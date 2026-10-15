@@ -1,0 +1,31 @@
+# Local development
+.claude/
+.codex/
+.gemini/
+.agents/
+.dev/
+CLAUDE.md
+CLAUDE.local.md
+CODEX.md
+CODEX.local.md
+GEMINI.md
+GEMINI.local.md
+AGENTS.md
+AGENTS.local.md
+MEMORY.md
+MEMORY.local.md
+
+# Runtime data
+data/
+__pycache__/
+*.pyc
+.venv/
+
+# Cloudflare development and credentials
+node_modules/
+.wrangler/
+dist/
+.nuxt-ui/
+components.d.ts
+.dev.vars*
+.env*

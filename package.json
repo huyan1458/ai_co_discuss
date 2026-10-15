@@ -1,0 +1,30 @@
+{
+  "name": "ai_co_discuss",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "bridge": "node message_bridge.mjs",
+    "weixin": "node weixin_bridge.mjs",
+    "test:bridge": "node --test test_message_bridge.mjs test_weixin_bridge.mjs",
+    "dev": "wrangler dev --ip 127.0.0.1 --port 8787",
+    "db:local": "wrangler d1 execute DB --local --file schema.sql",
+    "db:remote": "wrangler d1 execute DB --remote --file schema.sql",
+    "check": "node --check worker.mjs && node --check web/app.js",
+    "build:ui": "vite build",
+    "build": "npm run build:ui && wrangler deploy --dry-run --outdir dist",
+    "deploy": "npm run build:ui && wrangler deploy"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@vitejs/plugin-vue": "6.0.10",
+    "vite": "8.3.4",
+    "wrangler": "4.151.0"
+  },
+  "dependencies": {
+    "@iconify-json/lucide": "1.2.144",
+    "@nuxt/ui": "4.11.3",
+    "motion-v": "2.7.0",
+    "qrcode": "1.5.4",
+    "vue": "3.5.44"
+  }
+}

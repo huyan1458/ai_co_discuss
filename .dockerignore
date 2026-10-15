@@ -1,0 +1,6 @@
+*
+!server.py
+!schema.sql
+!web/
+!web/**
+web/modern/

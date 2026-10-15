@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ai-co-discuss",
+  "account_id": "cb14a4f0fc58abf5011f553de32b56ae",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-10-14",
+  "workers_dev": true,
+  "assets": {
+    "directory": "./web",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*", "/r/*", "/robots.txt"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ai-co-discuss-db",
+      "database_id": "60355da8-c891-4c08-8c30-fd233f6261e2"
+    }
+  ]
+}
