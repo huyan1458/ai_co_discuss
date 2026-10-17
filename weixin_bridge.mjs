@@ -885,7 +885,7 @@ export class WeixinStore extends MessageStore {
       .run(id).changes === 1;
   }
 
-  /** Bind to every successfully sent Codex source; already saved replies keep their own destinations. */
+  /** Bind successful Codex notices and end unconfirmed project selection in the same transaction. */
   finish_outbox(id, status, error = '', server_id = null) {
     this.transaction(() => {
       const settled = this.db.prepare(`UPDATE weixin_outbox SET status=?,last_error=?,server_id=COALESCE(?,server_id),
@@ -894,9 +894,12 @@ export class WeixinStore extends MessageStore {
       if (!settled.changes || status !== 'api_accepted') return;
       const source = this.db.prepare(`SELECT q.* FROM weixin_questions q JOIN weixin_outbox o
         ON o.event_key=json_array(q.account_id,q.peer_id,'notify:'||q.message_id)||':0' WHERE o.id=?`).get(id);
-      if (source) this.db.prepare(`UPDATE weixin_active_chats SET thread_id=?,pending_request=NULL
-        WHERE account_id=? AND peer_id=?`)
-        .run(source.thread_id, source.account_id, source.peer_id);
+      if (source) {
+        this.db.prepare(`UPDATE weixin_active_chats SET thread_id=?,pending_request=NULL
+          WHERE account_id=? AND peer_id=?`)
+          .run(source.thread_id, source.account_id, source.peer_id);
+        this.dismiss_project_list({ account_id: source.account_id, owner_id: source.peer_id });
+      }
     });
   }
 

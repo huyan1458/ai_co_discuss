@@ -886,6 +886,49 @@ test('项目未选定时无效数字和普通文字只提示；陌生人不选�
   assert.equal(store.project_list({ ...ACCOUNT, owner_id: 'stranger' }), undefined);
 });
 
+test('项目选择期间新通知结束待选状态，重启后普通文字和数字都回复最新通知', async context => {
+  for (const thread_id of [THREAD, OTHER_THREAD]) {
+    const { store, open } = fixture(context);
+    sent_question(store);
+    store.receive_answers(ACCOUNT, { msgs: [incoming('picker-before-notice', '/new')] });
+    const picker = store.project_list(ACCOUNT);
+    store.save_project_list(ACCOUNT, picker.id, PROJECTS);
+    const menu = store.pending_outbox(ACCOUNT)[0];
+    if (thread_id === THREAD) await flush_command_replies(store, { async send() { return {}; } }, ACCOUNT);
+    sent_question(open(), 'notification-after-picker', thread_id);
+    const restarted = open();
+    assert.equal(restarted.project_list(ACCOUNT), undefined);
+    assert.equal(store.db.prepare('SELECT status FROM weixin_answers WHERE id=?').get(picker.id).status, 'cancelled');
+    assert.equal(store.db.prepare('SELECT status FROM weixin_outbox WHERE id=?').get(menu.id).status,
+      thread_id === THREAD ? 'api_accepted' : 'cancelled');
+    restarted.receive_answers(ACCOUNT, { msgs: [incoming('readme-reply', '当前这个项目 README.MD 不够吸引人'),
+      incoming('number-after-notice', '1')] });
+    const codex = fake_codex();
+    const desktop = fake_desktop();
+    await dispatch_answers(restarted, codex, ACCOUNT, desktop);
+    assert.equal(desktop.creations.length, 0);
+    assert.deepEqual(codex.submissions.map(reply => reply.thread_id), [thread_id, thread_id]);
+    assert.ok(codex.submissions[0].prompt.endsWith('当前这个项目 README.MD 不够吸引人'));
+    assert.ok(codex.submissions[1].prompt.endsWith('1'));
+  }
+});
+
+test('读取项目期间成功通知结束选择，迟到的项目列表不恢复选择或发送旧菜单', async context => {
+  const { store, open } = fixture(context);
+  sent_question(store);
+  store.receive_answers(ACCOUNT, { msgs: [incoming('notice-while-listing', '/new')] });
+  const desktop = fake_desktop();
+  desktop.list_projects = async () => {
+    sent_question(open(), 'notification-while-listing', OTHER_THREAD);
+    return PROJECTS;
+  };
+  await dispatch_answers(store, fake_codex(), ACCOUNT, desktop);
+  assert.equal(store.project_list(ACCOUNT), undefined);
+  assert.equal(store.pending_outbox(ACCOUNT).length, 0);
+  assert.equal(store.answer_target(ACCOUNT, { references: [] }).thread_id, OTHER_THREAD);
+  assert.equal(desktop.creations.length, 0);
+});
+
 test('项目与会话选号不混用；新的 /new 替换未确认列表，迟到读取及旧来信不覆盖新列表', async context => {
   const { store } = fixture(context);
   sent_question(store);
@@ -1886,6 +1929,8 @@ test('手动目标只被本用户成功的新通知更新，失败、不确定�
   sent_question(store, 'another-chat', OTHER_THREAD);
   store.chat_list_text(ACCOUNT);
   store.receive_answers(ACCOUNT, { msgs: [incoming('choose-old-chat', '/resume 2')] });
+  store.receive_answers(ACCOUNT, { msgs: [incoming('picker-before-failed-notice', '/new')] });
+  store.save_project_list(ACCOUNT, store.project_list(ACCOUNT).id, PROJECTS);
   const request = { message_id: 'next-notification', thread_id: OTHER_THREAD, title: '新通知', text: '内容', mode: 'notify' };
   store.prepare_question(ACCOUNT, request);
   const notice = store.notification(ACCOUNT, request.message_id);
@@ -1893,17 +1938,24 @@ test('手动目标只被本用户成功的新通知更新，失败、不确定�
   store.claim_outbox(notice.id);
   store.finish_outbox(notice.id, 'uncertain');
   assert.equal(store.active_chat(ACCOUNT).thread_id, THREAD);
+  assert.equal(store.project_list(ACCOUNT).status, 'choosing');
   store.finish_outbox(notice.id, 'failed');
   assert.equal(store.active_chat(ACCOUNT).thread_id, THREAD);
+  assert.equal(store.project_list(ACCOUNT).status, 'choosing');
   const stranger = { ...ACCOUNT, owner_id: 'someone-else' };
   store.prepare_question(stranger, request);
   const other_notice = store.notification(stranger, request.message_id);
   store.claim_outbox(other_notice.id); store.finish_outbox(other_notice.id, 'api_accepted');
   assert.equal(store.active_chat(ACCOUNT).thread_id, THREAD);
-  sent_question(store, 'accepted-next-notice', OTHER_THREAD);
+  assert.equal(store.project_list(ACCOUNT).status, 'choosing');
   store.receive_context(ACCOUNT, { msgs: [incoming()] });
   const client = { async send() { return {}; } };
   await flush_command_replies(store, client, ACCOUNT);
+  assert.equal(store.project_list(ACCOUNT).status, 'choosing');
+  store.finish_outbox(store.notification(ACCOUNT, 'question-0001').id, 'api_accepted');
+  assert.equal(store.project_list(ACCOUNT).status, 'choosing');
+  sent_question(store, 'accepted-next-notice', OTHER_THREAD);
+  assert.equal(store.project_list(ACCOUNT), undefined);
   assert.equal(store.active_chat(ACCOUNT).thread_id, OTHER_THREAD);
   await send_notification(open(), { send() { assert.fail('不能重发旧通知'); } }, ACCOUNT,
     { message_id: 'question-0001', text: old_body });
@@ -1937,21 +1989,27 @@ test('创建期间新通知也更新绑定，之前暂存消息仍交给新聊�
   assert.equal(store.db.prepare('SELECT thread_id FROM weixin_answers WHERE id=?').get(held.id).thread_id, new_thread);
 });
 
-test('通知成功回执和目标更新同事务，路由写入失败不留下半成功状态', context => {
+test('通知成功回执、目标更新和结束项目选择同事务，清理失败完整回滚', context => {
   const { store } = fixture(context);
   sent_question(store);
   sent_question(store, 'transaction-other', OTHER_THREAD);
   store.chat_list_text(ACCOUNT);
   store.receive_answers(ACCOUNT, { msgs: [incoming('transaction-switch', '/resume 2')] });
+  store.receive_answers(ACCOUNT, { msgs: [incoming('transaction-picker', '/new')] });
+  const picker = store.project_list(ACCOUNT);
+  store.save_project_list(ACCOUNT, picker.id, PROJECTS);
+  const menu = store.pending_outbox(ACCOUNT).find(row => row.text.includes('请选择新聊天所在的项目'));
   store.prepare_question(ACCOUNT, { message_id: 'transaction-notice', thread_id: OTHER_THREAD, title: '通知', text: '内容' });
   const notice = store.notification(ACCOUNT, 'transaction-notice');
   store.claim_outbox(notice.id);
-  store.db.exec(`CREATE TRIGGER fail_route BEFORE UPDATE ON weixin_active_chats
-    BEGIN SELECT RAISE(ABORT, '模拟路由落库失败'); END`);
-  assert.throws(() => store.finish_outbox(notice.id, 'api_accepted'), /模拟路由落库失败/);
+  store.db.exec(`CREATE TRIGGER fail_picker BEFORE DELETE ON weixin_project_lists
+    BEGIN SELECT RAISE(ABORT, '模拟选择清理失败'); END`);
+  assert.throws(() => store.finish_outbox(notice.id, 'api_accepted'), /模拟选择清理失败/);
   assert.equal(store.notification(ACCOUNT, 'transaction-notice').status, 'uncertain');
   assert.equal(store.notification(ACCOUNT, 'transaction-notice').sent_order, null);
   assert.equal(store.active_chat(ACCOUNT).thread_id, THREAD);
+  assert.equal(store.project_list(ACCOUNT).status, 'choosing');
+  assert.equal(store.db.prepare('SELECT status FROM weixin_outbox WHERE id=?').get(menu.id).status, 'pending');
 });
 
 test('首次聊天没有标题时不发送未命名通知；命名后沿用原编号发送且只查本聊天元数据', context => {
