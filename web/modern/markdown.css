@@ -1,0 +1,48 @@
+@import "katex/dist/katex.min.css";
+
+.markdown-body {
+  --markdown-line: #c3ced8;
+  --markdown-panel: #edf2f6;
+  --markdown-link: #31647d;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+html[data-theme="channel"] .markdown-body {
+  --markdown-line: #454852;
+  --markdown-panel: #202228;
+  --markdown-link: #abb8ff;
+}
+.markdown-body > :first-child { margin-top: 0; }
+.markdown-body > :last-child { margin-bottom: 0; }
+.markdown-body p { margin: 0 0 .8em; }
+.markdown-body :is(h1, h2, h3, h4, h5, h6) { margin: 1.3em 0 .55em; font-weight: 650; line-height: 1.4; color: inherit; }
+.markdown-body h1 { font-size: 1.5em; }
+.markdown-body h2 { font-size: 1.3em; }
+.markdown-body h3 { font-size: 1.15em; }
+.markdown-body :is(h4, h5, h6) { font-size: 1em; }
+.markdown-body strong { font-weight: 700; }
+.markdown-body em { font-style: italic; }
+.markdown-body :is(ul, ol) { margin: .5em 0 .9em; padding-left: 1.7em; }
+.markdown-body ul { list-style: disc; }
+.markdown-body ol { list-style: decimal; }
+.markdown-body ul ul { list-style: circle; }
+.markdown-body li { padding-left: .15em; margin: .25em 0; }
+.markdown-body li > :is(ul, ol, p) { margin-top: .3em; margin-bottom: .3em; }
+.markdown-body blockquote { margin: 1em 0; padding: .2em 1em; border-left: 3px solid var(--markdown-line); color: inherit; }
+.markdown-body blockquote > :last-child { margin-bottom: 0; }
+.markdown-body hr { border: 0; border-top: 1px solid var(--markdown-line); margin: 1.3em 0; }
+.markdown-body a { color: var(--markdown-link); text-decoration: underline; text-underline-offset: 3px; }
+.markdown-body :is(a, .markdown-table):focus-visible { outline: 2px solid var(--markdown-link); outline-offset: 3px; }
+.markdown-body code { font-family: ui-monospace, Consolas, monospace; font-size: .88em; background: var(--markdown-panel); border-radius: 4px; padding: .15em .35em; }
+.markdown-body pre { max-width: 100%; overflow-x: auto; margin: .8em 0 1em; padding: 14px 16px; border: 1px solid var(--markdown-line); border-radius: 6px; background: var(--markdown-panel); line-height: 1.6; white-space: pre; overflow-wrap: normal; }
+.markdown-body pre code { padding: 0; border: 0; border-radius: 0; background: none; white-space: inherit; }
+.markdown-body .markdown-table { max-width: 100%; overflow-x: auto; margin: 1em 0; }
+.markdown-body table { width: max-content; min-width: 50%; max-width: 100%; border-collapse: collapse; font-size: .93em; }
+.markdown-body :is(th, td) { border: 1px solid var(--markdown-line); padding: .55em .8em; min-width: 6em; text-align: left; }
+.markdown-body th { background: var(--markdown-panel); font-weight: 650; }
+.markdown-body img { max-width: 100%; height: auto; }
+.markdown-body .mention { color: var(--markdown-link); background: none; border-radius: 3px; padding: 0 2px; }
+.markdown-body .katex { font-size: 1.1em; }
+.markdown-body .katex-display { max-width: 100%; overflow-x: auto; overflow-y: hidden; padding: .3em 0; }
+.markdown-body .katex-error { color: inherit; font-family: ui-monospace, Consolas, monospace; white-space: pre-wrap; }

@@ -1,0 +1,4 @@
+interface:
+  display_name: "讨论主持"
+  short_description: "仅主持人使用，须同时调用讨论参与技能，负责接入、推进与收束"
+  default_prompt: "使用 $discuss-host 并同时调用 $discuss-participant，由当前会话主持这个话题：准备聊天室、组织专家讨论、按需持续检查，并在结束时停用本次任务。"

@@ -4,7 +4,7 @@ import App from "./App.vue";
 import "./theme.css";
 import "./channel.css";
 
-/** Mount the dark workspace once; its controller is shared with older themes. */
+/** Mount the channel workspace once, sharing its controller with millennium chat. */
 function mount_workspace() {
   createApp(App).use(ui).mount("#modern-root");
 }

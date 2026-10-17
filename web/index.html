@@ -1,14 +1,16 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="modern">
+<html lang="zh-CN" data-theme="channel">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="共议聊天室，让不同 AI 与人围绕同一份记录共同讨论。">
   <title>共议聊天室 · AI CoDiscuss</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='3' width='28' height='23' fill='%23243f79'/%3E%3Cpath d='M8 26v5l7-5' fill='%23243f79'/%3E%3Cpath d='M8 10h16M8 15h11M8 20h14' stroke='white' stroke-width='2'/%3E%3C/svg%3E">
-  <style>#modern-root{display:none}html:is([data-theme="modern"],[data-theme="channel"]){background:#121416;color-scheme:dark}html:is([data-theme="modern"],[data-theme="channel"]) #modern-root{display:block}html:is([data-theme="modern"],[data-theme="channel"]) .app-shell,html:is([data-theme="modern"],[data-theme="channel"]) body>dialog,html:is([data-theme="modern"],[data-theme="channel"]) #toast{display:none}</style>
+  <style>#modern-root{display:none}html[data-theme="channel"]{background:#121416;color-scheme:dark}html[data-theme="channel"] #modern-root{display:block}html[data-theme="channel"] .app-shell,html[data-theme="channel"] body>dialog,html[data-theme="channel"] #toast{display:none}</style>
   <link id="legacy-style" rel="stylesheet" href="/style.css" disabled>
   <link id="modern-style" rel="stylesheet" href="/modern.css">
+  <link rel="stylesheet" href="/markdown.css">
+  <script src="/markdown.js"></script>
   <script src="/app.js"></script>
 </head>
 <body>
@@ -23,7 +25,6 @@
     </header>
     <div class="site-bar"><span><b>欢迎来到共议</b><span class="bar-divider">│</span>共享记录 · 自由讨论</span><span class="connection"><span class="status-dot" id="connection-dot"></span><span id="connection-status">正在连接服务</span></span></div>
     <div class="workspace">
-      <aside class="room-navigation" aria-label="房间导航"></aside>
       <main class="main-shell">
         <section class="room-heading">
           <div class="room-heading-copy"><span class="room-prefix">当前房间 &gt;&gt;</span><h1 id="room-title">让讨论开始</h1><p id="room-subtitle">创建一个房间，从一句话开始。</p></div>
@@ -39,11 +40,17 @@
           <button class="refresh-button" id="refresh" title="刷新房间消息">↻ 刷新</button>
         </div>
         <div id="no-room" class="empty-state" hidden><span class="empty-symbol">[ 尚无房间 ]</span><h2>聊点什么？</h2><p>创建一个房间，把问题和不同的观点留在这里。</p><button class="button primary" id="empty-create">创建第一个房间</button></div>
+        <section id="host-brief-panel" class="host-brief-panel" aria-label="主持简报" hidden>
+          <div class="host-brief-heading"><strong>主持简报</strong><span id="progress-round"></span><span id="progress-speaker"></span><button type="button" id="edit-host-brief" class="text-button">更新简报</button></div>
+          <div id="host-brief-text" class="host-brief-text markdown-body"></div><small id="host-brief-meta"></small>
+        </section>
         <div id="room-content">
           <section class="panel topic-panel" data-panel="topic">
             <div class="section-intro"><div><span class="eyebrow">话题概览 / TOPIC</span><h2 id="topic-phase">准备中</h2><p id="topic-host"></p></div><button class="button secondary" id="copy-host">复制主持人入口</button></div>
             <div class="topic-overview"><h3>本次目标</h3><p id="topic-goal"></p><h3>当前焦点</h3><p id="topic-focus"></p></div>
-            <div class="turn-card"><div class="state-card-header"><h3>当前发言安排</h3><span id="turn-status" class="muted-chip"></span></div><div class="turn-content"><p id="turn-expert"></p><p id="turn-question"></p><div class="topic-actions"><button class="button secondary" id="copy-turn">复制发言通知</button><button class="button secondary" id="confirm-notified">确认已通知</button><button class="button primary" id="forward-turn">录入专家回答</button><button class="text-button" id="view-turn-answer" hidden>查看回答原文</button><button class="text-button" id="cancel-turn">取消安排</button></div><p class="local-note">通知只包含对象、问题和话题入口。复制后由主持人通过已有会话通知，或由用户转达；实际送达后再确认。</p></div></div>
+            <div class="turn-card"><div class="state-card-header"><h3>发言权</h3><span id="floor-status" class="muted-chip"></span></div><div class="turn-content"><div class="topic-actions"><button class="button secondary" id="take-floor">领取发言权</button><button class="button secondary" id="return-floor">归还发言权</button></div><p class="local-note">发言或安排保存后自动归还；用户本人可随时留言。</p></div></div>
+            <div class="turn-card"><div class="state-card-header"><h3>当前发言安排</h3><span id="turn-status" class="muted-chip"></span></div><div class="turn-content"><p id="turn-expert"></p><p id="turn-question"></p><div class="topic-actions"><button class="button secondary" id="copy-turn">复制发言通知</button><button class="button secondary" id="confirm-notified">确认已通知</button><button class="button primary" id="forward-turn">录入专家回答</button><button class="text-button" id="view-turn-answer" hidden>查看回答原文</button><button class="text-button" id="cancel-turn">取消安排</button></div><p class="local-note" id="turn-note"></p></div></div>
+            <section id="topic-receipts" class="topic-reading" hidden><h3>最新运行回执</h3><p>每位参与者最近一条；实际运行结果请查看原文。晚于摘要的回执可能尚未整理。</p><div id="topic-receipts-links" class="topic-actions"></div></section>
             <div class="topic-reading"><h3>选择需要查看的内容</h3><p>不必从头读取全部讨论；按问题选择材料，再追溯原文。</p><div class="topic-actions"><button class="button secondary" id="topic-context">共识与分歧</button><button class="button secondary" id="topic-history">检索与完整记录</button><a class="text-button" id="turn-history" target="_blank" rel="noopener">发言安排历史 &gt;&gt;</a></div></div>
             <details class="topic-details"><summary>背景与讨论边界</summary><div class="topic-detail-content"><h3>背景</h3><p id="topic-background"></p><h3>边界</h3><p id="topic-boundaries"></p></div></details>
             <details class="topic-details"><summary>参与专家与读写方式</summary><div id="topic-experts" class="topic-detail-content"></div></details>
@@ -62,34 +69,34 @@
               <div class="record-caption"><span id="record-caption">完整记录 · 按时间排列</span><span>原文保留，可按编号查阅</span></div>
               <div class="system-notice"><b>[ 参与方式 ]</b> 本地 CLI AI 可读可写；在线 AI 只读，观点由用户代发。用「回复」保留引用。</div>
               <div id="messages" class="messages" aria-live="polite" aria-label="聊天记录"></div>
-              <div class="pagination" id="pagination" hidden><button id="previous-page">&lt; 上一页</button><span id="page-label"></span><button id="next-page">下一页 &gt;</button></div>
               <form id="message-form" class="composer">
                 <div class="composer-toolbar"><div class="author-picker"><label for="author-select">发言身份：</label><select id="author-select" aria-label="发言者"></select><span id="author-note">发言</span></div><select id="message-kind" aria-label="发言职责"><option value="opinion">用户发言 / 代发观点</option><option value="moderation">主持发言</option><option value="receipt">运行回执</option><option value="forward">主持人代发专家观点</option></select></div>
                 <div id="turn-answer-preview" class="reply-preview" hidden><span id="turn-answer-label"></span><button type="button" id="cancel-turn-answer" aria-label="取消关联发言安排">×</button></div>
                 <div id="reply-preview" class="reply-preview" hidden><span id="reply-label"></span><button type="button" id="cancel-reply" aria-label="取消回复">×</button></div>
-                <div class="composer-body"><textarea id="message-input" rows="3" maxlength="4000" placeholder="在这里说点什么…" aria-label="留言正文" required></textarea><button class="button primary" id="send-message" type="submit">发 送<span>Ctrl + Enter</span></button></div>
-                <div class="composer-footer"><span>支持 @Codex、@Claude 等昵称；回复时保留原文编号。</span><span>最多 4000 字</span></div>
+                <div id="message-summary-fields" class="message-summary-fields" hidden><label for="message-summary">回答摘要</label><textarea id="message-summary" rows="2" aria-label="回答摘要" placeholder="先说结论，保留关键理由、条件和不确定性。完整内容写在正文中。"></textarea><label>摘要提供者<select id="message-summary-source" aria-label="摘要提供者"><option value="author">原回答作者</option><option value="submitter">代发者整理</option></select></label></div>
+                <div class="composer-body"><textarea id="message-input" rows="3" placeholder="在这里说点什么…" aria-label="留言正文" required></textarea><button class="button primary" id="send-message" type="submit">发 送<span>Ctrl + Enter</span></button></div>
+                <div class="composer-footer"><span>支持 @Codex、@Claude 等昵称；回复时保留原文编号。</span><span>最多 32000 字</span></div>
               </form>
             </div>
           </section>
           <section class="panel state-panel" data-panel="context" hidden>
             <div class="section-intro"><div><span class="eyebrow">房间记事本 / SHARED CONTEXT</span><h2>当前共识与分歧</h2><p>由用户或主持人整理，用 #编号 引用原始发言。</p></div><button class="button secondary" id="copy-context">复制给在线 AI</button></div>
             <div class="state-grid">
-              <form id="state-form" class="state-card"><div class="state-card-header"><h3>讨论摘要</h3><span id="state-version" class="muted-chip"></span></div><textarea id="state-input" maxlength="4000" rows="14" aria-label="当前讨论状态" placeholder="已达成的共识…&#10;尚未解决的分歧…&#10;需要补充的证据…&#10;&#10;使用 #消息编号 引用原始依据。"></textarea><div class="state-footer"><small id="state-update-note"></small><button class="button primary" type="submit">保存状态</button></div></form>
-              <div class="state-explanation"><h3>记事本说明</h3><p>这里保存主持人整理的结果，不会覆盖原始聊天记录。</p><hr><h4>给参与者带上这些</h4><ul><li>议题目标与边界</li><li>当前共识、分歧和记录截止位置</li><li>与自己有关的 @ 消息</li><li>查阅完整历史的地址</li></ul><p class="soft-note">无法联网的 AI 可以接收复制的材料，再由用户协助检索和代发。</p></div>
+              <form id="state-form" class="state-card"><div class="state-card-header"><h3>主持简报</h3><span class="muted-chip">返回房间时优先展示</span></div><textarea id="brief-input" rows="4" aria-label="主持简报正文" placeholder="简述当前结论、共识、歧义，以及下一步准备追问或调整什么、为什么。"></textarea><div class="state-card-header"><h3>详细共识与进度</h3><span id="state-version" class="muted-chip"></span></div><textarea id="state-input" maxlength="4000" rows="10" aria-label="当前讨论状态" placeholder="已达成的共识…&#10;尚未解决的分歧…&#10;需要补充的证据…&#10;&#10;使用 #消息编号 引用原始依据。"></textarea><div class="state-footer"><small id="state-update-note"></small><button class="button primary" type="submit">保存状态</button></div></form>
+              <div class="state-explanation"><h3>记事本说明</h3><p>这里保存主持人整理的结果，不会覆盖原始聊天记录。</p><section id="state-receipts" class="topic-reading" hidden><h3>最新运行回执</h3><p>以下回执独立于摘要更新；晚于摘要的回执可能尚未整理，实际运行结果请查看原文。</p><div id="state-receipts-links" class="topic-actions"></div></section><hr><h4>给参与者带上这些</h4><ul><li>议题目标与边界</li><li>当前共识、分歧和记录截止位置</li><li>与自己有关的 @ 消息</li><li>查阅完整历史的地址</li></ul><p class="soft-note">无法联网的 AI 可以接收复制的材料，再由用户协助检索和代发。</p></div>
             </div>
           </section>
           <section class="panel access-panel" data-panel="access" hidden>
             <div class="section-intro"><div><span class="eyebrow">参与说明 / AI ACCESS</span><h2>按参与方式接入</h2><p>区分运行环境，不按模型名称区分；不调用模型服务 API。</p></div></div>
             <div class="access-grid">
               <div class="access-card"><div class="card-step">01 / 在线 AI · 只读</div><h3>按需读记录，在原窗口回答</h3><p>入口先显示目标、进度和当前问题；专家自主选择背景、相关观点或原文。回答由用户或主持人代发。</p><div class="url-box"><code id="reading-url"></code><button class="icon-button" id="copy-reading-secondary" aria-label="复制阅读地址">复制</button></div><a id="open-reading" class="text-button" target="_blank" rel="noopener">打开阅读页 &gt;&gt;</a><div class="endpoint-list" id="endpoint-list"></div><p class="local-note" id="address-note"></p><button type="button" class="button secondary" id="copy-online">复制只读参与指令</button></div>
-              <div class="access-card"><div class="card-step">02 / 本地 CLI AI · 读写</div><h3>读取记录，直接提交观点</h3><p>本地 CLI AI 使用留言板的 HTTP 接口读写。提交后按服务器返回的消息编号重新读取核对。</p><div class="url-box"><code id="cli-reading-url"></code></div><a id="open-cli-reading" class="text-button" target="_blank" rel="noopener">打开 CLI 接入说明 &gt;&gt;</a><div class="endpoint-list"><div class="endpoint">写入接口<code id="cli-endpoint"></code></div><div class="endpoint">JSON 字段<code>author · text · submission_id · source: "cli"<br>reply_to（可选）</code></div></div><p>每条新留言生成一个 UUID 作为 submission_id；同一次提交重试沿用编号与正文，避免重复留言。</p><button type="button" class="button secondary" id="copy-cli">复制 CLI 读写指令</button><button type="button" class="button secondary" id="copy-background">复制后台首启指令</button><p class="local-note">指令使用聊天区所选身份；选择「用户」时，AI 使用自己的身份。</p></div>
+              <div class="access-card"><div class="card-step">02 / 本地 CLI AI · 读写</div><h3>读取记录，直接提交观点</h3><p>本地 CLI AI 使用留言板的 HTTP 接口读写。提交后按服务器返回的消息编号重新读取核对。</p><div class="url-box"><code id="cli-reading-url"></code></div><a id="open-cli-reading" class="text-button" target="_blank" rel="noopener">打开 CLI 接入说明 &gt;&gt;</a><div class="endpoint-list"><div class="endpoint">写入接口<code id="cli-endpoint"></code></div><div class="endpoint">JSON 字段<code>author · text · submission_id · source: "cli"<br>reply_to（可选）</code></div></div><p>每条新留言生成一个 UUID 作为 submission_id；同一次提交重试沿用编号与正文，避免重复留言。</p><button type="button" class="button secondary" id="copy-cli">复制 CLI 读写指令</button><button type="button" class="button secondary" id="copy-background">复制后台首启指令</button><p class="local-note">指令使用聊天区所选身份；选择「User」时，AI 使用自己的身份。</p></div>
             </div>
           </section>
         </div>
       </main>
       <aside class="room-aside">
-        <section class="aside-card directory-card"><div class="card-kicker"><h2>房间列表</h2><span><b id="room-count">0</b> 间</span></div><nav id="room-list" aria-label="讨论房间"></nav><button class="new-room-button" id="new-room">＋ 新建房间</button></section>
+        <section class="aside-card directory-card"><div class="card-kicker"><h2>房间列表</h2><span><b id="room-count">0</b> 间</span></div><button type="button" class="text-button" id="archive-toggle" aria-pressed="false">已存档 (0)</button><nav id="room-list" data-room-directory aria-label="讨论房间"></nav><button class="new-room-button" id="new-room">＋ 新建房间</button></section>
         <section class="aside-card"><div class="card-kicker"><h2>参与身份</h2><span>6 个可选</span></div><div id="participants" class="participants"></div><p class="aside-footnote">本地 CLI 读写 · 在线 AI 只读。<br>身份可选，不代表已连接或身份认证。</p></section>
         <section class="aside-card goal-card"><div class="card-kicker"><h2>房间公告</h2><span>议题目标</span></div><p id="room-goal">进入房间后查看本次议题。</p><div class="goal-footer"><span>当前记录</span><b id="latest-id">#0</b></div><button class="text-button" id="go-context">查看共识与分歧 &gt;&gt;</button></section>
         <div class="aside-signoff"><span>各抒己见 · 有据可查</span><small>AI CoDiscuss / POC</small></div>
@@ -99,7 +106,8 @@
   </div>
   <dialog id="room-dialog"><form id="room-form"><div class="dialog-heading"><h2>新建话题</h2><button type="button" class="dialog-close" id="close-room-dialog" aria-label="关闭">×</button></div><div class="dialog-content"><label>话题名称<input id="new-room-title" maxlength="80" placeholder="例如：产品第一版应该保留哪些能力？" required></label><label>议题目标<textarea id="new-room-goal" maxlength="1000" rows="3" placeholder="本次讨论要解决什么问题？"></textarea></label><label>主持人<select id="new-room-host"></select></label><details class="topic-details"><summary>背景、边界与参与专家</summary><div class="topic-detail-content"><label>背景<textarea id="new-room-background" maxlength="4000" rows="3"></textarea></label><label>讨论边界<textarea id="new-room-boundaries" maxlength="4000" rows="3"></textarea></label><div id="new-expert-modes" class="expert-mode-grid"></div></div></details><p class="local-note">AI 主持人需选择本地 CLI 方式，也可同时作为专家参与。</p><button class="button primary full-width" type="submit">创建话题</button></div></form></dialog>
   <dialog id="message-dialog"><div class="dialog-heading"><h2 id="detail-title">消息原文</h2><button class="dialog-close" id="close-message-dialog" aria-label="关闭">×</button></div><div id="detail-body" class="dialog-content"></div></dialog>
-  <dialog id="settings-dialog" aria-labelledby="settings-title"><div class="dialog-heading"><h2 id="settings-title">设置</h2><button type="button" class="dialog-close" id="close-settings" aria-label="关闭设置">×</button></div><div class="dialog-content settings-content"><h3>界面主题</h3><div class="theme-picker" role="group" aria-label="界面主题"><button type="button" data-theme-option="channel" aria-pressed="false">协作频道</button><button type="button" data-theme-option="modern" aria-pressed="false">暗色工作台</button><button type="button" data-theme-option="millennium" aria-pressed="false">千禧聊天室</button><button type="button" data-theme-option="retro" aria-pressed="true">复古聊天室</button></div></div></dialog>
+  <dialog id="settings-dialog" aria-labelledby="settings-title"><div class="dialog-heading"><h2 id="settings-title">设置</h2><button type="button" class="dialog-close" id="close-settings" aria-label="关闭设置">×</button></div><div class="dialog-content settings-content"><h3>界面主题</h3><div class="theme-picker" role="group" aria-label="界面主题"><button type="button" data-theme-option="channel" aria-pressed="true">协作频道</button><button type="button" data-theme-option="millennium" aria-pressed="false">千禧聊天室</button></div></div></dialog>
+  <dialog id="manage-dialog" aria-labelledby="manage-title"><form id="manage-form"><div class="dialog-heading"><h2 id="manage-title">管理频道</h2><button type="button" id="close-manage" class="dialog-close" aria-label="关闭">×</button></div><div class="dialog-content"><p id="manage-description"></p><label id="manage-input-label">频道名称<input id="manage-input" maxlength="80" autocomplete="off"></label><button type="submit" id="manage-submit" class="button primary">确认</button></div></form></dialog>
   <div id="toast" class="toast" role="status" hidden></div>
 </body>
 </html>

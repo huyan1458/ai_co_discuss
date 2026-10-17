@@ -7,11 +7,11 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { find_message_turn, MessageStore, process_message } from './message_bridge.mjs';
+import { find_message_turn, MessageStore, process_message } from '../message_bridge.mjs';
 
-const THREAD_ID = '01a13ecf-eb91-75f1-972f-45d338554e5b';
-const OTHER_THREAD = '01a13e92-92ea-7923-8d46-cba0552b6db7';
-const CLI_PATH = fileURLToPath(new URL('./message_bridge.mjs', import.meta.url));
+const THREAD_ID = '11111111-1111-4111-8111-111111111111';
+const OTHER_THREAD = '22222222-2222-4222-8222-222222222222';
+const CLI_PATH = fileURLToPath(new URL('../message_bridge.mjs', import.meta.url));
 
 /** Create an isolated SQLite store and register safe cleanup for its temporary directory. */
 function test_store(context) {

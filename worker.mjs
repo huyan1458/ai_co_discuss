@@ -1,18 +1,25 @@
 /** Cloudflare Workers / D1 adapter for the existing discussion HTTP protocol. */
-const MAX_BODY_BYTES = 65536;
-const MAX_TEXT_LENGTH = 4000;
+const MAX_BODY_BYTES = 512 * 1024;
+const MAX_TEXT_LENGTH = 32000;
+const MAX_STATE_LENGTH = 4000;
+const MAX_BRIEF_LENGTH = 1600;
+const MAX_SUMMARY_LENGTH = 1000;
 const PAGE_SIZE = 20;
 const PARTICIPANTS = ["用户", "Codex", "Claude", "Gemini", "DeepSeek", "Qwen"];
 const PHASES = { preparing: "准备中", initial: "独立观点", discussing: "深入讨论", reviewing: "结论复核", paused: "已暂停", concluded: "已收束" };
-const TURN_STATUSES = { pending: "待通知", notified: "已通知，待回答", answered: "已回答", cancelled: "已取消" };
+const TURN_STATUSES = { pending: "待处理", notified: "已通知，待回答", answered: "已回答", cancelled: "已取消" };
 const MAX_TOPIC_DETAIL = 4000;
 const MAX_QUESTION_LENGTH = 1000;
 const MESSAGE_QUERY = `SELECT messages.*, COALESCE(details.kind,'opinion') AS kind,
   COALESCE(details.submitted_by, CASE WHEN messages.source IN ('cli','url','user')
-  THEN messages.author ELSE '用户' END) AS submitted_by, details.turn_id
-  FROM messages LEFT JOIN message_details AS details ON details.message_id=messages.id`;
-const ROOM_QUERY = `SELECT rooms.*, COUNT(messages.id) AS message_count,
-  COALESCE(MAX(messages.id),0) AS latest_id FROM rooms
+  THEN messages.author ELSE '用户' END) AS submitted_by, details.turn_id,
+  COALESCE(summaries.text,'') AS summary, COALESCE(summaries.author,'') AS summary_by
+  FROM messages LEFT JOIN message_details AS details ON details.message_id=messages.id
+  LEFT JOIN message_summaries AS summaries ON summaries.message_id=messages.id`;
+const ROOM_QUERY = `SELECT rooms.*, COALESCE(room_directory.archived,0) AS archived, COUNT(messages.id) AS message_count,
+  COALESCE(MAX(messages.id),0) AS latest_id, room_folder_assignments.folder_id AS folder_id FROM rooms
+  LEFT JOIN room_directory ON rooms.id=room_directory.room_id
+  LEFT JOIN room_folder_assignments ON rooms.id=room_folder_assignments.room_id
   LEFT JOIN messages ON rooms.id=messages.room_id`;
 
 class HttpError extends Error {
@@ -29,7 +36,6 @@ function respond(body, status = 200, text_mode = false) {
     headers: {
       "Content-Type": `${text_mode ? "text/plain" : "application/json"}; charset=utf-8`,
       "Cache-Control": "no-store",
-      "X-Robots-Tag": "noindex, nofollow",
       "Referrer-Policy": "no-referrer",
     },
   });
@@ -88,8 +94,79 @@ async function require_room(database, room_id) {
     .bind(room_id).first();
   if (!room) throw new HttpError(404, "房间不存在");
   const settings = await database.prepare("SELECT * FROM topic_settings WHERE room_id=?").bind(room_id).first();
-  const current_turn = await database.prepare("SELECT * FROM discussion_turns WHERE room_id=? ORDER BY id DESC LIMIT 1").bind(room_id).first();
-  return { ...room, ...(settings ? { ...settings, experts: JSON.parse(settings.experts) } : topic_defaults()), current_turn };
+  const current_turn = await database.prepare("SELECT *, (SELECT COUNT(*) FROM discussion_turns WHERE room_id=? AND status='answered') AS answered_turns FROM discussion_turns WHERE room_id=? ORDER BY id DESC LIMIT 1").bind(room_id, room_id).first();
+  const result = { ...room, ...(settings ? { ...settings, experts: JSON.parse(settings.experts) } : topic_defaults()), current_turn, answered_turns: current_turn?.answered_turns || 0 };
+  if (current_turn) delete current_turn.answered_turns;
+  if (current_turn) current_turn.status_label = turn_status_label(current_turn, result);
+  result.latest_receipts = await latest_receipts(database, room_id);
+  result.host_brief = await database.prepare("SELECT text,until,updated_at FROM room_briefs WHERE room_id=?").bind(room_id).first();
+  result.rounds = await discussion_rounds(database, room_id, result.experts);
+  result.completed_rounds = result.rounds.filter((item) => item.completed).length;
+  result.floor = await database.prepare("SELECT holder,next_speaker,revision FROM room_floor WHERE room_id=?").bind(room_id).first();
+  return result;
+}
+
+/** Claim or return the nominated speaker's floor with an atomic revision check. */
+async function update_floor(database, room_id, payload) {
+  const room = await require_room(database, room_id);
+  const { actor, action, revision } = payload;
+  const speaker = payload.speaker ?? actor;
+  const proxy = actor === room.host && room.experts[speaker] === "online";
+  if (!PARTICIPANTS.includes(speaker) || (![speaker, "用户"].includes(actor) && !proxy)) throw new HttpError(400, "本地专家自行操作发言权；主持人仅代操作在线专家，用户可协助");
+  if (!["take", "return"].includes(action) || !Number.isInteger(revision) || revision < 0) throw new HttpError(400, "请提供 take/return 和最新的发言权 revision");
+  const statement = action === "take"
+    ? database.prepare("UPDATE room_floor SET holder=?,revision=revision+1 WHERE room_id=? AND revision=? AND holder IS NULL AND next_speaker=? RETURNING holder,next_speaker,revision").bind(speaker, room_id, revision, speaker)
+    : database.prepare("UPDATE room_floor SET holder=NULL,next_speaker=COALESCE((SELECT host FROM topic_settings WHERE room_id=?),'用户'),revision=revision+1 WHERE room_id=? AND revision=? AND holder=? RETURNING holder,next_speaker,revision").bind(room_id, room_id, revision, speaker);
+  const result = await statement.first();
+  if (!result) throw new HttpError(409, "发言权已变化，或尚未轮到本人；请重新读取后核对");
+  return result;
+}
+
+/** Group complete history metadata until every configured expert has spoken. */
+async function discussion_rounds(database, room_id, experts) {
+  const participants = Object.keys(experts);
+  if (!participants.length) return [];
+  const rows = await database.prepare(`SELECT messages.id,messages.author,
+    COALESCE(details.kind,'opinion') AS kind FROM messages
+    LEFT JOIN message_details AS details ON details.message_id=messages.id
+    WHERE room_id=? ORDER BY messages.id`).bind(room_id).all();
+  const rounds = [];
+  let next_start = null;
+  for (const message of rows.results) {
+    next_start ??= message.id;
+    if (message.kind !== "opinion" || !participants.includes(message.author)) continue;
+    if (!rounds.length || rounds.at(-1).completed) {
+      rounds.push({ number: rounds.length + 1, start_id: next_start, speakers: [], completed: false });
+    }
+    const current = rounds.at(-1);
+    if (!current.speakers.includes(message.author)) current.speakers.push(message.author);
+    current.completed = current.speakers.length === participants.length;
+    if (current.completed) next_start = null;
+  }
+  return rounds;
+}
+
+/** Return each author's latest receipt reference without loading its body. */
+async function latest_receipts(database, room_id) {
+  const result = await database.prepare(`SELECT messages.id,messages.author,messages.created_at,details.submitted_by
+    FROM messages JOIN message_details AS details ON details.message_id=messages.id
+    WHERE messages.id IN (SELECT MAX(messages.id) FROM messages
+      JOIN message_details AS details ON details.message_id=messages.id
+      WHERE room_id=? AND details.kind='receipt' GROUP BY author)
+    ORDER BY messages.id`).bind(room_id).all();
+  return result.results;
+}
+
+/** Describe pending work using the expert's configured participation mode. */
+function turn_status_label(turn, room) {
+  if (turn.status === "pending") return { cli: "待处理（本地 CLI）", online: "待联系（在线专家）" }[room.experts[turn.expert]] || "待处理";
+  return TURN_STATUSES[turn.status];
+}
+
+/** Link to current receipt reports independently of an older host summary. */
+function receipt_references_text(room) {
+  const lines = room.latest_receipts.map((receipt) => `${receipt.author} · ${receipt.created_at}${receipt.id > room.state_until ? " · 晚于摘要" : ""}：/r/${room.id}/messages/${receipt.id}`);
+  return lines.length ? `最新运行回执（每位参与者最近一条，运行结果以原文为准）：\n${lines.join("\n")}` : "尚无运行回执。";
 }
 
 /** Return independent defaults for legacy rooms without settings. */
@@ -135,6 +212,7 @@ async function update_topic(database, room_id, payload) {
   const room = await require_room(database, room_id);
   require_host(room, payload);
   const settings = topic_values(payload, room);
+  if (room.archived && !["paused", "concluded"].includes(settings.phase)) throw new HttpError(400, "请先恢复已存档频道，再调整讨论阶段");
   const turn = room.current_turn;
   if (turn && ["pending", "notified"].includes(turn.status) && (settings.phase === "concluded" || !settings.experts[turn.expert])) {
     throw new HttpError(400, "请先完成或取消当前发言安排");
@@ -146,35 +224,113 @@ async function update_topic(database, room_id, payload) {
     ]);
   } catch (error) {
     if (String(error).includes("open_turn")) throw new HttpError(400, "请先完成或取消当前发言安排");
+    if (String(error).includes("topic_archived")) throw new HttpError(400, "请先恢复已存档频道，再调整讨论阶段");
     throw error;
   }
   return require_room(database, room_id);
 }
 
-/** Create the room and topic settings together. */
+/** Validate a replay identifier for writes or exact result lookup. */
+function submission_value(value) {
+  const identifier = String(value ?? "").trim();
+  if (!/^[A-Za-z0-9_-]{8,100}$/.test(identifier)) throw new HttpError(400, "submission_id 必须是 8–100 位字母、数字、下划线或连字符");
+  return identifier;
+}
+
+/** Freeze normalized creation inputs independently of later topic edits. */
+function creation_request(settings) {
+  const fields = ["title", "goal", "host", "background", "boundaries", "phase", "focus"];
+  const experts = Object.entries(settings.experts).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+  return JSON.stringify([...fields.map((field) => settings[field]), experts]);
+}
+
+/** Recover a committed creation, rejecting reuse for a different request. */
+async function replay_room(database, previous, request_text) {
+  if (previous.request_text !== request_text) throw new HttpError(409, "该建房提交编号已被其他内容使用");
+  return { ...await require_room(database, previous.room_id), duplicate: true, submission_id: previous.submission_id };
+}
+
+/** Create one room per explicit identifier, atomically with its saved request. */
 async function create_room(database, payload) {
   const settings = topic_values(payload);
+  const identifier = Object.hasOwn(payload, "submission_id") ? submission_value(payload.submission_id) : null;
+  const request_text = creation_request(settings);
+  const lookup = () => database.prepare("SELECT * FROM room_creations WHERE submission_id=?").bind(identifier).first();
+  const previous = identifier ? await lookup() : null;
+  if (previous) return replay_room(database, previous, request_text);
   const room_id = crypto.randomUUID().replaceAll("-", "").slice(0, 12);
-  await database.batch([
+  const statements = [
     database.prepare("INSERT INTO rooms (id,title,goal,created_at) VALUES (?,?,?,?)")
       .bind(room_id, settings.title, settings.goal, new Date().toISOString()),
     topic_statement(database, room_id, settings),
-  ]);
-  return require_room(database, room_id);
+  ];
+  if (identifier) statements.push(database.prepare("INSERT INTO room_creations (submission_id,room_id,request_text) VALUES (?,?,?)")
+    .bind(identifier, room_id, request_text));
+  try {
+    await database.batch(statements);
+  } catch (error) {
+    const committed = identifier ? await lookup() : null;
+    if (committed) return replay_room(database, committed, request_text);
+    throw error;
+  }
+  return { ...await require_room(database, room_id), duplicate: false, submission_id: identifier };
+}
+
+/** Locate a saved creation without searching room titles or histories. */
+async function query_rooms(database, params) {
+  const identifier = Object.hasOwn(params, "submission_id") ? submission_value(params.submission_id) : null;
+  const where = identifier ? "WHERE EXISTS (SELECT 1 FROM room_creations WHERE room_id=rooms.id AND submission_id=?)" : "";
+  const statement = database.prepare(`${ROOM_QUERY} ${where} GROUP BY rooms.id ORDER BY room_directory.position,rooms.created_at,rooms.id`);
+  const rows = await (identifier ? statement.bind(identifier) : statement).all();
+  const folders = await database.prepare("SELECT id,name,position FROM topic_folders ORDER BY position,name,id").all();
+  return { rooms: rows.results, folders: folders.results, participants: PARTICIPANTS };
+}
+
+/** Persist channel management atomically without touching other rooms. */
+async function manage_room(database, room_id, action, payload) {
+  const room = await require_room(database, room_id);
+  require_host(room, payload);
+  const statements = [];
+  if (action === "move") {
+    const rooms = (await query_rooms(database, {})).rooms.map((item) => item.id).filter((id) => id !== room_id);
+    const before = payload.before_id ?? null;
+    if (before !== null && !rooms.includes(before)) throw new HttpError(400, "目标频道不存在或与当前频道相同");
+    rooms.splice(before ? rooms.indexOf(before) : rooms.length, 0, room_id);
+    statements.push(...rooms.map((id, index) => database.prepare("UPDATE room_directory SET position=? WHERE room_id=?").bind(index + 1, id)));
+  } else if (action === "folder") {
+    const folder_id = payload.folder_id ?? null;
+    if (folder_id !== null && (typeof folder_id !== "string" || !(await database.prepare("SELECT 1 FROM topic_folders WHERE id=?").bind(folder_id).first()))) {
+      throw new HttpError(400, "文件夹不存在");
+    }
+    statements.push(database.prepare("UPDATE room_folder_assignments SET folder_id=? WHERE room_id=?").bind(folder_id, room_id));
+  } else if (["archive", "restore"].includes(action)) {
+    if (action === "archive" && room.phase !== "concluded") statements.push(topic_statement(database, room_id, { ...room, phase: "paused" }));
+    statements.push(database.prepare("UPDATE room_directory SET archived=? WHERE room_id=?").bind(Number(action === "archive"), room_id));
+  } else if (action === "delete") {
+    if (payload.confirm_title !== room.title) throw new HttpError(400, "请输入完整频道名称确认删除");
+    const queries = [
+      "DELETE FROM message_summaries WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
+      "DELETE FROM message_details WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
+      "DELETE FROM discussion_turns WHERE room_id=?", "UPDATE messages SET reply_to=NULL WHERE room_id=?",
+      "DELETE FROM messages WHERE room_id=?", "DELETE FROM topic_settings WHERE room_id=?",
+      "DELETE FROM room_creations WHERE room_id=?", "DELETE FROM room_directory WHERE room_id=?", "DELETE FROM room_folder_assignments WHERE room_id=?", "DELETE FROM room_briefs WHERE room_id=?", "DELETE FROM room_floor WHERE room_id=?", "DELETE FROM rooms WHERE id=?",
+    ];
+    statements.push(...queries.map((query) => database.prepare(`${query} AND EXISTS (SELECT 1 FROM rooms WHERE id=? AND title=?)`).bind(room_id, room_id, payload.confirm_title)));
+  } else throw new HttpError(404, "地址不存在");
+  const results = await database.batch(statements);
+  if (action === "delete" && !results.at(-1).meta.changes) throw new HttpError(400, "频道名称已变化，请重新确认删除");
+  return action === "delete" ? { deleted: true, id: room_id } : require_room(database, room_id);
 }
 
 /** Normalize and validate a message before either URL or JSON publication. */
 function message_values(payload) {
   const author = String(payload.author ?? "").trim();
   const text = String(payload.text ?? "").trim();
-  const submission_id = String(payload.submission_id ?? "").trim();
+  const submission_id = submission_value(payload.submission_id);
   const reply_to = payload.reply_to ? integer(payload.reply_to) : null;
   if (!PARTICIPANTS.includes(author)) throw new HttpError(400, "请选择有效的发言者");
   if (!text || text_length(text) > MAX_TEXT_LENGTH) {
     throw new HttpError(400, `发言需为 1–${MAX_TEXT_LENGTH} 字`);
-  }
-  if (!/^[A-Za-z0-9_-]{8,100}$/.test(submission_id)) {
-    throw new HttpError(400, "submission_id 必须是 8–100 位字母、数字、下划线或连字符；同一次提交应重复使用相同编号");
   }
   return { author, text, submission_id, reply_to };
 }
@@ -193,9 +349,20 @@ function message_details(room, payload) {
   return { kind, submitted_by, source, turn_id: payload.turn_id ? integer(payload.turn_id) : null };
 }
 
+/** Preserve a supplied summary and distinguish its writer from the answer's author. */
+function message_summary(payload, message) {
+  const summary = String(payload.summary ?? "").trim();
+  if (text_length(summary) > MAX_SUMMARY_LENGTH) throw new HttpError(400, `回答摘要最多 ${MAX_SUMMARY_LENGTH} 字`);
+  const summary_by = summary ? (payload.summary_by ?? message.submitted_by) : "";
+  if (summary && (message.kind !== "opinion" || ![message.author, message.submitted_by].includes(summary_by))) {
+    throw new HttpError(400, "摘要仅用于观点，撰写者须为原作者或实际提交者");
+  }
+  return { summary, summary_by };
+}
+
 /** Compare semantic content, including provenance and assignment linkage. */
 function check_retry(previous, expected) {
-  if (["author", "text", "reply_to", "kind", "submitted_by", "turn_id"].some((key) => previous[key] !== expected[key])) {
+  if (["author", "text", "reply_to", "kind", "submitted_by", "turn_id", "summary", "summary_by"].some((key) => previous[key] !== expected[key])) {
     throw new HttpError(409, "这个提交编号已被另一条内容使用，请为新发言生成新编号");
   }
 }
@@ -215,7 +382,7 @@ async function check_message_references(database, room_id, message) {
 
 /** Prepare one atomic message, attribution, and assignment completion batch. */
 function message_statements(database, room_id, message) {
-  const { author, text, submission_id, reply_to, source, kind, submitted_by, turn_id } = message;
+  const { author, text, submission_id, reply_to, source, kind, submitted_by, turn_id, summary, summary_by } = message;
   return [
     database.prepare(`INSERT INTO messages (room_id,author,text,reply_to,source,submission_id,created_at)
       VALUES (?,?,?,?,?,?,?) ON CONFLICT(room_id,submission_id) DO NOTHING RETURNING id`)
@@ -223,6 +390,9 @@ function message_statements(database, room_id, message) {
     database.prepare(`INSERT INTO message_details (message_id,kind,submitted_by,turn_id)
       SELECT id,?,?,? FROM messages WHERE room_id=? AND submission_id=? AND author=? AND text=? AND reply_to IS ?
       ON CONFLICT(message_id) DO NOTHING`).bind(kind, submitted_by, turn_id, room_id, submission_id, author, text, reply_to),
+    database.prepare(`INSERT INTO message_summaries (message_id,text,author)
+      SELECT id,?,? FROM messages WHERE room_id=? AND submission_id=? AND author=? AND text=? AND reply_to IS ?
+      ON CONFLICT(message_id) DO NOTHING`).bind(summary, summary_by, room_id, submission_id, author, text, reply_to),
     database.prepare(`UPDATE discussion_turns SET status='answered',answer_id=(SELECT id FROM messages WHERE room_id=? AND submission_id=?)
       WHERE id=? AND status IN ('pending','notified') AND EXISTS
       (SELECT 1 FROM messages JOIN message_details ON messages.id=message_details.message_id
@@ -237,18 +407,22 @@ async function append_message(database, room_id, payload) {
   const values = message_values(payload);
   const room = await require_room(database, room_id);
   const expected = { ...values, ...message_details(room, { ...payload, author: values.author }) };
+  Object.assign(expected, message_summary(payload, expected));
   const previous = await database.prepare(`${MESSAGE_QUERY} WHERE room_id=? AND submission_id=?`).bind(room_id, values.submission_id).first();
   if (previous) { check_retry(previous, expected); return { message: previous, duplicate: true }; }
   if (["paused", "concluded"].includes(room.phase) && expected.kind === "opinion") throw new HttpError(400, "话题已暂停或收束；恢复阶段后才能提交新观点，运行回执请用 receipt");
   await check_message_references(database, room_id, expected);
+  if (expected.author !== "用户" && expected.kind === "opinion" && !expected.turn_id) throw new HttpError(400, "专家观点必须关联当前有效的 turn_id");
   let results;
   try { results = await database.batch(message_statements(database, room_id, expected)); }
   catch (error) {
+    if (String(error).includes("floor_required")) throw new HttpError(409, "请先领取本人发言权；他人持有或尚未被点名时不能发言");
+    if (String(error).includes("floor_turn_required")) throw new HttpError(400, "专家观点必须关联当前有效的 turn_id");
     if (String(error).includes("topic_inactive")) throw new HttpError(400, "话题已暂停或收束，请重新读取阶段");
     if (String(error).includes("UNIQUE constraint") || String(error).includes("turn_unavailable")) throw new HttpError(409, "该发言安排已有回答或已取消，请重新读取核对");
     throw error;
   }
-  const message = results[3].results[0];
+  const message = results.at(-1).results[0];
   check_retry(message, expected);
   return { message, duplicate: results[0].results.length === 0 };
 }
@@ -264,9 +438,15 @@ async function get_turn(database, room_id, turn_id) {
 async function query_turns(database, room_id, params) {
   await require_room(database, room_id);
   const page = Math.max(1, integer(params.page ?? 1));
+  let where = "room_id=?";
+  const values = [room_id];
+  if (Object.hasOwn(params, "submission_id")) {
+    where += " AND submission_id=?";
+    values.push(submission_value(params.submission_id));
+  }
   const results = await database.batch([
-    database.prepare("SELECT COUNT(*) AS total FROM discussion_turns WHERE room_id=?").bind(room_id),
-    database.prepare("SELECT * FROM discussion_turns WHERE room_id=? ORDER BY id LIMIT ? OFFSET ?").bind(room_id, PAGE_SIZE, (page - 1) * PAGE_SIZE),
+    database.prepare(`SELECT COUNT(*) AS total FROM discussion_turns WHERE ${where}`).bind(...values),
+    database.prepare(`SELECT * FROM discussion_turns WHERE ${where} ORDER BY id LIMIT ? OFFSET ?`).bind(...values, PAGE_SIZE, (page - 1) * PAGE_SIZE),
   ]);
   const total = results[0].results[0].total;
   return { turns: results[1].results, page, total, pages: Math.max(1, Math.ceil(total / PAGE_SIZE)) };
@@ -293,6 +473,7 @@ async function create_turn(database, room_id, payload) {
       database.prepare("SELECT * FROM discussion_turns WHERE room_id=? AND submission_id=?").bind(room_id, submission_id),
     ]);
   } catch (error) {
+    if (String(error).includes("floor_required")) throw new HttpError(409, "主持人须先领取发言权再安排下一位");
     if (String(error).includes("topic_inactive")) throw new HttpError(400, "话题已暂停或收束，请重新读取阶段");
     if (String(error).includes("UNIQUE constraint")) throw new HttpError(409, "请先完成或取消当前发言安排");
     throw error;
@@ -313,36 +494,60 @@ async function update_turn(database, room_id, turn_id, payload) {
   if (status === "notified" && ["paused", "concluded"].includes(room.phase)) throw new HttpError(400, "话题已暂停或收束，不能继续通知");
   if (!["pending", "notified"].includes(turn.status)) throw new HttpError(409, "该发言安排已结束");
   await database.prepare(`UPDATE discussion_turns SET status=?,notified_at=? WHERE id=? AND status IN ('pending','notified')
+    AND (?<>'cancelled' OR ?='用户' OR EXISTS (SELECT 1 FROM room_floor JOIN topic_settings USING(room_id) WHERE room_id=discussion_turns.room_id AND holder=host))
     AND (?='cancelled' OR NOT EXISTS (SELECT 1 FROM topic_settings WHERE room_id=discussion_turns.room_id AND phase IN ('paused','concluded')))`)
-    .bind(status, status === "notified" ? new Date().toISOString() : turn.notified_at, turn.id, status).run();
+    .bind(status, status === "notified" ? new Date().toISOString() : turn.notified_at, turn.id, status, payload.actor, status).run();
   const updated = await get_turn(database, room_id, turn_id);
   if (updated.status !== status) throw new HttpError(409, "话题阶段或发言安排已变化，请重新读取核对");
   return updated;
 }
 
-/** Retrieve bounded history pages with keyword, author, and mention filters. */
-async function query_messages(database, room_id, params) {
-  await require_room(database, room_id);
-  const page = Math.max(1, integer(params.page ?? 1));
+/** Build exact and incremental filters without expanding the read scope. */
+function message_filters(room_id, params) {
   const clauses = ["room_id=?"];
   const values = [room_id];
   const query = String(params.q ?? "").trim();
   const author = String(params.author ?? "").trim();
   const mention = String(params.mention ?? "").trim();
   if (query) {
-    clauses.push("(instr(lower(text),lower(?)) > 0 OR CAST(messages.id AS TEXT)=?)");
+    clauses.push("(instr(lower(messages.text),lower(?)) > 0 OR CAST(messages.id AS TEXT)=?)");
     values.push(query, query.replace(/^#+/, ""));
   }
-  if (author) { clauses.push("author=?"); values.push(author); }
-  if (mention) { clauses.push("instr(text,?) > 0"); values.push(`@${mention}`); }
-  const where = clauses.join(" AND ");
+  if (author) { clauses.push("messages.author=?"); values.push(author); }
+  if (mention) { clauses.push("instr(messages.text,?) > 0"); values.push(`@${mention}`); }
+  if (Object.hasOwn(params, "kind")) {
+    if (!["opinion", "moderation", "receipt"].includes(params.kind)) throw new HttpError(400, "发言职责无效");
+    clauses.push("COALESCE(details.kind,'opinion')=?"); values.push(params.kind);
+  }
+  if (Object.hasOwn(params, "submission_id")) {
+    clauses.push("submission_id=?"); values.push(submission_value(params.submission_id));
+  }
+  if (Object.hasOwn(params, "after")) {
+    const after = integer(params.after);
+    if (after < 0 || integer(params.page ?? 1) !== 1) throw new HttpError(400, "after 需为非负消息编号，不能与翻页同时使用");
+    clauses.push("messages.id>?"); values.push(after);
+  }
+  return { where: clauses.join(" AND "), values };
+}
+
+/** Return one page, advancing incremental cursors only through returned rows. */
+async function query_messages(database, room_id, params) {
+  await require_room(database, room_id);
+  const page = Math.max(1, integer(params.page ?? 1));
+  const { where, values } = message_filters(room_id, params);
   const results = await database.batch([
-    database.prepare(`SELECT COUNT(*) AS total FROM messages WHERE ${where}`).bind(...values),
+    database.prepare(`SELECT COUNT(*) AS total FROM (${MESSAGE_QUERY} WHERE ${where})`).bind(...values),
     database.prepare(`${MESSAGE_QUERY} WHERE ${where} ORDER BY messages.id LIMIT ? OFFSET ?`)
-      .bind(...values, PAGE_SIZE, (page - 1) * PAGE_SIZE),
+      .bind(...values, PAGE_SIZE + 1, (page - 1) * PAGE_SIZE),
   ]);
   const total = results[0].results[0].total;
-  return { messages: results[1].results, page, total, pages: Math.max(1, Math.ceil(total / PAGE_SIZE)) };
+  const rows = results[1].results;
+  const messages = rows.slice(0, PAGE_SIZE);
+  const result = { messages, page, total, pages: Math.max(1, Math.ceil(total / PAGE_SIZE)) };
+  if (Object.hasOwn(params, "after")) Object.assign(result, {
+    next_after: messages.at(-1)?.id ?? integer(params.after), has_more: rows.length > PAGE_SIZE,
+  });
+  return result;
 }
 
 /** Read exact message text only inside its owning room. */
@@ -356,21 +561,32 @@ async function get_message(database, room_id, message_id) {
 /** Save the human-maintained state without advancing its evidence boundary. */
 async function update_state(database, room_id, payload) {
   const text = String(payload.text ?? "").trim();
-  if (text_length(text) > MAX_TEXT_LENGTH) throw new HttpError(400, "讨论状态最多 4000 字");
+  const brief = String(payload.brief ?? "").trim();
+  if (text_length(text) > MAX_STATE_LENGTH || text_length(brief) > MAX_BRIEF_LENGTH) throw new HttpError(400, `讨论状态最多 ${MAX_STATE_LENGTH} 字，主持简报最多 ${MAX_BRIEF_LENGTH} 字`);
   const room = await require_room(database, room_id);
   require_host(room, { actor: payload.actor ?? "用户" });
   const until = integer(payload.until ?? room.latest_id);
   if (until < 0 || until > room.latest_id) throw new HttpError(400, "讨论状态的截止编号无效");
-  await database.prepare("UPDATE rooms SET state_text=?,state_until=? WHERE id=?")
-    .bind(text, until, room_id).run();
+  const statements = [database.prepare("UPDATE rooms SET state_text=?,state_until=? WHERE id=?").bind(text, until, room_id)];
+  if (Object.hasOwn(payload, "brief")) statements.push(database.prepare(`INSERT INTO room_briefs (room_id,text,until,updated_at) VALUES (?,?,?,?)
+    ON CONFLICT(room_id) DO UPDATE SET text=excluded.text,until=excluded.until,updated_at=excluded.updated_at`).bind(room_id, brief, until, new Date().toISOString()));
+  await database.batch(statements);
   return require_room(database, room_id);
+}
+
+/** Read the host's brief explicitly without adding it to independent-entry overviews. */
+function state_reading_text(room) {
+  const brief = room.host_brief;
+  const overview = brief?.text ? `主持简报（整理至 #${brief.until}，${brief.updated_at}）\n${brief.text}` : "主持简报：尚未更新";
+  return `${overview}\n\n主持人维护的状态（整理至 #${room.state_until}）\n\n${room.state_text || "尚未整理"}\n\n${receipt_references_text(room)}`;
 }
 
 /** Render a message with its provenance and original reply reference. */
 function message_text(message) {
   const reply = message.reply_to ? ` · 回复 #${message.reply_to}` : "";
   const role = { moderation: "主持发言", receipt: "运行回执" }[message.kind] || "专家观点";
-  return `#${message.id} · ${message.author} · ${message.created_at}${reply}\n职责：${role}；来源：${message.source}；提交者：${message.submitted_by ?? "用户"}；安排：${message.turn_id || "无"}\n${message.text}`;
+  const summary = message.summary ? `\n回答摘要（${message.summary_by}）：\n${message.summary}\n\n完整正文：\n` : "\n";
+  return `#${message.id} · ${message.author} · ${message.created_at}${reply}\n职责：${role}；来源：${message.source}；提交者：${message.submitted_by ?? "用户"}；安排：${message.turn_id || "无"}${summary}${message.text}`;
 }
 
 /** Expose an overview; supporting context is available only through chosen links. */
@@ -379,11 +595,13 @@ async function room_text(database, room_id, params) {
   const base = `/r/${room_id}`;
   const content = [`# ${room.title}`, `目标：${room.goal}`,
     `主持人：${room.host}；阶段：${PHASES[room.phase]}；当前焦点：${room.focus || "尚未填写"}`,
-    `当前记录截止 #${room.latest_id}；共 ${room.message_count} 条。`];
+    `当前记录截止 #${room.latest_id}；共 ${room.message_count} 条；已完成 ${room.completed_rounds} 轮讨论（所有参与专家各发言一次）。`];
   const turn = room.current_turn;
+  content.push(`发言权：${room.floor.holder ? `${room.floor.holder} 持有` : `待 ${room.floor.next_speaker} 领取`}；版本 ${room.floor.revision}。用户本人可随时留言，AI 发言前须领取。`);
   if (room.phase === "initial") content.push("本阶段先独立形成详细观点：仅阅读目标、背景、边界和自己的已有讨论；暂不阅读他人观点或主持总结。提交后再交叉阅读。这是参与约定，不是权限隔离。");
-  if (["paused", "concluded"].includes(room.phase)) content.push("停止处理发言安排，取消本讨论自己的后台任务；核对实际状态后提交运行回执。不要因旧通知恢复讨论。");
-  if (turn) content.push(`当前安排 #${turn.id}：${turn.expert} · ${TURN_STATUSES[turn.status]}`, `待回应问题：${turn.question}`, `安排详情：${base}/turns/${turn.id}`);
+  if (room.archived) content.push("频道已存档，记录仍可查阅；先恢复频道，再由用户明确恢复讨论阶段。");
+  if (["paused", "concluded"].includes(room.phase)) content.push("停止处理发言安排，取消本讨论自己的后台任务并核对实际状态；非必要不生成回执，正常停止无需回执。不要因旧通知恢复讨论。");
+  if (turn) content.push(`当前安排 #${turn.id}：${turn.expert} · ${turn_status_label(turn, room)}`, `待回应问题：${turn.question}`, `安排详情：${base}/turns/${turn.id}`);
   content.push("## 按需展开", "请自主选择需要的材料，不必读取全部历史。", `背景、边界与参与专家：${base}/brief`,
     `共识与分歧（整理至 #${room.state_until}）：${base}/state`);
   if (params.participant) content.push(`与 @${params.participant} 相关的观点：${base}/search?mention=${params.participant}&page=1`);
@@ -397,7 +615,7 @@ async function room_text(database, room_id, params) {
       `完整写入与主持协议：${base}/protocol`, "重试沿用编号和正文；收到回执后按 message.id 重新读取核对。");
   } else {
     content.push("", "## 在线 AI · 只读参与",
-      "请读取议题、状态和相关原文，在你自己的聊天窗口输出观点，并注明引用的消息编号；需要留档时由用户代发。",
+      "请读取议题、状态和相关原文，在你自己的聊天窗口输出观点：先给通常 1–3 句的回答摘要，再给完整正文，保留关键条件、不确定性及引用编号；需要留档时由用户代发。",
       "不要操作网页表单、调用写入接口或生成发布链接，不要求获取发布回执。读取失败时如实报告，由用户提供复制的材料。");
   }
   content.push("参与方式按运行环境区分；主持人可以兼任专家；作者、职责与来源尚未认证。不调用模型服务 API。");
@@ -411,9 +629,10 @@ function brief_text(room) {
 }
 
 /** Render an assignment without embedding topic context. */
-function turn_text(turn, room_id) {
+function turn_text(turn, room) {
+  const room_id = room.id;
   const answer = turn.answer_id ? `\n回答原文：/r/${room_id}/messages/${turn.answer_id}` : "";
-  return `安排 #${turn.id} · ${turn.expert} · ${TURN_STATUSES[turn.status]}\n待回应问题：${turn.question}\n话题入口：/r/${room_id}?participant=${turn.expert}\n回答关联 turn_id：${turn.id}${answer}\n复制通知不代表已送达；实际通知后由主持人确认。`;
+  return `安排 #${turn.id} · ${turn.expert} · ${turn_status_label(turn, room)}\n待回应问题：${turn.question}\n话题入口：/r/${room_id}?participant=${turn.expert}\n回答关联 turn_id：${turn.id}${answer}\n回答附简短摘要及完整正文，保留关键条件和不确定性。\n已接入的本地 CLI 专家可自行检查安排；在线专家需联系。复制通知不代表已送达；仅实际通知后由主持人确认。`;
 }
 
 /** Describe CLI host operations separately from topic material. */
@@ -421,19 +640,23 @@ function protocol_text(room) {
   const base = `/api/rooms/${room.id}`;
   return ["# 本地 CLI 读写与主持协议", `当前主持人：${room.host}。以下为留言板接口，不是模型服务 API。`,
     "所有写入使用 POST 和 Content-Type: application/json。主持操作填写 actor 为当前主持人或用户；这些是声明身份，不是认证凭据。",
-    '创建话题：POST /api/rooms；字段 title、goal、background、boundaries、host、experts，例如 experts={"Codex":"cli","Gemini":"online"}。AI 主持人必须配置为 cli。',
+    `发言权：GET ${base}/floor 返回 holder、next_speaker、revision；POST 同路径，字段 actor、speaker（默认 actor）、action=take/return、revision（刚读到的整数版本）。仅无人持有且 next_speaker 为本人时可领取；持有者可主动归还，下一位回到主持人。版本变化返回 409，先读回核对。主持人仅可代操作 online 专家，cli 专家自行操作；用户可协助。`,
+    "新房间由主持人持有发言权。创建安排须主持人持有，保存成功即归还并点名该专家；AI 的 opinion、moderation、receipt 都须实际作者持有，代发不豁免，opinion 必须关联有效 turn_id。消息保存成功自动归还，下一位为主持人。失败不归还，同编号重试不再次交接。用户本人发言不受发言权限制，也不改变发言权；@ 不改变顺序。维护状态、阶段及通知回执不占用发言权。取消安排须主持人持有，用户可直接取消失效安排；取消后归还给主持人领取。",
+    '创建话题：POST /api/rooms；字段 title、goal、background、boundaries、host、experts、submission_id（新 UUID），例如 experts={"Codex":"cli","Gemini":"online"}。AI 主持人必须配置为 cli。同编号对照首次创建资料，重试不覆盖后来修改的房间；旧客户端不带编号时没有幂等保护。',
+    `查询提交：GET /api/rooms?submission_id=编号 查建房结果；GET ${base}/messages?submission_id=编号 或 ${base}/turns?submission_id=编号 查消息或安排。查询成功且列表为空表示尚未查到，读取失败不表示未写入。`,
+    `增量读取：GET ${base}/messages?after=已读消息编号，每次最多 20 条，按 next_after 续读，has_more 表示还有一批；可加 kind=opinion/moderation/receipt、author、mention、q。after 不与翻页混用，过滤后的游标只代表该查询范围。`,
     `维护话题：POST ${base}/topic；actor 加需要修改的上述字段，另可更新 phase（preparing/initial/discussing/reviewing/paused/concluded）、focus。收束前先完成或取消当前安排。暂停保留安排；恢复阶段后再继续。`,
     `安排发言：POST ${base}/turns；字段 actor、expert、question、submission_id（新 UUID）。同一话题同时只有一个未完成安排；重试沿用同一编号和问题。`,
     `通知：仅把对象、问题、话题入口交给对应专家，不附背景、摘要或历史。使用已有且获准的会话通道；没有通道时交由用户协助。实际送达后 POST ${base}/turns/安排编号，字段 actor、status=notified；取消用 status=cancelled。复制不算送达。`,
-    `专家观点：POST ${base}/messages；author、text、submission_id、source=cli，kind=opinion；可选 reply_to（本话题原文编号）、turn_id（回答的安排编号）。`,
+    `专家观点：POST ${base}/messages；author、text、submission_id、source=cli，kind=opinion；必须关联 turn_id（回答的安排编号），可选 reply_to（本话题原文编号）。每次回答同时提供 summary（最多 ${MAX_SUMMARY_LENGTH} 字），通常 1–3 句结论先行，保留关键理由、条件和不确定性；summary_by 为原作者或提交者，默认提交者。text 保留完整正文，最多 ${MAX_TEXT_LENGTH} 个 Unicode 字符，请求最多 ${MAX_BODY_BYTES} 字节；不截断或用摘要完成安排。旧客户端缺少 summary 时不自动生成。`,
     `主持发言：同一消息接口，author=${room.host}、submitted_by=${room.host}、kind=moderation、source=cli；个人观点使用 kind=opinion，不能自动视为共识。`,
-    `代发只读专家观点：author 保留原专家，submitted_by=${room.host}、kind=opinion、text 为原文；可附 reply_to 和 turn_id。服务保存代发来源；不要冒充专家直接提交。`,
-    `整理状态：POST ${base}/state；actor、text、until（依据的消息截止编号）。这不覆盖原始记录，也不代表全体专家一致同意。`,
+    `代发只读专家观点：author 保留原专家，submitted_by=${room.host}、kind=opinion、text 为原文；须关联 turn_id，可附 reply_to。服务保存代发来源；不要冒充专家直接提交。`,
+    `整理状态：POST ${base}/state；actor、text（详细状态，最多 ${MAX_STATE_LENGTH} 字）、until（依据的消息截止编号）；brief（最多 ${MAX_BRIEF_LENGTH} 字）为面向人的主持简报，说明结论、共识、歧义和下一步意图。进度或安排变化后更新；省略 brief 保留旧简报，空字符串清除。所有参与专家各保存一次完整观点才完成一轮；同轮重复发言只计该专家一次，主持说明、用户留言、回执及取消安排不推进轮次。房间 rounds 按当前配置专家和完整历史生成，completed_rounds 为完成轮数，answered_turns 仅为已回答安排数。状态不覆盖原文，也不代表全体一致同意。`,
     "讨论方法：initial 先独立给出结论、依据、假设和风险，不回应他人；discussing 围绕具体分歧引用原文，说明维持或修正及原因；reviewing 检查拟定结论是否误述自己、遗漏条件或仍有阻碍。沉默不算同意。",
-    `运行回执：POST ${base}/messages；author 使用实际身份、kind=receipt、source=cli、text 记录本次运行编号、任务编号、启动或停止状态及实际证据，submission_id 同次重试不变，不填 turn_id。回执不算专家观点或已回答。`,
-    "后台参与：先立即检查，再用本会话真实可用的后台任务按约定频率和上限检查；未配置时不自称在线。只答自己未完成的安排，每项一次；无新安排不发言。paused/concluded 或达到上限时停止自己的任务并报告结果。失败时保留未提交原文；重新读取阶段后再决定是否重试。",
+    `运行回执：非必要不生成。正常启停、首次检查、无变化轮询和已提交回答不另发回执；仅用户明确要求、异常影响协作且需要处理或交接确需补充确认时使用。POST ${base}/messages；author 使用实际身份、kind=receipt、source=cli、text 简述实际结果、影响和下一步，有任务时附本次运行标识与真实任务编号；已有状态或消息足够说明时不重复。submission_id 同次重试不变，不填 turn_id。回执不算专家观点或已回答。`,
+    "后台参与：先立即检查，再用本会话真实可用的原生任务按约定频率和自身运行上限检查。专家只答自己未完成的安排，无任务时等待；主持人仍需处理新回答、网页回复和下一安排。paused/concluded、用户叫停或达到自身上限时停止自己的任务并核验，实际结果保留在本地接续信息，是否发回执按上述规则判断；单个专家任务停止不等于整场讨论结束。失败时保留未提交原文，重新读取阶段后再决定是否重试。",
     "收束：结论须有原文依据，区分明确共识、未决分歧与主持人判断；完成约定复核或达到已说明的时间/轮次上限后收束。讨论完成与后台任务退出分别核验；不为追求全员确认无限续轮。",
-    "消息与安排都按 submission_id 去重，改变内容需新编号。写入后重新读取服务器返回的原文或安排，核对身份、内容与引用。",
+    "房间、消息与安排都支持 submission_id 去重，同次重试沿用编号和原始内容，新内容使用新编号。写入后重新读取服务器返回的结果，核对身份、内容与引用。",
   ].join("\n\n");
 }
 
@@ -443,18 +666,30 @@ async function handle_api(database, request, parts, params) {
   const method = request.method;
   if (route === "api/health" && method === "GET") return respond({ ok: true });
   if (route === "api/rooms") {
-    if (method === "GET") {
-      const rows = await database.prepare(`${ROOM_QUERY} GROUP BY rooms.id ORDER BY rooms.created_at,rooms.id`).all();
-      return respond({ rooms: rows.results, participants: PARTICIPANTS });
-    }
-    return respond(await create_room(database, await read_payload(request)), 201);
+    if (method === "GET") return respond(await query_rooms(database, params));
+    const room = await create_room(database, await read_payload(request));
+    return respond(room, room.duplicate ? 200 : 201);
+  }
+  if (route === "api/folders" && method === "POST") {
+    const raw_name = (await read_payload(request)).name;
+    if (typeof raw_name !== "string") throw new HttpError(400, "文件夹名称必须是文本");
+    const name = raw_name.trim();
+    if (!name || Array.from(name).length > 40) throw new HttpError(400, "文件夹名称须为 1–40 个字符");
+    const id = crypto.randomUUID().replaceAll("-", "");
+    const position = (await database.prepare("SELECT COALESCE(MAX(position),0)+1 AS next FROM topic_folders").first()).next;
+    await database.prepare("INSERT INTO topic_folders (id,name,position) VALUES (?,?,?)").bind(id, name, position).run();
+    return respond({ id, name, position }, 201);
   }
   if (parts.length < 3 || parts[0] !== "api" || parts[1] !== "rooms") {
     throw new HttpError(404, "地址不存在");
   }
   const room_id = parts[2];
   const tail = parts.slice(3).join("/");
+  if (["move", "folder", "archive", "restore", "delete"].includes(tail) && method === "POST") {
+    return respond(await manage_room(database, room_id, tail, await read_payload(request)));
+  }
   if (!tail && method === "GET") return respond(await require_room(database, room_id));
+  if (tail === "floor") return respond(method === "GET" ? (await require_room(database, room_id)).floor : await update_floor(database, room_id, await read_payload(request)));
   if (["topic", "turns"].includes(parts[3])) return handle_host_api(database, request, parts, params);
   if (tail === "messages") {
     if (method === "GET") return respond(await query_messages(database, room_id, params));
@@ -497,14 +732,15 @@ async function handle_text(database, parts, params) {
   if (["brief", "state", "protocol"].includes(tail)) {
     const room = await require_room(database, room_id);
     if (tail === "brief") return brief_text(room);
-    if (tail === "state") return `主持人维护的状态（整理至 #${room.state_until}）\n\n${room.state_text || "尚未整理"}`;
+    if (tail === "state") return state_reading_text(room);
     return protocol_text(room);
   }
   if (tail === "turns") {
     const result = await query_turns(database, room_id, params);
-    return `第 ${result.page} / ${result.pages} 页，共 ${result.total} 项。\n\n${result.turns.map((turn) => turn_text(turn, room_id)).join("\n\n")}`;
+    const room = await require_room(database, room_id);
+    return `第 ${result.page} / ${result.pages} 页，共 ${result.total} 项。\n\n${result.turns.map((turn) => turn_text(turn, room)).join("\n\n")}`;
   }
-  if (parts.length === 4 && parts[2] === "turns") return turn_text(await get_turn(database, room_id, parts[3]), room_id);
+  if (parts.length === 4 && parts[2] === "turns") return turn_text(await get_turn(database, room_id, parts[3]), await require_room(database, room_id));
   if (tail === "messages" || tail === "search") {
     const result = await query_messages(database, room_id, params);
     const items = result.messages.map(message_text);
@@ -526,7 +762,7 @@ async function fetch_request(request, env) {
   const parts = url.pathname.replace(/^\/+|\/+$/g, "").split("/");
   const text_mode = parts[0] === "r";
   try {
-    if (url.pathname === "/robots.txt") return respond("User-agent: *\nDisallow: /\n", 200, true);
+    if (url.pathname === "/robots.txt") return respond("User-agent: *\nAllow: /\n", 200, true);
     if (!["api", "r"].includes(parts[0])) return env.ASSETS.fetch(request);
     if (!["GET", "POST"].includes(request.method)) return new Response(null, { status: 501 });
     const params = Object.fromEntries(url.searchParams);

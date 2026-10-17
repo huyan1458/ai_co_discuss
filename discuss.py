@@ -14,20 +14,23 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 DEFAULT_TIMEOUT = 20
-MAX_BODY_BYTES = 65536
+MAX_BODY_BYTES = 512 * 1024
+MAX_TEXT_LENGTH = 32000
+MAX_SUMMARY_LENGTH = 1000
+MAX_BRIEF_LENGTH = 1600
 PARTICIPANTS = ("用户", "Codex", "Claude", "Gemini", "DeepSeek", "Qwen")
 PHASES = ("preparing", "initial", "discussing", "reviewing", "paused", "concluded")
 KINDS = ("opinion", "moderation", "receipt")
 OVERVIEW_FIELDS = ("id", "title", "goal", "host", "phase", "focus", "message_count",
-                   "latest_id", "state_until", "current_turn")
+                   "latest_id", "state_until", "current_turn", "floor", "latest_receipts", "answered_turns", "duplicate", "submission_id")
 BRIEF_FIELDS = ("id", "title", "goal", "host", "background", "boundaries", "experts")
 ROOM_LIST_FIELDS = ("id", "title", "goal", "message_count", "latest_id", "created_at")
 GUIDANCE = {
     "initial": "先基于目标、背景和边界独立形成观点；提交前不读他人观点或主持总结。",
-    "paused": "停止处理安排并停止本讨论自己的后台任务；核对实际状态后提交 receipt。",
-    "concluded": "话题已收束；停止本讨论自己的后台任务，核对后提交 receipt。",
+    "paused": "停止处理安排并停止本讨论自己的后台任务，核对实际状态；非必要不生成 receipt，正常停止无需回执。",
+    "concluded": "话题已收束；停止本讨论自己的后台任务并核对实际状态；非必要不生成 receipt，正常停止无需回执。",
 }
 EXIT_CODES = {"0": "成功", "1": "HTTP/API 错误", "2": "参数或输入错误",
               "3": "网络失败或响应无法确认", "130": "被中断，写入结果需核对"}
@@ -87,6 +90,17 @@ def room_id(value):
     return value
 
 
+def non_negative_int(value):
+    """Parse a message cursor, including zero for the start of history."""
+    try:
+        number = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("必须为非负整数") from error
+    if number < 0:
+        raise argparse.ArgumentTypeError("必须为非负整数")
+    return number
+
+
 def submission_id(value):
     """Validate the server's reusable submission identifier format."""
     if not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", value):
@@ -142,9 +156,13 @@ def room_commands(subcommands, registry):
     for action, description in (("list", "列出房间概要"), ("view", "只读目标、阶段、焦点及当前安排"),
                                 ("brief", "按需读取背景、边界和专家配置"),
                                 ("protocol", "按需读取当前服务的参与协议")):
-        add_leaf(subcommands, registry, f"room {action}", description, action != "list")
+        parser = add_leaf(subcommands, registry, f"room {action}", description, action != "list")
+        if action == "list":
+            parser.add_argument("--submission-id", type=submission_id, help="按建房提交编号精确查询")
     create = add_leaf(subcommands, registry, "room create", "创建话题；不自动启动讨论或监控")
     add_topic(create, create=True)
+    create.add_argument("--submission-id", type=submission_id, required=True,
+                        help="新话题唯一编号；未知结果先查询，重试沿用编号和原始资料")
     update = add_leaf(subcommands, registry, "room update", "维护话题；省略的字段保持不变", True)
     add_topic(update)
 
@@ -152,14 +170,20 @@ def room_commands(subcommands, registry):
 def message_commands(subcommands, registry):
     """Register bounded search, exact reads, and attributed message writes."""
     listing = add_leaf(subcommands, registry, "message list", "按页检索原文，每页 20 条", True)
-    listing.add_argument("--page", type=positive_int, default=1)
+    paging = listing.add_mutually_exclusive_group()
+    paging.add_argument("--page", type=positive_int, default=1)
+    paging.add_argument("--after", type=non_negative_int, help="只读此消息编号之后的内容；按 next_after 续读")
     listing.add_argument("--query", help="关键词或消息编号")
     listing.add_argument("--author", choices=PARTICIPANTS)
     listing.add_argument("--mention", choices=PARTICIPANTS)
+    listing.add_argument("--kind", choices=KINDS, help="筛选观点、主持说明或运行回执")
+    listing.add_argument("--submission-id", type=submission_id, help="按提交编号精确查询结果")
     view = add_leaf(subcommands, registry, "message view", "读取一条精确原文与来源", True)
     view.add_argument("id", type=positive_int, help="消息编号")
     post = add_leaf(subcommands, registry, "message post", "提交观点、主持说明、代发或运行回执", True)
     add_text(post, "body", required=True)
+    add_text(post, "summary")
+    post.add_argument("--summary-by", choices=PARTICIPANTS, help="摘要撰写者：原作者或实际操作者；默认操作者")
     post.add_argument("--author", choices=PARTICIPANTS, help="原作者；默认等于 --as；不同即代发")
     post.add_argument("--kind", choices=KINDS, default="opinion")
     post.add_argument("--turn", type=positive_int, help="所回答的安排编号，仅 opinion 可用")
@@ -178,6 +202,7 @@ def turn_commands(subcommands, registry):
         parser = add_leaf(subcommands, registry, f"turn {action}", description, True)
         if action == "list":
             parser.add_argument("--page", type=positive_int, default=1)
+            parser.add_argument("--submission-id", type=submission_id, help="按安排提交编号精确查询结果")
         elif action not in ("create", "current"):
             parser.add_argument("id", type=positive_int, help="安排编号")
         if action == "create":
@@ -192,7 +217,17 @@ def state_commands(subcommands, registry):
     add_leaf(subcommands, registry, "state view", "读取主持摘要及材料截止编号", True)
     parser = add_leaf(subcommands, registry, "state set", "保存主持摘要；不自动推定已读范围", True)
     add_text(parser, "body", required=True)
+    add_text(parser, "brief")
     parser.add_argument("--until", type=int, required=True, help="实际已读的材料截止编号，可为 0")
+
+
+def floor_commands(subcommands, registry):
+    """Expose explicit floor inspection, nominated claims and early returns."""
+    add_leaf(subcommands, registry, "floor view", "读取当前持有者、下一位与版本", True)
+    for action in ("take", "return"):
+        parser = add_leaf(subcommands, registry, f"floor {action}", "领取或归还发言权", True)
+        parser.add_argument("--speaker", choices=PARTICIPANTS, help="实际持有者；代操作时显式指定，默认 --as")
+        parser.add_argument("--revision", type=non_negative_int, required=True, help="刚读取的发言权版本；变化后需重新核对")
 
 
 def build_parser():
@@ -204,7 +239,7 @@ def build_parser():
     subcommands = parser.add_subparsers(dest="resource", required=True)
     registry = {}
     for name, register in (("room", room_commands), ("message", message_commands),
-                           ("turn", turn_commands), ("state", state_commands)):
+                           ("turn", turn_commands), ("state", state_commands), ("floor", floor_commands)):
         group = subcommands.add_parser(name, help=f"{name} 操作", allow_abbrev=False)
         add_common(group)
         register(group.add_subparsers(dest="action", required=True), registry)
@@ -278,10 +313,12 @@ def topic_payload(args):
 def plan_room(args):
     """Translate room operations to one existing HTTP endpoint."""
     if args.action == "list":
-        return RequestPlan("/api/rooms", view="room_list")
+        params = {"submission_id": args.submission_id} if args.submission_id else None
+        return RequestPlan("/api/rooms", view="room_list", params=params)
     if args.action == "create":
         payload = topic_payload(args)
         payload.setdefault("host", require_actor(args))
+        payload["submission_id"] = args.submission_id
         return RequestPlan("/api/rooms", "POST", payload, "overview")
     base = f"/api/rooms/{args.room}"
     if args.action == "update":
@@ -301,13 +338,23 @@ def plan_message(args):
     if args.action == "view":
         return RequestPlan(f"{base}/{args.id}")
     if args.action == "list":
-        params = {"page": args.page, "q": args.query, "author": args.author, "mention": args.mention}
+        params = {"page": args.page, "q": args.query, "author": args.author, "mention": args.mention,
+                  "after": args.after, "kind": args.kind, "submission_id": args.submission_id}
         return RequestPlan(base, params={key: value for key, value in params.items() if value is not None})
     actor = require_actor(args)
     if args.turn and args.kind != "opinion":
         raise CliError("只有 opinion 可以关联 --turn；receipt 不完成安排")
     payload = {"author": args.author or actor, "submitted_by": actor, "source": "cli",
                "kind": args.kind, "text": text_field(args, "body"), "submission_id": args.submission_id}
+    if not payload["text"].strip() or len(payload["text"].strip()) > MAX_TEXT_LENGTH:
+        raise CliError(f"发言需为 1–{MAX_TEXT_LENGTH} 个 Unicode 字符；不会自动截断或分段")
+    summary = text_field(args, "summary")
+    if summary is not None:
+        if len(summary.strip()) > MAX_SUMMARY_LENGTH:
+            raise CliError(f"回答摘要最多 {MAX_SUMMARY_LENGTH} 个 Unicode 字符；不会自动截断")
+        payload["summary"] = summary
+    if args.summary_by:
+        payload["summary_by"] = args.summary_by
     if args.turn:
         payload["turn_id"] = args.turn
     if args.reply_to:
@@ -321,7 +368,10 @@ def plan_turn(args):
     if args.action == "current":
         return RequestPlan(base, view="current")
     if args.action == "list":
-        return RequestPlan(base + "/turns", params={"page": args.page})
+        params = {"page": args.page}
+        if args.submission_id:
+            params["submission_id"] = args.submission_id
+        return RequestPlan(base + "/turns", params=params)
     if args.action == "create":
         payload = {"actor": require_actor(args), "expert": args.expert,
                    "question": text_field(args, "question"), "submission_id": args.submission_id}
@@ -333,6 +383,16 @@ def plan_turn(args):
     return RequestPlan(path, view="prompt" if args.action == "prompt" else None)
 
 
+def plan_floor(args):
+    """Send one versioned operation without silently claiming on a failed write."""
+    path = f"/api/rooms/{args.room}/floor"
+    if args.action == "view":
+        return RequestPlan(path)
+    actor = require_actor(args)
+    return RequestPlan(path, "POST", {"actor": actor, "speaker": args.speaker or actor,
+                                      "action": args.action, "revision": args.revision})
+
+
 def plan_state(args):
     """Keep a host summary's cutoff explicit instead of assuming latest means read."""
     base = f"/api/rooms/{args.room}"
@@ -341,6 +401,11 @@ def plan_state(args):
     if args.until < 0:
         raise CliError("--until 不能小于 0")
     payload = {"actor": require_actor(args), "text": text_field(args, "body"), "until": args.until}
+    brief = text_field(args, "brief")
+    if brief is not None:
+        if len(brief.strip()) > MAX_BRIEF_LENGTH:
+            raise CliError(f"主持简报最多 {MAX_BRIEF_LENGTH} 个 Unicode 字符；不会自动截断")
+        payload["brief"] = brief
     return RequestPlan(base + "/state", "POST", payload, "state")
 
 
@@ -365,7 +430,7 @@ def build_plan(args):
     if stdin_count > 1:
         raise CliError("一次命令只能有一个字段从标准输入读取")
     handlers = {"room": plan_room, "message": plan_message, "turn": plan_turn,
-                "state": plan_state, "api": plan_api}
+                "state": plan_state, "floor": plan_floor, "api": plan_api}
     plan = RequestPlan("/api/health") if args.resource == "health" else handlers[args.resource](args)
     if getattr(args, "dry_run", False) and plan.method != "POST":
         raise CliError("--dry-run 仅用于写入命令；读取命令本身不会修改数据")
@@ -446,16 +511,16 @@ def project_result(value, plan, site):
         return {"rooms": [select_fields(room, ROOM_LIST_FIELDS) for room in value["rooms"]]}
     if plan.view in ("overview", "brief", "state", "current"):
         fields = {"overview": OVERVIEW_FIELDS, "brief": BRIEF_FIELDS,
-                  "state": ("id", "state_text", "state_until"),
-                  "current": ("id", "phase", "current_turn")}[plan.view]
+                  "state": ("id", "state_text", "state_until", "host_brief", "latest_receipts", "answered_turns"),
+                  "current": ("id", "phase", "current_turn", "floor", "answered_turns")}[plan.view]
         result = select_fields(value, fields)
         if plan.view in ("overview", "current"):
-            result["guidance"] = GUIDANCE.get(value["phase"], "按需阅读相关原文；只处理自己的未完成安排。")
+            result["guidance"] = GUIDANCE.get(value["phase"], "按本次主持或专家职责，结合最新阶段、安排和必要原文决定下一步。")
             result["url"] = f"{site}/r/{value['id']}"
         return result
     if plan.view == "prompt":
         entry = f"{site}/r/{value['room_id']}?participant={value['expert']}"
-        prompt = f"请 {value['expert']} 回应：{value['question']}\n安排编号：{value['id']}\n按需阅读：{entry}"
+        prompt = f"请 {value['expert']} 回应：{value['question']}\n安排编号：{value['id']}\n按需阅读：{entry}\n回答附简短摘要及完整正文，保留关键条件和不确定性。"
         return {"turn_id": value["id"], "status": value["status"], "prompt": prompt,
                 "delivery": "未发送；仅生成文字，实际通知后使用 turn mark-notified"}
     return value
@@ -542,7 +607,7 @@ def run(args, registry):
         error.details.update(meta)
         if plan.method == "POST":
             error.details["submission_id"] = (plan.body or {}).get("submission_id")
-            error.details["hint"] = "未自动重试。结果未知时先读回核对；消息/安排重试沿用同一 submission_id 和正文。"
+            error.details["hint"] = "未自动重试。创建结果未知时用对应 list --submission-id 查询；确认需要重试才沿用原编号和原始内容。"
         raise
     except (KeyError, TypeError) as error:
         raise CliError("响应结构与 CLI 不兼容，请用 api 命令检查服务版本", 3,

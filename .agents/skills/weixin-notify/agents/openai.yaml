@@ -1,0 +1,4 @@
+interface:
+  display_name: "微信通知"
+  short_description: "微信纯文本通知与问答，显示聊天名称，支持 /new 新建独立聊天"
+  default_prompt: "使用 $weixin-notify 将本次任务的结果通知到我的微信。"

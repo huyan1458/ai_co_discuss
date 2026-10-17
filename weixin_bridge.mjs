@@ -7,7 +7,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
-import { CodexClient, MessageStore, process_message } from './message_bridge.mjs';
+import { CodexAppClient, CodexClient, MessageStore, process_message } from './message_bridge.mjs';
 import {
   acquire_account_lock, begin_login, complete_login, IlinkClient, IlinkError, load_account,
 } from './weixin_client.mjs';
@@ -26,8 +26,21 @@ const REPLY_PATTERN = /^\[Codex #(\d+) [^\]\r\n]+\]/;
 const QUESTION_PATTERN = /^\[Codex 提问 ([A-Za-z0-9_-]{8,100})\]/;
 const LISTENER_START_MS = 5_000;
 const LISTENER_CHECK_MS = 100;
-const NEW_COMMAND_PATTERN = /^\/new(?:\s+([\s\S]*))?$/;
-const SKILL_PATH = 'C:/Users/Administrator/.codex/skills/weixin-notify/SKILL.md';
+const NEW_COMMAND_PATTERN = /^\/new(?:\s+([\s\S]*))?$/i;
+const CHAT_COMMAND_PATTERN = /^\/(\S*)(?:\s+([\s\S]*))?$/;
+const CHAT_LIST_LIMIT = 10;
+const CHAT_TITLE_LIMIT = 80;
+const NEW_CHAT_TITLE_LIMIT = 24;
+const CHAT_HELP = `微信便捷命令：
+/help — 查看用法
+/status — 当前聊天与消息投递状态
+/resume — 查看会话列表（/sessions、/rusume 也可用）
+/resume 后可单独回复序号切换；名称后的（当前绑定）标识当前窗口
+/resume 序号 [消息] — 切换聊天，可同时发送消息，例如 /resume 2 你是窗口几？
+/new [问题] — 先选项目，再新建聊天；0 表示无项目
+/clear — 清理旧对话列表，保留当前对话
+
+按上述格式发送；Codex 新消息成功发到微信后自动绑定其来源，引用回复仍进入原消息所属聊天。`;
 
 const USAGE = `微信直连桥接（Node.js 24+；不需要 Hermes / OpenClaw）
   node weixin_bridge.mjs login
@@ -48,14 +61,17 @@ const USAGE = `微信直连桥接（Node.js 24+；不需要 Hermes / OpenClaw）
 
 共用选项：--account 凭据文件；--state SQLite文件；--codex 原生可执行文件
 login 生成本地二维码；扫码后 login --complete 确认，最多等待60秒。
-notify 只发送指定通知后退出，不执行模型任务；正文含来源标题不超过3500个UTF-8字节。
+notify 只发送指定通知后退出；有来源聊天时确保后台收件器运行，允许微信直接回复。
+不执行模型任务；正文含来源标题不超过3500个UTF-8字节。
 notify 不获取收件锁，可与后台收件程序同时运行。
 ask 记录来源聊天并发送问题；thread 默认取当前 CODEX_THREAD_ID。
 notify/ask 自动使用来源聊天名称，可用 --title 传入已经核实的名称。
 微信只显示纯文本及 Codex（聊天名称）：；引用通过内部回执定位。
-只有微信正文以 /new 开头且后接空白或结束时才申请新聊天，不继承旧历史。
+微信支持 /help、/status、/resume [序号 [消息]]、/clear，以及 /new [问题]。
+/resume 无参数时查看会话列表，兼容 /sessions 和 /rusume。
+/clear 清理旧对话列表并保留当前对话；只有 /new 申请新聊天，不继承旧历史。
 listen-start 启动一个后台微信收件器；listen 可前台运行（支持 --once）。
-微信普通回复送回最近发问的聊天，引用问题时送回该问题的原聊天。
+普通回复跟随最近发出通知或问题的聊天；手动切换立即生效，之后的新通知会更新目标；引用仍回原消息的来源。
 回复只经 codex queue 投递；不扫描历史、不调用模型生成通知、不安装 Hook。
 相同编号和正文不重复发送；notify-status 只查本地配置或指定通知。
 sync 只读取一批微信消息刷新上下文，不投递命令、不回信；最多等待40秒。
@@ -95,6 +111,12 @@ export function incoming_text(message) {
   return { text, references, reference_ids };
 }
 
+/** Ignore pasted zero-width spaces around command names, leaving arguments and ordinary text intact. */
+function command_input(text) {
+  return text.replace(/^[\s\u200B]+/u, '')
+    .replace(/^(\/[a-z]+)\u200B+(?=\s|$)/iu, '$1');
+}
+
 /** Keep skill questions and their queue receipts separate from the legacy history bridge. */
 function initialize_reply_tables(db) {
   db.exec(`
@@ -121,13 +143,31 @@ function initialize_reply_tables(db) {
       source_thread_id TEXT NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
       thread_id TEXT, title TEXT, created_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS weixin_chat_choices (
+      id INTEGER PRIMARY KEY, account_id TEXT NOT NULL, peer_id TEXT NOT NULL,
+      thread_id TEXT NOT NULL, title TEXT NOT NULL, last_seen INTEGER NOT NULL,
+      UNIQUE(account_id,peer_id,thread_id)
+    );
+    CREATE TABLE IF NOT EXISTS weixin_chat_lists (
+      account_id TEXT NOT NULL, peer_id TEXT NOT NULL, choice_ids TEXT NOT NULL,
+      PRIMARY KEY(account_id,peer_id)
+    );
+    CREATE TABLE IF NOT EXISTS weixin_project_lists (
+      account_id TEXT NOT NULL, peer_id TEXT NOT NULL, answer_id INTEGER NOT NULL, choices TEXT,
+      PRIMARY KEY(account_id,peer_id)
+    );
   `);
   add_column(db, 'weixin_questions', 'source_text', 'TEXT');
   add_column(db, 'weixin_questions', 'title', 'TEXT');
   add_column(db, 'weixin_questions', 'mode', "TEXT NOT NULL DEFAULT 'ask'");
   add_column(db, 'weixin_outbox', 'server_id', 'TEXT');
+  add_column(db, 'weixin_outbox', 'sent_order', 'INTEGER');
   add_column(db, 'weixin_answers', 'kind', "TEXT NOT NULL DEFAULT 'reply'");
   add_column(db, 'weixin_answers', 'request_id', 'TEXT');
+  add_column(db, 'weixin_new_requests', 'project_id', 'TEXT');
+  add_column(db, 'weixin_chat_choices', 'hidden', 'INTEGER NOT NULL DEFAULT 0');
+  add_column(db, 'weixin_chat_choices', 'source_key', "TEXT NOT NULL DEFAULT ''");
+  add_column(db, 'weixin_chat_lists', 'awaiting_selection', 'INTEGER NOT NULL DEFAULT 0');
 }
 
 /** Add only this bridge's missing columns, preserving existing messages and receipts. */
@@ -164,27 +204,18 @@ export function format_notice(title, text) {
     throw new Error('需要有效的来源聊天名称（--title），不能使用内部编号代替');
   }
   if (typeof text !== 'string' || !text.trim()) throw new Error('通知正文不能为空');
-  return `Codex（${title.trim()}）：\n${weixin_text(text)}`;
+  return `💬 Codex（${title.trim()}）：\n\n${weixin_text(text)}`;
 }
 
 /** Pass only the new request and channel setup to a fresh desktop chat, never previous history. */
 function new_chat_prompt(request) {
-  return `用户通过微信 /new 明确新建了这个聊天。请先读取 ${SKILL_PATH}，按其中“新聊天接入”完成登记，`
-    + `内部请求编号为 ${request.id}。用户需要通过微信收取本聊天的回复，使用该技能发送纯文本，`
-    + '无需等待用户重复说明。不要复制或读取来源聊天的历史。\n\n'
-    + (request.text ? `用户的第一条消息：\n${request.text}` : '用户尚未提供问题。登记后在微信简短表示已就绪，等待下一条消息。');
+  return `[微信新聊天] 请用 $weixin-notify 接入并回复。\n接入编号：${request.id}\n\n`
+    + (request.text || '暂无问题，请在微信告知已就绪。');
 }
 
-/** Convert a saved reply into a queue message; /new delegates only the explicit creation request. */
+/** Convert an ordinary saved reply into a queue message. */
 function answer_prompt(message) {
-  if (message.kind === 'new') {
-    return `[微信 /new 请求；内部编号：${message.request_id}]\n用户明确要求新建一个不带旧历史的聊天。`
-      + `请读取 ${SKILL_PATH} 的“处理 /new”步骤，先运行 new-claim，领取成功后用桌面 create_thread 工具`
-      + '新建本机无项目聊天并完成路由登记。不要 fork，不在本聊天执行新问题，不再向用户确认。\n\n'
-      + `用户原始指令：\n/new ${message.text}`;
-  }
-  return `[微信用户回复；来信编号：${message.raw_id}]\n`
-    + `以下是扫码绑定用户的消息，请在当前聊天处理，并通过 ${SKILL_PATH} 将答复发回微信。\n\n` + message.text;
+  return '[微信] 请用 $weixin-notify 回复。\n\n' + message.text;
 }
 
 /** Channel state shares the inbox transaction so advancing a cursor cannot lose a command. */
@@ -379,7 +410,7 @@ export class WeixinStore extends MessageStore {
     return new Set(matches.map(row => row.thread_id)).size === 1 ? matches[0] : undefined;
   }
 
-  /** Explicit quotes override the active conversation; plain replies follow a completed /new switch. */
+  /** Resolve quotes first, then the target updated by a switch or a successfully sent notification. */
   answer_target(account, input) {
     if (input.references.length) {
       const targets = input.references.map(reference => this.quoted_target(account, reference));
@@ -390,14 +421,231 @@ export class WeixinStore extends MessageStore {
     if (active) return { thread_id: active.thread_id, pending_request: active.pending_request };
     return this.db.prepare(`SELECT q.* FROM weixin_questions q JOIN weixin_outbox o
       ON o.event_key=json_array(q.account_id,q.peer_id,'notify:'||q.message_id)||':0'
-      WHERE q.account_id=? AND q.peer_id=? AND q.mode='ask' AND o.status IN ('api_accepted','uncertain')
-      ORDER BY o.id DESC LIMIT 1`).get(account.account_id, account.owner_id);
+      WHERE q.account_id=? AND q.peer_id=? AND o.status IN ('api_accepted','uncertain')
+      ORDER BY COALESCE(o.sent_order,o.id) DESC LIMIT 1`).get(account.account_id, account.owner_id);
   }
 
   /** Read only the selected Weixin conversation, never the desktop's currently selected tab. */
   active_chat(account) {
     return this.db.prepare('SELECT * FROM weixin_active_chats WHERE account_id=? AND peer_id=?')
       .get(account.account_id, account.owner_id);
+  }
+
+  /** Track internal identities only for chats already connected to this owner's Weixin channel. */
+  known_chats(account) {
+    const sources = this.db.prepare(`SELECT q.thread_id,q.title,q.created_at,COALESCE(o.sent_order,o.id) AS source_id,
+      'notify:'||q.message_id AS source_key,1 AS source_type FROM weixin_questions q
+      JOIN weixin_outbox o ON o.event_key=json_array(q.account_id,q.peer_id,'notify:'||q.message_id)||':0'
+      WHERE q.account_id=? AND q.peer_id=? AND o.status IN ('api_accepted','uncertain')
+      UNION ALL SELECT thread_id,title,created_at,rowid,'new:'||id,0 FROM weixin_new_requests
+      WHERE account_id=? AND peer_id=? AND status='completed' ORDER BY source_type,source_id,source_key`)
+      .all(account.account_id, account.owner_id, account.account_id, account.owner_id);
+    const upsert = this.db.prepare(`INSERT INTO weixin_chat_choices
+      (account_id,peer_id,thread_id,title,last_seen,source_key) VALUES (?,?,?,?,?,?)
+      ON CONFLICT(account_id,peer_id,thread_id) DO UPDATE SET title=excluded.title,last_seen=excluded.last_seen,
+      hidden=CASE WHEN excluded.source_key!=weixin_chat_choices.source_key THEN 0 ELSE weixin_chat_choices.hidden END,
+      source_key=excluded.source_key`);
+    const latest = new Map(sources.map(source => [source.thread_id, source]));
+    for (const source of latest.values()) {
+      const title = (source.title || '').replace(/\s+/g, ' ').trim().slice(0, CHAT_TITLE_LIMIT) || '未命名聊天';
+      upsert.run(account.account_id, account.owner_id, source.thread_id, title, source.created_at, source.source_key);
+    }
+    return this.db.prepare(`SELECT * FROM weixin_chat_choices WHERE account_id=? AND peer_id=? AND hidden=0
+      ORDER BY last_seen DESC,id DESC`).all(account.account_id, account.owner_id);
+  }
+
+  /** Read the owner's last displayed order; new notifications do not change its selection numbers. */
+  last_chat_list(account) {
+    const saved = this.db.prepare('SELECT choice_ids FROM weixin_chat_lists WHERE account_id=? AND peer_id=?')
+      .get(account.account_id, account.owner_id);
+    return saved ? JSON.parse(saved.choice_ids) : [];
+  }
+
+  /** Treat a standalone number as a selection only while this owner's last list awaits a choice. */
+  numeric_chat_command(account, input) {
+    if (input.references.length || !/^\d+$/.test(input.text.trim())) return null;
+    const saved = this.db.prepare('SELECT awaiting_selection FROM weixin_chat_lists WHERE account_id=? AND peer_id=?')
+      .get(account.account_id, account.owner_id);
+    return saved?.awaiting_selection ? [input.text, 'resume', input.text.trim()] : null;
+  }
+
+  /** End number selection after a successful choice or a new ordinary message. */
+  finish_chat_selection(account) {
+    this.db.prepare('UPDATE weixin_chat_lists SET awaiting_selection=0 WHERE account_id=? AND peer_id=?')
+      .run(account.account_id, account.owner_id);
+  }
+
+  /** Number the bounded list from one and persist its order with the command response. */
+  chat_list_text(account) {
+    this.dismiss_project_list(account);
+    const target = this.answer_target(account, { references: [] });
+    const chats = this.known_chats(account);
+    const current = chats.find(chat => chat.thread_id === target?.thread_id);
+    const others = chats.filter(chat => chat !== current && chat.title !== '未命名聊天')
+      .slice(0, CHAT_LIST_LIMIT - Number(Boolean(current)));
+    const listed = current ? [current, ...others] : others;
+    this.db.prepare(`INSERT INTO weixin_chat_lists (account_id,peer_id,choice_ids,awaiting_selection) VALUES (?,?,?,1)
+      ON CONFLICT(account_id,peer_id) DO UPDATE SET choice_ids=excluded.choice_ids,awaiting_selection=1`)
+      .run(account.account_id, account.owner_id, JSON.stringify(listed.map(chat => chat.id)));
+    if (!current && !others.length) return '暂无可用对话。先从 Codex 向微信发送一条消息。';
+    const title = current?.title === '未命名聊天' ? '' : ` · ${current?.title}`;
+    const heading = current ? `当前：\n\n1${title}（当前绑定）` : '请选择对话：';
+    if (!others.length) return heading;
+    const lines = others.map((chat, index) => `${index + 1 + Number(Boolean(current))} · ${chat.title}`);
+    return `${heading}\n\n${lines.join('\n\n')}\n\n切换：直接回复序号，或 /resume 序号`;
+  }
+
+  /** Clear the recent catalog and selection snapshot, retaining routing and delivery receipts. */
+  clear_chats(account) {
+    const target = this.answer_target(account, { references: [] });
+    this.known_chats(account);
+    this.db.prepare(`UPDATE weixin_chat_choices SET hidden=1
+      WHERE account_id=? AND peer_id=? AND thread_id!=COALESCE(?, '')`)
+      .run(account.account_id, account.owner_id, target?.thread_id ?? null);
+    this.db.prepare('DELETE FROM weixin_chat_lists WHERE account_id=? AND peer_id=?')
+      .run(account.account_id, account.owner_id);
+    return target?.thread_id ? '已清理旧对话列表，当前对话保留。' : '已清理对话列表。';
+  }
+
+  /** Report delivery facts without treating queue acceptance as live model execution. */
+  chat_status_text(account) {
+    const target = this.answer_target(account, { references: [] });
+    const chat = this.known_chats(account).find(value => value.thread_id === target?.thread_id);
+    const counts = this.db.prepare(`SELECT status,COUNT(*) AS count FROM weixin_answers
+      WHERE account_id=? AND peer_id=? AND kind!='command'
+      AND status IN ('received','waiting_new','uncertain') GROUP BY status`).all(account.account_id, account.owner_id);
+    const count = status => counts.find(row => row.status === status)?.count ?? 0;
+    return `当前聊天：${chat?.title ?? '尚未选择'}\n`
+      + `收件器：${this.reply_status(account).running ? '运行中' : '未运行'}\n`
+      + `待投递：${count('received')}；等待新聊天：${count('waiting_new')}；投递待核查：${count('uncertain')}\n`
+      + (target?.pending_request ? '新聊天尚未登记，后续普通消息暂存。\n' : '')
+      + '这里只显示桥接状态；消息入队不代表 Codex 已开始或完成任务。';
+  }
+
+  /** Switch future routing and optionally queue the command's text; older messages keep their destination. */
+  resume_chat(account, argument, reply) {
+    if (!/^[1-9]\d*$/.test(argument)) return '用法：/resume 序号 [消息]。单独发送 /resume 查看列表。';
+    const choice_id = this.last_chat_list(account)[Number(argument) - 1];
+    const chat = this.known_chats(account).find(value => value.id === choice_id);
+    if (!chat) return '未找到该序号。单独发送 /resume 查看列表。';
+    this.dismiss_project_list(account);
+    const pending = this.active_chat(account)?.pending_request;
+    this.db.prepare(`INSERT INTO weixin_active_chats VALUES (?,?,?,NULL) ON CONFLICT(account_id,peer_id)
+      DO UPDATE SET thread_id=excluded.thread_id,pending_request=NULL`)
+      .run(account.account_id, account.owner_id, chat.thread_id);
+    this.finish_chat_selection(account);
+    if (reply?.text.trim()) {
+      this.db.prepare("UPDATE weixin_answers SET thread_id=?,text=?,status='received',kind='reply' WHERE id=?")
+        .run(chat.thread_id, reply.text, reply.answer_id);
+    }
+    return `已切换：${argument} · ${chat.title}`
+      + (pending ? '\n先前的新建请求仍保留；此前暂存的消息仍交给那个新聊天。' : '');
+  }
+
+  /** Execute the small fixed command set locally, without model calls or desktop history scans. */
+  chat_command_text(account, command, answer_id) {
+    const name = command[1].toLowerCase();
+    if (name === 'resume') {
+      if (!(command[2] ?? '').trim()) return this.chat_list_text(account);
+      const selection = (command[2] ?? '').match(/^([1-9]\d*)(?:\s+([\s\S]*))?$/);
+      return this.resume_chat(account, selection?.[1] ?? '', { answer_id, text: selection?.[2] ?? '' });
+    }
+    const argument = (command[2] ?? '').trim();
+    if (name === 'new') return '尚未选择聊天。先用 /resume 查看列表，再用 /resume 序号 选择来源聊天。';
+    if (!['help', 'status', 'sessions', 'rusume', 'clear'].includes(name)) return '未支持此命令。发送 /help 查看可用命令。';
+    if (argument) return `/${name} 不需要参数，请单独发送。`;
+    if (name === 'clear') return this.clear_chats(account);
+    if (name === 'help') return CHAT_HELP;
+    return name === 'status' ? this.chat_status_text(account) : this.chat_list_text(account);
+  }
+
+  /** Save the command, routing change and reply in the caller's inbox/cursor transaction. */
+  receive_chat_command(account, message, command) {
+    const inserted = this.db.prepare(`INSERT OR IGNORE INTO weixin_answers
+      (account_id,peer_id,raw_id,text,status,created_at,kind) VALUES (?,?,?,?,'handled',?,'command')`)
+      .run(account.account_id, account.owner_id, String(message.message_id), command[0], Date.now());
+    if (!inserted.changes) return 0;
+    const text = this.chat_command_text(account, command, Number(inserted.lastInsertRowid));
+    this.add_outbox(account, `command:${inserted.lastInsertRowid}`, text, '🔔 系统通知：\n\n');
+    return 1;
+  }
+
+  /** Read the current project picker and its original first question, isolated by owner. */
+  project_list(account) {
+    return this.db.prepare(`SELECT a.*,p.choices FROM weixin_project_lists p
+      JOIN weixin_answers a ON a.id=p.answer_id WHERE p.account_id=? AND p.peer_id=?`)
+      .get(account.account_id, account.owner_id);
+  }
+
+  /** Discard only an unconfirmed picker; existing creation requests keep their messages. */
+  dismiss_project_list(account, status = 'cancelled') {
+    this.db.prepare(`UPDATE weixin_outbox SET status='cancelled' WHERE status='pending' AND group_key IN
+      (SELECT json_array(account_id,peer_id,'command:'||answer_id) FROM weixin_project_lists
+        WHERE account_id=? AND peer_id=?)`).run(account.account_id, account.owner_id);
+    this.db.prepare(`UPDATE weixin_answers SET status=? WHERE id IN
+      (SELECT answer_id FROM weixin_project_lists WHERE account_id=? AND peer_id=?)`)
+      .run(status, account.account_id, account.owner_id);
+    this.db.prepare('DELETE FROM weixin_project_lists WHERE account_id=? AND peer_id=?')
+      .run(account.account_id, account.owner_id);
+  }
+
+  /** Save /new before reading desktop projects; no chat is created until a valid choice. */
+  begin_project_list(account, message, target, text) {
+    const inserted = this.db.prepare(`INSERT OR IGNORE INTO weixin_answers
+      (account_id,peer_id,raw_id,thread_id,text,status,created_at,kind)
+      VALUES (?,?,?,?,?,'received',?,'project_list')`).run(account.account_id, account.owner_id,
+      String(message.message_id), target.thread_id, text, Date.now());
+    if (!inserted.changes) return 0;
+    this.dismiss_project_list(account);
+    this.finish_chat_selection(account);
+    this.db.prepare('INSERT INTO weixin_project_lists VALUES (?,?,?,NULL)')
+      .run(account.account_id, account.owner_id, inserted.lastInsertRowid);
+    return 1;
+  }
+
+  /** Persist exactly the displayed project order and its system reply in one transaction. */
+  save_project_list(account, answer_id, projects) {
+    return this.transaction(() => {
+      const current = this.project_list(account);
+      if (current?.id !== answer_id || current.status !== 'received') return;
+      const choices = projects.filter(project => project.projectKind === 'local' && project.hostId === 'local')
+        .map(project => ({ project_id: project.projectId,
+          title: project.label.replace(/\s+/g, ' ').trim().slice(0, CHAT_TITLE_LIMIT) }));
+      const lines = choices.map((project, index) => `${index + 1} · ${project.title}`);
+      const text = ['请选择新聊天所在的项目：', '0 · 无项目', ...lines, '回复序号创建聊天。'].join('\n\n');
+      this.db.prepare('UPDATE weixin_project_lists SET choices=? WHERE account_id=? AND peer_id=?')
+        .run(JSON.stringify(choices), account.account_id, account.owner_id);
+      this.db.prepare("UPDATE weixin_answers SET status='choosing',last_error=NULL WHERE id=?").run(answer_id);
+      this.add_outbox(account, `command:${answer_id}`, text, '🔔 系统通知：\n\n');
+    });
+  }
+
+  /** Consume a picker number as a creation choice; other unquoted text never reaches an old AI. */
+  receive_project_choice(account, message, input) {
+    if (input.references.length) return null;
+    const picker = this.project_list(account);
+    if (!picker) return null;
+    const number = /^\d+$/.test(input.text.trim()) ? Number(input.text.trim()) : -1;
+    const choices = picker.choices ? JSON.parse(picker.choices) : null;
+    if (!choices || !Number.isSafeInteger(number) || number < 0 || number > choices.length) {
+      const reply = choices ? '请回复项目列表中的序号；0 表示无项目。'
+        : '正在读取项目列表，请稍后按序号选择。';
+      return this.receive_project_hint(account, message, input.text, reply);
+    }
+    const target = { thread_id: picker.thread_id, project_id: choices[number - 1]?.project_id ?? null };
+    const received = this.receive_new_request(account, message, target, picker.text);
+    if (received) this.dismiss_project_list(account, 'handled');
+    return received;
+  }
+
+  /** Persist one invalid selection and its reply without changing the pending picker. */
+  receive_project_hint(account, message, text, reply) {
+    const inserted = this.db.prepare(`INSERT OR IGNORE INTO weixin_answers
+      (account_id,peer_id,raw_id,text,status,created_at,kind) VALUES (?,?,?,?,'handled',?,'command')`)
+      .run(account.account_id, account.owner_id, String(message.message_id), text, Date.now());
+    if (!inserted.changes) return 0;
+    this.add_outbox(account, `command:${inserted.lastInsertRowid}`, reply, '🔔 系统通知：\n\n');
+    return 1;
   }
 
   /** Persist replies together with the cursor so restarts neither lose nor replay submissions. */
@@ -428,13 +676,23 @@ export class WeixinStore extends MessageStore {
     }
     let input;
     let target;
+    let chat_command;
+    let command_text;
     try {
       input = incoming_text(message);
-      target = this.answer_target(account, NEW_COMMAND_PATTERN.test(input.text) ? { ...input, references: [] } : input);
+      command_text = command_input(input.text);
+      chat_command = command_text.match(CHAT_COMMAND_PATTERN);
+      target = this.answer_target(account, chat_command ? { ...input, references: [] } : input);
     }
     catch { /* Unsupported media is recorded as ignored, never partially executed. */ }
-    const command = input?.text.match(NEW_COMMAND_PATTERN);
-    if (command && target?.thread_id) return this.receive_new_request(account, message, target, command[1] ?? '');
+    if (input && !chat_command) {
+      const selection = this.receive_project_choice(account, message, input);
+      if (selection !== null) return selection;
+      chat_command = this.numeric_chat_command(account, input);
+    }
+    const command = command_text?.match(NEW_COMMAND_PATTERN);
+    if (command && target?.thread_id) return this.begin_project_list(account, message, target, command[1] ?? '');
+    if (chat_command) return this.receive_chat_command(account, message, chat_command);
     const accepted = Boolean(target && input?.text.trim());
     const insertion = this.db.prepare(`INSERT OR IGNORE INTO weixin_answers
       (account_id,peer_id,raw_id,question_id,thread_id,text,status,created_at,request_id)
@@ -442,6 +700,7 @@ export class WeixinStore extends MessageStore {
       target?.message_id ?? null, target?.thread_id ?? null, input?.text ?? '',
       accepted ? target.pending_request ? 'waiting_new' : 'received' : 'ignored', Date.now(),
       target?.pending_request ?? null);
+    if (insertion.changes) this.finish_chat_selection(account);
     return Number(insertion.changes);
   }
 
@@ -454,9 +713,10 @@ export class WeixinStore extends MessageStore {
       VALUES (?,?,?,?,?,'received',?,'new',?)`).run(account.account_id, account.owner_id, raw_id,
       target.thread_id, text, Date.now(), request_id);
     if (!inserted.changes) return 0;
+    this.finish_chat_selection(account);
     this.db.prepare(`INSERT INTO weixin_new_requests
-      (id,account_id,peer_id,source_thread_id,text,created_at) VALUES (?,?,?,?,?,?)`)
-      .run(request_id, account.account_id, account.owner_id, target.thread_id, text.trim(), Date.now());
+      (id,account_id,peer_id,source_thread_id,text,created_at,project_id) VALUES (?,?,?,?,?,?,?)`)
+      .run(request_id, account.account_id, account.owner_id, target.thread_id, text.trim(), Date.now(), target.project_id ?? null);
     this.db.prepare(`INSERT INTO weixin_active_chats VALUES (?,?,?,?) ON CONFLICT(account_id,peer_id)
       DO UPDATE SET pending_request=excluded.pending_request`)
       .run(account.account_id, account.owner_id, target.thread_id, request_id);
@@ -471,7 +731,24 @@ export class WeixinStore extends MessageStore {
     const changed = this.db.prepare("UPDATE weixin_new_requests SET status='creating' WHERE id=? AND status='pending'")
       .run(request_id).changes;
     return { request_id, claimed: Boolean(changed), status: changed ? 'creating' : request.status,
-      thread_id: request.thread_id, prompt: new_chat_prompt(request) };
+      thread_id: request.thread_id, prompt: new_chat_prompt(request), target: request.project_id
+        ? { type: 'project', projectId: request.project_id, environment: { type: 'local' } } : { type: 'projectless' } };
+  }
+
+  /** Reject a deleted project before creation and keep its unsent messages recorded. */
+  reject_new_project(account, message) {
+    this.transaction(() => {
+      const changed = this.db.prepare("UPDATE weixin_new_requests SET status='failed' WHERE id=? AND status='pending'")
+        .run(message.request_id).changes;
+      if (!changed) return;
+      this.db.prepare("UPDATE weixin_answers SET status='failed',last_error='所选项目已不可用' WHERE id=?")
+        .run(message.id);
+      this.db.prepare("UPDATE weixin_answers SET status='cancelled',last_error='目标项目已不可用，未投递' WHERE request_id=? AND status='waiting_new'")
+        .run(message.request_id);
+      this.db.prepare('UPDATE weixin_active_chats SET pending_request=NULL WHERE account_id=? AND peer_id=? AND pending_request=?')
+        .run(account.account_id, account.owner_id, message.request_id);
+      this.add_outbox(account, `command:${message.id}`, '所选项目已不可用，未创建聊天。请重新发送 /new 选择项目。', '🔔 系统通知：\n\n');
+    });
   }
 
   /** Register the desktop-created chat and release only replies waiting for this exact request. */
@@ -486,6 +763,8 @@ export class WeixinStore extends MessageStore {
       if (request.thread_id && request.thread_id !== target.thread_id) throw new Error('该请求已经关联另一个聊天');
       this.db.prepare("UPDATE weixin_new_requests SET status='completed',thread_id=?,title=? WHERE id=?")
         .run(target.thread_id, target.title, request_id);
+      this.db.prepare("UPDATE weixin_answers SET status='created',last_error=NULL WHERE request_id=? AND kind='new'")
+        .run(request_id);
       this.db.prepare(`UPDATE weixin_active_chats SET thread_id=?,pending_request=NULL
         WHERE account_id=? AND peer_id=? AND pending_request=?`)
         .run(target.thread_id, account.account_id, account.owner_id, request_id);
@@ -606,10 +885,19 @@ export class WeixinStore extends MessageStore {
       .run(id).changes === 1;
   }
 
-  /** Finish a claimed send without modifying any other worker's settled result. */
+  /** Bind to every successfully sent Codex source; already saved replies keep their own destinations. */
   finish_outbox(id, status, error = '', server_id = null) {
-    this.db.prepare("UPDATE weixin_outbox SET status=?,last_error=?,server_id=COALESCE(?,server_id) WHERE id=? AND status='uncertain'")
-      .run(status, error, server_id, id);
+    this.transaction(() => {
+      const settled = this.db.prepare(`UPDATE weixin_outbox SET status=?,last_error=?,server_id=COALESCE(?,server_id),
+        sent_order=CASE WHEN ?='api_accepted' THEN (SELECT COALESCE(MAX(COALESCE(sent_order,id)),0)+1 FROM weixin_outbox)
+        ELSE sent_order END WHERE id=? AND status='uncertain'`).run(status, error, server_id, status, id);
+      if (!settled.changes || status !== 'api_accepted') return;
+      const source = this.db.prepare(`SELECT q.* FROM weixin_questions q JOIN weixin_outbox o
+        ON o.event_key=json_array(q.account_id,q.peer_id,'notify:'||q.message_id)||':0' WHERE o.id=?`).get(id);
+      if (source) this.db.prepare(`UPDATE weixin_active_chats SET thread_id=?,pending_request=NULL
+        WHERE account_id=? AND peer_id=?`)
+        .run(source.thread_id, source.account_id, source.peer_id);
+    });
   }
 
   /** Return channel diagnostics without account tokens, context tokens or message bodies. */
@@ -631,6 +919,22 @@ export async function flush_outbox(store, client, account, signal) {
   for (const message of store.pending_outbox(account)) {
     if (signal?.aborted) break;
     await send_outbox_message(store, client, message);
+  }
+}
+
+/** Deliver only local command replies; do not resend unrelated notification or legacy backlogs. */
+export async function flush_command_replies(store, client, account, signal) {
+  for (const message of store.pending_outbox(account)) {
+    if (signal?.aborted) break;
+    const event = JSON.parse(message.group_key)[2];
+    if (!event.startsWith('command:')) continue;
+    const started_at = Date.now();
+    try { await send_outbox_message(store, client, message); }
+    finally {
+      const result = store.db.prepare('SELECT status FROM weixin_outbox WHERE id=?').get(message.id);
+      log_event('command_reply', { answer_id: Number(event.slice('command:'.length)), outbox_id: message.id,
+        local_wait_ms: started_at - message.created_at, send_ms: Date.now() - started_at, status: result.status });
+    }
   }
 }
 
@@ -663,10 +967,64 @@ export async function send_notification(store, client, account, request) {
   return result;
 }
 
-/** Queue each saved owner reply once; the queue itself does not offer content deduplication. */
-export async function dispatch_answers(store, codex, account) {
+/** Read project names for a saved /new and persist its picker without starting a chat. */
+async function dispatch_project_list(store, desktop, account) {
+  const picker = store.project_list(account);
+  if (!picker || picker.status !== 'received') return;
+  try {
+    await desktop.open();
+    const projects = await desktop.list_projects(picker.thread_id);
+    store.save_project_list(account, picker.id, projects);
+  } catch {
+    store.db.prepare("UPDATE weixin_answers SET last_error=? WHERE id=? AND status='received'")
+      .run('桌面项目列表暂不可用，恢复后重试', picker.id);
+  } finally { desktop.close(); }
+}
+
+/** Create each explicitly selected /new through the desktop, without source-AI forwarding. */
+async function dispatch_new_requests(store, desktop, account) {
+  const messages = store.db.prepare(`SELECT a.*,r.project_id FROM weixin_answers a
+    JOIN weixin_new_requests r ON r.id=a.request_id
+    WHERE a.account_id=? AND a.peer_id=? AND a.kind='new' AND a.status='received'
+      AND r.status='pending' ORDER BY a.id`)
+    .all(account.account_id, account.owner_id);
+  for (const message of messages) {
+    let claimed = false;
+    try {
+      await desktop.open();
+      if (message.project_id) {
+        const projects = await desktop.list_projects(message.thread_id);
+        if (!projects.some(project => project.projectId === message.project_id
+            && project.projectKind === 'local' && project.hostId === 'local')) {
+          store.reject_new_project(account, message);
+          continue;
+        }
+      }
+      const request = store.transaction(() => {
+        const result = store.claim_new_request(account, message.request_id, message.thread_id);
+        if (result.claimed) store.db.prepare("UPDATE weixin_answers SET status='uncertain',last_error=NULL WHERE id=?")
+          .run(message.id);
+        return result;
+      });
+      if (!request.claimed) continue;
+      claimed = true;
+      const subject = [...message.text.replace(/\s+/g, ' ').trim()].slice(0, NEW_CHAT_TITLE_LIMIT).join('');
+      const title = subject ? `微信新聊：${subject}` : `微信新聊 ${new Date(message.created_at).toLocaleTimeString('zh-CN', { hour12: false })}`;
+      const target = await desktop.create_thread(message.thread_id, request.prompt, title, request.target);
+      store.complete_new_request(account, message.request_id, target);
+    } catch {
+      store.db.prepare("UPDATE weixin_answers SET last_error=? WHERE id=? AND status!='created'")
+        .run(claimed ? '桌面创建结果待核查，未自动重建' : '桌面连接不可用，尚未创建；恢复后重试', message.id);
+    } finally { desktop.close(); }
+  }
+}
+
+/** Create requested chats, then queue each ordinary reply once to its recorded destination. */
+export async function dispatch_answers(store, codex, account, desktop = new CodexAppClient()) {
+  await dispatch_project_list(store, desktop, account);
+  await dispatch_new_requests(store, desktop, account);
   const messages = store.db.prepare(`SELECT * FROM weixin_answers
-    WHERE account_id=? AND peer_id=? AND status='received' ORDER BY id`)
+    WHERE account_id=? AND peer_id=? AND status='received' AND kind='reply' ORDER BY id`)
     .all(account.account_id, account.owner_id);
   for (const message of messages) {
     const claimed = store.db.prepare("UPDATE weixin_answers SET status='uncertain' WHERE id=? AND status='received'")
@@ -683,7 +1041,21 @@ export async function dispatch_answers(store, codex, account) {
   }
 }
 
-/** Receive replies and invoke only queue; no App Server or conversation history reader is opened. */
+/** Record command timing after commit, without logging message bodies or credentials. */
+function log_command_receipts(store, account, response, received_at) {
+  const processing_ms = Date.now() - received_at;
+  const find = store.db.prepare(`SELECT id,created_at FROM weixin_answers
+    WHERE account_id=? AND peer_id=? AND raw_id=? AND kind='command'`);
+  for (const message of response.msgs ?? []) {
+    const answer = find.get(account.account_id, account.owner_id, String(message.message_id));
+    if (!answer || answer.created_at < received_at) continue;
+    log_event('command_received', { answer_id: answer.id, received_at, processing_ms,
+      source_created_at: Number.isFinite(message.create_time_ms) && message.create_time_ms > 0
+        ? message.create_time_ms : null });
+  }
+}
+
+/** Receive replies; /new calls desktop app tools and ordinary text uses queue, without history reads. */
 async function listen_answers(store, account, options) {
   const controller = new AbortController();
   const stop = () => controller.abort();
@@ -697,20 +1069,28 @@ async function listen_answers(store, account, options) {
   log_event('reply_listener_running', { pid: process.pid });
   try {
     do {
+      await flush_command_replies(store, client, account, signal);
       await dispatch_answers(store, codex, account);
+      await flush_command_replies(store, client, account, signal);
       try {
         const response = await client.updates(store.cursor(account.account_id));
         if (signal.aborted) break;
+        const received_at = Date.now();
         const count = store.receive_answers(account, response);
+        if (count) {
+          log_command_receipts(store, account, response, received_at);
+          log_event('replies_saved', { count });
+        }
+        await flush_command_replies(store, client, account, signal);
         await dispatch_answers(store, codex, account);
-        if (count) log_event('replies_saved', { count });
+        await flush_command_replies(store, client, account, signal);
       } catch (error) {
         if (signal.aborted) break;
         if (error instanceof IlinkError && error.session_expired) throw error;
         log_event('reply_receive_retry', { message: '微信读取暂时失败，保留游标' });
+        if (!options.once) await pause(signal);
       }
       if (options.once) break;
-      await pause(signal);
     } while (!signal.aborted);
   } finally {
     controller.abort();
@@ -759,7 +1139,7 @@ export async function process_weixin(store, codex, account, signal) {
 
 /** Emit small operational events; never echo remote bodies or secret-bearing errors. */
 function log_event(event, fields = {}) {
-  process.stderr.write(`${JSON.stringify({ event, ...fields })}\n`);
+  process.stderr.write(`${JSON.stringify({ time: new Date().toISOString(), event, ...fields })}\n`);
 }
 
 /** Wait responsively between retries; SIGINT cancels the delay immediately. */
@@ -867,7 +1247,10 @@ async function source_details(options) {
   let title = options.title;
   if (!title && thread_id) {
     const metadata = await new CodexClient(options.codex).metadata(thread_id);
-    title = metadata.name || '未命名聊天';
+    title = metadata.name;
+    if (!title?.trim()) {
+      throw new Error('当前聊天尚未生成名称；请先用桌面 set_thread_title 设置简短中文标题，再沿用同一 message-id 重试');
+    }
   }
   format_notice(title, '检查来源');
   return { thread_id, title };
@@ -893,7 +1276,7 @@ async function notification_command(store, account, options) {
   const body = source.thread_id
     ? store.prepare_question(account, { message_id, ...source, text, mode: options.command })
     : format_notice(source.title, text);
-  const listener = options.command === 'ask' ? await start_listener(store, account, options) : null;
+  const listener = source.thread_id ? await start_listener(store, account, options) : null;
   return { ...await send_notification(store, client, account, { message_id, text: body }),
     ...source, ...(listener ? { listener_pid: listener.pid } : {}) };
 }

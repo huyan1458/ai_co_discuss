@@ -2,7 +2,6 @@
 .claude/
 .codex/
 .gemini/
-.agents/
 .dev/
 CLAUDE.md
 CLAUDE.local.md
@@ -10,7 +9,6 @@ CODEX.md
 CODEX.local.md
 GEMINI.md
 GEMINI.local.md
-AGENTS.md
 AGENTS.local.md
 MEMORY.md
 MEMORY.local.md
@@ -29,3 +27,7 @@ dist/
 components.d.ts
 .dev.vars*
 .env*
+# Local deployment targets and editor files
+wrangler.local.jsonc
+.DS_Store
+Thumbs.db

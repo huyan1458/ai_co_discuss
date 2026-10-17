@@ -101,11 +101,16 @@ export class IlinkClient {
   }
 
   /** Long-poll inbound messages from the last durably saved cursor. */
-  updates(cursor) {
-    return this.request('getupdates', {
-      get_updates_buf: cursor,
-      base_info: { channel_version: PROTOCOL_VERSION, bot_agent: BOT_AGENT },
-    }, { authenticated: true });
+  async updates(cursor) {
+    try {
+      return await this.request('getupdates', {
+        get_updates_buf: cursor,
+        base_info: { channel_version: PROTOCOL_VERSION, bot_agent: BOT_AGENT },
+      }, { authenticated: true });
+    } catch (error) {
+      if (!this.signal?.aborted && error.name === 'TimeoutError') return { msgs: [] };
+      throw error;
+    }
   }
 
   /** Send a single text chunk with the latest peer context and a durable client ID. */
