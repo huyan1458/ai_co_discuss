@@ -29,6 +29,7 @@ const NAV_MAX = 400;
 const NAV_DEFAULT = 248;
 const NAV_STEP = 16;
 const CONTENT_MIN = 480;
+const RAIL_BREAKPOINT = 1200;
 const DIVIDER_WIDTH = 6;
 const saved_layout = read_layout();
 const reading_width = ref(saved_layout.reading);
@@ -37,6 +38,10 @@ const nav_width = ref(saved_layout.nav);
 const viewport_width = ref(typeof window === "undefined" ? NAV_DEFAULT + CONTENT_MIN + DIVIDER_WIDTH : window.innerWidth);
 const nav_collapsed = ref(saved_layout.collapsed);
 const brief_collapsed = ref(saved_layout.brief_collapsed);
+const rail_collapsed = ref(saved_layout.rail_collapsed);
+const rail_inline = computed(() => viewport_width.value >= RAIL_BREAKPOINT);
+const show_rail = computed(() => !!room.value && view.value.tab === "discussion" && !rail_collapsed.value);
+const info_label = computed(() => rail_inline.value && view.value.tab === "discussion" ? (rail_collapsed.value ? "展开频道概览" : "收起频道概览") : "频道资料与参与者");
 const brief_preview = computed(() => {
   const template = document.createElement("template");
   template.innerHTML = room.value?.rendered_brief || "";
@@ -55,6 +60,7 @@ const width_options = Object.entries(READING_WIDTHS).map(([value, option]) => ({
 watch(reading_width, save_layout);
 watch(nav_collapsed, save_layout);
 watch(brief_collapsed, save_layout);
+watch(rail_collapsed, save_layout);
 onMounted(() => window.addEventListener("resize", update_viewport_width));
 onBeforeUnmount(() => window.removeEventListener("resize", update_viewport_width));
 const selected_tab = computed({ get: () => view.value.tab, set: (value) => act("tab", value) });
@@ -120,8 +126,9 @@ function read_layout() {
       nav: Number.isFinite(saved.nav) ? Math.min(NAV_MAX, Math.max(NAV_MIN, saved.nav)) : default_nav_width(),
       collapsed: saved.collapsed === true,
       brief_collapsed: saved.brief_collapsed === true,
+      rail_collapsed: saved.rail_collapsed === true,
     };
-  } catch { return { reading: "default", rail: RAIL_DEFAULT, nav: default_nav_width(), collapsed: false, brief_collapsed: false }; }
+  } catch { return { reading: "default", rail: RAIL_DEFAULT, nav: default_nav_width(), collapsed: false, brief_collapsed: false, rail_collapsed: false }; }
 }
 
 /** Preserve the existing responsive navigation width on first use. */
@@ -132,8 +139,14 @@ function default_nav_width() {
 
 /** Keep layout preferences local without blocking adjustments when storage is unavailable. */
 function save_layout() {
-  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify({ reading: reading_width.value, rail: rail_width.value, nav: nav_width.value, collapsed: nav_collapsed.value, brief_collapsed: brief_collapsed.value })); }
+  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify({ reading: reading_width.value, rail: rail_width.value, nav: nav_width.value, collapsed: nav_collapsed.value, brief_collapsed: brief_collapsed.value, rail_collapsed: rail_collapsed.value })); }
   catch { /* The current page can still use the selected layout. */ }
+}
+
+/** Toggle the inline overview rail on wide discussion views; otherwise open channel details. */
+function toggle_info() {
+  if (rail_inline.value && view.value.tab === "discussion") rail_collapsed.value = !rail_collapsed.value;
+  else info_open.value = true;
 }
 
 /** Keep the resizable layout within the current viewport. */
@@ -205,7 +218,7 @@ function resize_nav_by_key(event) {
 </script>
 
 <template>
-  <div class="channel-shell" :class="{ 'channel-resizing': rail_drag || nav_drag, 'channel-nav-collapsed': nav_collapsed, 'channel-has-rail': room && view.tab === 'discussion' }" :style="layout_style">
+  <div class="channel-shell" :class="{ 'channel-resizing': rail_drag || nav_drag, 'channel-nav-collapsed': nav_collapsed, 'channel-has-rail': show_rail }" :style="layout_style">
     <aside id="channel-sidebar" class="channel-sidebar" aria-label="频道导航">
       <header class="channel-workspace-heading">
         <span class="channel-brand-icon"><UIcon name="i-lucide-messages-square" /></span>
@@ -243,7 +256,7 @@ function resize_nav_by_key(event) {
           <UTooltip v-if="view.tab === 'discussion'" text="只看提到当前身份的消息"><UButton icon="i-lucide-at-sign" :variant="view.mention_only ? 'soft' : 'ghost'" color="neutral" size="sm" class="channel-icon-button channel-mention-filter" :aria-pressed="view.mention_only" aria-label="提到我" @click="act('filter', { mention: !view.mention_only })" /></UTooltip>
           <UDropdownMenu :items="channel_actions" :content="{ align: 'end', sideOffset: 8 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" class="channel-icon-button" aria-label="频道菜单" /></UDropdownMenu>
         </div>
-        <UTooltip v-if="room" text="频道资料与参与者"><UButton icon="i-lucide-panel-right" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-panel-toggle channel-info-button" aria-label="频道资料" :aria-expanded="info_open" @click="info_open = true" /></UTooltip>
+        <UTooltip v-if="room" :text="info_label"><UButton icon="i-lucide-panel-right" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-panel-toggle channel-info-button" :aria-label="info_label" :aria-expanded="rail_inline && view.tab === 'discussion' ? show_rail : info_open" @click="toggle_info" /></UTooltip>
       </header>
       <div v-if="room" class="channel-tabbar">
         <UTabs v-model="selected_tab" :items="tabs" :content="false" variant="pill" color="neutral" size="sm" class="channel-tabs" aria-label="频道视图" />
@@ -278,8 +291,8 @@ function resize_nav_by_key(event) {
       </div>
       <div v-else class="channel-empty"><UIcon name="i-lucide-hash" /><h2>新建一个讨论频道</h2><p>每个频道围绕一个议题，保留所有人的观点。</p><UButton icon="i-lucide-plus" label="新建讨论" color="neutral" @click="create_channel()" /></div>
     </main>
-    <div v-if="room && view.tab === 'discussion'" class="channel-rail-resizer" role="separator" tabindex="0" aria-label="调整右侧栏宽度" aria-orientation="vertical" aria-controls="channel-member-rail" :aria-valuemin="RAIL_MIN" :aria-valuemax="RAIL_MAX" :aria-valuenow="rail_width" :aria-valuetext="`${rail_width} 像素`" title="拖动调整右侧栏宽度，也可使用左右方向键" @pointerdown="start_rail_resize" @pointermove="resize_rail" @pointerup="finish_rail_resize" @pointercancel="finish_rail_resize" @lostpointercapture="finish_rail_resize" @keydown="resize_rail_by_key"></div>
-    <aside v-if="room && view.tab === 'discussion'" id="channel-member-rail" class="channel-member-rail" aria-label="频道概览与参与者">
+    <div v-if="show_rail" class="channel-rail-resizer" role="separator" tabindex="0" aria-label="调整右侧栏宽度" aria-orientation="vertical" aria-controls="channel-member-rail" :aria-valuemin="RAIL_MIN" :aria-valuemax="RAIL_MAX" :aria-valuenow="rail_width" :aria-valuetext="`${rail_width} 像素`" title="拖动调整右侧栏宽度，也可使用左右方向键" @pointerdown="start_rail_resize" @pointermove="resize_rail" @pointerup="finish_rail_resize" @pointercancel="finish_rail_resize" @lostpointercapture="finish_rail_resize" @keydown="resize_rail_by_key"></div>
+    <aside v-if="show_rail" id="channel-member-rail" class="channel-member-rail" aria-label="频道概览与参与者">
       <section class="channel-overview">
         <div class="channel-overview-heading"><span>频道概览</span><UBadge color="neutral" variant="subtle" size="sm" class="channel-phase"><span class="channel-phase-dot" :class="room.phase"></span>{{ bridge.phases[room.phase] }}</UBadge></div>
         <h2>{{ room.title }}</h2>
