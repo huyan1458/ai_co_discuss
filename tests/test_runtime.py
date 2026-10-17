@@ -409,26 +409,26 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.request(self.path)[1]["runtime"]["status"], "stopped")
         self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "迟到"}, token)[0], 403)
 
-    def test_directory_writes_need_owner_control_only_while_running(self):
-        """Running rooms keep owner protection; paused rooms can be organized without it, never deleted."""
-        run = self.start()
-        for token in (None, uuid.uuid4().hex):
-            status, error = self.request(self.path + "/archive", {"actor": "用户"}, token)
+    def test_archive_stops_run_without_owner_control_but_delete_stays_protected(self):
+        """Archiving always works and stops the run; other running directory writes and deletion need the owner key."""
+        self.start()
+        token = self.enter(self.events()[-1])
+        for key in (None, uuid.uuid4().hex):
+            status, error = self.request(self.path + "/folder", {"actor": "用户", "folder_id": None}, key)
             self.assertEqual(status, 403)
             self.assertIn("正在自动运行", error["error"])
             self.assertIn("接入", error["error"])
-            self.assertFalse(self.request(self.path)[1]["archived"])
-        self.request(self.path + "/runtime", {"action": "pause", "revision": run["revision"]}, self.owner)
         before = self.request(self.path)[1]
         status, archived = self.request(self.path + "/archive", {"actor": "用户"})
         self.assertEqual(status, 200, archived)
         self.assertTrue(archived["archived"])
         self.assertEqual(archived["message_count"], before["message_count"])
         self.assertEqual(archived["runtime"]["status"], "stopped")
+        self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "迟到"}, token)[0], 403)
         status, restored = self.request(self.path + "/restore", {"actor": "用户"})
         self.assertEqual(status, 200, restored)
         self.assertFalse(restored["archived"])
-        status, error = self.request(self.path + "/delete", {"actor": "用户", "confirm": before["title"]})
+        status, error = self.request(self.path + "/delete", {"actor": "用户", "confirm_title": before["title"]})
         self.assertEqual(status, 403)
         self.assertIn("控制凭据", error["error"])
         self.assertIsNotNone(self.request(self.path)[1].get("id"))
