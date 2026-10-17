@@ -127,6 +127,24 @@ test('Worker forces an early host summary and reports per-participant executions
   assert.equal((await f.request(`/${id}/limits`, { actor: '用户', force: true })).status, 400);
 });
 
+test('Worker lets paused protected rooms be organized without the owner key, never deleted', async t => {
+  const f = await worker_fixture(t);
+  const created = await f.request('', { title: '目录保护', host: 'Codex', experts: { Codex: 'cli' } });
+  const id = created.body.id;
+  const started = await f.request(`/${id}/runtime`, { action: 'start', revision: 0, deadline: Math.floor(Date.now() / 1000) + 600 });
+  const running = await f.request(`/${id}/archive`, { actor: '用户' }, '');
+  assert.equal(running.status, 403);
+  assert.match(running.body.error, /正在自动运行/);
+  await f.request(`/${id}/runtime`, { action: 'pause', revision: started.body.revision });
+  const archived = await f.request(`/${id}/archive`, { actor: '用户' }, '');
+  assert.equal(archived.status, 200, JSON.stringify(archived.body));
+  assert.ok(archived.body.archived);
+  assert.equal((await f.request(`/${id}/restore`, { actor: '用户' }, '')).status, 200);
+  const deleted = await f.request(`/${id}/delete`, { actor: '用户', confirm: '目录保护' }, '');
+  assert.equal(deleted.status, 403);
+  assert.match(deleted.body.error, /控制凭据/);
+});
+
 for (const change of ['limits', 'archive', 'phase']) {
   test(`Worker start rolls back when ${change} changes after validation`, async t => {
     const f = await worker_fixture(t);

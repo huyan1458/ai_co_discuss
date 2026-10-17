@@ -409,25 +409,29 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.request(self.path)[1]["runtime"]["status"], "stopped")
         self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "迟到"}, token)[0], 403)
 
-    def test_paused_archive_requires_owner_control_and_preserves_records(self):
-        """A migrated or paused protected room can be archived only with its owner key."""
+    def test_directory_writes_need_owner_control_only_while_running(self):
+        """Running rooms keep owner protection; paused rooms can be organized without it, never deleted."""
         run = self.start()
-        self.request(self.path + "/runtime", {"action": "pause", "revision": run["revision"]}, self.owner)
         for token in (None, uuid.uuid4().hex):
             status, error = self.request(self.path + "/archive", {"actor": "用户"}, token)
             self.assertEqual(status, 403)
-            self.assertIn("控制凭据", error["error"])
+            self.assertIn("正在自动运行", error["error"])
             self.assertIn("接入", error["error"])
             self.assertFalse(self.request(self.path)[1]["archived"])
+        self.request(self.path + "/runtime", {"action": "pause", "revision": run["revision"]}, self.owner)
         before = self.request(self.path)[1]
-        status, archived = self.request(self.path + "/archive", {"actor": "用户"}, self.owner)
-        self.assertEqual(status, 200)
+        status, archived = self.request(self.path + "/archive", {"actor": "用户"})
+        self.assertEqual(status, 200, archived)
         self.assertTrue(archived["archived"])
         self.assertEqual(archived["message_count"], before["message_count"])
         self.assertEqual(archived["runtime"]["status"], "stopped")
-        status, restored = self.request(self.path + "/restore", {"actor": "用户"}, self.owner)
-        self.assertEqual(status, 200)
+        status, restored = self.request(self.path + "/restore", {"actor": "用户"})
+        self.assertEqual(status, 200, restored)
         self.assertFalse(restored["archived"])
+        status, error = self.request(self.path + "/delete", {"actor": "用户", "confirm": before["title"]})
+        self.assertEqual(status, 403)
+        self.assertIn("控制凭据", error["error"])
+        self.assertIsNotNone(self.request(self.path)[1].get("id"))
 
     def test_expired_run_cannot_enter_or_write(self):
         """The deadline is enforced by the website even with no runner alive."""

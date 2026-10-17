@@ -929,6 +929,10 @@ async function authorize_database(database, room_id, token, operation, payload) 
   if (hashed && hashed === run.control_hash) return guarded_database(database,
     "EXISTS(SELECT 1 FROM discussion_runtime WHERE room_id=? AND control_hash=?)", [room_id, hashed]);
   if (["move", "folder", "archive", "restore", "delete"].includes(operation)) {
+    const active = run.status === "running" && run.deadline > Math.floor(Date.now() / 1000);
+    if (operation !== "delete" && !active) return guarded_database(database,
+      "NOT EXISTS(SELECT 1 FROM discussion_runtime WHERE room_id=? AND status='running' AND deadline>unixepoch())", [room_id]);
+    if (operation !== "delete") throw new HttpError(403, "讨论正在自动运行，需要本房间的控制凭据暂停后再整理；请在「接入」中导入原私有配置");
     throw new HttpError(403, "需要本房间的控制凭据；请在「接入」中导入原私有配置");
   }
   const event = await database.prepare("SELECT * FROM discussion_events WHERE room_id=? AND token_hash=? AND status='started'").bind(room_id, hashed).first();

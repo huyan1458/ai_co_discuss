@@ -131,6 +131,11 @@ def authorize_write(connection, room_id, token, operation, payload):
     if hashed and hashed == run["control_hash"]:
         return
     if operation in ("move", "folder", "archive", "restore", "delete"):
+        active = run["status"] == "running" and run["deadline"] > int(time.time())
+        if operation != "delete" and not active:
+            return
+        if operation != "delete":
+            raise PermissionError("讨论正在自动运行，需要本房间的控制凭据暂停后再整理；请在「接入」中导入原私有配置")
         raise PermissionError("需要本房间的控制凭据；请在「接入」中导入原私有配置")
     event = connection.execute("""SELECT * FROM discussion_events WHERE room_id=? AND token_hash=?
         AND run_id=? AND generation=? AND status='started' AND lease_until>?
