@@ -24,7 +24,7 @@ PARTICIPANTS = ("用户", "Codex", "Claude", "Gemini", "DeepSeek", "Qwen")
 PHASES = ("preparing", "initial", "discussing", "reviewing", "paused", "concluded")
 KINDS = ("opinion", "moderation", "receipt")
 OVERVIEW_FIELDS = ("id", "title", "goal", "host", "phase", "focus", "message_count",
-                   "latest_id", "state_until", "current_turn", "floor", "latest_receipts", "answered_turns", "duplicate", "submission_id")
+                   "latest_id", "state_until", "current_turn", "floor", "runtime", "limits", "completed_rounds", "latest_receipts", "answered_turns", "duplicate", "submission_id")
 BRIEF_FIELDS = ("id", "title", "goal", "host", "background", "boundaries", "experts")
 ROOM_LIST_FIELDS = ("id", "title", "goal", "message_count", "latest_id", "created_at")
 GUIDANCE = {
@@ -118,6 +118,7 @@ def add_common(parser):
                         help="默认 json；成功 stdout，错误 stderr", **options)
     parser.add_argument("--timeout", type=float, help="请求超时秒数，默认 20", **options)
     parser.add_argument("--dry-run", action="store_true", help="只预览写入请求，不联网", **options)
+    parser.add_argument("--access-file", help="本房间的受限凭据 JSON；不输出其 token", **options)
 
 
 def add_text(parser, name, required=False):
@@ -137,6 +138,9 @@ def add_topic(parser, create=False):
     parser.add_argument("--phase", choices=PHASES, default=argparse.SUPPRESS)
     parser.add_argument("--experts-file", default=argparse.SUPPRESS,
                         help='完整参与者映射 JSON，如 {"Codex":"cli","Gemini":"cli"}；替换整个映射')
+    for name in ("max-rounds", "max-minutes", "execution-minutes", "summary-minutes"):
+        parser.add_argument(f"--{name}", type=non_negative_int, default=argparse.SUPPRESS)
+    parser.add_argument("--on-limit", choices=("pause", "summarize"), default=argparse.SUPPRESS)
 
 
 def add_leaf(subcommands, registry, name, description, needs_room=False):
@@ -159,7 +163,10 @@ def room_commands(subcommands, registry):
         parser = add_leaf(subcommands, registry, f"room {action}", description, action != "list")
         if action == "list":
             parser.add_argument("--submission-id", type=submission_id, help="按建房提交编号精确查询")
+    limits = add_leaf(subcommands, registry, "room limits", "查看上限；--check 检查并执行到限处理", True)
+    limits.add_argument("--check", action="store_true")
     create = add_leaf(subcommands, registry, "room create", "创建话题；不自动启动讨论或监控")
+    create.add_argument("--folder-id", help="直接在指定文件夹中创建；省略则未归类")
     add_topic(create, create=True)
     create.add_argument("--submission-id", type=submission_id, required=True,
                         help="新话题唯一编号；未知结果先查询，重试沿用编号和原始资料")
@@ -230,6 +237,29 @@ def floor_commands(subcommands, registry):
         parser.add_argument("--revision", type=non_negative_int, required=True, help="刚读取的发言权版本；变化后需重新核对")
 
 
+def run_commands(subcommands, registry):
+    """Expose mode and lifecycle controls independently of discussion phases."""
+    for action in ("view", "configure", "start", "pause", "stop"):
+        parser = add_leaf(subcommands, registry, f"run {action}", "查看或显式控制讨论运行", True)
+        if action != "view":
+            parser.add_argument("--revision", type=non_negative_int, required=True)
+            parser.add_argument("--mode", choices=("manual", "automatic"))
+        if action == "start":
+            parser.add_argument("--deadline", type=positive_int, help="截止时间 Unix 秒数；省略时使用话题总时长上限")
+            parser.add_argument("--phase", choices=("initial", "discussing", "reviewing"))
+
+
+def execution_commands(subcommands, registry):
+    """Enter one delivered task; duplicate enters cannot start duplicate work."""
+    for action in ("view", "enter", "fail"):
+        parser = add_leaf(subcommands, registry, f"execution {action}", "读取、进入或报告本次执行失败", True)
+        parser.add_argument("id", type=positive_int)
+        if action == "enter":
+            parser.add_argument("--session-id", help="实际软件会话 ID，默认从受限任务文件读取")
+        if action == "fail":
+            parser.add_argument("--reason", required=True)
+
+
 def build_parser():
     """Build help and schema from the same command definitions."""
     parser = Parser(prog="discuss", description="AI CoDiscuss CLI：通过 HTTP 操作现有讨论网站。",
@@ -239,7 +269,8 @@ def build_parser():
     subcommands = parser.add_subparsers(dest="resource", required=True)
     registry = {}
     for name, register in (("room", room_commands), ("message", message_commands),
-                           ("turn", turn_commands), ("state", state_commands), ("floor", floor_commands)):
+                           ("turn", turn_commands), ("state", state_commands), ("floor", floor_commands),
+                           ("run", run_commands), ("execution", execution_commands)):
         group = subcommands.add_parser(name, help=f"{name} 操作", allow_abbrev=False)
         add_common(group)
         register(group.add_subparsers(dest="action", required=True), registry)
@@ -294,6 +325,9 @@ def require_actor(args):
 def topic_payload(args):
     """Collect only supplied topic fields; expert configuration is a full map."""
     payload = {}
+    limits = {key: getattr(args, key) for key in ("max_rounds", "max_minutes", "execution_minutes", "on_limit", "summary_minutes") if hasattr(args, key)}
+    if limits:
+        payload["limits"] = limits
     for field in ("title", "goal", "background", "boundaries", "focus"):
         value = text_field(args, field)
         if value is not None:
@@ -319,8 +353,12 @@ def plan_room(args):
         payload = topic_payload(args)
         payload.setdefault("host", require_actor(args))
         payload["submission_id"] = args.submission_id
+        if args.folder_id is not None:
+            payload["folder_id"] = args.folder_id
         return RequestPlan("/api/rooms", "POST", payload, "overview")
     base = f"/api/rooms/{args.room}"
+    if args.action == "limits":
+        return RequestPlan(base + "/limits", "POST", {"actor": require_actor(args)}, "overview") if args.check else RequestPlan(base + "/limits")
     if args.action == "update":
         payload = topic_payload(args)
         if not payload:
@@ -423,6 +461,31 @@ def plan_api(args):
     return RequestPlan(args.path, args.method, read_object(args.input) if args.input else None)
 
 
+def plan_run(args):
+    """Build one versioned lifecycle operation without starting a daemon."""
+    path = f"/api/rooms/{args.room}/runtime"
+    if args.action == "view":
+        return RequestPlan(path)
+    body = {"action": args.action, "revision": args.revision}
+    for key in ("mode", "deadline", "phase"):
+        if getattr(args, key, None) is not None:
+            body[key] = getattr(args, key)
+    return RequestPlan(path, "POST", body)
+
+
+def plan_execution(args):
+    """Use the bound actual session when acknowledging a delivered execution."""
+    body = {"action": args.action}
+    if args.action == "enter":
+        access = read_object(args.access_file) if getattr(args, "access_file", None) else {}
+        body["session_id"] = args.session_id or access.get("session_id")
+        if not body["session_id"]:
+            raise CliError("尚未取得实际 session_id，请先核对接入回执")
+    if args.action == "fail":
+        body["reason"] = args.reason
+    return RequestPlan(f"/api/rooms/{args.room}/events/{args.id}", "POST", body)
+
+
 def build_plan(args):
     """Validate local input before constructing any network request."""
     stdin_count = sum(value == "-" for key, value in vars(args).items()
@@ -430,7 +493,8 @@ def build_plan(args):
     if stdin_count > 1:
         raise CliError("一次命令只能有一个字段从标准输入读取")
     handlers = {"room": plan_room, "message": plan_message, "turn": plan_turn,
-                "state": plan_state, "floor": plan_floor, "api": plan_api}
+                "state": plan_state, "floor": plan_floor, "api": plan_api,
+                "run": plan_run, "execution": plan_execution}
     plan = RequestPlan("/api/health") if args.resource == "health" else handlers[args.resource](args)
     if getattr(args, "dry_run", False) and plan.method != "POST":
         raise CliError("--dry-run 仅用于写入命令；读取命令本身不会修改数据")
@@ -483,12 +547,12 @@ def http_error(error, plan):
                     outcome="unknown" if uncertain else "rejected")
 
 
-def send_request(plan, url, timeout):
+def send_request(plan, url, timeout, headers=None):
     """Send exactly once, preserving TLS verification and bounded waiting."""
     data = json.dumps(plan.body, ensure_ascii=False).encode("utf-8") if plan.body is not None else None
     request = Request(url, data=data, method=plan.method,
                       headers={"Content-Type": "application/json", "Accept": "application/json, text/plain",
-                               "User-Agent": f"AI-CoDiscuss-CLI/{VERSION}"})
+                               "User-Agent": f"AI-CoDiscuss-CLI/{VERSION}", **(headers or {})})
     try:
         with build_opener(NoRedirect()).open(request, timeout=timeout) as response:
             return decode_response(response, plan)
@@ -584,6 +648,21 @@ def emit(value, output="json", error=False):
     stream.flush()
 
 
+def access_headers(args, site, path):
+    """Load a room-scoped secret only for its exact site and room."""
+    if not getattr(args, "access_file", None):
+        return {}
+    access = read_object(args.access_file)
+    expected = f"/api/rooms/{access.get('room', '')}"
+    target = urlsplit(path).path
+    if access.get("site", "").rstrip("/") != site or not (target == expected or target.startswith(expected + "/")):
+        raise CliError("凭据文件不属于本次站点和房间")
+    token = access.get("token")
+    if not isinstance(token, str) or not 32 <= len(token) <= 256:
+        raise CliError("凭据文件中的 token 无效")
+    return {"X-Discussion-Token": token}
+
+
 def run(args, registry):
     """Execute a parsed command, with schema and previews remaining offline."""
     if args.resource == "schema":
@@ -601,7 +680,8 @@ def run(args, registry):
         return {"ok": True, "data": {"method": plan.method, "url": url, "body": plan.body},
                 "meta": {**meta, "dry_run": True, "validation": "仅本地参数；未验证房间、身份或服务端状态"}}
     try:
-        value = send_request(plan, url, timeout)
+        headers = access_headers(args, site, plan.path)
+        value = send_request(plan, url, timeout, headers) if headers else send_request(plan, url, timeout)
         result = project_result(value, plan, site)
     except CliError as error:
         error.details.update(meta)

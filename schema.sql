@@ -18,6 +18,10 @@ END;
 CREATE TABLE IF NOT EXISTS topic_folders (
     id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS directory_settings (
+    id INTEGER PRIMARY KEY CHECK (id=1),
+    uncategorized_position INTEGER CHECK (uncategorized_position>=0)
+);
 CREATE TABLE IF NOT EXISTS room_folder_assignments (
     room_id TEXT PRIMARY KEY REFERENCES rooms(id),
     folder_id TEXT REFERENCES topic_folders(id) ON DELETE SET NULL
@@ -172,4 +176,166 @@ BEGIN
     UPDATE room_floor SET holder=NULL,
         next_speaker=COALESCE((SELECT host FROM topic_settings WHERE room_id=NEW.room_id),'用户'),
         revision=revision+1 WHERE room_id=NEW.room_id;
+END;
+
+-- Runtime control is opt-in. Legacy rooms have no runtime row and keep manual entry.
+CREATE TABLE IF NOT EXISTS discussion_limits (
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+    max_rounds INTEGER NOT NULL DEFAULT 0,
+    max_minutes INTEGER NOT NULL DEFAULT 0,
+    execution_minutes INTEGER NOT NULL DEFAULT 20,
+    on_limit TEXT NOT NULL DEFAULT 'pause',
+    summary_minutes INTEGER NOT NULL DEFAULT 5,
+    started_at INTEGER NOT NULL DEFAULT 0,
+    closing_at INTEGER NOT NULL DEFAULT 0,
+    stop_reason TEXT NOT NULL DEFAULT '',
+    revision INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO discussion_limits(room_id) SELECT id FROM rooms;
+CREATE TRIGGER IF NOT EXISTS limits_room_created AFTER INSERT ON rooms
+BEGIN
+    INSERT INTO discussion_limits(room_id) VALUES (NEW.id);
+END;
+CREATE TRIGGER IF NOT EXISTS limits_topic_started AFTER INSERT ON topic_settings
+WHEN NEW.phase IN ('initial','discussing','reviewing')
+BEGIN
+    UPDATE discussion_limits SET started_at=CAST(strftime('%s','now') AS INTEGER) WHERE room_id=NEW.room_id AND started_at=0;
+END;
+CREATE TRIGGER IF NOT EXISTS limits_phase_started AFTER UPDATE OF phase ON topic_settings
+WHEN NEW.phase IN ('initial','discussing','reviewing') AND NEW.phase<>OLD.phase
+BEGIN
+    UPDATE discussion_limits SET started_at=CAST(strftime('%s','now') AS INTEGER) WHERE room_id=NEW.room_id AND started_at=0;
+END;
+CREATE TRIGGER IF NOT EXISTS limits_turn_started AFTER INSERT ON discussion_turns
+BEGIN
+    UPDATE discussion_limits SET started_at=CAST(strftime('%s','now') AS INTEGER) WHERE room_id=NEW.room_id AND started_at=0;
+END;
+CREATE TABLE IF NOT EXISTS discussion_runtime (
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+    mode TEXT NOT NULL CHECK(mode IN ('manual','automatic')),
+    run_id TEXT NOT NULL,
+    generation INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL CHECK(status IN ('ready','running','paused','stopped','concluded')),
+    control_hash TEXT NOT NULL,
+    deadline INTEGER NOT NULL DEFAULT 0,
+    revision INTEGER NOT NULL DEFAULT 1,
+    resume_phase TEXT NOT NULL DEFAULT 'initial',
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS discussion_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    run_id TEXT NOT NULL,
+    generation INTEGER NOT NULL,
+    cause TEXT NOT NULL,
+    participant TEXT NOT NULL,
+    role TEXT NOT NULL CHECK(role IN ('host','expert')),
+    turn_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending','dispatched','started','completed','cancelled','failed')),
+    token_hash TEXT NOT NULL DEFAULT '',
+    session_id TEXT NOT NULL DEFAULT '',
+    lease_until INTEGER NOT NULL DEFAULT 0,
+    started_at INTEGER NOT NULL DEFAULT 0,
+    result TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    UNIQUE(room_id,run_id,generation,cause)
+);
+CREATE INDEX IF NOT EXISTS events_room_cursor ON discussion_events(room_id,id);
+CREATE UNIQUE INDEX IF NOT EXISTS one_active_execution ON discussion_events(room_id)
+    WHERE status IN ('dispatched','started');
+-- A failed assertion rolls back the whole D1 batch, including concurrent writes.
+CREATE TABLE IF NOT EXISTS runtime_assertions (
+    id TEXT PRIMARY KEY, allowed INTEGER NOT NULL CHECK(allowed=1)
+);
+CREATE TRIGGER IF NOT EXISTS runtime_generation AFTER UPDATE ON discussion_runtime
+WHEN OLD.generation<>NEW.generation OR OLD.status<>NEW.status
+BEGIN
+    UPDATE discussion_events SET status='cancelled' WHERE room_id=NEW.room_id
+        AND status IN ('pending','dispatched','started')
+        AND (generation<>NEW.generation OR NEW.status<>'running');
+    INSERT OR IGNORE INTO discussion_events(room_id,run_id,generation,cause,participant,role,turn_id)
+        SELECT NEW.room_id,NEW.run_id,NEW.generation,'start:'||NEW.generation,
+            COALESCE(turns.expert,settings.host),CASE WHEN turns.id IS NULL THEN 'host' ELSE 'expert' END,turns.id
+        FROM topic_settings AS settings LEFT JOIN discussion_turns AS turns
+            ON turns.room_id=settings.room_id AND turns.status IN ('pending','notified')
+        WHERE settings.room_id=NEW.room_id AND NEW.status='running';
+END;
+DROP TRIGGER IF EXISTS runtime_turn_created;
+CREATE TRIGGER runtime_turn_created AFTER INSERT ON discussion_turns
+BEGIN
+    UPDATE discussion_events SET status='completed',result='turn:'||NEW.id
+        WHERE room_id=NEW.room_id AND role='host' AND status IN ('pending','dispatched','started');
+    INSERT OR IGNORE INTO discussion_events(room_id,run_id,generation,cause,participant,role,turn_id)
+        SELECT NEW.room_id,run_id,generation,'turn:'||NEW.id,NEW.expert,'expert',NEW.id
+        FROM discussion_runtime WHERE room_id=NEW.room_id AND status='running';
+END;
+CREATE TRIGGER IF NOT EXISTS runtime_turn_answered AFTER UPDATE OF status ON discussion_turns
+WHEN NEW.status='answered' AND OLD.status<>'answered'
+BEGIN
+    UPDATE discussion_events SET status='completed',result='message:'||NEW.answer_id
+        WHERE room_id=NEW.room_id AND turn_id=NEW.id AND status IN ('pending','dispatched','started');
+    INSERT OR IGNORE INTO discussion_events(room_id,run_id,generation,cause,participant,role)
+        SELECT NEW.room_id,run_id,generation,'answer:'||NEW.id,host,'host'
+        FROM discussion_runtime JOIN topic_settings USING(room_id)
+        WHERE room_id=NEW.room_id AND status='running';
+END;
+DROP TRIGGER IF EXISTS runtime_topic_stop;
+CREATE TRIGGER runtime_topic_stop AFTER UPDATE OF phase ON topic_settings
+WHEN NEW.phase IN ('paused','concluded') AND OLD.phase<>NEW.phase
+BEGIN
+    UPDATE discussion_events SET status='completed',result='concluded' WHERE room_id=NEW.room_id
+        AND role='host' AND status='started' AND NEW.phase='concluded';
+    UPDATE discussion_runtime SET status=NEW.phase,generation=generation+1,revision=revision+1,
+        resume_phase=CASE WHEN OLD.phase IN ('initial','discussing','reviewing') THEN OLD.phase ELSE resume_phase END,
+        updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE room_id=NEW.room_id;
+END;
+CREATE TRIGGER IF NOT EXISTS runtime_user_message AFTER INSERT ON message_details
+WHEN EXISTS(SELECT 1 FROM messages WHERE id=NEW.message_id AND author='用户')
+BEGIN
+    INSERT OR IGNORE INTO discussion_events(room_id,run_id,generation,cause,participant,role)
+        SELECT messages.room_id,run_id,generation,'user:'||NEW.message_id,host,'host'
+        FROM messages JOIN discussion_runtime ON discussion_runtime.room_id=messages.room_id
+        JOIN topic_settings ON topic_settings.room_id=messages.room_id
+        WHERE messages.id=NEW.message_id AND status='running';
+END;
+CREATE TRIGGER IF NOT EXISTS runtime_turn_cancelled AFTER UPDATE OF status ON discussion_turns
+WHEN NEW.status='cancelled' AND OLD.status<>'cancelled'
+BEGIN
+    UPDATE discussion_events SET status='cancelled' WHERE room_id=NEW.room_id AND turn_id=NEW.id
+        AND status IN ('pending','dispatched','started');
+    INSERT OR IGNORE INTO discussion_events(room_id,run_id,generation,cause,participant,role)
+        SELECT NEW.room_id,run_id,generation,'cancel:'||NEW.id,host,'host'
+        FROM discussion_runtime JOIN topic_settings USING(room_id)
+        WHERE room_id=NEW.room_id AND status='running'
+        AND NOT EXISTS(SELECT 1 FROM discussion_events WHERE room_id=NEW.room_id AND role='host' AND status='started');
+END;
+CREATE TRIGGER IF NOT EXISTS runtime_archive AFTER UPDATE OF archived ON room_directory
+WHEN NEW.archived=1 AND OLD.archived<>NEW.archived
+BEGIN
+    UPDATE discussion_runtime SET status='stopped',generation=generation+1,revision=revision+1
+        WHERE room_id=NEW.room_id;
+END;
+CREATE TRIGGER IF NOT EXISTS runtime_participants_changed AFTER UPDATE OF host,experts ON topic_settings
+WHEN NEW.host<>OLD.host OR NEW.experts<>OLD.experts
+BEGIN
+    UPDATE discussion_runtime SET status='paused',generation=generation+1,revision=revision+1
+        WHERE room_id=NEW.room_id AND status='running';
+END;
+CREATE TRIGGER IF NOT EXISTS runtime_goal_changed AFTER UPDATE OF goal ON rooms
+WHEN NEW.goal<>OLD.goal
+BEGIN
+    INSERT OR IGNORE INTO discussion_events(room_id,run_id,generation,cause,participant,role)
+        SELECT NEW.id,run_id,generation,'goal:'||COALESCE((SELECT MAX(id) FROM discussion_events),0),host,'host'
+        FROM discussion_runtime JOIN topic_settings USING(room_id)
+        WHERE room_id=NEW.id AND status='running'
+        AND NOT EXISTS(SELECT 1 FROM discussion_events WHERE room_id=NEW.id AND role='host' AND status='started');
+END;
+CREATE TRIGGER IF NOT EXISTS runtime_constraints_changed AFTER UPDATE OF background,boundaries ON topic_settings
+WHEN NEW.background<>OLD.background OR NEW.boundaries<>OLD.boundaries
+BEGIN
+    INSERT OR IGNORE INTO discussion_events(room_id,run_id,generation,cause,participant,role)
+        SELECT NEW.room_id,run_id,generation,'constraints:'||COALESCE((SELECT MAX(id) FROM discussion_events),0),NEW.host,'host'
+        FROM discussion_runtime WHERE room_id=NEW.room_id AND status='running'
+        AND NOT EXISTS(SELECT 1 FROM discussion_events WHERE room_id=NEW.room_id AND role='host' AND status='started');
 END;

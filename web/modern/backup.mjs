@@ -1,0 +1,94 @@
+import { strToU8, zip } from "fflate";
+
+const DOWNLOAD_RELEASE_MS = 60000;
+const FILENAME_TITLE_LIMIT = 80;
+const BACKUP_README = `AI CoDiscuss 聊天室备份
+
+完整数据.json：指定聊天室在导出时的数据库快照，保留全部原始字段、编号和关联。
+讨论记录.md：便于离线阅读的资料、消息原文与发言安排，正文以文本块原样保留。
+
+备份不受网页分页、搜索或当前标签限制；未保存的输入草稿不属于服务器数据。
+仅保存本聊天室及其所属文件夹信息，不包含其他聊天室、账号或本机配置。
+外部网页、图片和附件仅保留原链接，不下载其内容；网站目前没有附件存储功能。
+这是导出时刻的快照，之后的新消息不在包内。当前未提供导入恢复功能。
+`;
+
+/** Wrap original text safely, including embedded Markdown fences and HTML. */
+function original_block(value) {
+  const text = value ?? "";
+  const longest = Math.max(2, ...(text.match(/`+/g) || []).map((run) => run.length));
+  const fence = "`".repeat(longest + 1);
+  return `${fence}text\n${text}\n${fence}`;
+}
+
+/** Convert one message and its separate provenance rows to a readable record. */
+function message_markdown(message, details, summary) {
+  const submitted_by = details?.submitted_by || (["cli", "url", "user"].includes(message.source) ? message.author : "用户");
+  const lines = [`<a id="message-${message.id}"></a>`, `### #${message.id} · ${message.author}`,
+    `时间：${message.created_at}；来源：${message.source}；职责：${details?.kind || "opinion"}；代发/提交者：${submitted_by}`];
+  if (message.reply_to) lines.push(`回复：[#${message.reply_to}](#message-${message.reply_to})`);
+  if (details?.turn_id) lines.push(`对应安排：[#${details.turn_id}](#turn-${details.turn_id})`);
+  if (summary?.text) lines.push(`简述（作者：${summary.author}）：`, original_block(summary.text));
+  lines.push("原文：", original_block(message.text));
+  return lines.join("\n\n");
+}
+
+/** Render the complete snapshot as text without interpreting message HTML. */
+export function room_markdown(snapshot) {
+  const tables = snapshot.tables;
+  const room = tables.rooms[0];
+  const settings = tables.topic_settings[0];
+  const brief = tables.room_briefs[0];
+  const details = new Map(tables.message_details.map((row) => [row.message_id, row]));
+  const summaries = new Map(tables.message_summaries.map((row) => [row.message_id, row]));
+  const lines = ["# 讨论记录", original_block(room.title),
+    `房间：${room.id}；创建：${room.created_at}；导出：${snapshot.exported_at}`,
+    `来源：${snapshot.source_url || "未记录"}`, `消息：${tables.messages.length} 条；发言安排：${tables.discussion_turns.length} 项`,
+    `目录状态：${tables.room_directory[0]?.archived ? "已存档" : "使用中"}；文件夹：${tables.topic_folders[0]?.name || "未分组"}`,
+    "## 目标", original_block(room.goal)];
+  if (settings) lines.push(`主持人：${settings.host}；阶段：${settings.phase}`, "参与配置：", original_block(settings.experts),
+    "## 背景", original_block(settings.background), "## 讨论边界", original_block(settings.boundaries),
+    "## 当前焦点", original_block(settings.focus));
+  if (brief) lines.push("## 主持简报", `覆盖至 #${brief.until}；更新：${brief.updated_at}`, original_block(brief.text));
+  if (tables.discussion_limits?.[0]) lines.push("## 讨论上限", original_block(JSON.stringify(tables.discussion_limits[0], null, 2)));
+  lines.push("## 共识与分歧", `覆盖至 #${room.state_until}`, original_block(room.state_text),
+    "## 发言权", original_block(JSON.stringify(tables.room_floor[0] || {}, null, 2)), "## 全部消息");
+  for (const message of tables.messages) lines.push(message_markdown(message, details.get(message.id), summaries.get(message.id)));
+  if (!tables.messages.length) lines.push("暂无消息。");
+  lines.push("## 全部发言安排");
+  for (const turn of tables.discussion_turns) {
+    lines.push(`<a id="turn-${turn.id}"></a>`, `### 安排 #${turn.id} · ${turn.expert}`,
+      `状态：${turn.status}；创建：${turn.created_at}；通知：${turn.notified_at || "未记录"}`,
+      original_block(turn.question));
+    if (turn.answer_id) lines.push(`回答：[#${turn.answer_id}](#message-${turn.answer_id})`);
+  }
+  if (!tables.discussion_turns.length) lines.push("暂无发言安排。");
+  return lines.join("\n\n") + "\n";
+}
+
+/** Package a versioned room snapshot as a standard UTF-8 ZIP, without truncation. */
+export async function create_room_archive(snapshot) {
+  const files = {
+    "完整数据.json": strToU8(JSON.stringify(snapshot, null, 2) + "\n"),
+    "讨论记录.md": strToU8(room_markdown(snapshot)),
+    "备份说明.txt": strToU8(BACKUP_README),
+  };
+  return new Promise((resolve, reject) => {
+    zip(files, { level: 6 }, (error, data) => error ? reject(error) : resolve(data));
+  });
+}
+
+/** Start a browser download after the whole archive has been successfully built. */
+export async function download_room_backup(snapshot) {
+  const archive = await create_room_archive(snapshot);
+  const title = [...snapshot.tables.rooms[0].title.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")]
+    .slice(0, FILENAME_TITLE_LIMIT).join("").replace(/[. ]+$/, "") || "讨论";
+  const timestamp = snapshot.exported_at.replace(/[:.]/g, "-");
+  const url = URL.createObjectURL(new Blob([archive], { type: "application/zip" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${title}_${timestamp}.zip`;
+  document.body.append(link);
+  try { link.click(); }
+  finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), DOWNLOAD_RELEASE_MS); }
+}

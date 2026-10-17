@@ -70,6 +70,7 @@ h1, h2, h3, h4, p { margin: 0; }
 .state-card > #brief-input { min-height: 130px; }
 .room-heading { min-height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 9px 13px; background: #f5f7fa; border: 1px solid var(--line); }
 .room-heading-copy { min-width: 0; }
+.room-heading-actions { display: flex; gap: 10px; flex-shrink: 0; }
 .room-prefix { color: #7c8798; font-size: 11px; margin-right: 9px; }
 h1 { display: inline; font-size: 17px; color: #243c68; overflow-wrap: anywhere; }
 .room-heading p { font-size: 11px; color: var(--muted); margin-top: 5px; }
@@ -559,6 +560,8 @@ dialog::backdrop { background: #26385255; }
 #message-kind { max-width: 48%; font-size: 11px; }
 @media (max-width: 700px) {
   .topic-panel { padding: 14px; }
+  :root[data-theme="millennium"] .room-heading { flex-wrap: wrap; }
+  .room-heading-copy { flex-basis: 100%; }
   .topic-overview { grid-template-columns: 1fr; gap: 6px; }
   .topic-overview p { margin-bottom: 12px; }
   .topic-form-grid, .expert-mode-grid { grid-template-columns: 1fr; }

@@ -9,6 +9,7 @@ const { view, bridge, field, act, pending } = inject("discussion");
 const room = computed(() => view.value.room);
 const modal = ref("");
 const managed_room = ref(null);
+const target_folder = ref(null);
 const detail_id = ref(null);
 const nav_open = ref(false);
 const info_open = ref(false);
@@ -75,6 +76,7 @@ const channel_actions = computed(() => [[
   { label: "重命名", icon: "i-lucide-pencil", onSelect: () => manage_room({ room: room.value, action: "rename" }) },
   { label: "编辑议题", icon: "i-lucide-pencil", onSelect: () => { modal.value = "edit"; } },
   { label: "复制阅读入口", icon: "i-lucide-link", onSelect: () => act("copy_reading") },
+  { label: view.value.backup_pending ? "正在备份…" : "备份当前讨论", icon: "i-lucide-download", disabled: view.value.backup_pending || !!pending.value, onSelect: () => act("backup") },
 ], [
   { label: "刷新消息", icon: "i-lucide-refresh-cw", onSelect: () => act("refresh") },
   { label: "外观设置", icon: "i-lucide-settings-2", onSelect: () => { modal.value = "settings"; } },
@@ -93,10 +95,13 @@ async function choose_room(id) { nav_open.value = false; await act("room", id); 
 function open_detail(id) { detail_id.value = id; modal.value = "message"; }
 
 /** Open the shared creation form from either navigation surface. */
-function create_channel() { nav_open.value = false; modal.value = "create"; }
+function create_channel(folder = null) { target_folder.value = folder; nav_open.value = false; modal.value = "create"; }
 
 /** Open folder creation after closing the mobile directory. */
-function create_folder() { nav_open.value = false; modal.value = "folder"; }
+function create_folder() { target_folder.value = null; nav_open.value = false; modal.value = "folder"; }
+
+/** Open the folder name editor without changing the active conversation. */
+function edit_folder(folder) { target_folder.value = folder; nav_open.value = false; modal.value = "rename-folder"; }
 
 /** Restore only supported conversation and sidebar dimensions. */
 function read_layout() {
@@ -200,7 +205,7 @@ function resize_nav_by_key(event) {
         <strong>共议</strong><span>AI CoDiscuss</span>
       </header>
       <div class="channel-sidebar-content">
-        <ChannelDirectory @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" />
+        <ChannelDirectory @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" />
         <template v-if="room">
           <div class="channel-directory-heading channel-tools-heading"><span><UIcon name="i-lucide-chevron-down" />频道工具</span></div>
           <UNavigationMenu :items="view_links" orientation="vertical" color="neutral" variant="pill" class="channel-directory channel-view-links" aria-label="频道视图" :ui="{ link: 'channel-link', linkLabel: 'channel-link-label', linkLeadingIcon: 'channel-link-icon' }" />
@@ -275,11 +280,11 @@ function resize_nav_by_key(event) {
           </section>
         </aside>
       </div>
-      <div v-else class="channel-empty"><UIcon name="i-lucide-hash" /><h2>新建一个讨论频道</h2><p>每个频道围绕一个议题，保留所有人的观点。</p><UButton icon="i-lucide-plus" label="新建讨论" color="neutral" @click="create_channel" /></div>
+      <div v-else class="channel-empty"><UIcon name="i-lucide-hash" /><h2>新建一个讨论频道</h2><p>每个频道围绕一个议题，保留所有人的观点。</p><UButton icon="i-lucide-plus" label="新建讨论" color="neutral" @click="create_channel()" /></div>
     </main>
 
     <USlideover v-model:open="nav_open" side="left" title="讨论频道" description="共议 · AI CoDiscuss" :ui="{ content: 'channel-navigation-drawer', body: 'channel-drawer-body' }">
-      <template #body><ChannelDirectory @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" /><UButton block icon="i-lucide-settings-2" color="neutral" variant="ghost" label="外观设置" @click="nav_open = false; modal = 'settings'" /></template>
+      <template #body><ChannelDirectory @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" /><UButton block icon="i-lucide-settings-2" color="neutral" variant="ghost" label="外观设置" @click="nav_open = false; modal = 'settings'" /></template>
     </USlideover>
     <USlideover v-model:open="info_open" title="频道资料" description="目标、背景与参与方式" :ui="{ content: 'channel-details', body: 'space-y-6' }">
       <template #body><template v-if="room">
@@ -290,6 +295,6 @@ function resize_nav_by_key(event) {
         <UButton icon="i-lucide-pencil" color="neutral" variant="outline" block class="channel-surface-button" label="编辑议题" @click="info_open = false; modal = 'edit'" />
       </template></template>
     </USlideover>
-    <WorkspaceDialogs v-model="modal" v-model:reading-width="reading_width" :reading-options="width_options" :detail-id="detail_id" :target-room="managed_room" />
+    <WorkspaceDialogs v-model="modal" v-model:reading-width="reading_width" :reading-options="width_options" :detail-id="detail_id" :target-room="managed_room" :target-folder="target_folder" />
   </div>
 </template>

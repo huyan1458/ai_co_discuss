@@ -6,11 +6,11 @@
 
 `web/icons/` 中的 AI 品牌 SVG 参考 CC Switch 的 extracted icons，来源版本为 [`c8dc920615a2788a1315812d339bc34f349866c6`](https://github.com/farion1231/cc-switch/tree/c8dc920615a2788a1315812d339bc34f349866c6/src/icons/extracted)。原始 MIT 声明保存在 [web/icons/LICENSE.txt](web/icons/LICENSE.txt)，版权归 2025 Jason Young。
 
-品牌名称与标志归相应权利人，使用仅用于识别参与者，不表示官方合作、认可或背书。`user.svg` 为通用用户图形。
+品牌名称与标志归相应权利人，使用仅用于识别参与者，不表示官方合作、认可或背书。`user.svg` 为项目自绘的指纹图形，使用根目录 MIT License。
 
 ## npm 依赖与构建产物
 
-`package.json` 声明直接依赖，`package-lock.json` 记录实际版本、来源及包许可元数据。Vue、Nuxt UI、Markdown-it、KaTeX、Motion、Iconify / Lucide、QR code 等第三方代码用于前端或可选本机能力；Vite、Tailwind CSS 与 Wrangler 用于构建和部署。
+`package.json` 声明直接依赖，`package-lock.json` 记录实际版本、来源及包许可元数据。Vue、Nuxt UI、Markdown-it、KaTeX、Motion、Iconify / Lucide、fflate 等第三方代码用于前端渲染与本地备份；Vite、Tailwind CSS 与 Wrangler 用于构建和部署。
 
 发布带依赖的程序或重新打包前端时，应保留所使用包中的 LICENSE / NOTICE 文件和生成产物中的许可注释。KaTeX 的公式字体随前端 CSS 打包，其包内许可同样适用；Lucide 图标遵循该图标集自身许可。依赖安装后的原始许可位于各 `node_modules/<package>/`，下方附录保存直接依赖及当前前端实际打包模块的许可文本，便于源码与静态产物一同分发。
 
@@ -184,22 +184,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-```
-
-## qrcode 1.5.4
-
-来源：`node_modules/qrcode/license`
-
-```text
-The MIT License (MIT)
-
-Copyright (c) 2012 Ryan Day
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
 ## vue 3.5.44
@@ -1229,6 +1213,34 @@ SOFTWARE.
 MIT License
 
 Copyright (c) 2018 Popmotion
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## fflate 0.8.3
+
+来源：[fflate](https://github.com/101arrowz/fflate)，用于浏览器 ZIP 备份。
+
+```text
+MIT License
+
+Copyright (c) 2026 Arjun Barrett
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

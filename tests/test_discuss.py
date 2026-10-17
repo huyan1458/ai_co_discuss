@@ -55,6 +55,22 @@ class CliTests(unittest.TestCase):
                           "--submission-id", str(uuid.uuid4()))
         self.room = result["id"]
 
+    def test_limit_configuration_and_check_are_discoverable(self):
+        """Typed options survive create/read/update and a non-triggered check."""
+        room = self.cli("room", "create", "--title", "参数", "--as", "Codex",
+                        "--submission-id", str(uuid.uuid4()), "--max-rounds", "3", "--max-minutes", "60",
+                        "--execution-minutes", "10", "--on-limit", "summarize", "--summary-minutes", "5")
+        self.assertEqual(room["limits"]["max_rounds"], 3)
+        self.assertEqual(self.cli("room", "limits", room["id"])["max_minutes"], 60)
+        self.assertEqual(self.cli("room", "limits", room["id"], "--check", "--as", "Codex")["phase"], "preparing")
+        self.assertEqual(self.cli("room", "update", room["id"], "--as", "Codex", "--max-rounds", "0")["limits"]["max_rounds"], 0)
+
+    def test_folder_creation_option_is_forwarded_in_one_request(self):
+        """Expose folder placement in the CLI's documented creation payload."""
+        result = self.cli("room", "create", "--title", "文件夹内", "--as", "Codex", "--folder-id", "folder-id",
+                          "--submission-id", str(uuid.uuid4()), "--dry-run")
+        self.assertEqual(result["body"]["folder_id"], "folder-id")
+
     def invoke(self, arguments, stdin=None, environment=None):
         """Run the actual entrypoint with UTF-8 streams and no inherited target."""
         env = {**os.environ, "DISCUSS_URL": "", **(environment or {})}
@@ -85,6 +101,22 @@ class CliTests(unittest.TestCase):
         floor = self.cli("floor", "view", self.room)
         return self.cli("floor", "take", self.room, "--as", actor or speaker,
                         "--speaker", speaker, "--revision", floor["revision"])
+
+    def test_access_file_is_room_scoped_and_not_printed_in_preview(self):
+        """A private capability is usable only for its configured site and room."""
+        path = Path(self.directory.name) / "runtime-access.json"
+        secret = uuid.uuid4().hex
+        path.write_text(json.dumps({"site": self.base, "room": self.room, "token": secret}), encoding="utf-8")
+        configured = self.cli("run", "configure", self.room, "--mode", "automatic", "--revision", 0, "--access-file", path)
+        self.assertEqual(configured["mode"], "automatic")
+        preview = self.invoke(["--site", self.base, "run", "pause", self.room, "--revision", configured["revision"],
+                               "--access-file", path, "--dry-run"])
+        self.assertEqual(preview.returncode, 0, preview.stderr)
+        self.assertNotIn(secret, preview.stdout + preview.stderr)
+        error = self.rejected(["run", "view", "other-room", "--access-file", path])
+        self.assertIn("凭据文件不属于", str(error))
+        path.write_text(json.dumps({"site": "http://localhost:1", "room": self.room, "token": secret}), encoding="utf-8")
+        self.assertIn("凭据文件不属于", str(self.rejected(["run", "view", self.room, "--access-file", path])))
 
     def plan_speech(self, speaker="Codex", actor=None):
         """Create and claim a valid assignment for a content-focused CLI regression."""

@@ -34,9 +34,9 @@ export async function build_pages(source_root = PROJECT_ROOT, output_root = PROJ
   await Promise.all([readFile(join(source, "worker.mjs")), readFile(join(web_root, "index.html"))]);
   const output = await prepare_output(output_root);
   await cp(web_root, output, { recursive: true, filter: (file_path) => is_web_asset(web_root, file_path) });
-  await cp(join(PROJECT_ROOT, "pages", "public"), output, { recursive: true });
-  await cp(join(PROJECT_ROOT, "LICENSE"), join(output, "LICENSE"));
-  await cp(join(PROJECT_ROOT, "THIRD_PARTY_NOTICES.md"), join(output, "THIRD_PARTY_NOTICES.md"));
+  await cp(join(source, "pages", "public"), output, { recursive: true });
+  await cp(join(source, "LICENSE"), join(output, "LICENSE"));
+  await cp(join(source, "THIRD_PARTY_NOTICES.md"), join(output, "THIRD_PARTY_NOTICES.md"));
   await cp(join(source, "worker.mjs"), join(output, "_worker.js"));
   return output;
 }

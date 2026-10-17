@@ -1,0 +1,4 @@
+interface:
+  display_name: "讨论归档"
+  short_description: "按主题整理真实讨论并保留原文来源，生成可追溯、可持续归档的报告"
+  default_prompt: "使用 $discuss-report，将指定范围的真实讨论整理为中文综合报告，并归档到我指定的本地目录。"

@@ -18,6 +18,7 @@ data/
 __pycache__/
 *.pyc
 .venv/
+*.log
 
 # Cloudflare development and credentials
 node_modules/

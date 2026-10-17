@@ -9,7 +9,8 @@ const MAX_SUMMARY_LENGTH = 1000;
 const DIRECTORY_DRAG_THRESHOLD = 4;
 const DIRECTORY_DRAG_OFFSET = 12;
 const THEME_STORAGE_KEY = "ai-codiscuss-theme";
-const THEMES = ["millennium", "channel"];
+const DIRECTORY_SORT_KEY = "ai-codiscuss-directory-sort";
+const THEMES = ["millennium", "channel", "channel-light"];
 const SOURCE_LABELS = { demo: "示例", user: "本人发言", proxy: "用户代发", cli: "CLI 发言", url: "历史 URL 发言", host_proxy: "主持人代发" };
 const PHASE_LABELS = { preparing: "准备中", initial: "独立观点", discussing: "深入讨论", reviewing: "结论复核", paused: "已暂停", concluded: "已收束" };
 const TURN_LABELS = { pending: "待处理", notified: "已通知，待回答", answered: "已回答", cancelled: "已取消" };
@@ -22,7 +23,7 @@ const IDENTITIES = {
   Qwen: { initials: "QW", style: "qwen", icon: "/icons/qwen.svg", description: "AI 身份" },
 };
 const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false,
-  archive_view: false, management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
+  archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
   reply_to: null, turn_reply_to: null, tab: "topic", refresh_version: 0, context_dirty: false, topic_dirty: false,
   snapshot_id: 0, pending_submission: null, pending_turn: null, pending_room: null, toast_timer: null };
 state.messages = [];
@@ -35,9 +36,9 @@ function element(id) { return document.getElementById(id); }
 /** Apply a visual theme without replacing content or changing discussion state. */
 function apply_theme(theme) {
   const selected = theme === "retro" ? "millennium" : THEMES.includes(theme) ? theme : "channel";
-  const uses_vue = selected === "channel";
+  const uses_vue = selected.startsWith("channel");
   document.documentElement.dataset.theme = selected;
-  document.documentElement.classList.toggle("dark", uses_vue);
+  document.documentElement.classList.toggle("dark", selected === "channel");
   const legacy_style = document.getElementById("legacy-style");
   const modern_style = document.getElementById("modern-style");
   if (legacy_style) legacy_style.disabled = uses_vue;
@@ -83,9 +84,9 @@ function format_time(value) {
   return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
 }
 
-/** Display a brief operation result without losing the current draft. */
+/** Display operation feedback only in the classic renderer. */
 function show_toast(message, is_error = false) {
-  document.dispatchEvent(new CustomEvent("discuss:toast", { detail: { message, is_error } }));
+  if (document.documentElement.dataset.theme.startsWith("channel")) return;
   clearTimeout(state.toast_timer);
   element("toast").textContent = message;
   element("toast").classList.toggle("error", is_error);
@@ -94,11 +95,14 @@ function show_toast(message, is_error = false) {
 }
 
 /** Request JSON from the local or remotely hosted discussion service. */
-async function request_json(path, payload) {
+async function request_json(path, payload, access_token) {
   const options = { cache: "no-store" };
+  const target_room = path.match(/^\/api\/rooms\/([^/?]+)/)?.[1];
+  const token = access_token || (target_room ? localStorage.getItem(`discuss-access:${target_room}`) : null);
+  options.headers = token ? { "X-Discussion-Token": token } : {};
   if (payload !== undefined) {
     options.method = "POST";
-    options.headers = { "Content-Type": "application/json" };
+    options.headers["Content-Type"] = "application/json";
     options.body = JSON.stringify(payload);
   }
   const response = await fetch(path, options);
@@ -169,16 +173,39 @@ function render_rooms() {
   element("no-room").hidden = Boolean(state.room);
   element("room-content").hidden = !state.room;
   element("copy-reading").disabled = !state.room;
+  element("backup-room").disabled = !state.room || state.backup_pending;
   element("go-context").disabled = !state.room;
 }
 
 /** Return the active directory without hiding archived rooms from deep links. */
-function visible_rooms() { return state.rooms.filter((room) => Boolean(room.archived) === state.archive_view); }
+function visible_rooms() { return ordered_rooms().filter((room) => Boolean(room.archived) === state.archive_view); }
+
+/** Sort the displayed conversations without overwriting their saved manual order. */
+function ordered_rooms() {
+  if (state.directory_sort !== "recent") return state.rooms;
+  return [...state.rooms].sort((left, right) => (right.latest_id || 0) - (left.latest_id || 0)
+    || (right.created_at || "").localeCompare(left.created_at || ""));
+}
+
+/** Restore a supported local directory preference before rendering. */
+function restore_directory_sort() {
+  try { state.directory_sort = localStorage.getItem(DIRECTORY_SORT_KEY) === "recent" ? "recent" : "manual"; }
+  catch { state.directory_sort = "manual"; }
+}
+
+/** Change presentation order while preserving the current conversation and draft. */
+function sort_directory(value) {
+  if (!["manual", "recent"].includes(value)) return;
+  state.directory_sort = value;
+  try { localStorage.setItem(DIRECTORY_SORT_KEY, value); } catch { /* Keep the session preference. */ }
+  render_rooms();
+  publish_view();
+}
 
 /** Provide pointer and keyboard alternatives to dragging in the classic theme. */
 function room_menu_html(room, index, count) {
-  return [["rename", "重命名"], [room.archived ? "restore" : "archive", room.archived ? "恢复频道" : "存档频道"],
-    ["up", "上移", index === 0], ["down", "下移", index === count - 1], ["delete", "删除频道"]]
+  return [["rename", "重命名"], ["backup", "导出对话", state.backup_pending], [room.archived ? "restore" : "archive", room.archived ? "恢复频道" : "存档频道"],
+    ["up", "上移", state.directory_sort === "recent" || index === 0], ["down", "下移", state.directory_sort === "recent" || index === count - 1], ["delete", "删除频道"]]
     .map(([action, label, disabled]) => `<button type="button" data-manage-room="${room.id}" data-room-action="${action}" ${disabled ? "disabled" : ""}>${label}</button>`).join("");
 }
 
@@ -198,7 +225,7 @@ async function manage_channel({ id, action, title, confirm_title, before_id, fol
   const folder_version = state.folder_version;
   const directory = await request_json("/api/rooms");
   state.rooms = directory.rooms.map((room) => merge_room_folder(room, folder_version));
-  state.folders = directory.folders || [];
+  set_folder_directory(directory);
   if (action === "restore") state.archive_view = false;
   if (state.room?.id === id && ["archive", "delete"].includes(action)) {
     await select_room(visible_rooms()[0]?.id);
@@ -249,14 +276,60 @@ async function create_folder(name) {
   const folder_version = state.folder_version;
   const directory = await request_json("/api/rooms");
   state.rooms = directory.rooms.map((room) => merge_room_folder(room, folder_version));
-  state.folders = directory.folders || [];
+  set_folder_directory(directory);
   render_rooms();
   publish_view();
   show_toast("文件夹已创建");
 }
 
+/** Rename the exact folder without moving its conversations or changing selection. */
+async function rename_folder({ id, name }) {
+  state.refresh_version++;
+  const saved = await request_json(`/api/folders/${encodeURIComponent(id)}/rename`, { name });
+  state.refresh_version++;
+  state.folders = state.folders.map((folder) => folder.id === id ? saved : folder);
+  publish_view();
+  show_toast("文件夹已重命名");
+}
+
+/** Apply folder order and the virtual group's placement together. */
+function set_folder_directory(directory) {
+  state.folders = directory.folders || [];
+  state.uncategorized_position = directory.uncategorized_position ?? null;
+}
+
+/** Include the virtual group in ordering while keeping its room assignment empty. */
+function ordered_folders() {
+  const groups = state.folders.map((folder) => ({ ...folder, order_id: folder.id }));
+  groups.splice(state.uncategorized_position ?? groups.length, 0, { id: "", order_id: "__uncategorized__", name: "未归类" });
+  return groups;
+}
+
+/** Persist a folder's position without changing its contents or the open draft. */
+async function move_folder({ id, before_id, direction }) {
+  if (state.folder_order_pending) return;
+  const groups = ordered_folders();
+  const index = groups.findIndex((folder) => folder.order_id === id);
+  if (index < 0) return;
+  if (direction !== undefined) {
+    if (direction < 0 ? index === 0 : index === groups.length - 1) return;
+    before_id = groups[direction < 0 ? index - 1 : index + 2]?.order_id ?? null;
+  }
+  if (before_id === id) return;
+  state.folder_order_pending = true;
+  state.refresh_version++;
+  try {
+    const result = await request_json(`/api/folders/${encodeURIComponent(id)}/move`, { before_id });
+    state.refresh_version++;
+    set_folder_directory(result);
+    publish_view();
+    show_toast("文件夹顺序已保存");
+  } finally { state.folder_order_pending = false; }
+}
+
 /** Move a channel by one visible slot, also available without drag support. */
 async function move_channel({ id, direction, folder_id }) {
+  if (state.directory_sort === "recent") return;
   const rooms = visible_rooms();
   const folder_scoped = folder_id !== undefined;
   const group = folder_scoped ? rooms.filter((room) => (room.folder_id || null) === folder_id) : rooms;
@@ -401,14 +474,14 @@ async function load_message_history(room_id, version) {
 
 /** Refresh a room with version guards so slower requests cannot change the active view. */
 async function refresh_room() {
-  if (state.dragged_room) return;
+  if (state.dragged_room || state.folder_order_pending) return;
   const version = ++state.refresh_version;
   const folder_version = state.folder_version;
   const room_id = state.room?.id;
   const directory = await request_json("/api/rooms");
   if (version !== state.refresh_version) return;
   state.rooms = directory.rooms.map((room) => merge_room_folder(room, folder_version));
-  state.folders = directory.folders || [];
+  set_folder_directory(directory);
   if (state.room && !state.rooms.some((item) => item.id === state.room.id)) return select_room(visible_rooms()[0]?.id);
   if (!state.room) {
     if (visible_rooms().length) return select_room(visible_rooms()[0].id);
@@ -450,7 +523,7 @@ async function select_room(room_id) {
   cancel_turn_reply();
   element("turn-form").reset();
   element("message-kind").value = "opinion";
-  select_tab(document.documentElement.dataset.theme === "channel" ? "discussion" : "topic");
+  select_tab(document.documentElement.dataset.theme.startsWith("channel") ? "discussion" : "topic");
   history.replaceState(null, "", state.room ? `/?room=${encodeURIComponent(room_id)}` : "/");
   if (state.room) state.archive_view = Boolean(state.room.archived);
   else {
@@ -540,6 +613,17 @@ async function show_message(message_id) {
 /** Render reading links without creating or fetching any publishing links. */
 function render_access() {
   const base = `${location.origin}/r/${state.room.id}`;
+  const runtime = state.room.runtime || { mode: "manual", status: "ready" };
+  element("runtime-status").textContent = runtime_label(runtime);
+  element("runtime-execution").textContent = execution_label(runtime.latest_execution);
+  element("runtime-pause").hidden = runtime.status !== "running";
+  element("runtime-export").hidden = !runtime.protected;
+  if (state.runtime_draft_room !== state.room.id) {
+    const saved = JSON.parse(localStorage.getItem(`discuss-workspace:${state.room.id}`) || "{}");
+    element("runtime-project").value = saved.discussion_project || "";
+    element("runtime-cwd").value = saved.cwd || "";
+    state.runtime_draft_room = state.room.id;
+  }
   element("reading-url").textContent = base;
   element("open-reading").href = base;
   element("cli-reading-url").textContent = `${base}?mode=cli`;
@@ -553,22 +637,53 @@ function render_access() {
   element("address-note").textContent = local ? "当前是本机地址。请给在线 AI 提供公网阅读地址，或直接复制讨论材料。" : "在线 AI 仅需读取；若读取失败，由用户复制材料提供。观点在原聊天窗口输出，再由用户代发。";
 }
 
+/** Read numeric limits from the shared classic/modern form controls. */
+function read_limits(prefix) {
+  return Object.fromEntries(["max_rounds", "max_minutes", "execution_minutes", "on_limit", "summary_minutes"].map(key => {
+    const value = element(`${prefix}-limit-${key}${prefix === "topic" ? "-input" : ""}`).value;
+    return [key, key === "on_limit" ? value : Number(value)];
+  }));
+}
+
+/** Describe configured boundaries and actual progress without implying completion. */
+function limits_label(limits = {}) {
+  const finished = state.room?.phase === "concluded";
+  const rounds = limits.max_rounds ? `${limits.completed_rounds || 0} / ${limits.max_rounds} 轮` : `${limits.completed_rounds || 0} 轮 · 未设轮次上限`;
+  const duration = limits.max_minutes ? `总时长 ${limits.max_minutes} 分钟` : "未设总时长";
+  const progress = finished ? "讨论已收束" : !limits.started_at ? "尚未计时" : `已用 ${Math.floor((limits.elapsed_seconds || 0) / 60)} 分钟${limits.remaining_seconds == null ? "" : ` · 剩余 ${Math.ceil(limits.remaining_seconds / 60)} 分钟`}`;
+  const status = finished ? "" : limits.closing ? "正在收束" : limits.reached ? "已达上限，停止新增安排" : "";
+  const summary = limits.max_minutes || limits.deadline ? `总时长内预留 ${limits.summary_minutes} 分钟` : `收束最多 ${limits.summary_minutes} 分钟`;
+  const action = limits.on_limit === "summarize" ? `主持人总结 · ${summary}` : "到限暂停";
+  return `${rounds}；${duration}；${progress}。单次自动执行 ${limits.execution_minutes || 20} 分钟。${action}${status ? `；${status}` : ""}。`;
+}
+
+/** Apply a reached boundary without starting an AI or inventing a summary. */
+async function check_limits() {
+  await request_json(`/api/rooms/${state.room.id}/limits`, { actor: "用户" });
+  await refresh_room();
+  show_toast("已核对讨论上限");
+}
+
 /** Create a room from the dialog and switch into its empty history. */
-async function submit_room(event) {
+async function submit_room(event, folder_id = null) {
   event.preventDefault();
   const payload = { title: element("new-room-title").value, goal: element("new-room-goal").value,
     host: element("new-room-host").value, background: element("new-room-background").value,
-    boundaries: element("new-room-boundaries").value, experts: read_expert_inputs("new-expert-modes") };
+    boundaries: element("new-room-boundaries").value, experts: read_expert_inputs("new-expert-modes"),
+    runtime_mode: element("new-room-mode").value, limits: read_limits("new-room"), folder_id };
   const signature = JSON.stringify(payload);
-  if (state.pending_room?.signature !== signature) state.pending_room = { signature, id: new_submission_id() };
-  const room = await request_json("/api/rooms", { ...payload, submission_id: state.pending_room.id });
+  if (state.pending_room?.signature !== signature) state.pending_room = { signature, id: new_submission_id(), token: crypto.randomUUID() };
+  const token = payload.runtime_mode === "automatic" ? state.pending_room.token : undefined;
+  const room = await request_json("/api/rooms", { ...payload, submission_id: state.pending_room.id }, token);
+  if (token) localStorage.setItem(`discuss-access:${room.id}`, token);
   state.pending_room = null;
+  state.archive_view = false;
   if (!state.rooms.some((existing) => existing.id === room.id)) state.rooms.push(room);
   element("room-dialog").close();
   element("room-form").reset();
   render_expert_inputs("new-expert-modes", default_experts());
   await select_room(room.id);
-  select_tab(document.documentElement.dataset.theme === "channel" ? "discussion" : "topic");
+  select_tab(document.documentElement.dataset.theme.startsWith("channel") ? "discussion" : "topic");
   show_toast("话题已创建");
 }
 
@@ -593,7 +708,8 @@ async function copy_context(mode = "online") {
   const identity = participant === "用户" ? "你自己的身份" : `${participant} 身份`;
   const instruction = mode === "cli" ? "你是本地 CLI AI，可读取记录并通过留言板的 POST 接口发布，提交后重新读取核对。" :
     "你是在线 AI，只读取讨论，在当前聊天窗口输出观点和引用编号，由用户代发。不要尝试在留言板直接提交。";
-  await copy_text(`请以${identity}参与讨论。${instruction}\n话题入口：${address}\n先检查阶段和安排；独立观点阶段只读目标、背景、边界和自己的已有讨论，提交后再读他人观点。每次回答先给简短摘要，再给完整正文，保留关键理由、条件与不确定性。暂停或收束时不追加观点。其余材料按需阅读，不必读取全部历史。`);
+  const access = mode === "cli" && state.room.runtime?.protected ? "\n此房间启用了写入保护。请用户提供已导出接入配置的本机路径，写入时带 --access-file；不要读取或公开 token。" : "";
+  await copy_text(`请以${identity}参与讨论。${instruction}\n话题入口：${address}${access}${workspace_instruction()}\n先检查阶段和安排；独立观点阶段只读目标、背景、边界和自己的已有讨论，提交后再读他人观点。每次回答先给简短摘要，再给完整正文，保留关键理由、条件与不确定性。暂停或收束时不追加观点。其余材料按需阅读，不必读取全部历史。`);
 }
 
 /** Copy a bounded background startup contract without starting any external task. */
@@ -602,7 +718,76 @@ async function copy_background() {
   if (participant === "用户" || state.room.experts[participant] !== "cli") throw new Error("请先在讨论区选择已配置为本地 CLI 的专家身份");
   const base = `${location.origin}/r/${state.room.id}`;
   const params = new URLSearchParams({ mode: "cli", participant });
-  await copy_text(`请调用 discuss-participant 参与讨论。\n话题：${state.room.title}\n配置：你是 ${participant}，作为 CLI 专家持续参与；主持人为 ${state.room.host}。\n房间入口：${base}?${params}\n本次约定从房间资料和当前安排读取。`);
+  const access = state.room.runtime?.protected ? "\n用户须提供私有配置的本机路径，写入使用 --access-file，不读取或公开 token。" : "";
+  await copy_text(`请调用 discuss-participant 参与讨论。\n话题：${state.room.title}\n配置：你是 ${participant}，作为 CLI 专家持续参与；主持人为 ${state.room.host}。\n房间入口：${base}?${params}${workspace_instruction()}${access}\n本次约定从房间资料和当前安排读取。`);
+}
+
+/** Keep optional app placement local and include it in manual cold-start instructions. */
+function workspace_instruction() {
+  const workspace = runtime_workspace();
+  const lines = [workspace.discussion_project ? `讨论所属项目：${workspace.discussion_project}` : "",
+    workspace.cwd ? `工作目录 cwd：${workspace.cwd}` : ""].filter(Boolean);
+  return lines.length ? `\n${lines.join("\n")}\n请在对应项目和目录中打开会话；实际文件权限以软件配置为准。` : "";
+}
+
+/** Persist only optional local placement fields, never public room metadata. */
+function runtime_workspace() {
+  const workspace = { discussion_project: element("runtime-project").value.trim() || undefined,
+    cwd: element("runtime-cwd").value.trim() || undefined };
+  localStorage.setItem(`discuss-workspace:${state.room.id}`, JSON.stringify(workspace));
+  return workspace;
+}
+
+/** Describe a selected mode separately from actual execution. */
+function runtime_label(runtime = {}) {
+  const mode = runtime.mode === "automatic" ? "全自动讨论" : "手动复制冷启动";
+  const status = runtime.expired ? "已到截止时间" : ({ ready: "尚未启动", running: "运行已启用，实际进展以执行回执为准", paused: "已暂停", stopped: "已停止", concluded: "已收束" }[runtime.status] || "尚未启动");
+  return `${mode} · ${status}`;
+}
+
+/** Show only persisted business evidence, including actionable failure details. */
+function execution_label(event) {
+  if (!event) return "尚无自动执行回执";
+  const status = { pending: "待接入", dispatched: "已交付，等待开始", started: "实际执行中", completed: "本步已完成", cancelled: "已撤销", failed: "需要处理" }[event.status] || event.status;
+  return `${event.participant} · ${status}${event.result ? ` · ${event.result}` : ""}`;
+}
+
+/** Save an explicit mode selection; never start software from a preference change. */
+async function choose_runtime(mode) {
+  const room_id = state.room.id;
+  const path = `/api/rooms/${room_id}/runtime`;
+  const runtime = await request_json(path);
+  if (runtime.mode !== mode) {
+    const key = `discuss-access:${room_id}`;
+    if (!runtime.protected && !localStorage.getItem(key)) localStorage.setItem(key, crypto.randomUUID());
+    if (!localStorage.getItem(key)) throw new Error("本浏览器没有房间凭据，请在原浏览器或已配置 CLI 中操作");
+    await request_json(path, { action: "configure", mode, revision: runtime.revision });
+  }
+  if (state.room?.id !== room_id) return;
+  await refresh_room();
+  show_toast(mode === "automatic" ? "已选择全自动；请完成本机接入配置后启动" : "已选择手动复制冷启动");
+}
+
+/** Revoke active execution before the local adapters are stopped. */
+async function pause_runtime() {
+  await request_json(`/api/rooms/${state.room.id}/runtime`, { action: "pause", revision: state.room.runtime.revision });
+  await refresh_room();
+  show_toast("已暂停；旧执行不能继续写入");
+}
+
+/** Download a private per-room setup file for the independent local runner. */
+function export_runtime() {
+  const token = localStorage.getItem(`discuss-access:${state.room.id}`);
+  if (!token) throw new Error("请先选择全自动讨论，生成本房间的接入凭据");
+  const adapters = { Codex: "codex", Claude: "claude", Gemini: "antigravity" };
+  const participants = Object.fromEntries(Object.keys(state.room.experts).map(name => [name, { adapter: adapters[name] || "待配置" }]));
+  const workspace = runtime_workspace();
+  const config = { site: location.origin, room: state.room.id, token, cli_project: "填写 AI CoDiscuss 客户端目录", ...workspace, participants };
+  const url = URL.createObjectURL(new Blob([JSON.stringify(config, null, 2)], { type: "application/json" }));
+  const link = document.createElement("a");
+  link.href = url; link.download = `discussion-${state.room.id}.json`; link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  show_toast("已导出私有接入配置；按部署说明填写本机软件路径，不要公开此文件");
 }
 
 /** Supply participation defaults for a new topic. */
@@ -628,6 +813,7 @@ function render_topic() {
   const room = state.room;
   element("topic-phase").textContent = PHASE_LABELS[room.phase];
   element("topic-host").textContent = `主持人：${display_name(room.host)} · 可以同时作为专家参与`;
+  element("discussion-limits-status").textContent = limits_label(room.limits);
   for (const field of ["goal", "focus", "background", "boundaries"]) element(`topic-${field}`).textContent = room[field] || "尚未填写";
   element("topic-experts").textContent = Object.entries(room.experts).map(([name, mode]) =>
     `${name} · ${mode === "cli" ? "本地 CLI，可读可写" : "在线 AI，只读"}${name === room.host ? " · 兼任主持人" : ""}`).join("\n");
@@ -637,6 +823,11 @@ function render_topic() {
     for (const field of ["title", "goal", "focus", "background", "boundaries"]) element(`topic-${field}-input`).value = room[field];
     element("topic-host-select").value = room.host;
     element("topic-phase-select").value = room.phase;
+    for (const key of ["max_rounds", "max_minutes", "execution_minutes", "on_limit", "summary_minutes"]) {
+      const input = element(`topic-limit-${key}-input`);
+      input.value = room.limits?.[key] || (key === "on_limit" ? "pause" : "");
+      input.disabled = !["preparing", "paused"].includes(room.phase);
+    }
     render_expert_inputs("topic-expert-modes", room.experts);
   }
   const previous_expert = element("turn-expert-select").value;
@@ -664,10 +855,11 @@ function render_current_turn() {
   element("forward-turn").disabled = !active || inactive;
   element("cancel-turn").disabled = !active;
   element("view-turn-answer").hidden = !turn?.answer_id;
-  const unavailable = active || inactive || !Object.keys(state.room.experts).length || floor?.holder !== state.room.host;
+  const limited = state.room.limits?.reached;
+  const unavailable = active || inactive || limited || !Object.keys(state.room.experts).length || floor?.holder !== state.room.host;
   element("schedule-turn").disabled = Boolean(unavailable);
   element("schedule-note").textContent = inactive ? "话题已暂停或收束；恢复阶段后才能继续安排。" :
-    (active ? "先完成或取消当前安排，再安排下一位。" : floor?.holder !== state.room.host ? "主持人领取发言权后可安排下一位。" : "创建后本地专家可自行检查；在线专家需由主持人或用户联系。");
+    (active ? "先完成或取消当前安排，再安排下一位。" : limited ? "已达到讨论上限，请检查到限处理；需要继续时先暂停并调整参数。" : floor?.holder !== state.room.host ? "主持人领取发言权后可安排下一位。" : "创建后本地专家可自行检查；在线专家需由主持人或用户联系。");
 }
 
 /** Perform one explicit, versioned floor operation on behalf of its speaker. */
@@ -698,7 +890,7 @@ function turn_guidance(turn, room) {
 async function save_topic(event) {
   event.preventDefault();
   const payload = { actor: state.room.host, host: element("topic-host-select").value,
-    phase: element("topic-phase-select").value, experts: read_expert_inputs("topic-expert-modes") };
+    phase: element("topic-phase-select").value, experts: read_expert_inputs("topic-expert-modes"), limits: read_limits("topic") };
   for (const field of ["title", "goal", "focus", "background", "boundaries"]) payload[field] = element(`topic-${field}-input`).value;
   await request_json(`/api/rooms/${state.room.id}/topic`, payload);
   state.topic_dirty = false;
@@ -770,11 +962,13 @@ function update_composer_role() {
 /** Bind the topic workflow separately from existing chat controls. */
 function bind_host_controls() {
   const actions = { "topic-context": () => select_tab("context"), "edit-host-brief": () => select_tab("context"), "topic-history": () => select_tab("discussion"),
+    "runtime-auto": () => choose_runtime("automatic"), "runtime-manual": () => choose_runtime("manual"),
+    "runtime-export": export_runtime, "runtime-pause": pause_runtime, "check-discussion-limits": check_limits,
     "take-floor": () => change_floor("take"), "return-floor": () => change_floor("return"),
     "copy-turn": copy_turn, "confirm-notified": () => change_turn_status("notified"), "cancel-turn": () => change_turn_status("cancelled"),
     "forward-turn": prepare_turn_answer, "cancel-turn-answer": cancel_turn_reply,
     "view-turn-answer": () => show_message(state.room.current_turn.answer_id),
-    "copy-host": () => copy_text(`请以 ${state.room.host} 身份主持此话题，可兼任专家。\n话题入口：${location.origin}/r/${state.room.id}?mode=cli\n主持协议：${location.origin}/r/${state.room.id}/protocol\n由专家自主按需阅读；通知不附上下文。实际联系专家后再确认通知状态。`) };
+    "copy-host": () => copy_text(`请以 ${state.room.host} 身份主持此话题，可兼任专家。\n话题入口：${location.origin}/r/${state.room.id}?mode=cli\n主持协议：${location.origin}/r/${state.room.id}/protocol${workspace_instruction()}\n由专家自主按需阅读；通知不附上下文。实际联系专家后再确认通知状态。${state.room.runtime?.protected ? '\n用户须提供私有配置的本机路径，写入使用 --access-file，不读取或公开 token。' : ''}`) };
   Object.entries(actions).forEach(([id, action]) => element(id).addEventListener("click", () => run_action(action)));
   element("topic-form").addEventListener("submit", (event) => run_action(() => save_topic(event)));
   element("turn-form").addEventListener("submit", (event) => run_action(() => schedule_turn(event)));
@@ -820,6 +1014,7 @@ function bind_delegated_actions() {
 
 /** Show a targeted confirmation without changing the current channel or draft. */
 async function open_room_management(id, action) {
+  if (action === "backup") return backup_room(id);
   if (["up", "down"].includes(action)) return move_channel({ id, direction: action === "up" ? -1 : 1 });
   const room = state.rooms.find((item) => item.id === id);
   if (!room) return;
@@ -865,16 +1060,16 @@ function bind_directory_controls() {
 /** Capture a title or grip without turning a normal title click into a move. */
 function start_directory_drag(event) {
   const handle = event.target.closest("[data-drag-handle], [data-drag-title]");
-  if (!handle || handle.disabled || event.button !== 0 || state.dragged_room) return;
-  const row = handle.closest("[data-drag-room]");
-  if (state.folder_moves.has(row.dataset.dragRoom)) return;
+  if (!handle || handle.disabled || event.button !== 0 || state.dragged_room || state.folder_order_pending) return;
+  const row = handle.closest("[data-drag-room], [data-drag-folder]");
+  if (!row || state.folder_moves.has(row.dataset.dragRoom)) return;
   delete handle.dataset.suppressDragClick;
   handle.removeEventListener("click", suppress_directory_drag_click, true);
   if (event.pointerType === "touch" && handle.hasAttribute("data-drag-title")) return;
   event.preventDefault();
   event.stopPropagation();
   handle.addEventListener("click", suppress_directory_drag_click, true);
-  state.dragged_room = { id: row.dataset.dragRoom, folder_id: row.closest("[data-room-folder]")?.dataset.roomFolder || null,
+  state.dragged_room = { id: row.dataset.dragRoom || row.dataset.dragFolder, kind: row.hasAttribute("data-drag-folder") ? "folder" : "room", folder_id: row.closest("[data-room-folder]")?.dataset.roomFolder || null,
     origin_x: event.clientX, origin_y: event.clientY, pointer: event.pointerId, handle, row,
     list: handle.closest("[data-room-directory]"), target: null, moved: false, preview: null };
   handle.setPointerCapture(event.pointerId);
@@ -898,11 +1093,11 @@ function suppress_directory_drag_click(event) {
 
 /** Show the dragged title beside the pointer while leaving the directory in place. */
 function render_directory_drag_preview(drag, event) {
-  if (document.documentElement.dataset.theme !== "channel") return;
+  if (!document.documentElement.dataset.theme.startsWith("channel")) return;
   if (!drag.preview) {
     drag.preview = document.createElement("div");
     drag.preview.className = "channel-drag-preview";
-    drag.preview.textContent = state.rooms.find((room) => room.id === drag.id)?.title || "话题";
+    drag.preview.textContent = drag.kind === "folder" ? ordered_folders().find((folder) => folder.order_id === drag.id)?.name : state.rooms.find((room) => room.id === drag.id)?.title;
     drag.preview.setAttribute("aria-hidden", "true");
     document.body.append(drag.preview);
     drag.row.classList.add("drag-source");
@@ -916,6 +1111,7 @@ function render_directory_drag_preview(drag, event) {
 /** Clear both folder targets and within-folder insertion edges. */
 function clear_directory_drop(drag) {
   drag.list.querySelectorAll("[data-drag-room]").forEach((row) => row.classList.remove("drop-before", "drop-after"));
+  drag.list.querySelectorAll("[data-room-folder]").forEach((folder) => folder.classList.remove("drop-before", "drop-after"));
   drag.list.querySelectorAll("[data-drop-folder]").forEach((heading) => heading.classList.remove("drop-folder"));
   drag.target = null;
 }
@@ -931,6 +1127,7 @@ function update_directory_drag(event) {
   clear_directory_drop(drag);
   const hit = document.elementFromPoint(event.clientX, event.clientY);
   if (!hit || !drag.list.contains(hit)) return;
+  if (drag.kind === "folder") return update_folder_drop(drag, hit, event.clientY);
   const folder = hit.closest("[data-room-folder]");
   const folder_id = folder?.dataset.roomFolder || null;
   if (folder && folder_id !== drag.folder_id) {
@@ -938,11 +1135,26 @@ function update_directory_drag(event) {
     drag.target = { action: "folder", folder_id };
     return;
   }
+  if (state.directory_sort === "recent") return;
   const target = hit.closest("[data-drag-room]");
   if (!target || target.dataset.dragRoom === drag.id) return;
   const rect = target.getBoundingClientRect();
   const after = event.clientY > rect.top + rect.height / 2;
   drag.target = { action: "move", id: target.dataset.dragRoom, after };
+  target.classList.add(after ? "drop-after" : "drop-before");
+}
+
+/** Reorder whole groups, including the virtual uncategorized group. */
+function update_folder_drop(drag, hit, pointer_y) {
+  const target = hit.closest("[data-room-folder]");
+  if (!target || target.dataset.dragFolder === drag.id) return;
+  const rect = target.getBoundingClientRect();
+  const after = pointer_y > rect.top + rect.height / 2;
+  const groups = ordered_folders();
+  const index = groups.findIndex((folder) => folder.order_id === target.dataset.dragFolder);
+  const before_id = after ? groups[index + 1]?.order_id ?? null : target.dataset.dragFolder;
+  if (before_id === drag.id) return;
+  drag.target = { action: "move_folder", before_id };
   target.classList.add(after ? "drop-after" : "drop-before");
 }
 
@@ -972,6 +1184,7 @@ function finish_directory_drag(event) {
   drag.list.classList.remove("directory-dragging");
   if (drag.handle.hasPointerCapture(drag.pointer)) drag.handle.releasePointerCapture(drag.pointer);
   if (event.type !== "pointerup" || !target) return;
+  if (target.action === "move_folder") return run_action(() => move_folder({ id: drag.id, before_id: target.before_id }));
   if (target.action === "folder") return run_action(() => manage_channel({ id: drag.id, action: "folder", folder_id: target.folder_id }));
   const rooms = visible_rooms();
   const index = rooms.findIndex((room) => room.id === target.id);
@@ -986,6 +1199,7 @@ function bind_controls() {
     "close-room-dialog": () => element("room-dialog").close(), "close-message-dialog": () => element("message-dialog").close(),
     "refresh": refresh_room, "cancel-reply": cancel_reply, "go-context": () => select_tab("context"),
     "copy-reading": () => copy_text(`${location.origin}/r/${state.room.id}`),
+    "backup-room": () => backup_room(),
     "copy-reading-secondary": () => copy_text(`${location.origin}/r/${state.room.id}`),
     "copy-context": () => copy_context(), "copy-online": () => copy_context(), "copy-cli": () => copy_context("cli"), "copy-background": copy_background };
   Object.entries(actions).forEach(([id, action]) => element(id).addEventListener("click", () => run_action(action)));
@@ -1024,7 +1238,7 @@ async function initialize() {
   try {
     const result = await request_json("/api/rooms");
     state.rooms = result.rooms;
-    state.folders = result.folders || [];
+    set_folder_directory(result);
     const requested = new URLSearchParams(location.search).get("room");
     await select_room(state.rooms.some((room) => room.id === requested) ? requested : visible_rooms()[0]?.id);
     set_connection(true);
@@ -1047,8 +1261,8 @@ function view_snapshot() {
     .map((control) => [control.id, control.value]));
   const experts = Object.fromEntries(["new-expert-modes", "topic-expert-modes"].map((id) =>
     [id, element(id) ? read_expert_inputs(id) : {}]));
-  return { rooms: state.rooms, folders: state.folders, room: state.room, archive_view: state.archive_view, messages: state.messages, total: state.message_total,
-    connected: state.connected, page: state.page, pages: state.pages, query: state.query,
+  return { rooms: ordered_rooms(), folders: state.folders, folder_groups: ordered_folders(), room: state.room, archive_view: state.archive_view, directory_sort: state.directory_sort, messages: state.messages, total: state.message_total,
+    connected: state.connected, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
     mention_only: state.mention_only, reply_to: state.reply_to, turn_reply_to: state.turn_reply_to,
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
     theme: document.documentElement.dataset.theme, fields, experts };
@@ -1090,18 +1304,39 @@ async function filter_view({ query = state.query, mention = state.mention_only, 
   await refresh_room();
 }
 
+/** Download one complete room snapshot independently of visible filters or later navigation. */
+async function backup_room(room_id = state.room?.id) {
+  if (!room_id || state.backup_pending) return;
+  state.backup_pending = true;
+  element("backup-room").disabled = true;
+  element("backup-room").textContent = "正在备份…";
+  publish_view();
+  try {
+    const snapshot = await request_json(`/api/rooms/${encodeURIComponent(room_id)}/backup`);
+    snapshot.source_url = `${location.origin}/r/${encodeURIComponent(room_id)}`;
+    await window.discuss_backup.download_room_backup(snapshot);
+    show_toast(`已生成备份（${snapshot.tables.messages.length} 条消息），请查看浏览器下载。`);
+  } finally {
+    state.backup_pending = false;
+    element("backup-room").disabled = !state.room;
+    element("backup-room").textContent = "备份当前讨论";
+    publish_view();
+  }
+}
+
 /** Execute a named view command, retaining existing retry and provenance rules. */
 async function execute_view_action(name, value) {
   const event = { preventDefault() {} };
   const actions = { refresh: refresh_room, room: select_room, tab: select_tab,
-    archives: toggle_archives, manage_channel, move_channel, create_folder,
-    send: () => send_message(event), create: () => submit_room(event),
+    archives: toggle_archives, backup: backup_room, manage_channel, move_channel, create_folder, move_folder, rename_folder, sort_directory,
+    send: () => send_message(event), create: (folder_id) => submit_room(event, folder_id),
     save_context: () => save_context(event), save_topic: () => save_topic(event),
     schedule: () => schedule_turn(event), filter: filter_view, reply: set_view_reply,
     cancel_reply, cancel_answer: cancel_turn_reply, prepare_answer: prepare_turn_answer,
     copy_turn, notify: () => change_turn_status("notified"), cancel_turn: () => change_turn_status("cancelled"),
     take_floor: () => change_floor("take"), return_floor: () => change_floor("return"),
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
+    choose_runtime, export_runtime, pause_runtime, check_limits,
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };
   try {
     await actions[name](value);
@@ -1123,7 +1358,9 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
   start_drag: start_directory_drag,
   write_expert: write_view_expert, execute: execute_view_action, theme: change_view_theme,
   request: request_json, identities: IDENTITIES, display_name, sources: SOURCE_LABELS, phases: PHASE_LABELS,
+  runtime_label, execution_label, limits_label,
   turns: TURN_LABELS, turn_label, turn_guidance, floor_status, progress_round, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();
+restore_directory_sort();
 document.addEventListener("DOMContentLoaded", initialize);

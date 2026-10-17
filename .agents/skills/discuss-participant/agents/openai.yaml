@@ -1,4 +1,4 @@
 interface:
   display_name: "讨论参与"
-  short_description: "所有讨论参与者（包括主持人）必用，规范阅读、发言与可靠写入"
-  default_prompt: "使用 $discuss-participant，以指定身份参与这个 AI CoDiscuss 房间，按需阅读并完成本次任务。"
+  short_description: "所有参与者使用，独立判断、回应论证并可靠保存观点，支持自动与手动接入"
+  default_prompt: "使用 $discuss-participant，以指定身份参与这个 AI CoDiscuss 房间，围绕本轮问题检验证据、回应相关观点并保存自己的判断。"

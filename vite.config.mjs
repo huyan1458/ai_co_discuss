@@ -8,6 +8,11 @@ export default defineConfig(({ mode }) => mode === "markdown" ? {
     emptyOutDir: false,
     lib: { entry: "web/modern/markdown-entry.js", name: "discuss_markdown", formats: ["iife"], fileName: () => "markdown.js", cssFileName: "markdown" },
   },
+} : mode === "backup" ? {
+  build: {
+    outDir: "web", emptyOutDir: false,
+    lib: { entry: "web/modern/backup.mjs", name: "discuss_backup", formats: ["iife"], fileName: () => "backup.js" },
+  },
 } : {
   define: { "process.env.NODE_ENV": JSON.stringify("production") },
   plugins: [vue(), ui({

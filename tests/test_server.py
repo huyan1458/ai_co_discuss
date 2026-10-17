@@ -65,6 +65,68 @@ class DiscussionTests(unittest.TestCase):
             "author": "用户", "text": text, "submission_id": submission_id, "reply_to": reply_to,
         })
 
+    def test_room_backup_includes_every_page_and_original_relationships(self):
+        """Export complete, unchanged records rather than the current history page."""
+        self.configure_host()
+        base = f"/api/rooms/{self.room['id']}"
+        originals = [self.post(f"原文 {index} 🙂\n保留换行", f"backup-{index}")[1]["message"] for index in range(45)]
+        payload = {"author": "Gemini", "submitted_by": "Codex", "source": "cli", "text": "完整专家意见",
+                   "summary": "摘要", "summary_by": "Gemini", "submission_id": "backup-answer", "reply_to": originals[0]["id"]}
+        payload.update(self.prepare_speech("Gemini"))
+        status, answer = self.request(base + "/messages", payload)
+        self.assertEqual(status, 201)
+        answer = answer["message"]
+        self.assertEqual(self.request(base + "/state", {"actor": "Codex", "text": "保留分歧", "brief": "主持简报", "until": answer["id"]})[0], 200)
+        before = self.request(base)[1]
+        status, snapshot = self.request(base + "/backup?page=2&q=missing&author=Claude")
+        self.assertEqual(status, 200)
+        self.assertEqual((snapshot["format"], snapshot["version"]), ("ai-codiscuss-room-backup", 1))
+        self.assertTrue(snapshot["exported_at"])
+        tables = snapshot["tables"]
+        self.assertEqual(set(tables), {"rooms", "room_directory", "room_folder_assignments", "topic_folders", "room_creations",
+                                      "room_briefs", "topic_settings", "room_floor", "discussion_limits", "messages", "message_details", "message_summaries", "discussion_turns"})
+        self.assertEqual([row["id"] for row in tables["messages"]], [row["id"] for row in originals] + [answer["id"]])
+        for original, row in zip(originals + [answer], tables["messages"]):
+            self.assertEqual(row, {key: original[key] for key in row})
+        details = next(row for row in tables["message_details"] if row["message_id"] == answer["id"])
+        summary = next(row for row in tables["message_summaries"] if row["message_id"] == answer["id"])
+        self.assertEqual((details["submitted_by"], details["turn_id"]), ("Codex", payload["turn_id"]))
+        self.assertEqual((summary["text"], summary["author"]), ("摘要", "Gemini"))
+        self.assertEqual(tables["discussion_turns"][0]["answer_id"], answer["id"])
+        self.assertEqual(tables["rooms"][0]["state_text"], "保留分歧")
+        self.assertEqual(tables["room_briefs"][0]["text"], "主持简报")
+        self.assertEqual(tables["topic_settings"][0]["host"], "Codex")
+        self.assertEqual(self.request(base)[1], before)
+
+    def test_room_backup_excludes_other_rooms_and_retains_archived_data(self):
+        """Folder membership must not pull another room's messages or configuration."""
+        base = f"/api/rooms/{self.room['id']}"
+        folder = self.request("/api/folders", {"name": "共同文件夹"})[1]
+        self.request(base + "/folder", {"actor": "用户", "folder_id": folder["id"]})
+        other = self.request("/api/rooms", {"title": "禁止混入的房间", "submission_id": "other-creation"})[1]
+        self.request(f"/api/rooms/{other['id']}/folder", {"actor": "用户", "folder_id": folder["id"]})
+        self.request(f"/api/rooms/{other['id']}/messages", {"author": "用户", "text": "OTHER_SECRET", "submission_id": "other-secret"})
+        self.post("本房间原文", "own-record")
+        self.assertEqual(self.request(base + "/archive", {"actor": "用户"})[0], 200)
+        status, snapshot = self.request(base + "/backup")
+        self.assertEqual(status, 200)
+        tables = snapshot["tables"]
+        self.assertEqual(tables["room_directory"][0]["archived"], 1)
+        self.assertEqual(tables["topic_folders"], [folder])
+        self.assertEqual(len(tables["room_folder_assignments"]), 1)
+        self.assertEqual([row["text"] for row in tables["messages"]], ["本房间原文"])
+        self.assertNotIn(other["id"], json.dumps(snapshot))
+        self.assertNotIn("OTHER_SECRET", json.dumps(snapshot))
+        self.assertEqual(self.request(base + "/backup", {}, method="POST")[0], 404)
+
+    def test_room_backup_handles_empty_and_missing_rooms(self):
+        """A new room is exportable; missing rooms never produce an empty success."""
+        status, snapshot = self.request(f"/api/rooms/{self.room['id']}/backup")
+        self.assertEqual(status, 200)
+        self.assertEqual(snapshot["tables"]["messages"], [])
+        self.assertEqual(snapshot["tables"]["discussion_turns"], [])
+        self.assertEqual(self.request("/api/rooms/missing/backup"), (404, {"error": "房间不存在"}))
+
     def test_channel_order_and_rename_survive_reload(self):
         """Moves persist without losing new rooms; rename retains IDs and content."""
         original = self.post("原文保留", "rename-original")[1]["message"]
@@ -85,6 +147,15 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.request(base + f"/messages/{original['id']}")[1]["text"], original["text"])
         self.assertEqual(self.request(path, {"actor": "用户", "before_id": None})[0], 200)
         self.assertEqual(self.request("/api/rooms")[1]["rooms"][-1]["id"], third["id"])
+
+    def test_second_server_cannot_reuse_active_port(self):
+        """Reject duplicate listeners instead of mixing separate discussion databases."""
+        if self.external:
+            self.skipTest("Socket binding belongs to the Python deployment")
+        with self.assertRaises(OSError):
+            with DiscussionServer(self.server.server_address, self.database):
+                pass
+        self.assertEqual(self.request("/api/health"), (200, {"ok": True}))
 
     def test_archive_preserves_pending_turn_and_requires_explicit_resume(self):
         """Archive pauses writes, retains evidence, and restoration never resumes work."""
@@ -130,6 +201,101 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(next(item for item in directory["folders"] if item["id"] == folder_id)["name"], "产品讨论")
         self.assertEqual(next(item for item in directory["rooms"] if item["id"] == self.room["id"])["folder_id"], folder_id)
         self.assertEqual(self.request(room_path + "/folder", {"actor": "用户", "folder_id": None})[1]["folder_id"], None)
+
+    def test_folder_rename_preserves_order_and_archived_membership(self):
+        """Editing a folder name retains its contents and rejects invalid names."""
+        folder = self.request("/api/folders", {"name": "原名"})[1]
+        room_path = f"/api/rooms/{self.room['id']}"
+        self.request(room_path + "/folder", {"actor": "用户", "folder_id": folder["id"]})
+        self.request(room_path + "/archive", {"actor": "用户"})
+        before = self.request(room_path)[1]
+        path = f"/api/folders/{folder['id']}/rename"
+        status, renamed = self.request(path, {"name": "  新名称  "})
+        self.assertEqual(status, 200)
+        self.assertEqual(renamed, {**folder, "name": "新名称"})
+        self.assertEqual(self.request(room_path)[1], before)
+        for invalid in ("", " ", "字" * 41, None, 42, [], {}):
+            self.assertEqual(self.request(path, {"name": invalid})[0], 400)
+        self.assertEqual(self.request("/api/folders/missing/rename", {"name": "不存在"})[0], 404)
+        self.assertIn(renamed, self.request("/api/rooms")[1]["folders"])
+
+    def test_create_room_in_folder_is_atomic_and_replayable(self):
+        """Creation includes placement; retries never duplicate or move an existing room."""
+        folder = self.request("/api/folders", {"name": "目标文件夹"})[1]["id"]
+        payload = {"title": "在文件夹中新建", "folder_id": folder, "submission_id": str(uuid.uuid4())}
+        status, room = self.request("/api/rooms", payload)
+        self.assertEqual((status, room["folder_id"]), (201, folder))
+        status, replay = self.request("/api/rooms", payload)
+        self.assertEqual((status, replay["id"], replay["duplicate"]), (200, room["id"], True))
+        self.assertEqual(self.request("/api/rooms", {**payload, "folder_id": None})[0], 409)
+        self.request(f"/api/rooms/{room['id']}/folder", {"actor": "用户", "folder_id": None})
+        self.assertIsNone(self.request("/api/rooms", payload)[1]["folder_id"])
+        before_ids = [item["id"] for item in self.request("/api/rooms")[1]["rooms"]]
+        for invalid in ("missing", "", 42, [], {}):
+            self.assertEqual(self.request("/api/rooms", {**payload, "folder_id": invalid, "submission_id": str(uuid.uuid4())})[0], 400)
+        self.assertEqual([item["id"] for item in self.request("/api/rooms")[1]["rooms"]], before_ids)
+        ungrouped = {"title": "未归类", "submission_id": str(uuid.uuid4())}
+        created = self.request("/api/rooms", ungrouped)[1]
+        self.assertIsNone(created["folder_id"])
+        self.assertEqual(self.request("/api/rooms", {**ungrouped, "folder_id": None})[1]["id"], created["id"])
+
+    def test_folder_order_persists_without_changing_room_membership(self):
+        """Moves preserve contents, survive reload and reject invalid destinations."""
+        folders = [self.request("/api/folders", {"name": name})[1]["id"] for name in ("甲组", "乙组", "丙组")]
+        room_path = f"/api/rooms/{self.room['id']}"
+        self.request(room_path + "/folder", {"actor": "用户", "folder_id": folders[0]})
+        self.request(room_path + "/archive", {"actor": "用户"})
+        before_room = self.request(room_path)[1]
+        path = f"/api/folders/{folders[2]}/move"
+        for _ in range(2):
+            status, result = self.request(path, {"before_id": folders[0]})
+            self.assertEqual(status, 200)
+            self.assertEqual([item["id"] for item in result["folders"] if item["id"] in folders],
+                             [folders[2], folders[0], folders[1]])
+        result = self.request(path, {"before_id": None})[1]
+        self.assertEqual([item["id"] for item in result["folders"] if item["id"] in folders], folders)
+        self.assertEqual([item["position"] for item in result["folders"]], list(range(1, len(result["folders"]) + 1)))
+        for invalid in (folders[2], "missing", 42, [], {}):
+            self.assertEqual(self.request(path, {"before_id": invalid})[0], 400)
+        self.assertEqual(self.request("/api/folders/missing/move", {"before_id": None})[0], 404)
+        if not self.external:
+            init_database(self.database)
+        self.assertEqual(self.request("/api/rooms")[1]["folders"], result["folders"])
+        self.assertEqual(self.request(room_path)[1], before_room)
+
+    def test_uncategorized_order_with_one_folder_and_legacy_migration(self):
+        """The virtual group moves both ways, persists and never becomes an assignment."""
+        folder = self.request("/api/folders", {"name": "test"})[1]
+        virtual_path = "/api/folders/__uncategorized__/move"
+        folder_path = f"/api/folders/{folder['id']}/move"
+        if not self.external:
+            with closing(sqlite3.connect(self.database)) as connection:
+                connection.execute("DROP TABLE directory_settings")
+                connection.commit()
+            init_database(self.database, seed=False)
+            self.assertIsNone(self.request("/api/rooms")[1]["uncategorized_position"])
+        self.assertEqual(self.request(virtual_path, {"before_id": None})[0], 200)
+        status, moved = self.request(virtual_path, {"before_id": folder["id"]})
+        self.assertEqual(status, 200)
+        self.assertEqual(moved["uncategorized_position"], len(moved["folders"]) - 1)
+        self.assertEqual(self.request(folder_path, {"before_id": "__uncategorized__"})[1]["uncategorized_position"], None)
+        moved = self.request(folder_path, {"before_id": None})[1]
+        self.assertEqual(moved["uncategorized_position"], len(moved["folders"]) - 1)
+        if not self.external:
+            init_database(self.database, seed=False)
+            init_database(self.database, seed=False)
+        directory = self.request("/api/rooms")[1]
+        self.assertEqual(directory["uncategorized_position"], moved["uncategorized_position"])
+        self.assertEqual(directory["folders"], moved["folders"])
+        self.assertIsNone(self.request(f"/api/rooms/{self.room['id']}")[1]["folder_id"])
+        self.assertEqual(self.request(f"/api/rooms/{self.room['id']}/folder",
+                                      {"actor": "用户", "folder_id": "__uncategorized__"})[0], 400)
+        self.assertEqual(self.request(virtual_path, {"before_id": "__uncategorized__"})[0], 400)
+        self.request("/api/folders", {"name": "新增组"})
+        self.assertEqual(self.request("/api/rooms")[1]["uncategorized_position"], moved["uncategorized_position"])
+        self.request(virtual_path, {"before_id": None})
+        self.request("/api/folders", {"name": "末尾组"})
+        self.assertIsNone(self.request("/api/rooms")[1]["uncategorized_position"])
 
     def test_delete_removes_related_records_and_leaves_other_channels(self):
         """Wrong confirmations preserve content; deletion removes linked data atomically."""

@@ -1,20 +1,21 @@
 <script setup>
 import { computed, inject, ref, watch } from "vue";
 
-const props = defineProps({ detailId: { type: Number, default: null }, targetRoom: { type: Object, default: null }, readingOptions: { type: Array, default: () => [] } });
+const props = defineProps({ detailId: { type: Number, default: null }, targetRoom: { type: Object, default: null }, targetFolder: { type: Object, default: null }, readingOptions: { type: Array, default: () => [] } });
 const mode = defineModel({ type: String, default: "" });
 const reading_width = defineModel("readingWidth", { type: String, default: "default" });
 const rendered_mode = ref(mode.value);
 watch(mode, (value) => { if (value) rendered_mode.value = value; });
 const { view, bridge, field, act, pending } = inject("discussion");
 const open = computed({ get: () => Boolean(mode.value), set: (value) => { if (!value) mode.value = ""; } });
-const titles = { settings: "外观设置", create: "新建讨论", folder: "新建文件夹", edit: "编辑议题", schedule: "安排专家发言", message: "消息原文" };
+const titles = { settings: "外观设置", create: "新建对话", folder: "新建文件夹", "rename-folder": "重命名文件夹", edit: "编辑议题", schedule: "安排专家发言", message: "消息原文" };
 Object.assign(titles, { rename: "重命名频道", archive: "存档频道", restore: "恢复频道", delete: "删除频道" });
 const descriptions = { settings: "选择适合你的讨论界面。", create: "围绕一个明确的问题，开始一场讨论。", edit: "维护目标、参与身份与当前进度。", schedule: "只填写本轮问题，专家按需阅读讨论资料。", message: "保留作者、来源、提交人和引用关系。" };
 Object.assign(descriptions, { rename: "名称变化不会影响讨论记录和阅读地址。", archive: "保留所有记录，并暂停尚未收束的讨论。", restore: "移回讨论列表，保持当前讨论阶段。", delete: "永久删除频道及其所有记录，无法撤销。" });
 const management_title = ref("");
 const folder_name = ref("");
-watch(mode, (value) => { if (value === "folder") folder_name.value = ""; });
+watch(() => [mode.value, props.targetFolder?.id], () => { folder_name.value = mode.value === "rename-folder" ? props.targetFolder?.name || "" : ""; });
+const folder_dialog = computed(() => ["folder", "rename-folder"].includes(rendered_mode.value));
 watch(() => [mode.value, props.targetRoom?.id], () => { management_title.value = mode.value === "rename" ? props.targetRoom?.title || "" : ""; });
 
 /** Close management only after its exact target has been saved successfully. */
@@ -26,7 +27,8 @@ async function save_management() {
 async function save_folder() {
   const name = folder_name.value.trim();
   if (!name || pending.value) return;
-  if (await act("create_folder", name)) mode.value = "";
+  const renaming = mode.value === "rename-folder";
+  if (await act(renaming ? "rename_folder" : "create_folder", renaming ? { id: props.targetFolder.id, name } : name)) mode.value = "";
 }
 const form_prefix = computed(() => rendered_mode.value === "create" ? "new-room" : "topic");
 const expert_container = computed(() => rendered_mode.value === "create" ? "new-expert-modes" : "topic-expert-modes");
@@ -35,12 +37,14 @@ const participants = Object.keys(bridge.identities).map((value) => ({ value, lab
 const phases = Object.entries(bridge.phases).map(([value, label]) => ({ value, label }));
 const expert_modes = [{ value: "none", label: "不参与" }, { value: "cli", label: "本地 CLI · 读写" }, { value: "online", label: "在线 AI · 只读" }];
 const details_open = ref(false);
+const limits_locked = computed(() => rendered_mode.value === "edit" && !["preparing", "paused"].includes(view.value.room?.phase));
+const limit_fields = [{ key: 'max_rounds', label: '讨论轮次上限', min: 0, max: 100 }, { key: 'max_minutes', label: '总时长（分钟）', min: 0, max: 1440 }, { key: 'execution_minutes', label: '单次 AI 执行（分钟，仅自动）', min: 1, max: 60 }];
 const pending_theme = ref(null);
 const detail = ref(null);
 const detail_error = ref("");
 const turn_expert = field("turn-expert-select");
 const turn_question = field("turn-question-input");
-const themes = [{ value: "channel", title: "协作频道", description: "频道导航 · 连续消息 · 成员侧栏", icon: "i-lucide-panels-top-left" }, { value: "millennium", title: "千禧聊天室", description: "钢蓝窗框 · 经典聊天", icon: "i-lucide-message-square" }];
+const themes = [{ value: "channel", title: "协作频道", description: "深灰界面 · 频道导航 · 成员侧栏", icon: "i-lucide-panels-top-left" }, { value: "channel-light", title: "协作频道 · 浅色", description: "纯白界面 · 中性灰阶 · 清晰阅读", icon: "i-lucide-sun" }, { value: "millennium", title: "千禧聊天室", description: "钢蓝窗框 · 经典聊天", icon: "i-lucide-message-square" }];
 
 /** Map both topic forms onto the existing controller's draft fields. */
 function form_id(key) {
@@ -51,7 +55,7 @@ function form_id(key) {
 /** Close a write dialog only after the controller confirms a successful save. */
 async function save_form() {
   const action = mode.value === "create" ? "create" : mode.value === "edit" ? "save_topic" : "schedule";
-  if (await act(action)) mode.value = "";
+  if (await act(action, mode.value === "create" ? props.targetFolder?.id ?? null : undefined)) mode.value = "";
 }
 
 /** Close the overlay before switching its underlying renderer. */
@@ -85,11 +89,11 @@ async function follow_reply() {
 </script>
 
 <template>
-  <UModal v-model:open="open" :title="titles[rendered_mode] || '讨论'" :description="descriptions[rendered_mode]" :ui="{ content: ['glass-panel studio-modal', rendered_mode === 'folder' && 'channel-folder-modal'], body: 'dialog-body' }" @after:leave="finish_theme_change">
+  <UModal v-model:open="open" :title="titles[rendered_mode] || '讨论'" :description="descriptions[rendered_mode]" :ui="{ content: ['glass-panel studio-modal', folder_dialog && 'channel-folder-modal'], body: 'dialog-body' }" @after:leave="finish_theme_change">
     <template #body>
-      <form v-if="rendered_mode === 'folder'" class="dialog-form" @submit.prevent="save_folder">
-        <UInput v-model="folder_name" icon="i-lucide-folder" aria-label="新文件夹名称" placeholder="文件夹名称" autofocus required :maxlength="40" class="w-full" autocomplete="off" :readonly="Boolean(pending)" @keydown.enter.prevent="!$event.isComposing && save_folder()" />
-        <div class="dialog-actions"><UButton label="取消" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" label="创建文件夹" class="channel-primary-button" :loading="pending === 'create_folder'" :disabled="!folder_name.trim() || Boolean(pending)" /></div>
+      <form v-if="folder_dialog" class="dialog-form" @submit.prevent="save_folder">
+        <UInput v-model="folder_name" icon="i-lucide-folder" :aria-label="rendered_mode === 'folder' ? '新文件夹名称' : '文件夹名称'" placeholder="文件夹名称" autofocus required :maxlength="40" class="w-full" autocomplete="off" :readonly="Boolean(pending)" @keydown.enter.prevent="!$event.isComposing && save_folder()" />
+        <div class="dialog-actions"><UButton label="取消" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" :label="rendered_mode === 'folder' ? '创建文件夹' : '保存名称'" class="channel-primary-button" :loading="pending === 'create_folder' || pending === 'rename_folder'" :disabled="!folder_name.trim() || Boolean(pending)" /></div>
       </form>
       <form v-else-if="['rename', 'archive', 'restore', 'delete'].includes(rendered_mode)" class="dialog-form" @submit.prevent="save_management">
         <p class="channel-management-target">{{ targetRoom?.title }} <span>· {{ targetRoom?.message_count }} 条消息</span></p>
@@ -107,10 +111,17 @@ async function follow_reply() {
         </section>
       </div>
       <form v-else-if="rendered_mode === 'create' || rendered_mode === 'edit'" class="dialog-form" @submit.prevent="save_form">
+        <p v-if="rendered_mode === 'create'" class="channel-create-location"><UIcon name="i-lucide-folder" />{{ targetFolder?.name || '未归类' }}</p>
+        <UFormField v-if="rendered_mode === 'create'" label="讨论运行方式"><USelect :model-value="view.fields['new-room-mode'] || 'manual'" :items="[{value:'manual',label:'手动复制冷启动'},{value:'automatic',label:'全自动讨论'}]" class="w-full" @update:model-value="bridge.write_field('new-room-mode', $event)" /><p class="fine-print">全自动需要本机接入配置；创建话题不会立即启动软件。</p></UFormField>
         <UFormField label="话题名称" required><UInput :model-value="view.fields[form_id('title')]" :maxlength="80" required placeholder="这次想讨论什么？" class="w-full" @update:model-value="bridge.write_field(form_id('title'), $event)" /></UFormField>
         <UFormField label="讨论目标"><UTextarea :model-value="view.fields[form_id('goal')]" :maxlength="1000" :rows="2" placeholder="希望通过讨论解决的问题" class="w-full" @update:model-value="bridge.write_field(form_id('goal'), $event)" /></UFormField>
         <div class="form-two-columns"><UFormField label="主持人"><USelect :model-value="view.fields[form_id('host')]" :items="participants" class="w-full" @update:model-value="bridge.write_field(form_id('host'), $event)" /></UFormField><UFormField v-if="rendered_mode === 'edit'" label="阶段"><USelect :model-value="view.fields[form_id('phase')]" :items="phases" class="w-full" @update:model-value="bridge.write_field(form_id('phase'), $event)" /></UFormField></div>
         <UFormField v-if="rendered_mode === 'edit'" label="当前焦点"><UInput :model-value="view.fields[form_id('focus')]" :maxlength="1000" placeholder="当前最需要回应的问题" class="w-full" @update:model-value="bridge.write_field(form_id('focus'), $event)" /></UFormField>
+        <section class="advanced-content"><h3>讨论上限</h3><div class="form-two-columns">
+          <UFormField v-for="item in limit_fields" :key="item.key" :label="item.label"><UInput :model-value="view.fields[form_id(`limit-${item.key}`)]" type="number" :min="item.min" :max="item.max" :step="1" :disabled="limits_locked" :required="item.min > 0" :placeholder="item.min === 0 ? '留空不限' : '1–60'" class="w-full" @update:model-value="bridge.write_field(form_id(`limit-${item.key}`), $event)" /></UFormField>
+          <UFormField label="达到上限后"><USelect :model-value="view.fields[form_id('limit-on_limit')] || 'pause'" :disabled="limits_locked" :items="[{value:'pause',label:'暂停保留现场'},{value:'summarize',label:'由主持人总结'}]" class="w-full" @update:model-value="bridge.write_field(form_id('limit-on_limit'), $event)" /></UFormField>
+          <UFormField v-if="view.fields[form_id('limit-on_limit')] === 'summarize'" label="收束预留（分钟）"><UInput :model-value="view.fields[form_id('limit-summary_minutes')]" type="number" :min="1" :max="60" :step="1" :disabled="limits_locked" class="w-full" @update:model-value="bridge.write_field(form_id('limit-summary_minutes'), $event)" /></UFormField>
+        </div><p class="fine-print">轮次、总时长留空或 0 表示不限。一轮指每位专家各完成一次观点；首次进入讨论阶段或创建安排后计时，暂停仍计时。收束预留计入总时长。</p><p v-if="limits_locked" class="fine-print">修改上限前，请先把阶段保存为“已暂停”。</p></section>
         <UCollapsible v-model:open="details_open" class="advanced-fields"><UButton :trailing-icon="details_open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" label="背景、边界与参与专家" color="neutral" variant="ghost" block class="advanced-trigger" /><template #content><div class="advanced-content"><UFormField v-for="item in [{ key: 'background', label: '背景' }, { key: 'boundaries', label: '讨论边界' }]" :key="item.key" :label="item.label"><UTextarea :model-value="view.fields[form_id(item.key)]" :maxlength="4000" :rows="2" class="w-full" @update:model-value="bridge.write_field(form_id(item.key), $event)" /></UFormField><div class="expert-fields"><div v-for="name in experts" :key="name"><label>{{ name }}</label><USelect :model-value="view.experts[expert_container]?.[name] || 'none'" :items="expert_modes" :aria-label="`${name} 参与方式`" @update:model-value="bridge.write_expert(expert_container, name, $event === 'none' ? '' : $event)" /></div></div><p class="fine-print">AI 主持人需设为本地 CLI，可同时作为专家参与。</p></div></template></UCollapsible>
         <div class="dialog-actions"><UButton label="取消" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" class="channel-primary-button" :label="rendered_mode === 'create' ? '创建讨论' : '保存议题'" :loading="pending === 'create' || pending === 'save_topic'" /></div>
       </form>

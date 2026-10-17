@@ -1,8 +1,8 @@
 # 部署指南
 
-本地 Python / SQLite 与 Cloudflare Pages / D1 提供同样的讨论接口。二选一即可，数据库彼此独立，不自动同步。微信桥接运行在使用者自己的电脑，不属于网站部署。
+本地 Python / SQLite 与 Cloudflare Pages / D1 提供同样的讨论接口。二选一即可，数据库彼此独立，不自动同步。
 
-当前服务没有登录与访问控制。先阅读 [安全说明](../SECURITY.md)，再决定是否暴露到公网。外部访问控制也可能阻止在线 AI 读取；此时按工作流转交必要材料，不假定网站已实现权限隔离。
+当前服务没有用户登录和读取权限隔离；主动配置运行的房间另有写入凭据。先阅读 [安全说明](../SECURITY.md)，再决定是否暴露到公网。外部访问控制也可能阻止在线 AI 读取；此时按工作流转交必要材料。
 
 ## Python 服务
 
@@ -27,11 +27,9 @@ python server.py --host 127.0.0.1 --port 8765 --no-demo
 
 ## Docker
 
-先在宿主机准备好前端产物，镜像只复制服务、schema 和运行资源：
+仓库自带前端产物，直接用 Docker 即可启动；只有修改前端源码后才需要先执行 `npm ci` 和 `npm run build:ui`。镜像只复制服务、schema 和运行资源：
 
 ```sh
-npm ci
-npm run build:ui
 docker build -t ai-co-discuss .
 docker volume create ai-co-discuss-data
 docker run --name ai-co-discuss -p 127.0.0.1:8765:8765 -v ai-co-discuss-data:/data ai-co-discuss
@@ -113,8 +111,25 @@ python discuss.py room list --site https://YOUR_PROJECT_NAME.pages.dev
 
 ## 常见问题
 
+全自动接入的本机配置见下节；网站与软件接入程序分别部署。
+
 - **`no such table`**：所连接的数据库尚未执行 schema；先核对本地/远端及配置文件，不能为消除错误随意执行到别的数据库。
 - **本地网页正常、在线 AI 读不到**：回环地址、登录验证、域名访问策略均可能导致不可达。在专家实际环境中核对，必要时转交原始材料；不能凭浏览器成功推定远端 AI 可读。
 - **CLI 请求超时但可能已保存**：按原提交编号查询，见 [CLI 写入核对](cli.md#写入核对与错误处理)。
-- **Windows 端口占用**：选择其他端口，并同步实际 `--site`；不要停止未确认归属的进程。
+- **端口占用**：服务拒绝两个实例监听同一端口；选择其他端口，并同步实际 `--site`。Windows 也采用独占绑定，避免两个实例返回不同数据库的数据；不要停止未确认归属的进程。
 - **重新构建后页面未变化**：确认服务目录和发布产物，浏览器刷新；不要据旧标签页判断构建失败。
+
+## 可选的全自动接入
+
+通知程序位于独立的 [coder_notifier 项目](https://github.com/huyan1458/coder_notifier)，入口为 `src/discussion_runner.mjs`，不依赖微信登录。网站只保存事件，不启动进程。Python 启动时自动应用 schema；升级 D1 必须先在测试库核对，再由部署者执行 schema，不能只更新网页资源。
+
+1. 在房间“接入”选择全自动，按需填写讨论所属项目和 cwd，导出私有接入配置。选择本身不会开始讨论。
+2. 填写 `cli_project`（本仓库目录）、参与软件路径和会话/项目绑定。`discussion_project` 与 `cwd` 都允许省略；各参与者可覆盖。详细 JSON 和软件差异见通知项目 `docs/architecture.md` 的讨论接入部分。
+3. Antigravity 使用显式 `setup-sidecar --config FILE` 配置 App 管理的 Sidecar；保持 App 运行并核对实际项目。Codex 新建需实际来源聊天 ID，可绑定当前主持会话；Claude 使用已登录的官方 Code CLI，工具许可由本机配置提供。
+4. 在通知项目运行 `node src/discussion_runner.mjs start --config FILE --minutes 60`。这个明确动作启动有限运行；重启通知程序用 `watch`，不会擅自恢复已暂停的房间。`status` 只查询，`pause` 撤销资格。
+
+网页已设置总时长时可省略 `--minutes`，同时提供时取更早的截止。轮次、时长及单次执行上限由网站保存并校验；自动程序到限后暂停或交给主持人收束，收束预留计入总时长。准备/暂停阶段可编辑参数，保存不重新计时。
+
+自动模式先支持运行中的 Codex App、Antigravity App 及可用的 Claude Code CLI。软件关闭、账号失效或权限等待不能算作已开始；60 秒未进入会保留原因并暂停，不自动重复新建。通知程序退出、断网或崩溃后，旧执行最多在剩余租约内写入；恢复前核对原会话，过期资格不会重新激活。
+
+手动兜底：暂停并核对原执行停止后，切换“手动复制冷启动”；复制原接入指令，在原会话继续。保护过的房间仍需导出的私有文件路径作为 `--access-file`，不把 token 放进复制文本。公开房间不保存本机目录、软件账号或配置文件。

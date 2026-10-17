@@ -13,6 +13,11 @@ html[data-theme="channel"] .markdown-body {
   --markdown-panel: #202228;
   --markdown-link: #abb8ff;
 }
+html[data-theme="channel-light"] .markdown-body {
+  --markdown-line: #dedede;
+  --markdown-panel: #f6f6f6;
+  --markdown-link: #0969da;
+}
 .markdown-body > :first-child { margin-top: 0; }
 .markdown-body > :last-child { margin-bottom: 0; }
 .markdown-body p { margin: 0 0 .8em; }

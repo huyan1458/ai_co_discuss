@@ -5,13 +5,19 @@ import json
 import logging
 import os
 import re
+import socket
 import sqlite3
+import time
 import uuid
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
+
+from runtime import (authorize_write, begin_write, configure_runtime, event_action,
+                     LIMIT_DEFAULTS, limit_values, limits_view, require_within_limits,
+                     list_events, runtime_view, token_hash)
 
 ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / "web"
@@ -22,6 +28,7 @@ MAX_STATE_LENGTH = 4000
 MAX_BRIEF_LENGTH = 1600
 MAX_SUMMARY_LENGTH = 1000
 PAGE_SIZE = 20
+UNCATEGORIZED_FOLDER_ID = "__uncategorized__"
 PARTICIPANTS = ["用户", "Codex", "Claude", "Gemini", "DeepSeek", "Qwen"]
 ASSETS = {"/": ("index.html", "text/html"),
           "/app.js": ("app.js", "text/javascript"),
@@ -29,6 +36,7 @@ ASSETS = {"/": ("index.html", "text/html"),
           "/modern.js": ("modern.js", "text/javascript"),
           "/modern.css": ("modern.css", "text/css"),
           "/markdown.js": ("markdown.js", "text/javascript"),
+          "/backup.js": ("backup.js", "text/javascript"),
           "/markdown.css": ("markdown.css", "text/css"),
           "/icons/LICENSE.txt": ("icons/LICENSE.txt", "text/plain")}
 ASSETS.update({f"/icons/{name}.svg": (f"icons/{name}.svg", "image/svg+xml")
@@ -39,12 +47,42 @@ PHASES = {"preparing": "准备中", "initial": "独立观点", "discussing": "�
 TURN_STATUSES = {"pending": "待处理", "notified": "已通知，待回答", "answered": "已回答", "cancelled": "已取消"}
 MAX_TOPIC_DETAIL = 4000
 MAX_QUESTION_LENGTH = 1000
+ROOM_BACKUP_QUERIES = {
+    "rooms": "SELECT * FROM rooms WHERE id=?",
+    **{table: f"SELECT * FROM {table} WHERE room_id=?" for table in (
+        "room_directory", "room_folder_assignments", "room_creations", "room_briefs",
+        "topic_settings", "room_floor", "discussion_limits")},
+    "topic_folders": "SELECT * FROM topic_folders WHERE id IN (SELECT folder_id FROM room_folder_assignments WHERE room_id=?)",
+    "messages": "SELECT * FROM messages WHERE room_id=? ORDER BY id",
+    "discussion_turns": "SELECT * FROM discussion_turns WHERE room_id=? ORDER BY id",
+    **{table: f"SELECT * FROM {table} WHERE message_id IN (SELECT id FROM messages WHERE room_id=?) ORDER BY message_id"
+       for table in ("message_details", "message_summaries")},
+}
 MESSAGE_QUERY = """SELECT messages.*, COALESCE(details.kind,'opinion') AS kind,
 COALESCE(details.submitted_by, CASE WHEN messages.source IN ('cli','url','user')
 THEN messages.author ELSE '用户' END) AS submitted_by, details.turn_id,
 COALESCE(summaries.text,'') AS summary, COALESCE(summaries.author,'') AS summary_by
 FROM messages LEFT JOIN message_details AS details ON details.message_id=messages.id
 LEFT JOIN message_summaries AS summaries ON summaries.message_id=messages.id"""
+
+
+def room_backup(connection, room_id):
+    """Read all records belonging to one room in a single database snapshot.
+
+    Args:
+        connection: A fresh SQLite connection, with no active transaction.
+        room_id: The exact room to export, including archived rooms.
+
+    Returns:
+        A versioned backup containing original rows and their relationships.
+    """
+    connection.execute("BEGIN")
+    tables = {table: [dict(row) for row in connection.execute(query, (room_id,))]
+              for table, query in ROOM_BACKUP_QUERIES.items()}
+    if not tables["rooms"]:
+        raise LookupError("房间不存在")
+    return {"format": "ai-codiscuss-room-backup", "version": 1,
+            "exported_at": utc_now(), "tables": tables}
 
 
 def utc_now():
@@ -119,12 +157,14 @@ def require_room(connection, room_id):
     room["rounds"] = discussion_rounds(connection, room_id, room["experts"])
     room["completed_rounds"] = sum(item["completed"] for item in room["rounds"])
     room["floor"] = dict(connection.execute("SELECT holder,next_speaker,revision FROM room_floor WHERE room_id=?", (room_id,)).fetchone())
+    room["runtime"] = runtime_view(connection, room_id)
+    room["limits"] = limits_view(connection.execute("SELECT * FROM discussion_limits WHERE room_id=?", (room_id,)).fetchone(), room)
     return room
 
 
 def update_floor(connection, room_id, payload):
     """Claim or return the nominated speaker's floor using a checked revision."""
-    connection.execute("BEGIN IMMEDIATE")
+    begin_write(connection)
     room = require_room(connection, room_id)
     actor = payload.get("actor")
     speaker = payload.get("speaker", actor)
@@ -239,11 +279,24 @@ def topic_values(payload, current=None):
         raise ValueError("AI 主持人必须是可读可写的本地 CLI 参与者")
     if result["phase"] not in PHASES:
         raise ValueError("话题阶段无效")
+    if "limits" in payload:
+        result["limits"] = limit_values(payload["limits"], (current or {}).get("limits"))
+        changed = any(result["limits"][key] != current["limits"][key] for key in LIMIT_DEFAULTS) if current else False
+        if changed and current["phase"] not in ("preparing", "paused"):
+            raise ValueError("请先暂停讨论，再修改上限参数")
+        result["save_limits"] = not current or changed
+        result["reset_closing"] = not current or any(result["limits"][key] != current["limits"][key]
+                                                    for key in LIMIT_DEFAULTS if key != "execution_minutes")
     return result
 
 
 def save_topic_settings(connection, room_id, settings):
     """Persist topic settings without modifying any original messages."""
+    if settings.get("save_limits"):
+        connection.execute("""UPDATE discussion_limits SET max_rounds=?,max_minutes=?,execution_minutes=?,on_limit=?,summary_minutes=?,
+            closing_at=CASE WHEN ? THEN 0 ELSE closing_at END,stop_reason=CASE WHEN ? THEN '' ELSE stop_reason END,
+            revision=revision+1 WHERE room_id=?""",
+                           [*(settings["limits"][key] for key in LIMIT_DEFAULTS), settings["reset_closing"], settings["reset_closing"], room_id])
     values = [settings[key] for key in ("host", "background", "boundaries")]
     values.extend([json.dumps(settings["experts"], ensure_ascii=False), settings["phase"], settings["focus"]])
     connection.execute("INSERT INTO topic_settings (room_id,host,background,boundaries,experts,phase,focus) VALUES (?,?,?,?,?,?,?) ON CONFLICT(room_id) DO UPDATE SET host=excluded.host,background=excluded.background,boundaries=excluded.boundaries,experts=excluded.experts,phase=excluded.phase,focus=excluded.focus", [room_id, *values])
@@ -257,7 +310,7 @@ def require_host(room, payload):
 
 def update_topic(connection, room_id, payload):
     """Update topic direction and participants through a declared host action."""
-    connection.execute("BEGIN IMMEDIATE")
+    begin_write(connection)
     room = require_room(connection, room_id)
     require_host(room, payload)
     settings = topic_values(payload, room)
@@ -290,12 +343,77 @@ def list_rooms(connection, params=None):
     assignments = {row["room_id"]: row["folder_id"] for row in connection.execute("SELECT room_id,folder_id FROM room_folder_assignments")}
     rooms = [{**dict(row), "archived": bool(directory[row["id"]]["archived"]), "folder_id": assignments[row["id"]]} for row in rows]
     return {"rooms": sorted(rooms, key=lambda room: directory[room["id"]]["position"]),
-            "folders": [dict(row) for row in connection.execute("SELECT id,name,position FROM topic_folders ORDER BY position,name,id")]}
+            **folder_directory(connection)}
+
+
+def folder_directory(connection):
+    """Return real folders and the virtual group's index (null keeps it last)."""
+    settings = connection.execute("SELECT uncategorized_position FROM directory_settings WHERE id=1").fetchone()
+    return {"folders": [dict(row) for row in connection.execute("SELECT id,name,position FROM topic_folders ORDER BY position,name,id")],
+            "uncategorized_position": settings[0] if settings else None}
+
+
+def folder_name_value(payload):
+    """Validate a shared folder name for creation and renaming."""
+    raw_name = payload.get("name")
+    if not isinstance(raw_name, str):
+        raise ValueError("文件夹名称必须是文本")
+    name = raw_name.strip()
+    if not name or len(name) > 40:
+        raise ValueError("文件夹名称须为 1–40 个字符")
+    return name
+
+
+def rename_folder(connection, folder_id, payload):
+    """Rename one folder, retaining its position and all room assignments."""
+    begin_write(connection)
+    name = folder_name_value(payload)
+    if connection.execute("UPDATE topic_folders SET name=? WHERE id=?", (name, folder_id)).rowcount == 0:
+        raise LookupError("文件夹不存在")
+    return dict(connection.execute("SELECT id,name,position FROM topic_folders WHERE id=?", (folder_id,)).fetchone())
+
+
+def move_folder(connection, folder_id, payload):
+    """Persist a folder before another folder, or last when before_id is null.
+
+    Args:
+        connection: Writable SQLite connection.
+        folder_id: Existing folder or the reserved uncategorized group ID.
+        payload: Optional before_id identifying an existing destination folder.
+
+    Returns:
+        The complete folder list in its saved order.
+    """
+    begin_write(connection)
+    directory = folder_directory(connection)
+    folders = directory["folders"]
+    position = directory["uncategorized_position"]
+    folders.insert(min(position, len(folders)) if position is not None else len(folders), {"id": UNCATEGORIZED_FOLDER_ID})
+    moving = next((folder for folder in folders if folder["id"] == folder_id), None)
+    if moving is None:
+        raise LookupError("文件夹不存在")
+    remaining = [folder for folder in folders if folder["id"] != folder_id]
+    before = payload.get("before_id")
+    identifiers = [folder["id"] for folder in remaining]
+    if before is not None and before not in identifiers:
+        raise ValueError("目标文件夹不存在或与当前文件夹相同")
+    remaining.insert(identifiers.index(before) if before is not None else len(remaining), moving)
+    uncategorized_position = next(index for index, folder in enumerate(remaining) if folder["id"] == UNCATEGORIZED_FOLDER_ID)
+    ordered = [folder for folder in remaining if folder["id"] != UNCATEGORIZED_FOLDER_ID]
+    uncategorized_position = None if uncategorized_position == len(ordered) else uncategorized_position
+    for position, folder in enumerate(ordered, 1):
+        folder["position"] = position
+    connection.executemany("UPDATE topic_folders SET position=? WHERE id=?",
+                           [(folder["position"], folder["id"]) for folder in ordered])
+    connection.execute("INSERT INTO directory_settings (id,uncategorized_position) VALUES (1,?) "
+                       "ON CONFLICT(id) DO UPDATE SET uncategorized_position=excluded.uncategorized_position",
+                       (uncategorized_position,))
+    return {"folders": ordered, "uncategorized_position": uncategorized_position}
 
 
 def manage_room(connection, room_id, action, payload):
     """Move, archive, restore or permanently delete one declared host's room."""
-    connection.execute("BEGIN IMMEDIATE")
+    begin_write(connection)
     room = require_room(connection, room_id)
     require_host(room, payload)
     if action == "move":
@@ -342,26 +460,41 @@ def creation_request(settings):
     """Freeze normalized creation inputs independently of later topic edits."""
     fields = ("title", "goal", "host", "background", "boundaries", "phase", "focus")
     values = [settings[field] for field in fields] + [sorted(settings["experts"].items())]
+    if settings.get("save_limits"):
+        values.append([settings["limits"][key] for key in LIMIT_DEFAULTS])
     return json.dumps(values, ensure_ascii=False, separators=(",", ":"))
 
 
-def create_room(connection, payload):
+def create_room(connection, payload, control_token=""):
     """Create one room per explicit identifier, retaining legacy unkeyed requests."""
     settings = topic_values(payload)
+    automatic = payload.get("runtime_mode") == "automatic"
+    if payload.get("runtime_mode", "manual") not in ("manual", "automatic") or (automatic and not token_hash(control_token)):
+        raise ValueError("自动建房须提供有效的运行模式和控制凭据")
     identifier = submission_value(payload["submission_id"]) if "submission_id" in payload else None
-    request_text = creation_request(settings)
-    connection.execute("BEGIN IMMEDIATE")
+    folder_id = payload.get("folder_id")
+    if folder_id is not None and not isinstance(folder_id, str):
+        raise ValueError("文件夹编号必须是文本或 null")
+    request_text = creation_request(settings) + (":automatic" if automatic else "")
+    if folder_id is not None:
+        request_text += ":folder:" + json.dumps(folder_id, ensure_ascii=False)
+    begin_write(connection)
     if identifier:
         previous = connection.execute("SELECT * FROM room_creations WHERE submission_id=?", (identifier,)).fetchone()
         if previous:
             if previous["request_text"] != request_text:
                 raise FileExistsError("该建房提交编号已被其他内容使用")
             return {**require_room(connection, previous["room_id"]), "duplicate": True, "submission_id": identifier}
+    if folder_id is not None and connection.execute("SELECT 1 FROM topic_folders WHERE id=?", (folder_id,)).fetchone() is None:
+        raise ValueError("文件夹不存在")
     room_id = uuid.uuid4().hex[:12]
     connection.execute("INSERT INTO rooms (id,title,goal,created_at) VALUES (?,?,?,?)", (room_id, settings["title"], settings["goal"], utc_now()))
+    connection.execute("UPDATE room_folder_assignments SET folder_id=? WHERE room_id=?", (folder_id, room_id))
     if identifier:
         connection.execute("INSERT INTO room_creations (submission_id,room_id,request_text) VALUES (?,?,?)", (identifier, room_id, request_text))
     save_topic_settings(connection, room_id, settings)
+    if automatic:
+        configure_runtime(connection, room_id, control_token, {"revision": 0, "mode": "automatic"})
     return {**require_room(connection, room_id), "duplicate": False, "submission_id": identifier}
 
 
@@ -422,7 +555,7 @@ def check_message_references(connection, room_id, message):
 def append_message(connection, room_id, payload):
     """Atomically append an attributed message and complete its scheduled turn."""
     author, text, submission_id, reply_to = message_values(payload)
-    connection.execute("BEGIN IMMEDIATE")
+    begin_write(connection)
     room = require_room(connection, room_id)
     details = message_details(room, {**payload, "author": author})
     expected = {"author": author, "text": text, "reply_to": reply_to, **details}
@@ -432,6 +565,8 @@ def append_message(connection, room_id, payload):
         if any(previous[key] != expected[key] for key in ("author", "text", "reply_to", "kind", "submitted_by", "turn_id", "summary", "summary_by")):
             raise FileExistsError("这个提交编号已被另一条内容使用，请为新发言生成新编号")
         return {"message": dict(previous), "duplicate": True}
+    if author != "用户" and details["kind"] == "opinion":
+        require_within_limits(room)
     if room["phase"] in ("paused", "concluded") and details["kind"] == "opinion":
         raise ValueError("话题已暂停或收束；恢复阶段后才能提交新观点，运行回执请用 receipt")
     check_message_references(connection, room_id, expected)
@@ -473,7 +608,7 @@ def query_turns(connection, room_id, params):
 
 def create_turn(connection, room_id, payload):
     """Schedule one expert without claiming that an external notification was sent."""
-    connection.execute("BEGIN IMMEDIATE")
+    begin_write(connection)
     room = require_room(connection, room_id)
     require_host(room, payload)
     expert, question, submission_id, _ = message_values({"author": payload.get("expert", ""), "text": payload.get("question", ""), "submission_id": payload.get("submission_id", "")})
@@ -482,6 +617,7 @@ def create_turn(connection, room_id, payload):
         if previous["expert"] != expert or previous["question"] != question:
             raise FileExistsError("该安排编号已被其他内容使用")
         return {"turn": dict(previous), "duplicate": True}
+    require_within_limits(room)
     if expert not in room["experts"] or len(question) > MAX_QUESTION_LENGTH:
         raise ValueError("请选择参与专家，待回应问题最多 1000 字")
     if room["phase"] in ("paused", "concluded"):
@@ -493,9 +629,32 @@ def create_turn(connection, room_id, payload):
     return {"turn": get_turn(connection, room_id, cursor.lastrowid), "duplicate": False}
 
 
+def check_limits(connection, room_id, payload):
+    """Apply a reached boundary once; the host must author the actual summary."""
+    begin_write(connection)
+    room = require_room(connection, room_id)
+    require_host(room, payload)
+    limits = room["limits"]
+    if not limits["reached"] or room["phase"] in ("paused", "concluded") or room["archived"]:
+        return room
+    closing = limits["on_limit"] == "summarize" and limits["reason"] != "time_limit"
+    if closing and limits["closing"]:
+        return room
+    connection.execute("UPDATE discussion_limits SET closing_at=?,stop_reason=?,revision=revision+1 WHERE room_id=?",
+                       (int(time.time()) if closing else limits["closing_at"], limits["reason"], room_id))
+    connection.execute("UPDATE discussion_turns SET status='cancelled' WHERE room_id=? AND status IN ('pending','notified')", (room_id,))
+    connection.execute("UPDATE room_floor SET holder=NULL,next_speaker=?,revision=revision+1 WHERE room_id=?", (room["host"], room_id))
+    if closing:
+        connection.execute("UPDATE discussion_runtime SET generation=generation+1,revision=revision+1,deadline=MIN(deadline,?) WHERE room_id=? AND status='running'",
+                           (int(time.time()) + limits["summary_minutes"] * 60, room_id))
+    else:
+        connection.execute("UPDATE topic_settings SET phase='paused' WHERE room_id=?", (room_id,))
+    return require_room(connection, room_id)
+
+
 def update_turn(connection, room_id, turn_id, payload):
     """Record a host's explicit notification confirmation or cancellation."""
-    connection.execute("BEGIN IMMEDIATE")
+    begin_write(connection)
     room = require_room(connection, room_id)
     require_host(room, payload)
     turn = get_turn(connection, room_id, turn_id)
@@ -612,6 +771,8 @@ def room_text(connection, room_id, params):
     content = [f"# {room['title']}", f"目标：{room['goal']}",
                f"主持人：{room['host']}；阶段：{PHASES[room['phase']]}；当前焦点：{room['focus'] or '尚未填写'}",
                f"当前记录截止 #{room['latest_id']}；共 {room['message_count']} 条；已完成 {room['completed_rounds']} 轮讨论（所有参与专家各发言一次）。"]
+    limits = room["limits"]
+    content.append(f"讨论上限：{limits['max_rounds'] or '不限'} 轮；总时长 {limits['max_minutes'] or '不限'} 分钟；单次自动执行 {limits['execution_minutes']} 分钟；到限 {limits['on_limit']}；收束预留 {limits['summary_minutes']} 分钟（计入总时长）。到限：{limits['reached']}；收束中：{limits['closing']}。")
     turn = room["current_turn"]
     floor = room["floor"]
     content.append(f"发言权：{floor['holder'] + ' 持有' if floor['holder'] else '待 ' + floor['next_speaker'] + ' 领取'}；版本 {floor['revision']}。用户本人可随时留言，AI 发言前须领取。")
@@ -664,6 +825,8 @@ def protocol_text(room):
     return "\n\n".join([
         "# 本地 CLI 读写与主持协议", f"当前主持人：{room['host']}。以下为留言板接口，不是模型服务 API。",
         "所有写入使用 POST 和 Content-Type: application/json。主持操作填写 actor 为当前主持人或用户；这些是声明身份，不是认证凭据。",
+        "讨论上限：room.limits 返回轮次、总时长、单次执行、到限方式、收束预留和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理。到限停止新专家安排与观点；总结由真实主持人完成，预留计入总时长；暂停不重置计时。",
+        "运行方式：room.runtime 显示 manual/automatic、状态及真实执行回执。启用保护的房间写入须带 X-Discussion-Token；CLI 用 --access-file 读取本机私有文件，不公开令牌。自动任务先 execution enter，创建安排或保存关联回答即完成本步；不创建原生定时任务。旧执行在暂停、停止、换代、租约到期后失效。手动接入沿用原流程；受保护房间仍须用户提供有效的凭据文件。运行控制用 run view/start/pause/stop/configure；字段查 CLI schema。",
         f"发言权：GET {base}/floor 返回 holder、next_speaker、revision；POST 同路径，字段 actor、speaker（默认 actor）、action=take/return、revision（刚读到的整数版本）。仅无人持有且 next_speaker 为本人时可领取；持有者可主动归还，下一位回到主持人。版本变化返回 409，先读回核对。主持人仅可代操作 online 专家，cli 专家自行操作；用户可协助。",
         "新房间由主持人持有发言权。创建安排须主持人持有，保存成功即归还并点名该专家；AI 的 opinion、moderation、receipt 都须实际作者持有，代发不豁免，opinion 必须关联有效 turn_id。消息保存成功自动归还，下一位为主持人。失败不归还，同编号重试不再次交接。用户本人发言不受发言权限制，也不改变发言权；@ 不改变顺序。维护状态、阶段及通知回执不占用发言权。取消安排须主持人持有，用户可直接取消失效安排；取消后归还给主持人领取。",
         '创建话题：POST /api/rooms；字段 title、goal、background、boundaries、host、experts、submission_id（新 UUID），例如 experts={"Codex":"cli","Gemini":"online"}。AI 主持人必须配置为 cli。同编号对照首次创建资料，重试不覆盖后来修改的房间；旧客户端不带编号时没有幂等保护。',
@@ -688,10 +851,18 @@ class DiscussionServer(ThreadingHTTPServer):
     """HTTP server carrying the configured SQLite path."""
 
     daemon_threads = True
+    allow_reuse_address = os.name != "nt"
+    allow_reuse_port = False
 
     def __init__(self, address, database):
         self.database = Path(database)
         super().__init__(address, DiscussionHandler)
+
+    def server_bind(self):
+        """Keep each listening port exclusive while allowing normal Unix restarts."""
+        if os.name == "nt":
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
 
 class DiscussionHandler(BaseHTTPRequestHandler):
@@ -716,16 +887,20 @@ class DiscussionHandler(BaseHTTPRequestHandler):
 
     def read_payload(self):
         """Read a bounded JSON object from an incoming form API request."""
+        if getattr(self, "payload_cache", None) is not None:
+            return self.payload_cache
         length = int(self.headers.get("Content-Length", "0"))
         if not 0 < length <= MAX_BODY_BYTES:
             raise ValueError("请求内容为空或过大")
         payload = json.loads(self.rfile.read(length))
         if not isinstance(payload, dict):
             raise ValueError("请求必须是 JSON 对象")
+        self.payload_cache = payload
         return payload
 
     def dispatch(self, method):
         """Route a request and consistently report validation or lookup errors."""
+        self.payload_cache = None
         parsed = urlsplit(self.path)
         params = {key: values[-1] for key, values in parse_qs(parsed.query).items()}
         parts = parsed.path.strip("/").split("/")
@@ -740,6 +915,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 if text_mode and method == "GET":
                     return self.handle_text(connection, parts, params)
                 return self.handle_api(connection, parts, params, method)
+        except PermissionError as error:
+            return self.respond({"error": str(error)}, 403)
         except (ValueError, TypeError) as error:
             return self.respond(str(error) if text_mode else {"error": str(error)}, 400,
                                 "text/plain" if text_mode else "application/json")
@@ -768,30 +945,46 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if parts == ["api", "rooms"]:
             if method == "GET":
                 return self.respond({**list_rooms(connection, params), "participants": PARTICIPANTS})
-            room = create_room(connection, self.read_payload())
+            room = create_room(connection, self.read_payload(), self.headers.get("X-Discussion-Token", ""))
             connection.commit()
             return self.respond(room, 200 if room["duplicate"] else 201)
         if parts == ["api", "folders"] and method == "POST":
-            raw_name = self.read_payload().get("name")
-            if not isinstance(raw_name, str):
-                raise ValueError("文件夹名称必须是文本")
-            name = raw_name.strip()
-            if not name or len(name) > 40:
-                raise ValueError("文件夹名称须为 1–40 个字符")
+            name = folder_name_value(self.read_payload())
             folder_id = uuid.uuid4().hex
             position = connection.execute("SELECT COALESCE(MAX(position),0)+1 FROM topic_folders").fetchone()[0]
             connection.execute("INSERT INTO topic_folders (id,name,position) VALUES (?,?,?)", (folder_id, name, position))
             connection.commit()
             return self.respond({"id": folder_id, "name": name, "position": position}, 201)
+        if len(parts) == 4 and parts[:2] == ["api", "folders"] and parts[3] == "move" and method == "POST":
+            result = move_folder(connection, parts[2], self.read_payload())
+            connection.commit()
+            return self.respond(result)
+        if len(parts) == 4 and parts[:2] == ["api", "folders"] and parts[3] == "rename" and method == "POST":
+            result = rename_folder(connection, parts[2], self.read_payload())
+            connection.commit()
+            return self.respond(result)
         if len(parts) < 3 or parts[:2] != ["api", "rooms"]:
             raise LookupError("地址不存在")
         room_id = parts[2]
+        token = self.headers.get("X-Discussion-Token", "")
+        if parts[3:4] in (["runtime"], ["events"]):
+            return self.handle_runtime_api(connection, parts, params, method)
+        if method == "POST":
+            authorize_write(connection, room_id, token, parts[3] if len(parts) > 3 else "", self.read_payload())
+        if parts[3:] == ["backup"] and method == "GET":
+            return self.respond(room_backup(connection, room_id))
         if len(parts) == 4 and parts[3] in ("move", "folder", "archive", "restore", "delete") and method == "POST":
             result = manage_room(connection, room_id, parts[3], self.read_payload())
             connection.commit()
             return self.respond(result)
         if len(parts) == 3 and method == "GET":
             return self.respond(require_room(connection, room_id))
+        if parts[3:] == ["limits"]:
+            if method == "GET":
+                return self.respond(require_room(connection, room_id)["limits"])
+            result = check_limits(connection, room_id, self.read_payload())
+            connection.commit()
+            return self.respond(result)
         if parts[3:] == ["floor"]:
             if method == "GET":
                 return self.respond(require_room(connection, room_id)["floor"])
@@ -814,6 +1007,23 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             connection.commit()
             return self.respond(result)
         raise LookupError("地址不存在")
+
+    def handle_runtime_api(self, connection, parts, params, method):
+        """Expose explicit run controls and durable, capability-scoped executions."""
+        room_id = parts[2]
+        require_room(connection, room_id)
+        token = self.headers.get("X-Discussion-Token", "")
+        if parts[3:] == ["runtime"]:
+            result = runtime_view(connection, room_id) if method == "GET" else configure_runtime(
+                connection, room_id, token, self.read_payload())
+        elif parts[3:] == ["events"] and method == "GET":
+            result = list_events(connection, room_id, token, params.get("after", 0))
+        elif len(parts) == 5 and parts[3] == "events" and method == "POST":
+            result = event_action(connection, room_id, int(parts[4]), token, self.read_payload())
+        else:
+            raise LookupError("地址不存在")
+        connection.commit()
+        return self.respond(result)
 
     def handle_host_api(self, connection, parts, params, method):
         """Route topic maintenance and sequential speaking assignments."""
