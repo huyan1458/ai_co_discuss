@@ -790,9 +790,6 @@ function render_access() {
   element("runtime-execution").textContent = execution_label(runtime.latest_execution);
   element("runtime-pause").hidden = runtime.status !== "running";
   element("runtime-export").hidden = !runtime.protected;
-  element("runtime-import").hidden = !runtime.protected;
-  const imported = state.runtime_import?.room_id === state.room.id ? state.runtime_import : null;
-  element("runtime-import-status").textContent = imported?.text || "";
   if (state.runtime_draft_room !== state.room.id) {
     const saved = JSON.parse(localStorage.getItem(`discuss-workspace:${state.room.id}`) || "{}");
     element("runtime-project").value = saved.discussion_project || "";
@@ -946,7 +943,6 @@ async function choose_runtime(mode) {
   if (runtime.mode !== mode) {
     const key = `discuss-access:${room_id}`;
     if (!runtime.protected && !localStorage.getItem(key)) localStorage.setItem(key, crypto.randomUUID());
-    if (!localStorage.getItem(key)) throw new Error("本浏览器没有房间凭据，请在原浏览器或已配置 CLI 中操作");
     await request_json(path, { action: "configure", mode, revision: runtime.revision });
   }
   if (state.room?.id !== room_id) return;
@@ -1000,31 +996,6 @@ function export_runtime() {
   link.href = url; link.download = `discussion-${state.room.id}.json`; link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   show_toast("已导出私有接入配置；按部署说明填写本机软件路径，不要公开此文件");
-}
-
-/** Validate a private setup file against this site and room before storing its owner credential. */
-async function import_runtime(file) {
-  if (!file || !state.room) return;
-  const room_id = state.room.id;
-  state.runtime_import = { room_id, text: "正在核验接入配置…", error: false };
-  publish_view();
-  try {
-    const config = JSON.parse(await file.text());
-    if (!config || typeof config.site !== "string" || typeof config.token !== "string" || !config.token) {
-      throw new Error("请选择包含 site、room、token 的私有接入配置");
-    }
-    if (config.room !== room_id) throw new Error("配置属于其他频道，请选择本频道的接入配置");
-    if (new URL(config.site).origin !== location.origin) throw new Error("配置站点与当前站点不符，请使用当前站点的接入配置");
-    await request_json(`/api/rooms/${room_id}/events`, undefined, config.token);
-    localStorage.setItem(`discuss-access:${room_id}`, config.token);
-    state.runtime_import = { room_id, text: "控制凭据已导入，可在本浏览器管理此频道", error: false };
-  } catch (error) {
-    const text = error instanceof SyntaxError ? "配置文件不是有效的 JSON" : error.message;
-    state.runtime_import = { room_id, text, error: true };
-  } finally {
-    if (state.room?.id === room_id) render_access();
-    publish_view();
-  }
 }
 
 /** Supply participation defaults for a new topic. */
@@ -1200,7 +1171,7 @@ function update_composer_role() {
 function bind_host_controls() {
   const actions = { "topic-context": () => select_tab("context"), "edit-host-brief": () => select_tab("context"), "topic-history": () => select_tab("discussion"),
     "runtime-auto": () => choose_runtime("automatic"), "runtime-manual": () => choose_runtime("manual"),
-    "runtime-export": export_runtime, "runtime-import": () => element("runtime-import-file").click(),
+    "runtime-export": export_runtime,
     "runtime-pause": pause_runtime, "check-discussion-limits": check_limits,
     "take-floor": () => change_floor("take"), "return-floor": () => change_floor("return"),
     "copy-turn": copy_turn, "confirm-notified": () => change_turn_status("notified"), "cancel-turn": () => change_turn_status("cancelled"),
@@ -1208,11 +1179,6 @@ function bind_host_controls() {
     "view-turn-answer": () => show_message(state.room.current_turn.answer_id),
     "copy-host": () => copy_text(`请以 ${state.room.host} 身份主持此话题，可兼任专家。\n话题入口：${location.origin}/r/${state.room.id}?mode=cli\n主持协议：${location.origin}/r/${state.room.id}/protocol${workspace_instruction()}\n由专家自主按需阅读；通知不附上下文。实际联系专家后再确认通知状态。${state.room.runtime?.protected ? '\n用户须提供私有配置的本机路径，写入使用 --access-file，不读取或公开 token。' : ''}`) };
   Object.entries(actions).forEach(([id, action]) => element(id).addEventListener("click", () => run_action(action)));
-  element("runtime-import-file").addEventListener("change", (event) => {
-    const file = event.target.files[0];
-    event.target.value = "";
-    run_action(() => import_runtime(file));
-  });
   element("topic-form").addEventListener("submit", (event) => run_action(() => save_topic(event)));
   element("turn-form").addEventListener("submit", (event) => run_action(() => schedule_turn(event)));
   element("topic-form").addEventListener("input", () => { state.topic_dirty = true; });
@@ -1512,7 +1478,6 @@ function view_snapshot() {
     [id, element(id) ? read_expert_inputs(id) : {}]));
   return { rooms: ordered_rooms(), folders: state.folders, folder_groups: ordered_folders(), room: state.room, archive_view: state.archive_view, directory_sort: state.directory_sort, messages: state.messages, total: state.message_total,
     archive_pending: [...state.archive_changes.keys()], directory_error: state.directory_error,
-    runtime_import: state.runtime_import?.room_id === state.room?.id ? state.runtime_import : null,
     directory_pending: [...state.directory_pending.keys()], folder_pending: [...state.folder_moves.keys()], creating_room: state.creating_room,
     connected: state.connected, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
     mention_only: state.mention_only, reply_to: state.reply_to, turn_reply_to: state.turn_reply_to,
@@ -1590,7 +1555,7 @@ async function execute_view_action(name, value) {
     copy_turn, notify: () => change_turn_status("notified"), cancel_turn: () => change_turn_status("cancelled"),
     take_floor: () => change_floor("take"), return_floor: () => change_floor("return"),
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
-    choose_runtime, export_runtime, import_runtime, pause_runtime, check_limits, pause_discussion, force_close, conclude_discussion,
+    choose_runtime, export_runtime, pause_runtime, check_limits, pause_discussion, force_close, conclude_discussion,
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };
   try {
     await actions[name](value);

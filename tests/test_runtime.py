@@ -167,6 +167,25 @@ class RuntimeTests(unittest.TestCase):
         self.assertNotIn("token_hash", claude)
         self.assertEqual(run["participants"][0]["participant"], "Claude")
 
+    def test_runtime_reports_stage_timings_of_current_run(self):
+        """Each dispatched execution exposes queue, wake and work durations."""
+        self.request(self.path + "/turns", {"actor": "用户", "expert": "Claude", "question": "耗时记录",
+            "submission_id": "timing-turn"})
+        self.start()
+        event = self.events()[-1]
+        timings = self.request(self.path)[1]["runtime"]["timings"]
+        self.assertEqual((timings["count"], timings["items"][0]["status"], timings["items"][0]["wake_seconds"]),
+                         (1, "pending", None))
+        self.enter(event)
+        self.request(self.path + f"/events/{event['id']}", {"action": "fail", "reason": "计时验证"}, self.owner)
+        timings = self.request(self.path)[1]["runtime"]["timings"]
+        item = timings["items"][0]
+        self.assertEqual((item["id"], item["participant"], item["status"]), (event["id"], "Claude", "failed"))
+        for stage in ("queue_seconds", "wake_seconds", "work_seconds"):
+            self.assertGreaterEqual(item[stage], 0)
+            self.assertEqual(timings["totals"][stage], item[stage])
+        self.assertNotIn("token_hash", item)
+
     def test_limits_validation_and_active_edit_protection(self):
         """Bad settings fail; limits are editable only before start or while paused."""
         for limits in ({"max_rounds": -1}, {"max_minutes": 1441}, {"max_rounds": True},
@@ -226,7 +245,8 @@ class RuntimeTests(unittest.TestCase):
                 "revision": run["revision"], "deadline": int(time.time()) + 600}, self.owner)
             self.assertEqual(status, 409, result)
             self.assertEqual(self.events(), events)
-            self.assertEqual(self.request(self.path)[1]["runtime"], run)
+            current = self.request(self.path)[1]["runtime"]
+            self.assertEqual({k: v for k, v in current.items() if k != "timings"}, {k: v for k, v in run.items() if k != "timings"})
 
     def test_resuming_summary_preserves_deadline_and_rejects_expired_start(self):
         """Pausing a closing task does not grant another summary budget."""
@@ -280,15 +300,15 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(events[2]["participant"], "Codex")
         self.assertNotIn("token_hash", json.dumps(events))
 
-    def test_unauthorized_and_wrong_identity_writes_are_rejected(self):
-        """Anonymous writers and spoofed participant names cannot trigger work."""
+    def test_user_writes_need_no_credential_but_ai_identities_need_execution(self):
+        """The web user acts freely; AI identities and the runner inbox still need their tokens."""
         self.start()
         self.assertEqual(self.request(self.path + "/events")[0], 403)
-        payload = {"author": "用户", "text": "不能触发", "submission_id": "unauthorized"}
-        self.assertEqual(self.request(self.path + "/messages", payload)[0], 403)
+        self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "无执行"})[0], 403)
         token = self.enter(self.events()[0])
         self.assertEqual(self.request(self.path + "/state", {"actor": "Claude", "text": "冒充"}, token)[0], 403)
-        self.assertEqual(len(self.events()), 1)
+        payload = {"author": "用户", "text": "用户补充", "submission_id": "user-note"}
+        self.assertEqual(self.request(self.path + "/messages", payload)[0], 201)
 
     def test_pause_revokes_late_writes_and_requires_explicit_resume(self):
         """A delayed queued message cannot write after pause or mode change."""
@@ -359,7 +379,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(room["runtime"]["mode"], "automatic")
         self.assertEqual(room["runtime"]["status"], "ready")
         path = f"/api/rooms/{room['id']}"
-        self.assertEqual(self.request(path + "/state", {"actor": "用户", "text": "不能写"})[0], 403)
+        self.assertEqual(self.request(path + "/state", {"actor": "Codex", "text": "不能写"})[0], 403)
         retry = self.request("/api/rooms", payload, self.owner)
         self.assertEqual(retry[0], 200)
         self.assertEqual(retry[1]["id"], room["id"])
@@ -409,15 +429,15 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.request(self.path)[1]["runtime"]["status"], "stopped")
         self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "迟到"}, token)[0], 403)
 
-    def test_archive_stops_run_without_owner_control_but_delete_stays_protected(self):
-        """Archiving always works and stops the run; running directory writes and unarchived deletion need the owner key."""
-        self.start()
+    def test_web_user_controls_running_room_without_owner_key(self):
+        """Pause, directory edits, archive and delete work from any browser; stale AI tokens stay rejected."""
+        run = self.start()
         token = self.enter(self.events()[-1])
         for key in (None, uuid.uuid4().hex):
-            status, error = self.request(self.path + "/folder", {"actor": "用户", "folder_id": None}, key)
-            self.assertEqual(status, 403)
-            self.assertIn("正在自动运行", error["error"])
-            self.assertIn("接入", error["error"])
+            self.assertEqual(self.request(self.path + "/folder", {"actor": "用户", "folder_id": None}, key)[0], 200)
+        status, paused = self.request(self.path + "/runtime", {"action": "pause", "revision": run["revision"]})
+        self.assertEqual(status, 200, paused)
+        self.assertEqual(paused["status"], "paused")
         before = self.request(self.path)[1]
         status, archived = self.request(self.path + "/archive", {"actor": "用户"})
         self.assertEqual(status, 200, archived)
@@ -428,11 +448,6 @@ class RuntimeTests(unittest.TestCase):
         status, restored = self.request(self.path + "/restore", {"actor": "用户"})
         self.assertEqual(status, 200, restored)
         self.assertFalse(restored["archived"])
-        status, error = self.request(self.path + "/delete", {"actor": "用户", "confirm_title": before["title"]})
-        self.assertEqual(status, 403)
-        self.assertIn("控制凭据", error["error"])
-        self.assertIsNotNone(self.request(self.path)[1].get("id"))
-        self.request(self.path + "/archive", {"actor": "用户"})
         status, deleted = self.request(self.path + "/delete", {"actor": "用户", "confirm_title": before["title"]})
         self.assertEqual(status, 200, deleted)
         self.assertEqual(self.request(self.path)[0], 404)

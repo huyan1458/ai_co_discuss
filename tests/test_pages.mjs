@@ -127,23 +127,20 @@ test('Worker forces an early host summary and reports per-participant executions
   assert.equal((await f.request(`/${id}/limits`, { actor: '用户', force: true })).status, 400);
 });
 
-test('Worker archives and deletes archived protected rooms without the owner key', async t => {
+test('Worker lets the web user control a running protected room without the owner key', async t => {
   const f = await worker_fixture(t);
   const created = await f.request('', { title: '目录保护', host: 'Codex', experts: { Codex: 'cli' } });
   const id = created.body.id;
-  await f.request(`/${id}/runtime`, { action: 'start', revision: 0, deadline: Math.floor(Date.now() / 1000) + 600 });
-  const moved = await f.request(`/${id}/folder`, { actor: '用户', folder_id: null }, '');
-  assert.equal(moved.status, 403);
-  assert.match(moved.body.error, /正在自动运行/);
+  const started = await f.request(`/${id}/runtime`, { action: 'start', revision: 0, deadline: Math.floor(Date.now() / 1000) + 600 });
+  assert.equal((await f.request(`/${id}/state`, { actor: 'Codex', text: '无执行' }, '')).status, 403);
+  assert.equal((await f.request(`/${id}/folder`, { actor: '用户', folder_id: null }, '')).status, 200);
+  const paused = await f.request(`/${id}/runtime`, { action: 'pause', revision: started.body.revision }, '');
+  assert.equal(paused.status, 200, JSON.stringify(paused.body));
+  assert.equal(paused.body.status, 'paused');
   const archived = await f.request(`/${id}/archive`, { actor: '用户' }, '');
   assert.equal(archived.status, 200, JSON.stringify(archived.body));
   assert.ok(archived.body.archived);
-  assert.equal(archived.body.runtime.status, 'stopped');
   assert.equal((await f.request(`/${id}/restore`, { actor: '用户' }, '')).status, 200);
-  const deleted = await f.request(`/${id}/delete`, { actor: '用户', confirm_title: '目录保护' }, '');
-  assert.equal(deleted.status, 403);
-  assert.match(deleted.body.error, /控制凭据/);
-  await f.request(`/${id}/archive`, { actor: '用户' }, '');
   assert.equal((await f.request(`/${id}/delete`, { actor: '用户', confirm_title: '目录保护' }, '')).status, 200);
   assert.equal((await f.request(`/${id}`)).status, 404);
 });

@@ -12,6 +12,14 @@ LIMIT_DEFAULTS = {"max_rounds": 0, "max_minutes": 0, "execution_minutes": 20,
                   "on_limit": "pause", "summary_minutes": 5}
 PUBLIC_EVENT_FIELDS = ("id", "room_id", "run_id", "generation", "cause", "participant",
                        "role", "turn_id", "status", "session_id", "lease_until", "result", "created_at")
+TIMING_ITEMS = 20
+# Queue: created -> dispatched; wake: dispatched -> entered; work: entered -> finished. Open stages run to now.
+TIMING_SQL = """SELECT e.id,e.participant,e.role,e.cause,e.status,
+    MAX(0,CASE WHEN t.dispatched_at>0 THEN t.dispatched_at ELSE ? END-CAST(strftime('%s',e.created_at) AS INTEGER)) AS queue_seconds,
+    CASE WHEN t.dispatched_at>0 THEN MAX(0,COALESCE(NULLIF(e.started_at,0),NULLIF(t.finished_at,0),?)-t.dispatched_at) END AS wake_seconds,
+    CASE WHEN e.started_at>0 THEN MAX(0,COALESCE(NULLIF(t.finished_at,0),?)-e.started_at) END AS work_seconds
+    FROM discussion_events AS e LEFT JOIN event_timings AS t ON t.event_id=e.id
+    WHERE e.room_id=? AND e.run_id=? AND (t.dispatched_at>0 OR e.status='pending') ORDER BY e.id DESC"""
 
 
 def token_hash(token):
@@ -95,7 +103,17 @@ def runtime_view(connection, room_id):
     event = connection.execute("SELECT id,participant,role,status,result FROM discussion_events WHERE room_id=? ORDER BY id DESC LIMIT 1", (room_id,)).fetchone()
     result["latest_execution"] = dict(event) if event else None
     result["participants"] = participant_executions(connection, room_id)
+    result["timings"] = execution_timings(connection, room_id, row["run_id"])
     return result
+
+
+def execution_timings(connection, room_id, run_id):
+    """Summarize stage durations of the current run so slow stages are visible."""
+    now = int(time.time())
+    rows = [dict(row) for row in connection.execute(TIMING_SQL, (now, now, now, room_id, run_id))]
+    stages = ("queue_seconds", "wake_seconds", "work_seconds")
+    totals = {stage: sum(row[stage] or 0 for row in rows) for stage in stages}
+    return {"items": rows[:TIMING_ITEMS], "totals": totals, "count": len(rows)}
 
 
 def participant_executions(connection, room_id):
@@ -130,23 +148,15 @@ def authorize_write(connection, room_id, token, operation, payload):
     hashed = token_hash(token)
     if hashed and hashed == run["control_hash"]:
         return
-    if operation in ("move", "folder", "archive", "restore", "delete"):
-        active = run["status"] == "running" and run["deadline"] > int(time.time())
-        if operation == "archive" or (operation != "delete" and not active):
-            return
-        if operation == "delete" and connection.execute(
-                "SELECT 1 FROM room_directory WHERE room_id=? AND archived=1", (room_id,)).fetchone():
-            return
-        if operation != "delete":
-            raise PermissionError("讨论正在自动运行，需要本房间的控制凭据暂停后再整理；请在「接入」中导入原私有配置")
-        raise PermissionError("需要本房间的控制凭据；请在「接入」中导入原私有配置")
+    actor = payload.get("actor", payload.get("submitted_by", payload.get("author", "用户")))
+    if actor == "用户":
+        return
     event = connection.execute("""SELECT * FROM discussion_events WHERE room_id=? AND token_hash=?
         AND run_id=? AND generation=? AND status='started' AND lease_until>?
         AND started_at+?>?""", (room_id, hashed, run["run_id"], run["generation"],
                                 int(time.time()), execution_seconds(connection, room_id), int(time.time()))).fetchone()
     if not hashed or not event or run["status"] != "running" or run["deadline"] <= int(time.time()):
         raise PermissionError("执行资格无效、已结束或已到期；请重新读取运行状态")
-    actor = payload.get("actor", payload.get("submitted_by", payload.get("author", "用户")))
     if actor != event["participant"]:
         raise PermissionError("执行凭据与实际参与身份不符")
     if operation == "messages":
@@ -168,10 +178,8 @@ def configure_runtime(connection, room_id, token, payload):
     if payload.get("revision") != current["revision"]:
         raise FileExistsError("运行状态已变化，请重新读取 revision")
     hashed = token_hash(token)
-    if not hashed:
+    if not current["protected"] and not hashed:
         raise ValueError("运行凭据须为 32–256 字符的随机值")
-    if current["protected"]:
-        require_control(connection, room_id, token)
     action = payload.get("action", "configure")
     mode = payload.get("mode", "automatic" if action == "start" else current["mode"])
     if mode not in ("manual", "automatic") or action not in ("configure", "start", "pause", "stop"):

@@ -211,6 +211,15 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .progress-member-name small, .progress-member-status small { color: var(--ui-text-dimmed); font-size: 11px; }
 .progress-member-status { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
 .progress-member-result { grid-column: 2 / -1; overflow: hidden; color: var(--ui-text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.progress-timings { margin: 0 0 10px; padding-top: 10px; border-top: 1px solid var(--channel-line); }
+.progress-timings h4 { margin: 0 0 6px; color: var(--ui-text-highlighted); font-size: 12px; font-weight: 600; }
+.progress-timings h4 small { margin-left: 6px; color: var(--ui-text-dimmed); font-size: 11px; font-weight: 400; }
+.progress-timing-totals { grid-template-columns: repeat(3, 1fr); padding: 6px 0; border-block: 0; }
+.progress-timing-list { display: grid; gap: 6px; max-height: 168px; margin: 4px 0 0; padding: 0; overflow-y: auto; list-style: none; font-size: 11px; }
+.progress-timing-list li { display: grid; gap: 1px; }
+.progress-timing-who { color: var(--ui-text-highlighted); }
+.progress-timing-who small { margin-left: 6px; color: var(--ui-text-dimmed); }
+.progress-timing-stages { display: flex; flex-wrap: wrap; gap: 2px 10px; color: var(--ui-text-muted); font-variant-numeric: tabular-nums; }
 .progress-actions { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 10px; border-top: 1px solid var(--channel-line); }
 .progress-ending { display: grid; gap: 10px; }
 .progress-ending-option { display: grid; gap: 4px; padding: 12px 14px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-bg-muted); color: var(--ui-text); text-align: left; }

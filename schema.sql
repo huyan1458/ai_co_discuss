@@ -248,6 +248,23 @@ CREATE TABLE IF NOT EXISTS discussion_events (
 CREATE INDEX IF NOT EXISTS events_room_cursor ON discussion_events(room_id,id);
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_execution ON discussion_events(room_id)
     WHERE status IN ('dispatched','started');
+-- Stage timestamps for the progress panel; old events simply have no timing row.
+CREATE TABLE IF NOT EXISTS event_timings (
+    event_id INTEGER PRIMARY KEY REFERENCES discussion_events(id) ON DELETE CASCADE,
+    dispatched_at INTEGER NOT NULL DEFAULT 0,
+    finished_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TRIGGER IF NOT EXISTS record_event_timing AFTER UPDATE OF status ON discussion_events
+WHEN OLD.status<>NEW.status
+BEGIN
+    -- Avoid OR IGNORE: an outer statement's conflict policy would override it.
+    INSERT INTO event_timings(event_id) SELECT NEW.id
+        WHERE NOT EXISTS(SELECT 1 FROM event_timings WHERE event_id=NEW.id);
+    UPDATE event_timings SET dispatched_at=CAST(strftime('%s','now') AS INTEGER)
+        WHERE event_id=NEW.id AND NEW.status='dispatched';
+    UPDATE event_timings SET finished_at=CAST(strftime('%s','now') AS INTEGER)
+        WHERE event_id=NEW.id AND NEW.status IN ('completed','cancelled','failed');
+END;
 -- A failed assertion rolls back the whole D1 batch, including concurrent writes.
 CREATE TABLE IF NOT EXISTS runtime_assertions (
     id TEXT PRIMARY KEY, allowed INTEGER NOT NULL CHECK(allowed=1)

@@ -5,6 +5,12 @@ const { view, bridge, act, pending } = inject("discussion");
 const PANEL_KEY = "ai-codiscuss-progress-panel";
 const ACTIVE_TURN = ["pending", "notified"];
 const LIVE_EXECUTION_TEXT = { dispatched: "已交付，等待开始", started: "执行中" };
+const TIMING_STAGES = [
+  { key: "queue_seconds", label: "排队", hint: "事件产生到接入程序交付" },
+  { key: "wake_seconds", label: "唤醒", hint: "交付到 AI 执行 enter" },
+  { key: "work_seconds", label: "执行", hint: "AI 进入到保存结果或结束" },
+];
+const EXECUTION_STATUS_TEXT = { pending: "排队中", dispatched: "唤醒中", started: "执行中", completed: "完成", cancelled: "已撤销", failed: "失败" };
 const expanded = ref(read_expanded());
 const ending = ref(false);
 watch(expanded, (value) => {
@@ -28,6 +34,7 @@ const mode = computed(() => runtime.value.mode === "automatic" ? "全自动" : "
 const run_status = computed(() => runtime.value.expired ? "已到截止" : ({ ready: "未启动", running: "运行中", paused: "已暂停", stopped: "已停止", concluded: "已收束" }[runtime.value.status] || "未启动"));
 const tone = computed(() => concluded.value ? "neutral" : limits.value.closing ? "warning" : inactive.value ? "neutral" : limits.value.reached ? "warning" : "primary");
 const headline = computed(() => limits.value.closing && !inactive.value ? "正在收尾 · 等待主持人总结" : bridge.progress_speaker(room.value));
+const timings = computed(() => runtime.value.timings || { items: [], totals: {}, count: 0 });
 const members = computed(() => [room.value.host, ...Object.keys(room.value.experts || {}).filter((name) => name !== room.value.host)]
   .filter((name) => name && name !== "用户").map(member_status));
 
@@ -46,7 +53,8 @@ function member_status(name) {
   let color = "neutral";
   const live = LIVE_EXECUTION_TEXT[execution?.status] || "";
   if (turn.value?.expert === name) {
-    text = live && execution.turn_id === turn.value.id ? live : inactive.value ? "已暂停，原安排保留" : "轮到发言";
+    const round = room.value.rounds?.at(-1)?.completed === false ? room.value.rounds.at(-1).number : (room.value.completed_rounds || 0) + 1;
+    text = `第 ${round} 轮 · ${live && execution.turn_id === turn.value.id ? live : inactive.value ? "已暂停，原安排保留" : "轮到发言"}`;
     color = inactive.value ? "neutral" : "primary";
   } else if (is_host && !turn.value && !inactive.value) {
     const duty = limits.value.closing ? "总结收尾中" : "主持人安排中";
@@ -59,6 +67,14 @@ function member_status(name) {
   if (execution?.stale) { text = "疑似卡住（租约已过期）"; color = "warning"; }
   return { name, is_host, text, color, failures: execution?.failures || 0, result: execution?.status === "failed" ? execution.result : "",
     mode: room.value.experts?.[name] === "cli" ? "CLI" : "在线" };
+}
+
+/** Render whole seconds compactly; a stage that has not begun shows a dash. */
+function duration(seconds) {
+  if (seconds === null || seconds === undefined) return "—";
+  if (seconds < 60) return `${seconds}秒`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}分${String(seconds % 60).padStart(2, "0")}秒`;
+  return `${Math.floor(seconds / 3600)}小时${Math.floor((seconds % 3600) / 60)}分`;
 }
 
 /** Apply one of the two early-ending choices and close the confirmation. */
@@ -90,6 +106,18 @@ async function finish(action) {
           <small v-if="member.result" class="progress-member-result" :title="member.result">{{ member.result }}</small>
         </li>
       </ul>
+      <section v-if="runtime.mode === 'automatic' && timings.count" class="progress-timings" aria-label="阶段耗时">
+        <h4>阶段耗时 <small>本次运行 {{ timings.count }} 次执行</small></h4>
+        <dl class="progress-stats progress-timing-totals">
+          <div v-for="stage in TIMING_STAGES" :key="stage.key" :title="stage.hint"><dt>{{ stage.label }}</dt><dd>{{ duration(timings.totals[stage.key] || 0) }}</dd></div>
+        </dl>
+        <ol class="progress-timing-list">
+          <li v-for="item in timings.items" :key="item.id">
+            <span class="progress-timing-who">#{{ item.id }} {{ bridge.display_name(item.participant) }}<small>{{ item.role === "host" ? "主持" : "专家" }} · {{ EXECUTION_STATUS_TEXT[item.status] || item.status }}</small></span>
+            <span class="progress-timing-stages"><span v-for="stage in TIMING_STAGES" :key="stage.key" :title="stage.hint">{{ stage.label }} {{ duration(item[stage.key]) }}</span></span>
+          </li>
+        </ol>
+      </section>
       <p v-if="runtime.mode !== 'automatic'" class="fine-print">手动模式没有执行回执，状态只按安排与发言推断。</p>
       <div class="progress-actions">
         <UButton icon="i-lucide-pause" label="暂停" size="sm" color="neutral" variant="outline" :disabled="inactive || room.archived" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" />

@@ -12,6 +12,14 @@ const TURN_STATUSES = { pending: "待处理", notified: "已通知，待回答",
 const MAX_TOPIC_DETAIL = 4000;
 const MAX_QUESTION_LENGTH = 1000;
 const LIMIT_DEFAULTS = { max_rounds: 0, max_minutes: 0, execution_minutes: 20, on_limit: "pause", summary_minutes: 5 };
+const TIMING_ITEMS = 20;
+// Queue: created -> dispatched; wake: dispatched -> entered; work: entered -> finished. Open stages run to now.
+const TIMING_SQL = `SELECT e.id,e.participant,e.role,e.cause,e.status,
+  MAX(0,CASE WHEN t.dispatched_at>0 THEN t.dispatched_at ELSE ? END-CAST(strftime('%s',e.created_at) AS INTEGER)) AS queue_seconds,
+  CASE WHEN t.dispatched_at>0 THEN MAX(0,COALESCE(NULLIF(e.started_at,0),NULLIF(t.finished_at,0),?)-t.dispatched_at) END AS wake_seconds,
+  CASE WHEN e.started_at>0 THEN MAX(0,COALESCE(NULLIF(t.finished_at,0),?)-e.started_at) END AS work_seconds
+  FROM discussion_events AS e LEFT JOIN event_timings AS t ON t.event_id=e.id
+  WHERE e.room_id=? AND e.run_id=? AND (t.dispatched_at>0 OR e.status='pending') ORDER BY e.id DESC`;
 const ROOM_BACKUP_QUERIES = {
   rooms: "SELECT * FROM rooms WHERE id=?",
   ...Object.fromEntries(["room_directory", "room_folder_assignments", "room_creations", "room_briefs", "room_user_requests", "topic_settings", "room_floor", "discussion_limits"]
@@ -874,7 +882,8 @@ async function runtime_view(database, room_id) {
   const { control_hash, ...visible } = row;
   const latest_execution = await database.prepare("SELECT id,participant,role,status,result FROM discussion_events WHERE room_id=? ORDER BY id DESC LIMIT 1").bind(room_id).first();
   const participants = await participant_executions(database, room_id);
-  return { ...visible, latest_execution, participants, protected: true, expired: row.status === "running" && row.deadline <= Math.floor(Date.now() / 1000) };
+  const timings = await execution_timings(database, room_id, row.run_id);
+  return { ...visible, latest_execution, participants, timings, protected: true, expired: row.status === "running" && row.deadline <= Math.floor(Date.now() / 1000) };
 }
 
 /** Summarize each participant's latest execution and failure count for the progress panel. */
@@ -886,6 +895,15 @@ async function participant_executions(database, room_id) {
       FROM discussion_events AS other WHERE other.room_id=latest.room_id AND other.participant=latest.participant) ORDER BY latest.id`).bind(room_id).all();
   const now = Math.floor(Date.now() / 1000);
   return results.map(({ lease_until, ...event }) => ({ ...event, stale: event.status === "started" && lease_until <= now }));
+}
+
+/** Summarize stage durations of the current run so slow stages are visible. */
+async function execution_timings(database, room_id, run_id) {
+  const now = Math.floor(Date.now() / 1000);
+  const { results } = await database.prepare(TIMING_SQL).bind(now, now, now, room_id, run_id).all();
+  const totals = Object.fromEntries(["queue_seconds", "wake_seconds", "work_seconds"]
+    .map((stage) => [stage, results.reduce((sum, row) => sum + (row[stage] || 0), 0)]));
+  return { items: results.slice(0, TIMING_ITEMS), totals, count: results.length };
 }
 
 /** Assert authorization and mutation in one D1 transaction. */
@@ -928,19 +946,9 @@ async function authorize_database(database, room_id, token, operation, payload) 
   if (!run) return guarded_database(database, "NOT EXISTS(SELECT 1 FROM discussion_runtime WHERE room_id=?)", [room_id]);
   if (hashed && hashed === run.control_hash) return guarded_database(database,
     "EXISTS(SELECT 1 FROM discussion_runtime WHERE room_id=? AND control_hash=?)", [room_id, hashed]);
-  if (["move", "folder", "archive", "restore", "delete"].includes(operation)) {
-    const active = run.status === "running" && run.deadline > Math.floor(Date.now() / 1000);
-    if (operation === "archive") return database;
-    if (operation !== "delete" && !active) return guarded_database(database,
-      "NOT EXISTS(SELECT 1 FROM discussion_runtime WHERE room_id=? AND status='running' AND deadline>unixepoch())", [room_id]);
-    const archived = await database.prepare("SELECT 1 FROM room_directory WHERE room_id=? AND archived=1").bind(room_id).first();
-    if (operation === "delete" && archived) return guarded_database(database,
-      "EXISTS(SELECT 1 FROM room_directory WHERE room_id=? AND archived=1)", [room_id]);
-    if (operation !== "delete") throw new HttpError(403, "讨论正在自动运行，需要本房间的控制凭据暂停后再整理；请在「接入」中导入原私有配置");
-    throw new HttpError(403, "需要本房间的控制凭据；请在「接入」中导入原私有配置");
-  }
-  const event = await database.prepare("SELECT * FROM discussion_events WHERE room_id=? AND token_hash=? AND status='started'").bind(room_id, hashed).first();
   const actor = payload.actor ?? payload.submitted_by ?? payload.author ?? "用户";
+  if (actor === "用户") return database;
+  const event = await database.prepare("SELECT * FROM discussion_events WHERE room_id=? AND token_hash=? AND status='started'").bind(room_id, hashed).first();
   if (!hashed || !event || actor !== event.participant) throw new HttpError(403, "执行凭据与实际参与身份不符");
   if (operation === "messages") {
     if (payload.author !== actor || (event.role === "expert" && payload.turn_id !== event.turn_id)) throw new HttpError(403, "自动回答须关联本人的有效安排");
@@ -974,7 +982,7 @@ async function configure_runtime(database, room_id, token, payload) {
   const current = await runtime_view(database, room_id);
   if (payload.revision !== current.revision) throw new HttpError(409, "运行状态已变化，请重新读取 revision");
   const hashed = await runtime_hash(token);
-  if (!hashed) throw new HttpError(400, "运行凭据须为 32–256 字符的随机值");
+  if (!current.protected && !hashed) throw new HttpError(400, "运行凭据须为 32–256 字符的随机值");
   const action = payload.action ?? "configure";
   const mode = payload.mode ?? (action === "start" ? "automatic" : current.mode);
   const status = { configure: "ready", start: "running", pause: "paused", stop: "stopped" }[action];
@@ -982,9 +990,9 @@ async function configure_runtime(database, room_id, token, payload) {
   if (action === "start" && mode !== "automatic") throw new HttpError(400, "start 只用于全自动运行");
   if (["configure", "start"].includes(action) && current.status === "running") throw new HttpError(409, "讨论仍在运行；请先暂停，再切换模式或继续");
   let condition = current.protected
-    ? "EXISTS(SELECT 1 FROM discussion_runtime WHERE room_id=? AND revision=? AND control_hash=?)"
+    ? "EXISTS(SELECT 1 FROM discussion_runtime WHERE room_id=? AND revision=?)"
     : "NOT EXISTS(SELECT 1 FROM discussion_runtime WHERE room_id=?)";
-  const values = current.protected ? [room_id, current.revision, hashed] : [room_id];
+  const values = current.protected ? [room_id, current.revision] : [room_id];
   const idle = ["start", "configure"].includes(action) ? " AND NOT EXISTS(SELECT 1 FROM discussion_events WHERE room_id=? AND status IN ('dispatched','started'))" : "";
   const room = action === "start" ? await require_room(database, room_id) : null;
   const statements = room ? runtime_start(database, room, payload) : [];

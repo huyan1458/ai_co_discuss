@@ -93,59 +93,6 @@ test("mode selection retains its target when the user changes rooms during refre
   assert.equal(fixture.storage.get('discuss-access:room-b'), undefined);
 });
 
-test("imported control credentials stay bound to the selected room during navigation", async () => {
-  const fixture = theme_fixture();
-  const calls = [];
-  let finish;
-  fixture.context.test_state.room = { id: "room-a" };
-  Object.assign(fixture.context, { URL, location: { origin: "https://discuss.example" }, render_access() {},
-    request_json: (path, payload, token) => {
-      calls.push({ path, payload, token });
-      return new Promise(resolve => { finish = resolve; });
-    } });
-  const importing = fixture.context.import_runtime({ text: async () => JSON.stringify({
-    site: "https://discuss.example", room: "room-a", token: "owner-a" }) });
-  await new Promise(setImmediate);
-  assert.equal(fixture.storage.get("discuss-access:room-a"), undefined);
-  fixture.context.test_state.room = { id: "room-b" };
-  finish({ events: [] });
-  await importing;
-  assert.deepEqual(calls, [{ path: "/api/rooms/room-a/events", payload: undefined, token: "owner-a" }]);
-  assert.equal(fixture.storage.get("discuss-access:room-a"), "owner-a");
-  assert.equal(fixture.storage.get("discuss-access:room-b"), undefined);
-});
-
-test("credential imports reject a different site or room before sending any secret", async () => {
-  const fixture = theme_fixture();
-  const requests = [];
-  fixture.context.test_state.room = { id: "room-a" };
-  Object.assign(fixture.context, { URL, location: { origin: "https://discuss.example" }, render_access() {},
-    request_json(...args) { requests.push(args); } });
-  const configs = [
-    { site: "https://elsewhere.example", room: "room-a", token: "secret" },
-    { site: "https://discuss.example", room: "room-b", token: "secret" },
-  ];
-  for (const config of configs) {
-    await fixture.context.import_runtime({ text: async () => JSON.stringify(config) });
-    assert.equal(fixture.context.test_state.runtime_import.error, true);
-    assert.equal(fixture.storage.get("discuss-access:room-a"), undefined);
-  }
-  assert.equal(requests.length, 0);
-});
-
-test("invalid control credentials never replace a previously saved owner credential", async () => {
-  const fixture = theme_fixture();
-  fixture.context.test_state.room = { id: "room-a" };
-  fixture.storage.set("discuss-access:room-a", "valid-owner");
-  Object.assign(fixture.context, { URL, location: { origin: "https://discuss.example" }, render_access() {},
-    request_json: async () => { throw new Error("需要本房间的运行控制凭据"); } });
-  await fixture.context.import_runtime({ text: async () => JSON.stringify({
-    site: "https://discuss.example", room: "room-a", token: "invalid-owner" }) });
-  assert.equal(fixture.storage.get("discuss-access:room-a"), "valid-owner");
-  assert.equal(fixture.context.test_state.runtime_import.error, true);
-  assert.match(fixture.context.test_state.runtime_import.text, /控制凭据/);
-});
-
 test("finished discussions show their conclusion instead of a live timer or a later deadline warning", () => {
   const fixture = theme_fixture();
   fixture.context.test_state.room = { phase: 'concluded' };
