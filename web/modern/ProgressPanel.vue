@@ -4,7 +4,7 @@ import { computed, inject, ref, watch } from "vue";
 const { view, bridge, act, pending } = inject("discussion");
 const PANEL_KEY = "ai-codiscuss-progress-panel";
 const ACTIVE_TURN = ["pending", "notified"];
-const EXECUTION_TEXT = { pending: "待接入", dispatched: "已交付，等待开始", started: "执行中", completed: "本步已完成", cancelled: "已撤销", failed: "执行失败" };
+const LIVE_EXECUTION_TEXT = { dispatched: "已交付，等待开始", started: "执行中" };
 const expanded = ref(read_expanded());
 const ending = ref(false);
 watch(expanded, (value) => {
@@ -44,11 +44,13 @@ function member_status(name) {
   const is_host = name === room.value.host;
   let text = "等待";
   let color = "neutral";
+  const live = LIVE_EXECUTION_TEXT[execution?.status] || "";
   if (turn.value?.expert === name) {
-    text = execution?.turn_id === turn.value.id && execution.status !== "pending" ? EXECUTION_TEXT[execution.status] : "轮到发言";
-    color = "primary";
+    text = live && execution.turn_id === turn.value.id ? live : inactive.value ? "已暂停，原安排保留" : "轮到发言";
+    color = inactive.value ? "neutral" : "primary";
   } else if (is_host && !turn.value && !inactive.value) {
-    text = limits.value.closing ? "总结收尾中" : "主持人安排中";
+    const duty = limits.value.closing ? "总结收尾中" : "主持人安排中";
+    text = live && execution.role === "host" ? `${duty} · ${live}` : duty;
     color = "primary";
   } else if (speakers.includes(name)) {
     text = "本轮已发言";

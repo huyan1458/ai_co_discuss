@@ -43994,12 +43994,8 @@ var VV = {
 	__name: "ProgressPanel",
 	setup(e) {
 		let { view: t, bridge: n, act: r, pending: i } = Cr("discussion"), a = ["pending", "notified"], o = {
-			pending: "待接入",
 			dispatched: "已交付，等待开始",
-			started: "执行中",
-			completed: "本步已完成",
-			cancelled: "已撤销",
-			failed: "执行失败"
+			started: "执行中"
 		}, s = /* @__PURE__ */ N(C()), c = /* @__PURE__ */ N(!1);
 		I(s, (e) => {
 			try {
@@ -44025,8 +44021,13 @@ var VV = {
 			}
 		}
 		function w(e) {
-			let t = (d.value.participants || []).find((t) => t.participant === e), n = l.value.rounds?.at(-1)?.completed === !1 ? l.value.rounds.at(-1).speakers : [], r = e === l.value.host, i = "等待", a = "neutral";
-			return f.value?.expert === e ? (i = t?.turn_id === f.value.id && t.status !== "pending" ? o[t.status] : "轮到发言", a = "primary") : r && !f.value && !p.value ? (i = u.value.closing ? "总结收尾中" : "主持人安排中", a = "primary") : n.includes(e) && (i = "本轮已发言"), t?.status === "failed" && (i = "执行失败", a = "error"), t?.stale && (i = "疑似卡住（租约已过期）", a = "warning"), {
+			let t = (d.value.participants || []).find((t) => t.participant === e), n = l.value.rounds?.at(-1)?.completed === !1 ? l.value.rounds.at(-1).speakers : [], r = e === l.value.host, i = "等待", a = "neutral", s = o[t?.status] || "";
+			if (f.value?.expert === e) i = s && t.turn_id === f.value.id ? s : p.value ? "已暂停，原安排保留" : "轮到发言", a = p.value ? "neutral" : "primary";
+			else if (r && !f.value && !p.value) {
+				let e = u.value.closing ? "总结收尾中" : "主持人安排中";
+				i = s && t.role === "host" ? `${e} · ${s}` : e, a = "primary";
+			} else n.includes(e) && (i = "本轮已发言");
+			return t?.status === "failed" && (i = "执行失败", a = "error"), t?.stale && (i = "疑似卡住（租约已过期）", a = "warning"), {
 				name: e,
 				is_host: r,
 				text: i,
