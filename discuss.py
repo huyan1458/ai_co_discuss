@@ -25,7 +25,7 @@ PHASES = ("preparing", "initial", "discussing", "reviewing", "paused", "conclude
 KINDS = ("opinion", "moderation", "receipt")
 OVERVIEW_FIELDS = ("id", "title", "goal", "host", "phase", "focus", "message_count",
                    "latest_id", "state_until", "current_turn", "floor", "runtime", "limits", "completed_rounds", "latest_receipts", "answered_turns", "duplicate", "submission_id")
-BRIEF_FIELDS = ("id", "title", "goal", "host", "background", "boundaries", "experts")
+BRIEF_FIELDS = ("id", "title", "goal", "host", "user_request", "background", "boundaries", "experts")
 ROOM_LIST_FIELDS = ("id", "title", "goal", "message_count", "latest_id", "created_at")
 GUIDANCE = {
     "initial": "先基于目标、背景和边界独立形成观点；提交前不读他人观点或主持总结。",
@@ -131,8 +131,8 @@ def add_text(parser, name, required=False):
 
 def add_topic(parser, create=False):
     """Expose topic fields, using a full experts map to avoid hidden merging."""
-    for field in ("title", "goal", "background", "boundaries", "focus"):
-        add_text(parser, field, required=create and field == "title")
+    for field in ("title", "goal", "user_request", "background", "boundaries", "focus"):
+        add_text(parser, field.replace("_", "-"), required=create and field == "title")
     parser.add_argument("--host", choices=PARTICIPANTS, default=argparse.SUPPRESS,
                         help="主持人；创建时默认 --as 操作者")
     parser.add_argument("--phase", choices=PHASES, default=argparse.SUPPRESS)
@@ -328,7 +328,7 @@ def topic_payload(args):
     limits = {key: getattr(args, key) for key in ("max_rounds", "max_minutes", "execution_minutes", "on_limit", "summary_minutes") if hasattr(args, key)}
     if limits:
         payload["limits"] = limits
-    for field in ("title", "goal", "background", "boundaries", "focus"):
+    for field in ("title", "goal", "user_request", "background", "boundaries", "focus"):
         value = text_field(args, field)
         if value is not None:
             payload[field] = value

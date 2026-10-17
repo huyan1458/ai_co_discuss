@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
 
-import { create_room_archive } from "../web/modern/backup.mjs";
+import { create_room_archive, room_markdown } from "../web/modern/backup.mjs";
 
 /** Build a multi-page Unicode record that crosses the async compressor threshold. */
 function backup_fixture() {
@@ -22,6 +22,17 @@ function backup_fixture() {
       discussion_turns: [{ id: 7, room_id: "one", expert: "Gemini", question: "条件？", status: "answered", answer_id: 46, created_at: timestamp, notified_at: "" }],
     } };
 }
+
+test("readable backups separate stored and explicitly marked legacy user requests", () => {
+  const snapshot = backup_fixture();
+  const settings = { host: '用户', experts: '{}', phase: 'preparing', background: '补充背景' };
+  snapshot.tables.topic_settings = [settings];
+  snapshot.tables.room_user_requests = [{ room_id: 'one', text: '原始要求\n第二行' }];
+  assert.match(room_markdown(snapshot), /## 用户原文\n\n```text\n原始要求\n第二行\n```\n\n## 背景\n\n```text\n补充背景/);
+  delete snapshot.tables.room_user_requests;
+  settings.background = '用户原文：\n原始要求\n第二行\n\n项目背景与入口：\n补充背景';
+  assert.match(room_markdown(snapshot), /## 用户原文\n\n```text\n原始要求\n第二行\n```\n\n## 背景\n\n```text\n项目背景与入口：\n补充背景/);
+});
 
 test("standard ZIP reader recovers complete Unicode JSON, transcript and references", async () => {
   const snapshot = backup_fixture();

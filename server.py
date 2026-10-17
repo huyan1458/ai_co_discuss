@@ -50,7 +50,7 @@ MAX_QUESTION_LENGTH = 1000
 ROOM_BACKUP_QUERIES = {
     "rooms": "SELECT * FROM rooms WHERE id=?",
     **{table: f"SELECT * FROM {table} WHERE room_id=?" for table in (
-        "room_directory", "room_folder_assignments", "room_creations", "room_briefs",
+        "room_directory", "room_folder_assignments", "room_creations", "room_briefs", "room_user_requests",
         "topic_settings", "room_floor", "discussion_limits")},
     "topic_folders": "SELECT * FROM topic_folders WHERE id IN (SELECT folder_id FROM room_folder_assignments WHERE room_id=?)",
     "messages": "SELECT * FROM messages WHERE room_id=? ORDER BY id",
@@ -144,6 +144,8 @@ def require_room(connection, room_id):
     room["folder_id"] = connection.execute("SELECT folder_id FROM room_folder_assignments WHERE room_id=?", (room_id,)).fetchone()[0]
     settings = connection.execute("SELECT * FROM topic_settings WHERE room_id=?", (room_id,)).fetchone()
     room.update(dict(settings) if settings else topic_defaults())
+    original = connection.execute("SELECT text FROM room_user_requests WHERE room_id=?", (room_id,)).fetchone()
+    room.update(topic_context(room["background"], original["text"] if original else None))
     if settings:
         room["experts"] = json.loads(room["experts"])
     turn = connection.execute("SELECT *, (SELECT COUNT(*) FROM discussion_turns WHERE room_id=? AND status='answered') AS answered_turns FROM discussion_turns WHERE room_id=? ORDER BY id DESC LIMIT 1", (room_id, room_id)).fetchone()
@@ -254,6 +256,15 @@ def receipt_references_text(room):
     return "\n".join(lines) if room["latest_receipts"] else "尚无运行回执。"
 
 
+def topic_context(background, user_request=None):
+    """Separate explicitly marked legacy requests without guessing unmarked text."""
+    if user_request is None:
+        match = re.match(r"^用户原文[：:][ \t]*(?:\r?\n)?([\s\S]*?)(?:\r?\n){2,}((?:项目背景与入口|背景)[：:][\s\S]*)$", background)
+        if match:
+            user_request, background = match.group(1), match.group(2)
+    return {"user_request": user_request or "", "background": background}
+
+
 def topic_defaults():
     """Return independent participation defaults for existing rooms."""
     return {"host": "用户", "background": "", "boundaries": "", "phase": "preparing", "focus": "",
@@ -263,10 +274,11 @@ def topic_defaults():
 def topic_values(payload, current=None):
     """Validate topic fields and require an AI host to have CLI capability."""
     result = {**topic_defaults(), **(current or {})}
-    limits = {"title": 80, "goal": 1000, "background": MAX_TOPIC_DETAIL,
+    limits = {"title": 80, "goal": 1000, "user_request": MAX_TOPIC_DETAIL, "background": MAX_TOPIC_DETAIL,
               "boundaries": MAX_TOPIC_DETAIL, "focus": MAX_QUESTION_LENGTH}
     for field, limit in limits.items():
-        result[field] = str(payload.get(field, result.get(field, ""))).strip()
+        value = str(payload.get(field, result.get(field, "")))
+        result[field] = value if field == "user_request" else value.strip()
         if len(result[field]) > limit or (field == "title" and not result[field]):
             raise ValueError(f"{field} 内容为空或超过 {limit} 字")
     result["host"] = payload.get("host", result["host"])
@@ -300,6 +312,8 @@ def save_topic_settings(connection, room_id, settings):
     values = [settings[key] for key in ("host", "background", "boundaries")]
     values.extend([json.dumps(settings["experts"], ensure_ascii=False), settings["phase"], settings["focus"]])
     connection.execute("INSERT INTO topic_settings (room_id,host,background,boundaries,experts,phase,focus) VALUES (?,?,?,?,?,?,?) ON CONFLICT(room_id) DO UPDATE SET host=excluded.host,background=excluded.background,boundaries=excluded.boundaries,experts=excluded.experts,phase=excluded.phase,focus=excluded.focus", [room_id, *values])
+    connection.execute("INSERT INTO room_user_requests (room_id,text) VALUES (?,?) ON CONFLICT(room_id) DO UPDATE SET text=excluded.text",
+                       (room_id, settings.get("user_request", "")))
 
 
 def require_host(room, payload):
@@ -371,6 +385,23 @@ def rename_folder(connection, folder_id, payload):
     if connection.execute("UPDATE topic_folders SET name=? WHERE id=?", (name, folder_id)).rowcount == 0:
         raise LookupError("文件夹不存在")
     return dict(connection.execute("SELECT id,name,position FROM topic_folders WHERE id=?", (folder_id,)).fetchone())
+
+
+def delete_folder(connection, folder_id):
+    """Remove a group while retaining its rooms and the virtual group's position."""
+    begin_write(connection)
+    directory = folder_directory(connection)
+    identifiers = [folder["id"] for folder in directory["folders"]]
+    if folder_id not in identifiers:
+        raise LookupError("文件夹不存在")
+    position = directory["uncategorized_position"]
+    if position is not None:
+        position -= int(identifiers.index(folder_id) < position)
+        if position >= len(identifiers) - 1:
+            position = None
+    connection.execute("DELETE FROM topic_folders WHERE id=?", (folder_id,))
+    connection.execute("UPDATE directory_settings SET uncategorized_position=? WHERE id=1", (position,))
+    return {"deleted": True, "id": folder_id}
 
 
 def move_folder(connection, folder_id, payload):
@@ -451,7 +482,7 @@ def delete_room_records(connection, room_id):
     connection.execute("DELETE FROM discussion_turns WHERE room_id=?", (room_id,))
     connection.execute("UPDATE messages SET reply_to=NULL WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM messages WHERE room_id=?", (room_id,))
-    for table in ("room_floor", "topic_settings", "room_creations", "room_directory", "room_folder_assignments", "room_briefs"):
+    for table in ("room_floor", "topic_settings", "room_creations", "room_directory", "room_folder_assignments", "room_briefs", "room_user_requests"):
         connection.execute(f"DELETE FROM {table} WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM rooms WHERE id=?", (room_id,))
 
@@ -462,7 +493,9 @@ def creation_request(settings):
     values = [settings[field] for field in fields] + [sorted(settings["experts"].items())]
     if settings.get("save_limits"):
         values.append([settings["limits"][key] for key in LIMIT_DEFAULTS])
-    return json.dumps(values, ensure_ascii=False, separators=(",", ":"))
+    request = json.dumps(values, ensure_ascii=False, separators=(",", ":"))
+    return request + (":user_request:" + json.dumps(settings["user_request"], ensure_ascii=False)
+                      if settings.get("user_request") else "")
 
 
 def create_room(connection, payload, control_token=""):
@@ -635,13 +668,17 @@ def check_limits(connection, room_id, payload):
     room = require_room(connection, room_id)
     require_host(room, payload)
     limits = room["limits"]
-    if not limits["reached"] or room["phase"] in ("paused", "concluded") or room["archived"]:
+    force = payload.get("force") is True
+    if force and (room["phase"] in ("preparing", "paused", "concluded") or room["archived"]):
+        raise ValueError("仅进行中的讨论可以提前收尾")
+    if (not limits["reached"] and not force) or room["phase"] in ("paused", "concluded") or room["archived"]:
         return room
-    closing = limits["on_limit"] == "summarize" and limits["reason"] != "time_limit"
+    reason = limits["reason"] or "user_stop"
+    closing = (force or limits["on_limit"] == "summarize") and reason != "time_limit"
     if closing and limits["closing"]:
         return room
     connection.execute("UPDATE discussion_limits SET closing_at=?,stop_reason=?,revision=revision+1 WHERE room_id=?",
-                       (int(time.time()) if closing else limits["closing_at"], limits["reason"], room_id))
+                       (int(time.time()) if closing else limits["closing_at"], reason, room_id))
     connection.execute("UPDATE discussion_turns SET status='cancelled' WHERE room_id=? AND status IN ('pending','notified')", (room_id,))
     connection.execute("UPDATE room_floor SET holder=NULL,next_speaker=?,revision=revision+1 WHERE room_id=?", (room["host"], room_id))
     if closing:
@@ -809,7 +846,7 @@ def room_text(connection, room_id, params):
 def brief_text(room):
     """Render the detailed brief only when explicitly requested."""
     experts = "\n".join(f"- {name}：{'本地 CLI 读写' if mode == 'cli' else '在线只读'}" for name, mode in room["experts"].items())
-    return f"# {room['title']} · 话题资料\n\n目标：{room['goal']}\n\n背景：\n{room['background'] or '未填写'}\n\n边界：\n{room['boundaries'] or '未填写'}\n\n主持人：{room['host']}（可兼任专家）\n\n参与专家：\n{experts}"
+    return f"# {room['title']} · 话题资料\n\n目标：{room['goal']}\n\n用户原文：\n{room['user_request'] or '未填写'}\n\n背景：\n{room['background'] or '未填写'}\n\n边界：\n{room['boundaries'] or '未填写'}\n\n主持人：{room['host']}（可兼任专家）\n\n参与专家：\n{experts}"
 
 
 def turn_text(turn, room):
@@ -825,11 +862,11 @@ def protocol_text(room):
     return "\n\n".join([
         "# 本地 CLI 读写与主持协议", f"当前主持人：{room['host']}。以下为留言板接口，不是模型服务 API。",
         "所有写入使用 POST 和 Content-Type: application/json。主持操作填写 actor 为当前主持人或用户；这些是声明身份，不是认证凭据。",
-        "讨论上限：room.limits 返回轮次、总时长、单次执行、到限方式、收束预留和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理。到限停止新专家安排与观点；总结由真实主持人完成，预留计入总时长；暂停不重置计时。",
+        "讨论上限：room.limits 返回轮次、总时长、单次执行、到限方式、收束预留和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理；附 force:true 可在进行中提前进入收束，由主持人在收束预留时间内总结。到限停止新专家安排与观点；总结由真实主持人完成，预留计入总时长；暂停不重置计时。",
         "运行方式：room.runtime 显示 manual/automatic、状态及真实执行回执。启用保护的房间写入须带 X-Discussion-Token；CLI 用 --access-file 读取本机私有文件，不公开令牌。自动任务先 execution enter，创建安排或保存关联回答即完成本步；不创建原生定时任务。旧执行在暂停、停止、换代、租约到期后失效。手动接入沿用原流程；受保护房间仍须用户提供有效的凭据文件。运行控制用 run view/start/pause/stop/configure；字段查 CLI schema。",
         f"发言权：GET {base}/floor 返回 holder、next_speaker、revision；POST 同路径，字段 actor、speaker（默认 actor）、action=take/return、revision（刚读到的整数版本）。仅无人持有且 next_speaker 为本人时可领取；持有者可主动归还，下一位回到主持人。版本变化返回 409，先读回核对。主持人仅可代操作 online 专家，cli 专家自行操作；用户可协助。",
         "新房间由主持人持有发言权。创建安排须主持人持有，保存成功即归还并点名该专家；AI 的 opinion、moderation、receipt 都须实际作者持有，代发不豁免，opinion 必须关联有效 turn_id。消息保存成功自动归还，下一位为主持人。失败不归还，同编号重试不再次交接。用户本人发言不受发言权限制，也不改变发言权；@ 不改变顺序。维护状态、阶段及通知回执不占用发言权。取消安排须主持人持有，用户可直接取消失效安排；取消后归还给主持人领取。",
-        '创建话题：POST /api/rooms；字段 title、goal、background、boundaries、host、experts、submission_id（新 UUID），例如 experts={"Codex":"cli","Gemini":"online"}。AI 主持人必须配置为 cli。同编号对照首次创建资料，重试不覆盖后来修改的房间；旧客户端不带编号时没有幂等保护。',
+        '创建话题：POST /api/rooms；字段 title、goal、user_request（用户原文）、background、boundaries、host、experts、submission_id（新 UUID），例如 experts={"Codex":"cli","Gemini":"online"}。AI 主持人必须配置为 cli。同编号对照首次创建资料，重试不覆盖后来修改的房间；旧客户端不带编号时没有幂等保护。',
         f"查询提交：GET /api/rooms?submission_id=编号 查建房结果；GET {base}/messages?submission_id=编号 或 {base}/turns?submission_id=编号 查消息或安排。查询成功且列表为空表示尚未查到，读取失败不表示未写入。",
         f"增量读取：GET {base}/messages?after=已读消息编号，每次最多 20 条，按 next_after 续读，has_more 表示还有一批；可加 kind=opinion/moderation/receipt、author、mention、q。after 不与翻页混用，过滤后的游标只代表该查询范围。",
         f"维护话题：POST {base}/topic；actor 加需要修改的上述字段，另可更新 phase（preparing/initial/discussing/reviewing/paused/concluded）、focus。收束前先完成或取消当前安排。暂停保留安排；恢复阶段后再继续。",
@@ -961,6 +998,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.respond(result)
         if len(parts) == 4 and parts[:2] == ["api", "folders"] and parts[3] == "rename" and method == "POST":
             result = rename_folder(connection, parts[2], self.read_payload())
+            connection.commit()
+            return self.respond(result)
+        if len(parts) == 4 and parts[:2] == ["api", "folders"] and parts[3] == "delete" and method == "POST":
+            result = delete_folder(connection, parts[2])
             connection.commit()
             return self.respond(result)
         if len(parts) < 3 or parts[:2] != ["api", "rooms"]:

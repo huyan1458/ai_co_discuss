@@ -43,6 +43,54 @@ async function worker_fixture(test_case) {
   return fixture;
 }
 
+test('Worker preserves independent user requests, checks replays, exports and deletes them', async t => {
+  const f = await worker_fixture(t);
+  const original = '  用户要求🙂\n保留换行  \n';
+  const payload = { title: '原文与背景', user_request: original, background: '项目背景', submission_id: 'request-create' };
+  const created = await f.request('', payload);
+  assert.equal(created.status, 201);
+  const id = created.body.id;
+  assert.equal(created.body.user_request, original);
+  assert.equal((await f.request('', payload)).body.duplicate, true);
+  assert.equal((await f.request('', { ...payload, user_request: '另一要求' })).status, 409);
+  const updated = await f.request(`/${id}/topic`, { actor: '用户', background: '更新背景' });
+  assert.equal(updated.body.user_request, original);
+  assert.equal(updated.body.background, '更新背景');
+  const backup = await f.request(`/${id}/backup`);
+  assert.deepEqual(backup.body.tables.room_user_requests, [{ room_id: id, text: original }]);
+  assert.equal((await f.request(`/${id}/topic`, { actor: '用户', user_request: '🙂'.repeat(4000) })).status, 200);
+  assert.equal((await f.request(`/${id}/topic`, { actor: '用户', user_request: '🙂'.repeat(4001) })).status, 400);
+  const cleared = await f.request(`/${id}/topic`, { actor: '用户', user_request: '' });
+  assert.equal(cleared.body.user_request, '');
+  assert.equal(cleared.body.background, '更新背景');
+  assert.equal((await f.request(`/${id}/delete`, { actor: '用户', confirm_title: payload.title })).status, 200);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM room_user_requests WHERE room_id=?').get(id).count, 0);
+});
+
+test('Worker reads explicitly marked legacy user requests without rewriting raw background', async t => {
+  const f = await worker_fixture(t);
+  const created = await f.request('', { title: '旧资料' });
+  const id = created.body.id;
+  const background = '用户原文：\n原始要求\n第二行\n\n项目背景与入口：\n补充材料';
+  f.sql.prepare('DELETE FROM room_user_requests WHERE room_id=?').run(id);
+  f.sql.prepare('UPDATE topic_settings SET background=? WHERE room_id=?').run(background, id);
+  f.sql.exec(await readFile(join(PROJECT_ROOT, 'schema.sql'), 'utf8'));
+  const room = (await f.request(`/${id}`)).body;
+  assert.equal(room.user_request, '原始要求\n第二行');
+  assert.equal(room.background, '项目背景与入口：\n补充材料');
+  assert.equal(f.sql.prepare('SELECT background FROM topic_settings WHERE room_id=?').get(id).background, background);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM room_user_requests WHERE room_id=?').get(id).count, 0);
+  const saved = await f.request(`/${id}/topic`, { actor: '用户', goal: '更新目标' });
+  assert.equal(saved.body.user_request, room.user_request);
+  assert.equal(f.sql.prepare('SELECT text FROM room_user_requests WHERE room_id=?').get(id).text, room.user_request);
+  f.sql.prepare('DELETE FROM room_user_requests WHERE room_id=?').run(id);
+  const plain = '用户原文：\n没有明确背景分隔的整段文字';
+  f.sql.prepare('UPDATE topic_settings SET background=? WHERE room_id=?').run(plain, id);
+  const unchanged = (await f.request(`/${id}`)).body;
+  assert.equal(unchanged.user_request, '');
+  assert.equal(unchanged.background, plain);
+});
+
 test('Worker accepts SQLite-formatted expert JSON after migration, including reached limits', async t => {
   const f = await worker_fixture(t);
   const created = await f.request('', { title: '迁移兼容', host: 'Codex', experts: { Codex: 'cli' }, limits: { max_rounds: 1 } });
@@ -58,6 +106,25 @@ test('Worker accepts SQLite-formatted expert JSON after migration, including rea
   const checked = await f.request(`/${id}/limits`, { actor: '用户' });
   assert.equal(checked.status, 200, JSON.stringify(checked.body));
   assert.equal(checked.body.phase, 'paused');
+});
+
+test('Worker forces an early host summary and reports per-participant executions', async t => {
+  const f = await worker_fixture(t);
+  const created = await f.request('', { title: '提前收尾', host: 'Codex', experts: { Codex: 'cli' }, limits: { max_rounds: 3, summary_minutes: 2 } });
+  const id = created.body.id;
+  await f.request(`/${id}/turns`, { actor: '用户', expert: 'Codex', question: '待打断', submission_id: 'forced-turn' });
+  const started = await f.request(`/${id}/runtime`, { action: 'start', revision: 0, deadline: Math.floor(Date.now() / 1000) + 600 });
+  assert.equal(started.status, 200, JSON.stringify(started.body));
+  assert.deepEqual(started.body.participants.map(item => [item.participant, item.status, item.failures, item.stale]), [['Codex', 'pending', 0, false]]);
+  assert.equal(started.body.participants[0].lease_until, undefined);
+  const closed = await f.request(`/${id}/limits`, { actor: '用户', force: true });
+  assert.equal(closed.status, 200, JSON.stringify(closed.body));
+  assert.equal(closed.body.limits.closing, true);
+  assert.equal(closed.body.limits.stop_reason, 'user_stop');
+  assert.equal(closed.body.current_turn.status, 'cancelled');
+  assert.equal(closed.body.runtime.participants.at(-1).role, 'host');
+  await f.request(`/${id}/runtime`, { action: 'pause', revision: closed.body.runtime.revision });
+  assert.equal((await f.request(`/${id}/limits`, { actor: '用户', force: true })).status, 400);
 });
 
 for (const change of ['limits', 'archive', 'phase']) {

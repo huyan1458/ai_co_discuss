@@ -14,7 +14,7 @@ const MAX_QUESTION_LENGTH = 1000;
 const LIMIT_DEFAULTS = { max_rounds: 0, max_minutes: 0, execution_minutes: 20, on_limit: "pause", summary_minutes: 5 };
 const ROOM_BACKUP_QUERIES = {
   rooms: "SELECT * FROM rooms WHERE id=?",
-  ...Object.fromEntries(["room_directory", "room_folder_assignments", "room_creations", "room_briefs", "topic_settings", "room_floor", "discussion_limits"]
+  ...Object.fromEntries(["room_directory", "room_folder_assignments", "room_creations", "room_briefs", "room_user_requests", "topic_settings", "room_floor", "discussion_limits"]
     .map((table) => [table, `SELECT * FROM ${table} WHERE room_id=?`])),
   topic_folders: "SELECT * FROM topic_folders WHERE id IN (SELECT folder_id FROM room_folder_assignments WHERE room_id=?)",
   messages: "SELECT * FROM messages WHERE room_id=? ORDER BY id",
@@ -117,6 +117,8 @@ async function require_room(database, room_id) {
   const settings = await database.prepare("SELECT * FROM topic_settings WHERE room_id=?").bind(room_id).first();
   const current_turn = await database.prepare("SELECT *, (SELECT COUNT(*) FROM discussion_turns WHERE room_id=? AND status='answered') AS answered_turns FROM discussion_turns WHERE room_id=? ORDER BY id DESC LIMIT 1").bind(room_id, room_id).first();
   const result = { ...room, ...(settings ? { ...settings, experts: JSON.parse(settings.experts) } : topic_defaults()), current_turn, answered_turns: current_turn?.answered_turns || 0 };
+  const original = await database.prepare("SELECT text FROM room_user_requests WHERE room_id=?").bind(room_id).first();
+  Object.assign(result, topic_context(result.background, original?.text));
   if (current_turn) delete current_turn.answered_turns;
   if (current_turn) current_turn.status_label = turn_status_label(current_turn, result);
   result.latest_receipts = await latest_receipts(database, room_id);
@@ -192,6 +194,15 @@ function receipt_references_text(room) {
   return lines.length ? `最新运行回执（每位参与者最近一条，运行结果以原文为准）：\n${lines.join("\n")}` : "尚无运行回执。";
 }
 
+/** Separate explicitly marked legacy requests without guessing unmarked text. */
+function topic_context(background, user_request) {
+  if (user_request === undefined) {
+    const match = background.match(/^用户原文[：:][ \t]*(?:\r?\n)?([\s\S]*?)(?:\r?\n){2,}((?:项目背景与入口|背景)[：:][\s\S]*)$/);
+    if (match) { user_request = match[1]; background = match[2]; }
+  }
+  return { user_request: user_request || "", background };
+}
+
 /** Return independent defaults for legacy rooms without settings. */
 function topic_defaults() {
   return { host: "用户", background: "", boundaries: "", phase: "preparing", focus: "",
@@ -201,9 +212,10 @@ function topic_defaults() {
 /** Validate topic information and require an AI host to have CLI capability. */
 function topic_values(payload, current = {}) {
   const result = { ...topic_defaults(), ...current };
-  const limits = { title: 80, goal: 1000, background: MAX_TOPIC_DETAIL, boundaries: MAX_TOPIC_DETAIL, focus: MAX_QUESTION_LENGTH };
+  const limits = { title: 80, goal: 1000, user_request: MAX_TOPIC_DETAIL, background: MAX_TOPIC_DETAIL, boundaries: MAX_TOPIC_DETAIL, focus: MAX_QUESTION_LENGTH };
   for (const [field, limit] of Object.entries(limits)) {
-    result[field] = String(payload[field] ?? result[field] ?? "").trim();
+    const value = String(payload[field] ?? result[field] ?? "");
+    result[field] = field === "user_request" ? value : value.trim();
     if (text_length(result[field]) > limit || (field === "title" && !result[field])) throw new HttpError(400, `${field} 内容为空或超过 ${limit} 字`);
   }
   for (const field of ["host", "phase", "experts"]) result[field] = payload[field] ?? result[field];
@@ -225,11 +237,13 @@ function topic_values(payload, current = {}) {
 }
 
 /** Prepare an upsert shared by topic creation and maintenance. */
-function topic_statement(database, room_id, settings) {
-  return database.prepare(`INSERT INTO topic_settings (room_id,host,background,boundaries,experts,phase,focus)
+function topic_statements(database, room_id, settings) {
+  return [database.prepare(`INSERT INTO topic_settings (room_id,host,background,boundaries,experts,phase,focus)
     VALUES (?,?,?,?,?,?,?) ON CONFLICT(room_id) DO UPDATE SET host=excluded.host,background=excluded.background,
     boundaries=excluded.boundaries,experts=excluded.experts,phase=excluded.phase,focus=excluded.focus`)
-    .bind(room_id, settings.host, settings.background, settings.boundaries, JSON.stringify(settings.experts), settings.phase, settings.focus);
+    .bind(room_id, settings.host, settings.background, settings.boundaries, JSON.stringify(settings.experts), settings.phase, settings.focus),
+    database.prepare("INSERT INTO room_user_requests (room_id,text) VALUES (?,?) ON CONFLICT(room_id) DO UPDATE SET text=excluded.text")
+      .bind(room_id, settings.user_request || "")];
 }
 
 /** Check a declared operator without claiming authentication. */
@@ -254,7 +268,7 @@ async function update_topic(database, room_id, payload) {
     await database.batch([
       database.prepare("UPDATE rooms SET title=?,goal=? WHERE id=?").bind(settings.title, settings.goal, room_id),
       ...limit_statements(database, room_id, settings),
-      topic_statement(database, room_id, settings),
+      ...topic_statements(database, room_id, settings),
     ]);
   } catch (error) {
     if (String(error).includes("open_turn")) throw new HttpError(400, "请先完成或取消当前发言安排");
@@ -275,8 +289,9 @@ function submission_value(value) {
 function creation_request(settings) {
   const fields = ["title", "goal", "host", "background", "boundaries", "phase", "focus"];
   const experts = Object.entries(settings.experts).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
-  return JSON.stringify([...fields.map((field) => settings[field]), experts,
+  const request = JSON.stringify([...fields.map((field) => settings[field]), experts,
     ...(settings.save_limits ? [Object.keys(LIMIT_DEFAULTS).map(key => settings.limits[key])] : [])]);
+  return request + (settings.user_request ? `:user_request:${JSON.stringify(settings.user_request)}` : "");
 }
 
 /** Recover a committed creation, rejecting reuse for a different request. */
@@ -307,7 +322,7 @@ async function create_room(database, payload, control_token = "") {
       .bind(room_id, settings.title, settings.goal, new Date().toISOString()),
     database.prepare("UPDATE room_folder_assignments SET folder_id=? WHERE room_id=?").bind(folder_id, room_id),
     ...limit_statements(database, room_id, settings),
-    topic_statement(database, room_id, settings),
+    ...topic_statements(database, room_id, settings),
   ];
   if (identifier) statements.push(database.prepare("INSERT INTO room_creations (submission_id,room_id,request_text) VALUES (?,?,?)")
     .bind(identifier, room_id, request_text));
@@ -357,6 +372,23 @@ async function rename_folder(database, folder_id, payload) {
   return folder;
 }
 
+/** Remove a group atomically, retaining all rooms through the existing foreign key. */
+async function delete_folder(database, folder_id) {
+  const directory = await folder_directory(database);
+  const index = directory.folders.findIndex(folder => folder.id === folder_id);
+  if (index < 0) throw new HttpError(404, "文件夹不存在");
+  let position = directory.uncategorized_position;
+  if (position !== null) {
+    position -= Number(index < position);
+    if (position >= directory.folders.length - 1) position = null;
+  }
+  await database.batch([
+    database.prepare("DELETE FROM topic_folders WHERE id=?").bind(folder_id),
+    database.prepare("UPDATE directory_settings SET uncategorized_position=? WHERE id=1").bind(position),
+  ]);
+  return { deleted: true, id: folder_id };
+}
+
 /** Move an existing folder before another (or last), returning the saved directory. */
 async function move_folder(database, folder_id, payload) {
   const directory = await folder_directory(database);
@@ -397,7 +429,7 @@ async function manage_room(database, room_id, action, payload) {
     }
     statements.push(database.prepare("UPDATE room_folder_assignments SET folder_id=? WHERE room_id=?").bind(folder_id, room_id));
   } else if (["archive", "restore"].includes(action)) {
-    if (action === "archive" && room.phase !== "concluded") statements.push(topic_statement(database, room_id, { ...room, phase: "paused" }));
+    if (action === "archive" && room.phase !== "concluded") statements.push(...topic_statements(database, room_id, { ...room, phase: "paused" }));
     statements.push(database.prepare("UPDATE room_directory SET archived=? WHERE room_id=?").bind(Number(action === "archive"), room_id));
   } else if (action === "delete") {
     if (payload.confirm_title !== room.title) throw new HttpError(400, "请输入完整频道名称确认删除");
@@ -405,7 +437,7 @@ async function manage_room(database, room_id, action, payload) {
       "DELETE FROM message_summaries WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
       "DELETE FROM message_details WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
       "DELETE FROM discussion_turns WHERE room_id=?", "UPDATE messages SET reply_to=NULL WHERE room_id=?",
-      "DELETE FROM messages WHERE room_id=?", "DELETE FROM topic_settings WHERE room_id=?",
+      "DELETE FROM messages WHERE room_id=?", "DELETE FROM topic_settings WHERE room_id=?", "DELETE FROM room_user_requests WHERE room_id=?",
       "DELETE FROM room_creations WHERE room_id=?", "DELETE FROM room_directory WHERE room_id=?", "DELETE FROM room_folder_assignments WHERE room_id=?", "DELETE FROM room_briefs WHERE room_id=?", "DELETE FROM room_floor WHERE room_id=?", "DELETE FROM rooms WHERE id=?",
     ];
     statements.push(...queries.map((query) => database.prepare(`${query} AND EXISTS (SELECT 1 FROM rooms WHERE id=? AND title=?)`).bind(room_id, room_id, payload.confirm_title)));
@@ -722,7 +754,7 @@ async function room_text(database, room_id, params) {
 /** Render the detailed brief only when selected by a reader. */
 function brief_text(room) {
   const experts = Object.entries(room.experts).map(([name, mode]) => `- ${name}：${mode === "cli" ? "本地 CLI 读写" : "在线只读"}`).join("\n");
-  return `# ${room.title} · 话题资料\n\n目标：${room.goal}\n\n背景：\n${room.background || "未填写"}\n\n边界：\n${room.boundaries || "未填写"}\n\n主持人：${room.host}（可兼任专家）\n\n参与专家：\n${experts}`;
+  return `# ${room.title} · 话题资料\n\n目标：${room.goal}\n\n用户原文：\n${room.user_request || "未填写"}\n\n背景：\n${room.background || "未填写"}\n\n边界：\n${room.boundaries || "未填写"}\n\n主持人：${room.host}（可兼任专家）\n\n参与专家：\n${experts}`;
 }
 
 /** Render an assignment without embedding topic context. */
@@ -737,11 +769,11 @@ function protocol_text(room) {
   const base = `/api/rooms/${room.id}`;
   return ["# 本地 CLI 读写与主持协议", `当前主持人：${room.host}。以下为留言板接口，不是模型服务 API。`,
     "所有写入使用 POST 和 Content-Type: application/json。主持操作填写 actor 为当前主持人或用户；这些是声明身份，不是认证凭据。",
-    "讨论上限：room.limits 返回轮次、总时长、单次执行、到限方式、收束预留和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理。到限停止新专家安排与观点；总结由真实主持人完成，预留计入总时长；暂停不重置计时。",
+    "讨论上限：room.limits 返回轮次、总时长、单次执行、到限方式、收束预留和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理；附 force:true 可在进行中提前进入收束，由主持人在收束预留时间内总结。到限停止新专家安排与观点；总结由真实主持人完成，预留计入总时长；暂停不重置计时。",
     "运行方式：room.runtime 显示 manual/automatic、状态及真实执行回执。启用保护的房间写入须带 X-Discussion-Token；CLI 用 --access-file 读取本机私有文件，不公开令牌。自动任务先 execution enter，创建安排或保存关联回答即完成本步；不创建原生定时任务。旧执行在暂停、停止、换代、租约到期后失效。手动接入沿用原流程；受保护房间仍须用户提供有效的凭据文件。运行控制用 run view/start/pause/stop/configure；字段查 CLI schema。",
     `发言权：GET ${base}/floor 返回 holder、next_speaker、revision；POST 同路径，字段 actor、speaker（默认 actor）、action=take/return、revision（刚读到的整数版本）。仅无人持有且 next_speaker 为本人时可领取；持有者可主动归还，下一位回到主持人。版本变化返回 409，先读回核对。主持人仅可代操作 online 专家，cli 专家自行操作；用户可协助。`,
     "新房间由主持人持有发言权。创建安排须主持人持有，保存成功即归还并点名该专家；AI 的 opinion、moderation、receipt 都须实际作者持有，代发不豁免，opinion 必须关联有效 turn_id。消息保存成功自动归还，下一位为主持人。失败不归还，同编号重试不再次交接。用户本人发言不受发言权限制，也不改变发言权；@ 不改变顺序。维护状态、阶段及通知回执不占用发言权。取消安排须主持人持有，用户可直接取消失效安排；取消后归还给主持人领取。",
-    '创建话题：POST /api/rooms；字段 title、goal、background、boundaries、host、experts、submission_id（新 UUID），例如 experts={"Codex":"cli","Gemini":"online"}。AI 主持人必须配置为 cli。同编号对照首次创建资料，重试不覆盖后来修改的房间；旧客户端不带编号时没有幂等保护。',
+    '创建话题：POST /api/rooms；字段 title、goal、user_request（用户原文）、background、boundaries、host、experts、submission_id（新 UUID），例如 experts={"Codex":"cli","Gemini":"online"}。AI 主持人必须配置为 cli。同编号对照首次创建资料，重试不覆盖后来修改的房间；旧客户端不带编号时没有幂等保护。',
     `查询提交：GET /api/rooms?submission_id=编号 查建房结果；GET ${base}/messages?submission_id=编号 或 ${base}/turns?submission_id=编号 查消息或安排。查询成功且列表为空表示尚未查到，读取失败不表示未写入。`,
     `增量读取：GET ${base}/messages?after=已读消息编号，每次最多 20 条，按 next_after 续读，has_more 表示还有一批；可加 kind=opinion/moderation/receipt、author、mention、q。after 不与翻页混用，过滤后的游标只代表该查询范围。`,
     `维护话题：POST ${base}/topic；actor 加需要修改的上述字段，另可更新 phase（preparing/initial/discussing/reviewing/paused/concluded）、focus。收束前先完成或取消当前安排。暂停保留安排；恢复阶段后再继续。`,
@@ -816,11 +848,14 @@ async function check_limits(database, room_id, payload) {
   const room = await require_room(database, room_id);
   require_host(room, payload);
   const limits = room.limits;
-  if (!limits.reached || ["paused", "concluded"].includes(room.phase) || room.archived) return room;
-  const closing = limits.on_limit === "summarize" && limits.reason !== "time_limit";
+  const force = payload.force === true;
+  if (force && (["preparing", "paused", "concluded"].includes(room.phase) || room.archived)) throw new HttpError(400, "仅进行中的讨论可以提前收尾");
+  if ((!limits.reached && !force) || ["paused", "concluded"].includes(room.phase) || room.archived) return room;
+  const reason = limits.reason || "user_stop";
+  const closing = (force || limits.on_limit === "summarize") && reason !== "time_limit";
   if (closing && limits.closing) return room;
   const statements = [database.prepare("UPDATE discussion_limits SET closing_at=?,stop_reason=?,revision=revision+1 WHERE room_id=?")
-    .bind(closing ? Math.floor(Date.now() / 1000) : limits.closing_at, limits.reason, room_id),
+    .bind(closing ? Math.floor(Date.now() / 1000) : limits.closing_at, reason, room_id),
     database.prepare("UPDATE discussion_turns SET status='cancelled' WHERE room_id=? AND status IN ('pending','notified')").bind(room_id),
     database.prepare("UPDATE room_floor SET holder=NULL,next_speaker=?,revision=revision+1 WHERE room_id=?").bind(room.host, room_id),
     closing ? database.prepare("UPDATE discussion_runtime SET generation=generation+1,revision=revision+1,deadline=MIN(deadline,?) WHERE room_id=? AND status='running'").bind(Math.floor(Date.now() / 1000) + limits.summary_minutes * 60, room_id)
@@ -838,7 +873,19 @@ async function runtime_view(database, room_id) {
   if (!row) return { mode: "manual", status: "ready", revision: 0, protected: false };
   const { control_hash, ...visible } = row;
   const latest_execution = await database.prepare("SELECT id,participant,role,status,result FROM discussion_events WHERE room_id=? ORDER BY id DESC LIMIT 1").bind(room_id).first();
-  return { ...visible, latest_execution, protected: true, expired: row.status === "running" && row.deadline <= Math.floor(Date.now() / 1000) };
+  const participants = await participant_executions(database, room_id);
+  return { ...visible, latest_execution, participants, protected: true, expired: row.status === "running" && row.deadline <= Math.floor(Date.now() / 1000) };
+}
+
+/** Summarize each participant's latest execution and failure count for the progress panel. */
+async function participant_executions(database, room_id) {
+  const { results } = await database.prepare(`SELECT latest.id,latest.participant,latest.role,latest.status,latest.result,
+    latest.turn_id,latest.lease_until,(SELECT COUNT(*) FROM discussion_events AS failed
+      WHERE failed.room_id=latest.room_id AND failed.participant=latest.participant AND failed.status='failed') AS failures
+    FROM discussion_events AS latest WHERE latest.room_id=? AND latest.id=(SELECT MAX(id)
+      FROM discussion_events AS other WHERE other.room_id=latest.room_id AND other.participant=latest.participant) ORDER BY latest.id`).bind(room_id).all();
+  const now = Math.floor(Date.now() / 1000);
+  return results.map(({ lease_until, ...event }) => ({ ...event, stale: event.status === "started" && lease_until <= now }));
 }
 
 /** Assert authorization and mutation in one D1 transaction. */
@@ -881,6 +928,9 @@ async function authorize_database(database, room_id, token, operation, payload) 
   if (!run) return guarded_database(database, "NOT EXISTS(SELECT 1 FROM discussion_runtime WHERE room_id=?)", [room_id]);
   if (hashed && hashed === run.control_hash) return guarded_database(database,
     "EXISTS(SELECT 1 FROM discussion_runtime WHERE room_id=? AND control_hash=?)", [room_id, hashed]);
+  if (["move", "folder", "archive", "restore", "delete"].includes(operation)) {
+    throw new HttpError(403, "需要本房间的控制凭据；请在「接入」中导入原私有配置");
+  }
   const event = await database.prepare("SELECT * FROM discussion_events WHERE room_id=? AND token_hash=? AND status='started'").bind(room_id, hashed).first();
   const actor = payload.actor ?? payload.submitted_by ?? payload.author ?? "用户";
   if (!hashed || !event || actor !== event.participant) throw new HttpError(403, "执行凭据与实际参与身份不符");
@@ -1038,6 +1088,9 @@ async function handle_api(database, request, parts, params) {
   }
   if (parts.length === 4 && parts[0] === "api" && parts[1] === "folders" && parts[3] === "rename" && method === "POST") {
     return respond(await rename_folder(database, parts[2], await read_payload(request)));
+  }
+  if (parts.length === 4 && parts[0] === "api" && parts[1] === "folders" && parts[3] === "delete" && method === "POST") {
+    return respond(await delete_folder(database, parts[2]));
   }
   if (parts.length < 3 || parts[0] !== "api" || parts[1] !== "rooms") {
     throw new HttpError(404, "地址不存在");

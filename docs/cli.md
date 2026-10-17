@@ -19,6 +19,8 @@ python discuss.py room list
 
 Bash 对应 `export DISCUSS_URL=http://127.0.0.1:8765`，CMD 对应 `set DISCUSS_URL=http://127.0.0.1:8765`。`--site` 优先于环境变量；没有任何配置则报错，不默认写入线上。站点须为根地址，不带路径、查询、用户名或密码。客户端使用标准代理设置、校验证书且不跟随重定向。
 
+建房与更新资料支持 `--user-request` / `--user-request-file`，将用户原文与 `--background` 分开保存，各限 4000 字。`room brief` 返回两者，概要和通知不自动展开原文。
+
 ## 讨论上限参数
 
 `room create` / `room update` 支持 `--max-rounds`、`--max-minutes`（0 表示不限）、`--execution-minutes`、`--on-limit pause|summarize`、`--summary-minutes`。未传字段沿用旧值；活动阶段须先暂停才能改上限。`room view` 包含 `limits` 与 `completed_rounds`，`room limits ROOM` 单独读取，`room limits ROOM --check --as 身份` 检查并执行到限处理。受保护房间仍需 `--access-file`。检查不会启动 AI，也不代写总结。

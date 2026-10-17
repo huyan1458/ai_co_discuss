@@ -1,5 +1,5 @@
 <script setup>
-import { computed, inject } from "vue";
+import { computed, inject, ref } from "vue";
 import { motion, useReducedMotion } from "motion-v";
 
 defineEmits(["open", "detail"]);
@@ -11,6 +11,14 @@ const active_turn = computed(() => turn.value && ["pending", "notified"].include
 const inactive = computed(() => ["paused", "concluded"].includes(room.value?.phase));
 const can_schedule = computed(() => !active_turn.value && !inactive.value && !room.value?.limits?.reached && room.value?.floor?.holder === room.value?.host && Object.keys(room.value?.experts || {}).length > 0);
 const base = computed(() => `${location.origin}/r/${room.value?.id}`);
+const runtime_import_input = ref(null);
+
+/** Read one selected private setup file without retaining it in the input. */
+function import_runtime_file(event) {
+  const file = event.target.files[0];
+  event.target.value = "";
+  if (file) act("import_runtime", file);
+}
 </script>
 
 <template>
@@ -32,7 +40,7 @@ const base = computed(() => `${location.origin}/r/${room.value?.id}`);
       <p v-if="!can_schedule" class="fine-print">{{ inactive ? '话题已暂停或收束，修改阶段后可以继续安排。' : active_turn ? '先完成或取消当前安排，再安排下一位。' : room.limits?.reached ? '已达到讨论上限，请检查到限处理；需要继续时先暂停并调整参数。' : room.floor?.holder !== room.host ? '主持人领取发言权后可安排下一位。' : '请先在议题资料中配置参与专家。' }}</p>
     </template>
     <template v-else>
-      <section class="turn-panel"><h3>讨论运行方式</h3><p>{{ bridge.runtime_label(room.runtime) }}</p><p>{{ bridge.execution_label(room.runtime?.latest_execution) }}</p><div class="form-two-columns"><UFormField label="讨论所属项目（可选）"><UInput :model-value="view.fields['runtime-project']" placeholder="软件中的项目名称" class="w-full" @update:model-value="bridge.write_field('runtime-project', $event)" /></UFormField><UFormField label="工作目录 cwd（可选）"><UInput :model-value="view.fields['runtime-cwd']" placeholder="已有本机目录；留空沿用默认值" class="w-full" @update:model-value="bridge.write_field('runtime-cwd', $event)" /></UFormField></div><div class="button-row"><UButton label="选择全自动讨论" variant="outline" color="neutral" @click="act('choose_runtime', 'automatic')" /><UButton label="选择手动复制冷启动" variant="outline" color="neutral" @click="act('choose_runtime', 'manual')" /><UButton v-if="room.runtime?.protected" label="导出本机接入配置" variant="outline" color="neutral" @click="act('export_runtime')" /><UButton v-if="room.runtime?.status === 'running'" label="暂停自动运行" color="warning" @click="act('pause_runtime')" /></div><p class="fine-print">全自动需要本机通知程序已配置并运行。手动方式沿用下方复制指令；切换前先暂停并核对原会话。</p></section>
+      <section class="turn-panel"><h3>讨论运行方式</h3><p>{{ bridge.runtime_label(room.runtime) }}</p><p>{{ bridge.execution_label(room.runtime?.latest_execution) }}</p><div class="form-two-columns"><UFormField label="讨论所属项目（可选）"><UInput :model-value="view.fields['runtime-project']" placeholder="软件中的项目名称" class="w-full" @update:model-value="bridge.write_field('runtime-project', $event)" /></UFormField><UFormField label="工作目录 cwd（可选）"><UInput :model-value="view.fields['runtime-cwd']" placeholder="已有本机目录；留空沿用默认值" class="w-full" @update:model-value="bridge.write_field('runtime-cwd', $event)" /></UFormField></div><div class="button-row"><UButton label="选择全自动讨论" variant="outline" color="neutral" @click="act('choose_runtime', 'automatic')" /><UButton label="选择手动复制冷启动" variant="outline" color="neutral" @click="act('choose_runtime', 'manual')" /><UButton v-if="room.runtime?.protected" label="导出本机接入配置" variant="outline" color="neutral" @click="act('export_runtime')" /><UButton v-if="room.runtime?.protected" label="导入接入配置" variant="outline" color="neutral" :loading="pending === 'import_runtime'" @click="runtime_import_input.click()" /><input ref="runtime_import_input" type="file" accept=".json,application/json" hidden @change="import_runtime_file" /><UButton v-if="room.runtime?.status === 'running'" label="暂停自动运行" color="warning" @click="act('pause_runtime')" /></div><p v-if="view.runtime_import" role="status" :class="view.runtime_import.error ? 'channel-directory-error' : 'fine-print'">{{ view.runtime_import.text }}</p><p class="fine-print">全自动需要本机通知程序已配置并运行。手动方式沿用下方复制指令；切换前先暂停并核对原会话。</p></section>
       <div class="page-heading"><div><span class="eyebrow">共享讨论入口</span><h2>邀请 AI 参与</h2><p>按运行环境选择参与方式，专家自主决定阅读深度。</p></div></div>
       <section class="access-section"><span class="access-icon"><UIcon name="i-lucide-globe" /></span><div><h3>在线 AI <UBadge color="neutral" variant="subtle">只读</UBadge></h3><p>把阅读入口提供给在线聊天产品。观点留在原聊天窗口，再由用户或主持人代发。</p><div class="access-address"><code>{{ base }}</code><UButton icon="i-lucide-copy" color="neutral" variant="ghost" aria-label="复制在线阅读地址" @click="act('copy_reading')" /></div><div class="button-row"><UButton label="复制只读参与指令" variant="outline" color="neutral" class="channel-surface-button" @click="act('copy_online')" /><UButton :to="base" target="_blank" label="打开阅读页" trailing-icon="i-lucide-arrow-up-right" variant="ghost" color="neutral" /></div></div></section>
       <section class="access-section"><span class="access-icon"><UIcon name="i-lucide-terminal" /></span><div><h3>本地 CLI AI <UBadge color="primary" variant="subtle">读写</UBadge></h3><p>使用本地 AI 软件读取话题，通过留言板接口提交观点，按消息编号核对原文。</p><div class="access-address"><code>{{ base }}?mode=cli</code><UButton icon="i-lucide-copy" color="neutral" variant="ghost" aria-label="复制 CLI 阅读地址" @click="act('copy', `${base}?mode=cli`)" /></div><div class="button-row"><UButton label="复制 CLI 参与指令" variant="outline" color="neutral" class="channel-surface-button" @click="act('copy_cli')" /><UButton label="复制后台首启指令" variant="outline" color="neutral" class="channel-surface-button" @click="act('copy_background')" /><UButton :to="`${base}?mode=cli`" target="_blank" label="打开接入说明" trailing-icon="i-lucide-arrow-up-right" variant="ghost" color="neutral" /></div></div></section>

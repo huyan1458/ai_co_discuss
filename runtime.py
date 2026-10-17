@@ -94,7 +94,22 @@ def runtime_view(connection, room_id):
     result["expired"] = row["status"] == "running" and row["deadline"] <= int(time.time())
     event = connection.execute("SELECT id,participant,role,status,result FROM discussion_events WHERE room_id=? ORDER BY id DESC LIMIT 1", (room_id,)).fetchone()
     result["latest_execution"] = dict(event) if event else None
+    result["participants"] = participant_executions(connection, room_id)
     return result
+
+
+def participant_executions(connection, room_id):
+    """Summarize each participant's latest execution and failure count for the progress panel."""
+    rows = connection.execute("""SELECT latest.id,latest.participant,latest.role,latest.status,latest.result,
+        latest.turn_id,latest.lease_until,(SELECT COUNT(*) FROM discussion_events AS failed
+            WHERE failed.room_id=latest.room_id AND failed.participant=latest.participant
+            AND failed.status='failed') AS failures
+        FROM discussion_events AS latest WHERE latest.room_id=? AND latest.id=(SELECT MAX(id)
+            FROM discussion_events AS other WHERE other.room_id=latest.room_id
+            AND other.participant=latest.participant) ORDER BY latest.id""", (room_id,)).fetchall()
+    now = int(time.time())
+    return [{key: row[key] for key in row.keys() if key != "lease_until"}
+            | {"stale": row["status"] == "started" and row["lease_until"] <= now} for row in rows]
 
 
 def require_control(connection, room_id, token):
@@ -115,6 +130,8 @@ def authorize_write(connection, room_id, token, operation, payload):
     hashed = token_hash(token)
     if hashed and hashed == run["control_hash"]:
         return
+    if operation in ("move", "folder", "archive", "restore", "delete"):
+        raise PermissionError("需要本房间的控制凭据；请在「接入」中导入原私有配置")
     event = connection.execute("""SELECT * FROM discussion_events WHERE room_id=? AND token_hash=?
         AND run_id=? AND generation=? AND status='started' AND lease_until>?
         AND started_at+?>?""", (room_id, hashed, run["run_id"], run["generation"],

@@ -127,6 +127,20 @@ class CliTests(unittest.TestCase):
         self.take_floor(speaker, actor)
         return turn["id"]
 
+    def test_user_request_file_round_trip_is_separate_from_background(self):
+        """Expose original requests through explicit brief reads and UTF-8 file inputs."""
+        original = "  原始请求🙂\n保留缩进  \n"
+        path = Path(self.directory.name) / "user-request.txt"
+        path.write_bytes(original.encode("utf-8"))
+        self.cli("room", "update", self.room, "--as", "Codex", "--user-request-file", path)
+        brief = self.cli("room", "brief", self.room)
+        self.assertEqual((brief["user_request"], brief["background"]), (original, "按需背景正文"))
+        self.assertNotIn("user_request", self.cli("room", "view", self.room))
+        self.cli("room", "update", self.room, "--as", "Codex", "--background", "背景更新")
+        self.assertEqual(self.cli("room", "brief", self.room)["user_request"], original)
+        self.cli("room", "update", self.room, "--as", "Codex", "--user-request", "更新的原文")
+        self.assertEqual(self.cli("room", "brief", self.room)["user_request"], "更新的原文")
+
     def test_progressive_reads_do_not_expand_materials(self):
         """Overview/list omit briefing, state, and message bodies."""
         self.cli("state", "set", self.room, "--body", "未主动读取的摘要", "--until", "0", "--as", "Codex")

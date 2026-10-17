@@ -29,6 +29,12 @@ const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: ""
 state.messages = [];
 state.message_history = null;
 state.connected = false;
+state.archive_changes = new Map();
+state.archive_version = 0;
+state.directory_error = "";
+state.directory_pending = new Map();
+state.directory_version = 0;
+state.navigation_version = 0;
 
 /** Return a DOM element by its stable ID. */
 function element(id) { return document.getElementById(id); }
@@ -170,6 +176,8 @@ function render_rooms() {
   element("archive-toggle").setAttribute("aria-pressed", String(state.archive_view));
   element("room-list").innerHTML = rooms.map((room, index) =>
     `<div class="directory-row" data-drag-room="${room.id}"><button type="button" class="directory-grip" data-drag-handle aria-label="拖动 ${escape_html(room.title)}" title="拖动排序；上下方向键移动">⠿</button><button class="room-item ${room.id === state.room?.id ? "active" : ""}" data-room="${room.id}" title="${escape_html(room.title)}"><span class="room-item-name">${escape_html(room.title)}</span><span class="room-item-number">${room.message_count}</span></button><details class="room-actions"><summary aria-label="管理 ${escape_html(room.title)}">⋯</summary><div>${room_menu_html(room, index, rooms.length)}</div></details></div>`).join("") || "<p class='local-note'>这里还没有频道。</p>";
+  if (state.creating_room) element("room-list").innerHTML += `<p class="local-note">正在创建：${escape_html(state.creating_room.title)}</p>`;
+  element("new-room").disabled = state.directory_pending.has("create-room");
   element("no-room").hidden = Boolean(state.room);
   element("room-content").hidden = !state.room;
   element("copy-reading").disabled = !state.room;
@@ -178,7 +186,10 @@ function render_rooms() {
 }
 
 /** Return the active directory without hiding archived rooms from deep links. */
-function visible_rooms() { return ordered_rooms().filter((room) => Boolean(room.archived) === state.archive_view); }
+function visible_rooms() {
+  const archived = state.archive_view && !document.documentElement.dataset.theme?.startsWith("channel");
+  return ordered_rooms().filter((room) => Boolean(room.archived) === archived);
+}
 
 /** Sort the displayed conversations without overwriting their saved manual order. */
 function ordered_rooms() {
@@ -204,38 +215,153 @@ function sort_directory(value) {
 
 /** Provide pointer and keyboard alternatives to dragging in the classic theme. */
 function room_menu_html(room, index, count) {
-  return [["rename", "重命名"], ["backup", "导出对话", state.backup_pending], [room.archived ? "restore" : "archive", room.archived ? "恢复频道" : "存档频道"],
-    ["up", "上移", state.directory_sort === "recent" || index === 0], ["down", "下移", state.directory_sort === "recent" || index === count - 1], ["delete", "删除频道"]]
+  const ordering = state.directory_pending.has("room-order");
+  return [["rename", "重命名", state.directory_pending.has(`rename:${room.id}`)], ["backup", "导出对话", state.backup_pending], [room.archived ? "restore" : "archive", room.archived ? "恢复频道" : "存档频道", state.archive_changes.has(room.id)],
+    ["up", "上移", ordering || state.directory_sort === "recent" || index === 0], ["down", "下移", ordering || state.directory_sort === "recent" || index === count - 1], ["delete", "删除频道", state.directory_pending.has(`rename:${room.id}`)]]
     .map(([action, label, disabled]) => `<button type="button" data-manage-room="${room.id}" data-room-action="${action}" ${disabled ? "disabled" : ""}>${label}</button>`).join("");
 }
 
 /** Switch only the directory filter, preserving the open conversation and drafts. */
 function toggle_archives() { state.archive_view = !state.archive_view; render_rooms(); publish_view(); }
 
-/** Submit one channel operation and refresh the directory from committed data. */
+/** Dispatch directory changes without waiting for unrelated reads. */
 async function manage_channel({ id, action, title, confirm_title, before_id, folder_id }) {
   if (action === "folder") return assign_channel_folder(id, folder_id ?? null);
-  const endpoint = action === "rename" ? "topic" : action;
-  const payload = { actor: "用户" };
-  if (action === "rename") payload.title = title;
-  if (action === "delete") payload.confirm_title = confirm_title;
-  if (action === "move") payload.before_id = before_id;
-  await request_json(`/api/rooms/${id}/${endpoint}`, payload);
-  state.refresh_version++;
-  const folder_version = state.folder_version;
-  const directory = await request_json("/api/rooms");
-  state.rooms = directory.rooms.map((room) => merge_room_folder(room, folder_version));
-  set_folder_directory(directory);
-  if (action === "restore") state.archive_view = false;
-  if (state.room?.id === id && ["archive", "delete"].includes(action)) {
-    await select_room(visible_rooms()[0]?.id);
-  } else await refresh_room();
-  render_rooms();
-  show_toast({ rename: "频道已重命名", archive: "频道已存档", restore: "频道已恢复", delete: "频道已删除", move: "顺序已保存", folder: "话题归类已更新" }[action]);
+  if (["archive", "restore"].includes(action)) return archive_channel(id, action === "archive");
+  if (action === "rename") return rename_channel(id, title);
+  if (action === "move") return reorder_channel(id, before_id);
+  if (action === "delete") return delete_channel(id, confirm_title);
 }
 
-/** Merge fresh room data without undoing a folder move newer than the read. */
-function merge_room_folder(room, version) {
+/** Save an optimistic directory edit with a lock limited to its affected resource. */
+async function update_directory(change) {
+  if (state.directory_pending.has(change.key)) return;
+  state.directory_pending.set(change.key, change);
+  state.directory_version++;
+  state.directory_error = "";
+  change.apply();
+  render_rooms();
+  publish_view();
+  try {
+    const saved = await change.save();
+    change.commit?.(saved);
+    return saved;
+  } catch (error) {
+    change.rollback();
+    state.directory_error = `${change.label}失败，已恢复原状态：${error.message}`;
+    throw error;
+  } finally {
+    state.directory_pending.delete(change.key);
+    state.directory_version++;
+    render_rooms();
+    if (state.room?.experts) render_room();
+    publish_view();
+  }
+}
+
+/** Patch only the selected room fields, retaining unrelated metadata and drafts. */
+function patch_directory_room(id, patch) {
+  state.rooms = state.rooms.map(room => room.id === id ? { ...room, ...patch } : room);
+  if (state.room?.id === id) { state.room = { ...state.room, ...patch }; if (state.room.experts) render_room(); }
+}
+
+/** Reapply an ID order to current objects, retaining new items and later metadata. */
+function directory_order(items, ids) {
+  const positions = new Map(ids.map((id, index) => [id, index]));
+  return [...items].sort((left, right) => (positions.get(left.id) ?? ids.length) - (positions.get(right.id) ?? ids.length));
+}
+
+/** Move one existing item before another, or to the end of the list. */
+function move_directory_item(items, id, before_id) {
+  const moving = items.find(item => item.id === id);
+  const remaining = items.filter(item => item.id !== id);
+  const index = before_id == null ? remaining.length : remaining.findIndex(item => item.id === before_id);
+  if (!moving || index < 0) return items;
+  remaining.splice(index, 0, moving);
+  return remaining;
+}
+
+/** Rename immediately, then merge only the name returned by the server. */
+async function rename_channel(id, title) {
+  const room = state.rooms.find(item => item.id === id);
+  if (!room || !title?.trim()) return;
+  const patch = { title: title.trim() };
+  return update_directory({ key: `rename:${id}`, patch, label: `「${room.title}」重命名`,
+    apply: () => patch_directory_room(id, patch), rollback: () => patch_directory_room(id, { title: room.title }),
+    save: () => request_json(`/api/rooms/${id}/topic`, { actor: "用户", ...patch }),
+    commit: saved => patch_directory_room(id, { title: saved.title }) });
+}
+
+/** Show the new room order before its single write completes. */
+async function reorder_channel(id, before_id) {
+  const previous = state.rooms.map(room => room.id);
+  return update_directory({ key: "room-order", label: "频道排序",
+    apply: () => { state.rooms = move_directory_item(state.rooms, id, before_id); },
+    rollback: () => { state.rooms = directory_order(state.rooms, previous); },
+    save: () => request_json(`/api/rooms/${id}/move`, { actor: "用户", before_id }) });
+}
+
+/** Hide a confirmed deletion immediately and restore only that entry on failure. */
+async function delete_channel(id, confirm_title) {
+  const room = state.rooms.find(item => item.id === id);
+  if (!room || confirm_title !== room.title) throw new Error("请输入完整频道名称确认删除");
+  const previous = state.rooms.map(item => item.id);
+  return update_directory({ key: `delete:${id}`, label: `「${room.title}」删除`,
+    apply: () => {
+      state.rooms = state.rooms.filter(item => item.id !== id);
+      if (state.room?.id === id) run_action(() => select_room(visible_rooms()[0]?.id));
+    },
+    rollback: () => { state.rooms = directory_order([...state.rooms, room], previous); },
+    save: () => request_json(`/api/rooms/${id}/delete`, { actor: "用户", confirm_title }) });
+}
+
+/** Keep pending or newer archive changes when an older read finishes. */
+function merge_room_archive(room, version) {
+  const current = state.archive_changes.get(room.id)
+    || (version !== state.archive_version && state.rooms.find((item) => item.id === room.id));
+  return current ? { ...room, archived: current.archived, phase: current.phase ?? room.phase } : room;
+}
+
+/** Update archive fields without replacing newer metadata, navigation or drafts. */
+function display_channel_archive(id, change, expected) {
+  const update = (room) => ({ ...room, archived: change.archived,
+    phase: change.phase === undefined || (expected?.phase !== undefined && room.phase !== expected.phase) ? room.phase : change.phase });
+  state.rooms = state.rooms.map((room) => room.id === id ? update(room) : room);
+  if (state.room?.id === id) { state.room = update(state.room); if (state.room.experts) render_room(); }
+  render_rooms();
+  publish_view();
+}
+
+/** Move a channel immediately and reconcile only its archive fields after saving. */
+async function archive_channel(id, archived) {
+  const room = state.room?.id === id ? state.room : state.rooms.find((item) => item.id === id);
+  if (!room || state.archive_changes.has(id) || Boolean(room.archived) === archived) return;
+  const previous = { archived: Boolean(room.archived), phase: room.phase };
+  const change = { archived, phase: archived && room.phase && room.phase !== "concluded" ? "paused" : room.phase };
+  state.archive_changes.set(id, change);
+  state.archive_version++;
+  state.directory_error = "";
+  display_channel_archive(id, change);
+  try {
+    const saved = await request_json(`/api/rooms/${id}/${archived ? "archive" : "restore"}`, { actor: "用户" });
+    display_channel_archive(id, { archived: Boolean(saved.archived), phase: saved.phase }, change);
+  } catch (error) {
+    state.directory_error = `「${room.title}」${archived ? "存档" : "恢复"}失败，已恢复原状态：${error.message}`;
+    display_channel_archive(id, previous, change);
+    throw error;
+  } finally {
+    state.archive_changes.delete(id);
+    state.archive_version++;
+    publish_view();
+  }
+}
+
+/** Merge fresh room data without undoing directory changes newer than the read. */
+function merge_room_folder(room, version, archive_version, directory_version) {
+  room = merge_room_archive(room, archive_version);
+  const current_name = directory_version !== state.directory_version && state.rooms.find(item => item.id === room.id);
+  const patch = state.directory_pending.get(`rename:${room.id}`)?.patch || (current_name && { title: current_name.title });
+  if (patch) room = { ...room, ...patch };
   if (state.folder_moves.has(room.id)) return { ...room, folder_id: state.folder_moves.get(room.id) };
   const current = version !== state.folder_version && state.rooms.find((item) => item.id === room.id);
   return current ? { ...room, folder_id: current.folder_id ?? null } : room;
@@ -254,6 +380,9 @@ async function assign_channel_folder(id, folder_id) {
   const room = state.rooms.find((item) => item.id === id);
   if (!room || state.folder_moves.has(id) || (room.folder_id ?? null) === folder_id) return;
   const previous_folder = room.folder_id ?? null;
+  if (state.folders.some(folder => folder.id === folder_id && folder.pending)) return;
+  if (folder_id && state.directory_pending.get("folder-order")?.removed_folder === folder_id) return;
+  state.directory_error = "";
   state.folder_moves.set(id, folder_id);
   state.folder_version++;
   display_channel_folder(id, folder_id);
@@ -262,6 +391,7 @@ async function assign_channel_folder(id, folder_id) {
     display_channel_folder(id, saved.folder_id ?? null);
     show_toast("话题归类已更新");
   } catch (error) {
+    state.directory_error = `「${room.title}」归类失败，已恢复原状态：${error.message}`;
     display_channel_folder(id, previous_folder);
     throw error;
   } finally {
@@ -270,26 +400,59 @@ async function assign_channel_folder(id, folder_id) {
   }
 }
 
-/** Create a shared flat folder and refresh the directory without changing selection. */
+/** Display a provisional folder while its identifier is being assigned. */
 async function create_folder(name) {
-  await request_json("/api/folders", { name });
-  const folder_version = state.folder_version;
-  const directory = await request_json("/api/rooms");
-  state.rooms = directory.rooms.map((room) => merge_room_folder(room, folder_version));
-  set_folder_directory(directory);
-  render_rooms();
-  publish_view();
-  show_toast("文件夹已创建");
+  const folder = { id: `pending-${new_submission_id()}`, name: name.trim(), pending: true };
+  return update_directory({ key: "create-folder", label: `文件夹「${folder.name}」创建`,
+    apply: () => { state.folders = [...state.folders, folder]; },
+    rollback: () => { state.folders = state.folders.filter(item => item.id !== folder.id); },
+    save: () => request_json("/api/folders", { name: folder.name }),
+    commit: saved => { state.folders = state.folders.map(item => item.id === folder.id ? saved : item); } });
 }
 
 /** Rename the exact folder without moving its conversations or changing selection. */
 async function rename_folder({ id, name }) {
-  state.refresh_version++;
-  const saved = await request_json(`/api/folders/${encodeURIComponent(id)}/rename`, { name });
-  state.refresh_version++;
-  state.folders = state.folders.map((folder) => folder.id === id ? saved : folder);
-  publish_view();
-  show_toast("文件夹已重命名");
+  const folder = state.folders.find(item => item.id === id);
+  if (!folder || folder.pending || !name.trim()) return;
+  const display = value => { state.folders = state.folders.map(item => item.id === id ? { ...item, name: value } : item); };
+  return update_directory({ key: `folder-name:${id}`, label: `文件夹「${folder.name}」重命名`,
+    apply: () => display(name.trim()), rollback: () => display(folder.name),
+    save: () => request_json(`/api/folders/${encodeURIComponent(id)}/rename`, { name: name.trim() }),
+    commit: saved => display(saved.name) });
+}
+
+/** Remove only a grouping; keep its conversations, current transcript and drafts. */
+async function delete_folder(id) {
+  const folder = state.folders.find(item => item.id === id);
+  const members = state.rooms.filter(room => room.folder_id === id).map(room => room.id);
+  if (!folder || folder.pending || state.directory_pending.has("folder-order")
+    || state.directory_pending.has(`folder-name:${id}`) || state.directory_pending.has("create-folder")
+    || state.creating_room?.folder_id === id || members.some(room_id => state.folder_moves.has(room_id))) return;
+  const previous = state.folders.map(item => item.id);
+  const position = state.uncategorized_position;
+  members.forEach(room_id => state.folder_moves.set(room_id, null));
+  state.folder_version++;
+  try {
+    return await update_directory({ key: "folder-order", removed_folder: id, label: `文件夹「${folder.name}」移除`,
+      apply: () => {
+        state.folders = state.folders.filter(item => item.id !== id);
+        if (position != null) {
+          const next = position - Number(previous.indexOf(id) < position);
+          state.uncategorized_position = next < state.folders.length ? next : null;
+        }
+        members.forEach(room_id => patch_directory_room(room_id, { folder_id: null }));
+      },
+      rollback: () => {
+        state.folders = directory_order([...state.folders, folder], previous);
+        state.uncategorized_position = position;
+        members.forEach(room_id => patch_directory_room(room_id, { folder_id: id }));
+      },
+      save: () => request_json(`/api/folders/${encodeURIComponent(id)}/delete`, {}) });
+  } finally {
+    members.forEach(room_id => state.folder_moves.delete(room_id));
+    state.folder_version++;
+    publish_view();
+  }
 }
 
 /** Apply folder order and the virtual group's placement together. */
@@ -307,7 +470,7 @@ function ordered_folders() {
 
 /** Persist a folder's position without changing its contents or the open draft. */
 async function move_folder({ id, before_id, direction }) {
-  if (state.folder_order_pending) return;
+  if (state.folder_order_pending || state.folders.some(folder => folder.pending)) return;
   const groups = ordered_folders();
   const index = groups.findIndex((folder) => folder.order_id === id);
   if (index < 0) return;
@@ -316,15 +479,18 @@ async function move_folder({ id, before_id, direction }) {
     before_id = groups[direction < 0 ? index - 1 : index + 2]?.order_id ?? null;
   }
   if (before_id === id) return;
+  const previous = groups.map(folder => folder.order_id);
+  const reorder = ids => {
+    const ordered = directory_order(ordered_folders().map(folder => ({ ...folder, id: folder.order_id })), ids);
+    state.uncategorized_position = ordered.findIndex(folder => folder.id === "__uncategorized__");
+    state.folders = ordered.filter(folder => folder.id !== "__uncategorized__");
+  };
+  const next = move_directory_item(groups.map(folder => ({ ...folder, id: folder.order_id })), id, before_id).map(folder => folder.id);
   state.folder_order_pending = true;
-  state.refresh_version++;
   try {
-    const result = await request_json(`/api/folders/${encodeURIComponent(id)}/move`, { before_id });
-    state.refresh_version++;
-    set_folder_directory(result);
-    publish_view();
-    show_toast("文件夹顺序已保存");
-  } finally { state.folder_order_pending = false; }
+    await update_directory({ key: "folder-order", label: "文件夹排序", apply: () => reorder(next), rollback: () => reorder(previous),
+      save: () => request_json(`/api/folders/${encodeURIComponent(id)}/move`, { before_id }) });
+  } finally { state.folder_order_pending = false; publish_view(); }
 }
 
 /** Move a channel by one visible slot, also available without drag support. */
@@ -474,14 +640,18 @@ async function load_message_history(room_id, version) {
 
 /** Refresh a room with version guards so slower requests cannot change the active view. */
 async function refresh_room() {
-  if (state.dragged_room || state.folder_order_pending) return;
+  if (state.dragged_room) return;
   const version = ++state.refresh_version;
   const folder_version = state.folder_version;
+  const archive_version = state.archive_version;
+  const directory_version = state.directory_version;
   const room_id = state.room?.id;
   const directory = await request_json("/api/rooms");
   if (version !== state.refresh_version) return;
-  state.rooms = directory.rooms.map((room) => merge_room_folder(room, folder_version));
-  set_folder_directory(directory);
+  if (!state.directory_pending.size && directory_version === state.directory_version) {
+    state.rooms = directory.rooms.map((room) => merge_room_folder(room, folder_version, archive_version, directory_version));
+    set_folder_directory(directory);
+  }
   if (state.room && !state.rooms.some((item) => item.id === state.room.id)) return select_room(visible_rooms()[0]?.id);
   if (!state.room) {
     if (visible_rooms().length) return select_room(visible_rooms()[0].id);
@@ -494,7 +664,7 @@ async function refresh_room() {
     state.tab === "discussion" ? load_message_history(room_id, version) : null,
   ]);
   if (version !== state.refresh_version || state.room?.id !== room_id) return;
-  state.room = merge_room_folder(room, folder_version);
+  state.room = merge_room_folder(room, folder_version, archive_version, directory_version);
   render_rooms();
   render_room();
   if (result) render_messages(result);
@@ -503,6 +673,7 @@ async function refresh_room() {
 
 /** Select a room and reset room-specific draft and filter state. */
 async function select_room(room_id) {
+  state.navigation_version++;
   state.refresh_version++;
   state.room = state.rooms.find((room) => room.id === room_id);
   state.page = 1;
@@ -540,6 +711,7 @@ async function select_room(room_id) {
 
 /** Switch between history, manually maintained state, and participation guidance. */
 function select_tab(tab_name) {
+  state.navigation_version++;
   state.tab = tab_name;
   document.querySelectorAll("[data-tab]").forEach((tab) => {
     tab.classList.toggle("active", tab.dataset.tab === tab_name);
@@ -618,6 +790,9 @@ function render_access() {
   element("runtime-execution").textContent = execution_label(runtime.latest_execution);
   element("runtime-pause").hidden = runtime.status !== "running";
   element("runtime-export").hidden = !runtime.protected;
+  element("runtime-import").hidden = !runtime.protected;
+  const imported = state.runtime_import?.room_id === state.room.id ? state.runtime_import : null;
+  element("runtime-import-status").textContent = imported?.text || "";
   if (state.runtime_draft_room !== state.room.id) {
     const saved = JSON.parse(localStorage.getItem(`discuss-workspace:${state.room.id}`) || "{}");
     element("runtime-project").value = saved.discussion_project || "";
@@ -664,27 +839,38 @@ async function check_limits() {
   show_toast("已核对讨论上限");
 }
 
-/** Create a room from the dialog and switch into its empty history. */
-async function submit_room(event, folder_id = null) {
-  event.preventDefault();
-  const payload = { title: element("new-room-title").value, goal: element("new-room-goal").value,
-    host: element("new-room-host").value, background: element("new-room-background").value,
+/** Capture a creation draft before closing its dialog or starting network work. */
+function room_creation_payload(folder_id) {
+  return { title: element("new-room-title").value, goal: element("new-room-goal").value,
+    host: element("new-room-host").value, user_request: element("new-room-user_request").value, background: element("new-room-background").value,
     boundaries: element("new-room-boundaries").value, experts: read_expert_inputs("new-expert-modes"),
     runtime_mode: element("new-room-mode").value, limits: read_limits("new-room"), folder_id };
+}
+
+/** Show creation progress locally without blocking or later hijacking navigation. */
+async function submit_room(event, folder_id = null) {
+  event.preventDefault();
+  if (state.directory_pending.has("create-room")) return;
+  const payload = room_creation_payload(folder_id);
   const signature = JSON.stringify(payload);
   if (state.pending_room?.signature !== signature) state.pending_room = { signature, id: new_submission_id(), token: crypto.randomUUID() };
   const token = payload.runtime_mode === "automatic" ? state.pending_room.token : undefined;
-  const room = await request_json("/api/rooms", { ...payload, submission_id: state.pending_room.id }, token);
-  if (token) localStorage.setItem(`discuss-access:${room.id}`, token);
-  state.pending_room = null;
-  state.archive_view = false;
-  if (!state.rooms.some((existing) => existing.id === room.id)) state.rooms.push(room);
+  const navigation = state.navigation_version;
   element("room-dialog").close();
-  element("room-form").reset();
-  render_expert_inputs("new-expert-modes", default_experts());
-  await select_room(room.id);
-  select_tab(document.documentElement.dataset.theme.startsWith("channel") ? "discussion" : "topic");
-  show_toast("话题已创建");
+  const room = await update_directory({ key: "create-room", label: `「${payload.title}」创建`,
+    apply: () => { state.creating_room = payload; }, rollback: () => { state.creating_room = null; },
+    save: () => request_json("/api/rooms", { ...payload, submission_id: state.pending_room.id }, token),
+    commit: saved => {
+      if (token) localStorage.setItem(`discuss-access:${saved.id}`, token);
+      state.creating_room = null;
+      if (!state.rooms.some(existing => existing.id === saved.id)) state.rooms.push(saved);
+    } });
+  state.pending_room = null;
+  if (JSON.stringify(room_creation_payload(folder_id)) === signature) {
+    element("room-form").reset();
+    render_expert_inputs("new-expert-modes", default_experts());
+  }
+  if (state.navigation_version === navigation) { state.archive_view = false; await select_room(room.id); }
 }
 
 /** Persist a manually edited summary with the snapshot it was based on. */
@@ -768,6 +954,32 @@ async function choose_runtime(mode) {
   show_toast(mode === "automatic" ? "已选择全自动；请完成本机接入配置后启动" : "已选择手动复制冷启动");
 }
 
+/** Pause automatic execution, or the topic phase when no run is active. */
+async function pause_discussion() {
+  if (state.room.runtime?.status === "running") return pause_runtime();
+  await request_json(`/api/rooms/${state.room.id}/topic`, { actor: "用户", phase: "paused" });
+  await refresh_room();
+  show_toast("讨论已暂停，原安排保留");
+}
+
+/** End early with a host summary limited to the configured closing reserve. */
+async function force_close() {
+  await request_json(`/api/rooms/${state.room.id}/limits`, { actor: "用户", force: true });
+  await refresh_room();
+  show_toast("已取消当前安排，等待主持人总结收尾");
+}
+
+/** End early without a summary, keeping every original message. */
+async function conclude_discussion() {
+  const turn = state.room.current_turn;
+  if (turn && ["pending", "notified"].includes(turn.status)) {
+    await request_json(`/api/rooms/${state.room.id}/turns/${turn.id}`, { actor: "用户", status: "cancelled" });
+  }
+  await request_json(`/api/rooms/${state.room.id}/topic`, { actor: "用户", phase: "concluded" });
+  await refresh_room();
+  show_toast("讨论已直接收束，历史记录保留");
+}
+
 /** Revoke active execution before the local adapters are stopped. */
 async function pause_runtime() {
   await request_json(`/api/rooms/${state.room.id}/runtime`, { action: "pause", revision: state.room.runtime.revision });
@@ -788,6 +1000,31 @@ function export_runtime() {
   link.href = url; link.download = `discussion-${state.room.id}.json`; link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   show_toast("已导出私有接入配置；按部署说明填写本机软件路径，不要公开此文件");
+}
+
+/** Validate a private setup file against this site and room before storing its owner credential. */
+async function import_runtime(file) {
+  if (!file || !state.room) return;
+  const room_id = state.room.id;
+  state.runtime_import = { room_id, text: "正在核验接入配置…", error: false };
+  publish_view();
+  try {
+    const config = JSON.parse(await file.text());
+    if (!config || typeof config.site !== "string" || typeof config.token !== "string" || !config.token) {
+      throw new Error("请选择包含 site、room、token 的私有接入配置");
+    }
+    if (config.room !== room_id) throw new Error("配置属于其他频道，请选择本频道的接入配置");
+    if (new URL(config.site).origin !== location.origin) throw new Error("配置站点与当前站点不符，请使用当前站点的接入配置");
+    await request_json(`/api/rooms/${room_id}/events`, undefined, config.token);
+    localStorage.setItem(`discuss-access:${room_id}`, config.token);
+    state.runtime_import = { room_id, text: "控制凭据已导入，可在本浏览器管理此频道", error: false };
+  } catch (error) {
+    const text = error instanceof SyntaxError ? "配置文件不是有效的 JSON" : error.message;
+    state.runtime_import = { room_id, text, error: true };
+  } finally {
+    if (state.room?.id === room_id) render_access();
+    publish_view();
+  }
 }
 
 /** Supply participation defaults for a new topic. */
@@ -814,13 +1051,13 @@ function render_topic() {
   element("topic-phase").textContent = PHASE_LABELS[room.phase];
   element("topic-host").textContent = `主持人：${display_name(room.host)} · 可以同时作为专家参与`;
   element("discussion-limits-status").textContent = limits_label(room.limits);
-  for (const field of ["goal", "focus", "background", "boundaries"]) element(`topic-${field}`).textContent = room[field] || "尚未填写";
+  for (const field of ["goal", "focus", "user_request", "background", "boundaries"]) element(`topic-${field}`).textContent = room[field] || "尚未填写";
   element("topic-experts").textContent = Object.entries(room.experts).map(([name, mode]) =>
     `${name} · ${mode === "cli" ? "本地 CLI，可读可写" : "在线 AI，只读"}${name === room.host ? " · 兼任主持人" : ""}`).join("\n");
   element("turn-history").href = `${location.origin}/r/${room.id}/turns?page=1`;
   element("host-operator").textContent = `当前以 ${display_name(room.host)} 的主持职责管理话题。AI 主持人通过 CLI 操作；用户可在这里协助。`;
   if (!state.topic_dirty) {
-    for (const field of ["title", "goal", "focus", "background", "boundaries"]) element(`topic-${field}-input`).value = room[field];
+    for (const field of ["title", "goal", "focus", "user_request", "background", "boundaries"]) element(`topic-${field}-input`).value = room[field] || "";
     element("topic-host-select").value = room.host;
     element("topic-phase-select").value = room.phase;
     for (const key of ["max_rounds", "max_minutes", "execution_minutes", "on_limit", "summary_minutes"]) {
@@ -891,7 +1128,7 @@ async function save_topic(event) {
   event.preventDefault();
   const payload = { actor: state.room.host, host: element("topic-host-select").value,
     phase: element("topic-phase-select").value, experts: read_expert_inputs("topic-expert-modes"), limits: read_limits("topic") };
-  for (const field of ["title", "goal", "focus", "background", "boundaries"]) payload[field] = element(`topic-${field}-input`).value;
+  for (const field of ["title", "goal", "focus", "user_request", "background", "boundaries"]) payload[field] = element(`topic-${field}-input`).value;
   await request_json(`/api/rooms/${state.room.id}/topic`, payload);
   state.topic_dirty = false;
   await refresh_room();
@@ -963,13 +1200,19 @@ function update_composer_role() {
 function bind_host_controls() {
   const actions = { "topic-context": () => select_tab("context"), "edit-host-brief": () => select_tab("context"), "topic-history": () => select_tab("discussion"),
     "runtime-auto": () => choose_runtime("automatic"), "runtime-manual": () => choose_runtime("manual"),
-    "runtime-export": export_runtime, "runtime-pause": pause_runtime, "check-discussion-limits": check_limits,
+    "runtime-export": export_runtime, "runtime-import": () => element("runtime-import-file").click(),
+    "runtime-pause": pause_runtime, "check-discussion-limits": check_limits,
     "take-floor": () => change_floor("take"), "return-floor": () => change_floor("return"),
     "copy-turn": copy_turn, "confirm-notified": () => change_turn_status("notified"), "cancel-turn": () => change_turn_status("cancelled"),
     "forward-turn": prepare_turn_answer, "cancel-turn-answer": cancel_turn_reply,
     "view-turn-answer": () => show_message(state.room.current_turn.answer_id),
     "copy-host": () => copy_text(`请以 ${state.room.host} 身份主持此话题，可兼任专家。\n话题入口：${location.origin}/r/${state.room.id}?mode=cli\n主持协议：${location.origin}/r/${state.room.id}/protocol${workspace_instruction()}\n由专家自主按需阅读；通知不附上下文。实际联系专家后再确认通知状态。${state.room.runtime?.protected ? '\n用户须提供私有配置的本机路径，写入使用 --access-file，不读取或公开 token。' : ''}`) };
   Object.entries(actions).forEach(([id, action]) => element(id).addEventListener("click", () => run_action(action)));
+  element("runtime-import-file").addEventListener("change", (event) => {
+    const file = event.target.files[0];
+    event.target.value = "";
+    run_action(() => import_runtime(file));
+  });
   element("topic-form").addEventListener("submit", (event) => run_action(() => save_topic(event)));
   element("turn-form").addEventListener("submit", (event) => run_action(() => schedule_turn(event)));
   element("topic-form").addEventListener("input", () => { state.topic_dirty = true; });
@@ -1040,10 +1283,16 @@ function bind_directory_controls() {
   });
   element("manage-form").addEventListener("submit", (event) => {
     event.preventDefault();
+    const management = { ...state.management, title: element("manage-input").value, confirm_title: element("manage-input").value };
+    if (["archive", "restore", "rename", "delete"].includes(management.action)) {
+      element("manage-dialog").close();
+      run_action(() => manage_channel(management));
+      return;
+    }
     run_action(async () => {
       element("manage-submit").disabled = true;
       try {
-        await manage_channel({ ...state.management, title: element("manage-input").value, confirm_title: element("manage-input").value });
+        await manage_channel(management);
         element("manage-dialog").close();
       } finally { element("manage-submit").disabled = false; publish_view(); }
     });
@@ -1060,9 +1309,11 @@ function bind_directory_controls() {
 /** Capture a title or grip without turning a normal title click into a move. */
 function start_directory_drag(event) {
   const handle = event.target.closest("[data-drag-handle], [data-drag-title]");
-  if (!handle || handle.disabled || event.button !== 0 || state.dragged_room || state.folder_order_pending) return;
+  if (!handle || handle.disabled || event.button !== 0 || state.dragged_room) return;
   const row = handle.closest("[data-drag-room], [data-drag-folder]");
   if (!row || state.folder_moves.has(row.dataset.dragRoom)) return;
+  if (row.hasAttribute("data-drag-folder") && (state.folder_order_pending || state.folders.some(folder => folder.pending))) return;
+  if (row.hasAttribute("data-drag-room") && state.directory_pending.has("room-order")) return;
   delete handle.dataset.suppressDragClick;
   handle.removeEventListener("click", suppress_directory_drag_click, true);
   if (event.pointerType === "touch" && handle.hasAttribute("data-drag-title")) return;
@@ -1130,6 +1381,7 @@ function update_directory_drag(event) {
   if (drag.kind === "folder") return update_folder_drop(drag, hit, event.clientY);
   const folder = hit.closest("[data-room-folder]");
   const folder_id = folder?.dataset.roomFolder || null;
+  if (state.folders.some(item => item.id === folder_id && item.pending)) return;
   if (folder && folder_id !== drag.folder_id) {
     folder.querySelector("[data-drop-folder]")?.classList.add("drop-folder");
     drag.target = { action: "folder", folder_id };
@@ -1194,6 +1446,7 @@ function finish_directory_drag(event) {
 
 /** Bind forms, filters, and explicit read/write actions. */
 function bind_controls() {
+  document.addEventListener("input", () => { state.navigation_version++; });
   const actions = { "new-room": () => element("room-dialog").showModal(), "empty-create": () => element("room-dialog").showModal(),
     "open-settings": () => element("settings-dialog").showModal(), "close-settings": () => element("settings-dialog").close(),
     "close-room-dialog": () => element("room-dialog").close(), "close-message-dialog": () => element("message-dialog").close(),
@@ -1262,6 +1515,9 @@ function view_snapshot() {
   const experts = Object.fromEntries(["new-expert-modes", "topic-expert-modes"].map((id) =>
     [id, element(id) ? read_expert_inputs(id) : {}]));
   return { rooms: ordered_rooms(), folders: state.folders, folder_groups: ordered_folders(), room: state.room, archive_view: state.archive_view, directory_sort: state.directory_sort, messages: state.messages, total: state.message_total,
+    archive_pending: [...state.archive_changes.keys()], directory_error: state.directory_error,
+    runtime_import: state.runtime_import?.room_id === state.room?.id ? state.runtime_import : null,
+    directory_pending: [...state.directory_pending.keys()], folder_pending: [...state.folder_moves.keys()], creating_room: state.creating_room,
     connected: state.connected, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
     mention_only: state.mention_only, reply_to: state.reply_to, turn_reply_to: state.turn_reply_to,
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
@@ -1272,6 +1528,7 @@ function view_snapshot() {
 function write_view_field(id, value) {
   const control = element(id);
   if (!control || !control.matches("input, textarea, select")) return;
+  state.navigation_version++;
   control.value = value ?? "";
   control.dispatchEvent(new Event("input", { bubbles: true }));
   control.dispatchEvent(new Event("change", { bubbles: true }));
@@ -1326,9 +1583,10 @@ async function backup_room(room_id = state.room?.id) {
 
 /** Execute a named view command, retaining existing retry and provenance rules. */
 async function execute_view_action(name, value) {
+  if (!["refresh", "create"].includes(name)) state.navigation_version++;
   const event = { preventDefault() {} };
   const actions = { refresh: refresh_room, room: select_room, tab: select_tab,
-    archives: toggle_archives, backup: backup_room, manage_channel, move_channel, create_folder, move_folder, rename_folder, sort_directory,
+    archives: toggle_archives, backup: backup_room, manage_channel, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
     send: () => send_message(event), create: (folder_id) => submit_room(event, folder_id),
     save_context: () => save_context(event), save_topic: () => save_topic(event),
     schedule: () => schedule_turn(event), filter: filter_view, reply: set_view_reply,
@@ -1336,7 +1594,7 @@ async function execute_view_action(name, value) {
     copy_turn, notify: () => change_turn_status("notified"), cancel_turn: () => change_turn_status("cancelled"),
     take_floor: () => change_floor("take"), return_floor: () => change_floor("return"),
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
-    choose_runtime, export_runtime, pause_runtime, check_limits,
+    choose_runtime, export_runtime, import_runtime, pause_runtime, check_limits, pause_discussion, force_close, conclude_discussion,
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };
   try {
     await actions[name](value);

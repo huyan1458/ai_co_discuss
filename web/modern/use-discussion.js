@@ -11,6 +11,7 @@ export function use_discussion() {
   const field = (id) => computed({ get: () => view.value.fields[id] || "",
     set: (value) => bridge.write_field(id, value) });
   async function act(name, value) {
+    if (["manage_channel", "move_channel", "create_folder", "rename_folder", "delete_folder", "move_folder", "create"].includes(name)) return bridge.execute(name, value);
     if (pending.value) return false;
     pending.value = name;
     try { return await bridge.execute(name, value); }

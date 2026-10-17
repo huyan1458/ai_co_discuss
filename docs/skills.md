@@ -13,7 +13,7 @@
 | 技能 | 使用者 | 职责 |
 | --- | --- | --- |
 | [discuss-participant](../.agents/skills/discuss-participant/SKILL.md) | 所有参与者，包括主持人 | 按需阅读、发言权、真实署名、可靠写入与自身任务启停 |
-| [discuss-host](../.agents/skills/discuss-host/SKILL.md) | 主持人 | 同时调用参与技能；接入专家、决定下一安排、保存进度和收束 |
+| [discuss-host](../.agents/skills/discuss-host/SKILL.md) | 主持人 | 同时调用参与技能；独立保存用户原文、理解用户意图、接入专家、安排后续发言、保存进度和收束 |
 | [discuss-report](../.agents/skills/discuss-report/SKILL.md) | 报告整理者 | 只读既有讨论，按主题综合分析并保存原文、来源与未决事项；不启动讨论或改写正式决策 |
 
 技能与网站角色都按实际能力使用。本地可执行 Python 并联网的 AI 可设为 `cli`；只在网页原聊天回答的 AI 设为 `online`。不能因名称是 Codex、Claude 或 Gemini 就推定它有 CLI 或定时能力。

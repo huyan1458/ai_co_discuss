@@ -38,6 +38,10 @@ export function room_markdown(snapshot) {
   const tables = snapshot.tables;
   const room = tables.rooms[0];
   const settings = tables.topic_settings[0];
+  const request = tables.room_user_requests?.[0];
+  const legacy = !request && settings?.background.match(/^用户原文[：:][ \t]*(?:\r?\n)?([\s\S]*?)(?:\r?\n){2,}((?:项目背景与入口|背景)[：:][\s\S]*)$/);
+  const user_request = request?.text ?? (legacy ? legacy[1] : "");
+  const background = legacy ? legacy[2] : settings?.background;
   const brief = tables.room_briefs[0];
   const details = new Map(tables.message_details.map((row) => [row.message_id, row]));
   const summaries = new Map(tables.message_summaries.map((row) => [row.message_id, row]));
@@ -47,7 +51,7 @@ export function room_markdown(snapshot) {
     `目录状态：${tables.room_directory[0]?.archived ? "已存档" : "使用中"}；文件夹：${tables.topic_folders[0]?.name || "未分组"}`,
     "## 目标", original_block(room.goal)];
   if (settings) lines.push(`主持人：${settings.host}；阶段：${settings.phase}`, "参与配置：", original_block(settings.experts),
-    "## 背景", original_block(settings.background), "## 讨论边界", original_block(settings.boundaries),
+    "## 用户原文", original_block(user_request), "## 背景", original_block(background), "## 讨论边界", original_block(settings.boundaries),
     "## 当前焦点", original_block(settings.focus));
   if (brief) lines.push("## 主持简报", `覆盖至 #${brief.until}；更新：${brief.updated_at}`, original_block(brief.text));
   if (tables.discussion_limits?.[0]) lines.push("## 讨论上限", original_block(JSON.stringify(tables.discussion_limits[0], null, 2)));

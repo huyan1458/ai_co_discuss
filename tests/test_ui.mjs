@@ -93,6 +93,59 @@ test("mode selection retains its target when the user changes rooms during refre
   assert.equal(fixture.storage.get('discuss-access:room-b'), undefined);
 });
 
+test("imported control credentials stay bound to the selected room during navigation", async () => {
+  const fixture = theme_fixture();
+  const calls = [];
+  let finish;
+  fixture.context.test_state.room = { id: "room-a" };
+  Object.assign(fixture.context, { URL, location: { origin: "https://discuss.example" }, render_access() {},
+    request_json: (path, payload, token) => {
+      calls.push({ path, payload, token });
+      return new Promise(resolve => { finish = resolve; });
+    } });
+  const importing = fixture.context.import_runtime({ text: async () => JSON.stringify({
+    site: "https://discuss.example", room: "room-a", token: "owner-a" }) });
+  await new Promise(setImmediate);
+  assert.equal(fixture.storage.get("discuss-access:room-a"), undefined);
+  fixture.context.test_state.room = { id: "room-b" };
+  finish({ events: [] });
+  await importing;
+  assert.deepEqual(calls, [{ path: "/api/rooms/room-a/events", payload: undefined, token: "owner-a" }]);
+  assert.equal(fixture.storage.get("discuss-access:room-a"), "owner-a");
+  assert.equal(fixture.storage.get("discuss-access:room-b"), undefined);
+});
+
+test("credential imports reject a different site or room before sending any secret", async () => {
+  const fixture = theme_fixture();
+  const requests = [];
+  fixture.context.test_state.room = { id: "room-a" };
+  Object.assign(fixture.context, { URL, location: { origin: "https://discuss.example" }, render_access() {},
+    request_json(...args) { requests.push(args); } });
+  const configs = [
+    { site: "https://elsewhere.example", room: "room-a", token: "secret" },
+    { site: "https://discuss.example", room: "room-b", token: "secret" },
+  ];
+  for (const config of configs) {
+    await fixture.context.import_runtime({ text: async () => JSON.stringify(config) });
+    assert.equal(fixture.context.test_state.runtime_import.error, true);
+    assert.equal(fixture.storage.get("discuss-access:room-a"), undefined);
+  }
+  assert.equal(requests.length, 0);
+});
+
+test("invalid control credentials never replace a previously saved owner credential", async () => {
+  const fixture = theme_fixture();
+  fixture.context.test_state.room = { id: "room-a" };
+  fixture.storage.set("discuss-access:room-a", "valid-owner");
+  Object.assign(fixture.context, { URL, location: { origin: "https://discuss.example" }, render_access() {},
+    request_json: async () => { throw new Error("需要本房间的运行控制凭据"); } });
+  await fixture.context.import_runtime({ text: async () => JSON.stringify({
+    site: "https://discuss.example", room: "room-a", token: "invalid-owner" }) });
+  assert.equal(fixture.storage.get("discuss-access:room-a"), "valid-owner");
+  assert.equal(fixture.context.test_state.runtime_import.error, true);
+  assert.match(fixture.context.test_state.runtime_import.text, /控制凭据/);
+});
+
 test("finished discussions show their conclusion instead of a live timer or a later deadline warning", () => {
   const fixture = theme_fixture();
   fixture.context.test_state.room = { phase: 'concluded' };
@@ -114,7 +167,7 @@ test("classic scheduling disables new work and explains a reached limit", () => 
 test("folder creation target is submitted atomically and changes the retry identifier", async () => {
   const fixture = theme_fixture();
   const requests = [];
-  for (const id of ['title', 'goal', 'host', 'background', 'boundaries', 'mode']) fixture.nodes.set(`new-room-${id}`, { value: id === 'mode' ? 'manual' : '内容' });
+  for (const id of ['title', 'goal', 'host', 'user_request', 'background', 'boundaries', 'mode']) fixture.nodes.set(`new-room-${id}`, { value: id === 'mode' ? 'manual' : '内容' });
   fixture.nodes.set('room-dialog', { close() {} });
   fixture.nodes.set('room-form', { reset() {} });
   fixture.root.dataset.theme = 'channel';
@@ -122,7 +175,7 @@ test("folder creation target is submitted atomically and changes the retry ident
   Object.assign(fixture.context, {
     crypto: { randomUUID: () => `token-${++sequence}` }, new_submission_id: () => `submission-${++sequence}`,
     read_expert_inputs: () => ({}), read_limits: () => ({}), default_experts: () => ({}), render_expert_inputs() {},
-    select_room: async () => {}, select_tab() {}, show_toast() {},
+    select_room: async () => {}, select_tab() {}, show_toast() {}, render_rooms() {}, render_room() {},
     request_json: async (path, payload) => { requests.push(payload); throw new Error('retry'); },
   });
   const submit = folder => fixture.context.submit_room({ preventDefault() {} }, folder);
@@ -130,6 +183,7 @@ test("folder creation target is submitted atomically and changes the retry ident
   await assert.rejects(submit('one'), /retry/);
   await assert.rejects(submit('two'), /retry/);
   assert.equal(requests[0].folder_id, 'one');
+  assert.equal(requests[0].user_request, '内容');
   assert.equal(requests[0].submission_id, requests[1].submission_id);
   assert.notEqual(requests[1].submission_id, requests[2].submission_id);
   fixture.context.request_json = async (path, payload) => { requests.push(payload); return { id: 'created', folder_id: payload.folder_id }; };
@@ -274,6 +328,8 @@ function move_fixture(rooms) {
   };
   context.refresh_room = async () => {};
   context.render_rooms = () => {};
+  context.render_room = () => {};
+  context.publish_view = () => {};
   context.show_toast = () => {};
   return { requests, move: context.test_move_channel };
 }
@@ -374,6 +430,366 @@ test("duplicate folder writes are held while other rooms can save independently"
   fixture.requests[0].reject(new Error("首个保存失败"));
   await assert.rejects(first, /首个保存失败/);
   assert.deepEqual(Array.from(fixture.state.rooms, (room) => room.folder_id), ["one", null]);
+});
+
+test("archiving updates the directory immediately and keeps the current conversation and draft", async () => {
+  const fixture = folder_fixture();
+  fixture.state.room.phase = "discussing";
+  const messages = fixture.state.messages;
+  const saving = fixture.context.manage_channel({ id: "a", action: "archive" });
+  assert.deepEqual(Array.from(fixture.context.visible_rooms(), room => room.id), ["b"]);
+  assert.equal(fixture.state.room.id, "a");
+  assert.equal(fixture.state.room.archived, true);
+  assert.equal(fixture.state.room.phase, "paused");
+  assert.equal(fixture.frames[0][0].archived, true);
+  assert.equal(fixture.requests[0].path, "/api/rooms/a/archive");
+  fixture.state.room.goal = "等待期间更新的议题";
+  fixture.requests[0].resolve({ id: "a", archived: 1, phase: "paused", goal: "旧议题" });
+  await saving;
+  assert.equal(fixture.requests.length, 1);
+  assert.equal(fixture.state.archive_changes.size, 0);
+  assert.equal(fixture.state.room.goal, "等待期间更新的议题");
+  assert.equal(fixture.state.messages, messages);
+  assert.equal(fixture.draft.value, "保留当前草稿");
+});
+
+test("failed archives restore only the target while preserving later navigation and edits", async () => {
+  const fixture = folder_fixture();
+  fixture.state.room.phase = "discussing";
+  const saving = fixture.context.manage_channel({ id: "a", action: "archive" });
+  Object.assign(fixture.state.rooms[0], { title: "新标题", folder_id: "two", phase: "concluded" });
+  fixture.state.room = { id: "b", phase: "discussing" };
+  fixture.state.archive_view = true;
+  fixture.draft.value = "新页面的草稿";
+  fixture.requests[0].reject(new Error("网络断开"));
+  await assert.rejects(saving, /网络断开/);
+  assert.equal(fixture.state.rooms[0].archived, false);
+  assert.equal(fixture.state.rooms[0].phase, "concluded");
+  assert.equal(fixture.state.rooms[0].title, "新标题");
+  assert.equal(fixture.state.rooms[0].folder_id, "two");
+  assert.equal(fixture.state.room.id, "b");
+  assert.equal(fixture.state.archive_view, true);
+  assert.equal(fixture.draft.value, "新页面的草稿");
+  assert.match(fixture.state.directory_error, /话题 A.*存档失败.*网络断开/);
+  assert.equal(fixture.state.archive_changes.size, 0);
+});
+
+test("pending and completed archives survive stale refreshes while other room data stays fresh", async () => {
+  for (const fails of [false, true]) {
+    const fixture = folder_fixture();
+    fixture.state.room.phase = "discussing";
+    const saving = fixture.context.manage_channel({ id: "a", action: "archive" });
+    const settled = fails ? assert.rejects(saving, /失败/) : saving;
+    const refreshing = fixture.context.refresh_room();
+    fixture.requests[1].resolve({ rooms: [{ id: "a", archived: false, folder_id: "one" }], folders: [] });
+    await new Promise(setImmediate);
+    fixture.requests[2].resolve({ id: "a", archived: false, phase: "discussing", goal: "最新议题" });
+    await refreshing;
+    assert.equal(fixture.state.room.archived, true);
+    assert.equal(fixture.state.room.phase, "paused");
+    const stale_refresh = fixture.context.refresh_room();
+    if (fails) fixture.requests[0].reject(new Error("失败"));
+    else fixture.requests[0].resolve({ id: "a", archived: true, phase: "paused" });
+    await settled;
+    fixture.requests[3].resolve({ rooms: [{ id: "a", archived: fails, folder_id: "one" }], folders: [] });
+    await new Promise(setImmediate);
+    fixture.requests[4].resolve({ id: "a", archived: fails, phase: fails ? "paused" : "discussing", goal: "更晚的议题" });
+    await stale_refresh;
+    assert.equal(fixture.state.rooms[0].archived, !fails);
+    assert.equal(fixture.state.room.archived, !fails);
+    assert.equal(fixture.state.room.phase, fails ? "discussing" : "paused");
+    assert.equal(fixture.state.room.goal, "更晚的议题");
+  }
+});
+
+test("only duplicate archive writes are held and restoring a concluded room never restarts it", async () => {
+  const fixture = folder_fixture();
+  fixture.state.room.phase = "concluded";
+  const first = fixture.context.manage_channel({ id: "a", action: "archive" });
+  await fixture.context.manage_channel({ id: "a", action: "restore" });
+  assert.equal(fixture.requests.length, 1);
+  const second = fixture.context.manage_channel({ id: "b", action: "archive" });
+  assert.equal(fixture.requests.length, 2);
+  fixture.requests[1].resolve({ id: "b", archived: true, phase: "paused" });
+  await second;
+  fixture.requests[0].resolve({ id: "a", archived: true, phase: "concluded" });
+  await first;
+  const restoring = fixture.context.manage_channel({ id: "a", action: "restore" });
+  assert.equal(fixture.state.room.archived, false);
+  assert.equal(fixture.state.room.phase, "concluded");
+  fixture.requests[2].resolve({ id: "a", archived: false, phase: "concluded" });
+  await restoring;
+  assert.equal(fixture.state.rooms[1].archived, true);
+});
+
+test("directory requests do not take or release the global action lock", async () => {
+  const pending_requests = [];
+  const bridge = { snapshot: () => ({}), execute: (name) => new Promise(resolve => pending_requests.push({ name, resolve })) };
+  const context = vm.createContext({ window: { discuss_view: bridge }, document: { addEventListener() {}, removeEventListener() {} },
+    ref: value => ({ value }), shallowRef: value => ({ value }), onBeforeUnmount() {} });
+  const adapter = readFileSync(new URL("../web/modern/use-discussion.js", import.meta.url), "utf8").replace(/^import .*\n/, "").replace("export function", "function");
+  vm.runInContext(adapter, context);
+  const discussion = context.use_discussion();
+  const archiving = discussion.act("manage_channel", { id: "a", action: "archive" });
+  assert.equal(discussion.pending.value, "");
+  const navigating = discussion.act("room", "b");
+  assert.equal(pending_requests.length, 2);
+  assert.equal(discussion.pending.value, "room");
+  pending_requests[0].resolve(true);
+  await archiving;
+  assert.equal(discussion.pending.value, "room");
+  pending_requests[1].resolve(true);
+  await navigating;
+  assert.equal(discussion.pending.value, "");
+  for (const name of ["move_channel", "create_folder", "rename_folder", "delete_folder", "move_folder", "create"]) {
+    const saving = discussion.act(name, {});
+    assert.equal(discussion.pending.value, "");
+    pending_requests.at(-1).resolve(true);
+    await saving;
+  }
+});
+
+test("archive dialogs close before the response and never close a later dialog", async () => {
+  let finish;
+  const context = vm.createContext({ mode: { value: "archive" }, props: { targetRoom: { id: "a" } },
+    management_title: { value: "" }, act: () => new Promise(resolve => { finish = resolve; }) });
+  const dialog = readFileSync(new URL("../web/modern/WorkspaceDialogs.vue", import.meta.url), "utf8");
+  vm.runInContext(dialog.match(/async function save_management\(\) \{[\s\S]*?\n\}/)[0], context);
+  const saving = context.save_management();
+  assert.equal(context.mode.value, "");
+  context.mode.value = "create";
+  finish(true);
+  await saving;
+  assert.equal(context.mode.value, "create");
+});
+
+test("archive manager opening preserves the selected channel and draft", () => {
+  const room = { id: "current" };
+  const draft = { value: "保留未发送内容" };
+  const context = vm.createContext({ modal: { value: "" }, nav_open: { value: true }, room, draft,
+    act() { assert.fail("opening archive management must not navigate or fetch"); } });
+  const workspace = readFileSync(new URL("../web/modern/ChannelWorkspace.vue", import.meta.url), "utf8");
+  vm.runInContext(workspace.match(/function open_archives\(\) \{[^\n]+/)[0], context);
+  context.open_archives();
+  assert.equal(context.modal.value, "archives");
+  assert.equal(context.nav_open.value, false);
+  assert.equal(context.room, room);
+  assert.equal(draft.value, "保留未发送内容");
+});
+
+test("archive search uses one newest-first list regardless of folder membership", () => {
+  const context = vm.createContext({});
+  const dialog = readFileSync(new URL("../web/modern/WorkspaceDialogs.vue", import.meta.url), "utf8");
+  vm.runInContext(dialog.match(/function filter_archived_channels\(rooms, filters\) \{[\s\S]*?\n\}/)[0], context);
+  const rooms = [
+    { id: "old", title: "Codex 旧方案", archived: true, folder_id: "work", message_count: 0, created_at: "2026-10-15" },
+    { id: "active", title: "Codex 进行中", archived: false, folder_id: "work", message_count: 6, created_at: "2026-10-17" },
+    { id: "loose", title: "未分类记录", archived: true, folder_id: null, message_count: 0, created_at: "2026-10-16" },
+    { id: "new", title: "CODEX 新方案", archived: true, folder_id: "work", message_count: 12, created_at: "2026-10-17" },
+    { id: "orphan", title: "历史记录", archived: true, folder_id: "removed", message_count: 3, created_at: "2026-10-14" },
+  ];
+  const initial = JSON.stringify(rooms);
+  const matching = filters => Array.from(context.filter_archived_channels(rooms,
+    { query: "", content: "all", ...filters }), room => room.id);
+  assert.deepEqual(matching({}), ["new", "loose", "old", "orphan"]);
+  assert.deepEqual(matching({ query: " codex ", content: "messages" }), ["new"]);
+  assert.deepEqual(matching({ content: "empty" }), ["loose", "old"]);
+  assert.deepEqual(matching({ query: "不存在" }), []);
+  assert.equal(JSON.stringify(rooms), initial);
+});
+
+test("folder removal preserves channels and drafts through stale reads and failure", async () => {
+  for (const fails of [false, true]) {
+    const fixture = folder_fixture();
+    fixture.state.folders = [{ id: "one", name: "待移除" }, { id: "two", name: "保留" }];
+    fixture.state.uncategorized_position = 1;
+    fixture.state.rooms[1].archived = true;
+    const saving = fixture.context.delete_folder("one");
+    assert.equal(fixture.requests[0].path, "/api/folders/one/delete");
+    assert.deepEqual(Array.from(fixture.state.rooms, room => room.folder_id), [null, null]);
+    assert.equal(fixture.state.room.folder_id, null);
+    assert.equal(fixture.state.uncategorized_position, 0);
+    assert.equal(fixture.context.merge_room_folder({ id: "a", folder_id: "one" }, fixture.state.folder_version).folder_id, null);
+    await fixture.context.delete_folder("two");
+    await fixture.move("a", "two");
+    assert.equal(fixture.requests.length, 1);
+    fixture.context.patch_directory_room("a", { title: "后来修改的标题" });
+    fixture.state.folders[0].name = "后来修改的分组";
+    const during = fixture.state.folder_version;
+    if (fails) {
+      fixture.requests[0].reject(new Error("保存失败"));
+      await assert.rejects(saving, /保存失败/);
+    } else { fixture.requests[0].resolve({ deleted: true, id: "one" }); await saving; }
+    assert.deepEqual(Array.from(fixture.state.folders, folder => folder.id), fails ? ["one", "two"] : ["two"]);
+    assert.equal(fixture.state.folders.at(-1).name, "后来修改的分组");
+    assert.equal(fixture.state.uncategorized_position, fails ? 1 : 0);
+    assert.equal(fixture.state.rooms[0].title, "后来修改的标题");
+    assert.equal(fixture.state.rooms[1].archived, true);
+    assert.equal(fixture.state.room.id, "a");
+    assert.equal(fixture.draft.value, "保留当前草稿");
+    assert.equal(fixture.state.messages[0].text, "原发言");
+    assert.equal(fixture.context.merge_room_folder({ id: "a", folder_id: fails ? null : "one" }, during).folder_id, fails ? "one" : null);
+    assert.equal(fixture.state.folder_moves.size, 0);
+  }
+});
+
+test("reading an archived channel keeps modern directory movement in the active list", async () => {
+  const fixture = theme_fixture();
+  const moves = [];
+  fixture.root.dataset.theme = "channel-light";
+  Object.assign(fixture.context.test_state, { archive_view: true,
+    rooms: [{ id: "a", archived: false }, { id: "b", archived: false }, { id: "old", archived: true }] });
+  fixture.context.manage_channel = async request => moves.push(request);
+  await fixture.context.move_channel({ id: "b", direction: -1, folder_id: null });
+  assert.equal(moves.length, 1);
+  assert.equal(moves[0].id, "b");
+  assert.equal(moves[0].before_id, "a");
+  fixture.root.dataset.theme = "millennium";
+  assert.deepEqual(Array.from(fixture.context.visible_rooms(), room => room.id), ["old"]);
+});
+
+test("archive deletion requires the exact name and cannot close a later dialog", async () => {
+  let finish;
+  const requests = [];
+  const context = vm.createContext({ mode: { value: "archives" },
+    view: { value: { archive_pending: [], directory_pending: [] } },
+    archive_delete_room: { value: { id: "archived", title: "存档频道" } },
+    archive_delete_id: { value: "archived" }, archive_confirm_title: { value: "错误名称" },
+    act: (name, value) => { requests.push({ name, ...value }); return new Promise(resolve => { finish = resolve; }); } });
+  const dialog = readFileSync(new URL("../web/modern/WorkspaceDialogs.vue", import.meta.url), "utf8");
+  vm.runInContext(dialog.match(/function archive_busy\(room\) \{[\s\S]*?\n\}/)[0], context);
+  vm.runInContext(dialog.match(/async function delete_archive\(\) \{[\s\S]*?\n\}/)[0], context);
+  await context.delete_archive();
+  assert.equal(requests.length, 0);
+  context.archive_confirm_title.value = "存档频道";
+  context.view.value.archive_pending = ["archived"];
+  await context.delete_archive();
+  assert.equal(requests.length, 0);
+  context.view.value.archive_pending = [];
+  const saving = context.delete_archive();
+  assert.deepEqual(requests, [{ name: "manage_channel", id: "archived", action: "delete", confirm_title: "存档频道" }]);
+  assert.equal(context.archive_delete_id.value, null);
+  assert.equal(context.mode.value, "archives");
+  context.mode.value = "settings";
+  finish(false);
+  await saving;
+  assert.equal(context.mode.value, "settings");
+});
+
+test("renaming and archiving reconcile independently without replacing newer room details", async () => {
+  const fixture = folder_fixture();
+  const renaming = fixture.context.manage_channel({ id: "a", action: "rename", title: "新名称" });
+  assert.equal(fixture.state.room.title, "新名称");
+  const archiving = fixture.context.manage_channel({ id: "a", action: "archive" });
+  const refreshing = fixture.context.refresh_room();
+  fixture.requests[2].resolve({ rooms: [{ id: "a", title: "旧名称", archived: false }], folders: [] });
+  await new Promise(setImmediate);
+  fixture.requests[3].resolve({ id: "a", title: "旧名称", archived: false, phase: "preparing", goal: "最新内容" });
+  await refreshing;
+  assert.equal(fixture.state.room.title, "新名称");
+  assert.equal(fixture.state.room.archived, true);
+  assert.equal(fixture.state.room.goal, "最新内容");
+  const stale = fixture.context.refresh_room();
+  fixture.requests[0].resolve({ id: "a", title: "新名称", goal: "旧内容" });
+  fixture.requests[1].resolve({ id: "a", archived: true, phase: "paused" });
+  await Promise.all([renaming, archiving]);
+  fixture.requests[4].resolve({ rooms: [{ id: "a", title: "旧名称" }], folders: [] });
+  await new Promise(setImmediate);
+  fixture.requests[5].resolve({ id: "a", title: "旧名称", archived: false, goal: "再次更新" });
+  await stale;
+  assert.equal(fixture.state.room.title, "新名称");
+  assert.equal(fixture.state.room.archived, true);
+  assert.equal(fixture.state.room.goal, "再次更新");
+});
+
+test("room sorting responds before saving and rollback retains other successful edits", async () => {
+  const fixture = folder_fixture();
+  const moving = fixture.context.manage_channel({ id: "b", action: "move", before_id: "a" });
+  assert.deepEqual(Array.from(fixture.state.rooms, room => room.id), ["b", "a"]);
+  const renaming = fixture.context.manage_channel({ id: "a", action: "rename", title: "独立修改" });
+  fixture.requests[1].resolve({ id: "a", title: "独立修改" });
+  await renaming;
+  fixture.requests[0].reject(new Error("排序未保存"));
+  await assert.rejects(moving, /排序未保存/);
+  assert.deepEqual(Array.from(fixture.state.rooms, room => room.id), ["a", "b"]);
+  assert.equal(fixture.state.rooms[0].title, "独立修改");
+  assert.equal(fixture.state.room.id, "a");
+  assert.equal(fixture.requests.length, 2);
+});
+
+test("folder creation shows a provisional entry and does not roll back other folder edits", async () => {
+  const fixture = folder_fixture();
+  fixture.context.new_submission_id = () => "temp-one";
+  fixture.state.folders = [{ id: "one", name: "原文件夹" }];
+  const creating = fixture.context.create_folder("新文件夹");
+  assert.equal(fixture.state.folders[1].name, "新文件夹");
+  assert.equal(fixture.state.folders[1].pending, true);
+  await fixture.move("a", fixture.state.folders[1].id);
+  assert.equal(fixture.requests.length, 1);
+  const renaming = fixture.context.rename_folder({ id: "one", name: "更新名称" });
+  assert.equal(fixture.state.folders[0].name, "更新名称");
+  fixture.requests[1].resolve({ id: "one", name: "更新名称" });
+  await renaming;
+  fixture.requests[0].reject(new Error("创建失败"));
+  await assert.rejects(creating, /创建失败/);
+  assert.equal(fixture.state.folders.length, 1);
+  assert.equal(fixture.state.folders[0].name, "更新名称");
+  const retry = fixture.context.create_folder("新文件夹");
+  fixture.requests[2].resolve({ id: "two", name: "新文件夹", position: 2 });
+  await retry;
+  assert.equal(fixture.state.folders[1].id, "two");
+  assert.equal(fixture.state.folders[1].pending, undefined);
+});
+
+test("confirmed deletion responds immediately and failure restores only the removed entry", async () => {
+  const fixture = folder_fixture();
+  fixture.state.room = fixture.state.rooms[1];
+  await assert.rejects(fixture.context.manage_channel({ id: "a", action: "delete", confirm_title: "不匹配" }), /完整频道名称/);
+  assert.equal(fixture.requests.length, 0);
+  const deleting = fixture.context.manage_channel({ id: "a", action: "delete", confirm_title: "话题 A" });
+  assert.deepEqual(Array.from(fixture.state.rooms, room => room.id), ["b"]);
+  fixture.state.rooms[0].title = "等待期间的修改";
+  fixture.draft.value = "仍在编辑";
+  fixture.requests[0].reject(new Error("删除失败"));
+  await assert.rejects(deleting, /删除失败/);
+  assert.deepEqual(Array.from(fixture.state.rooms, room => room.id), ["a", "b"]);
+  assert.equal(fixture.state.rooms[1].title, "等待期间的修改");
+  assert.equal(fixture.state.room.id, "b");
+  assert.equal(fixture.draft.value, "仍在编辑");
+});
+
+for (const interaction of ["navigation", "classic draft input"]) test(`room creation shows immediate progress and preserves later ${interaction}`, async () => {
+  const fixture = folder_fixture();
+  let resolve;
+  let selections = 0;
+  let closes = 0;
+  let resets = 0;
+  let input;
+  fixture.context.document.addEventListener = (type, listener) => { if (type === "input") input = listener; };
+  fixture.context.element = id => ({ addEventListener() {},
+    ...(id === "room-dialog" ? { close: () => { closes++; } } : { reset: () => { resets++; } }) });
+  fixture.context.bind_controls();
+  Object.assign(fixture.context, {
+    room_creation_payload: () => ({ title: "新讨论", runtime_mode: "manual", folder_id: null }),
+    new_submission_id: () => "create-test-id", crypto: { randomUUID: () => "local-token" },
+    request_json: () => new Promise(done => { resolve = done; }), render_expert_inputs() {}, default_experts: () => ({}),
+    select_room: async () => { selections++; },
+  });
+  const creating = fixture.context.submit_room({ preventDefault() {} });
+  assert.equal(closes, 1);
+  assert.equal(fixture.state.creating_room.title, "新讨论");
+  if (interaction === "navigation") {
+    fixture.state.navigation_version++;
+    fixture.state.room = fixture.state.rooms[1];
+  } else { fixture.draft.value = "创建期间继续编辑"; input(); }
+  resolve({ id: "created", title: "新讨论" });
+  await creating;
+  assert.equal(fixture.state.rooms.at(-1).id, "created");
+  assert.equal(fixture.state.creating_room, null);
+  assert.equal(fixture.state.room.id, interaction === "navigation" ? "b" : "a");
+  if (interaction === "classic draft input") assert.equal(fixture.draft.value, "创建期间继续编辑");
+  assert.equal(selections, 0);
+  assert.equal(resets, 1);
 });
 
 /** Provide only the DOM operations exercised by the real pointer controller. */
@@ -496,18 +912,23 @@ test("folder ordering saves once, preserves drafts and recovers after a failed w
   const saving = fixture.context.move_folder({ id: "one", direction: 1 });
   assert.equal(fixture.requests[0].path, "/api/folders/one/move");
   assert.equal(fixture.requests[0].payload.before_id, "three");
+  assert.deepEqual(Array.from(fixture.state.folders, folder => folder.id), ["two", "one", "three"]);
   await fixture.context.move_folder({ id: "two", direction: 1 });
-  await fixture.context.refresh_room();
-  assert.equal(fixture.requests.length, 1);
+  const refreshing = fixture.context.refresh_room();
+  fixture.requests[1].resolve({ rooms: fixture.state.rooms, folders: original });
+  await new Promise(setImmediate);
+  fixture.requests[2].resolve({ id: "a", goal: "更新后的议题" });
+  await refreshing;
+  assert.deepEqual(Array.from(fixture.state.folders, folder => folder.id), ["two", "one", "three"]);
   fixture.requests[0].reject(new Error("排序失败"));
   await assert.rejects(saving, /排序失败/);
-  assert.equal(fixture.state.folders, original);
+  assert.deepEqual(Array.from(fixture.state.folders, folder => folder.id), ["one", "two", "three"]);
   assert.equal(fixture.state.folder_order_pending, false);
   const retry = fixture.context.move_folder({ id: "one", before_id: null });
   const ordered = [original[1], original[2], original[0]];
-  fixture.requests[1].resolve({ folders: ordered });
+  fixture.requests[3].resolve({ folders: ordered });
   await retry;
-  assert.equal(fixture.state.folders, ordered);
+  assert.deepEqual(Array.from(fixture.state.folders, folder => folder.id), ["two", "three", "one"]);
   assert.equal(fixture.state.room.id, "a");
   assert.equal(fixture.draft.value, "保留当前草稿");
 });
@@ -589,7 +1010,7 @@ test("folder-scoped channel moves stay within the folder and preserve its neighb
   assert.equal(fixture.requests[0].path, "/api/rooms/d/move");
   assert.deepEqual(JSON.parse(JSON.stringify(fixture.requests[0].payload)), { actor: "用户", before_id: "c" });
   fixture.requests.length = 0;
-  await fixture.move({ id: "c", direction: 1, folder_id: "one" });
+  await fixture.move({ id: "d", direction: 1, folder_id: "one" });
   assert.deepEqual(JSON.parse(JSON.stringify(fixture.requests[0].payload)), { actor: "用户", before_id: "e" });
   fixture.requests.length = 0;
   await fixture.move({ id: "a", direction: 1, folder_id: "one" });

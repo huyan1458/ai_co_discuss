@@ -37,6 +37,10 @@ CREATE TABLE IF NOT EXISTS room_creations (
     room_id TEXT NOT NULL UNIQUE REFERENCES rooms(id),
     request_text TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS room_user_requests (
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id),
+    text TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS room_briefs (
     room_id TEXT PRIMARY KEY REFERENCES rooms(id),
     text TEXT NOT NULL, until INTEGER NOT NULL, updated_at TEXT NOT NULL

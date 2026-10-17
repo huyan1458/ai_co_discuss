@@ -131,6 +131,42 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.request(self.path + "/limits", {"actor": "用户"}, self.owner)[1]["runtime"]["revision"], revision)
         self.assertEqual(self.request(self.path + "/topic", {"actor": "Codex", "phase": "concluded"}, token)[0], 200)
 
+    def test_forced_close_hands_summary_to_host_before_limits(self):
+        """A user can end early; the expert is cancelled and the host gets the closing reserve."""
+        self.limited_room(max_rounds=3, summary_minutes=2)
+        self.request(self.path + "/turns", {"actor": "用户", "expert": "Codex", "question": "待打断",
+            "submission_id": "forced-turn"})
+        self.start()
+        expert_token = self.enter(self.events()[-1])
+        status, room = self.request(self.path + "/limits", {"actor": "用户", "force": True}, self.owner)
+        self.assertEqual(status, 200, room)
+        self.assertTrue(room["limits"]["closing"])
+        self.assertEqual(room["limits"]["stop_reason"], "user_stop")
+        self.assertEqual(room["current_turn"]["status"], "cancelled")
+        self.assertLessEqual(room["runtime"]["deadline"], int(time.time()) + 120)
+        self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "旧执行"}, expert_token)[0], 403)
+        self.assertEqual(self.events()[-1]["role"], "host")
+        status, _ = self.request(self.path + "/limits", {"actor": "用户", "force": True}, self.owner)
+        self.assertEqual(status, 200)
+        self.request(self.path + "/runtime", {"action": "pause", "revision": room["runtime"]["revision"]}, self.owner)
+        self.assertEqual(self.request(self.path + "/limits", {"actor": "用户", "force": True}, self.owner)[0], 400)
+
+    def test_runtime_reports_latest_execution_per_participant(self):
+        """The progress panel sees each participant's latest execution and failure count."""
+        self.request(self.path + "/turns", {"actor": "用户", "expert": "Claude", "question": "执行状态",
+            "submission_id": "participant-turn"})
+        run = self.start()
+        event = self.events()[-1]
+        self.enter(event)
+        self.request(self.path + f"/events/{event['id']}", {"action": "fail", "reason": "软件未响应"}, self.owner)
+        participants = self.request(self.path)[1]["runtime"]["participants"]
+        claude = next(item for item in participants if item["participant"] == "Claude")
+        self.assertEqual((claude["status"], claude["failures"], claude["result"], claude["stale"]),
+                         ("failed", 1, "软件未响应", False))
+        self.assertNotIn("lease_until", claude)
+        self.assertNotIn("token_hash", claude)
+        self.assertEqual(run["participants"][0]["participant"], "Claude")
+
     def test_limits_validation_and_active_edit_protection(self):
         """Bad settings fail; limits are editable only before start or while paused."""
         for limits in ({"max_rounds": -1}, {"max_minutes": 1441}, {"max_rounds": True},
@@ -372,6 +408,26 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.request(self.path + "/archive", {"actor": "用户"}, self.owner)[0], 200)
         self.assertEqual(self.request(self.path)[1]["runtime"]["status"], "stopped")
         self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "迟到"}, token)[0], 403)
+
+    def test_paused_archive_requires_owner_control_and_preserves_records(self):
+        """A migrated or paused protected room can be archived only with its owner key."""
+        run = self.start()
+        self.request(self.path + "/runtime", {"action": "pause", "revision": run["revision"]}, self.owner)
+        for token in (None, uuid.uuid4().hex):
+            status, error = self.request(self.path + "/archive", {"actor": "用户"}, token)
+            self.assertEqual(status, 403)
+            self.assertIn("控制凭据", error["error"])
+            self.assertIn("接入", error["error"])
+            self.assertFalse(self.request(self.path)[1]["archived"])
+        before = self.request(self.path)[1]
+        status, archived = self.request(self.path + "/archive", {"actor": "用户"}, self.owner)
+        self.assertEqual(status, 200)
+        self.assertTrue(archived["archived"])
+        self.assertEqual(archived["message_count"], before["message_count"])
+        self.assertEqual(archived["runtime"]["status"], "stopped")
+        status, restored = self.request(self.path + "/restore", {"actor": "用户"}, self.owner)
+        self.assertEqual(status, 200)
+        self.assertFalse(restored["archived"])
 
     def test_expired_run_cannot_enter_or_write(self):
         """The deadline is enforced by the website even with no runner alive."""

@@ -84,7 +84,7 @@ class DiscussionTests(unittest.TestCase):
         self.assertTrue(snapshot["exported_at"])
         tables = snapshot["tables"]
         self.assertEqual(set(tables), {"rooms", "room_directory", "room_folder_assignments", "topic_folders", "room_creations",
-                                      "room_briefs", "topic_settings", "room_floor", "discussion_limits", "messages", "message_details", "message_summaries", "discussion_turns"})
+                                      "room_briefs", "room_user_requests", "topic_settings", "room_floor", "discussion_limits", "messages", "message_details", "message_summaries", "discussion_turns"})
         self.assertEqual([row["id"] for row in tables["messages"]], [row["id"] for row in originals] + [answer["id"]])
         for original, row in zip(originals + [answer], tables["messages"]):
             self.assertEqual(row, {key: original[key] for key in row})
@@ -218,6 +218,40 @@ class DiscussionTests(unittest.TestCase):
             self.assertEqual(self.request(path, {"name": invalid})[0], 400)
         self.assertEqual(self.request("/api/folders/missing/rename", {"name": "不存在"})[0], 404)
         self.assertIn(renamed, self.request("/api/rooms")[1]["folders"])
+
+    def test_folder_removal_preserves_active_and_archived_rooms(self):
+        """Removing a group clears assignments without deleting any room records."""
+        folder = self.request("/api/folders", {"name": "待移除"})[1]["id"]
+        active_path = f"/api/rooms/{self.room['id']}"
+        self.post("移除分组后保留原文", "remove-folder-message")
+        self.request(active_path + "/folder", {"actor": "用户", "folder_id": folder})
+        archived = self.request("/api/rooms", {"title": "已存档", "folder_id": folder})[1]
+        archived_path = f"/api/rooms/{archived['id']}"
+        self.request(archived_path + "/archive", {"actor": "用户"})
+        before = [self.request(path)[1] for path in (active_path, archived_path)]
+        directory = self.request("/api/rooms")[1]
+        status, removed = self.request(f"/api/folders/{folder}/delete", {})
+        self.assertEqual((status, removed), (200, {"deleted": True, "id": folder}))
+        for path, original in zip((active_path, archived_path), before):
+            self.assertEqual(self.request(path)[1], {**original, "folder_id": None})
+        after = self.request("/api/rooms")[1]
+        self.assertEqual([room["id"] for room in after["rooms"]], [room["id"] for room in directory["rooms"]])
+        self.assertEqual(after["folders"], [item for item in directory["folders"] if item["id"] != folder])
+        self.assertEqual(self.request(f"/api/folders/{folder}/delete", {})[0], 404)
+        self.assertEqual(self.request("/api/folders/__uncategorized__/delete", {})[0], 404)
+        self.assertEqual(self.request("/api/rooms")[1], after)
+
+    def test_folder_removal_keeps_uncategorized_between_remaining_groups(self):
+        """Remove empty groups before and after the virtual group without moving it."""
+        folders = [self.request("/api/folders", {"name": name})[1]["id"] for name in ("甲", "乙", "丙")]
+        moved = self.request("/api/folders/__uncategorized__/move", {"before_id": folders[1]})[1]
+        self.request(f"/api/folders/{folders[0]}/delete", {})
+        directory = self.request("/api/rooms")[1]
+        self.assertEqual(directory["uncategorized_position"], moved["uncategorized_position"] - 1)
+        self.assertEqual(directory["folders"], [item for item in moved["folders"] if item["id"] != folders[0]])
+        self.request("/api/folders/__uncategorized__/move", {"before_id": folders[2]})
+        self.request(f"/api/folders/{folders[2]}/delete", {})
+        self.assertIsNone(self.request("/api/rooms")[1]["uncategorized_position"])
 
     def test_create_room_in_folder_is_atomic_and_replayable(self):
         """Creation includes placement; retries never duplicate or move an existing room."""
@@ -775,6 +809,56 @@ class DiscussionTests(unittest.TestCase):
         """Schedule a read-only expert using the declared host identity."""
         payload = {"actor": "Codex", "expert": "Gemini", "question": "请检查尚未解决的分歧", "submission_id": submission_id}
         return self.request(f"/api/rooms/{self.room['id']}/turns", {**payload, **changes})
+
+    def test_user_request_is_preserved_separately_through_writes_and_backup(self):
+        """Keep original whitespace, enforce bounds, and include it in replay checks."""
+        original = "  用户原文🙂\n保留换行与空白  \n"
+        payload = {"title": "原文与背景", "user_request": original, "background": "项目补充背景",
+                   "submission_id": str(uuid.uuid4())}
+        status, room = self.request("/api/rooms", payload)
+        self.assertEqual(status, 201)
+        self.assertEqual((room["user_request"], room["background"]), (original, "项目补充背景"))
+        base = f"/api/rooms/{room['id']}"
+        self.assertTrue(self.request("/api/rooms", payload)[1]["duplicate"])
+        self.assertEqual(self.request("/api/rooms", {**payload, "user_request": "另一请求"})[0], 409)
+        self.assertEqual(self.request(base + "/topic", {"actor": "用户", "background": "更新背景"})[1]["user_request"], original)
+        text = self.request(f"/r/{room['id']}/brief")[1]
+        self.assertIn(f"用户原文：\n{original}\n\n背景：\n更新背景", text)
+        self.assertNotIn(original, self.request(f"/r/{room['id']}")[1])
+        tables = self.request(base + "/backup")[1]["tables"]
+        self.assertEqual(tables["room_user_requests"], [{"room_id": room["id"], "text": original}])
+        self.assertEqual(self.request(base + "/topic", {"actor": "用户", "user_request": "🙂" * 4000})[0], 200)
+        self.assertEqual(self.request(base + "/topic", {"actor": "用户", "user_request": "🙂" * 4001})[0], 400)
+        self.assertEqual(self.request(base)[1]["user_request"], "🙂" * 4000)
+        cleared = self.request(base + "/topic", {"actor": "用户", "user_request": ""})[1]
+        self.assertEqual((cleared["user_request"], cleared["background"]), ("", "更新背景"))
+        self.assertEqual(self.request(base + "/delete", {"actor": "用户", "confirm_title": room["title"]})[0], 200)
+
+    def test_legacy_user_request_has_read_only_compatibility_until_saved(self):
+        """Split only explicit legacy sections and preserve unmarked backgrounds."""
+        if self.external:
+            self.skipTest("Legacy storage setup is local to SQLite")
+        room_id = self.room["id"]
+        background = "用户原文：\n原始要求\n第二行\n\n项目背景与入口：\n补充材料"
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("DELETE FROM room_user_requests WHERE room_id=?", (room_id,))
+            connection.execute("UPDATE topic_settings SET background=? WHERE room_id=?", (background, room_id))
+        init_database(self.database, seed=False)
+        base = f"/api/rooms/{room_id}"
+        room = self.request(base)[1]
+        self.assertEqual((room["user_request"], room["background"]), ("原始要求\n第二行", "项目背景与入口：\n补充材料"))
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            self.assertEqual(connection.execute("SELECT background FROM topic_settings WHERE room_id=?", (room_id,)).fetchone()[0], background)
+            self.assertIsNone(connection.execute("SELECT text FROM room_user_requests WHERE room_id=?", (room_id,)).fetchone())
+        saved = self.request(base + "/topic", {"actor": "用户", "goal": "更新目标"})[1]
+        self.assertEqual(saved["user_request"], room["user_request"])
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            self.assertEqual(connection.execute("SELECT text FROM room_user_requests WHERE room_id=?", (room_id,)).fetchone()[0], room["user_request"])
+        plain = "用户原文：\n没有明确背景分隔的整段文字\n背景：\n仍属于原文"
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("DELETE FROM room_user_requests WHERE room_id=?", (room_id,))
+            connection.execute("UPDATE topic_settings SET background=? WHERE room_id=?", (plain, room_id))
+        self.assertEqual((self.request(base)[1]["user_request"], self.request(base)[1]["background"]), ("", plain))
 
     def test_topic_host_requires_write_capability_and_preserves_metadata(self):
         """Topic hosting is a role independent of the model name."""
