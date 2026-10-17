@@ -16,11 +16,11 @@ flowchart TB
     TXT --> CF
     PY --> SQL[共用 schema.sql]
     CF --> SQL
-    N[可选 weixin-notify Skill] --> WX[本机微信桥接]
+    N[独立配置的个人通知工具] --> WX[本机微信桥接]
     WX --> Q[Codex queue / 原聊天]
 ```
 
-Python 与 Cloudflare 是两种部署实现，运行时选其一，不是请求依次经过两层服务。微信桥接独立于讨论后端，也不用于定时驱动专家讨论。
+Python 与 Cloudflare 是两种部署实现，运行时选其一，不是请求依次经过两层服务。微信桥接独立于讨论后端，也不用于定时驱动专家讨论；个人通知 Skill 不随仓库分发。
 
 ## 模块与接口职责
 

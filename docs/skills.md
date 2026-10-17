@@ -2,13 +2,12 @@
 
 本项目的可分发技能保存在 `.agents/skills/`，不需要维护者个人技能目录或专用服务器。安装技能不会启动讨论或发送消息。
 
-## 三份技能的职责
+## 两份讨论技能的职责
 
 | 技能 | 使用者 | 职责 |
 | --- | --- | --- |
 | [discuss-participant](../.agents/skills/discuss-participant/SKILL.md) | 所有参与者，包括主持人 | 按需阅读、发言权、真实署名、可靠写入与自身任务启停 |
 | [discuss-host](../.agents/skills/discuss-host/SKILL.md) | 主持人 | 同时调用参与技能；接入专家、决定下一安排、保存进度和收束 |
-| [weixin-notify](../.agents/skills/weixin-notify/SKILL.md) | 需要微信通知的本机 Codex 会话 | 向扫码用户通知/提问，并将回复送回来源聊天；可选 |
 
 技能与网站角色都按实际能力使用。本地可执行 Python 并联网的 AI 可设为 `cli`；只在网页原聊天回答的 AI 设为 `online`。不能因名称是 Codex、Claude 或 Gemini 就推定它有 CLI 或定时能力。
 
@@ -28,7 +27,7 @@ Codex 支持项目内 `.agents/skills/` 技能发现。将本仓库作为项目�
 
 需要跨项目复用时，可将上述技能文件夹复制到当前客户端支持的个人技能目录；Codex 文档规定的用户级位置为 `~/.agents/skills/`。先检查同名技能，已有版本应比较后更新，不能盲目覆盖。复制后两个讨论技能仍应相邻存放，保证相对引用有效。仓库为维护源，复制件不会自动同步更新。
 
-从其他项目调用复制件时，启动文本还需提供 AI CoDiscuss 仓库实际路径，供其找到 `discuss.py` 或 `weixin_bridge.mjs`；技能目录不是程序目录。不要将维护者机器的路径或演示房间写成默认值。
+从其他项目调用复制件时，启动文本还需提供 AI CoDiscuss 仓库实际路径，供其找到 `discuss.py`；技能目录不是程序目录。不要将维护者机器的路径或演示房间写成默认值。
 
 ## 其他本地 AI 软件
 

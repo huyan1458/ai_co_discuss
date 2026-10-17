@@ -28,6 +28,6 @@
 ## 仓库维护
 
 - 首先阅读 README 与目标模块在 docs 中的说明；贡献约定见 CONTRIBUTING.md。
-- 测试位于 tests/，构建脚本位于 scripts/；Skill 的可分发源文件位于 .agents/skills/，不要依赖维护者个人目录。
+- 测试位于 tests/，构建脚本位于 scripts/；.agents/skills/ 只分发 discuss-host 和 discuss-participant 两份讨论技能，不纳入维护者的个人通知 Skill，不依赖维护者个人目录。
 - 修改 server.py、worker.mjs、schema.sql 的业务协议时同步两套后端及相关测试；不在 web/modern.js 等构建产物中手改。
 - 不提交 data/、.wrangler/、wrangler.local.jsonc、令牌、聊天记录或本机路径。未经用户明确要求不提交、推送、部署或启动真实讨论。
