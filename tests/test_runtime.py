@@ -410,7 +410,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "迟到"}, token)[0], 403)
 
     def test_archive_stops_run_without_owner_control_but_delete_stays_protected(self):
-        """Archiving always works and stops the run; other running directory writes and deletion need the owner key."""
+        """Archiving always works and stops the run; running directory writes and unarchived deletion need the owner key."""
         self.start()
         token = self.enter(self.events()[-1])
         for key in (None, uuid.uuid4().hex):
@@ -432,6 +432,10 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertIn("控制凭据", error["error"])
         self.assertIsNotNone(self.request(self.path)[1].get("id"))
+        self.request(self.path + "/archive", {"actor": "用户"})
+        status, deleted = self.request(self.path + "/delete", {"actor": "用户", "confirm_title": before["title"]})
+        self.assertEqual(status, 200, deleted)
+        self.assertEqual(self.request(self.path)[0], 404)
 
     def test_expired_run_cannot_enter_or_write(self):
         """The deadline is enforced by the website even with no runner alive."""

@@ -21,11 +21,11 @@ const archive_content_options = [{ label: "全部频道", value: "all" }, { labe
 const archive_results = computed(() => filter_archived_channels(view.value.rooms,
   { query: archive_query.value, content: archive_content.value }));
 const archive_delete_id = ref(null);
-const archive_confirm_title = ref("");
+const archive_delete_all = ref(false);
 const archive_delete_room = computed(() => archived_rooms.value.find((room) => room.id === archive_delete_id.value));
 watch(mode, value => {
   archive_delete_id.value = null;
-  archive_confirm_title.value = "";
+  archive_delete_all.value = false;
   if (value === "archives") { archive_query.value = ""; archive_content.value = "all"; }
 });
 
@@ -51,14 +51,19 @@ function archive_busy(room) {
 /** Open an archived transcript only when its title is explicitly selected. */
 function read_archive(room) { mode.value = ""; return act("room", room.id); }
 
-/** Require the exact channel name before submitting an irreversible deletion. */
+/** Delete one archived channel after a single confirmation click. */
 async function delete_archive() {
   const room = archive_delete_room.value;
-  if (!room || archive_busy(room) || archive_confirm_title.value !== room.title) return;
-  const request = { id: room.id, action: "delete", confirm_title: archive_confirm_title.value };
+  if (!room || archive_busy(room)) return;
   archive_delete_id.value = null;
-  archive_confirm_title.value = "";
-  await act("manage_channel", request);
+  await act("manage_channel", { id: room.id, action: "delete" });
+}
+
+/** Delete every archived channel in the current list, one request at a time. */
+async function delete_all_archives() {
+  const rooms = archive_results.value.filter((room) => !archive_busy(room));
+  archive_delete_all.value = false;
+  for (const room of rooms) await act("manage_channel", { id: room.id, action: "delete" });
 }
 
 const management_title = ref("");
@@ -69,7 +74,7 @@ watch(() => [mode.value, props.targetRoom?.id], () => { management_title.value =
 
 /** Close directory confirmations immediately; background completion never closes a later dialog. */
 async function save_management() {
-  const request = { id: props.targetRoom.id, action: mode.value, title: management_title.value, confirm_title: management_title.value };
+  const request = { id: props.targetRoom.id, action: mode.value, title: management_title.value };
   mode.value = "";
   await act("manage_channel", request);
 }
@@ -159,7 +164,9 @@ async function follow_reply() {
         <div class="channel-archive-toolbar">
           <UInput v-model="archive_query" icon="i-lucide-search" placeholder="搜索已存档频道" aria-label="搜索已存档频道" class="channel-archive-search" />
           <USelect v-model="archive_content" :items="archive_content_options" icon="i-lucide-list-filter" aria-label="筛选频道内容" />
+          <UButton :label="`全部删除（${archive_results.length}）`" icon="i-lucide-trash-2" color="error" variant="soft" size="sm" class="channel-archive-delete-all" :disabled="!archive_results.length" @click="archive_delete_all = true; archive_delete_id = null" />
         </div>
+        <div v-if="archive_delete_all && archive_results.length" class="channel-archive-confirm channel-archive-bulk" role="alert"><span>将永久删除当前列表中的 {{ archive_results.length }} 个频道及其全部记录，无法撤销。</span><UButton label="取消" color="neutral" variant="ghost" size="xs" @click="archive_delete_all = false" /><UButton label="全部删除" color="error" size="xs" @click="delete_all_archives" /></div>
         <p v-if="view.directory_error" role="alert" class="channel-directory-error">{{ view.directory_error }}</p>
         <div class="channel-archive-results">
           <ul v-if="archive_results.length" class="channel-archive-list" aria-label="已存档频道列表">
@@ -167,15 +174,11 @@ async function follow_reply() {
             <div class="channel-archive-row">
               <div class="channel-archive-info"><button class="channel-archive-title" :title="room.title" :disabled="Boolean(pending)" @click="read_archive(room)">{{ room.title }}</button><small><span v-if="room.created_at">创建于 <time :datetime="room.created_at">{{ archive_created(room.created_at) }}</time> · </span>{{ room.message_count }} 条消息</small></div>
               <div class="channel-archive-actions">
-                <UButton :aria-label="`彻底删除 ${room.title}`" title="彻底删除" icon="i-lucide-trash-2" color="neutral" variant="ghost" size="xs" class="channel-archive-delete" :disabled="archive_busy(room)" @click="archive_delete_id = room.id; archive_confirm_title = ''" />
+                <UButton :aria-label="`彻底删除 ${room.title}`" title="彻底删除" icon="i-lucide-trash-2" color="neutral" variant="ghost" size="xs" class="channel-archive-delete" :disabled="archive_busy(room)" @click="archive_delete_id = room.id; archive_delete_all = false" />
                 <UButton label="恢复" :aria-label="`恢复 ${room.title}`" color="neutral" variant="soft" size="xs" class="channel-archive-restore" :disabled="archive_busy(room)" @click="act('manage_channel', { id: room.id, action: 'restore' })" />
               </div>
             </div>
-            <form v-if="archive_delete_id === room.id" class="dialog-form channel-archive-confirm" @submit.prevent="delete_archive">
-              <p class="fine-print">将永久删除「{{ room.title }}」的全部消息、共识和发言安排，无法撤销。请先结束该频道的外部定时任务。</p>
-              <UFormField label="输入完整频道名称" required><UInput v-model="archive_confirm_title" :maxlength="80" required class="w-full" autocomplete="off" /></UFormField>
-              <div class="dialog-actions"><UButton label="取消" color="neutral" variant="ghost" @click="archive_delete_id = null" /><UButton type="submit" label="确认彻底删除" color="error" :disabled="archive_confirm_title !== room.title || archive_busy(room)" /></div>
-            </form>
+            <div v-if="archive_delete_id === room.id" class="channel-archive-confirm channel-archive-bulk" role="alert"><span>永久删除「{{ room.title }}」及其全部记录，无法撤销。</span><UButton label="取消" color="neutral" variant="ghost" size="xs" @click="archive_delete_id = null" /><UButton label="删除" color="error" size="xs" :disabled="archive_busy(room)" @click="delete_archive" /></div>
           </li>
           </ul>
         <p v-else class="channel-archive-empty">{{ archived_rooms.length ? '没有匹配的存档频道' : '暂无已存档频道' }}</p>
@@ -193,9 +196,9 @@ async function follow_reply() {
         <p class="channel-management-target">{{ targetRoom?.title }} <span>· {{ targetRoom?.message_count }} 条消息</span></p>
         <p v-if="rendered_mode === 'archive'" class="fine-print">存档后可在侧栏「已存档」中查阅与恢复。已有发言安排会保留；专家需在下次检查时停止自己的定时任务。</p>
         <p v-if="rendered_mode === 'restore'" class="fine-print">恢复不会自动继续讨论；需要继续时，在主持设置中调整阶段。</p>
-        <p v-if="rendered_mode === 'delete'" class="fine-print">消息、共识和发言安排将一起删除。请先结束该频道的外部定时任务，再输入完整频道名称确认。</p>
-        <UFormField v-if="rendered_mode === 'rename' || rendered_mode === 'delete'" :label="rendered_mode === 'delete' ? '输入完整频道名称' : '频道名称'" required><UInput v-model="management_title" autofocus :maxlength="80" required class="w-full" autocomplete="off" /></UFormField>
-        <div class="dialog-actions"><UButton label="取消" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" :label="rendered_mode === 'delete' ? '永久删除' : rendered_mode === 'rename' ? '保存名称' : titles[rendered_mode]" :color="rendered_mode === 'delete' ? 'error' : 'primary'" :loading="pending === 'manage_channel'" :disabled="rendered_mode === 'delete' ? management_title !== targetRoom?.title : rendered_mode === 'rename' && !management_title.trim()" /></div>
+        <p v-if="rendered_mode === 'delete'" class="fine-print">消息、共识和发言安排将一起删除，无法撤销。</p>
+        <UFormField v-if="rendered_mode === 'rename'" label="频道名称" required><UInput v-model="management_title" autofocus :maxlength="80" required class="w-full" autocomplete="off" /></UFormField>
+        <div class="dialog-actions"><UButton label="取消" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" :label="rendered_mode === 'delete' ? '永久删除' : rendered_mode === 'rename' ? '保存名称' : titles[rendered_mode]" :color="rendered_mode === 'delete' ? 'error' : 'primary'" :loading="pending === 'manage_channel'" :disabled="rendered_mode === 'rename' && !management_title.trim()" /></div>
       </form>
       <div v-else-if="rendered_mode === 'settings'">
         <div class="theme-choices"><button v-for="theme in themes" :key="theme.value" :class="{ chosen: view.theme === theme.value }" :aria-pressed="view.theme === theme.value" @click="choose_theme(theme.value)"><span class="theme-preview" :class="theme.value"><UIcon :name="theme.icon" /></span><span><strong>{{ theme.title }}</strong><small>{{ theme.description }}</small></span><UIcon v-if="view.theme === theme.value" name="i-lucide-check" class="theme-check" /></button></div>

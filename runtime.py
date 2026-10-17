@@ -134,6 +134,9 @@ def authorize_write(connection, room_id, token, operation, payload):
         active = run["status"] == "running" and run["deadline"] > int(time.time())
         if operation == "archive" or (operation != "delete" and not active):
             return
+        if operation == "delete" and connection.execute(
+                "SELECT 1 FROM room_directory WHERE room_id=? AND archived=1", (room_id,)).fetchone():
+            return
         if operation != "delete":
             raise PermissionError("讨论正在自动运行，需要本房间的控制凭据暂停后再整理；请在「接入」中导入原私有配置")
         raise PermissionError("需要本房间的控制凭据；请在「接入」中导入原私有配置")

@@ -648,26 +648,23 @@ test("reading an archived channel keeps modern directory movement in the active 
   assert.deepEqual(Array.from(fixture.context.visible_rooms(), room => room.id), ["old"]);
 });
 
-test("archive deletion requires the exact name and cannot close a later dialog", async () => {
+test("archive deletion needs one confirmation click and cannot close a later dialog", async () => {
   let finish;
   const requests = [];
   const context = vm.createContext({ mode: { value: "archives" },
     view: { value: { archive_pending: [], directory_pending: [] } },
     archive_delete_room: { value: { id: "archived", title: "存档频道" } },
-    archive_delete_id: { value: "archived" }, archive_confirm_title: { value: "错误名称" },
+    archive_delete_id: { value: "archived" },
     act: (name, value) => { requests.push({ name, ...value }); return new Promise(resolve => { finish = resolve; }); } });
   const dialog = readFileSync(new URL("../web/modern/WorkspaceDialogs.vue", import.meta.url), "utf8");
   vm.runInContext(dialog.match(/function archive_busy\(room\) \{[\s\S]*?\n\}/)[0], context);
   vm.runInContext(dialog.match(/async function delete_archive\(\) \{[\s\S]*?\n\}/)[0], context);
-  await context.delete_archive();
-  assert.equal(requests.length, 0);
-  context.archive_confirm_title.value = "存档频道";
   context.view.value.archive_pending = ["archived"];
   await context.delete_archive();
   assert.equal(requests.length, 0);
   context.view.value.archive_pending = [];
   const saving = context.delete_archive();
-  assert.deepEqual(requests, [{ name: "manage_channel", id: "archived", action: "delete", confirm_title: "存档频道" }]);
+  assert.deepEqual(requests, [{ name: "manage_channel", id: "archived", action: "delete" }]);
   assert.equal(context.archive_delete_id.value, null);
   assert.equal(context.mode.value, "archives");
   context.mode.value = "settings";
@@ -744,9 +741,7 @@ test("folder creation shows a provisional entry and does not roll back other fol
 test("confirmed deletion responds immediately and failure restores only the removed entry", async () => {
   const fixture = folder_fixture();
   fixture.state.room = fixture.state.rooms[1];
-  await assert.rejects(fixture.context.manage_channel({ id: "a", action: "delete", confirm_title: "不匹配" }), /完整频道名称/);
-  assert.equal(fixture.requests.length, 0);
-  const deleting = fixture.context.manage_channel({ id: "a", action: "delete", confirm_title: "话题 A" });
+  const deleting = fixture.context.manage_channel({ id: "a", action: "delete" });
   assert.deepEqual(Array.from(fixture.state.rooms, room => room.id), ["b"]);
   fixture.state.rooms[0].title = "等待期间的修改";
   fixture.draft.value = "仍在编辑";

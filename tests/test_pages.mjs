@@ -127,7 +127,7 @@ test('Worker forces an early host summary and reports per-participant executions
   assert.equal((await f.request(`/${id}/limits`, { actor: '用户', force: true })).status, 400);
 });
 
-test('Worker archives running protected rooms without the owner key, never deletes them', async t => {
+test('Worker archives and deletes archived protected rooms without the owner key', async t => {
   const f = await worker_fixture(t);
   const created = await f.request('', { title: '目录保护', host: 'Codex', experts: { Codex: 'cli' } });
   const id = created.body.id;
@@ -143,6 +143,9 @@ test('Worker archives running protected rooms without the owner key, never delet
   const deleted = await f.request(`/${id}/delete`, { actor: '用户', confirm_title: '目录保护' }, '');
   assert.equal(deleted.status, 403);
   assert.match(deleted.body.error, /控制凭据/);
+  await f.request(`/${id}/archive`, { actor: '用户' }, '');
+  assert.equal((await f.request(`/${id}/delete`, { actor: '用户', confirm_title: '目录保护' }, '')).status, 200);
+  assert.equal((await f.request(`/${id}`)).status, 404);
 });
 
 for (const change of ['limits', 'archive', 'phase']) {

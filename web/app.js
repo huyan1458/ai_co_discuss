@@ -225,12 +225,12 @@ function room_menu_html(room, index, count) {
 function toggle_archives() { state.archive_view = !state.archive_view; render_rooms(); publish_view(); }
 
 /** Dispatch directory changes without waiting for unrelated reads. */
-async function manage_channel({ id, action, title, confirm_title, before_id, folder_id }) {
+async function manage_channel({ id, action, title, before_id, folder_id }) {
   if (action === "folder") return assign_channel_folder(id, folder_id ?? null);
   if (["archive", "restore"].includes(action)) return archive_channel(id, action === "archive");
   if (action === "rename") return rename_channel(id, title);
   if (action === "move") return reorder_channel(id, before_id);
-  if (action === "delete") return delete_channel(id, confirm_title);
+  if (action === "delete") return delete_channel(id);
 }
 
 /** Save an optimistic directory edit with a lock limited to its affected resource. */
@@ -302,9 +302,9 @@ async function reorder_channel(id, before_id) {
 }
 
 /** Hide a confirmed deletion immediately and restore only that entry on failure. */
-async function delete_channel(id, confirm_title) {
+async function delete_channel(id) {
   const room = state.rooms.find(item => item.id === id);
-  if (!room || confirm_title !== room.title) throw new Error("请输入完整频道名称确认删除");
+  if (!room) return;
   const previous = state.rooms.map(item => item.id);
   return update_directory({ key: `delete:${id}`, label: `「${room.title}」删除`,
     apply: () => {
@@ -312,7 +312,7 @@ async function delete_channel(id, confirm_title) {
       if (state.room?.id === id) run_action(() => select_room(visible_rooms()[0]?.id));
     },
     rollback: () => { state.rooms = directory_order([...state.rooms, room], previous); },
-    save: () => request_json(`/api/rooms/${id}/delete`, { actor: "用户", confirm_title }) });
+    save: () => request_json(`/api/rooms/${id}/delete`, { actor: "用户", confirm_title: room.title }) });
 }
 
 /** Keep pending or newer archive changes when an older read finishes. */
@@ -994,7 +994,7 @@ function export_runtime() {
   const adapters = { Codex: "codex", Claude: "claude", Gemini: "antigravity" };
   const participants = Object.fromEntries(Object.keys(state.room.experts).map(name => [name, { adapter: adapters[name] || "待配置" }]));
   const workspace = runtime_workspace();
-  const config = { site: location.origin, room: state.room.id, token, cli_project: "填写 AI CoDiscuss 客户端目录", ...workspace, participants };
+  const config = { site: location.origin, room: state.room.id, token, ...workspace, participants };
   const url = URL.createObjectURL(new Blob([JSON.stringify(config, null, 2)], { type: "application/json" }));
   const link = document.createElement("a");
   link.href = url; link.download = `discussion-${state.room.id}.json`; link.click();
@@ -1263,14 +1263,13 @@ async function open_room_management(id, action) {
   if (!room) return;
   state.management = { id, action };
   element("manage-title").textContent = { rename: "重命名频道", archive: "存档频道", restore: "恢复频道", delete: "删除频道" }[action];
-  element("manage-description").textContent = action === "delete" ? `永久删除「${room.title}」及其 ${room.message_count} 条消息、共识和发言安排。无法撤销。请输入完整频道名称确认。` :
+  element("manage-description").textContent = action === "delete" ? `永久删除「${room.title}」及其 ${room.message_count} 条消息、共识和发言安排。无法撤销。` :
     action === "archive" ? `存档「${room.title}」后移入已存档列表，保留记录并暂停未收束的讨论。` : action === "restore" ? `恢复「${room.title}」到讨论列表；讨论阶段仍保持暂停或收束。` : "修改名称不会影响记录和阅读地址。";
-  element("manage-input-label").hidden = !["rename", "delete"].includes(action);
+  element("manage-input-label").hidden = action !== "rename";
   element("manage-input").value = action === "rename" ? room.title : "";
-  element("manage-input").required = ["rename", "delete"].includes(action);
-  element("manage-input").dataset.expected = room.title;
+  element("manage-input").required = action === "rename";
   element("manage-submit").textContent = action === "delete" ? "永久删除" : "确认";
-  element("manage-submit").disabled = action === "delete";
+  element("manage-submit").disabled = false;
   element("manage-dialog").showModal();
 }
 
@@ -1278,12 +1277,9 @@ async function open_room_management(id, action) {
 function bind_directory_controls() {
   element("archive-toggle").addEventListener("click", toggle_archives);
   element("close-manage").addEventListener("click", () => element("manage-dialog").close());
-  element("manage-input").addEventListener("input", () => {
-    element("manage-submit").disabled = state.management?.action === "delete" && element("manage-input").value !== element("manage-input").dataset.expected;
-  });
   element("manage-form").addEventListener("submit", (event) => {
     event.preventDefault();
-    const management = { ...state.management, title: element("manage-input").value, confirm_title: element("manage-input").value };
+    const management = { ...state.management, title: element("manage-input").value };
     if (["archive", "restore", "rename", "delete"].includes(management.action)) {
       element("manage-dialog").close();
       run_action(() => manage_channel(management));

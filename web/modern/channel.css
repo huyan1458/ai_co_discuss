@@ -429,7 +429,10 @@ html[data-theme^="channel"] .channel-archive-modal [data-slot="title"] { font-si
 html[data-theme^="channel"] .channel-archive-modal [data-slot="description"] { display: none; }
 html[data-theme^="channel"] .channel-archive-modal .dialog-body { padding: 0 44px 36px; min-height: 0; max-height: none; overflow: hidden; }
 .channel-archive-manager { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 28px; }
-.channel-archive-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) 148px; gap: 8px; flex-shrink: 0; }
+.channel-archive-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) 148px auto; gap: 8px; flex-shrink: 0; }
+.channel-archive-toolbar > .channel-archive-delete-all { width: auto; white-space: nowrap; }
+.channel-archive-bulk { display: flex; align-items: center; gap: 8px; padding: 10px 0; font-size: 12px; color: var(--ui-text); }
+.channel-archive-bulk > span { flex: 1; min-width: 0; }
 .channel-archive-toolbar > * { min-width: 0; width: 100%; }
 html[data-theme^="channel"] .channel-archive-toolbar :is(input, button[role="combobox"]) { height: 32px; min-height: 32px; border: 1px solid var(--ui-border-muted); background: transparent; box-shadow: none; font-size: 12px; border-radius: 9px; }
 html[data-theme^="channel"] .channel-archive-toolbar .channel-archive-search input { border-radius: 999px; }
