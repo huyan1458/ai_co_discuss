@@ -1,5 +1,5 @@
 <script setup>
-import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import ChannelDiscussion from "./ChannelDiscussion.vue";
 import TopicPanel from "./TopicPanel.vue";
 import WorkspaceDialogs from "./WorkspaceDialogs.vue";
@@ -151,6 +151,16 @@ function toggle_info() {
 /** Keep the resizable layout within the current viewport. */
 function update_viewport_width() { viewport_width.value = window.innerWidth; }
 
+/** Toggle the host brief while keeping the visible messages at the same screen position. */
+async function toggle_brief() {
+  const brief = document.querySelector(".channel-host-brief");
+  const transcript = document.querySelector(".channel-transcript");
+  const before = brief?.offsetHeight || 0;
+  brief_collapsed.value = !brief_collapsed.value;
+  await nextTick();
+  if (transcript && brief) transcript.scrollTop += brief.offsetHeight - before;
+}
+
 /** Capture the divider so dragging continues outside its narrow hit area. */
 function start_rail_resize(event) {
   if (event.button !== 0) return;
@@ -263,7 +273,7 @@ function resize_nav_by_key(event) {
       <section v-if="room" class="channel-host-brief" :class="{ 'is-collapsed': brief_collapsed }" aria-label="主持简报">
         <div class="channel-brief-inner">
           <div class="channel-brief-heading">
-            <button type="button" class="channel-brief-toggle" :aria-label="brief_collapsed ? '展开主持简报' : '收起主持简报'" :aria-expanded="!brief_collapsed" aria-controls="channel-brief-content" @click="brief_collapsed = !brief_collapsed"><UIcon :name="brief_collapsed ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" /><strong>主持简报{{ brief_collapsed ? '：' : '' }}</strong><span v-if="brief_collapsed" class="channel-brief-preview">{{ brief_preview }}</span></button>
+            <button type="button" class="channel-brief-toggle" :aria-label="brief_collapsed ? '展开主持简报' : '收起主持简报'" :aria-expanded="!brief_collapsed" aria-controls="channel-brief-content" @click="toggle_brief"><UIcon :name="brief_collapsed ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" /><strong>主持简报{{ brief_collapsed ? '：' : '' }}</strong><span v-if="brief_collapsed" class="channel-brief-preview">{{ brief_preview }}</span></button>
             <template v-if="!brief_collapsed"><span class="channel-brief-round">{{ bridge.progress_round(room) }}</span><UButton label="更新简报" color="neutral" variant="link" size="xs" class="channel-brief-update" @click="act('tab', 'context')" /></template>
           </div>
           <div v-show="!brief_collapsed" id="channel-brief-content" class="channel-brief-content">
