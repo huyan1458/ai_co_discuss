@@ -40598,45 +40598,47 @@ var VV = {
 	class: "channel-nav-preview-round"
 }, $V = { class: "channel-nav-preview-header" }, eH = { class: "channel-nav-preview-meta" }, tH = { key: 0 }, nH = { key: 1 }, rH = ["innerHTML"], iH = {
 	key: 0,
-	class: "channel-topic-card",
+	class: "channel-message-group channel-topic-group"
+}, aH = {
+	class: "channel-message channel-topic-card",
 	"aria-label": "议题"
-}, aH = { class: "channel-topic-heading" }, oH = { class: "channel-topic-eyebrow" }, sH = {
+}, oH = { class: "channel-topic-heading" }, sH = { class: "channel-topic-eyebrow" }, cH = {
 	key: 0,
 	class: "channel-topic-section channel-topic-request"
-}, cH = { class: "channel-topic-text" }, lH = {
+}, lH = { class: "channel-topic-text" }, uH = {
 	key: 1,
 	class: "channel-topic-section"
-}, uH = { class: "channel-topic-text" }, dH = {
+}, dH = { class: "channel-topic-text" }, fH = {
 	key: 2,
 	class: "channel-topic-section"
-}, fH = { class: "channel-topic-text" }, pH = { class: "channel-topic-section channel-topic-config" }, mH = { class: "channel-topic-people" }, hH = {
+}, pH = { class: "channel-topic-text" }, mH = { class: "channel-topic-section channel-topic-config" }, hH = { class: "channel-topic-people" }, gH = {
 	key: 0,
 	class: "channel-topic-person"
-}, gH = { class: "channel-topic-bounds" }, _H = { class: "channel-message-byline" }, vH = { class: "channel-message-meta" }, yH = { class: "channel-message-author" }, bH = { class: "channel-message-round" }, xH = { class: "channel-message-provenance" }, SH = ["title"], CH = { key: 0 }, wH = { key: 1 }, TH = {
+}, _H = { class: "channel-topic-bounds" }, vH = { class: "channel-message-byline" }, yH = { class: "channel-message-meta" }, bH = { class: "channel-message-author" }, xH = { class: "channel-message-round" }, SH = { class: "channel-message-provenance" }, CH = ["title"], wH = { key: 0 }, TH = { key: 1 }, EH = {
 	key: 1,
 	class: "channel-receipt"
-}, EH = ["aria-label"], DH = ["innerHTML"], OH = {
+}, DH = ["aria-label"], OH = ["innerHTML"], kH = {
 	key: 2,
 	class: "channel-answer"
-}, kH = ["id", "innerHTML"], AH = {
+}, AH = ["id", "innerHTML"], jH = {
 	key: 3,
 	class: "channel-answer-summary"
-}, jH = { key: 0 }, MH = ["innerHTML"], NH = { class: "channel-message-actions" }, PH = { class: "channel-message-toolbar" }, FH = {
+}, MH = { key: 0 }, NH = ["innerHTML"], PH = { class: "channel-message-actions" }, FH = { class: "channel-message-toolbar" }, IH = {
 	key: 1,
 	class: "channel-empty"
-}, IH = {
+}, LH = {
 	key: 2,
 	class: "channel-latest-dock"
-}, LH = { class: "channel-composer-dock" }, RH = {
+}, RH = { class: "channel-composer-dock" }, zH = {
 	key: 0,
 	class: "channel-reply-draft channel-queue-hint"
-}, zH = {
+}, BH = {
 	key: 1,
 	class: "channel-reply-draft"
-}, BH = {
+}, VH = {
 	key: 2,
 	class: "channel-answer-editor"
-}, VH = { class: "channel-composer-identity" }, HH = { class: "channel-shortcut" }, UH = { class: "channel-composer-note" }, WH = { class: "channel-draft-length" }, GH = 160, KH = 100, qH = 4, JH = 3, YH = 320, XH = 34, ZH = 12, QH = 16, $H = 14, eU = 8, tU = 28, nU = 18, rU = 1, iU = 1.5, aU = 3, oU = 6, sU = .62, cU = .72, lU = .88, uU = .16, dU = 12, fU = 450, pU = 8, mU = 70, hU = 20, gU = {
+}, HH = { class: "channel-composer-identity" }, UH = { class: "channel-shortcut" }, WH = { class: "channel-composer-note" }, GH = { class: "channel-draft-length" }, KH = 160, qH = 100, JH = 4, YH = 3, XH = 320, ZH = 34, QH = 12, $H = 16, eU = 14, tU = 8, nU = 28, rU = 18, iU = 1, aU = 1.5, oU = 3, sU = 6, cU = .62, lU = .72, uU = .88, dU = .16, fU = 12, pU = 450, mU = 8, hU = 70, gU = 20, _U = {
 	__name: "ChannelDiscussion",
 	emits: [
 		"detail",
@@ -40717,12 +40719,12 @@ var VV = {
 			for (let t of e.querySelectorAll("pre code, tbody")) {
 				let n = e.ownerDocument.createRange();
 				if (t.tagName === "TBODY") {
-					if (t.children.length <= JH) continue;
+					if (t.children.length <= YH) continue;
 					n.setStartAfter(t.children[2]);
 				} else {
 					let e = t.textContent.trimEnd().split("\n");
-					if (e.length <= qH) continue;
-					n.setStart(t.firstChild, e.slice(0, qH).join("\n").length);
+					if (e.length <= JH) continue;
+					n.setStart(t.firstChild, e.slice(0, JH).join("\n").length);
 				}
 				return n.setEnd(e, e.childNodes.length), n.deleteContents(), !0;
 			}
@@ -40739,11 +40741,11 @@ var VV = {
 			let r = Oe(n.content), i = document.createTreeWalker(n.content, NodeFilter.SHOW_TEXT, { acceptNode: (e) => e.parentElement?.closest(".katex-mathml") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT }), a = [];
 			for (; i.nextNode();) a.push(i.currentNode);
 			let o = [...a.map((e) => e.textContent).join("").trimEnd()];
-			if (o.length <= GH) return {
+			if (o.length <= KH) return {
 				truncated: r,
 				html: n.innerHTML
 			};
-			let s = o.slice(0, GH).join(""), c = [...s.matchAll(/[。！？；]\s*|[.!?;](?:\s|$)|\n/gu)].at(-1), l = c ? c.index + c[0].length : 0, u = [...s.slice(0, l)].length >= KH, d = u ? l : s.length;
+			let s = o.slice(0, KH).join(""), c = [...s.matchAll(/[。！？；]\s*|[.!?;](?:\s|$)|\n/gu)].at(-1), l = c ? c.index + c[0].length : 0, u = [...s.slice(0, l)].length >= qH, d = u ? l : s.length;
 			for (let e of a) {
 				if (d > e.textContent.length) {
 					d -= e.textContent.length;
@@ -40809,14 +40811,14 @@ var VV = {
 		function Ie() {
 			let e = _.value;
 			if (!e || !e.clientHeight) return;
-			ye.value = e.scrollHeight - e.scrollTop - e.clientHeight < mU;
+			ye.value = e.scrollHeight - e.scrollTop - e.clientHeight < hU;
 			let t = e.getBoundingClientRect(), n = [...e.querySelectorAll("[data-message-id]")], r = n.find((e) => Number(e.dataset.messageId) === ee.value);
 			if (r && r.getBoundingClientRect().bottom > t.top && r.getBoundingClientRect().top < t.bottom) {
 				T.value = ee.value;
 				return;
 			}
 			ee.value = null;
-			let i = n.find((e) => e.getBoundingClientRect().bottom > t.top + hU);
+			let i = n.find((e) => e.getBoundingClientRect().bottom > t.top + gU);
 			T.value = i ? Number(i.dataset.messageId) : null;
 		}
 		async function Le() {
@@ -40833,11 +40835,11 @@ var VV = {
 		}), L(() => r.value.room?.id, () => v.value.clear());
 		async function Re(e, t) {
 			let n = t.currentTarget.closest("[data-message-id]"), r = v.value.has(e.id), i = _.value.scrollTop;
-			ye.value = !1, r ? v.value.delete(e.id) : v.value.add(e.id), tt(), await $n(), r || (_.value.scrollTop = i), r && n.getBoundingClientRect().top < _.value.getBoundingClientRect().top && (_.value.scrollTop += n.getBoundingClientRect().top - _.value.getBoundingClientRect().top - hU), Ie();
+			ye.value = !1, r ? v.value.delete(e.id) : v.value.add(e.id), tt(), await $n(), r || (_.value.scrollTop = i), r && n.getBoundingClientRect().top < _.value.getBoundingClientRect().top && (_.value.scrollTop += n.getBoundingClientRect().top - _.value.getBoundingClientRect().top - gU), Ie();
 		}
 		function ze(e) {
 			let t = _.value, n = t?.querySelector(`[data-message-id="${e}"]`);
-			n && (et(), ee.value = e, T.value = e, t.scrollTop += n.getBoundingClientRect().top - t.getBoundingClientRect().top - hU, n.focus({ preventScroll: !0 }), Ie());
+			n && (et(), ee.value = e, T.value = e, t.scrollTop += n.getBoundingClientRect().top - t.getBoundingClientRect().top - gU, n.focus({ preventScroll: !0 }), Ie());
 		}
 		function Be(e) {
 			(e.type !== "keydown" || [
@@ -40866,7 +40868,7 @@ var VV = {
 			let t = C.value;
 			if (!t?.clientHeight || !e) return;
 			let n = t.getBoundingClientRect(), r = e.getBoundingClientRect();
-			r.top < n.top + dU ? t.scrollTop += r.top - n.top - dU : r.bottom > n.bottom - dU && (t.scrollTop += r.bottom - n.bottom + dU);
+			r.top < n.top + fU ? t.scrollTop += r.top - n.top - fU : r.bottom > n.bottom - fU && (t.scrollTop += r.bottom - n.bottom + fU);
 		}
 		async function Ue() {
 			await $n(), He(C.value?.querySelector(`[data-jump-id="${T.value}"]`));
@@ -40886,7 +40888,7 @@ var VV = {
 			};
 			se = n, n.timer = setTimeout(() => {
 				se === n && (ce = !0, $e(e, { currentTarget: n.target }));
-			}, fU);
+			}, pU);
 		}
 		function Ke() {
 			se && clearTimeout(se.timer), se = null;
@@ -40895,7 +40897,7 @@ var VV = {
 			se?.pointer === e.pointerId && (e.type === "pointercancel" && (ce = !0), et());
 		}
 		function Je(e, t) {
-			["touch", "pen"].includes(t.pointerType) ? se?.pointer === t.pointerId && Math.hypot(t.clientX - se.x, t.clientY - se.y) > pU && (ce = !0, et()) : t.type === "pointerenter" && w.value || (w.value = !1, (te.value !== e.key || !re.value) && $e(e, t));
+			["touch", "pen"].includes(t.pointerType) ? se?.pointer === t.pointerId && Math.hypot(t.clientX - se.x, t.clientY - se.y) > mU && (ce = !0, et()) : t.type === "pointerenter" && w.value || (w.value = !1, (te.value !== e.key || !re.value) && $e(e, t));
 		}
 		function Ye(e, t) {
 			ce && t.detail !== 0 ? (ce = !1, t.preventDefault()) : ze(e.message.id);
@@ -40910,11 +40912,11 @@ var VV = {
 			et(), ee.value = null, ye.value = !0, Le();
 		}
 		async function $e(e, t) {
-			let n = e.message, r = t.currentTarget.getBoundingClientRect(), i = C.value.getBoundingClientRect(), a = Math.min(YH, innerWidth - 24), o = i.right + QH;
-			if (ae.value = Math.max(ZH, Math.min(o, innerWidth - a - ZH)), E.value = n.id, te.value = e.key, ne.value = e.round, re.value = !0, await $n(), !re.value || te.value !== e.key) return;
-			oe.value = ie.value.scrollHeight + XH;
-			let s = (Math.max(r.top, i.top + dU) + Math.min(r.bottom, i.bottom - dU)) / 2 - oe.value / 2;
-			D.value = Math.max(ZH, Math.min(s, innerHeight - oe.value - ZH));
+			let n = e.message, r = t.currentTarget.getBoundingClientRect(), i = C.value.getBoundingClientRect(), a = Math.min(XH, innerWidth - 24), o = i.right + $H;
+			if (ae.value = Math.max(QH, Math.min(o, innerWidth - a - QH)), E.value = n.id, te.value = e.key, ne.value = e.round, re.value = !0, await $n(), !re.value || te.value !== e.key) return;
+			oe.value = ie.value.scrollHeight + ZH;
+			let s = (Math.max(r.top, i.top + fU) + Math.min(r.bottom, i.bottom - fU)) / 2 - oe.value / 2;
+			D.value = Math.max(QH, Math.min(s, innerHeight - oe.value - QH));
 			let c = O.value || de.get() === 0;
 			le[c ? "jump" : "set"](D.value), ue[c ? "jump" : "set"](oe.value);
 		}
@@ -40929,14 +40931,14 @@ var VV = {
 		}
 		function rt(e) {
 			let t = e.entries.length - 1;
-			return Math.max(-3, Math.min(t + aU, M.value - e.entries[0].index));
+			return Math.max(-3, Math.min(t + oU, M.value - e.entries[0].index));
 		}
 		function it(e, t) {
-			let n = M.value < 0 ? Infinity : Math.abs(t - M.value), r = Math.max(0, 1 - n / aU), i = T.value === e.message.id, a = n === 0 || i && M.value < 0, o = eU;
+			let n = M.value < 0 ? Infinity : Math.abs(t - M.value), r = Math.max(0, 1 - n / oU), i = T.value === e.message.id, a = n === 0 || i && M.value < 0, o = tU;
 			return {
-				scaleX: a ? tU / o : i ? nU / o : 1 + r * oU / o,
-				height: a ? iU : rU,
-				opacity: a ? lU : i ? cU : sU + r * uU
+				scaleX: a ? nU / o : i ? rU / o : 1 + r * sU / o,
+				height: a ? aU : iU,
+				opacity: a ? uU : i ? lU : cU + r * dU
 			};
 		}
 		L([re, O], () => {
@@ -40987,7 +40989,7 @@ var VV = {
 					ref_key: "message_map",
 					ref: C,
 					class: "channel-message-map",
-					style: pe({ "--nav-entry-height": `${$H}px` }),
+					style: pe({ "--nav-entry-height": `${eU}px` }),
 					"aria-label": "发言快速导航",
 					onWheelPassive: du(Ze, ["stop"]),
 					onPointerleave: et,
@@ -41052,7 +41054,7 @@ var VV = {
 						opacity: F(me),
 						scale: F(fe),
 						height: F(ue),
-						"--preview-gap": `${QH}px`
+						"--preview-gap": `${$H}px`
 					}),
 					onPointerleave: et,
 					onFocusout: et,
@@ -41113,9 +41115,9 @@ var VV = {
 					onTouchstartPassive: Be,
 					onKeydown: Be
 				}, [
-					!F(r).query && !F(r).mention_only ? (V(), H("section", iH, [
-						W("header", aH, [
-							W("span", oH, [G(w, { name: "i-lucide-target" }), t[15] ||= q("议题", -1)]),
+					!F(r).query && !F(r).mention_only ? (V(), H("div", iH, [W("section", aH, [
+						W("header", oH, [
+							W("span", sH, [G(w, { name: "i-lucide-target" }), t[15] ||= q("议题", -1)]),
 							W("h2", null, N(be.value.title), 1),
 							G(a, {
 								icon: "i-lucide-pencil",
@@ -41126,12 +41128,12 @@ var VV = {
 								onClick: t[3] ||= (e) => n("edit")
 							})
 						]),
-						x.value.request ? (V(), H("div", sH, [W("h3", null, N(x.value.request.label), 1), W("p", cH, N(x.value.request.text), 1)])) : J("", !0),
-						x.value.goal ? (V(), H("div", lH, [t[16] ||= W("h3", null, "目标", -1), W("p", uH, N(x.value.goal), 1)])) : J("", !0),
-						x.value.boundaries ? (V(), H("div", dH, [t[17] ||= W("h3", null, "边界", -1), W("p", fH, N(x.value.boundaries), 1)])) : J("", !0),
-						W("div", pH, [
+						x.value.request ? (V(), H("div", cH, [W("h3", null, N(x.value.request.label), 1), W("p", lH, N(x.value.request.text), 1)])) : J("", !0),
+						x.value.goal ? (V(), H("div", uH, [t[16] ||= W("h3", null, "目标", -1), W("p", dH, N(x.value.goal), 1)])) : J("", !0),
+						x.value.boundaries ? (V(), H("div", fH, [t[17] ||= W("h3", null, "边界", -1), W("p", pH, N(x.value.boundaries), 1)])) : J("", !0),
+						W("div", mH, [
 							t[19] ||= W("h3", null, "参与配置", -1),
-							W("div", mH, [(V(!0), H(B, null, ga(x.value.experts, (e) => (V(), H("span", {
+							W("div", hH, [(V(!0), H(B, null, ga(x.value.experts, (e) => (V(), H("span", {
 								key: e.name,
 								class: "channel-topic-person"
 							}, [
@@ -41149,8 +41151,8 @@ var VV = {
 								]),
 								q(N(F(i).display_name(e.name)), 1),
 								W("small", null, N(e.name === x.value.host ? `主持 · ${e.mode}` : e.mode), 1)
-							]))), 128)), x.value.host === "用户" ? (V(), H("span", hH, [q(N(F(i).display_name("用户")), 1), t[18] ||= W("small", null, "主持", -1)])) : J("", !0)]),
-							W("small", gH, N(x.value.bounds), 1)
+							]))), 128)), x.value.host === "用户" ? (V(), H("span", gH, [q(N(F(i).display_name("用户")), 1), t[18] ||= W("small", null, "主持", -1)])) : J("", !0)]),
+							W("small", _H, N(x.value.bounds), 1)
 						]),
 						G(a, {
 							label: "查看完整议题",
@@ -41161,7 +41163,7 @@ var VV = {
 							class: "channel-topic-toggle",
 							onClick: t[4] ||= (e) => n("topic")
 						})
-					])) : J("", !0),
+					])])) : J("", !0),
 					(V(!0), H(B, null, ga(Ae.value, (e) => (V(), H("div", {
 						key: e.key,
 						class: "channel-message-group"
@@ -41196,7 +41198,7 @@ var VV = {
 							}
 						}, {
 							body: I(() => [
-								W("div", _H, [G(y, {
+								W("div", vH, [G(y, {
 									src: F(i).identities[e.author]?.icon,
 									text: F(i).identities[e.author]?.initials || "?",
 									alt: F(i).display_name(e.author),
@@ -41207,9 +41209,9 @@ var VV = {
 									"text",
 									"alt",
 									"class"
-								]), W("div", vH, [W("div", yH, [
+								]), W("div", yH, [W("div", bH, [
 									W("strong", null, N(F(i).display_name(e.author)), 1),
-									W("span", bH, N(Ne.value.get(e.id)), 1),
+									W("span", xH, N(Ne.value.get(e.id)), 1),
 									G(E, {
 										size: "xs",
 										color: "neutral",
@@ -41250,8 +41252,8 @@ var VV = {
 										default: I(() => [...t[22] ||= [q("待主持人处理", -1)]]),
 										_: 1
 									}, 8, ["title"])) : J("", !0)
-								]), W("div", xH, [
-									W("time", { title: new Date(e.created_at).toLocaleString("zh-CN") }, N(F(i).format_time(e.created_at)), 9, SH),
+								]), W("div", SH, [
+									W("time", { title: new Date(e.created_at).toLocaleString("zh-CN") }, N(F(i).format_time(e.created_at)), 9, CH),
 									G(a, {
 										label: `#${e.id}`,
 										color: "neutral",
@@ -41265,8 +41267,8 @@ var VV = {
 										"aria-label",
 										"onClick"
 									]),
-									e.submitted_by && e.submitted_by !== e.author && (e.source !== "proxy" || e.submitted_by !== "用户") ? (V(), H("span", CH, N(F(i).display_name(e.submitted_by)) + " 代发", 1)) : J("", !0),
-									e.turn_id ? (V(), H("span", wH, "回答安排 #" + N(e.turn_id), 1)) : J("", !0)
+									e.submitted_by && e.submitted_by !== e.author && (e.source !== "proxy" || e.submitted_by !== "用户") ? (V(), H("span", wH, N(F(i).display_name(e.submitted_by)) + " 代发", 1)) : J("", !0),
+									e.turn_id ? (V(), H("span", TH, "回答安排 #" + N(e.turn_id), 1)) : J("", !0)
 								])])]),
 								e.reply_to ? (V(), U(a, {
 									key: 0,
@@ -41283,14 +41285,14 @@ var VV = {
 									"aria-label",
 									"onClick"
 								])) : J("", !0),
-								e.kind === "receipt" ? (V(), H("details", TH, [W("summary", { "aria-label": `查看运行回执 #${e.id}` }, "运行回执详情", 8, EH), W("div", {
+								e.kind === "receipt" ? (V(), H("details", EH, [W("summary", { "aria-label": `查看运行回执 #${e.id}` }, "运行回执详情", 8, DH), W("div", {
 									class: "channel-message-text markdown-body",
 									innerHTML: e.rendered_text
-								}, null, 8, DH)])) : (V(), H("div", OH, [W("div", {
+								}, null, 8, OH)])) : (V(), H("div", kH, [W("div", {
 									id: `channel-answer-${e.id}`,
 									class: "channel-message-text markdown-body",
 									innerHTML: v.value.has(e.id) ? e.rendered_text : b.value.get(e.id).html
-								}, null, 8, kH), b.value.get(e.id).truncated ? (V(), U(a, {
+								}, null, 8, AH), b.value.get(e.id).truncated ? (V(), U(a, {
 									key: 0,
 									label: v.value.has(e.id) ? "收起" : "展开全文",
 									"trailing-icon": v.value.has(e.id) ? "i-lucide-chevron-up" : "i-lucide-chevron-down",
@@ -41310,12 +41312,12 @@ var VV = {
 									"aria-controls",
 									"onClick"
 								])) : J("", !0)])),
-								e.summary ? (V(), H("div", AH, [W("small", null, [t[23] ||= q("回答摘要", -1), e.summary_by && e.summary_by !== e.author ? (V(), H("span", jH, " · " + N(F(i).display_name(e.summary_by)) + " 整理", 1)) : J("", !0)]), W("div", {
+								e.summary ? (V(), H("div", jH, [W("small", null, [t[23] ||= q("回答摘要", -1), e.summary_by && e.summary_by !== e.author ? (V(), H("span", MH, " · " + N(F(i).display_name(e.summary_by)) + " 整理", 1)) : J("", !0)]), W("div", {
 									class: "channel-message-text markdown-body",
 									innerHTML: e.rendered_summary
-								}, null, 8, MH)])) : J("", !0)
+								}, null, 8, NH)])) : J("", !0)
 							]),
-							header: I(() => [W("div", NH, [W("div", PH, [G(D, { text: "回复" }, {
+							header: I(() => [W("div", PH, [W("div", FH, [G(D, { text: "回复" }, {
 								default: I(() => [G(a, {
 									icon: "i-lucide-corner-up-left",
 									size: "xs",
@@ -41352,13 +41354,13 @@ var VV = {
 						]));
 						return l.memo = c, l;
 					}, t, 5), 128))]))), 128)),
-					F(r).messages.length ? J("", !0) : (V(), H("div", FH, [
+					F(r).messages.length ? J("", !0) : (V(), H("div", IH, [
 						G(w, { name: F(r).query || F(r).mention_only ? "i-lucide-search" : "i-lucide-hash" }, null, 8, ["name"]),
 						W("h2", null, N(F(r).query || F(r).mention_only ? "没有找到消息" : be.value.title), 1),
 						W("p", null, N(F(r).query || F(r).mention_only ? "试试其他关键词，或清除筛选。" : "这是频道的开始。发送第一条消息，开启讨论。"), 1)
 					]))
 				], 544)), t, 7),
-				F(r).messages.length && !ye.value ? (V(), H("div", IH, [G(a, {
+				F(r).messages.length && !ye.value ? (V(), H("div", LH, [G(a, {
 					icon: "i-lucide-arrow-down",
 					color: "neutral",
 					variant: "outline",
@@ -41366,7 +41368,7 @@ var VV = {
 					class: "channel-latest-button",
 					onClick: Qe
 				})])) : J("", !0),
-				W("div", LH, [G(Ee, {
+				W("div", RH, [G(Ee, {
 					ref_key: "prompt",
 					ref: ve,
 					modelValue: F(c),
@@ -41388,8 +41390,8 @@ var VV = {
 					onSubmit: st
 				}, {
 					header: I(() => [
-						xe.value ? (V(), H("div", RH, [G(w, { name: "i-lucide-clock" }), W("span", null, N(F(i).display_name(xe.value.expert)) + " 正在发言：新消息会在其说完后交给主持人；点「停止」立即打断", 1)])) : J("", !0),
-						F(r).reply_to || F(r).turn_reply_to ? (V(), H("div", zH, [
+						xe.value ? (V(), H("div", zH, [G(w, { name: "i-lucide-clock" }), W("span", null, N(F(i).display_name(xe.value.expert)) + " 正在发言：新消息会在其说完后交给主持人；点「停止」立即打断", 1)])) : J("", !0),
+						F(r).reply_to || F(r).turn_reply_to ? (V(), H("div", BH, [
 							G(w, { name: "i-lucide-corner-up-left" }),
 							W("span", null, N(F(r).turn_reply_to ? `回答安排 #${F(r).turn_reply_to} · ${F(i).display_name(be.value.host)} 代发` : `回复 #${F(r).reply_to}`), 1),
 							G(a, {
@@ -41401,7 +41403,7 @@ var VV = {
 								onClick: t[8] ||= (e) => F(o)(F(r).turn_reply_to ? "cancel_answer" : "cancel_reply")
 							}, null, 8, ["aria-label"])
 						])) : J("", !0),
-						m.value ? (V(), H("div", BH, [G(ce, {
+						m.value ? (V(), H("div", VH, [G(ce, {
 							modelValue: F(f),
 							"onUpdate:modelValue": t[9] ||= (e) => /* @__PURE__ */ un(f) ? f.value = e : null,
 							rows: 2,
@@ -41417,7 +41419,7 @@ var VV = {
 						}, null, 8, ["modelValue"])])) : J("", !0)
 					]),
 					footer: I(() => [
-						W("div", VH, [
+						W("div", HH, [
 							G(ge, {
 								modelValue: F(u),
 								"onUpdate:modelValue": t[11] ||= (e) => /* @__PURE__ */ un(u) ? u.value = e : null,
@@ -41465,7 +41467,7 @@ var VV = {
 								ui: { content: "channel-select-menu" }
 							}, null, 8, ["modelValue"])
 						]),
-						W("span", HH, [G(M, { value: "ctrl" }), G(M, { value: "enter" })]),
+						W("span", UH, [G(M, { value: "ctrl" }), G(M, { value: "enter" })]),
 						xe.value ? (V(), U(a, {
 							key: 0,
 							icon: "i-lucide-square",
@@ -41490,11 +41492,11 @@ var VV = {
 						}, null, 8, ["disabled", "loading"])
 					]),
 					_: 1
-				}, 8, ["modelValue", "placeholder"]), W("div", UH, [W("span", null, [
+				}, 8, ["modelValue", "placeholder"]), W("div", WH, [W("span", null, [
 					q(N(De.value), 1),
 					t[25] ||= W("span", { class: "channel-note-divider" }, "·", -1),
 					t[26] ||= q("在线 AI 的观点需代发", -1)
-				]), W("span", WH, [
+				]), W("span", GH, [
 					q(N(l.value) + " / " + N(F(i).max_message_length), 1),
 					t[27] ||= W("span", { class: "channel-note-divider" }, "·", -1),
 					t[28] ||= q("Enter 换行", -1)
@@ -41502,34 +41504,34 @@ var VV = {
 			], 2);
 		};
 	}
-}, _U = {
+}, vU = {
 	key: 0,
 	class: "turn-panel"
-}, vU = { class: "turn-header" }, yU = { class: "page-heading" }, bU = { class: "topic-brief" }, xU = {
+}, yU = { class: "turn-header" }, bU = { class: "page-heading" }, xU = { class: "topic-brief" }, SU = {
 	key: 0,
 	class: "turn-panel"
-}, SU = { class: "turn-header" }, CU = { class: "button-row" }, wU = { class: "turn-panel" }, TU = { class: "turn-header" }, EU = { class: "turn-expert" }, DU = { class: "turn-question" }, OU = {
+}, CU = { class: "turn-header" }, wU = { class: "button-row" }, TU = { class: "turn-panel" }, EU = { class: "turn-header" }, DU = { class: "turn-expert" }, OU = { class: "turn-question" }, kU = {
 	key: 0,
 	class: "button-row"
-}, kU = {
+}, AU = {
 	key: 1,
 	class: "turn-empty"
-}, AU = {
+}, jU = {
 	key: 2,
 	class: "fine-print"
-}, jU = {
+}, MU = {
 	key: 1,
 	class: "info-section"
-}, MU = { class: "button-row" }, NU = {
+}, NU = { class: "button-row" }, PU = {
 	key: 0,
 	class: "fine-print"
-}, PU = { class: "form-footer" }, FU = ["href"], IU = {
+}, FU = { class: "form-footer" }, IU = ["href"], LU = {
 	key: 2,
 	class: "fine-print"
-}, LU = { class: "turn-panel" }, RU = { class: "form-two-columns" }, zU = { class: "button-row" }, BU = { class: "access-section" }, VU = { class: "access-icon" }, HU = { class: "access-address" }, UU = { class: "button-row" }, WU = { class: "access-section" }, GU = { class: "access-icon" }, KU = { class: "access-address" }, qU = { class: "button-row" }, JU = { class: "fine-print" }, YU = {
+}, RU = { class: "turn-panel" }, zU = { class: "form-two-columns" }, BU = { class: "button-row" }, VU = { class: "access-section" }, HU = { class: "access-icon" }, UU = { class: "access-address" }, WU = { class: "button-row" }, GU = { class: "access-section" }, KU = { class: "access-icon" }, qU = { class: "access-address" }, JU = { class: "button-row" }, YU = { class: "fine-print" }, XU = {
 	key: 0,
 	class: "fine-print"
-}, XU = {
+}, ZU = {
 	__name: "TopicPanel",
 	emits: ["open", "detail"],
 	setup(e) {
@@ -41550,8 +41552,8 @@ var VV = {
 				},
 				transition: { duration: .16 }
 			}, {
-				default: I(() => [o.value.limits ? (V(), H("section", _U, [
-					W("div", vU, [f[21] ||= W("h3", null, "讨论上限与进度", -1), G(p, {
+				default: I(() => [o.value.limits ? (V(), H("section", vU, [
+					W("div", yU, [f[21] ||= W("h3", null, "讨论上限与进度", -1), G(p, {
 						color: o.value.limits.reached && o.value.phase !== "concluded" ? "warning" : "neutral",
 						variant: "subtle"
 					}, {
@@ -41569,7 +41571,7 @@ var VV = {
 					}, null, 8, ["loading"])) : J("", !0),
 					f[22] ||= W("p", { class: "fine-print" }, "在“编辑议题”中调整参数。自动模式由接入程序检查；手动模式由主持人或此按钮执行到限处理。", -1)
 				])) : J("", !0), F(t).tab === "topic" ? (V(), H(B, { key: 1 }, [
-					W("div", yU, [W("div", null, [
+					W("div", bU, [W("div", null, [
 						f[23] ||= W("span", { class: "eyebrow" }, "讨论进程", -1),
 						f[24] ||= W("h2", null, "主持与安排", -1),
 						W("p", null, "当前由 " + N(F(n).display_name(o.value.host)) + " 主持，围绕具体问题组织下一轮发言。", 1)
@@ -41581,16 +41583,16 @@ var VV = {
 						class: "channel-surface-button",
 						onClick: f[1] ||= (t) => e.$emit("open", "edit")
 					})]),
-					W("div", bU, [W("div", null, [f[25] ||= W("h3", null, "讨论目标", -1), W("p", null, N(o.value.goal || "尚未填写讨论目标"), 1)]), W("div", null, [f[26] ||= W("h3", null, "当前焦点", -1), W("p", null, N(o.value.focus || "尚未设置当前焦点"), 1)])]),
-					o.value.floor ? (V(), H("section", xU, [
-						W("div", SU, [f[27] ||= W("h3", null, "发言权", -1), G(p, {
+					W("div", xU, [W("div", null, [f[25] ||= W("h3", null, "讨论目标", -1), W("p", null, N(o.value.goal || "尚未填写讨论目标"), 1)]), W("div", null, [f[26] ||= W("h3", null, "当前焦点", -1), W("p", null, N(o.value.focus || "尚未设置当前焦点"), 1)])]),
+					o.value.floor ? (V(), H("section", SU, [
+						W("div", CU, [f[27] ||= W("h3", null, "发言权", -1), G(p, {
 							color: "neutral",
 							variant: "subtle"
 						}, {
 							default: I(() => [q(N(F(n).floor_status(o.value)), 1)]),
 							_: 1
 						})]),
-						W("div", CU, [o.value.floor.holder ? (V(), U(m, {
+						W("div", wU, [o.value.floor.holder ? (V(), U(m, {
 							key: 1,
 							label: "归还发言权",
 							loading: F(i) === "return_floor",
@@ -41607,8 +41609,8 @@ var VV = {
 						}, null, 8, ["label", "loading"]))]),
 						f[28] ||= W("p", { class: "fine-print" }, "发言或安排保存后自动归还；用户本人可随时留言。", -1)
 					])) : J("", !0),
-					W("section", wU, [
-						W("div", TU, [f[29] ||= W("h3", null, "当前发言安排", -1), G(p, {
+					W("section", TU, [
+						W("div", EU, [f[29] ||= W("h3", null, "当前发言安排", -1), G(p, {
 							color: c.value ? "primary" : "neutral",
 							variant: "subtle"
 						}, {
@@ -41616,7 +41618,7 @@ var VV = {
 							_: 1
 						}, 8, ["color"])]),
 						s.value ? (V(), H(B, { key: 0 }, [
-							W("div", EU, [G(h, {
+							W("div", DU, [G(h, {
 								src: F(n).identities[s.value.expert]?.icon,
 								text: F(n).identities[s.value.expert]?.initials,
 								alt: s.value.expert,
@@ -41627,8 +41629,8 @@ var VV = {
 								"alt",
 								"class"
 							]), W("div", null, [W("strong", null, N(s.value.expert), 1), W("small", null, "发言安排 #" + N(s.value.id), 1)])]),
-							W("p", DU, N(s.value.question), 1),
-							c.value ? (V(), H("div", OU, [
+							W("p", OU, N(s.value.question), 1),
+							c.value ? (V(), H("div", kU, [
 								G(m, {
 									icon: "i-lucide-copy",
 									label: "复制通知",
@@ -41671,39 +41673,39 @@ var VV = {
 								class: "channel-surface-button",
 								onClick: f[8] ||= (t) => e.$emit("detail", s.value.answer_id)
 							})) : J("", !0)
-						], 64)) : (V(), H("p", kU, "把下一轮需要回答的问题，交给一位参与者。")),
-						c.value ? (V(), H("p", AU, N(F(n).turn_guidance(s.value, o.value)), 1)) : J("", !0)
+						], 64)) : (V(), H("p", AU, "把下一轮需要回答的问题，交给一位参与者。")),
+						c.value ? (V(), H("p", jU, N(F(n).turn_guidance(s.value, o.value)), 1)) : J("", !0)
 					]),
-					Array.isArray(o.value.latest_receipts) ? (V(), H("section", jU, [
+					Array.isArray(o.value.latest_receipts) ? (V(), H("section", MU, [
 						f[30] ||= W("h3", null, "最新运行回执", -1),
 						f[31] ||= W("p", { class: "fine-print" }, "每位参与者最近一条；实际运行结果请查看原文。晚于摘要的回执可能尚未整理。", -1),
-						W("div", MU, [(V(!0), H(B, null, ga(o.value.latest_receipts, (t) => (V(), U(m, {
+						W("div", NU, [(V(!0), H(B, null, ga(o.value.latest_receipts, (t) => (V(), U(m, {
 							key: t.id,
 							label: `${F(n).display_name(t.author)} #${t.id} · ${new Date(t.created_at).toLocaleString("zh-CN")}${t.id > o.value.state_until ? " · 晚于摘要" : ""}`,
 							variant: "link",
 							color: "neutral",
 							onClick: (n) => e.$emit("detail", t.id)
-						}, null, 8, ["label", "onClick"]))), 128)), o.value.latest_receipts.length ? J("", !0) : (V(), H("span", NU, "尚无运行回执。"))])
+						}, null, 8, ["label", "onClick"]))), 128)), o.value.latest_receipts.length ? J("", !0) : (V(), H("span", PU, "尚无运行回执。"))])
 					])) : J("", !0),
-					W("div", PU, [W("a", {
+					W("div", FU, [W("a", {
 						href: `${d.value}/turns`,
 						target: "_blank",
 						rel: "noopener",
 						class: "subtle-link"
-					}, [f[32] ||= q("发言安排历史 ", -1), G(g, { name: "i-lucide-arrow-up-right" })], 8, FU), G(m, {
+					}, [f[32] ||= q("发言安排历史 ", -1), G(g, { name: "i-lucide-arrow-up-right" })], 8, IU), G(m, {
 						icon: "i-lucide-plus",
 						label: "安排下一位专家",
 						class: "channel-primary-button",
 						disabled: !u.value,
 						onClick: f[9] ||= (t) => e.$emit("open", "schedule")
 					}, null, 8, ["disabled"])]),
-					u.value ? J("", !0) : (V(), H("p", IU, N(l.value ? "话题已暂停或收束，修改阶段后可以继续安排。" : c.value ? "先完成或取消当前安排，再安排下一位。" : o.value.limits?.reached ? "已达到讨论上限，请检查到限处理；需要继续时先暂停并调整参数。" : o.value.floor?.holder === o.value.host ? "请先在议题资料中配置参与专家。" : "主持人领取发言权后可安排下一位。"), 1))
+					u.value ? J("", !0) : (V(), H("p", LU, N(l.value ? "话题已暂停或收束，修改阶段后可以继续安排。" : c.value ? "先完成或取消当前安排，再安排下一位。" : o.value.limits?.reached ? "已达到讨论上限，请检查到限处理；需要继续时先暂停并调整参数。" : o.value.floor?.holder === o.value.host ? "请先在议题资料中配置参与专家。" : "主持人领取发言权后可安排下一位。"), 1))
 				], 64)) : (V(), H(B, { key: 2 }, [
-					W("section", LU, [
+					W("section", RU, [
 						f[33] ||= W("h3", null, "讨论运行方式", -1),
 						W("p", null, N(F(n).runtime_label(o.value.runtime)), 1),
 						W("p", null, N(F(n).execution_label(o.value.runtime?.latest_execution)), 1),
-						W("div", RU, [G(v, { label: "讨论所属项目（可选）" }, {
+						W("div", zU, [G(v, { label: "讨论所属项目（可选）" }, {
 							default: I(() => [G(_, {
 								"model-value": F(t).fields["runtime-project"],
 								placeholder: "软件中的项目名称",
@@ -41720,7 +41722,7 @@ var VV = {
 							}, null, 8, ["model-value"])]),
 							_: 1
 						})]),
-						W("div", zU, [
+						W("div", BU, [
 							G(m, {
 								label: "选择全自动讨论",
 								variant: "outline",
@@ -41754,7 +41756,7 @@ var VV = {
 						W("h2", null, "邀请 AI 参与"),
 						W("p", null, "按运行环境选择参与方式，专家自主决定阅读深度。")
 					])], -1),
-					W("section", BU, [W("span", VU, [G(g, { name: "i-lucide-globe" })]), W("div", null, [
+					W("section", VU, [W("span", HU, [G(g, { name: "i-lucide-globe" })]), W("div", null, [
 						W("h3", null, [f[36] ||= q("在线 AI ", -1), G(p, {
 							color: "neutral",
 							variant: "subtle"
@@ -41763,14 +41765,14 @@ var VV = {
 							_: 1
 						})]),
 						f[37] ||= W("p", null, "把阅读入口提供给在线聊天产品。观点留在原聊天窗口，再由用户或主持人代发。", -1),
-						W("div", HU, [W("code", null, N(d.value), 1), G(m, {
+						W("div", UU, [W("code", null, N(d.value), 1), G(m, {
 							icon: "i-lucide-copy",
 							color: "neutral",
 							variant: "ghost",
 							"aria-label": "复制在线阅读地址",
 							onClick: f[16] ||= (e) => F(r)("copy_reading")
 						})]),
-						W("div", UU, [G(m, {
+						W("div", WU, [G(m, {
 							label: "复制只读参与指令",
 							variant: "outline",
 							color: "neutral",
@@ -41785,7 +41787,7 @@ var VV = {
 							color: "neutral"
 						}, null, 8, ["to"])])
 					])]),
-					W("section", WU, [W("span", GU, [G(g, { name: "i-lucide-terminal" })]), W("div", null, [
+					W("section", GU, [W("span", KU, [G(g, { name: "i-lucide-terminal" })]), W("div", null, [
 						W("h3", null, [f[39] ||= q("本地 CLI AI ", -1), G(p, {
 							color: "primary",
 							variant: "subtle"
@@ -41794,14 +41796,14 @@ var VV = {
 							_: 1
 						})]),
 						f[40] ||= W("p", null, "使用本地 AI 软件读取话题，通过留言板接口提交观点，按消息编号核对原文。", -1),
-						W("div", KU, [W("code", null, N(d.value) + "?mode=cli", 1), G(m, {
+						W("div", qU, [W("code", null, N(d.value) + "?mode=cli", 1), G(m, {
 							icon: "i-lucide-copy",
 							color: "neutral",
 							variant: "ghost",
 							"aria-label": "复制 CLI 阅读地址",
 							onClick: f[18] ||= (e) => F(r)("copy", `${d.value}?mode=cli`)
 						})]),
-						W("div", qU, [
+						W("div", JU, [
 							G(m, {
 								label: "复制 CLI 参与指令",
 								variant: "outline",
@@ -41826,14 +41828,14 @@ var VV = {
 							}, null, 8, ["to"])
 						])
 					])]),
-					W("p", JU, "指令使用讨论区当前选择的身份：" + N(F(n).display_name(F(t).fields["author-select"] || "用户")) + "。通知只提供问题与入口，不附整段上下文。", 1),
-					d.value.includes("127.0.0.1") || d.value.includes("localhost") ? (V(), H("p", YU, "当前是本机地址。在线 AI 需要公网阅读地址，或由用户复制材料提供。")) : J("", !0)
+					W("p", YU, "指令使用讨论区当前选择的身份：" + N(F(n).display_name(F(t).fields["author-select"] || "用户")) + "。通知只提供问题与入口，不附整段上下文。", 1),
+					d.value.includes("127.0.0.1") || d.value.includes("localhost") ? (V(), H("p", XU, "当前是本机地址。在线 AI 需要公网阅读地址，或由用户复制材料提供。")) : J("", !0)
 				], 64))]),
 				_: 1
 			}, 8, ["aria-label", "initial"]);
 		};
 	}
-}, ZU = {
+}, QU = {
 	slots: {
 		overlay: "fixed inset-0",
 		content: "bg-default divide-y divide-default flex flex-col focus:outline-none",
@@ -41875,7 +41877,7 @@ var VV = {
 		fullscreen: !1,
 		class: { content: "top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 max-h-[calc(100dvh-2rem)] sm:max-h-[calc(100dvh-4rem)] overflow-hidden" }
 	}]
-}, QU = {
+}, $U = {
 	__name: "Modal",
 	props: {
 		title: {
@@ -41966,7 +41968,7 @@ var VV = {
 		let n = e, r = t, i = Ma(), a = eE("modal", n), { t: o } = th(), s = Cm(), c = tE(om(a, "open", "defaultOpen", "modal", "unmountOnHide"), r), l = KT(/* @__PURE__ */ Cn(() => a.portal)), u = /* @__PURE__ */ Cn(() => a.content), d = X(() => a.dismissible ? { pointerDownOutside: (e) => eV(e, { scrollable: a.scrollable }) } : ["interactOutside", "escapeKeyDown"].reduce((e, t) => (e[t] = (e) => {
 			e.preventDefault(), r("close:prevent");
 		}, e), {})), [f, p] = _m(), m = X(() => kk({
-			extend: ZU,
+			extend: QU,
 			...s.ui?.modal || {}
 		})({
 			transition: a.transition,
@@ -42091,10 +42093,10 @@ var VV = {
 			_: 3
 		}, 16));
 	}
-}, $U = { slots: {
+}, eW = { slots: {
 	root: "",
 	content: "data-[state=open]:animate-[collapsible-down_200ms_var(--ease-out)] data-[state=closed]:animate-[collapsible-up_200ms_var(--ease-out)] data-[state=closed]:overflow-hidden"
-} }, eW = {
+} }, tW = {
 	__name: "Collapsible",
 	props: {
 		as: {
@@ -42130,7 +42132,7 @@ var VV = {
 	emits: ["update:open"],
 	setup(e, { emit: t }) {
 		let n = e, r = t, i = Ma(), a = eE("collapsible", n), o = Cm(), s = tE(om(a, "as", "defaultOpen", "open", "disabled", "unmountOnHide"), r), c = X(() => kk({
-			extend: $U,
+			extend: eW,
 			...o.ui?.collapsible || {}
 		})());
 		return (e, t) => (V(), U(F(Rg), Y(F(s), {
@@ -42153,64 +42155,64 @@ var VV = {
 			_: 3
 		}, 16, ["class"]));
 	}
-}, tW = {
+}, nW = {
 	key: 0,
 	class: "channel-archive-manager"
-}, nW = { class: "channel-archive-toolbar" }, rW = {
+}, rW = { class: "channel-archive-toolbar" }, iW = {
 	key: 0,
 	class: "channel-archive-confirm channel-archive-bulk",
 	role: "alert"
-}, iW = {
+}, aW = {
 	key: 1,
 	role: "alert",
 	class: "channel-directory-error"
-}, aW = { class: "channel-archive-results" }, oW = {
+}, oW = { class: "channel-archive-results" }, sW = {
 	key: 0,
 	class: "channel-archive-list",
 	"aria-label": "已存档频道列表"
-}, sW = { class: "channel-archive-row" }, cW = { class: "channel-archive-info" }, lW = [
+}, cW = { class: "channel-archive-row" }, lW = { class: "channel-archive-info" }, uW = [
 	"title",
 	"disabled",
 	"onClick"
-], uW = { key: 0 }, dW = ["datetime"], fW = { class: "channel-archive-actions" }, pW = {
+], dW = { key: 0 }, fW = ["datetime"], pW = { class: "channel-archive-actions" }, mW = {
 	key: 0,
 	class: "channel-archive-confirm channel-archive-bulk",
 	role: "alert"
-}, mW = {
+}, hW = {
 	key: 1,
 	class: "channel-archive-empty"
-}, hW = { class: "fine-print" }, gW = { class: "dialog-actions" }, _W = { class: "dialog-actions" }, vW = { class: "channel-management-target" }, yW = {
+}, gW = { class: "fine-print" }, _W = { class: "dialog-actions" }, vW = { class: "dialog-actions" }, yW = { class: "channel-management-target" }, bW = {
 	key: 0,
 	class: "fine-print"
-}, bW = {
+}, xW = {
 	key: 1,
 	class: "fine-print"
-}, xW = {
+}, SW = {
 	key: 2,
 	class: "fine-print"
-}, SW = { class: "dialog-actions" }, CW = { key: 4 }, wW = { class: "theme-choices" }, TW = ["aria-pressed", "onClick"], EW = { class: "channel-reading-setting" }, DW = {
+}, CW = { class: "dialog-actions" }, wW = { key: 4 }, TW = { class: "theme-choices" }, EW = ["aria-pressed", "onClick"], DW = { class: "channel-reading-setting" }, OW = {
 	class: "channel-reading-options",
 	role: "group",
 	"aria-labelledby": "channel-reading-label"
-}, OW = {
+}, kW = {
 	key: 0,
 	class: "channel-create-location"
-}, kW = { class: "form-two-columns" }, AW = { class: "advanced-content" }, jW = { class: "form-two-columns" }, MW = {
+}, AW = { class: "form-two-columns" }, jW = { class: "advanced-content" }, MW = { class: "form-two-columns" }, NW = {
 	key: 0,
 	class: "fine-print"
-}, NW = { class: "advanced-content" }, PW = { class: "expert-fields" }, FW = { class: "dialog-actions" }, IW = { class: "dialog-actions" }, LW = {
+}, PW = { class: "advanced-content" }, FW = { class: "expert-fields" }, IW = { class: "dialog-actions" }, LW = { class: "dialog-actions" }, RW = {
 	key: 7,
 	class: "original-message"
-}, RW = {
+}, zW = {
 	key: 0,
 	role: "alert"
-}, zW = { class: "original-meta" }, BW = { class: "fine-print" }, VW = {
+}, BW = { class: "original-meta" }, VW = { class: "fine-print" }, HW = {
 	key: 0,
 	class: "channel-answer-summary"
-}, HW = { class: "message-prose" }, UW = { class: "message-prose" }, WW = {
+}, UW = { class: "message-prose" }, WW = { class: "message-prose" }, GW = {
 	key: 2,
 	class: "fine-print"
-}, GW = {
+}, KW = {
 	__name: "WorkspaceDialogs",
 	props: /*@__PURE__*/ La({
 		detailId: {
@@ -42463,7 +42465,7 @@ var VV = {
 			}
 		}
 		return (t, s) => {
-			let b = CV, x = WV, D = tA, fe = cV, xe = Ak, Se = dV, Ce = eW, we = pV, Te = QU;
+			let b = CV, x = WV, D = tA, fe = cV, xe = Ak, Se = dV, Ce = tW, we = pV, Te = $U;
 			return V(), U(Te, {
 				open: u.value,
 				"onUpdate:open": s[24] ||= (e) => u.value = e,
@@ -42479,8 +42481,8 @@ var VV = {
 				},
 				"onAfter:leave": ye
 			}, {
-				body: I(() => [i.value === "archives" ? (V(), H("section", tW, [
-					W("div", nW, [
+				body: I(() => [i.value === "archives" ? (V(), H("section", nW, [
+					W("div", rW, [
 						G(b, {
 							modelValue: m.value,
 							"onUpdate:modelValue": s[0] ||= (e) => m.value = e,
@@ -42509,7 +42511,7 @@ var VV = {
 							}
 						}, null, 8, ["label", "disabled"])
 					]),
-					y.value && _.value.length ? (V(), H("div", rW, [
+					y.value && _.value.length ? (V(), H("div", iW, [
 						W("span", null, "将永久删除当前列表中的 " + N(_.value.length) + " 个频道及其全部记录，无法撤销。", 1),
 						G(D, {
 							label: "取消",
@@ -42525,20 +42527,20 @@ var VV = {
 							onClick: ee
 						})
 					])) : J("", !0),
-					F(a).directory_error ? (V(), H("p", iW, N(F(a).directory_error), 1)) : J("", !0),
-					W("div", aW, [_.value.length ? (V(), H("ul", oW, [(V(!0), H(B, null, ga(_.value, (e) => (V(), H("li", {
+					F(a).directory_error ? (V(), H("p", aW, N(F(a).directory_error), 1)) : J("", !0),
+					W("div", oW, [_.value.length ? (V(), H("ul", sW, [(V(!0), H(B, null, ga(_.value, (e) => (V(), H("li", {
 						key: e.id,
 						class: "channel-archive-item"
-					}, [W("div", sW, [W("div", cW, [W("button", {
+					}, [W("div", cW, [W("div", lW, [W("button", {
 						class: "channel-archive-title",
 						title: e.title,
 						disabled: !!F(l),
 						onClick: (t) => w(e)
-					}, N(e.title), 9, lW), W("small", null, [e.created_at ? (V(), H("span", uW, [
+					}, N(e.title), 9, uW), W("small", null, [e.created_at ? (V(), H("span", dW, [
 						s[25] ||= q("创建于 ", -1),
-						W("time", { datetime: e.created_at }, N(S(e.created_at)), 9, dW),
+						W("time", { datetime: e.created_at }, N(S(e.created_at)), 9, fW),
 						s[26] ||= q(" · ", -1)
-					])) : J("", !0), q(N(e.message_count) + " 条消息", 1)])]), W("div", fW, [G(D, {
+					])) : J("", !0), q(N(e.message_count) + " 条消息", 1)])]), W("div", pW, [G(D, {
 						"aria-label": `彻底删除 ${e.title}`,
 						title: "彻底删除",
 						icon: "i-lucide-trash-2",
@@ -42570,7 +42572,7 @@ var VV = {
 						"aria-label",
 						"disabled",
 						"onClick"
-					])])]), v.value === e.id ? (V(), H("div", pW, [
+					])])]), v.value === e.id ? (V(), H("div", mW, [
 						W("span", null, "永久删除「" + N(e.title) + "」及其全部记录，无法撤销。", 1),
 						G(D, {
 							label: "取消",
@@ -42586,12 +42588,12 @@ var VV = {
 							disabled: C(e),
 							onClick: T
 						}, null, 8, ["disabled"])
-					])) : J("", !0)]))), 128))])) : (V(), H("p", mW, N(p.value.length ? "没有匹配的存档频道" : "暂无已存档频道"), 1))])
+					])) : J("", !0)]))), 128))])) : (V(), H("p", hW, N(p.value.length ? "没有匹配的存档频道" : "暂无已存档频道"), 1))])
 				])) : i.value === "delete-folder" ? (V(), H("form", {
 					key: 1,
 					class: "dialog-form",
 					onSubmit: du(ae, ["prevent"])
-				}, [W("p", hW, "移除「" + N(e.targetFolder?.name) + "」后，频道不再归属文件夹，所有消息和存档状态都会保留。", 1), W("div", gW, [G(D, {
+				}, [W("p", gW, "移除「" + N(e.targetFolder?.name) + "」后，频道不再归属文件夹，所有消息和存档状态都会保留。", 1), W("div", _W, [G(D, {
 					label: "取消",
 					color: "neutral",
 					variant: "ghost",
@@ -42622,7 +42624,7 @@ var VV = {
 					"modelValue",
 					"aria-label",
 					"readonly"
-				]), W("div", _W, [G(D, {
+				]), W("div", vW, [G(D, {
 					label: "取消",
 					color: "neutral",
 					variant: "ghost",
@@ -42647,10 +42649,10 @@ var VV = {
 					class: "dialog-form",
 					onSubmit: du(re, ["prevent"])
 				}, [
-					W("p", vW, [q(N(e.targetRoom?.title) + " ", 1), W("span", null, "· " + N(e.targetRoom?.message_count) + " 条消息", 1)]),
-					i.value === "archive" ? (V(), H("p", yW, "存档后可在侧栏「已存档」中查阅与恢复。已有发言安排会保留；专家需在下次检查时停止自己的定时任务。")) : J("", !0),
-					i.value === "restore" ? (V(), H("p", bW, "恢复不会自动继续讨论；需要继续时，在主持设置中调整阶段。")) : J("", !0),
-					i.value === "delete" ? (V(), H("p", xW, "消息、共识和发言安排将一起删除，无法撤销。")) : J("", !0),
+					W("p", yW, [q(N(e.targetRoom?.title) + " ", 1), W("span", null, "· " + N(e.targetRoom?.message_count) + " 条消息", 1)]),
+					i.value === "archive" ? (V(), H("p", bW, "存档后可在侧栏「已存档」中查阅与恢复。已有发言安排会保留；专家需在下次检查时停止自己的定时任务。")) : J("", !0),
+					i.value === "restore" ? (V(), H("p", xW, "恢复不会自动继续讨论；需要继续时，在主持设置中调整阶段。")) : J("", !0),
+					i.value === "delete" ? (V(), H("p", SW, "消息、共识和发言安排将一起删除，无法撤销。")) : J("", !0),
 					i.value === "rename" ? (V(), U(fe, {
 						key: 3,
 						label: "频道名称",
@@ -42667,7 +42669,7 @@ var VV = {
 						}, null, 8, ["modelValue"])]),
 						_: 1
 					})) : J("", !0),
-					W("div", SW, [G(D, {
+					W("div", CW, [G(D, {
 						label: "取消",
 						color: "neutral",
 						variant: "ghost",
@@ -42684,7 +42686,7 @@ var VV = {
 						"loading",
 						"disabled"
 					])])
-				], 32)) : i.value === "settings" ? (V(), H("div", CW, [W("div", wW, [(V(), H(B, null, ga(ge, (e) => W("button", {
+				], 32)) : i.value === "settings" ? (V(), H("div", wW, [W("div", TW, [(V(), H(B, null, ga(ge, (e) => W("button", {
 					key: e.value,
 					class: j({ chosen: F(a).theme === e.value }),
 					"aria-pressed": F(a).theme === e.value,
@@ -42697,7 +42699,7 @@ var VV = {
 						name: "i-lucide-check",
 						class: "theme-check"
 					})) : J("", !0)
-				], 10, TW)), 64))]), W("section", EW, [s[27] ||= W("h3", { id: "channel-reading-label" }, "对话宽度", -1), W("div", DW, [(V(!0), H(B, null, ga(e.readingOptions, (e) => (V(), U(D, {
+				], 10, EW)), 64))]), W("section", DW, [s[27] ||= W("h3", { id: "channel-reading-label" }, "对话宽度", -1), W("div", OW, [(V(!0), H(B, null, ga(e.readingOptions, (e) => (V(), U(D, {
 					key: e.value,
 					label: e.label,
 					color: "neutral",
@@ -42715,7 +42717,7 @@ var VV = {
 					class: "dialog-form",
 					onSubmit: du(M, ["prevent"])
 				}, [
-					i.value === "create" && e.targetFolder?.id ? (V(), H("p", OW, [G(xe, { name: "i-lucide-folder" }), q(N(e.targetFolder.name), 1)])) : J("", !0),
+					i.value === "create" && e.targetFolder?.id ? (V(), H("p", kW, [G(xe, { name: "i-lucide-folder" }), q(N(e.targetFolder.name), 1)])) : J("", !0),
 					i.value === "create" ? (V(), U(fe, {
 						key: 1,
 						label: "讨论运行方式"
@@ -42759,7 +42761,7 @@ var VV = {
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
-					W("div", kW, [G(fe, { label: "主持人" }, {
+					W("div", AW, [G(fe, { label: "主持人" }, {
 						default: I(() => [G(x, {
 							"model-value": F(a).fields[_e("host")],
 							items: F(k),
@@ -42792,9 +42794,9 @@ var VV = {
 						}, null, 8, ["model-value"])]),
 						_: 1
 					})) : J("", !0),
-					W("section", AW, [
+					W("section", jW, [
 						s[29] ||= W("h3", null, "讨论上限", -1),
-						W("div", jW, [
+						W("div", MW, [
 							(V(), H(B, null, ga(de, (e) => G(fe, {
 								key: e.key,
 								label: e.label
@@ -42855,14 +42857,14 @@ var VV = {
 							})) : J("", !0)
 						]),
 						s[30] ||= W("p", { class: "fine-print" }, "轮次、总时长留空或 0 表示不限。一轮指每位专家各完成一次观点；首次进入讨论阶段或创建安排后计时，暂停期间不计时。收束预留计入总时长。", -1),
-						ue.value ? (V(), H("p", MW, "修改上限前，请先把阶段保存为“已暂停”。")) : J("", !0)
+						ue.value ? (V(), H("p", NW, "修改上限前，请先把阶段保存为“已暂停”。")) : J("", !0)
 					]),
 					G(Ce, {
 						open: le.value,
 						"onUpdate:open": s[19] ||= (e) => le.value = e,
 						class: "advanced-fields"
 					}, {
-						content: I(() => [W("div", NW, [
+						content: I(() => [W("div", PW, [
 							(V(), H(B, null, ga([
 								{
 									key: "user_request",
@@ -42889,7 +42891,7 @@ var VV = {
 								}, null, 8, ["model-value", "onUpdate:modelValue"])]),
 								_: 2
 							}, 1032, ["label"])), 64)),
-							W("div", PW, [(V(!0), H(B, null, ga(F(O), (e) => (V(), H("div", { key: e }, [W("label", null, N(e), 1), G(x, {
+							W("div", FW, [(V(!0), H(B, null, ga(F(O), (e) => (V(), H("div", { key: e }, [W("label", null, N(e), 1), G(x, {
 								"model-value": F(a).experts[oe.value]?.[e] || "none",
 								items: ce,
 								"aria-label": `${e} 参与方式`,
@@ -42911,7 +42913,7 @@ var VV = {
 						}, null, 8, ["trailing-icon"])]),
 						_: 1
 					}, 8, ["open"]),
-					W("div", FW, [G(D, {
+					W("div", IW, [G(D, {
 						label: "取消",
 						color: "neutral",
 						variant: "ghost",
@@ -42955,7 +42957,7 @@ var VV = {
 						_: 1
 					}),
 					s[32] ||= W("p", { class: "fine-print" }, "创建后为待通知状态；由主持人实际联系专家。", -1),
-					W("div", IW, [G(D, {
+					W("div", LW, [G(D, {
 						label: "取消",
 						variant: "ghost",
 						color: "neutral",
@@ -42966,8 +42968,8 @@ var VV = {
 						label: "创建发言安排",
 						loading: F(l) === "schedule"
 					}, null, 8, ["loading"])])
-				], 32)) : i.value === "message" ? (V(), H("div", LW, [pe.value ? (V(), H("p", RW, N(pe.value), 1)) : A.value ? (V(), H(B, { key: 1 }, [
-					W("div", zW, [
+				], 32)) : i.value === "message" ? (V(), H("div", RW, [pe.value ? (V(), H("p", zW, N(pe.value), 1)) : A.value ? (V(), H(B, { key: 1 }, [
+					W("div", BW, [
 						W("strong", null, N(F(o).display_name(A.value.author)), 1),
 						W("span", null, "#" + N(A.value.id), 1),
 						G(we, {
@@ -42978,9 +42980,9 @@ var VV = {
 							_: 1
 						})
 					]),
-					W("p", BW, N(F(o).provenance(A.value)) + " · " + N(new Date(A.value.created_at).toLocaleString("zh-CN")), 1),
-					A.value.summary ? (V(), H("section", VW, [W("small", null, "回答摘要 · " + N(F(o).display_name(A.value.summary_by)), 1), W("p", HW, N(A.value.summary), 1)])) : J("", !0),
-					W("p", UW, N(A.value.text), 1),
+					W("p", VW, N(F(o).provenance(A.value)) + " · " + N(new Date(A.value.created_at).toLocaleString("zh-CN")), 1),
+					A.value.summary ? (V(), H("section", HW, [W("small", null, "回答摘要 · " + N(F(o).display_name(A.value.summary_by)), 1), W("p", UW, N(A.value.summary), 1)])) : J("", !0),
+					W("p", WW, N(A.value.text), 1),
 					A.value.reply_to ? (V(), U(D, {
 						key: 1,
 						label: `查看被回复的原文 #${A.value.reply_to}`,
@@ -42990,7 +42992,7 @@ var VV = {
 						class: "channel-surface-button",
 						onClick: be
 					}, null, 8, ["label"])) : J("", !0)
-				], 64)) : (V(), H("p", WW, "正在读取原文…"))])) : J("", !0)]),
+				], 64)) : (V(), H("p", GW, "正在读取原文…"))])) : J("", !0)]),
 				_: 1
 			}, 8, [
 				"open",
@@ -43000,7 +43002,7 @@ var VV = {
 			]);
 		};
 	}
-}, KW = {
+}, qW = {
 	__name: "ContextMenuContent",
 	props: {
 		items: {
@@ -43295,7 +43297,7 @@ var VV = {
 									"disabled",
 									"text-value",
 									"class"
-								]), G(KW, Y({
+								]), G(qW, Y({
 									sub: "",
 									class: r.ui?.content,
 									ui: e.ui,
@@ -43406,7 +43408,7 @@ var VV = {
 			_: 3
 		}, 16)], 64));
 	}
-}, qW = {
+}, JW = {
 	slots: {
 		content: "min-w-32 max-h-(--reka-context-menu-content-available-height) bg-default shadow-lg rounded-md ring ring-default overflow-hidden data-[state=open]:animate-[scale-in_100ms_var(--ease-out)] data-[state=closed]:animate-[scale-out_100ms_var(--ease-out)] origin-(--reka-context-menu-content-transform-origin) flex flex-col",
 		viewport: "relative divide-y divide-default scroll-py-1 overflow-y-auto flex-1",
@@ -43594,7 +43596,7 @@ var VV = {
 		}
 	],
 	defaultVariants: { size: "md" }
-}, JW = {
+}, YW = {
 	__name: "ContextMenu",
 	props: {
 		size: {
@@ -43664,7 +43666,7 @@ var VV = {
 	emits: ["update:open"],
 	setup(e, { emit: t }) {
 		let n = e, r = t, i = Ma(), a = eE("contextMenu", n), o = Cm(), s = tE(om(a, "modal"), r), c = /* @__PURE__ */ Cn(() => a.content), l = () => Vm(i, ["default"]), u = X(() => kk({
-			extend: qW,
+			extend: JW,
 			...o.ui?.contextMenu || {}
 		})({ size: a.size }));
 		return (e, t) => (V(), U(F(LS), M(K(F(s))), {
@@ -43676,7 +43678,7 @@ var VV = {
 			}, {
 				default: I(() => [z(e.$slots, "default")]),
 				_: 3
-			}, 8, ["disabled", "class"])) : J("", !0), G(KW, Y({
+			}, 8, ["disabled", "class"])) : J("", !0), G(qW, Y({
 				class: u.value.content({ class: [!i.default && F(a).class, F(a).ui?.content] }),
 				ui: u.value,
 				"ui-override": F(a).ui
@@ -43706,46 +43708,46 @@ var VV = {
 			_: 3
 		}, 16));
 	}
-}, YW = { class: "channel-directory-manager" }, XW = { class: "channel-directory-heading" }, ZW = { class: "channel-directory-actions" }, QW = {
+}, XW = { class: "channel-directory-manager" }, ZW = { class: "channel-directory-heading" }, QW = { class: "channel-directory-actions" }, $W = {
 	"aria-label": "讨论频道列表",
 	class: "channel-room-list",
 	"data-room-directory": ""
-}, $W = ["data-room-folder", "data-drag-folder"], eG = {
+}, eG = ["data-room-folder", "data-drag-folder"], tG = {
 	key: 0,
 	class: "channel-folder-row"
-}, tG = [
+}, nG = [
 	"disabled",
 	"aria-label",
 	"aria-expanded",
 	"onKeydown",
 	"onClick"
-], nG = { class: "channel-folder-name" }, rG = { class: "channel-folder-actions" }, iG = {
+], rG = { class: "channel-folder-name" }, iG = { class: "channel-folder-actions" }, aG = {
 	class: "channel-directory-count",
 	"aria-hidden": "true"
-}, aG = ["data-drop-folder"], oG = {
+}, oG = ["data-drop-folder"], sG = {
 	key: 0,
 	class: "channel-directory-empty",
 	role: "status"
-}, sG = ["data-drag-room"], cG = [
+}, cG = ["data-drag-room"], lG = [
 	"aria-label",
 	"disabled",
 	"onKeydown"
-], lG = [
+], uG = [
 	"title",
 	"aria-label",
 	"aria-current",
 	"onClick"
-], uG = { class: "channel-room-actions" }, dG = {
+], dG = { class: "channel-room-actions" }, fG = {
 	class: "channel-directory-count",
 	"aria-hidden": "true"
-}, fG = {
+}, pG = {
 	key: 0,
 	class: "channel-directory-empty"
-}, pG = {
+}, mG = {
 	key: 0,
 	role: "alert",
 	class: "channel-directory-error"
-}, mG = {
+}, hG = {
 	__name: "ChannelDirectory",
 	emits: [
 		"select",
@@ -43901,8 +43903,8 @@ var VV = {
 			];
 		}
 		return (e, t) => {
-			let u = tA, m = Ak, _ = OV, v = AV, y = JW;
-			return V(), H("div", YW, [
+			let u = tA, m = Ak, _ = OV, v = AV, y = YW;
+			return V(), H("div", XW, [
 				G(u, {
 					label: "新建对话",
 					icon: "i-lucide-square-pen",
@@ -43912,7 +43914,7 @@ var VV = {
 					disabled: F(r).directory_pending.includes("create-room"),
 					onClick: t[0] ||= (e) => n("create", null)
 				}, null, 8, ["disabled"]),
-				W("div", XW, [W("span", null, [G(m, { name: "i-lucide-chevron-down" }), t[6] ||= q("讨论频道", -1)]), W("div", ZW, [G(_, {
+				W("div", ZW, [W("span", null, [G(m, { name: "i-lucide-chevron-down" }), t[6] ||= q("讨论频道", -1)]), W("div", QW, [G(_, {
 					items: d.value,
 					content: {
 						align: "end",
@@ -43941,12 +43943,12 @@ var VV = {
 					}, null, 8, ["disabled"])]),
 					_: 1
 				})])]),
-				W("nav", QW, [(V(!0), H(B, null, ga(l.value, (e, s) => (V(), H("section", {
+				W("nav", $W, [(V(!0), H(B, null, ga(l.value, (e, s) => (V(), H("section", {
 					key: e.order_id,
 					class: "channel-folder-section",
 					"data-room-folder": e.id,
 					"data-drag-folder": e.order_id
-				}, [e.id ? (V(), H("div", eG, [
+				}, [e.id ? (V(), H("div", tG, [
 					W("button", {
 						class: "channel-folder-heading",
 						"data-drop-folder": "",
@@ -43968,9 +43970,9 @@ var VV = {
 					}, [
 						G(m, { name: f.value.has(e.id) ? "i-lucide-chevron-right" : "i-lucide-chevron-down" }, null, 8, ["name"]),
 						G(m, { name: "i-lucide-folder" }),
-						W("span", nG, N(e.name), 1)
-					], 40, tG),
-					W("div", rG, [G(_, {
+						W("span", rG, N(e.name), 1)
+					], 40, nG),
+					W("div", iG, [G(_, {
 						items: p(e, s),
 						content: {
 							align: "start",
@@ -44004,12 +44006,12 @@ var VV = {
 						])]),
 						_: 2
 					}, 1032, ["text"])]),
-					W("small", iG, N(e.pending ? "保存中" : e.rooms.length), 1)
+					W("small", aG, N(e.pending ? "保存中" : e.rooms.length), 1)
 				])) : J("", !0), !e.id || !f.value.has(e.id) ? (V(), H("div", {
 					key: 1,
 					class: j(e.id ? "channel-folder-rooms" : "channel-root-rooms"),
 					"data-drop-folder": e.id ? void 0 : ""
-				}, [F(r).creating_room && (F(r).creating_room.folder_id || "") === e.id ? (V(), H("p", oG, "正在创建：" + N(F(r).creating_room.title), 1)) : J("", !0), (V(!0), H(B, null, ga(e.rooms, (s, c) => (V(), U(y, {
+				}, [F(r).creating_room && (F(r).creating_room.folder_id || "") === e.id ? (V(), H("p", sG, "正在创建：" + N(F(r).creating_room.title), 1)) : J("", !0), (V(!0), H(B, null, ga(e.rooms, (s, c) => (V(), U(y, {
 					key: s.id,
 					items: g(s, c, s.folder_id || null, e.rooms.length),
 					ui: { content: "channel-menu channel-topic-menu" }
@@ -44034,7 +44036,7 @@ var VV = {
 								direction: 1,
 								folder_id: s.folder_id || null
 							}), ["prevent"]), ["down"])]
-						}, [G(m, { name: "i-lucide-grip-vertical" })], 40, cG),
+						}, [G(m, { name: "i-lucide-grip-vertical" })], 40, lG),
 						W("button", {
 							class: "channel-room-select",
 							"data-drag-title": "",
@@ -44043,8 +44045,8 @@ var VV = {
 							"aria-current": s.id === F(r).room?.id ? "page" : void 0,
 							onPointerdown: t[4] ||= (e) => !F(o) && F(i).start_drag(e),
 							onClick: (e) => n("select", s.id)
-						}, [W("span", null, N(s.title), 1)], 40, lG),
-						W("div", uG, [G(v, {
+						}, [W("span", null, N(s.title), 1)], 40, uG),
+						W("div", dG, [G(v, {
 							text: s.archived ? "恢复频道" : "存档频道",
 							ui: { content: "channel-topic-tooltip" }
 						}, {
@@ -44085,10 +44087,10 @@ var VV = {
 							}, null, 8, ["aria-label"])]),
 							_: 2
 						}, 1032, ["items"])]),
-						W("small", dG, N(s.message_count), 1)
-					], 10, sG)]),
+						W("small", fG, N(s.message_count), 1)
+					], 10, cG)]),
 					_: 2
-				}, 1032, ["items"]))), 128))], 10, aG)) : J("", !0)], 8, $W))), 128)), s.value.length ? J("", !0) : (V(), H("p", fG, "暂无讨论频道"))]),
+				}, 1032, ["items"]))), 128))], 10, oG)) : J("", !0)], 8, eG))), 128)), s.value.length ? J("", !0) : (V(), H("p", pG, "暂无讨论频道"))]),
 				G(u, {
 					icon: "i-lucide-archive",
 					label: `已存档 · ${c.value}`,
@@ -44099,47 +44101,47 @@ var VV = {
 					"aria-haspopup": "dialog",
 					onClick: t[5] ||= (e) => n("archives")
 				}, null, 8, ["label"]),
-				F(r).directory_error ? (V(), H("p", pG, N(F(r).directory_error), 1)) : J("", !0)
+				F(r).directory_error ? (V(), H("p", mG, N(F(r).directory_error), 1)) : J("", !0)
 			]);
 		};
 	}
-}, hG = {
+}, gG = {
 	key: 0,
 	class: "pb-header"
-}, gG = { class: "pb-mode" }, _G = { class: "pb-status-line" }, vG = { role: "status" }, yG = {
+}, _G = { class: "pb-mode" }, vG = { class: "pb-status-line" }, yG = { role: "status" }, bG = {
 	key: 0,
 	class: "pb-mode"
-}, bG = {
+}, xG = {
 	key: 0,
 	class: "pb-status-detail"
-}, xG = {
+}, SG = {
 	key: 1,
 	class: "pb-meters"
-}, SG = { class: "pb-meter-label" }, CG = {
+}, CG = { class: "pb-meter-label" }, wG = {
 	key: 0,
 	class: "pb-bar"
-}, wG = {
+}, TG = {
 	key: 1,
 	class: "pb-section",
 	"aria-label": "当前焦点"
-}, TG = {
+}, EG = {
 	class: "pb-section",
 	"aria-label": "参与者"
-}, EG = {
+}, DG = {
 	key: 0,
 	class: "pb-status-detail pb-held"
-}, DG = { class: "pb-members" }, OG = { class: "pb-member-body" }, kG = { class: "pb-member-name" }, AG = { key: 0 }, jG = {
+}, OG = { class: "pb-members" }, kG = { class: "pb-member-body" }, AG = { class: "pb-member-name" }, jG = { key: 0 }, MG = {
 	key: 2,
 	class: "pb-actions",
 	"aria-label": "操作"
-}, MG = {
+}, NG = {
 	key: 3,
 	class: "pb-section",
 	"aria-label": "阶段耗时"
-}, NG = { class: "pb-timing-heading" }, PG = ["aria-label"], FG = { class: "pb-timing-totals" }, IG = ["title"], LG = { class: "pb-timings" }, RG = { class: "pb-timing-who" }, zG = { class: "pb-timing-stages" }, BG = ["title"], VG = {
+}, PG = { class: "pb-timing-heading" }, FG = ["aria-label"], IG = { class: "pb-timing-totals" }, LG = ["title"], RG = { class: "pb-timings" }, zG = { class: "pb-timing-who" }, BG = { class: "pb-timing-stages" }, VG = ["title"], HG = {
 	key: 0,
 	class: "pb-note"
-}, HG = { class: "progress-ending" }, UG = ["disabled"], WG = { key: 0 }, GG = ["disabled"], KG = 90, qG = {
+}, UG = { class: "progress-ending" }, WG = ["disabled"], GG = { key: 0 }, KG = ["disabled"], qG = 90, JG = {
 	__name: "ProgressBoard",
 	props: { docked: {
 		type: Boolean,
@@ -44176,7 +44178,7 @@ var VV = {
 			"initial",
 			"discussing",
 			"reviewing"
-		].includes(f.value.phase) && !f.value.archived), S = X(() => (x.value || f.value.phase === "paused") && !f.value.archived), C = X(() => x.value || b.value || S.value), w = X(() => !_.value && f.value.phase !== "preparing" && !f.value.archived && !p.value.closing), T = X(() => [f.value.host, ...Object.keys(f.value.experts || {}).filter((e) => e !== f.value.host)].filter((e) => e && e !== "用户").map(ae)), ee = X(() => T.value.find((e) => e.result)), E = X(() => g.value?.question || f.value.focus || f.value.goal || ""), te = X(() => E.value.length > KG), ne = X(() => m.value.timings || {
+		].includes(f.value.phase) && !f.value.archived), S = X(() => (x.value || f.value.phase === "paused") && !f.value.archived), C = X(() => x.value || b.value || S.value), w = X(() => !_.value && f.value.phase !== "preparing" && !f.value.archived && !p.value.closing), T = X(() => [f.value.host, ...Object.keys(f.value.experts || {}).filter((e) => e !== f.value.host)].filter((e) => e && e !== "用户").map(ae)), ee = X(() => T.value.find((e) => e.result)), E = X(() => g.value?.question || f.value.focus || f.value.goal || ""), te = X(() => E.value.length > qG), ne = X(() => m.value.timings || {
 			items: [],
 			totals: {},
 			count: 0
@@ -44275,25 +44277,25 @@ var VV = {
 			await i(e) && (o.value = !1);
 		}
 		return (e, n) => {
-			let c = Ik, l = Ak, m = tA, ee = OV, ae = QU;
+			let c = Ik, l = Ak, m = tA, ee = OV, ae = $U;
 			return V(), H("div", { class: j(["progress-board", { "is-docked": t.docked }]) }, [
-				t.docked ? (V(), H("header", hG, [n[8] ||= W("strong", null, "讨论进度", -1), W("span", gG, N(h.value ? "全自动" : "手动"), 1)])) : J("", !0),
+				t.docked ? (V(), H("header", gG, [n[8] ||= W("strong", null, "讨论进度", -1), W("span", _G, N(h.value ? "全自动" : "手动"), 1)])) : J("", !0),
 				W("section", {
 					class: j(["pb-status", `is-${re.value.tone}`]),
 					"aria-label": "讨论状态"
 				}, [
-					W("div", _G, [
+					W("div", vG, [
 						n[9] ||= W("span", { class: "pb-dot" }, null, -1),
-						W("strong", vG, N(re.value.title), 1),
-						t.docked ? J("", !0) : (V(), H("span", yG, N(h.value ? "全自动" : "手动"), 1))
+						W("strong", yG, N(re.value.title), 1),
+						t.docked ? J("", !0) : (V(), H("span", bG, N(h.value ? "全自动" : "手动"), 1))
 					]),
-					re.value.detail ? (V(), H("p", bG, N(re.value.detail), 1)) : J("", !0),
-					ie.value.length ? (V(), H("div", xG, [(V(!0), H(B, null, ga(ie.value, (e) => (V(), H("div", {
+					re.value.detail ? (V(), H("p", xG, N(re.value.detail), 1)) : J("", !0),
+					ie.value.length ? (V(), H("div", SG, [(V(!0), H(B, null, ga(ie.value, (e) => (V(), H("div", {
 						key: e.label,
 						class: "pb-meter"
-					}, [W("div", SG, [W("span", null, N(e.label), 1), W("b", null, N(e.text), 1)]), e.ratio === null ? J("", !0) : (V(), H("div", CG, [W("i", { style: pe({ width: `${Math.min(100, Math.round(e.ratio * 100))}%` }) }, null, 4)]))]))), 128))])) : J("", !0)
+					}, [W("div", CG, [W("span", null, N(e.label), 1), W("b", null, N(e.text), 1)]), e.ratio === null ? J("", !0) : (V(), H("div", wG, [W("i", { style: pe({ width: `${Math.min(100, Math.round(e.ratio * 100))}%` }) }, null, 4)]))]))), 128))])) : J("", !0)
 				], 2),
-				E.value ? (V(), H("section", wG, [
+				E.value ? (V(), H("section", TG, [
 					n[10] ||= W("h4", null, "当前焦点", -1),
 					W("p", { class: j(["pb-focus", { "is-expanded": s.value }]) }, N(E.value), 3),
 					te.value ? (V(), H("button", {
@@ -44303,10 +44305,10 @@ var VV = {
 						onClick: n[0] ||= (e) => s.value = !s.value
 					}, N(s.value ? "收起" : "展开"), 1)) : J("", !0)
 				])) : J("", !0),
-				W("section", TG, [
+				W("section", EG, [
 					n[12] ||= W("h4", null, "参与者", -1),
-					f.value.held_since && g.value && !_.value ? (V(), H("p", EG, "用户有新操作，" + N(F(r).display_name(g.value.expert)) + " 说完后交给主持人", 1)) : J("", !0),
-					W("ul", DG, [(V(!0), H(B, null, ga(T.value, (e) => (V(), H("li", {
+					f.value.held_since && g.value && !_.value ? (V(), H("p", DG, "用户有新操作，" + N(F(r).display_name(g.value.expert)) + " 说完后交给主持人", 1)) : J("", !0),
+					W("ul", OG, [(V(!0), H(B, null, ga(T.value, (e) => (V(), H("li", {
 						key: e.name,
 						class: "pb-member"
 					}, [
@@ -44322,7 +44324,7 @@ var VV = {
 							"alt",
 							"class"
 						]),
-						W("div", OG, [W("div", kG, [
+						W("div", kG, [W("div", AG, [
 							q(N(F(r).display_name(e.name)), 1),
 							e.is_host ? (V(), U(l, {
 								key: 0,
@@ -44336,7 +44338,7 @@ var VV = {
 						}, [
 							n[11] ||= W("span", { class: "pb-dot" }, null, -1),
 							q(N(e.text), 1),
-							e.failures ? (V(), H("small", AG, " · 失败 " + N(e.failures) + " 次", 1)) : J("", !0)
+							e.failures ? (V(), H("small", jG, " · 失败 " + N(e.failures) + " 次", 1)) : J("", !0)
 						], 2))]),
 						e.session ? (V(), U(ee, {
 							key: 0,
@@ -44356,7 +44358,7 @@ var VV = {
 						}, 1032, ["items"])) : J("", !0)
 					]))), 128))])
 				]),
-				C.value ? (V(), H("section", jG, [
+				C.value ? (V(), H("section", MG, [
 					b.value ? (V(), U(m, {
 						key: 0,
 						icon: "i-lucide-rotate-ccw",
@@ -44405,8 +44407,8 @@ var VV = {
 						onClick: n[4] ||= (e) => o.value = !0
 					})) : J("", !0)
 				])) : J("", !0),
-				h.value && ne.value.count ? (V(), H("section", MG, [
-					W("div", NG, [n[13] ||= W("h4", null, "耗时", -1), W("small", null, "共 " + N(ne.value.count) + " 次执行", 1)]),
+				h.value && ne.value.count ? (V(), H("section", NG, [
+					W("div", PG, [n[13] ||= W("h4", null, "耗时", -1), W("small", null, "共 " + N(ne.value.count) + " 次执行", 1)]),
 					W("div", {
 						class: "pb-timing-bar",
 						role: "img",
@@ -44415,18 +44417,18 @@ var VV = {
 						key: e.key,
 						class: j(`is-${e.key}`),
 						style: pe({ width: `${e.percent}%` })
-					}, null, 6))), 128))], 8, PG),
-					W("dl", FG, [(V(!0), H(B, null, ga(oe.value, (e) => (V(), H("div", {
+					}, null, 6))), 128))], 8, FG),
+					W("dl", IG, [(V(!0), H(B, null, ga(oe.value, (e) => (V(), H("div", {
 						key: e.key,
 						title: e.hint
-					}, [W("dt", null, [W("span", { class: j(`pb-timing-dot is-${e.key}`) }, null, 2), q(N(e.label), 1)]), W("dd", null, [q(N(O(e.seconds)), 1), W("small", null, N(e.percent) + "%", 1)])], 8, IG))), 128))]),
-					W("details", LG, [
+					}, [W("dt", null, [W("span", { class: j(`pb-timing-dot is-${e.key}`) }, null, 2), q(N(e.label), 1)]), W("dd", null, [q(N(O(e.seconds)), 1), W("small", null, N(e.percent) + "%", 1)])], 8, LG))), 128))]),
+					W("details", RG, [
 						n[14] ||= W("summary", null, "查看每次执行", -1),
-						W("ol", null, [(V(!0), H(B, null, ga(ne.value.items, (e) => (V(), H("li", { key: e.id }, [W("span", RG, [q("#" + N(e.id) + " " + N(F(r).display_name(e.participant)), 1), W("small", null, N(e.role === "host" ? "主持" : "专家") + " · " + N(d[e.status] || e.status), 1)]), W("span", zG, [(V(), H(B, null, ga(u, (t) => W("span", {
+						W("ol", null, [(V(!0), H(B, null, ga(ne.value.items, (e) => (V(), H("li", { key: e.id }, [W("span", zG, [q("#" + N(e.id) + " " + N(F(r).display_name(e.participant)), 1), W("small", null, N(e.role === "host" ? "主持" : "专家") + " · " + N(d[e.status] || e.status), 1)]), W("span", BG, [(V(), H(B, null, ga(u, (t) => W("span", {
 							key: t.key,
 							title: t.hint
-						}, N(t.label) + " " + N(O(e[t.key])), 9, BG)), 64))])]))), 128))]),
-						ne.value.count > ne.value.items.length ? (V(), H("p", VG, "只列出最近 " + N(ne.value.items.length) + " 次，共 " + N(ne.value.count) + " 次执行。", 1)) : J("", !0)
+						}, N(t.label) + " " + N(O(e[t.key])), 9, VG)), 64))])]))), 128))]),
+						ne.value.count > ne.value.items.length ? (V(), H("p", HG, "只列出最近 " + N(ne.value.items.length) + " 次，共 " + N(ne.value.count) + " 次执行。", 1)) : J("", !0)
 					])
 				])) : J("", !0),
 				G(ae, {
@@ -44439,7 +44441,7 @@ var VV = {
 						body: "dialog-body"
 					}
 				}, {
-					body: I(() => [W("div", HG, [W("button", {
+					body: I(() => [W("div", UG, [W("button", {
 						type: "button",
 						class: "progress-ending-option",
 						disabled: !w.value || !!F(a),
@@ -44447,22 +44449,22 @@ var VV = {
 					}, [
 						n[15] ||= W("strong", null, "强行收尾", -1),
 						W("span", null, "立即进入收束，由 " + N(F(r).display_name(f.value.host)) + " 在 " + N(p.value.summary_minutes || 5) + " 分钟收束预留内根据已有材料总结。", 1),
-						w.value ? J("", !0) : (V(), H("small", WG, N(p.value.closing ? "已在收尾中。" : "仅进行中的讨论可以收尾；已暂停时请选择直接丢弃。"), 1))
-					], 8, UG), W("button", {
+						w.value ? J("", !0) : (V(), H("small", GG, N(p.value.closing ? "已在收尾中。" : "仅进行中的讨论可以收尾；已暂停时请选择直接丢弃。"), 1))
+					], 8, WG), W("button", {
 						type: "button",
 						class: "progress-ending-option",
 						disabled: v.value || !!F(a),
 						onClick: n[6] ||= (e) => k("conclude_discussion")
-					}, [...n[16] ||= [W("strong", null, "直接丢弃", -1), W("span", null, "不再总结，阶段直接设为“已收束”，自动运行随之停止。", -1)]], 8, GG)])]),
+					}, [...n[16] ||= [W("strong", null, "直接丢弃", -1), W("span", null, "不再总结，阶段直接设为“已收束”，自动运行随之停止。", -1)]], 8, KG)])]),
 					_: 1
 				}, 8, ["open"])
 			], 2);
 		};
 	}
-}, JG = {
+}, YG = {
 	key: 0,
 	class: "progress-panel-anchor"
-}, YG = ["aria-expanded", "title"], XG = { class: "progress-chip-text" }, ZG = {
+}, XG = ["aria-expanded", "title"], ZG = { class: "progress-chip-text" }, QG = {
 	__name: "ProgressPanel",
 	props: { floating: {
 		type: Boolean,
@@ -44472,7 +44474,7 @@ var VV = {
 		let t = e, { view: n, bridge: r } = Sr("discussion"), i = /* @__PURE__ */ P(!1), a = X(() => n.value.room), o = X(() => a.value.limits || {}), s = X(() => a.value.phase === "concluded" ? "neutral" : o.value.closing ? "warning" : a.value.phase === "paused" ? "neutral" : o.value.reached ? "warning" : "primary");
 		return (e, n) => {
 			let o = Ak, c = nV;
-			return t.floating ? (V(), H("div", JG, [W("button", {
+			return t.floating ? (V(), H("div", YG, [W("button", {
 				type: "button",
 				class: j(["progress-chip", `is-${s.value}`]),
 				"aria-haspopup": "dialog",
@@ -44481,9 +44483,9 @@ var VV = {
 				onClick: n[0] ||= (e) => i.value = !0
 			}, [
 				n[2] ||= W("span", { class: "progress-dot" }, null, -1),
-				W("span", XG, N(F(r).progress_round(a.value)), 1),
+				W("span", ZG, N(F(r).progress_round(a.value)), 1),
 				G(o, { name: "i-lucide-panel-right-open" })
-			], 10, YG), G(c, {
+			], 10, XG), G(c, {
 				open: i.value,
 				"onUpdate:open": n[1] ||= (e) => i.value = e,
 				side: "right",
@@ -44494,51 +44496,51 @@ var VV = {
 					body: "progress-drawer-body"
 				}
 			}, {
-				body: I(() => [G(qG)]),
+				body: I(() => [G(JG)]),
 				_: 1
 			}, 8, ["open", "description"])])) : J("", !0);
 		};
 	}
-}, QG = {
+}, $G = {
 	id: "channel-sidebar",
 	class: "channel-sidebar",
 	"aria-label": "频道导航"
-}, $G = { class: "channel-workspace-heading" }, eK = { class: "channel-brand-icon" }, tK = { class: "channel-sidebar-content" }, nK = { class: "channel-directory-heading channel-tools-heading" }, rK = { class: "channel-sidebar-footer" }, iK = { class: "channel-self" }, aK = { class: "channel-connection" }, oK = [
+}, eK = { class: "channel-workspace-heading" }, tK = { class: "channel-brand-icon" }, nK = { class: "channel-sidebar-content" }, rK = { class: "channel-directory-heading channel-tools-heading" }, iK = { class: "channel-sidebar-footer" }, aK = { class: "channel-self" }, oK = { class: "channel-connection" }, sK = [
 	"aria-valuemax",
 	"aria-valuenow",
 	"aria-valuetext"
-], sK = { class: "channel-main" }, cK = { class: "channel-header" }, lK = { class: "channel-title-icon" }, uK = { class: "channel-title" }, dK = { class: "channel-title-copy" }, fK = ["title"], pK = ["title"], mK = {
+], cK = { class: "channel-main" }, lK = { class: "channel-header" }, uK = { class: "channel-title-icon" }, dK = { class: "channel-title" }, fK = { class: "channel-title-copy" }, pK = ["title"], mK = ["title"], hK = {
 	key: 0,
 	class: "channel-header-context"
-}, hK = {
+}, gK = {
 	key: 1,
 	class: "channel-header-actions"
-}, gK = {
+}, _K = {
 	key: 0,
 	class: "channel-tabbar"
-}, _K = { class: "channel-brief-inner" }, vK = { class: "channel-brief-heading" }, yK = ["aria-label", "aria-expanded"], bK = {
+}, vK = { class: "channel-brief-inner" }, yK = { class: "channel-brief-heading" }, bK = ["aria-label", "aria-expanded"], xK = {
 	key: 0,
 	class: "channel-brief-preview"
-}, xK = {
+}, SK = {
 	id: "channel-brief-content",
 	class: "channel-brief-content"
-}, SK = ["innerHTML"], CK = { class: "channel-brief-footer" }, wK = { class: "channel-brief-status" }, TK = { class: "channel-content" }, EK = {
+}, CK = ["innerHTML"], wK = { class: "channel-brief-footer" }, TK = { class: "channel-brief-status" }, EK = { class: "channel-content" }, DK = {
 	key: 0,
 	class: "content-page channel-summary",
 	role: "tabpanel",
 	"aria-label": "共识"
-}, DK = { class: "page-heading" }, OK = {
+}, OK = { class: "page-heading" }, kK = {
 	key: 0,
 	class: "info-section"
-}, kK = { class: "button-row" }, AK = { class: "form-footer" }, jK = {
+}, AK = { class: "button-row" }, jK = { class: "form-footer" }, MK = {
 	key: 3,
 	class: "channel-empty"
-}, MK = ["aria-valuenow", "aria-valuetext"], NK = {
+}, NK = ["aria-valuenow", "aria-valuetext"], PK = {
 	key: 2,
 	id: "channel-member-rail",
 	class: "channel-member-rail",
 	"aria-label": "当前焦点与讨论进度"
-}, PK = { class: "channel-rail-board" }, FK = { class: "channel-detail-title" }, IK = { class: "info-section" }, LK = "ai-codiscuss-channel-layout", RK = 220, zK = 440, BK = 280, VK = 16, HK = 180, UK = 400, WK = 248, GK = 16, KK = 480, qK = 1200, JK = 6, YK = {
+}, FK = { class: "channel-rail-board" }, IK = { class: "channel-detail-title" }, LK = { class: "info-section" }, RK = "ai-codiscuss-channel-layout", zK = 220, BK = 440, VK = 280, HK = 16, UK = 180, WK = 400, GK = 248, KK = 16, qK = 480, JK = 1200, YK = 6, XK = {
 	__name: "ChannelWorkspace",
 	setup(e) {
 		let { view: t, bridge: n, field: r, act: i, pending: a } = Sr("discussion"), o = X(() => t.value.room), s = /* @__PURE__ */ P(""), c = /* @__PURE__ */ P(null), l = /* @__PURE__ */ P(null), u = /* @__PURE__ */ P(null), d = /* @__PURE__ */ P(!1), f = /* @__PURE__ */ P(!1), p = r("state-input"), m = r("brief-input"), h = r("search-input"), g = r("author-select"), _ = {
@@ -44554,13 +44556,13 @@ var VV = {
 				label: "宽",
 				width: 1240
 			}
-		}, v = ve(), y = /* @__PURE__ */ P(v.reading), b = /* @__PURE__ */ P(v.rail), x = /* @__PURE__ */ P(v.nav), S = /* @__PURE__ */ P(typeof window > "u" ? 734 : window.innerWidth), C = /* @__PURE__ */ P(v.collapsed), w = /* @__PURE__ */ P(!0), T = /* @__PURE__ */ P(v.rail_collapsed), ee = X(() => S.value >= qK), E = X(() => !!o.value && t.value.tab === "discussion" && !T.value), te = X(() => ee.value && t.value.tab === "discussion" ? T.value ? "展开频道概览" : "收起频道概览" : "频道资料与参与者"), ne = X(() => {
+		}, v = ve(), y = /* @__PURE__ */ P(v.reading), b = /* @__PURE__ */ P(v.rail), x = /* @__PURE__ */ P(v.nav), S = /* @__PURE__ */ P(typeof window > "u" ? 734 : window.innerWidth), C = /* @__PURE__ */ P(v.collapsed), w = /* @__PURE__ */ P(!0), T = /* @__PURE__ */ P(v.rail_collapsed), ee = X(() => S.value >= JK), E = X(() => !!o.value && t.value.tab === "discussion" && !T.value), te = X(() => ee.value && t.value.tab === "discussion" ? T.value ? "展开频道概览" : "收起频道概览" : "频道资料与参与者"), ne = X(() => {
 			let e = document.createElement("template");
 			return e.innerHTML = o.value?.rendered_brief || "", e.content.textContent.replace(/\s+/g, " ").trim();
-		}), re = /* @__PURE__ */ P(null), ie = /* @__PURE__ */ P(null), ae = X(() => Math.min(UK, Math.max(HK, S.value - KK - JK))), D = X(() => Math.min(x.value, ae.value)), oe = X(() => ({
+		}), re = /* @__PURE__ */ P(null), ie = /* @__PURE__ */ P(null), ae = X(() => Math.min(WK, Math.max(UK, S.value - qK - YK))), D = X(() => Math.min(x.value, ae.value)), oe = X(() => ({
 			"--channel-reading-width": `${_[y.value].width}px`,
 			"--channel-rail-width": `${b.value}px`,
-			"--channel-main-columns": C.value ? "minmax(0, 1fr)" : `${D.value}px ${JK}px minmax(0, 1fr)`
+			"--channel-main-columns": C.value ? "minmax(0, 1fr)" : `${D.value}px ${YK}px minmax(0, 1fr)`
 		})), O = Object.entries(_).map(([e, t]) => ({
 			value: e,
 			label: t.label
@@ -44687,11 +44689,11 @@ var VV = {
 		}
 		function ve() {
 			try {
-				let e = JSON.parse(localStorage.getItem(LK)) || {};
+				let e = JSON.parse(localStorage.getItem(RK)) || {};
 				return {
 					reading: Object.hasOwn(_, e.reading) ? e.reading : "default",
-					rail: Number.isFinite(e.rail) ? Math.min(zK, Math.max(RK, e.rail)) : BK,
-					nav: Number.isFinite(e.nav) ? Math.min(UK, Math.max(HK, e.nav)) : ye(),
+					rail: Number.isFinite(e.rail) ? Math.min(BK, Math.max(zK, e.rail)) : VK,
+					nav: Number.isFinite(e.nav) ? Math.min(WK, Math.max(UK, e.nav)) : ye(),
 					collapsed: e.collapsed === !0,
 					brief_collapsed: e.brief_collapsed === !0,
 					rail_collapsed: e.rail_collapsed === !0
@@ -44699,7 +44701,7 @@ var VV = {
 			} catch {
 				return {
 					reading: "default",
-					rail: BK,
+					rail: VK,
 					nav: ye(),
 					collapsed: !1,
 					brief_collapsed: !1,
@@ -44708,11 +44710,11 @@ var VV = {
 			}
 		}
 		function ye() {
-			return typeof window > "u" ? WK : window.innerWidth >= 1900 ? 280 : window.innerWidth <= 980 ? 220 : WK;
+			return typeof window > "u" ? GK : window.innerWidth >= 1900 ? 280 : window.innerWidth <= 980 ? 220 : GK;
 		}
 		function be() {
 			try {
-				localStorage.setItem(LK, JSON.stringify({
+				localStorage.setItem(RK, JSON.stringify({
 					reading: y.value,
 					rail: b.value,
 					nav: x.value,
@@ -44742,19 +44744,19 @@ var VV = {
 			}, e.currentTarget.setPointerCapture(e.pointerId));
 		}
 		function Ee(e) {
-			re.value?.pointer === e.pointerId && (b.value = Math.round(Math.min(zK, Math.max(RK, re.value.width + re.value.x - e.clientX))));
+			re.value?.pointer === e.pointerId && (b.value = Math.round(Math.min(BK, Math.max(zK, re.value.width + re.value.x - e.clientX))));
 		}
 		function De(e) {
 			re.value?.pointer === e.pointerId && (re.value = null, e.currentTarget.hasPointerCapture(e.pointerId) && e.currentTarget.releasePointerCapture(e.pointerId), be());
 		}
 		function Oe(e) {
 			let t = {
-				ArrowLeft: b.value + VK,
-				ArrowRight: b.value - VK,
-				Home: RK,
-				End: zK
+				ArrowLeft: b.value + HK,
+				ArrowRight: b.value - HK,
+				Home: zK,
+				End: BK
 			};
-			Object.hasOwn(t, e.key) && (e.preventDefault(), b.value = Math.min(zK, Math.max(RK, t[e.key])), be());
+			Object.hasOwn(t, e.key) && (e.preventDefault(), b.value = Math.min(BK, Math.max(zK, t[e.key])), be());
 		}
 		function ke(e) {
 			e.button === 0 && (e.preventDefault(), e.currentTarget.focus(), ie.value = {
@@ -44764,19 +44766,19 @@ var VV = {
 			}, e.currentTarget.setPointerCapture(e.pointerId));
 		}
 		function Ae(e) {
-			ie.value?.pointer === e.pointerId && (x.value = Math.round(Math.min(ae.value, Math.max(HK, ie.value.width + e.clientX - ie.value.x))));
+			ie.value?.pointer === e.pointerId && (x.value = Math.round(Math.min(ae.value, Math.max(UK, ie.value.width + e.clientX - ie.value.x))));
 		}
 		function je(e) {
 			ie.value?.pointer === e.pointerId && (ie.value = null, e.currentTarget.hasPointerCapture(e.pointerId) && e.currentTarget.releasePointerCapture(e.pointerId), be());
 		}
 		function Me(e) {
 			let t = {
-				ArrowLeft: D.value - GK,
-				ArrowRight: D.value + GK,
-				Home: HK,
+				ArrowLeft: D.value - KK,
+				ArrowRight: D.value + KK,
+				Home: UK,
 				End: ae.value
 			};
-			Object.hasOwn(t, e.key) && (e.preventDefault(), x.value = Math.min(ae.value, Math.max(HK, t[e.key])), be());
+			Object.hasOwn(t, e.key) && (e.preventDefault(), x.value = Math.min(ae.value, Math.max(UK, t[e.key])), be());
 		}
 		return (e, r) => {
 			let _ = Ak, v = PV, x = Ik, S = tA, T = AV, ve = pV, ye = CV, be = OV, Se = hV, we = dV, Ne = cV, Pe = nV, Fe = $B;
@@ -44788,13 +44790,13 @@ var VV = {
 				}]),
 				style: pe(oe.value)
 			}, [
-				W("aside", QG, [
-					W("header", $G, [
-						W("span", eK, [G(_, { name: "i-lucide-messages-square" })]),
+				W("aside", $G, [
+					W("header", eK, [
+						W("span", tK, [G(_, { name: "i-lucide-messages-square" })]),
 						r[22] ||= W("strong", null, "共议", -1),
 						r[23] ||= W("span", null, "AI CoDiscuss", -1)
 					]),
-					W("div", tK, [G(mG, {
+					W("div", nK, [G(hG, {
 						onSelect: A,
 						onManage: de,
 						onCreate: he,
@@ -44802,7 +44804,7 @@ var VV = {
 						onManageFolder: _e,
 						onDeleteFolder: M,
 						onArchives: fe
-					}), o.value ? (V(), H(B, { key: 0 }, [W("div", nK, [W("span", null, [G(_, { name: "i-lucide-chevron-down" }), r[24] ||= q("频道工具", -1)])]), G(v, {
+					}), o.value ? (V(), H(B, { key: 0 }, [W("div", rK, [W("span", null, [G(_, { name: "i-lucide-chevron-down" }), r[24] ||= q("频道工具", -1)])]), G(v, {
 						items: ce.value,
 						orientation: "vertical",
 						color: "neutral",
@@ -44815,7 +44817,7 @@ var VV = {
 							linkLeadingIcon: "channel-link-icon"
 						}
 					}, null, 8, ["items"])], 64)) : J("", !0)]),
-					W("footer", rK, [
+					W("footer", iK, [
 						G(x, {
 							src: F(n).identities[F(g)]?.icon,
 							text: F(n).identities[F(g)]?.initials,
@@ -44828,7 +44830,7 @@ var VV = {
 							"alt",
 							"class"
 						]),
-						W("div", iK, [W("strong", null, N(F(n).display_name(F(g))), 1), W("div", aK, [W("span", { class: j({ connected: F(t).connected }) }, null, 2), q(N(F(t).connected ? "服务已连接" : "服务未连接"), 1)])]),
+						W("div", aK, [W("strong", null, N(F(n).display_name(F(g))), 1), W("div", oK, [W("span", { class: j({ connected: F(t).connected }) }, null, 2), q(N(F(t).connected ? "服务已连接" : "服务未连接"), 1)])]),
 						G(T, { text: "外观设置" }, {
 							default: I(() => [G(S, {
 								icon: "i-lucide-settings-2",
@@ -44851,7 +44853,7 @@ var VV = {
 					"aria-label": "调整频道栏宽度",
 					"aria-orientation": "vertical",
 					"aria-controls": "channel-sidebar",
-					"aria-valuemin": HK,
+					"aria-valuemin": UK,
 					"aria-valuemax": ae.value,
 					"aria-valuenow": D.value,
 					"aria-valuetext": `${D.value} 像素`,
@@ -44862,9 +44864,9 @@ var VV = {
 					onPointercancel: je,
 					onLostpointercapture: je,
 					onKeydown: Me
-				}, null, 40, oK)),
-				W("main", sK, [
-					W("header", cK, [
+				}, null, 40, sK)),
+				W("main", cK, [
+					W("header", lK, [
 						G(T, { text: C.value ? "展开频道栏" : "收起频道栏" }, {
 							default: I(() => [G(S, {
 								icon: "i-lucide-panel-left",
@@ -44889,13 +44891,13 @@ var VV = {
 							"aria-expanded": d.value,
 							onClick: r[2] ||= (e) => d.value = !0
 						}, null, 8, ["aria-expanded"]),
-						W("span", lK, [G(_, { name: "i-lucide-hash" })]),
-						W("div", uK, [W("div", dK, [W("h1", { title: o.value?.title }, N(o.value?.title || "共议"), 9, fK), o.value?.floor ? (V(), H("div", {
+						W("span", uK, [G(_, { name: "i-lucide-hash" })]),
+						W("div", dK, [W("div", fK, [W("h1", { title: o.value?.title }, N(o.value?.title || "共议"), 9, pK), o.value?.floor ? (V(), H("div", {
 							key: 0,
 							class: j(["channel-floor-status", { "is-held": o.value.floor.holder }]),
 							role: "status",
 							title: `发言权：${F(n).floor_status(o.value)}`
-						}, [G(_, { name: "i-lucide-mic" }), W("span", null, "发言权：" + N(F(n).floor_status(o.value)), 1)], 10, pK)) : J("", !0)]), o.value?.archived ? (V(), U(ve, {
+						}, [G(_, { name: "i-lucide-mic" }), W("span", null, "发言权：" + N(F(n).floor_status(o.value)), 1)], 10, mK)) : J("", !0)]), o.value?.archived ? (V(), U(ve, {
 							key: 0,
 							color: "neutral",
 							variant: "subtle",
@@ -44904,13 +44906,13 @@ var VV = {
 							default: I(() => [...r[25] ||= [q("已存档", -1)]]),
 							_: 1
 						})) : J("", !0)]),
-						o.value ? (V(), H("span", mK, [
+						o.value ? (V(), H("span", hK, [
 							q(N(se.find((e) => e.value === F(t).tab)?.label), 1),
 							r[26] ||= W("span", null, "·", -1),
 							q(N(o.value.message_count) + " 条记录", 1)
 						])) : J("", !0),
-						o.value ? (V(), H("div", hK, [
-							G(ZG, { floating: !(E.value && ee.value) }, null, 8, ["floating"]),
+						o.value ? (V(), H("div", gK, [
+							G(QG, { floating: !(E.value && ee.value) }, null, 8, ["floating"]),
 							F(t).tab === "discussion" ? (V(), H("form", {
 								key: 0,
 								class: "channel-search",
@@ -44997,7 +44999,7 @@ var VV = {
 							_: 1
 						}, 8, ["text"])) : J("", !0)
 					]),
-					o.value ? (V(), H("div", gK, [G(Se, {
+					o.value ? (V(), H("div", _K, [G(Se, {
 						modelValue: k.value,
 						"onUpdate:modelValue": r[7] ||= (e) => k.value = e,
 						items: se,
@@ -45012,7 +45014,7 @@ var VV = {
 						key: 1,
 						class: j(["channel-host-brief", { "is-collapsed": w.value }]),
 						"aria-label": "主持简报"
-					}, [W("div", _K, [W("div", vK, [W("button", {
+					}, [W("div", vK, [W("div", yK, [W("button", {
 						type: "button",
 						class: "channel-brief-toggle",
 						"aria-label": w.value ? "展开主持简报" : "收起主持简报",
@@ -45022,8 +45024,8 @@ var VV = {
 					}, [
 						G(_, { name: w.value ? "i-lucide-chevron-right" : "i-lucide-chevron-down" }, null, 8, ["name"]),
 						W("strong", null, "主持简报" + N(w.value ? "：" : ""), 1),
-						w.value ? (V(), H("span", bK, N(ne.value), 1)) : J("", !0)
-					], 8, yK), w.value ? J("", !0) : (V(), U(S, {
+						w.value ? (V(), H("span", xK, N(ne.value), 1)) : J("", !0)
+					], 8, bK), w.value ? J("", !0) : (V(), U(S, {
 						key: 0,
 						label: "更新简报",
 						color: "neutral",
@@ -45031,31 +45033,31 @@ var VV = {
 						size: "xs",
 						class: "channel-brief-update",
 						onClick: r[8] ||= (e) => F(i)("tab", "context")
-					}))]), yr(W("div", xK, [W("div", {
+					}))]), yr(W("div", SK, [W("div", {
 						class: "channel-brief-text markdown-body",
 						innerHTML: o.value.rendered_brief
-					}, null, 8, SK), W("div", CK, [W("span", wK, N(F(n).progress_speaker(o.value)), 1), W("small", null, N(F(n).brief_meta(o.value)), 1)])], 512), [[Hc, !w.value]])])], 2)) : J("", !0),
+					}, null, 8, CK), W("div", wK, [W("span", TK, N(F(n).progress_speaker(o.value)), 1), W("small", null, N(F(n).brief_meta(o.value)), 1)])], 512), [[Hc, !w.value]])])], 2)) : J("", !0),
 					o.value ? (V(), H("div", {
 						key: 2,
 						class: j(["channel-body", { "channel-body-discussion": F(t).tab === "discussion" }])
-					}, [W("div", TK, [
-						yr(G(gU, {
+					}, [W("div", EK, [
+						yr(G(_U, {
 							onDetail: me,
 							onEdit: r[9] ||= (e) => s.value = "edit",
 							onTopic: r[10] ||= (e) => f.value = !0
 						}, null, 512), [[Hc, F(t).tab === "discussion"]]),
-						F(t).tab === "context" ? (V(), H("section", EK, [
-							W("div", DK, [r[27] ||= W("div", null, [W("h2", null, "共识与分歧"), W("p", null, "整理讨论进展，用 #消息编号 保留依据。")], -1), G(ve, {
+						F(t).tab === "context" ? (V(), H("section", DK, [
+							W("div", OK, [r[27] ||= W("div", null, [W("h2", null, "共识与分歧"), W("p", null, "整理讨论进展，用 #消息编号 保留依据。")], -1), G(ve, {
 								color: "neutral",
 								variant: "outline"
 							}, {
 								default: I(() => [q("截止 #" + N(o.value.state_until), 1)]),
 								_: 1
 							})]),
-							Array.isArray(o.value.latest_receipts) && o.value.latest_receipts.length ? (V(), H("section", OK, [
+							Array.isArray(o.value.latest_receipts) && o.value.latest_receipts.length ? (V(), H("section", kK, [
 								r[28] ||= W("h3", null, "最新运行回执", -1),
 								r[29] ||= W("p", { class: "fine-print" }, "以下回执独立于摘要更新；晚于摘要的回执可能尚未整理，实际运行结果请查看原文。", -1),
-								W("div", kK, [(V(!0), H(B, null, ga(o.value.latest_receipts, (e) => (V(), U(S, {
+								W("div", AK, [(V(!0), H(B, null, ga(o.value.latest_receipts, (e) => (V(), U(S, {
 									key: e.id,
 									label: `${F(n).display_name(e.author)} #${e.id} · ${new Date(e.created_at).toLocaleString("zh-CN")}${e.id > o.value.state_until ? " · 晚于摘要" : ""}`,
 									variant: "link",
@@ -45089,7 +45091,7 @@ var VV = {
 									class: "summary-editor",
 									placeholder: "已达成的共识、尚未解决的问题与下一步…"
 								}, null, 8, ["modelValue"]),
-								W("div", AK, [W("span", null, "依据消息截止 #" + N(F(t).snapshot_id), 1), G(S, {
+								W("div", jK, [W("span", null, "依据消息截止 #" + N(F(t).snapshot_id), 1), G(S, {
 									type: "submit",
 									color: "neutral",
 									icon: "i-lucide-check",
@@ -45099,12 +45101,12 @@ var VV = {
 								}, null, 8, ["loading"])])
 							], 32)
 						])) : J("", !0),
-						F(t).tab === "topic" || F(t).tab === "access" ? (V(), U(XU, {
+						F(t).tab === "topic" || F(t).tab === "access" ? (V(), U(ZU, {
 							key: F(t).tab,
 							onOpen: r[14] ||= (e) => s.value = e,
 							onDetail: me
 						})) : J("", !0)
-					])], 2)) : (V(), H("div", jK, [
+					])], 2)) : (V(), H("div", MK, [
 						G(_, { name: "i-lucide-hash" }),
 						r[31] ||= W("h2", null, "新建一个讨论频道", -1),
 						r[32] ||= W("p", null, "每个频道围绕一个议题，保留所有人的观点。", -1),
@@ -45124,8 +45126,8 @@ var VV = {
 					"aria-label": "调整右侧栏宽度",
 					"aria-orientation": "vertical",
 					"aria-controls": "channel-member-rail",
-					"aria-valuemin": RK,
-					"aria-valuemax": zK,
+					"aria-valuemin": zK,
+					"aria-valuemax": BK,
 					"aria-valuenow": b.value,
 					"aria-valuetext": `${b.value} 像素`,
 					title: "拖动调整右侧栏宽度，也可使用左右方向键",
@@ -45135,8 +45137,8 @@ var VV = {
 					onPointercancel: De,
 					onLostpointercapture: De,
 					onKeydown: Oe
-				}, null, 40, MK)) : J("", !0),
-				E.value ? (V(), H("aside", NK, [W("section", PK, [G(qG, { docked: "" })])])) : J("", !0),
+				}, null, 40, NK)) : J("", !0),
+				E.value ? (V(), H("aside", PK, [W("section", FK, [G(JG, { docked: "" })])])) : J("", !0),
 				G(Pe, {
 					open: d.value,
 					"onUpdate:open": r[17] ||= (e) => d.value = e,
@@ -45148,7 +45150,7 @@ var VV = {
 						body: "channel-drawer-body"
 					}
 				}, {
-					body: I(() => [G(mG, {
+					body: I(() => [G(hG, {
 						onSelect: A,
 						onManage: de,
 						onCreate: he,
@@ -45179,7 +45181,7 @@ var VV = {
 					}
 				}, {
 					body: I(() => [o.value ? (V(), H(B, { key: 0 }, [
-						W("div", FK, [G(_, { name: "i-lucide-hash" }), W("h2", null, N(o.value.title), 1)]),
+						W("div", IK, [G(_, { name: "i-lucide-hash" }), W("h2", null, N(o.value.title), 1)]),
 						(V(), H(B, null, ga([
 							{
 								key: "goal",
@@ -45206,7 +45208,7 @@ var VV = {
 							class: "info-section"
 						}, [W("h3", null, N(e.label), 1), W("p", null, N(o.value[e.key] || "尚未填写"), 1)])), 64)),
 						G(Fe),
-						W("section", IK, [r[33] ||= W("h3", null, "参与身份", -1), (V(!0), H(B, null, ga(le.value, (e) => (V(), H("div", {
+						W("section", LK, [r[33] ||= W("h3", null, "参与身份", -1), (V(!0), H(B, null, ga(le.value, (e) => (V(), H("div", {
 							key: e.name,
 							class: "expert-row"
 						}, [
@@ -45239,7 +45241,7 @@ var VV = {
 					], 64)) : J("", !0)]),
 					_: 1
 				}, 8, ["open"]),
-				G(GW, {
+				G(KW, {
 					modelValue: s.value,
 					"onUpdate:modelValue": r[20] ||= (e) => s.value = e,
 					"reading-width": y.value,
@@ -45259,7 +45261,7 @@ var VV = {
 			], 6);
 		};
 	}
-}, XK = {
+}, ZK = {
 	__name: "App",
 	setup(e) {
 		let t = ZB();
@@ -45273,7 +45275,7 @@ var VV = {
 				toaster: null
 			}, {
 				default: I(() => [G(F(xz), { "reduced-motion": "user" }, {
-					default: I(() => [F(n).theme.startsWith("channel") ? (V(), U(YK, { key: 0 })) : J("", !0)]),
+					default: I(() => [F(n).theme.startsWith("channel") ? (V(), U(XK, { key: 0 })) : J("", !0)]),
 					_: 1
 				})]),
 				_: 1
@@ -45283,8 +45285,8 @@ var VV = {
 };
 //#endregion
 //#region web/modern/main.js
-function ZK() {
-	xu(XK).use(ph).mount("#modern-root");
+function QK() {
+	xu(ZK).use(ph).mount("#modern-root");
 }
-document.readyState === "loading" ? document.addEventListener("DOMContentLoaded", ZK) : ZK();
+document.readyState === "loading" ? document.addEventListener("DOMContentLoaded", QK) : QK();
 //#endregion
