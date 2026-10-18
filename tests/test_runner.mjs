@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { createServer } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
@@ -417,12 +417,13 @@ test('the same site and room cannot be registered twice', t => {
   assert.throws(() => register_room(home, room_config(home, 'http://127.0.0.1:8765', 'room1', 'b')), /已由/);
 });
 
-test('the detached service starts once, reports status and stops on request', async t => {
+for (const [name, prefix] of [['discussion_service', []], ['codiscuss', []], ['codiscuss', ['service']]]) {
+test(`${[name, ...prefix].join(' ')}: the detached service starts once, reports status and stops on request`, async t => {
   const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
-  const script = fileURLToPath(new URL('../runner/discussion_service.mjs', import.meta.url));
+  const script = fileURLToPath(new URL(`../runner/${name}.mjs`, import.meta.url));
   const env = { ...process.env, DISCUSS_SERVICE_HOME: home };
   const run = async (...args) => {
-    const child = spawn(process.execPath, [script, ...args], { env });
+    const child = spawn(process.execPath, [script, ...prefix, ...args, ...(name === 'codiscuss' ? ['--json'] : [])], { env, cwd: tmpdir() });
     let output = ''; child.stdout.on('data', chunk => { output += chunk; });
     const [code] = await once(child, 'close');
     assert.equal(code, 0);
@@ -435,6 +436,164 @@ test('the detached service starts once, reports status and stops on request', as
   assert.equal((await run('status')).pid, started.pid);
   assert.equal((await run('stop')).running, false);
   assert.equal(service_pid(home), 0);
+});
+}
+
+/** Invoke the public CLI from outside the repository, capturing readable output. */
+async function run_service_cli(env, ...args) {
+  const script = fileURLToPath(new URL('../runner/codiscuss.mjs', import.meta.url));
+  const child = spawn(process.execPath, [script, ...args], { env, cwd: tmpdir() });
+  let output = ''; let error = '';
+  child.stdout.on('data', chunk => { output += chunk; });
+  child.stderr.on('data', chunk => { error += chunk; });
+  child.stdin.end();
+  const [code] = await once(child, 'close');
+  return { code, output, error };
+}
+
+test('CLI help and status do not start a service; unknown commands fail', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'discussion-cli-'));
+  const env = { ...process.env, DISCUSS_SERVICE_HOME: home };
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const help = await run_service_cli(env, '--help');
+  assert.equal(help.code, 0); assert.match(help.output, /Ctrl\+C/);
+  assert.equal(existsSync(join(home, 'runner.lock')), false);
+  const status = await run_service_cli(env, 'status');
+  assert.equal(status.code, 0); assert.match(status.output, /讨论服务未运行/);
+  const invalid = await run_service_cli(env, 'unknown');
+  assert.equal(invalid.code, 2); assert.equal(invalid.output, '');
+  assert.match(JSON.parse(invalid.error).error.hint, /codiscuss --help/);
+  assert.equal(service_pid(home), 0);
+});
+
+test('unified help separates website run controls from the resident service', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'discussion-cli-'));
+  const env = { ...process.env, DISCUSS_SERVICE_HOME: home, DISCUSS_URL: '' };
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const service_help = await run_service_cli(env, 'service', '--help');
+  assert.equal(service_help.code, 0); assert.match(service_help.output, /codiscuss service/);
+  const room_help = await run_service_cli(env, 'room', '--help');
+  assert.equal(room_help.code, 0); assert.match(room_help.output, /codiscuss room/);
+  const run_help = await run_service_cli(env, 'run', '--help');
+  assert.equal(run_help.code, 0); assert.match(run_help.output, /codiscuss run/);
+  const schema = await run_service_cli(env, 'schema', 'message', 'post');
+  assert.equal(schema.code, 0); assert.equal(JSON.parse(schema.output).ok, true);
+  assert.equal(schema.error, ''); assert.equal(service_pid(home), 0);
+});
+
+test('website commands preserve global flags and return clean JSON without starting the service', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'discussion-cli-'));
+  const paths = [];
+  const server = createServer((request, response) => {
+    paths.push(request.url);
+    response.setHeader('Content-Type', 'application/json');
+    response.end(JSON.stringify(request.url === '/api/health' ? { ok: true } : { mode: 'automatic', status: 'paused' }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const site = `http://127.0.0.1:${server.address().port}`;
+  const env = { ...process.env, DISCUSS_SERVICE_HOME: home, DISCUSS_URL: site };
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); rmSync(home, { recursive: true, force: true }); });
+  const health = await run_service_cli(env, '--site', site, 'health');
+  assert.equal(health.code, 0); assert.equal(health.error, '');
+  assert.equal(JSON.parse(health.output).data.ok, true);
+  const runtime = await run_service_cli(env, 'run', 'view', 'room');
+  assert.equal(runtime.code, 0); assert.equal(runtime.error, '');
+  assert.equal(JSON.parse(runtime.output).data.status, 'paused');
+  assert.deepEqual(paths, ['/api/health', '/api/rooms/room/runtime']);
+  assert.equal(existsSync(join(home, 'runner.lock')), false);
+});
+
+test('unified message submission preserves UTF-8 stdin, quoted arguments and caller-relative files', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'discussion-cli-'));
+  const env = { ...process.env, DISCUSS_SERVICE_HOME: home, DISCUSS_URL: '' };
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const script = fileURLToPath(new URL('../runner/codiscuss.mjs', import.meta.url));
+  const body = '完整中文正文\n含 "引号" 与 $字面量';
+  const args = ['message', 'post', 'room', '--as', 'Claude', '--turn', '1', '--summary', '中文 简述',
+    '--submission-id', 'unified-preview', '--site', 'http://127.0.0.1:1', '--dry-run'];
+  const child = spawn(process.execPath, [script, ...args, '--body-file', '-'], { env, cwd: tmpdir() });
+  let output = ''; let error = '';
+  child.stdout.on('data', chunk => { output += chunk; }); child.stderr.on('data', chunk => { error += chunk; });
+  child.stdin.end(body);
+  const [code] = await once(child, 'close');
+  assert.equal(code, 0, error); assert.equal(error, '');
+  const preview = JSON.parse(output);
+  assert.equal(preview.data.body.text, body); assert.equal(preview.data.body.summary, '中文 简述');
+  const file = join(home, '中文 正文.txt'); writeFileSync(file, body);
+  const from_file = await run_service_cli(env, ...args, '--body-file', relative(tmpdir(), file));
+  assert.equal(from_file.code, 0, from_file.error); assert.equal(from_file.error, '');
+  assert.equal(JSON.parse(from_file.output).data.body.text, body);
+  assert.equal(service_pid(home), 0);
+});
+
+test('a website write with a lost response keeps exit code 3 and is never retried by the unified CLI', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'discussion-cli-'));
+  const env = { ...process.env, DISCUSS_SERVICE_HOME: home };
+  let writes = 0;
+  const server = createServer(async (request) => {
+    for await (const chunk of request) { void chunk; }
+    writes++;
+    request.socket.destroy();
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); rmSync(home, { recursive: true, force: true }); });
+  const result = await run_service_cli(env, 'api', '/api/rooms', '--method', 'POST', '--input', '-',
+    '--site', `http://127.0.0.1:${server.address().port}`);
+  assert.equal(result.code, 2, 'missing stdin is rejected before sending');
+  assert.equal(writes, 0);
+  const file = join(home, 'request.json'); writeFileSync(file, JSON.stringify({ title: '测试', submission_id: 'unified-write' }));
+  const uncertain = await run_service_cli(env, 'api', '/api/rooms', '--method', 'POST', '--input', file,
+    '--site', `http://127.0.0.1:${server.address().port}`);
+  assert.equal(uncertain.code, 3); assert.equal(uncertain.output, '');
+  assert.equal(JSON.parse(uncertain.error).error.outcome, 'unknown');
+  assert.equal(writes, 1); assert.equal(service_pid(home), 0);
+});
+
+test('the default CLI runs visibly, reports room state and can be stopped from another terminal', async t => {
+  const f = await fixture(t);
+  f.run.status = 'paused';
+  const home = mkdtempSync(join(tmpdir(), 'discussion-cli-'));
+  const env = { ...process.env, DISCUSS_SERVICE_HOME: home };
+  const config = room_config(home, f.config.site, 'room1');
+  const added = await run_service_cli(env, 'add', '--config', config);
+  assert.equal(added.code, 0); assert.match(added.output, /已登记房间/);
+  writeFileSync(join(home, 'stop.request'), 'stale request');
+  const script = fileURLToPath(new URL('../runner/codiscuss.mjs', import.meta.url));
+  const child = spawn(process.execPath, [script], { env, cwd: tmpdir() });
+  const closed = once(child, 'close');
+  let output = ''; child.stdout.on('data', chunk => { output += chunk; });
+  try {
+    for (let attempt = 0; attempt < 200 && !output.includes('已暂停'); attempt++) await delay(25);
+    assert.match(output, /讨论服务已启动/); assert.match(output, /Ctrl\+C/);
+    assert.match(output, /room1: 已暂停/);
+    assert.equal(service_pid(home), child.pid);
+    const duplicate = await run_service_cli(env);
+    assert.equal(duplicate.code, 0); assert.match(duplicate.output, new RegExp(`PID ${child.pid}`));
+    const status = await run_service_cli(env, 'status');
+    assert.match(status.output, /运行中/); assert.match(status.output, /room1：已暂停/);
+  } finally {
+    if (service_pid(home)) await run_service_cli(env, 'stop');
+    else if (child.exitCode === null) child.kill();
+    await closed;
+    assert.equal(service_pid(home), 0);
+    rmSync(home, { recursive: true, force: true });
+  }
+  assert.match(output, /讨论服务已停止/);
+  assert.deepEqual(f.calls, [], 'starting the service never starts a paused discussion');
+});
+
+test('the foreground service releases its lock when interrupted', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'discussion-cli-'));
+  const env = { ...process.env, DISCUSS_SERVICE_HOME: home };
+  const script = new URL('../runner/codiscuss.mjs', import.meta.url).href;
+  const source = `setTimeout(() => process.emit('SIGINT'), 500); await import(${JSON.stringify(script)});`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', source], { env, cwd: tmpdir() });
+  let output = ''; child.stdout.on('data', chunk => { output += chunk; });
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const [code] = await once(child, 'close');
+  assert.equal(code, 0); assert.match(output, /尚未登记房间/);
+  assert.match(output, /讨论服务已启动/); assert.match(output, /讨论服务已停止/);
+  assert.equal(existsSync(join(home, 'runner.lock')), false);
 });
 
 test('a Claude CLI launched from a hosting Claude session drops host variables and keeps its own login', () => {

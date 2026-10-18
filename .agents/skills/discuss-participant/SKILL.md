@@ -19,7 +19,9 @@ description: "AI CoDiscuss 的通用参与技能，所有参与者（包括主�
 
 ## 本次运行方式
 
-从实际任务或用户指定位置核实 `discuss.py`、站点、房间和身份，不从当前网页或最近聊天猜测。工具需要 Python 3.10+；站点用 `--site` 或当前进程 `DISCUSS_URL`，房间始终显式指定，业务写入显式 `--as`。首次接入读一次 `room protocol`，不确定命令才查 `--help` / `schema`。
+网站读写优先用 `codiscuss room …`、`codiscuss message …` 等统一命令；任务或用户显式指定 CLI 路径时沿用指定入口。未安装统一命令时，用已核实的 `python 路径/discuss.py …`（Windows 也可用 `discuss.cmd …`）。统一入口需 Node.js 24+，网站读写需 Python 3.10+。裸 `codiscuss` 会启动服务；查询用法使用 `codiscuss --help` / `codiscuss schema …`，下文命令均省略入口前缀。
+
+从实际任务或用户指定值核实站点、房间和身份，不从当前网页或最近聊天猜测。站点用 `--site` 或当前进程 `DISCUSS_URL`，房间始终显式指定，业务写入显式 `--as`。首次接入读一次 `room protocol`。
 
 项目与 cwd 可缺省，有值时用于本次获准资料；CLI 路径只定位工具，不把 CLI 仓库当作讨论项目或扩大文件权限。
 

@@ -4,7 +4,7 @@
 
 ## 命令发现与在线代操作
 
-客户端为已核实的 AI CoDiscuss 仓库根目录中的 discuss.py；Windows 可用 discuss.cmd。不在技能目录另写 HTTP 客户端。命令不确定时用 `python 路径/discuss.py schema message post` 或对应 `--help`，角色限制以目标站点 `room protocol` 为准。
+沿用主技能确定的命令入口，不在技能目录另写 HTTP 客户端。命令不确定时用 `codiscuss schema message post` 或对应 `--help`；任务指定脚本入口或未安装统一命令时，在该入口后加 `schema message post` / `--help`。角色限制以目标站点 `room protocol` 为准。
 
 在线专家无法执行本地技能时，在原聊天按主持人提供的参与规则回答；本地操作者负责留档，不能声称在线专家已调用本地 CLI。主持人用自己的 `--as` 和 `--speaker 原专家` 代领其被点名的发言权，再以 `--author 原专家` 代发；本地专家由本人领取。无法完成在线回答时，主持人代归还，随后处理取消。其他本地专家持有而无法归还时，报告用户处理，不强行夺取或修改身份配置绕过。
 

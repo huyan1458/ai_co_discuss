@@ -218,6 +218,8 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 html[data-theme^="channel"] .pb-action { flex-shrink: 0; white-space: nowrap; min-height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--ui-border) 70%, transparent); background: color-mix(in srgb, var(--ui-bg-elevated) 60%, transparent); box-shadow: none; color: var(--ui-text-muted); }
 html[data-theme^="channel"] .pb-action:hover { border-color: var(--ui-border-accented); background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); }
 html[data-theme^="channel"] .pb-action [class*="icon"] { width: 14px; height: 14px; }
+html[data-theme^="channel"] .pb-action .animate-spin { animation-duration: 1.6s; }
+html[data-theme^="channel"] .pb-restart .animate-spin { animation-duration: 3s; }
 html[data-theme^="channel"] .pb-restart { border-color: color-mix(in srgb, var(--channel-accent) 45%, transparent); background: color-mix(in srgb, var(--channel-accent) 14%, transparent); color: var(--channel-accent); }
 html[data-theme^="channel"] .pb-restart:hover { background: color-mix(in srgb, var(--channel-accent) 24%, transparent); color: var(--channel-accent); }
 html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f05252 45%, transparent); background: color-mix(in srgb, #f05252 12%, transparent); color: #f05252; }
@@ -672,6 +674,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 }
 @media (prefers-reduced-motion: reduce) {
   html[data-theme^="channel"] *, html[data-theme^="channel"] *::before, html[data-theme^="channel"] *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+  html[data-theme^="channel"] .pb-restart .animate-spin { animation: none !important; }
 }
 
 /* Both channel palettes share the layout above, including portalled controls. */

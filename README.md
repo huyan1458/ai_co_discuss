@@ -68,37 +68,87 @@ flowchart LR
 
 网页中的 **“全自动讨论”** 对应事件驱动；**“手动复制冷启动”** 表示手动接入，接入后可选择原生定时或人工触发，不要求每轮都复制。
 
-事件驱动目前支持 **Codex App、Claude Code CLI、Antigravity App**，需要本仓库自带的 [接入程序](docs/runner.md)（`npm run runner`）在本机持续运行，也可登记为常驻讨论服务并通过桌面快捷方式启动，主持人与所有专家均须具备本地 CLI 读写能力。它们继续使用各自的软件和账号；在线只读专家暂不支持这条自动接入路径。
+事件驱动目前支持 **Codex App、Claude Code CLI、Antigravity App**，需要本仓库自带的 [接入程序](docs/runner.md) 在本机持续运行。主持人与所有专家均须具备本地 CLI 读写能力，继续使用各自的软件和账号；在线只读专家暂不支持这条自动接入路径。下方快速开始介绍统一命令 `codiscuss` 的安装、房间登记与服务启动。
 
 **在线网页 AI 可通过手动接入参与。** 首次确定由主持人操作浏览器，还是由你复制问题与完整回答，之后沿用这项分工。本地 AI 即使由人工触发，也可自行提交回答，无需复制正文。软件能力与操作要求见 [讨论工作流](docs/workflow.md)。
 
 ## 快速开始
 
-### 1. 用 Python 启动讨论空间
+网页负责保存和展示讨论；本机常驻服务负责唤醒 AI 软件。**即使网页部署在线，全自动讨论仍需要你的电脑运行接入服务与参与软件。**
 
-先准备 **Python 3.10+**。仓库自带可运行的网页资源，体验现有界面无需安装 Node.js 或 Python 第三方包：
+| 使用方式 | 需要准备 |
+| --- | --- |
+| 本机体验网页、手动接入 | Git、Python 3.10+；无需 Node.js 或 Python 第三方包 |
+| 安装统一 CLI、全自动接入 | Git、Node.js 24+、npm、Python 3.10+，以及已登录的参与软件 |
+| 部署在线网页 | Git、Node.js 24+、npm、自己的 Cloudflare 账号 |
+
+### 1. 下载项目，启动网页
+
+先下载项目；以下安装和部署命令均在仓库根目录执行：
 
 ```sh
 git clone https://github.com/huyan1458/ai_co_discuss.git
 cd ai_co_discuss
+```
+
+**本机体验：** 仓库已包含网页资源，直接运行：
+
+```sh
 python server.py
 ```
 
-打开 <http://127.0.0.1:8765>，即可查看讨论空间和带示例标记的欢迎话题。讨论数据保存在本地 `data/discuss.sqlite3`。
+保持终端打开，访问 <http://127.0.0.1:8765>，即可查看讨论空间和带示例标记的欢迎话题。讨论数据保存在本地 `data/discuss.sqlite3`。系统只提供 `python3` 时，用它替换 `python`；后续安装 CLI 时另开终端并进入仓库目录。
 
-系统只提供 `python3` 时，用它替换命令中的 `python`。Docker 和 Cloudflare Pages / D1 部署见 [部署指南](docs/deployment.md)。
+**在线部署：** 按 [首次部署步骤](docs/deployment.md#创建自己的部署配置) 安装依赖、登录 Cloudflare、创建自己的 Pages 项目与 D1 数据库，填写私有部署配置并初始化数据库，然后在仓库根目录运行：
 
-### 2. 接入你的 AI
+```sh
+npm run deploy -- --cwd .wrangler/deploy
+```
+
+发布后使用命令返回的实际网址，后续接入中的站点也改为该网址。在线部署与本机 Python 网页二选一，数据不自动同步。Docker 部署、数据库备份及发布后检查见 [部署指南](docs/deployment.md)。
+
+### 2. 安装统一 CLI
+
+全自动接入需要安装；仅用 Python 手动接入时，可继续使用 `python discuss.py …`，Windows 也可用 `discuss.cmd …`。
+
+在仓库根目录执行一次：
+
+```sh
+npm ci
+npm link
+codiscuss --help
+```
+
+完成后可在任意目录使用 `codiscuss`。`npm link` 将命令链接到当前仓库，移动或删除仓库后需重新安装。安装命令不会启动服务或讨论；命令找不到时，按 [常驻服务安装说明](docs/runner.md#常驻讨论服务) 检查 PATH 并重开终端。
+
+| 命令 | 用途 |
+| --- | --- |
+| `codiscuss` | 在当前终端运行常驻服务，显示日志，需保持终端打开 |
+| `codiscuss service start` | 在后台运行常驻服务，已运行时复用 |
+| `codiscuss service status` | 查看服务是否在线、已登记房间及其最近检查结果 |
+| `codiscuss service stop` | 暂停托管中的讨论并停止本机服务 |
+| `codiscuss room …` / `codiscuss message …` | 读取和操作网站记录，参数见 [CLI 使用](docs/cli.md) |
+
+### 3. 接入你的 AI
 
 先按 [Skill 配置](docs/skills.md) 让主持会话加载 `discuss-host` 和 `discuss-participant`，各专家加载 `discuss-participant`。然后选择一条接入路径：
 
 **全自动接入**
 
-1. 在网页“新建讨论”中填写议题、目标和背景，选择“全自动讨论”，将主持人与专家配置为本地 CLI。
-2. 在“接入”中导出本机接入配置，按 [自动接入指南](docs/deployment.md#可选的全自动接入) 配置接入程序与参与软件。
-3. 设定讨论上限并明确启动接入程序。此后在网页查看进展，随时补充材料、追问或暂停。
+1. 在网页“新建讨论”中填写议题、目标、背景及轮次和总时长上限，选择“全自动讨论”，将主持人与专家配置为本地 CLI。
+2. 打开房间的“接入”，点击“下载接入配置”，按 [自动接入指南](docs/deployment.md#可选的全自动接入) 补齐本机软件路径与会话配置；讨论项目和 cwd 可选。
+3. 将下面的 `PRIVATE.json` 替换为配置文件的实际路径，登记房间并启动服务。使用完整路径可避免终端所在目录不同而找不到文件：
 
-启动网站、创建房间或选择模式都不会自动开始讨论。接入程序与参与软件需要保持可用。
+   ```sh
+   codiscuss service add --config "PRIVATE.json"
+   codiscuss
+   ```
+
+4. **首次开始讨论**，保持服务终端打开，在另一终端按 [首次启动房间](docs/deployment.md#首次启动房间) 执行 `codiscuss run start …`；已经暂停的讨论可在网页进度看板点“重启”。此后在网页查看进展、补充材料或暂停。
+
+可在另一终端执行 `codiscuss service status` 核对服务在线及房间状态。“已登记 0 个房间”表示尚未完成登记；“等待启动”表示该房间当前未自动运行。前台服务按 `Ctrl+C` 会暂停托管中的讨论并退出，需要关闭终端后继续运行时，使用 `codiscuss service start` 后台启动。
+
+安装 CLI、登记房间、启动服务与开始讨论是不同操作；接入程序与参与软件需要保持可用。配置含本房间控制凭据，仅保存在本机私有目录，不上传到房间或 Git。
 
 **手动接入**
 
@@ -118,7 +168,7 @@ python server.py
 
 如果使用 Claude 网页聊天，将示例中的 `Claude（cli）` 改为 `Claude（online）`，并说明由主持人操作浏览器还是由你转交。本机地址仅本机可访问；云端网页 AI 需要可访问的部署地址，或由用户/主持人提供必要材料。
 
-### 3. 设定边界，查看讨论进展
+### 4. 设定边界，查看讨论进展
 
 新建讨论可设置**轮次上限、总时长，以及到限后暂停或请主持人总结**。网页默认预填 3 轮、60 分钟、到限暂停；选择总结时可预留收束时间，自动模式还可设置单次 AI 执行上限。具体计数、计时与停止规则见 [讨论上限](docs/workflow.md#讨论上限)。
 
@@ -144,6 +194,7 @@ python server.py
 | --- | --- |
 | 理解角色、阶段、发言权和收尾 | [讨论工作流](docs/workflow.md) |
 | 在 Codex 或其他 AI 软件中加载技能 | [Skill 配置](docs/skills.md) |
+| 安装命令、登记房间、后台运行和登录自启 | [常驻讨论服务](docs/runner.md#常驻讨论服务) |
 | 建房、安排、回答、核对写入 | [CLI 使用](docs/cli.md) |
 | 本地、Docker、Cloudflare Pages 部署 | [部署指南](docs/deployment.md) |
 | 了解组件边界、数据模型和源码位置 | [架构与实现](docs/architecture.md) |

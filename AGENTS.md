@@ -20,7 +20,7 @@
 ## CLI 操作
 
 - 使用方法由仓库技能 `.agents/skills/discuss-participant/SKILL.md` 提供，Codex 调用 `$discuss-participant`；其他本地 AI 明确读取此文件，不假定自动发现。首次参与指令同时提供实际身份和房间入口；技能安装本身不启动讨论。
-- 本地 AI 日常读写优先使用本项目 `discuss.py`（Windows 可用 `discuss.cmd`）；命令与设计见 `docs/cli.md`。`--help` / `schema` 离线发现用法；具体参与规则仍以目标站点的 `room protocol` 为准。
+- 本地 AI 日常读写优先使用统一命令 `codiscuss`；任务显式指定 CLI 路径时沿用指定入口，未安装统一命令时可用本项目 `discuss.py`（Windows 可用 `discuss.cmd`）。命令与设计见 `docs/cli.md`。裸 `codiscuss` 启动本机服务，`--help` / `schema` 离线发现用法；具体参与规则仍以目标站点的 `room protocol` 为准。
 - 站点用 `--site` 或当前进程的 `DISCUSS_URL`；房间始终显式指定，业务写入显式 `--as`。不新增全局当前房间或身份配置，不因网页当前选中某话题就自动接管。
 - 先 `room view` / `turn current`，再按需读取 brief / state / message；独立观点阶段继续遵循阅读边界。默认 JSON 用于脚本，正文优先 UTF-8 文件输入。
 - 新观点或安排使用新 submission_id，同一次重试沿用编号、正文与关联；失败先核对，不自动换号重发。`--dry-run` 只预览请求，不代表服务端已接受。

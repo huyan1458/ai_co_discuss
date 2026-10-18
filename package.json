@@ -2,11 +2,14 @@
   "name": "ai_co_discuss",
   "version": "0.1.0",
   "private": true,
+  "bin": {
+    "codiscuss": "runner/codiscuss.mjs"
+  },
   "scripts": {
     "dev": "npm run build && wrangler pages dev --ip 127.0.0.1 --port 8787",
     "db:local": "wrangler d1 execute DB --local --file schema.sql",
     "db:remote": "wrangler d1 execute DB --remote --file schema.sql",
-    "check": "node --check worker.mjs && node --check web/app.js && node --check runner/discussion_runner.mjs && node --check runner/discussion_adapters.mjs && node --check runner/discussion_sidecar.mjs && node --check runner/codex_app_client.mjs && node --check runner/discussion_service.mjs",
+    "check": "node --check worker.mjs && node --check web/app.js && node --check runner/discussion_runner.mjs && node --check runner/discussion_adapters.mjs && node --check runner/discussion_sidecar.mjs && node --check runner/codex_app_client.mjs && node --check runner/discussion_service.mjs && node --check runner/codiscuss.mjs",
     "runner": "node runner/discussion_runner.mjs",
     "service": "node runner/discussion_service.mjs",
     "build:ui": "vite build --mode markdown && vite build --mode backup && vite build",

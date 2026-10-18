@@ -52,20 +52,35 @@ npm run runner -- watch --config PRIVATE.json
 
 ## 常驻讨论服务
 
-`discussion_service.mjs` 把上述事件消费封装为本机常驻后台服务：一个进程托管所有已登记房间，网页看板点「重启」后无需再回终端启动程序。服务每 2 秒重读登记表并对每个房间执行同一 `DiscussionRunner` 检查；房间暂停、到期、停止或收束时只继续等待，不退出。单个房间的配置错误、数据目录被 `watch` 占用或网站请求失败只记录在该房间状态中，其他房间照常处理。
+`discussion_service.mjs` 把上述事件消费封装为本机常驻服务，`codiscuss.mjs` 提供面向用户的 CLI：一个进程托管所有已登记房间，网页看板点「重启」后无需再回终端启动程序。服务每轮检查后等待 2 秒，重读登记表并对每个房间执行同一 `DiscussionRunner` 检查；房间暂停、到期、停止或收束时只继续等待，不退出。单个房间的配置错误、数据目录被 `watch` 占用或网站请求失败只记录在该房间状态中，其他房间照常处理。
+
+首次在仓库目录安装本机命令（需要 Node.js 24+ 与 npm，安装本身不启动服务）：
 
 ```sh
-npm run service -- add --config PRIVATE.json
-npm run service -- start
-npm run service -- status
-npm run service -- stop
-npm run service -- shortcut
-npm run service -- autostart on
+npm link
 ```
 
-`add` / `remove` / `list` 维护登记表，同一站点与房间只能登记一份配置；登记不启动讨论，首次运行仍需网页或 `npm run runner -- start` 明确启动有限运行。`start` 以无窗口方式启动后台服务，已有服务时直接复用；`run` 是同一服务的前台形式，便于排障。`stop` 请求服务退出：先暂停其中仍在运行的房间，再停止本服务创建的 Claude 子进程并释放锁，避免网站显示进行中却无人领取。`status` 返回服务是否在线及各房间最近一次检查结果（`running`/`paused`/`idle`/`error`）。
+之后在任意目录使用：
 
-`shortcut` 在 Windows 桌面创建「AI CoDiscuss 讨论服务」快捷方式：双击即启动服务（已运行则复用），并用默认浏览器打开已登记的讨论网站。`autostart on|off` 在当前用户的启动文件夹添加或删除登录自启快捷方式，默认不开启。登记表、锁、`status.json` 与 `service.log` 位于 `%LOCALAPPDATA%/ai-codiscuss/service`（其他系统为 `~/.local/state/ai-codiscuss/service`），可用 `DISCUSS_SERVICE_HOME` 改变；各房间的游标、收件箱与会话绑定仍在各自数据目录。
+```sh
+codiscuss service add --config PRIVATE.json
+codiscuss
+```
+
+`codiscuss`（等同 `codiscuss service run`）在当前终端运行，显示服务 PID、服务目录、已登记房间数、房间状态变化与错误；尚未登记房间时给出接入命令并继续等待。按 `Ctrl+C` 暂停托管中的讨论并退出。已存在服务时显示其状态后返回，不重复启动。配置文件路径相对于当前终端目录解析。`npm link` 将命令链接到本仓库，移动或删除仓库前需重新安装或运行 `npm unlink -g ai_co_discuss` 移除命令；命令不在 PATH 时，将 `npm prefix -g` 对应的 Windows 目录（其他系统为其中的 `bin`）加入 PATH 后重开终端。
+
+```sh
+codiscuss service status
+codiscuss service stop
+codiscuss service start
+codiscuss service --help
+```
+
+`add` / `remove` / `list` 维护登记表，同一站点与房间只能登记一份配置；登记不启动讨论。常驻服务运行后，首次用 `codiscuss run view` 读取版本，再用 `codiscuss run start` 明确启动有限运行，完整命令见 [首次启动房间](deployment.md#首次启动房间)；已暂停的自动讨论可在网页点“重启”。显式 `service start` 以无窗口方式启动后台服务，已有服务时直接复用。`stop` 请求服务退出：先暂停其中仍在运行的房间，再停止本服务创建的 Claude 子进程并释放锁，避免网站显示进行中却无人领取。`status` 显示服务是否在线及各房间最近一次检查结果（运行中、已暂停、等待启动、异常）。管理命令可加 `--json` 获取原始 JSON（状态值为 `running`/`paused`/`idle`/`error`）；原有 `npm run service -- COMMAND` 入口继续保留 JSON 输出。
+
+原有 `codiscuss start|status|stop|add|…` 和不带参数的 `codiscuss run` 保留为兼容别名。网站操作也统一使用 `codiscuss room …` / `message …` 等，需要 Python 3.10+；`codiscuss run start|pause|view` 只控制网站讨论，不管理本机服务进程，详见 [CLI 使用](cli.md)。
+
+`codiscuss service shortcut` 在 Windows 桌面创建「AI CoDiscuss 讨论服务」快捷方式：双击即启动后台服务（已运行则复用），并用默认浏览器打开已登记的讨论网站。`codiscuss service autostart on|off` 在当前用户的启动文件夹添加或删除登录自启快捷方式，默认不开启。登记表、锁、`status.json` 与 `service.log` 位于 `%LOCALAPPDATA%/ai-codiscuss/service`（其他系统为 `~/.local/state/ai-codiscuss/service`），可用 `DISCUSS_SERVICE_HOME` 改变；各房间的游标、收件箱与会话绑定仍在各自数据目录。
 
 `setup-sidecar` 是显式本机配置操作，只添加自己的 Sidecar 项并保留其他 App 设置，不开始讨论。保持 Antigravity 打开；核对其私有 IPC 目录中 ready 回执的项目 ID 与实际 PID。停止使用时在 App 停用该 Sidecar；不能结束其他项目的 Sidecar 或整个 App。
 

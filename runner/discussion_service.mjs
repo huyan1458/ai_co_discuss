@@ -16,6 +16,7 @@ const SCRIPT = fileURLToPath(import.meta.url);
 const REPO_ROOT = dirname(dirname(SCRIPT));
 const SHORTCUT_NAME = 'AI CoDiscuss 讨论服务.lnk';
 const TICK_STATES = { undefined: 'running', waiting: 'paused', false: 'idle' };
+const STATUS_LABELS = { running: '运行中', paused: '已暂停', idle: '等待启动', error: '异常' };
 const USAGE = '用法: discussion_service.mjs start|stop|status|open|run|list|add|remove|shortcut|autostart [--config 私有配置.json] [on|off]';
 
 /** Private per-user directory holding the registry, lock, status and log. */
@@ -74,6 +75,7 @@ class RoomWorker {
   }
   /** Run one bounded dispatcher iteration and keep the last result for status. */
   async tick() {
+    const previous_status = this.state.status;
     try {
       if (!this.runner) this.open();
       const result = await this.runner.tick();
@@ -81,6 +83,9 @@ class RoomWorker {
     } catch (error) {
       if (error.message !== this.state.error) this.log(`${this.state.room || this.path}: ${error.message}`);
       Object.assign(this.state, { status: 'error', error: error.message });
+    }
+    if (this.state.status !== previous_status) {
+      this.log(`${this.state.site || ''}/${this.state.room || this.path}: ${STATUS_LABELS[this.state.status]}`);
     }
     this.state.checked_at = Math.floor(Date.now() / 1000);
   }
@@ -135,11 +140,16 @@ export function service_pid(home) {
 }
 
 /** Foreground service loop; `start` runs this detached in the background. */
-async function run_service(home) {
+export async function run_service(home, output = () => {}) {
   const release = acquire_lock(home);
-  const log_line = message => appendFileSync(join(home, 'service.log'), `${new Date().toISOString()} ${message}\n`);
+  const log_line = message => {
+    const line = `${new Date().toISOString()} ${message}`;
+    appendFileSync(join(home, 'service.log'), `${line}\n`);
+    output(line);
+  };
   const service = new DiscussionService(home, undefined, log_line);
   const stop_path = join(home, 'stop.request');
+  if (existsSync(stop_path)) unlinkSync(stop_path);
   let stopped = false;
   const stop = () => { stopped = true; };
   process.once('SIGINT', stop);
@@ -155,6 +165,8 @@ async function run_service(home) {
     if (existsSync(stop_path)) unlinkSync(stop_path);
     log_line('讨论服务已停止');
     release();
+    process.removeListener('SIGINT', stop);
+    process.removeListener('SIGTERM', stop);
   }
 }
 
@@ -238,11 +250,10 @@ function powershell(script, env) {
 }
 
 /** Dispatch one service command; installing shortcuts or registering never starts a discussion. */
-export async function main(args = process.argv.slice(2)) {
+export async function main(args = process.argv.slice(2), print = value => process.stdout.write(JSON.stringify(value) + '\n')) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { config: { type: 'string' } } });
   const [command, option] = positionals;
   const home = service_home();
-  const print = value => process.stdout.write(JSON.stringify(value) + '\n');
   const require_config = () => { if (!values.config) throw new Error('请用 --config 指定私有房间配置'); return values.config; };
   switch (command) {
     case 'run': return run_service(home);

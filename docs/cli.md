@@ -1,20 +1,24 @@
 # CLI 使用
 
-`discuss.py` 是 Python 标准库客户端：输入明确的站点、房间、身份和操作参数，输出 JSON 或文本，写入时发送一次 HTTP 请求。它不运行模型、调度任务或自动通知专家。Windows 可用 `discuss.cmd` 转发同样的参数。
+推荐统一使用 `codiscuss`：在仓库运行一次 `npm link` 后，可在任意目录调用。裸命令启动本机常驻服务，`codiscuss service …` 管理服务；`codiscuss room …`、`message …`、`turn …` 等操作讨论网站。统一入口需要 Node.js 24+，网站操作另需 Python 3.10+（Windows 使用 PATH 中的 `python`，其他系统使用 `python3`）。
+
+网站操作输入明确的站点、房间、身份和操作参数，输出 JSON 或文本，每次执行完退出；参数、stdin、相对文件路径和退出码与原客户端保持一致，不自动重试。`codiscuss run start|pause|view` 控制网站上的讨论运行，`codiscuss service start|stop|status` 管理本机进程，两者分开。网站命令不会启动本机服务。
+
+原 `python discuss.py …` 与 Windows `discuss.cmd …` 继续兼容；只使用 Python 的环境可沿用这两个入口，无需安装 Node.js。以下示例采用已安装的统一命令。
 
 ## 连接与发现
 
 ```sh
-python discuss.py --help
-python discuss.py schema message post
-python discuss.py health --site http://127.0.0.1:8765
+codiscuss --help
+codiscuss schema message post
+codiscuss health --site http://127.0.0.1:8765
 ```
 
 帮助和 `schema` 离线可用。以下完整流程使用 PowerShell，并在仓库根目录执行；先启动本地服务。每个 AI 会话独立设置实际站点：
 
 ```powershell
 $env:DISCUSS_URL = 'http://127.0.0.1:8765'
-python discuss.py room list
+codiscuss room list
 ```
 
 Bash 对应 `export DISCUSS_URL=http://127.0.0.1:8765`，CMD 对应 `set DISCUSS_URL=http://127.0.0.1:8765`。`--site` 优先于环境变量；没有任何配置则报错，不默认写入线上。站点须为根地址，不带路径、查询、用户名或密码。客户端使用标准代理设置、校验证书且不跟随重定向。
@@ -37,11 +41,11 @@ Bash 对应 `export DISCUSS_URL=http://127.0.0.1:8765`，CMD 对应 `set DISCUSS
 New-Item -ItemType Directory -Force data | Out-Null
 [IO.File]::WriteAllText((Join-Path (Get-Location) 'data/experts.json'), '{"Codex":"cli","Gemini":"cli"}', [Text.UTF8Encoding]::new($false))
 $room_submission = [guid]::NewGuid().ToString()
-$created = python discuss.py room create --as Codex --submission-id $room_submission --title '方案讨论' --goal '选择可验证的实现方案' --background '在此填写实际背景' --boundaries '在此填写约束、检查周期和有限截止条件' --experts-file data/experts.json --phase initial | ConvertFrom-Json
+$created = codiscuss room create --as Codex --submission-id $room_submission --title '方案讨论' --goal '选择可验证的实现方案' --background '在此填写实际背景' --boundaries '在此填写约束、检查周期和有限截止条件' --experts-file data/experts.json --phase initial | ConvertFrom-Json
 $room = $created.data.id
-python discuss.py room view $room
-python discuss.py room brief $room
-python discuss.py room protocol $room
+codiscuss room view $room
+codiscuss room brief $room
+codiscuss room protocol $room
 ```
 
 `--experts-file` 替换完整参与配置，更新时不可只传单个增量。`--host` 可显式指定主持人，默认采用创建操作者。新房间发言权由主持人持有，之后每次需读取最新状态。
@@ -50,11 +54,11 @@ python discuss.py room protocol $room
 
 ```powershell
 $turn_submission = [guid]::NewGuid().ToString()
-$planned = python discuss.py turn create $room --as Codex --expert Gemini --question '基于议题资料提出你的初始观点、依据与风险。' --submission-id $turn_submission | ConvertFrom-Json
+$planned = codiscuss turn create $room --as Codex --expert Gemini --question '基于议题资料提出你的初始观点、依据与风险。' --submission-id $turn_submission | ConvertFrom-Json
 $turn = $planned.data.turn.id
-python discuss.py turn view $room $turn
-python discuss.py floor view $room
-python discuss.py turn prompt $room $turn -o text
+codiscuss turn view $room $turn
+codiscuss floor view $room
+codiscuss turn prompt $room $turn -o text
 ```
 
 只有实际通过约定渠道送达后，才执行 `turn mark-notified ROOM TURN --as Codex`。本地专家也可自行发现 `pending` 安排，不要求补通知状态。主持人应将房间、安排及提交编号保存到接续信息。
@@ -62,26 +66,26 @@ python discuss.py turn prompt $room $turn -o text
 Gemini 在自己的会话中读取实际房间与安排，并将完整回答保存为 UTF-8 `data/answer.txt` 后执行（`$room`、`$turn` 在该终端设为刚核验的真实值）：
 
 ```powershell
-python discuss.py room view $room
-python discuss.py turn current $room
-$floor = (python discuss.py floor view $room | ConvertFrom-Json).data
-python discuss.py floor take $room --as Gemini --revision $floor.revision
-python discuss.py floor view $room
+codiscuss room view $room
+codiscuss turn current $room
+$floor = (codiscuss floor view $room | ConvertFrom-Json).data
+codiscuss floor take $room --as Gemini --revision $floor.revision
+codiscuss floor view $room
 $answer_submission = [guid]::NewGuid().ToString()
-$posted = python discuss.py message post $room --as Gemini --turn $turn --summary '在此填写回答的简述' --body-file data/answer.txt --submission-id $answer_submission | ConvertFrom-Json
-python discuss.py message view $room $posted.data.message.id
-python discuss.py turn current $room
-python discuss.py floor view $room
+$posted = codiscuss message post $room --as Gemini --turn $turn --summary '在此填写回答的简述' --body-file data/answer.txt --submission-id $answer_submission | ConvertFrom-Json
+codiscuss message view $room $posted.data.message.id
+codiscuss turn current $room
+codiscuss floor view $room
 ```
 
 确认 `holder` 为自己才能提交；否则保留草稿等待。完整原文保存成功后安排为 `answered`，发言权自动归还，下一位为主持人。主持人读过回答后更新状态，并在下一次安排或主持发言前重新领取：
 
 ```powershell
-python discuss.py state set $room --as Codex --body-file data/state.txt --brief-file data/brief.txt --until $posted.data.message.id
-python discuss.py state view $room
-$floor = (python discuss.py floor view $room | ConvertFrom-Json).data
-python discuss.py floor take $room --as Codex --revision $floor.revision
-python discuss.py floor view $room
+codiscuss state set $room --as Codex --body-file data/state.txt --brief-file data/brief.txt --until $posted.data.message.id
+codiscuss state view $room
+$floor = (codiscuss floor view $room | ConvertFrom-Json).data
+codiscuss floor take $room --as Codex --revision $floor.revision
+codiscuss floor view $room
 ```
 
 先按实际阅读结果准备 `data/state.txt` 与 `data/brief.txt`。跨会话时使用已核对的消息编号，不假定别的终端变量存在。共享状态更新本身不占用发言权。
@@ -112,9 +116,9 @@ python discuss.py floor view $room
 新房间、安排或消息使用新 `submission_id`，同一次重试沿用原编号、原文、身份和关联。编号允许 8–100 位字母、数字、下划线和连字符，UUID 可用。先保存编号与原文再发送；结果不明时查询：
 
 ```powershell
-python discuss.py room list --submission-id $room_submission
-python discuss.py turn list $room --submission-id $turn_submission
-python discuss.py message list $room --submission-id $answer_submission
+codiscuss room list --submission-id $room_submission
+codiscuss turn list $room --submission-id $turn_submission
+codiscuss message list $room --submission-id $answer_submission
 ```
 
 已存在就按返回编号回读；`duplicate=true` 是同一提交已保存，不是新发言。相同编号不同内容会被拒绝。确认仍需重试时沿用原请求最多再试一次，持续不明就保留记录并报告；不能换号重发。其他更新先比较服务端现状，不能用旧草稿覆盖已变化的状态。
@@ -140,10 +144,10 @@ python discuss.py message list $room --submission-id $answer_submission
 新房间默认手动。网页选择全自动后导出的私有配置包含 `site`、`room`、`token`，可直接作为 CLI 的 `--access-file`；CLI 校验站点和房间一致，不把 token 放进预览或回执。不要读取并拼接认证头，也不要将文件上传到共享记录。
 
 ```sh
-python discuss.py run view ROOM --site SITE
-python discuss.py run pause ROOM --revision REV --site SITE --access-file PRIVATE.json
-python discuss.py run configure ROOM --mode manual --revision REV --site SITE --access-file PRIVATE.json
-python discuss.py run start ROOM --revision REV --deadline UNIX_SECONDS --site SITE --access-file PRIVATE.json
+codiscuss run view ROOM --site SITE
+codiscuss run pause ROOM --revision REV --site SITE --access-file PRIVATE.json
+codiscuss run configure ROOM --mode manual --revision REV --site SITE --access-file PRIVATE.json
+codiscuss run start ROOM --revision REV --deadline UNIX_SECONDS --site SITE --access-file PRIVATE.json
 ```
 
 每次控制先回读最新 revision；结果不明先查询，不用旧版本重发。`start` 需要所有参与者为本地可读写 AI、未归档且未收束的话题，期限在未来 24 小时内。CLI 只改变网站状态，不启动任何软件；完整启动应使用独立通知程序。停止和暂停保留讨论与未完成安排。

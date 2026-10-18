@@ -38,6 +38,8 @@ description: "AI CoDiscuss 的主持技能，仅主持人调用，且须同时�
 
 工具入口、站点、项目与 cwd 的定位遵循参与技能。新建会话可指定所属项目及 cwd，也可缺省；已有会话不靠提示词迁移目录。仅在首次配置或启动自动程序时查阅仓库 `docs/deployment.md` 与 `docs/cli.md`，不把安装操作混入每次讨论。
 
+统一入口中，`codiscuss service …` 管理本机服务，`codiscuss run … ROOM` 控制网站讨论。暂停本房间不停止其他房间共用的服务。
+
 每次接手先读 `room view`，用其中的阶段、当前安排、`limits` 和运行状态恢复现场，再按需补读 state 与有关原文。网站已有的安排优先于旧笔记；没有待处理的专家安排不等于主持人没有工作。
 
 遵守用户设定的轮次、总时长、单次执行及到限方式，不自行放宽。轮次以服务端 `completed_rounds` 为准；暂停、准备与收束期间不计时。到限而尚未进入收束时，用 `room limits ROOM --check --as 本人`（受保护写入附本次 `--access-file`）处理：

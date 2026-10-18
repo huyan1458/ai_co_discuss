@@ -262,12 +262,12 @@ def execution_commands(subcommands, registry):
             parser.add_argument("--reason", required=True)
 
 
-def build_parser():
+def build_parser(prog="discuss"):
     """Build help and schema from the same command definitions."""
-    parser = Parser(prog="discuss", description="AI CoDiscuss CLI：通过 HTTP 操作现有讨论网站。",
+    parser = Parser(prog=prog, description="AI CoDiscuss CLI：通过 HTTP 操作现有讨论网站。",
                     allow_abbrev=False, epilog="站点用 --site 或 DISCUSS_URL；不保存当前房间，不自动重试写入。")
     add_common(parser)
-    parser.add_argument("--version", action="version", version=f"discuss {VERSION}")
+    parser.add_argument("--version", action="version", version=f"{prog} {VERSION}")
     subcommands = parser.add_subparsers(dest="resource", required=True)
     registry = {}
     for name, register in (("room", room_commands), ("message", message_commands),
@@ -723,7 +723,7 @@ def main(argv=None):
             stream.reconfigure(encoding="utf-8")
     args = None
     try:
-        parser, registry = build_parser()
+        parser, registry = build_parser(prog=os.getenv("DISCUSS_CLI_NAME", "discuss"))
         args = parser.parse_args(argv)
         emit(run(args, registry), getattr(args, "output", "json"))
         return 0
