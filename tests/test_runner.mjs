@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { DiscussionService, register_room, service_pid, unregister_room } from '../runner/discussion_service.mjs';
-import { antigravity_project, claude_exit_error, codex_target, run_program } from '../runner/discussion_adapters.mjs';
+import { antigravity_project, claude_exit_error, standalone_claude_env, codex_target, run_program } from '../runner/discussion_adapters.mjs';
 
 /** Exercise the dispatcher against an HTTP contract without starting real software. */
 async function fixture(t) {
@@ -435,4 +435,12 @@ test('the detached service starts once, reports status and stops on request', as
   assert.equal((await run('status')).pid, started.pid);
   assert.equal((await run('stop')).running, false);
   assert.equal(service_pid(home), 0);
+});
+
+test('a Claude CLI launched from a hosting Claude session drops host variables and keeps its own login', () => {
+  const host = { CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'claude-desktop', CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH: '1', PATH: 'bin' };
+  const env = standalone_claude_env(host, () => ({ CLAUDE_CODE_OAUTH_TOKEN: 'persisted' }));
+  assert.deepEqual(env, { PATH: 'bin', CLAUDE_CODE_OAUTH_TOKEN: 'persisted' });
+  const plain = { PATH: 'bin', CLAUDE_CODE_OAUTH_TOKEN: 'own' };
+  assert.equal(standalone_claude_env(plain, () => { throw new Error('not read'); }), plain);
 });

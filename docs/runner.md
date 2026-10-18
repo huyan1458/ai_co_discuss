@@ -37,7 +37,7 @@
 | 软件 | 项目 / cwd 的实际处理 |
 | --- | --- |
 | Codex App | 按真实已保存项目 ID、名称和目录唯一匹配后创建；目录必须已加入 App。均省略时新建无项目聊天。现有绑定不能通过改提示迁移到另一目录。 |
-| Claude Code CLI | 进程以 cwd 启动，后续按实际 session ID `--resume`。未指定目录时使用本次私有数据目录；项目名仅作接入元数据，不声称关联 Claude 桌面 App 的项目分组。 |
+| Claude Code CLI | 进程以 cwd 启动，后续按实际 session ID `--resume`。未指定目录时使用本次私有数据目录；项目名仅作接入元数据，不声称关联 Claude 桌面 App 的项目分组。从 Claude Code 会话内启动接入程序或服务时，会去掉宿主会话注入的 `CLAUDECODE`、`CLAUDE_CODE_*` 等变量，Windows 上再读回用户与系统保存的 `ANTHROPIC_*`/`CLAUDE*` 变量（如 `claude setup-token` 的 `CLAUDE_CODE_OAUTH_TOKEN`），保证子进程使用自己的登录。 |
 | Antigravity App | 显式 setup-sidecar 将 Sidecar 绑定到实际项目，核对其资源目录及 App 返回的项目 ID；均省略时使用 Outside of Project。使用 App 2.23 当前配置版本，升级后须复核兼容性。 |
 
 cwd 是工作目录，不等于操作系统沙箱或权限提升。工具仍受各软件已配置权限约束，遇到审批不会代替用户批准。讨论材料可在 cwd，草稿放任务文件目录，CLI 与凭据是显式的工具路径。路径和项目配置仅保存在本机，不进入公开事件。

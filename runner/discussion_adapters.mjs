@@ -1,5 +1,5 @@
 /** Actual software entrypoints; never call model service APIs. */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -91,6 +91,31 @@ export function claude_exit_error(code, output) {
   return code === 0 ? '' : `Claude 退出码 ${code}`;
 }
 
+/**
+ * Drop variables a hosting Claude session injects, so the spawned CLI uses its own login.
+ * The host also hides the user's persisted login variables, which are read back on Windows.
+ */
+export function standalone_claude_env(env = process.env, persisted = persisted_claude_env) {
+  if (env.CLAUDECODE !== '1') return env;
+  const own = Object.entries(env).filter(([key]) =>
+    !/^(CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT)$|^(CLAUDE_CODE_|CLAUDE_AGENT_SDK_|CLAUDE_PREVIEW_)/.test(key));
+  return { ...Object.fromEntries(own), ...persisted() };
+}
+
+let persisted_cache;
+/** Read Machine then User persisted ANTHROPIC_/CLAUDE variables once; values stay in memory only. */
+function persisted_claude_env() {
+  if (process.platform !== 'win32') return {};
+  if (!persisted_cache) {
+    const script = "$r=@{}; foreach($s in 'Machine','User'){ $v=[Environment]::GetEnvironmentVariables($s);"
+      + " foreach($k in $v.Keys){ if($k -match '^(ANTHROPIC_|CLAUDE)'){ $r[$k]=$v[$k] } } }; $r | ConvertTo-Json -Compress";
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true });
+    try { persisted_cache = result.status === 0 && result.stdout.trim() ? JSON.parse(result.stdout) : {}; }
+    catch { persisted_cache = {}; }
+  }
+  return persisted_cache;
+}
+
 async function claude_delivery(config, binding, task) {
   const session_id = binding.session_id || randomUUID();
   try { bind_access(task.access_path, session_id); }
@@ -101,6 +126,7 @@ async function claude_delivery(config, binding, task) {
   try {
     child = spawn(config.executable, [...args, '--', task.prompt], {
       cwd: config.cwd || config.workdir || task.directory, windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'],
+      env: standalone_claude_env(),
     });
   } catch (error) { throw not_sent(error); }
   let spawned = false;
