@@ -20,23 +20,23 @@
 ## CLI 操作
 
 - 使用方法由仓库技能 `.agents/skills/discuss-participant/SKILL.md` 提供，Codex 调用 `$discuss-participant`；其他本地 AI 明确读取此文件，不假定自动发现。首次参与指令同时提供实际身份和房间入口；技能安装本身不启动讨论。
-- 本地 AI 日常读写优先使用统一命令 `codiscuss`；任务显式指定 CLI 路径时沿用指定入口，未安装统一命令时可用本项目 `discuss.py`（Windows 可用 `discuss.cmd`）。命令与设计见 `docs/cli.md`。裸 `codiscuss` 启动本机服务，`--help` / `schema` 离线发现用法；具体参与规则仍以目标站点的 `room protocol` 为准。
+- 本地 AI 日常读写优先使用统一命令 `codiscuss`；任务显式指定 CLI 路径时沿用指定入口，未安装统一命令时可用本项目 `python runner/discuss.py`。命令与设计见 `docs/cli.md`。裸 `codiscuss` 启动本机服务，`--help` / `schema` 离线发现用法；具体参与规则仍以目标站点的 `room protocol` 为准。
 - 站点用 `--site` 或当前进程的 `DISCUSS_URL`；房间始终显式指定，业务写入显式 `--as`。不新增全局当前房间或身份配置，不因网页当前选中某话题就自动接管。
 - 先 `room view` / `turn current`，再按需读取 brief / state / message；独立观点阶段继续遵循阅读边界。默认 JSON 用于脚本，正文优先 UTF-8 文件输入。
 - 新观点或安排使用新 submission_id，同一次重试沿用编号、正文与关联；失败先核对，不自动换号重发。`--dry-run` 只预览请求，不代表服务端已接受。
-- `turn prompt` 不发送通知；只有实际送达后才 `turn mark-notified`。CLI 只读写网站；手动模式下主持人与专家自行管理原生定时任务，收束后核对各自任务实际停用。自动模式由 `runner/` 交付任务与续租，不另建原生定时。创建或编辑技能不启动真实讨论或定时任务。
+- `turn prompt` 不发送通知；只有实际送达后才 `turn mark-notified`。网站子命令只读写网站；手动模式下主持人与专家自行管理原生定时任务，收束后核对各自任务实际停用。自动模式由 `runner/` 交付任务与续租，不另建原生定时。创建或编辑技能不启动真实讨论或定时任务。
 
 ## 对外文档维护
 
 - README 保留用户选方案和首次使用所需的信息：三种推进方式、支持的软件与前提、接入步骤、可选项目/cwd、讨论上限、数据与访问边界。文案应对应当前界面；“手动接入”需能对应“手动复制冷启动”选项，不将未实现或未验证的能力写成承诺。
 - CLI 字段、执行凭据、租约与代次、旧库兼容、参数计数和计时规则分别维护在 `docs/cli.md`、`docs/architecture.md`、`docs/deployment.md`、`docs/workflow.md`；README 只保留影响使用决策的说明和链接，不重复协议细节。
-- 源码结构与组件职责见 `docs/architecture.md`；安装依赖、构建、测试与贡献操作见 `CONTRIBUTING.md`；剩余验收事项放 `docs/maintainers/`。修改说明时同步已有对应文档，避免多处复制完整操作清单。
+- 源码结构与组件职责见 `docs/architecture.md`；安装依赖、构建、测试与贡献操作见 `.github/CONTRIBUTING.md`；剩余验收事项放 `docs/maintainers/`。修改说明时同步已有对应文档，避免多处复制完整操作清单。
 
 ## 仓库维护
 
-- 首先阅读 README 与目标模块在 docs 中的说明；贡献约定见 CONTRIBUTING.md。
+- 首先阅读 README 与目标模块在 docs 中的说明；贡献约定见 .github/CONTRIBUTING.md。
 - 测试位于 tests/，构建脚本位于 scripts/；.agents/skills/ 分发 discuss-host、discuss-participant、discuss-report 三份讨论相关技能，不纳入维护者的个人通知 Skill，不依赖维护者个人目录。
 - 本仓库独立提供讨论网站、CLI、讨论技能与全自动接入程序（`runner/`），不依赖其他项目的代码、数据或个人工具；接入程序只用 Node.js 内置模块，修改后同步 `docs/runner.md` 与 `tests/test_runner.mjs`。
-- 修改 server.py、worker.mjs、schema.sql 的业务协议时同步两套后端及相关测试；不在 web/modern.js 等构建产物中手改。
-- 前端源码修改后运行 `npm run build`，同步 `web/` 中的生成资源，Pages 输出位于 `dist/pages/`。`npm test` 使用临时数据，不接入真实专家；纯文档修改核对事实、链接和格式即可，不默认运行全量测试或构建。
+- `backend/` 保存两套后端和共用 schema，根目录 `server.py` 为启动入口。修改 backend/server.py、backend/worker.mjs、backend/schema.sql 的业务协议时同步两套后端及相关测试；不在 web/modern.js 等构建产物中手改。
+- `frontend/` 保存 Vue、Markdown 和备份源码，`web/` 保存直接运行的静态网页与构建产物。前端源码修改后运行 `npm run build`，同步 `web/` 中的生成资源，Pages 输出位于 `dist/pages/`。`npm test` 使用临时数据，不接入真实专家；纯文档修改核对事实、链接和格式即可，不默认运行全量测试或构建。
 - 不提交 data/、.wrangler/、wrangler.local.jsonc、令牌、聊天记录或本机路径。未经用户明确要求不提交、推送、部署或启动真实讨论。

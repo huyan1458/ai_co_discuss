@@ -8,14 +8,14 @@ import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
 
 import { build_pages } from "../scripts/build_pages.mjs";
-import worker from "../worker.mjs";
+import worker from "../backend/worker.mjs";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 /** Run Worker SQL transactions locally with a deterministic concurrent-write hook. */
 async function worker_fixture(test_case) {
   const sql = new DatabaseSync(':memory:');
-  sql.exec(await readFile(join(PROJECT_ROOT, 'schema.sql'), 'utf8'));
+  sql.exec(await readFile(join(PROJECT_ROOT, 'backend', 'schema.sql'), 'utf8'));
   test_case.after(() => sql.close());
   const fixture = { sql, before_batch: null };
   function prepare(query, values = []) {
@@ -74,7 +74,7 @@ test('Worker reads explicitly marked legacy user requests without rewriting raw 
   const background = '用户原文：\n原始要求\n第二行\n\n项目背景与入口：\n补充材料';
   f.sql.prepare('DELETE FROM room_user_requests WHERE room_id=?').run(id);
   f.sql.prepare('UPDATE topic_settings SET background=? WHERE room_id=?').run(background, id);
-  f.sql.exec(await readFile(join(PROJECT_ROOT, 'schema.sql'), 'utf8'));
+  f.sql.exec(await readFile(join(PROJECT_ROOT, 'backend', 'schema.sql'), 'utf8'));
   const room = (await f.request(`/${id}`)).body;
   assert.equal(room.user_request, '原始要求\n第二行');
   assert.equal(room.background, '项目背景与入口：\n补充材料');
@@ -190,7 +190,7 @@ test('Worker starts the clock for migrated active rooms without resetting an exi
 });
 
 /** Create a pinned release without reading the shared development assets. */
-async function release_fixture(test_case) {
+async function release_fixture(test_case, legacy_layout = false) {
   const root = await mkdtemp(join(tmpdir(), "discuss-pages-test-"));
   test_case.after(async () => {
     assert.ok(resolve(root).startsWith(resolve(tmpdir()) + "/") || resolve(root).startsWith(resolve(tmpdir()) + "\\"));
@@ -198,25 +198,31 @@ async function release_fixture(test_case) {
   });
   const source = join(root, "release");
   await mkdir(join(source, "web", "modern"), { recursive: true });
-  await writeFile(join(source, "worker.mjs"), "export default { fetch() { return new Response('pinned release'); } };\n");
+  await mkdir(join(source, "frontend"));
+  await mkdir(join(source, "backend"));
+  await mkdir(join(source, "docs"));
+  const worker_path = join(source, legacy_layout ? "worker.mjs" : "backend/worker.mjs");
+  const notices_path = join(source, legacy_layout ? "THIRD_PARTY_NOTICES.md" : "docs/THIRD_PARTY_NOTICES.md");
+  await writeFile(worker_path, "export default { fetch() { return new Response('pinned release'); } };\n");
   await writeFile(join(source, "web", "index.html"), "<h1>已验收版本</h1>\n");
   await writeFile(join(source, "web", "app.js"), "/* published assets */\n");
-  await writeFile(join(source, "web", "modern", "Draft.vue"), "unpublished component");
-  await writeFile(join(source, "web", ".assetsignore"), "modern/\n");
+  await writeFile(join(source, "frontend", "Draft.vue"), "unpublished component");
+  await writeFile(join(source, "web", "modern", "Draft.vue"), "unpublished legacy source");
+  await writeFile(join(source, "web", ".private"), "unpublished file");
   await cp(join(PROJECT_ROOT, "pages", "public"), join(source, "pages", "public"), { recursive: true });
   await writeFile(join(source, "LICENSE"), "License from the selected release\n");
-  await writeFile(join(source, "THIRD_PARTY_NOTICES.md"), "Notices from the selected release\n");
-  return { root, source };
+  await writeFile(notices_path, "Notices from the selected release\n");
+  return { root, source, worker_path, notices_path };
 }
 
 test("a pinned release uses its own backend and assets and removes stale output", async (test_case) => {
-  const { root, source } = await release_fixture(test_case);
+  const { root, source, worker_path } = await release_fixture(test_case);
   const output = await build_pages(source, root);
   await writeFile(join(output, "obsolete.js"), "old deployment");
   await build_pages(source, root);
-  assert.equal(await readFile(join(output, "_worker.js"), "utf8"), await readFile(join(source, "worker.mjs"), "utf8"));
+  assert.equal(await readFile(join(output, "_worker.js"), "utf8"), await readFile(worker_path, "utf8"));
   assert.equal(await readFile(join(output, "index.html"), "utf8"), "<h1>已验收版本</h1>\n");
-  for (const path of ["obsolete.js", "modern/Draft.vue", ".assetsignore"]) {
+  for (const path of ["obsolete.js", "frontend/Draft.vue", "modern/Draft.vue", "Draft.vue", ".private"]) {
     await assert.rejects(readFile(join(output, path)), { code: "ENOENT" });
   }
 });
@@ -234,7 +240,7 @@ test("only API and dynamic reading routes invoke the Function", async (test_case
 });
 
 test("a pinned release keeps its own routing policy, fallback page, and license notices", async (test_case) => {
-  const { root, source } = await release_fixture(test_case);
+  const { root, source, notices_path } = await release_fixture(test_case);
   const public_root = join(source, "pages", "public");
   await writeFile(join(public_root, "robots.txt"), "User-agent: *\r\nDisallow: /\r\n");
   await writeFile(join(public_root, "404.html"), "<h1>Release-specific fallback</h1>\n");
@@ -242,9 +248,17 @@ test("a pinned release keeps its own routing policy, fallback page, and license 
   for (const name of ["robots.txt", "404.html", "_routes.json"]) {
     assert.equal(await readFile(join(output, name), "utf8"), await readFile(join(public_root, name), "utf8"));
   }
-  for (const name of ["LICENSE", "THIRD_PARTY_NOTICES.md"]) {
-    assert.equal(await readFile(join(output, name), "utf8"), await readFile(join(source, name), "utf8"));
+  for (const [name, path] of [["LICENSE", join(source, "LICENSE")], ["THIRD_PARTY_NOTICES.md", notices_path]]) {
+    assert.equal(await readFile(join(output, name), "utf8"), await readFile(path, "utf8"));
   }
+});
+
+test("a release snapshot from before the directory move still packages its own files", async (test_case) => {
+  const { root, source, worker_path, notices_path } = await release_fixture(test_case, true);
+  const output = await build_pages(source, root);
+  assert.equal(await readFile(join(output, "_worker.js"), "utf8"), await readFile(worker_path, "utf8"));
+  assert.equal(await readFile(join(output, "THIRD_PARTY_NOTICES.md"), "utf8"), await readFile(notices_path, "utf8"));
+  await assert.rejects(readFile(join(output, "modern", "Draft.vue")), { code: "ENOENT" });
 });
 
 test("Pages binds D1 directly and has no external Worker service dependency", async () => {

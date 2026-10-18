@@ -1,10 +1,14 @@
 # CLI 使用
 
-推荐统一使用 `codiscuss`：在仓库运行一次 `npm link` 后，可在任意目录调用。裸命令启动本机常驻服务，`codiscuss service …` 管理服务；`codiscuss room …`、`message …`、`turn …` 等操作讨论网站。统一入口需要 Node.js 24+，网站操作另需 Python 3.10+（Windows 使用 PATH 中的 `python`，其他系统使用 `python3`）。
+推荐统一使用 `codiscuss`：通过 [npm 安装配置](runner.md#npm-安装与本机配置)，或开发时在仓库运行一次 `npm link` 后，可在任意目录调用。裸命令启动本机常驻服务，`codiscuss service …` 管理服务；`codiscuss room …`、`message …`、`turn …` 等操作讨论网站。统一入口需要 Node.js 24+，网站操作另需 Python 3.10+；优先使用 `setup` 保存的 Python 路径，未配置时 Windows 使用 PATH 中的 `python`，其他系统使用 `python3`。
+
+`codiscuss install` 安装持久命令后配置，`codiscuss setup` 配置现有安装；`codiscuss local open|start|status|stop` 管理本机网站和它启动的服务，不创建讨论。两种 AI 启动入口继续使用 `launch`。
 
 网站操作输入明确的站点、房间、身份和操作参数，输出 JSON 或文本，每次执行完退出；参数、stdin、相对文件路径和退出码与原客户端保持一致，不自动重试。`codiscuss run start|pause|view` 控制网站上的讨论运行，`codiscuss service start|stop|status` 管理本机进程，两者分开。网站命令不会启动本机服务。
 
-原 `python discuss.py …` 与 Windows `discuss.cmd …` 继续兼容；只使用 Python 的环境可沿用这两个入口，无需安装 Node.js。以下示例采用已安装的统一命令。
+只使用 Python 的环境可在仓库根目录运行 `python runner/discuss.py …`，无需安装 Node.js。客户端已移入 `runner/`，旧的根目录 `discuss.py` 和 `discuss.cmd` 入口已移除。以下示例采用已安装的统一命令。
+
+`codiscuss launch settings [--file FILE]` 读取或保存本机软件默认配置，`codiscuss launch start --file FILE [--dry-run]` 提供 AI 对话启动入口：实际启动会建房或接入显式房间、启动服务并将首个主持任务交回当前会话。它不同于只操作网站的 `run start`；配置、回执与幂等重试说明见 [两种讨论入口与启动配置](runner.md#两种讨论入口与启动配置)。
 
 ## 连接与发现
 

@@ -6,12 +6,12 @@ export default defineConfig(({ mode }) => mode === "markdown" ? {
   build: {
     outDir: "web",
     emptyOutDir: false,
-    lib: { entry: "web/modern/markdown-entry.js", name: "discuss_markdown", formats: ["iife"], fileName: () => "markdown.js", cssFileName: "markdown" },
+    lib: { entry: "frontend/markdown-entry.js", name: "discuss_markdown", formats: ["iife"], fileName: () => "markdown.js", cssFileName: "markdown" },
   },
 } : mode === "backup" ? {
   build: {
     outDir: "web", emptyOutDir: false,
-    lib: { entry: "web/modern/backup.mjs", name: "discuss_backup", formats: ["iife"], fileName: () => "backup.js" },
+    lib: { entry: "frontend/backup.mjs", name: "discuss_backup", formats: ["iife"], fileName: () => "backup.js" },
   },
 } : {
   define: { "process.env.NODE_ENV": JSON.stringify("production") },
@@ -26,7 +26,7 @@ export default defineConfig(({ mode }) => mode === "markdown" ? {
   build: {
     outDir: "web",
     emptyOutDir: false,
-    lib: { entry: "web/modern/main.js", formats: ["es"], fileName: () => "modern.js", cssFileName: "modern" },
+    lib: { entry: "frontend/main.js", formats: ["es"], fileName: () => "modern.js", cssFileName: "modern" },
     rolldownOptions: { output: { codeSplitting: false } },
   },
 });

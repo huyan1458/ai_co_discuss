@@ -11,27 +11,33 @@ import { atomic_json, deliver_task, setup_sidecar, sidecar_receipt } from './dis
 const POLL_MS = 2000;
 const DELIVERY_RETRY_DELAYS_MS = [2000, 4000];
 const RENEW_MS = 30_000;
+const ADAPTER_NAMES = ['codex', 'claude', 'antigravity', 'codex_cli', 'antigravity_cli'];
 const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 /** Explicit per-room configuration is the only source of software paths and capabilities. */
 export function load_config(path) {
-  const config = JSON.parse(readFileSync(path, 'utf8'));
+  return validate_config(JSON.parse(readFileSync(path, 'utf8')), dirname(resolve(path)));
+}
+
+/** Validate a launch draft with the same rules as a registered room configuration. */
+export function validate_config(input, base_directory) {
+  const config = structuredClone(input);
   config.project = config.cli_project || config.project || REPO_ROOT;
   const url = new URL(config.site);
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('站点必须是无路径和凭据的 HTTP(S) 根地址');
   if (!/^[A-Za-z0-9_-]+$/.test(config.room ?? '') || typeof config.token !== 'string' || config.token.length < 32) throw new Error('缺少房间及本房间凭据');
-  if (!config.project || !existsSync(join(config.project, 'discuss.py'))) throw new Error('cli_project 必须指向 AI CoDiscuss 项目；省略时默认使用本仓库');
+  if (!config.project || !existsSync(join(config.project, 'runner', 'discuss.py'))) throw new Error('cli_project 必须指向 AI CoDiscuss 项目；省略时默认使用本仓库');
   if (!config.participants || !Object.keys(config.participants).length) throw new Error('请配置本机参与软件');
   for (const participant of Object.values(config.participants)) {
     participant.cwd = participant.cwd ?? config.cwd;
     participant.project_name = participant.project_name ?? config.discussion_project;
     if (participant.cwd && !statSync(participant.cwd).isDirectory()) throw new Error('cwd 必须是已有本机目录');
-    if (!['codex', 'claude', 'antigravity'].includes(participant.adapter)) throw new Error('适配器只能为 codex/claude/antigravity');
+    if (!ADAPTER_NAMES.includes(participant.adapter)) throw new Error(`适配器只能为 ${ADAPTER_NAMES.join('/')}`);
     if (participant.adapter === 'antigravity' && !participant.ipc_directory) throw new Error('缺少 Antigravity Sidecar IPC 目录');
     if (participant.adapter !== 'antigravity' && !existsSync(participant.executable ?? '')) throw new Error('请指定实际原生可执行文件');
     if (participant.adapter === 'codex' && !participant.source_thread_id && !participant.session_id) throw new Error('Codex 新建入口需要实际来源聊天 ID');
   }
-  return { ...config, site: url.origin, project: resolve(config.project), directory: resolve(config.data_directory || join(dirname(resolve(path)), `discussion-${config.room}`)) };
+  return { ...config, site: url.origin, project: resolve(config.project), directory: resolve(config.data_directory || join(base_directory, `discussion-${config.room}`)) };
 }
 
 /** Send exactly one bounded website request; never follow redirects with a capability. */
@@ -123,7 +129,7 @@ export function acquire_lock(directory) {
 }
 
 /** Write a non-secret task separately from its CLI-only credential file. */
-function task_files(config, event, token, binding) {
+export function task_files(config, event, token, binding) {
   const id = `event-${event.id}`;
   const access_path = join(config.directory, `${id}.access.json`);
   const task_path = join(config.directory, `${id}.task.json`);
@@ -134,7 +140,7 @@ function task_files(config, event, token, binding) {
   atomic_json(task_path, { site: config.site, room: config.room, event_id: event.id, participant: event.participant,
     project_name: adapter.project_name || null, cwd: adapter.cwd || null,
     draft_directory: config.directory,
-    role: event.role, turn_id: event.turn_id, skills, cli: join(config.project, 'discuss.py'), access_file: access_path,
+    role: event.role, turn_id: event.turn_id, skills, cli: join(config.project, 'runner', 'discuss.py'), access_file: access_path,
     instructions: '读取指定技能；使用 execution enter 房间 执行编号 --access-file 凭据路径 进入。凭据文件由 CLI 内部读取，不要打印或读取其 token。进入成功后才处理本次安排；每次业务写入都带 --access-file。答案草稿只保存到 draft_directory；不修改讨论项目文件。只处理本次工作，不建定时任务。主持创建下一安排或收束即结束，专家提交原文后结束。无效或已进入的任务不要重复执行。' });
   const prompt = `用户已启动此房间的全自动讨论。请以 ${event.participant} 的${event.role === 'host' ? '主持' : '专家'}职责处理本次工作。先读取任务文件：${task_path}，立即按任务内 CLI 进行 execution enter，再读取指定版本的技能和网站现状。任务内 cwd 是本次工作目录；项目读写仍受软件实际权限和议题授权约束。只做讨论，不改项目代码，不读取凭据内容。实际会话 ID 由接入程序写入凭据文件，尚未就绪只短暂重查，不编造。`;
   return { id, participant: event.participant, directory: config.directory, access_path, prompt };

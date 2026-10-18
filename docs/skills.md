@@ -18,6 +18,21 @@
 
 技能与网站角色都按实际能力使用。本地可执行 Python 并联网的 AI 可设为 `cli`；只在网页原聊天回答的 AI 设为 `online`。不能因名称是 Codex、Claude 或 Gemini 就推定它有 CLI 或定时能力。
 
+## 自动安装完整技能
+
+`codiscuss install` 或已安装后的 `codiscuss setup` 会为选定的软件复制三份技能及 `references/`、`assets/` 等所有附属文件，保存前先核对已有内容。用户级目录依据当前官方文档：
+
+| 软件 | 默认位置 | 依据 |
+| --- | --- | --- |
+| Codex | `~/.agents/skills/` | [OpenAI 技能说明](https://learn.chatgpt.com/docs/build-skills) |
+| Claude Code | `~/.claude/skills/` | [Claude Code skills](https://code.claude.com/docs/en/skills) |
+| Antigravity CLI | `~/.gemini/antigravity-cli/skills/` | [Antigravity skills](https://antigravity.google/docs/skills/) |
+| Cursor CLI（Grok） | `~/.cursor/skills/` | [Cursor skills](https://cursor.com/docs/skills) |
+
+安装器只处理这四类 CLI，不自动识别 App。Cursor 当前可安装技能并手动参与，需要显式选择，不代表已有全自动适配器。目录中的 `.codiscuss-skills.json` 只记录安装版本的内容哈希；重复运行时相同内容跳过，安装器管理且未修改的旧副本可更新。已有不同内容、增加文件或含符号链接的同名技能保留，输出 `conflict` 和实际路径；总体结果为 `needs_attention`、`configured: false`，退出码为 2。核对后移走需要替换的旧副本，再运行 `setup` 即可，不要求重新安装程序。
+
+技能复制不证明当前会话已加载。AI 对话入口在新会话调用技能；若未自动发现，明确要求读取结果中实际目录内的 `discuss-host/SKILL.md` 与 `discuss-participant/SKILL.md`。网页自动执行的任务直接引用本次安装包中的技能，不依赖用户预先在交互会话加载。软件采用自定义配置目录时，核对其实际发现路径后按下文手动安装。
+
 ## 在 Codex 中使用
 
 Codex 支持项目内 `.agents/skills/` 技能发现。将本仓库作为项目目录打开，确认技能列表中出现 `discuss-host` 和 `discuss-participant`，再在聊天中显式调用。发现规则参考 [OpenAI 官方技能文档](https://learn.chatgpt.com/docs/build-skills)。
@@ -34,9 +49,11 @@ Codex 支持项目内 `.agents/skills/` 技能发现。将本仓库作为项目�
 
 需要跨项目复用时，可将上述技能文件夹（包括 `references/`）复制到当前客户端支持的个人技能目录；Codex 文档规定的用户级位置为 `~/.agents/skills/`。先检查同名技能，已有版本应比较后更新，不能盲目覆盖。复制后两个讨论技能仍应相邻存放，保证相对引用有效。仓库为维护源，复制件不会自动同步更新。
 
-从其他项目调用复制件时，优先使用已安装的统一命令 `codiscuss`，无需提供仓库脚本路径；任务或用户显式指定 CLI 路径时沿用指定入口。未安装统一命令时，再提供 AI CoDiscuss 仓库实际路径，使用 `python 路径/discuss.py …`（Windows 也可用 `discuss.cmd …`）；技能目录不是程序目录。裸 `codiscuss` 启动本机服务，`service …` 管理服务，`room …`、`message …` 等操作网站。不要将维护者机器的路径或演示房间写成默认值。
+从其他项目调用复制件时，优先使用已安装的统一命令 `codiscuss`，无需提供仓库脚本路径；任务或用户显式指定 CLI 路径时沿用指定入口。未安装统一命令时，再提供 AI CoDiscuss 仓库实际路径，使用 `python 路径/runner/discuss.py …`；技能目录不是程序目录。裸 `codiscuss` 启动本机服务，`service …` 管理服务，`room …`、`message …` 等操作网站。不要将维护者机器的路径或演示房间写成默认值。
 
 ## 其他本地 AI 软件
+
+从 AI 对话发起全自动讨论时，主持 Skill 使用 `codiscuss launch` 复用本机软件配置，并保留当前实际主持会话。首次启动才读取 [对话入口与启动配置](../.agents/skills/discuss-host/references/launch.md)；已收到自动任务时直接进入本次执行，不再次启动。网页一键发起使用相同配置与启动器，软件安装和技能加载本身仍不启动讨论。
 
 由对应软件支持的机制加载 Skill；未确认自动发现时，直接要求阅读实际文件。不要只复制 `$discuss-participant` 字样就假定另一产品识别该语法。
 

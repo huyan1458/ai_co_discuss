@@ -5,13 +5,19 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { main as service_main, read_registry, run_service, service_home, service_pid } from './discussion_service.mjs';
+import { launch_main } from './discussion_launch.mjs';
+import { local_settings, setup_main } from './discussion_setup.mjs';
+import { local_main } from './discussion_local.mjs';
 
 const HELP = `AI CoDiscuss CLI
 
 用法：codiscuss [命令] [选项]
 
   （无命令）            在当前终端启动服务，Ctrl+C 停止
+  install / setup       安装持久命令并配置 / 配置已有安装
+  local COMMAND         打开、启动、停止或查询本机网站
   service COMMAND       启动、停止、查询服务，或登记房间
+  launch COMMAND        保存启动配置，或从 AI 对话启动讨论
   room COMMAND          创建、读取或更新讨论房间
   message COMMAND       检索原文、提交观点
   turn COMMAND          安排发言、读取待办与回答
@@ -52,11 +58,11 @@ const SERVICE_HELP = `AI CoDiscuss 讨论服务
 `;
 const STATUS_LABELS = { running: '运行中', paused: '已暂停', idle: '等待启动', error: '异常' };
 const SERVICE_COMMANDS = new Set(['start', 'status', 'stop', 'add', 'remove', 'list', 'open', 'shortcut', 'autostart']);
-const WEBSITE_CLIENT = fileURLToPath(new URL('../discuss.py', import.meta.url));
+const WEBSITE_CLIENT = fileURLToPath(new URL('./discuss.py', import.meta.url));
 
 /** Forward untouched arguments, streams and exit codes to the existing Python client. */
 function website_cli(args) {
-  const executable = process.platform === 'win32' ? 'python' : 'python3';
+  const executable = local_settings().python || (process.platform === 'win32' ? 'python' : 'python3');
   const result = spawnSync(executable, ['-X', 'utf8', WEBSITE_CLIENT, ...args], {
     stdio: 'inherit', windowsHide: true, env: { ...process.env, DISCUSS_CLI_NAME: 'codiscuss' },
   });
@@ -68,7 +74,7 @@ function website_cli(args) {
 function print_result(result) {
   const lines = [];
   if (typeof result.running === 'boolean') {
-    lines.push(result.running ? `讨论服务运行中（PID ${result.pid}）` : '讨论服务未运行');
+    lines.push(result.running ? `讨论服务${result.ready === false ? '尚未确认就绪' : '运行中'}（PID ${result.pid}）` : '讨论服务未运行');
   }
   if (result.home) lines.push(`服务目录：${result.home}`);
   if (result.configs) lines.push(`已登记 ${result.configs.length} 个房间`, ...result.configs);
@@ -108,6 +114,9 @@ async function main(args = process.argv.slice(2)) {
   const [command] = args;
   if (['--help', '-h', 'help'].includes(command)) return process.stdout.write(HELP);
   if (command === 'service') return service_cli(args.slice(1));
+  if (command === 'launch') return launch_main(args.slice(1));
+  if (['install', 'setup'].includes(command)) return setup_main(command, args.slice(1));
+  if (command === 'local') return local_main(args.slice(1));
   if (!command || (command === 'run' && args.length === 1)) return service_cli([]);
   if (SERVICE_COMMANDS.has(command) || command === '--json') return service_cli(args);
   return website_cli(args);

@@ -1,8 +1,9 @@
 /** Resident local service that keeps every registered automatic room consumed; no model API orchestration. */
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -12,6 +13,7 @@ import { DiscussionRunner, DiscussionStore, acquire_lock, load_config, pause_if_
 const POLL_MS = 2000;
 const START_WAIT_MS = 5000;
 const STOP_WAIT_MS = 20_000;
+const REGISTRY_WAIT_MS = 5000;
 const SCRIPT = fileURLToPath(import.meta.url);
 const REPO_ROOT = dirname(dirname(SCRIPT));
 const SHORTCUT_NAME = 'AI CoDiscuss 讨论服务.lnk';
@@ -31,27 +33,49 @@ export function read_registry(home) {
   return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')).configs || [] : [];
 }
 
+/** Read room identity independently of software validity, isolating unreadable configuration files. */
+export function registered_identity(path) {
+  try {
+    const config = JSON.parse(readFileSync(path, 'utf8'));
+    return { site: new URL(config.site).origin, room: config.room };
+  } catch { return null; }
+}
+
+/** Serialize the entire registry read-modify-write across short-lived CLI processes. */
+function update_registry(home, update) {
+  mkdirSync(home, { recursive: true });
+  const lock = new DatabaseSync(join(home, 'registry-lock.sqlite3'));
+  try {
+    lock.exec(`PRAGMA busy_timeout=${REGISTRY_WAIT_MS}; BEGIN IMMEDIATE`);
+    atomic_json(join(home, 'rooms.json'), { configs: update(read_registry(home)) });
+    lock.exec('COMMIT');
+  } finally {
+    lock.close();
+  }
+}
+
 /** Register a validated room once; the same site and room may not be served twice. */
 export function register_room(home, config_path) {
   const path = resolve(config_path);
   const config = load_config(path);
-  const configs = read_registry(home).filter(item => item !== path);
-  for (const item of configs) {
-    let other;
-    try { other = load_config(item); } catch { continue; }
-    if (other.site === config.site && other.room === config.room) throw new Error(`房间 ${config.room} 已由 ${item} 登记`);
-  }
-  mkdirSync(home, { recursive: true });
-  atomic_json(join(home, 'rooms.json'), { configs: [...configs, path] });
+  update_registry(home, registered => {
+    const configs = registered.filter(item => item !== path);
+    for (const item of configs) {
+      const other = registered_identity(item);
+      if (other?.site === config.site && other.room === config.room) throw new Error(`房间 ${config.room} 已由 ${item} 登记`);
+    }
+    return [...configs, path];
+  });
   return config;
 }
 
 /** Remove one configuration path from the registry. */
 export function unregister_room(home, config_path) {
   const path = resolve(config_path);
-  const configs = read_registry(home);
-  if (!configs.includes(path)) throw new Error('该配置未登记');
-  atomic_json(join(home, 'rooms.json'), { configs: configs.filter(item => item !== path) });
+  update_registry(home, configs => {
+    if (!configs.includes(path)) throw new Error('该配置未登记');
+    return configs.filter(item => item !== path);
+  });
 }
 
 /** One registered room: its own data-directory lock, store and dispatcher. */
@@ -73,11 +97,20 @@ class RoomWorker {
     this.runner = this.create_runner(config, this.store);
     Object.assign(this.state, { site: config.site, room: config.room });
   }
+  /** Pick up corrected control credentials without restarting or replacing a bound conversation. */
+  refresh_control() {
+    const updated = load_config(this.path);
+    if (updated.site !== this.config.site || updated.room !== this.config.room || updated.directory !== this.config.directory) {
+      throw new Error('已登记配置的房间或数据目录发生变化，请移除原登记后重新接入');
+    }
+    this.config.token = updated.token;
+  }
   /** Run one bounded dispatcher iteration and keep the last result for status. */
   async tick() {
     const previous_status = this.state.status;
     try {
       if (!this.runner) this.open();
+      else this.refresh_control();
       const result = await this.runner.tick();
       Object.assign(this.state, { status: TICK_STATES[result], error: '' });
     } catch (error) {
@@ -139,6 +172,15 @@ export function service_pid(home) {
   try { process.kill(pid, 0); return pid; } catch (error) { return error.code === 'EPERM' ? pid : 0; }
 }
 
+/** Require a startup receipt from the current lock owner, not a previous process's status. */
+export function service_ready(home, pid = service_pid(home)) {
+  if (!pid) return false;
+  try {
+    const status = JSON.parse(readFileSync(join(home, 'status.json'), 'utf8'));
+    return status.pid === pid && Boolean(status.updated_at) && status.ready !== false;
+  } catch { return false; }
+}
+
 /** Foreground service loop; `start` runs this detached in the background. */
 export async function run_service(home, output = () => {}) {
   const release = acquire_lock(home);
@@ -154,8 +196,10 @@ export async function run_service(home, output = () => {}) {
   const stop = () => { stopped = true; };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
-  log_line(`讨论服务已启动 pid=${process.pid}`);
   try {
+    log_line(`讨论服务已启动 pid=${process.pid}`);
+    atomic_json(join(home, 'status.json'), { pid: process.pid, ready: true,
+      updated_at: Math.floor(Date.now() / 1000), rooms: [] });
     while (!stopped && !existsSync(stop_path)) {
       try { await service.tick(); } catch (error) { log_line(`服务检查失败：${error.message}`); }
       await sleep(POLL_MS);
@@ -171,21 +215,31 @@ export async function run_service(home, output = () => {}) {
 }
 
 /** Start the detached service once; an already running service is reused. */
-async function start_service(home) {
+export async function start_service(home) {
   const running = service_pid(home);
-  if (running) return { running: true, pid: running, started: false };
+  if (service_ready(home, running)) return { running: true, ready: true, pid: running, started: false };
   mkdirSync(home, { recursive: true });
-  const stop_path = join(home, 'stop.request');
-  if (existsSync(stop_path)) unlinkSync(stop_path);
-  const log = openSync(join(home, 'service.log'), 'a');
-  const child = spawn(process.execPath, [SCRIPT, 'run'], { detached: true, windowsHide: true,
-    stdio: ['ignore', log, log], env: { ...process.env, DISCUSS_SERVICE_HOME: home } });
-  child.unref();
+  let child, spawn_error;
+  if (!running) {
+    const stop_path = join(home, 'stop.request');
+    if (existsSync(stop_path)) unlinkSync(stop_path);
+    const log = openSync(join(home, 'service.log'), 'a');
+    child = spawn(process.execPath, [SCRIPT, 'run'], { detached: true, windowsHide: true,
+      stdio: ['ignore', log, log], env: { ...process.env, DISCUSS_SERVICE_HOME: home } });
+    closeSync(log);
+    child.once('error', error => { spawn_error = error; });
+    child.unref();
+  }
   for (let waited = 0; waited < START_WAIT_MS; waited += 200) {
-    if (service_pid(home) === child.pid) return { running: true, pid: child.pid, started: true };
+    const pid = service_pid(home);
+    if (service_ready(home, pid)) {
+      if (child && pid !== child.pid && child.exitCode === null) child.kill();
+      return { running: true, ready: true, pid, started: pid === child?.pid };
+    }
+    if (spawn_error) throw spawn_error;
     await sleep(200);
   }
-  throw new Error(`讨论服务未能启动，请查看 ${join(home, 'service.log')}`);
+  throw new Error(`讨论服务尚未确认就绪，请查看 ${join(home, 'service.log')}`);
 }
 
 /** Ask the service to pause its runs and exit, then wait for its lock to be released. */
@@ -203,8 +257,9 @@ async function stop_service(home) {
 function service_status(home) {
   const pid = service_pid(home);
   const path = join(home, 'status.json');
-  const last = pid && existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
-  return { running: Boolean(pid), pid, home, configs: read_registry(home), updated_at: last.updated_at || 0, rooms: last.rooms || [] };
+  const saved = pid && existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
+  const last = saved.pid === pid ? saved : {};
+  return { running: Boolean(pid), ready: service_ready(home, pid), pid, home, configs: read_registry(home), updated_at: last.updated_at || 0, rooms: last.rooms || [] };
 }
 
 /** Open each registered site once in the default browser. */

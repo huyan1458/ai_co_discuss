@@ -1,10 +1,10 @@
 # 第三方声明
 
-项目自有代码和文档使用根目录 [MIT License](LICENSE)。第三方内容保留各自许可证，根许可证不覆盖其商标或另行规定的权利。
+项目自有代码和文档使用根目录 [MIT License](../LICENSE)。第三方内容保留各自许可证，根许可证不覆盖其商标或另行规定的权利。
 
 ## 品牌头像
 
-`web/icons/` 中的 AI 品牌 SVG 参考 CC Switch 的 extracted icons，来源版本为 [`c8dc920615a2788a1315812d339bc34f349866c6`](https://github.com/farion1231/cc-switch/tree/c8dc920615a2788a1315812d339bc34f349866c6/src/icons/extracted)。原始 MIT 声明保存在 [web/icons/LICENSE.txt](web/icons/LICENSE.txt)，版权归 2025 Jason Young。
+`web/icons/` 中的 AI 品牌 SVG 参考 CC Switch 的 extracted icons，来源版本为 [`c8dc920615a2788a1315812d339bc34f349866c6`](https://github.com/farion1231/cc-switch/tree/c8dc920615a2788a1315812d339bc34f349866c6/src/icons/extracted)。原始 MIT 声明保存在 [web/icons/LICENSE.txt](../web/icons/LICENSE.txt)，版权归 2025 Jason Young。
 
 品牌名称与标志归相应权利人，使用仅用于识别参与者，不表示官方合作、认可或背书。`user.svg` 为项目自绘的指纹图形，使用根目录 MIT License。
 

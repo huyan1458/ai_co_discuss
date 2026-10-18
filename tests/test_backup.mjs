@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
 
-import { create_room_archive, room_markdown } from "../web/modern/backup.mjs";
+import { create_room_archive, room_markdown } from "../frontend/backup.mjs";
 
 /** Build a multi-page Unicode record that crosses the async compressor threshold. */
 function backup_fixture() {

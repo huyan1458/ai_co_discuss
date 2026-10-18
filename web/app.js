@@ -37,6 +37,10 @@ state.directory_error = "";
 state.directory_pending = new Map();
 state.directory_version = 0;
 state.navigation_version = 0;
+state.launch = { available: false, profiles: {}, workspace: {}, create: false, error: "", notice: "" };
+const LAUNCH_CLIENTS = { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }],
+  Claude: [{ value: "claude", label: "Claude Code CLI" }],
+  Gemini: [{ value: "antigravity_cli", label: "Antigravity CLI" }, { value: "antigravity", label: "Antigravity App" }] };
 
 /** Return a DOM element by its stable ID. */
 function element(id) { return document.getElementById(id); }
@@ -123,7 +127,7 @@ async function request_json(path, payload, access_token) {
 function set_connection(connected) {
   state.connected = connected;
   element("connection-dot").className = `status-dot ${connected ? "connected" : "failed"}`;
-  element("connection-status").textContent = connected ? "讨论服务已连接" : "连接中断，可手动刷新";
+  element("connection-status").textContent = connected ? "讨论网站已连接" : "网站连接中断，可手动刷新";
   publish_view();
 }
 
@@ -789,6 +793,7 @@ function render_access() {
   const base = `${location.origin}/r/${state.room.id}`;
   const runtime = state.room.runtime || { mode: "manual", status: "ready" };
   element("runtime-status").textContent = runtime_label(runtime);
+  if (element("local-launch-start")) element("local-launch-start").disabled = !state.launch.available || runtime.mode !== "automatic" || runtime.status !== "ready";
   element("runtime-execution").textContent = execution_label(runtime.latest_execution);
   element("runtime-pause").hidden = runtime.status !== "running";
   element("runtime-export").hidden = !runtime.protected;
@@ -851,25 +856,182 @@ async function submit_room(event, folder_id = null) {
   event.preventDefault();
   if (state.directory_pending.has("create-room")) return;
   const payload = room_creation_payload(folder_id);
-  const signature = JSON.stringify(payload);
+  const launching = state.launch.create && payload.runtime_mode === "automatic";
+  const launch_draft = launching ? launch_options() : null;
+  const signature = JSON.stringify({ payload, launch_draft });
   if (state.pending_room?.signature !== signature) state.pending_room = { signature, id: new_submission_id(), token: crypto.randomUUID() };
   const token = payload.runtime_mode === "automatic" ? state.pending_room.token : undefined;
   const navigation = state.navigation_version;
-  element("room-dialog").close();
-  const room = await update_directory({ key: "create-room", label: `「${payload.title}」创建`,
+  if (!launching) element("room-dialog").close();
+  state.launch.error = "";
+  let room;
+  try { room = await update_directory({ key: "create-room", label: `「${payload.title}」创建`,
     apply: () => { state.creating_room = payload; }, rollback: () => { state.creating_room = null; },
-    save: () => request_json("/api/rooms", { ...payload, submission_id: state.pending_room.id }, token),
+    save: async () => launching
+      ? (await local_launch_request("launch", { ...launch_draft, room: { ...payload, submission_id: state.pending_room.id }, token })).room
+      : request_json("/api/rooms", { ...payload, submission_id: state.pending_room.id }, token),
     commit: saved => {
       if (token) localStorage.setItem(`discuss-access:${saved.id}`, token);
       state.creating_room = null;
       if (!state.rooms.some(existing => existing.id === saved.id)) state.rooms.push(saved);
-    } });
+    } }); }
+  catch (error) {
+    if (launching) { state.launch.error = error.message; render_launch_settings(); publish_view(); }
+    throw error;
+  }
   state.pending_room = null;
-  if (JSON.stringify(room_creation_payload(folder_id)) === signature) {
+  if (JSON.stringify({ payload: room_creation_payload(folder_id), launch_draft: launching ? launch_options() : null }) === signature) {
     element("room-form").reset();
     render_expert_inputs("new-expert-modes", default_experts());
+    state.launch.create = false;
+    if (launching) element("room-dialog").close();
   }
+  if (launching) clear_launch_overrides(launch_draft);
   if (state.navigation_version === navigation) { state.archive_view = false; await select_room(room.id); }
+}
+
+/** Use the explicitly enabled local bridge; public deployments never receive machine configuration. */
+async function local_launch_request(action, payload) {
+  const response = await fetch(`/api/local/${action}`, { method: payload === undefined ? "GET" : "POST",
+    headers: { "Content-Type": "application/json", "X-CoDiscuss-Local": "1" },
+    body: payload === undefined ? undefined : JSON.stringify(payload) });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || "本机启动请求失败");
+  return result;
+}
+
+/** Load reusable client settings once; this neither registers rooms nor starts AI. */
+async function load_launch_settings() {
+  if (!["127.0.0.1", "localhost"].includes(location.hostname)) return;
+  try {
+    const settings = await local_launch_request("settings");
+    Object.assign(state.launch, { available: true, profiles: settings.participants, error: "" });
+  } catch (error) { state.launch.error = error.message; }
+  render_launch_settings();
+  publish_view();
+}
+
+/** Keep software drafts separate from shared room records and from discussion advancement mode. */
+function write_launch_field(name, field, value) {
+  if (name === "workspace") state.launch.workspace[field] = value;
+  else if (name === "create") state.launch.create = Boolean(value);
+  else {
+    state.launch.profiles[name] ||= {};
+    if (field === "allowed_tools") value = value.split("\n").map(item => item.trim()).filter(Boolean);
+    state.launch.profiles[name][field] = value;
+  }
+  state.launch.notice = "";
+  if (field === "adapter") render_launch_settings();
+  else render_launch_summaries();
+  publish_view();
+}
+
+/** Capture local overrides before asynchronous work or navigation can change the draft. */
+function launch_options() {
+  return JSON.parse(JSON.stringify({ participants: state.launch.profiles, ...state.launch.workspace, entry: "web" }));
+}
+
+/** Describe effective placement and binding from the same explicit draft sent to the launcher. */
+function launch_summary(name) {
+  const profile = state.launch.profiles[name] || {};
+  if (!profile.adapter) return { client: "尚未选择客户端", session: "尚未配置",
+    cwd: "选择客户端后确定", project: "选择客户端后确定" };
+  const cli_directory = ["codex_cli", "claude", "antigravity_cli"].includes(profile.adapter);
+  const project_name = profile.project_name || state.launch.workspace.discussion_project;
+  const project_id = profile.project_id;
+  const metadata_only = ["codex_cli", "claude"].includes(profile.adapter);
+  const fixed_project = profile.session_id && !metadata_only;
+  const project = fixed_project ? "沿用指定会话的项目" : metadata_only
+    ? (project_name ? `${project_name}（任务说明，不切换软件项目）` : "不指定项目，按工作目录执行")
+    : profile.adapter === "codex" ? [project_name, project_id ? `ID: ${project_id}` : ""].filter(Boolean).join(" · ") || "无项目聊天"
+      : project_id || project_name || "软件默认项目";
+  return { client: LAUNCH_CLIENTS[name]?.find(item => item.value === profile.adapter)?.label || "尚未选择客户端",
+    session: profile.session_id ? "复用指定会话" : "新建会话",
+    cwd: !cli_directory && profile.session_id ? "沿用指定会话的目录"
+      : profile.cwd || state.launch.workspace.cwd || (cli_directory ? "本次讨论的私有目录" : "由 App 项目确定"), project };
+}
+
+/** Refresh classic readbacks without replacing the input currently being edited. */
+function render_launch_summaries() {
+  document.querySelectorAll("[data-launch-summary]").forEach(node => {
+    const name = node.dataset.launchSummary;
+    if (!LAUNCH_CLIENTS[name]) return;
+    const summary = launch_summary(name);
+    node.textContent = `${summary.session} · 工作目录：${summary.cwd} · 项目：${summary.project}`;
+  });
+}
+
+/** Consume only the successful launch's transient fields, preserving edits made while waiting. */
+function clear_launch_overrides(draft) {
+  for (const [name, profile] of Object.entries(draft.participants)) {
+    if (state.launch.profiles[name]?.session_id === profile.session_id) delete state.launch.profiles[name]?.session_id;
+  }
+  for (const field of ["cwd", "discussion_project"]) {
+    if (state.launch.workspace[field] === draft[field]) delete state.launch.workspace[field];
+  }
+  render_launch_settings();
+  publish_view();
+}
+
+/** Save machine defaults without storing per-discussion session IDs. */
+async function save_launch_defaults() {
+  const participants = Object.fromEntries(Object.entries(launch_options().participants).map(([name, profile]) => {
+    const { session_id, ...defaults } = profile;
+    return [name, defaults];
+  }));
+  try {
+    await local_launch_request("settings", { participants });
+    state.launch.notice = "已保存本机软件配置，后续讨论可复用";
+    state.launch.error = "";
+  } catch (error) { state.launch.error = error.message; }
+  render_launch_settings();
+  publish_view();
+}
+
+/** Start an existing room with local client configuration, preserving browser ownership credentials. */
+async function launch_current_room() {
+  const room_id = state.room.id;
+  const key = `discuss-access:${room_id}`;
+  let token = localStorage.getItem(key);
+  if (!token && state.room.runtime?.protected) throw new Error("此浏览器缺少房间凭据，请使用原浏览器或原接入配置");
+  if (!token) { token = crypto.randomUUID(); localStorage.setItem(key, token); }
+  const draft = launch_options();
+  try {
+    const result = await local_launch_request("launch", { ...draft, room_id, token });
+    clear_launch_overrides(draft);
+    state.launch.notice = result.status === "running" ? "启动已提交，实际执行请查看进度回执" : "本次启动已有记录，请查看房间状态";
+    state.launch.error = "";
+    if (state.room?.id === room_id) await refresh_room();
+  } catch (error) { state.launch.error = error.message; }
+  render_launch_settings();
+  publish_view();
+}
+
+/** Render the same local setup controls in the classic theme. */
+function render_launch_settings() {
+  for (const id of ["local-launch-settings", "new-local-launch-settings"]) {
+    const container = element(id);
+    if (!container) continue;
+    container.hidden = !state.launch.available;
+    container.parentElement.hidden = !state.launch.available;
+    const create_toggle = container.parentElement.querySelector('[data-launch-name="create"]');
+    if (create_toggle) create_toggle.checked = state.launch.create;
+    container.innerHTML = Object.entries(LAUNCH_CLIENTS).map(([name, clients]) => {
+      const profile = state.launch.profiles[name] || {};
+      const fields = profile.adapter === "antigravity" ? [["ipc_directory", "Sidecar IPC 目录"]]
+        : [["executable", "原生可执行文件路径"]];
+      if (profile.adapter === "codex") fields.push(["source_thread_id", "来源聊天 ID（新建会话时使用）"]);
+      if (profile.adapter === "claude") fields.push(["allowed_tools", "允许的工具（每行一项，可选）"]);
+      fields.push(["session_id", "复用会话 ID（仅本次，可选）"], ["cwd", "此 AI 的工作目录（可选）"], ["project_name", "此 AI 的项目（可选）"]);
+      if (["codex", "antigravity", "antigravity_cli"].includes(profile.adapter)) fields.push(["project_id", "软件中的项目 ID（可选）"]);
+      const summary = launch_summary(name);
+      return `<fieldset><legend>${name}</legend><p class="local-note" data-launch-summary="${name}">${summary.session} · 工作目录：${escape_html(summary.cwd)} · 项目：${escape_html(summary.project)}</p><label>执行客户端<select data-launch-name="${name}" data-launch-field="adapter"><option value="">选择 CLI / App</option>${clients.map(client => `<option value="${client.value}" ${profile.adapter === client.value ? "selected" : ""}>${client.label}</option>`).join("")}</select></label>${fields.map(([field, label]) => `<label>${label}<textarea rows="${field === "allowed_tools" ? 2 : 1}" data-launch-name="${name}" data-launch-field="${field}">${escape_html(Array.isArray(profile[field]) ? profile[field].join("\n") : profile[field] || "")}</textarea></label>`).join("")}</fieldset>`;
+    }).join("") + `<label>本次工作目录（可选）<input data-launch-name="workspace" data-launch-field="cwd" value="${escape_html(state.launch.workspace.cwd || "")}"></label><label>本次 AI 项目（可选）<input data-launch-name="workspace" data-launch-field="discussion_project" value="${escape_html(state.launch.workspace.discussion_project || "")}"></label>`;
+  }
+  for (const id of ["local-launch-notice", "new-local-launch-notice"]) {
+    if (element(id)) element(id).textContent = state.launch.error || state.launch.notice;
+  }
+  if (element("local-launch-start")) element("local-launch-start").disabled = !state.launch.available || state.room?.runtime?.mode !== "automatic" || state.room?.runtime?.status !== "ready";
 }
 
 /** Persist a manually edited summary with the snapshot it was based on. */
@@ -1184,6 +1346,8 @@ function bind_host_controls() {
   const actions = { "topic-context": () => select_tab("context"), "edit-host-brief": () => select_tab("context"), "topic-history": () => select_tab("discussion"),
     "runtime-auto": () => choose_runtime("automatic"), "runtime-manual": () => choose_runtime("manual"),
     "runtime-export": export_runtime,
+    "local-launch-save": save_launch_defaults, "new-local-launch-save": save_launch_defaults,
+    "local-launch-start": launch_current_room,
     "runtime-pause": pause_runtime, "check-discussion-limits": check_limits,
     "take-floor": () => change_floor("take"), "return-floor": () => change_floor("return"),
     "copy-turn": copy_turn, "confirm-notified": () => change_turn_status("notified"), "cancel-turn": () => change_turn_status("cancelled"),
@@ -1462,6 +1626,11 @@ async function initialize() {
   bind_directory_controls();
   bind_controls();
   bind_host_controls();
+  document.addEventListener("input", event => {
+    const { launchName: name, launchField: field } = event.target.dataset || {};
+    if (name) write_launch_field(name, field, event.target.type === "checkbox" ? event.target.checked : event.target.value);
+  });
+  load_launch_settings();
   try {
     const result = await request_json("/api/rooms");
     state.rooms = result.rooms;
@@ -1494,7 +1663,7 @@ function view_snapshot() {
     connected: state.connected, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
     mention_only: state.mention_only, reply_to: state.reply_to, turn_reply_to: state.turn_reply_to,
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
-    theme: document.documentElement.dataset.theme, fields, experts };
+    theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch) };
 }
 
 /** Update a shared draft using the same input events as the original controls. */
@@ -1568,6 +1737,7 @@ async function execute_view_action(name, value) {
     take_floor: () => change_floor("take"), return_floor: () => change_floor("return"),
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
     choose_runtime, export_runtime, pause_runtime, check_limits, pause_discussion, restart_discussion, force_close, conclude_discussion,
+    save_launch_defaults, launch_current_room,
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };
   try {
     await actions[name](value);
@@ -1581,11 +1751,13 @@ async function execute_view_action(name, value) {
 /** Switch renderers while retaining the shared room, filters, and form drafts. */
 function change_view_theme(theme) {
   element("settings-dialog")?.close();
+  render_launch_settings();
   apply_theme(theme);
   try { localStorage.setItem(THEME_STORAGE_KEY, document.documentElement.dataset.theme); } catch { /* Keep the session preference. */ }
 }
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
+  write_launch: write_launch_field, launch_clients: LAUNCH_CLIENTS, launch_summary,
   start_drag: start_directory_drag,
   write_expert: write_view_expert, execute: execute_view_action, theme: change_view_theme,
   request: request_json, identities: IDENTITIES, display_name, sources: SOURCE_LABELS, phases: PHASE_LABELS,

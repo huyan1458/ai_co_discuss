@@ -1,6 +1,7 @@
 <script setup>
 import { computed, inject } from "vue";
 import { motion, useReducedMotion } from "motion-v";
+import LaunchSettings from "./LaunchSettings.vue";
 
 defineEmits(["open", "detail"]);
 const { view, bridge, act, pending } = inject("discussion");
@@ -53,11 +54,18 @@ const progress_summary = computed(() => {
           <UIcon name="i-lucide-copy" class="mode-icon" /><span><strong>手动复制冷启动</strong><small>复制参与指令，由你或软件定时触发。</small></span><UIcon v-if="!automatic" name="i-lucide-check" class="mode-check" />
         </button>
       </div>
-      <div v-if="automatic && execution?.status === 'failed'" class="access-failure" role="status">
-        <UIcon name="i-lucide-circle-alert" /><div><strong>{{ bridge.display_name(execution.participant) }} 上次执行失败</strong><details><summary>查看错误详情</summary><p>{{ execution.result || '请在原 AI 会话中检查执行情况。' }}</p></details></div>
-      </div>
+      <section v-if="automatic" class="access-evidence" aria-label="实际执行进展" role="status"><strong>实际执行进展</strong><p>{{ bridge.execution_label(execution) }}</p><p v-if="room.runtime?.status === 'running' && (!execution || ['pending', 'dispatched'].includes(execution.status))" class="fine-print">尚无 AI 进入记录。请核对本机服务及对应软件的登录和工具权限。</p></section>
       <div v-if="room.runtime?.status === 'running'" class="access-running"><span>切换方式前，先暂停讨论并核对原会话。</span><UButton label="暂停讨论" variant="outline" color="neutral" class="channel-surface-button" :loading="pending === 'pause_runtime'" @click="act('pause_runtime')" /></div>
-      <section v-if="automatic" class="access-setup" aria-label="全自动接入步骤">
+      <section v-if="automatic && view.launch.available" class="access-setup" aria-label="网页启动入口">
+        <div class="access-section-title"><h3>从网页启动</h3><span class="fine-print">本机执行</span></div>
+        <template v-if="room.runtime?.status === 'ready'">
+          <LaunchSettings :participants="[room.host, ...Object.keys(room.experts || {})]" />
+          <UButton label="启动讨论" icon="i-lucide-play" class="channel-primary-button" :loading="pending === 'launch_current_room'" @click="act('launch_current_room')" />
+        </template>
+        <p v-else class="fine-print">本次讨论已启动过。暂停后请在进度看板继续，原会话绑定保持不变。</p>
+        <p class="fine-print">另一种入口：在 AI 工具对话中调用 discuss-host，由当前会话主持。</p>
+      </section>
+      <section v-else-if="automatic" class="access-setup" aria-label="全自动接入步骤">
         <div class="access-section-title"><h3>首次接入</h3><a href="https://github.com/huyan1458/ai_co_discuss/blob/main/docs/runner.md#常驻讨论服务" target="_blank" rel="noopener" class="subtle-link">配置说明 <UIcon name="i-lucide-arrow-up-right" /></a></div>
         <ol class="access-steps">
           <li><span class="access-step-number">1</span><div><h4>下载接入配置</h4><p>包含当前房间信息。下载后，补齐本机软件路径与会话配置。</p></div><UButton v-if="room.runtime?.protected" icon="i-lucide-download" label="下载接入配置" class="channel-primary-button" :loading="pending === 'export_runtime'" @click="act('export_runtime')" /></li>
@@ -65,7 +73,7 @@ const progress_summary = computed(() => {
           <li><span class="access-step-number">3</span><div><h4>启动服务，保持终端打开</h4><p>启动服务不会自动开始讨论。已暂停的讨论可在进度看板点“重启”。</p><div class="access-command"><code>codiscuss</code><UButton icon="i-lucide-copy" color="neutral" variant="ghost" aria-label="复制服务启动命令" @click="act('copy', 'codiscuss')" /></div></div></li>
         </ol>
       </section>
-      <details class="access-disclosure access-workspace">
+      <details v-if="!automatic || !view.launch.available" class="access-disclosure access-workspace">
         <summary><span>项目与工作目录 <small>可选</small></span><UIcon name="i-lucide-chevron-down" class="disclosure-icon" /></summary>
         <div class="access-disclosure-body"><p>指定 AI 使用的本机项目和目录，留空使用默认位置。仅保存在本机配置中。</p><div class="form-two-columns"><UFormField label="AI 软件中的项目"><UInput :model-value="view.fields['runtime-project']" placeholder="项目名称" class="w-full" @update:model-value="bridge.write_field('runtime-project', $event)" /></UFormField><UFormField label="工作目录"><UInput :model-value="view.fields['runtime-cwd']" placeholder="已有本机目录的完整路径" class="w-full" @update:model-value="bridge.write_field('runtime-cwd', $event)" /></UFormField></div></div>
       </details>
@@ -91,6 +99,9 @@ const progress_summary = computed(() => {
 .access-page { color: var(--ui-text); }
 .access-heading { align-items: flex-start; }
 .access-heading > span { margin-top: 2px; white-space: nowrap; }
+.access-evidence { margin-bottom: 18px; padding: 12px 0; overflow-wrap: anywhere; }
+.access-evidence strong { font-size: 13px; }
+.access-evidence p { margin: 6px 0 0; }
 .access-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 28px; }
 .access-mode { display: flex; align-items: flex-start; gap: 12px; min-width: 0; padding: 17px 16px; border: 1px solid var(--ui-border); border-radius: 8px; background: transparent; color: var(--ui-text-muted); text-align: left; cursor: pointer; }
 .access-mode:hover { background: var(--ui-bg-elevated); }

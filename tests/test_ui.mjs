@@ -4,7 +4,7 @@ import test from "node:test";
 import vm from "node:vm";
 
 const source = readFileSync(new URL("../web/app.js", import.meta.url), "utf8").replace(/\nrestore_theme\(\);[\s\S]*$/, "");
-const discussion_source = readFileSync(new URL("../web/modern/ChannelDiscussion.vue", import.meta.url), "utf8");
+const discussion_source = readFileSync(new URL("../frontend/ChannelDiscussion.vue", import.meta.url), "utf8");
 
 /** Exercise theme persistence and renderer selection without touching discussion data. */
 function theme_fixture(saved_theme = null) {
@@ -149,6 +149,106 @@ test("light channel survives reload and selects the Vue renderer without dark mo
   assert.equal(fixture.nodes.get('modern-style').disabled, false);
   assert.equal(fixture.buttons.find((button) => button.dataset.themeOption === 'channel-light')['aria-pressed'], 'true');
   assert.equal(fixture.loaded.length, 1);
+});
+
+test("local defaults exclude session bindings and launch drafts are consumed only after successful creation", async () => {
+  const fixture = theme_fixture();
+  const state = fixture.context.test_state;
+  const requests = [];
+  let sequence = 0;
+  let fail = true;
+  let dialog_closes = 0;
+  fixture.nodes.set('room-dialog', { close() { dialog_closes++; } });
+  fixture.nodes.set('room-form', { reset() {} });
+  Object.assign(state.launch, { available: true, create: true,
+    profiles: { Codex: { adapter: 'codex_cli', executable: 'C:\\codex.exe', session_id: 'one-room-session' } },
+    workspace: { cwd: 'C:\\project', discussion_project: '本次项目' } });
+  Object.assign(fixture.context, {
+    crypto: { randomUUID: () => `token-${++sequence}` }, new_submission_id: () => `submission-${++sequence}`,
+    room_creation_payload: () => ({ title: '网页发起', runtime_mode: 'automatic' }),
+    render_launch_settings() {}, render_expert_inputs() {}, default_experts: () => ({}), select_room: async () => {},
+    update_directory: async ({ save, commit }) => { const result = await save(); commit(result); return result; },
+    local_launch_request: async (action, payload) => {
+      requests.push({ action, payload });
+      if (action === 'settings') return {};
+      if (fail) throw new Error('lost receipt');
+      return { room: { id: 'created' } };
+    },
+  });
+  await fixture.context.save_launch_defaults();
+  assert.equal(requests[0].payload.participants.Codex.session_id, undefined);
+  assert.equal(state.launch.profiles.Codex.session_id, 'one-room-session');
+  await assert.rejects(fixture.context.submit_room({ preventDefault() {} }), /lost receipt/);
+  assert.equal(dialog_closes, 0, 'failed startup must leave configuration open for correction or retry');
+  assert.equal(state.launch.error, 'lost receipt');
+  assert.equal(state.launch.profiles.Codex.session_id, 'one-room-session');
+  fail = false;
+  await fixture.context.submit_room({ preventDefault() {} });
+  assert.equal(requests[1].payload.room.submission_id, requests[2].payload.room.submission_id);
+  assert.equal(requests[1].payload.token, requests[2].payload.token);
+  assert.equal(fixture.storage.get('discuss-access:created'), requests[2].payload.token);
+  assert.equal(state.launch.profiles.Codex.session_id, undefined);
+  assert.equal(state.launch.profiles.Codex.executable, 'C:\\codex.exe');
+  assert.deepEqual(Object.keys(state.launch.workspace), []);
+  assert.equal(state.launch.create, false);
+  assert.equal(dialog_closes, 1);
+  assert.equal(state.launch.error, '');
+});
+
+test("an existing-room launch keeps its target and preserves newer configuration edits", async () => {
+  const fixture = theme_fixture();
+  const state = fixture.context.test_state;
+  state.room = { id: 'room-a', runtime: { protected: false } };
+  state.launch.profiles = { Codex: { session_id: 'old-session' } };
+  state.launch.workspace = { cwd: 'C:\\old' };
+  let request;
+  let refreshed = false;
+  Object.assign(fixture.context, {
+    crypto: { randomUUID: () => 'owner-token' }, render_launch_settings() {}, refresh_room: async () => { refreshed = true; },
+    local_launch_request: async (action, payload) => {
+      request = payload;
+      state.room = { id: 'room-b' };
+      state.launch.profiles.Codex.session_id = 'new-session';
+      state.launch.workspace.cwd = 'C:\\new';
+      return { status: 'running' };
+    },
+  });
+  await fixture.context.launch_current_room();
+  assert.equal(request.room_id, 'room-a');
+  assert.equal(request.participants.Codex.session_id, 'old-session');
+  assert.equal(fixture.storage.get('discuss-access:room-a'), 'owner-token');
+  assert.equal(state.launch.profiles.Codex.session_id, 'new-session');
+  assert.equal(state.launch.workspace.cwd, 'C:\\new');
+  assert.equal(refreshed, false);
+});
+
+test("launch drafts retain explicit clears so saved participant defaults cannot override this discussion", () => {
+  const fixture = theme_fixture();
+  Object.assign(fixture.context.test_state.launch, { profiles: { Codex: { adapter: 'codex_cli',
+    cwd: '', project_name: '', project_id: '', session_id: '' } }, workspace: { cwd: 'C:\\this-discussion' } });
+  const draft = fixture.context.launch_options();
+  assert.equal(draft.participants.Codex.cwd, '');
+  assert.equal(draft.participants.Codex.project_name, '');
+  assert.equal(draft.participants.Codex.project_id, '');
+  assert.equal(draft.cwd, 'C:\\this-discussion');
+});
+
+test("launch readback distinguishes effective directories, project metadata and existing App bindings", () => {
+  const fixture = theme_fixture();
+  Object.assign(fixture.context.test_state.launch, { profiles: { Codex: { adapter: 'codex_cli', cwd: 'C:\\specific' },
+    Claude: { adapter: 'claude' }, Gemini: { adapter: 'antigravity_cli', project_id: 'project-id' } },
+    workspace: { cwd: 'C:\\common', discussion_project: '任务项目' } });
+  assert.equal(fixture.context.launch_summary('Codex').cwd, 'C:\\specific');
+  assert.equal(fixture.context.launch_summary('Claude').cwd, 'C:\\common');
+  assert.match(fixture.context.launch_summary('Codex').project, /任务说明，不切换软件项目/);
+  assert.equal(fixture.context.launch_summary('Gemini').project, 'project-id');
+  fixture.context.write_launch_field('Codex', 'cwd', '');
+  assert.equal(fixture.context.launch_summary('Codex').cwd, 'C:\\common');
+  Object.assign(fixture.context.test_state.launch.profiles.Codex, { adapter: 'codex', session_id: 'existing' });
+  assert.equal(fixture.context.launch_summary('Codex').session, '复用指定会话');
+  assert.equal(fixture.context.launch_summary('Codex').project, '沿用指定会话的项目');
+  fixture.context.test_state.launch.workspace = {};
+  assert.equal(fixture.context.launch_summary('Claude').cwd, '本次讨论的私有目录');
 });
 
 test("switching all three themes preserves the room, filter, reply and draft", () => {
@@ -474,7 +574,7 @@ test("directory requests do not take or release the global action lock", async (
   const bridge = { snapshot: () => ({}), execute: (name) => new Promise(resolve => pending_requests.push({ name, resolve })) };
   const context = vm.createContext({ window: { discuss_view: bridge }, document: { addEventListener() {}, removeEventListener() {} },
     ref: value => ({ value }), shallowRef: value => ({ value }), onBeforeUnmount() {} });
-  const adapter = readFileSync(new URL("../web/modern/use-discussion.js", import.meta.url), "utf8").replace(/^import .*\n/, "").replace("export function", "function");
+  const adapter = readFileSync(new URL("../frontend/use-discussion.js", import.meta.url), "utf8").replace(/^import .*\n/, "").replace("export function", "function");
   vm.runInContext(adapter, context);
   const discussion = context.use_discussion();
   const archiving = discussion.act("manage_channel", { id: "a", action: "archive" });
@@ -500,7 +600,7 @@ test("archive dialogs close before the response and never close a later dialog",
   let finish;
   const context = vm.createContext({ mode: { value: "archive" }, props: { targetRoom: { id: "a" } },
     management_title: { value: "" }, act: () => new Promise(resolve => { finish = resolve; }) });
-  const dialog = readFileSync(new URL("../web/modern/WorkspaceDialogs.vue", import.meta.url), "utf8");
+  const dialog = readFileSync(new URL("../frontend/WorkspaceDialogs.vue", import.meta.url), "utf8");
   vm.runInContext(dialog.match(/async function save_management\(\) \{[\s\S]*?\n\}/)[0], context);
   const saving = context.save_management();
   assert.equal(context.mode.value, "");
@@ -515,7 +615,7 @@ test("archive manager opening preserves the selected channel and draft", () => {
   const draft = { value: "保留未发送内容" };
   const context = vm.createContext({ modal: { value: "" }, nav_open: { value: true }, room, draft,
     act() { assert.fail("opening archive management must not navigate or fetch"); } });
-  const workspace = readFileSync(new URL("../web/modern/ChannelWorkspace.vue", import.meta.url), "utf8");
+  const workspace = readFileSync(new URL("../frontend/ChannelWorkspace.vue", import.meta.url), "utf8");
   vm.runInContext(workspace.match(/function open_archives\(\) \{[^\n]+/)[0], context);
   context.open_archives();
   assert.equal(context.modal.value, "archives");
@@ -526,7 +626,7 @@ test("archive manager opening preserves the selected channel and draft", () => {
 
 test("archive search uses one newest-first list regardless of folder membership", () => {
   const context = vm.createContext({});
-  const dialog = readFileSync(new URL("../web/modern/WorkspaceDialogs.vue", import.meta.url), "utf8");
+  const dialog = readFileSync(new URL("../frontend/WorkspaceDialogs.vue", import.meta.url), "utf8");
   vm.runInContext(dialog.match(/function filter_archived_channels\(rooms, filters\) \{[\s\S]*?\n\}/)[0], context);
   const rooms = [
     { id: "old", title: "Codex 旧方案", archived: true, folder_id: "work", message_count: 0, created_at: "2026-10-15" },
@@ -603,7 +703,7 @@ test("archive deletion needs one confirmation click and cannot close a later dia
     archive_delete_room: { value: { id: "archived", title: "存档频道" } },
     archive_delete_id: { value: "archived" },
     act: (name, value) => { requests.push({ name, ...value }); return new Promise(resolve => { finish = resolve; }); } });
-  const dialog = readFileSync(new URL("../web/modern/WorkspaceDialogs.vue", import.meta.url), "utf8");
+  const dialog = readFileSync(new URL("../frontend/WorkspaceDialogs.vue", import.meta.url), "utf8");
   vm.runInContext(dialog.match(/function archive_busy\(room\) \{[\s\S]*?\n\}/)[0], context);
   vm.runInContext(dialog.match(/async function delete_archive\(\) \{[\s\S]*?\n\}/)[0], context);
   context.view.value.archive_pending = ["archived"];

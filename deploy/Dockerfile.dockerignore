@@ -1,0 +1,14 @@
+*
+!server.py
+!backend/
+backend/**
+!backend/__init__.py
+!backend/server.py
+!backend/runtime.py
+!backend/schema.sql
+!LICENSE
+!docs/
+docs/**
+!docs/THIRD_PARTY_NOTICES.md
+!web/
+!web/**

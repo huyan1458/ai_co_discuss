@@ -242,7 +242,7 @@ function resize_nav_by_key(event) {
       </div>
       <footer class="channel-sidebar-footer">
         <UAvatar :src="bridge.identities[author]?.icon" :text="bridge.identities[author]?.initials" :alt="bridge.display_name(author)" size="sm" class="channel-avatar" :class="bridge.identities[author]?.style" />
-        <div class="channel-self"><strong>{{ bridge.display_name(author) }}</strong><div class="channel-connection"><span :class="{ connected: view.connected }"></span>{{ view.connected ? '服务已连接' : '服务未连接' }}</div></div>
+        <div class="channel-self"><strong>{{ bridge.display_name(author) }}</strong><div class="channel-connection"><span :class="{ connected: view.connected }"></span>{{ view.connected ? '网站已连接' : '网站未连接' }}</div></div>
         <UTooltip text="外观设置"><UButton icon="i-lucide-settings-2" color="neutral" variant="ghost" size="sm" class="channel-icon-button" aria-label="外观设置" @click="modal = 'settings'" /></UTooltip>
       </footer>
     </aside>

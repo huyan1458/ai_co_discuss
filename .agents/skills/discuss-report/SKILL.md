@@ -23,15 +23,15 @@ description: "将已结束或明确选定范围的真实讨论整理为独立可
 
 ### AI CoDiscuss 房间
 
-从用户给定链接取得站点和房间 ID，从当前项目或用户指定路径定位 `discuss.py`。需要 Python 3.10+；复制到个人技能目录后，技能目录不是程序目录。首次使用或字段不明确时读 CLI 帮助；详细命令见项目 `docs/cli.md`。
+从用户给定链接取得站点和房间 ID，从当前项目或用户指定路径定位 `runner/discuss.py`。需要 Python 3.10+；复制到个人技能目录后，技能目录不是程序目录。首次使用或字段不明确时读 CLI 帮助；详细命令见项目 `docs/cli.md`。
 
 本任务只使用读取命令，例如：
 
 ```text
-python <已核实的项目路径>/discuss.py room view <房间ID> --site <实际站点>
-python <已核实的项目路径>/discuss.py room brief <房间ID> --site <实际站点>
-python <已核实的项目路径>/discuss.py state view <房间ID> --site <实际站点>
-python <已核实的项目路径>/discuss.py message list <房间ID> --after 0 --site <实际站点>
+python <已核实的项目路径>/runner/discuss.py room view <房间ID> --site <实际站点>
+python <已核实的项目路径>/runner/discuss.py room brief <房间ID> --site <实际站点>
+python <已核实的项目路径>/runner/discuss.py state view <房间ID> --site <实际站点>
+python <已核实的项目路径>/runner/discuss.py message list <房间ID> --after 0 --site <实际站点>
 ```
 
 默认 JSON 的 `ok=true` 与退出码 0 才表示读取成功。消息每页最多 20 条；使用 `--after` 时按实际返回的 `next_after` 续读，结合 `has_more` 核对是否覆盖固定截止编号。相关提问与安排通过 `turn list <房间ID> --page 1` 起读，按返回的 `page` / `pages` 递增页码覆盖相关安排，必要时用 `turn view` 补读。

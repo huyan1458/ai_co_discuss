@@ -1,3 +1,10 @@
 # Keep source and generated text identical across Windows and Linux checkouts.
 * text=auto eol=lf
 *.cmd text eol=crlf
+
+# Keep prebuilt assets available for Python-only installs, but hide generated diffs.
+web/modern.js linguist-generated=true
+web/modern.css linguist-generated=true
+web/markdown.js linguist-generated=true
+web/markdown.css linguist-generated=true
+web/backup.js linguist-generated=true

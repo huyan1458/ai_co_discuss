@@ -15,7 +15,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from urllib.robotparser import RobotFileParser
 
-from server import DiscussionServer, create_room, get_message, init_database, require_room
+from backend.server import DiscussionServer, create_room, get_message, init_database, require_room
 
 
 class DiscussionTests(unittest.TestCase):
@@ -1103,7 +1103,7 @@ class LegacyStorageTests(unittest.TestCase):
         """An existing pending expert becomes eligible without changing historical data."""
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "floor-migration.sqlite3"
-            schema = (Path(__file__).resolve().parent.parent / "schema.sql").read_text(encoding="utf-8")
+            schema = (Path(__file__).resolve().parent.parent / "backend" / "schema.sql").read_text(encoding="utf-8")
             with closing(sqlite3.connect(database)) as connection, connection:
                 connection.executescript(schema.split("CREATE TABLE IF NOT EXISTS room_floor")[0])
                 connection.execute("INSERT INTO rooms(id,title,goal,created_at) VALUES ('old','旧房间','保留历史','test')")

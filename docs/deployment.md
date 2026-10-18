@@ -2,9 +2,11 @@
 
 本地 Python / SQLite 与 Cloudflare Pages / D1 提供同样的讨论接口。二选一即可，数据库彼此独立，不自动同步。
 
-当前服务没有用户登录和读取权限隔离；主动配置运行的房间另有写入凭据。先阅读 [安全说明](../SECURITY.md)，再决定是否暴露到公网。外部访问控制也可能阻止在线 AI 读取；此时按工作流转交必要材料。
+当前服务没有用户登录和读取权限隔离；主动配置运行的房间另有写入凭据。先阅读 [安全说明](../.github/SECURITY.md)，再决定是否暴露到公网。外部访问控制也可能阻止在线 AI 读取；此时按工作流转交必要材料。
 
 ## Python 服务
+
+通过 [npm 安装配置](runner.md#npm-安装与本机配置) 的本机用户可直接 `codiscuss local open`，它使用包内网页、已配置 Python 和包外持久数据库，同时启用仅限回环的网页启动入口。以下参数适用于直接运行源码或独立部署；两种路径的数据位置不同，不自动迁移。
 
 Python 3.10+，无第三方 Python 依赖。前端已经随仓库提供；修改源码后在 Node.js 24+ 环境中重新构建：
 
@@ -20,6 +22,7 @@ python server.py --host 127.0.0.1 --port 8765 --no-demo
 | `--port` | `PORT` | `8765` |
 | `--database` | `DATABASE_PATH` | 项目 `data/discuss.sqlite3` |
 | `--no-demo` | 无 | 不传时在新数据库写入带示例标记的欢迎记录 |
+| `--local-launch` | 无 | 显式开启本机软件配置与网页启动，仅允许绑定 127.0.0.1，需 Node.js 24+ |
 
 命令行参数优先于环境变量。使用独立测试库可加 `--database data/test.sqlite3`。停止后重新启动沿用原库；`--no-demo` 不清理已有数据。长期部署应使用自己的进程管理和反向代理提供 HTTPS，按需要限制访问与请求规模。
 
@@ -27,19 +30,21 @@ python server.py --host 127.0.0.1 --port 8765 --no-demo
 
 ## Docker
 
-仓库自带前端产物，直接用 Docker 即可启动；只有修改前端源码后才需要先执行 `npm ci` 和 `npm run build:ui`。镜像只复制服务、schema 和运行资源：
+仓库自带前端产物，直接用 Docker 即可启动；只有修改前端源码后才需要先执行 `npm ci` 和 `npm run build:ui`。在仓库根目录显式指定 `deploy/Dockerfile`，镜像只复制服务、schema、许可证和运行资源：
 
 ```sh
-docker build -t ai-co-discuss .
+docker build -f deploy/Dockerfile -t ai-co-discuss .
 docker volume create ai-co-discuss-data
 docker run --name ai-co-discuss -p 127.0.0.1:8765:8765 -v ai-co-discuss-data:/data ai-co-discuss
 ```
 
 镜像以非 root 用户运行，默认空库；持久数据位于命名卷 `/data`，容器删除不代表卷已删除。此处只绑定本机端口，需要远程访问时由部署者配置反向代理与访问边界。
 
+`deploy/Dockerfile.dockerignore` 按 [Docker 的专用排除文件约定](https://docs.docker.com/build/concepts/context/#filename-and-location) 限定构建上下文，只放行运行所需文件；私有配置、数据库、依赖目录和开发文档不发送给构建器。
+
 ## Cloudflare Pages + Functions + D1
 
-采用 Pages advanced mode：`worker.mjs` 打包成 `_worker.js`，直接绑定 D1 的 `DB`。没有外部 Worker service binding，也不需要 Nuxt 服务端。配置依据见 [Cloudflare Pages Wrangler 文档](https://developers.cloudflare.com/pages/functions/wrangler-configuration/)。
+采用 Pages advanced mode：`backend/worker.mjs` 打包成 `_worker.js`，直接绑定 D1 的 `DB`。没有外部 Worker service binding，也不需要 Nuxt 服务端。配置依据见 [Cloudflare Pages Wrangler 文档](https://developers.cloudflare.com/pages/functions/wrangler-configuration/)。
 
 ### 本地预览
 
@@ -103,7 +108,7 @@ cp wrangler.jsonc .wrangler/deploy/wrangler.jsonc
 以下命令从仓库根目录运行，明确操作自己的远端数据库和站点：
 
 ```sh
-npx wrangler d1 execute DB --remote --config .wrangler/deploy/wrangler.jsonc --file schema.sql
+npx wrangler d1 execute DB --remote --config .wrangler/deploy/wrangler.jsonc --file backend/schema.sql
 npm run deploy -- --cwd .wrangler/deploy
 ```
 
@@ -118,13 +123,13 @@ codiscuss health --site https://YOUR_PROJECT_NAME.pages.dev
 codiscuss room list --site https://YOUR_PROJECT_NAME.pages.dev
 ```
 
-未安装统一命令时可用 `python discuss.py` 替换 `codiscuss`。同时打开网页与实际房间的 `/r/ROOM_ID`，检查静态资源、中文原文和读取链接。仅首页可见不能证明数据库或动态路由正常。
+未安装统一命令时可用 `python runner/discuss.py` 替换 `codiscuss`。同时打开网页与实际房间的 `/r/ROOM_ID`，检查静态资源、中文原文和读取链接。仅首页可见不能证明数据库或动态路由正常。
 
 ## 构建产物与发布边界
 
-`npm run build` 执行语法检查、两次 Vite 构建，再运行 `scripts/build_pages.mjs`。输出包含网页、JS/CSS、内联字体、本地图标、404、robots、路由规则和唯一 `_worker.js`；排除 `web/modern/` 源码与隐藏文件。`_routes.json` 仅让 `/api`、`/api/*`、`/r`、`/r/*` 调用 Function。
+`npm run build` 执行语法检查，构建 Markdown、备份和 Vue 三个入口，再运行 `scripts/build_pages.mjs`。输出包含网页、JS/CSS、内联字体、本地图标、404、robots、路由规则和唯一 `_worker.js`；`frontend/` 源码与隐藏文件不进入发布目录。`_routes.json` 仅让 `/api`、`/api/*`、`/r`、`/r/*` 调用 Function。
 
-不要部署仓库根目录，那里含开发文件和潜在本地数据。`dist/pages/` 是可重复生成的发布目录，同时附带根许可证与第三方许可声明。更新前端修改 `web/modern/` 等源码，再重新构建，不直接编辑产物。
+不要部署仓库根目录，那里含开发文件和潜在本地数据。`dist/pages/` 是可重复生成的发布目录，同时附带根许可证与第三方许可声明。更新 Vue 界面修改 `frontend/` 源码，再重新构建，不直接编辑产物。
 
 ## 常见问题
 
@@ -137,6 +142,8 @@ codiscuss room list --site https://YOUR_PROJECT_NAME.pages.dev
 - **重新构建后页面未变化**：确认服务目录和发布产物，浏览器刷新；不要据旧标签页判断构建失败。
 
 ## 可选的全自动接入
+
+本机使用可直接通过 `python server.py --local-launch` 打开网页启动入口，或在 AI 对话中调用主持 Skill 使用 `codiscuss launch start`。两者共用本机默认配置与单场覆盖，见 [讨论入口与配置](runner.md#两种讨论入口与启动配置)。以下手动导出与登记方式保留，适用于已部署站点或已有配置。
 
 接入程序随本仓库提供，无需安装其他项目。网页可以运行在本机或 Cloudflare，常驻服务与实际 AI 软件仍运行在你的电脑；网站不启动本机进程。服务需要 Node.js 24+，AI 通过 CLI 读写网站另需 Python 3.10+。Python 网站启动时自动应用 schema；升级 D1 必须先在测试库核对，再由部署者执行 schema，不能只更新网页资源。
 
@@ -179,6 +186,6 @@ codiscuss run start ROOM --site SITE --revision REV --access-file "PRIVATE.json"
 
 需要单个房间的有限运行而不使用常驻服务时，可在仓库执行 `npm run runner -- start --config FILE --minutes 60`；`watch` 仅恢复事件消费，不恢复已暂停房间。网页已设总时长时可省略 `--minutes`，同时提供时取更早截止；不要让独立 runner 与常驻服务同时消费同一房间配置。
 
-自动模式先支持运行中的 Codex App、Antigravity App 及可用的 Claude Code CLI。软件关闭、账号失效或权限等待不能算作已开始；60 秒未进入会保留原因并暂停，不自动重复新建。通知程序退出、断网或崩溃后，旧执行最多在剩余租约内写入；恢复前核对原会话，过期资格不会重新激活。
+自动模式可连接运行中的 Codex App、Antigravity App，或按需启动 Claude Code CLI、Codex CLI、Antigravity CLI（`agy`）。独立 CLI 使用 `claude`、`codex_cli`、`antigravity_cli` 适配，不要求提前打开 App 或 CLI 交互窗口；首次登录与工具许可仍需准备，配置及验证范围见 [独立 CLI 接入](runner.md#独立-cli-接入)。App 关闭、账号失效或权限等待不能算作已开始；已交付任务等待实际进入，不因聊天忙碌重复新建，等待仍受整场截止约束。接入程序退出、断网或崩溃后，旧执行最多在剩余租约内写入；恢复前核对原会话，过期资格不会重新激活。重试和停止规则见 [自动接入程序](runner.md)。
 
 手动兜底：暂停并核对原执行停止后，切换“手动复制冷启动”；复制原接入指令，在原会话继续。保护过的房间仍需导出的私有文件路径作为 `--access-file`，不把 token 放进复制文本。公开房间不保存本机目录、软件账号或配置文件。

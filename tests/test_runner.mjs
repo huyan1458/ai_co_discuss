@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
@@ -10,8 +10,8 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
-import { DiscussionService, register_room, service_pid, unregister_room } from '../runner/discussion_service.mjs';
-import { antigravity_project, claude_exit_error, standalone_claude_env, codex_target, run_program } from '../runner/discussion_adapters.mjs';
+import { DiscussionService, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
+import { antigravity_project, claude_exit_error, standalone_claude_env, codex_target, deliver_task, run_program } from '../runner/discussion_adapters.mjs';
 
 /** Exercise the dispatcher against an HTTP contract without starting real software. */
 async function fixture(t) {
@@ -26,8 +26,8 @@ async function fixture(t) {
     let text = ''; for await (const chunk of request) text += chunk;
     const body = text ? JSON.parse(text) : null;
     let result;
-    if (request.url.includes('/events?')) result = { events: [event], next_after: 1 };
-    else if (request.url.endsWith('/events/1')) {
+    if (request.url.includes('/events?')) result = { events: [event], next_after: event.id };
+    else if (request.url.endsWith(`/events/${event.id}`)) {
       calls.push(body.action);
       const failure = failures[body.action];
       delete failures[body.action];
@@ -260,15 +260,195 @@ test('only an executable that never starts is classified as safe to retry', asyn
   await assert.rejects(run_program(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { timeout: 50 }), error => !error.delivery_status);
 });
 
-test('Claude spawn failure can retry without binding an uncreated session', async t => {
+for (const adapter of ['claude', 'codex_cli', 'antigravity_cli']) {
+test(`${adapter} spawn failure can retry without binding an uncreated session`, async t => {
   const f = await fixture(t);
-  f.config.participants.Codex = { adapter: 'claude', executable: join(f.config.directory, 'missing-executable') };
+  f.config.participants.Codex = { adapter, executable: join(f.config.directory, 'missing-executable') };
   const runner = new DiscussionRunner(f.config, f.store);
   await runner.tick(); await delay(10);
   assert.equal(f.store.pending()[0].status, 'retry_wait');
   assert.equal(f.store.binding('Codex').session_id, undefined);
   f.store.record(1, { retry_at: 1 }); await runner.tick();
   assert.equal(f.store.pending()[0].attempts, 2); assert.equal(f.run.status, 'running');
+});
+}
+
+/** Emit real subprocess output in split UTF-8 chunks without invoking an AI account. */
+function fake_cli(events, options = {}) {
+  const calls = [];
+  const source = `
+    const fs = require('node:fs');
+    (async () => {
+      let input = ''; for await (const chunk of process.stdin) input += chunk;
+      fs.writeFileSync('stdin.txt', input);
+      process.stderr.write('diagnostic 中文');
+      const output = Buffer.from(${JSON.stringify(events.map(event => JSON.stringify(event)).join('\r\n') + '\r\n')});
+      const split = Math.max(1, output.indexOf(Buffer.from('中文')) + 1);
+      process.stdout.write(output.subarray(0, split));
+      await new Promise(resolve => setTimeout(resolve, 5));
+      process.stdout.write(output.subarray(split));
+      if (${Boolean(options.linger)}) setInterval(() => {}, 1000);
+      process.exitCode = ${options.exit_code || 0};
+    })();`;
+  const spawn_process = (executable, args, settings) => {
+    const child = spawn(process.execPath, ['-e', source], settings);
+    calls.push({ executable, args, settings, child, closed: once(child, 'close') });
+    return child;
+  };
+  return { calls, spawn_process };
+}
+
+/** Represent the documented startup and terminal events of the two CLI protocols. */
+function cli_events(adapter, session_id = 'actual-cli-session') {
+  return adapter === 'codex_cli'
+    ? [{ type: 'thread.started', thread_id: session_id }, { type: 'item.completed', item: { text: '中文' } }, { type: 'turn.completed' }]
+    : [{ event: 'init', conversation_id: session_id }, { event: 'result', result: { conversation_id: session_id, status: 'SUCCESS', response: '中文' } }];
+}
+
+/** Capture adapter callbacks and private credentials in an isolated task directory. */
+async function cli_delivery_fixture(t, adapter, options = {}) {
+  const directory = mkdtempSync(join(tmpdir(), 'discussion-cli-adapter-'));
+  const access_path = join(directory, 'access.json');
+  writeFileSync(access_path, JSON.stringify({ token: 'test-only', session_id: '' }));
+  const bindings = []; const errors = []; let exits = 0;
+  const process_fixture = fake_cli(options.events || cli_events(adapter), options);
+  t.after(async () => {
+    for (const call of process_fixture.calls) {
+      if (call.child.exitCode === null && call.child.signalCode === null) call.child.kill();
+      await call.closed;
+    }
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const task = { id: 'event-1', directory, access_path, prompt: '讨论中文 "quotes"\n$(literal); `literal`',
+    on_binding: session => bindings.push(session), on_process: () => {},
+    on_output: (path, chunk) => appendFileSync(path, chunk), on_failure: error => errors.push(error), on_exit: () => { exits++; } };
+  const config = { adapter, executable: process.execPath, project_name: 'Discussion project', ...options.config };
+  const result = await deliver_task(config, options.binding || {}, task, process_fixture.spawn_process);
+  await process_fixture.calls[0].closed;
+  return { directory, access_path, task, result, bindings, errors, exits, ...process_fixture };
+}
+
+for (const adapter of ['codex_cli', 'antigravity_cli']) {
+test(`${adapter} starts headlessly, binds emitted identity and preserves UTF-8 prompt and logs`, async t => {
+  const f = await cli_delivery_fixture(t, adapter);
+  assert.equal(f.result.status, 'accepted'); assert.deepEqual(f.errors, []); assert.equal(f.exits, 1);
+  assert.equal(f.bindings[0], 'actual-cli-session');
+  assert.equal(JSON.parse(readFileSync(f.access_path, 'utf8')).session_id, 'actual-cli-session');
+  const call = f.calls[0];
+  assert.equal(call.settings.cwd, f.directory); assert.equal(call.settings.shell, false);
+  assert.equal(call.settings.windowsHide, true); assert.ok(call.args.includes(f.directory));
+  assert.ok(!call.args.some(arg => arg.startsWith('--dangerously')));
+  if (adapter === 'codex_cli') {
+    assert.equal(call.args[0], 'exec'); assert.ok(call.args.includes('--json'));
+    assert.ok(call.args.includes('--skip-git-repo-check')); assert.equal(call.args.at(-1), '-');
+    assert.equal(readFileSync(join(f.directory, 'stdin.txt'), 'utf8'), f.task.prompt);
+  } else {
+    assert.equal(call.args[call.args.indexOf('-p') + 1], f.task.prompt);
+    assert.equal(call.args[call.args.indexOf('--output-format') + 1], 'stream-json');
+    assert.equal(call.args[call.args.indexOf('--print-timeout') + 1], '0');
+    assert.equal(call.args[call.args.indexOf('--project') + 1], 'Discussion project');
+  }
+  assert.match(readFileSync(join(f.directory, `${adapter}-event-1.log`), 'utf8'), /中文/);
+});
+
+test(`${adapter} resumes only the bound conversation and honors its configured cwd`, async t => {
+  const f = await cli_delivery_fixture(t, adapter, { binding: { session_id: 'actual-cli-session' },
+    config: { cwd: mkdtempSync(join(tmpdir(), 'discussion-cwd-')) } });
+  const call = f.calls[0]; t.after(() => rmSync(call.settings.cwd, { recursive: true, force: true }));
+  const flag = adapter === 'codex_cli' ? 'resume' : '--conversation';
+  assert.equal(call.args[call.args.indexOf(flag) + 1], 'actual-cli-session');
+  assert.equal(call.args.includes('--last'), false); assert.equal(call.args.includes('--continue'), false);
+  assert.equal(call.args.includes('--project'), false); assert.deepEqual(f.errors, []);
+  assert.notEqual(call.settings.cwd, f.directory);
+});
+
+test(`${adapter} never replaces a bound identity when the CLI returns another session`, async t => {
+  const f = await cli_delivery_fixture(t, adapter, { binding: { session_id: 'original-session' } });
+  assert.match(f.errors[0], /会话 ID 与绑定不符/); assert.equal(f.exits, 0);
+  assert.deepEqual(f.bindings, []);
+  assert.equal(JSON.parse(readFileSync(f.access_path, 'utf8')).session_id, 'original-session');
+});
+
+test(`${adapter} rejects successful process exit without a terminal CLI result`, async t => {
+  const f = await cli_delivery_fixture(t, adapter, { events: cli_events(adapter).slice(0, 1) });
+  assert.match(f.errors[0], /未返回成功结束事件/); assert.equal(f.exits, 0);
+});
+
+test(`${adapter} reports a nonzero exit without classifying the sent task as retryable`, async t => {
+  const f = await cli_delivery_fixture(t, adapter, { events: [], exit_code: 7 });
+  assert.match(f.errors[0], /退出码 7/); assert.match(f.errors[0], /diagnostic 中文/);
+  assert.equal(f.result.status, 'accepted'); assert.equal(f.exits, 0); assert.deepEqual(f.bindings, []);
+});
+
+test(`${adapter} persists a streamed binding and resumes it after a dispatcher restart`, async t => {
+  const f = await fixture(t);
+  f.config.participants.Codex = { adapter, executable: process.execPath };
+  const process_fixture = fake_cli(cli_events(adapter));
+  const deliver = (config, binding, task) => deliver_task(config, binding, task, process_fixture.spawn_process);
+  const runner = new DiscussionRunner(f.config, f.store, deliver);
+  await runner.tick(); await process_fixture.calls[0].closed;
+  assert.equal(f.store.binding('Codex').session_id, 'actual-cli-session');
+  f.event.status = 'completed'; await runner.tick();
+  f.event.id = 2; f.event.status = 'pending';
+  const restored_store = new DiscussionStore(f.config.directory);
+  try {
+    await new DiscussionRunner(f.config, restored_store, deliver).tick(); await process_fixture.calls[1].closed;
+  } finally { restored_store.close(); }
+  const args = process_fixture.calls[1].args;
+  assert.equal(args[args.indexOf(adapter === 'codex_cli' ? 'resume' : '--conversation') + 1], 'actual-cli-session');
+  assert.equal(JSON.parse(readFileSync(join(f.config.directory, 'event-2.access.json'), 'utf8')).session_id, 'actual-cli-session');
+  assert.equal(f.store.pending()[0].attempts, 1);
+});
+
+test(`${adapter} is stopped with the runner when its discussion pauses`, async t => {
+  const f = await fixture(t);
+  f.config.participants.Codex = { adapter, executable: process.execPath };
+  const process_fixture = fake_cli(cli_events(adapter).slice(0, 1), { linger: true });
+  const runner = new DiscussionRunner(f.config, f.store,
+    (config, binding, task) => deliver_task(config, binding, task, process_fixture.spawn_process));
+  try {
+    await runner.tick(); assert.equal(runner.children.size, 1);
+    for (let attempt = 0; attempt < 100 && !f.store.binding('Codex').session_id; attempt++) await delay(10);
+    assert.equal(f.store.binding('Codex').session_id, 'actual-cli-session', 'identity is available while the CLI is still running');
+    f.run.status = 'paused'; assert.equal(await runner.tick(), 'waiting');
+    await process_fixture.calls[0].closed;
+    assert.equal(runner.children.size, 0); assert.equal(process_fixture.calls.length, 1);
+  } finally { runner.stop_children(); }
+});
+}
+
+test('CLI failure results pause immediately even when the process exits with code zero', async t => {
+  for (const adapter of ['codex_cli', 'antigravity_cli']) {
+    await t.test(adapter, async t => {
+      const f = await fixture(t);
+      f.config.participants.Codex = { adapter, executable: process.execPath };
+      const events = cli_events(adapter).slice(0, 1);
+      events.push(adapter === 'codex_cli' ? { type: 'turn.failed', error: { message: 'quota exceeded' } }
+        : { event: 'result', result: { status: 'WAITING', response: 'permission required' } });
+      const process_fixture = fake_cli(events);
+      const runner = new DiscussionRunner(f.config, f.store,
+        (config, binding, task) => deliver_task(config, binding, task, process_fixture.spawn_process));
+      await runner.tick(); await process_fixture.calls[0].closed; await runner.tick();
+      assert.equal(f.event.status, 'failed'); assert.equal(f.run.status, 'paused');
+      assert.match(f.event.result, /quota exceeded|permission required/);
+      assert.equal(process_fixture.calls.length, 1);
+    });
+  }
+});
+
+test('headless CLI configuration does not require App threads or Sidecar directories', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'discussion-config-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, 'config.json');
+  const config = { site: 'http://localhost:8765', room: 'room', token: 'x'.repeat(32),
+    participants: { Codex: { adapter: 'codex_cli', executable: process.execPath },
+      Gemini: { adapter: 'antigravity_cli', executable: process.execPath } } };
+  writeFileSync(path, JSON.stringify(config));
+  assert.equal(load_config(path).participants.Codex.adapter, 'codex_cli');
+  config.participants.Codex.adapter = 'codex'; writeFileSync(path, JSON.stringify(config));
+  assert.throws(() => load_config(path), /来源聊天 ID/);
+  config.participants.Codex.adapter = 'codex_cli'; config.participants.Gemini.adapter = 'antigravity';
+  writeFileSync(path, JSON.stringify(config)); assert.throws(() => load_config(path), /Sidecar IPC/);
 });
 
 test('legacy inbox migration preserves accepted work and its credential', t => {
@@ -302,7 +482,7 @@ test('project and cwd are optional; configured directories must match real proje
 test('common cwd is inherited and participant-specific cwd can override it', t => {
   const directory = mkdtempSync(join(tmpdir(), 'discussion-config-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  mkdirSync(join(directory, 'other')); writeFileSync(join(directory, 'discuss.py'), '');
+  mkdirSync(join(directory, 'other')); mkdirSync(join(directory, 'runner')); writeFileSync(join(directory, 'runner', 'discuss.py'), '');
   const config_path = join(directory, 'config.json');
   writeFileSync(config_path, JSON.stringify({ site: 'http://localhost:8765', room: 'room', token: 'x'.repeat(32), cli_project: directory,
     cwd: directory, participants: { Claude: { adapter: 'claude', executable: process.execPath }, Gemini: { adapter: 'antigravity', ipc_directory: directory, cwd: join(directory, 'other') } } }));
@@ -366,7 +546,7 @@ test('omitted cli_project defaults to this repository', t => {
     participants: { Gemini: { adapter: 'antigravity', ipc_directory: directory } } }));
   const config = load_config(path);
   assert.equal(config.project, resolve(fileURLToPath(new URL('..', import.meta.url))));
-  assert.ok(existsSync(join(config.project, 'discuss.py')));
+  assert.ok(existsSync(join(config.project, 'runner', 'discuss.py')));
 });
 
 /** Write a minimal valid private room configuration for the service registry. */
@@ -417,6 +597,76 @@ test('the same site and room cannot be registered twice', t => {
   assert.throws(() => register_room(home, room_config(home, 'http://127.0.0.1:8765', 'room1', 'b')), /已由/);
 });
 
+test('invalid software in an existing configuration does not permit another owner for its room', t => {
+  const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const original = room_config(home, 'http://127.0.0.1:8765', 'room1', 'a');
+  register_room(home, original);
+  const config = JSON.parse(readFileSync(original, 'utf8'));
+  config.participants = {};
+  writeFileSync(original, JSON.stringify(config));
+  assert.throws(() => register_room(home, room_config(home, 'http://127.0.0.1:8765', 'room1', 'b')), /已由/);
+});
+
+/** Widen overlapping registry writes in separate CLI processes without starting AI or a service. */
+function concurrent_registration(home, config, gate, action = 'add') {
+  const script = `import fs from 'node:fs'; import { join } from 'node:path';
+    import { syncBuiltinESMExports } from 'node:module';
+    const [home, config, gate, action] = process.argv.slice(1);
+    const read = fs.readFileSync;
+    const waiting = new Int32Array(new SharedArrayBuffer(4));
+    fs.readFileSync = (...args) => {
+      const value = read(...args);
+      if (args[0] === join(home, 'rooms.json')) {
+        if (action === 'crash') process.exit(37);
+        Atomics.wait(waiting, 0, 0, 200);
+      }
+      return value;
+    };
+    syncBuiltinESMExports();
+    const registry = await import(${JSON.stringify(new URL('../runner/discussion_service.mjs', import.meta.url).href)});
+    process.stdout.write('ready');
+    while (!fs.existsSync(gate)) Atomics.wait(waiting, 0, 0, 10);
+    if (action === 'add') registry.register_room(home, config); else registry.unregister_room(home, config);`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', script, home, config, gate, action], { windowsHide: true });
+  let error = '';
+  child.stderr.on('data', chunk => { error += chunk; });
+  return { child, ready: once(child.stdout, 'data'), done: once(child, 'close').then(([code]) => assert.equal(code, action === 'crash' ? 37 : 0, error)) };
+}
+
+for (const action of ['add', 'remove']) test(`concurrent registry ${action} keeps the other process's room change`, async t => {
+  const home = mkdtempSync(join(tmpdir(), 'discussion-registry-'));
+  const gate = join(home, 'start');
+  const first = room_config(home, 'http://127.0.0.1:8765', 'room1');
+  const second = room_config(home, 'http://127.0.0.1:8765', 'room2');
+  const third = room_config(home, 'http://127.0.0.1:8765', 'room3');
+  register_room(home, first);
+  const workers = [concurrent_registration(home, action === 'add' ? third : first, gate, action), concurrent_registration(home, second, gate)];
+  t.after(() => { workers.forEach(worker => worker.child.kill()); rmSync(home, { recursive: true, force: true }); });
+  await Promise.all(workers.map(worker => worker.ready));
+  writeFileSync(gate, 'start');
+  await Promise.all(workers.map(worker => worker.done));
+  assert.deepEqual(read_registry(home).sort(), (action === 'add' ? [first, second, third] : [second]).sort());
+  register_room(home, first);
+  assert.ok(read_registry(home).includes(first), 'successful concurrent writes release their lock');
+});
+
+test('a registry writer exiting mid-update leaves existing rooms and releases the cross-process lock', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'discussion-registry-'));
+  const gate = join(home, 'start');
+  const first = room_config(home, 'http://127.0.0.1:8765', 'room1');
+  const second = room_config(home, 'http://127.0.0.1:8765', 'room2');
+  register_room(home, first);
+  const worker = concurrent_registration(home, first, gate, 'crash');
+  t.after(() => { worker.child.kill(); rmSync(home, { recursive: true, force: true }); });
+  await worker.ready;
+  writeFileSync(gate, 'start');
+  await worker.done;
+  assert.deepEqual(read_registry(home), [first]);
+  register_room(home, second);
+  assert.deepEqual(read_registry(home), [first, second]);
+});
+
 for (const [name, prefix] of [['discussion_service', []], ['codiscuss', []], ['codiscuss', ['service']]]) {
 test(`${[name, ...prefix].join(' ')}: the detached service starts once, reports status and stops on request`, async t => {
   const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
@@ -451,6 +701,35 @@ async function run_service_cli(env, ...args) {
   return { code, output, error };
 }
 
+test('simultaneous service starts share one process and only its creator reports ownership', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'discussion-start-'));
+  const env = { ...process.env, DISCUSS_SERVICE_HOME: home };
+  t.after(async () => { await run_service_cli(env, 'service', 'stop', '--json'); rmSync(home, { recursive: true, force: true }); });
+  const results = await Promise.allSettled([start_service(home), start_service(home)]);
+  assert(results.every(result => result.status === 'fulfilled'), JSON.stringify(results));
+  assert.equal(new Set(results.map(result => result.value.pid)).size, 1);
+  assert.equal(results.filter(result => result.value.started).length, 1);
+  assert.equal(results[0].value.pid, service_pid(home));
+  assert.equal(results[0].value.ready, true);
+});
+
+test('an existing process is reused only after its own readiness receipt arrives', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'discussion-ready-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  writeFileSync(join(home, 'runner.lock'), String(process.pid));
+  writeFileSync(join(home, 'status.json'), JSON.stringify({ pid: process.pid + 1, updated_at: 1, rooms: [{ room: 'old-room' }] }));
+  assert.equal(service_ready(home), false);
+  let settled = false;
+  const starting = start_service(home).then(result => { settled = true; return result; });
+  await delay(250);
+  assert.equal(settled, false, 'an alive PID and stale status must not mean ready');
+  writeFileSync(join(home, 'status.json'), JSON.stringify({ pid: process.pid, updated_at: 1, ready: true }));
+  const ready = await starting;
+  assert.equal(ready.pid, process.pid);
+  assert.equal(ready.started, false);
+  assert.equal(ready.ready, true);
+});
+
 test('CLI help and status do not start a service; unknown commands fail', async t => {
   const home = mkdtempSync(join(tmpdir(), 'discussion-cli-'));
   const env = { ...process.env, DISCUSS_SERVICE_HOME: home };
@@ -476,6 +755,15 @@ test('unified help separates website run controls from the resident service', as
   assert.equal(room_help.code, 0); assert.match(room_help.output, /codiscuss room/);
   const run_help = await run_service_cli(env, 'run', '--help');
   assert.equal(run_help.code, 0); assert.match(run_help.output, /codiscuss run/);
+  const setup_help = await run_service_cli(env, 'setup', '--help');
+  assert.equal(setup_help.code, 0); assert.match(setup_help.output, /--no-start/);
+  assert.match(setup_help.output, /2=配置待处理/);
+  assert.match(setup_help.output, /JSON，中文摘要写入 stderr/);
+  assert.match(setup_help.output, /codex,claude,antigravity,cursor/);
+  assert.match(setup_help.output, /Cursor 当前只安装技能/);
+  const local_help = await run_service_cli(env, 'local', '--help');
+  assert.equal(local_help.code, 0); assert.match(local_help.output, /codiscuss local/);
+  assert.equal(existsSync(join(home, 'local')), false);
   const schema = await run_service_cli(env, 'schema', 'message', 'post');
   assert.equal(schema.code, 0); assert.equal(JSON.parse(schema.output).ok, true);
   assert.equal(schema.error, ''); assert.equal(service_pid(home), 0);

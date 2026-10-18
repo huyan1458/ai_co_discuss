@@ -13,8 +13,8 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
-import discuss
-from server import DiscussionServer, init_database
+from backend.server import DiscussionServer, init_database
+from runner import discuss
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -74,7 +74,7 @@ class CliTests(unittest.TestCase):
     def invoke(self, arguments, stdin=None, environment=None):
         """Run the actual entrypoint with UTF-8 streams and no inherited target."""
         env = {**os.environ, "DISCUSS_URL": "", **(environment or {})}
-        return subprocess.run([sys.executable, str(ROOT / "discuss.py"), *map(str, arguments)],
+        return subprocess.run([sys.executable, str(ROOT / "runner" / "discuss.py"), *map(str, arguments)],
                               input=stdin, capture_output=True, text=True, encoding="utf-8",
                               env=env, timeout=10)
 
@@ -393,7 +393,7 @@ class CliTests(unittest.TestCase):
             original_send(plan, url, timeout)
             raise discuss.CliError("响应丢失", 3, outcome="unknown")
 
-        with patch("discuss.send_request", side_effect=lose_acknowledgement) as sender:
+        with patch.object(discuss, "send_request", side_effect=lose_acknowledgement) as sender:
             with self.assertRaises(discuss.CliError) as failure:
                 discuss.run(args, registry)
         sender.assert_called_once()
@@ -437,7 +437,7 @@ class CliContractTests(unittest.TestCase):
     def test_help_and_schema_work_without_network(self):
         """Schema is generated from real flags, including required operator and body alternatives."""
         args, registry = self.parse(["schema", "message", "post"])
-        with patch("discuss.build_opener") as opener:
+        with patch.object(discuss, "build_opener") as opener:
             schema = discuss.run(args, registry)["data"]
         opener.assert_not_called()
         self.assertTrue(next(item for item in schema["arguments"] if item["name"] == "actor")["required"])
@@ -447,7 +447,7 @@ class CliContractTests(unittest.TestCase):
         """Previews are entirely offline and make no claim of server validation."""
         args, registry = self.parse(["message", "post", "unknown", "--as", "Codex", "--body", "预览",
                                      "--submission-id", "preview-001", "--site", "https://example.org", "--dry-run"])
-        with patch("discuss.build_opener") as opener:
+        with patch.object(discuss, "build_opener") as opener:
             result = discuss.run(args, registry)
         opener.assert_not_called()
         self.assertTrue(result["meta"]["dry_run"])
@@ -457,7 +457,7 @@ class CliContractTests(unittest.TestCase):
         """Ambiguous failures report the original request ID and exactly one attempt."""
         args, registry = self.parse(["message", "post", "room", "--as", "Codex", "--body", "原文",
                                      "--submission-id", "uncertain-001", "--site", "https://example.org"])
-        with patch("discuss.build_opener") as opener:
+        with patch.object(discuss, "build_opener") as opener:
             opener.return_value.open.side_effect = URLError("connection dropped")
             with self.assertRaises(discuss.CliError) as failure:
                 discuss.run(args, registry)
@@ -470,7 +470,7 @@ class CliContractTests(unittest.TestCase):
         """A server error after POST cannot be advertised as definitely not saved."""
         plan = discuss.RequestPlan("/api/rooms/x/messages", "POST", {"submission_id": "server-001"})
         error = HTTPError("https://example.org/api", 502, "bad gateway", {}, io.BytesIO(b"bad gateway"))
-        with patch("discuss.build_opener") as opener:
+        with patch.object(discuss, "build_opener") as opener:
             opener.return_value.open.side_effect = error
             with self.assertRaises(discuss.CliError) as failure:
                 discuss.send_request(plan, error.url, 1)
@@ -499,7 +499,7 @@ class CliContractTests(unittest.TestCase):
             ["room", "create", "--title", "缺少提交编号", "--as", "Codex"],
             ["health", "--dry-run"], ["health", "--timeout", "nan"],
         ]
-        with patch("discuss.build_opener") as opener:
+        with patch.object(discuss, "build_opener") as opener:
             for command in commands:
                 with self.subTest(command=command), self.assertRaises(discuss.CliError):
                     args, registry = self.parse(["--site", "https://example.org", *command])

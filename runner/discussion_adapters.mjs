@@ -4,10 +4,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
+import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { CodexAppClient } from './codex_app_client.mjs';
 
 const CALL_TIMEOUT_MS = 30_000;
+const CLI_DIAGNOSTIC_CHARS = 1000;
 
 /** Only failures before a software invocation are safe for automatic redelivery. */
 function not_sent(error) { return Object.assign(error, { delivery_status: 'not_sent' }); }
@@ -150,6 +152,110 @@ async function claude_delivery(config, binding, task) {
   return { session_id, status: 'accepted' };
 }
 
+/** Build native CLI arguments; every continuation names the exact bound conversation. */
+function cli_invocation(config, binding, task) {
+  if (config.adapter === 'codex_cli') {
+    const args = ['exec', '--add-dir', task.directory];
+    if (binding.session_id) args.push('resume', binding.session_id);
+    args.push('--json', '--skip-git-repo-check', '-');
+    return { args, input: task.prompt };
+  }
+  const args = ['--output-format', 'stream-json', '--print-timeout', '0', '--add-dir', task.directory];
+  if (binding.session_id) args.push('--conversation', binding.session_id);
+  else if (config.project_id || config.project_name) args.push('--project', config.project_id || config.project_name);
+  args.push('-p', task.prompt);
+  return { args };
+}
+
+/** Persist an emitted identity before the agent reads its execution credential file. */
+function bind_cli_session(state, session_id, task) {
+  if (typeof session_id !== 'string' || !session_id) throw new Error('CLI 未返回实际会话 ID');
+  if (state.session_id && state.session_id !== session_id) throw new Error('CLI 返回的会话 ID 与绑定不符，已停止本次执行');
+  task.on_binding(session_id);
+  bind_access(task.access_path, session_id);
+  state.session_id = session_id;
+  state.initialized = true;
+}
+
+/** Consume only documented lifecycle events, not text produced by agent tools. */
+function cli_event(adapter, state, event, task) {
+  if (adapter === 'codex_cli') {
+    if (event.type === 'thread.started') bind_cli_session(state, event.thread_id, task);
+    if (event.type === 'turn.completed') state.completed = true;
+    if (event.type === 'turn.failed') state.error = event.error?.message || 'Codex CLI 执行失败';
+    if (event.type === 'error') state.diagnostic = event.message || 'Codex CLI 返回错误';
+    return;
+  }
+  if (event.event === 'init') bind_cli_session(state, event.conversation_id, task);
+  if (event.event === 'result') {
+    const result = event.result || {};
+    if (result.conversation_id) bind_cli_session(state, result.conversation_id, task);
+    state.completed = result.status === 'SUCCESS';
+    if (!state.completed) state.error = `Antigravity CLI ${result.status || '缺少结果状态'}：${result.error?.message || result.response || '执行未成功'}`;
+  }
+}
+
+/** Distinguish process completion from successful CLI output and saved website work. */
+function cli_exit_error(state, code, signal) {
+  if (state.error) return state.error;
+  if (code !== 0) return `CLI ${signal ? `被信号 ${signal} 终止` : `退出码 ${code}`}：${state.diagnostic}`;
+  if (!state.initialized) return `CLI 未确认实际会话 ID：${state.diagnostic}`;
+  if (!state.completed) return `CLI 未返回成功结束事件：${state.diagnostic}`;
+  return '';
+}
+
+/** Parse complete UTF-8 JSON lines while keeping raw output in the private task log. */
+function monitor_cli(child, config, binding, task) {
+  const state = { session_id: binding.session_id || '', initialized: false, completed: false, error: '', diagnostic: '' };
+  const log_path = resolve(task.directory, `${config.adapter}-${task.id}.log`);
+  const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
+  child.stdout.on('data', chunk => task.on_output(log_path, chunk));
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', chunk => {
+    state.diagnostic = (state.diagnostic + chunk).slice(-CLI_DIAGNOSTIC_CHARS).trim();
+    task.on_output(log_path, chunk);
+  });
+  lines.on('line', line => {
+    if (!line.trim()) return;
+    let event;
+    try { event = JSON.parse(line); }
+    catch { state.diagnostic = 'CLI 输出中存在无效 JSON，详情见本机日志'; return; }
+    try { cli_event(config.adapter, state, event, task); }
+    catch (error) { state.error = error.message; child.kill(); }
+  });
+  child.once('close', (code, signal) => {
+    if (!state.spawned) return;
+    const error = cli_exit_error(state, code, signal);
+    if (error) task.on_failure(error);
+    else task.on_exit?.();
+  });
+  return state;
+}
+
+/** Start one headless CLI turn without opening an App or changing native permission settings. */
+async function cli_delivery(config, binding, task, spawn_process) {
+  if (binding.session_id) {
+    try { bind_access(task.access_path, binding.session_id); }
+    catch (error) { throw not_sent(error); }
+  }
+  const invocation = cli_invocation(config, binding, task);
+  let child;
+  try {
+    child = spawn_process(config.executable, invocation.args, {
+      cwd: config.cwd || config.workdir || task.directory, windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } catch (error) { throw not_sent(error); }
+  const state = monitor_cli(child, config, binding, task);
+  task.on_process(child);
+  await new Promise((resolve_spawn, reject) => {
+    child.once('spawn', () => { state.spawned = true; resolve_spawn(); });
+    child.once('error', error => state.spawned ? task.on_failure(error.message) : reject(not_sent(error)));
+  });
+  child.stdin.on('error', error => { if (error.code !== 'EPIPE') task.on_failure(error.message); });
+  child.stdin.end(invocation.input);
+  return { session_id: state.session_id, status: 'accepted' };
+}
+
 /** Queue one immutable request for the official App-managed Sidecar. */
 async function antigravity_delivery(config, binding, task) {
   const directory = resolve(config.ipc_directory);
@@ -205,10 +311,11 @@ export function setup_sidecar(config, root = join(homedir(), '.gemini', 'config'
 }
 
 /** Select only allowlisted adapter types from local configuration. */
-export async function deliver_task(config, binding, task) {
-  const adapters = { codex: codex_delivery, claude: claude_delivery, antigravity: antigravity_delivery };
+export async function deliver_task(config, binding, task, spawn_process = spawn) {
+  const adapters = { codex: codex_delivery, claude: claude_delivery, antigravity: antigravity_delivery,
+    codex_cli: cli_delivery, antigravity_cli: cli_delivery };
   if (!adapters[config.adapter]) throw new Error('不支持的软件适配器');
-  return adapters[config.adapter](config, binding, task);
+  return adapters[config.adapter](config, binding, task, spawn_process);
 }
 
 /** Read a Sidecar's durable receipt without resubmitting an uncertain request. */

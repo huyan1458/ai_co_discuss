@@ -1,4 +1,5 @@
 /** Package the existing backend and built web assets as one Pages deployment. */
+import { existsSync } from "node:fs";
 import { cp, lstat, mkdir, readFile, rm } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -6,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const OUTPUT_PARTS = ["dist", "pages"];
 
-/** Include deployable web assets without source components or hidden files. */
+/** Exclude hidden files and source directories in older release snapshots. */
 function is_web_asset(web_root, file_path) {
   const parts = relative(web_root, file_path).split(sep);
   return parts[0] !== "modern" && !parts.some((part) => part.startsWith("."));
@@ -31,13 +32,16 @@ async function prepare_output(output_root) {
 export async function build_pages(source_root = PROJECT_ROOT, output_root = PROJECT_ROOT) {
   const source = resolve(source_root);
   const web_root = join(source, "web");
-  await Promise.all([readFile(join(source, "worker.mjs")), readFile(join(web_root, "index.html"))]);
+  // Older pinned releases keep these two files at the repository root.
+  const worker = join(source, existsSync(join(source, "backend", "worker.mjs")) ? "backend/worker.mjs" : "worker.mjs");
+  const notices = join(source, existsSync(join(source, "docs", "THIRD_PARTY_NOTICES.md")) ? "docs/THIRD_PARTY_NOTICES.md" : "THIRD_PARTY_NOTICES.md");
+  await Promise.all([readFile(worker), readFile(join(web_root, "index.html"))]);
   const output = await prepare_output(output_root);
   await cp(web_root, output, { recursive: true, filter: (file_path) => is_web_asset(web_root, file_path) });
   await cp(join(source, "pages", "public"), output, { recursive: true });
   await cp(join(source, "LICENSE"), join(output, "LICENSE"));
-  await cp(join(source, "THIRD_PARTY_NOTICES.md"), join(output, "THIRD_PARTY_NOTICES.md"));
-  await cp(join(source, "worker.mjs"), join(output, "_worker.js"));
+  await cp(notices, join(output, "THIRD_PARTY_NOTICES.md"));
+  await cp(worker, join(output, "_worker.js"));
   return output;
 }
 

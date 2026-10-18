@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
-import { render_markdown } from "../web/modern/markdown.mjs";
+import { render_markdown } from "../frontend/markdown.mjs";
 
 test("renders headings, emphasis, nested lists, quotes, tables, and line breaks", () => {
   const html = render_markdown("### 事实与假设\n\n**已知事实**与*假设*\n第二行\n\n- 第一项\n  - 子项\n\n1. 复核\n2. 收束\n\n> 引用原话\n\n| 项目 | 结果 |\n| --- | --- |\n| 检索 | 通过 |\n\n---");
