@@ -147,6 +147,7 @@ export class DiscussionRunner {
     this.store = store;
     this.deliver = deliver;
     this.children = new Set();
+    this.exited = new Set();
   }
   /** Reserve with a durable token so a lost HTTP response can be reconciled. */
   async dispatch(row, event) {
@@ -172,6 +173,7 @@ export class DiscussionRunner {
         on_process: child => { this.children.add(child); child.once('close', () => this.children.delete(child)); },
         on_output: (path, chunk) => appendFileSync(path, chunk, { mode: 0o600 }),
         on_failure: error => { try { this.store.record(row.id, { error }); } catch { /* Store may already be closed at shutdown. */ } },
+        on_exit: () => this.exited.add(row.id),
       });
       if (result.session_id) this.store.bind(event.participant, result.session_id);
       this.store.record(row.id, { status: result.status, receipt: result.receipt || '' });
@@ -208,6 +210,12 @@ export class DiscussionRunner {
       if (receipt) this.store.record(row.id, { status: receipt.status, receipt: JSON.stringify(receipt), error: receipt.error || '' });
     }
     if (row.error && ['accepted', 'started'].includes(row.status)) return this.fail(row, row.error);
+    if (this.exited.has(row.id) && ['dispatched', 'started'].includes(event.status)) {
+      // A business write may have just completed the task; recheck before declaring a silent exit.
+      const latest = await api(this.config, `/events/${row.id}`, { action: 'view' });
+      if (['dispatched', 'started'].includes(latest.status)) return this.fail(row, `${event.participant} 会话已结束，但未保存本次结果`);
+      return this.reconcile(row, latest);
+    }
     if (event.status === 'started' && event.lease_until <= Math.floor(Date.now() / 1000)) return this.fail(row, '执行租约到期；旧会话不能继续写入');
     if (event.status === 'started' && Date.now() - row.last_renew >= RENEW_MS) {
       try { await api(this.config, `/events/${row.id}`, { action: 'renew' }); }

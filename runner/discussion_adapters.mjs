@@ -83,6 +83,14 @@ export function same_path(left, right) {
 }
 
 /** Use one official Claude process per turn and resume the persisted session. */
+/** Explain why a finished Claude print run failed, including errors reported with exit code 0. */
+export function claude_exit_error(code, output) {
+  let result = null;
+  try { result = JSON.parse(output.trim().split(/\r?\n/).at(-1)); } catch { /* Non-JSON output keeps the exit code check. */ }
+  if (result?.is_error) return `Claude 执行出错：${result.result || result.api_error || result.subtype || '未知错误'}`;
+  return code === 0 ? '' : `Claude 退出码 ${code}`;
+}
+
 async function claude_delivery(config, binding, task) {
   const session_id = binding.session_id || randomUUID();
   try { bind_access(task.access_path, session_id); }
@@ -97,9 +105,15 @@ async function claude_delivery(config, binding, task) {
   } catch (error) { throw not_sent(error); }
   let spawned = false;
   const log_path = resolve(task.directory, `claude-${task.id}.log`);
-  child.stdout.on('data', chunk => task.on_output(log_path, chunk));
+  let output = '';
+  child.stdout.on('data', chunk => { output += chunk; task.on_output(log_path, chunk); });
   child.stderr.on('data', chunk => task.on_output(log_path, chunk));
-  child.once('close', code => { if (spawned && code !== 0) task.on_failure(`Claude 退出码 ${code}`); });
+  child.once('close', code => {
+    if (!spawned) return;
+    const error = claude_exit_error(code, output);
+    if (error) task.on_failure(error);
+    else task.on_exit?.();
+  });
   task.on_process(child);
   await new Promise((resolve_spawn, reject) => {
     child.once('spawn', () => { spawned = true; resolve_spawn(); });

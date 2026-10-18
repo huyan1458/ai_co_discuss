@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
-import { antigravity_project, codex_target, run_program } from '../runner/discussion_adapters.mjs';
+import { antigravity_project, claude_exit_error, codex_target, run_program } from '../runner/discussion_adapters.mjs';
 
 /** Exercise the dispatcher against an HTTP contract without starting real software. */
 async function fixture(t) {
@@ -32,7 +32,7 @@ async function fixture(t) {
       delete failures[body.action];
       if (failure === 'before') { request.socket.destroy(); return; }
       if (body.action === 'reserve') { event.status = 'dispatched'; reserve_tokens.push(body.execution_token); }
-      if (body.action === 'fail') { event.status = 'failed'; run.status = 'paused'; }
+      if (body.action === 'fail') { event.status = 'failed'; event.result = body.reason; run.status = 'paused'; }
       if (failure === 'after') { request.socket.destroy(); return; }
       result = event;
     } else if (request.url.endsWith('/limits')) {
@@ -204,6 +204,38 @@ test('an expired execution lease still pauses without restarting the AI task', a
   await runner.tick(); f.event.status = 'started'; f.event.lease_until = Math.floor(Date.now() / 1000) - 1;
   await runner.tick();
   assert.equal(f.run.status, 'paused'); assert.equal(f.event.status, 'failed'); assert.equal(sent, 1);
+});
+
+test('Claude errors reported with exit code 0 are recognized, including usage limits', () => {
+  const limited = JSON.stringify({ type: 'result', is_error: true, api_error: 'usage_limit_reached', result: "You've hit your session limit · resets 2pm" });
+  assert.match(claude_exit_error(0, `${limited}
+`), /session limit/);
+  assert.equal(claude_exit_error(1, 'not json'), 'Claude 退出码 1');
+  assert.equal(claude_exit_error(0, JSON.stringify({ type: 'result', is_error: false, result: '完成' })), '');
+});
+
+test('a software error pauses at once with its cause instead of waiting for the lease', async t => {
+  const f = await fixture(t);
+  const runner = new DiscussionRunner(f.config, f.store, async (adapter, binding, task) => {
+    setImmediate(() => task.on_failure('Claude 执行出错：usage limit'));
+    return { status: 'accepted' };
+  });
+  await runner.tick(); await delay(5);
+  f.event.status = 'started'; f.event.lease_until = Math.floor(Date.now() / 1000) + 120;
+  await runner.tick();
+  assert.equal(f.event.status, 'failed'); assert.equal(f.event.result, 'Claude 执行出错：usage limit');
+});
+
+test('a session that exits without saving its result pauses after rechecking the event', async t => {
+  const f = await fixture(t);
+  const runner = new DiscussionRunner(f.config, f.store, async (adapter, binding, task) => {
+    setImmediate(() => task.on_exit());
+    return { status: 'accepted' };
+  });
+  await runner.tick(); await delay(5);
+  f.event.status = 'started'; f.event.lease_until = Math.floor(Date.now() / 1000) + 120;
+  await runner.tick();
+  assert.equal(f.event.status, 'failed'); assert.match(f.event.result, /会话已结束，但未保存本次结果/);
 });
 
 test('a late Sidecar receipt is reconciled without another request', async t => {
