@@ -66,7 +66,7 @@ test('a reached limit pauses before another app can be invoked', async t => {
   const f = await fixture(t); let sent = 0;
   f.limits.reached = true;
   const runner = new DiscussionRunner(f.config, f.store, async () => { sent++; });
-  assert.equal(await runner.tick(), false);
+  assert.equal(await runner.tick(), 'waiting');
   assert.equal(sent, 0); assert.equal(f.run.status, 'paused');
   assert.deepEqual(f.calls, ['limits']);
 });
@@ -87,7 +87,7 @@ test('summary polling avoids repeated mutations and still pauses at the final de
   await runner.tick();
   assert.equal(f.calls.filter(action => action === 'limits').length, 1);
   f.limits.reason = 'time_limit';
-  assert.equal(await runner.tick(), false);
+  assert.equal(await runner.tick(), 'waiting');
   assert.equal(f.calls.filter(action => action === 'limits').length, 2);
   assert.equal(f.run.status, 'paused');
 });
@@ -194,7 +194,7 @@ test('an uncertain delivery still obeys the discussion limit', async t => {
   const f = await fixture(t); let sent = 0;
   const runner = new DiscussionRunner(f.config, f.store, async () => { sent++; throw new Error('receipt lost'); });
   await runner.tick(); f.limits.reached = true;
-  assert.equal(await runner.tick(), false);
+  assert.equal(await runner.tick(), 'waiting');
   assert.equal(sent, 1); assert.equal(f.run.status, 'paused'); assert.equal(f.store.pending().length, 0);
 });
 
@@ -317,6 +317,15 @@ test('a bound runtime rejects changed projects before delivering work', async t 
   f.config.participants.Codex.cwd = tmpdir();
   await assert.rejects(new DiscussionRunner(f.config, f.store, deliver).tick(), /项目、cwd/);
   assert.equal(sent, 1);
+});
+
+test('a paused run keeps the runner waiting for a web restart, and a stopped run ends it', async t => {
+  const f = await fixture(t);
+  const runner = new DiscussionRunner(f.config, f.store, async () => ({ status: 'accepted' }));
+  f.run.status = 'paused';
+  assert.equal(await runner.tick(), 'waiting');
+  f.run.status = 'stopped';
+  assert.equal(await runner.tick(), false);
 });
 
 test('conclusion reconciles the final business result before the runner exits', async t => {

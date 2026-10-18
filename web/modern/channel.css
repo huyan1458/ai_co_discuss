@@ -210,6 +210,8 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .progress-member-name { display: inline-flex; align-items: center; gap: 4px; min-width: 0; color: var(--ui-text-highlighted); }
 .progress-member-name small, .progress-member-status small { color: var(--ui-text-dimmed); font-size: 11px; }
 .progress-member-status { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+.progress-member-session { grid-column: 2 / -1; display: flex; align-items: center; gap: 2px; min-width: 0; color: var(--ui-text-dimmed); font-size: 11px; }
+.progress-member-session > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .progress-member-result { grid-column: 2 / -1; overflow: hidden; color: var(--ui-text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .progress-timings { margin: 0 0 10px; padding-top: 10px; border-top: 1px solid var(--channel-line); }
 .progress-timings h4 { margin: 0 0 6px; color: var(--ui-text-highlighted); font-size: 12px; font-weight: 600; }

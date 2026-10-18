@@ -250,7 +250,8 @@ export class DiscussionRunner {
         const event = await api(this.config, `/events/${row.id}`, { action: 'view' });
         if (['completed', 'cancelled', 'failed'].includes(event.status)) this.store.record(row.id, { status: event.status });
       }
-      return false;
+      // A paused automatic run waits so the web restart can resume it; stop, conclusion or manual mode ends the loop.
+      return run.mode === 'automatic' && (run.status === 'paused' || run.expired) ? 'waiting' : false;
     }
     this.store.receive(await api(this.config, `/events?after=${this.store.cursor()}`));
     const rows = this.store.pending();

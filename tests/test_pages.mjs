@@ -117,6 +117,7 @@ test('Worker forces an early host summary and reports per-participant executions
   assert.equal(started.status, 200, JSON.stringify(started.body));
   assert.deepEqual(started.body.participants.map(item => [item.participant, item.status, item.failures, item.stale]), [['Codex', 'pending', 0, false]]);
   assert.equal(started.body.participants[0].lease_until, undefined);
+  assert.equal(started.body.participants[0].session_id, '');
   const closed = await f.request(`/${id}/limits`, { actor: '用户', force: true });
   assert.equal(closed.status, 200, JSON.stringify(closed.body));
   assert.equal(closed.body.limits.closing, true);

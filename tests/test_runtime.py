@@ -164,6 +164,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual((claude["status"], claude["failures"], claude["result"], claude["stale"]),
                          ("failed", 1, "软件未响应", False))
         self.assertNotIn("lease_until", claude)
+        self.assertEqual(len(claude["session_id"]), 36)
         self.assertNotIn("token_hash", claude)
         self.assertEqual(run["participants"][0]["participant"], "Claude")
 

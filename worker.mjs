@@ -889,7 +889,9 @@ async function runtime_view(database, room_id) {
 /** Summarize each participant's latest execution and failure count for the progress panel. */
 async function participant_executions(database, room_id) {
   const { results } = await database.prepare(`SELECT latest.id,latest.participant,latest.role,latest.status,latest.result,
-    latest.turn_id,latest.lease_until,(SELECT COUNT(*) FROM discussion_events AS failed
+    latest.turn_id,latest.lease_until,COALESCE((SELECT bound.session_id FROM discussion_events AS bound
+        WHERE bound.room_id=latest.room_id AND bound.participant=latest.participant AND bound.session_id<>''
+        ORDER BY bound.id DESC LIMIT 1),'') AS session_id,(SELECT COUNT(*) FROM discussion_events AS failed
       WHERE failed.room_id=latest.room_id AND failed.participant=latest.participant AND failed.status='failed') AS failures
     FROM discussion_events AS latest WHERE latest.room_id=? AND latest.id=(SELECT MAX(id)
       FROM discussion_events AS other WHERE other.room_id=latest.room_id AND other.participant=latest.participant) ORDER BY latest.id`).bind(room_id).all();

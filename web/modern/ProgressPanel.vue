@@ -1,5 +1,5 @@
 <script setup>
-import { computed, inject, ref, watch } from "vue";
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 const { view, bridge, act, pending } = inject("discussion");
 const PANEL_KEY = "ai-codiscuss-progress-panel";
@@ -13,6 +13,9 @@ const TIMING_STAGES = [
 const EXECUTION_STATUS_TEXT = { pending: "排队中", dispatched: "唤醒中", started: "执行中", completed: "完成", cancelled: "已撤销", failed: "失败" };
 const expanded = ref(read_expanded());
 const ending = ref(false);
+const anchor = ref(null);
+onMounted(() => document.addEventListener("pointerdown", collapse_on_outside));
+onBeforeUnmount(() => document.removeEventListener("pointerdown", collapse_on_outside));
 watch(expanded, (value) => {
   try { localStorage.setItem(PANEL_KEY, JSON.stringify({ expanded: value })); }
   catch { /* The panel still toggles for this page. */ }
@@ -23,6 +26,8 @@ const runtime = computed(() => room.value.runtime || {});
 const turn = computed(() => ACTIVE_TURN.includes(room.value.current_turn?.status) ? room.value.current_turn : null);
 const inactive = computed(() => ["paused", "concluded"].includes(room.value.phase));
 const concluded = computed(() => room.value.phase === "concluded");
+const can_restart = computed(() => runtime.value.mode === "automatic" && (runtime.value.status === "paused" || runtime.value.expired)
+  && !concluded.value && !room.value.archived);
 const can_close = computed(() => !inactive.value && room.value.phase !== "preparing" && !room.value.archived && !limits.value.closing);
 const rounds = computed(() => limits.value.max_rounds ? `${limits.value.completed_rounds || 0} / ${limits.value.max_rounds}` : `${limits.value.completed_rounds || 0} · 不限`);
 const elapsed = computed(() => {
@@ -37,6 +42,13 @@ const headline = computed(() => limits.value.closing && !inactive.value ? "正�
 const timings = computed(() => runtime.value.timings || { items: [], totals: {}, count: 0 });
 const members = computed(() => [room.value.host, ...Object.keys(room.value.experts || {}).filter((name) => name !== room.value.host)]
   .filter((name) => name && name !== "用户").map(member_status));
+
+/** Collapse when the pointer lands outside the panel, keeping its own dialogs and menus usable. */
+function collapse_on_outside(event) {
+  if (!expanded.value || ending.value || anchor.value?.contains(event.target)) return;
+  if (event.target.closest?.("[role='dialog'], [data-reka-popper-content-wrapper]")) return;
+  expanded.value = false;
+}
 
 /** Restore the last expanded state without failing when storage is unavailable. */
 function read_expanded() {
@@ -65,7 +77,7 @@ function member_status(name) {
   }
   if (execution?.status === "failed") { text = "执行失败"; color = "error"; }
   if (execution?.stale) { text = "疑似卡住（租约已过期）"; color = "warning"; }
-  return { name, is_host, text, color, failures: execution?.failures || 0, result: execution?.status === "failed" ? execution.result : "",
+  return { name, is_host, text, color, failures: execution?.failures || 0, result: execution?.status === "failed" ? execution.result : "", session: execution?.session_id || "",
     mode: room.value.experts?.[name] === "cli" ? "CLI" : "在线" };
 }
 
@@ -84,7 +96,7 @@ async function finish(action) {
 </script>
 
 <template>
-  <div class="progress-panel-anchor">
+  <div ref="anchor" class="progress-panel-anchor">
     <button type="button" class="progress-chip" :class="`is-${tone}`" :aria-expanded="expanded" aria-controls="progress-panel" :title="expanded ? '收起进度看板' : '展开进度看板'" @click="expanded = !expanded">
       <span class="progress-dot"></span><span class="progress-chip-text">{{ bridge.progress_round(room) }}</span><UIcon :name="expanded ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" />
     </button>
@@ -104,6 +116,7 @@ async function finish(action) {
           <span class="progress-member-name">{{ bridge.display_name(member.name) }}<UIcon v-if="member.is_host" name="i-lucide-crown" title="主持人" /><small>{{ member.mode }}</small></span>
           <span class="progress-member-status"><UBadge :color="member.color" variant="subtle" size="sm">{{ member.text }}</UBadge><small v-if="member.failures">累计失败 {{ member.failures }} 次</small></span>
           <small v-if="member.result" class="progress-member-result" :title="member.result">{{ member.result }}</small>
+          <small v-if="member.session" class="progress-member-session"><span :title="member.session">会话 {{ member.session }}</span><UButton icon="i-lucide-copy" color="neutral" variant="ghost" size="xs" :aria-label="`复制 ${member.name} 的会话 ID`" title="复制会话 ID" @click="act('copy', member.session)" /></small>
         </li>
       </ul>
       <section v-if="runtime.mode === 'automatic' && timings.count" class="progress-timings" aria-label="阶段耗时">
@@ -120,7 +133,8 @@ async function finish(action) {
       </section>
       <p v-if="runtime.mode !== 'automatic'" class="fine-print">手动模式没有执行回执，状态只按安排与发言推断。</p>
       <div class="progress-actions">
-        <UButton icon="i-lucide-pause" label="暂停" size="sm" color="neutral" variant="outline" :disabled="inactive || room.archived" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" />
+        <UButton v-if="can_restart" icon="i-lucide-rotate-ccw" label="重启" size="sm" class="channel-primary-button" title="重新启动自动运行，原安排重新交给对应 AI；需本机接入程序保持运行" :loading="pending === 'restart_discussion'" @click="act('restart_discussion')" />
+        <UButton v-else icon="i-lucide-pause" label="暂停" size="sm" color="neutral" variant="outline" :disabled="inactive || room.archived" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" />
         <UButton icon="i-lucide-hand" label="打断发言" size="sm" color="neutral" variant="outline" :disabled="!turn" :loading="pending === 'cancel_turn'" :title="turn ? `取消 ${turn.expert} 的发言安排 #${turn.id}` : '当前没有进行中的发言'" @click="act('cancel_turn')" />
         <UButton icon="i-lucide-square" label="提前结束" size="sm" color="error" variant="soft" :disabled="concluded" @click="ending = true" />
       </div>

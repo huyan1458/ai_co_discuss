@@ -13,6 +13,8 @@ const DIRECTORY_SORT_KEY = "ai-codiscuss-directory-sort";
 const THEMES = ["millennium", "channel", "channel-light"];
 const SOURCE_LABELS = { demo: "示例", user: "本人发言", proxy: "用户代发", cli: "CLI 发言", url: "历史 URL 发言", host_proxy: "主持人代发" };
 const PHASE_LABELS = { preparing: "准备中", initial: "独立观点", discussing: "深入讨论", reviewing: "结论复核", paused: "已暂停", concluded: "已收束" };
+// The server accepts a run deadline at most 24 hours ahead and also caps it by the topic limits.
+const RESTART_WINDOW_SECONDS = 86_340;
 const TURN_LABELS = { pending: "待处理", notified: "已通知，待回答", answered: "已回答", cancelled: "已取消" };
 const IDENTITIES = {
   "用户": { label: "User", initials: "U", style: "user", icon: "/icons/user.svg", description: "发起与协助" },
@@ -958,6 +960,16 @@ async function pause_discussion() {
   show_toast("讨论已暂停，原安排保留");
 }
 
+/** Resume a paused automatic run; the server caps the deadline by the topic's own limits. */
+async function restart_discussion() {
+  const path = `/api/rooms/${state.room.id}/runtime`;
+  const runtime = await request_json(path);
+  const deadline = Math.floor(Date.now() / 1000) + RESTART_WINDOW_SECONDS;
+  await request_json(path, { action: "start", mode: "automatic", revision: runtime.revision, deadline });
+  await refresh_room();
+  show_toast("已重启，原安排会重新交给对应 AI；需本机接入程序保持运行");
+}
+
 /** End early with a host summary limited to the configured closing reserve. */
 async function force_close() {
   await request_json(`/api/rooms/${state.room.id}/limits`, { actor: "用户", force: true });
@@ -1555,7 +1567,7 @@ async function execute_view_action(name, value) {
     copy_turn, notify: () => change_turn_status("notified"), cancel_turn: () => change_turn_status("cancelled"),
     take_floor: () => change_floor("take"), return_floor: () => change_floor("return"),
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
-    choose_runtime, export_runtime, pause_runtime, check_limits, pause_discussion, force_close, conclude_discussion,
+    choose_runtime, export_runtime, pause_runtime, check_limits, pause_discussion, restart_discussion, force_close, conclude_discussion,
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };
   try {
     await actions[name](value);
