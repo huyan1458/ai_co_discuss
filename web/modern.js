@@ -44093,7 +44093,10 @@ var VV = {
 }, OG = { class: "progress-stats progress-timing-totals" }, kG = ["title"], AG = { class: "progress-timing-list" }, jG = { class: "progress-timing-who" }, MG = { class: "progress-timing-stages" }, NG = ["title"], PG = {
 	key: 2,
 	class: "fine-print"
-}, FG = { class: "progress-actions" }, IG = { class: "progress-ending" }, LG = ["disabled"], RG = { key: 0 }, zG = ["disabled"], BG = "ai-codiscuss-progress-panel", VG = {
+}, FG = {
+	key: 3,
+	class: "progress-actions"
+}, IG = { class: "progress-ending" }, LG = ["disabled"], RG = { key: 0 }, zG = ["disabled"], BG = "ai-codiscuss-progress-panel", VG = {
 	__name: "ProgressPanel",
 	setup(e) {
 		let { view: t, bridge: n, act: r, pending: i } = xr("discussion"), a = ["pending", "notified"], o = {
@@ -44122,38 +44125,42 @@ var VV = {
 			completed: "完成",
 			cancelled: "已撤销",
 			failed: "失败"
-		}, l = /* @__PURE__ */ F(ne()), u = /* @__PURE__ */ F(!1), d = /* @__PURE__ */ F(null);
-		Qi(() => document.addEventListener("pointerdown", te)), ta(() => document.removeEventListener("pointerdown", te)), R(l, (e) => {
+		}, l = /* @__PURE__ */ F(ie()), u = /* @__PURE__ */ F(!1), d = /* @__PURE__ */ F(null);
+		Qi(() => document.addEventListener("pointerdown", D)), ta(() => document.removeEventListener("pointerdown", D)), R(l, (e) => {
 			try {
 				localStorage.setItem(BG, JSON.stringify({ expanded: e }));
 			} catch {}
 		});
-		let f = Z(() => t.value.room), p = Z(() => f.value.limits || {}), m = Z(() => f.value.runtime || {}), h = Z(() => a.includes(f.value.current_turn?.status) ? f.value.current_turn : null), g = Z(() => ["paused", "concluded"].includes(f.value.phase)), _ = Z(() => f.value.phase === "concluded"), v = Z(() => m.value.mode === "automatic" && (m.value.status === "paused" || m.value.expired) && !_.value && !f.value.archived), y = Z(() => !g.value && f.value.phase !== "preparing" && !f.value.archived && !p.value.closing), b = Z(() => p.value.max_rounds ? `${p.value.completed_rounds || 0} / ${p.value.max_rounds}` : `${p.value.completed_rounds || 0} · 不限`), x = Z(() => {
+		let f = Z(() => t.value.room), p = Z(() => f.value.limits || {}), m = Z(() => f.value.runtime || {}), h = Z(() => a.includes(f.value.current_turn?.status) ? f.value.current_turn : null), g = Z(() => ["paused", "concluded"].includes(f.value.phase)), _ = Z(() => f.value.phase === "concluded"), v = Z(() => m.value.mode === "automatic" && (m.value.status === "paused" || m.value.expired) && !_.value && !f.value.archived), y = Z(() => [
+			"initial",
+			"discussing",
+			"reviewing"
+		].includes(f.value.phase) && !f.value.archived), b = Z(() => (y.value || f.value.phase === "paused") && !f.value.archived), x = Z(() => y.value || v.value || b.value), S = Z(() => !g.value && f.value.phase !== "preparing" && !f.value.archived && !p.value.closing), C = Z(() => p.value.max_rounds ? `${p.value.completed_rounds || 0} / ${p.value.max_rounds}` : `${p.value.completed_rounds || 0} · 不限`), w = Z(() => {
 			if (!p.value.started_at) return "尚未计时";
 			let e = Math.floor((p.value.elapsed_seconds || 0) / 60);
 			return p.value.max_minutes ? `${e} / ${p.value.max_minutes} 分钟` : `${e} 分钟 · 不限`;
-		}), S = Z(() => m.value.mode === "automatic" ? "全自动" : "手动"), C = Z(() => m.value.expired ? "已到截止" : {
+		}), T = Z(() => m.value.mode === "automatic" ? "全自动" : "手动"), ee = Z(() => m.value.expired ? "已到截止" : {
 			ready: "未启动",
 			running: "运行中",
 			paused: "已暂停",
 			stopped: "已停止",
 			concluded: "已收束"
-		}[m.value.status] || "未启动"), w = Z(() => _.value ? "neutral" : p.value.closing ? "warning" : g.value ? "neutral" : p.value.reached ? "warning" : "primary"), T = Z(() => p.value.closing && !g.value ? "正在收尾 · 等待主持人总结" : n.progress_speaker(f.value)), ee = Z(() => m.value.timings || {
+		}[m.value.status] || "未启动"), E = Z(() => _.value ? "neutral" : p.value.closing ? "warning" : g.value ? "neutral" : p.value.reached ? "warning" : "primary"), te = Z(() => p.value.closing && !g.value ? "正在收尾 · 等待主持人总结" : n.progress_speaker(f.value)), ne = Z(() => m.value.timings || {
 			items: [],
 			totals: {},
 			count: 0
-		}), E = Z(() => [f.value.host, ...Object.keys(f.value.experts || {}).filter((e) => e !== f.value.host)].filter((e) => e && e !== "用户").map(re));
-		function te(e) {
+		}), re = Z(() => [f.value.host, ...Object.keys(f.value.experts || {}).filter((e) => e !== f.value.host)].filter((e) => e && e !== "用户").map(O));
+		function D(e) {
 			!l.value || u.value || d.value?.contains(e.target) || e.target.closest?.("[role='dialog'], [data-reka-popper-content-wrapper]") || (l.value = !1);
 		}
-		function ne() {
+		function ie() {
 			try {
 				return JSON.parse(localStorage.getItem(BG))?.expanded === !0;
 			} catch {
 				return !1;
 			}
 		}
-		function re(e) {
+		function O(e) {
 			let t = (m.value.participants || []).find((t) => t.participant === e), n = f.value.rounds?.at(-1)?.completed === !1 ? f.value.rounds.at(-1).speakers : [], r = e === f.value.host, i = "等待", a = "neutral", s = o[t?.status] || "";
 			if (h.value?.expert === e) i = `第 ${f.value.rounds?.at(-1)?.completed === !1 ? f.value.rounds.at(-1).number : (f.value.completed_rounds || 0) + 1} 轮 · ${s && t.turn_id === h.value.id ? s : g.value ? "已暂停，原安排保留" : "轮到发言"}`, a = g.value ? "neutral" : "primary";
 			else if (r && !h.value && !g.value) {
@@ -44171,14 +44178,14 @@ var VV = {
 				mode: f.value.experts?.[e] === "cli" ? "CLI" : "在线"
 			};
 		}
-		function D(e) {
+		function ae(e) {
 			return e == null ? "—" : e < 60 ? `${e}秒` : e < 3600 ? `${Math.floor(e / 60)}分${String(e % 60).padStart(2, "0")}秒` : `${Math.floor(e / 3600)}小时${Math.floor(e % 3600 / 60)}分`;
 		}
-		async function ie(e) {
+		async function k(e) {
 			await r(e) && (u.value = !1);
 		}
 		return (e, t) => {
-			let a = Ak, o = pV, te = Ik, ne = tA, re = XU;
+			let a = Ak, o = pV, D = Ik, ie = tA, O = XU;
 			return H(), U("div", {
 				ref_key: "anchor",
 				ref: d,
@@ -44186,7 +44193,7 @@ var VV = {
 			}, [
 				G("button", {
 					type: "button",
-					class: M(["progress-chip", `is-${w.value}`]),
+					class: M(["progress-chip", `is-${E.value}`]),
 					"aria-expanded": l.value,
 					"aria-controls": "progress-panel",
 					title: l.value ? "收起进度看板" : "展开进度看板",
@@ -44205,16 +44212,16 @@ var VV = {
 						default: L(() => [J(P(I(n).phases[f.value.phase]), 1)]),
 						_: 1
 					})]),
-					G("p", _G, P(T.value), 1),
+					G("p", _G, P(te.value), 1),
 					G("dl", vG, [
-						G("div", null, [t[10] ||= G("dt", null, "完成轮次", -1), G("dd", null, P(b.value), 1)]),
-						G("div", null, [t[11] ||= G("dt", null, "用时", -1), G("dd", null, P(x.value), 1)]),
-						G("div", null, [t[12] ||= G("dt", null, "推进方式", -1), G("dd", null, P(S.value) + " · " + P(C.value), 1)]),
+						G("div", null, [t[10] ||= G("dt", null, "完成轮次", -1), G("dd", null, P(C.value), 1)]),
+						G("div", null, [t[11] ||= G("dt", null, "用时", -1), G("dd", null, P(w.value), 1)]),
+						G("div", null, [t[12] ||= G("dt", null, "推进方式", -1), G("dd", null, P(T.value) + " · " + P(ee.value), 1)]),
 						G("div", null, [t[13] ||= G("dt", null, "发言权", -1), G("dd", null, P(I(n).floor_status(f.value)), 1)])
 					]),
 					p.value.reached && !g.value && !p.value.closing ? (H(), U("p", yG, "已达讨论上限，停止新增安排。")) : Y("", !0),
-					G("ul", bG, [(H(!0), U(V, null, ha(E.value, (e) => (H(), U("li", { key: e.name }, [
-						K(te, {
+					G("ul", bG, [(H(!0), U(V, null, ha(re.value, (e) => (H(), U("li", { key: e.name }, [
+						K(D, {
 							src: I(n).identities[e.name]?.icon,
 							text: I(n).identities[e.name]?.initials,
 							alt: e.name,
@@ -44248,7 +44255,7 @@ var VV = {
 							class: "progress-member-result",
 							title: e.result
 						}, P(e.result), 9, wG)) : Y("", !0),
-						e.session ? (H(), U("small", TG, [G("span", { title: e.session }, "会话 " + P(e.session), 9, EG), K(ne, {
+						e.session ? (H(), U("small", TG, [G("span", { title: e.session }, "会话 " + P(e.session), 9, EG), K(ie, {
 							icon: "i-lucide-copy",
 							color: "neutral",
 							variant: "ghost",
@@ -44258,20 +44265,20 @@ var VV = {
 							onClick: (t) => I(r)("copy", e.session)
 						}, null, 8, ["aria-label", "onClick"])])) : Y("", !0)
 					]))), 128))]),
-					m.value.mode === "automatic" && ee.value.count ? (H(), U("section", DG, [
-						G("h4", null, [t[14] ||= J("阶段耗时 ", -1), G("small", null, "本次运行 " + P(ee.value.count) + " 次执行", 1)]),
+					m.value.mode === "automatic" && ne.value.count ? (H(), U("section", DG, [
+						G("h4", null, [t[14] ||= J("阶段耗时 ", -1), G("small", null, "本次运行 " + P(ne.value.count) + " 次执行", 1)]),
 						G("dl", OG, [(H(), U(V, null, ha(s, (e) => G("div", {
 							key: e.key,
 							title: e.hint
-						}, [G("dt", null, P(e.label), 1), G("dd", null, P(D(ee.value.totals[e.key] || 0)), 1)], 8, kG)), 64))]),
-						G("ol", AG, [(H(!0), U(V, null, ha(ee.value.items, (e) => (H(), U("li", { key: e.id }, [G("span", jG, [J("#" + P(e.id) + " " + P(I(n).display_name(e.participant)), 1), G("small", null, P(e.role === "host" ? "主持" : "专家") + " · " + P(c[e.status] || e.status), 1)]), G("span", MG, [(H(), U(V, null, ha(s, (t) => G("span", {
+						}, [G("dt", null, P(e.label), 1), G("dd", null, P(ae(ne.value.totals[e.key] || 0)), 1)], 8, kG)), 64))]),
+						G("ol", AG, [(H(!0), U(V, null, ha(ne.value.items, (e) => (H(), U("li", { key: e.id }, [G("span", jG, [J("#" + P(e.id) + " " + P(I(n).display_name(e.participant)), 1), G("small", null, P(e.role === "host" ? "主持" : "专家") + " · " + P(c[e.status] || e.status), 1)]), G("span", MG, [(H(), U(V, null, ha(s, (t) => G("span", {
 							key: t.key,
 							title: t.hint
-						}, P(t.label) + " " + P(D(e[t.key])), 9, NG)), 64))])]))), 128))])
+						}, P(t.label) + " " + P(ae(e[t.key])), 9, NG)), 64))])]))), 128))])
 					])) : Y("", !0),
 					m.value.mode === "automatic" ? Y("", !0) : (H(), U("p", PG, "手动模式没有执行回执，状态只按安排与发言推断。")),
-					G("div", FG, [
-						v.value ? (H(), W(ne, {
+					x.value ? (H(), U("div", FG, [
+						v.value ? (H(), W(ie, {
 							key: 0,
 							icon: "i-lucide-rotate-ccw",
 							label: "重启",
@@ -44280,44 +44287,40 @@ var VV = {
 							title: "重新启动自动运行，原安排重新交给对应 AI；需本机接入程序保持运行",
 							loading: I(i) === "restart_discussion",
 							onClick: t[1] ||= (e) => I(r)("restart_discussion")
-						}, null, 8, ["loading"])) : (H(), W(ne, {
+						}, null, 8, ["loading"])) : Y("", !0),
+						y.value ? (H(), W(ie, {
 							key: 1,
 							icon: "i-lucide-pause",
 							label: "暂停",
 							size: "sm",
 							color: "neutral",
 							variant: "outline",
-							disabled: g.value || f.value.archived,
 							loading: I(i) === "pause_discussion",
 							onClick: t[2] ||= (e) => I(r)("pause_discussion")
-						}, null, 8, ["disabled", "loading"])),
-						K(ne, {
+						}, null, 8, ["loading"])) : Y("", !0),
+						y.value && h.value ? (H(), W(ie, {
+							key: 2,
 							icon: "i-lucide-hand",
 							label: "打断发言",
 							size: "sm",
 							color: "neutral",
 							variant: "outline",
-							disabled: !h.value,
 							loading: I(i) === "cancel_turn",
-							title: h.value ? `取消 ${h.value.expert} 的发言安排 #${h.value.id}` : "当前没有进行中的发言",
+							title: `取消 ${h.value.expert} 的发言安排 #${h.value.id}`,
 							onClick: t[3] ||= (e) => I(r)("cancel_turn")
-						}, null, 8, [
-							"disabled",
-							"loading",
-							"title"
-						]),
-						K(ne, {
+						}, null, 8, ["loading", "title"])) : Y("", !0),
+						b.value ? (H(), W(ie, {
+							key: 3,
 							icon: "i-lucide-square",
 							label: "提前结束",
 							size: "sm",
 							color: "error",
 							variant: "soft",
-							disabled: _.value,
 							onClick: t[4] ||= (e) => u.value = !0
-						}, null, 8, ["disabled"])
-					])
+						})) : Y("", !0)
+					])) : Y("", !0)
 				])) : Y("", !0),
-				K(re, {
+				K(O, {
 					open: u.value,
 					"onUpdate:open": t[7] ||= (e) => u.value = e,
 					title: "提前结束讨论",
@@ -44330,17 +44333,17 @@ var VV = {
 					body: L(() => [G("div", IG, [G("button", {
 						type: "button",
 						class: "progress-ending-option",
-						disabled: !y.value || !!I(i),
-						onClick: t[5] ||= (e) => ie("force_close")
+						disabled: !S.value || !!I(i),
+						onClick: t[5] ||= (e) => k("force_close")
 					}, [
 						t[15] ||= G("strong", null, "强行收尾", -1),
 						G("span", null, "立即进入收束，由 " + P(I(n).display_name(f.value.host)) + " 在 " + P(p.value.summary_minutes || 5) + " 分钟收束预留内根据已有材料总结。", 1),
-						y.value ? Y("", !0) : (H(), U("small", RG, P(p.value.closing ? "已在收尾中。" : "仅进行中的讨论可以收尾；已暂停时请选择直接丢弃。"), 1))
+						S.value ? Y("", !0) : (H(), U("small", RG, P(p.value.closing ? "已在收尾中。" : "仅进行中的讨论可以收尾；已暂停时请选择直接丢弃。"), 1))
 					], 8, LG), G("button", {
 						type: "button",
 						class: "progress-ending-option",
 						disabled: _.value || !!I(i),
-						onClick: t[6] ||= (e) => ie("conclude_discussion")
+						onClick: t[6] ||= (e) => k("conclude_discussion")
 					}, [...t[16] ||= [G("strong", null, "直接丢弃", -1), G("span", null, "不再总结，阶段直接设为“已收束”，自动运行随之停止。", -1)]], 8, zG)])]),
 					_: 1
 				}, 8, ["open"])

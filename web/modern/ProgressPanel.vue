@@ -28,6 +28,10 @@ const inactive = computed(() => ["paused", "concluded"].includes(room.value.phas
 const concluded = computed(() => room.value.phase === "concluded");
 const can_restart = computed(() => runtime.value.mode === "automatic" && (runtime.value.status === "paused" || runtime.value.expired)
   && !concluded.value && !room.value.archived);
+// Actions appear only when they apply: running phases can pause, interrupt or end; paused ones restart or end.
+const active = computed(() => ["initial", "discussing", "reviewing"].includes(room.value.phase) && !room.value.archived);
+const can_end = computed(() => (active.value || room.value.phase === "paused") && !room.value.archived);
+const has_actions = computed(() => active.value || can_restart.value || can_end.value);
 const can_close = computed(() => !inactive.value && room.value.phase !== "preparing" && !room.value.archived && !limits.value.closing);
 const rounds = computed(() => limits.value.max_rounds ? `${limits.value.completed_rounds || 0} / ${limits.value.max_rounds}` : `${limits.value.completed_rounds || 0} · 不限`);
 const elapsed = computed(() => {
@@ -132,11 +136,11 @@ async function finish(action) {
         </ol>
       </section>
       <p v-if="runtime.mode !== 'automatic'" class="fine-print">手动模式没有执行回执，状态只按安排与发言推断。</p>
-      <div class="progress-actions">
+      <div v-if="has_actions" class="progress-actions">
         <UButton v-if="can_restart" icon="i-lucide-rotate-ccw" label="重启" size="sm" class="channel-primary-button" title="重新启动自动运行，原安排重新交给对应 AI；需本机接入程序保持运行" :loading="pending === 'restart_discussion'" @click="act('restart_discussion')" />
-        <UButton v-else icon="i-lucide-pause" label="暂停" size="sm" color="neutral" variant="outline" :disabled="inactive || room.archived" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" />
-        <UButton icon="i-lucide-hand" label="打断发言" size="sm" color="neutral" variant="outline" :disabled="!turn" :loading="pending === 'cancel_turn'" :title="turn ? `取消 ${turn.expert} 的发言安排 #${turn.id}` : '当前没有进行中的发言'" @click="act('cancel_turn')" />
-        <UButton icon="i-lucide-square" label="提前结束" size="sm" color="error" variant="soft" :disabled="concluded" @click="ending = true" />
+        <UButton v-if="active" icon="i-lucide-pause" label="暂停" size="sm" color="neutral" variant="outline" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" />
+        <UButton v-if="active && turn" icon="i-lucide-hand" label="打断发言" size="sm" color="neutral" variant="outline" :loading="pending === 'cancel_turn'" :title="`取消 ${turn.expert} 的发言安排 #${turn.id}`" @click="act('cancel_turn')" />
+        <UButton v-if="can_end" icon="i-lucide-square" label="提前结束" size="sm" color="error" variant="soft" @click="ending = true" />
       </div>
     </section>
     <UModal v-model:open="ending" title="提前结束讨论" description="当前发言安排会被取消，已有消息全部保留。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
