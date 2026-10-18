@@ -363,12 +363,14 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 .channel-topic-eyebrow { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; color: var(--channel-accent); font-size: 12px; font-weight: 600; }
 .channel-topic-section { margin-top: 10px; }
 .channel-topic-section h3 { margin: 0 0 3px; color: var(--ui-text-dimmed); font-size: 12px; font-weight: 600; }
-.channel-topic-text { margin: 0; font-size: 14px; line-height: 24px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.channel-topic-request .channel-topic-text { color: var(--ui-text-highlighted); }
+/* Collapse by whole lines without an ellipsis, so expanding only appends lines and never rewrites the visible ones. */
+.channel-topic-text { --topic-lines: 3; margin: 0; font-size: 14px; line-height: 24px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: calc(var(--topic-lines) * 24px); overflow: hidden; }
+.channel-topic-request .channel-topic-text { --topic-lines: 5; color: var(--ui-text-highlighted); }
 .channel-topic-people { display: flex; flex-wrap: wrap; gap: 6px 14px; }
 .channel-topic-person { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--ui-text-highlighted); }
 .channel-topic-person small, .channel-topic-bounds { color: var(--ui-text-dimmed); font-size: 11px; }
 .channel-topic-bounds { display: block; margin-top: 5px; }
+.channel-topic-card.is-expanded .channel-topic-text { max-height: none; }
 .channel-details .info-section p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .channel-date-divider { padding: 12px 24px 14px; }
 .channel-date-divider [data-slot="border"] { border-color: #ffffff0d; }
