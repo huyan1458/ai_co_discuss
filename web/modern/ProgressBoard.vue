@@ -98,6 +98,14 @@ function member_menu(member) {
   return [[{ label: "复制会话 ID", icon: "i-lucide-copy", onSelect: () => act("copy", member.session) }]];
 }
 
+/** Share of each stage in the run's total, so the slowest stage stands out. */
+const timing_shares = computed(() => {
+  const totals = timings.value.totals || {};
+  const sum = TIMING_STAGES.reduce((value, stage) => value + (totals[stage.key] || 0), 0);
+  return TIMING_STAGES.map((stage) => ({ ...stage, seconds: totals[stage.key] || 0,
+    percent: sum ? Math.round(((totals[stage.key] || 0) / sum) * 100) : 0 }));
+});
+
 /** Render whole seconds compactly; a stage that has not begun shows a dash. */
 function duration(seconds) {
   if (seconds === null || seconds === undefined) return "—";
@@ -145,17 +153,24 @@ async function finish(action) {
       </ul>
     </section>
     <section v-if="has_actions" class="pb-actions" aria-label="操作">
-      <UTooltip v-if="can_restart" text="重启：原安排重新交给对应 AI，需本机接入程序在运行"><UButton icon="i-lucide-rotate-ccw" aria-label="重启" color="neutral" variant="outline" class="pb-icon-button pb-restart" :loading="pending === 'restart_discussion'" @click="act('restart_discussion')" /></UTooltip>
-      <UTooltip v-if="active" text="暂停"><UButton icon="i-lucide-pause" aria-label="暂停" color="neutral" variant="outline" class="pb-icon-button" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" /></UTooltip>
-      <UTooltip v-if="active && turn" :text="`打断 ${turn.expert} 的发言（本次作废），交给主持人`"><UButton icon="i-lucide-hand" :aria-label="`打断 ${turn.expert} 的发言`" color="neutral" variant="outline" class="pb-icon-button" :loading="pending === 'cancel_turn'" @click="act('cancel_turn')" /></UTooltip>
-      <UTooltip v-if="can_end" text="提前结束"><UButton icon="i-lucide-square" aria-label="提前结束" color="neutral" variant="outline" class="pb-icon-button pb-end" @click="ending = true" /></UTooltip>
+      <UButton v-if="can_restart" icon="i-lucide-rotate-ccw" label="重启" size="sm" color="neutral" variant="outline" class="pb-action pb-restart" title="原安排重新交给对应 AI，需本机接入程序在运行" :loading="pending === 'restart_discussion'" @click="act('restart_discussion')" />
+      <UButton v-if="active" icon="i-lucide-pause" label="暂停" size="sm" color="neutral" variant="outline" class="pb-action" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" />
+      <UButton v-if="active && turn" icon="i-lucide-hand" :label="`打断 ${bridge.display_name(turn.expert)}`" size="sm" color="neutral" variant="outline" class="pb-action" title="本次发言作废，交给主持人" :loading="pending === 'cancel_turn'" @click="act('cancel_turn')" />
+      <UButton v-if="can_end" icon="i-lucide-flag" label="结束讨论…" size="sm" color="neutral" variant="outline" class="pb-action pb-end" @click="ending = true" />
     </section>
     <section v-if="automatic && timings.count" class="pb-section" aria-label="阶段耗时">
+      <div class="pb-timing-heading"><h4>耗时</h4><small>共 {{ timings.count }} 次执行</small></div>
+      <div class="pb-timing-bar" role="img" :aria-label="timing_shares.map((stage) => `${stage.label} ${stage.percent}%`).join('，')">
+        <i v-for="stage in timing_shares" :key="stage.key" :class="`is-${stage.key}`" :style="{ width: `${stage.percent}%` }"></i>
+      </div>
+      <dl class="pb-timing-totals">
+        <div v-for="stage in timing_shares" :key="stage.key" :title="stage.hint"><dt><span :class="`pb-timing-dot is-${stage.key}`"></span>{{ stage.label }}</dt><dd>{{ duration(stage.seconds) }}<small>{{ stage.percent }}%</small></dd></div>
+      </dl>
       <details class="pb-timings">
-        <summary><h4>耗时</h4><span>{{ TIMING_STAGES.map((stage) => `${stage.label} ${duration(timings.totals[stage.key] || 0)}`).join(' · ') }}</span></summary>
+        <summary>查看每次执行</summary>
         <ol>
           <li v-for="item in timings.items" :key="item.id">
-            <span>#{{ item.id }} {{ bridge.display_name(item.participant) }}<small>{{ item.role === "host" ? "主持" : "专家" }} · {{ EXECUTION_STATUS_TEXT[item.status] || item.status }}</small></span>
+            <span class="pb-timing-who">#{{ item.id }} {{ bridge.display_name(item.participant) }}<small>{{ item.role === "host" ? "主持" : "专家" }} · {{ EXECUTION_STATUS_TEXT[item.status] || item.status }}</small></span>
             <span class="pb-timing-stages"><span v-for="stage in TIMING_STAGES" :key="stage.key" :title="stage.hint">{{ stage.label }} {{ duration(item[stage.key]) }}</span></span>
           </li>
         </ol>
