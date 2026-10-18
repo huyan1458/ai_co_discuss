@@ -2,6 +2,7 @@
 /** Progress content shared by the docked right rail and the tablet/phone drawer. */
 import { computed, inject, ref } from "vue";
 
+const props = defineProps({ docked: { type: Boolean, default: false } });
 const { view, bridge, act, pending } = inject("discussion");
 const ending = ref(false);
 const focus_expanded = ref(false);
@@ -109,21 +110,16 @@ async function finish(action) {
 </script>
 
 <template>
-  <div class="progress-board">
+  <div class="progress-board" :class="{ 'is-docked': props.docked }">
+    <header v-if="props.docked" class="pb-header"><strong>讨论进度</strong><span class="pb-mode">{{ automatic ? '全自动' : '手动' }}</span></header>
     <section class="pb-status" :class="`is-${status.tone}`" aria-label="讨论状态">
-      <div class="pb-status-line"><span class="pb-dot"></span><strong role="status">{{ status.title }}</strong><span class="pb-mode">{{ automatic ? '全自动' : '手动' }}</span></div>
+      <div class="pb-status-line"><span class="pb-dot"></span><strong role="status">{{ status.title }}</strong><span v-if="!props.docked" class="pb-mode">{{ automatic ? '全自动' : '手动' }}</span></div>
       <p v-if="status.detail" class="pb-status-detail">{{ status.detail }}</p>
       <div v-if="meters.length" class="pb-meters">
         <div v-for="meter in meters" :key="meter.label" class="pb-meter">
           <div class="pb-meter-label"><span>{{ meter.label }}</span><b>{{ meter.text }}</b></div>
           <div v-if="meter.ratio !== null" class="pb-bar"><i :style="{ width: `${Math.min(100, Math.round(meter.ratio * 100))}%` }"></i></div>
         </div>
-      </div>
-      <div v-if="has_actions" class="pb-actions">
-        <UButton v-if="can_restart" icon="i-lucide-rotate-ccw" label="重启" class="channel-primary-button" title="重新启动自动运行，原安排重新交给对应 AI；需本机接入程序保持运行" :loading="pending === 'restart_discussion'" @click="act('restart_discussion')" />
-        <UButton v-if="active" icon="i-lucide-pause" label="暂停" color="neutral" variant="outline" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" />
-        <UButton v-if="active && turn" icon="i-lucide-hand" label="打断发言" color="neutral" variant="outline" :loading="pending === 'cancel_turn'" :title="`取消 ${turn.expert} 的发言安排 #${turn.id}`" @click="act('cancel_turn')" />
-        <UButton v-if="can_end" icon="i-lucide-square" label="提前结束" color="error" variant="soft" @click="ending = true" />
       </div>
     </section>
     <section v-if="focus" class="pb-section" aria-label="当前焦点">
@@ -135,12 +131,12 @@ async function finish(action) {
       <h4>参与者</h4>
       <ul class="pb-members">
         <li v-for="member in members" :key="member.name" class="pb-member">
-          <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="sm" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
+          <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
           <div class="pb-member-body">
             <div class="pb-member-name">{{ bridge.display_name(member.name) }}<UIcon v-if="member.is_host" name="i-lucide-crown" title="主持人" /><small>{{ member.is_host ? `主持 · ${member.mode}` : member.mode }}</small></div>
             <div v-if="!settled" class="pb-member-status" :class="`is-${member.tone}`"><span class="pb-dot"></span>{{ member.text }}<small v-if="member.failures"> · 失败 {{ member.failures }} 次</small></div>
           </div>
-          <UDropdownMenu v-if="member.session" :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" class="pb-member-more" :aria-label="`${member.name} 的更多操作`" /></UDropdownMenu>
+          <UDropdownMenu v-if="member.session" :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="`${member.name} 的更多操作`" /></UDropdownMenu>
         </li>
       </ul>
     </section>
@@ -156,6 +152,12 @@ async function finish(action) {
         <p v-if="timings.count > timings.items.length" class="pb-note">只列出最近 {{ timings.items.length }} 次，共 {{ timings.count }} 次执行。</p>
       </details>
     </section>
+    <footer v-if="has_actions" class="pb-footer">
+      <UButton v-if="can_restart" icon="i-lucide-rotate-ccw" label="重启" size="sm" class="channel-primary-button" title="重新启动自动运行，原安排重新交给对应 AI；需本机接入程序保持运行" :loading="pending === 'restart_discussion'" @click="act('restart_discussion')" />
+      <UButton v-if="active" icon="i-lucide-pause" label="暂停" size="sm" class="channel-primary-button" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" />
+      <UButton v-if="active && turn" icon="i-lucide-hand" label="打断发言" size="sm" color="neutral" variant="outline" :loading="pending === 'cancel_turn'" :title="`取消 ${turn.expert} 的发言安排 #${turn.id}`" @click="act('cancel_turn')" />
+      <UButton v-if="can_end" label="提前结束…" size="sm" color="neutral" variant="ghost" class="pb-end" @click="ending = true" />
+    </footer>
     <UModal v-model:open="ending" title="提前结束讨论" description="当前发言安排会被取消，已有消息全部保留。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
       <template #body>
         <div class="progress-ending">

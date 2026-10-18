@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from runtime import (authorize_write, begin_write, configure_runtime, event_action,
-                     LIMIT_DEFAULTS, limit_values, limits_view, require_within_limits,
+                     LIMIT_DEFAULTS, LIMITS_SQL, limit_values, limits_view, require_within_limits,
                      list_events, runtime_view, token_hash)
 
 ROOT = Path(__file__).resolve().parent
@@ -160,7 +160,7 @@ def require_room(connection, room_id):
     room["completed_rounds"] = sum(item["completed"] for item in room["rounds"])
     room["floor"] = dict(connection.execute("SELECT holder,next_speaker,revision FROM room_floor WHERE room_id=?", (room_id,)).fetchone())
     room["runtime"] = runtime_view(connection, room_id)
-    room["limits"] = limits_view(connection.execute("SELECT * FROM discussion_limits WHERE room_id=?", (room_id,)).fetchone(), room)
+    room["limits"] = limits_view(connection.execute(LIMITS_SQL, (room_id,)).fetchone(), room)
     return room
 
 
@@ -862,7 +862,7 @@ def protocol_text(room):
     return "\n\n".join([
         "# 本地 CLI 读写与主持协议", f"当前主持人：{room['host']}。以下为留言板接口，不是模型服务 API。",
         "所有写入使用 POST 和 Content-Type: application/json。主持操作填写 actor 为当前主持人或用户；这些是声明身份，不是认证凭据。",
-        "讨论上限：room.limits 返回轮次、总时长、单次执行、到限方式、收束预留和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理；附 force:true 可在进行中提前进入收束，由主持人在收束预留时间内总结。到限停止新专家安排与观点；总结由真实主持人完成，预留计入总时长；暂停不重置计时。",
+        "讨论上限：room.limits 返回轮次、总时长、单次执行、到限方式、收束预留和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理；附 force:true 可在进行中提前进入收束，由主持人在收束预留时间内总结。到限停止新专家安排与观点；总结由真实主持人完成，预留计入总时长；暂停期间不计时也不消耗总时长。",
         "运行方式：room.runtime 显示 manual/automatic、状态及真实执行回执。启用保护的房间写入须带 X-Discussion-Token；CLI 用 --access-file 读取本机私有文件，不公开令牌。自动任务先 execution enter，创建安排或保存关联回答即完成本步；不创建原生定时任务。旧执行在暂停、停止、换代、租约到期后失效。手动接入沿用原流程；受保护房间仍须用户提供有效的凭据文件。运行控制用 run view/start/pause/stop/configure；字段查 CLI schema。",
         f"发言权：GET {base}/floor 返回 holder、next_speaker、revision；POST 同路径，字段 actor、speaker（默认 actor）、action=take/return、revision（刚读到的整数版本）。仅无人持有且 next_speaker 为本人时可领取；持有者可主动归还，下一位回到主持人。版本变化返回 409，先读回核对。主持人仅可代操作 online 专家，cli 专家自行操作；用户可协助。",
         "新房间由主持人持有发言权。创建安排须主持人持有，保存成功即归还并点名该专家；AI 的 opinion、moderation、receipt 都须实际作者持有，代发不豁免，opinion 必须关联有效 turn_id。消息保存成功自动归还，下一位为主持人。失败不归还，同编号重试不再次交接。用户本人发言不受发言权限制，也不改变发言权；@ 不改变顺序。维护状态、阶段及通知回执不占用发言权。取消安排须主持人持有，用户可直接取消失效安排；取消后归还给主持人领取。",

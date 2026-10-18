@@ -108,6 +108,21 @@ test('Worker accepts SQLite-formatted expert JSON after migration, including rea
   assert.equal(checked.body.phase, 'paused');
 });
 
+test('Worker excludes paused time from elapsed time and the total-duration deadline', async t => {
+  const f = await worker_fixture(t);
+  const created = await f.request('', { title: '暂停不计时', host: 'Codex', experts: { Codex: 'cli' }, limits: { max_minutes: 60 } });
+  const id = created.body.id;
+  const started = await f.request(`/${id}/runtime`, { action: 'start', revision: 0 });
+  assert.equal(started.status, 200, JSON.stringify(started.body));
+  const before = (await f.request(`/${id}`)).body.limits;
+  await f.request(`/${id}/runtime`, { action: 'pause', revision: started.body.revision });
+  f.sql.prepare('UPDATE discussion_pauses SET paused_at=paused_at-600 WHERE room_id=?').run(id);
+  const paused = (await f.request(`/${id}`)).body.limits;
+  assert.ok(paused.elapsed_seconds < 60);
+  assert.ok(paused.deadline >= before.deadline + 600);
+  assert.equal(paused.reached, false);
+});
+
 test('Worker forces an early host summary and reports per-participant executions', async t => {
   const f = await worker_fixture(t);
   const created = await f.request('', { title: '提前收尾', host: 'Codex', experts: { Codex: 'cli' }, limits: { max_rounds: 3, summary_minutes: 2 } });

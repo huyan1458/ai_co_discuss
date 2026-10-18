@@ -12,6 +12,9 @@ LIMIT_DEFAULTS = {"max_rounds": 0, "max_minutes": 0, "execution_minutes": 20,
                   "on_limit": "pause", "summary_minutes": 5}
 PUBLIC_EVENT_FIELDS = ("id", "room_id", "run_id", "generation", "cause", "participant",
                        "role", "turn_id", "status", "session_id", "lease_until", "result", "created_at")
+LIMITS_SQL = """SELECT limits.*,COALESCE(pauses.paused_seconds,0)+CASE WHEN COALESCE(pauses.paused_at,0)>0
+    THEN MAX(0,CAST(strftime('%s','now') AS INTEGER)-pauses.paused_at) ELSE 0 END AS idle_seconds
+    FROM discussion_limits AS limits LEFT JOIN discussion_pauses AS pauses USING(room_id) WHERE limits.room_id=?"""
 TIMING_ITEMS = 20
 # Queue: created -> dispatched; wake: dispatched -> entered; work: entered -> finished. Open stages run to now.
 TIMING_SQL = """SELECT e.id,e.participant,e.role,e.cause,e.status,
@@ -56,7 +59,8 @@ def limits_view(row, room):
     """Derive progress without changing state during reads."""
     result = dict(row)
     now = int(time.time())
-    deadline = result["started_at"] + result["max_minutes"] * 60 if result["started_at"] and result["max_minutes"] else 0
+    idle = result.get("idle_seconds") or 0
+    deadline = result["started_at"] + result["max_minutes"] * 60 + idle if result["started_at"] and result["max_minutes"] else 0
     if room.get("runtime", {}).get("deadline") and (room["runtime"]["status"] == "running" or result["stop_reason"]):
         runtime_deadline = room["runtime"]["deadline"]
         deadline = min(deadline or runtime_deadline, runtime_deadline)
@@ -76,7 +80,7 @@ def limits_view(row, room):
     result.update(deadline=deadline, cutoff=cutoff, reached=bool(reason), reason=reason,
                   closing=bool(result["closing_at"]) and room["phase"] not in ("paused", "concluded"), completed_rounds=room["completed_rounds"],
                   remaining_seconds=max(0, deadline - now) if deadline else None,
-                  elapsed_seconds=max(0, now - result["started_at"]) if result["started_at"] else 0)
+                  elapsed_seconds=max(0, now - result["started_at"] - idle) if result["started_at"] else 0)
     return result
 
 
@@ -211,8 +215,9 @@ def validate_start(connection, room_id, payload):
     """Require an unarchived AI-hosted room and a finite user-specified deadline."""
     row = connection.execute("SELECT * FROM topic_settings JOIN room_directory USING(room_id) WHERE room_id=?",
                              (room_id,)).fetchone()
-    limits = connection.execute("SELECT * FROM discussion_limits WHERE room_id=?", (room_id,)).fetchone()
-    configured = (limits["started_at"] or int(time.time())) + limits["max_minutes"] * 60 if limits["max_minutes"] else 0
+    limits = connection.execute(LIMITS_SQL, (room_id,)).fetchone()
+    configured = ((limits["started_at"] or int(time.time())) + limits["max_minutes"] * 60 + limits["idle_seconds"]
+                  if limits["max_minutes"] else 0)
     if limits["closing_at"]:
         closing_deadline = limits["closing_at"] + limits["summary_minutes"] * 60
         previous_deadline = runtime_view(connection, room_id).get("deadline", 0)

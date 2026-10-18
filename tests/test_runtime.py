@@ -2,6 +2,7 @@
 
 import json
 import os
+import sqlite3
 import tempfile
 import threading
 import time
@@ -186,6 +187,30 @@ class RuntimeTests(unittest.TestCase):
             self.assertGreaterEqual(item[stage], 0)
             self.assertEqual(timings["totals"][stage], item[stage])
         self.assertNotIn("token_hash", item)
+
+    def test_paused_time_is_excluded_from_elapsed_time_and_deadline(self):
+        """Idle time while paused neither counts as elapsed nor consumes the total duration."""
+        if not hasattr(self, "database"):
+            self.skipTest("需要直接调整本地数据库中的暂停起点")
+        self.limited_room(max_minutes=60)
+        run = self.start()
+        started = self.request(self.path)[1]["limits"]
+        self.request(self.path + "/runtime", {"action": "pause", "revision": run["revision"]}, self.owner)
+        connection = sqlite3.connect(self.database)
+        try:
+            with connection:
+                connection.execute("UPDATE discussion_pauses SET paused_at=paused_at-600 WHERE room_id=?", (self.room,))
+        finally:
+            connection.close()
+        paused = self.request(self.path)[1]
+        self.assertLess(paused["limits"]["elapsed_seconds"], 60)
+        self.assertGreaterEqual(paused["limits"]["deadline"], started["deadline"] + 600)
+        self.assertFalse(paused["limits"]["reached"])
+        status, resumed = self.request(self.path + "/runtime", {"action": "start", "revision": paused["runtime"]["revision"]}, self.owner)
+        self.assertEqual(status, 200, resumed)
+        room = self.request(self.path)[1]
+        self.assertLess(room["limits"]["elapsed_seconds"], 60)
+        self.assertGreaterEqual(room["limits"]["idle_seconds"], 600)
 
     def test_limits_validation_and_active_edit_protection(self):
         """Bad settings fail; limits are editable only before start or while paused."""

@@ -12,6 +12,10 @@ const TURN_STATUSES = { pending: "待处理", notified: "已通知，待回答",
 const MAX_TOPIC_DETAIL = 4000;
 const MAX_QUESTION_LENGTH = 1000;
 const LIMIT_DEFAULTS = { max_rounds: 0, max_minutes: 0, execution_minutes: 20, on_limit: "pause", summary_minutes: 5 };
+// Idle (paused, preparing or concluded) seconds are excluded from elapsed time and total-duration deadlines.
+const LIMITS_SQL = `SELECT limits.*,COALESCE(pauses.paused_seconds,0)+CASE WHEN COALESCE(pauses.paused_at,0)>0
+  THEN MAX(0,CAST(strftime('%s','now') AS INTEGER)-pauses.paused_at) ELSE 0 END AS idle_seconds
+  FROM discussion_limits AS limits LEFT JOIN discussion_pauses AS pauses USING(room_id) WHERE limits.room_id=?`;
 const TIMING_ITEMS = 20;
 // Queue: created -> dispatched; wake: dispatched -> entered; work: entered -> finished. Open stages run to now.
 const TIMING_SQL = `SELECT e.id,e.participant,e.role,e.cause,e.status,
@@ -135,7 +139,7 @@ async function require_room(database, room_id) {
   result.completed_rounds = result.rounds.filter((item) => item.completed).length;
   result.floor = await database.prepare("SELECT holder,next_speaker,revision FROM room_floor WHERE room_id=?").bind(room_id).first();
   result.runtime = await runtime_view(database, room_id);
-  result.limits = limits_view(await database.prepare("SELECT * FROM discussion_limits WHERE room_id=?").bind(room_id).first(), result);
+  result.limits = limits_view(await database.prepare(LIMITS_SQL).bind(room_id).first(), result);
   return result;
 }
 
@@ -777,7 +781,7 @@ function protocol_text(room) {
   const base = `/api/rooms/${room.id}`;
   return ["# 本地 CLI 读写与主持协议", `当前主持人：${room.host}。以下为留言板接口，不是模型服务 API。`,
     "所有写入使用 POST 和 Content-Type: application/json。主持操作填写 actor 为当前主持人或用户；这些是声明身份，不是认证凭据。",
-    "讨论上限：room.limits 返回轮次、总时长、单次执行、到限方式、收束预留和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理；附 force:true 可在进行中提前进入收束，由主持人在收束预留时间内总结。到限停止新专家安排与观点；总结由真实主持人完成，预留计入总时长；暂停不重置计时。",
+    "讨论上限：room.limits 返回轮次、总时长、单次执行、到限方式、收束预留和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理；附 force:true 可在进行中提前进入收束，由主持人在收束预留时间内总结。到限停止新专家安排与观点；总结由真实主持人完成，预留计入总时长；暂停期间不计时也不消耗总时长。",
     "运行方式：room.runtime 显示 manual/automatic、状态及真实执行回执。启用保护的房间写入须带 X-Discussion-Token；CLI 用 --access-file 读取本机私有文件，不公开令牌。自动任务先 execution enter，创建安排或保存关联回答即完成本步；不创建原生定时任务。旧执行在暂停、停止、换代、租约到期后失效。手动接入沿用原流程；受保护房间仍须用户提供有效的凭据文件。运行控制用 run view/start/pause/stop/configure；字段查 CLI schema。",
     `发言权：GET ${base}/floor 返回 holder、next_speaker、revision；POST 同路径，字段 actor、speaker（默认 actor）、action=take/return、revision（刚读到的整数版本）。仅无人持有且 next_speaker 为本人时可领取；持有者可主动归还，下一位回到主持人。版本变化返回 409，先读回核对。主持人仅可代操作 online 专家，cli 专家自行操作；用户可协助。`,
     "新房间由主持人持有发言权。创建安排须主持人持有，保存成功即归还并点名该专家；AI 的 opinion、moderation、receipt 都须实际作者持有，代发不豁免，opinion 必须关联有效 turn_id。消息保存成功自动归还，下一位为主持人。失败不归还，同编号重试不再次交接。用户本人发言不受发言权限制，也不改变发言权；@ 不改变顺序。维护状态、阶段及通知回执不占用发言权。取消安排须主持人持有，用户可直接取消失效安排；取消后归还给主持人领取。",
@@ -830,7 +834,8 @@ function limit_statements(database, room_id, settings) {
 /** Derive public progress; reads never perform lifecycle mutations. */
 function limits_view(row, room) {
   const now = Math.floor(Date.now() / 1000);
-  let deadline = row.started_at && row.max_minutes ? row.started_at + row.max_minutes * 60 : 0;
+  const idle = row.idle_seconds || 0;
+  let deadline = row.started_at && row.max_minutes ? row.started_at + row.max_minutes * 60 + idle : 0;
   if (room.runtime?.deadline && (room.runtime.status === "running" || row.stop_reason)) deadline = Math.min(deadline || room.runtime.deadline, room.runtime.deadline);
   if (row.closing_at) deadline = Math.min(deadline || Infinity, row.closing_at + row.summary_minutes * 60);
   const cutoff = deadline && row.on_limit === "summarize" && !row.closing_at ? deadline - row.summary_minutes * 60 : deadline;
@@ -839,7 +844,7 @@ function limits_view(row, room) {
     : cutoff && now >= cutoff ? row.on_limit === "summarize" ? "summary_reserved" : "time_limit" : "";
   return { ...row, deadline, cutoff, reason, reached: Boolean(reason), closing: Boolean(row.closing_at) && !["paused", "concluded"].includes(room.phase),
     completed_rounds: room.completed_rounds, remaining_seconds: deadline ? Math.max(0, deadline - now) : null,
-    elapsed_seconds: row.started_at ? Math.max(0, now - row.started_at) : 0 };
+    elapsed_seconds: row.started_at ? Math.max(0, now - row.started_at - idle) : 0 };
 }
 
 /** Fence new expert work against concurrent answers, settings and the clock. */
@@ -967,7 +972,7 @@ async function authorize_database(database, room_id, token, operation, payload) 
 function runtime_start(database, room, payload) {
   const room_id = room.id;
   const now = Math.floor(Date.now() / 1000);
-  let configured = room.limits.max_minutes ? (room.limits.started_at || now) + room.limits.max_minutes * 60 : 0;
+  let configured = room.limits.max_minutes ? (room.limits.started_at || now) + room.limits.max_minutes * 60 + (room.limits.idle_seconds || 0) : 0;
   if (room.limits.closing_at) configured = Math.min(...[configured, room.limits.closing_at + room.limits.summary_minutes * 60, room.runtime.deadline].filter(Boolean));
   payload.deadline ??= configured;
   if (Number.isInteger(payload.deadline) && configured) payload.deadline = Math.min(payload.deadline, configured);

@@ -55,6 +55,7 @@ Python 服务独占监听端口：Windows 使用 `SO_EXCLUSIVEADDRUSE`，关闭�
 | `room_user_requests` | 独立保存用户请求原文，与补充背景分开 |
 | `topic_settings` | 主持人、阶段、焦点和参与方式 |
 | `discussion_limits` | 轮次、总时长、单次执行上限、到限方式、收束预留及实际计时状态 |
+| `discussion_pauses` | 每个房间当前暂停起点与累计暂停秒数；离开进行中阶段时由触发器记起点，恢复时累加，用时与总时长截止均扣除 |
 | `messages` | 原始消息、作者、来源、回复与提交编号 |
 | `message_summaries` | 回答简述及其实际撰写者 |
 | `message_details` | 消息职责、代发操作者、关联安排 |

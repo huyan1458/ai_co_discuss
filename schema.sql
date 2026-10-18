@@ -360,3 +360,27 @@ BEGIN
         FROM discussion_runtime WHERE room_id=NEW.room_id AND status='running'
         AND NOT EXISTS(SELECT 1 FROM discussion_events WHERE room_id=NEW.room_id AND role='host' AND status='started');
 END;
+-- Paused, preparing or concluded time is idle: it is excluded from elapsed time and total-duration deadlines.
+CREATE TABLE IF NOT EXISTS discussion_pauses (
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+    paused_at INTEGER NOT NULL DEFAULT 0,
+    paused_seconds INTEGER NOT NULL DEFAULT 0
+);
+INSERT INTO discussion_pauses(room_id,paused_at)
+    SELECT room_id,CASE WHEN phase IN ('paused','concluded') THEN COALESCE((SELECT CAST(strftime('%s',updated_at) AS INTEGER)
+        FROM discussion_runtime WHERE discussion_runtime.room_id=topic_settings.room_id AND status<>'running'),
+        CAST(strftime('%s','now') AS INTEGER)) ELSE 0 END
+    FROM topic_settings WHERE NOT EXISTS(SELECT 1 FROM discussion_pauses WHERE discussion_pauses.room_id=topic_settings.room_id);
+CREATE TRIGGER IF NOT EXISTS pause_clock_stopped AFTER UPDATE OF phase ON topic_settings
+WHEN OLD.phase IN ('initial','discussing','reviewing') AND NEW.phase NOT IN ('initial','discussing','reviewing')
+BEGIN
+    INSERT INTO discussion_pauses(room_id) SELECT NEW.room_id
+        WHERE NOT EXISTS(SELECT 1 FROM discussion_pauses WHERE room_id=NEW.room_id);
+    UPDATE discussion_pauses SET paused_at=CAST(strftime('%s','now') AS INTEGER) WHERE room_id=NEW.room_id AND paused_at=0;
+END;
+CREATE TRIGGER IF NOT EXISTS pause_clock_resumed AFTER UPDATE OF phase ON topic_settings
+WHEN NEW.phase IN ('initial','discussing','reviewing') AND OLD.phase NOT IN ('initial','discussing','reviewing')
+BEGIN
+    UPDATE discussion_pauses SET paused_seconds=paused_seconds+MAX(0,CAST(strftime('%s','now') AS INTEGER)-paused_at),paused_at=0
+        WHERE room_id=NEW.room_id AND paused_at>0;
+END;
