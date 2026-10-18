@@ -2,7 +2,7 @@
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { motion, useReducedMotion, useSpring, useTransform } from "motion-v";
 
-const emit = defineEmits(["detail"]);
+const emit = defineEmits(["detail", "edit"]);
 const { view, bridge, field, act, pending } = inject("discussion");
 const text = field("message-input");
 const text_length = computed(() => [...text.value].length);
@@ -25,6 +25,18 @@ const answer_previews = computed(() => new Map(view.value.messages.map((message)
   if (!answer_preview_cache.has(message)) answer_preview_cache.set(message, build_answer_preview(message));
   return [message.id, answer_preview_cache.get(message)];
 })));
+const topic_expanded = ref(false);
+/** The channel's purpose shown above the transcript; old rooms without a user request fall back to background. */
+const topic = computed(() => {
+  const value = room.value || {};
+  const request = value.user_request?.trim() ? { label: "用户原文", text: value.user_request } : value.background?.trim() ? { label: "背景", text: value.background } : null;
+  const experts = Object.entries(value.experts || {}).map(([name, mode]) => ({ name, mode: mode === "cli" ? "CLI" : "在线" }));
+  const limits = value.limits || {};
+  const bounds = [limits.max_rounds ? `${limits.max_rounds} 轮` : "轮次不限", limits.max_minutes ? `${limits.max_minutes} 分钟` : "时长不限",
+    value.runtime?.mode === "automatic" ? "全自动" : "手动"].join(" · ");
+  return { request, goal: value.goal, boundaries: value.boundaries, host: value.host, experts, bounds };
+});
+const topic_key = computed(() => JSON.stringify(topic.value));
 const message_map = ref(null);
 const navigation_keyboard = ref(false);
 const active_message = ref(null);
@@ -488,7 +500,18 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
         </div>
       </motion.div>
     </Teleport>
-    <div ref="transcript" v-memo="[message_groups, message_round_labels, active_message, expanded_answers.size, room.title, view.query, view.mention_only]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
+    <div ref="transcript" v-memo="[message_groups, message_round_labels, active_message, expanded_answers.size, room.title, view.query, view.mention_only, topic_key, topic_expanded]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
+      <section v-if="!view.query && !view.mention_only" class="channel-topic-card" :class="{ 'is-expanded': topic_expanded }" aria-label="议题">
+        <header class="channel-topic-heading"><span class="channel-topic-eyebrow"><UIcon name="i-lucide-target" />议题</span><h2>{{ room.title }}</h2><UButton icon="i-lucide-pencil" label="编辑" color="neutral" variant="ghost" size="xs" @click="emit('edit')" /></header>
+        <div v-if="topic.request" class="channel-topic-section channel-topic-request"><h3>{{ topic.request.label }}</h3><p class="channel-topic-text">{{ topic.request.text }}</p></div>
+        <div v-if="topic.goal" class="channel-topic-section"><h3>目标</h3><p class="channel-topic-text">{{ topic.goal }}</p></div>
+        <div v-if="topic.boundaries" class="channel-topic-section"><h3>边界</h3><p class="channel-topic-text">{{ topic.boundaries }}</p></div>
+        <div class="channel-topic-section channel-topic-config"><h3>参与配置</h3><div class="channel-topic-people">
+          <span v-for="person in topic.experts" :key="person.name" class="channel-topic-person"><UAvatar :src="bridge.identities[person.name]?.icon" :text="bridge.identities[person.name]?.initials" :alt="person.name" size="2xs" class="channel-avatar" :class="bridge.identities[person.name]?.style" />{{ bridge.display_name(person.name) }}<small>{{ person.name === topic.host ? `主持 · ${person.mode}` : person.mode }}</small></span>
+          <span v-if="topic.host === '用户'" class="channel-topic-person">{{ bridge.display_name('用户') }}<small>主持</small></span>
+        </div><small class="channel-topic-bounds">{{ topic.bounds }}</small></div>
+        <UButton :label="topic_expanded ? '收起议题' : '展开完整议题'" :trailing-icon="topic_expanded ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" variant="link" color="neutral" size="xs" class="channel-topic-toggle" @click="topic_expanded = !topic_expanded" />
+      </section>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
         <UChatMessage v-for="message in group.messages" :id="String(message.id)" :key="message.id" v-memo="[message, message_round_labels.get(message.id), expanded_answers.has(message.id), active_message === message.id]" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="{ 'channel-current-message': active_message === message.id }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">

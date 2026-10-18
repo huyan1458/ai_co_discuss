@@ -18,10 +18,10 @@ function n(e) {
 var r = {}, i = [], a = () => {}, o = () => !1, s = (e) => e.charCodeAt(0) === 111 && e.charCodeAt(1) === 110 && (e.charCodeAt(2) > 122 || e.charCodeAt(2) < 97), c = (e) => e.startsWith("onUpdate:"), l = Object.assign, u = (e, t) => {
 	let n = e.indexOf(t);
 	n > -1 && e.splice(n, 1);
-}, d = Object.prototype.hasOwnProperty, f = (e, t) => d.call(e, t), p = Array.isArray, m = (e) => w(e) === "[object Map]", h = (e) => w(e) === "[object Set]", g = (e) => w(e) === "[object Date]", _ = (e) => w(e) === "[object RegExp]", v = (e) => typeof e == "function", y = (e) => typeof e == "string", b = (e) => typeof e == "symbol", x = (e) => typeof e == "object" && !!e, S = (e) => (x(e) || v(e)) && v(e.then) && v(e.catch), C = Object.prototype.toString, w = (e) => C.call(e), T = (e) => w(e).slice(8, -1), ee = (e) => w(e) === "[object Object]", E = (e) => y(e) && e !== "NaN" && e[0] !== "-" && "" + parseInt(e, 10) === e, D = /* @__PURE__ */ n(",key,ref,ref_for,ref_key,onVnodeBeforeMount,onVnodeMounted,onVnodeBeforeUpdate,onVnodeUpdated,onVnodeBeforeUnmount,onVnodeUnmounted"), te = (e) => {
+}, d = Object.prototype.hasOwnProperty, f = (e, t) => d.call(e, t), p = Array.isArray, m = (e) => w(e) === "[object Map]", h = (e) => w(e) === "[object Set]", g = (e) => w(e) === "[object Date]", _ = (e) => w(e) === "[object RegExp]", v = (e) => typeof e == "function", y = (e) => typeof e == "string", b = (e) => typeof e == "symbol", x = (e) => typeof e == "object" && !!e, S = (e) => (x(e) || v(e)) && v(e.then) && v(e.catch), C = Object.prototype.toString, w = (e) => C.call(e), T = (e) => w(e).slice(8, -1), ee = (e) => w(e) === "[object Object]", E = (e) => y(e) && e !== "NaN" && e[0] !== "-" && "" + parseInt(e, 10) === e, te = /* @__PURE__ */ n(",key,ref,ref_for,ref_key,onVnodeBeforeMount,onVnodeMounted,onVnodeBeforeUpdate,onVnodeUpdated,onVnodeBeforeUnmount,onVnodeUnmounted"), ne = (e) => {
 	let t = /* @__PURE__ */ Object.create(null);
 	return ((n) => t[n] || (t[n] = e(n)));
-}, ne = /-\w/g, re = te((e) => e.replace(ne, (e) => e.slice(1).toUpperCase())), ie = /\B([A-Z])/g, O = te((e) => e.replace(ie, "-$1").toLowerCase()), ae = te((e) => e.charAt(0).toUpperCase() + e.slice(1)), k = te((e) => e ? `on${ae(e)}` : ""), A = (e, t) => !Object.is(e, t), oe = (e, ...t) => {
+}, re = /-\w/g, D = ne((e) => e.replace(re, (e) => e.slice(1).toUpperCase())), ie = /\B([A-Z])/g, O = ne((e) => e.replace(ie, "-$1").toLowerCase()), ae = ne((e) => e.charAt(0).toUpperCase() + e.slice(1)), k = ne((e) => e ? `on${ae(e)}` : ""), A = (e, t) => !Object.is(e, t), oe = (e, ...t) => {
 	for (let n = 0; n < e.length; n++) e[n](...t);
 }, se = (e, t, n, r = !1) => {
 	Object.defineProperty(e, t, {
@@ -1815,7 +1815,7 @@ function yi(e) {
 			if (d) {
 				if (_ || b || !o || f & 48) {
 					let t = e.tagName.includes("-"), i = e.namespaceURI.includes("svg") ? "svg" : e.namespaceURI.includes("MathML") ? "mathml" : void 0;
-					for (let a in d) if (_ && (a.endsWith("value") || a === "indeterminate") || s(a) && !D(a) || a[0] === "." || t && !D(a) || u && u.includes(a)) {
+					for (let a in d) if (_ && (a.endsWith("value") || a === "indeterminate") || s(a) && !te(a) || a[0] === "." || t && !te(a) || u && u.includes(a)) {
 						if (xi(e, a, d[a])) continue;
 						r(e, a, null, d[a], i, n);
 					}
@@ -2180,14 +2180,14 @@ function pa(e, t, n = !0, r = !1) {
 		let n = i.type;
 		if (e === sa) {
 			let e = Qs(n, !1);
-			if (e && (e === t || e === re(t) || e === ae(re(t)))) return n;
+			if (e && (e === t || e === D(t) || e === ae(D(t)))) return n;
 		}
 		let a = ma(i[e] || n[e], t) || ma(i.appContext[e], t);
 		return !a && r ? n : a;
 	}
 }
 function ma(e, t) {
-	return e && (e[t] || e[re(t)] || e[ae(re(t))]);
+	return e && (e[t] || e[D(t)] || e[ae(D(t))]);
 }
 function ha(e, t, n, r) {
 	let i, a = n && n[r], o = p(e);
@@ -2384,7 +2384,7 @@ var za = !0;
 function Ba(e) {
 	let t = Wa(e), n = e.proxy, r = e.ctx;
 	za = !1, t.beforeCreate && Ha(t.beforeCreate, e, "bc");
-	let { data: i, computed: o, methods: s, watch: c, provide: l, inject: u, created: d, beforeMount: f, mounted: m, beforeUpdate: h, updated: g, activated: _, deactivated: y, beforeDestroy: b, beforeUnmount: S, destroyed: C, unmounted: w, render: T, renderTracked: ee, renderTriggered: E, errorCaptured: D, serverPrefetch: te, expose: ne, inheritAttrs: re, components: ie, directives: O, filters: ae } = t;
+	let { data: i, computed: o, methods: s, watch: c, provide: l, inject: u, created: d, beforeMount: f, mounted: m, beforeUpdate: h, updated: g, activated: _, deactivated: y, beforeDestroy: b, beforeUnmount: S, destroyed: C, unmounted: w, render: T, renderTracked: ee, renderTriggered: E, errorCaptured: te, serverPrefetch: ne, expose: re, inheritAttrs: D, components: ie, directives: O, filters: ae } = t;
 	if (u && Va(u, r, null), s) for (let e in s) {
 		let t = s[e];
 		v(t) && (r[e] = t.bind(n));
@@ -2416,10 +2416,10 @@ function Ba(e) {
 	function k(e, t) {
 		p(t) ? t.forEach((t) => e(t.bind(n))) : t && e(t.bind(n));
 	}
-	if (k(Zi, f), k(Qi, m), k($i, h), k(ea, g), k(Ui, _), k(Wi, y), k(oa, D), k(aa, ee), k(ia, E), k(ta, S), k(na, w), k(ra, te), p(ne)) {
-		if (ne.length) {
+	if (k(Zi, f), k(Qi, m), k($i, h), k(ea, g), k(Ui, _), k(Wi, y), k(oa, te), k(aa, ee), k(ia, E), k(ta, S), k(na, w), k(ra, ne), p(re)) {
+		if (re.length) {
 			let t = e.exposed ||= {};
-			ne.forEach((e) => {
+			re.forEach((e) => {
 				Object.defineProperty(t, e, {
 					get: () => n[e],
 					set: (t) => n[e] = t,
@@ -2428,7 +2428,7 @@ function Ba(e) {
 			});
 		} else e.exposed ||= {};
 	}
-	T && e.render === a && (e.render = T), re != null && (e.inheritAttrs = re), ie && (e.components = ie), O && (e.directives = O), te && si(e);
+	T && e.render === a && (e.render = T), D != null && (e.inheritAttrs = D), ie && (e.components = ie), O && (e.directives = O), ne && si(e);
 }
 function Va(e, t, n = a) {
 	p(e) && (e = Ya(e));
@@ -2609,7 +2609,7 @@ function no(e, t) {
 }
 var ro = null;
 function io(e, t, n = r) {
-	let i = Ps(), a = re(t), o = O(t), s = ao(e, a), c = vn((s, c) => {
+	let i = Ps(), a = D(t), o = O(t), s = ao(e, a), c = vn((s, c) => {
 		let l, u = r, d;
 		return Dr(() => {
 			let t = e[a];
@@ -2636,12 +2636,12 @@ function io(e, t, n = r) {
 		} };
 	}, c;
 }
-var ao = (e, t) => t === "modelValue" || t === "model-value" ? e.modelModifiers : e[`${t}Modifiers`] || e[`${re(t)}Modifiers`] || e[`${O(t)}Modifiers`];
+var ao = (e, t) => t === "modelValue" || t === "model-value" ? e.modelModifiers : e[`${t}Modifiers`] || e[`${D(t)}Modifiers`] || e[`${O(t)}Modifiers`];
 function oo(e, t, ...n) {
 	if (e.isUnmounted) return;
 	let i = e.vnode.props || r, a = n, o = t.startsWith("update:"), s = o && ao(i, t.slice(7));
 	s && (s.trim && (a = n.map((e) => y(e) ? e.trim() : e)), s.number && (a = a.map(ce)));
-	let c, l = i[c = k(t)] || i[c = k(re(t))];
+	let c, l = i[c = k(t)] || i[c = k(D(t))];
 	!l && o && (l = i[c = k(O(t))]), l && Hn(l, e, 6, a);
 	let u = i[c + "Once"];
 	if (u) {
@@ -2769,7 +2769,7 @@ function Co(e, t, n, r) {
 				if (c) {
 					if (f(a, o)) u !== a[o] && (a[o] = u, l = !0);
 					else {
-						let t = re(o);
+						let t = D(o);
 						i[t] = To(c, s, t, u, e, !1);
 					}
 				} else u !== a[o] && (a[o] = u, l = !0);
@@ -2786,9 +2786,9 @@ function Co(e, t, n, r) {
 function wo(e, t, n, i) {
 	let [a, o] = e.propsOptions, s = !1, c;
 	if (t) for (let r in t) {
-		if (D(r)) continue;
+		if (te(r)) continue;
 		let l = t[r], u;
-		a && f(a, u = re(r)) ? !o || !o.includes(u) ? n[u] = l : (c ||= {})[u] = l : lo(e.emitsOptions, r) || (!(r in i) || l !== i[r]) && (i[r] = l, s = !0);
+		a && f(a, u = D(r)) ? !o || !o.includes(u) ? n[u] = l : (c ||= {})[u] = l : lo(e.emitsOptions, r) || (!(r in i) || l !== i[r]) && (i[r] = l, s = !0);
 	}
 	if (o) {
 		let t = /* @__PURE__ */ an(n), i = c || r;
@@ -2834,11 +2834,11 @@ function Do(e, t, n = !1) {
 	}
 	if (!s && !d) return x(e) && a.set(e, i), i;
 	if (p(s)) for (let e = 0; e < s.length; e++) {
-		let t = re(s[e]);
+		let t = D(s[e]);
 		Oo(t) && (c[t] = r);
 	}
 	else if (s) for (let e in s) {
-		let t = re(e);
+		let t = D(e);
 		if (Oo(t)) {
 			let n = s[e], r = c[t] = p(n) || v(n) ? { type: n } : l({}, n), i = r.type, a = !1, o = !0;
 			if (p(i)) for (let e = 0; e < i.length; ++e) {
@@ -2857,7 +2857,7 @@ function Do(e, t, n = !1) {
 	return x(e) && a.set(e, m), m;
 }
 function Oo(e) {
-	return e[0] !== "$" && !D(e);
+	return e[0] !== "$" && !te(e);
 }
 var ko = (e) => e === "_" || e === "_ctx" || e === "$stable", Ao = (e) => p(e) ? e.map(Ts) : [Ts(e)], jo = (e, t, n) => {
 	if (t._n) return t;
@@ -2945,7 +2945,7 @@ function Bo(e, t) {
 		else {
 			let n = e.el && e.el._isVueCE ? e.el : null;
 			try {
-				n && n._beginPatch(), te(e, t, i, a, o, s, c);
+				n && n._beginPatch(), ne(e, t, i, a, o, s, c);
 			} finally {
 				n && n._endPatch();
 			}
@@ -2953,7 +2953,7 @@ function Bo(e, t) {
 	}, T = (e, t, n, r, i, a, s, u) => {
 		let d, f, { props: m, shapeFlag: h, transition: g, dirs: _ } = e;
 		if (d = e.el = l(e.type, a, m && m.is, m), h & 8 ? p(d, e.children) : h & 16 && E(e.children, d, null, r, i, Vo(e, a), s, u), _ && yr(e, null, r, "created"), ee(d, e, e.scopeId, s, r), m) {
-			for (let e in m) e !== "value" && !D(e) && c(d, e, null, m[e], a, r);
+			for (let e in m) e !== "value" && !te(e) && c(d, e, null, m[e], a, r);
 			"value" in m && c(d, "value", null, m.value, a), (f = m.onVnodeBeforeMount) && Os(f, r, e);
 		}
 		_ && yr(e, null, r, "beforeMount");
@@ -2977,12 +2977,12 @@ function Bo(e, t) {
 			let c = e[l] = s ? Es(e[l]) : Ts(e[l]);
 			v(null, c, t, n, r, i, a, o, s);
 		}
-	}, te = (e, t, n, i, a, o, s) => {
+	}, ne = (e, t, n, i, a, o, s) => {
 		let l = t.el = e.el, { patchFlag: u, dynamicChildren: d, dirs: f } = t;
 		u |= e.patchFlag & 16;
 		let m = e.props || r, h = t.props || r, g;
-		if (n && Ho(n, !1), (g = h.onVnodeBeforeUpdate) && Os(g, n, t, e), f && yr(t, e, n, "beforeUpdate"), n && Ho(n, !0), d && (!e.dynamicChildren || e.dynamicChildren.length !== d.length) && (u = 0, s = !1, d = null), (m.innerHTML && h.innerHTML == null || m.textContent && h.textContent == null) && p(l, ""), d ? ne(e.dynamicChildren, d, l, n, i, Vo(t, a), o) : s || ce(e, t, l, null, n, i, Vo(t, a), o, !1), u > 0) {
-			if (u & 16) re(l, m, h, n, a);
+		if (n && Ho(n, !1), (g = h.onVnodeBeforeUpdate) && Os(g, n, t, e), f && yr(t, e, n, "beforeUpdate"), n && Ho(n, !0), d && (!e.dynamicChildren || e.dynamicChildren.length !== d.length) && (u = 0, s = !1, d = null), (m.innerHTML && h.innerHTML == null || m.textContent && h.textContent == null) && p(l, ""), d ? re(e.dynamicChildren, d, l, n, i, Vo(t, a), o) : s || ce(e, t, l, null, n, i, Vo(t, a), o, !1), u > 0) {
+			if (u & 16) D(l, m, h, n, a);
 			else if (u & 2 && m.class !== h.class && c(l, "class", null, h.class, a), u & 4 && c(l, "style", m.style, h.style, a), u & 8) {
 				let e = t.dynamicProps;
 				for (let t = 0; t < e.length; t++) {
@@ -2991,20 +2991,20 @@ function Bo(e, t) {
 				}
 			}
 			u & 1 && e.children !== t.children && p(l, t.children);
-		} else !s && d == null && re(l, m, h, n, a);
+		} else !s && d == null && D(l, m, h, n, a);
 		((g = h.onVnodeUpdated) || f) && Lo(() => {
 			g && Os(g, n, t, e), f && yr(t, e, n, "updated");
 		}, i);
-	}, ne = (e, t, n, r, i, a, o) => {
+	}, re = (e, t, n, r, i, a, o) => {
 		for (let s = 0; s < t.length; s++) {
 			let c = e[s], l = t[s], u = c.el || Jo(c), d = u && (c.type === V || !vs(c, l) || c.shapeFlag & 198) ? m(u) : n;
 			v(c, l, d, null, r, i, a, o, !0);
 		}
-	}, re = (e, t, n, i, a) => {
+	}, D = (e, t, n, i, a) => {
 		if (t !== n) {
-			if (t !== r) for (let r in t) !D(r) && !(r in n) && c(e, r, t[r], null, a, i);
+			if (t !== r) for (let r in t) !te(r) && !(r in n) && c(e, r, t[r], null, a, i);
 			for (let r in n) {
-				if (D(r)) continue;
+				if (te(r)) continue;
 				let o = n[r], s = t[r];
 				o !== s && r !== "value" && c(e, r, s, o, a, i);
 			}
@@ -3012,7 +3012,7 @@ function Bo(e, t) {
 		}
 	}, ie = (e, t, n, r, i, a, s, c, l) => {
 		let d = t.el = e ? e.el : u(""), f = t.anchor = e ? e.anchor : u(""), { patchFlag: p, dynamicChildren: m, slotScopeIds: h } = t;
-		h && (c = c ? c.concat(h) : h), e == null ? (o(d, n, r), o(f, n, r), E(t.children || [], n, f, i, a, s, c, l)) : p > 0 && p & 64 && m && e.dynamicChildren && e.dynamicChildren.length === m.length ? (ne(e.dynamicChildren, m, n, i, a, s, c), (t.key != null || i && t === i.subTree) && Wo(e, t, !0)) : ce(e, t, n, f, i, a, s, c, l);
+		h && (c = c ? c.concat(h) : h), e == null ? (o(d, n, r), o(f, n, r), E(t.children || [], n, f, i, a, s, c, l)) : p > 0 && p & 64 && m && e.dynamicChildren && e.dynamicChildren.length === m.length ? (re(e.dynamicChildren, m, n, i, a, s, c), (t.key != null || i && t === i.subTree) && Wo(e, t, !0)) : ce(e, t, n, f, i, a, s, c, l);
 	}, O = (e, t, n, r, i, a, o, s, c) => {
 		t.slotScopeIds = s, e == null ? t.shapeFlag & 512 ? i.ctx.activate(t, n, r, o, c) : ae(t, n, r, i, a, o, c) : k(e, t, c);
 	}, ae = (e, t, n, r, i, a, o) => {
@@ -3236,7 +3236,7 @@ function Bo(e, t) {
 		mt: ae,
 		mc: E,
 		pc: ce,
-		pbc: ne,
+		pbc: re,
 		n: M,
 		o: e
 	}, ve, ye;
@@ -3915,7 +3915,7 @@ function Ec(e) {
 		e._enterCancelled = r, Ac(e, t ? d : s), Ac(e, t ? u : o), n && n();
 	}, E = (e, t) => {
 		e._isLeaving = !1, Ac(e, f), Ac(e, m), Ac(e, p), t && t();
-	}, D = (e) => (t, n) => {
+	}, te = (e) => (t, n) => {
 		let i = e ? w : y, o = () => ee(t, e, n);
 		wc(i, [t, o]), jc(() => {
 			Ac(t, e ? c : a), kc(t, e ? d : s), Tc(i) || Nc(t, r, g, o);
@@ -3928,8 +3928,8 @@ function Ec(e) {
 		onBeforeAppear(e) {
 			wc(C, [e]), kc(e, c), kc(e, u);
 		},
-		onEnter: D(!1),
-		onAppear: D(!0),
+		onEnter: te(!1),
+		onAppear: te(!0),
 		onLeave(e, t) {
 			e._isLeaving = !0;
 			let n = () => E(e, t);
@@ -4123,7 +4123,7 @@ var Qc = [
 function el(e, t) {
 	let n = $c[t];
 	if (n) return n;
-	let r = re(t);
+	let r = D(t);
 	if (r !== "filter" && r in e) return $c[t] = r;
 	r = ae(r);
 	for (let n = 0; n < Qc.length; n++) {
@@ -4203,7 +4203,7 @@ function hl(e, t) {
 }
 var gl = (e) => e.charCodeAt(0) === 111 && e.charCodeAt(1) === 110 && e.charCodeAt(2) > 96 && e.charCodeAt(2) < 123, _l = (e, t, n, r, i, a) => {
 	let o = i === "svg";
-	t === "class" ? Rc(e, r, o) : t === "style" ? Yc(e, n, r) : s(t) ? c(t) || cl(e, t, n, r, a) : (t[0] === "." ? (t = t.slice(1), 1) : t[0] === "^" ? (t = t.slice(1), 0) : vl(e, t, r, o)) ? (il(e, t, r), !e.tagName.includes("-") && (t === "value" || t === "checked" || t === "selected") && rl(e, t, r, o, a, t !== "value")) : e._isVueCE && (yl(e, t) || e._def.__asyncLoader && (/[A-Z]/.test(t) || !y(r))) ? il(e, re(t), r, a, t) : (t === "true-value" ? e._trueValue = r : t === "false-value" && (e._falseValue = r), rl(e, t, r, o));
+	t === "class" ? Rc(e, r, o) : t === "style" ? Yc(e, n, r) : s(t) ? c(t) || cl(e, t, n, r, a) : (t[0] === "." ? (t = t.slice(1), 1) : t[0] === "^" ? (t = t.slice(1), 0) : vl(e, t, r, o)) ? (il(e, t, r), !e.tagName.includes("-") && (t === "value" || t === "checked" || t === "selected") && rl(e, t, r, o, a, t !== "value")) : e._isVueCE && (yl(e, t) || e._def.__asyncLoader && (/[A-Z]/.test(t) || !y(r))) ? il(e, D(t), r, a, t) : (t === "true-value" ? e._trueValue = r : t === "false-value" && (e._falseValue = r), rl(e, t, r, o));
 };
 function vl(e, t, n, r) {
 	if (r) return !!(t === "innerHTML" || t === "textContent" || t in e && gl(t) && v(n));
@@ -4217,8 +4217,8 @@ function vl(e, t, n, r) {
 function yl(e, t) {
 	let n = e._def.props;
 	if (!n) return !1;
-	let r = re(t);
-	return Array.isArray(n) ? n.some((e) => re(e) === r) : Object.keys(n).some((e) => re(e) === r);
+	let r = D(t);
+	return Array.isArray(n) ? n.some((e) => D(e) === r) : Object.keys(n).some((e) => D(e) === r);
 }
 var bl = {};
 // @__NO_SIDE_EFFECTS__
@@ -4271,7 +4271,7 @@ var Sl = /* @__NO_SIDE_EFFECTS__ */ ((e, t) => /* @__PURE__ */ xl(e, t, xu)), Cl
 			let { props: n, styles: r } = e, i;
 			if (n && !p(n)) for (let e in n) {
 				let t = n[e];
-				(t === Number || t && t.type === Number) && (e in this._props && (this._props[e] = le(this._props[e])), (i ||= /* @__PURE__ */ Object.create(null))[re(e)] = !0);
+				(t === Number || t && t.type === Number) && (e in this._props && (this._props[e] = le(this._props[e])), (i ||= /* @__PURE__ */ Object.create(null))[D(e)] = !0);
 			}
 			this._numberProps = i, this._resolveProps(e), this.shadowRoot && this._applyStyles(r), this._connected && this._mount(e);
 		}, t = this._def.__asyncLoader;
@@ -4288,7 +4288,7 @@ var Sl = /* @__NO_SIDE_EFFECTS__ */ ((e, t) => /* @__PURE__ */ xl(e, t, xu)), Cl
 	_resolveProps(e) {
 		let { props: t } = e, n = p(t) ? t : Object.keys(t || {});
 		for (let e of Object.keys(this)) e[0] !== "_" && n.includes(e) && this._setProp(e, this[e]);
-		for (let e of n.map(re)) Object.defineProperty(this, e, {
+		for (let e of n.map(D)) Object.defineProperty(this, e, {
 			get() {
 				return this._getProp(e);
 			},
@@ -4299,7 +4299,7 @@ var Sl = /* @__NO_SIDE_EFFECTS__ */ ((e, t) => /* @__PURE__ */ xl(e, t, xu)), Cl
 	}
 	_setAttr(e) {
 		if (e.startsWith("data-v-")) return;
-		let t = this.hasAttribute(e), n = t ? this.getAttribute(e) : bl, r = re(e);
+		let t = this.hasAttribute(e), n = t ? this.getAttribute(e) : bl, r = D(e);
 		t && this._numberProps && this._numberProps[r] && (n = le(n)), this._setProp(r, n, !1, !0);
 	}
 	_getProp(e) {
@@ -4799,7 +4799,7 @@ var wu = !1, Tu = () => {
 	assertNumber: () => Rn,
 	callWithAsyncErrorHandling: () => Hn,
 	callWithErrorHandling: () => Vn,
-	camelize: () => re,
+	camelize: () => D,
 	capitalize: () => ae,
 	cloneVNode: () => Cs,
 	compatUtils: () => null,
@@ -5938,7 +5938,7 @@ var mf = {
 }), gf = !1;
 function _f(e) {
 	if (gf) return;
-	let t = JSON.parse("[{\"prefix\":\"lucide\",\"icons\":{\"archive\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"20\\\" height=\\\"5\\\" x=\\\"2\\\" y=\\\"3\\\" rx=\\\"1\\\"/><path d=\\\"M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8m-10 4h4\\\"/></g>\"},\"archive-restore\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"20\\\" height=\\\"5\\\" x=\\\"2\\\" y=\\\"3\\\" rx=\\\"1\\\"/><path d=\\\"M4 8v11a2 2 0 0 0 2 2h2M20 8v11a2 2 0 0 1-2 2h-2m-7-6l3-3l3 3m-3-3v9\\\"/></g>\"},\"arrow-down\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 5v14m7-7l-7 7l-7-7\\\"/>\"},\"arrow-left\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m12 19l-7-7l7-7m7 7H5\\\"/>\"},\"arrow-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 12h14m-7-7l7 7l-7 7\\\"/>\"},\"arrow-up\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m5 12l7-7l7 7m-7 7V5\\\"/>\"},\"arrow-up-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M7 7h10v10M7 17L17 7\\\"/>\"},\"at-sign\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"4\\\"/><path d=\\\"M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8\\\"/></g>\"},\"check\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20 6L9 17l-5-5\\\"/>\"},\"check-check\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M18 6L7 17l-5-5m20-2l-7.5 7.5L13 16\\\"/>\"},\"chevron-down\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m6 9l6 6l6-6\\\"/>\"},\"chevron-left\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m15 18l-6-6l6-6\\\"/>\"},\"chevron-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m9 18l6-6l-6-6\\\"/>\"},\"chevron-up\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m18 15l-6-6l-6 6\\\"/>\"},\"chevrons-left\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m11 17l-5-5l5-5m7 10l-5-5l5-5\\\"/>\"},\"chevrons-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m6 17l5-5l-5-5m7 10l5-5l-5-5\\\"/>\"},\"circle-alert\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 8v4m0 4h.01\\\"/></g>\"},\"circle-check\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"m16 9l-5.5 5.5L8 12\\\"/></g>\"},\"circle-x\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"m15 9l-6 6m0-6l6 6\\\"/></g>\"},\"copy\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"14\\\" height=\\\"14\\\" x=\\\"8\\\" y=\\\"8\\\" rx=\\\"2\\\" ry=\\\"2\\\"/><path d=\\\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\\\"/></g>\"},\"copy-check\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m12 15l2 2l4-4\\\"/><rect width=\\\"14\\\" height=\\\"14\\\" x=\\\"8\\\" y=\\\"8\\\" rx=\\\"2\\\" ry=\\\"2\\\"/><path d=\\\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\\\"/></g>\"},\"corner-down-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M20 4v7a4 4 0 0 1-4 4H4\\\"/><path d=\\\"m9 10l-5 5l5 5\\\"/></g>\"},\"corner-up-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M20 20v-7a4 4 0 0 0-4-4H4\\\"/><path d=\\\"M9 14L4 9l5-5\\\"/></g>\"},\"crown\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294zM5 21h14\\\"/>\"},\"download\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 15V3m9 12v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\\\"/><path d=\\\"m7 10l5 5l5-5\\\"/></g>\"},\"ellipsis\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"19\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"5\\\" cy=\\\"12\\\" r=\\\"1\\\"/></g>\"},\"expand\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m15 15l6 6M15 9l6-6m0 13v5h-5m5-13V3h-5M3 16v5h5m-5 0l6-6M3 8V3h5m1 6L3 3\\\"/>\"},\"eye\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M2.062 12.348a1 1 0 0 1 0-.696a10.75 10.75 0 0 1 19.876 0a1 1 0 0 1 0 .696a10.75 10.75 0 0 1-19.876 0\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"3\\\"/></g>\"},\"eye-off\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575a1 1 0 0 1 0 .696a10.8 10.8 0 0 1-1.444 2.49m-6.41-.679a3 3 0 0 1-4.242-4.242\\\"/><path d=\\\"M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151a1 1 0 0 1 0-.696a10.75 10.75 0 0 1 4.446-5.143M2 2l20 20\\\"/></g>\"},\"file\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\\\"/><path d=\\\"M14 2v5a1 1 0 0 0 1 1h5\\\"/></g>\"},\"file-text\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\\\"/><path d=\\\"M14 2v5a1 1 0 0 0 1 1h5M10 9H8m8 4H8m8 4H8\\\"/></g>\"},\"folder\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\\\"/>\"},\"folder-input\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1m0-4h10\\\"/><path d=\\\"m9 16l3-3l-3-3\\\"/></g>\"},\"folder-minus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M9 13h6m5 7a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\\\"/>\"},\"folder-open\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m6 14l1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2\\\"/>\"},\"forward\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m15 17l5-5l-5-5\\\"/><path d=\\\"M4 18v-2a4 4 0 0 1 4-4h12\\\"/></g>\"},\"globe\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 2a14.5 14.5 0 0 0 0 20a14.5 14.5 0 0 0 0-20M2 12h20\\\"/></g>\"},\"grip-vertical\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"9\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"9\\\" cy=\\\"5\\\" r=\\\"1\\\"/><circle cx=\\\"9\\\" cy=\\\"19\\\" r=\\\"1\\\"/><circle cx=\\\"15\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"15\\\" cy=\\\"5\\\" r=\\\"1\\\"/><circle cx=\\\"15\\\" cy=\\\"19\\\" r=\\\"1\\\"/></g>\"},\"hand\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2m0 4V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2m0 4.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8\\\"/><path d=\\\"M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15\\\"/></g>\"},\"hash\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M4 9h16M4 15h16M10 3L8 21m8-18l-2 18\\\"/>\"},\"info\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 16v-4m0-4h.01\\\"/></g>\"},\"lightbulb\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M15 14c.2-1 .7-1.7 1.5-2.5c1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5c.7.7 1.3 1.5 1.5 2.5m0 4h6m-5 4h4\\\"/>\"},\"link\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\\\"/><path d=\\\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\\\"/></g>\"},\"list-checks\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M13 5h8m-8 7h8m-8 7h8M3 17l2 2l4-4M3 7l2 2l4-4\\\"/>\"},\"list-filter\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M2 5h20M6 12h12m-9 7h6\\\"/>\"},\"loader-circle\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M21 12a9 9 0 1 1-6.219-8.56\\\"/>\"},\"menu\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M4 5h16M4 12h16M4 19h16\\\"/>\"},\"message-square\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z\\\"/>\"},\"message-square-plus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2zM12 8v6m-3-3h6\\\"/>\"},\"messages-square\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2zm4-1a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1\\\"/>\"},\"mic\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 19v3m7-12v2a7 7 0 0 1-14 0v-2\\\"/><rect width=\\\"6\\\" height=\\\"13\\\" x=\\\"9\\\" y=\\\"2\\\" rx=\\\"3\\\"/></g>\"},\"minus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 12h14\\\"/>\"},\"monitor\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"20\\\" height=\\\"14\\\" x=\\\"2\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M8 21h8m-4-4v4\\\"/></g>\"},\"moon\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401\\\"/>\"},\"panel-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M9 3v18\\\"/></g>\"},\"panel-left-close\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M9 3v18m7-6l-3-3l3-3\\\"/></g>\"},\"panel-left-open\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M9 3v18m5-12l3 3l-3 3\\\"/></g>\"},\"panel-right\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M15 3v18\\\"/></g>\"},\"panels-top-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M3 9h18M9 21V9\\\"/></g>\"},\"pause\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"5\\\" height=\\\"18\\\" x=\\\"14\\\" y=\\\"3\\\" rx=\\\"1\\\"/><rect width=\\\"5\\\" height=\\\"18\\\" x=\\\"5\\\" y=\\\"3\\\" rx=\\\"1\\\"/></g>\"},\"pencil\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497zM15 5l4 4\\\"/>\"},\"pin\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 17v5M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4a1 1 0 0 1 1 1z\\\"/>\"},\"plug\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 22v-5m3-9V2m2 6a1 1 0 0 1 1 1v4a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1zM9 8V2\\\"/>\"},\"plus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 12h14m-7-7v14\\\"/>\"},\"refresh-cw\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M3 12a9 9 0 0 1 9-9a9.75 9.75 0 0 1 6.74 2.74L21 8\\\"/><path d=\\\"M21 3v5h-5m5 4a9 9 0 0 1-9 9a9.75 9.75 0 0 1-6.74-2.74L3 16\\\"/><path d=\\\"M8 16H3v5\\\"/></g>\"},\"rotate-ccw\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M3 12a9 9 0 1 0 9-9a9.75 9.75 0 0 0-6.74 2.74L3 8\\\"/><path d=\\\"M3 3v5h5\\\"/></g>\"},\"search\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m21 21l-4.34-4.34\\\"/><circle cx=\\\"11\\\" cy=\\\"11\\\" r=\\\"8\\\"/></g>\"},\"settings-2\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M14 17H5M19 7h-9\\\"/><circle cx=\\\"17\\\" cy=\\\"17\\\" r=\\\"3\\\"/><circle cx=\\\"7\\\" cy=\\\"7\\\" r=\\\"3\\\"/></g>\"},\"square\":{\"width\":24,\"height\":24,\"body\":\"<rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" rx=\\\"2\\\"/>\"},\"square-pen\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7\\\"/><path d=\\\"M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z\\\"/></g>\"},\"star\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.12 2.12 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.12 2.12 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.12 2.12 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.12 2.12 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.12 2.12 0 0 0 1.597-1.16z\\\"/>\"},\"sun\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"4\\\"/><path d=\\\"M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41\\\"/></g>\"},\"terminal\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 19h8M4 17l6-6l-6-6\\\"/>\"},\"trash-2\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M10 11v6m4-6v6m5-11v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\\\"/>\"},\"triangle-alert\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m21.73 18l-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3M12 9v4m0 4h.01\\\"/>\"},\"upload\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 3v12m5-7l-5-5l-5 5m14 7v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\\\"/>\"},\"x\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M18 6L6 18M6 6l12 12\\\"/>\"}}}]");
+	let t = JSON.parse("[{\"prefix\":\"lucide\",\"icons\":{\"archive\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"20\\\" height=\\\"5\\\" x=\\\"2\\\" y=\\\"3\\\" rx=\\\"1\\\"/><path d=\\\"M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8m-10 4h4\\\"/></g>\"},\"archive-restore\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"20\\\" height=\\\"5\\\" x=\\\"2\\\" y=\\\"3\\\" rx=\\\"1\\\"/><path d=\\\"M4 8v11a2 2 0 0 0 2 2h2M20 8v11a2 2 0 0 1-2 2h-2m-7-6l3-3l3 3m-3-3v9\\\"/></g>\"},\"arrow-down\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 5v14m7-7l-7 7l-7-7\\\"/>\"},\"arrow-left\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m12 19l-7-7l7-7m7 7H5\\\"/>\"},\"arrow-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 12h14m-7-7l7 7l-7 7\\\"/>\"},\"arrow-up\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m5 12l7-7l7 7m-7 7V5\\\"/>\"},\"arrow-up-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M7 7h10v10M7 17L17 7\\\"/>\"},\"at-sign\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"4\\\"/><path d=\\\"M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8\\\"/></g>\"},\"check\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20 6L9 17l-5-5\\\"/>\"},\"check-check\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M18 6L7 17l-5-5m20-2l-7.5 7.5L13 16\\\"/>\"},\"chevron-down\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m6 9l6 6l6-6\\\"/>\"},\"chevron-left\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m15 18l-6-6l6-6\\\"/>\"},\"chevron-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m9 18l6-6l-6-6\\\"/>\"},\"chevron-up\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m18 15l-6-6l-6 6\\\"/>\"},\"chevrons-left\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m11 17l-5-5l5-5m7 10l-5-5l5-5\\\"/>\"},\"chevrons-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m6 17l5-5l-5-5m7 10l5-5l-5-5\\\"/>\"},\"circle-alert\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 8v4m0 4h.01\\\"/></g>\"},\"circle-check\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"m16 9l-5.5 5.5L8 12\\\"/></g>\"},\"circle-x\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"m15 9l-6 6m0-6l6 6\\\"/></g>\"},\"copy\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"14\\\" height=\\\"14\\\" x=\\\"8\\\" y=\\\"8\\\" rx=\\\"2\\\" ry=\\\"2\\\"/><path d=\\\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\\\"/></g>\"},\"copy-check\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m12 15l2 2l4-4\\\"/><rect width=\\\"14\\\" height=\\\"14\\\" x=\\\"8\\\" y=\\\"8\\\" rx=\\\"2\\\" ry=\\\"2\\\"/><path d=\\\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\\\"/></g>\"},\"corner-down-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M20 4v7a4 4 0 0 1-4 4H4\\\"/><path d=\\\"m9 10l-5 5l5 5\\\"/></g>\"},\"corner-up-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M20 20v-7a4 4 0 0 0-4-4H4\\\"/><path d=\\\"M9 14L4 9l5-5\\\"/></g>\"},\"crown\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294zM5 21h14\\\"/>\"},\"download\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 15V3m9 12v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\\\"/><path d=\\\"m7 10l5 5l5-5\\\"/></g>\"},\"ellipsis\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"19\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"5\\\" cy=\\\"12\\\" r=\\\"1\\\"/></g>\"},\"expand\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m15 15l6 6M15 9l6-6m0 13v5h-5m5-13V3h-5M3 16v5h5m-5 0l6-6M3 8V3h5m1 6L3 3\\\"/>\"},\"eye\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M2.062 12.348a1 1 0 0 1 0-.696a10.75 10.75 0 0 1 19.876 0a1 1 0 0 1 0 .696a10.75 10.75 0 0 1-19.876 0\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"3\\\"/></g>\"},\"eye-off\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575a1 1 0 0 1 0 .696a10.8 10.8 0 0 1-1.444 2.49m-6.41-.679a3 3 0 0 1-4.242-4.242\\\"/><path d=\\\"M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151a1 1 0 0 1 0-.696a10.75 10.75 0 0 1 4.446-5.143M2 2l20 20\\\"/></g>\"},\"file\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\\\"/><path d=\\\"M14 2v5a1 1 0 0 0 1 1h5\\\"/></g>\"},\"file-text\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\\\"/><path d=\\\"M14 2v5a1 1 0 0 0 1 1h5M10 9H8m8 4H8m8 4H8\\\"/></g>\"},\"folder\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\\\"/>\"},\"folder-input\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1m0-4h10\\\"/><path d=\\\"m9 16l3-3l-3-3\\\"/></g>\"},\"folder-minus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M9 13h6m5 7a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\\\"/>\"},\"folder-open\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m6 14l1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2\\\"/>\"},\"forward\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m15 17l5-5l-5-5\\\"/><path d=\\\"M4 18v-2a4 4 0 0 1 4-4h12\\\"/></g>\"},\"globe\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 2a14.5 14.5 0 0 0 0 20a14.5 14.5 0 0 0 0-20M2 12h20\\\"/></g>\"},\"grip-vertical\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"9\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"9\\\" cy=\\\"5\\\" r=\\\"1\\\"/><circle cx=\\\"9\\\" cy=\\\"19\\\" r=\\\"1\\\"/><circle cx=\\\"15\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"15\\\" cy=\\\"5\\\" r=\\\"1\\\"/><circle cx=\\\"15\\\" cy=\\\"19\\\" r=\\\"1\\\"/></g>\"},\"hand\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2m0 4V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2m0 4.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8\\\"/><path d=\\\"M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15\\\"/></g>\"},\"hash\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M4 9h16M4 15h16M10 3L8 21m8-18l-2 18\\\"/>\"},\"info\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 16v-4m0-4h.01\\\"/></g>\"},\"lightbulb\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M15 14c.2-1 .7-1.7 1.5-2.5c1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5c.7.7 1.3 1.5 1.5 2.5m0 4h6m-5 4h4\\\"/>\"},\"link\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\\\"/><path d=\\\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\\\"/></g>\"},\"list-checks\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M13 5h8m-8 7h8m-8 7h8M3 17l2 2l4-4M3 7l2 2l4-4\\\"/>\"},\"list-filter\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M2 5h20M6 12h12m-9 7h6\\\"/>\"},\"loader-circle\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M21 12a9 9 0 1 1-6.219-8.56\\\"/>\"},\"menu\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M4 5h16M4 12h16M4 19h16\\\"/>\"},\"message-square\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z\\\"/>\"},\"message-square-plus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2zM12 8v6m-3-3h6\\\"/>\"},\"messages-square\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2zm4-1a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1\\\"/>\"},\"mic\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 19v3m7-12v2a7 7 0 0 1-14 0v-2\\\"/><rect width=\\\"6\\\" height=\\\"13\\\" x=\\\"9\\\" y=\\\"2\\\" rx=\\\"3\\\"/></g>\"},\"minus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 12h14\\\"/>\"},\"monitor\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"20\\\" height=\\\"14\\\" x=\\\"2\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M8 21h8m-4-4v4\\\"/></g>\"},\"moon\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401\\\"/>\"},\"panel-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M9 3v18\\\"/></g>\"},\"panel-left-close\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M9 3v18m7-6l-3-3l3-3\\\"/></g>\"},\"panel-left-open\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M9 3v18m5-12l3 3l-3 3\\\"/></g>\"},\"panel-right\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M15 3v18\\\"/></g>\"},\"panels-top-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M3 9h18M9 21V9\\\"/></g>\"},\"pause\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"5\\\" height=\\\"18\\\" x=\\\"14\\\" y=\\\"3\\\" rx=\\\"1\\\"/><rect width=\\\"5\\\" height=\\\"18\\\" x=\\\"5\\\" y=\\\"3\\\" rx=\\\"1\\\"/></g>\"},\"pencil\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497zM15 5l4 4\\\"/>\"},\"pin\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 17v5M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4a1 1 0 0 1 1 1z\\\"/>\"},\"plug\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 22v-5m3-9V2m2 6a1 1 0 0 1 1 1v4a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1zM9 8V2\\\"/>\"},\"plus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 12h14m-7-7v14\\\"/>\"},\"refresh-cw\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M3 12a9 9 0 0 1 9-9a9.75 9.75 0 0 1 6.74 2.74L21 8\\\"/><path d=\\\"M21 3v5h-5m5 4a9 9 0 0 1-9 9a9.75 9.75 0 0 1-6.74-2.74L3 16\\\"/><path d=\\\"M8 16H3v5\\\"/></g>\"},\"rotate-ccw\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M3 12a9 9 0 1 0 9-9a9.75 9.75 0 0 0-6.74 2.74L3 8\\\"/><path d=\\\"M3 3v5h5\\\"/></g>\"},\"search\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m21 21l-4.34-4.34\\\"/><circle cx=\\\"11\\\" cy=\\\"11\\\" r=\\\"8\\\"/></g>\"},\"settings-2\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M14 17H5M19 7h-9\\\"/><circle cx=\\\"17\\\" cy=\\\"17\\\" r=\\\"3\\\"/><circle cx=\\\"7\\\" cy=\\\"7\\\" r=\\\"3\\\"/></g>\"},\"square\":{\"width\":24,\"height\":24,\"body\":\"<rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" rx=\\\"2\\\"/>\"},\"square-pen\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7\\\"/><path d=\\\"M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z\\\"/></g>\"},\"star\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.12 2.12 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.12 2.12 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.12 2.12 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.12 2.12 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.12 2.12 0 0 0 1.597-1.16z\\\"/>\"},\"sun\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"4\\\"/><path d=\\\"M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41\\\"/></g>\"},\"target\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"6\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"2\\\"/></g>\"},\"terminal\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 19h8M4 17l6-6l-6-6\\\"/>\"},\"trash-2\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M10 11v6m4-6v6m5-11v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\\\"/>\"},\"triangle-alert\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m21.73 18l-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3M12 9v4m0 4h.01\\\"/>\"},\"upload\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 3v12m5-7l-5-5l-5 5m14 7v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\\\"/>\"},\"x\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M18 6L6 18M6 6l12 12\\\"/>\"}}}]");
 	for (let n of t) for (let [t, r] of Object.entries(n.icons)) e(n.prefix ? n.prefix + ":" + t : t, r);
 	gf = !0;
 }
@@ -8346,7 +8346,7 @@ function Yh(e) {
 function Xh(e) {
 	let t = Ps(), n = t?.type.emits, r = {};
 	return n?.length || console.warn(`No emitted event found. Please check component: ${t?.type.__name}`), n?.forEach((t) => {
-		r[k(re(t))] = (...n) => e(t, ...n);
+		r[k(D(t))] = (...n) => e(t, ...n);
 	}), r;
 }
 //#endregion
@@ -8448,7 +8448,7 @@ function ng(e) {
 	return Z(() => {
 		let e = {}, i = t?.vnode.props ?? {};
 		return Object.keys(i).forEach((t) => {
-			e[re(t)] = i[t];
+			e[D(t)] = i[t];
 		}), Object.keys({
 			...n,
 			...e
@@ -10701,7 +10701,7 @@ var [uv, dv] = /*#__PURE__*/ hh("ListboxRoot"), [fv, pv] = /*#__PURE__*/ hh("Lis
 				x.value = !1;
 			}, 1);
 		}
-		let T = /* @__PURE__ */ F(null), ee = /* @__PURE__ */ F(null), E = /* @__PURE__ */ F(!1), D = /* @__PURE__ */ F(!1), te = Fp(), ne = Fp(), re = Fp();
+		let T = /* @__PURE__ */ F(null), ee = /* @__PURE__ */ F(null), E = /* @__PURE__ */ F(!1), te = /* @__PURE__ */ F(!1), ne = Fp(), re = Fp(), D = Fp();
 		function ie() {
 			return d().map((e) => e.ref).filter((e) => e.dataset.disabled !== "");
 		}
@@ -10717,7 +10717,7 @@ var [uv, dv] = /*#__PURE__*/ hh("ListboxRoot"), [fv, pv] = /*#__PURE__*/ hh("Lis
 			i("highlight", a);
 		}
 		function ae(e) {
-			if (E.value) re.trigger(e);
+			if (E.value) D.trigger(e);
 			else {
 				let t = d().find((t) => nv(t.value, e, r.by));
 				t && (T.value = t.ref, O(t.ref));
@@ -10726,12 +10726,12 @@ var [uv, dv] = /*#__PURE__*/ hh("ListboxRoot"), [fv, pv] = /*#__PURE__*/ hh("Lis
 		function k(e) {
 			if (T.value && T.value.isConnected) {
 				if (e.ctrlKey || e.metaKey || e.altKey) return;
-				e.preventDefault(), e.stopPropagation(), D.value || T.value.click();
+				e.preventDefault(), e.stopPropagation(), te.value || T.value.click();
 			}
 		}
 		function A(e) {
 			if (S.value) {
-				if (x.value = !0, E.value) ne.trigger(e);
+				if (x.value = !0, E.value) re.trigger(e);
 				else {
 					let t = e.altKey || e.ctrlKey || e.metaKey;
 					if (t && e.key === "a" && a.value) {
@@ -10750,11 +10750,11 @@ var [uv, dv] = /*#__PURE__*/ hh("ListboxRoot"), [fv, pv] = /*#__PURE__*/ hh("Lis
 			}
 		}
 		function oe() {
-			D.value = !0;
+			te.value = !0;
 		}
 		function se() {
 			Qn(() => {
-				D.value = !1;
+				te.value = !1;
 			});
 		}
 		function ce() {
@@ -10796,7 +10796,7 @@ var [uv, dv] = /*#__PURE__*/ hh("ListboxRoot"), [fv, pv] = /*#__PURE__*/ hh("Lis
 				let e = !T.value && t === "prev" ? n.length - 1 : 0;
 				O(n[e]);
 			}
-			if (E.value) return ne.trigger(e);
+			if (E.value) return re.trigger(e);
 		}
 		function j(e, t) {
 			if (!E.value && r.selectionBehavior === "replace" && a.value && Array.isArray(C.value) && (!e.altKey && !e.ctrlKey && !e.metaKey || e.shiftKey) && e.shiftKey) {
@@ -10808,7 +10808,7 @@ var [uv, dv] = /*#__PURE__*/ hh("ListboxRoot"), [fv, pv] = /*#__PURE__*/ hh("Lis
 		}
 		async function fe(e, t = !0) {
 			if (Lp) {
-				if (await Qn(), E.value) te.trigger({
+				if (await Qn(), E.value) ne.trigger({
 					event: e,
 					scroll: t
 				});
@@ -10845,9 +10845,9 @@ var [uv, dv] = /*#__PURE__*/ hh("ListboxRoot"), [fv, pv] = /*#__PURE__*/ hh("Lis
 			highlightOnHover: o,
 			highlightedElement: T,
 			isVirtual: E,
-			virtualFocusHook: te,
-			virtualKeydownHook: ne,
-			virtualHighlightHook: re,
+			virtualFocusHook: ne,
+			virtualKeydownHook: re,
+			virtualHighlightHook: D,
 			by: r.by,
 			firstValue: b,
 			selectionBehavior: l,
@@ -12441,15 +12441,15 @@ var Vy = 50, Hy = async (e, t, n) => {
 			y: r
 		}, p = Ty(i), m = Cy(p), h = await o.getDimensions(l), g = p === "y", _ = g ? "top" : "left", v = g ? "bottom" : "right", y = g ? "clientHeight" : "clientWidth", b = a.reference[m] + a.reference[p] - f[p] - a.floating[m], x = f[p] - a.reference[p], S = await (o.getOffsetParent == null ? void 0 : o.getOffsetParent(l)), C = S ? S[y] : 0;
 		(!C || !await (o.isElement == null ? void 0 : o.isElement(S))) && (C = s.floating[y] || a.floating[m]);
-		let w = b / 2 - x / 2, T = C / 2 - h[m] / 2 - 1, ee = fy(d[_], T), E = fy(d[v], T), D = C - h[m] - E, te = C / 2 - h[m] / 2 + w, ne = vy(ee, te, D), re = !c.arrow && xy(i) != null && te !== ne && a.reference[m] / 2 - (te < ee ? ee : E) - h[m] / 2 < 0, ie = re ? te < ee ? te - ee : te - D : 0;
+		let w = b / 2 - x / 2, T = C / 2 - h[m] / 2 - 1, ee = fy(d[_], T), E = fy(d[v], T), te = C - h[m] - E, ne = C / 2 - h[m] / 2 + w, re = vy(ee, ne, te), D = !c.arrow && xy(i) != null && ne !== re && a.reference[m] / 2 - (ne < ee ? ee : E) - h[m] / 2 < 0, ie = D ? ne < ee ? ne - ee : ne - te : 0;
 		return {
 			[p]: f[p] + ie,
 			data: {
-				[p]: ne,
-				centerOffset: te - ne - ie,
-				...re && { alignmentOffset: ie }
+				[p]: re,
+				centerOffset: ne - re - ie,
+				...D && { alignmentOffset: ie }
 			},
-			reset: re
+			reset: D
 		};
 	}
 }), Wy = function(e) {
@@ -13626,22 +13626,22 @@ var [Cx, wx] = /*#__PURE__*/ hh("ComboboxRoot"), Tx = /* @__PURE__ */ z({
 			passive: r.open === void 0
 		});
 		async function y(e) {
-			v.value = e, ne.value = "", e ? (await Qn(), a.value?.highlightSelected(), x.value = !0, C.value?.focus()) : (x.value = !1, setTimeout(() => {
+			v.value = e, re.value = "", e ? (await Qn(), a.value?.highlightSelected(), x.value = !0, C.value?.focus()) : (x.value = !1, setTimeout(() => {
 				!e && r.resetSearchTermOnBlur && b.trigger();
 			}, 1));
 		}
-		let b = Fp(), x = /* @__PURE__ */ F(!1), S = /* @__PURE__ */ F(!1), C = /* @__PURE__ */ F(), w = /* @__PURE__ */ F(), T = Z(() => a.value?.highlightedElement ?? void 0), ee = Sx(v), E = /* @__PURE__ */ F(/* @__PURE__ */ new Map()), D = /* @__PURE__ */ F(/* @__PURE__ */ new Map()), { contains: te } = Zh({ sensitivity: "base" }), ne = /* @__PURE__ */ F(""), re = Z((e) => {
-			if (!ne.value || r.ignoreFilter || S.value) return {
+		let b = Fp(), x = /* @__PURE__ */ F(!1), S = /* @__PURE__ */ F(!1), C = /* @__PURE__ */ F(), w = /* @__PURE__ */ F(), T = Z(() => a.value?.highlightedElement ?? void 0), ee = Sx(v), E = /* @__PURE__ */ F(/* @__PURE__ */ new Map()), te = /* @__PURE__ */ F(/* @__PURE__ */ new Map()), { contains: ne } = Zh({ sensitivity: "base" }), re = /* @__PURE__ */ F(""), D = Z((e) => {
+			if (!re.value || r.ignoreFilter || S.value) return {
 				count: E.value.size,
 				items: e?.items ?? /* @__PURE__ */ new Map(),
-				groups: e?.groups ?? new Set(D.value.keys())
+				groups: e?.groups ?? new Set(te.value.keys())
 			};
 			let t = 0, n = /* @__PURE__ */ new Map(), i = /* @__PURE__ */ new Set();
 			for (let [e, r] of E.value) {
-				let i = te(r, ne.value);
+				let i = ne(r, re.value);
 				n.set(e, +!!i), i && t++;
 			}
-			for (let [e, t] of D.value) for (let r of t) if (n.get(r) > 0) {
+			for (let [e, t] of te.value) for (let r of t) if (n.get(r) > 0) {
 				i.add(e);
 				break;
 			}
@@ -13654,7 +13654,7 @@ var [Cx, wx] = /*#__PURE__*/ hh("ComboboxRoot"), Tx = /* @__PURE__ */ z({
 		return Qi(() => {
 			ie?.exposed && (ie.exposed.highlightItem = a.value?.highlightItem, ie.exposed.highlightFirstItem = a.value?.highlightFirstItem, ie.exposed.highlightSelected = a.value?.highlightSelected);
 		}), t({
-			filtered: re,
+			filtered: D,
 			highlightedElement: T,
 			highlightItem: a.value?.highlightItem,
 			highlightFirstItem: a.value?.highlightFirstItem,
@@ -13678,9 +13678,9 @@ var [Cx, wx] = /*#__PURE__*/ hh("ComboboxRoot"), Tx = /* @__PURE__ */ z({
 			resetSearchTermOnSelect: u,
 			onResetSearchTerm: b.on,
 			allItems: E,
-			allGroups: D,
-			filterSearch: ne,
-			filterState: re,
+			allGroups: te,
+			filterSearch: re,
+			filterState: D,
 			ignoreFilter: l,
 			openOnFocus: d,
 			openOnClick: f,
@@ -15032,10 +15032,10 @@ var $x = em(Qx), [eS, tS] = /*#__PURE__*/ hh(["MenuRoot", "MenuSub"], "MenuConte
 			let u = [...l.map((e) => e.ref)];
 			D_.includes(e.key) && u.reverse(), P_(u);
 		}
-		function D(e) {
+		function te(e) {
 			e?.currentTarget?.contains?.(e.target) || (window.clearTimeout(u.value), l.value = "");
 		}
-		function te(e) {
+		function ne(e) {
 			if (!L_(e)) return;
 			let t = e.target, n = m.value !== e.clientX;
 			if ((e?.currentTarget)?.contains(t) && n) {
@@ -15043,7 +15043,7 @@ var $x = em(Qx), [eS, tS] = /*#__PURE__*/ hh(["MenuRoot", "MenuSub"], "MenuConte
 				p.value = t, m.value = e.clientX;
 			}
 		}
-		function ne(e) {
+		function re(e) {
 			L_(e) && C.value && C.value.focus();
 		}
 		return oS({
@@ -15115,9 +15115,9 @@ var $x = em(Qx), [eS, tS] = /*#__PURE__*/ hh(["MenuRoot", "MenuSub"], "MenuConte
 						"hide-when-detached": e.hideWhenDetached,
 						reference: e.reference,
 						onKeydown: E,
-						onBlur: D,
-						onPointermove: te,
-						onPointerenter: ne
+						onBlur: te,
+						onPointermove: ne,
+						onPointerenter: re
 					}, {
 						default: L(() => [B(e.$slots, "default")]),
 						_: 3
@@ -20325,17 +20325,17 @@ var xw = ["value"], [Sw, Cw] = /*#__PURE__*/ hh("SelectRoot"), ww = /* @__PURE__
 					let r = t.right - o.right, i = window.innerWidth - n.right - r, a = window.innerWidth - e.right - i, s = e.width + a, c = Math.max(s, t.width), u = window.innerWidth - 10, d = mh(i, 10, Math.max(10, u - c));
 					l.value.style.minWidth = `${s}px`, l.value.style.right = `${d}px`;
 				}
-				let c = i().map((e) => e.ref), u = window.innerHeight - 20, h = f.value.scrollHeight, g = window.getComputedStyle(d.value), _ = Number.parseInt(g.borderTopWidth, 10), v = Number.parseInt(g.paddingTop, 10), y = Number.parseInt(g.borderBottomWidth, 10), b = Number.parseInt(g.paddingBottom, 10), x = _ + v + h + b + y, S = Math.min(p.value.offsetHeight * 5, x), C = window.getComputedStyle(f.value), w = Number.parseInt(C.paddingTop, 10), T = Number.parseInt(C.paddingBottom, 10), ee = e.top + e.height / 2 - 10, E = u - ee, D = p.value.offsetHeight / 2, te = p.value.offsetTop + D, ne = _ + v + te, re = x - ne;
-				if (ne <= ee) {
+				let c = i().map((e) => e.ref), u = window.innerHeight - 20, h = f.value.scrollHeight, g = window.getComputedStyle(d.value), _ = Number.parseInt(g.borderTopWidth, 10), v = Number.parseInt(g.paddingTop, 10), y = Number.parseInt(g.borderBottomWidth, 10), b = Number.parseInt(g.paddingBottom, 10), x = _ + v + h + b + y, S = Math.min(p.value.offsetHeight * 5, x), C = window.getComputedStyle(f.value), w = Number.parseInt(C.paddingTop, 10), T = Number.parseInt(C.paddingBottom, 10), ee = e.top + e.height / 2 - 10, E = u - ee, te = p.value.offsetHeight / 2, ne = p.value.offsetTop + te, re = _ + v + ne, D = x - re;
+				if (re <= ee) {
 					let e = p.value === c.at(-1);
 					l.value.style.bottom = "0px";
-					let t = d.value.clientHeight - f.value.offsetTop - f.value.offsetHeight, n = ne + Math.max(E, D + (e ? T : 0) + t + y);
+					let t = d.value.clientHeight - f.value.offsetTop - f.value.offsetHeight, n = re + Math.max(E, te + (e ? T : 0) + t + y);
 					l.value.style.height = `${n}px`;
 				} else {
 					let e = p.value === c[0];
 					l.value.style.top = "0px";
-					let t = Math.max(ee, _ + f.value.offsetTop + (e ? w : 0) + D) + re;
-					l.value.style.height = `${t}px`, f.value.scrollTop = ne - ee + f.value.offsetTop;
+					let t = Math.max(ee, _ + f.value.offsetTop + (e ? w : 0) + te) + D;
+					l.value.style.height = `${t}px`, f.value.scrollTop = re - ee + f.value.offsetTop;
 				}
 				l.value.style.margin = "10px 0", l.value.style.minHeight = `${S}px`, l.value.style.maxHeight = `${u}px`, r("placed"), requestAnimationFrame(() => s.value = !0);
 			}
@@ -23504,19 +23504,19 @@ var jE = AE(), ME = (e) => {
 		iO,
 		CO,
 		hO
-	], D = () => [
+	], te = () => [
 		iO,
 		"auto",
 		CO,
 		hO
-	], te = () => [
+	], ne = () => [
 		"auto",
 		"min",
 		"max",
 		"fr",
 		CO,
 		hO
-	], ne = () => [
+	], re = () => [
 		"start",
 		"end",
 		"center",
@@ -23527,7 +23527,7 @@ var jE = AE(), ME = (e) => {
 		"baseline",
 		"center-safe",
 		"end-safe"
-	], re = () => [
+	], D = () => [
 		"start",
 		"end",
 		"center",
@@ -23894,12 +23894,12 @@ var jE = AE(), ME = (e) => {
 			] }],
 			"grid-cols": [{ "grid-cols": ee() }],
 			"col-start-end": [{ col: E() }],
-			"col-start": [{ "col-start": D() }],
-			"col-end": [{ "col-end": D() }],
+			"col-start": [{ "col-start": te() }],
+			"col-end": [{ "col-end": te() }],
 			"grid-rows": [{ "grid-rows": ee() }],
 			"row-start-end": [{ row: E() }],
-			"row-start": [{ "row-start": D() }],
-			"row-end": [{ "row-end": D() }],
+			"row-start": [{ "row-start": te() }],
+			"row-end": [{ "row-end": te() }],
 			"grid-flow": [{ "grid-flow": [
 				"row",
 				"col",
@@ -23907,24 +23907,24 @@ var jE = AE(), ME = (e) => {
 				"row-dense",
 				"col-dense"
 			] }],
-			"auto-cols": [{ "auto-cols": te() }],
-			"auto-rows": [{ "auto-rows": te() }],
+			"auto-cols": [{ "auto-cols": ne() }],
+			"auto-rows": [{ "auto-rows": ne() }],
 			gap: [{ gap: w() }],
 			"gap-x": [{ "gap-x": w() }],
 			"gap-y": [{ "gap-y": w() }],
-			"justify-content": [{ justify: [...ne(), "normal"] }],
-			"justify-items": [{ "justify-items": [...re(), "normal"] }],
-			"justify-self": [{ "justify-self": ["auto", ...re()] }],
-			"align-content": [{ content: ["normal", ...ne()] }],
-			"align-items": [{ items: [...re(), { baseline: ["", "last"] }] }],
+			"justify-content": [{ justify: [...re(), "normal"] }],
+			"justify-items": [{ "justify-items": [...D(), "normal"] }],
+			"justify-self": [{ "justify-self": ["auto", ...D()] }],
+			"align-content": [{ content: ["normal", ...re()] }],
+			"align-items": [{ items: [...D(), { baseline: ["", "last"] }] }],
 			"align-self": [{ self: [
 				"auto",
-				...re(),
+				...D(),
 				{ baseline: ["", "last"] }
 			] }],
-			"place-content": [{ "place-content": ne() }],
-			"place-items": [{ "place-items": [...re(), "baseline"] }],
-			"place-self": [{ "place-self": ["auto", ...re()] }],
+			"place-content": [{ "place-content": re() }],
+			"place-items": [{ "place-items": [...D(), "baseline"] }],
+			"place-self": [{ "place-self": ["auto", ...D()] }],
 			p: [{ p: w() }],
 			px: [{ px: w() }],
 			py: [{ py: w() }],
@@ -34061,7 +34061,7 @@ var tV = {
 		"change"
 	],
 	setup(e, { expose: t, emit: n }) {
-		let r = e, i = n, a = ja(), o = $T("textarea", r), s = ym(o, "modelValue", i, { defaultValue: o.defaultValue }), c = Sm(), { emitFormFocus: l, emitFormBlur: u, emitFormInput: d, emitFormChange: f, size: p, color: m, id: h, name: g, highlight: _, disabled: v, ariaAttrs: y } = Jk(r, { deferInputValidation: !0 }), b = Z(() => m.value ?? o.color), x = Z(() => _.value ?? o.highlight), S = Z(() => p.value ?? o.size), C = Z(() => v.value ?? o.disabled), { isLeading: w, isTrailing: T, leadingIconName: ee, trailingIconName: E } = Lk(o), D = Z(() => kk({
+		let r = e, i = n, a = ja(), o = $T("textarea", r), s = ym(o, "modelValue", i, { defaultValue: o.defaultValue }), c = Sm(), { emitFormFocus: l, emitFormBlur: u, emitFormInput: d, emitFormChange: f, size: p, color: m, id: h, name: g, highlight: _, disabled: v, ariaAttrs: y } = Jk(r, { deferInputValidation: !0 }), b = Z(() => m.value ?? o.color), x = Z(() => _.value ?? o.highlight), S = Z(() => p.value ?? o.size), C = Z(() => v.value ?? o.disabled), { isLeading: w, isTrailing: T, leadingIconName: ee, trailingIconName: E } = Lk(o), te = Z(() => kk({
 			extend: lV,
 			...c.ui?.textarea || {}
 		})({
@@ -34074,30 +34074,30 @@ var tV = {
 			autoresize: o.autoresize,
 			leading: w.value || !!o.avatar || !!a.leading,
 			trailing: T.value || !!a.trailing
-		})), te = ci("textareaRef");
-		function ne(e) {
+		})), ne = ci("textareaRef");
+		function re(e) {
 			o.modelModifiers?.trim && (typeof e == "string" || e == null) && (e = e?.trim() ?? null), o.modelModifiers?.number && (e = Hm(e)), o.modelModifiers?.nullable && Wm(e) && (e = null), o.modelModifiers?.optional && !o.modelModifiers?.nullable && e !== null && Wm(e) && (e = void 0), s.value = e, d();
 		}
-		function re(e) {
-			k(), o.modelModifiers?.lazy || ne(e.target.value);
+		function D(e) {
+			k(), o.modelModifiers?.lazy || re(e.target.value);
 		}
 		function ie(e) {
 			let t = e.target.value;
-			o.modelModifiers?.lazy && ne(t), o.modelModifiers?.trim && (e.target.value = t.trim()), f(), i("change", e);
+			o.modelModifiers?.lazy && re(t), o.modelModifiers?.trim && (e.target.value = t.trim()), f(), i("change", e);
 		}
 		function O(e) {
 			u(), i("blur", e);
 		}
 		function ae() {
-			o.autofocus && te.value?.focus();
+			o.autofocus && ne.value?.focus();
 		}
 		function k() {
-			if (o.autoresize && te.value) {
-				te.value.rows = o.rows;
-				let e = te.value.style.overflow;
-				te.value.style.overflow = "hidden";
-				let t = window.getComputedStyle(te.value), n = Number.parseInt(t.paddingTop) + Number.parseInt(t.paddingBottom), r = Number.parseInt(t.lineHeight), { scrollHeight: i } = te.value, a = (i - n) / r;
-				a > o.rows && (te.value.rows = o.maxrows ? Math.min(a, o.maxrows) : a), te.value.style.overflow = e;
+			if (o.autoresize && ne.value) {
+				ne.value.rows = o.rows;
+				let e = ne.value.style.overflow;
+				ne.value.style.overflow = "hidden";
+				let t = window.getComputedStyle(ne.value), n = Number.parseInt(t.paddingTop) + Number.parseInt(t.paddingBottom), r = Number.parseInt(t.lineHeight), { scrollHeight: i } = ne.value, a = (i - n) / r;
+				a > o.rows && (ne.value.rows = o.maxrows ? Math.min(a, o.maxrows) : a), ne.value.style.overflow = e;
 			}
 		}
 		R(s, () => {
@@ -34113,23 +34113,23 @@ var tV = {
 		}), Ne(() => {
 			clearTimeout(A), clearTimeout(oe);
 		}), t({
-			textareaRef: te,
+			textareaRef: ne,
 			autoResize: k
 		}), (e, t) => (H(), W(I($), {
 			as: I(o).as,
 			"data-slot": e.$attrs["data-slot"] ?? "root",
-			class: M(D.value.root({ class: [I(o).ui?.root, I(o).class] }))
+			class: M(te.value.root({ class: [I(o).ui?.root, I(o).class] }))
 		}, {
 			default: L(() => [
 				G("textarea", X({
 					id: I(h),
 					ref_key: "textareaRef",
-					ref: te,
+					ref: ne,
 					value: I(s),
 					name: I(g),
 					rows: I(o).rows,
 					placeholder: I(o).placeholder,
-					class: D.value.base({ class: I(o).ui?.base }),
+					class: te.value.base({ class: I(o).ui?.base }),
 					disabled: C.value,
 					required: I(o).required
 				}, {
@@ -34137,37 +34137,37 @@ var tV = {
 					...I(y)
 				}, {
 					"data-slot": "base",
-					onInput: re,
+					onInput: D,
 					onBlur: O,
 					onChange: ie,
 					onFocus: t[0] ||= (...e) => I(l) && I(l)(...e)
 				}), null, 16, uV),
-				B(e.$slots, "default", { ui: D.value }),
+				B(e.$slots, "default", { ui: te.value }),
 				I(w) || I(o).avatar || a.leading ? (H(), U("span", {
 					key: 0,
 					"data-slot": "leading",
-					class: M(D.value.leading({ class: I(o).ui?.leading }))
-				}, [B(e.$slots, "leading", { ui: D.value }, () => [I(w) && I(ee) ? (H(), W(Ak, {
+					class: M(te.value.leading({ class: I(o).ui?.leading }))
+				}, [B(e.$slots, "leading", { ui: te.value }, () => [I(w) && I(ee) ? (H(), W(Ak, {
 					key: 0,
 					name: I(ee),
 					"data-slot": "leadingIcon",
-					class: M(D.value.leadingIcon({ class: I(o).ui?.leadingIcon }))
+					class: M(te.value.leadingIcon({ class: I(o).ui?.leadingIcon }))
 				}, null, 8, ["name", "class"])) : I(o).avatar ? (H(), W(Ik, X({
 					key: 1,
-					size: I(o).ui?.leadingAvatarSize || D.value.leadingAvatarSize()
+					size: I(o).ui?.leadingAvatarSize || te.value.leadingAvatarSize()
 				}, I(o).avatar, {
 					"data-slot": "leadingAvatar",
-					class: D.value.leadingAvatar({ class: I(o).ui?.leadingAvatar })
+					class: te.value.leadingAvatar({ class: I(o).ui?.leadingAvatar })
 				}), null, 16, ["size", "class"])) : Y("", !0)])], 2)) : Y("", !0),
 				I(T) || a.trailing ? (H(), U("span", {
 					key: 1,
 					"data-slot": "trailing",
-					class: M(D.value.trailing({ class: I(o).ui?.trailing }))
-				}, [B(e.$slots, "trailing", { ui: D.value }, () => [I(E) ? (H(), W(Ak, {
+					class: M(te.value.trailing({ class: I(o).ui?.trailing }))
+				}, [B(e.$slots, "trailing", { ui: te.value }, () => [I(E) ? (H(), W(Ak, {
 					key: 0,
 					name: I(E),
 					"data-slot": "trailingIcon",
-					class: M(D.value.trailingIcon({ class: I(o).ui?.trailingIcon }))
+					class: M(te.value.trailingIcon({ class: I(o).ui?.trailingIcon }))
 				}, null, 8, ["name", "class"])) : Y("", !0)])], 2)) : Y("", !0)
 			]),
 			_: 3
@@ -35458,21 +35458,21 @@ var xV = {
 		"change"
 	],
 	setup(e, { expose: t, emit: n }) {
-		let r = e, i = n, a = ja(), o = $T("input", r), s = ym(o, "modelValue", i, { defaultValue: o.defaultValue }), c = Sm(), { emitFormBlur: l, emitFormInput: u, emitFormChange: d, size: f, color: p, id: m, name: h, highlight: g, disabled: _, emitFormFocus: v, ariaAttrs: y } = Jk(r, { deferInputValidation: !0 }), { orientation: b, size: x } = zk(r), { isLeading: S, isTrailing: C, leadingIconName: w, trailingIconName: T } = Lk(o), ee = Z(() => p.value ?? o.color), E = Z(() => g.value ?? o.highlight), D = Z(() => x.value ?? f.value ?? o.size), te = Z(() => _.value ?? o.disabled), ne = Z(() => kk({
+		let r = e, i = n, a = ja(), o = $T("input", r), s = ym(o, "modelValue", i, { defaultValue: o.defaultValue }), c = Sm(), { emitFormBlur: l, emitFormInput: u, emitFormChange: d, size: f, color: p, id: m, name: h, highlight: g, disabled: _, emitFormFocus: v, ariaAttrs: y } = Jk(r, { deferInputValidation: !0 }), { orientation: b, size: x } = zk(r), { isLeading: S, isTrailing: C, leadingIconName: w, trailingIconName: T } = Lk(o), ee = Z(() => p.value ?? o.color), E = Z(() => g.value ?? o.highlight), te = Z(() => x.value ?? f.value ?? o.size), ne = Z(() => _.value ?? o.disabled), re = Z(() => kk({
 			extend: xV,
 			...c.ui?.input || {}
 		})({
 			type: o.type,
 			color: ee.value,
 			variant: o.variant,
-			size: D.value,
+			size: te.value,
 			loading: o.loading,
 			highlight: E.value,
 			fixed: o.fixed,
 			leading: S.value || !!o.avatar || !!a.leading,
 			trailing: C.value || !!a.trailing,
 			fieldGroup: b.value
-		})), re = ci("inputRef");
+		})), D = ci("inputRef");
 		function ie(e) {
 			o.modelModifiers?.trim && (typeof e == "string" || e == null) && (e = e?.trim() ?? null), (o.modelModifiers?.number || o.type === "number") && (e = Hm(e)), o.modelModifiers?.nullable && Wm(e) && (e = null), o.modelModifiers?.optional && !o.modelModifiers?.nullable && e !== null && Wm(e) && (e = void 0), s.value = e, u();
 		}
@@ -35487,29 +35487,29 @@ var xV = {
 			l(), i("blur", e);
 		}
 		function A() {
-			o.autofocus && re.value?.focus();
+			o.autofocus && D.value?.focus();
 		}
 		let oe;
 		return Qi(() => {
 			oe = setTimeout(() => {
 				A();
 			}, o.autofocusDelay);
-		}), Ne(() => clearTimeout(oe)), t({ inputRef: re }), (e, t) => (H(), W(I($), {
+		}), Ne(() => clearTimeout(oe)), t({ inputRef: D }), (e, t) => (H(), W(I($), {
 			as: I(o).as,
 			"data-slot": e.$attrs["data-slot"] ?? "root",
-			class: M(ne.value.root({ class: [I(o).ui?.root, I(o).class] }))
+			class: M(re.value.root({ class: [I(o).ui?.root, I(o).class] }))
 		}, {
 			default: L(() => [
 				G("input", X({
 					id: I(m),
 					ref_key: "inputRef",
-					ref: re,
+					ref: D,
 					type: I(o).type,
 					value: I(s),
 					name: I(h),
 					placeholder: I(o).placeholder,
-					class: ne.value.base({ class: I(o).ui?.base }),
-					disabled: te.value,
+					class: re.value.base({ class: I(o).ui?.base }),
+					disabled: ne.value,
 					required: I(o).required,
 					autocomplete: I(o).autocomplete
 				}, {
@@ -35522,32 +35522,32 @@ var xV = {
 					onChange: ae,
 					onFocus: t[0] ||= (...e) => I(v) && I(v)(...e)
 				}), null, 16, SV),
-				B(e.$slots, "default", { ui: ne.value }),
+				B(e.$slots, "default", { ui: re.value }),
 				I(S) || I(o).avatar || a.leading ? (H(), U("span", {
 					key: 0,
 					"data-slot": "leading",
-					class: M(ne.value.leading({ class: I(o).ui?.leading }))
-				}, [B(e.$slots, "leading", { ui: ne.value }, () => [I(S) && I(w) ? (H(), W(Ak, {
+					class: M(re.value.leading({ class: I(o).ui?.leading }))
+				}, [B(e.$slots, "leading", { ui: re.value }, () => [I(S) && I(w) ? (H(), W(Ak, {
 					key: 0,
 					name: I(w),
 					"data-slot": "leadingIcon",
-					class: M(ne.value.leadingIcon({ class: I(o).ui?.leadingIcon }))
+					class: M(re.value.leadingIcon({ class: I(o).ui?.leadingIcon }))
 				}, null, 8, ["name", "class"])) : I(o).avatar ? (H(), W(Ik, X({
 					key: 1,
-					size: I(o).ui?.leadingAvatarSize || ne.value.leadingAvatarSize()
+					size: I(o).ui?.leadingAvatarSize || re.value.leadingAvatarSize()
 				}, I(o).avatar, {
 					"data-slot": "leadingAvatar",
-					class: ne.value.leadingAvatar({ class: I(o).ui?.leadingAvatar })
+					class: re.value.leadingAvatar({ class: I(o).ui?.leadingAvatar })
 				}), null, 16, ["size", "class"])) : Y("", !0)])], 2)) : Y("", !0),
 				I(C) || a.trailing ? (H(), U("span", {
 					key: 1,
 					"data-slot": "trailing",
-					class: M(ne.value.trailing({ class: I(o).ui?.trailing }))
-				}, [B(e.$slots, "trailing", { ui: ne.value }, () => [I(T) ? (H(), W(Ak, {
+					class: M(re.value.trailing({ class: I(o).ui?.trailing }))
+				}, [B(e.$slots, "trailing", { ui: re.value }, () => [I(T) ? (H(), W(Ak, {
 					key: 0,
 					name: I(T),
 					"data-slot": "trailingIcon",
-					class: M(ne.value.trailingIcon({ class: I(o).ui?.trailingIcon }))
+					class: M(re.value.trailingIcon({ class: I(o).ui?.trailingIcon }))
 				}, null, 8, ["name", "class"])) : Y("", !0)])], 2)) : Y("", !0)
 			]),
 			_: 3
@@ -38864,7 +38864,7 @@ var VV = {
 			placeholder: c("selectMenu.search"),
 			variant: "none",
 			fixed: o.fixed
-		})), { emitFormBlur: v, emitFormFocus: y, emitFormInput: b, emitFormChange: x, size: S, color: C, id: w, name: T, highlight: ee, disabled: E, ariaAttrs: D } = Jk(r), { orientation: te, size: ne } = zk(r), { isLeading: re, isTrailing: ie, leadingIconName: O, trailingIconName: ae } = Lk(Z(() => ({
+		})), { emitFormBlur: v, emitFormFocus: y, emitFormInput: b, emitFormChange: x, size: S, color: C, id: w, name: T, highlight: ee, disabled: E, ariaAttrs: te } = Jk(r), { orientation: ne, size: re } = zk(r), { isLeading: D, isTrailing: ie, leadingIconName: O, trailingIconName: ae } = Lk(Z(() => ({
 			icon: o.icon,
 			leading: o.leading,
 			leadingIcon: o.leadingIcon,
@@ -38872,7 +38872,7 @@ var VV = {
 			trailingIcon: o.trailingIcon ?? l.ui.icons.chevronDown,
 			loading: o.loading,
 			loadingIcon: o.loadingIcon
-		}))), k = Z(() => C.value ?? o.color), A = Z(() => ee.value ?? o.highlight), oe = Z(() => ne.value ?? S.value ?? o.size), se = Z(() => E.value ?? o.disabled), [ce, le] = gm(), [ue, de] = gm({ props: {
+		}))), k = Z(() => C.value ?? o.color), A = Z(() => ee.value ?? o.highlight), oe = Z(() => re.value ?? S.value ?? o.size), se = Z(() => E.value ?? o.disabled), [ce, le] = gm(), [ue, de] = gm({ props: {
 			item: {
 				type: [
 					Object,
@@ -38896,9 +38896,9 @@ var VV = {
 			loading: o.loading,
 			highlight: A.value,
 			fixed: o.fixed,
-			leading: re.value || !!o.avatar || !!a.leading,
+			leading: D.value || !!o.avatar || !!a.leading,
 			trailing: ie.value || !!a.trailing,
-			fieldGroup: te.value,
+			fieldGroup: ne.value,
 			virtualize: !!o.virtualize,
 			multiple: o.multiple
 		}));
@@ -39131,10 +39131,10 @@ var VV = {
 					}, {
 						"aria-label": void 0,
 						...e.$attrs,
-						...I(D)
+						...I(te)
 					}, { onKeydown: [fu(Ee, ["down"]), fu(Ee, ["up"])] }), {
 						default: L(() => [
-							I(re) || I(o).avatar || a.leading ? (H(), U("span", {
+							I(D) || I(o).avatar || a.leading ? (H(), U("span", {
 								key: 0,
 								"data-slot": "leading",
 								class: M(j.value.leading({ class: I(o).ui?.leading }))
@@ -39142,7 +39142,7 @@ var VV = {
 								modelValue: n,
 								open: r,
 								ui: j.value
-							}, () => [I(re) && I(O) ? (H(), W(Ak, {
+							}, () => [I(D) && I(O) ? (H(), W(Ak, {
 								key: 0,
 								name: I(O),
 								"data-slot": "leadingIcon",
@@ -39831,7 +39831,7 @@ var VV = {
 			sideOffset: 8,
 			collisionPadding: 8,
 			position: u.value
-		})), f = /* @__PURE__ */ Sn(() => Om(o.arrow, { rounded: !0 })), { emitFormChange: p, emitFormInput: m, emitFormBlur: h, emitFormFocus: g, size: _, color: v, id: y, name: b, highlight: x, disabled: S, ariaAttrs: C } = Jk(r), { orientation: w, size: T } = zk(r), { isLeading: ee, isTrailing: E, leadingIconName: D, trailingIconName: te } = Lk(Z(() => ({
+		})), f = /* @__PURE__ */ Sn(() => Om(o.arrow, { rounded: !0 })), { emitFormChange: p, emitFormInput: m, emitFormBlur: h, emitFormFocus: g, size: _, color: v, id: y, name: b, highlight: x, disabled: S, ariaAttrs: C } = Jk(r), { orientation: w, size: T } = zk(r), { isLeading: ee, isTrailing: E, leadingIconName: te, trailingIconName: ne } = Lk(Z(() => ({
 			icon: o.icon,
 			leading: o.leading,
 			leadingIcon: o.leadingIcon,
@@ -39839,15 +39839,15 @@ var VV = {
 			trailingIcon: o.trailingIcon ?? s.ui.icons.chevronDown,
 			loading: o.loading,
 			loadingIcon: o.loadingIcon
-		}))), ne = Z(() => v.value ?? o.color), re = Z(() => x.value ?? o.highlight), ie = Z(() => T.value ?? _.value ?? o.size), O = Z(() => S.value ?? o.disabled), ae = Z(() => u.value === "item-aligned"), k = Z(() => kk({
+		}))), re = Z(() => v.value ?? o.color), D = Z(() => x.value ?? o.highlight), ie = Z(() => T.value ?? _.value ?? o.size), O = Z(() => S.value ?? o.disabled), ae = Z(() => u.value === "item-aligned"), k = Z(() => kk({
 			extend: UV,
 			...s.ui?.select || {}
 		})({
-			color: ne.value,
+			color: re.value,
 			variant: o.variant,
 			size: ie.value,
 			loading: o.loading,
-			highlight: re.value,
+			highlight: D.value,
 			fixed: o.fixed,
 			leading: ee.value || !!o.avatar || !!a.leading,
 			trailing: E.value || !!a.trailing,
@@ -39939,9 +39939,9 @@ var VV = {
 						modelValue: e,
 						open: n,
 						ui: k.value
-					}, () => [I(ee) && I(D) ? (H(), W(Ak, {
+					}, () => [I(ee) && I(te) ? (H(), W(Ak, {
 						key: 0,
-						name: I(D),
+						name: I(te),
 						"data-slot": "leadingIcon",
 						class: M(k.value.leadingIcon({ class: I(o).ui?.leadingIcon }))
 					}, null, 8, ["name", "class"])) : I(o).avatar ? (H(), W(Ik, X({
@@ -39971,9 +39971,9 @@ var VV = {
 						modelValue: e,
 						open: n,
 						ui: k.value
-					}, () => [I(te) ? (H(), W(Ak, {
+					}, () => [I(ne) ? (H(), W(Ak, {
 						key: 0,
-						name: I(te),
+						name: I(ne),
 						"data-slot": "trailingIcon",
 						class: M(k.value.trailingIcon({ class: I(o).ui?.trailingIcon }))
 					}, null, 8, ["name", "class"])) : Y("", !0)])], 2)) : Y("", !0)
@@ -40596,30 +40596,42 @@ var VV = {
 }, QV = {
 	key: 0,
 	class: "channel-nav-preview-round"
-}, $V = { class: "channel-nav-preview-header" }, eH = { class: "channel-nav-preview-meta" }, tH = { key: 0 }, nH = { key: 1 }, rH = ["innerHTML"], iH = { class: "channel-message-byline" }, aH = { class: "channel-message-meta" }, oH = { class: "channel-message-author" }, sH = { class: "channel-message-round" }, cH = { class: "channel-message-provenance" }, lH = ["title"], uH = { key: 0 }, dH = { key: 1 }, fH = {
+}, $V = { class: "channel-nav-preview-header" }, eH = { class: "channel-nav-preview-meta" }, tH = { key: 0 }, nH = { key: 1 }, rH = ["innerHTML"], iH = { class: "channel-topic-heading" }, aH = { class: "channel-topic-eyebrow" }, oH = {
+	key: 0,
+	class: "channel-topic-section channel-topic-request"
+}, sH = { class: "channel-topic-text" }, cH = {
+	key: 1,
+	class: "channel-topic-section"
+}, lH = { class: "channel-topic-text" }, uH = {
+	key: 2,
+	class: "channel-topic-section"
+}, dH = { class: "channel-topic-text" }, fH = { class: "channel-topic-section channel-topic-config" }, pH = { class: "channel-topic-people" }, mH = {
+	key: 0,
+	class: "channel-topic-person"
+}, hH = { class: "channel-topic-bounds" }, gH = { class: "channel-message-byline" }, _H = { class: "channel-message-meta" }, vH = { class: "channel-message-author" }, yH = { class: "channel-message-round" }, bH = { class: "channel-message-provenance" }, xH = ["title"], SH = { key: 0 }, CH = { key: 1 }, wH = {
 	key: 1,
 	class: "channel-receipt"
-}, pH = ["aria-label"], mH = ["innerHTML"], hH = {
+}, TH = ["aria-label"], EH = ["innerHTML"], DH = {
 	key: 2,
 	class: "channel-answer"
-}, gH = ["id", "innerHTML"], _H = {
+}, OH = ["id", "innerHTML"], kH = {
 	key: 3,
 	class: "channel-answer-summary"
-}, vH = { key: 0 }, yH = ["innerHTML"], bH = { class: "channel-message-actions" }, xH = { class: "channel-message-toolbar" }, SH = {
-	key: 0,
+}, AH = { key: 0 }, jH = ["innerHTML"], MH = { class: "channel-message-actions" }, NH = { class: "channel-message-toolbar" }, PH = {
+	key: 1,
 	class: "channel-empty"
-}, CH = {
+}, FH = {
 	key: 2,
 	class: "channel-latest-dock"
-}, wH = { class: "channel-composer-dock" }, TH = {
+}, IH = { class: "channel-composer-dock" }, LH = {
 	key: 0,
 	class: "channel-reply-draft"
-}, EH = {
+}, RH = {
 	key: 1,
 	class: "channel-answer-editor"
-}, DH = { class: "channel-composer-identity" }, OH = { class: "channel-shortcut" }, kH = { class: "channel-composer-note" }, AH = { class: "channel-draft-length" }, jH = 160, MH = 100, NH = 4, PH = 3, FH = 320, IH = 34, LH = 12, RH = 16, zH = 14, BH = 8, VH = 28, HH = 18, UH = 1, WH = 1.5, GH = 3, KH = 6, qH = .62, JH = .72, YH = .88, XH = .16, ZH = 12, QH = 450, $H = 8, eU = 70, tU = 20, nU = {
+}, zH = { class: "channel-composer-identity" }, BH = { class: "channel-shortcut" }, VH = { class: "channel-composer-note" }, HH = { class: "channel-draft-length" }, UH = 160, WH = 100, GH = 4, KH = 3, qH = 320, JH = 34, YH = 12, XH = 16, ZH = 14, QH = 8, $H = 28, eU = 18, tU = 1, nU = 1.5, rU = 3, iU = 6, aU = .62, oU = .72, sU = .88, cU = .16, lU = 12, uU = 450, dU = 8, fU = 70, pU = 20, mU = {
 	__name: "ChannelDiscussion",
-	emits: ["detail"],
+	emits: ["detail", "edit"],
 	setup(e, { emit: t }) {
 		let n = t, { view: r, bridge: i, field: a, act: o, pending: s } = xr("discussion"), c = a("message-input"), l = Z(() => [...c.value].length), u = a("author-select"), d = a("message-kind"), f = a("message-summary"), p = a("message-summary-source"), m = Z(() => ["opinion", "forward"].includes(d.value) && u.value !== "用户"), h = [{
 			value: "author",
@@ -40627,12 +40639,35 @@ var VV = {
 		}, {
 			value: "submitter",
 			label: "代发者整理"
-		}], g = a("search-input"), _ = /* @__PURE__ */ F(null), v = /* @__PURE__ */ F(/* @__PURE__ */ new Set()), y = /* @__PURE__ */ new WeakMap(), b = Z(() => new Map(r.value.messages.map((e) => (y.has(e) || y.set(e, we(e)), [e.id, y.get(e)])))), x = /* @__PURE__ */ F(null), S = /* @__PURE__ */ F(!1), C = /* @__PURE__ */ F(null), w = /* @__PURE__ */ F(null), T = /* @__PURE__ */ F(null), ee = /* @__PURE__ */ F(null), E = /* @__PURE__ */ F(!1), D = /* @__PURE__ */ F(!1), te = /* @__PURE__ */ F(null), ne = /* @__PURE__ */ F(0), re = /* @__PURE__ */ F(0), ie = /* @__PURE__ */ F(0), O = YB(), ae = {
+		}], g = a("search-input"), _ = /* @__PURE__ */ F(null), v = /* @__PURE__ */ F(/* @__PURE__ */ new Set()), y = /* @__PURE__ */ new WeakMap(), b = Z(() => new Map(r.value.messages.map((e) => (y.has(e) || y.set(e, De(e)), [e.id, y.get(e)])))), x = /* @__PURE__ */ F(!1), S = Z(() => {
+			let e = be.value || {}, t = e.user_request?.trim() ? {
+				label: "用户原文",
+				text: e.user_request
+			} : e.background?.trim() ? {
+				label: "背景",
+				text: e.background
+			} : null, n = Object.entries(e.experts || {}).map(([e, t]) => ({
+				name: e,
+				mode: t === "cli" ? "CLI" : "在线"
+			})), r = e.limits || {}, i = [
+				r.max_rounds ? `${r.max_rounds} 轮` : "轮次不限",
+				r.max_minutes ? `${r.max_minutes} 分钟` : "时长不限",
+				e.runtime?.mode === "automatic" ? "全自动" : "手动"
+			].join(" · ");
+			return {
+				request: t,
+				goal: e.goal,
+				boundaries: e.boundaries,
+				host: e.host,
+				experts: n,
+				bounds: i
+			};
+		}), C = Z(() => JSON.stringify(S.value)), w = /* @__PURE__ */ F(null), T = /* @__PURE__ */ F(!1), ee = /* @__PURE__ */ F(null), E = /* @__PURE__ */ F(null), te = /* @__PURE__ */ F(null), ne = /* @__PURE__ */ F(null), re = /* @__PURE__ */ F(!1), D = /* @__PURE__ */ F(!1), ie = /* @__PURE__ */ F(null), O = /* @__PURE__ */ F(0), ae = /* @__PURE__ */ F(0), k = /* @__PURE__ */ F(0), A = YB(), oe = {
 			type: "spring",
 			mass: 1,
 			stiffness: 604.0197893466687,
 			damping: 44.729801589453814
-		}, k = null, A = !1, oe = JB(0, ae), se = JB(0, ae), ce = JB(0, ae), le = KB(ce, [0, 1], [.96, 1]), ue = KB(ce, [0, 1], [-8, 0]), de = KB(ce, [0, 1], [0, 1]), j = Z(() => r.value.messages.find((e) => e.id === T.value)), pe = Z(() => Ee.value.find((e) => e.messages.some((e) => e.id === T.value))), me = Z(() => pe.value?.label), he = Z(() => D.value ? Ae.value.findIndex((e) => e.key === ee.value) : -1), ge = /* @__PURE__ */ F(null), N = /* @__PURE__ */ F(!0), _e = Z(() => r.value.room), ve = Z(() => Object.entries(i.identities).map(([e, t]) => ({
+		}, se = null, ce = !1, le = JB(0, oe), ue = JB(0, oe), de = JB(0, oe), j = KB(de, [0, 1], [.96, 1]), pe = KB(de, [0, 1], [-8, 0]), me = KB(de, [0, 1], [0, 1]), he = Z(() => r.value.messages.find((e) => e.id === te.value)), ge = Z(() => ke.value.find((e) => e.messages.some((e) => e.id === te.value))), N = Z(() => ge.value?.label), _e = Z(() => D.value ? Ne.value.findIndex((e) => e.key === ne.value) : -1), ve = /* @__PURE__ */ F(null), ye = /* @__PURE__ */ F(!0), be = Z(() => r.value.room), xe = Z(() => Object.entries(i.identities).map(([e, t]) => ({
 			label: i.display_name(e),
 			value: e,
 			avatar: {
@@ -40641,8 +40676,8 @@ var VV = {
 				alt: i.display_name(e),
 				class: `channel-avatar ${t.style}`
 			},
-			description: e === "用户" ? "发起与协助" : _e.value?.experts?.[e] === "cli" ? "本地 CLI · 读写" : _e.value?.experts?.[e] === "online" ? "在线 AI · 只读" : "未配置参与方式"
-		}))), ye = Z(() => ve.value.find((e) => e.value === u.value)), be = [
+			description: e === "用户" ? "发起与协助" : be.value?.experts?.[e] === "cli" ? "本地 CLI · 读写" : be.value?.experts?.[e] === "online" ? "在线 AI · 只读" : "未配置参与方式"
+		}))), Se = Z(() => xe.value.find((e) => e.value === u.value)), Ce = [
 			{
 				label: "运行回执",
 				value: "receipt"
@@ -40662,27 +40697,27 @@ var VV = {
 				value: "forward",
 				icon: "i-lucide-forward"
 			}
-		], xe = new Intl.DateTimeFormat("zh-CN", {
+		], we = new Intl.DateTimeFormat("zh-CN", {
 			month: "long",
 			day: "numeric",
 			weekday: "long"
-		}), Se = Z(() => d.value === "receipt" ? "运行回执，由用户录入" : d.value === "forward" ? `${i.display_name(_e.value.host)} 代发` : d.value === "moderation" ? "主持发言" : u.value === "用户" ? "本人发言" : `代发 ${u.value} 的观点`);
-		function Ce(e) {
+		}), Te = Z(() => d.value === "receipt" ? "运行回执，由用户录入" : d.value === "forward" ? `${i.display_name(be.value.host)} 代发` : d.value === "moderation" ? "主持发言" : u.value === "用户" ? "本人发言" : `代发 ${u.value} 的观点`);
+		function Ee(e) {
 			for (let t of e.querySelectorAll("pre code, tbody")) {
 				let n = e.ownerDocument.createRange();
 				if (t.tagName === "TBODY") {
-					if (t.children.length <= PH) continue;
+					if (t.children.length <= KH) continue;
 					n.setStartAfter(t.children[2]);
 				} else {
 					let e = t.textContent.trimEnd().split("\n");
-					if (e.length <= NH) continue;
-					n.setStart(t.firstChild, e.slice(0, NH).join("\n").length);
+					if (e.length <= GH) continue;
+					n.setStart(t.firstChild, e.slice(0, GH).join("\n").length);
 				}
 				return n.setEnd(e, e.childNodes.length), n.deleteContents(), !0;
 			}
 			return !1;
 		}
-		function we(e) {
+		function De(e) {
 			let t = {
 				truncated: !1,
 				html: e.rendered_text
@@ -40690,14 +40725,14 @@ var VV = {
 			if (e.kind === "receipt") return t;
 			let n = document.createElement("template");
 			n.innerHTML = e.rendered_text;
-			let r = Ce(n.content), i = document.createTreeWalker(n.content, NodeFilter.SHOW_TEXT, { acceptNode: (e) => e.parentElement?.closest(".katex-mathml") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT }), a = [];
+			let r = Ee(n.content), i = document.createTreeWalker(n.content, NodeFilter.SHOW_TEXT, { acceptNode: (e) => e.parentElement?.closest(".katex-mathml") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT }), a = [];
 			for (; i.nextNode();) a.push(i.currentNode);
 			let o = [...a.map((e) => e.textContent).join("").trimEnd()];
-			if (o.length <= jH) return {
+			if (o.length <= UH) return {
 				truncated: r,
 				html: n.innerHTML
 			};
-			let s = o.slice(0, jH).join(""), c = [...s.matchAll(/[。！？；]\s*|[.!?;](?:\s|$)|\n/gu)].at(-1), l = c ? c.index + c[0].length : 0, u = [...s.slice(0, l)].length >= MH, d = u ? l : s.length;
+			let s = o.slice(0, UH).join(""), c = [...s.matchAll(/[。！？；]\s*|[.!?;](?:\s|$)|\n/gu)].at(-1), l = c ? c.index + c[0].length : 0, u = [...s.slice(0, l)].length >= WH, d = u ? l : s.length;
 			for (let e of a) {
 				if (d > e.textContent.length) {
 					d -= e.textContent.length;
@@ -40712,23 +40747,23 @@ var VV = {
 				html: n.innerHTML
 			};
 		}
-		let Te = Z(() => {
+		let Oe = Z(() => {
 			let e = [];
 			for (let t of r.value.messages) {
 				let n = new Date(t.created_at), r = n.toLocaleDateString();
 				e.at(-1)?.key !== r && e.push({
 					key: r,
-					label: xe.format(n),
+					label: we.format(n),
 					messages: []
 				}), e.at(-1).messages.push(t);
 			}
 			return e;
-		}), Ee = Z(() => {
+		}), ke = Z(() => {
 			let e = [];
 			for (let t of r.value.messages) {
-				let n = _e.value.rounds?.findLast((e) => e.start_id <= t.id), r = n?.number || 0;
+				let n = be.value.rounds?.findLast((e) => e.start_id <= t.id), r = n?.number || 0;
 				if (e.at(-1)?.number !== r) {
-					let t = r ? `第 ${r} 轮` : "未分组", i = n ? `${n.speakers.length}/${Object.keys(_e.value.experts).length} 人已发言` : "尚无参与专家的观点";
+					let t = r ? `第 ${r} 轮` : "未分组", i = n ? `${n.speakers.length}/${Object.keys(be.value.experts).length} 人已发言` : "尚无参与专家的观点";
 					e.push({
 						number: r,
 						label: t,
@@ -40739,9 +40774,9 @@ var VV = {
 				e.at(-1).messages.push(t);
 			}
 			return e;
-		}), De = Z(() => Ee.value.find((e) => e.messages.some((e) => e.id === C.value))?.number), Oe = Z(() => new Map(Ee.value.flatMap((e) => e.messages.map((t) => [t.id, e.label])))), ke = Z(() => {
+		}), Ae = Z(() => ke.value.find((e) => e.messages.some((e) => e.id === ee.value))?.number), je = Z(() => new Map(ke.value.flatMap((e) => e.messages.map((t) => [t.id, e.label])))), Me = Z(() => {
 			let e = 0;
-			return Ee.value.map((t) => ({
+			return ke.value.map((t) => ({
 				number: t.number,
 				count: t.messages.length,
 				entries: [{
@@ -40759,41 +40794,41 @@ var VV = {
 					index: e++
 				}))]
 			}));
-		}), Ae = Z(() => ke.value.flatMap((e) => e.entries));
-		function je() {
+		}), Ne = Z(() => Me.value.flatMap((e) => e.entries));
+		function Pe() {
 			let e = _.value;
 			if (!e || !e.clientHeight) return;
-			N.value = e.scrollHeight - e.scrollTop - e.clientHeight < eU;
-			let t = e.getBoundingClientRect(), n = [...e.querySelectorAll("[data-message-id]")], r = n.find((e) => Number(e.dataset.messageId) === w.value);
+			ye.value = e.scrollHeight - e.scrollTop - e.clientHeight < fU;
+			let t = e.getBoundingClientRect(), n = [...e.querySelectorAll("[data-message-id]")], r = n.find((e) => Number(e.dataset.messageId) === E.value);
 			if (r && r.getBoundingClientRect().bottom > t.top && r.getBoundingClientRect().top < t.bottom) {
-				C.value = w.value;
+				ee.value = E.value;
 				return;
 			}
-			w.value = null;
-			let i = n.find((e) => e.getBoundingClientRect().bottom > t.top + tU);
-			C.value = i ? Number(i.dataset.messageId) : null;
+			E.value = null;
+			let i = n.find((e) => e.getBoundingClientRect().bottom > t.top + pU);
+			ee.value = i ? Number(i.dataset.messageId) : null;
 		}
-		async function Me() {
-			await Qn(), N.value && _.value && (_.value.scrollTop = _.value.scrollHeight), je();
+		async function Fe() {
+			await Qn(), ye.value && _.value && (_.value.scrollTop = _.value.scrollHeight), Pe();
 		}
-		R(() => r.value.messages, Me, { immediate: !0 }), R([
+		R(() => r.value.messages, Fe, { immediate: !0 }), R([
 			() => r.value.room?.id,
 			() => r.value.query,
 			() => r.value.mention_only
 		], () => {
-			w.value = null, C.value = null, Xe(), N.value = !0;
+			E.value = null, ee.value = null, $e(), ye.value = !0;
 		}), R(() => r.value.tab, (e) => {
-			Xe(), e === "discussion" && Me();
+			$e(), e === "discussion" && Fe();
 		}), R(() => r.value.room?.id, () => v.value.clear());
-		async function Ne(e, t) {
+		async function Ie(e, t) {
 			let n = t.currentTarget.closest("[data-message-id]"), r = v.value.has(e.id), i = _.value.scrollTop;
-			N.value = !1, r ? v.value.delete(e.id) : v.value.add(e.id), Xe(), await Qn(), r || (_.value.scrollTop = i), r && n.getBoundingClientRect().top < _.value.getBoundingClientRect().top && (_.value.scrollTop += n.getBoundingClientRect().top - _.value.getBoundingClientRect().top - tU), je();
+			ye.value = !1, r ? v.value.delete(e.id) : v.value.add(e.id), $e(), await Qn(), r || (_.value.scrollTop = i), r && n.getBoundingClientRect().top < _.value.getBoundingClientRect().top && (_.value.scrollTop += n.getBoundingClientRect().top - _.value.getBoundingClientRect().top - pU), Pe();
 		}
-		function Pe(e) {
+		function Le(e) {
 			let t = _.value, n = t?.querySelector(`[data-message-id="${e}"]`);
-			n && (Ye(), w.value = e, C.value = e, t.scrollTop += n.getBoundingClientRect().top - t.getBoundingClientRect().top - tU, n.focus({ preventScroll: !0 }), je());
+			n && (Qe(), E.value = e, ee.value = e, t.scrollTop += n.getBoundingClientRect().top - t.getBoundingClientRect().top - pU, n.focus({ preventScroll: !0 }), Pe());
 		}
-		function Fe(e) {
+		function Re(e) {
 			(e.type !== "keydown" || [
 				"ArrowUp",
 				"ArrowDown",
@@ -40802,123 +40837,123 @@ var VV = {
 				"Home",
 				"End",
 				" "
-			].includes(e.key)) && (w.value = null);
+			].includes(e.key)) && (E.value = null);
 		}
-		function Ie(e, t) {
+		function ze(e, t) {
 			let n = {
 				ArrowUp: t - 1,
 				ArrowDown: t + 1,
 				Home: 0,
-				End: Ae.value.length - 1
+				End: Ne.value.length - 1
 			};
 			if (!Object.hasOwn(n, e.key)) return;
 			e.preventDefault();
-			let r = Math.max(0, Math.min(n[e.key], Ae.value.length - 1));
-			x.value.querySelectorAll("button")[r].focus({ preventScroll: !0 });
+			let r = Math.max(0, Math.min(n[e.key], Ne.value.length - 1));
+			w.value.querySelectorAll("button")[r].focus({ preventScroll: !0 });
 		}
-		function Le(e) {
-			let t = x.value;
+		function Be(e) {
+			let t = w.value;
 			if (!t?.clientHeight || !e) return;
 			let n = t.getBoundingClientRect(), r = e.getBoundingClientRect();
-			r.top < n.top + ZH ? t.scrollTop += r.top - n.top - ZH : r.bottom > n.bottom - ZH && (t.scrollTop += r.bottom - n.bottom + ZH);
+			r.top < n.top + lU ? t.scrollTop += r.top - n.top - lU : r.bottom > n.bottom - lU && (t.scrollTop += r.bottom - n.bottom + lU);
 		}
-		async function Re() {
-			await Qn(), Le(x.value?.querySelector(`[data-jump-id="${C.value}"]`));
+		async function Ve() {
+			await Qn(), Be(w.value?.querySelector(`[data-jump-id="${ee.value}"]`));
 		}
-		R(C, Re);
-		function ze(e, t) {
-			!k && t.currentTarget.matches(":focus-visible") && (S.value = !0, Le(e.round ? t.currentTarget.parentElement.querySelector("[data-jump-id]") : t.currentTarget), Je(e, t));
+		R(ee, Ve);
+		function He(e, t) {
+			!se && t.currentTarget.matches(":focus-visible") && (T.value = !0, Be(e.round ? t.currentTarget.parentElement.querySelector("[data-jump-id]") : t.currentTarget), Ze(e, t));
 		}
-		function Be(e, t) {
-			if (A = !1, !["touch", "pen"].includes(t.pointerType)) return;
-			Ye(), S.value = !1;
+		function Ue(e, t) {
+			if (ce = !1, !["touch", "pen"].includes(t.pointerType)) return;
+			Qe(), T.value = !1;
 			let n = {
 				pointer: t.pointerId,
 				x: t.clientX,
 				y: t.clientY,
 				target: t.currentTarget
 			};
-			k = n, n.timer = setTimeout(() => {
-				k === n && (A = !0, Je(e, { currentTarget: n.target }));
-			}, QH);
+			se = n, n.timer = setTimeout(() => {
+				se === n && (ce = !0, Ze(e, { currentTarget: n.target }));
+			}, uU);
 		}
-		function Ve() {
-			k && clearTimeout(k.timer), k = null;
-		}
-		function He(e) {
-			k?.pointer === e.pointerId && (e.type === "pointercancel" && (A = !0), Ye());
-		}
-		function Ue(e, t) {
-			["touch", "pen"].includes(t.pointerType) ? k?.pointer === t.pointerId && Math.hypot(t.clientX - k.x, t.clientY - k.y) > $H && (A = !0, Ye()) : t.type === "pointerenter" && S.value || (S.value = !1, (ee.value !== e.key || !D.value) && Je(e, t));
-		}
-		function We(e, t) {
-			A && t.detail !== 0 ? (A = !1, t.preventDefault()) : Pe(e.message.id);
+		function We() {
+			se && clearTimeout(se.timer), se = null;
 		}
 		function Ge(e) {
-			k && e.preventDefault();
+			se?.pointer === e.pointerId && (e.type === "pointercancel" && (ce = !0), Qe());
 		}
-		function Ke(e) {
-			(e.deltaX || e.deltaY) && (S.value = !1, Ye());
+		function Ke(e, t) {
+			["touch", "pen"].includes(t.pointerType) ? se?.pointer === t.pointerId && Math.hypot(t.clientX - se.x, t.clientY - se.y) > dU && (ce = !0, Qe()) : t.type === "pointerenter" && T.value || (T.value = !1, (ne.value !== e.key || !D.value) && Ze(e, t));
 		}
-		function qe() {
-			Ye(), w.value = null, N.value = !0, Me();
+		function qe(e, t) {
+			ce && t.detail !== 0 ? (ce = !1, t.preventDefault()) : Le(e.message.id);
 		}
-		async function Je(e, t) {
-			let n = e.message, r = t.currentTarget.getBoundingClientRect(), i = x.value.getBoundingClientRect(), a = Math.min(FH, innerWidth - 24), o = i.right + RH;
-			if (ne.value = Math.max(LH, Math.min(o, innerWidth - a - LH)), T.value = n.id, ee.value = e.key, E.value = e.round, D.value = !0, await Qn(), !D.value || ee.value !== e.key) return;
-			ie.value = te.value.scrollHeight + IH;
-			let s = (Math.max(r.top, i.top + ZH) + Math.min(r.bottom, i.bottom - ZH)) / 2 - ie.value / 2;
-			re.value = Math.max(LH, Math.min(s, innerHeight - ie.value - LH));
-			let c = O.value || ce.get() === 0;
-			oe[c ? "jump" : "set"](re.value), se[c ? "jump" : "set"](ie.value);
+		function Je(e) {
+			se && e.preventDefault();
 		}
 		function Ye(e) {
-			e?.relatedTarget?.closest?.(".channel-message-map, .channel-nav-preview") || (Ve(), D.value = !1);
+			(e.deltaX || e.deltaY) && (T.value = !1, Qe());
 		}
 		function Xe() {
-			Ve(), D.value = !1, ce.jump(0), T.value = null;
+			Qe(), E.value = null, ye.value = !0, Fe();
 		}
-		async function Ze() {
-			Xe(), await Me(), await Re();
+		async function Ze(e, t) {
+			let n = e.message, r = t.currentTarget.getBoundingClientRect(), i = w.value.getBoundingClientRect(), a = Math.min(qH, innerWidth - 24), o = i.right + XH;
+			if (O.value = Math.max(YH, Math.min(o, innerWidth - a - YH)), te.value = n.id, ne.value = e.key, re.value = e.round, D.value = !0, await Qn(), !D.value || ne.value !== e.key) return;
+			k.value = ie.value.scrollHeight + JH;
+			let s = (Math.max(r.top, i.top + lU) + Math.min(r.bottom, i.bottom - lU)) / 2 - k.value / 2;
+			ae.value = Math.max(YH, Math.min(s, innerHeight - k.value - YH));
+			let c = A.value || de.get() === 0;
+			le[c ? "jump" : "set"](ae.value), ue[c ? "jump" : "set"](k.value);
 		}
 		function Qe(e) {
-			let t = e.entries.length - 1;
-			return Math.max(-3, Math.min(t + GH, he.value - e.entries[0].index));
+			e?.relatedTarget?.closest?.(".channel-message-map, .channel-nav-preview") || (We(), D.value = !1);
 		}
-		function $e(e, t) {
-			let n = he.value < 0 ? Infinity : Math.abs(t - he.value), r = Math.max(0, 1 - n / GH), i = C.value === e.message.id, a = n === 0 || i && he.value < 0, o = BH;
+		function $e() {
+			We(), D.value = !1, de.jump(0), te.value = null;
+		}
+		async function et() {
+			$e(), await Fe(), await Ve();
+		}
+		function tt(e) {
+			let t = e.entries.length - 1;
+			return Math.max(-3, Math.min(t + rU, _e.value - e.entries[0].index));
+		}
+		function nt(e, t) {
+			let n = _e.value < 0 ? Infinity : Math.abs(t - _e.value), r = Math.max(0, 1 - n / rU), i = ee.value === e.message.id, a = n === 0 || i && _e.value < 0, o = QH;
 			return {
-				scaleX: a ? VH / o : i ? HH / o : 1 + r * KH / o,
-				height: a ? WH : UH,
-				opacity: a ? YH : i ? JH : qH + r * XH
+				scaleX: a ? $H / o : i ? eU / o : 1 + r * iU / o,
+				height: a ? nU : tU,
+				opacity: a ? sU : i ? oU : aU + r * cU
 			};
 		}
-		R([D, O], () => {
+		R([D, A], () => {
 			let e = +!!D.value;
-			O.value ? (ce.jump(e), oe.jump(re.value), se.jump(ie.value)) : ce.set(e);
-		}), Qi(() => window.addEventListener("resize", Ze)), ta(() => window.removeEventListener("resize", Ze)), ta(Ve);
-		function et(e) {
+			A.value ? (de.jump(e), le.jump(ae.value), ue.jump(k.value)) : de.set(e);
+		}), Qi(() => window.addEventListener("resize", et)), ta(() => window.removeEventListener("resize", et)), ta(We);
+		function rt(e) {
 			return [[{
 				label: "复制原文链接",
 				icon: "i-lucide-link",
-				onSelect: () => rt(e)
+				onSelect: () => ot(e)
 			}, {
 				label: "查看原文",
 				icon: "i-lucide-expand",
 				onSelect: () => n("detail", e.id)
 			}]];
 		}
-		async function tt(e) {
-			await o("reply", e), ge.value?.textareaRef?.focus();
+		async function it(e) {
+			await o("reply", e), ve.value?.textareaRef?.focus();
 		}
-		async function nt() {
-			c.value.trim() && !s.value && (N.value = !0, await o("send"), await Me());
+		async function at() {
+			c.value.trim() && !s.value && (ye.value = !0, await o("send"), await Fe());
 		}
-		function rt(e) {
-			o("copy", `${location.origin}/r/${_e.value.id}/messages/${e.id}`);
+		function ot(e) {
+			o("copy", `${location.origin}/r/${be.value.id}/messages/${e.id}`);
 		}
 		return (e, t) => {
-			let a = tA, y = Ik, S = $B, w = pV, T = AV, re = OV, ie = KV, k = Ak, A = dV, ce = WV, pe = HV, he = TV, xe = LV;
+			let a = tA, y = Ik, T = Ak, E = $B, te = pV, ae = AV, k = OV, se = KV, ce = dV, de = WV, ge = HV, _e = TV, we = LV;
 			return H(), U("section", {
 				class: M(["channel-conversation", { "channel-has-messages": I(r).messages.length }]),
 				role: "tabpanel",
@@ -40939,22 +40974,22 @@ var VV = {
 				I(r).messages.length ? (H(), U("nav", {
 					key: 1,
 					ref_key: "message_map",
-					ref: x,
+					ref: w,
 					class: "channel-message-map",
-					style: fe({ "--nav-entry-height": `${zH}px` }),
+					style: fe({ "--nav-entry-height": `${ZH}px` }),
 					"aria-label": "发言快速导航",
-					onWheelPassive: uu(Ke, ["stop"]),
-					onPointerleave: Ye,
-					onFocusout: Ye,
-					onKeydown: fu(uu(Ye, ["stop"]), ["esc"]),
-					onContextmenu: Ge
-				}, [G("div", YV, [(H(!0), U(V, null, ha(ke.value, (e, t, n, a) => {
+					onWheelPassive: uu(Ye, ["stop"]),
+					onPointerleave: Qe,
+					onFocusout: Qe,
+					onKeydown: fu(uu(Qe, ["stop"]), ["esc"]),
+					onContextmenu: Je
+				}, [G("div", YV, [(H(!0), U(V, null, ha(Me.value, (e, t, n, a) => {
 					let o = [
 						e,
-						I(O),
+						I(A),
 						D.value,
-						De.value === e.number ? C.value : null,
-						Qe(e)
+						Ae.value === e.number ? ee.value : null,
+						tt(e)
 					];
 					if (a && a.el && a.key === e.number && rc(a, o)) return a;
 					let s = (H(), U("div", {
@@ -40969,29 +41004,29 @@ var VV = {
 						"data-jump-id": e.round ? void 0 : e.message.id,
 						"data-round-jump": e.round ? e.label : void 0,
 						"aria-label": e.label,
-						tabindex: !e.round && e.message.id === (C.value || I(r).messages[0]?.id) ? 0 : -1,
-						"aria-current": !e.round && C.value === e.message.id ? "location" : void 0,
-						"aria-describedby": D.value && ee.value === e.key ? "channel-navigation-preview" : void 0,
-						onPointerenter: (t) => Ue(e, t),
-						onPointermove: (t) => Ue(e, t),
-						onPointerdown: (t) => Be(e, t),
-						onPointerup: He,
-						onPointercancel: He,
-						onFocus: (t) => ze(e, t),
-						onKeydown: (t) => Ie(t, e.index),
-						onClick: (t) => We(e, t)
+						tabindex: !e.round && e.message.id === (ee.value || I(r).messages[0]?.id) ? 0 : -1,
+						"aria-current": !e.round && ee.value === e.message.id ? "location" : void 0,
+						"aria-describedby": D.value && ne.value === e.key ? "channel-navigation-preview" : void 0,
+						onPointerenter: (t) => Ke(e, t),
+						onPointermove: (t) => Ke(e, t),
+						onPointerdown: (t) => Ue(e, t),
+						onPointerup: Ge,
+						onPointercancel: Ge,
+						onFocus: (t) => He(e, t),
+						onKeydown: (t) => ze(t, e.index),
+						onClick: (t) => qe(e, t)
 					}, [e.round ? (H(), U("span", ZV, P(e.number || "–"), 1)) : (H(), W(I(UB).span, {
 						key: 1,
 						class: "channel-jump-tick",
 						"aria-hidden": "true",
 						initial: !1,
-						animate: I(O) ? void 0 : $e(e, e.index),
-						style: fe(I(O) ? $e(e, e.index) : void 0),
-						transition: ae
+						animate: I(A) ? void 0 : nt(e, e.index),
+						style: fe(I(A) ? nt(e, e.index) : void 0),
+						transition: oe
 					}, null, 8, ["animate", "style"]))], 42, XV))), 128))], 4));
 					return s.memo = o, s;
 				}, t, 1), 128))])], 44, JV)) : Y("", !0),
-				(H(), W(Hr, { to: "body" }, [j.value ? (H(), W(I(UB).div, {
+				(H(), W(Hr, { to: "body" }, [he.value ? (H(), W(I(UB).div, {
 					key: 0,
 					id: "channel-navigation-preview",
 					class: "channel-nav-preview",
@@ -41000,44 +41035,44 @@ var VV = {
 					inert: !D.value,
 					"data-open": D.value,
 					style: fe({
-						left: ne.value,
-						y: I(oe),
-						x: I(ue),
-						opacity: I(de),
-						scale: I(le),
-						height: I(se),
-						"--preview-gap": `${RH}px`
+						left: O.value,
+						y: I(le),
+						x: I(pe),
+						opacity: I(me),
+						scale: I(j),
+						height: I(ue),
+						"--preview-gap": `${XH}px`
 					}),
-					onPointerleave: Ye,
-					onFocusout: Ye,
-					onKeydown: fu(uu(Ye, ["stop"]), ["esc"])
+					onPointerleave: Qe,
+					onFocusout: Qe,
+					onKeydown: fu(uu(Qe, ["stop"]), ["esc"])
 				}, {
 					default: L(() => [G("div", {
 						ref_key: "preview_content",
-						ref: te,
+						ref: ie,
 						class: "channel-nav-preview-content"
 					}, [
-						E.value ? (H(), U("h3", QV, P(me.value), 1)) : Y("", !0),
+						re.value ? (H(), U("h3", QV, P(N.value), 1)) : Y("", !0),
 						G("div", $V, [
 							K(y, {
-								src: I(i).identities[j.value.author]?.icon,
-								text: I(i).identities[j.value.author]?.initials || "?",
-								alt: I(i).display_name(j.value.author),
+								src: I(i).identities[he.value.author]?.icon,
+								text: I(i).identities[he.value.author]?.initials || "?",
+								alt: I(i).display_name(he.value.author),
 								size: "sm",
-								class: M(["channel-avatar", I(i).identities[j.value.author]?.style])
+								class: M(["channel-avatar", I(i).identities[he.value.author]?.style])
 							}, null, 8, [
 								"src",
 								"text",
 								"alt",
 								"class"
 							]),
-							G("strong", null, P(I(i).display_name(j.value.author)), 1),
-							G("span", null, "#" + P(j.value.id), 1)
+							G("strong", null, P(I(i).display_name(he.value.author)), 1),
+							G("span", null, "#" + P(he.value.id), 1)
 						]),
-						G("div", eH, [J(P(me.value) + " · " + P(I(i).sources[j.value.source]) + " · " + P(I(i).format_time(j.value.created_at)), 1), j.value.kind === "moderation" ? (H(), U("span", tH, " · 主持人")) : j.value.kind === "receipt" ? (H(), U("span", nH, " · 运行回执")) : Y("", !0)]),
+						G("div", eH, [J(P(N.value) + " · " + P(I(i).sources[he.value.source]) + " · " + P(I(i).format_time(he.value.created_at)), 1), he.value.kind === "moderation" ? (H(), U("span", tH, " · 主持人")) : he.value.kind === "receipt" ? (H(), U("span", nH, " · 运行回执")) : Y("", !0)]),
 						G("div", {
 							class: "channel-nav-preview-text markdown-body",
-							innerHTML: j.value.summary ? j.value.rendered_summary : j.value.rendered_text
+							innerHTML: he.value.summary ? he.value.rendered_summary : he.value.rendered_text
 						}, null, 8, rH)
 					], 512)]),
 					_: 1
@@ -41049,222 +41084,280 @@ var VV = {
 					"onKeydown"
 				])) : Y("", !0)])),
 				nc([
-					Te.value,
 					Oe.value,
-					C.value,
+					je.value,
+					ee.value,
 					v.value.size,
-					_e.value.title,
+					be.value.title,
 					I(r).query,
-					I(r).mention_only
+					I(r).mention_only,
+					C.value,
+					x.value
 				], () => (H(), U("div", {
 					ref_key: "transcript",
 					ref: _,
 					class: "channel-transcript",
 					"aria-label": "聊天记录",
-					onScroll: je,
-					onWheelPassive: Fe,
-					onTouchstartPassive: Fe,
-					onKeydown: Fe
-				}, [(H(!0), U(V, null, ha(Te.value, (e) => (H(), U("div", {
-					key: e.key,
-					class: "channel-message-group"
-				}, [K(S, {
-					label: e.label,
-					class: "channel-date-divider"
-				}, null, 8, ["label"]), (H(!0), U(V, null, ha(e.messages, (e, r, o, s) => {
-					let c = [
-						e,
-						Oe.value.get(e.id),
-						v.value.has(e.id),
-						C.value === e.id
-					];
-					if (s && s.el && s.key === e.id && rc(s, c)) return s;
-					let l = (H(), W(ie, {
-						id: String(e.id),
-						key: e.id,
-						"data-message-id": e.id,
-						"data-author": I(i).identities[e.author]?.style,
-						tabindex: "-1",
-						role: e.author === "用户" ? "user" : "assistant",
-						parts: [],
-						side: "left",
-						variant: "naked",
-						color: "neutral",
-						class: M(["channel-message", { "channel-current-message": C.value === e.id }]),
-						ui: {
-							header: "channel-message-header",
-							container: "channel-message-container",
-							body: "channel-message-body"
-						}
-					}, {
-						body: L(() => [
-							G("div", iH, [K(y, {
-								src: I(i).identities[e.author]?.icon,
-								text: I(i).identities[e.author]?.initials || "?",
-								alt: I(i).display_name(e.author),
-								size: "md",
-								class: M(["channel-avatar", I(i).identities[e.author]?.style])
-							}, null, 8, [
-								"src",
-								"text",
-								"alt",
-								"class"
-							]), G("div", aH, [G("div", oH, [
-								G("strong", null, P(I(i).display_name(e.author)), 1),
-								G("span", sH, P(Oe.value.get(e.id)), 1),
-								K(w, {
-									size: "xs",
-									color: "neutral",
-									variant: "soft",
-									class: "channel-source"
-								}, {
-									default: L(() => [J(P(I(i).sources[e.source]), 1)]),
-									_: 2
-								}, 1024),
-								e.kind === "moderation" ? (H(), W(w, {
+					onScroll: Pe,
+					onWheelPassive: Re,
+					onTouchstartPassive: Re,
+					onKeydown: Re
+				}, [
+					!I(r).query && !I(r).mention_only ? (H(), U("section", {
+						key: 0,
+						class: M(["channel-topic-card", { "is-expanded": x.value }]),
+						"aria-label": "议题"
+					}, [
+						G("header", iH, [
+							G("span", aH, [K(T, { name: "i-lucide-target" }), t[14] ||= J("议题", -1)]),
+							G("h2", null, P(be.value.title), 1),
+							K(a, {
+								icon: "i-lucide-pencil",
+								label: "编辑",
+								color: "neutral",
+								variant: "ghost",
+								size: "xs",
+								onClick: t[3] ||= (e) => n("edit")
+							})
+						]),
+						S.value.request ? (H(), U("div", oH, [G("h3", null, P(S.value.request.label), 1), G("p", sH, P(S.value.request.text), 1)])) : Y("", !0),
+						S.value.goal ? (H(), U("div", cH, [t[15] ||= G("h3", null, "目标", -1), G("p", lH, P(S.value.goal), 1)])) : Y("", !0),
+						S.value.boundaries ? (H(), U("div", uH, [t[16] ||= G("h3", null, "边界", -1), G("p", dH, P(S.value.boundaries), 1)])) : Y("", !0),
+						G("div", fH, [
+							t[18] ||= G("h3", null, "参与配置", -1),
+							G("div", pH, [(H(!0), U(V, null, ha(S.value.experts, (e) => (H(), U("span", {
+								key: e.name,
+								class: "channel-topic-person"
+							}, [
+								K(y, {
+									src: I(i).identities[e.name]?.icon,
+									text: I(i).identities[e.name]?.initials,
+									alt: e.name,
+									size: "2xs",
+									class: M(["channel-avatar", I(i).identities[e.name]?.style])
+								}, null, 8, [
+									"src",
+									"text",
+									"alt",
+									"class"
+								]),
+								J(P(I(i).display_name(e.name)), 1),
+								G("small", null, P(e.name === S.value.host ? `主持 · ${e.mode}` : e.mode), 1)
+							]))), 128)), S.value.host === "用户" ? (H(), U("span", mH, [J(P(I(i).display_name("用户")), 1), t[17] ||= G("small", null, "主持", -1)])) : Y("", !0)]),
+							G("small", hH, P(S.value.bounds), 1)
+						]),
+						K(a, {
+							label: x.value ? "收起议题" : "展开完整议题",
+							"trailing-icon": x.value ? "i-lucide-chevron-up" : "i-lucide-chevron-down",
+							variant: "link",
+							color: "neutral",
+							size: "xs",
+							class: "channel-topic-toggle",
+							onClick: t[4] ||= (e) => x.value = !x.value
+						}, null, 8, ["label", "trailing-icon"])
+					], 2)) : Y("", !0),
+					(H(!0), U(V, null, ha(Oe.value, (e) => (H(), U("div", {
+						key: e.key,
+						class: "channel-message-group"
+					}, [K(E, {
+						label: e.label,
+						class: "channel-date-divider"
+					}, null, 8, ["label"]), (H(!0), U(V, null, ha(e.messages, (e, r, o, s) => {
+						let c = [
+							e,
+							je.value.get(e.id),
+							v.value.has(e.id),
+							ee.value === e.id
+						];
+						if (s && s.el && s.key === e.id && rc(s, c)) return s;
+						let l = (H(), W(se, {
+							id: String(e.id),
+							key: e.id,
+							"data-message-id": e.id,
+							"data-author": I(i).identities[e.author]?.style,
+							tabindex: "-1",
+							role: e.author === "用户" ? "user" : "assistant",
+							parts: [],
+							side: "left",
+							variant: "naked",
+							color: "neutral",
+							class: M(["channel-message", { "channel-current-message": ee.value === e.id }]),
+							ui: {
+								header: "channel-message-header",
+								container: "channel-message-container",
+								body: "channel-message-body"
+							}
+						}, {
+							body: L(() => [
+								G("div", gH, [K(y, {
+									src: I(i).identities[e.author]?.icon,
+									text: I(i).identities[e.author]?.initials || "?",
+									alt: I(i).display_name(e.author),
+									size: "md",
+									class: M(["channel-avatar", I(i).identities[e.author]?.style])
+								}, null, 8, [
+									"src",
+									"text",
+									"alt",
+									"class"
+								]), G("div", _H, [G("div", vH, [
+									G("strong", null, P(I(i).display_name(e.author)), 1),
+									G("span", yH, P(je.value.get(e.id)), 1),
+									K(te, {
+										size: "xs",
+										color: "neutral",
+										variant: "soft",
+										class: "channel-source"
+									}, {
+										default: L(() => [J(P(I(i).sources[e.source]), 1)]),
+										_: 2
+									}, 1024),
+									e.kind === "moderation" ? (H(), W(te, {
+										key: 0,
+										size: "xs",
+										color: "neutral",
+										variant: "soft",
+										class: "channel-source"
+									}, {
+										default: L(() => [...t[19] ||= [J("主持人", -1)]]),
+										_: 1
+									})) : Y("", !0),
+									e.kind === "receipt" ? (H(), W(te, {
+										key: 1,
+										size: "xs",
+										color: "neutral",
+										variant: "soft",
+										class: "channel-source"
+									}, {
+										default: L(() => [...t[20] ||= [J("运行回执", -1)]]),
+										_: 1
+									})) : Y("", !0)
+								]), G("div", bH, [
+									G("time", { title: new Date(e.created_at).toLocaleString("zh-CN") }, P(I(i).format_time(e.created_at)), 9, xH),
+									K(a, {
+										label: `#${e.id}`,
+										color: "neutral",
+										variant: "link",
+										size: "xs",
+										"aria-label": `查看原文 #${e.id}`,
+										class: "channel-message-id",
+										onClick: (t) => n("detail", e.id)
+									}, null, 8, [
+										"label",
+										"aria-label",
+										"onClick"
+									]),
+									e.submitted_by && e.submitted_by !== e.author && (e.source !== "proxy" || e.submitted_by !== "用户") ? (H(), U("span", SH, P(I(i).display_name(e.submitted_by)) + " 代发", 1)) : Y("", !0),
+									e.turn_id ? (H(), U("span", CH, "回答安排 #" + P(e.turn_id), 1)) : Y("", !0)
+								])])]),
+								e.reply_to ? (H(), W(a, {
 									key: 0,
-									size: "xs",
-									color: "neutral",
-									variant: "soft",
-									class: "channel-source"
-								}, {
-									default: L(() => [...t[12] ||= [J("主持人", -1)]]),
-									_: 1
-								})) : Y("", !0),
-								e.kind === "receipt" ? (H(), W(w, {
-									key: 1,
-									size: "xs",
-									color: "neutral",
-									variant: "soft",
-									class: "channel-source"
-								}, {
-									default: L(() => [...t[13] ||= [J("运行回执", -1)]]),
-									_: 1
-								})) : Y("", !0)
-							]), G("div", cH, [
-								G("time", { title: new Date(e.created_at).toLocaleString("zh-CN") }, P(I(i).format_time(e.created_at)), 9, lH),
-								K(a, {
-									label: `#${e.id}`,
-									color: "neutral",
+									label: `回复 #${e.reply_to}`,
+									icon: "i-lucide-corner-up-left",
 									variant: "link",
+									color: "neutral",
 									size: "xs",
-									"aria-label": `查看原文 #${e.id}`,
-									class: "channel-message-id",
-									onClick: (t) => n("detail", e.id)
+									class: "channel-message-reference",
+									"aria-label": `回复 #${e.reply_to} 查看原文`,
+									onClick: (t) => n("detail", e.reply_to)
 								}, null, 8, [
 									"label",
 									"aria-label",
 									"onClick"
-								]),
-								e.submitted_by && e.submitted_by !== e.author && (e.source !== "proxy" || e.submitted_by !== "用户") ? (H(), U("span", uH, P(I(i).display_name(e.submitted_by)) + " 代发", 1)) : Y("", !0),
-								e.turn_id ? (H(), U("span", dH, "回答安排 #" + P(e.turn_id), 1)) : Y("", !0)
-							])])]),
-							e.reply_to ? (H(), W(a, {
-								key: 0,
-								label: `回复 #${e.reply_to}`,
-								icon: "i-lucide-corner-up-left",
-								variant: "link",
-								color: "neutral",
-								size: "xs",
-								class: "channel-message-reference",
-								"aria-label": `回复 #${e.reply_to} 查看原文`,
-								onClick: (t) => n("detail", e.reply_to)
-							}, null, 8, [
-								"label",
-								"aria-label",
-								"onClick"
-							])) : Y("", !0),
-							e.kind === "receipt" ? (H(), U("details", fH, [G("summary", { "aria-label": `查看运行回执 #${e.id}` }, "运行回执详情", 8, pH), G("div", {
-								class: "channel-message-text markdown-body",
-								innerHTML: e.rendered_text
-							}, null, 8, mH)])) : (H(), U("div", hH, [G("div", {
-								id: `channel-answer-${e.id}`,
-								class: "channel-message-text markdown-body",
-								innerHTML: v.value.has(e.id) ? e.rendered_text : b.value.get(e.id).html
-							}, null, 8, gH), b.value.get(e.id).truncated ? (H(), W(a, {
-								key: 0,
-								label: v.value.has(e.id) ? "收起" : "展开全文",
-								"trailing-icon": v.value.has(e.id) ? "i-lucide-chevron-up" : "i-lucide-chevron-down",
-								variant: "link",
-								color: "neutral",
-								size: "xs",
-								class: "channel-answer-toggle",
-								"aria-label": `${v.value.has(e.id) ? "收起回答" : "展开完整回答"} #${e.id}`,
-								"aria-expanded": v.value.has(e.id),
-								"aria-controls": `channel-answer-${e.id}`,
-								onClick: (t) => Ne(e, t)
-							}, null, 8, [
-								"label",
-								"trailing-icon",
-								"aria-label",
-								"aria-expanded",
-								"aria-controls",
-								"onClick"
-							])) : Y("", !0)])),
-							e.summary ? (H(), U("div", _H, [G("small", null, [t[14] ||= J("回答摘要", -1), e.summary_by && e.summary_by !== e.author ? (H(), U("span", vH, " · " + P(I(i).display_name(e.summary_by)) + " 整理", 1)) : Y("", !0)]), G("div", {
-								class: "channel-message-text markdown-body",
-								innerHTML: e.rendered_summary
-							}, null, 8, yH)])) : Y("", !0)
-						]),
-						header: L(() => [G("div", bH, [G("div", xH, [K(T, { text: "回复" }, {
-							default: L(() => [K(a, {
-								icon: "i-lucide-corner-up-left",
-								size: "xs",
-								color: "neutral",
-								variant: "ghost",
-								"aria-label": `回复 #${e.id}`,
-								onClick: (t) => tt(e)
-							}, null, 8, ["aria-label", "onClick"])]),
+								])) : Y("", !0),
+								e.kind === "receipt" ? (H(), U("details", wH, [G("summary", { "aria-label": `查看运行回执 #${e.id}` }, "运行回执详情", 8, TH), G("div", {
+									class: "channel-message-text markdown-body",
+									innerHTML: e.rendered_text
+								}, null, 8, EH)])) : (H(), U("div", DH, [G("div", {
+									id: `channel-answer-${e.id}`,
+									class: "channel-message-text markdown-body",
+									innerHTML: v.value.has(e.id) ? e.rendered_text : b.value.get(e.id).html
+								}, null, 8, OH), b.value.get(e.id).truncated ? (H(), W(a, {
+									key: 0,
+									label: v.value.has(e.id) ? "收起" : "展开全文",
+									"trailing-icon": v.value.has(e.id) ? "i-lucide-chevron-up" : "i-lucide-chevron-down",
+									variant: "link",
+									color: "neutral",
+									size: "xs",
+									class: "channel-answer-toggle",
+									"aria-label": `${v.value.has(e.id) ? "收起回答" : "展开完整回答"} #${e.id}`,
+									"aria-expanded": v.value.has(e.id),
+									"aria-controls": `channel-answer-${e.id}`,
+									onClick: (t) => Ie(e, t)
+								}, null, 8, [
+									"label",
+									"trailing-icon",
+									"aria-label",
+									"aria-expanded",
+									"aria-controls",
+									"onClick"
+								])) : Y("", !0)])),
+								e.summary ? (H(), U("div", kH, [G("small", null, [t[21] ||= J("回答摘要", -1), e.summary_by && e.summary_by !== e.author ? (H(), U("span", AH, " · " + P(I(i).display_name(e.summary_by)) + " 整理", 1)) : Y("", !0)]), G("div", {
+									class: "channel-message-text markdown-body",
+									innerHTML: e.rendered_summary
+								}, null, 8, jH)])) : Y("", !0)
+							]),
+							header: L(() => [G("div", MH, [G("div", NH, [K(ae, { text: "回复" }, {
+								default: L(() => [K(a, {
+									icon: "i-lucide-corner-up-left",
+									size: "xs",
+									color: "neutral",
+									variant: "ghost",
+									"aria-label": `回复 #${e.id}`,
+									onClick: (t) => it(e)
+								}, null, 8, ["aria-label", "onClick"])]),
+								_: 2
+							}, 1024), K(k, {
+								items: rt(e),
+								content: {
+									align: "end",
+									sideOffset: 5
+								},
+								ui: { content: "channel-menu" }
+							}, {
+								default: L(() => [K(a, {
+									icon: "i-lucide-ellipsis",
+									size: "xs",
+									color: "neutral",
+									variant: "ghost",
+									"aria-label": `消息 #${e.id} 的更多操作`
+								}, null, 8, ["aria-label"])]),
+								_: 2
+							}, 1032, ["items"])])])]),
 							_: 2
-						}, 1024), K(re, {
-							items: et(e),
-							content: {
-								align: "end",
-								sideOffset: 5
-							},
-							ui: { content: "channel-menu" }
-						}, {
-							default: L(() => [K(a, {
-								icon: "i-lucide-ellipsis",
-								size: "xs",
-								color: "neutral",
-								variant: "ghost",
-								"aria-label": `消息 #${e.id} 的更多操作`
-							}, null, 8, ["aria-label"])]),
-							_: 2
-						}, 1032, ["items"])])])]),
-						_: 2
-					}, 1032, [
-						"id",
-						"data-message-id",
-						"data-author",
-						"role",
-						"class"
-					]));
-					return l.memo = c, l;
-				}, t, 3), 128))]))), 128)), I(r).messages.length ? Y("", !0) : (H(), U("div", SH, [
-					K(k, { name: I(r).query || I(r).mention_only ? "i-lucide-search" : "i-lucide-hash" }, null, 8, ["name"]),
-					G("h2", null, P(I(r).query || I(r).mention_only ? "没有找到消息" : _e.value.title), 1),
-					G("p", null, P(I(r).query || I(r).mention_only ? "试试其他关键词，或清除筛选。" : "这是频道的开始。发送第一条消息，开启讨论。"), 1)
-				]))], 544)), t, 5),
-				I(r).messages.length && !N.value ? (H(), U("div", CH, [K(a, {
+						}, 1032, [
+							"id",
+							"data-message-id",
+							"data-author",
+							"role",
+							"class"
+						]));
+						return l.memo = c, l;
+					}, t, 5), 128))]))), 128)),
+					I(r).messages.length ? Y("", !0) : (H(), U("div", PH, [
+						K(T, { name: I(r).query || I(r).mention_only ? "i-lucide-search" : "i-lucide-hash" }, null, 8, ["name"]),
+						G("h2", null, P(I(r).query || I(r).mention_only ? "没有找到消息" : be.value.title), 1),
+						G("p", null, P(I(r).query || I(r).mention_only ? "试试其他关键词，或清除筛选。" : "这是频道的开始。发送第一条消息，开启讨论。"), 1)
+					]))
+				], 544)), t, 7),
+				I(r).messages.length && !ye.value ? (H(), U("div", FH, [K(a, {
 					icon: "i-lucide-arrow-down",
 					color: "neutral",
 					variant: "outline",
 					"aria-label": "回到最新消息",
 					class: "channel-latest-button",
-					onClick: qe
+					onClick: Xe
 				})])) : Y("", !0),
-				G("div", wH, [K(xe, {
+				G("div", IH, [K(we, {
 					ref_key: "prompt",
-					ref: ge,
+					ref: ve,
 					modelValue: I(c),
-					"onUpdate:modelValue": t[11] ||= (e) => /* @__PURE__ */ ln(c) ? c.value = e : null,
+					"onUpdate:modelValue": t[13] ||= (e) => /* @__PURE__ */ ln(c) ? c.value = e : null,
 					"submit-on-enter": !1,
 					autofocus: !1,
 					rows: 1,
 					maxrows: 6,
-					placeholder: `发消息到 # ${_e.value.title}`,
+					placeholder: `发消息到 # ${be.value.title}`,
 					"aria-label": "留言正文",
 					variant: "outline",
 					color: "neutral",
@@ -41274,41 +41367,41 @@ var VV = {
 						base: "channel-editor",
 						footer: "channel-composer-footer"
 					},
-					onSubmit: nt
+					onSubmit: at
 				}, {
-					header: L(() => [I(r).reply_to || I(r).turn_reply_to ? (H(), U("div", TH, [
-						K(k, { name: "i-lucide-corner-up-left" }),
-						G("span", null, P(I(r).turn_reply_to ? `回答安排 #${I(r).turn_reply_to} · ${I(i).display_name(_e.value.host)} 代发` : `回复 #${I(r).reply_to}`), 1),
+					header: L(() => [I(r).reply_to || I(r).turn_reply_to ? (H(), U("div", LH, [
+						K(T, { name: "i-lucide-corner-up-left" }),
+						G("span", null, P(I(r).turn_reply_to ? `回答安排 #${I(r).turn_reply_to} · ${I(i).display_name(be.value.host)} 代发` : `回复 #${I(r).reply_to}`), 1),
 						K(a, {
 							icon: "i-lucide-x",
 							color: "neutral",
 							variant: "ghost",
 							size: "xs",
 							"aria-label": I(r).turn_reply_to ? "取消关联安排" : "取消回复",
-							onClick: t[6] ||= (e) => I(o)(I(r).turn_reply_to ? "cancel_answer" : "cancel_reply")
+							onClick: t[8] ||= (e) => I(o)(I(r).turn_reply_to ? "cancel_answer" : "cancel_reply")
 						}, null, 8, ["aria-label"])
-					])) : Y("", !0), m.value ? (H(), U("div", EH, [K(A, {
+					])) : Y("", !0), m.value ? (H(), U("div", RH, [K(ce, {
 						modelValue: I(f),
-						"onUpdate:modelValue": t[7] ||= (e) => /* @__PURE__ */ ln(f) ? f.value = e : null,
+						"onUpdate:modelValue": t[9] ||= (e) => /* @__PURE__ */ ln(f) ? f.value = e : null,
 						rows: 2,
 						"aria-label": "回答摘要",
 						class: "w-full",
 						placeholder: "先说结论，保留关键理由、条件和不确定性。完整内容写在正文中。"
-					}, null, 8, ["modelValue"]), K(ce, {
+					}, null, 8, ["modelValue"]), K(de, {
 						modelValue: I(p),
-						"onUpdate:modelValue": t[8] ||= (e) => /* @__PURE__ */ ln(p) ? p.value = e : null,
+						"onUpdate:modelValue": t[10] ||= (e) => /* @__PURE__ */ ln(p) ? p.value = e : null,
 						items: h,
 						"aria-label": "摘要提供者",
 						size: "xs"
 					}, null, 8, ["modelValue"])])) : Y("", !0)]),
 					footer: L(() => [
-						G("div", DH, [
-							K(pe, {
+						G("div", zH, [
+							K(ge, {
 								modelValue: I(u),
-								"onUpdate:modelValue": t[9] ||= (e) => /* @__PURE__ */ ln(u) ? u.value = e : null,
-								items: ve.value,
+								"onUpdate:modelValue": t[11] ||= (e) => /* @__PURE__ */ ln(u) ? u.value = e : null,
+								items: xe.value,
 								"value-key": "value",
-								avatar: ye.value?.avatar,
+								avatar: Se.value?.avatar,
 								disabled: I(d) === "moderation",
 								"search-input": {
 									placeholder: "搜索身份…",
@@ -41333,11 +41426,11 @@ var VV = {
 								"avatar",
 								"disabled"
 							]),
-							t[15] ||= G("span", { class: "channel-control-divider" }, null, -1),
-							K(ce, {
+							t[22] ||= G("span", { class: "channel-control-divider" }, null, -1),
+							K(de, {
 								modelValue: I(d),
-								"onUpdate:modelValue": t[10] ||= (e) => /* @__PURE__ */ ln(d) ? d.value = e : null,
-								items: be,
+								"onUpdate:modelValue": t[12] ||= (e) => /* @__PURE__ */ ln(d) ? d.value = e : null,
+								items: Ce,
 								content: {
 									side: "top",
 									align: "start",
@@ -41350,7 +41443,7 @@ var VV = {
 								ui: { content: "channel-select-menu" }
 							}, null, 8, ["modelValue"])
 						]),
-						G("span", OH, [K(he, { value: "ctrl" }), K(he, { value: "enter" })]),
+						G("span", BH, [K(_e, { value: "ctrl" }), K(_e, { value: "enter" })]),
 						K(a, {
 							type: "submit",
 							"trailing-icon": "i-lucide-arrow-up",
@@ -41363,46 +41456,46 @@ var VV = {
 						}, null, 8, ["disabled", "loading"])
 					]),
 					_: 1
-				}, 8, ["modelValue", "placeholder"]), G("div", kH, [G("span", null, [
-					J(P(Se.value), 1),
-					t[16] ||= G("span", { class: "channel-note-divider" }, "·", -1),
-					t[17] ||= J("在线 AI 的观点需代发", -1)
-				]), G("span", AH, [
+				}, 8, ["modelValue", "placeholder"]), G("div", VH, [G("span", null, [
+					J(P(Te.value), 1),
+					t[23] ||= G("span", { class: "channel-note-divider" }, "·", -1),
+					t[24] ||= J("在线 AI 的观点需代发", -1)
+				]), G("span", HH, [
 					J(P(l.value) + " / " + P(I(i).max_message_length), 1),
-					t[18] ||= G("span", { class: "channel-note-divider" }, "·", -1),
-					t[19] ||= J("Enter 换行", -1)
+					t[25] ||= G("span", { class: "channel-note-divider" }, "·", -1),
+					t[26] ||= J("Enter 换行", -1)
 				])])])
 			], 2);
 		};
 	}
-}, rU = {
+}, hU = {
 	key: 0,
 	class: "turn-panel"
-}, iU = { class: "turn-header" }, aU = { class: "page-heading" }, oU = { class: "topic-brief" }, sU = {
+}, gU = { class: "turn-header" }, _U = { class: "page-heading" }, vU = { class: "topic-brief" }, yU = {
 	key: 0,
 	class: "turn-panel"
-}, cU = { class: "turn-header" }, lU = { class: "button-row" }, uU = { class: "turn-panel" }, dU = { class: "turn-header" }, fU = { class: "turn-expert" }, pU = { class: "turn-question" }, mU = {
+}, bU = { class: "turn-header" }, xU = { class: "button-row" }, SU = { class: "turn-panel" }, CU = { class: "turn-header" }, wU = { class: "turn-expert" }, TU = { class: "turn-question" }, EU = {
 	key: 0,
 	class: "button-row"
-}, hU = {
+}, DU = {
 	key: 1,
 	class: "turn-empty"
-}, gU = {
+}, OU = {
 	key: 2,
 	class: "fine-print"
-}, _U = {
+}, kU = {
 	key: 1,
 	class: "info-section"
-}, vU = { class: "button-row" }, yU = {
+}, AU = { class: "button-row" }, jU = {
 	key: 0,
 	class: "fine-print"
-}, bU = { class: "form-footer" }, xU = ["href"], SU = {
+}, MU = { class: "form-footer" }, NU = ["href"], PU = {
 	key: 2,
 	class: "fine-print"
-}, CU = { class: "turn-panel" }, wU = { class: "form-two-columns" }, TU = { class: "button-row" }, EU = { class: "access-section" }, DU = { class: "access-icon" }, OU = { class: "access-address" }, kU = { class: "button-row" }, AU = { class: "access-section" }, jU = { class: "access-icon" }, MU = { class: "access-address" }, NU = { class: "button-row" }, PU = { class: "fine-print" }, FU = {
+}, FU = { class: "turn-panel" }, IU = { class: "form-two-columns" }, LU = { class: "button-row" }, RU = { class: "access-section" }, zU = { class: "access-icon" }, BU = { class: "access-address" }, VU = { class: "button-row" }, HU = { class: "access-section" }, UU = { class: "access-icon" }, WU = { class: "access-address" }, GU = { class: "button-row" }, KU = { class: "fine-print" }, qU = {
 	key: 0,
 	class: "fine-print"
-}, IU = {
+}, JU = {
 	__name: "TopicPanel",
 	emits: ["open", "detail"],
 	setup(e) {
@@ -41423,8 +41516,8 @@ var VV = {
 				},
 				transition: { duration: .16 }
 			}, {
-				default: L(() => [o.value.limits ? (H(), U("section", rU, [
-					G("div", iU, [f[21] ||= G("h3", null, "讨论上限与进度", -1), K(p, {
+				default: L(() => [o.value.limits ? (H(), U("section", hU, [
+					G("div", gU, [f[21] ||= G("h3", null, "讨论上限与进度", -1), K(p, {
 						color: o.value.limits.reached && o.value.phase !== "concluded" ? "warning" : "neutral",
 						variant: "subtle"
 					}, {
@@ -41442,7 +41535,7 @@ var VV = {
 					}, null, 8, ["loading"])) : Y("", !0),
 					f[22] ||= G("p", { class: "fine-print" }, "在“编辑议题”中调整参数。自动模式由接入程序检查；手动模式由主持人或此按钮执行到限处理。", -1)
 				])) : Y("", !0), I(t).tab === "topic" ? (H(), U(V, { key: 1 }, [
-					G("div", aU, [G("div", null, [
+					G("div", _U, [G("div", null, [
 						f[23] ||= G("span", { class: "eyebrow" }, "讨论进程", -1),
 						f[24] ||= G("h2", null, "主持与安排", -1),
 						G("p", null, "当前由 " + P(I(n).display_name(o.value.host)) + " 主持，围绕具体问题组织下一轮发言。", 1)
@@ -41454,16 +41547,16 @@ var VV = {
 						class: "channel-surface-button",
 						onClick: f[1] ||= (t) => e.$emit("open", "edit")
 					})]),
-					G("div", oU, [G("div", null, [f[25] ||= G("h3", null, "讨论目标", -1), G("p", null, P(o.value.goal || "尚未填写讨论目标"), 1)]), G("div", null, [f[26] ||= G("h3", null, "当前焦点", -1), G("p", null, P(o.value.focus || "尚未设置当前焦点"), 1)])]),
-					o.value.floor ? (H(), U("section", sU, [
-						G("div", cU, [f[27] ||= G("h3", null, "发言权", -1), K(p, {
+					G("div", vU, [G("div", null, [f[25] ||= G("h3", null, "讨论目标", -1), G("p", null, P(o.value.goal || "尚未填写讨论目标"), 1)]), G("div", null, [f[26] ||= G("h3", null, "当前焦点", -1), G("p", null, P(o.value.focus || "尚未设置当前焦点"), 1)])]),
+					o.value.floor ? (H(), U("section", yU, [
+						G("div", bU, [f[27] ||= G("h3", null, "发言权", -1), K(p, {
 							color: "neutral",
 							variant: "subtle"
 						}, {
 							default: L(() => [J(P(I(n).floor_status(o.value)), 1)]),
 							_: 1
 						})]),
-						G("div", lU, [o.value.floor.holder ? (H(), W(m, {
+						G("div", xU, [o.value.floor.holder ? (H(), W(m, {
 							key: 1,
 							label: "归还发言权",
 							loading: I(i) === "return_floor",
@@ -41480,8 +41573,8 @@ var VV = {
 						}, null, 8, ["label", "loading"]))]),
 						f[28] ||= G("p", { class: "fine-print" }, "发言或安排保存后自动归还；用户本人可随时留言。", -1)
 					])) : Y("", !0),
-					G("section", uU, [
-						G("div", dU, [f[29] ||= G("h3", null, "当前发言安排", -1), K(p, {
+					G("section", SU, [
+						G("div", CU, [f[29] ||= G("h3", null, "当前发言安排", -1), K(p, {
 							color: c.value ? "primary" : "neutral",
 							variant: "subtle"
 						}, {
@@ -41489,7 +41582,7 @@ var VV = {
 							_: 1
 						}, 8, ["color"])]),
 						s.value ? (H(), U(V, { key: 0 }, [
-							G("div", fU, [K(h, {
+							G("div", wU, [K(h, {
 								src: I(n).identities[s.value.expert]?.icon,
 								text: I(n).identities[s.value.expert]?.initials,
 								alt: s.value.expert,
@@ -41500,8 +41593,8 @@ var VV = {
 								"alt",
 								"class"
 							]), G("div", null, [G("strong", null, P(s.value.expert), 1), G("small", null, "发言安排 #" + P(s.value.id), 1)])]),
-							G("p", pU, P(s.value.question), 1),
-							c.value ? (H(), U("div", mU, [
+							G("p", TU, P(s.value.question), 1),
+							c.value ? (H(), U("div", EU, [
 								K(m, {
 									icon: "i-lucide-copy",
 									label: "复制通知",
@@ -41544,39 +41637,39 @@ var VV = {
 								class: "channel-surface-button",
 								onClick: f[8] ||= (t) => e.$emit("detail", s.value.answer_id)
 							})) : Y("", !0)
-						], 64)) : (H(), U("p", hU, "把下一轮需要回答的问题，交给一位参与者。")),
-						c.value ? (H(), U("p", gU, P(I(n).turn_guidance(s.value, o.value)), 1)) : Y("", !0)
+						], 64)) : (H(), U("p", DU, "把下一轮需要回答的问题，交给一位参与者。")),
+						c.value ? (H(), U("p", OU, P(I(n).turn_guidance(s.value, o.value)), 1)) : Y("", !0)
 					]),
-					Array.isArray(o.value.latest_receipts) ? (H(), U("section", _U, [
+					Array.isArray(o.value.latest_receipts) ? (H(), U("section", kU, [
 						f[30] ||= G("h3", null, "最新运行回执", -1),
 						f[31] ||= G("p", { class: "fine-print" }, "每位参与者最近一条；实际运行结果请查看原文。晚于摘要的回执可能尚未整理。", -1),
-						G("div", vU, [(H(!0), U(V, null, ha(o.value.latest_receipts, (t) => (H(), W(m, {
+						G("div", AU, [(H(!0), U(V, null, ha(o.value.latest_receipts, (t) => (H(), W(m, {
 							key: t.id,
 							label: `${I(n).display_name(t.author)} #${t.id} · ${new Date(t.created_at).toLocaleString("zh-CN")}${t.id > o.value.state_until ? " · 晚于摘要" : ""}`,
 							variant: "link",
 							color: "neutral",
 							onClick: (n) => e.$emit("detail", t.id)
-						}, null, 8, ["label", "onClick"]))), 128)), o.value.latest_receipts.length ? Y("", !0) : (H(), U("span", yU, "尚无运行回执。"))])
+						}, null, 8, ["label", "onClick"]))), 128)), o.value.latest_receipts.length ? Y("", !0) : (H(), U("span", jU, "尚无运行回执。"))])
 					])) : Y("", !0),
-					G("div", bU, [G("a", {
+					G("div", MU, [G("a", {
 						href: `${d.value}/turns`,
 						target: "_blank",
 						rel: "noopener",
 						class: "subtle-link"
-					}, [f[32] ||= J("发言安排历史 ", -1), K(g, { name: "i-lucide-arrow-up-right" })], 8, xU), K(m, {
+					}, [f[32] ||= J("发言安排历史 ", -1), K(g, { name: "i-lucide-arrow-up-right" })], 8, NU), K(m, {
 						icon: "i-lucide-plus",
 						label: "安排下一位专家",
 						class: "channel-primary-button",
 						disabled: !u.value,
 						onClick: f[9] ||= (t) => e.$emit("open", "schedule")
 					}, null, 8, ["disabled"])]),
-					u.value ? Y("", !0) : (H(), U("p", SU, P(l.value ? "话题已暂停或收束，修改阶段后可以继续安排。" : c.value ? "先完成或取消当前安排，再安排下一位。" : o.value.limits?.reached ? "已达到讨论上限，请检查到限处理；需要继续时先暂停并调整参数。" : o.value.floor?.holder === o.value.host ? "请先在议题资料中配置参与专家。" : "主持人领取发言权后可安排下一位。"), 1))
+					u.value ? Y("", !0) : (H(), U("p", PU, P(l.value ? "话题已暂停或收束，修改阶段后可以继续安排。" : c.value ? "先完成或取消当前安排，再安排下一位。" : o.value.limits?.reached ? "已达到讨论上限，请检查到限处理；需要继续时先暂停并调整参数。" : o.value.floor?.holder === o.value.host ? "请先在议题资料中配置参与专家。" : "主持人领取发言权后可安排下一位。"), 1))
 				], 64)) : (H(), U(V, { key: 2 }, [
-					G("section", CU, [
+					G("section", FU, [
 						f[33] ||= G("h3", null, "讨论运行方式", -1),
 						G("p", null, P(I(n).runtime_label(o.value.runtime)), 1),
 						G("p", null, P(I(n).execution_label(o.value.runtime?.latest_execution)), 1),
-						G("div", wU, [K(v, { label: "讨论所属项目（可选）" }, {
+						G("div", IU, [K(v, { label: "讨论所属项目（可选）" }, {
 							default: L(() => [K(_, {
 								"model-value": I(t).fields["runtime-project"],
 								placeholder: "软件中的项目名称",
@@ -41593,7 +41686,7 @@ var VV = {
 							}, null, 8, ["model-value"])]),
 							_: 1
 						})]),
-						G("div", TU, [
+						G("div", LU, [
 							K(m, {
 								label: "选择全自动讨论",
 								variant: "outline",
@@ -41627,7 +41720,7 @@ var VV = {
 						G("h2", null, "邀请 AI 参与"),
 						G("p", null, "按运行环境选择参与方式，专家自主决定阅读深度。")
 					])], -1),
-					G("section", EU, [G("span", DU, [K(g, { name: "i-lucide-globe" })]), G("div", null, [
+					G("section", RU, [G("span", zU, [K(g, { name: "i-lucide-globe" })]), G("div", null, [
 						G("h3", null, [f[36] ||= J("在线 AI ", -1), K(p, {
 							color: "neutral",
 							variant: "subtle"
@@ -41636,14 +41729,14 @@ var VV = {
 							_: 1
 						})]),
 						f[37] ||= G("p", null, "把阅读入口提供给在线聊天产品。观点留在原聊天窗口，再由用户或主持人代发。", -1),
-						G("div", OU, [G("code", null, P(d.value), 1), K(m, {
+						G("div", BU, [G("code", null, P(d.value), 1), K(m, {
 							icon: "i-lucide-copy",
 							color: "neutral",
 							variant: "ghost",
 							"aria-label": "复制在线阅读地址",
 							onClick: f[16] ||= (e) => I(r)("copy_reading")
 						})]),
-						G("div", kU, [K(m, {
+						G("div", VU, [K(m, {
 							label: "复制只读参与指令",
 							variant: "outline",
 							color: "neutral",
@@ -41658,7 +41751,7 @@ var VV = {
 							color: "neutral"
 						}, null, 8, ["to"])])
 					])]),
-					G("section", AU, [G("span", jU, [K(g, { name: "i-lucide-terminal" })]), G("div", null, [
+					G("section", HU, [G("span", UU, [K(g, { name: "i-lucide-terminal" })]), G("div", null, [
 						G("h3", null, [f[39] ||= J("本地 CLI AI ", -1), K(p, {
 							color: "primary",
 							variant: "subtle"
@@ -41667,14 +41760,14 @@ var VV = {
 							_: 1
 						})]),
 						f[40] ||= G("p", null, "使用本地 AI 软件读取话题，通过留言板接口提交观点，按消息编号核对原文。", -1),
-						G("div", MU, [G("code", null, P(d.value) + "?mode=cli", 1), K(m, {
+						G("div", WU, [G("code", null, P(d.value) + "?mode=cli", 1), K(m, {
 							icon: "i-lucide-copy",
 							color: "neutral",
 							variant: "ghost",
 							"aria-label": "复制 CLI 阅读地址",
 							onClick: f[18] ||= (e) => I(r)("copy", `${d.value}?mode=cli`)
 						})]),
-						G("div", NU, [
+						G("div", GU, [
 							K(m, {
 								label: "复制 CLI 参与指令",
 								variant: "outline",
@@ -41699,14 +41792,14 @@ var VV = {
 							}, null, 8, ["to"])
 						])
 					])]),
-					G("p", PU, "指令使用讨论区当前选择的身份：" + P(I(n).display_name(I(t).fields["author-select"] || "用户")) + "。通知只提供问题与入口，不附整段上下文。", 1),
-					d.value.includes("127.0.0.1") || d.value.includes("localhost") ? (H(), U("p", FU, "当前是本机地址。在线 AI 需要公网阅读地址，或由用户复制材料提供。")) : Y("", !0)
+					G("p", KU, "指令使用讨论区当前选择的身份：" + P(I(n).display_name(I(t).fields["author-select"] || "用户")) + "。通知只提供问题与入口，不附整段上下文。", 1),
+					d.value.includes("127.0.0.1") || d.value.includes("localhost") ? (H(), U("p", qU, "当前是本机地址。在线 AI 需要公网阅读地址，或由用户复制材料提供。")) : Y("", !0)
 				], 64))]),
 				_: 1
 			}, 8, ["aria-label", "initial"]);
 		};
 	}
-}, LU = {
+}, YU = {
 	slots: {
 		overlay: "fixed inset-0",
 		content: "bg-default divide-y divide-default flex flex-col focus:outline-none",
@@ -41748,7 +41841,7 @@ var VV = {
 		fullscreen: !1,
 		class: { content: "top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 max-h-[calc(100dvh-2rem)] sm:max-h-[calc(100dvh-4rem)] overflow-hidden" }
 	}]
-}, RU = {
+}, XU = {
 	__name: "Modal",
 	props: {
 		title: {
@@ -41839,7 +41932,7 @@ var VV = {
 		let n = e, r = t, i = ja(), a = $T("modal", n), { t: o } = eh(), s = Sm(), c = eE(am(a, "open", "defaultOpen", "modal", "unmountOnHide"), r), l = GT(/* @__PURE__ */ Sn(() => a.portal)), u = /* @__PURE__ */ Sn(() => a.content), d = Z(() => a.dismissible ? { pointerDownOutside: (e) => eV(e, { scrollable: a.scrollable }) } : ["interactOutside", "escapeKeyDown"].reduce((e, t) => (e[t] = (e) => {
 			e.preventDefault(), r("close:prevent");
 		}, e), {})), [f, p] = gm(), m = Z(() => kk({
-			extend: LU,
+			extend: YU,
 			...s.ui?.modal || {}
 		})({
 			transition: a.transition,
@@ -41964,10 +42057,10 @@ var VV = {
 			_: 3
 		}, 16));
 	}
-}, zU = { slots: {
+}, ZU = { slots: {
 	root: "",
 	content: "data-[state=open]:animate-[collapsible-down_200ms_var(--ease-out)] data-[state=closed]:animate-[collapsible-up_200ms_var(--ease-out)] data-[state=closed]:overflow-hidden"
-} }, BU = {
+} }, QU = {
 	__name: "Collapsible",
 	props: {
 		as: {
@@ -42003,7 +42096,7 @@ var VV = {
 	emits: ["update:open"],
 	setup(e, { emit: t }) {
 		let n = e, r = t, i = ja(), a = $T("collapsible", n), o = Sm(), s = eE(am(a, "as", "defaultOpen", "open", "disabled", "unmountOnHide"), r), c = Z(() => kk({
-			extend: zU,
+			extend: ZU,
 			...o.ui?.collapsible || {}
 		})());
 		return (e, t) => (H(), W(I(Lg), X(I(s), {
@@ -42026,64 +42119,64 @@ var VV = {
 			_: 3
 		}, 16, ["class"]));
 	}
-}, VU = {
+}, $U = {
 	key: 0,
 	class: "channel-archive-manager"
-}, HU = { class: "channel-archive-toolbar" }, UU = {
+}, eW = { class: "channel-archive-toolbar" }, tW = {
 	key: 0,
 	class: "channel-archive-confirm channel-archive-bulk",
 	role: "alert"
-}, WU = {
+}, nW = {
 	key: 1,
 	role: "alert",
 	class: "channel-directory-error"
-}, GU = { class: "channel-archive-results" }, KU = {
+}, rW = { class: "channel-archive-results" }, iW = {
 	key: 0,
 	class: "channel-archive-list",
 	"aria-label": "已存档频道列表"
-}, qU = { class: "channel-archive-row" }, JU = { class: "channel-archive-info" }, YU = [
+}, aW = { class: "channel-archive-row" }, oW = { class: "channel-archive-info" }, sW = [
 	"title",
 	"disabled",
 	"onClick"
-], XU = { key: 0 }, ZU = ["datetime"], QU = { class: "channel-archive-actions" }, $U = {
+], cW = { key: 0 }, lW = ["datetime"], uW = { class: "channel-archive-actions" }, dW = {
 	key: 0,
 	class: "channel-archive-confirm channel-archive-bulk",
 	role: "alert"
-}, eW = {
+}, fW = {
 	key: 1,
 	class: "channel-archive-empty"
-}, tW = { class: "fine-print" }, nW = { class: "dialog-actions" }, rW = { class: "dialog-actions" }, iW = { class: "channel-management-target" }, aW = {
+}, pW = { class: "fine-print" }, mW = { class: "dialog-actions" }, hW = { class: "dialog-actions" }, gW = { class: "channel-management-target" }, _W = {
 	key: 0,
 	class: "fine-print"
-}, oW = {
+}, vW = {
 	key: 1,
 	class: "fine-print"
-}, sW = {
+}, yW = {
 	key: 2,
 	class: "fine-print"
-}, cW = { class: "dialog-actions" }, lW = { key: 4 }, uW = { class: "theme-choices" }, dW = ["aria-pressed", "onClick"], fW = { class: "channel-reading-setting" }, pW = {
+}, bW = { class: "dialog-actions" }, xW = { key: 4 }, SW = { class: "theme-choices" }, CW = ["aria-pressed", "onClick"], wW = { class: "channel-reading-setting" }, TW = {
 	class: "channel-reading-options",
 	role: "group",
 	"aria-labelledby": "channel-reading-label"
-}, mW = {
+}, EW = {
 	key: 0,
 	class: "channel-create-location"
-}, hW = { class: "form-two-columns" }, gW = { class: "advanced-content" }, _W = { class: "form-two-columns" }, vW = {
+}, DW = { class: "form-two-columns" }, OW = { class: "advanced-content" }, kW = { class: "form-two-columns" }, AW = {
 	key: 0,
 	class: "fine-print"
-}, yW = { class: "advanced-content" }, bW = { class: "expert-fields" }, xW = { class: "dialog-actions" }, SW = { class: "dialog-actions" }, CW = {
+}, jW = { class: "advanced-content" }, MW = { class: "expert-fields" }, NW = { class: "dialog-actions" }, PW = { class: "dialog-actions" }, FW = {
 	key: 7,
 	class: "original-message"
-}, wW = {
+}, IW = {
 	key: 0,
 	role: "alert"
-}, TW = { class: "original-meta" }, EW = { class: "fine-print" }, DW = {
+}, LW = { class: "original-meta" }, RW = { class: "fine-print" }, zW = {
 	key: 0,
 	class: "channel-answer-summary"
-}, OW = { class: "message-prose" }, kW = { class: "message-prose" }, AW = {
+}, BW = { class: "message-prose" }, VW = { class: "message-prose" }, HW = {
 	key: 2,
 	class: "fine-print"
-}, jW = {
+}, UW = {
 	__name: "WorkspaceDialogs",
 	props: /*@__PURE__*/ Ia({
 		detailId: {
@@ -42208,11 +42301,11 @@ var VV = {
 				action: "delete"
 			});
 		}
-		let E = /* @__PURE__ */ F(""), D = /* @__PURE__ */ F("");
+		let E = /* @__PURE__ */ F(""), te = /* @__PURE__ */ F("");
 		R(() => [n.value, t.targetFolder?.id], () => {
-			D.value = n.value === "rename-folder" && t.targetFolder?.name || "";
+			te.value = n.value === "rename-folder" && t.targetFolder?.name || "";
 		});
-		let te = Z(() => [
+		let ne = Z(() => [
 			"folder",
 			"rename-folder",
 			"delete-folder"
@@ -42220,7 +42313,7 @@ var VV = {
 		R(() => [n.value, t.targetRoom?.id], () => {
 			E.value = n.value === "rename" && t.targetRoom?.title || "";
 		});
-		async function ne() {
+		async function re() {
 			let e = {
 				id: t.targetRoom.id,
 				action: n.value,
@@ -42228,8 +42321,8 @@ var VV = {
 			};
 			n.value = "", await c("manage_channel", e);
 		}
-		async function re() {
-			let e = D.value.trim();
+		async function D() {
+			let e = te.value.trim();
 			if (!e || l.value) return;
 			let r = n.value === "rename-folder", i = r ? {
 				id: t.targetFolder.id,
@@ -42336,7 +42429,7 @@ var VV = {
 			}
 		}
 		return (t, s) => {
-			let b = CV, x = WV, O = tA, de = cV, be = Ak, xe = dV, Se = BU, Ce = pV, we = RU;
+			let b = CV, x = WV, O = tA, de = cV, be = Ak, xe = dV, Se = QU, Ce = pV, we = XU;
 			return H(), W(we, {
 				open: u.value,
 				"onUpdate:open": s[24] ||= (e) => u.value = e,
@@ -42345,15 +42438,15 @@ var VV = {
 				ui: {
 					content: [
 						"glass-panel studio-modal",
-						te.value && "channel-folder-modal",
+						ne.value && "channel-folder-modal",
 						i.value === "archives" && "channel-archive-modal"
 					],
 					body: "dialog-body"
 				},
 				"onAfter:leave": ve
 			}, {
-				body: L(() => [i.value === "archives" ? (H(), U("section", VU, [
-					G("div", HU, [
+				body: L(() => [i.value === "archives" ? (H(), U("section", $U, [
+					G("div", eW, [
 						K(b, {
 							modelValue: m.value,
 							"onUpdate:modelValue": s[0] ||= (e) => m.value = e,
@@ -42382,7 +42475,7 @@ var VV = {
 							}
 						}, null, 8, ["label", "disabled"])
 					]),
-					y.value && _.value.length ? (H(), U("div", UU, [
+					y.value && _.value.length ? (H(), U("div", tW, [
 						G("span", null, "将永久删除当前列表中的 " + P(_.value.length) + " 个频道及其全部记录，无法撤销。", 1),
 						K(O, {
 							label: "取消",
@@ -42398,20 +42491,20 @@ var VV = {
 							onClick: ee
 						})
 					])) : Y("", !0),
-					I(a).directory_error ? (H(), U("p", WU, P(I(a).directory_error), 1)) : Y("", !0),
-					G("div", GU, [_.value.length ? (H(), U("ul", KU, [(H(!0), U(V, null, ha(_.value, (e) => (H(), U("li", {
+					I(a).directory_error ? (H(), U("p", nW, P(I(a).directory_error), 1)) : Y("", !0),
+					G("div", rW, [_.value.length ? (H(), U("ul", iW, [(H(!0), U(V, null, ha(_.value, (e) => (H(), U("li", {
 						key: e.id,
 						class: "channel-archive-item"
-					}, [G("div", qU, [G("div", JU, [G("button", {
+					}, [G("div", aW, [G("div", oW, [G("button", {
 						class: "channel-archive-title",
 						title: e.title,
 						disabled: !!I(l),
 						onClick: (t) => w(e)
-					}, P(e.title), 9, YU), G("small", null, [e.created_at ? (H(), U("span", XU, [
+					}, P(e.title), 9, sW), G("small", null, [e.created_at ? (H(), U("span", cW, [
 						s[25] ||= J("创建于 ", -1),
-						G("time", { datetime: e.created_at }, P(S(e.created_at)), 9, ZU),
+						G("time", { datetime: e.created_at }, P(S(e.created_at)), 9, lW),
 						s[26] ||= J(" · ", -1)
-					])) : Y("", !0), J(P(e.message_count) + " 条消息", 1)])]), G("div", QU, [K(O, {
+					])) : Y("", !0), J(P(e.message_count) + " 条消息", 1)])]), G("div", uW, [K(O, {
 						"aria-label": `彻底删除 ${e.title}`,
 						title: "彻底删除",
 						icon: "i-lucide-trash-2",
@@ -42443,7 +42536,7 @@ var VV = {
 						"aria-label",
 						"disabled",
 						"onClick"
-					])])]), v.value === e.id ? (H(), U("div", $U, [
+					])])]), v.value === e.id ? (H(), U("div", dW, [
 						G("span", null, "永久删除「" + P(e.title) + "」及其全部记录，无法撤销。", 1),
 						K(O, {
 							label: "取消",
@@ -42459,12 +42552,12 @@ var VV = {
 							disabled: C(e),
 							onClick: T
 						}, null, 8, ["disabled"])
-					])) : Y("", !0)]))), 128))])) : (H(), U("p", eW, P(p.value.length ? "没有匹配的存档频道" : "暂无已存档频道"), 1))])
+					])) : Y("", !0)]))), 128))])) : (H(), U("p", fW, P(p.value.length ? "没有匹配的存档频道" : "暂无已存档频道"), 1))])
 				])) : i.value === "delete-folder" ? (H(), U("form", {
 					key: 1,
 					class: "dialog-form",
 					onSubmit: uu(ie, ["prevent"])
-				}, [G("p", tW, "移除「" + P(e.targetFolder?.name) + "」后，频道不再归属文件夹，所有消息和存档状态都会保留。", 1), G("div", nW, [K(O, {
+				}, [G("p", pW, "移除「" + P(e.targetFolder?.name) + "」后，频道不再归属文件夹，所有消息和存档状态都会保留。", 1), G("div", mW, [K(O, {
 					label: "取消",
 					color: "neutral",
 					variant: "ghost",
@@ -42474,13 +42567,13 @@ var VV = {
 					label: "移除文件夹",
 					color: "neutral",
 					variant: "solid"
-				})])], 32)) : te.value ? (H(), U("form", {
+				})])], 32)) : ne.value ? (H(), U("form", {
 					key: 2,
 					class: "dialog-form",
-					onSubmit: uu(re, ["prevent"])
+					onSubmit: uu(D, ["prevent"])
 				}, [K(b, {
-					modelValue: D.value,
-					"onUpdate:modelValue": s[6] ||= (e) => D.value = e,
+					modelValue: te.value,
+					"onUpdate:modelValue": s[6] ||= (e) => te.value = e,
 					icon: "i-lucide-folder",
 					"aria-label": i.value === "folder" ? "新文件夹名称" : "文件夹名称",
 					placeholder: "文件夹名称",
@@ -42490,12 +42583,12 @@ var VV = {
 					class: "w-full",
 					autocomplete: "off",
 					readonly: !!I(l),
-					onKeydown: s[7] ||= fu(uu((e) => !e.isComposing && re(), ["prevent"]), ["enter"])
+					onKeydown: s[7] ||= fu(uu((e) => !e.isComposing && D(), ["prevent"]), ["enter"])
 				}, null, 8, [
 					"modelValue",
 					"aria-label",
 					"readonly"
-				]), G("div", rW, [K(O, {
+				]), G("div", hW, [K(O, {
 					label: "取消",
 					color: "neutral",
 					variant: "ghost",
@@ -42505,7 +42598,7 @@ var VV = {
 					label: i.value === "folder" ? "创建文件夹" : "保存名称",
 					class: "channel-primary-button",
 					loading: I(l) === "create_folder" || I(l) === "rename_folder",
-					disabled: !D.value.trim() || !!I(l)
+					disabled: !te.value.trim() || !!I(l)
 				}, null, 8, [
 					"label",
 					"loading",
@@ -42518,12 +42611,12 @@ var VV = {
 				].includes(i.value) ? (H(), U("form", {
 					key: 3,
 					class: "dialog-form",
-					onSubmit: uu(ne, ["prevent"])
+					onSubmit: uu(re, ["prevent"])
 				}, [
-					G("p", iW, [J(P(e.targetRoom?.title) + " ", 1), G("span", null, "· " + P(e.targetRoom?.message_count) + " 条消息", 1)]),
-					i.value === "archive" ? (H(), U("p", aW, "存档后可在侧栏「已存档」中查阅与恢复。已有发言安排会保留；专家需在下次检查时停止自己的定时任务。")) : Y("", !0),
-					i.value === "restore" ? (H(), U("p", oW, "恢复不会自动继续讨论；需要继续时，在主持设置中调整阶段。")) : Y("", !0),
-					i.value === "delete" ? (H(), U("p", sW, "消息、共识和发言安排将一起删除，无法撤销。")) : Y("", !0),
+					G("p", gW, [J(P(e.targetRoom?.title) + " ", 1), G("span", null, "· " + P(e.targetRoom?.message_count) + " 条消息", 1)]),
+					i.value === "archive" ? (H(), U("p", _W, "存档后可在侧栏「已存档」中查阅与恢复。已有发言安排会保留；专家需在下次检查时停止自己的定时任务。")) : Y("", !0),
+					i.value === "restore" ? (H(), U("p", vW, "恢复不会自动继续讨论；需要继续时，在主持设置中调整阶段。")) : Y("", !0),
+					i.value === "delete" ? (H(), U("p", yW, "消息、共识和发言安排将一起删除，无法撤销。")) : Y("", !0),
 					i.value === "rename" ? (H(), W(de, {
 						key: 3,
 						label: "频道名称",
@@ -42540,7 +42633,7 @@ var VV = {
 						}, null, 8, ["modelValue"])]),
 						_: 1
 					})) : Y("", !0),
-					G("div", cW, [K(O, {
+					G("div", bW, [K(O, {
 						label: "取消",
 						color: "neutral",
 						variant: "ghost",
@@ -42557,7 +42650,7 @@ var VV = {
 						"loading",
 						"disabled"
 					])])
-				], 32)) : i.value === "settings" ? (H(), U("div", lW, [G("div", uW, [(H(), U(V, null, ha(he, (e) => G("button", {
+				], 32)) : i.value === "settings" ? (H(), U("div", xW, [G("div", SW, [(H(), U(V, null, ha(he, (e) => G("button", {
 					key: e.value,
 					class: M({ chosen: I(a).theme === e.value }),
 					"aria-pressed": I(a).theme === e.value,
@@ -42570,7 +42663,7 @@ var VV = {
 						name: "i-lucide-check",
 						class: "theme-check"
 					})) : Y("", !0)
-				], 10, dW)), 64))]), G("section", fW, [s[27] ||= G("h3", { id: "channel-reading-label" }, "对话宽度", -1), G("div", pW, [(H(!0), U(V, null, ha(e.readingOptions, (e) => (H(), W(O, {
+				], 10, CW)), 64))]), G("section", wW, [s[27] ||= G("h3", { id: "channel-reading-label" }, "对话宽度", -1), G("div", TW, [(H(!0), U(V, null, ha(e.readingOptions, (e) => (H(), W(O, {
 					key: e.value,
 					label: e.label,
 					color: "neutral",
@@ -42588,7 +42681,7 @@ var VV = {
 					class: "dialog-form",
 					onSubmit: uu(N, ["prevent"])
 				}, [
-					i.value === "create" && e.targetFolder?.id ? (H(), U("p", mW, [K(be, { name: "i-lucide-folder" }), J(P(e.targetFolder.name), 1)])) : Y("", !0),
+					i.value === "create" && e.targetFolder?.id ? (H(), U("p", EW, [K(be, { name: "i-lucide-folder" }), J(P(e.targetFolder.name), 1)])) : Y("", !0),
 					i.value === "create" ? (H(), W(de, {
 						key: 1,
 						label: "讨论运行方式"
@@ -42632,7 +42725,7 @@ var VV = {
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
-					G("div", hW, [K(de, { label: "主持人" }, {
+					G("div", DW, [K(de, { label: "主持人" }, {
 						default: L(() => [K(x, {
 							"model-value": I(a).fields[ge("host")],
 							items: I(A),
@@ -42665,9 +42758,9 @@ var VV = {
 						}, null, 8, ["model-value"])]),
 						_: 1
 					})) : Y("", !0),
-					G("section", gW, [
+					G("section", OW, [
 						s[29] ||= G("h3", null, "讨论上限", -1),
-						G("div", _W, [
+						G("div", kW, [
 							(H(), U(V, null, ha(ue, (e) => K(de, {
 								key: e.key,
 								label: e.label
@@ -42728,14 +42821,14 @@ var VV = {
 							})) : Y("", !0)
 						]),
 						s[30] ||= G("p", { class: "fine-print" }, "轮次、总时长留空或 0 表示不限。一轮指每位专家各完成一次观点；首次进入讨论阶段或创建安排后计时，暂停仍计时。收束预留计入总时长。", -1),
-						le.value ? (H(), U("p", vW, "修改上限前，请先把阶段保存为“已暂停”。")) : Y("", !0)
+						le.value ? (H(), U("p", AW, "修改上限前，请先把阶段保存为“已暂停”。")) : Y("", !0)
 					]),
 					K(Se, {
 						open: ce.value,
 						"onUpdate:open": s[19] ||= (e) => ce.value = e,
 						class: "advanced-fields"
 					}, {
-						content: L(() => [G("div", yW, [
+						content: L(() => [G("div", jW, [
 							(H(), U(V, null, ha([
 								{
 									key: "user_request",
@@ -42762,7 +42855,7 @@ var VV = {
 								}, null, 8, ["model-value", "onUpdate:modelValue"])]),
 								_: 2
 							}, 1032, ["label"])), 64)),
-							G("div", bW, [(H(!0), U(V, null, ha(I(k), (e) => (H(), U("div", { key: e }, [G("label", null, P(e), 1), K(x, {
+							G("div", MW, [(H(!0), U(V, null, ha(I(k), (e) => (H(), U("div", { key: e }, [G("label", null, P(e), 1), K(x, {
 								"model-value": I(a).experts[ae.value]?.[e] || "none",
 								items: se,
 								"aria-label": `${e} 参与方式`,
@@ -42784,7 +42877,7 @@ var VV = {
 						}, null, 8, ["trailing-icon"])]),
 						_: 1
 					}, 8, ["open"]),
-					G("div", xW, [K(O, {
+					G("div", NW, [K(O, {
 						label: "取消",
 						color: "neutral",
 						variant: "ghost",
@@ -42828,7 +42921,7 @@ var VV = {
 						_: 1
 					}),
 					s[32] ||= G("p", { class: "fine-print" }, "创建后为待通知状态；由主持人实际联系专家。", -1),
-					G("div", SW, [K(O, {
+					G("div", PW, [K(O, {
 						label: "取消",
 						variant: "ghost",
 						color: "neutral",
@@ -42839,8 +42932,8 @@ var VV = {
 						label: "创建发言安排",
 						loading: I(l) === "schedule"
 					}, null, 8, ["loading"])])
-				], 32)) : i.value === "message" ? (H(), U("div", CW, [fe.value ? (H(), U("p", wW, P(fe.value), 1)) : j.value ? (H(), U(V, { key: 1 }, [
-					G("div", TW, [
+				], 32)) : i.value === "message" ? (H(), U("div", FW, [fe.value ? (H(), U("p", IW, P(fe.value), 1)) : j.value ? (H(), U(V, { key: 1 }, [
+					G("div", LW, [
 						G("strong", null, P(I(o).display_name(j.value.author)), 1),
 						G("span", null, "#" + P(j.value.id), 1),
 						K(Ce, {
@@ -42851,9 +42944,9 @@ var VV = {
 							_: 1
 						})
 					]),
-					G("p", EW, P(I(o).provenance(j.value)) + " · " + P(new Date(j.value.created_at).toLocaleString("zh-CN")), 1),
-					j.value.summary ? (H(), U("section", DW, [G("small", null, "回答摘要 · " + P(I(o).display_name(j.value.summary_by)), 1), G("p", OW, P(j.value.summary), 1)])) : Y("", !0),
-					G("p", kW, P(j.value.text), 1),
+					G("p", RW, P(I(o).provenance(j.value)) + " · " + P(new Date(j.value.created_at).toLocaleString("zh-CN")), 1),
+					j.value.summary ? (H(), U("section", zW, [G("small", null, "回答摘要 · " + P(I(o).display_name(j.value.summary_by)), 1), G("p", BW, P(j.value.summary), 1)])) : Y("", !0),
+					G("p", VW, P(j.value.text), 1),
 					j.value.reply_to ? (H(), W(O, {
 						key: 1,
 						label: `查看被回复的原文 #${j.value.reply_to}`,
@@ -42863,7 +42956,7 @@ var VV = {
 						class: "channel-surface-button",
 						onClick: ye
 					}, null, 8, ["label"])) : Y("", !0)
-				], 64)) : (H(), U("p", AW, "正在读取原文…"))])) : Y("", !0)]),
+				], 64)) : (H(), U("p", HW, "正在读取原文…"))])) : Y("", !0)]),
 				_: 1
 			}, 8, [
 				"open",
@@ -42873,7 +42966,7 @@ var VV = {
 			]);
 		};
 	}
-}, MW = {
+}, WW = {
 	__name: "ContextMenuContent",
 	props: {
 		items: {
@@ -43168,7 +43261,7 @@ var VV = {
 									"disabled",
 									"text-value",
 									"class"
-								]), K(MW, X({
+								]), K(WW, X({
 									sub: "",
 									class: r.ui?.content,
 									ui: e.ui,
@@ -43279,7 +43372,7 @@ var VV = {
 			_: 3
 		}, 16)], 64));
 	}
-}, NW = {
+}, GW = {
 	slots: {
 		content: "min-w-32 max-h-(--reka-context-menu-content-available-height) bg-default shadow-lg rounded-md ring ring-default overflow-hidden data-[state=open]:animate-[scale-in_100ms_var(--ease-out)] data-[state=closed]:animate-[scale-out_100ms_var(--ease-out)] origin-(--reka-context-menu-content-transform-origin) flex flex-col",
 		viewport: "relative divide-y divide-default scroll-py-1 overflow-y-auto flex-1",
@@ -43467,7 +43560,7 @@ var VV = {
 		}
 	],
 	defaultVariants: { size: "md" }
-}, PW = {
+}, KW = {
 	__name: "ContextMenu",
 	props: {
 		size: {
@@ -43537,7 +43630,7 @@ var VV = {
 	emits: ["update:open"],
 	setup(e, { emit: t }) {
 		let n = e, r = t, i = ja(), a = $T("contextMenu", n), o = Sm(), s = eE(am(a, "modal"), r), c = /* @__PURE__ */ Sn(() => a.content), l = () => Bm(i, ["default"]), u = Z(() => kk({
-			extend: NW,
+			extend: GW,
 			...o.ui?.contextMenu || {}
 		})({ size: a.size }));
 		return (e, t) => (H(), W(I(IS), N(q(I(s))), {
@@ -43549,7 +43642,7 @@ var VV = {
 			}, {
 				default: L(() => [B(e.$slots, "default")]),
 				_: 3
-			}, 8, ["disabled", "class"])) : Y("", !0), K(MW, X({
+			}, 8, ["disabled", "class"])) : Y("", !0), K(WW, X({
 				class: u.value.content({ class: [!i.default && I(a).class, I(a).ui?.content] }),
 				ui: u.value,
 				"ui-override": I(a).ui
@@ -43579,46 +43672,46 @@ var VV = {
 			_: 3
 		}, 16));
 	}
-}, FW = { class: "channel-directory-manager" }, IW = { class: "channel-directory-heading" }, LW = { class: "channel-directory-actions" }, RW = {
+}, qW = { class: "channel-directory-manager" }, JW = { class: "channel-directory-heading" }, YW = { class: "channel-directory-actions" }, XW = {
 	"aria-label": "讨论频道列表",
 	class: "channel-room-list",
 	"data-room-directory": ""
-}, zW = ["data-room-folder", "data-drag-folder"], BW = {
+}, ZW = ["data-room-folder", "data-drag-folder"], QW = {
 	key: 0,
 	class: "channel-folder-row"
-}, VW = [
+}, $W = [
 	"disabled",
 	"aria-label",
 	"aria-expanded",
 	"onKeydown",
 	"onClick"
-], HW = { class: "channel-folder-name" }, UW = { class: "channel-folder-actions" }, WW = {
+], eG = { class: "channel-folder-name" }, tG = { class: "channel-folder-actions" }, nG = {
 	class: "channel-directory-count",
 	"aria-hidden": "true"
-}, GW = ["data-drop-folder"], KW = {
+}, rG = ["data-drop-folder"], iG = {
 	key: 0,
 	class: "channel-directory-empty",
 	role: "status"
-}, qW = ["data-drag-room"], JW = [
+}, aG = ["data-drag-room"], oG = [
 	"aria-label",
 	"disabled",
 	"onKeydown"
-], YW = [
+], sG = [
 	"title",
 	"aria-label",
 	"aria-current",
 	"onClick"
-], XW = { class: "channel-room-actions" }, ZW = {
+], cG = { class: "channel-room-actions" }, lG = {
 	class: "channel-directory-count",
 	"aria-hidden": "true"
-}, QW = {
+}, uG = {
 	key: 0,
 	class: "channel-directory-empty"
-}, $W = {
+}, dG = {
 	key: 0,
 	role: "alert",
 	class: "channel-directory-error"
-}, eG = {
+}, fG = {
 	__name: "ChannelDirectory",
 	emits: [
 		"select",
@@ -43774,8 +43867,8 @@ var VV = {
 			];
 		}
 		return (e, t) => {
-			let u = tA, m = Ak, _ = OV, v = AV, y = PW;
-			return H(), U("div", FW, [
+			let u = tA, m = Ak, _ = OV, v = AV, y = KW;
+			return H(), U("div", qW, [
 				K(u, {
 					label: "新建对话",
 					icon: "i-lucide-square-pen",
@@ -43785,7 +43878,7 @@ var VV = {
 					disabled: I(r).directory_pending.includes("create-room"),
 					onClick: t[0] ||= (e) => n("create", null)
 				}, null, 8, ["disabled"]),
-				G("div", IW, [G("span", null, [K(m, { name: "i-lucide-chevron-down" }), t[6] ||= J("讨论频道", -1)]), G("div", LW, [K(_, {
+				G("div", JW, [G("span", null, [K(m, { name: "i-lucide-chevron-down" }), t[6] ||= J("讨论频道", -1)]), G("div", YW, [K(_, {
 					items: d.value,
 					content: {
 						align: "end",
@@ -43814,12 +43907,12 @@ var VV = {
 					}, null, 8, ["disabled"])]),
 					_: 1
 				})])]),
-				G("nav", RW, [(H(!0), U(V, null, ha(l.value, (e, s) => (H(), U("section", {
+				G("nav", XW, [(H(!0), U(V, null, ha(l.value, (e, s) => (H(), U("section", {
 					key: e.order_id,
 					class: "channel-folder-section",
 					"data-room-folder": e.id,
 					"data-drag-folder": e.order_id
-				}, [e.id ? (H(), U("div", BW, [
+				}, [e.id ? (H(), U("div", QW, [
 					G("button", {
 						class: "channel-folder-heading",
 						"data-drop-folder": "",
@@ -43841,9 +43934,9 @@ var VV = {
 					}, [
 						K(m, { name: f.value.has(e.id) ? "i-lucide-chevron-right" : "i-lucide-chevron-down" }, null, 8, ["name"]),
 						K(m, { name: "i-lucide-folder" }),
-						G("span", HW, P(e.name), 1)
-					], 40, VW),
-					G("div", UW, [K(_, {
+						G("span", eG, P(e.name), 1)
+					], 40, $W),
+					G("div", tG, [K(_, {
 						items: p(e, s),
 						content: {
 							align: "start",
@@ -43877,12 +43970,12 @@ var VV = {
 						])]),
 						_: 2
 					}, 1032, ["text"])]),
-					G("small", WW, P(e.pending ? "保存中" : e.rooms.length), 1)
+					G("small", nG, P(e.pending ? "保存中" : e.rooms.length), 1)
 				])) : Y("", !0), !e.id || !f.value.has(e.id) ? (H(), U("div", {
 					key: 1,
 					class: M(e.id ? "channel-folder-rooms" : "channel-root-rooms"),
 					"data-drop-folder": e.id ? void 0 : ""
-				}, [I(r).creating_room && (I(r).creating_room.folder_id || "") === e.id ? (H(), U("p", KW, "正在创建：" + P(I(r).creating_room.title), 1)) : Y("", !0), (H(!0), U(V, null, ha(e.rooms, (s, c) => (H(), W(y, {
+				}, [I(r).creating_room && (I(r).creating_room.folder_id || "") === e.id ? (H(), U("p", iG, "正在创建：" + P(I(r).creating_room.title), 1)) : Y("", !0), (H(!0), U(V, null, ha(e.rooms, (s, c) => (H(), W(y, {
 					key: s.id,
 					items: g(s, c, s.folder_id || null, e.rooms.length),
 					ui: { content: "channel-menu channel-topic-menu" }
@@ -43907,7 +44000,7 @@ var VV = {
 								direction: 1,
 								folder_id: s.folder_id || null
 							}), ["prevent"]), ["down"])]
-						}, [K(m, { name: "i-lucide-grip-vertical" })], 40, JW),
+						}, [K(m, { name: "i-lucide-grip-vertical" })], 40, oG),
 						G("button", {
 							class: "channel-room-select",
 							"data-drag-title": "",
@@ -43916,8 +44009,8 @@ var VV = {
 							"aria-current": s.id === I(r).room?.id ? "page" : void 0,
 							onPointerdown: t[4] ||= (e) => !I(o) && I(i).start_drag(e),
 							onClick: (e) => n("select", s.id)
-						}, [G("span", null, P(s.title), 1)], 40, YW),
-						G("div", XW, [K(v, {
+						}, [G("span", null, P(s.title), 1)], 40, sG),
+						G("div", cG, [K(v, {
 							text: s.archived ? "恢复频道" : "存档频道",
 							ui: { content: "channel-topic-tooltip" }
 						}, {
@@ -43958,10 +44051,10 @@ var VV = {
 							}, null, 8, ["aria-label"])]),
 							_: 2
 						}, 1032, ["items"])]),
-						G("small", ZW, P(s.message_count), 1)
-					], 10, qW)]),
+						G("small", lG, P(s.message_count), 1)
+					], 10, aG)]),
 					_: 2
-				}, 1032, ["items"]))), 128))], 10, GW)) : Y("", !0)], 8, zW))), 128)), s.value.length ? Y("", !0) : (H(), U("p", QW, "暂无讨论频道"))]),
+				}, 1032, ["items"]))), 128))], 10, rG)) : Y("", !0)], 8, ZW))), 128)), s.value.length ? Y("", !0) : (H(), U("p", uG, "暂无讨论频道"))]),
 				K(u, {
 					icon: "i-lucide-archive",
 					label: `已存档 · ${c.value}`,
@@ -43972,35 +44065,35 @@ var VV = {
 					"aria-haspopup": "dialog",
 					onClick: t[5] ||= (e) => n("archives")
 				}, null, 8, ["label"]),
-				I(r).directory_error ? (H(), U("p", $W, P(I(r).directory_error), 1)) : Y("", !0)
+				I(r).directory_error ? (H(), U("p", dG, P(I(r).directory_error), 1)) : Y("", !0)
 			]);
 		};
 	}
-}, tG = ["aria-expanded", "title"], nG = { class: "progress-chip-text" }, rG = {
+}, pG = ["aria-expanded", "title"], mG = { class: "progress-chip-text" }, hG = {
 	key: 0,
 	id: "progress-panel",
 	class: "progress-panel",
 	"aria-label": "讨论进度看板"
-}, iG = { class: "progress-panel-heading" }, aG = {
+}, gG = { class: "progress-panel-heading" }, _G = {
 	class: "progress-headline",
 	role: "status"
-}, oG = { class: "progress-stats" }, sG = {
+}, vG = { class: "progress-stats" }, yG = {
 	key: 0,
 	class: "progress-warning"
-}, cG = {
+}, bG = {
 	class: "progress-members",
 	"aria-label": "参与专家状态"
-}, lG = { class: "progress-member-name" }, uG = { class: "progress-member-status" }, dG = { key: 0 }, fG = ["title"], pG = {
+}, xG = { class: "progress-member-name" }, SG = { class: "progress-member-status" }, CG = { key: 0 }, wG = ["title"], TG = {
 	key: 1,
 	class: "progress-member-session"
-}, mG = ["title"], hG = {
+}, EG = ["title"], DG = {
 	key: 1,
 	class: "progress-timings",
 	"aria-label": "阶段耗时"
-}, gG = { class: "progress-stats progress-timing-totals" }, _G = ["title"], vG = { class: "progress-timing-list" }, yG = { class: "progress-timing-who" }, bG = { class: "progress-timing-stages" }, xG = ["title"], SG = {
+}, OG = { class: "progress-stats progress-timing-totals" }, kG = ["title"], AG = { class: "progress-timing-list" }, jG = { class: "progress-timing-who" }, MG = { class: "progress-timing-stages" }, NG = ["title"], PG = {
 	key: 2,
 	class: "fine-print"
-}, CG = { class: "progress-actions" }, wG = { class: "progress-ending" }, TG = ["disabled"], EG = { key: 0 }, DG = ["disabled"], OG = "ai-codiscuss-progress-panel", kG = {
+}, FG = { class: "progress-actions" }, IG = { class: "progress-ending" }, LG = ["disabled"], RG = { key: 0 }, zG = ["disabled"], BG = "ai-codiscuss-progress-panel", VG = {
 	__name: "ProgressPanel",
 	setup(e) {
 		let { view: t, bridge: n, act: r, pending: i } = xr("discussion"), a = ["pending", "notified"], o = {
@@ -44029,10 +44122,10 @@ var VV = {
 			completed: "完成",
 			cancelled: "已撤销",
 			failed: "失败"
-		}, l = /* @__PURE__ */ F(te()), u = /* @__PURE__ */ F(!1), d = /* @__PURE__ */ F(null);
-		Qi(() => document.addEventListener("pointerdown", D)), ta(() => document.removeEventListener("pointerdown", D)), R(l, (e) => {
+		}, l = /* @__PURE__ */ F(ne()), u = /* @__PURE__ */ F(!1), d = /* @__PURE__ */ F(null);
+		Qi(() => document.addEventListener("pointerdown", te)), ta(() => document.removeEventListener("pointerdown", te)), R(l, (e) => {
 			try {
-				localStorage.setItem(OG, JSON.stringify({ expanded: e }));
+				localStorage.setItem(BG, JSON.stringify({ expanded: e }));
 			} catch {}
 		});
 		let f = Z(() => t.value.room), p = Z(() => f.value.limits || {}), m = Z(() => f.value.runtime || {}), h = Z(() => a.includes(f.value.current_turn?.status) ? f.value.current_turn : null), g = Z(() => ["paused", "concluded"].includes(f.value.phase)), _ = Z(() => f.value.phase === "concluded"), v = Z(() => m.value.mode === "automatic" && (m.value.status === "paused" || m.value.expired) && !_.value && !f.value.archived), y = Z(() => !g.value && f.value.phase !== "preparing" && !f.value.archived && !p.value.closing), b = Z(() => p.value.max_rounds ? `${p.value.completed_rounds || 0} / ${p.value.max_rounds}` : `${p.value.completed_rounds || 0} · 不限`), x = Z(() => {
@@ -44049,18 +44142,18 @@ var VV = {
 			items: [],
 			totals: {},
 			count: 0
-		}), E = Z(() => [f.value.host, ...Object.keys(f.value.experts || {}).filter((e) => e !== f.value.host)].filter((e) => e && e !== "用户").map(ne));
-		function D(e) {
+		}), E = Z(() => [f.value.host, ...Object.keys(f.value.experts || {}).filter((e) => e !== f.value.host)].filter((e) => e && e !== "用户").map(re));
+		function te(e) {
 			!l.value || u.value || d.value?.contains(e.target) || e.target.closest?.("[role='dialog'], [data-reka-popper-content-wrapper]") || (l.value = !1);
 		}
-		function te() {
+		function ne() {
 			try {
-				return JSON.parse(localStorage.getItem(OG))?.expanded === !0;
+				return JSON.parse(localStorage.getItem(BG))?.expanded === !0;
 			} catch {
 				return !1;
 			}
 		}
-		function ne(e) {
+		function re(e) {
 			let t = (m.value.participants || []).find((t) => t.participant === e), n = f.value.rounds?.at(-1)?.completed === !1 ? f.value.rounds.at(-1).speakers : [], r = e === f.value.host, i = "等待", a = "neutral", s = o[t?.status] || "";
 			if (h.value?.expert === e) i = `第 ${f.value.rounds?.at(-1)?.completed === !1 ? f.value.rounds.at(-1).number : (f.value.completed_rounds || 0) + 1} 轮 · ${s && t.turn_id === h.value.id ? s : g.value ? "已暂停，原安排保留" : "轮到发言"}`, a = g.value ? "neutral" : "primary";
 			else if (r && !h.value && !g.value) {
@@ -44078,14 +44171,14 @@ var VV = {
 				mode: f.value.experts?.[e] === "cli" ? "CLI" : "在线"
 			};
 		}
-		function re(e) {
+		function D(e) {
 			return e == null ? "—" : e < 60 ? `${e}秒` : e < 3600 ? `${Math.floor(e / 60)}分${String(e % 60).padStart(2, "0")}秒` : `${Math.floor(e / 3600)}小时${Math.floor(e % 3600 / 60)}分`;
 		}
 		async function ie(e) {
 			await r(e) && (u.value = !1);
 		}
 		return (e, t) => {
-			let a = Ak, o = pV, D = tA, te = Ik, ne = RU;
+			let a = Ak, o = pV, te = tA, ne = Ik, re = XU;
 			return H(), U("div", {
 				ref_key: "anchor",
 				ref: d,
@@ -44100,11 +44193,11 @@ var VV = {
 					onClick: t[0] ||= (e) => l.value = !l.value
 				}, [
 					t[9] ||= G("span", { class: "progress-dot" }, null, -1),
-					G("span", nG, P(I(n).progress_round(f.value)), 1),
+					G("span", mG, P(I(n).progress_round(f.value)), 1),
 					K(a, { name: l.value ? "i-lucide-chevron-up" : "i-lucide-chevron-down" }, null, 8, ["name"])
-				], 10, tG),
-				l.value ? (H(), U("section", rG, [
-					G("header", iG, [
+				], 10, pG),
+				l.value ? (H(), U("section", hG, [
+					G("header", gG, [
 						t[10] ||= G("strong", null, "讨论进度", -1),
 						K(o, {
 							color: "neutral",
@@ -44114,7 +44207,7 @@ var VV = {
 							default: L(() => [J(P(I(n).phases[f.value.phase]), 1)]),
 							_: 1
 						}),
-						K(D, {
+						K(te, {
 							icon: "i-lucide-minus",
 							color: "neutral",
 							variant: "ghost",
@@ -44124,16 +44217,16 @@ var VV = {
 							onClick: t[1] ||= (e) => l.value = !1
 						})
 					]),
-					G("p", aG, P(T.value), 1),
-					G("dl", oG, [
+					G("p", _G, P(T.value), 1),
+					G("dl", vG, [
 						G("div", null, [t[11] ||= G("dt", null, "完成轮次", -1), G("dd", null, P(b.value), 1)]),
 						G("div", null, [t[12] ||= G("dt", null, "用时", -1), G("dd", null, P(x.value), 1)]),
 						G("div", null, [t[13] ||= G("dt", null, "推进方式", -1), G("dd", null, P(S.value) + " · " + P(C.value), 1)]),
 						G("div", null, [t[14] ||= G("dt", null, "发言权", -1), G("dd", null, P(I(n).floor_status(f.value)), 1)])
 					]),
-					p.value.reached && !g.value && !p.value.closing ? (H(), U("p", sG, "已达讨论上限，停止新增安排。")) : Y("", !0),
-					G("ul", cG, [(H(!0), U(V, null, ha(E.value, (e) => (H(), U("li", { key: e.name }, [
-						K(te, {
+					p.value.reached && !g.value && !p.value.closing ? (H(), U("p", yG, "已达讨论上限，停止新增安排。")) : Y("", !0),
+					G("ul", bG, [(H(!0), U(V, null, ha(E.value, (e) => (H(), U("li", { key: e.name }, [
+						K(ne, {
 							src: I(n).identities[e.name]?.icon,
 							text: I(n).identities[e.name]?.initials,
 							alt: e.name,
@@ -44145,7 +44238,7 @@ var VV = {
 							"alt",
 							"class"
 						]),
-						G("span", lG, [
+						G("span", xG, [
 							J(P(I(n).display_name(e.name)), 1),
 							e.is_host ? (H(), W(a, {
 								key: 0,
@@ -44154,20 +44247,20 @@ var VV = {
 							})) : Y("", !0),
 							G("small", null, P(e.mode), 1)
 						]),
-						G("span", uG, [K(o, {
+						G("span", SG, [K(o, {
 							color: e.color,
 							variant: "subtle",
 							size: "sm"
 						}, {
 							default: L(() => [J(P(e.text), 1)]),
 							_: 2
-						}, 1032, ["color"]), e.failures ? (H(), U("small", dG, "累计失败 " + P(e.failures) + " 次", 1)) : Y("", !0)]),
+						}, 1032, ["color"]), e.failures ? (H(), U("small", CG, "累计失败 " + P(e.failures) + " 次", 1)) : Y("", !0)]),
 						e.result ? (H(), U("small", {
 							key: 0,
 							class: "progress-member-result",
 							title: e.result
-						}, P(e.result), 9, fG)) : Y("", !0),
-						e.session ? (H(), U("small", pG, [G("span", { title: e.session }, "会话 " + P(e.session), 9, mG), K(D, {
+						}, P(e.result), 9, wG)) : Y("", !0),
+						e.session ? (H(), U("small", TG, [G("span", { title: e.session }, "会话 " + P(e.session), 9, EG), K(te, {
 							icon: "i-lucide-copy",
 							color: "neutral",
 							variant: "ghost",
@@ -44177,20 +44270,20 @@ var VV = {
 							onClick: (t) => I(r)("copy", e.session)
 						}, null, 8, ["aria-label", "onClick"])])) : Y("", !0)
 					]))), 128))]),
-					m.value.mode === "automatic" && ee.value.count ? (H(), U("section", hG, [
+					m.value.mode === "automatic" && ee.value.count ? (H(), U("section", DG, [
 						G("h4", null, [t[15] ||= J("阶段耗时 ", -1), G("small", null, "本次运行 " + P(ee.value.count) + " 次执行", 1)]),
-						G("dl", gG, [(H(), U(V, null, ha(s, (e) => G("div", {
+						G("dl", OG, [(H(), U(V, null, ha(s, (e) => G("div", {
 							key: e.key,
 							title: e.hint
-						}, [G("dt", null, P(e.label), 1), G("dd", null, P(re(ee.value.totals[e.key] || 0)), 1)], 8, _G)), 64))]),
-						G("ol", vG, [(H(!0), U(V, null, ha(ee.value.items, (e) => (H(), U("li", { key: e.id }, [G("span", yG, [J("#" + P(e.id) + " " + P(I(n).display_name(e.participant)), 1), G("small", null, P(e.role === "host" ? "主持" : "专家") + " · " + P(c[e.status] || e.status), 1)]), G("span", bG, [(H(), U(V, null, ha(s, (t) => G("span", {
+						}, [G("dt", null, P(e.label), 1), G("dd", null, P(D(ee.value.totals[e.key] || 0)), 1)], 8, kG)), 64))]),
+						G("ol", AG, [(H(!0), U(V, null, ha(ee.value.items, (e) => (H(), U("li", { key: e.id }, [G("span", jG, [J("#" + P(e.id) + " " + P(I(n).display_name(e.participant)), 1), G("small", null, P(e.role === "host" ? "主持" : "专家") + " · " + P(c[e.status] || e.status), 1)]), G("span", MG, [(H(), U(V, null, ha(s, (t) => G("span", {
 							key: t.key,
 							title: t.hint
-						}, P(t.label) + " " + P(re(e[t.key])), 9, xG)), 64))])]))), 128))])
+						}, P(t.label) + " " + P(D(e[t.key])), 9, NG)), 64))])]))), 128))])
 					])) : Y("", !0),
-					m.value.mode === "automatic" ? Y("", !0) : (H(), U("p", SG, "手动模式没有执行回执，状态只按安排与发言推断。")),
-					G("div", CG, [
-						v.value ? (H(), W(D, {
+					m.value.mode === "automatic" ? Y("", !0) : (H(), U("p", PG, "手动模式没有执行回执，状态只按安排与发言推断。")),
+					G("div", FG, [
+						v.value ? (H(), W(te, {
 							key: 0,
 							icon: "i-lucide-rotate-ccw",
 							label: "重启",
@@ -44199,7 +44292,7 @@ var VV = {
 							title: "重新启动自动运行，原安排重新交给对应 AI；需本机接入程序保持运行",
 							loading: I(i) === "restart_discussion",
 							onClick: t[2] ||= (e) => I(r)("restart_discussion")
-						}, null, 8, ["loading"])) : (H(), W(D, {
+						}, null, 8, ["loading"])) : (H(), W(te, {
 							key: 1,
 							icon: "i-lucide-pause",
 							label: "暂停",
@@ -44210,7 +44303,7 @@ var VV = {
 							loading: I(i) === "pause_discussion",
 							onClick: t[3] ||= (e) => I(r)("pause_discussion")
 						}, null, 8, ["disabled", "loading"])),
-						K(D, {
+						K(te, {
 							icon: "i-lucide-hand",
 							label: "打断发言",
 							size: "sm",
@@ -44225,7 +44318,7 @@ var VV = {
 							"loading",
 							"title"
 						]),
-						K(D, {
+						K(te, {
 							icon: "i-lucide-square",
 							label: "提前结束",
 							size: "sm",
@@ -44236,7 +44329,7 @@ var VV = {
 						}, null, 8, ["disabled"])
 					])
 				])) : Y("", !0),
-				K(ne, {
+				K(re, {
 					open: u.value,
 					"onUpdate:open": t[8] ||= (e) => u.value = e,
 					title: "提前结束讨论",
@@ -44246,7 +44339,7 @@ var VV = {
 						body: "dialog-body"
 					}
 				}, {
-					body: L(() => [G("div", wG, [G("button", {
+					body: L(() => [G("div", IG, [G("button", {
 						type: "button",
 						class: "progress-ending-option",
 						disabled: !y.value || !!I(i),
@@ -44254,64 +44347,58 @@ var VV = {
 					}, [
 						t[16] ||= G("strong", null, "强行收尾", -1),
 						G("span", null, "立即进入收束，由 " + P(I(n).display_name(f.value.host)) + " 在 " + P(p.value.summary_minutes || 5) + " 分钟收束预留内根据已有材料总结。", 1),
-						y.value ? Y("", !0) : (H(), U("small", EG, P(p.value.closing ? "已在收尾中。" : "仅进行中的讨论可以收尾；已暂停时请选择直接丢弃。"), 1))
-					], 8, TG), G("button", {
+						y.value ? Y("", !0) : (H(), U("small", RG, P(p.value.closing ? "已在收尾中。" : "仅进行中的讨论可以收尾；已暂停时请选择直接丢弃。"), 1))
+					], 8, LG), G("button", {
 						type: "button",
 						class: "progress-ending-option",
 						disabled: _.value || !!I(i),
 						onClick: t[7] ||= (e) => ie("conclude_discussion")
-					}, [...t[17] ||= [G("strong", null, "直接丢弃", -1), G("span", null, "不再总结，阶段直接设为“已收束”，自动运行随之停止。", -1)]], 8, DG)])]),
+					}, [...t[17] ||= [G("strong", null, "直接丢弃", -1), G("span", null, "不再总结，阶段直接设为“已收束”，自动运行随之停止。", -1)]], 8, zG)])]),
 					_: 1
 				}, 8, ["open"])
 			], 512);
 		};
 	}
-}, AG = {
+}, HG = {
 	id: "channel-sidebar",
 	class: "channel-sidebar",
 	"aria-label": "频道导航"
-}, jG = { class: "channel-workspace-heading" }, MG = { class: "channel-brand-icon" }, NG = { class: "channel-sidebar-content" }, PG = { class: "channel-directory-heading channel-tools-heading" }, FG = { class: "channel-sidebar-footer" }, IG = { class: "channel-self" }, LG = { class: "channel-connection" }, RG = [
+}, UG = { class: "channel-workspace-heading" }, WG = { class: "channel-brand-icon" }, GG = { class: "channel-sidebar-content" }, KG = { class: "channel-directory-heading channel-tools-heading" }, qG = { class: "channel-sidebar-footer" }, JG = { class: "channel-self" }, YG = { class: "channel-connection" }, XG = [
 	"aria-valuemax",
 	"aria-valuenow",
 	"aria-valuetext"
-], zG = { class: "channel-main" }, BG = { class: "channel-header" }, VG = { class: "channel-title-icon" }, HG = { class: "channel-title" }, UG = { class: "channel-title-copy" }, WG = ["title"], GG = ["title"], KG = {
+], ZG = { class: "channel-main" }, QG = { class: "channel-header" }, $G = { class: "channel-title-icon" }, eK = { class: "channel-title" }, tK = { class: "channel-title-copy" }, nK = ["title"], rK = ["title"], iK = {
 	key: 0,
 	class: "channel-header-context"
-}, qG = {
+}, aK = {
 	key: 1,
 	class: "channel-header-actions"
-}, JG = {
+}, oK = {
 	key: 0,
 	class: "channel-tabbar"
-}, YG = { class: "channel-brief-inner" }, XG = { class: "channel-brief-heading" }, ZG = ["aria-label", "aria-expanded"], QG = {
+}, sK = { class: "channel-brief-inner" }, cK = { class: "channel-brief-heading" }, lK = ["aria-label", "aria-expanded"], uK = {
 	key: 0,
 	class: "channel-brief-preview"
-}, $G = { class: "channel-brief-round" }, eK = {
+}, dK = { class: "channel-brief-round" }, fK = {
 	id: "channel-brief-content",
 	class: "channel-brief-content"
-}, tK = ["innerHTML"], nK = { class: "channel-brief-footer" }, rK = { class: "channel-brief-status" }, iK = { class: "channel-content" }, aK = {
+}, pK = ["innerHTML"], mK = { class: "channel-brief-footer" }, hK = { class: "channel-brief-status" }, gK = { class: "channel-content" }, _K = {
 	key: 0,
 	class: "content-page channel-summary",
 	role: "tabpanel",
 	"aria-label": "共识"
-}, oK = { class: "page-heading" }, sK = {
+}, vK = { class: "page-heading" }, yK = {
 	key: 0,
 	class: "info-section"
-}, cK = { class: "button-row" }, lK = { class: "form-footer" }, uK = {
+}, bK = { class: "button-row" }, xK = { class: "form-footer" }, SK = {
 	key: 3,
 	class: "channel-empty"
-}, dK = ["aria-valuenow", "aria-valuetext"], fK = {
+}, CK = ["aria-valuenow", "aria-valuetext"], wK = {
 	key: 2,
 	id: "channel-member-rail",
 	class: "channel-member-rail",
 	"aria-label": "频道概览与参与者"
-}, pK = { class: "channel-overview" }, mK = { class: "channel-overview-heading" }, hK = {
-	key: 0,
-	class: "channel-overview-goal"
-}, gK = {
-	key: 1,
-	class: "channel-current-focus"
-}, _K = { class: "channel-participants" }, vK = { class: "channel-directory-heading" }, yK = { class: "channel-person-label" }, bK = { class: "channel-detail-title" }, xK = { class: "info-section" }, SK = "ai-codiscuss-channel-layout", CK = 220, wK = 440, TK = 280, EK = 16, DK = 180, OK = 400, kK = 248, AK = 16, jK = 480, MK = 1200, NK = 6, PK = {
+}, TK = { class: "channel-overview" }, EK = { class: "channel-overview-heading" }, DK = { class: "channel-current-focus" }, OK = { class: "channel-participants" }, kK = { class: "channel-directory-heading" }, AK = { class: "channel-person-label" }, jK = { class: "channel-detail-title" }, MK = { class: "info-section" }, NK = "ai-codiscuss-channel-layout", PK = 220, FK = 440, IK = 280, LK = 16, RK = 180, zK = 400, BK = 248, VK = 16, HK = 480, UK = 1200, WK = 6, GK = {
 	__name: "ChannelWorkspace",
 	setup(e) {
 		let { view: t, bridge: n, field: r, act: i, pending: a } = xr("discussion"), o = Z(() => t.value.room), s = /* @__PURE__ */ F(""), c = /* @__PURE__ */ F(null), l = /* @__PURE__ */ F(null), u = /* @__PURE__ */ F(null), d = /* @__PURE__ */ F(!1), f = /* @__PURE__ */ F(!1), p = r("state-input"), m = r("brief-input"), h = r("search-input"), g = r("author-select"), _ = {
@@ -44327,13 +44414,13 @@ var VV = {
 				label: "宽",
 				width: 1240
 			}
-		}, v = ve(), y = /* @__PURE__ */ F(v.reading), b = /* @__PURE__ */ F(v.rail), x = /* @__PURE__ */ F(v.nav), S = /* @__PURE__ */ F(typeof window > "u" ? 734 : window.innerWidth), C = /* @__PURE__ */ F(v.collapsed), w = /* @__PURE__ */ F(v.brief_collapsed), T = /* @__PURE__ */ F(v.rail_collapsed), ee = Z(() => S.value >= MK), E = Z(() => !!o.value && t.value.tab === "discussion" && !T.value), D = Z(() => ee.value && t.value.tab === "discussion" ? T.value ? "展开频道概览" : "收起频道概览" : "频道资料与参与者"), te = Z(() => {
+		}, v = ve(), y = /* @__PURE__ */ F(v.reading), b = /* @__PURE__ */ F(v.rail), x = /* @__PURE__ */ F(v.nav), S = /* @__PURE__ */ F(typeof window > "u" ? 734 : window.innerWidth), C = /* @__PURE__ */ F(v.collapsed), w = /* @__PURE__ */ F(v.brief_collapsed), T = /* @__PURE__ */ F(v.rail_collapsed), ee = Z(() => S.value >= UK), E = Z(() => !!o.value && t.value.tab === "discussion" && !T.value), te = Z(() => ee.value && t.value.tab === "discussion" ? T.value ? "展开频道概览" : "收起频道概览" : "频道资料与参与者"), ne = Z(() => {
 			let e = document.createElement("template");
 			return e.innerHTML = o.value?.rendered_brief || "", e.content.textContent.replace(/\s+/g, " ").trim();
-		}), ne = /* @__PURE__ */ F(null), re = /* @__PURE__ */ F(null), ie = Z(() => Math.min(OK, Math.max(DK, S.value - jK - NK))), O = Z(() => Math.min(x.value, ie.value)), ae = Z(() => ({
+		}), re = /* @__PURE__ */ F(null), D = /* @__PURE__ */ F(null), ie = Z(() => Math.min(zK, Math.max(RK, S.value - HK - WK))), O = Z(() => Math.min(x.value, ie.value)), ae = Z(() => ({
 			"--channel-reading-width": `${_[y.value].width}px`,
 			"--channel-rail-width": `${b.value}px`,
-			"--channel-main-columns": C.value ? "minmax(0, 1fr)" : `${O.value}px ${NK}px minmax(0, 1fr)`
+			"--channel-main-columns": C.value ? "minmax(0, 1fr)" : `${O.value}px ${WK}px minmax(0, 1fr)`
 		})), k = Object.entries(_).map(([e, t]) => ({
 			value: e,
 			label: t.label
@@ -44460,11 +44547,11 @@ var VV = {
 		}
 		function ve() {
 			try {
-				let e = JSON.parse(localStorage.getItem(SK)) || {};
+				let e = JSON.parse(localStorage.getItem(NK)) || {};
 				return {
 					reading: Object.hasOwn(_, e.reading) ? e.reading : "default",
-					rail: Number.isFinite(e.rail) ? Math.min(wK, Math.max(CK, e.rail)) : TK,
-					nav: Number.isFinite(e.nav) ? Math.min(OK, Math.max(DK, e.nav)) : ye(),
+					rail: Number.isFinite(e.rail) ? Math.min(FK, Math.max(PK, e.rail)) : IK,
+					nav: Number.isFinite(e.nav) ? Math.min(zK, Math.max(RK, e.nav)) : ye(),
 					collapsed: e.collapsed === !0,
 					brief_collapsed: e.brief_collapsed === !0,
 					rail_collapsed: e.rail_collapsed === !0
@@ -44472,7 +44559,7 @@ var VV = {
 			} catch {
 				return {
 					reading: "default",
-					rail: TK,
+					rail: IK,
 					nav: ye(),
 					collapsed: !1,
 					brief_collapsed: !1,
@@ -44481,11 +44568,11 @@ var VV = {
 			}
 		}
 		function ye() {
-			return typeof window > "u" ? kK : window.innerWidth >= 1900 ? 280 : window.innerWidth <= 980 ? 220 : kK;
+			return typeof window > "u" ? BK : window.innerWidth >= 1900 ? 280 : window.innerWidth <= 980 ? 220 : BK;
 		}
 		function be() {
 			try {
-				localStorage.setItem(SK, JSON.stringify({
+				localStorage.setItem(NK, JSON.stringify({
 					reading: y.value,
 					rail: b.value,
 					nav: x.value,
@@ -44502,66 +44589,66 @@ var VV = {
 			S.value = window.innerWidth;
 		}
 		function Ce(e) {
-			e.button === 0 && (e.preventDefault(), e.currentTarget.focus(), ne.value = {
+			e.button === 0 && (e.preventDefault(), e.currentTarget.focus(), re.value = {
 				pointer: e.pointerId,
 				x: e.clientX,
 				width: b.value
 			}, e.currentTarget.setPointerCapture(e.pointerId));
 		}
 		function we(e) {
-			ne.value?.pointer === e.pointerId && (b.value = Math.round(Math.min(wK, Math.max(CK, ne.value.width + ne.value.x - e.clientX))));
+			re.value?.pointer === e.pointerId && (b.value = Math.round(Math.min(FK, Math.max(PK, re.value.width + re.value.x - e.clientX))));
 		}
 		function Te(e) {
-			ne.value?.pointer === e.pointerId && (ne.value = null, e.currentTarget.hasPointerCapture(e.pointerId) && e.currentTarget.releasePointerCapture(e.pointerId), be());
+			re.value?.pointer === e.pointerId && (re.value = null, e.currentTarget.hasPointerCapture(e.pointerId) && e.currentTarget.releasePointerCapture(e.pointerId), be());
 		}
 		function Ee(e) {
 			let t = {
-				ArrowLeft: b.value + EK,
-				ArrowRight: b.value - EK,
-				Home: CK,
-				End: wK
+				ArrowLeft: b.value + LK,
+				ArrowRight: b.value - LK,
+				Home: PK,
+				End: FK
 			};
-			Object.hasOwn(t, e.key) && (e.preventDefault(), b.value = Math.min(wK, Math.max(CK, t[e.key])), be());
+			Object.hasOwn(t, e.key) && (e.preventDefault(), b.value = Math.min(FK, Math.max(PK, t[e.key])), be());
 		}
 		function De(e) {
-			e.button === 0 && (e.preventDefault(), e.currentTarget.focus(), re.value = {
+			e.button === 0 && (e.preventDefault(), e.currentTarget.focus(), D.value = {
 				pointer: e.pointerId,
 				x: e.clientX,
 				width: O.value
 			}, e.currentTarget.setPointerCapture(e.pointerId));
 		}
 		function Oe(e) {
-			re.value?.pointer === e.pointerId && (x.value = Math.round(Math.min(ie.value, Math.max(DK, re.value.width + e.clientX - re.value.x))));
+			D.value?.pointer === e.pointerId && (x.value = Math.round(Math.min(ie.value, Math.max(RK, D.value.width + e.clientX - D.value.x))));
 		}
 		function ke(e) {
-			re.value?.pointer === e.pointerId && (re.value = null, e.currentTarget.hasPointerCapture(e.pointerId) && e.currentTarget.releasePointerCapture(e.pointerId), be());
+			D.value?.pointer === e.pointerId && (D.value = null, e.currentTarget.hasPointerCapture(e.pointerId) && e.currentTarget.releasePointerCapture(e.pointerId), be());
 		}
 		function Ae(e) {
 			let t = {
-				ArrowLeft: O.value - AK,
-				ArrowRight: O.value + AK,
-				Home: DK,
+				ArrowLeft: O.value - VK,
+				ArrowRight: O.value + VK,
+				Home: RK,
 				End: ie.value
 			};
-			Object.hasOwn(t, e.key) && (e.preventDefault(), x.value = Math.min(ie.value, Math.max(DK, t[e.key])), be());
+			Object.hasOwn(t, e.key) && (e.preventDefault(), x.value = Math.min(ie.value, Math.max(RK, t[e.key])), be());
 		}
 		return (e, r) => {
 			let _ = Ak, v = PV, x = Ik, S = tA, T = AV, ve = pV, ye = CV, be = OV, Se = hV, je = dV, Me = cV, Ne = nV, Pe = $B;
 			return H(), U("div", {
 				class: M(["channel-shell", {
-					"channel-resizing": ne.value || re.value,
+					"channel-resizing": re.value || D.value,
 					"channel-nav-collapsed": C.value,
 					"channel-has-rail": E.value
 				}]),
 				style: fe(ae.value)
 			}, [
-				G("aside", AG, [
-					G("header", jG, [
-						G("span", MG, [K(_, { name: "i-lucide-messages-square" })]),
+				G("aside", HG, [
+					G("header", UG, [
+						G("span", WG, [K(_, { name: "i-lucide-messages-square" })]),
 						r[23] ||= G("strong", null, "共议", -1),
 						r[24] ||= G("span", null, "AI CoDiscuss", -1)
 					]),
-					G("div", NG, [K(eG, {
+					G("div", GG, [K(fG, {
 						onSelect: pe,
 						onManage: de,
 						onCreate: he,
@@ -44569,7 +44656,7 @@ var VV = {
 						onManageFolder: N,
 						onDeleteFolder: _e,
 						onArchives: j
-					}), o.value ? (H(), U(V, { key: 0 }, [G("div", PG, [G("span", null, [K(_, { name: "i-lucide-chevron-down" }), r[25] ||= J("频道工具", -1)])]), K(v, {
+					}), o.value ? (H(), U(V, { key: 0 }, [G("div", KG, [G("span", null, [K(_, { name: "i-lucide-chevron-down" }), r[25] ||= J("频道工具", -1)])]), K(v, {
 						items: se.value,
 						orientation: "vertical",
 						color: "neutral",
@@ -44582,7 +44669,7 @@ var VV = {
 							linkLeadingIcon: "channel-link-icon"
 						}
 					}, null, 8, ["items"])], 64)) : Y("", !0)]),
-					G("footer", FG, [
+					G("footer", qG, [
 						K(x, {
 							src: I(n).identities[I(g)]?.icon,
 							text: I(n).identities[I(g)]?.initials,
@@ -44595,7 +44682,7 @@ var VV = {
 							"alt",
 							"class"
 						]),
-						G("div", IG, [G("strong", null, P(I(n).display_name(I(g))), 1), G("div", LG, [G("span", { class: M({ connected: I(t).connected }) }, null, 2), J(P(I(t).connected ? "服务已连接" : "服务未连接"), 1)])]),
+						G("div", JG, [G("strong", null, P(I(n).display_name(I(g))), 1), G("div", YG, [G("span", { class: M({ connected: I(t).connected }) }, null, 2), J(P(I(t).connected ? "服务已连接" : "服务未连接"), 1)])]),
 						K(T, { text: "外观设置" }, {
 							default: L(() => [K(S, {
 								icon: "i-lucide-settings-2",
@@ -44618,7 +44705,7 @@ var VV = {
 					"aria-label": "调整频道栏宽度",
 					"aria-orientation": "vertical",
 					"aria-controls": "channel-sidebar",
-					"aria-valuemin": DK,
+					"aria-valuemin": RK,
 					"aria-valuemax": ie.value,
 					"aria-valuenow": O.value,
 					"aria-valuetext": `${O.value} 像素`,
@@ -44629,9 +44716,9 @@ var VV = {
 					onPointercancel: ke,
 					onLostpointercapture: ke,
 					onKeydown: Ae
-				}, null, 40, RG)),
-				G("main", zG, [
-					G("header", BG, [
+				}, null, 40, XG)),
+				G("main", ZG, [
+					G("header", QG, [
 						K(T, { text: C.value ? "展开频道栏" : "收起频道栏" }, {
 							default: L(() => [K(S, {
 								icon: "i-lucide-panel-left",
@@ -44656,13 +44743,13 @@ var VV = {
 							"aria-expanded": d.value,
 							onClick: r[2] ||= (e) => d.value = !0
 						}, null, 8, ["aria-expanded"]),
-						G("span", VG, [K(_, { name: "i-lucide-hash" })]),
-						G("div", HG, [G("div", UG, [G("h1", { title: o.value?.title }, P(o.value?.title || "共议"), 9, WG), o.value?.floor ? (H(), U("div", {
+						G("span", $G, [K(_, { name: "i-lucide-hash" })]),
+						G("div", eK, [G("div", tK, [G("h1", { title: o.value?.title }, P(o.value?.title || "共议"), 9, nK), o.value?.floor ? (H(), U("div", {
 							key: 0,
 							class: M(["channel-floor-status", { "is-held": o.value.floor.holder }]),
 							role: "status",
 							title: `发言权：${I(n).floor_status(o.value)}`
-						}, [K(_, { name: "i-lucide-mic" }), G("span", null, "发言权：" + P(I(n).floor_status(o.value)), 1)], 10, GG)) : Y("", !0)]), o.value?.archived ? (H(), W(ve, {
+						}, [K(_, { name: "i-lucide-mic" }), G("span", null, "发言权：" + P(I(n).floor_status(o.value)), 1)], 10, rK)) : Y("", !0)]), o.value?.archived ? (H(), W(ve, {
 							key: 0,
 							color: "neutral",
 							variant: "subtle",
@@ -44671,13 +44758,13 @@ var VV = {
 							default: L(() => [...r[26] ||= [J("已存档", -1)]]),
 							_: 1
 						})) : Y("", !0)]),
-						o.value ? (H(), U("span", KG, [
+						o.value ? (H(), U("span", iK, [
 							J(P(oe.find((e) => e.value === I(t).tab)?.label), 1),
 							r[27] ||= G("span", null, "·", -1),
 							J(P(o.value.message_count) + " 条记录", 1)
 						])) : Y("", !0),
-						o.value ? (H(), U("div", qG, [
-							K(kG),
+						o.value ? (H(), U("div", aK, [
+							K(VG),
 							I(t).tab === "discussion" ? (H(), U("form", {
 								key: 0,
 								class: "channel-search",
@@ -44749,7 +44836,7 @@ var VV = {
 						])) : Y("", !0),
 						o.value ? (H(), W(T, {
 							key: 2,
-							text: D.value
+							text: te.value
 						}, {
 							default: L(() => [K(S, {
 								icon: "i-lucide-panel-right",
@@ -44757,14 +44844,14 @@ var VV = {
 								variant: "ghost",
 								size: "sm",
 								class: "channel-icon-button channel-panel-toggle channel-info-button",
-								"aria-label": D.value,
+								"aria-label": te.value,
 								"aria-expanded": ee.value && I(t).tab === "discussion" ? E.value : f.value,
 								onClick: xe
 							}, null, 8, ["aria-label", "aria-expanded"])]),
 							_: 1
 						}, 8, ["text"])) : Y("", !0)
 					]),
-					o.value ? (H(), U("div", JG, [K(Se, {
+					o.value ? (H(), U("div", oK, [K(Se, {
 						modelValue: A.value,
 						"onUpdate:modelValue": r[7] ||= (e) => A.value = e,
 						items: oe,
@@ -44779,7 +44866,7 @@ var VV = {
 						key: 1,
 						class: M(["channel-host-brief", { "is-collapsed": w.value }]),
 						"aria-label": "主持简报"
-					}, [G("div", YG, [G("div", XG, [G("button", {
+					}, [G("div", sK, [G("div", cK, [G("button", {
 						type: "button",
 						class: "channel-brief-toggle",
 						"aria-label": w.value ? "展开主持简报" : "收起主持简报",
@@ -44789,35 +44876,38 @@ var VV = {
 					}, [
 						K(_, { name: w.value ? "i-lucide-chevron-right" : "i-lucide-chevron-down" }, null, 8, ["name"]),
 						G("strong", null, "主持简报" + P(w.value ? "：" : ""), 1),
-						w.value ? (H(), U("span", QG, P(te.value), 1)) : Y("", !0)
-					], 8, ZG), w.value ? Y("", !0) : (H(), U(V, { key: 0 }, [G("span", $G, P(I(n).progress_round(o.value)), 1), K(S, {
+						w.value ? (H(), U("span", uK, P(ne.value), 1)) : Y("", !0)
+					], 8, lK), w.value ? Y("", !0) : (H(), U(V, { key: 0 }, [G("span", dK, P(I(n).progress_round(o.value)), 1), K(S, {
 						label: "更新简报",
 						color: "neutral",
 						variant: "link",
 						size: "xs",
 						class: "channel-brief-update",
 						onClick: r[9] ||= (e) => I(i)("tab", "context")
-					})], 64))]), vr(G("div", eK, [G("div", {
+					})], 64))]), vr(G("div", fK, [G("div", {
 						class: "channel-brief-text markdown-body",
 						innerHTML: o.value.rendered_brief
-					}, null, 8, tK), G("div", nK, [G("span", rK, P(I(n).progress_speaker(o.value)), 1), G("small", null, P(I(n).brief_meta(o.value)), 1)])], 512), [[Vc, !w.value]])])], 2)) : Y("", !0),
+					}, null, 8, pK), G("div", mK, [G("span", hK, P(I(n).progress_speaker(o.value)), 1), G("small", null, P(I(n).brief_meta(o.value)), 1)])], 512), [[Vc, !w.value]])])], 2)) : Y("", !0),
 					o.value ? (H(), U("div", {
 						key: 2,
 						class: M(["channel-body", { "channel-body-discussion": I(t).tab === "discussion" }])
-					}, [G("div", iK, [
-						vr(K(nU, { onDetail: me }, null, 512), [[Vc, I(t).tab === "discussion"]]),
-						I(t).tab === "context" ? (H(), U("section", aK, [
-							G("div", oK, [r[28] ||= G("div", null, [G("h2", null, "共识与分歧"), G("p", null, "整理讨论进展，用 #消息编号 保留依据。")], -1), K(ve, {
+					}, [G("div", gK, [
+						vr(K(mU, {
+							onDetail: me,
+							onEdit: r[10] ||= (e) => s.value = "edit"
+						}, null, 512), [[Vc, I(t).tab === "discussion"]]),
+						I(t).tab === "context" ? (H(), U("section", _K, [
+							G("div", vK, [r[28] ||= G("div", null, [G("h2", null, "共识与分歧"), G("p", null, "整理讨论进展，用 #消息编号 保留依据。")], -1), K(ve, {
 								color: "neutral",
 								variant: "outline"
 							}, {
 								default: L(() => [J("截止 #" + P(o.value.state_until), 1)]),
 								_: 1
 							})]),
-							Array.isArray(o.value.latest_receipts) && o.value.latest_receipts.length ? (H(), U("section", sK, [
+							Array.isArray(o.value.latest_receipts) && o.value.latest_receipts.length ? (H(), U("section", yK, [
 								r[29] ||= G("h3", null, "最新运行回执", -1),
 								r[30] ||= G("p", { class: "fine-print" }, "以下回执独立于摘要更新；晚于摘要的回执可能尚未整理，实际运行结果请查看原文。", -1),
-								G("div", cK, [(H(!0), U(V, null, ha(o.value.latest_receipts, (e) => (H(), W(S, {
+								G("div", bK, [(H(!0), U(V, null, ha(o.value.latest_receipts, (e) => (H(), W(S, {
 									key: e.id,
 									label: `${I(n).display_name(e.author)} #${e.id} · ${new Date(e.created_at).toLocaleString("zh-CN")}${e.id > o.value.state_until ? " · 晚于摘要" : ""}`,
 									variant: "link",
@@ -44825,7 +44915,7 @@ var VV = {
 									onClick: (t) => me(e.id)
 								}, null, 8, ["label", "onClick"]))), 128))])
 							])) : Y("", !0),
-							G("form", { onSubmit: r[12] ||= uu((e) => I(i)("save_context"), ["prevent"]) }, [
+							G("form", { onSubmit: r[13] ||= uu((e) => I(i)("save_context"), ["prevent"]) }, [
 								K(Me, {
 									label: "主持简报",
 									description: "简述结论、共识、歧义，以及接下来要追问或调整什么、为什么。",
@@ -44833,7 +44923,7 @@ var VV = {
 								}, {
 									default: L(() => [K(je, {
 										modelValue: I(m),
-										"onUpdate:modelValue": r[10] ||= (e) => /* @__PURE__ */ ln(m) ? m.value = e : null,
+										"onUpdate:modelValue": r[11] ||= (e) => /* @__PURE__ */ ln(m) ? m.value = e : null,
 										"aria-label": "主持简报正文",
 										rows: 4,
 										class: "w-full",
@@ -44844,14 +44934,14 @@ var VV = {
 								r[31] ||= G("label", { class: "channel-state-label" }, "详细共识与进度", -1),
 								K(je, {
 									modelValue: I(p),
-									"onUpdate:modelValue": r[11] ||= (e) => /* @__PURE__ */ ln(p) ? p.value = e : null,
+									"onUpdate:modelValue": r[12] ||= (e) => /* @__PURE__ */ ln(p) ? p.value = e : null,
 									"aria-label": "共识与分歧正文",
 									rows: 15,
 									maxlength: 4e3,
 									class: "summary-editor",
 									placeholder: "已达成的共识、尚未解决的问题与下一步…"
 								}, null, 8, ["modelValue"]),
-								G("div", lK, [G("span", null, "依据消息截止 #" + P(I(t).snapshot_id), 1), K(S, {
+								G("div", xK, [G("span", null, "依据消息截止 #" + P(I(t).snapshot_id), 1), K(S, {
 									type: "submit",
 									color: "neutral",
 									icon: "i-lucide-check",
@@ -44861,12 +44951,12 @@ var VV = {
 								}, null, 8, ["loading"])])
 							], 32)
 						])) : Y("", !0),
-						I(t).tab === "topic" || I(t).tab === "access" ? (H(), W(IU, {
+						I(t).tab === "topic" || I(t).tab === "access" ? (H(), W(JU, {
 							key: I(t).tab,
-							onOpen: r[13] ||= (e) => s.value = e,
+							onOpen: r[14] ||= (e) => s.value = e,
 							onDetail: me
 						})) : Y("", !0)
-					])], 2)) : (H(), U("div", uK, [
+					])], 2)) : (H(), U("div", SK, [
 						K(_, { name: "i-lucide-hash" }),
 						r[32] ||= G("h2", null, "新建一个讨论频道", -1),
 						r[33] ||= G("p", null, "每个频道围绕一个议题，保留所有人的观点。", -1),
@@ -44874,7 +44964,7 @@ var VV = {
 							icon: "i-lucide-plus",
 							label: "新建讨论",
 							color: "neutral",
-							onClick: r[14] ||= (e) => he()
+							onClick: r[15] ||= (e) => he()
 						})
 					]))
 				]),
@@ -44886,8 +44976,8 @@ var VV = {
 					"aria-label": "调整右侧栏宽度",
 					"aria-orientation": "vertical",
 					"aria-controls": "channel-member-rail",
-					"aria-valuemin": CK,
-					"aria-valuemax": wK,
+					"aria-valuemin": PK,
+					"aria-valuemax": FK,
 					"aria-valuenow": b.value,
 					"aria-valuetext": `${b.value} 像素`,
 					title: "拖动调整右侧栏宽度，也可使用左右方向键",
@@ -44897,29 +44987,16 @@ var VV = {
 					onPointercancel: Te,
 					onLostpointercapture: Te,
 					onKeydown: Ee
-				}, null, 40, dK)) : Y("", !0),
-				E.value ? (H(), U("aside", fK, [G("section", pK, [
-					G("div", mK, [r[34] ||= G("span", null, "频道概览", -1), K(ve, {
-						color: "neutral",
-						variant: "subtle",
-						size: "sm",
-						class: "channel-phase"
-					}, {
-						default: L(() => [G("span", { class: M(["channel-phase-dot", o.value.phase]) }, null, 2), J(P(I(n).phases[o.value.phase]), 1)]),
-						_: 1
-					})]),
-					G("h2", null, P(o.value.title), 1),
-					o.value.goal ? (H(), U("p", hK, P(o.value.goal), 1)) : Y("", !0),
-					ce.value && ce.value !== o.value.goal ? (H(), U("div", gK, [G("span", null, [K(_, { name: "i-lucide-pin" }), r[35] ||= J("当前焦点", -1)]), G("p", null, P(ce.value), 1)])) : Y("", !0),
-					K(S, {
-						label: "查看频道资料",
-						"trailing-icon": "i-lucide-chevron-right",
-						color: "neutral",
-						variant: "link",
-						class: "channel-detail-link",
-						onClick: r[15] ||= (e) => f.value = !0
-					})
-				]), G("section", _K, [G("div", vK, [G("span", null, "参与者 — " + P(le.value.length), 1), K(T, { text: "配置的参与身份，不代表在线状态" }, {
+				}, null, 40, CK)) : Y("", !0),
+				E.value ? (H(), U("aside", wK, [G("section", TK, [G("div", EK, [r[34] ||= G("span", null, "讨论状态", -1), K(ve, {
+					color: "neutral",
+					variant: "subtle",
+					size: "sm",
+					class: "channel-phase"
+				}, {
+					default: L(() => [G("span", { class: M(["channel-phase-dot", o.value.phase]) }, null, 2), J(P(I(n).phases[o.value.phase]), 1)]),
+					_: 1
+				})]), G("div", DK, [G("span", null, [K(_, { name: "i-lucide-pin" }), r[35] ||= J("当前焦点", -1)]), G("p", null, P(ce.value || "尚未设置当前焦点"), 1)])]), G("section", OK, [G("div", kK, [G("span", null, "参与者 — " + P(le.value.length), 1), K(T, { text: "配置的参与身份，不代表在线状态" }, {
 					default: L(() => [K(_, { name: "i-lucide-info" })]),
 					_: 1
 				})]), (H(!0), U(V, null, ha(le.value, (e) => (H(), W(S, {
@@ -44940,7 +45017,7 @@ var VV = {
 						"text",
 						"alt",
 						"class"
-					]), G("span", yK, [G("strong", null, [J(P(I(n).display_name(e.name)), 1), e.name === o.value.host ? (H(), W(_, {
+					]), G("span", AK, [G("strong", null, [J(P(I(n).display_name(e.name)), 1), e.name === o.value.host ? (H(), W(_, {
 						key: 0,
 						name: "i-lucide-crown",
 						title: "主持人"
@@ -44958,7 +45035,7 @@ var VV = {
 						body: "channel-drawer-body"
 					}
 				}, {
-					body: L(() => [K(eG, {
+					body: L(() => [K(fG, {
 						onSelect: pe,
 						onManage: de,
 						onCreate: he,
@@ -44989,7 +45066,7 @@ var VV = {
 					}
 				}, {
 					body: L(() => [o.value ? (H(), U(V, { key: 0 }, [
-						G("div", bK, [K(_, { name: "i-lucide-hash" }), G("h2", null, P(o.value.title), 1)]),
+						G("div", jK, [K(_, { name: "i-lucide-hash" }), G("h2", null, P(o.value.title), 1)]),
 						(H(), U(V, null, ha([
 							{
 								key: "goal",
@@ -45016,7 +45093,7 @@ var VV = {
 							class: "info-section"
 						}, [G("h3", null, P(e.label), 1), G("p", null, P(o.value[e.key] || "尚未填写"), 1)])), 64)),
 						K(Pe),
-						G("section", xK, [r[36] ||= G("h3", null, "参与身份", -1), (H(!0), U(V, null, ha(le.value, (e) => (H(), U("div", {
+						G("section", MK, [r[36] ||= G("h3", null, "参与身份", -1), (H(!0), U(V, null, ha(le.value, (e) => (H(), U("div", {
 							key: e.name,
 							class: "expert-row"
 						}, [
@@ -45049,7 +45126,7 @@ var VV = {
 					], 64)) : Y("", !0)]),
 					_: 1
 				}, 8, ["open"]),
-				K(jW, {
+				K(UW, {
 					modelValue: s.value,
 					"onUpdate:modelValue": r[21] ||= (e) => s.value = e,
 					"reading-width": y.value,
@@ -45069,7 +45146,7 @@ var VV = {
 			], 6);
 		};
 	}
-}, FK = {
+}, KK = {
 	__name: "App",
 	setup(e) {
 		let t = ZB();
@@ -45083,7 +45160,7 @@ var VV = {
 				toaster: null
 			}, {
 				default: L(() => [K(I(xz), { "reduced-motion": "user" }, {
-					default: L(() => [I(n).theme.startsWith("channel") ? (H(), W(PK, { key: 0 })) : Y("", !0)]),
+					default: L(() => [I(n).theme.startsWith("channel") ? (H(), W(GK, { key: 0 })) : Y("", !0)]),
 					_: 1
 				})]),
 				_: 1
@@ -45093,8 +45170,8 @@ var VV = {
 };
 //#endregion
 //#region web/modern/main.js
-function IK() {
-	bu(FK).use(fh).mount("#modern-root");
+function qK() {
+	bu(KK).use(fh).mount("#modern-root");
 }
-document.readyState === "loading" ? document.addEventListener("DOMContentLoaded", IK) : IK();
+document.readyState === "loading" ? document.addEventListener("DOMContentLoaded", qK) : qK();
 //#endregion

@@ -275,7 +275,7 @@ function resize_nav_by_key(event) {
       </section>
       <div v-if="room" class="channel-body" :class="{ 'channel-body-discussion': view.tab === 'discussion' }">
         <div class="channel-content">
-        <ChannelDiscussion v-show="view.tab === 'discussion'" @detail="open_detail" />
+        <ChannelDiscussion v-show="view.tab === 'discussion'" @detail="open_detail" @edit="modal = 'edit'" />
         <section v-if="view.tab === 'context'" class="content-page channel-summary" role="tabpanel" aria-label="共识">
           <div class="page-heading"><div><h2>共识与分歧</h2><p>整理讨论进展，用 #消息编号 保留依据。</p></div><UBadge color="neutral" variant="outline">截止 #{{ room.state_until }}</UBadge></div>
           <section v-if="Array.isArray(room.latest_receipts) && room.latest_receipts.length" class="info-section"><h3>最新运行回执</h3><p class="fine-print">以下回执独立于摘要更新；晚于摘要的回执可能尚未整理，实际运行结果请查看原文。</p><div class="button-row"><UButton v-for="receipt in room.latest_receipts" :key="receipt.id" :label="`${bridge.display_name(receipt.author)} #${receipt.id} · ${new Date(receipt.created_at).toLocaleString('zh-CN')}${receipt.id > room.state_until ? ' · 晚于摘要' : ''}`" variant="link" color="neutral" @click="open_detail(receipt.id)" /></div></section>
@@ -294,11 +294,8 @@ function resize_nav_by_key(event) {
     <div v-if="show_rail" class="channel-rail-resizer" role="separator" tabindex="0" aria-label="调整右侧栏宽度" aria-orientation="vertical" aria-controls="channel-member-rail" :aria-valuemin="RAIL_MIN" :aria-valuemax="RAIL_MAX" :aria-valuenow="rail_width" :aria-valuetext="`${rail_width} 像素`" title="拖动调整右侧栏宽度，也可使用左右方向键" @pointerdown="start_rail_resize" @pointermove="resize_rail" @pointerup="finish_rail_resize" @pointercancel="finish_rail_resize" @lostpointercapture="finish_rail_resize" @keydown="resize_rail_by_key"></div>
     <aside v-if="show_rail" id="channel-member-rail" class="channel-member-rail" aria-label="频道概览与参与者">
       <section class="channel-overview">
-        <div class="channel-overview-heading"><span>频道概览</span><UBadge color="neutral" variant="subtle" size="sm" class="channel-phase"><span class="channel-phase-dot" :class="room.phase"></span>{{ bridge.phases[room.phase] }}</UBadge></div>
-        <h2>{{ room.title }}</h2>
-        <p v-if="room.goal" class="channel-overview-goal">{{ room.goal }}</p>
-        <div v-if="focus && focus !== room.goal" class="channel-current-focus"><span><UIcon name="i-lucide-pin" />当前焦点</span><p>{{ focus }}</p></div>
-        <UButton label="查看频道资料" trailing-icon="i-lucide-chevron-right" color="neutral" variant="link" class="channel-detail-link" @click="info_open = true" />
+        <div class="channel-overview-heading"><span>讨论状态</span><UBadge color="neutral" variant="subtle" size="sm" class="channel-phase"><span class="channel-phase-dot" :class="room.phase"></span>{{ bridge.phases[room.phase] }}</UBadge></div>
+        <div class="channel-current-focus"><span><UIcon name="i-lucide-pin" />当前焦点</span><p>{{ focus || '尚未设置当前焦点' }}</p></div>
       </section>
       <section class="channel-participants">
         <div class="channel-directory-heading"><span>参与者 — {{ participants.length }}</span><UTooltip text="配置的参与身份，不代表在线状态"><UIcon name="i-lucide-info" /></UTooltip></div>
