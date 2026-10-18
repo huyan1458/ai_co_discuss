@@ -5,6 +5,7 @@ import TopicPanel from "./TopicPanel.vue";
 import WorkspaceDialogs from "./WorkspaceDialogs.vue";
 import ChannelDirectory from "./ChannelDirectory.vue";
 import ProgressPanel from "./ProgressPanel.vue";
+import ProgressBoard from "./ProgressBoard.vue";
 
 const { view, bridge, field, act, pending } = inject("discussion");
 const room = computed(() => view.value.room);
@@ -247,7 +248,7 @@ function resize_nav_by_key(event) {
         <div class="channel-title"><div class="channel-title-copy"><h1 :title="room?.title">{{ room?.title || '共议' }}</h1><div v-if="room?.floor" class="channel-floor-status" :class="{ 'is-held': room.floor.holder }" role="status" :title="`发言权：${bridge.floor_status(room)}`"><UIcon name="i-lucide-mic" /><span>发言权：{{ bridge.floor_status(room) }}</span></div></div><UBadge v-if="room?.archived" color="neutral" variant="subtle" size="sm">已存档</UBadge></div>
         <span v-if="room" class="channel-header-context">{{ tabs.find((item) => item.value === view.tab)?.label }}<span>·</span>{{ room.message_count }} 条记录</span>
         <div v-if="room" class="channel-header-actions">
-          <ProgressPanel />
+          <ProgressPanel :floating="!(show_rail && rail_inline)" />
           <form v-if="view.tab === 'discussion'" class="channel-search" @submit.prevent="act('filter', { query: search })">
             <UInput v-model="search" icon="i-lucide-search" variant="none" size="sm" placeholder="搜索消息" aria-label="搜索讨论记录" class="channel-search-input">
               <template #trailing><UButton v-if="search || view.query" icon="i-lucide-x" color="neutral" variant="ghost" size="xs" aria-label="清除搜索" @click="search = ''; act('filter', { query: '' })" /><UButton type="submit" icon="i-lucide-corner-down-left" color="neutral" variant="ghost" size="xs" aria-label="搜索" /></template>
@@ -292,18 +293,11 @@ function resize_nav_by_key(event) {
       <div v-else class="channel-empty"><UIcon name="i-lucide-hash" /><h2>新建一个讨论频道</h2><p>每个频道围绕一个议题，保留所有人的观点。</p><UButton icon="i-lucide-plus" label="新建讨论" color="neutral" @click="create_channel()" /></div>
     </main>
     <div v-if="show_rail" class="channel-rail-resizer" role="separator" tabindex="0" aria-label="调整右侧栏宽度" aria-orientation="vertical" aria-controls="channel-member-rail" :aria-valuemin="RAIL_MIN" :aria-valuemax="RAIL_MAX" :aria-valuenow="rail_width" :aria-valuetext="`${rail_width} 像素`" title="拖动调整右侧栏宽度，也可使用左右方向键" @pointerdown="start_rail_resize" @pointermove="resize_rail" @pointerup="finish_rail_resize" @pointercancel="finish_rail_resize" @lostpointercapture="finish_rail_resize" @keydown="resize_rail_by_key"></div>
-    <aside v-if="show_rail" id="channel-member-rail" class="channel-member-rail" aria-label="频道概览与参与者">
+    <aside v-if="show_rail" id="channel-member-rail" class="channel-member-rail" aria-label="当前焦点与讨论进度">
       <section class="channel-overview">
-        <div class="channel-overview-heading"><span>讨论状态</span><UBadge color="neutral" variant="subtle" size="sm" class="channel-phase"><span class="channel-phase-dot" :class="room.phase"></span>{{ bridge.phases[room.phase] }}</UBadge></div>
         <div class="channel-current-focus"><span><UIcon name="i-lucide-pin" />当前焦点</span><p>{{ focus || '尚未设置当前焦点' }}</p></div>
       </section>
-      <section class="channel-participants">
-        <div class="channel-directory-heading"><span>参与者 — {{ participants.length }}</span><UTooltip text="配置的参与身份，不代表在线状态"><UIcon name="i-lucide-info" /></UTooltip></div>
-        <UButton v-for="person in participants" :key="person.name" color="neutral" variant="ghost" class="channel-person" @click="act('tab', 'access')">
-          <UAvatar :src="bridge.identities[person.name]?.icon" :text="bridge.identities[person.name]?.initials" :alt="bridge.display_name(person.name)" size="sm" class="channel-avatar" :class="bridge.identities[person.name]?.style" />
-          <span class="channel-person-label"><strong>{{ bridge.display_name(person.name) }}<UIcon v-if="person.name === room.host" name="i-lucide-crown" title="主持人" /></strong><small>{{ person.name === room.host ? `主持人 · ${person.mode}` : person.mode }}</small></span>
-        </UButton>
-      </section>
+      <section class="channel-rail-board"><ProgressBoard /></section>
     </aside>
 
     <USlideover v-model:open="nav_open" side="left" title="讨论频道" description="共议 · AI CoDiscuss" :ui="{ content: 'channel-navigation-drawer', body: 'channel-drawer-body' }">

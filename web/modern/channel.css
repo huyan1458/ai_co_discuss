@@ -192,6 +192,8 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .progress-panel-anchor { position: relative; flex-shrink: 0; }
 .progress-chip { display: inline-flex; align-items: center; gap: 7px; height: 29px; padding: 0 9px 0 10px; border: 1px solid var(--ui-border); border-radius: 15px; background: var(--ui-bg-muted); color: var(--ui-text); font-size: 12px; white-space: nowrap; }
 .progress-chip:hover { border-color: var(--ui-border-accented); }
+.progress-chip.is-static { cursor: default; }
+.progress-chip.is-static:hover { border-color: var(--ui-border); }
 .progress-chip > [class*="icon"] { width: 14px; height: 14px; color: var(--ui-text-muted); }
 .progress-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ui-text-dimmed); }
 .progress-chip.is-primary .progress-dot { background: var(--channel-accent); }
@@ -260,6 +262,7 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .channel-detail-link { color: #a4afff; font-size: 11px; padding: 0; margin-top: 15px; gap: 4px; font-weight: 500; }
 .channel-detail-link [class*="icon"] { width: 12px; height: 12px; }
 .channel-participants { padding: 18px 8px; }
+.channel-rail-board { padding: 16px; color: var(--ui-text); font-size: 13px; }
 .channel-participants .channel-directory-heading { padding: 0 10px 8px; min-height: 26px; font-size: 11px; }
 .channel-person { display: flex; width: 100%; padding: 7px 10px; gap: 11px; color: #c1c7d2; border-radius: 5px; font-weight: 400; text-align: left; }
 .channel-person:hover { background: #ffffff05; }
