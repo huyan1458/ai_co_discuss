@@ -267,7 +267,7 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 .pb-timing-stages { display: flex; flex-wrap: wrap; gap: 2px 10px; color: var(--ui-text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .pb-note { margin: 8px 0 0; color: var(--ui-text-dimmed); font-size: 11px; }
 .progress-drawer { max-width: min(420px, 100vw); }
-.progress-drawer-body { display: flex; flex-direction: column; padding: 0; }
+.progress-drawer-body { display: flex; flex-direction: column; padding: 0; scrollbar-gutter: stable; }
 @media (max-width: 700px) {
   .progress-drawer { max-width: 100vw; }
 }
@@ -293,7 +293,7 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 .channel-content { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 
 /* The right rail exposes actual topic context and configured participants. */
-.channel-member-rail { display: flex; flex-direction: column; width: var(--channel-rail-width, 280px); flex-shrink: 0; overflow-y: auto; background: #232428; }
+.channel-member-rail { display: flex; flex-direction: column; width: var(--channel-rail-width, 280px); flex-shrink: 0; overflow-y: auto; scrollbar-gutter: stable; background: #232428; }
 .channel-nav-resizer, .channel-rail-resizer { position: relative; width: 6px; min-height: 0; flex-shrink: 0; cursor: col-resize; touch-action: none; background: #232428; }
 :is(.channel-nav-resizer, .channel-rail-resizer)::after { content: ""; position: absolute; inset: 0 2px; background: #ffffff0b; transition: background .12s; }
 :is(.channel-nav-resizer, .channel-rail-resizer):is(:hover, :focus-visible)::after, .channel-resizing :is(.channel-nav-resizer, .channel-rail-resizer)::after { background: var(--channel-accent); }
