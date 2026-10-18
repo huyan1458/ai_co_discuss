@@ -140,6 +140,12 @@ async function finish(action) {
         </li>
       </ul>
     </section>
+    <section v-if="has_actions" class="pb-actions" aria-label="操作">
+      <UTooltip v-if="can_restart" text="重启：原安排重新交给对应 AI，需本机接入程序在运行"><UButton icon="i-lucide-rotate-ccw" aria-label="重启" class="channel-primary-button pb-icon-button" :loading="pending === 'restart_discussion'" @click="act('restart_discussion')" /></UTooltip>
+      <UTooltip v-if="active" text="暂停"><UButton icon="i-lucide-pause" aria-label="暂停" color="neutral" variant="outline" class="pb-icon-button" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" /></UTooltip>
+      <UTooltip v-if="active && turn" :text="`打断 ${turn.expert} 的发言`"><UButton icon="i-lucide-hand" :aria-label="`打断 ${turn.expert} 的发言`" color="neutral" variant="outline" class="pb-icon-button" :loading="pending === 'cancel_turn'" @click="act('cancel_turn')" /></UTooltip>
+      <UTooltip v-if="can_end" text="提前结束"><UButton icon="i-lucide-square" aria-label="提前结束" color="neutral" variant="outline" class="pb-icon-button pb-end" @click="ending = true" /></UTooltip>
+    </section>
     <section v-if="automatic && timings.count" class="pb-section" aria-label="阶段耗时">
       <details class="pb-timings">
         <summary><h4>耗时</h4><span>{{ TIMING_STAGES.map((stage) => `${stage.label} ${duration(timings.totals[stage.key] || 0)}`).join(' · ') }}</span></summary>
@@ -152,12 +158,6 @@ async function finish(action) {
         <p v-if="timings.count > timings.items.length" class="pb-note">只列出最近 {{ timings.items.length }} 次，共 {{ timings.count }} 次执行。</p>
       </details>
     </section>
-    <footer v-if="has_actions" class="pb-footer">
-      <UButton v-if="can_restart" icon="i-lucide-rotate-ccw" label="重启" size="sm" class="channel-primary-button" title="重新启动自动运行，原安排重新交给对应 AI；需本机接入程序保持运行" :loading="pending === 'restart_discussion'" @click="act('restart_discussion')" />
-      <UButton v-if="active" icon="i-lucide-pause" label="暂停" size="sm" class="channel-primary-button" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" />
-      <UButton v-if="active && turn" icon="i-lucide-hand" label="打断发言" size="sm" color="neutral" variant="outline" :loading="pending === 'cancel_turn'" :title="`取消 ${turn.expert} 的发言安排 #${turn.id}`" @click="act('cancel_turn')" />
-      <UButton v-if="can_end" label="提前结束…" size="sm" color="neutral" variant="ghost" class="pb-end" @click="ending = true" />
-    </footer>
     <UModal v-model:open="ending" title="提前结束讨论" description="当前发言安排会被取消，已有消息全部保留。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
       <template #body>
         <div class="progress-ending">
