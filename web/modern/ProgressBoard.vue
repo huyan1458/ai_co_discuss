@@ -1,11 +1,13 @@
 <script setup>
-/** Progress content shared by the docked right rail and the floating header panel. */
+/** Progress content shared by the docked right rail and the tablet/phone drawer. */
 import { computed, inject, ref } from "vue";
 
 const { view, bridge, act, pending } = inject("discussion");
 const ending = ref(false);
+const focus_expanded = ref(false);
 const ACTIVE_TURN = ["pending", "notified"];
 const LIVE_EXECUTION_TEXT = { dispatched: "已交付，等待开始", started: "执行中" };
+const FOCUS_PREVIEW_LENGTH = 90;
 const TIMING_STAGES = [
   { key: "queue_seconds", label: "排队", hint: "事件产生到接入程序交付" },
   { key: "wake_seconds", label: "唤醒", hint: "交付到 AI 执行 enter" },
@@ -15,28 +17,51 @@ const EXECUTION_STATUS_TEXT = { pending: "排队中", dispatched: "唤醒中", s
 const room = computed(() => view.value.room);
 const limits = computed(() => room.value.limits || {});
 const runtime = computed(() => room.value.runtime || {});
+const automatic = computed(() => runtime.value.mode === "automatic");
 const turn = computed(() => ACTIVE_TURN.includes(room.value.current_turn?.status) ? room.value.current_turn : null);
 const inactive = computed(() => ["paused", "concluded"].includes(room.value.phase));
 const concluded = computed(() => room.value.phase === "concluded");
-const can_restart = computed(() => runtime.value.mode === "automatic" && (runtime.value.status === "paused" || runtime.value.expired)
+const settled = computed(() => concluded.value || room.value.archived);
+const can_restart = computed(() => automatic.value && (runtime.value.status === "paused" || runtime.value.expired)
   && !concluded.value && !room.value.archived);
 // Actions appear only when they apply: running phases can pause, interrupt or end; paused ones restart or end.
 const active = computed(() => ["initial", "discussing", "reviewing"].includes(room.value.phase) && !room.value.archived);
 const can_end = computed(() => (active.value || room.value.phase === "paused") && !room.value.archived);
 const has_actions = computed(() => active.value || can_restart.value || can_end.value);
 const can_close = computed(() => !inactive.value && room.value.phase !== "preparing" && !room.value.archived && !limits.value.closing);
-const rounds = computed(() => limits.value.max_rounds ? `${limits.value.completed_rounds || 0} / ${limits.value.max_rounds}` : `${limits.value.completed_rounds || 0} · 不限`);
-const elapsed = computed(() => {
-  if (!limits.value.started_at) return "尚未计时";
-  const used = Math.floor((limits.value.elapsed_seconds || 0) / 60);
-  return limits.value.max_minutes ? `${used} / ${limits.value.max_minutes} 分钟` : `${used} 分钟 · 不限`;
-});
-const mode = computed(() => runtime.value.mode === "automatic" ? "全自动" : "手动");
-const run_status = computed(() => runtime.value.expired ? "已到截止" : ({ ready: "未启动", running: "运行中", paused: "已暂停", stopped: "已停止", concluded: "已收束" }[runtime.value.status] || "未启动"));
-const headline = computed(() => limits.value.closing && !inactive.value ? "正在收尾 · 等待主持人总结" : bridge.progress_speaker(room.value));
-const timings = computed(() => runtime.value.timings || { items: [], totals: {}, count: 0 });
 const members = computed(() => [room.value.host, ...Object.keys(room.value.experts || {}).filter((name) => name !== room.value.host)]
   .filter((name) => name && name !== "用户").map(member_status));
+const failed_member = computed(() => members.value.find((member) => member.result));
+const focus = computed(() => turn.value?.question || room.value.focus || room.value.goal || "");
+const focus_long = computed(() => focus.value.length > FOCUS_PREVIEW_LENGTH);
+const timings = computed(() => runtime.value.timings || { items: [], totals: {}, count: 0 });
+/** One sentence that says what is happening now, plus a tone for color. */
+const status = computed(() => {
+  const value = room.value;
+  if (value.archived) return { tone: "neutral", title: "已存档", detail: "" };
+  if (concluded.value) return { tone: "neutral", title: "已收束", detail: `共完成 ${limits.value.completed_rounds || 0} 轮` };
+  if (limits.value.closing) return { tone: "warning", title: "正在收尾", detail: `等待 ${bridge.display_name(value.host)} 总结` };
+  if (value.phase === "preparing") return { tone: "neutral", title: "准备中", detail: "讨论尚未开始" };
+  if (value.phase === "paused") {
+    const failure = failed_member.value;
+    if (failure) return { tone: "error", title: "已暂停", detail: failure.result.startsWith(failure.name) ? failure.result : `${bridge.display_name(failure.name)} 执行失败：${failure.result}` };
+    return { tone: "warning", title: runtime.value.expired ? "已到截止时间" : "已暂停", detail: turn.value ? `原安排 ${bridge.display_name(turn.value.expert)} 保留` : "" };
+  }
+  if (limits.value.reached) return { tone: "warning", title: "已达上限", detail: "停止新增安排" };
+  return { tone: "primary", title: "进行中", detail: bridge.progress_speaker(value) };
+});
+/** Bars only exist for configured limits; unlimited values stay plain text. */
+const meters = computed(() => {
+  const value = limits.value;
+  const used = Math.floor((value.elapsed_seconds || 0) / 60);
+  if (settled.value) return [];
+  return [
+    { label: "轮次", text: value.max_rounds ? `${value.completed_rounds || 0} / ${value.max_rounds}` : `${value.completed_rounds || 0} 轮`,
+      ratio: value.max_rounds ? (value.completed_rounds || 0) / value.max_rounds : null },
+    { label: "用时", text: value.max_minutes ? `${used} / ${value.max_minutes} 分钟` : `${used} 分钟`,
+      ratio: value.max_minutes ? used / value.max_minutes : null },
+  ].filter((meter) => meter.label !== "用时" || value.started_at);
+});
 
 /** Combine assignment, round and execution evidence into one participant line. */
 function member_status(name) {
@@ -44,23 +69,29 @@ function member_status(name) {
   const speakers = room.value.rounds?.at(-1)?.completed === false ? room.value.rounds.at(-1).speakers : [];
   const is_host = name === room.value.host;
   let text = "等待";
-  let color = "neutral";
+  let tone = "neutral";
   const live = LIVE_EXECUTION_TEXT[execution?.status] || "";
   if (turn.value?.expert === name) {
     const round = room.value.rounds?.at(-1)?.completed === false ? room.value.rounds.at(-1).number : (room.value.completed_rounds || 0) + 1;
-    text = `第 ${round} 轮 · ${live && execution.turn_id === turn.value.id ? live : inactive.value ? "已暂停，原安排保留" : "轮到发言"}`;
-    color = inactive.value ? "neutral" : "primary";
+    text = `第 ${round} 轮 · ${live && execution.turn_id === turn.value.id ? live : inactive.value ? "原安排保留" : "轮到发言"}`;
+    tone = inactive.value ? "neutral" : "primary";
   } else if (is_host && !turn.value && !inactive.value) {
-    const duty = limits.value.closing ? "总结收尾中" : "主持人安排中";
+    const duty = limits.value.closing ? "总结收尾中" : "安排下一步";
     text = live && execution.role === "host" ? `${duty} · ${live}` : duty;
-    color = "primary";
+    tone = "primary";
   } else if (speakers.includes(name)) {
     text = "本轮已发言";
+    tone = "success";
   }
-  if (execution?.status === "failed") { text = "执行失败"; color = "error"; }
-  if (execution?.stale) { text = "疑似卡住（租约已过期）"; color = "warning"; }
-  return { name, is_host, text, color, failures: execution?.failures || 0, result: execution?.status === "failed" ? execution.result : "", session: execution?.session_id || "",
-    mode: room.value.experts?.[name] === "cli" ? "CLI" : "在线" };
+  if (execution?.status === "failed") { text = "执行失败"; tone = "error"; }
+  if (execution?.stale) { text = "疑似卡住（租约已过期）"; tone = "warning"; }
+  return { name, is_host, text, tone, failures: execution?.failures || 0, result: execution?.status === "failed" ? execution.result : "",
+    session: execution?.session_id || "", mode: room.value.experts?.[name] === "cli" ? "CLI" : "在线" };
+}
+
+/** Menu entries for one participant; the session ID stays out of the row until needed. */
+function member_menu(member) {
+  return [[{ label: "复制会话 ID", icon: "i-lucide-copy", onSelect: () => act("copy", member.session) }]];
 }
 
 /** Render whole seconds compactly; a stage that has not begun shows a dash. */
@@ -79,43 +110,52 @@ async function finish(action) {
 
 <template>
   <div class="progress-board">
-      <header class="progress-panel-heading"><strong>讨论进度</strong><UBadge color="neutral" variant="subtle" size="sm">{{ bridge.phases[room.phase] }}</UBadge></header>
-      <p class="progress-headline" role="status">{{ headline }}</p>
-      <dl class="progress-stats">
-        <div><dt>完成轮次</dt><dd>{{ rounds }}</dd></div>
-        <div><dt>用时</dt><dd>{{ elapsed }}</dd></div>
-        <div><dt>推进方式</dt><dd>{{ mode }} · {{ run_status }}</dd></div>
-        <div><dt>发言权</dt><dd>{{ bridge.floor_status(room) }}</dd></div>
-      </dl>
-      <p v-if="limits.reached && !inactive && !limits.closing" class="progress-warning">已达讨论上限，停止新增安排。</p>
-      <ul class="progress-members" aria-label="参与专家状态">
-        <li v-for="member in members" :key="member.name">
-          <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
-          <span class="progress-member-name">{{ bridge.display_name(member.name) }}<UIcon v-if="member.is_host" name="i-lucide-crown" title="主持人" /><small>{{ member.mode }}</small></span>
-          <span class="progress-member-status"><UBadge :color="member.color" variant="subtle" size="sm">{{ member.text }}</UBadge><small v-if="member.failures">累计失败 {{ member.failures }} 次</small></span>
-          <small v-if="member.result" class="progress-member-result" :title="member.result">{{ member.result }}</small>
-          <small v-if="member.session" class="progress-member-session"><span :title="member.session">会话 {{ member.session }}</span><UButton icon="i-lucide-copy" color="neutral" variant="ghost" size="xs" :aria-label="`复制 ${member.name} 的会话 ID`" title="复制会话 ID" @click="act('copy', member.session)" /></small>
+    <section class="pb-status" :class="`is-${status.tone}`" aria-label="讨论状态">
+      <div class="pb-status-line"><span class="pb-dot"></span><strong role="status">{{ status.title }}</strong><span class="pb-mode">{{ automatic ? '全自动' : '手动' }}</span></div>
+      <p v-if="status.detail" class="pb-status-detail">{{ status.detail }}</p>
+      <div v-if="meters.length" class="pb-meters">
+        <div v-for="meter in meters" :key="meter.label" class="pb-meter">
+          <div class="pb-meter-label"><span>{{ meter.label }}</span><b>{{ meter.text }}</b></div>
+          <div v-if="meter.ratio !== null" class="pb-bar"><i :style="{ width: `${Math.min(100, Math.round(meter.ratio * 100))}%` }"></i></div>
+        </div>
+      </div>
+      <div v-if="has_actions" class="pb-actions">
+        <UButton v-if="can_restart" icon="i-lucide-rotate-ccw" label="重启" class="channel-primary-button" title="重新启动自动运行，原安排重新交给对应 AI；需本机接入程序保持运行" :loading="pending === 'restart_discussion'" @click="act('restart_discussion')" />
+        <UButton v-if="active" icon="i-lucide-pause" label="暂停" color="neutral" variant="outline" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" />
+        <UButton v-if="active && turn" icon="i-lucide-hand" label="打断发言" color="neutral" variant="outline" :loading="pending === 'cancel_turn'" :title="`取消 ${turn.expert} 的发言安排 #${turn.id}`" @click="act('cancel_turn')" />
+        <UButton v-if="can_end" icon="i-lucide-square" label="提前结束" color="error" variant="soft" @click="ending = true" />
+      </div>
+    </section>
+    <section v-if="focus" class="pb-section" aria-label="当前焦点">
+      <h4>当前焦点</h4>
+      <p class="pb-focus" :class="{ 'is-expanded': focus_expanded }">{{ focus }}</p>
+      <button v-if="focus_long" type="button" class="pb-link" @click="focus_expanded = !focus_expanded">{{ focus_expanded ? '收起' : '展开' }}</button>
+    </section>
+    <section class="pb-section" aria-label="参与者">
+      <h4>参与者</h4>
+      <ul class="pb-members">
+        <li v-for="member in members" :key="member.name" class="pb-member">
+          <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="sm" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
+          <div class="pb-member-body">
+            <div class="pb-member-name">{{ bridge.display_name(member.name) }}<UIcon v-if="member.is_host" name="i-lucide-crown" title="主持人" /><small>{{ member.is_host ? `主持 · ${member.mode}` : member.mode }}</small></div>
+            <div v-if="!settled" class="pb-member-status" :class="`is-${member.tone}`"><span class="pb-dot"></span>{{ member.text }}<small v-if="member.failures"> · 失败 {{ member.failures }} 次</small></div>
+          </div>
+          <UDropdownMenu v-if="member.session" :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" class="pb-member-more" :aria-label="`${member.name} 的更多操作`" /></UDropdownMenu>
         </li>
       </ul>
-      <section v-if="runtime.mode === 'automatic' && timings.count" class="progress-timings" aria-label="阶段耗时">
-        <h4>阶段耗时 <small>本次运行 {{ timings.count }} 次执行</small></h4>
-        <dl class="progress-stats progress-timing-totals">
-          <div v-for="stage in TIMING_STAGES" :key="stage.key" :title="stage.hint"><dt>{{ stage.label }}</dt><dd>{{ duration(timings.totals[stage.key] || 0) }}</dd></div>
-        </dl>
-        <ol class="progress-timing-list">
+    </section>
+    <section v-if="automatic && timings.count" class="pb-section" aria-label="阶段耗时">
+      <details class="pb-timings">
+        <summary><h4>耗时</h4><span>{{ TIMING_STAGES.map((stage) => `${stage.label} ${duration(timings.totals[stage.key] || 0)}`).join(' · ') }}</span></summary>
+        <ol>
           <li v-for="item in timings.items" :key="item.id">
-            <span class="progress-timing-who">#{{ item.id }} {{ bridge.display_name(item.participant) }}<small>{{ item.role === "host" ? "主持" : "专家" }} · {{ EXECUTION_STATUS_TEXT[item.status] || item.status }}</small></span>
-            <span class="progress-timing-stages"><span v-for="stage in TIMING_STAGES" :key="stage.key" :title="stage.hint">{{ stage.label }} {{ duration(item[stage.key]) }}</span></span>
+            <span>#{{ item.id }} {{ bridge.display_name(item.participant) }}<small>{{ item.role === "host" ? "主持" : "专家" }} · {{ EXECUTION_STATUS_TEXT[item.status] || item.status }}</small></span>
+            <span class="pb-timing-stages"><span v-for="stage in TIMING_STAGES" :key="stage.key" :title="stage.hint">{{ stage.label }} {{ duration(item[stage.key]) }}</span></span>
           </li>
         </ol>
-      </section>
-      <p v-if="runtime.mode !== 'automatic'" class="fine-print">手动模式没有执行回执，状态只按安排与发言推断。</p>
-      <div v-if="has_actions" class="progress-actions">
-        <UButton v-if="can_restart" icon="i-lucide-rotate-ccw" label="重启" size="sm" class="channel-primary-button" title="重新启动自动运行，原安排重新交给对应 AI；需本机接入程序保持运行" :loading="pending === 'restart_discussion'" @click="act('restart_discussion')" />
-        <UButton v-if="active" icon="i-lucide-pause" label="暂停" size="sm" color="neutral" variant="outline" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" />
-        <UButton v-if="active && turn" icon="i-lucide-hand" label="打断发言" size="sm" color="neutral" variant="outline" :loading="pending === 'cancel_turn'" :title="`取消 ${turn.expert} 的发言安排 #${turn.id}`" @click="act('cancel_turn')" />
-        <UButton v-if="can_end" icon="i-lucide-square" label="提前结束" size="sm" color="error" variant="soft" @click="ending = true" />
-      </div>
+        <p v-if="timings.count > timings.items.length" class="pb-note">只列出最近 {{ timings.items.length }} 次，共 {{ timings.count }} 次执行。</p>
+      </details>
+    </section>
     <UModal v-model:open="ending" title="提前结束讨论" description="当前发言安排会被取消，已有消息全部保留。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
       <template #body>
         <div class="progress-ending">

@@ -74,8 +74,6 @@ const tabs = [
 const view_links = computed(() => tabs.map((item) => ({
   ...item, active: view.value.tab === item.value, onSelect: () => { nav_open.value = false; act("tab", item.value); },
 })));
-const focus = computed(() => ["pending", "notified"].includes(room.value?.current_turn?.status)
-  ? room.value.current_turn.question : room.value?.focus || room.value?.goal);
 const participants = computed(() => [
   { name: "用户", mode: "发起与协助" },
   ...Object.entries(room.value?.experts || {}).map(([name, mode]) => ({ name, mode: mode === "cli" ? "CLI · 读写" : "在线 AI · 只读" })),
@@ -294,9 +292,6 @@ function resize_nav_by_key(event) {
     </main>
     <div v-if="show_rail" class="channel-rail-resizer" role="separator" tabindex="0" aria-label="调整右侧栏宽度" aria-orientation="vertical" aria-controls="channel-member-rail" :aria-valuemin="RAIL_MIN" :aria-valuemax="RAIL_MAX" :aria-valuenow="rail_width" :aria-valuetext="`${rail_width} 像素`" title="拖动调整右侧栏宽度，也可使用左右方向键" @pointerdown="start_rail_resize" @pointermove="resize_rail" @pointerup="finish_rail_resize" @pointercancel="finish_rail_resize" @lostpointercapture="finish_rail_resize" @keydown="resize_rail_by_key"></div>
     <aside v-if="show_rail" id="channel-member-rail" class="channel-member-rail" aria-label="当前焦点与讨论进度">
-      <section class="channel-overview">
-        <div class="channel-current-focus"><span><UIcon name="i-lucide-pin" />当前焦点</span><p>{{ focus || '尚未设置当前焦点' }}</p></div>
-      </section>
       <section class="channel-rail-board"><ProgressBoard /></section>
     </aside>
 
