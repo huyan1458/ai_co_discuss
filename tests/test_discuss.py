@@ -127,6 +127,24 @@ class CliTests(unittest.TestCase):
         self.take_floor(speaker, actor)
         return turn["id"]
 
+    def test_round_plan_from_stdin_relays_and_continue_needs_host_turn(self):
+        """A plan file queues later experts; an answer relays without returning to the host."""
+        if self.cli("floor", "view", self.room)["holder"] is None:
+            self.take_floor()
+        plan = json.dumps([{"expert": "Codex", "question": "先答"}, {"expert": "Gemini", "question": "再答"}], ensure_ascii=False)
+        created = self.cli("turn", "create", self.room, "--plan-file", "-", "--as", "Codex",
+                           "--submission-id", str(uuid.uuid4()), stdin=plan)
+        current = self.cli("turn", "current", self.room)
+        self.assertEqual((current["current_turn"]["expert"], [item["expert"] for item in current["queued_turns"]]), ("Codex", ["Gemini"]))
+        self.assertEqual(self.rejected(["turn", "continue", self.room, "--as", "Codex"], 1)["http_status"], 409)
+        self.take_floor("Codex")
+        self.cli("message", "post", self.room, "--body", "回答", "--as", "Codex", "--turn", created["turn"]["id"],
+                 "--summary", "摘要", "--submission-id", str(uuid.uuid4()))
+        current = self.cli("turn", "current", self.room)
+        self.assertEqual((current["current_turn"]["expert"], current["queued_turns"], current["floor"]["next_speaker"]), ("Gemini", [], "Gemini"))
+        self.rejected(["turn", "create", self.room, "--plan-file", "-", "--expert", "Codex", "--as", "Codex",
+                       "--submission-id", str(uuid.uuid4())])
+
     def test_user_request_file_round_trip_is_separate_from_background(self):
         """Expose original requests through explicit brief reads and UTF-8 file inputs."""
         original = "  原始请求🙂\n保留缩进  \n"

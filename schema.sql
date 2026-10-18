@@ -163,14 +163,18 @@ BEGIN
         next_speaker=COALESCE((SELECT host FROM topic_settings WHERE room_id=room_floor.room_id),'用户'),
         revision=revision+1 WHERE room_id=(SELECT room_id FROM messages WHERE id=NEW.message_id);
 END;
-CREATE TRIGGER IF NOT EXISTS require_host_floor BEFORE INSERT ON discussion_turns
-WHEN NOT EXISTS (SELECT 1 FROM discussion_turns WHERE room_id=NEW.room_id AND submission_id=NEW.submission_id)
+DROP TRIGGER IF EXISTS require_host_floor;
+-- Queued turns of a round plan are inserted after the first one has already nominated an expert.
+CREATE TRIGGER require_host_floor BEFORE INSERT ON discussion_turns
+WHEN NEW.status<>'queued' AND NOT EXISTS (SELECT 1 FROM discussion_turns WHERE room_id=NEW.room_id AND submission_id=NEW.submission_id)
     AND NOT EXISTS (SELECT 1 FROM room_floor WHERE room_id=NEW.room_id
                     AND holder=COALESCE((SELECT host FROM topic_settings WHERE room_id=NEW.room_id),'用户'))
 BEGIN
     SELECT RAISE(ABORT, 'floor_required');
 END;
-CREATE TRIGGER IF NOT EXISTS nominate_expert_floor AFTER INSERT ON discussion_turns
+DROP TRIGGER IF EXISTS nominate_expert_floor;
+CREATE TRIGGER nominate_expert_floor AFTER INSERT ON discussion_turns
+WHEN NEW.status<>'queued'
 BEGIN
     UPDATE room_floor SET holder=NULL,next_speaker=NEW.expert,revision=revision+1 WHERE room_id=NEW.room_id;
 END;
@@ -284,6 +288,7 @@ BEGIN
 END;
 DROP TRIGGER IF EXISTS runtime_turn_created;
 CREATE TRIGGER runtime_turn_created AFTER INSERT ON discussion_turns
+WHEN NEW.status<>'queued'
 BEGIN
     UPDATE discussion_events SET status='completed',result='turn:'||NEW.id
         WHERE room_id=NEW.room_id AND role='host' AND status IN ('pending','dispatched','started');
@@ -291,15 +296,79 @@ BEGIN
         SELECT NEW.room_id,run_id,generation,'turn:'||NEW.id,NEW.expert,'expert',NEW.id
         FROM discussion_runtime WHERE room_id=NEW.room_id AND status='running';
 END;
-CREATE TRIGGER IF NOT EXISTS runtime_turn_answered AFTER UPDATE OF status ON discussion_turns
+-- Round plans: queued turns wait in id order. held_since marks the first unprocessed user action
+-- (a message id, or the next id for a topic edit); while set, answers return to the host instead of relaying.
+CREATE TABLE IF NOT EXISTS turn_relay (
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+    held_since INTEGER NOT NULL DEFAULT 0
+);
+CREATE TRIGGER IF NOT EXISTS relay_turn_promoted AFTER UPDATE OF status ON discussion_turns
+WHEN OLD.status='queued' AND NEW.status='pending'
+BEGIN
+    UPDATE room_floor SET holder=NULL,next_speaker=NEW.expert,revision=revision+1 WHERE room_id=NEW.room_id;
+    UPDATE turn_relay SET held_since=0 WHERE room_id=NEW.room_id;
+    UPDATE discussion_events SET status='completed',result='turn:'||NEW.id
+        WHERE room_id=NEW.room_id AND role='host' AND status IN ('pending','dispatched','started');
+    INSERT OR IGNORE INTO discussion_events(room_id,run_id,generation,cause,participant,role,turn_id)
+        SELECT NEW.room_id,run_id,generation,'turn:'||NEW.id,NEW.expert,'expert',NEW.id
+        FROM discussion_runtime WHERE room_id=NEW.room_id AND status='running';
+END;
+-- A new arrangement is the host's response: it replaces any older plan and clears the hold.
+CREATE TRIGGER IF NOT EXISTS relay_plan_replaced AFTER INSERT ON discussion_turns
+WHEN NEW.status<>'queued'
+BEGIN
+    UPDATE discussion_turns SET status='skipped' WHERE room_id=NEW.room_id AND status='queued' AND id<NEW.id;
+    UPDATE turn_relay SET held_since=0 WHERE room_id=NEW.room_id;
+END;
+CREATE TRIGGER IF NOT EXISTS relay_hold_user_message AFTER INSERT ON message_details
+WHEN EXISTS(SELECT 1 FROM messages WHERE id=NEW.message_id AND author='用户')
+BEGIN
+    INSERT INTO turn_relay(room_id) SELECT room_id FROM messages WHERE id=NEW.message_id
+        AND NOT EXISTS(SELECT 1 FROM turn_relay WHERE turn_relay.room_id=messages.room_id);
+    UPDATE turn_relay SET held_since=NEW.message_id
+        WHERE room_id=(SELECT room_id FROM messages WHERE id=NEW.message_id) AND held_since=0;
+END;
+CREATE TRIGGER IF NOT EXISTS relay_hold_goal AFTER UPDATE OF goal ON rooms
+WHEN NEW.goal<>OLD.goal
+BEGIN
+    INSERT INTO turn_relay(room_id) SELECT NEW.id WHERE NOT EXISTS(SELECT 1 FROM turn_relay WHERE room_id=NEW.id);
+    UPDATE turn_relay SET held_since=(SELECT COALESCE(MAX(id),0)+1 FROM messages WHERE room_id=NEW.id)
+        WHERE room_id=NEW.id AND held_since=0;
+END;
+CREATE TRIGGER IF NOT EXISTS relay_hold_topic AFTER UPDATE OF background,boundaries,focus ON topic_settings
+WHEN NEW.background<>OLD.background OR NEW.boundaries<>OLD.boundaries OR NEW.focus<>OLD.focus
+BEGIN
+    INSERT INTO turn_relay(room_id) SELECT NEW.room_id WHERE NOT EXISTS(SELECT 1 FROM turn_relay WHERE room_id=NEW.room_id);
+    UPDATE turn_relay SET held_since=(SELECT COALESCE(MAX(id),0)+1 FROM messages WHERE room_id=NEW.room_id)
+        WHERE room_id=NEW.room_id AND held_since=0;
+END;
+-- Concluding or changing participants voids plans that have not started.
+CREATE TRIGGER IF NOT EXISTS relay_plan_concluded AFTER UPDATE OF phase ON topic_settings
+WHEN NEW.phase='concluded'
+BEGIN
+    UPDATE discussion_turns SET status='skipped' WHERE room_id=NEW.room_id AND status='queued';
+END;
+CREATE TRIGGER IF NOT EXISTS relay_plan_participants AFTER UPDATE OF host,experts ON topic_settings
+WHEN NEW.host<>OLD.host OR NEW.experts<>OLD.experts
+BEGIN
+    UPDATE discussion_turns SET status='skipped' WHERE room_id=NEW.room_id AND status='queued';
+END;
+DROP TRIGGER IF EXISTS runtime_turn_answered;
+-- An answer relays to the next queued turn unless the user has acted since the host last arranged.
+CREATE TRIGGER runtime_turn_answered AFTER UPDATE OF status ON discussion_turns
 WHEN NEW.status='answered' AND OLD.status<>'answered'
 BEGIN
     UPDATE discussion_events SET status='completed',result='message:'||NEW.answer_id
         WHERE room_id=NEW.room_id AND turn_id=NEW.id AND status IN ('pending','dispatched','started');
+    UPDATE discussion_turns SET status='pending'
+        WHERE id=(SELECT MIN(id) FROM discussion_turns WHERE room_id=NEW.room_id AND status='queued')
+        AND NOT EXISTS(SELECT 1 FROM turn_relay WHERE room_id=NEW.room_id AND held_since>0)
+        AND NOT EXISTS(SELECT 1 FROM topic_settings WHERE room_id=NEW.room_id AND phase IN ('paused','concluded'));
     INSERT OR IGNORE INTO discussion_events(room_id,run_id,generation,cause,participant,role)
         SELECT NEW.room_id,run_id,generation,'answer:'||NEW.id,host,'host'
         FROM discussion_runtime JOIN topic_settings USING(room_id)
-        WHERE room_id=NEW.room_id AND status='running';
+        WHERE room_id=NEW.room_id AND status='running'
+        AND NOT EXISTS(SELECT 1 FROM discussion_turns WHERE room_id=NEW.room_id AND status IN ('pending','notified'));
 END;
 DROP TRIGGER IF EXISTS runtime_topic_stop;
 CREATE TRIGGER runtime_topic_stop AFTER UPDATE OF phase ON topic_settings

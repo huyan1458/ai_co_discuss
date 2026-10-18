@@ -88,6 +88,10 @@ const follow_tail = ref(true);
 const FOLLOW_TAIL_THRESHOLD = 70;
 const READING_OFFSET = 20;
 const room = computed(() => view.value.room);
+const speaking_turn = computed(() => ["pending", "notified"].includes(room.value?.current_turn?.status)
+  && !["paused", "concluded"].includes(room.value.phase) ? room.value.current_turn : null);
+/** A user's message is waiting for the host while it is at or after the relay hold. */
+const waits_for_host = (message) => message.author === "用户" && room.value?.held_since > 0 && message.id >= room.value.held_since;
 const identities = computed(() => Object.entries(bridge.identities).map(([name, identity]) => ({
   label: bridge.display_name(name), value: name,
   avatar: { src: identity.icon, text: identity.initials, alt: bridge.display_name(name), class: `channel-avatar ${identity.style}` },
@@ -514,12 +518,12 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
       </section>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
-        <UChatMessage v-for="message in group.messages" :id="String(message.id)" :key="message.id" v-memo="[message, message_round_labels.get(message.id), expanded_answers.has(message.id), active_message === message.id]" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="{ 'channel-current-message': active_message === message.id }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
+        <UChatMessage v-for="message in group.messages" :id="String(message.id)" :key="message.id" v-memo="[message, message_round_labels.get(message.id), expanded_answers.has(message.id), active_message === message.id, waits_for_host(message)]" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="{ 'channel-current-message': active_message === message.id }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
               <div class="channel-message-meta">
-                <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><span class="channel-message-round">{{ message_round_labels.get(message.id) }}</span><UBadge size="xs" color="neutral" variant="soft" class="channel-source">{{ bridge.sources[message.source] }}</UBadge><UBadge v-if="message.kind === 'moderation'" size="xs" color="neutral" variant="soft" class="channel-source">主持人</UBadge><UBadge v-if="message.kind === 'receipt'" size="xs" color="neutral" variant="soft" class="channel-source">运行回执</UBadge></div>
+                <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><span class="channel-message-round">{{ message_round_labels.get(message.id) }}</span><UBadge size="xs" color="neutral" variant="soft" class="channel-source">{{ bridge.sources[message.source] }}</UBadge><UBadge v-if="message.kind === 'moderation'" size="xs" color="neutral" variant="soft" class="channel-source">主持人</UBadge><UBadge v-if="message.kind === 'receipt'" size="xs" color="neutral" variant="soft" class="channel-source">运行回执</UBadge><UBadge v-if="waits_for_host(message)" size="xs" color="warning" variant="soft" class="channel-source" :title="speaking_turn ? `${bridge.display_name(speaking_turn.expert)} 说完后交给主持人处理` : '等待主持人处理'">待主持人处理</UBadge></div>
                 <div class="channel-message-provenance"><time :title="new Date(message.created_at).toLocaleString('zh-CN')">{{ bridge.format_time(message.created_at) }}</time><UButton :label="`#${message.id}`" color="neutral" variant="link" size="xs" :aria-label="`查看原文 #${message.id}`" class="channel-message-id" @click="emit('detail', message.id)" /><span v-if="message.submitted_by && message.submitted_by !== message.author && !(message.source === 'proxy' && message.submitted_by === '用户')">{{ bridge.display_name(message.submitted_by) }} 代发</span><span v-if="message.turn_id">回答安排 #{{ message.turn_id }}</span></div>
               </div>
             </div>
@@ -546,6 +550,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
     <div class="channel-composer-dock">
       <UChatPrompt ref="prompt" v-model="text" :submit-on-enter="false" :autofocus="false" :rows="1" :maxrows="6" :placeholder="`发消息到 # ${room.title}`" aria-label="留言正文" variant="outline" color="neutral" class="channel-composer" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
         <template #header>
+          <div v-if="speaking_turn" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>{{ bridge.display_name(speaking_turn.expert) }} 正在发言：新消息会在其说完后交给主持人；点「停止」立即打断</span></div>
           <div v-if="view.reply_to || view.turn_reply_to" class="channel-reply-draft"><UIcon name="i-lucide-corner-up-left" /><span>{{ view.turn_reply_to ? `回答安排 #${view.turn_reply_to} · ${bridge.display_name(room.host)} 代发` : `回复 #${view.reply_to}` }}</span><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" :aria-label="view.turn_reply_to ? '取消关联安排' : '取消回复'" @click="act(view.turn_reply_to ? 'cancel_answer' : 'cancel_reply')" /></div>
           <div v-if="needs_summary" class="channel-answer-editor"><UTextarea v-model="answer_summary" :rows="2" aria-label="回答摘要" class="w-full" placeholder="先说结论，保留关键理由、条件和不确定性。完整内容写在正文中。" /><USelect v-model="summary_source" :items="summary_sources" aria-label="摘要提供者" size="xs" /></div>
         </template>
@@ -556,6 +561,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             <USelect v-model="kind" :items="kinds" :content="{ side: 'top', align: 'start', sideOffset: 10 }" variant="none" size="sm" aria-label="发言职责" class="channel-kind-select" :ui="{ content: 'channel-select-menu' }" />
           </div>
           <span class="channel-shortcut"><UKbd value="ctrl" /><UKbd value="enter" /></span>
+          <UButton v-if="speaking_turn" icon="i-lucide-square" label="停止" color="neutral" variant="outline" size="sm" class="channel-stop" :title="`打断 ${bridge.display_name(speaking_turn.expert)} 的发言（本次作废），交给主持人`" :loading="pending === 'cancel_turn'" @click="act('cancel_turn')" />
           <UButton type="submit" trailing-icon="i-lucide-arrow-up" color="neutral" label="发送" size="sm" class="channel-primary-button channel-send" :disabled="!text.trim() || (needs_summary && !answer_summary.trim())" :loading="pending === 'send'" />
         </template>
       </UChatPrompt>

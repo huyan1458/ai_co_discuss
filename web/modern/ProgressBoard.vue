@@ -72,6 +72,7 @@ function member_status(name) {
   let text = "等待";
   let tone = "neutral";
   const live = LIVE_EXECUTION_TEXT[execution?.status] || "";
+  const queue_index = (room.value.queued_turns || []).findIndex((item) => item.expert === name);
   if (turn.value?.expert === name) {
     const round = room.value.rounds?.at(-1)?.completed === false ? room.value.rounds.at(-1).number : (room.value.completed_rounds || 0) + 1;
     text = `第 ${round} 轮 · ${live && execution.turn_id === turn.value.id ? live : inactive.value ? "原安排保留" : "轮到发言"}`;
@@ -80,6 +81,8 @@ function member_status(name) {
     const duty = limits.value.closing ? "总结收尾中" : "安排下一步";
     text = live && execution.role === "host" ? `${duty} · ${live}` : duty;
     tone = "primary";
+  } else if (queue_index >= 0 && !inactive.value) {
+    text = `本轮排队 · 第 ${queue_index + 1} 位`;
   } else if (speakers.includes(name)) {
     text = "本轮已发言";
     tone = "success";
@@ -129,6 +132,7 @@ async function finish(action) {
     </section>
     <section class="pb-section" aria-label="参与者">
       <h4>参与者</h4>
+      <p v-if="room.held_since && turn && !inactive" class="pb-status-detail pb-held">用户有新操作，{{ bridge.display_name(turn.expert) }} 说完后交给主持人</p>
       <ul class="pb-members">
         <li v-for="member in members" :key="member.name" class="pb-member">
           <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
@@ -143,7 +147,7 @@ async function finish(action) {
     <section v-if="has_actions" class="pb-actions" aria-label="操作">
       <UTooltip v-if="can_restart" text="重启：原安排重新交给对应 AI，需本机接入程序在运行"><UButton icon="i-lucide-rotate-ccw" aria-label="重启" color="neutral" variant="outline" class="pb-icon-button pb-restart" :loading="pending === 'restart_discussion'" @click="act('restart_discussion')" /></UTooltip>
       <UTooltip v-if="active" text="暂停"><UButton icon="i-lucide-pause" aria-label="暂停" color="neutral" variant="outline" class="pb-icon-button" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" /></UTooltip>
-      <UTooltip v-if="active && turn" :text="`打断 ${turn.expert} 的发言`"><UButton icon="i-lucide-hand" :aria-label="`打断 ${turn.expert} 的发言`" color="neutral" variant="outline" class="pb-icon-button" :loading="pending === 'cancel_turn'" @click="act('cancel_turn')" /></UTooltip>
+      <UTooltip v-if="active && turn" :text="`打断 ${turn.expert} 的发言（本次作废），交给主持人`"><UButton icon="i-lucide-hand" :aria-label="`打断 ${turn.expert} 的发言`" color="neutral" variant="outline" class="pb-icon-button" :loading="pending === 'cancel_turn'" @click="act('cancel_turn')" /></UTooltip>
       <UTooltip v-if="can_end" text="提前结束"><UButton icon="i-lucide-square" aria-label="提前结束" color="neutral" variant="outline" class="pb-icon-button pb-end" @click="ending = true" /></UTooltip>
     </section>
     <section v-if="automatic && timings.count" class="pb-section" aria-label="阶段耗时">

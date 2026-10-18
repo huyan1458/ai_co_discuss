@@ -24,7 +24,7 @@ PARTICIPANTS = ("用户", "Codex", "Claude", "Gemini", "DeepSeek", "Qwen")
 PHASES = ("preparing", "initial", "discussing", "reviewing", "paused", "concluded")
 KINDS = ("opinion", "moderation", "receipt")
 OVERVIEW_FIELDS = ("id", "title", "goal", "host", "phase", "focus", "message_count",
-                   "latest_id", "state_until", "current_turn", "floor", "runtime", "limits", "completed_rounds", "latest_receipts", "answered_turns", "duplicate", "submission_id")
+                   "latest_id", "state_until", "current_turn", "queued_turns", "held_since", "floor", "runtime", "limits", "completed_rounds", "latest_receipts", "answered_turns", "duplicate", "submission_id")
 BRIEF_FIELDS = ("id", "title", "goal", "host", "user_request", "background", "boundaries", "experts")
 ROOM_LIST_FIELDS = ("id", "title", "goal", "message_count", "latest_id", "created_at")
 GUIDANCE = {
@@ -203,20 +203,22 @@ def turn_commands(subcommands, registry):
     """Keep planning, notification text, and delivery confirmation distinct."""
     descriptions = {"list": "分页读取安排历史", "current": "读取阶段和最近安排；需核对状态及专家",
                     "view": "读取一个安排", "prompt": "生成简短通知；不发送、不标记送达",
-                    "create": "安排一位专家回答；不发送通知", "mark-notified": "实际送达后显式确认",
-                    "cancel": "取消指定未完成安排"}
+                    "create": "安排一位专家，或用 --plan-file 一次安排整轮；不发送通知",
+                    "continue": "处理用户操作或打断后，按原排队继续下一位",
+                    "mark-notified": "实际送达后显式确认", "cancel": "取消指定未完成安排"}
     for action, description in descriptions.items():
         parser = add_leaf(subcommands, registry, f"turn {action}", description, True)
         if action == "list":
             parser.add_argument("--page", type=positive_int, default=1)
             parser.add_argument("--submission-id", type=submission_id, help="按安排提交编号精确查询结果")
-        elif action not in ("create", "current"):
+        elif action not in ("create", "current", "continue"):
             parser.add_argument("id", type=positive_int, help="安排编号")
         if action == "create":
-            parser.add_argument("--expert", choices=PARTICIPANTS[1:], required=True)
-            add_text(parser, "question", required=True)
+            parser.add_argument("--expert", choices=PARTICIPANTS[1:], help="单个安排的专家；与 --plan-file 二选一")
+            add_text(parser, "question")
+            parser.add_argument("--plan-file", help='整轮安排 JSON 数组 [{"expert":"Claude","question":"…"}]，按顺序接力；- 从标准输入读取')
             parser.add_argument("--submission-id", type=submission_id, required=True,
-                                help="新安排唯一编号；重试沿用同编号和问题")
+                                help="新安排唯一编号；重试沿用同编号和内容")
 
 
 def state_commands(subcommands, registry):
@@ -411,14 +413,33 @@ def plan_turn(args):
             params["submission_id"] = args.submission_id
         return RequestPlan(base + "/turns", params=params)
     if args.action == "create":
-        payload = {"actor": require_actor(args), "expert": args.expert,
-                   "question": text_field(args, "question"), "submission_id": args.submission_id}
-        return RequestPlan(base + "/turns", "POST", payload)
+        return RequestPlan(base + "/turns", "POST", turn_payload(args))
+    if args.action == "continue":
+        return RequestPlan(base + "/turns/continue", "POST", {"actor": require_actor(args)})
     path = f"{base}/turns/{args.id}"
     if args.action in ("mark-notified", "cancel"):
         status = "notified" if args.action == "mark-notified" else "cancelled"
         return RequestPlan(path, "POST", {"actor": require_actor(args), "status": status})
     return RequestPlan(path, view="prompt" if args.action == "prompt" else None)
+
+
+def turn_payload(args):
+    """Build one arrangement or an ordered round plan from a UTF-8 JSON array."""
+    payload = {"actor": require_actor(args), "submission_id": args.submission_id}
+    question = text_field(args, "question")
+    if args.plan_file is not None:
+        if args.expert or question is not None:
+            raise CliError("--plan-file 不能与 --expert / --question 同时使用")
+        try:
+            turns = json.loads(read_input(args.plan_file))
+        except ValueError as error:
+            raise CliError(f"无效 JSON: {error}") from error
+        if not isinstance(turns, list) or not all(isinstance(item, dict) for item in turns):
+            raise CliError("--plan-file 必须是由 expert、question 对象组成的数组")
+        return {**payload, "turns": turns}
+    if not args.expert or question is None:
+        raise CliError("需要 --expert 与 --question/--question-file，或改用 --plan-file")
+    return {**payload, "expert": args.expert, "question": question}
 
 
 def plan_floor(args):
@@ -576,7 +597,7 @@ def project_result(value, plan, site):
     if plan.view in ("overview", "brief", "state", "current"):
         fields = {"overview": OVERVIEW_FIELDS, "brief": BRIEF_FIELDS,
                   "state": ("id", "state_text", "state_until", "host_brief", "latest_receipts", "answered_turns"),
-                  "current": ("id", "phase", "current_turn", "floor", "answered_turns")}[plan.view]
+                  "current": ("id", "phase", "current_turn", "queued_turns", "held_since", "floor", "answered_turns")}[plan.view]
         result = select_fields(value, fields)
         if plan.view in ("overview", "current"):
             result["guidance"] = GUIDANCE.get(value["phase"], "按本次主持或专家职责，结合最新阶段、安排和必要原文决定下一步。")

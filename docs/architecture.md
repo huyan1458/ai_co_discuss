@@ -61,6 +61,7 @@ Python 服务独占监听端口：Windows 使用 `SO_EXCLUSIVEADDRUSE`，关闭�
 | `message_details` | 消息职责、代发操作者、关联安排 |
 | `discussion_turns` | 问题、专家、通知状态、回答与取消 |
 | `room_floor` | 发言权持有人、下一位和版本 |
+| `turn_relay` | 整轮接力暂停标记：`held_since` 为首个待主持人处理的用户操作，非 0 时回答交回主持人而不接力 |
 | `discussion_runtime` | 显式模式、运行 ID、代次、截止时间、版本及控制凭据哈希 |
 | `discussion_events` | 持久业务原因和对应的一次执行、身份、状态、真实会话及租约；事件 ID 兼执行 ID |
 | `event_timings` | 执行的交付与结束时间（触发器在状态变化时写入），供进度看板计算阶段耗时 |

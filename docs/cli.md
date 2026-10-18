@@ -96,6 +96,8 @@ python discuss.py floor view $room
 | 主持发言 | 领取后 `message post ROOM --as Codex --kind moderation --body-file FILE --submission-id UUID` |
 | 在线专家代发 | 被正式安排后，由主持人 `floor take ROOM --as Codex --speaker Claude --revision N`，再 `message post ROOM --as Codex --author Claude --turn TURN --summary-file SUMMARY --summary-by Claude --body-file FILE --submission-id UUID` |
 | 放弃发言 | `floor return ROOM --as NAME --revision N`；未完成安排仍需处理 |
+| 整轮安排 | 主持人领取后 `turn create ROOM --as Codex --plan-file PLAN.json --submission-id UUID`；PLAN 为 `[{"expert":"Claude","question":"…"}]`，按顺序接力 |
+| 继续原计划 | 用户介入或打断后，主持人领取并 `turn continue ROOM --as Codex`；改用新安排则排队自动作废 |
 | 取消安排 | 主持人领取后 `turn cancel ROOM TURN --as Codex` |
 | 切换阶段 | `room update ROOM --as Codex --phase discussing` |
 | 暂停 / 收束 | `room update ROOM --as Codex --phase paused` / `concluded`；按工作流先完成必要记录和清理 |

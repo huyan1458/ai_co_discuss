@@ -8,9 +8,10 @@ const PAGE_SIZE = 20;
 const UNCATEGORIZED_FOLDER_ID = "__uncategorized__";
 const PARTICIPANTS = ["用户", "Codex", "Claude", "Gemini", "DeepSeek", "Qwen"];
 const PHASES = { preparing: "准备中", initial: "独立观点", discussing: "深入讨论", reviewing: "结论复核", paused: "已暂停", concluded: "已收束" };
-const TURN_STATUSES = { pending: "待处理", notified: "已通知，待回答", answered: "已回答", cancelled: "已取消" };
+const TURN_STATUSES = { pending: "待处理", notified: "已通知，待回答", answered: "已回答", cancelled: "已取消", queued: "排队中", skipped: "未开始即取消" };
 const MAX_TOPIC_DETAIL = 4000;
 const MAX_QUESTION_LENGTH = 1000;
+const MAX_PLAN_TURNS = 10;
 const LIMIT_DEFAULTS = { max_rounds: 0, max_minutes: 0, execution_minutes: 20, on_limit: "pause", summary_minutes: 5 };
 // Idle (paused, preparing or concluded) seconds are excluded from elapsed time and total-duration deadlines.
 const LIMITS_SQL = `SELECT limits.*,COALESCE(pauses.paused_seconds,0)+CASE WHEN COALESCE(pauses.paused_at,0)>0
@@ -127,12 +128,16 @@ async function require_room(database, room_id) {
     .bind(room_id).first();
   if (!room) throw new HttpError(404, "房间不存在");
   const settings = await database.prepare("SELECT * FROM topic_settings WHERE room_id=?").bind(room_id).first();
-  const current_turn = await database.prepare("SELECT *, (SELECT COUNT(*) FROM discussion_turns WHERE room_id=? AND status='answered') AS answered_turns FROM discussion_turns WHERE room_id=? ORDER BY id DESC LIMIT 1").bind(room_id, room_id).first();
+  const current_turn = await database.prepare(`SELECT *, (SELECT COUNT(*) FROM discussion_turns WHERE room_id=? AND status='answered') AS answered_turns
+    FROM discussion_turns WHERE room_id=? AND status NOT IN ('queued','skipped')
+    ORDER BY status IN ('pending','notified') DESC, id DESC LIMIT 1`).bind(room_id, room_id).first();
   const result = { ...room, ...(settings ? { ...settings, experts: JSON.parse(settings.experts) } : topic_defaults()), current_turn, answered_turns: current_turn?.answered_turns || 0 };
   const original = await database.prepare("SELECT text FROM room_user_requests WHERE room_id=?").bind(room_id).first();
   Object.assign(result, topic_context(result.background, original?.text));
   if (current_turn) delete current_turn.answered_turns;
   if (current_turn) current_turn.status_label = turn_status_label(current_turn, result);
+  result.queued_turns = (await database.prepare("SELECT id,expert,question FROM discussion_turns WHERE room_id=? AND status='queued' ORDER BY id").bind(room_id).all()).results;
+  result.held_since = (await database.prepare("SELECT held_since FROM turn_relay WHERE room_id=?").bind(room_id).first())?.held_since || 0;
   result.latest_receipts = await latest_receipts(database, room_id);
   result.host_brief = await database.prepare("SELECT text,until,updated_at FROM room_briefs WHERE room_id=?").bind(room_id).first();
   result.rounds = await discussion_rounds(database, room_id, result.experts);
@@ -590,36 +595,71 @@ async function query_turns(database, room_id, params) {
   return { turns: results[1].results, page, total, pages: Math.max(1, Math.ceil(total / PAGE_SIZE)) };
 }
 
-/** Schedule one expert; creation does not send a notification. */
+/** Normalize one arrangement or an ordered round plan into { expert, question, submission_id } items. */
+function plan_values(payload) {
+  const items = payload.turns === undefined ? [{ expert: payload.expert, question: payload.question }] : payload.turns;
+  if (!Array.isArray(items) || items.length < 1 || items.length > MAX_PLAN_TURNS) throw new HttpError(400, `整轮安排需要 1–${MAX_PLAN_TURNS} 项`);
+  const submission_id = submission_value(payload.submission_id);
+  return items.map((item, index) => {
+    if (!item || typeof item !== "object") throw new HttpError(400, "整轮安排的每一项需要 expert 和 question");
+    const { author: expert, text: question } = message_values({ author: item.expert, text: item.question, submission_id });
+    return { expert, question, submission_id: index === 0 ? submission_id : `${submission_id}-q${index + 1}` };
+  });
+}
+
+/** Read plan rows by submission and reject a replay whose content differs. */
+async function plan_rows(database, room_id, plan) {
+  const rows = await Promise.all(plan.map((item) => database.prepare("SELECT * FROM discussion_turns WHERE room_id=? AND submission_id=?")
+    .bind(room_id, item.submission_id).first()));
+  if (rows.some((row, index) => !row || row.expert !== plan[index].expert || row.question !== plan[index].question)) {
+    throw new HttpError(409, "该安排编号已被其他内容使用");
+  }
+  return rows;
+}
+
+/** Schedule one expert, or a round whose later turns relay without waking the host. */
 async function create_turn(database, room_id, payload) {
   const room = await require_room(database, room_id);
   require_host(room, payload);
-  const { author: expert, text: question, submission_id } = message_values({ author: payload.expert, text: payload.question, submission_id: payload.submission_id });
-  const previous = await database.prepare("SELECT * FROM discussion_turns WHERE room_id=? AND submission_id=?").bind(room_id, submission_id).first();
+  const plan = plan_values(payload);
+  const previous = await database.prepare("SELECT * FROM discussion_turns WHERE room_id=? AND submission_id=?").bind(room_id, plan[0].submission_id).first();
   if (previous) {
-    if (previous.expert !== expert || previous.question !== question) throw new HttpError(409, "该安排编号已被其他内容使用");
-    return { turn: previous, duplicate: true };
+    const rows = await plan_rows(database, room_id, plan);
+    return { turn: rows[0], queued: rows.slice(1), duplicate: true };
   }
   database = guard_limits(database, room);
-  if (!room.experts[expert] || text_length(question) > MAX_QUESTION_LENGTH) throw new HttpError(400, "请选择参与专家，待回应问题最多 1000 字");
+  if (plan.some((item) => !room.experts[item.expert] || text_length(item.question) > MAX_QUESTION_LENGTH)) throw new HttpError(400, "请选择参与专家，待回应问题最多 1000 字");
   if (["paused", "concluded"].includes(room.phase)) throw new HttpError(400, "话题已暂停或收束，请先调整阶段");
+  const created_at = new Date().toISOString();
   let results;
   try {
-    results = await database.batch([
-      database.prepare(`INSERT INTO discussion_turns (room_id,expert,question,submission_id,created_at)
-        VALUES (?,?,?,?,?) ON CONFLICT(room_id,submission_id) DO NOTHING RETURNING id`)
-        .bind(room_id, expert, question, submission_id, new Date().toISOString()),
-      database.prepare("SELECT * FROM discussion_turns WHERE room_id=? AND submission_id=?").bind(room_id, submission_id),
-    ]);
+    results = await database.batch(plan.map((item, index) => database.prepare(`INSERT INTO discussion_turns (room_id,expert,question,status,submission_id,created_at)
+        VALUES (?,?,?,?,?,?) ON CONFLICT(room_id,submission_id) DO NOTHING RETURNING id`)
+      .bind(room_id, item.expert, item.question, index === 0 ? "pending" : "queued", item.submission_id, created_at)));
   } catch (error) {
     if (String(error).includes("floor_required")) throw new HttpError(409, "主持人须先领取发言权再安排下一位");
     if (String(error).includes("topic_inactive")) throw new HttpError(400, "话题已暂停或收束，请重新读取阶段");
     if (String(error).includes("UNIQUE constraint")) throw new HttpError(409, "请先完成或取消当前发言安排");
     throw error;
   }
-  const turn = results[1].results[0];
-  if (turn.expert !== expert || turn.question !== question) throw new HttpError(409, "该安排编号已被其他内容使用");
-  return { turn, duplicate: results[0].results.length === 0 };
+  const rows = await plan_rows(database, room_id, plan);
+  return { turn: rows[0], queued: rows.slice(1), duplicate: results[0].results.length === 0 };
+}
+
+/** Resume the remaining round plan after the host has handled user actions or an interruption. */
+async function continue_turns(database, room_id, payload) {
+  const room = await require_room(database, room_id);
+  require_host(room, payload);
+  if (["paused", "concluded"].includes(room.phase)) throw new HttpError(400, "话题已暂停或收束，请先调整阶段");
+  if (room.current_turn && ["pending", "notified"].includes(room.current_turn.status)) throw new HttpError(409, "当前已有进行中的发言安排");
+  if (!room.queued_turns.length) throw new HttpError(409, "没有排队中的安排；请创建新的安排");
+  database = guard_limits(database, room);
+  const turn_id = room.queued_turns[0].id;
+  const [result] = await database.batch([database.prepare(`UPDATE discussion_turns SET status='pending' WHERE id=? AND status='queued'
+    AND NOT EXISTS (SELECT 1 FROM discussion_turns WHERE room_id=? AND status IN ('pending','notified'))
+    AND EXISTS (SELECT 1 FROM room_floor JOIN topic_settings USING(room_id) WHERE room_id=? AND holder=host)`).bind(turn_id, room_id, room_id)]);
+  if (!result.meta.changes) throw new HttpError(409, "主持人须先领取发言权，或安排已变化，请重新读取");
+  return { turn: await get_turn(database, room_id, turn_id), queued: room.queued_turns.slice(1) };
 }
 
 /** Record explicit delivery confirmation or cancellation without external I/O. */
@@ -743,6 +783,8 @@ async function room_text(database, room_id, params) {
   if (room.archived) content.push("频道已存档，记录仍可查阅；先恢复频道，再由用户明确恢复讨论阶段。");
   if (["paused", "concluded"].includes(room.phase)) content.push("停止处理发言安排，取消本讨论自己的后台任务并核对实际状态；非必要不生成回执，正常停止无需回执。不要因旧通知恢复讨论。");
   if (turn) content.push(`当前安排 #${turn.id}：${turn.expert} · ${turn_status_label(turn, room)}`, `待回应问题：${turn.question}`, `安排详情：${base}/turns/${turn.id}`);
+  if (room.queued_turns.length) content.push(`本轮排队：${room.queued_turns.map((item) => `#${item.id} ${item.expert}`).join(" → ")}`);
+  if (room.held_since) content.push(`用户自 #${room.held_since} 起有待主持人处理的操作；当前回答完成后交给主持人，不自动接力。`);
   content.push("## 按需展开", "请自主选择需要的材料，不必读取全部历史。", `背景、边界与参与专家：${base}/brief`,
     `共识与分歧（整理至 #${room.state_until}）：${base}/state`);
   if (params.participant) content.push(`与 @${params.participant} 相关的观点：${base}/search?mention=${params.participant}&page=1`);
@@ -789,7 +831,7 @@ function protocol_text(room) {
     `查询提交：GET /api/rooms?submission_id=编号 查建房结果；GET ${base}/messages?submission_id=编号 或 ${base}/turns?submission_id=编号 查消息或安排。查询成功且列表为空表示尚未查到，读取失败不表示未写入。`,
     `增量读取：GET ${base}/messages?after=已读消息编号，每次最多 20 条，按 next_after 续读，has_more 表示还有一批；可加 kind=opinion/moderation/receipt、author、mention、q。after 不与翻页混用，过滤后的游标只代表该查询范围。`,
     `维护话题：POST ${base}/topic；actor 加需要修改的上述字段，另可更新 phase（preparing/initial/discussing/reviewing/paused/concluded）、focus。收束前先完成或取消当前安排。暂停保留安排；恢复阶段后再继续。`,
-    `安排发言：POST ${base}/turns；字段 actor、expert、question、submission_id（新 UUID）。同一话题同时只有一个未完成安排；重试沿用同一编号和问题。`,
+    `安排发言：POST ${base}/turns；字段 actor、expert、question、submission_id（新 UUID）。同一话题同时只有一个未完成安排；重试沿用同一编号和问题。整轮安排改传 turns=[{expert,question},…]（最多 ${MAX_PLAN_TURNS} 项）：第一项立即生效，其余排队（queued）；每个回答保存后自动交给下一位，最后一位答完再交回主持人。用户留言或修改目标、背景、边界、焦点后（room.held_since 非 0），当前回答完成即交回主持人；主持人处理后用 POST ${base}/turns/continue（actor）按原计划继续，或直接创建新安排替换剩余排队（原排队改为 skipped）。`,
     `通知：仅把对象、问题、话题入口交给对应专家，不附背景、摘要或历史。使用已有且获准的会话通道；没有通道时交由用户协助。实际送达后 POST ${base}/turns/安排编号，字段 actor、status=notified；取消用 status=cancelled。复制不算送达。`,
     `专家观点：POST ${base}/messages；author、text、submission_id、source=cli，kind=opinion；必须关联 turn_id（回答的安排编号），可选 reply_to（本话题原文编号）。每次回答同时提供 summary（最多 ${MAX_SUMMARY_LENGTH} 字），通常 1–3 句结论先行，保留关键理由、条件和不确定性；summary_by 为原作者或提交者，默认提交者。text 保留完整正文，最多 ${MAX_TEXT_LENGTH} 个 Unicode 字符，请求最多 ${MAX_BODY_BYTES} 字节；不截断或用摘要完成安排。旧客户端缺少 summary 时不自动生成。`,
     `主持发言：同一消息接口，author=${room.host}、submitted_by=${room.host}、kind=moderation、source=cli；个人观点使用 kind=opinion，不能自动视为共识。`,
@@ -870,6 +912,7 @@ async function check_limits(database, room_id, payload) {
   const statements = [database.prepare("UPDATE discussion_limits SET closing_at=?,stop_reason=?,revision=revision+1 WHERE room_id=?")
     .bind(closing ? Math.floor(Date.now() / 1000) : limits.closing_at, reason, room_id),
     database.prepare("UPDATE discussion_turns SET status='cancelled' WHERE room_id=? AND status IN ('pending','notified')").bind(room_id),
+    database.prepare("UPDATE discussion_turns SET status='skipped' WHERE room_id=? AND status='queued'").bind(room_id),
     database.prepare("UPDATE room_floor SET holder=NULL,next_speaker=?,revision=revision+1 WHERE room_id=?").bind(room.host, room_id),
     closing ? database.prepare("UPDATE discussion_runtime SET generation=generation+1,revision=revision+1,deadline=MIN(deadline,?) WHERE room_id=? AND status='running'").bind(Math.floor(Date.now() / 1000) + limits.summary_minutes * 60, room_id)
       : database.prepare("UPDATE topic_settings SET phase='paused' WHERE room_id=?").bind(room_id)];
@@ -1156,6 +1199,7 @@ async function handle_host_api(database, request, parts, params) {
     const result = await create_turn(database, room_id, await read_payload(request));
     return respond(result, result.duplicate ? 200 : 201);
   }
+  if (tail === "turns/continue" && request.method === "POST") return respond(await continue_turns(database, room_id, await read_payload(request)));
   if (parts.length === 5 && parts[3] === "turns") {
     return respond(request.method === "GET" ? await get_turn(database, room_id, parts[4]) :
       await update_turn(database, room_id, parts[4], await read_payload(request)));

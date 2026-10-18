@@ -326,6 +326,77 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(events[2]["participant"], "Codex")
         self.assertNotIn("token_hash", json.dumps(events))
 
+    def take_floor(self, actor, token):
+        """Claim the floor that the last handoff nominated."""
+        floor = self.request(self.path + "/floor")[1]
+        self.assertEqual(self.request(self.path + "/floor", {"actor": actor, "action": "take",
+            "revision": floor["revision"]}, token)[0], 200)
+
+    def answer(self, expert, turn_id, token, submission_id):
+        """Take the floor and save one formal answer with the expert's execution token."""
+        self.take_floor(expert, token)
+        status, saved = self.request(self.path + "/messages", {"author": expert, "source": "cli", "kind": "opinion",
+            "turn_id": turn_id, "text": "实际回答", "summary": "摘要", "submission_id": submission_id}, token)
+        self.assertEqual(status, 201, saved)
+
+    def plan_round(self, submission_id="round-plan-1"):
+        """Let the host arrange Claude then Gemini in one execution."""
+        self.start()
+        host_token = self.enter(self.events()[0])
+        status, created = self.request(self.path + "/turns", {"actor": "Codex", "submission_id": submission_id,
+            "turns": [{"expert": "Claude", "question": "先答"}, {"expert": "Gemini", "question": "再答"}]}, host_token)
+        self.assertEqual(status, 201, created)
+        return created, host_token
+
+    def test_round_plan_relays_between_experts_without_waking_host(self):
+        """Only the last answer of an undisturbed plan returns to the host."""
+        created, _ = self.plan_round()
+        self.assertEqual([item["expert"] for item in created["queued"]], ["Gemini"])
+        room = self.request(self.path)[1]
+        self.assertEqual((room["current_turn"]["expert"], [item["expert"] for item in room["queued_turns"]]), ("Claude", ["Gemini"]))
+        self.assertEqual(self.events()[-1]["participant"], "Claude")
+        self.answer("Claude", created["turn"]["id"], self.enter(self.events()[-1]), "plan-answer-1")
+        events = self.events()
+        self.assertEqual((events[-1]["participant"], events[-1]["role"]), ("Gemini", "expert"))
+        room = self.request(self.path)[1]
+        self.assertEqual((room["current_turn"]["expert"], room["queued_turns"], room["floor"]["next_speaker"]), ("Gemini", [], "Gemini"))
+        self.answer("Gemini", created["queued"][0]["id"], self.enter(events[-1]), "plan-answer-2")
+        self.assertEqual((self.events()[-1]["participant"], self.events()[-1]["role"]), ("Codex", "host"))
+
+    def test_user_action_returns_round_to_host_who_may_continue(self):
+        """A user message waits for the speaking expert, then the host resumes or replaces the plan."""
+        created, _ = self.plan_round()
+        claude = self.enter(self.events()[-1])
+        self.assertEqual(self.request(self.path + "/messages", {"author": "用户", "text": "补充材料",
+            "submission_id": "plan-user-note"})[0], 201)
+        held = self.request(self.path)[1]["held_since"]
+        self.assertGreater(held, 0)
+        self.assertEqual(self.events()[-1]["participant"], "Codex")
+        self.answer("Claude", created["turn"]["id"], claude, "plan-answer-held")
+        room = self.request(self.path)[1]
+        self.assertEqual((room["current_turn"]["status"], [item["expert"] for item in room["queued_turns"]]), ("answered", ["Gemini"]))
+        host = self.enter(self.events()[-1])
+        self.take_floor("Codex", host)
+        status, resumed = self.request(self.path + "/turns/continue", {"actor": "Codex"}, host)
+        self.assertEqual(status, 200, resumed)
+        room = self.request(self.path)[1]
+        self.assertEqual((room["current_turn"]["expert"], room["queued_turns"], room["held_since"]), ("Gemini", [], 0))
+        self.assertEqual(self.events()[-1]["participant"], "Gemini")
+
+    def test_new_arrangement_replaces_remaining_plan_and_stop_keeps_it(self):
+        """Stopping returns to the host with the plan intact; a new arrangement skips it."""
+        created, _ = self.plan_round()
+        self.assertEqual(self.request(self.path + f"/turns/{created['turn']['id']}", {"actor": "用户", "status": "cancelled"})[0], 200)
+        room = self.request(self.path)[1]
+        self.assertEqual(([item["expert"] for item in room["queued_turns"]], self.events()[-1]["role"]), (["Gemini"], "host"))
+        host = self.enter(self.events()[-1])
+        self.take_floor("Codex", host)
+        status, _ = self.request(self.path + "/turns", {"actor": "Codex", "expert": "Codex", "question": "重排",
+            "submission_id": "plan-replaced"}, host)
+        self.assertEqual(status, 201)
+        turns = self.request(self.path + "/turns")[1]["turns"]
+        self.assertEqual([turn["status"] for turn in turns], ["cancelled", "skipped", "pending"])
+
     def test_user_writes_need_no_credential_but_ai_identities_need_execution(self):
         """The web user acts freely; AI identities and the runner inbox still need their tokens."""
         self.start()
