@@ -198,9 +198,9 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .progress-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ui-text-dimmed); }
 .progress-chip.is-primary .progress-dot { background: var(--channel-accent); }
 .progress-chip.is-warning .progress-dot { background: #e5a50a; }
-.progress-board { display: flex; flex: 1 0 auto; flex-direction: column; color: var(--ui-text); font-size: 13px; }
-.progress-board > section { padding: 16px; }
-.progress-board > section + section { border-top: 1px solid color-mix(in srgb, var(--ui-border) 55%, transparent); }
+.progress-board { display: flex; flex: 1 0 auto; flex-direction: column; padding-bottom: 20px; color: var(--ui-text); font-size: 13px; }
+.progress-board > section { padding: 0 16px; margin-top: 22px; }
+.progress-board > .pb-status { margin-top: 18px; }
 .pb-header { display: flex; align-items: center; gap: 8px; height: 56px; padding: 0 16px; border-bottom: 1px solid #191a1e70; }
 .pb-header strong { color: var(--ui-text-highlighted); font-size: 14px; font-weight: 600; }
 .pb-mode { margin-left: auto; color: var(--ui-text-dimmed); font-size: 12px; }
@@ -211,17 +211,20 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .is-error > .pb-dot, .is-error .pb-status-line .pb-dot { background: #f05252; }
 .pb-status-line { display: flex; align-items: center; gap: 8px; }
 .pb-status-line strong { color: var(--ui-text-highlighted); font-size: 15px; font-weight: 600; }
-.pb-status-detail { margin: 6px 0 0 16px; color: var(--ui-text-muted); line-height: 1.6; overflow-wrap: anywhere; }
+.pb-status-detail { margin: 6px 0 0 16px; color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .pb-meters { display: grid; gap: 10px; margin-top: 14px; }
 .pb-meter-label { display: flex; justify-content: space-between; gap: 8px; color: var(--ui-text-dimmed); font-size: 12px; }
 .pb-meter-label b { color: var(--ui-text); font-weight: 500; font-variant-numeric: tabular-nums; }
 .pb-bar { height: 3px; margin-top: 6px; overflow: hidden; border-radius: 999px; background: var(--ui-bg-accented); }
 .pb-bar > i { display: block; height: 100%; border-radius: inherit; background: var(--channel-accent); }
-.progress-board > .pb-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-block: 12px; }
-html[data-theme^="channel"] .pb-icon-button { justify-content: center; width: 36px; min-height: 36px; height: 36px; padding: 0; }
-.pb-end { color: var(--ui-text-muted); }
-.pb-end:hover { color: #f05252; }
-.pb-section h4 { margin: 0 0 8px; color: var(--ui-text-dimmed); font-size: 12px; font-weight: 500; }
+.progress-board > .pb-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 14px; }
+html[data-theme^="channel"] .pb-icon-button { justify-content: center; width: 32px; min-height: 32px; height: 32px; padding: 0; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--ui-border) 70%, transparent); background: color-mix(in srgb, var(--ui-bg-elevated) 60%, transparent); box-shadow: none; color: var(--ui-text-muted); }
+html[data-theme^="channel"] .pb-icon-button:hover { border-color: var(--ui-border-accented); background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); }
+html[data-theme^="channel"] .pb-icon-button [class*="icon"] { width: 15px; height: 15px; }
+html[data-theme^="channel"] .pb-restart { border-color: color-mix(in srgb, var(--channel-accent) 45%, transparent); background: color-mix(in srgb, var(--channel-accent) 14%, transparent); color: var(--channel-accent); }
+html[data-theme^="channel"] .pb-restart:hover { background: color-mix(in srgb, var(--channel-accent) 24%, transparent); color: var(--channel-accent); }
+html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f05252 45%, transparent); background: color-mix(in srgb, #f05252 12%, transparent); color: #f05252; }
+.pb-section h4 { margin: 0 0 6px; color: var(--ui-text-dimmed); font-size: 11px; font-weight: 600; letter-spacing: .04em; }
 .pb-focus { margin: 0; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
 .pb-focus.is-expanded { display: block; }
 .pb-link { margin-top: 4px; padding: 0; color: var(--channel-accent); font-size: 12px; }

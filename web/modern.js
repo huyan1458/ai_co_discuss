@@ -44315,7 +44315,9 @@ var VV = {
 						default: L(() => [K(m, {
 							icon: "i-lucide-rotate-ccw",
 							"aria-label": "重启",
-							class: "channel-primary-button pb-icon-button",
+							color: "neutral",
+							variant: "outline",
+							class: "pb-icon-button pb-restart",
 							loading: I(a) === "restart_discussion",
 							onClick: n[1] ||= (e) => I(i)("restart_discussion")
 						}, null, 8, ["loading"])]),

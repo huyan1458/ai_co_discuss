@@ -141,7 +141,7 @@ async function finish(action) {
       </ul>
     </section>
     <section v-if="has_actions" class="pb-actions" aria-label="操作">
-      <UTooltip v-if="can_restart" text="重启：原安排重新交给对应 AI，需本机接入程序在运行"><UButton icon="i-lucide-rotate-ccw" aria-label="重启" class="channel-primary-button pb-icon-button" :loading="pending === 'restart_discussion'" @click="act('restart_discussion')" /></UTooltip>
+      <UTooltip v-if="can_restart" text="重启：原安排重新交给对应 AI，需本机接入程序在运行"><UButton icon="i-lucide-rotate-ccw" aria-label="重启" color="neutral" variant="outline" class="pb-icon-button pb-restart" :loading="pending === 'restart_discussion'" @click="act('restart_discussion')" /></UTooltip>
       <UTooltip v-if="active" text="暂停"><UButton icon="i-lucide-pause" aria-label="暂停" color="neutral" variant="outline" class="pb-icon-button" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" /></UTooltip>
       <UTooltip v-if="active && turn" :text="`打断 ${turn.expert} 的发言`"><UButton icon="i-lucide-hand" :aria-label="`打断 ${turn.expert} 的发言`" color="neutral" variant="outline" class="pb-icon-button" :loading="pending === 'cancel_turn'" @click="act('cancel_turn')" /></UTooltip>
       <UTooltip v-if="can_end" text="提前结束"><UButton icon="i-lucide-square" aria-label="提前结束" color="neutral" variant="outline" class="pb-icon-button pb-end" @click="ending = true" /></UTooltip>
