@@ -44555,7 +44555,7 @@ var VV = {
 				label: "宽",
 				width: 1240
 			}
-		}, v = _e(), y = /* @__PURE__ */ F(v.reading), b = /* @__PURE__ */ F(v.rail), x = /* @__PURE__ */ F(v.nav), S = /* @__PURE__ */ F(typeof window > "u" ? 734 : window.innerWidth), C = /* @__PURE__ */ F(v.collapsed), w = /* @__PURE__ */ F(v.brief_collapsed), T = /* @__PURE__ */ F(v.rail_collapsed), ee = Z(() => S.value >= JK), E = Z(() => !!o.value && t.value.tab === "discussion" && !T.value), te = Z(() => ee.value && t.value.tab === "discussion" ? T.value ? "展开频道概览" : "收起频道概览" : "频道资料与参与者"), ne = Z(() => {
+		}, v = _e(), y = /* @__PURE__ */ F(v.reading), b = /* @__PURE__ */ F(v.rail), x = /* @__PURE__ */ F(v.nav), S = /* @__PURE__ */ F(typeof window > "u" ? 734 : window.innerWidth), C = /* @__PURE__ */ F(v.collapsed), w = /* @__PURE__ */ F(!0), T = /* @__PURE__ */ F(v.rail_collapsed), ee = Z(() => S.value >= JK), E = Z(() => !!o.value && t.value.tab === "discussion" && !T.value), te = Z(() => ee.value && t.value.tab === "discussion" ? T.value ? "展开频道概览" : "收起频道概览" : "频道资料与参与者"), ne = Z(() => {
 			let e = document.createElement("template");
 			return e.innerHTML = o.value?.rendered_brief || "", e.content.textContent.replace(/\s+/g, " ").trim();
 		}), re = /* @__PURE__ */ F(null), D = /* @__PURE__ */ F(null), ie = Z(() => Math.min(WK, Math.max(UK, S.value - qK - YK))), O = Z(() => Math.min(x.value, ie.value)), ae = Z(() => ({
@@ -44566,7 +44566,7 @@ var VV = {
 			value: e,
 			label: t.label
 		}));
-		R(y, ye), R(C, ye), R(w, ye), R(T, ye), Qi(() => window.addEventListener("resize", xe)), ta(() => window.removeEventListener("resize", xe));
+		R(y, ye), R(C, ye), R(T, ye), Qi(() => window.addEventListener("resize", xe)), ta(() => window.removeEventListener("resize", xe)), Qi(() => document.addEventListener("pointerdown", Ce)), ta(() => document.removeEventListener("pointerdown", Ce));
 		let A = Z({
 			get: () => t.value.tab,
 			set: (e) => i("tab", e)
@@ -44729,24 +44729,26 @@ var VV = {
 		function xe() {
 			S.value = window.innerWidth;
 		}
-		async function Se() {
-			let e = document.querySelector(".channel-host-brief"), t = document.querySelector(".channel-transcript"), n = e?.offsetHeight || 0;
-			w.value = !w.value, await Qn(), t && e && (t.scrollTop += e.offsetHeight - n);
+		function Se() {
+			w.value = !w.value;
 		}
 		function Ce(e) {
+			!w.value && !e.target.closest?.(".channel-host-brief") && (w.value = !0);
+		}
+		function we(e) {
 			e.button === 0 && (e.preventDefault(), e.currentTarget.focus(), re.value = {
 				pointer: e.pointerId,
 				x: e.clientX,
 				width: b.value
 			}, e.currentTarget.setPointerCapture(e.pointerId));
 		}
-		function we(e) {
+		function Te(e) {
 			re.value?.pointer === e.pointerId && (b.value = Math.round(Math.min(BK, Math.max(zK, re.value.width + re.value.x - e.clientX))));
 		}
-		function Te(e) {
+		function Ee(e) {
 			re.value?.pointer === e.pointerId && (re.value = null, e.currentTarget.hasPointerCapture(e.pointerId) && e.currentTarget.releasePointerCapture(e.pointerId), ye());
 		}
-		function Ee(e) {
+		function De(e) {
 			let t = {
 				ArrowLeft: b.value + HK,
 				ArrowRight: b.value - HK,
@@ -44755,20 +44757,20 @@ var VV = {
 			};
 			Object.hasOwn(t, e.key) && (e.preventDefault(), b.value = Math.min(BK, Math.max(zK, t[e.key])), ye());
 		}
-		function De(e) {
+		function Oe(e) {
 			e.button === 0 && (e.preventDefault(), e.currentTarget.focus(), D.value = {
 				pointer: e.pointerId,
 				x: e.clientX,
 				width: O.value
 			}, e.currentTarget.setPointerCapture(e.pointerId));
 		}
-		function Oe(e) {
+		function ke(e) {
 			D.value?.pointer === e.pointerId && (x.value = Math.round(Math.min(ie.value, Math.max(UK, D.value.width + e.clientX - D.value.x))));
 		}
-		function ke(e) {
+		function Ae(e) {
 			D.value?.pointer === e.pointerId && (D.value = null, e.currentTarget.hasPointerCapture(e.pointerId) && e.currentTarget.releasePointerCapture(e.pointerId), ye());
 		}
-		function Ae(e) {
+		function je(e) {
 			let t = {
 				ArrowLeft: O.value - KK,
 				ArrowRight: O.value + KK,
@@ -44778,7 +44780,7 @@ var VV = {
 			Object.hasOwn(t, e.key) && (e.preventDefault(), x.value = Math.min(ie.value, Math.max(UK, t[e.key])), ye());
 		}
 		return (e, r) => {
-			let _ = Ak, v = PV, x = Ik, S = tA, T = AV, _e = pV, ve = CV, ye = OV, xe = hV, je = dV, Me = cV, Ne = nV, Pe = $B;
+			let _ = Ak, v = PV, x = Ik, S = tA, T = AV, _e = pV, ve = CV, ye = OV, xe = hV, Ce = dV, Me = cV, Ne = nV, Pe = $B;
 			return H(), U("div", {
 				class: M(["channel-shell", {
 					"channel-resizing": re.value || D.value,
@@ -44855,12 +44857,12 @@ var VV = {
 					"aria-valuenow": O.value,
 					"aria-valuetext": `${O.value} 像素`,
 					title: "拖动调整频道栏宽度，也可使用方向键",
-					onPointerdown: De,
-					onPointermove: Oe,
-					onPointerup: ke,
-					onPointercancel: ke,
-					onLostpointercapture: ke,
-					onKeydown: Ae
+					onPointerdown: Oe,
+					onPointermove: ke,
+					onPointerup: Ae,
+					onPointercancel: Ae,
+					onLostpointercapture: Ae,
+					onKeydown: je
 				}, null, 40, oK)),
 				G("main", sK, [
 					G("header", cK, [
@@ -45066,7 +45068,7 @@ var VV = {
 									description: "简述结论、共识、歧义，以及接下来要追问或调整什么、为什么。",
 									class: "channel-brief-editor"
 								}, {
-									default: L(() => [K(je, {
+									default: L(() => [K(Ce, {
 										modelValue: I(m),
 										"onUpdate:modelValue": r[10] ||= (e) => /* @__PURE__ */ ln(m) ? m.value = e : null,
 										"aria-label": "主持简报正文",
@@ -45077,7 +45079,7 @@ var VV = {
 									_: 1
 								}),
 								r[29] ||= G("label", { class: "channel-state-label" }, "详细共识与进度", -1),
-								K(je, {
+								K(Ce, {
 									modelValue: I(p),
 									"onUpdate:modelValue": r[11] ||= (e) => /* @__PURE__ */ ln(p) ? p.value = e : null,
 									"aria-label": "共识与分歧正文",
@@ -45126,12 +45128,12 @@ var VV = {
 					"aria-valuenow": b.value,
 					"aria-valuetext": `${b.value} 像素`,
 					title: "拖动调整右侧栏宽度，也可使用左右方向键",
-					onPointerdown: Ce,
-					onPointermove: we,
-					onPointerup: Te,
-					onPointercancel: Te,
-					onLostpointercapture: Te,
-					onKeydown: Ee
+					onPointerdown: we,
+					onPointermove: Te,
+					onPointerup: Ee,
+					onPointercancel: Ee,
+					onLostpointercapture: Ee,
+					onKeydown: De
 				}, null, 40, NK)) : Y("", !0),
 				E.value ? (H(), U("aside", PK, [G("section", FK, [K(KG, { docked: "" })])])) : Y("", !0),
 				K(Ne, {

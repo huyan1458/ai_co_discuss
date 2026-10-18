@@ -137,19 +137,18 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .channel-management-target { color: #eef0f5; overflow-wrap: anywhere; }
 .channel-management-target > span { color: #949dad; font-size: 12px; }
 .channel-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--ui-bg); }
-.channel-host-brief { flex-shrink: 0; padding: 12px 20px; border-bottom: 1px solid #ffffff0d; background: #ffffff03; }
+.channel-host-brief { position: relative; z-index: 20; flex-shrink: 0; padding: 6px 20px; border-bottom: 1px solid #ffffff0d; background: #ffffff03; }
 .channel-brief-inner { width: 100%; }
-.channel-brief-heading { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--ui-text-muted); }
+.channel-brief-heading { display: flex; align-items: center; gap: 12px; min-height: 28px; font-size: 12px; color: var(--ui-text-muted); }
 .channel-brief-toggle { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 0; border-radius: 4px; color: var(--ui-text-highlighted); font-size: 13px; }
 .channel-brief-toggle > [class*="icon"] { width: 14px; height: 14px; color: var(--ui-text-muted); }
 .channel-brief-round { padding-left: 12px; border-left: 1px solid var(--channel-line); font-size: 11px; line-height: 1.5; }
 .channel-brief-update { flex-shrink: 0; margin-left: auto; font-size: 11px; color: var(--ui-text-muted); }
-.channel-host-brief.is-collapsed { padding-block: 4px; }
 .channel-host-brief.is-collapsed .channel-brief-heading { display: flex; flex-wrap: nowrap; }
 .channel-host-brief.is-collapsed .channel-brief-toggle { width: 100%; min-width: 0; }
 .channel-brief-toggle > :is(strong, [class*="icon"]) { flex-shrink: 0; }
 .channel-brief-preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; color: var(--ui-text-muted); font-weight: 400; }
-.channel-brief-content { padding: 6px 0 0 20px; }
+.channel-brief-content { position: absolute; top: 100%; left: 0; right: 0; padding: 10px 20px 14px 40px; border-bottom: 1px solid var(--ui-border); background: var(--ui-bg); box-shadow: 0 12px 24px #00000040; }
 .channel-brief-text { max-height: 140px; overflow: auto; line-height: 1.75; font-size: 14px; color: var(--ui-text); overflow-wrap: anywhere; }
 .channel-brief-footer { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 20px; margin-top: 8px; color: var(--ui-text-muted); font-size: 11px; line-height: 1.6; }
 .channel-brief-footer small { margin-left: auto; font-size: inherit; }
@@ -583,6 +582,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 @media (max-width: 1199px) {
   html[data-theme^="channel"] .channel-panel-toggle { width: 44px; height: 44px; }
   .channel-brief-toggle, .channel-brief-update { min-height: 44px; }
+  .channel-brief-heading { min-height: 44px; }
   .channel-member-rail, .channel-rail-resizer { display: none; }
   .channel-header-context { display: none; }
 }
@@ -622,7 +622,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-host-brief.is-collapsed .channel-brief-toggle { min-height: 32px; }
   .channel-brief-heading { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; }
   .channel-brief-round { padding-left: 8px; }
-  .channel-brief-content { padding-left: 20px; }
+  .channel-brief-content { padding: 8px 16px 12px 36px; }
   .channel-brief-footer { flex-direction: column; gap: 2px; }
   .channel-brief-footer small { margin-left: 0; }
   .channel-brief-text { font-size: 13px; }
@@ -834,7 +834,6 @@ html[data-theme^="channel"] .theme-preview.channel-light { background: #ffffff; 
   .channel-title-icon { color: #8c8c8c; }
   .channel-floor-status.is-held { color: #666666; }
   .channel-search-input input { border: 1px solid #dedede; border-radius: 6px; background: #ffffff; }
-  .channel-host-brief.is-collapsed { padding-block: 6px; }
   .channel-brief-toggle { color: #242424; }
   .channel-brief-toggle strong { font-weight: 600; }
   .channel-brief-text { color: #555555; }

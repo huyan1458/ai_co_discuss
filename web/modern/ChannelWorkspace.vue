@@ -1,5 +1,5 @@
 <script setup>
-import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import ChannelDiscussion from "./ChannelDiscussion.vue";
 import TopicPanel from "./TopicPanel.vue";
 import WorkspaceDialogs from "./WorkspaceDialogs.vue";
@@ -38,7 +38,8 @@ const rail_width = ref(saved_layout.rail);
 const nav_width = ref(saved_layout.nav);
 const viewport_width = ref(typeof window === "undefined" ? NAV_DEFAULT + CONTENT_MIN + DIVIDER_WIDTH : window.innerWidth);
 const nav_collapsed = ref(saved_layout.collapsed);
-const brief_collapsed = ref(saved_layout.brief_collapsed);
+// The expanded brief floats over the messages, so it always starts collapsed instead of covering them.
+const brief_collapsed = ref(true);
 const rail_collapsed = ref(saved_layout.rail_collapsed);
 const rail_inline = computed(() => viewport_width.value >= RAIL_BREAKPOINT);
 const show_rail = computed(() => !!room.value && view.value.tab === "discussion" && !rail_collapsed.value);
@@ -60,10 +61,11 @@ const layout_style = computed(() => ({
 const width_options = Object.entries(READING_WIDTHS).map(([value, option]) => ({ value, label: option.label }));
 watch(reading_width, save_layout);
 watch(nav_collapsed, save_layout);
-watch(brief_collapsed, save_layout);
 watch(rail_collapsed, save_layout);
 onMounted(() => window.addEventListener("resize", update_viewport_width));
 onBeforeUnmount(() => window.removeEventListener("resize", update_viewport_width));
+onMounted(() => document.addEventListener("pointerdown", collapse_brief_outside));
+onBeforeUnmount(() => document.removeEventListener("pointerdown", collapse_brief_outside));
 const selected_tab = computed({ get: () => view.value.tab, set: (value) => act("tab", value) });
 const tabs = [
   { value: "discussion", label: "消息", icon: "i-lucide-message-square" },
@@ -151,14 +153,12 @@ function toggle_info() {
 /** Keep the resizable layout within the current viewport. */
 function update_viewport_width() { viewport_width.value = window.innerWidth; }
 
-/** Toggle the host brief while keeping the visible messages at the same screen position. */
-async function toggle_brief() {
-  const brief = document.querySelector(".channel-host-brief");
-  const transcript = document.querySelector(".channel-transcript");
-  const before = brief?.offsetHeight || 0;
-  brief_collapsed.value = !brief_collapsed.value;
-  await nextTick();
-  if (transcript && brief) transcript.scrollTop += brief.offsetHeight - before;
+/** Toggle the floating host brief; the bar keeps its height so the messages never move. */
+function toggle_brief() { brief_collapsed.value = !brief_collapsed.value; }
+
+/** Close the floating brief when the pointer lands anywhere outside it. */
+function collapse_brief_outside(event) {
+  if (!brief_collapsed.value && !event.target.closest?.(".channel-host-brief")) brief_collapsed.value = true;
 }
 
 /** Capture the divider so dragging continues outside its narrow hit area. */
