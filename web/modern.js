@@ -44374,29 +44374,31 @@ var VV = {
 						color: "neutral",
 						variant: "outline",
 						class: "pb-action",
+						title: "暂停讨论，原安排保留",
 						loading: I(a) === "pause_discussion",
 						onClick: n[2] ||= (e) => I(i)("pause_discussion")
 					}, null, 8, ["loading"])) : Y("", !0),
 					x.value && g.value ? (H(), W(m, {
 						key: 2,
 						icon: "i-lucide-hand",
-						label: `打断 ${I(r).display_name(g.value.expert)}`,
+						label: "打断",
 						size: "sm",
 						color: "neutral",
 						variant: "outline",
 						class: "pb-action",
-						title: "本次发言作废，交给主持人",
+						title: `打断 ${I(r).display_name(g.value.expert)}：本次发言作废，交给主持人`,
 						loading: I(a) === "cancel_turn",
 						onClick: n[3] ||= (e) => I(i)("cancel_turn")
-					}, null, 8, ["label", "loading"])) : Y("", !0),
+					}, null, 8, ["title", "loading"])) : Y("", !0),
 					S.value ? (H(), W(m, {
 						key: 3,
 						icon: "i-lucide-flag",
-						label: "结束讨论…",
+						label: "结束",
 						size: "sm",
 						color: "neutral",
 						variant: "outline",
 						class: "pb-action pb-end",
+						title: "结束讨论：选择主持人收尾或直接结束",
 						onClick: n[4] ||= (e) => o.value = !0
 					})) : Y("", !0)
 				])) : Y("", !0),

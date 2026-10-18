@@ -219,7 +219,7 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .pb-bar { height: 3px; margin-top: 6px; overflow: hidden; border-radius: 999px; background: var(--ui-bg-accented); }
 .pb-bar > i { display: block; height: 100%; border-radius: inherit; background: var(--channel-accent); }
 .progress-board > .pb-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 14px; }
-html[data-theme^="channel"] .pb-action { min-height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--ui-border) 70%, transparent); background: color-mix(in srgb, var(--ui-bg-elevated) 60%, transparent); box-shadow: none; color: var(--ui-text-muted); }
+html[data-theme^="channel"] .pb-action { flex-shrink: 0; white-space: nowrap; min-height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--ui-border) 70%, transparent); background: color-mix(in srgb, var(--ui-bg-elevated) 60%, transparent); box-shadow: none; color: var(--ui-text-muted); }
 html[data-theme^="channel"] .pb-action:hover { border-color: var(--ui-border-accented); background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); }
 html[data-theme^="channel"] .pb-action [class*="icon"] { width: 14px; height: 14px; }
 html[data-theme^="channel"] .pb-restart { border-color: color-mix(in srgb, var(--channel-accent) 45%, transparent); background: color-mix(in srgb, var(--channel-accent) 14%, transparent); color: var(--channel-accent); }
