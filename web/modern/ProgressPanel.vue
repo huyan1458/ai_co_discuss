@@ -101,7 +101,7 @@ async function finish(action) {
       <span class="progress-dot"></span><span class="progress-chip-text">{{ bridge.progress_round(room) }}</span><UIcon :name="expanded ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" />
     </button>
     <section v-if="expanded" id="progress-panel" class="progress-panel" aria-label="讨论进度看板">
-      <header class="progress-panel-heading"><strong>讨论进度</strong><UBadge color="neutral" variant="subtle" size="sm">{{ bridge.phases[room.phase] }}</UBadge><UButton icon="i-lucide-minus" color="neutral" variant="ghost" size="xs" aria-label="收起进度看板" class="progress-collapse" @click="expanded = false" /></header>
+      <header class="progress-panel-heading"><strong>讨论进度</strong><UBadge color="neutral" variant="subtle" size="sm">{{ bridge.phases[room.phase] }}</UBadge></header>
       <p class="progress-headline" role="status">{{ headline }}</p>
       <dl class="progress-stats">
         <div><dt>完成轮次</dt><dd>{{ rounds }}</dd></div>

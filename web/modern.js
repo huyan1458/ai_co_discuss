@@ -44178,7 +44178,7 @@ var VV = {
 			await r(e) && (u.value = !1);
 		}
 		return (e, t) => {
-			let a = Ak, o = pV, te = tA, ne = Ik, re = XU;
+			let a = Ak, o = pV, te = Ik, ne = tA, re = XU;
 			return H(), U("div", {
 				ref_key: "anchor",
 				ref: d,
@@ -44192,41 +44192,29 @@ var VV = {
 					title: l.value ? "收起进度看板" : "展开进度看板",
 					onClick: t[0] ||= (e) => l.value = !l.value
 				}, [
-					t[9] ||= G("span", { class: "progress-dot" }, null, -1),
+					t[8] ||= G("span", { class: "progress-dot" }, null, -1),
 					G("span", mG, P(I(n).progress_round(f.value)), 1),
 					K(a, { name: l.value ? "i-lucide-chevron-up" : "i-lucide-chevron-down" }, null, 8, ["name"])
 				], 10, pG),
 				l.value ? (H(), U("section", hG, [
-					G("header", gG, [
-						t[10] ||= G("strong", null, "讨论进度", -1),
-						K(o, {
-							color: "neutral",
-							variant: "subtle",
-							size: "sm"
-						}, {
-							default: L(() => [J(P(I(n).phases[f.value.phase]), 1)]),
-							_: 1
-						}),
-						K(te, {
-							icon: "i-lucide-minus",
-							color: "neutral",
-							variant: "ghost",
-							size: "xs",
-							"aria-label": "收起进度看板",
-							class: "progress-collapse",
-							onClick: t[1] ||= (e) => l.value = !1
-						})
-					]),
+					G("header", gG, [t[9] ||= G("strong", null, "讨论进度", -1), K(o, {
+						color: "neutral",
+						variant: "subtle",
+						size: "sm"
+					}, {
+						default: L(() => [J(P(I(n).phases[f.value.phase]), 1)]),
+						_: 1
+					})]),
 					G("p", _G, P(T.value), 1),
 					G("dl", vG, [
-						G("div", null, [t[11] ||= G("dt", null, "完成轮次", -1), G("dd", null, P(b.value), 1)]),
-						G("div", null, [t[12] ||= G("dt", null, "用时", -1), G("dd", null, P(x.value), 1)]),
-						G("div", null, [t[13] ||= G("dt", null, "推进方式", -1), G("dd", null, P(S.value) + " · " + P(C.value), 1)]),
-						G("div", null, [t[14] ||= G("dt", null, "发言权", -1), G("dd", null, P(I(n).floor_status(f.value)), 1)])
+						G("div", null, [t[10] ||= G("dt", null, "完成轮次", -1), G("dd", null, P(b.value), 1)]),
+						G("div", null, [t[11] ||= G("dt", null, "用时", -1), G("dd", null, P(x.value), 1)]),
+						G("div", null, [t[12] ||= G("dt", null, "推进方式", -1), G("dd", null, P(S.value) + " · " + P(C.value), 1)]),
+						G("div", null, [t[13] ||= G("dt", null, "发言权", -1), G("dd", null, P(I(n).floor_status(f.value)), 1)])
 					]),
 					p.value.reached && !g.value && !p.value.closing ? (H(), U("p", yG, "已达讨论上限，停止新增安排。")) : Y("", !0),
 					G("ul", bG, [(H(!0), U(V, null, ha(E.value, (e) => (H(), U("li", { key: e.name }, [
-						K(ne, {
+						K(te, {
 							src: I(n).identities[e.name]?.icon,
 							text: I(n).identities[e.name]?.initials,
 							alt: e.name,
@@ -44260,7 +44248,7 @@ var VV = {
 							class: "progress-member-result",
 							title: e.result
 						}, P(e.result), 9, wG)) : Y("", !0),
-						e.session ? (H(), U("small", TG, [G("span", { title: e.session }, "会话 " + P(e.session), 9, EG), K(te, {
+						e.session ? (H(), U("small", TG, [G("span", { title: e.session }, "会话 " + P(e.session), 9, EG), K(ne, {
 							icon: "i-lucide-copy",
 							color: "neutral",
 							variant: "ghost",
@@ -44271,7 +44259,7 @@ var VV = {
 						}, null, 8, ["aria-label", "onClick"])])) : Y("", !0)
 					]))), 128))]),
 					m.value.mode === "automatic" && ee.value.count ? (H(), U("section", DG, [
-						G("h4", null, [t[15] ||= J("阶段耗时 ", -1), G("small", null, "本次运行 " + P(ee.value.count) + " 次执行", 1)]),
+						G("h4", null, [t[14] ||= J("阶段耗时 ", -1), G("small", null, "本次运行 " + P(ee.value.count) + " 次执行", 1)]),
 						G("dl", OG, [(H(), U(V, null, ha(s, (e) => G("div", {
 							key: e.key,
 							title: e.hint
@@ -44283,7 +44271,7 @@ var VV = {
 					])) : Y("", !0),
 					m.value.mode === "automatic" ? Y("", !0) : (H(), U("p", PG, "手动模式没有执行回执，状态只按安排与发言推断。")),
 					G("div", FG, [
-						v.value ? (H(), W(te, {
+						v.value ? (H(), W(ne, {
 							key: 0,
 							icon: "i-lucide-rotate-ccw",
 							label: "重启",
@@ -44291,8 +44279,8 @@ var VV = {
 							class: "channel-primary-button",
 							title: "重新启动自动运行，原安排重新交给对应 AI；需本机接入程序保持运行",
 							loading: I(i) === "restart_discussion",
-							onClick: t[2] ||= (e) => I(r)("restart_discussion")
-						}, null, 8, ["loading"])) : (H(), W(te, {
+							onClick: t[1] ||= (e) => I(r)("restart_discussion")
+						}, null, 8, ["loading"])) : (H(), W(ne, {
 							key: 1,
 							icon: "i-lucide-pause",
 							label: "暂停",
@@ -44301,9 +44289,9 @@ var VV = {
 							variant: "outline",
 							disabled: g.value || f.value.archived,
 							loading: I(i) === "pause_discussion",
-							onClick: t[3] ||= (e) => I(r)("pause_discussion")
+							onClick: t[2] ||= (e) => I(r)("pause_discussion")
 						}, null, 8, ["disabled", "loading"])),
-						K(te, {
+						K(ne, {
 							icon: "i-lucide-hand",
 							label: "打断发言",
 							size: "sm",
@@ -44312,26 +44300,26 @@ var VV = {
 							disabled: !h.value,
 							loading: I(i) === "cancel_turn",
 							title: h.value ? `取消 ${h.value.expert} 的发言安排 #${h.value.id}` : "当前没有进行中的发言",
-							onClick: t[4] ||= (e) => I(r)("cancel_turn")
+							onClick: t[3] ||= (e) => I(r)("cancel_turn")
 						}, null, 8, [
 							"disabled",
 							"loading",
 							"title"
 						]),
-						K(te, {
+						K(ne, {
 							icon: "i-lucide-square",
 							label: "提前结束",
 							size: "sm",
 							color: "error",
 							variant: "soft",
 							disabled: _.value,
-							onClick: t[5] ||= (e) => u.value = !0
+							onClick: t[4] ||= (e) => u.value = !0
 						}, null, 8, ["disabled"])
 					])
 				])) : Y("", !0),
 				K(re, {
 					open: u.value,
-					"onUpdate:open": t[8] ||= (e) => u.value = e,
+					"onUpdate:open": t[7] ||= (e) => u.value = e,
 					title: "提前结束讨论",
 					description: "当前发言安排会被取消，已有消息全部保留。",
 					ui: {
@@ -44343,17 +44331,17 @@ var VV = {
 						type: "button",
 						class: "progress-ending-option",
 						disabled: !y.value || !!I(i),
-						onClick: t[6] ||= (e) => ie("force_close")
+						onClick: t[5] ||= (e) => ie("force_close")
 					}, [
-						t[16] ||= G("strong", null, "强行收尾", -1),
+						t[15] ||= G("strong", null, "强行收尾", -1),
 						G("span", null, "立即进入收束，由 " + P(I(n).display_name(f.value.host)) + " 在 " + P(p.value.summary_minutes || 5) + " 分钟收束预留内根据已有材料总结。", 1),
 						y.value ? Y("", !0) : (H(), U("small", RG, P(p.value.closing ? "已在收尾中。" : "仅进行中的讨论可以收尾；已暂停时请选择直接丢弃。"), 1))
 					], 8, LG), G("button", {
 						type: "button",
 						class: "progress-ending-option",
 						disabled: _.value || !!I(i),
-						onClick: t[7] ||= (e) => ie("conclude_discussion")
-					}, [...t[17] ||= [G("strong", null, "直接丢弃", -1), G("span", null, "不再总结，阶段直接设为“已收束”，自动运行随之停止。", -1)]], 8, zG)])]),
+						onClick: t[6] ||= (e) => ie("conclude_discussion")
+					}, [...t[16] ||= [G("strong", null, "直接丢弃", -1), G("span", null, "不再总结，阶段直接设为“已收束”，自动运行随之停止。", -1)]], 8, zG)])]),
 					_: 1
 				}, 8, ["open"])
 			], 512);
