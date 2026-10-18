@@ -126,7 +126,7 @@ python discuss.py room list --site https://YOUR_PROJECT_NAME.pages.dev
 1. 在房间“接入”选择全自动，按需填写讨论所属项目和 cwd，导出私有接入配置。选择本身不会开始讨论。
 2. 填写参与软件路径和会话/项目绑定；`cli_project` 可删除，默认使用本仓库。`discussion_project` 与 `cwd` 都允许省略；各参与者可覆盖。详细 JSON 和软件差异见 [自动接入程序](runner.md)。
 3. Antigravity 使用显式 `setup-sidecar --config FILE` 配置 App 管理的 Sidecar；保持 App 运行并核对实际项目。Codex 新建需实际来源聊天 ID，可绑定当前主持会话；Claude 使用已登录的官方 Code CLI，工具许可由本机配置提供。
-4. 在本仓库运行 `npm run runner -- start --config FILE --minutes 60`。这个明确动作启动有限运行；重启接入程序用 `watch`，不会擅自恢复已暂停的房间。`status` 只查询，`pause` 撤销资格。
+4. 在本仓库运行 `npm run runner -- start --config FILE --minutes 60`。这个明确动作启动有限运行；重启接入程序用 `watch`，不会擅自恢复已暂停的房间。`status` 只查询，`pause` 撤销资格。希望网页「重启」随时生效时，用 `npm run service -- add --config FILE` 登记房间并以 `npm run service -- start` 或桌面快捷方式启动常驻讨论服务，见 [常驻讨论服务](runner.md#常驻讨论服务)。
 
 网页已设置总时长时可省略 `--minutes`，同时提供时取更早的截止。轮次、时长及单次执行上限由网站保存并校验；自动程序到限后暂停或交给主持人收束，收束预留计入总时长。准备/暂停阶段可编辑参数，保存不重新计时。
 

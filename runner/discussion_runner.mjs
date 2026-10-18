@@ -108,7 +108,7 @@ export class DiscussionStore {
 }
 
 /** Hold one PID lock per runtime directory, without taking over a live owner. */
-function acquire_lock(directory) {
+export function acquire_lock(directory) {
   mkdirSync(directory, { recursive: true });
   const path = join(directory, 'runner.lock');
   if (existsSync(path)) {
@@ -280,6 +280,12 @@ export class DiscussionRunner {
   stop_children() { for (const child of this.children) child.kill(); }
 }
 
+/** Pause a running automatic run so the website never shows work nobody will consume. */
+export async function pause_if_running(config) {
+  const latest = await api(config, '/runtime');
+  if (latest.status === 'running') await api(config, '/runtime', { action: 'pause', revision: latest.revision });
+}
+
 /** Run an explicitly configured room; install and status never start a discussion. */
 export async function main(args = process.argv.slice(2)) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
@@ -320,10 +326,8 @@ export async function main(args = process.argv.slice(2)) {
     } while (!values.once && !stopped);
   } finally {
     if (stopped) {
-      try {
-        const latest = await api(config, '/runtime');
-        if (latest.status === 'running') await api(config, '/runtime', { action: 'pause', revision: latest.revision });
-      } catch (error) { process.stderr.write(`停止回执未确认；租约到期后拒绝写入：${error.message}\n`); }
+      try { await pause_if_running(config); }
+      catch (error) { process.stderr.write(`停止回执未确认；租约到期后拒绝写入：${error.message}\n`); }
     }
     runner.stop_children(); store.close(); release();
     process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);

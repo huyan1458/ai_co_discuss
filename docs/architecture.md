@@ -35,7 +35,7 @@ Python 与 Cloudflare 是两种部署实现，运行时选其一，不是请求�
 | `web/index.html` / `web/style.css` | 控制器状态 | 经典主题界面 |
 | `web/modern/` | 同一控制器与 API | Vue / Nuxt UI 协作频道、资料/讨论/主持与接入、对话框 |
 | `web/modern/markdown.mjs` | Markdown 原文 | 三个主题共用的安全 HTML 与公式渲染；原始 HTML 关闭 |
-| `runner/` | 私有房间配置、网站事件 | 唤醒 Codex App / Claude Code CLI / Antigravity App 的真实会话，续租与有限重试；不生成回答，详见 [自动接入程序](runner.md) |
+| `runner/` | 私有房间配置、网站事件 | 唤醒 Codex App / Claude Code CLI / Antigravity App 的真实会话，续租与有限重试；`discussion_service.mjs` 常驻托管多个已登记房间；不生成回答，详见 [自动接入程序](runner.md) |
 | `scripts/build_pages.mjs` | 后端源码、已构建 `web/`、Pages 静态文件 | 清理固定输出并生成 `dist/pages/`；不部署 |
 
 讨论运行入口保留在仓库根目录。测试集中到 `tests/`，构建脚本到 `scripts/`；目录整理不拆分或改写核心后端。

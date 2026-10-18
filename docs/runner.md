@@ -50,6 +50,23 @@ npm run runner -- pause --config PRIVATE.json
 npm run runner -- watch --config PRIVATE.json
 ```
 
+## 常驻讨论服务
+
+`discussion_service.mjs` 把上述事件消费封装为本机常驻后台服务：一个进程托管所有已登记房间，网页看板点「重启」后无需再回终端启动程序。服务每 2 秒重读登记表并对每个房间执行同一 `DiscussionRunner` 检查；房间暂停、到期、停止或收束时只继续等待，不退出。单个房间的配置错误、数据目录被 `watch` 占用或网站请求失败只记录在该房间状态中，其他房间照常处理。
+
+```sh
+npm run service -- add --config PRIVATE.json
+npm run service -- start
+npm run service -- status
+npm run service -- stop
+npm run service -- shortcut
+npm run service -- autostart on
+```
+
+`add` / `remove` / `list` 维护登记表，同一站点与房间只能登记一份配置；登记不启动讨论，首次运行仍需网页或 `npm run runner -- start` 明确启动有限运行。`start` 以无窗口方式启动后台服务，已有服务时直接复用；`run` 是同一服务的前台形式，便于排障。`stop` 请求服务退出：先暂停其中仍在运行的房间，再停止本服务创建的 Claude 子进程并释放锁，避免网站显示进行中却无人领取。`status` 返回服务是否在线及各房间最近一次检查结果（`running`/`paused`/`idle`/`error`）。
+
+`shortcut` 在 Windows 桌面创建「AI CoDiscuss 讨论服务」快捷方式：双击即启动服务（已运行则复用），并用默认浏览器打开已登记的讨论网站。`autostart on|off` 在当前用户的启动文件夹添加或删除登录自启快捷方式，默认不开启。登记表、锁、`status.json` 与 `service.log` 位于 `%LOCALAPPDATA%/ai-codiscuss/service`（其他系统为 `~/.local/state/ai-codiscuss/service`），可用 `DISCUSS_SERVICE_HOME` 改变；各房间的游标、收件箱与会话绑定仍在各自数据目录。
+
 `setup-sidecar` 是显式本机配置操作，只添加自己的 Sidecar 项并保留其他 App 设置，不开始讨论。保持 Antigravity 打开；核对其私有 IPC 目录中 ready 回执的项目 ID 与实际 PID。停止使用时在 App 停用该 Sidecar；不能结束其他项目的 Sidecar 或整个 App。
 
 `start` 要求 (0,1440] 分钟及完整参与配置；`--minutes` 可省略并采用网页保存的总时长，服务器取启动截止与话题截止的较早值。`watch` 仅恢复事件消费。运行暂停（含执行失败、到期）时程序继续等待，网页进度看板点「重启」后接着处理；停止、收束或切到手动才退出。每 2 秒查询、HTTP 超时 10 秒；已入队任务等待实际进入，不设置从投递起算的启动超时，也不因聊天忙碌而重发。排队仍受整场截止约束。网站租约最多 120 秒、每 30 秒续租，单执行上限采用房间 `execution_minutes`（旧房间默认 20 分钟），从 AI 实际进入执行起算。空查询不调用 AI。控制终端中断先暂停，再停止本程序创建的 Claude 子进程；不结束桌面应用。

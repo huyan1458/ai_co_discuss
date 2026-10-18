@@ -10,6 +10,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
+import { DiscussionService, register_room, service_pid, unregister_room } from '../runner/discussion_service.mjs';
 import { antigravity_project, claude_exit_error, codex_target, run_program } from '../runner/discussion_adapters.mjs';
 
 /** Exercise the dispatcher against an HTTP contract without starting real software. */
@@ -366,4 +367,72 @@ test('omitted cli_project defaults to this repository', t => {
   const config = load_config(path);
   assert.equal(config.project, resolve(fileURLToPath(new URL('..', import.meta.url))));
   assert.ok(existsSync(join(config.project, 'discuss.py')));
+});
+
+/** Write a minimal valid private room configuration for the service registry. */
+function room_config(directory, site, room, name = room) {
+  const path = join(directory, `${name}.json`);
+  writeFileSync(path, JSON.stringify({ site, room, token: 'x'.repeat(32), data_directory: join(directory, `data-${name}`),
+    participants: { Gemini: { adapter: 'antigravity', ipc_directory: directory } } }));
+  return path;
+}
+
+test('the service ticks every registered room and pauses a room once it is unregistered', async t => {
+  const f = await fixture(t);
+  const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
+  const first = room_config(home, f.config.site, 'room1');
+  const second = room_config(home, f.config.site, 'room2');
+  register_room(home, first); register_room(home, second);
+  const ticks = [];
+  const service = new DiscussionService(home, config => ({ tick: async () => { ticks.push(config.room); return 'waiting'; }, stop_children() {} }));
+  t.after(async () => { await service.close(); rmSync(home, { recursive: true, force: true }); });
+  await service.tick();
+  assert.deepEqual(ticks.sort(), ['room1', 'room2']);
+  const status = JSON.parse(readFileSync(join(home, 'status.json'), 'utf8'));
+  assert.deepEqual(status.rooms.map(room => room.status), ['paused', 'paused']);
+  unregister_room(home, second);
+  ticks.length = 0;
+  await service.tick();
+  assert.deepEqual(ticks, ['room1']);
+  assert.ok(!existsSync(join(home, 'data-room2', 'runner.lock')), 'removed room releases its data-directory lock');
+});
+
+test('a room failure is reported without stopping the other rooms', async t => {
+  const f = await fixture(t);
+  const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
+  register_room(home, room_config(home, f.config.site, 'room1'));
+  register_room(home, room_config(home, f.config.site, 'room2'));
+  const service = new DiscussionService(home, config => ({ stop_children() {},
+    tick: async () => { if (config.room === 'room1') throw new Error('HTTP 500'); } }));
+  t.after(async () => { await service.close(); rmSync(home, { recursive: true, force: true }); });
+  await service.tick();
+  const rooms = JSON.parse(readFileSync(join(home, 'status.json'), 'utf8')).rooms;
+  assert.deepEqual(rooms.map(room => [room.room, room.status, room.error]), [['room1', 'error', 'HTTP 500'], ['room2', 'running', '']]);
+});
+
+test('the same site and room cannot be registered twice', t => {
+  const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  register_room(home, room_config(home, 'http://127.0.0.1:8765', 'room1', 'a'));
+  assert.throws(() => register_room(home, room_config(home, 'http://127.0.0.1:8765', 'room1', 'b')), /已由/);
+});
+
+test('the detached service starts once, reports status and stops on request', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
+  const script = fileURLToPath(new URL('../runner/discussion_service.mjs', import.meta.url));
+  const env = { ...process.env, DISCUSS_SERVICE_HOME: home };
+  const run = async (...args) => {
+    const child = spawn(process.execPath, [script, ...args], { env });
+    let output = ''; child.stdout.on('data', chunk => { output += chunk; });
+    const [code] = await once(child, 'close');
+    assert.equal(code, 0);
+    return JSON.parse(output);
+  };
+  t.after(async () => { if (service_pid(home)) await run('stop'); rmSync(home, { recursive: true, force: true }); });
+  const started = await run('start');
+  assert.equal(started.started, true);
+  assert.equal((await run('start')).started, false, 'a second start reuses the running service');
+  assert.equal((await run('status')).pid, started.pid);
+  assert.equal((await run('stop')).running, false);
+  assert.equal(service_pid(home), 0);
 });
