@@ -284,7 +284,7 @@ function resize_nav_by_key(event) {
       </section>
       <div v-if="room" class="channel-body" :class="{ 'channel-body-discussion': view.tab === 'discussion' }">
         <div class="channel-content">
-        <ChannelDiscussion v-show="view.tab === 'discussion'" @detail="open_detail" @edit="modal = 'edit'" @topic="info_open = true" />
+        <ChannelDiscussion v-show="view.tab === 'discussion'" @detail="open_detail" @edit="modal = 'edit'" />
         <section v-if="view.tab === 'context'" class="content-page channel-summary" role="tabpanel" aria-label="共识">
           <div class="page-heading"><div><h2>共识与分歧</h2><p>整理讨论进展，用 #消息编号 保留依据。</p></div><UBadge color="neutral" variant="outline">截止 #{{ room.state_until }}</UBadge></div>
           <section v-if="Array.isArray(room.latest_receipts) && room.latest_receipts.length" class="info-section"><h3>最新运行回执</h3><p class="fine-print">以下回执独立于摘要更新；晚于摘要的回执可能尚未整理，实际运行结果请查看原文。</p><div class="button-row"><UButton v-for="receipt in room.latest_receipts" :key="receipt.id" :label="`${bridge.display_name(receipt.author)} #${receipt.id} · ${new Date(receipt.created_at).toLocaleString('zh-CN')}${receipt.id > room.state_until ? ' · 晚于摘要' : ''}`" variant="link" color="neutral" @click="open_detail(receipt.id)" /></div></section>
