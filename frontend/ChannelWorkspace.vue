@@ -87,7 +87,6 @@ const channel_actions = computed(() => [[
   { label: view.value.backup_pending ? "正在备份…" : "备份当前讨论", icon: "i-lucide-download", disabled: view.value.backup_pending || !!pending.value, onSelect: () => act("backup") },
 ], [
   { label: "刷新消息", icon: "i-lucide-refresh-cw", onSelect: () => act("refresh") },
-  { label: "外观设置", icon: "i-lucide-settings-2", onSelect: () => { modal.value = "settings"; } },
 ], [
   { label: room.value?.archived ? "恢复频道" : "存档频道", icon: room.value?.archived ? "i-lucide-archive-restore" : "i-lucide-archive", disabled: view.value.archive_pending.includes(room.value?.id), onSelect: () => manage_room({ room: room.value, action: room.value.archived ? "restore" : "archive" }) },
   { label: "永久删除", icon: "i-lucide-trash-2", disabled: view.value.directory_pending.includes(`rename:${room.value?.id}`), onSelect: () => manage_room({ room: room.value, action: "delete" }) },
@@ -296,10 +295,9 @@ function resize_nav_by_key(event) {
         <section v-if="view.tab === 'context'" class="content-page channel-summary" role="tabpanel" aria-label="共识">
           <div class="page-heading"><div><h2>共识与分歧</h2><p>整理讨论进展，用 #消息编号 保留依据。</p></div><UBadge color="neutral" variant="outline">截止 #{{ room.state_until }}</UBadge></div>
           <section v-if="Array.isArray(room.latest_receipts) && room.latest_receipts.length" class="info-section"><h3>最新运行回执</h3><p class="fine-print">以下回执独立于摘要更新；晚于摘要的回执可能尚未整理，实际运行结果请查看原文。</p><div class="button-row"><UButton v-for="receipt in room.latest_receipts" :key="receipt.id" :label="`${bridge.display_name(receipt.author)} #${receipt.id} · ${new Date(receipt.created_at).toLocaleString('zh-CN')}${receipt.id > room.state_until ? ' · 晚于摘要' : ''}`" variant="link" color="neutral" @click="open_detail(receipt.id)" /></div></section>
-          <form @submit.prevent="act('save_context')">
-            <UFormField label="主持简报" description="简述结论、共识、歧义，以及接下来要追问或调整什么、为什么。" class="channel-brief-editor"><UTextarea v-model="brief" aria-label="主持简报正文" :rows="4" class="w-full" placeholder="让返回房间的人快速理解讨论进展和主持意图。" /></UFormField>
-            <label class="channel-state-label">详细共识与进度</label>
-            <UTextarea v-model="summary" aria-label="共识与分歧正文" :rows="15" :maxlength="4000" class="summary-editor" placeholder="已达成的共识、尚未解决的问题与下一步…" />
+          <form class="summary-form" @submit.prevent="act('save_context')">
+            <UFormField label="主持简报" description="简述结论、共识、歧义，以及接下来要追问或调整什么、为什么。" class="channel-brief-editor"><UTextarea v-model="brief" aria-label="主持简报正文" :rows="4" class="w-full summary-brief-editor" placeholder="让返回房间的人快速理解讨论进展和主持意图。" /></UFormField>
+            <UFormField label="详细共识与进度" description="已达成的共识、尚未解决的问题与下一步，用 #消息编号 标注依据。" class="channel-state-field"><UTextarea v-model="summary" aria-label="共识与分歧正文" :rows="12" :maxlength="4000" class="summary-editor" placeholder="已达成的共识、尚未解决的问题与下一步…" /></UFormField>
             <div class="form-footer"><span>依据消息截止 #{{ view.snapshot_id }}</span><UButton type="submit" color="neutral" icon="i-lucide-check" label="保存共识" class="channel-primary-button" :loading="pending === 'save_context'" /></div>
           </form>
         </section>

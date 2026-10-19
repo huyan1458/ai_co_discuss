@@ -157,8 +157,6 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .channel-brief-text { max-height: 140px; overflow: auto; line-height: 1.75; font-size: 14px; color: var(--ui-text); overflow-wrap: anywhere; }
 .channel-brief-footer { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 20px; margin-top: 8px; color: var(--ui-text-muted); font-size: 11px; line-height: 1.6; }
 .channel-brief-footer small { margin-left: auto; font-size: inherit; }
-.channel-brief-editor { margin: 20px 0; }
-.channel-state-label { display: block; font-size: 13px; margin-bottom: 8px; }
 .channel-answer-summary { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: 12px; margin-top: 18px; }
 .channel-answer-summary > small { color: #939ba8; font-size: 12px; font-weight: 400; line-height: 1.7; }
 .channel-answer-summary > small > span { display: block; color: #939ba8; font-weight: 400; }
@@ -575,7 +573,36 @@ html[data-theme^="channel"] :is(.page-heading p, .fine-print, .form-footer > spa
 html[data-theme^="channel"] :is(.info-section h3, .topic-brief h3) { color: #aab5c6; font-size: 11px; }
 html[data-theme^="channel"] :is(.info-section p, .topic-brief p, .turn-question, .message-prose) { color: #cbd3e0; font-size: 13px; line-height: 1.85; }
 html[data-theme^="channel"] .turn-panel { background: linear-gradient(160deg, #2b2e36, #24272e); border-color: #424856; border-radius: 11px; padding: 24px; box-shadow: inset 0 1px #ffffff05; }
-html[data-theme^="channel"] .summary-editor textarea { background: #1c1f26; font-size: 13px; border-radius: 10px; min-height: 320px; box-shadow: inset 0 1px 3px #0003, 0 0 0 1px #414856; padding: 17px; }
+html[data-theme^="channel"] :is(.summary-editor, .summary-brief-editor) textarea { background: var(--ui-bg-muted); color: var(--ui-text); font-size: 13px; line-height: 1.8; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--ui-border); padding: 12px 14px; transition: box-shadow .12s; }
+html[data-theme^="channel"] :is(.summary-editor, .summary-brief-editor) textarea:focus { box-shadow: inset 0 0 0 1px var(--channel-accent), 0 0 0 3px color-mix(in srgb, var(--channel-accent) 18%, transparent); }
+html[data-theme^="channel"] .summary-editor textarea { min-height: 280px; }
+
+/* Summary: one panel holds both editors; footer separates the save action. */
+.summary-form { display: flex; flex-direction: column; gap: 22px; padding: 22px 24px 18px; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-bg-elevated); }
+.summary-form [data-slot="label"] { color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
+.summary-form [data-slot="description"] { margin-top: 2px; margin-bottom: 10px; color: var(--ui-text-muted); font-size: 12px; }
+.summary-form .form-footer { padding-top: 16px; border-top: 1px solid var(--ui-border-muted); }
+
+/* Host view: heading first, status cards side by side, then the active turn. */
+.host-page > * + * { margin-top: 14px; }
+.host-page > .page-heading + * { margin-top: 0; }
+html[data-theme^="channel"] .host-page .topic-brief { gap: 14px; margin-bottom: 0; }
+.host-page .topic-brief > div { padding: 14px 18px; border: 1px solid var(--ui-border-muted); border-radius: 10px; background: var(--ui-bg-muted); }
+.host-page .topic-brief h3 { margin-bottom: 6px; }
+.host-status { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+html[data-theme^="channel"] .host-page .turn-panel { background: var(--ui-bg-elevated); border-color: var(--ui-border); border-radius: 12px; box-shadow: none; }
+html[data-theme^="channel"] .host-status .turn-panel { display: flex; flex-direction: column; align-items: flex-start; padding: 18px 20px; }
+.host-status .turn-header { align-self: stretch; margin-bottom: 10px; }
+.host-status p:not(.fine-print) { margin-bottom: 12px; color: var(--ui-text); font-size: 13px; line-height: 1.7; }
+.host-status .fine-print { margin-top: auto; padding-top: 12px; }
+.host-turn .turn-header { margin-bottom: 16px; }
+html[data-theme^="channel"] .host-turn .turn-question { margin-bottom: 18px; padding: 12px 16px; border-left: 2px solid var(--channel-accent); border-radius: 0 8px 8px 0; background: var(--ui-bg-muted); }
+.host-turn .turn-actions { padding-top: 16px; border-top: 1px solid var(--ui-border-muted); }
+.host-turn .turn-empty { padding: 4px 0 8px; }
+.host-receipts { padding: 16px 20px; border: 1px dashed var(--ui-border); border-radius: 12px; }
+html[data-theme^="channel"] .host-receipts p.fine-print { margin: 0 0 8px; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
+.host-page .form-footer { padding-top: 18px; }
+.host-page .host-schedule-hint { margin-top: 6px; text-align: right; }
 html[data-theme^="channel"] .access-address { background: #1a1d23; border-color: #3b4250; border-radius: 7px; box-shadow: inset 0 1px 2px #0002; }
 html[data-theme^="channel"] .access-icon { background: linear-gradient(#3b4352, #2c3240); border-color: #536078; color: #c6d6f2; width: 36px; height: 36px; border-radius: 9px; box-shadow: inset 0 1px #ffffff0b; }
 html[data-theme^="channel"] .access-section { border-color: #363d49; }
@@ -815,8 +842,8 @@ html[data-theme^="channel"] .theme-preview.channel-light { background: #ffffff; 
   .channel-identity-menu [data-slot="input"] { border-color: var(--ui-border-muted); }
   :is(.channel-details, .channel-navigation-drawer, .glass-panel) { background: #ffffff !important; border-color: var(--ui-border); box-shadow: 0 20px 64px #00000026; }
   .studio-modal [data-slot="header"] { border-bottom-color: var(--ui-border-muted); }
-  .dialog-form :is(input, textarea, button[role="combobox"]), .summary-editor textarea { background: #ffffff; box-shadow: 0 0 0 1px #c9c9c9; }
-  .dialog-form :is(input, textarea, button[role="combobox"]):focus, .summary-editor textarea:focus { box-shadow: 0 0 0 2px var(--channel-accent); }
+  .dialog-form :is(input, textarea, button[role="combobox"]), :is(.summary-editor, .summary-brief-editor) textarea { background: #ffffff; box-shadow: 0 0 0 1px #c9c9c9; }
+  .dialog-form :is(input, textarea, button[role="combobox"]):focus, :is(.summary-editor, .summary-brief-editor) textarea:focus { box-shadow: 0 0 0 2px var(--channel-accent); }
   .theme-choices > button { background: #fff; border-color: var(--ui-border); }
   .theme-choices > button:hover { background: #f6f6f6; }
   .theme-choices > button.chosen { background: #f3f7fd; border-color: #0969da; box-shadow: none; }
