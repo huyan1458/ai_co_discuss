@@ -42,7 +42,8 @@ const nav_collapsed = ref(saved_layout.collapsed);
 const brief_collapsed = ref(true);
 const rail_collapsed = ref(saved_layout.rail_collapsed);
 const rail_inline = computed(() => viewport_width.value >= RAIL_BREAKPOINT);
-const show_rail = computed(() => !!room.value && view.value.tab === "discussion" && !rail_collapsed.value);
+// The rail and channel tools stay in place without a room so the layout never jumps; room-only controls are disabled.
+const show_rail = computed(() => view.value.tab === "discussion" && !rail_collapsed.value);
 const info_label = computed(() => rail_inline.value && view.value.tab === "discussion" ? (rail_collapsed.value ? "展开频道概览" : "收起频道概览") : "频道资料与参与者");
 const brief_preview = computed(() => {
   const template = document.createElement("template");
@@ -74,7 +75,7 @@ const tabs = [
   { value: "access", label: "接入", icon: "i-lucide-plug" },
 ];
 const view_links = computed(() => tabs.map((item) => ({
-  ...item, active: view.value.tab === item.value, onSelect: () => { nav_open.value = false; act("tab", item.value); },
+  ...item, active: !!room.value && view.value.tab === item.value, disabled: !room.value, onSelect: () => { nav_open.value = false; act("tab", item.value); },
 })));
 const participants = computed(() => [
   { name: "用户", mode: "发起与协助" },
@@ -234,10 +235,8 @@ function resize_nav_by_key(event) {
       </header>
       <div class="channel-sidebar-content">
         <ChannelDirectory @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archives="open_archives" />
-        <template v-if="room">
-          <div class="channel-directory-heading channel-tools-heading"><span><UIcon name="i-lucide-chevron-down" />频道工具</span></div>
-          <UNavigationMenu :items="view_links" orientation="vertical" color="neutral" variant="pill" class="channel-directory channel-view-links" aria-label="频道视图" :ui="{ link: 'channel-link', linkLabel: 'channel-link-label', linkLeadingIcon: 'channel-link-icon' }" />
-        </template>
+        <div class="channel-directory-heading channel-tools-heading"><span><UIcon name="i-lucide-chevron-down" />频道工具</span></div>
+        <UNavigationMenu :items="view_links" orientation="vertical" color="neutral" variant="pill" class="channel-directory channel-view-links" aria-label="频道视图" :ui="{ link: 'channel-link', linkLabel: 'channel-link-label', linkLeadingIcon: 'channel-link-icon' }" />
       </div>
       <footer class="channel-sidebar-footer">
         <UAvatar :src="bridge.identities[author]?.icon" :text="bridge.identities[author]?.initials" :alt="bridge.display_name(author)" size="sm" class="channel-avatar" :class="bridge.identities[author]?.style" />
@@ -254,17 +253,17 @@ function resize_nav_by_key(event) {
         <span class="channel-title-icon"><UIcon name="i-lucide-hash" /></span>
         <div class="channel-title"><div class="channel-title-copy"><h1 :title="room?.title">{{ room?.title || '共议' }}</h1><div v-if="room?.floor" class="channel-floor-status" :class="{ 'is-held': room.floor.holder }" role="status" :title="`发言权：${bridge.floor_status(room)}`"><UIcon name="i-lucide-mic" /><span>发言权：{{ bridge.floor_status(room) }}</span></div></div><UBadge v-if="room?.archived" color="neutral" variant="subtle" size="sm">已存档</UBadge></div>
         <span v-if="room" class="channel-header-context">{{ tabs.find((item) => item.value === view.tab)?.label }}<span>·</span>{{ room.message_count }} 条记录</span>
-        <div v-if="room" class="channel-header-actions">
-          <ProgressPanel :floating="!(show_rail && rail_inline)" />
+        <div class="channel-header-actions">
+          <ProgressPanel v-if="room" :floating="!(show_rail && rail_inline)" />
           <form v-if="view.tab === 'discussion'" class="channel-search" @submit.prevent="act('filter', { query: search })">
-            <UInput v-model="search" icon="i-lucide-search" variant="none" size="sm" placeholder="搜索消息" aria-label="搜索讨论记录" class="channel-search-input">
-              <template #trailing><UButton v-if="search || view.query" icon="i-lucide-x" color="neutral" variant="ghost" size="xs" aria-label="清除搜索" @click="search = ''; act('filter', { query: '' })" /><UButton type="submit" icon="i-lucide-corner-down-left" color="neutral" variant="ghost" size="xs" aria-label="搜索" /></template>
+            <UInput v-model="search" icon="i-lucide-search" variant="none" size="sm" placeholder="搜索消息" aria-label="搜索讨论记录" :disabled="!room" class="channel-search-input">
+              <template #trailing><UButton v-if="search || view.query" icon="i-lucide-x" color="neutral" variant="ghost" size="xs" aria-label="清除搜索" @click="search = ''; act('filter', { query: '' })" /><UButton type="submit" icon="i-lucide-corner-down-left" color="neutral" variant="ghost" size="xs" aria-label="搜索" :disabled="!room" /></template>
             </UInput>
           </form>
-          <UTooltip v-if="view.tab === 'discussion'" text="只看提到当前身份的消息"><UButton icon="i-lucide-at-sign" :variant="view.mention_only ? 'soft' : 'ghost'" color="neutral" size="sm" class="channel-icon-button channel-mention-filter" :aria-pressed="view.mention_only" aria-label="提到我" @click="act('filter', { mention: !view.mention_only })" /></UTooltip>
-          <UDropdownMenu :items="channel_actions" :content="{ align: 'end', sideOffset: 8 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" class="channel-icon-button" aria-label="频道菜单" /></UDropdownMenu>
+          <UTooltip v-if="view.tab === 'discussion'" text="只看提到当前身份的消息"><UButton icon="i-lucide-at-sign" :variant="view.mention_only ? 'soft' : 'ghost'" color="neutral" size="sm" class="channel-icon-button channel-mention-filter" :aria-pressed="view.mention_only" aria-label="提到我" :disabled="!room" @click="act('filter', { mention: !view.mention_only })" /></UTooltip>
+          <UDropdownMenu :items="channel_actions" :disabled="!room" :content="{ align: 'end', sideOffset: 8 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" class="channel-icon-button" aria-label="频道菜单" :disabled="!room" /></UDropdownMenu>
         </div>
-        <UTooltip v-if="room" :text="info_label"><UButton icon="i-lucide-panel-right" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-panel-toggle channel-info-button" :aria-label="info_label" :aria-expanded="rail_inline && view.tab === 'discussion' ? show_rail : info_open" @click="toggle_info" /></UTooltip>
+        <UTooltip :text="info_label"><UButton icon="i-lucide-panel-right" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-panel-toggle channel-info-button" :aria-label="info_label" :disabled="!room && !(rail_inline && view.tab === 'discussion')" :aria-expanded="rail_inline && view.tab === 'discussion' ? show_rail : info_open" @click="toggle_info" /></UTooltip>
       </header>
       <section v-if="view.launch.available && view.launch.recoveries.length" class="channel-launch-recovery" aria-label="未完成的启动请求">
         <h2>继续未完成的启动</h2>
@@ -308,7 +307,7 @@ function resize_nav_by_key(event) {
     </main>
     <div v-if="show_rail" class="channel-rail-resizer" role="separator" tabindex="0" aria-label="调整右侧栏宽度" aria-orientation="vertical" aria-controls="channel-member-rail" :aria-valuemin="RAIL_MIN" :aria-valuemax="RAIL_MAX" :aria-valuenow="rail_width" :aria-valuetext="`${rail_width} 像素`" title="拖动调整右侧栏宽度，也可使用左右方向键" @pointerdown="start_rail_resize" @pointermove="resize_rail" @pointerup="finish_rail_resize" @pointercancel="finish_rail_resize" @lostpointercapture="finish_rail_resize" @keydown="resize_rail_by_key"></div>
     <aside v-if="show_rail" id="channel-member-rail" class="channel-member-rail" aria-label="当前焦点与讨论进度">
-      <section class="channel-rail-board"><ProgressBoard docked /></section>
+      <section class="channel-rail-board"><ProgressBoard v-if="room" docked /><div v-else class="progress-board is-docked"><header class="pb-header"><strong>讨论进度</strong></header><p class="channel-rail-empty">暂无频道，新建讨论后在这里查看进度与参与者。</p></div></section>
     </aside>
 
     <USlideover v-model:open="nav_open" side="left" title="讨论频道" description="共议 · AI CoDiscuss" :ui="{ content: 'channel-navigation-drawer', body: 'channel-drawer-body' }">

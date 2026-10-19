@@ -46173,10 +46173,7 @@ var XV = {
 ], Kq = { class: "channel-main" }, qq = { class: "channel-header" }, Jq = { class: "channel-title-icon" }, Yq = { class: "channel-title" }, Xq = { class: "channel-title-copy" }, Zq = ["title"], Qq = ["title"], $q = {
 	key: 0,
 	class: "channel-header-context"
-}, eJ = {
-	key: 1,
-	class: "channel-header-actions"
-}, tJ = {
+}, eJ = { class: "channel-header-actions" }, tJ = {
 	key: 0,
 	class: "channel-launch-recovery",
 	"aria-label": "未完成的启动请求"
@@ -46205,7 +46202,10 @@ var XV = {
 	id: "channel-member-rail",
 	class: "channel-member-rail",
 	"aria-label": "当前焦点与讨论进度"
-}, SJ = { class: "channel-rail-board" }, CJ = { class: "channel-detail-title" }, wJ = { class: "info-section" }, TJ = "ai-codiscuss-channel-layout", EJ = 220, DJ = 440, OJ = 280, kJ = 16, AJ = 180, jJ = 400, MJ = 248, NJ = 16, PJ = 480, FJ = 1200, IJ = 6, LJ = {
+}, SJ = { class: "channel-rail-board" }, CJ = {
+	key: 1,
+	class: "progress-board is-docked"
+}, wJ = { class: "channel-detail-title" }, TJ = { class: "info-section" }, EJ = "ai-codiscuss-channel-layout", DJ = 220, OJ = 440, kJ = 280, AJ = 16, jJ = 180, MJ = 400, NJ = 248, PJ = 16, FJ = 480, IJ = 1200, LJ = 6, RJ = {
 	__name: "ChannelWorkspace",
 	setup(e) {
 		let { view: t, bridge: n, field: r, act: i, pending: a } = Cr("discussion"), o = X(() => t.value.room), s = /* @__PURE__ */ N(""), c = /* @__PURE__ */ N(null), l = /* @__PURE__ */ N(null), u = /* @__PURE__ */ N(null), d = /* @__PURE__ */ N(!1), f = /* @__PURE__ */ N(!1), p = r("state-input"), m = r("brief-input"), h = r("search-input"), g = r("author-select"), _ = {
@@ -46221,13 +46221,13 @@ var XV = {
 				label: "宽",
 				width: 1240
 			}
-		}, v = ye(), y = /* @__PURE__ */ N(v.reading), b = /* @__PURE__ */ N(v.rail), x = /* @__PURE__ */ N(v.nav), S = /* @__PURE__ */ N(typeof window > "u" ? 734 : window.innerWidth), C = /* @__PURE__ */ N(v.collapsed), w = /* @__PURE__ */ N(!0), T = /* @__PURE__ */ N(v.rail_collapsed), ee = X(() => S.value >= FJ), E = X(() => !!o.value && t.value.tab === "discussion" && !T.value), te = X(() => ee.value && t.value.tab === "discussion" ? T.value ? "展开频道概览" : "收起频道概览" : "频道资料与参与者"), ne = X(() => {
+		}, v = ye(), y = /* @__PURE__ */ N(v.reading), b = /* @__PURE__ */ N(v.rail), x = /* @__PURE__ */ N(v.nav), S = /* @__PURE__ */ N(typeof window > "u" ? 734 : window.innerWidth), C = /* @__PURE__ */ N(v.collapsed), w = /* @__PURE__ */ N(!0), T = /* @__PURE__ */ N(v.rail_collapsed), ee = X(() => S.value >= IJ), E = X(() => t.value.tab === "discussion" && !T.value), te = X(() => ee.value && t.value.tab === "discussion" ? T.value ? "展开频道概览" : "收起频道概览" : "频道资料与参与者"), ne = X(() => {
 			let e = document.createElement("template");
 			return e.innerHTML = o.value?.rendered_brief || "", e.content.textContent.replace(/\s+/g, " ").trim();
-		}), re = /* @__PURE__ */ N(null), D = /* @__PURE__ */ N(null), ie = X(() => Math.min(jJ, Math.max(AJ, S.value - PJ - IJ))), ae = X(() => Math.min(x.value, ie.value)), oe = X(() => ({
+		}), re = /* @__PURE__ */ N(null), D = /* @__PURE__ */ N(null), ie = X(() => Math.min(MJ, Math.max(jJ, S.value - FJ - LJ))), ae = X(() => Math.min(x.value, ie.value)), oe = X(() => ({
 			"--channel-reading-width": `${_[y.value].width}px`,
 			"--channel-rail-width": `${b.value}px`,
-			"--channel-main-columns": C.value ? "minmax(0, 1fr)" : `${ae.value}px ${IJ}px minmax(0, 1fr)`
+			"--channel-main-columns": C.value ? "minmax(0, 1fr)" : `${ae.value}px ${LJ}px minmax(0, 1fr)`
 		})), O = Object.entries(_).map(([e, t]) => ({
 			value: e,
 			label: t.label
@@ -46259,7 +46259,8 @@ var XV = {
 			}
 		], ce = X(() => se.map((e) => ({
 			...e,
-			active: t.value.tab === e.value,
+			active: !!o.value && t.value.tab === e.value,
+			disabled: !o.value,
 			onSelect: () => {
 				d.value = !1, i("tab", e.value);
 			}
@@ -46348,11 +46349,11 @@ var XV = {
 		}
 		function ye() {
 			try {
-				let e = JSON.parse(localStorage.getItem(TJ)) || {};
+				let e = JSON.parse(localStorage.getItem(EJ)) || {};
 				return {
 					reading: Object.hasOwn(_, e.reading) ? e.reading : "default",
-					rail: Number.isFinite(e.rail) ? Math.min(DJ, Math.max(EJ, e.rail)) : OJ,
-					nav: Number.isFinite(e.nav) ? Math.min(jJ, Math.max(AJ, e.nav)) : be(),
+					rail: Number.isFinite(e.rail) ? Math.min(OJ, Math.max(DJ, e.rail)) : kJ,
+					nav: Number.isFinite(e.nav) ? Math.min(MJ, Math.max(jJ, e.nav)) : be(),
 					collapsed: e.collapsed === !0,
 					brief_collapsed: e.brief_collapsed === !0,
 					rail_collapsed: e.rail_collapsed === !0
@@ -46360,7 +46361,7 @@ var XV = {
 			} catch {
 				return {
 					reading: "default",
-					rail: OJ,
+					rail: kJ,
 					nav: be(),
 					collapsed: !1,
 					brief_collapsed: !1,
@@ -46369,11 +46370,11 @@ var XV = {
 			}
 		}
 		function be() {
-			return typeof window > "u" ? MJ : window.innerWidth >= 1900 ? 280 : window.innerWidth <= 980 ? 220 : MJ;
+			return typeof window > "u" ? NJ : window.innerWidth >= 1900 ? 280 : window.innerWidth <= 980 ? 220 : NJ;
 		}
 		function xe() {
 			try {
-				localStorage.setItem(TJ, JSON.stringify({
+				localStorage.setItem(EJ, JSON.stringify({
 					reading: y.value,
 					rail: b.value,
 					nav: x.value,
@@ -46403,19 +46404,19 @@ var XV = {
 			}, e.currentTarget.setPointerCapture(e.pointerId));
 		}
 		function De(e) {
-			re.value?.pointer === e.pointerId && (b.value = Math.round(Math.min(DJ, Math.max(EJ, re.value.width + re.value.x - e.clientX))));
+			re.value?.pointer === e.pointerId && (b.value = Math.round(Math.min(OJ, Math.max(DJ, re.value.width + re.value.x - e.clientX))));
 		}
 		function Oe(e) {
 			re.value?.pointer === e.pointerId && (re.value = null, e.currentTarget.hasPointerCapture(e.pointerId) && e.currentTarget.releasePointerCapture(e.pointerId), xe());
 		}
 		function ke(e) {
 			let t = {
-				ArrowLeft: b.value + kJ,
-				ArrowRight: b.value - kJ,
-				Home: EJ,
-				End: DJ
+				ArrowLeft: b.value + AJ,
+				ArrowRight: b.value - AJ,
+				Home: DJ,
+				End: OJ
 			};
-			Object.hasOwn(t, e.key) && (e.preventDefault(), b.value = Math.min(DJ, Math.max(EJ, t[e.key])), xe());
+			Object.hasOwn(t, e.key) && (e.preventDefault(), b.value = Math.min(OJ, Math.max(DJ, t[e.key])), xe());
 		}
 		function Ae(e) {
 			e.button === 0 && (e.preventDefault(), e.currentTarget.focus(), D.value = {
@@ -46425,19 +46426,19 @@ var XV = {
 			}, e.currentTarget.setPointerCapture(e.pointerId));
 		}
 		function je(e) {
-			D.value?.pointer === e.pointerId && (x.value = Math.round(Math.min(ie.value, Math.max(AJ, D.value.width + e.clientX - D.value.x))));
+			D.value?.pointer === e.pointerId && (x.value = Math.round(Math.min(ie.value, Math.max(jJ, D.value.width + e.clientX - D.value.x))));
 		}
 		function Me(e) {
 			D.value?.pointer === e.pointerId && (D.value = null, e.currentTarget.hasPointerCapture(e.pointerId) && e.currentTarget.releasePointerCapture(e.pointerId), xe());
 		}
 		function Ne(e) {
 			let t = {
-				ArrowLeft: ae.value - NJ,
-				ArrowRight: ae.value + NJ,
-				Home: AJ,
+				ArrowLeft: ae.value - PJ,
+				ArrowRight: ae.value + PJ,
+				Home: jJ,
 				End: ie.value
 			};
-			Object.hasOwn(t, e.key) && (e.preventDefault(), x.value = Math.min(ie.value, Math.max(AJ, t[e.key])), xe());
+			Object.hasOwn(t, e.key) && (e.preventDefault(), x.value = Math.min(ie.value, Math.max(jJ, t[e.key])), xe());
 		}
 		return (e, r) => {
 			let _ = zk, v = UV, x = Gk, S = uA, T = zV, ye = SV, be = MV, xe = LV, Ce = wV, Te = bV, Pe = _V, Fe = dV, Ie = cV;
@@ -46455,27 +46456,31 @@ var XV = {
 						r[21] ||= W("strong", null, "共议", -1),
 						r[22] ||= W("span", null, "AI CoDiscuss", -1)
 					]),
-					W("div", Bq, [G(XK, {
-						onSelect: pe,
-						onManage: de,
-						onCreate: ge,
-						onCreateFolder: _e,
-						onManageFolder: ve,
-						onDeleteFolder: j,
-						onArchives: fe
-					}), o.value ? (V(), H(B, { key: 0 }, [W("div", Vq, [W("span", null, [G(_, { name: "i-lucide-chevron-down" }), r[23] ||= q("频道工具", -1)])]), G(v, {
-						items: ce.value,
-						orientation: "vertical",
-						color: "neutral",
-						variant: "pill",
-						class: "channel-directory channel-view-links",
-						"aria-label": "频道视图",
-						ui: {
-							link: "channel-link",
-							linkLabel: "channel-link-label",
-							linkLeadingIcon: "channel-link-icon"
-						}
-					}, null, 8, ["items"])], 64)) : J("", !0)]),
+					W("div", Bq, [
+						G(XK, {
+							onSelect: pe,
+							onManage: de,
+							onCreate: ge,
+							onCreateFolder: _e,
+							onManageFolder: ve,
+							onDeleteFolder: j,
+							onArchives: fe
+						}),
+						W("div", Vq, [W("span", null, [G(_, { name: "i-lucide-chevron-down" }), r[23] ||= q("频道工具", -1)])]),
+						G(v, {
+							items: ce.value,
+							orientation: "vertical",
+							color: "neutral",
+							variant: "pill",
+							class: "channel-directory channel-view-links",
+							"aria-label": "频道视图",
+							ui: {
+								link: "channel-link",
+								linkLabel: "channel-link-label",
+								linkLeadingIcon: "channel-link-icon"
+							}
+						}, null, 8, ["items"])
+					]),
 					W("footer", Hq, [
 						G(x, {
 							src: P(n).identities[P(g)]?.icon,
@@ -46512,7 +46517,7 @@ var XV = {
 					"aria-label": "调整频道栏宽度",
 					"aria-orientation": "vertical",
 					"aria-controls": "channel-sidebar",
-					"aria-valuemin": AJ,
+					"aria-valuemin": jJ,
 					"aria-valuemax": ie.value,
 					"aria-valuenow": ae.value,
 					"aria-valuetext": `${ae.value} 像素`,
@@ -46570,10 +46575,13 @@ var XV = {
 							r[25] ||= W("span", null, "·", -1),
 							q(M(o.value.message_count) + " 条记录", 1)
 						])) : J("", !0),
-						o.value ? (V(), H("div", eJ, [
-							G(Iq, { floating: !(E.value && ee.value) }, null, 8, ["floating"]),
-							P(t).tab === "discussion" ? (V(), H("form", {
+						W("div", eJ, [
+							o.value ? (V(), U(Iq, {
 								key: 0,
+								floating: !(E.value && ee.value)
+							}, null, 8, ["floating"])) : J("", !0),
+							P(t).tab === "discussion" ? (V(), H("form", {
+								key: 1,
 								class: "channel-search",
 								onSubmit: r[5] ||= du((e) => P(i)("filter", { query: P(h) }), ["prevent"])
 							}, [G(be, {
@@ -46584,6 +46592,7 @@ var XV = {
 								size: "sm",
 								placeholder: "搜索消息",
 								"aria-label": "搜索讨论记录",
+								disabled: !o.value,
 								class: "channel-search-input"
 							}, {
 								trailing: F(() => [P(h) || P(t).query ? (V(), U(S, {
@@ -46602,12 +46611,13 @@ var XV = {
 									color: "neutral",
 									variant: "ghost",
 									size: "xs",
-									"aria-label": "搜索"
-								})]),
+									"aria-label": "搜索",
+									disabled: !o.value
+								}, null, 8, ["disabled"])]),
 								_: 1
-							}, 8, ["modelValue"])], 32)) : J("", !0),
+							}, 8, ["modelValue", "disabled"])], 32)) : J("", !0),
 							P(t).tab === "discussion" ? (V(), U(T, {
-								key: 1,
+								key: 2,
 								text: "只看提到当前身份的消息"
 							}, {
 								default: F(() => [G(S, {
@@ -46618,12 +46628,18 @@ var XV = {
 									class: "channel-icon-button channel-mention-filter",
 									"aria-pressed": P(t).mention_only,
 									"aria-label": "提到我",
+									disabled: !o.value,
 									onClick: r[6] ||= (e) => P(i)("filter", { mention: !P(t).mention_only })
-								}, null, 8, ["variant", "aria-pressed"])]),
+								}, null, 8, [
+									"variant",
+									"aria-pressed",
+									"disabled"
+								])]),
 								_: 1
 							})) : J("", !0),
 							G(xe, {
 								items: ue.value,
+								disabled: !o.value,
 								content: {
 									align: "end",
 									sideOffset: 8
@@ -46636,15 +46652,13 @@ var XV = {
 									variant: "ghost",
 									size: "sm",
 									class: "channel-icon-button",
-									"aria-label": "频道菜单"
-								})]),
+									"aria-label": "频道菜单",
+									disabled: !o.value
+								}, null, 8, ["disabled"])]),
 								_: 1
-							}, 8, ["items"])
-						])) : J("", !0),
-						o.value ? (V(), U(T, {
-							key: 2,
-							text: te.value
-						}, {
+							}, 8, ["items", "disabled"])
+						]),
+						G(T, { text: te.value }, {
 							default: F(() => [G(S, {
 								icon: "i-lucide-panel-right",
 								color: "neutral",
@@ -46652,11 +46666,16 @@ var XV = {
 								size: "sm",
 								class: "channel-icon-button channel-panel-toggle channel-info-button",
 								"aria-label": te.value,
+								disabled: !o.value && !(ee.value && P(t).tab === "discussion"),
 								"aria-expanded": ee.value && P(t).tab === "discussion" ? E.value : f.value,
 								onClick: Se
-							}, null, 8, ["aria-label", "aria-expanded"])]),
+							}, null, 8, [
+								"aria-label",
+								"disabled",
+								"aria-expanded"
+							])]),
 							_: 1
-						}, 8, ["text"])) : J("", !0)
+						}, 8, ["text"])
 					]),
 					P(t).launch.available && P(t).launch.recoveries.length ? (V(), H("section", tJ, [
 						r[26] ||= W("h2", null, "继续未完成的启动", -1),
@@ -46830,8 +46849,8 @@ var XV = {
 					"aria-label": "调整右侧栏宽度",
 					"aria-orientation": "vertical",
 					"aria-controls": "channel-member-rail",
-					"aria-valuemin": EJ,
-					"aria-valuemax": DJ,
+					"aria-valuemin": DJ,
+					"aria-valuemax": OJ,
 					"aria-valuenow": b.value,
 					"aria-valuetext": `${b.value} 像素`,
 					title: "拖动调整右侧栏宽度，也可使用左右方向键",
@@ -46842,7 +46861,10 @@ var XV = {
 					onLostpointercapture: Oe,
 					onKeydown: ke
 				}, null, 40, bJ)) : J("", !0),
-				E.value ? (V(), H("aside", xJ, [W("section", SJ, [G(Mq, { docked: "" })])])) : J("", !0),
+				E.value ? (V(), H("aside", xJ, [W("section", SJ, [o.value ? (V(), U(Mq, {
+					key: 0,
+					docked: ""
+				})) : (V(), H("div", CJ, [...r[33] ||= [W("header", { class: "pb-header" }, [W("strong", null, "讨论进度")], -1), W("p", { class: "channel-rail-empty" }, "暂无频道，新建讨论后在这里查看进度与参与者。", -1)]]))])])) : J("", !0),
 				G(Fe, {
 					open: d.value,
 					"onUpdate:open": r[16] ||= (e) => d.value = e,
@@ -46885,7 +46907,7 @@ var XV = {
 					}
 				}, {
 					body: F(() => [o.value ? (V(), H(B, { key: 0 }, [
-						W("div", CJ, [G(_, { name: "i-lucide-hash" }), W("h2", null, M(o.value.title), 1)]),
+						W("div", wJ, [G(_, { name: "i-lucide-hash" }), W("h2", null, M(o.value.title), 1)]),
 						(V(), H(B, null, R([
 							{
 								key: "goal",
@@ -46912,7 +46934,7 @@ var XV = {
 							class: "info-section"
 						}, [W("h3", null, M(e.label), 1), W("p", null, M(o.value[e.key] || "尚未填写"), 1)])), 64)),
 						G(Ie),
-						W("section", wJ, [r[33] ||= W("h3", null, "参与身份", -1), (V(!0), H(B, null, R(le.value, (e) => (V(), H("div", {
+						W("section", TJ, [r[34] ||= W("h3", null, "参与身份", -1), (V(!0), H(B, null, R(le.value, (e) => (V(), H("div", {
 							key: e.name,
 							class: "expert-row"
 						}, [
@@ -46965,7 +46987,7 @@ var XV = {
 			], 6);
 		};
 	}
-}, RJ = {
+}, zJ = {
 	__name: "App",
 	setup(e) {
 		let t = oV();
@@ -46979,7 +47001,7 @@ var XV = {
 				toaster: null
 			}, {
 				default: F(() => [G(P(Az), { "reduced-motion": "user" }, {
-					default: F(() => [P(n).theme.startsWith("channel") ? (V(), U(LJ, { key: 0 })) : J("", !0)]),
+					default: F(() => [P(n).theme.startsWith("channel") ? (V(), U(RJ, { key: 0 })) : J("", !0)]),
 					_: 1
 				})]),
 				_: 1
@@ -46989,8 +47011,8 @@ var XV = {
 };
 //#endregion
 //#region frontend/main.js
-function zJ() {
-	xu(RJ).use(ph).mount("#modern-root");
+function BJ() {
+	xu(zJ).use(ph).mount("#modern-root");
 }
-document.readyState === "loading" ? document.addEventListener("DOMContentLoaded", zJ) : zJ();
+document.readyState === "loading" ? document.addEventListener("DOMContentLoaded", BJ) : BJ();
 //#endregion
