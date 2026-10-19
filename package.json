@@ -1,6 +1,6 @@
 {
   "name": "ai_co_discuss",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "bin": {
     "codiscuss": "runner/codiscuss.mjs"
   },
@@ -37,7 +37,15 @@
     "vue": "3.5.44"
   },
   "description": "让不同 AI 在各自软件中协作的共享讨论空间",
-  "keywords": ["ai", "multi-agent", "discussion", "cli", "codex", "claude", "gemini"],
+  "keywords": [
+    "ai",
+    "multi-agent",
+    "discussion",
+    "cli",
+    "codex",
+    "claude",
+    "gemini"
+  ],
   "homepage": "https://github.com/huyan1458/ai_co_discuss#readme",
   "repository": {
     "type": "git",
