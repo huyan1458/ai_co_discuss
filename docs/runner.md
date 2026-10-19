@@ -4,13 +4,13 @@
 
 ## npm 安装与本机配置
 
-需要 Node.js 24+、npm 与 Python 3.10+。包内带已构建网页、Python 后端、接入程序及三份完整技能；运行时不安装前端依赖。当前尚未发布 npm registry，使用本项目生成的 `.tgz` 文件：
+需要 Node.js 24+、npm 与 Python 3.10+。包内带已构建网页、Python 后端、接入程序及三份完整技能；运行时不安装前端依赖。从 npm registry 安装：
 
 ```sh
-npx --yes --package ./ai_co_discuss-0.1.0.tgz codiscuss install
+npx --yes --package ai_co_discuss codiscuss install
 ```
 
-`install` 在安装包或写配置前检查 Node、Python、端口参数及显式选择的软件路径，再将当前包安装到 npm 的全局 prefix，由持久安装运行 `setup`；不依赖 npx 缓存长期存在。已有源码时可直接在仓库执行 `node runner/codiscuss.mjs install`。普通 `npm install --global 包路径.tgz` 只安装命令，随后运行 `codiscuss setup`；没有 postinstall 配置或启动副作用。开发者仍可使用下文的 `npm link`。
+`install` 在安装包或写配置前检查 Node、Python、端口参数及显式选择的软件路径，再将当前包安装到 npm 的全局 prefix，由持久安装运行 `setup`；不依赖 npx 缓存长期存在。已有源码时可直接在仓库执行 `node runner/codiscuss.mjs install`。维护者生成的 `.tgz` 可将包名换成文件路径。普通 `npm install --global ai_co_discuss` 只安装命令，随后运行 `codiscuss setup`；没有 postinstall 配置或启动副作用。开发者仍可使用下文的 `npm link`。
 
 `setup` 检测 Python 和固定四类 CLI：Claude（`claude`）、Codex（`codex`）、Gemini 使用的 Antigravity（`agy`）、Grok 使用的 Cursor（`agent` / `cursor-agent`）。按显式路径或 PATH 查找并执行有超时的 `--version`；Windows 读取实际 `.exe`（PATH 上只有 npm 包装脚本时，到 `node_modules/@openai` 包内查找 Codex 原生程序，跳过 npm 升级残留的 `.` 开头目录），Cursor 也支持官方 `.cmd` 启动入口。仅检查 CLI 能否启动，不扫描 App、账号登录或模型状态；已有 App 配置不会被当成检测成功。
 

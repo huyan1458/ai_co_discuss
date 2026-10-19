@@ -17,10 +17,10 @@
 
 ### 安装包用户
 
-需要 **Node.js 24+、npm、Python 3.10+**，所选 AI CLI 须预先安装并登录；安装器不会代装这些运行环境或 AI 软件。当前尚无公开安装包下载或 npm registry 发布，`.tgz` 由维护者提供；尚未取得包时，使用下方的[源码运行方式](#源码运行方式)。在安装包所在目录运行，文件名以实际版本为准：
+需要 **Node.js 24+、npm、Python 3.10+**，所选 AI CLI 须预先安装并登录；安装器不会代装这些运行环境或 AI 软件。安装包已发布到 npm registry，在任意目录运行：
 
 ```sh
-npx --yes --package ./ai_co_discuss-0.1.0.tgz codiscuss install
+npx --yes --package ai_co_discuss codiscuss install
 ```
 
 按安装提示选择已检测到的软件并核对配置。安装器会安装持久的 `codiscuss` 命令、复制三份完整讨论 Skill、保存本机软件配置，启动网站与讨论服务并打开浏览器。安装包已带运行代码和构建好的网页，无需另行克隆仓库或构建前端；安装本身不创建讨论。
