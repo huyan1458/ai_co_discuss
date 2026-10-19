@@ -7,10 +7,10 @@ const source = readFileSync(new URL("../web/app.js", import.meta.url), "utf8").r
 const discussion_source = readFileSync(new URL("../frontend/ChannelDiscussion.vue", import.meta.url), "utf8");
 
 /** Exercise theme persistence and renderer selection without touching discussion data. */
-function theme_fixture(saved_theme = null) {
+function theme_fixture(saved_theme = null, shared_storage = null) {
   const nodes = new Map([['legacy-style', {}], ['modern-style', {}], ['settings-dialog', { close() {} }]]);
   const classes = new Set();
-  const storage = new Map([['ai-codiscuss-theme', saved_theme]]);
+  const storage = shared_storage || new Map([['ai-codiscuss-theme', saved_theme]]);
   const loaded = [];
   const buttons = ['channel', 'channel-light', 'millennium'].map((theme) => ({
     dataset: { themeOption: theme }, setAttribute(key, value) { this[key] = value; },
@@ -20,8 +20,9 @@ function theme_fixture(saved_theme = null) {
     getElementById: (id) => nodes.get(id), querySelectorAll: () => buttons,
     createElement: () => ({}), head: { append(node) { nodes.set(node.id, node); loaded.push(node); } },
   };
-  const context = vm.createContext({ window: {}, document, localStorage: {
+  const context = vm.createContext({ window: {}, document, crypto: globalThis.crypto, localStorage: {
     getItem: (key) => storage.get(key), setItem: (key, value) => storage.set(key, value),
+    removeItem: key => storage.delete(key), key: index => [...storage.keys()][index], get length() { return storage.size; },
   } });
   vm.runInContext(`${source}\nglobalThis.test_state = state;`, context);
   context.publish_view = () => {};
@@ -151,7 +152,7 @@ test("light channel survives reload and selects the Vue renderer without dark mo
   assert.equal(fixture.loaded.length, 1);
 });
 
-test("local defaults exclude session bindings and launch drafts are consumed only after successful creation", async () => {
+for (const recovery of [false, true]) test(`local defaults exclude session bindings and launch drafts are consumed after ${recovery ? 'saved-request recovery' : 'successful creation'}`, async () => {
   const fixture = theme_fixture();
   const state = fixture.context.test_state;
   const requests = [];
@@ -180,10 +181,11 @@ test("local defaults exclude session bindings and launch drafts are consumed onl
   assert.equal(state.launch.profiles.Codex.session_id, 'one-room-session');
   await assert.rejects(fixture.context.submit_room({ preventDefault() {} }), /lost receipt/);
   assert.equal(dialog_closes, 0, 'failed startup must leave configuration open for correction or retry');
-  assert.equal(state.launch.error, 'lost receipt');
+  assert.match(state.launch.error, /结果尚未确认.*lost receipt/);
   assert.equal(state.launch.profiles.Codex.session_id, 'one-room-session');
   fail = false;
-  await fixture.context.submit_room({ preventDefault() {} });
+  if (recovery) await fixture.context.resume_launch(state.pending_room.id);
+  else await fixture.context.submit_room({ preventDefault() {} });
   assert.equal(requests[1].payload.room.submission_id, requests[2].payload.room.submission_id);
   assert.equal(requests[1].payload.token, requests[2].payload.token);
   assert.equal(fixture.storage.get('discuss-access:created'), requests[2].payload.token);
@@ -210,7 +212,7 @@ test("an existing-room launch keeps its target and preserves newer configuration
       state.room = { id: 'room-b' };
       state.launch.profiles.Codex.session_id = 'new-session';
       state.launch.workspace.cwd = 'C:\\new';
-      return { status: 'running' };
+      return { status: 'running', room: { id: payload.room_id } };
     },
   });
   await fixture.context.launch_current_room();
@@ -231,6 +233,180 @@ test("launch drafts retain explicit clears so saved participant defaults cannot 
   assert.equal(draft.participants.Codex.project_name, '');
   assert.equal(draft.participants.Codex.project_id, '');
   assert.equal(draft.cwd, 'C:\\this-discussion');
+});
+
+test("automatic creation uses configured local clients and preserves independent mode choices", () => {
+  const f = theme_fixture();
+  const state = f.context.test_state;
+  const mode = { value: 'manual' };
+  const host = { value: '用户' };
+  f.nodes.set('new-room-mode', mode); f.nodes.set('new-room-host', host);
+  let experts = { Codex: 'cli', Claude: 'online', DeepSeek: 'online' };
+  f.context.read_expert_inputs = () => experts;
+  f.context.render_expert_inputs = (_id, value) => { experts = value; };
+  state.launch.profiles = { Codex: { adapter: 'codex_cli', executable: 'C:\\codex.exe' },
+    Claude: { adapter: 'claude', executable: 'C:\\claude.exe' }, Gemini: { adapter: 'antigravity_cli' } };
+  mode.value = 'automatic'; f.context.update_creation_mode();
+  assert.equal(host.value, 'Codex');
+  assert.deepEqual(Object.entries(experts), [['Codex', 'cli'], ['Claude', 'cli']]);
+  host.value = 'Claude'; experts = { Claude: 'cli' };
+  mode.value = 'manual'; f.context.update_creation_mode();
+  assert.equal(host.value, '用户'); assert.equal(experts.DeepSeek, 'online');
+  mode.value = 'automatic'; f.context.update_creation_mode();
+  assert.equal(host.value, 'Claude'); assert.deepEqual(Object.entries(experts), [['Claude', 'cli']]);
+});
+
+test("room path correction keeps defaults separate, reports acknowledgement and ignores another room's late result", async () => {
+  const f = theme_fixture(); const state = f.context.test_state;
+  state.room = { id: 'one' }; state.launch.profiles = { Codex: { executable: 'machine-default' } };
+  f.storage.set('discuss-access:one', 'owner');
+  Object.assign(f.context, { render_room_configuration() {}, refresh_room: async () => {},
+    local_launch_request: async () => ({ room_id: 'one', version: 'v1', runtime_revision: 3,
+      participants: { Codex: { adapter: 'codex_cli', executable: 'old-path' } } }) });
+  await f.context.load_room_configuration();
+  f.context.write_room_connection('Codex', 'fixed-path');
+  assert.equal(state.launch.profiles.Codex.executable, 'machine-default');
+  f.context.local_launch_request = async (_action, input) => {
+    assert.equal(input.token, 'owner'); assert.equal(input.version, 'v1');
+    assert.deepEqual(Object.keys(input.participants.Codex), ['executable']);
+    return { ...input, applied: false };
+  };
+  await f.context.save_room_configuration();
+  assert.match(state.launch.repair.notice, /尚未确认采用/);
+  f.context.local_launch_request = async () => { state.room = { id: 'two' }; return { room_id: 'one' }; };
+  await f.context.load_room_configuration();
+  assert.equal(state.launch.repair.participants.Codex.executable, 'fixed-path');
+});
+
+test("empty automatic discussions describe their actual state instead of requiring another message", () => {
+  const message = theme_fixture().context.empty_discussion_message;
+  for (const [status, pattern] of [['ready', /尚未启动/], ['running', /等待 AI 执行/], ['paused', /已暂停/], ['stopped', /已停止/]]) {
+    assert.match(message({ phase: 'preparing', runtime: { mode: 'automatic', status } }), pattern);
+  }
+  assert.match(message({ phase: 'concluded' }), /已结束/);
+});
+
+test("a reloaded browser explicitly resumes the original submitted launch and retains ownership", async () => {
+  const first = theme_fixture();
+  const input = { room: { submission_id: 'original-request', title: '原议题' }, token: 'owner-token',
+    participants: { Codex: { adapter: 'codex_cli', cwd: 'original-directory' } } };
+  let sends = 0;
+  first.context.local_launch_request = async (_action, payload) => {
+    sends++;
+    assert.equal(JSON.parse(first.storage.get('discuss-launch:original-request')).input.token, payload.token);
+    throw Object.assign(new Error('service unavailable'), { launch: { stage: 'created', room_id: 'original-room' } });
+  };
+  await assert.rejects(first.context.submit_local_launch(input, '原议题'), /房间已创建/);
+  assert.equal(first.storage.get('discuss-access:original-room'), input.token);
+  const reloaded = theme_fixture(null, first.storage);
+  const state = reloaded.context.test_state;
+  state.launch.profiles = { Codex: { cwd: 'changed-default' } };
+  let selected;
+  Object.assign(reloaded.context, { render_launch_settings() {}, select_room: async id => { selected = id; },
+    local_launch_request: async (_action, payload) => {
+      sends++;
+      assert.deepEqual(JSON.parse(JSON.stringify(payload)), input);
+      return { room: { id: 'original-room' }, status: 'running' };
+    } });
+  reloaded.context.refresh_launch_recoveries();
+  assert.equal(sends, 1, 'loading the page must not restart a discussion');
+  assert.equal(state.launch.recoveries[0].room_id, 'original-room');
+  assert.doesNotMatch(JSON.stringify(state.launch), /owner-token|original-directory/);
+  await reloaded.context.resume_launch('original-request');
+  assert.equal(sends, 2);
+  assert.equal(selected, 'original-room');
+  assert.equal(state.launch.profiles.Codex.cwd, 'changed-default');
+  assert.equal(first.storage.get('discuss-launch:original-request'), undefined);
+  assert.equal(first.storage.get('discuss-access:original-room'), input.token);
+});
+
+test("a lost response is retained across reload while changed input cannot replace the original request", async () => {
+  const fixture = theme_fixture();
+  const input = { room: { submission_id: 'lost', title: '原议题' }, token: 'original-owner' };
+  fixture.context.local_launch_request = async () => { throw new Error('response lost'); };
+  await assert.rejects(fixture.context.submit_local_launch(input, '原议题'), /结果尚未确认/);
+  const reloaded = theme_fixture(null, fixture.storage);
+  reloaded.context.refresh_launch_recoveries();
+  assert.equal(reloaded.context.test_state.launch.recoveries.length, 1);
+  await assert.rejects(reloaded.context.submit_local_launch({ ...input, token: 'changed-owner' }, '原议题'), /未完成的原启动请求/);
+  assert.equal(JSON.parse(fixture.storage.get('discuss-launch:lost')).input.token, 'original-owner');
+});
+
+test("preflight rejection permits correction while storage failure prevents any launch request", async () => {
+  const fixture = theme_fixture();
+  const input = { room: { submission_id: 'preflight' }, token: 'owner' };
+  let sends = 0;
+  fixture.context.local_launch_request = async () => { sends++; throw Object.assign(new Error('bad executable'), { launch: { stage: 'not_started' } }); };
+  await assert.rejects(fixture.context.submit_local_launch(input, '校验'), /bad executable/);
+  assert.equal(fixture.storage.get('discuss-launch:preflight'), undefined);
+  fixture.context.localStorage.setItem = () => { throw new Error('storage blocked'); };
+  await assert.rejects(fixture.context.submit_local_launch(input, '校验'), /尚未发送/);
+  assert.equal(sends, 1);
+});
+
+test("a delayed failure in another tab cannot resurrect a completed launch", async () => {
+  const first = theme_fixture();
+  const second = theme_fixture(null, first.storage);
+  const input = { room: { submission_id: 'shared-request' }, token: 'owner' };
+  let reject_second;
+  second.context.local_launch_request = () => new Promise((_resolve, reject) => { reject_second = reject; });
+  const pending = second.context.submit_local_launch(input, '同一请求');
+  first.context.local_launch_request = async () => ({ room: { id: 'one-room' }, status: 'running' });
+  await first.context.submit_local_launch(input, '同一请求');
+  reject_second(new Error('late response loss'));
+  await assert.rejects(pending, /late response loss/);
+  assert.equal(first.storage.get('discuss-launch:shared-request'), undefined);
+  assert.equal(first.storage.get('discuss-access:one-room'), 'owner');
+});
+
+test("a late preflight rejection cannot delete the newer attempt another tab still needs to recover", async () => {
+  const first = theme_fixture();
+  const second = theme_fixture(null, first.storage);
+  const input = { room: { submission_id: 'same-input' }, token: 'owner' };
+  let reject_first;
+  first.context.local_launch_request = () => new Promise((_resolve, reject) => { reject_first = reject; });
+  const earlier = first.context.submit_local_launch(input, '原请求');
+  second.context.local_launch_request = async () => { throw Object.assign(new Error('created then failed'), { launch: { stage: 'created', room_id: 'created-room' } }); };
+  await assert.rejects(second.context.submit_local_launch(input, '原请求'), /created then failed/);
+  const newer_record = first.storage.get('discuss-launch:same-input');
+  reject_first(Object.assign(new Error('earlier validation failed'), { launch: { stage: 'not_started' } }));
+  await assert.rejects(earlier, /earlier validation failed/);
+  assert.equal(first.storage.get('discuss-launch:same-input'), newer_record);
+  assert.equal(first.storage.get('discuss-access:created-room'), 'owner');
+});
+
+test("a retry preflight rejection preserves an earlier in-flight request when its response is lost", async () => {
+  const first = theme_fixture();
+  const second = theme_fixture(null, first.storage);
+  const input = { room: { submission_id: 'in-flight' }, token: 'owner' };
+  let reject_first;
+  first.context.local_launch_request = () => new Promise((_resolve, reject) => { reject_first = reject; });
+  const earlier = first.context.submit_local_launch(input, '原请求');
+  second.context.local_launch_request = async () => { throw Object.assign(new Error('retry validation failed'), { launch: { stage: 'not_started' } }); };
+  await assert.rejects(second.context.submit_local_launch(input, '原请求'), /原启动结果仍待确认/);
+  reject_first(new Error('started but response lost'));
+  await assert.rejects(earlier, /started but response lost/);
+  const reloaded = theme_fixture(null, first.storage);
+  reloaded.context.refresh_launch_recoveries();
+  assert.equal(reloaded.context.test_state.launch.recoveries.length, 1);
+  reloaded.context.local_launch_request = async (_action, payload) => {
+    assert.deepEqual(JSON.parse(JSON.stringify(payload)), input);
+    return { room: { id: 'original-room' }, status: 'running' };
+  };
+  await reloaded.context.submit_local_launch(input, '原请求');
+  assert.equal(first.storage.get('discuss-launch:in-flight'), undefined);
+  assert.equal(first.storage.get('discuss-access:original-room'), 'owner');
+});
+
+test("missing existing-room credentials remain visible in the default theme without sending a request", async () => {
+  const fixture = theme_fixture();
+  fixture.root.dataset.theme = 'channel';
+  fixture.context.test_state.room = { id: 'protected', runtime: { protected: true } };
+  let sends = 0;
+  Object.assign(fixture.context, { render_launch_settings() {}, local_launch_request: async () => { sends++; } });
+  await fixture.context.launch_current_room();
+  assert.match(fixture.context.test_state.launch.error, /缺少房间凭据/);
+  assert.equal(sends, 0);
 });
 
 test("launch readback distinguishes effective directories, project metadata and existing App bindings", () => {
@@ -808,7 +984,7 @@ for (const interaction of ["navigation", "classic draft input"]) test(`room crea
   let resets = 0;
   let input;
   fixture.context.document.addEventListener = (type, listener) => { if (type === "input") input = listener; };
-  fixture.context.element = id => ({ addEventListener() {},
+  fixture.context.element = id => ({ addEventListener() {}, closest: () => ({ setAttribute() {} }),
     ...(id === "room-dialog" ? { close: () => { closes++; } } : { reset: () => { resets++; } }) });
   fixture.context.bind_controls();
   Object.assign(fixture.context, {

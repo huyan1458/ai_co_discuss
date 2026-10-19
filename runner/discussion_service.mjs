@@ -1,5 +1,6 @@
 /** Resident local service that keeps every registered automatic room consumed; no model API orchestration. */
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -8,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { atomic_json } from './discussion_adapters.mjs';
-import { DiscussionRunner, DiscussionStore, acquire_lock, load_config, pause_if_running } from './discussion_runner.mjs';
+import { DiscussionRunner, DiscussionStore, acquire_lock, load_config, pause_if_running, validate_config } from './discussion_runner.mjs';
 
 const POLL_MS = 2000;
 const START_WAIT_MS = 5000;
@@ -20,6 +21,13 @@ const SHORTCUT_NAME = 'AI CoDiscuss 讨论服务.lnk';
 const TICK_STATES = { undefined: 'running', waiting: 'paused', false: 'idle' };
 const STATUS_LABELS = { running: '运行中', paused: '已暂停', idle: '等待启动', error: '异常' };
 const USAGE = '用法: discussion_service.mjs start|stop|status|open|run|list|add|remove|shortcut|autostart [--config 私有配置.json] [on|off]';
+export const CONNECTION_FIELDS = ['executable', 'ipc_directory'];
+
+/** Read one atomic configuration version for editing and worker acknowledgement. */
+export function configuration_snapshot(path) {
+  const content = readFileSync(path, 'utf8');
+  return { config: JSON.parse(content), version: createHash('sha256').update(content).digest('hex') };
+}
 
 /** Private per-user directory holding the registry, lock, status and log. */
 export function service_home() {
@@ -88,22 +96,32 @@ class RoomWorker {
   }
   /** Open lazily so a busy lock or broken file is retried instead of stopping the service. */
   open() {
-    const config = load_config(this.path);
+    const snapshot = configuration_snapshot(this.path);
+    const config = validate_config(snapshot.config, dirname(this.path));
     const release = acquire_lock(config.directory);
     try { this.store = new DiscussionStore(config.directory); }
     catch (error) { release(); throw error; }
     this.config = config;
     this.release = release;
     this.runner = this.create_runner(config, this.store);
-    Object.assign(this.state, { site: config.site, room: config.room });
+    Object.assign(this.state, { site: config.site, room: config.room, config_version: snapshot.version });
   }
-  /** Pick up corrected control credentials without restarting or replacing a bound conversation. */
+  /** Reload connection paths and credentials while retaining the exact conversation context. */
   refresh_control() {
-    const updated = load_config(this.path);
+    const snapshot = configuration_snapshot(this.path);
+    const updated = validate_config(snapshot.config, dirname(this.path));
     if (updated.site !== this.config.site || updated.room !== this.config.room || updated.directory !== this.config.directory) {
       throw new Error('已登记配置的房间或数据目录发生变化，请移除原登记后重新接入');
     }
+    this.store.context(updated);
     this.config.token = updated.token;
+    for (const [name, profile] of Object.entries(this.config.participants)) {
+      for (const field of CONNECTION_FIELDS) {
+        if (updated.participants[name][field] === undefined) delete profile[field];
+        else profile[field] = updated.participants[name][field];
+      }
+    }
+    this.state.config_version = snapshot.version;
   }
   /** Run one bounded dispatcher iteration and keep the last result for status. */
   async tick() {

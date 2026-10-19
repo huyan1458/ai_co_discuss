@@ -18,7 +18,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from .runtime import (authorize_write, begin_write, configure_runtime, event_action,
                      LIMIT_DEFAULTS, LIMITS_SQL, limit_values, limits_view, require_within_limits,
-                     list_events, runtime_view, token_hash)
+                     list_events, require_control, runtime_view, token_hash)
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB_ROOT = ROOT / "web"
@@ -1054,6 +1054,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = "settings"
         elif route == ["launch"] and method == "POST":
             command = "start"
+        elif route == ["room-config"] and method == "POST":
+            command = "room-config"
         else:
             raise LookupError("本机入口不存在")
         payload = None
@@ -1061,10 +1063,34 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if self.headers.get_content_type() != "application/json":
                 raise ValueError("本机操作须使用 application/json")
             payload = self.read_payload()
-            if command == "start":
+            if command in ("start", "room-config"):
                 payload.pop("access_file", None)
                 payload.update(site=f"http://{host}", entry="web")
+        if command == "room-config" and "participants" in payload:
+            return self.save_local_room_configuration(command, payload)
+        return self.run_local_command(command, payload)
+
+    def save_local_room_configuration(self, command, payload):
+        """Keep pause/revision validation and local file replacement ahead of any runtime write."""
+        with closing(connect_db(self.server.database)) as connection, connection:
+            begin_write(connection)
+            room = require_room(connection, payload.get("room_id", ""))
+            runtime = room["runtime"]
+            if not runtime["protected"]:
+                raise PermissionError("本场配置修正需要原控制凭据")
+            require_control(connection, room["id"], payload.get("token", ""))
+            if (room["archived"] or room["phase"] == "concluded" or runtime["mode"] != "automatic"
+                    or runtime["status"] != "paused" or runtime["revision"] != payload.get("runtime_revision")):
+                raise FileExistsError("房间状态已变化，请暂停后重新读取本场配置")
+            return self.run_local_command(command, payload, configuration_locked=True)
+
+    def run_local_command(self, command, payload, configuration_locked=False):
+        """Run the fixed local Node entrypoint after the same-origin request checks."""
         arguments = ["node", str(ROOT / "runner" / "discussion_launch.mjs"), command]
+        if command in ("start", "room-config"):
+            arguments.append("--browser")
+        if configuration_locked:
+            arguments.append("--configuration-locked")
         if payload is not None:
             arguments.append("--stdin")
         try:
@@ -1076,7 +1102,11 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         except subprocess.TimeoutExpired as error:
             raise ValueError("启动结果未确认，请核对房间状态后沿用原配置重试") from error
         if result.returncode:
-            raise ValueError(result.stderr.strip())
+            try:
+                failure = json.loads(result.stderr.strip())
+            except ValueError:
+                raise ValueError(result.stderr.strip())
+            return self.respond(failure, 400)
         return self.respond(json.loads(result.stdout))
 
     def handle_api(self, connection, parts, params, method):

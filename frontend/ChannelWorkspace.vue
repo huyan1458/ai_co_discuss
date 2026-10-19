@@ -267,6 +267,14 @@ function resize_nav_by_key(event) {
         </div>
         <UTooltip v-if="room" :text="info_label"><UButton icon="i-lucide-panel-right" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-panel-toggle channel-info-button" :aria-label="info_label" :aria-expanded="rail_inline && view.tab === 'discussion' ? show_rail : info_open" @click="toggle_info" /></UTooltip>
       </header>
+      <section v-if="view.launch.available && view.launch.recoveries.length" class="channel-launch-recovery" aria-label="未完成的启动请求">
+        <h2>继续未完成的启动</h2>
+        <article v-for="item in view.launch.recoveries" :key="item.id">
+          <strong>{{ item.title }}</strong><p role="status">{{ item.error || '启动结果尚未确认；原请求已保存在此浏览器中。' }}</p>
+          <div class="button-row"><UButton label="继续本次启动" size="sm" :loading="pending === 'resume_launch'" :disabled="Boolean(pending)" @click="act('resume_launch', item.id)" /><UButton v-if="item.room_id" label="查看原房间" color="neutral" variant="outline" size="sm" @click="act('room', item.room_id)" /><UButton label="移除待办" color="neutral" variant="ghost" size="sm" :disabled="Boolean(pending)" @click="act('discard_launch', item.id)" /></div>
+        </article>
+        <small>移除待办不会删除房间或停止讨论。</small>
+      </section>
       <div v-if="room" class="channel-tabbar">
         <UTabs v-model="selected_tab" :items="tabs" :content="false" variant="pill" color="neutral" size="sm" class="channel-tabs" aria-label="频道视图" />
       </div>

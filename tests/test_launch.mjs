@@ -8,11 +8,73 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { launch_discussion, launch_settings, save_launch_settings } from '../runner/discussion_launch.mjs';
+import { launch_discussion, launch_settings, room_configuration, save_launch_settings } from '../runner/discussion_launch.mjs';
 import { api, DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { DiscussionService, read_registry } from '../runner/discussion_service.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
+
+test('paused room path correction is authenticated, versioned and adopted before an explicit restart', async t => {
+  let service;
+  t.after(() => service?.close());
+  const f = await fixture(t);
+  save_launch_settings(f.home, { participants: f.input.participants });
+  const launched = await launch_discussion(f.home, f.input, f.options);
+  const config = load_config(launched.config_path);
+  const input = { site: f.site, room_id: config.room, token: config.token };
+  const calls = [];
+  service = new DiscussionService(f.home, (current, store) => new DiscussionRunner(current, store,
+    async (profile, binding) => { calls.push({ executable: profile.executable, session_id: binding.session_id });
+      return { status: 'accepted', session_id: 'original-host' }; }));
+  await service.tick();
+  await assert.rejects(room_configuration(f.home, input), /先暂停/);
+  await api(config, '/runtime', { action: 'pause', revision: (await api(config, '/runtime')).revision });
+  await service.tick();
+  await assert.rejects(room_configuration(f.home, { ...input, token: 'wrong-owner' }), /403/);
+  const before = await room_configuration(f.home, input);
+  assert.doesNotMatch(JSON.stringify(before), new RegExp(config.token));
+  const replacement = join(f.directory, 'replacement.exe');
+  writeFileSync(replacement, 'not executed by this test');
+  const corrected = { ...input, version: before.version, runtime_revision: before.runtime_revision,
+    participants: { Codex: { executable: replacement } } };
+  await assert.rejects(room_configuration(f.home, { ...corrected, version: 'stale' }), /已变化/);
+  await assert.rejects(room_configuration(f.home, { ...corrected, participants: { Codex: { session_id: 'other-chat' } } }), /本场修正仅支持/);
+  writeFileSync(join(f.home, 'runner.lock'), String(process.pid));
+  const interval = setInterval(() => service.tick(), 100);
+  let saved;
+  try { saved = await room_configuration(f.home, corrected); }
+  finally { clearInterval(interval); }
+  assert.equal(saved.applied, true);
+  assert.equal((await api(config, '/runtime')).status, 'paused');
+  assert.equal(calls.length, 1, 'saving a path must not dispatch AI');
+  assert.deepEqual(launch_settings(f.home).participants, f.input.participants);
+  const worker = service.workers.get(launched.config_path);
+  assert.equal(worker.store.binding('Codex').session_id, 'original-host');
+  assert.equal(worker.config.participants.Codex.executable, replacement);
+  await launch_discussion(f.home, f.input, f.options);
+  assert.equal(load_config(launched.config_path).participants.Codex.executable, replacement, 'an original launch retry must not undo the correction');
+  const runtime = await api(config, '/runtime');
+  await api(config, '/runtime', { action: 'start', mode: 'automatic', revision: runtime.revision, deadline: Math.floor(Date.now() / 1000) + 600 });
+  await service.tick();
+  assert.deepEqual(calls.at(-1), { executable: replacement, session_id: 'original-host' });
+});
+
+test('local room-config route edits only the authorized paused room and reports an offline worker honestly', async t => {
+  const f = await fixture(t);
+  const launched = await launch_discussion(f.home, f.input, f.options);
+  const config = load_config(launched.config_path);
+  await api(config, '/runtime', { action: 'pause', revision: (await api(config, '/runtime')).revision });
+  const input = { room_id: config.room, token: config.token };
+  const headers = { 'X-CoDiscuss-Local': '1', Origin: f.site };
+  const read = await request(f.site, '/api/local/room-config', input, headers);
+  assert.equal(read.status, 200);
+  assert.equal((await request(f.site, '/api/local/room-config', { ...input, token: 'wrong' }, headers)).status, 400);
+  const saved = await request(f.site, '/api/local/room-config', { ...input, version: read.body.version,
+    runtime_revision: read.body.runtime_revision, participants: { Codex: { executable: process.execPath } } }, headers);
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body.applied, false);
+  assert.equal((await api(config, '/runtime')).status, 'paused');
+});
 
 /** Run the real website in a temporary database; no actual AI software is invoked. */
 async function fixture(t, local_launch = true) {
@@ -20,7 +82,8 @@ async function fixture(t, local_launch = true) {
   const home = join(directory, 'service');
   const script = 'import sys; from backend.server import DiscussionServer,init_database; '
     + 'init_database(sys.argv[1],seed=False); '
-    + `server=DiscussionServer(('127.0.0.1',0),sys.argv[1],local_launch=${local_launch ? 'True' : 'False'}); `
+    + `server=DiscussionServer(('127.0.0.1',0),sys.argv[1],local_launch=${local_launch ? 'True' : 'False'});\n`
+    + `while server.server_port <= 10080:\n server.server_close(); server=DiscussionServer(('127.0.0.1',0),sys.argv[1],local_launch=${local_launch ? 'True' : 'False'})\n`
     + 'print(server.server_port,flush=True); server.serve_forever()';
   const child = spawn(process.platform === 'win32' ? 'python' : 'python3', ['-u', '-c', script, join(directory, 'site.sqlite3')],
     { cwd: ROOT, windowsHide: true, env: { ...process.env, DISCUSS_SERVICE_HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -139,7 +202,7 @@ test('correcting a legacy credential updates its live worker without changing th
   try {
     await service.tick();
     assert.match([...service.workers.values()][0].state.error, /403/);
-    const recovered = await launch_discussion(f.home, input, f.options);
+    const recovered = await launch_discussion(f.home, input, { ...f.options, browser_request: true });
     assert.equal(recovered.room.runtime.generation, first.room.runtime.generation);
     assert.equal(load_config(first.config_path).token, token);
     await service.tick();
@@ -280,6 +343,78 @@ test('ordinary website hosting keeps machine configuration and process launch un
   const result = await request(f.site, '/api/local/settings', undefined, { 'X-CoDiscuss-Local': '1' });
   assert.equal(result.status, 404);
   assert.equal(existsSync(f.home), false);
+});
+
+test('web partial-failure receipts preserve the original room and require its browser credential', async t => {
+  const f = await fixture(t);
+  const input = { ...f.input, token: randomUUID() };
+  const headers = { 'X-CoDiscuss-Local': '1', Origin: f.site };
+  mkdirSync(f.home, { recursive: true });
+  writeFileSync(join(f.home, 'runner.lock'), String(process.pid));
+  const failed = await request(f.site, '/api/local/launch', input, headers);
+  assert.equal(failed.status, 400, JSON.stringify(failed.body));
+  assert.equal(failed.body.launch.stage, 'created');
+  const room_id = failed.body.launch.room_id;
+  assert.ok(room_id);
+  assert.ok(!JSON.stringify(failed.body).includes(input.token));
+  assert.ok(!JSON.stringify(failed.body.launch).includes('config'));
+  assert.equal((await request(f.site, '/api/rooms')).body.rooms.length, 1);
+  assert.equal(read_registry(f.home).length, 0);
+  const journal_path = join(f.home, 'launches', readdirSync(join(f.home, 'launches'))[0], 'launch.json');
+  const original = readFileSync(journal_path, 'utf8');
+  for (const token of [undefined, randomUUID()]) {
+    const denied = await request(f.site, '/api/local/launch', { ...input, token }, headers);
+    assert.equal(denied.status, 400);
+    assert.equal(denied.body.launch.room_id, undefined);
+    assert.equal(readFileSync(journal_path, 'utf8'), original);
+  }
+  writeFileSync(join(f.home, 'status.json'), JSON.stringify({ pid: process.pid, updated_at: Date.now(), ready: true }));
+  const replies = await Promise.all([request(f.site, '/api/local/launch', input, headers), request(f.site, '/api/local/launch', input, headers)]);
+  assert.ok(replies.some(reply => reply.status === 200));
+  const replay = await request(f.site, '/api/local/launch', input, headers);
+  assert.equal(replay.status, 200, JSON.stringify(replay.body));
+  assert.equal(replay.body.room.id, room_id);
+  assert.equal((await request(f.site, '/api/rooms')).body.rooms.length, 1);
+  assert.deepEqual(read_registry(f.home), [replay.body.config_path]);
+  const config = load_config(replay.body.config_path);
+  assert.equal((await api(config, '/events?after=0')).events.length, 1);
+});
+
+test('an interrupted launch cannot start a room paused before service recovery', async t => {
+  const f = await fixture(t);
+  const input = { ...f.input, token: randomUUID() };
+  let failure;
+  await assert.rejects(launch_discussion(f.home, input, { browser_request: true,
+    start_service: async () => { throw new Error('interrupted before start'); } }), error => {
+    failure = error.launch;
+    return error.message === 'interrupted before start';
+  });
+  assert.equal(failure.stage, 'created');
+  const journal = JSON.parse(readFileSync(join(f.home, 'launches', readdirSync(join(f.home, 'launches'))[0], 'launch.json'), 'utf8'));
+  const config = { ...journal.config, room: failure.room_id };
+  const runtime = await api(config, '/runtime');
+  const paused = await api(config, '/runtime', { action: 'pause', revision: runtime.revision });
+  await assert.rejects(launch_discussion(f.home, input, { ...f.options, browser_request: true }), /暂停|状态已变化/);
+  const actual = await api(config, '/runtime');
+  assert.equal(actual.status, 'paused');
+  assert.equal(actual.generation, paused.generation);
+  assert.equal((await api(config, '/events?after=0')).events.length, 0);
+  assert.equal(read_registry(f.home).length, 0);
+});
+
+test('a rejected first launch reports no side effects and a changed retry cannot replace its saved request', async t => {
+  const f = await fixture(t);
+  await assert.rejects(launch_discussion(f.home, { ...f.input, participants: {} }, { browser_request: true }), error => {
+    assert.equal(error.launch.stage, 'not_started');
+    return true;
+  });
+  assert.equal((await request(f.site, '/api/rooms')).body.rooms.length, 0);
+  const input = { ...f.input, token: randomUUID() };
+  await assert.rejects(launch_discussion(f.home, input, { start_service: async () => { throw new Error('offline'); } }), /offline/);
+  await assert.rejects(launch_discussion(f.home, { ...input, room: { ...input.room, title: 'changed' } }, { ...f.options, browser_request: true }), /原请求不同/);
+  const recovered = await launch_discussion(f.home, input, { ...f.options, browser_request: true });
+  assert.equal(recovered.room.title, f.input.room.title);
+  assert.equal((await request(f.site, '/api/rooms')).body.rooms.length, 1);
 });
 
 /** Exit a separate launcher at a real persistence or HTTP boundary, without a model process. */

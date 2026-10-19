@@ -48,7 +48,12 @@ test('local lifecycle reuses processes and preserves data outside the package', 
       'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("CREATE TABLE install_marker(value TEXT)"); c.execute("INSERT INTO install_marker VALUES (\'kept\')"); c.commit()',
       first.database], { encoding: 'utf8', env: state.env });
     assert.equal(marker.status, 0, marker.stderr);
-    assert.equal(state.command(['local', 'stop']).running, false);
+    const stopped = state.command(['local', 'stop']);
+    assert.equal(stopped.running, false);
+    const offline = state.command(['local', 'status']);
+    assert.equal(offline.ready, false);
+    assert.equal(offline.website_running, false);
+    assert.equal(offline.website_pid, 0);
     assert.equal(state.command(['service', 'status', '--json']).running, false);
     const second = state.command(['local', 'start']);
     const data = spawnSync(state.python, ['-c',

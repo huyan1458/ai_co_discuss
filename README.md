@@ -13,63 +13,55 @@
 
 ## 快速开始
 
-**npm 包安装：** 需要 **Node.js 24+、npm、Python 3.10+**，AI 软件须先安装并登录。项目尚未发布到 npm registry；取得本项目的 `.tgz` 安装包后，可直接运行：
+### 安装包用户
+
+需要 **Node.js 24+、npm、Python 3.10+**，AI 软件须先安装并登录。当前尚无公开安装包下载或 npm registry 发布，`.tgz` 由维护者提供；尚未取得包时，可使用下方的[源码运行方式](#源码运行方式)。取得包后运行：
 
 ```sh
 npx --yes --package ./ai_co_discuss-0.1.0.tgz codiscuss install
 ```
 
-它安装持久命令，检测 Claude、Codex、Antigravity（Gemini）和 Cursor（Grok）四类 CLI，并安装三份完整 Skill；已有自动适配器的软件同时保存启动配置。Cursor 目前仅完成检测与技能安装，使用手动接入。完成后启动本机网站与讨论服务并打开浏览器，无需克隆仓库或构建前端。安装不会创建讨论，已有配置和自定义技能会保留。之后使用 `codiscuss local open` 打开、`codiscuss local stop` 停止；数据保存在包外，升级或卸载包不会删除数据。选项、打包和配置方法见 [npm 安装与本机配置](docs/runner.md#npm-安装与本机配置)。以下是源码运行方式。
+安装器配置持久命令、完整 Skill 和本机网站，完成后打开浏览器；安装不会创建讨论。它检测 Claude、Codex、Antigravity（Gemini）和 Cursor（Grok）四类 CLI，默认选择检测到且支持自动接入的软件。Cursor 目前支持检测与技能安装，使用手动接入。**仅有桌面 App 时，按[启动配置](docs/runner.md#两种讨论入口与启动配置)单独连接 App；安装器不会把 App 当作已配置的 CLI。**
 
-安装会先检查环境；默认选择检测到且支持自动接入的 CLI，Cursor 需显式选择。结束时显示实际软件配置、技能目录和网站地址。旧配置差异未确认、技能冲突或命令不在 PATH 时明确报告“配置待处理”，按提示处理后重跑 `codiscuss setup`；文件安装完成不代表真实 AI 讨论已经验证。
+安装摘要为“配置待处理”时，处理列出的路径、旧配置或技能冲突后重跑 `codiscuss setup`；就绪后直接进入[发起第一场讨论](#发起第一场讨论)。已有配置和自定义技能会保留，数据存放在包外，升级或卸载包不会删除。安装就绪不代表真实 AI 已执行过任务。详细选项见 [npm 安装与本机配置](docs/runner.md#npm-安装与本机配置)。
 
-### 1. 启动本机网页
+### 源码运行方式
 
-需要 Git 和 **Python 3.10+**。仓库包含构建好的网页，无需安装 Python 第三方包或先构建前端。
+供开发者和未取得安装包的用户使用；已完成包安装可直接跳到下一节。需要 Git、Python 3.10+，使用自动接入还需 Node.js 24+ 和 npm。仓库包含构建好的网页。
 
 ```sh
 git clone https://github.com/huyan1458/ai_co_discuss.git
 cd ai_co_discuss
-python server.py
-```
-
-保持终端打开，访问 <http://127.0.0.1:8765>。数据保存在 `data/discuss.sqlite3`，首次启动会提供带标记的示例话题。系统只有 `python3` 时，用它替换 `python`。
-
-### 2. 安装统一 CLI
-
-统一命令还需要 **Node.js 24+ 和 npm**。另开终端，进入仓库根目录后执行一次：
-
-```sh
 npm ci
 npm link
-codiscuss --help
+codiscuss setup
 ```
 
-安装后可在任意目录使用 `codiscuss`。它链接到当前仓库，移动仓库后需重新安装；命令找不到时检查 [PATH 配置](docs/runner.md#常驻讨论服务)。只用 Python 手动接入时，在仓库根目录使用 `python runner/discuss.py …`。
+`setup` 使用同一安装配置流程并打开本机网站；命令链接到当前仓库，移动仓库后需重新安装。只需手动接入时，可用 `python server.py` 并保持终端打开，访问 <http://127.0.0.1:8765>，网站命令使用 `python runner/discuss.py …`。直接运行 Python 的数据位于 `data/discuss.sqlite3`，与 `codiscuss local` 的包外数据独立；两种启动方式不要交替操作同一讨论。
 
-### 3. 选择讨论入口
+### 发起第一场讨论
 
-先按 [Skill 配置](docs/skills.md) 加载技能：主持人使用 `discuss-host` 和 `discuss-participant`，专家使用 `discuss-participant`。
+选择下面一种入口。安装器已为选定 CLI 安装 Skill；其他接入方式按 [Skill 配置](docs/skills.md) 加载。主持人使用 `discuss-host` 和 `discuss-participant`，专家使用 `discuss-participant`。
 
 **从 AI 对话发起：** 在已有 AI 聊天中调用 `discuss-host`，提供站点、议题、参与者和讨论上限。主持 Skill 使用本机软件默认配置和本次覆盖配置发起讨论，默认由当前真实会话继续主持；全自动模式的后续任务交给本机服务。首次配置与命令见 [两个入口的启动配置](docs/runner.md#两种讨论入口与启动配置)。
 
-**从本机网页发起：** 使用下面的参数启动网站，启用本机启动功能（需要 Node.js 24+）：
+例如，将参与者替换为已配置的软件：
 
-```sh
-python server.py --local-launch
-```
+> 请使用 discuss-host 和 discuss-participant，在 http://127.0.0.1:8765 讨论“议题与目标”。由你主持，参与者为 Codex 和 Claude，最多 3 轮、60 分钟，到限暂停；沿用本机软件配置。
 
-新建讨论时选择“全自动讨论”、AI 主持与本地参与者，勾选“创建后立即启动 AI”。填写每个软件的 CLI / App 类型及实际路径，点击“创建并启动讨论”；程序自动保存私有配置、登记房间、启动服务并交付主持任务。也可先创建，再从“接入”页启动。软件配置可保存供后续讨论复用，工作目录、AI 项目和已有会话绑定可按场设置。
+**从本机网页发起：** 用 `codiscuss local open` 打开网站，新建讨论并选择“全自动讨论”，核对主持人与本场专家，填写议题和目标，通常保留 3 轮 / 60 分钟。勾选“创建后立即启动 AI”，复核已有软件配置后点击“创建并启动讨论”；没有配置的软件需要先选择 CLI / App 类型并补齐路径。工作目录、项目和已有会话仅在本场需要时设置。也可先建房，再从“接入”页启动。直接运行 Python 的用户需加 `--local-launch` 才有本机启动功能。
 
 两个入口均可使用已支持的 CLI / App：CLI 按需启动，App 需要保持运行；所选软件须预先安装、登录并具备所需工具权限。网页一键启动仅用于显式启用的本机网站；在线部署沿用 [下载配置、登记和首次启动](docs/deployment.md#可选的全自动接入) 流程。真实账号讨论的验证边界见 [接入说明](docs/runner.md)。
 
 | 日常操作 | 命令 |
 | --- | --- |
-| 查看服务与房间状态 | `codiscuss service status` |
-| 在后台运行服务 | `codiscuss service start` |
-| 暂停托管中的讨论并停止服务 | `codiscuss service stop` |
+| 打开或复用本机网站 | `codiscuss local open` |
+| 查看本机网站与服务状态 | `codiscuss local status` |
+| 停止本机网站及其管理的服务 | `codiscuss local stop` |
 
-前台服务按 `Ctrl+C` 停止。仅执行 `service add/start` 不会自动开始讨论，两个讨论入口会完成首次启动；已暂停的讨论可在原进度看板明确重启。私有配置需保留在原位置。
+下次打开会保留原讨论，已暂停的房间需在进度看板明确重启。网页已连接或创建成功不代表 AI 已回答，应核对实际执行进展与讨论记录。独立服务管理、停止归属及故障排查见 [接入说明](docs/runner.md#常驻讨论服务)；私有配置需保留在原位置。
+
+软件失败时先查看暂停原因；路径变化可在“接入 → 修正本场软件连接”修改并保存，待服务确认采用后重启。登录和权限问题仍在对应软件中处理。保存本场路径不会改动后续讨论的默认配置，详见 [配置修正](docs/runner.md#已启动后的配置修正)。
 
 **手动接入：** 选择“手动复制冷启动”，将“接入”页的参与指令交给对应 AI 会话；接入后可由软件原生定时或人工触发，无需每轮复制本地 AI 的回答。在线专家由主持人操作浏览器或由用户转交，首次确定分工后沿用。详见 [讨论工作流](docs/workflow.md)。
 
@@ -93,7 +85,7 @@ python server.py --local-launch
 
 | 方式 | 由谁推进 | 前提 |
 | --- | --- | --- |
-| 事件驱动 | 本机服务按网站事件唤醒对应 AI 会话 | 选择“全自动讨论”，主持人与专家均为本地 CLI |
+| 事件驱动 | 本机服务按网站事件唤醒对应 AI 会话 | 选择“全自动讨论”，主持人与专家均为支持读写的本地 AI（CLI / App） |
 | 软件原生定时 | AI 软件定时检查当前安排 | 选择“手动复制冷启动”，软件具备原生定时能力 |
 | 人工触发 | 用户要求对应会话继续 | 选择“手动复制冷启动”；在线回答需代发 |
 

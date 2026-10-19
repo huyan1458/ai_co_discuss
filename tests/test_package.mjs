@@ -92,9 +92,10 @@ async function verify_installed_launches(package_path, execute, env, site) {
   const entered = installed_command(execute, cli, ['--site', site, 'execution', 'enter', task.room, String(task.event_id), '--access-file', task.access_file]);
   assert.equal(entered.data.status, 'started');
   installed_command(execute, cli, ['--site', site, 'execution', 'fail', task.room, String(task.event_id), '--access-file', task.access_file, '--reason', 'conversation-integration-complete']);
+  const web_token = randomUUID();
   const response = await fetch(`${site}/api/local/launch`, { method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-CoDiscuss-Local': '1', Origin: site },
-    body: JSON.stringify({ cwd: home, room: { ...input.room, submission_id: randomUUID() } }) });
+    body: JSON.stringify({ cwd: home, token: web_token, room: { ...input.room, submission_id: randomUUID() } }) });
   const web = await response.json();
   assert.equal(response.status, 200, JSON.stringify(web));
   let room;
@@ -105,6 +106,7 @@ async function verify_installed_launches(package_path, execute, env, site) {
   }
   assert.equal(room.runtime.status, 'paused', 'the stub must enter and finish its delivered task');
   const config = JSON.parse(readFileSync(web.config_path, 'utf8'));
+  assert.equal(config.token, web_token);
   const tasks = readdirSync(config.directory).filter(name => name.endsWith('.task.json'));
   assert.equal(tasks.length, 1);
   const delivered = JSON.parse(readFileSync(join(config.directory, tasks[0]), 'utf8'));

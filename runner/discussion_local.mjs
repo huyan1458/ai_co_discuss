@@ -24,7 +24,8 @@ export function local_status(home = service_home()) {
   const status = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
   const website_running = Boolean(pid && pid === status.pid && status.ready);
   const service = service_pid(home);
-  return { ...status, website_running, running: website_running && service_ready(home, service), service_pid: service,
+  return { ...status, ready: website_running, website_pid: website_running ? status.website_pid : 0,
+    website_running, running: website_running && service_ready(home, service), service_pid: service,
     service_error: service ? undefined : status.service_error, pid, home };
 }
 

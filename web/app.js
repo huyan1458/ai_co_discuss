@@ -10,6 +10,7 @@ const DIRECTORY_DRAG_THRESHOLD = 4;
 const DIRECTORY_DRAG_OFFSET = 12;
 const THEME_STORAGE_KEY = "ai-codiscuss-theme";
 const DIRECTORY_SORT_KEY = "ai-codiscuss-directory-sort";
+const LAUNCH_PENDING_PREFIX = "discuss-launch:";
 const THEMES = ["millennium", "channel", "channel-light"];
 const SOURCE_LABELS = { demo: "示例", user: "本人发言", proxy: "用户代发", cli: "CLI 发言", url: "历史 URL 发言", host_proxy: "主持人代发" };
 const PHASE_LABELS = { preparing: "准备中", initial: "独立观点", discussing: "深入讨论", reviewing: "结论复核", paused: "已暂停", concluded: "已收束" };
@@ -27,7 +28,8 @@ const IDENTITIES = {
 const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false,
   archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
   reply_to: null, turn_reply_to: null, tab: "topic", refresh_version: 0, context_dirty: false, topic_dirty: false,
-  snapshot_id: 0, pending_submission: null, pending_turn: null, pending_room: null, toast_timer: null };
+  snapshot_id: 0, pending_submission: null, pending_turn: null, pending_room: null, toast_timer: null,
+  creation_mode: "manual", creation_drafts: {} };
 state.messages = [];
 state.message_history = null;
 state.connected = false;
@@ -37,7 +39,7 @@ state.directory_error = "";
 state.directory_pending = new Map();
 state.directory_version = 0;
 state.navigation_version = 0;
-state.launch = { available: false, profiles: {}, workspace: {}, create: false, error: "", notice: "" };
+state.launch = { available: false, profiles: {}, workspace: {}, create: false, error: "", notice: "", recoveries: [] };
 const LAUNCH_CLIENTS = { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }],
   Claude: [{ value: "claude", label: "Claude Code CLI" }],
   Gemini: [{ value: "antigravity_cli", label: "Antigravity CLI" }, { value: "antigravity", label: "Antigravity App" }] };
@@ -254,7 +256,7 @@ async function update_directory(change) {
     return saved;
   } catch (error) {
     change.rollback();
-    state.directory_error = `${change.label}失败，已恢复原状态：${error.message}`;
+    state.directory_error = change.error_message?.(error) || `${change.label}失败，已恢复原状态：${error.message}`;
     throw error;
   } finally {
     state.directory_pending.delete(change.key);
@@ -562,6 +564,18 @@ function progress_speaker(room) {
   return room.rounds?.length || room.answered_turns || turn?.status === "answered" ? "等待主持人安排下一步" : "尚未开始发言";
 }
 
+/** Explain an empty transcript using the room's actual progression state. */
+function empty_discussion_message(room) {
+  if (room.archived || room.phase === 'concluded') return '讨论已结束，尚未产生发言记录。';
+  if (room.phase === 'paused' || room.runtime?.status === 'paused') return '讨论已暂停。核对暂停原因后，可在进度看板重启或结束。';
+  if (room.runtime?.mode === 'automatic') {
+    if (room.runtime.status === 'ready') return '讨论尚未启动。请在接入页核对软件配置并启动。';
+    if (room.runtime.status === 'stopped') return '自动推进已停止，尚未产生发言记录。';
+    return room.runtime.latest_execution?.status === 'started' ? 'AI 已进入执行，等待第一条讨论记录。' : '自动推进已启用，等待 AI 执行；可在接入页核对实际进展。';
+  }
+  return '这是讨论的开始。发送问题，或从接入页邀请参与者。';
+}
+
 /** Keep a saved brief's evidence cutoff visible next to the live assignment status. */
 function brief_meta(room) {
   const brief = room.host_brief;
@@ -618,7 +632,7 @@ function render_messages(result) {
   const is_near_bottom = container.scrollHeight - container.clientHeight - scroll_position < SCROLL_BOTTOM_THRESHOLD;
   state.pages = result.pages;
   container.innerHTML = state.messages.length ? state.messages.map(message_markup).join("") :
-    `<div class="empty-messages"><strong>${state.query || state.mention_only ? "没有找到匹配的发言" : "讨论从第一句话开始"}</strong><p>${state.query || state.mention_only ? "换个关键词，或清除筛选后查看完整记录。" : "提出你的问题，邀请不同的观点。"}</p></div>`;
+    `<div class="empty-messages"><strong>${state.query || state.mention_only ? "没有找到匹配的发言" : "暂无讨论记录"}</strong><p>${state.query || state.mention_only ? "换个关键词，或清除筛选后查看完整记录。" : empty_discussion_message(state.room)}</p></div>`;
   for (const receipt of container.querySelectorAll(".message-receipt")) receipt.open = open_receipts.includes(receipt.dataset.receiptId);
   for (const answer of container.querySelectorAll(".message-answer")) answer.open = open_answers.includes(answer.dataset.answerId);
   container.scrollTop = is_near_bottom ? container.scrollHeight : scroll_position;
@@ -689,6 +703,8 @@ async function select_room(room_id) {
   state.topic_dirty = false;
   state.pending_turn = null;
   state.pending_submission = null;
+  state.launch.repair = null;
+  state.launch.repair_error = '';
   state.messages = [];
   state.message_history = null;
   element("message-input").value = "";
@@ -790,6 +806,7 @@ async function show_message(message_id) {
 
 /** Render reading links without creating or fetching any publishing links. */
 function render_access() {
+  render_room_configuration();
   const base = `${location.origin}/r/${state.room.id}`;
   const runtime = state.room.runtime || { mode: "manual", status: "ready" };
   element("runtime-status").textContent = runtime_label(runtime);
@@ -851,6 +868,16 @@ function room_creation_payload(folder_id) {
     runtime_mode: element("new-room-mode").value, limits: read_limits("new-room"), folder_id };
 }
 
+/** Retain an unresolved creation instead of silently replacing it with a new request. */
+function prepare_room_request(signature) {
+  if (state.pending_room?.signature === signature) return state.pending_room;
+  if (state.pending_room && localStorage.getItem(LAUNCH_PENDING_PREFIX + state.pending_room.id)) {
+    throw new Error("上次启动结果尚未确认，请先继续原请求；如要放弃重试，请移除对应待办。原房间不会被删除。");
+  }
+  state.pending_room = { signature, id: new_submission_id(), token: crypto.randomUUID() };
+  return state.pending_room;
+}
+
 /** Show creation progress locally without blocking or later hijacking navigation. */
 async function submit_room(event, folder_id = null) {
   event.preventDefault();
@@ -859,17 +886,19 @@ async function submit_room(event, folder_id = null) {
   const launching = state.launch.create && payload.runtime_mode === "automatic";
   const launch_draft = launching ? launch_options() : null;
   const signature = JSON.stringify({ payload, launch_draft });
-  if (state.pending_room?.signature !== signature) state.pending_room = { signature, id: new_submission_id(), token: crypto.randomUUID() };
-  const token = payload.runtime_mode === "automatic" ? state.pending_room.token : undefined;
   const navigation = state.navigation_version;
   if (!launching) element("room-dialog").close();
   state.launch.error = "";
   let room;
-  try { room = await update_directory({ key: "create-room", label: `「${payload.title}」创建`,
+  try {
+    const pending = prepare_room_request(signature);
+    const token = payload.runtime_mode === "automatic" ? pending.token : undefined;
+    room = await update_directory({ key: "create-room", label: `「${payload.title}」创建`,
+    error_message: launching ? error => `「${payload.title}」${error.message}` : null,
     apply: () => { state.creating_room = payload; }, rollback: () => { state.creating_room = null; },
     save: async () => launching
-      ? (await local_launch_request("launch", { ...launch_draft, room: { ...payload, submission_id: state.pending_room.id }, token })).room
-      : request_json("/api/rooms", { ...payload, submission_id: state.pending_room.id }, token),
+      ? (await submit_local_launch({ ...launch_draft, room: { ...payload, submission_id: pending.id }, token }, payload.title)).room
+      : request_json("/api/rooms", { ...payload, submission_id: pending.id }, token),
     commit: saved => {
       if (token) localStorage.setItem(`discuss-access:${saved.id}`, token);
       state.creating_room = null;
@@ -882,6 +911,7 @@ async function submit_room(event, folder_id = null) {
   state.pending_room = null;
   if (JSON.stringify({ payload: room_creation_payload(folder_id), launch_draft: launching ? launch_options() : null }) === signature) {
     element("room-form").reset();
+    reset_creation_mode();
     render_expert_inputs("new-expert-modes", default_experts());
     state.launch.create = false;
     if (launching) element("room-dialog").close();
@@ -896,8 +926,108 @@ async function local_launch_request(action, payload) {
     headers: { "Content-Type": "application/json", "X-CoDiscuss-Local": "1" },
     body: payload === undefined ? undefined : JSON.stringify(payload) });
   const result = await response.json();
-  if (!response.ok) throw new Error(result.error || "本机启动请求失败");
+  if (!response.ok) throw Object.assign(new Error(result.error || "本机启动请求失败"), { launch: result.launch });
   return result;
+}
+
+/** Read this browser's submitted requests; credentials never enter the presentation snapshot. */
+function stored_launches() {
+  const records = [];
+  for (let index = 0; index < localStorage.length; index++) {
+    const key = localStorage.key(index);
+    if (!key?.startsWith(LAUNCH_PENDING_PREFIX)) continue;
+    try {
+      const record = JSON.parse(localStorage.getItem(key));
+      if (record?.input?.token && record.id && key === LAUNCH_PENDING_PREFIX + record.id) records.push(record);
+    } catch { /* An unreadable local draft must not block other discussions. */ }
+  }
+  return records;
+}
+
+/** Share only recovery labels and safe room references with both renderers. */
+function refresh_launch_recoveries() {
+  state.launch.recoveries = stored_launches().map(({ id, title, room_id, error }) => ({ id, title, room_id, error }));
+  const container = element("launch-recoveries");
+  if (container) {
+    container.hidden = !state.launch.available || !state.launch.recoveries.length;
+    container.innerHTML = state.launch.recoveries.map(item => `<section><strong>${escape_html(item.title)}</strong>
+      <p>${escape_html(item.error || "启动结果尚未确认；原请求已保存在此浏览器中。")}</p><div class="topic-actions">
+      <button class="button primary" data-launch-retry="${escape_html(item.id)}">继续本次启动</button>
+      ${item.room_id ? `<button class="button secondary" data-launch-room="${escape_html(item.room_id)}">查看原房间</button>` : ""}
+      <button class="button secondary" data-launch-discard="${escape_html(item.id)}">移除待办</button></div></section>`).join("")
+      + "<p>移除待办不会删除房间或停止讨论。</p>";
+  }
+  publish_view();
+}
+
+/** Persist the complete submitted input before any request can create or start a room. */
+async function submit_local_launch(input, title) {
+  const id = input.room?.submission_id || `room-${input.room_id}`;
+  const key = LAUNCH_PENDING_PREFIX + id;
+  const previous = localStorage.getItem(key);
+  const record = previous ? JSON.parse(previous) : { id, title, input, room_id: input.room_id };
+  if (previous && JSON.stringify(record.input) !== JSON.stringify(input)) throw new Error("此房间有未完成的原启动请求，请先继续该请求，不要替换配置");
+  record.attempt_id = crypto.randomUUID();
+  try { localStorage.setItem(key, JSON.stringify(record)); }
+  catch { throw new Error("此浏览器无法保存启动请求，请启用本地存储后重试；尚未发送本次启动"); }
+  refresh_launch_recoveries();
+  try {
+    const result = await local_launch_request("launch", record.input);
+    localStorage.setItem(`discuss-access:${result.room.id}`, record.input.token);
+    localStorage.removeItem(key);
+    refresh_launch_recoveries();
+    return result;
+  } catch (error) {
+    const stage = error.launch?.stage;
+    const prefix = stage === "not_started" ? (previous ? "本次请求未执行，原启动结果仍待确认：" : "本次请求未执行：") : stage === "created" ? "房间已创建，启动结果待确认："
+      : stage === "started" ? "自动推进已启用，接入结果待确认：" : "启动结果尚未确认，请沿用原请求重试：";
+    error.message = prefix + error.message;
+    const latest = localStorage.getItem(key);
+    const owns_attempt = latest && JSON.parse(latest).attempt_id === record.attempt_id;
+    if (owns_attempt && stage === "not_started" && !previous) localStorage.removeItem(key);
+    else if (owns_attempt) {
+      record.error = error.message;
+      record.room_id = error.launch?.room_id || record.room_id;
+      if (record.room_id) localStorage.setItem(`discuss-access:${record.room_id}`, record.input.token);
+      localStorage.setItem(key, JSON.stringify(record));
+    }
+    refresh_launch_recoveries();
+    throw error;
+  }
+}
+
+/** Explicitly replay one saved request without adopting newly edited client defaults. */
+async function resume_launch(id) {
+  const record = stored_launches().find(item => item.id === id);
+  if (!record || state.directory_pending.has(`launch-${id}`)) return;
+  state.directory_pending.set(`launch-${id}`, true);
+  state.launch.error = "";
+  publish_view();
+  try {
+    const result = await submit_local_launch(record.input, record.title);
+    if (state.pending_room?.id === id && state.pending_room.signature === JSON.stringify({
+      payload: room_creation_payload(record.input.room?.folder_id ?? null), launch_draft: launch_options() })) {
+      element("room-form").reset();
+      reset_creation_mode();
+      render_expert_inputs("new-expert-modes", default_experts());
+      state.launch.create = false;
+      element("room-dialog").close();
+    }
+    clear_launch_overrides(record.input);
+    state.launch.notice = result.status === "running" ? "已核对原启动，实际执行请查看进度回执" : "已核对原房间状态；不会自动恢复已暂停或结束的讨论";
+    state.directory_error = "";
+    if (state.pending_room?.id === id) state.pending_room = null;
+    await select_room(result.room.id);
+  } catch (error) { state.launch.error = error.message; }
+  finally { state.directory_pending.delete(`launch-${id}`); render_launch_settings(); publish_view(); }
+}
+
+/** Remove only a browser retry intent, leaving remote rooms and running work untouched. */
+function discard_launch(id) {
+  localStorage.removeItem(LAUNCH_PENDING_PREFIX + id);
+  if (state.pending_room?.id === id) state.pending_room = null;
+  state.launch.error = "";
+  refresh_launch_recoveries();
 }
 
 /** Load reusable client settings once; this neither registers rooms nor starts AI. */
@@ -907,6 +1037,7 @@ async function load_launch_settings() {
     const settings = await local_launch_request("settings");
     Object.assign(state.launch, { available: true, profiles: settings.participants, error: "" });
   } catch (error) { state.launch.error = error.message; }
+  refresh_launch_recoveries();
   render_launch_settings();
   publish_view();
 }
@@ -991,13 +1122,13 @@ async function save_launch_defaults() {
 /** Start an existing room with local client configuration, preserving browser ownership credentials. */
 async function launch_current_room() {
   const room_id = state.room.id;
-  const key = `discuss-access:${room_id}`;
-  let token = localStorage.getItem(key);
-  if (!token && state.room.runtime?.protected) throw new Error("此浏览器缺少房间凭据，请使用原浏览器或原接入配置");
-  if (!token) { token = crypto.randomUUID(); localStorage.setItem(key, token); }
-  const draft = launch_options();
   try {
-    const result = await local_launch_request("launch", { ...draft, room_id, token });
+    const key = `discuss-access:${room_id}`;
+    let token = localStorage.getItem(key);
+    if (!token && state.room.runtime?.protected) throw new Error("此浏览器缺少房间凭据，请使用原浏览器或原接入配置");
+    if (!token) { token = crypto.randomUUID(); localStorage.setItem(key, token); }
+    const draft = launch_options();
+    const result = await submit_local_launch({ ...draft, room_id, token }, state.room.title || "已有讨论");
     clear_launch_overrides(draft);
     state.launch.notice = result.status === "running" ? "启动已提交，实际执行请查看进度回执" : "本次启动已有记录，请查看房间状态";
     state.launch.error = "";
@@ -1005,6 +1136,74 @@ async function launch_current_room() {
   } catch (error) { state.launch.error = error.message; }
   render_launch_settings();
   publish_view();
+}
+
+/** Load the selected paused room's original connection paths after proving browser ownership. */
+async function load_room_configuration() {
+  const room_id = state.room.id;
+  state.launch.repair_error = '';
+  try {
+    const token = localStorage.getItem(`discuss-access:${room_id}`);
+    if (!token) throw new Error('此浏览器缺少房间凭据，请使用原浏览器或原接入配置');
+    const result = await local_launch_request('room-config', { room_id, token });
+    if (state.room?.id === room_id) state.launch.repair = { ...result, notice: '' };
+  } catch (error) { if (state.room?.id === room_id) state.launch.repair_error = error.message; }
+  render_room_configuration();
+  publish_view();
+}
+
+/** Edit only the connection field displayed for this room, separately from machine defaults. */
+function write_room_connection(name, value) {
+  const repair = state.launch.repair;
+  if (repair?.room_id !== state.room?.id || !repair.participants[name]) return;
+  const profile = repair.participants[name];
+  profile[profile.adapter === 'antigravity' ? 'ipc_directory' : 'executable'] = value;
+  repair.notice = '';
+  publish_view();
+}
+
+/** Save a version-checked path correction without automatically restarting the discussion. */
+async function save_room_configuration() {
+  const repair = state.launch.repair;
+  if (repair?.room_id !== state.room?.id) return;
+  const participants = Object.fromEntries(Object.entries(repair.participants).map(([name, profile]) => {
+    const field = profile.adapter === 'antigravity' ? 'ipc_directory' : 'executable';
+    return [name, { [field]: profile[field] }];
+  }));
+  state.launch.repair_error = '';
+  try {
+    const token = localStorage.getItem(`discuss-access:${repair.room_id}`);
+    if (!token) throw new Error('此浏览器缺少房间凭据，请重新核对');
+    const result = await local_launch_request('room-config', { room_id: repair.room_id, token,
+      version: repair.version, runtime_revision: repair.runtime_revision, participants });
+    if (state.room?.id === repair.room_id) {
+      state.launch.repair = { ...result, notice: result.applied ? '本场路径已保存，接入服务已采用；可在进度看板重启。'
+        : '本场路径已保存；服务尚未确认采用，请先核对本机服务再重启。' };
+      await refresh_room();
+    }
+  } catch (error) { if (state.room?.id === repair.room_id) state.launch.repair_error = error.message; }
+  render_room_configuration();
+  publish_view();
+}
+
+/** Keep the classic theme's paused-room correction controls in sync with the shared draft. */
+function render_room_configuration() {
+  const panel = element('local-room-configuration');
+  if (!panel) return;
+  const runtime = state.room?.runtime;
+  panel.hidden = !state.launch.available || runtime?.mode !== 'automatic' || runtime.status !== 'paused' || state.room?.archived;
+  element('local-launch-settings').parentElement.hidden = !state.launch.available || runtime?.mode !== 'automatic' || runtime.status !== 'ready';
+  const repair = state.launch.repair?.room_id === state.room?.id ? state.launch.repair : null;
+  const fields = element('local-room-configuration-fields');
+  if (fields.dataset.roomId !== state.room?.id || !fields.contains(document.activeElement)) {
+    fields.innerHTML = repair ? Object.entries(repair.participants).map(([name, profile]) => {
+      const field = profile.adapter === 'antigravity' ? 'ipc_directory' : 'executable';
+      return `<label>${escape_html(name)} · ${field === 'ipc_directory' ? 'Sidecar 目录' : '软件路径'}<input data-room-connection="${escape_html(name)}" value="${escape_html(profile[field] || '')}"></label>`;
+    }).join('') : '';
+    fields.dataset.roomId = state.room?.id || '';
+  }
+  element('local-room-configuration-save').hidden = !repair;
+  element('local-room-configuration-notice').textContent = state.launch.repair_error || repair?.notice || '';
 }
 
 /** Render the same local setup controls in the classic theme. */
@@ -1032,6 +1231,7 @@ function render_launch_settings() {
     if (element(id)) element(id).textContent = state.launch.error || state.launch.notice;
   }
   if (element("local-launch-start")) element("local-launch-start").disabled = !state.launch.available || state.room?.runtime?.mode !== "automatic" || state.room?.runtime?.status !== "ready";
+  render_room_configuration();
 }
 
 /** Persist a manually edited summary with the snapshot it was based on. */
@@ -1175,6 +1375,30 @@ function export_runtime() {
 /** Supply participation defaults for a new topic. */
 function default_experts() {
   return Object.fromEntries(Object.keys(IDENTITIES).filter((name) => name !== "用户").map((name) => [name, name === "Codex" ? "cli" : "online"]));
+}
+
+/** Start automatic drafts with configured software, preserving each mode's explicit choices. */
+function update_creation_mode() {
+  const mode = element("new-room-mode").value;
+  if (mode === state.creation_mode) return;
+  state.creation_drafts[state.creation_mode] = { host: element("new-room-host").value,
+    experts: read_expert_inputs("new-expert-modes") };
+  const names = Object.entries(state.launch.profiles).filter(([name, profile]) =>
+    LAUNCH_CLIENTS[name]?.some(client => client.value === profile.adapter)
+    && (profile.adapter === "antigravity" ? profile.ipc_directory : profile.executable)).map(([name]) => name);
+  const draft = state.creation_drafts[mode] || { host: names[0] || "", experts: Object.fromEntries(names.map(name => [name, "cli"])) };
+  element("new-room-host").value = draft.host;
+  render_expert_inputs("new-expert-modes", draft.experts);
+  state.creation_mode = mode;
+  element("new-room-limit-execution_minutes")?.closest("label")?.toggleAttribute("hidden", mode !== "automatic");
+  publish_view();
+}
+
+/** A completed creation starts the next form with fresh mode defaults. */
+function reset_creation_mode() {
+  state.creation_mode = "manual";
+  state.creation_drafts = {};
+  element("new-room-limit-execution_minutes")?.closest("label")?.setAttribute("hidden", "");
 }
 
 /** Render independently configurable expert modes without changing identity names. */
@@ -1348,6 +1572,8 @@ function bind_host_controls() {
     "runtime-export": export_runtime,
     "local-launch-save": save_launch_defaults, "new-local-launch-save": save_launch_defaults,
     "local-launch-start": launch_current_room,
+    "local-room-configuration-load": load_room_configuration, "local-room-configuration-save": save_room_configuration,
+    "local-room-configuration-restart": restart_discussion,
     "runtime-pause": pause_runtime, "check-discussion-limits": check_limits,
     "take-floor": () => change_floor("take"), "return-floor": () => change_floor("return"),
     "copy-turn": copy_turn, "confirm-notified": () => change_turn_status("notified"), "cancel-turn": () => change_turn_status("cancelled"),
@@ -1626,11 +1852,21 @@ async function initialize() {
   bind_directory_controls();
   bind_controls();
   bind_host_controls();
+  reset_creation_mode();
+  element("new-room-mode").addEventListener("change", update_creation_mode);
   document.addEventListener("input", event => {
+    if (event.target.dataset?.roomConnection) write_room_connection(event.target.dataset.roomConnection, event.target.value);
     const { launchName: name, launchField: field } = event.target.dataset || {};
     if (name) write_launch_field(name, field, event.target.type === "checkbox" ? event.target.checked : event.target.value);
   });
   load_launch_settings();
+  window.addEventListener("storage", event => { if (!event.key || event.key.startsWith(LAUNCH_PENDING_PREFIX)) refresh_launch_recoveries(); });
+  element("launch-recoveries").addEventListener("click", event => {
+    const button = event.target.closest("button");
+    if (button?.dataset.launchRetry) run_action(() => resume_launch(button.dataset.launchRetry));
+    if (button?.dataset.launchDiscard) discard_launch(button.dataset.launchDiscard);
+    if (button?.dataset.launchRoom) run_action(() => select_room(button.dataset.launchRoom));
+  });
   try {
     const result = await request_json("/api/rooms");
     state.rooms = result.rooms;
@@ -1737,7 +1973,8 @@ async function execute_view_action(name, value) {
     take_floor: () => change_floor("take"), return_floor: () => change_floor("return"),
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
     choose_runtime, export_runtime, pause_runtime, check_limits, pause_discussion, restart_discussion, force_close, conclude_discussion,
-    save_launch_defaults, launch_current_room,
+    save_launch_defaults, launch_current_room, resume_launch, discard_launch,
+    load_room_configuration, save_room_configuration,
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };
   try {
     await actions[name](value);
@@ -1757,7 +1994,7 @@ function change_view_theme(theme) {
 }
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
-  write_launch: write_launch_field, launch_clients: LAUNCH_CLIENTS, launch_summary,
+  write_launch: write_launch_field, write_room_connection, launch_clients: LAUNCH_CLIENTS, launch_summary, empty_discussion_message,
   start_drag: start_directory_drag,
   write_expert: write_view_expert, execute: execute_view_action, theme: change_view_theme,
   request: request_json, identities: IDENTITIES, display_name, sources: SOURCE_LABELS, phases: PHASE_LABELS,

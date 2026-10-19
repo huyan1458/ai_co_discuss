@@ -137,6 +137,12 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .channel-management-target { color: #eef0f5; overflow-wrap: anywhere; }
 .channel-management-target > span { color: #949dad; font-size: 12px; }
 .channel-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--ui-bg); }
+.channel-launch-recovery { flex-shrink: 0; max-height: 42vh; overflow: auto; padding: 14px 20px; border-bottom: 1px solid var(--ui-border); background: var(--ui-bg-elevated); font-size: 13px; overflow-wrap: anywhere; }
+.channel-launch-recovery h2 { font-size: 13px; font-weight: 600; margin-bottom: 10px; }
+.channel-launch-recovery article + article { border-top: 1px solid var(--ui-border); margin-top: 12px; padding-top: 12px; }
+.channel-launch-recovery p { margin: 6px 0 10px; color: var(--ui-text-muted); }
+.channel-launch-recovery .button-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.channel-launch-recovery small { display: block; margin-top: 10px; color: var(--ui-text-muted); }
 .channel-host-brief { position: relative; z-index: 20; flex-shrink: 0; padding: 6px 20px; border-bottom: 1px solid #ffffff0d; background: #ffffff03; }
 .channel-brief-inner { width: 100%; }
 .channel-brief-heading { display: flex; align-items: center; gap: 12px; min-height: 28px; font-size: 12px; color: var(--ui-text-muted); }
@@ -208,6 +214,7 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .pb-status-line { display: flex; align-items: center; gap: 8px; }
 .pb-status-line strong { color: var(--ui-text-highlighted); font-size: 15px; font-weight: 600; }
 .pb-status-detail { margin: 6px 0 0 16px; color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.pb-error-detail { white-space: pre-wrap; font: inherit; max-height: 240px; overflow: auto; margin-top: 8px; }
 .pb-held { margin: 0 0 8px; }
 .pb-meters { display: grid; gap: 10px; margin-top: 14px; }
 .pb-meter-label { display: flex; justify-content: space-between; gap: 8px; color: var(--ui-text-dimmed); font-size: 12px; }

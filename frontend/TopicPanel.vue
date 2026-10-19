@@ -14,6 +14,7 @@ const can_schedule = computed(() => !active_turn.value && !inactive.value && !ro
 const base = computed(() => `${location.origin}/r/${room.value?.id}`);
 const automatic = computed(() => room.value?.runtime?.mode === "automatic");
 const execution = computed(() => room.value?.runtime?.latest_execution);
+const repair = computed(() => view.value.launch.repair?.room_id === room.value?.id ? view.value.launch.repair : null);
 const runtime_status = computed(() => room.value?.runtime?.expired ? "已到截止时间" : ({ ready: "尚未启动", running: "自动推进已启用", paused: "已暂停", stopped: "已停止", concluded: "已收束" }[room.value?.runtime?.status] || "尚未启动"));
 const register_command = computed(() => `codiscuss add --config "discussion-${room.value?.id}.json"`);
 const progress_summary = computed(() => {
@@ -62,7 +63,19 @@ const progress_summary = computed(() => {
           <LaunchSettings :participants="[room.host, ...Object.keys(room.experts || {})]" />
           <UButton label="启动讨论" icon="i-lucide-play" class="channel-primary-button" :loading="pending === 'launch_current_room'" @click="act('launch_current_room')" />
         </template>
-        <p v-else class="fine-print">本次讨论已启动过。暂停后请在进度看板继续，原会话绑定保持不变。</p>
+        <div v-else-if="room.runtime?.status === 'paused' && !room.archived" class="launch-settings">
+          <h3>修正本场软件连接</h3>
+          <p class="fine-print">登录或软件权限问题请先在对应软件中处理。路径变化可在这里修正，保存后再到进度看板重启。客户端类型、工作目录、项目及会话设置保持不变。</p>
+          <UButton label="读取本场配置" variant="outline" color="neutral" :loading="pending === 'load_room_configuration'" @click="act('load_room_configuration')" />
+          <template v-if="repair">
+            <UFormField v-for="(profile, name) in repair.participants" :key="name" :label="`${name} · ${profile.adapter === 'antigravity' ? 'Sidecar 目录' : '软件路径'}`"><UInput :model-value="profile[profile.adapter === 'antigravity' ? 'ipc_directory' : 'executable'] || ''" class="w-full" @update:model-value="bridge.write_room_connection(name, $event)" /></UFormField>
+            <UButton label="保存本场路径" :loading="pending === 'save_room_configuration'" @click="act('save_room_configuration')" />
+            <p v-if="repair.notice" role="status" class="fine-print">{{ repair.notice }}</p>
+          </template>
+          <p v-if="view.launch.repair_error" role="alert" class="fine-print">{{ view.launch.repair_error }}</p>
+        </div>
+        <p v-else-if="room.runtime?.status === 'running'" class="fine-print">讨论正在运行。需要修正软件路径时，请先暂停。</p>
+        <p v-else class="fine-print">本场讨论已停止或结束，已有记录保留。</p>
         <p class="fine-print">另一种入口：在 AI 工具对话中调用 discuss-host，由当前会话主持。</p>
       </section>
       <section v-else-if="automatic" class="access-setup" aria-label="全自动接入步骤">

@@ -27,7 +27,7 @@ Python 与 Cloudflare 是两种部署实现，运行时选其一，不是请求�
 | `backend/server.py` | HTTP 请求、SQLite 路径、`backend/schema.sql` | JSON API、纯文本页面、静态资源；事务读写本地数据库；根目录 `server.py` 调用其启动函数 |
 | `backend/worker.mjs` | Pages Request、D1 `DB` binding | 与 Python 相同的业务响应；静态请求交由 Pages assets |
 | `runner/codiscuss.mjs` | 统一 `codiscuss` 命令与原样参数 | 无子命令时启动本机服务，`service` 管理进程；网站命令转交 Python 客户端，保留 stdin、相对路径与退出码 |
-| `runner/discussion_launch.mjs` | 本机默认软件配置、单场启动配置、对话 / 网页入口 | 校验后建房、保存私有配置、启用运行并登记接入服务；对话入口将首个主持任务交回当前会话；不生成 AI 回答 |
+| `runner/discussion_launch.mjs` | 本机默认软件配置、单场启动配置、对话 / 网页入口 | 校验后建房、保存私有配置、启用运行并登记接入服务；对话入口将首个主持任务交回当前会话；暂停后可凭原控制凭据和版本修正本场软件路径，不改变会话绑定或自动重启 |
 | `runner/discussion_setup.mjs` / `discussion_skills.mjs` | npm 包、已有 Python / CLI、选定软件 | 持久安装统一命令，合并本机软件配置，复制完整技能并保留本地修改；不创建讨论 |
 | `runner/discussion_local.mjs` | 用户服务目录、Python 和端口配置 | 后台网站及包外 SQLite，复用讨论服务、检查就绪、仅停止拥有的进程 |
 | `runner/discuss.py` | 命令、站点、房间、声明身份、UTF-8 文件 | 网站客户端实现；单次 HTTP 请求、稳定 JSON / 文本、退出码，帮助和预览可离线，可直接用 Python 执行 |
@@ -43,6 +43,8 @@ Python 与 Cloudflare 是两种部署实现，运行时选其一，不是请求�
 Python 服务独占监听端口：Windows 使用 `SO_EXCLUSIVEADDRUSE`，关闭地址复用；其他平台保留常规重启所需的地址复用，但不允许复用正在监听的端口。第二个实例在启动时失败，避免请求被分配到另一个讨论数据库。
 
 `--local-launch` 是仅限回环监听的可选本机控制接口，公开部署默认关闭。它校验同源请求并通过固定 Node 入口共享启动器；本机路径不进入房间公开数据。启动器复用两套后端已有建房、运行、事件协议，Cloudflare 不提供进程启动接口。网页的启动配置由 `frontend/LaunchSettings.vue` 与共享控制器维护，两个现代主题和经典主题使用同一启动请求。
+
+网页在请求前按原提交号或房间保存完整待办；展示快照仅含标题、房间编号与错误，不包含待办中的凭据或私有配置。刷新后的恢复必须由用户显式触发，重放原输入进入启动器已有日志；每次发送的独立编号防止跨标签迟到失败覆盖较新的待办状态。本机桥接保留启动器的部分失败阶段，只有控制权验证后才返回原房间编号；浏览器请求必须显式携带控制凭据，不回退到磁盘中的凭据代为认领。网站业务协议和 Cloudflare 后端不受此本机恢复接口变更影响。
 
 ## 数据模型
 

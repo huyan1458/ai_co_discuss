@@ -9,6 +9,7 @@ const focus_expanded = ref(false);
 const ACTIVE_TURN = ["pending", "notified"];
 const LIVE_EXECUTION_TEXT = { dispatched: "已交付，等待开始", started: "执行中" };
 const FOCUS_PREVIEW_LENGTH = 90;
+const ERROR_PREVIEW_LENGTH = 100;
 const TIMING_STAGES = [
   { key: "queue_seconds", label: "排队", hint: "事件产生到接入程序交付" },
   { key: "wake_seconds", label: "唤醒", hint: "交付到 AI 执行 enter" },
@@ -45,7 +46,12 @@ const status = computed(() => {
   if (value.phase === "preparing") return { tone: "neutral", title: "准备中", detail: "讨论尚未开始" };
   if (value.phase === "paused") {
     const failure = failed_member.value;
-    if (failure) return { tone: "error", title: "已暂停", detail: failure.result.startsWith(failure.name) ? failure.result : `${bridge.display_name(failure.name)} 执行失败：${failure.result}` };
+    if (failure) {
+      const detail = failure.result.startsWith(failure.name) ? failure.result : `${bridge.display_name(failure.name)} 执行失败：${failure.result}`;
+      const summary = detail.split('\n')[0];
+      const preview = summary.length > ERROR_PREVIEW_LENGTH ? `${summary.slice(0, ERROR_PREVIEW_LENGTH)}…` : summary;
+      return { tone: "error", title: "已暂停", detail: preview, full_detail: detail !== preview ? detail : '' };
+    }
     return { tone: "warning", title: runtime.value.expired ? "已到截止时间" : "已暂停", detail: turn.value ? `原安排 ${bridge.display_name(turn.value.expert)} 保留` : "" };
   }
   if (limits.value.reached) return { tone: "warning", title: "已达上限", detail: "停止新增安排" };
@@ -126,6 +132,7 @@ async function finish(action) {
     <section class="pb-status" :class="`is-${status.tone}`" aria-label="讨论状态">
       <div class="pb-status-line"><span class="pb-dot"></span><strong role="status">{{ status.title }}</strong><span v-if="!props.docked" class="pb-mode">{{ automatic ? '全自动' : '手动' }}</span></div>
       <p v-if="status.detail" class="pb-status-detail">{{ status.detail }}</p>
+      <details v-if="status.full_detail" class="pb-status-detail"><summary>查看错误详情</summary><pre class="pb-error-detail">{{ status.full_detail }}</pre></details>
       <div v-if="meters.length" class="pb-meters">
         <div v-for="meter in meters" :key="meter.label" class="pb-meter">
           <div class="pb-meter-label"><span>{{ meter.label }}</span><b>{{ meter.text }}</b></div>
@@ -181,10 +188,10 @@ async function finish(action) {
       <template #body>
         <div class="progress-ending">
           <button type="button" class="progress-ending-option" :disabled="!can_close || !!pending" @click="finish('force_close')">
-            <strong>强行收尾</strong><span>立即进入收束，由 {{ bridge.display_name(room.host) }} 在 {{ limits.summary_minutes || 5 }} 分钟收束预留内根据已有材料总结。</span><small v-if="!can_close">{{ limits.closing ? '已在收尾中。' : '仅进行中的讨论可以收尾；已暂停时请选择直接丢弃。' }}</small>
+            <strong>请主持人收尾</strong><span>立即进入收束，由 {{ bridge.display_name(room.host) }} 在 {{ limits.summary_minutes || 5 }} 分钟收束预留内根据已有材料总结。</span><small v-if="!can_close">{{ limits.closing ? '已在收尾中。' : '仅进行中的讨论可以收尾；暂停后可先重启再收尾，或直接结束并保留记录。' }}</small>
           </button>
           <button type="button" class="progress-ending-option" :disabled="concluded || !!pending" @click="finish('conclude_discussion')">
-            <strong>直接丢弃</strong><span>不再总结，阶段直接设为“已收束”，自动运行随之停止。</span>
+            <strong>直接结束（不总结）</strong><span>保留全部记录，阶段设为“已收束”，自动运行随之停止。</span>
           </button>
         </div>
       </template>

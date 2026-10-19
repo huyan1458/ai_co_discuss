@@ -5,6 +5,7 @@ import os
 import sqlite3
 import tempfile
 import threading
+import time
 import unittest
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -15,7 +16,9 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from urllib.robotparser import RobotFileParser
 
-from backend.server import DiscussionServer, create_room, get_message, init_database, require_room
+from backend.server import (DiscussionHandler, DiscussionServer, connect_db, create_room,
+                            get_message, init_database, require_room)
+from backend.runtime import configure_runtime, runtime_view
 
 
 class DiscussionTests(unittest.TestCase):
@@ -43,6 +46,50 @@ class DiscussionTests(unittest.TestCase):
         self.server.server_close()
         self.thread.join()
         self.directory.cleanup()
+
+    def test_local_configuration_save_blocks_a_concurrent_restart_until_file_replacement(self):
+        """An already queued restart cannot pass the guarded paused-file replacement."""
+        if self.external:
+            self.skipTest("Local filesystem configuration is unavailable on a remote Worker")
+        token = uuid.uuid4().hex
+        with closing(connect_db(self.database)) as connection, connection:
+            room = create_room(connection, {"title": "本场修正", "host": "Codex", "experts": {"Codex": "cli"},
+                                           "runtime_mode": "automatic", "submission_id": uuid.uuid4().hex}, token)
+            paused = configure_runtime(connection, room["id"], token, {"action": "pause", "revision": room["runtime"]["revision"]})
+        handler = object.__new__(DiscussionHandler)
+        handler.server = self.server
+        entered, proceed, restarting = threading.Event(), threading.Event(), threading.Event()
+
+        def replace_file(_command, _payload, configuration_locked=False):
+            self.assertTrue(configuration_locked)
+            entered.set()
+            self.assertTrue(proceed.wait(3))
+            with closing(connect_db(self.database)) as connection:
+                self.assertEqual(runtime_view(connection, room["id"])["status"], "paused")
+            return "saved"
+
+        def restart():
+            restarting.set()
+            with closing(connect_db(self.database)) as connection, connection:
+                return configure_runtime(connection, room["id"], token, {"action": "start", "mode": "automatic",
+                    "revision": paused["revision"], "deadline": int(time.time()) + 600})
+
+        handler.run_local_command = replace_file
+        payload = {"room_id": room["id"], "token": token, "runtime_revision": paused["revision"], "participants": {}}
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            saving = pool.submit(handler.save_local_room_configuration, "room-config", payload)
+            self.assertTrue(entered.wait(3))
+            resumed = pool.submit(restart)
+            try:
+                self.assertTrue(restarting.wait(3))
+                with self.assertRaises(TimeoutError):
+                    resumed.result(0.2)
+            finally:
+                proceed.set()
+            self.assertEqual(saving.result(3), "saved")
+            self.assertEqual(resumed.result(3)["status"], "running")
+        with self.assertRaises(FileExistsError):
+            handler.save_local_room_configuration("room-config", payload)
 
     def request(self, path, payload=None, method=None):
         """Send a request and decode JSON or UTF-8 text, including error bodies."""

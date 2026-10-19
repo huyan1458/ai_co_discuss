@@ -590,6 +590,36 @@ test('a room failure is reported without stopping the other rooms', async t => {
   assert.deepEqual(rooms.map(room => [room.room, room.status, room.error]), [['room1', 'error', 'HTTP 500'], ['room2', 'running', '']]);
 });
 
+test('a resident worker adopts connection corrections but rejects changes to its bound conversation context', async t => {
+  const f = await fixture(t);
+  const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
+  const path = room_config(home, f.config.site, 'room1');
+  register_room(home, path);
+  const service = new DiscussionService(home, (config, store) => {
+    store.context(config); store.bind('Gemini', 'existing-session');
+    return { tick: async () => 'waiting', stop_children() {} };
+  });
+  t.after(async () => { await service.close(); rmSync(home, { recursive: true, force: true }); });
+  await service.tick();
+  const worker = service.workers.get(path);
+  const previous_version = worker.state.config_version;
+  const config = JSON.parse(readFileSync(path, 'utf8'));
+  const connection = join(home, 'new-sidecar'); mkdirSync(connection);
+  config.participants.Gemini.ipc_directory = connection;
+  writeFileSync(path, JSON.stringify(config));
+  await service.tick();
+  assert.equal(worker.config.participants.Gemini.ipc_directory, connection);
+  assert.notEqual(worker.state.config_version, previous_version);
+  assert.equal(worker.store.binding('Gemini').session_id, 'existing-session');
+  config.participants.Gemini.session_id = 'another-session';
+  writeFileSync(path, JSON.stringify(config));
+  await service.tick();
+  assert.equal(worker.state.status, 'error');
+  assert.match(worker.state.error, /身份配置发生变化/);
+  assert.equal(worker.store.binding('Gemini').session_id, 'existing-session');
+  assert.equal(worker.config.participants.Gemini.session_id, undefined);
+});
+
 test('the same site and room cannot be registered twice', t => {
   const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
