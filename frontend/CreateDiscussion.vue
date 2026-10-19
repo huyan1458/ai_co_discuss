@@ -167,7 +167,7 @@ const summary = computed(() => {
             </UCollapsible>
           </template>
         </template>
-        <p v-else class="fine-print">网页一键启动需在本机运行 codiscuss；也可从 AI 对话调用 discuss-host 发起。只建房时可稍后在「接入」页接入。</p>
+        <LaunchSettings v-else :participants="launch_names" :workspace="false" />
       </section>
     </form>
     <footer class="create-footer">

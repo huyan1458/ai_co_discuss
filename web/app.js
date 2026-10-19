@@ -11,6 +11,9 @@ const DIRECTORY_DRAG_OFFSET = 12;
 const THEME_STORAGE_KEY = "ai-codiscuss-theme";
 const DIRECTORY_SORT_KEY = "ai-codiscuss-directory-sort";
 const LAUNCH_PENDING_PREFIX = "discuss-launch:";
+const LOCAL_CONNECTION_KEY = "discuss-local-connection";
+const LOCAL_CONNECTION_TIMEOUT_MS = 15000;
+let local_connection = null;
 const THEMES = ["millennium", "channel", "channel-light"];
 const SOURCE_LABELS = { demo: "示例", user: "本人发言", proxy: "用户代发", cli: "CLI 发言", url: "历史 URL 发言", host_proxy: "主持人代发" };
 const PHASE_LABELS = { preparing: "准备中", initial: "独立观点", discussing: "深入讨论", reviewing: "结论复核", paused: "已暂停", concluded: "已收束" };
@@ -39,7 +42,7 @@ state.directory_error = "";
 state.directory_pending = new Map();
 state.directory_version = 0;
 state.navigation_version = 0;
-state.launch = { available: false, profiles: {}, workspace: {}, create: false, error: "", notice: "", recoveries: [] };
+state.launch = { available: false, remote: false, connect_command: "", profiles: {}, workspace: {}, create: false, error: "", notice: "", recoveries: [] };
 const LAUNCH_CLIENTS = { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }],
   Claude: [{ value: "claude", label: "Claude Code CLI" }],
   Gemini: [{ value: "antigravity_cli", label: "Antigravity CLI" }, { value: "antigravity", label: "Antigravity App" }] };
@@ -920,11 +923,41 @@ async function submit_room(event, folder_id = null) {
   if (state.navigation_version === navigation) { state.archive_view = false; await select_room(room.id); }
 }
 
-/** Use the explicitly enabled local bridge; public deployments never receive machine configuration. */
+/** Read a site-bound connection without exposing its credential to the shared view snapshot. */
+function restore_local_connection() {
+  const fragment = new URLSearchParams(location.hash?.slice(1) || "");
+  const incoming = fragment.get("codiscuss-connect");
+  if (incoming !== null) history.replaceState(null, "", `${location.pathname}${location.search}`);
+  const saved = incoming ?? localStorage.getItem(LOCAL_CONNECTION_KEY);
+  if (!saved) return null;
+  try {
+    const value = JSON.parse(saved);
+    const endpoint = new URL(value.endpoint);
+    if (value.site !== location.origin || endpoint.protocol !== "http:" || endpoint.hostname !== "127.0.0.1"
+        || endpoint.username || endpoint.password || endpoint.pathname !== "/" || endpoint.search || endpoint.hash
+        || !/^[a-f0-9]{64}$/.test(value.token)) throw new Error("invalid connection");
+    const connection = { site: value.site, endpoint: endpoint.origin, token: value.token };
+    if (incoming !== null) localStorage.setItem(LOCAL_CONNECTION_KEY, JSON.stringify(connection));
+    return connection;
+  } catch {
+    throw new Error("本机连接链接无效或无法保存，请重新运行连接命令；尚未发送启动请求");
+  }
+}
+
+/** Use the local bridge directly; machine configuration and connection credentials never go to the public server. */
 async function local_launch_request(action, payload) {
-  const response = await fetch(`/api/local/${action}`, { method: payload === undefined ? "GET" : "POST",
-    headers: { "Content-Type": "application/json", "X-CoDiscuss-Local": "1" },
-    body: payload === undefined ? undefined : JSON.stringify(payload) });
+  const headers = { "Content-Type": "application/json", "X-CoDiscuss-Local": "1" };
+  if (local_connection) headers["X-CoDiscuss-Connection"] = local_connection.token;
+  let response;
+  try {
+    response = await fetch(`${local_connection?.endpoint || ""}/api/local/${action}`, {
+      method: payload === undefined ? "GET" : "POST", headers, credentials: "omit", redirect: "error",
+      body: payload === undefined ? undefined : JSON.stringify(payload),
+      ...(payload === undefined ? { signal: AbortSignal.timeout(LOCAL_CONNECTION_TIMEOUT_MS) } : {}) });
+  } catch (error) {
+    if (!local_connection) throw error;
+    throw new Error("无法连接本机服务：请在这台电脑运行 codiscuss local open，并允许浏览器访问本机网络，再重试原请求");
+  }
   const result = await response.json();
   if (!response.ok) throw Object.assign(new Error(result.error || "本机启动请求失败"), { launch: result.launch });
   return result;
@@ -1032,14 +1065,19 @@ function discard_launch(id) {
 
 /** Load reusable client settings once; this neither registers rooms nor starts AI. */
 async function load_launch_settings() {
-  if (!["127.0.0.1", "localhost"].includes(location.hostname)) return;
+  const local = ["127.0.0.1", "localhost"].includes(location.hostname);
+  state.launch.connect_command = local ? "codiscuss local open" : `codiscuss local connect "${location.origin}"`;
   try {
+    local_connection = null;
+    local_connection = restore_local_connection();
+    state.launch.remote = Boolean(local_connection);
+    if (local_connection) state.launch.connect_command = `codiscuss local connect "${location.origin}"`;
+    if (!local_connection && !local) return;
     const settings = await local_launch_request("settings");
-    Object.assign(state.launch, { available: true, profiles: settings.participants, error: "" });
-  } catch (error) { state.launch.error = error.message; }
-  refresh_launch_recoveries();
-  render_launch_settings();
-  publish_view();
+    Object.assign(state.launch, { available: true, profiles: settings.participants, error: "",
+      notice: local_connection ? "已连接本机服务，讨论保存在当前网站" : "" });
+  } catch (error) { state.launch.available = false; state.launch.error = error.message; }
+  finally { refresh_launch_recoveries(); render_launch_settings(); publish_view(); }
 }
 
 /** Keep software drafts separate from shared room records and from discussion advancement mode. */
@@ -1207,8 +1245,8 @@ function render_room_configuration() {
   const panel = element('local-room-configuration');
   if (!panel) return;
   const runtime = state.room?.runtime;
-  panel.hidden = !state.launch.available || runtime?.mode !== 'automatic' || runtime.status !== 'paused' || state.room?.archived;
-  element('local-launch-settings').parentElement.hidden = !state.launch.available || runtime?.mode !== 'automatic' || runtime.status !== 'ready';
+  panel.hidden = !state.launch.available || state.launch.remote || runtime?.mode !== 'automatic' || runtime.status !== 'paused' || state.room?.archived;
+  element('local-launch-settings').parentElement.hidden = runtime?.mode !== 'automatic' || (state.launch.available && runtime.status !== 'ready');
   const repair = state.launch.repair?.room_id === state.room?.id ? state.launch.repair : null;
   const fields = element('local-room-configuration-fields');
   if (fields.dataset.roomId !== state.room?.id || !fields.contains(document.activeElement)) {
@@ -1228,9 +1266,9 @@ function render_launch_settings() {
     const container = element(id);
     if (!container) continue;
     container.hidden = !state.launch.available;
-    container.parentElement.hidden = !state.launch.available;
+    container.parentElement.hidden = false;
     const create_toggle = container.parentElement.querySelector('[data-launch-name="create"]');
-    if (create_toggle) create_toggle.checked = state.launch.create;
+    if (create_toggle) { create_toggle.checked = state.launch.create; create_toggle.disabled = !state.launch.available; }
     container.innerHTML = Object.entries(LAUNCH_CLIENTS).map(([name, clients]) => {
       const profile = state.launch.profiles[name] || {};
       const fields = profile.adapter === "antigravity" ? [["ipc_directory", "Sidecar IPC 目录"]]
@@ -1244,8 +1282,10 @@ function render_launch_settings() {
     }).join("") + `<label>本次项目文件<select data-launch-name="workspace" data-launch-field="project_access">${access_options(state.launch.workspace.project_access)}</select></label><label>本次工作目录（可选）<input data-launch-name="workspace" data-launch-field="cwd" value="${escape_html(state.launch.workspace.cwd || "")}"></label><label>本次 AI 项目（可选）<input data-launch-name="workspace" data-launch-field="discussion_project" value="${escape_html(state.launch.workspace.discussion_project || "")}"></label>`;
   }
   for (const id of ["local-launch-notice", "new-local-launch-notice"]) {
-    if (element(id)) element(id).textContent = state.launch.error || state.launch.notice;
+    if (element(id)) element(id).textContent = [state.launch.error || state.launch.notice,
+      !state.launch.available && state.launch.connect_command ? `在这台电脑运行 ${state.launch.connect_command}，使用命令打开的网页完成连接。` : ""].filter(Boolean).join(" ");
   }
+  for (const id of ["local-launch-save", "new-local-launch-save"]) if (element(id)) element(id).disabled = !state.launch.available;
   if (element("local-launch-start")) element("local-launch-start").disabled = !state.launch.available || state.room?.runtime?.mode !== "automatic" || state.room?.runtime?.status !== "ready";
   render_room_configuration();
 }
@@ -1876,6 +1916,9 @@ async function initialize() {
     if (name) write_launch_field(name, field, event.target.type === "checkbox" ? event.target.checked : event.target.value);
   });
   load_launch_settings();
+  window.addEventListener("hashchange", () => {
+    if (new URLSearchParams(location.hash.slice(1)).has("codiscuss-connect")) load_launch_settings();
+  });
   window.addEventListener("storage", event => { if (!event.key || event.key.startsWith(LAUNCH_PENDING_PREFIX)) refresh_launch_recoveries(); });
   element("launch-recoveries").addEventListener("click", event => {
     const button = event.target.closest("button");
@@ -1989,7 +2032,7 @@ async function execute_view_action(name, value) {
     take_floor: () => change_floor("take"), return_floor: () => change_floor("return"),
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
     choose_runtime, export_runtime, pause_runtime, check_limits, pause_discussion, restart_discussion, force_close, conclude_discussion,
-    save_launch_defaults, launch_current_room, resume_launch, discard_launch,
+    save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection: load_launch_settings,
     load_room_configuration, save_room_configuration,
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };
   try {

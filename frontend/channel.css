@@ -965,3 +965,6 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 :root[data-theme^="channel"] .channel-composer { box-shadow: var(--channel-shadow-panel) !important; }
 :root[data-theme^="channel"] .channel-composer:focus-within { box-shadow: var(--channel-shadow-panel), 0 0 0 1px color-mix(in srgb, var(--channel-accent) 18%, transparent) !important; }
 :root[data-theme^="channel"] :is(.channel-menu, .channel-select-menu, .channel-topic-menu, .channel-nav-preview, .channel-message-toolbar, .channel-latest-button, .channel-details, .channel-navigation-drawer, .glass-panel, .channel-brief-content) { border-color: var(--channel-edge-float); box-shadow: var(--channel-shadow-float); }
+/* Like the light theme, the dark seams show only the resize handle's line. */
+:root[data-theme="channel"] .channel-sidebar { border-right-color: transparent; }
+:root[data-theme="channel"] :is(.channel-nav-resizer, .channel-rail-resizer) { background: transparent; }

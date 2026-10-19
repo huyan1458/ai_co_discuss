@@ -15,6 +15,14 @@ const write_access = (name, value) => write(name, "project_access", value === "i
 
 <template>
   <section class="launch-settings" aria-label="启动配置">
+    <template v-if="!view.launch.available">
+      <h3>连接这台电脑</h3>
+      <p class="fine-print">先安装并配置 codiscuss，在运行 AI 的这台电脑上执行以下命令，使用命令打开的网页完成连接。浏览器询问时允许访问本机网络。</p>
+      <div class="launch-connect-command"><code>{{ view.launch.connect_command }}</code><UButton icon="i-lucide-copy" aria-label="复制本机连接命令" variant="ghost" color="neutral" @click="act('copy', view.launch.connect_command)" /></div>
+      <UButton label="重新检查连接" variant="outline" color="neutral" :loading="pending === 'retry_launch_connection'" @click="act('retry_launch_connection')" />
+      <p v-if="view.launch.error" role="alert" class="fine-print">{{ view.launch.error }}</p>
+    </template>
+    <template v-else>
     <h3>启动配置</h3>
     <p class="fine-print">软件配置可保存供后续讨论复用。App 需要保持运行；CLI 按需启动，使用已有登录和工具权限。</p>
     <details v-for="name in names" :key="name" open class="launch-client">
@@ -45,6 +53,7 @@ const write_access = (name, value) => write(name, "project_access", value === "i
     <UButton label="保存为本机软件默认配置" variant="outline" color="neutral" :loading="pending === 'save_launch_defaults'" @click="act('save_launch_defaults')" />
     <p v-if="view.launch.error" role="alert" class="fine-print">{{ view.launch.error }}</p>
     <p v-else-if="view.launch.notice" role="status" class="fine-print">{{ view.launch.notice }}</p>
+    </template>
   </section>
 </template>
 
@@ -57,4 +66,6 @@ const write_access = (name, value) => write(name, "project_access", value === "i
 .launch-effective { margin: 8px 0 0; font-size: 12px; color: var(--ui-text-muted); overflow-wrap: anywhere; }
 .launch-client-fields { padding-top: 12px; }
 .launch-settings > button { justify-self: start; }
+.launch-connect-command { display: flex; align-items: center; gap: 8px; padding: 10px; border-radius: 8px; background: var(--ui-bg-elevated); }
+.launch-connect-command code { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
 </style>

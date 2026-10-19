@@ -65,7 +65,7 @@ const progress_summary = computed(() => {
           <LaunchSettings :participants="[room.host, ...Object.keys(room.experts || {})]" />
           <UButton label="启动讨论" icon="i-lucide-play" class="channel-primary-button" :loading="pending === 'launch_current_room'" @click="act('launch_current_room')" />
         </template>
-        <div v-else-if="room.runtime?.status === 'paused' && !room.archived" class="launch-settings">
+        <div v-else-if="room.runtime?.status === 'paused' && !room.archived && !view.launch.remote" class="launch-settings">
           <h3>修正本场软件连接</h3>
           <p class="fine-print">登录或软件权限问题请先在对应软件中处理。路径变化可在这里修正，保存后再到进度看板重启。客户端类型、工作目录、项目及会话设置保持不变。</p>
           <UButton label="读取本场配置" variant="outline" color="neutral" :loading="pending === 'load_room_configuration'" @click="act('load_room_configuration')" />
@@ -76,17 +76,21 @@ const progress_summary = computed(() => {
           </template>
           <p v-if="view.launch.repair_error" role="alert" class="fine-print">{{ view.launch.repair_error }}</p>
         </div>
-        <p v-else-if="room.runtime?.status === 'running'" class="fine-print">讨论正在运行。需要修正软件路径时，请先暂停。</p>
+        <p v-else-if="room.runtime?.status === 'paused' && view.launch.remote" class="fine-print">讨论已暂停，可在进度看板重启。线上连接暂不提供已登记房间的软件路径修正。</p>
+        <p v-else-if="room.runtime?.status === 'running'" class="fine-print">讨论正在运行。</p>
         <p v-else class="fine-print">本场讨论已停止或结束，已有记录保留。</p>
         <p class="fine-print">另一种入口：在 AI 工具对话中调用 discuss-host，由当前会话主持。</p>
       </section>
       <section v-else-if="automatic" class="access-setup" aria-label="全自动接入步骤">
+        <LaunchSettings :participants="[room.host, ...Object.keys(room.experts || {})]" />
+        <details><summary>手动下载与登记配置</summary>
         <div class="access-section-title"><h3>首次接入</h3><a href="https://github.com/huyan1458/ai_co_discuss/blob/main/docs/runner.md#常驻讨论服务" target="_blank" rel="noopener" class="subtle-link">配置说明 <UIcon name="i-lucide-arrow-up-right" /></a></div>
         <ol class="access-steps">
           <li><span class="access-step-number">1</span><div><h4>下载接入配置</h4><p>包含当前房间信息。下载后，补齐本机软件路径与会话配置。</p></div><UButton v-if="room.runtime?.protected" icon="i-lucide-download" label="下载接入配置" class="channel-primary-button" :loading="pending === 'export_runtime'" @click="act('export_runtime')" /></li>
           <li><span class="access-step-number">2</span><div><h4>登记到本机服务</h4><p>在下载文件所在目录执行；也可以将文件名换成完整路径。</p><div class="access-command"><code>{{ register_command }}</code><UButton icon="i-lucide-copy" color="neutral" variant="ghost" aria-label="复制房间登记命令" @click="act('copy', register_command)" /></div></div></li>
           <li><span class="access-step-number">3</span><div><h4>启动服务，保持终端打开</h4><p>启动服务不会自动开始讨论。已暂停的讨论可在进度看板点“重启”。</p><div class="access-command"><code>codiscuss</code><UButton icon="i-lucide-copy" color="neutral" variant="ghost" aria-label="复制服务启动命令" @click="act('copy', 'codiscuss')" /></div></div></li>
         </ol>
+        </details>
       </section>
       <details v-if="!automatic || !view.launch.available" class="access-disclosure access-workspace">
         <summary><span>项目与工作目录 <small>可选</small></span><UIcon name="i-lucide-chevron-down" class="disclosure-icon" /></summary>
