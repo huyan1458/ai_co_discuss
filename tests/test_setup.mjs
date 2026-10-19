@@ -31,7 +31,7 @@ test('agy rule matches only codiscuss website subcommands without separators', (
     'codiscuss api /rooms', 'codiscuss setup --yes', 'codiscuss roomx view', 'python discuss.py room view', 'x codiscuss room view']) {
     assert.equal(pattern.test(command), false, command);
   }
-  for (const tail of ['; Remove-Item x', ' | Out-File x', ' $(evil)', ' `evil', ' && evil', ' > x']) {
+  for (const tail of ['; Remove-Item x', ' | Out-File x', ' $(evil)', ' `evil', ' && evil', ' > x', ' (Set-Content x changed)']) {
     assert.equal(pattern.test('codiscuss room view room' + tail), false, tail);
   }
 });

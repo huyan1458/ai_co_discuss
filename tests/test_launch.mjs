@@ -11,6 +11,7 @@ import { test } from 'node:test';
 import { launch_discussion, launch_settings, room_configuration, save_launch_settings } from '../runner/discussion_launch.mjs';
 import { api, DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { DiscussionService, read_registry } from '../runner/discussion_service.mjs';
+import { save_site_connection } from '../runner/discussion_local.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -114,7 +115,7 @@ async function request(site, path, body, headers = {}) {
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(text), ...headers } }, response => {
       let output = '';
       response.on('data', chunk => { output += chunk; });
-      response.on('end', () => { try { resolve({ status: response.statusCode, body: JSON.parse(output) }); } catch (error) { reject(error); } });
+      response.on('end', () => { try { resolve({ status: response.statusCode, headers: response.headers, body: JSON.parse(output) }); } catch (error) { reject(error); } });
     });
     outgoing.on('error', reject);
     outgoing.end(text);
@@ -134,6 +135,86 @@ test('machine defaults and per-discussion overrides share validation without per
   assert.equal((await request(f.site, '/api/rooms')).body.rooms.length, 0);
   assert.equal(read_registry(f.home).length, 0);
   assert.equal(existsSync(join(f.home, 'launches')), false);
+});
+
+test('connected website needs its own credential and CORS preflight never starts or configures anything', async t => {
+  const f = await fixture(t);
+  const site = 'https://discussion.example';
+  const token = 'a'.repeat(64);
+  save_site_connection(f.home, site, token);
+  save_launch_settings(f.home, { participants: f.input.participants });
+  const headers = { Origin: site, 'X-CoDiscuss-Local': '1', 'X-CoDiscuss-Connection': token };
+  const preflight = async origin => {
+    const response = await fetch(`${f.site}/api/local/launch`, { method: 'OPTIONS', headers: {
+      Origin: origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Private-Network': 'true',
+      'Access-Control-Request-Headers': 'content-type,x-codiscuss-local,x-codiscuss-connection' } });
+    await response.json();
+    return response;
+  };
+  const allowed = await preflight(site);
+  assert.equal(allowed.status, 200);
+  assert.equal(allowed.headers.get('access-control-allow-origin'), site);
+  assert.equal(allowed.headers.get('access-control-allow-private-network'), 'true');
+  const rejected = await preflight('https://unrelated.example');
+  assert.equal(rejected.status, 403);
+  assert.equal(rejected.headers.get('access-control-allow-origin'), null);
+  for (const overrides of [{ 'X-CoDiscuss-Connection': '' }, { 'X-CoDiscuss-Connection': 'b'.repeat(64) },
+    { Origin: 'https://unrelated.example' }, { Origin: 'null' }, { Host: 'discussion.example' }]) {
+    const denied = await request(f.site, '/api/local/settings', undefined, { ...headers, ...overrides });
+    assert.equal(denied.status, 403);
+    assert.equal(denied.body.participants, undefined);
+  }
+  const settings = await request(f.site, '/api/local/settings', undefined, headers);
+  assert.equal(settings.status, 200);
+  assert.equal(settings.headers['access-control-allow-origin'], site);
+  assert.equal(settings.headers['access-control-allow-credentials'], undefined);
+  assert.deepEqual(settings.body.participants, f.input.participants);
+  assert.equal((await request(f.site, '/api/local/room-config', {}, headers)).status, 404);
+  const other = await fetch(`${f.site}/api/rooms`, { method: 'OPTIONS' });
+  assert.equal(other.status, 404);
+  await other.json();
+  assert.equal(read_registry(f.home).length, 0);
+  assert.equal((await request(f.site, '/api/rooms')).body.rooms.length, 0);
+});
+
+test('connected browser launches on its authorized website, resumes the same request and dispatches locally once', async t => {
+  const local = await fixture(t);
+  const online = await fixture(t, false);
+  const credential = 'c'.repeat(64);
+  save_site_connection(local.home, online.site, credential);
+  save_launch_settings(local.home, { participants: local.input.participants });
+  writeFileSync(join(local.home, 'runner.lock'), String(process.pid));
+  writeFileSync(join(local.home, 'status.json'), JSON.stringify({ pid: process.pid, ready: true, updated_at: Date.now() }));
+  const headers = { Origin: online.site, 'X-CoDiscuss-Local': '1', 'X-CoDiscuss-Connection': credential };
+  const input = { site: local.site, access_file: 'must-be-ignored', entry: 'conversation', token: randomUUID(), room: online.input.room };
+  const first = await request(local.site, '/api/local/launch', input, headers);
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  assert.equal(first.headers['access-control-allow-origin'], online.site);
+  assert.equal((await request(local.site, '/api/rooms')).body.rooms.length, 0);
+  assert.equal((await request(online.site, '/api/rooms')).body.rooms.length, 1);
+  const config = load_config(first.body.config_path);
+  assert.equal(config.site, online.site);
+  assert.equal(config.token, input.token);
+  const calls = [];
+  const service = new DiscussionService(local.home, (current, store) => new DiscussionRunner(current, store,
+    async (profile, binding, task) => { calls.push({ participant: task.participant,
+      site: JSON.parse(readFileSync(join(current.directory, `${task.id}.task.json`), 'utf8')).site });
+      return { status: 'accepted', session_id: 'connected-host-session' }; }));
+  try {
+    await service.tick();
+    const repeated = await request(local.site, '/api/local/launch', input, headers);
+    assert.equal(repeated.body.room.id, first.body.room.id);
+    await service.tick();
+    assert.deepEqual(calls, [{ participant: 'Codex', site: online.site }]);
+    assert.equal(read_registry(local.home).length, 1);
+    const runtime = await api(config, '/runtime');
+    await api(config, '/runtime', { action: 'pause', revision: runtime.revision });
+    await request(local.site, '/api/local/launch', input, headers);
+    await service.tick();
+    assert.equal((await api(config, '/runtime')).status, 'paused');
+    assert.equal(calls.length, 1);
+    assert.equal((await request(online.site, '/api/local/settings', undefined, headers)).status, 404);
+  } finally { await service.close(); }
 });
 
 test('project write access is per launch, defaults to read and can differ per participant', async t => {

@@ -141,7 +141,7 @@ export function acquire_lock(directory) {
 /** Write a non-secret task separately from its CLI-only credential file. */
 export function task_files(config, event, token, binding) {
   const id = `event-${event.id}`;
-  const draft_directory = config.draft_directory || join(config.directory, 'drafts');
+  const draft_directory = config.draft_directory || `${config.directory}-drafts`;
   mkdirSync(draft_directory, { recursive: true });
   const access_path = join(config.directory, `${id}.access.json`);
   const task_path = join(config.directory, `${id}.task.json`);

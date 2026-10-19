@@ -7,11 +7,11 @@ import { join, relative, resolve } from 'node:path';
 import { createServer } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DiscussionRunner, DiscussionStore, load_config, service_drafts, task_files, validate_config } from '../runner/discussion_runner.mjs';
 import { DiscussionService, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
-import { antigravity_project, claude_exit_error, claude_rule_path, standalone_claude_env, codex_target, deliver_task, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
+import { agy_rule, antigravity_project, claude_exit_error, claude_rule_path, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
 
 /** Exercise the dispatcher against an HTTP contract without starting real software. */
 async function fixture(t) {
@@ -48,7 +48,8 @@ async function fixture(t) {
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const store = new DiscussionStore(directory);
-  t.after(async () => { store.close(); await new Promise(resolve => server.close(resolve)); rmSync(directory, { recursive: true, force: true }); });
+  t.after(async () => { store.close(); await new Promise(resolve => server.close(resolve));
+    rmSync(directory, { recursive: true, force: true }); rmSync(`${directory}-drafts`, { recursive: true, force: true }); });
   const config = { site: `http://127.0.0.1:${server.address().port}`, room: 'room', token: 'private-token', directory, project: directory, participants: { Codex: { adapter: 'codex' } } };
   return { store, event, run, calls, config, limits, failures, reserve_tokens };
 }
@@ -264,7 +265,8 @@ for (const adapter of ['claude', 'codex_cli', 'antigravity_cli']) {
 test(`${adapter} spawn failure can retry without binding an uncreated session`, async t => {
   const f = await fixture(t);
   f.config.participants.Codex = { adapter, executable: join(f.config.directory, 'missing-executable') };
-  const runner = new DiscussionRunner(f.config, f.store);
+  const runner = new DiscussionRunner(f.config, f.store,
+    (config, binding, task) => deliver_task(config, binding, task, undefined, join(f.config.directory, 'user')));
   await runner.tick(); await delay(10);
   assert.equal(f.store.pending()[0].status, 'retry_wait');
   assert.equal(f.store.binding('Codex').session_id, undefined);
@@ -320,8 +322,11 @@ function cli_events(adapter, session_id = 'actual-cli-session') {
 
 /** Capture adapter callbacks and private credentials in an isolated task directory. */
 async function cli_delivery_fixture(t, adapter, options = {}) {
-  const directory = mkdtempSync(join(tmpdir(), 'discussion-cli-adapter-'));
-  const draft_directory = join(directory, 'drafts');
+  const root = mkdtempSync(join(tmpdir(), 'discussion-cli-adapter-'));
+  const directory = join(root, 'runtime');
+  const user_home = join(root, 'user');
+  mkdirSync(directory);
+  const draft_directory = join(root, 'drafts');
   mkdirSync(draft_directory);
   const access_path = join(directory, 'access.json');
   writeFileSync(access_path, JSON.stringify({ token: 'test-only', session_id: '' }));
@@ -332,16 +337,16 @@ async function cli_delivery_fixture(t, adapter, options = {}) {
       if (call.child.exitCode === null && call.child.signalCode === null) call.child.kill();
       await call.closed;
     }
-    rmSync(directory, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
   });
-  const task = { id: 'event-1', directory, draft_directory, access_path, prompt: '讨论中文 "quotes"\n$(literal); `literal`',
+  const task = { id: 'event-1', participant: 'Gemini', directory, draft_directory, access_path, prompt: '讨论中文 "quotes"\n$(literal); `literal`',
     skills_directory: join(directory, 'skills'),
     on_binding: session => bindings.push(session), on_process: () => {},
     on_output: (path, chunk) => appendFileSync(path, chunk), on_failure: error => errors.push(error), on_exit: () => { exits++; } };
-  const config = { adapter, executable: process.execPath, project_name: 'Discussion project', ...options.config };
-  const result = await deliver_task(config, options.binding || {}, task, process_fixture.spawn_process);
+  const config = { adapter, executable: process.execPath, ...options.config };
+  const result = await deliver_task(config, options.binding || {}, task, process_fixture.spawn_process, user_home);
   await process_fixture.calls[0].closed;
-  return { directory, access_path, task, result, bindings, errors, exits, ...process_fixture };
+  return { directory, user_home, config, access_path, task, result, bindings, errors, exits, ...process_fixture };
 }
 
 for (const adapter of ['codex_cli', 'antigravity_cli']) {
@@ -370,7 +375,8 @@ test(`${adapter} starts headlessly, binds emitted identity and preserves UTF-8 p
     assert.equal(call.args[call.args.indexOf('-p') + 1], f.task.prompt);
     assert.equal(call.args[call.args.indexOf('--output-format') + 1], 'stream-json');
     assert.equal(call.args[call.args.indexOf('--print-timeout') + 1], '0');
-    assert.equal(call.args[call.args.indexOf('--project') + 1], 'Discussion project');
+    assert.match(call.args[call.args.indexOf('--project') + 1], /^[a-f0-9-]{36}$/);
+    assert.equal(f.result.permission_enforcement, 'native');
   }
   assert.match(readFileSync(join(f.directory, `${adapter}-event-1.log`), 'utf8'), /中文/);
 });
@@ -390,7 +396,11 @@ test(`${adapter} resumes only the bound conversation and honors its configured c
     assert.match(call.args.find(arg => arg.startsWith('permissions.')), /extends=":workspace"/);
     assert.equal(call.args[call.args.indexOf('--cd') + 1], project);
   }
-  else assert.equal(call.args[call.args.indexOf('--mode') + 1], 'accept-edits');
+  else {
+    assert.equal(call.args[call.args.indexOf('--mode') + 1], 'accept-edits');
+    assert.equal(f.result.permission_enforcement, 'prompt');
+    assert.equal(existsSync(join(f.user_home, '.gemini')), false);
+  }
 });
 
 test(`${adapter} keeps the project cwd when project access is read-only`, async t => {
@@ -398,11 +408,14 @@ test(`${adapter} keeps the project cwd when project access is read-only`, async 
   const f = await cli_delivery_fixture(t, adapter, { config: { cwd: project, project_access: 'read' } });
   const call = f.calls[0];
   assert.equal(call.settings.cwd, project); assert.deepEqual(f.errors, []);
-  assert.equal(call.args.includes('--mode'), false);
   if (adapter === 'codex_cli') {
+    assert.equal(call.args.includes('--mode'), false);
     assert.equal(call.args[call.args.indexOf('--cd') + 1], project);
     assert.match(call.args.find(arg => arg.startsWith('permissions.')), /extends=":read-only"/);
-  } else assert.ok(!call.args.includes(project), 'agy does not attach its cwd a second time');
+  } else {
+    assert.equal(call.args[call.args.indexOf('--mode') + 1], 'accept-edits');
+    assert.ok(!call.args.includes(project), 'agy does not attach its cwd a second time');
+  }
 });
 
 test(`${adapter} never replaces a bound identity when the CLI returns another session`, async t => {
@@ -427,7 +440,7 @@ test(`${adapter} persists a streamed binding and resumes it after a dispatcher r
   const f = await fixture(t);
   f.config.participants.Codex = { adapter, executable: process.execPath };
   const process_fixture = fake_cli(cli_events(adapter));
-  const deliver = (config, binding, task) => deliver_task(config, binding, task, process_fixture.spawn_process);
+  const deliver = (config, binding, task) => deliver_task(config, binding, task, process_fixture.spawn_process, join(f.config.directory, 'user'));
   const runner = new DiscussionRunner(f.config, f.store, deliver);
   await runner.tick(); await process_fixture.calls[0].closed;
   assert.equal(f.store.binding('Codex').session_id, 'actual-cli-session');
@@ -441,6 +454,10 @@ test(`${adapter} persists a streamed binding and resumes it after a dispatcher r
   assert.equal(args[args.indexOf(adapter === 'codex_cli' ? 'resume' : '--conversation') + 1], 'actual-cli-session');
   assert.equal(JSON.parse(readFileSync(join(f.config.directory, 'event-2.access.json'), 'utf8')).session_id, 'actual-cli-session');
   assert.equal(f.store.pending()[0].attempts, 1);
+  if (adapter === 'antigravity_cli') {
+    const first_args = process_fixture.calls[0].args;
+    assert.equal(args[args.indexOf('--project') + 1], first_args[first_args.indexOf('--project') + 1]);
+  }
 });
 
 test(`${adapter} is stopped with the runner when its discussion pauses`, async t => {
@@ -448,7 +465,7 @@ test(`${adapter} is stopped with the runner when its discussion pauses`, async t
   f.config.participants.Codex = { adapter, executable: process.execPath };
   const process_fixture = fake_cli(cli_events(adapter).slice(0, 1), { linger: true });
   const runner = new DiscussionRunner(f.config, f.store,
-    (config, binding, task) => deliver_task(config, binding, task, process_fixture.spawn_process));
+    (config, binding, task) => deliver_task(config, binding, task, process_fixture.spawn_process, join(f.config.directory, 'user')));
   try {
     await runner.tick(); assert.equal(runner.children.size, 1);
     for (let attempt = 0; attempt < 100 && !f.store.binding('Codex').session_id; attempt++) await delay(10);
@@ -479,6 +496,74 @@ test(`codex refuses conflicting or unavailable permission profiles: ${JSON.strin
   assert.equal(runner.children.size, 0);
 });
 }
+
+test('agy separates native project permissions from the selected project and preserves read/write boundaries', async t => {
+  const f = await fixture(t);
+  const user_home = join(f.config.directory, 'user');
+  const projects = join(user_home, '.gemini', 'config', 'projects');
+  mkdirSync(projects, { recursive: true });
+  const original = { id: 'original', name: 'Original project', settings: { keep: true },
+    projectResources: { resources: [{ folder: { folderUri: pathToFileURL(join(f.config.directory, 'source')).href } }] },
+    permissionGrants: { permissionGrants: { allow: ['command(*)'] } } };
+  const original_path = join(projects, 'original.json');
+  const original_text = JSON.stringify(original);
+  writeFileSync(original_path, original_text);
+  const task = task_files(f.config, f.event, 'test-token', {});
+  const config = { project_id: 'original', project_access: 'read' };
+  const first = prepare_agy_project(config, {}, task, user_home);
+  const read = JSON.parse(readFileSync(join(projects, `${first.project_id}.json`), 'utf8'));
+  const rule = path => `write_file(${resolve(path).replaceAll('\\', '/')})`;
+  assert.deepEqual(read.projectResources, original.projectResources);
+  assert.deepEqual(read.settings, {});
+  assert.deepEqual(read.permissionGrants.permissionGrants.allow, [agy_rule(), rule(task.draft_directory)]);
+  assert.ok(read.permissionGrants.permissionGrants.deny.includes(rule(join(f.config.directory, 'source'))));
+  for (const path of [task.directory, task.skills_directory, join(user_home, '.gemini')]) {
+    assert.ok(read.permissionGrants.permissionGrants.deny.includes(rule(path)));
+  }
+  assert.ok(read.permissionGrants.permissionGrants.deny.includes('mcp(*)'));
+  first.bind('real-session');
+  const resumed = prepare_agy_project({ ...config, project_access: 'write' }, { session_id: 'real-session' }, task, user_home);
+  assert.equal(resumed.project_id, first.project_id);
+  const write = JSON.parse(readFileSync(join(projects, `${first.project_id}.json`), 'utf8')).permissionGrants.permissionGrants;
+  assert.ok(write.allow.includes(rule(join(f.config.directory, 'source'))));
+  assert.ok(!write.deny.includes(rule(join(f.config.directory, 'source'))));
+  assert.ok(write.deny.includes(rule(task.directory)));
+  assert.equal(readFileSync(original_path, 'utf8'), original_text);
+  assert.throws(() => prepare_agy_project(config, { session_id: 'other-session' }, task, user_home), /会话绑定不符/);
+});
+
+test('agy refuses inherited shell bypasses before invoking a model and leaves settings unchanged', async t => {
+  const f = await fixture(t);
+  const user_home = join(f.config.directory, 'user');
+  const cli_path = join(user_home, '.gemini', 'antigravity-cli', 'settings.json');
+  const shared_path = join(user_home, '.gemini', 'config', 'config.json');
+  mkdirSync(join(user_home, '.gemini', 'antigravity-cli'), { recursive: true });
+  mkdirSync(join(user_home, '.gemini', 'config'), { recursive: true });
+  const task = task_files(f.config, f.event, 'test-token', {});
+  for (const [cli, shared] of [
+    [{ toolPermission: 'always-proceed' }, {}], [{ toolPermission: 'proceed-in-sandbox' }, {}],
+    [{ permissions: { allow: ['command(*)'] } }, {}],
+    [{}, { userSettings: { globalPermissionGrants: { allow: ['unsandboxed_command(*)'] } } }],
+  ]) {
+    writeFileSync(cli_path, JSON.stringify(cli)); writeFileSync(shared_path, JSON.stringify(shared));
+    await assert.rejects(deliver_task({ adapter: 'antigravity_cli' }, {}, task,
+      () => assert.fail('must reject before spawning'), user_home), error => error.delivery_status === 'not_sent');
+    assert.deepEqual(JSON.parse(readFileSync(cli_path, 'utf8')), cli);
+    assert.deepEqual(JSON.parse(readFileSync(shared_path, 'utf8')), shared);
+  }
+  writeFileSync(cli_path, JSON.stringify({ toolPermission: 'request-review', permissions: { allow: [agy_rule()] } }));
+  writeFileSync(shared_path, JSON.stringify({ userSettings: { globalPermissionGrants: { allow: ['read_url(https://example.com)'] } } }));
+  assert.ok(prepare_agy_project({}, {}, task, user_home).project_id);
+});
+
+test('agy rejects nested answer storage because native deny rules take priority over allows', async t => {
+  const f = await fixture(t);
+  const task = task_files(f.config, f.event, 'test-token', {});
+  for (const parent of [task.directory, task.skills_directory, join(f.config.directory, 'user', '.gemini')]) {
+    assert.throws(() => prepare_agy_project({}, {}, { ...task, draft_directory: join(parent, 'drafts') },
+      join(f.config.directory, 'user')), /草稿目录不能位于/);
+  }
+});
 
 test('claude allows only codiscuss website subcommands and draft writes, then user rules', async t => {
   const f = await cli_delivery_fixture(t, 'claude', { events: [{ type: 'result', is_error: false, result: '完成' }],
@@ -516,7 +601,7 @@ test('tasks state whether the discussion project is read-only or writable', asyn
   assert.match(task_files(config, f.event, 'token-for-test', {}).prompt, /允许按议题需要修改/);
   const saved = JSON.parse(readFileSync(join(f.config.directory, 'event-1.task.json'), 'utf8'));
   assert.equal(saved.project_access, 'write'); assert.equal(saved.cwd, project);
-  assert.equal(saved.draft_directory, join(f.config.directory, 'drafts'));
+  assert.equal(saved.draft_directory, `${f.config.directory}-drafts`);
   assert.ok(existsSync(saved.draft_directory));
   assert.match(saved.instructions, /不修改任务、凭据、日志或调度数据库/);
   assert.match(task_files(load_config_from(f, project), f.event, 'token-for-test', {}).prompt, /只读，不修改/);
@@ -549,7 +634,7 @@ test('CLI failure results pause immediately even when the process exits with cod
         : { event: 'result', result: { status: 'WAITING', response: 'permission required' } });
       const process_fixture = fake_cli(events);
       const runner = new DiscussionRunner(f.config, f.store,
-        (config, binding, task) => deliver_task(config, binding, task, process_fixture.spawn_process));
+        (config, binding, task) => deliver_task(config, binding, task, process_fixture.spawn_process, join(f.config.directory, 'user')));
       await runner.tick(); await process_fixture.calls[0].closed; await runner.tick();
       assert.equal(f.event.status, 'failed'); assert.equal(f.run.status, 'paused');
       assert.match(f.event.result, /quota exceeded|permission required/);
@@ -921,6 +1006,8 @@ test('unified help separates website run controls from the resident service', as
   assert.match(setup_help.output, /Cursor 当前只安装技能/);
   const local_help = await run_service_cli(env, 'local', '--help');
   assert.equal(local_help.code, 0); assert.match(local_help.output, /codiscuss local/);
+  assert.match(local_help.output, /connect SITE/);
+  assert.match(local_help.output, /disconnect SITE/);
   assert.equal(existsSync(join(home, 'local')), false);
   const schema = await run_service_cli(env, 'schema', 'message', 'post');
   assert.equal(schema.code, 0); assert.equal(JSON.parse(schema.output).ok, true);

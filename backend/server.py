@@ -1,6 +1,7 @@
 """AI CoDiscuss 的零依赖 HTTP / SQLite 概念验证服务。"""
 
 import argparse
+import hmac
 import json
 import logging
 import os
@@ -953,6 +954,8 @@ class DiscussionServer(ThreadingHTTPServer):
         if local_launch and address[0] != "127.0.0.1":
             raise ValueError("本机启动入口须绑定 127.0.0.1")
         self.local_launch = local_launch
+        service_home = os.getenv("DISCUSS_SERVICE_HOME")
+        self.connections_file = Path(service_home) / "site-connections.json" if service_home else None
         super().__init__(address, DiscussionHandler)
 
     def server_bind(self):
@@ -979,6 +982,14 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("Referrer-Policy", "no-referrer")
+        if getattr(self, "bridge_origin", None):
+            self.send_header("Access-Control-Allow-Origin", self.bridge_origin)
+            self.send_header("Vary", "Origin")
+            if self.command == "OPTIONS":
+                self.send_header("Access-Control-Allow-Methods", "GET, POST")
+                self.send_header("Access-Control-Allow-Headers", "Content-Type, X-CoDiscuss-Local, X-CoDiscuss-Connection")
+                if self.headers.get("Access-Control-Request-Private-Network") == "true":
+                    self.send_header("Access-Control-Allow-Private-Network", "true")
         self.end_headers()
         self.wfile.write(data)
 
@@ -998,6 +1009,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
     def dispatch(self, method):
         """Route a request and consistently report validation or lookup errors."""
         self.payload_cache = None
+        self.bridge_origin = None
         parsed = urlsplit(self.path)
         params = {key: values[-1] for key, values in parse_qs(parsed.query).items()}
         parts = parsed.path.strip("/").split("/")
@@ -1037,24 +1049,60 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Handle browser form submissions through JSON POST endpoints."""
         self.dispatch("POST")
 
-    def handle_local_launch(self, parts, method):
-        """Forward explicit same-origin local launch requests to the shared Node entrypoint."""
+    def do_OPTIONS(self):
+        """Handle preflight only for explicitly connected websites on the local bridge."""
+        if urlsplit(self.path).path.startswith("/api/local/"):
+            return self.dispatch("OPTIONS")
+        return self.respond({"error": "地址不存在"}, 404)
+
+    def local_request_site(self, method):
+        """Authenticate a local page or a site-bound browser connection before reading configuration."""
         if not self.server.local_launch:
             raise LookupError("本机启动未启用，请使用 python server.py --local-launch")
         allowed_hosts = {f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"}
         host = self.headers.get("Host", "")
         origin = self.headers.get("Origin")
-        if (self.client_address[0] != "127.0.0.1" or host not in allowed_hosts
-                or (origin and origin != f"http://{host}")
-                or self.headers.get("X-CoDiscuss-Local") != "1"
+        if self.client_address[0] != "127.0.0.1" or host not in allowed_hosts:
+            raise PermissionError("本机启动只接受本机同源请求")
+        if origin and origin != f"http://{host}":
+            return self.connected_request_site(origin, method)
+        if (method == "OPTIONS" or self.headers.get("X-CoDiscuss-Local") != "1"
                 or self.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none")):
             raise PermissionError("本机启动只接受本机同源请求")
+        return f"http://{host}"
+
+    def connected_request_site(self, origin, method):
+        """Require both an explicitly registered origin and its private connection credential."""
+        path = self.server.connections_file
+        settings = json.loads(path.read_text(encoding="utf-8")) if path and path.exists() else {}
+        expected = settings.get("sites", {}).get(origin, {}).get("token_hash")
+        if not isinstance(expected, str) or not expected:
+            raise PermissionError("此网站尚未连接本机；请运行 codiscuss local connect 站点地址")
+        self.bridge_origin = origin
+        if method == "OPTIONS":
+            headers = {value.strip().lower() for value in self.headers.get("Access-Control-Request-Headers", "").split(",")}
+            allowed = {"content-type", "x-codiscuss-local", "x-codiscuss-connection"}
+            if (self.headers.get("Access-Control-Request-Method") not in ("GET", "POST")
+                    or not {"x-codiscuss-local", "x-codiscuss-connection"}.issubset(headers) or headers - allowed):
+                raise PermissionError("连接请求不受支持")
+            return origin
+        credential = self.headers.get("X-CoDiscuss-Connection", "")
+        if (self.headers.get("X-CoDiscuss-Local") != "1" or not re.fullmatch(r"[a-f0-9]{64}", credential)
+                or not hmac.compare_digest(token_hash(credential), expected)):
+            raise PermissionError("本机连接已失效，请重新运行 codiscuss local connect 站点地址")
+        return origin
+
+    def handle_local_launch(self, parts, method):
+        """Forward authenticated browser requests to the shared Node entrypoint and pin their website."""
+        site = self.local_request_site(method)
         route = parts[2:]
+        if method == "OPTIONS" and route in (["settings"], ["launch"]):
+            return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
             command = "settings"
         elif route == ["launch"] and method == "POST":
             command = "start"
-        elif route == ["room-config"] and method == "POST":
+        elif route == ["room-config"] and method == "POST" and not self.bridge_origin:
             command = "room-config"
         else:
             raise LookupError("本机入口不存在")
@@ -1065,7 +1113,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             payload = self.read_payload()
             if command in ("start", "room-config"):
                 payload.pop("access_file", None)
-                payload.update(site=f"http://{host}", entry="web")
+                payload.update(site=site, entry="web")
         if command == "room-config" and "participants" in payload:
             return self.save_local_room_configuration(command, payload)
         return self.run_local_command(command, payload)

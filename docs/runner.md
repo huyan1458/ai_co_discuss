@@ -44,7 +44,7 @@ codiscuss local stop
 
 ## 两种讨论入口与启动配置
 
-讨论可以从已有 AI 对话调用主持 Skill 发起，也可以从本机网页发起。它们共用 `runner/discussion_launch.mjs`；全自动 / 手动是推进方式，CLI / App 是实际执行客户端。以下统一启动器用于全自动接入；手动讨论保留原 Skill / CLI 流程。
+讨论可以从已有 AI 对话调用主持 Skill 发起，也可以从本机或已连接本机的线上网页发起。它们共用 `runner/discussion_launch.mjs`；全自动 / 手动是推进方式，CLI / App 是实际执行客户端。以下统一启动器用于全自动接入；手动讨论保留原 Skill / CLI 流程。
 
 配置分两层：
 
@@ -75,7 +75,29 @@ python server.py --host 127.0.0.1 --local-launch
 
 新建表单切到全自动时，默认选入已配置路径的本地软件，并选择其中一位主持；没有配置则需明确选择和补齐。支持的软件列表不会全部自动参会，手动与自动模式各保留本次表单中的选择。只有自动模式显示单次 AI 执行上限。“直接结束（不总结）”保留已有记录；需要主持总结时，在允许收尾的运行状态使用“请主持人收尾”。
 
-网页启动仅由显式启用的 Python 回环网站提供；Cloudflare、普通 Python 公共部署不提供本机配置或进程操作。`--local-launch` 拒绝非 `127.0.0.1` 监听，`/api/local/settings` 与 `/api/local/launch` 检查本机连接、Host、Origin、请求头与 JSON 类型，不开放 CORS。浏览器只提交启动意图，Node 启动器生成私有配置并调用原接入服务，不调用模型 API。无需事先开启常驻服务，启动器会启动或复用它；网站与服务仍是独立进程。
+网页启动由显式启用的 Python 回环服务执行；Cloudflare、普通 Python 公共部署不提供本机配置或进程操作。`--local-launch` 拒绝非 `127.0.0.1` 监听，本机页面继续使用同源接口；线上页面须先完成下节的站点授权，随后由浏览器直接请求本机服务。Node 启动器生成私有配置并调用原接入服务，不调用模型 API。启动器会启动或复用讨论服务；网站与服务仍是独立进程。
+
+### 线上网页连接本机
+
+更新线上网页和本机程序后，在运行 AI 的电脑上完成 `setup`，再执行：
+
+```sh
+codiscuss local connect https://你的站点
+```
+
+`connect` 只接受 HTTPS 根地址（本机验证允许 `http://127.0.0.1:端口` 或 `http://localhost:端口`），不接受用户名、密码、路径、查询或片段。它启动或复用本机网站及讨论服务，为该站点生成独立的随机连接凭据，打开线上网页。页面从链接片段读取连接后立即清除地址栏片段，保存到该站点的浏览器本地存储；片段不会发送到线上 HTTP 服务。`--no-open` 只输出连接链接供手动打开，链接具有本机配置与启动权限，不应分享。
+
+连接成功后，线上页面可以读取 / 保存本机软件默认配置、新建并启动讨论、启动本机尚未登记的现有未启动房间；程序复用原有持久启动日志和会话绑定。首次连接可能需要允许浏览器访问本机网络；[Chrome 的 Local Network Access 说明](https://developer.chrome.com/blog/local-network-access)规定了这类访问的权限要求。须在运行 AI 的同一台电脑和保存连接的浏览器中使用；手机、另一台电脑、未获本机网络权限的浏览器不因此获得远程控制能力。已有的线上房间事件消费方式不变。
+
+软件路径、连接凭据与启动配置由浏览器直接发到 `http://127.0.0.1:<本机端口>/api/local/`，不经过线上服务器。服务目录的 `site-connections.json` 仅保存站点来源及凭据 SHA-256；每次请求重新核对来源、凭据、回环 Host 和自定义头。CORS 仅返回已登记的精确 Origin，实际请求仍必须提供凭据；预检不启动进程或写配置。启动目标固定为已授权 Origin，忽略请求中伪造的 `site`、`entry` 和 `access_file`。原有控制凭据、去重与暂停后不自动恢复规则继续生效。
+
+本机服务重启保留连接；用 `codiscuss local open` 恢复后，在网页重新检查连接即可。再次 `connect` 会替换该站点旧凭据，旧浏览器连接失效。撤销方式：
+
+```sh
+codiscuss local disconnect https://你的站点
+```
+
+撤销阻止该站点继续读取配置或发起新启动，不终止已运行的讨论，须另行暂停。连接失败或响应丢失时保留原启动待办，恢复后重试原请求；不换编号重建。线上连接暂不开放 `/api/local/room-config`，既有房间的路径修正仍限本机网站的数据库锁保护流程。未连接浏览器仍可使用[下载配置与登记](deployment.md#可选的全自动接入)方式。
 
 ### 从 AI 对话发起
 
@@ -106,7 +128,7 @@ codiscuss launch start --file 本次启动.json
 
 接入已有受保护房间时，启动器先验证事件读取所需的控制凭据，再保存日志、启动服务和改变房间状态；错误凭据不留下失败绑定。旧日志曾保存错误凭据时，沿用原请求并提供正确的私有凭据文件或网页凭据，验证成功后会修正该房间配置；运行中的服务读取修正值，保留原会话、运行代次和暂停状态。启动回执不代表 AI 已进入或已完成任务，仍以网站实际执行记录为准。
 
-启动器与 UI 已使用隔离 Python 网站、临时配置及替身交付测试；真实账号讨论和跨平台行为仍需实机核验。
+启动器与 UI 已通过隔离回归；Windows 下本机网页已实际拉起 Claude Code 2.1.302 与 agy 1.4.2，完成发言、主持总结和收束。其他客户端组合、跨平台行为及公开 HTTPS 页面连接本机的完整链路仍需实机核验，具体证据见下文。
 
 ## 房间与软件配置
 
@@ -149,7 +171,7 @@ codiscuss launch start --file 本次启动.json
 
 cwd 是工作目录，不等于操作系统沙箱或权限提升。讨论材料在用户指定的 cwd，回答草稿只放任务中的 `draft_directory`；CLI 与凭据是显式的工具路径。路径和项目配置仅保存在本机，不进入公开事件。
 
-本机服务将回答草稿放在 `<服务目录>/drafts/<运行目录摘要>/`，按运行目录隔离；任务文件、执行凭据、日志和 `runtime.sqlite3` 仍在原运行目录。旧房间配置无需改写，服务加载时为其计算同一草稿位置；已有草稿不自动搬迁。单独运行 `runner` 时默认使用运行目录下的 `drafts/` 子目录。草稿经 `--body-file` 提交后以网站记录为准，日志可能保留 CLI 输出；这里的目录分工不承诺讨论内容只存在网站，也不使凭据对所有 AI 工具不可读。
+本机服务将回答草稿放在 `<服务目录>/drafts/<运行目录摘要>/`，按运行目录隔离；任务文件、执行凭据、日志和 `runtime.sqlite3` 仍在原运行目录。旧房间配置无需改写，服务加载时为其计算同一草稿位置；已有草稿不自动搬迁。单独运行 `runner` 时默认使用与运行目录同级的 `<运行目录名>-drafts/`。草稿经 `--body-file` 提交后以网站记录为准，日志可能保留 CLI 输出；这里的目录分工不承诺讨论内容只存在网站，也不使凭据对所有 AI 工具不可读。
 
 ## 独立 CLI 接入
 
@@ -180,7 +202,7 @@ Windows 的 `executable` 填原生 `.exe`，不填 npm 的 `.cmd` / `.ps1` 包�
 | --- | --- | --- |
 | `codex_cli` | `codex exec --json`，从 `thread.started` 读取实际 ID；后续 `exec resume ID`，不使用 `--last` | 首次与续接均显式 `--cd` 到用户指定项目；省略 cwd 时使用本场独立草稿目录。允许非 Git 目录；项目与草稿的写入权限由本次 permission profile 区分。项目名仅作元数据，不关联 App 项目分组 |
 | `claude` | 现有 `claude -p --output-format json`；后续 `--resume ID` | 沿用上表中的 Claude 规则 |
-| `antigravity_cli` | `agy -p --output-format stream-json`，从 `init.conversation_id` 读取实际 ID；后续 `--conversation ID`，不使用 `--continue` | 在用户指定项目启动；省略 cwd 时使用本场独立草稿目录。首次可通过 `project_id` 或 `project_name` 传 `--project`，续接时沿用该会话的项目；同时提供任务、技能和草稿目录 |
+| `antigravity_cli` | `agy -p --output-format stream-json`，从 `init.conversation_id` 读取实际 ID；后续 `--conversation ID`，不使用 `--continue` | 保持指定 cwd；省略 cwd 时使用本场独立草稿目录。新会话创建独立的原生讨论项目，沿用所选项目的资源目录并设置权限，续接复用该项目；外部已有会话保留原项目和上下文 |
 
 两种新适配器都不需要 `source_thread_id` 或 `ipc_directory`。实际 ID 在输出流到达时写入本机绑定和本次执行凭据，随后 AI 按任务文件自行 `execution enter` 并通过讨论 CLI 保存业务结果；程序不把终端回答直接代发。已有 App 绑定不能通过改适配器直接复用，须先暂停并使用独立 `data_directory` 明确重新接入。此路径不承诺 CLI 会话同步到桌面 App。
 
@@ -188,25 +210,33 @@ Windows 的 `executable` 填原生 `.exe`，不填 npm 的 `.cmd` / `.ps1` 包�
 
 每次执行只开放本场讨论所需的最小权限，不使用全部放行或绕过审批参数。任务文件的 `cli` 为 `codiscuss`，`subcommands` 列出唯一放行的网站子命令：`room`、`message`、`turn`、`state`、`floor`、`execution`、`health`、`schema`；`service`、`launch`、`run`、`api`、`setup`、`install`、`local` 不放行。提示词要求命令以 `codiscuss` 开头，不用 `python discuss.py`、`cd` 或管道。规则不含路径，重装或更换 Python 无需更新；子进程 PATH 中的 `codiscuss` 须指向本次安装，setup 的持久命令检查会核对。
 
-项目文件权限 `project_access` 为 `read`（默认）或 `write`：启动文件顶层设本场值，`participants.NAME.project_access` 覆盖单个 AI，空字符串表示沿用本场值。它只随本次启动保存，不能存入本机默认配置；网页新建讨论在“启动”区直接提供项目目录与项目文件选项，单个 AI 的覆盖在“调整启动配置”中。三种 CLI 都在用户指定的 cwd 启动；省略 cwd 时才使用独立草稿目录。只读与可写不再改变项目上下文。**本项目当前对 agy 的只读要求通过提示词实现，不提供强制文件隔离**：不额外启用自动编辑，但继承的用户规则与模式仍可能允许写入。App 适配器的写权限也由 App 自身决定，任务文件始终写明本场要求。
+项目文件权限 `project_access` 为 `read`（默认）或 `write`：启动文件顶层设本场值，`participants.NAME.project_access` 覆盖单个 AI，空字符串表示沿用本场值。它只随本次启动保存，不能存入本机默认配置；网页新建讨论在“启动”区直接提供项目目录与项目文件选项，单个 AI 的覆盖在“调整启动配置”中。三种 CLI 都在用户指定的 cwd 启动；省略 cwd 时才使用独立草稿目录。agy 新建会话使用原生项目权限；已有外部会话继续使用提示词约束，保留原项目与历史。App 适配器的写权限由 App 自身决定，任务文件始终写明本场要求。
 
 | 适配器 | 本次追加 | 只读 / 可写差异 |
 | --- | --- | --- |
 | `claude` | `--add-dir` 运行、草稿与技能目录；每个子命令各一条 `Bash(codiscuss room *)` 与 `PowerShell(codiscuss room *)`，仅对独立草稿增加 `Edit(//<草稿目录>/**)`，再追加用户的 `allowed_tools` | 可写时再加 `Edit(//<项目目录>/**)`；不再对运行目录新增 Edit 放行，已有用户规则仍生效；Windows 路径按 `//c/...` 匹配 |
 | `codex_cli` | 每次创建唯一名称的 permission profile，通过 `-c default_permissions=...` 与 `permissions.<名称>=...` 传入，`approval_policy="never"`；运行目录只读，独立草稿目录可写 | 无项目或项目只读时继承 `:read-only`，项目可写时继承 `:workspace`；维持原有广泛读取范围和本次联网能力，未启用域名过滤 |
-| `antigravity_cli` | `--add-dir` 运行、草稿与技能目录；安装规则仅新增讨论命令和服务草稿目录写入 | 只读时提示词要求不修改项目，不额外传 `accept-edits`；可写时传 `--mode accept-edits`，该模式也可能允许写附加目录，因此不承诺运行目录或技能目录被强制保护 |
+| `antigravity_cli` | 新会话使用独立 `--project UUID` 与 `--mode accept-edits`；项目规则允许讨论命令和草稿写入，禁止运行目录、技能目录、`~/.gemini` 写入及 MCP 工具调用；每次启动检查全局命令权限 | `read` 为项目目录添加 `write_file(目录)` deny，`write` 改为 allow；运行数据禁写不随项目授权放开。旧外部绑定只传原会话 ID，沿用提示词约束，可写时才额外传 `accept-edits` |
 
-上述 agy 限制是本项目当前实现的边界，不表示 agy 缺少禁止写入的能力。官方支持在 `permissions.deny` 使用 `write_file(目录)`，按目录前缀递归匹配，不使用 `/**`；优先级为 Deny > Ask > Allow，全局 `write_file(*)` 禁令不能再用草稿 allow 例外放行。[官方权限文档](https://antigravity.google/docs/permissions?tab=cli) 与 [Issue #798 后续澄清及 Linux 复测](https://github.com/google-antigravity/antigravity-cli/issues/798) 支持这一判断。若以后实现项目强制只读，还须覆盖 shell、MCP 等其他写入渠道，并保留 `codiscuss` 提交能力；直接禁止 `command(*)` 会一并阻断提交。仅省略 `accept-edits` 或使用 `--mode plan` 都不足以完成这些限制，[plan 模式只添加规划指令，shell 仍受独立权限控制](https://antigravity.google/docs/cli/modes)。这套组合尚未在本机 Windows 验证，本轮按用户选择保留提示词约束。
+agy 的规则按目录前缀递归匹配，不使用 `/**`；Deny > Ask > Allow，因此草稿不得放在只读项目、运行目录、技能或 `.gemini` 中，路径冲突会在交付前报告。原生工具权限不是操作系统沙箱：runner 同时要求 CLI 的 `toolPermission` 为默认 `request-review`，检查 CLI 和共享全局 allow，存在本工具讨论规则以外的 `command(...)` / `unsandboxed_command(...)` 放行时拒绝交付；未授权 shell 在非交互模式下被拒绝。MCP 工具调用统一 deny，避免经 MCP 写入项目。[原生权限文档](https://antigravity.google/docs/permissions?tab=cli)、[CLI 设置](https://antigravity.google/docs/settings?tab=cli)。
+
+独立讨论项目保存在 `~/.gemini/config/projects/<UUID>.json`，运行目录的 `agy-project-<参与者摘要>.json` 保存项目与实际会话绑定。所选原项目及用户全局配置不被改写；新项目只沿用资源目录，不继承原项目的命令放行。会话继续使用时保留这两份记录，不将生成的讨论会话手动迁入其他项目。agy 续接已有会话会恢复其原项目，传入另一 `--project` 不能替换它；因此历史绑定和从当前 agy 对话发起的主持保留提示词约束，交付回执以 `permission_enforcement: prompt` 标识，新管理会话为 `native`。缺失已登记的原生项目或会话绑定不匹配时拒绝交付。[项目权限继承](https://antigravity.google/docs/projects?tab=cli)。
 
 Codex 要求 CLI 0.163.0 或更新版本，使用 permission profiles 和本地 `app-server config/read`。配置检查先核对初始化回执中的版本；不支持或无法识别的版本拒绝交付。每次交付前只启动本地配置检查进程，不创建会话、不调用模型；发现已加载的旧 `sandbox_mode` / `sandbox_workspace_write` 或新配置未被采用就拒绝交付，避免旧设置覆盖本次限制。报错后需更新不支持的 CLI 或移除冲突的旧配置；接入程序不自动改写用户全局设置。首次与续接使用同一组权限参数，配置检查进程也随暂停或停止清理。[Codex 权限配置](https://learn.chatgpt.com/docs/permissions)
 
-agy 没有单次命令放行参数，规则只能写入 `~/.gemini/antigravity-cli/settings.json` 的 `permissions.allow`。`setup` 选中 Gemini 时询问一次（回车同意，`--yes` 视为同意），追加两条规则：只匹配 `codiscuss` 或 `codiscuss.cmd`、可选一个 `--site` 网址及上述子命令的 `command(regex:...)`，参数不得含分号、`&`、`|`、`<`、`>`、美元符号与反引号，因此无法接第二条命令；以及 `write_file(<服务目录>/drafts)`（Windows 保留盘符、使用正斜杠）。写入前备份原文件到服务目录 `agy-settings.backup.json`，`agy-permission.json` 记录已写规则；升级后重跑 setup 会将本工具曾写入的宽泛 `launches` 写规则替换为 `drafts`，不改其他设置与用户规则。单独运行 runner 时须按任务中的实际草稿目录配置 agy。文件无法解析时不写入并报告待处理；非交互且未加 `--yes` 只报告。
+agy 没有单次命令放行参数，新管理会话由上述项目规则放行。兼容旧会话和手动接入的 `setup` 仍可向 `~/.gemini/antigravity-cli/settings.json` 的 `permissions.allow` 写入规则：选中 Gemini 时询问一次（回车同意，`--yes` 视为同意），追加两条规则：只匹配 `codiscuss` 或 `codiscuss.cmd`、可选一个 `--site` 网址及上述子命令的 `command(regex:...)`，参数不得含分号、`&`、`|`、`<`、`>`、美元符号、反引号与圆括号，避免附加命令或 PowerShell 括号表达式；以及 `write_file(<服务目录>/drafts)`（Windows 保留盘符、使用正斜杠）。写入前备份原文件到服务目录 `agy-settings.backup.json`，`agy-permission.json` 记录已写规则；升级后重跑 setup 会替换本工具记录的旧命令规则，并将宽泛 `launches` 写规则替换为 `drafts`，不改其他设置与用户规则。旧会话通过单独 runner 运行时须按任务中的实际草稿目录配置 agy。文件无法解析时不写入并报告待处理；非交互且未加 `--yes` 只报告。
 
 2026-10-18 本机实测（本轮权限调整前）：Claude 主持、Codex 与 Gemini 专家完成一场最小讨论。Windows 的 Codex / agy 经 PowerShell 调用时优先执行 npm 生成的 `codiscuss.ps1`；Codex elevated 沙箱内即使当前用户为 RemoteSigned 也拒绝 `.ps1`，Codex 自行改用 `cmd.exe` 调用 `codiscuss.cmd` 后成功。`agy` 非交互模式下被拒绝的工具也可能伴随退出码 0，最终仍以网站业务保存为准。`agy` 显式使用 `--print-timeout 0`，由房间的单次执行时限和整场截止控制停止，避免额外的 CLI 默认时限提前截断。
 
 结构化失败（Codex `turn.failed`、Antigravity 非 `SUCCESS` 结果）、非零退出码、缺少会话 ID 或成功结束事件均记录为失败；软件已启动后不自动重发。正常退出后若网站尚未保存本次结果，复查后暂停。暂停或停止接入服务会终止本服务创建的 CLI 进程，保留会话绑定和本机日志。
 
 2026-10-19 权限调整验证：Windows / Codex CLI 0.163.0 的本地配置检查采用了本次 profile；以原生 `sandbox`（`unelevated`）运行无模型的文件操作，确认项目 cwd 保持、中文文件可读、只读模式拒绝项目与运行目录写入、可写模式允许项目写入但仍拒绝运行目录写入，两种模式均可写草稿并访问本机 HTTP。此证据不覆盖 elevated 模式、其他平台或本轮调整后的真实模型讨论。
+
+2026-10-19 agy 原生权限验证：Windows / agy 1.4.2 使用临时项目与合成数据调用真实模型，确认项目文件和运行凭据的文件写入命中原生 deny；MCP 写入工具被拒绝，测试 MCP 服务未收到 `tools/call`；未放行的 shell 写入被拒绝。通过最终 runner 入口新建会话完成项目读取、草稿写入及 `codiscuss.cmd --body-file` 的本机 HTTP 提交，同一会话续接后项目写入仍被 deny，原文件未变。随后实测 `project_access: write` 成功修改项目文件，同一可写会话仍无法修改运行凭据；没有改写用户原项目和全局权限设置。
+
+同日完整业务验证：独立 Python 网站与临时数据库运行真实 `launch_discussion`、`DiscussionService` 和软件适配器，Claude Code 2.1.302 主持、agy 1.4.2 专家完成两轮讨论，保存 4 条观点与 1 条有原文引用的主持总结，房间正常收束。Gemini 首次进入后暂停，旧执行取消、实际 CLI 进程退出且没有新增回答；关闭并重新创建服务实例后沿用原会话继续。两位 AI 分别始终使用同一个会话，项目文件哈希不变，结束后所有记录到的 CLI 进程及测试网站均退出。此测试覆盖本机完整路径配置，不覆盖其他平台、版本或后台服务操作系统进程崩溃；后者的持久化恢复另由自动化测试覆盖。Windows 临时目录含 `ADMINI~1` 等短文件名时，Claude 会拒绝读取；本次改用完整用户目录后通过，短路径兼容性仍有限制。
+
+同日本机网页验证：使用独立服务目录，经 `codiscuss local start` 启动实际网站及后台服务，在内置浏览器 1440 × 900 / 100% 视口点击“创建并启动讨论”，未指定项目目录。Claude Code 2.1.302 与 agy 1.4.2 各保存一条真实观点，Claude 引用两条原文保存总结，房间阶段与运行状态均为 `concluded`，AI 子进程全部退出。首次 agy 因认证等待 60 秒超时而触发暂停；直接运行原生 CLI 刷新已有登录凭据后，在网页重启原房间成功接续，未重复创建房间或发言。这证明本机网页启动与故障恢复，不代表登录状态始终有效或线上 HTTPS 链路已验收。
 
 接口依据：[Codex 非交互模式](https://learn.chatgpt.com/docs/non-interactive-mode)、[Antigravity CLI 非交互模式](https://antigravity.google/docs/cli/headless/)。2026-10-18 已核对本机 Codex CLI 0.163.0、Antigravity CLI 1.4.2 的版本与帮助参数；自动化测试使用临时 HTTP 服务和子进程替身验证启动、绑定、续接、错误和暂停，真实讨论与本轮调整的验证边界分别如上。
 

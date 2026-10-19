@@ -15,7 +15,7 @@ const HELP = `AI CoDiscuss CLI
 
   （无命令）            在当前终端启动服务，Ctrl+C 停止
   install / setup       安装持久命令并配置 / 配置已有安装
-  local COMMAND         打开、启动、停止或查询本机网站
+  local COMMAND         管理本机网站，或 connect 连接线上站点
   service COMMAND       启动、停止、查询服务，或登记房间
   launch COMMAND        保存启动配置，或从 AI 对话启动讨论
   room COMMAND          创建、读取或更新讨论房间

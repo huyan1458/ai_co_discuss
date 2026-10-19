@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import { detect_python } from '../runner/discussion_setup.mjs';
+import { connection_site } from '../runner/discussion_local.mjs';
 
 const CLI = fileURLToPath(new URL('../runner/codiscuss.mjs', import.meta.url));
 
@@ -30,6 +31,54 @@ function fixture(port) {
   };
   return { home, python, env, execute, command };
 }
+
+test('website connection requires a secure root origin before any process or configuration is created', () => {
+  assert.equal(connection_site('https://discussion.example:443/'), 'https://discussion.example');
+  assert.equal(connection_site('http://127.0.0.1:8765'), 'http://127.0.0.1:8765');
+  for (const site of ['http://discussion.example', 'https://name:secret@discussion.example', 'https://discussion.example/path',
+    'https://discussion.example/?query=1', 'https://discussion.example/#fragment', 'file:///tmp']) {
+    assert.throws(() => connection_site(site), /HTTPS 根地址/);
+  }
+});
+
+test('local connect persists only the site-bound hash, rotates credentials and revokes without stopping the website', async () => {
+  const reservation = await reserve_port();
+  const port = reservation.address().port;
+  await new Promise(done => reservation.close(done));
+  const state = fixture(port);
+  const site = 'https://discussion.example';
+  try {
+    assert.notEqual(state.execute(['local', 'connect', 'http://discussion.example', '--no-open']).status, 0);
+    assert.equal(existsSync(join(state.home, 'local')), false);
+    const connected = state.command(['local', 'connect', site, '--no-open']);
+    const link = new URL(connected.url);
+    assert.equal(link.origin, site);
+    assert.equal(link.search, '');
+    const connection = JSON.parse(new URLSearchParams(link.hash.slice(1)).get('codiscuss-connect'));
+    const saved = readFileSync(join(state.home, 'site-connections.json'), 'utf8');
+    assert.equal(saved.includes(connection.token), false);
+    const headers = { Origin: site, 'X-CoDiscuss-Local': '1', 'X-CoDiscuss-Connection': connection.token };
+    const get_settings = async current => {
+      const response = await fetch(`${connected.local_url}/api/local/settings`, { headers: current });
+      await response.json();
+      return response.status;
+    };
+    assert.equal(await get_settings(headers), 200);
+    state.command(['local', 'stop']);
+    const reopened = state.command(['local', 'start']);
+    assert.equal(await get_settings(headers), 200, 'connection survives an ordinary local restart');
+    state.command(['local', 'connect', site, '--no-open']);
+    assert.equal(await get_settings(headers), 403, 'old browser credential must stop working after reconnect');
+    assert.equal(state.command(['local', 'disconnect', site]).disconnected, site);
+    assert.equal(state.command(['local', 'status']).website_pid, reopened.website_pid);
+    assert.equal(await get_settings(headers), 403);
+    assert.deepEqual(JSON.parse(readFileSync(join(state.home, 'site-connections.json'))).sites, {});
+  } finally {
+    state.execute(['local', 'stop']);
+    state.execute(['service', 'stop', '--json']);
+    rmSync(state.home, { recursive: true, force: true });
+  }
+});
 
 test('local lifecycle reuses processes and preserves data outside the package', async () => {
   const reservation = await reserve_port();

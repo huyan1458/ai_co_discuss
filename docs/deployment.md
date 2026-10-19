@@ -143,7 +143,7 @@ codiscuss room list --site https://YOUR_PROJECT_NAME.pages.dev
 
 ## 可选的全自动接入
 
-本机使用可直接通过 `python server.py --local-launch` 打开网页启动入口，或在 AI 对话中调用主持 Skill 使用 `codiscuss launch start`。两者共用本机默认配置与单场覆盖，见 [讨论入口与配置](runner.md#两种讨论入口与启动配置)。以下手动导出与登记方式保留，适用于已部署站点或已有配置。
+本机使用可直接通过 `codiscuss local open` 打开网页启动入口，或在 AI 对话中调用主持 Skill 使用 `codiscuss launch start`。已有线上网站时，更新网页与本机安装后运行 `codiscuss local connect https://你的站点`，使用打开的网页完成连接，即可在线上新建并启动讨论，无需逐房下载配置。浏览器与 AI 须在同一台电脑；连接与权限说明见 [线上网页连接本机](runner.md#线上网页连接本机)。各入口共用本机默认配置与单场覆盖。以下手动导出与登记方式继续适用于未连接的浏览器或已有配置。
 
 接入程序随本仓库提供，无需安装其他项目。网页可以运行在本机或 Cloudflare，常驻服务与实际 AI 软件仍运行在你的电脑；网站不启动本机进程。服务需要 Node.js 24+，AI 通过 CLI 读写网站另需 Python 3.10+。Python 网站启动时自动应用 schema；升级 D1 必须先在测试库核对，再由部署者执行 schema，不能只更新网页资源。
 

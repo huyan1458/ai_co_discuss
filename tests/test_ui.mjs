@@ -20,7 +20,7 @@ function theme_fixture(saved_theme = null, shared_storage = null) {
     getElementById: (id) => nodes.get(id), querySelectorAll: () => buttons,
     createElement: () => ({}), head: { append(node) { nodes.set(node.id, node); loaded.push(node); } },
   };
-  const context = vm.createContext({ window: {}, document, crypto: globalThis.crypto, localStorage: {
+  const context = vm.createContext({ window: {}, document, crypto: globalThis.crypto, URL, URLSearchParams, AbortSignal, localStorage: {
     getItem: (key) => storage.get(key), setItem: (key, value) => storage.set(key, value),
     removeItem: key => storage.delete(key), key: index => [...storage.keys()][index], get length() { return storage.size; },
   } });
@@ -28,6 +28,79 @@ function theme_fixture(saved_theme = null, shared_storage = null) {
   context.publish_view = () => {};
   return { context, nodes, classes, storage, loaded, buttons, root: document.documentElement };
 }
+
+/** Model a public page and its private browser storage without using a real local credential. */
+function connection_fixture(connection, shared_storage) {
+  const fixture = theme_fixture(null, shared_storage);
+  const location = new URL('https://discussion.example/?room=keep');
+  if (connection) location.hash = `codiscuss-connect=${encodeURIComponent(JSON.stringify(connection))}`;
+  const requests = [];
+  Object.assign(fixture.context, { location, render_launch_settings() {},
+    history: { replaceState(_state, _title, url) { assert.equal(url, '/?room=keep'); location.hash = ''; } },
+    fetch: async (url, options) => {
+      assert.equal(location.hash, '', 'connection secret must leave the address bar before network requests');
+      requests.push({ url, options });
+      return { ok: true, json: async () => ({ participants: { Claude: { adapter: 'claude', executable: '/local/claude' } } }) };
+    },
+  });
+  return { ...fixture, requests, location };
+}
+
+test('online connection removes its URL secret, survives reload and sends private settings only to loopback', async () => {
+  const connection = { site: 'https://discussion.example', endpoint: 'http://127.0.0.1:8765', token: 'a'.repeat(64) };
+  const fixture = connection_fixture(connection);
+  await fixture.context.load_launch_settings();
+  assert.equal(fixture.context.test_state.launch.available, true);
+  assert.equal(fixture.context.test_state.launch.remote, true);
+  assert.equal(fixture.requests[0].url, `${connection.endpoint}/api/local/settings`);
+  assert.equal(fixture.requests[0].options.headers['X-CoDiscuss-Connection'], connection.token);
+  assert.equal(fixture.requests[0].options.credentials, 'omit');
+  assert.equal(fixture.requests[0].options.redirect, 'error');
+  assert.equal(JSON.stringify(fixture.context.test_state.launch).includes(connection.token), false);
+  const reloaded = connection_fixture(null, fixture.storage);
+  await reloaded.context.load_launch_settings();
+  await reloaded.context.local_launch_request('launch', { token: 'room-credential', room: { title: '新讨论' } });
+  assert.equal(reloaded.requests.length, 2);
+  assert.equal(reloaded.requests[1].url, `${connection.endpoint}/api/local/launch`);
+  assert.equal(JSON.parse(reloaded.requests[1].options.body).room.title, '新讨论');
+});
+
+test('unconnected public page shows the connection command without probing arbitrary local ports', async () => {
+  const fixture = connection_fixture();
+  await fixture.context.load_launch_settings();
+  assert.equal(fixture.context.test_state.launch.available, false);
+  assert.match(fixture.context.test_state.launch.connect_command, /codiscuss local connect "https:\/\/discussion.example"/);
+  assert.equal(fixture.requests.length, 0);
+});
+
+test('browser rejects connection links for another site, remote endpoints, URL credentials or malformed tokens', async () => {
+  const connection = { site: 'https://discussion.example', endpoint: 'http://127.0.0.1:8765', token: 'b'.repeat(64) };
+  for (const override of [{ site: 'https://unrelated.example' }, { endpoint: 'https://unrelated.example' },
+    { endpoint: 'http://127.0.0.1:8765/path' }, { endpoint: 'http://name:secret@127.0.0.1:8765' }, { token: 'invalid' }]) {
+    const fixture = connection_fixture({ ...connection, ...override });
+    await fixture.context.load_launch_settings();
+    assert.equal(fixture.location.hash, '');
+    assert.equal(fixture.requests.length, 0);
+    assert.equal(fixture.context.test_state.launch.available, false);
+    assert.match(fixture.context.test_state.launch.error, /连接链接无效/);
+    assert.equal(fixture.storage.get('discuss-local-connection'), undefined);
+  }
+});
+
+test('connection failure remains visible and an explicit retry restores availability without creating a room', async () => {
+  const fixture = connection_fixture({ site: 'https://discussion.example', endpoint: 'http://127.0.0.1:8765', token: 'c'.repeat(64) });
+  const fetch = fixture.context.fetch;
+  fixture.context.fetch = async () => { throw new TypeError('Failed to fetch'); };
+  await fixture.context.load_launch_settings();
+  assert.equal(fixture.context.test_state.launch.available, false);
+  assert.match(fixture.context.test_state.launch.error, /允许浏览器访问本机网络/);
+  fixture.context.fetch = fetch;
+  await fixture.context.load_launch_settings();
+  assert.equal(fixture.context.test_state.launch.available, true);
+  assert.equal(fixture.context.test_state.launch.error, '');
+  assert.equal(fixture.requests.length, 1);
+  assert.equal(fixture.requests[0].options.method, 'GET');
+});
 
 test("recent conversation order is local, reversible and preserves manual placement and drafts", () => {
   const fixture = theme_fixture();

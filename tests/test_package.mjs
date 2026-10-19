@@ -32,6 +32,14 @@ async function verify_installed_website(package_path, execute, env) {
       'import json,sys,urllib.request; base=sys.argv[1]; assert json.load(urllib.request.urlopen(base+"/api/health"))["ok"]; assert urllib.request.urlopen(base).status==200; assert len(urllib.request.urlopen(base+"/modern.js").read())>100',
       result.local.url], { encoding: 'utf8' });
     assert.equal(website.status, 0, website.stderr);
+    const linked = installed_command(execute, cli, ['local', 'connect', 'https://discussion.example', '--no-open']);
+    const connection = JSON.parse(new URLSearchParams(new URL(linked.url).hash.slice(1)).get('codiscuss-connect'));
+    const connected_settings = await fetch(`${connection.endpoint}/api/local/settings`, { headers: {
+      Origin: connection.site, 'X-CoDiscuss-Local': '1', 'X-CoDiscuss-Connection': connection.token,
+    } });
+    assert.equal(connected_settings.status, 200);
+    assert.equal(connected_settings.headers.get('Access-Control-Allow-Origin'), connection.site);
+    installed_command(execute, cli, ['local', 'disconnect', connection.site]);
     await verify_installed_launches(package_path, execute, env, result.local.url);
   } finally {
     const stopped = execute(cli, ['local', 'stop']);
@@ -48,6 +56,16 @@ function installed_command(execute, cli, args) {
 
 /** A Node executable running an exec file replaces Codex; only test acknowledgements are sent. */
 function write_cli_stub(home) {
+  writeFileSync(join(home, 'app-server'), `const readline = require('node:readline');
+    const configured = process.argv.find(value => value.startsWith('default_permissions='));
+    const name = JSON.parse(configured.slice(configured.indexOf('=') + 1));
+    readline.createInterface({ input: process.stdin }).on('line', line => {
+      const request = JSON.parse(line);
+      if (!request.id) return;
+      const result = request.method === 'initialize' ? { userAgent: 'Codex Desktop/0.163.0 (test)' }
+        : { config: { default_permissions: name, permissions: { [name]: {} } } };
+      process.stdout.write(JSON.stringify({ id: request.id, result }) + '\\n');
+    });`);
   writeFileSync(join(home, 'exec'), `const fs = require('node:fs');
     const { spawnSync } = require('node:child_process');
     const { setTimeout: delay } = require('node:timers/promises');
@@ -94,7 +112,7 @@ async function verify_installed_launches(package_path, execute, env, site) {
   assert.equal(entered.data.status, 'started');
   installed_command(execute, cli, ['--site', site, 'execution', 'fail', task.room, String(task.event_id), '--access-file', task.access_file, '--reason', 'conversation-integration-complete']);
   const web_token = randomUUID();
-  // The Codex stand-in runs ./exec from its start directory, which is the project only with write access.
+  // The stand-in runs ./app-server and ./exec from the preserved project directory.
   const response = await fetch(`${site}/api/local/launch`, { method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-CoDiscuss-Local': '1', Origin: site },
     body: JSON.stringify({ cwd: home, project_access: 'write', token: web_token, room: { ...input.room, submission_id: randomUUID() } }) });

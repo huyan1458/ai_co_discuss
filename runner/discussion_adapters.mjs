@@ -2,10 +2,10 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CodexAppClient } from './codex_app_client.mjs';
 
 const CALL_TIMEOUT_MS = 30_000;
@@ -135,6 +135,78 @@ export function launch_directory(config, task) {
   return project_directory(config) || task.draft_directory;
 }
 
+/** Allow only the discussion website commands, without shell separators or expressions. */
+export function agy_rule() {
+  const safe = '[^;&|<>$`()\\r\\n]';
+  return `command(regex:^codiscuss(\\.cmd)?( --site ${safe.replace('[^', '[^ ')}+)? (${TASK_SUBCOMMANDS.join('|')})( ${safe}*)?$)`;
+}
+
+/** Read optional native settings; malformed settings must not silently disable a permission check. */
+function read_json(path) { return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {}; }
+
+/** Native headless review blocks unapproved shell commands; inherited command grants could bypass it. */
+function check_agy_shell(user_home) {
+  const cli = read_json(join(user_home, '.gemini', 'antigravity-cli', 'settings.json'));
+  const shared = read_json(join(user_home, '.gemini', 'config', 'config.json'));
+  const grants = [...(cli.permissions?.allow || []), ...(shared.userSettings?.globalPermissionGrants?.allow || [])];
+  if ((cli.toolPermission && cli.toolPermission !== 'request-review')
+    || grants.some(rule => rule !== agy_rule() && (/^(?:unsandboxed_)?command\(/.test(rule) || rule === '*'))) {
+    throw new Error('agy 全局命令放行或 toolPermission 会绕过本场文件限制；请保留 request-review，重跑 setup 更新旧管理规则并移除额外命令放行，未交付讨论任务');
+  }
+}
+
+/** Test directory containment on the current platform, including Windows drive boundaries. */
+function within_directory(parent, child) {
+  const path = relative(resolve(parent), resolve(child));
+  return !path || (!isAbsolute(path) && path !== '..' && !path.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`));
+}
+
+/** Resolve only the user's selected folders; do not inherit another project's grants or settings. */
+function agy_resources(config, task, root) {
+  if (config.project_id || config.project_name) return antigravity_project(config, root).projectResources?.resources || [];
+  return [{ folder: { folderUri: pathToFileURL(launch_directory(config, task)).href } }];
+}
+
+/** Build native deny rules for protected directories, with separate writable answer storage. */
+function agy_project_grants(config, task, resources, user_home) {
+  const folders = resources.map(resource => resource.gitFolder?.folderUri || resource.folder?.folderUri)
+    .filter(uri => uri?.startsWith('file:')).map(uri => fileURLToPath(uri));
+  const projects = [...new Set([project_directory(config), ...folders].filter(directory => directory && !same_path(directory, task.draft_directory)))];
+  const protected_paths = [task.directory, task.skills_directory, join(user_home, '.gemini'),
+    ...(config.project_access === 'write' ? [] : projects)];
+  if (protected_paths.some(directory => within_directory(directory, task.draft_directory))) {
+    throw new Error('agy 草稿目录不能位于只读项目、运行目录、技能或 .gemini 配置目录中，未交付讨论任务');
+  }
+  const write_rule = directory => `write_file(${resolve(directory).replaceAll('\\', '/')})`;
+  return { allow: [agy_rule(), write_rule(task.draft_directory),
+    ...(config.project_access === 'write' ? projects.map(write_rule) : [])],
+  deny: [...new Set(protected_paths.map(write_rule)), 'mcp(*)'] };
+}
+
+/** Keep a private native project per participant; existing external conversations retain their original project. */
+export function prepare_agy_project(config, binding, task, user_home = homedir()) {
+  const key = createHash('sha256').update(task.participant).digest('hex');
+  const record_path = join(task.directory, `agy-project-${key}.json`);
+  const record = read_json(record_path);
+  if (binding.session_id && !record.project_id) return null;
+  if (record.session_id && record.session_id !== binding.session_id) throw new Error('agy 项目记录与会话绑定不符，未交付讨论任务');
+  check_agy_shell(user_home);
+  const root = join(user_home, '.gemini', 'config');
+  const resources = agy_resources(config, task, root);
+  const grants = agy_project_grants(config, task, resources, user_home);
+  const project_id = record.project_id || randomUUID();
+  if (!/^[a-f0-9-]{36}$/.test(project_id)) throw new Error('agy 项目记录无效，未交付讨论任务');
+  const path = join(root, 'projects', `${project_id}.json`);
+  const current = read_json(path);
+  if (record.project_id && current.id !== project_id) throw new Error('agy 讨论项目已丢失或不匹配，未交付讨论任务');
+  mkdirSync(join(root, 'projects'), { recursive: true });
+  atomic_json(path, { ...current, id: project_id, name: `CoDiscuss · ${task.participant}`,
+    projectResources: { resources }, settings: {}, permissionGrants: { permissionGrants: grants, v2Migrated: true } });
+  const saved = { project_id, session_id: record.session_id || '' };
+  atomic_json(record_path, saved);
+  return { project_id, bind: session_id => atomic_json(record_path, { ...saved, session_id }) };
+}
+
 /**
  * Allow only listed codiscuss website subcommands and draft writes for this run; user rules are added after.
  * Claude Code on Windows may run commands through its PowerShell tool instead of Bash, so both are listed.
@@ -245,7 +317,7 @@ async function check_codex_permissions(config, task, permissions, spawn_process)
 }
 
 /** Build native CLI arguments; every continuation names the exact bound conversation. */
-function cli_invocation(config, binding, task) {
+function cli_invocation(config, binding, task, user_home) {
   if (config.adapter === 'codex_cli') {
     const permissions = codex_permissions(config, task);
     const args = ['exec', '--cd', launch_directory(config, task)];
@@ -253,14 +325,14 @@ function cli_invocation(config, binding, task) {
     args.push(...permissions.args, '--json', '--skip-git-repo-check', '-');
     return { args, input: task.prompt, permissions };
   }
-  // agy's read-only project instruction is advisory; inherited user settings can still permit edits.
+  const project = prepare_agy_project(config, binding, task, user_home);
   const args = ['--output-format', 'stream-json', '--print-timeout', '0', '--add-dir', task.directory,
     '--add-dir', task.draft_directory, '--add-dir', task.skills_directory];
-  if (project_directory(config) && config.project_access === 'write') args.push('--mode', 'accept-edits');
+  if (project || (project_directory(config) && config.project_access === 'write')) args.push('--mode', 'accept-edits');
+  if (project) args.push('--project', project.project_id);
   if (binding.session_id) args.push('--conversation', binding.session_id);
-  else if (config.project_id || config.project_name) args.push('--project', config.project_id || config.project_name);
   args.push('-p', task.prompt);
-  return { args };
+  return { args, project, permission_enforcement: project ? 'native' : 'prompt' };
 }
 
 /** Persist an emitted identity before the agent reads its execution credential file. */
@@ -328,14 +400,20 @@ function monitor_cli(child, config, binding, task) {
   return state;
 }
 
-/** Start one headless CLI turn without opening an App or changing native permission settings. */
-async function cli_delivery(config, binding, task, spawn_process) {
+/** Start one headless CLI turn; native agy permissions belong to a separate discussion project. */
+async function cli_delivery(config, binding, task, spawn_process, user_home) {
   if (binding.session_id) {
     try { bind_access(task.access_path, binding.session_id); }
     catch (error) { throw not_sent(error); }
   }
-  const invocation = cli_invocation(config, binding, task);
+  let invocation;
+  try { invocation = cli_invocation(config, binding, task, user_home); }
+  catch (error) { throw not_sent(error); }
   if (invocation.permissions) await check_codex_permissions(config, task, invocation.permissions, spawn_process);
+  if (invocation.project) {
+    const on_binding = task.on_binding;
+    task = { ...task, on_binding: session_id => { invocation.project.bind(session_id); on_binding(session_id); } };
+  }
   let child;
   try {
     child = spawn_process(config.executable, invocation.args, {
@@ -350,7 +428,8 @@ async function cli_delivery(config, binding, task, spawn_process) {
   });
   child.stdin.on('error', error => { if (error.code !== 'EPIPE') task.on_failure(error.message); });
   child.stdin.end(invocation.input);
-  return { session_id: state.session_id, status: 'accepted' };
+  return { session_id: state.session_id, status: 'accepted',
+    ...(invocation.permission_enforcement ? { permission_enforcement: invocation.permission_enforcement } : {}) };
 }
 
 /** Queue one immutable request for the official App-managed Sidecar. */
@@ -408,11 +487,11 @@ export function setup_sidecar(config, root = join(homedir(), '.gemini', 'config'
 }
 
 /** Select only allowlisted adapter types from local configuration. */
-export async function deliver_task(config, binding, task, spawn_process = spawn) {
+export async function deliver_task(config, binding, task, spawn_process = spawn, user_home = homedir()) {
   const adapters = { codex: codex_delivery, claude: claude_delivery, antigravity: antigravity_delivery,
     codex_cli: cli_delivery, antigravity_cli: cli_delivery };
   if (!adapters[config.adapter]) throw new Error('不支持的软件适配器');
-  return adapters[config.adapter](config, binding, task, spawn_process);
+  return adapters[config.adapter](config, binding, task, spawn_process, user_home);
 }
 
 /** Read a Sidecar's durable receipt without resubmitting an uncertain request. */

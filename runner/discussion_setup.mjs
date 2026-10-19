@@ -7,10 +7,11 @@ import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
-import { atomic_json, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
+import { agy_rule, atomic_json } from './discussion_adapters.mjs';
 import { launch_settings, save_launch_settings } from './discussion_launch.mjs';
 import { service_home } from './discussion_service.mjs';
 import { install_skills } from './discussion_skills.mjs';
+export { agy_rule } from './discussion_adapters.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const PROBE_TIMEOUT = 10000;
@@ -191,14 +192,6 @@ async function choose_profile(client, current, options) {
     effective: { adapter: current.adapter, executable: current.executable }, detected,
     action: `如需更新，运行 codiscuss setup --clients ${client.key} --${client.key} "${client.executable}"；交互 setup 也可确认保留。` };
   return { client: client.name, status: 'configured', effective: detected };
-}
-
-/** agy only reads command rules from user settings; allow just the task's codiscuss website subcommands. */
-export function agy_rule() {
-  // Arguments may not contain separators, redirection or PowerShell expressions, so no second command fits.
-  // A single --site value may precede the subcommand; codiscuss.cmd avoids blocked PowerShell scripts.
-  const safe = '[^;&|<>$`\\r\\n]';
-  return `command(regex:^codiscuss(\\.cmd)?( --site ${safe.replace('[^', '[^ ')}+)? (${TASK_SUBCOMMANDS.join('|')})( ${safe}*)?$)`;
 }
 
 /** Allow answer files only; service runtime data never belongs to the managed write rule. */

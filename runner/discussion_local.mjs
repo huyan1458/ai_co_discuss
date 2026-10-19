@@ -1,9 +1,11 @@
 /** Own the local website and only the discussion service started by this supervisor. */
 import { spawn } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync } from 'node:fs';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { parseArgs } from 'node:util';
 
 import { atomic_json } from './discussion_adapters.mjs';
 import { acquire_lock } from './discussion_runner.mjs';
@@ -15,6 +17,50 @@ const SERVER = fileURLToPath(new URL('../server.py', import.meta.url));
 const START_WAIT_MS = 15000;
 const STOP_WAIT_MS = 25000;
 const POLL_MS = 200;
+const CONNECTION_TOKEN_BYTES = 32;
+const LOCAL_HELP = `用法：codiscuss local open|start|status|stop
+      codiscuss local connect SITE [--no-open]
+      codiscuss local disconnect SITE
+
+connect 允许指定 HTTPS 站点通过此浏览器使用本机软件配置并启动 AI，打开连接链接完成接入。
+disconnect 撤销该站点的新启动权限；已运行的讨论须另行暂停。
+数据保留在服务目录中；重新 connect 会替换该站点的旧连接。
+`;
+
+/** Accept an explicit secure website origin; loopback HTTP is available for local deployments. */
+export function connection_site(value) {
+  const url = new URL(value);
+  const local_http = url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname);
+  if ((url.protocol !== 'https:' && !local_http) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
+    throw new Error('连接站点须为 HTTPS 根地址；本机测试可使用 http://127.0.0.1:端口');
+  }
+  return url.origin;
+}
+
+/** Save only a token hash, or revoke this site's connection without touching active discussions. */
+export function save_site_connection(home, site, token = null) {
+  const origin = connection_site(site);
+  const release = acquire_lock(join(home, 'connection-lock'));
+  try {
+    const path = join(home, 'site-connections.json');
+    const settings = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { sites: {} };
+    if (token) settings.sites[origin] = { token_hash: createHash('sha256').update(token).digest('hex') };
+    else delete settings.sites[origin];
+    atomic_json(path, settings);
+  } finally { release(); }
+}
+
+/** Start the local service and open a site-bound connection whose credential stays in the URL fragment. */
+async function connect_site(home, site, no_open) {
+  const origin = connection_site(site);
+  const local = await start_local(home);
+  const token = randomBytes(CONNECTION_TOKEN_BYTES).toString('hex');
+  save_site_connection(home, origin, token);
+  const connection = { site: origin, endpoint: local.url, token };
+  const url = `${origin}/#codiscuss-connect=${encodeURIComponent(JSON.stringify(connection))}`;
+  if (!no_open) open_site(url);
+  return { connected: origin, local_url: local.url, url };
+}
 
 /** Read the website supervisor's lock and last startup receipt. */
 export function local_status(home = service_home()) {
@@ -171,7 +217,7 @@ async function stop_local(home) {
   throw new Error('本机服务尚未停止，请查看 local/supervisor.log');
 }
 
-/** Open only the loopback URL returned by this website supervisor. */
+/** Open the supervisor's loopback URL or a website explicitly authorized by local connect. */
 function open_site(url) {
   const [command, args] = process.platform === 'win32' ? ['rundll32', ['url.dll,FileProtocolHandler', url]]
     : [process.platform === 'darwin' ? 'open' : 'xdg-open', [url]];
@@ -182,10 +228,21 @@ function open_site(url) {
 
 /** Manage local website lifecycle without changing discussion launch semantics. */
 export async function local_main(args, output = value => process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)) {
-  const [command = 'open'] = args;
+  const { positionals, values } = parseArgs({ args, allowPositionals: true, options: {
+    'no-open': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
+  } });
+  const [command = 'open', site] = positionals;
   const home = service_home();
-  if (['help', '--help', '-h'].includes(command)) return output('用法：codiscuss local open|start|status|stop；数据保留在服务目录的 local/ 中。');
-  if (args.length > 1 || !['open', 'start', 'status', 'stop'].includes(command)) throw new Error('用法：codiscuss local open|start|status|stop');
+  if (values.help || command === 'help') return output(LOCAL_HELP);
+  if (['connect', 'disconnect'].includes(command)) {
+    if (positionals.length !== 2 || (values['no-open'] && command !== 'connect')) throw new Error(LOCAL_HELP);
+    const origin = connection_site(site);
+    const result = command === 'connect' ? await connect_site(home, origin, values['no-open'])
+      : (save_site_connection(home, origin), { disconnected: origin });
+    output(result);
+    return result;
+  }
+  if (positionals.length > 1 || values['no-open'] || !['open', 'start', 'status', 'stop'].includes(command)) throw new Error(LOCAL_HELP);
   const result = command === 'status' ? local_status(home) : command === 'stop' ? await stop_local(home) : await start_local(home);
   if (command === 'open') open_site(result.url);
   output(result);

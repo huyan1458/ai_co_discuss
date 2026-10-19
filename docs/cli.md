@@ -2,7 +2,7 @@
 
 推荐统一使用 `codiscuss`：通过 [npm 安装配置](runner.md#npm-安装与本机配置)，或开发时在仓库运行一次 `npm link` 后，可在任意目录调用。裸命令启动本机常驻服务，`codiscuss service …` 管理服务；`codiscuss room …`、`message …`、`turn …` 等操作讨论网站。统一入口需要 Node.js 24+，网站操作另需 Python 3.10+；优先使用 `setup` 保存的 Python 路径，未配置时 Windows 使用 PATH 中的 `python`，其他系统使用 `python3`。
 
-`codiscuss install` 安装持久命令后配置，`codiscuss setup` 配置现有安装；`codiscuss local open|start|status|stop` 管理本机网站和它启动的服务，不创建讨论。两种 AI 启动入口继续使用 `launch`。
+`codiscuss install` 安装持久命令后配置，`codiscuss setup` 配置现有安装；`codiscuss local open|start|status|stop` 管理本机网站和它启动的服务，不创建讨论。`codiscuss local connect SITE [--no-open]` 授权指定 HTTPS 站点的浏览器调用本机启动程序，`local disconnect SITE` 撤销该站点权限；两者都不创建讨论，连接链接不可转发。网页与 AI 对话启动继续复用 `launch`，详见[线上网页连接本机](runner.md#线上网页连接本机)。
 
 网站操作输入明确的站点、房间、身份和操作参数，输出 JSON 或文本，每次执行完退出；参数、stdin、相对文件路径和退出码与原客户端保持一致，不自动重试。`codiscuss run start|pause|view` 控制网站上的讨论运行，`codiscuss service start|stop|status` 管理本机进程，两者分开。网站命令不会启动本机服务。
 
