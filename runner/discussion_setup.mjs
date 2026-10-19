@@ -79,7 +79,7 @@ function path_program(name, search_path = process.env.PATH || '', allow_cmd = fa
   return '';
 }
 
-/** Locate npm Codex's native binary inside its package when only its shim is on PATH. */
+/** Locate npm Codex's native binary inside its package when only its shim is on PATH; dot directories are npm upgrade leftovers. */
 function codex_binary(search_path) {
   const roots = search_path.split(delimiter).filter(Boolean)
     .map(directory => join(directory, 'node_modules', '@openai'));
@@ -89,7 +89,7 @@ function codex_binary(search_path) {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const path = join(directory, entry.name);
       if (entry.isFile() && entry.name === 'codex.exe') return path;
-      if (entry.isDirectory() && depth < 7) queue.push([path, depth + 1]);
+      if (entry.isDirectory() && !entry.name.startsWith('.') && depth < 7) queue.push([path, depth + 1]);
     }
   }
   return '';

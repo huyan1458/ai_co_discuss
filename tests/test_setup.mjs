@@ -87,6 +87,19 @@ test('Cursor Windows cmd launcher is probed with a fixed argument and a path con
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
+test('npm Codex binary search skips dot-prefixed upgrade leftovers', { skip: process.platform !== 'win32' }, () => {
+  const directory = mkdtempSync(join(tmpdir(), 'codiscuss-codex npm-'));
+  try {
+    const scope = join(directory, 'node_modules', '@openai');
+    const leftover = join(scope, '.codex-awaeVzrD');
+    const vendor = join(scope, 'codex', 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'codex');
+    for (const path of [leftover, vendor]) mkdirSync(path, { recursive: true });
+    fixture_cli(leftover, 'codex');
+    const current = fixture_cli(vendor, 'codex');
+    assert.equal(detect_clients({}, directory).find(item => item.key === 'codex').executable, current);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 test('complete skills install idempotently and preserve user edits', () => {
   const directory = mkdtempSync(join(tmpdir(), 'codiscuss-skills-'));
   try {

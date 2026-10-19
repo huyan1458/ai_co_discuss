@@ -12,7 +12,7 @@ npx --yes --package ./ai_co_discuss-0.1.0.tgz codiscuss install
 
 `install` 在安装包或写配置前检查 Node、Python、端口参数及显式选择的软件路径，再将当前包安装到 npm 的全局 prefix，由持久安装运行 `setup`；不依赖 npx 缓存长期存在。已有源码时可直接在仓库执行 `node runner/codiscuss.mjs install`。普通 `npm install --global 包路径.tgz` 只安装命令，随后运行 `codiscuss setup`；没有 postinstall 配置或启动副作用。开发者仍可使用下文的 `npm link`。
 
-`setup` 检测 Python 和固定四类 CLI：Claude（`claude`）、Codex（`codex`）、Gemini 使用的 Antigravity（`agy`）、Grok 使用的 Cursor（`agent` / `cursor-agent`）。按显式路径或 PATH 查找并执行有超时的 `--version`；Windows 读取实际 `.exe`，Cursor 也支持官方 `.cmd` 启动入口。仅检查 CLI 能否启动，不扫描 App、账号登录或模型状态；已有 App 配置不会被当成检测成功。
+`setup` 检测 Python 和固定四类 CLI：Claude（`claude`）、Codex（`codex`）、Gemini 使用的 Antigravity（`agy`）、Grok 使用的 Cursor（`agent` / `cursor-agent`）。按显式路径或 PATH 查找并执行有超时的 `--version`；Windows 读取实际 `.exe`（PATH 上只有 npm 包装脚本时，到 `node_modules/@openai` 包内查找 Codex 原生程序，跳过 npm 升级残留的 `.` 开头目录），Cursor 也支持官方 `.cmd` 启动入口。仅检查 CLI 能否启动，不扫描 App、账号登录或模型状态；已有 App 配置不会被当成检测成功。
 
 用户选定后，Python、端口写入服务目录的 `local-settings.json`；已支持自动接入的 CLI 默认配置写入 `launch-settings.json`。已有类型或路径与检测结果不同时，交互终端显示两者并询问保留或更新；非交互或 `--yes` 保留旧配置，但报告待处理，不能视为所选 CLI 已配置。显式 `--codex/--claude/--antigravity` 路径直接更新对应软件为 CLI，其他已保存字段保留。结果列出实际沿用的类型与路径。Cursor 当前仅检测并安装技能，不写入无效的自动启动配置；可按手动接入流程参与，Grok 模型由用户在 Cursor 中选择。登录和工具许可仍在对应 CLI 中设置。
 
