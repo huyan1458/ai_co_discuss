@@ -3,11 +3,12 @@ import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import { install_skills } from '../runner/discussion_skills.mjs';
-import { agy_rule, agy_rules, allow_agy_command, check_command, detect_clients, detect_python } from '../runner/discussion_setup.mjs';
+import { agy_rule, agy_rules, allow_agy_command, check_command, checkbox_prompt, detect_clients, detect_python } from '../runner/discussion_setup.mjs';
 
 const CLI = fileURLToPath(new URL('../runner/codiscuss.mjs', import.meta.url));
 
@@ -60,6 +61,23 @@ test('agy setup narrows the old launch write rule to drafts and leaves user sett
     assert.equal((await allow_agy_command(home, directory, { yes: true })).status, 'invalid');
     assert.equal(readFileSync(path, 'utf8'), '{ broken');
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('client checkbox skips undetected entries, toggles with space and confirms with enter', async () => {
+  const input = Object.assign(new PassThrough(), { isTTY: true, raw: [], setRawMode(value) { this.raw.push(value); } });
+  const output = new PassThrough();
+  const items = [{ label: 'Codex', hint: 'codex.exe', checked: true, disabled: false },
+    { label: 'Gemini', hint: '未检测到 CLI', checked: false, disabled: true },
+    { label: 'Claude', hint: 'claude.exe', checked: true, disabled: false }];
+  const result = checkbox_prompt('选择要接入的软件', items, input, output);
+  input.write(' ');
+  input.write('\x1b[B');
+  input.write(' ');
+  input.write(' ');
+  input.write('\r');
+  assert.deepEqual(await result, [false, false, true]);
+  assert.deepEqual(input.raw, [true, false]);
+  assert.match(output.read().toString(), /\[-\] Gemini/);
 });
 
 test('CLI detection is limited to Claude, Codex, agy and Cursor command aliases', () => {

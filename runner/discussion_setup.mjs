@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { accessSync, constants, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
+import { emitKeypressEvents } from 'node:readline';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -137,18 +138,64 @@ export function detect_clients(options = {}, search_path = process.env.PATH || '
   });
 }
 
+/**
+ * Render a terminal checkbox list: arrows move, space toggles, enter confirms, Ctrl+C cancels.
+ * @param {{label: string, hint: string, checked: boolean, disabled: boolean}[]} items
+ * @returns {Promise<boolean[]>} The checked state of every item.
+ */
+export function checkbox_prompt(message, items, input = process.stdin, output = process.stderr) {
+  const checked = items.map(item => item.checked && !item.disabled);
+  let cursor = Math.max(0, items.findIndex(item => !item.disabled)), drawn = 0;
+  const move = step => {
+    for (let next = cursor + step; next >= 0 && next < items.length; next += step) {
+      if (!items[next].disabled) { cursor = next; return; }
+    }
+  };
+  const draw = () => {
+    if (drawn) output.write(`\x1b[${drawn}A`);
+    const lines = [`${message}  \x1b[2m↑↓ 移动 · 空格 勾选 · 回车 确认\x1b[0m`, ...items.map((item, index) => {
+      const pointer = index === cursor ? '\x1b[36m>\x1b[0m' : ' ';
+      if (item.disabled) return `${pointer} \x1b[2m[-] ${item.label}  ${item.hint}\x1b[0m`;
+      return `${pointer} ${checked[index] ? '\x1b[32m[x]\x1b[0m' : '[ ]'} ${item.label}  \x1b[2m${item.hint}\x1b[0m`;
+    })];
+    output.write(`${lines.map(line => `\x1b[2K${line}`).join('\n')}\n`);
+    drawn = lines.length;
+  };
+  return new Promise((done, fail) => {
+    const finish = error => {
+      input.off('keypress', on_key);
+      input.setRawMode(false);
+      input.pause();
+      output.write('\x1b[?25h');
+      if (error) fail(error); else done(checked);
+    };
+    const on_key = (text, key = {}) => {
+      if (key.ctrl && key.name === 'c') return finish(new Error('已取消安装选择'));
+      if (key.name === 'up' || key.name === 'k') move(-1);
+      else if (key.name === 'down' || key.name === 'j') move(1);
+      else if (key.name === 'space' && !items[cursor]?.disabled) checked[cursor] = !checked[cursor];
+      else if (key.name === 'return' || key.name === 'enter') return finish();
+      draw();
+    };
+    emitKeypressEvents(input);
+    input.setRawMode(true);
+    input.resume();
+    input.on('keypress', on_key);
+    output.write('\x1b[?25l');
+    draw();
+  });
+}
+
 /** Select detected clients interactively or through explicit noninteractive options. */
 async function selected_clients(options, detected) {
   let choice = options.clients;
-  const available = detected.filter(item => item.executable);
-  const defaults = available.filter(item => item.adapter);
-  for (const item of detected) process.stderr.write(`${item.name}：${item.executable || '未检测到 CLI'}\n`);
   if (choice === undefined && !options.yes) {
     if (!process.stdin.isTTY) throw new Error('非交互终端请使用 --yes 或 --clients；只配置网站可用 --clients none。');
-    const prompt = createInterface({ input: process.stdin, output: process.stderr });
-    try { choice = await prompt.question(`选择软件（逗号分隔，回车选择 ${defaults.map(item => item.key).join(',') || 'none'}）：`); }
-    finally { prompt.close(); }
-  }
+    const items = detected.map(item => ({ label: item.name, hint: item.executable || '未检测到 CLI',
+      checked: Boolean(item.executable && item.adapter), disabled: !item.executable }));
+    const checked = await checkbox_prompt('选择要接入的软件', items);
+    choice = detected.filter((_, index) => checked[index]).map(item => item.key).join(',') || 'none';
+  } else for (const item of detected) process.stderr.write(`${item.name}：${item.executable || '未检测到 CLI'}\n`);
   return requested_clients(choice, detected);
 }
 

@@ -24,7 +24,7 @@ codiscuss local status
 codiscuss local stop
 ```
 
-交互回车及 `--yes` 默认选择检测到且已有自动适配器的 CLI；`--clients codex,claude,antigravity,cursor` 明确选择，`none` 只配置网站，Cursor 需要显式选择。`--no-start` 只配置，`--no-open` 启动网站但不打开浏览器；无交互输入时须提供 `--yes` 或 `--clients`。软件路径可用 `--codex PATH`、`--claude PATH`、`--antigravity PATH`、`--cursor PATH` 指定。`install --prefix DIR` 可使用可写的 npm 安装前缀；Windows 命令目录是 prefix 本身，macOS/Linux 是其 `bin` 子目录。
+交互终端显示多选列表（方向键移动、空格勾选、回车确认，Ctrl+C 取消），默认勾选检测到且已有自动适配器的 CLI，未检测到的软件不可勾选；`--yes` 同样默认选择这些 CLI；`--clients codex,claude,antigravity,cursor` 明确选择，`none` 只配置网站，Cursor 需要显式选择。`--no-start` 只配置，`--no-open` 启动网站但不打开浏览器；无交互输入时须提供 `--yes` 或 `--clients`。软件路径可用 `--codex PATH`、`--claude PATH`、`--antigravity PATH`、`--cursor PATH` 指定。`install --prefix DIR` 可使用可写的 npm 安装前缀；Windows 命令目录是 prefix 本身，macOS/Linux 是其 `bin` 子目录。
 
 配置结束时忽略 npx 临时入口，核对当前 PATH 中的持久 `codiscuss` 是否指向本次安装，并实际执行 `--help`。命令缺失、旧入口优先或无法运行均报告待处理及处理方式；自定义 prefix 未在 PATH 时，输出需要加入的实际目录。安装器不修改系统 PATH；修正后重新打开终端运行 `codiscuss setup`。
 
