@@ -28,7 +28,7 @@ codiscuss local stop
 
 配置结束时忽略 npx 临时入口，核对当前 PATH 中的持久 `codiscuss` 是否指向本次安装，并实际执行 `--help`。命令缺失、旧入口优先或无法运行均报告待处理及处理方式；自定义 prefix 未在 PATH 时，输出需要加入的实际目录。安装器不修改系统 PATH；修正后重新打开终端运行 `codiscuss setup`。
 
-`install/setup` 保留 stdout JSON，并在 stderr 输出中文摘要，包括实际软件配置、Skill 文件就绪数、命令和网站地址。退出码与 JSON `status` 对应：`0` 为 `ready`（网站与讨论服务已就绪）或 `configured`（显式 `--no-start`）；`2` 为 `needs_attention`（配置差异未确认、技能冲突或命令不可用）；`1` 为失败。网站启动失败时返回 `start_failed` 与已保存的配置结果，修复后重跑 `setup` 即可。环境预检失败发生在写入前，仅输出错误。配置待处理不撤销已完成部分，也不妨碍启动可用的网站；`configured` 布尔值为 false，不能按成功处理。`ai_verified: false` 表示安装器没有执行真实模型，不证明账号、技能发现或多轮讨论已验收。
+`install/setup` 在 stderr 输出中文摘要，包括实际软件配置、Skill 文件就绪数、命令和网站地址；交互终端显示分步进度、多选列表与对齐的结果汇总（遵循 `NO_COLOR`），输出被重定向时保持逐行纯文本。结果 JSON 在 stdout 被重定向或加 `--json` 时写入 stdout，交互终端默认不打印。退出码与 JSON `status` 对应：`0` 为 `ready`（网站与讨论服务已就绪）或 `configured`（显式 `--no-start`）；`2` 为 `needs_attention`（配置差异未确认、技能冲突或命令不可用）；`1` 为失败。网站启动失败时返回 `start_failed` 与已保存的配置结果，修复后重跑 `setup` 即可。环境预检失败发生在写入前，仅输出错误。配置待处理不撤销已完成部分，也不妨碍启动可用的网站；`configured` 布尔值为 false，不能按成功处理。`ai_verified: false` 表示安装器没有执行真实模型，不证明账号、技能发现或多轮讨论已验收。
 
 安装器按 [技能配置](skills.md#自动安装完整技能) 复制完整技能。`--skills-home DIR` 可覆盖技能用户根目录；默认当前用户 home。重复安装只更新由安装器管理且未被编辑的版本；冲突保留本地文件，输出实际路径并标记待处理。核对后可移走需替换的旧副本再重跑 `setup`。安装器不调整登录状态；权限只在选中 Gemini 时经确认写入讨论命令与草稿目录规则，见 [单次执行权限](#单次执行权限)。
 

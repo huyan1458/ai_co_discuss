@@ -1,10 +1,8 @@
 /** npm bootstrap and per-user setup; never logs in or starts an AI conversation. */
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { accessSync, constants, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
-import { emitKeypressEvents } from 'node:readline';
-import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
@@ -12,9 +10,12 @@ import { agy_rule, atomic_json } from './discussion_adapters.mjs';
 import { launch_settings, save_launch_settings } from './discussion_launch.mjs';
 import { service_home } from './discussion_service.mjs';
 import { install_skills } from './discussion_skills.mjs';
+import { ask, checkbox_prompt, intro, outro, pad, short_path, spinner, step, styled, text_width, tone } from './discussion_tui.mjs';
 export { agy_rule } from './discussion_adapters.mjs';
+export { checkbox_prompt } from './discussion_tui.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
+const PACKAGE = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
 const PROBE_TIMEOUT = 10000;
 const MIN_NODE_MAJOR = 24;
 const DEFAULT_PORT = 8765;
@@ -31,7 +32,7 @@ const CLIENTS = {
 const OPTIONS = { yes: { type: 'boolean' }, clients: { type: 'string' }, python: { type: 'string' },
   codex: { type: 'string' }, claude: { type: 'string' }, antigravity: { type: 'string' }, cursor: { type: 'string' },
   port: { type: 'string' }, prefix: { type: 'string' }, 'skills-home': { type: 'string' },
-  'no-start': { type: 'boolean' }, 'no-open': { type: 'boolean' }, help: { type: 'boolean', short: 'h' } };
+  'no-start': { type: 'boolean' }, 'no-open': { type: 'boolean' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' } };
 const HELP = `用法：codiscuss install [选项] / codiscuss setup [选项]
 install 将当前 npm 包安装为持久命令，再运行 setup；setup 配置已有安装。
   --yes                     使用已检测且支持自动接入的软件，冲突保留并报告
@@ -45,7 +46,7 @@ install 将当前 npm 包安装为持久命令，再运行 setup；setup 配置�
 Gemini 使用 agy；Grok 使用 Cursor CLI（agent / cursor-agent）。仅检测 CLI。
 Cursor 当前只安装技能，可手动参与；全自动接入尚未提供。已有软件设置保留。
 显式软件路径可更新已支持的 CLI 配置。安装不会开始讨论。
-结果输出 JSON，中文摘要写入 stderr；退出码 0=完成，2=配置待处理，1=失败。
+中文摘要写入 stderr；输出被重定向或加 --json 时结果 JSON 写入 stdout；退出码 0=完成，2=配置待处理，1=失败。
 `;
 
 /** Read local settings stored outside the npm installation. */
@@ -63,6 +64,13 @@ function setup_environment(options) {
   const port = Number(options.port || previous.port || DEFAULT_PORT);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('端口必须为 1–65535 的整数');
   return { home, previous, python, port };
+}
+
+/** Summarise the checked runtime in one short line for the styled installer. */
+function environment_line(python, port) {
+  const probe = spawnSync(python, ['-c', 'import sys; print(".".join(map(str, sys.version_info[:3])))'],
+    { encoding: 'utf8', windowsHide: true, timeout: PROBE_TIMEOUT });
+  return `Node ${process.version.slice(1)} · Python ${probe.stdout?.trim() || short_path(python)} · 端口 ${port}`;
 }
 
 /** Find executable PATH entries, explicitly allowing Cursor's Windows .cmd launcher. */
@@ -138,64 +146,16 @@ export function detect_clients(options = {}, search_path = process.env.PATH || '
   });
 }
 
-/**
- * Render a terminal checkbox list: arrows move, space toggles, enter confirms, Ctrl+C cancels.
- * @param {{label: string, hint: string, checked: boolean, disabled: boolean}[]} items
- * @returns {Promise<boolean[]>} The checked state of every item.
- */
-export function checkbox_prompt(message, items, input = process.stdin, output = process.stderr) {
-  const checked = items.map(item => item.checked && !item.disabled);
-  let cursor = Math.max(0, items.findIndex(item => !item.disabled)), drawn = 0;
-  const move = step => {
-    for (let next = cursor + step; next >= 0 && next < items.length; next += step) {
-      if (!items[next].disabled) { cursor = next; return; }
-    }
-  };
-  const draw = () => {
-    if (drawn) output.write(`\x1b[${drawn}A`);
-    const lines = [`${message}  \x1b[2m↑↓ 移动 · 空格 勾选 · 回车 确认\x1b[0m`, ...items.map((item, index) => {
-      const pointer = index === cursor ? '\x1b[36m>\x1b[0m' : ' ';
-      if (item.disabled) return `${pointer} \x1b[2m[-] ${item.label}  ${item.hint}\x1b[0m`;
-      return `${pointer} ${checked[index] ? '\x1b[32m[x]\x1b[0m' : '[ ]'} ${item.label}  \x1b[2m${item.hint}\x1b[0m`;
-    })];
-    output.write(`${lines.map(line => `\x1b[2K${line}`).join('\n')}\n`);
-    drawn = lines.length;
-  };
-  return new Promise((done, fail) => {
-    const finish = error => {
-      input.off('keypress', on_key);
-      input.setRawMode(false);
-      input.pause();
-      output.write('\x1b[?25h');
-      if (error) fail(error); else done(checked);
-    };
-    const on_key = (text, key = {}) => {
-      if (key.ctrl && key.name === 'c') return finish(new Error('已取消安装选择'));
-      if (key.name === 'up' || key.name === 'k') move(-1);
-      else if (key.name === 'down' || key.name === 'j') move(1);
-      else if (key.name === 'space' && !items[cursor]?.disabled) checked[cursor] = !checked[cursor];
-      else if (key.name === 'return' || key.name === 'enter') return finish();
-      draw();
-    };
-    emitKeypressEvents(input);
-    input.setRawMode(true);
-    input.resume();
-    input.on('keypress', on_key);
-    output.write('\x1b[?25l');
-    draw();
-  });
-}
-
 /** Select detected clients interactively or through explicit noninteractive options. */
 async function selected_clients(options, detected) {
   let choice = options.clients;
   if (choice === undefined && !options.yes) {
     if (!process.stdin.isTTY) throw new Error('非交互终端请使用 --yes 或 --clients；只配置网站可用 --clients none。');
-    const items = detected.map(item => ({ label: item.name, hint: item.executable || '未检测到 CLI',
+    const items = detected.map(item => ({ label: item.name, hint: item.executable ? short_path(item.executable) : '未检测到 CLI',
       checked: Boolean(item.executable && item.adapter), disabled: !item.executable }));
     const checked = await checkbox_prompt('选择要接入的软件', items);
     choice = detected.filter((_, index) => checked[index]).map(item => item.key).join(',') || 'none';
-  } else for (const item of detected) process.stderr.write(`${item.name}：${item.executable || '未检测到 CLI'}\n`);
+  } else if (!styled) for (const item of detected) process.stderr.write(`${item.name}：${item.executable || '未检测到 CLI'}\n`);
   return requested_clients(choice, detected);
 }
 
@@ -228,12 +188,9 @@ async function choose_profile(client, current, options) {
   const differs = current && (current.adapter !== client.adapter || !same_executable(current.executable, client.executable));
   let update = Boolean(options[client.key]), acknowledged = false;
   if (differs && !update && !options.yes && process.stdin.isTTY) {
-    const prompt = createInterface({ input: process.stdin, output: process.stderr });
-    try {
-      const choice = await prompt.question(`${client.name} 已有配置：${current.adapter || '未设置类型'} / ${current.executable || '未设置路径'}\n检测到 CLI：${client.executable}\n保留已有配置或更新为此 CLI？[保留/更新，默认保留]：`);
-      update = ['更新', 'update', 'u'].includes(choice.trim().toLowerCase());
-      acknowledged = !choice.trim() || ['保留', 'keep', 'k'].includes(choice.trim().toLowerCase());
-    } finally { prompt.close(); }
+    const choice = await ask(`${client.name} 已有配置：${current.adapter || '未设置类型'} / ${current.executable || '未设置路径'}\n检测到 CLI：${client.executable}\n保留已有配置或更新为此 CLI？`, '[保留/更新，默认保留]');
+    update = ['更新', 'update', 'u'].includes(choice.trim().toLowerCase());
+    acknowledged = !choice.trim() || ['保留', 'keep', 'k'].includes(choice.trim().toLowerCase());
   }
   if (differs && !update) return { client: client.name, status: acknowledged ? 'retained' : 'pending',
     effective: { adapter: current.adapter, executable: current.executable }, detected,
@@ -252,11 +209,8 @@ export function agy_rules(home) {
 async function agy_consent(path, rules, options) {
   if (options.yes) return true;
   if (!process.stdin.isTTY) return false;
-  const prompt = createInterface({ input: process.stdin, output: process.stderr });
-  try {
-    const answer = await prompt.question(`允许 Gemini（agy）在全自动讨论中执行讨论命令并写讨论草稿？将向 ${path} 的 permissions.allow 追加 ${rules.length} 条只匹配讨论命令与草稿目录的规则 [Y/n]：`);
-    return !['n', 'no', '否'].includes(answer.trim().toLowerCase());
-  } finally { prompt.close(); }
+  const answer = await ask(`允许 Gemini（agy）在全自动讨论中执行讨论命令并写讨论草稿？将向 ${path} 的 permissions.allow 追加 ${rules.length} 条只匹配讨论命令与草稿目录的规则`, ' [Y/n]');
+  return !['n', 'no', '否'].includes(answer.trim().toLowerCase());
 }
 
 /** Keep the installer-managed allow rules current, never touching other settings or user rules. */
@@ -347,10 +301,19 @@ function setup_issues(result) {
 
 /** Configure Python, selected clients and skills, returning partial results on startup failure. */
 async function setup(options) {
+  intro('配置 AI CoDiscuss', PACKAGE.version, PACKAGE.description);
   const { home, previous, python, port } = setup_environment(options);
-  const selected = await selected_clients(options, detect_clients(options));
+  if (styled && !process.env.CODISCUSS_TUI_NESTED) step('运行环境就绪', [environment_line(python, port)]);
+  const scan = spinner('检测已安装的 AI 软件');
+  const detected = detect_clients(options);
+  const width = Math.max(...detected.map(item => text_width(item.name)));
+  const listed = options.clients !== undefined || options.yes
+    ? detected.map(item => `${pad(item.name, width)}  ${tone.dim(item.executable ? short_path(item.executable) : '未检测到 CLI')}`) : [];
+  scan.done(`检测到 ${detected.filter(item => item.executable).length} 个可接入的 CLI`, listed);
+  const selected = await selected_clients(options, detected);
   const configured = await configure_clients(home, selected, options, launch_settings(home).participants);
   atomic_json(join(home, 'local-settings.json'), { ...previous, python, port });
+  step('已写入软件配置与技能', configured.skills.map(group => `${pad(group.client, width)}  ${tone.dim(short_path(dirname(group.results[0].path)))}`));
   const result = { home, python, clients: selected.map(item => item.name), ...configured,
     command: check_command(), ai_verified: false };
   result.issues = setup_issues(result);
@@ -358,10 +321,13 @@ async function setup(options) {
   result.status = result.configured ? 'configured' : 'needs_attention';
   if (!options['no-start']) {
     const { local_main } = await import('./discussion_local.mjs');
+    const launch = spinner('启动本机网站与讨论服务');
     try {
       result.local = await local_main([options['no-open'] ? 'start' : 'open'], () => {});
+      launch.done('网站与讨论服务已在后台运行');
       if (result.configured) result.status = 'ready';
     } catch (error) {
+      launch.fail(error.message);
       result.status = 'start_failed';
       result.issues.push(`本机启动失败：${error.message}；配置已保存，修复后重新运行 setup。`);
     }
@@ -371,6 +337,7 @@ async function setup(options) {
 
 /** Print a concise human receipt while keeping stdout machine-readable. */
 function report_setup(result, options = {}) {
+  if (styled) return report_styled(result, options);
   const labels = { ready: '安装配置完成，网站与讨论服务已就绪', configured: '配置完成，本次未启动网站',
     needs_attention: '配置待处理', start_failed: '本机启动失败' };
   const lines = [labels[result.status]];
@@ -391,6 +358,29 @@ function report_setup(result, options = {}) {
   process.stderr.write(`${lines.join('\n')}\n`);
 }
 
+/** Close the styled installer with aligned results, open issues and the commands to manage the site. */
+function report_styled(result, options) {
+  const titles = { ready: ['安装完成', tone.green('◆')], configured: ['配置完成，本次未启动网站', tone.green('◆')],
+    needs_attention: ['配置完成，仍有待处理项', tone.yellow('▲')], start_failed: ['本机启动失败', tone.red('■')] };
+  const [title, mark] = titles[result.status];
+  const rows = [];
+  if (result.local?.running) rows.push(['网站', tone.cyan(result.local.url), options['no-open'] ? '' : '已在浏览器打开']);
+  for (const profile of result.profiles) rows.push(profile.status === 'manual' ? [profile.client, '仅安装技能，可手动参与', '尚不支持全自动接入']
+    : [profile.client, `${profile.status === 'configured' ? 'CLI 已配置' : '沿用已有配置'} · ${profile.effective.adapter}`, short_path(profile.effective.executable) || '未设置路径']);
+  for (const permission of result.permissions) {
+    if (['allowed', 'unchanged'].includes(permission.status)) rows.push([permission.client, '已放行讨论命令', short_path(permission.path)]);
+  }
+  if (result.skills.length) rows.push(['技能', result.skills.map(group => `${group.client} ${group.results.filter(skill => skill.status !== 'conflict').length}/${group.results.length}`).join(' · '), 'discuss-host · discuss-participant · discuss-report']);
+  if (result.command.path) rows.push(['命令', `codiscuss ${tone.dim(`(${result.command.status})`)}`, short_path(result.command.path)]);
+  const notes = result.issues.map(issue => tone.yellow(`▲ ${issue}`));
+  if (result.local?.running) notes.push(tone.dim('网站与讨论服务在后台运行，关闭此终端不影响'),
+    `${tone.cyan('codiscuss local status')}  ${tone.dim('查看状态')}`, `${tone.cyan('codiscuss local stop')}    ${tone.dim('停止')}`,
+    `${tone.cyan('codiscuss local open')}    ${tone.dim('重启电脑后重新启动')}`);
+  const closing = result.local?.running ? `在网页新建讨论，或在 AI 会话里调用 ${tone.cyan('discuss-host')} ${tone.dim('· 真实 AI 执行尚未验证')}`
+    : `运行 ${tone.cyan('codiscuss local open')} 启动网站`;
+  outro(title, rows, notes, closing, mark);
+}
+
 /** Locate npm's JavaScript entrypoint so paths with spaces never need shell quoting. */
 function npm_entry() {
   const candidates = [process.env.npm_execpath, join(dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js'),
@@ -402,31 +392,44 @@ function npm_entry() {
   return entry;
 }
 
-/** Execute npm without lifecycle scripts; surface actionable npm errors. */
+/** Execute npm without lifecycle scripts asynchronously, so a progress spinner can animate. */
 function npm_run(entry, args) {
-  const result = spawnSync(process.execPath, [entry, ...args], { encoding: 'utf8', windowsHide: true });
-  if (result.status !== 0) throw new Error(result.stderr || result.error?.message || 'npm 执行失败');
-  return result.stdout.trim();
+  return new Promise((done, fail) => {
+    const child = spawn(process.execPath, [entry, ...args], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', data => { stdout += data; });
+    child.stderr.on('data', data => { stderr += data; });
+    child.on('error', fail);
+    child.on('close', code => (code === 0 ? done(stdout.trim()) : fail(new Error(stderr || 'npm 执行失败'))));
+  });
 }
 
 /** Install a real package copy, never a symlink into a disposable npx cache. */
-function install(args, options) {
-  setup_environment(options);
+async function install(args, options) {
+  intro('安装 AI CoDiscuss', PACKAGE.version, PACKAGE.description);
+  const { python, port } = setup_environment(options);
   requested_clients(options.clients, detect_clients(options));
+  if (styled) step('运行环境就绪', [environment_line(python, port)]);
   const entry = npm_entry();
   const temporary = mkdtempSync(join(tmpdir(), 'codiscuss-install-'));
   const prefix = options.prefix ? ['--prefix', resolve(options.prefix)] : [];
+  const progress = spinner('安装 codiscuss 命令');
   try {
-    const packed = JSON.parse(npm_run(entry, ['pack', ROOT, '--ignore-scripts', '--json', '--pack-destination', temporary]));
-    npm_run(entry, ['install', '--global', ...prefix, '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', join(temporary, packed[0].filename)]);
-    const installed = join(npm_run(entry, ['root', '--global', ...prefix]), 'ai_co_discuss', 'runner', 'codiscuss.mjs');
-    const install_prefix = npm_run(entry, ['prefix', '--global', ...prefix]);
-    process.stderr.write(`命令目录：${process.platform === 'win32' ? install_prefix : join(install_prefix, 'bin')}\n`);
+    const packed = JSON.parse(await npm_run(entry, ['pack', ROOT, '--ignore-scripts', '--json', '--pack-destination', temporary]));
+    await npm_run(entry, ['install', '--global', ...prefix, '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', join(temporary, packed[0].filename)]);
+    // npm masks UUID-like path segments as *** in its output, so an explicit prefix is resolved locally.
+    const install_prefix = options.prefix ? resolve(options.prefix) : await npm_run(entry, ['prefix', '--global']);
+    const global_root = process.platform === 'win32' ? join(install_prefix, 'node_modules') : join(install_prefix, 'lib', 'node_modules');
+    const installed = join(global_root, 'ai_co_discuss', 'runner', 'codiscuss.mjs');
+    const directory = process.platform === 'win32' ? install_prefix : join(install_prefix, 'bin');
+    progress.done('已安装 codiscuss 命令', [tone.dim(short_path(directory))]);
+    if (!styled) process.stderr.write(`命令目录：${directory}\n`);
     const result = spawnSync(process.execPath, [installed, 'setup', ...args], { stdio: 'inherit', windowsHide: true,
-      env: { ...process.env, PATH: persistent_search_path() } });
+      env: { ...process.env, PATH: persistent_search_path(), CODISCUSS_TUI_NESTED: '1' } });
     process.exitCode = result.status ?? 1;
     if (result.error) throw result.error;
-  } finally { rmSync(temporary, { recursive: true, force: true }); }
+  } catch (error) { progress.fail(error.message); throw error; }
+  finally { rmSync(temporary, { recursive: true, force: true }); }
 }
 
 /** Dispatch bootstrap or setup, leaving website and launch commands untouched. */
@@ -436,7 +439,7 @@ export async function setup_main(command, args) {
   if (command === 'install') return install(args, values);
   const result = await setup(values);
   report_setup(result, values);
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  if (values.json || !process.stdout.isTTY) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   process.exitCode = result.status === 'start_failed' ? 1 : result.status === 'needs_attention' ? ATTENTION_EXIT_CODE : 0;
   return result;
 }

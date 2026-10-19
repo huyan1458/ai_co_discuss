@@ -28,7 +28,7 @@ Python 与 Cloudflare 是两种部署实现，运行时选其一，不是请求�
 | `backend/worker.mjs` | Pages Request、D1 `DB` binding | 与 Python 相同的业务响应；静态请求交由 Pages assets |
 | `runner/codiscuss.mjs` | 统一 `codiscuss` 命令与原样参数 | 无子命令时启动本机服务，`service` 管理进程；网站命令转交 Python 客户端，保留 stdin、相对路径与退出码 |
 | `runner/discussion_launch.mjs` | 本机默认软件配置、单场启动配置、对话 / 网页入口 | 校验后建房、保存私有配置、启用运行并登记接入服务；对话入口将首个主持任务交回当前会话；暂停后可凭原控制凭据和版本修正本场软件路径，不改变会话绑定或自动重启 |
-| `runner/discussion_setup.mjs` / `discussion_skills.mjs` | npm 包、已有 Python / CLI、选定软件 | 持久安装统一命令，合并本机软件配置，复制完整技能并保留本地修改；不创建讨论 |
+| `runner/discussion_setup.mjs` / `discussion_skills.mjs` / `discussion_tui.mjs` | npm 包、已有 Python / CLI、选定软件 | 持久安装统一命令，合并本机软件配置，复制完整技能并保留本地修改；`discussion_tui.mjs` 只负责安装过程的终端呈现；不创建讨论 |
 | `runner/discussion_local.mjs` | 用户服务目录、Python 和端口配置 | 后台网站及包外 SQLite，复用讨论服务、检查就绪、仅停止拥有的进程 |
 | `runner/discuss.py` | 命令、站点、房间、声明身份、UTF-8 文件 | 网站客户端实现；单次 HTTP 请求、稳定 JSON / 文本、退出码，帮助和预览可离线，可直接用 Python 执行 |
 | `web/app.js` | 页面事件和 API 返回状态 | 共享讨论控制器、读写操作、主题与界面同步 |

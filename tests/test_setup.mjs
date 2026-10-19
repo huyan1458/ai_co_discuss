@@ -77,7 +77,7 @@ test('client checkbox skips undetected entries, toggles with space and confirms 
   input.write('\r');
   assert.deepEqual(await result, [false, false, true]);
   assert.deepEqual(input.raw, [true, false]);
-  assert.match(output.read().toString(), /\[-\] Gemini/);
+  assert.match(output.read().toString(), /○ Gemini/);
 });
 
 test('CLI detection is limited to Claude, Codex, agy and Cursor command aliases', () => {
