@@ -450,8 +450,9 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 .channel-editor { padding: 13px 15px 7px !important; font-size: 15px !important; line-height: 1.6 !important; min-height: 49px; resize: none; color: #e2e6ee; outline: none !important; }
 .channel-editor::placeholder { color: #9ba3b1; }
 .channel-composer-footer { display: flex; align-items: center; justify-content: flex-start !important; padding: 2px 9px 9px !important; gap: 8px !important; }
-.channel-composer-identity { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.channel-composer-identity > button { width: auto; height: 28px; border: 1px solid var(--ui-border); border-radius: 999px; color: var(--ui-text-toned); font-size: 12px; box-shadow: none; transition: background .12s, border-color .12s; }
+.channel-composer-identity { display: flex; flex: 0 1 auto; align-items: center; gap: 6px; min-width: 0; }
+.channel-composer-footer > :is(.channel-stop, .channel-send), .channel-author-select { flex-shrink: 0; }
+.channel-composer-identity > button { width: auto; min-width: 0; height: 28px; border: 1px solid var(--ui-border); border-radius: 999px; color: var(--ui-text-toned); font-size: 12px; box-shadow: none; transition: background .12s, border-color .12s; }
 .channel-composer-identity > button:hover, .channel-composer-identity > button[data-state="open"] { border-color: var(--ui-border-accented); background: #ffffff08; }
 .channel-composer-identity > button:disabled { opacity: .55; }
 .channel-composer-identity > button [data-slot="leadingIcon"] { width: 14px; height: 14px; color: var(--ui-text-muted); }
@@ -604,6 +605,12 @@ html[data-theme^="channel"] .host-turn .turn-question { margin-bottom: 18px; pad
 html[data-theme^="channel"] .host-receipts p.fine-print { margin: 0 0 8px; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
 .host-page .form-footer { padding-top: 18px; }
 .host-page .host-schedule-hint { margin-top: 6px; text-align: right; }
+@media (max-width: 600px) {
+  html[data-theme^="channel"] .host-page .turn-panel, html[data-theme^="channel"] .host-status .turn-panel { padding: 16px; }
+  html[data-theme^="channel"] .host-turn .turn-question { padding: 10px 12px; }
+  .host-receipts { padding: 14px 16px; }
+  .summary-form { padding: 16px 14px 14px; gap: 18px; }
+}
 html[data-theme^="channel"] .access-address { background: #1a1d23; border-color: #3b4250; border-radius: 7px; box-shadow: inset 0 1px 2px #0002; }
 html[data-theme^="channel"] .access-icon { background: linear-gradient(#3b4352, #2c3240); border-color: #536078; color: #c6d6f2; width: 36px; height: 36px; border-radius: 9px; box-shadow: inset 0 1px #ffffff0b; }
 html[data-theme^="channel"] .access-section { border-color: #363d49; }

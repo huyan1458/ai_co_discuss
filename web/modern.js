@@ -43710,7 +43710,7 @@ var XV = {
 			])])]);
 		};
 	}
-}, [["__scopeId", "data-v-5302e119"]]), MG = {
+}, [["__scopeId", "data-v-05115949"]]), MG = {
 	key: 0,
 	class: "channel-archive-manager"
 }, NG = { class: "channel-archive-toolbar" }, PG = {

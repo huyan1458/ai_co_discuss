@@ -233,6 +233,7 @@ const summary = computed(() => {
 .create-summary { flex: 1; min-width: 0; overflow: hidden; color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
 .create-error { margin-bottom: 10px; color: #f0716b; font-size: 12px; }
 @media (max-width: 600px) {
+  .create-discussion { max-height: calc(100dvh - 130px); }
   .create-scroll { padding: 18px 18px 20px; }
   .create-modes { grid-template-columns: 1fr; }
   .create-footer { padding: 12px 18px 14px; }
