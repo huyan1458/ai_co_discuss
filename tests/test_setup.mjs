@@ -36,7 +36,7 @@ test('agy rule matches only codiscuss website subcommands without separators', (
   }
 });
 
-test('agy setup keeps one managed rule and leaves other settings untouched', async () => {
+test('agy setup narrows the old launch write rule to drafts and leaves user settings untouched', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'codiscuss-agy-'));
   try {
     const home = join(directory, 'service');
@@ -45,15 +45,16 @@ test('agy setup keeps one managed rule and leaves other settings untouched', asy
     assert.equal(existsSync(path), false);
     mkdirSync(join(directory, '.gemini', 'antigravity-cli'), { recursive: true });
     mkdirSync(home, { recursive: true });
-    writeFileSync(join(home, 'agy-permission.json'), JSON.stringify({ rule: 'command(old-managed)' }));
+    const previous = ['command(old-managed)', `write_file(${join(home, 'launches').replaceAll('\\', '/')})`];
+    writeFileSync(join(home, 'agy-permission.json'), JSON.stringify({ rules: previous }));
     writeFileSync(path, JSON.stringify({ trustedWorkspaces: 'C:/Users/A',
-      permissions: { allow: ['command(git)', 'command(old-managed)'], deny: ['command(sudo)'] } }));
+      permissions: { allow: ['command(git)', ...previous], deny: ['command(sudo)'] } }));
     assert.equal((await allow_agy_command(home, directory, { yes: true })).status, 'allowed');
     assert.equal((await allow_agy_command(home, directory, {})).status, 'unchanged');
     const settings = JSON.parse(readFileSync(path, 'utf8'));
     assert.equal(settings.trustedWorkspaces, 'C:/Users/A'); assert.deepEqual(settings.permissions.deny, ['command(sudo)']);
     assert.deepEqual(settings.permissions.allow, ['command(git)', ...agy_rules(home)]);
-    assert.equal(agy_rules(home)[1], `write_file(${join(home, 'launches').replaceAll('\\', '/')})`);
+    assert.equal(agy_rules(home)[1], `write_file(${join(home, 'drafts').replaceAll('\\', '/')})`);
     assert.ok(existsSync(join(home, 'agy-settings.backup.json')));
     writeFileSync(path, '{ broken');
     assert.equal((await allow_agy_command(home, directory, { yes: true })).status, 'invalid');

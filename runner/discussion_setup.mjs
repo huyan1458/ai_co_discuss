@@ -201,10 +201,10 @@ export function agy_rule() {
   return `command(regex:^codiscuss(\\.cmd)?( --site ${safe.replace('[^', '[^ ')}+)? (${TASK_SUBCOMMANDS.join('|')})( ${safe}*)?$)`;
 }
 
-/** Drafts live under the service home; agy does not treat --add-dir directories as writable. */
+/** Allow answer files only; service runtime data never belongs to the managed write rule. */
 export function agy_rules(home) {
   // Verified with agy 1.4.2 on Windows: the rule matches forward slashes with the drive letter kept.
-  const drafts = join(resolve(home), 'launches').replaceAll('\\', '/');
+  const drafts = join(resolve(home), 'drafts').replaceAll('\\', '/');
   return [agy_rule(), `write_file(${drafts})`];
 }
 

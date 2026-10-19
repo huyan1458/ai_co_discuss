@@ -10,6 +10,7 @@ import { CodexAppClient } from './codex_app_client.mjs';
 
 const CALL_TIMEOUT_MS = 30_000;
 const CLI_DIAGNOSTIC_CHARS = 1000;
+const CODEX_PERMISSIONS_MIN_MINOR = 163;
 /** Website subcommands an automatic task may run; service, launch, run, api and setup stay unapproved. */
 export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'floor', 'execution', 'health', 'schema'];
 
@@ -129,14 +130,9 @@ export function claude_rule_path(directory) {
 /** The participant's discussion project directory; workdir is the legacy field name. */
 function project_directory(config) { return config.cwd || config.workdir || ''; }
 
-/**
- * Where a CLI starts. Codex and agy can write their start directory, so read-only project access starts
- * them in the draft directory and leaves the project readable only; Claude writes only through Edit rules.
- */
+/** Keep the requested project as cwd; without a project, use the separate answer directory. */
 export function launch_directory(config, task) {
-  const project = project_directory(config);
-  if (!project) return task.directory;
-  return config.adapter === 'claude' || config.project_access === 'write' ? project : task.directory;
+  return project_directory(config) || task.draft_directory;
 }
 
 /**
@@ -145,8 +141,8 @@ export function launch_directory(config, task) {
  */
 export function claude_permissions(config, task) {
   const commands = TASK_SUBCOMMANDS.flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]);
-  const writable = [task.directory, ...(config.project_access === 'write' && project_directory(config) ? [project_directory(config)] : [])];
-  return ['--add-dir', task.directory, task.skills_directory, '--allowedTools',
+  const writable = [task.draft_directory, ...(config.project_access === 'write' && project_directory(config) ? [project_directory(config)] : [])];
+  return ['--add-dir', task.directory, task.draft_directory, task.skills_directory, '--allowedTools',
     ...commands, ...writable.map(directory => `Edit(${claude_rule_path(directory)}/**)`), ...(config.allowed_tools || [])];
 }
 
@@ -184,23 +180,83 @@ async function claude_delivery(config, binding, task, spawn_process = spawn) {
   return { session_id, status: 'accepted' };
 }
 
+/** Build a per-invocation profile without inheriting a user's custom profile of the same name. */
+export function codex_permissions(config, task) {
+  const name = `codiscuss-${randomUUID()}`;
+  const base = project_directory(config) && config.project_access === 'write' ? ':workspace' : ':read-only';
+  const filesystem = { ':root': 'read', [resolve(task.directory).replaceAll('\\', '/')]: 'read',
+    [resolve(task.draft_directory).replaceAll('\\', '/')]: 'write' };
+  const rules = Object.entries(filesystem).map(([path, access]) => `${JSON.stringify(path)}=${JSON.stringify(access)}`).join(',');
+  const profile = `{extends=${JSON.stringify(base)},filesystem={${rules}},network={enabled=true}}`;
+  return { name, args: ['-c', `default_permissions=${JSON.stringify(name)}`, '-c', `permissions.${name}=${profile}`,
+    '-c', 'approval_policy="never"'] };
+}
+
+/** Read effective Codex config through its local CLI; no thread or model is started. */
+function read_codex_config(config, task, permissions, spawn_process) {
+  return new Promise((resolve_config, reject) => {
+    const child = spawn_process(config.executable, ['app-server', ...permissions.args], {
+      cwd: launch_directory(config, task), windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    task.on_process(child);
+    const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
+    let settled = false;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer); lines.close();
+      const complete = () => error ? reject(not_sent(error)) : resolve_config(value);
+      if (child.exitCode !== null || child.signalCode !== null) complete();
+      else { child.once('close', complete); child.kill(); }
+    };
+    const timer = setTimeout(() => finish(new Error('Codex 权限配置检查超时，未交付讨论任务')), CALL_TIMEOUT_MS);
+    const send = (id, method, params) => child.stdin.write(`${JSON.stringify({ id, method, params })}\n`);
+    child.once('error', error => finish(error));
+    child.once('close', () => finish(new Error('Codex 无法读取权限配置，请使用支持 permission profiles 的 CLI')));
+    child.stdin.on('error', error => finish(error));
+    child.stderr.resume();
+    lines.on('line', line => {
+      let response;
+      try { response = JSON.parse(line); } catch { return; }
+      if (![1, 2].includes(response.id)) return;
+      if (response.error) return finish(new Error(`Codex 权限配置检查失败：${response.error.message}`));
+      if (response.id === 1) {
+        const version = response.result?.userAgent?.match(/\/(\d+)\.(\d+)\.\d+\b/);
+        if (!version || (Number(version[1]) === 0 && Number(version[2]) < CODEX_PERMISSIONS_MIN_MINOR)) {
+          return finish(new Error('本次权限配置需要 Codex CLI 0.163.0 或更新版本，未交付讨论任务'));
+        }
+        send(2, 'config/read', { cwd: launch_directory(config, task), includeLayers: false });
+      }
+      else finish(null, response.result?.config);
+    });
+    send(1, 'initialize', { clientInfo: { name: 'codiscuss', version: '0.1.0' } });
+  });
+}
+
+/** Reject legacy overrides that would silently replace the requested filesystem policy. */
+async function check_codex_permissions(config, task, permissions, spawn_process) {
+  const effective = await read_codex_config(config, task, permissions, spawn_process).catch(error => { throw not_sent(error); });
+  if (effective?.sandbox_mode != null || effective?.sandbox_workspace_write != null) {
+    throw not_sent(new Error('Codex 配置含旧 sandbox_mode / sandbox_workspace_write，会覆盖本次权限；请移除旧配置后重试，未交付讨论任务'));
+  }
+  if (effective?.default_permissions !== permissions.name || !effective?.permissions?.[permissions.name]) {
+    throw not_sent(new Error('Codex 未采用本次 permission profile，未交付讨论任务；请更新 CLI'));
+  }
+}
+
 /** Build native CLI arguments; every continuation names the exact bound conversation. */
 function cli_invocation(config, binding, task) {
   if (config.adapter === 'codex_cli') {
-    const args = ['exec', '--add-dir', task.directory];
+    const permissions = codex_permissions(config, task);
+    const args = ['exec', '--cd', launch_directory(config, task)];
     if (binding.session_id) args.push('resume', binding.session_id);
-    // Overrides apply to this run only: write the start directory and drafts, reach the discussion site,
-    // never wait for approval. The sandbox still reads the whole disk, so a read-only project stays readable.
-    args.push('-c', 'sandbox_mode="workspace-write"', '-c', 'sandbox_workspace_write.network_access=true',
-      '-c', `sandbox_workspace_write.writable_roots=${JSON.stringify([task.directory])}`, '-c', 'approval_policy="never"');
-    args.push('--json', '--skip-git-repo-check', '-');
-    return { args, input: task.prompt };
+    args.push(...permissions.args, '--json', '--skip-git-repo-check', '-');
+    return { args, input: task.prompt, permissions };
   }
-  // agy asks before any file write; headless runs deny it. Drafts are allowed by the setup rule. Write access
-  // uses accept-edits for this run only, which also makes the added draft and skill directories writable.
-  const args = ['--output-format', 'stream-json', '--print-timeout', '0', '--add-dir', task.directory, '--add-dir', task.skills_directory];
+  // agy's read-only project instruction is advisory; inherited user settings can still permit edits.
+  const args = ['--output-format', 'stream-json', '--print-timeout', '0', '--add-dir', task.directory,
+    '--add-dir', task.draft_directory, '--add-dir', task.skills_directory];
   if (project_directory(config) && config.project_access === 'write') args.push('--mode', 'accept-edits');
-  else if (project_directory(config)) args.push('--add-dir', project_directory(config));
   if (binding.session_id) args.push('--conversation', binding.session_id);
   else if (config.project_id || config.project_name) args.push('--project', config.project_id || config.project_name);
   args.push('-p', task.prompt);
@@ -279,6 +335,7 @@ async function cli_delivery(config, binding, task, spawn_process) {
     catch (error) { throw not_sent(error); }
   }
   const invocation = cli_invocation(config, binding, task);
+  if (invocation.permissions) await check_codex_permissions(config, task, invocation.permissions, spawn_process);
   let child;
   try {
     child = spawn_process(config.executable, invocation.args, {

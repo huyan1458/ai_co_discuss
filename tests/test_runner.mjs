@@ -9,7 +9,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { DiscussionRunner, DiscussionStore, load_config, task_files, validate_config } from '../runner/discussion_runner.mjs';
+import { DiscussionRunner, DiscussionStore, load_config, service_drafts, task_files, validate_config } from '../runner/discussion_runner.mjs';
 import { DiscussionService, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
 import { antigravity_project, claude_exit_error, claude_rule_path, standalone_claude_env, codex_target, deliver_task, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
 
@@ -276,6 +276,7 @@ test(`${adapter} spawn failure can retry without binding an uncreated session`, 
 /** Emit real subprocess output in split UTF-8 chunks without invoking an AI account. */
 function fake_cli(events, options = {}) {
   const calls = [];
+  const config_calls = [];
   const source = `
     const fs = require('node:fs');
     (async () => {
@@ -291,11 +292,23 @@ function fake_cli(events, options = {}) {
       process.exitCode = ${options.exit_code || 0};
     })();`;
   const spawn_process = (executable, args, settings) => {
+    if (args[0] === 'app-server') {
+      const name = JSON.parse(args.find(arg => arg.startsWith('default_permissions=')).split('=')[1]);
+      const config = { default_permissions: name, permissions: { [name]: {} }, ...options.codex_config };
+      const source = `require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+        const request = JSON.parse(line);
+        const result = request.id === 1 ? { userAgent: 'Codex Desktop/${options.codex_version || '0.163.0'} (test)' } : { config: ${JSON.stringify(config)} };
+        process.stdout.write(JSON.stringify({ id: request.id, result }) + '\\n');
+      });`;
+      const child = spawn(process.execPath, ['-e', source], settings);
+      config_calls.push({ args, child, closed: once(child, 'close') });
+      return child;
+    }
     const child = spawn(process.execPath, ['-e', source], settings);
     calls.push({ executable, args, settings, child, closed: once(child, 'close') });
     return child;
   };
-  return { calls, spawn_process };
+  return { calls, config_calls, spawn_process };
 }
 
 /** Represent the documented startup and terminal events of the two CLI protocols. */
@@ -308,18 +321,20 @@ function cli_events(adapter, session_id = 'actual-cli-session') {
 /** Capture adapter callbacks and private credentials in an isolated task directory. */
 async function cli_delivery_fixture(t, adapter, options = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'discussion-cli-adapter-'));
+  const draft_directory = join(directory, 'drafts');
+  mkdirSync(draft_directory);
   const access_path = join(directory, 'access.json');
   writeFileSync(access_path, JSON.stringify({ token: 'test-only', session_id: '' }));
   const bindings = []; const errors = []; let exits = 0;
   const process_fixture = fake_cli(options.events || cli_events(adapter), options);
   t.after(async () => {
-    for (const call of process_fixture.calls) {
+    for (const call of [...process_fixture.calls, ...process_fixture.config_calls]) {
       if (call.child.exitCode === null && call.child.signalCode === null) call.child.kill();
       await call.closed;
     }
     rmSync(directory, { recursive: true, force: true });
   });
-  const task = { id: 'event-1', directory, access_path, prompt: '讨论中文 "quotes"\n$(literal); `literal`',
+  const task = { id: 'event-1', directory, draft_directory, access_path, prompt: '讨论中文 "quotes"\n$(literal); `literal`',
     skills_directory: join(directory, 'skills'),
     on_binding: session => bindings.push(session), on_process: () => {},
     on_output: (path, chunk) => appendFileSync(path, chunk), on_failure: error => errors.push(error), on_exit: () => { exits++; } };
@@ -336,16 +351,20 @@ test(`${adapter} starts headlessly, binds emitted identity and preserves UTF-8 p
   assert.equal(f.bindings[0], 'actual-cli-session');
   assert.equal(JSON.parse(readFileSync(f.access_path, 'utf8')).session_id, 'actual-cli-session');
   const call = f.calls[0];
-  assert.equal(call.settings.cwd, f.directory); assert.equal(call.settings.shell, false);
-  assert.equal(call.settings.windowsHide, true); assert.ok(call.args.includes(f.directory));
+  assert.equal(call.settings.cwd, f.task.draft_directory); assert.equal(call.settings.shell, false);
+  assert.equal(call.settings.windowsHide, true); assert.ok(call.args.includes(f.task.draft_directory));
   assert.ok(!call.args.some(arg => arg.startsWith('--dangerously')));
   if (adapter === 'codex_cli') {
     assert.equal(call.args[0], 'exec'); assert.ok(call.args.includes('--json'));
     assert.ok(call.args.includes('--skip-git-repo-check')); assert.equal(call.args.at(-1), '-');
-    assert.equal(readFileSync(join(f.directory, 'stdin.txt'), 'utf8'), f.task.prompt);
+    assert.equal(readFileSync(join(f.task.draft_directory, 'stdin.txt'), 'utf8'), f.task.prompt);
     const overrides = call.args.filter((arg, index) => call.args[index - 1] === '-c');
-    assert.deepEqual(overrides, ['sandbox_mode="workspace-write"', 'sandbox_workspace_write.network_access=true',
-      `sandbox_workspace_write.writable_roots=${JSON.stringify([f.directory])}`, 'approval_policy="never"']);
+    assert.equal(overrides.length, 3); assert.equal(overrides[2], 'approval_policy="never"');
+    assert.match(overrides[1], /extends=":read-only"/); assert.match(overrides[1], /network=\{enabled=true\}/);
+    assert.ok(overrides[1].includes(`${JSON.stringify(f.directory.replaceAll('\\', '/'))}="read"`));
+    assert.ok(overrides[1].includes(`${JSON.stringify(f.task.draft_directory.replaceAll('\\', '/'))}="write"`));
+    assert.deepEqual(f.config_calls[0].args.slice(1), call.args.slice(call.args.indexOf('-c'), call.args.indexOf('--json')));
+    assert.ok(!call.args.includes('--add-dir'));
   } else {
     assert.ok(call.args.includes(f.task.skills_directory));
     assert.equal(call.args[call.args.indexOf('-p') + 1], f.task.prompt);
@@ -366,18 +385,24 @@ test(`${adapter} resumes only the bound conversation and honors its configured c
   assert.equal(call.args.includes('--last'), false); assert.equal(call.args.includes('--continue'), false);
   assert.equal(call.args.includes('--project'), false); assert.deepEqual(f.errors, []);
   assert.equal(call.settings.cwd, project);
-  if (adapter === 'codex_cli') assert.ok(call.args.indexOf('sandbox_mode="workspace-write"') > call.args.indexOf('resume'));
+  if (adapter === 'codex_cli') {
+    assert.ok(call.args.findIndex(arg => arg.startsWith('default_permissions=')) > call.args.indexOf('resume'));
+    assert.match(call.args.find(arg => arg.startsWith('permissions.')), /extends=":workspace"/);
+    assert.equal(call.args[call.args.indexOf('--cd') + 1], project);
+  }
   else assert.equal(call.args[call.args.indexOf('--mode') + 1], 'accept-edits');
 });
 
-test(`${adapter} starts in the draft directory and only attaches a read-only project`, async t => {
+test(`${adapter} keeps the project cwd when project access is read-only`, async t => {
   const project = mkdtempSync(join(tmpdir(), 'discussion-cwd-')); t.after(() => rmSync(project, { recursive: true, force: true }));
   const f = await cli_delivery_fixture(t, adapter, { config: { cwd: project, project_access: 'read' } });
   const call = f.calls[0];
-  assert.equal(call.settings.cwd, f.directory); assert.deepEqual(f.errors, []);
+  assert.equal(call.settings.cwd, project); assert.deepEqual(f.errors, []);
   assert.equal(call.args.includes('--mode'), false);
-  if (adapter === 'codex_cli') assert.ok(!call.args.includes(project) && !call.args.some(arg => arg.includes(JSON.stringify(project).slice(1, -1))));
-  else assert.equal(call.args[call.args.lastIndexOf('--add-dir') + 1], project);
+  if (adapter === 'codex_cli') {
+    assert.equal(call.args[call.args.indexOf('--cd') + 1], project);
+    assert.match(call.args.find(arg => arg.startsWith('permissions.')), /extends=":read-only"/);
+  } else assert.ok(!call.args.includes(project), 'agy does not attach its cwd a second time');
 });
 
 test(`${adapter} never replaces a bound identity when the CLI returns another session`, async t => {
@@ -435,6 +460,26 @@ test(`${adapter} is stopped with the runner when its discussion pauses`, async t
 });
 }
 
+for (const options of [{ codex_config: { sandbox_mode: 'workspace-write' } },
+  { codex_config: { sandbox_workspace_write: { writable_roots: ['/'] } } }, { codex_config: { permissions: {} } },
+  { codex_version: '0.162.0' }, { codex_version: 'unknown' }]) {
+test(`codex refuses conflicting or unavailable permission profiles: ${JSON.stringify(options)}`, async t => {
+  const f = await fixture(t);
+  f.config.participants.Codex = { adapter: 'codex_cli', executable: process.execPath };
+  const process_fixture = fake_cli(cli_events('codex_cli'), options);
+  const runner = new DiscussionRunner(f.config, f.store,
+    (config, binding, task) => deliver_task(config, binding, task, process_fixture.spawn_process));
+  await runner.tick();
+  await process_fixture.config_calls[0].closed;
+  assert.equal(process_fixture.calls.length, 0, 'config inspection must reject before starting an AI turn');
+  assert.equal(f.store.binding('Codex').session_id, undefined);
+  assert.equal(f.store.pending()[0].status, 'retry_wait');
+  assert.match(f.store.pending()[0].error, /未交付讨论任务/);
+  if (options.codex_version) assert.match(f.store.pending()[0].error, /0\.163\.0/);
+  assert.equal(runner.children.size, 0);
+});
+}
+
 test('claude allows only codiscuss website subcommands and draft writes, then user rules', async t => {
   const f = await cli_delivery_fixture(t, 'claude', { events: [{ type: 'result', is_error: false, result: '完成' }],
     config: { allowed_tools: ['Read(//d/materials/**)'] } });
@@ -442,11 +487,12 @@ test('claude allows only codiscuss website subcommands and draft writes, then us
   assert.deepEqual(f.errors, []);
   assert.ok(!args.some(arg => arg.startsWith('--dangerously') || arg === '--permission-mode'));
   const directories = args.indexOf('--add-dir');
-  assert.deepEqual(args.slice(directories + 1, directories + 3), [f.directory, f.task.skills_directory]);
+  assert.deepEqual(args.slice(directories + 1, directories + 4), [f.directory, f.task.draft_directory, f.task.skills_directory]);
   assert.deepEqual(args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--')),
     [...['room', 'message', 'turn', 'state', 'floor', 'execution', 'health', 'schema']
       .flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]),
-    `Edit(${claude_rule_path(f.directory)}/**)`, 'Read(//d/materials/**)']);
+    `Edit(${claude_rule_path(f.task.draft_directory)}/**)`, 'Read(//d/materials/**)']);
+  assert.ok(!args.includes(`Edit(${claude_rule_path(f.directory)}/**)`));
   assert.ok(!args.some(arg => /(Bash|PowerShell)\(codiscuss (service|launch|run|api|setup|install|local)/.test(arg)));
   assert.equal(args.at(-1), f.task.prompt);
   if (process.platform === 'win32') assert.equal(claude_rule_path('C:\\Data\\room'), '//c/Data/room');
@@ -470,6 +516,9 @@ test('tasks state whether the discussion project is read-only or writable', asyn
   assert.match(task_files(config, f.event, 'token-for-test', {}).prompt, /允许按议题需要修改/);
   const saved = JSON.parse(readFileSync(join(f.config.directory, 'event-1.task.json'), 'utf8'));
   assert.equal(saved.project_access, 'write'); assert.equal(saved.cwd, project);
+  assert.equal(saved.draft_directory, join(f.config.directory, 'drafts'));
+  assert.ok(existsSync(saved.draft_directory));
+  assert.match(saved.instructions, /不修改任务、凭据、日志或调度数据库/);
   assert.match(task_files(load_config_from(f, project), f.event, 'token-for-test', {}).prompt, /只读，不修改/);
   assert.match(task_files(f.config, f.event, 'token-for-test', {}).prompt, /未指定讨论项目目录/);
   assert.throws(() => load_config_from(f, project, 'admin'), /read 或 write/);
@@ -641,6 +690,12 @@ test('the service ticks every registered room and pauses a room once it is unreg
   t.after(async () => { await service.close(); rmSync(home, { recursive: true, force: true }); });
   await service.tick();
   assert.deepEqual(ticks.sort(), ['room1', 'room2']);
+  const first_worker = service.workers.get(first);
+  const second_worker = service.workers.get(second);
+  assert.equal(first_worker.config.draft_directory, service_drafts(home, first_worker.config.directory));
+  assert.ok(first_worker.config.draft_directory.startsWith(join(home, 'drafts')));
+  assert.notEqual(first_worker.config.draft_directory, second_worker.config.draft_directory);
+  assert.equal(JSON.parse(readFileSync(first, 'utf8')).draft_directory, undefined, 'old configs need no on-disk migration');
   const status = JSON.parse(readFileSync(join(home, 'status.json'), 'utf8'));
   assert.deepEqual(status.rooms.map(room => room.status), ['paused', 'paused']);
   unregister_room(home, second);

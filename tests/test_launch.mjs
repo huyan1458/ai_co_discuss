@@ -292,6 +292,10 @@ test('conversation entry gives the first host task to the real current session, 
   const result = await launch_discussion(f.home, { ...f.input, entry: 'conversation', current_session_id: 'current-real-session' }, f.options);
   const config = load_config(result.config_path);
   const access = JSON.parse(readFileSync(result.current_task.access_file, 'utf8'));
+  const task = JSON.parse(readFileSync(result.current_task.task_file, 'utf8'));
+  assert.equal(task.draft_directory, config.draft_directory);
+  assert.ok(task.draft_directory.startsWith(join(f.home, 'drafts')));
+  assert.ok(!task.draft_directory.startsWith(config.directory));
   assert.equal(access.session_id, 'current-real-session');
   assert.equal(config.participants.Codex.session_id, access.session_id);
   assert.ok(!JSON.stringify(result).includes(access.token));

@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { atomic_json } from './discussion_adapters.mjs';
-import { DiscussionRunner, DiscussionStore, acquire_lock, load_config, pause_if_running, validate_config } from './discussion_runner.mjs';
+import { DiscussionRunner, DiscussionStore, acquire_lock, load_config, pause_if_running, service_drafts, validate_config } from './discussion_runner.mjs';
 
 const POLL_MS = 2000;
 const START_WAIT_MS = 5000;
@@ -88,8 +88,9 @@ export function unregister_room(home, config_path) {
 
 /** One registered room: its own data-directory lock, store and dispatcher. */
 class RoomWorker {
-  constructor(path, create_runner, log) {
+  constructor(path, create_runner, log, home) {
     this.path = path;
+    this.home = home;
     this.create_runner = create_runner;
     this.log = log;
     this.state = { config: path, status: 'starting', error: '' };
@@ -98,6 +99,7 @@ class RoomWorker {
   open() {
     const snapshot = configuration_snapshot(this.path);
     const config = validate_config(snapshot.config, dirname(this.path));
+    config.draft_directory = service_drafts(this.home, config.directory);
     const release = acquire_lock(config.directory);
     try { this.store = new DiscussionStore(config.directory); }
     catch (error) { release(); throw error; }
@@ -169,7 +171,7 @@ export class DiscussionService {
       if (!configs.includes(path)) { await worker.close(true); this.workers.delete(path); }
     }
     for (const path of configs) {
-      if (!this.workers.has(path)) this.workers.set(path, new RoomWorker(path, this.create_runner, this.log));
+      if (!this.workers.has(path)) this.workers.set(path, new RoomWorker(path, this.create_runner, this.log, this.home));
       await this.workers.get(path).tick();
     }
     atomic_json(join(this.home, 'status.json'), { pid: process.pid, updated_at: Math.floor(Date.now() / 1000),

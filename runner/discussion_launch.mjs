@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { atomic_json } from './discussion_adapters.mjs';
-import { acquire_lock, api, DiscussionStore, task_files, validate_config } from './discussion_runner.mjs';
+import { acquire_lock, api, DiscussionStore, service_drafts, task_files, validate_config } from './discussion_runner.mjs';
 import { CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 
 const CLIENTS = { Codex: ['codex_cli', 'codex'], Claude: ['claude'], Gemini: ['antigravity_cli', 'antigravity'] };
@@ -115,7 +115,7 @@ function launch_config(home, input, room, directory, options) {
   }
   return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, participants,
     cwd: input.cwd, discussion_project: input.discussion_project, project_access: input.project_access || undefined,
-    data_directory: join(directory, 'runtime') }, directory);
+    data_directory: join(directory, 'runtime'), draft_directory: service_drafts(home, join(directory, 'runtime')) }, directory);
 }
 
 /** Stable signatures make changed retry requests explicit without putting credentials in receipts. */
@@ -318,6 +318,7 @@ async function prepare_launch(home, input, directory, options = {}) {
   if (!previous && room.runtime && room.runtime.status !== 'ready') throw new Error('房间已启动过；请沿用原配置核对或从原进度看板明确继续');
   const config = previous?.request_signature ? { ...structuredClone(saved), token }
     : launch_config(home, input, room, directory, { token, defaults: saved?.participants || legacy?.participants });
+  config.draft_directory = service_drafts(home, config.directory);
   if (previous?.request_signature && !previous.finished) validate_config(config, directory);
   const minutes = previous?.minutes ?? legacy?.minutes ?? launch_minutes(input, room);
   const draft = signature({ entry: input.entry, room_id: input.room_id, room: input.room, participants: config.participants, cwd: input.cwd, discussion_project: input.discussion_project, minutes });
