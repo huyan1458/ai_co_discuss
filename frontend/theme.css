@@ -64,11 +64,23 @@
 .theme-choices > button { display: flex; align-items: center; gap: 15px; text-align: left; width: 100%; border: 1px solid #344148; border-radius: 9px; padding: 14px; transition: background .15s ease; }
 .theme-choices > button:hover { background: #ffffff04; }
 .theme-choices > button.chosen { border-color: #729181; background: #96b7a50a; }
-.theme-preview { display: flex; align-items: center; justify-content: center; width: 48px; height: 40px; border-radius: 6px; background: #11191b; border: 1px solid #394d4e; color: #accbbf; font-size: 21px; }
-.theme-preview.millennium { background: #e5edf2; border-color: #a9bfce; color: #466d86; }
+/* Theme previews are miniature windows drawn in each theme's own fixed palette. */
+.theme-preview { --tp-bg: #11191b; --tp-side: #0b1113; --tp-line: #33464a; --tp-accent: #accbbf; --tp-border: #394d4e;
+  position: relative; display: flex; flex-shrink: 0; width: 64px; height: 44px; overflow: hidden; border: 1px solid var(--tp-border); border-radius: 7px; background: var(--tp-bg); box-shadow: 0 1px 2px #0000002e; }
+.theme-preview.channel { --tp-bg: #2b2d31; --tp-side: #1e1f22; --tp-line: #4a4e58; --tp-accent: #8791ff; --tp-border: #4a4e58; }
+.theme-preview.channel-light { --tp-bg: #ffffff; --tp-side: #f3f3f3; --tp-line: #e1e1e1; --tp-accent: #0969da; --tp-border: #d6d6d6; }
+.theme-preview.millennium { --tp-bg: #eef3f6; --tp-side: linear-gradient(#5d87a3, #3f6782); --tp-line: #bfd0dc; --tp-accent: #3f6782; --tp-border: #9fb7c8; }
+.theme-preview-side { width: 15px; background: var(--tp-side); }
+.theme-preview-main { display: flex; flex: 1; flex-direction: column; gap: 5px; padding: 8px 7px; }
+.theme-preview-main b { display: block; height: 4px; border-radius: 2px; background: var(--tp-line); }
+.theme-preview-main b:first-child { width: 55%; background: var(--tp-accent); }
+.theme-preview-main b:nth-child(2) { width: 90%; }
+.theme-preview-main b:nth-child(3) { width: 70%; }
 .theme-choices strong { display: block; font-size: 13px; font-weight: 500; }
 .theme-choices small { display: block; font-size: 11px; color: #90a2a9; margin-top: 4px; }
-.theme-check { margin-left: auto; color: #a8cdbb; }
+.theme-check { display: grid; place-items: center; flex-shrink: 0; width: 18px; height: 18px; margin-left: auto; border: 1px solid #ffffff26; border-radius: 50%; color: #a8cdbb; }
+.chosen .theme-check { border-color: transparent; background: #a8cdbb; color: #11191b; }
+.theme-check > * { width: 12px; height: 12px; }
 .original-meta { display: flex; align-items: center; gap: 12px; font-size: 12px; }
 .original-meta > span { color: #8f9fa7; }
 .original-message .message-prose { margin: 25px 0; }

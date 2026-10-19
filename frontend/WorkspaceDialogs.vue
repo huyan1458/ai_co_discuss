@@ -111,7 +111,7 @@ const detail = ref(null);
 const detail_error = ref("");
 const turn_expert = field("turn-expert-select");
 const turn_question = field("turn-question-input");
-const themes = [{ value: "channel", title: "协作频道", description: "深灰界面 · 频道导航 · 成员侧栏", icon: "i-lucide-panels-top-left" }, { value: "channel-light", title: "协作频道 · 浅色", description: "纯白界面 · 中性灰阶 · 清晰阅读", icon: "i-lucide-sun" }, { value: "millennium", title: "千禧聊天室", description: "钢蓝窗框 · 经典聊天", icon: "i-lucide-message-square" }];
+const themes = [{ value: "channel", title: "协作频道", description: "深灰界面 · 频道导航 · 成员侧栏" }, { value: "channel-light", title: "协作频道 · 浅色", description: "纯白界面 · 中性灰阶 · 清晰阅读" }, { value: "millennium", title: "千禧聊天室", description: "钢蓝窗框 · 经典聊天" }];
 
 /** Map the topic form onto the existing controller's draft fields. */
 function form_id(key) {
@@ -203,7 +203,7 @@ async function follow_reply() {
         <div class="dialog-actions"><UButton label="取消" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" :label="rendered_mode === 'delete' ? '永久删除' : rendered_mode === 'rename' ? '保存名称' : titles[rendered_mode]" :color="rendered_mode === 'delete' ? 'error' : 'primary'" :loading="pending === 'manage_channel'" :disabled="rendered_mode === 'rename' && !management_title.trim()" /></div>
       </form>
       <div v-else-if="rendered_mode === 'settings'">
-        <div class="theme-choices"><button v-for="theme in themes" :key="theme.value" :class="{ chosen: view.theme === theme.value }" :aria-pressed="view.theme === theme.value" @click="choose_theme(theme.value)"><span class="theme-preview" :class="theme.value"><UIcon :name="theme.icon" /></span><span><strong>{{ theme.title }}</strong><small>{{ theme.description }}</small></span><UIcon v-if="view.theme === theme.value" name="i-lucide-check" class="theme-check" /></button></div>
+        <div class="theme-choices"><button v-for="theme in themes" :key="theme.value" :class="{ chosen: view.theme === theme.value }" :aria-pressed="view.theme === theme.value" @click="choose_theme(theme.value)"><span class="theme-preview" :class="theme.value" aria-hidden="true"><i class="theme-preview-side"></i><i class="theme-preview-main"><b></b><b></b><b></b></i></span><span><strong>{{ theme.title }}</strong><small>{{ theme.description }}</small></span><span class="theme-check"><UIcon v-if="view.theme === theme.value" name="i-lucide-check" /></span></button></div>
         <section class="channel-reading-setting">
           <h3 id="channel-reading-label">对话宽度</h3>
           <div class="channel-reading-options" role="group" aria-labelledby="channel-reading-label"><UButton v-for="option in readingOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: reading_width === option.value }" :aria-pressed="reading_width === option.value" @click="reading_width = option.value" /></div>

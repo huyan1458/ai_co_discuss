@@ -5938,7 +5938,7 @@ var hf = {
 }), _f = !1;
 function vf(e) {
 	if (_f) return;
-	let t = JSON.parse("[{\"prefix\":\"lucide\",\"icons\":{\"archive\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"20\\\" height=\\\"5\\\" x=\\\"2\\\" y=\\\"3\\\" rx=\\\"1\\\"/><path d=\\\"M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8m-10 4h4\\\"/></g>\"},\"archive-restore\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"20\\\" height=\\\"5\\\" x=\\\"2\\\" y=\\\"3\\\" rx=\\\"1\\\"/><path d=\\\"M4 8v11a2 2 0 0 0 2 2h2M20 8v11a2 2 0 0 1-2 2h-2m-7-6l3-3l3 3m-3-3v9\\\"/></g>\"},\"arrow-down\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 5v14m7-7l-7 7l-7-7\\\"/>\"},\"arrow-left\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m12 19l-7-7l7-7m7 7H5\\\"/>\"},\"arrow-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 12h14m-7-7l7 7l-7 7\\\"/>\"},\"arrow-up\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m5 12l7-7l7 7m-7 7V5\\\"/>\"},\"arrow-up-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M7 7h10v10M7 17L17 7\\\"/>\"},\"at-sign\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"4\\\"/><path d=\\\"M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8\\\"/></g>\"},\"check\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20 6L9 17l-5-5\\\"/>\"},\"check-check\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M18 6L7 17l-5-5m20-2l-7.5 7.5L13 16\\\"/>\"},\"chevron-down\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m6 9l6 6l6-6\\\"/>\"},\"chevron-left\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m15 18l-6-6l6-6\\\"/>\"},\"chevron-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m9 18l6-6l-6-6\\\"/>\"},\"chevron-up\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m18 15l-6-6l-6 6\\\"/>\"},\"chevrons-left\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m11 17l-5-5l5-5m7 10l-5-5l5-5\\\"/>\"},\"chevrons-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m6 17l5-5l-5-5m7 10l5-5l-5-5\\\"/>\"},\"circle\":{\"width\":24,\"height\":24,\"body\":\"<circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\" fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"/>\"},\"circle-alert\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 8v4m0 4h.01\\\"/></g>\"},\"circle-check\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"m16 9l-5.5 5.5L8 12\\\"/></g>\"},\"circle-x\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"m15 9l-6 6m0-6l6 6\\\"/></g>\"},\"clock\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 6v6l4 2\\\"/></g>\"},\"copy\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"14\\\" height=\\\"14\\\" x=\\\"8\\\" y=\\\"8\\\" rx=\\\"2\\\" ry=\\\"2\\\"/><path d=\\\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\\\"/></g>\"},\"copy-check\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m12 15l2 2l4-4\\\"/><rect width=\\\"14\\\" height=\\\"14\\\" x=\\\"8\\\" y=\\\"8\\\" rx=\\\"2\\\" ry=\\\"2\\\"/><path d=\\\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\\\"/></g>\"},\"corner-down-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M20 4v7a4 4 0 0 1-4 4H4\\\"/><path d=\\\"m9 10l-5 5l5 5\\\"/></g>\"},\"corner-up-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M20 20v-7a4 4 0 0 0-4-4H4\\\"/><path d=\\\"M9 14L4 9l5-5\\\"/></g>\"},\"crown\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294zM5 21h14\\\"/>\"},\"download\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 15V3m9 12v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\\\"/><path d=\\\"m7 10l5 5l5-5\\\"/></g>\"},\"ellipsis\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"19\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"5\\\" cy=\\\"12\\\" r=\\\"1\\\"/></g>\"},\"expand\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m15 15l6 6M15 9l6-6m0 13v5h-5m5-13V3h-5M3 16v5h5m-5 0l6-6M3 8V3h5m1 6L3 3\\\"/>\"},\"eye\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M2.062 12.348a1 1 0 0 1 0-.696a10.75 10.75 0 0 1 19.876 0a1 1 0 0 1 0 .696a10.75 10.75 0 0 1-19.876 0\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"3\\\"/></g>\"},\"eye-off\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575a1 1 0 0 1 0 .696a10.8 10.8 0 0 1-1.444 2.49m-6.41-.679a3 3 0 0 1-4.242-4.242\\\"/><path d=\\\"M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151a1 1 0 0 1 0-.696a10.75 10.75 0 0 1 4.446-5.143M2 2l20 20\\\"/></g>\"},\"file\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\\\"/><path d=\\\"M14 2v5a1 1 0 0 0 1 1h5\\\"/></g>\"},\"file-text\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\\\"/><path d=\\\"M14 2v5a1 1 0 0 0 1 1h5M10 9H8m8 4H8m8 4H8\\\"/></g>\"},\"flag\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528\\\"/>\"},\"folder\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\\\"/>\"},\"folder-input\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1m0-4h10\\\"/><path d=\\\"m9 16l3-3l-3-3\\\"/></g>\"},\"folder-minus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M9 13h6m5 7a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\\\"/>\"},\"folder-open\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m6 14l1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2\\\"/>\"},\"forward\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m15 17l5-5l-5-5\\\"/><path d=\\\"M4 18v-2a4 4 0 0 1 4-4h12\\\"/></g>\"},\"globe\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 2a14.5 14.5 0 0 0 0 20a14.5 14.5 0 0 0 0-20M2 12h20\\\"/></g>\"},\"grip-vertical\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"9\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"9\\\" cy=\\\"5\\\" r=\\\"1\\\"/><circle cx=\\\"9\\\" cy=\\\"19\\\" r=\\\"1\\\"/><circle cx=\\\"15\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"15\\\" cy=\\\"5\\\" r=\\\"1\\\"/><circle cx=\\\"15\\\" cy=\\\"19\\\" r=\\\"1\\\"/></g>\"},\"hand\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2m0 4V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2m0 4.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8\\\"/><path d=\\\"M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15\\\"/></g>\"},\"hash\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M4 9h16M4 15h16M10 3L8 21m8-18l-2 18\\\"/>\"},\"info\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 16v-4m0-4h.01\\\"/></g>\"},\"lightbulb\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M15 14c.2-1 .7-1.7 1.5-2.5c1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5c.7.7 1.3 1.5 1.5 2.5m0 4h6m-5 4h4\\\"/>\"},\"link\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\\\"/><path d=\\\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\\\"/></g>\"},\"list-checks\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M13 5h8m-8 7h8m-8 7h8M3 17l2 2l4-4M3 7l2 2l4-4\\\"/>\"},\"list-filter\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M2 5h20M6 12h12m-9 7h6\\\"/>\"},\"loader-circle\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M21 12a9 9 0 1 1-6.219-8.56\\\"/>\"},\"menu\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M4 5h16M4 12h16M4 19h16\\\"/>\"},\"message-square\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z\\\"/>\"},\"message-square-plus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2zM12 8v6m-3-3h6\\\"/>\"},\"messages-square\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2zm4-1a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1\\\"/>\"},\"mic\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 19v3m7-12v2a7 7 0 0 1-14 0v-2\\\"/><rect width=\\\"6\\\" height=\\\"13\\\" x=\\\"9\\\" y=\\\"2\\\" rx=\\\"3\\\"/></g>\"},\"minus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 12h14\\\"/>\"},\"monitor\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"20\\\" height=\\\"14\\\" x=\\\"2\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M8 21h8m-4-4v4\\\"/></g>\"},\"moon\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401\\\"/>\"},\"panel-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M9 3v18\\\"/></g>\"},\"panel-left-close\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M9 3v18m7-6l-3-3l3-3\\\"/></g>\"},\"panel-left-open\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M9 3v18m5-12l3 3l-3 3\\\"/></g>\"},\"panel-right\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M15 3v18\\\"/></g>\"},\"panel-right-open\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M15 3v18m-5-6l-3-3l3-3\\\"/></g>\"},\"panels-top-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M3 9h18M9 21V9\\\"/></g>\"},\"pause\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"5\\\" height=\\\"18\\\" x=\\\"14\\\" y=\\\"3\\\" rx=\\\"1\\\"/><rect width=\\\"5\\\" height=\\\"18\\\" x=\\\"5\\\" y=\\\"3\\\" rx=\\\"1\\\"/></g>\"},\"pencil\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497zM15 5l4 4\\\"/>\"},\"play\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z\\\"/>\"},\"plug\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 22v-5m3-9V2m2 6a1 1 0 0 1 1 1v4a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1zM9 8V2\\\"/>\"},\"plus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 12h14m-7-7v14\\\"/>\"},\"refresh-cw\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M3 12a9 9 0 0 1 9-9a9.75 9.75 0 0 1 6.74 2.74L21 8\\\"/><path d=\\\"M21 3v5h-5m5 4a9 9 0 0 1-9 9a9.75 9.75 0 0 1-6.74-2.74L3 16\\\"/><path d=\\\"M8 16H3v5\\\"/></g>\"},\"rotate-ccw\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M3 12a9 9 0 1 0 9-9a9.75 9.75 0 0 0-6.74 2.74L3 8\\\"/><path d=\\\"M3 3v5h5\\\"/></g>\"},\"search\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m21 21l-4.34-4.34\\\"/><circle cx=\\\"11\\\" cy=\\\"11\\\" r=\\\"8\\\"/></g>\"},\"settings-2\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M14 17H5M19 7h-9\\\"/><circle cx=\\\"17\\\" cy=\\\"17\\\" r=\\\"3\\\"/><circle cx=\\\"7\\\" cy=\\\"7\\\" r=\\\"3\\\"/></g>\"},\"square\":{\"width\":24,\"height\":24,\"body\":\"<rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" rx=\\\"2\\\"/>\"},\"square-pen\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7\\\"/><path d=\\\"M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z\\\"/></g>\"},\"star\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.12 2.12 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.12 2.12 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.12 2.12 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.12 2.12 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.12 2.12 0 0 0 1.597-1.16z\\\"/>\"},\"sun\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"4\\\"/><path d=\\\"M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41\\\"/></g>\"},\"target\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"6\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"2\\\"/></g>\"},\"terminal\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 19h8M4 17l6-6l-6-6\\\"/>\"},\"trash-2\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M10 11v6m4-6v6m5-11v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\\\"/>\"},\"triangle-alert\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m21.73 18l-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3M12 9v4m0 4h.01\\\"/>\"},\"upload\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 3v12m5-7l-5-5l-5 5m14 7v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\\\"/>\"},\"x\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M18 6L6 18M6 6l12 12\\\"/>\"},\"zap\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M15.914 4a1.5 1.5 0 0 0-2.474-1.561l-9 9A1.5 1.5 0 0 0 5.5 14h4.002a.5.5 0 0 1 .471.666L8.086 20a1.5 1.5 0 0 0 2.475 1.56l9-9A1.5 1.5 0 0 0 18.5 10h-3.997a.5.5 0 0 1-.472-.667z\\\"/>\"}}}]");
+	let t = JSON.parse("[{\"prefix\":\"lucide\",\"icons\":{\"archive\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"20\\\" height=\\\"5\\\" x=\\\"2\\\" y=\\\"3\\\" rx=\\\"1\\\"/><path d=\\\"M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8m-10 4h4\\\"/></g>\"},\"archive-restore\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"20\\\" height=\\\"5\\\" x=\\\"2\\\" y=\\\"3\\\" rx=\\\"1\\\"/><path d=\\\"M4 8v11a2 2 0 0 0 2 2h2M20 8v11a2 2 0 0 1-2 2h-2m-7-6l3-3l3 3m-3-3v9\\\"/></g>\"},\"arrow-down\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 5v14m7-7l-7 7l-7-7\\\"/>\"},\"arrow-left\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m12 19l-7-7l7-7m7 7H5\\\"/>\"},\"arrow-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 12h14m-7-7l7 7l-7 7\\\"/>\"},\"arrow-up\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m5 12l7-7l7 7m-7 7V5\\\"/>\"},\"arrow-up-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M7 7h10v10M7 17L17 7\\\"/>\"},\"at-sign\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"4\\\"/><path d=\\\"M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8\\\"/></g>\"},\"check\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20 6L9 17l-5-5\\\"/>\"},\"check-check\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M18 6L7 17l-5-5m20-2l-7.5 7.5L13 16\\\"/>\"},\"chevron-down\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m6 9l6 6l6-6\\\"/>\"},\"chevron-left\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m15 18l-6-6l6-6\\\"/>\"},\"chevron-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m9 18l6-6l-6-6\\\"/>\"},\"chevron-up\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m18 15l-6-6l-6 6\\\"/>\"},\"chevrons-left\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m11 17l-5-5l5-5m7 10l-5-5l5-5\\\"/>\"},\"chevrons-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m6 17l5-5l-5-5m7 10l5-5l-5-5\\\"/>\"},\"circle\":{\"width\":24,\"height\":24,\"body\":\"<circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\" fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"/>\"},\"circle-alert\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 8v4m0 4h.01\\\"/></g>\"},\"circle-check\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"m16 9l-5.5 5.5L8 12\\\"/></g>\"},\"circle-x\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"m15 9l-6 6m0-6l6 6\\\"/></g>\"},\"clock\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 6v6l4 2\\\"/></g>\"},\"copy\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"14\\\" height=\\\"14\\\" x=\\\"8\\\" y=\\\"8\\\" rx=\\\"2\\\" ry=\\\"2\\\"/><path d=\\\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\\\"/></g>\"},\"copy-check\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m12 15l2 2l4-4\\\"/><rect width=\\\"14\\\" height=\\\"14\\\" x=\\\"8\\\" y=\\\"8\\\" rx=\\\"2\\\" ry=\\\"2\\\"/><path d=\\\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\\\"/></g>\"},\"corner-down-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M20 4v7a4 4 0 0 1-4 4H4\\\"/><path d=\\\"m9 10l-5 5l5 5\\\"/></g>\"},\"corner-up-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M20 20v-7a4 4 0 0 0-4-4H4\\\"/><path d=\\\"M9 14L4 9l5-5\\\"/></g>\"},\"crown\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294zM5 21h14\\\"/>\"},\"download\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 15V3m9 12v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\\\"/><path d=\\\"m7 10l5 5l5-5\\\"/></g>\"},\"ellipsis\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"19\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"5\\\" cy=\\\"12\\\" r=\\\"1\\\"/></g>\"},\"expand\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m15 15l6 6M15 9l6-6m0 13v5h-5m5-13V3h-5M3 16v5h5m-5 0l6-6M3 8V3h5m1 6L3 3\\\"/>\"},\"eye\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M2.062 12.348a1 1 0 0 1 0-.696a10.75 10.75 0 0 1 19.876 0a1 1 0 0 1 0 .696a10.75 10.75 0 0 1-19.876 0\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"3\\\"/></g>\"},\"eye-off\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575a1 1 0 0 1 0 .696a10.8 10.8 0 0 1-1.444 2.49m-6.41-.679a3 3 0 0 1-4.242-4.242\\\"/><path d=\\\"M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151a1 1 0 0 1 0-.696a10.75 10.75 0 0 1 4.446-5.143M2 2l20 20\\\"/></g>\"},\"file\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\\\"/><path d=\\\"M14 2v5a1 1 0 0 0 1 1h5\\\"/></g>\"},\"file-text\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\\\"/><path d=\\\"M14 2v5a1 1 0 0 0 1 1h5M10 9H8m8 4H8m8 4H8\\\"/></g>\"},\"flag\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528\\\"/>\"},\"folder\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\\\"/>\"},\"folder-input\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1m0-4h10\\\"/><path d=\\\"m9 16l3-3l-3-3\\\"/></g>\"},\"folder-minus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M9 13h6m5 7a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\\\"/>\"},\"folder-open\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m6 14l1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2\\\"/>\"},\"forward\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m15 17l5-5l-5-5\\\"/><path d=\\\"M4 18v-2a4 4 0 0 1 4-4h12\\\"/></g>\"},\"globe\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 2a14.5 14.5 0 0 0 0 20a14.5 14.5 0 0 0 0-20M2 12h20\\\"/></g>\"},\"grip-vertical\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"9\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"9\\\" cy=\\\"5\\\" r=\\\"1\\\"/><circle cx=\\\"9\\\" cy=\\\"19\\\" r=\\\"1\\\"/><circle cx=\\\"15\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"15\\\" cy=\\\"5\\\" r=\\\"1\\\"/><circle cx=\\\"15\\\" cy=\\\"19\\\" r=\\\"1\\\"/></g>\"},\"hand\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2m0 4V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2m0 4.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8\\\"/><path d=\\\"M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15\\\"/></g>\"},\"hash\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M4 9h16M4 15h16M10 3L8 21m8-18l-2 18\\\"/>\"},\"info\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 16v-4m0-4h.01\\\"/></g>\"},\"lightbulb\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M15 14c.2-1 .7-1.7 1.5-2.5c1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5c.7.7 1.3 1.5 1.5 2.5m0 4h6m-5 4h4\\\"/>\"},\"link\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\\\"/><path d=\\\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\\\"/></g>\"},\"list-checks\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M13 5h8m-8 7h8m-8 7h8M3 17l2 2l4-4M3 7l2 2l4-4\\\"/>\"},\"list-filter\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M2 5h20M6 12h12m-9 7h6\\\"/>\"},\"loader-circle\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M21 12a9 9 0 1 1-6.219-8.56\\\"/>\"},\"menu\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M4 5h16M4 12h16M4 19h16\\\"/>\"},\"message-square\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z\\\"/>\"},\"message-square-plus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2zM12 8v6m-3-3h6\\\"/>\"},\"messages-square\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2zm4-1a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1\\\"/>\"},\"mic\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 19v3m7-12v2a7 7 0 0 1-14 0v-2\\\"/><rect width=\\\"6\\\" height=\\\"13\\\" x=\\\"9\\\" y=\\\"2\\\" rx=\\\"3\\\"/></g>\"},\"minus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 12h14\\\"/>\"},\"monitor\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"20\\\" height=\\\"14\\\" x=\\\"2\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M8 21h8m-4-4v4\\\"/></g>\"},\"moon\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401\\\"/>\"},\"panel-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M9 3v18\\\"/></g>\"},\"panel-left-close\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M9 3v18m7-6l-3-3l3-3\\\"/></g>\"},\"panel-left-open\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M9 3v18m5-12l3 3l-3 3\\\"/></g>\"},\"panel-right\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M15 3v18\\\"/></g>\"},\"panel-right-open\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M15 3v18m-5-6l-3-3l3-3\\\"/></g>\"},\"pause\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"5\\\" height=\\\"18\\\" x=\\\"14\\\" y=\\\"3\\\" rx=\\\"1\\\"/><rect width=\\\"5\\\" height=\\\"18\\\" x=\\\"5\\\" y=\\\"3\\\" rx=\\\"1\\\"/></g>\"},\"pencil\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497zM15 5l4 4\\\"/>\"},\"play\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z\\\"/>\"},\"plug\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 22v-5m3-9V2m2 6a1 1 0 0 1 1 1v4a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1zM9 8V2\\\"/>\"},\"plus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 12h14m-7-7v14\\\"/>\"},\"refresh-cw\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M3 12a9 9 0 0 1 9-9a9.75 9.75 0 0 1 6.74 2.74L21 8\\\"/><path d=\\\"M21 3v5h-5m5 4a9 9 0 0 1-9 9a9.75 9.75 0 0 1-6.74-2.74L3 16\\\"/><path d=\\\"M8 16H3v5\\\"/></g>\"},\"rotate-ccw\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M3 12a9 9 0 1 0 9-9a9.75 9.75 0 0 0-6.74 2.74L3 8\\\"/><path d=\\\"M3 3v5h5\\\"/></g>\"},\"search\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m21 21l-4.34-4.34\\\"/><circle cx=\\\"11\\\" cy=\\\"11\\\" r=\\\"8\\\"/></g>\"},\"settings-2\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M14 17H5M19 7h-9\\\"/><circle cx=\\\"17\\\" cy=\\\"17\\\" r=\\\"3\\\"/><circle cx=\\\"7\\\" cy=\\\"7\\\" r=\\\"3\\\"/></g>\"},\"square\":{\"width\":24,\"height\":24,\"body\":\"<rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" rx=\\\"2\\\"/>\"},\"square-pen\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7\\\"/><path d=\\\"M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z\\\"/></g>\"},\"star\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.12 2.12 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.12 2.12 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.12 2.12 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.12 2.12 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.12 2.12 0 0 0 1.597-1.16z\\\"/>\"},\"sun\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"4\\\"/><path d=\\\"M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41\\\"/></g>\"},\"target\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"6\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"2\\\"/></g>\"},\"terminal\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 19h8M4 17l6-6l-6-6\\\"/>\"},\"trash-2\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M10 11v6m4-6v6m5-11v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\\\"/>\"},\"triangle-alert\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m21.73 18l-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3M12 9v4m0 4h.01\\\"/>\"},\"upload\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 3v12m5-7l-5-5l-5 5m14 7v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\\\"/>\"},\"x\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M18 6L6 18M6 6l12 12\\\"/>\"},\"zap\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M15.914 4a1.5 1.5 0 0 0-2.474-1.561l-9 9A1.5 1.5 0 0 0 5.5 14h4.002a.5.5 0 0 1 .471.666L8.086 20a1.5 1.5 0 0 0 2.475 1.56l9-9A1.5 1.5 0 0 0 18.5 10h-3.997a.5.5 0 0 1-.472-.667z\\\"/>\"}}}]");
 	for (let n of t) for (let [t, r] of Object.entries(n.icons)) e(n.prefix ? n.prefix + ":" + t : t, r);
 	_f = !0;
 }
@@ -43768,26 +43768,26 @@ var XV = {
 }, QG = {
 	key: 2,
 	class: "fine-print"
-}, $G = { class: "dialog-actions" }, eK = { key: 4 }, tK = { class: "theme-choices" }, nK = ["aria-pressed", "onClick"], rK = { class: "channel-reading-setting" }, iK = {
+}, $G = { class: "dialog-actions" }, eK = { key: 4 }, tK = { class: "theme-choices" }, nK = ["aria-pressed", "onClick"], rK = { class: "theme-check" }, iK = { class: "channel-reading-setting" }, aK = {
 	class: "channel-reading-options",
 	role: "group",
 	"aria-labelledby": "channel-reading-label"
-}, aK = { class: "form-two-columns" }, oK = { class: "advanced-content" }, sK = { class: "form-two-columns" }, cK = {
+}, oK = { class: "form-two-columns" }, sK = { class: "advanced-content" }, cK = { class: "form-two-columns" }, lK = {
 	key: 0,
 	class: "fine-print"
-}, lK = { class: "advanced-content" }, uK = { class: "expert-fields" }, dK = { class: "dialog-actions" }, fK = { class: "dialog-actions" }, pK = {
+}, uK = { class: "advanced-content" }, dK = { class: "expert-fields" }, fK = { class: "dialog-actions" }, pK = { class: "dialog-actions" }, mK = {
 	key: 8,
 	class: "original-message"
-}, mK = {
+}, hK = {
 	key: 0,
 	role: "alert"
-}, hK = { class: "original-meta" }, gK = { class: "fine-print" }, _K = {
+}, gK = { class: "original-meta" }, _K = { class: "fine-print" }, vK = {
 	key: 0,
 	class: "channel-answer-summary"
-}, vK = { class: "message-prose" }, yK = { class: "message-prose" }, bK = {
+}, yK = { class: "message-prose" }, bK = { class: "message-prose" }, xK = {
 	key: 2,
 	class: "fine-print"
-}, xK = "topic-expert-modes", SK = {
+}, SK = "topic-expert-modes", CK = {
 	__name: "WorkspaceDialogs",
 	props: /*@__PURE__*/ La({
 		detailId: {
@@ -43987,20 +43987,17 @@ var XV = {
 			{
 				value: "channel",
 				title: "协作频道",
-				description: "深灰界面 · 频道导航 · 成员侧栏",
-				icon: "i-lucide-panels-top-left"
+				description: "深灰界面 · 频道导航 · 成员侧栏"
 			},
 			{
 				value: "channel-light",
 				title: "协作频道 · 浅色",
-				description: "纯白界面 · 中性灰阶 · 清晰阅读",
-				icon: "i-lucide-sun"
+				description: "纯白界面 · 中性灰阶 · 清晰阅读"
 			},
 			{
 				value: "millennium",
 				title: "千禧聊天室",
-				description: "钢蓝窗框 · 经典聊天",
-				icon: "i-lucide-message-square"
+				description: "钢蓝窗框 · 经典聊天"
 			}
 		];
 		function _e(e) {
@@ -44268,14 +44265,20 @@ var XV = {
 					"aria-pressed": P(a).theme === e.value,
 					onClick: (t) => j(e.value)
 				}, [
-					W("span", { class: A(["theme-preview", e.value]) }, [G(xe, { name: e.icon }, null, 8, ["name"])], 2),
+					W("span", {
+						class: A(["theme-preview", e.value]),
+						"aria-hidden": "true"
+					}, [...s[27] ||= [W("i", { class: "theme-preview-side" }, null, -1), W("i", { class: "theme-preview-main" }, [
+						W("b"),
+						W("b"),
+						W("b")
+					], -1)]], 2),
 					W("span", null, [W("strong", null, M(e.title), 1), W("small", null, M(e.description), 1)]),
-					P(a).theme === e.value ? (V(), U(xe, {
+					W("span", rK, [P(a).theme === e.value ? (V(), U(xe, {
 						key: 0,
-						name: "i-lucide-check",
-						class: "theme-check"
-					})) : J("", !0)
-				], 10, nK)), 64))]), W("section", rK, [s[27] ||= W("h3", { id: "channel-reading-label" }, "对话宽度", -1), W("div", iK, [(V(!0), H(B, null, R(e.readingOptions, (e) => (V(), U(le, {
+						name: "i-lucide-check"
+					})) : J("", !0)])
+				], 10, nK)), 64))]), W("section", iK, [s[28] ||= W("h3", { id: "channel-reading-label" }, "对话宽度", -1), W("div", aK, [(V(!0), H(B, null, R(e.readingOptions, (e) => (V(), U(le, {
 					key: e.value,
 					label: e.label,
 					color: "neutral",
@@ -44323,7 +44326,7 @@ var XV = {
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
-					W("div", aK, [G(de, { label: "主持人" }, {
+					W("div", oK, [G(de, { label: "主持人" }, {
 						default: F(() => [G(x, {
 							"model-value": P(a).fields[_e("host")],
 							items: P(oe),
@@ -44357,9 +44360,9 @@ var XV = {
 						}, null, 8, ["model-value"])]),
 						_: 1
 					})) : J("", !0),
-					W("section", oK, [
-						s[28] ||= W("h3", null, "讨论上限", -1),
-						W("div", sK, [
+					W("section", sK, [
+						s[29] ||= W("h3", null, "讨论上限", -1),
+						W("div", cK, [
 							(V(!0), H(B, null, R(ue.value, (e) => (V(), U(de, {
 								key: e.key,
 								label: e.label
@@ -44419,15 +44422,15 @@ var XV = {
 								_: 1
 							})) : J("", !0)
 						]),
-						s[29] ||= W("p", { class: "fine-print" }, "轮次、总时长留空或 0 表示不限。一轮指每位专家各完成一次观点；首次进入讨论阶段或创建安排后计时，暂停期间不计时。收束预留计入总时长。", -1),
-						ce.value ? (V(), H("p", cK, "修改上限前，请先把阶段保存为“已暂停”。")) : J("", !0)
+						s[30] ||= W("p", { class: "fine-print" }, "轮次、总时长留空或 0 表示不限。一轮指每位专家各完成一次观点；首次进入讨论阶段或创建安排后计时，暂停期间不计时。收束预留计入总时长。", -1),
+						ce.value ? (V(), H("p", lK, "修改上限前，请先把阶段保存为“已暂停”。")) : J("", !0)
 					]),
 					G(Ce, {
 						open: se.value,
 						"onUpdate:open": s[19] ||= (e) => se.value = e,
 						class: "advanced-fields"
 					}, {
-						content: F(() => [W("div", lK, [
+						content: F(() => [W("div", uK, [
 							(V(), H(B, null, R([
 								{
 									key: "user_request",
@@ -44454,17 +44457,17 @@ var XV = {
 								}, null, 8, ["model-value", "onUpdate:modelValue"])]),
 								_: 2
 							}, 1032, ["label"])), 64)),
-							W("div", uK, [(V(!0), H(B, null, R(P(ae), (e) => (V(), H("div", { key: e }, [W("label", null, M(e), 1), G(x, {
-								"model-value": P(a).experts[xK]?.[e] || "none",
+							W("div", dK, [(V(!0), H(B, null, R(P(ae), (e) => (V(), H("div", { key: e }, [W("label", null, M(e), 1), G(x, {
+								"model-value": P(a).experts[SK]?.[e] || "none",
 								items: k,
 								"aria-label": `${e} 参与方式`,
-								"onUpdate:modelValue": (t) => P(o).write_expert(xK, e, t === "none" ? "" : t)
+								"onUpdate:modelValue": (t) => P(o).write_expert(SK, e, t === "none" ? "" : t)
 							}, null, 8, [
 								"model-value",
 								"aria-label",
 								"onUpdate:modelValue"
 							])]))), 128))]),
-							s[30] ||= W("p", { class: "fine-print" }, "AI 主持人需设为本地 CLI，可同时作为专家参与。", -1)
+							s[31] ||= W("p", { class: "fine-print" }, "AI 主持人需设为本地 CLI，可同时作为专家参与。", -1)
 						])]),
 						default: F(() => [G(le, {
 							"trailing-icon": se.value ? "i-lucide-chevron-up" : "i-lucide-chevron-down",
@@ -44476,7 +44479,7 @@ var XV = {
 						}, null, 8, ["trailing-icon"])]),
 						_: 1
 					}, 8, ["open"]),
-					W("div", dK, [G(le, {
+					W("div", fK, [G(le, {
 						label: "取消",
 						color: "neutral",
 						variant: "ghost",
@@ -44519,8 +44522,8 @@ var XV = {
 						}, null, 8, ["modelValue"])]),
 						_: 1
 					}),
-					s[31] ||= W("p", { class: "fine-print" }, "创建后为待通知状态；由主持人实际联系专家。", -1),
-					W("div", fK, [G(le, {
+					s[32] ||= W("p", { class: "fine-print" }, "创建后为待通知状态；由主持人实际联系专家。", -1),
+					W("div", pK, [G(le, {
 						label: "取消",
 						variant: "ghost",
 						color: "neutral",
@@ -44531,8 +44534,8 @@ var XV = {
 						label: "创建发言安排",
 						loading: P(l) === "schedule"
 					}, null, 8, ["loading"])])
-				], 32)) : i.value === "message" ? (V(), H("div", pK, [pe.value ? (V(), H("p", mK, M(pe.value), 1)) : fe.value ? (V(), H(B, { key: 1 }, [
-					W("div", hK, [
+				], 32)) : i.value === "message" ? (V(), H("div", mK, [pe.value ? (V(), H("p", hK, M(pe.value), 1)) : fe.value ? (V(), H(B, { key: 1 }, [
+					W("div", gK, [
 						W("strong", null, M(P(o).display_name(fe.value.author)), 1),
 						W("span", null, "#" + M(fe.value.id), 1),
 						G(we, {
@@ -44543,9 +44546,9 @@ var XV = {
 							_: 1
 						})
 					]),
-					W("p", gK, M(P(o).provenance(fe.value)) + " · " + M(new Date(fe.value.created_at).toLocaleString("zh-CN")), 1),
-					fe.value.summary ? (V(), H("section", _K, [W("small", null, "回答摘要 · " + M(P(o).display_name(fe.value.summary_by)), 1), W("p", vK, M(fe.value.summary), 1)])) : J("", !0),
-					W("p", yK, M(fe.value.text), 1),
+					W("p", _K, M(P(o).provenance(fe.value)) + " · " + M(new Date(fe.value.created_at).toLocaleString("zh-CN")), 1),
+					fe.value.summary ? (V(), H("section", vK, [W("small", null, "回答摘要 · " + M(P(o).display_name(fe.value.summary_by)), 1), W("p", yK, M(fe.value.summary), 1)])) : J("", !0),
+					W("p", bK, M(fe.value.text), 1),
 					fe.value.reply_to ? (V(), U(le, {
 						key: 1,
 						label: `查看被回复的原文 #${fe.value.reply_to}`,
@@ -44555,7 +44558,7 @@ var XV = {
 						class: "channel-surface-button",
 						onClick: be
 					}, null, 8, ["label"])) : J("", !0)
-				], 64)) : (V(), H("p", bK, "正在读取原文…"))])) : J("", !0)]),
+				], 64)) : (V(), H("p", xK, "正在读取原文…"))])) : J("", !0)]),
 				_: 1
 			}, 8, [
 				"open",
@@ -44565,7 +44568,7 @@ var XV = {
 			]);
 		};
 	}
-}, CK = {
+}, wK = {
 	__name: "ContextMenuContent",
 	props: {
 		items: {
@@ -44860,7 +44863,7 @@ var XV = {
 									"disabled",
 									"text-value",
 									"class"
-								]), G(CK, Y({
+								]), G(wK, Y({
 									sub: "",
 									class: r.ui?.content,
 									ui: e.ui,
@@ -44971,7 +44974,7 @@ var XV = {
 			_: 3
 		}, 16)], 64));
 	}
-}, wK = {
+}, TK = {
 	slots: {
 		content: "min-w-32 max-h-(--reka-context-menu-content-available-height) bg-default shadow-lg rounded-md ring ring-default overflow-hidden data-[state=open]:animate-[scale-in_100ms_var(--ease-out)] data-[state=closed]:animate-[scale-out_100ms_var(--ease-out)] origin-(--reka-context-menu-content-transform-origin) flex flex-col",
 		viewport: "relative divide-y divide-default scroll-py-1 overflow-y-auto flex-1",
@@ -45159,7 +45162,7 @@ var XV = {
 		}
 	],
 	defaultVariants: { size: "md" }
-}, TK = {
+}, EK = {
 	__name: "ContextMenu",
 	props: {
 		size: {
@@ -45229,7 +45232,7 @@ var XV = {
 	emits: ["update:open"],
 	setup(e, { emit: t }) {
 		let n = e, r = t, i = Ma(), a = lE("contextMenu", n), o = Cm(), s = uE(om(a, "modal"), r), c = /* @__PURE__ */ wn(() => a.content), l = () => Vm(i, ["default"]), u = X(() => Rk({
-			extend: wK,
+			extend: TK,
 			...o.ui?.contextMenu || {}
 		})({ size: a.size }));
 		return (e, t) => (V(), U(P(KS), j(K(P(s))), {
@@ -45241,7 +45244,7 @@ var XV = {
 			}, {
 				default: F(() => [z(e.$slots, "default")]),
 				_: 3
-			}, 8, ["disabled", "class"])) : J("", !0), G(CK, Y({
+			}, 8, ["disabled", "class"])) : J("", !0), G(wK, Y({
 				class: u.value.content({ class: [!i.default && P(a).class, P(a).ui?.content] }),
 				ui: u.value,
 				"ui-override": P(a).ui
@@ -45271,46 +45274,46 @@ var XV = {
 			_: 3
 		}, 16));
 	}
-}, EK = { class: "channel-directory-manager" }, DK = { class: "channel-directory-heading" }, OK = { class: "channel-directory-actions" }, kK = {
+}, DK = { class: "channel-directory-manager" }, OK = { class: "channel-directory-heading" }, kK = { class: "channel-directory-actions" }, AK = {
 	"aria-label": "讨论频道列表",
 	class: "channel-room-list",
 	"data-room-directory": ""
-}, AK = ["data-room-folder", "data-drag-folder"], jK = {
+}, jK = ["data-room-folder", "data-drag-folder"], MK = {
 	key: 0,
 	class: "channel-folder-row"
-}, MK = [
+}, NK = [
 	"disabled",
 	"aria-label",
 	"aria-expanded",
 	"onKeydown",
 	"onClick"
-], NK = { class: "channel-folder-name" }, PK = { class: "channel-folder-actions" }, FK = {
+], PK = { class: "channel-folder-name" }, FK = { class: "channel-folder-actions" }, IK = {
 	class: "channel-directory-count",
 	"aria-hidden": "true"
-}, IK = ["data-drop-folder"], LK = {
+}, LK = ["data-drop-folder"], RK = {
 	key: 0,
 	class: "channel-directory-empty",
 	role: "status"
-}, RK = ["data-drag-room"], zK = [
+}, zK = ["data-drag-room"], BK = [
 	"aria-label",
 	"disabled",
 	"onKeydown"
-], BK = [
+], VK = [
 	"title",
 	"aria-label",
 	"aria-current",
 	"onClick"
-], VK = { class: "channel-room-actions" }, HK = {
+], HK = { class: "channel-room-actions" }, UK = {
 	class: "channel-directory-count",
 	"aria-hidden": "true"
-}, UK = {
+}, WK = {
 	key: 0,
 	class: "channel-directory-empty"
-}, WK = {
+}, GK = {
 	key: 0,
 	role: "alert",
 	class: "channel-directory-error"
-}, GK = {
+}, KK = {
 	__name: "ChannelDirectory",
 	emits: [
 		"select",
@@ -45466,8 +45469,8 @@ var XV = {
 			];
 		}
 		return (e, t) => {
-			let u = uA, m = zk, _ = LV, v = zV, y = TK;
-			return V(), H("div", EK, [
+			let u = uA, m = zk, _ = LV, v = zV, y = EK;
+			return V(), H("div", DK, [
 				G(u, {
 					label: "新建对话",
 					icon: "i-lucide-square-pen",
@@ -45477,7 +45480,7 @@ var XV = {
 					disabled: P(r).directory_pending.includes("create-room"),
 					onClick: t[0] ||= (e) => n("create", null)
 				}, null, 8, ["disabled"]),
-				W("div", DK, [W("span", null, [G(m, { name: "i-lucide-chevron-down" }), t[6] ||= q("讨论频道", -1)]), W("div", OK, [G(_, {
+				W("div", OK, [W("span", null, [G(m, { name: "i-lucide-chevron-down" }), t[6] ||= q("讨论频道", -1)]), W("div", kK, [G(_, {
 					items: d.value,
 					content: {
 						align: "end",
@@ -45506,12 +45509,12 @@ var XV = {
 					}, null, 8, ["disabled"])]),
 					_: 1
 				})])]),
-				W("nav", kK, [(V(!0), H(B, null, R(l.value, (e, s) => (V(), H("section", {
+				W("nav", AK, [(V(!0), H(B, null, R(l.value, (e, s) => (V(), H("section", {
 					key: e.order_id,
 					class: "channel-folder-section",
 					"data-room-folder": e.id,
 					"data-drag-folder": e.order_id
-				}, [e.id ? (V(), H("div", jK, [
+				}, [e.id ? (V(), H("div", MK, [
 					W("button", {
 						class: "channel-folder-heading",
 						"data-drop-folder": "",
@@ -45533,9 +45536,9 @@ var XV = {
 					}, [
 						G(m, { name: f.value.has(e.id) ? "i-lucide-chevron-right" : "i-lucide-chevron-down" }, null, 8, ["name"]),
 						G(m, { name: "i-lucide-folder" }),
-						W("span", NK, M(e.name), 1)
-					], 40, MK),
-					W("div", PK, [G(_, {
+						W("span", PK, M(e.name), 1)
+					], 40, NK),
+					W("div", FK, [G(_, {
 						items: p(e, s),
 						content: {
 							align: "start",
@@ -45569,12 +45572,12 @@ var XV = {
 						])]),
 						_: 2
 					}, 1032, ["text"])]),
-					W("small", FK, M(e.pending ? "保存中" : e.rooms.length), 1)
+					W("small", IK, M(e.pending ? "保存中" : e.rooms.length), 1)
 				])) : J("", !0), !e.id || !f.value.has(e.id) ? (V(), H("div", {
 					key: 1,
 					class: A(e.id ? "channel-folder-rooms" : "channel-root-rooms"),
 					"data-drop-folder": e.id ? void 0 : ""
-				}, [P(r).creating_room && (P(r).creating_room.folder_id || "") === e.id ? (V(), H("p", LK, "正在创建：" + M(P(r).creating_room.title), 1)) : J("", !0), (V(!0), H(B, null, R(e.rooms, (s, c) => (V(), U(y, {
+				}, [P(r).creating_room && (P(r).creating_room.folder_id || "") === e.id ? (V(), H("p", RK, "正在创建：" + M(P(r).creating_room.title), 1)) : J("", !0), (V(!0), H(B, null, R(e.rooms, (s, c) => (V(), U(y, {
 					key: s.id,
 					items: g(s, c, s.folder_id || null, e.rooms.length),
 					ui: { content: "channel-menu channel-topic-menu" }
@@ -45599,7 +45602,7 @@ var XV = {
 								direction: 1,
 								folder_id: s.folder_id || null
 							}), ["prevent"]), ["down"])]
-						}, [G(m, { name: "i-lucide-grip-vertical" })], 40, zK),
+						}, [G(m, { name: "i-lucide-grip-vertical" })], 40, BK),
 						W("button", {
 							class: "channel-room-select",
 							"data-drag-title": "",
@@ -45608,8 +45611,8 @@ var XV = {
 							"aria-current": s.id === P(r).room?.id ? "page" : void 0,
 							onPointerdown: t[4] ||= (e) => !P(o) && P(i).start_drag(e),
 							onClick: (e) => n("select", s.id)
-						}, [W("span", null, M(s.title), 1)], 40, BK),
-						W("div", VK, [G(v, {
+						}, [W("span", null, M(s.title), 1)], 40, VK),
+						W("div", HK, [G(v, {
 							text: s.archived ? "恢复频道" : "存档频道",
 							ui: { content: "channel-topic-tooltip" }
 						}, {
@@ -45650,10 +45653,10 @@ var XV = {
 							}, null, 8, ["aria-label"])]),
 							_: 2
 						}, 1032, ["items"])]),
-						W("small", HK, M(s.message_count), 1)
-					], 10, RK)]),
+						W("small", UK, M(s.message_count), 1)
+					], 10, zK)]),
 					_: 2
-				}, 1032, ["items"]))), 128))], 10, IK)) : J("", !0)], 8, AK))), 128)), s.value.length ? J("", !0) : (V(), H("p", UK, "暂无讨论频道"))]),
+				}, 1032, ["items"]))), 128))], 10, LK)) : J("", !0)], 8, jK))), 128)), s.value.length ? J("", !0) : (V(), H("p", WK, "暂无讨论频道"))]),
 				G(u, {
 					icon: "i-lucide-archive",
 					label: `已存档 · ${c.value}`,
@@ -45664,50 +45667,50 @@ var XV = {
 					"aria-haspopup": "dialog",
 					onClick: t[5] ||= (e) => n("archives")
 				}, null, 8, ["label"]),
-				P(r).directory_error ? (V(), H("p", WK, M(P(r).directory_error), 1)) : J("", !0)
+				P(r).directory_error ? (V(), H("p", GK, M(P(r).directory_error), 1)) : J("", !0)
 			]);
 		};
 	}
-}, KK = {
+}, qK = {
 	key: 0,
 	class: "pb-header"
-}, qK = { class: "pb-mode" }, JK = { class: "pb-status-line" }, YK = { role: "status" }, XK = {
+}, JK = { class: "pb-mode" }, YK = { class: "pb-status-line" }, XK = { role: "status" }, ZK = {
 	key: 0,
 	class: "pb-mode"
-}, ZK = {
+}, QK = {
 	key: 0,
 	class: "pb-status-detail"
-}, QK = {
+}, $K = {
 	key: 1,
 	class: "pb-status-detail"
-}, $K = { class: "pb-error-detail" }, eq = {
+}, eq = { class: "pb-error-detail" }, tq = {
 	key: 2,
 	class: "pb-meters"
-}, tq = { class: "pb-meter-label" }, nq = {
+}, nq = { class: "pb-meter-label" }, rq = {
 	key: 0,
 	class: "pb-bar"
-}, rq = {
+}, iq = {
 	key: 1,
 	class: "pb-section",
 	"aria-label": "当前焦点"
-}, iq = {
+}, aq = {
 	class: "pb-section",
 	"aria-label": "参与者"
-}, aq = {
+}, oq = {
 	key: 0,
 	class: "pb-status-detail pb-held"
-}, oq = { class: "pb-members" }, sq = { class: "pb-member-body" }, cq = { class: "pb-member-name" }, lq = { key: 0 }, uq = {
+}, sq = { class: "pb-members" }, cq = { class: "pb-member-body" }, lq = { class: "pb-member-name" }, uq = { key: 0 }, dq = {
 	key: 2,
 	class: "pb-actions",
 	"aria-label": "操作"
-}, dq = {
+}, fq = {
 	key: 3,
 	class: "pb-section",
 	"aria-label": "阶段耗时"
-}, fq = { class: "pb-timing-heading" }, pq = ["aria-label"], mq = { class: "pb-timing-totals" }, hq = ["title"], gq = { class: "pb-timings" }, _q = { class: "pb-timing-who" }, vq = { class: "pb-timing-stages" }, yq = ["title"], bq = {
+}, pq = { class: "pb-timing-heading" }, mq = ["aria-label"], hq = { class: "pb-timing-totals" }, gq = ["title"], _q = { class: "pb-timings" }, vq = { class: "pb-timing-who" }, yq = { class: "pb-timing-stages" }, bq = ["title"], xq = {
 	key: 0,
 	class: "pb-note"
-}, xq = { class: "progress-ending" }, Sq = ["disabled"], Cq = { key: 0 }, wq = ["disabled"], Tq = 90, Eq = 100, Dq = {
+}, Sq = { class: "progress-ending" }, Cq = ["disabled"], wq = { key: 0 }, Tq = ["disabled"], Eq = 90, Dq = 100, Oq = {
 	__name: "ProgressBoard",
 	props: { docked: {
 		type: Boolean,
@@ -45744,7 +45747,7 @@ var XV = {
 			"initial",
 			"discussing",
 			"reviewing"
-		].includes(f.value.phase) && !f.value.archived), S = X(() => (x.value || f.value.phase === "paused") && !f.value.archived), C = X(() => x.value || b.value || S.value), w = X(() => !_.value && f.value.phase !== "preparing" && !f.value.archived && !p.value.closing), T = X(() => [f.value.host, ...Object.keys(f.value.experts || {}).filter((e) => e !== f.value.host)].filter((e) => e && e !== "用户").map(ie)), ee = X(() => T.value.find((e) => e.result)), E = X(() => g.value?.question || f.value.focus || f.value.goal || ""), te = X(() => E.value.length > Tq), ne = X(() => m.value.timings || {
+		].includes(f.value.phase) && !f.value.archived), S = X(() => (x.value || f.value.phase === "paused") && !f.value.archived), C = X(() => x.value || b.value || S.value), w = X(() => !_.value && f.value.phase !== "preparing" && !f.value.archived && !p.value.closing), T = X(() => [f.value.host, ...Object.keys(f.value.experts || {}).filter((e) => e !== f.value.host)].filter((e) => e && e !== "用户").map(ie)), ee = X(() => T.value.find((e) => e.result)), E = X(() => g.value?.question || f.value.focus || f.value.goal || ""), te = X(() => E.value.length > Eq), ne = X(() => m.value.timings || {
 			items: [],
 			totals: {},
 			count: 0
@@ -45773,7 +45776,7 @@ var XV = {
 			if (e.phase === "paused") {
 				let e = ee.value;
 				if (e) {
-					let t = e.result.startsWith(e.name) ? e.result : `${r.display_name(e.name)} 执行失败：${e.result}`, n = t.split("\n")[0], i = n.length > Eq ? `${n.slice(0, Eq)}…` : n;
+					let t = e.result.startsWith(e.name) ? e.result : `${r.display_name(e.name)} 执行失败：${e.result}`, n = t.split("\n")[0], i = n.length > Dq ? `${n.slice(0, Dq)}…` : n;
 					return {
 						tone: "error",
 						title: "已暂停",
@@ -45850,24 +45853,24 @@ var XV = {
 		return (e, n) => {
 			let c = Gk, l = zk, m = uA, ee = LV, ie = qW;
 			return V(), H("div", { class: A(["progress-board", { "is-docked": t.docked }]) }, [
-				t.docked ? (V(), H("header", KK, [n[8] ||= W("strong", null, "讨论进度", -1), W("span", qK, M(h.value ? "全自动" : "手动"), 1)])) : J("", !0),
+				t.docked ? (V(), H("header", qK, [n[8] ||= W("strong", null, "讨论进度", -1), W("span", JK, M(h.value ? "全自动" : "手动"), 1)])) : J("", !0),
 				W("section", {
 					class: A(["pb-status", `is-${re.value.tone}`]),
 					"aria-label": "讨论状态"
 				}, [
-					W("div", JK, [
+					W("div", YK, [
 						n[9] ||= W("span", { class: "pb-dot" }, null, -1),
-						W("strong", YK, M(re.value.title), 1),
-						t.docked ? J("", !0) : (V(), H("span", XK, M(h.value ? "全自动" : "手动"), 1))
+						W("strong", XK, M(re.value.title), 1),
+						t.docked ? J("", !0) : (V(), H("span", ZK, M(h.value ? "全自动" : "手动"), 1))
 					]),
-					re.value.detail ? (V(), H("p", ZK, M(re.value.detail), 1)) : J("", !0),
-					re.value.full_detail ? (V(), H("details", QK, [n[10] ||= W("summary", null, "查看错误详情", -1), W("pre", $K, M(re.value.full_detail), 1)])) : J("", !0),
-					D.value.length ? (V(), H("div", eq, [(V(!0), H(B, null, R(D.value, (e) => (V(), H("div", {
+					re.value.detail ? (V(), H("p", QK, M(re.value.detail), 1)) : J("", !0),
+					re.value.full_detail ? (V(), H("details", $K, [n[10] ||= W("summary", null, "查看错误详情", -1), W("pre", eq, M(re.value.full_detail), 1)])) : J("", !0),
+					D.value.length ? (V(), H("div", tq, [(V(!0), H(B, null, R(D.value, (e) => (V(), H("div", {
 						key: e.label,
 						class: "pb-meter"
-					}, [W("div", tq, [W("span", null, M(e.label), 1), W("b", null, M(e.text), 1)]), e.ratio === null ? J("", !0) : (V(), H("div", nq, [W("i", { style: me({ width: `${Math.min(100, Math.round(e.ratio * 100))}%` }) }, null, 4)]))]))), 128))])) : J("", !0)
+					}, [W("div", nq, [W("span", null, M(e.label), 1), W("b", null, M(e.text), 1)]), e.ratio === null ? J("", !0) : (V(), H("div", rq, [W("i", { style: me({ width: `${Math.min(100, Math.round(e.ratio * 100))}%` }) }, null, 4)]))]))), 128))])) : J("", !0)
 				], 2),
-				E.value ? (V(), H("section", rq, [
+				E.value ? (V(), H("section", iq, [
 					n[11] ||= W("h4", null, "当前焦点", -1),
 					W("p", { class: A(["pb-focus", { "is-expanded": s.value }]) }, M(E.value), 3),
 					te.value ? (V(), H("button", {
@@ -45877,10 +45880,10 @@ var XV = {
 						onClick: n[0] ||= (e) => s.value = !s.value
 					}, M(s.value ? "收起" : "展开"), 1)) : J("", !0)
 				])) : J("", !0),
-				W("section", iq, [
+				W("section", aq, [
 					n[13] ||= W("h4", null, "参与者", -1),
-					f.value.held_since && g.value && !_.value ? (V(), H("p", aq, "用户有新操作，" + M(P(r).display_name(g.value.expert)) + " 说完后交给主持人", 1)) : J("", !0),
-					W("ul", oq, [(V(!0), H(B, null, R(T.value, (e) => (V(), H("li", {
+					f.value.held_since && g.value && !_.value ? (V(), H("p", oq, "用户有新操作，" + M(P(r).display_name(g.value.expert)) + " 说完后交给主持人", 1)) : J("", !0),
+					W("ul", sq, [(V(!0), H(B, null, R(T.value, (e) => (V(), H("li", {
 						key: e.name,
 						class: "pb-member"
 					}, [
@@ -45896,7 +45899,7 @@ var XV = {
 							"alt",
 							"class"
 						]),
-						W("div", sq, [W("div", cq, [
+						W("div", cq, [W("div", lq, [
 							q(M(P(r).display_name(e.name)), 1),
 							e.is_host ? (V(), U(l, {
 								key: 0,
@@ -45910,7 +45913,7 @@ var XV = {
 						}, [
 							n[12] ||= W("span", { class: "pb-dot" }, null, -1),
 							q(M(e.text), 1),
-							e.failures ? (V(), H("small", lq, " · 失败 " + M(e.failures) + " 次", 1)) : J("", !0)
+							e.failures ? (V(), H("small", uq, " · 失败 " + M(e.failures) + " 次", 1)) : J("", !0)
 						], 2))]),
 						e.session ? (V(), U(ee, {
 							key: 0,
@@ -45930,7 +45933,7 @@ var XV = {
 						}, 1032, ["items"])) : J("", !0)
 					]))), 128))])
 				]),
-				C.value ? (V(), H("section", uq, [
+				C.value ? (V(), H("section", dq, [
 					b.value ? (V(), U(m, {
 						key: 0,
 						icon: "i-lucide-rotate-ccw",
@@ -45979,8 +45982,8 @@ var XV = {
 						onClick: n[4] ||= (e) => o.value = !0
 					})) : J("", !0)
 				])) : J("", !0),
-				h.value && ne.value.count ? (V(), H("section", dq, [
-					W("div", fq, [n[14] ||= W("h4", null, "耗时", -1), W("small", null, "共 " + M(ne.value.count) + " 次执行", 1)]),
+				h.value && ne.value.count ? (V(), H("section", fq, [
+					W("div", pq, [n[14] ||= W("h4", null, "耗时", -1), W("small", null, "共 " + M(ne.value.count) + " 次执行", 1)]),
 					W("div", {
 						class: "pb-timing-bar",
 						role: "img",
@@ -45989,18 +45992,18 @@ var XV = {
 						key: e.key,
 						class: A(`is-${e.key}`),
 						style: me({ width: `${e.percent}%` })
-					}, null, 6))), 128))], 8, pq),
-					W("dl", mq, [(V(!0), H(B, null, R(oe.value, (e) => (V(), H("div", {
+					}, null, 6))), 128))], 8, mq),
+					W("dl", hq, [(V(!0), H(B, null, R(oe.value, (e) => (V(), H("div", {
 						key: e.key,
 						title: e.hint
-					}, [W("dt", null, [W("span", { class: A(`pb-timing-dot is-${e.key}`) }, null, 2), q(M(e.label), 1)]), W("dd", null, [q(M(O(e.seconds)), 1), W("small", null, M(e.percent) + "%", 1)])], 8, hq))), 128))]),
-					W("details", gq, [
+					}, [W("dt", null, [W("span", { class: A(`pb-timing-dot is-${e.key}`) }, null, 2), q(M(e.label), 1)]), W("dd", null, [q(M(O(e.seconds)), 1), W("small", null, M(e.percent) + "%", 1)])], 8, gq))), 128))]),
+					W("details", _q, [
 						n[15] ||= W("summary", null, "查看每次执行", -1),
-						W("ol", null, [(V(!0), H(B, null, R(ne.value.items, (e) => (V(), H("li", { key: e.id }, [W("span", _q, [q("#" + M(e.id) + " " + M(P(r).display_name(e.participant)), 1), W("small", null, M(e.role === "host" ? "主持" : "专家") + " · " + M(d[e.status] || e.status), 1)]), W("span", vq, [(V(), H(B, null, R(u, (t) => W("span", {
+						W("ol", null, [(V(!0), H(B, null, R(ne.value.items, (e) => (V(), H("li", { key: e.id }, [W("span", vq, [q("#" + M(e.id) + " " + M(P(r).display_name(e.participant)), 1), W("small", null, M(e.role === "host" ? "主持" : "专家") + " · " + M(d[e.status] || e.status), 1)]), W("span", yq, [(V(), H(B, null, R(u, (t) => W("span", {
 							key: t.key,
 							title: t.hint
-						}, M(t.label) + " " + M(O(e[t.key])), 9, yq)), 64))])]))), 128))]),
-						ne.value.count > ne.value.items.length ? (V(), H("p", bq, "只列出最近 " + M(ne.value.items.length) + " 次，共 " + M(ne.value.count) + " 次执行。", 1)) : J("", !0)
+						}, M(t.label) + " " + M(O(e[t.key])), 9, bq)), 64))])]))), 128))]),
+						ne.value.count > ne.value.items.length ? (V(), H("p", xq, "只列出最近 " + M(ne.value.items.length) + " 次，共 " + M(ne.value.count) + " 次执行。", 1)) : J("", !0)
 					])
 				])) : J("", !0),
 				G(ie, {
@@ -46013,7 +46016,7 @@ var XV = {
 						body: "dialog-body"
 					}
 				}, {
-					body: F(() => [W("div", xq, [W("button", {
+					body: F(() => [W("div", Sq, [W("button", {
 						type: "button",
 						class: "progress-ending-option",
 						disabled: !w.value || !!P(a),
@@ -46021,22 +46024,22 @@ var XV = {
 					}, [
 						n[16] ||= W("strong", null, "请主持人收尾", -1),
 						W("span", null, "立即进入收束，由 " + M(P(r).display_name(f.value.host)) + " 在 " + M(p.value.summary_minutes || 5) + " 分钟收束预留内根据已有材料总结。", 1),
-						w.value ? J("", !0) : (V(), H("small", Cq, M(p.value.closing ? "已在收尾中。" : "仅进行中的讨论可以收尾；暂停后可先重启再收尾，或直接结束并保留记录。"), 1))
-					], 8, Sq), W("button", {
+						w.value ? J("", !0) : (V(), H("small", wq, M(p.value.closing ? "已在收尾中。" : "仅进行中的讨论可以收尾；暂停后可先重启再收尾，或直接结束并保留记录。"), 1))
+					], 8, Cq), W("button", {
 						type: "button",
 						class: "progress-ending-option",
 						disabled: v.value || !!P(a),
 						onClick: n[6] ||= (e) => k("conclude_discussion")
-					}, [...n[17] ||= [W("strong", null, "直接结束（不总结）", -1), W("span", null, "保留全部记录，阶段设为“已收束”，自动运行随之停止。", -1)]], 8, wq)])]),
+					}, [...n[17] ||= [W("strong", null, "直接结束（不总结）", -1), W("span", null, "保留全部记录，阶段设为“已收束”，自动运行随之停止。", -1)]], 8, Tq)])]),
 					_: 1
 				}, 8, ["open"])
 			], 2);
 		};
 	}
-}, Oq = {
+}, kq = {
 	key: 0,
 	class: "progress-panel-anchor"
-}, kq = ["aria-expanded", "title"], Aq = { class: "progress-chip-text" }, jq = {
+}, Aq = ["aria-expanded", "title"], jq = { class: "progress-chip-text" }, Mq = {
 	__name: "ProgressPanel",
 	props: { floating: {
 		type: Boolean,
@@ -46046,7 +46049,7 @@ var XV = {
 		let t = e, { view: n, bridge: r } = Cr("discussion"), i = /* @__PURE__ */ N(!1), a = X(() => n.value.room), o = X(() => a.value.limits || {}), s = X(() => a.value.phase === "concluded" ? "neutral" : o.value.closing ? "warning" : a.value.phase === "paused" ? "neutral" : o.value.reached ? "warning" : "primary");
 		return (e, n) => {
 			let o = zk, c = dV;
-			return t.floating ? (V(), H("div", Oq, [W("button", {
+			return t.floating ? (V(), H("div", kq, [W("button", {
 				type: "button",
 				class: A(["progress-chip", `is-${s.value}`]),
 				"aria-haspopup": "dialog",
@@ -46055,9 +46058,9 @@ var XV = {
 				onClick: n[0] ||= (e) => i.value = !0
 			}, [
 				n[2] ||= W("span", { class: "progress-dot" }, null, -1),
-				W("span", Aq, M(P(r).progress_round(a.value)), 1),
+				W("span", jq, M(P(r).progress_round(a.value)), 1),
 				G(o, { name: "i-lucide-panel-right-open" })
-			], 10, kq), G(c, {
+			], 10, Aq), G(c, {
 				open: i.value,
 				"onUpdate:open": n[1] ||= (e) => i.value = e,
 				side: "right",
@@ -46068,55 +46071,55 @@ var XV = {
 					body: "progress-drawer-body"
 				}
 			}, {
-				body: F(() => [G(Dq)]),
+				body: F(() => [G(Oq)]),
 				_: 1
 			}, 8, ["open", "description"])])) : J("", !0);
 		};
 	}
-}, Mq = {
+}, Nq = {
 	id: "channel-sidebar",
 	class: "channel-sidebar",
 	"aria-label": "频道导航"
-}, Nq = { class: "channel-workspace-heading" }, Pq = { class: "channel-brand-icon" }, Fq = { class: "channel-sidebar-content" }, Iq = { class: "channel-directory-heading channel-tools-heading" }, Lq = { class: "channel-sidebar-footer" }, Rq = { class: "channel-self" }, zq = { class: "channel-connection" }, Bq = [
+}, Pq = { class: "channel-workspace-heading" }, Fq = { class: "channel-brand-icon" }, Iq = { class: "channel-sidebar-content" }, Lq = { class: "channel-directory-heading channel-tools-heading" }, Rq = { class: "channel-sidebar-footer" }, zq = { class: "channel-self" }, Bq = { class: "channel-connection" }, Vq = [
 	"aria-valuemax",
 	"aria-valuenow",
 	"aria-valuetext"
-], Vq = { class: "channel-main" }, Hq = { class: "channel-header" }, Uq = { class: "channel-title-icon" }, Wq = { class: "channel-title" }, Gq = { class: "channel-title-copy" }, Kq = ["title"], qq = ["title"], Jq = {
+], Hq = { class: "channel-main" }, Uq = { class: "channel-header" }, Wq = { class: "channel-title-icon" }, Gq = { class: "channel-title" }, Kq = { class: "channel-title-copy" }, qq = ["title"], Jq = ["title"], Yq = {
 	key: 0,
 	class: "channel-header-context"
-}, Yq = {
+}, Xq = {
 	key: 1,
 	class: "channel-header-actions"
-}, Xq = {
+}, Zq = {
 	key: 0,
 	class: "channel-launch-recovery",
 	"aria-label": "未完成的启动请求"
-}, Zq = { role: "status" }, Qq = { class: "button-row" }, $q = {
+}, Qq = { role: "status" }, $q = { class: "button-row" }, eJ = {
 	key: 1,
 	class: "channel-tabbar"
-}, eJ = { class: "channel-brief-inner" }, tJ = { class: "channel-brief-heading" }, nJ = ["aria-label", "aria-expanded"], rJ = {
+}, tJ = { class: "channel-brief-inner" }, nJ = { class: "channel-brief-heading" }, rJ = ["aria-label", "aria-expanded"], iJ = {
 	key: 0,
 	class: "channel-brief-preview"
-}, iJ = {
+}, aJ = {
 	id: "channel-brief-content",
 	class: "channel-brief-content"
-}, aJ = ["innerHTML"], oJ = { class: "channel-brief-footer" }, sJ = { class: "channel-brief-status" }, cJ = { class: "channel-content" }, lJ = {
+}, oJ = ["innerHTML"], sJ = { class: "channel-brief-footer" }, cJ = { class: "channel-brief-status" }, lJ = { class: "channel-content" }, uJ = {
 	key: 0,
 	class: "content-page channel-summary",
 	role: "tabpanel",
 	"aria-label": "共识"
-}, uJ = { class: "page-heading" }, dJ = {
+}, dJ = { class: "page-heading" }, fJ = {
 	key: 0,
 	class: "info-section"
-}, fJ = { class: "button-row" }, pJ = { class: "form-footer" }, mJ = {
+}, pJ = { class: "button-row" }, mJ = { class: "form-footer" }, hJ = {
 	key: 4,
 	class: "channel-empty"
-}, hJ = ["aria-valuenow", "aria-valuetext"], gJ = {
+}, gJ = ["aria-valuenow", "aria-valuetext"], _J = {
 	key: 2,
 	id: "channel-member-rail",
 	class: "channel-member-rail",
 	"aria-label": "当前焦点与讨论进度"
-}, _J = { class: "channel-rail-board" }, vJ = { class: "channel-detail-title" }, yJ = { class: "info-section" }, bJ = "ai-codiscuss-channel-layout", xJ = 220, SJ = 440, CJ = 280, wJ = 16, TJ = 180, EJ = 400, DJ = 248, OJ = 16, kJ = 480, AJ = 1200, jJ = 6, MJ = {
+}, vJ = { class: "channel-rail-board" }, yJ = { class: "channel-detail-title" }, bJ = { class: "info-section" }, xJ = "ai-codiscuss-channel-layout", SJ = 220, CJ = 440, wJ = 280, TJ = 16, EJ = 180, DJ = 400, OJ = 248, kJ = 16, AJ = 480, jJ = 1200, MJ = 6, NJ = {
 	__name: "ChannelWorkspace",
 	setup(e) {
 		let { view: t, bridge: n, field: r, act: i, pending: a } = Cr("discussion"), o = X(() => t.value.room), s = /* @__PURE__ */ N(""), c = /* @__PURE__ */ N(null), l = /* @__PURE__ */ N(null), u = /* @__PURE__ */ N(null), d = /* @__PURE__ */ N(!1), f = /* @__PURE__ */ N(!1), p = r("state-input"), m = r("brief-input"), h = r("search-input"), g = r("author-select"), _ = {
@@ -46132,13 +46135,13 @@ var XV = {
 				label: "宽",
 				width: 1240
 			}
-		}, v = ye(), y = /* @__PURE__ */ N(v.reading), b = /* @__PURE__ */ N(v.rail), x = /* @__PURE__ */ N(v.nav), S = /* @__PURE__ */ N(typeof window > "u" ? 734 : window.innerWidth), C = /* @__PURE__ */ N(v.collapsed), w = /* @__PURE__ */ N(!0), T = /* @__PURE__ */ N(v.rail_collapsed), ee = X(() => S.value >= AJ), E = X(() => !!o.value && t.value.tab === "discussion" && !T.value), te = X(() => ee.value && t.value.tab === "discussion" ? T.value ? "展开频道概览" : "收起频道概览" : "频道资料与参与者"), ne = X(() => {
+		}, v = ye(), y = /* @__PURE__ */ N(v.reading), b = /* @__PURE__ */ N(v.rail), x = /* @__PURE__ */ N(v.nav), S = /* @__PURE__ */ N(typeof window > "u" ? 734 : window.innerWidth), C = /* @__PURE__ */ N(v.collapsed), w = /* @__PURE__ */ N(!0), T = /* @__PURE__ */ N(v.rail_collapsed), ee = X(() => S.value >= jJ), E = X(() => !!o.value && t.value.tab === "discussion" && !T.value), te = X(() => ee.value && t.value.tab === "discussion" ? T.value ? "展开频道概览" : "收起频道概览" : "频道资料与参与者"), ne = X(() => {
 			let e = document.createElement("template");
 			return e.innerHTML = o.value?.rendered_brief || "", e.content.textContent.replace(/\s+/g, " ").trim();
-		}), re = /* @__PURE__ */ N(null), D = /* @__PURE__ */ N(null), ie = X(() => Math.min(EJ, Math.max(TJ, S.value - kJ - jJ))), ae = X(() => Math.min(x.value, ie.value)), oe = X(() => ({
+		}), re = /* @__PURE__ */ N(null), D = /* @__PURE__ */ N(null), ie = X(() => Math.min(DJ, Math.max(EJ, S.value - AJ - MJ))), ae = X(() => Math.min(x.value, ie.value)), oe = X(() => ({
 			"--channel-reading-width": `${_[y.value].width}px`,
 			"--channel-rail-width": `${b.value}px`,
-			"--channel-main-columns": C.value ? "minmax(0, 1fr)" : `${ae.value}px ${jJ}px minmax(0, 1fr)`
+			"--channel-main-columns": C.value ? "minmax(0, 1fr)" : `${ae.value}px ${MJ}px minmax(0, 1fr)`
 		})), O = Object.entries(_).map(([e, t]) => ({
 			value: e,
 			label: t.label
@@ -46259,11 +46262,11 @@ var XV = {
 		}
 		function ye() {
 			try {
-				let e = JSON.parse(localStorage.getItem(bJ)) || {};
+				let e = JSON.parse(localStorage.getItem(xJ)) || {};
 				return {
 					reading: Object.hasOwn(_, e.reading) ? e.reading : "default",
-					rail: Number.isFinite(e.rail) ? Math.min(SJ, Math.max(xJ, e.rail)) : CJ,
-					nav: Number.isFinite(e.nav) ? Math.min(EJ, Math.max(TJ, e.nav)) : be(),
+					rail: Number.isFinite(e.rail) ? Math.min(CJ, Math.max(SJ, e.rail)) : wJ,
+					nav: Number.isFinite(e.nav) ? Math.min(DJ, Math.max(EJ, e.nav)) : be(),
 					collapsed: e.collapsed === !0,
 					brief_collapsed: e.brief_collapsed === !0,
 					rail_collapsed: e.rail_collapsed === !0
@@ -46271,7 +46274,7 @@ var XV = {
 			} catch {
 				return {
 					reading: "default",
-					rail: CJ,
+					rail: wJ,
 					nav: be(),
 					collapsed: !1,
 					brief_collapsed: !1,
@@ -46280,11 +46283,11 @@ var XV = {
 			}
 		}
 		function be() {
-			return typeof window > "u" ? DJ : window.innerWidth >= 1900 ? 280 : window.innerWidth <= 980 ? 220 : DJ;
+			return typeof window > "u" ? OJ : window.innerWidth >= 1900 ? 280 : window.innerWidth <= 980 ? 220 : OJ;
 		}
 		function xe() {
 			try {
-				localStorage.setItem(bJ, JSON.stringify({
+				localStorage.setItem(xJ, JSON.stringify({
 					reading: y.value,
 					rail: b.value,
 					nav: x.value,
@@ -46314,19 +46317,19 @@ var XV = {
 			}, e.currentTarget.setPointerCapture(e.pointerId));
 		}
 		function De(e) {
-			re.value?.pointer === e.pointerId && (b.value = Math.round(Math.min(SJ, Math.max(xJ, re.value.width + re.value.x - e.clientX))));
+			re.value?.pointer === e.pointerId && (b.value = Math.round(Math.min(CJ, Math.max(SJ, re.value.width + re.value.x - e.clientX))));
 		}
 		function Oe(e) {
 			re.value?.pointer === e.pointerId && (re.value = null, e.currentTarget.hasPointerCapture(e.pointerId) && e.currentTarget.releasePointerCapture(e.pointerId), xe());
 		}
 		function ke(e) {
 			let t = {
-				ArrowLeft: b.value + wJ,
-				ArrowRight: b.value - wJ,
-				Home: xJ,
-				End: SJ
+				ArrowLeft: b.value + TJ,
+				ArrowRight: b.value - TJ,
+				Home: SJ,
+				End: CJ
 			};
-			Object.hasOwn(t, e.key) && (e.preventDefault(), b.value = Math.min(SJ, Math.max(xJ, t[e.key])), xe());
+			Object.hasOwn(t, e.key) && (e.preventDefault(), b.value = Math.min(CJ, Math.max(SJ, t[e.key])), xe());
 		}
 		function Ae(e) {
 			e.button === 0 && (e.preventDefault(), e.currentTarget.focus(), D.value = {
@@ -46336,19 +46339,19 @@ var XV = {
 			}, e.currentTarget.setPointerCapture(e.pointerId));
 		}
 		function je(e) {
-			D.value?.pointer === e.pointerId && (x.value = Math.round(Math.min(ie.value, Math.max(TJ, D.value.width + e.clientX - D.value.x))));
+			D.value?.pointer === e.pointerId && (x.value = Math.round(Math.min(ie.value, Math.max(EJ, D.value.width + e.clientX - D.value.x))));
 		}
 		function Me(e) {
 			D.value?.pointer === e.pointerId && (D.value = null, e.currentTarget.hasPointerCapture(e.pointerId) && e.currentTarget.releasePointerCapture(e.pointerId), xe());
 		}
 		function Ne(e) {
 			let t = {
-				ArrowLeft: ae.value - OJ,
-				ArrowRight: ae.value + OJ,
-				Home: TJ,
+				ArrowLeft: ae.value - kJ,
+				ArrowRight: ae.value + kJ,
+				Home: EJ,
 				End: ie.value
 			};
-			Object.hasOwn(t, e.key) && (e.preventDefault(), x.value = Math.min(ie.value, Math.max(TJ, t[e.key])), xe());
+			Object.hasOwn(t, e.key) && (e.preventDefault(), x.value = Math.min(ie.value, Math.max(EJ, t[e.key])), xe());
 		}
 		return (e, r) => {
 			let _ = zk, v = UV, x = Gk, S = uA, T = zV, ye = SV, be = MV, xe = LV, Ce = wV, Te = bV, Pe = _V, Fe = dV, Ie = cV;
@@ -46360,13 +46363,13 @@ var XV = {
 				}]),
 				style: me(oe.value)
 			}, [
-				W("aside", Mq, [
-					W("header", Nq, [
-						W("span", Pq, [G(_, { name: "i-lucide-messages-square" })]),
+				W("aside", Nq, [
+					W("header", Pq, [
+						W("span", Fq, [G(_, { name: "i-lucide-messages-square" })]),
 						r[21] ||= W("strong", null, "共议", -1),
 						r[22] ||= W("span", null, "AI CoDiscuss", -1)
 					]),
-					W("div", Fq, [G(GK, {
+					W("div", Iq, [G(KK, {
 						onSelect: pe,
 						onManage: de,
 						onCreate: ge,
@@ -46374,7 +46377,7 @@ var XV = {
 						onManageFolder: ve,
 						onDeleteFolder: j,
 						onArchives: fe
-					}), o.value ? (V(), H(B, { key: 0 }, [W("div", Iq, [W("span", null, [G(_, { name: "i-lucide-chevron-down" }), r[23] ||= q("频道工具", -1)])]), G(v, {
+					}), o.value ? (V(), H(B, { key: 0 }, [W("div", Lq, [W("span", null, [G(_, { name: "i-lucide-chevron-down" }), r[23] ||= q("频道工具", -1)])]), G(v, {
 						items: ce.value,
 						orientation: "vertical",
 						color: "neutral",
@@ -46387,7 +46390,7 @@ var XV = {
 							linkLeadingIcon: "channel-link-icon"
 						}
 					}, null, 8, ["items"])], 64)) : J("", !0)]),
-					W("footer", Lq, [
+					W("footer", Rq, [
 						G(x, {
 							src: P(n).identities[P(g)]?.icon,
 							text: P(n).identities[P(g)]?.initials,
@@ -46400,7 +46403,7 @@ var XV = {
 							"alt",
 							"class"
 						]),
-						W("div", Rq, [W("strong", null, M(P(n).display_name(P(g))), 1), W("div", zq, [W("span", { class: A({ connected: P(t).connected }) }, null, 2), q(M(P(t).connected ? "网站已连接" : "网站未连接"), 1)])]),
+						W("div", zq, [W("strong", null, M(P(n).display_name(P(g))), 1), W("div", Bq, [W("span", { class: A({ connected: P(t).connected }) }, null, 2), q(M(P(t).connected ? "网站已连接" : "网站未连接"), 1)])]),
 						G(T, { text: "外观设置" }, {
 							default: F(() => [G(S, {
 								icon: "i-lucide-settings-2",
@@ -46423,7 +46426,7 @@ var XV = {
 					"aria-label": "调整频道栏宽度",
 					"aria-orientation": "vertical",
 					"aria-controls": "channel-sidebar",
-					"aria-valuemin": TJ,
+					"aria-valuemin": EJ,
 					"aria-valuemax": ie.value,
 					"aria-valuenow": ae.value,
 					"aria-valuetext": `${ae.value} 像素`,
@@ -46434,9 +46437,9 @@ var XV = {
 					onPointercancel: Me,
 					onLostpointercapture: Me,
 					onKeydown: Ne
-				}, null, 40, Bq)),
-				W("main", Vq, [
-					W("header", Hq, [
+				}, null, 40, Vq)),
+				W("main", Hq, [
+					W("header", Uq, [
 						G(T, { text: C.value ? "展开频道栏" : "收起频道栏" }, {
 							default: F(() => [G(S, {
 								icon: "i-lucide-panel-left",
@@ -46461,13 +46464,13 @@ var XV = {
 							"aria-expanded": d.value,
 							onClick: r[2] ||= (e) => d.value = !0
 						}, null, 8, ["aria-expanded"]),
-						W("span", Uq, [G(_, { name: "i-lucide-hash" })]),
-						W("div", Wq, [W("div", Gq, [W("h1", { title: o.value?.title }, M(o.value?.title || "共议"), 9, Kq), o.value?.floor ? (V(), H("div", {
+						W("span", Wq, [G(_, { name: "i-lucide-hash" })]),
+						W("div", Gq, [W("div", Kq, [W("h1", { title: o.value?.title }, M(o.value?.title || "共议"), 9, qq), o.value?.floor ? (V(), H("div", {
 							key: 0,
 							class: A(["channel-floor-status", { "is-held": o.value.floor.holder }]),
 							role: "status",
 							title: `发言权：${P(n).floor_status(o.value)}`
-						}, [G(_, { name: "i-lucide-mic" }), W("span", null, "发言权：" + M(P(n).floor_status(o.value)), 1)], 10, qq)) : J("", !0)]), o.value?.archived ? (V(), U(ye, {
+						}, [G(_, { name: "i-lucide-mic" }), W("span", null, "发言权：" + M(P(n).floor_status(o.value)), 1)], 10, Jq)) : J("", !0)]), o.value?.archived ? (V(), U(ye, {
 							key: 0,
 							color: "neutral",
 							variant: "subtle",
@@ -46476,13 +46479,13 @@ var XV = {
 							default: F(() => [...r[24] ||= [q("已存档", -1)]]),
 							_: 1
 						})) : J("", !0)]),
-						o.value ? (V(), H("span", Jq, [
+						o.value ? (V(), H("span", Yq, [
 							q(M(se.find((e) => e.value === P(t).tab)?.label), 1),
 							r[25] ||= W("span", null, "·", -1),
 							q(M(o.value.message_count) + " 条记录", 1)
 						])) : J("", !0),
-						o.value ? (V(), H("div", Yq, [
-							G(jq, { floating: !(E.value && ee.value) }, null, 8, ["floating"]),
+						o.value ? (V(), H("div", Xq, [
+							G(Mq, { floating: !(E.value && ee.value) }, null, 8, ["floating"]),
 							P(t).tab === "discussion" ? (V(), H("form", {
 								key: 0,
 								class: "channel-search",
@@ -46569,12 +46572,12 @@ var XV = {
 							_: 1
 						}, 8, ["text"])) : J("", !0)
 					]),
-					P(t).launch.available && P(t).launch.recoveries.length ? (V(), H("section", Xq, [
+					P(t).launch.available && P(t).launch.recoveries.length ? (V(), H("section", Zq, [
 						r[26] ||= W("h2", null, "继续未完成的启动", -1),
 						(V(!0), H(B, null, R(P(t).launch.recoveries, (e) => (V(), H("article", { key: e.id }, [
 							W("strong", null, M(e.title), 1),
-							W("p", Zq, M(e.error || "启动结果尚未确认；原请求已保存在此浏览器中。"), 1),
-							W("div", Qq, [
+							W("p", Qq, M(e.error || "启动结果尚未确认；原请求已保存在此浏览器中。"), 1),
+							W("div", $q, [
 								G(S, {
 									label: "继续本次启动",
 									size: "sm",
@@ -46606,7 +46609,7 @@ var XV = {
 						]))), 128)),
 						r[27] ||= W("small", null, "移除待办不会删除房间或停止讨论。", -1)
 					])) : J("", !0),
-					o.value ? (V(), H("div", $q, [G(Ce, {
+					o.value ? (V(), H("div", eJ, [G(Ce, {
 						modelValue: k.value,
 						"onUpdate:modelValue": r[7] ||= (e) => k.value = e,
 						items: se,
@@ -46621,7 +46624,7 @@ var XV = {
 						key: 2,
 						class: A(["channel-host-brief", { "is-collapsed": w.value }]),
 						"aria-label": "主持简报"
-					}, [W("div", eJ, [W("div", tJ, [W("button", {
+					}, [W("div", tJ, [W("div", nJ, [W("button", {
 						type: "button",
 						class: "channel-brief-toggle",
 						"aria-label": w.value ? "展开主持简报" : "收起主持简报",
@@ -46631,8 +46634,8 @@ var XV = {
 					}, [
 						G(_, { name: w.value ? "i-lucide-chevron-right" : "i-lucide-chevron-down" }, null, 8, ["name"]),
 						W("strong", null, "主持简报" + M(w.value ? "：" : ""), 1),
-						w.value ? (V(), H("span", rJ, M(ne.value), 1)) : J("", !0)
-					], 8, nJ), w.value ? J("", !0) : (V(), U(S, {
+						w.value ? (V(), H("span", iJ, M(ne.value), 1)) : J("", !0)
+					], 8, rJ), w.value ? J("", !0) : (V(), U(S, {
 						key: 0,
 						label: "更新简报",
 						color: "neutral",
@@ -46640,30 +46643,30 @@ var XV = {
 						size: "xs",
 						class: "channel-brief-update",
 						onClick: r[8] ||= (e) => P(i)("tab", "context")
-					}))]), br(W("div", iJ, [W("div", {
+					}))]), br(W("div", aJ, [W("div", {
 						class: "channel-brief-text markdown-body",
 						innerHTML: o.value.rendered_brief
-					}, null, 8, aJ), W("div", oJ, [W("span", sJ, M(P(n).progress_speaker(o.value)), 1), W("small", null, M(P(n).brief_meta(o.value)), 1)])], 512), [[Hc, !w.value]])])], 2)) : J("", !0),
+					}, null, 8, oJ), W("div", sJ, [W("span", cJ, M(P(n).progress_speaker(o.value)), 1), W("small", null, M(P(n).brief_meta(o.value)), 1)])], 512), [[Hc, !w.value]])])], 2)) : J("", !0),
 					o.value ? (V(), H("div", {
 						key: 3,
 						class: A(["channel-body", { "channel-body-discussion": P(t).tab === "discussion" }])
-					}, [W("div", cJ, [
+					}, [W("div", lJ, [
 						br(G(EU, {
 							onDetail: he,
 							onEdit: r[9] ||= (e) => s.value = "edit"
 						}, null, 512), [[Hc, P(t).tab === "discussion"]]),
-						P(t).tab === "context" ? (V(), H("section", lJ, [
-							W("div", uJ, [r[28] ||= W("div", null, [W("h2", null, "共识与分歧"), W("p", null, "整理讨论进展，用 #消息编号 保留依据。")], -1), G(ye, {
+						P(t).tab === "context" ? (V(), H("section", uJ, [
+							W("div", dJ, [r[28] ||= W("div", null, [W("h2", null, "共识与分歧"), W("p", null, "整理讨论进展，用 #消息编号 保留依据。")], -1), G(ye, {
 								color: "neutral",
 								variant: "outline"
 							}, {
 								default: F(() => [q("截止 #" + M(o.value.state_until), 1)]),
 								_: 1
 							})]),
-							Array.isArray(o.value.latest_receipts) && o.value.latest_receipts.length ? (V(), H("section", dJ, [
+							Array.isArray(o.value.latest_receipts) && o.value.latest_receipts.length ? (V(), H("section", fJ, [
 								r[29] ||= W("h3", null, "最新运行回执", -1),
 								r[30] ||= W("p", { class: "fine-print" }, "以下回执独立于摘要更新；晚于摘要的回执可能尚未整理，实际运行结果请查看原文。", -1),
-								W("div", fJ, [(V(!0), H(B, null, R(o.value.latest_receipts, (e) => (V(), U(S, {
+								W("div", pJ, [(V(!0), H(B, null, R(o.value.latest_receipts, (e) => (V(), U(S, {
 									key: e.id,
 									label: `${P(n).display_name(e.author)} #${e.id} · ${new Date(e.created_at).toLocaleString("zh-CN")}${e.id > o.value.state_until ? " · 晚于摘要" : ""}`,
 									variant: "link",
@@ -46706,7 +46709,7 @@ var XV = {
 									}, null, 8, ["modelValue"])]),
 									_: 1
 								}),
-								W("div", pJ, [W("span", null, "依据消息截止 #" + M(P(t).snapshot_id), 1), G(S, {
+								W("div", mJ, [W("span", null, "依据消息截止 #" + M(P(t).snapshot_id), 1), G(S, {
 									type: "submit",
 									color: "neutral",
 									icon: "i-lucide-check",
@@ -46721,7 +46724,7 @@ var XV = {
 							onOpen: r[13] ||= (e) => s.value = e,
 							onDetail: he
 						})) : J("", !0)
-					])], 2)) : (V(), H("div", mJ, [
+					])], 2)) : (V(), H("div", hJ, [
 						G(_, { name: "i-lucide-hash" }),
 						r[31] ||= W("h2", null, "新建一个讨论频道", -1),
 						r[32] ||= W("p", null, "每个频道围绕一个议题，保留所有人的观点。", -1),
@@ -46741,8 +46744,8 @@ var XV = {
 					"aria-label": "调整右侧栏宽度",
 					"aria-orientation": "vertical",
 					"aria-controls": "channel-member-rail",
-					"aria-valuemin": xJ,
-					"aria-valuemax": SJ,
+					"aria-valuemin": SJ,
+					"aria-valuemax": CJ,
 					"aria-valuenow": b.value,
 					"aria-valuetext": `${b.value} 像素`,
 					title: "拖动调整右侧栏宽度，也可使用左右方向键",
@@ -46752,8 +46755,8 @@ var XV = {
 					onPointercancel: Oe,
 					onLostpointercapture: Oe,
 					onKeydown: ke
-				}, null, 40, hJ)) : J("", !0),
-				E.value ? (V(), H("aside", gJ, [W("section", _J, [G(Dq, { docked: "" })])])) : J("", !0),
+				}, null, 40, gJ)) : J("", !0),
+				E.value ? (V(), H("aside", _J, [W("section", vJ, [G(Oq, { docked: "" })])])) : J("", !0),
 				G(Fe, {
 					open: d.value,
 					"onUpdate:open": r[16] ||= (e) => d.value = e,
@@ -46765,7 +46768,7 @@ var XV = {
 						body: "channel-drawer-body"
 					}
 				}, {
-					body: F(() => [G(GK, {
+					body: F(() => [G(KK, {
 						onSelect: pe,
 						onManage: de,
 						onCreate: ge,
@@ -46796,7 +46799,7 @@ var XV = {
 					}
 				}, {
 					body: F(() => [o.value ? (V(), H(B, { key: 0 }, [
-						W("div", vJ, [G(_, { name: "i-lucide-hash" }), W("h2", null, M(o.value.title), 1)]),
+						W("div", yJ, [G(_, { name: "i-lucide-hash" }), W("h2", null, M(o.value.title), 1)]),
 						(V(), H(B, null, R([
 							{
 								key: "goal",
@@ -46823,7 +46826,7 @@ var XV = {
 							class: "info-section"
 						}, [W("h3", null, M(e.label), 1), W("p", null, M(o.value[e.key] || "尚未填写"), 1)])), 64)),
 						G(Ie),
-						W("section", yJ, [r[33] ||= W("h3", null, "参与身份", -1), (V(!0), H(B, null, R(le.value, (e) => (V(), H("div", {
+						W("section", bJ, [r[33] ||= W("h3", null, "参与身份", -1), (V(!0), H(B, null, R(le.value, (e) => (V(), H("div", {
 							key: e.name,
 							class: "expert-row"
 						}, [
@@ -46856,7 +46859,7 @@ var XV = {
 					], 64)) : J("", !0)]),
 					_: 1
 				}, 8, ["open"]),
-				G(SK, {
+				G(CK, {
 					modelValue: s.value,
 					"onUpdate:modelValue": r[19] ||= (e) => s.value = e,
 					"reading-width": y.value,
@@ -46876,7 +46879,7 @@ var XV = {
 			], 6);
 		};
 	}
-}, NJ = {
+}, PJ = {
 	__name: "App",
 	setup(e) {
 		let t = oV();
@@ -46890,7 +46893,7 @@ var XV = {
 				toaster: null
 			}, {
 				default: F(() => [G(P(Az), { "reduced-motion": "user" }, {
-					default: F(() => [P(n).theme.startsWith("channel") ? (V(), U(MJ, { key: 0 })) : J("", !0)]),
+					default: F(() => [P(n).theme.startsWith("channel") ? (V(), U(NJ, { key: 0 })) : J("", !0)]),
 					_: 1
 				})]),
 				_: 1
@@ -46900,8 +46903,8 @@ var XV = {
 };
 //#endregion
 //#region frontend/main.js
-function PJ() {
-	xu(NJ).use(ph).mount("#modern-root");
+function FJ() {
+	xu(PJ).use(ph).mount("#modern-root");
 }
-document.readyState === "loading" ? document.addEventListener("DOMContentLoaded", PJ) : PJ();
+document.readyState === "loading" ? document.addEventListener("DOMContentLoaded", FJ) : FJ();
 //#endregion
