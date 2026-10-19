@@ -47,4 +47,5 @@ const write = (name, field, value) => bridge.write_launch(name, field, value);
 .launch-client summary { cursor: pointer; font-size: 13px; }
 .launch-effective { margin: 8px 0 0; font-size: 12px; color: var(--ui-text-muted); overflow-wrap: anywhere; }
 .launch-client-fields { padding-top: 12px; }
+.launch-settings > button { justify-self: start; }
 </style>

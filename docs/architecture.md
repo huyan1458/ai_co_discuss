@@ -124,6 +124,7 @@ Python 在一个只读事务快照中查询；D1 使用同一个 batch 事务读
 | `ChannelDirectory.vue` | 频道、文件夹和存档管理 |
 | `ChannelDiscussion.vue` | 议题卡、消息流、原文导航和输入区 |
 | `TopicPanel.vue`、`WorkspaceDialogs.vue` | 话题资料、主持操作、接入步骤及编辑对话框 |
+| `CreateDiscussion.vue`、`LaunchSettings.vue` | 新建讨论表单（议题、参与者与主持、上限预设）及本机启动配置 |
 | `ProgressBoard.vue`、`ProgressPanel.vue` | 共享进度看板及抽屉容器 |
 | `use-discussion.js` | 将 `web/app.js` 的共享控制器状态接入 Vue |
 | `theme.css`、`channel.css` | 组件主题、深浅配色与响应式布局 |

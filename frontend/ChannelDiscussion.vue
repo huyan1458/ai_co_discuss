@@ -570,8 +570,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
         <template #footer>
           <div class="channel-composer-identity">
             <USelectMenu v-model="author" :items="identities" value-key="value" :avatar="selected_identity?.avatar" :disabled="kind === 'moderation'" :search-input="{ placeholder: '搜索身份…', icon: 'i-lucide-search' }" :content="{ side: 'top', align: 'start', sideOffset: 10 }" variant="none" size="sm" aria-label="发言身份" class="channel-author-select" :ui="{ content: 'channel-select-menu channel-identity-menu', itemLeadingAvatarSize: 'xs' }" />
-            <span class="channel-control-divider"></span>
-            <USelect v-model="kind" :items="kinds" :content="{ side: 'top', align: 'start', sideOffset: 10 }" variant="none" size="sm" aria-label="发言职责" class="channel-kind-select" :ui="{ content: 'channel-select-menu' }" />
+            <USelect v-model="kind" :items="kinds" :icon="kinds.find((item) => item.value === kind)?.icon" :content="{ side: 'top', align: 'start', sideOffset: 10 }" variant="none" size="sm" aria-label="发言职责" class="channel-kind-select" :ui="{ content: 'channel-select-menu' }" />
           </div>
           <span class="channel-shortcut"><UKbd value="ctrl" /><UKbd value="enter" /></span>
           <UButton v-if="speaking_turn" icon="i-lucide-square" label="停止" color="neutral" variant="outline" size="sm" class="channel-stop" :title="`打断 ${bridge.display_name(speaking_turn.expert)} 的发言（本次作废），交给主持人`" :loading="pending === 'cancel_turn'" @click="act('cancel_turn')" />
