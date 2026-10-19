@@ -122,6 +122,11 @@ async function room_backup(database, room_id) {
   return { format: "ai-codiscuss-room-backup", version: 1, exported_at: new Date().toISOString(), tables };
 }
 
+/** Confirm a room exists without loading its full view; for polled endpoints that only need the 404. */
+async function require_room_id(database, room_id) {
+  if (!await database.prepare("SELECT 1 FROM rooms WHERE id=?").bind(room_id).first()) throw new HttpError(404, "房间不存在");
+}
+
 /** Read a room with its actual history count and latest message ID. */
 async function require_room(database, room_id) {
   const room = await database.prepare(`${ROOM_QUERY} WHERE rooms.id=? GROUP BY rooms.id`)
@@ -579,7 +584,7 @@ async function get_turn(database, room_id, turn_id) {
 
 /** Read assignment history in bounded chronological pages. */
 async function query_turns(database, room_id, params) {
-  await require_room(database, room_id);
+  await require_room_id(database, room_id);
   const page = Math.max(1, integer(params.page ?? 1));
   let where = "room_id=?";
   const values = [room_id];
@@ -711,7 +716,7 @@ function message_filters(room_id, params) {
 
 /** Return one page, advancing incremental cursors only through returned rows. */
 async function query_messages(database, room_id, params) {
-  await require_room(database, room_id);
+  await require_room_id(database, room_id);
   const page = Math.max(1, integer(params.page ?? 1));
   const { where, values } = message_filters(room_id, params);
   const results = await database.batch([
@@ -936,13 +941,14 @@ async function runtime_view(database, room_id) {
 
 /** Summarize each participant's latest execution and failure count for the progress panel. */
 async function participant_executions(database, room_id) {
-  const { results } = await database.prepare(`SELECT latest.id,latest.participant,latest.role,latest.status,latest.result,
-    latest.turn_id,latest.lease_until,COALESCE((SELECT bound.session_id FROM discussion_events AS bound
-        WHERE bound.room_id=latest.room_id AND bound.participant=latest.participant AND bound.session_id<>''
-        ORDER BY bound.id DESC LIMIT 1),'') AS session_id,(SELECT COUNT(*) FROM discussion_events AS failed
-      WHERE failed.room_id=latest.room_id AND failed.participant=latest.participant AND failed.status='failed') AS failures
-    FROM discussion_events AS latest WHERE latest.room_id=? AND latest.id=(SELECT MAX(id)
-      FROM discussion_events AS other WHERE other.room_id=latest.room_id AND other.participant=latest.participant) ORDER BY latest.id`).bind(room_id).all();
+  // One grouped pass over the room's events; per-row correlated subqueries made reads grow quadratically.
+  const { results } = await database.prepare(`WITH stats AS (SELECT participant,MAX(id) AS latest_id,
+      MAX(CASE WHEN session_id<>'' THEN id END) AS bound_id,SUM(status='failed') AS failures
+      FROM discussion_events WHERE room_id=? GROUP BY participant)
+    SELECT latest.id,latest.participant,latest.role,latest.status,latest.result,latest.turn_id,latest.lease_until,
+      COALESCE(bound.session_id,'') AS session_id,stats.failures
+    FROM stats JOIN discussion_events AS latest ON latest.id=stats.latest_id
+    LEFT JOIN discussion_events AS bound ON bound.id=stats.bound_id ORDER BY latest.id`).bind(room_id).all();
   const now = Math.floor(Date.now() / 1000);
   return results.map(({ lease_until, ...event }) => ({ ...event, stale: event.status === "started" && lease_until <= now }));
 }
@@ -1116,7 +1122,7 @@ async function runtime_event_action(database, room_id, event_id, token, payload)
 /** Handle runtime requests without exposing owner or execution hashes. */
 async function handle_runtime_api(database, request, parts, params) {
   const room_id = parts[2];
-  await require_room(database, room_id);
+  await require_room_id(database, room_id);
   const token = request.headers.get("X-Discussion-Token") ?? "";
   if (parts.length === 4 && parts[3] === "runtime") return respond(request.method === "GET"
     ? await runtime_view(database, room_id) : await configure_runtime(database, room_id, token, await read_payload(request)));
