@@ -370,7 +370,7 @@ async function setup(options) {
 }
 
 /** Print a concise human receipt while keeping stdout machine-readable. */
-function report_setup(result) {
+function report_setup(result, options = {}) {
   const labels = { ready: '安装配置完成，网站与讨论服务已就绪', configured: '配置完成，本次未启动网站',
     needs_attention: '配置待处理', start_failed: '本机启动失败' };
   const lines = [labels[result.status]];
@@ -382,7 +382,10 @@ function report_setup(result) {
   }
   for (const group of result.skills) lines.push(`${group.client} Skill：${group.results.filter(skill => skill.status !== 'conflict').length}/${group.results.length} 份文件就绪，目录 ${dirname(group.results[0].path)}`);
   if (result.command.path) lines.push(`持久命令：${result.command.path}（${result.command.status}）`);
-  if (result.local?.running) lines.push(`本机网站：${result.local.url}`);
+  if (result.local?.running) {
+    lines.push(`本机网站：${result.local.url}${options['no-open'] ? '' : '（已在浏览器打开）'}`,
+      '网站与讨论服务在后台运行，关闭此终端不影响；查看状态 codiscuss local status，停止 codiscuss local stop；电脑重启后运行 codiscuss local open 重新启动。');
+  }
   lines.push(...result.issues, '真实 AI 执行尚未验证；可从网页创建讨论，或在新会话调用 Skill。');
   if (result.skills.length) lines.push('若新会话未发现技能，请让 AI 读取上述目录内的 discuss-host/SKILL.md 和 discuss-participant/SKILL.md。');
   process.stderr.write(`${lines.join('\n')}\n`);
@@ -432,7 +435,7 @@ export async function setup_main(command, args) {
   if (values.help) return process.stdout.write(HELP);
   if (command === 'install') return install(args, values);
   const result = await setup(values);
-  report_setup(result);
+  report_setup(result, values);
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   process.exitCode = result.status === 'start_failed' ? 1 : result.status === 'needs_attention' ? ATTENTION_EXIT_CODE : 0;
   return result;
