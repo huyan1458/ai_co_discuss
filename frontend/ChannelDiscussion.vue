@@ -560,7 +560,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
       <div v-if="!view.messages.length" class="channel-empty"><UIcon :name="view.query || view.mention_only ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.mention_only ? '没有找到消息' : room.title }}</h2><p>{{ view.query || view.mention_only ? '试试其他关键词，或清除筛选。' : bridge.empty_discussion_message(room) }}</p></div>
     </div>
     <div v-if="view.messages.length && !follow_tail" class="channel-latest-dock"><UButton icon="i-lucide-arrow-down" color="neutral" variant="outline" aria-label="回到最新消息" class="channel-latest-button" @click="return_to_latest" /></div>
-    <div class="channel-composer-dock">
+    <div class="channel-composer-dock"><div class="channel-composer-column">
       <UChatPrompt ref="prompt" v-model="text" :submit-on-enter="false" :autofocus="false" :rows="1" :maxrows="6" :placeholder="`发消息到 # ${room.title}`" aria-label="留言正文" variant="outline" color="neutral" class="channel-composer" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
         <template #header>
           <div v-if="speaking_turn" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>{{ bridge.display_name(speaking_turn.expert) }} 正在发言：新消息会在其说完后交给主持人；点「停止」立即打断</span></div>
@@ -578,6 +578,6 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
         </template>
       </UChatPrompt>
       <div class="channel-composer-note"><span>{{ author_note }}<span class="channel-note-divider">·</span>在线 AI 的观点需代发</span><span class="channel-draft-length">{{ text_length }} / {{ bridge.max_message_length }}<span class="channel-note-divider">·</span>Enter 换行</span></div>
-    </div>
+    </div></div>
   </section>
 </template>
