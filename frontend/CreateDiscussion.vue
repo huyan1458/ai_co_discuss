@@ -1,6 +1,6 @@
 <script setup>
-/** New-discussion form: topic first, then who takes part and how, with a pinned summary footer. */
-import { computed, inject, ref, watch } from "vue";
+/** New-discussion form: the user states the topic in their own words; the AI host drafts goal, background and boundaries. */
+import { computed, inject, onMounted, ref, watch } from "vue";
 import LaunchSettings from "./LaunchSettings.vue";
 
 const props = defineProps({ targetFolder: { type: Object, default: null } });
@@ -22,8 +22,7 @@ const write = (key, next) => bridge.write_field(field_id(key), next);
 const automatic = computed(() => value("mode") === "automatic");
 const selected = computed(() => view.value.experts[EXPERT_CONTAINER] || {});
 const host = computed(() => value("host"));
-const host_options = computed(() => (automatic.value ? experts : ["用户", ...experts]).filter((name) => !automatic.value || bridge.launch_clients[name]));
-const details_open = ref(false);
+const host_options = computed(() => experts.filter((name) => selected.value[name] === "cli"));
 const custom_limits = ref(false);
 const active_preset = computed(() => custom_limits.value ? null
   : LIMIT_PRESETS.find((preset) => String(value("limit-max_rounds")) === preset.rounds && String(value("limit-max_minutes")) === preset.minutes) || null);
@@ -39,6 +38,25 @@ watch(() => [launching.value, launch_names.value.every(launch_ready), view.value
   if (on && (!ready || error)) launch_open.value = true;
 }, { immediate: true });
 
+/** Keep an AI host chosen among selected local experts; the web form never assigns the user as host.
+ * Called from event handlers only: writing a draft from inside a watcher stalls the shared view. */
+function ensure_host() {
+  if (!host_options.value.includes(host.value)) write("host", host_options.value[0] || "");
+}
+onMounted(ensure_host);
+
+/** Switch the advancement mode, then repair a host the mode's draft no longer allows. */
+function choose_mode(mode) {
+  write("mode", mode);
+  ensure_host();
+}
+
+/** Change one selected expert's participation mode and keep the host valid. */
+function set_expert_mode(name, mode) {
+  bridge.write_expert(EXPERT_CONTAINER, name, mode);
+  ensure_host();
+}
+
 /** Explain each participant card from the current mode and local launch configuration. */
 function expert_status(name) {
   const mode = selected.value[name];
@@ -52,9 +70,8 @@ function expert_status(name) {
 
 /** Toggle one expert; automatic mode only admits software the local service can wake. */
 function toggle_expert(name) {
-  if (selected.value[name]) return bridge.write_expert(EXPERT_CONTAINER, name, "");
-  if (automatic.value && !bridge.launch_clients[name]) return;
-  bridge.write_expert(EXPERT_CONTAINER, name, automatic.value || bridge.launch_clients[name] ? "cli" : "online");
+  if (!selected.value[name] && automatic.value && !bridge.launch_clients[name]) return;
+  set_expert_mode(name, selected.value[name] ? "" : automatic.value || bridge.launch_clients[name] ? "cli" : "online");
 }
 
 /** Apply a limit preset while keeping the per-execution and closing settings. */
@@ -80,19 +97,13 @@ const summary = computed(() => {
       <section class="create-section">
         <h3><span>1</span>讨论什么</h3>
         <UFormField label="话题名称" required><UInput :model-value="value('title')" :maxlength="80" required autofocus size="lg" placeholder="这次想讨论什么？" class="w-full" @update:model-value="write('title', $event)" /></UFormField>
-        <UFormField label="讨论目标" description="希望讨论最终产出什么：结论、方案比较，还是待决问题清单。"><UTextarea :model-value="value('goal')" :maxlength="1000" :rows="2" autoresize placeholder="例如：比较三种方案，给出推荐与代价" class="w-full" @update:model-value="write('goal', $event)" /></UFormField>
-        <UCollapsible v-model:open="details_open">
-          <UButton :icon="details_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" label="补充用户原文、背景与讨论边界" color="neutral" variant="link" size="sm" class="create-more" />
-          <template #content><div class="create-more-fields">
-            <UFormField v-for="item in [{ key: 'user_request', label: '用户原文' }, { key: 'background', label: '背景' }, { key: 'boundaries', label: '讨论边界' }]" :key="item.key" :label="item.label"><UTextarea :model-value="value(item.key)" :maxlength="4000" :rows="2" autoresize class="w-full" @update:model-value="write(item.key, $event)" /></UFormField>
-          </div></template>
-        </UCollapsible>
+        <UFormField label="用户原文" required description="把你的问题、背景和顾虑原样写下来。讨论目标、背景与边界由 AI 主持人据此补全，之后可在「主持 → 编辑议题」修改。"><UTextarea :model-value="value('user_request')" :maxlength="4000" :rows="5" autoresize :maxrows="12" required placeholder="例如：我们在 A、B 两个方案之间犹豫，主要顾虑是成本和上线时间……" class="w-full" @update:model-value="write('user_request', $event)" /></UFormField>
       </section>
 
       <section class="create-section">
         <h3><span>2</span>谁来参与</h3>
         <div class="create-modes" role="radiogroup" aria-label="讨论推进方式">
-          <button v-for="option in [{ value: 'automatic', icon: 'i-lucide-zap', title: '全自动讨论', text: '本机服务按安排唤醒本地 AI' }, { value: 'manual', icon: 'i-lucide-copy', title: '手动复制冷启动', text: '支持在线 AI，由你或定时任务触发' }]" :key="option.value" type="button" role="radio" class="create-mode" :class="{ 'is-selected': (automatic ? 'automatic' : 'manual') === option.value }" :aria-checked="(automatic ? 'automatic' : 'manual') === option.value" @click="write('mode', option.value)">
+          <button v-for="option in [{ value: 'automatic', icon: 'i-lucide-zap', title: '全自动讨论', text: '本机服务按安排唤醒本地 AI' }, { value: 'manual', icon: 'i-lucide-copy', title: '手动复制冷启动', text: '支持在线 AI，由你或定时任务触发' }]" :key="option.value" type="button" role="radio" class="create-mode" :class="{ 'is-selected': (automatic ? 'automatic' : 'manual') === option.value }" :aria-checked="(automatic ? 'automatic' : 'manual') === option.value" @click="choose_mode(option.value)">
             <UIcon :name="option.icon" /><span><strong>{{ option.title }}</strong><small>{{ option.text }}</small></span>
           </button>
         </div>
@@ -104,17 +115,18 @@ const summary = computed(() => {
               <UIcon :name="selected[name] ? 'i-lucide-circle-check' : 'i-lucide-circle'" class="create-expert-check" />
             </button>
             <div v-if="selected[name] && !automatic" class="create-expert-modes" role="radiogroup" :aria-label="`${name} 参与方式`">
-              <button v-for="mode in [{ value: 'cli', label: '本地读写' }, { value: 'online', label: '在线只读' }]" :key="mode.value" type="button" role="radio" :aria-checked="selected[name] === mode.value" :class="{ 'is-selected': selected[name] === mode.value }" @click="bridge.write_expert(EXPERT_CONTAINER, name, mode.value)">{{ mode.label }}</button>
+              <button v-for="mode in [{ value: 'cli', label: '本地读写' }, { value: 'online', label: '在线只读' }]" :key="mode.value" type="button" role="radio" :aria-checked="selected[name] === mode.value" :class="{ 'is-selected': selected[name] === mode.value }" @click="set_expert_mode(name, mode.value)">{{ mode.label }}</button>
             </div>
           </div>
         </div>
         <div class="create-host">
-          <span class="create-label">主持人</span>
-          <div class="create-chips" role="radiogroup" aria-label="主持人">
+          <span class="create-label">AI 主持人</span>
+          <span v-if="!host_options.length" class="fine-print create-host-empty">先选择一位本地读写的专家</span>
+          <div v-else class="create-chips" role="radiogroup" aria-label="主持人">
             <button v-for="name in host_options" :key="name" type="button" role="radio" :aria-checked="host === name" :class="{ 'is-selected': host === name }" @click="write('host', name)"><UIcon v-if="host === name" name="i-lucide-crown" />{{ bridge.display_name(name) }}</button>
           </div>
         </div>
-        <p class="fine-print create-hint">{{ automatic ? '全自动要求主持人与专家都是本机 AI；在线 AI 请改用手动推进。主持人可同时作为专家发言。' : 'AI 主持人需能在本地读写；主持人可同时作为专家发言。' }}</p>
+        <p class="fine-print create-hint">{{ automatic ? '全自动要求主持人与专家都是本机 AI；在线 AI 请改用手动推进。' : '主持人须为本地读写的专家；' }}主持人会先补全议题资料，也可同时作为专家发言。</p>
       </section>
 
       <section class="create-section">
@@ -158,7 +170,7 @@ const summary = computed(() => {
       <div class="create-footer-row">
         <span class="create-summary" :title="summary">{{ summary }}</span>
         <UButton label="取消" color="neutral" variant="ghost" @click="emit('cancel')" />
-        <UButton type="submit" form="create-discussion-form" class="channel-primary-button" :icon="launching ? 'i-lucide-play' : 'i-lucide-plus'" :label="launching ? '创建并启动讨论' : '创建讨论'" :loading="pending === 'create'" />
+        <UButton type="submit" form="create-discussion-form" class="channel-primary-button" :icon="launching ? 'i-lucide-play' : 'i-lucide-plus'" :label="launching ? '创建并启动讨论' : '创建讨论'" :disabled="!host" :loading="pending === 'create'" />
       </div>
     </footer>
   </div>
@@ -172,7 +184,6 @@ const summary = computed(() => {
 .create-section h3 { display: flex; align-items: center; gap: 9px; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
 .create-section h3 > span { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: color-mix(in srgb, var(--channel-accent) 18%, transparent); color: var(--channel-accent); font-size: 11px; }
 .create-more { align-self: flex-start; padding-inline: 0; color: var(--ui-text-muted); }
-.create-more-fields { display: flex; flex-direction: column; gap: 14px; padding-top: 10px; }
 .create-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .create-mode { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border: 1px solid var(--ui-border); border-radius: 10px; text-align: left; color: var(--ui-text-muted); transition: border-color .12s, background .12s; }
 .create-mode:hover { border-color: var(--ui-border-accented); }
@@ -199,6 +210,7 @@ const summary = computed(() => {
 .create-expert-modes button { padding: 4px 0; border-radius: 5px; color: var(--ui-text-muted); font-size: 11px; }
 .create-expert-modes button.is-selected { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
 .create-host { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.create-host-empty { margin: 0 !important; }
 .create-label { min-width: 64px; color: var(--ui-text-toned); font-size: 12px; }
 .create-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .create-chips button { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 4px 12px; border: 1px solid var(--ui-border); border-radius: 999px; color: var(--ui-text-toned); font-size: 12px; transition: border-color .12s, background .12s; }
