@@ -6,7 +6,7 @@
 
 1. 使用已安装的 `codiscuss`；未安装时用本仓库 `node runner/codiscuss.mjs`。`codiscuss launch settings` 只读本机软件默认配置，不启动服务或 AI。缺少配置时按仓库 `docs/runner.md` 的“两种讨论入口与启动配置”补齐；用户已提供的软件、目录和上限直接沿用，只询问无法确定的缺项。
 2. 从当前软件的实际会话信息取得会话 ID，不自造编号。启动文件中 `entry` 使用 `conversation`，`current_session_id` 使用该实际 ID；主持人的 `participants` 覆盖配置必须对应当前实际 CLI / App 客户端，不能仅根据模型名称选适配器。当前会话继续主持，不另建主持聊天。
-3. 站点始终明确指定。每场讨论选择主持人、专家、目标、用户原文、背景和上限；软件路径来自本机默认配置，本次可用 `participants` 覆盖。`cwd` / `discussion_project` 可省略，单个参与者可覆盖。已有会话仍在原目录，设置 cwd 不会迁移它。
+3. 站点始终明确指定。每场讨论选择主持人、专家、目标、用户原文、背景和上限；软件路径来自本机默认配置，本次可用 `participants` 覆盖。`cwd` / `discussion_project` 可省略，单个参与者可覆盖。已有会话仍在原目录，设置 cwd 不会迁移它。用户要一起查看某个项目时，把该项目目录设为 `cwd`；项目文件默认只读，仅当用户明确要求 AI 修改项目时才设 `"project_access": "write"`，也可在 `participants.NAME.project_access` 单独指定。
 
 新讨论的 UTF-8 启动文件示例（替换示例内容；软件已在本机配置）：
 

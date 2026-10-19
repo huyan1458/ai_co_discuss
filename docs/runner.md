@@ -30,7 +30,7 @@ codiscuss local stop
 
 `install/setup` 保留 stdout JSON，并在 stderr 输出中文摘要，包括实际软件配置、Skill 文件就绪数、命令和网站地址。退出码与 JSON `status` 对应：`0` 为 `ready`（网站与讨论服务已就绪）或 `configured`（显式 `--no-start`）；`2` 为 `needs_attention`（配置差异未确认、技能冲突或命令不可用）；`1` 为失败。网站启动失败时返回 `start_failed` 与已保存的配置结果，修复后重跑 `setup` 即可。环境预检失败发生在写入前，仅输出错误。配置待处理不撤销已完成部分，也不妨碍启动可用的网站；`configured` 布尔值为 false，不能按成功处理。`ai_verified: false` 表示安装器没有执行真实模型，不证明账号、技能发现或多轮讨论已验收。
 
-安装器按 [技能配置](skills.md#自动安装完整技能) 复制完整技能。`--skills-home DIR` 可覆盖技能用户根目录；默认当前用户 home。重复安装只更新由安装器管理且未被编辑的版本；冲突保留本地文件，输出实际路径并标记待处理。核对后可移走需替换的旧副本再重跑 `setup`，安装器不调整模型权限或登录状态。
+安装器按 [技能配置](skills.md#自动安装完整技能) 复制完整技能。`--skills-home DIR` 可覆盖技能用户根目录；默认当前用户 home。重复安装只更新由安装器管理且未被编辑的版本；冲突保留本地文件，输出实际路径并标记待处理。核对后可移走需替换的旧副本再重跑 `setup`。安装器不调整登录状态；权限只在选中 Gemini 时经确认写入讨论命令与草稿目录规则，见 [单次执行权限](#单次执行权限)。
 
 安装实现保持固定软件表和本地文件复制。路径查找参考 [npm/node-which](https://github.com/npm/node-which/blob/main/lib/index.js) 的 PATH 顺序与执行权限检查，只覆盖所需命令和后缀；技能复制参考 [OpenAI 单文件安装脚本](https://github.com/openai/skills/blob/main/skills/.system/skill-installer/scripts/install-skill-from-github.py) 的整目录复制与同名保护思路，保留本项目的内容哈希更新判断。不引入这些项目作为依赖，也不增加在线技能下载、插件注册或后台更新。
 
@@ -61,7 +61,7 @@ codiscuss local stop
 python server.py --host 127.0.0.1 --local-launch
 ```
 
-需要 Node.js 24+ 与已安装、已登录并具备讨论工具权限的 AI 客户端。新建讨论时选择全自动、设置 AI 主持与本地参与者，勾选“创建后立即启动 AI”，填写启动配置并点击“创建并启动讨论”。配置可“保存为本机软件默认配置”，保存本身不启动任何 AI。也可先创建房间，再在“接入”页填写配置并点击“启动讨论”。正常首次接入无需下载 JSON、手动登记房间或另执行 `run start`。
+需要 Node.js 24+ 与已安装、已登录的 AI 客户端；讨论所需的最小工具权限按 [单次执行权限](#单次执行权限) 提供。新建讨论时选择全自动、设置 AI 主持与本地参与者，勾选“创建后立即启动 AI”，按需填写项目目录与项目文件权限（默认只读），再点击“创建并启动讨论”。配置可“保存为本机软件默认配置”，保存本身不启动任何 AI。也可先创建房间，再在“接入”页填写配置并点击“启动讨论”。正常首次接入无需下载 JSON、手动登记房间或另执行 `run start`。
 
 网页在发送前把完整已提交输入、原提交号和控制凭据保存在当前站点的浏览器本地存储。服务启动失败或响应丢失后，刷新仍会显示“继续未完成的启动”；点击“继续本次启动”沿用原请求和本机已固定配置，无需重新填写，也不随新的默认配置变化。刷新只恢复界面，不自动运行；已暂停、结束、过期或在启动期间改变的房间不会因此重新开始。部分失败明确显示已核实的阶段，已建房不等于回滚；结果不明时保留原请求待核对。
 
@@ -162,8 +162,7 @@ cwd 是工作目录，不等于操作系统沙箱或权限提升。工具仍受�
     },
     "Claude": {
       "adapter": "claude",
-      "executable": "实际原生 claude 可执行文件路径",
-      "allowed_tools": ["Read", "Write", "Bash(python:*)"]
+      "executable": "实际原生 claude 可执行文件路径"
     },
     "Gemini": {
       "adapter": "antigravity_cli",
@@ -177,13 +176,27 @@ Windows 的 `executable` 填原生 `.exe`，不填 npm 的 `.cmd` / `.ps1` 包�
 
 | 适配器 | 首次执行与续接 | 项目与工作目录 |
 | --- | --- | --- |
-| `codex_cli` | `codex exec --json`，从 `thread.started` 读取实际 ID；后续 `exec resume ID`，不使用 `--last` | 以 `cwd` 启动；省略时使用本房间私有数据目录。允许非 Git 目录，将草稿目录通过 `--add-dir` 提供给 CLI。项目名仅作元数据，不关联 App 项目分组 |
+| `codex_cli` | `codex exec --json`，从 `thread.started` 读取实际 ID；后续 `exec resume ID`，不使用 `--last` | 按 [单次执行权限](#单次执行权限) 的项目文件权限选择启动目录；省略 cwd 时使用本房间私有数据目录。允许非 Git 目录，将草稿目录通过 `--add-dir` 提供给 CLI。项目名仅作元数据，不关联 App 项目分组 |
 | `claude` | 现有 `claude -p --output-format json`；后续 `--resume ID` | 沿用上表中的 Claude 规则 |
-| `antigravity_cli` | `agy -p --output-format stream-json`，从 `init.conversation_id` 读取实际 ID；后续 `--conversation ID`，不使用 `--continue` | 以 `cwd` 启动；省略时使用私有数据目录。首次可通过 `project_id` 或 `project_name` 传 `--project`，续接时沿用该会话的项目；同时提供草稿目录 |
+| `antigravity_cli` | `agy -p --output-format stream-json`，从 `init.conversation_id` 读取实际 ID；后续 `--conversation ID`，不使用 `--continue` | 按 [单次执行权限](#单次执行权限) 的项目文件权限选择启动目录；省略 cwd 时使用私有数据目录。首次可通过 `project_id` 或 `project_name` 传 `--project`，续接时沿用该会话的项目；同时提供草稿目录 |
 
 两种新适配器都不需要 `source_thread_id` 或 `ipc_directory`。实际 ID 在输出流到达时写入本机绑定和本次执行凭据，随后 AI 按任务文件自行 `execution enter` 并通过讨论 CLI 保存业务结果；程序不把终端回答直接代发。已有 App 绑定不能通过改适配器直接复用，须先暂停并使用独立 `data_directory` 明确重新接入。此路径不承诺 CLI 会话同步到桌面 App。
 
-权限沿用各 CLI 的原生设置，接入程序不修改全局配置或启用绕过审批参数。需预先允许读取任务与技能、在草稿目录写文件，以及通过讨论 CLI 访问指定站点。Codex 默认只读沙箱需按任务配置写入与网络权限；`agy` 非交互模式下被拒绝的工具也可能伴随退出码 0，最终仍以网站业务保存为准。`agy` 显式使用 `--print-timeout 0`，由房间的单次执行时限和整场截止控制停止，避免额外的 CLI 默认时限提前截断。
+### 单次执行权限
+
+每次执行只开放本场讨论所需的最小权限，不使用全部放行或绕过审批参数。任务文件的 `cli` 为 `codiscuss`，`subcommands` 列出唯一放行的网站子命令：`room`、`message`、`turn`、`state`、`floor`、`execution`、`health`、`schema`；`service`、`launch`、`run`、`api`、`setup`、`install`、`local` 不放行。提示词要求命令以 `codiscuss` 开头，不用 `python discuss.py`、`cd` 或管道。规则不含路径，重装或更换 Python 无需更新；子进程 PATH 中的 `codiscuss` 须指向本次安装，setup 的持久命令检查会核对。
+
+项目文件权限 `project_access` 为 `read`（默认）或 `write`：启动文件顶层设本场值，`participants.NAME.project_access` 覆盖单个 AI，空字符串表示沿用本场值。它只随本次启动保存，不能存入本机默认配置；网页新建讨论在“启动”区直接提供项目目录与项目文件选项，单个 AI 的覆盖在“调整启动配置”中。未指定 cwd 时该选项不生效。只读时 Codex / agy 在草稿目录启动（项目仍可读，但不会自动加载项目内的 AGENTS.md 等说明），Claude 在项目目录启动但只放行写草稿；可写时三者都以项目目录为工作区。App 适配器的写权限由 App 自身决定，任务文件仍写明只读或可写要求。
+
+| 适配器 | 本次追加 | 只读 / 可写差异 |
+| --- | --- | --- |
+| `claude` | `--add-dir` 草稿目录与技能目录；每个子命令各一条 `Bash(codiscuss room *)` 与 `PowerShell(codiscuss room *)`（Windows 上 Claude Code 可能经 PowerShell 工具执行），加 `Edit(//<草稿目录>/**)`，再追加配置中的 `allowed_tools` | 可写时再加 `Edit(//<项目目录>/**)`；Windows 路径按 `//c/...` 形式匹配 |
+| `codex_cli` | 首次与 `exec resume` 都传 `-c sandbox_mode="workspace-write"`、`sandbox_workspace_write.network_access=true`、`writable_roots=[草稿目录]`、`approval_policy="never"` | 只读时以草稿目录为工作目录，可写时以项目目录启动；网络在本次执行中整体开放，Codex 不支持仅放行讨论站点 |
+| `antigravity_cli` | `--add-dir` 草稿目录与技能目录 | 只读时以草稿目录启动并 `--add-dir` 项目（附加目录可读不可写）；可写时以项目目录启动 |
+
+agy 没有单次命令放行参数，规则只能写入 `~/.gemini/antigravity-cli/settings.json` 的 `permissions.allow`。`setup` 选中 Gemini 时询问一次（回车同意，`--yes` 视为同意），追加两条规则：只匹配 `codiscuss` 或 `codiscuss.cmd`、可选一个 `--site` 网址及上述子命令的 `command(regex:...)`，参数不得含分号、`&`、`|`、`<`、`>`、美元符号与反引号，因此无法接第二条命令；以及 `write_file(<服务目录>/launches)`（Windows 去掉盘符、使用正斜杠），因为 `--add-dir` 目录不被视为可写。写入前备份原文件到服务目录 `agy-settings.backup.json`，`agy-permission.json` 记录已写规则；名单或服务目录变化后重跑 setup 只替换这些规则，不改其他设置与用户规则。文件无法解析时不写入并报告待处理；非交互且未加 `--yes` 只报告。
+
+2026-10-18 本机实测：Claude 主持、Codex 与 Gemini 专家在上述规则下完成一场最小讨论。Windows 的 Codex / agy 经 PowerShell 调用时优先执行 npm 生成的 `codiscuss.ps1`；Codex elevated 沙箱内即使当前用户为 RemoteSigned 也拒绝 `.ps1`，Codex 自行改用 `cmd.exe` 调用 `codiscuss.cmd` 后成功。`agy` 非交互模式下被拒绝的工具也可能伴随退出码 0，最终仍以网站业务保存为准。`agy` 显式使用 `--print-timeout 0`，由房间的单次执行时限和整场截止控制停止，避免额外的 CLI 默认时限提前截断。
 
 结构化失败（Codex `turn.failed`、Antigravity 非 `SUCCESS` 结果）、非零退出码、缺少会话 ID 或成功结束事件均记录为失败；软件已启动后不自动重发。正常退出后若网站尚未保存本次结果，复查后暂停。暂停或停止接入服务会终止本服务创建的 CLI 进程，保留会话绑定和本机日志。
 

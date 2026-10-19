@@ -427,6 +427,23 @@ test("launch readback distinguishes effective directories, project metadata and 
   assert.equal(fixture.context.launch_summary('Claude').cwd, '本次讨论的私有目录');
 });
 
+test("launch readback shows project access, per-AI overrides and never saves write access as a default", async () => {
+  const fixture = theme_fixture();
+  Object.assign(fixture.context.test_state.launch, { profiles: { Codex: { adapter: 'codex_cli' }, Claude: { adapter: 'claude', project_access: 'read' },
+    Gemini: { adapter: 'antigravity' } }, workspace: {} });
+  assert.equal(fixture.context.launch_summary('Codex').access, '无项目目录');
+  fixture.context.write_launch_field('workspace', 'cwd', 'C:\\project');
+  assert.equal(fixture.context.launch_summary('Codex').access, '项目只读');
+  fixture.context.write_launch_field('workspace', 'project_access', 'write');
+  assert.equal(fixture.context.launch_summary('Codex').access, '项目可写');
+  assert.equal(fixture.context.launch_summary('Claude').access, '项目只读');
+  assert.equal(fixture.context.launch_summary('Gemini').access, '按 App 权限');
+  let saved;
+  Object.assign(fixture.context, { render_launch_settings() {}, local_launch_request: async (_, body) => { saved = body; } });
+  await fixture.context.save_launch_defaults();
+  assert.equal(saved.participants.Claude.project_access, undefined);
+});
+
 test("switching all three themes preserves the room, filter, reply and draft", () => {
   const fixture = theme_fixture();
   const room = { id: 'welcome' };

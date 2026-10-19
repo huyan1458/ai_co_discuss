@@ -136,6 +136,18 @@ test('machine defaults and per-discussion overrides share validation without per
   assert.equal(existsSync(join(f.home, 'launches')), false);
 });
 
+test('project write access is per launch, defaults to read and can differ per participant', async t => {
+  const f = await fixture(t);
+  assert.throws(() => save_launch_settings(f.home, { participants: { Codex: { ...f.input.participants.Codex, project_access: 'write' } } }), /不能保存房间或会话/);
+  const preview = input => launch_discussion(f.home, { ...f.input, cwd: f.directory, ...input }, { dry_run: true });
+  assert.equal((await preview({})).participants.Codex.project_access, 'read');
+  const mixed = await preview({ project_access: 'write', participants: { ...f.input.participants, Claude: { ...f.input.participants.Claude, project_access: 'read' } } });
+  assert.equal(mixed.participants.Codex.project_access, 'write'); assert.equal(mixed.participants.Claude.project_access, 'read');
+  const inherited = await preview({ project_access: 'write', participants: { ...f.input.participants, Claude: { ...f.input.participants.Claude, project_access: '' } } });
+  assert.equal(inherited.participants.Claude.project_access, 'write');
+  await assert.rejects(preview({ project_access: 'admin' }), /read 或 write/);
+});
+
 test('explicit empty participant settings fall back to this discussion without changing saved defaults', async t => {
   const f = await fixture(t);
   const defaults = { ...f.input.participants, Codex: { ...f.input.participants.Codex,

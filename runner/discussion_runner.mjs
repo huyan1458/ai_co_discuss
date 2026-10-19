@@ -6,13 +6,15 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { atomic_json, deliver_task, setup_sidecar, sidecar_receipt } from './discussion_adapters.mjs';
+import { atomic_json, deliver_task, setup_sidecar, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
 
 const POLL_MS = 2000;
 const DELIVERY_RETRY_DELAYS_MS = [2000, 4000];
 const RENEW_MS = 30_000;
 const ADAPTER_NAMES = ['codex', 'claude', 'antigravity', 'codex_cli', 'antigravity_cli'];
 const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+/** Project files in cwd are read-only unless the launch or participant explicitly grants write. */
+const PROJECT_ACCESS = ['read', 'write'];
 
 /** Explicit per-room configuration is the only source of software paths and capabilities. */
 export function load_config(path) {
@@ -31,6 +33,8 @@ export function validate_config(input, base_directory) {
   for (const participant of Object.values(config.participants)) {
     participant.cwd = participant.cwd ?? config.cwd;
     participant.project_name = participant.project_name ?? config.discussion_project;
+    participant.project_access = participant.project_access || config.project_access || 'read';
+    if (!PROJECT_ACCESS.includes(participant.project_access)) throw new Error('project_access 只能为 read 或 write');
     if (participant.cwd && !statSync(participant.cwd).isDirectory()) throw new Error('cwd 必须是已有本机目录');
     if (!ADAPTER_NAMES.includes(participant.adapter)) throw new Error(`适配器只能为 ${ADAPTER_NAMES.join('/')}`);
     if (participant.adapter === 'antigravity' && !participant.ipc_directory) throw new Error('缺少 Antigravity Sidecar IPC 目录');
@@ -137,13 +141,16 @@ export function task_files(config, event, token, binding) {
   const skills = [join(config.project, '.agents/skills/discuss-participant/SKILL.md')];
   if (event.role === 'host') skills.push(join(config.project, '.agents/skills/discuss-host/SKILL.md'));
   const adapter = config.participants[event.participant];
+  const skills_directory = join(config.project, '.agents', 'skills');
+  const project_rule = !adapter.cwd ? '未指定讨论项目目录。'
+    : adapter.project_access === 'write' ? '用户允许按议题需要修改 cwd 中的项目文件。' : 'cwd 中的项目文件只读，不修改。';
   atomic_json(task_path, { site: config.site, room: config.room, event_id: event.id, participant: event.participant,
-    project_name: adapter.project_name || null, cwd: adapter.cwd || null,
+    project_name: adapter.project_name || null, cwd: adapter.cwd || null, project_access: adapter.project_access,
     draft_directory: config.directory,
-    role: event.role, turn_id: event.turn_id, skills, cli: join(config.project, 'runner', 'discuss.py'), access_file: access_path,
-    instructions: '读取指定技能；使用 execution enter 房间 执行编号 --access-file 凭据路径 进入。凭据文件由 CLI 内部读取，不要打印或读取其 token。进入成功后才处理本次安排；每次业务写入都带 --access-file。答案草稿只保存到 draft_directory；不修改讨论项目文件。只处理本次工作，不建定时任务。主持创建下一安排或收束即结束，专家提交原文后结束。无效或已进入的任务不要重复执行。' });
-  const prompt = `用户已启动此房间的全自动讨论。请以 ${event.participant} 的${event.role === 'host' ? '主持' : '专家'}职责处理本次工作。先读取任务文件：${task_path}，立即按任务内 CLI 进行 execution enter，再读取指定版本的技能和网站现状。任务内 cwd 是本次工作目录；项目读写仍受软件实际权限和议题授权约束。只做讨论，不改项目代码，不读取凭据内容。实际会话 ID 由接入程序写入凭据文件，尚未就绪只短暂重查，不编造。`;
-  return { id, participant: event.participant, directory: config.directory, access_path, prompt };
+    role: event.role, turn_id: event.turn_id, skills, cli: 'codiscuss', subcommands: TASK_SUBCOMMANDS, access_file: access_path,
+    instructions: '读取指定技能；网站命令只用 codiscuss 的 subcommands 子命令，命令以 codiscuss 开头，不用 python discuss.py、cd、管道或其他入口；使用 codiscuss execution enter 房间 执行编号 --access-file 凭据路径 进入。凭据文件由 CLI 内部读取，不要打印或读取其 token。进入成功后才处理本次安排；每次业务写入都带 --access-file。答案草稿只保存到 draft_directory；' + project_rule + '只处理本次工作，不建定时任务。主持创建下一安排或收束即结束，专家提交原文后结束。无效或已进入的任务不要重复执行。' });
+  const prompt = `用户已启动此房间的全自动讨论。请以 ${event.participant} 的${event.role === 'host' ? '主持' : '专家'}职责处理本次工作。先读取任务文件：${task_path}，立即用 codiscuss execution enter 进入，再读取指定版本的技能和网站现状。本次只放行任务内 subcommands 列出的 codiscuss 子命令，命令以 codiscuss 开头，不用 python discuss.py、cd、管道或其他入口。任务内 cwd 是讨论项目目录；${project_rule}项目读写仍受软件实际权限和议题授权约束。不读取凭据内容。实际会话 ID 由接入程序写入凭据文件，尚未就绪只短暂重查，不编造。`;
+  return { id, participant: event.participant, directory: config.directory, skills_directory, access_path, prompt };
 }
 
 /** A running dispatcher retains only the processes it created itself. */

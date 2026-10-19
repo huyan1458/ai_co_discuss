@@ -52,7 +52,8 @@ export function save_launch_settings(home, input) {
 function validate_profile(name, profile, binding = false) {
   if (!CLIENTS[name] || !profile || typeof profile !== 'object' || Array.isArray(profile)) throw new Error(`不支持的软件配置：${name}`);
   if (profile.adapter && !CLIENTS[name].includes(profile.adapter)) throw new Error(`${name} 的客户端不匹配`);
-  const fields = binding ? [...PROFILE_FIELDS, 'session_id'] : PROFILE_FIELDS;
+  // Session bindings and project write access apply to one launch only, never to machine defaults.
+  const fields = binding ? [...PROFILE_FIELDS, 'session_id', 'project_access'] : PROFILE_FIELDS;
   if (Object.keys(profile).some(key => !fields.includes(key))) throw new Error('软件配置包含不支持的字段；默认配置不能保存房间或会话绑定');
   for (const [key, value] of Object.entries(profile)) {
     if (key === 'allowed_tools') {
@@ -81,6 +82,7 @@ function launch_input(input) {
   if (!['conversation', 'web'].includes(value.entry)) throw new Error('entry 必须为 conversation 或 web');
   if (value.entry === 'conversation' && (typeof value.current_session_id !== 'string' || !value.current_session_id.trim())) throw new Error('对话入口须提供当前实际会话的 current_session_id');
   if (value.cwd && (typeof value.cwd !== 'string' || !isAbsolute(value.cwd))) throw new Error('cwd 必须为完整绝对路径');
+  if (value.project_access && !['read', 'write'].includes(value.project_access)) throw new Error('project_access 只能为 read 或 write');
   if (value.room_id && !/^[A-Za-z0-9_-]+$/.test(value.room_id)) throw new Error('房间编号无效');
   if (!value.room_id && !value.room?.submission_id) throw new Error('新房间须提供 room.submission_id；重试沿用原编号');
   if (value.access_file) {
@@ -101,7 +103,7 @@ function launch_config(home, input, room, directory, options) {
   const participants = {};
   for (const name of new Set([room.host, ...Object.keys(room.experts)])) {
     const profile = { ...defaults[name], ...input.participants?.[name] };
-    for (const field of ['cwd', 'project_name', 'project_id']) if (profile[field] === '') delete profile[field];
+    for (const field of ['cwd', 'project_name', 'project_id', 'project_access']) if (profile[field] === '') delete profile[field];
     validate_profile(name, profile, true);
     if (!CLIENTS[name]?.includes(profile.adapter)) throw new Error(`请配置 ${name} 的 CLI / App 客户端`);
     if (profile.adapter !== 'antigravity' && (!existsSync(profile.executable || '') || !statSync(profile.executable).isFile()
@@ -112,7 +114,8 @@ function launch_config(home, input, room, directory, options) {
     participants[name] = profile;
   }
   return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, participants,
-    cwd: input.cwd, discussion_project: input.discussion_project, data_directory: join(directory, 'runtime') }, directory);
+    cwd: input.cwd, discussion_project: input.discussion_project, project_access: input.project_access || undefined,
+    data_directory: join(directory, 'runtime') }, directory);
 }
 
 /** Stable signatures make changed retry requests explicit without putting credentials in receipts. */

@@ -1076,10 +1076,24 @@ function launch_summary(name) {
     ? (project_name ? `${project_name}（任务说明，不切换软件项目）` : "不指定项目，按工作目录执行")
     : profile.adapter === "codex" ? [project_name, project_id ? `ID: ${project_id}` : ""].filter(Boolean).join(" · ") || "无项目聊天"
       : project_id || project_name || "软件默认项目";
+  const directory = profile.cwd || state.launch.workspace.cwd;
+  const access = !cli_directory ? "按 App 权限" : !directory ? "无项目目录"
+    : launch_access(name) === "write" ? "项目可写" : "项目只读";
   return { client: LAUNCH_CLIENTS[name]?.find(item => item.value === profile.adapter)?.label || "尚未选择客户端",
     session: profile.session_id ? "复用指定会话" : "新建会话",
     cwd: !cli_directory && profile.session_id ? "沿用指定会话的目录"
-      : profile.cwd || state.launch.workspace.cwd || (cli_directory ? "本次讨论的私有目录" : "由 App 项目确定"), project };
+      : directory || (cli_directory ? "本次讨论的私有目录" : "由 App 项目确定"), project, access };
+}
+
+/** Project files are read-only unless this launch or this participant explicitly allows writing. */
+function launch_access(name) {
+  return state.launch.profiles[name]?.project_access || state.launch.workspace.project_access || "read";
+}
+
+/** Classic select options; an empty value inherits the launch-wide setting. */
+function access_options(value = "", inherit = "") {
+  const options = [...(inherit ? [["", inherit]] : []), ["read", "只读"], ["write", "可写"]];
+  return options.map(([key, label]) => `<option value="${key}" ${(value || (inherit ? "" : "read")) === key ? "selected" : ""}>${label}</option>`).join("");
 }
 
 /** Refresh classic readbacks without replacing the input currently being edited. */
@@ -1088,26 +1102,28 @@ function render_launch_summaries() {
     const name = node.dataset.launchSummary;
     if (!LAUNCH_CLIENTS[name]) return;
     const summary = launch_summary(name);
-    node.textContent = `${summary.session} · 工作目录：${summary.cwd} · 项目：${summary.project}`;
+    node.textContent = `${summary.session} · 工作目录：${summary.cwd}（${summary.access}） · 项目：${summary.project}`;
   });
 }
 
 /** Consume only the successful launch's transient fields, preserving edits made while waiting. */
 function clear_launch_overrides(draft) {
   for (const [name, profile] of Object.entries(draft.participants)) {
-    if (state.launch.profiles[name]?.session_id === profile.session_id) delete state.launch.profiles[name]?.session_id;
+    for (const field of ["session_id", "project_access"]) {
+      if (state.launch.profiles[name]?.[field] === profile[field]) delete state.launch.profiles[name]?.[field];
+    }
   }
-  for (const field of ["cwd", "discussion_project"]) {
+  for (const field of ["cwd", "discussion_project", "project_access"]) {
     if (state.launch.workspace[field] === draft[field]) delete state.launch.workspace[field];
   }
   render_launch_settings();
   publish_view();
 }
 
-/** Save machine defaults without storing per-discussion session IDs. */
+/** Save machine defaults without per-discussion session IDs or project write access. */
 async function save_launch_defaults() {
   const participants = Object.fromEntries(Object.entries(launch_options().participants).map(([name, profile]) => {
-    const { session_id, ...defaults } = profile;
+    const { session_id, project_access, ...defaults } = profile;
     return [name, defaults];
   }));
   try {
@@ -1224,8 +1240,8 @@ function render_launch_settings() {
       fields.push(["session_id", "复用会话 ID（仅本次，可选）"], ["cwd", "此 AI 的工作目录（可选）"], ["project_name", "此 AI 的项目（可选）"]);
       if (["codex", "antigravity", "antigravity_cli"].includes(profile.adapter)) fields.push(["project_id", "软件中的项目 ID（可选）"]);
       const summary = launch_summary(name);
-      return `<fieldset><legend>${name}</legend><p class="local-note" data-launch-summary="${name}">${summary.session} · 工作目录：${escape_html(summary.cwd)} · 项目：${escape_html(summary.project)}</p><label>执行客户端<select data-launch-name="${name}" data-launch-field="adapter"><option value="">选择 CLI / App</option>${clients.map(client => `<option value="${client.value}" ${profile.adapter === client.value ? "selected" : ""}>${client.label}</option>`).join("")}</select></label>${fields.map(([field, label]) => `<label>${label}<textarea rows="${field === "allowed_tools" ? 2 : 1}" data-launch-name="${name}" data-launch-field="${field}">${escape_html(Array.isArray(profile[field]) ? profile[field].join("\n") : profile[field] || "")}</textarea></label>`).join("")}</fieldset>`;
-    }).join("") + `<label>本次工作目录（可选）<input data-launch-name="workspace" data-launch-field="cwd" value="${escape_html(state.launch.workspace.cwd || "")}"></label><label>本次 AI 项目（可选）<input data-launch-name="workspace" data-launch-field="discussion_project" value="${escape_html(state.launch.workspace.discussion_project || "")}"></label>`;
+      return `<fieldset><legend>${name}</legend><p class="local-note" data-launch-summary="${name}">${summary.session} · 工作目录：${escape_html(summary.cwd)}（${summary.access}） · 项目：${escape_html(summary.project)}</p><label>执行客户端<select data-launch-name="${name}" data-launch-field="adapter"><option value="">选择 CLI / App</option>${clients.map(client => `<option value="${client.value}" ${profile.adapter === client.value ? "selected" : ""}>${client.label}</option>`).join("")}</select></label>${fields.map(([field, label]) => `<label>${label}<textarea rows="${field === "allowed_tools" ? 2 : 1}" data-launch-name="${name}" data-launch-field="${field}">${escape_html(Array.isArray(profile[field]) ? profile[field].join("\n") : profile[field] || "")}</textarea></label>`).join("")}<label>此 AI 的项目文件<select data-launch-name="${name}" data-launch-field="project_access">${access_options(profile.project_access, "沿用本次设置")}</select></label></fieldset>`;
+    }).join("") + `<label>本次项目文件<select data-launch-name="workspace" data-launch-field="project_access">${access_options(state.launch.workspace.project_access)}</select></label><label>本次工作目录（可选）<input data-launch-name="workspace" data-launch-field="cwd" value="${escape_html(state.launch.workspace.cwd || "")}"></label><label>本次 AI 项目（可选）<input data-launch-name="workspace" data-launch-field="discussion_project" value="${escape_html(state.launch.workspace.discussion_project || "")}"></label>`;
   }
   for (const id of ["local-launch-notice", "new-local-launch-notice"]) {
     if (element(id)) element(id).textContent = state.launch.error || state.launch.notice;

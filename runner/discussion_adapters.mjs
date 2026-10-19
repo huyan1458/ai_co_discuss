@@ -10,6 +10,8 @@ import { CodexAppClient } from './codex_app_client.mjs';
 
 const CALL_TIMEOUT_MS = 30_000;
 const CLI_DIAGNOSTIC_CHARS = 1000;
+/** Website subcommands an automatic task may run; service, launch, run, api and setup stay unapproved. */
+export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'floor', 'execution', 'health', 'schema'];
 
 /** Only failures before a software invocation are safe for automatic redelivery. */
 function not_sent(error) { return Object.assign(error, { delivery_status: 'not_sent' }); }
@@ -118,16 +120,46 @@ function persisted_claude_env() {
   return persisted_cache;
 }
 
-async function claude_delivery(config, binding, task) {
+/** Claude permission rules match Windows paths in POSIX form, e.g. C:\a becomes //c/a. */
+export function claude_rule_path(directory) {
+  const path = resolve(directory).replaceAll('\\', '/').replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`);
+  return `/${path}`;
+}
+
+/** The participant's discussion project directory; workdir is the legacy field name. */
+function project_directory(config) { return config.cwd || config.workdir || ''; }
+
+/**
+ * Where a CLI starts. Codex and agy can write their start directory, so read-only project access starts
+ * them in the draft directory and leaves the project readable only; Claude writes only through Edit rules.
+ */
+export function launch_directory(config, task) {
+  const project = project_directory(config);
+  if (!project) return task.directory;
+  return config.adapter === 'claude' || config.project_access === 'write' ? project : task.directory;
+}
+
+/**
+ * Allow only listed codiscuss website subcommands and draft writes for this run; user rules are added after.
+ * Claude Code on Windows may run commands through its PowerShell tool instead of Bash, so both are listed.
+ */
+export function claude_permissions(config, task) {
+  const commands = TASK_SUBCOMMANDS.flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]);
+  const writable = [task.directory, ...(config.project_access === 'write' && project_directory(config) ? [project_directory(config)] : [])];
+  return ['--add-dir', task.directory, task.skills_directory, '--allowedTools',
+    ...commands, ...writable.map(directory => `Edit(${claude_rule_path(directory)}/**)`), ...(config.allowed_tools || [])];
+}
+
+async function claude_delivery(config, binding, task, spawn_process = spawn) {
   const session_id = binding.session_id || randomUUID();
   try { bind_access(task.access_path, session_id); }
   catch (error) { throw not_sent(error); }
-  const args = ['-p', '--output-format', 'json', binding.session_id ? '--resume' : '--session-id', session_id];
-  if (config.allowed_tools) args.push('--allowedTools', ...config.allowed_tools);
+  const args = ['-p', '--output-format', 'json', binding.session_id ? '--resume' : '--session-id', session_id,
+    ...claude_permissions(config, task)];
   let child;
   try {
-    child = spawn(config.executable, [...args, '--', task.prompt], {
-      cwd: config.cwd || config.workdir || task.directory, windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'],
+    child = spawn_process(config.executable, [...args, '--', task.prompt], {
+      cwd: launch_directory(config, task), windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'],
       env: standalone_claude_env(),
     });
   } catch (error) { throw not_sent(error); }
@@ -157,10 +189,18 @@ function cli_invocation(config, binding, task) {
   if (config.adapter === 'codex_cli') {
     const args = ['exec', '--add-dir', task.directory];
     if (binding.session_id) args.push('resume', binding.session_id);
+    // Overrides apply to this run only: write the start directory and drafts, reach the discussion site,
+    // never wait for approval. The sandbox still reads the whole disk, so a read-only project stays readable.
+    args.push('-c', 'sandbox_mode="workspace-write"', '-c', 'sandbox_workspace_write.network_access=true',
+      '-c', `sandbox_workspace_write.writable_roots=${JSON.stringify([task.directory])}`, '-c', 'approval_policy="never"');
     args.push('--json', '--skip-git-repo-check', '-');
     return { args, input: task.prompt };
   }
-  const args = ['--output-format', 'stream-json', '--print-timeout', '0', '--add-dir', task.directory];
+  // agy asks before any file write; headless runs deny it. Drafts are allowed by the setup rule. Write access
+  // uses accept-edits for this run only, which also makes the added draft and skill directories writable.
+  const args = ['--output-format', 'stream-json', '--print-timeout', '0', '--add-dir', task.directory, '--add-dir', task.skills_directory];
+  if (project_directory(config) && config.project_access === 'write') args.push('--mode', 'accept-edits');
+  else if (project_directory(config)) args.push('--add-dir', project_directory(config));
   if (binding.session_id) args.push('--conversation', binding.session_id);
   else if (config.project_id || config.project_name) args.push('--project', config.project_id || config.project_name);
   args.push('-p', task.prompt);
@@ -242,7 +282,7 @@ async function cli_delivery(config, binding, task, spawn_process) {
   let child;
   try {
     child = spawn_process(config.executable, invocation.args, {
-      cwd: config.cwd || config.workdir || task.directory, windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'],
+      cwd: launch_directory(config, task), windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'],
     });
   } catch (error) { throw not_sent(error); }
   const state = monitor_cli(child, config, binding, task);

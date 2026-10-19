@@ -13,6 +13,7 @@ const LIMIT_PRESETS = [
   { label: "深入", rounds: "6", minutes: "120" },
   { label: "不限", rounds: "", minutes: "" },
 ];
+const ACCESS_ITEMS = [{ label: "只读", value: "read" }, { label: "可写", value: "write" }];
 const LIMIT_FIELDS = [{ key: "max_rounds", label: "讨论轮次上限", min: 0, max: 100 }, { key: "max_minutes", label: "总时长（分钟）", min: 0, max: 1440 }, { key: "execution_minutes", label: "单次 AI 执行（分钟）", min: 1, max: 60 }];
 const experts = Object.keys(bridge.identities).filter((name) => name !== "用户");
 const field_id = (key) => `new-room-${key}`;
@@ -153,12 +154,16 @@ const summary = computed(() => {
         <template v-if="view.launch.available">
           <UCheckbox :model-value="view.launch.create" label="创建后立即启动 AI" description="由本机服务创建会话并交付首个主持任务；不勾选则只建房，稍后在「接入」页启动。" @update:model-value="bridge.write_launch('create', '', $event)" />
           <template v-if="view.launch.create">
+            <div class="form-two-columns">
+              <UFormField label="项目目录（可选）" help="要一起查看的项目；留空时 AI 只在讨论私有目录工作"><UInput :model-value="view.launch.workspace.cwd || ''" placeholder="已有目录的完整路径" class="w-full" @update:model-value="bridge.write_launch('workspace', 'cwd', $event)" /></UFormField>
+              <UFormField label="项目文件" help="默认只读；可写允许 CLI 专家按议题修改项目文件，仅本次有效"><USelect :model-value="view.launch.workspace.project_access || 'read'" :items="ACCESS_ITEMS" class="w-full" @update:model-value="bridge.write_launch('workspace', 'project_access', $event)" /></UFormField>
+            </div>
             <ul class="create-launch-list">
-              <li v-for="name in launch_names" :key="name"><UIcon :name="launch_ready(name) ? 'i-lucide-circle-check' : 'i-lucide-circle-alert'" :class="launch_ready(name) ? 'is-ready' : 'is-warn'" /><strong>{{ name }}</strong><span>{{ bridge.launch_summary(name).client }} · {{ bridge.launch_summary(name).session }} · {{ bridge.launch_summary(name).cwd }}</span></li>
+              <li v-for="name in launch_names" :key="name"><UIcon :name="launch_ready(name) ? 'i-lucide-circle-check' : 'i-lucide-circle-alert'" :class="launch_ready(name) ? 'is-ready' : 'is-warn'" /><strong>{{ name }}</strong><span>{{ bridge.launch_summary(name).client }} · {{ bridge.launch_summary(name).session }} · {{ bridge.launch_summary(name).access }} · {{ bridge.launch_summary(name).cwd }}</span></li>
             </ul>
             <UCollapsible v-model:open="launch_open">
               <UButton :icon="launch_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" label="调整启动配置" color="neutral" variant="link" size="sm" class="create-more" />
-              <template #content><LaunchSettings :participants="launch_names" /></template>
+              <template #content><LaunchSettings :participants="launch_names" :workspace="false" /></template>
             </UCollapsible>
           </template>
         </template>

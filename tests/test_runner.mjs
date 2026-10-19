@@ -9,9 +9,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
+import { DiscussionRunner, DiscussionStore, load_config, task_files, validate_config } from '../runner/discussion_runner.mjs';
 import { DiscussionService, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
-import { antigravity_project, claude_exit_error, standalone_claude_env, codex_target, deliver_task, run_program } from '../runner/discussion_adapters.mjs';
+import { antigravity_project, claude_exit_error, claude_rule_path, standalone_claude_env, codex_target, deliver_task, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
 
 /** Exercise the dispatcher against an HTTP contract without starting real software. */
 async function fixture(t) {
@@ -320,6 +320,7 @@ async function cli_delivery_fixture(t, adapter, options = {}) {
     rmSync(directory, { recursive: true, force: true });
   });
   const task = { id: 'event-1', directory, access_path, prompt: '讨论中文 "quotes"\n$(literal); `literal`',
+    skills_directory: join(directory, 'skills'),
     on_binding: session => bindings.push(session), on_process: () => {},
     on_output: (path, chunk) => appendFileSync(path, chunk), on_failure: error => errors.push(error), on_exit: () => { exits++; } };
   const config = { adapter, executable: process.execPath, project_name: 'Discussion project', ...options.config };
@@ -342,7 +343,11 @@ test(`${adapter} starts headlessly, binds emitted identity and preserves UTF-8 p
     assert.equal(call.args[0], 'exec'); assert.ok(call.args.includes('--json'));
     assert.ok(call.args.includes('--skip-git-repo-check')); assert.equal(call.args.at(-1), '-');
     assert.equal(readFileSync(join(f.directory, 'stdin.txt'), 'utf8'), f.task.prompt);
+    const overrides = call.args.filter((arg, index) => call.args[index - 1] === '-c');
+    assert.deepEqual(overrides, ['sandbox_mode="workspace-write"', 'sandbox_workspace_write.network_access=true',
+      `sandbox_workspace_write.writable_roots=${JSON.stringify([f.directory])}`, 'approval_policy="never"']);
   } else {
+    assert.ok(call.args.includes(f.task.skills_directory));
     assert.equal(call.args[call.args.indexOf('-p') + 1], f.task.prompt);
     assert.equal(call.args[call.args.indexOf('--output-format') + 1], 'stream-json');
     assert.equal(call.args[call.args.indexOf('--print-timeout') + 1], '0');
@@ -352,14 +357,27 @@ test(`${adapter} starts headlessly, binds emitted identity and preserves UTF-8 p
 });
 
 test(`${adapter} resumes only the bound conversation and honors its configured cwd`, async t => {
+  const project = mkdtempSync(join(tmpdir(), 'discussion-cwd-')); t.after(() => rmSync(project, { recursive: true, force: true }));
   const f = await cli_delivery_fixture(t, adapter, { binding: { session_id: 'actual-cli-session' },
-    config: { cwd: mkdtempSync(join(tmpdir(), 'discussion-cwd-')) } });
-  const call = f.calls[0]; t.after(() => rmSync(call.settings.cwd, { recursive: true, force: true }));
+    config: { cwd: project, project_access: 'write' } });
+  const call = f.calls[0];
   const flag = adapter === 'codex_cli' ? 'resume' : '--conversation';
   assert.equal(call.args[call.args.indexOf(flag) + 1], 'actual-cli-session');
   assert.equal(call.args.includes('--last'), false); assert.equal(call.args.includes('--continue'), false);
   assert.equal(call.args.includes('--project'), false); assert.deepEqual(f.errors, []);
-  assert.notEqual(call.settings.cwd, f.directory);
+  assert.equal(call.settings.cwd, project);
+  if (adapter === 'codex_cli') assert.ok(call.args.indexOf('sandbox_mode="workspace-write"') > call.args.indexOf('resume'));
+  else assert.equal(call.args[call.args.indexOf('--mode') + 1], 'accept-edits');
+});
+
+test(`${adapter} starts in the draft directory and only attaches a read-only project`, async t => {
+  const project = mkdtempSync(join(tmpdir(), 'discussion-cwd-')); t.after(() => rmSync(project, { recursive: true, force: true }));
+  const f = await cli_delivery_fixture(t, adapter, { config: { cwd: project, project_access: 'read' } });
+  const call = f.calls[0];
+  assert.equal(call.settings.cwd, f.directory); assert.deepEqual(f.errors, []);
+  assert.equal(call.args.includes('--mode'), false);
+  if (adapter === 'codex_cli') assert.ok(!call.args.includes(project) && !call.args.some(arg => arg.includes(JSON.stringify(project).slice(1, -1))));
+  else assert.equal(call.args[call.args.lastIndexOf('--add-dir') + 1], project);
 });
 
 test(`${adapter} never replaces a bound identity when the CLI returns another session`, async t => {
@@ -416,6 +434,61 @@ test(`${adapter} is stopped with the runner when its discussion pauses`, async t
   } finally { runner.stop_children(); }
 });
 }
+
+test('claude allows only codiscuss website subcommands and draft writes, then user rules', async t => {
+  const f = await cli_delivery_fixture(t, 'claude', { events: [{ type: 'result', is_error: false, result: '完成' }],
+    config: { allowed_tools: ['Read(//d/materials/**)'] } });
+  const args = f.calls[0].args;
+  assert.deepEqual(f.errors, []);
+  assert.ok(!args.some(arg => arg.startsWith('--dangerously') || arg === '--permission-mode'));
+  const directories = args.indexOf('--add-dir');
+  assert.deepEqual(args.slice(directories + 1, directories + 3), [f.directory, f.task.skills_directory]);
+  assert.deepEqual(args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--')),
+    [...['room', 'message', 'turn', 'state', 'floor', 'execution', 'health', 'schema']
+      .flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]),
+    `Edit(${claude_rule_path(f.directory)}/**)`, 'Read(//d/materials/**)']);
+  assert.ok(!args.some(arg => /(Bash|PowerShell)\(codiscuss (service|launch|run|api|setup|install|local)/.test(arg)));
+  assert.equal(args.at(-1), f.task.prompt);
+  if (process.platform === 'win32') assert.equal(claude_rule_path('C:\\Data\\room'), '//c/Data/room');
+});
+
+test('claude edits a project only when the launch grants write access', async t => {
+  const project = mkdtempSync(join(tmpdir(), 'discussion-cwd-')); t.after(() => rmSync(project, { recursive: true, force: true }));
+  const result = [{ type: 'result', is_error: false, result: '完成' }];
+  for (const project_access of ['read', 'write']) {
+    const f = await cli_delivery_fixture(t, 'claude', { events: result, config: { cwd: project, project_access } });
+    const call = f.calls[0];
+    assert.equal(call.settings.cwd, project);
+    assert.equal(call.args.includes(`Edit(${claude_rule_path(project)}/**)`), project_access === 'write');
+  }
+});
+
+test('tasks state whether the discussion project is read-only or writable', async t => {
+  const f = await fixture(t);
+  const project = mkdtempSync(join(tmpdir(), 'discussion-cwd-')); t.after(() => rmSync(project, { recursive: true, force: true }));
+  const config = load_config_from(f, project, 'write');
+  assert.match(task_files(config, f.event, 'token-for-test', {}).prompt, /允许按议题需要修改/);
+  const saved = JSON.parse(readFileSync(join(f.config.directory, 'event-1.task.json'), 'utf8'));
+  assert.equal(saved.project_access, 'write'); assert.equal(saved.cwd, project);
+  assert.match(task_files(load_config_from(f, project), f.event, 'token-for-test', {}).prompt, /只读，不修改/);
+  assert.match(task_files(f.config, f.event, 'token-for-test', {}).prompt, /未指定讨论项目目录/);
+  assert.throws(() => load_config_from(f, project, 'admin'), /read 或 write/);
+});
+
+/** Validate the fixture room with a project directory and optional access level. */
+function load_config_from(f, project, project_access) {
+  return validate_config({ ...f.config, project: undefined, token: 'x'.repeat(32), cwd: project, project_access,
+    participants: { Codex: { adapter: 'codex_cli', executable: process.execPath } }, data_directory: f.config.directory }, f.config.directory);
+}
+
+test('tasks direct website work to the approved codiscuss subcommands', async t => {
+  const f = await fixture(t);
+  const task = task_files(f.config, f.event, 'token-for-test', {});
+  const saved = JSON.parse(readFileSync(join(f.config.directory, 'event-1.task.json'), 'utf8'));
+  assert.equal(saved.cli, 'codiscuss'); assert.deepEqual(saved.subcommands, TASK_SUBCOMMANDS);
+  assert.match(task.prompt, /codiscuss execution enter/); assert.match(task.prompt, /不用 python discuss\.py/);
+  assert.equal(task.skills_directory, join(f.config.project, '.agents', 'skills'));
+});
 
 test('CLI failure results pause immediately even when the process exits with code zero', async t => {
   for (const adapter of ['codex_cli', 'antigravity_cli']) {

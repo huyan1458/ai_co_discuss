@@ -1,13 +1,13 @@
 /** npm bootstrap and per-user setup; never logs in or starts an AI conversation. */
 import { spawnSync } from 'node:child_process';
-import { accessSync, constants, existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { accessSync, constants, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
-import { atomic_json } from './discussion_adapters.mjs';
+import { atomic_json, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
 import { launch_settings, save_launch_settings } from './discussion_launch.mjs';
 import { service_home } from './discussion_service.mjs';
 import { install_skills } from './discussion_skills.mjs';
@@ -17,6 +17,9 @@ const PROBE_TIMEOUT = 10000;
 const MIN_NODE_MAJOR = 24;
 const DEFAULT_PORT = 8765;
 const ATTENTION_EXIT_CODE = 2;
+const AGY_SETTINGS = ['.gemini', 'antigravity-cli', 'settings.json'];
+const AGY_RULE_RECORD = 'agy-permission.json';
+const AGY_SETTINGS_BACKUP = 'agy-settings.backup.json';
 const CLIENTS = {
   codex: { name: 'Codex', commands: ['codex'], adapter: 'codex_cli', skills: ['.agents', 'skills'] },
   claude: { name: 'Claude', commands: ['claude'], adapter: 'claude', skills: ['.claude', 'skills'] },
@@ -190,19 +193,73 @@ async function choose_profile(client, current, options) {
   return { client: client.name, status: 'configured', effective: detected };
 }
 
+/** agy only reads command rules from user settings; allow just the task's codiscuss website subcommands. */
+export function agy_rule() {
+  // Arguments may not contain separators, redirection or PowerShell expressions, so no second command fits.
+  // A single --site value may precede the subcommand; codiscuss.cmd avoids blocked PowerShell scripts.
+  const safe = '[^;&|<>$`\\r\\n]';
+  return `command(regex:^codiscuss(\\.cmd)?( --site ${safe.replace('[^', '[^ ')}+)? (${TASK_SUBCOMMANDS.join('|')})( ${safe}*)?$)`;
+}
+
+/** Drafts live under the service home; agy does not treat --add-dir directories as writable. */
+export function agy_rules(home) {
+  // Verified with agy 1.4.2 on Windows: the rule matches forward slashes with the drive letter kept.
+  const drafts = join(resolve(home), 'launches').replaceAll('\\', '/');
+  return [agy_rule(), `write_file(${drafts})`];
+}
+
+/** Ask once before adding the rules; --yes counts as consent, other noninteractive runs only report. */
+async function agy_consent(path, rules, options) {
+  if (options.yes) return true;
+  if (!process.stdin.isTTY) return false;
+  const prompt = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    const answer = await prompt.question(`允许 Gemini（agy）在全自动讨论中执行讨论命令并写讨论草稿？将向 ${path} 的 permissions.allow 追加 ${rules.length} 条只匹配讨论命令与草稿目录的规则 [Y/n]：`);
+    return !['n', 'no', '否'].includes(answer.trim().toLowerCase());
+  } finally { prompt.close(); }
+}
+
+/** Keep the installer-managed allow rules current, never touching other settings or user rules. */
+export async function allow_agy_command(home, user_home, options) {
+  const path = join(user_home, ...AGY_SETTINGS);
+  const record = join(home, AGY_RULE_RECORD);
+  const rules = agy_rules(home);
+  let settings = {};
+  try { if (existsSync(path)) settings = JSON.parse(readFileSync(path, 'utf8')); }
+  catch { return { status: 'invalid', path, rules }; }
+  const allow = settings.permissions?.allow ?? [];
+  if (!Array.isArray(allow)) return { status: 'invalid', path, rules };
+  const saved = existsSync(record) ? JSON.parse(readFileSync(record, 'utf8')) : {};
+  const previous = saved.rules || (saved.rule ? [saved.rule] : []);
+  const stale = previous.some(rule => !rules.includes(rule) && allow.includes(rule));
+  mkdirSync(home, { recursive: true });
+  if (rules.every(rule => allow.includes(rule)) && !stale) {
+    if (previous.join('\n') !== rules.join('\n')) atomic_json(record, { rules });
+    return { status: 'unchanged', path, rules };
+  }
+  if (!await agy_consent(path, rules, options)) return { status: options.yes || process.stdin.isTTY ? 'declined' : 'pending', path, rules };
+  mkdirSync(dirname(path), { recursive: true });
+  if (existsSync(path)) copyFileSync(path, join(home, AGY_SETTINGS_BACKUP));
+  const next = [...allow.filter(item => !previous.includes(item) && !rules.includes(item)), ...rules];
+  atomic_json(path, { ...settings, permissions: { ...settings.permissions, allow: next } });
+  atomic_json(record, { rules });
+  return { status: 'allowed', path, rules };
+}
+
 /** Save the selected effective profiles and copy complete skills without overwriting edits. */
 async function configure_clients(home, selected, options, existing) {
   const participants = { ...existing };
-  const skills = [], profiles = [];
+  const skills = [], profiles = [], permissions = [];
   const user_home = resolve(options['skills-home'] || homedir());
   for (const client of selected) {
     const profile = await choose_profile(client, participants[client.name], options);
     profiles.push(profile);
     if (profile.status === 'configured') participants[client.name] = { ...participants[client.name], ...profile.effective };
     skills.push({ client: client.name, results: install_skills(join(user_home, ...client.skills)) });
+    if (client.key === 'antigravity') permissions.push({ client: client.name, ...await allow_agy_command(home, user_home, options) });
   }
   save_launch_settings(home, { participants });
-  return { skills, profiles };
+  return { skills, profiles, permissions };
 }
 
 /** Exclude npm exec's temporary command wrappers when checking persistent availability. */
@@ -240,6 +297,10 @@ function setup_issues(result) {
   for (const group of result.skills) for (const skill of group.results) {
     if (skill.status === 'conflict') issues.push(`${group.client} 技能冲突，已保留 ${skill.path}；请核对并移走需替换的旧副本，再运行 setup。`);
   }
+  for (const permission of result.permissions) {
+    if (permission.status === 'invalid') issues.push(`${permission.client} 设置文件无法解析，未写入讨论命令规则：${permission.path}；修复后重新运行 setup。`);
+    if (['declined', 'pending'].includes(permission.status)) issues.push(`${permission.client} 未放行讨论命令，全自动讨论会被拦截；运行 codiscuss setup --clients antigravity --yes 授权。`);
+  }
   if (result.command.status !== 'ready') issues.push(result.command.action);
   return issues;
 }
@@ -276,6 +337,9 @@ function report_setup(result) {
   for (const profile of result.profiles) lines.push(profile.status === 'manual'
     ? `${profile.client}：仅安装技能，可手动参与，尚不支持全自动接入。`
     : `${profile.client}：${profile.status === 'configured' ? 'CLI 已配置' : '沿用已有配置'}（${profile.effective.adapter} / ${profile.effective.executable || '未设置路径'}）`);
+  for (const permission of result.permissions) {
+    if (['allowed', 'unchanged'].includes(permission.status)) lines.push(`${permission.client}：已放行讨论命令（${permission.path}）`);
+  }
   for (const group of result.skills) lines.push(`${group.client} Skill：${group.results.filter(skill => skill.status !== 'conflict').length}/${group.results.length} 份文件就绪，目录 ${dirname(group.results[0].path)}`);
   if (result.command.path) lines.push(`持久命令：${result.command.path}（${result.command.status}）`);
   if (result.local?.running) lines.push(`本机网站：${result.local.url}`);

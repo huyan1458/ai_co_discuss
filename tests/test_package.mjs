@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -61,9 +61,10 @@ function write_cli_stub(home) {
         if (JSON.parse(fs.readFileSync(task.access_file, 'utf8')).session_id === session) break;
         await delay(20);
       }
-      const settings = JSON.parse(fs.readFileSync(join(process.env.DISCUSS_SERVICE_HOME, 'local-settings.json'), 'utf8'));
+      // Run the package's codiscuss entry the way an approved task command would.
+      const codiscuss = join(task.skills[0], '..', '..', '..', '..', 'runner', 'codiscuss.mjs');
       for (const [action, ...args] of [['enter'], ['fail', '--reason', 'package-integration-complete']]) {
-        const result = spawnSync(settings.python, ['-X', 'utf8', task.cli, '--site', task.site, 'execution', action,
+        const result = spawnSync(process.execPath, [codiscuss, '--site', task.site, 'execution', action,
           task.room, String(task.event_id), '--access-file', task.access_file, ...args], { encoding: 'utf8', windowsHide: true });
         if (result.status !== 0) throw new Error(result.stderr);
       }
@@ -86,16 +87,17 @@ async function verify_installed_launches(package_path, execute, env, site) {
   writeFileSync(draft, JSON.stringify(input));
   const conversation = installed_command(execute, cli, ['launch', 'start', '--file', draft]);
   const task = JSON.parse(readFileSync(conversation.current_task.task_file, 'utf8'));
-  assert.equal(task.cli, join(package_path, 'runner/discuss.py'));
+  assert.equal(task.cli, 'codiscuss');
   assert(task.skills.every(path => path.startsWith(package_path) && existsSync(path)));
   assert(conversation.config_path.startsWith(home));
   const entered = installed_command(execute, cli, ['--site', site, 'execution', 'enter', task.room, String(task.event_id), '--access-file', task.access_file]);
   assert.equal(entered.data.status, 'started');
   installed_command(execute, cli, ['--site', site, 'execution', 'fail', task.room, String(task.event_id), '--access-file', task.access_file, '--reason', 'conversation-integration-complete']);
   const web_token = randomUUID();
+  // The Codex stand-in runs ./exec from its start directory, which is the project only with write access.
   const response = await fetch(`${site}/api/local/launch`, { method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-CoDiscuss-Local': '1', Origin: site },
-    body: JSON.stringify({ cwd: home, token: web_token, room: { ...input.room, submission_id: randomUUID() } }) });
+    body: JSON.stringify({ cwd: home, project_access: 'write', token: web_token, room: { ...input.room, submission_id: randomUUID() } }) });
   const web = await response.json();
   assert.equal(response.status, 200, JSON.stringify(web));
   let room;
@@ -110,7 +112,7 @@ async function verify_installed_launches(package_path, execute, env, site) {
   const tasks = readdirSync(config.directory).filter(name => name.endsWith('.task.json'));
   assert.equal(tasks.length, 1);
   const delivered = JSON.parse(readFileSync(join(config.directory, tasks[0]), 'utf8'));
-  assert.equal(realpathSync.native(delivered.cli), realpathSync.native(task.cli));
+  assert.equal(delivered.cli, 'codiscuss');
   assert.equal(JSON.parse(readFileSync(delivered.access_file, 'utf8')).session_id, `package-test-${web.room.id}`);
   const receipt = installed_command(execute, cli, ['--site', site, 'execution', 'view', delivered.room, String(delivered.event_id), '--access-file', web.config_path]);
   assert.equal(receipt.data.result, 'package-integration-complete');

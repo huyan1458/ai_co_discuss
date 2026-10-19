@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, linkSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import { install_skills } from '../runner/discussion_skills.mjs';
-import { check_command, detect_clients, detect_python } from '../runner/discussion_setup.mjs';
+import { agy_rule, agy_rules, allow_agy_command, check_command, detect_clients, detect_python } from '../runner/discussion_setup.mjs';
 
 const CLI = fileURLToPath(new URL('../runner/codiscuss.mjs', import.meta.url));
 
@@ -19,6 +19,47 @@ function fixture_cli(directory, name) {
   } else writeFileSync(path, '#!/bin/sh\nprintf "fixture 1.0\\n"\n', { mode: 0o755 });
   return path;
 }
+
+test('agy rule matches only codiscuss website subcommands without separators', () => {
+  const pattern = new RegExp(agy_rule().slice('command(regex:'.length, -1));
+  assert.ok(pattern.test('codiscuss execution enter room 1 --access-file C:/data/event-1.access.json'));
+  assert.ok(pattern.test('codiscuss message post room --as Gemini --file "D:/drafts/answer one.md"'));
+  assert.ok(pattern.test('codiscuss --site http://127.0.0.1:8797 execution enter room 1 --access-file C:/x.json'));
+  assert.ok(pattern.test('codiscuss.cmd room view room --site http://127.0.0.1:8797'));
+  for (const command of ['codiscuss --site http://x service stop', 'codiscuss --site a b room view',
+    'codiscuss service stop', 'codiscuss launch start --file x', 'codiscuss run pause room',
+    'codiscuss api /rooms', 'codiscuss setup --yes', 'codiscuss roomx view', 'python discuss.py room view', 'x codiscuss room view']) {
+    assert.equal(pattern.test(command), false, command);
+  }
+  for (const tail of ['; Remove-Item x', ' | Out-File x', ' $(evil)', ' `evil', ' && evil', ' > x']) {
+    assert.equal(pattern.test('codiscuss room view room' + tail), false, tail);
+  }
+});
+
+test('agy setup keeps one managed rule and leaves other settings untouched', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'codiscuss-agy-'));
+  try {
+    const home = join(directory, 'service');
+    const path = join(directory, '.gemini', 'antigravity-cli', 'settings.json');
+    assert.equal((await allow_agy_command(home, directory, {})).status, 'pending');
+    assert.equal(existsSync(path), false);
+    mkdirSync(join(directory, '.gemini', 'antigravity-cli'), { recursive: true });
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, 'agy-permission.json'), JSON.stringify({ rule: 'command(old-managed)' }));
+    writeFileSync(path, JSON.stringify({ trustedWorkspaces: 'C:/Users/A',
+      permissions: { allow: ['command(git)', 'command(old-managed)'], deny: ['command(sudo)'] } }));
+    assert.equal((await allow_agy_command(home, directory, { yes: true })).status, 'allowed');
+    assert.equal((await allow_agy_command(home, directory, {})).status, 'unchanged');
+    const settings = JSON.parse(readFileSync(path, 'utf8'));
+    assert.equal(settings.trustedWorkspaces, 'C:/Users/A'); assert.deepEqual(settings.permissions.deny, ['command(sudo)']);
+    assert.deepEqual(settings.permissions.allow, ['command(git)', ...agy_rules(home)]);
+    assert.equal(agy_rules(home)[1], `write_file(${join(home, 'launches').replaceAll('\\', '/')})`);
+    assert.ok(existsSync(join(home, 'agy-settings.backup.json')));
+    writeFileSync(path, '{ broken');
+    assert.equal((await allow_agy_command(home, directory, { yes: true })).status, 'invalid');
+    assert.equal(readFileSync(path, 'utf8'), '{ broken');
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
 
 test('CLI detection is limited to Claude, Codex, agy and Cursor command aliases', () => {
   const directory = mkdtempSync(join(tmpdir(), 'codiscuss-cli fixtures-'));
