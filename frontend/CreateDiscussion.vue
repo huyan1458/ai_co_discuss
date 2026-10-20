@@ -35,6 +35,10 @@ const launch_ready = (name) => {
 };
 const launching = computed(() => automatic.value && view.value.launch.available && view.value.launch.create);
 const model_hint = (name) => bridge.launch_model_hints[view.value.launch.profiles[name]?.adapter];
+const effort_items = (name) => {
+  const levels = bridge.launch_effort_levels[view.value.launch.profiles[name]?.adapter];
+  return levels ? [{ label: "默认档位", value: "default" }, ...levels.map((level) => ({ label: level, value: level }))] : null;
+};
 const launch_open = ref(false);
 watch(() => [launching.value, launch_names.value.every(launch_ready), view.value.launch.error], ([on, ready, error]) => {
   if (on && (!ready || error)) launch_open.value = true;
@@ -160,7 +164,7 @@ const summary = computed(() => {
               <UFormField label="项目文件" help="默认只读；可写允许 CLI 专家按议题修改项目文件，仅本次有效"><USelect :model-value="view.launch.workspace.project_access || 'read'" :items="ACCESS_ITEMS" class="w-full" @update:model-value="bridge.write_launch('workspace', 'project_access', $event)" /></UFormField>
             </div>
             <ul class="create-launch-list">
-              <li v-for="name in launch_names" :key="name"><UIcon :name="launch_ready(name) ? 'i-lucide-circle-check' : 'i-lucide-circle-alert'" :class="launch_ready(name) ? 'is-ready' : 'is-warn'" /><strong>{{ name }}</strong><span>{{ bridge.launch_summary(name).client }} · {{ bridge.launch_summary(name).session }} · {{ bridge.launch_summary(name).access }} · {{ bridge.launch_summary(name).cwd }}</span><UInput v-if="model_hint(name)" :model-value="view.launch.profiles[name]?.model || ''" :placeholder="`模型：${model_hint(name).example}，留空用默认`" :title="model_hint(name).help" :aria-label="`${name} 使用的模型`" size="xs" class="create-launch-model" @update:model-value="bridge.write_launch(name, 'model', $event)" /></li>
+              <li v-for="name in launch_names" :key="name"><UIcon :name="launch_ready(name) ? 'i-lucide-circle-check' : 'i-lucide-circle-alert'" :class="launch_ready(name) ? 'is-ready' : 'is-warn'" /><strong>{{ name }}</strong><span>{{ bridge.launch_summary(name).client }} · {{ bridge.launch_summary(name).session }} · {{ bridge.launch_summary(name).access }} · {{ bridge.launch_summary(name).cwd }}</span><UInput v-if="model_hint(name)" :model-value="view.launch.profiles[name]?.model || ''" :placeholder="`模型：${model_hint(name).example}，留空用默认`" :title="model_hint(name).help" :aria-label="`${name} 使用的模型`" size="xs" class="create-launch-model" :class="{ 'is-wide': !effort_items(name) }" @update:model-value="bridge.write_launch(name, 'model', $event)" /><USelect v-if="effort_items(name)" :model-value="view.launch.profiles[name]?.effort || 'default'" :items="effort_items(name)" :aria-label="`${name} 的思考档位`" size="xs" class="create-launch-effort" @update:model-value="bridge.write_launch(name, 'effort', $event === 'default' ? '' : $event)" /></li>
             </ul>
             <UCollapsible v-model:open="launch_open">
               <UButton :icon="launch_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" label="调整启动配置" color="neutral" variant="link" size="sm" class="create-more" />
@@ -233,7 +237,10 @@ const summary = computed(() => {
 .create-launch-list span { overflow: hidden; color: var(--ui-text-muted); white-space: nowrap; text-overflow: ellipsis; }
 .create-launch-list li:has(.create-launch-model) { align-items: center; }
 .create-launch-list span:has(+ .create-launch-model) { flex: 1; min-width: 0; }
-.create-launch-model { flex-shrink: 0; width: 210px; margin-left: auto; }
+.create-launch-model { flex: none; width: 190px; margin-left: auto; }
+/* Without an effort select the model box spans both columns so every row keeps the same edges. */
+.create-launch-model.is-wide { width: 282px; }
+.create-launch-effort { flex: none; width: 84px; }
 .create-launch-list [class*="icon"] { flex-shrink: 0; align-self: center; width: 14px; height: 14px; }
 .is-ready { color: #3fb27f; }
 .is-warn { color: #e0a33a; }

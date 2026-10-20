@@ -206,7 +206,7 @@ Windows 的 `executable` 填原生 `.exe`，不填 npm 的 `.cmd` / `.ps1` 包�
 | `claude` | 现有 `claude -p --output-format json`；后续 `--resume ID` | 沿用上表中的 Claude 规则 |
 | `antigravity_cli` | `agy -p --output-format stream-json`，从 `init.conversation_id` 读取实际 ID；后续 `--conversation ID`，不使用 `--continue` | 保持指定 cwd；省略 cwd 时使用本场独立草稿目录。只在讨论服务新建的会话中执行：每位参与者一个独立原生讨论项目，续接复用该项目；不绑定外部已有会话 |
 
-三种 CLI 适配器可选 `model`：分别作为 `codex -m`、`claude --model`、`agy --model` 的参数传入，留空使用各 CLI 的默认模型；可存入本机默认配置，也可在新建讨论时按参与者单独填写。模型名不能以 `-` 开头或含空格。App 适配器使用 App 内选择的模型。
+三种 CLI 适配器可选 `model`：分别作为 `codex -m`、`claude --model`、`agy --model` 的参数传入，留空使用各 CLI 的默认模型；可存入本机默认配置，也可在新建讨论时按参与者单独填写。模型名不能以 `-` 开头或含空格。可选 `effort` 设置思考档位：Codex 为 low / medium / high / xhigh / max / ultra，以 `-c model_reasoning_effort="档位"` 传入；Claude 为 low / medium / high / xhigh / max，以 `--effort` 传入；agy 的档位写在模型名中（如 `gemini-4-argon-high`），不单独设置。App 适配器使用 App 内选择的模型与档位。
 
 两种新适配器都不需要 `source_thread_id` 或 `ipc_directory`。实际 ID 在输出流到达时写入本机绑定和本次执行凭据，随后 AI 按任务文件自行 `execution enter` 并通过讨论 CLI 保存业务结果；程序不把终端回答直接代发。已有 App 绑定不能通过改适配器直接复用，须先暂停并使用独立 `data_directory` 明确重新接入。此路径不承诺 CLI 会话同步到桌面 App。
 

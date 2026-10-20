@@ -600,18 +600,21 @@ test('agy rejects nested answer storage because native deny rules take priority 
   }
 });
 
-test('each CLI receives the configured model as its own model argument', async t => {
-  const codex = await cli_delivery_fixture(t, 'codex_cli', { config: { model: 'gpt-5.5' } });
+test('each CLI receives the configured model and effort as its own arguments', async t => {
+  const codex = await cli_delivery_fixture(t, 'codex_cli', { config: { model: 'gpt-6-astra', effort: 'xhigh' } });
   const codex_args = codex.calls[0].args;
-  assert.equal(codex_args[codex_args.indexOf('-m') + 1], 'gpt-5.5'); assert.equal(codex_args.at(-1), '-');
+  assert.equal(codex_args[codex_args.indexOf('-m') + 1], 'gpt-6-astra'); assert.equal(codex_args.at(-1), '-');
+  assert.ok(codex_args.includes('model_reasoning_effort="xhigh"'));
   const agy = await cli_delivery_fixture(t, 'antigravity_cli', { config: { model: 'gemini-4-argon-high' } });
   const agy_args = agy.calls[0].args;
   assert.equal(agy_args[agy_args.indexOf('--model') + 1], 'gemini-4-argon-high'); assert.ok(agy_args.indexOf('--model') < agy_args.indexOf('-p'));
-  const claude = await cli_delivery_fixture(t, 'claude', { events: [{ type: 'result', is_error: false, result: '完成' }], config: { model: 'opus' } });
+  const claude = await cli_delivery_fixture(t, 'claude', { events: [{ type: 'result', is_error: false, result: '完成' }], config: { model: 'opus', effort: 'max' } });
   const claude_args = claude.calls[0].args;
-  assert.equal(claude_args[claude_args.indexOf('--model') + 1], 'opus'); assert.ok(claude_args.indexOf('--model') < claude_args.indexOf('--allowedTools'));
+  assert.equal(claude_args[claude_args.indexOf('--model') + 1], 'opus');
+  assert.equal(claude_args[claude_args.indexOf('--effort') + 1], 'max'); assert.ok(claude_args.indexOf('--effort') < claude_args.indexOf('--allowedTools')); assert.ok(claude_args.indexOf('--model') < claude_args.indexOf('--allowedTools'));
   const plain = await cli_delivery_fixture(t, 'codex_cli');
   assert.equal(plain.calls[0].args.includes('-m'), false);
+  assert.equal(plain.calls[0].args.some(arg => arg.startsWith('model_reasoning_effort')), false);
 });
 
 test('claude allows only codiscuss website subcommands and draft writes, then user rules', async t => {

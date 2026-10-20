@@ -194,6 +194,8 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .progress-panel-anchor { position: relative; flex-shrink: 0; }
 .progress-chip { display: inline-flex; align-items: center; gap: 7px; height: 29px; padding: 0 9px 0 10px; border: 1px solid var(--ui-border); border-radius: 15px; background: var(--ui-bg-muted); color: var(--ui-text); font-size: 12px; white-space: nowrap; }
 .progress-chip:hover { border-color: var(--ui-border-accented); }
+/* While the docked rail is open the chip reads as a pressed toggle. */
+.progress-chip.is-docked { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
 .progress-chip > [class*="icon"] { width: 14px; height: 14px; color: var(--ui-text-muted); }
 .progress-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ui-text-dimmed); }
 .progress-chip.is-primary .progress-dot { background: var(--channel-accent); }

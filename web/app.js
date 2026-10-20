@@ -1082,10 +1082,13 @@ async function load_launch_settings() {
 
 // Only CLI clients accept a model argument; App clients use the model chosen inside the App.
 const LAUNCH_MODEL_HINTS = {
-  codex_cli: { example: "例如 gpt-5.5", help: "传给 codex -m；留空用 CLI 默认模型" },
-  claude: { example: "例如 opus、sonnet", help: "传给 claude --model；留空用 CLI 默认模型" },
+  codex_cli: { example: "例如 gpt-6-astra", help: "传给 codex -m；留空用 CLI 默认模型" },
+  claude: { example: "例如 opus、sonnet、fable", help: "传给 claude --model；留空用 CLI 默认模型" },
   antigravity_cli: { example: "例如 gemini-4-argon-high", help: "传给 agy --model；可用模型运行 agy models 查看，留空用 CLI 默认模型" },
 };
+
+// Reasoning effort is a separate argument only for Codex and Claude; agy encodes it in the model name.
+const LAUNCH_EFFORT_LEVELS = { codex_cli: ["low", "medium", "high", "xhigh", "max", "ultra"], claude: ["low", "medium", "high", "xhigh", "max"] };
 
 /** Keep software drafts separate from shared room records and from discussion advancement mode. */
 function write_launch_field(name, field, value) {
@@ -1094,7 +1097,7 @@ function write_launch_field(name, field, value) {
   else {
     state.launch.profiles[name] ||= {};
     if (field === "allowed_tools") value = value.split("\n").map(item => item.trim()).filter(Boolean);
-    if (field === "model") value = value.trim();
+    if (["model", "effort"].includes(field)) value = value.trim();
     state.launch.profiles[name][field] = value;
   }
   state.launch.notice = "";
@@ -1126,7 +1129,8 @@ function launch_summary(name) {
   const access = !cli_directory ? "按 App 权限" : !directory ? "无项目目录"
     : launch_access(name) === "write" ? "项目可写" : "项目只读";
   const label = LAUNCH_CLIENTS[name]?.find(item => item.value === profile.adapter)?.label || "尚未选择客户端";
-  return { client: cli_directory && profile.model ? `${label} · ${profile.model}` : label,
+  const choice = [profile.model, profile.effort && `${profile.effort} 档`].filter(Boolean).join(" · ");
+  return { client: cli_directory && choice ? `${label} · ${choice}` : label,
     session: profile.session_id ? "复用指定会话" : "新建会话",
     cwd: !cli_directory && profile.session_id ? "沿用指定会话的目录"
       : directory || (cli_directory ? "本次讨论的私有目录" : "由 App 项目确定"), project, access };
@@ -1283,6 +1287,7 @@ function render_launch_settings() {
       const fields = profile.adapter === "antigravity" ? [["ipc_directory", "Sidecar IPC 目录"]]
         : [["executable", "原生可执行文件路径"]];
       if (["codex_cli", "claude", "antigravity_cli"].includes(profile.adapter)) fields.push(["model", "模型（可选，留空用 CLI 默认）"]);
+      if (LAUNCH_EFFORT_LEVELS[profile.adapter]) fields.push(["effort", `思考档位（可选：${LAUNCH_EFFORT_LEVELS[profile.adapter].join(" / ")}）`]);
       if (profile.adapter === "codex") fields.push(["source_thread_id", "来源聊天 ID（新建会话时使用）"]);
       if (profile.adapter === "claude") fields.push(["allowed_tools", "允许的工具（每行一项，可选）"]);
       fields.push(["session_id", "复用会话 ID（仅本次，可选）"], ["cwd", "此 AI 的工作目录（可选）"], ["project_name", "此 AI 的项目（可选）"]);
@@ -2063,7 +2068,7 @@ function change_view_theme(theme) {
 }
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
-  write_launch: write_launch_field, write_room_connection, launch_clients: LAUNCH_CLIENTS, launch_model_hints: LAUNCH_MODEL_HINTS, launch_summary, empty_discussion_message,
+  write_launch: write_launch_field, write_room_connection, launch_clients: LAUNCH_CLIENTS, launch_model_hints: LAUNCH_MODEL_HINTS, launch_effort_levels: LAUNCH_EFFORT_LEVELS, launch_summary, empty_discussion_message,
   start_drag: start_directory_drag,
   write_expert: write_view_expert, execute: execute_view_action, theme: change_view_theme,
   request: request_json, identities: IDENTITIES, display_name, sources: SOURCE_LABELS, phases: PHASE_LABELS,

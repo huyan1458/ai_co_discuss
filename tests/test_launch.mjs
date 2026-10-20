@@ -331,6 +331,8 @@ test('missing software, current identity or finite limits fail before creating r
   for (const model of ['-o evil', 'gpt 5', '--config=x']) {
     await assert.rejects(launch_discussion(f.home, { ...f.input, participants: { ...f.input.participants, Codex: { adapter: 'codex_cli', executable: process.execPath, model } } }, f.options), /model 只能是模型名称/);
   }
+  await assert.rejects(launch_discussion(f.home, { ...f.input, participants: { ...f.input.participants, Codex: { adapter: 'codex_cli', executable: process.execPath, effort: 'turbo' } } }, f.options), /effort 只能是 low/);
+  await assert.rejects(launch_discussion(f.home, { ...f.input, participants: { ...f.input.participants, Claude: { adapter: 'claude', executable: process.execPath, effort: 'ultra' } } }, f.options), /effort 只能是 low/);
   const agy = { adapter: 'antigravity_cli', executable: process.execPath };
   const agy_room = { ...f.input.room, host: 'Gemini', experts: { Gemini: 'cli', Claude: 'cli' } };
   await assert.rejects(launch_discussion(f.home, { ...f.input, room: agy_room, entry: 'conversation', current_session_id: 'agy-chat',

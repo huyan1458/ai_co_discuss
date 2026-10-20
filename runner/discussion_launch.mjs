@@ -11,7 +11,9 @@ import { acquire_lock, api, DiscussionStore, service_drafts, task_files, validat
 import { CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 
 const CLIENTS = { Codex: ['codex_cli', 'codex'], Claude: ['claude'], Gemini: ['antigravity_cli', 'antigravity'] };
-const PROFILE_FIELDS = ['adapter', 'executable', 'model', 'source_thread_id', 'ipc_directory', 'allowed_tools', 'cwd', 'project_name', 'project_id'];
+// Reasoning effort is a separate CLI argument only for Codex and Claude; agy encodes it in the model name.
+const EFFORT_LEVELS = { codex_cli: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], claude: ['low', 'medium', 'high', 'xhigh', 'max'] };
+const PROFILE_FIELDS = ['adapter', 'executable', 'model', 'effort', 'source_thread_id', 'ipc_directory', 'allowed_tools', 'cwd', 'project_name', 'project_id'];
 const MAX_MINUTES = 1440;
 const CONFIG_APPLY_TIMEOUT_MS = 6000;
 const CONFIG_APPLY_POLL_MS = 100;
@@ -61,7 +63,11 @@ function validate_profile(name, profile, binding = false) {
     } else if (typeof value !== 'string') throw new Error(`${name}.${key} 必须为文本`);
     if (['executable', 'cwd', 'ipc_directory'].includes(key) && value && !isAbsolute(value)) throw new Error(`${name}.${key} 必须为完整绝对路径`);
     // The model is passed as one CLI argument, so it must not look like a flag or contain spaces.
-    if (key === 'model' && value && !/^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]*$/.test(value)) throw new Error(`${name}.model 只能是模型名称，例如 gpt-5.5、opus 或 gemini-4-argon-high`);
+    if (key === 'model' && value && !/^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]*$/.test(value)) throw new Error(`${name}.model 只能是模型名称，例如 gpt-6-astra、opus 或 gemini-4-argon-high`);
+  }
+  if (profile.effort && !EFFORT_LEVELS[profile.adapter]?.includes(profile.effort)) {
+    throw new Error(EFFORT_LEVELS[profile.adapter] ? `${name}.effort 只能是 ${EFFORT_LEVELS[profile.adapter].join(' / ')}`
+      : `${name} 的思考档位不能单独设置；agy 请选择带档位的模型名，App 在软件内选择`);
   }
 }
 
@@ -105,7 +111,7 @@ function launch_config(home, input, room, directory, options) {
   const participants = {};
   for (const name of new Set([room.host, ...Object.keys(room.experts)])) {
     const profile = { ...defaults[name], ...input.participants?.[name] };
-    for (const field of ['cwd', 'model', 'project_name', 'project_id', 'project_access']) if (profile[field] === '') delete profile[field];
+    for (const field of ['cwd', 'model', 'effort', 'project_name', 'project_id', 'project_access']) if (profile[field] === '') delete profile[field];
     validate_profile(name, profile, true);
     if (!CLIENTS[name]?.includes(profile.adapter)) throw new Error(`请配置 ${name} 的 CLI / App 客户端`);
     if (profile.adapter !== 'antigravity' && (!existsSync(profile.executable || '') || !statSync(profile.executable).isFile()

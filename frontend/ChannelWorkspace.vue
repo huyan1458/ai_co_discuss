@@ -261,7 +261,7 @@ function resize_nav_by_key(event) {
           </form>
           <UTooltip v-if="view.tab === 'discussion'" text="只看提到当前身份的消息"><UButton icon="i-lucide-at-sign" :variant="view.mention_only ? 'soft' : 'ghost'" color="neutral" size="sm" class="channel-icon-button channel-mention-filter" :aria-pressed="view.mention_only" aria-label="提到我" :disabled="!room" @click="act('filter', { mention: !view.mention_only })" /></UTooltip>
           <UDropdownMenu :items="channel_actions" :disabled="!room" :content="{ align: 'end', sideOffset: 8 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" class="channel-icon-button" aria-label="频道菜单" :disabled="!room" /></UDropdownMenu>
-          <ProgressPanel v-if="room" :floating="!(show_rail && rail_inline)" :dockable="rail_inline && view.tab === 'discussion'" @dock="rail_collapsed = false" />
+          <ProgressPanel v-if="room" :dockable="rail_inline && view.tab === 'discussion'" :docked="show_rail" @toggle="rail_collapsed = !rail_collapsed" />
         </div>
         <UTooltip :text="info_label"><UButton icon="i-lucide-panel-right" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-panel-toggle channel-info-button" :aria-label="info_label" :disabled="!room && !(rail_inline && view.tab === 'discussion')" :aria-expanded="rail_inline && view.tab === 'discussion' ? show_rail : info_open" @click="toggle_info" /></UTooltip>
       </header>
