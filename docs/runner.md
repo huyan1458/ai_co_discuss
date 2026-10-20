@@ -38,6 +38,8 @@ codiscuss local stop
 
 网站数据库为服务目录下 `local/discuss.sqlite3`，配置、登记表和讨论执行数据也位于包外；服务目录位置及 `DISCUSS_SERVICE_HOME` 见下文。源码运行的 `data/discuss.sqlite3` 不自动迁移。网站仍在而讨论服务已停止时，显式 `local open/start` 会要求网站管理进程恢复服务；不会自动恢复已暂停的房间。`local status` 的 `running` 要求网站和讨论服务同时运行，`website_running` 单独表示网站状态。`local stop` 关闭它创建的网站，并停止它启动或恢复且仍由相同 PID 持有的讨论服务；预先运行或后来独立启动的服务会保留。停止服务会暂停其托管中的活动讨论，数据库保留。日志在 `local/website.log`、`local/supervisor.log` 与原 `service.log`。
 
+已安装后升级不要使用 `npx`（它会运行已安装的旧版本）：先 `codiscuss local stop`，再 `npm install --global --prefer-online ai_co_discuss@latest`，然后重跑 `codiscuss setup`；`--prefer-online` 避免本地缓存把 `latest` 解析为旧版本。
+
 卸载先 `codiscuss local stop`，按需要另用 `codiscuss service stop` 停止预先独立运行的服务，再执行 `npm uninstall --global ai_co_discuss`；自定义 prefix 时带回相同 `--prefix`。安装器不删除数据库、私有配置或已复制技能。
 
 维护者从源码生成安装包时先完成相关测试与网页构建，再 `npm pack --pack-destination <已存在的输出目录>`。包采用运行文件白名单，不含数据库、凭据、`.dev`、前端源码或 node_modules；新增运行文件需同步清单。`npm run test:install` 在临时 prefix/home 中验证真实 npx 安装、命令、技能和本机启停，不触发真实 AI。Windows 已通过隔离测试；macOS/Linux 启动与默认浏览器仍需实机核验。

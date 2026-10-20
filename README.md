@@ -29,9 +29,21 @@ npx --yes --package ai_co_discuss codiscuss install
 
 安装摘要为“配置待处理”时，处理列出的路径、旧配置或技能冲突后重跑 `codiscuss setup`；就绪后直接进入[发起第一场讨论](#发起第一场讨论)。已有配置和自定义技能会保留，数据存放在包外，升级或卸载包不会删除。安装就绪不代表真实 AI 已执行过任务。详细选项见 [npm 安装与本机配置](docs/runner.md#npm-安装与本机配置)。
 
+#### 升级与卸载
+
+已安装过时不要再用 `npx` 升级：npx 会直接运行已安装的旧版本。先停止本机网站，再强制从线上取最新版并重新配置：
+
+```sh
+codiscuss local stop
+npm install --global --prefer-online ai_co_discuss@latest
+codiscuss setup
+```
+
+`--prefer-online` 避免 npm 用本地缓存把 `latest` 解析成旧版本；完成后可用 `npm ls -g ai_co_discuss` 核对版本。卸载时先 `codiscuss local stop`，开启过登录自启的再运行 `codiscuss service autostart off`，最后 `npm uninstall --global ai_co_discuss`。讨论数据、软件配置和已复制的技能不会被删除，位置见 [卸载说明](docs/runner.md#npm-安装与本机配置)。
+
 ### 源码运行方式
 
-供开发者和未取得安装包的用户使用；已完成包安装可直接跳到下一节。需要 Git、Python 3.10+，使用自动接入还需 Node.js 24+ 和 npm。仓库包含构建好的网页。
+供开发者使用；已完成包安装可直接跳到下一节。需要 Git、Python 3.10+，使用自动接入还需 Node.js 24+ 和 npm。仓库包含构建好的网页。
 
 ```sh
 git clone https://github.com/huyan1458/ai_co_discuss.git
@@ -79,7 +91,7 @@ codiscuss local connect https://你的站点
 
 > 请使用 discuss-host 和 discuss-participant，在 http://127.0.0.1:8765 新建一场全自动讨论，议题是“议题与目标”，我的问题和背景是“用户原文”。由当前 Codex 会话主持，参与者为 Codex 和 Claude，最多 3 轮、60 分钟，到限暂停；沿用本机软件配置。
 
-将地址、议题和参与者替换为实际内容。AI 主持人使用已保存的软件配置完成建房与启动，**当前实际会话继续主持**；后续安排由本机服务交付，可在网页查看同一场讨论。无需用户手写启动 JSON。当前会话的 CLI / App 类型必须与配置对应；其他接入方式与配置细节见 [两个入口的启动配置](docs/runner.md#两种讨论入口与启动配置)。
+将地址、议题和参与者替换为实际内容。AI 主持人使用已保存的软件配置完成建房与启动，**当前实际会话继续主持**；后续安排由本机服务交付，可在网页查看同一场讨论。无需用户手写启动 JSON。当前会话的 CLI / App 类型必须与配置对应；agy 不能从自己的对话主持全自动讨论（只在讨论服务新建的会话中运行），请改用其他软件主持或从网页发起。其他接入方式与配置细节见 [两个入口的启动配置](docs/runner.md#两种讨论入口与启动配置)。
 
 #### 项目与日常使用
 
