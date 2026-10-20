@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { atomic_json, deliver_task, setup_sidecar, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
+import { atomic_json, deliver_task, remove_agy_projects, setup_sidecar, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
 
 const POLL_MS = 2000;
 const DELIVERY_RETRY_DELAYS_MS = [2000, 4000];
@@ -189,7 +189,7 @@ export class DiscussionRunner {
     try {
       const task = task_files(this.config, event, row.token, binding);
       invoked = true;
-      const result = await this.deliver(adapter, binding, { ...task,
+      const result = await this.deliver(adapter, binding, { ...task, room_title: this.room_title,
         on_binding: session => this.store.bind(event.participant, session),
         on_process: child => { this.children.add(child); child.once('close', () => this.children.delete(child)); },
         on_output: (path, chunk) => appendFileSync(path, chunk, { mode: 0o600 }),
@@ -256,12 +256,19 @@ export class DiscussionRunner {
   /** Process one bounded iteration without waking models for empty checks. */
   async tick() {
     this.store.context(this.config);
-    let room = await api(this.config, '');
+    let room;
+    try { room = await api(this.config, ''); }
+    catch (error) {
+      // Only a permanently deleted room drops its private agy projects; concluded or archived rooms keep them for later continuation.
+      if (/^HTTP 404: 房间不存在/.test(error.message)) remove_agy_projects(this.config.directory);
+      throw error;
+    }
     if (room.limits?.reached && (!room.limits.closing || room.limits.reason === 'time_limit') && room.runtime.status === 'running') {
       const generation = room.runtime.generation;
       room = await api(this.config, '/limits', { actor: '用户' });
       if (room.runtime.generation !== generation) this.stop_children();
     }
+    this.room_title = room.title;
     const run = room.runtime;
     if (run.run_id) this.store.scope(this.config, run.run_id);
     if (run.mode !== 'automatic' || run.status !== 'running' || run.expired) {

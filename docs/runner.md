@@ -227,7 +227,7 @@ agy 只用一套方法控制权限：
 
 原生工具权限不是操作系统沙箱；工具被拒绝时 agy 仍可能退出码为 0，验收以实际文件和网站结果为准。[原生权限文档](https://antigravity.google/docs/permissions?tab=cli)、[CLI 设置](https://antigravity.google/docs/settings?tab=cli)。
 
-独立讨论项目保存在 `~/.gemini/config/projects/<UUID>.json`，运行目录的 `agy-project-<参与者摘要>.json` 保存项目与实际会话绑定。所选原项目及用户全局配置不被改写；新项目只沿用资源目录，不继承原项目的命令放行。会话继续使用时保留这两份记录，不将生成的讨论会话手动迁入其他项目。缺失已登记的原生项目或会话绑定不匹配时拒绝交付。[项目权限继承](https://antigravity.google/docs/projects?tab=cli)。
+独立讨论项目保存在 `~/.gemini/config/projects/<UUID>.json`，运行目录的 `agy-project-<参与者摘要>.json` 保存项目与实际会话绑定。所选原项目及用户全局配置不被改写；新项目只沿用资源目录，不继承原项目的命令放行。项目名为 `CoDiscuss · 讨论标题 · 参与者`，便于在 Antigravity 项目列表中区分。会话继续使用时保留这两份记录，不将生成的讨论会话手动迁入其他项目；讨论收束或存档后仍保留，以便之后在同一会话中继续讨论。只有网站确认房间已被删除（`房间不存在`）时，接入程序才删除该房间建立的讨论项目与记录，不触碰用户自己的项目。缺失已登记的原生项目或会话绑定不匹配时拒绝交付。[项目权限继承](https://antigravity.google/docs/projects?tab=cli)。
 
 Codex 要求 CLI 0.163.0 或更新版本，使用 permission profiles 和本地 `app-server config/read`。配置检查先核对初始化回执中的版本；不支持或无法识别的版本拒绝交付。每次交付前只启动本地配置检查进程，不创建会话、不调用模型；发现已加载的旧 `sandbox_mode` / `sandbox_workspace_write` 或新配置未被采用就拒绝交付，避免旧设置覆盖本次限制。报错后需更新不支持的 CLI 或移除冲突的旧配置；接入程序不自动改写用户全局设置。首次与续接使用同一组权限参数，配置检查进程也随暂停或停止清理。[Codex 权限配置](https://learn.chatgpt.com/docs/permissions)
 

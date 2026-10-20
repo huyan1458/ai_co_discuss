@@ -1,7 +1,7 @@
 /** Actual software entrypoints; never call model service APIs. */
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
@@ -202,11 +202,28 @@ export function prepare_agy_project(config, binding, task, user_home = homedir()
   const current = read_json(path);
   if (record.project_id && current.id !== project_id) throw new Error('agy 讨论项目已丢失或不匹配，未交付讨论任务');
   mkdirSync(join(root, 'projects'), { recursive: true });
-  atomic_json(path, { ...current, id: project_id, name: `CoDiscuss · ${task.participant}`,
+  const name = ['CoDiscuss', task.room_title, task.participant].filter(Boolean).join(' · ');
+  atomic_json(path, { ...current, id: project_id, name,
     projectResources: { resources }, settings: {}, permissionGrants: { permissionGrants: grants, v2Migrated: true } });
   const saved = { project_id, session_id: record.session_id || '' };
   atomic_json(record_path, saved);
   return { project_id, bind: session_id => atomic_json(record_path, { ...saved, session_id }) };
+}
+
+/**
+ * Delete the agy projects this room created after the room itself is deleted; the user's own projects are never touched.
+ * @returns {number} How many project records were cleared.
+ */
+export function remove_agy_projects(directory, user_home = homedir()) {
+  if (!existsSync(directory)) return 0;
+  const records = readdirSync(directory).filter(name => /^agy-project-[a-f0-9]{64}\.json$/.test(name));
+  for (const file of records) {
+    const { project_id } = read_json(join(directory, file));
+    const path = join(user_home, '.gemini', 'config', 'projects', `${project_id}.json`);
+    if (/^[a-f0-9-]{36}$/.test(project_id || '') && read_json(path).id === project_id) rmSync(path);
+    rmSync(join(directory, file));
+  }
+  return records.length;
 }
 
 /**

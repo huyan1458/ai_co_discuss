@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
@@ -11,7 +12,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DiscussionRunner, DiscussionStore, load_config, service_drafts, task_files, validate_config } from '../runner/discussion_runner.mjs';
 import { DiscussionService, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
-import { agy_rule, antigravity_project, claude_exit_error, claude_rule_path, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
+import { agy_rule, antigravity_project, claude_exit_error, claude_rule_path, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
 
 /** Exercise the dispatcher against an HTTP contract without starting real software. */
 async function fixture(t) {
@@ -53,6 +54,29 @@ async function fixture(t) {
   const config = { site: `http://127.0.0.1:${server.address().port}`, room: 'room', token: 'private-token', directory, project: directory, participants: { Codex: { adapter: 'codex' } } };
   return { store, event, run, calls, config, limits, failures, reserve_tokens };
 }
+
+test('agy project records survive a concluded room and are dropped only after the room is deleted', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'discussion-deleted-'));
+  const room = { deleted: false };
+  const server = createServer((request, response) => {
+    response.statusCode = room.deleted ? 404 : 200;
+    response.setHeader('Content-Type', 'application/json');
+    response.end(JSON.stringify(room.deleted ? { error: '房间不存在' }
+      : { title: '已收束', phase: 'concluded', runtime: { mode: 'automatic', status: 'stopped' }, limits: {} }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const store = new DiscussionStore(directory);
+  t.after(async () => { store.close(); await new Promise(resolve => server.close(resolve)); rmSync(directory, { recursive: true, force: true }); });
+  const record = join(directory, `agy-project-${'a'.repeat(64)}.json`);
+  writeFileSync(record, JSON.stringify({ project_id: randomUUID(), session_id: 'kept-session' }));
+  const runner = new DiscussionRunner({ site: `http://127.0.0.1:${server.address().port}`, room: 'room', token: 'private-token',
+    directory, participants: { Gemini: { adapter: 'antigravity_cli' } } }, store, async () => assert.fail('must not deliver'));
+  assert.equal(await runner.tick(), false);
+  assert.ok(existsSync(record));
+  room.deleted = true;
+  await assert.rejects(runner.tick(), /房间不存在/);
+  assert.equal(existsSync(record), false);
+});
 
 test('replayed events and a restarted dispatcher do not deliver a second notification', async t => {
   const f = await fixture(t); let sent = 0;
@@ -511,10 +535,11 @@ test('agy separates native project permissions from the selected project and pre
   const original_path = join(projects, 'original.json');
   const original_text = JSON.stringify(original);
   writeFileSync(original_path, original_text);
-  const task = task_files(f.config, f.event, 'test-token', {});
+  const task = { ...task_files(f.config, f.event, 'test-token', {}), room_title: '架构评审' };
   const config = { project_id: 'original', project_access: 'read' };
   const first = prepare_agy_project(config, {}, task, user_home);
   const read = JSON.parse(readFileSync(join(projects, `${first.project_id}.json`), 'utf8'));
+  assert.equal(read.name, `CoDiscuss · 架构评审 · ${task.participant}`);
   const rule = path => `write_file(${resolve(path).replaceAll('\\', '/')})`;
   assert.deepEqual(read.projectResources, original.projectResources);
   assert.deepEqual(read.settings, {});
@@ -533,6 +558,11 @@ test('agy separates native project permissions from the selected project and pre
   assert.ok(write.deny.includes(rule(task.directory)));
   assert.equal(readFileSync(original_path, 'utf8'), original_text);
   assert.throws(() => prepare_agy_project(config, { session_id: 'other-session' }, task, user_home), /会话绑定不符/);
+  // Deleting the room removes only the projects it created.
+  assert.equal(remove_agy_projects(task.directory, user_home), 1);
+  assert.equal(existsSync(join(projects, `${first.project_id}.json`)), false);
+  assert.equal(readFileSync(original_path, 'utf8'), original_text);
+  assert.equal(remove_agy_projects(task.directory, user_home), 0);
 });
 
 test('agy refuses inherited shell bypasses before invoking a model and leaves settings unchanged', async t => {
