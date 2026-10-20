@@ -876,6 +876,35 @@ test("archive dialogs close before the response and never close a later dialog",
   assert.equal(context.mode.value, "create");
 });
 
+test("channel menus keep copy and export bound to the clicked room without navigating", () => {
+  const calls = [];
+  const events = [];
+  const current = { id: "current" };
+  const target = { id: "other room" };
+  const context = vm.createContext({
+    view: { value: { room: current, directory_pending: [], archive_pending: [], folders: [], backup_pending: false } },
+    pending: { value: "" }, manual_order: { value: true }, location: { origin: "https://discussion.example" },
+    act: (...args) => calls.push(args), emit: (...args) => events.push(args),
+  });
+  const directory = readFileSync(new URL("../frontend/ChannelDirectory.vue", import.meta.url), "utf8");
+  vm.runInContext(directory.match(/function actions\(room, index, folder_id, folder_room_count\) \{[\s\S]*?\n\}/)[0], context);
+  const items = context.actions(target, 0, null, 2).flat();
+  assert.equal(items.some(item => item.label === "编辑议题" || item.label === "刷新消息"), false);
+  items.find(item => item.label === "复制阅读入口").onSelect();
+  items.find(item => item.label === "导出对话").onSelect();
+  items.find(item => item.label === "重命名").onSelect();
+  assert.deepEqual(calls, [["copy", "https://discussion.example/r/other%20room"], ["backup", target.id]]);
+  assert.equal(events[0][0], "manage");
+  assert.equal(events[0][1].room, target);
+  assert.equal(context.view.value.room, current);
+  const current_items = context.actions(current, 1, null, 2).flat();
+  current_items.find(item => item.label === "编辑议题").onSelect();
+  current_items.find(item => item.label === "刷新消息").onSelect();
+  assert.equal(events[1][1].room, current);
+  assert.equal(events[1][1].action, "edit");
+  assert.deepEqual(calls.at(-1), ["refresh"]);
+});
+
 test("archive manager opening preserves the selected channel and draft", () => {
   const room = { id: "current" };
   const draft = { value: "保留未发送内容" };

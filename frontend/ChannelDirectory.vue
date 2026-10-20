@@ -52,10 +52,13 @@ function toggle_folder(id) {
 /** Keep actions targeted to the clicked channel without changing the open draft. */
 function actions(room, index, folder_id, folder_room_count) {
   const ordering = view.value.directory_pending.includes("room-order");
+  const current = room.id === view.value.room?.id;
   return [[
     { label: "重命名", icon: "i-lucide-pencil", disabled: view.value.directory_pending.includes(`rename:${room.id}`), onSelect: () => emit("manage", { room, action: "rename" }) },
+    ...(current ? [{ label: "编辑议题", icon: "i-lucide-pencil", onSelect: () => emit("manage", { room, action: "edit" }) }] : []),
+    { label: "复制阅读入口", icon: "i-lucide-link", onSelect: () => act("copy", `${location.origin}/r/${encodeURIComponent(room.id)}`) },
     { label: "导出对话", icon: "i-lucide-download", disabled: view.value.backup_pending || Boolean(pending.value), onSelect: () => act("backup", room.id) },
-  ], [
+  ], ...(current ? [[{ label: "刷新消息", icon: "i-lucide-refresh-cw", onSelect: () => act("refresh") }]] : []), [
     { label: "移出文件夹", icon: "i-lucide-folder-minus", disabled: !room.folder_id || Boolean(pending.value), onSelect: () => act("manage_channel", { id: room.id, action: "folder", folder_id: null }) },
     ...(view.value.folders || []).map((folder) => ({ label: `移至「${folder.name}」`, icon: "i-lucide-folder-input", disabled: folder.pending || room.folder_id === folder.id || Boolean(pending.value), onSelect: () => act("manage_channel", { id: room.id, action: "folder", folder_id: folder.id }) })),
   ], [
@@ -94,14 +97,13 @@ function actions(room, index, folder_id, folder_room_count) {
       <UContextMenu v-for="(room, index) in folder.rooms" :key="room.id" :items="actions(room, index, room.folder_id || null, folder.rooms.length)" :ui="{ content: 'channel-menu channel-topic-menu' }">
         <div class="channel-room-row" :class="{ active: room.id === view.room?.id }" :data-drag-room="room.id">
           <button class="channel-room-grip" data-drag-handle :aria-label="`拖动 ${room.title}`" title="拖动排序；上下方向键移动" :disabled="Boolean(pending)" @pointerdown="bridge.start_drag($event)" @keydown.up.prevent="act('move_channel', { id: room.id, direction: -1, folder_id: room.folder_id || null })" @keydown.down.prevent="act('move_channel', { id: room.id, direction: 1, folder_id: room.folder_id || null })"><UIcon name="i-lucide-grip-vertical" /></button>
-          <button class="channel-room-select" data-drag-title :title="room.title" :aria-label="`${room.title} ${room.message_count}`" :aria-current="room.id === view.room?.id ? 'page' : undefined" @pointerdown="!pending && bridge.start_drag($event)" @click="emit('select', room.id)"><span>{{ room.title }}</span></button>
+          <button class="channel-room-select" data-drag-title :title="room.title" :aria-label="room.title" :aria-current="room.id === view.room?.id ? 'page' : undefined" @pointerdown="!pending && bridge.start_drag($event)" @click="emit('select', room.id)"><span>{{ room.title }}</span></button>
           <div class="channel-room-actions">
             <UTooltip :text="room.archived ? '恢复频道' : '存档频道'" :ui="{ content: 'channel-topic-tooltip' }">
               <UButton :icon="room.archived ? 'i-lucide-archive-restore' : 'i-lucide-archive'" :aria-label="`${room.archived ? '恢复' : '存档'} ${room.title}`" size="xs" color="neutral" variant="ghost" :disabled="Boolean(pending) || view.archive_pending.includes(room.id)" @click="emit('manage', { room, action: room.archived ? 'restore' : 'archive' })" />
             </UTooltip>
             <UDropdownMenu :items="actions(room, index, room.folder_id || null, folder.rooms.length)" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :aria-label="`管理 ${room.title}`" title="更多操作" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
           </div>
-          <small class="channel-directory-count" aria-hidden="true">{{ room.message_count }}</small>
         </div>
       </UContextMenu>
        </div>

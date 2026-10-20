@@ -102,7 +102,7 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .channel-archive-toggle { margin: 10px 8px 0; color: #a0a8b6; font-size: var(--channel-nav-text); font-weight: 400; }
 .channel-directory-error { margin: 8px 16px; color: var(--ui-error); font-size: var(--channel-nav-text); line-height: 1.5; overflow-wrap: anywhere; }
 .channel-room-list { padding: 0 8px; }
-.channel-room-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto max-content; align-items: center; padding-right: 8px; border-radius: 8px; position: relative; color: #a8afbc; margin-bottom: 2px; }
+.channel-room-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; padding-right: 8px; border-radius: 8px; position: relative; color: #a8afbc; margin-bottom: 2px; }
 .channel-room-row:hover { background: #ffffff08; }
 .channel-room-row.active { color: #f1f2f5; background: #ffffff12; }
 .channel-room-row.drag-source, .channel-folder-section.drag-source { opacity: .45; }
@@ -202,9 +202,6 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .progress-panel-anchor { position: relative; flex-shrink: 0; }
 .progress-chip { display: inline-flex; align-items: center; gap: 7px; height: 29px; padding: 0 9px 0 10px; border: 1px solid var(--ui-border); border-radius: 15px; background: var(--ui-bg-muted); color: var(--ui-text); font-size: 12px; white-space: nowrap; }
 .progress-chip:hover { border-color: var(--ui-border-accented); }
-/* While the docked rail is open the chip reads as a pressed toggle. */
-.progress-chip.is-docked { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
-.progress-chip > [class*="icon"] { width: 14px; height: 14px; color: var(--ui-text-muted); }
 .progress-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ui-text-dimmed); }
 .progress-chip.is-primary .progress-dot { background: var(--channel-accent); }
 .progress-chip.is-warning .progress-dot { background: #e5a50a; }
@@ -648,7 +645,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-header-context { display: none; }
 }
 @media (max-width: 980px) {
-  .progress-chip .progress-chip-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .progress-chip-rounds { display: none; }
   .progress-chip { padding: 0 8px; }
   .channel-workspace-heading { padding-inline: 14px; }
   .channel-header { padding-inline: 16px; gap: 8px; }
@@ -675,7 +672,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-search { flex: 1; min-width: 0; }
   .channel-search-input { width: 100%; }
   .channel-header-actions > button:first-of-type { margin-left: auto; }
-  .progress-chip .progress-chip-text { position: static; width: auto; height: auto; overflow: visible; clip-path: none; }
+  .progress-chip-rounds { display: inline; }
   .channel-tabbar { display: flex; height: 36px; padding-inline: 8px; }
   .channel-tabs [data-slot="list"] { padding-block: 3px; }
   .channel-tabs [data-slot="trigger"] { height: 28px; }

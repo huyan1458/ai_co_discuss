@@ -82,17 +82,6 @@ const participants = computed(() => [
   { name: "用户", mode: "发起与协助" },
   ...Object.entries(room.value?.experts || {}).map(([name, mode]) => ({ name, mode: mode === "cli" ? "CLI · 读写" : "在线 AI · 只读" })),
 ]);
-const channel_actions = computed(() => [[
-  { label: "重命名", icon: "i-lucide-pencil", disabled: view.value.directory_pending.includes(`rename:${room.value?.id}`), onSelect: () => manage_room({ room: room.value, action: "rename" }) },
-  { label: "编辑议题", icon: "i-lucide-pencil", onSelect: () => { modal.value = "edit"; } },
-  { label: "复制阅读入口", icon: "i-lucide-link", onSelect: () => act("copy_reading") },
-  { label: view.value.backup_pending ? "正在备份…" : "备份当前讨论", icon: "i-lucide-download", disabled: view.value.backup_pending || !!pending.value, onSelect: () => act("backup") },
-], [
-  { label: "刷新消息", icon: "i-lucide-refresh-cw", onSelect: () => act("refresh") },
-], [
-  { label: room.value?.archived ? "恢复频道" : "存档频道", icon: room.value?.archived ? "i-lucide-archive-restore" : "i-lucide-archive", disabled: view.value.archive_pending.includes(room.value?.id), onSelect: () => manage_room({ room: room.value, action: room.value.archived ? "restore" : "archive" }) },
-  { label: "永久删除", icon: "i-lucide-trash-2", disabled: view.value.directory_pending.includes(`rename:${room.value?.id}`), onSelect: () => manage_room({ room: room.value, action: "delete" }) },
-]]);
 
 /** Open management for the exact sidebar item while leaving its draft untouched. */
 function manage_room({ room, action }) { managed_room.value = room; nav_open.value = false; modal.value = action; }
@@ -261,8 +250,7 @@ function resize_nav_by_key(event) {
             </UInput>
           </form>
           <UTooltip v-if="view.tab === 'discussion'" text="只看提到当前身份的消息"><UButton icon="i-lucide-at-sign" :variant="view.mention_only ? 'soft' : 'ghost'" color="neutral" size="sm" class="channel-icon-button channel-mention-filter" :aria-pressed="view.mention_only" aria-label="提到我" :disabled="!room" @click="act('filter', { mention: !view.mention_only })" /></UTooltip>
-          <UDropdownMenu :items="channel_actions" :disabled="!room" :content="{ align: 'end', sideOffset: 8 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" class="channel-icon-button" aria-label="频道菜单" :disabled="!room" /></UDropdownMenu>
-          <ProgressPanel v-if="room" :dockable="rail_inline && view.tab === 'discussion'" :docked="show_rail" @toggle="rail_collapsed = !rail_collapsed" />
+          <ProgressPanel v-if="room && !(show_rail && rail_inline)" />
         </div>
         <UTooltip :text="info_label"><UButton icon="i-lucide-panel-right" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-panel-toggle channel-info-button" :aria-label="info_label" :disabled="!room && !(rail_inline && view.tab === 'discussion')" :aria-expanded="rail_inline && view.tab === 'discussion' ? show_rail : info_open" @click="toggle_info" /></UTooltip>
       </header>
@@ -312,7 +300,10 @@ function resize_nav_by_key(event) {
     </aside>
 
     <USlideover v-model:open="nav_open" side="left" title="讨论频道" description="共议 · AI CoDiscuss" :ui="{ content: 'channel-navigation-drawer', body: 'channel-drawer-body' }">
-      <template #body><ChannelDirectory @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archives="open_archives" /><UButton block icon="i-lucide-settings-2" color="neutral" variant="ghost" label="外观设置" @click="nav_open = false; modal = 'settings'" /></template>
+      <template #body>
+        <ChannelDirectory @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archives="open_archives" />
+        <UButton block icon="i-lucide-settings-2" color="neutral" variant="ghost" label="外观设置" @click="nav_open = false; modal = 'settings'" />
+      </template>
     </USlideover>
     <USlideover v-model:open="info_open" title="频道资料" description="目标、背景与参与方式" :ui="{ content: 'channel-details', body: 'space-y-6' }">
       <template #body><template v-if="room">
