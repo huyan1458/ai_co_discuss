@@ -14,6 +14,7 @@ const managed_room = ref(null);
 const target_folder = ref(null);
 const detail_id = ref(null);
 const nav_open = ref(false);
+const tools_open = ref(true);
 const info_open = ref(false);
 const summary = field("state-input");
 const brief = field("brief-input");
@@ -235,8 +236,8 @@ function resize_nav_by_key(event) {
       </header>
       <div class="channel-sidebar-content">
         <ChannelDirectory @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archives="open_archives" />
-        <div class="channel-directory-heading channel-tools-heading"><span><UIcon name="i-lucide-chevron-down" />频道工具</span></div>
-        <UNavigationMenu :items="view_links" orientation="vertical" color="neutral" variant="pill" class="channel-directory channel-view-links" aria-label="频道视图" :ui="{ link: 'channel-link', linkLabel: 'channel-link-label', linkLeadingIcon: 'channel-link-icon' }" />
+        <div class="channel-directory-heading channel-tools-heading"><button type="button" class="channel-section-toggle" :aria-expanded="tools_open" @click="tools_open = !tools_open"><UIcon :name="tools_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />频道工具</button></div>
+        <UNavigationMenu v-if="tools_open" :items="view_links" orientation="vertical" color="neutral" variant="pill" class="channel-directory channel-view-links" aria-label="频道视图" :ui="{ link: 'channel-link', linkLabel: 'channel-link-label', linkLeadingIcon: 'channel-link-icon' }" />
       </div>
       <footer class="channel-sidebar-footer">
         <UAvatar :src="bridge.identities[author]?.icon" :text="bridge.identities[author]?.initials" :alt="bridge.display_name(author)" size="sm" class="channel-avatar" :class="bridge.identities[author]?.style" />

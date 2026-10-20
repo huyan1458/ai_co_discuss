@@ -432,6 +432,7 @@ function reset_preview() {
 /** Reflow changes message heights; keep tail following and the current tick in sync. */
 async function refresh_layout() {
   reset_preview();
+  measure_topic();
   await follow_messages();
   await reveal_reading_position();
 }
@@ -518,7 +519,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
     <div ref="transcript" v-memo="[message_groups, message_round_labels, active_message, expanded_answers.size, room.title, view.query, view.mention_only, topic_key, topic_expanded, topic_overflows]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
       <div v-if="!view.query && !view.mention_only" class="channel-message-group channel-topic-group"><section class="channel-message channel-topic-card" :class="{ 'is-expanded': topic_expanded }" aria-label="议题">
         <header class="channel-topic-heading"><span class="channel-topic-eyebrow"><UIcon name="i-lucide-target" />议题</span><h2>{{ room.title }}</h2><UButton icon="i-lucide-pencil" label="编辑" color="neutral" variant="ghost" size="xs" @click="emit('edit')" /></header>
-        <div ref="topic_body" class="channel-topic-body">
+        <div ref="topic_body" class="channel-topic-body" :class="{ 'is-clamped': topic_overflows && !topic_expanded }">
         <div v-if="topic.request" class="channel-topic-section channel-topic-request"><h3>{{ topic.request.label }}</h3><p class="channel-topic-text">{{ topic.request.text }}</p></div>
         <div v-if="topic.goal" class="channel-topic-section"><h3>目标</h3><p class="channel-topic-text">{{ topic.goal }}</p></div>
         <div v-if="topic.boundaries" class="channel-topic-section"><h3>边界</h3><p class="channel-topic-text">{{ topic.boundaries }}</p></div>
