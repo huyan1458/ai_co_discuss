@@ -1,5 +1,13 @@
+<script>
+/** Format a minute count as hours and remaining minutes for the form and its summary. */
+export function format_duration(minutes) {
+  const hours = Math.floor(minutes / 60), remainder = minutes % 60;
+  return [hours && `${hours} 小时`, remainder && `${remainder} 分钟`].filter(Boolean).join(" ") || "0 分钟";
+}
+</script>
+
 <script setup>
-import { onBeforeUnmount, onMounted, reactive, watch } from "vue";
+import { onBeforeUnmount, reactive, watch } from "vue";
 
 const props = defineProps({ rounds: { type: Number, default: 3 }, minutes: { type: Number, default: 60 } });
 const emit = defineEmits(["update:rounds", "update:minutes"]);
@@ -10,55 +18,69 @@ const VISIBLE_RADIUS = 3;
 const PHYSICS_STEP = 1 / 240;
 const REST_DISTANCE = 0.001;
 const REST_SPEED = 0.01;
-// "smooth, magnetic": unit mass, 1.8 Hz and critical damping (Feel.words).
-const FREE_DAMPING = 2 * Math.PI * 1.8 * 2;
-// A broad 1.1 Hz well catches a coast; a 7 Hz well seats the nearest integer.
-const REACH_FREQUENCY = 1.1;
-const CLICK_FREQUENCY = 7;
-const CLICK_RADIUS = 1 / 3;
+// Feel.words("loose"): unit mass, 1.6 Hz, zeta 0.3; coast retains velocity for about 166 ms.
+const FREE_DAMPING = 4 * Math.PI * 1.6 * 0.3;
+// Feel.words("precise"): 4.5 Hz, critical damping; capture without oscillating around a row.
+const SNAP_FREQUENCY = 4.5;
+const CAPTURE_DISTANCE = 0.5;
 // A 6 Hz critically damped hand follows dragging; 8 Hz walls contain end travel.
 const HAND_FREQUENCY = 6;
 const WALL_FREQUENCY = 8;
 const TAP_DISTANCE = 4;
+const fields = reactive([
+  { key: "rounds", label: "轮次上限", selected: 3, unlimited: false, open: false },
+  { key: "minutes", label: "时长上限", selected: 60, unlimited: false, open: false },
+]);
 const wheels = reactive([
-  { key: "rounds", label: "轮次上限", unit: "轮", limit: 100, step: 1, initial: 3 },
-  { key: "minutes", label: "时长上限", unit: "分钟", limit: 1440, step: 5, initial: 60 },
-].map((wheel) => ({ ...wheel, values: [], max: 0, x: 0, v: 0, selected: wheel.initial,
-  unlimited: false, open: false, editing: false, draft: String(wheel.initial), target: null, hand: null, pointer: null })));
-let frame_id = 0, previous_time = 0, reduced_motion = false, motion_query;
-const clamp = (next, max) => Math.min(max, Math.max(0, next));
-const nearest = (wheel) => clamp(Math.round(wheel.x), wheel.max);
+  { key: "rounds", field: "rounds", label: "轮次上限", unit: "轮", min: 1, max: 100, initial: 3 },
+  { key: "hours", field: "minutes", label: "小时", unit: "小时", min: 0, max: 24, initial: 1 },
+  { key: "minutes", field: "minutes", label: "分钟", unit: "分钟", min: 0, max: 59, initial: 0 },
+].map((wheel) => ({ ...wheel, x: wheel.initial, v: 0, selected: wheel.initial,
+  editing: false, draft: String(wheel.initial), target: null, hand: null, pointer: null })));
+let frame_id = 0, previous_time = 0;
+const clamp = (next, max, min = 0) => Math.min(max, Math.max(min, next));
+const nearest = (wheel) => clamp(Math.round(wheel.x), wheel.max, wheel.min);
+const field_wheels = (field) => wheels.filter((wheel) => wheel.field === field.key);
+const wheel_field = (wheel) => fields.find((field) => field.key === wheel.field);
+const field_text = (field) => field.key === "rounds" ? `${field.selected} 轮` : format_duration(field.selected);
 const spring = (distance, velocity, frequency) => -((2 * Math.PI * frequency) ** 2) * distance - 4 * Math.PI * frequency * velocity;
 
-/** Retain exact input values alongside ordinary one-round or five-minute stops. */
+/** Load a finite value into one column without leaving residual motion. */
 function load_value(wheel, value) {
-  const next = Math.max(1, clamp(Math.round(value), wheel.limit));
-  wheel.values = [...new Set([1, next, ...Array.from({ length: wheel.limit / wheel.step }, (_, index) => (index + 1) * wheel.step)])].sort((left, right) => left - right);
-  wheel.max = wheel.values.length - 1;
-  rest(wheel, wheel.values.indexOf(next));
-  wheel.selected = next;
-  wheel.draft = String(next);
+  rest(wheel, value);
+  wheel.selected = wheel.x;
+  wheel.draft = String(wheel.selected);
+}
+
+/** Keep finite duration within 1 minute–24 hours while retaining separate columns. */
+function sync_minutes() {
+  const hours = wheels[1], minutes = wheels[2];
+  minutes.min = hours.selected === 0 ? 1 : 0;
+  minutes.max = hours.selected === 24 ? 0 : 59;
+  if (minutes.selected < minutes.min || minutes.selected > minutes.max) load_value(minutes, minutes.selected);
 }
 
 /** Keep the last finite value when an independent unlimited option is toggled. */
-function set_unlimited(wheel, unlimited) {
-  set_open(wheel, false);
-  wheel.unlimited = unlimited;
-  emit(`update:${wheel.key}`, unlimited ? 0 : wheel.selected);
+function set_unlimited(field, unlimited) {
+  set_open(field, false);
+  field.unlimited = unlimited;
+  emit(`update:${field.key}`, unlimited ? 0 : field.selected);
 }
 
 /** Settle a dismissed popover and allow only one field to be edited at a time. */
-function set_open(wheel, open) {
-  if (open && wheel.unlimited) return;
-  for (const current of wheels) {
-    if (current.open && (current !== wheel || !open)) {
-      finish_edit(current);
-      rest(current, current.target ?? nearest(current));
-      publish(current);
+function set_open(field, open) {
+  if (open && field.unlimited) return;
+  for (const current of fields) {
+    if (current.open && (current !== field || !open)) {
+      for (const wheel of field_wheels(current)) {
+        finish_edit(wheel);
+        rest(wheel, wheel.target ?? nearest(wheel));
+        publish(wheel);
+      }
       current.open = false;
     }
   }
-  wheel.open = open;
+  field.open = open;
 }
 
 /** Freeze at the visible value before exposing a native exact-value input. */
@@ -76,28 +98,27 @@ function finish_edit(wheel) {
   const next = Number(wheel.draft);
   wheel.editing = false;
   if (wheel.draft.trim() && Number.isFinite(next)) {
-    load_value(wheel, next);
-    emit(`update:${wheel.key}`, wheel.selected);
+    rest(wheel, next);
+    publish(wheel);
   }
   wheel.draft = String(wheel.selected);
 }
 
-/** Calculate the acceleration of a unit mass in the hand, end walls or integer wells. */
+/** Apply hand/end springs, free viscous coasting, then a spring to the predicted stop. */
 function acceleration(wheel, position, velocity) {
   if (wheel.hand !== null) return spring(position - wheel.hand, velocity, HAND_FREQUENCY);
-  if (position < 0 || position > wheel.max) return spring(position - clamp(position, wheel.max), velocity, WALL_FREQUENCY);
-  if (wheel.target !== null) return spring(position - wheel.target, velocity, CLICK_FREQUENCY);
-  const distance = position - Math.round(position);
-  const proximity = Math.max(0, 1 - Math.abs(distance) / CLICK_RADIUS);
-  const attraction = (2 * Math.PI * REACH_FREQUENCY) ** 2
-    + (2 * Math.PI * CLICK_FREQUENCY) ** 2 * proximity ** 2 * (3 - 2 * proximity);
-  return -attraction * distance - FREE_DAMPING * velocity;
+  if (position < wheel.min || position > wheel.max) return spring(position - clamp(position, wheel.max, wheel.min), velocity, WALL_FREQUENCY);
+  if (wheel.target !== null) return spring(position - wheel.target, velocity, SNAP_FREQUENCY);
+  return -FREE_DAMPING * velocity;
 }
 
 /** Integrate the force field with RK4 so input velocity survives release and interruption. */
 function advance(wheel, elapsed) {
   const steps = Math.ceil(elapsed / PHYSICS_STEP), step = elapsed / steps;
   for (let index = 0; index < steps; index++) {
+    if (wheel.hand === null && wheel.target === null && Math.abs(wheel.v) / FREE_DAMPING <= CAPTURE_DISTANCE) {
+      wheel.target = clamp(Math.round(wheel.x + wheel.v / FREE_DAMPING), wheel.max, wheel.min);
+    }
     const position = wheel.x, velocity = wheel.v;
     const first = acceleration(wheel, position, velocity);
     const second_v = velocity + first * step / 2;
@@ -113,16 +134,18 @@ function advance(wheel, elapsed) {
 
 /** Publish the visible stop without changing the other field or its unlimited state. */
 function publish(wheel) {
-  const next = wheel.values[nearest(wheel)];
-  if (wheel.unlimited || next === wheel.selected) return;
+  const next = nearest(wheel), field = wheel_field(wheel);
+  if (field.unlimited || next === wheel.selected) return;
   wheel.selected = next;
   wheel.draft = String(next);
-  emit(`update:${wheel.key}`, next);
+  if (field.key === "minutes") sync_minutes();
+  field.selected = field.key === "rounds" ? next : wheels[1].selected * 60 + wheels[2].selected;
+  emit(`update:${field.key}`, field.selected);
 }
 
-/** Stop at an exact row for reduced motion, external updates or form submission. */
+/** Stop at an exact row for external updates or form submission. */
 function rest(wheel, next) {
-  wheel.x = clamp(Math.round(next), wheel.max);
+  wheel.x = clamp(Math.round(next), wheel.max, wheel.min);
   wheel.v = 0;
   wheel.target = null;
   wheel.hand = null;
@@ -136,7 +159,7 @@ function animate(time) {
   frame_id = 0;
   let moving = false;
   for (const wheel of wheels) {
-    if (wheel.unlimited || wheel.editing) continue;
+    if (wheel_field(wheel).unlimited || wheel.editing) continue;
     advance(wheel, elapsed);
     const settled = Math.abs(wheel.x - (wheel.target ?? nearest(wheel))) < REST_DISTANCE && Math.abs(wheel.v) < REST_SPEED;
     if (!wheel.pointer && settled) rest(wheel, nearest(wheel));
@@ -148,21 +171,18 @@ function animate(time) {
 
 /** Wake the shared animation loop without restarting an existing trajectory. */
 function wake() {
-  if (frame_id || reduced_motion) return;
+  if (frame_id) return;
   previous_time = performance.now();
   frame_id = requestAnimationFrame(animate);
 }
 
 /** Select a definite row with a spring; keyboard commands accumulate while in flight. */
 function choose(wheel, next) {
-  if (wheel.unlimited) return;
+  if (wheel_field(wheel).unlimited) return;
   finish_edit(wheel);
   wheel.hand = null;
-  wheel.target = clamp(Math.round(next), wheel.max);
-  if (reduced_motion) {
-    rest(wheel, wheel.target);
-    publish(wheel);
-  } else wake();
+  wheel.target = clamp(Math.round(next), wheel.max, wheel.min);
+  wake();
 }
 
 /** Support every value with arrows, larger page steps and the two range boundaries. */
@@ -174,19 +194,18 @@ function keydown(wheel, event) {
     return;
   }
   const current = wheel.target ?? nearest(wheel);
-  const choices = { ArrowUp: current - 1, ArrowDown: current + 1, PageUp: current - 5, PageDown: current + 5, Home: 0, End: wheel.max };
+  const choices = { ArrowUp: current - 1, ArrowDown: current + 1, PageUp: current - 5, PageDown: current + 5, Home: wheel.min, End: wheel.max };
   if (!(event.key in choices)) return;
   event.preventDefault();
   choose(wheel, choices[event.key]);
 }
 
-/** Convert mouse-wheel travel to an impulse; reduced motion uses discrete rows. */
+/** Convert mouse-wheel travel to an impulse; each row of input projects one row of travel. */
 function scroll(wheel, event) {
   const pixels = event.deltaY * (event.deltaMode === 1 ? ROW_HEIGHT : event.deltaMode === 2 ? ROW_HEIGHT * 5 : 1);
-  if (!pixels || wheel.pointer || wheel.unlimited) return;
+  if (!pixels || wheel.pointer || wheel_field(wheel).unlimited) return;
   finish_edit(wheel);
   event.currentTarget.querySelector(".limit-wheel").focus({ preventScroll: true });
-  if (reduced_motion) return choose(wheel, nearest(wheel) + Math.sign(pixels));
   wheel.target = null;
   wheel.v += pixels / ROW_HEIGHT * FREE_DAMPING;
   wake();
@@ -211,11 +230,7 @@ function drag(wheel, event) {
   if (wheel.pointer?.id !== event.pointerId) return;
   const distance = wheel.pointer.y - event.clientY;
   wheel.pointer.travel = Math.max(wheel.pointer.travel, Math.abs(distance));
-  wheel.hand = clamp(wheel.pointer.x + distance / ROW_HEIGHT, wheel.max);
-  if (reduced_motion) {
-    wheel.x = wheel.hand;
-    publish(wheel);
-  }
+  wheel.hand = clamp(wheel.pointer.x + distance / ROW_HEIGHT, wheel.max, wheel.min);
 }
 
 /** Release the hand, keeping body velocity; taps select the row under the pointer. */
@@ -233,9 +248,6 @@ function release(wheel, event) {
     }
     const offset = distance / WHEEL_RADIUS;
     choose(wheel, wheel.x + Math.asin(Math.max(-1, Math.min(1, offset))) / ROW_ANGLE);
-  } else if (reduced_motion) {
-    rest(wheel, nearest(wheel));
-    publish(wheel);
   } else wake();
 }
 
@@ -243,11 +255,11 @@ function release(wheel, event) {
 function rows(wheel) {
   const center = Math.round(wheel.x);
   return Array.from({ length: VISIBLE_RADIUS * 2 + 1 }, (_, index) => center + index - VISIBLE_RADIUS)
-    .filter((index) => index >= 0 && index <= wheel.max)
+    .filter((index) => index >= wheel.min && index <= wheel.max)
     .map((index) => {
       const offset = index - wheel.x, angle = offset * ROW_ANGLE;
-      return { index, text: wheel.values[index],
-        style: { transform: `translateY(${Math.sin(angle) * WHEEL_RADIUS}px) rotateX(${-angle * 180 / Math.PI}deg)`,
+      return { index, text: index,
+        style: { "--wheel-y": `${Math.sin(angle) * WHEEL_RADIUS}px`, "--wheel-angle": `${-angle * 180 / Math.PI}deg`,
           opacity: Math.max(0, Math.cos(angle)) ** 2 } };
     });
 }
@@ -263,69 +275,63 @@ function settle() {
   frame_id = 0;
 }
 
-/** Follow system motion preferences, including changes while the form is open. */
-function motion_changed(event) {
-  reduced_motion = event.matches;
-  if (reduced_motion) settle();
-}
-
 watch(() => [props.rounds, props.minutes], (values) => {
   values.forEach((next, index) => {
-    const wheel = wheels[index];
-    if (wheel.values.length && next === (wheel.unlimited ? 0 : wheel.selected)) return;
-    wheel.unlimited = next === 0;
-    wheel.editing = false;
-    if (wheel.unlimited) wheel.open = false;
-    load_value(wheel, next || wheel.selected);
+    const field = fields[index];
+    if (next === (field.unlimited ? 0 : field.selected)) return;
+    field.unlimited = next === 0;
+    if (field.unlimited) field.open = false;
+    field.selected = clamp(Math.round(next || field.selected), index ? 1440 : 100, 1);
+    field_wheels(field).forEach((wheel) => { wheel.editing = false; });
+    if (index === 0) load_value(wheels[0], field.selected);
+    else {
+      load_value(wheels[1], Math.floor(field.selected / 60));
+      sync_minutes();
+      load_value(wheels[2], field.selected % 60);
+    }
   });
 }, { immediate: true });
-onMounted(() => {
-  motion_query = window.matchMedia("(prefers-reduced-motion: reduce)");
-  motion_changed(motion_query);
-  motion_query.addEventListener("change", motion_changed);
-});
-onBeforeUnmount(() => {
-  cancelAnimationFrame(frame_id);
-  motion_query?.removeEventListener("change", motion_changed);
-});
+onBeforeUnmount(() => cancelAnimationFrame(frame_id));
 defineExpose({ settle });
 </script>
 
 <template>
   <div class="limit-picker" role="group" aria-label="讨论轮次和时长">
-    <div v-for="wheel in wheels" :key="wheel.key" class="limit-field">
+    <div v-for="field in fields" :key="field.key" class="limit-field">
       <div class="limit-field-heading">
-        <label :for="`limit-trigger-${wheel.key}`">{{ wheel.label }}</label>
-        <label class="limit-unlimited"><input type="checkbox" :checked="wheel.unlimited" :aria-label="`不限${wheel.key === 'rounds' ? '轮次' : '时长'}`" @change="set_unlimited(wheel, $event.target.checked)">不限</label>
+        <label :for="`limit-trigger-${field.key}`">{{ field.label }}</label>
+        <label class="limit-unlimited"><input type="checkbox" :checked="field.unlimited" :aria-label="`不限${field.key === 'rounds' ? '轮次' : '时长'}`" @change="set_unlimited(field, $event.target.checked)">不限</label>
       </div>
-      <UPopover :open="wheel.open" :content="{ align: wheel.key === 'rounds' ? 'start' : 'end', sideOffset: 6, collisionPadding: 12 }"
-        :ui="{ content: 'limit-popover-content' }" @update:open="set_open(wheel, $event)">
-        <button :id="`limit-trigger-${wheel.key}`" type="button" class="limit-trigger" :disabled="wheel.unlimited"
-          :aria-label="`${wheel.label}：${wheel.unlimited ? '不限' : `${wheel.selected} ${wheel.unit}`}`">
-          <span v-if="wheel.unlimited">不限{{ wheel.key === "rounds" ? "轮次" : "时长" }}</span>
-          <span v-else>{{ wheel.selected }} <small>{{ wheel.unit }}</small></span>
+      <UPopover :open="field.open" :content="{ align: field.key === 'rounds' ? 'start' : 'end', sideOffset: 6, collisionPadding: 12 }"
+        :ui="{ content: `limit-popover-content ${field.key === 'minutes' ? 'limit-duration-content' : ''}` }" @update:open="set_open(field, $event)">
+        <button :id="`limit-trigger-${field.key}`" type="button" class="limit-trigger" :disabled="field.unlimited"
+          :aria-label="`${field.label}：${field.unlimited ? '不限' : field_text(field)}`">
+          <span v-if="field.unlimited">不限{{ field.key === "rounds" ? "轮次" : "时长" }}</span>
+          <span v-else class="limit-trigger-value"><span v-for="part in field_text(field).match(/\d+ \S+/g)" :key="part">{{ part }}</span></span>
           <UIcon name="i-lucide-chevrons-up-down" />
         </button>
         <template #content>
           <div class="limit-editor">
-            <div class="limit-editor-heading"><span>{{ wheel.label }}</span><button type="button" class="limit-close" :aria-label="`关闭${wheel.label}选择`" @click="set_open(wheel, false)"><UIcon name="i-lucide-x" /></button></div>
-            <div class="limit-track" :class="{ 'is-editing': wheel.editing }"
+            <div class="limit-editor-heading"><span>{{ field.label }}</span><button type="button" class="limit-close" :aria-label="`关闭${field.label}选择`" @click="set_open(field, false)"><UIcon name="i-lucide-x" /></button></div>
+            <div class="limit-columns">
+            <div v-for="wheel in field_wheels(field)" :key="wheel.key" class="limit-track" :class="{ 'is-editing': wheel.editing }"
                 @keydown="keydown(wheel, $event)" @wheel.prevent="scroll(wheel, $event)"
                 @pointerdown="grab(wheel, $event)" @pointermove="drag(wheel, $event)"
                 @pointerup="release(wheel, $event)" @pointercancel="release(wheel, $event)" @lostpointercapture="release(wheel, $event)">
               <div class="limit-wheel" role="spinbutton" tabindex="0" :aria-label="`滚轮选择${wheel.label}`"
-                :aria-valuemin="1" :aria-valuemax="wheel.limit" :aria-valuenow="wheel.selected" :aria-valuetext="`${wheel.selected} ${wheel.unit}`">
+                :aria-valuemin="wheel.min" :aria-valuemax="wheel.max" :aria-valuenow="wheel.selected" :aria-valuetext="`${wheel.selected} ${wheel.unit}`">
                 <div class="limit-selection" aria-hidden="true"></div>
                 <div class="limit-wheel-rows" aria-hidden="true">
                   <span v-for="row in rows(wheel)" :key="row.index" class="limit-wheel-row" :class="{ 'is-current': row.index === nearest(wheel) }" :style="row.style">{{ row.text }}</span>
                 </div>
               </div>
               <div class="limit-exact-value">
-                <input type="number" inputmode="numeric" :min="1" :max="wheel.limit" step="1" :value="wheel.draft"
+                <input type="number" inputmode="numeric" :min="wheel.min" :max="wheel.max" step="1" :value="wheel.draft"
                   :aria-label="`输入${wheel.label}（${wheel.unit}）`" @focus="begin_edit(wheel, $event)" @input="wheel.draft = $event.target.value"
-                  @blur="finish_edit(wheel)" @keydown.enter.stop.prevent="finish_edit(wheel); set_open(wheel, false)">
+                  @blur="finish_edit(wheel)" @keydown.enter.stop.prevent="finish_edit(wheel); set_open(field, false)">
                 <span aria-hidden="true">{{ wheel.unit }}</span>
               </div>
+            </div>
             </div>
           </div>
         </template>
@@ -341,13 +347,16 @@ defineExpose({ settle });
 .limit-unlimited { display: inline-flex; align-items: center; gap: 5px; color: var(--ui-text-muted); cursor: pointer; }
 .limit-unlimited input { width: 13px; height: 13px; margin: 0; accent-color: var(--channel-accent); }
 .limit-trigger { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 38px; padding: 7px 12px; border: 1px solid var(--ui-border); border-radius: 7px; background: var(--ui-bg-muted); color: var(--ui-text-highlighted); font-size: 13px; font-variant-numeric: tabular-nums; text-align: left; }
-.limit-trigger small { margin-left: 3px; color: var(--ui-text-muted); font-size: 12px; }
-.limit-trigger > [class*="icon"] { width: 13px; height: 13px; color: var(--ui-text-muted); }
+.limit-trigger-value { display: flex; flex-wrap: wrap; gap: 0 5px; min-width: 0; }
+.limit-trigger-value > span { white-space: nowrap; }
+.limit-trigger > [class*="icon"] { flex-shrink: 0; width: 13px; height: 13px; color: var(--ui-text-muted); }
 .limit-trigger[data-state="open"] { border-color: var(--channel-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--channel-accent) 12%, transparent); }
 .limit-trigger:disabled { color: var(--ui-text-muted); }
 .limit-trigger:disabled > [class*="icon"] { opacity: .35; }
 :global(.limit-popover-content) { width: max(170px, var(--reka-popover-trigger-width)); max-width: calc(100vw - 24px); z-index: 60; border: 1px solid var(--ui-border); border-radius: 9px; background: var(--ui-bg); box-shadow: var(--channel-shadow-float); animation: none !important; }
+:global(.limit-duration-content) { width: max(240px, var(--reka-popover-trigger-width)); }
 .limit-editor { padding: 10px; }
+.limit-columns { display: grid; grid-auto-columns: minmax(0, 1fr); grid-auto-flow: column; gap: 8px; }
 .limit-editor-heading { display: flex; align-items: center; justify-content: space-between; color: var(--ui-text-muted); font-size: 11px; }
 .limit-close { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border-radius: 4px; }
 .limit-close:hover { background: var(--ui-bg-elevated); }
@@ -358,14 +367,19 @@ defineExpose({ settle });
 .limit-wheel { position: relative; height: 144px; min-width: 0; overflow: hidden; outline: none; }
 .limit-selection { position: absolute; top: 50%; left: 0; right: 0; height: 32px; transform: translateY(-50%); border-radius: 5px; background: color-mix(in srgb, var(--channel-accent) 10%, var(--ui-bg)); pointer-events: none; }
 .limit-wheel-rows { position: absolute; inset: 0; perspective: 500px; mask-image: linear-gradient(transparent, #000 22%, #000 78%, transparent); }
-.limit-wheel-row { position: absolute; top: calc(50% - 16px); left: calc(50% - 46px); width: 58px; height: 32px; line-height: 32px; text-align: center; color: var(--ui-text-toned); font-size: 18px; font-weight: 400; font-variant-numeric: tabular-nums; backface-visibility: hidden; }
+.limit-wheel-row { position: absolute; top: calc(50% - 16px); left: calc(50% - 42px); width: 50px; height: 32px; line-height: 32px; text-align: center; color: var(--ui-text-toned); font-size: 18px; font-weight: 400; font-variant-numeric: tabular-nums; backface-visibility: hidden; transform: translateY(var(--wheel-y)) rotateX(var(--wheel-angle)); }
 .limit-wheel-row.is-current { color: var(--ui-text-highlighted); }
-.limit-exact-value { position: absolute; top: calc(50% - 16px); left: calc(50% - 46px); display: flex; align-items: center; gap: 4px; height: 32px; pointer-events: none; }
-.limit-exact-value input { width: 58px; min-width: 0; padding: 0; border: 0; appearance: textfield; background: transparent; color: transparent; caret-color: transparent; text-align: center; font-size: 18px; font-variant-numeric: tabular-nums; }
+.limit-exact-value { position: absolute; top: calc(50% - 16px); left: calc(50% - 42px); display: flex; align-items: center; gap: 4px; height: 32px; pointer-events: none; }
+.limit-exact-value input { width: 50px; min-width: 0; padding: 0; border: 0; appearance: textfield; background: transparent; color: transparent; caret-color: transparent; text-align: center; font-size: 18px; font-variant-numeric: tabular-nums; }
 .limit-exact-value input::-webkit-inner-spin-button, .limit-exact-value input::-webkit-outer-spin-button { margin: 0; appearance: none; }
 .is-editing .limit-exact-value input { color: var(--ui-text-highlighted); caret-color: auto; pointer-events: auto; user-select: text; }
 .is-editing .limit-wheel-row.is-current { opacity: 0 !important; }
 .limit-exact-value > span { color: var(--ui-text-muted); font-size: 11px; pointer-events: none; }
+/* Keep the requested direct-manipulation inertia; reduce only decorative 3D tilt. */
+@media (prefers-reduced-motion: reduce) {
+  .limit-wheel-rows { perspective: none; }
+  .limit-wheel-row { transform: translateY(var(--wheel-y)); }
+}
 @media (max-width: 480px) {
   .limit-picker { gap: 12px; }
   .limit-trigger { padding-inline: 10px; }

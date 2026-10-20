@@ -2,7 +2,7 @@
 /** New-discussion form: the user states the topic in their own words; the AI host drafts goal, background and boundaries. */
 import { computed, inject, onMounted, ref, watch } from "vue";
 import LaunchSettings from "./LaunchSettings.vue";
-import LimitPicker from "./LimitPicker.vue";
+import LimitPicker, { format_duration } from "./LimitPicker.vue";
 
 const props = defineProps({ targetFolder: { type: Object, default: null } });
 const emit = defineEmits(["submit", "cancel"]);
@@ -79,7 +79,7 @@ function submit() {
 
 const limit_rule = computed(() => {
   const rounds = Number(value("limit-max_rounds")), minutes = Number(value("limit-max_minutes"));
-  const limits = [rounds && `${rounds} 轮`, minutes && `${minutes} 分钟`].filter(Boolean);
+  const limits = [rounds && `${rounds} 轮`, minutes && format_duration(minutes)].filter(Boolean);
   if (!limits.length) return "不设轮次和时长上限。";
   const action = value("limit-on_limit") === "summarize" ? "由主持人总结" : "暂停";
   return `最多 ${limits.join(" 或 ")}，${limits.length === 2 ? "先到则" : "到限后"}${action}。`;
@@ -88,7 +88,7 @@ const limit_rule = computed(() => {
 const summary = computed(() => {
   const names = Object.keys(selected.value);
   const rounds = value("limit-max_rounds"), minutes = value("limit-max_minutes");
-  const limits = [rounds && Number(rounds) ? `${rounds} 轮` : "不限轮次", minutes && Number(minutes) ? `${minutes} 分钟` : "不限时长"].join(" / ");
+  const limits = [rounds && Number(rounds) ? `${rounds} 轮` : "不限轮次", minutes && Number(minutes) ? format_duration(Number(minutes)) : "不限时长"].join(" / ");
   return [host.value ? `${bridge.display_name(host.value)} 主持` : "尚未选择主持人", names.length ? `${names.join("、")} 参与` : "尚未选择专家",
     automatic.value ? "全自动" : "手动推进", limits].join(" · ");
 });

@@ -124,7 +124,7 @@ Python 在一个只读事务快照中查询；D1 使用同一个 batch 事务读
 | `ChannelDirectory.vue` | 频道、文件夹和存档管理 |
 | `ChannelDiscussion.vue` | 议题卡、消息流、原文导航和输入区 |
 | `TopicPanel.vue`、`WorkspaceDialogs.vue` | 话题资料、主持操作、接入步骤及编辑对话框 |
-| `CreateDiscussion.vue`、`LimitPicker.vue`、`LaunchSettings.vue` | 新建讨论表单及本机启动配置；轮次和时长是独立字段，按需展开浮层滚轮，选择即时生效，支持精确输入、各自不限和到限条件预览；整块滚轮（含中间数字）支持拖动与鼠标滚动，以弹簧、阻尼和档位吸附保留释放惯性，轻点中间数字进入输入，支持键盘及减少动态效果 |
+| `CreateDiscussion.vue`、`LimitPicker.vue`、`LaunchSettings.vue` | 新建讨论表单及本机启动配置；轮次和时长是独立字段，按需展开浮层滚轮，选择即时生效，支持精确输入、各自不限和到限条件预览；整块滚轮（含中间数字）支持拖动与鼠标滚动，先阻尼滑行再吸附预计停点，轻点中间数字进入输入；时长浮层分小时/分钟两列，收起与摘要共用时长格式；支持键盘，减少动态效果时保留操作惯性并去掉三维翻转 |
 | `ProgressBoard.vue`、`ProgressPanel.vue` | 共享进度看板及抽屉容器 |
 | `use-discussion.js` | 将 `web/app.js` 的共享控制器状态接入 Vue |
 | `theme.css`、`channel.css` | 组件主题、深浅配色与响应式布局 |
