@@ -1,17 +1,16 @@
 /** npm bootstrap and per-user setup; never logs in or starts an AI conversation. */
 import { spawn, spawnSync } from 'node:child_process';
-import { accessSync, constants, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { accessSync, constants, copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
-import { agy_rule, atomic_json } from './discussion_adapters.mjs';
+import { atomic_json } from './discussion_adapters.mjs';
 import { launch_settings, save_launch_settings } from './discussion_launch.mjs';
 import { service_home } from './discussion_service.mjs';
 import { install_skills } from './discussion_skills.mjs';
 import { ask, checkbox_prompt, intro, outro, pad, short_path, spinner, step, styled, text_width, tone } from './discussion_tui.mjs';
-export { agy_rule } from './discussion_adapters.mjs';
 export { checkbox_prompt } from './discussion_tui.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -198,62 +197,44 @@ async function choose_profile(client, current, options) {
   return { client: client.name, status: 'configured', effective: detected };
 }
 
-/** Allow answer files only; service runtime data never belongs to the managed write rule. */
-export function agy_rules(home) {
-  // Verified with agy 1.4.2 on Windows: the rule matches forward slashes with the drive letter kept.
-  const drafts = join(resolve(home), 'drafts').replaceAll('\\', '/');
-  return [agy_rule(), `write_file(${drafts})`];
-}
-
-/** Ask once before adding the rules; --yes counts as consent, other noninteractive runs only report. */
-async function agy_consent(path, rules, options) {
-  if (options.yes) return true;
-  if (!process.stdin.isTTY) return false;
-  const answer = await ask(`允许 Gemini（agy）在全自动讨论中执行讨论命令并写讨论草稿？将向 ${path} 的 permissions.allow 追加 ${rules.length} 条只匹配讨论命令与草稿目录的规则`, ' [Y/n]');
-  return !['n', 'no', '否'].includes(answer.trim().toLowerCase());
-}
-
-/** Keep the installer-managed allow rules current, never touching other settings or user rules. */
-export async function allow_agy_command(home, user_home, options) {
-  const path = join(user_home, ...AGY_SETTINGS);
+/**
+ * Remove global agy rules that earlier versions added; agy permissions now live only in each discussion project.
+ * Only rules recorded by the installer are removed, after a backup; other settings and user rules stay untouched.
+ */
+export function remove_legacy_agy_rules(home, user_home) {
   const record = join(home, AGY_RULE_RECORD);
-  const rules = agy_rules(home);
+  if (!existsSync(record)) return null;
+  const path = join(user_home, ...AGY_SETTINGS);
+  const saved = JSON.parse(readFileSync(record, 'utf8'));
+  const legacy = saved.rules || (saved.rule ? [saved.rule] : []);
   let settings = {};
   try { if (existsSync(path)) settings = JSON.parse(readFileSync(path, 'utf8')); }
-  catch { return { status: 'invalid', path, rules }; }
+  catch { return { client: 'Gemini', status: 'invalid', path }; }
   const allow = settings.permissions?.allow ?? [];
-  if (!Array.isArray(allow)) return { status: 'invalid', path, rules };
-  const saved = existsSync(record) ? JSON.parse(readFileSync(record, 'utf8')) : {};
-  const previous = saved.rules || (saved.rule ? [saved.rule] : []);
-  const stale = previous.some(rule => !rules.includes(rule) && allow.includes(rule));
-  mkdirSync(home, { recursive: true });
-  if (rules.every(rule => allow.includes(rule)) && !stale) {
-    if (previous.join('\n') !== rules.join('\n')) atomic_json(record, { rules });
-    return { status: 'unchanged', path, rules };
+  if (!Array.isArray(allow)) return { client: 'Gemini', status: 'invalid', path };
+  const next = allow.filter(rule => !legacy.includes(rule));
+  if (next.length !== allow.length) {
+    copyFileSync(path, join(home, AGY_SETTINGS_BACKUP));
+    atomic_json(path, { ...settings, permissions: { ...settings.permissions, allow: next } });
   }
-  if (!await agy_consent(path, rules, options)) return { status: options.yes || process.stdin.isTTY ? 'declined' : 'pending', path, rules };
-  mkdirSync(dirname(path), { recursive: true });
-  if (existsSync(path)) copyFileSync(path, join(home, AGY_SETTINGS_BACKUP));
-  const next = [...allow.filter(item => !previous.includes(item) && !rules.includes(item)), ...rules];
-  atomic_json(path, { ...settings, permissions: { ...settings.permissions, allow: next } });
-  atomic_json(record, { rules });
-  return { status: 'allowed', path, rules };
+  rmSync(record);
+  return { client: 'Gemini', status: next.length !== allow.length ? 'removed' : 'unchanged', path };
 }
 
 /** Save the selected effective profiles and copy complete skills without overwriting edits. */
 async function configure_clients(home, selected, options, existing) {
   const participants = { ...existing };
-  const skills = [], profiles = [], permissions = [];
+  const skills = [], profiles = [];
   const user_home = resolve(options['skills-home'] || homedir());
   for (const client of selected) {
     const profile = await choose_profile(client, participants[client.name], options);
     profiles.push(profile);
     if (profile.status === 'configured') participants[client.name] = { ...participants[client.name], ...profile.effective };
     skills.push({ client: client.name, results: install_skills(join(user_home, ...client.skills)) });
-    if (client.key === 'antigravity') permissions.push({ client: client.name, ...await allow_agy_command(home, user_home, options) });
   }
   save_launch_settings(home, { participants });
-  return { skills, profiles, permissions };
+  const legacy = remove_legacy_agy_rules(home, user_home);
+  return { skills, profiles, permissions: legacy ? [legacy] : [] };
 }
 
 /** Exclude npm exec's temporary command wrappers when checking persistent availability. */
@@ -292,8 +273,7 @@ function setup_issues(result) {
     if (skill.status === 'conflict') issues.push(`${group.client} 技能冲突，已保留 ${skill.path}；请核对并移走需替换的旧副本，再运行 setup。`);
   }
   for (const permission of result.permissions) {
-    if (permission.status === 'invalid') issues.push(`${permission.client} 设置文件无法解析，未写入讨论命令规则：${permission.path}；修复后重新运行 setup。`);
-    if (['declined', 'pending'].includes(permission.status)) issues.push(`${permission.client} 未放行讨论命令，全自动讨论会被拦截；运行 codiscuss setup --clients antigravity --yes 授权。`);
+    if (permission.status === 'invalid') issues.push(`${permission.client} 设置文件无法解析，未能移除旧版全局放行规则：${permission.path}；修复后重新运行 setup，否则全自动讨论会拒绝交付给 agy。`);
   }
   if (result.command.status !== 'ready') issues.push(result.command.action);
   return issues;
@@ -345,7 +325,7 @@ function report_setup(result, options = {}) {
     ? `${profile.client}：仅安装技能，可手动参与，尚不支持全自动接入。`
     : `${profile.client}：${profile.status === 'configured' ? 'CLI 已配置' : '沿用已有配置'}（${profile.effective.adapter} / ${profile.effective.executable || '未设置路径'}）`);
   for (const permission of result.permissions) {
-    if (['allowed', 'unchanged'].includes(permission.status)) lines.push(`${permission.client}：已放行讨论命令（${permission.path}）`);
+    if (permission.status === 'removed') lines.push(`${permission.client}：已移除旧版全局放行规则（${permission.path}）`);
   }
   for (const group of result.skills) lines.push(`${group.client} Skill：${group.results.filter(skill => skill.status !== 'conflict').length}/${group.results.length} 份文件就绪，目录 ${dirname(group.results[0].path)}`);
   if (result.command.path) lines.push(`持久命令：${result.command.path}（${result.command.status}）`);
@@ -368,7 +348,7 @@ function report_styled(result, options) {
   for (const profile of result.profiles) rows.push(profile.status === 'manual' ? [profile.client, '仅安装技能，可手动参与', '尚不支持全自动接入']
     : [profile.client, `${profile.status === 'configured' ? 'CLI 已配置' : '沿用已有配置'} · ${profile.effective.adapter}`, short_path(profile.effective.executable) || '未设置路径']);
   for (const permission of result.permissions) {
-    if (['allowed', 'unchanged'].includes(permission.status)) rows.push([permission.client, '已放行讨论命令', short_path(permission.path)]);
+    if (permission.status === 'removed') rows.push([permission.client, '已移除旧版全局放行规则', short_path(permission.path)]);
   }
   if (result.skills.length) rows.push(['技能', result.skills.map(group => `${group.client} ${group.results.filter(skill => skill.status !== 'conflict').length}/${group.results.length}`).join(' · '), 'discuss-host · discuss-participant · discuss-report']);
   if (result.command.path) rows.push(['命令', `codiscuss ${tone.dim(`(${result.command.status})`)}`, short_path(result.command.path)]);

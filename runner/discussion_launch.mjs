@@ -111,6 +111,8 @@ function launch_config(home, input, room, directory, options) {
     const cwd = profile.cwd || input.cwd;
     if (cwd && (!existsSync(cwd) || !statSync(cwd).isDirectory())) throw new Error(`${name}：工作目录不存在或不是文件夹，请核对本次目录配置`);
     if (input.entry === 'conversation' && name === room.host) profile.session_id = input.current_session_id;
+    // agy runs only in sessions this tool creates, so its native discussion project always applies.
+    if (profile.adapter === 'antigravity_cli' && profile.session_id) throw new Error(`${name}：agy 不能绑定已有会话或从当前 agy 对话主持全自动讨论；请从网页或其他软件发起，agy 会由讨论服务新建会话`);
     participants[name] = profile;
   }
   return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, participants,

@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import { install_skills } from '../runner/discussion_skills.mjs';
-import { agy_rule, agy_rules, allow_agy_command, check_command, checkbox_prompt, detect_clients, detect_python } from '../runner/discussion_setup.mjs';
+import { agy_rule } from '../runner/discussion_adapters.mjs';
+import { check_command, checkbox_prompt, detect_clients, detect_python, remove_legacy_agy_rules } from '../runner/discussion_setup.mjs';
 
 const CLI = fileURLToPath(new URL('../runner/codiscuss.mjs', import.meta.url));
 
@@ -37,28 +38,28 @@ test('agy rule matches only codiscuss website subcommands without separators', (
   }
 });
 
-test('agy setup narrows the old launch write rule to drafts and leaves user settings untouched', async () => {
+test('setup removes only the global agy rules earlier versions recorded, keeping user settings', () => {
   const directory = mkdtempSync(join(tmpdir(), 'codiscuss-agy-'));
   try {
     const home = join(directory, 'service');
     const path = join(directory, '.gemini', 'antigravity-cli', 'settings.json');
-    assert.equal((await allow_agy_command(home, directory, {})).status, 'pending');
-    assert.equal(existsSync(path), false);
+    assert.equal(remove_legacy_agy_rules(home, directory), null);
     mkdirSync(join(directory, '.gemini', 'antigravity-cli'), { recursive: true });
     mkdirSync(home, { recursive: true });
-    const previous = ['command(old-managed)', `write_file(${join(home, 'launches').replaceAll('\\', '/')})`];
-    writeFileSync(join(home, 'agy-permission.json'), JSON.stringify({ rules: previous }));
+    const legacy = [agy_rule(), `write_file(${join(home, 'drafts').replaceAll('\\', '/')})`];
+    writeFileSync(join(home, 'agy-permission.json'), JSON.stringify({ rules: legacy }));
     writeFileSync(path, JSON.stringify({ trustedWorkspaces: 'C:/Users/A',
-      permissions: { allow: ['command(git)', ...previous], deny: ['command(sudo)'] } }));
-    assert.equal((await allow_agy_command(home, directory, { yes: true })).status, 'allowed');
-    assert.equal((await allow_agy_command(home, directory, {})).status, 'unchanged');
+      permissions: { allow: ['command(git)', ...legacy], deny: ['command(sudo)'] } }));
+    assert.equal(remove_legacy_agy_rules(home, directory).status, 'removed');
     const settings = JSON.parse(readFileSync(path, 'utf8'));
-    assert.equal(settings.trustedWorkspaces, 'C:/Users/A'); assert.deepEqual(settings.permissions.deny, ['command(sudo)']);
-    assert.deepEqual(settings.permissions.allow, ['command(git)', ...agy_rules(home)]);
-    assert.equal(agy_rules(home)[1], `write_file(${join(home, 'drafts').replaceAll('\\', '/')})`);
+    assert.equal(settings.trustedWorkspaces, 'C:/Users/A');
+    assert.deepEqual(settings.permissions, { allow: ['command(git)'], deny: ['command(sudo)'] });
     assert.ok(existsSync(join(home, 'agy-settings.backup.json')));
+    assert.equal(existsSync(join(home, 'agy-permission.json')), false);
+    assert.equal(remove_legacy_agy_rules(home, directory), null);
+    writeFileSync(join(home, 'agy-permission.json'), JSON.stringify({ rules: legacy }));
     writeFileSync(path, '{ broken');
-    assert.equal((await allow_agy_command(home, directory, { yes: true })).status, 'invalid');
+    assert.equal(remove_legacy_agy_rules(home, directory).status, 'invalid');
     assert.equal(readFileSync(path, 'utf8'), '{ broken');
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

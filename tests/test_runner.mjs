@@ -376,13 +376,19 @@ test(`${adapter} starts headlessly, binds emitted identity and preserves UTF-8 p
     assert.equal(call.args[call.args.indexOf('--output-format') + 1], 'stream-json');
     assert.equal(call.args[call.args.indexOf('--print-timeout') + 1], '0');
     assert.match(call.args[call.args.indexOf('--project') + 1], /^[a-f0-9-]{36}$/);
-    assert.equal(f.result.permission_enforcement, 'native');
+    assert.equal(call.args[call.args.indexOf('--mode') + 1], 'accept-edits');
   }
   assert.match(readFileSync(join(f.directory, `${adapter}-event-1.log`), 'utf8'), /中文/);
 });
 
 test(`${adapter} resumes only the bound conversation and honors its configured cwd`, async t => {
   const project = mkdtempSync(join(tmpdir(), 'discussion-cwd-')); t.after(() => rmSync(project, { recursive: true, force: true }));
+  if (adapter === 'antigravity_cli') {
+    // agy runs only in sessions this tool created; an external conversation cannot take the discussion project.
+    await assert.rejects(cli_delivery_fixture(t, adapter, { binding: { session_id: 'actual-cli-session' }, config: { cwd: project } }),
+      error => error.delivery_status === 'not_sent' && /本工具新建/.test(error.message));
+    return;
+  }
   const f = await cli_delivery_fixture(t, adapter, { binding: { session_id: 'actual-cli-session' },
     config: { cwd: project, project_access: 'write' } });
   const call = f.calls[0];
@@ -395,11 +401,6 @@ test(`${adapter} resumes only the bound conversation and honors its configured c
     assert.ok(call.args.findIndex(arg => arg.startsWith('default_permissions=')) > call.args.indexOf('resume'));
     assert.match(call.args.find(arg => arg.startsWith('permissions.')), /extends=":workspace"/);
     assert.equal(call.args[call.args.indexOf('--cd') + 1], project);
-  }
-  else {
-    assert.equal(call.args[call.args.indexOf('--mode') + 1], 'accept-edits');
-    assert.equal(f.result.permission_enforcement, 'prompt');
-    assert.equal(existsSync(join(f.user_home, '.gemini')), false);
   }
 });
 
@@ -419,6 +420,8 @@ test(`${adapter} keeps the project cwd when project access is read-only`, async 
 });
 
 test(`${adapter} never replaces a bound identity when the CLI returns another session`, async t => {
+  // agy refuses unmanaged bindings before spawning; its managed binding mismatch is covered by the project test.
+  if (adapter === 'antigravity_cli') return;
   const f = await cli_delivery_fixture(t, adapter, { binding: { session_id: 'original-session' } });
   assert.match(f.errors[0], /会话 ID 与绑定不符/); assert.equal(f.exits, 0);
   assert.deepEqual(f.bindings, []);
@@ -544,6 +547,8 @@ test('agy refuses inherited shell bypasses before invoking a model and leaves se
     [{ toolPermission: 'always-proceed' }, {}], [{ toolPermission: 'proceed-in-sandbox' }, {}],
     [{ permissions: { allow: ['command(*)'] } }, {}],
     [{}, { userSettings: { globalPermissionGrants: { allow: ['unsandboxed_command(*)'] } } }],
+    [{}, { userSettings: { globalPermissionGrants: { allow: ['unsandboxed(*)'] } } }],
+    [{ permissions: { allow: [agy_rule()] } }, {}],
   ]) {
     writeFileSync(cli_path, JSON.stringify(cli)); writeFileSync(shared_path, JSON.stringify(shared));
     await assert.rejects(deliver_task({ adapter: 'antigravity_cli' }, {}, task,
@@ -551,7 +556,7 @@ test('agy refuses inherited shell bypasses before invoking a model and leaves se
     assert.deepEqual(JSON.parse(readFileSync(cli_path, 'utf8')), cli);
     assert.deepEqual(JSON.parse(readFileSync(shared_path, 'utf8')), shared);
   }
-  writeFileSync(cli_path, JSON.stringify({ toolPermission: 'request-review', permissions: { allow: [agy_rule()] } }));
+  writeFileSync(cli_path, JSON.stringify({ toolPermission: 'request-review', permissions: { allow: ['read_file(*)'] } }));
   writeFileSync(shared_path, JSON.stringify({ userSettings: { globalPermissionGrants: { allow: ['read_url(https://example.com)'] } } }));
   assert.ok(prepare_agy_project({}, {}, task, user_home).project_id);
 });
@@ -1001,7 +1006,7 @@ test('unified help separates website run controls from the resident service', as
   const setup_help = await run_service_cli(env, 'setup', '--help');
   assert.equal(setup_help.code, 0); assert.match(setup_help.output, /--no-start/);
   assert.match(setup_help.output, /2=配置待处理/);
-  assert.match(setup_help.output, /JSON，中文摘要写入 stderr/);
+  assert.match(setup_help.output, /中文摘要写入 stderr；输出被重定向或加 --json 时结果 JSON 写入 stdout/);
   assert.match(setup_help.output, /codex,claude,antigravity,cursor/);
   assert.match(setup_help.output, /Cursor 当前只安装技能/);
   const local_help = await run_service_cli(env, 'local', '--help');

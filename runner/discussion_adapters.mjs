@@ -144,14 +144,14 @@ export function agy_rule() {
 /** Read optional native settings; malformed settings must not silently disable a permission check. */
 function read_json(path) { return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {}; }
 
-/** Native headless review blocks unapproved shell commands; inherited command grants could bypass it. */
+/** Native headless review blocks unapproved shell commands; any global command grant could bypass the project rules. */
 function check_agy_shell(user_home) {
   const cli = read_json(join(user_home, '.gemini', 'antigravity-cli', 'settings.json'));
   const shared = read_json(join(user_home, '.gemini', 'config', 'config.json'));
   const grants = [...(cli.permissions?.allow || []), ...(shared.userSettings?.globalPermissionGrants?.allow || [])];
   if ((cli.toolPermission && cli.toolPermission !== 'request-review')
-    || grants.some(rule => rule !== agy_rule() && (/^(?:unsandboxed_)?command\(/.test(rule) || rule === '*'))) {
-    throw new Error('agy 全局命令放行或 toolPermission 会绕过本场文件限制；请保留 request-review，重跑 setup 更新旧管理规则并移除额外命令放行，未交付讨论任务');
+    || grants.some(rule => rule === '*' || /^(?:command|unsandboxed|unsandboxed_command)\(/.test(rule))) {
+    throw new Error('agy 全局设置放行了命令或改了 toolPermission，会绕过讨论项目的权限；请移除全局 command / unsandboxed 放行并保留 request-review（本工具旧版写入的规则可运行 codiscuss setup 清理），未交付讨论任务');
   }
 }
 
@@ -183,12 +183,14 @@ function agy_project_grants(config, task, resources, user_home) {
   deny: [...new Set(protected_paths.map(write_rule)), 'mcp(*)'] };
 }
 
-/** Keep a private native project per participant; existing external conversations retain their original project. */
+/** Run agy only inside a private native project this tool created; external conversations keep their own project, so they are refused. */
 export function prepare_agy_project(config, binding, task, user_home = homedir()) {
   const key = createHash('sha256').update(task.participant).digest('hex');
   const record_path = join(task.directory, `agy-project-${key}.json`);
   const record = read_json(record_path);
-  if (binding.session_id && !record.project_id) return null;
+  if (binding.session_id && !record.project_id) {
+    throw new Error('agy 只在本工具新建的讨论会话中自动执行；该会话不是本工具创建的，无法套用讨论项目权限，未交付讨论任务');
+  }
   if (record.session_id && record.session_id !== binding.session_id) throw new Error('agy 项目记录与会话绑定不符，未交付讨论任务');
   check_agy_shell(user_home);
   const root = join(user_home, '.gemini', 'config');
@@ -328,11 +330,10 @@ function cli_invocation(config, binding, task, user_home) {
   const project = prepare_agy_project(config, binding, task, user_home);
   const args = ['--output-format', 'stream-json', '--print-timeout', '0', '--add-dir', task.directory,
     '--add-dir', task.draft_directory, '--add-dir', task.skills_directory];
-  if (project || (project_directory(config) && config.project_access === 'write')) args.push('--mode', 'accept-edits');
-  if (project) args.push('--project', project.project_id);
+  args.push('--mode', 'accept-edits', '--project', project.project_id);
   if (binding.session_id) args.push('--conversation', binding.session_id);
   args.push('-p', task.prompt);
-  return { args, project, permission_enforcement: project ? 'native' : 'prompt' };
+  return { args, project };
 }
 
 /** Persist an emitted identity before the agent reads its execution credential file. */
@@ -428,8 +429,7 @@ async function cli_delivery(config, binding, task, spawn_process, user_home) {
   });
   child.stdin.on('error', error => { if (error.code !== 'EPIPE') task.on_failure(error.message); });
   child.stdin.end(invocation.input);
-  return { session_id: state.session_id, status: 'accepted',
-    ...(invocation.permission_enforcement ? { permission_enforcement: invocation.permission_enforcement } : {}) };
+  return { session_id: state.session_id, status: 'accepted' };
 }
 
 /** Queue one immutable request for the official App-managed Sidecar. */

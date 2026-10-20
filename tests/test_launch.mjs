@@ -328,6 +328,12 @@ test('missing software, current identity or finite limits fail before creating r
   await assert.rejects(launch_discussion(f.home, { ...f.input, cwd: './project' }, f.options), /绝对路径/);
   await assert.rejects(launch_discussion(f.home, { ...f.input, participants: { ...f.input.participants, Codex: { adapter: 'codex_cli', executable: f.directory } } }, f.options), /可执行文件/);
   await assert.rejects(launch_discussion(f.home, { ...f.input, participants: { ...f.input.participants, Claude: { adapter: 'claude', executable: join(f.directory, 'missing.exe') } } }, f.options), /可执行文件/);
+  const agy = { adapter: 'antigravity_cli', executable: process.execPath };
+  const agy_room = { ...f.input.room, host: 'Gemini', experts: { Gemini: 'cli', Claude: 'cli' } };
+  await assert.rejects(launch_discussion(f.home, { ...f.input, room: agy_room, entry: 'conversation', current_session_id: 'agy-chat',
+    participants: { ...f.input.participants, Gemini: agy } }, f.options), /agy 不能绑定已有会话/);
+  await assert.rejects(launch_discussion(f.home, { ...f.input, room: agy_room,
+    participants: { ...f.input.participants, Gemini: { ...agy, session_id: 'known-session' } } }, f.options), /agy 不能绑定已有会话/);
   assert.equal((await request(f.site, '/api/rooms')).body.rooms.length, 0);
   assert.equal(f.starts.length, 0);
 });
