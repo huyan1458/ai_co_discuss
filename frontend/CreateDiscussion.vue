@@ -77,6 +77,14 @@ function submit() {
   emit("submit");
 }
 
+const limit_rule = computed(() => {
+  const rounds = Number(value("limit-max_rounds")), minutes = Number(value("limit-max_minutes"));
+  const limits = [rounds && `${rounds} 轮`, minutes && `${minutes} 分钟`].filter(Boolean);
+  if (!limits.length) return "不设轮次和时长上限。";
+  const action = value("limit-on_limit") === "summarize" ? "由主持人总结" : "暂停";
+  return `最多 ${limits.join(" 或 ")}，${limits.length === 2 ? "先到则" : "到限后"}${action}。`;
+});
+
 const summary = computed(() => {
   const names = Object.keys(selected.value);
   const rounds = value("limit-max_rounds"), minutes = value("limit-max_minutes");
@@ -129,17 +137,18 @@ const summary = computed(() => {
         <h3><span>3</span>讨论多久</h3>
         <LimitPicker ref="limit_picker" :rounds="Number(value('limit-max_rounds'))" :minutes="Number(value('limit-max_minutes'))"
           @update:rounds="write('limit-max_rounds', String($event))" @update:minutes="write('limit-max_minutes', String($event))" />
+        <p class="fine-print create-hint">一轮指每位专家各完成一次观点；首次进入讨论或创建安排后计时，暂停期间不计时。</p>
         <div v-if="automatic" class="form-two-columns">
           <UFormField label="单次 AI 执行（分钟）"><UInput :model-value="value('limit-execution_minutes')" type="number" :min="1" :max="60" :step="1" required class="w-full" @update:model-value="write('limit-execution_minutes', $event)" /></UFormField>
         </div>
         <div class="create-host">
-          <span class="create-label">到达上限后</span>
+          <span class="create-label">达到任一上限后</span>
           <div class="create-chips" role="radiogroup" aria-label="达到上限后">
             <button v-for="option in [{ value: 'pause', label: '暂停保留现场' }, { value: 'summarize', label: '由主持人总结' }]" :key="option.value" type="button" role="radio" :aria-checked="(value('limit-on_limit') || 'pause') === option.value" :class="{ 'is-selected': (value('limit-on_limit') || 'pause') === option.value }" @click="write('limit-on_limit', option.value)">{{ option.label }}</button>
           </div>
           <UInput v-if="value('limit-on_limit') === 'summarize'" :model-value="value('limit-summary_minutes')" type="number" :min="1" :max="60" :step="1" aria-label="收束预留（分钟）" class="create-summary-minutes" @update:model-value="write('limit-summary_minutes', $event)"><template #trailing><span class="fine-print">分钟收束</span></template></UInput>
         </div>
-        <p class="fine-print create-hint">一轮指每位专家各完成一次观点；首次进入讨论或创建安排后计时，暂停期间不计时。</p>
+        <p class="create-limit-rule" aria-live="polite"><UIcon name="i-lucide-flag" />{{ limit_rule }}</p>
       </section>
 
       <section v-if="automatic" class="create-section">
@@ -217,6 +226,8 @@ const summary = computed(() => {
 .create-chips button [class*="icon"] { width: 13px; height: 13px; color: #e0b44a; }
 .create-summary-minutes { width: 150px; }
 .create-hint { margin-top: -4px !important; }
+.create-limit-rule { display: flex; align-items: flex-start; gap: 8px; padding-top: 14px; border-top: 1px solid var(--ui-border-muted); color: var(--ui-text-muted); font-size: 12px; }
+.create-limit-rule > [class*="icon"] { flex-shrink: 0; width: 13px; height: 13px; margin-top: 2px; color: var(--channel-accent); }
 .create-launch-list { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 9px; background: var(--ui-bg-muted); font-size: 12px; }
 .create-launch-list li { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .create-launch-list strong { flex-shrink: 0; color: var(--ui-text-highlighted); }

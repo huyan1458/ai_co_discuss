@@ -42,45 +42,68 @@ function picker_fixture(initial = {}) {
     for (let index = 0; frames.size && index < 600; index++) await tick();
     assert.equal(frames.size, 0, "picker must stop requesting frames after settling");
   };
-  const target = { focus() {}, setPointerCapture() {}, getBoundingClientRect: () => ({ top: 0, height: 200 }) };
-  const pointer = (extra = {}) => ({ pointerId: 1, isPrimary: true, button: 0, clientY: 100, currentTarget: target, ...extra });
+  const target = { querySelector: () => ({ focus() {} }), setPointerCapture() {}, getBoundingClientRect: () => ({ top: 0, height: 144 }) };
+  const pointer = (extra = {}) => ({ pointerId: 1, isPrimary: true, button: 0, clientY: 72,
+    target: { tagName: "DIV" }, currentTarget: target, preventDefault() {}, ...extra });
   return { context, props, events, wheels: context.test_wheels, tick, finish, frames, pointer,
     reduce: () => motion_listener({ matches: true }),
     cleanup: () => { cleanups.forEach((callback) => callback()); watchers.forEach((stop) => stop()); },
   };
 }
 
-test("picker keeps minute precision, caps at 24:00, and restores the minute range below it", async () => {
+test("picker retains exact minute values alongside five-minute stops and caps at 1440", async () => {
   const fixture = picker_fixture({ minutes: 1439 });
   const { context, wheels, props } = fixture;
-  assert.deepEqual(Array.from(wheels, (wheel) => wheel.selected), [3, 23, 59]);
-  context.choose(wheels[1], 24);
+  assert.deepEqual(Array.from(wheels, (wheel) => wheel.selected), [3, 1439]);
+  context.choose(wheels[1], wheels[1].max);
   await fixture.finish();
   assert.equal(props.minutes, 1440);
-  assert.equal(wheels[2].selected, 0);
-  assert.equal(wheels[2].max, 0);
   assert.ok(fixture.events.filter((event) => event.name === "update:minutes").every((event) => event.next <= 1440));
-  context.choose(wheels[1], 1);
+  context.begin_edit(wheels[1], { target: { select() {} } });
+  wheels[1].draft = "67";
+  context.finish_edit(wheels[1]);
   await fixture.finish();
-  context.choose(wheels[2], 1);
+  assert.equal(props.minutes, 67);
+  const shown = Array.from(context.rows(wheels[1]), (row) => row.text);
+  assert(shown.includes(65) && shown.includes(67) && shown.includes(70));
+  context.choose(wheels[1], 0);
   await fixture.finish();
-  assert.equal(props.minutes, 61);
-  assert.equal(wheels[2].max, 59);
+  assert.equal(props.minutes, 1);
+  assert.equal(props.rounds, 3);
   fixture.cleanup();
 });
 
-test("picker keyboard reaches unlimited and accumulates quick commands without losing them", async () => {
+test("picker unlimited settings are independent and restore the previous exact value", async () => {
+  const fixture = picker_fixture({ rounds: 4, minutes: 67 });
+  const { context, wheels, props } = fixture;
+  context.set_unlimited(wheels[0], true);
+  assert.equal(props.rounds, 0);
+  assert.equal(props.minutes, 67);
+  context.set_unlimited(wheels[1], true);
+  await fixture.finish();
+  context.settle();
+  assert.equal(props.rounds, 0);
+  assert.equal(props.minutes, 0);
+  context.set_unlimited(wheels[1], false);
+  assert.equal(props.minutes, 67);
+  assert.equal(props.rounds, 0);
+  context.set_unlimited(wheels[0], false);
+  assert.equal(props.rounds, 4);
+  fixture.cleanup();
+});
+
+test("picker keyboard reaches finite boundaries and accumulates quick commands without losing them", async () => {
   const fixture = picker_fixture();
   const { context, wheels, props } = fixture;
   const key = (wheel, name) => context.keydown(wheel, { key: name, preventDefault() {} });
   key(wheels[0], "Home");
   key(wheels[1], "Home");
   await fixture.finish();
-  assert.equal(props.rounds, 0);
-  assert.equal(props.minutes, 0);
-  for (let index = 0; index < 10; index++) key(wheels[2], "ArrowDown");
+  assert.equal(props.rounds, 1);
+  assert.equal(props.minutes, 1);
+  for (let index = 0; index < 10; index++) key(wheels[1], "ArrowDown");
   await fixture.finish();
-  assert.equal(props.minutes, 10);
+  assert.equal(props.minutes, 50);
   key(wheels[0], "End");
   await fixture.finish();
   assert.equal(props.rounds, 100);
@@ -89,11 +112,11 @@ test("picker keyboard reaches unlimited and accumulates quick commands without l
 
 test("picker drag preserves release velocity and grabbing a moving wheel does not jump", async () => {
   const fixture = picker_fixture({ minutes: 30 });
-  const { context, wheels, pointer } = fixture, wheel = wheels[2];
+  const { context, wheels, pointer } = fixture, wheel = wheels[1], initial_position = wheel.x;
   context.grab(wheel, pointer());
   context.drag(wheel, pointer({ clientY: -60 }));
   await fixture.tick(6);
-  assert.ok(wheel.x > 30 && wheel.v > 0);
+  assert.ok(wheel.x > initial_position && wheel.v > 0);
   const velocity = wheel.v, released_at = wheel.x;
   context.release(wheel, pointer({ type: "pointerup", clientY: -60 }));
   assert.equal(wheel.v, velocity);
@@ -107,39 +130,83 @@ test("picker drag preserves release velocity and grabbing a moving wheel does no
   await fixture.tick(8);
   context.release(wheel, pointer({ type: "pointerup", clientY: 220 }));
   await fixture.finish();
-  assert.equal(wheel.x, wheel.selected);
+  assert.equal(wheel.values[wheel.x], wheel.selected);
+  fixture.cleanup();
+});
+
+test("picker wheel impulses coast and publish without confirmation, including after exact input", async () => {
+  const fixture = picker_fixture({ minutes: 60 }), { context, wheels, props, pointer } = fixture;
+  const wheel = wheels[1], input = { currentTarget: pointer().currentTarget, deltaY: 64, deltaMode: 0 };
+  context.scroll(wheel, input);
+  await fixture.tick(2);
+  const moving_at = wheel.x;
+  assert.ok(wheel.v > 0);
+  await fixture.tick(2);
+  assert.ok(wheel.x > moving_at, "the wheel keeps moving without another input event");
+  await fixture.finish();
+  assert.ok(props.minutes > 60);
+  assert.equal(wheel.values[wheel.x], props.minutes);
+  context.begin_edit(wheel, { target: { select() {} } });
+  wheel.draft = "67";
+  context.scroll(wheel, { ...input, deltaY: -64 });
+  await fixture.finish();
+  assert.ok(props.minutes < 67);
+  assert.equal(wheel.editing, false);
+  fixture.reduce();
+  const before = wheel.selected;
+  context.scroll(wheel, { ...input, deltaY: 64 });
+  assert.ok(props.minutes > before);
+  assert.equal(fixture.frames.size, 0);
+  fixture.cleanup();
+});
+
+test("picker distinguishes a central tap from dragging and preserves native text editing", () => {
+  const fixture = picker_fixture(), { context, wheels, pointer } = fixture, wheel = wheels[1];
+  let focused = 0;
+  const point = pointer();
+  point.currentTarget.querySelector = (selector) => ({ focus() { if (selector === "input") focused++; } });
+  context.grab(wheel, point);
+  context.release(wheel, { ...point, type: "pointerup" });
+  assert.equal(focused, 1, "a central tap opens exact input");
+  context.grab(wheel, point);
+  context.drag(wheel, { ...point, clientY: 40 });
+  context.release(wheel, { ...point, type: "pointerup", clientY: 40 });
+  assert.equal(focused, 1, "dragging across the center never enters text input");
+  context.begin_edit(wheel, { target: { select() {} } });
+  context.grab(wheel, { ...point, target: { tagName: "INPUT" },
+    preventDefault() { assert.fail("native text selection must remain available"); } });
+  assert.equal(wheel.pointer, null);
   fixture.cleanup();
 });
 
 test("picker catches flicks at boundaries and halfway releases settle to an integer", async () => {
-  for (const [position, speed] of [[0, -60], [59, 60], [30.5, 0]]) {
-    const fixture = picker_fixture({ minutes: position });
-    const wheel = fixture.wheels[2];
+  for (const [position, speed] of [[0, -60], [288, 60], [30.5, 0]]) {
+    const fixture = picker_fixture();
+    const wheel = fixture.wheels[1];
     wheel.x = position;
     wheel.v = speed;
     fixture.context.wake();
     await fixture.finish();
-    assert.ok(wheel.selected >= 0 && wheel.selected <= 59);
-    assert.equal(wheel.x, wheel.selected);
+    assert.ok(wheel.selected >= 1 && wheel.selected <= 1440);
+    assert.equal(wheel.values[wheel.x], wheel.selected);
     fixture.cleanup();
   }
 });
 
-test("picker external drafts, submission and reduced motion all retain displayed values", async () => {
+test("picker external drafts, submission and reduced motion retain explicit selections", async () => {
   const fixture = picker_fixture(), { context, props, wheels } = fixture;
   props.rounds = 12;
   props.minutes = 125;
   await nextTick();
-  assert.deepEqual(Array.from(wheels, (wheel) => wheel.selected), [12, 2, 5]);
-  context.choose(wheels[2], 40);
+  assert.deepEqual(Array.from(wheels, (wheel) => wheel.selected), [12, 125]);
+  context.choose(wheels[1], wheels[1].values.indexOf(200));
   await fixture.tick(5);
-  const displayed = wheels[2].selected;
   context.settle();
-  assert.equal(props.minutes, 120 + displayed);
+  assert.equal(props.minutes, 200);
   assert.equal(fixture.frames.size, 0);
   fixture.reduce();
-  context.choose(wheels[2], 1);
-  assert.equal(props.minutes, 121);
+  context.choose(wheels[1], wheels[1].values.indexOf(5));
+  assert.equal(props.minutes, 5);
   assert.equal(fixture.frames.size, 0);
   fixture.cleanup();
 });
@@ -154,7 +221,7 @@ test("unmounting a moving picker cancels its scheduled animation", () => {
 
 test("a zero-length first animation frame cannot discard a keyboard selection", async () => {
   const fixture = picker_fixture();
-  fixture.context.choose(fixture.wheels[2], 15);
+  fixture.context.choose(fixture.wheels[1], fixture.wheels[1].values.indexOf(75));
   const callback = [...fixture.frames.values()][0];
   fixture.frames.clear();
   callback(0);
@@ -166,12 +233,42 @@ test("a zero-length first animation frame cannot discard a keyboard selection", 
 
 test("tapping a curved outer row selects that row rather than its flat projection", async () => {
   const fixture = picker_fixture({ minutes: 30 });
-  const wheel = fixture.wheels[2];
-  const point = fixture.pointer({ clientY: 187 });
+  const wheel = fixture.wheels[1];
+  const point = fixture.pointer({ clientY: 141 });
   fixture.context.grab(wheel, point);
   fixture.context.release(wheel, { ...point, type: "pointerup" });
   await fixture.finish();
-  assert.equal(fixture.props.minutes, 33);
+  assert.equal(fixture.props.minutes, 45);
+  fixture.cleanup();
+});
+
+test("closing or switching picker popovers commits edits and stops the hidden wheel", async () => {
+  const fixture = picker_fixture(), { context, wheels, props } = fixture;
+  context.set_open(wheels[1], true);
+  context.begin_edit(wheels[1], { target: { select() {} } });
+  wheels[1].draft = "67";
+  context.set_open(wheels[0], true);
+  assert.equal(wheels[1].open, false);
+  assert.equal(wheels[0].open, true);
+  assert.equal(props.minutes, 67);
+  context.choose(wheels[0], 30);
+  await fixture.tick(3);
+  context.set_open(wheels[0], false);
+  await fixture.finish();
+  assert.equal(props.rounds, 31, "closing during an explicit selection commits the chosen stop");
+  context.set_open(wheels[0], true);
+  context.keydown(wheels[0], { key: "ArrowDown", preventDefault() {} });
+  context.set_open(wheels[0], false);
+  assert.equal(props.rounds, 32, "immediately dismissing after a key press must not discard it");
+  context.set_open(wheels[1], true);
+  context.begin_edit(wheels[1], { target: { select() {} } });
+  wheels[1].draft = "9000";
+  context.settle();
+  assert.equal(props.minutes, 1440);
+  context.begin_edit(wheels[1], { target: { select() {} } });
+  wheels[1].draft = "";
+  context.settle();
+  assert.equal(props.minutes, 1440);
   fixture.cleanup();
 });
 
