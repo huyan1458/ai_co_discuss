@@ -8,7 +8,7 @@ import { parseArgs } from 'node:util';
 
 import { atomic_json } from './discussion_adapters.mjs';
 import { launch_settings, save_launch_settings } from './discussion_launch.mjs';
-import { service_home } from './discussion_service.mjs';
+import { assert_shared_home, service_home } from './discussion_service.mjs';
 import { install_skills } from './discussion_skills.mjs';
 import { ask, checkbox_prompt, intro, outro, pad, short_path, spinner, step, styled, text_width, tone } from './discussion_tui.mjs';
 export { checkbox_prompt } from './discussion_tui.mjs';
@@ -58,6 +58,7 @@ export function local_settings(home = service_home()) {
 function setup_environment(options) {
   if (Number(process.versions.node.split('.')[0]) < MIN_NODE_MAJOR) throw new Error('需要 Node.js 24+，请升级后重试。');
   const home = service_home();
+  assert_shared_home(home);
   const previous = local_settings(home);
   const python = detect_python(options.python || previous.python);
   const port = Number(options.port || previous.port || DEFAULT_PORT);

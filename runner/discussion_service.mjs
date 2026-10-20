@@ -1,7 +1,7 @@
 /** Resident local service that keeps every registered automatic room consumed; no model API orchestration. */
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -33,6 +33,29 @@ export function configuration_snapshot(path) {
 export function service_home() {
   if (process.env.DISCUSS_SERVICE_HOME) return resolve(process.env.DISCUSS_SERVICE_HOME);
   return join(process.env.LOCALAPPDATA || join(homedir(), '.local', 'state'), 'ai-codiscuss', 'service');
+}
+
+/** Reject an MSIX-private write view before reading shared service state or changing it. */
+export function assert_shared_home(home) {
+  if (process.platform !== 'win32') return;
+  let directory = resolve(home);
+  while (!existsSync(directory)) {
+    const parent = dirname(directory);
+    if (parent === directory) throw new Error(`服务目录没有可访问的父目录：${home}`);
+    directory = parent;
+  }
+  const probe = join(directory, `.codiscuss-path-${randomUUID()}`);
+  closeSync(openSync(probe, 'wx', 0o600));
+  try {
+    const actual = realpathSync.native(probe);
+    // Compare the container suffix so a short user-profile name (ADMINI~1) is not a redirect.
+    const container = actual.match(/\\AppData\\Local\\Packages\\[^\\]+\\LocalCache\\(?:Local|Roaming)\\/i)?.[0];
+    if (container && !probe.toLowerCase().includes(container.toLowerCase())) {
+      throw new Error(`Windows MSIX 正在重定向服务目录 ${home}，实际写入 ${dirname(actual)}。`
+        + '请从应用外的普通终端执行 codiscuss local start/stop；'
+        + '或让所有入口使用同一个 AppData 之外的 DISCUSS_SERVICE_HOME。原数据不会自动迁移。');
+    }
+  } finally { unlinkSync(probe); }
 }
 
 /** Read the registered private room configuration paths. */
@@ -203,6 +226,7 @@ export function service_ready(home, pid = service_pid(home)) {
 
 /** Foreground service loop; `start` runs this detached in the background. */
 export async function run_service(home, output = () => {}) {
+  assert_shared_home(home);
   const release = acquire_lock(home);
   const log_line = message => {
     const line = `${new Date().toISOString()} ${message}`;
@@ -236,6 +260,7 @@ export async function run_service(home, output = () => {}) {
 
 /** Start the detached service once; an already running service is reused. */
 export async function start_service(home) {
+  assert_shared_home(home);
   const running = service_pid(home);
   if (service_ready(home, running)) return { running: true, ready: true, pid: running, started: false };
   mkdirSync(home, { recursive: true });
@@ -329,6 +354,7 @@ export async function main(args = process.argv.slice(2), print = value => proces
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { config: { type: 'string' } } });
   const [command, option] = positionals;
   const home = service_home();
+  assert_shared_home(home);
   const require_config = () => { if (!values.config) throw new Error('请用 --config 指定私有房间配置'); return values.config; };
   switch (command) {
     case 'run': return run_service(home);

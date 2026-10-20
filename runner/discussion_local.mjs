@@ -9,7 +9,7 @@ import { parseArgs } from 'node:util';
 
 import { atomic_json } from './discussion_adapters.mjs';
 import { acquire_lock } from './discussion_runner.mjs';
-import { main as service_main, service_home, service_pid, service_ready, start_service } from './discussion_service.mjs';
+import { assert_shared_home, main as service_main, service_home, service_pid, service_ready, start_service } from './discussion_service.mjs';
 import { detect_python, local_settings } from './discussion_setup.mjs';
 import { tone } from './discussion_tui.mjs';
 
@@ -142,6 +142,7 @@ async function requested_service(home, status, owned_service) {
 
 /** Run one supervisor, recording readiness and handling an explicit local stop request. */
 async function supervise(home) {
+  assert_shared_home(home);
   const directory = join(home, 'local');
   const release = acquire_lock(directory);
   const status_path = join(directory, 'status.json');
@@ -239,7 +240,8 @@ function local_summary(command, result, opened) {
     status: result.running ? [`本机网站运行中：${site}`]
       : result.website_running ? [`本机网站运行中：${site}，但讨论服务未运行；运行 codiscuss local open 恢复`]
         : ['本机网站未运行；运行 codiscuss local open 启动'],
-    stop: ['本机网站与讨论服务已停止；数据已保留，运行 codiscuss local open 重新启动'],
+    stop: result.service_pid ? [`本机网站已停止；独立讨论服务仍在运行（PID ${result.service_pid}），可用 codiscuss service stop 单独停止；数据已保留`]
+      : ['本机网站与讨论服务已停止；数据已保留，运行 codiscuss local open 重新启动'],
     connect: [`已连接 ${result.connected}；本机网站 ${tone.cyan(result.local_url || '')}`,
       opened ? '已在浏览器打开连接链接，请在该页面完成接入；连接链接不要转发' : `请在浏览器打开连接链接完成接入，链接不要转发：${result.url}`],
     disconnect: [`已撤销 ${result.disconnected} 的本机启动权限；正在运行的讨论需在进度看板暂停`],
@@ -258,6 +260,7 @@ export async function local_main(args, output) {
   const [command = 'open', site] = positionals;
   const home = service_home();
   if (values.help || command === 'help') return process.stdout.write(LOCAL_HELP);
+  assert_shared_home(home);
   const report = (result, opened) => {
     if (output) return output(result);
     local_summary(command, result, opened);

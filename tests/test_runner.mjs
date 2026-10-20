@@ -1,17 +1,18 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
 import { tmpdir } from 'node:os';
-import { join, relative, resolve } from 'node:path';
+import { basename, join, relative, resolve } from 'node:path';
 import { createServer } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DiscussionRunner, DiscussionStore, load_config, service_drafts, task_files, validate_config } from '../runner/discussion_runner.mjs';
-import { DiscussionService, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
+import { assert_shared_home, DiscussionService, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
+import { launch_discussion } from '../runner/discussion_launch.mjs';
 import { agy_rule, antigravity_project, claude_exit_error, claude_rule_path, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
 
 /** Exercise the dispatcher against an HTTP contract without starting real software. */
@@ -1039,6 +1040,31 @@ test('an existing process is reused only after its own readiness receipt arrives
   assert.equal(ready.pid, process.pid);
   assert.equal(ready.started, false);
   assert.equal(ready.ready, true);
+});
+
+test('MSIX redirection fails before service startup or room creation and removes its probe', { skip: process.platform !== 'win32' }, async t => {
+  const home = mkdtempSync(join(tmpdir(), 'discussion-msix-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  t.mock.method(realpathSync, 'native', path => join('C:\\Users\\example\\AppData\\Local\\Packages',
+    'Example_123', 'LocalCache', 'Local', basename(path)));
+  const redirected = /MSIX.*普通终端.*DISCUSS_SERVICE_HOME/;
+  assert.throws(() => assert_shared_home(home), redirected);
+  await assert.rejects(start_service(home), redirected);
+  await assert.rejects(launch_discussion(home, {}), redirected);
+  assert.deepEqual(readdirSync(home), [], 'no lock, launch record, or probe may remain');
+});
+
+test('service directory checks preserve absent homes and allow an explicit physical recovery path', () => {
+  const home = mkdtempSync(join(tmpdir(), 'discussion-path-'));
+  try {
+    const absent = join(home, 'not-created', 'service');
+    assert_shared_home(absent);
+    assert.deepEqual(readdirSync(home), []);
+    const physical = join(home, 'AppData', 'Local', 'Packages', 'Example_123', 'LocalCache', 'Local', 'service');
+    mkdirSync(physical, { recursive: true });
+    assert_shared_home(physical);
+    assert.deepEqual(readdirSync(physical), []);
+  } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
 test('CLI help and status do not start a service; unknown commands fail', async t => {

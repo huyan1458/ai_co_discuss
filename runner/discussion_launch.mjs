@@ -8,7 +8,7 @@ import { parseArgs } from 'node:util';
 
 import { atomic_json } from './discussion_adapters.mjs';
 import { acquire_lock, api, DiscussionStore, service_drafts, task_files, validate_config } from './discussion_runner.mjs';
-import { CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
+import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 
 const CLIENTS = { Codex: ['codex_cli', 'codex'], Claude: ['claude'], Gemini: ['antigravity_cli', 'antigravity'] };
 // Reasoning effort is a separate CLI argument only for Codex and Claude; agy encodes it in the model name.
@@ -339,6 +339,7 @@ async function prepare_launch(home, input, directory, options = {}) {
 
 /** Launch a room through either entry, using a durable journal for safe retries. */
 export async function launch_discussion(home, raw, options = {}) {
+  assert_shared_home(home);
   const input = launch_input(raw);
   const key = createHash('sha256').update(`${input.site}/${input.room_id || input.room.submission_id}`).digest('hex');
   const directory = join(home, 'launches', key);
@@ -401,6 +402,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   if (values.help || !positionals.length) return process.stdout.write(HELP);
   const input = input_text === undefined ? (values.file ? JSON.parse(readFileSync(values.file, 'utf8').replace(/^\uFEFF/, '')) : null) : JSON.parse(input_text);
   const home = service_home();
+  assert_shared_home(home);
   let result;
   if (positionals[0] === 'settings') result = input ? save_launch_settings(home, input) : launch_settings(home);
   else if (positionals[0] === 'start' && input) result = await launch_discussion(home, input, { dry_run: values['dry-run'], browser_request: values.browser });

@@ -38,6 +38,10 @@ codiscuss local stop
 
 网站数据库为服务目录下 `local/discuss.sqlite3`，配置、登记表和讨论执行数据也位于包外；服务目录位置及 `DISCUSS_SERVICE_HOME` 见下文。源码运行的 `data/discuss.sqlite3` 不自动迁移。网站仍在而讨论服务已停止时，显式 `local open/start` 会要求网站管理进程恢复服务；不会自动恢复已暂停的房间。`local status` 的 `running` 要求网站和讨论服务同时运行，`website_running` 单独表示网站状态。`local stop` 关闭它创建的网站，并停止它启动或恢复且仍由相同 PID 持有的讨论服务；预先运行或后来独立启动的服务会保留。停止服务会暂停其托管中的活动讨论，数据库保留。日志在 `local/website.log`、`local/supervisor.log` 与原 `service.log`。
 
+Windows 的 MSIX 应用（如 Claude 桌面版）可能把派生进程对 AppData 的写入重定向到 `Packages/<包名>/LocalCache/Local/`；同名数据库、锁和停止请求因此与普通终端分离。管理命令在读状态、建房或启动进程前，用临时文件核实实际写入位置，发现重定向就报出两处路径并停止，避免误报已启动或已停止；帮助和纯 HTTP 网站命令仍可使用。检测依据是文件实际位置，不依赖进程是否报告包身份。Python 启动别名与直接执行原生 Python 也可能进入不同文件视图，排查时须核对网站实际使用的可执行文件与数据库。此机制见 [Microsoft MSIX 文件虚拟化说明](https://learn.microsoft.com/en-us/windows/msix/desktop/desktop-to-uwp-behind-the-scenes)。
+
+遇到该错误，从应用外的普通终端管理服务；需要所有入口直接管理时，为它们统一设置 AppData 之外的 `DISCUSS_SERVICE_HOME`，已有数据需停机备份后迁移，不会自动合并两份库。若旧版本已在包私有目录启动服务，先核对该目录的 `local/status.json`、`status.json` 和实际 PID，再在普通终端将 `DISCUSS_SERVICE_HOME` 显式设为该物理目录执行 `local stop`；独立启动的讨论服务仍需单独 `service stop`，`local stop` 会明确报告保留的 PID。停止请求必须与目标进程使用同一份目录，仅看到另一个目录没有锁不能证明目标已退出。
+
 已安装后升级不要使用 `npx`（它会运行已安装的旧版本）：先 `codiscuss local stop`，再 `npm install --global --prefer-online ai_co_discuss@latest`，然后重跑 `codiscuss setup`；`--prefer-online` 避免本地缓存把 `latest` 解析为旧版本。
 
 卸载先 `codiscuss local stop`，按需要另用 `codiscuss service stop` 停止预先独立运行的服务，再执行 `npm uninstall --global ai_co_discuss`；自定义 prefix 时带回相同 `--prefix`。安装器不删除数据库、私有配置或已复制技能。

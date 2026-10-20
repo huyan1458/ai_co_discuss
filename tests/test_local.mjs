@@ -135,7 +135,10 @@ test('local stop keeps a pre-existing service; occupied port cannot be mistaken 
     await new Promise(done => reservation.close(done));
     const service = state.command(['service', 'start', '--json']);
     state.command(['local', 'start']);
-    state.command(['local', 'stop']);
+    const stopped = state.execute(['local', 'stop']);
+    assert.equal(stopped.status, 0, stopped.stderr);
+    assert.match(stopped.stderr, /独立讨论服务仍在运行/);
+    assert.equal(JSON.parse(stopped.stdout).service_pid, service.pid);
     const retained = state.command(['service', 'status', '--json']);
     assert.equal(retained.pid, service.pid);
     assert.equal(retained.running, true);
