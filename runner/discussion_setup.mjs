@@ -304,7 +304,7 @@ async function setup(options) {
     const launch = spinner('启动本机网站与讨论服务');
     try {
       result.local = await local_main([options['no-open'] ? 'start' : 'open'], () => {});
-      launch.done('网站与讨论服务已在后台运行');
+      launch.done('网站与讨论服务已在后台运行', [`${tone.cyan(result.local.url)}${options['no-open'] ? tone.dim('  未打开浏览器，可直接访问此地址') : tone.dim('  已在浏览器打开')}`]);
       if (result.configured) result.status = 'ready';
     } catch (error) {
       launch.fail(error.message);

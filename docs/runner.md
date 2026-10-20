@@ -34,7 +34,7 @@ codiscuss local stop
 
 安装实现保持固定软件表和本地文件复制。路径查找参考 [npm/node-which](https://github.com/npm/node-which/blob/main/lib/index.js) 的 PATH 顺序与执行权限检查，只覆盖所需命令和后缀；技能复制参考 [OpenAI 单文件安装脚本](https://github.com/openai/skills/blob/main/skills/.system/skill-installer/scripts/install-skill-from-github.py) 的整目录复制与同名保护思路，保留本项目的内容哈希更新判断。不引入这些项目作为依赖，也不增加在线技能下载、插件注册或后台更新。
 
-默认 `setup` 最后执行 `local open`：后台启动 Python 回环网站（`--local-launch --no-demo`）与讨论服务，再打开浏览器；首次为空库。网站地址默认为 `http://127.0.0.1:8765`。`local start` 具有相同启动行为但不打开浏览器，重复启动复用原进程；真正绑定成功并通过健康检查后才返回就绪。端口占用会失败，不接管或停止占用者。网站管理进程脱离启动它的终端在后台运行，关闭终端不会停止网站或讨论服务；本机网站不设登录自启，重启电脑后运行 `local open` 重新启动。安装摘要会同时提示这些状态与停止命令。改端口或升级程序前先 `local stop`，再重新启动。
+默认 `setup` 最后执行 `local open`：后台启动 Python 回环网站（`--local-launch --no-demo`）与讨论服务，再打开浏览器；首次为空库。网站地址默认为 `http://127.0.0.1:8765`。`local start` 具有相同启动行为但不打开浏览器，重复启动复用原进程；真正绑定成功并通过健康检查后才返回就绪。端口占用会失败，不接管或停止占用者。网站管理进程脱离启动它的终端在后台运行，关闭终端不会停止网站或讨论服务；本机网站不设登录自启，重启电脑后运行 `local open` 重新启动。安装摘要会同时提示这些状态与停止命令。`local open/start/status/stop` 在终端显示中文结果与网站地址；输出被重定向或加 `--json` 时在 stdout 输出 JSON。改端口或升级程序前先 `local stop`，再重新启动。
 
 网站数据库为服务目录下 `local/discuss.sqlite3`，配置、登记表和讨论执行数据也位于包外；服务目录位置及 `DISCUSS_SERVICE_HOME` 见下文。源码运行的 `data/discuss.sqlite3` 不自动迁移。网站仍在而讨论服务已停止时，显式 `local open/start` 会要求网站管理进程恢复服务；不会自动恢复已暂停的房间。`local status` 的 `running` 要求网站和讨论服务同时运行，`website_running` 单独表示网站状态。`local stop` 关闭它创建的网站，并停止它启动或恢复且仍由相同 PID 持有的讨论服务；预先运行或后来独立启动的服务会保留。停止服务会暂停其托管中的活动讨论，数据库保留。日志在 `local/website.log`、`local/supervisor.log` 与原 `service.log`。
 

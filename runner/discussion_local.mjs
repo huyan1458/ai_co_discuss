@@ -11,6 +11,7 @@ import { atomic_json } from './discussion_adapters.mjs';
 import { acquire_lock } from './discussion_runner.mjs';
 import { main as service_main, service_home, service_pid, service_ready, start_service } from './discussion_service.mjs';
 import { detect_python, local_settings } from './discussion_setup.mjs';
+import { tone } from './discussion_tui.mjs';
 
 const SCRIPT = fileURLToPath(import.meta.url);
 const SERVER = fileURLToPath(new URL('../server.py', import.meta.url));
@@ -18,13 +19,14 @@ const START_WAIT_MS = 15000;
 const STOP_WAIT_MS = 25000;
 const POLL_MS = 200;
 const CONNECTION_TOKEN_BYTES = 32;
-const LOCAL_HELP = `用法：codiscuss local open|start|status|stop
+const LOCAL_HELP = `用法：codiscuss local open|start|status|stop [--json]
       codiscuss local connect SITE [--no-open]
       codiscuss local disconnect SITE
 
 connect 允许指定 HTTPS 站点通过此浏览器使用本机软件配置并启动 AI，打开连接链接完成接入。
 disconnect 撤销该站点的新启动权限；已运行的讨论须另行暂停。
 数据保留在服务目录中；重新 connect 会替换该站点的旧连接。
+结果摘要写入终端；输出被重定向或加 --json 时 JSON 写入 stdout。
 `;
 
 /** Accept an explicit secure website origin; loopback HTTP is available for local deployments. */
@@ -227,25 +229,52 @@ function open_site(url) {
 }
 
 /** Manage local website lifecycle without changing discussion launch semantics. */
-export async function local_main(args, output = value => process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)) {
+/** Print a readable result for people; machine output stays on stdout only when redirected or with --json. */
+function local_summary(command, result, opened) {
+  const site = tone.cyan(result.url || result.local_url || '');
+  const background = tone.dim('网站与讨论服务在后台运行，关闭此终端不影响；停止运行 codiscuss local stop');
+  const lines = {
+    open: [`本机网站已就绪：${site}${opened ? '（已在浏览器打开）' : ''}`, background],
+    start: [`本机网站已就绪：${site}（未打开浏览器，可直接访问此地址）`, background],
+    status: result.running ? [`本机网站运行中：${site}`]
+      : result.website_running ? [`本机网站运行中：${site}，但讨论服务未运行；运行 codiscuss local open 恢复`]
+        : ['本机网站未运行；运行 codiscuss local open 启动'],
+    stop: ['本机网站与讨论服务已停止；数据已保留，运行 codiscuss local open 重新启动'],
+    connect: [`已连接 ${result.connected}；本机网站 ${tone.cyan(result.local_url || '')}`,
+      opened ? '已在浏览器打开连接链接，请在该页面完成接入；连接链接不要转发' : `请在浏览器打开连接链接完成接入，链接不要转发：${result.url}`],
+    disconnect: [`已撤销 ${result.disconnected} 的本机启动权限；正在运行的讨论需在进度看板暂停`],
+  }[command];
+  process.stderr.write(`${lines.join('\n')}\n`);
+}
+
+/**
+ * Manage local website lifecycle without changing discussion launch semantics.
+ * Without an output callback, people get a summary on stderr and scripts get JSON when stdout is redirected or --json is given.
+ */
+export async function local_main(args, output) {
   const { positionals, values } = parseArgs({ args, allowPositionals: true, options: {
-    'no-open': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
+    'no-open': { type: 'boolean' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
   } });
   const [command = 'open', site] = positionals;
   const home = service_home();
-  if (values.help || command === 'help') return output(LOCAL_HELP);
+  if (values.help || command === 'help') return process.stdout.write(LOCAL_HELP);
+  const report = (result, opened) => {
+    if (output) return output(result);
+    local_summary(command, result, opened);
+    if (values.json || !process.stdout.isTTY) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  };
   if (['connect', 'disconnect'].includes(command)) {
     if (positionals.length !== 2 || (values['no-open'] && command !== 'connect')) throw new Error(LOCAL_HELP);
     const origin = connection_site(site);
     const result = command === 'connect' ? await connect_site(home, origin, values['no-open'])
       : (save_site_connection(home, origin), { disconnected: origin });
-    output(result);
+    report(result, command === 'connect' && !values['no-open']);
     return result;
   }
   if (positionals.length > 1 || values['no-open'] || !['open', 'start', 'status', 'stop'].includes(command)) throw new Error(LOCAL_HELP);
   const result = command === 'status' ? local_status(home) : command === 'stop' ? await stop_local(home) : await start_local(home);
   if (command === 'open') open_site(result.url);
-  output(result);
+  report(result, command === 'open');
   return result;
 }
 
