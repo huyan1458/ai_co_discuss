@@ -3,8 +3,23 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
+import { unzipSync } from "fflate";
 
 import { create_room_archive, room_markdown } from "../frontend/backup.mjs";
+
+test("backups include original binary attachments and safe relative Markdown links", async () => {
+  const snapshot = backup_fixture(), bytes = new Uint8Array([0, 255, 10, 13]);
+  snapshot.tables.attachments = [{ id: "a".repeat(32), room_id: "one", message_id: 1,
+    file_name: "资料(#1).bin", size: bytes.length, sha256: "hash" }];
+  const archive = unzipSync(await create_room_archive(snapshot, async file => {
+    assert.equal(file.id, "a".repeat(32));
+    return bytes;
+  }));
+  const path = `附件/${"a".repeat(32)}_资料(#1).bin`;
+  assert.deepEqual(archive[path], bytes);
+  assert.match(new TextDecoder().decode(archive["讨论记录.md"]), /%28%231%29/);
+  await assert.rejects(create_room_archive(snapshot, async () => { throw new Error("原文件缺失"); }), /原文件缺失/);
+});
 
 /** Build a multi-page Unicode record that crosses the async compressor threshold. */
 function backup_fixture() {

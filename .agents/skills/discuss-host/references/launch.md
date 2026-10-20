@@ -24,7 +24,7 @@
     "boundaries": "讨论边界",
     "host": "Codex",
     "experts": { "Codex": "cli", "Claude": "cli" },
-    "limits": { "max_rounds": 3, "max_minutes": 60, "execution_minutes": 10, "on_limit": "pause", "summary_minutes": 5 }
+    "limits": { "max_rounds": 3, "max_minutes": 60, "execution_minutes": 0, "on_limit": "pause", "summary_minutes": 5 }
   },
   "participants": {
     "Codex": { "adapter": "codex" }
@@ -32,7 +32,7 @@
 }
 ```
 
-此示例的主持在 Codex App；若当前是独立 Codex CLI，应使用 `codex_cli`。可执行文件、App 来源聊天或 Sidecar 等缺项仍须来自实际本机配置。主持也须出现在 `experts` 中并设为 `cli`。示例中的上限不能覆盖用户已经指定的参数；总时长为 0 时，另用顶层 `minutes` 指定本次有限运行时长。
+此示例的主持在 Codex App；若当前是独立 Codex CLI，应使用 `codex_cli`。可执行文件、App 来源聊天或 Sidecar 等缺项仍须来自实际本机配置。主持也须出现在 `experts` 中并设为 `cli`。示例中的上限不能覆盖用户已经指定的参数；总时长为 0 时可不限总时长运行，按轮次上限或手动停止结束。单次执行默认 0（不限），主动设置的单次执行超时仍有效。只有用户另设本次时长时才提供顶层 `minutes`，不能用它延长房间既定截止。
 
 已有房间改为指定顶层 `room_id`，省略 `room`；受保护房间另提供原私有配置的 `access_file` 路径，不读取或打印令牌。首次启动命令不替代已暂停房间的继续操作，已有运行按当前房间状态接续。
 

@@ -1,5 +1,8 @@
 /** Cloudflare Workers / D1 adapter for the existing discussion HTTP protocol. */
 const MAX_BODY_BYTES = 512 * 1024;
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const MAX_MESSAGE_ATTACHMENTS = 10;
+const MAX_FILENAME_LENGTH = 255;
 const MAX_TEXT_LENGTH = 32000;
 const MAX_STATE_LENGTH = 4000;
 const MAX_BRIEF_LENGTH = 1600;
@@ -12,7 +15,7 @@ const TURN_STATUSES = { pending: "待处理", notified: "已通知，待回答",
 const MAX_TOPIC_DETAIL = 4000;
 const MAX_QUESTION_LENGTH = 1000;
 const MAX_PLAN_TURNS = 10;
-const LIMIT_DEFAULTS = { max_rounds: 0, max_minutes: 0, execution_minutes: 20, on_limit: "pause", summary_minutes: 5 };
+const LIMIT_DEFAULTS = { max_rounds: 0, max_minutes: 0, execution_minutes: 0, on_limit: "pause", summary_minutes: 5 };
 // Idle (paused, preparing or concluded) seconds are excluded from elapsed time and total-duration deadlines.
 const LIMITS_SQL = `SELECT limits.*,COALESCE(pauses.paused_seconds,0)+CASE WHEN COALESCE(pauses.paused_at,0)>0
   THEN MAX(0,CAST(strftime('%s','now') AS INTEGER)-pauses.paused_at) ELSE 0 END AS idle_seconds
@@ -31,16 +34,18 @@ const ROOM_BACKUP_QUERIES = {
     .map((table) => [table, `SELECT * FROM ${table} WHERE room_id=?`])),
   topic_folders: "SELECT * FROM topic_folders WHERE id IN (SELECT folder_id FROM room_folder_assignments WHERE room_id=?)",
   messages: "SELECT * FROM messages WHERE room_id=? ORDER BY id",
+  attachments: "SELECT * FROM attachments WHERE room_id=? AND message_id IS NOT NULL ORDER BY message_id,position",
   discussion_turns: "SELECT * FROM discussion_turns WHERE room_id=? ORDER BY id",
-  ...Object.fromEntries(["message_details", "message_summaries"]
+  ...Object.fromEntries(["message_details", "message_summaries", "message_timings"]
     .map((table) => [table, `SELECT * FROM ${table} WHERE message_id IN (SELECT id FROM messages WHERE room_id=?) ORDER BY message_id`])),
 };
 const MESSAGE_QUERY = `SELECT messages.*, COALESCE(details.kind,'opinion') AS kind,
   COALESCE(details.submitted_by, CASE WHEN messages.source IN ('cli','url','user')
   THEN messages.author ELSE '用户' END) AS submitted_by, details.turn_id,
-  COALESCE(summaries.text,'') AS summary, COALESCE(summaries.author,'') AS summary_by
+  COALESCE(summaries.text,'') AS summary, COALESCE(summaries.author,'') AS summary_by, timing.elapsed_seconds
   FROM messages LEFT JOIN message_details AS details ON details.message_id=messages.id
-  LEFT JOIN message_summaries AS summaries ON summaries.message_id=messages.id`;
+  LEFT JOIN message_summaries AS summaries ON summaries.message_id=messages.id
+  LEFT JOIN message_timings AS timing ON timing.message_id=messages.id`;
 const ROOM_QUERY = `SELECT rooms.*, COALESCE(room_directory.archived,0) AS archived, COUNT(messages.id) AS message_count,
   COALESCE(MAX(messages.id),0) AS latest_id, room_folder_assignments.folder_id AS folder_id FROM rooms
   LEFT JOIN room_directory ON rooms.id=room_directory.room_id
@@ -79,19 +84,19 @@ function integer(value) {
   return Number(value);
 }
 
-/** Read a bounded JSON object from a browser request. */
-async function read_payload(request) {
+/** Read bytes with a streaming size check before allocating the final buffer. */
+async function read_bytes(request, limit) {
   const reader = request.body?.getReader();
-  if (!reader) throw new HttpError(400, "请求内容为空或过大");
+  if (!reader) return new Uint8Array();
   const chunks = [];
   let size = 0;
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     size += value.length;
-    if (size > MAX_BODY_BYTES) {
+    if (size > limit) {
       await reader.cancel();
-      throw new HttpError(400, "请求内容为空或过大");
+      throw new HttpError(limit === MAX_BODY_BYTES ? 400 : 413, "请求内容过大");
     }
     chunks.push(value);
   }
@@ -101,6 +106,12 @@ async function read_payload(request) {
     data.set(chunk, offset);
     offset += chunk.length;
   }
+  return data;
+}
+
+/** Read a bounded JSON object from a browser request. */
+async function read_payload(request) {
+  const data = await read_bytes(request, MAX_BODY_BYTES);
   let payload;
   try {
     payload = JSON.parse(new TextDecoder().decode(data));
@@ -456,6 +467,7 @@ async function manage_room(database, room_id, action, payload) {
   } else if (action === "delete") {
     if (payload.confirm_title !== room.title) throw new HttpError(400, "请输入完整频道名称确认删除");
     const queries = [
+      "DELETE FROM message_timings WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
       "DELETE FROM message_summaries WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
       "DELETE FROM message_details WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
       "DELETE FROM discussion_turns WHERE room_id=?", "UPDATE messages SET reply_to=NULL WHERE room_id=?",
@@ -476,10 +488,123 @@ function message_values(payload) {
   const submission_id = submission_value(payload.submission_id);
   const reply_to = payload.reply_to ? integer(payload.reply_to) : null;
   if (!PARTICIPANTS.includes(author)) throw new HttpError(400, "请选择有效的发言者");
-  if (!text || text_length(text) > MAX_TEXT_LENGTH) {
-    throw new HttpError(400, `发言需为 1–${MAX_TEXT_LENGTH} 字`);
+  if ((!text && !attachment_ids(payload).length) || text_length(text) > MAX_TEXT_LENGTH) {
+    throw new HttpError(400, `发言需包含正文或附件，正文最多 ${MAX_TEXT_LENGTH} 字`);
   }
   return { author, text, submission_id, reply_to };
+}
+
+/** Validate the ordered, unique attachment references of one message. */
+function attachment_ids(payload) {
+  const identifiers = payload.attachment_ids ?? [];
+  if (!Array.isArray(identifiers) || identifiers.length > MAX_MESSAGE_ATTACHMENTS
+    || identifiers.some(id => typeof id !== "string" || !/^[a-f0-9]{32}$/.test(id))
+    || new Set(identifiers).size !== identifiers.length) {
+    throw new HttpError(400, `附件编号无效；每条消息最多 ${MAX_MESSAGE_ATTACHMENTS} 个，不能重复`);
+  }
+  return identifiers;
+}
+
+/** Validate upload metadata without trusting supplied file paths or MIME types. */
+function attachment_metadata(params) {
+  const file_name = params.file_name ?? "";
+  if (typeof file_name !== "string" || !file_name.trim() || text_length(file_name) > MAX_FILENAME_LENGTH
+    || [".", ".."].includes(file_name) || /[/\\\x00-\x1f\x7f]/.test(file_name)) {
+    throw new HttpError(400, `文件名需为 1–${MAX_FILENAME_LENGTH} 字，不能包含路径或控制字符`);
+  }
+  if (!PARTICIPANTS.includes(params.actor)) throw new HttpError(400, "上传附件须声明有效的 actor");
+  return { file_name, actor: params.actor, submission_id: submission_value(params.submission_id) };
+}
+
+/** Detect only raster images and PDF for inline presentation; everything else downloads. */
+function attachment_content_type(data) {
+  const starts = bytes => bytes.every((value, index) => data[index] === value);
+  if (starts([137, 80, 78, 71, 13, 10, 26, 10])) return "image/png";
+  if (starts([255, 216, 255])) return "image/jpeg";
+  const prefix = new TextDecoder().decode(data.subarray(0, 12));
+  if (prefix.startsWith("GIF87a") || prefix.startsWith("GIF89a")) return "image/gif";
+  if (prefix.startsWith("%PDF-")) return "application/pdf";
+  if (prefix.startsWith("RIFF") && prefix.slice(8, 12) === "WEBP") return "image/webp";
+  return "application/octet-stream";
+}
+
+/** Expose metadata and stable room-scoped URLs without an object-store address. */
+function attachment_view(record) {
+  const url = `/api/rooms/${record.room_id}/attachments/${record.id}/content`;
+  return { ...record, url, download_url: `${url}?download=1` };
+}
+
+/** Read one uploaded file strictly within its owning room. */
+async function get_attachment(database, room_id, id) {
+  const record = await database.prepare("SELECT * FROM attachments WHERE room_id=? AND id=?").bind(room_id, id).first();
+  if (!record) throw new HttpError(404, "附件不存在");
+  return attachment_view(record);
+}
+
+/** Add published files to a page of original messages in one query. */
+async function attach_message_files(database, messages) {
+  if (!messages.length) return messages;
+  const rows = await database.prepare(`SELECT * FROM attachments WHERE message_id IN (${messages.map(() => "?").join(",")}) ORDER BY position,id`)
+    .bind(...messages.map(message => message.id)).all();
+  for (const message of messages) message.attachments = rows.results.filter(file => file.message_id === message.id).map(attachment_view);
+  return messages;
+}
+
+/** List published attachments or recover one exact upload receipt. */
+async function query_attachments(database, room_id, params) {
+  await require_room_id(database, room_id);
+  let where = "room_id=?";
+  const values = [room_id];
+  if (Object.hasOwn(params, "submission_id")) { where += " AND submission_id=?"; values.push(submission_value(params.submission_id)); }
+  else where += " AND message_id IS NOT NULL";
+  if (Object.hasOwn(params, "message_id")) { where += " AND message_id=?"; values.push(integer(params.message_id)); }
+  const page = Math.max(1, integer(params.page ?? 1));
+  const results = await database.batch([
+    database.prepare(`SELECT COUNT(*) AS total FROM attachments WHERE ${where}`).bind(...values),
+    database.prepare(`SELECT * FROM attachments WHERE ${where} ORDER BY created_at,id LIMIT ? OFFSET ?`).bind(...values, PAGE_SIZE, (page - 1) * PAGE_SIZE),
+  ]);
+  const total = results[0].results[0].total;
+  return { attachments: results[1].results.map(attachment_view), page, total, pages: Math.max(1, Math.ceil(total / PAGE_SIZE)) };
+}
+
+/** Compare immutable upload content when a submission number is retried. */
+function check_attachment_retry(previous, expected) {
+  if (Object.keys(expected).some(key => previous[key] !== expected[key])) throw new HttpError(409, "这个附件提交编号已被其他文件使用");
+}
+
+/** Persist bytes in R2, then atomically publish metadata under the current write capability. */
+async function store_attachment(database, bucket, room_id, metadata, data) {
+  const sha256 = [...new Uint8Array(await crypto.subtle.digest("SHA-256", data))].map(byte => byte.toString(16).padStart(2, "0")).join("");
+  const expected = { ...metadata, size: data.length, sha256, content_type: attachment_content_type(data) };
+  const previous = await database.prepare("SELECT * FROM attachments WHERE room_id=? AND submission_id=?").bind(room_id, metadata.submission_id).first();
+  if (previous) { check_attachment_retry(previous, expected); return { attachment: attachment_view(previous), duplicate: true }; }
+  const id = crypto.randomUUID().replaceAll("-", ""), key = `rooms/${room_id}/${id}`;
+  try {
+    await bucket.put(key, data, { httpMetadata: { contentType: expected.content_type } });
+    const results = await database.batch([
+      database.prepare(`INSERT INTO attachments (id,room_id,file_name,actor,submission_id,size,sha256,content_type,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(room_id,submission_id) DO NOTHING RETURNING id`)
+        .bind(id, room_id, expected.file_name, expected.actor, expected.submission_id, expected.size, sha256, expected.content_type, new Date().toISOString()),
+      database.prepare("SELECT * FROM attachments WHERE room_id=? AND submission_id=?").bind(room_id, metadata.submission_id),
+    ]);
+    const saved = results[1].results[0], duplicate = saved.id !== id;
+    if (duplicate) await bucket.delete(key);
+    check_attachment_retry(saved, expected);
+    return { attachment: attachment_view(saved), duplicate };
+  } catch (error) {
+    // An uncertain database response must not delete a file whose metadata was committed.
+    const saved = await database.prepare("SELECT id FROM attachments WHERE id=?").bind(id).first().catch(() => ({ id }));
+    if (!saved) await bucket.delete(key).catch(() => {});
+    throw error;
+  }
+}
+
+/** Reject reuse of another uploader's file or a file already linked elsewhere. */
+async function check_message_attachments(database, room_id, message) {
+  for (const id of message.attachment_ids) {
+    const file = await get_attachment(database, room_id, id);
+    if (file.actor !== message.submitted_by || file.message_id !== null) throw new HttpError(409, "附件已用于其他消息，或不属于本次实际提交者");
+  }
 }
 
 /** Validate message role and preserve the original author's attribution. */
@@ -509,7 +634,8 @@ function message_summary(payload, message) {
 
 /** Compare semantic content, including provenance and assignment linkage. */
 function check_retry(previous, expected) {
-  if (["author", "text", "reply_to", "kind", "submitted_by", "turn_id", "summary", "summary_by"].some((key) => previous[key] !== expected[key])) {
+  if (["author", "text", "reply_to", "kind", "submitted_by", "turn_id", "summary", "summary_by"].some((key) => previous[key] !== expected[key])
+    || JSON.stringify((previous.attachments ?? []).map(file => file.id)) !== JSON.stringify(expected.attachment_ids)) {
     throw new HttpError(409, "这个提交编号已被另一条内容使用，请为新发言生成新编号");
   }
 }
@@ -528,11 +654,11 @@ async function check_message_references(database, room_id, message) {
 }
 
 /** Prepare one atomic message, attribution, and assignment completion batch. */
-function message_statements(database, room_id, message) {
+function message_statements(database, room_id, message, hashed) {
   const { author, text, submission_id, reply_to, source, kind, submitted_by, turn_id, summary, summary_by } = message;
   return [
     database.prepare(`INSERT INTO messages (room_id,author,text,reply_to,source,submission_id,created_at)
-      VALUES (?,?,?,?,?,?,?) ON CONFLICT(room_id,submission_id) DO NOTHING RETURNING id`)
+      VALUES (?,?,?,?,?,?,?) RETURNING id`)
       .bind(room_id, author, text, reply_to, source, submission_id, new Date().toISOString()),
     database.prepare(`INSERT INTO message_details (message_id,kind,submitted_by,turn_id)
       SELECT id,?,?,? FROM messages WHERE room_id=? AND submission_id=? AND author=? AND text=? AND reply_to IS ?
@@ -540,6 +666,17 @@ function message_statements(database, room_id, message) {
     database.prepare(`INSERT INTO message_summaries (message_id,text,author)
       SELECT id,?,? FROM messages WHERE room_id=? AND submission_id=? AND author=? AND text=? AND reply_to IS ?
       ON CONFLICT(message_id) DO NOTHING`).bind(summary, summary_by, room_id, submission_id, author, text, reply_to),
+    ...message.attachment_ids.map((id, position) => database.prepare(`UPDATE attachments
+      SET message_id=(SELECT id FROM messages WHERE room_id=? AND submission_id=?),position=? WHERE id=?`)
+      .bind(room_id, submission_id, position, id)),
+    database.prepare(`INSERT INTO message_timings(message_id,elapsed_seconds)
+      SELECT m.id,MAX(0,CAST(strftime('%s',m.created_at) AS INTEGER)-t.dispatched_at)
+      FROM messages AS m JOIN message_details AS d ON d.message_id=m.id
+      JOIN discussion_events AS e ON e.room_id=m.room_id AND e.participant=m.author
+      JOIN event_timings AS t ON t.event_id=e.id
+      WHERE m.room_id=? AND m.submission_id=? AND m.source='cli' AND d.submitted_by=m.author
+        AND e.status='started' AND e.token_hash=? AND t.dispatched_at>0
+      ON CONFLICT(message_id) DO NOTHING`).bind(room_id, submission_id, hashed),
     database.prepare(`UPDATE discussion_turns SET status='answered',answer_id=(SELECT id FROM messages WHERE room_id=? AND submission_id=?)
       WHERE id=? AND status IN ('pending','notified') AND EXISTS
       (SELECT 1 FROM messages JOIN message_details ON messages.id=message_details.message_id
@@ -550,20 +687,26 @@ function message_statements(database, room_id, message) {
 }
 
 /** Atomically append a message, preserving idempotency under concurrent retries. */
-async function append_message(database, room_id, payload) {
+async function append_message(database, room_id, payload, token = "") {
   const values = message_values(payload);
   const room = await require_room(database, room_id);
-  const expected = { ...values, ...message_details(room, { ...payload, author: values.author }) };
+  const expected = { ...values, ...message_details(room, { ...payload, author: values.author }), attachment_ids: attachment_ids(payload) };
   Object.assign(expected, message_summary(payload, expected));
   const previous = await database.prepare(`${MESSAGE_QUERY} WHERE room_id=? AND submission_id=?`).bind(room_id, values.submission_id).first();
-  if (previous) { check_retry(previous, expected); return { message: previous, duplicate: true }; }
+  if (previous) { await attach_message_files(database, [previous]); check_retry(previous, expected); return { message: previous, duplicate: true }; }
   if (expected.author !== "用户" && expected.kind === "opinion") database = guard_limits(database, room);
   if (["paused", "concluded"].includes(room.phase) && expected.kind === "opinion") throw new HttpError(400, "话题已暂停或收束；恢复阶段后才能提交新观点，运行回执请用 receipt");
   await check_message_references(database, room_id, expected);
+  await check_message_attachments(database, room_id, expected);
   if (expected.author !== "用户" && expected.kind === "opinion" && !expected.turn_id) throw new HttpError(400, "专家观点必须关联当前有效的 turn_id");
   let results;
-  try { results = await database.batch(message_statements(database, room_id, expected)); }
+  try { results = await database.batch(message_statements(database, room_id, expected, token ? await runtime_hash(token) : "")); }
   catch (error) {
+    if (String(error).includes("UNIQUE constraint")) {
+      const saved = await database.prepare(`${MESSAGE_QUERY} WHERE room_id=? AND submission_id=?`).bind(room_id, values.submission_id).first();
+      if (saved) { await attach_message_files(database, [saved]); check_retry(saved, expected); return { message: saved, duplicate: true }; }
+    }
+    if (String(error).includes("attachment_unavailable")) throw new HttpError(409, "附件已用于其他消息，或不属于本次实际提交者");
     if (String(error).includes("floor_required")) throw new HttpError(409, "请先领取本人发言权；他人持有或尚未被点名时不能发言");
     if (String(error).includes("floor_turn_required")) throw new HttpError(400, "专家观点必须关联当前有效的 turn_id");
     if (String(error).includes("topic_inactive")) throw new HttpError(400, "话题已暂停或收束，请重新读取阶段");
@@ -571,6 +714,7 @@ async function append_message(database, room_id, payload) {
     throw error;
   }
   const message = results.at(-1).results[0];
+  await attach_message_files(database, [message]);
   check_retry(message, expected);
   return { message, duplicate: results[0].results.length === 0 };
 }
@@ -727,6 +871,7 @@ async function query_messages(database, room_id, params) {
   const total = results[0].results[0].total;
   const rows = results[1].results;
   const messages = rows.slice(0, PAGE_SIZE);
+  await attach_message_files(database, messages);
   const result = { messages, page, total, pages: Math.max(1, Math.ceil(total / PAGE_SIZE)) };
   if (Object.hasOwn(params, "after")) Object.assign(result, {
     next_after: messages.at(-1)?.id ?? integer(params.after), has_more: rows.length > PAGE_SIZE,
@@ -739,6 +884,7 @@ async function get_message(database, room_id, message_id) {
   const message = await database.prepare(`${MESSAGE_QUERY} WHERE room_id=? AND messages.id=?`)
     .bind(room_id, integer(message_id)).first();
   if (!message) throw new HttpError(404, "消息不存在");
+  await attach_message_files(database, [message]);
   return message;
 }
 
@@ -770,7 +916,8 @@ function message_text(message) {
   const reply = message.reply_to ? ` · 回复 #${message.reply_to}` : "";
   const role = { moderation: "主持发言", receipt: "运行回执" }[message.kind] || "专家观点";
   const summary = message.summary ? `\n回答摘要（${message.summary_by}）：\n${message.summary}\n\n完整正文：\n` : "\n";
-  return `#${message.id} · ${message.author} · ${message.created_at}${reply}\n职责：${role}；来源：${message.source}；提交者：${message.submitted_by ?? "用户"}；安排：${message.turn_id || "无"}${summary}${message.text}`;
+  const attachments = (message.attachments ?? []).map(file => `\n附件：${file.file_name}（${file.size} 字节；ID: ${file.id}）\n${file.download_url}`).join("");
+  return `#${message.id} · ${message.author} · ${message.created_at}${reply}\n职责：${role}；来源：${message.source}；提交者：${message.submitted_by ?? "用户"}；安排：${message.turn_id || "无"}${summary}${message.text}${attachments}`;
 }
 
 /** Expose an overview; supporting context is available only through chosen links. */
@@ -781,7 +928,7 @@ async function room_text(database, room_id, params) {
     `主持人：${room.host}；阶段：${PHASES[room.phase]}；当前焦点：${room.focus || "尚未填写"}`,
     `当前记录截止 #${room.latest_id}；共 ${room.message_count} 条；已完成 ${room.completed_rounds} 轮讨论（所有参与专家各发言一次）。`];
   const limits = room.limits;
-  content.push(`讨论上限：${limits.max_rounds || '不限'} 轮；总时长 ${limits.max_minutes || '不限'} 分钟；单次自动执行 ${limits.execution_minutes} 分钟；到限 ${limits.on_limit}；收束预留 ${limits.summary_minutes} 分钟（计入总时长）。到限：${limits.reached}；收束中：${limits.closing}。`);
+  content.push(`讨论上限：${limits.max_rounds || '不限'} 轮；总时长 ${limits.max_minutes || '不限'} 分钟；单次自动执行 ${limits.execution_minutes ? `${limits.execution_minutes} 分钟` : "不限时长"}；到限 ${limits.on_limit}；收束预留 ${limits.summary_minutes} 分钟（计入总时长）。到限：${limits.reached}；收束中：${limits.closing}。`);
   const turn = room.current_turn;
   content.push(`发言权：${room.floor.holder ? `${room.floor.holder} 持有` : `待 ${room.floor.next_speaker} 领取`}；版本 ${room.floor.revision}。用户本人可随时留言，AI 发言前须领取。`);
   if (room.phase === "initial") content.push("本阶段先独立形成详细观点：仅阅读目标、背景、边界和自己的已有讨论；暂不阅读他人观点或主持总结。提交后再交叉阅读。这是参与约定，不是权限隔离。");
@@ -827,8 +974,9 @@ function turn_text(turn, room) {
 function protocol_text(room) {
   const base = `/api/rooms/${room.id}`;
   return ["# 本地 CLI 读写与主持协议", `当前主持人：${room.host}。以下为留言板接口，不是模型服务 API。`,
-    "所有写入使用 POST 和 Content-Type: application/json。主持操作填写 actor 为当前主持人或用户；这些是声明身份，不是认证凭据。",
-    "讨论上限：room.limits 返回轮次、总时长、单次执行、到限方式、收束预留和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理；附 force:true 可在进行中提前进入收束，由主持人在收束预留时间内总结。到限停止新专家安排与观点；总结由真实主持人完成，预留计入总时长；暂停期间不计时也不消耗总时长。",
+    "写入使用 POST，通常为 Content-Type: application/json；附件上传使用 application/octet-stream 原始字节。主持操作填写 actor 为当前主持人或用户；这些是声明身份，不是认证凭据。",
+    `附件：POST ${base}/attachments?actor=身份&file_name=文件名&submission_id=新编号，原文件最多 20 MiB；GET 同路径默认列已发送附件，加 submission_id 精确核对上传。GET ${base}/attachments/ID 读元数据，/ID/content 下载原文件。消息可带 attachment_ids（最多 10 个有序编号）；只关联同房间、同提交者的未使用附件，可只有附件无正文。自动任务须在回答完成前上传；消息查询包含附件，按需下载后由当前软件读取，不自动解析。`,
+    "讨论上限：room.limits 返回轮次、总时长、单次执行、到限方式、收束预留和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长/单次执行时限。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理；附 force:true 可在进行中提前进入收束，由主持人在收束预留时间内总结。到限停止新专家安排与观点；总结由真实主持人完成，预留计入总时长；暂停期间不计时也不消耗总时长。",
     "运行方式：room.runtime 显示 manual/automatic、状态及真实执行回执。启用保护的房间写入须带 X-Discussion-Token；CLI 用 --access-file 读取本机私有文件，不公开令牌。自动任务先 execution enter，创建安排或保存关联回答即完成本步；不创建原生定时任务。旧执行在暂停、停止、换代、租约到期后失效。手动接入沿用原流程；受保护房间仍须用户提供有效的凭据文件。运行控制用 run view/start/pause/stop/configure；字段查 CLI schema。",
     `发言权：GET ${base}/floor 返回 holder、next_speaker、revision；POST 同路径，字段 actor、speaker（默认 actor）、action=take/return、revision（刚读到的整数版本）。仅无人持有且 next_speaker 为本人时可领取；持有者可主动归还，下一位回到主持人。版本变化返回 409，先读回核对。主持人仅可代操作 online 专家，cli 专家自行操作；用户可协助。`,
     "新房间由主持人持有发言权。创建安排须主持人持有，保存成功即归还并点名该专家；AI 的 opinion、moderation、receipt 都须实际作者持有，代发不豁免，opinion 必须关联有效 turn_id。消息保存成功自动归还，下一位为主持人。失败不归还，同编号重试不再次交接。用户本人发言不受发言权限制，也不改变发言权；@ 不改变顺序。维护状态、阶段及通知回执不占用发言权。取消安排须主持人持有，用户可直接取消失效安排；取消后归还给主持人领取。",
@@ -863,7 +1011,7 @@ function limit_values(payload, current = {}) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload) || Object.keys(payload).some(key => !Object.hasOwn(LIMIT_DEFAULTS, key))) throw new HttpError(400, "limits 仅接受讨论上限配置字段");
   const result = Object.fromEntries(Object.entries(LIMIT_DEFAULTS).map(([key, value]) => [key, current[key] ?? value]));
   Object.assign(result, payload);
-  for (const [key, minimum, maximum] of [["max_rounds", 0, 100], ["max_minutes", 0, 1440], ["execution_minutes", 1, 60], ["summary_minutes", 1, 60]]) {
+  for (const [key, minimum, maximum] of [["max_rounds", 0, 100], ["max_minutes", 0, 1440], ["execution_minutes", 0, 60], ["summary_minutes", 1, 60]]) {
     if (!Number.isInteger(result[key]) || result[key] < minimum || result[key] > maximum) throw new HttpError(400, `${key} 须为 ${minimum}–${maximum} 的整数`);
   }
   if (!["pause", "summarize"].includes(result.on_limit)) throw new HttpError(400, "on_limit 须为 pause 或 summarize");
@@ -914,12 +1062,13 @@ async function check_limits(database, room_id, payload) {
   const reason = limits.reason || "user_stop";
   const closing = (force || limits.on_limit === "summarize") && reason !== "time_limit";
   if (closing && limits.closing) return room;
+  const summary_deadline = Math.floor(Date.now() / 1000) + limits.summary_minutes * 60;
   const statements = [database.prepare("UPDATE discussion_limits SET closing_at=?,stop_reason=?,revision=revision+1 WHERE room_id=?")
     .bind(closing ? Math.floor(Date.now() / 1000) : limits.closing_at, reason, room_id),
     database.prepare("UPDATE discussion_turns SET status='cancelled' WHERE room_id=? AND status IN ('pending','notified')").bind(room_id),
     database.prepare("UPDATE discussion_turns SET status='skipped' WHERE room_id=? AND status='queued'").bind(room_id),
     database.prepare("UPDATE room_floor SET holder=NULL,next_speaker=?,revision=revision+1 WHERE room_id=?").bind(room.host, room_id),
-    closing ? database.prepare("UPDATE discussion_runtime SET generation=generation+1,revision=revision+1,deadline=MIN(deadline,?) WHERE room_id=? AND status='running'").bind(Math.floor(Date.now() / 1000) + limits.summary_minutes * 60, room_id)
+    closing ? database.prepare("UPDATE discussion_runtime SET generation=generation+1,revision=revision+1,deadline=CASE WHEN deadline=0 THEN ? ELSE MIN(deadline,?) END WHERE room_id=? AND status='running'").bind(summary_deadline, summary_deadline, room_id)
       : database.prepare("UPDATE topic_settings SET phase='paused' WHERE room_id=?").bind(room_id)];
   await checked_batch(database, `EXISTS(SELECT 1 FROM discussion_limits WHERE room_id=? AND revision=?)
     AND EXISTS(SELECT 1 FROM topic_settings WHERE room_id=? AND phase=? AND host=? AND json(experts)=json(?))
@@ -936,19 +1085,20 @@ async function runtime_view(database, room_id) {
   const latest_execution = await database.prepare("SELECT id,participant,role,status,result FROM discussion_events WHERE room_id=? ORDER BY id DESC LIMIT 1").bind(room_id).first();
   const participants = await participant_executions(database, room_id);
   const timings = await execution_timings(database, room_id, row.run_id);
-  return { ...visible, latest_execution, participants, timings, protected: true, expired: row.status === "running" && row.deadline <= Math.floor(Date.now() / 1000) };
+  return { ...visible, latest_execution, participants, timings, protected: true, expired: row.status === "running" && row.deadline > 0 && row.deadline <= Math.floor(Date.now() / 1000) };
 }
 
 /** Summarize each participant's latest execution and failure count for the progress panel. */
 async function participant_executions(database, room_id) {
   // One grouped pass over the room's events; per-row correlated subqueries made reads grow quadratically.
-  const { results } = await database.prepare(`WITH stats AS (SELECT participant,MAX(id) AS latest_id,
+  // Keep SELECT outermost so guarded_database treats post-completion readback as read-only.
+  const { results } = await database.prepare(`SELECT * FROM (WITH stats AS (SELECT participant,MAX(id) AS latest_id,
       MAX(CASE WHEN session_id<>'' THEN id END) AS bound_id,SUM(status='failed') AS failures
       FROM discussion_events WHERE room_id=? GROUP BY participant)
     SELECT latest.id,latest.participant,latest.role,latest.status,latest.result,latest.turn_id,latest.lease_until,
       COALESCE(bound.session_id,'') AS session_id,stats.failures
     FROM stats JOIN discussion_events AS latest ON latest.id=stats.latest_id
-    LEFT JOIN discussion_events AS bound ON bound.id=stats.bound_id ORDER BY latest.id`).bind(room_id).all();
+    LEFT JOIN discussion_events AS bound ON bound.id=stats.bound_id ORDER BY latest.id)`).bind(room_id).all();
   const now = Math.floor(Date.now() / 1000);
   return results.map(({ lease_until, ...event }) => ({ ...event, stale: event.status === "started" && lease_until <= now }));
 }
@@ -1010,22 +1160,22 @@ async function authorize_database(database, room_id, token, operation, payload) 
     if (payload.author !== actor || (event.role === "expert" && payload.turn_id !== event.turn_id)) throw new HttpError(403, "自动回答须关联本人的有效安排");
   } else if (operation === "floor") {
     if ((payload.speaker ?? actor) !== actor) throw new HttpError(403, "只能操作本人发言权");
-  } else if (event.role !== "host" || !["topic", "state", "turns", "limits"].includes(operation)) throw new HttpError(403, "本次执行不能进行此操作");
-  return guarded_database(database, `EXISTS(SELECT 1 FROM discussion_events e JOIN discussion_runtime r USING(room_id)
+  } else if (operation !== "attachments" && (event.role !== "host" || !["topic", "state", "turns", "limits"].includes(operation))) throw new HttpError(403, "本次执行不能进行此操作");
+  return guarded_database(database, `EXISTS(SELECT 1 FROM discussion_events e JOIN discussion_runtime r USING(room_id) JOIN discussion_limits l USING(room_id)
     WHERE e.id=? AND e.token_hash=? AND e.run_id=r.run_id AND e.generation=r.generation
-    AND e.status='started' AND r.status='running' AND r.deadline>unixepoch()
-    AND e.lease_until>unixepoch() AND e.started_at+(SELECT execution_minutes*60 FROM discussion_limits WHERE room_id=e.room_id)>unixepoch())`, [event.id, hashed]);
+    AND e.status='started' AND r.status='running' AND (r.deadline=0 OR r.deadline>unixepoch())
+    AND e.lease_until>unixepoch() AND (l.execution_minutes=0 OR e.started_at+l.execution_minutes*60>unixepoch()))`, [event.id, hashed]);
 }
 
-/** Validate explicit finite starts without launching any application. */
+/** Validate starts with an optional deadline without launching any application. */
 function runtime_start(database, room, payload) {
   const room_id = room.id;
   const now = Math.floor(Date.now() / 1000);
   let configured = room.limits.max_minutes ? (room.limits.started_at || now) + room.limits.max_minutes * 60 + (room.limits.idle_seconds || 0) : 0;
   if (room.limits.closing_at) configured = Math.min(...[configured, room.limits.closing_at + room.limits.summary_minutes * 60, room.runtime.deadline].filter(Boolean));
   payload.deadline ??= configured;
-  if (Number.isInteger(payload.deadline) && configured) payload.deadline = Math.min(payload.deadline, configured);
-  if (!Number.isInteger(payload.deadline) || payload.deadline <= now || payload.deadline > now + 86400) throw new HttpError(400, "deadline 须为未来 24 小时内的 Unix 秒数");
+  if (Number.isInteger(payload.deadline) && configured) payload.deadline = Math.min(payload.deadline || configured, configured);
+  if (!Number.isInteger(payload.deadline) || (payload.deadline !== 0 && (payload.deadline <= now || payload.deadline > now + 86400))) throw new HttpError(400, "deadline 须为 0（不限时长）或未来 24 小时内的 Unix 秒数");
   if (room.archived || room.phase === "concluded" || room.host === "用户" || !Object.keys(room.experts).length || Object.values(room.experts).some(mode => mode !== "cli")) throw new HttpError(400, "自动运行需要未归档、未收束的话题及具有 CLI 读写能力的 AI 主持和参与者");
   const phase = payload.phase ?? room.runtime.resume_phase ?? (room.phase === "preparing" ? "initial" : "discussing");
   if (!["initial", "discussing", "reviewing"].includes(phase)) throw new HttpError(400, "恢复阶段无效");
@@ -1055,9 +1205,9 @@ async function configure_runtime(database, room_id, token, payload) {
   if (room) {
     condition += ` AND EXISTS(SELECT 1 FROM topic_settings JOIN room_directory USING(room_id)
       JOIN discussion_limits USING(room_id) WHERE room_id=? AND phase=? AND host=? AND json(experts)=json(?)
-      AND archived=0 AND discussion_limits.revision=? AND started_at=?) AND unixepoch()<?`;
+      AND archived=0 AND discussion_limits.revision=? AND started_at=?) AND (?=0 OR unixepoch()<?)`;
     // The start snapshot must be checked before phase/clock writes in the same transaction.
-    values.push(room_id, room.phase, room.host, JSON.stringify(room.experts), room.limits.revision, room.limits.started_at, payload.deadline);
+    values.push(room_id, room.phase, room.host, JSON.stringify(room.experts), room.limits.revision, room.limits.started_at, payload.deadline, payload.deadline);
   }
   if (idle) values.push(room_id);
   statements.push(database.prepare(`INSERT INTO discussion_runtime(room_id,mode,run_id,status,control_hash,deadline,updated_at)
@@ -1099,21 +1249,23 @@ async function runtime_event_action(database, room_id, event_id, token, payload)
   let statements;
   const now = Math.floor(Date.now() / 1000);
   const work_seconds = (await database.prepare("SELECT execution_minutes*60 AS seconds FROM discussion_limits WHERE room_id=?").bind(room_id).first()).seconds;
+  const work_deadline = work_seconds ? (payload.action === "enter" ? now : event.started_at) + work_seconds : 0;
+  const lease_until = Math.min(now + 120, work_deadline || Infinity, run.deadline || Infinity);
   if (payload.action === "reserve" && controller) statements = await reservation_statements(database, event, payload);
   else if (payload.action === "enter" && !controller && event.status === "dispatched" && payload.session_id) {
     statements = [database.prepare("UPDATE discussion_events SET status='started',session_id=?,started_at=?,lease_until=? WHERE id=?")
-      .bind(String(payload.session_id).slice(0, 200), now, Math.min(now + 120, now + work_seconds, run.deadline), event.id)];
-  } else if (payload.action === "renew" && controller && event.status === "started" && event.lease_until > now && event.started_at + work_seconds > now) {
-    statements = [database.prepare("UPDATE discussion_events SET lease_until=? WHERE id=?").bind(Math.min(now + 120, event.started_at + work_seconds, run.deadline), event.id)];
+      .bind(String(payload.session_id).slice(0, 200), now, lease_until, event.id)];
+  } else if (payload.action === "renew" && controller && event.status === "started" && event.lease_until > now && (!work_deadline || work_deadline > now)) {
+    statements = [database.prepare("UPDATE discussion_events SET lease_until=? WHERE id=?").bind(lease_until, event.id)];
   } else if (payload.action === "fail" && ["dispatched", "started"].includes(event.status)) {
     statements = [database.prepare("UPDATE discussion_events SET status='failed',result=? WHERE id=?").bind(String(payload.reason ?? "需要用户处理").slice(0, 500), event.id),
       database.prepare("UPDATE topic_settings SET phase='paused' WHERE room_id=?").bind(room_id)];
   } else throw new HttpError(409, "执行状态不允许此操作");
   const condition = `EXISTS(SELECT 1 FROM discussion_events e JOIN discussion_runtime r USING(room_id)
     WHERE e.id=? AND e.status=? AND e.generation=r.generation AND e.run_id=r.run_id AND r.status='running'
-    AND r.deadline>unixepoch() AND (r.control_hash=? OR e.token_hash=?))`;
+    AND (r.deadline=0 OR r.deadline>unixepoch()) AND (r.control_hash=? OR e.token_hash=?))`;
   const idle = payload.action === "reserve" ? " AND NOT EXISTS(SELECT 1 FROM discussion_events WHERE room_id=? AND status IN ('dispatched','started'))" : "";
-  const live_lease = payload.action === "renew" ? " AND EXISTS(SELECT 1 FROM discussion_events WHERE id=? AND lease_until>unixepoch() AND started_at+(SELECT execution_minutes*60 FROM discussion_limits WHERE room_id=discussion_events.room_id)>unixepoch())" : "";
+  const live_lease = payload.action === "renew" ? " AND EXISTS(SELECT 1 FROM discussion_events e JOIN discussion_limits l USING(room_id) WHERE e.id=? AND e.lease_until>unixepoch() AND (l.execution_minutes=0 OR e.started_at+l.execution_minutes*60>unixepoch()))" : "";
   await checked_batch(database, condition + idle + live_lease,
     [event.id, event.status, hashed, hashed, ...(idle ? [room_id] : []), ...(live_lease ? [event.id] : [])], statements);
   return public_event(await database.prepare("SELECT * FROM discussion_events WHERE id=?").bind(event.id).first());
@@ -1139,7 +1291,8 @@ async function handle_runtime_api(database, request, parts, params) {
   throw new HttpError(404, "地址不存在");
 }
 
-async function handle_api(database, request, parts, params) {
+/** Route JSON operations alongside explicitly bounded binary attachment routes. */
+async function handle_api(database, request, parts, params, bucket) {
   const route = parts.join("/");
   const method = request.method;
   if (route === "api/health" && method === "GET") return respond({ ok: true });
@@ -1168,6 +1321,7 @@ async function handle_api(database, request, parts, params) {
     throw new HttpError(404, "地址不存在");
   }
   const room_id = parts[2];
+  if (parts[3] === "attachments") return handle_attachments(database, request, parts, params, bucket);
   if (["runtime", "events"].includes(parts[3])) return handle_runtime_api(database, request, parts, params);
   if (method === "POST") database = await authorize_database(database, room_id,
     request.headers.get("X-Discussion-Token") ?? "", parts[3], await read_payload(request.clone()));
@@ -1175,7 +1329,12 @@ async function handle_api(database, request, parts, params) {
   const tail = parts.slice(3).join("/");
   if (tail === "limits") return respond(method === "GET" ? (await require_room(database, room_id)).limits : await check_limits(database, room_id, await read_payload(request)));
   if (["move", "folder", "archive", "restore", "delete"].includes(tail) && method === "POST") {
-    return respond(await manage_room(database, room_id, tail, await read_payload(request)));
+    const files = tail === "delete" ? (await database.prepare("SELECT id FROM attachments WHERE room_id=?").bind(room_id).all()).results : [];
+    const result = await manage_room(database, room_id, tail, await read_payload(request));
+    if (bucket) {
+      for (const file of files) await bucket.delete(`rooms/${room_id}/${file.id}`).catch(error => console.error("Attachment cleanup failed", file.id, error));
+    }
+    return respond(result);
   }
   if (!tail && method === "GET") return respond(await require_room(database, room_id));
   if (tail === "floor") return respond(method === "GET" ? (await require_room(database, room_id)).floor : await update_floor(database, room_id, await read_payload(request)));
@@ -1183,7 +1342,7 @@ async function handle_api(database, request, parts, params) {
   if (tail === "messages") {
     if (method === "GET") return respond(await query_messages(database, room_id, params));
     const payload = await read_payload(request);
-    const result = await append_message(database, room_id, payload);
+    const result = await append_message(database, room_id, payload, request.headers.get("X-Discussion-Token") ?? "");
     return respond(result, result.duplicate ? 200 : 201);
   }
   if (parts.length === 5 && parts[3] === "messages" && method === "GET") {
@@ -1193,6 +1352,43 @@ async function handle_api(database, request, parts, params) {
     return respond(await update_state(database, room_id, await read_payload(request)));
   }
   throw new HttpError(404, "地址不存在");
+}
+
+/** Handle upload, listing, metadata, and safe content access through an optional R2 binding. */
+async function handle_attachments(database, request, parts, params, bucket) {
+  const room_id = parts[2];
+  if (parts.length === 4) {
+    if (request.method === "GET") return respond(await query_attachments(database, room_id, params));
+    if (!bucket) throw new HttpError(503, "附件存储未配置；请绑定 ATTACHMENTS R2 存储桶");
+    const metadata = attachment_metadata(params);
+    database = await authorize_database(database, room_id, request.headers.get("X-Discussion-Token") ?? "", "attachments", metadata);
+    await require_room_id(database, room_id);
+    if (Number(request.headers.get("Content-Length")) > MAX_ATTACHMENT_BYTES) throw new HttpError(413, "单个附件最多 20 MiB");
+    const result = await store_attachment(database, bucket, room_id, metadata, await read_bytes(request, MAX_ATTACHMENT_BYTES));
+    return respond(result, result.duplicate ? 200 : 201);
+  }
+  if (request.method === "GET" && [5, 6].includes(parts.length)) {
+    const file = await get_attachment(database, room_id, parts[4]);
+    if (parts.length === 5) return respond(file);
+    if (parts[5] === "content") return attachment_response(bucket, file, params.download === "1");
+  }
+  throw new HttpError(404, "地址不存在");
+}
+
+/** Stream opaque R2 bytes without exposing the bucket or allowing executable inline content. */
+async function attachment_response(bucket, file, download) {
+  if (!bucket) throw new HttpError(503, "附件存储未配置；请绑定 ATTACHMENTS R2 存储桶");
+  const object = await bucket.get(`rooms/${file.room_id}/${file.id}`);
+  if (!object) throw new HttpError(404, "附件原文件缺失");
+  const disposition = download || file.content_type === "application/octet-stream" ? "attachment" : "inline";
+  const filename = encodeURIComponent(file.file_name).replace(/[!'()*]/g, character => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+  return new Response(object.body, { headers: {
+    "Content-Type": file.content_type, "Content-Length": String(file.size),
+    "Content-Disposition": `${disposition}; filename*=UTF-8''${filename}`,
+    "X-Content-SHA256": file.sha256,
+    "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox",
+    "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+  } });
 }
 
 /** Route topic maintenance and speaking assignments. */
@@ -1246,8 +1442,22 @@ async function handle_text(database, parts, params) {
   throw new HttpError(404, "地址不存在");
 }
 
+/** Share updates across domain aliases; deployments can isolate distinct databases by channel. */
+function updates_hub(env) {
+  return env.UPDATES?.get(env.UPDATES.idFromName(env.UPDATES_CHANNEL || "default"));
+}
+
+/** Deliver an invalidation without making a committed write fail on push outages. */
+async function notify_update(env) {
+  try {
+    const hub = updates_hub(env);
+    const response = await hub.fetch("https://updates.internal/", { method: "POST" });
+    if (!response.ok) console.error("Update notification failed:", response.status);
+  } catch (error) { console.error("Update notification failed:", error.message); }
+}
+
 /** Dispatch Worker requests, preserving HEAD's no-publication behavior. */
-async function fetch_request(request, env) {
+async function fetch_request(request, env, context) {
   const url = new URL(request.url);
   const parts = url.pathname.replace(/^\/+|\/+$/g, "").split("/");
   const text_mode = parts[0] === "r";
@@ -1255,11 +1465,23 @@ async function fetch_request(request, env) {
     if (url.pathname === "/robots.txt") return respond("User-agent: *\nAllow: /\n", 200, true);
     if (!["api", "r"].includes(parts[0])) return env.ASSETS.fetch(request);
     if (!["GET", "POST"].includes(request.method)) return new Response(null, { status: 501 });
+    if (url.pathname === "/api/updates" && request.method === "GET") {
+      const hub = updates_hub(env);
+      return hub ? await hub.fetch("https://updates.internal/") : new Response(null, { status: 204 });
+    }
     const params = Object.fromEntries(url.searchParams);
     if (text_mode && request.method === "GET") {
       return respond(await handle_text(env.DB, parts, params), 200, true);
     }
-    return await handle_api(env.DB, request, parts, params);
+    const quiet_renewal = parts[3] === "events" && request.method === "POST"
+      && (await request.clone().json().catch(() => ({}))).action === "renew";
+    const response = await handle_api(env.DB, request, parts, params, env.ATTACHMENTS);
+    if (request.method === "POST" && response.ok && ["rooms", "folders"].includes(parts[1]) && !quiet_renewal && env.UPDATES) {
+      const notification = notify_update(env);
+      if (context) context.waitUntil(notification);
+      else await notification;
+    }
+    return response;
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;
     const message = status === 500 ? "服务器内部错误" : error.message;

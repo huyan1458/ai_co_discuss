@@ -367,14 +367,14 @@ defineExpose({ settle });
 .limit-close > [class*="icon"] { width: 14px; height: 14px; }
 .limit-track { position: relative; margin-top: 3px; touch-action: none; user-select: none; cursor: grab; border-radius: 5px; outline: none; }
 .limit-track:active { cursor: grabbing; }
-.limit-track:has(:focus-visible) { box-shadow: inset 0 0 0 2px var(--channel-accent); }
+.limit-track:has(:focus-visible) .limit-selection { background: color-mix(in srgb, var(--channel-accent) 16%, var(--ui-bg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--channel-accent) 60%, transparent); }
 .limit-wheel { position: relative; height: 144px; min-width: 0; overflow: hidden; outline: none; }
 .limit-selection { position: absolute; top: 50%; left: 0; right: 0; height: 32px; transform: translateY(-50%); border-radius: 5px; background: color-mix(in srgb, var(--channel-accent) 10%, var(--ui-bg)); pointer-events: none; }
 .limit-wheel-rows { position: absolute; inset: 0; perspective: 500px; mask-image: linear-gradient(transparent, #000 22%, #000 78%, transparent); }
 .limit-wheel-row { position: absolute; top: calc(50% - 16px); left: calc(50% - 42px); width: 50px; height: 32px; line-height: 32px; text-align: center; color: var(--ui-text-toned); font-size: 18px; font-weight: 400; font-variant-numeric: tabular-nums; backface-visibility: hidden; transform: translateY(var(--wheel-y)) rotateX(var(--wheel-angle)); }
 .limit-wheel-row.is-current { color: var(--ui-text-highlighted); }
 .limit-exact-value { position: absolute; top: calc(50% - 16px); left: calc(50% - 42px); display: flex; align-items: center; gap: 4px; height: 32px; pointer-events: none; }
-.limit-exact-value input { width: 50px; min-width: 0; padding: 0; border: 0; appearance: textfield; background: transparent; color: transparent; caret-color: transparent; text-align: center; font-size: 18px; font-variant-numeric: tabular-nums; }
+.limit-exact-value input { width: 50px; min-width: 0; height: 32px; padding: 0; border: 0; outline: none; box-shadow: none; appearance: textfield; background: transparent; color: transparent; caret-color: transparent; text-align: center; font-size: 18px; line-height: 32px; font-variant-numeric: tabular-nums; }
 .limit-exact-value input::-webkit-inner-spin-button, .limit-exact-value input::-webkit-outer-spin-button { margin: 0; appearance: none; }
 .is-editing .limit-exact-value input { color: var(--ui-text-highlighted); caret-color: auto; pointer-events: auto; user-select: text; }
 .is-editing .limit-wheel-row.is-current { opacity: 0 !important; }

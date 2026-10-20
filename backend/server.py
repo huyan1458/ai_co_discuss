@@ -1,6 +1,7 @@
 """AI CoDiscuss 的零依赖 HTTP / SQLite 概念验证服务。"""
 
 import argparse
+import hashlib
 import hmac
 import json
 import logging
@@ -9,13 +10,14 @@ import re
 import socket
 import sqlite3
 import subprocess
+import threading
 import time
 import uuid
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 from .runtime import (authorize_write, begin_write, configure_runtime, event_action,
                      LIMIT_DEFAULTS, LIMITS_SQL, limit_values, limits_view, require_within_limits,
@@ -24,7 +26,11 @@ from .runtime import (authorize_write, begin_write, configure_runtime, event_act
 ROOT = Path(__file__).resolve().parent.parent
 WEB_ROOT = ROOT / "web"
 DEFAULT_PORT = 8765
+UPDATE_HEARTBEAT_SECONDS = 15
 MAX_BODY_BYTES = 512 * 1024
+MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+MAX_MESSAGE_ATTACHMENTS = 10
+MAX_FILENAME_LENGTH = 255
 LOCAL_LAUNCH_TIMEOUT = 60
 MAX_TEXT_LENGTH = 32000
 MAX_STATE_LENGTH = 4000
@@ -35,7 +41,6 @@ UNCATEGORIZED_FOLDER_ID = "__uncategorized__"
 PARTICIPANTS = ["用户", "Codex", "Claude", "Gemini", "DeepSeek", "Qwen"]
 ASSETS = {"/": ("index.html", "text/html"),
           "/app.js": ("app.js", "text/javascript"),
-          "/style.css": ("style.css", "text/css"),
           "/modern.js": ("modern.js", "text/javascript"),
           "/modern.css": ("modern.css", "text/css"),
           "/markdown.js": ("markdown.js", "text/javascript"),
@@ -44,6 +49,10 @@ ASSETS = {"/": ("index.html", "text/html"),
           "/icons/LICENSE.txt": ("icons/LICENSE.txt", "text/plain")}
 ASSETS.update({f"/icons/{name}.svg": (f"icons/{name}.svg", "image/svg+xml")
                for name in ("openai", "claude", "gemini", "deepseek", "qwen", "user")})
+ASSETS.update({"/pdfjs/" + file.relative_to(WEB_ROOT / "pdfjs").as_posix():
+               (file.relative_to(WEB_ROOT).as_posix(),
+                {".mjs": "text/javascript", ".js": "text/javascript", ".wasm": "application/wasm"}.get(file.suffix, "application/octet-stream"))
+               for file in (WEB_ROOT / "pdfjs").rglob("*") if file.is_file()})
 SCHEMA = (Path(__file__).resolve().parent / "schema.sql").read_text(encoding="utf-8")
 PHASES = {"preparing": "准备中", "initial": "独立观点", "discussing": "深入讨论",
           "reviewing": "结论复核", "paused": "已暂停", "concluded": "已收束"}
@@ -59,16 +68,18 @@ ROOM_BACKUP_QUERIES = {
         "topic_settings", "room_floor", "discussion_limits")},
     "topic_folders": "SELECT * FROM topic_folders WHERE id IN (SELECT folder_id FROM room_folder_assignments WHERE room_id=?)",
     "messages": "SELECT * FROM messages WHERE room_id=? ORDER BY id",
+    "attachments": "SELECT * FROM attachments WHERE room_id=? AND message_id IS NOT NULL ORDER BY message_id,position",
     "discussion_turns": "SELECT * FROM discussion_turns WHERE room_id=? ORDER BY id",
     **{table: f"SELECT * FROM {table} WHERE message_id IN (SELECT id FROM messages WHERE room_id=?) ORDER BY message_id"
-       for table in ("message_details", "message_summaries")},
+       for table in ("message_details", "message_summaries", "message_timings")},
 }
 MESSAGE_QUERY = """SELECT messages.*, COALESCE(details.kind,'opinion') AS kind,
 COALESCE(details.submitted_by, CASE WHEN messages.source IN ('cli','url','user')
 THEN messages.author ELSE '用户' END) AS submitted_by, details.turn_id,
-COALESCE(summaries.text,'') AS summary, COALESCE(summaries.author,'') AS summary_by
+COALESCE(summaries.text,'') AS summary, COALESCE(summaries.author,'') AS summary_by, timing.elapsed_seconds
 FROM messages LEFT JOIN message_details AS details ON details.message_id=messages.id
-LEFT JOIN message_summaries AS summaries ON summaries.message_id=messages.id"""
+LEFT JOIN message_summaries AS summaries ON summaries.message_id=messages.id
+LEFT JOIN message_timings AS timing ON timing.message_id=messages.id"""
 
 
 def room_backup(connection, room_id):
@@ -488,6 +499,7 @@ def manage_room(connection, room_id, action, payload):
 
 def delete_room_records(connection, room_id):
     """Remove a room's dependent records in the caller's transaction."""
+    connection.execute("DELETE FROM message_timings WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)", (room_id,))
     connection.execute("DELETE FROM message_summaries WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)", (room_id,))
     connection.execute("DELETE FROM message_details WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)", (room_id,))
     connection.execute("DELETE FROM discussion_turns WHERE room_id=?", (room_id,))
@@ -549,10 +561,130 @@ def message_values(payload):
     submission_id = submission_value(payload.get("submission_id"))
     if author not in PARTICIPANTS:
         raise ValueError("请选择有效的发言者")
-    if not text or len(text) > MAX_TEXT_LENGTH:
-        raise ValueError(f"发言需为 1–{MAX_TEXT_LENGTH} 字")
+    if (not text and not attachment_ids(payload)) or len(text) > MAX_TEXT_LENGTH:
+        raise ValueError(f"发言需包含正文或附件，正文最多 {MAX_TEXT_LENGTH} 字")
     reply_to = payload.get("reply_to")
     return author, text, submission_id, int(reply_to) if reply_to else None
+
+
+def attachment_ids(payload):
+    """Validate the ordered, unique attachment references of one message."""
+    identifiers = payload.get("attachment_ids", [])
+    if (not isinstance(identifiers, list) or len(identifiers) > MAX_MESSAGE_ATTACHMENTS
+            or any(not isinstance(item, str) or not re.fullmatch(r"[a-f0-9]{32}", item) for item in identifiers)
+            or len(set(identifiers)) != len(identifiers)):
+        raise ValueError(f"附件编号无效；每条消息最多 {MAX_MESSAGE_ATTACHMENTS} 个，不能重复")
+    return identifiers
+
+
+def attachment_metadata(params):
+    """Validate upload metadata independently of the untrusted MIME header."""
+    name = params.get("file_name", "")
+    actor = params.get("actor")
+    if (not isinstance(name, str) or not name.strip() or len(name) > MAX_FILENAME_LENGTH
+            or name in (".", "..") or re.search(r"[/\\\x00-\x1f\x7f]", name)):
+        raise ValueError(f"文件名需为 1–{MAX_FILENAME_LENGTH} 字，不能包含路径或控制字符")
+    if actor not in PARTICIPANTS:
+        raise ValueError("上传附件须声明有效的 actor")
+    return {"file_name": name, "actor": actor, "submission_id": submission_value(params.get("submission_id"))}
+
+
+def attachment_content_type(data):
+    """Allow inline preview only for recognized raster images and PDF bytes."""
+    signatures = ((b"\x89PNG\r\n\x1a\n", "image/png"), (b"\xff\xd8\xff", "image/jpeg"),
+                  (b"GIF87a", "image/gif"), (b"GIF89a", "image/gif"), (b"%PDF-", "application/pdf"))
+    for signature, content_type in signatures:
+        if data.startswith(signature):
+            return content_type
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "application/octet-stream"
+
+
+def attachment_view(row):
+    """Return attachment metadata and room-scoped content URLs."""
+    result = dict(row)
+    base = f"/api/rooms/{result['room_id']}/attachments/{result['id']}/content"
+    result.update(url=base, download_url=base + "?download=1")
+    return result
+
+
+def message_with_attachments(connection, row):
+    """Attach the published file list to an original message."""
+    message = dict(row)
+    message["attachments"] = [attachment_view(item) for item in connection.execute(
+        "SELECT * FROM attachments WHERE message_id=? ORDER BY position,id", (message["id"],))]
+    return message
+
+
+def query_attachments(connection, room_id, params):
+    """List published files, or recover one upload by its exact submission ID."""
+    require_room(connection, room_id)
+    where, values = "room_id=?", [room_id]
+    if "submission_id" in params:
+        where += " AND submission_id=?"
+        values.append(submission_value(params["submission_id"]))
+    else:
+        where += " AND message_id IS NOT NULL"
+    if "message_id" in params:
+        where += " AND message_id=?"
+        values.append(int(params["message_id"]))
+    page = max(1, int(params.get("page", 1)))
+    total = connection.execute(f"SELECT COUNT(*) FROM attachments WHERE {where}", values).fetchone()[0]
+    rows = connection.execute(f"SELECT * FROM attachments WHERE {where} ORDER BY created_at,id LIMIT ? OFFSET ?",
+                              [*values, PAGE_SIZE, (page - 1) * PAGE_SIZE])
+    return {"attachments": [attachment_view(row) for row in rows], "page": page, "total": total,
+            "pages": max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)}
+
+
+def get_attachment(connection, room_id, identifier):
+    """Resolve a file only within the explicitly selected room."""
+    row = connection.execute("SELECT * FROM attachments WHERE room_id=? AND id=?", (room_id, identifier)).fetchone()
+    if not row:
+        raise LookupError("附件不存在")
+    return attachment_view(row)
+
+
+def attachment_path(database, attachment):
+    """Keep opaque file IDs in storage belonging to this exact SQLite database."""
+    root = Path(str(Path(database).resolve()) + ".attachments")
+    return root / attachment["id"]
+
+
+def store_attachment(connection, database, room_id, metadata, data):
+    """Persist one immutable upload; exact retries return the original file."""
+    begin_write(connection)
+    require_room(connection, room_id)
+    expected = {**metadata, "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+                "content_type": attachment_content_type(data)}
+    previous = connection.execute("SELECT * FROM attachments WHERE room_id=? AND submission_id=?",
+                                  (room_id, metadata["submission_id"])).fetchone()
+    if previous:
+        if any(previous[key] != value for key, value in expected.items()):
+            raise FileExistsError("这个附件提交编号已被其他文件使用")
+        return {"attachment": attachment_view(previous), "duplicate": True}
+    record = {"id": uuid.uuid4().hex, "room_id": room_id, **expected, "created_at": utc_now()}
+    path = attachment_path(database, record)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("xb") as target:
+            target.write(data)
+        connection.execute("""INSERT INTO attachments
+            (id,room_id,file_name,actor,submission_id,size,sha256,content_type,created_at)
+            VALUES (:id,:room_id,:file_name,:actor,:submission_id,:size,:sha256,:content_type,:created_at)""", record)
+        connection.commit()
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+    return {"attachment": get_attachment(connection, room_id, record["id"]), "duplicate": False}
+
+
+def check_message_attachments(connection, room_id, actor, identifiers):
+    """Reject references to another room, uploader, or already published message."""
+    for identifier in identifiers:
+        attachment = get_attachment(connection, room_id, identifier)
+        if attachment["actor"] != actor or attachment["message_id"] is not None:
+            raise FileExistsError("附件已用于其他消息，或不属于本次实际提交者")
 
 
 def message_details(room, payload):
@@ -596,7 +728,21 @@ def check_message_references(connection, room_id, message):
             raise FileExistsError("该发言安排已完成或取消")
 
 
-def append_message(connection, room_id, payload):
+def record_message_timing(connection, message_id, token):
+    """Freeze elapsed time only for the execution that actually authored this message."""
+    if not token:
+        return
+    connection.execute("""INSERT INTO message_timings(message_id,elapsed_seconds)
+        SELECT m.id,MAX(0,CAST(strftime('%s',m.created_at) AS INTEGER)-t.dispatched_at)
+        FROM messages AS m JOIN message_details AS d ON d.message_id=m.id
+        JOIN discussion_events AS e ON e.room_id=m.room_id AND e.participant=m.author
+        JOIN event_timings AS t ON t.event_id=e.id
+        WHERE m.id=? AND m.source='cli' AND d.submitted_by=m.author
+            AND e.status='started' AND e.token_hash=? AND t.dispatched_at>0
+        ON CONFLICT(message_id) DO NOTHING""", (message_id, token_hash(token)))
+
+
+def append_message(connection, room_id, payload, token=""):
     """Atomically append an attributed message and complete its scheduled turn."""
     author, text, submission_id, reply_to = message_values(payload)
     begin_write(connection)
@@ -604,16 +750,20 @@ def append_message(connection, room_id, payload):
     details = message_details(room, {**payload, "author": author})
     expected = {"author": author, "text": text, "reply_to": reply_to, **details}
     expected.update(message_summary(payload, expected))
+    identifiers = attachment_ids(payload)
     previous = connection.execute(f"{MESSAGE_QUERY} WHERE room_id=? AND submission_id=?", (room_id, submission_id)).fetchone()
     if previous:
-        if any(previous[key] != expected[key] for key in ("author", "text", "reply_to", "kind", "submitted_by", "turn_id", "summary", "summary_by")):
+        previous = message_with_attachments(connection, previous)
+        if (any(previous[key] != expected[key] for key in ("author", "text", "reply_to", "kind", "submitted_by", "turn_id", "summary", "summary_by"))
+                or [item["id"] for item in previous["attachments"]] != identifiers):
             raise FileExistsError("这个提交编号已被另一条内容使用，请为新发言生成新编号")
-        return {"message": dict(previous), "duplicate": True}
+        return {"message": previous, "duplicate": True}
     if author != "用户" and details["kind"] == "opinion":
         require_within_limits(room)
     if room["phase"] in ("paused", "concluded") and details["kind"] == "opinion":
         raise ValueError("话题已暂停或收束；恢复阶段后才能提交新观点，运行回执请用 receipt")
     check_message_references(connection, room_id, expected)
+    check_message_attachments(connection, room_id, details["submitted_by"], identifiers)
     if author != "用户":
         if details["kind"] == "opinion" and not details["turn_id"]:
             raise ValueError("专家观点必须关联当前有效的 turn_id")
@@ -624,6 +774,10 @@ def append_message(connection, room_id, payload):
                        (cursor.lastrowid, details["kind"], details["submitted_by"], details["turn_id"]))
     connection.execute("INSERT INTO message_summaries (message_id,text,author) VALUES (?,?,?)",
                        (cursor.lastrowid, expected["summary"], expected["summary_by"]))
+    for position, identifier in enumerate(identifiers):
+        connection.execute("UPDATE attachments SET message_id=?,position=? WHERE id=?",
+                           (cursor.lastrowid, position, identifier))
+    record_message_timing(connection, cursor.lastrowid, token)
     if details["turn_id"]:
         connection.execute("UPDATE discussion_turns SET status='answered',answer_id=? WHERE id=?", (cursor.lastrowid, details["turn_id"]))
     return {"message": get_message(connection, room_id, cursor.lastrowid), "duplicate": False}
@@ -736,8 +890,9 @@ def check_limits(connection, room_id, payload):
     connection.execute("UPDATE discussion_turns SET status='skipped' WHERE room_id=? AND status='queued'", (room_id,))
     connection.execute("UPDATE room_floor SET holder=NULL,next_speaker=?,revision=revision+1 WHERE room_id=?", (room["host"], room_id))
     if closing:
-        connection.execute("UPDATE discussion_runtime SET generation=generation+1,revision=revision+1,deadline=MIN(deadline,?) WHERE room_id=? AND status='running'",
-                           (int(time.time()) + limits["summary_minutes"] * 60, room_id))
+        summary_deadline = int(time.time()) + limits["summary_minutes"] * 60
+        connection.execute("UPDATE discussion_runtime SET generation=generation+1,revision=revision+1,deadline=CASE WHEN deadline=0 THEN ? ELSE MIN(deadline,?) END WHERE room_id=? AND status='running'",
+                           (summary_deadline, summary_deadline, room_id))
     else:
         connection.execute("UPDATE topic_settings SET phase='paused' WHERE room_id=?", (room_id,))
     return require_room(connection, room_id)
@@ -805,7 +960,7 @@ def query_messages(connection, room_id, params):
     where, values = message_filters(room_id, params)
     total = connection.execute(f"SELECT COUNT(*) FROM ({MESSAGE_QUERY} WHERE {where})", values).fetchone()[0]
     rows = connection.execute(f"{MESSAGE_QUERY} WHERE {where} ORDER BY messages.id LIMIT ? OFFSET ?", [*values, PAGE_SIZE + 1, (page - 1) * PAGE_SIZE]).fetchall()
-    messages = [dict(row) for row in rows[:PAGE_SIZE]]
+    messages = [message_with_attachments(connection, row) for row in rows[:PAGE_SIZE]]
     result = {"messages": messages, "page": page, "total": total,
               "pages": max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)}
     if "after" in params:
@@ -818,7 +973,7 @@ def get_message(connection, room_id, message_id):
     row = connection.execute(f"{MESSAGE_QUERY} WHERE room_id=? AND messages.id=?", (room_id, message_id)).fetchone()
     if row is None:
         raise LookupError("消息不存在")
-    return dict(row)
+    return message_with_attachments(connection, row)
 
 
 def update_state(connection, room_id, payload):
@@ -852,7 +1007,9 @@ def message_text(message):
     reply = f" · 回复 #{message['reply_to']}" if message["reply_to"] else ""
     role = {"moderation": "主持发言", "receipt": "运行回执"}.get(message.get("kind"), "专家观点")
     summary = f"\n回答摘要（{message['summary_by']}）：\n{message['summary']}\n\n完整正文：\n" if message.get("summary") else "\n"
-    return f"#{message['id']} · {message['author']} · {message['created_at']}{reply}\n职责：{role}；来源：{message['source']}；提交者：{message.get('submitted_by', '用户')}；安排：{message.get('turn_id') or '无'}{summary}{message['text']}"
+    attachments = "".join(f"\n附件：{item['file_name']}（{item['size']} 字节；ID: {item['id']}）\n{item['download_url']}"
+                          for item in message.get("attachments", []))
+    return f"#{message['id']} · {message['author']} · {message['created_at']}{reply}\n职责：{role}；来源：{message['source']}；提交者：{message.get('submitted_by', '用户')}；安排：{message.get('turn_id') or '无'}{summary}{message['text']}{attachments}"
 
 
 def room_text(connection, room_id, params):
@@ -863,7 +1020,7 @@ def room_text(connection, room_id, params):
                f"主持人：{room['host']}；阶段：{PHASES[room['phase']]}；当前焦点：{room['focus'] or '尚未填写'}",
                f"当前记录截止 #{room['latest_id']}；共 {room['message_count']} 条；已完成 {room['completed_rounds']} 轮讨论（所有参与专家各发言一次）。"]
     limits = room["limits"]
-    content.append(f"讨论上限：{limits['max_rounds'] or '不限'} 轮；总时长 {limits['max_minutes'] or '不限'} 分钟；单次自动执行 {limits['execution_minutes']} 分钟；到限 {limits['on_limit']}；收束预留 {limits['summary_minutes']} 分钟（计入总时长）。到限：{limits['reached']}；收束中：{limits['closing']}。")
+    content.append(f"讨论上限：{limits['max_rounds'] or '不限'} 轮；总时长 {limits['max_minutes'] or '不限'} 分钟；单次自动执行 {str(limits['execution_minutes']) + ' 分钟' if limits['execution_minutes'] else '不限时长'}；到限 {limits['on_limit']}；收束预留 {limits['summary_minutes']} 分钟（计入总时长）。到限：{limits['reached']}；收束中：{limits['closing']}。")
     turn = room["current_turn"]
     floor = room["floor"]
     content.append(f"发言权：{floor['holder'] + ' 持有' if floor['holder'] else '待 ' + floor['next_speaker'] + ' 领取'}；版本 {floor['revision']}。用户本人可随时留言，AI 发言前须领取。")
@@ -919,8 +1076,9 @@ def protocol_text(room):
     base = f"/api/rooms/{room['id']}"
     return "\n\n".join([
         "# 本地 CLI 读写与主持协议", f"当前主持人：{room['host']}。以下为留言板接口，不是模型服务 API。",
-        "所有写入使用 POST 和 Content-Type: application/json。主持操作填写 actor 为当前主持人或用户；这些是声明身份，不是认证凭据。",
-        "讨论上限：room.limits 返回轮次、总时长、单次执行、到限方式、收束预留和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理；附 force:true 可在进行中提前进入收束，由主持人在收束预留时间内总结。到限停止新专家安排与观点；总结由真实主持人完成，预留计入总时长；暂停期间不计时也不消耗总时长。",
+        "写入使用 POST，通常为 Content-Type: application/json；附件上传使用 application/octet-stream 原始字节。主持操作填写 actor 为当前主持人或用户；这些是声明身份，不是认证凭据。",
+        f"附件：POST {base}/attachments?actor=身份&file_name=文件名&submission_id=新编号，原文件最多 20 MiB；GET 同路径默认列已发送附件，加 submission_id 精确核对上传。GET {base}/attachments/ID 读元数据，/ID/content 下载原文件。消息可带 attachment_ids（最多 10 个有序编号）；只关联同房间、同提交者的未使用附件，可只有附件无正文。自动任务须在回答完成前上传；消息查询包含附件，按需下载后由当前软件读取，不自动解析。",
+        "讨论上限：room.limits 返回轮次、总时长、单次执行、到限方式、收束预留和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长/单次执行时限。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理；附 force:true 可在进行中提前进入收束，由主持人在收束预留时间内总结。到限停止新专家安排与观点；总结由真实主持人完成，预留计入总时长；暂停期间不计时也不消耗总时长。",
         "运行方式：room.runtime 显示 manual/automatic、状态及真实执行回执。启用保护的房间写入须带 X-Discussion-Token；CLI 用 --access-file 读取本机私有文件，不公开令牌。自动任务先 execution enter，创建安排或保存关联回答即完成本步；不创建原生定时任务。旧执行在暂停、停止、换代、租约到期后失效。手动接入沿用原流程；受保护房间仍须用户提供有效的凭据文件。运行控制用 run view/start/pause/stop/configure；字段查 CLI schema。",
         f"发言权：GET {base}/floor 返回 holder、next_speaker、revision；POST 同路径，字段 actor、speaker（默认 actor）、action=take/return、revision（刚读到的整数版本）。仅无人持有且 next_speaker 为本人时可领取；持有者可主动归还，下一位回到主持人。版本变化返回 409，先读回核对。主持人仅可代操作 online 专家，cli 专家自行操作；用户可协助。",
         "新房间由主持人持有发言权。创建安排须主持人持有，保存成功即归还并点名该专家；AI 的 opinion、moderation、receipt 都须实际作者持有，代发不豁免，opinion 必须关联有效 turn_id。消息保存成功自动归还，下一位为主持人。失败不归还，同编号重试不再次交接。用户本人发言不受发言权限制，也不改变发言权；@ 不改变顺序。维护状态、阶段及通知回执不占用发言权。取消安排须主持人持有，用户可直接取消失效安排；取消后归还给主持人领取。",
@@ -951,6 +1109,9 @@ class DiscussionServer(ThreadingHTTPServer):
 
     def __init__(self, address, database, local_launch=False):
         self.database = Path(database)
+        self.updates = threading.Condition()
+        self.update_version = 0
+        self.updates_closed = False
         if local_launch and address[0] != "127.0.0.1":
             raise ValueError("本机启动入口须绑定 127.0.0.1")
         self.local_launch = local_launch
@@ -964,6 +1125,19 @@ class DiscussionServer(ThreadingHTTPServer):
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         super().server_bind()
 
+    def notify_update(self):
+        """Wake browser subscribers after a committed business write."""
+        with self.updates:
+            self.update_version += 1
+            self.updates.notify_all()
+
+    def server_close(self):
+        """Release streaming clients when the HTTP server stops."""
+        with self.updates:
+            self.updates_closed = True
+            self.updates.notify_all()
+        super().server_close()
+
 
 class DiscussionHandler(BaseHTTPRequestHandler):
     """Serve the browser UI and explicit plain-text discussion endpoints."""
@@ -974,6 +1148,11 @@ class DiscussionHandler(BaseHTTPRequestHandler):
 
     def respond(self, body, status=200, content_type="application/json"):
         """Send a UTF-8 response that browsers and proxies must not cache."""
+        parts = urlsplit(self.path).path.strip("/").split("/")
+        quiet_renewal = parts[3:4] == ["events"] and (self.payload_cache or {}).get("action") == "renew"
+        if (self.command == "POST" and 200 <= status < 300 and parts[:2] in (["api", "rooms"], ["api", "folders"])
+                and not quiet_renewal):
+            self.server.notify_update()
         if content_type == "application/json":
             body = json.dumps(body, ensure_ascii=False)
         data = body.encode("utf-8") if isinstance(body, str) else body
@@ -1017,6 +1196,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         try:
             if parts[:2] == ["api", "local"]:
                 return self.handle_local_launch(parts, method)
+            if parts == ["api", "updates"] and method == "GET":
+                return self.stream_updates()
             if method == "GET" and parsed.path in ASSETS:
                 filename, content_type = ASSETS[parsed.path]
                 return self.respond((WEB_ROOT / filename).read_bytes(), content_type=content_type)
@@ -1046,8 +1227,36 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         self.dispatch("GET")
 
     def do_POST(self):
-        """Handle browser form submissions through JSON POST endpoints."""
+        """Handle JSON mutations and explicit binary attachment uploads."""
         self.dispatch("POST")
+
+    def stream_updates(self):
+        """Stream invalidations without holding a database connection or exposing records."""
+        self.close_connection = True
+        self.connection.settimeout(5)
+        with self.server.updates:
+            version = self.server.update_version
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+        try:
+            self.wfile.write(b"retry: 3000\nevent: ready\ndata: {}\n\n")
+            self.wfile.flush()
+            while True:
+                with self.server.updates:
+                    self.server.updates.wait_for(
+                        lambda: self.server.update_version != version or self.server.updates_closed,
+                        timeout=UPDATE_HEARTBEAT_SECONDS)
+                    if self.server.updates_closed:
+                        return
+                    changed = self.server.update_version != version
+                    version = self.server.update_version
+                self.wfile.write(b"event: change\ndata: {}\n\n" if changed else b": keepalive\n\n")
+                self.wfile.flush()
+        except OSError:
+            pass
 
     def do_OPTIONS(self):
         """Handle preflight only for explicitly connected websites on the local bridge."""
@@ -1096,7 +1305,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Forward authenticated browser requests to the shared Node entrypoint and pin their website."""
         site = self.local_request_site(method)
         route = parts[2:]
-        if method == "OPTIONS" and route in (["settings"], ["launch"]):
+        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"]):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
             command = "settings"
@@ -1104,6 +1313,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = "start"
         elif route == ["room-config"] and method == "POST" and not self.bridge_origin:
             command = "room-config"
+        elif route == ["room-models"] and method == "POST":
+            command = "room-models"
         else:
             raise LookupError("本机入口不存在")
         payload = None
@@ -1111,7 +1322,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if self.headers.get_content_type() != "application/json":
                 raise ValueError("本机操作须使用 application/json")
             payload = self.read_payload()
-            if command in ("start", "room-config"):
+            if command in ("start", "room-config", "room-models"):
                 payload.pop("access_file", None)
                 payload.update(site=site, entry="web")
         if command == "room-config" and "participants" in payload:
@@ -1190,6 +1401,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             raise LookupError("地址不存在")
         room_id = parts[2]
         token = self.headers.get("X-Discussion-Token", "")
+        if parts[3:4] == ["attachments"]:
+            return self.handle_attachments(connection, parts, params, method)
         if parts[3:4] in (["runtime"], ["events"]):
             return self.handle_runtime_api(connection, parts, params, method)
         if method == "POST":
@@ -1197,8 +1410,14 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if parts[3:] == ["backup"] and method == "GET":
             return self.respond(room_backup(connection, room_id))
         if len(parts) == 4 and parts[3] in ("move", "folder", "archive", "restore", "delete") and method == "POST":
+            files = connection.execute("SELECT id FROM attachments WHERE room_id=?", (room_id,)).fetchall() if parts[3] == "delete" else []
             result = manage_room(connection, room_id, parts[3], self.read_payload())
             connection.commit()
+            for attachment in files:
+                try:
+                    attachment_path(self.server.database, attachment).unlink(missing_ok=True)
+                except OSError:
+                    logging.exception("Attachment cleanup failed: %s", attachment["id"])
             return self.respond(result)
         if len(parts) == 3 and method == "GET":
             return self.respond(require_room(connection, room_id))
@@ -1220,7 +1439,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if method == "GET":
                 return self.respond(query_messages(connection, room_id, params))
             payload = self.read_payload()
-            result = append_message(connection, room_id, payload)
+            result = append_message(connection, room_id, payload, self.headers.get("X-Discussion-Token", ""))
             connection.commit()
             return self.respond(result, 200 if result["duplicate"] else 201)
         if len(parts) == 5 and parts[3] == "messages" and method == "GET":
@@ -1230,6 +1449,50 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             connection.commit()
             return self.respond(result)
         raise LookupError("地址不存在")
+
+    def handle_attachments(self, connection, parts, params, method):
+        """Handle bounded upload, discovery, metadata, and binary download."""
+        room_id = parts[2]
+        if len(parts) == 4:
+            if method == "GET":
+                return self.respond(query_attachments(connection, room_id, params))
+            metadata = attachment_metadata(params)
+            authorize_write(connection, room_id, self.headers.get("X-Discussion-Token", ""), "attachments", metadata)
+            require_room(connection, room_id)
+            length = int(self.headers.get("Content-Length", "-1"))
+            if not 0 <= length <= MAX_ATTACHMENT_BYTES:
+                return self.respond({"error": "单个附件最多 20 MiB，须提供 Content-Length"}, 413)
+            data = self.rfile.read(length)
+            if len(data) != length:
+                raise ValueError("附件内容不完整")
+            result = store_attachment(connection, self.server.database, room_id, metadata, data)
+            return self.respond(result, 200 if result["duplicate"] else 201)
+        if method == "GET" and len(parts) in (5, 6):
+            attachment = get_attachment(connection, room_id, parts[4])
+            if len(parts) == 5:
+                return self.respond(attachment)
+            if parts[5] == "content":
+                return self.respond_attachment(attachment, params.get("download") == "1")
+        raise LookupError("地址不存在")
+
+    def respond_attachment(self, attachment, download):
+        """Serve stored bytes with a safe disposition, never as executable HTML."""
+        path = attachment_path(self.server.database, attachment)
+        if not path.is_file():
+            raise LookupError("附件原文件缺失")
+        data = path.read_bytes()
+        disposition = "attachment" if download or attachment["content_type"] == "application/octet-stream" else "inline"
+        self.send_response(200)
+        self.send_header("Content-Type", attachment["content_type"])
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", f"{disposition}; filename*=UTF-8''{quote(attachment['file_name'], safe='')}")
+        self.send_header("X-Content-SHA256", attachment["sha256"])
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", "default-src 'none'; sandbox")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.end_headers()
+        self.wfile.write(data)
 
     def handle_runtime_api(self, connection, parts, params, method):
         """Expose explicit run controls and durable, capability-scoped executions."""

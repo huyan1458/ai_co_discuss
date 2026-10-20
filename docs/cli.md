@@ -10,6 +10,8 @@
 
 `codiscuss launch settings [--file FILE]` 读取或保存本机软件默认配置，`codiscuss launch start --file FILE [--dry-run]` 提供 AI 对话启动入口：实际启动会建房或接入显式房间、启动服务并将首个主持任务交回当前会话。它不同于只操作网站的 `run start`；配置、回执与幂等重试说明见 [两种讨论入口与启动配置](runner.md#两种讨论入口与启动配置)。
 
+`codiscuss launch room-models --file FILE` 输入 `site`、`room_id`，只读返回本机已登记房间中各参与者的 `adapter/model/effort`；未登记时返回空参与者对象。命令不启动 AI、不修改配置，不用本机默认模型填补缺失值。
+
 ## 连接与发现
 
 ```sh
@@ -29,11 +31,27 @@ Bash 对应 `export DISCUSS_URL=http://127.0.0.1:8765`，CMD 对应 `set DISCUSS
 
 建房与更新资料支持 `--user-request` / `--user-request-file`，将用户原文与 `--background` 分开保存，各限 4000 字。`room brief` 返回两者，概要和通知不自动展开原文。
 
+消息 JSON 中的 `elapsed_seconds` 为只读耗时：自动执行从交付唤醒到保存该消息的秒数，不含排队，保存后固定。用户留言、手动或代发内容及没有计时记录的旧消息返回 `null`；发布命令无需提供耗时。
+
+## 附件
+
+```sh
+codiscuss attachment upload ROOM --as 用户 --file ./资料.pdf --submission-id UPLOAD_UUID
+codiscuss attachment list ROOM --submission-id UPLOAD_UUID
+codiscuss attachment view ROOM ATTACHMENT_ID
+codiscuss attachment download ROOM ATTACHMENT_ID --dest ./下载资料.pdf
+codiscuss message post ROOM --as 用户 --body "请参考附件" --attachment ATTACHMENT_ID --submission-id MESSAGE_UUID
+```
+
+上传回执中的 `attachment.id` 是后续引用的编号；上传和消息分别使用自己的提交编号。单个文件最多 20 MiB，消息最多重复指定 10 次 `--attachment`；仅附件消息可省略正文。普通 `attachment list ROOM` 只列已发送附件，可加 `--message ID`、`--page N`；精确提交查询用于核对未关联的上传。下载路径必须明确、父目录已存在且目标文件不存在；客户端验证长度和 SHA-256，不覆盖已有文件。
+
+受保护写入带 `--access-file`。自动任务先上传，再提交关联回答；回答完成后执行凭据不能继续上传。AI 发言仍需有效安排、发言权和摘要；下载后由参与软件自身工具读取，不默认把全部附件加入通知。`--dry-run` 预览路径与元数据，不上传字节或创建下载文件。结果不明先查原上传编号；重试沿用原文件、身份和编号。
+
 ## 讨论上限参数
 
-`room create` / `room update` 支持 `--max-rounds`、`--max-minutes`（0 表示不限）、`--execution-minutes`、`--on-limit pause|summarize`、`--summary-minutes`。未传字段沿用旧值；活动阶段须先暂停才能改上限。`room view` 包含 `limits` 与 `completed_rounds`，`room limits ROOM` 单独读取，`room limits ROOM --check --as 身份` 检查并执行到限处理。受保护房间仍需 `--access-file`。检查不会启动 AI，也不代写总结。
+`room create` / `room update` 支持 `--max-rounds`、`--max-minutes`、`--execution-minutes`（三者均以 0 表示不限；单次执行默认 0，可设 1–60 分钟）、`--on-limit pause|summarize`、`--summary-minutes`。未传字段沿用旧值；活动阶段须先暂停才能改上限。`room view` 包含 `limits` 与 `completed_rounds`，`room limits ROOM` 单独读取，`room limits ROOM --check --as 身份` 检查并执行到限处理。受保护房间仍需 `--access-file`。检查不会启动 AI，也不代写总结。
 
-`run start` 的 `--deadline` 可省略，此时采用房间总时长；同时指定时取更早截止。未配置总时长仍须明确提供 deadline。暂停或重新启动不会重置话题计时；继续前需调整已耗尽的上限。
+`run start` 的 `--deadline` 可省略，此时采用房间总时长；房间总时长为 0 时不限总时长。显式传 0 也表示不另设运行期限，仍受话题上限约束；非零值与话题截止取更早值。不限总时长仍受轮次上限、主动设置的单次执行超时及手动停止约束。暂停或重新启动不会重置话题计时；继续前需调整已耗尽的上限。
 
 ## 一次安排与回答
 
@@ -154,6 +172,6 @@ codiscuss run configure ROOM --mode manual --revision REV --site SITE --access-f
 codiscuss run start ROOM --revision REV --deadline UNIX_SECONDS --site SITE --access-file PRIVATE.json
 ```
 
-每次控制先回读最新 revision；结果不明先查询，不用旧版本重发。`start` 需要所有参与者为本地可读写 AI、未归档且未收束的话题，期限在未来 24 小时内。CLI 只改变网站状态，不启动任何软件；完整启动应使用独立通知程序。停止和暂停保留讨论与未完成安排。
+每次控制先回读最新 revision；结果不明先查询，不用旧版本重发。`start` 需要所有参与者为本地可读写 AI、未归档且未收束的话题；非零运行期限须在未来 24 小时内，0 表示不限总时长。CLI 只改变网站状态，不启动任何软件；完整启动应使用独立通知程序。停止和暂停保留讨论与未完成安排。
 
 自动参与者收到自己的任务文件后，用专属凭据 `execution enter ROOM EVENT --site SITE --access-file FILE`。实际会话 ID 由适配器写入文件；缺失时不能编造。`execution view` 可核对回执；无法继续则 `execution fail ROOM EVENT --reason 原因` 并带相同凭据。进入不是完成，主持创建安排或专家关联答案保存后才完成；此后旧凭据仅用于查询。`run`、`execution` 各命令的字段以 `schema` 为准。

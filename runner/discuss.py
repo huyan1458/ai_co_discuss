@@ -2,6 +2,7 @@
 """AI CoDiscuss 命令行客户端：显式目标、按需读取、可重放的 HTTP 写入。"""
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -17,6 +18,8 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 VERSION = "0.2.0"
 DEFAULT_TIMEOUT = 20
 MAX_BODY_BYTES = 512 * 1024
+MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+MAX_MESSAGE_ATTACHMENTS = 10
 MAX_TEXT_LENGTH = 32000
 MAX_SUMMARY_LENGTH = 1000
 MAX_BRIEF_LENGTH = 1600
@@ -70,6 +73,8 @@ class RequestPlan:
     body: dict | None = None
     view: str | None = None
     params: dict | None = None
+    upload_file: str | None = None
+    download_file: str | None = None
 
 
 def positive_int(value):
@@ -105,6 +110,13 @@ def submission_id(value):
     """Validate the server's reusable submission identifier format."""
     if not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", value):
         raise argparse.ArgumentTypeError("提交编号需为 8–100 位字母、数字、下划线或连字符")
+    return value
+
+
+def attachment_id(value):
+    """Accept only opaque file identifiers, never local or remote paths."""
+    if not re.fullmatch(r"[a-f0-9]{32}", value):
+        raise argparse.ArgumentTypeError("附件 ID 需为服务端返回的 32 位小写十六进制编号")
     return value
 
 
@@ -188,7 +200,9 @@ def message_commands(subcommands, registry):
     view = add_leaf(subcommands, registry, "message view", "读取一条精确原文与来源", True)
     view.add_argument("id", type=positive_int, help="消息编号")
     post = add_leaf(subcommands, registry, "message post", "提交观点、主持说明、代发或运行回执", True)
-    add_text(post, "body", required=True)
+    add_text(post, "body")
+    post.add_argument("--attachment", action="append", type=attachment_id, default=[],
+                      help="已上传附件 ID；可重复指定，最多 10 个")
     add_text(post, "summary")
     post.add_argument("--summary-by", choices=PARTICIPANTS, help="摘要撰写者：原作者或实际操作者；默认操作者")
     post.add_argument("--author", choices=PARTICIPANTS, help="原作者；默认等于 --as；不同即代发")
@@ -197,6 +211,22 @@ def message_commands(subcommands, registry):
     post.add_argument("--reply-to", type=positive_int, help="被引用的原文编号")
     post.add_argument("--submission-id", type=submission_id, required=True,
                       help="每次新提交的唯一编号；重试必须沿用同编号和正文")
+
+
+def attachment_commands(subcommands, registry):
+    """Expose explicit upload, bounded discovery, and binary downloads."""
+    listing = add_leaf(subcommands, registry, "attachment list", "分页读取已发送附件；按提交编号核对上传", True)
+    listing.add_argument("--page", type=positive_int, default=1)
+    listing.add_argument("--message", type=positive_int, help="只读指定消息的附件")
+    listing.add_argument("--submission-id", type=submission_id, help="核对一次上传，包含尚未发送的文件")
+    view = add_leaf(subcommands, registry, "attachment view", "读取文件名、类型、大小与下载地址", True)
+    view.add_argument("id", type=attachment_id)
+    upload = add_leaf(subcommands, registry, "attachment upload", "上传原文件；之后用 message post --attachment 关联消息", True)
+    upload.add_argument("--file", required=True, help="本地原文件路径；最多 20 MiB")
+    upload.add_argument("--submission-id", type=submission_id, required=True)
+    download = add_leaf(subcommands, registry, "attachment download", "下载原文件到显式路径；不覆盖已有文件", True)
+    download.add_argument("id", type=attachment_id)
+    download.add_argument("--dest", required=True, help="保存文件的完整或相对路径；父目录须已存在")
 
 
 def turn_commands(subcommands, registry):
@@ -247,7 +277,7 @@ def run_commands(subcommands, registry):
             parser.add_argument("--revision", type=non_negative_int, required=True)
             parser.add_argument("--mode", choices=("manual", "automatic"))
         if action == "start":
-            parser.add_argument("--deadline", type=positive_int, help="截止时间 Unix 秒数；省略时使用话题总时长上限")
+            parser.add_argument("--deadline", type=non_negative_int, help="截止时间 Unix 秒数；0 表示不限时长，仍受话题上限约束；省略时使用话题上限")
             parser.add_argument("--phase", choices=("initial", "discussing", "reviewing"))
 
 
@@ -271,6 +301,7 @@ def build_parser(prog="discuss"):
     subcommands = parser.add_subparsers(dest="resource", required=True)
     registry = {}
     for name, register in (("room", room_commands), ("message", message_commands),
+                           ("attachment", attachment_commands),
                            ("turn", turn_commands), ("state", state_commands), ("floor", floor_commands),
                            ("run", run_commands), ("execution", execution_commands)):
         group = subcommands.add_parser(name, help=f"{name} 操作", allow_abbrev=False)
@@ -385,9 +416,13 @@ def plan_message(args):
     if args.turn and args.kind != "opinion":
         raise CliError("只有 opinion 可以关联 --turn；receipt 不完成安排")
     payload = {"author": args.author or actor, "submitted_by": actor, "source": "cli",
-               "kind": args.kind, "text": text_field(args, "body"), "submission_id": args.submission_id}
-    if not payload["text"].strip() or len(payload["text"].strip()) > MAX_TEXT_LENGTH:
-        raise CliError(f"发言需为 1–{MAX_TEXT_LENGTH} 个 Unicode 字符；不会自动截断或分段")
+               "kind": args.kind, "text": text_field(args, "body") or "", "submission_id": args.submission_id}
+    if len(args.attachment) > MAX_MESSAGE_ATTACHMENTS or len(set(args.attachment)) != len(args.attachment):
+        raise CliError("每条消息最多 10 个附件，不能重复")
+    if args.attachment:
+        payload["attachment_ids"] = args.attachment
+    if (not payload["text"].strip() and not args.attachment) or len(payload["text"].strip()) > MAX_TEXT_LENGTH:
+        raise CliError(f"发言需包含正文或附件，正文最多 {MAX_TEXT_LENGTH} 个 Unicode 字符；不会自动截断或分段")
     summary = text_field(args, "summary")
     if summary is not None:
         if len(summary.strip()) > MAX_SUMMARY_LENGTH:
@@ -400,6 +435,29 @@ def plan_message(args):
     if args.reply_to:
         payload["reply_to"] = args.reply_to
     return RequestPlan(base, "POST", payload)
+
+
+def plan_attachment(args):
+    """Keep file bytes outside JSON messages and all storage targets explicit."""
+    base = f"/api/rooms/{args.room}/attachments"
+    if args.action == "list":
+        params = {"page": args.page, "message_id": args.message, "submission_id": args.submission_id}
+        return RequestPlan(base, params={key: value for key, value in params.items() if value is not None})
+    if args.action == "upload":
+        path = Path(args.file)
+        try:
+            if not path.is_file() or path.stat().st_size > MAX_ATTACHMENT_BYTES:
+                raise CliError("上传路径须为文件，大小最多 20 MiB")
+        except OSError as error:
+            raise CliError(f"无法读取上传文件: {error}") from error
+        metadata = {"actor": require_actor(args), "file_name": path.name, "submission_id": args.submission_id}
+        return RequestPlan(base, "POST", params=metadata, upload_file=str(path))
+    if args.action == "download":
+        destination = Path(args.dest)
+        if destination.exists() or not destination.parent.is_dir():
+            raise CliError("--dest 须为不存在的文件路径，且父目录已存在；不会覆盖文件")
+        return RequestPlan(f"{base}/{args.id}/content", params={"download": "1"}, download_file=str(destination))
+    return RequestPlan(f"{base}/{args.id}")
 
 
 def plan_turn(args):
@@ -514,10 +572,11 @@ def build_plan(args):
     if stdin_count > 1:
         raise CliError("一次命令只能有一个字段从标准输入读取")
     handlers = {"room": plan_room, "message": plan_message, "turn": plan_turn,
+                "attachment": plan_attachment,
                 "state": plan_state, "floor": plan_floor, "api": plan_api,
                 "run": plan_run, "execution": plan_execution}
     plan = RequestPlan("/api/health") if args.resource == "health" else handlers[args.resource](args)
-    if getattr(args, "dry_run", False) and plan.method != "POST":
+    if getattr(args, "dry_run", False) and plan.method != "POST" and plan.download_file is None:
         raise CliError("--dry-run 仅用于写入命令；读取命令本身不会修改数据")
     if plan.body is not None and len(json.dumps(plan.body, ensure_ascii=False).encode("utf-8")) > MAX_BODY_BYTES:
         raise CliError(f"请求体超过服务端限制 {MAX_BODY_BYTES} 字节")
@@ -540,6 +599,8 @@ def resolve_site(args):
 
 def decode_response(response, plan):
     """Decode the expected payload while identifying uncertain write responses."""
+    if plan.download_file is not None:
+        return save_attachment_response(response, plan.download_file)
     try:
         text = response.read().decode("utf-8-sig")
         if plan.path.startswith("/r/") and plan.method == "GET":
@@ -553,6 +614,42 @@ def decode_response(response, plan):
     except (ValueError, UnicodeError) as error:
         raise CliError("响应不是预期的 UTF-8 / JSON 内容", 3,
                        outcome="unknown" if plan.method == "POST" else "unavailable") from error
+
+
+def save_attachment_response(response, destination):
+    """Validate a complete bounded response before creating an exclusive local file."""
+    data = response.read(MAX_ATTACHMENT_BYTES + 1)
+    size_header = response.headers.get("Content-Length")
+    if len(data) > MAX_ATTACHMENT_BYTES or (size_header and len(data) != int(size_header)):
+        raise CliError("附件下载不完整或超过 20 MiB；未保存文件", 3, outcome="unavailable")
+    digest = hashlib.sha256(data).hexdigest()
+    if response.headers.get("X-Content-SHA256", digest) != digest:
+        raise CliError("附件校验失败；未保存文件", 3, outcome="unavailable")
+    path = Path(destination)
+    created = False
+    try:
+        with path.open("xb") as target:
+            created = True
+            target.write(data)
+    except OSError as error:
+        if created:
+            path.unlink(missing_ok=True)
+        raise CliError(f"无法保存附件；不会覆盖已有文件: {error}") from error
+    return {"path": str(path.resolve()), "size": len(data), "sha256": digest}
+
+
+def request_data(plan):
+    """Load a bounded file for binary upload, or encode ordinary JSON requests."""
+    if plan.upload_file is not None:
+        try:
+            with Path(plan.upload_file).open("rb") as source:
+                data = source.read(MAX_ATTACHMENT_BYTES + 1)
+        except OSError as error:
+            raise CliError(f"无法读取上传文件: {error}") from error
+        if len(data) > MAX_ATTACHMENT_BYTES:
+            raise CliError("单个附件最多 20 MiB")
+        return data
+    return json.dumps(plan.body, ensure_ascii=False).encode("utf-8") if plan.body is not None else None
 
 
 def http_error(error, plan):
@@ -570,9 +667,10 @@ def http_error(error, plan):
 
 def send_request(plan, url, timeout, headers=None):
     """Send exactly once, preserving TLS verification and bounded waiting."""
-    data = json.dumps(plan.body, ensure_ascii=False).encode("utf-8") if plan.body is not None else None
+    data = request_data(plan)
+    content_type = "application/octet-stream" if plan.upload_file is not None else "application/json"
     request = Request(url, data=data, method=plan.method,
-                      headers={"Content-Type": "application/json", "Accept": "application/json, text/plain",
+                      headers={"Content-Type": content_type, "Accept": "*/*" if plan.download_file else "application/json, text/plain",
                                "User-Agent": f"AI-CoDiscuss-CLI/{VERSION}", **(headers or {})})
     try:
         with build_opener(NoRedirect()).open(request, timeout=timeout) as response:
@@ -628,7 +726,7 @@ def command_schema(args, registry):
         item = {"name": action.dest, "flags": action.option_strings,
                 "required": action.required, "help": action.help}
         if action.dest == "actor" and name in ("room create", "room update", "message post",
-                                               "turn create", "turn mark-notified", "turn cancel", "state set"):
+                                               "turn create", "turn mark-notified", "turn cancel", "state set", "attachment upload"):
             item["required"] = True
         if action.choices is not None:
             item["choices"] = list(action.choices)
@@ -698,7 +796,9 @@ def run(args, registry):
         url += "?" + urlencode(plan.params)
     meta = {"site": site, "method": plan.method, "path": plan.path}
     if getattr(args, "dry_run", False):
-        return {"ok": True, "data": {"method": plan.method, "url": url, "body": plan.body},
+        return {"ok": True, "data": {"method": plan.method, "url": url, "body": plan.body,
+                                   **({"file": plan.upload_file} if plan.upload_file else {}),
+                                   **({"destination": plan.download_file} if plan.download_file else {})},
                 "meta": {**meta, "dry_run": True, "validation": "仅本地参数；未验证房间、身份或服务端状态"}}
     try:
         headers = access_headers(args, site, plan.path)
@@ -707,7 +807,7 @@ def run(args, registry):
     except CliError as error:
         error.details.update(meta)
         if plan.method == "POST":
-            error.details["submission_id"] = (plan.body or {}).get("submission_id")
+            error.details["submission_id"] = (plan.body or plan.params or {}).get("submission_id")
             error.details["hint"] = "未自动重试。创建结果未知时用对应 list --submission-id 查询；确认需要重试才沿用原编号和原始内容。"
         raise
     except (KeyError, TypeError) as error:

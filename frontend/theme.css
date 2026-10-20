@@ -69,7 +69,6 @@
   position: relative; display: flex; flex-shrink: 0; width: 64px; height: 44px; overflow: hidden; border: 1px solid var(--tp-border); border-radius: 7px; background: var(--tp-bg); box-shadow: 0 1px 2px #0000002e; }
 .theme-preview.channel { --tp-bg: #2b2d31; --tp-side: #1e1f22; --tp-line: #4a4e58; --tp-accent: #8791ff; --tp-border: #4a4e58; }
 .theme-preview.channel-light { --tp-bg: #ffffff; --tp-side: #f3f3f3; --tp-line: #e1e1e1; --tp-accent: #0969da; --tp-border: #d6d6d6; }
-.theme-preview.millennium { --tp-bg: #eef3f6; --tp-side: linear-gradient(#5d87a3, #3f6782); --tp-line: #bfd0dc; --tp-accent: #3f6782; --tp-border: #9fb7c8; }
 .theme-preview-side { width: 15px; background: var(--tp-side); }
 .theme-preview-main { display: flex; flex: 1; flex-direction: column; gap: 5px; padding: 8px 7px; }
 .theme-preview-main b { display: block; height: 4px; border-radius: 2px; background: var(--tp-line); }

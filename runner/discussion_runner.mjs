@@ -12,6 +12,7 @@ const POLL_MS = 2000;
 const DELIVERY_RETRY_DELAYS_MS = [2000, 4000];
 const RENEW_MS = 30_000;
 const ADAPTER_NAMES = ['codex', 'claude', 'antigravity', 'codex_cli', 'antigravity_cli'];
+export const CODEX_ADAPTERS = ['codex', 'codex_cli'];
 const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 /** Project files in cwd are read-only unless the launch or participant explicitly grants write. */
 const PROJECT_ACCESS = ['read', 'write'];
@@ -97,13 +98,26 @@ export class DiscussionStore {
     this.db.prepare("INSERT OR IGNORE INTO metadata VALUES ('scope',?)").run(scope);
   }
   /** Do not silently reuse a conversation after its software project or cwd changes. */
-  context(config) {
-    const context = JSON.stringify(Object.entries(config.participants).sort(([left], [right]) => left.localeCompare(right))
+  context(config, allow_codex_switch = false) {
+    const entries = Object.entries(config.participants).sort(([left], [right]) => left.localeCompare(right))
       .map(([name, item]) => [name, item.adapter, item.project_id || '', item.project_name || '',
-        item.cwd ? resolve(item.cwd) : '', item.workdir ? resolve(item.workdir) : '', item.session_id || '']));
+        item.cwd ? resolve(item.cwd) : '', item.workdir ? resolve(item.workdir) : '', item.session_id || '']);
+    const context = JSON.stringify(entries);
     const previous = this.db.prepare("SELECT value FROM metadata WHERE key='context'").get()?.value;
-    if (previous && previous !== context) throw new Error('已绑定会话的项目、cwd 或身份配置发生变化；请暂停并使用独立运行目录重新接入');
-    this.db.prepare("INSERT OR IGNORE INTO metadata VALUES ('context',?)").run(context);
+    if (previous === context) return;
+    if (previous && previous !== context) {
+      const before = JSON.parse(previous);
+      const allowed = allow_codex_switch && before.length === entries.length && before.every((item, index) => {
+        const next = entries[index];
+        if (JSON.stringify(item) === JSON.stringify(next)) return true;
+        const session = this.binding(item[0]).session_id || item[6];
+        return item[0] === next[0] && item[1] !== next[1] && CODEX_ADAPTERS.includes(item[1])
+          && CODEX_ADAPTERS.includes(next[1]) && session && next[6] === session && (!item[6] || item[6] === session)
+          && JSON.stringify(item.slice(2, 6)) === JSON.stringify(next.slice(2, 6));
+      });
+      if (!allowed) throw new Error('已绑定会话的项目、cwd 或身份配置发生变化；请暂停并使用独立运行目录重新接入');
+    }
+    this.db.prepare("INSERT INTO metadata VALUES ('context',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(context);
   }
   /** Persist only known internal fields, never dynamic SQL column names. */
   record(id, fields) {
@@ -355,10 +369,10 @@ export async function main(args = process.argv.slice(2)) {
     if (run.run_id) store.scope(config, run.run_id);
     if (positionals[0] === 'start') {
       const room = await api(config, '');
-      const minutes = Number(values.minutes ?? room.limits?.max_minutes);
-      if (!Number.isFinite(minutes) || minutes <= 0 || minutes > 1440) throw new Error('请在网页设置总时长，或指定 --minutes，范围 (0,1440]');
+      const minutes = Number(values.minutes ?? room.limits?.max_minutes ?? 0);
+      if (!Number.isFinite(minutes) || minutes < 0 || minutes > 1440) throw new Error('总时长或 --minutes 须在 [0,1440]，0 表示不限时长');
       if (![room.host, ...Object.keys(room.experts)].every(name => config.participants[name])) throw new Error('尚未配置全部参与者的本机软件');
-      await api(config, '/runtime', { action: 'start', mode: 'automatic', revision: run.revision, deadline: Math.floor(Date.now() / 1000 + minutes * 60) });
+      await api(config, '/runtime', { action: 'start', mode: 'automatic', revision: run.revision, deadline: minutes ? Math.floor(Date.now() / 1000 + minutes * 60) : 0 });
     }
     do {
       try { if (await runner.tick() === false) break; }

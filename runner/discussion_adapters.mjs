@@ -372,6 +372,7 @@ function cli_event(adapter, state, event, task) {
     if (event.type === 'turn.completed') state.completed = true;
     if (event.type === 'turn.failed') state.error = event.error?.message || 'Codex CLI 执行失败';
     if (event.type === 'error') state.diagnostic = event.message || 'Codex CLI 返回错误';
+    remember_writer_conflict(state, state.error || state.diagnostic);
     return;
   }
   if (event.event === 'init') bind_cli_session(state, event.conversation_id, task);
@@ -383,8 +384,14 @@ function cli_event(adapter, state, event, task) {
   }
 }
 
+/** Keep the actual resume failure even when later model-refresh logs replace the diagnostic tail. */
+function remember_writer_conflict(state, diagnostic) {
+  if (/thread-store conflict:[\s\S]*already has an active writer/.test(diagnostic)) state.writer_conflict = true;
+}
+
 /** Distinguish process completion from successful CLI output and saved website work. */
 function cli_exit_error(state, code, signal) {
+  if (state.writer_conflict) return `Codex 会话 ${state.session_id} 已被另一进程持有（active writer），CLI 无法接管。若为 App 中的聊天，请使用 Codex App 接入；独立 CLI 须使用未被占用的会话。重复点击重试不会解除占用`;
   if (state.error) return state.error;
   if (code !== 0) return `CLI ${signal ? `被信号 ${signal} 终止` : `退出码 ${code}`}：${state.diagnostic}`;
   if (!state.initialized) return `CLI 未确认实际会话 ID：${state.diagnostic}`;
@@ -400,6 +407,7 @@ function monitor_cli(child, config, binding, task) {
   child.stdout.on('data', chunk => task.on_output(log_path, chunk));
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', chunk => {
+    if (config.adapter === 'codex_cli') remember_writer_conflict(state, state.diagnostic + chunk);
     state.diagnostic = (state.diagnostic + chunk).slice(-CLI_DIAGNOSTIC_CHARS).trim();
     task.on_output(log_path, chunk);
   });

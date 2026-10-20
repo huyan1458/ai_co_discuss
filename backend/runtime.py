@@ -6,9 +6,8 @@ import time
 import uuid
 
 LEASE_SECONDS = 120
-WORK_SECONDS = 1200
 MAX_RUN_SECONDS = 86400
-LIMIT_DEFAULTS = {"max_rounds": 0, "max_minutes": 0, "execution_minutes": 20,
+LIMIT_DEFAULTS = {"max_rounds": 0, "max_minutes": 0, "execution_minutes": 0,
                   "on_limit": "pause", "summary_minutes": 5}
 PUBLIC_EVENT_FIELDS = ("id", "room_id", "run_id", "generation", "cause", "participant",
                        "role", "turn_id", "status", "session_id", "lease_until", "result", "created_at")
@@ -45,7 +44,7 @@ def limit_values(payload, current=None):
     result = {key: (current or {}).get(key, value) for key, value in LIMIT_DEFAULTS.items()}
     result.update(payload)
     for key, minimum, maximum in (("max_rounds", 0, 100), ("max_minutes", 0, 1440),
-                                  ("execution_minutes", 1, 60), ("summary_minutes", 1, 60)):
+                                  ("execution_minutes", 0, 60), ("summary_minutes", 1, 60)):
         if type(result[key]) is not int or not minimum <= result[key] <= maximum:
             raise ValueError(f"{key} 须为 {minimum}–{maximum} 的整数")
     if result["on_limit"] not in ("pause", "summarize"):
@@ -93,7 +92,7 @@ def require_within_limits(room):
 def execution_seconds(connection, room_id):
     """Read the per-execution budget shared by entry, renewal and writes."""
     row = connection.execute("SELECT execution_minutes FROM discussion_limits WHERE room_id=?", (room_id,)).fetchone()
-    return row[0] * 60 if row else WORK_SECONDS
+    return (row[0] if row else LIMIT_DEFAULTS["execution_minutes"]) * 60
 
 
 def runtime_view(connection, room_id):
@@ -103,7 +102,7 @@ def runtime_view(connection, room_id):
         return {"mode": "manual", "status": "ready", "revision": 0, "protected": False}
     result = {key: row[key] for key in row.keys() if key != "control_hash"}
     result["protected"] = True
-    result["expired"] = row["status"] == "running" and row["deadline"] <= int(time.time())
+    result["expired"] = row["status"] == "running" and 0 < row["deadline"] <= int(time.time())
     event = connection.execute("SELECT id,participant,role,status,result FROM discussion_events WHERE room_id=? ORDER BY id DESC LIMIT 1", (room_id,)).fetchone()
     result["latest_execution"] = dict(event) if event else None
     result["participants"] = participant_executions(connection, room_id)
@@ -157,11 +156,12 @@ def authorize_write(connection, room_id, token, operation, payload):
     actor = payload.get("actor", payload.get("submitted_by", payload.get("author", "用户")))
     if actor == "用户":
         return
+    work_seconds = execution_seconds(connection, room_id)
     event = connection.execute("""SELECT * FROM discussion_events WHERE room_id=? AND token_hash=?
         AND run_id=? AND generation=? AND status='started' AND lease_until>?
-        AND started_at+?>?""", (room_id, hashed, run["run_id"], run["generation"],
-                                int(time.time()), execution_seconds(connection, room_id), int(time.time()))).fetchone()
-    if not hashed or not event or run["status"] != "running" or run["deadline"] <= int(time.time()):
+        AND (?=0 OR started_at+?>?)""", (room_id, hashed, run["run_id"], run["generation"],
+                                       int(time.time()), work_seconds, work_seconds, int(time.time()))).fetchone()
+    if not hashed or not event or run["status"] != "running" or 0 < run["deadline"] <= int(time.time()):
         raise PermissionError("执行资格无效、已结束或已到期；请重新读取运行状态")
     if actor != event["participant"]:
         raise PermissionError("执行凭据与实际参与身份不符")
@@ -173,6 +173,8 @@ def authorize_write(connection, room_id, token, operation, payload):
     elif operation == "floor":
         if payload.get("speaker", actor) != actor:
             raise PermissionError("自动执行只能操作本人发言权")
+    elif operation == "attachments":
+        pass
     elif event["role"] != "host" or operation not in ("topic", "state", "turns", "limits"):
         raise PermissionError("本次执行不能进行此操作")
 
@@ -212,7 +214,7 @@ def configure_runtime(connection, room_id, token, payload):
 
 
 def validate_start(connection, room_id, payload):
-    """Require an unarchived AI-hosted room and a finite user-specified deadline."""
+    """Validate an AI-hosted run; zero deadline leaves only the configured limits."""
     row = connection.execute("SELECT * FROM topic_settings JOIN room_directory USING(room_id) WHERE room_id=?",
                              (room_id,)).fetchone()
     limits = connection.execute(LIMITS_SQL, (room_id,)).fetchone()
@@ -224,9 +226,9 @@ def validate_start(connection, room_id, payload):
         configured = min(value for value in (configured, closing_deadline, previous_deadline) if value)
     deadline = payload.get("deadline", configured)
     if type(deadline) is int and configured:
-        deadline = min(deadline, configured)
-    if type(deadline) is not int or not int(time.time()) < deadline <= int(time.time()) + MAX_RUN_SECONDS:
-        raise ValueError("deadline 须为未来 24 小时内的 Unix 秒数")
+        deadline = min(deadline or configured, configured)
+    if type(deadline) is not int or (deadline != 0 and not int(time.time()) < deadline <= int(time.time()) + MAX_RUN_SECONDS):
+        raise ValueError("deadline 须为 0（不限时长）或未来 24 小时内的 Unix 秒数")
     experts = json.loads(row["experts"])
     if row["archived"] or row["phase"] == "concluded" or row["host"] == "用户":
         raise ValueError("自动运行需要未归档、未收束的话题及 AI 主持人")
@@ -262,12 +264,14 @@ def event_action(connection, room_id, event_id, token, payload):
     now = int(time.time())
     work_seconds = execution_seconds(connection, room_id)
     action = payload.get("action")
+    work_deadline = (now if action == "enter" else event["started_at"]) + work_seconds if work_seconds else 0
+    lease_until = min(now + LEASE_SECONDS, work_deadline or now + LEASE_SECONDS, run["deadline"] or now + LEASE_SECONDS)
     controller = token_hash(token) == run["control_hash"]
     if not controller and (not token_hash(token) or token_hash(token) != event["token_hash"]):
         raise PermissionError("执行凭据无效")
     if action == "view":
         return {key: event[key] for key in PUBLIC_EVENT_FIELDS}
-    if run["status"] != "running" or run["deadline"] <= now or event["generation"] != run["generation"]:
+    if run["status"] != "running" or 0 < run["deadline"] <= now or event["generation"] != run["generation"]:
         raise FileExistsError("本次运行已停止或执行已过期")
     if action == "reserve" and controller:
         reserve_event(connection, event, payload)
@@ -275,12 +279,12 @@ def event_action(connection, room_id, event_id, token, payload):
         if event["status"] != "dispatched" or not payload.get("session_id"):
             raise FileExistsError("本次任务已进入或不可进入；不要重复执行")
         connection.execute("UPDATE discussion_events SET status='started',session_id=?,started_at=?,lease_until=? WHERE id=?",
-                           (str(payload["session_id"])[:200], now, min(now + LEASE_SECONDS, now + work_seconds, run["deadline"]), event_id))
+                           (str(payload["session_id"])[:200], now, lease_until, event_id))
     elif action == "renew" and controller and event["status"] == "started":
-        if event["lease_until"] <= now or event["started_at"] + work_seconds <= now:
+        if event["lease_until"] <= now or 0 < work_deadline <= now:
             raise FileExistsError("执行租约已到期，不能自动重新激活")
         connection.execute("UPDATE discussion_events SET lease_until=? WHERE id=?",
-                           (min(now + LEASE_SECONDS, event["started_at"] + work_seconds, run["deadline"]), event_id))
+                           (lease_until, event_id))
     elif action == "fail" and event["status"] in ("dispatched", "started"):
         connection.execute("UPDATE discussion_events SET status='failed',result=? WHERE id=?",
                            (str(payload.get("reason", "需要用户处理"))[:500], event_id))

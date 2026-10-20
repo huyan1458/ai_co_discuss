@@ -99,10 +99,84 @@ async function measure_topic() {
 }
 watch(topic_key, measure_topic, { immediate: true });
 watch(() => view.value.tab, measure_topic);
+const reply_glow = ref(null);
+// Feel.words("calm, smooth"): m 1, f 1.407 Hz, ζ 1.05 → k 78.167, c 18.567.
+// A constant force equal to a spring stretched by 1/8 of the sweep gives a calm,
+// steady scan; mass sets acceleration, damping sets the terminal speed F/c.
+const REPLY_GLOW_MASS = 1;
+const REPLY_GLOW_DAMPING = 18.566573373612275;
+const REPLY_GLOW_FORCE = 78.16726685662772 / 8;
+/** Move only the text's highlight; removal and reduced motion cancel the loop. */
+watch([reply_glow, reduced_motion], ([element, reduce_motion], _previous, cleanup) => {
+  if (!element || reduce_motion) return;
+  const relaxation = REPLY_GLOW_MASS / REPLY_GLOW_DAMPING;
+  const terminal_speed = REPLY_GLOW_FORCE / REPLY_GLOW_DAMPING;
+  let position = 0, velocity = 0, previous_time = performance.now(), frame = 0;
+  element.classList.add("is-glowing");
+  /** Integrate m·x″ = F − c·x′ exactly, independent of frame rate. */
+  function advance_glow(now) {
+    const seconds = (now - previous_time) / 1000;
+    const decay = Math.exp(-seconds / relaxation);
+    position = (position + terminal_speed * seconds
+      + (velocity - terminal_speed) * relaxation * (1 - decay)) % 1;
+    velocity = terminal_speed + (velocity - terminal_speed) * decay;
+    previous_time = now;
+    element.style.setProperty("--reply-glow-position", `${100 * (1 - position)}%`);
+    frame = requestAnimationFrame(advance_glow);
+  }
+  frame = requestAnimationFrame(advance_glow);
+  cleanup(() => {
+    cancelAnimationFrame(frame);
+    element.classList.remove("is-glowing");
+    element.style.removeProperty("--reply-glow-position");
+  });
+}, { flush: "post" });
 const speaking_turn = computed(() => ["pending", "notified"].includes(room.value?.current_turn?.status)
   && !["paused", "concluded"].includes(room.value.phase) ? room.value.current_turn : null);
+/** Show only a live automatic execution; assignments alone are not evidence of a reply in progress. */
+const pending_message = computed(() => {
+  const value = room.value;
+  const runtime = value?.runtime;
+  if (view.value.query || view.value.mention_only || value?.archived || ["paused", "concluded"].includes(value?.phase)
+    || runtime?.mode !== "automatic" || runtime.status !== "running" || runtime.expired) return null;
+  const execution = (runtime.participants || []).find((item) => !item.stale
+    && ["dispatched", "started"].includes(item.status)
+    && (item.role === "host" ? item.participant === value.host
+      : item.turn_id === speaking_turn.value?.id && item.participant === speaking_turn.value?.expert));
+  if (!execution) return null;
+  const latest_round = value.rounds?.at(-1);
+  const round = latest_round?.completed === false || execution.role === "host"
+    ? latest_round?.number : (value.completed_rounds || 0) + 1;
+  const timing = runtime.timings?.items.find((item) => item.id === execution.id);
+  const is_host = execution.role === "host";
+  const text = is_host ? (execution.status === "dispatched" ? "正在唤醒主持人…" : "正在安排下一步…")
+    : (execution.status === "dispatched" ? "正在唤醒…" : "正在准备回复…");
+  return { id: execution.id, author: execution.participant, is_host,
+    round: round ? `第 ${round} 轮` : "", text,
+    seconds: timing?.wake_seconds == null ? null : timing.wake_seconds + (timing.work_seconds || 0) };
+});
 /** A user's message is waiting for the host while it is at or after the relay hold. */
 const waits_for_host = (message) => message.author === "用户" && room.value?.held_since > 0 && message.id >= room.value.held_since;
+const ELAPSED_TICK_MS = 1000;
+const pending_seconds = ref(null);
+/** Tick from dispatch time, resync with each server snapshot, and stop when the card disappears. */
+watch([() => pending_message.value?.id, () => pending_message.value?.seconds], ([_id, seconds], _previous, cleanup) => {
+  pending_seconds.value = seconds ?? null;
+  if (pending_seconds.value === null) return;
+  const baseline = performance.now();
+  const timer = setInterval(() => {
+    pending_seconds.value = seconds + Math.floor((performance.now() - baseline) / ELAPSED_TICK_MS);
+  }, ELAPSED_TICK_MS);
+  cleanup(() => clearInterval(timer));
+}, { immediate: true });
+/** Format recorded seconds consistently; missing timing is never estimated. */
+function format_elapsed(seconds) {
+  if (seconds == null) return "—";
+  if (seconds < 60) return `${seconds}秒`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}分${String(seconds % 60).padStart(2, "0")}秒`;
+  return `${Math.floor(seconds / 3600)}小时${Math.floor((seconds % 3600) / 60)}分${String(seconds % 60).padStart(2, "0")}秒`;
+}
+const pending_duration = computed(() => format_elapsed(pending_seconds.value));
 const identities = computed(() => Object.entries(bridge.identities).map(([name, identity]) => ({
   label: bridge.display_name(name), value: name,
   avatar: { src: identity.icon, text: identity.initials, alt: bridge.display_name(name), class: `channel-avatar ${identity.style}` },
@@ -236,7 +310,7 @@ async function follow_messages() {
   if (follow_tail.value && transcript.value) transcript.value.scrollTop = transcript.value.scrollHeight;
   track_scroll();
 }
-watch(() => view.value.messages, follow_messages, { immediate: true });
+watch([() => view.value.messages, pending_message], follow_messages, { immediate: true });
 watch([() => view.value.room?.id, () => view.value.query, () => view.value.mention_only], () => {
   jump_target.value = null;
   active_message.value = null;
@@ -479,10 +553,19 @@ async function reply_to(message) { await act("reply", message); prompt.value?.te
 
 /** Send the shared draft through the established idempotent controller. */
 async function send() {
-  if (!text.value.trim() || pending.value) return;
+  if ((!text.value.trim() && !view.value.attachment_drafts.length) || pending.value || view.value.sending_message) return;
   follow_tail.value = true;
   await act("send");
   await follow_messages();
+}
+
+/** Let attachment-only drafts use the same shortcut as text messages. */
+function attachment_shortcut(event) {
+  if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey) || event.isComposing || text.value.trim()) return;
+  if (!view.value.attachment_drafts.length) return;
+  event.preventDefault();
+  event.stopPropagation();
+  send();
 }
 
 /** Copy a durable reference to the original record. */
@@ -516,7 +599,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
         </div>
       </motion.div>
     </Teleport>
-    <div ref="transcript" v-memo="[message_groups, message_round_labels, active_message, expanded_answers.size, room.title, view.query, view.mention_only, topic_key, topic_expanded, topic_overflows]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
+    <div ref="transcript" v-memo="[message_groups, message_round_labels, active_message, expanded_answers.size, room.title, view.query, view.mention_only, topic_key, topic_expanded, topic_overflows, pending_message, pending_seconds]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
       <div v-if="!view.query && !view.mention_only" class="channel-message-group channel-topic-group"><section class="channel-message channel-topic-card" :class="{ 'is-expanded': topic_expanded }" aria-label="议题">
         <header class="channel-topic-heading"><span class="channel-topic-eyebrow"><UIcon name="i-lucide-target" />议题</span><h2>{{ room.title }}</h2><UButton icon="i-lucide-pencil" label="编辑" color="neutral" variant="ghost" size="xs" @click="emit('edit')" /></header>
         <div ref="topic_body" class="channel-topic-body" :class="{ 'is-clamped': topic_overflows && !topic_expanded }">
@@ -540,6 +623,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
                 <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><span class="channel-message-round">{{ message_round_labels.get(message.id) }}</span><UBadge size="xs" color="neutral" variant="soft" class="channel-source">{{ bridge.sources[message.source] }}</UBadge><UBadge v-if="message.kind === 'moderation'" size="xs" color="neutral" variant="soft" class="channel-source">主持人</UBadge><UBadge v-if="message.kind === 'receipt'" size="xs" color="neutral" variant="soft" class="channel-source">运行回执</UBadge><UBadge v-if="waits_for_host(message)" size="xs" color="warning" variant="soft" class="channel-source" :title="speaking_turn ? `${bridge.display_name(speaking_turn.expert)} 说完后交给主持人处理` : '等待主持人处理'">待主持人处理</UBadge></div>
                 <div class="channel-message-provenance"><time :title="new Date(message.created_at).toLocaleString('zh-CN')">{{ bridge.format_time(message.created_at) }}</time><UButton :label="`#${message.id}`" color="neutral" variant="link" size="xs" :aria-label="`查看原文 #${message.id}`" class="channel-message-id" @click="emit('detail', message.id)" /><span v-if="message.submitted_by && message.submitted_by !== message.author && !(message.source === 'proxy' && message.submitted_by === '用户')">{{ bridge.display_name(message.submitted_by) }} 代发</span><span v-if="message.turn_id">回答安排 #{{ message.turn_id }}</span></div>
               </div>
+              <span class="channel-message-provenance channel-message-elapsed">耗时 {{ format_elapsed(message.elapsed_seconds) }}</span>
             </div>
             <UButton v-if="message.reply_to" :label="`回复 #${message.reply_to}`" icon="i-lucide-corner-up-left" variant="link" color="neutral" size="xs" class="channel-message-reference" :aria-label="`回复 #${message.reply_to} 查看原文`" @click="emit('detail', message.reply_to)" />
             <details v-if="message.kind === 'receipt'" class="channel-receipt">
@@ -551,6 +635,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
               <UButton v-if="answer_previews.get(message.id).truncated" :label="expanded_answers.has(message.id) ? '收起' : '展开全文'" :trailing-icon="expanded_answers.has(message.id) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" variant="link" color="neutral" size="xs" class="channel-answer-toggle" :aria-label="`${expanded_answers.has(message.id) ? '收起回答' : '展开完整回答'} #${message.id}`" :aria-expanded="expanded_answers.has(message.id)" :aria-controls="`channel-answer-${message.id}`" @click="toggle_answer(message, $event)" />
             </div>
             <div v-if="message.summary" class="channel-answer-summary"><small>回答摘要<span v-if="message.summary_by && message.summary_by !== message.author"> · {{ bridge.display_name(message.summary_by) }} 整理</span></small><div class="channel-message-text markdown-body" v-html="message.rendered_summary"></div></div>
+            <div v-if="message.attachments?.length" v-html="bridge.attachment_markup(message.attachments)"></div>
           </template>
           <template #header><div class="channel-message-actions"><div class="channel-message-toolbar">
             <UTooltip text="回复"><UButton icon="i-lucide-corner-up-left" size="xs" color="neutral" variant="ghost" :aria-label="`回复 #${message.id}`" @click="reply_to(message)" /></UTooltip>
@@ -558,27 +643,84 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           </div></div></template>
         </UChatMessage>
       </div>
-      <div v-if="!view.messages.length" class="channel-empty"><UIcon :name="view.query || view.mention_only ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.mention_only ? '没有找到消息' : room.title }}</h2><p>{{ view.query || view.mention_only ? '试试其他关键词，或清除筛选。' : bridge.empty_discussion_message(room) }}</p></div>
+      <div v-if="pending_message" class="channel-message-group">
+        <section v-if="pending_message.is_host" :id="`execution-${pending_message.id}`" class="channel-host-work" :aria-label="`${bridge.display_name(pending_message.author)} 主持工作`">
+          <UAvatar :src="bridge.identities[pending_message.author]?.icon" :text="bridge.identities[pending_message.author]?.initials || '?'" :alt="bridge.display_name(pending_message.author)" size="md" class="channel-avatar" :class="bridge.identities[pending_message.author]?.style" />
+          <div class="channel-host-work-heading"><strong>{{ bridge.display_name(pending_message.author) }}</strong><span>主持工作</span></div>
+          <span class="channel-host-work-elapsed">已用 {{ pending_duration }}</span>
+          <p class="channel-host-work-status" role="status" :aria-label="`${bridge.display_name(pending_message.author)} ${pending_message.text}`"><span ref="reply_glow" class="channel-reply-glow">{{ pending_message.text }}</span></p>
+        </section>
+        <UChatMessage v-else :id="`execution-${pending_message.id}`" :data-author="bridge.identities[pending_message.author]?.style" role="assistant" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
+          <template #body>
+            <div class="channel-message-byline">
+              <UAvatar :src="bridge.identities[pending_message.author]?.icon" :text="bridge.identities[pending_message.author]?.initials || '?'" :alt="bridge.display_name(pending_message.author)" size="md" class="channel-avatar" :class="bridge.identities[pending_message.author]?.style" />
+              <div class="channel-message-meta"><div class="channel-message-author"><strong>{{ bridge.display_name(pending_message.author) }}</strong><span v-if="pending_message.round" class="channel-message-round">{{ pending_message.round }}</span></div></div>
+              <span class="channel-message-provenance channel-message-elapsed">已用 {{ pending_duration }}</span>
+            </div>
+            <div class="channel-message-text" role="status" :aria-label="`${bridge.display_name(pending_message.author)} ${pending_message.text}`"><span ref="reply_glow" class="channel-reply-glow">{{ pending_message.text }}</span></div>
+          </template>
+        </UChatMessage>
+      </div>
+      <div v-if="!view.messages.length && !pending_message" class="channel-empty"><UIcon :name="view.query || view.mention_only ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.mention_only ? '没有找到消息' : room.title }}</h2><p>{{ view.query || view.mention_only ? '试试其他关键词，或清除筛选。' : bridge.empty_discussion_message(room) }}</p></div>
     </div>
-    <div v-if="view.messages.length && !follow_tail" class="channel-latest-dock"><UButton icon="i-lucide-arrow-down" color="neutral" variant="outline" aria-label="回到最新消息" class="channel-latest-button" @click="return_to_latest" /></div>
-    <div class="channel-composer-dock"><div class="channel-composer-column">
-      <UChatPrompt ref="prompt" v-model="text" :submit-on-enter="false" :autofocus="false" :rows="1" :maxrows="6" :placeholder="`发消息到 # ${room.title}`" aria-label="留言正文" variant="outline" color="neutral" class="channel-composer" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
+    <div v-if="(view.messages.length || pending_message) && !follow_tail" class="channel-latest-dock"><UButton icon="i-lucide-arrow-down" color="neutral" variant="outline" aria-label="回到最新消息" class="channel-latest-button" @click="return_to_latest" /></div>
+    <div class="channel-composer-dock"><div class="channel-composer-column" @dragover="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments" @keydown.capture="attachment_shortcut">
+      <UChatPrompt ref="prompt" v-model="text" :disabled="view.sending_message" :submit-on-enter="false" :autofocus="false" :rows="1" :maxrows="6" :placeholder="`发消息到 # ${room.title}`" aria-label="留言正文" variant="outline" color="neutral" class="channel-composer" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
         <template #header>
-          <div v-if="speaking_turn" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>{{ bridge.display_name(speaking_turn.expert) }} 正在发言：新消息会在其说完后交给主持人；点「停止」立即打断</span></div>
+          <div v-if="view.attachment_drafts.length" class="attachment-drafts">
+            <div v-for="file in view.attachment_drafts" :key="file.id" :class="file.preview_url ? 'attachment-draft-image' : 'attachment-draft-file'">
+              <img v-if="file.preview_url" :src="file.preview_url" :alt="file.file_name" :title="file.file_name">
+              <template v-else>
+                <span v-html="bridge.attachment_file_icon(file.file_name)"></span>
+                <span class="attachment-name"><span :title="file.file_name">{{ file.file_name }}</span><small>{{ bridge.attachment_size(file.size) }}</small></span>
+              </template>
+              <button type="button" class="attachment-remove" :aria-label="`移除 ${file.file_name}`" :disabled="view.sending_message" @click="act('remove_attachment', file.id)"><UIcon name="i-lucide-x" /></button>
+            </div>
+          </div>
+          <p v-if="view.composer_error || view.upload_status" class="attachment-status" :role="view.composer_error ? 'alert' : 'status'">{{ view.composer_error || view.upload_status }}</p>
+          <div v-if="speaking_turn" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>新消息会在 {{ bridge.display_name(speaking_turn.expert) }} 回复后交给主持人；点「停止」取消本次安排</span></div>
           <div v-if="view.reply_to || view.turn_reply_to" class="channel-reply-draft"><UIcon name="i-lucide-corner-up-left" /><span>{{ view.turn_reply_to ? `回答安排 #${view.turn_reply_to} · ${bridge.display_name(room.host)} 代发` : `回复 #${view.reply_to}` }}</span><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" :aria-label="view.turn_reply_to ? '取消关联安排' : '取消回复'" @click="act(view.turn_reply_to ? 'cancel_answer' : 'cancel_reply')" /></div>
           <div v-if="needs_summary" class="channel-answer-editor"><UTextarea v-model="answer_summary" :rows="2" aria-label="回答摘要" class="w-full" placeholder="先说结论，保留关键理由、条件和不确定性。完整内容写在正文中。" /><USelect v-model="summary_source" :items="summary_sources" aria-label="摘要提供者" size="xs" /></div>
         </template>
         <template #footer>
+          <UButton type="button" icon="i-lucide-paperclip" aria-label="添加附件" title="图片、PDF 或其他文件 · 每个最多 20 MiB" color="neutral" variant="ghost" size="sm" :disabled="view.sending_message" @click="act('choose_attachments')" />
           <div class="channel-composer-identity">
             <USelectMenu v-model="author" :items="identities" value-key="value" :avatar="selected_identity?.avatar" :disabled="kind === 'moderation'" :search-input="{ placeholder: '搜索身份…', icon: 'i-lucide-search' }" :content="{ side: 'top', align: 'start', sideOffset: 10 }" variant="none" size="sm" aria-label="发言身份" class="channel-author-select" :ui="{ content: 'channel-select-menu channel-identity-menu', itemLeadingAvatarSize: 'xs' }" />
             <USelect v-model="kind" :items="kinds" :icon="kinds.find((item) => item.value === kind)?.icon" :content="{ side: 'top', align: 'start', sideOffset: 10 }" variant="none" size="sm" aria-label="发言职责" class="channel-kind-select" :ui="{ content: 'channel-select-menu' }" />
           </div>
           <span class="channel-shortcut"><UKbd value="ctrl" /><UKbd value="enter" /></span>
           <UButton v-if="speaking_turn" icon="i-lucide-square" label="停止" color="neutral" variant="outline" size="sm" class="channel-stop" :title="`打断 ${bridge.display_name(speaking_turn.expert)} 的发言（本次作废），交给主持人`" :loading="pending === 'cancel_turn'" @click="act('cancel_turn')" />
-          <UButton type="submit" trailing-icon="i-lucide-arrow-up" color="neutral" label="发送" size="sm" class="channel-primary-button channel-send" :disabled="!text.trim() || (needs_summary && !answer_summary.trim())" :loading="pending === 'send'" />
+          <UButton type="button" trailing-icon="i-lucide-arrow-up" color="neutral" label="发送" size="sm" class="channel-primary-button channel-send" :disabled="(!text.trim() && !view.attachment_drafts.length) || (needs_summary && !answer_summary.trim())" :loading="pending === 'send' || view.sending_message" @click="send" />
         </template>
       </UChatPrompt>
       <div class="channel-composer-note"><span>{{ author_note }}<span class="channel-note-divider">·</span>在线 AI 的观点需代发</span><span class="channel-draft-length">{{ text_length }} / {{ bridge.max_message_length }}<span class="channel-note-divider">·</span>Enter 换行</span></div>
     </div></div>
   </section>
 </template>
+
+<style scoped>
+.channel-message-elapsed { align-self: flex-start; margin-left: auto; line-height: 28px; white-space: nowrap; }
+.channel-host-work { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; column-gap: 10px; row-gap: 2px; align-items: start; margin: 0 var(--message-inset-end, 16px) 20px 16px; padding: 12px 18px; border: 1px solid var(--ui-border-muted); border-radius: 10px; background: color-mix(in srgb, var(--ui-bg-elevated) 35%, transparent); }
+.channel-host-work > .channel-avatar { grid-row: 1 / 3; align-self: center; width: 28px; height: 28px; font-size: 9px; }
+.channel-host-work-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; min-width: 0; line-height: 20px; }
+.channel-host-work-heading strong { color: var(--ui-text); font-size: 13px; font-weight: 600; }
+.channel-host-work-heading span, .channel-host-work-elapsed { color: var(--ui-text-dimmed); font-size: 11px; line-height: 20px; }
+.channel-host-work-elapsed { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.channel-host-work-status { grid-column: 2 / -1; margin: 0; color: var(--ui-text-toned); font-size: 13px; line-height: 20px; }
+@media (max-width: 700px) {
+  .channel-host-work { margin: 0 8px 14px; padding: 12px 15px; }
+}
+.channel-reply-glow { display: inline-block; max-width: 100%; }
+@media (prefers-reduced-motion: no-preference) {
+  .channel-reply-glow.is-glowing {
+    background-image: linear-gradient(90deg,
+      color-mix(in srgb, currentColor 76%, transparent) 40%,
+      currentColor 50%,
+      color-mix(in srgb, currentColor 76%, transparent) 60%);
+    background-size: 250% 100%;
+    background-position: var(--reply-glow-position, 100%) 0;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+}
+</style>

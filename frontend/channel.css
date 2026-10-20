@@ -385,8 +385,9 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 .channel-topic-card.is-expanded .channel-topic-body { max-height: none; }
 .channel-topic-request .channel-topic-text { color: var(--ui-text-highlighted); }
 .channel-topic-people { display: flex; flex-wrap: wrap; gap: 6px 14px; }
-.channel-topic-person { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--ui-text-highlighted); }
+.channel-topic-person { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; line-height: 20px; color: var(--ui-text-highlighted); }
 .channel-topic-person small, .channel-topic-bounds { color: var(--ui-text-dimmed); font-size: 11px; }
+.channel-topic-person small { line-height: inherit; }
 .channel-topic-bounds { display: block; margin-top: 5px; }
 .channel-details .info-section p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .channel-date-divider { padding: 12px 24px 14px; }

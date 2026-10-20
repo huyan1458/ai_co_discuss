@@ -20,6 +20,7 @@ const HELP = `AI CoDiscuss CLI
   launch COMMAND        保存启动配置，或从 AI 对话启动讨论
   room COMMAND          创建、读取或更新讨论房间
   message COMMAND       检索原文、提交观点
+  attachment COMMAND    上传、查询与下载讨论附件
   turn COMMAND          安排发言、读取待办与回答
   state COMMAND         读取或保存共享状态
   floor COMMAND         查看、领取或归还发言权

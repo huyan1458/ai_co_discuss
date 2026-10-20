@@ -169,7 +169,10 @@ for (const independent of [false, true]) test(`local restart ${independent ? 'pr
     const service = state.command(['service', 'status', '--json']);
     assert.equal(service.running, true);
     assert.equal(service.pid, reopened.service_pid);
-    assert.notEqual(service.pid, first.service_pid);
+    // The OS may reuse a stopped process's PID; lifecycle records prove a replacement started.
+    const service_log = readFileSync(join(state.home, 'service.log'), 'utf8');
+    assert.equal((service_log.match(/讨论服务已启动 pid=/g) || []).length, 2);
+    assert.equal((service_log.match(/讨论服务已停止/g) || []).length, 1);
     state.command(['local', 'stop']);
     assert.equal(state.command(['service', 'status', '--json']).running, independent);
   } finally {

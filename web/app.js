@@ -1,11 +1,17 @@
 "use strict";
 
-const REFRESH_INTERVAL_MS = 12000;
+const REFRESH_INTERVAL_MS = 60000;
+const FALLBACK_REFRESH_INTERVAL_MS = 12000;
+const UPDATE_BATCH_MS = 100;
+const UPDATE_DRAG_RETRY_MS = 500;
 const TOAST_DURATION_MS = 3500;
 const SCROLL_BOTTOM_THRESHOLD = 70;
 const SUBMISSION_ID_BYTES = 16;
 const MAX_MESSAGE_LENGTH = 32000;
 const MAX_SUMMARY_LENGTH = 1000;
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const MAX_MESSAGE_ATTACHMENTS = 10;
+const PDF_CANVAS_LIMIT = 4096;
 const DIRECTORY_DRAG_THRESHOLD = 4;
 const DIRECTORY_DRAG_OFFSET = 12;
 const THEME_STORAGE_KEY = "ai-codiscuss-theme";
@@ -14,11 +20,9 @@ const LAUNCH_PENDING_PREFIX = "discuss-launch:";
 const LOCAL_CONNECTION_KEY = "discuss-local-connection";
 const LOCAL_CONNECTION_TIMEOUT_MS = 15000;
 let local_connection = null;
-const THEMES = ["millennium", "channel", "channel-light"];
+const THEMES = ["channel", "channel-light"];
 const SOURCE_LABELS = { demo: "示例", user: "本人发言", proxy: "用户代发", cli: "CLI 发言", url: "历史 URL 发言", host_proxy: "主持人代发" };
 const PHASE_LABELS = { preparing: "准备中", initial: "独立观点", discussing: "深入讨论", reviewing: "结论复核", paused: "已暂停", concluded: "已收束" };
-// The server accepts a run deadline at most 24 hours ahead and also caps it by the topic limits.
-const RESTART_WINDOW_SECONDS = 86_340;
 const TURN_LABELS = { pending: "待处理", notified: "已通知，待回答", answered: "已回答", cancelled: "已取消" };
 const IDENTITIES = {
   "用户": { label: "User", initials: "U", style: "user", icon: "/icons/user.svg", description: "发起与协助" },
@@ -33,9 +37,16 @@ const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: ""
   reply_to: null, turn_reply_to: null, tab: "topic", refresh_version: 0, context_dirty: false, topic_dirty: false,
   snapshot_id: 0, pending_submission: null, pending_turn: null, pending_room: null, toast_timer: null,
   creation_mode: "manual", creation_drafts: {} };
+const live_updates = { source: null, connected: false, enabled: false, timer: null, poll_timer: null,
+  running: false, dirty: false };
 state.messages = [];
 state.message_history = null;
 state.connected = false;
+state.attachment_drafts = [];
+state.composer_error = "";
+state.upload_status = "";
+state.sending_message = false;
+state.attachment_preview = null;
 state.archive_changes = new Map();
 state.archive_version = 0;
 state.directory_error = "";
@@ -52,24 +63,16 @@ function element(id) { return document.getElementById(id); }
 
 /** Apply a visual theme without replacing content or changing discussion state. */
 function apply_theme(theme) {
-  const selected = theme === "retro" ? "millennium" : THEMES.includes(theme) ? theme : "channel";
-  const uses_vue = selected.startsWith("channel");
+  const selected = THEMES.includes(theme) ? theme : "channel";
   document.documentElement.dataset.theme = selected;
   document.documentElement.classList.toggle("dark", selected === "channel");
-  const legacy_style = document.getElementById("legacy-style");
-  const modern_style = document.getElementById("modern-style");
-  if (legacy_style) legacy_style.disabled = uses_vue;
-  if (modern_style) modern_style.disabled = !uses_vue;
-  if (uses_vue && !document.getElementById("modern-script")) {
+  if (!document.getElementById("modern-script")) {
     const script = document.createElement("script");
     script.id = "modern-script";
     script.type = "module";
     script.src = "/modern.js";
     document.head.append(script);
   }
-  document.querySelectorAll("[data-theme-option]").forEach((button) => {
-    button.setAttribute("aria-pressed", String(button.dataset.themeOption === selected));
-  });
   publish_view();
 }
 
@@ -78,16 +81,6 @@ function restore_theme() {
   let theme = "channel";
   try { theme = localStorage.getItem(THEME_STORAGE_KEY); } catch { /* Storage may be disabled. */ }
   change_view_theme(theme);
-}
-
-/** Bind the theme picker and remember choices when browser storage is available. */
-function bind_theme_controls() {
-  apply_theme(document.documentElement.dataset.theme);
-  document.querySelectorAll("[data-theme-option]").forEach((button) => {
-    button.addEventListener("click", () => {
-      change_view_theme(button.dataset.themeOption);
-    });
-  });
 }
 
 /** Escape untrusted message content before inserting presentation markup. */
@@ -198,8 +191,7 @@ function render_rooms() {
 
 /** Return the active directory without hiding archived rooms from deep links. */
 function visible_rooms() {
-  const archived = state.archive_view && !document.documentElement.dataset.theme?.startsWith("channel");
-  return ordered_rooms().filter((room) => Boolean(room.archived) === archived);
+  return ordered_rooms().filter((room) => !room.archived);
 }
 
 /** Sort the displayed conversations without overwriting their saved manual order. */
@@ -618,7 +610,8 @@ function message_provenance(message) {
 /** Build compact chat lines with colored names, reply references, and provenance. */
 function message_markup(message) {
   const identity = IDENTITIES[message.author] || IDENTITIES["用户"];
-  const text = message.kind === "receipt" ? `<details class="message-receipt" data-receipt-id="${message.id}"><summary aria-label="查看运行回执 #${message.id}">运行回执详情</summary>${message.rendered_text}</details>` : message.summary ? `<div class="answer-summary"><small>回答摘要 · ${escape_html(display_name(message.summary_by))}</small>${message.rendered_summary}</div><details class="message-answer" data-answer-id="${message.id}"><summary aria-label="展开完整回答 #${message.id}">完整回答</summary>${message.rendered_text}</details>` : message.rendered_text;
+  const body = message.kind === "receipt" ? `<details class="message-receipt" data-receipt-id="${message.id}"><summary aria-label="查看运行回执 #${message.id}">运行回执详情</summary>${message.rendered_text}</details>` : message.summary ? `<div class="answer-summary"><small>回答摘要 · ${escape_html(display_name(message.summary_by))}</small>${message.rendered_summary}</div><details class="message-answer" data-answer-id="${message.id}"><summary aria-label="展开完整回答 #${message.id}">完整回答</summary>${message.rendered_text}</details>` : message.rendered_text;
+  const text = body + attachment_markup(message.attachments);
   const reply = message.reply_to ? `<button class="quote-link" data-detail="${message.reply_to}">↳ 回复 #${message.reply_to} · 查看原文</button>` : "";
   return `<article class="message ${identity.style}" id="message-${message.id}"><span class="avatar message-avatar" aria-hidden="true">${identity_avatar(identity)}</span><div class="message-line"><time title="${escape_html(message.created_at)}">[${format_time(message.created_at)}]</time><strong class="message-author">${escape_html(display_name(message.author))}</strong><span class="message-verb"> 说：</span><div class="message-text markdown-body">${text}</div></div><div class="message-details"><span class="source-badge ${message.source === "demo" ? "" : "real"}">${SOURCE_LABELS[message.source] || "发言"}</span><span>${escape_html(message_provenance(message))}</span><button class="message-id" data-detail="${message.id}">#${message.id}</button>${reply}<span class="message-actions"><button data-reply="${message.id}" data-author="${escape_html(message.author)}">回复</button><button data-copy-message="${message.id}">复制原文链接</button></span></div></article>`;
 }
@@ -692,6 +685,7 @@ async function refresh_room() {
   render_room();
   if (result) render_messages(result);
   set_connection(true);
+  load_room_models();
 }
 
 /** Select a room and reset room-specific draft and filter state. */
@@ -706,8 +700,11 @@ async function select_room(room_id) {
   state.topic_dirty = false;
   state.pending_turn = null;
   state.pending_submission = null;
+  clear_attachment_drafts();
+  state.composer_error = "";
   state.launch.repair = null;
   state.launch.repair_error = '';
+  state.launch.room_models = null;
   state.messages = [];
   state.message_history = null;
   element("message-input").value = "";
@@ -719,7 +716,7 @@ async function select_room(room_id) {
   cancel_turn_reply();
   element("turn-form").reset();
   element("message-kind").value = "opinion";
-  select_tab(document.documentElement.dataset.theme.startsWith("channel") ? "discussion" : "topic");
+  select_tab("discussion");
   history.replaceState(null, "", state.room ? `/?room=${encodeURIComponent(room_id)}` : "/");
   if (state.room) state.archive_view = Boolean(state.room.archived);
   else {
@@ -753,15 +750,12 @@ function cancel_reply() {
   element("reply-preview").hidden = true;
 }
 
-/** Submit one message; reuse its identifier if a network failure requires a retry. */
-async function send_message(event) {
-  event.preventDefault();
-  if (!state.room) return;
+/** Read and validate the current composer before any upload starts. */
+function message_payload() {
   const mode = element("message-kind").value;
   const payload = { author: mode === "moderation" ? state.room.host : element("author-select").value,
     text: element("message-input").value.trim(), reply_to: state.reply_to, turn_id: state.turn_reply_to,
     kind: ["moderation", "receipt"].includes(mode) ? mode : "opinion", submitted_by: ["opinion", "receipt"].includes(mode) ? "用户" : state.room.host };
-  if (!payload.text) return;
   if (payload.kind === "opinion" && payload.author !== "用户") {
     payload.summary = element("message-summary").value.trim();
     payload.summary_by = element("message-summary-source").value === "submitter" ? payload.submitted_by : payload.author;
@@ -769,26 +763,276 @@ async function send_message(event) {
     if ([...payload.summary].length > MAX_SUMMARY_LENGTH) throw new Error(`回答摘要最多 ${MAX_SUMMARY_LENGTH} 字，草稿已保留`);
   }
   if ([...payload.text].length > MAX_MESSAGE_LENGTH) throw new Error(`留言最多 ${MAX_MESSAGE_LENGTH} 字，原文已保留，请调整后提交`);
-  const signature = JSON.stringify({ room: state.room.id, ...payload });
+  return payload;
+}
+
+/** Clear only the composer that produced the saved message. */
+async function finish_message(result, room_id, drafts) {
+  show_toast(`留言已保存 · #${result.message.id}`);
+  if (state.room?.id !== room_id || state.attachment_drafts !== drafts) return;
+  element("message-input").value = "";
+  element("message-summary").value = "";
+  state.pending_submission = null;
+  clear_attachment_drafts();
+  cancel_reply();
+  cancel_turn_reply();
+  state.query = "";
+  state.mention_only = false;
+  element("search-input").value = "";
+  element("mention-filter").setAttribute("aria-pressed", "false");
+  state.page = 1;
+  await refresh_room();
+  element("messages").scrollTop = element("messages").scrollHeight;
+}
+
+/** Submit one message; reuse its identifier if a network failure requires a retry. */
+async function send_message(event) {
+  event.preventDefault();
+  if (!state.room || state.sending_message) return;
+  const room_id = state.room.id, drafts = state.attachment_drafts;
+  state.composer_error = "";
+  let payload, saved = false;
+  try { payload = message_payload(); }
+  catch (error) { state.composer_error = error.message; render_attachment_drafts(); publish_view(); throw error; }
+  if (!payload.text && !drafts.length) return;
+  const signature = JSON.stringify({ room: room_id, ...payload, files: drafts.map(file => file.id) });
   if (state.pending_submission?.signature !== signature) state.pending_submission = { signature, id: new_submission_id() };
   payload.submission_id = state.pending_submission.id;
   element("send-message").disabled = true;
+  state.sending_message = true;
+  element("message-input").disabled = true;
+  publish_view();
   try {
-    const result = await request_json(`/api/rooms/${state.room.id}/messages`, payload);
-    element("message-input").value = "";
-    element("message-summary").value = "";
-    state.pending_submission = null;
-    cancel_reply();
-    cancel_turn_reply();
-    state.query = "";
-    state.mention_only = false;
-    element("search-input").value = "";
-    element("mention-filter").setAttribute("aria-pressed", "false");
-    state.page = 1;
-    await refresh_room();
-    element("messages").scrollTop = element("messages").scrollHeight;
-    show_toast(`留言已保存 · #${result.message.id}`);
-  } finally { element("send-message").disabled = false; }
+    payload.attachment_ids = await upload_message_attachments(room_id, payload.submitted_by, drafts);
+    const result = await request_json(`/api/rooms/${room_id}/messages`, payload);
+    saved = true;
+    await finish_message(result, room_id, drafts);
+  } catch (error) {
+    if (state.room?.id === room_id) state.composer_error = saved
+      ? `留言已保存，但页面刷新失败：${error.message}`
+      : `${error.message}；草稿已保留，可重试发送`;
+    throw error;
+  } finally {
+    state.sending_message = false;
+    state.upload_status = "";
+    element("send-message").disabled = false;
+    element("message-input").disabled = false;
+    render_attachment_drafts();
+    publish_view();
+  }
+}
+
+/** Format sizes for the file cards and composer. */
+function attachment_size(size) {
+  return size < 1024 ? `${size} B` : size < 1024 * 1024 ? `${(size / 1024).toFixed(1)} KiB` : `${(size / 1024 / 1024).toFixed(1)} MiB`;
+}
+
+/** Render a file-shaped type badge; the extension is a label, not a preview capability. */
+function attachment_file_icon(file_name) {
+  const extension = String(file_name).match(/\.([a-z0-9]{1,5})$/i)?.[1].toUpperCase() || "FILE";
+  const tone = extension === "PDF" ? "red" : /^(XLSX?|CSV)$/.test(extension) ? "green"
+    : /^(PPTX?)$/.test(extension) ? "orange" : "blue";
+  return `<span class="attachment-file-icon" data-tone="${tone}" aria-hidden="true">
+    <svg viewBox="0 0 36 44" fill="none"><path d="M4 0h19l13 13v27a4 4 0 0 1-4 4H4a4 4 0 0 1-4-4V4a4 4 0 0 1 4-4Z" fill="currentColor"/><path d="M23 0v9a4 4 0 0 0 4 4h9" fill="#fff" fill-opacity=".3"/></svg>
+    <span>${extension}</span></span>`;
+}
+
+/** Keep original files in memory until sending; reject an invalid selection as a whole. */
+function add_attachments(files) {
+  if (!state.room || state.sending_message) return;
+  const selected = Array.from(files);
+  state.composer_error = "";
+  if (state.attachment_drafts.length + selected.length > MAX_MESSAGE_ATTACHMENTS) state.composer_error = "每条消息最多 10 个附件";
+  else if (selected.some(file => file.size > MAX_ATTACHMENT_BYTES)) state.composer_error = "单个附件最多 20 MiB";
+  else state.attachment_drafts.push(...selected.map(file => ({ id: new_submission_id(), file,
+    preview_url: /^image\/(png|jpeg|gif|webp)$/.test(file.type) ? URL.createObjectURL(file) : "", uploaded: null, actor: null })));
+  render_attachment_drafts();
+  publish_view();
+}
+
+/** Release local previews when a draft is sent or its room is left. */
+function clear_attachment_drafts() {
+  for (const file of state.attachment_drafts) if (file.preview_url) URL.revokeObjectURL(file.preview_url);
+  state.attachment_drafts = [];
+  render_attachment_drafts();
+}
+
+/** Remove one unsent file without disturbing the text draft. */
+function remove_attachment(id) {
+  if (state.sending_message) return;
+  const file = state.attachment_drafts.find(item => item.id === id);
+  if (file?.preview_url) URL.revokeObjectURL(file.preview_url);
+  state.attachment_drafts = state.attachment_drafts.filter(item => item.id !== id);
+  state.composer_error = "";
+  render_attachment_drafts();
+  publish_view();
+}
+
+/** Display shared file drafts and errors in the classic theme. */
+function render_attachment_drafts() {
+  const container = element("attachment-drafts");
+  if (!container) return;
+  container.innerHTML = state.attachment_drafts.map(item => `<div class="attachment-draft">${item.preview_url ? `<img src="${item.preview_url}" alt="">` : ""}
+    <span>${escape_html(item.file.name)}<small>${attachment_size(item.file.size)}</small></span>
+    <button type="button" data-remove-attachment="${item.id}" aria-label="移除 ${escape_html(item.file.name)}" ${state.sending_message ? "disabled" : ""}>×</button></div>`).join("");
+  element("attachment-status").textContent = state.composer_error || state.upload_status;
+  element("choose-attachments").disabled = state.sending_message;
+}
+
+/** Upload once per actual uploader, retaining receipts across ambiguous send failures. */
+async function upload_message_attachments(room_id, actor, drafts) {
+  const identifiers = [];
+  for (const [index, item] of drafts.entries()) {
+    if (!item.uploaded || item.actor !== actor) {
+      item.upload_submission ??= item.id;
+      if (item.actor && item.actor !== actor) { item.upload_submission = new_submission_id(); item.uploaded = null; }
+      item.actor = actor;
+      state.upload_status = `正在上传 ${index + 1}/${drafts.length} · ${item.file.name}`;
+      render_attachment_drafts();
+      publish_view();
+      const params = new URLSearchParams({ file_name: item.file.name, actor, submission_id: item.upload_submission });
+      const token = localStorage.getItem(`discuss-access:${room_id}`);
+      const response = await fetch(`/api/rooms/${room_id}/attachments?${params}`, { method: "POST",
+        headers: { "Content-Type": "application/octet-stream", ...(token ? { "X-Discussion-Token": token } : {}) }, body: item.file });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "附件上传失败");
+      item.uploaded = result.attachment.id;
+    }
+    identifiers.push(item.uploaded);
+  }
+  return identifiers;
+}
+
+/** Intercept only actual file drops; ordinary text dragging keeps its default behavior. */
+function drop_attachments(event) {
+  if (!event.dataTransfer?.types.includes("Files")) return;
+  event.preventDefault();
+  if (event.type === "drop") add_attachments(event.dataTransfer.files);
+}
+
+/** Paste screenshots without replacing normal clipboard text handling. */
+function paste_attachments(event) {
+  const files = Array.from(event.clipboardData?.files || []);
+  if (!files.length) return;
+  event.preventDefault();
+  add_attachments(files);
+}
+
+/** Render immutable file cards shared by messages, original-message dialogs, and themes. */
+function attachment_markup(files = []) {
+  if (!files.length) return "";
+  return `<div class="message-attachments">${files.map(file => {
+    const url = `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
+    const name = escape_html(file.file_name);
+    const preview_attributes = `data-preview-attachment="${escape_html(file.id)}" data-attachment-room="${escape_html(file.room_id)}" aria-label="预览 ${name}"`;
+    if (file.content_type.startsWith("image/")) return `<button type="button" class="attachment-image" ${preview_attributes}>
+      <img src="${url}" alt="${name}" loading="lazy"></button>`;
+    const content = `${attachment_file_icon(file.file_name)}<span class="attachment-name"><span title="${name}">${name}</span><small>${attachment_size(file.size)}</small></span>`;
+    return `<div class="attachment-file">${file.content_type === "application/pdf"
+      ? `<button type="button" class="attachment-file-main" ${preview_attributes}>${content}</button>`
+      : `<a class="attachment-file-main" href="${url}?download=1" download aria-label="下载 ${name}">${content}</a>`}
+      <a class="attachment-download" href="${url}?download=1" download aria-label="下载 ${name}" title="下载 ${name}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>
+      </a></div>`;
+  }).join("")}</div>`;
+}
+
+/** Close previews and release document workers and in-flight canvas renders. */
+function close_attachment_preview() {
+  const preview = state.attachment_preview;
+  state.attachment_preview = null;
+  preview?.render_task?.cancel();
+  if (preview?.task) preview.task.destroy().catch(() => {});
+  element("attachment-image")?.removeAttribute("src");
+}
+
+/** Open images or the local PDF.js reader without leaving the discussion. */
+async function preview_attachment({ room_id, id }) {
+  close_attachment_preview();
+  const preview = { page: 1, zoom: 1, render_version: 0 };
+  state.attachment_preview = preview;
+  const file = await request_json(`/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(id)}`);
+  if (state.attachment_preview !== preview) return;
+  preview.file = file;
+  const is_pdf = file.content_type === "application/pdf";
+  element("attachment-title").textContent = file.file_name;
+  element("attachment-download").href = file.download_url;
+  element("attachment-image").hidden = is_pdf;
+  element("attachment-canvas").hidden = true;
+  element("attachment-pdf-controls").hidden = !is_pdf;
+  element("attachment-preview-status").textContent = is_pdf ? "正在读取 PDF…" : "";
+  if (!element("attachment-dialog").open) element("attachment-dialog").showModal();
+  if (!is_pdf) { element("attachment-image").src = file.url; return; }
+  try {
+    const pdf = await import("/pdfjs/pdf.min.mjs");
+    if (state.attachment_preview !== preview) return;
+    pdf.GlobalWorkerOptions.workerSrc = "/pdfjs/pdf.worker.min.mjs";
+    preview.task = pdf.getDocument({ url: file.url, cMapUrl: "/pdfjs/cmaps/", cMapPacked: true,
+      standardFontDataUrl: "/pdfjs/standard_fonts/", wasmUrl: "/pdfjs/wasm/", iccUrl: "/pdfjs/iccs/",
+      isEvalSupported: false, enableXfa: false, disableRange: true, disableStream: true });
+    preview.document = await preview.task.promise;
+    if (state.attachment_preview === preview) await render_attachment_pdf();
+  } catch (error) {
+    if (state.attachment_preview === preview) element("attachment-preview-status").textContent = `无法预览此 PDF：${error.message}。可下载原文件查看。`;
+  }
+}
+
+/** Render only the selected PDF page, bounding canvas allocation and cancelling stale work. */
+async function render_attachment_pdf() {
+  const preview = state.attachment_preview;
+  if (!preview?.document) return;
+  const version = ++preview.render_version;
+  const previous = preview.render_task;
+  previous?.cancel();
+  if (previous) await previous.promise.catch(() => {});
+  try {
+    const page = await preview.document.getPage(preview.page);
+    if (state.attachment_preview !== preview || version !== preview.render_version) return;
+    const canvas = element("attachment-canvas"), original = page.getViewport({ scale: 1 });
+    const fit = Math.min((element("attachment-viewer").clientWidth - 40) / original.width, 1.6);
+    const viewport = page.getViewport({ scale: fit * preview.zoom });
+    const density = Math.min(window.devicePixelRatio || 1, 2, PDF_CANVAS_LIMIT / Math.max(viewport.width, viewport.height));
+    canvas.width = Math.ceil(viewport.width * density);
+    canvas.height = Math.ceil(viewport.height * density);
+    canvas.style.width = `${viewport.width}px`;
+    canvas.style.height = `${viewport.height}px`;
+    element("attachment-page").textContent = `${preview.page} / ${preview.document.numPages}`;
+    element("attachment-previous").disabled = preview.page === 1;
+    element("attachment-next").disabled = preview.page === preview.document.numPages;
+    element("attachment-preview-status").textContent = "";
+    preview.render_task = page.render({ canvasContext: canvas.getContext("2d"), viewport,
+      transform: [density, 0, 0, density, 0, 0] });
+    await preview.render_task.promise;
+    if (state.attachment_preview === preview && version === preview.render_version) canvas.hidden = false;
+  } catch (error) {
+    if (state.attachment_preview === preview && version === preview.render_version && error.name !== "RenderingCancelledException")
+      element("attachment-preview-status").textContent = `PDF 页面读取失败：${error.message}`;
+  }
+}
+
+/** Bind the shared picker, paste/drop handlers, and accessible preview dialog once. */
+function bind_attachment_controls() {
+  element("choose-attachments").addEventListener("click", () => element("attachment-input").click());
+  element("attachment-input").addEventListener("change", event => { add_attachments(event.target.files); event.target.value = ""; });
+  for (const event of ["dragover", "drop"]) element("message-form").addEventListener(event, drop_attachments);
+  element("message-input").addEventListener("paste", paste_attachments);
+  document.addEventListener("click", event => {
+    const preview = event.target.closest("[data-preview-attachment]");
+    if (preview) run_action(() => preview_attachment({ room_id: preview.dataset.attachmentRoom, id: preview.dataset.previewAttachment }));
+    const remove = event.target.closest("[data-remove-attachment]");
+    if (remove) remove_attachment(remove.dataset.removeAttachment);
+  });
+  element("close-attachment").addEventListener("click", () => element("attachment-dialog").close());
+  element("attachment-dialog").addEventListener("close", close_attachment_preview);
+  element("attachment-image").addEventListener("error", () => { element("attachment-preview-status").textContent = "图片读取失败，可下载原文件查看"; });
+  for (const [id, delta] of [["attachment-previous", -1], ["attachment-next", 1]]) element(id).addEventListener("click", () => {
+    const preview = state.attachment_preview;
+    if (preview?.document) { preview.page = Math.max(1, Math.min(preview.document.numPages, preview.page + delta)); render_attachment_pdf(); }
+  });
+  for (const [id, factor] of [["attachment-zoom-out", 0.8], ["attachment-zoom-in", 1.25]]) element(id).addEventListener("click", () => {
+    const preview = state.attachment_preview;
+    if (preview) { preview.zoom = Math.max(0.5, Math.min(3, preview.zoom * factor)); render_attachment_pdf(); }
+  });
 }
 
 /** Show exact original content and let the reader follow the reply chain. */
@@ -798,6 +1042,7 @@ async function show_message(message_id) {
   const source = SOURCE_LABELS[message.source] || message.source;
   const summary = message.summary ? `回答摘要 · ${display_name(message.summary_by)}\n${message.summary}\n\n完整正文\n` : "";
   element("detail-body").textContent = `${source} · ${message_provenance(message)} · ${new Date(message.created_at).toLocaleString("zh-CN")}\n\n${summary}${message.text}`;
+  element("detail-body").insertAdjacentHTML("beforeend", attachment_markup(message.attachments));
   if (message.reply_to) {
     const link = document.createElement("button");
     link.textContent = `↳ 查看被回复的原文 #${message.reply_to}`;
@@ -853,7 +1098,8 @@ function limits_label(limits = {}) {
   const status = finished ? "" : limits.closing ? "正在收束" : limits.reached ? "已达上限，停止新增安排" : "";
   const summary = limits.max_minutes || limits.deadline ? `总时长内预留 ${limits.summary_minutes} 分钟` : `收束最多 ${limits.summary_minutes} 分钟`;
   const action = limits.on_limit === "summarize" ? `主持人总结 · ${summary}` : "到限暂停";
-  return `${rounds}；${duration}；${progress}。单次自动执行 ${limits.execution_minutes || 20} 分钟。${action}${status ? `；${status}` : ""}。`;
+  const execution = limits.execution_minutes ? `${limits.execution_minutes} 分钟` : "不限时长";
+  return `${rounds}；${duration}；${progress}。单次自动执行 ${execution}。${action}${status ? `；${status}` : ""}。`;
 }
 
 /** Apply a reached boundary without starting an AI or inventing a summary. */
@@ -953,7 +1199,7 @@ async function local_launch_request(action, payload) {
     response = await fetch(`${local_connection?.endpoint || ""}/api/local/${action}`, {
       method: payload === undefined ? "GET" : "POST", headers, credentials: "omit", redirect: "error",
       body: payload === undefined ? undefined : JSON.stringify(payload),
-      ...(payload === undefined ? { signal: AbortSignal.timeout(LOCAL_CONNECTION_TIMEOUT_MS) } : {}) });
+      ...(payload === undefined || action === "room-models" ? { signal: AbortSignal.timeout(LOCAL_CONNECTION_TIMEOUT_MS) } : {}) });
   } catch (error) {
     if (!local_connection) throw error;
     throw new Error("无法连接本机服务：请在这台电脑运行 codiscuss local open，并允许浏览器访问本机网络，再重试原请求");
@@ -1066,6 +1312,7 @@ function discard_launch(id) {
 /** Load reusable client settings once; this neither registers rooms nor starts AI. */
 async function load_launch_settings() {
   const local = ["127.0.0.1", "localhost"].includes(location.hostname);
+  state.launch.room_models = null;
   state.launch.connect_command = local ? "codiscuss local open" : `codiscuss local connect "${location.origin}"`;
   try {
     local_connection = null;
@@ -1076,8 +1323,40 @@ async function load_launch_settings() {
     const settings = await local_launch_request("settings");
     Object.assign(state.launch, { available: true, profiles: settings.participants, error: "",
       notice: local_connection ? "已连接本机服务，讨论保存在当前网站" : "" });
-  } catch (error) { state.launch.available = false; state.launch.error = error.message; }
+    load_room_models();
+  } catch (error) { state.launch.available = false; state.launch.room_models = null; state.launch.error = error.message; }
   finally { refresh_launch_recoveries(); render_launch_settings(); publish_view(); }
+}
+
+/** Read saved choices for the active room without using drafts or delaying discussion refreshes. */
+async function load_room_models() {
+  const room = state.room;
+  if (!state.launch.available || room?.runtime?.mode !== "automatic") return;
+  const previous = state.launch.room_models;
+  if (previous?.room_id === room.id && previous.revision === room.runtime.revision
+    && (previous.loading || previous.participants)) return;
+  const current = { room_id: room.id, revision: room.runtime.revision, loading: true, participants: null };
+  state.launch.room_models = current;
+  try {
+    const result = await local_launch_request("room-models", { room_id: room.id });
+    if (state.launch.room_models !== current || state.room?.id !== room.id) return;
+    if (result.room_id === room.id) current.participants = result.participants;
+  } catch { /* Unavailable or older bridges leave the model explicitly unknown. */ }
+  finally {
+    current.loading = false;
+    if (state.launch.room_models === current && state.room?.id === room.id) publish_view();
+  }
+}
+
+/** Describe registered launch choices without claiming the software's effective defaults are known. */
+function participant_model(name, room, saved) {
+  if (room?.runtime?.mode !== "automatic") return "模型与强度在原聊天设置";
+  const profile = saved?.room_id === room.id ? saved.participants?.[name] : null;
+  if (!profile) return "模型与强度未获取";
+  if (["codex", "antigravity"].includes(profile.adapter)) return "模型与强度由 App 设置";
+  const model = profile.model || "默认模型";
+  const effort = profile.adapter === "antigravity_cli" ? "强度随模型" : profile.effort || "默认强度";
+  return `${model} · ${effort}`;
 }
 
 // Only CLI clients accept a model argument; App clients use the model chosen inside the App.
@@ -1229,13 +1508,24 @@ function write_room_connection(name, value) {
   publish_view();
 }
 
-/** Save a version-checked path correction without automatically restarting the discussion. */
+/** Change Codex's entrypoint in this room's draft, retaining its private session binding. */
+function write_room_adapter(name, value) {
+  const repair = state.launch.repair;
+  const profile = repair?.participants[name];
+  if (repair?.room_id !== state.room?.id || !['codex', 'codex_cli'].includes(profile?.adapter)
+    || !['codex', 'codex_cli'].includes(value)) return;
+  profile.adapter = value;
+  repair.notice = '';
+  publish_view();
+}
+
+/** Save a version-checked connection change without automatically restarting the discussion. */
 async function save_room_configuration() {
   const repair = state.launch.repair;
   if (repair?.room_id !== state.room?.id) return;
   const participants = Object.fromEntries(Object.entries(repair.participants).map(([name, profile]) => {
     const field = profile.adapter === 'antigravity' ? 'ipc_directory' : 'executable';
-    return [name, { [field]: profile[field] }];
+    return [name, { [field]: profile[field], ...(['codex', 'codex_cli'].includes(profile.adapter) ? { adapter: profile.adapter } : {}) }];
   }));
   state.launch.repair_error = '';
   try {
@@ -1244,8 +1534,8 @@ async function save_room_configuration() {
     const result = await local_launch_request('room-config', { room_id: repair.room_id, token,
       version: repair.version, runtime_revision: repair.runtime_revision, participants });
     if (state.room?.id === repair.room_id) {
-      state.launch.repair = { ...result, notice: result.applied ? '本场路径已保存，接入服务已采用；可在进度看板重启。'
-        : '本场路径已保存；服务尚未确认采用，请先核对本机服务再重启。' };
+      state.launch.repair = { ...result, notice: result.applied ? '本场接入设置已保存，服务已采用；可在进度看板重启并核对实际发言。'
+        : '本场接入设置已保存；服务尚未确认采用，请先核对本机服务再重启。' };
       await refresh_room();
     }
   } catch (error) { if (state.room?.id === repair.room_id) state.launch.repair_error = error.message; }
@@ -1265,7 +1555,8 @@ function render_room_configuration() {
   if (fields.dataset.roomId !== state.room?.id || !fields.contains(document.activeElement)) {
     fields.innerHTML = repair ? Object.entries(repair.participants).map(([name, profile]) => {
       const field = profile.adapter === 'antigravity' ? 'ipc_directory' : 'executable';
-      return `<label>${escape_html(name)} · ${field === 'ipc_directory' ? 'Sidecar 目录' : '软件路径'}<input data-room-connection="${escape_html(name)}" value="${escape_html(profile[field] || '')}"></label>`;
+      const adapter = ['codex', 'codex_cli'].includes(profile.adapter) ? `<label>${escape_html(name)} · 接入方式<select data-room-adapter="${escape_html(name)}"><option value="codex"${profile.adapter === 'codex' ? ' selected' : ''}>Codex App</option><option value="codex_cli"${profile.adapter === 'codex_cli' ? ' selected' : ''}>Codex CLI</option></select></label>` : '';
+      return `${adapter}<label>${escape_html(name)} · ${field === 'ipc_directory' ? 'Sidecar 目录' : '软件路径'}<input data-room-connection="${escape_html(name)}" value="${escape_html(profile[field] || '')}"></label>`;
     }).join('') : '';
     fields.dataset.roomId = state.room?.id || '';
   }
@@ -1393,12 +1684,11 @@ async function pause_discussion() {
   show_toast("讨论已暂停，原安排保留");
 }
 
-/** Resume a paused automatic run; the server caps the deadline by the topic's own limits. */
+/** Resume with the topic's current limits; the server also preserves an active summary deadline. */
 async function restart_discussion() {
   const path = `/api/rooms/${state.room.id}/runtime`;
   const runtime = await request_json(path);
-  const deadline = Math.floor(Date.now() / 1000) + RESTART_WINDOW_SECONDS;
-  await request_json(path, { action: "start", mode: "automatic", revision: runtime.revision, deadline });
+  await request_json(path, { action: "start", mode: "automatic", revision: runtime.revision, deadline: 0 });
   await refresh_room();
   show_toast("已重启，原安排会重新交给对应 AI；需本机接入程序保持运行");
 }
@@ -1779,7 +2069,6 @@ function suppress_directory_drag_click(event) {
 
 /** Show the dragged title beside the pointer while leaving the directory in place. */
 function render_directory_drag_preview(drag, event) {
-  if (!document.documentElement.dataset.theme.startsWith("channel")) return;
   if (!drag.preview) {
     drag.preview = document.createElement("div");
     drag.preview.className = "channel-drag-preview";
@@ -1883,7 +2172,6 @@ function finish_directory_drag(event) {
 function bind_controls() {
   document.addEventListener("input", () => { state.navigation_version++; });
   const actions = { "new-room": () => element("room-dialog").showModal(), "empty-create": () => element("room-dialog").showModal(),
-    "open-settings": () => element("settings-dialog").showModal(), "close-settings": () => element("settings-dialog").close(),
     "close-room-dialog": () => element("room-dialog").close(), "close-message-dialog": () => element("message-dialog").close(),
     "refresh": refresh_room, "cancel-reply": cancel_reply, "go-context": () => select_tab("context"),
     "copy-reading": () => copy_text(`${location.origin}/r/${state.room.id}`),
@@ -1915,18 +2203,91 @@ function bind_controls() {
   });
 }
 
-/** Load persisted discussion data and keep visible pages up to date. */
+/** Coalesce bursts and retain changes that arrive during a previous refresh. */
+function queue_live_refresh() {
+  live_updates.dirty = true;
+  if (!live_updates.enabled || document.hidden || live_updates.running || live_updates.timer !== null) return;
+  live_updates.timer = setTimeout(flush_live_refresh, UPDATE_BATCH_MS);
+}
+
+/** Fetch committed state without disturbing drafts, filters or transcript position. */
+async function flush_live_refresh() {
+  live_updates.timer = null;
+  if (!live_updates.enabled || document.hidden) return;
+  if (state.dragged_room) {
+    live_updates.timer = setTimeout(flush_live_refresh, UPDATE_DRAG_RETRY_MS);
+    return;
+  }
+  live_updates.dirty = false;
+  live_updates.running = true;
+  try { await refresh_room(); } catch { set_connection(false); }
+  finally {
+    live_updates.running = false;
+    if (live_updates.dirty) queue_live_refresh();
+  }
+}
+
+/** Keep a low-frequency safety read, or retain the original polling when push is unavailable. */
+function arm_update_poll() {
+  clearTimeout(live_updates.poll_timer);
+  if (!live_updates.enabled || document.hidden) return;
+  live_updates.poll_timer = setTimeout(() => {
+    queue_live_refresh();
+    arm_update_poll();
+  }, live_updates.connected ? REFRESH_INTERVAL_MS : FALLBACK_REFRESH_INTERVAL_MS);
+}
+
+/** Subscribe once per visible page; every connection fetches changes missed while disconnected. */
+function start_live_updates() {
+  if (document.hidden) return;
+  live_updates.enabled = true;
+  if (!live_updates.source && typeof EventSource !== "undefined") {
+    const source = new EventSource("/api/updates");
+    live_updates.source = source;
+    source.addEventListener("open", () => {
+      if (live_updates.source !== source) return;
+      live_updates.connected = true;
+      arm_update_poll();
+    });
+    for (const name of ["ready", "change"]) source.addEventListener(name, () => {
+      if (live_updates.source === source) queue_live_refresh();
+    });
+    source.addEventListener("error", () => {
+      if (live_updates.source !== source) return;
+      const was_connected = live_updates.connected;
+      live_updates.connected = false;
+      if (was_connected) arm_update_poll();
+    });
+  }
+  arm_update_poll();
+  queue_live_refresh();
+}
+
+/** Release streams and scheduled reads while hidden or leaving the page. */
+function stop_live_updates() {
+  live_updates.enabled = false;
+  live_updates.source?.close();
+  live_updates.source = null;
+  live_updates.connected = false;
+  clearTimeout(live_updates.timer);
+  clearTimeout(live_updates.poll_timer);
+  live_updates.timer = null;
+  live_updates.poll_timer = null;
+}
+
+/** Initialize forms and the shared discussion controller. */
 async function initialize() {
-  bind_theme_controls();
   render_identities();
   bind_delegated_actions();
   bind_directory_controls();
   bind_controls();
+  bind_attachment_controls();
   bind_host_controls();
   reset_creation_mode();
   element("new-room-mode").addEventListener("change", update_creation_mode);
   document.addEventListener("input", event => {
     if (event.target.dataset?.roomConnection) write_room_connection(event.target.dataset.roomConnection, event.target.value);
+    if (event.target.dataset?.roomAdapter) write_room_adapter(event.target.dataset.roomAdapter, event.target.value);
     const { launchName: name, launchField: field } = event.target.dataset || {};
     if (name) write_launch_field(name, field, event.target.type === "checkbox" ? event.target.checked : event.target.value);
   });
@@ -1949,11 +2310,13 @@ async function initialize() {
     await select_room(state.rooms.some((room) => room.id === requested) ? requested : visible_rooms()[0]?.id);
     set_connection(true);
   } catch (error) { set_connection(false); show_toast(error.message, true); }
-  setInterval(async () => {
-    if (document.hidden) return;
-    try { await refresh_room(); } catch { set_connection(false); }
-  }, REFRESH_INTERVAL_MS);
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) run_action(refresh_room); });
+  start_live_updates();
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) stop_live_updates();
+    else start_live_updates();
+  });
+  window.addEventListener("pagehide", stop_live_updates);
+  window.addEventListener("pageshow", start_live_updates);
 }
 
 /** Publish a presentation snapshot shared by the legacy and Vue renderers. */
@@ -1963,7 +2326,7 @@ function publish_view() {
 
 /** Read current form drafts without transferring ownership to either renderer. */
 function view_snapshot() {
-  const fields = Object.fromEntries(Array.from(document.querySelectorAll(".app-shell input[id], .app-shell textarea[id], .app-shell select[id], body > dialog input[id], body > dialog textarea[id], body > dialog select[id]"))
+  const fields = Object.fromEntries(Array.from(document.querySelectorAll("#controller-fields input[id], #controller-fields textarea[id], #controller-fields select[id], body > dialog input[id], body > dialog textarea[id], body > dialog select[id]"))
     .map((control) => [control.id, control.value]));
   const experts = Object.fromEntries(["new-expert-modes", "topic-expert-modes"].map((id) =>
     [id, element(id) ? read_expert_inputs(id) : {}]));
@@ -1971,6 +2334,8 @@ function view_snapshot() {
     archive_pending: [...state.archive_changes.keys()], directory_error: state.directory_error,
     directory_pending: [...state.directory_pending.keys()], folder_pending: [...state.folder_moves.keys()], creating_room: state.creating_room,
     connected: state.connected, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
+    attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url })),
+    composer_error: state.composer_error, upload_status: state.upload_status, sending_message: state.sending_message,
     mention_only: state.mention_only, reply_to: state.reply_to, turn_reply_to: state.turn_reply_to,
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
     theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch) };
@@ -2039,7 +2404,8 @@ async function execute_view_action(name, value) {
   const event = { preventDefault() {} };
   const actions = { refresh: refresh_room, room: select_room, tab: select_tab,
     archives: toggle_archives, backup: backup_room, manage_channel, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
-    send: () => send_message(event), create: (folder_id) => submit_room(event, folder_id),
+    send: () => send_message(event), choose_attachments: () => element("attachment-input").click(), remove_attachment, preview_attachment,
+    create: (folder_id) => submit_room(event, folder_id),
     save_context: () => save_context(event), save_topic: () => save_topic(event),
     schedule: () => schedule_turn(event), filter: filter_view, reply: set_view_reply,
     cancel_reply, cancel_answer: cancel_turn_reply, prepare_answer: prepare_turn_answer,
@@ -2059,20 +2425,19 @@ async function execute_view_action(name, value) {
   } finally { publish_view(); }
 }
 
-/** Switch renderers while retaining the shared room, filters, and form drafts. */
+/** Change channel colors while retaining the shared room, filters, and form drafts. */
 function change_view_theme(theme) {
-  element("settings-dialog")?.close();
-  render_launch_settings();
   apply_theme(theme);
   try { localStorage.setItem(THEME_STORAGE_KEY, document.documentElement.dataset.theme); } catch { /* Keep the session preference. */ }
 }
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
-  write_launch: write_launch_field, write_room_connection, launch_clients: LAUNCH_CLIENTS, launch_model_hints: LAUNCH_MODEL_HINTS, launch_effort_levels: LAUNCH_EFFORT_LEVELS, launch_summary, empty_discussion_message,
+  write_launch: write_launch_field, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS, launch_model_hints: LAUNCH_MODEL_HINTS, launch_effort_levels: LAUNCH_EFFORT_LEVELS, launch_summary, empty_discussion_message,
   start_drag: start_directory_drag,
+  attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, execute: execute_view_action, theme: change_view_theme,
   request: request_json, identities: IDENTITIES, display_name, sources: SOURCE_LABELS, phases: PHASE_LABELS,
-  runtime_label, execution_label, limits_label,
+  runtime_label, execution_label, limits_label, participant_model,
   turns: TURN_LABELS, turn_label, turn_guidance, floor_status, progress_round, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();

@@ -52,6 +52,27 @@ CREATE TABLE IF NOT EXISTS messages (
     UNIQUE(room_id, submission_id)
 );
 CREATE INDEX IF NOT EXISTS messages_room ON messages(room_id, id);
+CREATE TABLE IF NOT EXISTS attachments (
+    id TEXT PRIMARY KEY, room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    message_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL DEFAULT 0,
+    file_name TEXT NOT NULL, content_type TEXT NOT NULL,
+    size INTEGER NOT NULL, sha256 TEXT NOT NULL,
+    actor TEXT NOT NULL, submission_id TEXT NOT NULL, created_at TEXT NOT NULL,
+    UNIQUE(room_id, submission_id)
+);
+CREATE INDEX IF NOT EXISTS attachments_message ON attachments(message_id, position);
+CREATE TRIGGER IF NOT EXISTS validate_attachment_link BEFORE UPDATE OF message_id ON attachments
+WHEN NEW.message_id IS NOT NULL AND (
+    (OLD.message_id IS NOT NULL AND OLD.message_id != NEW.message_id)
+    OR NOT EXISTS (
+        SELECT 1 FROM messages m JOIN message_details d ON d.message_id=m.id
+        WHERE m.id=NEW.message_id AND m.room_id=NEW.room_id AND d.submitted_by=NEW.actor
+    )
+)
+BEGIN
+    SELECT RAISE(ABORT, 'attachment_unavailable');
+END;
 CREATE TABLE IF NOT EXISTS message_summaries (
     message_id INTEGER PRIMARY KEY REFERENCES messages(id),
     text TEXT NOT NULL DEFAULT '', author TEXT NOT NULL DEFAULT ''
@@ -191,7 +212,7 @@ CREATE TABLE IF NOT EXISTS discussion_limits (
     room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
     max_rounds INTEGER NOT NULL DEFAULT 0,
     max_minutes INTEGER NOT NULL DEFAULT 0,
-    execution_minutes INTEGER NOT NULL DEFAULT 20,
+    execution_minutes INTEGER NOT NULL DEFAULT 0,
     on_limit TEXT NOT NULL DEFAULT 'pause',
     summary_minutes INTEGER NOT NULL DEFAULT 5,
     started_at INTEGER NOT NULL DEFAULT 0,
@@ -199,10 +220,11 @@ CREATE TABLE IF NOT EXISTS discussion_limits (
     stop_reason TEXT NOT NULL DEFAULT '',
     revision INTEGER NOT NULL DEFAULT 0
 );
-INSERT OR IGNORE INTO discussion_limits(room_id) SELECT id FROM rooms;
-CREATE TRIGGER IF NOT EXISTS limits_room_created AFTER INSERT ON rooms
+INSERT OR IGNORE INTO discussion_limits(room_id,execution_minutes) SELECT id,0 FROM rooms;
+DROP TRIGGER IF EXISTS limits_room_created;
+CREATE TRIGGER limits_room_created AFTER INSERT ON rooms
 BEGIN
-    INSERT INTO discussion_limits(room_id) VALUES (NEW.id);
+    INSERT INTO discussion_limits(room_id,execution_minutes) VALUES (NEW.id,0);
 END;
 CREATE TRIGGER IF NOT EXISTS limits_topic_started AFTER INSERT ON topic_settings
 WHEN NEW.phase IN ('initial','discussing','reviewing')
@@ -225,7 +247,7 @@ CREATE TABLE IF NOT EXISTS discussion_runtime (
     generation INTEGER NOT NULL DEFAULT 1,
     status TEXT NOT NULL CHECK(status IN ('ready','running','paused','stopped','concluded')),
     control_hash TEXT NOT NULL,
-    deadline INTEGER NOT NULL DEFAULT 0,
+    deadline INTEGER NOT NULL DEFAULT 0, -- 0 means no run duration limit; execution leases remain bounded.
     revision INTEGER NOT NULL DEFAULT 1,
     resume_phase TEXT NOT NULL DEFAULT 'initial',
     updated_at TEXT NOT NULL
@@ -258,6 +280,20 @@ CREATE TABLE IF NOT EXISTS event_timings (
     dispatched_at INTEGER NOT NULL DEFAULT 0,
     finished_at INTEGER NOT NULL DEFAULT 0
 );
+-- Freeze dispatch-to-publication time independently of the recent execution list.
+CREATE TABLE IF NOT EXISTS message_timings (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    elapsed_seconds INTEGER NOT NULL CHECK(elapsed_seconds>=0)
+);
+-- Only completed expert events identify a historical message unambiguously.
+INSERT INTO message_timings(message_id,elapsed_seconds)
+    SELECT m.id,MAX(0,CAST(strftime('%s',m.created_at) AS INTEGER)-t.dispatched_at)
+    FROM messages AS m JOIN discussion_events AS e
+        ON e.room_id=m.room_id AND e.result='message:'||m.id AND e.participant=m.author
+    JOIN event_timings AS t ON t.event_id=e.id
+    WHERE m.source='cli' AND e.role='expert' AND e.status='completed'
+        AND e.started_at>0 AND t.dispatched_at>0 AND t.finished_at>0
+    ON CONFLICT(message_id) DO NOTHING;
 CREATE TRIGGER IF NOT EXISTS record_event_timing AFTER UPDATE OF status ON discussion_events
 WHEN OLD.status<>NEW.status
 BEGIN

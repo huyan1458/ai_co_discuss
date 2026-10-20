@@ -2,10 +2,408 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
-import { computed, nextTick, reactive, watch } from "vue";
+import { computed, nextTick, reactive, ref, watch } from "vue";
 
 const source = readFileSync(new URL("../web/app.js", import.meta.url), "utf8").replace(/\nrestore_theme\(\);[\s\S]*$/, "");
 const discussion_source = readFileSync(new URL("../frontend/ChannelDiscussion.vue", import.meta.url), "utf8");
+
+/** Drive page subscriptions and timers without polling a live discussion. */
+function update_fixture() {
+  const fixture = theme_fixture(), { context } = fixture;
+  const timers = new Map(), sources = [], reads = [], connections = [];
+  let timer_id = 0;
+  context.document.hidden = false;
+  context.EventSource = class {
+    constructor(url) { this.url = url; this.listeners = new Map(); sources.push(this); }
+    addEventListener(name, callback) { this.listeners.set(name, callback); }
+    emit(name) { this.listeners.get(name)?.(); }
+    close() { this.closed = true; }
+  };
+  context.setTimeout = (callback, delay) => { timers.set(++timer_id, { callback, delay }); return timer_id; };
+  context.clearTimeout = id => timers.delete(id);
+  context.refresh_room = async () => { reads.push(context.test_state.room?.id); };
+  context.set_connection = value => connections.push(value);
+  return { ...fixture, timers, sources, reads, connections, async run(delay) {
+    const timer = [...timers].find(([, item]) => item.delay === delay);
+    assert.ok(timer, `missing ${delay}ms timer`);
+    timers.delete(timer[0]);
+    await timer[1].callback();
+  } };
+}
+
+test("push batches bursts, keeps an in-flight invalidation and polls healthy streams only every minute", async () => {
+  const f = update_fixture();
+  f.context.start_live_updates();
+  assert.equal(f.sources[0].url, "/api/updates");
+  f.sources[0].emit("open");
+  f.sources[0].emit("ready");
+  for (let count = 0; count < 10; count++) f.sources[0].emit("change");
+  assert.deepEqual([...f.timers.values()].map(item => item.delay).sort((left, right) => left - right), [100, 60000]);
+  let finish;
+  f.context.refresh_room = () => new Promise(resolve => { finish = resolve; });
+  const reading = f.run(100);
+  f.sources[0].emit("change");
+  f.sources[0].emit("change");
+  finish();
+  await reading;
+  f.context.refresh_room = async () => { f.reads.push("latest"); };
+  await f.run(100);
+  assert.equal(f.reads.length, 1);
+  await f.run(60000);
+  await f.run(100);
+  assert.equal(f.reads.length, 2);
+});
+
+test("hidden pages close streams and catch up on return without accepting the previous stream", async () => {
+  const f = update_fixture();
+  f.context.start_live_updates();
+  const first = f.sources[0];
+  f.context.document.hidden = true;
+  f.context.stop_live_updates();
+  assert.equal(first.closed, true);
+  assert.equal(f.timers.size, 0);
+  first.emit("change");
+  assert.equal(f.timers.size, 0);
+  f.context.document.hidden = false;
+  f.context.test_state.room = { id: "new-room" };
+  f.context.start_live_updates();
+  f.sources[1].emit("ready");
+  await f.run(100);
+  assert.deepEqual(f.reads, ["new-room"]);
+  first.emit("open");
+  assert.ok([...f.timers.values()].some(item => item.delay === 12000), "an obsolete connection cannot mark the new one healthy");
+});
+
+test("unavailable or broken push retains polling and reconnect fetches missed changes", async () => {
+  for (const supported of [false, true]) {
+    const f = update_fixture();
+    if (!supported) f.context.EventSource = undefined;
+    f.context.start_live_updates();
+    if (supported) {
+      f.sources[0].emit("open");
+      f.sources[0].emit("error");
+      const scheduled = [...f.timers.keys()];
+      for (let count = 0; count < 4; count++) f.sources[0].emit("error");
+      assert.deepEqual([...f.timers.keys()], scheduled, "reconnection failures cannot postpone fallback polling forever");
+    }
+    await f.run(100);
+    await f.run(12000);
+    await f.run(100);
+    assert.equal(f.reads.length, 2);
+    if (supported) {
+      f.sources[0].emit("open");
+      f.sources[0].emit("ready");
+      await f.run(100);
+      assert.equal(f.reads.length, 3);
+    }
+  }
+});
+
+test("push defers during a directory drag and failed refreshes can recover", async () => {
+  const f = update_fixture();
+  f.context.test_state.dragged_room = "dragging";
+  f.context.start_live_updates();
+  await f.run(100);
+  assert.equal(f.reads.length, 0);
+  f.context.test_state.dragged_room = null;
+  f.context.refresh_room = async () => { throw new Error("offline"); };
+  await f.run(500);
+  assert.deepEqual(f.connections, [false]);
+  f.context.refresh_room = async () => f.reads.push("recovered");
+  f.sources[0].emit("change");
+  await f.run(100);
+  assert.deepEqual(f.reads, ["recovered"]);
+});
+
+/** Exercise shared attachment submission and draft lifetime without a live service. */
+function attachment_fixture() {
+  const nodes = new Map(), posts = [], uploads = [], revoked = [];
+  const element = id => {
+    if (!nodes.has(id)) nodes.set(id, { value: "", setAttribute() {} });
+    return nodes.get(id);
+  };
+  element("message-kind").value = "opinion";
+  element("author-select").value = "用户";
+  const state = { room: { id: "one", host: "Codex" }, attachment_drafts: [] };
+  let identifier = 0, fail = true;
+  const context = vm.createContext({ state, element, MAX_MESSAGE_LENGTH: 30000, MAX_SUMMARY_LENGTH: 1000,
+    MAX_MESSAGE_ATTACHMENTS: 10, MAX_ATTACHMENT_BYTES: 20 * 1024 * 1024, URLSearchParams,
+    new_submission_id: () => String(++identifier), escape_html: text => text,
+    URL: { createObjectURL: () => "blob:test", revokeObjectURL: url => revoked.push(url) },
+    localStorage: { getItem: () => null }, publish_view() {}, show_toast() {}, cancel_reply() {}, cancel_turn_reply() {},
+    refresh_room: async () => {},
+    fetch: async (url, options) => { uploads.push([url, options]); return { ok: true, json: async () => ({ attachment: { id: "a".repeat(32) } }) }; },
+    request_json: async (url, payload) => {
+      posts.push([url, payload]);
+      if (fail) throw new Error("连接中断");
+      return { message: { id: 1 } };
+    } });
+  vm.runInContext(source.slice(source.indexOf("function message_payload("), source.indexOf("/** Render immutable file cards")), context);
+  return { context, state, element, posts, uploads, revoked, succeed() { fail = false; } };
+}
+
+test("attachment rendering separates images from files and keeps preview capability tied to content type", () => {
+  const { context } = theme_fixture();
+  const file = { id: "one", room_id: "room", file_name: '设计"<图>.png', size: 1024, content_type: "image/png" };
+  const image = context.attachment_markup([file]);
+  assert.match(image, /class="attachment-image"/);
+  assert.match(image, /data-preview-attachment="one"/);
+  assert.match(image, /alt="设计&quot;&lt;图&gt;\.png"/);
+  assert.doesNotMatch(image, /attachment-file|attachment-name|<small>/);
+  const pdf = context.attachment_markup([{ ...file, file_name: "方案.pdf", content_type: "application/pdf" }]);
+  assert.match(pdf, /class="attachment-file"/);
+  assert.match(pdf, /data-preview-attachment="one"/);
+  assert.match(pdf, /href="\/api\/rooms\/room\/attachments\/one\/content\?download=1"/);
+  const binary = context.attachment_markup([{ ...file, content_type: "application/octet-stream" }]);
+  assert.match(binary, /class="attachment-file-main" href=/);
+  assert.doesNotMatch(binary, /data-preview-attachment|<img/);
+  assert.match(binary, /title="设计&quot;&lt;图&gt;\.png"/);
+});
+
+test("attachment retries retain files and reuse both upload and message receipts", async () => {
+  const fixture = attachment_fixture(), { context, state, uploads, posts } = fixture;
+  context.add_attachments([{ name: "截图.png", size: 10, type: "image/png" }]);
+  await assert.rejects(context.send_message({ preventDefault() {} }), /连接中断/);
+  assert.equal(state.attachment_drafts.length, 1);
+  assert.match(state.composer_error, /草稿已保留/);
+  const first_id = posts[0][1].submission_id;
+  fixture.succeed();
+  await context.send_message({ preventDefault() {} });
+  assert.equal(uploads.length, 1);
+  assert.equal(posts[1][1].submission_id, first_id);
+  assert.equal(posts[1][1].text, "", "files-only messages are submitted");
+  assert.equal(state.attachment_drafts.length, 0);
+  assert.deepEqual(fixture.revoked, ["blob:test"]);
+});
+
+test("saved old drafts cannot clear a new composer after navigating away and back", async () => {
+  const fixture = attachment_fixture(), { context, state, element } = fixture;
+  context.add_attachments([{ name: "旧.txt", size: 10, type: "text/plain" }]);
+  let finish;
+  context.request_json = () => new Promise(resolve => { finish = resolve; });
+  const pending = context.send_message({ preventDefault() {} });
+  while (!finish) await Promise.resolve();
+  context.clear_attachment_drafts();
+  state.attachment_drafts.push({ id: "new", file: { name: "新.txt", size: 1 } });
+  element("message-input").value = "新的正文";
+  finish({ message: { id: 1 } });
+  await pending;
+  assert.equal(element("message-input").value, "新的正文");
+  assert.equal(state.attachment_drafts[0].id, "new");
+});
+
+test("attachment selection enforces count and size without consuming ordinary clipboard text", () => {
+  const { context, state } = attachment_fixture();
+  context.add_attachments([{ name: "大文件", size: 20 * 1024 * 1024 + 1 }]);
+  assert.equal(state.attachment_drafts.length, 0);
+  assert.match(state.composer_error, /20 MiB/);
+  context.add_attachments(Array.from({ length: 11 }, () => ({ name: "文件", size: 1 })));
+  assert.equal(state.attachment_drafts.length, 0);
+  let prevented = 0;
+  context.paste_attachments({ clipboardData: { files: [] }, preventDefault() { prevented++; } });
+  assert.equal(prevented, 0);
+  context.paste_attachments({ clipboardData: { files: [{ name: "截图", size: 1, type: "image/png" }] }, preventDefault() { prevented++; } });
+  assert.equal(prevented, 1);
+  assert.equal(state.attachment_drafts.length, 1);
+});
+
+test("changing the uploader never reuses an earlier actor's receipt after upload failure", async () => {
+  const { context, state, uploads } = attachment_fixture();
+  context.add_attachments([{ name: "文件", size: 1 }]);
+  await context.upload_message_attachments("one", "用户", state.attachment_drafts);
+  const original_fetch = context.fetch;
+  context.fetch = async () => { throw new Error("断线"); };
+  await assert.rejects(context.upload_message_attachments("one", "Codex", state.attachment_drafts), /断线/);
+  assert.equal(state.attachment_drafts[0].uploaded, null);
+  const submission = state.attachment_drafts[0].upload_submission;
+  context.fetch = original_fetch;
+  await context.upload_message_attachments("one", "Codex", state.attachment_drafts);
+  assert.equal(uploads.length, 2);
+  assert.equal(state.attachment_drafts[0].upload_submission, submission);
+});
+
+/** Run card face/focus transitions independently of the spring's browser clock. */
+function expert_card_fixture() {
+  const props = reactive({ name: "Codex", mode: "cli", automatic: true, status: {} });
+  const view = ref({ launch: { profiles: { Codex: { adapter: "codex_cli", model: "saved-model", effort: "high" } } } });
+  const reduced = ref(false), calls = [], cleanups = [], listeners = new Set(), document = { activeElement: null };
+  const angle = { set: (target) => calls.push(["set", target]), jump(target) { calls.push(["jump", target]); this.advance(target); },
+    on: (event, callback) => { const listener = { event, callback }; listeners.add(listener); return () => listeners.delete(listener); },
+    advance: (position) => listeners.forEach(({ event, callback }) => event === "change" && callback(position)),
+    complete: () => listeners.forEach(({ event, callback }) => event === "animationComplete" && callback()),
+    stop: () => calls.push(["stop"]) };
+  const bridge = { launch_model_hints: { codex_cli: { example: "model" } }, launch_clients: { Codex: true },
+    launch_effort_levels: { codex_cli: ["low", "high"] },
+    write_launch: (name, field, value) => { view.value.launch.profiles[name][field] = value; } };
+  const context = vm.createContext({ computed, ref, nextTick, defineProps: () => props, defineEmits: () => () => {},
+    inject: () => ({ view, bridge }), useSpring: () => angle, useReducedMotion: () => reduced, document,
+    watch: (...args) => { const stop = watch(...args); cleanups.push(stop); return stop; },
+    onBeforeUnmount: (callback) => cleanups.push(callback) });
+  const component = readFileSync(new URL("../frontend/ExpertCard.vue", import.meta.url), "utf8");
+  vm.runInContext(component.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .*;$/gm, "")
+    + "\nglobalThis.card_refs = { card, front_button, back_button, back, visible_back };", context);
+  const refs = context.card_refs;
+  for (const name of ["card", "front_button", "back_button"]) {
+    refs[name].value = { focus() { document.activeElement = refs[name].value; } };
+  }
+  return { context, props, view, reduced, angle, refs, document, calls, listeners,
+    cleanup: () => cleanups.forEach((callback) => callback()) };
+}
+
+test("expert card exposes one face and hands focus over only after crossing the edge", async () => {
+  const fixture = expert_card_fixture();
+  const { context, refs, angle, document, calls } = fixture;
+  context.flip(true);
+  await nextTick();
+  assert.deepEqual(calls, [["set", 180]]);
+  angle.advance(89);
+  assert.equal(refs.visible_back.value, false);
+  angle.advance(91);
+  await nextTick();
+  assert.equal(refs.visible_back.value, true);
+  assert.equal(document.activeElement, refs.back_button.value);
+  let stopped = 0;
+  context.escape({ stopPropagation() { stopped++; }, preventDefault() {} });
+  await nextTick();
+  assert.equal(stopped, 1);
+  assert.deepEqual(calls.at(-1), ["set", 0], "reversal retargets the same spring without jumping");
+  angle.advance(89);
+  await nextTick();
+  assert.equal(document.activeElement, refs.front_button.value);
+  context.escape({ stopPropagation() { stopped++; } });
+  assert.equal(stopped, 1, "Escape on the front remains available to the enclosing dialog");
+  context.flip(true);
+  await nextTick();
+  angle.advance(30);
+  context.flip(false);
+  await nextTick();
+  angle.advance(0);
+  angle.complete();
+  await nextTick();
+  assert.equal(document.activeElement, refs.front_button.value, "a reversal before halfway still restores focus");
+  fixture.cleanup();
+  assert.equal(fixture.listeners.size, 0);
+});
+
+test("expert card reduced motion and participation changes restore an accessible face without clearing settings", async () => {
+  const fixture = expert_card_fixture();
+  fixture.reduced.value = true;
+  fixture.context.flip(true);
+  await nextTick();
+  assert.deepEqual(fixture.calls.at(-1), ["jump", 180]);
+  assert.equal(fixture.refs.visible_back.value, true);
+  fixture.props.automatic = false;
+  await nextTick();
+  assert.equal(fixture.refs.back.value, false);
+  assert.equal(fixture.refs.visible_back.value, false);
+  assert.deepEqual(fixture.calls.at(-1), ["jump", 0]);
+  assert.equal(fixture.view.value.launch.profiles.Codex.model, "saved-model");
+  assert.equal(fixture.view.value.launch.profiles.Codex.effort, "high");
+  fixture.cleanup();
+});
+
+test("model selection returns to effort first and reset clears only the current expert", async () => {
+  const fixture = expert_card_fixture(), { context, view } = fixture;
+  view.value.launch.profiles.Claude = { model: "other-model", effort: "low" };
+  context.flip(true);
+  vm.runInContext("model_open.value = true", context);
+  context.escape({ stopPropagation() {}, preventDefault() {} });
+  assert.equal(fixture.refs.back.value, true);
+  assert.equal(vm.runInContext("model_open.value", context), false);
+  context.reset_model();
+  assert.equal(view.value.launch.profiles.Codex.model, "");
+  assert.equal(view.value.launch.profiles.Codex.effort, "");
+  assert.equal(view.value.launch.profiles.Claude.model, "other-model");
+  assert.equal(view.value.launch.profiles.Claude.effort, "low");
+  await nextTick();
+  fixture.cleanup();
+});
+
+/** Drive the real slider with a deterministic clock and no live client. */
+function effort_fixture(reduced = false) {
+  const props = reactive({ modelValue: "", items: [
+    { value: "", label: "默认强度" }, { value: "low", label: "Low" }, { value: "high", label: "High" },
+  ] });
+  const frames = new Map(), cleanups = [], events = [];
+  let now = 0, frame_id = 0;
+  const context = vm.createContext({ computed, ref, reactive, defineProps: () => props,
+    defineEmits: () => (_name, value) => { events.push(value); props.modelValue = value; },
+    useReducedMotion: () => ref(reduced), onBeforeUnmount: callback => cleanups.push(callback),
+    watch: (...args) => cleanups.push(watch(...args)), performance: { now: () => now },
+    requestAnimationFrame: callback => { frames.set(++frame_id, callback); return frame_id; },
+    cancelAnimationFrame: id => frames.delete(id) });
+  const component = readFileSync(new URL("../frontend/EffortSlider.vue", import.meta.url), "utf8");
+  vm.runInContext(component.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .*;$/gm, "")
+    + "\nglobalThis.slider_refs = { body, track };", context);
+  const { body, track } = context.slider_refs;
+  track.value = { focus() {}, setPointerCapture() {}, getBoundingClientRect: () => ({ left: 0, width: 220 }) };
+  const pointer = (clientX, thumb = false) => ({ clientX, pointerId: 1, isPrimary: true, button: 0,
+    target: { closest: () => thumb }, preventDefault() {} });
+  const tick = async (count = 1) => {
+    for (let index = 0; index < count; index++) {
+      now += 1000 / 60;
+      const pending = [...frames.values()]; frames.clear();
+      pending.forEach(callback => callback(now));
+      await nextTick();
+    }
+  };
+  const finish = async () => {
+    for (let count = 0; frames.size && count < 300; count++) await tick();
+    assert.equal(frames.size, 0);
+  };
+  return { context, body, props, frames, events, pointer, tick, finish,
+    cleanup: () => cleanups.forEach(callback => callback()) };
+}
+
+test("effort slider supports exact taps, every keyboard stop and explicit default", async () => {
+  const fixture = effort_fixture(), { context, pointer, props } = fixture;
+  context.grab(pointer(110));
+  context.release(pointer(110));
+  await fixture.finish();
+  assert.equal(props.modelValue, "low");
+  for (const [key, expected] of [["End", "high"], ["ArrowLeft", "low"], ["Home", ""], ["ArrowRight", "low"]]) {
+    context.keydown({ key, preventDefault() {} });
+    await fixture.finish();
+    assert.equal(props.modelValue, expected);
+  }
+  fixture.cleanup();
+});
+
+test("effort drag keeps velocity on release and mid-flight grab; cancellation restores the saved stop", async () => {
+  const fixture = effort_fixture(), { context, body, pointer } = fixture;
+  context.grab(pointer(10, true));
+  context.move(pointer(210));
+  await fixture.tick(3);
+  assert.ok(body.x > 0 && body.x < 2, "the hand pulls without teleporting");
+  const velocity = body.v;
+  context.release(pointer(210));
+  assert.equal(body.v, velocity);
+  const position = body.x;
+  context.grab(pointer(10 + position * 100, true));
+  assert.equal(body.x, position);
+  assert.equal(body.v, velocity);
+  context.move(pointer(10));
+  context.cancel(pointer(10));
+  await fixture.finish();
+  assert.equal(body.x, 2);
+  assert.deepEqual(fixture.events, ["high"], "a cancelled drag cannot write another effort");
+  fixture.cleanup();
+});
+
+test("effort slider handles touch cancellation, boundaries and reduced motion without leftover frames", async () => {
+  const fixture = effort_fixture(true), { context, body, pointer } = fixture;
+  context.grab(pointer(210));
+  context.cancel(pointer(210));
+  assert.equal(body.x, 0);
+  assert.equal(fixture.events.length, 0);
+  context.grab(pointer(500));
+  context.release(pointer(500));
+  await nextTick();
+  assert.equal(body.x, 2);
+  assert.equal(body.v, 0);
+  assert.equal(fixture.frames.size, 0);
+  fixture.cleanup();
+});
 
 /** Mount the real picker logic with Vue reactivity and a deterministic animation clock. */
 function picker_fixture(initial = {}, reduced_motion = false) {
@@ -308,11 +706,11 @@ test("duration labels use hours and retain exact remaining minutes", () => {
 
 /** Exercise theme persistence and renderer selection without touching discussion data. */
 function theme_fixture(saved_theme = null, shared_storage = null) {
-  const nodes = new Map([['legacy-style', {}], ['modern-style', {}], ['settings-dialog', { close() {} }]]);
+  const nodes = new Map([['modern-style', { disabled: false }]]);
   const classes = new Set();
   const storage = shared_storage || new Map([['ai-codiscuss-theme', saved_theme]]);
   const loaded = [];
-  const buttons = ['channel', 'channel-light', 'millennium'].map((theme) => ({
+  const buttons = ['channel', 'channel-light'].map((theme) => ({
     dataset: { themeOption: theme }, setAttribute(key, value) { this[key] = value; },
   }));
   const document = {
@@ -328,6 +726,19 @@ function theme_fixture(saved_theme = null, shared_storage = null) {
   context.publish_view = () => {};
   return { context, nodes, classes, storage, loaded, buttons, root: document.documentElement };
 }
+
+test('empty execution limits submit as unlimited and remain clear in the progress label', () => {
+  const { context, nodes } = theme_fixture();
+  for (const [key, value] of Object.entries({ max_rounds: '3', max_minutes: '0', execution_minutes: '', on_limit: 'pause', summary_minutes: '5' })) {
+    nodes.set(`new-room-limit-${key}`, { value });
+  }
+  const limits = context.read_limits('new-room');
+  assert.equal(limits.execution_minutes, 0);
+  assert.match(context.limits_label(limits), /单次自动执行 不限时长/);
+  nodes.get('new-room-limit-execution_minutes').value = '10';
+  assert.equal(context.read_limits('new-room').execution_minutes, 10);
+  assert.match(context.limits_label(context.read_limits('new-room')), /单次自动执行 10 分钟/);
+});
 
 /** Model a public page and its private browser storage without using a real local credential. */
 function connection_fixture(connection, shared_storage) {
@@ -467,6 +878,26 @@ test("mode selection retains its target when the user changes rooms during refre
   assert.equal(fixture.storage.get('discuss-access:room-b'), undefined);
 });
 
+test("web restart delegates duration to the topic without adding a hidden time limit", async () => {
+  const fixture = theme_fixture();
+  const posts = [];
+  let deadline = 0;
+  fixture.context.test_state.room = { id: 'unlimited', limits: { max_minutes: 0 } };
+  Object.assign(fixture.context, {
+    request_json: async (path, payload) => payload ? posts.push(payload) : { revision: 4, deadline },
+    refresh_room: async () => {}, show_toast() {},
+  });
+  await fixture.context.restart_discussion();
+  assert.equal(posts[0].deadline, 0);
+  deadline = Math.floor(Date.now() / 1000) - 60;
+  await fixture.context.restart_discussion();
+  assert.equal(posts[1].deadline, 0, 'an old run deadline must not override the current unlimited choice');
+  deadline = 0;
+  fixture.context.test_state.room.limits.max_minutes = 60;
+  await fixture.context.restart_discussion();
+  assert.equal(posts[2].deadline, 0, 'the backend applies the configured topic deadline, including summary time');
+});
+
 test("finished discussions show their conclusion instead of a live timer or a later deadline warning", () => {
   const fixture = theme_fixture();
   fixture.context.test_state.room = { phase: 'concluded' };
@@ -519,9 +950,7 @@ test("light channel survives reload and selects the Vue renderer without dark mo
   fixture.context.restore_theme();
   assert.equal(fixture.root.dataset.theme, 'channel-light');
   assert.equal(fixture.classes.has('dark'), false);
-  assert.equal(fixture.nodes.get('legacy-style').disabled, true);
   assert.equal(fixture.nodes.get('modern-style').disabled, false);
-  assert.equal(fixture.buttons.find((button) => button.dataset.themeOption === 'channel-light')['aria-pressed'], 'true');
   assert.equal(fixture.loaded.length, 1);
 });
 
@@ -629,6 +1058,61 @@ test("automatic creation uses configured local clients and preserves independent
   assert.equal(host.value, 'Claude'); assert.deepEqual(Object.entries(experts), [['Claude', 'cli']]);
 });
 
+/** Exercise the participant menu's pause boundary with the shared controller actions. */
+function participant_connection_fixture(status = "running") {
+  const view = ref({ room: { id: "one", phase: "discussing", runtime: { mode: "automatic", status } },
+    launch: { available: true, remote: false, repair: null, repair_error: "" } });
+  const pending = ref(""), calls = [];
+  const controls = { pause_allowed: true, changed_room: false };
+  const act = async (name) => {
+    calls.push(name);
+    if (name === "pause_runtime") {
+      if (!controls.pause_allowed) return false;
+      view.value.room.runtime.status = "paused";
+    }
+    if (name === "load_room_configuration") {
+      view.value.launch.repair = { room_id: "one", participants: { Codex: { adapter: "codex_cli" } } };
+      if (controls.changed_room) view.value.room.id = "two";
+    }
+    return true;
+  };
+  const context = vm.createContext({ computed, ref, defineProps: () => ({}),
+    inject: () => ({ view, bridge: {}, pending, act }) });
+  const component = readFileSync(new URL("../frontend/ProgressBoard.vue", import.meta.url), "utf8");
+  vm.runInContext(component.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .*;$/gm, "")
+    + "\nglobalThis.connection_refs = { connection_open, connection_profile };", context);
+  return { context, view, calls, controls, refs: context.connection_refs };
+}
+
+test("participant menu opens an inline switch and waits for explicit pause before reading configuration", async () => {
+  const { context, view, calls, refs } = participant_connection_fixture();
+  const menu = context.member_menu({ name: "Codex", session: "original" })[0];
+  assert.deepEqual(Array.from(menu, item => item.label), ["复制会话 ID", "切换 App / CLI"]);
+  await menu[1].onSelect();
+  assert.equal(refs.connection_open.value, true);
+  assert.deepEqual(calls, [], "opening a menu must not pause a live discussion");
+  await context.read_connection();
+  assert.deepEqual(calls, ["pause_runtime", "load_room_configuration"]);
+  assert.equal(refs.connection_profile.value.adapter, "codex_cli");
+  assert.equal(context.member_menu({ name: "Claude", session: "other" })[0].length, 1);
+  view.value.launch.remote = true;
+  assert.equal(context.member_menu({ name: "Codex", session: "original" })[0].length, 1);
+});
+
+test("participant switch stops on pause failure and discards a configuration after navigating rooms", async () => {
+  const { context, view, calls, controls, refs } = participant_connection_fixture();
+  await context.open_connection({ name: "Codex" });
+  controls.pause_allowed = false;
+  await context.read_connection();
+  assert.deepEqual(calls, ["pause_runtime"]);
+  assert.equal(refs.connection_profile.value, null);
+  view.value.room.runtime.status = "paused";
+  controls.changed_room = true;
+  await context.read_connection();
+  assert.equal(refs.connection_open.value, false);
+  assert.equal(refs.connection_profile.value, null);
+});
+
 test("room path correction keeps defaults separate, reports acknowledgement and ignores another room's late result", async () => {
   const f = theme_fixture(); const state = f.context.test_state;
   state.room = { id: 'one' }; state.launch.profiles = { Codex: { executable: 'machine-default' } };
@@ -638,10 +1122,13 @@ test("room path correction keeps defaults separate, reports acknowledgement and 
       participants: { Codex: { adapter: 'codex_cli', executable: 'old-path' } } }) });
   await f.context.load_room_configuration();
   f.context.write_room_connection('Codex', 'fixed-path');
+  f.context.write_room_adapter('Codex', 'codex');
+  f.context.write_room_adapter('Codex', 'claude');
   assert.equal(state.launch.profiles.Codex.executable, 'machine-default');
   f.context.local_launch_request = async (_action, input) => {
     assert.equal(input.token, 'owner'); assert.equal(input.version, 'v1');
-    assert.deepEqual(Object.keys(input.participants.Codex), ['executable']);
+    assert.deepEqual(Object.keys(input.participants.Codex), ['executable', 'adapter']);
+    assert.equal(input.participants.Codex.adapter, 'codex');
     return { ...input, applied: false };
   };
   await f.context.save_room_configuration();
@@ -651,12 +1138,240 @@ test("room path correction keeps defaults separate, reports acknowledgement and 
   assert.equal(state.launch.repair.participants.Codex.executable, 'fixed-path');
 });
 
+test("room model readback stays separate from drafts, reloads on revision and discards a different room's late response", async () => {
+  const f = theme_fixture(), state = f.context.test_state;
+  state.launch.available = true;
+  state.launch.profiles = { Codex: { model: 'new-discussion-draft', effort: 'low' } };
+  state.room = { id: 'one', runtime: { mode: 'automatic', revision: 1 } };
+  const requests = [];
+  f.context.local_launch_request = async (action, input) => {
+    requests.push({ action, input });
+    return { room_id: input.room_id, participants: { Codex: { adapter: 'codex_cli', model: 'saved-model', effort: 'high' } } };
+  };
+  await f.context.load_room_models();
+  assert.equal(state.launch.room_models.participants.Codex.model, 'saved-model');
+  assert.equal(state.launch.profiles.Codex.model, 'new-discussion-draft');
+  assert.deepEqual(Object.keys(requests[0].input), ['room_id']);
+  await f.context.load_room_models();
+  assert.equal(requests.length, 1);
+  state.room.runtime.revision++;
+  await f.context.load_room_models();
+  assert.equal(requests.length, 2);
+  let release;
+  state.room.runtime.revision++;
+  f.context.local_launch_request = () => new Promise(resolve => { release = resolve; });
+  const pending = f.context.load_room_models();
+  state.room = { id: 'two', runtime: { mode: 'automatic', revision: 1 } };
+  f.context.local_launch_request = async () => ({ room_id: 'two', participants: {} });
+  await f.context.load_room_models();
+  release({ room_id: 'one', participants: { Codex: { model: 'late' } } });
+  await pending;
+  assert.equal(state.launch.room_models.room_id, 'two');
+  assert.equal(state.launch.room_models.participants.Codex, undefined);
+  state.room.runtime.revision++;
+  f.context.local_launch_request = async () => { throw new Error('old bridge'); };
+  await f.context.load_room_models();
+  assert.equal(state.launch.room_models.loading, false);
+  assert.equal(state.launch.room_models.participants, null);
+});
+
+test("participant model labels distinguish explicit choices, software defaults and unavailable room data", () => {
+  const label = theme_fixture().context.participant_model;
+  const room = { id: 'one', runtime: { mode: 'automatic' } };
+  const saved = { room_id: 'one', participants: {
+    Codex: { adapter: 'codex_cli', model: 'gpt-6-astra', effort: 'xhigh' },
+    Claude: { adapter: 'claude', model: '', effort: '' },
+    Gemini: { adapter: 'antigravity_cli', model: 'gemini-4-argon-high', effort: '' },
+  } };
+  assert.equal(label('Codex', room, saved), 'gpt-6-astra · xhigh');
+  assert.equal(label('Claude', room, saved), '默认模型 · 默认强度');
+  assert.equal(label('Gemini', room, saved), 'gemini-4-argon-high · 强度随模型');
+  assert.equal(label('Codex', { ...room, id: 'two' }, saved), '模型与强度未获取');
+  assert.equal(label('Codex', room, null), '模型与强度未获取');
+  saved.participants.Codex.adapter = 'codex';
+  assert.equal(label('Codex', room, saved), '模型与强度由 App 设置');
+  assert.equal(label('Codex', { ...room, runtime: { mode: 'manual' } }, saved), '模型与强度在原聊天设置');
+});
+
 test("empty automatic discussions describe their actual state instead of requiring another message", () => {
   const message = theme_fixture().context.empty_discussion_message;
   for (const [status, pattern] of [['ready', /尚未启动/], ['running', /等待 AI 执行/], ['paused', /已暂停/], ['stopped', /已停止/]]) {
     assert.match(message({ phase: 'preparing', runtime: { mode: 'automatic', status } }), pattern);
   }
   assert.match(message({ phase: 'concluded' }), /已结束/);
+});
+
+/** Run the actual glow lifecycle with a controlled animation frame clock. */
+function reply_glow_fixture() {
+  const reduced_motion = ref(false), frames = new Map(), styles = new Map(), classes = new Set();
+  let now = 0, next_frame = 0, stop;
+  const context = vm.createContext({ ref, reduced_motion, performance: { now: () => now },
+    requestAnimationFrame: (callback) => { frames.set(++next_frame, callback); return next_frame; },
+    cancelAnimationFrame: (frame) => frames.delete(frame),
+    watch: (...args) => { stop = watch(...args); return stop; } });
+  const start = discussion_source.indexOf("const reply_glow =");
+  const end = discussion_source.indexOf("const speaking_turn =", start);
+  vm.runInContext(`${discussion_source.slice(start, end)}\nglobalThis.element = reply_glow;`, context);
+  const element = { classList: { add: (name) => classes.add(name), remove: (name) => classes.delete(name) },
+    style: { setProperty: (name, value) => styles.set(name, value), removeProperty: (name) => styles.delete(name) } };
+  return { reduced_motion, frames, styles, classes, element, target: context.element, stop: () => stop(),
+    advance(seconds) {
+      now += seconds * 1000;
+      for (const [id, callback] of [...frames]) { frames.delete(id); callback(now); }
+    } };
+}
+
+test("reply glow moves without duplicate loops and stops on reduced motion or card removal", async (t) => {
+  const glow = reply_glow_fixture();
+  t.after(glow.stop);
+  assert.equal(glow.frames.size, 0);
+  glow.target.value = glow.element;
+  await nextTick();
+  assert.equal(glow.frames.size, 1);
+  glow.advance(0.1);
+  const first = parseFloat(glow.styles.get("--reply-glow-position"));
+  glow.advance(0.1);
+  assert.ok(parseFloat(glow.styles.get("--reply-glow-position")) < first, "the highlight travels left to right");
+  assert.equal(glow.frames.size, 1);
+  glow.reduced_motion.value = true;
+  await nextTick();
+  assert.equal(glow.frames.size, 0);
+  assert.equal(glow.styles.size, 0);
+  assert.equal(glow.classes.size, 0, "ordinary text is restored");
+  glow.reduced_motion.value = false;
+  await nextTick();
+  assert.equal(glow.frames.size, 1);
+  glow.advance(3600);
+  const resumed = parseFloat(glow.styles.get("--reply-glow-position"));
+  assert.ok(resumed >= 0 && resumed <= 100, "a suspended tab resumes within the text sweep");
+  glow.target.value = null;
+  await nextTick();
+  assert.equal(glow.frames.size, 0);
+  assert.equal(glow.styles.size, 0);
+});
+
+/** Evaluate the actual pending-card state with reactive room snapshots. */
+function pending_message_fixture() {
+  const execution = { id: 9, participant: "Codex", role: "expert", turn_id: 7, status: "dispatched", stale: false };
+  const view = reactive({ value: { query: "", mention_only: false, room: {
+    host: "Claude", phase: "discussing", current_turn: { id: 7, expert: "Codex", status: "notified" },
+    rounds: [{ number: 2, completed: false }], completed_rounds: 1,
+    runtime: { mode: "automatic", status: "running", expired: false, participants: [execution] },
+  } } });
+  const context = vm.createContext({ computed, view, room: computed(() => view.value.room) });
+  const start = discussion_source.indexOf("const speaking_turn =");
+  const end = discussion_source.indexOf("/** A user's message", start);
+  vm.runInContext(`${discussion_source.slice(start, end)}\nglobalThis.card = pending_message;`, context);
+  return { view: view.value, room: view.value.room, execution: view.value.room.runtime.participants[0], card: context.card };
+}
+
+test("pending reply cards follow real expert and host execution without counting queued assignments as typing", () => {
+  const { room, execution, card } = pending_message_fixture();
+  assert.equal(card.value.author, "Codex");
+  assert.equal(card.value.text, "正在唤醒…");
+  assert.equal(card.value.round, "第 2 轮");
+  execution.status = "started";
+  assert.equal(card.value.text, "正在准备回复…");
+  for (const status of ["pending", "completed", "failed", "cancelled"]) {
+    execution.status = status;
+    assert.equal(card.value, null, status);
+  }
+  execution.status = "started";
+  execution.turn_id = 6;
+  assert.equal(card.value, null, "an old assignment cannot appear to be replying");
+  execution.turn_id = 7;
+  room.current_turn.status = "answered";
+  assert.equal(card.value, null);
+  room.current_turn = null;
+  execution.role = "host";
+  execution.participant = "Claude";
+  execution.turn_id = null;
+  assert.equal(card.value.author, "Claude");
+  assert.equal(card.value.is_host, true);
+  assert.equal(card.value.text, "正在安排下一步…");
+  execution.status = "dispatched";
+  assert.equal(card.value.text, "正在唤醒主持人…");
+  execution.status = "started";
+  room.rounds = [];
+  room.phase = "preparing";
+  assert.equal(card.value.round, "", "a host can start before the first round exists");
+  assert.equal(card.value.text, "正在安排下一步…");
+  execution.status = "completed";
+  assert.equal(card.value, null, "completing an arrangement removes the host work card");
+  execution.role = "expert";
+  execution.status = "pending";
+  execution.turn_id = 8;
+  room.current_turn = { id: 8, expert: "Claude", status: "pending" };
+  assert.equal(card.value, null, "an arrangement alone does not show the next expert as working");
+  execution.status = "started";
+  assert.equal(card.value.is_host, false, "the host acting as an expert uses a reply card");
+  assert.equal(card.value.text, "正在准备回复…");
+});
+
+test("pending reply cards disappear when execution is invalid or the transcript is filtered", () => {
+  const { view, room, execution, card } = pending_message_fixture();
+  for (const [object, key, next] of [[execution, "stale", true], [room, "archived", true],
+    [room, "phase", "paused"], [room, "phase", "concluded"],
+    [room.runtime, "mode", "manual"], [room.runtime, "status", "paused"],
+    [room.runtime, "status", "stopped"], [room.runtime, "expired", true],
+    [view, "query", "历史"], [view, "mention_only", true]]) {
+    const previous = object[key];
+    object[key] = next;
+    assert.equal(card.value, null, `${key}=${next}`);
+    object[key] = previous;
+    assert.ok(card.value);
+  }
+  view.room = { phase: "preparing" };
+  assert.equal(card.value, null, "switching to an unstarted room clears the previous card");
+});
+
+test("pending reply elapsed time includes wake and work, ticks locally, resyncs and stops with the execution", async () => {
+  const { room, execution, card } = pending_message_fixture();
+  const timers = new Map();
+  let now = 0, next_timer = 0, stop;
+  const context = vm.createContext({ computed, ref, pending_message: card, performance: { now: () => now },
+    setInterval: (callback) => { timers.set(++next_timer, callback); return next_timer; },
+    clearInterval: (timer) => timers.delete(timer),
+    watch: (...args) => { stop = watch(...args); return stop; } });
+  const start = discussion_source.indexOf("const ELAPSED_TICK_MS");
+  const end = discussion_source.indexOf("const identities =", start);
+  vm.runInContext(`${discussion_source.slice(start, end)}\nglobalThis.duration = pending_duration;`, context);
+  assert.equal(context.duration.value, "—");
+  assert.equal(timers.size, 0, "legacy executions without timings do not invent a duration");
+  room.runtime.timings = { items: [{ id: 9, queue_seconds: 200, wake_seconds: 59, work_seconds: null }] };
+  await nextTick();
+  assert.equal(context.duration.value, "59秒");
+  now = 1000;
+  timers.forEach((callback) => callback());
+  assert.equal(context.duration.value, "1分00秒");
+  room.runtime = { ...room.runtime };
+  await nextTick();
+  assert.equal(context.duration.value, "1分00秒", "unrelated snapshots cannot rewind the elapsed clock");
+  assert.equal(next_timer, 1);
+  execution.status = "started";
+  room.runtime.timings.items[0].work_seconds = 24;
+  await nextTick();
+  assert.equal(context.duration.value, "1分23秒", "entering does not reset the wake duration");
+  assert.equal(timers.size, 1, "server refreshes replace the previous clock");
+  room.runtime.timings.items[0].work_seconds = 3542;
+  await nextTick();
+  assert.equal(context.duration.value, "1小时0分01秒");
+  execution.status = "completed";
+  await nextTick();
+  assert.equal(context.duration.value, "—");
+  assert.equal(timers.size, 0);
+  stop();
+});
+
+test("message duration formatting distinguishes zero from missing data and handles hours", () => {
+  const start = discussion_source.indexOf("function format_elapsed");
+  const end = discussion_source.indexOf("const pending_duration", start);
+  const context = vm.createContext({});
+  vm.runInContext(discussion_source.slice(start, end), context);
+  for (const [seconds, label] of [[null, "—"], [undefined, "—"], [0, "0秒"], [59, "59秒"],
+    [60, "1分00秒"], [3599, "59分59秒"], [3661, "1小时1分01秒"]]) {
+    assert.equal(context.format_elapsed(seconds), label);
+  }
 });
 
 test("a reloaded browser explicitly resumes the original submitted launch and retains ownership", async () => {
@@ -817,16 +1532,16 @@ test("launch readback shows project access, per-AI overrides and never saves wri
   assert.equal(saved.participants.Claude.project_access, undefined);
 });
 
-test("switching all three themes preserves the room, filter, reply and draft", () => {
+test("switching channel colors preserves the room, filter, reply and draft", () => {
   const fixture = theme_fixture();
   const room = { id: 'welcome' };
   Object.assign(fixture.context.test_state, { room, query: '原文', reply_to: 42, tab: 'discussion' });
   fixture.nodes.set('message-input', { value: '尚未发送的草稿' });
-  for (const theme of ['channel', 'channel-light', 'millennium', 'channel-light', 'channel']) {
+  for (const theme of ['channel', 'channel-light', 'channel']) {
     fixture.context.change_view_theme(theme);
     assert.equal(fixture.storage.get('ai-codiscuss-theme'), theme);
     assert.equal(fixture.classes.has('dark'), theme === 'channel');
-    assert.equal(fixture.nodes.get('modern-style').disabled, theme === 'millennium');
+    assert.equal(fixture.nodes.get('modern-style').disabled, false);
     assert.equal(fixture.context.test_state.room, room);
     assert.equal(fixture.context.test_state.query, '原文');
     assert.equal(fixture.context.test_state.reply_to, 42);
@@ -834,6 +1549,17 @@ test("switching all three themes preserves the room, filter, reply and draft", (
     assert.equal(fixture.nodes.get('message-input').value, '尚未发送的草稿');
   }
   assert.equal(fixture.loaded.length, 1);
+});
+
+test("removed and unknown theme preferences fall back to the channel workspace", () => {
+  for (const saved of ["millennium", "retro", "unknown"]) {
+    const fixture = theme_fixture(saved);
+    fixture.context.restore_theme();
+    assert.equal(fixture.root.dataset.theme, "channel");
+    assert.equal(fixture.storage.get("ai-codiscuss-theme"), "channel");
+    assert.equal(fixture.loaded.length, 1);
+    assert.equal(fixture.classes.has("dark"), true);
+  }
 });
 
 /** Exercise the real navigation pointer handlers with a deterministic hold clock. */
@@ -1286,8 +2012,7 @@ test("reading an archived channel keeps modern directory movement in the active 
   assert.equal(moves.length, 1);
   assert.equal(moves[0].id, "b");
   assert.equal(moves[0].before_id, "a");
-  fixture.root.dataset.theme = "millennium";
-  assert.deepEqual(Array.from(fixture.context.visible_rooms(), room => room.id), ["old"]);
+  assert.deepEqual(Array.from(fixture.context.visible_rooms(), room => room.id), ["a", "b"]);
 });
 
 test("archive deletion needs one confirmation click and cannot close a later dialog", async () => {

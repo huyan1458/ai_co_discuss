@@ -103,15 +103,16 @@ const phases = Object.entries(bridge.phases).map(([value, label]) => ({ value, l
 const expert_modes = [{ value: "none", label: "不参与" }, { value: "cli", label: "本地 AI · 读写" }, { value: "online", label: "在线 AI · 只读" }];
 const details_open = ref(false);
 const limits_locked = computed(() => !["preparing", "paused"].includes(view.value.room?.phase));
-const limit_fields = [{ key: 'max_rounds', label: '讨论轮次上限', min: 0, max: 100 }, { key: 'max_minutes', label: '总时长（分钟）', min: 0, max: 1440 }, { key: 'execution_minutes', label: '单次 AI 执行（分钟，仅自动）', min: 1, max: 60 }];
+const limit_fields = [{ key: 'max_rounds', label: '讨论轮次上限', min: 0, max: 100 }, { key: 'max_minutes', label: '总时长（分钟）', min: 0, max: 1440 }, { key: 'execution_minutes', label: '单次 AI 执行（分钟，仅自动）', min: 0, max: 60 }];
 const visible_limits = computed(() => limit_fields.filter(item => item.key !== 'execution_minutes'
   || view.value.room?.runtime?.mode === 'automatic'));
 const pending_theme = ref(null);
+const pending_attachment = ref(null);
 const detail = ref(null);
 const detail_error = ref("");
 const turn_expert = field("turn-expert-select");
 const turn_question = field("turn-question-input");
-const themes = [{ value: "channel", title: "协作频道", description: "深灰界面 · 频道导航 · 成员侧栏" }, { value: "channel-light", title: "协作频道 · 浅色", description: "纯白界面 · 中性灰阶 · 清晰阅读" }, { value: "millennium", title: "千禧聊天室", description: "钢蓝窗框 · 经典聊天" }];
+const themes = [{ value: "channel", title: "协作频道", description: "深灰界面 · 频道导航 · 成员侧栏" }, { value: "channel-light", title: "协作频道 · 浅色", description: "纯白界面 · 中性灰阶 · 清晰阅读" }];
 
 /** Map the topic form onto the existing controller's draft fields. */
 function form_id(key) {
@@ -139,6 +140,24 @@ function finish_theme_change() {
   pending_theme.value = null;
 }
 
+/** Release the original-message focus trap before opening the shared preview. */
+function open_attachment(event) {
+  const button = event.target.closest("[data-preview-attachment]");
+  if (!button) return;
+  event.stopPropagation();
+  pending_attachment.value = { room_id: button.dataset.attachmentRoom, id: button.dataset.previewAttachment };
+  mode.value = "";
+}
+
+/** Apply deferred actions only after the modal removes its accessibility isolation. */
+function after_dialog_leave() {
+  finish_theme_change();
+  if (!pending_attachment.value) return;
+  const file = pending_attachment.value;
+  pending_attachment.value = null;
+  act("preview_attachment", file);
+}
+
 /** Fetch an exact message and discard replies from a previously closed dialog. */
 watch(() => [mode.value, props.detailId], async ([kind, id], previous, on_cleanup) => {
   if (kind !== "message" || !id || !view.value.room) return;
@@ -160,7 +179,7 @@ async function follow_reply() {
 </script>
 
 <template>
-  <UModal v-model:open="open" :title="titles[rendered_mode] || '讨论'" :description="descriptions[rendered_mode]" :ui="{ content: ['glass-panel studio-modal', folder_dialog && 'channel-folder-modal', rendered_mode === 'archives' && 'channel-archive-modal', rendered_mode === 'create' && 'channel-create-modal'], body: 'dialog-body' }" @after:leave="finish_theme_change">
+  <UModal v-model:open="open" :title="titles[rendered_mode] || '讨论'" :description="descriptions[rendered_mode]" :ui="{ content: ['glass-panel studio-modal', folder_dialog && 'channel-folder-modal', rendered_mode === 'archives' && 'channel-archive-modal', rendered_mode === 'create' && 'channel-create-modal'], body: 'dialog-body' }" @after:leave="after_dialog_leave">
     <template #body>
       <section v-if="rendered_mode === 'archives'" class="channel-archive-manager">
         <div class="channel-archive-toolbar">
@@ -219,12 +238,12 @@ async function follow_reply() {
           <UFormField v-for="item in visible_limits" :key="item.key" :label="item.label"><UInput :model-value="view.fields[form_id(`limit-${item.key}`)]" type="number" :min="item.min" :max="item.max" :step="1" :disabled="limits_locked" :required="item.min > 0" :placeholder="item.min === 0 ? '留空不限' : '1–60'" class="w-full" @update:model-value="bridge.write_field(form_id(`limit-${item.key}`), $event)" /></UFormField>
           <UFormField label="达到上限后"><USelect :model-value="view.fields[form_id('limit-on_limit')] || 'pause'" :disabled="limits_locked" :items="[{value:'pause',label:'暂停保留现场'},{value:'summarize',label:'由主持人总结'}]" class="w-full" @update:model-value="bridge.write_field(form_id('limit-on_limit'), $event)" /></UFormField>
           <UFormField v-if="view.fields[form_id('limit-on_limit')] === 'summarize'" label="收束预留（分钟）"><UInput :model-value="view.fields[form_id('limit-summary_minutes')]" type="number" :min="1" :max="60" :step="1" :disabled="limits_locked" class="w-full" @update:model-value="bridge.write_field(form_id('limit-summary_minutes'), $event)" /></UFormField>
-        </div><p class="fine-print">轮次、总时长留空或 0 表示不限。一轮指每位专家各完成一次观点；首次进入讨论阶段或创建安排后计时，暂停期间不计时。收束预留计入总时长。</p><p v-if="limits_locked" class="fine-print">修改上限前，请先把阶段保存为“已暂停”。</p></section>
+        </div><p class="fine-print">轮次、总时长、单次执行留空或 0 表示不限。一轮指每位专家各完成一次观点；首次进入讨论阶段或创建安排后计时，暂停期间不计时。收束预留计入总时长。</p><p v-if="limits_locked" class="fine-print">修改上限前，请先把阶段保存为“已暂停”。</p></section>
         <UCollapsible v-model:open="details_open" class="advanced-fields"><UButton :trailing-icon="details_open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" label="用户原文、背景、边界与参与专家" color="neutral" variant="ghost" block class="advanced-trigger" /><template #content><div class="advanced-content"><UFormField v-for="item in [{ key: 'user_request', label: '用户原文' }, { key: 'background', label: '背景' }, { key: 'boundaries', label: '讨论边界' }]" :key="item.key" :label="item.label"><UTextarea :model-value="view.fields[form_id(item.key)]" :maxlength="4000" :rows="2" class="w-full" @update:model-value="bridge.write_field(form_id(item.key), $event)" /></UFormField><div class="expert-fields"><div v-for="name in experts" :key="name"><label>{{ name }}</label><USelect :model-value="view.experts[expert_container]?.[name] || 'none'" :items="expert_modes" :aria-label="`${name} 参与方式`" @update:model-value="bridge.write_expert(expert_container, name, $event === 'none' ? '' : $event)" /></div></div><p class="fine-print">AI 主持人需设为本地 CLI，可同时作为专家参与。</p></div></template></UCollapsible>
         <div class="dialog-actions"><UButton label="取消" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" class="channel-primary-button" label="保存议题" :loading="pending === 'create' || pending === 'save_topic'" /></div>
       </form>
       <form v-else-if="rendered_mode === 'schedule'" class="dialog-form" @submit.prevent="save_form"><UFormField label="发言专家" required><USelect v-model="turn_expert" :items="Object.keys(view.room?.experts || {})" class="w-full" /></UFormField><UFormField label="需要回应的问题" required><UTextarea v-model="turn_question" :rows="5" :maxlength="1000" required class="w-full" placeholder="本轮希望这位专家回答什么？" /></UFormField><p class="fine-print">创建后为待通知状态；由主持人实际联系专家。</p><div class="dialog-actions"><UButton label="取消" variant="ghost" color="neutral" @click="mode = ''" /><UButton type="submit" class="channel-primary-button" label="创建发言安排" :loading="pending === 'schedule'" /></div></form>
-      <div v-else-if="rendered_mode === 'message'" class="original-message"><p v-if="detail_error" role="alert">{{ detail_error }}</p><template v-else-if="detail"><div class="original-meta"><strong>{{ bridge.display_name(detail.author) }}</strong><span>#{{ detail.id }}</span><UBadge color="neutral" variant="subtle">{{ bridge.sources[detail.source] }}</UBadge></div><p class="fine-print">{{ bridge.provenance(detail) }} · {{ new Date(detail.created_at).toLocaleString('zh-CN') }}</p><section v-if="detail.summary" class="channel-answer-summary"><small>回答摘要 · {{ bridge.display_name(detail.summary_by) }}</small><p class="message-prose">{{ detail.summary }}</p></section><p class="message-prose">{{ detail.text }}</p><UButton v-if="detail.reply_to" :label="`查看被回复的原文 #${detail.reply_to}`" icon="i-lucide-corner-up-left" variant="outline" color="neutral" class="channel-surface-button" @click="follow_reply" /></template><p v-else class="fine-print">正在读取原文…</p></div>
+      <div v-else-if="rendered_mode === 'message'" class="original-message"><p v-if="detail_error" role="alert">{{ detail_error }}</p><template v-else-if="detail"><div class="original-meta"><strong>{{ bridge.display_name(detail.author) }}</strong><span>#{{ detail.id }}</span><UBadge color="neutral" variant="subtle">{{ bridge.sources[detail.source] }}</UBadge></div><p class="fine-print">{{ bridge.provenance(detail) }} · {{ new Date(detail.created_at).toLocaleString('zh-CN') }}</p><section v-if="detail.summary" class="channel-answer-summary"><small>回答摘要 · {{ bridge.display_name(detail.summary_by) }}</small><p class="message-prose">{{ detail.summary }}</p></section><p class="message-prose">{{ detail.text }}</p><div v-if="detail.attachments?.length" @click="open_attachment" v-html="bridge.attachment_markup(detail.attachments)"></div><UButton v-if="detail.reply_to" :label="`查看被回复的原文 #${detail.reply_to}`" icon="i-lucide-corner-up-left" variant="outline" color="neutral" class="channel-surface-button" @click="follow_reply" /></template><p v-else class="fine-print">正在读取原文…</p></div>
     </template>
   </UModal>
 </template>

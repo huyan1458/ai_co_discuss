@@ -4,7 +4,7 @@ import App from "./App.vue";
 import "./theme.css";
 import "./channel.css";
 
-/** Mount the channel workspace once, sharing its controller with millennium chat. */
+/** Mount the channel workspace once over the shared discussion controller. */
 function mount_workspace() {
   createApp(App).use(ui).mount("#modern-root");
 }

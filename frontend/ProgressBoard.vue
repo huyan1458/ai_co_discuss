@@ -6,6 +6,8 @@ const props = defineProps({ docked: { type: Boolean, default: false } });
 const { view, bridge, act, pending } = inject("discussion");
 const ending = ref(false);
 const focus_expanded = ref(false);
+const connection = ref(null);
+const connection_ready = ref(false);
 const ACTIVE_TURN = ["pending", "notified"];
 const LIVE_EXECUTION_TEXT = { dispatched: "已交付，等待开始", started: "执行中" };
 const FOCUS_PREVIEW_LENGTH = 90;
@@ -37,6 +39,12 @@ const failed_member = computed(() => members.value.find((member) => member.resul
 const focus = computed(() => turn.value?.question || room.value.focus || room.value.goal || "");
 const focus_long = computed(() => focus.value.length > FOCUS_PREVIEW_LENGTH);
 const timings = computed(() => runtime.value.timings || { items: [], totals: {}, count: 0 });
+const connection_open = computed({
+  get: () => connection.value?.room_id === room.value.id,
+  set: (open) => { if (!open) connection.value = null; },
+});
+const connection_profile = computed(() => connection_ready.value && view.value.launch.repair?.room_id === room.value.id
+  ? view.value.launch.repair.participants[connection.value?.name] : null);
 /** One sentence that says what is happening now, plus a tone for color. */
 const status = computed(() => {
   const value = room.value;
@@ -96,12 +104,38 @@ function member_status(name) {
   if (execution?.status === "failed") { text = "执行失败"; tone = "error"; }
   if (execution?.stale) { text = "疑似卡住（租约已过期）"; tone = "warning"; }
   return { name, is_host, text, tone, failures: execution?.failures || 0, result: execution?.status === "failed" ? execution.result : "",
+    model: bridge.participant_model(name, room.value, view.value.launch.room_models),
     session: execution?.session_id || "", mode: room.value.experts?.[name] === "cli" ? "CLI" : "在线" };
 }
 
 /** Menu entries for one participant; the session ID stays out of the row until needed. */
 function member_menu(member) {
-  return [[{ label: "复制会话 ID", icon: "i-lucide-copy", onSelect: () => act("copy", member.session) }]];
+  const items = [{ label: "复制会话 ID", icon: "i-lucide-copy", onSelect: () => act("copy", member.session) }];
+  if (member.name === "Codex" && automatic.value && !settled.value && view.value.launch.available
+    && !view.value.launch.remote && ["running", "paused"].includes(runtime.value.status)) {
+    items.push({ label: "切换 App / CLI", icon: "i-lucide-arrow-left-right",
+      disabled: Boolean(pending.value), onSelect: () => open_connection(member) });
+  }
+  return [items];
+}
+
+/** Open the participant's connection editor without leaving the discussion. */
+async function open_connection(member) {
+  connection.value = { room_id: room.value.id, name: member.name };
+  connection_ready.value = false;
+  if (runtime.value.status === "paused") await read_connection();
+}
+
+/** Pause only after the explicit button, then read the same version-checked room configuration. */
+async function read_connection() {
+  const opened = connection.value;
+  if (!opened || opened.room_id !== room.value.id) return;
+  if (runtime.value.status === "running" && !await act("pause_runtime")) return;
+  if (connection.value !== opened || room.value.id !== opened.room_id || runtime.value.status !== "paused") return;
+  await act("load_room_configuration");
+  if (connection.value === opened && room.value.id === opened.room_id) {
+    connection_ready.value = !view.value.launch.repair_error && view.value.launch.repair?.room_id === opened.room_id;
+  }
 }
 
 /** Share of each stage in the run's total, so the slowest stage stands out. */
@@ -153,6 +187,7 @@ async function finish(action) {
           <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
           <div class="pb-member-body">
             <div class="pb-member-name">{{ bridge.display_name(member.name) }}<UIcon v-if="member.is_host" name="i-lucide-crown" title="主持人" /><small>{{ member.is_host ? `主持 · ${member.mode}` : member.mode }}</small></div>
+            <div class="pb-member-model" title="本场启动配置；默认模型与默认强度由对应软件决定">{{ member.model }}</div>
             <div v-if="!settled" class="pb-member-status" :class="`is-${member.tone}`"><span class="pb-dot"></span>{{ member.text }}<small v-if="member.failures"> · 失败 {{ member.failures }} 次</small></div>
           </div>
           <UDropdownMenu v-if="member.session" :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="`${member.name} 的更多操作`" /></UDropdownMenu>
@@ -184,6 +219,27 @@ async function finish(action) {
         <p v-if="timings.count > timings.items.length" class="pb-note">只列出最近 {{ timings.items.length }} 次，共 {{ timings.count }} 次执行。</p>
       </details>
     </section>
+    <UModal v-model:open="connection_open" title="切换 Codex 接入方式" description="沿用原聊天和讨论进度，仅修改本场讨论。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
+      <template #body>
+        <div class="pb-connection">
+          <template v-if="runtime.status === 'running'">
+            <p>切换前需要暂停讨论，当前执行会停止，原发言安排保留。</p>
+            <UButton label="暂停并读取配置" icon="i-lucide-pause" class="channel-primary-button" :loading="Boolean(pending)" @click="read_connection" />
+          </template>
+          <template v-else-if="runtime.status === 'paused'">
+            <template v-if="connection_profile">
+              <UFormField label="接入方式"><USelect :model-value="connection_profile.adapter" :items="[{ label: 'Codex App', value: 'codex' }, { label: 'Codex CLI', value: 'codex_cli' }]" class="w-full" :disabled="Boolean(pending)" @update:model-value="bridge.write_room_adapter(connection.name, $event)" /></UFormField>
+              <p class="fine-print">{{ connection_profile.adapter === 'codex' ? 'App 需保持运行，模型与权限沿用原聊天设置。' : '切回 CLI 前，需让 App 释放原聊天；仍被占用时无法执行。' }}</p>
+              <UButton label="保存接入方式" class="channel-primary-button" :loading="pending === 'save_room_configuration'" :disabled="Boolean(pending)" @click="act('save_room_configuration')" />
+              <p v-if="view.launch.repair?.notice" role="status" class="fine-print">{{ view.launch.repair.notice }}</p>
+            </template>
+            <UButton v-else label="读取本场配置" variant="outline" color="neutral" :loading="Boolean(pending)" @click="read_connection" />
+            <p v-if="view.launch.repair_error" role="alert" class="fine-print">{{ view.launch.repair_error }}</p>
+          </template>
+          <p v-else>本场状态已变化，请关闭后重新核对。</p>
+        </div>
+      </template>
+    </UModal>
     <UModal v-model:open="ending" title="提前结束讨论" description="当前发言安排会被取消，已有消息全部保留。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
       <template #body>
         <div class="progress-ending">
@@ -198,3 +254,10 @@ async function finish(action) {
     </UModal>
   </div>
 </template>
+
+<style scoped>
+.pb-member-model { margin: 2px 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.pb-connection { display: grid; gap: 16px; }
+.pb-connection > p { margin: 0; }
+.pb-connection > button { justify-self: start; }
+</style>

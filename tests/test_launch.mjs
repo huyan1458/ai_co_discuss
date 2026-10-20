@@ -10,7 +10,7 @@ import { test } from 'node:test';
 
 import { launch_discussion, launch_settings, room_configuration, save_launch_settings } from '../runner/discussion_launch.mjs';
 import { api, DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
-import { DiscussionService, read_registry } from '../runner/discussion_service.mjs';
+import { DiscussionService, read_registry, register_room } from '../runner/discussion_service.mjs';
 import { save_site_connection } from '../runner/discussion_local.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -60,6 +60,63 @@ test('paused room path correction is authenticated, versioned and adopted before
   assert.deepEqual(calls.at(-1), { executable: replacement, session_id: 'original-host' });
 });
 
+test('paused Codex switches App and CLI with the same room and session, without dispatching on save', async t => {
+  let service;
+  t.after(() => service?.close());
+  const f = await fixture(t);
+  const launched = await launch_discussion(f.home, f.input, f.options);
+  const config = load_config(launched.config_path), calls = [];
+  const input = { site: f.site, room_id: config.room, token: config.token };
+  service = new DiscussionService(f.home, (current, store) => new DiscussionRunner(current, store,
+    async (profile, binding) => { calls.push([profile.adapter, binding.session_id]);
+      return { status: 'accepted', session_id: 'original-host' }; }));
+  await service.tick();
+  await api(config, '/runtime', { action: 'pause', revision: (await api(config, '/runtime')).revision });
+  await service.tick();
+  writeFileSync(join(f.home, 'runner.lock'), String(process.pid));
+  const before = await api(config, '');
+  for (const adapter of ['codex', 'codex_cli']) {
+    const current = await room_configuration(f.home, input);
+    const count = calls.length;
+    const interval = setInterval(() => service.tick(), 100);
+    let saved;
+    try { saved = await room_configuration(f.home, { ...input, version: current.version,
+      runtime_revision: current.runtime_revision, participants: { Codex: { adapter } } }); }
+    finally { clearInterval(interval); }
+    assert.equal(saved.applied, true);
+    assert.equal(calls.length, count, 'saving an entrypoint must not start AI');
+    assert.equal(saved.participants.Codex.adapter, adapter);
+    assert.equal(service.workers.get(launched.config_path).store.binding('Codex').session_id, 'original-host');
+    assert.equal(load_config(launched.config_path).participants.Codex.session_id, 'original-host');
+    const room = await api(config, '');
+    assert.equal(room.runtime.status, 'paused');
+    assert.equal(room.runtime.run_id, before.runtime.run_id);
+    assert.deepEqual(room.current_turn, before.current_turn);
+    await api(config, '/runtime', { action: 'start', mode: 'automatic', revision: room.runtime.revision,
+      deadline: Math.floor(Date.now() / 1000) + 600 });
+    await service.tick();
+    assert.deepEqual(calls.at(-1), [adapter, 'original-host']);
+    await api(config, '/runtime', { action: 'pause', revision: (await api(config, '/runtime')).revision });
+    await service.tick();
+  }
+});
+
+test('Codex entrypoint changes reject unbound sessions and unrelated participant changes', async t => {
+  const f = await fixture(t);
+  const launched = await launch_discussion(f.home, f.input, f.options);
+  const config = load_config(launched.config_path);
+  await api(config, '/runtime', { action: 'pause', revision: (await api(config, '/runtime')).revision });
+  const input = { site: f.site, room_id: config.room, token: config.token };
+  const current = await room_configuration(f.home, input);
+  const saved = readFileSync(launched.config_path, 'utf8');
+  const change = participants => room_configuration(f.home, { ...input, version: current.version,
+    runtime_revision: current.runtime_revision, participants });
+  await assert.rejects(change({ Codex: { adapter: 'codex' } }), /尚无实际 Codex 会话/);
+  await assert.rejects(change({ Claude: { adapter: 'codex' } }), /本场修正仅支持/);
+  await assert.rejects(change({ Codex: { adapter: 'codex', session_id: 'replacement' } }), /本场修正仅支持/);
+  assert.equal(readFileSync(launched.config_path, 'utf8'), saved);
+});
+
 test('local room-config route edits only the authorized paused room and reports an offline worker honestly', async t => {
   const f = await fixture(t);
   const launched = await launch_discussion(f.home, f.input, f.options);
@@ -75,6 +132,44 @@ test('local room-config route edits only the authorized paused room and reports 
   assert.equal(saved.status, 200);
   assert.equal(saved.body.applied, false);
   assert.equal((await api(config, '/runtime')).status, 'paused');
+});
+
+test('room-models bridge pins the connected site and reads without changing a running discussion', async t => {
+  const f = await fixture(t);
+  f.input.participants.Codex.model = 'gpt-6-astra';
+  f.input.participants.Codex.effort = 'xhigh';
+  const launched = await launch_discussion(f.home, f.input, f.options);
+  const config = load_config(launched.config_path);
+  const before = await api(config, '/runtime');
+  const contents = readFileSync(launched.config_path, 'utf8');
+  const input = { room_id: config.room, site: 'https://spoof.example', access_file: 'must-not-be-read',
+    participants: { Codex: { model: 'must-not-be-written' } } };
+  const headers = { 'X-CoDiscuss-Local': '1', Origin: f.site };
+  const read = await request(f.site, '/api/local/room-models', input, headers);
+  assert.equal(read.status, 200);
+  assert.deepEqual(read.body.participants.Codex, { adapter: 'codex_cli', model: 'gpt-6-astra', effort: 'xhigh' });
+  assert.equal(readFileSync(launched.config_path, 'utf8'), contents);
+  assert.equal((await api(config, '/runtime')).revision, before.revision);
+  assert.equal((await api(config, '/runtime')).status, 'running');
+  assert.equal((await request(f.site, '/api/local/room-models', input)).status, 403);
+  const origin = 'https://discussion.example', token = 'c'.repeat(64);
+  const remote_path = join(f.directory, 'connected-room.json');
+  writeFileSync(remote_path, JSON.stringify({ ...config, site: origin,
+    participants: { Codex: { ...config.participants.Codex, model: 'connected-room-model' } } }));
+  register_room(f.home, remote_path);
+  save_site_connection(f.home, origin, token);
+  const connected = { Origin: origin, 'X-CoDiscuss-Local': '1', 'X-CoDiscuss-Connection': token };
+  const remote_read = await request(f.site, '/api/local/room-models', { room_id: config.room, site: f.site }, connected);
+  assert.equal(remote_read.status, 200);
+  assert.equal(remote_read.body.participants.Codex.model, 'connected-room-model');
+  assert.equal(remote_read.headers['access-control-allow-origin'], origin);
+  assert.equal((await request(f.site, '/api/local/room-models', input, { ...connected, 'X-CoDiscuss-Connection': '' })).status, 403);
+  const preflight = await fetch(`${f.site}/api/local/room-models`, { method: 'OPTIONS', headers: {
+    Origin: origin, 'Access-Control-Request-Method': 'POST',
+    'Access-Control-Request-Headers': 'content-type,x-codiscuss-local,x-codiscuss-connection' } });
+  assert.equal(preflight.status, 200);
+  await preflight.json();
+  assert.equal(f.starts.length, 1, 'readback must not start another service or dispatch AI');
 });
 
 /** Run the real website in a temporary database; no actual AI software is invoked. */
@@ -217,6 +312,34 @@ test('connected browser launches on its authorized website, resumes the same req
   } finally { await service.close(); }
 });
 
+for (const entry of ['web', 'conversation']) {
+  test(`${entry} launch accepts unlimited duration and retries without recreating the run`, async t => {
+    const f = await fixture(t);
+    f.input.entry = entry;
+    f.input.room.limits.max_minutes = 0;
+    if (entry === 'conversation') f.input.current_session_id = 'actual-host-session';
+    assert.equal((await launch_discussion(f.home, f.input, { dry_run: true })).minutes, 0);
+    const result = await launch_discussion(f.home, f.input, f.options);
+    assert.equal(result.room.runtime.deadline, 0);
+    assert.equal(result.room.runtime.expired, false);
+    assert.equal(result.room.limits.max_rounds, 3);
+    assert.equal(result.room.limits.execution_minutes, 0);
+    assert.equal(result.room.limits.remaining_seconds, null);
+    const retry = await launch_discussion(f.home, f.input, f.options);
+    assert.equal(retry.room.id, result.room.id);
+    assert.equal(retry.room.runtime.generation, result.room.runtime.generation);
+    assert.equal(read_registry(f.home).length, 1);
+    if (entry === 'conversation') assert.equal(retry.current_task.event_id, result.current_task.event_id);
+  });
+}
+
+test('zero launch minutes still respects a finite topic duration', async t => {
+  const f = await fixture(t);
+  const result = await launch_discussion(f.home, { ...f.input, minutes: 0 }, f.options);
+  assert.ok(result.room.runtime.deadline > Math.floor(Date.now() / 1000));
+  assert.ok(result.room.runtime.deadline <= Math.floor(Date.now() / 1000) + 15 * 60);
+});
+
 test('project write access is per launch, defaults to read and can differ per participant', async t => {
   const f = await fixture(t);
   assert.throws(() => save_launch_settings(f.home, { participants: { Codex: { ...f.input.participants.Codex, project_access: 'write' } } }), /不能保存房间或会话/);
@@ -320,11 +443,13 @@ test('unrelated malformed registrations do not block launch and broken software 
   await assert.rejects(launch_discussion(f.home, f.input, f.options), /另一份接入配置/);
 });
 
-test('missing software, current identity or finite limits fail before creating rooms or starting a service', async t => {
+test('missing software, current identity or invalid limits fail before creating rooms or starting a service', async t => {
   const f = await fixture(t);
   await assert.rejects(launch_discussion(f.home, { ...f.input, participants: {} }, f.options), /请配置 Codex/);
   await assert.rejects(launch_discussion(f.home, { ...f.input, entry: 'conversation' }, f.options), /current_session_id/);
-  await assert.rejects(launch_discussion(f.home, { ...f.input, minutes: 0 }, f.options), /总时长/);
+  for (const minutes of [-1, 1441, 'invalid']) {
+    await assert.rejects(launch_discussion(f.home, { ...f.input, minutes }, f.options), /总时长/);
+  }
   await assert.rejects(launch_discussion(f.home, { ...f.input, cwd: './project' }, f.options), /绝对路径/);
   await assert.rejects(launch_discussion(f.home, { ...f.input, participants: { ...f.input.participants, Codex: { adapter: 'codex_cli', executable: f.directory } } }, f.options), /可执行文件/);
   await assert.rejects(launch_discussion(f.home, { ...f.input, participants: { ...f.input.participants, Claude: { adapter: 'claude', executable: join(f.directory, 'missing.exe') } } }, f.options), /可执行文件/);

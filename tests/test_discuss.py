@@ -65,6 +65,35 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self.cli("room", "limits", room["id"], "--check", "--as", "Codex")["phase"], "preparing")
         self.assertEqual(self.cli("room", "update", room["id"], "--as", "Codex", "--max-rounds", "0")["limits"]["max_rounds"], 0)
 
+    def test_attachment_upload_recovery_files_only_message_and_verified_download(self):
+        """Round-trip binary files with receipt recovery and no local overwrite."""
+        source = Path(self.directory.name) / f"资料({uuid.uuid4().hex}).pdf"
+        data = b"%PDF-1.7\n\x00\xff test bytes"
+        source.write_bytes(data)
+        upload_id = str(uuid.uuid4())
+        args = ("attachment", "upload", self.room, "--as", "用户", "--file", source, "--submission-id", upload_id)
+        preview = self.cli(*args, "--dry-run")
+        self.assertEqual(preview["method"], "POST")
+        self.assertEqual(self.cli("attachment", "list", self.room, "--submission-id", upload_id)["total"], 0)
+        upload = self.cli(*args)
+        attachment = upload["attachment"]
+        self.assertTrue(self.cli(*args)["duplicate"])
+        self.assertEqual(self.cli("attachment", "list", self.room)["total"], 0)
+        self.assertEqual(self.cli("attachment", "view", self.room, attachment["id"])["file_name"], source.name)
+        self.assertEqual(self.cli("attachment", "list", self.room, "--submission-id", upload_id)["attachments"][0]["id"], attachment["id"])
+        message = self.cli("message", "post", self.room, "--as", "用户", "--attachment", attachment["id"],
+                           "--submission-id", str(uuid.uuid4()))["message"]
+        self.assertEqual(message["text"], "")
+        self.assertEqual(self.cli("attachment", "list", self.room, "--message", message["id"])["total"], 1)
+        destination = source.with_suffix(".download")
+        self.cli("attachment", "download", self.room, attachment["id"], "--dest", destination, "--dry-run")
+        self.assertFalse(destination.exists())
+        saved = self.cli("attachment", "download", self.room, attachment["id"], "--dest", destination)
+        self.assertEqual(saved["sha256"], attachment["sha256"])
+        self.assertEqual(destination.read_bytes(), data)
+        self.rejected(["attachment", "download", self.room, attachment["id"], "--dest", destination])
+        self.assertEqual(destination.read_bytes(), data)
+
     def test_folder_creation_option_is_forwarded_in_one_request(self):
         """Expose folder placement in the CLI's documented creation payload."""
         result = self.cli("room", "create", "--title", "文件夹内", "--as", "Codex", "--folder-id", "folder-id",
@@ -452,6 +481,15 @@ class CliContractTests(unittest.TestCase):
         opener.assert_not_called()
         self.assertTrue(result["meta"]["dry_run"])
         self.assertEqual(result["data"]["body"]["submission_id"], "preview-001")
+
+    def test_unlimited_runtime_preview_preserves_zero_without_network(self):
+        """The CLI passes an explicit unlimited deadline without issuing a start."""
+        args, registry = self.parse(["run", "start", "unknown", "--revision", "0", "--deadline", "0",
+                                     "--site", "https://example.org", "--dry-run"])
+        with patch.object(discuss, "build_opener") as opener:
+            result = discuss.run(args, registry)
+        opener.assert_not_called()
+        self.assertEqual(result["data"]["body"]["deadline"], 0)
 
     def test_write_network_failure_does_not_retry_and_keeps_replay_id(self):
         """Ambiguous failures report the original request ID and exactly one attempt."""

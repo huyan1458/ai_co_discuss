@@ -1,8 +1,9 @@
 <script setup>
 /** New-discussion form: the user states the topic in their own words; the AI host drafts goal, background and boundaries. */
-import { computed, inject, onMounted, ref, watch } from "vue";
+import { computed, inject, nextTick, onMounted, ref, watch } from "vue";
 import LaunchSettings from "./LaunchSettings.vue";
 import LimitPicker, { format_duration } from "./LimitPicker.vue";
+import ExpertCard from "./ExpertCard.vue";
 
 const props = defineProps({ targetFolder: { type: Object, default: null } });
 const emit = defineEmits(["submit", "cancel"]);
@@ -16,6 +17,8 @@ const write = (key, next) => bridge.write_field(field_id(key), next);
 
 const automatic = computed(() => value("mode") === "automatic");
 const selected = computed(() => view.value.experts[EXPERT_CONTAINER] || {});
+const selected_names = computed(() => experts.filter((name) => selected.value[name]));
+const library_open = ref(false), library_trigger = ref(null);
 const host = computed(() => value("host"));
 const host_options = computed(() => experts.filter((name) => selected.value[name] === "cli"));
 const limit_picker = ref(null);
@@ -25,11 +28,6 @@ const launch_ready = (name) => {
   return Boolean(profile.adapter && (profile.adapter === "antigravity" ? profile.ipc_directory : profile.executable));
 };
 const launching = computed(() => automatic.value && view.value.launch.available && view.value.launch.create);
-const model_hint = (name) => bridge.launch_model_hints[view.value.launch.profiles[name]?.adapter];
-const effort_items = (name) => {
-  const levels = bridge.launch_effort_levels[view.value.launch.profiles[name]?.adapter];
-  return levels ? [{ label: "默认档位", value: "default" }, ...levels.map((level) => ({ label: level, value: level }))] : null;
-};
 const launch_open = ref(false);
 watch(() => [launching.value, launch_names.value.every(launch_ready), view.value.launch.error], ([on, ready, error]) => {
   if (on && (!ready || error)) launch_open.value = true;
@@ -59,16 +57,24 @@ function expert_status(name) {
   const mode = selected.value[name];
   if (automatic.value && !bridge.launch_clients[name]) return { text: "仅在线只读", tone: "muted" };
   if (automatic.value && view.value.launch.available) {
-    return launch_ready(name) ? { text: `本机 ${bridge.launch_summary(name).client}`, tone: "ready" } : { text: "尚未配置本机软件", tone: "warn" };
+    const client = bridge.launch_clients[name]?.find((item) => item.value === view.value.launch.profiles[name]?.adapter);
+    return launch_ready(name) ? { text: `本机 ${client?.label || 'AI'}`, tone: "ready" } : { text: "尚未配置本机软件", tone: "warn" };
   }
   if (!mode) return { text: bridge.launch_clients[name] ? "可本地读写" : "在线只读", tone: "muted" };
   return { text: mode === "cli" ? "本地读写，可担任主持" : "只读，回答由你代发", tone: "muted" };
 }
 
-/** Toggle one expert; automatic mode only admits software the local service can wake. */
-function toggle_expert(name) {
-  if (!selected.value[name] && automatic.value && !bridge.launch_clients[name]) return;
-  set_expert_mode(name, selected.value[name] ? "" : automatic.value || bridge.launch_clients[name] ? "cli" : "online");
+/** Admit one library role without toggling an existing participant. */
+function add_expert(name) {
+  if (selected.value[name] || (automatic.value && !bridge.launch_clients[name])) return;
+  set_expert_mode(name, automatic.value || bridge.launch_clients[name] ? "cli" : "online");
+  library_open.value = false;
+}
+
+/** Remove a role, repair the host and return keyboard focus to the library entry. */
+function remove_expert(name) {
+  set_expert_mode(name, "");
+  nextTick(() => library_trigger.value?.focus({ preventScroll: true }));
 }
 
 /** Submit the currently visible wheel values, including during an unfinished gesture. */
@@ -110,32 +116,46 @@ const summary = computed(() => {
         <h4>推进方式</h4>
         <div class="create-modes" role="radiogroup" aria-label="讨论推进方式">
           <button v-for="option in [{ value: 'automatic', icon: 'i-lucide-zap', title: '全自动讨论', text: '本机服务按安排唤醒本地 AI' }, { value: 'manual', icon: 'i-lucide-copy', title: '手动复制冷启动', text: '支持在线 AI，由你或定时任务触发' }]" :key="option.value" type="button" role="radio" class="create-mode" :class="{ 'is-selected': (automatic ? 'automatic' : 'manual') === option.value }" :aria-checked="(automatic ? 'automatic' : 'manual') === option.value" @click="choose_mode(option.value)">
-            <UIcon :name="option.icon" /><span><strong>{{ option.title }}</strong><small>{{ option.text }}</small></span>
+            <UIcon :name="option.icon" /><span class="create-mode-copy"><strong>{{ option.title }}</strong><small>{{ option.text }}</small></span>
           </button>
         </div>
         </div>
         <div class="create-choice-group">
-        <h4>参与专家</h4>
-        <div class="create-experts" role="group" aria-label="参与专家">
-          <div v-for="name in experts" :key="name" class="create-expert" :class="{ 'is-selected': selected[name], 'is-disabled': automatic && !bridge.launch_clients[name] && !selected[name] }">
-            <button type="button" class="create-expert-toggle" :aria-pressed="Boolean(selected[name])" :disabled="automatic && !bridge.launch_clients[name] && !selected[name]" @click="toggle_expert(name)">
-              <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="sm" class="channel-avatar" :class="bridge.identities[name]?.style" />
-              <span class="create-expert-text"><strong>{{ name }}</strong><small :class="`is-${expert_status(name).tone}`">{{ expert_status(name).text }}</small></span>
-              <span class="create-expert-check" aria-hidden="true"><UIcon v-if="selected[name]" name="i-lucide-check" /></span>
-            </button>
-            <div v-if="selected[name] && !automatic" class="create-expert-modes" role="radiogroup" :aria-label="`${name} 参与方式`">
-              <button v-for="mode in [{ value: 'cli', label: '本地读写' }, { value: 'online', label: '在线只读' }]" :key="mode.value" type="button" role="radio" :aria-checked="selected[name] === mode.value" :class="{ 'is-selected': selected[name] === mode.value }" @click="set_expert_mode(name, mode.value)">{{ mode.label }}</button>
+        <div class="create-expert-heading">
+          <h4>参与的 AI <span>{{ selected_names.length }}</span></h4>
+          <UPopover v-model:open="library_open" :content="{ align: 'end', sideOffset: 8, collisionPadding: 12 }"
+            :ui="{ content: 'create-role-library-popover' }">
+            <button ref="library_trigger" type="button" class="create-library-trigger"><UIcon name="i-lucide-plus" />邀请 AI</button>
+            <template #content>
+              <div class="create-role-library">
+                <div class="create-library-heading"><strong>选择参与的 AI</strong><button type="button" aria-label="关闭 AI 选择" @click="library_open = false"><UIcon name="i-lucide-x" /></button></div>
+                <ul>
+                  <li v-for="name in experts" :key="name">
+                    <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="sm" class="channel-avatar" :class="bridge.identities[name]?.style" />
+                    <span class="create-library-description"><strong>{{ name }}</strong><small>{{ expert_status(name).text }}</small></span>
+                    <button type="button" :disabled="Boolean(selected[name]) || (automatic && !bridge.launch_clients[name])"
+                      :aria-label="selected[name] ? `${name} 已加入讨论` : `将 ${name} 加入讨论`" @click="add_expert(name)">{{ selected[name] ? '已加入' : automatic && !bridge.launch_clients[name] ? '仅手动接入' : '加入讨论' }}</button>
+                  </li>
+                </ul>
+              </div>
+            </template>
+          </UPopover>
+        </div>
+        <div v-if="selected_names.length" class="create-experts" role="group" aria-label="参与的 AI">
+          <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :automatic="automatic"
+            :status="expert_status(name)" @remove="remove_expert(name)" @mode="set_expert_mode(name, $event)" />
+        </div>
+        <p v-else class="create-experts-empty">点击“邀请 AI”，选择本场讨论的参与者</p>
+        <div class="create-host-setting">
+          <div class="create-host">
+            <span class="create-label">AI 主持人</span>
+            <span v-if="!host_options.length" class="fine-print create-host-empty">先选择一位本地读写的专家</span>
+            <div v-else class="create-host-choices" role="radiogroup" aria-label="主持人">
+              <button v-for="name in host_options" :key="name" type="button" role="radio" :aria-checked="host === name" @click="write('host', name)"><span aria-hidden="true" />{{ bridge.display_name(name) }}</button>
             </div>
           </div>
+          <p class="fine-print create-hint">{{ automatic ? '全自动要求主持人与专家都是本机 AI；在线 AI 请改用手动推进。' : '主持人须为本地读写的专家；' }}主持人会先补全议题资料，也可同时作为专家发言。</p>
         </div>
-        <div class="create-host">
-          <span class="create-label">AI 主持人</span>
-          <span v-if="!host_options.length" class="fine-print create-host-empty">先选择一位本地读写的专家</span>
-          <div v-else class="create-chips" role="radiogroup" aria-label="主持人">
-            <button v-for="name in host_options" :key="name" type="button" role="radio" :aria-checked="host === name" :class="{ 'is-selected': host === name }" @click="write('host', name)"><UIcon v-if="host === name" name="i-lucide-crown" />{{ bridge.display_name(name) }}</button>
-          </div>
-        </div>
-        <p class="fine-print create-hint">{{ automatic ? '全自动要求主持人与专家都是本机 AI；在线 AI 请改用手动推进。' : '主持人须为本地读写的专家；' }}主持人会先补全议题资料，也可同时作为专家发言。</p>
         </div>
       </section>
 
@@ -145,7 +165,7 @@ const summary = computed(() => {
           @update:rounds="write('limit-max_rounds', String($event))" @update:minutes="write('limit-max_minutes', String($event))" />
         <p class="fine-print create-hint">一轮指每位专家各完成一次观点；首次进入讨论或创建安排后计时，暂停期间不计时。</p>
         <div v-if="automatic" class="form-two-columns">
-          <UFormField label="单次 AI 执行（分钟）"><UInput :model-value="value('limit-execution_minutes')" type="number" :min="1" :max="60" :step="1" required class="w-full" @update:model-value="write('limit-execution_minutes', $event)" /></UFormField>
+          <UFormField label="单次 AI 执行（分钟）" description="留空或 0 表示不限"><UInput :model-value="Number(value('limit-execution_minutes')) ? value('limit-execution_minutes') : ''" type="number" :min="0" :max="60" :step="1" placeholder="不限时长" class="w-full" @update:model-value="write('limit-execution_minutes', $event)" /></UFormField>
         </div>
         <div class="create-host">
           <span class="create-label">达到任一上限后</span>
@@ -167,15 +187,15 @@ const summary = computed(() => {
               <UFormField label="项目文件" help="默认只读；可写允许 CLI 专家按议题修改项目文件，仅本次有效"><USelect :model-value="view.launch.workspace.project_access || 'read'" :items="ACCESS_ITEMS" class="w-full" @update:model-value="bridge.write_launch('workspace', 'project_access', $event)" /></UFormField>
             </div>
             <ul class="create-launch-list">
-              <li v-for="name in launch_names" :key="name"><UIcon :name="launch_ready(name) ? 'i-lucide-circle-check' : 'i-lucide-circle-alert'" :class="launch_ready(name) ? 'is-ready' : 'is-warn'" /><strong>{{ name }}</strong><span>{{ bridge.launch_summary(name).client }} · {{ bridge.launch_summary(name).session }} · {{ bridge.launch_summary(name).access }} · {{ bridge.launch_summary(name).cwd }}</span><UInput v-if="model_hint(name)" :model-value="view.launch.profiles[name]?.model || ''" :placeholder="`模型：${model_hint(name).example}，留空用默认`" :title="model_hint(name).help" :aria-label="`${name} 使用的模型`" size="xs" class="create-launch-model" :class="{ 'is-wide': !effort_items(name) }" @update:model-value="bridge.write_launch(name, 'model', $event)" /><USelect v-if="effort_items(name)" :model-value="view.launch.profiles[name]?.effort || 'default'" :items="effort_items(name)" :aria-label="`${name} 的思考档位`" size="xs" class="create-launch-effort" @update:model-value="bridge.write_launch(name, 'effort', $event === 'default' ? '' : $event)" /></li>
+              <li v-for="name in launch_names" :key="name"><UIcon :name="launch_ready(name) ? 'i-lucide-circle-check' : 'i-lucide-circle-alert'" :class="launch_ready(name) ? 'is-ready' : 'is-warn'" /><strong>{{ name }}</strong><span>{{ bridge.launch_summary(name).client }} · {{ bridge.launch_summary(name).session }} · {{ bridge.launch_summary(name).access }} · {{ bridge.launch_summary(name).cwd }}</span></li>
             </ul>
             <UCollapsible v-model:open="launch_open">
               <UButton :icon="launch_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" label="调整启动配置" color="neutral" variant="link" size="sm" class="create-more" />
-              <template #content><LaunchSettings :participants="launch_names" :workspace="false" /></template>
+              <template #content><LaunchSettings :participants="launch_names" :workspace="false" :model-selection="false" /></template>
             </UCollapsible>
           </template>
         </template>
-        <LaunchSettings v-else :participants="launch_names" :workspace="false" />
+        <LaunchSettings v-else :participants="launch_names" :workspace="false" :model-selection="false" />
       </section>
     </form>
     <footer class="create-footer">
@@ -198,35 +218,56 @@ const summary = computed(() => {
 .create-section h3 > span { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: color-mix(in srgb, var(--channel-accent) 18%, transparent); color: var(--channel-accent); font-size: 11px; }
 .create-more { align-self: flex-start; padding-inline: 0; color: var(--ui-text-muted); }
 .create-choice-group { display: flex; flex-direction: column; gap: 12px; }
-.create-choice-group + .create-choice-group { margin-top: 12px; }
-.create-choice-group h4 { margin: 0; color: var(--ui-text-muted); font-size: 12px; font-weight: 500; }
+.create-choice-group + .create-choice-group { margin-top: 8px; }
+.create-choice-group h4 { margin: 0; color: var(--ui-text-toned); font-size: 12px; font-weight: 500; }
 .create-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.create-mode { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border: 1px solid var(--ui-border); border-radius: 10px; text-align: left; color: var(--ui-text-muted); transition: border-color .12s, background .12s; }
+.create-mode { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; text-align: left; background: color-mix(in srgb, var(--ui-bg-elevated) 35%, transparent); color: var(--ui-text-muted); transition: border-color .12s, background .12s; }
 .create-mode:hover { border-color: var(--ui-border-accented); }
-.create-mode > span { display: flex; flex-direction: column; gap: 2px; }
+.create-mode-copy { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; }
 .create-mode strong { color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
-.create-mode small { font-size: 11px; }
+.create-mode small { font-size: 11px; line-height: 1.6; }
 .create-mode > [class*="icon"] { flex-shrink: 0; width: 16px; height: 16px; margin-top: 2px; }
-.create-mode.is-selected { border-color: var(--channel-accent); background: color-mix(in srgb, var(--channel-accent) 9%, transparent); }
+.create-mode::after { content: ""; flex-shrink: 0; width: 14px; height: 14px; margin-top: 3px; border: 1px solid var(--ui-border-accented); border-radius: 50%; }
+.create-mode.is-selected { border-color: color-mix(in srgb, var(--channel-accent) 60%, var(--ui-border)); background: color-mix(in srgb, var(--channel-accent) 7%, var(--ui-bg)); }
 .create-mode.is-selected > [class*="icon"] { color: var(--channel-accent); }
-.create-experts { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
-.create-expert { border: 1px solid var(--ui-border); border-radius: 10px; transition: border-color .12s, background .12s; }
-.create-expert.is-selected { border-color: var(--ui-border-accented); background: var(--ui-bg-elevated); }
-.create-expert:not(.is-disabled):hover { border-color: var(--ui-text-dimmed); }
-.create-expert.is-disabled { opacity: .55; }
-.create-expert-toggle { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; text-align: left; border-radius: inherit; }
-.create-expert-toggle:disabled { cursor: not-allowed; }
-.create-expert-text { display: flex; flex: 1; flex-direction: column; min-width: 0; }
-.create-expert-toggle strong { color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
-.create-expert-toggle small { overflow: hidden; color: var(--ui-text-muted); font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
-.create-expert-toggle small.is-ready { color: #3fb27f; }
-.create-expert-toggle small.is-warn { color: #e0a33a; }
-.create-expert-check { display: grid; flex-shrink: 0; place-items: center; width: 16px; height: 16px; border: 1px solid var(--ui-border-accented); border-radius: 4px; background: var(--ui-bg); }
-.is-selected .create-expert-check { border-color: var(--channel-accent); background: var(--channel-accent); color: white; }
-.create-expert-check > [class*="icon"] { width: 12px; height: 12px; }
-.create-expert-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; margin: 0 10px 10px; padding: 3px; border-radius: 7px; background: var(--ui-bg-muted); }
-.create-expert-modes button { padding: 4px 0; border-radius: 5px; color: var(--ui-text-muted); font-size: 11px; }
-.create-expert-modes button.is-selected { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
+.create-mode.is-selected::after { border-color: var(--channel-accent); background: radial-gradient(circle, var(--channel-accent) 3px, transparent 3.5px); }
+.create-experts { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); align-items: start; gap: 10px; }
+.create-expert-heading, .create-library-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.create-expert-heading h4 { display: flex; align-items: center; gap: 7px; }
+.create-expert-heading h4 > span { min-width: 19px; padding: 1px 5px; border-radius: 4px; background: var(--ui-bg-elevated); color: var(--ui-text-muted); font-size: 11px; text-align: center; font-variant-numeric: tabular-nums; }
+.create-library-trigger { display: inline-flex; align-items: center; gap: 5px; min-height: 30px; padding: 4px 9px; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 6px; background: var(--ui-bg-elevated); box-shadow: var(--channel-shadow-control); color: var(--ui-text-toned); font-size: 12px; }
+.create-library-trigger:hover { background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); }
+.create-library-trigger > [class*="icon"] { width: 13px; height: 13px; }
+.create-experts-empty { margin: 0; padding: 24px 12px; border: 1px dashed var(--ui-border); border-radius: 8px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }
+:global(.create-role-library-popover) { z-index: 60; width: 352px; max-width: calc(100vw - 24px); border: 1px solid var(--channel-edge-float, var(--ui-border)); border-radius: 8px; background: var(--ui-bg); box-shadow: var(--channel-shadow-float); animation: none !important; }
+.create-role-library { padding: 6px; }
+.create-library-heading { margin: 0 6px 4px; padding: 6px 0 10px; border-bottom: 1px solid var(--ui-border-muted); }
+.create-library-heading > strong { color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
+.create-library-heading > button { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 5px; color: var(--ui-text-muted); }
+.create-library-heading > button:hover { background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); }
+.create-library-heading > button > [class*="icon"] { width: 15px; height: 15px; }
+.create-role-library ul { display: grid; gap: 2px; }
+.create-role-library li { display: flex; align-items: center; gap: 10px; min-height: 58px; padding: 9px 8px; border-radius: 5px; }
+.create-role-library li:has(button:not(:disabled)):hover { background: var(--ui-bg-elevated); }
+.create-role-library li > .channel-avatar { width: 30px; height: 30px; }
+.create-library-description { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
+.create-role-library li strong { color: var(--ui-text-highlighted); font-size: 13px; font-weight: 500; }
+.create-role-library li small { overflow: hidden; color: var(--ui-text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.create-role-library li > button { flex-shrink: 0; min-height: 30px; padding: 5px 8px; border-radius: 5px; background: color-mix(in srgb, var(--channel-accent) 9%, transparent); color: var(--channel-accent); font-size: 11px; }
+.create-role-library li > button:hover:not(:disabled) { background: color-mix(in srgb, var(--channel-accent) 16%, transparent); }
+.create-role-library li > button:disabled { background: transparent; color: var(--ui-text-dimmed); }
+.create-library-trigger:focus-visible, .create-role-library button:focus-visible, .create-host-choices button:focus-visible { outline: 2px solid var(--channel-accent); outline-offset: 2px; }
+@media (pointer: coarse) {
+  .create-library-trigger, .create-library-heading > button, .create-role-library li > button, .create-host-setting .create-host-choices button { min-height: 44px; }
+  .create-library-heading > button { width: 44px; }
+}
+.create-host-setting { display: grid; gap: 10px; margin-top: 4px; padding-top: 14px; border-top: 1px solid var(--ui-border-muted); }
+.create-host-choices { display: flex; flex-wrap: wrap; gap: 4px; }
+.create-host-choices button { display: inline-flex; align-items: center; gap: 7px; min-height: 30px; padding: 4px 9px; border: 1px solid transparent; border-radius: 5px; color: var(--ui-text-muted); font-size: 12px; }
+.create-host-choices button:hover { background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); }
+.create-host-choices button > span { width: 12px; height: 12px; border: 1px solid var(--ui-border-accented); border-radius: 50%; }
+.create-host-choices button[aria-checked="true"] { color: var(--ui-text-highlighted); background: var(--ui-bg-elevated); border-color: var(--channel-edge-control, var(--ui-border)); }
+.create-host-choices button[aria-checked="true"] > span { border-color: var(--channel-accent); background: radial-gradient(circle, var(--channel-accent) 2.5px, transparent 3px); }
 .create-host { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .create-host-empty { margin: 0 !important; }
 .create-label { min-width: 64px; color: var(--ui-text-toned); font-size: 12px; }
@@ -243,12 +284,6 @@ const summary = computed(() => {
 .create-launch-list li { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .create-launch-list strong { flex-shrink: 0; color: var(--ui-text-highlighted); }
 .create-launch-list span { overflow: hidden; color: var(--ui-text-muted); white-space: nowrap; text-overflow: ellipsis; }
-.create-launch-list li:has(.create-launch-model) { align-items: center; }
-.create-launch-list span:has(+ .create-launch-model) { flex: 1; min-width: 0; }
-.create-launch-model { flex: none; width: 190px; margin-left: auto; }
-/* Without an effort select the model box spans both columns so every row keeps the same edges. */
-.create-launch-model.is-wide { width: 282px; }
-.create-launch-effort { flex: none; width: 84px; }
 .create-launch-list [class*="icon"] { flex-shrink: 0; align-self: center; width: 14px; height: 14px; }
 .is-ready { color: #3fb27f; }
 .is-warn { color: #e0a33a; }

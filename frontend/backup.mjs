@@ -9,7 +9,8 @@ const BACKUP_README = `AI CoDiscuss 聊天室备份
 
 备份不受网页分页、搜索或当前标签限制；未保存的输入草稿不属于服务器数据。
 仅保存本聊天室及其所属文件夹信息，不包含其他聊天室、账号或本机配置。
-外部网页、图片和附件仅保留原链接，不下载其内容；网站目前没有附件存储功能。
+附件/：本聊天室已发送附件的原文件，与完整数据中的附件编号对应。
+外部网页、外链图片和外部附件仅保留原链接，不下载其内容；未发送的上传不在备份内。
 这是导出时刻的快照，之后的新消息不在包内。当前未提供导入恢复功能。
 `;
 
@@ -22,7 +23,7 @@ function original_block(value) {
 }
 
 /** Convert one message and its separate provenance rows to a readable record. */
-function message_markdown(message, details, summary) {
+function message_markdown(message, details, summary, attachments) {
   const submitted_by = details?.submitted_by || (["cli", "url", "user"].includes(message.source) ? message.author : "用户");
   const lines = [`<a id="message-${message.id}"></a>`, `### #${message.id} · ${message.author}`,
     `时间：${message.created_at}；来源：${message.source}；职责：${details?.kind || "opinion"}；代发/提交者：${submitted_by}`];
@@ -30,6 +31,11 @@ function message_markdown(message, details, summary) {
   if (details?.turn_id) lines.push(`对应安排：[#${details.turn_id}](#turn-${details.turn_id})`);
   if (summary?.text) lines.push(`简述（作者：${summary.author}）：`, original_block(summary.text));
   lines.push("原文：", original_block(message.text));
+  for (const file of attachments) {
+    const path = attachment_archive_path(file).split("/").map(part => encodeURIComponent(part).replace(/[()]/g,
+      char => `%${char.charCodeAt(0).toString(16)}`)).join("/");
+    lines.push(`附件：${original_block(file.file_name)}\n\n[下载原文件](${path}) · ${file.size} 字节 · SHA-256: ${file.sha256}`);
+  }
   return lines.join("\n\n");
 }
 
@@ -57,7 +63,8 @@ export function room_markdown(snapshot) {
   if (tables.discussion_limits?.[0]) lines.push("## 讨论上限", original_block(JSON.stringify(tables.discussion_limits[0], null, 2)));
   lines.push("## 共识与分歧", `覆盖至 #${room.state_until}`, original_block(room.state_text),
     "## 发言权", original_block(JSON.stringify(tables.room_floor[0] || {}, null, 2)), "## 全部消息");
-  for (const message of tables.messages) lines.push(message_markdown(message, details.get(message.id), summaries.get(message.id)));
+  for (const message of tables.messages) lines.push(message_markdown(message, details.get(message.id), summaries.get(message.id),
+    (tables.attachments || []).filter(file => file.message_id === message.id)));
   if (!tables.messages.length) lines.push("暂无消息。");
   lines.push("## 全部发言安排");
   for (const turn of tables.discussion_turns) {
@@ -70,13 +77,33 @@ export function room_markdown(snapshot) {
   return lines.join("\n\n") + "\n";
 }
 
-/** Package a versioned room snapshot as a standard UTF-8 ZIP, without truncation. */
-export async function create_room_archive(snapshot) {
+/** Keep each archived filename unique and portable without trusting path separators. */
+export function attachment_archive_path(file) {
+  const name = file.file_name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").replace(/[. ]+$/, "") || "附件";
+  return `附件/${file.id}_${name}`;
+}
+
+/** Fetch only this site's managed attachment bytes, not arbitrary URLs in message text. */
+async function fetch_attachment(file) {
+  const response = await fetch(`/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content?download=1`);
+  if (!response.ok) throw new Error(`附件下载失败：${file.file_name}，未生成备份`);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.length !== file.size) throw new Error(`附件不完整：${file.file_name}，未生成备份`);
+  if (globalThis.crypto?.subtle) {
+    const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map(value => value.toString(16).padStart(2, "0")).join("");
+    if (digest !== file.sha256) throw new Error(`附件校验失败：${file.file_name}，未生成备份`);
+  }
+  return bytes;
+}
+
+/** Package a versioned snapshot and all published original files without partial success. */
+export async function create_room_archive(snapshot, load_attachment = fetch_attachment) {
   const files = {
     "完整数据.json": strToU8(JSON.stringify(snapshot, null, 2) + "\n"),
     "讨论记录.md": strToU8(room_markdown(snapshot)),
     "备份说明.txt": strToU8(BACKUP_README),
   };
+  for (const file of snapshot.tables.attachments || []) files[attachment_archive_path(file)] = [await load_attachment(file), { level: 0 }];
   return new Promise((resolve, reject) => {
     zip(files, { level: 6 }, (error, data) => error ? reject(error) : resolve(data));
   });

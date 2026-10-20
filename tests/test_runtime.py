@@ -60,12 +60,27 @@ class RuntimeTests(unittest.TestCase):
         with response:
             return response.status, json.load(response)
 
-    def start(self):
-        """Opt into one finite run with an owner capability."""
+    def start(self, deadline=None):
+        """Opt into one run with an owner capability and an optional time limit."""
         status, value = self.request(self.path + "/runtime", {"action": "start", "mode": "automatic",
-            "revision": 0, "deadline": int(time.time()) + 600}, self.owner)
+            "revision": 0, "deadline": int(time.time()) + 600 if deadline is None else deadline}, self.owner)
         self.assertEqual(status, 200, value)
         return value
+
+    def test_browser_updates_follow_execution_changes_not_lease_heartbeats(self):
+        """Entering execution notifies readers while a renewal keeps the stream quiet."""
+        if not hasattr(self, "server"):
+            self.skipTest("Worker notification behavior has its own namespace fixture")
+        previous = self.server.update_version
+        self.start()
+        self.assertGreater(self.server.update_version, previous)
+        event = self.events()[0]
+        previous = self.server.update_version
+        self.enter(event)
+        self.assertEqual(self.server.update_version, previous + 2)
+        previous = self.server.update_version
+        self.assertEqual(self.request(self.path + f"/events/{event['id']}", {"action": "renew"}, self.owner)[0], 200)
+        self.assertEqual(self.server.update_version, previous)
 
     def events(self):
         """Read the durable inbox using its room owner capability."""
@@ -188,6 +203,39 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(timings["totals"][stage], item[stage])
         self.assertNotIn("token_hash", item)
 
+    def test_message_elapsed_time_is_frozen_for_host_and_expert_only(self):
+        """Save execution time with original messages, including zero and exact retries."""
+        self.start()
+        host_token = self.enter(self.events()[-1])
+        host = {"author": "Codex", "source": "cli", "kind": "moderation", "text": "主持发言",
+                "submission_id": "timed-host", "elapsed_seconds": 999999}
+        status, saved = self.request(self.path + "/messages", host, host_token)
+        self.assertEqual(status, 201, saved)
+        self.assertGreaterEqual(saved["message"]["elapsed_seconds"], 0)
+        self.assertLess(saved["message"]["elapsed_seconds"], 60)
+        user = self.request(self.path + "/messages", {"author": "用户", "text": "用户留言",
+                            "submission_id": "timed-user", "elapsed_seconds": 999999})[1]["message"]
+        self.assertIsNone(user["elapsed_seconds"])
+        self.take_floor("Codex", host_token)
+        turn = self.request(self.path + "/turns", {"actor": "Codex", "expert": "Claude",
+            "question": "给出回答", "submission_id": "timed-turn"}, host_token)[1]["turn"]
+        expert_token = self.enter(self.events()[-1])
+        self.take_floor("Claude", expert_token)
+        answer = {"author": "Claude", "source": "cli", "text": "专家回答",
+                  "turn_id": turn["id"], "submission_id": "timed-answer"}
+        status, saved = self.request(self.path + "/messages", answer, expert_token)
+        self.assertEqual(status, 201, saved)
+        message = saved["message"]
+        self.assertGreaterEqual(message["elapsed_seconds"], 0)
+        status, retry = self.request(self.path + "/messages", answer, self.owner)
+        self.assertEqual(status, 200, retry)
+        self.assertEqual(retry["message"], message)
+        self.assertEqual(self.request(self.path + f"/messages/{message['id']}")[1], message)
+        self.assertEqual(self.request(self.path + "/messages")[1]["messages"][-1], message)
+        timings = self.request(self.path + "/backup")[1]["tables"]["message_timings"]
+        self.assertEqual(len(timings), 2)
+        self.assertEqual(timings[-1], {"message_id": message["id"], "elapsed_seconds": message["elapsed_seconds"]})
+
     def test_paused_time_is_excluded_from_elapsed_time_and_deadline(self):
         """Idle time while paused neither counts as elapsed nor consumes the total duration."""
         if not hasattr(self, "database"):
@@ -215,7 +263,7 @@ class RuntimeTests(unittest.TestCase):
     def test_limits_validation_and_active_edit_protection(self):
         """Bad settings fail; limits are editable only before start or while paused."""
         for limits in ({"max_rounds": -1}, {"max_minutes": 1441}, {"max_rounds": True},
-                       {"execution_minutes": 0}, {"on_limit": "ignore"},
+                       {"execution_minutes": -1}, {"execution_minutes": 61}, {"on_limit": "ignore"},
                        {"max_minutes": 5, "on_limit": "summarize", "summary_minutes": 5}, {"started_at": 0}):
             self.assertEqual(self.request("/api/rooms", {"title": "invalid", "limits": limits})[0], 400)
         room = self.limited_room(max_minutes=60, execution_minutes=1)
@@ -548,6 +596,111 @@ class RuntimeTests(unittest.TestCase):
         status, deleted = self.request(self.path + "/delete", {"actor": "用户", "confirm_title": before["title"]})
         self.assertEqual(status, 200, deleted)
         self.assertEqual(self.request(self.path)[0], 404)
+
+    def test_unlimited_run_keeps_leases_and_resumes_without_a_deadline(self):
+        """No total duration still requires a valid execution and explicit resume."""
+        self.limited_room(execution_minutes=1)
+        status, run = self.request(self.path + "/runtime", {"action": "start", "revision": 0}, self.owner)
+        self.assertEqual(status, 200, run)
+        self.assertEqual((run["deadline"], run["expired"]), (0, False))
+        self.assertIsNone(self.request(self.path)[1]["limits"]["remaining_seconds"])
+        event = self.events()[-1]
+        token = self.enter(event)
+        renewed = self.request(self.path + f"/events/{event['id']}", {"action": "renew"}, self.owner)
+        self.assertEqual(renewed[0], 200, renewed)
+        self.assertTrue(int(time.time()) < renewed[1]["lease_until"] <= int(time.time()) + 60)
+        self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "有效执行"}, token)[0], 200)
+        paused = self.request(self.path + "/runtime", {"action": "pause", "revision": run["revision"]}, self.owner)[1]
+        self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "已撤销"}, token)[0], 403)
+        status, resumed = self.request(self.path + "/runtime", {"action": "start", "revision": paused["revision"]}, self.owner)
+        self.assertEqual(status, 200, resumed)
+        self.assertEqual((resumed["deadline"], resumed["expired"]), (0, False))
+        self.assertEqual(self.request(self.path + "/runtime", {"action": "stop", "revision": resumed["revision"]}, self.owner)[1]["status"], "stopped")
+
+    def test_unlimited_run_still_stops_or_summarizes_at_round_limit(self):
+        """Round limits stop unlimited runs and summaries get a finite reserve."""
+        for action in ("pause", "summarize"):
+            with self.subTest(action=action):
+                self.limited_room(max_rounds=1, on_limit=action, summary_minutes=1)
+                self.start(0)
+                self.complete_round()
+                old_token = self.enter(self.events()[-1])
+                status, room = self.request(self.path + "/limits", {"actor": "用户"}, self.owner)
+                self.assertEqual(status, 200, room)
+                self.assertEqual(room["limits"]["reason"], "round_limit")
+                self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "旧执行"}, old_token)[0], 403)
+                if action == "pause":
+                    self.assertEqual(room["runtime"]["status"], "paused")
+                else:
+                    deadline = room["runtime"]["deadline"]
+                    self.assertTrue(int(time.time()) < deadline <= int(time.time()) + 60)
+                    paused = self.request(self.path + "/runtime", {"action": "pause", "revision": room["runtime"]["revision"]}, self.owner)[1]
+                    resumed = self.request(self.path + "/runtime", {"action": "start", "revision": paused["revision"], "deadline": 0}, self.owner)[1]
+                    self.assertEqual(resumed["deadline"], deadline)
+                    token = self.enter(self.events()[-1])
+                    self.assertEqual(self.request(self.path + "/topic", {"actor": "Codex", "phase": "concluded"}, token)[0], 200)
+
+    def test_zero_deadline_cannot_bypass_configured_duration(self):
+        """Zero inherits a configured topic cutoff; invalid deadlines still fail."""
+        for deadline in (-1, True, "0", int(time.time()) - 1, int(time.time()) + 90000):
+            status, result = self.request(self.path + "/runtime", {"action": "start", "revision": 0, "deadline": deadline}, self.owner)
+            self.assertEqual(status, 400, result)
+        self.limited_room(max_minutes=1)
+        run = self.start(0)
+        self.assertTrue(int(time.time()) < run["deadline"] <= int(time.time()) + 60)
+
+    def test_unlimited_run_still_rejects_execution_timeout(self):
+        """Unlimited total duration never disables the per-execution timeout."""
+        if not hasattr(self, "database"):
+            self.skipTest("需要隔离 SQLite 时钟")
+        self.limited_room(execution_minutes=1)
+        self.start(0)
+        event = self.events()[-1]
+        token = self.enter(event)
+        with sqlite3.connect(self.database) as connection:
+            connection.execute("UPDATE discussion_events SET started_at=started_at-61 WHERE id=?", (event["id"],))
+        connection.close()
+        self.assertFalse(self.request(self.path)[1]["runtime"]["expired"])
+        self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "超时"}, token)[0], 403)
+        self.assertIn(self.request(self.path + f"/events/{event['id']}", {"action": "renew"}, self.owner)[0], (403, 409))
+
+    def test_default_execution_has_no_time_limit_but_requires_a_live_lease(self):
+        """Long executions can renew and write until their lease or run is revoked."""
+        if not hasattr(self, "database"):
+            self.skipTest("需要隔离 SQLite 时钟")
+        self.assertEqual(self.request(self.path)[1]["limits"]["execution_minutes"], 0)
+        self.start(0)
+        event = self.events()[-1]
+        token = self.enter(event)
+        with sqlite3.connect(self.database) as connection:
+            connection.execute("UPDATE discussion_events SET started_at=started_at-7200 WHERE id=?", (event["id"],))
+        connection.close()
+        renewed = self.request(self.path + f"/events/{event['id']}", {"action": "renew"}, self.owner)
+        self.assertEqual(renewed[0], 200, renewed)
+        self.assertTrue(int(time.time()) < renewed[1]["lease_until"] <= int(time.time()) + 120)
+        self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "两小时后仍有效"}, token)[0], 200)
+        with sqlite3.connect(self.database) as connection:
+            connection.execute("UPDATE discussion_events SET lease_until=0 WHERE id=?", (event["id"],))
+        connection.close()
+        self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "失去租约"}, token)[0], 403)
+        self.assertIn(self.request(self.path + f"/events/{event['id']}", {"action": "renew"}, self.owner)[0], (403, 409))
+
+    def test_old_schema_keeps_saved_execution_limits_and_defaults_new_rooms_to_unlimited(self):
+        """Upgrading an old table's trigger changes only future room defaults."""
+        schema = (Path(__file__).resolve().parents[1] / "backend" / "schema.sql").read_text(encoding="utf-8")
+        legacy = schema.replace("execution_minutes INTEGER NOT NULL DEFAULT 0", "execution_minutes INTEGER NOT NULL DEFAULT 20")
+        legacy = legacy.replace("INSERT INTO discussion_limits(room_id,execution_minutes) VALUES (NEW.id,0);",
+                                "INSERT INTO discussion_limits(room_id) VALUES (NEW.id);")
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.executescript(legacy)
+            connection.execute("INSERT INTO rooms(id,title,goal,created_at) VALUES ('existing','旧房间','',datetime('now'))")
+            connection.executescript(schema)
+            connection.execute("INSERT INTO rooms(id,title,goal,created_at) VALUES ('new','新房间','',datetime('now'))")
+            self.assertEqual(connection.execute("SELECT execution_minutes FROM discussion_limits WHERE room_id='existing'").fetchone()[0], 20)
+            self.assertEqual(connection.execute("SELECT execution_minutes FROM discussion_limits WHERE room_id='new'").fetchone()[0], 0)
+        finally:
+            connection.close()
 
     def test_expired_run_cannot_enter_or_write(self):
         """The deadline is enforced by the website even with no runner alive."""

@@ -1,0 +1,14 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "ai-co-discuss-updates",
+  "main": "../backend/updates.mjs",
+  "compatibility_date": "2026-10-14",
+  "workers_dev": false,
+  "preview_urls": false,
+  "durable_objects": {
+    "bindings": [{ "name": "UPDATES", "class_name": "DiscussionUpdates" }]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["DiscussionUpdates"] }
+  ]
+}

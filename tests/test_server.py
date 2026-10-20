@@ -1,5 +1,6 @@
 """Test CLI writes, read-only online instructions, and context provenance."""
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -46,6 +47,34 @@ class DiscussionTests(unittest.TestCase):
         self.server.server_close()
         self.thread.join()
         self.directory.cleanup()
+
+    def test_browser_update_stream_reports_only_successful_committed_writes(self):
+        """Independent subscribers see committed changes and can reconnect without a cursor."""
+        if self.external:
+            self.skipTest("The optional cloud push binding is covered by Worker tests")
+        with urlopen(self.base + "/api/updates", timeout=3) as first, urlopen(
+                self.base + "/api/updates", timeout=3) as second:
+            self.assertIn("text/event-stream", first.headers["Content-Type"])
+            for stream in (first, second):
+                self.assertEqual(stream.readline(), b"retry: 3000\n")
+                self.assertEqual(stream.readline(), b"event: ready\n")
+                self.assertEqual(stream.readline(), b"data: {}\n")
+                self.assertEqual(stream.readline(), b"\n")
+            version = self.server.update_version
+            self.assertEqual(self.request(f"/api/rooms/{self.room['id']}/messages",
+                                         {"author": "用户", "text": ""})[0], 400)
+            self.assertEqual(self.server.update_version, version)
+            saved = self.request(f"/api/rooms/{self.room['id']}/messages",
+                                 {"author": "用户", "text": "立即出现", "submission_id": "stream-write"})[1]
+            for stream in (first, second):
+                self.assertEqual(stream.readline(), b"event: change\n")
+                self.assertEqual(stream.readline(), b"data: {}\n")
+                self.assertEqual(stream.readline(), b"\n")
+            self.assertEqual(self.request(f"/api/rooms/{self.room['id']}/messages/{saved['message']['id']}")[1]["text"],
+                             "立即出现")
+        with urlopen(self.base + "/api/updates", timeout=3) as reconnected:
+            self.assertEqual(reconnected.readline(), b"retry: 3000\n")
+            self.assertEqual(reconnected.readline(), b"event: ready\n")
 
     def test_local_configuration_save_blocks_a_concurrent_restart_until_file_replacement(self):
         """An already queued restart cannot pass the guarded paused-file replacement."""
@@ -112,6 +141,80 @@ class DiscussionTests(unittest.TestCase):
             "author": "用户", "text": text, "submission_id": submission_id, "reply_to": reply_to,
         })
 
+    def attachment_request(self, path, data=None, headers=None):
+        """Read raw bytes so content headers and binary round trips are verified."""
+        request = Request(self.base + path, data=data, headers={"Content-Type": "application/octet-stream", **(headers or {})})
+        try:
+            response = urlopen(request, timeout=10)
+        except HTTPError as error:
+            response = error
+        with response:
+            return response.status, response.headers, response.read()
+
+    def test_attachments_round_trip_link_replay_and_room_delete(self):
+        """Published files retain exact bytes, provenance, readable links, and backup metadata."""
+        base = f"/api/rooms/{self.room['id']}"
+        data = b"\x89PNG\r\n\x1a\noriginal-image"
+        params = urlencode({"actor": "用户", "file_name": "中文 截图.png", "submission_id": "upload-original"})
+        status, _, body = self.attachment_request(base + "/attachments?" + params, data, {"Content-Type": "text/html"})
+        self.assertEqual(status, 201, body)
+        file = json.loads(body)["attachment"]
+        self.assertEqual((file["content_type"], file["size"], file["sha256"]), ("image/png", len(data), hashlib.sha256(data).hexdigest()))
+        self.assertEqual(self.request(base + "/attachments")[1]["total"], 0)
+        self.assertEqual(self.request(base + "/attachments?submission_id=upload-original")[1]["attachments"][0]["id"], file["id"])
+        replay = self.attachment_request(base + "/attachments?" + params, data)
+        self.assertEqual(replay[0], 200)
+        self.assertEqual(json.loads(replay[2])["attachment"]["id"], file["id"])
+        self.assertEqual(self.attachment_request(base + "/attachments?" + params, b"changed")[0], 409)
+        payload = {"author": "用户", "text": "", "attachment_ids": [file["id"]], "submission_id": "attached-message"}
+        status, result = self.request(base + "/messages", payload)
+        self.assertEqual(status, 201, result)
+        message = result["message"]
+        self.assertEqual(self.request(base + "/messages", payload)[1]["message"], message)
+        self.assertEqual(self.request(base + f"/messages/{message['id']}")[1]["attachments"], message["attachments"])
+        self.assertEqual(self.request(base + "/messages")[1]["messages"][0]["attachments"], message["attachments"])
+        self.assertEqual(self.request(base + "/attachments")[1]["total"], 1)
+        self.assertIn(file["download_url"], self.request(f"/r/{self.room['id']}/messages/{message['id']}")[1])
+        status, headers, content = self.attachment_request(file["url"])
+        self.assertEqual((status, content), (200, data))
+        self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
+        self.assertTrue(headers["Content-Disposition"].startswith("inline"))
+        self.assertTrue(self.attachment_request(file["download_url"])[1]["Content-Disposition"].startswith("attachment"))
+        self.assertEqual(self.request(base + "/backup")[1]["tables"]["attachments"][0]["sha256"], file["sha256"])
+        self.assertEqual(self.request(base + "/messages", {**payload, "submission_id": "reuse-message"})[0], 409)
+        self.assertEqual(self.request(base + "/messages", {**payload, "text": "changed", "attachment_ids": []})[0], 409)
+        if not self.external:
+            init_database(self.database, seed=False)
+            self.assertEqual(self.attachment_request(file["url"])[2], data)
+        self.assertEqual(self.request(base + "/delete", {"actor": "用户", "confirm_title": self.room["title"]})[0], 200)
+        self.assertEqual(self.attachment_request(file["url"])[0], 404)
+        if not self.external:
+            self.assertEqual(list(Path(str(self.database) + ".attachments").iterdir()), [])
+
+    def test_attachments_reject_cross_room_owner_path_and_size(self):
+        """Untrusted MIME and filenames cannot create executable or cross-room file access."""
+        base = f"/api/rooms/{self.room['id']}"
+        params = {"actor": "用户", "file_name": "页面.html", "submission_id": "upload-security"}
+        status, _, body = self.attachment_request(base + "/attachments?" + urlencode(params), b"<script>bad()</script>")
+        self.assertEqual(status, 201, body)
+        file = json.loads(body)["attachment"]
+        headers = self.attachment_request(file["url"])[1]
+        self.assertEqual(headers["Content-Type"], "application/octet-stream")
+        self.assertTrue(headers["Content-Disposition"].startswith("attachment"))
+        other = self.request("/api/rooms", {"title": "另一房间"})[1]["id"]
+        self.assertEqual(self.request(f"/api/rooms/{other}/attachments/{file['id']}")[0], 404)
+        self.assertEqual(self.request(f"/api/rooms/{other}/messages", {"author": "用户", "text": "", "attachment_ids": [file["id"]], "submission_id": "cross-room"})[0], 404)
+        params.update(actor="Codex", submission_id="other-uploader")
+        foreign = json.loads(self.attachment_request(base + "/attachments?" + urlencode(params), b"other")[2])["attachment"]
+        self.assertEqual(self.request(base + "/messages", {"author": "用户", "text": "", "attachment_ids": [foreign["id"]], "submission_id": "wrong-owner"})[0], 409)
+        for name in ("../escape", "folder\\file", "bad\nname", "x" * 256):
+            self.assertEqual(self.attachment_request(base + "/attachments?" + urlencode({**params, "file_name": name}), b"x")[0], 400)
+        self.assertEqual(self.attachment_request(base + "/attachments?" + urlencode(params), b"x", {"Content-Length": str(20 * 1024 * 1024 + 1)})[0], 413)
+        invalid = {"author": "用户", "text": "资料", "submission_id": "invalid-files"}
+        for identifiers in ([file["id"]] * 2, ["invalid"], [f"{index:032x}" for index in range(11)], "not-an-array"):
+            self.assertEqual(self.request(base + "/messages", {**invalid, "attachment_ids": identifiers})[0], 400)
+        self.assertEqual(self.request(base + "/messages")[1]["total"], 0)
+
     def test_room_backup_includes_every_page_and_original_relationships(self):
         """Export complete, unchanged records rather than the current history page."""
         self.configure_host()
@@ -131,7 +234,7 @@ class DiscussionTests(unittest.TestCase):
         self.assertTrue(snapshot["exported_at"])
         tables = snapshot["tables"]
         self.assertEqual(set(tables), {"rooms", "room_directory", "room_folder_assignments", "topic_folders", "room_creations",
-                                      "room_briefs", "room_user_requests", "topic_settings", "room_floor", "discussion_limits", "messages", "message_details", "message_summaries", "discussion_turns"})
+                                      "room_briefs", "room_user_requests", "topic_settings", "room_floor", "discussion_limits", "messages", "message_details", "message_summaries", "message_timings", "discussion_turns", "attachments"})
         self.assertEqual([row["id"] for row in tables["messages"]], [row["id"] for row in originals] + [answer["id"]])
         for original, row in zip(originals + [answer], tables["messages"]):
             self.assertEqual(row, {key: original[key] for key in row})
@@ -506,8 +609,8 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.request(base)[1]["messages"], [winner])
 
     def test_frontend_assets_have_browser_compatible_content_types(self):
-        """Both renderers load their compiled assets through the static routes."""
-        assets = {"/": "text/html", "/app.js": "text/javascript", "/style.css": "text/css",
+        """The channel workspace loads compiled assets through the static routes."""
+        assets = {"/": "text/html", "/app.js": "text/javascript",
                   "/modern.js": "text/javascript", "/modern.css": "text/css",
                   "/markdown.js": "text/javascript", "/markdown.css": "text/css",
                   "/icons/LICENSE.txt": "text/plain"}

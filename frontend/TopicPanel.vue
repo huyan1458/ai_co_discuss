@@ -71,12 +71,15 @@ const progress_summary = computed(() => {
             <UButton label="读取本场配置" variant="outline" color="neutral" class="channel-surface-button" :loading="pending === 'load_room_configuration'" @click="act('load_room_configuration')" />
           </div>
           <div class="access-repair-description">
-            <p>登录或软件权限问题请先在对应软件中处理。路径变化可在这里修正，保存后再到进度看板重启。</p>
-            <p class="fine-print">客户端类型、工作目录、项目及会话设置保持不变。</p>
+            <p>修正软件路径，或切换 Codex 的 App / CLI 接入。保留原房间、发言进度和会话，保存后到进度看板重启。</p>
+            <p class="fine-print">App 需保持运行，模型与文件权限在 App 内设置。切回 CLI 前须让 App 释放原聊天；未释放时执行仍会暂停。</p>
           </div>
           <div v-if="repair" class="access-repair-fields">
-            <UFormField v-for="(profile, name) in repair.participants" :key="name" :label="`${name} · ${profile.adapter === 'antigravity' ? 'Sidecar 目录' : '软件路径'}`"><UInput :model-value="profile[profile.adapter === 'antigravity' ? 'ipc_directory' : 'executable'] || ''" class="w-full" @update:model-value="bridge.write_room_connection(name, $event)" /></UFormField>
-            <UButton label="保存本场路径" class="channel-primary-button" :loading="pending === 'save_room_configuration'" @click="act('save_room_configuration')" />
+            <div v-for="(profile, name) in repair.participants" :key="name" class="form-two-columns">
+              <UFormField v-if="['codex', 'codex_cli'].includes(profile.adapter)" :label="`${name} · 接入方式`"><USelect :model-value="profile.adapter" :items="[{ label: 'Codex App', value: 'codex' }, { label: 'Codex CLI', value: 'codex_cli' }]" class="w-full" @update:model-value="bridge.write_room_adapter(name, $event)" /></UFormField>
+              <UFormField :label="`${name} · ${profile.adapter === 'antigravity' ? 'Sidecar 目录' : '软件路径'}`"><UInput :model-value="profile[profile.adapter === 'antigravity' ? 'ipc_directory' : 'executable'] || ''" class="w-full" @update:model-value="bridge.write_room_connection(name, $event)" /></UFormField>
+            </div>
+            <UButton label="保存本场接入设置" class="channel-primary-button" :loading="pending === 'save_room_configuration'" @click="act('save_room_configuration')" />
             <p v-if="repair.notice" role="status" class="fine-print">{{ repair.notice }}</p>
           </div>
           <p v-if="view.launch.repair_error" role="alert" class="fine-print">{{ view.launch.repair_error }}</p>

@@ -26,7 +26,9 @@ python server.py --host 127.0.0.1 --port 8765 --no-demo
 
 命令行参数优先于环境变量。使用独立测试库可加 `--database data/test.sqlite3`。停止后重新启动沿用原库；`--no-demo` 不清理已有数据。长期部署应使用自己的进程管理和反向代理提供 HTTPS，按需要限制访问与请求规模。
 
-备份 SQLite 时先停止对应写入进程，或使用 SQLite 的在线备份工具生成一致快照；不要仅复制正在写入的主文件而遗漏 WAL。恢复前保留原库，再用 `--database` 指向恢复副本核验。
+网页 SSE 推送在 Python 服务中默认启用，无需额外进程或数据库迁移。反向代理应关闭 `/api/updates` 的响应缓冲并允许长连接；服务每 15 秒发送心跳。页面隐藏时断开，重新打开后补取最新数据；代理不支持推送时回退轮询。
+
+附件保存在数据库旁的 `<数据库文件名>.attachments/`，例如 `data/discuss.sqlite3.attachments/`；Docker 中同样位于数据卷内。备份时先停止对应写入进程，再一并复制数据库和附件目录；只备份 SQLite 不包含原文件。无附件时也可用 SQLite 的在线备份工具生成一致快照，不要仅复制正在写入的主文件而遗漏 WAL。恢复前保留原库和附件目录，再用 `--database` 指向恢复副本核验。
 
 ## Docker
 
@@ -64,6 +66,7 @@ npm run dev
 npm ci
 npx wrangler login
 npx wrangler d1 create YOUR_DATABASE_NAME
+npx wrangler r2 bucket create YOUR_ATTACHMENT_BUCKET
 npx wrangler pages project create YOUR_PROJECT_NAME --production-branch main
 ```
 
@@ -97,11 +100,14 @@ cp wrangler.jsonc .wrangler/deploy/wrangler.jsonc
       "database_name": "YOUR_DATABASE_NAME",
       "database_id": "YOUR_DATABASE_ID"
     }
+  ],
+  "r2_buckets": [
+    { "binding": "ATTACHMENTS", "bucket_name": "YOUR_ATTACHMENT_BUCKET" }
   ]
 }
 ```
 
-`DB` 绑定名保持不变；输出路径和 `$schema` 相对于这份配置的位置。不要把个人资源配置覆盖回可提交模板。Wrangler Pages 不支持 `--config`，因此部署用 `--cwd .wrangler/deploy` 选择配置；D1 命令支持 `--config`。
+`DB` 和 `ATTACHMENTS` 绑定名保持不变；输出路径和 `$schema` 相对于这份配置的位置。附件通过同站点路由读取，无需开启桶的公开域名；缺少 R2 绑定时文字讨论可用，上传返回 503。D1 备份只含附件元数据，站点恢复须同时保留 R2 对象；网页导出对话的 ZIP 包含已发送原文件。不要把个人资源配置覆盖回可提交模板。Wrangler Pages 不支持 `--config`，因此部署用 `--cwd .wrangler/deploy` 选择配置；D1 命令支持 `--config`。
 
 ### 初始化与部署
 
@@ -124,6 +130,30 @@ codiscuss room list --site https://YOUR_PROJECT_NAME.pages.dev
 ```
 
 未安装统一命令时可用 `python runner/discuss.py` 替换 `codiscuss`。同时打开网页与实际房间的 `/r/ROOM_ID`，检查静态资源、中文原文和读取链接。仅首页可见不能证明数据库或动态路由正常。
+
+### 网页推送（可选）
+
+Pages 的跨实例推送使用独立 Durable Object Worker；[Cloudflare 要求先部署该 Worker，再通过 `script_name` 绑定到 Pages](https://developers.cloudflare.com/pages/functions/bindings/#durable-objects)。原有 D1 业务与静态部署无需依赖它，未绑定时仍每 12 秒轮询。配置后改为写入通知驱动，另每 60 秒补读。
+
+在仓库根目录明确部署通知 Worker：
+
+```sh
+npx wrangler deploy --config deploy/updates.wrangler.jsonc
+```
+
+配置默认名为 `ai-co-discuss-updates`，不开放 `workers.dev` 或预览 URL，也没有公开发布路由。需要自定义名称时使用自己的部署配置副本，并同步下面的 `script_name`。随后在已有 `.wrangler/deploy/wrangler.jsonc` 顶层加入：
+
+```json
+"durable_objects": {
+  "bindings": [
+    { "name": "UPDATES", "class_name": "DiscussionUpdates", "script_name": "ai-co-discuss-updates" }
+  ]
+}
+```
+
+再按前节命令部署 Pages。使用不同 D1 数据库的生产与预览环境若共用这个 Worker，应分别设置 `vars.UPDATES_CHANNEL` 为不同值；同一数据库的 Pages 域名与自定义域名应使用同一值，缺省为 `default`。通知只含“数据已变化”，不包含讨论记录。SSE 连接期间 Durable Object 保持活跃，资源消耗按 Cloudflare 的实际计划计费；页面隐藏后会关闭连接。
+
+部署后用两个浏览器标签打开同一讨论，在一处发送用户留言，另一处应自动出现；网络面板的 `/api/updates` 应为 `text/event-stream`，能看到 `ready` 和 `change`。断开再恢复网络后应补齐消息。没有配置绑定时返回 204 属于轮询兼容路径，不代表已启用推送。
 
 ## 构建产物与发布边界
 
@@ -184,7 +214,7 @@ codiscuss run start ROOM --site SITE --revision REV --access-file "PRIVATE.json"
 
 轮次、时长及单次执行上限由网站保存并校验；到限后暂停或交给主持人收束，收束预留计入总时长。准备/暂停阶段可编辑参数，保存不重新计时。运行控制字段见 [CLI 使用](cli.md#运行控制与一次执行)。
 
-需要单个房间的有限运行而不使用常驻服务时，可在仓库执行 `npm run runner -- start --config FILE --minutes 60`；`watch` 仅恢复事件消费，不恢复已暂停房间。网页已设总时长时可省略 `--minutes`，同时提供时取更早截止；不要让独立 runner 与常驻服务同时消费同一房间配置。
+需要单个房间运行而不使用常驻服务时，可在仓库执行 `npm run runner -- start --config FILE --minutes 60`；`watch` 仅恢复事件消费，不恢复已暂停房间。`--minutes` 可省略并采用网页总时长，0 表示不另设运行期限；同时设置时取更早的非零截止。话题和运行均不限总时长时，按轮次上限或手动停止结束，主动设置的单次执行超时仍有效；不要让独立 runner 与常驻服务同时消费同一房间配置。
 
 自动模式可连接运行中的 Codex App、Antigravity App，或按需启动 Claude Code CLI、Codex CLI、Antigravity CLI（`agy`）。独立 CLI 使用 `claude`、`codex_cli`、`antigravity_cli` 适配，不要求提前打开 App 或 CLI 交互窗口；首次登录与工具许可仍需准备，配置及验证范围见 [独立 CLI 接入](runner.md#独立-cli-接入)。App 关闭、账号失效或权限等待不能算作已开始；已交付任务等待实际进入，不因聊天忙碌重复新建，等待仍受整场截止约束。接入程序退出、断网或崩溃后，旧执行最多在剩余租约内写入；恢复前核对原会话，过期资格不会重新激活。重试和停止规则见 [自动接入程序](runner.md)。
 

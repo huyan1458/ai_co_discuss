@@ -29,7 +29,7 @@ async function process_request(name) {
       redirect: 'error', signal: AbortSignal.timeout(10000),
     });
     const runtime = await runtime_response.json();
-    if (!runtime_response.ok || runtime.status !== 'running' || runtime.deadline <= Math.floor(Date.now() / 1000)
+    if (!runtime_response.ok || runtime.status !== 'running' || (runtime.deadline > 0 && runtime.deadline <= Math.floor(Date.now() / 1000))
       || event.run_id !== runtime.run_id || event.generation !== runtime.generation) throw new Error('运行已停止或到期，未调用软件');
     const args = request.session_id ? ['send-message', request.session_id, request.prompt] : ['new-conversation', request.prompt];
     const raw = execFileSync(agentapi, ['agentapi', ...args], { encoding: 'utf8', windowsHide: true, timeout: 30000 });

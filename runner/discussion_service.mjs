@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { atomic_json } from './discussion_adapters.mjs';
-import { DiscussionRunner, DiscussionStore, acquire_lock, load_config, pause_if_running, service_drafts, validate_config } from './discussion_runner.mjs';
+import { DiscussionRunner, DiscussionStore, acquire_lock, api, load_config, pause_if_running, service_drafts, validate_config } from './discussion_runner.mjs';
 
 const POLL_MS = 2000;
 const START_WAIT_MS = 5000;
@@ -132,16 +132,23 @@ class RoomWorker {
     Object.assign(this.state, { site: config.site, room: config.room, config_version: snapshot.version });
   }
   /** Reload connection paths and credentials while retaining the exact conversation context. */
-  refresh_control() {
+  async refresh_control() {
     const snapshot = configuration_snapshot(this.path);
     const updated = validate_config(snapshot.config, dirname(this.path));
     if (updated.site !== this.config.site || updated.room !== this.config.room || updated.directory !== this.config.directory) {
       throw new Error('已登记配置的房间或数据目录发生变化，请移除原登记后重新接入');
     }
-    this.store.context(updated);
+    try { this.store.context(updated); }
+    catch (error) {
+      const room = await api(this.config, '');
+      if (room.runtime.status !== 'paused' || room.runtime.mode !== 'automatic' || room.archived || room.phase === 'concluded') throw error;
+      this.runner.stop_children();
+      if (this.runner.children?.size) throw new Error('正在等待原 CLI 进程退出；退出后采用新的接入方式');
+      this.store.context(updated, true);
+    }
     this.config.token = updated.token;
     for (const [name, profile] of Object.entries(this.config.participants)) {
-      for (const field of CONNECTION_FIELDS) {
+      for (const field of [...CONNECTION_FIELDS, 'adapter', 'session_id']) {
         if (updated.participants[name][field] === undefined) delete profile[field];
         else profile[field] = updated.participants[name][field];
       }
@@ -153,7 +160,7 @@ class RoomWorker {
     const previous_status = this.state.status;
     try {
       if (!this.runner) this.open();
-      else this.refresh_control();
+      await this.refresh_control();
       const result = await this.runner.tick();
       Object.assign(this.state, { status: TICK_STATES[result], error: '' });
     } catch (error) {

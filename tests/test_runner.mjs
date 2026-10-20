@@ -8,11 +8,12 @@ import { basename, join, relative, resolve } from 'node:path';
 import { createServer } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
+import vm from 'node:vm';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DiscussionRunner, DiscussionStore, load_config, service_drafts, task_files, validate_config } from '../runner/discussion_runner.mjs';
 import { assert_shared_home, DiscussionService, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
-import { launch_discussion } from '../runner/discussion_launch.mjs';
+import { launch_discussion, room_models } from '../runner/discussion_launch.mjs';
 import { agy_rule, antigravity_project, claude_exit_error, claude_rule_path, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
 
 /** Exercise the dispatcher against an HTTP contract without starting real software. */
@@ -55,6 +56,34 @@ async function fixture(t) {
   const config = { site: `http://127.0.0.1:${server.address().port}`, room: 'room', token: 'private-token', directory, project: directory, participants: { Codex: { adapter: 'codex' } } };
   return { store, event, run, calls, config, limits, failures, reserve_tokens };
 }
+
+test('room model readback uses registered choices and excludes defaults, paths and credentials', t => {
+  const home = mkdtempSync(join(tmpdir(), 'discussion-models-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const path = join(home, 'room.json');
+  const config = { site: 'http://127.0.0.1:8765', room: 'models', token: 'private-owner-token'.repeat(3),
+    data_directory: join(home, 'runtime'), participants: {
+      Codex: { adapter: 'codex_cli', executable: process.execPath, model: 'gpt-6-astra', effort: 'xhigh', session_id: 'private-session' },
+      Claude: { adapter: 'claude', executable: process.execPath },
+      Gemini: { adapter: 'antigravity', ipc_directory: home, model: 'stale-cli-choice', effort: 'high' },
+    } };
+  writeFileSync(path, JSON.stringify(config));
+  register_room(home, path);
+  writeFileSync(join(home, 'launch-settings.json'), JSON.stringify({ participants: { Claude: { model: 'wrong-default', effort: 'max' } } }));
+  const input = { site: config.site, room_id: config.room };
+  assert.deepEqual(room_models(home, input), { room_id: 'models', participants: {
+    Codex: { adapter: 'codex_cli', model: 'gpt-6-astra', effort: 'xhigh' },
+    Claude: { adapter: 'claude', model: '', effort: '' },
+    Gemini: { adapter: 'antigravity', model: '', effort: '' },
+  } });
+  config.participants.Gemini = { adapter: 'antigravity_cli', executable: process.execPath, model: 'gemini-4-argon-high' };
+  writeFileSync(path, JSON.stringify(config));
+  assert.deepEqual(room_models(home, input).participants.Gemini,
+    { adapter: 'antigravity_cli', model: 'gemini-4-argon-high', effort: '' });
+  assert.deepEqual(room_models(home, { ...input, room_id: 'missing' }).participants, {});
+  assert.deepEqual(room_models(home, { ...input, site: 'https://other.example' }).participants, {});
+  assert.throws(() => room_models(home, { ...input, room_id: '../models' }), /房间编号无效/);
+});
 
 test('agy project records survive a concluded room and are dropped only after the room is deleted', async t => {
   const directory = mkdtempSync(join(tmpdir(), 'discussion-deleted-'));
@@ -321,7 +350,7 @@ function fake_cli(events, options = {}) {
     (async () => {
       let input = ''; for await (const chunk of process.stdin) input += chunk;
       fs.writeFileSync('stdin.txt', input);
-      process.stderr.write('diagnostic 中文');
+      process.stderr.write(${JSON.stringify(options.stderr || 'diagnostic 中文')});
       const output = Buffer.from(${JSON.stringify(events.map(event => JSON.stringify(event)).join('\r\n') + '\r\n')});
       const split = Math.max(1, output.indexOf(Buffer.from('中文')) + 1);
       process.stdout.write(output.subarray(0, split));
@@ -384,6 +413,22 @@ async function cli_delivery_fixture(t, adapter, options = {}) {
   const result = await deliver_task(config, options.binding || {}, task, process_fixture.spawn_process, user_home);
   await process_fixture.calls[0].closed;
   return { directory, user_home, config, access_path, task, result, bindings, errors, exits, ...process_fixture };
+}
+
+for (const source of ['stderr', 'event']) {
+test(`codex_cli explains an active writer from ${source} without replacing the original session`, async t => {
+  const conflict = 'thread-store conflict: thread original-session already has an active writer';
+  const f = await cli_delivery_fixture(t, 'codex_cli', {
+    binding: { session_id: 'original-session' }, exit_code: 1,
+    events: source === 'event' ? [{ type: 'error', message: conflict }, { type: 'error', message: 'models refresh timed out' }] : [],
+    stderr: source === 'stderr' ? `${conflict}\n${'models refresh timed out\n'.repeat(100)}` : undefined,
+  });
+  assert.match(f.errors[0], /original-session.*active writer/);
+  assert.match(f.errors[0], /Codex App 接入/);
+  assert.doesNotMatch(f.errors[0], /models refresh/);
+  assert.equal(f.calls.length, 1); assert.equal(f.exits, 0); assert.deepEqual(f.bindings, []);
+  assert.equal(JSON.parse(readFileSync(f.access_path, 'utf8')).session_id, 'original-session');
+});
 }
 
 for (const adapter of ['codex_cli', 'antigravity_cli']) {
@@ -795,6 +840,26 @@ test('conclusion reconciles the final business result before the runner exits', 
   assert.equal(sent, 1);
 });
 
+test('an unlimited Sidecar run delivers once after checking the current event and generation', async t => {
+  const f = await fixture(t);
+  f.event.status = 'dispatched'; f.run.deadline = 0;
+  const access_path = join(f.config.directory, 'access.json');
+  writeFileSync(access_path, JSON.stringify({ site: f.config.site, room: f.config.room, token: 'x'.repeat(32) }));
+  writeFileSync(join(f.config.directory, 'event-1.request.json'), JSON.stringify({ id: 'event-1', event_id: 1, access_path, prompt: 'test' }));
+  let calls = 0;
+  const source = readFileSync(new URL('../runner/discussion_sidecar.mjs', import.meta.url), 'utf8')
+    .replace(/^import .+;\r?$/gm, '').split("\natomic_json(join(directory, 'ready.json')")[0];
+  const context = vm.createContext({ process: { env: { CODISCUSS_IPC_DIRECTORY: f.config.directory, ANTIGRAVITY_AGENTAPI_EXE: 'test' } },
+    resolve, join, existsSync, readFileSync, writeFileSync, fetch, AbortSignal,
+    execFileSync: () => { calls++; return JSON.stringify({ response: { newConversation: { conversationId: 'test-session' } } }); },
+    atomic_json: (path, value) => writeFileSync(path, JSON.stringify(value)),
+  });
+  await vm.runInContext(`${source}\nprocess_request('event-1.request.json')`, context);
+  assert.equal(JSON.parse(readFileSync(join(f.config.directory, 'event-1.result.json'), 'utf8')).status, 'accepted');
+  await vm.runInContext("process_request('event-1.request.json')", context);
+  assert.equal(calls, 1);
+});
+
 test('a delayed Sidecar request after the deadline never invokes the software', async t => {
   const f = await fixture(t);
   f.event.status = 'dispatched'; f.run.deadline = Math.floor(Date.now() / 1000) - 1;
@@ -900,6 +965,52 @@ test('a resident worker adopts connection corrections but rejects changes to its
   assert.match(worker.state.error, /身份配置发生变化/);
   assert.equal(worker.store.binding('Gemini').session_id, 'existing-session');
   assert.equal(worker.config.participants.Gemini.session_id, undefined);
+});
+
+test('Codex context switch is restricted to the original session and project', async t => {
+  const f = await fixture(t);
+  const original = { participants: { Codex: { adapter: 'codex_cli', cwd: f.config.directory } } };
+  f.store.context(original);
+  f.store.bind('Codex', 'original-session');
+  const switched = { participants: { Codex: { ...original.participants.Codex, adapter: 'codex', session_id: 'original-session' } } };
+  assert.throws(() => f.store.context(switched), /身份配置发生变化/);
+  assert.throws(() => f.store.context({ participants: { Codex: { ...switched.participants.Codex, session_id: 'other-session' } } }, true), /身份配置发生变化/);
+  assert.throws(() => f.store.context({ participants: { Codex: { ...switched.participants.Codex, cwd: tmpdir() } } }, true), /身份配置发生变化/);
+  f.store.context(switched, true);
+  f.store.context(switched);
+  assert.equal(f.store.binding('Codex').session_id, 'original-session');
+});
+
+test('Codex worker waits for its old process to exit before adopting a paused switch', async t => {
+  let service;
+  t.after(() => service?.close());
+  const f = await fixture(t);
+  const home = join(f.config.directory, 'service');
+  mkdirSync(home);
+  const path = join(home, 'config.json');
+  const config = { ...f.config, token: 'x'.repeat(32), project: undefined, data_directory: join(home, 'runtime'),
+    participants: { Codex: { adapter: 'codex_cli', executable: process.execPath, session_id: 'original-session' } } };
+  writeFileSync(path, JSON.stringify(config));
+  register_room(home, path);
+  const child = { kill() {} }, children = new Set([child]);
+  service = new DiscussionService(home, (current, store) => {
+    store.context(current);
+    return { children, stop_children() {}, tick: async () => f.run.status === 'paused' ? 'waiting' : undefined };
+  });
+  await service.tick();
+  config.participants.Codex.adapter = 'codex';
+  writeFileSync(path, JSON.stringify(config));
+  await service.tick();
+  const worker = service.workers.get(path);
+  assert.equal(worker.config.participants.Codex.adapter, 'codex_cli', 'running rooms cannot adopt a switch');
+  f.run.status = 'paused';
+  await service.tick();
+  assert.match(worker.state.error, /等待原 CLI 进程退出/);
+  assert.equal(worker.config.participants.Codex.adapter, 'codex_cli');
+  children.clear();
+  await service.tick();
+  assert.equal(worker.config.participants.Codex.adapter, 'codex');
+  assert.equal(worker.state.status, 'paused');
 });
 
 test('the same site and room cannot be registered twice', t => {

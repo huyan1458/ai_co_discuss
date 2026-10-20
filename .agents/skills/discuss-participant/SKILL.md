@@ -42,6 +42,8 @@ description: "AI CoDiscuss 的通用参与技能，所有参与者（包括主�
 
 增量读取用实际已读编号 `message list ROOM --after ID`，按 `next_after` / `has_more` 续读；`latest_id` 不等于已读。筛选后的游标只代表该查询范围，不能用来声称已读全场。阶段和安排以最新服务端状态为准。
 
+消息的 `attachments` 提供文件名、类型、大小与编号；需要核对内容时用 `attachment view ROOM ID`、`attachment download ROOM ID --dest 明确的新文件路径`，再用当前软件的实际工具读取。独立阶段仍遵循上述材料边界；下载或看见文件名不等于已读，无法解析时如实说明。
+
 ## 发言权与提交边界
 
 专家只回答属于自己的当前未完成安排（pending/notified），使用真实 `--turn`；没有安排就等待，不自行接管主持。提交前核对阶段、安排和上限。暂停、收束、`limits.reached` 或 `limits.closing` 时不新增专家观点，保留草稿；主持人按主持技能处理到限或总结。
@@ -55,6 +57,8 @@ description: "AI CoDiscuss 的通用参与技能，所有参与者（包括主�
 ## 保存真实结果
 
 观点用 `message post`，摘要用 `--summary` / `--summary-file`，完整正文优先 UTF-8 `--body-file`；自己的观点署名自己。主持消息用 `moderation`。代发保留真实作者、完整原文及引用关系，摘要归实际撰写者，不把自己的改写冒充对方回答。
+
+需要提交原文件时，先 `attachment upload ROOM --as 本人 --file FILE --submission-id 上传编号`，再把回执中的附件 ID 通过 `message post --attachment ID` 关联，可重复指定（最多 10 个，单个 20 MiB）。受保护上传带本次 `--access-file`，须在回答完成、执行资格结束前上传。上传和消息分别保存提交编号；结果不明用 `attachment list ROOM --submission-id 上传编号` 核对，重试沿用原文件与原编号。
 
 创建房间、安排、消息前保存 `--submission-id` 与原内容；同次重试沿用，新内容换新编号。成功须核对服务端返回的持久记录、作者和关联；返回不含所需证据时按编号补读，避免重复获取同一份已确认内容。答案落库后只读核验即可结束，不补启停回执或使用旧资格继续写入。
 

@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { atomic_json } from './discussion_adapters.mjs';
-import { acquire_lock, api, DiscussionStore, service_drafts, task_files, validate_config } from './discussion_runner.mjs';
+import { acquire_lock, api, CODEX_ADAPTERS, DiscussionStore, service_drafts, task_files, validate_config } from './discussion_runner.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 
 const CLIENTS = { Codex: ['codex_cli', 'codex'], Claude: ['claude'], Gemini: ['antigravity_cli', 'antigravity'] };
@@ -20,10 +20,12 @@ const CONFIG_APPLY_POLL_MS = 100;
 const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch start --file FILE [--dry-run]
       codiscuss launch room-config --file FILE
+      codiscuss launch room-models --file FILE
 
 settings 读取本机软件默认配置；指定文件时保存，不启动 AI。
 start 使用启动 JSON 创建或接入房间并启动；--dry-run 只校验和预览。
-room-config 显式读取或修正已暂停房间的软件路径，不启动讨论；须提供 site、room_id、token。
+room-config 修正已暂停房间的软件路径或切换 Codex App / CLI，不启动讨论；须提供 site、room_id、token。
+room-models 只读指定 site、room_id 的本机登记模型与思考强度，不启动讨论。
 JSON 指定 site、entry（conversation/web）、room（建房内容，含 submission_id）
 或 room_id（已有房间）、participants（本次软件覆盖配置）。
 conversation 还须 current_session_id，当前会话接手首个主持任务。
@@ -35,6 +37,24 @@ conversation 还须 current_session_id，当前会话接手首个主持任务。
 export function launch_settings(home) {
   const path = join(home, 'launch-settings.json');
   return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { participants: {} };
+}
+
+/** Read only the registered room's model choices, never machine defaults or connection secrets. */
+export function room_models(home, raw) {
+  const input = launch_input({ ...raw, entry: 'web' });
+  if (!input.room_id) throw new Error('读取本场模型须提供 room_id');
+  const paths = read_registry(home).filter(path => {
+    const identity = registered_identity(path);
+    return identity?.site === input.site && identity.room === input.room_id;
+  });
+  if (paths.length > 1) throw new Error('本场存在多份登记配置，无法确定模型设置');
+  const profiles = paths.length ? configuration_snapshot(paths[0]).config.participants : {};
+  const participants = Object.fromEntries(Object.entries(profiles).map(([name, profile]) => {
+    const cli = ['codex_cli', 'claude', 'antigravity_cli'].includes(profile.adapter);
+    return [name, { adapter: profile.adapter, model: cli ? profile.model || '' : '',
+      effort: EFFORT_LEVELS[profile.adapter] ? profile.effort || '' : '' }];
+  }));
+  return { room_id: input.room_id, participants };
 }
 
 /** Save only reusable client settings; room credentials and session bindings are never defaults. */
@@ -135,10 +155,10 @@ function signature(value) {
   return JSON.stringify(value);
 }
 
-/** Choose a finite execution deadline; zero topic minutes still require an explicit run budget. */
+/** Inherit the topic duration unless overridden; zero leaves the run without a time limit. */
 function launch_minutes(input, room) {
-  const minutes = Number(input.minutes ?? room.limits?.max_minutes);
-  if (!Number.isFinite(minutes) || minutes <= 0 || minutes > MAX_MINUTES) throw new Error('请设置讨论总时长或 minutes，范围 (0,1440]');
+  const minutes = Number(input.minutes ?? room.limits?.max_minutes ?? 0);
+  if (!Number.isFinite(minutes) || minutes < 0 || minutes > MAX_MINUTES) throw new Error('讨论总时长或 minutes 须在 [0,1440]，0 表示不限时长');
   return minutes;
 }
 
@@ -169,7 +189,7 @@ async function enable_run(config, record, persist, minutes) {
   persist();
   try {
     runtime = await api(config, '/runtime', { action: 'start', mode: 'automatic', revision: runtime.revision,
-      deadline: Math.floor(Date.now() / 1000 + minutes * 60) });
+      deadline: minutes ? Math.floor(Date.now() / 1000 + minutes * 60) : 0 });
   } catch (error) {
     const latest = await api(config, '/runtime');
     if (latest.generation !== record.expected_generation || latest.status !== 'running') throw error;
@@ -244,15 +264,35 @@ function connection_view(context) {
       [name, Object.fromEntries(['adapter', ...CONNECTION_FIELDS].filter(field => profile[field] !== undefined).map(field => [field, profile[field]]))])) };
 }
 
-/** Validate a narrow path correction without replacing adapters, project context or session IDs. */
+/** Switch only Codex's execution entrypoint, keeping its actual original conversation. */
+function switch_codex_adapter(context, name, profile, adapter) {
+  if (!CODEX_ADAPTERS.includes(profile.adapter) || !CODEX_ADAPTERS.includes(adapter)) throw new Error('本场仅支持 Codex App / CLI 切换');
+  const current = validate_config(context.config, dirname(context.path));
+  let session = profile.session_id;
+  if (existsSync(join(current.directory, 'runtime.sqlite3'))) {
+    const store = new DiscussionStore(current.directory);
+    try {
+      const binding = store.binding(name).session_id;
+      if (session && binding && session !== binding) throw new Error('原会话绑定不一致，请先核对原会话');
+      session = binding || session;
+    } finally { store.close(); }
+  }
+  if (!session) throw new Error('尚无实际 Codex 会话，不能切换；请先完成首次接入');
+  profile.adapter = adapter;
+  profile.session_id = session;
+}
+
+/** Validate paused-room paths and Codex entrypoints without replacing the discussion or session. */
 function corrected_configuration(context) {
   const config = structuredClone(context.config);
   for (const [name, patch] of Object.entries(context.input.participants)) {
     const profile = config.participants[name];
     const field = profile?.adapter === 'antigravity' ? 'ipc_directory' : 'executable';
-    if (!profile || !patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some(key => key !== field)) throw new Error('本场修正仅支持软件路径和 Sidecar 目录；参与者、客户端类型、项目及会话保持不变');
+    const fields = CODEX_ADAPTERS.includes(profile?.adapter) ? [field, 'adapter'] : [field];
+    if (!profile || !patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some(key => !fields.includes(key))) throw new Error('本场修正仅支持软件路径、Sidecar 目录及 Codex App / CLI；参与者、项目及会话保持不变');
     validate_profile(name, patch);
-    const path = patch[field];
+    if (patch.adapter && patch.adapter !== profile.adapter) switch_codex_adapter(context, name, profile, patch.adapter);
+    const path = patch[field] ?? profile[field];
     if (typeof path !== 'string' || !path || !existsSync(path)
       || (field === 'executable' ? !statSync(path).isFile() || (process.platform === 'win32' && !/\.exe$/i.test(path)) : !statSync(path).isDirectory())) throw new Error(`${name}：请提供有效的软件文件或连接目录`);
     profile[field] = path;
@@ -405,6 +445,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   assert_shared_home(home);
   let result;
   if (positionals[0] === 'settings') result = input ? save_launch_settings(home, input) : launch_settings(home);
+  else if (positionals[0] === 'room-models' && input) result = room_models(home, input);
   else if (positionals[0] === 'start' && input) result = await launch_discussion(home, input, { dry_run: values['dry-run'], browser_request: values.browser });
   else if (positionals[0] === 'room-config' && input) result = await room_configuration(home, input, { local_guard: values['configuration-locked'] });
   else throw new Error(HELP);
