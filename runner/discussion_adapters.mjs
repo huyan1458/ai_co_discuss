@@ -242,7 +242,7 @@ async function claude_delivery(config, binding, task, spawn_process = spawn) {
   try { bind_access(task.access_path, session_id); }
   catch (error) { throw not_sent(error); }
   const args = ['-p', '--output-format', 'json', binding.session_id ? '--resume' : '--session-id', session_id,
-    ...claude_permissions(config, task)];
+    ...(config.model ? ['--model', config.model] : []), ...claude_permissions(config, task)];
   let child;
   try {
     child = spawn_process(config.executable, [...args, '--', task.prompt], {
@@ -341,7 +341,7 @@ function cli_invocation(config, binding, task, user_home) {
     const permissions = codex_permissions(config, task);
     const args = ['exec', '--cd', launch_directory(config, task)];
     if (binding.session_id) args.push('resume', binding.session_id);
-    args.push(...permissions.args, '--json', '--skip-git-repo-check', '-');
+    args.push(...permissions.args, '--json', '--skip-git-repo-check', ...(config.model ? ['-m', config.model] : []), '-');
     return { args, input: task.prompt, permissions };
   }
   const project = prepare_agy_project(config, binding, task, user_home);
@@ -349,6 +349,7 @@ function cli_invocation(config, binding, task, user_home) {
     '--add-dir', task.draft_directory, '--add-dir', task.skills_directory];
   args.push('--mode', 'accept-edits', '--project', project.project_id);
   if (binding.session_id) args.push('--conversation', binding.session_id);
+  if (config.model) args.push('--model', config.model);
   args.push('-p', task.prompt);
   return { args, project };
 }

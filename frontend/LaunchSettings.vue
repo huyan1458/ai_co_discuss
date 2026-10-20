@@ -11,6 +11,7 @@ const ACCESS = [{ label: "只读", value: "read" }, { label: "可写", value: "w
 // Select items cannot use an empty value, so "inherit" stands for following the launch-wide setting.
 const PARTICIPANT_ACCESS = [{ label: "沿用本次设置", value: "inherit" }, ...ACCESS];
 const write_access = (name, value) => write(name, "project_access", value === "inherit" ? "" : value);
+const MODEL_HINTS = bridge.launch_model_hints;
 </script>
 
 <template>
@@ -32,6 +33,7 @@ const write_access = (name, value) => write(name, "project_access", value === "i
         <UFormField :label="`${name} 执行客户端`"><USelect :model-value="profile(name).adapter || ''" :items="bridge.launch_clients[name]" placeholder="选择 CLI / App" class="w-full" @update:model-value="write(name, 'adapter', $event)" /></UFormField>
         <UFormField v-if="profile(name).adapter === 'antigravity'" label="Sidecar IPC 目录"><UInput :model-value="profile(name).ipc_directory || ''" placeholder="已配置的 Sidecar 目录" class="w-full" @update:model-value="write(name, 'ipc_directory', $event)" /></UFormField>
         <UFormField v-else label="原生可执行文件路径"><UInput :model-value="profile(name).executable || ''" placeholder="Windows 填写 .exe 的完整路径" class="w-full" @update:model-value="write(name, 'executable', $event)" /></UFormField>
+        <UFormField v-if="MODEL_HINTS[profile(name).adapter]" label="模型（可选）" :help="MODEL_HINTS[profile(name).adapter].help"><UInput :model-value="profile(name).model || ''" :placeholder="MODEL_HINTS[profile(name).adapter].example" class="w-full" @update:model-value="write(name, 'model', $event)" /></UFormField>
         <UFormField v-if="profile(name).adapter === 'codex'" label="来源聊天 ID"><UInput :model-value="profile(name).source_thread_id || ''" placeholder="用于在 Codex App 新建会话" class="w-full" @update:model-value="write(name, 'source_thread_id', $event)" /></UFormField>
         <UFormField v-if="profile(name).adapter === 'claude'" label="允许的工具（可选，每行一项）"><UTextarea :model-value="(profile(name).allowed_tools || []).join('\n')" :rows="2" placeholder="例如 Read、Write 及按需配置的 Bash 权限" class="w-full" @update:model-value="write(name, 'allowed_tools', $event)" /></UFormField>
         <details><summary>会话与目录覆盖（可选）</summary><div class="launch-client-fields">
