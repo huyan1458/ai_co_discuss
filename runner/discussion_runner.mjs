@@ -171,6 +171,7 @@ export class DiscussionRunner {
     this.deliver = deliver;
     this.children = new Set();
     this.exited = new Set();
+    this.running = new Map();
   }
   /** Reserve with a durable token so a lost HTTP response can be reconciled. */
   async dispatch(row, event) {
@@ -193,7 +194,7 @@ export class DiscussionRunner {
       invoked = true;
       const result = await this.deliver(adapter, binding, { ...task, room_title: this.room_title,
         on_binding: session => this.store.bind(event.participant, session),
-        on_process: child => { this.children.add(child); child.once('close', () => this.children.delete(child)); },
+        on_process: child => this.track(event.participant, child),
         on_output: (path, chunk) => appendFileSync(path, chunk, { mode: 0o600 }),
         on_failure: error => { try { this.store.record(row.id, { error }); } catch { /* Store may already be closed at shutdown. */ } },
         on_exit: () => this.exited.add(row.id),
@@ -298,13 +299,23 @@ export class DiscussionRunner {
       if (event.generation !== run.generation || event.run_id !== run.run_id) this.store.record(row.id, { status: 'cancelled' });
     }
     const next = eligible.at(-1);
-    if (next) {
+    // A host that just saved the next turn may still be exiting; the same session cannot accept a second writer yet.
+    if (next && !this.running.get(next.event.participant)) {
       const fresh = await api(this.config, `/events/${next.row.id}`, { action: 'view' });
       if (fresh.status === 'pending') {
         await this.dispatch(next.row, fresh);
       }
       else this.store.record(next.row.id, { status: fresh.status });
     }
+  }
+  /** Count live processes per participant so a resumed session never overlaps its previous writer. */
+  track(participant, child) {
+    this.children.add(child);
+    this.running.set(participant, (this.running.get(participant) || 0) + 1);
+    child.once('close', () => {
+      this.children.delete(child);
+      this.running.set(participant, this.running.get(participant) - 1);
+    });
   }
   /** Stop only child processes created by this runner, never the desktop apps. */
   stop_children() { for (const child of this.children) child.kill(); }

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { createServer } from 'node:http';
@@ -86,6 +86,18 @@ test('replayed events and a restarted dispatcher do not deliver a second notific
   assert.equal(sent, 1); assert.equal(f.store.cursor(), 1);
   assert.equal(f.store.binding('Codex').session_id, 'actual-chat');
   assert.equal(f.calls.filter(action => action === 'reserve').length, 1);
+});
+
+test('a participant whose previous process is still exiting is not resumed until it closes', async t => {
+  const f = await fixture(t); let sent = 0;
+  const runner = new DiscussionRunner(f.config, f.store, async () => { sent++; return { status: 'accepted' }; });
+  const previous = new EventEmitter();
+  runner.track('Codex', previous);
+  await runner.tick();
+  assert.equal(sent, 0); assert.equal(f.calls.filter(action => action === 'reserve').length, 0);
+  previous.emit('close', 0);
+  await runner.tick();
+  assert.equal(sent, 1);
 });
 
 test('a reached limit pauses before another app can be invoked', async t => {

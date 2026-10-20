@@ -237,7 +237,7 @@ Codex 要求 CLI 0.163.0 或更新版本，使用 permission profiles 和本地 
 
 2026-10-18 本机实测（本轮权限调整前）：Claude 主持、Codex 与 Gemini 专家完成一场最小讨论。Windows 的 Codex / agy 经 PowerShell 调用时优先执行 npm 生成的 `codiscuss.ps1`；Codex elevated 沙箱内即使当前用户为 RemoteSigned 也拒绝 `.ps1`，Codex 自行改用 `cmd.exe` 调用 `codiscuss.cmd` 后成功。`agy` 非交互模式下被拒绝的工具也可能伴随退出码 0，最终仍以网站业务保存为准。`agy` 显式使用 `--print-timeout 0`，由房间的单次执行时限和整场截止控制停止，避免额外的 CLI 默认时限提前截断。
 
-结构化失败（Codex `turn.failed`、Antigravity 非 `SUCCESS` 结果）、非零退出码、缺少会话 ID 或成功结束事件均记录为失败；软件已启动后不自动重发。正常退出后若网站尚未保存本次结果，复查后暂停。暂停或停止接入服务会终止本服务创建的 CLI 进程，保留会话绑定和本机日志。
+结构化失败（Codex `turn.failed`、Antigravity 非 `SUCCESS` 结果）、非零退出码、缺少会话 ID 或成功结束事件均记录为失败；软件已启动后不自动重发。正常退出后若网站尚未保存本次结果，复查后暂停。同一参与者兼任主持与专家时，主持保存安排后进程可能仍在退出；该参与者由本服务创建的进程全部退出前不交付下一次执行，避免续接同一会话时出现两个写入者。暂停或停止接入服务会终止本服务创建的 CLI 进程，保留会话绑定和本机日志。
 
 2026-10-19 权限调整验证：Windows / Codex CLI 0.163.0 的本地配置检查采用了本次 profile；以原生 `sandbox`（`unelevated`）运行无模型的文件操作，确认项目 cwd 保持、中文文件可读、只读模式拒绝项目与运行目录写入、可写模式允许项目写入但仍拒绝运行目录写入，两种模式均可写草稿并访问本机 HTTP。此证据不覆盖 elevated 模式、其他平台或本轮调整后的真实模型讨论。
 
