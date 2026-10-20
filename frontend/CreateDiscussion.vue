@@ -106,17 +106,22 @@ const summary = computed(() => {
 
       <section class="create-section">
         <h3><span>2</span>谁来参与</h3>
+        <div class="create-choice-group">
+        <h4>推进方式</h4>
         <div class="create-modes" role="radiogroup" aria-label="讨论推进方式">
           <button v-for="option in [{ value: 'automatic', icon: 'i-lucide-zap', title: '全自动讨论', text: '本机服务按安排唤醒本地 AI' }, { value: 'manual', icon: 'i-lucide-copy', title: '手动复制冷启动', text: '支持在线 AI，由你或定时任务触发' }]" :key="option.value" type="button" role="radio" class="create-mode" :class="{ 'is-selected': (automatic ? 'automatic' : 'manual') === option.value }" :aria-checked="(automatic ? 'automatic' : 'manual') === option.value" @click="choose_mode(option.value)">
             <UIcon :name="option.icon" /><span><strong>{{ option.title }}</strong><small>{{ option.text }}</small></span>
           </button>
         </div>
+        </div>
+        <div class="create-choice-group">
+        <h4>参与专家</h4>
         <div class="create-experts" role="group" aria-label="参与专家">
           <div v-for="name in experts" :key="name" class="create-expert" :class="{ 'is-selected': selected[name], 'is-disabled': automatic && !bridge.launch_clients[name] && !selected[name] }">
             <button type="button" class="create-expert-toggle" :aria-pressed="Boolean(selected[name])" :disabled="automatic && !bridge.launch_clients[name] && !selected[name]" @click="toggle_expert(name)">
               <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="sm" class="channel-avatar" :class="bridge.identities[name]?.style" />
               <span class="create-expert-text"><strong>{{ name }}</strong><small :class="`is-${expert_status(name).tone}`">{{ expert_status(name).text }}</small></span>
-              <UIcon :name="selected[name] ? 'i-lucide-circle-check' : 'i-lucide-circle'" class="create-expert-check" />
+              <span class="create-expert-check" aria-hidden="true"><UIcon v-if="selected[name]" name="i-lucide-check" /></span>
             </button>
             <div v-if="selected[name] && !automatic" class="create-expert-modes" role="radiogroup" :aria-label="`${name} 参与方式`">
               <button v-for="mode in [{ value: 'cli', label: '本地读写' }, { value: 'online', label: '在线只读' }]" :key="mode.value" type="button" role="radio" :aria-checked="selected[name] === mode.value" :class="{ 'is-selected': selected[name] === mode.value }" @click="set_expert_mode(name, mode.value)">{{ mode.label }}</button>
@@ -131,6 +136,7 @@ const summary = computed(() => {
           </div>
         </div>
         <p class="fine-print create-hint">{{ automatic ? '全自动要求主持人与专家都是本机 AI；在线 AI 请改用手动推进。' : '主持人须为本地读写的专家；' }}主持人会先补全议题资料，也可同时作为专家发言。</p>
+        </div>
       </section>
 
       <section class="create-section">
@@ -191,6 +197,9 @@ const summary = computed(() => {
 .create-section h3 { display: flex; align-items: center; gap: 9px; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
 .create-section h3 > span { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: color-mix(in srgb, var(--channel-accent) 18%, transparent); color: var(--channel-accent); font-size: 11px; }
 .create-more { align-self: flex-start; padding-inline: 0; color: var(--ui-text-muted); }
+.create-choice-group { display: flex; flex-direction: column; gap: 12px; }
+.create-choice-group + .create-choice-group { margin-top: 12px; }
+.create-choice-group h4 { margin: 0; color: var(--ui-text-muted); font-size: 12px; font-weight: 500; }
 .create-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .create-mode { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border: 1px solid var(--ui-border); border-radius: 10px; text-align: left; color: var(--ui-text-muted); transition: border-color .12s, background .12s; }
 .create-mode:hover { border-color: var(--ui-border-accented); }
@@ -202,7 +211,8 @@ const summary = computed(() => {
 .create-mode.is-selected > [class*="icon"] { color: var(--channel-accent); }
 .create-experts { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
 .create-expert { border: 1px solid var(--ui-border); border-radius: 10px; transition: border-color .12s, background .12s; }
-.create-expert.is-selected { border-color: color-mix(in srgb, var(--channel-accent) 70%, transparent); background: color-mix(in srgb, var(--channel-accent) 7%, transparent); }
+.create-expert.is-selected { border-color: var(--ui-border-accented); background: var(--ui-bg-elevated); }
+.create-expert:not(.is-disabled):hover { border-color: var(--ui-text-dimmed); }
 .create-expert.is-disabled { opacity: .55; }
 .create-expert-toggle { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; text-align: left; border-radius: inherit; }
 .create-expert-toggle:disabled { cursor: not-allowed; }
@@ -211,8 +221,9 @@ const summary = computed(() => {
 .create-expert-toggle small { overflow: hidden; color: var(--ui-text-muted); font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
 .create-expert-toggle small.is-ready { color: #3fb27f; }
 .create-expert-toggle small.is-warn { color: #e0a33a; }
-.create-expert-check { flex-shrink: 0; width: 17px; height: 17px; color: var(--ui-text-dimmed); }
-.is-selected .create-expert-check { color: var(--channel-accent); }
+.create-expert-check { display: grid; flex-shrink: 0; place-items: center; width: 16px; height: 16px; border: 1px solid var(--ui-border-accented); border-radius: 4px; background: var(--ui-bg); }
+.is-selected .create-expert-check { border-color: var(--channel-accent); background: var(--channel-accent); color: white; }
+.create-expert-check > [class*="icon"] { width: 12px; height: 12px; }
 .create-expert-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; margin: 0 10px 10px; padding: 3px; border-radius: 7px; background: var(--ui-bg-muted); }
 .create-expert-modes button { padding: 4px 0; border-radius: 5px; color: var(--ui-text-muted); font-size: 11px; }
 .create-expert-modes button.is-selected { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }

@@ -113,9 +113,10 @@ test("picker keyboard reaches finite boundaries and accumulates quick commands",
   fixture.cleanup();
 });
 
-test("picker drag preserves release velocity and grabbing a moving wheel does not jump", async () => {
+for (const pointerType of ["mouse", "touch"]) test(`picker ${pointerType} drag preserves release velocity and grabbing a moving wheel does not jump`, async () => {
   const fixture = picker_fixture({ minutes: 90 });
-  const { context, wheels, pointer } = fixture, wheel = wheels[2], initial_position = wheel.x;
+  const { context, wheels } = fixture, wheel = wheels[2], initial_position = wheel.x;
+  const pointer = (extra = {}) => fixture.pointer({ pointerType, ...extra });
   context.grab(wheel, pointer());
   context.drag(wheel, pointer({ clientY: -60 }));
   await fixture.tick(6);
@@ -137,27 +138,52 @@ test("picker drag preserves release velocity and grabbing a moving wheel does no
   fixture.cleanup();
 });
 
-test("picker keeps perceptible inertia even with reduced motion enabled", async () => {
+test("picker mouse-wheel steps stop immediately, including after editing or interrupting a drag", async () => {
   for (const reduced_motion of [false, true]) {
     const fixture = picker_fixture({ minutes: 75 }, reduced_motion);
     const { context, wheels, props, pointer } = fixture, wheel = wheels[2];
     const input = { currentTarget: pointer().currentTarget, deltaY: 64, deltaMode: 0 };
-    context.scroll(wheel, input);
-    await fixture.tick(6);
-    const moving_at = wheel.x;
-    assert.ok(wheel.v > 0 && fixture.frames.size > 0);
-    await fixture.tick(6);
-    assert.ok(wheel.x - moving_at > 0.25, "one input continues visibly between 100 and 200 ms");
-    await fixture.finish();
-    assert.equal(props.minutes, 77);
+    for (const deltaMode of [0, 1, 2]) context.scroll(wheel, { ...input, deltaMode });
+    assert.equal(props.minutes, 78);
+    assert.equal(wheel.x, 18);
+    assert.equal(wheel.v, 0);
+    assert.equal(fixture.frames.size, 0);
+    await fixture.tick(30);
+    assert.equal(props.minutes, 78, "no input means no further movement");
     context.begin_edit(wheel, { target: { select() {} } });
     wheel.draft = "7";
     context.scroll(wheel, { ...input, deltaY: -64 });
-    await fixture.finish();
-    assert.equal(props.minutes, 65);
+    assert.equal(props.minutes, 66);
     assert.equal(wheel.editing, false);
+    context.grab(wheel, pointer());
+    context.drag(wheel, pointer({ clientY: -60 }));
+    await fixture.tick(6);
+    context.release(wheel, pointer({ type: "pointerup", clientY: -60 }));
+    assert.ok(wheel.v > 0);
+    const stop = Math.round(wheel.x) - 1;
+    context.scroll(wheel, { ...input, deltaY: -64 });
+    assert.equal(wheel.x, stop);
+    assert.equal(wheel.v, 0);
+    await fixture.finish();
+    assert.equal(wheel.x, stop, "wheel input must stop an unfinished drag trajectory");
     fixture.cleanup();
   }
+});
+
+test("picker drag retains perceptible release inertia with reduced motion enabled", async () => {
+  const fixture = picker_fixture({ minutes: 75 }, true);
+  const { context, wheels, pointer } = fixture, wheel = wheels[2];
+  context.grab(wheel, pointer({ pointerType: "touch" }));
+  context.drag(wheel, pointer({ pointerType: "touch", clientY: -60 }));
+  await fixture.tick(6);
+  context.release(wheel, pointer({ type: "pointerup", pointerType: "touch", clientY: -60 }));
+  await fixture.tick(6);
+  const moving_at = wheel.x;
+  assert.ok(wheel.v > 0 && fixture.frames.size > 0);
+  await fixture.tick(6);
+  assert.ok(wheel.x - moving_at > 0.25, "a released drag continues visibly between 100 and 200 ms");
+  await fixture.finish();
+  fixture.cleanup();
 });
 
 test("picker distinguishes a central tap from dragging and preserves native text editing", () => {

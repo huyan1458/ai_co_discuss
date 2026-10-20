@@ -9,7 +9,7 @@ export function format_duration(minutes) {
 <script setup>
 import { onBeforeUnmount, reactive, watch } from "vue";
 
-const props = defineProps({ rounds: { type: Number, default: 3 }, minutes: { type: Number, default: 60 } });
+const props = defineProps({ rounds: { type: Number, default: 3 }, minutes: { type: Number, default: 0 } });
 const emit = defineEmits(["update:rounds", "update:minutes"]);
 const ROW_HEIGHT = 32;
 const ROW_ANGLE = Math.PI / 7;
@@ -200,15 +200,13 @@ function keydown(wheel, event) {
   choose(wheel, choices[event.key]);
 }
 
-/** Convert mouse-wheel travel to an impulse; each row of input projects one row of travel. */
+/** Step immediately on mouse-wheel input, clearing any previous drag inertia. */
 function scroll(wheel, event) {
-  const pixels = event.deltaY * (event.deltaMode === 1 ? ROW_HEIGHT : event.deltaMode === 2 ? ROW_HEIGHT * 5 : 1);
-  if (!pixels || wheel.pointer || wheel_field(wheel).unlimited) return;
+  if (!event.deltaY || wheel.pointer || wheel_field(wheel).unlimited) return;
   finish_edit(wheel);
   event.currentTarget.querySelector(".limit-wheel").focus({ preventScroll: true });
-  wheel.target = null;
-  wheel.v += pixels / ROW_HEIGHT * FREE_DAMPING;
-  wake();
+  rest(wheel, nearest(wheel) + Math.sign(event.deltaY));
+  publish(wheel);
 }
 
 /** Take over from the current position and velocity without jumping during an animation. */
@@ -300,7 +298,10 @@ defineExpose({ settle });
     <div v-for="field in fields" :key="field.key" class="limit-field">
       <div class="limit-field-heading">
         <label :for="`limit-trigger-${field.key}`">{{ field.label }}</label>
-        <label class="limit-unlimited"><input type="checkbox" :checked="field.unlimited" :aria-label="`不限${field.key === 'rounds' ? '轮次' : '时长'}`" @change="set_unlimited(field, $event.target.checked)">不限</label>
+        <button type="button" class="limit-unlimited" :aria-pressed="field.unlimited"
+          :aria-label="`不限${field.key === 'rounds' ? '轮次' : '时长'}`" @click="set_unlimited(field, !field.unlimited)">
+          <UIcon name="i-lucide-infinity" aria-hidden="true" /><span>不限</span>
+        </button>
       </div>
       <UPopover :open="field.open" :content="{ align: field.key === 'rounds' ? 'start' : 'end', sideOffset: 6, collisionPadding: 12 }"
         :ui="{ content: `limit-popover-content ${field.key === 'minutes' ? 'limit-duration-content' : ''}` }" @update:open="set_open(field, $event)">
@@ -343,9 +344,12 @@ defineExpose({ settle });
 <style scoped>
 .limit-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; width: 100%; }
 .limit-field { min-width: 0; }
-.limit-field-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; color: var(--ui-text-toned); font-size: 12px; }
-.limit-unlimited { display: inline-flex; align-items: center; gap: 5px; color: var(--ui-text-muted); cursor: pointer; }
-.limit-unlimited input { width: 13px; height: 13px; margin: 0; accent-color: var(--channel-accent); }
+.limit-field-heading { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 8px; color: var(--ui-text-toned); font-size: 12px; }
+.limit-unlimited { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; gap: 4px; min-height: 26px; padding: 3px 6px; border: 1px solid var(--ui-border-muted); border-radius: 6px; background: var(--ui-bg-muted); color: var(--ui-text-muted); font-size: 11px; line-height: 16px; cursor: pointer; }
+.limit-unlimited > [class*="icon"] { width: 13px; height: 13px; }
+.limit-unlimited:hover { border-color: var(--ui-border-accented); color: var(--ui-text-highlighted); }
+.limit-unlimited[aria-pressed="true"] { border-color: color-mix(in srgb, var(--channel-accent) 45%, var(--ui-border)); background: color-mix(in srgb, var(--channel-accent) 12%, var(--ui-bg)); color: var(--channel-accent); }
+.limit-unlimited:focus-visible { outline: 2px solid var(--channel-accent); outline-offset: 2px; }
 .limit-trigger { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 38px; padding: 7px 12px; border: 1px solid var(--ui-border); border-radius: 7px; background: var(--ui-bg-muted); color: var(--ui-text-highlighted); font-size: 13px; font-variant-numeric: tabular-nums; text-align: left; }
 .limit-trigger-value { display: flex; flex-wrap: wrap; gap: 0 5px; min-width: 0; }
 .limit-trigger-value > span { white-space: nowrap; }
