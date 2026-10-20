@@ -65,21 +65,26 @@ const progress_summary = computed(() => {
           <LaunchSettings :participants="[room.host, ...Object.keys(room.experts || {})]" />
           <UButton label="启动讨论" icon="i-lucide-play" class="channel-primary-button" :loading="pending === 'launch_current_room'" @click="act('launch_current_room')" />
         </template>
-        <div v-else-if="room.runtime?.status === 'paused' && !room.archived && !view.launch.remote" class="launch-settings">
-          <h3>修正本场软件连接</h3>
-          <p class="fine-print">登录或软件权限问题请先在对应软件中处理。路径变化可在这里修正，保存后再到进度看板重启。客户端类型、工作目录、项目及会话设置保持不变。</p>
-          <UButton label="读取本场配置" variant="outline" color="neutral" :loading="pending === 'load_room_configuration'" @click="act('load_room_configuration')" />
-          <template v-if="repair">
+        <div v-else-if="room.runtime?.status === 'paused' && !room.archived && !view.launch.remote" class="access-repair">
+          <div class="access-repair-heading">
+            <h3>修正本场软件连接</h3>
+            <UButton label="读取本场配置" variant="outline" color="neutral" class="channel-surface-button" :loading="pending === 'load_room_configuration'" @click="act('load_room_configuration')" />
+          </div>
+          <div class="access-repair-description">
+            <p>登录或软件权限问题请先在对应软件中处理。路径变化可在这里修正，保存后再到进度看板重启。</p>
+            <p class="fine-print">客户端类型、工作目录、项目及会话设置保持不变。</p>
+          </div>
+          <div v-if="repair" class="access-repair-fields">
             <UFormField v-for="(profile, name) in repair.participants" :key="name" :label="`${name} · ${profile.adapter === 'antigravity' ? 'Sidecar 目录' : '软件路径'}`"><UInput :model-value="profile[profile.adapter === 'antigravity' ? 'ipc_directory' : 'executable'] || ''" class="w-full" @update:model-value="bridge.write_room_connection(name, $event)" /></UFormField>
-            <UButton label="保存本场路径" :loading="pending === 'save_room_configuration'" @click="act('save_room_configuration')" />
+            <UButton label="保存本场路径" class="channel-primary-button" :loading="pending === 'save_room_configuration'" @click="act('save_room_configuration')" />
             <p v-if="repair.notice" role="status" class="fine-print">{{ repair.notice }}</p>
-          </template>
+          </div>
           <p v-if="view.launch.repair_error" role="alert" class="fine-print">{{ view.launch.repair_error }}</p>
         </div>
         <p v-else-if="room.runtime?.status === 'paused' && view.launch.remote" class="fine-print">讨论已暂停，可在进度看板重启。线上连接暂不提供已登记房间的软件路径修正。</p>
         <p v-else-if="room.runtime?.status === 'running'" class="fine-print">讨论正在运行。</p>
         <p v-else class="fine-print">本场讨论已停止或结束，已有记录保留。</p>
-        <p class="fine-print">另一种入口：在 AI 工具对话中调用 discuss-host，由当前会话主持。</p>
+        <p class="access-host-entry">另一种入口：在 AI 工具对话中调用 <code>discuss-host</code>，由当前会话主持。</p>
       </section>
       <section v-else-if="automatic" class="access-setup" aria-label="全自动接入步骤">
         <LaunchSettings :participants="[room.host, ...Object.keys(room.experts || {})]" />
@@ -133,6 +138,18 @@ const progress_summary = computed(() => {
 .mode-check { flex-shrink: 0; width: 16px; height: 16px; color: var(--channel-accent); margin-top: 1px; }
 .access-section-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
 .access-section-title h3 { font-size: 13px; font-weight: 600; color: var(--ui-text-highlighted); }
+.access-repair { display: grid; gap: 14px; margin: 16px 0; padding: 18px; border: 1px solid var(--ui-border); border-radius: 8px; }
+.access-repair-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.access-repair-heading h3 { margin: 0; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
+.access-repair-heading > button { flex-shrink: 0; }
+.access-repair-description { display: grid; gap: 6px; }
+.access-repair-description > p { margin: 0; font-size: 12px; line-height: 1.8; }
+.access-repair-description > .fine-print { font-size: 11px; }
+.access-repair-fields { display: grid; gap: 16px; padding-top: 16px; border-top: 1px solid var(--ui-border-muted); }
+.access-repair-fields > button { justify-self: start; }
+.access-repair > .fine-print, .access-repair-fields > .fine-print { margin: 0; }
+.access-host-entry { margin: 16px 0 22px; color: var(--ui-text-muted); font-size: 12px; line-height: 1.8; }
+.access-host-entry code { padding: 2px 5px; border-radius: 4px; background: var(--ui-bg-elevated); color: var(--ui-text); font-size: 11px; white-space: nowrap; }
 .access-steps { list-style: none; margin: 0; padding: 0; }
 .access-steps > li { display: flex; align-items: flex-start; gap: 14px; padding: 20px 0; }
 .access-steps > li + li { border-top: 1px solid var(--ui-border-muted); }
@@ -169,6 +186,7 @@ const progress_summary = computed(() => {
 .access-running { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; font-size: 12px; color: var(--ui-text-muted); }
 .access-running > button { flex-shrink: 0; }
 @media (max-width: 640px) {
+  .access-page .access-repair button { min-height: 44px; }
   .access-modes { grid-template-columns: 1fr; gap: 8px; margin-bottom: 22px; }
   .access-mode { padding: 14px; }
   .access-workspace .form-two-columns { grid-template-columns: 1fr; }

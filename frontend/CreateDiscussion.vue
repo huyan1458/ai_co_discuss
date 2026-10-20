@@ -2,19 +2,13 @@
 /** New-discussion form: the user states the topic in their own words; the AI host drafts goal, background and boundaries. */
 import { computed, inject, onMounted, ref, watch } from "vue";
 import LaunchSettings from "./LaunchSettings.vue";
+import LimitPicker from "./LimitPicker.vue";
 
 const props = defineProps({ targetFolder: { type: Object, default: null } });
 const emit = defineEmits(["submit", "cancel"]);
 const { view, bridge, pending } = inject("discussion");
 const EXPERT_CONTAINER = "new-expert-modes";
-const LIMIT_PRESETS = [
-  { label: "快速", rounds: "2", minutes: "30" },
-  { label: "标准", rounds: "3", minutes: "60", hint: "推荐" },
-  { label: "深入", rounds: "6", minutes: "120" },
-  { label: "不限", rounds: "", minutes: "" },
-];
 const ACCESS_ITEMS = [{ label: "只读", value: "read" }, { label: "可写", value: "write" }];
-const LIMIT_FIELDS = [{ key: "max_rounds", label: "讨论轮次上限", min: 0, max: 100 }, { key: "max_minutes", label: "总时长（分钟）", min: 0, max: 1440 }, { key: "execution_minutes", label: "单次 AI 执行（分钟）", min: 1, max: 60 }];
 const experts = Object.keys(bridge.identities).filter((name) => name !== "用户");
 const field_id = (key) => `new-room-${key}`;
 const value = (key) => view.value.fields[field_id(key)] ?? "";
@@ -24,10 +18,7 @@ const automatic = computed(() => value("mode") === "automatic");
 const selected = computed(() => view.value.experts[EXPERT_CONTAINER] || {});
 const host = computed(() => value("host"));
 const host_options = computed(() => experts.filter((name) => selected.value[name] === "cli"));
-const custom_limits = ref(false);
-const active_preset = computed(() => custom_limits.value ? null
-  : LIMIT_PRESETS.find((preset) => String(value("limit-max_rounds")) === preset.rounds && String(value("limit-max_minutes")) === preset.minutes) || null);
-const visible_limits = computed(() => LIMIT_FIELDS.filter((item) => item.key !== "execution_minutes" || automatic.value));
+const limit_picker = ref(null);
 const launch_names = computed(() => [...new Set([host.value, ...Object.keys(selected.value)])].filter((name) => bridge.launch_clients[name]));
 const launch_ready = (name) => {
   const profile = view.value.launch.profiles[name] || {};
@@ -80,11 +71,10 @@ function toggle_expert(name) {
   set_expert_mode(name, selected.value[name] ? "" : automatic.value || bridge.launch_clients[name] ? "cli" : "online");
 }
 
-/** Apply a limit preset while keeping the per-execution and closing settings. */
-function apply_preset(preset) {
-  custom_limits.value = false;
-  write("limit-max_rounds", preset.rounds);
-  write("limit-max_minutes", preset.minutes);
+/** Submit the currently visible wheel values, including during an unfinished gesture. */
+function submit() {
+  limit_picker.value?.settle();
+  emit("submit");
 }
 
 const summary = computed(() => {
@@ -98,7 +88,7 @@ const summary = computed(() => {
 
 <template>
   <div class="create-discussion">
-    <form id="create-discussion-form" class="create-scroll dialog-form" @submit.prevent="emit('submit')">
+    <form id="create-discussion-form" class="create-scroll dialog-form" @submit.prevent="submit">
       <p v-if="targetFolder?.id" class="channel-create-location"><UIcon name="i-lucide-folder" />{{ targetFolder.name }}</p>
       <section class="create-section">
         <h3><span>1</span>讨论什么</h3>
@@ -137,12 +127,10 @@ const summary = computed(() => {
 
       <section class="create-section">
         <h3><span>3</span>讨论多久</h3>
-        <div class="create-chips" role="radiogroup" aria-label="讨论上限">
-          <button v-for="preset in LIMIT_PRESETS" :key="preset.label" type="button" role="radio" :aria-checked="active_preset === preset" :class="{ 'is-selected': active_preset === preset }" @click="apply_preset(preset)">{{ preset.label }}<small>{{ preset.rounds ? `${preset.rounds} 轮 · ${preset.minutes} 分钟` : '不设上限' }}</small><em v-if="preset.hint">{{ preset.hint }}</em></button>
-          <button type="button" role="radio" :aria-checked="!active_preset" :class="{ 'is-selected': !active_preset }" @click="custom_limits = true">自定义</button>
-        </div>
-        <div v-if="!active_preset || automatic" class="form-two-columns">
-          <template v-for="item in visible_limits" :key="item.key"><UFormField v-if="!active_preset || item.key === 'execution_minutes'" :label="item.label"><UInput :model-value="value(`limit-${item.key}`)" type="number" :min="item.min" :max="item.max" :step="1" :required="item.min > 0" :placeholder="item.min === 0 ? '留空不限' : '1–60'" class="w-full" @update:model-value="write(`limit-${item.key}`, $event)" /></UFormField></template>
+        <LimitPicker ref="limit_picker" :rounds="Number(value('limit-max_rounds'))" :minutes="Number(value('limit-max_minutes'))"
+          @update:rounds="write('limit-max_rounds', String($event))" @update:minutes="write('limit-max_minutes', String($event))" />
+        <div v-if="automatic" class="form-two-columns">
+          <UFormField label="单次 AI 执行（分钟）"><UInput :model-value="value('limit-execution_minutes')" type="number" :min="1" :max="60" :step="1" required class="w-full" @update:model-value="write('limit-execution_minutes', $event)" /></UFormField>
         </div>
         <div class="create-host">
           <span class="create-label">到达上限后</span>
@@ -227,8 +215,6 @@ const summary = computed(() => {
 .create-chips button:hover { border-color: var(--ui-border-accented); }
 .create-chips button.is-selected { border-color: var(--channel-accent); background: color-mix(in srgb, var(--channel-accent) 12%, transparent); color: var(--ui-text-highlighted); }
 .create-chips button [class*="icon"] { width: 13px; height: 13px; color: #e0b44a; }
-.create-chips small { color: var(--ui-text-muted); font-size: 11px; }
-.create-chips em { padding: 0 6px; border-radius: 999px; background: color-mix(in srgb, var(--channel-accent) 20%, transparent); color: var(--channel-accent); font-size: 10px; font-style: normal; }
 .create-summary-minutes { width: 150px; }
 .create-hint { margin-top: -4px !important; }
 .create-launch-list { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 9px; background: var(--ui-bg-muted); font-size: 12px; }

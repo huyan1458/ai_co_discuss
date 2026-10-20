@@ -2,9 +2,178 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
+import { computed, nextTick, reactive, watch } from "vue";
 
 const source = readFileSync(new URL("../web/app.js", import.meta.url), "utf8").replace(/\nrestore_theme\(\);[\s\S]*$/, "");
 const discussion_source = readFileSync(new URL("../frontend/ChannelDiscussion.vue", import.meta.url), "utf8");
+
+/** Mount the real picker logic with Vue reactivity and a deterministic animation clock. */
+function picker_fixture(initial = {}) {
+  const props = reactive({ rounds: 3, minutes: 60, ...initial });
+  const frames = new Map(), events = [], mounts = [], cleanups = [], watchers = [];
+  let now = 0, frame_number = 0, motion_listener;
+  const context = vm.createContext({
+    computed, reactive, defineProps: () => props, defineExpose() {},
+    defineEmits: () => (name, next) => { events.push({ name, next }); props[name.slice(7)] = next; },
+    watch: (...args) => { const stop = watch(...args); watchers.push(stop); return stop; },
+    onMounted: (callback) => mounts.push(callback), onBeforeUnmount: (callback) => cleanups.push(callback),
+    performance: { now: () => now },
+    requestAnimationFrame: (callback) => { frames.set(++frame_number, callback); return frame_number; },
+    cancelAnimationFrame: (id) => frames.delete(id),
+    window: { matchMedia: () => ({ matches: false,
+      addEventListener(_name, callback) { motion_listener = callback; },
+      removeEventListener() { motion_listener = null; },
+    }) },
+  });
+  const picker_source = readFileSync(new URL("../frontend/LimitPicker.vue", import.meta.url), "utf8")
+    .match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .*;$/gm, "");
+  vm.runInContext(`${picker_source}\nglobalThis.test_wheels = wheels;`, context);
+  mounts.forEach((callback) => callback());
+  const tick = async (count = 1) => {
+    for (let index = 0; index < count; index++) {
+      now += 1000 / 60;
+      const pending = [...frames.values()];
+      frames.clear();
+      pending.forEach((callback) => callback(now));
+      await nextTick();
+    }
+  };
+  const finish = async () => {
+    for (let index = 0; frames.size && index < 600; index++) await tick();
+    assert.equal(frames.size, 0, "picker must stop requesting frames after settling");
+  };
+  const target = { focus() {}, setPointerCapture() {}, getBoundingClientRect: () => ({ top: 0, height: 200 }) };
+  const pointer = (extra = {}) => ({ pointerId: 1, isPrimary: true, button: 0, clientY: 100, currentTarget: target, ...extra });
+  return { context, props, events, wheels: context.test_wheels, tick, finish, frames, pointer,
+    reduce: () => motion_listener({ matches: true }),
+    cleanup: () => { cleanups.forEach((callback) => callback()); watchers.forEach((stop) => stop()); },
+  };
+}
+
+test("picker keeps minute precision, caps at 24:00, and restores the minute range below it", async () => {
+  const fixture = picker_fixture({ minutes: 1439 });
+  const { context, wheels, props } = fixture;
+  assert.deepEqual(Array.from(wheels, (wheel) => wheel.selected), [3, 23, 59]);
+  context.choose(wheels[1], 24);
+  await fixture.finish();
+  assert.equal(props.minutes, 1440);
+  assert.equal(wheels[2].selected, 0);
+  assert.equal(wheels[2].max, 0);
+  assert.ok(fixture.events.filter((event) => event.name === "update:minutes").every((event) => event.next <= 1440));
+  context.choose(wheels[1], 1);
+  await fixture.finish();
+  context.choose(wheels[2], 1);
+  await fixture.finish();
+  assert.equal(props.minutes, 61);
+  assert.equal(wheels[2].max, 59);
+  fixture.cleanup();
+});
+
+test("picker keyboard reaches unlimited and accumulates quick commands without losing them", async () => {
+  const fixture = picker_fixture();
+  const { context, wheels, props } = fixture;
+  const key = (wheel, name) => context.keydown(wheel, { key: name, preventDefault() {} });
+  key(wheels[0], "Home");
+  key(wheels[1], "Home");
+  await fixture.finish();
+  assert.equal(props.rounds, 0);
+  assert.equal(props.minutes, 0);
+  for (let index = 0; index < 10; index++) key(wheels[2], "ArrowDown");
+  await fixture.finish();
+  assert.equal(props.minutes, 10);
+  key(wheels[0], "End");
+  await fixture.finish();
+  assert.equal(props.rounds, 100);
+  fixture.cleanup();
+});
+
+test("picker drag preserves release velocity and grabbing a moving wheel does not jump", async () => {
+  const fixture = picker_fixture({ minutes: 30 });
+  const { context, wheels, pointer } = fixture, wheel = wheels[2];
+  context.grab(wheel, pointer());
+  context.drag(wheel, pointer({ clientY: -60 }));
+  await fixture.tick(6);
+  assert.ok(wheel.x > 30 && wheel.v > 0);
+  const velocity = wheel.v, released_at = wheel.x;
+  context.release(wheel, pointer({ type: "pointerup", clientY: -60 }));
+  assert.equal(wheel.v, velocity);
+  await fixture.tick(2);
+  assert.ok(wheel.x > released_at);
+  const position = wheel.x, speed = wheel.v;
+  context.grab(wheel, pointer());
+  assert.equal(wheel.x, position);
+  assert.equal(wheel.v, speed);
+  context.drag(wheel, pointer({ clientY: 220 }));
+  await fixture.tick(8);
+  context.release(wheel, pointer({ type: "pointerup", clientY: 220 }));
+  await fixture.finish();
+  assert.equal(wheel.x, wheel.selected);
+  fixture.cleanup();
+});
+
+test("picker catches flicks at boundaries and halfway releases settle to an integer", async () => {
+  for (const [position, speed] of [[0, -60], [59, 60], [30.5, 0]]) {
+    const fixture = picker_fixture({ minutes: position });
+    const wheel = fixture.wheels[2];
+    wheel.x = position;
+    wheel.v = speed;
+    fixture.context.wake();
+    await fixture.finish();
+    assert.ok(wheel.selected >= 0 && wheel.selected <= 59);
+    assert.equal(wheel.x, wheel.selected);
+    fixture.cleanup();
+  }
+});
+
+test("picker external drafts, submission and reduced motion all retain displayed values", async () => {
+  const fixture = picker_fixture(), { context, props, wheels } = fixture;
+  props.rounds = 12;
+  props.minutes = 125;
+  await nextTick();
+  assert.deepEqual(Array.from(wheels, (wheel) => wheel.selected), [12, 2, 5]);
+  context.choose(wheels[2], 40);
+  await fixture.tick(5);
+  const displayed = wheels[2].selected;
+  context.settle();
+  assert.equal(props.minutes, 120 + displayed);
+  assert.equal(fixture.frames.size, 0);
+  fixture.reduce();
+  context.choose(wheels[2], 1);
+  assert.equal(props.minutes, 121);
+  assert.equal(fixture.frames.size, 0);
+  fixture.cleanup();
+});
+
+test("unmounting a moving picker cancels its scheduled animation", () => {
+  const fixture = picker_fixture();
+  fixture.context.choose(fixture.wheels[0], 20);
+  assert.equal(fixture.frames.size, 1);
+  fixture.cleanup();
+  assert.equal(fixture.frames.size, 0);
+});
+
+test("a zero-length first animation frame cannot discard a keyboard selection", async () => {
+  const fixture = picker_fixture();
+  fixture.context.choose(fixture.wheels[2], 15);
+  const callback = [...fixture.frames.values()][0];
+  fixture.frames.clear();
+  callback(0);
+  assert.equal(fixture.frames.size, 1);
+  await fixture.finish();
+  assert.equal(fixture.props.minutes, 75);
+  fixture.cleanup();
+});
+
+test("tapping a curved outer row selects that row rather than its flat projection", async () => {
+  const fixture = picker_fixture({ minutes: 30 });
+  const wheel = fixture.wheels[2];
+  const point = fixture.pointer({ clientY: 187 });
+  fixture.context.grab(wheel, point);
+  fixture.context.release(wheel, { ...point, type: "pointerup" });
+  await fixture.finish();
+  assert.equal(fixture.props.minutes, 33);
+  fixture.cleanup();
+});
 
 /** Exercise theme persistence and renderer selection without touching discussion data. */
 function theme_fixture(saved_theme = null, shared_storage = null) {

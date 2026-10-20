@@ -64,7 +64,7 @@ html[data-theme^="channel"] .channel-panel-toggle { flex-shrink: 0; }
 .channel-directory-heading [class*="icon"] { width: 12px; height: 12px; }
 .channel-directory-actions { display: flex; align-items: center; gap: 0; opacity: 0; pointer-events: none; }
 .channel-directory-heading:is(:hover, :focus-within) .channel-directory-actions, .channel-directory-heading:has([data-state="open"]) .channel-directory-actions { opacity: 1; pointer-events: auto; }
-.channel-new-conversation { display: flex; justify-content: flex-start; width: calc(100% - 16px); min-height: 36px; margin: 0 8px 4px; padding: 8px; border-radius: 6px; color: var(--ui-text); font-size: var(--channel-nav-text); font-weight: 500; }
+.channel-new-conversation { display: flex; justify-content: flex-start; gap: 3px; width: 100%; min-height: 36px; margin: 0 0 4px; padding: 8px 6px; border-radius: 6px; color: var(--ui-text); font-size: var(--channel-nav-text); font-weight: 500; }
 .channel-new-conversation:hover { background: var(--ui-bg-elevated); }
 .channel-new-conversation > [class*="icon"] { width: 16px; height: 16px; }
 html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 156px; }
