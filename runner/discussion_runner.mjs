@@ -150,14 +150,16 @@ export function task_files(config, event, token, binding) {
   if (event.role === 'host') skills.push(join(config.project, '.agents/skills/discuss-host/SKILL.md'));
   const adapter = config.participants[event.participant];
   const skills_directory = join(config.project, '.agents', 'skills');
+  // Codex and agy run commands through PowerShell on Windows, whose execution policy blocks npm's codiscuss.ps1 shim.
+  const cli = process.platform === 'win32' && adapter.adapter !== 'claude' ? 'codiscuss.cmd' : 'codiscuss';
   const project_rule = !adapter.cwd ? '未指定讨论项目目录。'
     : adapter.project_access === 'write' ? '用户允许按议题需要修改 cwd 中的项目文件。' : 'cwd 中的项目文件只读，不修改。';
   atomic_json(task_path, { site: config.site, room: config.room, event_id: event.id, participant: event.participant,
     project_name: adapter.project_name || null, cwd: adapter.cwd || null, project_access: adapter.project_access,
     draft_directory,
-    role: event.role, turn_id: event.turn_id, skills, cli: 'codiscuss', subcommands: TASK_SUBCOMMANDS, access_file: access_path,
-    instructions: '读取指定技能；网站命令只用 codiscuss 的 subcommands 子命令，命令以 codiscuss 开头，不用 python discuss.py、cd、管道或其他入口；使用 codiscuss execution enter 房间 执行编号 --access-file 凭据路径 进入。凭据文件由 CLI 内部读取，不要打印或读取其 token。进入成功后才处理本次安排；每次业务写入都带 --access-file。答案草稿只保存到 draft_directory，不修改任务、凭据、日志或调度数据库；' + project_rule + '只处理本次工作，不建定时任务。主持创建下一安排或收束即结束，专家提交原文后结束。无效或已进入的任务不要重复执行。' });
-  const prompt = `用户已启动此房间的全自动讨论。请以 ${event.participant} 的${event.role === 'host' ? '主持' : '专家'}职责处理本次工作。先读取任务文件：${task_path}，立即用 codiscuss execution enter 进入，再读取指定版本的技能和网站现状。本次只放行任务内 subcommands 列出的 codiscuss 子命令，命令以 codiscuss 开头，不用 python discuss.py、cd、管道或其他入口。任务内 cwd 是讨论项目目录；${project_rule}项目读写仍受软件实际权限和议题授权约束。不读取凭据内容。实际会话 ID 由接入程序写入凭据文件，尚未就绪只短暂重查，不编造。`;
+    role: event.role, turn_id: event.turn_id, skills, cli, subcommands: TASK_SUBCOMMANDS, access_file: access_path,
+    instructions: `读取指定技能；网站命令只用 ${cli} 的 subcommands 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口；使用 ${cli} execution enter 房间 执行编号 --access-file 凭据路径 进入。凭据文件由 CLI 内部读取，不要打印或读取其 token。进入成功后才处理本次安排；每次业务写入都带 --access-file。答案草稿只保存到 draft_directory，不修改任务、凭据、日志或调度数据库；${project_rule}只处理本次工作，不建定时任务。主持创建下一安排或收束即结束，专家提交原文后结束。无效或已进入的任务不要重复执行。` });
+  const prompt = `用户已启动此房间的全自动讨论。请以 ${event.participant} 的${event.role === 'host' ? '主持' : '专家'}职责处理本次工作。先读取任务文件：${task_path}，立即用 ${cli} execution enter 进入，再读取指定版本的技能和网站现状。本次只放行任务内 subcommands 列出的 ${cli} 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口。任务内 cwd 是讨论项目目录；${project_rule}项目读写仍受软件实际权限和议题授权约束。不读取凭据内容。实际会话 ID 由接入程序写入凭据文件，尚未就绪只短暂重查，不编造。`;
   return { id, participant: event.participant, directory: config.directory, draft_directory, skills_directory, access_path, prompt };
 }
 

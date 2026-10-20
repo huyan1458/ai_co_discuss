@@ -668,8 +668,12 @@ test('tasks direct website work to the approved codiscuss subcommands', async t 
   const f = await fixture(t);
   const task = task_files(f.config, f.event, 'token-for-test', {});
   const saved = JSON.parse(readFileSync(join(f.config.directory, 'event-1.task.json'), 'utf8'));
-  assert.equal(saved.cli, 'codiscuss'); assert.deepEqual(saved.subcommands, TASK_SUBCOMMANDS);
-  assert.match(task.prompt, /codiscuss execution enter/); assert.match(task.prompt, /不用 python discuss\.py/);
+  // Codex runs commands through PowerShell on Windows, where the npm .ps1 shim is blocked by execution policy.
+  const cli = process.platform === 'win32' ? 'codiscuss.cmd' : 'codiscuss';
+  assert.equal(saved.cli, cli); assert.deepEqual(saved.subcommands, TASK_SUBCOMMANDS);
+  assert(task.prompt.includes(`${cli} execution enter`)); assert.match(task.prompt, /不用 python discuss\.py/);
+  const claude = task_files({ ...f.config, participants: { Codex: { adapter: 'claude' } } }, f.event, 'token-for-test', {});
+  assert.match(claude.prompt, /用 codiscuss execution enter/);
   assert.equal(task.skills_directory, join(f.config.project, '.agents', 'skills'));
 });
 

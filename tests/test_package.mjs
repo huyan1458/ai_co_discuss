@@ -105,7 +105,7 @@ async function verify_installed_launches(package_path, execute, env, site) {
   writeFileSync(draft, JSON.stringify(input));
   const conversation = installed_command(execute, cli, ['launch', 'start', '--file', draft]);
   const task = JSON.parse(readFileSync(conversation.current_task.task_file, 'utf8'));
-  assert.equal(task.cli, 'codiscuss');
+  assert.equal(task.cli, process.platform === 'win32' ? 'codiscuss.cmd' : 'codiscuss');
   assert(task.skills.every(path => path.startsWith(package_path) && existsSync(path)));
   assert(conversation.config_path.startsWith(home));
   const entered = installed_command(execute, cli, ['--site', site, 'execution', 'enter', task.room, String(task.event_id), '--access-file', task.access_file]);
@@ -130,7 +130,7 @@ async function verify_installed_launches(package_path, execute, env, site) {
   const tasks = readdirSync(config.directory).filter(name => name.endsWith('.task.json'));
   assert.equal(tasks.length, 1);
   const delivered = JSON.parse(readFileSync(join(config.directory, tasks[0]), 'utf8'));
-  assert.equal(delivered.cli, 'codiscuss');
+  assert.equal(delivered.cli, process.platform === 'win32' ? 'codiscuss.cmd' : 'codiscuss');
   assert.equal(JSON.parse(readFileSync(delivered.access_file, 'utf8')).session_id, `package-test-${web.room.id}`);
   const receipt = installed_command(execute, cli, ['--site', site, 'execution', 'view', delivered.room, String(delivered.event_id), '--access-file', web.config_path]);
   assert.equal(receipt.data.result, 'package-integration-complete');
