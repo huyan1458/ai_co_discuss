@@ -46780,10 +46780,9 @@ var YG = /*#__PURE__*/ nH({
 			return U(), W("div", lJ, [
 				q(u, {
 					label: "新建对话",
-					icon: "i-lucide-square-pen",
+					icon: "i-lucide-plus",
 					color: "neutral",
-					variant: "ghost",
-					class: "channel-new-conversation",
+					class: "channel-primary-button channel-new-conversation",
 					disabled: I(r).directory_pending.includes("create-room"),
 					onClick: t[0] ||= (e) => n("create", null)
 				}, null, 8, ["disabled"]),

@@ -71,10 +71,11 @@ html[data-theme^="channel"] .channel-panel-toggle { flex-shrink: 0; }
 .channel-directory-heading [class*="icon"] { width: 12px; height: 12px; }
 .channel-directory-actions { display: flex; align-items: center; gap: 0; opacity: 0; pointer-events: none; }
 .channel-directory-heading:is(:hover, :focus-within) .channel-directory-actions, .channel-directory-heading:has([data-state="open"]) .channel-directory-actions { opacity: 1; pointer-events: auto; }
-.channel-new-conversation, .channel-archive-toggle { display: flex; justify-content: flex-start; gap: 8px; width: 100%; min-height: 36px; padding: 7px 10px; border-radius: 5px; color: var(--ui-text-toned); font-size: var(--channel-nav-text); font-weight: 400; }
-.channel-new-conversation { margin: 2px 0 10px; color: var(--ui-text-highlighted); font-weight: 500; }
-:is(.channel-new-conversation, .channel-archive-toggle):hover { background: color-mix(in srgb, var(--ui-text) 8%, transparent); color: var(--ui-text-highlighted); }
-:is(.channel-new-conversation, .channel-archive-toggle) > [class*="icon"] { width: 19px; height: 19px; color: var(--ui-text-muted); flex-shrink: 0; }
+.channel-archive-toggle { display: flex; justify-content: flex-start; gap: 8px; width: 100%; min-height: 36px; padding: 7px 10px; border-radius: 5px; color: var(--ui-text-toned); font-size: var(--channel-nav-text); font-weight: 400; }
+html[data-theme^="channel"] .channel-new-conversation { display: flex; justify-content: center; width: 100%; min-height: 34px; margin: 2px 0 12px; border-radius: 8px; }
+.channel-new-conversation > [class*="icon"] { width: 16px; height: 16px; }
+.channel-archive-toggle:hover { background: color-mix(in srgb, var(--ui-text) 8%, transparent); color: var(--ui-text-highlighted); }
+.channel-archive-toggle > [class*="icon"] { width: 19px; height: 19px; color: var(--ui-text-muted); flex-shrink: 0; }
 .channel-archive-toggle { margin: 6px 0 0 !important; }
 .channel-archive-label { flex: 1; text-align: left; }
 .channel-archive-count { color: var(--ui-text-dimmed); font-size: 11px; font-variant-numeric: tabular-nums; }

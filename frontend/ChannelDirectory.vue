@@ -74,7 +74,7 @@ function actions(room, index, folder_id, folder_room_count) {
 
 <template>
   <div class="channel-directory-manager">
-    <UButton label="新建对话" icon="i-lucide-square-pen" color="neutral" variant="ghost" class="channel-new-conversation" :disabled="view.directory_pending.includes('create-room')" @click="emit('create', null)" />
+    <UButton label="新建对话" icon="i-lucide-plus" color="neutral" class="channel-primary-button channel-new-conversation" :disabled="view.directory_pending.includes('create-room')" @click="emit('create', null)" />
     <div class="channel-directory-heading">
       <button type="button" class="channel-section-toggle" :aria-expanded="rooms_open" @click="rooms_open = !rooms_open"><UIcon :name="rooms_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />讨论频道</button>
       <div class="channel-directory-actions">
