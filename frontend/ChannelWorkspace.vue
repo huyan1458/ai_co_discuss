@@ -78,8 +78,16 @@ const ALL_TABS = [
 /** Free rooms have no host, consensus state or run controls; only the conversation applies. */
 const free_room = computed(() => room.value?.mode === "free");
 const tabs = computed(() => free_room.value ? ALL_TABS.slice(0, 1) : ALL_TABS);
+const invite_name = ref("");
+const invite_access = ref("runner");
+/** AIs not yet in the room; a member that left is brought back, not invited again. */
+const invite_choices = computed(() => Object.keys(bridge.launch_clients).filter((name) =>
+  !(room.value?.free?.members || []).some((member) => member.name === name)).map((name) => ({ label: bridge.display_name(name), value: name })));
+/** A member is busy while it has a live execution or queued requests. */
+const free_member_busy = (member) => member.pending > 0 || ["dispatched", "started"].includes(member.execution?.status);
 /** One line per member: live execution, queued requests, or the last outcome. */
 function free_member_status(member) {
+  if (member.status === "away") return "已离开：不会被唤醒，可请回";
   const execution = member.execution;
   if (execution && ["dispatched", "started"].includes(execution.status)) return execution.stale ? "执行失联，停止未确认" : "正在处理";
   if (member.pending) return `待投递 ${member.pending} 条`;
@@ -309,8 +317,33 @@ function resize_nav_by_key(event) {
     <div v-if="show_rail" class="channel-rail-resizer" role="separator" tabindex="0" aria-label="调整右侧栏宽度" aria-orientation="vertical" aria-controls="channel-member-rail" :aria-valuemin="RAIL_MIN" :aria-valuemax="RAIL_MAX" :aria-valuenow="rail_width" :aria-valuetext="`${rail_width} 像素`" title="拖动调整右侧栏宽度，也可使用左右方向键" @pointerdown="start_rail_resize" @pointermove="resize_rail" @pointerup="finish_rail_resize" @pointercancel="finish_rail_resize" @lostpointercapture="finish_rail_resize" @keydown="resize_rail_by_key"></div>
     <aside v-if="show_rail" id="channel-member-rail" class="channel-member-rail" aria-label="当前焦点与讨论进度">
       <section class="channel-rail-board"><div v-if="room && free_room" class="progress-board is-docked"><header class="pb-header"><strong>自由协作</strong><span class="pb-mode">无主持 · 无轮次</span></header>
-        <ul class="channel-free-members"><li v-for="member in room.free?.members || []" :key="member.id"><strong>{{ bridge.display_name(member.name) }}</strong><span>{{ free_member_status(member) }}</span></li></ul>
-        <p class="channel-rail-empty">每条消息交给成员处理；处理中可在输入框旁停止。单次执行最多 {{ room.free?.execution_minutes }} 分钟。</p></div>
+        <ul class="channel-free-members">
+          <li v-for="member in room.free?.members || []" :key="member.id">
+            <div class="channel-free-member-heading"><strong>{{ bridge.display_name(member.name) }}</strong><small>{{ member.access === 'manual' ? '手动接入' : '本机自动' }}{{ member.session_mode === 'borrowed' ? ' · 借用会话' : '' }}</small></div>
+            <span>{{ free_member_status(member) }}</span>
+            <small v-if="member.session_mode === 'borrowed'" class="channel-free-warning">该成员绑定了你正在使用的会话：它工作时请不要在原窗口继续操作，否则两个进程会同时写入同一份会话记录。</small>
+            <div class="channel-free-actions">
+              <UButton v-if="free_member_busy(member)" label="停止" size="xs" color="neutral" variant="outline" @click="act('change_member', { member_id: member.id, action: 'interrupt' })" />
+              <UButton v-if="member.status === 'active'" label="离开" size="xs" color="neutral" variant="ghost" @click="act('change_member', { member_id: member.id, action: 'away' })" />
+              <UButton v-else label="请回" size="xs" color="neutral" variant="outline" :disabled="!view.launch.available" :title="view.launch.available ? '换发新凭证并续接原会话' : '请回需要本机服务'" @click="act('change_member', { member_id: member.id, name: member.name, action: 'rejoin' })" />
+              <UButton label="移除" size="xs" color="error" variant="ghost" @click="act('change_member', { member_id: member.id, action: 'remove' })" />
+            </div>
+          </li>
+        </ul>
+        <div v-if="room.free?.conflicts?.length" class="channel-free-conflicts" role="status">
+          <strong>可能的改动冲突</strong>
+          <p v-for="item in room.free.conflicts" :key="item.executions.join('-')">{{ item.members.map((name) => bridge.display_name(name)).join(' 与 ') }} 在重叠时段都改动了 {{ item.files.join('、') }}，请核对。</p>
+          <small>依据执行前后的工作区对比，无法确定修改者；未出现提示不代表没有覆盖。</small>
+        </div>
+        <form class="channel-free-invite" @submit.prevent="act('invite_member', { name: invite_name, access: invite_access })">
+          <strong>邀请 AI</strong>
+          <div><USelect v-model="invite_name" :items="invite_choices" placeholder="选择 AI" size="xs" class="w-28" /><USelect v-model="invite_access" :items="[{ label: '本机自动', value: 'runner' }, { label: '手动接入', value: 'manual' }]" size="xs" class="w-24" />
+          <UButton type="submit" label="邀请" size="xs" :disabled="!invite_name || !view.launch.available" /></div>
+          <small>{{ view.launch.available ? '自动成员沿用本机软件配置与本房间工作目录；手动成员会得到一份私有凭据文件。' : '邀请需要本机服务：请在运行 AI 的电脑打开本机网站。' }}</small>
+        </form>
+        <p v-if="view.free_error" role="alert" class="channel-free-error">{{ view.free_error }}</p>
+        <p v-else-if="view.free_notice" role="status" class="channel-rail-empty">{{ view.free_notice }}</p>
+        <p class="channel-rail-empty">点名的成员各自处理；处理中可随时停止。单次执行最多 {{ room.free?.execution_minutes }} 分钟。</p></div>
         <ProgressBoard v-else-if="room" docked /><div v-else class="progress-board is-docked"><header class="pb-header"><strong>讨论进度</strong></header><p class="channel-rail-empty">暂无频道，新建讨论后在这里查看进度与参与者。</p></div></section>
     </aside>
 

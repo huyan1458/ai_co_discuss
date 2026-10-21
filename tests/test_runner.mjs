@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
 import { tmpdir } from 'node:os';
@@ -12,7 +12,7 @@ import vm from 'node:vm';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DiscussionRunner, DiscussionStore, load_config, service_drafts, task_files, validate_config } from '../runner/discussion_runner.mjs';
-import { FreeRoomRunner } from '../runner/free_runner.mjs';
+import { cwd_key, FreeRoomRunner } from '../runner/free_runner.mjs';
 import { assert_shared_home, DiscussionService, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
 import { launch_discussion, room_models } from '../runner/discussion_launch.mjs';
 import { agy_rule, antigravity_project, claude_exit_error, claude_rule_path, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
@@ -1346,7 +1346,8 @@ test('a Claude CLI launched from a hosting Claude session drops host variables a
 /** A minimal free-room website: one member, durable executions keyed by client id. */
 async function free_fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'free-room-test-'));
-  const state = { pending: [{ id: 1, message_id: 11 }, { id: 2, message_id: 12 }], executions: [], calls: [], archived: false };
+  // `pending` belongs to Claude (id 7); `others` adds members with their own queues.
+  const state = { pending: [{ id: 1, message_id: 11 }, { id: 2, message_id: 12 }], others: [], executions: [], calls: [], archived: false, reports: {} };
   const server = createServer(async (request, response) => {
     let text = ''; for await (const chunk of request) text += chunk;
     const body = text ? JSON.parse(text) : null;
@@ -1355,20 +1356,24 @@ async function free_fixture(t) {
     state.calls.push(`${request.method} ${url}${body?.action ? ` ${body.action}` : ''}`);
     if (url === '/inbox') {
       result = { archived: state.archived, execution_minutes: 20,
-        members: [{ id: 7, name: 'Claude', pending: state.pending }],
+        members: [{ id: 7, name: 'Claude', pending: state.pending }, ...state.others],
         executions: state.executions.filter(item => ['dispatched', 'started'].includes(item.status)) };
     } else if (url === '/executions') {
       let execution = state.executions.find(item => item.client_id === body.client_id);
       if (!execution) {
-        execution = { id: state.executions.length + 1, client_id: body.client_id, status: 'dispatched', member: 'Claude',
-          created_at: Math.floor(Date.now() / 1000), read_until: 10, requests: state.pending.map(item => ({ ...item, status: 'delivering' })) };
-        state.executions.push(execution); state.pending = [];
+        const other = state.others.find(item => item.id === body.member_id);
+        const queue = other ? other.pending : state.pending;
+        execution = { id: state.executions.length + 1, client_id: body.client_id, status: 'dispatched', member: other?.name || 'Claude',
+          cwd: body.cwd, created_at: Math.floor(Date.now() / 1000), read_until: 10, requests: queue.map(item => ({ ...item, status: 'delivering' })) };
+        state.executions.push(execution);
+        if (other) other.pending = []; else state.pending = [];
       }
       result = execution;
     } else if (url.startsWith('/executions/')) {
       const execution = state.executions.find(item => item.id === Number(url.split('/')[2]));
       if (body?.action === 'fail') execution.status = 'failed';
       if (body?.action === 'release') { execution.status = 'cancelled'; state.pending = execution.requests; }
+      if (body?.action === 'report') state.reports[execution.id] = body.changes;
       result = execution;
     } else result = { title: '自由单聊', mode: 'free' };
     response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(result));
@@ -1463,3 +1468,73 @@ test('a stopped free process reporting late cannot fail the next execution', asy
   assert.equal(state.executions[1].status, 'dispatched');
   assert.ok(!state.calls.includes('POST /executions/2 fail'));
 });
+
+test('two free members are delivered in parallel, each with its own credential', async t => {
+  const { state, store, config } = await free_fixture(t);
+  config.participants.Codex = { adapter: 'codex_cli' };
+  config.members.Codex = { token: 'codex-credential'.repeat(3) };
+  state.others.push({ id: 8, name: 'Codex', pending: [{ id: 3, message_id: 11 }] });
+  const tasks = [];
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => { tasks.push(task); return { status: 'accepted' }; });
+  await runner.tick();
+  assert.deepEqual(tasks.map(task => task.participant), ['Claude', 'Codex']);
+  assert.deepEqual(state.executions.map(item => [item.member, item.status]), [['Claude', 'dispatched'], ['Codex', 'dispatched']]);
+  assert.equal(JSON.parse(readFileSync(tasks[1].access_path, 'utf8')).token, config.members.Codex.token);
+});
+
+test('a free member that left is stopped while the other keeps working', async t => {
+  const { state, store, config } = await free_fixture(t);
+  config.participants.Codex = { adapter: 'codex_cli' };
+  config.members.Codex = { token: 'codex-credential'.repeat(3) };
+  state.others.push({ id: 8, name: 'Codex', pending: [{ id: 3, message_id: 11 }] });
+  const children = {};
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => {
+    children[task.participant] = Object.assign(new EventEmitter(), { killed: false, kill() { this.killed = true; this.emit('close'); } });
+    task.on_process(children[task.participant]);
+    return { status: 'accepted' };
+  });
+  await runner.tick();
+  state.others = [];
+  state.executions[1].status = 'cancelled';
+  await runner.tick();
+  assert.equal(children.Codex.killed, true);
+  assert.equal(children.Claude.killed, false);
+  assert.equal(runner.row('Codex').status, 'idle');
+});
+
+test('a member whose bound context changes is blocked while new members are adopted', async t => {
+  const { state, store, config } = await free_fixture(t);
+  config.participants.Claude.cwd = config.directory;
+  const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }));
+  runner.adopt({ ...config, participants: { Claude: { adapter: 'claude', cwd: tmpdir() }, Codex: { adapter: 'codex_cli' } },
+    members: { ...config.members, Codex: { token: 'codex-credential'.repeat(3) } } });
+  assert.ok(runner.config.participants.Codex);
+  await runner.tick();
+  assert.equal(state.executions[0].status, 'failed');
+  assert.match(runner.row('Claude').error, /发生变化/);
+});
+
+test('changed files in a Git working tree are reported after the member exits', async t => {
+  const { state, store, config } = await free_fixture(t);
+  const project = mkdtempSync(join(tmpdir(), 'free-git-'));
+  t.after(() => rmSync(project, { recursive: true, force: true }));
+  const git = (...args) => spawnSync('git', ['-C', project, ...args], { encoding: 'utf8' });
+  if (git('init').status !== 0) return t.skip('git unavailable');
+  writeFileSync(join(project, 'index.html'), 'old');
+  writeFileSync(join(project, 'keep.txt'), 'same');
+  git('add', '.'); git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-m', 'init');
+  config.participants.Claude.cwd = project;
+  const child = Object.assign(new EventEmitter(), { kill() { this.emit('close'); } });
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => { task.on_process(child); return { status: 'accepted' }; });
+  await runner.tick();
+  assert.equal(state.executions[0].cwd, cwd_key(project));
+  writeFileSync(join(project, 'index.html'), 'new');
+  writeFileSync(join(project, 'added.css'), 'x');
+  state.executions[0].status = 'completed';
+  await runner.tick();
+  assert.equal(state.reports[1], undefined, 'reporting waits for the process to exit');
+  child.emit('close');
+  await runner.tick();
+  assert.deepEqual(state.reports[1], ['added.css', 'index.html']);
+});
+

@@ -36,7 +36,7 @@ const launch_ready = (name) => {
   return Boolean(profile.adapter && (profile.adapter === "antigravity" ? profile.ipc_directory : profile.executable));
 };
 const launching = computed(() => free.value ? view.value.launch.available : automatic.value && view.value.launch.available && view.value.launch.create);
-const free_ready = computed(() => selected_names.value.length === 1 && launch_ready(selected_names.value[0]) && view.value.launch.available);
+const free_ready = computed(() => selected_names.value.length > 0 && selected_names.value.every(launch_ready) && view.value.launch.available);
 const launch_open = ref(false);
 watch(() => [launching.value, launch_names.value.every(launch_ready), view.value.launch.error], ([on, ready, error]) => {
   if (on && (!ready || error)) launch_open.value = true;
@@ -76,8 +76,6 @@ function expert_status(name) {
 /** Admit one library role without toggling an existing participant. */
 function add_expert(name) {
   if (selected.value[name] || (local.value && !bridge.launch_clients[name])) return;
-  // A free room has exactly one member in this version: choosing another replaces it.
-  if (free.value) for (const other of selected_names.value) bridge.write_expert(EXPERT_CONTAINER, other, "");
   set_expert_mode(name, local.value || bridge.launch_clients[name] ? "cli" : "online");
   library_open.value = false;
 }
@@ -157,8 +155,8 @@ const summary = computed(() => {
           <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :automatic="local"
             :status="expert_status(name)" @remove="remove_expert(name)" @mode="set_expert_mode(name, $event)" />
         </div>
-        <p v-else class="create-experts-empty">{{ free ? '点击“邀请 AI”，选择一位本地 AI；之后在网页发消息即交给它处理' : '点击“邀请 AI”，选择本场讨论的参与者' }}</p>
-        <p v-if="free" class="fine-print create-hint">无需主持人：你的每条消息都会交给这位 AI，它在自己的会话里工作并回到频道回复；随时可以停止。</p>
+        <p v-else class="create-experts-empty">{{ free ? '点击“邀请 AI”，选择要遥控的本地 AI；之后也可随时邀请或请离' : '点击“邀请 AI”，选择本场讨论的参与者' }}</p>
+        <p v-if="free" class="fine-print create-hint">无需主持人：只有一位 AI 时每条消息都交给它；多位时由你点名或在正文中 @，被点名的 AI 各自在自己的会话里工作并回到频道回复，随时可以停止。</p>
         <div v-else class="create-host-setting">
           <div class="create-host">
             <span class="create-label">AI 主持人</span>

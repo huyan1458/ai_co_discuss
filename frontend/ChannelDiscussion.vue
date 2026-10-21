@@ -135,21 +135,32 @@ watch([reply_glow, reduced_motion], ([element, reduce_motion], _previous, cleanu
 const speaking_turn = computed(() => ["pending", "notified"].includes(room.value?.current_turn?.status)
   && !["paused", "concluded"].includes(room.value.phase) ? room.value.current_turn : null);
 const free = computed(() => room.value?.mode === "free");
-/** A free room's member is working on a live execution, or has requests nobody has picked up yet. */
-const free_activity = computed(() => {
-  if (!free.value || room.value.archived) return null;
-  for (const member of room.value.free?.members || []) {
+/** Members of a free room that are working on a live execution, or have requests nobody has picked up yet. */
+const free_busy = computed(() => {
+  if (!free.value || room.value.archived) return [];
+  return (room.value.free?.members || []).flatMap((member) => {
     const execution = member.execution;
     if (execution && ["dispatched", "started"].includes(execution.status)) {
-      return { id: `free-${execution.id}`, author: member.name, member_id: member.id, is_host: false, round: "",
+      return [{ id: `free-${execution.id}`, author: member.name, member_id: member.id,
         text: execution.stale ? "执行失联：网站已不再接受本次回答，软件停止未确认" : "正在处理…",
-        seconds: Math.max(0, Math.floor(Date.now() / 1000) - execution.created_at) };
+        seconds: Math.max(0, Math.floor(Date.now() / 1000) - execution.created_at) }];
     }
-    if (member.pending) return { id: `queue-${member.id}`, author: member.name, member_id: member.id, is_host: false, round: "",
-      text: "待投递：等待本机服务接手", seconds: null };
-  }
-  return null;
+    return member.pending ? [{ id: `queue-${member.id}`, author: member.name, member_id: member.id, text: "待投递：等待本机服务接手", seconds: null }] : [];
+  });
 });
+/** One working card: the first busy member leads, the others are listed in the same line. */
+const free_activity = computed(() => {
+  const [first, ...others] = free_busy.value;
+  if (!first) return null;
+  const text = others.length ? [first, ...others].map((item) => `${bridge.display_name(item.author)}：${item.text}`).join(" · ") : first.text;
+  return { ...first, is_host: false, round: "", text };
+});
+/** Active members a free-room message can name; chips appear only when there is a choice. */
+const free_members = computed(() => free.value ? (room.value.free?.members || []).filter((member) => member.status === "active") : []);
+/** A chip is on when clicked or when the draft @mentions that member outside code. */
+const MENTION_PATTERN = (name) => new RegExp(`(^|[\\s(（，,。；;：:])@${name}(?![\\w-])`, "u");
+const draft_prose = computed(() => text.value.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "").replace(/^>.*$/gm, ""));
+const recipient_on = (name) => view.value.free_to.includes(name) || MENTION_PATTERN(name).test(draft_prose.value);
 const FREE_REQUEST_LABELS = { pending: ["待投递", "neutral"], delivering: ["处理中", "info"], completed: ["已回复", "success"],
   cancelled: ["已停止", "neutral"], failed: ["失败", "error"] };
 /** Each user message in a free room shows what happened to its request for every named member. */
@@ -712,6 +723,11 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             </div>
           </div>
           <p v-if="view.composer_error || view.upload_status" class="attachment-status" :role="view.composer_error ? 'alert' : 'status'">{{ view.composer_error || view.upload_status }}</p>
+          <div v-if="free_members.length > 1" class="channel-free-recipients" role="group" aria-label="发给哪些成员">
+            <span>发给</span>
+            <button v-for="member in free_members" :key="member.id" type="button" :aria-pressed="recipient_on(member.name)" :class="{ 'is-on': recipient_on(member.name) }" @click="act('toggle_recipient', member.name)">{{ bridge.display_name(member.name) }}</button>
+            <small>{{ free_members.some((member) => recipient_on(member.name)) ? '可同时点名多位，也可在正文中 @ 成员' : '未点名任何成员：只作留言，不会唤醒 AI' }}</small>
+          </div>
           <div v-if="speaking_turn" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>新消息会在 {{ bridge.display_name(speaking_turn.expert) }} 回复后交给主持人；点「停止」取消本次安排</span></div>
           <div v-if="view.reply_to || view.turn_reply_to" class="channel-reply-draft"><UIcon name="i-lucide-corner-up-left" /><span>{{ view.turn_reply_to ? `回答安排 #${view.turn_reply_to} · ${bridge.display_name(room.host)} 代发` : `回复 #${view.reply_to}` }}</span><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" :aria-label="view.turn_reply_to ? '取消关联安排' : '取消回复'" @click="act(view.turn_reply_to ? 'cancel_answer' : 'cancel_reply')" /></div>
           <div v-if="needs_summary" class="channel-answer-editor"><UTextarea v-model="answer_summary" :rows="2" aria-label="回答摘要" class="w-full" placeholder="先说结论，保留关键理由、条件和不确定性。完整内容写在正文中。" /><USelect v-model="summary_source" :items="summary_sources" aria-label="摘要提供者" size="xs" /></div>
@@ -723,17 +739,21 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             <USelect v-model="kind" :items="kinds" :icon="kinds.find((item) => item.value === kind)?.icon" :content="{ side: 'top', align: 'start', sideOffset: 10 }" variant="none" size="sm" aria-label="发言职责" class="channel-kind-select" :ui="{ content: 'channel-select-menu' }" />
           </div>
           <span class="channel-shortcut"><UKbd value="ctrl" /><UKbd value="enter" /></span>
-          <UButton v-if="free_activity" icon="i-lucide-square" label="停止" color="neutral" variant="outline" size="sm" class="channel-stop" :title="`停止 ${bridge.display_name(free_activity.author)} 当前的工作，并取消尚未投递的请求`" :loading="pending === 'interrupt_member'" @click="act('interrupt_member', free_activity.member_id)" />
+          <UButton v-if="free_activity" icon="i-lucide-square" label="停止" color="neutral" variant="outline" size="sm" class="channel-stop" :title="`停止 ${free_busy.map((item) => bridge.display_name(item.author)).join('、')} 当前的工作，并取消尚未投递的请求`" :loading="pending === 'interrupt_free'" @click="act('interrupt_free')" />
           <UButton v-if="speaking_turn" icon="i-lucide-square" label="停止" color="neutral" variant="outline" size="sm" class="channel-stop" :title="`打断 ${bridge.display_name(speaking_turn.expert)} 的发言（本次作废），交给主持人`" :loading="pending === 'cancel_turn'" @click="act('cancel_turn')" />
           <UButton type="button" trailing-icon="i-lucide-arrow-up" color="neutral" label="发送" size="sm" class="channel-primary-button channel-send" :disabled="(!text.trim() && !view.attachment_drafts.length) || (needs_summary && !answer_summary.trim())" :loading="pending === 'send' || view.sending_message" @click="send" />
         </template>
       </UChatPrompt>
-      <div class="channel-composer-note"><span v-if="free">消息会交给 {{ (room.free?.members || []).map((member) => bridge.display_name(member.name)).join('、') || 'AI' }} 处理<span class="channel-note-divider">·</span>处理中可随时停止</span><span v-else>{{ author_note }}<span class="channel-note-divider">·</span>在线 AI 的观点需代发</span><span class="channel-draft-length">{{ text_length }} / {{ bridge.max_message_length }}<span class="channel-note-divider">·</span>Enter 换行</span></div>
+      <div class="channel-composer-note"><span v-if="free">{{ free_members.length > 1 ? '点名的成员会各自处理' : `消息会交给 ${free_members.map((member) => bridge.display_name(member.name)).join('、') || 'AI'} 处理` }}<span class="channel-note-divider">·</span>处理中可随时停止</span><span v-else>{{ author_note }}<span class="channel-note-divider">·</span>在线 AI 的观点需代发</span><span class="channel-draft-length">{{ text_length }} / {{ bridge.max_message_length }}<span class="channel-note-divider">·</span>Enter 换行</span></div>
     </div></div>
   </section>
 </template>
 
 <style scoped>
+.channel-free-recipients { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px 2px; font-size: 12px; color: var(--ui-text-muted); }
+.channel-free-recipients button { min-height: 26px; padding: 2px 10px; border: 1px solid var(--ui-border); border-radius: 999px; color: var(--ui-text-toned); }
+.channel-free-recipients button.is-on { border-color: var(--channel-accent); background: color-mix(in srgb, var(--channel-accent) 14%, transparent); color: var(--ui-text-highlighted); }
+.channel-free-recipients small { flex-basis: 100%; color: var(--ui-text-dimmed); font-size: 11px; }
 .channel-message-elapsed { align-self: flex-start; margin-left: auto; line-height: 28px; white-space: nowrap; }
 .channel-host-work { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; column-gap: 10px; row-gap: 2px; align-items: start; margin: 0 var(--message-inset-end, 16px) 20px 16px; padding: 12px 18px; border: 1px solid var(--ui-border-muted); border-radius: 10px; background: color-mix(in srgb, var(--ui-bg-elevated) 35%, transparent); }
 .channel-host-work > .channel-avatar { grid-row: 1 / 3; align-self: center; width: 28px; height: 28px; font-size: 9px; }

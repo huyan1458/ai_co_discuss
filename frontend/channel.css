@@ -278,7 +278,16 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 .pb-note { margin: 8px 0 0; color: var(--ui-text-dimmed); font-size: 11px; }
 .channel-rail-empty { margin: 20px 16px 0; color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.7; }
 .channel-free-members { display: grid; gap: 8px; margin: 16px 16px 0; }
-.channel-free-members li { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.channel-free-members li { display: flex; flex-direction: column; gap: 4px; padding-bottom: 8px; border-bottom: 1px solid var(--ui-border-muted); font-size: 12px; }
+.channel-free-member-heading { display: flex; align-items: baseline; gap: 8px; }
+.channel-free-member-heading small, .channel-free-invite small, .channel-free-conflicts small { color: var(--ui-text-dimmed); font-size: 11px; }
+.channel-free-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.channel-free-warning { color: #e0a33a; font-size: 11px; line-height: 1.6; }
+.channel-free-conflicts { display: grid; gap: 4px; margin: 14px 16px 0; padding: 10px; border: 1px solid color-mix(in srgb, #e0a33a 45%, transparent); border-radius: 8px; font-size: 12px; }
+.channel-free-conflicts strong { color: #e0a33a; }
+.channel-free-invite { display: grid; gap: 6px; margin: 14px 16px 0; font-size: 12px; }
+.channel-free-invite > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.channel-free-error { margin: 12px 16px 0; color: #f0716b; font-size: 12px; }
 .channel-free-members strong { color: var(--ui-text-highlighted); font-weight: 600; }
 .channel-free-members span { color: var(--ui-text-muted); overflow-wrap: anywhere; }
 .progress-drawer { max-width: min(420px, 100vw); }

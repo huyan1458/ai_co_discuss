@@ -508,7 +508,9 @@ CREATE TABLE IF NOT EXISTS room_members (
     status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','away','removed')),
     token_hash TEXT NOT NULL,
     read_until INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    access TEXT NOT NULL DEFAULT 'runner',
+    session_mode TEXT NOT NULL DEFAULT 'new'
 );
 CREATE UNIQUE INDEX IF NOT EXISTS member_name ON room_members(room_id,name) WHERE status<>'removed';
 CREATE TABLE IF NOT EXISTS member_executions (
@@ -523,6 +525,8 @@ CREATE TABLE IF NOT EXISTS member_executions (
     created_at INTEGER NOT NULL,
     finished_at INTEGER NOT NULL DEFAULT 0,
     result TEXT NOT NULL DEFAULT '',
+    changes TEXT NOT NULL DEFAULT '',
+    cwd TEXT NOT NULL DEFAULT '',
     UNIQUE(room_id,client_id)
 );
 -- One live execution per member: different members may run in parallel, one session never twice.

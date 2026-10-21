@@ -21,11 +21,13 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch start --file FILE [--dry-run]
       codiscuss launch room-config --file FILE
       codiscuss launch room-models --file FILE
+      codiscuss launch room-member --file FILE
 
 settings 读取本机软件默认配置；指定文件时保存，不启动 AI。
 start 使用启动 JSON 创建或接入房间并启动；--dry-run 只校验和预览。
 room-config 修正已暂停房间的软件路径或切换 Codex App / CLI，不启动讨论；须提供 site、room_id、token。
 room-models 只读指定 site、room_id 的本机登记模型与思考强度，不启动讨论。
+room-member 为运行中的自由房间邀请或请回一位成员；须提供 site、room_id、token、action（add/rejoin）、name。
 JSON 指定 site、entry（conversation/web）、room（建房内容，含 submission_id）
 或 room_id（已有房间）、participants（本次软件覆盖配置）。
 conversation 还须 current_session_id，当前会话接手首个主持任务。
@@ -117,7 +119,9 @@ function launch_input(input) {
     // P1: a free room is launched once, at creation, from the web page.
     if (value.entry !== 'web' || value.room_id) throw new Error('自由协作房间目前只能在网页创建时启动');
     const members = value.room.members;
-    if (!Array.isArray(members) || members.length !== 1 || !CLIENTS[members[0]]) throw new Error('自由协作房间须选择 1 位支持自动接入的 AI 成员');
+    if (!Array.isArray(members) || !members.length || new Set(members).size !== members.length || members.some(name => !CLIENTS[name])) {
+      throw new Error('自由协作房间须选择至少 1 位支持自动接入的 AI 成员，且不能重复');
+    }
   }
   if (value.access_file) {
     const access = JSON.parse(readFileSync(resolve(value.access_file), 'utf8'));
@@ -168,6 +172,68 @@ function participant_profile(name, defaults, input, current_host) {
   // agy runs only in sessions this tool creates, so its native discussion project always applies.
   if (profile.adapter === 'antigravity_cli' && profile.session_id) throw new Error(`${name}：agy 不能绑定已有会话或从当前 agy 对话主持全自动讨论；请从网页或其他软件发起，agy 会由讨论服务新建会话`);
   return profile;
+}
+
+/** Find the one registered configuration of a free room after proving the owner's credential. */
+async function free_room_context(home, raw) {
+  const input = launch_input({ ...raw, entry: 'web' });
+  if (!input.room_id || typeof input.token !== 'string' || !input.token.trim()) throw new Error('管理成员须提供房间编号和房间控制凭据');
+  await site_request(input.site, `/api/rooms/${input.room_id}/inbox`, input.token);
+  const paths = read_registry(home).filter(path => {
+    const identity = registered_identity(path);
+    return identity?.site === input.site && identity.room === input.room_id;
+  });
+  if (paths.length !== 1) throw new Error('未找到本房间唯一的已登记配置，请核对本机接入服务');
+  const config = configuration_snapshot(paths[0]).config;
+  if (config.mode !== 'free') throw new Error('只有自由协作房间可以在运行中增减成员');
+  return { input, path: paths[0], config };
+}
+
+/** Write a manual member's private credential next to the room configuration, never into a receipt. */
+function manual_access(path, input, name, token) {
+  const access_path = join(dirname(path), `manual-${name}.access.json`);
+  atomic_json(access_path, { site: input.site, room: input.room_id, token });
+  return access_path;
+}
+
+/**
+ * Invite (add) or bring back (rejoin) one member of a running free room.
+ * The local configuration is written before the website call, so a retry reuses the same credential.
+ */
+export async function room_member(home, raw) {
+  const { input, path } = await free_room_context(home, raw);
+  const { action, name } = input;
+  const access = input.access || 'runner';
+  if (!['add', 'rejoin'].includes(action) || !CLIENTS[name] || !['runner', 'manual'].includes(access)) {
+    throw new Error('action 须为 add/rejoin，成员须为支持的 AI，接入方式须为 runner/manual');
+  }
+  const release = acquire_lock(join(dirname(path), 'configuration-edit'));
+  try {
+    const config = configuration_snapshot(path).config;
+    const room = await site_request(input.site, `/api/rooms/${input.room_id}`, input.token);
+    const current = room.free.members.find(member => member.name === name);
+    if (action === 'rejoin' && current?.status !== 'away') throw new Error(`${name} 不是离开状态，无需请回`);
+    if (action === 'add' && current) throw new Error(`${name} 已是本房间成员；离开的成员请用请回`);
+    const manual = action === 'rejoin' ? current.access === 'manual' : access === 'manual';
+    const pending = input.retry_token && config.members?.[name]?.pending === input.retry_token;
+    const token = pending ? config.members[name].token : `${randomUUID()}${randomUUID()}`;
+    let profile = config.participants[name];
+    if (!manual) {
+      if (action === 'add') profile = participant_profile(name, launch_settings(home).participants, { ...input, cwd: input.cwd || config.cwd }, false);
+      if (!profile) throw new Error(`${name} 没有本机接入配置；请移除后重新邀请`);
+      const next = { ...config, participants: { ...config.participants, [name]: profile },
+        members: { ...config.members, [name]: { token, pending: input.retry_token || '' } } };
+      validate_config(next, dirname(path));
+      atomic_json(path, next);
+    }
+    const access_file = manual ? manual_access(path, input, name, token) : null;
+    const body = action === 'add'
+      ? { name, adapter: manual ? '' : profile.adapter, token, access, session_mode: profile?.session_id ? 'borrowed' : 'new' }
+      : { action: 'active', token };
+    const view = await site_request(input.site, action === 'add' ? `/api/rooms/${input.room_id}/members` : `/api/rooms/${input.room_id}/members/${current.id}`,
+      input.token, body);
+    return { room_id: input.room_id, member: name, access: manual ? 'manual' : 'runner', free: view, access_file };
+  } finally { release(); }
 }
 
 /** Stable signatures make changed retry requests explicit without putting credentials in receipts. */
@@ -472,6 +538,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   let result;
   if (positionals[0] === 'settings') result = input ? save_launch_settings(home, input) : launch_settings(home);
   else if (positionals[0] === 'room-models' && input) result = room_models(home, input);
+  else if (positionals[0] === 'room-member' && input) result = await room_member(home, input);
   else if (positionals[0] === 'start' && input) result = await launch_discussion(home, input, { dry_run: values['dry-run'], browser_request: values.browser });
   else if (positionals[0] === 'room-config' && input) result = await room_configuration(home, input, { local_guard: values['configuration-locked'] });
   else throw new Error(HELP);

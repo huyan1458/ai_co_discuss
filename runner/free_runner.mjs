@@ -1,13 +1,54 @@
 /** Free-room delivery: one live execution per member, carrying all of that member's open requests. */
-import { randomUUID } from 'node:crypto';
-import { appendFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
+import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { atomic_json, deliver_task, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
 import { api } from './discussion_runner.mjs';
 
 const RENEW_MS = 30_000;
 const MAX_DELIVERY_ATTEMPTS = 3;
 const LIVE = ['reserving', 'delivering', 'running'];
+const MAX_HASHED_BYTES = 5 * 1024 * 1024;
+const GIT_TIMEOUT_MS = 15_000;
+
+/** Identify a working directory consistently, so executions in the same cwd can be compared. */
+export function cwd_key(directory) {
+  if (!directory) return '';
+  const path = resolve(directory).replaceAll('\\', '/');
+  return process.platform === 'win32' ? path.toLowerCase() : path;
+}
+
+/**
+ * Record each changed or untracked file's Git status and content hash in a Git working tree.
+ * Returns null outside Git: free rooms then provide no automatic overlap detection.
+ */
+export function workspace_snapshot(directory) {
+  if (!directory) return null;
+  const result = spawnSync('git', ['-C', directory, 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
+    { encoding: 'utf8', windowsHide: true, timeout: GIT_TIMEOUT_MS });
+  if (result.status !== 0) return null;
+  const entries = new Map();
+  const fields = result.stdout.split('\0').filter(Boolean);
+  for (let index = 0; index < fields.length; index++) {
+    const status = fields[index].slice(0, 2), path = fields[index].slice(3);
+    if (status[0] === 'R' || status[0] === 'C') index++; // The original path of a rename follows.
+    let content = 'missing';
+    try {
+      const file = join(directory, path);
+      const size = statSync(file).size;
+      content = size > MAX_HASHED_BYTES ? `size:${size}` : createHash('sha256').update(readFileSync(file)).digest('hex');
+    } catch { /* Deleted files keep the marker. */ }
+    entries.set(path, `${status}:${content}`);
+  }
+  return entries;
+}
+
+/** Paths whose status or content differ between two snapshots of one working tree. */
+export function changed_between(before, after) {
+  const paths = new Set([...before.keys(), ...after.keys()]);
+  return [...paths].filter(path => before.get(path) !== after.get(path)).sort();
+}
 
 /** Write a non-secret task and a member-only credential file for one execution. */
 export function free_task_files(config, member, execution, binding) {
@@ -43,6 +84,9 @@ export class FreeRoomRunner {
     this.children = new Set();
     this.members = new Map();
     this.exited = new Set();
+    this.snapshots = new Map();
+    this.context_errors = new Map();
+    this.adopt(config);
     this.store.db.exec(`CREATE TABLE IF NOT EXISTS free_deliveries(member TEXT PRIMARY KEY, client_id TEXT NOT NULL,
       execution_id INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
       started INTEGER NOT NULL DEFAULT 0, last_renew INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '')`);
@@ -59,12 +103,32 @@ export class FreeRoomRunner {
       .run(name, next.client_id, next.execution_id, next.status, next.attempts, next.started, next.last_renew, next.error);
     return next;
   }
+  /**
+   * Take a changed configuration while running: new members are added, but a member whose
+   * project, cwd or bound session changed is blocked instead of silently reusing its conversation.
+   */
+  adopt(config) {
+    for (const [name, item] of Object.entries(config.participants)) {
+      const context = JSON.stringify([item.adapter, item.project_id || '', item.project_name || '', cwd_key(item.cwd), cwd_key(item.workdir), item.session_id || '']);
+      const key = `member-context:${name}`;
+      const previous = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(key)?.value;
+      if (previous && previous !== context) this.context_errors.set(name, `${name} 已绑定会话的项目、cwd 或接入方式发生变化；请移除后重新邀请`);
+      else this.store.db.prepare('INSERT INTO metadata VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, context);
+    }
+    this.config = { ...this.config, ...config, participants: config.participants, members: config.members };
+  }
   /** One bounded iteration: reconcile live executions, then deliver idle members with open requests. */
   async tick() {
     const inbox = await api(this.config, '/inbox');
     const room = await api(this.config, '');
     this.room_title = room.title;
     const active = new Map(inbox.executions.map(item => [item.id, item]));
+    const present = new Set(inbox.members.map(member => member.name));
+    // A member sent away or removed no longer appears; its live work was already voided on the website.
+    for (const row of this.store.db.prepare('SELECT * FROM free_deliveries').all()) {
+      if (LIVE.includes(row.status) && !present.has(row.member)) { this.stop_member(row.member); this.save(row.member, { status: 'idle' }); }
+    }
+    await this.report_finished(active);
     for (const member of inbox.members) {
       const row = this.row(member.name);
       if (row && LIVE.includes(row.status)) await this.reconcile(member, row, active, inbox.execution_minutes);
@@ -80,7 +144,8 @@ export class FreeRoomRunner {
   /** A retried client id returns the original execution; a finished or refused one just goes idle. */
   async reserve(member, record) {
     let execution;
-    try { execution = await api(this.config, '/executions', { member_id: member.id, client_id: record.client_id }); }
+    const cwd = cwd_key(this.config.participants[member.name]?.cwd || this.config.cwd);
+    try { execution = await api(this.config, '/executions', { member_id: member.id, client_id: record.client_id, cwd }); }
     catch (error) {
       if (/HTTP (404|409)/.test(error.message)) return this.save(member.name, { status: 'idle', error: '' });
       throw error;
@@ -93,6 +158,10 @@ export class FreeRoomRunner {
   async invoke(member, execution) {
     const adapter = this.config.participants[member.name];
     if (!adapter) return this.fail(member.name, execution.id, `未配置 ${member.name} 的本机接入`);
+    if (this.context_errors.has(member.name)) return this.fail(member.name, execution.id, this.context_errors.get(member.name));
+    const directory = adapter.cwd || this.config.cwd;
+    const before = workspace_snapshot(directory);
+    if (before) this.snapshots.set(execution.id, { member: member.name, directory, before });
     const binding = this.store.binding(member.name);
     if (!binding.session_id && adapter.session_id) binding.session_id = adapter.session_id;
     let invoked = false;
@@ -138,6 +207,18 @@ export class FreeRoomRunner {
     if (Date.now() - row.last_renew >= RENEW_MS) {
       await api(this.config, `/executions/${execution.id}`, { action: 'renew' });
       this.save(member.name, { last_renew: Date.now() });
+    }
+  }
+  /** Report observed file changes once an execution has ended and its member's processes have exited. */
+  async report_finished(active) {
+    for (const [execution_id, snapshot] of this.snapshots) {
+      if (active.has(execution_id) || this.members.get(snapshot.member)?.size) continue;
+      this.snapshots.delete(execution_id);
+      const after = workspace_snapshot(snapshot.directory);
+      const changes = after ? changed_between(snapshot.before, after) : [];
+      if (!changes.length) continue;
+      try { await api(this.config, `/executions/${execution_id}`, { action: 'report', changes: changes.slice(0, 200) }); }
+      catch (error) { if (!/HTTP (404|409)/.test(error.message)) throw error; }
     }
   }
   /** Record the cause on the website, then stop this member's own processes. */

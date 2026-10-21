@@ -19,8 +19,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit
 
-from .free_room import (after_free_message, authorize_free_write, check_answer, execution_action, free_view, inbox,
-                        interrupt_member, member_values, reserve_execution, room_mode, save_free_room, view_execution)
+from .free_room import (add_member, after_free_message, authorize_free_write, check_answer, execution_action, free_view, inbox,
+                        interrupt_member, member_action, member_values, migrate_free_tables, reserve_execution, room_mode,
+                        save_free_room, view_execution)
 from .runtime import (authorize_write, begin_write, configure_runtime, event_action,
                      LIMIT_DEFAULTS, LIMITS_SQL, limit_values, limits_view, require_within_limits,
                      list_events, require_control, runtime_view, token_hash)
@@ -155,6 +156,7 @@ def init_database(database, seed=True):
     with closing(connect_db(database)) as connection, connection:
         connection.execute("PRAGMA journal_mode = WAL")
         connection.executescript(SCHEMA)
+        migrate_free_tables(connection)
         if seed and is_new:
             seed_demo(connection)
 
@@ -1374,7 +1376,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Forward authenticated browser requests to the shared Node entrypoint and pin their website."""
         site = self.local_request_site(method)
         route = parts[2:]
-        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"]):
+        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-member"]):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
             command = "settings"
@@ -1384,6 +1386,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = "room-config"
         elif route == ["room-models"] and method == "POST":
             command = "room-models"
+        elif route == ["room-member"] and method == "POST":
+            command = "room-member"
         else:
             raise LookupError("本机入口不存在")
         payload = None
@@ -1391,7 +1395,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if self.headers.get_content_type() != "application/json":
                 raise ValueError("本机操作须使用 application/json")
             payload = self.read_payload()
-            if command in ("start", "room-config", "room-models"):
+            if command in ("start", "room-config", "room-models", "room-member"):
                 payload.pop("access_file", None)
                 payload.update(site=site, entry="web")
         if command == "room-config" and "participants" in payload:
@@ -1606,6 +1610,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             execution_id = int(parts[4])
             result = (view_execution(connection, room_id, execution_id, token) if method == "GET"
                       else execution_action(connection, room_id, execution_id, token, self.read_payload()))
+        elif parts[3:] == ["members"] and method == "POST":
+            result = add_member(connection, room_id, token, self.read_payload(), PARTICIPANTS, utc_now())
+        elif len(parts) == 5 and parts[3] == "members" and method == "POST":
+            result = member_action(connection, room_id, int(parts[4]), token, self.read_payload())
         elif len(parts) == 6 and parts[3] == "members" and parts[5] == "interrupt" and method == "POST":
             result = interrupt_member(connection, room_id, int(parts[4]), token)
         else:

@@ -139,6 +139,13 @@ class RoomWorker {
     if (updated.site !== this.config.site || updated.room !== this.config.room || updated.directory !== this.config.directory) {
       throw new Error('已登记配置的房间或数据目录发生变化，请移除原登记后重新接入');
     }
+    if (updated.mode === 'free') {
+      // Members join and leave while a free room runs; the runner checks each member's context itself.
+      this.runner.adopt({ ...updated, draft_directory: this.config.draft_directory });
+      this.config = this.runner.config;
+      this.state.config_version = snapshot.version;
+      return;
+    }
     try { this.store.context(updated); }
     catch (error) {
       const room = await api(this.config, '');

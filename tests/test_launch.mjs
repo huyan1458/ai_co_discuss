@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { launch_discussion, launch_settings, room_configuration, save_launch_settings } from '../runner/discussion_launch.mjs';
+import { launch_discussion, launch_settings, room_configuration, room_member, save_launch_settings } from '../runner/discussion_launch.mjs';
 import { api, DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { DiscussionService, read_registry, register_room } from '../runner/discussion_service.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
@@ -760,4 +760,42 @@ test('a free room launches without a run, and a user message reaches its member 
   } finally { await service.close(); }
   assert.deepEqual(room.free.requests.map(item => item.status), ['completed']);
   assert.equal(delivered.length, 1);
+});
+
+test('members join, leave and return while a free room keeps running', async t => {
+  const f = await fixture(t);
+  const owner = randomUUID() + randomUUID();
+  const input = { site: f.site, entry: 'web', participants: f.input.participants, token: owner,
+    room: { title: '多人协作', goal: 'x', mode: 'free', members: ['Claude'], submission_id: randomUUID() } };
+  const launched = await launch_discussion(f.home, input, f.options);
+  const room_id = launched.room.id, path = `/api/rooms/${room_id}`, auth = { 'X-Discussion-Token': owner };
+  await assert.rejects(room_member(f.home, { site: f.site, room_id, token: 'wrong'.repeat(8), action: 'add', name: 'Codex' }), /403/);
+  const added = await room_member(f.home, { site: f.site, room_id, token: owner, action: 'add', name: 'Codex',
+    participants: { Codex: f.input.participants.Codex } });
+  assert.deepEqual(added.free.members.map(member => member.name), ['Claude', 'Codex']);
+  assert.ok(!JSON.stringify(added).includes(load_config(launched.config_path).members.Codex.token));
+  const delivered = [];
+  const service = new DiscussionService(f.home, (current, store) => new FreeRoomRunner(current, store,
+    async (_, binding, task) => { delivered.push(task.participant); return { status: 'accepted' }; }));
+  try {
+    await service.tick();
+    await request(f.site, `${path}/messages`, { author: '用户', text: '两位都看看', to: ['Claude', 'Codex'], submission_id: randomUUID() }, auth);
+    await service.tick();
+    assert.deepEqual(delivered.sort(), ['Claude', 'Codex']);
+    const codex = (await request(f.site, path)).body.free.members.find(member => member.name === 'Codex');
+    const old_token = load_config(launched.config_path).members.Codex.token;
+    assert.equal((await request(f.site, `${path}/members/${codex.id}`, { action: 'away' }, auth)).status, 200);
+    await service.tick();
+    const back = await room_member(f.home, { site: f.site, room_id, token: owner, action: 'rejoin', name: 'Codex' });
+    assert.equal(back.free.members.find(member => member.name === 'Codex').status, 'active');
+    assert.notEqual(load_config(launched.config_path).members.Codex.token, old_token);
+    assert.equal((await request(f.site, `${path}/messages`, { author: 'Codex', text: '旧凭证', submission_id: randomUUID() },
+      { 'X-Discussion-Token': old_token })).status, 403);
+    const manual = await room_member(f.home, { site: f.site, room_id, token: owner, action: 'add', name: 'Gemini', access: 'manual' });
+    const access = JSON.parse(readFileSync(manual.access_file, 'utf8'));
+    assert.ok(!JSON.stringify(manual).includes(access.token));
+    assert.equal(manual.free.members.find(member => member.name === 'Gemini').access, 'manual');
+    assert.equal((await request(f.site, `${path}/messages`, { author: 'Gemini', text: '手动接入', source: 'cli', submission_id: randomUUID() },
+      { 'X-Discussion-Token': access.token })).status, 201);
+  } finally { await service.close(); }
 });

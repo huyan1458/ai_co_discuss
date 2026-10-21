@@ -143,6 +143,8 @@ codiscuss message post ROOM --as Claude --kind chat --execution 执行编号 --b
 
 执行编号与待处理的消息编号写在任务文件中；先用 `message list ROOM --after 已读编号` 读取新消息。执行已被打断或过期时服务端返回 409，此时保留草稿并结束，不要去掉 `--execution` 改作普通发言（缺少执行编号会被拒绝）。`--execution` 只能与 `chat` 一起使用，不能与 `--turn` 同时出现。
 
+手动接入的成员没有执行编号：`room view` 的 `free.requests` 列出它的待处理请求，回答时用 `--request 请求编号`（可重复）关闭对应请求；不带 `--request` 的回答是普通发言，不关闭任何请求。`--request` 与 `--execution` 不能同用。
+
 ## 写入核对与错误处理
 
 新房间、安排或消息使用新 `submission_id`，同一次重试沿用原编号、原文、身份和关联。编号允许 8–100 位字母、数字、下划线和连字符，UUID 可用。先保存编号与原文再发送；结果不明时查询：

@@ -78,7 +78,7 @@ class FreeRoomTests(unittest.TestCase):
         room = self.request(self.path)[1]
         self.assertEqual(room["mode"], "free")
         self.assertEqual(room["host"], "用户")
-        self.assertEqual([member["name"] for member in room["free"]["members"]], ["Claude"])
+        self.assertEqual(room["free"]["members"][0]["name"], "Claude")
         self.assertNotIn("token_hash", json.dumps(room))
         self.assertNotIn("control_hash", json.dumps(room))
         backup = self.request(f"{self.path}/backup")[1]
@@ -226,6 +226,116 @@ class FreeRoomTests(unittest.TestCase):
                 self.assertEqual(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], 0, table)
 
 
+class MultiMemberTests(FreeRoomTests):
+    """Several members: structured recipients, parallel work, membership changes and manual members."""
+
+    def setUp(self):
+        """Reuse the single-member room and add Codex as a second runner member."""
+        super().setUp()
+        self.codex = uuid.uuid4().hex
+        status, view = self.request(f"{self.path}/members", {"name": "Codex", "adapter": "codex_cli", "token": self.codex}, self.owner)
+        self.assertEqual(status, 200, view)
+
+    def member_id(self, name):
+        """Resolve a member's stable id from the public view."""
+        return next(member["id"] for member in self.request(self.path)[1]["free"]["members"] if member["name"] == name)
+
+    def reserve_for(self, name):
+        """Reserve one member's open requests."""
+        return self.request(f"{self.path}/executions", {"member_id": self.member_id(name), "client_id": uuid.uuid4().hex,
+                                                        "cwd": "d:/project"}, self.owner)
+
+    def say(self, text, token=None, **extra):
+        """Single-member defaults do not apply here: name Claude unless told otherwise."""
+        return super().say(text, token, **({"to": ["Claude"]} | extra))
+
+    def test_unnamed_message_with_several_members_is_only_a_note(self):
+        """With two members an unnamed message creates no request; nothing is broadcast."""
+        self.assertEqual(super().say("没有点名")[0], 201)
+        self.assertEqual(self.request(self.path)[1]["free"]["requests"], [])
+
+    def test_naming_two_members_creates_two_requests_that_run_in_parallel(self):
+        """One message to both members queues one request each; both can execute at once."""
+        self.assertEqual(self.say("一起看看", to=["Claude", "Codex", "Claude"])[0], 201)
+        self.assertEqual(self.say("不在场", to=["Gemini"])[0], 400)
+        requests = self.request(self.path)[1]["free"]["requests"]
+        self.assertEqual(sorted(item["member"] for item in requests), ["Claude", "Codex"])
+        self.assertEqual(self.reserve_for("Claude")[0], 200)
+        self.assertEqual(self.reserve_for("Codex")[0], 200)
+        self.assertEqual(self.request(self.path)[1]["experts"], {"Claude": "cli", "Codex": "cli"})
+
+    def test_adding_a_member_does_not_interrupt_another_members_work(self):
+        """Claude keeps its live execution while Gemini joins."""
+        self.say("开始")
+        execution = self.reserve_for("Claude")[1]
+        self.assertEqual(self.request(f"{self.path}/members", {"name": "Gemini", "token": uuid.uuid4().hex}, self.owner)[0], 200)
+        self.assertEqual(self.request(f"{self.path}/members", {"name": "Codex", "token": uuid.uuid4().hex}, self.owner)[0], 409)
+        self.assertEqual(self.request(f"{self.path}/members", {"name": "Qwen", "token": uuid.uuid4().hex}, self.member)[0], 403)
+        self.assertEqual(self.answer(execution["id"])[0], 201)
+
+    def test_away_voids_work_and_return_needs_a_new_credential(self):
+        """Leaving cancels only that member's work; old credential copies never revive."""
+        self.say("两人", to=["Claude", "Codex"])
+        claude = self.reserve_for("Claude")[1]
+        codex = self.reserve_for("Codex")[1]
+        codex_id = self.member_id("Codex")
+        view = self.request(f"{self.path}/members/{codex_id}", {"action": "away"}, self.owner)[1]
+        statuses = {member["name"]: (member["status"], member["execution"]["status"]) for member in view["members"]}
+        self.assertEqual(statuses, {"Claude": ("active", "dispatched"), "Codex": ("away", "cancelled")})
+        self.assertEqual(self.say("只给离开的人", to=["Codex"])[0], 400)
+        late = {"author": "Codex", "text": "迟到", "submission_id": uuid.uuid4().hex, "execution_id": codex["id"]}
+        self.assertEqual(self.request(f"{self.path}/messages", late, self.codex)[0], 403)
+        self.assertEqual(self.request(f"{self.path}/members/{codex_id}", {"action": "active", "token": self.codex}, self.owner)[0], 400)
+        renewed = uuid.uuid4().hex
+        self.assertEqual(self.request(f"{self.path}/members/{codex_id}", {"action": "active", "token": renewed}, self.owner)[0], 200)
+        self.assertEqual(self.request(f"{self.path}/messages", {**late, "submission_id": uuid.uuid4().hex}, self.codex)[0], 403)
+        self.assertEqual(self.request(f"{self.path}/messages", {**late, "submission_id": uuid.uuid4().hex}, renewed)[0], 409)
+        self.assertEqual(self.answer(claude["id"])[0], 201)
+
+    def test_removed_member_leaves_history_and_participants(self):
+        """Removal keeps past messages but drops the member from the participant list."""
+        codex_id = self.member_id("Codex")
+        self.assertEqual(self.request(f"{self.path}/members/{codex_id}", {"action": "remove"}, self.owner)[0], 200)
+        room = self.request(self.path)[1]
+        self.assertEqual([member["name"] for member in room["free"]["members"]], ["Claude"])
+        self.assertEqual(room["experts"], {"Claude": "cli"})
+        self.assertEqual(self.request(f"{self.path}/members/{codex_id}", {"action": "active", "token": uuid.uuid4().hex}, self.owner)[0], 404)
+
+    def test_manual_member_answers_by_request_and_is_never_delivered(self):
+        """A manual member is skipped by the runner and closes only its own open requests."""
+        gemini = uuid.uuid4().hex
+        self.request(f"{self.path}/members", {"name": "Gemini", "token": gemini, "access": "manual"}, self.owner)
+        self.say("请 Gemini 看看", to=["Gemini", "Claude"])
+        inbox = self.request(f"{self.path}/inbox", token=self.owner)[1]
+        self.assertEqual([member["name"] for member in inbox["members"]], ["Claude", "Codex"])
+        self.assertEqual(self.reserve_for("Gemini")[0], 404)
+        requests = {item["member"]: item["id"] for item in self.request(self.path)[1]["free"]["requests"]}
+
+        def post(**extra):
+            return self.request(f"{self.path}/messages", {"author": "Gemini", "text": "我的看法", "source": "cli",
+                                                          "submission_id": uuid.uuid4().hex, **extra}, gemini)
+        self.assertEqual(post(request_ids=[requests["Claude"]])[0], 409)
+        self.assertEqual(post(execution_id=1)[0], 400)
+        self.assertEqual(post(request_ids=[requests["Gemini"]])[0], 201)
+        self.assertEqual(post()[0], 201)
+        states = {item["member"]: item["status"] for item in self.request(self.path)[1]["free"]["requests"]}
+        self.assertEqual(states, {"Gemini": "completed", "Claude": "pending"})
+
+    def test_overlapping_changes_to_the_same_file_are_reported_as_possible_conflicts(self):
+        """Two members changing one file in overlapping windows are flagged; the report is recorded once."""
+        self.say("改首页", to=["Claude", "Codex"])
+        claude, codex = self.reserve_for("Claude")[1], self.reserve_for("Codex")[1]
+
+        def report(execution, files):
+            return self.request(f"{self.path}/executions/{execution['id']}", {"action": "report", "changes": files}, self.owner)
+        self.assertEqual(report(claude, ["index.html", "a.css"])[0], 200)
+        self.assertEqual(report(claude, ["b.css"])[0], 409)
+        self.assertEqual(report(codex, "x")[0], 400)
+        self.assertEqual(report(codex, ["index.html"])[0], 200)
+        conflicts = self.request(self.path)[1]["free"]["conflicts"]
+        self.assertEqual(conflicts, [{"members": ["Claude", "Codex"], "executions": [claude["id"], codex["id"]], "files": ["index.html"]}])
+
+
 class MigrationTests(unittest.TestCase):
     """The floor trigger is replaced on existing databases, and legacy rooms stay brainstorm rooms."""
 
@@ -247,6 +357,24 @@ class MigrationTests(unittest.TestCase):
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM room_modes").fetchone()[0], 0)
                 with self.assertRaises(sqlite3.IntegrityError):
                     connection.execute("INSERT INTO messages (room_id,author,text,source,submission_id,created_at) VALUES ('welcome','Codex','x','cli','late-0001','now')")
+
+    def test_early_free_tables_gain_later_columns(self):
+        """A database created before the member columns existed is upgraded in place."""
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "early.db"
+            with closing(sqlite3.connect(database)) as connection, connection:
+                connection.execute("CREATE TABLE room_members (id INTEGER PRIMARY KEY, room_id TEXT, name TEXT, adapter TEXT, "
+                                   "role TEXT, status TEXT, token_hash TEXT, read_until INTEGER, created_at TEXT)")
+                connection.execute("CREATE TABLE member_executions (id INTEGER PRIMARY KEY, room_id TEXT, member_id INTEGER, "
+                                   "client_id TEXT, status TEXT, session_id TEXT, lease_until INTEGER, created_at INTEGER, "
+                                   "finished_at INTEGER, result TEXT)")
+            init_database(database, seed=False)
+            init_database(database, seed=False)
+            with closing(sqlite3.connect(database)) as connection:
+                members = {row[1] for row in connection.execute("PRAGMA table_info(room_members)")}
+                executions = {row[1] for row in connection.execute("PRAGMA table_info(member_executions)")}
+            self.assertTrue({"access", "session_mode"} <= members)
+            self.assertTrue({"changes", "cwd"} <= executions)
 
 
 if __name__ == "__main__":
