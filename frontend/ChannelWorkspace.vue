@@ -285,13 +285,21 @@ function resize_nav_by_key(event) {
   <div class="channel-shell" :class="{ 'channel-resizing': rail_drag || nav_drag, 'channel-nav-collapsed': nav_collapsed, 'channel-has-rail': show_rail }" :style="layout_style">
     <aside id="channel-sidebar" class="channel-sidebar" aria-label="频道导航">
       <header class="channel-workspace-heading">
-        <span class="channel-brand-icon" aria-hidden="true"><svg viewBox="0 0 24 24">
-          <path d="M2 13.83H17.49L19.09 11.73Q19.09 11.73 19.39 11.96Q19.68 12.19 20.14 12.55Q20.59 12.91 21.09 13.32Q21.6 13.73 22 14.08Q21.92 14.42 21.37 14.42H2.17Z" />
-          <path d="M2.8 7.43H17.22L18.65 5.45Q18.65 5.45 18.92 5.67Q19.18 5.89 19.58 6.23Q19.98 6.57 20.42 6.96Q20.86 7.35 21.22 7.68Q21.14 8.02 20.63 8.02H2.97Z" />
-          <path d="M6.82 2.13 10.63 2.44Q10.61 2.67 10.46 2.83Q10.32 2.99 9.87 3.05V14.08H6.82Z" />
-          <path d="M13.6 2.13 17.47 2.44Q17.45 2.67 17.29 2.83Q17.14 2.99 16.69 3.05V14.08H13.6Z" />
-          <path class="channel-brand-dot" d="M13.41 15.56Q15.87 15.75 17.43 16.37Q18.99 16.99 19.79 17.81Q20.59 18.63 20.77 19.45Q20.95 20.27 20.63 20.88Q20.32 21.49 19.64 21.69Q18.97 21.89 18.08 21.45Q17.71 20.65 17.17 19.86Q16.63 19.07 15.99 18.32Q15.35 17.56 14.65 16.89Q13.96 16.23 13.26 15.71Z" />
-          <path class="channel-brand-dot" d="M8 14.8 11.58 16.93Q11.49 17.07 11.31 17.16Q11.12 17.24 10.76 17.2Q9.81 18.13 8.47 19.03Q7.14 19.94 5.54 20.67Q3.94 21.41 2.13 21.87L2 21.66Q3.33 20.76 4.49 19.57Q5.66 18.38 6.57 17.13Q7.47 15.87 8 14.8Z" />
+        <span class="channel-brand-icon" aria-hidden="true"><svg viewBox="0 0 100 100">
+          <defs>
+            <linearGradient id="channel-brand-grok" gradientUnits="userSpaceOnUse" x1="5.75" y1="68" x2="94.25" y2="68"><stop offset="0%" class="channel-brand-grok-1"/><stop offset="50%" class="channel-brand-grok-1"/><stop offset="50%" class="channel-brand-grok-2"/><stop offset="100%" class="channel-brand-grok-2"/></linearGradient>
+            <linearGradient id="channel-brand-gemini" gradientUnits="userSpaceOnUse" x1="7.75" y1="33" x2="92.25" y2="33"><stop offset="0%" stop-color="#3186ff"/><stop offset="25%" stop-color="#3186ff"/><stop offset="25%" stop-color="#fc413d"/><stop offset="50%" stop-color="#fc413d"/><stop offset="50%" stop-color="#fbbc04"/><stop offset="75%" stop-color="#fbbc04"/><stop offset="75%" stop-color="#00b95c"/><stop offset="100%" stop-color="#00b95c"/></linearGradient>
+            <linearGradient id="channel-brand-claude" gradientUnits="userSpaceOnUse" x1="24.92" y1="93.16" x2="40.08" y2="6.84"><stop offset="0%" class="channel-brand-claude-1"/><stop offset="50%" class="channel-brand-claude-1"/><stop offset="50%" class="channel-brand-claude-2"/><stop offset="100%" class="channel-brand-claude-2"/></linearGradient>
+            <linearGradient id="channel-brand-codex" gradientUnits="userSpaceOnUse" x1="75.08" y1="93.16" x2="59.92" y2="6.84"><stop offset="0%" class="channel-brand-codex-1"/><stop offset="50%" class="channel-brand-codex-1"/><stop offset="50%" class="channel-brand-codex-2"/><stop offset="100%" class="channel-brand-codex-2"/></linearGradient>
+          </defs>
+          <line class="channel-brand-gap" x1="12" y1="68" x2="88" y2="68"/>
+          <line x1="12" y1="68" x2="88" y2="68" stroke="url(#channel-brand-grok)" stroke-width="12.5" stroke-linecap="round"/>
+          <line class="channel-brand-gap" x1="14" y1="33" x2="86" y2="33"/>
+          <line x1="14" y1="33" x2="86" y2="33" stroke="url(#channel-brand-gemini)" stroke-width="12.5" stroke-linecap="round"/>
+          <line class="channel-brand-gap" x1="26" y1="87" x2="39" y2="13"/>
+          <line x1="26" y1="87" x2="39" y2="13" stroke="url(#channel-brand-claude)" stroke-width="12.5" stroke-linecap="round"/>
+          <line class="channel-brand-gap" x1="74" y1="87" x2="61" y2="13"/>
+          <line x1="74" y1="87" x2="61" y2="13" stroke="url(#channel-brand-codex)" stroke-width="12.5" stroke-linecap="round"/>
         </svg></span>
         <span class="channel-brand-text"><strong>共议</strong><span>AI CoDiscuss</span></span>
       </header>
