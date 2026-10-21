@@ -283,7 +283,7 @@ function setup_issues(result) {
 /** Ask before restarting a running website; non-interactive runs never stop it and report the pending restart instead. */
 async function confirm_restart(reason, options) {
   if (options.yes || !process.stdin.isTTY) return false;
-  const choice = await ask(`${reason}\n重启后生效，重启会暂停托管中的讨论。现在重启？`, '[重启/暂不，默认重启]');
+  const choice = await ask(`${reason}\n重启后生效，重启会暂停托管中的讨论。现在重启？`, '[Y/N，默认 Y]');
   return !choice.trim() || ['重启', 'restart', 'r', 'y', 'yes'].includes(choice.trim().toLowerCase());
 }
 
