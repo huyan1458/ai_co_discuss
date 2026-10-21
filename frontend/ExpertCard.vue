@@ -82,11 +82,25 @@ const stop_observing = angle.on("change", reveal);
 const stop_settling = angle.on("animationComplete", focus_face);
 
 /** Retarget the same spring so a reversal carries its current angle and velocity. */
+// Opening the back remembers this instance's settings so Cancel can restore them exactly.
+let opened_with = null;
+
 function flip(next) {
   if (next && !can_flip.value) return;
   card.value?.focus({ preventScroll: true });
   asked.value = next ? required_connection() : [];
+  if (next && !back.value) opened_with = { profile: JSON.parse(JSON.stringify(profile.value)), mode: props.mode };
   back.value = next;
+}
+
+/** Discard edits made since the back opened, then return to the front. */
+function cancel() {
+  if (opened_with) {
+    bridge.restore_launch_profile(props.name, opened_with.profile);
+    if (opened_with.mode !== props.mode) emit("mode", opened_with.mode);
+    opened_with = null;
+  }
+  flip(false);
 }
 
 /** Restore the CLI defaults for this participant only. */
@@ -109,7 +123,7 @@ function escape(event) {
   if (!back.value) return;
   event.stopPropagation();
   event.preventDefault();
-  flip(false);
+  cancel();
 }
 
 watch([back, reduced_motion], ([next, reduced]) => {
@@ -176,7 +190,10 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
           <button type="button" class="expert-card-defaults" title="留空使用 CLI 默认值" :aria-label="`恢复 ${name} 的默认模型与强度`" :disabled="!profile.model && !profile.effort" @click="reset_model">恢复默认</button>
         </template>
         <p v-else class="expert-card-note"><UIcon :name="mode === 'online' ? 'i-lucide-globe' : 'i-lucide-monitor'" />{{ configuration_note }}</p>
-        <button ref="back_button" type="button" class="expert-card-flip is-done" :aria-label="`返回 ${name} 角色卡片`" @click="flip(false)"><UIcon name="i-lucide-check" />完成</button>
+        <span class="expert-card-flip-actions">
+          <button type="button" class="expert-card-flip is-cancel" :aria-label="`放弃 ${name} 的修改`" @click="cancel">取消</button>
+          <button ref="back_button" type="button" class="expert-card-flip is-done" :aria-label="`保存并返回 ${name} 角色卡片`" @click="flip(false)"><UIcon name="i-lucide-check" />完成</button>
+        </span>
       </div>
     </motion.div>
   </div>
@@ -207,7 +224,10 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
 .expert-card-flip { position: absolute; right: 8px; bottom: 8px; display: inline-flex; align-items: center; gap: 4px; min-height: 22px; padding: 2px 6px; border-radius: 4px; color: var(--ui-text-dimmed); font-size: 11px; }
 .expert-card-flip > span { width: 12px; height: 12px; }
 .expert-card-open:hover .expert-card-flip, .expert-card-flip.is-done { color: var(--channel-accent); }
-.expert-card-flip.is-done:hover { background: var(--ui-bg-accented); }
+.expert-card-flip.is-done:hover, .expert-card-flip.is-cancel:hover { background: var(--ui-bg-accented); }
+.expert-card-flip-actions { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 2px; }
+.expert-card-flip-actions > .expert-card-flip { position: static; }
+.expert-card-flip.is-cancel:hover { color: var(--ui-text-highlighted); }
 .expert-card-tools { position: absolute; top: 9px; right: 8px; display: flex; gap: 2px; }
 .expert-card-tools > button { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; color: var(--ui-text-dimmed); }
 .expert-card-tools > button > span { width: 13px; height: 13px; }

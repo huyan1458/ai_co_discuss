@@ -207,10 +207,9 @@ const summary = computed(() => {
           <UCheckbox v-if="!free" :model-value="view.launch.create" label="创建后立即启动 AI" description="由本机服务创建会话并交付首个主持任务；不勾选则只建房，稍后在「接入」页启动。" @update:model-value="bridge.write_launch('create', '', $event)" />
           <template v-if="free || view.launch.create">
             <UFormField label="项目目录（可选）">
-              <div class="create-directory">
-                <UInput :model-value="view.launch.workspace.cwd || ''" placeholder="输入完整路径，或点右侧选择" class="w-full" @update:model-value="bridge.write_launch('workspace', 'cwd', $event)" />
-                <UButton icon="i-lucide-folder-open" label="选择…" color="neutral" variant="outline" :loading="picking" @click="pick_directory" />
-              </div>
+              <UInput :model-value="view.launch.workspace.cwd || ''" placeholder="输入完整路径，或点右侧图标选择" class="w-full" :ui="{ trailing: 'pe-1' }" @update:model-value="bridge.write_launch('workspace', 'cwd', $event)">
+                <template #trailing><UButton icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" aria-label="在本机选择项目目录" title="在本机选择文件夹" :loading="picking" @click="pick_directory" /></template>
+              </UInput>
             </UFormField>
             <p class="fine-print create-hint">要一起查看的项目；留空时 AI 只在讨论私有目录工作。读写权限在各专家卡片上设置。</p>
           </template>
@@ -230,7 +229,9 @@ const summary = computed(() => {
 </template>
 
 <style scoped>
-.create-discussion { display: flex; flex-direction: column; max-height: min(78dvh, 820px); }
+/* A fixed height keeps the dialog still when switching room use or delivery adds or removes sections. */
+.create-discussion { display: flex; flex-direction: column; height: min(78dvh, 820px); }
+.create-scroll { flex: 1; min-height: 0; }
 .create-scroll { overflow-y: auto; padding: 20px 26px 24px; gap: 26px !important; }
 .create-section { display: flex; flex-direction: column; gap: 14px; }
 .create-section + .create-section { padding-top: 22px; border-top: 1px solid var(--ui-border-muted); }
@@ -280,14 +281,12 @@ const summary = computed(() => {
 .create-hint { margin-top: -4px !important; }
 .create-limit-rule { display: flex; align-items: flex-start; gap: 8px; padding-top: 14px; border-top: 1px solid var(--ui-border-muted); color: var(--ui-text-muted); font-size: 12px; }
 .create-limit-rule > [class*="icon"] { flex-shrink: 0; width: 13px; height: 13px; margin-top: 2px; color: var(--channel-accent); }
-.create-directory { display: flex; gap: 8px; }
-.create-directory > button { flex-shrink: 0; }
 .create-footer { flex-shrink: 0; padding: 14px 26px 16px; border-top: 1px solid var(--ui-border-muted); }
 .create-footer-row { display: flex; align-items: center; gap: 8px; }
 .create-summary { flex: 1; min-width: 0; overflow: hidden; color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
 .create-error { margin-bottom: 10px; color: #f0716b; font-size: 12px; }
 @media (max-width: 600px) {
-  .create-discussion { max-height: calc(100dvh - 130px); }
+  .create-discussion { height: calc(100dvh - 130px); }
   .create-scroll { padding: 18px 18px 20px; }
   .create-modes, .create-experts { grid-template-columns: 1fr; }
   .create-footer { padding: 12px 18px 14px; }

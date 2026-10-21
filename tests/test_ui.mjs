@@ -236,7 +236,8 @@ function expert_card_fixture() {
   const bridge = { launch_clients: { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }] },
     launch_model_state: (name, launch) => ({ supported: launch.profiles[name]?.adapter === "codex_cli", efforts: ["low", "high"] }),
     load_launch_models: name => reads.push(name),
-    write_launch: (name, field, value) => { view.value.launch.profiles[name][field] = value; } };
+    write_launch: (name, field, value) => { view.value.launch.profiles[name][field] = value; },
+    restore_launch_profile: (name, profile) => { view.value.launch.profiles[name] = profile; } };
   const context = vm.createContext({ computed, ref, nextTick, defineProps: () => props, defineEmits: () => () => {},
     inject: () => ({ view, bridge }), useSpring: () => angle, useReducedMotion: () => reduced, document,
     watch: (...args) => { const stop = watch(...args); cleanups.push(stop); return stop; },
@@ -324,6 +325,27 @@ test("card defaults reset only the current instance and Escape returns directly 
   assert.equal(view.value.launch.profiles.Codex.effort, "");
   assert.equal(view.value.launch.profiles.Claude.model, "other-model");
   assert.equal(view.value.launch.profiles.Claude.effort, "low");
+  await nextTick();
+  fixture.cleanup();
+});
+
+test("card Cancel restores the settings from when the back opened while Done keeps edits", async () => {
+  const fixture = expert_card_fixture(), { context, view, refs } = fixture;
+  context.flip(true);
+  view.value.launch.profiles.Codex.model = "other-model";
+  view.value.launch.profiles.Codex.project_access = "write";
+  context.cancel();
+  assert.equal(refs.back.value, false);
+  assert.equal(view.value.launch.profiles.Codex.model, "saved-model");
+  assert.equal("project_access" in view.value.launch.profiles.Codex, false, "a field that was never set stays unset");
+  context.flip(true);
+  view.value.launch.profiles.Codex.effort = "low";
+  context.escape({ stopPropagation() {}, preventDefault() {} });
+  assert.equal(view.value.launch.profiles.Codex.effort, "high", "Escape cancels like the Cancel button");
+  context.flip(true);
+  view.value.launch.profiles.Codex.model = "kept-model";
+  context.flip(false);
+  assert.equal(view.value.launch.profiles.Codex.model, "kept-model");
   await nextTick();
   fixture.cleanup();
 });

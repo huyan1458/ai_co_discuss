@@ -1633,6 +1633,13 @@ function write_launch_field(name, field, value) {
   publish_view();
 }
 
+/** Put one instance's draft back exactly as it was, including fields that were never set. */
+function restore_launch_profile(name, profile) {
+  state.launch.profiles[name] = JSON.parse(JSON.stringify(profile));
+  render_launch_settings();
+  publish_view();
+}
+
 /** Capture local overrides before asynchronous work or navigation can change the draft. */
 function launch_options() {
   return JSON.parse(JSON.stringify({ participants: state.launch.profiles, ...state.launch.workspace, entry: "web" }));
@@ -2796,7 +2803,7 @@ function change_view_theme(theme) {
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
   write_launch: write_launch_field, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
-  launch_model_state, load_launch_models, write_launch_model, launch_summary, pick_launch_directory, empty_discussion_message,
+  launch_model_state, load_launch_models, write_launch_model, launch_summary, pick_launch_directory, restore_launch_profile, empty_discussion_message,
   start_drag: start_directory_drag,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
