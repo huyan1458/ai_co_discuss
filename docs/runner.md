@@ -77,7 +77,7 @@ python server.py --host 127.0.0.1 --local-launch
 
 ### 本机模型目录
 
-网页的自动 CLI 模型选择通过 `POST /api/local/models` 读取本机软件目录。输入为 `adapter`、可选完整 `executable`；未传路径时沿用该适配器的本机配置。CLI 对应 `codiscuss launch models --file FILE`。返回 `{adapter, models:[{id,label,efforts?}], source, error?}`，只含模型元数据；没有列表时显示原因并允许使用软件默认，不要求手填 ID。页面按适配器和路径缓存，模型支持的档位随目录返回；App、纯网页和手动会话在原软件设置。
+网页的自动 CLI 模型选择通过 `POST /api/local/models` 读取本机软件目录。输入为 `adapter`、可选完整 `executable`；未传路径时沿用该适配器的本机配置。CLI 对应 `codiscuss launch models --file FILE`。返回 `{adapter, models:[{id,label,efforts?}], source, error?}`，只含模型元数据；没有列表时显示原因并允许使用软件默认，不要求手填 ID。部分 CLI 列表较慢（`agy models` 实测约 15 秒），本机服务把成功结果按适配器、路径与可执行文件大小/修改时间缓存在服务目录的 `model-catalogs.json`，24 小时内复用；可执行文件变化或点“重试”（`refresh: true`）时重新查询，查询失败不覆盖上次成功的列表。卡片加入后即在后台预读，不等翻面；页面同样按适配器和路径缓存，模型支持的档位随目录返回；App、纯网页和手动会话在原软件设置。
 
 - Codex：临时运行 `app-server`，依次 `initialize`、`initialized`、分页 `model/list`，不创建 thread 或 turn。见 [官方协议](https://learn.chatgpt.com/docs/app-server#list-models-modellist)。
 - Claude：临时以 `--safe-mode --no-session-persistence` 开启流式控制通道，仅发送 initialize，读取软件返回的 models 和 supportedEffortLevels；禁用自定义启动扩展，不发送用户消息。协议依据 [官方客户端初始化](https://github.com/anthropics/claude-agent-sdk-python/blob/main/src/claude_agent_sdk/_internal/query.py)。旧版本不支持时显示查询失败。

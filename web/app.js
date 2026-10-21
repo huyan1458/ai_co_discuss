@@ -1591,7 +1591,7 @@ async function load_launch_models(name, force = false) {
   const catalogs = state.launch.model_catalogs ||= {}, key = model_catalog_key(profile);
   if (catalogs[key]?.loading || (!force && catalogs[key])) return;
   const current = { models: [], loading: true, error: "", source: "" };
-  const input = { adapter: profile.adapter, ...(profile.executable ? { executable: profile.executable } : {}) };
+  const input = { adapter: profile.adapter, ...(profile.executable ? { executable: profile.executable } : {}), ...(force ? { refresh: true } : {}) };
   catalogs[key] = current;
   publish_view();
   try {

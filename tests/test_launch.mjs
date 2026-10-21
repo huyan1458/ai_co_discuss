@@ -10,7 +10,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { launch_discussion, launch_settings, room_configuration, room_member, save_launch_settings } from '../runner/discussion_launch.mjs';
+import { cached_software_models, launch_discussion, launch_settings, room_configuration, room_member, save_launch_settings } from '../runner/discussion_launch.mjs';
 import { api, DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { DiscussionService, read_registry, register_room } from '../runner/discussion_service.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
@@ -66,6 +66,27 @@ test('Claude model discovery sends only initialization and strips account metada
   assert.ok(f.invocations[0][1].includes('--no-session-persistence'));
   assert.ok(!JSON.stringify(result).includes('private@example.test'));
   assert.equal(f.child.killed, true);
+});
+
+test('slow model catalogs are reused until the executable changes or the user retries', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-models-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const executable = join(home, 'agy.exe');
+  writeFileSync(executable, 'v1');
+  const calls = [];
+  const query = async profile => { calls.push(profile.adapter); return calls.length === 3
+    ? { adapter: profile.adapter, models: [], source: 'antigravity-cli', error: '超时' }
+    : { adapter: profile.adapter, models: [{ id: `model-${calls.length}`, label: 'Model' }], source: 'antigravity-cli' }; };
+  const profile = { adapter: 'antigravity_cli', executable };
+  assert.equal((await cached_software_models(home, profile, { query })).models[0].id, 'model-1');
+  assert.equal((await cached_software_models(home, profile, { query })).models[0].id, 'model-1', 'a new page reads the saved list');
+  assert.equal(calls.length, 1);
+  assert.equal((await cached_software_models(home, profile, { query, refresh: true })).models[0].id, 'model-2');
+  assert.match((await cached_software_models(home, profile, { query, refresh: true })).error, /超时/);
+  assert.equal((await cached_software_models(home, profile, { query })).models[0].id, 'model-2', 'a failed retry keeps the last good list');
+  writeFileSync(executable, 'v2 upgraded');
+  assert.equal((await cached_software_models(home, profile, { query })).models[0].id, 'model-4');
+  assert.equal(Object.keys(JSON.parse(readFileSync(join(home, 'model-catalogs.json'), 'utf8'))).length, 1, 'old executable entries are replaced');
 });
 
 test('agy discovery parses native model output and failure never invents choices', async () => {

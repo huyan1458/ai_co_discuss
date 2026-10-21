@@ -100,8 +100,9 @@ watch([back, reduced_motion], ([next, reduced]) => {
   if (reduced) { angle.jump(target); focus_face(); }
   else angle.set(target);
 });
-watch(() => [back.value, configurable.value, view.value.launch.available, profile.value.adapter],
-  ([opened, enabled, available]) => { if (opened && enabled && available) bridge.load_launch_models(props.name); });
+// Prefetch as soon as the card can use a catalog, so flipping does not wait on a slow CLI query.
+watch(() => [configurable.value, view.value.launch.available, profile.value.adapter],
+  ([enabled, available]) => { if (enabled && available) bridge.load_launch_models(props.name); }, { immediate: true });
 onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
 </script>
 
@@ -128,9 +129,7 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
         </span>
       </div>
       <div v-if="can_flip" class="expert-card-face expert-card-back" :inert="!visible_back" :aria-hidden="!visible_back">
-        <div class="expert-card-heading"><strong>{{ name }}<span>设置</span></strong>
-          <button ref="back_button" type="button" class="expert-card-return" :aria-label="`返回 ${name} 角色卡片`" @click="flip(false)"><UIcon name="i-lucide-check" />完成</button>
-        </div>
+        <div class="expert-card-heading"><strong>{{ name }}<span>设置</span></strong></div>
         <div v-if="!automatic" class="expert-card-modes" role="radiogroup" :aria-label="`${name} 参与能力`" @keydown="choose_capability">
           <button v-for="option in [{ value: 'cli', label: '本地读写' }, { value: 'online', label: '在线只读' }]" :key="option.value" type="button"
             role="radio" :aria-checked="mode === option.value" :tabindex="mode === option.value ? 0 : -1" :data-mode="option.value" @click="emit('mode', option.value)">{{ option.label }}</button>
@@ -148,9 +147,10 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
             <EffortSlider :items="effort_items" :model-value="profile.effort || ''" :label="`${name} 的思考强度`" @update:model-value="bridge.write_launch(name, 'effort', $event)" />
           </div>
           <p v-else class="expert-card-note">{{ models.effort_note }}</p>
-          <div class="expert-card-defaults"><span>默认值由 CLI 决定</span><button type="button" :aria-label="`恢复 ${name} 的默认模型与强度`" :disabled="!profile.model && !profile.effort" @click="reset_model">恢复默认</button></div>
+          <button type="button" class="expert-card-defaults" title="留空使用 CLI 默认值" :aria-label="`恢复 ${name} 的默认模型与强度`" :disabled="!profile.model && !profile.effort" @click="reset_model">恢复默认</button>
         </template>
         <p v-else class="expert-card-note"><UIcon :name="mode === 'online' ? 'i-lucide-globe' : 'i-lucide-monitor'" />{{ configuration_note }}</p>
+        <button ref="back_button" type="button" class="expert-card-flip is-done" :aria-label="`返回 ${name} 角色卡片`" @click="flip(false)"><UIcon name="i-lucide-check" />完成</button>
       </div>
     </motion.div>
   </div>
@@ -158,11 +158,12 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
 
 <style scoped>
 .expert-card { min-width: 0; perspective: 900px; outline: none; }
-.expert-card-turn { display: grid; height: 100%; transform-style: preserve-3d; }
+/* Every card keeps one height in both delivery modes; the back scrolls only if a long note overflows. */
+.expert-card-turn { display: grid; height: 212px; transform-style: preserve-3d; }
 .expert-card-face { grid-area: 1 / 1; min-width: 0; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); box-shadow: var(--channel-shadow-control); backface-visibility: hidden; }
 .expert-card.is-host .expert-card-front { border-color: color-mix(in srgb, #e0b44a 45%, var(--ui-border)); }
 .expert-card-front { position: relative; display: flex; }
-.expert-card-back { display: flex; flex-direction: column; gap: 9px; padding: 10px 12px 12px; transform: rotateY(180deg); }
+.expert-card-back { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 34px; overflow-y: auto; scrollbar-width: thin; transform: rotateY(180deg); }
 .expert-card:hover .expert-card-face { border-color: var(--ui-border-accented); }
 .expert-card-open { display: flex; flex: 1; flex-direction: column; gap: 10px; width: 100%; min-width: 0; padding: 12px 12px 30px; text-align: left; border-radius: inherit; outline: none; }
 .expert-card-open.is-static { cursor: default; padding-bottom: 12px; }
@@ -177,9 +178,10 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
 .expert-card-facts > div { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 8px; }
 .expert-card-facts dt { color: var(--ui-text-dimmed); }
 .expert-card-facts dd { overflow: hidden; margin: 0; color: var(--ui-text-toned); white-space: nowrap; text-overflow: ellipsis; }
-.expert-card-flip { position: absolute; right: 10px; bottom: 9px; display: inline-flex; align-items: center; gap: 4px; color: var(--ui-text-dimmed); font-size: 11px; }
+.expert-card-flip { position: absolute; right: 8px; bottom: 8px; display: inline-flex; align-items: center; gap: 4px; min-height: 22px; padding: 2px 6px; border-radius: 4px; color: var(--ui-text-dimmed); font-size: 11px; }
 .expert-card-flip > span { width: 12px; height: 12px; }
-.expert-card-open:hover .expert-card-flip { color: var(--channel-accent); }
+.expert-card-open:hover .expert-card-flip, .expert-card-flip.is-done { color: var(--channel-accent); }
+.expert-card-flip.is-done:hover { background: var(--ui-bg-accented); }
 .expert-card-tools { position: absolute; top: 9px; right: 8px; display: flex; gap: 2px; }
 .expert-card-tools > button { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; color: var(--ui-text-dimmed); }
 .expert-card-tools > button > span { width: 13px; height: 13px; }
@@ -188,9 +190,6 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
 .expert-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .expert-card-heading strong { display: flex; align-items: baseline; gap: 6px; min-width: 0; overflow: hidden; color: var(--ui-text-highlighted); font-size: 12px; font-weight: 600; white-space: nowrap; }
 .expert-card-heading strong > span { font-size: 10px; font-weight: 400; color: var(--ui-text-muted); }
-.expert-card-return { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; min-height: 24px; padding: 2px 6px; border-radius: 4px; color: var(--channel-accent); font-size: 11px; }
-.expert-card-return > span { width: 12px; height: 12px; }
-.expert-card-return:hover { background: var(--ui-bg-accented); }
 .expert-card-modes { display: flex; gap: 3px; padding: 3px; border-radius: 5px; background: var(--ui-bg-muted); }
 .expert-card-modes button { flex: 1; min-height: 26px; border-radius: 4px; color: var(--ui-text-muted); font-size: 11px; }
 .expert-card-modes button[aria-checked="true"] { background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); box-shadow: var(--channel-shadow-control); }
@@ -201,16 +200,16 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
 .expert-card-effort > div { display: flex; align-items: center; justify-content: space-between; color: var(--ui-text-dimmed); font-size: 11px; }
 .expert-card-effort strong { color: var(--channel-accent); font-size: 11px; font-weight: 600; }
 .expert-card-effort :deep(.effort-slider) { height: 28px; }
-.expert-card-defaults { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px; margin-top: auto; color: var(--ui-text-dimmed); font-size: 10px; }
-.expert-card-defaults > button { min-height: 22px; color: var(--ui-text-muted); font-size: 11px; }
-.expert-card-defaults > button:hover:not(:disabled) { color: var(--channel-accent); }
-.expert-card-defaults > button:disabled { opacity: .4; }
+.expert-card-defaults { position: absolute; left: 8px; bottom: 8px; min-height: 22px; padding: 2px 4px; border-radius: 4px; color: var(--ui-text-muted); font-size: 11px; }
+.expert-card-defaults:hover:not(:disabled) { color: var(--channel-accent); }
+.expert-card-defaults:disabled { opacity: .4; }
 .expert-card-note { display: flex; gap: 6px; margin: 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
 .expert-card-note > span { flex-shrink: 0; width: 13px; height: 13px; margin-top: 3px; }
 @media (pointer: coarse) {
-  .expert-card-return, .expert-card-tools > button { min-width: 44px; min-height: 44px; }
+  .expert-card-flip, .expert-card-defaults, .expert-card-tools > button { min-width: 44px; min-height: 44px; }
+  .expert-card-turn { height: 244px; }
   .expert-card-tools { top: 4px; right: 4px; }
   .expert-card-identity { padding-right: 92px; }
-  .expert-card-modes button, .expert-card-defaults > button { min-height: 44px; }
+  .expert-card-modes button { min-height: 44px; }
 }
 </style>

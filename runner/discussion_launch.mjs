@@ -52,6 +52,28 @@ conversation 还须 current_session_id，当前会话接手首个主持任务。
 详见 docs/runner.md 的“两种讨论入口与启动配置”。
 `;
 
+/** Some CLIs take seconds to list models; reuse a good list for a day unless the executable changes or the user retries. */
+const MODEL_CACHE_MS = 24 * 60 * 60 * 1000;
+
+/** Return the software catalog, served from the private service home when still valid. */
+export async function cached_software_models(home, profile, { refresh = false, query = software_models } = {}) {
+  const path = join(home, 'model-catalogs.json');
+  let stamp = '';
+  try { const file = statSync(profile.executable); stamp = `${file.size}:${file.mtimeMs}`; } catch {}
+  const key = JSON.stringify([profile.adapter, profile.executable || '', stamp]);
+  let cache = {};
+  try { cache = JSON.parse(readFileSync(path, 'utf8')); } catch {}
+  const hit = cache[key];
+  if (!refresh && hit && Date.now() - hit.at < MODEL_CACHE_MS) return hit.result;
+  const result = await query(profile);
+  if (!result.error && result.models.length) {
+    const prefix = JSON.stringify([profile.adapter, profile.executable || '']).slice(0, -1);
+    for (const old of Object.keys(cache)) if (old.startsWith(prefix)) delete cache[old];
+    atomic_json(path, { ...cache, [key]: { at: Date.now(), result } });
+  }
+  return result;
+}
+
 /** Read private defaults without selecting a global room or identity. */
 export function launch_settings(home) {
   const path = join(home, 'launch-settings.json');
@@ -585,7 +607,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'room-models' && input) result = room_models(home, input);
   else if (positionals[0] === 'models' && input) {
     const saved = Object.values(launch_settings(home).participants).find(profile => profile.adapter === input.adapter);
-    result = await software_models({ adapter: input.adapter, executable: input.executable || saved?.executable });
+    result = await cached_software_models(home, { adapter: input.adapter, executable: input.executable || saved?.executable }, { refresh: input.refresh === true });
   }
   else if (positionals[0] === 'room-member' && input) result = await room_member(home, input);
   else if (positionals[0] === 'start' && input) result = await launch_discussion(home, input, { dry_run: values['dry-run'], browser_request: values.browser });
