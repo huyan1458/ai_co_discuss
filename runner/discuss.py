@@ -227,7 +227,7 @@ def message_commands(subcommands, registry):
     post.add_argument("--turn", type=positive_int, help="所回答的安排编号，仅 opinion 可用")
     post.add_argument("--execution", type=positive_int, help="自由房间：本次执行编号，仅 chat 可用；执行失效后不能改作普通发言")
     post.add_argument("--to", type=ai_name, action="append", default=[],
-                      help="自由房间主持人：在回答中点名派活的成员，可重复；其他成员不能使用")
+                      help="自由房间：主持人点名派活，普通成员提出回应建议（须房主确认）；可重复")
     post.add_argument("--request", type=positive_int, action="append", default=[],
                       help="自由房间手动接入成员：本次回答完成的请求编号，可重复；不能与 --execution 同用")
     post.add_argument("--reply-to", type=positive_int, help="被引用的原文编号")

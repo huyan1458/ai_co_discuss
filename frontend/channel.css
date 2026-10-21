@@ -191,6 +191,10 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .channel-brief-footer { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 20px; margin-top: 8px; color: var(--ui-text-muted); font-size: 11px; line-height: 1.6; }
 .channel-brief-footer small { margin-left: auto; font-size: inherit; }
 .channel-answer-summary { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: 12px; margin-top: 18px; }
+.channel-execution-report { margin-top: 14px; padding: 10px 12px; border: 1px solid #8792a333; border-radius: 8px; color: var(--ui-text-muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.channel-execution-report > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; }
+.channel-execution-report strong { font-weight: 500; }
+.channel-execution-report p { margin: 2px 0 0; }
 .channel-answer-summary > small { color: #939ba8; font-size: 12px; font-weight: 400; line-height: 1.7; }
 .channel-answer-summary > small > span { display: block; color: #939ba8; font-weight: 400; }
 .channel-answer-summary > .channel-message-text { margin: 0; color: #c3c9d3; font-size: 14px; line-height: 1.7; }
@@ -304,7 +308,7 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 .pb-free-note { margin: 0 0 6px; color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .pb-free-note.is-warning { color: #e5a50a; }
 .pb-free-note.is-error { color: #f05252; }
-.pb-free-invite { display: flex; gap: 6px; }
+.pb-free-invite { display: flex; flex-wrap: wrap; gap: 6px; }
 .pb-free-linked { display: flex; justify-content: space-between; gap: 8px; width: 100%; text-align: left; }
 .pb-free-linked small { color: var(--ui-text-dimmed); }
 .progress-drawer { max-width: min(420px, 100vw); }
@@ -516,6 +520,15 @@ html[data-theme^="channel"] .channel-send { min-width: 64px; height: 29px; min-h
 
 
 /* Portalled controls retain the same surface, item spacing and focus language. */
+.channel-mention-menu { width: min(360px, var(--reka-popper-anchor-width)); max-width: calc(100vw - 16px); animation: none !important; }
+.channel-mention-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 10px; color: var(--ui-text-toned); font-size: 12px; }
+.channel-mention-heading small { color: var(--ui-text-dimmed); font-size: 10px; }
+.channel-mention-list { max-height: min(260px, calc(var(--reka-popover-content-available-height, 320px) - 44px)); overflow-y: auto; }
+.channel-mention-option { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; border-radius: 6px; text-align: left; color: var(--ui-text); font-size: 13px; }
+.channel-mention-option[aria-selected="true"] { background: color-mix(in srgb, var(--channel-accent) 14%, transparent); }
+.channel-mention-option > span:not(.channel-avatar) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.channel-mention-option small { margin-left: auto; color: var(--ui-text-muted); font-size: 11px; }
+.channel-mention-empty { margin: 0; padding: 12px 10px; color: var(--ui-text-muted); font-size: 12px; }
 html[data-theme^="channel"] :is(.channel-menu, .channel-select-menu) { min-width: 196px; border: 1px solid #ffffff19; border-radius: 10px; background: #2c2e35f5; backdrop-filter: blur(24px); box-shadow: inset 0 1px #ffffff08, 0 10px 32px #0006, 0 2px 7px #0005; padding: 4px; }
 html[data-theme^="channel"] .channel-identity-menu { min-width: 248px; max-height: min(370px, var(--reka-combobox-content-available-height, 370px)); }
 html[data-theme^="channel"] :is(.channel-menu, .channel-select-menu) [data-slot="item"] { min-height: 33px; margin: 1px 0; padding: 7px 8px; gap: 9px; border-radius: 6px; font-size: 12px; }
@@ -1047,3 +1060,5 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 /* Like the light theme, the dark seams show only the resize handle's line. */
 :root[data-theme="channel"] .channel-sidebar { border-right-color: transparent; }
 :root[data-theme="channel"] :is(.channel-nav-resizer, .channel-rail-resizer) { background: transparent; }
+.channel-response-suggestions { display: grid; gap: 6px; margin-top: 10px; font-size: 12px; color: var(--ui-text-muted); }
+.channel-response-suggestions > div { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

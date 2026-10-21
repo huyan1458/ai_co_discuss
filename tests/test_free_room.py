@@ -137,6 +137,29 @@ class FreeRoomTests(unittest.TestCase):
         again = self.reserve(client_id)[1]
         self.assertEqual(first["id"], again["id"])
 
+    def test_recent_execution_reports_include_associations_and_detection_state(self):
+        """Reports distinguish an empty Git observation from missing detection and cap history."""
+        message = self.say("只读检查")[1]["message"]
+        execution = self.reserve()[1]
+        saved = self.answer(execution["id"])[1]["message"]
+        report_path = f"{self.path}/executions/{execution['id']}"
+        report = self.request(self.path)[1]["free"]["executions"][0]
+        self.assertFalse(report["changes_recorded"])
+        self.assertEqual(self.request(report_path, {"action": "report", "changes": []}, self.owner)[0], 200)
+        report = self.request(self.path)[1]["free"]["executions"][0]
+        self.assertEqual((report["changes"], report["changes_recorded"]), ([], True))
+        self.assertEqual((report["answer_id"], report["request_message_id"]), (saved["id"], message["id"]))
+        self.assertEqual(len(report["request_ids"]), 1)
+        self.assertGreaterEqual(report["finished_at"], report["created_at"])
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            for index in range(101):
+                connection.execute("""INSERT INTO member_executions (room_id,member_id,client_id,status,created_at,changes)
+                    VALUES (?,?,?,'failed',1,'["index.html"]')""", (self.room["id"], execution["member_id"], f"history-{index}"))
+        reports = self.request(self.path)[1]["free"]["executions"]
+        self.assertEqual(len(reports), 100)
+        self.assertEqual(reports[0]["changes"], ["index.html"])
+        self.assertFalse({"token_hash", "client_id", "control_hash"} & set(reports[0]))
+
     def test_late_and_unbound_answers_are_rejected(self):
         """Interrupted executions refuse late answers, and an answer cannot be reposted as plain chat."""
         self.say("开始")
@@ -184,11 +207,22 @@ class FreeRoomTests(unittest.TestCase):
         self.say("一")
         execution = self.reserve()[1]
         with closing(sqlite3.connect(self.database)) as connection, connection:
-            connection.execute("UPDATE member_executions SET lease_until=1 WHERE id=?", (execution["id"],))
+            connection.execute("UPDATE member_executions SET created_at=unixepoch()-3600,lease_until=unixepoch()-3480 WHERE id=?", (execution["id"],))
         self.assertEqual(self.answer(execution["id"])[0], 409)
         inbox = self.request(f"{self.path}/inbox", token=self.owner)[1]
         self.assertEqual(inbox["executions"], [])
         self.assertEqual(self.request(self.path)[1]["free"]["requests"][0]["status"], "failed")
+        self.assertEqual(self.request(self.path)[1]["free"]["members"][0]["execution"]["result"], "执行租约到期，接入程序未续租")
+
+    def test_execution_limit_has_a_distinct_failure_reason(self):
+        """A lease clamped to the execution deadline is reported as a timeout."""
+        self.say("等待超时")
+        execution = self.reserve()[1]
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("UPDATE discussion_limits SET execution_minutes=1 WHERE room_id=?", (self.room["id"],))
+            connection.execute("UPDATE member_executions SET created_at=unixepoch()-60,lease_until=unixepoch() WHERE id=?", (execution["id"],))
+        self.request(f"{self.path}/inbox", token=self.owner)
+        self.assertEqual(self.request(self.path)[1]["free"]["members"][0]["execution"]["result"], "已达到单次执行时限")
 
     def test_runner_endpoints_need_the_owner_credential(self):
         """Inbox, reservation and lifecycle actions refuse member and missing credentials."""
@@ -272,6 +306,67 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(self.request(f"{self.path}/members", {"name": "Codex", "token": uuid.uuid4().hex}, self.owner)[0], 409)
         self.assertEqual(self.request(f"{self.path}/members", {"name": "Qwen", "token": uuid.uuid4().hex}, self.member)[0], 403)
         self.assertEqual(self.answer(execution["id"])[0], 201)
+
+    def test_member_suggestion_requires_owner_and_converts_once_with_fresh_chain(self):
+        """A suggestion stays inert, then one owner confirmation creates a deliverable request."""
+        original = self.say("先请 Claude 看看")[1]["message"]
+        execution = self.reserve_for("Claude")[1]
+        status, saved = self.answer(execution["id"], "建议 @Codex 检查边界。", to=["Codex", "Codex"])
+        self.assertEqual(status, 201, saved)
+        source = saved["message"]
+        self.assertEqual([item["member"] for item in source["suggestions"]], ["Codex"])
+        self.assertEqual(len(self.request(self.path)[1]["free"]["requests"]), 1)
+        payload = {"message_id": source["id"], "member_id": self.member_id("Codex")}
+        for token in (None, "wrong-token", self.member, self.codex):
+            self.assertEqual(self.request(f"{self.path}/suggestions", payload, token)[0], 403)
+        status, converted = self.request(f"{self.path}/suggestions", payload, self.owner)
+        self.assertEqual(status, 200, converted)
+        request = converted["request"]
+        self.assertFalse(converted["duplicate"])
+        self.assertEqual((request["message_id"], request["created_by"]), (source["id"], "user"))
+        self.assertNotIn(request["chain_id"], (source["id"], original["id"]))
+        confirmation = self.request(f"{self.path}/messages/{request['chain_id']}")[1]
+        self.assertEqual((confirmation["author"], confirmation["reply_to"]), ("用户", source["id"]))
+        for _ in range(2):
+            retry = self.request(f"{self.path}/suggestions", payload, self.owner)[1]
+            self.assertTrue(retry["duplicate"])
+            self.assertEqual(retry["request"]["id"], request["id"])
+        delivered = self.reserve_for("Codex")[1]
+        self.assertEqual([item["message_id"] for item in delivered["requests"]], [source["id"]])
+        self.assertEqual(self.answer(delivered["id"], author="Codex", token=self.codex)[0], 201)
+        retry = self.request(f"{self.path}/suggestions", payload, self.owner)[1]
+        self.assertEqual(retry["request"]["status"], "completed")
+        source = self.request(f"{self.path}/messages/{source['id']}")[1]
+        self.assertEqual(source["suggestions"][0]["request_id"], request["id"])
+        self.assertEqual(len(self.request(self.path)[1]["free"]["requests"]), 2)
+
+    def test_suggestions_ignore_code_quotes_partial_names_and_self(self):
+        """Only prose mentions or structured targets become response suggestions."""
+        samples = ["`@Codex`", "`` @Codex ` nested ``", "```txt\n@Codex\n```", "~~~\n@Codex\n~~~",
+                   "    @Codex", "  > quote\n@Codex", "> @Codex", "@Codex-评审", "@Claude", "```\n@Codex"]
+        for text in samples:
+            self.say("查看")
+            execution = self.reserve_for("Claude")[1]
+            status, saved = self.answer(execution["id"], text)
+            self.assertEqual(status, 201, saved)
+            self.assertEqual(saved["message"]["suggestions"], [], text)
+        self.say("查看")
+        source = self.answer(self.reserve_for("Claude")[1]["id"], "> 引用 @Claude\n\n请 @Codex 看看。 @Codex 再核对。 \n@不在场")[1]["message"]
+        self.assertEqual([item["member"] for item in source["suggestions"]], ["Codex"])
+
+    def test_suggestion_conversion_rejects_absent_targets_and_wrong_sources(self):
+        """A stale button, archived room or unrelated message cannot dispatch work."""
+        original = self.say("查看")[1]["message"]
+        source = self.answer(self.reserve_for("Claude")[1]["id"], "请 @Codex 看看")[1]["message"]
+        target = self.member_id("Codex")
+        payload = {"message_id": source["id"], "member_id": target}
+        self.assertEqual(self.request(f"{self.path}/suggestions", {**payload, "message_id": original["id"]}, self.owner)[0], 404)
+        self.assertEqual(self.request(f"{self.path}/suggestions", {**payload, "member_id": True}, self.owner)[0], 400)
+        self.request(f"{self.path}/archive", {"actor": "用户"}, self.owner)
+        self.assertEqual(self.request(f"{self.path}/suggestions", payload, self.owner)[0], 400)
+        self.request(f"{self.path}/restore", {"actor": "用户"}, self.owner)
+        self.request(f"{self.path}/members/{target}", {"action": "away"}, self.owner)
+        self.assertEqual(self.request(f"{self.path}/suggestions", payload, self.owner)[0], 409)
 
     def test_away_voids_work_and_return_needs_a_new_credential(self):
         """Leaving cancels only that member's work; old credential copies never revive."""
@@ -417,12 +512,13 @@ class HostTests(FreeRoomTests):
         finally:
             free_room.MAX_AUTO_HOPS = original
 
-    def test_only_the_host_may_name_members_and_never_itself(self):
-        """A member naming others or the host naming itself is rejected before anything is saved."""
+    def test_only_the_host_dispatches_and_never_itself(self):
+        """Members suggest without dispatching; the host cannot name itself."""
         FreeRoomTests.say(self, "派活检查", to=["Codex", "Claude"])
         codex = self.reserve_for("Codex")[1]
         payload = {"author": "Codex", "text": "越权", "source": "cli", "submission_id": uuid.uuid4().hex, "execution_id": codex["id"], "to": ["Gemini"]}
-        self.assertEqual(self.request(f"{self.path}/messages", payload, self.codex)[0], 403)
+        self.assertEqual(self.request(f"{self.path}/messages", payload, self.codex)[0], 201)
+        self.assertFalse(any(item["member"] == "Gemini" for item in self.request(self.path)[1]["free"]["requests"]))
         host = self.reserve_for("Claude")[1]
         payload = {"author": "Claude", "text": "点名自己", "source": "cli", "submission_id": uuid.uuid4().hex, "execution_id": host["id"], "to": ["Claude"]}
         self.assertEqual(self.request(f"{self.path}/messages", payload, self.member)[0], 400)

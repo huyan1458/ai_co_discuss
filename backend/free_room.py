@@ -11,13 +11,16 @@ launched here.
 
 import hmac
 import json
+import re
 import time
+import uuid
 
 from .identity import MAX_ROOM_AGENTS, is_ai
 from .runtime import LEASE_SECONDS, begin_write, require_owner, token_hash
 
 FREE_EXECUTION_MINUTES = 20
 RECENT_REQUESTS = 100
+RECENT_EXECUTIONS = 100
 RECENT_CHANGES = 50
 MAX_CHANGED_FILES = 200
 MAX_PATH_LENGTH = 500
@@ -157,6 +160,18 @@ def public_execution(row):
     return {key: row[key] for key in EXECUTION_FIELDS} if row else None
 
 
+def recent_executions(connection, room_id):
+    """Return bounded public reports, including requests no longer in the recent request list."""
+    rows = connection.execute("""SELECT e.*,
+        (SELECT json_group_array(id) FROM member_requests WHERE execution_id=e.id) AS request_ids,
+        (SELECT MAX(answer_id) FROM member_requests WHERE execution_id=e.id) AS answer_id,
+        (SELECT MIN(message_id) FROM member_requests WHERE execution_id=e.id) AS request_message_id
+        FROM member_executions e WHERE room_id=? ORDER BY id DESC LIMIT ?""", (room_id, RECENT_EXECUTIONS))
+    return [{**public_execution(row), "cwd": row["cwd"], "changes": json.loads(row["changes"] or "[]"),
+             "changes_recorded": bool(row["changes"]), "request_ids": json.loads(row["request_ids"]),
+             "answer_id": row["answer_id"], "request_message_id": row["request_message_id"]} for row in rows]
+
+
 def possible_conflicts(connection, room_id, names):
     """Report files changed by executions of different members whose time windows overlapped.
 
@@ -204,7 +219,7 @@ def free_view(connection, room_id):
         WHERE room_id=? ORDER BY id DESC LIMIT ?""", (room_id, RECENT_REQUESTS))]
     chains = [dict(row) for row in connection.execute(
         "SELECT chain_id,reason FROM free_chains WHERE room_id=? ORDER BY chain_id DESC LIMIT 10", (room_id,))]
-    return {"members": members, "requests": requests[::-1], "execution_minutes": execution_minutes(connection, room_id),
+    return {"members": members, "requests": requests[::-1], "executions": recent_executions(connection, room_id), "execution_minutes": execution_minutes(connection, room_id),
             "conflicts": possible_conflicts(connection, room_id, names), "halted_chains": chains, "max_auto_hops": MAX_AUTO_HOPS}
 
 
@@ -278,11 +293,9 @@ def proxy_member(connection, room_id, author):
 def check_answer(connection, room_id, member, payload):
     """A runner member completes a live execution; a manual member may close its own open requests.
 
-    Only the AI host may name members in its answer; online members are forwarded by the owner.
+    Only the AI host dispatches work; other members' targets remain suggestions.
     """
     if payload.get("to") is not None:
-        if member["role"] != "host":
-            raise PermissionError("只有主持人可以在回答中点名成员派活")
         named_members(active_members(connection, room_id), payload["to"], exclude=member["name"])
     if member["access"] == "online":
         raise PermissionError("在线成员只读，回答由用户代发")
@@ -321,6 +334,82 @@ def insert_request(connection, room_id, member_id, message_id, chain_id, purpose
     """Queue one request; every request belongs to the chain its owner message started."""
     connection.execute("""INSERT INTO member_requests (room_id,member_id,message_id,chain_id,batch_id,purpose,created_by,created_at)
         VALUES (?,?,?,?,?,?,?,?)""", (room_id, member_id, message_id, chain_id, batch_id, purpose, created_by, int(time.time())))
+
+
+def mention_prose(text):
+    """Remove Markdown code and quote blocks before interpreting response suggestions."""
+    lines, fence, quoted = [], "", False
+    for line in text.splitlines():
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if marker:
+            value = marker[1]
+            if not fence:
+                fence = value
+            elif value[0] == fence[0] and len(value) >= len(fence):
+                fence = ""
+            continue
+        if fence or re.match(r"^( {4}|\t)", line):
+            continue
+        if re.match(r"^ {0,3}>", line):
+            quoted = True
+            continue
+        if not line.strip():
+            quoted = False
+        if not quoted:
+            lines.append(line)
+    return re.sub(r"(`+)[\s\S]*?\1(?!`)", "", "\n".join(lines))
+
+
+def save_suggestions(connection, room_id, message_id, member, payload):
+    """Save ordinary members' explicit targets and prose mentions without waking anyone."""
+    if member == "用户" or member["role"] == "host":
+        return
+    active = active_members(connection, room_id)
+    targets = set(named_members(active, payload["to"] if payload.get("to") is not None else [], exclude=member["name"]))
+    prose = mention_prose(str(payload.get("text", "")))
+    for name, target in active.items():
+        if name != member["name"] and re.search(r"(^|[\s(（，,。；;：:])@" + re.escape(name) + r"(?![A-Za-z0-9_\-\u4e00-\u9fff])", prose):
+            targets.add(target["id"])
+    for target_id in targets:
+        connection.execute("INSERT INTO member_suggestions (message_id,member_id) VALUES (?,?)", (message_id, target_id))
+
+
+def message_suggestions(connection, message_id):
+    """Expose suggested members and the durable request, including terminal conversions."""
+    return [dict(row) for row in connection.execute("""SELECT s.member_id,m.name AS member,m.status,
+        r.id AS request_id,r.status AS request_status FROM member_suggestions s
+        JOIN room_members m ON m.id=s.member_id
+        LEFT JOIN member_requests r ON r.message_id=s.message_id AND r.member_id=s.member_id
+        WHERE s.message_id=? ORDER BY s.member_id""", (message_id,))]
+
+
+def convert_suggestion(connection, room_id, token, payload):
+    """Let the owner turn a saved suggestion into one request and a fresh user chain."""
+    begin_write(connection)
+    require_owner(connection, room_id, token)
+    message_id, member_id = payload.get("message_id"), payload.get("member_id")
+    if type(message_id) is not int or type(member_id) is not int:
+        raise ValueError("须提供原消息编号 message_id 与成员编号 member_id")
+    target = connection.execute("""SELECT m.name,m.status FROM member_suggestions s
+        JOIN messages source ON source.id=s.message_id JOIN room_members m ON m.id=s.member_id
+        WHERE source.room_id=? AND m.room_id=? AND s.message_id=? AND s.member_id=?""",
+        (room_id, room_id, message_id, member_id)).fetchone()
+    if not target:
+        raise LookupError("这条消息没有该成员的回应建议")
+    if target["status"] != "active":
+        raise FileExistsError("该成员已离开，不能转为请求")
+    if connection.execute("SELECT 1 FROM room_directory WHERE room_id=? AND archived=1", (room_id,)).fetchone():
+        raise ValueError("频道已存档；恢复后才能继续协作")
+    previous = connection.execute("SELECT * FROM member_requests WHERE message_id=? AND member_id=?", (message_id, member_id)).fetchone()
+    if previous:
+        return {"request": dict(previous), "duplicate": True}
+    confirmation = connection.execute("""INSERT INTO messages (room_id,author,text,reply_to,source,submission_id,created_at)
+        VALUES (?,'用户',?,?,'user',?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))""",
+        (room_id, f"请 @{target['name']} 回应 #{message_id} 的建议。", message_id, uuid.uuid4().hex))
+    connection.execute("INSERT INTO message_details (message_id,kind,submitted_by) VALUES (?,'chat','用户')", (confirmation.lastrowid,))
+    insert_request(connection, room_id, member_id, message_id, confirmation.lastrowid, "ask", "user")
+    request = connection.execute("SELECT * FROM member_requests WHERE message_id=? AND member_id=?", (message_id, member_id)).fetchone()
+    return {"request": dict(request), "duplicate": False}
 
 
 def halt_chain(connection, room_id, chain_id, reason):
@@ -412,10 +501,12 @@ def after_free_message(connection, room_id, message_id, actor, payload):
 def expire_executions(connection, room_id):
     """Fail executions whose lease lapsed; their requests stay visible as failed, never silently retried."""
     now = int(time.time())
-    stale = [row["id"] for row in connection.execute(
-        "SELECT id FROM member_executions WHERE room_id=? AND status IN ('dispatched','started') AND lease_until<=?", (room_id, now))]
-    for execution_id in stale:
-        finish_execution(connection, execution_id, "failed", "执行租约到期，接入程序未续租", "failed")
+    limit_seconds = execution_minutes(connection, room_id) * 60
+    stale = connection.execute(
+        "SELECT id,created_at,lease_until FROM member_executions WHERE room_id=? AND status IN ('dispatched','started') AND lease_until<=?", (room_id, now)).fetchall()
+    for row in stale:
+        reason = "已达到单次执行时限" if row["lease_until"] >= row["created_at"] + limit_seconds else "执行租约到期，接入程序未续租"
+        finish_execution(connection, row["id"], "failed", reason, "failed")
     if stale:
         settle_batches(connection, room_id)
 

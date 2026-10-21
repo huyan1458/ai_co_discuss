@@ -95,8 +95,10 @@ const free_room = computed(() => room.value?.mode === "free");
 const tabs = computed(() => free_room.value ? ALL_TABS.slice(0, 1) : ALL_TABS);
 const invite_name = ref("");
 const invite_access = ref("runner");
+const invite_project_access = ref("read");
 watch(() => room.value?.id, () => {
   invite_name.value = "";
+  invite_project_access.value = "read";
   invite_access.value = (room.value?.free?.members || []).some(member => member.access === "runner") ? "runner" : "manual";
 }, { immediate: true });
 /** Open the creation dialog prefilled for a brainstorm room linked to this free room. */
@@ -384,7 +386,7 @@ function resize_nav_by_key(event) {
           </section>
           <section v-if="room.free?.conflicts?.length || room.free?.halted_chains?.length || view.free_error || view.free_notice || view.access?.error || view.access?.notice" class="pb-section" aria-label="提示">
             <h4>提示</h4>
-            <p v-for="item in room.free?.conflicts || []" :key="item.executions.join('-')" class="pb-free-note is-warning">可能冲突：{{ item.members.map((name) => bridge.display_name(name)).join(' 与 ') }} 都改动了 {{ item.files.join('、') }}</p>
+            <p v-for="item in room.free?.conflicts || []" :key="item.executions.join('-')" class="pb-free-note is-warning">可能冲突：{{ item.members.map((name) => bridge.display_name(name)).join(' 与 ') }} 的重叠执行观察到 {{ item.files.join('、') }} 变化；修改者未确认。</p>
             <p v-for="item in (room.free?.halted_chains || []).slice(0, 3)" :key="item.chain_id" class="pb-free-note">#{{ item.chain_id }} 的任务链已停：{{ item.reason === 'budget' ? `达到 ${room.free.max_auto_hops} 次上限` : '派出的成员都失败了' }}；发新消息即重新开始</p>
             <p v-if="view.free_error" role="alert" class="pb-free-note is-error">{{ view.free_error }}</p>
             <p v-else-if="view.free_notice" role="status" class="pb-free-note">{{ view.free_notice }}</p>
@@ -393,9 +395,10 @@ function resize_nav_by_key(event) {
           </section>
           <section class="pb-section" aria-label="邀请">
             <h4>邀请 AI</h4>
-            <form class="pb-free-invite" @submit.prevent="act('invite_member', { name: invite_name, access: invite_access })">
+            <form class="pb-free-invite" @submit.prevent="act('invite_member', { name: invite_name, access: invite_access, project_access: invite_project_access })">
               <USelect v-model="invite_name" :items="invite_choices" placeholder="选择 AI" size="sm" class="min-w-0 flex-1" />
               <USelect v-model="invite_access" :items="[{ label: '本机自动', value: 'runner' }, { label: '手动接入', value: 'manual' }, { label: '在线只读', value: 'online' }]" size="sm" class="w-26" />
+              <USelect v-if="invite_access === 'runner'" v-model="invite_project_access" :items="[{ label: '项目文件只读', value: 'read' }, { label: '项目文件可写', value: 'write' }]" aria-label="受邀成员的项目文件权限" size="sm" class="w-full" />
             </form>
             <p v-if="invite_access === 'runner' && !view.launch.available" class="pb-free-note">程序唤醒需要本机服务，请在运行 AI 的电脑打开本机网站。</p>
           </section>
@@ -404,7 +407,7 @@ function resize_nav_by_key(event) {
             <button v-for="item in room.linked_rooms" :key="item.id" type="button" class="pb-link pb-free-linked" @click="act('room', item.id)">{{ item.title }}<small>{{ bridge.phases[item.phase] || item.phase }}</small></button>
           </section>
           <section class="pb-actions" aria-label="操作">
-            <UButton icon="i-lucide-user-plus" label="邀请" size="sm" color="neutral" variant="outline" class="pb-action" :disabled="!invite_name || (invite_access === 'runner' && !view.launch.available)" @click="act('invite_member', { name: invite_name, access: invite_access })" />
+            <UButton icon="i-lucide-user-plus" label="邀请" size="sm" color="neutral" variant="outline" class="pb-action" :disabled="!invite_name || (invite_access === 'runner' && !view.launch.available)" @click="act('invite_member', { name: invite_name, access: invite_access, project_access: invite_project_access })" />
             <UButton icon="i-lucide-messages-square" label="发起头脑风暴" size="sm" color="neutral" variant="outline" class="pb-action" title="用当前成员新建一场讨论房间，收束后可把结论发回这里" @click="start_brainstorm" />
           </section>
         </div>

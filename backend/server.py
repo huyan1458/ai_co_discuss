@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 from .free_room import (add_member, after_free_message, authorize_free_write, check_answer, check_proxy, execution_action, free_view,
                         inbox, interrupt_member, member_action, member_values, migrate_free_tables, proxy_member, reserve_execution,
                         discussion_members, room_mode, save_room_access, sync_discussion_members, view_execution)
+from .free_room import convert_suggestion, message_suggestions, save_suggestions
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, is_ai, is_participant
 from .runtime import (authorize_write, begin_write, configure_runtime, event_action,
                      LIMIT_DEFAULTS, LIMITS_SQL, limit_values, limits_view, require_within_limits,
@@ -85,6 +86,7 @@ FREE_BACKUP_QUERIES = {
     "room_modes": "SELECT room_id,mode FROM room_modes WHERE room_id=?",
     "room_members": "SELECT id,room_id,name,adapter,role,status,read_until,created_at FROM room_members WHERE room_id=? ORDER BY id",
     "member_requests": "SELECT * FROM member_requests WHERE room_id=? ORDER BY id",
+    "member_suggestions": "SELECT s.* FROM member_suggestions s JOIN messages m ON m.id=s.message_id WHERE m.room_id=? ORDER BY s.message_id,s.member_id",
 }
 MESSAGE_QUERY = """SELECT messages.*, COALESCE(details.kind,'opinion') AS kind,
 COALESCE(details.submitted_by, CASE WHEN messages.source IN ('cli','url','user')
@@ -667,6 +669,7 @@ def attachment_view(row):
 def message_with_attachments(connection, row):
     """Attach the published file list to an original message."""
     message = dict(row)
+    message["suggestions"] = message_suggestions(connection, message["id"])
     message["attachments"] = [attachment_view(item) for item in connection.execute(
         "SELECT * FROM attachments WHERE message_id=? ORDER BY position,id", (message["id"],))]
     return message
@@ -838,6 +841,7 @@ def append_free_message(connection, room, payload, actor):
                        (cursor.lastrowid, expected["summary"], expected["summary_by"]))
     for position, identifier in enumerate(identifiers):
         connection.execute("UPDATE attachments SET message_id=?,position=? WHERE id=?", (cursor.lastrowid, position, identifier))
+    save_suggestions(connection, room_id, cursor.lastrowid, proxy or actor, payload)
     after_free_message(connection, room_id, cursor.lastrowid, proxy or actor, payload)
     return {"message": get_message(connection, room_id, cursor.lastrowid), "duplicate": False}
 
@@ -1189,6 +1193,7 @@ def protocol_text(room):
             "manual 成员可由人工或软件原生定时触发，用本人成员文件自行提交。回答带 --request 请求编号（可重复）关闭自己的请求，不带则为普通发言。不得编造 execution 编号。",
             "online 成员只读，在原聊天回答，由用户以房主凭据代发原文；作者仍是在线成员、提交者为用户，不能用成员凭证自行写入。复制说明不表示已送达或接入。",
             "获授 host 职责的本地成员可在回答中用 --to 点名其他成员，不能点名自己或扩大权限；route 表示分配任务，handoff 表示派出的成员已结束。链上 AI 请求受房间预算限制，到限等待用户。",
+            "普通成员的 --to 或正文 @ 只保存为回应建议，不唤醒；代码与引用中的正文 @ 不算。房主在网页转为请求后建立关联原消息的新用户任务链，重复点击不重复派发。",
             f"附件使用 attachment upload/download；上传使用本人成员文件，消息带 attachment_ids。原始接口为 {base}/attachments 与 {base}/messages，自动成员在回答完成前上传。",
             "每次新内容用新 submission_id，同次重试沿用编号、原文、凭据和执行/请求关联；失败先核对服务端结果，不换身份或编号绕过。用户打断、成员离开或移除后停止本次工作。",
         ])
@@ -1528,7 +1533,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         room_id = parts[2]
         token = self.headers.get("X-Discussion-Token", "")
         free = room_mode(connection, room_id) == "free"
-        if free and parts[3:4] in (["inbox"], ["executions"], ["members"]):
+        if free and parts[3:4] in (["inbox"], ["executions"], ["members"], ["suggestions"]):
             return self.handle_free_api(connection, parts, method)
         if parts[3:4] == ["attachments"]:
             return self.handle_attachments(connection, parts, params, method)
@@ -1659,6 +1664,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         token = self.headers.get("X-Discussion-Token", "")
         if parts[3:] == ["inbox"] and method == "GET":
             result = inbox(connection, room_id, token)
+        elif parts[3:] == ["suggestions"] and method == "POST":
+            result = convert_suggestion(connection, room_id, token, self.read_payload())
         elif parts[3:] == ["executions"] and method == "POST":
             result = reserve_execution(connection, room_id, token, self.read_payload())
         elif len(parts) == 5 and parts[3] == "executions":

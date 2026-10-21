@@ -7,6 +7,183 @@ import { computed, nextTick, reactive, ref, watch } from "vue";
 const source = readFileSync(new URL("../web/app.js", import.meta.url), "utf8").replace(/\nrestore_theme\(\);[\s\S]*$/, "");
 const discussion_source = readFileSync(new URL("../frontend/ChannelDiscussion.vue", import.meta.url), "utf8");
 
+/** Exercise the real autocomplete against a native-editor stub and reactive room membership. */
+function mention_fixture() {
+  const text = ref("");
+  const room = ref({ id: "test", host: "用户", experts: { Codex: "cli", Claude: "online" } });
+  const free = ref(true);
+  const free_members = ref([{ name: "Codex" }, { name: "Claude-评审" }]);
+  const editor = { value: "", selectionStart: 0, selectionEnd: 0, focus() {}, setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; } };
+  const context = vm.createContext({ computed, ref, watch, nextTick, text, room, free, free_members,
+    view: ref({ tab: "messages" }), prompt: ref({ textareaRef: editor }), bridge: { display_name: name => name } });
+  const start = discussion_source.indexOf("const mention_context =");
+  const end = discussion_source.indexOf("/** End a structured excerpt", start);
+  vm.runInContext(discussion_source.slice(start, end) + "\nglobalThis.mention_state = { context: mention_context, members: mention_members, active: mention_active };", context);
+  const target = context.prompt.value.textareaRef;
+  return { context, room, free, free_members, text, editor: target, state: context.mention_state,
+    type(value, caret = value.length, end = caret) {
+      text.value = value; target.value = value; target.selectionStart = caret; target.selectionEnd = end;
+      context.update_mention({ type: "input", target });
+    },
+    key(key, options = {}) {
+      const event = { key, target, prevented: false, stopped: false, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; }, ...options };
+      context.mention_keydown(event);
+      return event;
+    } };
+}
+
+test("mention autocomplete excludes email, selected text, code and quotes, and filters current members", () => {
+  const fixture = mention_fixture();
+  for (const value of ["mail@Co", "`@Co", "```js\n@Co", "> @Co"]) {
+    fixture.type(value);
+    assert.equal(fixture.state.context.value, null, value);
+  }
+  fixture.type("@Co", 1, 3);
+  assert.equal(fixture.state.context.value, null);
+  fixture.type("请查看，@cO");
+  assert.deepEqual([...fixture.state.members.value], ["Codex"]);
+  fixture.type("@不存在");
+  assert.equal(fixture.state.members.value.length, 0);
+  fixture.type("@评审");
+  assert.deepEqual([...fixture.state.members.value], ["Claude-评审"]);
+  fixture.free_members.value = [{ name: "Codex" }];
+  assert.equal(fixture.state.members.value.length, 0, "departed members disappear from an open menu");
+  fixture.free.value = false;
+  fixture.type("@");
+  assert.deepEqual([...fixture.state.members.value], ["Codex", "Claude"]);
+});
+
+test("mention selection replaces the caret token without dropping surrounding draft and supports multiple mentions", async () => {
+  const fixture = mention_fixture();
+  fixture.type("前文 @Claude 后文", 7);
+  await fixture.context.select_mention("Claude-评审");
+  assert.equal(fixture.text.value, "前文 @Claude-评审 后文");
+  assert.equal(fixture.editor.selectionStart, "前文 @Claude-评审 ".length);
+  assert.equal(fixture.state.context.value, null);
+  fixture.type("@Codex 请看 @Cl");
+  const event = fixture.key("Tab");
+  await nextTick();
+  assert.equal(event.prevented, true);
+  assert.equal(fixture.text.value, "@Codex 请看 @Claude-评审 ");
+});
+
+test("mention arrows wrap, Enter selects, Escape dismisses and send modifiers remain available", async () => {
+  const fixture = mention_fixture();
+  fixture.type("@");
+  fixture.key("ArrowUp");
+  assert.equal(fixture.state.active.value, "Claude-评审");
+  fixture.key("ArrowDown");
+  assert.equal(fixture.state.active.value, "Codex");
+  for (const options of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { isComposing: true }, { keyCode: 229 }]) {
+    assert.equal(fixture.key("Enter", options).prevented, false);
+    assert.equal(fixture.text.value, "@");
+  }
+  assert.equal(fixture.key("Enter").stopped, true);
+  await nextTick();
+  assert.equal(fixture.text.value, "@Codex ");
+  fixture.type("@");
+  assert.equal(fixture.key("Escape").prevented, true);
+  fixture.context.update_mention({ type: "keyup", key: "Escape", target: fixture.editor });
+  assert.equal(fixture.state.context.value, null, "Escape keyup must not reopen the menu");
+  assert.equal(fixture.text.value, "@");
+});
+
+test("mention composition and room changes close stale suggestions", async () => {
+  const fixture = mention_fixture();
+  fixture.type("@");
+  fixture.context.mention_composition({ type: "compositionstart", target: fixture.editor });
+  fixture.type("@评");
+  assert.equal(fixture.state.context.value, null);
+  fixture.context.mention_composition({ type: "compositionend", target: fixture.editor });
+  assert.equal(fixture.state.active.value, "Claude-评审");
+  fixture.room.value.id = "another";
+  await nextTick();
+  assert.equal(fixture.state.context.value, null);
+});
+
+test('response suggestions track live conversion membership ownership and pending state', () => {
+  const room = ref({ mode: 'free', free: { members: [{ id: 2, name: 'Codex', status: 'active' }], requests: [] } });
+  const view = ref({ access: { can_manage: false }, messages: [{ id: 7, suggestions: [{ member_id: 2, member: 'Codex', request_id: null }] }] });
+  const pending = ref('');
+  const context = vm.createContext({ computed, room, view, pending, free: ref(true) });
+  const start = discussion_source.indexOf('const response_suggestions = computed(');
+  const end = discussion_source.indexOf('/** A chip is on', start);
+  vm.runInContext(discussion_source.slice(start, end) + '\nglobalThis.suggestions = response_suggestions;', context);
+  const suggestion = () => context.suggestions.value.get(7)[0];
+  assert.equal(Boolean(suggestion().can_convert), false);
+  view.value.access.can_manage = true;
+  assert.equal(suggestion().can_convert, true);
+  pending.value = 'convert_suggestion';
+  assert.equal(suggestion().can_convert, false);
+  pending.value = '';
+  room.value.archived = true;
+  assert.equal(suggestion().can_convert, false);
+  room.value.archived = false;
+  room.value.free.members[0].status = 'away';
+  assert.equal(suggestion().status, 'away');
+  assert.equal(suggestion().can_convert, false);
+  room.value.free.members[0].status = 'active';
+  room.value.free.requests.push({ id: 9, message_id: 7, member_id: 2, status: 'completed' });
+  assert.equal(suggestion().request_id, 9);
+  assert.equal(suggestion().can_convert, false);
+  assert.match(discussion_source, /act\('convert_suggestion', \{ message_id: message.id, member_id: suggestion.member_id \}\)/);
+  assert.match(discussion_source, /已转请求 #/);
+});
+
+test('conversion controller preserves source and target across retries and ignores another room', async () => {
+  const calls = [], state = { room: { id: 'source-room' }, messages: [{ id: 7, suggestions: [{ member_id: 2, request_id: null }] }] };
+  let refreshes = 0;
+  const context = vm.createContext({ state, request_json: async (...args) => { calls.push(args); return { request: { id: 9 } }; }, refresh_room: async () => refreshes++ });
+  vm.runInContext(source.match(/async function convert_suggestion\([\s\S]*?\n\}/)[0], context);
+  await context.convert_suggestion({ message_id: 7, member_id: 2 });
+  await context.convert_suggestion({ message_id: 7, member_id: 2 });
+  assert.equal(JSON.stringify(calls[0]), JSON.stringify(calls[1]));
+  assert.equal(calls[0][0], '/api/rooms/source-room/suggestions');
+  assert.equal(refreshes, 2);
+  assert.equal(state.messages[0].suggestions[0].request_id, 9);
+  context.request_json = async () => { state.room = { id: 'another-room' }; };
+  await context.convert_suggestion({ message_id: 7, member_id: 2 });
+  assert.equal(refreshes, 2);
+});
+
+test('message cache retains confirmed suggestions after recent requests age out without rerendering prose', () => {
+  const message = { id: 7, text: '已保存正文', suggestions: [{ member_id: 2, request_id: null }], rendered_text: 'cached-markdown' };
+  const state = { messages: [message], room: { free: { requests: [{ id: 9, message_id: 7, member_id: 2 }] } } };
+  const container = { querySelectorAll: () => [], scrollTop: 0, scrollHeight: 100, clientHeight: 100 };
+  const context = vm.createContext({ state, element: () => container, SCROLL_BOTTOM_THRESHOLD: 70, message_markup: () => '',
+    window: { discuss_markdown: { render_markdown: () => { throw new Error('Unchanged prose must stay cached'); } } } });
+  vm.runInContext(source.match(/function render_messages\(result\) \{[\s\S]*?\n\}/)[0], context);
+  context.render_messages({ messages: [message], total: 1, pages: 1 });
+  assert.equal(state.messages[0].suggestions[0].request_id, 9);
+  assert.equal(state.messages[0].rendered_text, 'cached-markdown');
+  const saved = state.messages[0];
+  state.room.free.requests = [];
+  context.render_messages({ messages: [message], total: 1, pages: 1 });
+  assert.equal(state.messages[0], saved);
+  assert.equal(state.messages[0].suggestions[0].request_id, 9);
+});
+
+test('execution reports bind answers and failed requests and distinguish unknown file changes', () => {
+  const room = ref({ free: { executions: [
+    { id: 1, status: 'completed', answer_id: 8, request_message_id: 4, request_ids: [1, 2], created_at: 10, finished_at: 22, changes_recorded: true, changes: ['index.html'] },
+    { id: 2, status: 'failed', answer_id: null, request_message_id: 9, request_ids: [3], created_at: 10, finished_at: 30, changes_recorded: false, changes: [] },
+    { id: 3, status: 'completed', answer_id: 11, request_message_id: 10, request_ids: [4], created_at: 10, finished_at: 30, changes_recorded: true, changes: [] },
+    { id: 4, status: 'started', request_message_id: 12 },
+  ] } });
+  const context = vm.createContext({ computed, room, free: ref(true) });
+  const start = discussion_source.indexOf('const execution_reports = computed(');
+  const end = discussion_source.indexOf('/** Show only a live automatic execution', start);
+  vm.runInContext(discussion_source.slice(start, end) + '\nglobalThis.reports = execution_reports;', context);
+  const reports = context.reports.value;
+  assert.equal(reports.get(8)[0].files_text, 'index.html');
+  assert.equal(reports.get(8)[0].seconds, 12);
+  assert.match(reports.get(9)[0].files_text, /未提供自动改动检测/);
+  assert.equal(reports.get(11)[0].files_text, '未观察到文件变化');
+  assert.equal(reports.has(12), false);
+  assert.match(discussion_source, /v-for="report in execution_reports.get\(message.id\)/);
+  assert.match(discussion_source, /report.request_ids.map/);
+});
+
 /** Drive page subscriptions and timers without polling a live discussion. */
 function update_fixture() {
   const fixture = theme_fixture(), { context } = fixture;
@@ -1240,6 +1417,28 @@ test("manual invitations and rejoin reuse the original token after ambiguous res
   assert.deepEqual(inputs[3], inputs[2]);
   assert.notEqual(inputs[2].payload.token, inputs[0].payload.token);
   assert.equal(f.context.member_credentials('one')['Codex-2'].token, inputs[2].payload.token);
+});
+
+test("automatic invitations keep explicit project permissions across an uncertain retry", async () => {
+  const f = theme_fixture(), inputs = [], members = [];
+  f.context.test_state.room = { id: 'one', mode: 'free', free: { members } };
+  f.storage.set('discuss-access:one', 'owner-secret');
+  let lose = true;
+  Object.assign(f.context, { refresh_room: async () => {},
+    launch_options: () => ({ participants: { Claude: { model: 'sonnet' } } }),
+    local_launch_request: async (operation, payload) => {
+      inputs.push({ operation, payload });
+      if (lose) throw new Error('receipt lost');
+      return { free: { members: [{ name: payload.name, status: 'active', access: 'runner' }] } };
+    } });
+  await f.context.invite_member({ name: 'Claude', access: 'runner', project_access: 'write' });
+  lose = false;
+  await f.context.invite_member({ name: 'Claude', access: 'runner', project_access: 'read' });
+  assert.deepEqual(inputs[1], inputs[0]);
+  assert.equal(inputs[0].payload.participants.Claude.project_access, 'write');
+  assert.equal(inputs[0].payload.participants.Claude.model, 'sonnet');
+  await f.context.invite_member({ name: 'Codex', access: 'runner' });
+  assert.equal(inputs[2].payload.participants.Codex.project_access, 'read');
 });
 
 test("topic retry retains a pending credential after live refresh has already revealed the new member", () => {

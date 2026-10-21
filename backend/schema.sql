@@ -550,6 +550,12 @@ CREATE TABLE IF NOT EXISTS member_requests (
     UNIQUE(message_id,member_id)
 );
 CREATE INDEX IF NOT EXISTS member_requests_open ON member_requests(member_id,status);
+-- Ordinary members can suggest a response without creating work or spending a chain budget.
+CREATE TABLE IF NOT EXISTS member_suggestions (
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    member_id INTEGER NOT NULL REFERENCES room_members(id) ON DELETE CASCADE,
+    PRIMARY KEY (message_id,member_id)
+);
 -- A host's dispatch: its named requests form one batch that hands back to the host once.
 CREATE TABLE IF NOT EXISTS free_batches (
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,

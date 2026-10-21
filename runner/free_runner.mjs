@@ -227,8 +227,8 @@ export class FreeRoomRunner {
       if (active.has(execution_id) || this.members.get(snapshot.member)?.size) continue;
       this.snapshots.delete(execution_id);
       const after = workspace_snapshot(snapshot.directory);
-      const changes = after ? changed_between(snapshot.before, after) : [];
-      if (!changes.length) continue;
+      if (!after) continue;
+      const changes = changed_between(snapshot.before, after);
       try { await api(this.config, `/executions/${execution_id}`, { action: 'report', changes: changes.slice(0, 200) }); }
       catch (error) { if (!/HTTP (404|409)/.test(error.message)) throw error; }
     }

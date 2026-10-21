@@ -159,6 +159,18 @@ const free_activity = computed(() => {
 const free_members = computed(() => free.value ? (room.value.free?.members || []).filter((member) => member.status === "active") : []);
 const free_host = computed(() => free_members.value.find((member) => member.role === "host"));
 const free_online = computed(() => free_members.value.filter((member) => member.access === "online"));
+/** Combine immutable suggestions with live membership and conversion status. */
+const response_suggestions = computed(() => {
+  if (!free.value) return new Map();
+  const members = new Map((room.value.free?.members || []).map(member => [member.id, member]));
+  const requests = new Map((room.value.free?.requests || []).map(request => [`${request.message_id}:${request.member_id}`, request]));
+  return new Map(view.value.messages.map(message => [message.id, (message.suggestions || []).map(suggestion => {
+    const request_id = requests.get(`${message.id}:${suggestion.member_id}`)?.id || suggestion.request_id;
+    const status = members.get(suggestion.member_id)?.status || "removed";
+    return { ...suggestion, request_id, status,
+      can_convert: !request_id && status === "active" && view.value.access?.can_manage && !room.value.archived && !pending.value };
+  })]));
+});
 /** A chip is on when clicked or when the draft @mentions that member outside code. */
 const MENTION_PATTERN = (name) => new RegExp(`(^|[\\s(（，,。；;：:])@${name}(?![\\w-])`, "u");
 const draft_prose = computed(() => text.value.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "").replace(/^>.*$/gm, ""));
@@ -169,7 +181,7 @@ const FREE_REQUEST_LABELS = { pending: ["待投递", "neutral"], delivering: ["�
 const request_badges = computed(() => {
   const badges = new Map();
   if (!free.value) return badges;
-  const failures = new Map((room.value.free?.members || []).map((member) => [member.execution?.id, member.execution?.result]));
+  const failures = new Map((room.value.free?.executions || []).map((execution) => [execution.id, execution.result]));
   for (const request of room.value.free?.requests || []) {
     const [label, color] = FREE_REQUEST_LABELS[request.status];
     const title = request.status === "failed" ? failures.get(request.execution_id) || "执行失败" : "";
@@ -177,6 +189,21 @@ const request_badges = computed(() => {
       { key: request.id, label: `${bridge.display_name(request.member)} · ${label}`, color, title }]);
   }
   return badges;
+});
+/** Attach each terminal execution to its answer, or to the original request when it has no answer. */
+const execution_reports = computed(() => {
+  const reports = new Map();
+  if (!free.value) return reports;
+  for (const execution of room.value.free?.executions || []) {
+    if (!["completed", "failed", "cancelled"].includes(execution.status)) continue;
+    const message_id = execution.answer_id || execution.request_message_id;
+    const report = { ...execution, label: { completed: "已完成", failed: "失败", cancelled: "已停止" }[execution.status],
+      seconds: Math.max(0, execution.finished_at - execution.created_at),
+      files_text: !execution.changes_recorded ? "未提供自动改动检测（非 Git 目录或未上报）"
+        : execution.changes.length ? execution.changes.join("、") : "未观察到文件变化" };
+    reports.set(message_id, [...(reports.get(message_id) || []), report]);
+  }
+  return reports;
 });
 /** Show only a live automatic execution; assignments alone are not evidence of a reply in progress. */
 const pending_message = computed(() => {
@@ -233,6 +260,80 @@ const selected_identity = computed(() => identities.value.find((item) => item.va
 const kinds = [{ label: "运行回执", value: "receipt" }, { label: "普通发言 / 代发", value: "opinion", icon: "i-lucide-message-square" }, { label: "主持发言", value: "moderation", icon: "i-lucide-list-checks" }, { label: "代发在线观点", value: "forward", icon: "i-lucide-forward" }];
 const date_formatter = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" });
 const author_note = computed(() => kind.value === "receipt" ? "运行回执，由用户录入" : kind.value === "forward" ? "由用户代发" : kind.value === "moderation" ? "主持发言" : author.value === "用户" ? "本人发言" : `代发 ${author.value} 的观点`);
+
+const mention_context = ref(null);
+const mention_index = ref(0);
+const mention_list = ref(null);
+let mention_composing = false;
+const mention_members = computed(() => {
+  const names = free.value ? free_members.value.map(member => member.name)
+    : [...new Set([room.value?.host, ...Object.keys(room.value?.experts || {})])].filter(name => name && name !== "用户");
+  const query = mention_context.value?.query.toLocaleLowerCase() || "";
+  return names.filter(name => `${name} ${bridge.display_name(name)}`.toLocaleLowerCase().includes(query));
+});
+const mention_active = computed(() => mention_members.value[Math.min(mention_index.value, mention_members.value.length - 1)]);
+watch([() => room.value?.id, () => view.value.tab], () => { mention_context.value = null; });
+
+/** Locate an @ token at a collapsed caret, excluding email addresses, code and quotes. */
+function find_mention(value, start, end = start) {
+  if (start !== end) return null;
+  const prefix = value.slice(0, start);
+  const match = prefix.match(/(?:^|[\s(（，,。；;：:])@([^\s@`，,。；;：:()（）]*)$/u);
+  if (!match) return null;
+  const prose = prefix.replace(/```[\s\S]*?```/g, "");
+  const line = prose.split("\n").at(-1);
+  if (prose.includes("```") || /^\s*>/.test(line) || line.replace(/`[^`]*`/g, "").includes("`")) return null;
+  const remainder = value.slice(start).match(/^[^\s@`，,。；;：:()（）]*/u)[0];
+  return { start: start - match[1].length - 1, end: start + remainder.length, query: match[1] };
+}
+
+/** Read the native caret after typing or moving through the existing draft. */
+function update_mention(event) {
+  const editor = prompt.value?.textareaRef;
+  if (event.target !== editor || mention_composing) return;
+  if (event.type === "keyup" && !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const context = find_mention(editor.value, editor.selectionStart, editor.selectionEnd);
+  if (context?.query !== mention_context.value?.query || context?.start !== mention_context.value?.start) mention_index.value = 0;
+  mention_context.value = context;
+}
+
+/** Replace just the active token and leave the caret ready for the next word. */
+async function select_mention(name) {
+  if (!mention_context.value || !mention_members.value.includes(name)) return;
+  const { start, end } = mention_context.value;
+  const insertion = `@${name} `;
+  text.value = text.value.slice(0, start) + insertion + text.value.slice(end).replace(/^ /, "");
+  mention_context.value = null;
+  await nextTick();
+  const editor = prompt.value?.textareaRef;
+  editor?.focus();
+  editor?.setSelectionRange(start + insertion.length, start + insertion.length);
+}
+
+/** Keep suggestion keys local to the editor; Ctrl/Cmd+Enter still sends. */
+function mention_keydown(event) {
+  if (event.target !== prompt.value?.textareaRef || !mention_context.value || event.isComposing || event.keyCode === 229) return;
+  if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+  if (event.key === "Escape") mention_context.value = null;
+  else if (["ArrowDown", "ArrowUp"].includes(event.key) && mention_members.value.length) {
+    const direction = event.key === "ArrowDown" ? 1 : -1;
+    mention_index.value = (mention_members.value.indexOf(mention_active.value) + direction + mention_members.value.length) % mention_members.value.length;
+    nextTick(() => mention_list.value?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" }));
+  } else if (["Enter", "Tab"].includes(event.key) && mention_active.value) select_mention(mention_active.value);
+  else return;
+  event.preventDefault();
+  event.stopPropagation();
+}
+
+/** Let the input method own candidate selection before reopening member suggestions. */
+function mention_composition(event) {
+  mention_composing = event.type === "compositionstart";
+  mention_context.value = null;
+  if (!mention_composing) update_mention(event);
+}
+
+/** The autocomplete never moves focus away from the draft. */
+function keep_mention_focus(event) { event.preventDefault(); }
 
 /** End a structured excerpt after complete code lines or table rows. */
 function trim_preview_blocks(fragment) {
@@ -608,6 +709,7 @@ async function reply_to(message) { await act("reply", message); prompt.value?.te
 /** Send the shared draft through the established idempotent controller. */
 async function send() {
   if ((!text.value.trim() && !view.value.attachment_drafts.length) || pending.value || view.value.sending_message) return;
+  mention_context.value = null;
   follow_tail.value = true;
   await act("send");
   await follow_messages();
@@ -653,7 +755,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
         </div>
       </motion.div>
     </Teleport>
-    <div ref="transcript" v-memo="[message_groups, message_round_labels, active_message, expanded_answers.size, room.title, view.query, view.mention_only, topic_key, topic_expanded, topic_overflows, pending_message, pending_seconds, request_badges]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
+    <div ref="transcript" v-memo="[message_groups, message_round_labels, active_message, expanded_answers.size, room.title, view.query, view.mention_only, topic_key, topic_expanded, topic_overflows, pending_message, pending_seconds, request_badges, execution_reports, response_suggestions]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
       <div v-if="!view.query && !view.mention_only" class="channel-message-group channel-topic-group"><section class="channel-message channel-topic-card" :class="{ 'is-expanded': topic_expanded }" aria-label="议题">
         <header class="channel-topic-heading"><span class="channel-topic-eyebrow"><UIcon name="i-lucide-target" />议题</span><h2>{{ room.title }}</h2><UButton icon="i-lucide-pencil" label="编辑" color="neutral" variant="ghost" size="xs" @click="emit('edit')" /></header>
         <div ref="topic_body" class="channel-topic-body" :class="{ 'is-clamped': topic_overflows && !topic_expanded }">
@@ -670,7 +772,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
       </section></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
-        <UChatMessage v-for="message in group.messages" :id="String(message.id)" :key="message.id" v-memo="[message, message_round_labels.get(message.id), expanded_answers.has(message.id), active_message === message.id, waits_for_host(message), request_badges.get(message.id)]" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="{ 'channel-current-message': active_message === message.id }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
+        <UChatMessage v-for="message in group.messages" :id="String(message.id)" :key="message.id" v-memo="[message, message_round_labels.get(message.id), expanded_answers.has(message.id), active_message === message.id, waits_for_host(message), request_badges.get(message.id), execution_reports.get(message.id), response_suggestions.get(message.id)]" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="{ 'channel-current-message': active_message === message.id }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
@@ -691,6 +793,20 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             </div>
             <div v-if="message.summary" class="channel-answer-summary"><small>回答摘要<span v-if="message.summary_by && message.summary_by !== message.author"> · {{ bridge.display_name(message.summary_by) }} 整理</span></small><div class="channel-message-text markdown-body" v-html="message.rendered_summary"></div></div>
             <div v-if="message.attachments?.length" v-html="bridge.attachment_markup(message.attachments)"></div>
+            <div v-if="free && message.suggestions?.length" class="channel-response-suggestions" aria-label="回应建议">
+              <div v-for="suggestion in response_suggestions.get(message.id) || []" :key="suggestion.member_id">
+                <span>建议请 {{ bridge.display_name(suggestion.member) }} 回应</span>
+                <span v-if="suggestion.request_id">已转请求 #{{ suggestion.request_id }}</span>
+                <span v-else-if="suggestion.status !== 'active'">成员已离开</span>
+                <UButton v-else-if="view.access?.can_manage && !room.archived" label="转为请求" icon="i-lucide-send" size="xs" variant="soft" color="neutral" :disabled="!suggestion.can_convert" :aria-label="`请 ${suggestion.member} 回应 #${message.id}`" @click="act('convert_suggestion', { message_id: message.id, member_id: suggestion.member_id })" />
+              </div>
+            </div>
+            <section v-for="report in execution_reports.get(message.id) || []" :key="report.id" class="channel-execution-report" :aria-label="`执行报告 #${report.id}`">
+              <div><strong>执行 #{{ report.id }} · {{ report.label }}</strong><span>{{ format_elapsed(report.seconds) }}</span></div>
+              <p>请求 {{ report.request_ids.map((id) => `#${id}`).join('、') }}</p>
+              <p>工作区观察：{{ report.files_text }}</p>
+              <p v-if="report.status !== 'completed' && report.result">{{ report.result }}</p>
+            </section>
           </template>
           <template #header><div class="channel-message-actions"><div class="channel-message-toolbar">
             <UTooltip text="回复"><UButton icon="i-lucide-corner-up-left" size="xs" color="neutral" variant="ghost" :aria-label="`回复 #${message.id}`" @click="reply_to(message)" /></UTooltip>
@@ -719,8 +835,20 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
       <div v-if="!view.messages.length && !pending_message" class="channel-empty"><UIcon :name="view.query || view.mention_only ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.mention_only ? '没有找到消息' : room.title }}</h2><p>{{ view.query || view.mention_only ? '试试其他关键词，或清除筛选。' : bridge.empty_discussion_message(room) }}</p></div>
     </div>
     <div v-if="(view.messages.length || pending_message) && !follow_tail" class="channel-latest-dock"><UButton icon="i-lucide-arrow-down" color="neutral" variant="outline" aria-label="回到最新消息" class="channel-latest-button" @click="return_to_latest" /></div>
-    <div class="channel-composer-dock"><div class="channel-composer-column" @dragover="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments" @keydown.capture="attachment_shortcut">
-      <UChatPrompt ref="prompt" v-model="text" :disabled="view.sending_message" :submit-on-enter="false" :autofocus="false" :rows="1" :maxrows="6" :placeholder="`发消息到 # ${room.title}`" aria-label="留言正文" variant="outline" color="neutral" class="channel-composer" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
+    <div class="channel-composer-dock"><div class="channel-composer-column" @dragover="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments" @keydown.capture="mention_keydown($event); attachment_shortcut($event)" @input="update_mention" @click="update_mention" @keyup="update_mention" @select="update_mention" @compositionstart="mention_composition" @compositionend="mention_composition">
+      <UPopover :open="!!mention_context" :reference="prompt?.$el" :content="{ side: 'top', align: 'start', sideOffset: 8, onOpenAutoFocus: keep_mention_focus, onCloseAutoFocus: keep_mention_focus }" :ui="{ content: 'channel-select-menu channel-mention-menu' }" @update:open="!$event && (mention_context = null)">
+        <template #content>
+          <div class="channel-mention-heading"><span>选择成员</span><small>↑↓ 选择 · Enter 确认</small></div>
+          <div id="channel-mention-list" ref="mention_list" role="listbox" aria-label="选择成员" class="channel-mention-list">
+            <button v-for="(name, index) in mention_members" :id="`channel-mention-${index}`" :key="name" type="button" role="option" :aria-selected="name === mention_active" tabindex="-1" class="channel-mention-option" @pointerdown.prevent @click="select_mention(name)" @pointermove="mention_index = index">
+              <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="bridge.display_name(name)" size="xs" :class="['channel-avatar', bridge.identities[name]?.style]" />
+              <span>{{ bridge.display_name(name) }}</span><small>@{{ name }}</small>
+            </button>
+            <p v-if="!mention_members.length" class="channel-mention-empty">没有匹配的成员</p>
+          </div>
+        </template>
+      </UPopover>
+      <UChatPrompt ref="prompt" v-model="text" :disabled="view.sending_message" :submit-on-enter="false" :autofocus="false" :rows="1" :maxrows="6" :placeholder="`发消息到 # ${room.title}`" aria-label="留言正文" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_members.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
         <template #header>
           <div v-if="view.attachment_drafts.length" class="attachment-drafts">
             <div v-for="file in view.attachment_drafts" :key="file.id" :class="file.preview_url ? 'attachment-draft-image' : 'attachment-draft-file'">

@@ -12,7 +12,7 @@ import vm from 'node:vm';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DiscussionRunner, DiscussionStore, load_config, service_drafts, task_files, validate_config } from '../runner/discussion_runner.mjs';
-import { cwd_key, FreeRoomRunner } from '../runner/free_runner.mjs';
+import { cwd_key, FreeRoomRunner, workspace_snapshot } from '../runner/free_runner.mjs';
 import { assert_shared_home, DiscussionService, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
 import { launch_discussion, room_models } from '../runner/discussion_launch.mjs';
 import { agy_rule, antigravity_project, claude_exit_error, claude_rule_path, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
@@ -1568,6 +1568,13 @@ test('changed files in a Git working tree are reported after the member exits', 
   child.emit('close');
   await runner.tick();
   assert.deepEqual(state.reports[1], ['added.css', 'index.html']);
+  state.executions.push({ ...state.executions[0], id: 2 });
+  runner.snapshots.set(2, { member: 'Claude', directory: project, before: workspace_snapshot(project) });
+  await runner.report_finished(new Set());
+  assert.deepEqual(state.reports[2], [], 'a real unchanged Git snapshot is reported explicitly');
+  runner.snapshots.set(3, { member: 'Claude', directory: config.directory, before: new Map() });
+  await runner.report_finished(new Set());
+  assert.equal(state.reports[3], undefined, 'non-Git or unavailable detection is not an empty report');
 });
 
 test('the host task explains routing and hand-backs; other members get no dispatch rule', async t => {

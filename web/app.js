@@ -636,7 +636,17 @@ function message_markup(message) {
 /** Render continuous history while retaining expanded answers and reading position. */
 function render_messages(result) {
   const previous = new Map(state.messages.map((message) => [message.id, message]));
-  state.messages = result.messages.map((message) => previous.get(message.id) || ({ ...message, rendered_text: window.discuss_markdown.render_markdown(message.text), rendered_summary: window.discuss_markdown.render_markdown(message.summary || "") }));
+  const requests = new Map((state.room?.free?.requests || []).map(request => [`${request.message_id}:${request.member_id}`, request]));
+  state.messages = result.messages.map((message) => {
+    const saved = previous.get(message.id);
+    const suggestions = (saved?.suggestions || message.suggestions || []).map(suggestion => {
+      const request = requests.get(`${message.id}:${suggestion.member_id}`);
+      return request && suggestion.request_id !== request.id ? { ...suggestion, request_id: request.id } : suggestion;
+    });
+    if (saved) return suggestions.some((item, index) => item !== saved.suggestions?.[index]) ? { ...saved, suggestions } : saved;
+    return { ...message, suggestions, rendered_text: window.discuss_markdown.render_markdown(message.text),
+      rendered_summary: window.discuss_markdown.render_markdown(message.summary || "") };
+  });
   state.message_total = result.total;
   const container = element("messages");
   const open_receipts = [...container.querySelectorAll(".message-receipt[open]")].map((receipt) => receipt.dataset.receiptId);
@@ -864,10 +874,10 @@ async function return_conclusion() {
 }
 
 /** Persist a member mutation before transmission and reuse its credential after an uncertain response. */
-function prepare_member_request(room_id, operation, member) {
+function prepare_member_request(room_id, operation, member, options = {}) {
   const key = MEMBER_PENDING_PREFIX + room_id + ":" + operation;
   const previous = localStorage.getItem(key);
-  const record = previous ? JSON.parse(previous) : { key, member: { ...member, token: crypto.randomUUID() + crypto.randomUUID() } };
+  const record = previous ? JSON.parse(previous) : { key, member: { ...member, token: crypto.randomUUID() + crypto.randomUUID() }, options };
   localStorage.setItem(key, JSON.stringify(record));
   return record;
 }
@@ -909,7 +919,7 @@ async function interrupt_free() {
 }
 
 /** Invite an independent member, retaining its credential before either delivery path runs. */
-async function invite_member({ name, access }) {
+async function invite_member({ name, access, project_access = "read" }) {
   const room_id = state.room.id;
   state.free_error = ""; state.free_notice = "";
   try {
@@ -918,12 +928,14 @@ async function invite_member({ name, access }) {
     const taken = new Set((state.room.free?.members || []).map(member => member.name));
     let instance = name;
     for (let number = 2; taken.has(instance); number++) instance = `${name}-${number}`;
-    const record = prepare_member_request(room_id, `add:${name}:${access}`, { name: instance, access, adapter: "", session_mode: "new" });
+    const record = prepare_member_request(room_id, `add:${name}:${access}`, { name: instance, access, adapter: "", session_mode: "new" }, { project_access });
     let result;
     if (access === "runner") {
       const draft = launch_options();
+      const participants = { ...draft.participants, [record.member.name]: { ...draft.participants?.[name],
+        ...draft.participants?.[record.member.name], project_access: record.options?.project_access || "read" } };
       result = await local_launch_request("room-member", { room_id, token, action: "add", name: record.member.name, access,
-        member_token: record.member.token, participants: draft.participants, cwd: draft.cwd, project_access: draft.project_access });
+        member_token: record.member.token, participants, cwd: draft.cwd });
     } else result = await request_json(`/api/rooms/${room_id}/members`, record.member);
     finish_member_request(room_id, token, record, result);
     if (state.room?.id === room_id) {
@@ -2089,6 +2101,17 @@ async function interrupt_member(member_id) {
   if (state.room?.id === room_id) await refresh_room();
 }
 
+/** Confirm one ordinary member's suggestion, keeping retries bound to its source and target. */
+async function convert_suggestion({ message_id, member_id }) {
+  const room_id = state.room.id;
+  const result = await request_json(`/api/rooms/${room_id}/suggestions`, { message_id, member_id });
+  if (state.room?.id !== room_id) return;
+  state.messages = state.messages.map(message => message.id === message_id ? { ...message,
+    suggestions: message.suggestions.map(suggestion => suggestion.member_id === member_id
+      ? { ...suggestion, request_id: result.request.id } : suggestion) } : message);
+  await refresh_room();
+}
+
 /** A completed creation starts the next form with fresh mode defaults. */
 function reset_creation_mode() {
   state.creation_mode = "brainstorm:automatic";
@@ -2803,7 +2826,7 @@ async function execute_view_action(name, value) {
     choose_runtime, export_runtime, download_member_access, copy_member_join, pause_runtime, check_limits, pause_discussion, restart_discussion, force_close, conclude_discussion,
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection: load_launch_settings,
     load_room_configuration, save_room_configuration, interrupt_member, toggle_recipient, change_member, invite_member, interrupt_free, set_proxy, copy_online_notice,
-    prepare_brainstorm, return_conclusion,
+    prepare_brainstorm, return_conclusion, convert_suggestion,
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };
   try {
     await actions[name](value);
