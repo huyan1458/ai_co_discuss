@@ -74,6 +74,7 @@ description: "AI CoDiscuss 源码仓库的安装与运维技能：在已克隆�
 - **配置差异未确认**：列出已保存与检测到的类型、路径，问用户保留还是更新；更新时用对应 `--codex/--claude/--antigravity PATH` 重跑 `setup`。
 - **技能冲突**：输出实际路径，比较已有副本与仓库版本的差异给用户看；用户同意后移走旧副本再重跑 `setup`，不直接覆盖。
 - **持久命令缺失或指向旧安装**：`npm prefix -g` 与 `where codiscuss`（macOS/Linux 用 `which -a`）核对；告诉用户需加入 PATH 的实际目录，由用户修改后重开终端。
+- **网站需重启**（运行中的版本或端口与当前安装不同）：重启会暂停托管中的讨论，经用户同意后运行 `codiscuss local stop`、`codiscuss local open`。
 - **端口占用**：报告占用进程，改用 `--port` 另一端口重跑 `setup`，同步告知实际网站地址。
 - **MSIX 文件虚拟化**（Windows，错误中报出两处路径）：按 docs/runner.md 说明，由用户在普通终端操作或统一设置 `DISCUSS_SERVICE_HOME`。
 - **网站或服务异常**：读服务目录 `local/website.log`、`local/supervisor.log`、`service.log` 的最近错误后再判断，不凭猜测重启。

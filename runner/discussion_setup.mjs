@@ -280,6 +280,13 @@ function setup_issues(result) {
   return issues;
 }
 
+/** Ask before restarting a running website; non-interactive runs never stop it and report the pending restart instead. */
+async function confirm_restart(reason, options) {
+  if (options.yes || !process.stdin.isTTY) return false;
+  const choice = await ask(`${reason}\n重启后生效，重启会暂停托管中的讨论。现在重启？`, '[重启/暂不，默认重启]');
+  return !choice.trim() || ['重启', 'restart', 'r', 'y', 'yes'].includes(choice.trim().toLowerCase());
+}
+
 /** Configure Python, selected clients and skills, returning partial results on startup failure. */
 async function setup(options) {
   intro('配置 AI CoDiscuss', PACKAGE.version, PACKAGE.description);
@@ -301,9 +308,17 @@ async function setup(options) {
   result.configured = result.issues.length === 0;
   result.status = result.configured ? 'configured' : 'needs_attention';
   if (!options['no-start']) {
-    const { local_main } = await import('./discussion_local.mjs');
-    const launch = spinner('启动本机网站与讨论服务');
+    const { local_main, restart_reason } = await import('./discussion_local.mjs');
+    const reason = restart_reason(home);
+    if (reason && !await confirm_restart(reason, options)) {
+      result.issues.push(`${reason}；重启后才生效，重启会暂停托管中的讨论。确认后运行 codiscuss local stop，再运行 codiscuss local open。`);
+      result.configured = false;
+      result.status = 'needs_attention';
+      return result;
+    }
+    const launch = spinner(reason ? '重启本机网站与讨论服务' : '启动本机网站与讨论服务');
     try {
+      if (reason) await local_main(['stop'], () => {});
       result.local = await local_main([options['no-open'] ? 'start' : 'open'], () => {});
       launch.done('网站与讨论服务已在后台运行', [`${tone.cyan(result.local.url)}${options['no-open'] ? tone.dim('  未打开浏览器，可直接访问此地址') : tone.dim('  已在浏览器打开')}`]);
       if (result.configured) result.status = 'ready';

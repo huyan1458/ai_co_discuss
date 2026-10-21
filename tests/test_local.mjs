@@ -117,6 +117,38 @@ test('local lifecycle reuses processes and preserves data outside the package', 
   }
 });
 
+test('setup restarts a stale or moved website only after interactive confirmation', async () => {
+  const reservation = await reserve_port();
+  const port = reservation.address().port;
+  await new Promise(done => reservation.close(done));
+  const state = fixture(port);
+  try {
+    const first = state.command(['local', 'start']);
+    const status_path = join(state.home, 'local', 'status.json');
+    assert.equal(JSON.parse(readFileSync(status_path, 'utf8')).version, JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
+    writeFileSync(status_path, JSON.stringify({ ...JSON.parse(readFileSync(status_path, 'utf8')), version: '0.0.1' }));
+    for (const args of [[], ['--port', String(port + 1)]]) {
+      const setup = state.execute(['setup', '--yes', '--clients', 'none', '--no-open', ...args]);
+      assert.equal(setup.status, 2, setup.stderr);
+      const receipt = JSON.parse(setup.stdout);
+      assert.equal(receipt.status, 'needs_attention');
+      assert(receipt.issues.some(issue => issue.includes(args.length ? '端口配置已改为' : '版本 0.0.1') && issue.includes('codiscuss local stop')));
+      assert.equal(state.command(['local', 'status']).pid, first.pid);
+    }
+    const restart = spawnSync(process.execPath, ['--import', 'data:text/javascript,Object.defineProperty(process.stdin,"isTTY",{value:true})',
+      CLI, 'setup', '--clients', 'none', '--no-open', '--port', String(port)], { cwd: state.home, env: state.env, input: '\n', encoding: 'utf8', timeout: 60000 });
+    assert.notEqual(restart.status, 1, restart.stderr);
+    const restarted = state.command(['local', 'status']);
+    assert.equal(restarted.running, true);
+    assert.notEqual(restarted.pid, first.pid);
+    assert.notEqual(restarted.version, '0.0.1');
+  } finally {
+    state.execute(['local', 'stop']);
+    state.execute(['service', 'stop', '--json']);
+    rmSync(state.home, { recursive: true, force: true });
+  }
+});
+
 test('local stop keeps a pre-existing service; occupied port cannot be mistaken for readiness', async () => {
   const reservation = await reserve_port();
   const port = reservation.address().port;

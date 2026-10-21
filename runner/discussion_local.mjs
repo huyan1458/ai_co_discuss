@@ -15,6 +15,7 @@ import { tone } from './discussion_tui.mjs';
 
 const SCRIPT = fileURLToPath(import.meta.url);
 const SERVER = fileURLToPath(new URL('../server.py', import.meta.url));
+const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const START_WAIT_MS = 15000;
 const STOP_WAIT_MS = 25000;
 const POLL_MS = 200;
@@ -149,7 +150,7 @@ async function supervise(home) {
   const stop_path = join(directory, 'stop.request');
   const settings = local_settings(home);
   const url = `http://127.0.0.1:${settings.port || 8765}`;
-  const status = { pid: process.pid, ready: false, url };
+  const status = { pid: process.pid, ready: false, url, version: VERSION };
   if (existsSync(stop_path)) unlinkSync(stop_path);
   atomic_json(status_path, status);
   let website, owned_service, stopped = false;
@@ -206,6 +207,16 @@ async function start_local(home) {
     await sleep(POLL_MS);
   }
   throw new Error(`本机启动未完成，请查看 ${join(directory, 'supervisor.log')}`);
+}
+
+/** Explain why a running website must restart before this installation's version or port takes effect. */
+export function restart_reason(home = service_home()) {
+  const current = local_status(home);
+  if (!current.website_running) return null;
+  const url = `http://127.0.0.1:${local_settings(home).port || 8765}`;
+  if (current.url !== url) return `本机网站正在 ${current.url} 运行，端口配置已改为 ${url}`;
+  if (current.version !== VERSION) return `本机网站正在运行${current.version ? `版本 ${current.version}` : '未记录版本的旧程序'}，当前安装为 ${VERSION}`;
+  return null;
 }
 
 /** Ask the owned supervisor to stop, retaining its database and user configuration. */
