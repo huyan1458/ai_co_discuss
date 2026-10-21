@@ -335,20 +335,26 @@ const navigation_sections = computed(() => {
 });
 const navigation_entries = computed(() => navigation_sections.value.flatMap((section) => section.entries));
 
+/** The glass top bar overlays the transcript, so readable content starts below it. */
+function reading_top(element) {
+  return element.getBoundingClientRect().top + (parseFloat(getComputedStyle(element).getPropertyValue("--channel-topbar-height")) || 0);
+}
+
 /** Polling follows new messages only while the reader is near the end. */
 function track_scroll() {
   const element = transcript.value;
   if (!element || !element.clientHeight) return;
   follow_tail.value = element.scrollHeight - element.scrollTop - element.clientHeight < FOLLOW_TAIL_THRESHOLD;
   const bounds = element.getBoundingClientRect();
+  const top = reading_top(element);
   const messages = [...element.querySelectorAll('[data-message-id]')];
   const target = messages.find((item) => Number(item.dataset.messageId) === jump_target.value);
-  if (target && target.getBoundingClientRect().bottom > bounds.top && target.getBoundingClientRect().top < bounds.bottom) {
+  if (target && target.getBoundingClientRect().bottom > top && target.getBoundingClientRect().top < bounds.bottom) {
     active_message.value = jump_target.value;
     return;
   }
   jump_target.value = null;
-  const current = messages.find((item) => item.getBoundingClientRect().bottom > bounds.top + READING_OFFSET);
+  const current = messages.find((item) => item.getBoundingClientRect().bottom > top + READING_OFFSET);
   active_message.value = current ? Number(current.dataset.messageId) : null;
 }
 
@@ -382,8 +388,8 @@ async function toggle_answer(message, event) {
   reset_preview();
   await nextTick();
   if (!collapsing) transcript.value.scrollTop = scroll_position;
-  if (collapsing && card.getBoundingClientRect().top < transcript.value.getBoundingClientRect().top) {
-    transcript.value.scrollTop += card.getBoundingClientRect().top - transcript.value.getBoundingClientRect().top - READING_OFFSET;
+  if (collapsing && card.getBoundingClientRect().top < reading_top(transcript.value)) {
+    transcript.value.scrollTop += card.getBoundingClientRect().top - reading_top(transcript.value) - READING_OFFSET;
   }
   track_scroll();
 }
@@ -396,7 +402,7 @@ function jump_to(id) {
   close_preview();
   jump_target.value = id;
   active_message.value = id;
-  element.scrollTop += message.getBoundingClientRect().top - element.getBoundingClientRect().top - READING_OFFSET;
+  element.scrollTop += message.getBoundingClientRect().top - reading_top(element) - READING_OFFSET;
   message.focus({ preventScroll: true });
   track_scroll();
 }

@@ -993,7 +993,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   --channel-shadow-float: inset 0 1px 0 #ffffff1f, inset 0 -1px 0 #00000040, 0 2px 6px #0000004d, 0 16px 40px #00000073;
   --channel-glass-bg: linear-gradient(180deg, #34363dc2 0%, #25272cd6 100%);
   --channel-glass-filter: blur(24px) saturate(180%);
-  --channel-topbar-bg: linear-gradient(180deg, #303238b8 0%, #2b2d32c7 100%);
+  --channel-topbar-bg: linear-gradient(180deg, #2f31379e 0%, #2a2c31b3 100%);
   --channel-topbar-divider: #ffffff0d;
   --channel-shadow-bar: 0 8px 24px #00000047;
 }
@@ -1005,7 +1005,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   --channel-shadow-panel: inset 0 1px 1px #ffffffe6, inset 0 -2px 4px #c8d2e626, 0 1px 3px #0000000d, 0 8px 24px #00143212;
   --channel-shadow-float: inset 0 1px 2px #ffffffe6, inset 0 -2px 4px #c8d2e626, 0 4px 12px #0000001a, 0 24px 48px #0014322e;
   --channel-glass-filter: blur(24px) saturate(180%);
-  --channel-topbar-bg: linear-gradient(180deg, #ffffffd9 0%, #fbfcfdc2 100%);
+  --channel-topbar-bg: linear-gradient(180deg, #ffffffc2 0%, #fbfcfdad 100%);
   --channel-topbar-divider: var(--ui-border-muted);
   --channel-shadow-bar: 0 1px 2px #0014320f, 0 8px 24px #00143214;
 }

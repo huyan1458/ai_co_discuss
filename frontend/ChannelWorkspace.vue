@@ -54,6 +54,10 @@ const brief_preview = computed(() => {
   template.innerHTML = room.value?.rendered_brief || "";
   return template.content.textContent.replace(/\s+/g, " ").trim();
 });
+const topbar = ref(null);
+// Only the collapsed height offsets the transcript; the expanded brief floats over messages instead of pushing them.
+const topbar_height = ref(0);
+let topbar_observer = null;
 const rail_drag = ref(null);
 const nav_drag = ref(null);
 const nav_max = computed(() => Math.min(NAV_MAX, Math.max(NAV_MIN, viewport_width.value - CONTENT_MIN - DIVIDER_WIDTH)));
@@ -61,6 +65,7 @@ const effective_nav_width = computed(() => Math.min(nav_width.value, nav_max.val
 const layout_style = computed(() => ({
   "--channel-reading-width": `${READING_WIDTHS[reading_width.value].width}px`,
   "--channel-rail-width": `${rail_width.value}px`,
+  "--channel-topbar-height": `${topbar_height.value}px`,
   "--channel-main-columns": nav_collapsed.value ? "minmax(0, 1fr)" : `${effective_nav_width.value}px ${DIVIDER_WIDTH}px minmax(0, 1fr)`,
 }));
 const width_options = Object.entries(READING_WIDTHS).map(([value, option]) => ({ value, label: option.label }));
@@ -72,6 +77,11 @@ watch(rail_collapsed, save_layout);
 onMounted(() => window.addEventListener("resize", update_viewport_width));
 onBeforeUnmount(() => window.removeEventListener("resize", update_viewport_width));
 onMounted(() => document.addEventListener("pointerdown", collapse_brief_outside));
+onMounted(() => {
+  topbar_observer = new ResizeObserver(([entry]) => { if (brief_collapsed.value) topbar_height.value = Math.round(entry.target.offsetHeight); });
+  topbar_observer.observe(topbar.value);
+});
+onBeforeUnmount(() => topbar_observer?.disconnect());
 onBeforeUnmount(() => document.removeEventListener("pointerdown", collapse_brief_outside));
 const selected_tab = computed({ get: () => view.value.tab, set: (value) => act("tab", value) });
 const ALL_TABS = [
@@ -150,7 +160,7 @@ async function choose_room(id) { nav_open.value = false; await act("room", id); 
 function open_detail(id) { detail_id.value = id; modal.value = "message"; }
 
 /** Open the shared creation form from either navigation surface. */
-function create_channel(folder = null) { act("clear_create_parent"); target_folder.value = folder; nav_open.value = false; modal.value = "create"; }
+function create_channel(folder = null) { bridge.reset_create_form(); target_folder.value = folder; nav_open.value = false; modal.value = "create"; }
 
 /** Open folder creation after closing the mobile directory. */
 function create_folder() { target_folder.value = null; nav_open.value = false; modal.value = "folder"; }
@@ -292,46 +302,48 @@ function resize_nav_by_key(event) {
     <div v-if="!nav_collapsed" class="channel-nav-resizer" role="separator" tabindex="0" aria-label="调整频道栏宽度" aria-orientation="vertical" aria-controls="channel-sidebar" :aria-valuemin="NAV_MIN" :aria-valuemax="nav_max" :aria-valuenow="effective_nav_width" :aria-valuetext="`${effective_nav_width} 像素`" title="拖动调整频道栏宽度，也可使用方向键" @pointerdown="start_nav_resize" @pointermove="resize_nav" @pointerup="finish_nav_resize" @pointercancel="finish_nav_resize" @lostpointercapture="finish_nav_resize" @keydown="resize_nav_by_key"></div>
 
     <main class="channel-main">
-      <header class="channel-header">
-        <UTooltip :text="nav_collapsed ? '展开频道栏' : '收起频道栏'"><UButton icon="i-lucide-panel-left" color="neutral" variant="ghost" size="sm" class="channel-desktop-nav channel-icon-button channel-panel-toggle" :aria-label="nav_collapsed ? '展开频道栏' : '收起频道栏'" :aria-expanded="!nav_collapsed" aria-controls="channel-sidebar" @click="nav_collapsed = !nav_collapsed" /></UTooltip>
-        <UButton icon="i-lucide-panel-left" color="neutral" variant="ghost" size="sm" class="channel-mobile-nav channel-icon-button channel-panel-toggle" aria-label="打开频道导航" :aria-expanded="nav_open" @click="nav_open = true" />
-        <span class="channel-title-icon"><UIcon name="i-lucide-hash" /></span>
-        <div class="channel-title"><div class="channel-title-copy"><h1 :title="room?.title">{{ room?.title || '共议' }}</h1><div v-if="room?.floor && !free_room" class="channel-floor-status" :class="{ 'is-held': room.floor.holder }" role="status" :title="`发言权：${bridge.floor_status(room)}`"><UIcon name="i-lucide-mic" /><span>发言权：{{ bridge.floor_status(room) }}</span></div></div><UBadge v-if="room?.archived" color="neutral" variant="subtle" size="sm">已存档</UBadge></div>
-        <span v-if="room" class="channel-header-context">{{ tabs.find((item) => item.value === view.tab)?.label }}<span>·</span>{{ room.message_count }} 条记录</span>
-        <div class="channel-header-actions">
-          <form v-if="view.tab === 'discussion'" class="channel-search" @submit.prevent="act('filter', { query: search })">
-            <UInput v-model="search" icon="i-lucide-search" variant="none" size="sm" placeholder="搜索消息" aria-label="搜索讨论记录" :disabled="!room" class="channel-search-input">
-              <template #trailing><UButton v-if="search || view.query" icon="i-lucide-x" color="neutral" variant="ghost" size="xs" aria-label="清除搜索" @click="search = ''; act('filter', { query: '' })" /><UButton type="submit" icon="i-lucide-corner-down-left" color="neutral" variant="ghost" size="xs" aria-label="搜索" :disabled="!room" /></template>
-            </UInput>
-          </form>
-          <UTooltip v-if="view.tab === 'discussion'" text="只看提到当前身份的消息"><UButton icon="i-lucide-at-sign" :variant="view.mention_only ? 'soft' : 'ghost'" color="neutral" size="sm" class="channel-icon-button channel-mention-filter" :aria-pressed="view.mention_only" aria-label="提到我" :disabled="!room" @click="act('filter', { mention: !view.mention_only })" /></UTooltip>
-          <ProgressPanel v-if="room && !(show_rail && rail_inline)" />
+      <div ref="topbar" class="channel-topbar" :class="{ 'is-overlay': room && view.tab === 'discussion' }">
+        <header class="channel-header">
+          <UTooltip :text="nav_collapsed ? '展开频道栏' : '收起频道栏'"><UButton icon="i-lucide-panel-left" color="neutral" variant="ghost" size="sm" class="channel-desktop-nav channel-icon-button channel-panel-toggle" :aria-label="nav_collapsed ? '展开频道栏' : '收起频道栏'" :aria-expanded="!nav_collapsed" aria-controls="channel-sidebar" @click="nav_collapsed = !nav_collapsed" /></UTooltip>
+          <UButton icon="i-lucide-panel-left" color="neutral" variant="ghost" size="sm" class="channel-mobile-nav channel-icon-button channel-panel-toggle" aria-label="打开频道导航" :aria-expanded="nav_open" @click="nav_open = true" />
+          <span class="channel-title-icon"><UIcon name="i-lucide-hash" /></span>
+          <div class="channel-title"><div class="channel-title-copy"><h1 :title="room?.title">{{ room?.title || '共议' }}</h1><div v-if="room?.floor && !free_room" class="channel-floor-status" :class="{ 'is-held': room.floor.holder }" role="status" :title="`发言权：${bridge.floor_status(room)}`"><UIcon name="i-lucide-mic" /><span>发言权：{{ bridge.floor_status(room) }}</span></div></div><UBadge v-if="room?.archived" color="neutral" variant="subtle" size="sm">已存档</UBadge></div>
+          <span v-if="room" class="channel-header-context">{{ tabs.find((item) => item.value === view.tab)?.label }}<span>·</span>{{ room.message_count }} 条记录</span>
+          <div class="channel-header-actions">
+            <form v-if="view.tab === 'discussion'" class="channel-search" @submit.prevent="act('filter', { query: search })">
+              <UInput v-model="search" icon="i-lucide-search" variant="none" size="sm" placeholder="搜索消息" aria-label="搜索讨论记录" :disabled="!room" class="channel-search-input">
+                <template #trailing><UButton v-if="search || view.query" icon="i-lucide-x" color="neutral" variant="ghost" size="xs" aria-label="清除搜索" @click="search = ''; act('filter', { query: '' })" /><UButton type="submit" icon="i-lucide-corner-down-left" color="neutral" variant="ghost" size="xs" aria-label="搜索" :disabled="!room" /></template>
+              </UInput>
+            </form>
+            <UTooltip v-if="view.tab === 'discussion'" text="只看提到当前身份的消息"><UButton icon="i-lucide-at-sign" :variant="view.mention_only ? 'soft' : 'ghost'" color="neutral" size="sm" class="channel-icon-button channel-mention-filter" :aria-pressed="view.mention_only" aria-label="提到我" :disabled="!room" @click="act('filter', { mention: !view.mention_only })" /></UTooltip>
+            <ProgressPanel v-if="room && !(show_rail && rail_inline)" />
+          </div>
+          <UTooltip :text="info_label"><UButton icon="i-lucide-panel-right" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-panel-toggle channel-info-button" :aria-label="info_label" :disabled="!room && !(rail_inline && view.tab === 'discussion')" :aria-expanded="rail_inline && view.tab === 'discussion' ? show_rail : info_open" @click="toggle_info" /></UTooltip>
+        </header>
+        <section v-if="view.launch.recoveries.length" class="channel-launch-recovery" aria-label="未完成的创建或启动请求">
+          <h2>继续未完成的请求</h2>
+          <article v-for="item in view.launch.recoveries" :key="item.id">
+            <strong>{{ item.title }}</strong><p role="status">{{ item.error || '启动结果尚未确认；原请求已保存在此浏览器中。' }}</p>
+            <div class="button-row"><UButton :label="item.direct ? '继续创建房间' : '继续本次启动'" size="sm" :loading="pending === 'resume_launch'" :disabled="Boolean(pending)" @click="act('resume_launch', item.id)" /><UButton v-if="item.room_id" label="查看原房间" color="neutral" variant="outline" size="sm" @click="act('room', item.room_id)" /><UButton label="移除待办" color="neutral" variant="ghost" size="sm" :disabled="Boolean(pending)" @click="act('discard_launch', item.id)" /></div>
+          </article>
+          <small>移除待办不会删除房间或停止讨论。</small>
+        </section>
+        <div v-if="room" class="channel-tabbar">
+          <UTabs v-model="selected_tab" :items="tabs" :content="false" variant="pill" color="neutral" size="sm" class="channel-tabs" aria-label="频道视图" />
         </div>
-        <UTooltip :text="info_label"><UButton icon="i-lucide-panel-right" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-panel-toggle channel-info-button" :aria-label="info_label" :disabled="!room && !(rail_inline && view.tab === 'discussion')" :aria-expanded="rail_inline && view.tab === 'discussion' ? show_rail : info_open" @click="toggle_info" /></UTooltip>
-      </header>
-      <section v-if="view.launch.recoveries.length" class="channel-launch-recovery" aria-label="未完成的创建或启动请求">
-        <h2>继续未完成的请求</h2>
-        <article v-for="item in view.launch.recoveries" :key="item.id">
-          <strong>{{ item.title }}</strong><p role="status">{{ item.error || '启动结果尚未确认；原请求已保存在此浏览器中。' }}</p>
-          <div class="button-row"><UButton :label="item.direct ? '继续创建房间' : '继续本次启动'" size="sm" :loading="pending === 'resume_launch'" :disabled="Boolean(pending)" @click="act('resume_launch', item.id)" /><UButton v-if="item.room_id" label="查看原房间" color="neutral" variant="outline" size="sm" @click="act('room', item.room_id)" /><UButton label="移除待办" color="neutral" variant="ghost" size="sm" :disabled="Boolean(pending)" @click="act('discard_launch', item.id)" /></div>
-        </article>
-        <small>移除待办不会删除房间或停止讨论。</small>
-      </section>
-      <div v-if="room" class="channel-tabbar">
-        <UTabs v-model="selected_tab" :items="tabs" :content="false" variant="pill" color="neutral" size="sm" class="channel-tabs" aria-label="频道视图" />
+        <section v-if="room && !free_room" class="channel-host-brief" :class="{ 'is-collapsed': brief_collapsed }" aria-label="主持简报">
+          <div class="channel-brief-inner">
+            <div class="channel-brief-heading">
+              <button type="button" class="channel-brief-toggle" :aria-label="brief_collapsed ? '展开主持简报' : '收起主持简报'" :aria-expanded="!brief_collapsed" aria-controls="channel-brief-content" @click="toggle_brief"><UIcon :name="brief_collapsed ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" /><strong>主持简报{{ brief_collapsed ? '：' : '' }}</strong><span v-if="brief_collapsed" class="channel-brief-preview">{{ brief_preview }}</span></button>
+              <template v-if="!brief_collapsed"><UButton label="更新简报" color="neutral" variant="link" size="xs" class="channel-brief-update" @click="act('tab', 'context')" /></template>
+            </div>
+            <div v-show="!brief_collapsed" id="channel-brief-content" class="channel-brief-content">
+              <div class="channel-brief-text markdown-body" v-html="room.rendered_brief"></div>
+              <div class="channel-brief-footer"><span class="channel-brief-status">{{ bridge.progress_speaker(room) }}</span><small>{{ bridge.brief_meta(room) }}</small></div>
+            </div>
+          </div>
+        </section>
       </div>
-      <section v-if="room && !free_room" class="channel-host-brief" :class="{ 'is-collapsed': brief_collapsed }" aria-label="主持简报">
-        <div class="channel-brief-inner">
-          <div class="channel-brief-heading">
-            <button type="button" class="channel-brief-toggle" :aria-label="brief_collapsed ? '展开主持简报' : '收起主持简报'" :aria-expanded="!brief_collapsed" aria-controls="channel-brief-content" @click="toggle_brief"><UIcon :name="brief_collapsed ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" /><strong>主持简报{{ brief_collapsed ? '：' : '' }}</strong><span v-if="brief_collapsed" class="channel-brief-preview">{{ brief_preview }}</span></button>
-            <template v-if="!brief_collapsed"><UButton label="更新简报" color="neutral" variant="link" size="xs" class="channel-brief-update" @click="act('tab', 'context')" /></template>
-          </div>
-          <div v-show="!brief_collapsed" id="channel-brief-content" class="channel-brief-content">
-            <div class="channel-brief-text markdown-body" v-html="room.rendered_brief"></div>
-            <div class="channel-brief-footer"><span class="channel-brief-status">{{ bridge.progress_speaker(room) }}</span><small>{{ bridge.brief_meta(room) }}</small></div>
-          </div>
-        </div>
-      </section>
       <div v-if="room" class="channel-body" :class="{ 'channel-body-discussion': view.tab === 'discussion' }">
         <div class="channel-content">
         <ChannelDiscussion v-show="view.tab === 'discussion'" @detail="open_detail" @edit="modal = 'edit'" />
