@@ -55,13 +55,16 @@ conversation 还须 current_session_id，当前会话接手首个主持任务。
 详见 docs/runner.md 的“两种讨论入口与启动配置”。
 `;
 
-// Windows PowerShell 5.1 ships WinForms; a topmost owner keeps the dialog above the browser that asked for it.
+// Windows PowerShell 5.1 ships WinForms. A background process cannot take the foreground, so the owner must be
+// shown (off-screen) as a topmost window; the dialog it owns then stays above the browser that asked for it.
 const WINDOWS_PICKER = [
   'Add-Type -AssemblyName System.Windows.Forms',
   '[Console]::OutputEncoding = [Text.Encoding]::UTF8',
-  '$owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; ShowInTaskbar = $false }',
+  '$owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; ShowInTaskbar = $false; FormBorderStyle = "None"; StartPosition = "Manual"; Location = New-Object System.Drawing.Point(-32000, -32000); Size = New-Object System.Drawing.Size(1, 1) }',
+  '$owner.Show(); $owner.Activate()',
   '$dialog = New-Object System.Windows.Forms.FolderBrowserDialog -Property @{ Description = "选择项目目录"; ShowNewFolderButton = $true }',
   'if ($dialog.ShowDialog($owner) -eq "OK") { $dialog.SelectedPath }',
+  '$owner.Close()',
 ].join('; ');
 const PICKERS = {
   win32: ['powershell.exe', ['-NoProfile', '-STA', '-Command', WINDOWS_PICKER]],
