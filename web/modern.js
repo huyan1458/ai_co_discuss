@@ -45521,7 +45521,7 @@ var nK = /*#__PURE__*/ nH({
 			let e = n.value === "create" ? "create" : n.value === "edit" ? "save_topic" : "schedule";
 			if (e === "create") {
 				let r = t.targetFolder?.id ?? null, i = o.value.fields["new-room-mode"], a = i === "free" || o.value.launch.create && i === "automatic";
-				a || (n.value = ""), await l(e, r) && a && !o.value.launch.create && (n.value = "");
+				a || (n.value = ""), await l(e, r) && a && (n.value = "");
 			} else await l(e) && (n.value = "");
 		}
 		function ve(e) {
