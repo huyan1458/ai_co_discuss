@@ -110,7 +110,7 @@ function actions(room, index, folder_id, folder_room_count) {
       </section>
       <p v-if="!rooms.length" class="channel-directory-empty">暂无讨论频道</p>
     </nav>
-    <UButton v-show="rooms_open" icon="i-lucide-archive" :label="`已存档 · ${archived_count}`" color="neutral" variant="ghost" size="xs" class="channel-archive-toggle" aria-haspopup="dialog" @click="emit('archives')" />
+    <UButton v-show="rooms_open" icon="i-lucide-archive" color="neutral" variant="ghost" class="channel-archive-toggle" aria-haspopup="dialog" @click="emit('archives')"><span class="channel-archive-label">已存档</span><small class="channel-archive-count">{{ archived_count }}</small></UButton>
     <p v-if="view.directory_error" role="alert" class="channel-directory-error">{{ view.directory_error }}</p>
   </div>
 </template>

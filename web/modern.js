@@ -8,7 +8,7 @@ var e = Object.defineProperty, t = (t, n) => {
 	return n || e(r, Symbol.toStringTag, { value: "Module" }), r;
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@vue/shared/dist/shared.esm-bundler.js
+//#region node_modules/@vue/shared/dist/shared.esm-bundler.js
 // @__NO_SIDE_EFFECTS__
 function n(e) {
 	let t = /* @__PURE__ */ Object.create(null);
@@ -128,7 +128,7 @@ function Oe(e) {
 	return e == null ? "initial" : typeof e == "string" ? e === "" ? " " : e : String(e);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@vue/reactivity/dist/reactivity.esm-bundler.js
+//#region node_modules/@vue/reactivity/dist/reactivity.esm-bundler.js
 var ke, Ae = class {
 	constructor(e = !1) {
 		this.detached = e, this._active = !0, this._on = 0, this.effects = [], this.cleanups = [], this._isPaused = !1, this._warnOnRun = !0, this.__v_skip = !0, !e && ke && (ke.active ? (this.parent = ke, this.index = (ke.scopes || (ke.scopes = [])).push(this) - 1) : (this._active = !1, this._warnOnRun = !1));
@@ -1043,7 +1043,7 @@ function Pn(e, t = Infinity, n) {
 	return e;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@vue/runtime-core/dist/runtime-core.esm-bundler.js
+//#region node_modules/@vue/runtime-core/dist/runtime-core.esm-bundler.js
 var Fn = [];
 function In(e) {
 	Fn.push(e);
@@ -5943,7 +5943,7 @@ function _f(e) {
 	gf = !0;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@nuxt/ui/dist/runtime/vue/plugins/icons.js
+//#region node_modules/@nuxt/ui/dist/runtime/vue/plugins/icons.js
 var vf = { install() {
 	_f((e, t) => {
 		let n = e.indexOf(":");
@@ -5951,7 +5951,7 @@ var vf = { install() {
 	});
 } };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/unhead/dist/shared/unhead.D7HkBzZn.mjs
+//#region node_modules/unhead/dist/shared/unhead.D7HkBzZn.mjs
 function yf(e, t) {
 	if (typeof t == "function" && t.key && e.plugins.has(t.key)) return;
 	let n = typeof t == "function" ? t(e) : t, r = n.key || String(e.plugins.size + 1);
@@ -5994,7 +5994,7 @@ function bf(e, t = {}) {
 	return t.init?.forEach((e) => e && i.push(e)), i;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/unhead/dist/shared/unhead.CGPOfp5O.mjs
+//#region node_modules/unhead/dist/shared/unhead.CGPOfp5O.mjs
 var xf = /* @__PURE__ */ new Set([
 	"link",
 	"style",
@@ -6065,7 +6065,7 @@ function jf(e) {
 	return e === "__proto__" || e === "constructor" || e === "prototype";
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/hookable/dist/index.mjs
+//#region node_modules/hookable/dist/index.mjs
 function Mf(e, t = {}, n) {
 	for (let r in e) {
 		let i = e[r], a = n ? `${n}:${r}` : r;
@@ -6223,7 +6223,7 @@ var Bf = class {
 	}
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/unhead/dist/shared/unhead.Bm4Y6XQI.mjs
+//#region node_modules/unhead/dist/shared/unhead.Bm4Y6XQI.mjs
 function Vf(e) {
 	let t = new Bf();
 	for (let n in e || {}) t.hook(n, e[n]);
@@ -6233,7 +6233,7 @@ function Hf(e, t, n) {
 	if (e.hooks?._hooks?.[t]?.length) return e.hooks?.callHook(t, n);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/unhead/dist/shared/unhead.C5Bksi2B.mjs
+//#region node_modules/unhead/dist/shared/unhead.C5Bksi2B.mjs
 function Uf(e, t, n) {
 	let r = e.push, i = e;
 	i.ssr = !1, i.hooks = t, i.dirty = !!i.dirty, i.use = (e) => yf(i, e), i.render = () => n(i);
@@ -6257,7 +6257,7 @@ function Uf(e, t, n) {
 	}, i;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/unhead/dist/shared/unhead.DJuZwX9c.mjs
+//#region node_modules/unhead/dist/shared/unhead.DJuZwX9c.mjs
 var Wf = /^(?:viewport|description|keywords|robots)$/, Gf = [
 	"name",
 	"property",
@@ -6519,7 +6519,7 @@ function hp(e, t) {
 	return pp(r, e), dp(r, o), Hf(e, "tags:beforeResolve", r), Hf(e, "tags:resolve", r), Hf(e, "tags:afterResolve", r), mp(r.tags);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/unhead/dist/shared/unhead.DD4N5B4k.mjs
+//#region node_modules/unhead/dist/shared/unhead.DD4N5B4k.mjs
 var gp = /\s+/;
 // @__NO_SIDE_EFFECTS__
 function _p(e = {}) {
@@ -6667,7 +6667,7 @@ function bp(e, t = {}) {
 	return a && (e.dirty || vp(e)) && bp(e, t), a;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/unhead/dist/shared/unhead.CaeaMM5q.mjs
+//#region node_modules/unhead/dist/shared/unhead.CaeaMM5q.mjs
 var xp = (e) => typeof e.tagPriority == "number" ? e.tagPriority : 100 + (kf[e.tagPriority] || 0);
 function Sp(e = {}) {
 	e.document = e.document || (typeof window < "u" ? document : void 0);
@@ -6680,7 +6680,7 @@ function Sp(e = {}) {
 	return e.plugins?.forEach((e) => n.use(e)), e.init?.forEach((e) => e && n.push(e)), n;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@unhead/vue/dist/shared/vue.DKb5ZKVl.mjs
+//#region node_modules/@unhead/vue/dist/shared/vue.DKb5ZKVl.mjs
 var Cp = "usehead";
 // @__NO_SIDE_EFFECTS__
 function wp() {
@@ -6697,10 +6697,10 @@ function Tp(e) {
 	} }.install;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@unhead/vue/dist/shared/vue.D2XR8FqS.mjs
+//#region node_modules/@unhead/vue/dist/shared/vue.D2XR8FqS.mjs
 var Ep = /* @__PURE__ */ Object.assign((e, t) => /* @__PURE__ */ ln(t) ? mn(t) : t, { _static: !0 });
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@unhead/vue/dist/shared/vue.CXwiCT15.mjs
+//#region node_modules/@unhead/vue/dist/shared/vue.CXwiCT15.mjs
 function Dp(e, t = {}) {
 	let n = t.head || /* @__PURE__ */ wp();
 	return n.ssr ? n.push(e || {}, t) : Op(n, e, t);
@@ -6733,7 +6733,7 @@ function Op(e, t, n = {}) {
 	})) : r && Ne(() => a.dispose()), a;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@unhead/vue/dist/client.mjs
+//#region node_modules/@unhead/vue/dist/client.mjs
 // @__NO_SIDE_EFFECTS__
 function kp(e = {}) {
 	let t = /* @__PURE__ */ _p(), n, r = 0;
@@ -6748,7 +6748,7 @@ function kp(e = {}) {
 	}), n.install = /* @__PURE__ */ Tp(n), n;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@nuxt/ui/dist/runtime/vue/plugins/head.js
+//#region node_modules/@nuxt/ui/dist/runtime/vue/plugins/head.js
 var Ap = { install(e) {
 	if (e._context.provides.usehead) return;
 	let t = /* @__PURE__ */ kp();
@@ -7101,7 +7101,7 @@ var Ap = { install(e) {
 	}
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@vueuse/shared/dist/index.js
+//#region node_modules/@vueuse/shared/dist/index.js
 function Np(e, t, n = {}) {
 	let r, i, a, o = !0, s = () => {
 		o = !0, a();
@@ -7384,7 +7384,7 @@ function hm(e, t, n) {
 	});
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@nuxt/ui/node_modules/@vueuse/core/dist/index.js
+//#region node_modules/@nuxt/ui/node_modules/@vueuse/core/dist/index.js
 function gm(e = {}) {
 	let { inheritAttrs: t = !0, name: n = "ReusableTemplate" } = e, r = /* @__PURE__ */ un(), i = /* @__PURE__ */ z({
 		name: `${n}.define`,
@@ -7553,7 +7553,7 @@ var bm = {
 	};
 });
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/defu/dist/defu.mjs
+//#region node_modules/defu/dist/defu.mjs
 function Tm(e) {
 	if (typeof e != "object" || !e) return !1;
 	let t = Object.getPrototypeOf(e);
@@ -7574,13 +7574,13 @@ function Dm(e) {
 }
 var Om = Dm();
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@nuxt/ui/dist/runtime/composables/defineLocale.js
+//#region node_modules/@nuxt/ui/dist/runtime/composables/defineLocale.js
 // @__NO_SIDE_EFFECTS__
 function km(e) {
 	return Om(e, { dir: "ltr" });
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/ohash/dist/_chunks/is-equal.mjs
+//#region node_modules/ohash/dist/_chunks/is-equal.mjs
 function Am(e) {
 	return typeof e == "string" ? `'${e}'` : new Pm().serialize(e);
 }
@@ -7713,7 +7713,7 @@ function zm(e, t = {}) {
 	return typeof t == "boolean" && (t = { acceptRelative: t }), t.strict ? Im.test(e) : Lm.test(e) || (t.acceptRelative ? Rm.test(e) : !1);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@nuxt/ui/dist/runtime/utils/index.js
+//#region node_modules/@nuxt/ui/dist/runtime/utils/index.js
 function Bm(e, t) {
 	let n = { ...e };
 	for (let e of t) delete n[e];
@@ -7764,7 +7764,7 @@ function Jm(e, t) {
 	return Object.entries(e).reduce((e, [n, r]) => (e[n] = typeof r == "function" ? r({ class: t?.[n] }) : r, e), { ...t || {} });
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@nuxt/ui/dist/runtime/utils/locale.js
+//#region node_modules/@nuxt/ui/dist/runtime/utils/locale.js
 function Ym(e) {
 	return (t, n) => Xm(t, n, I(e));
 }
@@ -7781,7 +7781,7 @@ function Zm(e) {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@nuxt/ui/dist/runtime/locale/en.js
+//#region node_modules/@nuxt/ui/dist/runtime/locale/en.js
 var Qm = /* @__PURE__ */ km({
 	name: "English",
 	code: "en",
@@ -7923,7 +7923,7 @@ function ah(e) {
 	} };
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@nuxt/ui/dist/runtime/plugins/colors.js
+//#region node_modules/@nuxt/ui/dist/runtime/plugins/colors.js
 var oh = [
 	50,
 	100,
@@ -7981,7 +7981,7 @@ var dh = ah(() => {
 	e.use(vf, t), e.use(Ap, t), e.use(jp, t), e.use(dh, t);
 } };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/arrays.js
+//#region node_modules/reka-ui/dist/shared/arrays.js
 function ph(e, t, n) {
 	let r = e.findIndex((e) => Fm(e, t)), i = e.findIndex((e) => Fm(e, n));
 	if (r === -1 || i === -1) return [];
@@ -7989,12 +7989,12 @@ function ph(e, t, n) {
 	return e.slice(a, o + 1);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/clamp.js
+//#region node_modules/reka-ui/dist/shared/clamp.js
 function mh(e, t = -Infinity, n = Infinity) {
 	return Math.min(n, Math.max(t, e));
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/createContext.js
+//#region node_modules/reka-ui/dist/shared/createContext.js
 function hh(e, t) {
 	let n = typeof e == "string" && !t ? `${e}Context` : t, r = Symbol(n);
 	return [(t) => {
@@ -8004,7 +8004,7 @@ function hh(e, t) {
 	}, (e) => (br(r, e), e)];
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/getActiveElement.js
+//#region node_modules/reka-ui/dist/shared/getActiveElement.js
 function gh() {
 	let e = document.activeElement;
 	if (e == null) return null;
@@ -8012,7 +8012,7 @@ function gh() {
 	return e;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/handleAndDispatchCustomEvent.js
+//#region node_modules/reka-ui/dist/shared/handleAndDispatchCustomEvent.js
 function _h(e, t, n) {
 	let r = n.originalEvent.target, i = new CustomEvent(e, {
 		bubbles: !1,
@@ -8022,17 +8022,17 @@ function _h(e, t, n) {
 	t && r.addEventListener(e, t, { once: !0 }), r.dispatchEvent(i);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/nullish.js
+//#region node_modules/reka-ui/dist/shared/nullish.js
 function vh(e) {
 	return e == null;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/isValueEqualOrExist.js
+//#region node_modules/reka-ui/dist/shared/isValueEqualOrExist.js
 function yh(e, t) {
 	return vh(e) ? !1 : Array.isArray(e) ? e.some((e) => Fm(e, t)) : Fm(e, t);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/node_modules/@vueuse/core/dist/index.js
+//#region node_modules/reka-ui/node_modules/@vueuse/core/dist/index.js
 var bh = Lp ? window : void 0;
 Lp && window.document, Lp && window.navigator, Lp && window.location;
 function xh(e) {
@@ -8166,12 +8166,12 @@ function Mh(e, t, n, r = {}) {
 	});
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/renderSlotFragments.js
+//#region node_modules/reka-ui/dist/shared/renderSlotFragments.js
 function Nh(e) {
 	return e ? e.flatMap((e) => e.type === H ? Nh(e.children) : [e]) : [];
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/useArrowNavigation.js
+//#region node_modules/reka-ui/dist/shared/useArrowNavigation.js
 var Ph = ["INPUT", "TEXTAREA"];
 function Fh(e, t, n, r = {}) {
 	if (!t || r.enableIgnoredElement && Ph.includes(t.nodeName)) return null;
@@ -8201,7 +8201,7 @@ function Ih(e, t, n, r = e.includes(t) ? e.length : e.length + 1) {
 	return o ? o.hasAttribute("disabled") && o.getAttribute("disabled") !== "false" ? Ih(e, o, n, r) : o : null;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/ConfigProvider/ConfigProvider.js
+//#region node_modules/reka-ui/dist/ConfigProvider/ConfigProvider.js
 var [Lh, Rh] = /*#__PURE__*/ hh("ConfigProvider"), zh = /* @__PURE__ */ z({
 	inheritAttrs: !1,
 	__name: "ConfigProvider",
@@ -8309,7 +8309,7 @@ function Wh(e) {
 	return n instanceof Element && Uh(n) ? !1 : t.touches.length > 1 || (t.preventDefault && t.cancelable && t.preventDefault(), !1);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/useComposing.js
+//#region node_modules/reka-ui/dist/shared/useComposing.js
 var Gh = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Bopomofo}]/u, Kh = /android/i;
 function qh() {
 	return typeof navigator < "u" && Kh.test(navigator.userAgent);
@@ -8336,13 +8336,13 @@ function Jh(e) {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/useDirection.js
+//#region node_modules/reka-ui/dist/shared/useDirection.js
 function Yh(e) {
 	let t = Lh({ dir: /* @__PURE__ */ F("ltr") });
 	return Z(() => e?.value || t.dir?.value || "ltr");
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/useEmitAsProps.js
+//#region node_modules/reka-ui/dist/shared/useEmitAsProps.js
 function Xh(e) {
 	let t = Ps(), n = t?.type.emits, r = {};
 	return n?.length || console.warn(`No emitted event found. Please check component: ${t?.type.__name}`), n?.forEach((t) => {
@@ -8350,7 +8350,7 @@ function Xh(e) {
 	}), r;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/useFilter.js
+//#region node_modules/reka-ui/dist/shared/useFilter.js
 function Zh(e) {
 	let t = Z(() => I(e)), n = Z(() => new Intl.Collator("en", {
 		usage: "search",
@@ -8371,7 +8371,7 @@ function Zh(e) {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/useFocusGuards.js
+//#region node_modules/reka-ui/dist/shared/useFocusGuards.js
 var Qh = 0;
 function $h() {
 	Tr((e) => {
@@ -8387,12 +8387,12 @@ function eg() {
 	return e.setAttribute("data-reka-focus-guard", ""), e.tabIndex = 0, e.style.outline = "none", e.style.opacity = "0", e.style.position = "fixed", e.style.pointerEvents = "none", e;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/useFormControl.js
+//#region node_modules/reka-ui/dist/shared/useFormControl.js
 function tg(e) {
 	return Z(() => !mn(e) || !!xh(e)?.closest("form"));
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/useForwardExpose.js
+//#region node_modules/reka-ui/dist/shared/useForwardExpose.js
 function Q() {
 	let e = Ps(), t = /* @__PURE__ */ F(), n = Z(() => r());
 	ea(() => {
@@ -8439,7 +8439,7 @@ function Q() {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/useForwardProps.js
+//#region node_modules/reka-ui/dist/shared/useForwardProps.js
 function ng(e) {
 	let t = Ps(), n = Object.keys(t?.type.props ?? {}).reduce((e, n) => {
 		let r = (t?.type.props[n]).default;
@@ -8456,7 +8456,7 @@ function ng(e) {
 	});
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/useForwardPropsEmits.js
+//#region node_modules/reka-ui/dist/shared/useForwardPropsEmits.js
 function rg(e, t) {
 	let n = ng(e), r = t ? Xh(t) : {};
 	return Z(() => ({
@@ -8465,13 +8465,13 @@ function rg(e, t) {
 	}));
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/useForwardScopeId.js
+//#region node_modules/reka-ui/dist/shared/useForwardScopeId.js
 function ig() {
 	let e = Ps()?.vnode?.scopeId;
 	return e ? { [e]: "" } : {};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/useGraceArea.js
+//#region node_modules/reka-ui/dist/shared/useGraceArea.js
 function ag(e, t) {
 	let n = om(!1, 300);
 	Pp(() => {
@@ -8622,7 +8622,7 @@ function dg(e) {
 	return n.pop(), t.length === 1 && n.length === 1 && t[0].x === n[0].x && t[0].y === n[0].y ? t : t.concat(n);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/aria-hidden/dist/es2015/index.js
+//#region node_modules/aria-hidden/dist/es2015/index.js
 var fg = function(e) {
 	return typeof document > "u" ? null : (Array.isArray(e) ? e[0] : e).ownerDocument.body;
 }, pg = /* @__PURE__ */ new WeakMap(), mg = /* @__PURE__ */ new WeakMap(), hg = {}, gg = 0, _g = function(e) {
@@ -8667,7 +8667,7 @@ var fg = function(e) {
 	};
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/useHideOthers.js
+//#region node_modules/reka-ui/dist/shared/useHideOthers.js
 function xg(e) {
 	let t;
 	R(() => xh(e), (e) => {
@@ -8681,7 +8681,7 @@ function xg(e) {
 	});
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/useId.js
+//#region node_modules/reka-ui/dist/shared/useId.js
 var Sg = 0;
 function Cg(e, t = "reka") {
 	if (e) return e;
@@ -8689,7 +8689,7 @@ function Cg(e, t = "reka") {
 	return n = r.useId ? r.useId() : "useId" in Eu ? oi?.() : `${++Sg}`, t ? `${t}-${n}` : n;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/useKbd.js
+//#region node_modules/reka-ui/dist/shared/useKbd.js
 function wg() {
 	return {
 		ALT: "Alt",
@@ -8729,7 +8729,7 @@ function wg() {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/useSize.js
+//#region node_modules/reka-ui/dist/shared/useSize.js
 function Tg(e) {
 	let t = /* @__PURE__ */ F(), n = Z(() => t.value?.width ?? 0), r = Z(() => t.value?.height ?? 0), i;
 	return Qi(() => {
@@ -8757,7 +8757,7 @@ function Tg(e) {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/useStateMachine.js
+//#region node_modules/reka-ui/dist/shared/useStateMachine.js
 function Eg(e, t) {
 	let n = /* @__PURE__ */ F(e);
 	function r(e) {
@@ -8771,7 +8771,7 @@ function Eg(e, t) {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/useTypeahead.js
+//#region node_modules/reka-ui/dist/shared/useTypeahead.js
 function Dg(e) {
 	let t = om("", 1e3);
 	return {
@@ -8801,7 +8801,7 @@ function kg(e, t, n) {
 	return o === n ? void 0 : o;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/Presence/usePresence.js
+//#region node_modules/reka-ui/dist/Presence/usePresence.js
 function Ag(e, t) {
 	let n = /* @__PURE__ */ F({}), r = /* @__PURE__ */ F("none"), i = /* @__PURE__ */ F(e), a = e.value ? "mounted" : "unmounted", o, s = t.value?.ownerDocument.defaultView ?? bh, { state: c, dispatch: l } = Eg(a, {
 		mounted: {
@@ -8855,7 +8855,7 @@ function jg(e) {
 	return e && getComputedStyle(e).animationName || "none";
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/Presence/Presence.js
+//#region node_modules/reka-ui/dist/Presence/Presence.js
 var Mg = /*#__PURE__*/ z({
 	name: "Presence",
 	props: {
@@ -8927,7 +8927,7 @@ var Mg = /*#__PURE__*/ z({
 	}
 });
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/Primitive/usePrimitiveElement.js
+//#region node_modules/reka-ui/dist/Primitive/usePrimitiveElement.js
 function Fg() {
 	let e = /* @__PURE__ */ F();
 	return {
@@ -8936,7 +8936,7 @@ function Fg() {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/Collapsible/CollapsibleRoot.js
+//#region node_modules/reka-ui/dist/Collapsible/CollapsibleRoot.js
 var [Ig, Lg] = /*#__PURE__*/ hh("CollapsibleRoot"), Rg = /* @__PURE__ */ z({
 	__name: "CollapsibleRoot",
 	props: {
@@ -9116,7 +9116,7 @@ var [Ig, Lg] = /*#__PURE__*/ hh("CollapsibleRoot"), Rg = /* @__PURE__ */ z({
 	}
 });
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/useSingleOrMultipleValue.js
+//#region node_modules/reka-ui/dist/shared/useSingleOrMultipleValue.js
 function Vg({ type: e, defaultValue: t, modelValue: n }) {
 	let r = n || t;
 	return n !== void 0 || t !== void 0 ? Array.isArray(r) ? "multiple" : "single" : e ?? "single";
@@ -9155,7 +9155,7 @@ function Wg(e, t) {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/Accordion/AccordionRoot.js
+//#region node_modules/reka-ui/dist/Accordion/AccordionRoot.js
 var [Gg, Kg] = /*#__PURE__*/ hh("AccordionRoot"), qg = /* @__PURE__ */ z({
 	__name: "AccordionRoot",
 	props: {
@@ -9538,7 +9538,7 @@ function c_(e, t, n = !0) {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/DismissableLayer/DismissableLayer.js
+//#region node_modules/reka-ui/dist/DismissableLayer/DismissableLayer.js
 var l_ = /* @__PURE__ */ z({
 	__name: "DismissableLayer",
 	props: {
@@ -9659,7 +9659,7 @@ function p_(e, t) {
 	return r !== -1 && n.splice(r, 1), n;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/FocusScope/utils.js
+//#region node_modules/reka-ui/dist/FocusScope/utils.js
 var m_ = "focusScope.autoFocusOnMount", h_ = "focusScope.autoFocusOnUnmount", g_ = {
 	bubbles: !1,
 	cancelable: !0
@@ -9702,7 +9702,7 @@ function C_(e, { select: t = !1 } = {}) {
 	}
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/FocusScope/FocusScope.js
+//#region node_modules/reka-ui/dist/FocusScope/FocusScope.js
 var w_ = /* @__PURE__ */ z({
 	__name: "FocusScope",
 	props: {
@@ -9866,7 +9866,7 @@ function R_(e) {
 	return e.pointerType === "mouse";
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/Dialog/DialogContentImpl.js
+//#region node_modules/reka-ui/dist/Dialog/DialogContentImpl.js
 var z_ = /* @__PURE__ */ z({
 	__name: "DialogContentImpl",
 	props: {
@@ -10421,7 +10421,7 @@ function Z_(e = {}) {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/VisuallyHidden/VisuallyHidden.js
+//#region node_modules/reka-ui/dist/VisuallyHidden/VisuallyHidden.js
 var Q_ = /* @__PURE__ */ z({
 	__name: "VisuallyHidden",
 	props: {
@@ -10582,7 +10582,7 @@ var Q_ = /* @__PURE__ */ z({
 	}
 });
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/Listbox/utils.js
+//#region node_modules/reka-ui/dist/Listbox/utils.js
 function tv(e) {
 	return e?.querySelector("[data-state=checked]");
 }
@@ -10593,7 +10593,7 @@ function rv(e, t, n) {
 	return e === void 0 || t === void 0 ? !1 : typeof e == "string" ? e === t : typeof n == "function" ? n(e, t) : typeof n == "string" ? e?.[n] === t?.[n] : Fm(e, t);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/RovingFocus/utils.js
+//#region node_modules/reka-ui/dist/RovingFocus/utils.js
 var iv = "rovingFocusGroup.onEntryFocus", av = {
 	bubbles: !1,
 	cancelable: !0
@@ -10622,7 +10622,7 @@ function uv(e, t) {
 	return e.map((n, r) => e[(t + r) % e.length]);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/Listbox/ListboxRoot.js
+//#region node_modules/reka-ui/dist/Listbox/ListboxRoot.js
 var [dv, fv] = /*#__PURE__*/ hh("ListboxRoot"), [pv, mv] = /*#__PURE__*/ hh("ListboxHighlightScroll"), hv = /* @__PURE__ */ z({
 	__name: "ListboxRoot",
 	props: {
@@ -11165,7 +11165,7 @@ var [dv, fv] = /*#__PURE__*/ hh("ListboxRoot"), [pv, mv] = /*#__PURE__*/ hh("Lis
 	}
 });
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@tanstack/virtual-core/dist/esm/lazy-measurements.js
+//#region node_modules/@tanstack/virtual-core/dist/esm/lazy-measurements.js
 function Ev(e) {
 	return typeof e == "object" ? e.key : e;
 }
@@ -11198,7 +11198,7 @@ function Dv(e, t) {
 	} });
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@tanstack/virtual-core/dist/esm/utils.js
+//#region node_modules/@tanstack/virtual-core/dist/esm/utils.js
 function Ov(e, t, n) {
 	let r = n.initialDeps ?? [], i, a = !0;
 	function o() {
@@ -11930,7 +11930,7 @@ function Qv(e, t, n, r, i) {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@tanstack/vue-virtual/dist/esm/index.js
+//#region node_modules/@tanstack/vue-virtual/dist/esm/index.js
 function $v(e) {
 	let t = new Yv(I(e)), n = /* @__PURE__ */ un(t), r = t._didMount();
 	return R(() => I(e).getScrollElement(), (e) => {
@@ -11954,7 +11954,7 @@ function ey(e) {
 	})));
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/Listbox/ListboxVirtualizer.js
+//#region node_modules/reka-ui/dist/Listbox/ListboxVirtualizer.js
 var ty = /* @__PURE__ */ z({
 	__name: "ListboxVirtualizer",
 	props: {
@@ -12196,7 +12196,7 @@ var ty = /* @__PURE__ */ z({
 	}
 });
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/Popper/utils.js
+//#region node_modules/reka-ui/dist/Popper/utils.js
 function ly(e) {
 	return e !== null;
 }
@@ -12226,7 +12226,7 @@ function dy(e) {
 	return [t, n];
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@floating-ui/utils/dist/floating-ui.utils.mjs
+//#region node_modules/@floating-ui/utils/dist/floating-ui.utils.mjs
 var fy = [
 	"top",
 	"right",
@@ -12330,7 +12330,7 @@ function zy(e) {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@floating-ui/core/dist/floating-ui.core.mjs
+//#region node_modules/@floating-ui/core/dist/floating-ui.core.mjs
 function By(e, t, n) {
 	let { reference: r, floating: i } = e, a = Ty(t), o = Ey(t), s = wy(o), c = xy(t), l = a === "y", u = r.x + r.width / 2 - i.width / 2, d = r.y + r.height / 2 - i.height / 2, f = r[s] / 2 - i[s] / 2, p;
 	switch (c) {
@@ -12665,7 +12665,7 @@ var Zy = function(e) {
 	};
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@floating-ui/utils/dist/floating-ui.utils.dom.mjs
+//#region node_modules/@floating-ui/utils/dist/floating-ui.utils.dom.mjs
 function tb() {
 	return typeof window < "u";
 }
@@ -12762,7 +12762,7 @@ function Tb(e) {
 	return e.parent && Object.getPrototypeOf(e.parent) ? e.frameElement : null;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@floating-ui/dom/dist/floating-ui.dom.mjs
+//#region node_modules/@floating-ui/dom/dist/floating-ui.dom.mjs
 function Eb(e) {
 	let t = bb(e), n = parseFloat(t.width) || 0, r = parseFloat(t.height) || 0, i = sb(e), a = i ? e.offsetWidth : n, o = i ? e.offsetHeight : r, s = hy(n) !== a || hy(r) !== o;
 	return s && (n = a, r = o), {
@@ -13080,7 +13080,7 @@ var tx = Zy, nx = Qy, rx = Gy, ix = eb, ax = Jy, ox = Wy, sx = $y, cx = (e, t, n
 	});
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@floating-ui/vue/dist/floating-ui.vue.mjs
+//#region node_modules/@floating-ui/vue/dist/floating-ui.vue.mjs
 function lx(e) {
 	return typeof e == "object" && !!e && "$el" in e;
 }
@@ -13171,7 +13171,7 @@ function hx(e, t, n) {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/Popper/PopperContent.js
+//#region node_modules/reka-ui/dist/Popper/PopperContent.js
 var gx = ["dir"], _x = {
 	side: "bottom",
 	sideOffset: 0,
@@ -13501,7 +13501,7 @@ var gx = ["dir"], _x = {
 	}
 });
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/Combobox/useComboboxContentPositioning.js
+//#region node_modules/reka-ui/dist/Combobox/useComboboxContentPositioning.js
 function Cx(e) {
 	let t = /* @__PURE__ */ F("inline"), n = /* @__PURE__ */ F(!1), r = /* @__PURE__ */ F(), i = Z(() => t.value === "popper" && !n.value), a;
 	mv({
@@ -13529,7 +13529,7 @@ function Cx(e) {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/Combobox/ComboboxRoot.js
+//#region node_modules/reka-ui/dist/Combobox/ComboboxRoot.js
 var [wx, Tx] = /*#__PURE__*/ hh("ComboboxRoot"), Ex = /* @__PURE__ */ z({
 	__name: "ComboboxRoot",
 	props: {
@@ -14530,13 +14530,13 @@ var [wx, Tx] = /*#__PURE__*/ hh("ComboboxRoot"), Ex = /* @__PURE__ */ z({
 	}
 });
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/useNonce.js
+//#region node_modules/reka-ui/dist/shared/useNonce.js
 function Gx(e) {
 	let t = Lh({ nonce: /* @__PURE__ */ F() });
 	return Z(() => e?.value || t.nonce?.value);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/Combobox/ComboboxVirtualizer.js
+//#region node_modules/reka-ui/dist/Combobox/ComboboxVirtualizer.js
 var Kx = /* @__PURE__ */ z({
 	__name: "ComboboxVirtualizer",
 	props: {
@@ -14760,7 +14760,7 @@ var Kx = /* @__PURE__ */ z({
 	}
 }), [Zx, Qx] = /*#__PURE__*/ hh("CheckboxGroupRoot");
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/Checkbox/utils.js
+//#region node_modules/reka-ui/dist/Checkbox/utils.js
 function $x(e) {
 	return e === "indeterminate";
 }
@@ -14768,7 +14768,7 @@ function eS(e) {
 	return $x(e) ? "indeterminate" : e ? "checked" : "unchecked";
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/Checkbox/CheckboxRoot.js
+//#region node_modules/reka-ui/dist/Checkbox/CheckboxRoot.js
 var [tS, nS] = /*#__PURE__*/ hh("CheckboxRoot"), rS = /* @__PURE__ */ z({
 	inheritAttrs: !1,
 	__name: "CheckboxRoot",
@@ -14995,7 +14995,7 @@ var [tS, nS] = /*#__PURE__*/ hh("CheckboxRoot"), rS = /* @__PURE__ */ z({
 	}
 });
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/shared/useIsUsingKeyboard.js
+//#region node_modules/reka-ui/dist/shared/useIsUsingKeyboard.js
 function sS() {
 	let e = /* @__PURE__ */ F(!1);
 	return Qi(() => {
@@ -16924,12 +16924,12 @@ var cS = em(sS), [lS, uS] = /*#__PURE__*/ hh(["MenuRoot", "MenuSub"], "MenuConte
 	}
 });
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/ContextMenu/utils.js
+//#region node_modules/reka-ui/dist/ContextMenu/utils.js
 function iC(e) {
 	return e.pointerType !== "mouse";
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/ContextMenu/ContextMenuTrigger.js
+//#region node_modules/reka-ui/dist/ContextMenu/ContextMenuTrigger.js
 var aC = /* @__PURE__ */ z({
 	inheritAttrs: !1,
 	__name: "ContextMenuTrigger",
@@ -18621,7 +18621,7 @@ var aC = /* @__PURE__ */ z({
 	}
 });
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/HoverCard/utils.js
+//#region node_modules/reka-ui/dist/HoverCard/utils.js
 function VC(e) {
 	return (t) => t.pointerType === "touch" ? void 0 : e();
 }
@@ -18631,7 +18631,7 @@ function HC(e) {
 	return t;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/HoverCard/HoverCardContentImpl.js
+//#region node_modules/reka-ui/dist/HoverCard/HoverCardContentImpl.js
 var UC = /* @__PURE__ */ z({
 	__name: "HoverCardContentImpl",
 	props: {
@@ -19012,7 +19012,7 @@ var UC = /* @__PURE__ */ z({
 	}
 });
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/NavigationMenu/utils.js
+//#region node_modules/reka-ui/dist/NavigationMenu/utils.js
 function JC(e) {
 	return e ? "open" : "closed";
 }
@@ -19049,7 +19049,7 @@ function nw(e) {
 	return (t) => t.pointerType === "mouse" ? e(t) : void 0;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/NavigationMenu/NavigationMenuRoot.js
+//#region node_modules/reka-ui/dist/NavigationMenu/NavigationMenuRoot.js
 var [rw, iw] = /*#__PURE__*/ hh(["NavigationMenuRoot", "NavigationMenuSub"], "NavigationMenuContext"), aw = /* @__PURE__ */ z({
 	__name: "NavigationMenuRoot",
 	props: {
@@ -19923,7 +19923,7 @@ function kw(e) {
 	return e == null || e === "" || Array.isArray(e) && e.length === 0;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/Select/SelectRoot.js
+//#region node_modules/reka-ui/dist/Select/SelectRoot.js
 var Aw = ["value"], [jw, Mw] = /*#__PURE__*/ hh("SelectRoot"), Nw = /* @__PURE__ */ z({
 	inheritAttrs: !1,
 	__name: "SelectRoot",
@@ -21356,7 +21356,7 @@ var Aw = ["value"], [jw, Mw] = /*#__PURE__*/ hh("SelectRoot"), Nw = /* @__PURE__
 	}
 });
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/Tabs/utils.js
+//#region node_modules/reka-ui/dist/Tabs/utils.js
 function fT(e, t) {
 	return `${e}-trigger-${t}`;
 }
@@ -21364,7 +21364,7 @@ function pT(e, t) {
 	return `${e}-content-${t}`;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/Tabs/TabsContent.js
+//#region node_modules/reka-ui/dist/Tabs/TabsContent.js
 var mT = /* @__PURE__ */ z({
 	__name: "TabsContent",
 	props: {
@@ -21723,7 +21723,7 @@ function OT(e) {
 	}), t;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/reka-ui/dist/Toast/ToastRootImpl.js
+//#region node_modules/reka-ui/dist/Toast/ToastRootImpl.js
 var [kT, AT] = /*#__PURE__*/ hh("ToastRoot"), jT = /* @__PURE__ */ z({
 	inheritAttrs: !1,
 	__name: "ToastRootImpl",
@@ -22794,7 +22794,7 @@ function eE(e) {
 	}));
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@nuxt/ui/dist/runtime/composables/useComponentProps.js
+//#region node_modules/@nuxt/ui/dist/runtime/composables/useComponentProps.js
 var [tE, nE] = hh("UTheme", "RootContext"), rE = { defaults: Z(() => ({})) };
 function iE(e = rE) {
 	return tE(e);
@@ -22839,7 +22839,7 @@ function cE(e, t) {
 	});
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@nuxt/ui/dist/runtime/composables/useForwardProps.js
+//#region node_modules/@nuxt/ui/dist/runtime/composables/useForwardProps.js
 function lE(e, t) {
 	let n = t ? Xh(t) : {};
 	return Z(() => {
@@ -22852,7 +22852,7 @@ function lE(e, t) {
 	});
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@nuxt/ui/dist/runtime/composables/useToast.js
+//#region node_modules/@nuxt/ui/dist/runtime/composables/useToast.js
 var uE = Symbol("nuxt-ui.toast-max");
 function dE() {
 	let e = nh("toasts", () => []), t = xr(uE, void 0), n = /* @__PURE__ */ F(!1), r = [], i = () => `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -22923,7 +22923,7 @@ function dE() {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/tailwind-variants/dist/chunk-OYFAXDFZ.js
+//#region node_modules/tailwind-variants/dist/chunk-OYFAXDFZ.js
 var fE = Array.isArray, pE = (e) => {
 	if (!e && e !== 0 && e !== 0n) return "";
 	if (typeof e == "string") return e;
@@ -25674,7 +25674,7 @@ var Hk = {
 	}
 });
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@nuxt/ui/dist/runtime/composables/useComponentIcons.js
+//#region node_modules/@nuxt/ui/dist/runtime/composables/useComponentIcons.js
 function Kk(e) {
 	let t = Sm(), n = Z(() => mn(e)), r = Z(() => n.value.icon && n.value.leading || n.value.icon && !n.value.trailing || n.value.loading && !n.value.trailing || !!n.value.leadingIcon);
 	return {
@@ -25685,7 +25685,7 @@ function Kk(e) {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@nuxt/ui/dist/runtime/composables/useFieldGroup.js
+//#region node_modules/@nuxt/ui/dist/runtime/composables/useFieldGroup.js
 var qk = Symbol("nuxt-ui.field-group");
 function Jk(e) {
 	let t = xr(qk, void 0);
@@ -25759,16 +25759,16 @@ function rA(e, t) {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@nuxt/ui/dist/runtime/utils/link-keys.js
+//#region node_modules/@nuxt/ui/dist/runtime/utils/link-keys.js
 var iA = /* @__PURE__ */ "active.activeClass.ariaCurrentValue.as.disabled.download.exact.exactActiveClass.exactHash.exactQuery.external.form.formaction.formenctype.formmethod.formnovalidate.formtarget.href.hreflang.inactiveClass.locale.media.noPrefetch.noRel.onClick.ping.prefetch.prefetchOn.prefetchedClass.referrerpolicy.rel.replace.target.title.to.trailingSlash.type.viewTransition".split(".");
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@nuxt/ui/dist/runtime/utils/link.js
+//#region node_modules/@nuxt/ui/dist/runtime/utils/link.js
 function aA(e) {
 	let t = Object.keys(e), n = t.filter((e) => e.startsWith("aria-")), r = t.filter((e) => e.startsWith("data-"));
 	return am(e, ...iA, ...n, ...r);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@nuxt/ui/dist/runtime/components/LinkBase.vue
+//#region node_modules/@nuxt/ui/dist/runtime/components/LinkBase.vue
 var oA = {
 	__name: "LinkBase",
 	props: {
@@ -27482,7 +27482,7 @@ var oA = {
 	}
 });
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@nuxt/ui/dist/runtime/composables/useOverlay.js
+//#region node_modules/@nuxt/ui/dist/runtime/composables/useOverlay.js
 function _A() {
 	let e = /* @__PURE__ */ Xt([]), t = (t, i) => {
 		let { props: a, defaultOpen: s, destroyOnClose: c } = i || {}, l = /* @__PURE__ */ Yt({
@@ -27627,7 +27627,7 @@ var vA = /* @__PURE__ */ em(_A), yA = {
 	}
 });
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/utils/createContext.mjs
+//#region node_modules/motion-v/dist/es/utils/createContext.mjs
 function xA(e, t) {
 	let n = typeof e == "string" && !t ? `${e}Context` : t, r = Symbol(n);
 	return [
@@ -27641,7 +27641,7 @@ function xA(e, t) {
 	];
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/utils/resolve-motion-props.mjs
+//#region node_modules/motion-v/dist/es/utils/resolve-motion-props.mjs
 function SA(e, t) {
 	let { layoutGroup: n, presenceContext: r, config: i } = t, a = n.id && e.layoutId ? `${n.id}-${e.layoutId}` : e.layoutId || void 0;
 	return {
@@ -27656,7 +27656,7 @@ function SA(e, t) {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-utils/dist/es/array.mjs
+//#region node_modules/motion-utils/dist/es/array.mjs
 function CA(e, t) {
 	e.indexOf(t) === -1 && e.push(t);
 }
@@ -27665,17 +27665,17 @@ function wA(e, t) {
 	n > -1 && e.splice(n, 1);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-utils/dist/es/clamp.mjs
+//#region node_modules/motion-utils/dist/es/clamp.mjs
 var TA = (e, t, n) => n > t ? t : n < e ? e : n, EA = {}, DA = (e) => /^-?(?:\d+(?:\.\d+)?|\.\d+)$/u.test(e), OA = (e) => typeof e == "object" && !!e, kA = (e) => /^0[^.\s]+$/u.test(e);
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-utils/dist/es/memo.mjs
+//#region node_modules/motion-utils/dist/es/memo.mjs
 /*#__NO_SIDE_EFFECTS__*/
 function AA(e) {
 	let t;
 	return () => (t === void 0 && (t = e()), t);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-utils/dist/es/noop.mjs
+//#region node_modules/motion-utils/dist/es/noop.mjs
 var jA = /* @__NO_SIDE_EFFECTS__ */ (e) => e, MA = (...e) => e.reduce((e, t) => (n) => t(e(n))), NA = /* @__NO_SIDE_EFFECTS__ */ (e, t, n) => {
 	let r = t - e;
 	return r ? (n - e) / r : 1;
@@ -27720,7 +27720,7 @@ function zA(e, t, n, r) {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-utils/dist/es/easing/modifiers/mirror.mjs
+//#region node_modules/motion-utils/dist/es/easing/modifiers/mirror.mjs
 var BA = /* @__NO_SIDE_EFFECTS__ */ (e) => (t) => t <= .5 ? e(2 * t) / 2 : (2 - e(2 * (1 - t))) / 2, VA = /* @__NO_SIDE_EFFECTS__ */ (e) => (t) => 1 - e(1 - t), HA = /*@__PURE__*/ zA(.33, 1.53, .69, .99), UA = /*@__PURE__*/ VA(HA), WA = /*@__PURE__*/ BA(UA), GA = (e) => e >= 1 ? 1 : (e *= 2) < 1 ? .5 * UA(e) : .5 * (2 - 2 ** (-10 * (e - 1))), KA = (e) => 1 - Math.sin(Math.acos(e)), qA = /* @__PURE__ */ VA(KA), JA = /* @__PURE__ */ BA(KA), YA = /*@__PURE__*/ zA(.42, 0, 1, 1), XA = /*@__PURE__*/ zA(0, 0, .58, 1), ZA = /*@__PURE__*/ zA(.42, 0, .58, 1), QA = /* @__NO_SIDE_EFFECTS__ */ (e) => Array.isArray(e) && typeof e[0] != "number", $A = /* @__NO_SIDE_EFFECTS__ */ (e) => Array.isArray(e) && typeof e[0] == "number", ej = {
 	linear: jA,
 	easeIn: YA,
@@ -27758,7 +27758,7 @@ function pj(e) {
 	return typeof e == "string" && e.split("/*")[0].includes("var(--");
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/value/types/numbers/index.mjs
+//#region node_modules/motion-dom/dist/es/value/types/numbers/index.mjs
 var mj = {
 	test: (e) => typeof e == "number",
 	parse: parseFloat,
@@ -27771,12 +27771,12 @@ var mj = {
 	default: 1
 }, _j = /-?(?:\d+(?:\.\d+)?|\.\d+)/gu;
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/value/types/utils/is-nullish.mjs
+//#region node_modules/motion-dom/dist/es/value/types/utils/is-nullish.mjs
 function vj(e) {
 	return e == null;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/value/types/utils/single-color-regex.mjs
+//#region node_modules/motion-dom/dist/es/value/types/utils/single-color-regex.mjs
 var yj = /^(?:#[\da-f]{3,8}|(?:rgb|hsl)a?\((?:-?[\d.]+%?[,\s]+){2}-?[\d.]+%?\s*(?:[,/]\s*)?(?:\b\d+(?:\.\d+)?|\.\d+)?%?\))$/iu, bj = (e, t) => (n) => !!(typeof n == "string" && yj.test(n) && n.startsWith(e) || t && !vj(n) && Object.prototype.hasOwnProperty.call(n, t)), xj = (e, t, n) => (r) => {
 	if (typeof r != "string") return r;
 	let [i, a, o, s] = r.match(_j);
@@ -27795,7 +27795,7 @@ var yj = /^(?:#[\da-f]{3,8}|(?:rgb|hsl)a?\((?:-?[\d.]+%?[,\s]+){2}-?[\d.]+%?\s*(
 	transform: ({ red: e, green: t, blue: n, alpha: r = 1 }) => "rgba(" + Cj.transform(e) + ", " + Cj.transform(t) + ", " + Cj.transform(n) + ", " + sj(hj.transform(r)) + ")"
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/value/types/color/hex.mjs
+//#region node_modules/motion-dom/dist/es/value/types/color/hex.mjs
 function Tj(e) {
 	let t = "", n = "", r = "", i = "";
 	return e.length > 5 ? (t = e.substring(1, 3), n = e.substring(3, 5), r = e.substring(5, 7), i = e.substring(7, 9)) : (t = e.substring(1, 2), n = e.substring(2, 3), r = e.substring(3, 4), i = e.substring(4, 5), t += t, n += n, r += r, i += i), {
@@ -27880,7 +27880,7 @@ var eM = {
 	getAnimatableNone: $j
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/value/types/color/hsla-to-rgba.mjs
+//#region node_modules/motion-dom/dist/es/value/types/color/hsla-to-rgba.mjs
 function tM(e, t, n) {
 	return n < 0 && (n += 1), n > 1 && --n, n < 1 / 6 ? e + (t - e) * 6 * n : n < 1 / 2 ? t : n < 2 / 3 ? e + (t - e) * (2 / 3 - n) * 6 : e;
 }
@@ -27900,12 +27900,12 @@ function nM({ hue: e, saturation: t, lightness: n, alpha: r }) {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/utils/mix/immediate.mjs
+//#region node_modules/motion-dom/dist/es/utils/mix/immediate.mjs
 function rM(e, t) {
 	return (n) => n > 0 ? t : e;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/utils/mix/number.mjs
+//#region node_modules/motion-dom/dist/es/utils/mix/number.mjs
 var iM = (e, t, n) => e + (t - e) * n, aM = (e, t, n) => {
 	let r = e * e, i = n * (t * t - r) + r;
 	return i < 0 ? 0 : Math.sqrt(i);
@@ -27930,7 +27930,7 @@ function dM(e, t) {
 	return uM.has(e) ? (n) => n <= 0 ? e : t : (n) => n >= 1 ? t : e;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/utils/mix/complex.mjs
+//#region node_modules/motion-dom/dist/es/utils/mix/complex.mjs
 function fM(e, t) {
 	return (n) => iM(e, t, n);
 }
@@ -27988,7 +27988,7 @@ function bM(e, t, n) {
 	return pM(e)(e, t);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/frameloop/order.mjs
+//#region node_modules/motion-dom/dist/es/frameloop/order.mjs
 var xM = [
 	"setup",
 	"read",
@@ -28000,7 +28000,7 @@ var xM = [
 	"postRender"
 ];
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/frameloop/render-step.mjs
+//#region node_modules/motion-dom/dist/es/frameloop/render-step.mjs
 function SM(e) {
 	let t = /* @__PURE__ */ new Set(), n = /* @__PURE__ */ new Set(), r = !1, i = !1, a = /* @__PURE__ */ new Set(), o = {
 		delta: 0,
@@ -28031,7 +28031,7 @@ function SM(e) {
 	return c;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/frameloop/batcher.mjs
+//#region node_modules/motion-dom/dist/es/frameloop/batcher.mjs
 var CM = 40;
 function wM(e, t, n = {
 	delta: 0,
@@ -28057,7 +28057,7 @@ function wM(e, t, n = {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/frameloop/frame.mjs
+//#region node_modules/motion-dom/dist/es/frameloop/frame.mjs
 var { schedule: TM, cancel: EM, steps: DM } = /* @__PURE__ */ wM(typeof requestAnimationFrame < "u" ? requestAnimationFrame : jA, !0, rj), OM = (e) => {
 	let t = ({ timestamp: t }) => e(t);
 	return {
@@ -28076,7 +28076,7 @@ function jM(e, t = 50, n = AM, r) {
 	return i >= n ? Infinity : i;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/generators/utils/create-generator-easing.mjs
+//#region node_modules/motion-dom/dist/es/animation/generators/utils/create-generator-easing.mjs
 function MM(e, t = 100, n) {
 	let { keyframes: r, velocity: i } = e, a = r && r[r.length - 1] - r[0], o = n({
 		...e,
@@ -28090,7 +28090,7 @@ function MM(e, t = 100, n) {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/generators/spring.mjs
+//#region node_modules/motion-dom/dist/es/animation/generators/spring.mjs
 var NM = {
 	stiffness: 100,
 	damping: 10,
@@ -28247,7 +28247,7 @@ WM.applyToOptions = (e) => {
 	return e.ease = t.ease, e.duration = /* @__PURE__ */ FA(t.duration), e.type = "keyframes", e;
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/generators/inertia.mjs
+//#region node_modules/motion-dom/dist/es/animation/generators/inertia.mjs
 function GM({ keyframes: e, velocity: t = 0, power: n = .8, timeConstant: r = 325, bounceDamping: i = 10, bounceStiffness: a = 500, modifyTarget: o, min: s, max: c, restDelta: l = .5, restSpeed: u }) {
 	let d = e[0], f = {
 		done: !1,
@@ -28276,7 +28276,7 @@ function GM({ keyframes: e, velocity: t = 0, power: n = .8, timeConstant: r = 32
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/utils/interpolate.mjs
+//#region node_modules/motion-dom/dist/es/utils/interpolate.mjs
 function KM(e, t, n) {
 	let r = [], i = n || EA.mix || bM, a = e.length - 1;
 	for (let n = 0; n < a; n++) {
@@ -28301,7 +28301,7 @@ function qM(e, t, { clamp: n = !0, ease: r, mixer: i } = {}) {
 	return n ? (t) => l(TA(e[0], e[a - 1], t)) : l;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/keyframes/offsets/fill.mjs
+//#region node_modules/motion-dom/dist/es/animation/keyframes/offsets/fill.mjs
 function JM(e, t) {
 	let n = e[e.length - 1];
 	for (let r = 1; r <= t; r++) {
@@ -28310,18 +28310,18 @@ function JM(e, t) {
 	}
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/keyframes/offsets/default.mjs
+//#region node_modules/motion-dom/dist/es/animation/keyframes/offsets/default.mjs
 function YM(e) {
 	let t = [0];
 	return JM(t, e.length - 1), t;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/keyframes/offsets/time.mjs
+//#region node_modules/motion-dom/dist/es/animation/keyframes/offsets/time.mjs
 function XM(e, t) {
 	return e.map((e) => e * t);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/generators/keyframes.mjs
+//#region node_modules/motion-dom/dist/es/animation/generators/keyframes.mjs
 function ZM(e, t) {
 	return e.map(() => t || ZA).splice(0, e.length - 1);
 }
@@ -28344,7 +28344,7 @@ function QM({ duration: e = 300, keyframes: t, times: n, ease: r = "easeInOut" }
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/generators/utils/velocity.mjs
+//#region node_modules/motion-dom/dist/es/animation/generators/utils/velocity.mjs
 var $M = 5;
 function eN(e, t, n) {
 	let r = Math.max(t - $M, 0);
@@ -28354,14 +28354,14 @@ function tN(e, t, n = 0) {
 	return t <= 0 ? n : e.velocity ? e.velocity(t) : eN((t) => e.next(t).value, t, e.next(t).value);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/keyframes/get-final.mjs
+//#region node_modules/motion-dom/dist/es/animation/keyframes/get-final.mjs
 var nN = (e) => e !== null;
 function rN(e, { repeat: t, repeatType: n = "loop" }, r, i = 1) {
 	let a = e.filter(nN), o = i < 0 || t && n !== "loop" && t % 2 == 1 ? 0 : a.length - 1;
 	return !o || r === void 0 ? a[o] : r;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/utils/replace-transition-type.mjs
+//#region node_modules/motion-dom/dist/es/animation/utils/replace-transition-type.mjs
 var iN = {
 	decay: GM,
 	inertia: GM,
@@ -28373,10 +28373,10 @@ function aN(e) {
 	typeof e.type == "string" && (e.type = iN[e.type]);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/utils/resolve-start-time.mjs
+//#region node_modules/motion-dom/dist/es/animation/utils/resolve-start-time.mjs
 var oN = 40, sN = (e, t) => t - e > oN && !EA.useManualTiming ? t : e;
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/utils/notify-inspector.mjs
+//#region node_modules/motion-dom/dist/es/animation/utils/notify-inspector.mjs
 function cN(e, t) {
 	return {
 		kind: e,
@@ -28408,7 +28408,7 @@ function uN(e, t) {
 	} catch {}
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/utils/WithPromise.mjs
+//#region node_modules/motion-dom/dist/es/animation/utils/WithPromise.mjs
 var dN = class {
 	constructor() {
 		this.isResolved = !1;
@@ -28668,12 +28668,12 @@ function wN(e, t) {
 	return CN.has(n) || (n = eM), n.getAnimatableNone ? n.getAnimatableNone(t) : void 0;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/keyframes/utils/fill-wildcards.mjs
+//#region node_modules/motion-dom/dist/es/animation/keyframes/utils/fill-wildcards.mjs
 function TN(e) {
 	for (let t = 1; t < e.length; t++) e[t] ?? (e[t] = e[t - 1]);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/dom/parse-transform.mjs
+//#region node_modules/motion-dom/dist/es/render/dom/parse-transform.mjs
 var EN = (e) => e * 180 / Math.PI, DN = (e) => kN(EN(Math.atan2(e[1], e[0]))), ON = {
 	x: 4,
 	y: 5,
@@ -28728,7 +28728,7 @@ function LN(e) {
 	return parseFloat(e.trim());
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/utils/keys-transform.mjs
+//#region node_modules/motion-dom/dist/es/render/utils/keys-transform.mjs
 var RN = [
 	"transformPerspective",
 	"x",
@@ -28788,7 +28788,7 @@ var KN = {
 };
 KN.translateX = KN.x, KN.translateY = KN.y;
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/keyframes/KeyframesResolver.mjs
+//#region node_modules/motion-dom/dist/es/animation/keyframes/KeyframesResolver.mjs
 var qN = /* @__PURE__ */ new Set(), JN = !1, YN = !1, XN = !1;
 function ZN() {
 	if (YN) {
@@ -28862,21 +28862,21 @@ var tP = class {
 	}
 }, nP = (e) => e.startsWith("--");
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/dom/style-set.mjs
+//#region node_modules/motion-dom/dist/es/render/dom/style-set.mjs
 function rP(e, t, n) {
 	nP(t) ? e.style.setProperty(t, n) : e.style[t] = n;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/utils/supports/flags.mjs
+//#region node_modules/motion-dom/dist/es/utils/supports/flags.mjs
 var iP = {};
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/utils/supports/memo.mjs
+//#region node_modules/motion-dom/dist/es/utils/supports/memo.mjs
 function aP(e, t) {
 	let n = /* @__PURE__ */ AA(e);
 	return () => iP[t] ?? n();
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/utils/supports/scroll-timeline.mjs
+//#region node_modules/motion-dom/dist/es/utils/supports/scroll-timeline.mjs
 var oP = /* @__PURE__ */ aP(() => window.ScrollTimeline !== void 0, "scrollTimeline"), sP = /*@__PURE__*/ aP(() => {
 	try {
 		document.createElement("div").animate({ opacity: 0 }, { easing: "linear(0, 1)" });
@@ -28916,12 +28916,12 @@ var oP = /* @__PURE__ */ aP(() => window.ScrollTimeline !== void 0, "scrollTimel
 	])
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/waapi/easing/map-easing.mjs
+//#region node_modules/motion-dom/dist/es/animation/waapi/easing/map-easing.mjs
 function uP(e, t) {
 	if (e) return typeof e == "function" ? sP() ? kM(e, t) : "ease-out" : /* @__PURE__ */ $A(e) ? cP(e) : Array.isArray(e) ? e.map((e) => uP(e, t) || lP.easeOut) : lP[e];
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/waapi/start-waapi-animation.mjs
+//#region node_modules/motion-dom/dist/es/animation/waapi/start-waapi-animation.mjs
 function dP(e, t, n, { delay: r = 0, duration: i = 300, repeat: a = 0, repeatType: o = "loop", ease: s = "easeOut", times: c } = {}, l = void 0) {
 	let u = { [t]: n };
 	c && (u.offset = c);
@@ -28938,17 +28938,17 @@ function dP(e, t, n, { delay: r = 0, duration: i = 300, repeat: a = 0, repeatTyp
 	return l && (f.pseudoElement = l), e.animate(u, f);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/generators/utils/is-generator.mjs
+//#region node_modules/motion-dom/dist/es/animation/generators/utils/is-generator.mjs
 function fP(e) {
 	return typeof e == "function" && "applyToOptions" in e;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/waapi/utils/apply-generator.mjs
+//#region node_modules/motion-dom/dist/es/animation/waapi/utils/apply-generator.mjs
 function pP({ type: e, ...t }) {
 	return fP(e) && sP() ? e.applyToOptions(t) : (t.duration ??= 300, t.ease ??= "easeOut", t);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/NativeAnimation.mjs
+//#region node_modules/motion-dom/dist/es/animation/NativeAnimation.mjs
 var mP = class extends dN {
 	constructor(e) {
 		if (super(), this.finishedTime = null, this.isStopped = !1, this.manualStartTime = null, !e) return;
@@ -29032,7 +29032,7 @@ function _P(e) {
 	typeof e.ease == "string" && gP(e.ease) && (e.ease = hP[e.ease]);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/NativeAnimationExtended.mjs
+//#region node_modules/motion-dom/dist/es/animation/NativeAnimationExtended.mjs
 var vP = 10, yP = class extends mP {
 	constructor(e) {
 		_P(e), aN(e), super(e), e.startTime !== void 0 && e.autoplay !== !1 && (this.startTime = e.startTime), this.options = e;
@@ -29052,7 +29052,7 @@ var vP = 10, yP = class extends mP {
 	}
 }, bP = (e, t) => t !== "zIndex" && !!(typeof e == "number" || Array.isArray(e) || typeof e == "string" && (eM.test(e) || e === "0") && !e.startsWith("url("));
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/utils/can-animate.mjs
+//#region node_modules/motion-dom/dist/es/animation/utils/can-animate.mjs
 function xP(e) {
 	let t = e[0];
 	if (e.length === 1) return !0;
@@ -29066,12 +29066,12 @@ function SP(e, t, n, r) {
 	return !o || !s ? (o !== s && `${t}${i}${a}${o ? a : i}`, !1) : xP(e) || (n === "spring" || fP(n)) && r;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/utils/make-animation-instant.mjs
+//#region node_modules/motion-dom/dist/es/animation/utils/make-animation-instant.mjs
 function CP(e) {
 	e.duration = 0, e.type = "keyframes";
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/waapi/utils/accelerated-values.mjs
+//#region node_modules/motion-dom/dist/es/animation/waapi/utils/accelerated-values.mjs
 var wP = /* @__PURE__ */ new Set([
 	"opacity",
 	"clipPath",
@@ -29084,7 +29084,7 @@ function EP(e) {
 	return !1;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/waapi/supports/waapi.mjs
+//#region node_modules/motion-dom/dist/es/animation/waapi/supports/waapi.mjs
 var DP = /* @__PURE__ */ new Set([
 	"color",
 	"backgroundColor",
@@ -29106,7 +29106,7 @@ function kP(e) {
 	return OP() && (wP.has(n) || DP.has(n) && EP(s)) && (n !== "transform" || !u) && !l && !r && i !== "mirror" && a !== 0 && o !== "inertia";
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/AsyncMotionValueAnimation.mjs
+//#region node_modules/motion-dom/dist/es/animation/AsyncMotionValueAnimation.mjs
 var AP = class extends dN {
 	constructor(e) {
 		super(), this.stop = () => {
@@ -29190,13 +29190,13 @@ var AP = class extends dN {
 	}
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/utils/calc-child-stagger.mjs
+//#region node_modules/motion-dom/dist/es/animation/utils/calc-child-stagger.mjs
 function jP(e, t, n, r = 0, i = 1) {
 	let a = Array.from(e).sort((e, t) => e.sortNodePosition(t)).indexOf(t), o = e.size, s = (o - 1) * r;
 	return typeof n == "function" ? n(a, o) : i === 1 ? a * r : s - a * r;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/value/index.mjs
+//#region node_modules/motion-dom/dist/es/value/index.mjs
 var MP = 30, NP = (e) => !isNaN(parseFloat(e)), PP = { current: void 0 }, FP = class {
 	constructor(e, t = {}) {
 		this.canTrackVelocity = null, this.events = {}, this.updateAndNotify = (e) => {
@@ -29295,7 +29295,7 @@ function IP(e, t) {
 	return new FP(e, t);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/utils/resolve-transition.mjs
+//#region node_modules/motion-dom/dist/es/animation/utils/resolve-transition.mjs
 function LP(e, t) {
 	if (e?.inherit && t) {
 		let { inherit: n, ...r } = e;
@@ -29307,13 +29307,13 @@ function LP(e, t) {
 	return e;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/utils/get-value-transition.mjs
+//#region node_modules/motion-dom/dist/es/animation/utils/get-value-transition.mjs
 function RP(e, t) {
 	let n = e?.[t] ?? e?.default ?? e;
 	return n === e ? n : LP(n, e);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/utils/default-transitions.mjs
+//#region node_modules/motion-dom/dist/es/animation/utils/default-transitions.mjs
 var zP = {
 	type: "spring",
 	stiffness: 500,
@@ -29353,7 +29353,7 @@ function GP(e) {
 	return !1;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/interfaces/motion-value.mjs
+//#region node_modules/motion-dom/dist/es/animation/interfaces/motion-value.mjs
 var KP = (e, t, n, r = {}, i, a) => (o) => {
 	let s = RP(r, e) || {}, c = s.delay || r.delay || 0, { elapsed: l = 0 } = r;
 	l -= /* @__PURE__ */ FA(c);
@@ -29404,7 +29404,7 @@ function YP(e, t, n = 1) {
 	return dj(i) ? YP(i, t, n + 1) : i;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/utils/resolve-variants.mjs
+//#region node_modules/motion-dom/dist/es/render/utils/resolve-variants.mjs
 function XP(e) {
 	let t = [{}, {}];
 	return e?.values.forEach((e, n) => {
@@ -29416,7 +29416,7 @@ function ZP(e, t, n, r) {
 	return t = i(t), typeof t == "string" && (t = e.variants && e.variants[t]), i(t);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/utils/resolve-dynamic-variants.mjs
+//#region node_modules/motion-dom/dist/es/render/utils/resolve-dynamic-variants.mjs
 function QP(e, t, n) {
 	return ZP(e.getProps(), t, n, e);
 }
@@ -29430,7 +29430,7 @@ var $P = (e, t) => t === "exit" ? e.presenceContext?.custom : void 0, eF = /* @_
 	...RN
 ]), tF = (e) => Array.isArray(e);
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/utils/setters.mjs
+//#region node_modules/motion-dom/dist/es/render/utils/setters.mjs
 function nF(e, t, n) {
 	e.hasValue(t) ? e.getValue(t).set(n) : e.addValue(t, IP(n));
 }
@@ -29446,15 +29446,15 @@ function iF(e, t) {
 	for (let t in i) nF(e, t, rF(i[t]));
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/value/utils/is-motion-value.mjs
+//#region node_modules/motion-dom/dist/es/value/utils/is-motion-value.mjs
 var aF = (e) => !!(e && e.getVelocity);
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/value/will-change/is.mjs
+//#region node_modules/motion-dom/dist/es/value/will-change/is.mjs
 function oF(e) {
 	return !!(aF(e) && e.add);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/value/will-change/add-will-change.mjs
+//#region node_modules/motion-dom/dist/es/value/will-change/add-will-change.mjs
 function sF(e, t) {
 	let n = e.getValue("willChange");
 	if (oF(n)) return n.add(t);
@@ -29464,18 +29464,18 @@ function sF(e, t) {
 	}
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/dom/utils/camel-to-dash.mjs
+//#region node_modules/motion-dom/dist/es/render/dom/utils/camel-to-dash.mjs
 function cF(e) {
 	return e.replace(/([A-Z])/g, (e) => `-${e.toLowerCase()}`);
 }
 var lF = "data-" + cF("framerAppearId");
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/optimized-appear/get-appear-id.mjs
+//#region node_modules/motion-dom/dist/es/animation/optimized-appear/get-appear-id.mjs
 function uF(e) {
 	return e.props[lF];
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/interfaces/visual-element-target.mjs
+//#region node_modules/motion-dom/dist/es/animation/interfaces/visual-element-target.mjs
 var dF = typeof window < "u";
 function fF({ protectedKeys: e, needsAnimating: t }, n) {
 	let r = n in e && !t[n];
@@ -29524,7 +29524,7 @@ function pF(e, t, { delay: n = 0, transitionOverride: r, type: i } = {}) {
 	return d;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/interfaces/visual-element-variant.mjs
+//#region node_modules/motion-dom/dist/es/animation/interfaces/visual-element-variant.mjs
 function mF(e, t, n = {}) {
 	let r = QP(e, t, $P(e, n.type)), i = n.transitionOverride || (r?.transition ?? (e.getDefaultTransition() || {})), a = () => Promise.all(r ? pF(e, r, n) : []), o = (r = 0) => {
 		let { variantChildren: a } = e, { delayChildren: o = 0, staggerChildren: s, staggerDirection: c } = i, l = [];
@@ -29538,14 +29538,14 @@ function mF(e, t, n = {}) {
 	return s ? s === "beforeChildren" ? a().then(() => o()) : o().then(a) : Promise.all([a(), o(n.delay)]);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/interfaces/visual-element.mjs
+//#region node_modules/motion-dom/dist/es/animation/interfaces/visual-element.mjs
 function hF(e, t, n = {}) {
 	return e.notify("AnimationStart", t), (Array.isArray(t) ? Promise.all(t.map((t) => mF(e, t, n))) : typeof t == "string" ? mF(e, t, n) : Promise.all(pF(e, QP(e, t, n.custom), n))).then(() => {
 		e.notify("AnimationComplete", t);
 	});
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/value/types/auto.mjs
+//#region node_modules/motion-dom/dist/es/value/types/auto.mjs
 var gF = {
 	test: (e) => e === "auto",
 	parse: (e) => e
@@ -29559,12 +29559,12 @@ var gF = {
 	gF
 ], yF = (e) => vF.find(_F(e));
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/keyframes/utils/is-none.mjs
+//#region node_modules/motion-dom/dist/es/animation/keyframes/utils/is-none.mjs
 function bF(e) {
 	return typeof e == "number" ? e === 0 : e === null || e === "none" || e === "0" || kA(e);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/keyframes/utils/make-none-animatable.mjs
+//#region node_modules/motion-dom/dist/es/animation/keyframes/utils/make-none-animatable.mjs
 var xF = /* @__PURE__ */ new Set([
 	"auto",
 	"none",
@@ -29579,7 +29579,7 @@ function SF(e, t, n) {
 	if (i && n) for (let r of t) e[r] !== i && (e[r] = wN(n, i));
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/keyframes/DOMKeyframesResolver.mjs
+//#region node_modules/motion-dom/dist/es/animation/keyframes/DOMKeyframesResolver.mjs
 var CF = class extends tP {
 	constructor(e, t, n, r, i) {
 		super(e, t, n, r, i, !0);
@@ -29640,20 +29640,20 @@ var CF = class extends tP {
 	"borderBottomLeftRadius"
 ];
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/utils/is-html-element.mjs
+//#region node_modules/motion-dom/dist/es/utils/is-html-element.mjs
 function TF(e) {
 	return OA(e) && "offsetHeight" in e && !("ownerSVGElement" in e);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/utils/is-svg-element.mjs
+//#region node_modules/motion-dom/dist/es/utils/is-svg-element.mjs
 function EF(e) {
 	return OA(e) && "ownerSVGElement" in e;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/value/types/utils/get-as-type.mjs
+//#region node_modules/motion-dom/dist/es/value/types/utils/get-as-type.mjs
 var DF = (e, t) => t && typeof e == "number" ? t.transform(e) : e;
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/utils/resolve-elements.mjs
+//#region node_modules/motion-dom/dist/es/utils/resolve-elements.mjs
 function OF(e, t, n) {
 	if (e == null) return [];
 	if (e instanceof EventTarget) return [e];
@@ -29666,7 +29666,7 @@ function OF(e, t, n) {
 	return Array.from(e).filter((e) => e != null);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/html/utils/build-transform.mjs
+//#region node_modules/motion-dom/dist/es/render/html/utils/build-transform.mjs
 var kF = {
 	x: "translateX",
 	y: "translateY",
@@ -29698,7 +29698,7 @@ function jF(e, t, n) {
 	return a && (i = !1, r += `rotate(${DF(a, bN.pathRotation)}) `), r = r.trim(), n ? r = n(t, i ? "" : r) : i && (r = "none"), r;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/html/utils/build-styles.mjs
+//#region node_modules/motion-dom/dist/es/render/html/utils/build-styles.mjs
 function MF(e, t, n) {
 	let { style: r, vars: i, transformOrigin: a } = e, o = !1, s = !1;
 	for (let e in t) {
@@ -29716,7 +29716,7 @@ function MF(e, t, n) {
 	}
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/svg/utils/path.mjs
+//#region node_modules/motion-dom/dist/es/render/svg/utils/path.mjs
 var NF = {
 	offset: "stroke-dashoffset",
 	array: "stroke-dasharray"
@@ -29730,7 +29730,7 @@ function FF(e, t, n = 1, r = 0, i = !0) {
 	e[a.offset] = `${-r}`, e[a.array] = `${t} ${n}`;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/svg/utils/build-attrs.mjs
+//#region node_modules/motion-dom/dist/es/render/svg/utils/build-attrs.mjs
 var IF = [
 	"transform",
 	"opacity",
@@ -29752,7 +29752,7 @@ function LF(e, { attrX: t, attrY: n, attrScale: r, pathLength: i, pathSpacing: a
 	(f.transform || d.transformOrigin) && (f.transformOrigin = d.transformOrigin ?? "50% 50%", delete d.transformOrigin), f.transform && (f.transformBox = u?.transformBox ?? "fill-box", delete d.transformBox), t !== void 0 && (d.x = t), n !== void 0 && (d.y = n), r !== void 0 && (d.scale = r), i !== void 0 && FF(d, i, a, o, !1);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/projection/geometry/conversion.mjs
+//#region node_modules/motion-dom/dist/es/projection/geometry/conversion.mjs
 function RF({ top: e, left: t, right: n, bottom: r }) {
 	return {
 		x: {
@@ -29790,7 +29790,7 @@ function BF(e, t) {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/projection/utils/has-transform.mjs
+//#region node_modules/motion-dom/dist/es/projection/utils/has-transform.mjs
 function VF(e) {
 	return e === void 0 || e === 1;
 }
@@ -29807,7 +29807,7 @@ function GF(e) {
 	return e && e !== "0%";
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/projection/geometry/delta-apply.mjs
+//#region node_modules/motion-dom/dist/es/projection/geometry/delta-apply.mjs
 function KF(e, t, n) {
 	return n + t * (e - n);
 }
@@ -29847,7 +29847,7 @@ function nI(e, t, n) {
 	eI(e.x, tI(t.x, r.x), t.scaleX, t.scale, t.originX), eI(e.y, tI(t.y, r.y), t.scaleY, t.scale, t.originY);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/projection/utils/measure.mjs
+//#region node_modules/motion-dom/dist/es/projection/utils/measure.mjs
 function rI(e, t) {
 	return RF(BF(e.getBoundingClientRect(), t));
 }
@@ -29856,7 +29856,7 @@ function iI(e, t, n) {
 	return i && ($F(r.x, i.offset.x), $F(r.y, i.offset.y)), r;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/frameloop/microtask.mjs
+//#region node_modules/motion-dom/dist/es/frameloop/microtask.mjs
 var { schedule: aI, cancel: oI } = /* @__PURE__ */ wM(queueMicrotask, !1), sI = {
 	x: !1,
 	y: !1
@@ -29865,7 +29865,7 @@ function cI() {
 	return sI.x || sI.y;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/gestures/utils/setup.mjs
+//#region node_modules/motion-dom/dist/es/gestures/utils/setup.mjs
 function lI(e, t) {
 	let n = OF(e), r = new AbortController();
 	return [
@@ -29879,7 +29879,7 @@ function lI(e, t) {
 	];
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/gestures/hover.mjs
+//#region node_modules/motion-dom/dist/es/gestures/hover.mjs
 function uI(e) {
 	return !(e.pointerType === "touch" || cI());
 }
@@ -29906,7 +29906,7 @@ function dI(e, t, n = {}) {
 	}), a;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/gestures/utils/is-node-or-child.mjs
+//#region node_modules/motion-dom/dist/es/gestures/utils/is-node-or-child.mjs
 var fI = (e, t) => t ? e === t || fI(e, t.parentElement) : !1, pI = (e) => e.pointerType === "mouse" ? typeof e.button != "number" || e.button <= 0 : e.isPrimary !== !1, mI = /* @__PURE__ */ new Set([
 	"BUTTON",
 	"INPUT",
@@ -29918,10 +29918,10 @@ function hI(e) {
 	return mI.has(e.tagName) || e.isContentEditable === !0;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/gestures/press/utils/state.mjs
+//#region node_modules/motion-dom/dist/es/gestures/press/utils/state.mjs
 var gI = /* @__PURE__ */ new WeakSet();
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/gestures/press/utils/keyboard.mjs
+//#region node_modules/motion-dom/dist/es/gestures/press/utils/keyboard.mjs
 function _I(e) {
 	return (t) => {
 		t.key === "Enter" && e(t);
@@ -29947,7 +29947,7 @@ var yI = (e, t) => {
 	n.addEventListener("keydown", r, t), n.addEventListener("blur", () => n.removeEventListener("keydown", r), t);
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/gestures/press/index.mjs
+//#region node_modules/motion-dom/dist/es/gestures/press/index.mjs
 function bI(e) {
 	return pI(e) && !cI();
 }
@@ -29974,24 +29974,24 @@ function SI(e, t, n = {}) {
 	}), a;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/stats/buffer.mjs
+//#region node_modules/motion-dom/dist/es/stats/buffer.mjs
 var CI = {
 	value: null,
 	addProjectionMetrics: null
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/utils/is-svg-svg-element.mjs
+//#region node_modules/motion-dom/dist/es/utils/is-svg-svg-element.mjs
 function wI(e) {
 	return EF(e) && e.tagName === "svg";
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/utils/transform.mjs
+//#region node_modules/motion-dom/dist/es/utils/transform.mjs
 function TI(...e) {
 	let t = !Array.isArray(e[0]), n = t ? 0 : -1, r = e[0 + n], i = e[1 + n], a = e[2 + n], o = e[3 + n], s = qM(i, a, o);
 	return t ? s(r) : s;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/FollowAnimation.mjs
+//#region node_modules/motion-dom/dist/es/animation/FollowAnimation.mjs
 var EI = /* @__PURE__ */ new Set(), DI = ({ timestamp: e }) => {
 	EI.forEach((t) => t.tick(e));
 }, OI = class extends dN {
@@ -30031,7 +30031,7 @@ var EI = /* @__PURE__ */ new Set(), DI = ({ timestamp: e }) => {
 	}
 }, kI = (e) => typeof e == "number" ? e : parseFloat(e);
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/value/utils/follow.mjs
+//#region node_modules/motion-dom/dist/es/value/utils/follow.mjs
 function AI(e, t, n) {
 	let r = e.get(), i = null, a, o = typeof r == "string" ? r.replace(/[\d.-]/g, "") : void 0, s = (e) => a(o ? e + o : e), c = () => e.events.animationStart?.notify(), l = () => {
 		i &&= (i.stop(), null), e.animation = void 0;
@@ -30071,7 +30071,7 @@ function jI(e, t) {
 	return t ? e + t : e;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/value/follow-value.mjs
+//#region node_modules/motion-dom/dist/es/value/follow-value.mjs
 function MI(e, t, n = {}) {
 	let r = {
 		type: "spring",
@@ -30080,7 +30080,7 @@ function MI(e, t, n = {}) {
 	return aN(r), r.type = r.type || QM, AI(e, t, r);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/projection/geometry/models.mjs
+//#region node_modules/motion-dom/dist/es/projection/geometry/models.mjs
 var NI = () => ({
 	translate: 0,
 	scale: 1,
@@ -30097,17 +30097,17 @@ var NI = () => ({
 	y: FI()
 }), LI = /* @__PURE__ */ new WeakMap();
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/utils/is-animation-controls.mjs
+//#region node_modules/motion-dom/dist/es/render/utils/is-animation-controls.mjs
 function RI(e) {
 	return typeof e == "object" && !!e && typeof e.start == "function";
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/utils/is-variant-label.mjs
+//#region node_modules/motion-dom/dist/es/render/utils/is-variant-label.mjs
 function zI(e) {
 	return typeof e == "string" || Array.isArray(e);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/utils/variant-props.mjs
+//#region node_modules/motion-dom/dist/es/render/utils/variant-props.mjs
 var BI = [
 	"animate",
 	"whileInView",
@@ -30118,7 +30118,7 @@ var BI = [
 	"exit"
 ], VI = ["initial", ...BI];
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/utils/is-controlling-variants.mjs
+//#region node_modules/motion-dom/dist/es/render/utils/is-controlling-variants.mjs
 function HI(e) {
 	if (RI(e.animate)) return !0;
 	for (let t = 0; t < VI.length; t++) if (zI(e[VI[t]])) return !0;
@@ -30128,7 +30128,7 @@ function UI(e) {
 	return !!(HI(e) || e.variants);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/utils/motion-values.mjs
+//#region node_modules/motion-dom/dist/es/render/utils/motion-values.mjs
 function WI(e, t, n) {
 	for (let r in t) {
 		let i = t[r], a = n[r];
@@ -30148,7 +30148,7 @@ function WI(e, t, n) {
 	return t;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/utils/reduced-motion/state.mjs
+//#region node_modules/motion-dom/dist/es/render/utils/reduced-motion/state.mjs
 var GI = { current: null }, KI = { current: !1 }, qI = typeof window < "u";
 function JI() {
 	if (KI.current = !0, qI) {
@@ -30159,7 +30159,7 @@ function JI() {
 	}
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/VisualElement.mjs
+//#region node_modules/motion-dom/dist/es/render/VisualElement.mjs
 var YI = [
 	"AnimationStart",
 	"AnimationComplete",
@@ -30349,25 +30349,25 @@ var YI = [
 	}
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/html/utils/render.mjs
+//#region node_modules/motion-dom/dist/es/render/html/utils/render.mjs
 function $I(e, { style: t, vars: n }, r, i) {
 	let a = e.style, o;
 	for (o in t) a[o] = t[o];
 	for (o in i?.applyProjectionStyles(a, r), n) a.setProperty(o, n[o]);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/projection/styles/scale-correction.mjs
+//#region node_modules/motion-dom/dist/es/projection/styles/scale-correction.mjs
 var eL = {};
 function tL(e) {
 	for (let t in e) eL[t] = e[t], lj(t) && (eL[t].isCSSVariable = !0);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/utils/is-forced-motion-value.mjs
+//#region node_modules/motion-dom/dist/es/render/utils/is-forced-motion-value.mjs
 function nL(e, { layout: t, layoutId: n }) {
 	return zN.has(e) || e.startsWith("origin") || (t || n !== void 0) && (!!eL[e] || e === "opacity");
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/html/utils/scrape-motion-values.mjs
+//#region node_modules/motion-dom/dist/es/render/html/utils/scrape-motion-values.mjs
 function rL(e, t, n) {
 	let r = e.style, i = t?.style, a = {};
 	if (!r) return a;
@@ -30375,7 +30375,7 @@ function rL(e, t, n) {
 	return a;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/html/HTMLVisualElement.mjs
+//#region node_modules/motion-dom/dist/es/render/html/HTMLVisualElement.mjs
 function iL(e) {
 	return window.getComputedStyle(e);
 }
@@ -30428,13 +30428,13 @@ var aL = class extends QI {
 	"lengthAdjust"
 ]), sL = (e) => typeof e == "string" && e.toLowerCase() === "svg";
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/svg/utils/render.mjs
+//#region node_modules/motion-dom/dist/es/render/svg/utils/render.mjs
 function cL(e, t, n, r) {
 	$I(e, t, void 0, r);
 	for (let n in t.attrs) e.setAttribute(oL.has(n) ? n : cF(n), t.attrs[n]);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/svg/utils/scrape-motion-values.mjs
+//#region node_modules/motion-dom/dist/es/render/svg/utils/scrape-motion-values.mjs
 function lL(e, t, n) {
 	let r = rL(e, t, n);
 	for (let n in e) if (aF(e[n]) || aF(t[n])) {
@@ -30444,7 +30444,7 @@ function lL(e, t, n) {
 	return r;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/svg/SVGVisualElement.mjs
+//#region node_modules/motion-dom/dist/es/render/svg/SVGVisualElement.mjs
 var uL = class extends QI {
 	constructor() {
 		super(...arguments), this.type = "svg", this.isSVGTag = !1, this.measureInstanceViewportBox = II;
@@ -30480,7 +30480,7 @@ var uL = class extends QI {
 	}
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/utils/shallow-compare.mjs
+//#region node_modules/motion-dom/dist/es/render/utils/shallow-compare.mjs
 function dL(e, t) {
 	if (!Array.isArray(t)) return !1;
 	let n = t.length;
@@ -30489,7 +30489,7 @@ function dL(e, t) {
 	return !0;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/render/utils/animation-state.mjs
+//#region node_modules/motion-dom/dist/es/render/utils/animation-state.mjs
 var fL = [...BI].reverse();
 function pL(e) {
 	let t = (t) => Promise.all(t.map(({ animation: t, options: n }) => hF(e, t, n))), n = hL(), r = !0, i = !1;
@@ -30592,7 +30592,7 @@ function hL() {
 	return e;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/projection/geometry/copy.mjs
+//#region node_modules/motion-dom/dist/es/projection/geometry/copy.mjs
 function gL(e, t) {
 	e.min = t.min, e.max = t.max;
 }
@@ -30603,7 +30603,7 @@ function vL(e, t) {
 	e.translate = t.translate, e.scale = t.scale, e.originPoint = t.originPoint, e.origin = t.origin;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/projection/geometry/delta-calc.mjs
+//#region node_modules/motion-dom/dist/es/projection/geometry/delta-calc.mjs
 var yL = .9999, bL = 1.0001, xL = -.01, SL = .01;
 function CL(e) {
 	return e.max - e.min;
@@ -30631,7 +30631,7 @@ function AL(e, t, n, r) {
 	kL(e.x, t.x, n.x, r?.x), kL(e.y, t.y, n.y, r?.y);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/projection/geometry/delta-remove.mjs
+//#region node_modules/motion-dom/dist/es/projection/geometry/delta-remove.mjs
 function jL(e, t, n, r, i) {
 	return e -= t, e = KF(e, 1 / n, r), i !== void 0 && (e = KF(e, 1 / i, r)), e;
 }
@@ -30656,7 +30656,7 @@ function IL(e, t, n, r) {
 	NL(e.x, t, PL, n ? n.x : void 0, r ? r.x : void 0), NL(e.y, t, FL, n ? n.y : void 0, r ? r.y : void 0);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/projection/geometry/utils.mjs
+//#region node_modules/motion-dom/dist/es/projection/geometry/utils.mjs
 function LL(e) {
 	return e.translate === 0 && e.scale === 1;
 }
@@ -30682,12 +30682,12 @@ function WL(e, t) {
 	return e.translate === t.translate && e.scale === t.scale && e.originPoint === t.originPoint;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/projection/utils/each-axis.mjs
+//#region node_modules/motion-dom/dist/es/projection/utils/each-axis.mjs
 function GL(e) {
 	return [e("x"), e("y")];
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/projection/styles/scale-border-radius.mjs
+//#region node_modules/motion-dom/dist/es/projection/styles/scale-border-radius.mjs
 function KL(e, t) {
 	return t.max === t.min ? 0 : e / (t.max - t.min) * 100;
 }
@@ -30707,7 +30707,7 @@ var qL = { correct: (e, t) => {
 	return typeof i[2 + o] == "number" && (i[2 + o] /= l), typeof i[3 + o] == "number" && (i[3 + o] /= l), a(i);
 } };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/projection/styles/transform.mjs
+//#region node_modules/motion-dom/dist/es/projection/styles/transform.mjs
 function YL(e, t, n) {
 	let r = "", i = e.x.translate / t.x, a = e.y.translate / t.y, o = n?.z || 0;
 	if ((i || a || o) && (r = `translate3d(${i}px, ${a}px, ${o}px) `), (t.x !== 1 || t.y !== 1) && (r += `scale(${1 / t.x}, ${1 / t.y}) `), n) {
@@ -30718,7 +30718,7 @@ function YL(e, t, n) {
 	return (s !== 1 || c !== 1) && (r += `scale(${s}, ${c})`), r || "none";
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/projection/animation/mix-values.mjs
+//#region node_modules/motion-dom/dist/es/projection/animation/mix-values.mjs
 var XL = wF.length, ZL = (e) => typeof e == "number" || Aj.test(e);
 function QL(e, t, n, r, i, a) {
 	i ? (e.opacity = iM(0, n.opacity ?? 1, eR(r)), e.opacityExit = iM(t.opacity ?? 1, 0, tR(r))) : a && (e.opacity = iM(t.opacity ?? 1, n.opacity ?? 1, r));
@@ -30736,18 +30736,18 @@ function nR(e, t, n) {
 	return (r) => r < e ? 0 : r > t ? 1 : n(/* @__PURE__ */ NA(e, t, r));
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/animation/animate/single-value.mjs
+//#region node_modules/motion-dom/dist/es/animation/animate/single-value.mjs
 function rR(e, t, n) {
 	let r = aF(e) ? e : IP(e);
 	return r.start(KP("", r, t, n)), r.animation;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/events/add-dom-event.mjs
+//#region node_modules/motion-dom/dist/es/events/add-dom-event.mjs
 function iR(e, t, n, r = { passive: !0 }) {
 	return e.addEventListener(t, n, r), () => e.removeEventListener(t, n, r);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/projection/utils/compare-by-depth.mjs
+//#region node_modules/motion-dom/dist/es/projection/utils/compare-by-depth.mjs
 var aR = (e, t) => e.depth - t.depth, oR = class {
 	constructor() {
 		this.children = [], this.isDirty = !1;
@@ -30763,7 +30763,7 @@ var aR = (e, t) => e.depth - t.depth, oR = class {
 	}
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/utils/delay.mjs
+//#region node_modules/motion-dom/dist/es/utils/delay.mjs
 function sR(e, t) {
 	let n = oj.now(), r = ({ timestamp: i }) => {
 		let a = i - n;
@@ -30772,12 +30772,12 @@ function sR(e, t) {
 	return TM.setup(r, !0), () => EM(r);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/value/utils/resolve-motion-value.mjs
+//#region node_modules/motion-dom/dist/es/value/utils/resolve-motion-value.mjs
 function cR(e) {
 	return aF(e) ? e.get() : e;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/projection/shared/stack.mjs
+//#region node_modules/motion-dom/dist/es/projection/shared/stack.mjs
 var lR = class {
 	constructor() {
 		this.members = [];
@@ -30839,7 +30839,7 @@ var lR = class {
 	hasEverUpdated: !1
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/projection/node/create-projection-node.mjs
+//#region node_modules/motion-dom/dist/es/projection/node/create-projection-node.mjs
 Object.assign(eL, {
 	...uR,
 	...eL
@@ -31398,7 +31398,7 @@ function KR(e) {
 	return e !== e.root && e.scroll?.wasRoot;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-dom/dist/es/projection/node/DocumentProjectionNode.mjs
+//#region node_modules/motion-dom/dist/es/projection/node/DocumentProjectionNode.mjs
 var qR = vR({
 	attachResizeListener: (e, t) => iR(e, "resize", t),
 	measureScroll: () => ({
@@ -31445,14 +31445,14 @@ function ZR(e, t, { root: n, margin: r, amount: i = "some" } = {}) {
 	return a.forEach((e) => s.observe(e)), () => s.disconnect();
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/framer-motion/dist/es/utils/distance.mjs
+//#region node_modules/framer-motion/dist/es/utils/distance.mjs
 var QR = (e, t) => Math.abs(e - t);
 function $R(e, t) {
 	let n = QR(e.x, t.x), r = QR(e.y, t.y);
 	return Math.sqrt(n ** 2 + r ** 2);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@vueuse/core/node_modules/@vueuse/shared/dist/index.js
+//#region node_modules/@vueuse/core/node_modules/@vueuse/shared/dist/index.js
 var ez = /* @__PURE__ */ new WeakMap(), tz = /* @__NO_SIDE_EFFECTS__ */ (...e) => {
 	let t = e[0], n = Ps()?.proxy ?? Me();
 	if (n == null && !Sr()) throw Error("injectLocal must be called in setup");
@@ -31473,7 +31473,7 @@ function cz(e, t, n) {
 	});
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@vueuse/core/dist/index.js
+//#region node_modules/@vueuse/core/dist/index.js
 var lz = nz ? window : void 0;
 nz && window.document, nz && window.navigator, nz && window.location;
 function uz(e) {
@@ -31531,17 +31531,17 @@ function gz(e, t = {}) {
 	}, { passive: !0 }), Z(() => s.value);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/utils/get-context-window.mjs
+//#region node_modules/motion-v/dist/es/utils/get-context-window.mjs
 function _z({ current: e }) {
 	return e ? e.ownerDocument.defaultView : null;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/components/hooks/use-motion-elm.mjs
+//#region node_modules/motion-v/dist/es/components/hooks/use-motion-elm.mjs
 function vz(e) {
 	if (e) return e.nodeType === 3 || e.nodeType === 8 ? vz(e.nextSibling) : e;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/components/context.mjs
+//#region node_modules/motion-v/dist/es/components/context.mjs
 var [yz, bz, xz] = xA("Motion"), [Sz, Cz, wz] = xA("LayoutGroup"), Tz = {
 	reducedMotion: "never",
 	transition: void 0,
@@ -31551,7 +31551,7 @@ function kz() {
 	return Ez(Z(() => Tz));
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/hey-listen/dist/hey-listen.es.js
+//#region node_modules/hey-listen/dist/hey-listen.es.js
 var Az = /* @__PURE__ */ z({
 	name: "MotionConfig",
 	inheritAttrs: !1,
@@ -31576,7 +31576,7 @@ var Az = /* @__PURE__ */ z({
 	}
 });
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/state/utils.mjs
+//#region node_modules/motion-v/dist/es/state/utils.mjs
 function jz(e, t, n) {
 	if (Array.isArray(e)) return e.reduce((e, r) => {
 		let i = jz(r, t, n);
@@ -31612,7 +31612,7 @@ function Fz(e) {
 	return Pz.has(e);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/state/motion-state.mjs
+//#region node_modules/motion-v/dist/es/state/motion-state.mjs
 var Iz = /* @__PURE__ */ new WeakMap(), Lz = class {
 	constructor(e, t, n = {}) {
 		this.element = null, this.isExiting = !1, this.children = /* @__PURE__ */ new Set(), this.features = /* @__PURE__ */ new Map(), this.featureCtors = [], this._context = null, this.options = e, this.parent = t, t?.children?.add(this), this.latestValues = Nz(e, this.context), this.type = Fz(this.options.as) ? "svg" : "html", this.setBundle(n);
@@ -31708,12 +31708,12 @@ var Iz = /* @__PURE__ */ new WeakMap(), Lz = class {
 	getSnapshot(e) {}
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/utils/is-hidden.mjs
+//#region node_modules/motion-v/dist/es/utils/is-hidden.mjs
 function zz(e) {
 	return e.style.display === "none" || e.offsetParent === null && window.getComputedStyle(e).position !== "fixed";
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/features/animation/animation.mjs
+//#region node_modules/motion-v/dist/es/features/animation/animation.mjs
 var Bz = class extends Rz {
 	static {
 		this.key = "animation";
@@ -31775,12 +31775,12 @@ var Bz = class extends Rz {
 	}
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/state/create-visual-element.mjs
+//#region node_modules/motion-v/dist/es/state/create-visual-element.mjs
 function Hz(e, t) {
 	return Fz(e) ? new uL(t) : new aL(t);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/features/gestures/press/index.mjs
+//#region node_modules/motion-v/dist/es/features/gestures/press/index.mjs
 function Uz(e) {
 	return { point: {
 		x: e.pageX,
@@ -31821,12 +31821,12 @@ var Wz = class extends Rz {
 	}
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/events/utils/is-primary-pointer.mjs
+//#region node_modules/motion-v/dist/es/events/utils/is-primary-pointer.mjs
 function Gz(e) {
 	return e.pointerType === "mouse" ? typeof e.button != "number" || e.button <= 0 : e.isPrimary !== !1;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/events/event-info.mjs
+//#region node_modules/motion-v/dist/es/events/event-info.mjs
 function Kz(e, t = "page") {
 	return { point: {
 		x: e[`${t}X`],
@@ -31837,7 +31837,7 @@ function qz(e) {
 	return (t) => Gz(t) && e(t, Kz(t));
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/features/gestures/hover/index.mjs
+//#region node_modules/motion-v/dist/es/features/gestures/hover/index.mjs
 var Jz = class extends Rz {
 	static {
 		this.key = "hover";
@@ -31937,12 +31937,12 @@ var Jz = class extends Rz {
 	}
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/features/layout/utils.mjs
+//#region node_modules/motion-v/dist/es/features/layout/utils.mjs
 function Zz(e) {
 	if (e) return e.options.allowProjection === !1 ? Zz(e.parent) : e.projection;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/features/layout/config.mjs
+//#region node_modules/motion-v/dist/es/features/layout/config.mjs
 var Qz = {
 	borderRadius: {
 		...qL,
@@ -31960,12 +31960,12 @@ var Qz = {
 	boxShadow: JL
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/features/gestures/drag/utils/is.mjs
+//#region node_modules/motion-v/dist/es/features/gestures/drag/utils/is.mjs
 function $z(e) {
 	return typeof e == "object" && !!e && "nodeType" in e;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/utils/is.mjs
+//#region node_modules/motion-v/dist/es/utils/is.mjs
 var eB = typeof window > "u", tB = class extends Rz {
 	static {
 		this.key = "projection";
@@ -32003,12 +32003,12 @@ var eB = typeof window > "u", tB = class extends Rz {
 	}
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/events/add-pointer-event.mjs
+//#region node_modules/motion-v/dist/es/events/add-pointer-event.mjs
 function nB(e, t, n, r) {
 	return iR(e, t, qz(n), r);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/features/gestures/pan/PanSession.mjs
+//#region node_modules/motion-v/dist/es/features/gestures/pan/PanSession.mjs
 var rB = /* #__PURE__ */ new Set(["auto", "scroll"]), iB = class {
 	constructor(e, t, { transformPagePoint: n, contextWindow: r, dragSnapToOrigin: i = !1, element: a } = {}) {
 		if (this.startEvent = null, this.lastMoveEvent = null, this.lastMoveEventInfo = null, this.handlers = {}, this.contextWindow = window, this.scrollPositions = /* @__PURE__ */ new Map(), this.onElementScroll = (e) => {
@@ -32138,7 +32138,7 @@ function uB(e, t) {
 	return o.x === Infinity && (o.x = 0), o.y === Infinity && (o.y = 0), o;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/features/gestures/pan/index.mjs
+//#region node_modules/motion-v/dist/es/features/gestures/pan/index.mjs
 function dB(e) {
 	return (t, n) => {
 		e && TM.postRender(() => e(t, n));
@@ -32186,7 +32186,7 @@ var fB = class extends Rz {
 	}
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/features/gestures/drag/lock.mjs
+//#region node_modules/motion-v/dist/es/features/gestures/drag/lock.mjs
 function pB(e) {
 	let t = null;
 	return () => t === null && (t = e, () => {
@@ -32207,7 +32207,7 @@ function gB(e) {
 	return t;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/features/gestures/drag/utils/constraints.mjs
+//#region node_modules/motion-v/dist/es/features/gestures/drag/utils/constraints.mjs
 function _B(e, { min: t, max: n }, r) {
 	return t !== void 0 && e < t ? e = r ? iM(t, e, r.min) : Math.max(e, t) : n !== void 0 && e > n && (e = r ? iM(n, e, r.max) : Math.min(e, n)), e;
 }
@@ -32261,7 +32261,7 @@ function DB(e, t) {
 	return i > r ? n = /* @__PURE__ */ NA(t.min, t.max - r, e.min) : r > i && (n = /* @__PURE__ */ NA(e.min, e.max - i, t.min)), TA(0, 1, n);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/features/gestures/drag/VisualElementDragControls.mjs
+//#region node_modules/motion-v/dist/es/features/gestures/drag/VisualElementDragControls.mjs
 var OB = /* @__PURE__ */ new WeakMap(), kB = class {
 	constructor(e) {
 		this.openGlobalLock = null, this.isDragging = !1, this.currentDirection = null, this.originPoint = {
@@ -32466,7 +32466,7 @@ function jB(e, t = 10) {
 	return Math.abs(e.y) > t ? n = "y" : Math.abs(e.x) > t && (n = "x"), n;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/features/dom-max.mjs
+//#region node_modules/motion-v/dist/es/features/dom-max.mjs
 var MB = {
 	renderer: Hz,
 	features: [
@@ -32535,7 +32535,7 @@ var MB = {
 	]
 }, [NB, PB] = xA("LazyMotionContext"), [FB, IB, LB] = xA("AnimatePresenceContext");
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/state/style.mjs
+//#region node_modules/motion-v/dist/es/state/style.mjs
 function RB(e) {
 	return e.replace(/([A-Z])/g, (e) => `-${e.toLowerCase()}`);
 }
@@ -32578,7 +32578,7 @@ function HB(e, t, n) {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/components/motion/use-motion-state.mjs
+//#region node_modules/motion-v/dist/es/components/motion/use-motion-state.mjs
 function UB(e, t = {}) {
 	let n = yz(null), r = Sz({}), i = kz(), a = FB({}), o = NB({
 		features: /* @__PURE__ */ F({}),
@@ -32655,7 +32655,7 @@ function UB(e, t = {}) {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/components/motion/props.mjs
+//#region node_modules/motion-v/dist/es/components/motion/props.mjs
 var WB = {
 	ignoreStrict: { type: Boolean },
 	forwardMotionProps: {
@@ -32871,11 +32871,11 @@ function ZB(e) {
 	} });
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/components/motion/index.mjs
+//#region node_modules/motion-v/dist/es/components/motion/index.mjs
 var QB = ZB(MB);
 QB.create("div");
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/value/use-combine-values.mjs
+//#region node_modules/motion-v/dist/es/value/use-combine-values.mjs
 function $B(e) {
 	let t = IP(e()), n = () => t.set(e()), r = () => TM.preRender(n, !1, !0), i, a = (e) => {
 		i = e.map((e) => e.on("change", r));
@@ -32892,7 +32892,7 @@ function $B(e) {
 	};
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/value/use-computed.mjs
+//#region node_modules/motion-v/dist/es/value/use-computed.mjs
 function eV(e) {
 	PP.current = [];
 	let { value: t, subscribe: n, unsubscribe: r, updateValue: i } = $B(e);
@@ -32901,7 +32901,7 @@ function eV(e) {
 	}), t;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/value/use-transform.mjs
+//#region node_modules/motion-v/dist/es/value/use-transform.mjs
 function tV(e, t, n, r) {
 	if (typeof e == "function") return eV(e);
 	if (n && !Array.isArray(n) && typeof n == "object") {
@@ -32946,7 +32946,7 @@ function nV(e, t) {
 	return i(e), r;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/value/use-spring.mjs
+//#region node_modules/motion-v/dist/es/value/use-spring.mjs
 function rV(e, t = {}) {
 	let n = IP(aF(e) ? e.get() : e);
 	return R(() => mn(t), (r, i, a) => {
@@ -32960,13 +32960,13 @@ function rV(e, t = {}) {
 	}, { immediate: !0 }), n;
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/motion-v/dist/es/animation/hooks/use-reduced-motion.mjs
+//#region node_modules/motion-v/dist/es/animation/hooks/use-reduced-motion.mjs
 function iV(e = {}) {
 	let t = gz("(prefers-reduced-motion: reduce)", e);
 	return Z(() => t.value);
 }
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@nuxt/ui/dist/runtime/locale/zh_cn.js
+//#region node_modules/@nuxt/ui/dist/runtime/locale/zh_cn.js
 var aV = /* @__PURE__ */ km({
 	name: "简体中文",
 	code: "zh-CN",
@@ -33370,7 +33370,7 @@ var sV = {
 	}
 });
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@nuxt/ui/dist/runtime/utils/overlay.js
+//#region node_modules/@nuxt/ui/dist/runtime/utils/overlay.js
 function lV(e, t = {}) {
 	let n = e.detail.originalEvent, r = n.target;
 	r?.isConnected ? t.scrollable && (n.offsetX > r.clientWidth || n.offsetY > r.clientHeight) && e.preventDefault() : e.preventDefault();
@@ -34524,7 +34524,7 @@ var uV = {
 	Anchor: lC
 };
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@nuxt/ui/dist/runtime/composables/useFilter.js
+//#region node_modules/@nuxt/ui/dist/runtime/composables/useFilter.js
 function vV() {
 	let { contains: e, startsWith: t } = Zh({ sensitivity: "base" });
 	function n(n, r) {
@@ -38935,7 +38935,7 @@ var yV = {
 	}
 });
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@nuxt/ui/dist/runtime/composables/useIMEGuard.js
+//#region node_modules/@nuxt/ui/dist/runtime/composables/useIMEGuard.js
 function KV(e) {
 	let t = !1;
 	function n(e) {
@@ -39252,7 +39252,7 @@ var qV = {
 	}
 });
 //#endregion
-//#region D:/WorkSpace/Projects/ai_co_discuss/node_modules/@nuxt/ui/dist/runtime/utils/virtualizer.js
+//#region node_modules/@nuxt/ui/dist/runtime/utils/virtualizer.js
 function YV(e, t) {
 	if (typeof e != "object" || !e) return !1;
 	let n = Vm(e, t);
@@ -46595,11 +46595,11 @@ var YG = /*#__PURE__*/ nH({
 ], TJ = { class: "channel-room-actions" }, EJ = {
 	key: 0,
 	class: "channel-directory-empty"
-}, DJ = {
+}, DJ = { class: "channel-archive-count" }, OJ = {
 	key: 0,
 	role: "alert",
 	class: "channel-directory-error"
-}, OJ = {
+}, kJ = {
 	__name: "ChannelDirectory",
 	emits: [
 		"select",
@@ -46970,69 +46970,70 @@ var YG = /*#__PURE__*/ nH({
 				}, 1032, ["items"]))), 128))], 10, bJ)) : Y("", !0)], 8, mJ))), 128)), s.value.length ? Y("", !0) : (U(), W("p", EJ, "暂无讨论频道"))], 512), [[Vc, f.value]]),
 				vr(q(u, {
 					icon: "i-lucide-archive",
-					label: `已存档 · ${c.value}`,
 					color: "neutral",
 					variant: "ghost",
-					size: "xs",
 					class: "channel-archive-toggle",
 					"aria-haspopup": "dialog",
 					onClick: t[6] ||= (e) => n("archives")
-				}, null, 8, ["label"]), [[Vc, f.value]]),
-				I(r).directory_error ? (U(), W("p", DJ, P(I(r).directory_error), 1)) : Y("", !0)
+				}, {
+					default: L(() => [t[8] ||= K("span", { class: "channel-archive-label" }, "已存档", -1), K("small", DJ, P(c.value), 1)]),
+					_: 1
+				}, 512), [[Vc, f.value]]),
+				I(r).directory_error ? (U(), W("p", OJ, P(I(r).directory_error), 1)) : Y("", !0)
 			]);
 		};
 	}
-}, kJ = {
+}, AJ = {
 	key: 0,
 	class: "pb-header"
-}, AJ = { class: "pb-mode" }, jJ = { class: "pb-status-line" }, MJ = { role: "status" }, NJ = {
+}, jJ = { class: "pb-mode" }, MJ = { class: "pb-status-line" }, NJ = { role: "status" }, PJ = {
 	key: 0,
 	class: "pb-mode"
-}, PJ = {
+}, FJ = {
 	key: 0,
 	class: "pb-status-detail"
-}, FJ = {
+}, IJ = {
 	key: 1,
 	class: "pb-status-detail"
-}, IJ = { class: "pb-error-detail" }, LJ = {
+}, LJ = { class: "pb-error-detail" }, RJ = {
 	key: 2,
 	class: "pb-meters"
-}, RJ = { class: "pb-meter-label" }, zJ = {
+}, zJ = { class: "pb-meter-label" }, BJ = {
 	key: 0,
 	class: "pb-bar"
-}, BJ = {
+}, VJ = {
 	key: 1,
 	class: "pb-section",
 	"aria-label": "当前焦点"
-}, VJ = {
+}, HJ = {
 	class: "pb-section",
 	"aria-label": "参与者"
-}, HJ = {
+}, UJ = {
 	key: 0,
 	class: "pb-status-detail pb-held"
-}, UJ = { class: "pb-members" }, WJ = { class: "pb-member-body" }, GJ = { class: "pb-member-name" }, KJ = {
+}, WJ = { class: "pb-members" }, GJ = { class: "pb-member-body" }, KJ = { class: "pb-member-name" }, qJ = {
 	class: "pb-member-model",
 	title: "本场启动配置；默认模型与默认强度由对应软件决定"
-}, qJ = { key: 0 }, JJ = {
+}, JJ = { key: 0 }, YJ = {
 	key: 2,
 	class: "pb-actions",
 	"aria-label": "操作"
-}, YJ = {
+}, XJ = {
 	key: 3,
 	class: "pb-section",
 	"aria-label": "阶段耗时"
-}, XJ = { class: "pb-timing-heading" }, ZJ = ["aria-label"], QJ = { class: "pb-timing-totals" }, $J = ["title"], eY = { class: "pb-timings" }, tY = { class: "pb-timing-who" }, nY = { class: "pb-timing-stages" }, rY = ["title"], iY = {
+}, ZJ = { class: "pb-timing-heading" }, QJ = ["aria-label"], $J = { class: "pb-timing-totals" }, eY = ["title"], tY = { class: "pb-timings" }, nY = { class: "pb-timing-who" }, rY = { class: "pb-timing-stages" }, iY = ["title"], aY = {
 	key: 0,
 	class: "pb-note"
-}, aY = { class: "pb-connection" }, oY = { class: "fine-print" }, sY = {
+}, oY = { class: "pb-connection" }, sY = { class: "fine-print" }, cY = {
 	key: 0,
 	role: "status",
 	class: "fine-print"
-}, cY = {
+}, lY = {
 	key: 2,
 	role: "alert",
 	class: "fine-print"
-}, lY = { key: 2 }, uY = { class: "progress-ending" }, dY = ["disabled"], fY = { key: 0 }, pY = ["disabled"], mY = 90, hY = 100, gY = /*#__PURE__*/ nH({
+}, uY = { key: 2 }, dY = { class: "progress-ending" }, fY = ["disabled"], pY = { key: 0 }, mY = ["disabled"], hY = 90, gY = 100, _Y = /*#__PURE__*/ nH({
 	__name: "ProgressBoard",
 	props: { docked: {
 		type: Boolean,
@@ -47069,7 +47070,7 @@ var YG = /*#__PURE__*/ nH({
 			"initial",
 			"discussing",
 			"reviewing"
-		].includes(m.value.phase) && !m.value.archived), w = Z(() => (C.value || m.value.phase === "paused") && !m.value.archived), T = Z(() => C.value || S.value || w.value), E = Z(() => !y.value && m.value.phase !== "preparing" && !m.value.archived && !h.value.closing), D = Z(() => [m.value.host, ...Object.keys(m.value.experts || {}).filter((e) => e !== m.value.host)].filter((e) => e && e !== "用户").map(A)), O = Z(() => D.value.find((e) => e.result)), ee = Z(() => v.value?.question || m.value.focus || m.value.goal || ""), te = Z(() => ee.value.length > mY), k = Z(() => g.value.timings || {
+		].includes(m.value.phase) && !m.value.archived), w = Z(() => (C.value || m.value.phase === "paused") && !m.value.archived), T = Z(() => C.value || S.value || w.value), E = Z(() => !y.value && m.value.phase !== "preparing" && !m.value.archived && !h.value.closing), D = Z(() => [m.value.host, ...Object.keys(m.value.experts || {}).filter((e) => e !== m.value.host)].filter((e) => e && e !== "用户").map(A)), O = Z(() => D.value.find((e) => e.result)), ee = Z(() => v.value?.question || m.value.focus || m.value.goal || ""), te = Z(() => ee.value.length > hY), k = Z(() => g.value.timings || {
 			items: [],
 			totals: {},
 			count: 0
@@ -47103,7 +47104,7 @@ var YG = /*#__PURE__*/ nH({
 			if (e.phase === "paused") {
 				let e = O.value;
 				if (e) {
-					let t = e.result.startsWith(e.name) ? e.result : `${r.display_name(e.name)} 执行失败：${e.result}`, n = t.split("\n")[0], i = n.length > hY ? `${n.slice(0, hY)}…` : n;
+					let t = e.result.startsWith(e.name) ? e.result : `${r.display_name(e.name)} 执行失败：${e.result}`, n = t.split("\n")[0], i = n.length > gY ? `${n.slice(0, gY)}…` : n;
 					return {
 						tone: "error",
 						title: "已暂停",
@@ -47197,24 +47198,24 @@ var YG = /*#__PURE__*/ nH({
 		return (e, l) => {
 			let u = Gk, d = zk, O = uA, A = EV, se = pV, j = MV, pe = EG;
 			return U(), W("div", { class: M(["progress-board", { "is-docked": t.docked }]) }, [
-				t.docked ? (U(), W("header", kJ, [l[11] ||= K("strong", null, "讨论进度", -1), K("span", AJ, P(_.value ? "全自动" : "手动"), 1)])) : Y("", !0),
+				t.docked ? (U(), W("header", AJ, [l[11] ||= K("strong", null, "讨论进度", -1), K("span", jJ, P(_.value ? "全自动" : "手动"), 1)])) : Y("", !0),
 				K("section", {
 					class: M(["pb-status", `is-${ie.value.tone}`]),
 					"aria-label": "讨论状态"
 				}, [
-					K("div", jJ, [
+					K("div", MJ, [
 						l[12] ||= K("span", { class: "pb-dot" }, null, -1),
-						K("strong", MJ, P(ie.value.title), 1),
-						t.docked ? Y("", !0) : (U(), W("span", NJ, P(_.value ? "全自动" : "手动"), 1))
+						K("strong", NJ, P(ie.value.title), 1),
+						t.docked ? Y("", !0) : (U(), W("span", PJ, P(_.value ? "全自动" : "手动"), 1))
 					]),
-					ie.value.detail ? (U(), W("p", PJ, P(ie.value.detail), 1)) : Y("", !0),
-					ie.value.full_detail ? (U(), W("details", FJ, [l[13] ||= K("summary", null, "查看错误详情", -1), K("pre", IJ, P(ie.value.full_detail), 1)])) : Y("", !0),
-					ae.value.length ? (U(), W("div", LJ, [(U(!0), W(H, null, B(ae.value, (e) => (U(), W("div", {
+					ie.value.detail ? (U(), W("p", FJ, P(ie.value.detail), 1)) : Y("", !0),
+					ie.value.full_detail ? (U(), W("details", IJ, [l[13] ||= K("summary", null, "查看错误详情", -1), K("pre", LJ, P(ie.value.full_detail), 1)])) : Y("", !0),
+					ae.value.length ? (U(), W("div", RJ, [(U(!0), W(H, null, B(ae.value, (e) => (U(), W("div", {
 						key: e.label,
 						class: "pb-meter"
-					}, [K("div", RJ, [K("span", null, P(e.label), 1), K("b", null, P(e.text), 1)]), e.ratio === null ? Y("", !0) : (U(), W("div", zJ, [K("i", { style: fe({ width: `${Math.min(100, Math.round(e.ratio * 100))}%` }) }, null, 4)]))]))), 128))])) : Y("", !0)
+					}, [K("div", zJ, [K("span", null, P(e.label), 1), K("b", null, P(e.text), 1)]), e.ratio === null ? Y("", !0) : (U(), W("div", BJ, [K("i", { style: fe({ width: `${Math.min(100, Math.round(e.ratio * 100))}%` }) }, null, 4)]))]))), 128))])) : Y("", !0)
 				], 2),
-				ee.value ? (U(), W("section", BJ, [
+				ee.value ? (U(), W("section", VJ, [
 					l[14] ||= K("h4", null, "当前焦点", -1),
 					K("p", { class: M(["pb-focus", { "is-expanded": s.value }]) }, P(ee.value), 3),
 					te.value ? (U(), W("button", {
@@ -47224,10 +47225,10 @@ var YG = /*#__PURE__*/ nH({
 						onClick: l[0] ||= (e) => s.value = !s.value
 					}, P(s.value ? "收起" : "展开"), 1)) : Y("", !0)
 				])) : Y("", !0),
-				K("section", VJ, [
+				K("section", HJ, [
 					l[16] ||= K("h4", null, "参与者", -1),
-					m.value.held_since && v.value && !y.value ? (U(), W("p", HJ, "用户有新操作，" + P(I(r).display_name(v.value.expert)) + " 说完后交给主持人", 1)) : Y("", !0),
-					K("ul", UJ, [(U(!0), W(H, null, B(D.value, (e) => (U(), W("li", {
+					m.value.held_since && v.value && !y.value ? (U(), W("p", UJ, "用户有新操作，" + P(I(r).display_name(v.value.expert)) + " 说完后交给主持人", 1)) : Y("", !0),
+					K("ul", WJ, [(U(!0), W(H, null, B(D.value, (e) => (U(), W("li", {
 						key: e.name,
 						class: "pb-member"
 					}, [
@@ -47243,8 +47244,8 @@ var YG = /*#__PURE__*/ nH({
 							"alt",
 							"class"
 						]),
-						K("div", WJ, [
-							K("div", GJ, [
+						K("div", GJ, [
+							K("div", KJ, [
 								J(P(I(r).display_name(e.name)), 1),
 								e.is_host ? (U(), G(d, {
 									key: 0,
@@ -47253,14 +47254,14 @@ var YG = /*#__PURE__*/ nH({
 								})) : Y("", !0),
 								K("small", null, P(e.is_host ? `主持 · ${e.mode}` : e.mode), 1)
 							]),
-							K("div", KJ, P(e.model), 1),
+							K("div", qJ, P(e.model), 1),
 							x.value ? Y("", !0) : (U(), W("div", {
 								key: 0,
 								class: M(["pb-member-status", `is-${e.tone}`])
 							}, [
 								l[15] ||= K("span", { class: "pb-dot" }, null, -1),
 								J(P(e.text), 1),
-								e.failures ? (U(), W("small", qJ, " · 失败 " + P(e.failures) + " 次", 1)) : Y("", !0)
+								e.failures ? (U(), W("small", JJ, " · 失败 " + P(e.failures) + " 次", 1)) : Y("", !0)
 							], 2))
 						]),
 						e.session ? (U(), G(A, {
@@ -47281,7 +47282,7 @@ var YG = /*#__PURE__*/ nH({
 						}, 1032, ["items"])) : Y("", !0)
 					]))), 128))])
 				]),
-				T.value ? (U(), W("section", JJ, [
+				T.value ? (U(), W("section", YJ, [
 					S.value ? (U(), G(O, {
 						key: 0,
 						icon: "i-lucide-rotate-ccw",
@@ -47330,8 +47331,8 @@ var YG = /*#__PURE__*/ nH({
 						onClick: l[4] ||= (e) => o.value = !0
 					})) : Y("", !0)
 				])) : Y("", !0),
-				_.value && k.value.count ? (U(), W("section", YJ, [
-					K("div", XJ, [l[17] ||= K("h4", null, "耗时", -1), K("small", null, "共 " + P(k.value.count) + " 次执行", 1)]),
+				_.value && k.value.count ? (U(), W("section", XJ, [
+					K("div", ZJ, [l[17] ||= K("h4", null, "耗时", -1), K("small", null, "共 " + P(k.value.count) + " 次执行", 1)]),
 					K("div", {
 						class: "pb-timing-bar",
 						role: "img",
@@ -47340,18 +47341,18 @@ var YG = /*#__PURE__*/ nH({
 						key: e.key,
 						class: M(`is-${e.key}`),
 						style: fe({ width: `${e.percent}%` })
-					}, null, 6))), 128))], 8, ZJ),
-					K("dl", QJ, [(U(!0), W(H, null, B(le.value, (e) => (U(), W("div", {
+					}, null, 6))), 128))], 8, QJ),
+					K("dl", $J, [(U(!0), W(H, null, B(le.value, (e) => (U(), W("div", {
 						key: e.key,
 						title: e.hint
-					}, [K("dt", null, [K("span", { class: M(`pb-timing-dot is-${e.key}`) }, null, 2), J(P(e.label), 1)]), K("dd", null, [J(P(ue(e.seconds)), 1), K("small", null, P(e.percent) + "%", 1)])], 8, $J))), 128))]),
-					K("details", eY, [
+					}, [K("dt", null, [K("span", { class: M(`pb-timing-dot is-${e.key}`) }, null, 2), J(P(e.label), 1)]), K("dd", null, [J(P(ue(e.seconds)), 1), K("small", null, P(e.percent) + "%", 1)])], 8, eY))), 128))]),
+					K("details", tY, [
 						l[18] ||= K("summary", null, "查看每次执行", -1),
-						K("ol", null, [(U(!0), W(H, null, B(k.value.items, (e) => (U(), W("li", { key: e.id }, [K("span", tY, [J("#" + P(e.id) + " " + P(I(r).display_name(e.participant)), 1), K("small", null, P(e.role === "host" ? "主持" : "专家") + " · " + P(p[e.status] || e.status), 1)]), K("span", nY, [(U(), W(H, null, B(f, (t) => K("span", {
+						K("ol", null, [(U(!0), W(H, null, B(k.value.items, (e) => (U(), W("li", { key: e.id }, [K("span", nY, [J("#" + P(e.id) + " " + P(I(r).display_name(e.participant)), 1), K("small", null, P(e.role === "host" ? "主持" : "专家") + " · " + P(p[e.status] || e.status), 1)]), K("span", rY, [(U(), W(H, null, B(f, (t) => K("span", {
 							key: t.key,
 							title: t.hint
-						}, P(t.label) + " " + P(ue(e[t.key])), 9, rY)), 64))])]))), 128))]),
-						k.value.count > k.value.items.length ? (U(), W("p", iY, "只列出最近 " + P(k.value.items.length) + " 次，共 " + P(k.value.count) + " 次执行。", 1)) : Y("", !0)
+						}, P(t.label) + " " + P(ue(e[t.key])), 9, iY)), 64))])]))), 128))]),
+						k.value.count > k.value.items.length ? (U(), W("p", aY, "只列出最近 " + P(k.value.items.length) + " 次，共 " + P(k.value.count) + " 次执行。", 1)) : Y("", !0)
 					])
 				])) : Y("", !0),
 				q(pe, {
@@ -47364,7 +47365,7 @@ var YG = /*#__PURE__*/ nH({
 						body: "dialog-body"
 					}
 				}, {
-					body: L(() => [K("div", aY, [g.value.status === "running" ? (U(), W(H, { key: 0 }, [l[19] ||= K("p", null, "切换前需要暂停讨论，当前执行会停止，原发言安排保留。", -1), q(O, {
+					body: L(() => [K("div", oY, [g.value.status === "running" ? (U(), W(H, { key: 0 }, [l[19] ||= K("p", null, "切换前需要暂停讨论，当前执行会停止，原发言安排保留。", -1), q(O, {
 						label: "暂停并读取配置",
 						icon: "i-lucide-pause",
 						class: "channel-primary-button",
@@ -47387,7 +47388,7 @@ var YG = /*#__PURE__*/ nH({
 							}, null, 8, ["model-value", "disabled"])]),
 							_: 1
 						}),
-						K("p", oY, P(re.value.adapter === "codex" ? "App 需保持运行，模型与权限沿用原聊天设置。" : "切回 CLI 前，需让 App 释放原聊天；仍被占用时无法执行。"), 1),
+						K("p", sY, P(re.value.adapter === "codex" ? "App 需保持运行，模型与权限沿用原聊天设置。" : "切回 CLI 前，需让 App 释放原聊天；仍被占用时无法执行。"), 1),
 						q(O, {
 							label: "保存接入方式",
 							class: "channel-primary-button",
@@ -47395,7 +47396,7 @@ var YG = /*#__PURE__*/ nH({
 							disabled: !!I(a),
 							onClick: l[6] ||= (e) => I(i)("save_room_configuration")
 						}, null, 8, ["loading", "disabled"]),
-						I(n).launch.repair?.notice ? (U(), W("p", sY, P(I(n).launch.repair.notice), 1)) : Y("", !0)
+						I(n).launch.repair?.notice ? (U(), W("p", cY, P(I(n).launch.repair.notice), 1)) : Y("", !0)
 					], 64)) : (U(), G(O, {
 						key: 1,
 						label: "读取本场配置",
@@ -47403,7 +47404,7 @@ var YG = /*#__PURE__*/ nH({
 						color: "neutral",
 						loading: !!I(a),
 						onClick: ce
-					}, null, 8, ["loading"])), I(n).launch.repair_error ? (U(), W("p", cY, P(I(n).launch.repair_error), 1)) : Y("", !0)], 64)) : (U(), W("p", lY, "本场状态已变化，请关闭后重新核对。"))])]),
+					}, null, 8, ["loading"])), I(n).launch.repair_error ? (U(), W("p", lY, P(I(n).launch.repair_error), 1)) : Y("", !0)], 64)) : (U(), W("p", uY, "本场状态已变化，请关闭后重新核对。"))])]),
 					_: 1
 				}, 8, ["open"]),
 				q(pe, {
@@ -47416,7 +47417,7 @@ var YG = /*#__PURE__*/ nH({
 						body: "dialog-body"
 					}
 				}, {
-					body: L(() => [K("div", uY, [K("button", {
+					body: L(() => [K("div", dY, [K("button", {
 						type: "button",
 						class: "progress-ending-option",
 						disabled: !E.value || !!I(a),
@@ -47424,19 +47425,19 @@ var YG = /*#__PURE__*/ nH({
 					}, [
 						l[20] ||= K("strong", null, "请主持人收尾", -1),
 						K("span", null, "立即进入收束，由 " + P(I(r).display_name(m.value.host)) + " 在 " + P(h.value.summary_minutes || 5) + " 分钟收束预留内根据已有材料总结。", 1),
-						E.value ? Y("", !0) : (U(), W("small", fY, P(h.value.closing ? "已在收尾中。" : "仅进行中的讨论可以收尾；暂停后可先重启再收尾，或直接结束并保留记录。"), 1))
-					], 8, dY), K("button", {
+						E.value ? Y("", !0) : (U(), W("small", pY, P(h.value.closing ? "已在收尾中。" : "仅进行中的讨论可以收尾；暂停后可先重启再收尾，或直接结束并保留记录。"), 1))
+					], 8, fY), K("button", {
 						type: "button",
 						class: "progress-ending-option",
 						disabled: b.value || !!I(a),
 						onClick: l[9] ||= (e) => de("conclude_discussion")
-					}, [...l[21] ||= [K("strong", null, "直接结束（不总结）", -1), K("span", null, "保留全部记录，阶段设为“已收束”，自动运行随之停止。", -1)]], 8, pY)])]),
+					}, [...l[21] ||= [K("strong", null, "直接结束（不总结）", -1), K("span", null, "保留全部记录，阶段设为“已收束”，自动运行随之停止。", -1)]], 8, mY)])]),
 					_: 1
 				}, 8, ["open"])
 			], 2);
 		};
 	}
-}, [["__scopeId", "data-v-9928cf63"]]), _Y = { class: "progress-panel-anchor" }, vY = ["aria-expanded", "aria-label"], yY = { class: "progress-chip-text" }, bY = { class: "progress-chip-rounds" }, xY = {
+}, [["__scopeId", "data-v-9928cf63"]]), vY = { class: "progress-panel-anchor" }, yY = ["aria-expanded", "aria-label"], bY = { class: "progress-chip-text" }, xY = { class: "progress-chip-rounds" }, SY = {
 	__name: "ProgressPanel",
 	setup(e) {
 		let { view: t, bridge: n } = xr("discussion"), r = /* @__PURE__ */ F(!1), i = Z(() => t.value.room), a = Z(() => i.value.limits || {}), o = Z(() => {
@@ -47466,7 +47467,7 @@ var YG = /*#__PURE__*/ nH({
 		}), s = Z(() => a.value.max_rounds ? `${a.value.completed_rounds || 0}/${a.value.max_rounds} 轮` : n.progress_round(i.value)), c = Z(() => `${o.value.title} · ${s.value}`);
 		return (e, t) => {
 			let n = VV, a = dV;
-			return U(), W("div", _Y, [q(n, { text: "查看讨论进度" }, {
+			return U(), W("div", vY, [q(n, { text: "查看讨论进度" }, {
 				default: L(() => [K("button", {
 					type: "button",
 					class: M(["progress-chip", `is-${o.value.tone}`]),
@@ -47474,7 +47475,7 @@ var YG = /*#__PURE__*/ nH({
 					"aria-expanded": r.value,
 					"aria-label": `查看讨论进度：${c.value}`,
 					onClick: t[0] ||= (e) => r.value = !0
-				}, [t[2] ||= K("span", { class: "progress-dot" }, null, -1), K("span", yY, [J(P(o.value.title), 1), K("span", bY, " · " + P(s.value), 1)])], 10, vY)]),
+				}, [t[2] ||= K("span", { class: "progress-dot" }, null, -1), K("span", bY, [J(P(o.value.title), 1), K("span", xY, " · " + P(s.value), 1)])], 10, yY)]),
 				_: 1
 			}), q(a, {
 				open: r.value,
@@ -47487,98 +47488,98 @@ var YG = /*#__PURE__*/ nH({
 					body: "progress-drawer-body"
 				}
 			}, {
-				body: L(() => [q(gY)]),
+				body: L(() => [q(_Y)]),
 				_: 1
 			}, 8, ["open", "description"])]);
 		};
 	}
-}, SY = {
+}, CY = {
 	id: "channel-sidebar",
 	class: "channel-sidebar",
 	"aria-label": "频道导航"
-}, CY = { class: "channel-workspace-heading" }, wY = { class: "channel-brand-icon" }, TY = { class: "channel-sidebar-content" }, EY = { class: "channel-directory-heading channel-tools-heading" }, DY = ["aria-expanded"], OY = { class: "channel-sidebar-footer" }, kY = { class: "channel-self" }, AY = { class: "channel-connection" }, jY = [
+}, wY = { class: "channel-workspace-heading" }, TY = { class: "channel-brand-icon" }, EY = { class: "channel-sidebar-content" }, DY = { class: "channel-directory-heading channel-tools-heading" }, OY = ["aria-expanded"], kY = { class: "channel-sidebar-footer" }, AY = { class: "channel-self" }, jY = { class: "channel-connection" }, MY = [
 	"aria-valuemax",
 	"aria-valuenow",
 	"aria-valuetext"
-], MY = { class: "channel-main" }, NY = { class: "channel-header" }, PY = { class: "channel-title-icon" }, FY = { class: "channel-title" }, IY = { class: "channel-title-copy" }, LY = ["title"], RY = ["title"], zY = {
+], NY = { class: "channel-main" }, PY = { class: "channel-header" }, FY = { class: "channel-title-icon" }, IY = { class: "channel-title" }, LY = { class: "channel-title-copy" }, RY = ["title"], zY = ["title"], BY = {
 	key: 0,
 	class: "channel-header-context"
-}, BY = { class: "channel-header-actions" }, VY = {
+}, VY = { class: "channel-header-actions" }, HY = {
 	key: 0,
 	class: "channel-launch-recovery",
 	"aria-label": "未完成的创建或启动请求"
-}, HY = { role: "status" }, UY = { class: "button-row" }, WY = {
+}, UY = { role: "status" }, WY = { class: "button-row" }, GY = {
 	key: 1,
 	class: "channel-tabbar"
-}, GY = { class: "channel-brief-inner" }, KY = { class: "channel-brief-heading" }, qY = ["aria-label", "aria-expanded"], JY = {
+}, KY = { class: "channel-brief-inner" }, qY = { class: "channel-brief-heading" }, JY = ["aria-label", "aria-expanded"], YY = {
 	key: 0,
 	class: "channel-brief-preview"
-}, YY = {
+}, XY = {
 	id: "channel-brief-content",
 	class: "channel-brief-content"
-}, XY = ["innerHTML"], ZY = { class: "channel-brief-footer" }, QY = { class: "channel-brief-status" }, $Y = { class: "channel-content" }, eX = {
+}, ZY = ["innerHTML"], QY = { class: "channel-brief-footer" }, $Y = { class: "channel-brief-status" }, eX = { class: "channel-content" }, tX = {
 	key: 0,
 	class: "content-page channel-summary",
 	role: "tabpanel",
 	"aria-label": "共识"
-}, tX = { class: "page-heading" }, nX = {
+}, nX = { class: "page-heading" }, rX = {
 	key: 0,
 	class: "info-section"
-}, rX = { class: "button-row" }, iX = { class: "form-footer" }, aX = {
+}, iX = { class: "button-row" }, aX = { class: "form-footer" }, oX = {
 	key: 4,
 	class: "channel-empty"
-}, oX = ["aria-valuenow", "aria-valuetext"], sX = {
+}, sX = ["aria-valuenow", "aria-valuetext"], cX = {
 	key: 2,
 	id: "channel-member-rail",
 	class: "channel-member-rail",
 	"aria-label": "当前焦点与讨论进度"
-}, cX = { class: "channel-rail-board" }, lX = {
+}, lX = { class: "channel-rail-board" }, uX = {
 	key: 0,
 	class: "progress-board is-docked"
-}, uX = { class: "pb-header" }, dX = { class: "pb-mode" }, fX = {
+}, dX = { class: "pb-header" }, fX = { class: "pb-mode" }, pX = {
 	class: "pb-section",
 	"aria-label": "成员"
-}, pX = { class: "pb-members" }, mX = { class: "pb-member-body" }, hX = { class: "pb-member-name" }, gX = {
+}, mX = { class: "pb-members" }, hX = { class: "pb-member-body" }, gX = { class: "pb-member-name" }, _X = {
 	key: 0,
 	class: "pb-member-model",
 	title: "它工作时请不要在原窗口继续操作"
-}, _X = {
+}, vX = {
 	key: 0,
 	class: "pb-section",
 	"aria-label": "提示"
-}, vX = {
+}, yX = {
 	key: 0,
 	role: "alert",
 	class: "pb-free-note is-error"
-}, yX = {
+}, bX = {
 	key: 1,
 	role: "status",
 	class: "pb-free-note"
-}, bX = {
+}, xX = {
 	key: 2,
 	role: "alert",
 	class: "pb-free-note is-error"
-}, xX = {
+}, SX = {
 	key: 3,
 	role: "status",
 	class: "pb-free-note"
-}, SX = {
+}, CX = {
 	class: "pb-section",
 	"aria-label": "邀请"
-}, CX = {
+}, wX = {
 	key: 0,
 	class: "pb-free-note"
-}, wX = {
+}, TX = {
 	key: 1,
 	class: "pb-section",
 	"aria-label": "头脑风暴"
-}, TX = ["onClick"], EX = {
+}, EX = ["onClick"], DX = {
 	class: "pb-actions",
 	"aria-label": "操作"
-}, DX = {
+}, OX = {
 	key: 2,
 	class: "progress-board is-docked"
-}, OX = { class: "channel-detail-title" }, kX = { class: "info-section" }, AX = "ai-codiscuss-channel-layout", jX = 220, MX = 440, NX = 280, PX = 16, FX = 180, IX = 400, LX = 248, RX = 16, zX = 480, BX = 1200, VX = 6, HX = {
+}, kX = { class: "channel-detail-title" }, AX = { class: "info-section" }, jX = "ai-codiscuss-channel-layout", MX = 220, NX = 440, PX = 280, FX = 16, IX = 180, LX = 400, RX = 248, zX = 16, BX = 480, VX = 1200, HX = 6, UX = {
 	__name: "ChannelWorkspace",
 	setup(e) {
 		let { view: t, bridge: n, field: r, act: i, pending: a } = xr("discussion"), o = Z(() => t.value.room), s = /* @__PURE__ */ F(""), c = /* @__PURE__ */ F(null), l = /* @__PURE__ */ F(null), u = /* @__PURE__ */ F(null), d = /* @__PURE__ */ F(!1), f = /* @__PURE__ */ F(!0), p = /* @__PURE__ */ F(!1), m = r("state-input"), h = r("brief-input"), g = r("search-input"), _ = r("author-select"), v = {
@@ -47594,13 +47595,13 @@ var YG = /*#__PURE__*/ nH({
 				label: "宽",
 				width: 1240
 			}
-		}, y = Oe(), b = /* @__PURE__ */ F(y.reading), x = /* @__PURE__ */ F(y.rail), S = /* @__PURE__ */ F(y.nav), C = /* @__PURE__ */ F(typeof window > "u" ? 734 : window.innerWidth), w = /* @__PURE__ */ F(y.collapsed), T = /* @__PURE__ */ F(!0), E = /* @__PURE__ */ F(y.rail_collapsed), D = Z(() => C.value >= BX), O = Z(() => t.value.tab === "discussion" && !E.value), ee = Z(() => D.value && t.value.tab === "discussion" ? E.value ? "展开频道概览" : "收起频道概览" : "频道资料与参与者"), te = Z(() => {
+		}, y = Oe(), b = /* @__PURE__ */ F(y.reading), x = /* @__PURE__ */ F(y.rail), S = /* @__PURE__ */ F(y.nav), C = /* @__PURE__ */ F(typeof window > "u" ? 734 : window.innerWidth), w = /* @__PURE__ */ F(y.collapsed), T = /* @__PURE__ */ F(!0), E = /* @__PURE__ */ F(y.rail_collapsed), D = Z(() => C.value >= VX), O = Z(() => t.value.tab === "discussion" && !E.value), ee = Z(() => D.value && t.value.tab === "discussion" ? E.value ? "展开频道概览" : "收起频道概览" : "频道资料与参与者"), te = Z(() => {
 			let e = document.createElement("template");
 			return e.innerHTML = o.value?.rendered_brief || "", e.content.textContent.replace(/\s+/g, " ").trim();
-		}), k = /* @__PURE__ */ F(null), ne = /* @__PURE__ */ F(null), re = Z(() => Math.min(IX, Math.max(FX, C.value - zX - VX))), ie = Z(() => Math.min(S.value, re.value)), ae = Z(() => ({
+		}), k = /* @__PURE__ */ F(null), ne = /* @__PURE__ */ F(null), re = Z(() => Math.min(LX, Math.max(IX, C.value - BX - HX))), ie = Z(() => Math.min(S.value, re.value)), ae = Z(() => ({
 			"--channel-reading-width": `${v[b.value].width}px`,
 			"--channel-rail-width": `${x.value}px`,
-			"--channel-main-columns": w.value ? "minmax(0, 1fr)" : `${ie.value}px ${VX}px minmax(0, 1fr)`
+			"--channel-main-columns": w.value ? "minmax(0, 1fr)" : `${ie.value}px ${HX}px minmax(0, 1fr)`
 		})), A = Object.entries(v).map(([e, t]) => ({
 			value: e,
 			label: t.label
@@ -47734,11 +47735,11 @@ var YG = /*#__PURE__*/ nH({
 		}
 		function Oe() {
 			try {
-				let e = JSON.parse(localStorage.getItem(AX)) || {};
+				let e = JSON.parse(localStorage.getItem(jX)) || {};
 				return {
 					reading: Object.hasOwn(v, e.reading) ? e.reading : "default",
-					rail: Number.isFinite(e.rail) ? Math.min(MX, Math.max(jX, e.rail)) : NX,
-					nav: Number.isFinite(e.nav) ? Math.min(IX, Math.max(FX, e.nav)) : ke(),
+					rail: Number.isFinite(e.rail) ? Math.min(NX, Math.max(MX, e.rail)) : PX,
+					nav: Number.isFinite(e.nav) ? Math.min(LX, Math.max(IX, e.nav)) : ke(),
 					collapsed: e.collapsed === !0,
 					brief_collapsed: e.brief_collapsed === !0,
 					rail_collapsed: e.rail_collapsed === !0
@@ -47746,7 +47747,7 @@ var YG = /*#__PURE__*/ nH({
 			} catch {
 				return {
 					reading: "default",
-					rail: NX,
+					rail: PX,
 					nav: ke(),
 					collapsed: !1,
 					brief_collapsed: !1,
@@ -47755,11 +47756,11 @@ var YG = /*#__PURE__*/ nH({
 			}
 		}
 		function ke() {
-			return typeof window > "u" ? LX : window.innerWidth >= 1900 ? 280 : window.innerWidth <= 980 ? 220 : LX;
+			return typeof window > "u" ? RX : window.innerWidth >= 1900 ? 280 : window.innerWidth <= 980 ? 220 : RX;
 		}
 		function Ae() {
 			try {
-				localStorage.setItem(AX, JSON.stringify({
+				localStorage.setItem(jX, JSON.stringify({
 					reading: b.value,
 					rail: x.value,
 					nav: S.value,
@@ -47789,19 +47790,19 @@ var YG = /*#__PURE__*/ nH({
 			}, e.currentTarget.setPointerCapture(e.pointerId));
 		}
 		function Ie(e) {
-			k.value?.pointer === e.pointerId && (x.value = Math.round(Math.min(MX, Math.max(jX, k.value.width + k.value.x - e.clientX))));
+			k.value?.pointer === e.pointerId && (x.value = Math.round(Math.min(NX, Math.max(MX, k.value.width + k.value.x - e.clientX))));
 		}
 		function Le(e) {
 			k.value?.pointer === e.pointerId && (k.value = null, e.currentTarget.hasPointerCapture(e.pointerId) && e.currentTarget.releasePointerCapture(e.pointerId), Ae());
 		}
 		function Re(e) {
 			let t = {
-				ArrowLeft: x.value + PX,
-				ArrowRight: x.value - PX,
-				Home: jX,
-				End: MX
+				ArrowLeft: x.value + FX,
+				ArrowRight: x.value - FX,
+				Home: MX,
+				End: NX
 			};
-			Object.hasOwn(t, e.key) && (e.preventDefault(), x.value = Math.min(MX, Math.max(jX, t[e.key])), Ae());
+			Object.hasOwn(t, e.key) && (e.preventDefault(), x.value = Math.min(NX, Math.max(MX, t[e.key])), Ae());
 		}
 		function ze(e) {
 			e.button === 0 && (e.preventDefault(), e.currentTarget.focus(), ne.value = {
@@ -47811,19 +47812,19 @@ var YG = /*#__PURE__*/ nH({
 			}, e.currentTarget.setPointerCapture(e.pointerId));
 		}
 		function Be(e) {
-			ne.value?.pointer === e.pointerId && (S.value = Math.round(Math.min(re.value, Math.max(FX, ne.value.width + e.clientX - ne.value.x))));
+			ne.value?.pointer === e.pointerId && (S.value = Math.round(Math.min(re.value, Math.max(IX, ne.value.width + e.clientX - ne.value.x))));
 		}
 		function Ve(e) {
 			ne.value?.pointer === e.pointerId && (ne.value = null, e.currentTarget.hasPointerCapture(e.pointerId) && e.currentTarget.releasePointerCapture(e.pointerId), Ae());
 		}
 		function He(e) {
 			let t = {
-				ArrowLeft: ie.value - RX,
-				ArrowRight: ie.value + RX,
-				Home: FX,
+				ArrowLeft: ie.value - zX,
+				ArrowRight: ie.value + zX,
+				Home: IX,
 				End: re.value
 			};
-			Object.hasOwn(t, e.key) && (e.preventDefault(), S.value = Math.min(re.value, Math.max(FX, t[e.key])), Ae());
+			Object.hasOwn(t, e.key) && (e.preventDefault(), S.value = Math.min(re.value, Math.max(IX, t[e.key])), Ae());
 		}
 		return (e, r) => {
 			let v = zk, y = GV, S = Gk, C = uA, E = VV, se = LV, me = xV, Oe = zV, ke = FV, Ae = MV, Me = EV, Pe = pV, Ue = dV, We = cV;
@@ -47835,14 +47836,14 @@ var YG = /*#__PURE__*/ nH({
 				}]),
 				style: fe(ae.value)
 			}, [
-				K("aside", SY, [
-					K("header", CY, [
-						K("span", wY, [q(v, { name: "i-lucide-messages-square" })]),
+				K("aside", CY, [
+					K("header", wY, [
+						K("span", TY, [q(v, { name: "i-lucide-messages-square" })]),
 						r[26] ||= K("strong", null, "共议", -1),
 						r[27] ||= K("span", null, "AI CoDiscuss", -1)
 					]),
-					K("div", TY, [
-						q(OJ, {
+					K("div", EY, [
+						q(kJ, {
 							onSelect: Se,
 							onManage: be,
 							onCreate: we,
@@ -47851,12 +47852,12 @@ var YG = /*#__PURE__*/ nH({
 							onDeleteFolder: De,
 							onArchives: xe
 						}),
-						K("div", EY, [K("button", {
+						K("div", DY, [K("button", {
 							type: "button",
 							class: "channel-section-toggle",
 							"aria-expanded": f.value,
 							onClick: r[0] ||= (e) => f.value = !f.value
-						}, [q(v, { name: f.value ? "i-lucide-chevron-down" : "i-lucide-chevron-right" }, null, 8, ["name"]), r[28] ||= J("频道工具", -1)], 8, DY)]),
+						}, [q(v, { name: f.value ? "i-lucide-chevron-down" : "i-lucide-chevron-right" }, null, 8, ["name"]), r[28] ||= J("频道工具", -1)], 8, OY)]),
 						f.value ? (U(), G(y, {
 							key: 0,
 							items: ve.value,
@@ -47872,7 +47873,7 @@ var YG = /*#__PURE__*/ nH({
 							}
 						}, null, 8, ["items"])) : Y("", !0)
 					]),
-					K("footer", OY, [
+					K("footer", kY, [
 						q(S, {
 							src: I(n).identities[I(_)]?.icon,
 							text: I(n).identities[I(_)]?.initials,
@@ -47885,7 +47886,7 @@ var YG = /*#__PURE__*/ nH({
 							"alt",
 							"class"
 						]),
-						K("div", kY, [K("strong", null, P(I(n).display_name(I(_))), 1), K("div", AY, [K("span", { class: M({ connected: I(t).connected }) }, null, 2), J(P(I(t).connected ? "网站已连接" : "网站未连接"), 1)])]),
+						K("div", AY, [K("strong", null, P(I(n).display_name(I(_))), 1), K("div", jY, [K("span", { class: M({ connected: I(t).connected }) }, null, 2), J(P(I(t).connected ? "网站已连接" : "网站未连接"), 1)])]),
 						q(E, { text: "外观设置" }, {
 							default: L(() => [q(C, {
 								icon: "i-lucide-settings-2",
@@ -47908,7 +47909,7 @@ var YG = /*#__PURE__*/ nH({
 					"aria-label": "调整频道栏宽度",
 					"aria-orientation": "vertical",
 					"aria-controls": "channel-sidebar",
-					"aria-valuemin": FX,
+					"aria-valuemin": IX,
 					"aria-valuemax": re.value,
 					"aria-valuenow": ie.value,
 					"aria-valuetext": `${ie.value} 像素`,
@@ -47919,9 +47920,9 @@ var YG = /*#__PURE__*/ nH({
 					onPointercancel: Ve,
 					onLostpointercapture: Ve,
 					onKeydown: He
-				}, null, 40, jY)),
-				K("main", MY, [
-					K("header", NY, [
+				}, null, 40, MY)),
+				K("main", NY, [
+					K("header", PY, [
 						q(E, { text: w.value ? "展开频道栏" : "收起频道栏" }, {
 							default: L(() => [q(C, {
 								icon: "i-lucide-panel-left",
@@ -47946,13 +47947,13 @@ var YG = /*#__PURE__*/ nH({
 							"aria-expanded": d.value,
 							onClick: r[3] ||= (e) => d.value = !0
 						}, null, 8, ["aria-expanded"]),
-						K("span", PY, [q(v, { name: "i-lucide-hash" })]),
-						K("div", FY, [K("div", IY, [K("h1", { title: o.value?.title }, P(o.value?.title || "共议"), 9, LY), o.value?.floor && !ce.value ? (U(), W("div", {
+						K("span", FY, [q(v, { name: "i-lucide-hash" })]),
+						K("div", IY, [K("div", LY, [K("h1", { title: o.value?.title }, P(o.value?.title || "共议"), 9, RY), o.value?.floor && !ce.value ? (U(), W("div", {
 							key: 0,
 							class: M(["channel-floor-status", { "is-held": o.value.floor.holder }]),
 							role: "status",
 							title: `发言权：${I(n).floor_status(o.value)}`
-						}, [q(v, { name: "i-lucide-mic" }), K("span", null, "发言权：" + P(I(n).floor_status(o.value)), 1)], 10, RY)) : Y("", !0)]), o.value?.archived ? (U(), G(se, {
+						}, [q(v, { name: "i-lucide-mic" }), K("span", null, "发言权：" + P(I(n).floor_status(o.value)), 1)], 10, zY)) : Y("", !0)]), o.value?.archived ? (U(), G(se, {
 							key: 0,
 							color: "neutral",
 							variant: "subtle",
@@ -47961,12 +47962,12 @@ var YG = /*#__PURE__*/ nH({
 							default: L(() => [...r[29] ||= [J("已存档", -1)]]),
 							_: 1
 						})) : Y("", !0)]),
-						o.value ? (U(), W("span", zY, [
+						o.value ? (U(), W("span", BY, [
 							J(P(le.value.find((e) => e.value === I(t).tab)?.label), 1),
 							r[30] ||= K("span", null, "·", -1),
 							J(P(o.value.message_count) + " 条记录", 1)
 						])) : Y("", !0),
-						K("div", BY, [
+						K("div", VY, [
 							I(t).tab === "discussion" ? (U(), W("form", {
 								key: 0,
 								class: "channel-search",
@@ -48024,7 +48025,7 @@ var YG = /*#__PURE__*/ nH({
 								])]),
 								_: 1
 							})) : Y("", !0),
-							o.value && !(O.value && D.value) ? (U(), G(xY, { key: 2 })) : Y("", !0)
+							o.value && !(O.value && D.value) ? (U(), G(SY, { key: 2 })) : Y("", !0)
 						]),
 						q(E, { text: ee.value }, {
 							default: L(() => [q(C, {
@@ -48045,12 +48046,12 @@ var YG = /*#__PURE__*/ nH({
 							_: 1
 						}, 8, ["text"])
 					]),
-					I(t).launch.recoveries.length ? (U(), W("section", VY, [
+					I(t).launch.recoveries.length ? (U(), W("section", HY, [
 						r[31] ||= K("h2", null, "继续未完成的请求", -1),
 						(U(!0), W(H, null, B(I(t).launch.recoveries, (e) => (U(), W("article", { key: e.id }, [
 							K("strong", null, P(e.title), 1),
-							K("p", HY, P(e.error || "启动结果尚未确认；原请求已保存在此浏览器中。"), 1),
-							K("div", UY, [
+							K("p", UY, P(e.error || "启动结果尚未确认；原请求已保存在此浏览器中。"), 1),
+							K("div", WY, [
 								q(C, {
 									label: e.direct ? "继续创建房间" : "继续本次启动",
 									size: "sm",
@@ -48083,7 +48084,7 @@ var YG = /*#__PURE__*/ nH({
 						]))), 128)),
 						r[32] ||= K("small", null, "移除待办不会删除房间或停止讨论。", -1)
 					])) : Y("", !0),
-					o.value ? (U(), W("div", WY, [q(Oe, {
+					o.value ? (U(), W("div", GY, [q(Oe, {
 						modelValue: oe.value,
 						"onUpdate:modelValue": r[8] ||= (e) => oe.value = e,
 						items: le.value,
@@ -48098,7 +48099,7 @@ var YG = /*#__PURE__*/ nH({
 						key: 2,
 						class: M(["channel-host-brief", { "is-collapsed": T.value }]),
 						"aria-label": "主持简报"
-					}, [K("div", GY, [K("div", KY, [K("button", {
+					}, [K("div", KY, [K("div", qY, [K("button", {
 						type: "button",
 						class: "channel-brief-toggle",
 						"aria-label": T.value ? "展开主持简报" : "收起主持简报",
@@ -48108,8 +48109,8 @@ var YG = /*#__PURE__*/ nH({
 					}, [
 						q(v, { name: T.value ? "i-lucide-chevron-right" : "i-lucide-chevron-down" }, null, 8, ["name"]),
 						K("strong", null, "主持简报" + P(T.value ? "：" : ""), 1),
-						T.value ? (U(), W("span", JY, P(te.value), 1)) : Y("", !0)
-					], 8, qY), T.value ? Y("", !0) : (U(), G(C, {
+						T.value ? (U(), W("span", YY, P(te.value), 1)) : Y("", !0)
+					], 8, JY), T.value ? Y("", !0) : (U(), G(C, {
 						key: 0,
 						label: "更新简报",
 						color: "neutral",
@@ -48117,30 +48118,30 @@ var YG = /*#__PURE__*/ nH({
 						size: "xs",
 						class: "channel-brief-update",
 						onClick: r[9] ||= (e) => I(i)("tab", "context")
-					}))]), vr(K("div", YY, [K("div", {
+					}))]), vr(K("div", XY, [K("div", {
 						class: "channel-brief-text markdown-body",
 						innerHTML: o.value.rendered_brief
-					}, null, 8, XY), K("div", ZY, [K("span", QY, P(I(n).progress_speaker(o.value)), 1), K("small", null, P(I(n).brief_meta(o.value)), 1)])], 512), [[Vc, !T.value]])])], 2)) : Y("", !0),
+					}, null, 8, ZY), K("div", QY, [K("span", $Y, P(I(n).progress_speaker(o.value)), 1), K("small", null, P(I(n).brief_meta(o.value)), 1)])], 512), [[Vc, !T.value]])])], 2)) : Y("", !0),
 					o.value ? (U(), W("div", {
 						key: 3,
 						class: M(["channel-body", { "channel-body-discussion": I(t).tab === "discussion" }])
-					}, [K("div", $Y, [
+					}, [K("div", eX, [
 						vr(q(aW, {
 							onDetail: Ce,
 							onEdit: r[10] ||= (e) => s.value = "edit"
 						}, null, 512), [[Vc, I(t).tab === "discussion"]]),
-						I(t).tab === "context" ? (U(), W("section", eX, [
-							K("div", tX, [r[33] ||= K("div", null, [K("h2", null, "共识与分歧"), K("p", null, "整理讨论进展，用 #消息编号 保留依据。")], -1), q(se, {
+						I(t).tab === "context" ? (U(), W("section", tX, [
+							K("div", nX, [r[33] ||= K("div", null, [K("h2", null, "共识与分歧"), K("p", null, "整理讨论进展，用 #消息编号 保留依据。")], -1), q(se, {
 								color: "neutral",
 								variant: "outline"
 							}, {
 								default: L(() => [J("截止 #" + P(o.value.state_until), 1)]),
 								_: 1
 							})]),
-							Array.isArray(o.value.latest_receipts) && o.value.latest_receipts.length ? (U(), W("section", nX, [
+							Array.isArray(o.value.latest_receipts) && o.value.latest_receipts.length ? (U(), W("section", rX, [
 								r[34] ||= K("h3", null, "最新运行回执", -1),
 								r[35] ||= K("p", { class: "fine-print" }, "以下回执独立于摘要更新；晚于摘要的回执可能尚未整理，实际运行结果请查看原文。", -1),
-								K("div", rX, [(U(!0), W(H, null, B(o.value.latest_receipts, (e) => (U(), G(C, {
+								K("div", iX, [(U(!0), W(H, null, B(o.value.latest_receipts, (e) => (U(), G(C, {
 									key: e.id,
 									label: `${I(n).display_name(e.author)} #${e.id} · ${new Date(e.created_at).toLocaleString("zh-CN")}${e.id > o.value.state_until ? " · 晚于摘要" : ""}`,
 									variant: "link",
@@ -48183,7 +48184,7 @@ var YG = /*#__PURE__*/ nH({
 									}, null, 8, ["modelValue"])]),
 									_: 1
 								}),
-								K("div", iX, [K("span", null, "依据消息截止 #" + P(I(t).snapshot_id), 1), q(C, {
+								K("div", aX, [K("span", null, "依据消息截止 #" + P(I(t).snapshot_id), 1), q(C, {
 									type: "submit",
 									color: "neutral",
 									icon: "i-lucide-check",
@@ -48198,7 +48199,7 @@ var YG = /*#__PURE__*/ nH({
 							onOpen: r[14] ||= (e) => s.value = e,
 							onDetail: Ce
 						})) : Y("", !0)
-					])], 2)) : (U(), W("div", aX, [
+					])], 2)) : (U(), W("div", oX, [
 						q(v, { name: "i-lucide-hash" }),
 						r[36] ||= K("h2", null, "新建一个讨论频道", -1),
 						r[37] ||= K("p", null, "每个频道围绕一个议题，保留所有人的观点。", -1),
@@ -48218,8 +48219,8 @@ var YG = /*#__PURE__*/ nH({
 					"aria-label": "调整右侧栏宽度",
 					"aria-orientation": "vertical",
 					"aria-controls": "channel-member-rail",
-					"aria-valuemin": jX,
-					"aria-valuemax": MX,
+					"aria-valuemin": MX,
+					"aria-valuemax": NX,
 					"aria-valuenow": x.value,
 					"aria-valuetext": `${x.value} 像素`,
 					title: "拖动调整右侧栏宽度，也可使用左右方向键",
@@ -48229,10 +48230,10 @@ var YG = /*#__PURE__*/ nH({
 					onPointercancel: Le,
 					onLostpointercapture: Le,
 					onKeydown: Re
-				}, null, 40, oX)) : Y("", !0),
-				O.value ? (U(), W("aside", sX, [K("section", cX, [o.value && ce.value ? (U(), W("div", lX, [
-					K("header", uX, [r[38] ||= K("strong", null, "自由协作", -1), K("span", dX, P(he.value ? `${I(n).display_name(he.value.name)} 协助主持` : "你来主持"), 1)]),
-					K("section", fX, [r[40] ||= K("h4", null, "成员", -1), K("ul", pX, [(U(!0), W(H, null, B(o.value.free?.members || [], (e) => (U(), W("li", {
+				}, null, 40, sX)) : Y("", !0),
+				O.value ? (U(), W("aside", cX, [K("section", lX, [o.value && ce.value ? (U(), W("div", uX, [
+					K("header", dX, [r[38] ||= K("strong", null, "自由协作", -1), K("span", fX, P(he.value ? `${I(n).display_name(he.value.name)} 协助主持` : "你来主持"), 1)]),
+					K("section", pX, [r[40] ||= K("h4", null, "成员", -1), K("ul", mX, [(U(!0), W(H, null, B(o.value.free?.members || [], (e) => (U(), W("li", {
 						key: e.id,
 						class: "pb-member"
 					}, [
@@ -48248,8 +48249,8 @@ var YG = /*#__PURE__*/ nH({
 							"alt",
 							"class"
 						]),
-						K("div", mX, [
-							K("div", hX, [
+						K("div", hX, [
+							K("div", gX, [
 								J(P(I(n).display_name(e.name)), 1),
 								e.role === "host" ? (U(), G(v, {
 									key: 0,
@@ -48262,7 +48263,7 @@ var YG = /*#__PURE__*/ nH({
 								}[e.access] || "本机自动"), 1)
 							]),
 							K("div", { class: M(["pb-member-status", `is-${ge(e)}`]) }, [r[39] ||= K("span", { class: "pb-dot" }, null, -1), J(P(_e(e)), 1)], 2),
-							e.session_mode === "borrowed" ? (U(), W("p", gX, "借用你正在使用的会话")) : Y("", !0)
+							e.session_mode === "borrowed" ? (U(), W("p", _X, "借用你正在使用的会话")) : Y("", !0)
 						]),
 						q(Me, {
 							items: N(e),
@@ -48280,7 +48281,7 @@ var YG = /*#__PURE__*/ nH({
 							_: 2
 						}, 1032, ["items"])
 					]))), 128))])]),
-					o.value.free?.conflicts?.length || o.value.free?.halted_chains?.length || I(t).free_error || I(t).free_notice || I(t).access?.error || I(t).access?.notice ? (U(), W("section", _X, [
+					o.value.free?.conflicts?.length || o.value.free?.halted_chains?.length || I(t).free_error || I(t).free_notice || I(t).access?.error || I(t).access?.notice ? (U(), W("section", vX, [
 						r[41] ||= K("h4", null, "提示", -1),
 						(U(!0), W(H, null, B(o.value.free?.conflicts || [], (e) => (U(), W("p", {
 							key: e.executions.join("-"),
@@ -48290,10 +48291,10 @@ var YG = /*#__PURE__*/ nH({
 							key: e.chain_id,
 							class: "pb-free-note"
 						}, "#" + P(e.chain_id) + " 的任务链已停：" + P(e.reason === "budget" ? `达到 ${o.value.free.max_auto_hops} 次上限` : "派出的成员都失败了") + "；发新消息即重新开始", 1))), 128)),
-						I(t).free_error ? (U(), W("p", vX, P(I(t).free_error), 1)) : I(t).free_notice ? (U(), W("p", yX, P(I(t).free_notice), 1)) : Y("", !0),
-						I(t).access?.error ? (U(), W("p", bX, P(I(t).access.error), 1)) : I(t).access?.notice ? (U(), W("p", xX, P(I(t).access.notice), 1)) : Y("", !0)
+						I(t).free_error ? (U(), W("p", yX, P(I(t).free_error), 1)) : I(t).free_notice ? (U(), W("p", bX, P(I(t).free_notice), 1)) : Y("", !0),
+						I(t).access?.error ? (U(), W("p", xX, P(I(t).access.error), 1)) : I(t).access?.notice ? (U(), W("p", SX, P(I(t).access.notice), 1)) : Y("", !0)
 					])) : Y("", !0),
-					K("section", SX, [
+					K("section", CX, [
 						r[42] ||= K("h4", null, "邀请 AI", -1),
 						K("form", {
 							class: "pb-free-invite",
@@ -48328,15 +48329,15 @@ var YG = /*#__PURE__*/ nH({
 							size: "sm",
 							class: "w-26"
 						}, null, 8, ["modelValue"])], 32),
-						de.value === "runner" && !I(t).launch.available ? (U(), W("p", CX, "程序唤醒需要本机服务，请在运行 AI 的电脑打开本机网站。")) : Y("", !0)
+						de.value === "runner" && !I(t).launch.available ? (U(), W("p", wX, "程序唤醒需要本机服务，请在运行 AI 的电脑打开本机网站。")) : Y("", !0)
 					]),
-					o.value.linked_rooms?.length ? (U(), W("section", wX, [r[43] ||= K("h4", null, "头脑风暴", -1), (U(!0), W(H, null, B(o.value.linked_rooms, (e) => (U(), W("button", {
+					o.value.linked_rooms?.length ? (U(), W("section", TX, [r[43] ||= K("h4", null, "头脑风暴", -1), (U(!0), W(H, null, B(o.value.linked_rooms, (e) => (U(), W("button", {
 						key: e.id,
 						type: "button",
 						class: "pb-link pb-free-linked",
 						onClick: (t) => I(i)("room", e.id)
-					}, [J(P(e.title), 1), K("small", null, P(I(n).phases[e.phase] || e.phase), 1)], 8, TX))), 128))])) : Y("", !0),
-					K("section", EX, [q(C, {
+					}, [J(P(e.title), 1), K("small", null, P(I(n).phases[e.phase] || e.phase), 1)], 8, EX))), 128))])) : Y("", !0),
+					K("section", DX, [q(C, {
 						icon: "i-lucide-user-plus",
 						label: "邀请",
 						size: "sm",
@@ -48358,10 +48359,10 @@ var YG = /*#__PURE__*/ nH({
 						title: "用当前成员新建一场讨论房间，收束后可把结论发回这里",
 						onClick: j
 					})])
-				])) : o.value ? (U(), G(gY, {
+				])) : o.value ? (U(), G(_Y, {
 					key: 1,
 					docked: ""
-				})) : (U(), W("div", DX, [...r[44] ||= [K("header", { class: "pb-header" }, [K("strong", null, "讨论进度")], -1), K("p", { class: "channel-rail-empty" }, "暂无频道，新建讨论后在这里查看进度与参与者。", -1)]]))])])) : Y("", !0),
+				})) : (U(), W("div", OX, [...r[44] ||= [K("header", { class: "pb-header" }, [K("strong", null, "讨论进度")], -1), K("p", { class: "channel-rail-empty" }, "暂无频道，新建讨论后在这里查看进度与参与者。", -1)]]))])])) : Y("", !0),
 				q(Ue, {
 					open: d.value,
 					"onUpdate:open": r[21] ||= (e) => d.value = e,
@@ -48373,7 +48374,7 @@ var YG = /*#__PURE__*/ nH({
 						body: "channel-drawer-body"
 					}
 				}, {
-					body: L(() => [q(OJ, {
+					body: L(() => [q(kJ, {
 						onSelect: Se,
 						onManage: be,
 						onCreate: we,
@@ -48404,7 +48405,7 @@ var YG = /*#__PURE__*/ nH({
 					}
 				}, {
 					body: L(() => [o.value ? (U(), W(H, { key: 0 }, [
-						K("div", OX, [q(v, { name: "i-lucide-hash" }), K("h2", null, P(o.value.title), 1)]),
+						K("div", kX, [q(v, { name: "i-lucide-hash" }), K("h2", null, P(o.value.title), 1)]),
 						(U(), W(H, null, B([
 							{
 								key: "goal",
@@ -48431,7 +48432,7 @@ var YG = /*#__PURE__*/ nH({
 							class: "info-section"
 						}, [K("h3", null, P(e.label), 1), K("p", null, P(o.value[e.key] || "尚未填写"), 1)])), 64)),
 						q(We),
-						K("section", kX, [r[45] ||= K("h3", null, "参与身份", -1), (U(!0), W(H, null, B(ye.value, (e) => (U(), W("div", {
+						K("section", AX, [r[45] ||= K("h3", null, "参与身份", -1), (U(!0), W(H, null, B(ye.value, (e) => (U(), W("div", {
 							key: e.name,
 							class: "expert-row"
 						}, [
@@ -48484,7 +48485,7 @@ var YG = /*#__PURE__*/ nH({
 			], 6);
 		};
 	}
-}, UX = {
+}, WX = {
 	__name: "App",
 	setup(e) {
 		return br("discussion", oV()), (e, t) => {
@@ -48495,7 +48496,7 @@ var YG = /*#__PURE__*/ nH({
 				toaster: null
 			}, {
 				default: L(() => [q(I(Az), { "reduced-motion": "user" }, {
-					default: L(() => [q(HX)]),
+					default: L(() => [q(UX)]),
 					_: 1
 				})]),
 				_: 1
@@ -48505,8 +48506,8 @@ var YG = /*#__PURE__*/ nH({
 };
 //#endregion
 //#region frontend/main.js
-function WX() {
-	bu(UX).use(fh).mount("#modern-root");
+function GX() {
+	bu(WX).use(fh).mount("#modern-root");
 }
-document.readyState === "loading" ? document.addEventListener("DOMContentLoaded", WX) : WX();
+document.readyState === "loading" ? document.addEventListener("DOMContentLoaded", GX) : GX();
 //#endregion
