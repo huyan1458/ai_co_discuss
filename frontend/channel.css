@@ -849,10 +849,13 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-phase-dot.concluded { background: var(--channel-accent); }
   .channel-person-label strong [class*="icon"] { color: #8c6d1f; }
   .channel-filter-summary { color: #0969da; background: #f3f7fd; border-color: #cddff5; }
-  .channel-map-round + .channel-map-round::before { border-color: #d6d6d6; }
-  .channel-jump-tick { height: 2px; background: var(--navigation-tick-fill, #8c8c8c); }
-  .channel-message-jump[data-author="user"] { --navigation-tick-fill: linear-gradient(to right, #0f8f83 0 50%, #c4c8d0 50% 100%); }
-  .channel-message-jump:is([data-author="codex"], [data-author="claude"], [data-author="deepseek"], [data-author="qwen"]) { --navigation-tick-fill: linear-gradient(to right, var(--tick-color) 0 50%, #c4c8d0 50% 100%); }
+  /* The navigation sits on a light raised plate hugging its rounds; the map's scroll fade still trims overflow. */
+  .channel-map-track { width: calc(100% - 16px); padding: 8px 0; border: 1px solid var(--channel-edge-panel); border-radius: 10px; background: #fff; box-shadow: var(--channel-shadow-control); }
+  .channel-map-round + .channel-map-round::before { border-color: var(--ui-border-accented); }
+  .channel-round-number { color: var(--ui-text-toned); }
+  .channel-jump-tick { width: 12px; height: 2px; background: var(--navigation-tick-fill, #8c8c8c); }
+  .channel-message-jump[data-author="user"] { --navigation-tick-fill: linear-gradient(to right, #0f8f83 0 50%, #9aa3b2 50% 100%); }
+  .channel-message-jump:is([data-author="codex"], [data-author="claude"], [data-author="deepseek"], [data-author="qwen"]) { --navigation-tick-fill: linear-gradient(to right, var(--tick-color) 0 50%, #9aa3b2 50% 100%); }
   .channel-message-jump[data-author="codex"] { --tick-color: #111; }
   .channel-message-jump[data-author="claude"] { --tick-color: #d98a1f; }
   .channel-message-jump[data-author="deepseek"] { --tick-color: #4d6bfe; }
