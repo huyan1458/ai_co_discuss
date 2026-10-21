@@ -18,19 +18,23 @@ async function process_request(name) {
   writeFileSync(claim, String(process.pid), { flag: 'wx', mode: 0o600 });
   try {
     const access = JSON.parse(readFileSync(request.access_path, 'utf8'));
-    const response = await fetch(`${access.site}/api/rooms/${access.room}/events/${request.event_id}`, {
-      method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10000),
+    const free = request.mode === 'free';
+    const response = await fetch(`${access.site}/api/rooms/${access.room}/${free ? 'executions' : 'events'}/${request.event_id}`, {
+      method: free ? 'GET' : 'POST', redirect: 'error', signal: AbortSignal.timeout(10000),
       headers: { 'Content-Type': 'application/json', 'X-Discussion-Token': access.token },
-      body: JSON.stringify({ action: 'view' }),
+      body: free ? undefined : JSON.stringify({ action: 'view' }),
     });
     const event = await response.json();
     if (!response.ok || event.status !== 'dispatched') throw new Error('请求已撤销或状态不明，未调用软件');
+    if (free && event.lease_until <= Math.floor(Date.now() / 1000)) throw new Error('执行租约已到期，未调用软件');
+    if (!free) {
     const runtime_response = await fetch(`${access.site}/api/rooms/${access.room}/runtime`, {
       redirect: 'error', signal: AbortSignal.timeout(10000),
     });
     const runtime = await runtime_response.json();
     if (!runtime_response.ok || runtime.status !== 'running' || (runtime.deadline > 0 && runtime.deadline <= Math.floor(Date.now() / 1000))
       || event.run_id !== runtime.run_id || event.generation !== runtime.generation) throw new Error('运行已停止或到期，未调用软件');
+    }
     const args = request.session_id ? ['send-message', request.session_id, request.prompt] : ['new-conversation', request.prompt];
     const raw = execFileSync(agentapi, ['agentapi', ...args], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
     const result = JSON.parse(raw);

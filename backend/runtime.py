@@ -144,18 +144,65 @@ def require_control(connection, room_id, token):
     return row
 
 
+def require_owner(connection, room_id, token):
+    """Require the persistent room owner credential, independent of execution mode."""
+    hashed = token_hash(token)
+    row = connection.execute("SELECT * FROM room_modes WHERE room_id=? AND control_hash=?",
+                             (room_id, hashed)).fetchone() if hashed else None
+    if not row:
+        raise PermissionError("需要本房间的控制凭据；没有凭据只能阅读")
+    return row
+
+
+def write_actor(operation, payload):
+    """Use the same message attribution defaults as persisted message details."""
+    if operation == "messages":
+        return payload.get("submitted_by", payload.get("author") if payload.get("source") == "cli" else "用户")
+    return payload.get("actor", "用户")
+
+
+def authorize_participant(connection, room_id, identity, operation, payload):
+    """Limit authenticated participants to their identity and assigned host duties."""
+    actor = write_actor(operation, payload)
+    if actor != identity["name"]:
+        raise PermissionError("凭据与实际参与身份不符")
+    if operation == "messages":
+        author = payload.get("author")
+        online = connection.execute("SELECT 1 FROM room_members WHERE room_id=? AND name=? AND access='online' AND status='active'",
+                                    (room_id, author)).fetchone()
+        if author != actor and not (online and identity["role"] in ("owner", "host")):
+            raise PermissionError("只能提交本人观点，或由房主、主持人代发在线成员原文")
+    elif operation == "floor":
+        speaker = payload.get("speaker", actor)
+        online = connection.execute("SELECT 1 FROM room_members WHERE room_id=? AND name=? AND access='online' AND status='active'",
+                                    (room_id, speaker)).fetchone()
+        if identity["role"] != "owner" and speaker != actor and not (identity["role"] == "host" and online):
+            raise PermissionError("只能操作本人发言权")
+    elif operation != "attachments" and identity["role"] != "owner":
+        if identity["role"] != "host" or operation not in ("topic", "state", "turns", "limits"):
+            raise PermissionError("本成员没有此管理权限")
+        if operation == "topic":
+            if any(field in payload for field in ("host", "experts", "members")):
+                raise PermissionError("只有房主可以修改成员和主持人")
+
+
 def authorize_write(connection, room_id, token, operation, payload):
     """Check a capability under the same writer lock as the following mutation."""
     begin_write(connection)
     run = connection.execute("SELECT * FROM discussion_runtime WHERE room_id=?", (room_id,)).fetchone()
-    if not run:
-        return
     hashed = token_hash(token)
-    if hashed and hashed == run["control_hash"]:
+    owner = connection.execute("SELECT 1 FROM room_modes WHERE room_id=? AND control_hash=?", (room_id, hashed)).fetchone() if hashed else None
+    if owner:
+        authorize_participant(connection, room_id, {"name": "用户", "role": "owner"}, operation, payload)
         return
-    actor = payload.get("actor", payload.get("submitted_by", payload.get("author", "用户")))
-    if actor == "用户":
+    member = connection.execute("SELECT * FROM room_members WHERE room_id=? AND token_hash=? AND status='active' AND access<>'online'",
+                                (room_id, hashed)).fetchone() if hashed else None
+    if member and (not run or run["mode"] == "manual"):
+        authorize_participant(connection, room_id, member, operation, payload)
         return
+    if not run:
+        raise PermissionError("需要房主或本成员的有效凭据；没有凭据只能阅读")
+    actor = write_actor(operation, payload)
     work_seconds = execution_seconds(connection, room_id)
     event = connection.execute("""SELECT * FROM discussion_events WHERE room_id=? AND token_hash=?
         AND run_id=? AND generation=? AND status='started' AND lease_until>?
@@ -165,6 +212,7 @@ def authorize_write(connection, room_id, token, operation, payload):
         raise PermissionError("执行资格无效、已结束或已到期；请重新读取运行状态")
     if actor != event["participant"]:
         raise PermissionError("执行凭据与实际参与身份不符")
+    authorize_participant(connection, room_id, {"name": event["participant"], "role": event["role"]}, operation, payload)
     if operation == "messages":
         if payload.get("author") != actor:
             raise PermissionError("自动执行不能代发其他参与者")
@@ -182,6 +230,7 @@ def authorize_write(connection, room_id, token, operation, payload):
 def configure_runtime(connection, room_id, token, payload):
     """Apply one versioned, explicit mode or lifecycle action."""
     begin_write(connection)
+    require_owner(connection, room_id, token)
     current = runtime_view(connection, room_id)
     if payload.get("revision") != current["revision"]:
         raise FileExistsError("运行状态已变化，请重新读取 revision")
@@ -210,6 +259,8 @@ def configure_runtime(connection, room_id, token, payload):
     if action in ("pause", "stop"):
         connection.execute("UPDATE topic_settings SET phase='paused' WHERE room_id=? AND phase<>'concluded'", (room_id,))
     connection.execute("UPDATE discussion_runtime SET status=? WHERE room_id=?", (status, room_id))
+    connection.execute("UPDATE room_members SET access=? WHERE room_id=? AND access<>'online'",
+                       ("runner" if mode == "automatic" else "manual", room_id))
     return runtime_view(connection, room_id)
 
 

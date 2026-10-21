@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { atomic_json } from './discussion_adapters.mjs';
+import { software_models } from './discussion_models.mjs';
 import { acquire_lock, api, CODEX_ADAPTERS, DiscussionStore, service_drafts, task_files, validate_config } from './discussion_runner.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 
@@ -35,12 +36,14 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch start --file FILE [--dry-run]
       codiscuss launch room-config --file FILE
       codiscuss launch room-models --file FILE
+      codiscuss launch models --file FILE
       codiscuss launch room-member --file FILE
 
 settings 读取本机软件默认配置；指定文件时保存，不启动 AI。
 start 使用启动 JSON 创建或接入房间并启动；--dry-run 只校验和预览。
 room-config 修正已暂停房间的软件路径或切换 Codex App / CLI，不启动讨论；须提供 site、room_id、token。
 room-models 只读指定 site、room_id 的本机登记模型与思考强度，不启动讨论。
+models 按 adapter、executable 读取本机 CLI 的模型目录，不启动讨论或生成回答。
 room-member 为运行中的自由房间邀请或请回一位成员；须提供 site、room_id、token、action（add/rejoin）、name。
 JSON 指定 site、entry（conversation/web）、room（建房内容，含 submission_id）
 或 room_id（已有房间）、participants（本次软件覆盖配置）。
@@ -134,7 +137,8 @@ function launch_input(input) {
     // P1: a free room is launched once, at creation, from the web page.
     if (value.entry !== 'web' || value.room_id) throw new Error('自由协作房间目前只能在网页创建时启动');
     const members = value.room.members;
-    if (!Array.isArray(members) || !members.length || new Set(members).size !== members.length || members.some(name => !clients_of(name))) {
+    const names = members?.map(member => typeof member === 'string' ? member : member.name);
+    if (!Array.isArray(members) || !members.length || new Set(names).size !== names.length || names.some(name => !clients_of(name))) {
       throw new Error('自由协作房间须选择至少 1 位支持自动接入的 AI 成员，且不能重复');
     }
   }
@@ -158,7 +162,8 @@ function launch_config(home, input, room, directory, options) {
   for (const name of new Set([room.host, ...Object.keys(room.experts)])) {
     participants[name] = participant_profile(name, defaults, input, name === room.host);
   }
-  return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, participants,
+  const members = launch_members(input, Object.keys(participants), options);
+  return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, participants, members,
     cwd: input.cwd, discussion_project: input.discussion_project, project_access: input.project_access || undefined,
     data_directory: join(directory, 'runtime'), draft_directory: service_drafts(home, join(directory, 'runtime')) }, directory);
 }
@@ -166,11 +171,20 @@ function launch_config(home, input, room, directory, options) {
 /** Free rooms add one private credential per member, kept with the room configuration for retries. */
 function free_launch_config(home, input, room, directory, options) {
   const defaults = options.defaults || launch_settings(home).participants;
-  const participants = Object.fromEntries(room.members.map(name => [name, participant_profile(name, defaults, input, false)]));
-  const members = Object.fromEntries(room.members.map(name => [name, { token: options.members?.[name]?.token || `${randomUUID()}${randomUUID()}` }]));
+  const names = room.members.map(member => typeof member === 'string' ? member : member.name);
+  const participants = Object.fromEntries(names.map(name => [name, participant_profile(name, defaults, input, false)]));
+  const members = launch_members(input, names, options);
   return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, mode: 'free', participants, members,
     cwd: input.cwd, project_access: input.project_access || undefined,
     data_directory: join(directory, 'runtime'), draft_directory: service_drafts(home, join(directory, 'runtime')) }, directory);
+}
+
+/** Preserve caller-generated member credentials; journal newly generated ones before creation. */
+function launch_members(input, names, options) {
+  return Object.fromEntries(names.map(name => {
+    const supplied = input.room?.members?.find(member => member?.name === name);
+    return [name, { token: supplied?.token || options.members?.[name]?.token || `${randomUUID()}${randomUUID()}` }];
+  }));
 }
 
 /** Merge one participant's machine defaults with this launch's overrides and check its software. */
@@ -235,12 +249,17 @@ export async function room_member(home, raw, locked = false) {
       return room_member(home, { ...raw, name: next_instance(platform_of(name), taken), new_instance: false }, true);
     }
     const current = room.free.members.find(member => member.name === name);
+    if (input.member_token !== undefined && (typeof input.member_token !== 'string' || input.member_token.length < 32 || input.member_token.length > 256)) throw new Error('member_token 须为 32–256 字符');
+    if (current?.status === 'active' && input.member_token && config.members?.[name]?.token === input.member_token) {
+      const view = await site_request(input.site, `/api/rooms/${input.room_id}/members/${current.id}`, input.token, { action: 'active', token: input.member_token });
+      return { room_id: input.room_id, member: name, access: current.access, free: view, access_file: null };
+    }
     if (action === 'add' && !current && config.participants[name] && !locked) throw new Error(`${name} 曾在本房间使用过并绑定了会话；请换一个名称`);
     if (action === 'rejoin' && current?.status !== 'away') throw new Error(`${name} 不是离开状态，无需请回`);
     if (action === 'add' && current) throw new Error(`${name} 已是本房间成员；离开的成员请用请回`);
     const manual = action === 'rejoin' ? current.access === 'manual' : access === 'manual';
     const pending = input.retry_token && config.members?.[name]?.pending === input.retry_token;
-    const token = pending ? config.members[name].token : `${randomUUID()}${randomUUID()}`;
+    const token = input.member_token || (pending ? config.members[name].token : `${randomUUID()}${randomUUID()}`);
     let profile = config.participants[name];
     if (!manual) {
       if (action === 'add') profile = participant_profile(name, launch_settings(home).participants, { ...input, cwd: input.cwd || config.cwd }, false);
@@ -519,10 +538,11 @@ async function perform_launch(home, context, options) {
   try {
     let room = context.room;
     const free = config.mode === 'free';
-    if (!input.room_id) room = await site_request(input.site, '/api/rooms', config.token, free
-      ? { ...input.room, members: input.room.members.map(name => ({ name, adapter: config.participants[name].adapter, token: config.members[name].token,
-        session_mode: config.participants[name].session_id ? 'borrowed' : 'new' })) }
-      : { ...input.room, runtime_mode: 'automatic' });
+    if (!input.room_id) room = await site_request(input.site, '/api/rooms', config.token, {
+      ...input.room, ...(free ? {} : { runtime_mode: 'automatic' }),
+      members: Object.keys(config.participants).map(name => ({ name, adapter: config.participants[name].adapter,
+        token: config.members[name].token, access: 'runner', session_mode: config.participants[name].session_id ? 'borrowed' : 'new' })),
+    });
     config.room = room.id;
     await verify_control(config, room);
     Object.assign(progress, { stage: 'created', room_id: room.id });
@@ -563,6 +583,10 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   let result;
   if (positionals[0] === 'settings') result = input ? save_launch_settings(home, input) : launch_settings(home);
   else if (positionals[0] === 'room-models' && input) result = room_models(home, input);
+  else if (positionals[0] === 'models' && input) {
+    const saved = Object.values(launch_settings(home).participants).find(profile => profile.adapter === input.adapter);
+    result = await software_models({ adapter: input.adapter, executable: input.executable || saved?.executable });
+  }
   else if (positionals[0] === 'room-member' && input) result = await room_member(home, input);
   else if (positionals[0] === 'start' && input) result = await launch_discussion(home, input, { dry_run: values['dry-run'], browser_request: values.browser });
   else if (positionals[0] === 'room-config' && input) result = await room_configuration(home, input, { local_guard: values['configuration-locked'] });

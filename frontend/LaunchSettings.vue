@@ -1,5 +1,5 @@
 <script setup>
-import { computed, inject } from "vue";
+import { computed, inject, watch } from "vue";
 
 // The create form shows directory, access and model choices beside their related controls.
 const props = defineProps({ participants: { type: Array, default: () => [] }, workspace: { type: Boolean, default: true },
@@ -12,9 +12,11 @@ const ACCESS = [{ label: "只读", value: "read" }, { label: "可写", value: "w
 // Select items cannot use an empty value, so "inherit" stands for following the launch-wide setting.
 const PARTICIPANT_ACCESS = [{ label: "沿用本次设置", value: "inherit" }, ...ACCESS];
 const write_access = (name, value) => write(name, "project_access", value === "inherit" ? "" : value);
-const MODEL_HINTS = bridge.launch_model_hints;
+const models = name => bridge.launch_model_state(name, view.value.launch);
 // Select items cannot hold an empty value, so "default" stands for the CLI's own effort.
-const effort_items = adapter => [{ label: "CLI 默认", value: "default" }, ...(bridge.launch_effort_levels[adapter] || []).map(level => ({ label: level, value: level }))];
+const effort_items = name => [{ label: "CLI 默认", value: "default" }, ...(models(name).efforts || []).map(level => ({ label: level, value: level }))];
+watch(() => [props.modelSelection, view.value.launch.available, ...names.value.map(name => `${name}:${profile(name).adapter}`)],
+  ([selectable, available]) => { if (selectable && available) names.value.forEach(name => bridge.load_launch_models(name)); }, { immediate: true });
 </script>
 
 <template>
@@ -35,9 +37,9 @@ const effort_items = adapter => [{ label: "CLI 默认", value: "default" }, ...(
       <div class="launch-client-fields">
         <UFormField :label="`${name} 执行客户端`"><USelect :model-value="profile(name).adapter || ''" :items="bridge.launch_clients[name]" placeholder="选择 CLI / App" class="w-full" @update:model-value="write(name, 'adapter', $event)" /></UFormField>
         <UFormField v-if="profile(name).adapter === 'antigravity'" label="Sidecar IPC 目录"><UInput :model-value="profile(name).ipc_directory || ''" placeholder="已配置的 Sidecar 目录" class="w-full" @update:model-value="write(name, 'ipc_directory', $event)" /></UFormField>
-        <UFormField v-else label="原生可执行文件路径"><UInput :model-value="profile(name).executable || ''" placeholder="Windows 填写 .exe 的完整路径" class="w-full" @update:model-value="write(name, 'executable', $event)" /></UFormField>
-        <UFormField v-if="props.modelSelection && MODEL_HINTS[profile(name).adapter]" label="模型（可选）" :help="MODEL_HINTS[profile(name).adapter].help"><UInput :model-value="profile(name).model || ''" :placeholder="MODEL_HINTS[profile(name).adapter].example" class="w-full" @update:model-value="write(name, 'model', $event)" /></UFormField>
-        <UFormField v-if="props.modelSelection && bridge.launch_effort_levels[profile(name).adapter]" label="思考档位（可选）"><USelect :model-value="profile(name).effort || 'default'" :items="effort_items(profile(name).adapter)" class="w-full" @update:model-value="write(name, 'effort', $event === 'default' ? '' : $event)" /></UFormField>
+        <UFormField v-else label="原生可执行文件路径"><UInput :model-value="profile(name).executable || ''" placeholder="Windows 填写 .exe 的完整路径" class="w-full" @update:model-value="write(name, 'executable', $event)" @blur="props.modelSelection && bridge.load_launch_models(name)" /></UFormField>
+        <UFormField v-if="props.modelSelection && models(name).supported" label="模型" :help="models(name).loading ? '正在读取软件模型列表…' : models(name).error || models(name).source"><USelect :model-value="profile(name).model || '__default__'" :items="models(name).items" :loading="models(name).loading" class="w-full" @update:model-value="bridge.write_launch_model(name, $event)" /><button v-if="models(name).error && !models(name).loading" type="button" class="model-retry" @click="bridge.load_launch_models(name, true)">重新读取模型列表</button></UFormField>
+        <UFormField v-if="props.modelSelection && models(name).efforts?.length" label="思考档位（可选）"><USelect :model-value="profile(name).effort || 'default'" :items="effort_items(name)" class="w-full" @update:model-value="write(name, 'effort', $event === 'default' ? '' : $event)" /></UFormField>
         <UFormField v-if="profile(name).adapter === 'codex'" label="来源聊天 ID"><UInput :model-value="profile(name).source_thread_id || ''" placeholder="用于在 Codex App 新建会话" class="w-full" @update:model-value="write(name, 'source_thread_id', $event)" /></UFormField>
         <UFormField v-if="profile(name).adapter === 'claude'" label="允许的工具（可选，每行一项）"><UTextarea :model-value="(profile(name).allowed_tools || []).join('\n')" :rows="2" placeholder="例如 Read、Write 及按需配置的 Bash 权限" class="w-full" @update:model-value="write(name, 'allowed_tools', $event)" /></UFormField>
         <details><summary>会话与目录覆盖（可选）</summary><div class="launch-client-fields">
@@ -72,6 +74,7 @@ const effort_items = adapter => [{ label: "CLI 默认", value: "default" }, ...(
 .launch-effective { margin: 8px 0 0; font-size: 12px; color: var(--ui-text-muted); overflow-wrap: anywhere; }
 .launch-client-fields { padding-top: 12px; }
 .launch-settings > button { justify-self: start; }
+.model-retry { margin-top: 6px; color: var(--ui-text-muted); font-size: 12px; }
 .launch-connect-command { display: flex; align-items: center; gap: 8px; padding: 10px; border-radius: 8px; background: var(--ui-bg-elevated); }
 .launch-connect-command code { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
 </style>

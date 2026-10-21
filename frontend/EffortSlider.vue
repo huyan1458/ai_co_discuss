@@ -154,6 +154,5 @@ onBeforeUnmount(() => cancelAnimationFrame(frame));
 .effort-slider-stop.is-active { background: color-mix(in srgb, var(--channel-accent) 40%, white); }
 .effort-slider-stop.is-default { width: 6px; height: 6px; background: var(--ui-bg-elevated); border: 1px solid var(--ui-text-dimmed); }
 .effort-slider-thumb { position: absolute; top: 50%; width: 20px; height: 20px; border: 1px solid #00000012; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px #00000026; transform: translate(-50%, -50%); }
-.effort-slider:focus-visible { border-radius: 6px; outline: 2px solid var(--channel-accent); outline-offset: 2px; }
 @media (pointer: coarse) { .effort-slider { height: 44px; } }
 </style>

@@ -13,6 +13,7 @@ const inactive = computed(() => ["paused", "concluded"].includes(room.value?.pha
 const can_schedule = computed(() => !active_turn.value && !inactive.value && !room.value?.limits?.reached && room.value?.floor?.holder === room.value?.host && Object.keys(room.value?.experts || {}).length > 0);
 const base = computed(() => `${location.origin}/r/${room.value?.id}`);
 const automatic = computed(() => room.value?.runtime?.mode === "automatic");
+const access = computed(() => view.value.access || {});
 const execution = computed(() => room.value?.runtime?.latest_execution);
 const repair = computed(() => view.value.launch.repair?.room_id === room.value?.id ? view.value.launch.repair : null);
 const runtime_status = computed(() => room.value?.runtime?.expired ? "已到截止时间" : ({ ready: "尚未启动", running: "自动推进已启用", paused: "已暂停", stopped: "已停止", concluded: "已收束" }[room.value?.runtime?.status] || "尚未启动"));
@@ -35,7 +36,7 @@ const progress_summary = computed(() => {
       </div>
       <section class="turn-panel host-turn"><div class="turn-header"><h3>当前发言安排</h3><UBadge :color="active_turn ? 'primary' : 'neutral'" variant="subtle">{{ bridge.turn_label(turn, room) }}</UBadge></div>
         <template v-if="turn"><div class="turn-expert"><UAvatar :src="bridge.identities[turn.expert]?.icon" :text="bridge.identities[turn.expert]?.initials" :alt="turn.expert" class="message-mark channel-avatar" :class="bridge.identities[turn.expert]?.style" /><div><strong>{{ turn.expert }}</strong><small>发言安排 #{{ turn.id }}</small></div></div><p class="turn-question">{{ turn.question }}</p>
-          <div v-if="active_turn" class="button-row turn-actions"><UButton icon="i-lucide-copy" label="复制通知" :disabled="inactive" color="neutral" variant="outline" class="channel-surface-button" @click="act('copy_turn')" /><UButton icon="i-lucide-check-check" label="确认已通知" color="neutral" variant="outline" class="channel-surface-button" :disabled="inactive || turn.status !== 'pending'" :loading="pending === 'notify'" @click="act('notify')" /><UButton icon="i-lucide-message-square-plus" label="录入专家回答" :disabled="inactive" class="channel-primary-button" @click="act('prepare_answer')" /><UButton label="取消安排" color="neutral" variant="ghost" @click="act('cancel_turn')" /></div>
+          <div v-if="active_turn" class="button-row turn-actions"><UButton icon="i-lucide-copy" label="复制通知" :disabled="inactive" color="neutral" variant="outline" class="channel-surface-button" @click="act('copy_turn')" /><UButton icon="i-lucide-check-check" label="确认已通知" color="neutral" variant="outline" class="channel-surface-button" :disabled="inactive || turn.status !== 'pending'" :loading="pending === 'notify'" @click="act('notify')" /><UButton v-if="room.experts[turn.expert] === 'online'" icon="i-lucide-message-square-plus" label="录入在线回答" :disabled="inactive" class="channel-primary-button" @click="act('prepare_answer')" /><UButton label="取消安排" color="neutral" variant="ghost" @click="act('cancel_turn')" /></div>
           <UButton v-if="turn.answer_id" icon="i-lucide-arrow-up-right" label="查看回答原文" variant="outline" color="neutral" class="channel-surface-button" @click="$emit('detail', turn.answer_id)" />
         </template><p v-else class="turn-empty">把下一轮需要回答的问题，交给一位参与者。</p>
         <p v-if="active_turn" class="fine-print">{{ bridge.turn_guidance(turn, room) }}</p>
@@ -46,15 +47,15 @@ const progress_summary = computed(() => {
     </template>
     <template v-else>
       <div class="page-heading access-heading">
-        <div><h2>接入 AI</h2><p>选择推进方式，再按步骤完成接入。</p></div>
+        <div><h2>接入 AI</h2><p>选择任务交付方式，再将对应身份的参与说明交给 AI。</p></div>
         <UBadge v-if="automatic" :color="room.runtime?.status === 'running' ? 'primary' : 'neutral'" variant="subtle">{{ runtime_status }}</UBadge>
       </div>
-      <div class="access-modes" aria-label="讨论推进方式">
+      <div class="access-modes" aria-label="接入方式">
         <button type="button" class="access-mode" :class="{ 'is-selected': automatic }" :aria-pressed="automatic" :disabled="Boolean(pending)" @click="act('choose_runtime', 'automatic')">
-          <UIcon name="i-lucide-zap" class="mode-icon" /><span><strong>全自动讨论</strong><small>本机服务按安排唤醒 AI，接续讨论。</small></span><UIcon v-if="automatic" name="i-lucide-check" class="mode-check" />
+          <UIcon name="i-lucide-zap" class="mode-icon" /><span><strong>程序唤醒</strong><small>本机服务按安排唤醒 AI，接续讨论。</small></span><UIcon v-if="automatic" name="i-lucide-check" class="mode-check" />
         </button>
         <button type="button" class="access-mode" :class="{ 'is-selected': !automatic }" :aria-pressed="!automatic" :disabled="Boolean(pending)" @click="act('choose_runtime', 'manual')">
-          <UIcon name="i-lucide-copy" class="mode-icon" /><span><strong>手动复制冷启动</strong><small>复制参与指令，由你或软件定时触发。</small></span><UIcon v-if="!automatic" name="i-lucide-check" class="mode-check" />
+          <UIcon name="i-lucide-copy" class="mode-icon" /><span><strong>手动接入</strong><small>首次复制指令，之后人工或软件定时触发。</small></span><UIcon v-if="!automatic" name="i-lucide-check" class="mode-check" />
         </button>
       </div>
       <section v-if="automatic" class="access-evidence" aria-label="实际执行进展" role="status"><strong>实际执行进展</strong><p>{{ bridge.execution_label(execution) }}</p><p v-if="room.runtime?.status === 'running' && (!execution || ['pending', 'dispatched'].includes(execution.status))" class="fine-print">尚无 AI 进入记录。请核对本机服务及对应软件的登录和工具权限。</p></section>
@@ -105,12 +106,23 @@ const progress_summary = computed(() => {
         <div class="access-disclosure-body"><p>指定 AI 使用的本机项目和目录，留空使用默认位置。仅保存在本机配置中。</p><div class="form-two-columns"><UFormField label="AI 软件中的项目"><UInput :model-value="view.fields['runtime-project']" placeholder="项目名称" class="w-full" @update:model-value="bridge.write_field('runtime-project', $event)" /></UFormField><UFormField label="工作目录"><UInput :model-value="view.fields['runtime-cwd']" placeholder="已有本机目录的完整路径" class="w-full" @update:model-value="bridge.write_field('runtime-cwd', $event)" /></UFormField></div></div>
       </details>
       <details class="access-disclosure access-instructions" :open="!automatic">
-        <summary><span>{{ automatic ? '手动参与指令与阅读地址' : '复制指令，交给对应的 AI' }}</span><UIcon name="i-lucide-chevron-down" class="disclosure-icon" /></summary>
+        <summary><span>{{ automatic ? '成员参与说明与阅读地址' : '复制指令，交给对应的 AI' }}</span><UIcon name="i-lucide-chevron-down" class="disclosure-icon" /></summary>
         <div class="access-disclosure-body">
-          <div v-if="!automatic && room.runtime?.protected" class="access-running"><span>本房间已启用写入保护，请将接入配置的本机路径交给参与的本地 AI。</span><UButton icon="i-lucide-download" label="下载接入配置" variant="outline" color="neutral" class="channel-surface-button" @click="act('export_runtime')" /></div>
-          <section class="access-section"><span class="access-icon"><UIcon name="i-lucide-terminal" /></span><div><h3>本地 AI 软件 <UBadge color="primary" variant="subtle">可提交回答</UBadge></h3><p>在 Codex、Claude Code 等本地会话中发送参与指令。AI 可自行读取讨论、提交回答。</p><div class="button-row"><UButton icon="i-lucide-copy" label="复制本地参与指令" variant="outline" color="neutral" class="channel-surface-button" @click="act('copy_cli')" /><UButton label="复制后台首启指令" variant="ghost" color="neutral" @click="act('copy_background')" /></div><details class="access-reading"><summary>查看阅读地址</summary><div class="access-address"><code>{{ base }}?mode=cli</code><UButton icon="i-lucide-copy" color="neutral" variant="ghost" aria-label="复制 CLI 阅读地址" @click="act('copy', `${base}?mode=cli`)" /></div><a :href="`${base}?mode=cli`" target="_blank" rel="noopener" class="subtle-link">打开接入说明 <UIcon name="i-lucide-arrow-up-right" /></a></details></div></section>
-          <section class="access-section"><span class="access-icon"><UIcon name="i-lucide-globe" /></span><div><h3>在线聊天 AI <UBadge color="neutral" variant="subtle">由用户或主持人代发</UBadge></h3><p>在网页聊天中发送参与指令。AI 在原聊天回答，再由用户或主持人复制到本讨论。</p><div class="button-row"><UButton icon="i-lucide-copy" label="复制在线参与指令" variant="outline" color="neutral" class="channel-surface-button" @click="act('copy_online')" /><UButton :to="base" target="_blank" label="打开阅读页" trailing-icon="i-lucide-arrow-up-right" variant="ghost" color="neutral" /></div><details class="access-reading"><summary>查看阅读地址</summary><div class="access-address"><code>{{ base }}</code><UButton icon="i-lucide-copy" color="neutral" variant="ghost" aria-label="复制在线阅读地址" @click="act('copy_reading')" /></div></details></div></section>
-          <p class="fine-print">当前参与身份：{{ bridge.display_name(view.fields['author-select'] || '用户') }}。复制前，请在消息页选择实际参与的 AI 身份。</p>
+          <p class="fine-print">手动接入的本地 AI 使用自己的私有配置；程序唤醒的成员等待本机任务，使用本次执行凭据。在线 AI 只读，真实回答由你或授权主持人代发。</p>
+          <ul class="access-member-list" aria-label="成员接入">
+            <li v-for="member in access.members || []" :key="member.name">
+              <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="sm" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
+              <div class="access-member-copy"><strong>{{ member.name }}</strong><span>{{ member.access === 'online' ? '在线只读 · 由人代发' : member.access === 'runner' ? '程序唤醒 · 本地读写' : '手动接入 · 自行提交' }}</span><small v-if="member.access !== 'online' && !member.available">当前浏览器没有此成员的私有配置</small></div>
+              <div class="button-row">
+                <UButton v-if="member.access !== 'online'" icon="i-lucide-download" label="私有配置" :aria-label="`下载 ${member.name} 私有配置`" :disabled="!access.can_manage || !member.available" variant="outline" color="neutral" size="sm" @click="act('download_member_access', member.name)" />
+                <UButton icon="i-lucide-copy" label="参与说明" :aria-label="`复制 ${member.name} 参与说明`" variant="outline" color="neutral" size="sm" :disabled="!access.can_manage" @click="act('copy_member_join', member.name)" />
+              </div>
+            </li>
+          </ul>
+          <p v-if="access.error" role="alert" class="access-member-error">{{ access.error }}</p>
+          <p v-else-if="access.notice" role="status" class="fine-print">{{ access.notice }}</p>
+          <p class="fine-print">复制说明或下载配置不代表 AI 已接入，请以实际回答和运行记录为准。</p>
+          <details class="access-reading"><summary>查看房间阅读地址</summary><div class="access-address"><code>{{ base }}</code><UButton icon="i-lucide-copy" color="neutral" variant="ghost" aria-label="复制阅读地址" @click="act('copy', base)" /></div></details>
           <p v-if="base.includes('127.0.0.1') || base.includes('localhost')" class="fine-print">本机地址仅本机可访问。在线 AI 需要公网阅读地址，或由用户提供材料。</p>
         </div>
       </details>
@@ -123,6 +135,15 @@ const progress_summary = computed(() => {
 </template>
 
 <style scoped>
+.access-member-list { display: grid; margin: 16px 0; padding: 0; list-style: none; }
+.access-member-list > li { display: flex; align-items: center; gap: 12px; padding: 15px 0; border-bottom: 1px solid var(--ui-border-muted); }
+.access-member-list > li > .channel-avatar { flex-shrink: 0; }
+.access-member-copy { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; }
+.access-member-copy > strong { color: var(--ui-text-highlighted); font-size: 13px; }
+.access-member-copy > span { color: var(--ui-text-muted); font-size: 11px; }
+.access-member-copy > small { color: var(--ui-text-dimmed); font-size: 11px; }
+.access-member-list .button-row { flex-shrink: 0; }
+.access-member-error { color: var(--ui-error); font-size: 12px; }
 .access-page { color: var(--ui-text); }
 .access-heading { align-items: flex-start; }
 .access-heading > span { margin-top: 2px; white-space: nowrap; }
@@ -132,8 +153,7 @@ const progress_summary = computed(() => {
 .access-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 28px; }
 .access-mode { display: flex; align-items: flex-start; gap: 12px; min-width: 0; padding: 17px 16px; border: 1px solid var(--ui-border); border-radius: 8px; background: transparent; color: var(--ui-text-muted); text-align: left; cursor: pointer; }
 .access-mode:hover { background: var(--ui-bg-elevated); }
-.access-mode:focus-visible { outline: 2px solid var(--channel-accent); outline-offset: 3px; }
-.access-mode.is-selected { border-color: color-mix(in srgb, var(--channel-accent) 60%, var(--ui-border)); background: color-mix(in srgb, var(--channel-accent) 6%, transparent); }
+.access-mode.is-selected { background: color-mix(in srgb, var(--channel-accent) 6%, transparent); }
 .access-mode > span:not(.mode-icon):not(.mode-check) { flex: 1; min-width: 0; }
 .access-mode strong { display: block; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
 .access-mode small { display: block; margin-top: 5px; font-size: 12px; line-height: 1.6; }
@@ -189,6 +209,9 @@ const progress_summary = computed(() => {
 .access-running { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; font-size: 12px; color: var(--ui-text-muted); }
 .access-running > button { flex-shrink: 0; }
 @media (max-width: 640px) {
+  .access-member-list > li { flex-wrap: wrap; }
+  .access-member-list .button-row { width: 100%; margin-left: 44px; }
+
   .access-page .access-repair button { min-height: 44px; }
   .access-modes { grid-template-columns: 1fr; gap: 8px; margin-bottom: 22px; }
   .access-mode { padding: 14px; }

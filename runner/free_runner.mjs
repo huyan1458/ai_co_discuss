@@ -3,12 +3,12 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { atomic_json, deliver_task, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
+import { atomic_json, deliver_task, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
 import { api } from './discussion_runner.mjs';
 
 const RENEW_MS = 30_000;
 const MAX_DELIVERY_ATTEMPTS = 3;
-const LIVE = ['reserving', 'delivering', 'running'];
+const LIVE = ['reserving', 'delivering', 'sidecar_pending', 'running'];
 const MAX_HASHED_BYTES = 5 * 1024 * 1024;
 const GIT_TIMEOUT_MS = 15_000;
 
@@ -182,7 +182,7 @@ export class FreeRoomRunner {
         on_exit: () => this.exited.add(execution.id),
       });
       if (result.session_id) this.store.bind(member.name, result.session_id);
-      this.save(member.name, { status: 'running', attempts: 0 });
+      this.save(member.name, { status: result.status === 'sidecar_pending' ? 'sidecar_pending' : 'running', attempts: 0 });
     } catch (error) {
       const attempts = (this.row(member.name)?.attempts || 0) + 1;
       if ((invoked && error.delivery_status !== 'not_sent') || attempts >= MAX_DELIVERY_ATTEMPTS) {
@@ -195,6 +195,13 @@ export class FreeRoomRunner {
   /** Follow the website's verdict; stop only this member's processes when its execution ends. */
   async reconcile(member, row, active, minutes) {
     if (row.status === 'reserving') return this.reserve(member, row);
+    if (row.status === 'sidecar_pending') {
+      const receipt = sidecar_receipt(this.config.participants[member.name], `free-${row.execution_id}`);
+      if (receipt?.status === 'accepted' && receipt.session_id) {
+        this.store.bind(member.name, receipt.session_id);
+        this.save(member.name, { status: 'running' });
+      } else if (receipt && active.has(row.execution_id)) return this.fail(member.name, row.execution_id, receipt.error || 'Sidecar 投递结果不明，请核对原会话');
+    }
     const execution = active.get(row.execution_id);
     if (!execution) {
       this.stop_member(member.name);

@@ -7,7 +7,9 @@ import json
 import math
 import os
 import re
+import secrets
 import sys
+import tempfile
 from dataclasses import dataclass
 from http.client import HTTPException
 from pathlib import Path
@@ -29,7 +31,8 @@ INSTANCE_PATTERN = re.compile(r"(Codex|Claude|Gemini|DeepSeek|Qwen)(?:-[0-9A-Za-
 PHASES = ("preparing", "initial", "discussing", "reviewing", "paused", "concluded")
 KINDS = ("opinion", "moderation", "receipt", "chat")
 OVERVIEW_FIELDS = ("id", "title", "goal", "host", "phase", "focus", "message_count",
-                   "latest_id", "state_until", "current_turn", "queued_turns", "held_since", "floor", "runtime", "limits", "completed_rounds", "latest_receipts", "answered_turns", "duplicate", "submission_id")
+                   "latest_id", "state_until", "current_turn", "queued_turns", "held_since", "floor", "runtime", "limits", "completed_rounds", "latest_receipts", "answered_turns", "duplicate", "submission_id",
+                   "mode", "members", "free", "parent_room", "linked_rooms")
 BRIEF_FIELDS = ("id", "title", "goal", "host", "user_request", "background", "boundaries", "experts")
 ROOM_LIST_FIELDS = ("id", "title", "goal", "message_count", "latest_id", "created_at")
 GUIDANCE = {
@@ -796,6 +799,60 @@ def emit(value, output="json", error=False):
     stream.flush()
 
 
+def save_access(path, value):
+    """Persist private capabilities before sending requests, without printing their content."""
+    target = Path(path)
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=target.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+        os.chmod(temporary, 0o600)
+        json.dump(value, stream, ensure_ascii=False, indent=2)
+        stream.flush()
+        os.fsync(stream.fileno())
+    try:
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def prepare_creation_access(args, site, plan):
+    """Create or reuse one explicit private credential bundle for a stable creation id."""
+    if getattr(args, "operation", "") != "room create":
+        return
+    if not getattr(args, "access_file", None):
+        raise CliError("建房须用 --access-file 指定私有凭据文件路径；首次自动生成，重试沿用同一文件")
+    path = Path(args.access_file)
+    payload = plan.body
+    access = read_object(path) if path.exists() else {"site": site, "room": "", "token": secrets.token_urlsafe(48),
+        "submission_id": payload.get("submission_id"), "members": {}}
+    if access.get("site") != site or access.get("submission_id") != payload.get("submission_id"):
+        raise CliError("建房凭据文件与本次站点或 submission_id 不符")
+    experts = payload.setdefault("experts", {name: "cli" if name == "Codex" else "online" for name in PARTICIPANTS[1:]})
+    members = []
+    for name, capability in experts.items():
+        member = access["members"].setdefault(name, {"token": secrets.token_urlsafe(48)})
+        members.append({"name": name, "token": member["token"], "access": "online" if capability == "online" else "manual"})
+    payload["members"] = members
+    save_access(path, access)
+
+
+def finish_creation_access(args, site, plan, value):
+    """Save the confirmed room and separate member files; return paths without secrets."""
+    if getattr(args, "operation", "") != "room create":
+        return {}
+    path = Path(args.access_file).resolve()
+    access = read_object(path)
+    access["room"] = value["id"]
+    save_access(path, access)
+    paths = {}
+    for member in plan.body["members"]:
+        if member["access"] == "online":
+            continue
+        member_path = path.with_name(f"{path.stem}.{member['name']}.json")
+        save_access(member_path, {"site": site, "room": value["id"], "token": member["token"]})
+        paths[member["name"]] = str(member_path)
+    return {"owner_access_file": str(path), "member_access_files": paths}
+
+
 def access_headers(args, site, path):
     """Load a room-scoped secret only for its exact site and room."""
     if not getattr(args, "access_file", None):
@@ -803,12 +860,24 @@ def access_headers(args, site, path):
     access = read_object(args.access_file)
     expected = f"/api/rooms/{access.get('room', '')}"
     target = urlsplit(path).path
-    if access.get("site", "").rstrip("/") != site or not (target == expected or target.startswith(expected + "/")):
+    creation = target == "/api/rooms" and bool(access.get("submission_id"))
+    reading = f"/r/{access.get('room', '')}"
+    if access.get("site", "").rstrip("/") != site or not (creation or target == expected or target.startswith(expected + "/") or target == reading or target.startswith(reading + "/")):
         raise CliError("凭据文件不属于本次站点和房间")
     token = access.get("token")
     if not isinstance(token, str) or not 32 <= len(token) <= 256:
         raise CliError("凭据文件中的 token 无效")
     return {"X-Discussion-Token": token}
+
+
+def preview_body(value):
+    """Keep private capability material out of offline request previews."""
+    if isinstance(value, dict):
+        return {key: "[redacted]" if key in ("token", "execution_token", "control_hash", "token_hash") else preview_body(item)
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [preview_body(item) for item in value]
+    return value
 
 
 def run(args, registry):
@@ -825,14 +894,17 @@ def run(args, registry):
         url += "?" + urlencode(plan.params)
     meta = {"site": site, "method": plan.method, "path": plan.path}
     if getattr(args, "dry_run", False):
-        return {"ok": True, "data": {"method": plan.method, "url": url, "body": plan.body,
+        return {"ok": True, "data": {"method": plan.method, "url": url, "body": preview_body(plan.body),
                                    **({"file": plan.upload_file} if plan.upload_file else {}),
                                    **({"destination": plan.download_file} if plan.download_file else {})},
                 "meta": {**meta, "dry_run": True, "validation": "仅本地参数；未验证房间、身份或服务端状态"}}
     try:
+        prepare_creation_access(args, site, plan)
         headers = access_headers(args, site, plan.path)
         value = send_request(plan, url, timeout, headers) if headers else send_request(plan, url, timeout)
         result = project_result(value, plan, site)
+        if getattr(args, "operation", "") == "room create":
+            result.update(finish_creation_access(args, site, plan, value))
     except CliError as error:
         error.details.update(meta)
         if plan.method == "POST":

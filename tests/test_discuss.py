@@ -51,6 +51,7 @@ class CliTests(unittest.TestCase):
 
     def setUp(self):
         """Create a fresh room through the CLI for each case."""
+        self.room_access = {}
         result = self.cli("room", "create", "--title", "CLI 测试", "--goal", "验证真实行为",
                           "--background", "按需背景正文", "--boundaries", "按需边界正文", "--as", "Codex",
                           "--submission-id", str(uuid.uuid4()))
@@ -110,16 +111,37 @@ class CliTests(unittest.TestCase):
 
     def cli(self, *arguments, stdin=None):
         """Require a successful, clean machine-readable result."""
+        arguments = self.credential_arguments(arguments, stdin)
         result = self.invoke(["--site", self.base, *arguments], stdin)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr, "")
         payload = json.loads(result.stdout)
         self.assertTrue(payload["ok"])
+        if isinstance(payload["data"], dict) and "owner_access_file" in payload["data"]:
+            self.room_access[payload["data"]["id"]] = {"用户": payload["data"]["owner_access_file"], **payload["data"]["member_access_files"]}
         return payload["data"]
+
+    def credential_arguments(self, arguments, stdin=None):
+        """Use explicit per-room fixture files; never mask an explicitly supplied credential."""
+        args = list(arguments)
+        if "--access-file" in args or "--dry-run" in args:
+            return args
+        if args[:2] == ["room", "create"] and "--submission-id" in args:
+            identifier = args[args.index("--submission-id") + 1]
+            return [*args, "--access-file", Path(self.directory.name) / f"{identifier}.access.json"]
+        room = str(args[2]) if len(args) > 2 else ""
+        actor = args[args.index("--as") + 1] if "--as" in args else "用户"
+        if args[0] == "api" and args[1].startswith("/api/rooms/"):
+            room = args[1].split("/")[3]
+            if stdin:
+                body = json.loads(stdin)
+                actor = body.get("actor", body.get("submitted_by", "用户"))
+        access = self.room_access.get(room, {}).get(actor)
+        return [*args, "--access-file", access] if access else args
 
     def rejected(self, arguments, code=2):
         """Require structured errors on stderr and no success data on stdout."""
-        result = self.invoke(["--site", self.base, *arguments])
+        result = self.invoke(["--site", self.base, *self.credential_arguments(arguments)])
         self.assertEqual(result.returncode, code, result.stderr)
         self.assertEqual(result.stdout, "")
         payload = json.loads(result.stderr)
@@ -171,7 +193,7 @@ class CliTests(unittest.TestCase):
     def test_access_file_is_room_scoped_and_not_printed_in_preview(self):
         """A private capability is usable only for its configured site and room."""
         path = Path(self.directory.name) / "runtime-access.json"
-        secret = uuid.uuid4().hex
+        secret = json.loads(Path(self.room_access[self.room]["用户"]).read_text(encoding="utf-8"))["token"]
         path.write_text(json.dumps({"site": self.base, "room": self.room, "token": secret}), encoding="utf-8")
         configured = self.cli("run", "configure", self.room, "--mode", "automatic", "--revision", 0, "--access-file", path)
         self.assertEqual(configured["mode"], "automatic")
@@ -426,7 +448,14 @@ class CliTests(unittest.TestCase):
         """Changing one topic field preserves others; experts use an explicit full map."""
         experts = Path(self.directory.name) / "experts.json"
         experts.write_text('{"Codex":"cli","Gemini":"cli"}', encoding="utf-8")
-        self.cli("room", "update", self.room, "--experts-file", experts, "--focus", "新焦点", "--as", "Codex")
+        self.assertEqual(self.rejected(["room", "update", self.room, "--experts-file", experts, "--focus", "新焦点", "--as", "Codex"], 1)["http_status"], 403)
+        token = uuid.uuid4().hex
+        self.cli("api", f"/api/rooms/{self.room}/topic", "--method", "POST", "--input", "-", stdin=json.dumps({
+            "actor": "用户", "experts": {"Codex": "cli", "Gemini": "cli"}, "focus": "新焦点",
+            "members": [{"name": "Gemini", "token": token, "access": "manual"}]}))
+        access = Path(self.directory.name) / f"{self.room}.Gemini.json"
+        access.write_text(json.dumps({"site": self.base, "room": self.room, "token": token}), encoding="utf-8")
+        self.room_access[self.room]["Gemini"] = access
         self.assertEqual(self.cli("room", "brief", self.room)["experts"], {"Codex": "cli", "Gemini": "cli"})
         self.assertEqual(self.cli("room", "brief", self.room)["background"], "按需背景正文")
         turn_id = self.plan_speech("Gemini")
@@ -450,13 +479,14 @@ class CliTests(unittest.TestCase):
     def test_creation_response_loss_recovers_without_overwriting_later_edits(self):
         """A committed but unacknowledged creation is found and replayed exactly once."""
         identifier = str(uuid.uuid4())
-        arguments = ["room", "create", "--title", "首次建房", "--as", "Codex", "--submission-id", identifier]
+        arguments = ["room", "create", "--title", "首次建房", "--as", "Codex", "--submission-id", identifier,
+                     "--access-file", str(Path(self.directory.name) / f"{identifier}.access.json")]
         parser, registry = discuss.build_parser()
         args = parser.parse_args(["--site", self.base, *arguments])
         original_send = discuss.send_request
 
-        def lose_acknowledgement(plan, url, timeout):
-            original_send(plan, url, timeout)
+        def lose_acknowledgement(plan, url, timeout, headers=None):
+            original_send(plan, url, timeout, headers)
             raise discuss.CliError("响应丢失", 3, outcome="unknown")
 
         with patch.object(discuss, "send_request", side_effect=lose_acknowledgement) as sender:
@@ -467,6 +497,8 @@ class CliTests(unittest.TestCase):
         found = self.cli("room", "list", "--submission-id", identifier)["rooms"]
         self.assertEqual(len(found), 1)
         room = found[0]["id"]
+        # Retry confirms the room and materializes member files before normal member operations.
+        self.cli(*arguments)
         self.cli("room", "update", room, "--title", "后来修改", "--phase", "paused", "--as", "Codex")
         replay = self.cli(*arguments)
         self.assertEqual((replay["id"], replay["title"], replay["phase"], replay["duplicate"]),

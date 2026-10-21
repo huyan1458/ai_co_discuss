@@ -17,8 +17,11 @@ const DIRECTORY_DRAG_OFFSET = 12;
 const THEME_STORAGE_KEY = "ai-codiscuss-theme";
 const DIRECTORY_SORT_KEY = "ai-codiscuss-directory-sort";
 const LAUNCH_PENDING_PREFIX = "discuss-launch:";
+const MEMBER_ACCESS_PREFIX = "discuss-members:";
+const MEMBER_PENDING_PREFIX = "discuss-member-pending:";
 const LOCAL_CONNECTION_KEY = "discuss-local-connection";
 const LOCAL_CONNECTION_TIMEOUT_MS = 15000;
+const MODEL_CATALOG_TIMEOUT_MS = 35000;
 let local_connection = null;
 const THEMES = ["channel", "channel-light"];
 const SOURCE_LABELS = { demo: "示例", user: "本人发言", proxy: "用户代发", cli: "CLI 发言", url: "历史 URL 发言", host_proxy: "主持人代发" };
@@ -38,7 +41,7 @@ const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: ""
   archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
   reply_to: null, turn_reply_to: null, tab: "topic", refresh_version: 0, context_dirty: false, topic_dirty: false,
   snapshot_id: 0, pending_submission: null, pending_turn: null, pending_room: null, toast_timer: null,
-  creation_mode: "manual", creation_drafts: {} };
+  creation_mode: "brainstorm:manual", creation_drafts: {}, access_notice: "", access_error: "" };
 const live_updates = { source: null, connected: false, enabled: false, timer: null, poll_timer: null,
   running: false, dirty: false };
 state.messages = [];
@@ -130,7 +133,7 @@ async function request_json(path, payload, access_token) {
   }
   const response = await fetch(path, options);
   const result = await response.json();
-  if (!response.ok) throw new Error(result.error || "请求失败，请重试");
+  if (!response.ok) throw Object.assign(new Error(result.error || "请求失败，请重试"), { preflight: response.status >= 400 && response.status < 500 });
   return result;
 }
 
@@ -575,7 +578,7 @@ function progress_speaker(room) {
 /** Explain an empty transcript using the room's actual progression state. */
 function empty_discussion_message(room) {
   if (room.archived || room.phase === 'concluded') return '讨论已结束，尚未产生发言记录。';
-  if (room.mode === 'free') return `发一条消息，${(room.free?.members || []).map(member => display_name(member.name)).join('、') || 'AI'} 会在自己的会话里接手处理。`;
+  if (room.mode === 'free') return '写下任务并点名成员。程序唤醒由本机服务交付；手动成员需在原会话触发，在线回答由人代发。';
   if (room.phase === 'paused' || room.runtime?.status === 'paused') return '讨论已暂停。核对暂停原因后，可在进度看板重启或结束。';
   if (room.runtime?.mode === 'automatic') {
     if (room.runtime.status === 'ready') return '讨论尚未启动。请在接入页核对软件配置并启动。';
@@ -704,6 +707,7 @@ async function refresh_room() {
 
 /** Select a room and reset room-specific draft and filter state. */
 async function select_room(room_id) {
+  state.access_error = ""; state.access_notice = "";
   state.navigation_version++;
   state.refresh_version++;
   state.room = state.rooms.find((room) => room.id === room_id);
@@ -781,9 +785,10 @@ function message_payload() {
     return payload;
   }
   const mode = element("message-kind").value;
-  const payload = { author: mode === "moderation" ? state.room.host : element("author-select").value,
-    text: element("message-input").value.trim(), reply_to: state.reply_to, turn_id: state.turn_reply_to,
-    kind: ["moderation", "receipt"].includes(mode) ? mode : "opinion", submitted_by: ["opinion", "receipt"].includes(mode) ? "用户" : state.room.host };
+  const author = ["moderation", "receipt"].includes(mode) ? "用户" : element("author-select").value;
+  if (author !== "用户" && state.room.experts?.[author] !== "online") throw new Error("本地 AI 须自行提交回答；网页仅代发在线成员的真实原文");
+  const payload = { author, text, reply_to: state.reply_to, turn_id: state.turn_reply_to,
+    kind: ["moderation", "receipt"].includes(mode) ? mode : "opinion", submitted_by: "用户" };
   if (payload.kind === "opinion" && payload.author !== "用户") {
     payload.summary = element("message-summary").value.trim();
     payload.summary_by = element("message-summary-source").value === "submitter" ? payload.submitted_by : payload.author;
@@ -821,12 +826,13 @@ function prepare_brainstorm() {
   const members = (room.free?.members || []).filter(member => member.status === "active");
   const host = members.find(member => member.role === "host" && member.access !== "online") || members.find(member => member.access !== "online");
   // Online members cannot join an automatic discussion, so their presence selects manual advancement.
-  element("new-room-mode").value = members.some(member => member.access === "online") ? "manual" : "automatic";
+  element("new-room-kind").value = "brainstorm";
+  element("new-room-mode").value = members.some(member => member.access !== "runner") ? "manual" : "automatic";
   update_creation_mode();
   element("new-room-title").value = `头脑风暴：${room.title}`.slice(0, 80);
   element("new-room-user_request").value = room.user_request || room.goal || "";
   render_expert_inputs("new-expert-modes", Object.fromEntries(members.map(member => [member.name, member.access === "online" ? "online" : "cli"])));
-  element("new-room-host").value = host?.name || "";
+  render_host_options("new-room-host", members.map(member => member.name), host?.name || "");
   state.create_parent = room.id;
 }
 
@@ -841,20 +847,42 @@ async function return_conclusion() {
   await select_room(parent.id);
 }
 
-/** Owner actions on one member: stop, leave or remove go to the website; bringing back needs the local launcher. */
+/** Persist a member mutation before transmission and reuse its credential after an uncertain response. */
+function prepare_member_request(room_id, operation, member) {
+  const key = MEMBER_PENDING_PREFIX + room_id + ":" + operation;
+  const previous = localStorage.getItem(key);
+  const record = previous ? JSON.parse(previous) : { key, member: { ...member, token: crypto.randomUUID() + crypto.randomUUID() } };
+  localStorage.setItem(key, JSON.stringify(record));
+  return record;
+}
+
+/** Keep a successful membership receipt and its private file together. */
+function finish_member_request(room_id, token, record, result) {
+  const members = result.free?.members || result.members || [];
+  save_room_credentials({ id: room_id, members }, token, [record.member]);
+  localStorage.removeItem(record.key);
+}
+
+/** Owner changes use the website; only automatic members need the local service to reconnect. */
 async function change_member({ member_id, name, action, role }) {
   const room_id = state.room.id;
   state.free_error = ""; state.free_notice = "";
   try {
     if (action === "rejoin") {
+      const member = state.room.free.members.find(item => item.id === member_id);
       const token = localStorage.getItem(`discuss-access:${room_id}`);
-      await local_launch_request("room-member", { room_id, token, action: "rejoin", name });
+      const record = prepare_member_request(room_id, `rejoin:${member_id}`, { name, access: member.access });
+      const result = member.access === "runner"
+        ? await local_launch_request("room-member", { room_id, token, action: "rejoin", name, member_token: record.member.token })
+        : await request_json(`/api/rooms/${room_id}/members/${member_id}`, { action: "active", token: record.member.token });
+      finish_member_request(room_id, token, record, result);
+      if (state.room?.id === room_id) state.free_notice = `${name} 已请回；手动成员请下载更新后的私有配置。`;
     } else {
       await request_json(`/api/rooms/${room_id}/members/${member_id}${action === "interrupt" ? "/interrupt" : ""}`,
         action === "interrupt" ? {} : { action, ...(role ? { role } : {}) });
     }
     if (state.room?.id === room_id) await refresh_room();
-  } catch (error) { state.free_error = error.message; }
+  } catch (error) { if (state.room?.id === room_id) state.free_error = error.message; }
 }
 
 /** Composer stop in a free room: interrupt every member that is working or queued. */
@@ -864,32 +892,31 @@ async function interrupt_free() {
   for (const member of busy) await change_member({ member_id: member.id, action: "interrupt" });
 }
 
-/** Invite one AI into a running free room through the local launcher, which keeps its credential private. */
+/** Invite an independent member, retaining its credential before either delivery path runs. */
 async function invite_member({ name, access }) {
   const room_id = state.room.id;
   state.free_error = ""; state.free_notice = "";
   try {
     const token = localStorage.getItem(`discuss-access:${room_id}`);
     if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
-    if (access === "online") {
-      // Online members never write themselves, so their credential is discarded right away.
-      const taken = new Set((state.room.free?.members || []).map(member => member.name));
-      let instance = name;
-      for (let number = 2; taken.has(instance); number++) instance = `${name}-${number}`;
-      name = instance;
-      await request_json(`/api/rooms/${room_id}/members`, { name, access, token: crypto.randomUUID() + crypto.randomUUID() });
-      state.free_notice = `${name} 已作为在线成员加入：点名它后，在成员栏复制阅读通知，拿到回答再代发。`;
-      if (state.room?.id === room_id) await refresh_room();
-      return;
+    const taken = new Set((state.room.free?.members || []).map(member => member.name));
+    let instance = name;
+    for (let number = 2; taken.has(instance); number++) instance = `${name}-${number}`;
+    const record = prepare_member_request(room_id, `add:${name}:${access}`, { name: instance, access, adapter: "", session_mode: "new" });
+    let result;
+    if (access === "runner") {
+      const draft = launch_options();
+      result = await local_launch_request("room-member", { room_id, token, action: "add", name: record.member.name, access,
+        member_token: record.member.token, participants: draft.participants, cwd: draft.cwd, project_access: draft.project_access });
+    } else result = await request_json(`/api/rooms/${room_id}/members`, record.member);
+    finish_member_request(room_id, token, record, result);
+    if (state.room?.id === room_id) {
+      state.free_notice = access === "online" ? `${record.member.name} 已加入，阅读通知与真实回答由你或授权主持人转交。`
+        : access === "manual" ? `${record.member.name} 已加入；在成员菜单下载私有配置、复制参与说明，再交给它的本地会话。`
+          : `${record.member.name} 已加入，之后点名它即会由本机服务唤醒。`;
+      await refresh_room();
     }
-    const draft = launch_options();
-    const result = await local_launch_request("room-member", { room_id, token, action: "add", name, access, new_instance: true,
-      participants: draft.participants, cwd: draft.cwd, project_access: draft.project_access });
-    state.free_notice = result.access_file
-      ? `${name} 已作为手动成员加入。请在它的会话中使用 discuss-participant 技能，并用 --access-file "${result.access_file}" 读写本房间（room view 可看到它的待处理请求，回答时用 --request 关联）。`
-      : `${name} 已加入，之后点名它即会唤醒。`;
-    if (state.room?.id === room_id) await refresh_room();
-  } catch (error) { state.free_error = error.message; }
+  } catch (error) { if (state.room?.id === room_id) state.free_error = error.message; }
 }
 
 /** Clear only the composer that produced the saved message. */
@@ -1236,23 +1263,58 @@ async function check_limits() {
   show_toast("已核对讨论上限");
 }
 
-/** Capture a creation draft before closing its dialog or starting network work. */
-function room_creation_payload(folder_id) {
-  if (element("new-room-mode").value === "free") {
-    const members = Object.entries(read_expert_inputs("new-expert-modes")).filter(([, mode]) => mode === "cli").map(([name]) => name);
-    return { title: element("new-room-title").value, goal: element("new-room-goal").value,
-      user_request: element("new-room-user_request").value, mode: "free", members, folder_id };
+/** Read private member files only inside the controller, never in a presentation snapshot. */
+function member_credentials(room_id) {
+  try { return JSON.parse(localStorage.getItem(MEMBER_ACCESS_PREFIX + room_id) || "{}"); }
+  catch { return {}; }
+}
+
+/** Persist accepted owner/member credentials before discarding the original retry record. */
+function save_room_credentials(room, token, members = []) {
+  localStorage.setItem(`discuss-access:${room.id}`, token);
+  const saved = member_credentials(room.id);
+  for (const member of members) {
+    const public_member = (room.members || room.free?.members || []).find(item => item.name === member.name);
+    saved[member.name] = { token: member.token, access: member.access, id: public_member?.id };
   }
-  return { title: element("new-room-title").value, goal: element("new-room-goal").value,
-    host: element("new-room-host").value, user_request: element("new-room-user_request").value, background: element("new-room-background").value,
-    boundaries: element("new-room-boundaries").value, experts: read_expert_inputs("new-expert-modes"),
-    runtime_mode: element("new-room-mode").value, limits: read_limits("new-room"), folder_id,
+  localStorage.setItem(MEMBER_ACCESS_PREFIX + room.id, JSON.stringify(saved));
+}
+
+/** Build only non-secret status metadata for the currently selected room. */
+function access_snapshot() {
+  const room = state.room;
+  if (!room) return { can_manage: false, members: [], notice: "", error: "" };
+  const saved = member_credentials(room.id);
+  return { can_manage: Boolean(localStorage.getItem(`discuss-access:${room.id}`)),
+    members: (room.members || room.free?.members || []).filter(member => member.status !== "removed").map(member => ({
+      name: member.name, access: member.access, available: member.status === "active" && member.access !== "online"
+        && Boolean(saved[member.name]?.token) && (saved[member.name].access === "online") === (member.access === "online")
+        && (!saved[member.name].id || saved[member.name].id === member.id),
+    })), notice: state.access_notice, error: state.access_error };
+}
+
+/** Generate a separate random credential for each declared participant instance. */
+function creation_members(experts, automatic) {
+  return Object.entries(experts || {}).map(([name, capability]) => ({ name, token: crypto.randomUUID() + crypto.randomUUID(),
+    adapter: "", access: capability === "online" ? "online" : automatic ? "runner" : "manual", session_mode: "new" }));
+}
+
+/** Capture public form choices separately from the private credentials added at submission. */
+function room_creation_payload(folder_id) {
+  const common = { title: element("new-room-title").value, goal: element("new-room-goal").value,
+    host: element("new-room-host").value, user_request: element("new-room-user_request").value,
+    experts: read_expert_inputs("new-expert-modes"), folder_id };
+  if (element("new-room-kind").value === "free") return { ...common, mode: "free", host: common.host || "用户" };
+  return { ...common, mode: "brainstorm", background: element("new-room-background").value,
+    boundaries: element("new-room-boundaries").value, runtime_mode: element("new-room-mode").value, limits: read_limits("new-room"),
     ...(state.create_parent ? { parent_room_id: state.create_parent } : {}) };
 }
 
 /** Retain an unresolved creation instead of silently replacing it with a new request. */
 function prepare_room_request(signature) {
   if (state.pending_room?.signature === signature) return state.pending_room;
+  const saved = stored_launches().find(record => record.signature === signature);
+  if (saved) return state.pending_room = { signature, id: saved.id, token: saved.input.token, members: saved.input.room?.members };
   if (state.pending_room && localStorage.getItem(LAUNCH_PENDING_PREFIX + state.pending_room.id)) {
     throw new Error("上次启动结果尚未确认，请先继续原请求；如要放弃重试，请移除对应待办。原房间不会被删除。");
   }
@@ -1266,9 +1328,9 @@ async function submit_room(event, folder_id = null) {
   if (state.directory_pending.has("create-room")) return;
   const payload = room_creation_payload(folder_id);
   const free = payload.mode === "free";
-  // A free room is only useful with its member connected, so it is always created through the local launcher.
-  const launching = free || (state.launch.create && payload.runtime_mode === "automatic");
-  if (free && !state.launch.available) throw new Error("自由协作需要连接本机服务：请在这台电脑打开本机网站，或先运行连接命令");
+  const automatic = free ? element("new-room-mode").value === "automatic" : payload.runtime_mode === "automatic";
+  const launching = automatic && (free || state.launch.create);
+  if (launching && !state.launch.available) throw new Error("程序唤醒需要连接本机服务；也可改用手动接入");
   const launch_draft = launching ? launch_options() : null;
   const signature = JSON.stringify({ payload, launch_draft });
   const navigation = state.navigation_version;
@@ -1277,15 +1339,14 @@ async function submit_room(event, folder_id = null) {
   let room;
   try {
     const pending = prepare_room_request(signature);
-    const token = payload.runtime_mode === "automatic" || free ? pending.token : undefined;
+    const token = pending.token;
+    pending.members ||= creation_members(payload.experts, automatic);
+    const input = { ...(launch_draft || {}), room: { ...payload, members: pending.members, submission_id: pending.id }, token };
     room = await update_directory({ key: "create-room", label: `「${payload.title}」创建`,
     error_message: launching ? error => `「${payload.title}」${error.message}` : null,
     apply: () => { state.creating_room = payload; }, rollback: () => { state.creating_room = null; },
-    save: async () => launching
-      ? (await submit_local_launch({ ...launch_draft, room: { ...payload, submission_id: pending.id }, token }, payload.title)).room
-      : request_json("/api/rooms", { ...payload, submission_id: pending.id }, token),
+    save: async () => (await submit_local_launch(input, payload.title, !launching, signature)).room,
     commit: saved => {
-      if (token) localStorage.setItem(`discuss-access:${saved.id}`, token);
       state.creating_room = null;
       if (!state.rooms.some(existing => existing.id === saved.id)) state.rooms.push(saved);
     } }); }
@@ -1336,7 +1397,8 @@ async function local_launch_request(action, payload) {
     response = await fetch(`${local_connection?.endpoint || ""}/api/local/${action}`, {
       method: payload === undefined ? "GET" : "POST", headers, credentials: "omit", redirect: "error",
       body: payload === undefined ? undefined : JSON.stringify(payload),
-      ...(payload === undefined || action === "room-models" ? { signal: AbortSignal.timeout(LOCAL_CONNECTION_TIMEOUT_MS) } : {}) });
+      ...(payload === undefined || ["room-models", "models"].includes(action)
+        ? { signal: AbortSignal.timeout(action === "models" ? MODEL_CATALOG_TIMEOUT_MS : LOCAL_CONNECTION_TIMEOUT_MS) } : {}) });
   } catch (error) {
     if (!local_connection) throw error;
     throw new Error("无法连接本机服务：请在这台电脑运行 codiscuss local open，并允许浏览器访问本机网络，再重试原请求");
@@ -1362,10 +1424,10 @@ function stored_launches() {
 
 /** Share only recovery labels and safe room references with both renderers. */
 function refresh_launch_recoveries() {
-  state.launch.recoveries = stored_launches().map(({ id, title, room_id, error }) => ({ id, title, room_id, error }));
+  state.launch.recoveries = stored_launches().map(({ id, title, room_id, error, direct }) => ({ id, title, room_id, error, direct: Boolean(direct) }));
   const container = element("launch-recoveries");
   if (container) {
-    container.hidden = !state.launch.available || !state.launch.recoveries.length;
+    container.hidden = !state.launch.recoveries.length;
     container.innerHTML = state.launch.recoveries.map(item => `<section><strong>${escape_html(item.title)}</strong>
       <p>${escape_html(item.error || "启动结果尚未确认；原请求已保存在此浏览器中。")}</p><div class="topic-actions">
       <button class="button primary" data-launch-retry="${escape_html(item.id)}">继续本次启动</button>
@@ -1377,24 +1439,25 @@ function refresh_launch_recoveries() {
 }
 
 /** Persist the complete submitted input before any request can create or start a room. */
-async function submit_local_launch(input, title) {
+async function submit_local_launch(input, title, direct = false, signature) {
   const id = input.room?.submission_id || `room-${input.room_id}`;
   const key = LAUNCH_PENDING_PREFIX + id;
   const previous = localStorage.getItem(key);
-  const record = previous ? JSON.parse(previous) : { id, title, input, room_id: input.room_id };
+  const record = previous ? JSON.parse(previous) : { id, title, input, room_id: input.room_id, direct, signature };
   if (previous && JSON.stringify(record.input) !== JSON.stringify(input)) throw new Error("此房间有未完成的原启动请求，请先继续该请求，不要替换配置");
   record.attempt_id = crypto.randomUUID();
   try { localStorage.setItem(key, JSON.stringify(record)); }
   catch { throw new Error("此浏览器无法保存启动请求，请启用本地存储后重试；尚未发送本次启动"); }
   refresh_launch_recoveries();
   try {
-    const result = await local_launch_request("launch", record.input);
-    localStorage.setItem(`discuss-access:${result.room.id}`, record.input.token);
+    const result = record.direct ? { room: await request_json("/api/rooms", record.input.room, record.input.token), status: "created" }
+      : await local_launch_request("launch", record.input);
+    save_room_credentials(result.room, record.input.token, record.input.room?.members || []);
     localStorage.removeItem(key);
     refresh_launch_recoveries();
     return result;
   } catch (error) {
-    const stage = error.launch?.stage;
+    const stage = error.launch?.stage || (record.direct && error.preflight ? "not_started" : undefined);
     const prefix = stage === "not_started" ? (previous ? "本次请求未执行，原启动结果仍待确认：" : "本次请求未执行：") : stage === "created" ? "房间已创建，启动结果待确认："
       : stage === "started" ? "自动推进已启用，接入结果待确认：" : "启动结果尚未确认，请沿用原请求重试：";
     error.message = prefix + error.message;
@@ -1404,7 +1467,7 @@ async function submit_local_launch(input, title) {
     else if (owns_attempt) {
       record.error = error.message;
       record.room_id = error.launch?.room_id || record.room_id;
-      if (record.room_id) localStorage.setItem(`discuss-access:${record.room_id}`, record.input.token);
+      if (record.room_id) save_room_credentials({ id: record.room_id }, record.input.token, record.input.room?.members || []);
       localStorage.setItem(key, JSON.stringify(record));
     }
     refresh_launch_recoveries();
@@ -1420,16 +1483,16 @@ async function resume_launch(id) {
   state.launch.error = "";
   publish_view();
   try {
-    const result = await submit_local_launch(record.input, record.title);
+    const result = await submit_local_launch(record.input, record.title, record.direct, record.signature);
     if (state.pending_room?.id === id && state.pending_room.signature === JSON.stringify({
-      payload: room_creation_payload(record.input.room?.folder_id ?? null), launch_draft: launch_options() })) {
+      payload: room_creation_payload(record.input.room?.folder_id ?? null), launch_draft: record.direct ? null : launch_options() })) {
       element("room-form").reset();
       reset_creation_mode();
       render_expert_inputs("new-expert-modes", default_experts());
       state.launch.create = false;
       element("room-dialog").close();
     }
-    clear_launch_overrides(record.input);
+    if (!record.direct) clear_launch_overrides(record.input);
     state.launch.notice = result.status === "running" ? "已核对原启动，实际执行请查看进度回执" : "已核对原房间状态；不会自动恢复已暂停或结束的讨论";
     state.directory_error = "";
     if (state.pending_room?.id === id) state.pending_room = null;
@@ -1450,6 +1513,7 @@ function discard_launch(id) {
 async function load_launch_settings() {
   const local = ["127.0.0.1", "localhost"].includes(location.hostname);
   state.launch.room_models = null;
+  state.launch.model_catalogs = {};
   state.launch.connect_command = local ? "codiscuss local open" : `codiscuss local connect "${location.origin}"`;
   try {
     local_connection = null;
@@ -1496,15 +1560,60 @@ function participant_model(name, room, saved) {
   return `${model} · ${effort}`;
 }
 
-// Only CLI clients accept a model argument; App clients use the model chosen inside the App.
-const LAUNCH_MODEL_HINTS = {
-  codex_cli: { example: "例如 gpt-6-astra", help: "传给 codex -m；留空用 CLI 默认模型" },
-  claude: { example: "例如 opus、sonnet、fable", help: "传给 claude --model；留空用 CLI 默认模型" },
-  antigravity_cli: { example: "例如 gemini-4-argon-high", help: "传给 agy --model；可用模型运行 agy models 查看，留空用 CLI 默认模型" },
-};
+// App and web clients keep model selection in the original conversation.
+const MODEL_CLIENTS = ["codex_cli", "claude", "antigravity_cli"];
+const MODEL_SOURCE_LABELS = { "codex-app-server": "来自 Codex CLI 模型列表", "claude-cli": "来自 Claude CLI 模型列表", "antigravity-cli": "来自 Antigravity CLI 模型列表" };
 
-// Reasoning effort is a separate argument only for Codex and Claude; agy encodes it in the model name.
-const LAUNCH_EFFORT_LEVELS = { codex_cli: ["low", "medium", "high", "xhigh", "max", "ultra"], claude: ["low", "medium", "high", "xhigh", "max"] };
+/** Keep discoveries separate for each software executable, shared by its participant instances. */
+function model_catalog_key(profile) {
+  return JSON.stringify([profile.adapter, profile.executable || ""]);
+}
+
+/** Provide selectable software results without turning an unavailable list into a text field. */
+function launch_model_state(name, launch = state.launch) {
+  const profile = launch.profiles[name] || {};
+  const catalog = launch.model_catalogs?.[model_catalog_key(profile)];
+  const models = catalog?.models || [];
+  const selected = models.find(model => model.id === profile.model);
+  const items = [{ label: "软件默认模型", value: "__default__" }, ...models.map(model => ({ label: model.label || model.id, value: model.id }))];
+  if (profile.model && !selected) items.push({ label: `${profile.model}（已保存，列表未确认）`, value: profile.model, disabled: true });
+  return { supported: MODEL_CLIENTS.includes(profile.adapter), items, loading: Boolean(catalog?.loading),
+    efforts: selected?.efforts, source: MODEL_SOURCE_LABELS[catalog?.source] || catalog?.source || "",
+    effort_note: profile.adapter === "antigravity_cli" ? "思考强度随模型选择。" : !selected
+      ? "选择模型后显示可用思考强度；默认值由软件决定。" : "所选模型不提供单独思考强度。",
+    error: catalog?.error || (!launch.available ? "连接本机服务后读取模型列表" : !catalog ? "尚未读取此软件的模型列表" : "") };
+}
+
+/** Read model metadata only; never launch an AI task or persist discovered choices as defaults. */
+async function load_launch_models(name, force = false) {
+  const profile = state.launch.profiles[name] || {};
+  if (!state.launch.available || !MODEL_CLIENTS.includes(profile.adapter)) return;
+  const catalogs = state.launch.model_catalogs ||= {}, key = model_catalog_key(profile);
+  if (catalogs[key]?.loading || (!force && catalogs[key])) return;
+  const current = { models: [], loading: true, error: "", source: "" };
+  const input = { adapter: profile.adapter, ...(profile.executable ? { executable: profile.executable } : {}) };
+  catalogs[key] = current;
+  publish_view();
+  try {
+    const result = await local_launch_request("models", input);
+    if (result.adapter !== input.adapter) throw new Error("模型列表与所选软件不一致");
+    current.models = result.models || [];
+    current.source = result.source || "";
+    current.error = result.error || (!current.models.length ? "软件未返回可用模型，可使用默认模型" : "");
+  } catch (error) { current.error = error.message; }
+  finally {
+    current.loading = false;
+    if (state.launch.model_catalogs === catalogs) { render_launch_settings(); publish_view(); }
+  }
+}
+
+/** Accept a discovered model and clear an effort no longer supported by that model. */
+function write_launch_model(name, value) {
+  const model = value === "__default__" ? "" : value;
+  write_launch_field(name, "model", model);
+  const levels = launch_model_state(name).efforts;
+  if (!levels?.includes(state.launch.profiles[name].effort)) write_launch_field(name, "effort", "");
+}
 
 /** Keep software drafts separate from shared room records and from discussion advancement mode. */
 function write_launch_field(name, field, value) {
@@ -1609,8 +1718,7 @@ async function launch_current_room() {
   try {
     const key = `discuss-access:${room_id}`;
     let token = localStorage.getItem(key);
-    if (!token && state.room.runtime?.protected) throw new Error("此浏览器缺少房间凭据，请使用原浏览器或原接入配置");
-    if (!token) { token = crypto.randomUUID(); localStorage.setItem(key, token); }
+    if (!token) throw new Error("此浏览器缺少房间凭据，请使用创建房间的浏览器");
     const draft = launch_options();
     const result = await submit_local_launch({ ...draft, room_id, token }, state.room.title || "已有讨论");
     clear_launch_overrides(draft);
@@ -1703,6 +1811,16 @@ function render_room_configuration() {
 }
 
 /** Render the same local setup controls in the classic theme. */
+/** Keep the classic form on the same read-only catalog contract as the role cards. */
+function render_launch_model_fields(name) {
+  const catalog = launch_model_state(name), profile = state.launch.profiles[name] || {};
+  if (!catalog.supported) return "";
+  const models = catalog.items.map(item => `<option value="${escape_html(item.value)}" ${item.value === (profile.model || "__default__") ? "selected" : ""} ${item.disabled ? "disabled" : ""}>${escape_html(item.label)}</option>`).join("");
+  const efforts = [{ label: "默认强度", value: "" }, ...(catalog.efforts || []).map(value => ({ label: value, value }))];
+  const strength = catalog.efforts?.length ? `<label>思考强度<select data-launch-name="${name}" data-launch-field="effort">${efforts.map(item => `<option value="${item.value}" ${item.value === (profile.effort || "") ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>` : "";
+  return `<label>模型<select data-launch-name="${name}" data-launch-field="model">${models}</select></label><p class="local-note">${escape_html(catalog.loading ? "正在读取软件模型列表…" : catalog.error || catalog.source)}</p>${strength}`;
+}
+
 function render_launch_settings() {
   for (const id of ["local-launch-settings", "new-local-launch-settings"]) {
     const container = element(id);
@@ -1715,14 +1833,12 @@ function render_launch_settings() {
       const profile = state.launch.profiles[name] || {};
       const fields = profile.adapter === "antigravity" ? [["ipc_directory", "Sidecar IPC 目录"]]
         : [["executable", "原生可执行文件路径"]];
-      if (["codex_cli", "claude", "antigravity_cli"].includes(profile.adapter)) fields.push(["model", "模型（可选，留空用 CLI 默认）"]);
-      if (LAUNCH_EFFORT_LEVELS[profile.adapter]) fields.push(["effort", `思考档位（可选：${LAUNCH_EFFORT_LEVELS[profile.adapter].join(" / ")}）`]);
       if (profile.adapter === "codex") fields.push(["source_thread_id", "来源聊天 ID（新建会话时使用）"]);
       if (profile.adapter === "claude") fields.push(["allowed_tools", "允许的工具（每行一项，可选）"]);
       fields.push(["session_id", "复用会话 ID（仅本次，可选）"], ["cwd", "此 AI 的工作目录（可选）"], ["project_name", "此 AI 的项目（可选）"]);
       if (["codex", "antigravity", "antigravity_cli"].includes(profile.adapter)) fields.push(["project_id", "软件中的项目 ID（可选）"]);
       const summary = launch_summary(name);
-      return `<fieldset><legend>${name}</legend><p class="local-note" data-launch-summary="${name}">${summary.session} · 工作目录：${escape_html(summary.cwd)}（${summary.access}） · 项目：${escape_html(summary.project)}</p><label>执行客户端<select data-launch-name="${name}" data-launch-field="adapter"><option value="">选择 CLI / App</option>${clients.map(client => `<option value="${client.value}" ${profile.adapter === client.value ? "selected" : ""}>${client.label}</option>`).join("")}</select></label>${fields.map(([field, label]) => `<label>${label}<textarea rows="${field === "allowed_tools" ? 2 : 1}" data-launch-name="${name}" data-launch-field="${field}">${escape_html(Array.isArray(profile[field]) ? profile[field].join("\n") : profile[field] || "")}</textarea></label>`).join("")}<label>此 AI 的项目文件<select data-launch-name="${name}" data-launch-field="project_access">${access_options(profile.project_access, "沿用本次设置")}</select></label></fieldset>`;
+      return `<fieldset><legend>${name}</legend><p class="local-note" data-launch-summary="${name}">${summary.session} · 工作目录：${escape_html(summary.cwd)}（${summary.access}） · 项目：${escape_html(summary.project)}</p><label>执行客户端<select data-launch-name="${name}" data-launch-field="adapter"><option value="">选择 CLI / App</option>${clients.map(client => `<option value="${client.value}" ${profile.adapter === client.value ? "selected" : ""}>${client.label}</option>`).join("")}</select></label>${render_launch_model_fields(name)}${fields.map(([field, label]) => `<label>${label}<textarea rows="${field === "allowed_tools" ? 2 : 1}" data-launch-name="${name}" data-launch-field="${field}">${escape_html(Array.isArray(profile[field]) ? profile[field].join("\n") : profile[field] || "")}</textarea></label>`).join("")}<label>此 AI 的项目文件<select data-launch-name="${name}" data-launch-field="project_access">${access_options(profile.project_access, "沿用本次设置")}</select></label></fieldset>`;
     }).join("") + `<label>本次项目文件<select data-launch-name="workspace" data-launch-field="project_access">${access_options(state.launch.workspace.project_access)}</select></label><label>本次工作目录（可选）<input data-launch-name="workspace" data-launch-field="cwd" value="${escape_html(state.launch.workspace.cwd || "")}"></label><label>本次 AI 项目（可选）<input data-launch-name="workspace" data-launch-field="discussion_project" value="${escape_html(state.launch.workspace.discussion_project || "")}"></label>`;
   }
   for (const id of ["local-launch-notice", "new-local-launch-notice"]) {
@@ -1737,7 +1853,7 @@ function render_launch_settings() {
 /** Persist a manually edited summary with the snapshot it was based on. */
 async function save_context(event) {
   event.preventDefault();
-  await request_json(`/api/rooms/${state.room.id}/state`, { actor: state.room.host, text: element("state-input").value, brief: element("brief-input").value, until: state.snapshot_id });
+  await request_json(`/api/rooms/${state.room.id}/state`, { actor: "用户", text: element("state-input").value, brief: element("brief-input").value, until: state.snapshot_id });
   state.context_dirty = false;
   await refresh_room();
   show_toast("讨论状态已保存，原始记录保持不变");
@@ -1745,28 +1861,17 @@ async function save_context(event) {
 
 /** Copy a participation entrypoint without bundling any discussion context. */
 async function copy_context(mode = "online") {
-  const participant = element("author-select").value;
-  const params = new URLSearchParams({ mode });
-  if (participant !== "用户") params.set("participant", participant);
-  const address = `${location.origin}/r/${state.room.id}?${params}`;
-  if (mode === "cli" && participant !== "用户" && state.room.experts[participant] !== "cli") {
-    throw new Error("该身份在本话题不是本地 CLI，请在主持管理中调整参与方式");
-  }
-  const identity = participant === "用户" ? "你自己的身份" : `${participant} 身份`;
-  const instruction = mode === "cli" ? "你是本地 CLI AI，可读取记录并通过留言板的 POST 接口发布，提交后重新读取核对。" :
-    "你是在线 AI，只读取讨论，在当前聊天窗口输出观点和引用编号，由用户代发。不要尝试在留言板直接提交。";
-  const access = mode === "cli" && state.room.runtime?.protected ? "\n此房间启用了写入保护。请用户提供已导出接入配置的本机路径，写入时带 --access-file；不要读取或公开 token。" : "";
-  await copy_text(`请以${identity}参与讨论。${instruction}\n话题入口：${address}${access}${workspace_instruction()}\n先检查阶段和安排；独立观点阶段只读目标、背景、边界和自己的已有讨论，提交后再读他人观点。每次回答先给简短摘要，再给完整正文，保留关键理由、条件与不确定性。暂停或收束时不追加观点。其余材料按需阅读，不必读取全部历史。`);
+  const members = access_snapshot().members.filter(member => (member.access === "online") === (mode === "online"));
+  const selected = mode === "online" ? members.find(member => member.name === element("author-select").value) : null;
+  const member = selected || (members.length === 1 ? members[0] : null);
+  if (member) return copy_member_join(member.name);
+  select_tab("access");
+  show_toast("请在接入页选择具体成员的「参与说明」");
 }
 
 /** Copy a bounded background startup contract without starting any external task. */
 async function copy_background() {
-  const participant = element("author-select").value;
-  if (participant === "用户" || state.room.experts[participant] !== "cli") throw new Error("请先在讨论区选择已配置为本地 CLI 的专家身份");
-  const base = `${location.origin}/r/${state.room.id}`;
-  const params = new URLSearchParams({ mode: "cli", participant });
-  const access = state.room.runtime?.protected ? "\n用户须提供私有配置的本机路径，写入使用 --access-file，不读取或公开 token。" : "";
-  await copy_text(`请调用 discuss-participant 参与讨论。\n话题：${state.room.title}\n配置：你是 ${participant}，作为 CLI 专家持续参与；主持人为 ${state.room.host}。\n房间入口：${base}?${params}${workspace_instruction()}${access}\n本次约定从房间资料和当前安排读取。`);
+  return copy_context("cli");
 }
 
 /** Keep optional app placement local and include it in manual cold-start instructions. */
@@ -1805,8 +1910,7 @@ async function choose_runtime(mode) {
   const path = `/api/rooms/${room_id}/runtime`;
   const runtime = await request_json(path);
   if (runtime.mode !== mode) {
-    const key = `discuss-access:${room_id}`;
-    if (!runtime.protected && !localStorage.getItem(key)) localStorage.setItem(key, crypto.randomUUID());
+    if (!localStorage.getItem(`discuss-access:${room_id}`)) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
     await request_json(path, { action: "configure", mode, revision: runtime.revision });
   }
   if (state.room?.id !== room_id) return;
@@ -1856,42 +1960,88 @@ async function pause_runtime() {
   show_toast("已暂停；旧执行不能继续写入");
 }
 
+/** Download JSON through a temporary object URL without exposing its contents in the page. */
+function download_private_json(config, filename) {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(config, null, 2)], { type: "application/json" }));
+  const link = document.createElement("a");
+  link.href = url; link.download = filename; link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** Give one writable member only its own room-scoped credential. */
+function download_member_access(name) {
+  const room = state.room, access = access_snapshot();
+  const member = access.members.find(item => item.name === name);
+  if (!access.can_manage || !member?.available || member.access === "online") throw new Error("当前浏览器没有此成员可下载的私有配置");
+  download_private_json({ site: location.origin, room: room.id, token: member_credentials(room.id)[name].token }, `member-${room.id}-${name}.json`);
+  state.access_error = "";
+  state.access_notice = member.access === "runner" ? `已下载 ${name} 的持久成员配置；自动执行仍须使用本次任务凭据。`
+    : `已下载 ${name} 的私有配置；交给该成员的本地会话，下载不代表已接入。`;
+}
+
+/** Copy a member-specific entry instruction without copying its credential or conversation context. */
+async function copy_member_join(name) {
+  const room = state.room, access = access_snapshot();
+  const member = access.members.find(item => item.name === name);
+  if (!access.can_manage || !member) throw new Error("请使用房主浏览器选择本房间成员");
+  const params = new URLSearchParams({ participant: name, mode: member.access === "online" ? "online" : "cli" });
+  const address = `${location.origin}/r/${room.id}?${params}`;
+  const skills = `请调用 discuss-participant${room.host === name ? " 和 discuss-host" : ""}。`;
+  let instruction;
+  if (member.access === "online") instruction = "你是在线只读成员，请在原聊天回答，由用户或授权主持人代发；不要尝试直接写入房间。模型与思考强度在原网页设置。";
+  else if (member.access === "runner") instruction = `${skills}等待本机程序交付有效任务，按 task 中的 access_file 和 execution 凭据操作${room.mode === "free" ? "；自由协作的回答必须绑定本次有效 execution_id" : ""}。不要另建定时任务；只处理本次有效执行，失效或撤销后停止提交。下载的持久成员私有文件不能替代自动执行凭据。`;
+  else instruction = `${skills}使用属于你的私有文件 member-${room.id}-${name}.json，由用户提供它在本机的实际完整路径；先执行 codiscuss room view ${room.id} --site ${location.origin} --as ${name} --access-file "实际完整路径"，后续命令保持本站点、房间和身份。不要读取或公开文件中的 token。模型与思考强度在原软件中设置。首次复制后，可由人工或软件原生定时触发；自行提交，不必每轮复制回答。${workspace_instruction()}`;
+  await copy_text(`请以 ${name} 身份参与房间。\n${instruction}\n房间入口：${address}\n先核对最新阶段、任务和原文编号，再按房间协议参与。`);
+  if (state.room?.id === room.id) {
+    state.access_error = "";
+    state.access_notice = `已复制 ${name} 的参与说明，未包含凭据；复制不代表已经送达或接入。`;
+  }
+}
+
 /** Download a private per-room setup file for the independent local runner. */
 function export_runtime() {
   const token = localStorage.getItem(`discuss-access:${state.room.id}`);
-  if (!token) throw new Error("请先选择全自动讨论，生成本房间的接入凭据");
-  const adapters = { Codex: "codex", Claude: "claude", Gemini: "antigravity" };
-  const participants = Object.fromEntries(Object.keys(state.room.experts).map(name => [name, { adapter: adapters[name] || "待配置" }]));
+  if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
+  const saved = member_credentials(state.room.id);
+  const participants = Object.fromEntries(Object.keys(state.room.experts).filter(name => state.room.experts[name] === "cli")
+    .map(name => [name, { adapter: state.launch.profiles[name]?.adapter || "待配置" }]));
+  const members = Object.fromEntries(Object.entries(saved).map(([name, value]) => [name, { token: value.token }]));
   const workspace = runtime_workspace();
-  const config = { site: location.origin, room: state.room.id, token, ...workspace, participants };
-  const url = URL.createObjectURL(new Blob([JSON.stringify(config, null, 2)], { type: "application/json" }));
-  const link = document.createElement("a");
-  link.href = url; link.download = `discussion-${state.room.id}.json`; link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  const config = { site: location.origin, room: state.room.id, token, ...workspace, participants, members };
+  download_private_json(config, `discussion-${state.room.id}.json`);
   show_toast("已导出私有接入配置；按部署说明填写本机软件路径，不要公开此文件");
 }
 
 /** Supply participation defaults for a new topic. */
-function default_experts() {
-  return Object.fromEntries(Object.keys(IDENTITIES).filter((name) => name !== "用户").map((name) => [name, name === "Codex" ? "cli" : "online"]));
-}
+function default_experts() { return {}; }
 
-/** Start automatic drafts with configured software, preserving each mode's explicit choices. */
+/** Keep a roster per room use and delivery method; software drafts remain per instance. */
 function update_creation_mode() {
-  const mode = element("new-room-mode").value;
-  if (mode === state.creation_mode) return;
-  state.creation_drafts[state.creation_mode] = { host: element("new-room-host").value,
-    experts: read_expert_inputs("new-expert-modes") };
-  const names = Object.entries(state.launch.profiles).filter(([name, profile]) =>
+  const kind = element("new-room-kind").value, mode = element("new-room-mode").value;
+  const key = `${kind}:${mode}`;
+  if (key === state.creation_mode) return;
+  const previous = { host: element("new-room-host").value, experts: read_expert_inputs("new-expert-modes") };
+  state.creation_drafts[state.creation_mode] = previous;
+  const configured = Object.entries(state.launch.profiles).filter(([name, profile]) =>
     LAUNCH_CLIENTS[name]?.some(client => client.value === profile.adapter)
     && (profile.adapter === "antigravity" ? profile.ipc_directory : profile.executable)).map(([name]) => name);
-  const draft = state.creation_drafts[mode] || (mode === "free" ? { host: "", experts: names[0] ? { [names[0]]: "cli" } : {} }
-    : { host: names[0] || "", experts: Object.fromEntries(names.map(name => [name, "cli"])) });
-  element("new-room-host").value = draft.host;
+  const experts = Object.keys(previous.experts).length ? previous.experts
+    : mode === "automatic" ? Object.fromEntries(configured.map(name => [name, "cli"])) : {};
+  const eligible = mode === "automatic" ? Object.fromEntries(Object.keys(experts).filter(name => LAUNCH_CLIENTS[platform_of(name)]).map(name => [name, "cli"])) : experts;
+  const local_names = Object.keys(eligible).filter(name => eligible[name] === "cli");
+  const draft = state.creation_drafts[key] || { experts: eligible, host: kind === "free" ? "用户" : local_names.includes(previous.host) ? previous.host : local_names[0] || "" };
   render_expert_inputs("new-expert-modes", draft.experts);
-  state.creation_mode = mode;
+  render_host_options("new-room-host", Object.keys(draft.experts), draft.host);
+  state.creation_mode = key;
   element("new-room-limit-execution_minutes")?.closest("label")?.toggleAttribute("hidden", mode !== "automatic");
   publish_view();
+}
+
+/** Preserve dynamic instance names in the hidden select that backs the visible host controls. */
+function render_host_options(id, names, selected) {
+  const control = element(id);
+  control.innerHTML = ["用户", ...names].map(name => `<option value="${escape_html(name)}">${escape_html(display_name(name))}</option>`).join("");
+  control.value = selected;
 }
 
 /** Owner stop for a free room: void the member's live execution and queued requests. */
@@ -1903,7 +2053,7 @@ async function interrupt_member(member_id) {
 
 /** A completed creation starts the next form with fresh mode defaults. */
 function reset_creation_mode() {
-  state.creation_mode = "manual";
+  state.creation_mode = "brainstorm:manual";
   state.creation_drafts = {};
   element("new-room-limit-execution_minutes")?.closest("label")?.setAttribute("hidden", "");
 }
@@ -1925,6 +2075,8 @@ function read_expert_inputs(container_id) {
 function render_topic() {
   const room = state.room;
   element("topic-phase").textContent = PHASE_LABELS[room.phase];
+  const authors = ["用户", ...Object.keys(room.experts).filter(name => room.experts[name] === "online")];
+  render_host_options("author-select", authors.filter(name => name !== "用户"), authors.includes(element("author-select").value) ? element("author-select").value : "用户");
   element("topic-host").textContent = `主持人：${display_name(room.host)} · 可以同时作为专家参与`;
   element("discussion-limits-status").textContent = limits_label(room.limits);
   for (const field of ["goal", "focus", "user_request", "background", "boundaries"]) element(`topic-${field}`).textContent = room[field] || "尚未填写";
@@ -1934,7 +2086,7 @@ function render_topic() {
   element("host-operator").textContent = `当前以 ${display_name(room.host)} 的主持职责管理话题。AI 主持人通过 CLI 操作；用户可在这里协助。`;
   if (!state.topic_dirty) {
     for (const field of ["title", "goal", "focus", "user_request", "background", "boundaries"]) element(`topic-${field}-input`).value = room[field] || "";
-    element("topic-host-select").value = room.host;
+    render_host_options("topic-host-select", Object.keys(room.experts).filter(name => room.experts[name] === "cli"), room.host);
     element("topic-phase-select").value = room.phase;
     for (const key of ["max_rounds", "max_minutes", "execution_minutes", "on_limit", "summary_minutes"]) {
       const input = element(`topic-limit-${key}-input`);
@@ -1965,7 +2117,7 @@ function render_current_turn() {
   element("turn-question").textContent = turn?.question || "在下方展开主持管理，填写本轮待回应的问题。";
   element("copy-turn").disabled = !active || inactive;
   element("confirm-notified").disabled = !turn || turn.status !== "pending" || inactive;
-  element("forward-turn").disabled = !active || inactive;
+  element("forward-turn").disabled = !active || inactive || state.room.experts[turn?.expert] !== "online";
   element("cancel-turn").disabled = !active;
   element("view-turn-answer").hidden = !turn?.answer_id;
   const limited = state.room.limits?.reached;
@@ -1999,22 +2151,39 @@ function turn_guidance(turn, room) {
   return "在线专家需由主持人或用户联系。复制通知不表示送达，实际联系后再确认已通知。";
 }
 
-/** Save host-edited information and direction without touching message history. */
+/** Prepare fresh member credentials only when an identity is added or changes writable capability. */
+function topic_member_requests(room, experts) {
+  const current = room.members || [];
+  return Object.entries(experts).map(([name, capability]) => {
+    const access = capability === "online" ? "online" : room.runtime?.mode === "automatic" ? "runner" : "manual";
+    const operation = `topic:${name}:${access}`;
+    const member = current.find(item => item.name === name && item.status === "active");
+    const pending = localStorage.getItem(MEMBER_PENDING_PREFIX + room.id + ":" + operation);
+    if (!pending && member && (member.access === "online") === (capability === "online")) return null;
+    return prepare_member_request(room.id, operation, { name, access, adapter: "", session_mode: "new" });
+  }).filter(Boolean);
+}
+
+/** Save owner-edited topic data while retaining untouched participants' existing credentials. */
 async function save_topic(event) {
   event.preventDefault();
-  const payload = { actor: state.room.host, host: element("topic-host-select").value,
+  const room = state.room;
+  const payload = { actor: "用户", host: element("topic-host-select").value,
     phase: element("topic-phase-select").value, experts: read_expert_inputs("topic-expert-modes"), limits: read_limits("topic") };
   for (const field of ["title", "goal", "focus", "user_request", "background", "boundaries"]) payload[field] = element(`topic-${field}-input`).value;
-  await request_json(`/api/rooms/${state.room.id}/topic`, payload);
-  state.topic_dirty = false;
-  await refresh_room();
+  const records = topic_member_requests(room, payload.experts);
+  payload.members = records.map(record => record.member);
+  const result = await request_json(`/api/rooms/${room.id}/topic`, payload);
+  save_room_credentials({ ...result, id: room.id }, localStorage.getItem(`discuss-access:${room.id}`), payload.members);
+  records.forEach(record => localStorage.removeItem(record.key));
+  if (state.room?.id === room.id) { state.topic_dirty = false; await refresh_room(); }
   show_toast("话题资料与进度已保存");
 }
 
 /** Schedule an expert with an identifier retained across uncertain retries. */
 async function schedule_turn(event) {
   event.preventDefault();
-  const payload = { actor: state.room.host, expert: element("turn-expert-select").value, question: element("turn-question-input").value.trim() };
+  const payload = { actor: "用户", expert: element("turn-expert-select").value, question: element("turn-question-input").value.trim() };
   const signature = JSON.stringify({ room: state.room.id, ...payload });
   if (state.pending_turn?.signature !== signature) state.pending_turn = { signature, id: new_submission_id() };
   element("schedule-turn").disabled = true;
@@ -2044,10 +2213,11 @@ async function change_turn_status(status) {
 /** Prepare a host-forwarded answer while retaining the expert's own authorship. */
 function prepare_turn_answer() {
   const turn = state.room.current_turn;
+  if (state.room.experts[turn.expert] !== "online") throw new Error("本地 AI 须使用自身凭据提交回答");
   element("message-kind").value = "forward";
   element("author-select").value = turn.expert;
   state.turn_reply_to = turn.id;
-  element("turn-answer-label").textContent = `回答安排 #${turn.id} · ${turn.expert}，由 ${display_name(state.room.host)} 代发`;
+  element("turn-answer-label").textContent = `回答安排 #${turn.id} · ${turn.expert}，由用户代发`;
   element("turn-answer-preview").hidden = false;
   update_composer_role();
   select_tab("discussion");
@@ -2063,13 +2233,13 @@ function cancel_turn_reply() {
 /** Keep moderator statements distinct from opinions in the same identity. */
 function update_composer_role() {
   const mode = element("message-kind").value;
-  element("author-select").disabled = mode === "moderation";
-  if (mode === "moderation" && state.room?.host) element("author-select").value = state.room.host;
+  element("author-select").disabled = ["moderation", "receipt"].includes(mode);
+  if (["moderation", "receipt"].includes(mode)) element("author-select").value = "用户";
   const needs_summary = ["opinion", "forward"].includes(mode) && element("author-select").value !== "用户";
   element("message-summary-fields").hidden = !needs_summary;
   element("message-summary").required = needs_summary;
   element("author-note").textContent = mode === "receipt" ? "运行回执，由用户录入" : mode === "moderation" ? "主持发言" :
-    (mode === "forward" ? `由 ${display_name(state.room?.host) || "主持人"} 代发` : (element("author-select").value === "用户" ? "发言" : "的观点代发"));
+    (mode === "forward" ? "由用户代发" : (element("author-select").value === "用户" ? "发言" : "的观点代发"));
 }
 
 /** Bind the topic workflow separately from existing chat controls. */
@@ -2086,7 +2256,7 @@ function bind_host_controls() {
     "copy-turn": copy_turn, "confirm-notified": () => change_turn_status("notified"), "cancel-turn": () => change_turn_status("cancelled"),
     "forward-turn": prepare_turn_answer, "cancel-turn-answer": cancel_turn_reply,
     "view-turn-answer": () => show_message(state.room.current_turn.answer_id),
-    "copy-host": () => copy_text(`请以 ${state.room.host} 身份主持此话题，可兼任专家。\n话题入口：${location.origin}/r/${state.room.id}?mode=cli\n主持协议：${location.origin}/r/${state.room.id}/protocol${workspace_instruction()}\n由专家自主按需阅读；通知不附上下文。实际联系专家后再确认通知状态。${state.room.runtime?.protected ? '\n用户须提供私有配置的本机路径，写入使用 --access-file，不读取或公开 token。' : ''}`) };
+    "copy-host": () => copy_member_join(state.room.host) };
   Object.entries(actions).forEach(([id, action]) => element(id).addEventListener("click", () => run_action(action)));
   element("topic-form").addEventListener("submit", (event) => run_action(() => save_topic(event)));
   element("turn-form").addEventListener("submit", (event) => run_action(() => schedule_turn(event)));
@@ -2430,12 +2600,17 @@ async function initialize() {
   bind_attachment_controls();
   bind_host_controls();
   reset_creation_mode();
+  element("new-room-kind").addEventListener("change", update_creation_mode);
   element("new-room-mode").addEventListener("change", update_creation_mode);
+  document.addEventListener("focusin", event => {
+    if (event.target.dataset?.launchField === "model") load_launch_models(event.target.dataset.launchName);
+  });
   document.addEventListener("input", event => {
     if (event.target.dataset?.roomConnection) write_room_connection(event.target.dataset.roomConnection, event.target.value);
     if (event.target.dataset?.roomAdapter) write_room_adapter(event.target.dataset.roomAdapter, event.target.value);
     const { launchName: name, launchField: field } = event.target.dataset || {};
-    if (name) write_launch_field(name, field, event.target.type === "checkbox" ? event.target.checked : event.target.value);
+    if (name && field === "model") write_launch_model(name, event.target.value);
+    else if (name) write_launch_field(name, field, event.target.type === "checkbox" ? event.target.checked : event.target.value);
   });
   load_launch_settings();
   window.addEventListener("hashchange", () => {
@@ -2484,7 +2659,7 @@ function view_snapshot() {
     composer_error: state.composer_error, upload_status: state.upload_status, sending_message: state.sending_message,
     mention_only: state.mention_only, reply_to: state.reply_to, turn_reply_to: state.turn_reply_to,
     free_to: [...state.free_to], free_notice: state.free_notice, free_error: state.free_error, free_proxy: state.free_proxy,
-    create_parent: state.create_parent,
+    create_parent: state.create_parent, access: access_snapshot(),
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
     theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch) };
 }
@@ -2494,6 +2669,10 @@ function write_view_field(id, value) {
   const control = element(id);
   if (!control || !control.matches("input, textarea, select")) return;
   state.navigation_version++;
+  if (["new-room-host", "topic-host-select"].includes(id) && platform_of(value)
+      && !Array.from(control.options).some(option => option.value === value)) {
+    control.insertAdjacentHTML("beforeend", `<option value="${escape_html(value)}">${escape_html(value)}</option>`);
+  }
   control.value = value ?? "";
   control.dispatchEvent(new Event("input", { bubbles: true }));
   control.dispatchEvent(new Event("change", { bubbles: true }));
@@ -2582,7 +2761,7 @@ async function execute_view_action(name, value) {
     copy_turn, notify: () => change_turn_status("notified"), cancel_turn: () => change_turn_status("cancelled"),
     take_floor: () => change_floor("take"), return_floor: () => change_floor("return"),
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
-    choose_runtime, export_runtime, pause_runtime, check_limits, pause_discussion, restart_discussion, force_close, conclude_discussion,
+    choose_runtime, export_runtime, download_member_access, copy_member_join, pause_runtime, check_limits, pause_discussion, restart_discussion, force_close, conclude_discussion,
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection: load_launch_settings,
     load_room_configuration, save_room_configuration, interrupt_member, toggle_recipient, change_member, invite_member, interrupt_free, set_proxy, copy_online_notice,
     prepare_brainstorm, return_conclusion, clear_create_parent: () => { state.create_parent = null; },
@@ -2591,6 +2770,7 @@ async function execute_view_action(name, value) {
     await actions[name](value);
     return true;
   } catch (error) {
+    if (["download_member_access", "copy_member_join"].includes(name)) state.access_error = error.message;
     show_toast(error.message, true);
     return false;
   } finally { publish_view(); }
@@ -2603,7 +2783,8 @@ function change_view_theme(theme) {
 }
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
-  write_launch: write_launch_field, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS, launch_model_hints: LAUNCH_MODEL_HINTS, launch_effort_levels: LAUNCH_EFFORT_LEVELS, launch_summary, empty_discussion_message,
+  write_launch: write_launch_field, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
+  launch_model_state, load_launch_models, write_launch_model, launch_summary, empty_discussion_message,
   start_drag: start_directory_drag,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, platform_of, execute: execute_view_action, theme: change_view_theme,

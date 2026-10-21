@@ -77,7 +77,7 @@ class FreeRoomTests(unittest.TestCase):
         """The public view lists members and states but never any credential hash."""
         room = self.request(self.path)[1]
         self.assertEqual(room["mode"], "free")
-        self.assertEqual(room["host"], "用户")
+        self.assertEqual(room["host"], getattr(self, "expected_host", "用户"))
         self.assertEqual(room["free"]["members"][0]["name"], "Claude")
         self.assertNotIn("token_hash", json.dumps(room))
         self.assertNotIn("control_hash", json.dumps(room))
@@ -339,6 +339,7 @@ class MultiMemberTests(FreeRoomTests):
 class HostTests(FreeRoomTests):
     """An AI host routes unnamed messages, dispatches members, and is woken once per finished batch."""
 
+    expected_host = "Claude"
     member_id = MultiMemberTests.member_id
     reserve_for = MultiMemberTests.reserve_for
     def say(self, text, token=None, **extra):
@@ -431,6 +432,9 @@ class HostTests(FreeRoomTests):
         self.request(f"{self.path}/members/{self.member_id('Codex')}", {"action": "role", "role": "host"}, self.owner)
         roles = {member["name"]: member["role"] for member in self.request(self.path)[1]["free"]["members"]}
         self.assertEqual(roles, {"Claude": "member", "Codex": "host", "Gemini": "member"})
+        self.assertEqual(self.request(self.path)[1]["host"], "Codex")
+        self.request(f"{self.path}/members/{self.member_id('Codex')}", {"action": "away"}, self.owner)
+        self.assertEqual(self.request(self.path)[1]["host"], "用户")
 
 
 class OnlineAndLinkTests(FreeRoomTests):
@@ -440,6 +444,7 @@ class OnlineAndLinkTests(FreeRoomTests):
         """The online member never posts itself; the owner's forward keeps it as author and closes its request."""
         deepseek = uuid.uuid4().hex
         self.request(f"{self.path}/members", {"name": "DeepSeek", "token": deepseek, "access": "online"}, self.owner)
+        self.assertEqual(self.request(self.path)[1]["experts"]["DeepSeek"], "online")
         self.assertEqual(self.request(f"{self.path}/members/{self.request(self.path)[1]['free']['members'][1]['id']}",
                                       {"action": "role", "role": "host"}, self.owner)[0], 400)
         self.say("请 DeepSeek 看看", to=["DeepSeek"])
@@ -456,7 +461,7 @@ class OnlineAndLinkTests(FreeRoomTests):
 
     def test_brainstorm_room_links_back_to_its_free_room(self):
         """A discussion started from a free room records its origin; free rooms cannot be linked children."""
-        status, child = self.request("/api/rooms", {"title": "方案头脑风暴", "goal": "x", "parent_room_id": self.room["id"]})
+        status, child = self.request("/api/rooms", {"title": "方案头脑风暴", "goal": "x", "experts": {}, "parent_room_id": self.room["id"]}, uuid.uuid4().hex)
         self.assertEqual(status, 201, child)
         self.assertEqual(child["parent_room"], {"id": self.room["id"], "title": "自由单聊"})
         self.assertEqual(self.request(self.path)[1]["linked_rooms"], [{"id": child["id"], "title": "方案头脑风暴", "phase": "preparing"}])
@@ -488,7 +493,9 @@ class InstanceTests(FreeRoomTests):
     def test_discussion_rooms_accept_instances_as_experts_and_host(self):
         """A brainstorm room may hold two Claude instances, one of them hosting."""
         status, room = self.request("/api/rooms", {"title": "双 Claude", "goal": "x", "host": "Claude-主持",
-                                                   "experts": {"Claude-主持": "cli", "Claude": "cli", "Codex": "online"}})
+            "experts": {"Claude-主持": "cli", "Claude": "cli", "Codex": "online"},
+            "members": [{"name": name, "token": uuid.uuid4().hex, "access": "online" if name == "Codex" else "manual"}
+                        for name in ("Claude-主持", "Claude", "Codex")]}, uuid.uuid4().hex)
         self.assertEqual(status, 201, room)
         self.assertEqual(room["floor"]["holder"], "Claude-主持")
         self.assertEqual(self.request("/api/rooms", {"title": "无效", "goal": "x", "experts": {"Claudex": "cli"}})[0], 400)

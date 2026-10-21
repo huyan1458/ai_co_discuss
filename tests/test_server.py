@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
 from urllib.error import HTTPError
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request, urlopen
 from urllib.robotparser import RobotFileParser
 
@@ -27,6 +27,8 @@ class DiscussionTests(unittest.TestCase):
 
     def setUp(self):
         """Use an explicit test Worker URL, or start isolated local storage."""
+        self.owner = uuid.uuid4().hex
+        self.member_tokens = {name: uuid.uuid4().hex for name in ("Codex", "Claude", "Gemini", "DeepSeek", "Qwen")}
         self.base = os.getenv("DISCUSS_TEST_URL", "").rstrip("/")
         self.external = bool(self.base)
         if not self.external:
@@ -83,7 +85,8 @@ class DiscussionTests(unittest.TestCase):
         token = uuid.uuid4().hex
         with closing(connect_db(self.database)) as connection, connection:
             room = create_room(connection, {"title": "本场修正", "host": "Codex", "experts": {"Codex": "cli"},
-                                           "runtime_mode": "automatic", "submission_id": uuid.uuid4().hex}, token)
+                                           "runtime_mode": "automatic", "submission_id": uuid.uuid4().hex,
+                                           "members": [{"name": "Codex", "token": uuid.uuid4().hex, "access": "runner"}]}, token)
             paused = configure_runtime(connection, room["id"], token, {"action": "pause", "revision": room["runtime"]["revision"]})
         handler = object.__new__(DiscussionHandler)
         handler.server = self.server
@@ -122,8 +125,27 @@ class DiscussionTests(unittest.TestCase):
 
     def request(self, path, payload=None, method=None):
         """Send a request and decode JSON or UTF-8 text, including error bodies."""
+        payload = dict(payload) if payload is not None else None
+        if payload is not None and (path == "/api/rooms" or (path.endswith("/topic") and "experts" in payload)):
+            experts = payload.get("experts", {name: "cli" if name == "Codex" else "online" for name in self.member_tokens})
+            if isinstance(experts, dict):
+                current = self.request(path.removesuffix("/topic"))[1].get("experts", {}) if path.endswith("/topic") else {}
+                for name, mode in experts.items():
+                    if name in current and current[name] != mode:
+                        self.member_tokens[name] = uuid.uuid4().hex
+                payload.setdefault("members", [{"name": name, "token": self.member_tokens.setdefault(name, uuid.uuid4().hex),
+                    "access": "online" if mode == "online" else "runner" if payload.get("runtime_mode") == "automatic" else "manual"} for name, mode in experts.items()])
+        if payload is not None and path.endswith("/messages") and "source" not in payload and "submitted_by" not in payload:
+            mode = self.request(path.removesuffix("/messages"))[1].get("experts", {}).get(payload.get("author"))
+            if mode == "cli":
+                payload["source"] = "cli"
+            elif mode == "online":
+                payload["submitted_by"] = "用户"
+        actor = (payload or {}).get("actor", (payload or {}).get("submitted_by", (payload or {}).get("author", "用户")))
+        token = self.owner if actor == "用户" or path == "/api/rooms" else self.member_tokens.get(actor, "")
         data = json.dumps(payload).encode() if payload is not None else None
         request = Request(self.base + path, data=data, method=method)
+        request.add_header("X-Discussion-Token", token)
         if data:
             request.add_header("Content-Type", "application/json")
         try:
@@ -143,7 +165,9 @@ class DiscussionTests(unittest.TestCase):
 
     def attachment_request(self, path, data=None, headers=None):
         """Read raw bytes so content headers and binary round trips are verified."""
-        request = Request(self.base + path, data=data, headers={"Content-Type": "application/octet-stream", **(headers or {})})
+        actor = parse_qs(urlsplit(path).query).get("actor", ["用户"])[0]
+        request = Request(self.base + path, data=data, headers={"Content-Type": "application/octet-stream",
+            "X-Discussion-Token": self.owner if actor == "用户" else self.member_tokens.get(actor, ""), **(headers or {})})
         try:
             response = urlopen(request, timeout=10)
         except HTTPError as error:
@@ -234,7 +258,7 @@ class DiscussionTests(unittest.TestCase):
         self.assertTrue(snapshot["exported_at"])
         tables = snapshot["tables"]
         self.assertEqual(set(tables), {"rooms", "room_directory", "room_folder_assignments", "topic_folders", "room_creations",
-                                      "room_briefs", "room_user_requests", "topic_settings", "room_floor", "discussion_limits", "messages", "message_details", "message_summaries", "message_timings", "discussion_turns", "attachments"})
+                                      "room_briefs", "room_user_requests", "topic_settings", "room_floor", "discussion_limits", "messages", "message_details", "message_summaries", "message_timings", "discussion_turns", "attachments", "room_modes", "room_members", "member_requests"})
         self.assertEqual([row["id"] for row in tables["messages"]], [row["id"] for row in originals] + [answer["id"]])
         for original, row in zip(originals + [answer], tables["messages"]):
             self.assertEqual(row, {key: original[key] for key in row})
@@ -283,7 +307,7 @@ class DiscussionTests(unittest.TestCase):
         second = self.request("/api/rooms", {"title": "频道乙"})[1]
         third = self.request("/api/rooms", {"title": "频道丙"})[1]
         path = f"/api/rooms/{third['id']}/move"
-        self.assertEqual(self.request(path, {"actor": "Claude", "before_id": self.room["id"]})[0], 400)
+        self.assertEqual(self.request(path, {"actor": "Claude", "before_id": self.room["id"]})[0], 403)
         self.assertEqual(self.request(path, {"actor": "用户", "before_id": "missing"})[0], 400)
         self.assertEqual(self.request(path, {"actor": "用户", "before_id": self.room["id"]})[0], 200)
         base = f"/api/rooms/{self.room['id']}"
@@ -494,7 +518,7 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.request(base + "/state", {"actor": "Codex", "text": "状态", "brief": "主持简报"})[0], 200)
         other = self.request("/api/rooms", {"title": "保留频道"})[1]
         self.assertEqual(self.request(base + "/delete", {"actor": "用户", "confirm_title": "错误"})[0], 400)
-        self.assertEqual(self.request(base + "/delete", {"actor": "Gemini", "confirm_title": self.room["title"]})[0], 400)
+        self.assertEqual(self.request(base + "/delete", {"actor": "Gemini", "confirm_title": self.room["title"]})[0], 403)
         self.assertEqual(self.request(base)[1]["message_count"], 3)
         self.assertEqual(self.request(base + "/delete", {"actor": "用户", "confirm_title": self.room["title"]})[0], 200)
         for suffix in ("", "/messages", f"/messages/{original['id']}", "/turns"):
@@ -571,7 +595,7 @@ class DiscussionTests(unittest.TestCase):
         self.request(base + "/state", {"actor": "Codex", "text": "旧客户端的新状态", "until": 0})
         self.assertEqual(self.request(base)[1]["host_brief"], brief)
         for change in ({"brief": "🙂" * 1601}, {"until": message["id"] + 100}, {"actor": "Gemini"}):
-            self.assertEqual(self.request(base + "/state", {**payload, **change})[0], 400)
+            self.assertEqual(self.request(base + "/state", {**payload, **change})[0], 403 if "actor" in change else 400)
         self.assertEqual(self.request(base)[1]["state_text"], "旧客户端的新状态")
         self.assertEqual(self.request(base)[1]["host_brief"], brief)
         self.assertNotIn(payload["brief"], self.request(f"/r/{self.room['id']}?mode=cli")[1])
@@ -867,7 +891,7 @@ class DiscussionTests(unittest.TestCase):
         turn = self.schedule()[1]["turn"]
         self.assertEqual(self.floor()["next_speaker"], turn["expert"])
         self.assertIsNone(self.floor()["holder"])
-        self.assertEqual(self.floor("take", "Qwen")[0], 409)
+        self.assertEqual(self.floor("take", "Qwen")[0], 403)
         answer = {"author": turn["expert"], "submitted_by": "用户", "kind": "opinion",
                   "text": "被点名者的真实回答", "submission_id": "floor-answer", "turn_id": turn["id"]}
         self.assertEqual(self.request(base + "/messages", answer)[0], 409)
@@ -923,10 +947,10 @@ class DiscussionTests(unittest.TestCase):
         base = f"/api/rooms/{self.room['id']}"
         self.request(base + "/topic", {"actor": "用户", "host": "Codex", "experts": {"Codex": "cli", "Gemini": "cli"}})
         turn = self.schedule("floor-local")[1]["turn"]
-        self.assertEqual(self.floor("take", "Gemini", "Codex")[0], 400)
+        self.assertEqual(self.floor("take", "Gemini", "Codex")[0], 403)
         self.assertEqual(self.floor("take", "Gemini")[0], 200)
         held = self.floor()
-        self.assertEqual(self.floor("return", "Gemini", "Codex")[0], 400)
+        self.assertEqual(self.floor("return", "Gemini", "Codex")[0], 403)
         self.assertEqual(self.request(base + f"/turns/{turn['id']}", {"actor": "Codex", "status": "cancelled"})[0], 409)
         self.assertEqual(self.floor(), held)
         self.assertEqual(self.floor("return", "Gemini")[0], 200)
@@ -942,9 +966,9 @@ class DiscussionTests(unittest.TestCase):
         held = self.floor()
         payload = {"author": "Gemini", "submitted_by": "Claude", "text": "错误代发",
                    "turn_id": turn["id"], "submission_id": "floor-bad-proxy"}
-        self.assertEqual(self.request(f"/api/rooms/{self.room['id']}/messages", payload)[0], 400)
+        self.assertEqual(self.request(f"/api/rooms/{self.room['id']}/messages", payload)[0], 403)
         self.assertEqual(self.floor(), held)
-        self.assertEqual(self.floor("take", "Qwen")[0], 409)
+        self.assertEqual(self.floor("take", "Qwen")[0], 403)
 
     def configure_host(self):
         """Set Codex as both host and CLI expert, leaving Gemini read-only."""
@@ -1017,7 +1041,7 @@ class DiscussionTests(unittest.TestCase):
         room = self.configure_host()
         self.assertEqual(room["host"], "Codex")
         self.assertEqual(room["experts"]["Codex"], "cli")
-        self.assertEqual(self.request(path, {"actor": "Gemini", "focus": "错误操作"})[0], 400)
+        self.assertEqual(self.request(path, {"actor": "Gemini", "focus": "错误操作"})[0], 403)
         updated = self.request(path, {"actor": "Codex", "background": "问题背景", "boundaries": "不更换产品", "focus": "成本分歧"})[1]
         self.assertEqual((updated["background"], updated["boundaries"], updated["focus"]), ("问题背景", "不更换产品", "成本分歧"))
         status, created = self.request("/api/rooms", {"title": "主持人创建", "host": "Gemini", "experts": {"Gemini": "cli"}})
@@ -1059,8 +1083,8 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(status, 201)
         message = result["message"]
         self.assertEqual((message["author"], message["submitted_by"], message["source"]), ("Gemini", "Codex", "host_proxy"))
-        self.assertEqual(self.request(path, {**forwarded, "submitted_by": "Claude", "submission_id": "bad-forward-001"})[0], 400)
-        self.assertEqual(self.request(path, {**forwarded, "submitted_by": "Gemini", "source": "cli", "submission_id": "bad-online-001"})[0], 400)
+        self.assertEqual(self.request(path, {**forwarded, "submitted_by": "Claude", "submission_id": "bad-forward-001"})[0], 403)
+        self.assertEqual(self.request(path, {**forwarded, "submitted_by": "Gemini", "source": "cli", "submission_id": "bad-online-001"})[0], 403)
         self.assertEqual(self.request(path, {**forwarded, "kind": "moderation", "submission_id": "bad-role-001"})[0], 400)
         original = self.request(f"/r/{self.room['id']}/messages/{message['id']}")[1]
         self.assertIn("提交者：Codex", original)
@@ -1280,7 +1304,8 @@ class LegacyStorageTests(unittest.TestCase):
             init_database(database, seed=False)
             with closing(sqlite3.connect(database)) as connection:
                 connection.row_factory = sqlite3.Row
-                room = create_room(connection, {"title": "并发阶段校验", "phase": "paused"})
+                room = create_room(connection, {"title": "并发阶段校验", "phase": "paused", "experts": {"Codex": "cli"},
+                    "members": [{"name": "Codex", "access": "manual", "token": uuid.uuid4().hex}]}, uuid.uuid4().hex)
                 connection.commit()
                 with self.assertRaisesRegex(sqlite3.IntegrityError, "topic_inactive"), connection:
                     message = connection.execute("INSERT INTO messages(room_id,author,text,source,submission_id,created_at) VALUES (?,'用户','迟到观点','user','late-opinion-001','test')", (room["id"],))

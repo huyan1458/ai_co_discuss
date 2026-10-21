@@ -474,7 +474,9 @@ async function antigravity_delivery(config, binding, task) {
   } catch (error) { throw not_sent(error); }
   const path = join(directory, `${task.id}.request.json`);
   if (existsSync(path)) throw new Error('Sidecar 请求已存在；必须核对回执，不自动重复发送');
-  atomic_json(path, { id: task.id, event_id: Number(task.id.replace('event-', '')), prompt: task.prompt, session_id: binding.session_id || '', access_path: task.access_path });
+  atomic_json(path, { id: task.id, mode: task.id.startsWith('free-') ? 'free' : 'brainstorm',
+    event_id: Number(task.id.replace(/^(event|free)-/, '')), prompt: task.prompt,
+    session_id: binding.session_id || '', access_path: task.access_path });
   return { session_id: binding.session_id || '', status: 'sidecar_pending' };
 }
 

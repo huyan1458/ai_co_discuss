@@ -33,6 +33,7 @@ class RuntimeTests(unittest.TestCase):
             self.thread.start()
             self.base = f"http://127.0.0.1:{self.server.server_port}"
         self.owner = uuid.uuid4().hex
+        self.member_tokens = {name: uuid.uuid4().hex for name in ("Codex", "Claude", "Gemini", "DeepSeek", "Qwen")}
         room = self.request("/api/rooms", {"title": "隔离运行验证", "host": "Codex", "phase": "initial",
             "experts": {"Codex": "cli", "Claude": "cli", "Gemini": "cli"}})[1]
         self.room = room["id"]
@@ -49,6 +50,14 @@ class RuntimeTests(unittest.TestCase):
     def request(self, path, payload=None, token=None):
         """Return JSON and status for successes and rejected writes alike."""
         headers = {"Content-Type": "application/json"}
+        if payload is not None and path == "/api/rooms":
+            payload = dict(payload)
+            experts = payload.get("experts", {name: "cli" if name == "Codex" else "online" for name in self.member_tokens})
+            payload.setdefault("members", [{"name": name, "token": self.member_tokens[name],
+                "access": "online" if mode == "online" else "runner" if payload.get("runtime_mode") == "automatic" else "manual"} for name, mode in experts.items()])
+        if token is None:
+            actor = (payload or {}).get("actor", (payload or {}).get("submitted_by", (payload or {}).get("author", "用户")))
+            token = self.owner if actor == "用户" or path == "/api/rooms" else self.member_tokens.get(actor, "")
         if token:
             headers["X-Discussion-Token"] = token
         request = Request(self.base + path, headers=headers,
@@ -66,6 +75,58 @@ class RuntimeTests(unittest.TestCase):
             "revision": 0, "deadline": int(time.time()) + 600 if deadline is None else deadline}, self.owner)
         self.assertEqual(status, 200, value)
         return value
+
+    def test_manual_room_requires_distinct_owner_and_member_capabilities(self):
+        """Manual delivery grants scoped member access, never implicit owner authority."""
+        message = {"author": "用户", "text": "要求", "submission_id": "manual-user-note"}
+        for token in ("", uuid.uuid4().hex, self.member_tokens["Codex"]):
+            self.assertEqual(self.request(self.path + "/messages", message, token)[0], 403)
+        self.assertEqual(self.request(self.path + "/messages", message, self.owner)[0], 201)
+        host = {"actor": "Codex", "text": "主持摘要"}
+        self.assertEqual(self.request(self.path + "/state", host, self.member_tokens["Codex"])[0], 200)
+        self.assertEqual(self.request(self.path + "/state", host, self.member_tokens["Claude"])[0], 403)
+        self.assertEqual(self.request(self.path + "/state", {**host, "actor": "Claude"}, self.member_tokens["Claude"])[0], 403)
+        self.assertEqual(self.request(self.path + "/topic", {"actor": "Codex", "experts": {"Codex": "cli"}}, self.member_tokens["Codex"])[0], 403)
+        self.assertEqual(self.request(self.path + "/runtime", {"revision": 0, "mode": "automatic"}, self.member_tokens["Codex"])[0], 403)
+        own = {"author": "Codex", "source": "cli", "kind": "moderation", "text": "主持原文", "submission_id": "manual-host-note"}
+        self.assertEqual(self.request(self.path + "/messages", own, self.owner)[0], 403)
+        self.assertEqual(self.request(self.path + "/messages", own, self.member_tokens["Codex"])[0], 201)
+        self.assertEqual(self.request(self.path + "/topic", {"actor": "用户", "experts": {"Codex": "cli"}}, self.owner)[0], 200)
+        self.assertEqual(self.request(self.path + "/messages", {**own, "author": "Claude", "submission_id": "removed-member"}, self.member_tokens["Claude"])[0], 403)
+        public = json.dumps([self.request(self.path, token="")[1], self.request(self.path + "/backup", token="")[1]])
+        for secret in (self.owner, *self.member_tokens.values()):
+            self.assertNotIn(secret, public)
+        self.assertNotIn("token_hash", public)
+        self.assertNotIn("control_hash", public)
+
+    def test_manual_online_members_need_an_authenticated_proxy(self):
+        """Online identities cannot write, while the owner can forward their real answer."""
+        token = uuid.uuid4().hex
+        payload = {"actor": "用户", "experts": {"Codex": "cli", "Qwen": "online"},
+                   "members": [{"name": "Qwen", "access": "online", "token": token}]}
+        self.assertEqual(self.request(self.path + "/topic", payload, self.owner)[0], 200)
+        turn = self.request(self.path + "/turns", {"actor": "用户", "expert": "Qwen", "question": "问题", "submission_id": "manual-online-turn"})[1]["turn"]
+        floor = self.request(self.path + "/floor")[1]
+        self.assertEqual(self.request(self.path + "/floor", {"actor": "用户", "speaker": "Qwen", "action": "take", "revision": floor["revision"]})[0], 200)
+        answer = {"author": "Qwen", "submitted_by": "Qwen", "source": "cli", "text": "原文", "turn_id": turn["id"], "submission_id": "online-answer"}
+        self.assertEqual(self.request(self.path + "/messages", answer, token)[0], 403)
+        answer.update(submitted_by="用户", source="proxy")
+        status, saved = self.request(self.path + "/messages", answer, self.owner)
+        self.assertEqual(status, 201, saved)
+        self.assertEqual(saved["message"]["source"], "proxy")
+
+    def test_member_credential_never_replaces_automatic_execution(self):
+        """A persistent identity only writes manually; automatic work needs its live lease."""
+        run = self.start()
+        payload = {"actor": "Codex", "text": "主持摘要"}
+        self.assertEqual(self.request(self.path + "/state", payload, self.member_tokens["Codex"])[0], 403)
+        execution = self.enter(self.events()[0])
+        self.assertEqual(self.request(self.path + "/state", payload, execution)[0], 200)
+        paused = self.request(self.path + "/runtime", {"action": "pause", "revision": run["revision"]}, self.owner)[1]
+        self.assertEqual(self.request(self.path + "/state", payload, execution)[0], 403)
+        self.assertEqual(self.request(self.path + "/runtime", {"mode": "manual", "revision": paused["revision"]}, self.owner)[0], 200)
+        self.assertEqual(self.request(self.path + "/state", payload, execution)[0], 403)
+        self.assertEqual(self.request(self.path + "/state", payload, self.member_tokens["Codex"])[0], 200)
 
     def test_browser_updates_follow_execution_changes_not_lease_heartbeats(self):
         """Entering execution notifies readers while a renewal keeps the stream quiet."""
@@ -107,19 +168,21 @@ class RuntimeTests(unittest.TestCase):
         status, result = self.request(self.path + "/turns", {"actor": "用户", "expert": "Codex",
             "question": "测试观点", "submission_id": "limited-turn"}, self.owner)
         self.assertEqual(status, 201, result)
+        runtime = self.request(self.path + "/runtime")[1]
+        token = self.enter(self.events()[-1]) if runtime["mode"] == "automatic" else self.member_tokens["Codex"]
         floor = self.request(self.path + "/floor")[1]
         self.assertEqual(self.request(self.path + "/floor", {"actor": "Codex", "action": "take",
-            "revision": floor["revision"]}, self.owner)[0], 200)
+            "revision": floor["revision"]}, token)[0], 200)
         answer = {"author": "Codex", "kind": "opinion", "source": "cli", "text": "测试原文",
                   "submission_id": "limited-answer", "turn_id": result["turn"]["id"]}
-        self.assertEqual(self.request(self.path + "/messages", answer, self.owner)[0], 201)
+        self.assertEqual(self.request(self.path + "/messages", answer, token)[0], 201)
         return answer
 
     def test_round_limit_blocks_new_work_but_preserves_exact_retry(self):
         """A completed round prevents further work while retries stay idempotent."""
         self.limited_room(max_rounds=1)
         answer = self.complete_round()
-        self.assertEqual(self.request(self.path + "/messages", answer, self.owner)[0], 200)
+        self.assertEqual(self.request(self.path + "/messages", answer, self.member_tokens["Codex"])[0], 200)
         self.assertEqual(self.request(self.path)[1]["limits"]["reason"], "round_limit")
         status, _ = self.request(self.path + "/turns", {"actor": "用户", "expert": "Codex",
             "question": "不得新增", "submission_id": "limited-next"})
@@ -228,8 +291,7 @@ class RuntimeTests(unittest.TestCase):
         message = saved["message"]
         self.assertGreaterEqual(message["elapsed_seconds"], 0)
         status, retry = self.request(self.path + "/messages", answer, self.owner)
-        self.assertEqual(status, 200, retry)
-        self.assertEqual(retry["message"], message)
+        self.assertEqual(status, 403, retry)
         self.assertEqual(self.request(self.path + f"/messages/{message['id']}")[1], message)
         self.assertEqual(self.request(self.path + "/messages")[1]["messages"][-1], message)
         timings = self.request(self.path + "/backup")[1]["tables"]["message_timings"]
@@ -358,8 +420,8 @@ class RuntimeTests(unittest.TestCase):
         turn = created["turn"]
         self.assertEqual(self.events()[0]["status"], "completed")
         self.assertEqual(len(self.events()), 2)
-        # Exact replay with owner capability must not generate another event.
-        self.assertEqual(self.request(self.path + "/turns", payload, self.owner)[0], 200)
+        # The owner cannot impersonate a completed host execution, even on replay.
+        self.assertEqual(self.request(self.path + "/turns", payload, self.owner)[0], 403)
         token = self.enter(self.events()[-1])
         floor = self.request(self.path + "/floor")[1]
         self.assertEqual(self.request(self.path + "/floor", {"actor": "Claude", "action": "take", "revision": floor["revision"]}, token)[0], 200)
@@ -367,7 +429,7 @@ class RuntimeTests(unittest.TestCase):
             "turn_id": turn["id"], "text": "实际回答", "summary": "摘要", "submission_id": "runtime-answer"}
         status, saved = self.request(self.path + "/messages", answer, token)
         self.assertEqual(status, 201, saved)
-        self.assertEqual(self.request(self.path + "/messages", answer, self.owner)[0], 200)
+        self.assertEqual(self.request(self.path + "/messages", answer, self.owner)[0], 403)
         events = self.events()
         self.assertEqual(len(events), 3)
         self.assertEqual(events[1]["status"], "completed")
@@ -445,14 +507,15 @@ class RuntimeTests(unittest.TestCase):
         turns = self.request(self.path + "/turns")[1]["turns"]
         self.assertEqual([turn["status"] for turn in turns], ["cancelled", "skipped", "pending"])
 
-    def test_user_writes_need_no_credential_but_ai_identities_need_execution(self):
-        """The web user acts freely; AI identities and the runner inbox still need their tokens."""
+    def test_user_writes_need_owner_credential_and_ai_identities_need_execution(self):
+        """Declared names alone never authorize a user or AI write."""
         self.start()
-        self.assertEqual(self.request(self.path + "/events")[0], 403)
+        self.assertEqual(self.request(self.path + "/events", token="")[0], 403)
         self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "无执行"})[0], 403)
         token = self.enter(self.events()[0])
         self.assertEqual(self.request(self.path + "/state", {"actor": "Claude", "text": "冒充"}, token)[0], 403)
         payload = {"author": "用户", "text": "用户补充", "submission_id": "user-note"}
+        self.assertEqual(self.request(self.path + "/messages", payload, "")[0], 403)
         self.assertEqual(self.request(self.path + "/messages", payload)[0], 201)
 
     def test_pause_revokes_late_writes_and_requires_explicit_resume(self):
@@ -518,7 +581,7 @@ class RuntimeTests(unittest.TestCase):
     def test_automatic_creation_is_protected_atomically_and_idempotent(self):
         """Creating an automatic room never exposes an unprotected write window."""
         payload = {"title": "自动创建验证", "runtime_mode": "automatic", "submission_id": uuid.uuid4().hex}
-        self.assertEqual(self.request("/api/rooms", payload)[0], 400)
+        self.assertEqual(self.request("/api/rooms", payload, "")[0], 400)
         status, room = self.request("/api/rooms", payload, self.owner)
         self.assertEqual(status, 201, room)
         self.assertEqual(room["runtime"]["mode"], "automatic")
@@ -574,12 +637,13 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.request(self.path)[1]["runtime"]["status"], "stopped")
         self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "迟到"}, token)[0], 403)
 
-    def test_web_user_controls_running_room_without_owner_key(self):
-        """Pause, directory edits, archive and delete work from any browser; stale AI tokens stay rejected."""
+    def test_web_user_controls_require_owner_key(self):
+        """Only the owner can control a room; stale AI tokens stay rejected."""
         run = self.start()
         token = self.enter(self.events()[-1])
-        for key in (None, uuid.uuid4().hex):
-            self.assertEqual(self.request(self.path + "/folder", {"actor": "用户", "folder_id": None}, key)[0], 200)
+        for key in ("", uuid.uuid4().hex, self.member_tokens["Codex"]):
+            self.assertEqual(self.request(self.path + "/folder", {"actor": "用户", "folder_id": None}, key)[0], 403)
+            self.assertEqual(self.request(self.path + "/runtime", {"action": "pause", "revision": run["revision"]}, key)[0], 403)
         status, paused = self.request(self.path + "/runtime", {"action": "pause", "revision": run["revision"]})
         self.assertEqual(status, 200, paused)
         self.assertEqual(paused["status"], "paused")

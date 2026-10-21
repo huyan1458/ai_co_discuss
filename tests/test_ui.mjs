@@ -232,8 +232,10 @@ function expert_card_fixture() {
     advance: (position) => listeners.forEach(({ event, callback }) => event === "change" && callback(position)),
     complete: () => listeners.forEach(({ event, callback }) => event === "animationComplete" && callback()),
     stop: () => calls.push(["stop"]) };
-  const bridge = { launch_model_hints: { codex_cli: { example: "model" } }, launch_clients: { Codex: true },
-    launch_effort_levels: { codex_cli: ["low", "high"] },
+  const reads = [];
+  const bridge = { launch_clients: { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }] },
+    launch_model_state: (name, launch) => ({ supported: launch.profiles[name]?.adapter === "codex_cli", efforts: ["low", "high"] }),
+    load_launch_models: name => reads.push(name),
     write_launch: (name, field, value) => { view.value.launch.profiles[name][field] = value; } };
   const context = vm.createContext({ computed, ref, nextTick, defineProps: () => props, defineEmits: () => () => {},
     inject: () => ({ view, bridge }), useSpring: () => angle, useReducedMotion: () => reduced, document,
@@ -246,7 +248,7 @@ function expert_card_fixture() {
   for (const name of ["card", "front_button", "back_button"]) {
     refs[name].value = { focus() { document.activeElement = refs[name].value; } };
   }
-  return { context, props, view, reduced, angle, refs, document, calls, listeners,
+  return { context, props, view, reduced, angle, refs, document, calls, listeners, reads,
     cleanup: () => cleanups.forEach((callback) => callback()) };
 }
 
@@ -285,7 +287,7 @@ test("expert card exposes one face and hands focus over only after crossing the 
   assert.equal(fixture.listeners.size, 0);
 });
 
-test("expert card reduced motion and participation changes restore an accessible face without clearing settings", async () => {
+test("expert card reduced motion keeps manual and online faces accessible without exposing launch overrides", async () => {
   const fixture = expert_card_fixture();
   fixture.reduced.value = true;
   fixture.context.flip(true);
@@ -294,22 +296,29 @@ test("expert card reduced motion and participation changes restore an accessible
   assert.equal(fixture.refs.visible_back.value, true);
   fixture.props.automatic = false;
   await nextTick();
-  assert.equal(fixture.refs.back.value, false);
-  assert.equal(fixture.refs.visible_back.value, false);
-  assert.deepEqual(fixture.calls.at(-1), ["jump", 0]);
+  assert.equal(fixture.refs.back.value, true);
+  assert.equal(fixture.refs.visible_back.value, true);
+  assert.equal(vm.runInContext("configurable.value", fixture.context), false);
+  assert.match(vm.runInContext("configuration_note.value", fixture.context), /已有 App 或 CLI/);
+  fixture.props.mode = "online";
+  assert.match(vm.runInContext("configuration_note.value", fixture.context), /原网页/);
+  assert.equal(vm.runInContext("entry_label.value", fixture.context), "网页");
+  fixture.props.mode = "cli";
+  fixture.props.automatic = true;
+  fixture.view.value.launch.profiles.Codex.adapter = "codex";
+  assert.equal(vm.runInContext("configurable.value", fixture.context), false);
+  assert.match(vm.runInContext("configuration_note.value", fixture.context), /App 原聊天/);
   assert.equal(fixture.view.value.launch.profiles.Codex.model, "saved-model");
   assert.equal(fixture.view.value.launch.profiles.Codex.effort, "high");
   fixture.cleanup();
 });
 
-test("model selection returns to effort first and reset clears only the current expert", async () => {
+test("card defaults reset only the current instance and Escape returns directly to its front", async () => {
   const fixture = expert_card_fixture(), { context, view } = fixture;
   view.value.launch.profiles.Claude = { model: "other-model", effort: "low" };
   context.flip(true);
-  vm.runInContext("model_open.value = true", context);
   context.escape({ stopPropagation() {}, preventDefault() {} });
-  assert.equal(fixture.refs.back.value, true);
-  assert.equal(vm.runInContext("model_open.value", context), false);
+  assert.equal(fixture.refs.back.value, false);
   context.reset_model();
   assert.equal(view.value.launch.profiles.Codex.model, "");
   assert.equal(view.value.launch.profiles.Codex.effort, "");
@@ -317,6 +326,96 @@ test("model selection returns to effort first and reset clears only the current 
   assert.equal(view.value.launch.profiles.Claude.effort, "low");
   await nextTick();
   fixture.cleanup();
+});
+
+test("cards read model catalogs only for automatic CLI and pure web participants cannot flip", async () => {
+  const fixture = expert_card_fixture();
+  fixture.view.value.launch.available = true;
+  fixture.props.automatic = false;
+  fixture.context.flip(true);
+  await nextTick();
+  assert.deepEqual(fixture.reads, []);
+  fixture.props.automatic = true;
+  await nextTick();
+  assert.deepEqual(fixture.reads, ["Codex"]);
+  fixture.view.value.launch.profiles.Codex.adapter = "codex";
+  await nextTick();
+  assert.equal(fixture.reads.length, 1);
+  fixture.context.flip(false);
+  fixture.props.name = "DeepSeek";
+  fixture.props.mode = "online";
+  await nextTick();
+  fixture.context.flip(true);
+  assert.equal(fixture.refs.back.value, false);
+  assert.equal(vm.runInContext("can_flip.value", fixture.context), false);
+  assert.equal(vm.runInContext("configurable.value", fixture.context), false);
+  fixture.cleanup();
+});
+
+/** Use actual create-form handlers with isolated drafts; no AI or website is started. */
+function create_form_fixture() {
+  const view = ref({ fields: { "new-room-kind": "free", "new-room-mode": "manual", "new-room-host": "用户" },
+    experts: { "new-expert-modes": {} }, launch: { profiles: {}, available: false, create: false } });
+  const events = [], cleanups = [];
+  const bridge = { identities: { 用户: {}, Codex: {}, Claude: {}, DeepSeek: {} }, launch_clients: { Codex: [{}], Claude: [{}] },
+    platform_of: name => name.split("-")[0], display_name: name => name,
+    write_field: (id, value) => { events.push([id, value]); view.value.fields[id] = value; },
+    write_expert: (id, name, mode) => { if (mode) view.value.experts[id][name] = mode; else delete view.value.experts[id][name]; },
+    add_instance: (id, name, mode) => {
+      let number = 2;
+      while (view.value.experts[id][`${name}-${number}`]) number++;
+      view.value.experts[id][`${name}-${number}`] = mode;
+    } };
+  const context = vm.createContext({ computed, ref, nextTick, defineProps: () => ({}), defineEmits: () => () => {},
+    inject: () => ({ view, bridge, pending: ref("") }), onMounted: callback => callback(),
+    watch: (...args) => { const stop = watch(...args); cleanups.push(stop); return stop; } });
+  const component = readFileSync(new URL("../frontend/CreateDiscussion.vue", import.meta.url), "utf8");
+  vm.runInContext(component.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .*;$/gm, ""), context);
+  return { context, view, events, cleanup: () => cleanups.forEach(stop => stop()) };
+}
+
+test("create form shares a role library, keeps independent instances and defaults free hosting to the user", async () => {
+  const f = create_form_fixture(), { context, view } = f;
+  context.add_expert("Codex");
+  context.add_expert("Codex");
+  context.add_expert("DeepSeek");
+  assert.deepEqual(Object.keys(view.value.experts["new-expert-modes"]), ["Codex", "Codex-2", "DeepSeek"]);
+  assert.equal(view.value.fields["new-room-host"], "用户");
+  assert.equal(vm.runInContext("free_ready.value", context), true, "manual free rooms need no launcher");
+  view.value.fields["new-room-host"] = "Codex-2";
+  context.remove_expert("Codex");
+  assert.equal(view.value.fields["new-room-host"], "Codex-2");
+  context.set_expert_mode("Codex-2", "online");
+  assert.equal(view.value.fields["new-room-host"], "用户", "an online instance cannot remain AI host");
+  context.choose_kind("brainstorm");
+  assert.equal(view.value.fields["new-room-mode"], "manual", "room use does not change delivery");
+  assert.equal(view.value.fields["new-room-host"], "");
+  context.set_expert_mode("Codex-2", "cli");
+  assert.equal(view.value.fields["new-room-host"], "Codex-2");
+  context.choose_mode("automatic");
+  assert.equal(view.value.fields["new-room-kind"], "brainstorm");
+  await nextTick();
+  f.cleanup();
+});
+
+test("free member delivery never offers writable credentials to online or unavailable identities", async () => {
+  const view = ref({ access: { can_manage: true, members: [{ name: "Codex", access: "manual", available: false }] }, launch: { available: false } });
+  const calls = [];
+  const context = vm.createContext({ view, free_member_busy: () => false, act: (...args) => calls.push(args) });
+  const component = readFileSync(new URL("../frontend/ChannelWorkspace.vue", import.meta.url), "utf8");
+  vm.runInContext(component.match(/function free_member_menu\(member\) \{[\s\S]*?\n\}/)[0], context);
+  const manual = { name: "Codex", access: "manual", status: "away" };
+  let menu = context.free_member_menu(manual).flat();
+  assert.equal(menu.find(item => item.label === "下载私有配置").disabled, true);
+  assert.equal(menu.find(item => item.label === "请回").disabled, false, "manual rejoin needs no launcher");
+  view.value.access.members[0].available = true;
+  menu = context.free_member_menu(manual).flat();
+  await menu.find(item => item.label === "下载私有配置").onSelect();
+  assert.deepEqual(calls, [["download_member_access", "Codex"]]);
+  const online = context.free_member_menu({ ...manual, access: "online" }).flat();
+  assert.equal(online.some(item => item.label === "下载私有配置"), false);
+  view.value.access.can_manage = false;
+  assert.equal(context.free_member_menu(manual)[0][0].disabled, true);
 });
 
 /** Drive the real slider with a deterministic clock and no live client. */
@@ -836,6 +935,7 @@ test("recent conversation order is local, reversible and preserves manual placem
 test("retrying a lost mode response preserves the owner credential and reconciles runtime", async () => {
   const fixture = theme_fixture();
   const key = 'discuss-access:room-a';
+  fixture.storage.set(key, 'existing-owner');
   fixture.context.test_state.room = { id: 'room-a', runtime: { revision: 0, protected: false } };
   let runtime = { revision: 0, protected: false, mode: 'manual', status: 'ready' };
   let accepted_token;
@@ -862,6 +962,7 @@ test("retrying a lost mode response preserves the owner credential and reconcile
 
 test("mode selection retains its target when the user changes rooms during refresh", async () => {
   const fixture = theme_fixture();
+  fixture.storage.set('discuss-access:room-a', 'credential-a');
   fixture.context.test_state.room = { id: 'room-a' };
   const paths = [];
   Object.assign(fixture.context, {
@@ -920,6 +1021,7 @@ test("folder creation target is submitted atomically and changes the retry ident
   const fixture = theme_fixture();
   const requests = [];
   for (const id of ['title', 'goal', 'host', 'user_request', 'background', 'boundaries', 'mode']) fixture.nodes.set(`new-room-${id}`, { value: id === 'mode' ? 'manual' : '内容' });
+  fixture.nodes.set('new-room-kind', { value: 'brainstorm' });
   fixture.nodes.set('room-dialog', { close() {} });
   fixture.nodes.set('room-form', { reset() {} });
   fixture.root.dataset.theme = 'channel';
@@ -928,7 +1030,7 @@ test("folder creation target is submitted atomically and changes the retry ident
     crypto: { randomUUID: () => `token-${++sequence}` }, new_submission_id: () => `submission-${++sequence}`,
     read_expert_inputs: () => ({}), read_limits: () => ({}), default_experts: () => ({}), render_expert_inputs() {},
     select_room: async () => {}, select_tab() {}, show_toast() {}, render_rooms() {}, render_room() {},
-    request_json: async (path, payload) => { requests.push(payload); throw new Error('retry'); },
+    request_json: async (path, payload) => { requests.push(payload); throw Object.assign(new Error('retry'), { preflight: true }); },
   });
   const submit = folder => fixture.context.submit_room({ preventDefault() {} }, folder);
   await assert.rejects(submit('one'), /retry/);
@@ -952,6 +1054,152 @@ test("light channel survives reload and selects the Vue renderer without dark mo
   assert.equal(fixture.classes.has('dark'), false);
   assert.equal(fixture.nodes.get('modern-style').disabled, false);
   assert.equal(fixture.loaded.length, 1);
+});
+
+test("manual creation retains distinct member credentials across reload and a lost receipt", async () => {
+  const f = theme_fixture(), requests = [];
+  const payload = { title: "手动协作", mode: "free", host: "用户", experts: { Codex: "cli", "Codex-2": "cli", DeepSeek: "online" } };
+  f.nodes.set('new-room-mode', { value: 'manual' });
+  f.nodes.set('room-dialog', { close() {} });
+  Object.assign(f.context, { room_creation_payload: () => payload, render_rooms() {}, render_room() {}, show_toast() {},
+    request_json: async (_path, input, token) => { requests.push({ input, token }); throw new Error('lost manual receipt'); } });
+  await assert.rejects(f.context.submit_room({ preventDefault() {} }), /lost manual receipt/);
+  const record = f.context.stored_launches()[0];
+  assert.equal(record.direct, true);
+  assert.equal(record.input.room.runtime_mode, undefined, "free room creation cannot send automatic discussion runtime");
+  assert.deepEqual(Array.from(record.input.room.members, member => member.access), ['manual', 'manual', 'online']);
+  const tokens = record.input.room.members.map(member => member.token);
+  assert.equal(new Set([record.input.token, ...tokens]).size, 4);
+  assert.equal(JSON.stringify(f.context.test_state.launch).includes(tokens[0]), false);
+  assert.equal(JSON.stringify(f.context.test_state.creating_room).includes(tokens[0]), false);
+  const reloaded = theme_fixture(null, f.storage);
+  let recovered;
+  Object.assign(reloaded.context, { select_room: async () => {}, render_launch_settings() {},
+    request_json: async (_path, input, token) => { recovered = { input, token }; return { id: 'manual-room', members: input.members.map((member, id) => ({ name: member.name, id })) }; } });
+  await reloaded.context.resume_launch(record.id);
+  assert.equal(JSON.stringify(recovered), JSON.stringify(requests[0]));
+  assert.equal(reloaded.storage.get('discuss-access:manual-room'), record.input.token);
+  const saved = reloaded.context.member_credentials('manual-room');
+  assert.equal(saved['Codex-2'].token, tokens[1]);
+  assert.equal(reloaded.context.stored_launches().length, 0);
+});
+
+test("member downloads contain only their credential and copied instructions contain no secrets", async () => {
+  const f = theme_fixture();
+  const room = { id: 'one', host: 'Codex', members: [
+    { id: 1, name: 'Codex', access: 'manual', status: 'active' },
+    { id: 2, name: 'Codex-2', access: 'manual', status: 'active' },
+    { id: 3, name: 'DeepSeek', access: 'online', status: 'active' }] };
+  f.context.test_state.room = room;
+  f.context.save_room_credentials(room, 'owner-secret', room.members.map(member => ({ ...member, token: `${member.name}-secret` })));
+  let downloaded, copied;
+  Object.assign(f.context, { location: new URL('https://discussion.example'),
+    download_private_json: value => { downloaded = value; }, copy_text: async value => { copied = value; }, workspace_instruction: () => '' });
+  assert.equal(JSON.stringify(f.context.access_snapshot()).includes('secret'), false);
+  f.context.download_member_access('Codex-2');
+  assert.deepEqual(JSON.parse(JSON.stringify(downloaded)), { site: 'https://discussion.example', room: 'one', token: 'Codex-2-secret' });
+  assert.throws(() => f.context.download_member_access('DeepSeek'), /没有此成员/);
+  await f.context.copy_member_join('Codex');
+  assert.match(copied, /discuss-host/);
+  assert.match(copied, /--as Codex --access-file/);
+  assert.doesNotMatch(copied, /owner-secret|Codex-secret|Codex-2-secret|DeepSeek-secret/);
+  room.members[0].id = 99;
+  assert.equal(f.context.access_snapshot().members[0].available, false, 'replaced identities cannot download an old private file');
+  f.storage.delete('discuss-access:one');
+  assert.throws(() => f.context.download_member_access('Codex-2'), /没有此成员/);
+});
+
+test("member instructions separate manual credentials, runner executions and online relay", async () => {
+  const f = theme_fixture(), room = { id: "one", mode: "free", host: "Codex", runtime: { protected: false }, members: [
+    { id: 1, name: "Codex", access: "manual", status: "active" }, { id: 2, name: "DeepSeek", access: "online", status: "active" }] };
+  f.context.test_state.room = room;
+  f.context.save_room_credentials(room, "owner-secret", [{ name: "Codex", token: "member-secret", access: "manual" }]);
+  let copied;
+  Object.assign(f.context, { location: new URL("https://discussion.example"), copy_text: async value => { copied = value; }, workspace_instruction: () => "" });
+  await f.context.copy_member_join("Codex");
+  assert.match(copied, /discuss-participant 和 discuss-host/);
+  assert.match(copied, /--as Codex --access-file/);
+  assert.match(copied, /人工或软件原生定时触发/);
+  room.members[0].access = "runner";
+  await f.context.copy_member_join("Codex");
+  assert.match(copied, /task 中的 access_file 和 execution/);
+  assert.match(copied, /有效 execution_id/);
+  assert.match(copied, /持久成员私有文件不能替代自动执行凭据/);
+  assert.doesNotMatch(copied, /--access-file|人工或软件原生定时触发|模型与思考强度在原软件/);
+  room.mode = "brainstorm";
+  await f.context.copy_member_join("Codex");
+  assert.match(copied, /只处理本次有效执行/);
+  assert.doesNotMatch(copied, /execution_id/);
+  await f.context.copy_member_join("DeepSeek");
+  assert.match(copied, /由用户或授权主持人代发/);
+  assert.doesNotMatch(copied, /定时|自行提交|access_file|私有文件|owner-secret|member-secret/);
+});
+
+test("legacy copy actions delegate to member instructions without selecting local identities in the composer", async () => {
+  const f = theme_fixture(), room = { id: "one", host: "Codex", members: [
+    { id: 1, name: "Codex", access: "manual", status: "active" }, { id: 2, name: "DeepSeek", access: "online", status: "active" }] };
+  f.context.test_state.room = room;
+  f.context.save_room_credentials(room, "owner", []);
+  f.nodes.set("author-select", { value: "用户" });
+  const copied = [], tabs = [];
+  Object.assign(f.context, { copy_member_join: async name => copied.push(name), select_tab: tab => tabs.push(tab), show_toast() {} });
+  await f.context.copy_background();
+  await f.context.copy_context("online");
+  assert.deepEqual(copied, ["Codex", "DeepSeek"]);
+  room.members.push({ id: 3, name: "Claude", access: "manual", status: "active" });
+  await f.context.copy_context("cli");
+  assert.deepEqual(tabs, ["access"]);
+  assert.equal(copied.length, 2);
+  const actions = {};
+  f.context.element = id => ({ addEventListener: (_event, action) => { actions[id] = action; } });
+  f.context.bind_host_controls();
+  await actions["copy-host"]();
+  assert.equal(copied.at(-1), "Codex");
+});
+
+test("manual invitations and rejoin reuse the original token after ambiguous responses", async () => {
+  const f = theme_fixture(), inputs = [];
+  const members = [{ id: 1, name: 'Codex', access: 'manual', status: 'active' }];
+  f.context.test_state.room = { id: 'one', mode: 'free', free: { members } };
+  f.storage.set('discuss-access:one', 'owner-secret');
+  let lose = true;
+  Object.assign(f.context, { refresh_room: async () => {},
+    local_launch_request: async () => { throw new Error('manual must not invoke a launcher'); },
+    request_json: async (path, payload) => {
+      inputs.push({ path, payload: { ...payload } });
+      if (path.endsWith('/members') && !members.some(item => item.name === payload.name)) members.push({ id: 2, ...payload, status: 'active' });
+      if (lose) throw new Error('receipt lost');
+      return { members };
+    } });
+  await f.context.invite_member({ name: 'Codex', access: 'manual' });
+  lose = false;
+  await f.context.invite_member({ name: 'Codex', access: 'manual' });
+  assert.equal(inputs[0].payload.name, 'Codex-2');
+  assert.deepEqual(inputs[1], inputs[0]);
+  assert.equal(f.context.member_credentials('one')['Codex-2'].token, inputs[0].payload.token);
+  lose = true;
+  await f.context.change_member({ member_id: 2, name: 'Codex-2', action: 'rejoin' });
+  lose = false;
+  await f.context.change_member({ member_id: 2, name: 'Codex-2', action: 'rejoin' });
+  assert.deepEqual(inputs[3], inputs[2]);
+  assert.notEqual(inputs[2].payload.token, inputs[0].payload.token);
+  assert.equal(f.context.member_credentials('one')['Codex-2'].token, inputs[2].payload.token);
+});
+
+test("topic retry retains a pending credential after live refresh has already revealed the new member", () => {
+  const f = theme_fixture();
+  const room = { id: 'topic', runtime: { mode: 'manual' }, members: [{ name: 'Codex', status: 'active', access: 'manual' }] };
+  const experts = { Codex: 'cli', 'Codex-2': 'cli' };
+  const original = f.context.topic_member_requests(room, experts);
+  assert.equal(original.length, 1);
+  room.members.push({ name: 'Codex-2', status: 'active', access: 'manual' });
+  const reloaded = theme_fixture(null, f.storage);
+  const retry = reloaded.context.topic_member_requests(room, experts);
+  assert.equal(retry.length, 1);
+  assert.equal(retry[0].member.token, original[0].member.token);
+  assert.equal(retry[0].member.name, 'Codex-2');
+  f.storage.delete(original[0].key);
+  assert.equal(f.context.topic_member_requests(room, experts).length, 0);
 });
 
 for (const recovery of [false, true]) test(`local defaults exclude session bindings and launch drafts are consumed after ${recovery ? 'saved-request recovery' : 'successful creation'}`, async () => {
@@ -1001,6 +1249,7 @@ for (const recovery of [false, true]) test(`local defaults exclude session bindi
 
 test("an existing-room launch keeps its target and preserves newer configuration edits", async () => {
   const fixture = theme_fixture();
+  fixture.storage.set('discuss-access:room-a', 'owner-token');
   const state = fixture.context.test_state;
   state.room = { id: 'room-a', runtime: { protected: false } };
   state.launch.profiles = { Codex: { session_id: 'old-session' } };
@@ -1042,6 +1291,7 @@ test("automatic creation uses configured local clients and preserves independent
   const state = f.context.test_state;
   const mode = { value: 'manual' };
   const host = { value: '用户' };
+  f.nodes.set('new-room-kind', { value: 'brainstorm' });
   f.nodes.set('new-room-mode', mode); f.nodes.set('new-room-host', host);
   let experts = { Codex: 'cli', Claude: 'online', DeepSeek: 'online' };
   f.context.read_expert_inputs = () => experts;
@@ -1136,6 +1386,73 @@ test("room path correction keeps defaults separate, reports acknowledgement and 
   f.context.local_launch_request = async () => { state.room = { id: 'two' }; return { room_id: 'one' }; };
   await f.context.load_room_configuration();
   assert.equal(state.launch.repair.participants.Codex.executable, 'fixed-path');
+});
+
+test("model discovery shares executable catalogs without leaking a late response into another software draft", async () => {
+  const f = theme_fixture(), state = f.context.test_state, requests = [];
+  Object.assign(f.context, { render_launch_settings() {} });
+  Object.assign(state.launch, { available: true, profiles: { Codex: { adapter: "codex_cli", executable: "first.exe" }, "Codex-2": { adapter: "codex_cli", executable: "first.exe" } } });
+  let release;
+  f.context.local_launch_request = (action, input) => { requests.push({ action, input }); return new Promise(resolve => { release = resolve; }); };
+  const pending = f.context.load_launch_models("Codex");
+  await f.context.load_launch_models("Codex-2");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].action, "models");
+  assert.deepEqual(JSON.parse(JSON.stringify(requests[0].input)), { adapter: "codex_cli", executable: "first.exe" });
+  state.launch.profiles.Codex.adapter = "claude";
+  release({ adapter: "codex_cli", models: [{ id: "codex-model", label: "Codex Model", efforts: ["high"] }], source: "codex-app-server" });
+  await pending;
+  assert.equal(f.context.launch_model_state("Codex").items.length, 1);
+  assert.equal(f.context.launch_model_state("Codex-2").items[1].value, "codex-model");
+  state.launch.profiles["Codex-2"].executable = "second.exe";
+  assert.equal(f.context.launch_model_state("Codex-2").items.length, 1);
+  f.context.local_launch_request = async () => ({ adapter: "codex_cli", models: [{ id: "second-model" }] });
+  await f.context.load_launch_models("Codex-2");
+  assert.equal(f.context.launch_model_state("Codex-2").items[1].value, "second-model");
+});
+
+test("model discovery failure keeps only software defaults and saved values until an explicit retry succeeds", async () => {
+  const f = theme_fixture(), state = f.context.test_state;
+  f.context.render_launch_settings = () => {};
+  Object.assign(state.launch, { available: true, profiles: { Claude: { adapter: "claude", model: "previous-model" } } });
+  let count = 0;
+  f.context.local_launch_request = async () => { count++; throw new Error("软件无法读取模型目录"); };
+  await f.context.load_launch_models("Claude");
+  await f.context.load_launch_models("Claude");
+  const failed = f.context.launch_model_state("Claude");
+  assert.equal(count, 1);
+  assert.match(failed.error, /无法读取/);
+  assert.equal(failed.items.length, 2);
+  assert.equal(failed.items[0].value, "__default__");
+  assert.equal(failed.items[1].value, "previous-model");
+  assert.equal(failed.items[1].disabled, true);
+  f.context.local_launch_request = async () => ({ adapter: "claude", models: [{ id: "available-model", label: "Available Model", efforts: [] }], source: "claude-cli" });
+  await f.context.load_launch_models("Claude", true);
+  assert.equal(f.context.launch_model_state("Claude").error, "");
+  assert.equal(f.context.launch_model_state("Claude").items[1].value, "available-model");
+  assert.equal(state.launch.profiles.Claude.model, "previous-model");
+});
+
+test("choosing a discovered model applies its effort choices only to the selected instance", async () => {
+  const f = theme_fixture(), state = f.context.test_state;
+  Object.assign(f.context, { render_launch_settings() {}, render_launch_summaries() {} });
+  Object.assign(state.launch, { available: true, profiles: { Codex: { adapter: "codex_cli", effort: "ultra" }, "Codex-2": { adapter: "codex_cli", model: "other-model", effort: "ultra" } } });
+  f.context.local_launch_request = async () => ({ adapter: "codex_cli", models: [{ id: "limited", efforts: ["low", "high"] }, { id: "no-effort", efforts: [] }] });
+  await f.context.load_launch_models("Codex");
+  f.context.write_launch_model("Codex", "limited");
+  assert.equal(state.launch.profiles.Codex.model, "limited");
+  assert.equal(state.launch.profiles.Codex.effort, "");
+  assert.deepEqual(Array.from(f.context.launch_model_state("Codex").efforts), ["low", "high"]);
+  f.context.write_launch_field("Codex", "effort", "high");
+  f.context.write_launch_model("Codex", "no-effort");
+  assert.equal(state.launch.profiles.Codex.effort, "");
+  assert.equal(f.context.launch_model_state("Codex").efforts.length, 0);
+  assert.equal(state.launch.profiles["Codex-2"].model, "other-model");
+  assert.equal(state.launch.profiles["Codex-2"].effort, "ultra");
+  f.context.write_launch_model("Codex", "__default__");
+  assert.equal(state.launch.profiles.Codex.model, "");
+  assert.equal(f.context.launch_model_state("Codex").efforts, undefined);
+  assert.match(f.context.launch_model_state("Codex").effort_note, /默认值由软件决定/);
 });
 
 test("room model readback stays separate from drafts, reloads on revision and discards a different room's late response", async () => {
@@ -1679,7 +1996,11 @@ function folder_fixture() {
   const notices = [];
   const frames = [];
   const draft = { value: "保留当前草稿" };
-  const context = vm.createContext({ URLSearchParams, window: {}, document: { getElementById: () => draft } });
+  const storage = new Map();
+  const context = vm.createContext({ URLSearchParams, window: {}, localStorage: {
+    getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value),
+    removeItem: key => storage.delete(key), key: index => [...storage.keys()][index], get length() { return storage.size; },
+  }, document: { getElementById: () => draft } });
   vm.runInContext(`${source}\nglobalThis.test_state = state;`, context);
   const state = context.test_state;
   state.rooms = [{ id: "a", title: "话题 A", folder_id: "one" }, { id: "b", folder_id: "one" }];

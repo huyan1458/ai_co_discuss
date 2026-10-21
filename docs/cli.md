@@ -12,6 +12,8 @@
 
 `codiscuss launch room-models --file FILE` 输入 `site`、`room_id`，只读返回本机已登记房间中各参与者的 `adapter/model/effort`；未登记时返回空参与者对象。命令不启动 AI、不修改配置，不用本机默认模型填补缺失值。
 
+`codiscuss launch models --file FILE` 输入 `adapter` 和可选的完整 `executable`，读取对应 CLI 的模型目录与支持的档位，不发送提示词。详情与失败边界见 [本机模型目录](runner.md#本机模型目录)。
+
 ## 连接与发现
 
 ```sh
@@ -31,25 +33,27 @@ Bash 对应 `export DISCUSS_URL=http://127.0.0.1:8765`，CMD 对应 `set DISCUSS
 
 建房与更新资料支持 `--user-request` / `--user-request-file`，将用户原文与 `--background` 分开保存，各限 4000 字。`room brief` 返回两者，概要和通知不自动展开原文。
 
+`room create` 必须指定 `--access-file 私有文件`，CLI 在请求前原子保存建房编号、房主和各成员凭据，确认房间后另写各本地成员的独立文件，回执只返回 `member_access_files` 路径。结果不明时沿用同一文件、编号和创建参数；不能换文件重建。后续每次写入使用对应身份的文件，不能拿房主文件冒充成员；自动讨论使用本次任务文件中的执行凭据。文件含 `site`、`room`、`token`，CLI 检查站点与房间匹配。`--dry-run` 不生成或写入凭据，预览会隐藏凭据字段。
+
 消息 JSON 中的 `elapsed_seconds` 为只读耗时：自动执行从交付唤醒到保存该消息的秒数，不含排队，保存后固定。用户留言、手动或代发内容及没有计时记录的旧消息返回 `null`；发布命令无需提供耗时。
 
 ## 附件
 
 ```sh
-codiscuss attachment upload ROOM --as 用户 --file ./资料.pdf --submission-id UPLOAD_UUID
+codiscuss attachment upload ROOM --as 用户 --file ./资料.pdf --submission-id UPLOAD_UUID --access-file OWNER.json
 codiscuss attachment list ROOM --submission-id UPLOAD_UUID
 codiscuss attachment view ROOM ATTACHMENT_ID
 codiscuss attachment download ROOM ATTACHMENT_ID --dest ./下载资料.pdf
-codiscuss message post ROOM --as 用户 --body "请参考附件" --attachment ATTACHMENT_ID --submission-id MESSAGE_UUID
+codiscuss message post ROOM --as 用户 --body "请参考附件" --attachment ATTACHMENT_ID --submission-id MESSAGE_UUID --access-file OWNER.json
 ```
 
 上传回执中的 `attachment.id` 是后续引用的编号；上传和消息分别使用自己的提交编号。单个文件最多 20 MiB，消息最多重复指定 10 次 `--attachment`；仅附件消息可省略正文。普通 `attachment list ROOM` 只列已发送附件，可加 `--message ID`、`--page N`；精确提交查询用于核对未关联的上传。下载路径必须明确、父目录已存在且目标文件不存在；客户端验证长度和 SHA-256，不覆盖已有文件。
 
-受保护写入带 `--access-file`。自动任务先上传，再提交关联回答；回答完成后执行凭据不能继续上传。AI 发言仍需有效安排、发言权和摘要；下载后由参与软件自身工具读取，不默认把全部附件加入通知。`--dry-run` 预览路径与元数据，不上传字节或创建下载文件。结果不明先查原上传编号；重试沿用原文件、身份和编号。
+所有写入带 `--access-file`。自动任务先上传，再提交关联回答；回答完成后执行凭据不能继续上传。AI 发言仍需有效安排、发言权和摘要；下载后由参与软件自身工具读取，不默认把全部附件加入通知。`--dry-run` 预览路径与元数据，不上传字节或创建下载文件。结果不明先查原上传编号；重试沿用原文件、身份和编号。
 
 ## 讨论上限参数
 
-`room create` / `room update` 支持 `--max-rounds`、`--max-minutes`、`--execution-minutes`（三者均以 0 表示不限；单次执行默认 0，可设 1–60 分钟）、`--on-limit pause|summarize`、`--summary-minutes`。未传字段沿用旧值；活动阶段须先暂停才能改上限。`room view` 包含 `limits` 与 `completed_rounds`，`room limits ROOM` 单独读取，`room limits ROOM --check --as 身份` 检查并执行到限处理。受保护房间仍需 `--access-file`。检查不会启动 AI，也不代写总结。
+`room create` / `room update` 支持 `--max-rounds`、`--max-minutes`、`--execution-minutes`（三者均以 0 表示不限；单次执行默认 0，可设 1–60 分钟）、`--on-limit pause|summarize`、`--summary-minutes`。未传字段沿用旧值；活动阶段须先暂停才能改上限。`room view` 包含 `limits` 与 `completed_rounds`，`room limits ROOM` 单独读取，`room limits ROOM --check --as 身份 --access-file FILE` 检查并执行到限处理。检查不会启动 AI，也不代写总结。
 
 `run start` 的 `--deadline` 可省略，此时采用房间总时长；房间总时长为 0 时不限总时长。显式传 0 也表示不另设运行期限，仍受话题上限约束；非零值与话题截止取更早值。不限总时长仍受轮次上限、主动设置的单次执行超时及手动停止约束。暂停或重新启动不会重置话题计时；继续前需调整已耗尽的上限。
 
@@ -63,38 +67,40 @@ codiscuss message post ROOM --as 用户 --body "请参考附件" --attachment AT
 New-Item -ItemType Directory -Force data | Out-Null
 [IO.File]::WriteAllText((Join-Path (Get-Location) 'data/experts.json'), '{"Codex":"cli","Gemini":"cli"}', [Text.UTF8Encoding]::new($false))
 $room_submission = [guid]::NewGuid().ToString()
-$created = codiscuss room create --as Codex --submission-id $room_submission --title '方案讨论' --goal '选择可验证的实现方案' --background '在此填写实际背景' --boundaries '在此填写约束、检查周期和有限截止条件' --experts-file data/experts.json --phase initial | ConvertFrom-Json
+$created = codiscuss room create --as Codex --submission-id $room_submission --title '方案讨论' --goal '选择可验证的实现方案' --background '在此填写实际背景' --boundaries '在此填写约束、检查周期和有限截止条件' --experts-file data/experts.json --phase initial --access-file data/room-owner.json | ConvertFrom-Json
 $room = $created.data.id
+$host_access = $created.data.member_access_files.Codex
+$expert_access = $created.data.member_access_files.Gemini
 codiscuss room view $room
 codiscuss room brief $room
 codiscuss room protocol $room
 ```
 
-`--experts-file` 替换完整参与配置，更新时不可只传单个增量。`--host` 可显式指定主持人，默认采用创建操作者。新房间发言权由主持人持有，之后每次需读取最新状态。
+`--experts-file` 替换完整参与配置，更新时不可只传单个增量。`--host` 可显式指定主持人，默认采用创建操作者。新房间发言权由主持人持有，之后每次需读取最新状态。名单与主持职责只能由房主变更；新增或改变读写能力时，使用网页或 `api` 同时提供对应 `members` 及新凭据，保留未变成员凭据。
 
 主持人创建安排并回读：
 
 ```powershell
 $turn_submission = [guid]::NewGuid().ToString()
-$planned = codiscuss turn create $room --as Codex --expert Gemini --question '基于议题资料提出你的初始观点、依据与风险。' --submission-id $turn_submission | ConvertFrom-Json
+$planned = codiscuss turn create $room --as Codex --expert Gemini --question '基于议题资料提出你的初始观点、依据与风险。' --submission-id $turn_submission --access-file $host_access | ConvertFrom-Json
 $turn = $planned.data.turn.id
 codiscuss turn view $room $turn
 codiscuss floor view $room
 codiscuss turn prompt $room $turn -o text
 ```
 
-只有实际通过约定渠道送达后，才执行 `turn mark-notified ROOM TURN --as Codex`。本地专家也可自行发现 `pending` 安排，不要求补通知状态。主持人应将房间、安排及提交编号保存到接续信息。
+只有实际通过约定渠道送达后，才执行 `turn mark-notified ROOM TURN --as Codex --access-file FILE`。本地专家也可自行发现 `pending` 安排，不要求补通知状态。主持人应将房间、安排及提交编号保存到接续信息。
 
-Gemini 在自己的会话中读取实际房间与安排，并将完整回答保存为 UTF-8 `data/answer.txt` 后执行（`$room`、`$turn` 在该终端设为刚核验的真实值）：
+Gemini 在自己的会话中读取实际房间与安排，并将完整回答保存为 UTF-8 `data/answer.txt` 后执行（`$room`、`$turn` 在该终端设为刚核验的真实值，`$expert_access` 为私下交付的 Gemini 文件路径）：
 
 ```powershell
 codiscuss room view $room
 codiscuss turn current $room
 $floor = (codiscuss floor view $room | ConvertFrom-Json).data
-codiscuss floor take $room --as Gemini --revision $floor.revision
+codiscuss floor take $room --as Gemini --revision $floor.revision --access-file $expert_access
 codiscuss floor view $room
 $answer_submission = [guid]::NewGuid().ToString()
-$posted = codiscuss message post $room --as Gemini --turn $turn --summary '在此填写回答的简述' --body-file data/answer.txt --submission-id $answer_submission | ConvertFrom-Json
+$posted = codiscuss message post $room --as Gemini --turn $turn --summary '在此填写回答的简述' --body-file data/answer.txt --submission-id $answer_submission --access-file $expert_access | ConvertFrom-Json
 codiscuss message view $room $posted.data.message.id
 codiscuss turn current $room
 codiscuss floor view $room
@@ -103,16 +109,18 @@ codiscuss floor view $room
 确认 `holder` 为自己才能提交；否则保留草稿等待。完整原文保存成功后安排为 `answered`，发言权自动归还，下一位为主持人。主持人读过回答后更新状态，并在下一次安排或主持发言前重新领取：
 
 ```powershell
-codiscuss state set $room --as Codex --body-file data/state.txt --brief-file data/brief.txt --until $posted.data.message.id
+codiscuss state set $room --as Codex --body-file data/state.txt --brief-file data/brief.txt --until $posted.data.message.id --access-file $host_access
 codiscuss state view $room
 $floor = (codiscuss floor view $room | ConvertFrom-Json).data
-codiscuss floor take $room --as Codex --revision $floor.revision
+codiscuss floor take $room --as Codex --revision $floor.revision --access-file $host_access
 codiscuss floor view $room
 ```
 
 先按实际阅读结果准备 `data/state.txt` 与 `data/brief.txt`。跨会话时使用已核对的消息编号，不假定别的终端变量存在。共享状态更新本身不占用发言权。
 
 ## 常用命令
+
+下表省略每次写入必须附带的 `--access-file FILE`，实际执行时使用本人文件。
 
 | 目的 | 命令示意 |
 | --- | --- |
@@ -173,11 +181,11 @@ codiscuss message list $room --submission-id $answer_submission
 | 3 | 网络失败或结果不能确认；POST 可能已保存 |
 | 130 | 中断，写入结果需核对 |
 
-`--as` 声明业务身份，不是身份认证；受保护房间还必须带有效的 `--access-file`，不能仅凭发言权写入。
+`--as` 声明业务身份，不是身份认证；所有房间写入都必须带有效的 `--access-file`，不能仅凭发言权写入。
 
 ## 运行控制与一次执行
 
-新房间默认手动。网页选择全自动后导出的私有配置包含 `site`、`room`、`token`，可直接作为 CLI 的 `--access-file`；CLI 校验站点和房间一致，不把 token 放进预览或回执。不要读取并拼接认证头，也不要将文件上传到共享记录。
+CLI `room create` 默认手动。运行控制使用房主私有文件（下例 `PRIVATE.json`），成员文件不能启动或切换运行。CLI 校验站点和房间一致，不把 token 放进预览或回执。不要读取并拼接认证头，也不要将文件上传到共享记录。
 
 ```sh
 codiscuss run view ROOM --site SITE

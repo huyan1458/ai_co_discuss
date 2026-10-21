@@ -14,7 +14,7 @@ import json
 import time
 
 from .identity import MAX_ROOM_AGENTS, is_ai
-from .runtime import LEASE_SECONDS, begin_write, token_hash
+from .runtime import LEASE_SECONDS, begin_write, require_owner, token_hash
 
 FREE_EXECUTION_MINUTES = 20
 RECENT_REQUESTS = 100
@@ -68,12 +68,14 @@ def member_value(member):
 
 
 def member_values(members):
-    """Validate the initial members of a new free room."""
+    """Validate independent member credentials for a room."""
     if not isinstance(members, list) or not 1 <= len(members) <= MAX_ROOM_AGENTS:
-        raise ValueError("自由房间须有至少 1 位 AI 成员")
+        raise ValueError("房间须有至少 1 位 AI 成员，且不超过成员上限")
     result = [member_value(member) for member in members]
     if len({member["name"] for member in result}) != len(result):
         raise ValueError("成员名称不能重复")
+    if len({member["token"] for member in result}) != len(result):
+        raise ValueError("每位成员须使用独立凭证")
     return result
 
 
@@ -84,21 +86,64 @@ def insert_member(connection, room_id, member, now):
                                      member["access"], member["session_mode"], now))
 
 
-def save_free_room(connection, room_id, control_token, members, now):
+def save_room_access(connection, room_id, control_token, members, settings):
     """Persist the mode, the owner's control hash and the members in the creating transaction."""
     control = token_hash(control_token)
     if not control:
-        raise ValueError("自由房间须提供 32–256 字符的房间控制凭据")
-    connection.execute("INSERT INTO room_modes (room_id,mode,control_hash) VALUES (?,?,?)", (room_id, "free", control))
+        raise ValueError("建房须提供 32–256 字符的房间控制凭据")
+    if any(token_hash(member["token"]) == control for member in members):
+        raise ValueError("成员凭证不能与房主控制凭据相同")
+    connection.execute("INSERT INTO room_modes (room_id,mode,control_hash) VALUES (?,?,?)", (room_id, settings["mode"], control))
     for member in members:
-        insert_member(connection, room_id, member, now)
+        insert_member(connection, room_id, member, settings["created_at"])
+    connection.execute("UPDATE room_members SET role='host' WHERE room_id=? AND name=?", (room_id, settings["host"]))
+
+
+def discussion_members(payload, settings):
+    """Validate credentials against the room's declared participants and delivery mode."""
+    members = member_values(payload.get("members")) if settings["experts"] else []
+    if {member["name"] for member in members} != set(settings["experts"]):
+        raise ValueError("成员凭证名单须与参与者名单一致")
+    for member in members:
+        expected = "online" if settings["experts"][member["name"]] == "online" else (
+            "runner" if payload.get("runtime_mode") == "automatic" else "manual")
+        if member["access"] != expected:
+            raise ValueError("成员接入方式与房间参与能力、任务交付方式不符")
+    return members
+
+
+def sync_discussion_members(connection, room_id, payload, settings):
+    """Keep existing credentials; require fresh credentials for added or changed members."""
+    current = {row["name"]: row for row in connection.execute("SELECT * FROM room_members WHERE room_id=? AND status='active'", (room_id,))}
+    supplied = {member["name"]: member_value(member) for member in payload.get("members", [])}
+    run = connection.execute("SELECT mode FROM discussion_runtime WHERE room_id=?", (room_id,)).fetchone()
+    for name, capability in settings["experts"].items():
+        access = "online" if capability == "online" else ("runner" if run and run[0] == "automatic" else "manual")
+        old = current.get(name)
+        if old and (old["access"] == "online") == (access == "online"):
+            if name in supplied and token_hash(supplied[name]["token"]) != old["token_hash"]:
+                raise FileExistsError("成员凭证与已登记身份不符；请核对原接入文件")
+            continue
+        if name not in supplied or supplied[name]["access"] != access:
+            raise ValueError(f"新增或改变接入方式的成员 {name} 须提供独立的新凭证")
+        member = supplied[name]
+        hashed = token_hash(member["token"])
+        if connection.execute("SELECT 1 FROM room_members WHERE room_id=? AND token_hash=? UNION ALL SELECT 1 FROM room_modes WHERE room_id=? AND control_hash=?", (room_id, hashed, room_id, hashed)).fetchone():
+            raise ValueError("新成员凭证不能复用已有凭证")
+        connection.execute("UPDATE room_members SET status='removed' WHERE room_id=? AND name=?", (room_id, name))
+        insert_member(connection, room_id, member, int(time.time()))
+    for name in current.keys() - settings["experts"].keys():
+        connection.execute("UPDATE room_members SET status='removed' WHERE room_id=? AND name=?", (room_id, name))
+    connection.execute("UPDATE room_members SET role=CASE WHEN name=? THEN 'host' ELSE 'member' END WHERE room_id=?", (settings["host"], room_id))
 
 
 def sync_participants(connection, room_id):
-    """Mirror non-removed members into the shared participant list the page already shows."""
-    names = [row[0] for row in connection.execute("SELECT name FROM room_members WHERE room_id=? AND status<>'removed' ORDER BY id", (room_id,))]
-    connection.execute("UPDATE topic_settings SET experts=? WHERE room_id=?",
-                       (json.dumps({name: "cli" for name in names}, ensure_ascii=False), room_id))
+    """Mirror member capabilities and the active host into shared room metadata."""
+    members = connection.execute("SELECT name,access,role,status FROM room_members WHERE room_id=? AND status<>'removed' ORDER BY id", (room_id,)).fetchall()
+    experts = {row["name"]: "online" if row["access"] == "online" else "cli" for row in members}
+    host = next((row["name"] for row in members if row["role"] == "host" and row["status"] == "active"), "用户")
+    connection.execute("UPDATE topic_settings SET experts=?,host=? WHERE room_id=?",
+                       (json.dumps(experts, ensure_ascii=False), host, room_id))
 
 
 def execution_minutes(connection, room_id):
@@ -161,14 +206,6 @@ def free_view(connection, room_id):
         "SELECT chain_id,reason FROM free_chains WHERE room_id=? ORDER BY chain_id DESC LIMIT 10", (room_id,))]
     return {"members": members, "requests": requests[::-1], "execution_minutes": execution_minutes(connection, room_id),
             "conflicts": possible_conflicts(connection, room_id, names), "halted_chains": chains, "max_auto_hops": MAX_AUTO_HOPS}
-
-
-def require_owner(connection, room_id, token):
-    """Accept only the room control credential; declared names never grant ownership."""
-    row = connection.execute("SELECT control_hash FROM room_modes WHERE room_id=? AND mode='free'", (room_id,)).fetchone()
-    hashed = token_hash(token)
-    if not row or not hashed or not hmac.compare_digest(hashed, row[0]):
-        raise PermissionError("需要本房间的控制凭据；没有凭据只能阅读")
 
 
 def require_member(connection, room_id, token, name=None):
@@ -533,11 +570,24 @@ def add_member(connection, room_id, token, payload, now):
     require_owner(connection, room_id, token)
     begin_write(connection)
     member = member_value(payload)
-    if connection.execute("SELECT 1 FROM room_members WHERE room_id=? AND name=? AND status<>'removed'", (room_id, member["name"])).fetchone():
+    existing = connection.execute("SELECT * FROM room_members WHERE room_id=? AND name=? AND status<>'removed'", (room_id, member["name"])).fetchone()
+    if existing and existing["status"] == "active" and existing["token_hash"] == token_hash(member["token"]) and all(
+            existing[key] == member[key] for key in ("adapter", "access", "session_mode")):
+        return free_view(connection, room_id)
+    if existing:
         raise FileExistsError(f"{member['name']} 已是本房间成员；离开的成员请用请回")
+    require_fresh_member_token(connection, room_id, member["token"])
     insert_member(connection, room_id, member, now)
     sync_participants(connection, room_id)
     return free_view(connection, room_id)
+
+
+def require_fresh_member_token(connection, room_id, token):
+    """Prevent owner or another member's credential from being reused for a new identity."""
+    hashed = token_hash(token)
+    if not hashed or connection.execute("SELECT 1 FROM room_members WHERE room_id=? AND token_hash=? UNION ALL SELECT 1 FROM room_modes WHERE room_id=? AND control_hash=?",
+                                        (room_id, hashed, room_id, hashed)).fetchone():
+        raise ValueError("须提供独立的新成员凭证")
 
 
 def member_action(connection, room_id, member_id, token, payload):
@@ -554,8 +604,11 @@ def member_action(connection, room_id, member_id, token, payload):
         connection.execute("UPDATE room_members SET status=? WHERE id=?", ("away" if action == "away" else "removed", member_id))
     elif action == "active":
         hashed = token_hash(payload.get("token"))
+        if member["status"] == "active" and hashed and hmac.compare_digest(hashed, member["token_hash"]):
+            return free_view(connection, room_id)
         if member["status"] != "away" or not hashed or hmac.compare_digest(hashed, member["token_hash"]):
             raise ValueError("只有离开的成员可以请回，且须提供新的成员凭证")
+        require_fresh_member_token(connection, room_id, payload.get("token"))
         connection.execute("UPDATE room_members SET status='active',token_hash=? WHERE id=?", (hashed, member_id))
     elif action == "role":
         role = payload.get("role")

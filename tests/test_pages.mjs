@@ -40,7 +40,16 @@ async function worker_fixture(test_case) {
     catch (error) { sql.exec('ROLLBACK'); throw error; }
   } };
   fixture.env = { DB: database, ATTACHMENTS: fixture.bucket };
-  fixture.request = async (path, payload, token = 'owner-credential'.repeat(3)) => {
+  fixture.member_tokens = {};
+  fixture.request = async (path, payload, token) => {
+    if (payload && path === '' && payload.mode !== 'free') {
+      const experts = payload.experts ?? { Codex: 'cli', Claude: 'online', Gemini: 'online', DeepSeek: 'online', Qwen: 'online' };
+      payload = { ...payload, members: payload.members ?? Object.entries(experts).map(([name, mode]) => ({ name,
+        token: fixture.member_tokens[name] ??= crypto.randomUUID(),
+        access: mode === 'online' ? 'online' : payload.runtime_mode === 'automatic' ? 'runner' : 'manual' })) };
+    }
+    const actor = payload?.actor ?? payload?.submitted_by ?? payload?.author ?? '用户';
+    token ??= path === '' || actor === '用户' ? 'owner-credential'.repeat(3) : fixture.member_tokens[actor] || '';
     const response = await worker.fetch(new Request(`https://discussion.test/api/rooms${path}`, {
       method: payload === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json', 'X-Discussion-Token': token },
       body: payload === undefined ? undefined : JSON.stringify(payload),
@@ -48,7 +57,8 @@ async function worker_fixture(test_case) {
     return { status: response.status, body: await response.json() };
   };
   fixture.raw = (path, options = {}, bucket = fixture.bucket) => worker.fetch(
-    new Request(`https://discussion.test/api/rooms${path}`, options), { ...fixture.env, ATTACHMENTS: bucket || undefined });
+    new Request(`https://discussion.test/api/rooms${path}`, { ...options,
+      headers: { 'X-Discussion-Token': 'owner-credential'.repeat(3), ...options.headers } }), { ...fixture.env, ATTACHMENTS: bucket || undefined });
   return fixture;
 }
 
@@ -64,6 +74,55 @@ function bind_updates(fixture) {
   }) };
   return { hub, notifications };
 }
+
+test('Worker manual members have scoped credentials and revocation is checked in the write transaction', async t => {
+  const f = await worker_fixture(t);
+  const room = (await f.request('', { title: '手动凭证', host: 'Codex', phase: 'initial', experts: { Codex: 'cli', Claude: 'cli' } })).body;
+  const path = `/${room.id}`, host = f.member_tokens.Codex, member = f.member_tokens.Claude;
+  const own = { author: 'Codex', source: 'cli', kind: 'moderation', text: '主持观点', submission_id: 'manual-host' };
+  for (const token of ['', crypto.randomUUID(), member, 'owner-credential'.repeat(3)]) {
+    assert.equal((await f.request(`${path}/messages`, own, token)).status, 403);
+  }
+  assert.equal((await f.request(`${path}/messages`, own, host)).status, 201);
+  assert.equal((await f.request(`${path}/state`, { actor: 'Claude', text: '非主持' }, member)).status, 403);
+  assert.equal((await f.request(`${path}/topic`, { actor: 'Codex', experts: { Codex: 'cli' } }, host)).status, 403);
+  assert.equal((await f.request(`${path}/runtime`, { revision: 0, mode: 'automatic' }, host)).status, 403);
+  f.before_batch = () => f.sql.prepare("UPDATE room_members SET status='removed' WHERE room_id=? AND name='Codex'").run(room.id);
+  assert.equal((await f.request(`${path}/state`, { actor: 'Codex', text: '撤销后禁止写入' }, host)).status, 403);
+  assert.equal((await f.request(path)).body.state_text, '');
+  const public_data = JSON.stringify([(await f.request(path)).body, (await f.request(`${path}/backup`)).body]);
+  for (const token of [host, member, 'owner-credential'.repeat(3)]) assert.ok(!public_data.includes(token));
+  assert.doesNotMatch(public_data, /token_hash|control_hash/);
+});
+
+test('Worker proxies only active online members and rechecks that identity atomically', async t => {
+  const f = await worker_fixture(t);
+  const room = (await f.request('', { title: '在线代发', host: 'Codex', phase: 'initial', experts: { Codex: 'cli', Qwen: 'online' } })).body;
+  const path = `/${room.id}`;
+  const turn = (await f.request(`${path}/turns`, { actor: '用户', expert: 'Qwen', question: '问题', submission_id: 'proxy-turn' })).body.turn;
+  const floor = (await f.request(`${path}/floor`)).body;
+  assert.equal((await f.request(`${path}/floor`, { actor: '用户', speaker: 'Qwen', action: 'take', revision: floor.revision })).status, 200);
+  const answer = { author: 'Qwen', submitted_by: 'Qwen', source: 'cli', text: '在线原文', turn_id: turn.id, submission_id: 'proxy-answer' };
+  assert.equal((await f.request(`${path}/messages`, answer, f.member_tokens.Qwen)).status, 403);
+  answer.submitted_by = '用户'; answer.source = 'proxy';
+  f.before_batch = () => f.sql.prepare("UPDATE room_members SET status='removed' WHERE room_id=? AND name='Qwen'").run(room.id);
+  assert.equal((await f.request(`${path}/messages`, answer)).status, 403);
+  assert.equal((await f.request(path)).body.message_count, 0);
+});
+
+test('Worker creation retries bind the full credential set and reject reused member secrets', async t => {
+  const f = await worker_fixture(t);
+  const owner = crypto.randomUUID(), first = crypto.randomUUID(), second = crypto.randomUUID();
+  const payload = { title: '固定凭证', host: 'Codex', experts: { Codex: 'cli', Claude: 'cli' }, submission_id: 'credential-replay',
+    members: [{ name: 'Codex', access: 'manual', token: first }, { name: 'Claude', access: 'manual', token: second }] };
+  assert.equal((await f.request('', payload, '')).status, 400);
+  const created = await f.request('', payload, owner);
+  assert.equal(created.status, 201);
+  assert.equal((await f.request('', payload, owner)).body.id, created.body.id);
+  assert.equal((await f.request('', payload, crypto.randomUUID())).status, 409);
+  assert.equal((await f.request('', { ...payload, members: payload.members.map(item => ({ ...item, token: crypto.randomUUID() })) }, owner)).status, 409);
+  assert.equal((await f.request('', { ...payload, submission_id: 'another-create', members: payload.members.map(item => ({ ...item, token: first })) }, owner)).status, 400);
+});
 
 test('Pages streams committed changes across aliases and rejects public notification writes', async t => {
   const f = await worker_fixture(t), { notifications, hub } = bind_updates(f);
@@ -244,9 +303,9 @@ for (const role of ['host', 'expert']) test(`Worker freezes ${role} message time
   assert.equal(message.elapsed_seconds, Math.floor(Date.parse(message.created_at) / 1000) - f.dispatched);
   assert.ok(message.elapsed_seconds >= 125 && message.elapsed_seconds < 150, 'wake is included, queue and supplied duration are not');
   f.sql.prepare('UPDATE event_timings SET dispatched_at=dispatched_at-500 WHERE event_id=?').run(f.event);
-  const retry = await f.request(`${f.path}/messages`, f.payload);
-  assert.equal(retry.status, 200, JSON.stringify(retry.body));
-  assert.deepEqual(retry.body.message, message);
+  const retry = await f.request(`${f.path}/messages`, f.payload, f.token);
+  assert.equal(retry.status, role === 'host' ? 200 : 403, JSON.stringify(retry.body));
+  if (role === 'host') assert.deepEqual(retry.body.message, message);
   assert.deepEqual((await f.request(`${f.path}/messages/${message.id}`)).body, message);
   assert.deepEqual((await f.request(`${f.path}/messages`)).body.messages[0], message);
   assert.deepEqual((await f.request(`${f.path}/backup`)).body.tables.message_timings,
@@ -257,16 +316,15 @@ for (const role of ['host', 'expert']) test(`Worker freezes ${role} message time
   assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM message_timings').get().count, 0);
 });
 
-test('Worker leaves user and proxy timings unknown even while an expert is running', async t => {
+test('Worker leaves user timings unknown and refuses to proxy a local execution', async t => {
   const f = await timed_message_fixture(t, 'expert');
   const user = await f.request(`${f.path}/messages`, { author: '用户', text: '留言', submission_id: 'untimed-user', elapsed_seconds: 999999 });
   assert.equal(user.status, 201, JSON.stringify(user.body));
   assert.equal(user.body.message.elapsed_seconds, null);
   const proxy = await f.request(`${f.path}/messages`, { ...f.payload, source: 'proxy', submitted_by: '用户' });
-  assert.equal(proxy.status, 201, JSON.stringify(proxy.body));
-  assert.equal(proxy.body.message.elapsed_seconds, null);
+  assert.equal(proxy.status, 403, JSON.stringify(proxy.body));
   f.sql.exec(await readFile(join(PROJECT_ROOT, 'backend', 'schema.sql'), 'utf8'));
-  assert.equal((await f.request(`${f.path}/messages/${proxy.body.message.id}`)).body.elapsed_seconds, null);
+  assert.equal((await f.request(`${f.path}/messages/${user.body.message.id}`)).body.elapsed_seconds, null);
 });
 
 test('schema backfills only exact historical expert results and preserves frozen durations', async t => {
@@ -423,10 +481,14 @@ for (const on_limit of ['pause', 'summarize']) {
       limits: { max_rounds: 1, on_limit, summary_minutes: 1 } })).body.id;
     assert.equal((await f.request(`/${id}/runtime`, { action: 'start', revision: 0, deadline: 0 })).status, 200);
     const turn = (await f.request(`/${id}/turns`, { actor: '用户', expert: 'Codex', question: '观点', submission_id: 'unlimited-turn' })).body.turn;
+    const execution = (await f.request(`/${id}/events`)).body.events.at(-1);
+    const answer_token = crypto.randomUUID();
+    assert.equal((await f.request(`/${id}/events/${execution.id}`, { action: 'reserve', execution_token: answer_token })).status, 200);
+    assert.equal((await f.request(`/${id}/events/${execution.id}`, { action: 'enter', session_id: 'answer' }, answer_token)).status, 200);
     const floor = (await f.request(`/${id}/floor`)).body;
-    assert.equal((await f.request(`/${id}/floor`, { actor: 'Codex', action: 'take', revision: floor.revision })).status, 200);
+    assert.equal((await f.request(`/${id}/floor`, { actor: 'Codex', action: 'take', revision: floor.revision }, answer_token)).status, 200);
     assert.equal((await f.request(`/${id}/messages`, { author: 'Codex', kind: 'opinion', source: 'cli',
-      text: '原文', submission_id: 'unlimited-answer', turn_id: turn.id })).status, 201);
+      text: '原文', submission_id: 'unlimited-answer', turn_id: turn.id }, answer_token)).status, 201);
     const room = (await f.request(`/${id}/limits`, { actor: '用户' })).body;
     assert.equal(room.limits.reason, 'round_limit');
     if (on_limit === 'pause') assert.equal(room.runtime.status, 'paused');
@@ -480,21 +542,25 @@ test('Worker forces an early host summary and reports per-participant executions
   assert.equal((await f.request(`/${id}/limits`, { actor: '用户', force: true })).status, 400);
 });
 
-test('Worker lets the web user control a running protected room without the owner key', async t => {
+test('Worker requires the owner key for user controls in every room mode', async t => {
   const f = await worker_fixture(t);
   const created = await f.request('', { title: '目录保护', host: 'Codex', experts: { Codex: 'cli' } });
   const id = created.body.id;
   const started = await f.request(`/${id}/runtime`, { action: 'start', revision: 0, deadline: Math.floor(Date.now() / 1000) + 600 });
   assert.equal((await f.request(`/${id}/state`, { actor: 'Codex', text: '无执行' }, '')).status, 403);
-  assert.equal((await f.request(`/${id}/folder`, { actor: '用户', folder_id: null }, '')).status, 200);
-  const paused = await f.request(`/${id}/runtime`, { action: 'pause', revision: started.body.revision }, '');
+  for (const token of ['', crypto.randomUUID(), f.member_tokens.Codex]) {
+    for (const [tail, payload] of [['/folder', { actor: '用户', folder_id: null }],
+      ['/runtime', { action: 'pause', revision: started.body.revision }], ['/archive', { actor: '用户' }],
+      ['/delete', { actor: '用户', confirm_title: '目录保护' }]]) assert.equal((await f.request(`/${id}${tail}`, payload, token)).status, 403);
+  }
+  const paused = await f.request(`/${id}/runtime`, { action: 'pause', revision: started.body.revision });
   assert.equal(paused.status, 200, JSON.stringify(paused.body));
   assert.equal(paused.body.status, 'paused');
-  const archived = await f.request(`/${id}/archive`, { actor: '用户' }, '');
+  const archived = await f.request(`/${id}/archive`, { actor: '用户' });
   assert.equal(archived.status, 200, JSON.stringify(archived.body));
   assert.ok(archived.body.archived);
-  assert.equal((await f.request(`/${id}/restore`, { actor: '用户' }, '')).status, 200);
-  assert.equal((await f.request(`/${id}/delete`, { actor: '用户', confirm_title: '目录保护' }, '')).status, 200);
+  assert.equal((await f.request(`/${id}/restore`, { actor: '用户' })).status, 200);
+  assert.equal((await f.request(`/${id}/delete`, { actor: '用户', confirm_title: '目录保护' })).status, 200);
   assert.equal((await f.request(`/${id}`)).status, 404);
 });
 
@@ -778,6 +844,9 @@ test('Worker free hosts route, dispatch, hand back once and stop at the chain bu
   const roles = Object.fromEntries((await f.request(`${r.path}/members/${await r.member_id('Codex')}`, { action: 'role', role: 'host' }, r.owner)).body.members
     .map(member => [member.name, member.role]));
   assert.deepEqual(roles, { Claude: 'member', Codex: 'host', Gemini: 'member' });
+  assert.equal((await f.request(r.path)).body.host, 'Codex');
+  await f.request(`${r.path}/members/${await r.member_id('Codex')}`, { action: 'away' }, r.owner);
+  assert.equal((await f.request(r.path)).body.host, '用户');
 });
 
 test('Worker free rooms forward online answers and link brainstorm rooms', async t => {
@@ -785,6 +854,7 @@ test('Worker free rooms forward online answers and link brainstorm rooms', async
   const r = await free_worker_room(f);
   const online = 'deepseek-free'.repeat(3);
   assert.equal((await f.request(`${r.path}/members`, { name: 'DeepSeek', token: online, access: 'online' }, r.owner)).status, 200);
+  assert.equal((await f.request(r.path)).body.experts.DeepSeek, 'online');
   assert.equal((await f.request(`${r.path}/members/${await r.member_id('DeepSeek')}`, { action: 'role', role: 'host' }, r.owner)).status, 400);
   await r.say('请 DeepSeek 看看', { to: ['DeepSeek'] });
   const request_id = (await f.request(r.path)).body.free.requests[0].id;

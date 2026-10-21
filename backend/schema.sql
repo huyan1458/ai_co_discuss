@@ -498,7 +498,7 @@ BEGIN
     UPDATE discussion_pauses SET paused_seconds=paused_seconds+MAX(0,CAST(strftime('%s','now') AS INTEGER)-paused_at),paused_at=0
         WHERE room_id=NEW.room_id AND paused_at>0;
 END;
--- Free rooms: members act with their own credential; each @ of a member is a durable request.
+-- Both room kinds register members; free rooms additionally persist requests and executions.
 CREATE TABLE IF NOT EXISTS room_members (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
@@ -513,6 +513,7 @@ CREATE TABLE IF NOT EXISTS room_members (
     session_mode TEXT NOT NULL DEFAULT 'new'
 );
 CREATE UNIQUE INDEX IF NOT EXISTS member_name ON room_members(room_id,name) WHERE status<>'removed';
+CREATE UNIQUE INDEX IF NOT EXISTS member_credential ON room_members(room_id,token_hash);
 CREATE TABLE IF NOT EXISTS member_executions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,

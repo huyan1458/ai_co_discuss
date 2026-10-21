@@ -1281,8 +1281,10 @@ test('a website write with a lost response keeps exit code 3 and is never retrie
   assert.equal(result.code, 2, 'missing stdin is rejected before sending');
   assert.equal(writes, 0);
   const file = join(home, 'request.json'); writeFileSync(file, JSON.stringify({ title: '测试', submission_id: 'unified-write' }));
+  writeFileSync(join(home, 'owner.json'), JSON.stringify({ site: `http://127.0.0.1:${server.address().port}`,
+    room: '', submission_id: 'unified-write', token: randomUUID() }));
   const uncertain = await run_service_cli(env, 'api', '/api/rooms', '--method', 'POST', '--input', file,
-    '--site', `http://127.0.0.1:${server.address().port}`);
+    '--site', `http://127.0.0.1:${server.address().port}`, '--access-file', join(home, 'owner.json'));
   assert.equal(uncertain.code, 3); assert.equal(uncertain.output, '');
   assert.equal(JSON.parse(uncertain.error).error.outcome, 'unknown');
   assert.equal(writes, 1); assert.equal(service_pid(home), 0);
@@ -1364,7 +1366,8 @@ async function free_fixture(t) {
         const other = state.others.find(item => item.id === body.member_id);
         const queue = other ? other.pending : state.pending;
         execution = { id: state.executions.length + 1, client_id: body.client_id, status: 'dispatched', member: other?.name || 'Claude',
-          cwd: body.cwd, created_at: Math.floor(Date.now() / 1000), read_until: 10, requests: queue.map(item => ({ ...item, status: 'delivering' })) };
+          cwd: body.cwd, created_at: Math.floor(Date.now() / 1000), lease_until: Math.floor(Date.now() / 1000) + 120,
+          read_until: 10, requests: queue.map(item => ({ ...item, status: 'delivering' })) };
         state.executions.push(execution);
         if (other) other.pending = []; else state.pending = [];
       }
@@ -1386,6 +1389,35 @@ async function free_fixture(t) {
     directory, project: directory, participants: { Claude: { adapter: 'claude' } }, members: { Claude: { token: 'member-credential'.repeat(3) } } };
   return { state, store, config };
 }
+
+for (const outcome of ['accepted', 'cancelled', 'expired']) test(`free Sidecar delivery checks executions and reconciles ${outcome} without resending`, async t => {
+  const { state, store, config } = await free_fixture(t);
+  config.participants.Claude = { adapter: 'antigravity', ipc_directory: config.directory };
+  writeFileSync(join(config.directory, 'ready.json'), JSON.stringify({ pid: process.pid }));
+  const runner = new FreeRoomRunner(config, store);
+  await runner.tick();
+  const request = JSON.parse(readFileSync(join(config.directory, 'free-1.request.json'), 'utf8'));
+  assert.equal(request.mode, 'free'); assert.equal(request.event_id, 1);
+  if (outcome === 'cancelled') state.executions[0].status = 'cancelled';
+  if (outcome === 'expired') state.executions[0].lease_until = 1;
+  let invoked = 0;
+  const source = readFileSync(new URL('../runner/discussion_sidecar.mjs', import.meta.url), 'utf8')
+    .replace(/^import .+;\r?$/gm, '').split("\natomic_json(join(directory, 'ready.json')")[0];
+  const context = vm.createContext({ process: { env: { CODISCUSS_IPC_DIRECTORY: config.directory, ANTIGRAVITY_AGENTAPI_EXE: 'test' } },
+    resolve, join, existsSync, readFileSync, writeFileSync, fetch, AbortSignal,
+    execFileSync: () => { invoked++; return JSON.stringify({ response: { newConversation: { conversationId: 'free-session' } } }); },
+    atomic_json: (path, value) => writeFileSync(path, JSON.stringify(value)),
+  });
+  await vm.runInContext(`${source}\nprocess_request('free-1.request.json')`, context);
+  await vm.runInContext("process_request('free-1.request.json')", context);
+  assert.equal(invoked, outcome === 'accepted' ? 1 : 0);
+  assert.ok(state.calls.includes('GET /executions/1'));
+  assert.ok(!state.calls.some(call => call.includes('/runtime') || call.includes('/events')));
+  if (outcome === 'accepted') state.executions[0].status = 'completed'; // Fast answers can beat reconciliation.
+  await runner.tick(); await runner.tick();
+  assert.equal(state.executions.length, 1);
+  assert.equal(store.binding('Claude').session_id || '', outcome === 'accepted' ? 'free-session' : '');
+});
 
 test('a free room delivers all open requests as one execution with the member credential only', async t => {
   const { state, store, config } = await free_fixture(t);

@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { request as http_request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
@@ -13,8 +15,74 @@ import { api, DiscussionRunner, DiscussionStore, load_config } from '../runner/d
 import { DiscussionService, read_registry, register_room } from '../runner/discussion_service.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
 import { save_site_connection } from '../runner/discussion_local.mjs';
+import { software_models } from '../runner/discussion_models.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
+
+/** Simulate the software control stream, recording every request and process cleanup. */
+function catalog_process(on_request = () => {}) {
+  const child = new EventEmitter(), requests = [], invocations = [];
+  child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  child.kill = () => { child.killed = true; queueMicrotask(() => child.emit('close', null)); };
+  let pending = '';
+  child.stdin.on('data', chunk => {
+    pending += chunk;
+    while (pending.includes('\n')) {
+      const end = pending.indexOf('\n'), request = JSON.parse(pending.slice(0, end));
+      pending = pending.slice(end + 1); requests.push(request);
+      queueMicrotask(() => on_request(request, child));
+    }
+  });
+  return { child, requests, invocations, spawn: (...args) => { invocations.push(args); return child; } };
+}
+
+test('model discovery initializes Codex and reads every catalog page without creating a turn', async () => {
+  const f = catalog_process((request, child) => {
+    let result;
+    if (request.method === 'initialize') result = {};
+    else if (request.method === 'model/list') result = request.params.cursor
+      ? { data: [{ model: 'second', displayName: 'Second', supportedReasoningEfforts: [{ reasoningEffort: 'low' }] }] }
+      : { data: [{ model: 'first', displayName: 'First', supportedReasoningEfforts: [{ reasoningEffort: 'high' }] },
+        { model: 'hidden', hidden: true }], nextCursor: 'page-2' };
+    if (result) child.stdout.write(`${JSON.stringify({ id: request.id, result })}\n`);
+  });
+  const result = await software_models({ adapter: 'codex_cli', executable: process.execPath }, f);
+  assert.deepEqual(result, { adapter: 'codex_cli', source: 'codex-app-server', models: [
+    { id: 'first', label: 'First', efforts: ['high'] }, { id: 'second', label: 'Second', efforts: ['low'] }] });
+  assert.deepEqual(f.requests.map(row => row.method), ['initialize', 'initialized', 'model/list', 'model/list']);
+  assert.equal(f.child.killed, true);
+  assert.equal(f.invocations[0][2].shell, false);
+});
+
+test('Claude model discovery sends only initialization and strips account metadata', async () => {
+  const f = catalog_process((request, child) => child.stdout.write(`${JSON.stringify({ type: 'control_response', response: {
+    subtype: 'success', request_id: request.request_id, response: { account: { email: 'private@example.test' }, models: [
+      { value: 'opus', displayName: 'Opus', supportedEffortLevels: ['low', 'max'], supportsEffort: true },
+      { value: 'older', displayName: 'Older', supportsEffort: false }] } } })}\n`));
+  const result = await software_models({ adapter: 'claude', executable: process.execPath }, f);
+  assert.deepEqual(result.models, [{ id: 'opus', label: 'Opus', efforts: ['low', 'max'] }, { id: 'older', label: 'Older', efforts: [] }]);
+  assert.equal(f.requests.length, 1); assert.equal(f.requests[0].request.subtype, 'initialize');
+  assert.ok(f.invocations[0][1].includes('--safe-mode'));
+  assert.ok(f.invocations[0][1].includes('--no-session-persistence'));
+  assert.ok(!JSON.stringify(result).includes('private@example.test'));
+  assert.equal(f.child.killed, true);
+});
+
+test('agy discovery parses native model output and failure never invents choices', async () => {
+  const f = catalog_process();
+  const pending = software_models({ adapter: 'antigravity_cli', executable: process.execPath }, f);
+  f.child.stdout.write('model-high\tModel (High)\nmodel-low  Model (Low)\nFetching models...\n');
+  f.child.emit('close', 0);
+  assert.deepEqual((await pending).models, [{ id: 'model-high', label: 'Model (High)' }, { id: 'model-low', label: 'Model (Low)' }]);
+  assert.deepEqual(f.invocations[0][1], ['models']); assert.deepEqual(f.requests, []);
+  const slow = catalog_process();
+  const timeout = await software_models({ adapter: 'claude', executable: process.execPath }, { ...slow, timeout_ms: 5 });
+  assert.equal(slow.child.killed, true); assert.deepEqual(timeout.models, []); assert.match(timeout.error, /超时/);
+  const unused = catalog_process();
+  assert.match((await software_models({ adapter: 'codex' }, unused)).error, /原软件/);
+  assert.match((await software_models({ adapter: 'claude' }, unused)).error, /完整路径/);
+  assert.equal(unused.invocations.length, 0);
+});
 
 test('paused room path correction is authenticated, versioned and adopted before an explicit restart', async t => {
   let service;
@@ -389,7 +457,8 @@ for (const legacy of [false, true]) test(`a ${legacy ? 'legacy' : 'current'} int
 for (const entry of ['web', 'conversation']) test(`${entry} rejects incorrect control credentials before state changes and permits correction`, async t => {
   const f = await fixture(t);
   const token = randomUUID();
-  const created = await request(f.site, '/api/rooms', { ...f.input.room, runtime_mode: 'automatic' }, { 'X-Discussion-Token': token });
+  const created = await request(f.site, '/api/rooms', { ...f.input.room, runtime_mode: 'automatic',
+    members: Object.keys(f.input.room.experts).map(name => ({ name, access: 'runner', token: randomUUID() })) }, { 'X-Discussion-Token': token });
   const input = { site: f.site, room_id: created.body.id, entry, participants: f.input.participants,
     current_session_id: 'actual-host-session', token: randomUUID() };
   await assert.rejects(launch_discussion(f.home, input, f.options), /403/);
@@ -567,6 +636,10 @@ test('local configuration bridge requires opt-in, loopback Host, same origin and
   const saved = await request(f.site, '/api/local/settings', { participants: f.input.participants }, headers);
   assert.equal(saved.status, 200, JSON.stringify(saved.body));
   assert.equal((await request(f.site, '/api/local/settings', undefined, headers)).body.participants.Codex.adapter, 'codex_cli');
+  assert.equal((await request(f.site, '/api/local/models', { adapter: 'codex' })).status, 403);
+  const models = await request(f.site, '/api/local/models', { adapter: 'codex' }, headers);
+  assert.equal(models.status, 200); assert.equal(models.body.source, 'original-software');
+  assert.deepEqual(models.body.models, []);
   const invalid = await request(f.site, '/api/local/launch', { room: f.input.room, participants: { Codex: { adapter: 'unsupported' } } }, headers);
   assert.equal(invalid.status, 400);
   assert.equal((await request(f.site, '/api/rooms')).body.rooms.length, 0);

@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 
 from .free_room import (add_member, after_free_message, authorize_free_write, check_answer, check_proxy, execution_action, free_view,
                         inbox, interrupt_member, member_action, member_values, migrate_free_tables, proxy_member, reserve_execution,
-                        room_mode, save_free_room, view_execution)
+                        discussion_members, room_mode, save_room_access, sync_discussion_members, view_execution)
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, is_ai, is_participant
 from .runtime import (authorize_write, begin_write, configure_runtime, event_action,
                      LIMIT_DEFAULTS, LIMITS_SQL, limit_values, limits_view, require_within_limits,
@@ -76,7 +76,8 @@ ROOM_BACKUP_QUERIES = {
     **{table: f"SELECT * FROM {table} WHERE message_id IN (SELECT id FROM messages WHERE room_id=?) ORDER BY message_id"
        for table in ("message_details", "message_summaries", "message_timings")},
 }
-# Only free rooms carry these tables; credential hashes are never exported.
+ROOM_BACKUP_QUERIES["room_creations"] = "SELECT submission_id,room_id FROM room_creations WHERE room_id=?"
+# Shared membership plus free-room requests; credential hashes are never exported.
 FREE_BACKUP_QUERIES = {
     "room_modes": "SELECT room_id,mode FROM room_modes WHERE room_id=?",
     "room_members": "SELECT id,room_id,name,adapter,role,status,read_until,created_at FROM room_members WHERE room_id=? ORDER BY id",
@@ -102,7 +103,7 @@ def room_backup(connection, room_id):
         A versioned backup containing original rows and their relationships.
     """
     connection.execute("BEGIN")
-    queries = {**ROOM_BACKUP_QUERIES, **(FREE_BACKUP_QUERIES if room_mode(connection, room_id) == "free" else {})}
+    queries = {**ROOM_BACKUP_QUERIES, **FREE_BACKUP_QUERIES}
     tables = {table: [dict(row) for row in connection.execute(query, (room_id,))]
               for table, query in queries.items()}
     if not tables["rooms"]:
@@ -195,6 +196,8 @@ def require_room(connection, room_id):
     room["runtime"] = runtime_view(connection, room_id)
     room["limits"] = limits_view(connection.execute(LIMITS_SQL, (room_id,)).fetchone(), room)
     room["mode"] = room_mode(connection, room_id)
+    room["members"] = [dict(row) for row in connection.execute(
+        "SELECT id,name,adapter,role,status,access,session_mode FROM room_members WHERE room_id=? AND status<>'removed' ORDER BY id", (room_id,))]
     parent = connection.execute("""SELECT rooms.id,rooms.title FROM room_links JOIN rooms ON rooms.id=room_links.parent_id
         WHERE room_links.room_id=?""", (room_id,)).fetchone()
     room["parent_room"] = dict(parent) if parent else None
@@ -380,6 +383,7 @@ def update_topic(connection, room_id, payload):
         if settings["phase"] == "concluded" or turn["expert"] not in settings["experts"]:
             raise ValueError("请先完成或取消当前发言安排")
     connection.execute("UPDATE rooms SET title=?,goal=? WHERE id=?", (settings["title"], settings["goal"], room_id))
+    sync_discussion_members(connection, room_id, payload, settings)
     save_topic_settings(connection, room_id, settings)
     return require_room(connection, room_id)
 
@@ -547,17 +551,19 @@ def creation_request(settings):
 
 
 def create_room(connection, payload, control_token=""):
-    """Create one room per explicit identifier, retaining legacy unkeyed requests."""
+    """Create a credential-protected room, binding retries to the original credentials."""
     if payload.get("mode", "brainstorm") not in ("free", "brainstorm"):
         raise ValueError("房间模式须为 free 或 brainstorm")
     free = payload.get("mode") == "free"
     members = member_values(payload.get("members")) if free else []
     if free:
-        payload = {**payload, "host": "用户", "phase": "discussing", "experts": {member["name"]: "cli" for member in members}}
+        payload = {**payload, "phase": "discussing", "experts": {member["name"]: "online" if member["access"] == "online" else "cli" for member in members}}
     settings = topic_values(payload)
+    if not free:
+        members = discussion_members(payload, settings)
     automatic = payload.get("runtime_mode") == "automatic"
-    if payload.get("runtime_mode", "manual") not in ("manual", "automatic") or (automatic and not token_hash(control_token)):
-        raise ValueError("自动建房须提供有效的运行模式和控制凭据")
+    if payload.get("runtime_mode", "manual") not in ("manual", "automatic") or not token_hash(control_token):
+        raise ValueError("建房须提供有效的运行模式和房主控制凭据")
     if free and (automatic or not token_hash(control_token)):
         raise ValueError("自由房间须提供房间控制凭据，且不使用讨论运行模式")
     parent_id = payload.get("parent_room_id")
@@ -568,8 +574,10 @@ def create_room(connection, payload, control_token=""):
     if folder_id is not None and not isinstance(folder_id, str):
         raise ValueError("文件夹编号必须是文本或 null")
     request_text = creation_request(settings) + (":automatic" if automatic else "")
+    request_text += ":access:" + token_hash(control_token) + ":" + json.dumps(
+        [[member["name"], member["adapter"], member["access"], member["session_mode"], token_hash(member["token"])] for member in members], ensure_ascii=False)
     if free:
-        request_text += ":free:" + json.dumps([[member["name"], member["adapter"]] for member in members], ensure_ascii=False)
+        request_text += ":free"
     if parent_id is not None:
         request_text += ":parent:" + parent_id
     if folder_id is not None:
@@ -589,8 +597,8 @@ def create_room(connection, payload, control_token=""):
     if identifier:
         connection.execute("INSERT INTO room_creations (submission_id,room_id,request_text) VALUES (?,?,?)", (identifier, room_id, request_text))
     save_topic_settings(connection, room_id, settings)
-    if free:
-        save_free_room(connection, room_id, control_token, members, utc_now())
+    save_room_access(connection, room_id, control_token, members,
+                     {"mode": "free" if free else "brainstorm", "host": settings["host"], "created_at": utc_now()})
     if parent_id is not None:
         connection.execute("INSERT INTO room_links (room_id,parent_id,created_at) VALUES (?,?,?)", (room_id, parent_id, utc_now()))
     if automatic:
@@ -1169,15 +1177,27 @@ def turn_text(turn, room):
 def protocol_text(room):
     """Describe explicit CLI and host operations separately from topic content."""
     base = f"/api/rooms/{room['id']}"
+    if room["mode"] == "free":
+        return "\n\n".join([
+            "# 自由协作参与协议", f"当前主持人：{room['host']}。没有讨论发言权、正式安排或轮次。",
+            "先用 room view 读取成员、职责和 free.requests，再按需读取 message list / message view 原文；通知只给对象、问题和入口。",
+            "用户写入和成员管理须房主控制凭据；本地成员写入须本人的 --access-file，不能借用用户或其他成员身份。凭据文件私下交付，不公开 token。",
+            "runner 成员等待本机接入程序交付有效任务，不另建定时。用 message post --as 本人 --kind chat --execution 本次编号 --access-file FILE 回答；不执行 execution enter。执行失效后保留草稿，不能去掉编号改作普通发言。",
+            "manual 成员可由人工或软件原生定时触发，用本人成员文件自行提交。回答带 --request 请求编号（可重复）关闭自己的请求，不带则为普通发言。不得编造 execution 编号。",
+            "online 成员只读，在原聊天回答，由用户以房主凭据代发原文；作者仍是在线成员、提交者为用户，不能用成员凭证自行写入。复制说明不表示已送达或接入。",
+            "获授 host 职责的本地成员可在回答中用 --to 点名其他成员，不能点名自己或扩大权限；route 表示分配任务，handoff 表示派出的成员已结束。链上 AI 请求受房间预算限制，到限等待用户。",
+            f"附件使用 attachment upload/download；上传使用本人成员文件，消息带 attachment_ids。原始接口为 {base}/attachments 与 {base}/messages，自动成员在回答完成前上传。",
+            "每次新内容用新 submission_id，同次重试沿用编号、原文、凭据和执行/请求关联；失败先核对服务端结果，不换身份或编号绕过。用户打断、成员离开或移除后停止本次工作。",
+        ])
     return "\n\n".join([
         "# 本地 CLI 读写与主持协议", f"当前主持人：{room['host']}。以下为留言板接口，不是模型服务 API。",
         "写入使用 POST，通常为 Content-Type: application/json；附件上传使用 application/octet-stream 原始字节。主持操作填写 actor 为当前主持人或用户；这些是声明身份，不是认证凭据。",
         f"附件：POST {base}/attachments?actor=身份&file_name=文件名&submission_id=新编号，原文件最多 20 MiB；GET 同路径默认列已发送附件，加 submission_id 精确核对上传。GET {base}/attachments/ID 读元数据，/ID/content 下载原文件。消息可带 attachment_ids（最多 10 个有序编号）；只关联同房间、同提交者的未使用附件，可只有附件无正文。自动任务须在回答完成前上传；消息查询包含附件，按需下载后由当前软件读取，不自动解析。",
         "讨论上限：room.limits 返回轮次、总时长、单次执行、到限方式、收束预留和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长/单次执行时限。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理；附 force:true 可在进行中提前进入收束，由主持人在收束预留时间内总结。到限停止新专家安排与观点；总结由真实主持人完成，预留计入总时长；暂停期间不计时也不消耗总时长。",
-        "运行方式：room.runtime 显示 manual/automatic、状态及真实执行回执。启用保护的房间写入须带 X-Discussion-Token；CLI 用 --access-file 读取本机私有文件，不公开令牌。自动任务先 execution enter，创建安排或保存关联回答即完成本步；不创建原生定时任务。旧执行在暂停、停止、换代、租约到期后失效。手动接入沿用原流程；受保护房间仍须用户提供有效的凭据文件。运行控制用 run view/start/pause/stop/configure；字段查 CLI schema。",
+        "运行方式：room.runtime 显示 manual/automatic、状态及真实执行回执。所有房间写入须带 X-Discussion-Token，CLI 用 --access-file 读取私有文件。用户及运行控制使用房主凭据，手动本地成员使用自己的成员凭证，不能相互冒充；在线成员只读，由房主或讨论主持人代发。自动讨论先 execution enter，创建安排或保存关联回答即完成本步，不创建原生定时任务；持久成员凭证不能替代自动执行，暂停、停止、换代、租约到期后的旧执行失效。run view/start/pause/stop/configure 字段查 CLI schema。",
         f"发言权：GET {base}/floor 返回 holder、next_speaker、revision；POST 同路径，字段 actor、speaker（默认 actor）、action=take/return、revision（刚读到的整数版本）。仅无人持有且 next_speaker 为本人时可领取；持有者可主动归还，下一位回到主持人。版本变化返回 409，先读回核对。主持人仅可代操作 online 专家，cli 专家自行操作；用户可协助。",
         "新房间由主持人持有发言权。创建安排须主持人持有，保存成功即归还并点名该专家；AI 的 opinion、moderation、receipt 都须实际作者持有，代发不豁免，opinion 必须关联有效 turn_id。消息保存成功自动归还，下一位为主持人。失败不归还，同编号重试不再次交接。用户本人发言不受发言权限制，也不改变发言权；@ 不改变顺序。维护状态、阶段及通知回执不占用发言权。取消安排须主持人持有，用户可直接取消失效安排；取消后归还给主持人领取。",
-        '创建话题：POST /api/rooms；字段 title、goal、user_request（用户原文）、background、boundaries、host、experts、submission_id（新 UUID），例如 experts={"Codex":"cli","Gemini":"online"}。AI 主持人必须配置为 cli。同编号对照首次创建资料，重试不覆盖后来修改的房间；旧客户端不带编号时没有幂等保护。',
+        '创建话题：POST /api/rooms，携带房主控制凭据；字段 title、goal、user_request、background、boundaries、host、experts、members、submission_id（新 UUID）。members 与 experts 名单一致，各项含 name、独立 token、access（手动本地 manual、自动 runner、在线 online）。AI 主持人必须为本地可写成员。CLI room create --access-file 私有房主文件 在请求前保存凭据，确认后返回各本地成员文件路径；同编号重试沿用原资料和全部凭据。名单、主持职责变更仅房主可做。',
         f"查询提交：GET /api/rooms?submission_id=编号 查建房结果；GET {base}/messages?submission_id=编号 或 {base}/turns?submission_id=编号 查消息或安排。查询成功且列表为空表示尚未查到，读取失败不表示未写入。",
         f"增量读取：GET {base}/messages?after=已读消息编号，每次最多 20 条，按 next_after 续读，has_more 表示还有一批；可加 kind=opinion/moderation/receipt、author、mention、q。after 不与翻页混用，过滤后的游标只代表该查询范围。",
         f"维护话题：POST {base}/topic；actor 加需要修改的上述字段，另可更新 phase（preparing/initial/discussing/reviewing/paused/concluded）、focus。收束前先完成或取消当前安排。暂停保留安排；恢复阶段后再继续。",
@@ -1400,7 +1420,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Forward authenticated browser requests to the shared Node entrypoint and pin their website."""
         site = self.local_request_site(method)
         route = parts[2:]
-        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-member"]):
+        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-member"], ["models"]):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
             command = "settings"
@@ -1410,6 +1430,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = "room-config"
         elif route == ["room-models"] and method == "POST":
             command = "room-models"
+        elif route == ["models"] and method == "POST":
+            command = "models"
         elif route == ["room-member"] and method == "POST":
             command = "room-member"
         else:

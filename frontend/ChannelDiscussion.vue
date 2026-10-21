@@ -223,15 +223,16 @@ function format_elapsed(seconds) {
   return `${Math.floor(seconds / 3600)}小时${Math.floor((seconds % 3600) / 60)}分${String(seconds % 60).padStart(2, "0")}秒`;
 }
 const pending_duration = computed(() => format_elapsed(pending_seconds.value));
-const identities = computed(() => Object.entries(bridge.identities).map(([name, identity]) => ({
-  label: bridge.display_name(name), value: name,
-  avatar: { src: identity.icon, text: identity.initials, alt: bridge.display_name(name), class: `channel-avatar ${identity.style}` },
-  description: name === "用户" ? "发起与协助" : room.value?.experts?.[name] === "cli" ? "本地 CLI · 读写" : room.value?.experts?.[name] === "online" ? "在线 AI · 只读" : "未配置参与方式",
-})));
+const identities = computed(() => ["用户", ...Object.keys(room.value?.experts || {}).filter(name => room.value.experts[name] === "online")].map(name => {
+  const identity = bridge.identities[name];
+  return { label: bridge.display_name(name), value: name,
+    avatar: { src: identity.icon, text: identity.initials, alt: bridge.display_name(name), class: `channel-avatar ${identity.style}` },
+    description: name === "用户" ? "本人发言" : "代发在线成员原文" };
+}));
 const selected_identity = computed(() => identities.value.find((item) => item.value === author.value));
-const kinds = [{ label: "运行回执", value: "receipt" }, { label: "普通发言 / 代发", value: "opinion", icon: "i-lucide-message-square" }, { label: "主持发言", value: "moderation", icon: "i-lucide-list-checks" }, { label: "主持人代发", value: "forward", icon: "i-lucide-forward" }];
+const kinds = [{ label: "运行回执", value: "receipt" }, { label: "普通发言 / 代发", value: "opinion", icon: "i-lucide-message-square" }, { label: "主持发言", value: "moderation", icon: "i-lucide-list-checks" }, { label: "代发在线观点", value: "forward", icon: "i-lucide-forward" }];
 const date_formatter = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" });
-const author_note = computed(() => kind.value === "receipt" ? "运行回执，由用户录入" : kind.value === "forward" ? `${bridge.display_name(room.value.host)} 代发` : kind.value === "moderation" ? "主持发言" : author.value === "用户" ? "本人发言" : `代发 ${author.value} 的观点`);
+const author_note = computed(() => kind.value === "receipt" ? "运行回执，由用户录入" : kind.value === "forward" ? "由用户代发" : kind.value === "moderation" ? "主持发言" : author.value === "用户" ? "本人发言" : `代发 ${author.value} 的观点`);
 
 /** End a structured excerpt after complete code lines or table rows. */
 function trim_preview_blocks(fragment) {
@@ -743,7 +744,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
         <template #footer>
           <UButton type="button" icon="i-lucide-paperclip" aria-label="添加附件" title="图片、PDF 或其他文件 · 每个最多 20 MiB" color="neutral" variant="ghost" size="sm" :disabled="view.sending_message" @click="act('choose_attachments')" />
           <div v-if="!free" class="channel-composer-identity">
-            <USelectMenu v-model="author" :items="identities" value-key="value" :avatar="selected_identity?.avatar" :disabled="kind === 'moderation'" :search-input="{ placeholder: '搜索身份…', icon: 'i-lucide-search' }" :content="{ side: 'top', align: 'start', sideOffset: 10 }" variant="none" size="sm" aria-label="发言身份" class="channel-author-select" :ui="{ content: 'channel-select-menu channel-identity-menu', itemLeadingAvatarSize: 'xs' }" />
+            <USelectMenu v-model="author" :items="identities" value-key="value" :avatar="selected_identity?.avatar" :disabled="['moderation', 'receipt'].includes(kind)" :search-input="{ placeholder: '搜索身份…', icon: 'i-lucide-search' }" :content="{ side: 'top', align: 'start', sideOffset: 10 }" variant="none" size="sm" aria-label="发言身份" class="channel-author-select" :ui="{ content: 'channel-select-menu channel-identity-menu', itemLeadingAvatarSize: 'xs' }" />
             <USelect v-model="kind" :items="kinds" :icon="kinds.find((item) => item.value === kind)?.icon" :content="{ side: 'top', align: 'start', sideOffset: 10 }" variant="none" size="sm" aria-label="发言职责" class="channel-kind-select" :ui="{ content: 'channel-select-menu' }" />
           </div>
           <span class="channel-shortcut"><UKbd value="ctrl" /><UKbd value="enter" /></span>
@@ -752,7 +753,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           <UButton type="button" trailing-icon="i-lucide-arrow-up" color="neutral" label="发送" size="sm" class="channel-primary-button channel-send" :disabled="(!text.trim() && !view.attachment_drafts.length) || (needs_summary && !answer_summary.trim())" :loading="pending === 'send' || view.sending_message" @click="send" />
         </template>
       </UChatPrompt>
-      <div class="channel-composer-note"><span v-if="free">{{ free_members.length > 1 ? '点名的成员会各自处理' : `消息会交给 ${free_members.map((member) => bridge.display_name(member.name)).join('、') || 'AI'} 处理` }}<span class="channel-note-divider">·</span>处理中可随时停止</span><span v-else>{{ author_note }}<span class="channel-note-divider">·</span>在线 AI 的观点需代发</span><span class="channel-draft-length">{{ text_length }} / {{ bridge.max_message_length }}<span class="channel-note-divider">·</span>Enter 换行</span></div>
+      <div class="channel-composer-note"><span v-if="free">点名分配任务<span class="channel-note-divider">·</span>手动成员需在原会话触发</span><span v-else>{{ author_note }}<span class="channel-note-divider">·</span>在线 AI 的观点需代发</span><span class="channel-draft-length">{{ text_length }} / {{ bridge.max_message_length }}<span class="channel-note-divider">·</span>Enter 换行</span></div>
     </div></div>
   </section>
 </template>
@@ -760,7 +761,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
 <style scoped>
 .channel-free-recipients { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px 2px; font-size: 12px; color: var(--ui-text-muted); }
 .channel-free-recipients button { min-height: 26px; padding: 2px 8px; border: 1px solid var(--ui-border); border-radius: 6px; color: var(--ui-text-toned); }
-.channel-free-recipients button.is-on { border-color: var(--channel-accent); background: color-mix(in srgb, var(--channel-accent) 14%, transparent); color: var(--ui-text-highlighted); }
+.channel-free-recipients button.is-on { background: color-mix(in srgb, var(--channel-accent) 14%, transparent); color: var(--ui-text-highlighted); }
 .channel-free-recipients small { flex-basis: 100%; color: var(--ui-text-dimmed); font-size: 11px; }
 .channel-link-button { color: var(--channel-accent); text-decoration: underline; text-underline-offset: 2px; }
 .channel-message-elapsed { align-self: flex-start; margin-left: auto; line-height: 28px; white-space: nowrap; }
