@@ -1,5 +1,6 @@
 /** Durable website-event delivery to AI software and explicitly configured API participants. */
 import { createHash, randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -11,6 +12,14 @@ import { read_api_key } from './discussion_api.mjs';
 
 const POLL_MS = 2000;
 /** Headless CLIs know their session at start, so the runner enters the execution instead of spending model turns on it. */
+let rg_available;
+/** Windows PowerShell mis-decodes UTF-8 files, so point the AI at rg only when it is installed. */
+function windows_rg() {
+  if (process.platform !== 'win32') return false;
+  rg_available ??= spawnSync('rg', ['--version'], { stdio: 'ignore', windowsHide: true }).status === 0;
+  return rg_available;
+}
+
 const AUTO_ENTER_ADAPTERS = new Set(['codex_cli', 'claude', 'antigravity_cli']);
 const DELIVERY_RETRY_DELAYS_MS = [2000, 4000];
 const RENEW_MS = 30_000;
@@ -128,7 +137,9 @@ export class DiscussionStore {
           && CODEX_ADAPTERS.includes(next[1]) && session && next[6] === session && (!item[6] || item[6] === session)
           && JSON.stringify(item.slice(2, 6)) === JSON.stringify(next.slice(2, 6));
       });
-      if (!allowed) throw new Error('已绑定会话的项目、cwd 或身份配置发生变化；请暂停并使用独立运行目录重新接入');
+      // Experts invited during a run only add entries; every existing binding must stay as it was.
+      const added = before.every(item => entries.some(next => JSON.stringify(next) === JSON.stringify(item)));
+      if (!allowed && !added) throw new Error('已绑定会话的项目、cwd 或身份配置发生变化；请暂停并使用独立运行目录重新接入');
     }
     this.db.prepare("INSERT INTO metadata VALUES ('context',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(context);
   }
@@ -187,8 +198,9 @@ export function task_files(config, event, token, binding) {
     draft_directory,
     role: event.role, turn_id: event.turn_id, skills, cli, subcommands: TASK_SUBCOMMANDS, access_file: access_path,
     instructions: `读取指定技能；网站命令只用 ${cli} 的 subcommands 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口；${auto_enter ? '接入程序已进入本次执行，不要再执行 execution enter。' : `使用 ${cli} execution enter 房间 执行编号 --access-file 凭据路径 进入。进入成功后才处理本次安排；`}凭据文件由 CLI 内部读取，不要打印或读取其 token。每次业务写入都带 --access-file。答案草稿只保存到 draft_directory，不修改任务、凭据、日志或调度数据库；${project_rule}只处理本次工作，不建定时任务。主持创建下一安排或收束即结束，专家提交原文后结束。无效或已进入的任务不要重复执行。` });
-  const scope = `本次只放行任务内 subcommands 列出的 ${cli} 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口。任务内 cwd 是讨论项目目录；${project_rule}项目读写仍受软件实际权限和议题授权约束。不读取凭据内容。读取含中文的技能或文本文件时用 rg --encoding utf-8 . 文件路径，不用 Get-Content（Windows PowerShell 会按系统编码读出乱码，需要反复重试）。`;
-  const plan_rule = event.role === 'host' ? '安排专家回应时先写发言计划，用 turn create --plan-file 一次排满本轮或可预知的整个序列，不要每次只排一位。' : '';
+  const read_rule = windows_rg() ? '读取含中文的技能或文本文件时用 rg --encoding utf-8 . 文件路径，不用 Get-Content（Windows PowerShell 会按系统编码读出乱码，需要反复重试）。' : '';
+  const scope = `本次只放行任务内 subcommands 列出的 ${cli} 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口。任务内 cwd 是讨论项目目录；${project_rule}项目读写仍受软件实际权限和议题授权约束。不读取凭据内容。${read_rule}`;
+  const plan_rule = event.role === 'host' ? '安排专家回应时先写发言计划，用 turn create --plan-file 一次排满本轮每位专家，不要每次只排一位。' : '';
   const intro = `用户已启动此房间的全自动讨论。请以 ${event.participant} 的${event.role === 'host' ? '主持' : '专家'}职责处理本次工作。${plan_rule}`;
   const prompt = auto_enter
     ? `${intro}接入程序已为本次执行完成 execution enter，不要再执行。任务内容如下（同一份保存在 ${task_path}，无需再读）：
@@ -210,8 +222,9 @@ export class DiscussionRunner {
     this.seen = new Set();
     this.blocked = new Set();
   }
-  /** Append one timestamped stage to the event's trace file; tracing must never affect delivery. */
+  /** Append one timestamped stage to the event's trace file when CODISCUSS_TRACE=1; tracing must never affect delivery. */
   trace(id, stage, detail = {}) {
+    if (process.env.CODISCUSS_TRACE !== '1') return;
     try { appendFileSync(join(this.config.directory, `event-${id}.trace.jsonl`), JSON.stringify({ t: new Date().toISOString(), stage, ...detail }) + '\n', { mode: 0o600 }); }
     catch { /* Diagnostics only. */ }
   }

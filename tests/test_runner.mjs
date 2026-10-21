@@ -752,7 +752,8 @@ test('tasks direct website work to the approved codiscuss subcommands', async t 
   const claude = task_files({ ...f.config, participants: { Codex: { adapter: 'claude' } } }, f.event, 'token-for-test', {});
   assert.match(claude.prompt, /接入程序已为本次执行完成 execution enter/);
   assert(!claude.prompt.includes('立即用'));
-  assert.match(claude.prompt, /rg --encoding utf-8/);
+  const has_rg = process.platform === 'win32' && spawnSync('rg', ['--version'], { stdio: 'ignore' }).status === 0;
+  assert.equal(/rg --encoding utf-8/.test(claude.prompt), has_rg);
   const agy = task_files({ ...f.config, participants: { Codex: { adapter: 'antigravity_cli' } } }, f.event, 'token-for-test', {});
   assert.match(agy.prompt, /接入程序已为本次执行完成 execution enter/);
   assert.match(agy.prompt, /turn create --plan-file/);
