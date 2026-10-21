@@ -1,0 +1,4 @@
+interface:
+  display_name: "安装与配置"
+  short_description: "在已克隆的仓库中完成本机安装、配置、升级与诊断，可选部署 Cloudflare 在线网站"
+  default_prompt: "使用 $codiscuss-setup，在当前仓库完成 AI CoDiscuss 的本机安装与配置。"

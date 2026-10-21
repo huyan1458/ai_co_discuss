@@ -53,6 +53,8 @@ npm link
 codiscuss setup
 ```
 
+也可以在仓库中打开本地 AI，调用 [codiscuss-setup](.agents/skills/codiscuss-setup/SKILL.md)（Codex 为 `$codiscuss-setup`，其他 AI 明确读取该文件），由 AI 完成安装、配置、升级、诊断，以及可选的 Cloudflare 在线部署。
+
 `setup` 使用同一安装配置流程并打开本机网站；命令链接到当前仓库，移动仓库后需重新安装。只需手动接入时，可用 `python server.py` 并保持终端打开，访问 <http://127.0.0.1:8765>，网站命令使用 `python runner/discuss.py …`。直接运行 Python 的数据位于 `data/discuss.sqlite3`，与 `codiscuss local` 的包外数据独立；两种启动方式不要交替操作同一讨论。
 
 ### 发起第一场讨论

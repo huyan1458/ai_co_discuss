@@ -38,7 +38,7 @@
 ## 仓库维护
 
 - 首先阅读 README 与目标模块在 docs 中的说明；贡献约定见 .github/CONTRIBUTING.md。
-- 测试位于 tests/，构建脚本位于 scripts/；.agents/skills/ 分发 discuss-host、discuss-participant、discuss-report 三份讨论相关技能，不纳入维护者的个人通知 Skill，不依赖维护者个人目录。
+- 测试位于 tests/，构建脚本位于 scripts/；.agents/skills/ 分发 discuss-host、discuss-participant、discuss-report 三份讨论相关技能，并提供仅在源码仓库内使用的 codiscuss-setup 安装与部署技能（不进入 npm 包、不由安装器复制）；只有 .gitignore 白名单内的技能入库，新增分发技能须同步白名单，不纳入维护者的个人通知 Skill，不依赖维护者个人目录。
 - 本仓库独立提供讨论网站、CLI、讨论技能与全自动接入程序（`runner/`），不依赖其他项目的代码、数据或个人工具；接入程序只用 Node.js 内置模块，修改后同步 `docs/runner.md` 与 `tests/test_runner.mjs`。
 - `backend/` 保存两套后端和共用 schema，根目录 `server.py` 为启动入口。修改 backend/server.py、backend/worker.mjs、backend/schema.sql 的业务协议时同步两套后端及相关测试；不在 web/modern.js 等构建产物中手改。
 - `frontend/` 保存 Vue、Markdown 和备份源码，`web/` 保存直接运行的静态网页与构建产物。前端源码修改后运行 `npm run build`，同步 `web/` 中的生成资源，Pages 输出位于 `dist/pages/`。`npm test` 使用临时数据，不接入真实专家；纯文档修改核对事实、链接和格式即可，不默认运行全量测试或构建。

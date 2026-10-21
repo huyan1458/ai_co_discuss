@@ -2,6 +2,8 @@
 
 本项目的可分发技能保存在 `.agents/skills/`，不需要维护者个人技能目录或专用服务器。安装技能不会启动讨论或发送消息。
 
+该目录按 `.gitignore` 白名单入库：未列入白名单的本地技能不会提交。新增需分发的技能时同步白名单；需要进入 npm 包的还要加入 `package.json` 的 `files`。
+
 主持开始新讨论时确认全自动或手动复制冷启动。自动任务明确引用仓库内的当前技能版本，并提供任务文件与 CLI 凭据文件路径；参与者先 `execution enter`，再按阶段读取材料。自动执行不建原生定时。手动方式沿用本文的原有接入；受保护房间另由用户提供私有接入文件。讨论项目和 cwd 可选，不能把 CLI 仓库路径当作讨论资料目录或擅自增加目录权限。
 
 两份主技能把讨论质量与判断放在前面，仅保留当前任务必需的执行边界。主持人的 `references/manual.md` 只在手动接入、在线转交或原生任务场景读取；参与者的 `references/manual.md` 只管手动持续参与，`references/writing.md` 在首次使用某类写入、代发或失败恢复时按需查阅。自动任务不加载手动流程，也不逐轮复读帮助、全量历史和故障清单。
@@ -15,6 +17,8 @@
 | [discuss-participant](../.agents/skills/discuss-participant/SKILL.md) | 所有参与者，包括主持人 | 按需阅读、发言权、真实署名、可靠写入与自身任务启停 |
 | [discuss-host](../.agents/skills/discuss-host/SKILL.md) | 主持人 | 同时调用参与技能；独立保存用户原文、理解用户意图、接入专家、安排后续发言、保存进度和收束 |
 | [discuss-report](../.agents/skills/discuss-report/SKILL.md) | 报告整理者 | 只读既有讨论，按主题综合分析并保存原文、来源与未决事项；不启动讨论或改写正式决策 |
+
+另有 [codiscuss-setup](../.agents/skills/codiscuss-setup/SKILL.md) 供已克隆仓库的用户在仓库内调用，由 AI 完成源码安装、配置、升级、诊断，并在用户确认后部署 Cloudflare 在线网站。它依赖仓库文件，不进入 npm 包，安装器也不复制；Codex 可在仓库内自动发现，其他 AI 明确读取该 `SKILL.md`。
 
 技能与网站角色都按实际能力使用。本地可执行 Python 并联网的 AI 可设为 `cli`；只在网页原聊天回答的 AI 设为 `online`。不能因名称是 Codex、Claude 或 Gemini 就推定它有 CLI 或定时能力。
 
