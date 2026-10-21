@@ -1616,7 +1616,7 @@ test('two instances of one platform keep separate sessions and credentials', asy
   assert.equal(JSON.parse(readFileSync(join(config.directory, 'free-2.access.json'), 'utf8')).token, config.members['Claude-评审'].token);
 });
 
-test('the runner enters an auto-enter execution once even when the session is reported twice, and records a failed enter', async t => {
+test('the runner enters an auto-enter execution once even when the session is reported twice, and pauses after a failed enter', async t => {
   const f = await fixture(t);
   const config = { ...f.config, participants: { Codex: { adapter: 'antigravity_cli', executable: process.execPath } } };
   for (const failing of [false, true]) {
@@ -1631,7 +1631,14 @@ test('the runner enters an auto-enter execution once even when the session is re
     f.store.receive({ events: [f.event], next_after: 1 });
     await runner.dispatch(f.store.pending()[0], f.event);
     assert.equal(f.calls.filter(action => action === 'enter').length, 1);
-    if (failing) assert.match(f.store.pending()[0].error, /接入程序进入执行失败/);
+    if (failing) {
+      assert.match(f.store.pending()[0].error, /接入程序进入执行失败/);
+      await runner.reconcile(f.store.pending()[0], f.event);
+      assert.ok(f.calls.includes('fail'));
+      assert.equal(f.event.status, 'failed');
+      assert.equal(f.run.status, 'paused');
+      f.run.status = 'running';
+    }
     f.store.record(1, { status: 'pending', error: '' });
   }
 });

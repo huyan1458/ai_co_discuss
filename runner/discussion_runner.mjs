@@ -349,7 +349,7 @@ export class DiscussionRunner {
     for (const { row, event } of pending) {
       if (event.generation !== run.generation || event.run_id !== run.run_id) this.store.record(row.id, { status: 'cancelled' });
     }
-    for (const { row } of pending) if (!this.seen.has(row.id)) { this.seen.add(row.id); this.trace(row.id, 'event_seen'); }
+    for (const { row, event } of pending) if (!this.seen.has(row.id)) { this.seen.add(row.id); this.trace(row.id, 'event_seen', { event_created_at: event.created_at }); }
     const next = eligible.at(-1);
     if (next && this.running.get(next.event.participant) && !this.blocked.has(next.row.id)) {
       this.blocked.add(next.row.id);

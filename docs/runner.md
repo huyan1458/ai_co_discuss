@@ -230,6 +230,8 @@ Windows 的 `executable` 填原生 `.exe`，不填 npm 的 `.cmd` / `.ps1` 包�
 
 两种新适配器都不需要 `source_thread_id` 或 `ipc_directory`。实际 ID 在输出流到达时写入本机绑定和本次执行凭据，随后由接入程序在会话启动时直接 `execution enter`（`codex_cli`、`claude` 与 `antigravity_cli`，任务内容内联进提示词，省去模型读文件和进入的往返；其余适配器仍由 AI 自行进入），AI 通过讨论 CLI 保存业务结果；Codex CLI 输出 `turn.completed` 1.5 秒后若进程未退出即终止，避免同会话的下一次投递等待收尾。每次执行在任务目录写 `event-ID.trace.jsonl`（时间戳加阶段：`event_seen`、`blocked_by_running_process`、`reserve_*`、`permission_check_*`、`cli_spawned`、`enter_*`、Codex 的 `thread.started` / `turn.started` / 工具命令 / `turn.completed`、`kill_after_completed`、`cli_closed`），仅用于定位各阶段耗时，不含凭据；程序不把终端回答直接代发。Codex App / CLI 可通过上述暂停后配置修正保留原绑定切换；其他适配器或项目、会话变更仍须使用独立 `data_directory` 明确重新接入。此路径不承诺 CLI 会话自动出现在桌面 App 的项目列表。
 
+trace 中 `event_seen.event_created_at` 记录服务端事件创建时间，`t` 仍为本机记录该阶段的实际时间，两者分别用于核对事件创建后的等待和本机阶段耗时。
+
 `codex_cli` 的 `exec resume` 需要取得该会话的写入权；已有聊天仍被 Codex App 或另一进程持有时，会报 `thread-store conflict / already has an active writer`，App 显示空闲也不代表已释放。重复重试或仅关闭窗口不能保证解除占用。需要沿用 App 原聊天时，暂停后在本场接入设置中切到 `codex`，由 `codex queue` 向原聊天交付；需要独立 CLI 时，使用未被占用的 CLI 会话或新建讨论时省略会话 ID。接入程序保留这一根因，不让后续模型列表刷新超时覆盖它，也不自动换会话或切换适配器。
 
 ### 单次执行权限

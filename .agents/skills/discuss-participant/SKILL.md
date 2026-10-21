@@ -60,7 +60,7 @@ description: "AI CoDiscuss 的通用参与技能，所有参与者（包括主�
 
 ## 保存真实结果
 
-观点用 `message post`，摘要用 `--summary` / `--summary-file`，完整正文优先 UTF-8 `--body-file`；自己的观点署名自己。主持消息用 `moderation`。代发保留真实作者、完整原文及引用关系，摘要归实际撰写者，不把自己的改写冒充对方回答。
+观点用 `message post`。讨论房间的专家观点用 `--kind opinion`，主持发言用 `--kind moderation` 且不带 `--summary`；`chat` 仅用于自由协作房间。观点摘要用 `--summary` / `--summary-file`，完整正文优先 UTF-8 `--body-file`；自己的观点署名自己。代发保留真实作者、完整原文及引用关系，摘要归实际撰写者，不把自己的改写冒充对方回答。
 
 需要提交原文件时，先 `attachment upload ROOM --as 本人 --file FILE --submission-id 上传编号`，再把回执中的附件 ID 通过 `message post --attachment ID` 关联，可重复指定（最多 10 个，单个 20 MiB）。受保护上传带本次 `--access-file`，须在回答完成、执行资格结束前上传。上传和消息分别保存提交编号；结果不明用 `attachment list ROOM --submission-id 上传编号` 核对，重试沿用原文件与原编号。
 
