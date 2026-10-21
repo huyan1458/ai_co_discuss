@@ -36,6 +36,7 @@ MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 MAX_MESSAGE_ATTACHMENTS = 10
 MAX_FILENAME_LENGTH = 255
 LOCAL_LAUNCH_TIMEOUT = 60
+DIRECTORY_PICKER_TIMEOUT = 600  # the folder dialog waits for the person at the computer
 MAX_TEXT_LENGTH = 32000
 MAX_STATE_LENGTH = 4000
 MAX_BRIEF_LENGTH = 1600
@@ -1420,7 +1421,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Forward authenticated browser requests to the shared Node entrypoint and pin their website."""
         site = self.local_request_site(method)
         route = parts[2:]
-        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-member"], ["models"]):
+        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-member"], ["models"], ["pick-directory"]):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
             command = "settings"
@@ -1434,6 +1435,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = "models"
         elif route == ["room-member"] and method == "POST":
             command = "room-member"
+        elif route == ["pick-directory"] and method == "POST":
+            command = "pick-directory"
         else:
             raise LookupError("本机入口不存在")
         payload = None
@@ -1473,11 +1476,13 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             arguments.append("--stdin")
         try:
             result = subprocess.run(arguments, input=json.dumps(payload) if payload is not None else None,
-                                    capture_output=True, encoding="utf-8", timeout=LOCAL_LAUNCH_TIMEOUT,
+                                    capture_output=True, encoding="utf-8", timeout=DIRECTORY_PICKER_TIMEOUT if command == "pick-directory" else LOCAL_LAUNCH_TIMEOUT,
                                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
         except FileNotFoundError as error:
             raise ValueError("本机启动需要 Node.js 24+，请安装并加入 PATH") from error
         except subprocess.TimeoutExpired as error:
+            if command == "pick-directory":
+                raise ValueError("目录选择窗口已超时，请重试或直接输入完整路径") from error
             raise ValueError("启动结果未确认，请核对房间状态后沿用原配置重试") from error
         if result.returncode:
             try:

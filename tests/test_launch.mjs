@@ -10,7 +10,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { cached_software_models, launch_discussion, launch_settings, room_configuration, room_member, save_launch_settings } from '../runner/discussion_launch.mjs';
+import { cached_software_models, launch_discussion, pick_directory, launch_settings, room_configuration, room_member, save_launch_settings } from '../runner/discussion_launch.mjs';
 import { api, DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { DiscussionService, read_registry, register_room } from '../runner/discussion_service.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
@@ -66,6 +66,24 @@ test('Claude model discovery sends only initialization and strips account metada
   assert.ok(f.invocations[0][1].includes('--no-session-persistence'));
   assert.ok(!JSON.stringify(result).includes('private@example.test'));
   assert.equal(f.child.killed, true);
+});
+
+test('directory picker returns only an absolute chosen path and never guesses on cancel', async () => {
+  const runs = [];
+  const fake = (output, code = 0) => (command, args, options) => {
+    runs.push({ command, args, options });
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    queueMicrotask(() => { child.stdout.end(output); child.stdout.on('end', () => child.emit('close', code)); child.stdout.resume(); });
+    return child;
+  };
+  const chosen = await pick_directory({ platform: 'win32', spawn_process: fake('D:\\项目\\demo\r\n') });
+  assert.deepEqual(chosen, { path: 'D:\\项目\\demo' });
+  assert.equal(runs[0].command, 'powershell.exe');
+  assert.equal(runs[0].options.shell, false);
+  assert.deepEqual(await pick_directory({ platform: 'darwin', spawn_process: fake('', 1) }), { cancelled: true });
+  assert.deepEqual(await pick_directory({ platform: 'linux', spawn_process: fake('relative/path\n') }), { cancelled: true });
+  await assert.rejects(pick_directory({ platform: 'aix', spawn_process: fake('') }), /直接输入/);
 });
 
 test('slow model catalogs are reused until the executable changes or the user retries', async t => {

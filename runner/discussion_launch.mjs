@@ -1,4 +1,5 @@
 /** Shared launch configuration for an existing AI conversation and the local website. */
+import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -38,12 +39,14 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch room-models --file FILE
       codiscuss launch models --file FILE
       codiscuss launch room-member --file FILE
+      codiscuss launch pick-directory
 
 settings 读取本机软件默认配置；指定文件时保存，不启动 AI。
 start 使用启动 JSON 创建或接入房间并启动；--dry-run 只校验和预览。
 room-config 修正已暂停房间的软件路径或切换 Codex App / CLI，不启动讨论；须提供 site、room_id、token。
 room-models 只读指定 site、room_id 的本机登记模型与思考强度，不启动讨论。
 models 按 adapter、executable 读取本机 CLI 的模型目录，不启动讨论或生成回答。
+pick-directory 在本机弹出系统目录选择窗口，返回所选路径；取消时不返回路径。
 room-member 为运行中的自由房间邀请或请回一位成员；须提供 site、room_id、token、action（add/rejoin）、name。
 JSON 指定 site、entry（conversation/web）、room（建房内容，含 submission_id）
 或 room_id（已有房间）、participants（本次软件覆盖配置）。
@@ -51,6 +54,37 @@ conversation 还须 current_session_id，当前会话接手首个主持任务。
 已有受保护房间使用 access_file。路径、凭据只保存在本机。
 详见 docs/runner.md 的“两种讨论入口与启动配置”。
 `;
+
+// Windows PowerShell 5.1 ships WinForms; a topmost owner keeps the dialog above the browser that asked for it.
+const WINDOWS_PICKER = [
+  'Add-Type -AssemblyName System.Windows.Forms',
+  '[Console]::OutputEncoding = [Text.Encoding]::UTF8',
+  '$owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; ShowInTaskbar = $false }',
+  '$dialog = New-Object System.Windows.Forms.FolderBrowserDialog -Property @{ Description = "选择项目目录"; ShowNewFolderButton = $true }',
+  'if ($dialog.ShowDialog($owner) -eq "OK") { $dialog.SelectedPath }',
+].join('; ');
+const PICKERS = {
+  win32: ['powershell.exe', ['-NoProfile', '-STA', '-Command', WINDOWS_PICKER]],
+  darwin: ['osascript', ['-e', 'POSIX path of (choose folder with prompt "选择项目目录")']],
+  linux: ['zenity', ['--file-selection', '--directory', '--title=选择项目目录']],
+};
+
+/** Show the platform's own folder dialog on this computer; cancelling resolves without a path. */
+export function pick_directory({ platform = process.platform, spawn_process = spawn } = {}) {
+  const picker = PICKERS[platform];
+  if (!picker) return Promise.reject(new Error('此系统不支持目录选择窗口，请直接输入完整路径'));
+  return new Promise((resolve_result, reject) => {
+    const child = spawn_process(picker[0], picker[1], { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    let output = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', chunk => { output += chunk; });
+    child.once('error', () => reject(new Error('无法打开目录选择窗口，请直接输入完整路径')));
+    child.once('close', code => {
+      const path = output.trim();
+      resolve_result(code === 0 && isAbsolute(path) ? { path } : { cancelled: true });
+    });
+  });
+}
 
 /** Some CLIs take seconds to list models; reuse a good list for a day unless the executable changes or the user retries. */
 const MODEL_CACHE_MS = 24 * 60 * 60 * 1000;
@@ -610,6 +644,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     result = await cached_software_models(home, { adapter: input.adapter, executable: input.executable || saved?.executable }, { refresh: input.refresh === true });
   }
   else if (positionals[0] === 'room-member' && input) result = await room_member(home, input);
+  else if (positionals[0] === 'pick-directory') result = await pick_directory();
   else if (positionals[0] === 'start' && input) result = await launch_discussion(home, input, { dry_run: values['dry-run'], browser_request: values.browser });
   else if (positionals[0] === 'room-config' && input) result = await room_configuration(home, input, { local_guard: values['configuration-locked'] });
   else throw new Error(HELP);

@@ -163,8 +163,9 @@ onBeforeUnmount(() => cancelAnimationFrame(frame));
 .effort-value-leave-to { opacity: 0; transform: translateY(-3px); }
 /* Stops, fill and thumb share the pointer mapping: an inset of one thumb radius at both ends. */
 .effort-slider { --inset: 10px; --travel: calc(100% - 2 * var(--inset)); position: relative; height: 28px; touch-action: pan-y; cursor: pointer; outline: none; }
-.effort-slider-track { position: absolute; top: 50%; left: var(--inset); right: var(--inset); height: 4px; border-radius: 999px; background: var(--ui-bg-accented); transform: translateY(-50%); }
-.effort-slider-fill { position: absolute; inset: 0 auto 0 0; width: calc(var(--progress) * 100%); border-radius: inherit; background: var(--channel-accent); }
+/* The rail runs past the first and last stops, so the ends are clean caps rather than dots on an edge. */
+.effort-slider-track { position: absolute; top: 50%; left: 2px; right: 2px; height: 4px; border-radius: 999px; background: var(--ui-bg-accented); transform: translateY(-50%); }
+.effort-slider-fill { position: absolute; inset: 0 auto 0 0; width: calc(var(--inset) - 2px + (100% + 4px - 2 * var(--inset)) * var(--progress)); border-radius: inherit; background: var(--channel-accent); }
 .effort-slider-stop { position: absolute; top: 50%; left: calc(var(--inset) + var(--travel) * var(--at)); width: 4px; height: 4px; border-radius: 50%; background: var(--ui-text-dimmed); transform: translate(-50%, -50%); transition: background-color .15s ease, transform .15s ease; }
 .effort-slider-stop.is-active { background: color-mix(in srgb, var(--channel-accent) 35%, white); }
 .effort-slider-stop.is-current { transform: translate(-50%, -50%) scale(0); }

@@ -30,7 +30,7 @@ const can_flip = computed(() => entry_items.value.length > 0);
 const card_label = computed(() => props.mode === "online" ? `设置 ${props.name} 的参与方式` : `配置 ${props.name} 的本地软件`);
 const models = computed(() => bridge.launch_model_state(props.name, view.value.launch));
 const configurable = computed(() => Boolean(props.automatic && props.mode === "cli" && models.value.supported));
-const configuration_note = computed(() => props.mode === "online" ? "模型与思考强度在原网页聊天中选择。回答由你或授权主持人代发。"
+const configuration_note = computed(() => configurable.value && connection.value.length ? "补齐上方连接后，可在这里选择模型与思考强度。" : props.mode === "online" ? "模型与思考强度在原网页聊天中选择。回答由你或授权主持人代发。"
   : !props.automatic ? "在已有 App 或 CLI 会话中选择模型与强度，再交给它参与指令。本地 AI 可自行提交回答。"
   : profile.value.adapter ? "模型与思考强度在 App 原聊天中选择，本页不覆盖 App 设置。" : "先选择软件入口。支持启动参数的 CLI 可在这里设置模型与强度。");
 const effort_items = computed(() => {
@@ -41,11 +41,27 @@ const effort_items = computed(() => {
 const effort_label = computed(() => effort_items.value?.find((item) => item.value === (profile.value.effort || ""))?.label
   || (profile.value.adapter === "antigravity_cli" ? "强度随模型" : profile.value.effort || "默认强度"));
 // The front lists the read-only configuration; strength appears only where this page sets it.
+// Each automatic CLI expert gets its own project permission; online experts can only read.
+const sets_access = computed(() => props.automatic && props.mode === "cli");
+const access = computed(() => profile.value.project_access || view.value.launch.workspace?.project_access || "read");
 const facts = computed(() => [
   { label: "软件", value: entry_label.value },
   { label: "模型", value: configurable.value ? profile.value.model || "默认模型" : props.mode === "online" ? "在原网页设置" : "在原软件设置" },
   ...configurable.value ? [{ label: "强度", value: effort_label.value }] : [],
+  ...sets_access.value || props.mode === "online" ? [{ label: "项目", value: sets_access.value && access.value === "write" ? "可写" : "只读" }] : [],
 ]);
+// Ask only for connection values that are missing; a field stays while the back is open so typing does not hide it.
+const CONNECTION_FIELDS = { executable: { label: "路径", placeholder: "可执行文件完整路径" },
+  ipc_directory: { label: "IPC", placeholder: "Sidecar IPC 目录" }, source_thread_id: { label: "聊天", placeholder: "Codex App 来源聊天 ID" } };
+const asked = ref([]);
+const required_connection = () => {
+  const adapter = profile.value.adapter;
+  if (!sets_access.value || !adapter) return [];
+  return (adapter === "antigravity" ? ["ipc_directory"] : adapter === "codex" ? ["executable", "source_thread_id"] : ["executable"])
+    .filter(field => !profile.value[field]);
+};
+const connection = computed(() => !sets_access.value ? []
+  : [...new Set([...asked.value, ...required_connection()])].map(field => ({ field, ...CONNECTION_FIELDS[field] })));
 
 /** Restore focus only while the user is still waiting on this card. */
 function focus_face() {
@@ -69,6 +85,7 @@ const stop_settling = angle.on("animationComplete", focus_face);
 function flip(next) {
   if (next && !can_flip.value) return;
   card.value?.focus({ preventScroll: true });
+  asked.value = next ? required_connection() : [];
   back.value = next;
 }
 
@@ -137,11 +154,21 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
         <div v-if="automatic && mode === 'cli' && entry_items.length" class="expert-card-field">
           <span>软件</span><USelect :model-value="profile.adapter || ''" :items="entry_items" placeholder="选择 App / CLI" :aria-label="`${name} 软件入口`" size="xs" class="w-full" @update:model-value="bridge.write_launch(name, 'adapter', $event)" />
         </div>
-        <template v-if="configurable">
-          <div class="expert-card-field">
-            <span>模型</span><USelect :model-value="profile.model || '__default__'" :items="models.items" :loading="models.loading" :aria-label="`${name} 使用的模型`" size="xs" class="w-full" @update:model-value="bridge.write_launch_model(name, $event)" />
+        <div v-for="item in connection" :key="item.field" class="expert-card-field">
+          <span>{{ item.label }}</span><UInput :model-value="profile[item.field] || ''" :placeholder="item.placeholder" :aria-label="`${name} ${item.placeholder}`" size="xs" class="w-full" @update:model-value="bridge.write_launch(name, item.field, $event)" />
+        </div>
+        <div v-if="sets_access" class="expert-card-field">
+          <span>项目</span>
+          <div class="expert-card-modes" role="radiogroup" :aria-label="`${name} 的项目文件权限`">
+            <button v-for="option in [{ value: 'read', label: '只读' }, { value: 'write', label: '可写' }]" :key="option.value" type="button" role="radio"
+              :aria-checked="access === option.value" @click="bridge.write_launch(name, 'project_access', option.value)">{{ option.label }}</button>
           </div>
-          <div class="expert-card-catalog"><span>{{ models.loading ? '正在读取软件模型列表…' : models.error || models.source }}</span><button v-if="!models.loading && models.error && view.launch.available" type="button" @click="bridge.load_launch_models(name, true)">重试</button></div>
+        </div>
+        <template v-if="configurable && !connection.length">
+          <div class="expert-card-field">
+            <span>模型</span><USelect :model-value="profile.model || '__default__'" :items="models.items" :loading="models.loading" :title="models.source" :aria-label="`${name} 使用的模型`" size="xs" class="w-full" @update:model-value="bridge.write_launch_model(name, $event)" />
+          </div>
+          <div v-if="models.loading || models.error" class="expert-card-catalog"><span>{{ models.loading ? '正在读取软件模型列表…' : models.error }}</span><button v-if="!models.loading && models.error && view.launch.available" type="button" @click="bridge.load_launch_models(name, true)">重试</button></div>
           <div v-if="effort_items" class="expert-card-effort">
             <EffortSlider caption="强度" :items="effort_items" :model-value="profile.effort || ''" :label="`${name} 的思考强度`" @update:model-value="bridge.write_launch(name, 'effort', $event)" />
           </div>
@@ -158,7 +185,7 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
 <style scoped>
 .expert-card { min-width: 0; perspective: 900px; outline: none; }
 /* Every card keeps one height in both delivery modes; the back scrolls only if a long note overflows. */
-.expert-card-turn { display: grid; height: 212px; transform-style: preserve-3d; }
+.expert-card-turn { display: grid; height: 224px; transform-style: preserve-3d; }
 .expert-card-face { grid-area: 1 / 1; min-width: 0; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); box-shadow: var(--channel-shadow-control); backface-visibility: hidden; }
 .expert-card.is-host .expert-card-front { border-color: color-mix(in srgb, #e0b44a 45%, var(--ui-border)); }
 .expert-card-front { position: relative; display: flex; }
@@ -190,7 +217,7 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
 .expert-card-heading strong { display: flex; align-items: baseline; gap: 6px; min-width: 0; overflow: hidden; color: var(--ui-text-highlighted); font-size: 12px; font-weight: 600; white-space: nowrap; }
 .expert-card-heading strong > span { font-size: 10px; font-weight: 400; color: var(--ui-text-muted); }
 .expert-card-modes { display: flex; gap: 3px; padding: 3px; border-radius: 5px; background: var(--ui-bg-muted); }
-.expert-card-modes button { flex: 1; min-height: 26px; border-radius: 4px; color: var(--ui-text-muted); font-size: 11px; }
+.expert-card-modes button { flex: 1; min-height: 22px; border-radius: 4px; color: var(--ui-text-muted); font-size: 11px; }
 .expert-card-modes button[aria-checked="true"] { background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); box-shadow: var(--channel-shadow-control); }
 .expert-card-field { display: grid; grid-template-columns: 26px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--ui-text-dimmed); font-size: 11px; }
 .expert-card-catalog { display: flex; align-items: baseline; gap: 8px; margin: -5px 0 0 34px; color: var(--ui-text-dimmed); font-size: 10px; overflow-wrap: anywhere; }

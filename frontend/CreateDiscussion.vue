@@ -1,6 +1,6 @@
 <script setup>
 /** New-discussion form: the user states the topic in their own words; the AI host drafts goal, background and boundaries. */
-import { computed, inject, nextTick, onMounted, ref, watch } from "vue";
+import { computed, inject, nextTick, onMounted, ref } from "vue";
 import LaunchSettings from "./LaunchSettings.vue";
 import LimitPicker, { format_duration } from "./LimitPicker.vue";
 import ExpertCard from "./ExpertCard.vue";
@@ -9,7 +9,6 @@ const props = defineProps({ targetFolder: { type: Object, default: null } });
 const emit = defineEmits(["submit", "cancel"]);
 const { view, bridge, pending } = inject("discussion");
 const EXPERT_CONTAINER = "new-expert-modes";
-const ACCESS_ITEMS = [{ label: "只读", value: "read" }, { label: "可写", value: "write" }];
 const experts = Object.keys(bridge.identities).filter((name) => name !== "用户");
 const field_id = (key) => `new-room-${key}`;
 const value = (key) => view.value.fields[field_id(key)] ?? "";
@@ -38,10 +37,6 @@ const launch_ready = (name) => {
 };
 const launching = computed(() => automatic.value && view.value.launch.available && (free.value || view.value.launch.create));
 const free_ready = computed(() => selected_names.value.length > 0 && (!automatic.value || selected_names.value.every(launch_ready) && view.value.launch.available));
-const launch_open = ref(false);
-watch(() => [launching.value, launch_names.value.every(launch_ready), view.value.launch.error], ([on, ready, error]) => {
-  if (on && (!ready || error)) launch_open.value = true;
-}, { immediate: true });
 
 /** Keep the host inside the selected local members; free rooms also allow the user. */
 function ensure_host() {
@@ -110,6 +105,14 @@ function remove_expert(name) {
   nextTick(() => library.value?.querySelector("button:not(:disabled)")?.focus({ preventScroll: true }));
 }
 
+const picking = ref(false);
+
+/** Open the computer's folder dialog through the local service; typing a path remains available. */
+async function pick_directory() {
+  picking.value = true;
+  try { await bridge.pick_launch_directory(); } finally { picking.value = false; }
+}
+
 /** Submit the currently visible wheel values, including during an unfinished gesture. */
 function submit() {
   limit_picker.value?.settle();
@@ -146,7 +149,8 @@ const summary = computed(() => {
           </button>
         </div>
         <UFormField label="话题名称" required><UInput :model-value="value('title')" :maxlength="80" required autofocus size="lg" :placeholder="free ? '这次要一起做什么？' : '这次想讨论什么？'" class="w-full" @update:model-value="write('title', $event)" /></UFormField>
-        <UFormField label="用户原文" required :description="free ? '写下任务、背景和协作范围，成员按需阅读。' : '写下问题、背景和顾虑，AI 主持人据此补全讨论资料。'"><UTextarea :model-value="value('user_request')" :maxlength="4000" :rows="5" autoresize :maxrows="12" required placeholder="例如：我们在 A、B 两个方案之间犹豫，主要顾虑是成本和上线时间……" class="w-full" @update:model-value="write('user_request', $event)" /></UFormField>
+        <!-- A free room's task evolves in the conversation itself, so only the discussion form asks for an opening brief. -->
+        <UFormField v-if="!free" label="用户原文" required description="写下问题、背景和顾虑，AI 主持人据此补全讨论资料。"><UTextarea :model-value="value('user_request')" :maxlength="4000" :rows="5" autoresize :maxrows="12" required placeholder="例如：我们在 A、B 两个方案之间犹豫，主要顾虑是成本和上线时间……" class="w-full" @update:model-value="write('user_request', $event)" /></UFormField>
       </section>
 
       <section class="create-section">
@@ -202,17 +206,13 @@ const summary = computed(() => {
         <template v-if="view.launch.available">
           <UCheckbox v-if="!free" :model-value="view.launch.create" label="创建后立即启动 AI" description="由本机服务创建会话并交付首个主持任务；不勾选则只建房，稍后在「接入」页启动。" @update:model-value="bridge.write_launch('create', '', $event)" />
           <template v-if="free || view.launch.create">
-            <div class="form-two-columns">
-              <UFormField label="项目目录（可选）" help="要一起查看的项目；留空时 AI 只在讨论私有目录工作"><UInput :model-value="view.launch.workspace.cwd || ''" placeholder="已有目录的完整路径" class="w-full" @update:model-value="bridge.write_launch('workspace', 'cwd', $event)" /></UFormField>
-              <UFormField label="项目文件" :help="free ? '默认只读；要让 AI 改代码请选可写，仅本房间有效' : '默认只读；可写允许 CLI 专家按议题修改项目文件，仅本次有效'"><USelect :model-value="view.launch.workspace.project_access || 'read'" :items="ACCESS_ITEMS" class="w-full" @update:model-value="bridge.write_launch('workspace', 'project_access', $event)" /></UFormField>
-            </div>
-            <ul class="create-launch-list">
-              <li v-for="name in launch_names" :key="name"><UIcon :name="launch_ready(name) ? 'i-lucide-circle-check' : 'i-lucide-circle-alert'" :class="launch_ready(name) ? 'is-ready' : 'is-warn'" /><strong>{{ name }}</strong><span>{{ bridge.launch_summary(name).client }} · {{ bridge.launch_summary(name).session }} · {{ bridge.launch_summary(name).access }} · {{ bridge.launch_summary(name).cwd }}</span></li>
-            </ul>
-            <UCollapsible v-model:open="launch_open">
-              <UButton :icon="launch_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" label="调整启动配置" color="neutral" variant="link" size="sm" class="create-more" />
-              <template #content><LaunchSettings :participants="launch_names" :workspace="false" :model-selection="false" /></template>
-            </UCollapsible>
+            <UFormField label="项目目录（可选）">
+              <div class="create-directory">
+                <UInput :model-value="view.launch.workspace.cwd || ''" placeholder="输入完整路径，或点右侧选择" class="w-full" @update:model-value="bridge.write_launch('workspace', 'cwd', $event)" />
+                <UButton icon="i-lucide-folder-open" label="选择…" color="neutral" variant="outline" :loading="picking" @click="pick_directory" />
+              </div>
+            </UFormField>
+            <p class="fine-print create-hint">要一起查看的项目；留空时 AI 只在讨论私有目录工作。读写权限在各专家卡片上设置。</p>
           </template>
         </template>
         <LaunchSettings v-else :participants="launch_names" :workspace="false" :model-selection="false" />
@@ -236,7 +236,6 @@ const summary = computed(() => {
 .create-section + .create-section { padding-top: 22px; border-top: 1px solid var(--ui-border-muted); }
 .create-section h3 { display: flex; align-items: center; gap: 9px; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
 .create-section h3 > span { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: color-mix(in srgb, var(--channel-accent) 18%, transparent); color: var(--channel-accent); font-size: 11px; }
-.create-more { align-self: flex-start; padding-inline: 0; color: var(--ui-text-muted); }
 .create-modes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
 .create-mode { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; text-align: left; background: color-mix(in srgb, var(--ui-bg-elevated) 35%, transparent); color: var(--ui-text-muted); }
 .create-mode:hover { border-color: var(--ui-border-accented); }
@@ -281,13 +280,8 @@ const summary = computed(() => {
 .create-hint { margin-top: -4px !important; }
 .create-limit-rule { display: flex; align-items: flex-start; gap: 8px; padding-top: 14px; border-top: 1px solid var(--ui-border-muted); color: var(--ui-text-muted); font-size: 12px; }
 .create-limit-rule > [class*="icon"] { flex-shrink: 0; width: 13px; height: 13px; margin-top: 2px; color: var(--channel-accent); }
-.create-launch-list { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 9px; background: var(--ui-bg-muted); font-size: 12px; }
-.create-launch-list li { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.create-launch-list strong { flex-shrink: 0; color: var(--ui-text-highlighted); }
-.create-launch-list span { overflow: hidden; color: var(--ui-text-muted); white-space: nowrap; text-overflow: ellipsis; }
-.create-launch-list [class*="icon"] { flex-shrink: 0; align-self: center; width: 14px; height: 14px; }
-.is-ready { color: #3fb27f; }
-.is-warn { color: #e0a33a; }
+.create-directory { display: flex; gap: 8px; }
+.create-directory > button { flex-shrink: 0; }
 .create-footer { flex-shrink: 0; padding: 14px 26px 16px; border-top: 1px solid var(--ui-border-muted); }
 .create-footer-row { display: flex; align-items: center; gap: 8px; }
 .create-summary { flex: 1; min-width: 0; overflow: hidden; color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }

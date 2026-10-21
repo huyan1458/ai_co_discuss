@@ -41,7 +41,7 @@ const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: ""
   archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
   reply_to: null, turn_reply_to: null, tab: "topic", refresh_version: 0, context_dirty: false, topic_dirty: false,
   snapshot_id: 0, pending_submission: null, pending_turn: null, pending_room: null, toast_timer: null,
-  creation_mode: "brainstorm:manual", creation_drafts: {}, access_notice: "", access_error: "" };
+  creation_mode: "brainstorm:automatic", creation_drafts: {}, access_notice: "", access_error: "" };
 const live_updates = { source: null, connected: false, enabled: false, timer: null, poll_timer: null,
   running: false, dirty: false };
 state.messages = [];
@@ -58,7 +58,7 @@ state.directory_error = "";
 state.directory_pending = new Map();
 state.directory_version = 0;
 state.navigation_version = 0;
-state.launch = { available: false, remote: false, connect_command: "", profiles: {}, workspace: {}, create: false, error: "", notice: "", recoveries: [] };
+state.launch = { available: false, remote: false, connect_command: "", profiles: {}, workspace: {}, create: true, error: "", notice: "", recoveries: [] };
 const PLATFORM_CLIENTS = { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }],
   Claude: [{ value: "claude", label: "Claude Code CLI" }],
   Gemini: [{ value: "antigravity_cli", label: "Antigravity CLI" }, { value: "antigravity", label: "Antigravity App" }] };
@@ -1304,7 +1304,8 @@ function room_creation_payload(folder_id) {
   const common = { title: element("new-room-title").value, goal: element("new-room-goal").value,
     host: element("new-room-host").value, user_request: element("new-room-user_request").value,
     experts: read_expert_inputs("new-expert-modes"), folder_id };
-  if (element("new-room-kind").value === "free") return { ...common, mode: "free", host: common.host || "用户" };
+  // Free rooms carry their task in the conversation, so no opening brief is sent even if one was typed for a discussion.
+  if (element("new-room-kind").value === "free") return { ...common, user_request: "", mode: "free", host: common.host || "用户" };
   return { ...common, mode: "brainstorm", background: element("new-room-background").value,
     boundaries: element("new-room-boundaries").value, runtime_mode: element("new-room-mode").value, limits: read_limits("new-room"),
     ...(state.create_parent ? { parent_room_id: state.create_parent } : {}) };
@@ -1329,7 +1330,8 @@ async function submit_room(event, folder_id = null) {
   const payload = room_creation_payload(folder_id);
   const free = payload.mode === "free";
   const automatic = free ? element("new-room-mode").value === "automatic" : payload.runtime_mode === "automatic";
-  const launching = automatic && (free || state.launch.create);
+  // A discussion can still be created without the local service and started later from the room.
+  const launching = automatic && (free || state.launch.create && state.launch.available);
   if (launching && !state.launch.available) throw new Error("程序唤醒需要连接本机服务；也可改用手动接入");
   const launch_draft = launching ? launch_options() : null;
   const signature = JSON.stringify({ payload, launch_draft });
@@ -1360,7 +1362,7 @@ async function submit_room(event, folder_id = null) {
     element("room-form").reset();
     reset_creation_mode();
     render_expert_inputs("new-expert-modes", default_experts());
-    state.launch.create = false;
+    state.launch.create = true;
     if (launching) element("room-dialog").close();
   }
   if (launching) clear_launch_overrides(launch_draft);
@@ -1489,7 +1491,7 @@ async function resume_launch(id) {
       element("room-form").reset();
       reset_creation_mode();
       render_expert_inputs("new-expert-modes", default_experts());
-      state.launch.create = false;
+      state.launch.create = true;
       element("room-dialog").close();
     }
     if (!record.direct) clear_launch_overrides(record.input);
@@ -1693,6 +1695,16 @@ function clear_launch_overrides(draft) {
     if (state.launch.workspace[field] === draft[field]) delete state.launch.workspace[field];
   }
   render_launch_settings();
+  publish_view();
+}
+
+/** Let the user browse for the project folder on the computer running the local service. */
+async function pick_launch_directory() {
+  try {
+    const result = await local_launch_request("pick-directory", {});
+    if (result.path) write_launch_field("workspace", "cwd", result.path);
+    state.launch.error = "";
+  } catch (error) { state.launch.error = error.message; }
   publish_view();
 }
 
@@ -2053,9 +2065,9 @@ async function interrupt_member(member_id) {
 
 /** A completed creation starts the next form with fresh mode defaults. */
 function reset_creation_mode() {
-  state.creation_mode = "brainstorm:manual";
+  state.creation_mode = "brainstorm:automatic";
   state.creation_drafts = {};
-  element("new-room-limit-execution_minutes")?.closest("label")?.setAttribute("hidden", "");
+  element("new-room-limit-execution_minutes")?.closest("label")?.removeAttribute("hidden");
 }
 
 /** Render independently configurable expert modes without changing identity names. */
@@ -2784,7 +2796,7 @@ function change_view_theme(theme) {
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
   write_launch: write_launch_field, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
-  launch_model_state, load_launch_models, write_launch_model, launch_summary, empty_discussion_message,
+  launch_model_state, load_launch_models, write_launch_model, launch_summary, pick_launch_directory, empty_discussion_message,
   start_drag: start_directory_drag,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, platform_of, execute: execute_view_action, theme: change_view_theme,

@@ -328,6 +328,27 @@ test("card defaults reset only the current instance and Escape returns directly 
   fixture.cleanup();
 });
 
+test("each automatic CLI card sets its own project access and asks only for a missing connection", async () => {
+  const fixture = expert_card_fixture(), { context, view, props } = fixture;
+  const fact = label => vm.runInContext("facts.value", context).find(item => item.label === label)?.value;
+  assert.equal(fact("项目"), "只读");
+  view.value.launch.profiles.Codex.project_access = "write";
+  assert.equal(fact("项目"), "可写");
+  props.mode = "online";
+  assert.equal(fact("项目"), "只读", "online experts never get write access");
+  props.mode = "cli";
+  props.automatic = false;
+  assert.equal(fact("项目"), undefined, "manual sessions keep the permissions of their own software");
+  props.automatic = true;
+  assert.deepEqual(Array.from(vm.runInContext("connection.value", context), item => item.field), ["executable"]);
+  context.flip(true);
+  view.value.launch.profiles.Codex.executable = "C";
+  assert.deepEqual(Array.from(vm.runInContext("connection.value", context), item => item.field), ["executable"], "the field stays while typing");
+  context.flip(false);
+  assert.equal(vm.runInContext("connection.value", context).length, 0);
+  fixture.cleanup();
+});
+
 test("cards read model catalogs only for automatic CLI and pure web participants cannot flip", async () => {
   const fixture = expert_card_fixture();
   fixture.view.value.launch.available = true;
@@ -1255,7 +1276,7 @@ for (const recovery of [false, true]) test(`local defaults exclude session bindi
   assert.equal(state.launch.profiles.Codex.session_id, undefined);
   assert.equal(state.launch.profiles.Codex.executable, 'C:\\codex.exe');
   assert.deepEqual(Object.keys(state.launch.workspace), []);
-  assert.equal(state.launch.create, false);
+  assert.equal(state.launch.create, true, "the next form starts with immediate launch on again");
   assert.equal(dialog_closes, 1);
   assert.equal(state.launch.error, '');
 });
@@ -1304,6 +1325,7 @@ test("automatic creation uses configured local clients and preserves independent
   const state = f.context.test_state;
   const mode = { value: 'manual' };
   const host = { value: '用户' };
+  state.creation_mode = 'brainstorm:manual';
   f.nodes.set('new-room-kind', { value: 'brainstorm' });
   f.nodes.set('new-room-mode', mode); f.nodes.set('new-room-host', host);
   let experts = { Codex: 'cli', Claude: 'online', DeepSeek: 'online' };
@@ -2462,7 +2484,7 @@ for (const interaction of ["navigation", "classic draft input"]) test(`room crea
   let resets = 0;
   let input;
   fixture.context.document.addEventListener = (type, listener) => { if (type === "input") input = listener; };
-  fixture.context.element = id => ({ addEventListener() {}, closest: () => ({ setAttribute() {} }),
+  fixture.context.element = id => ({ addEventListener() {}, closest: () => ({ setAttribute() {}, removeAttribute() {} }),
     ...(id === "room-dialog" ? { close: () => { closes++; } } : { reset: () => { resets++; } }) });
   fixture.context.bind_controls();
   Object.assign(fixture.context, {
