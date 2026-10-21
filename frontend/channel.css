@@ -318,9 +318,13 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 
 /* The right rail exposes actual topic context and configured participants. */
 .channel-member-rail { display: flex; flex-direction: column; width: var(--channel-rail-width, 280px); flex-shrink: 0; overflow-y: auto; scrollbar-gutter: stable; background: #232428; }
-.channel-nav-resizer, .channel-rail-resizer { position: relative; width: 6px; min-height: 0; flex-shrink: 0; cursor: col-resize; touch-action: none; background: #232428; }
-:is(.channel-nav-resizer, .channel-rail-resizer)::after { content: ""; position: absolute; inset: 0 2px; background: #ffffff0b; transition: background .12s; }
-:is(.channel-nav-resizer, .channel-rail-resizer):is(:hover, :focus-visible)::after, .channel-resizing :is(.channel-nav-resizer, .channel-rail-resizer)::after { background: var(--channel-accent); }
+/* The handle overlaps the seam instead of taking layout width, so neighbouring panels meet without a gap strip. */
+.channel-nav-resizer, .channel-rail-resizer { position: relative; z-index: 2; width: 6px; margin-inline: -3px; min-height: 0; flex-shrink: 0; cursor: col-resize; touch-action: none; background: transparent; }
+/* Each side shows one 1px divider at rest; the handle widens to an accent bar only while it can be dragged. */
+:is(.channel-nav-resizer, .channel-rail-resizer)::after { content: ""; position: absolute; inset: 0 auto 0 calc(50% - .5px); width: 1px; background: #ffffff0b; transition: background .12s; }
+:is(.channel-nav-resizer, .channel-rail-resizer):is(:hover, :focus-visible)::after, .channel-resizing :is(.channel-nav-resizer, .channel-rail-resizer)::after { left: calc(50% - 1px); width: 2px; background: var(--channel-accent); }
+/* The transcript thumb appears only while the pointer or focus is in it, so it does not read as another divider. */
+.channel-shell .channel-transcript:not(:hover, :focus-within) { scrollbar-color: transparent transparent; }
 :is(.channel-nav-resizer, .channel-rail-resizer):focus-visible { outline: none; }
 .channel-resizing, .channel-resizing * { cursor: col-resize !important; user-select: none !important; }
 .channel-overview { margin: 0 16px; padding: 23px 0 20px; border-bottom: 1px solid #ffffff0b; }
@@ -587,6 +591,8 @@ html[data-theme^="channel"] .theme-choices small { color: #a1aab9; }
 .channel-reading-setting { margin-top: 22px; padding-top: 20px; border-top: 1px solid #ffffff0d; }
 .channel-reading-setting h3 { margin-bottom: 10px; color: #cbd3df; font-size: 12px; font-weight: 500; }
 .channel-reading-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 4px; background: #1d1f25; border: 1px solid #ffffff0b; border-radius: 8px; }
+.channel-effect-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.channel-reading-setting .fine-print { margin-top: 8px; }
 .channel-reading-options button { justify-content: center; border-radius: 5px; min-height: 32px; color: #a1aab9; font-size: 12px; }
 .channel-reading-options button.chosen { color: #eef0ff; background: #414552; box-shadow: 0 1px 3px #0003; }
 
@@ -643,7 +649,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 
 
 @media (min-width: 1200px) {
-  .channel-shell.channel-has-rail { grid-template-columns: var(--channel-main-columns) 6px var(--channel-rail-width); }
+  .channel-shell.channel-has-rail { grid-template-columns: var(--channel-main-columns) 0 var(--channel-rail-width); }
 }
 @media (min-width: 1900px) {
   .channel-overview { margin-inline: 22px; }
@@ -765,6 +771,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   --channel-line: #ebebeb;
 
   .channel-shell * { scrollbar-color: #c6c6c6 transparent; }
+  .channel-shell .channel-transcript:not(:hover, :focus-within) { scrollbar-color: transparent transparent; }
   .channel-sidebar { background: #f6f6f6; border-color: var(--ui-border-muted); }
   .channel-member-rail { background: #ffffff; }
   .channel-nav-resizer, .channel-rail-resizer { background: transparent; }
@@ -832,6 +839,8 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-tabs [data-slot="indicator"] { background: #ebebeb; }
   .channel-tabbar, .channel-overview, .channel-reading-setting, .access-section, .advanced-fields { border-color: var(--ui-border-muted); }
   :is(.channel-nav-resizer, .channel-rail-resizer)::after { background: var(--ui-border); }
+  /* The sidebar's own border already divides the left edge. */
+  .channel-nav-resizer::after { background: transparent; }
   :is(.channel-nav-resizer, .channel-rail-resizer):is(:hover, :focus-visible)::after,
   .channel-resizing :is(.channel-nav-resizer, .channel-rail-resizer)::after { background: var(--channel-accent); }
   .channel-header-context { border-color: var(--ui-border); }
@@ -964,23 +973,39 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   }
 }
 
-/* Control edges in three strengths: dark themes use faint bright rims and glow, light themes thin dark rims, a top highlight and soft shadow. */
+/* Control edges in three strengths. Dark rims are lit from above and sink below, with no outer glow;
+   floating layers are frosted glass. Light rims are thin cool lines, an inner top highlight, a faint
+   inner bottom shade and a layered blue-gray drop shadow; light surfaces themselves stay opaque. */
 :root[data-theme="channel"] {
   --channel-edge-control: #ffffff14;
   --channel-edge-panel: #ffffff17;
-  --channel-edge-float: #ffffff1f;
+  --channel-edge-float: #ffffff1c;
   --channel-shadow-control: inset 0 1px 0 #ffffff0d;
-  --channel-shadow-panel: inset 0 1px 0 #ffffff0d, 0 0 14px #ffffff08;
-  --channel-shadow-float: inset 0 1px 0 #ffffff14, 0 0 18px #ffffff0f, 0 12px 32px #00000066;
+  --channel-shadow-panel: inset 0 1px 0 #ffffff0f, 0 1px 3px #00000033;
+  --channel-shadow-float: inset 0 1px 0 #ffffff1f, inset 0 -1px 0 #00000040, 0 2px 6px #0000004d, 0 16px 40px #00000073;
+  --channel-glass-bg: linear-gradient(180deg, #34363dc2 0%, #25272cd6 100%);
+  --channel-glass-filter: blur(24px) saturate(180%);
 }
 :root[data-theme="channel-light"] {
   --channel-edge-control: #000a1e1f;
   --channel-edge-panel: #000a1e1a;
   --channel-edge-float: #000a1e1f;
-  --channel-shadow-control: inset 0 1px 0 #ffffff, 0 1px 2px #2432480f;
-  --channel-shadow-panel: inset 0 1px 0 #ffffff, 0 1px 2px #2432480d, 0 4px 14px #2432480f;
-  --channel-shadow-float: inset 0 1px 0 #ffffff, 0 4px 12px #0000000f, 0 12px 32px #2432481f;
+  --channel-shadow-control: inset 0 1px 0 #ffffff, inset 0 -1px 1px #c8d2e633, 0 1px 2px #0014321a;
+  --channel-shadow-panel: inset 0 1px 1px #ffffffe6, inset 0 -2px 4px #c8d2e626, 0 1px 3px #0000000d, 0 8px 24px #00143212;
+  --channel-shadow-float: inset 0 1px 2px #ffffffe6, inset 0 -2px 4px #c8d2e626, 0 4px 12px #0000001a, 0 24px 48px #0014322e;
 }
+/* Reduced effects: no backdrop blur, solid floating layers and single soft shadows. */
+:root[data-theme="channel"][data-effects="reduced"] {
+  --channel-shadow-float: inset 0 1px 0 #ffffff14, 0 10px 28px #00000066;
+  --channel-glass-bg: #2a2c31;
+  --channel-glass-filter: none;
+}
+:root[data-theme="channel-light"][data-effects="reduced"] {
+  --channel-shadow-control: 0 1px 2px #2432480f;
+  --channel-shadow-panel: 0 1px 2px #2432480f;
+  --channel-shadow-float: 0 8px 24px #0014321f;
+}
+:root[data-effects="reduced"] * { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
 :root[data-theme^="channel"] :is(.channel-search-input input:not(:focus), .channel-composer-identity > button:not(:hover, [data-state="open"]), .channel-surface-button:not(:hover), .pb-action:not(:hover), .progress-chip:not(:hover)) { border-color: var(--channel-edge-control); }
 :root[data-theme^="channel"] :is(.channel-search-input input, .channel-composer-identity > button:not(:disabled), .channel-surface-button, .pb-action:not(:disabled), .progress-chip) { box-shadow: var(--channel-shadow-control); }
 :root[data-theme^="channel"] :is(.channel-message:not(:hover, :focus-within), .channel-composer:not(:focus-within), .turn-panel, .summary-form) { border-color: var(--channel-edge-panel); }
@@ -988,6 +1013,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 :root[data-theme^="channel"] .channel-message.channel-topic-card { box-shadow: inset 3px 0 0 var(--channel-accent), var(--channel-shadow-panel); }
 :root[data-theme^="channel"] .channel-composer { box-shadow: var(--channel-shadow-panel) !important; }
 :root[data-theme^="channel"] :is(.channel-menu, .channel-select-menu, .channel-topic-menu, .channel-nav-preview, .channel-message-toolbar, .channel-latest-button, .channel-details, .channel-navigation-drawer, .glass-panel, .channel-brief-content) { border-color: var(--channel-edge-float); box-shadow: var(--channel-shadow-float); }
+:root[data-theme="channel"] :is(.channel-menu, .channel-select-menu, .channel-topic-menu, .channel-nav-preview, .channel-message-toolbar, .channel-latest-button, .channel-details, .channel-navigation-drawer, .glass-panel, .channel-brief-content) { background: var(--channel-glass-bg) !important; -webkit-backdrop-filter: var(--channel-glass-filter); backdrop-filter: var(--channel-glass-filter); }
 /* Like the light theme, the dark seams show only the resize handle's line. */
 :root[data-theme="channel"] .channel-sidebar { border-right-color: transparent; }
 :root[data-theme="channel"] :is(.channel-nav-resizer, .channel-rail-resizer) { background: transparent; }

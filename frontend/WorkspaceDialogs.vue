@@ -2,9 +2,10 @@
 import { computed, inject, ref, watch } from "vue";
 import CreateDiscussion from "./CreateDiscussion.vue";
 
-const props = defineProps({ detailId: { type: Number, default: null }, targetRoom: { type: Object, default: null }, targetFolder: { type: Object, default: null }, readingOptions: { type: Array, default: () => [] } });
+const props = defineProps({ detailId: { type: Number, default: null }, targetRoom: { type: Object, default: null }, targetFolder: { type: Object, default: null }, readingOptions: { type: Array, default: () => [] }, effectOptions: { type: Array, default: () => [] } });
 const mode = defineModel({ type: String, default: "" });
 const reading_width = defineModel("readingWidth", { type: String, default: "default" });
+const effects = defineModel("effects", { type: String, default: "full" });
 const rendered_mode = ref(mode.value);
 watch(mode, (value) => { if (value) rendered_mode.value = value; });
 const { view, bridge, field, act, pending } = inject("discussion");
@@ -227,6 +228,11 @@ async function follow_reply() {
         <section class="channel-reading-setting">
           <h3 id="channel-reading-label">对话宽度</h3>
           <div class="channel-reading-options" role="group" aria-labelledby="channel-reading-label"><UButton v-for="option in readingOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: reading_width === option.value }" :aria-pressed="reading_width === option.value" @click="reading_width = option.value" /></div>
+        </section>
+        <section class="channel-reading-setting">
+          <h3 id="channel-effects-label">视觉效果</h3>
+          <div class="channel-reading-options channel-effect-options" role="group" aria-labelledby="channel-effects-label"><UButton v-for="option in effectOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: effects === option.value }" :aria-pressed="effects === option.value" @click="effects = option.value" /></div>
+          <p class="fine-print">精简模式关闭毛玻璃模糊与多层阴影，适合配置较低或需要更流畅滚动的设备。</p>
         </section>
       </div>
       <CreateDiscussion v-else-if="rendered_mode === 'create'" :target-folder="targetFolder" @submit="save_form" @cancel="mode = ''" />

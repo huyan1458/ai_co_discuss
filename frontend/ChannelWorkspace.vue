@@ -21,6 +21,7 @@ const brief = field("brief-input");
 const search = field("search-input");
 const author = field("author-select");
 const LAYOUT_KEY = "ai-codiscuss-channel-layout";
+const EFFECT_OPTIONS = [{ value: "full", label: "完整" }, { value: "reduced", label: "精简" }];
 const READING_WIDTHS = { narrow: { label: "窄", width: 720 }, default: { label: "默认", width: 960 }, wide: { label: "宽", width: 1240 } };
 const RAIL_MIN = 220;
 const RAIL_MAX = 440;
@@ -32,9 +33,11 @@ const NAV_DEFAULT = 248;
 const NAV_STEP = 16;
 const CONTENT_MIN = 480;
 const RAIL_BREAKPOINT = 1200;
-const DIVIDER_WIDTH = 6;
+// Resize handles overlap the panel seams (see channel.css), so their grid tracks take no width.
+const DIVIDER_WIDTH = 0;
 const saved_layout = read_layout();
 const reading_width = ref(saved_layout.reading);
+const effects = ref(saved_layout.effects);
 const rail_width = ref(saved_layout.rail);
 const nav_width = ref(saved_layout.nav);
 const viewport_width = ref(typeof window === "undefined" ? NAV_DEFAULT + CONTENT_MIN + DIVIDER_WIDTH : window.innerWidth);
@@ -62,6 +65,8 @@ const layout_style = computed(() => ({
 }));
 const width_options = Object.entries(READING_WIDTHS).map(([value, option]) => ({ value, label: option.label }));
 watch(reading_width, save_layout);
+// Portalled menus and dialogs sit outside the shell, so the preference marks the document root.
+watch(effects, (value) => { document.documentElement.dataset.effects = value; save_layout(); }, { immediate: true });
 watch(nav_collapsed, save_layout);
 watch(rail_collapsed, save_layout);
 onMounted(() => window.addEventListener("resize", update_viewport_width));
@@ -162,13 +167,14 @@ function read_layout() {
     const saved = JSON.parse(localStorage.getItem(LAYOUT_KEY)) || {};
     return {
       reading: Object.hasOwn(READING_WIDTHS, saved.reading) ? saved.reading : "default",
+      effects: saved.effects === "reduced" ? "reduced" : "full",
       rail: Number.isFinite(saved.rail) ? Math.min(RAIL_MAX, Math.max(RAIL_MIN, saved.rail)) : RAIL_DEFAULT,
       nav: Number.isFinite(saved.nav) ? Math.min(NAV_MAX, Math.max(NAV_MIN, saved.nav)) : default_nav_width(),
       collapsed: saved.collapsed === true,
       brief_collapsed: saved.brief_collapsed === true,
       rail_collapsed: saved.rail_collapsed === true,
     };
-  } catch { return { reading: "default", rail: RAIL_DEFAULT, nav: default_nav_width(), collapsed: false, brief_collapsed: false, rail_collapsed: false }; }
+  } catch { return { reading: "default", effects: "full", rail: RAIL_DEFAULT, nav: default_nav_width(), collapsed: false, brief_collapsed: false, rail_collapsed: false }; }
 }
 
 /** Preserve the existing responsive navigation width on first use. */
@@ -179,7 +185,7 @@ function default_nav_width() {
 
 /** Keep layout preferences local without blocking adjustments when storage is unavailable. */
 function save_layout() {
-  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify({ reading: reading_width.value, rail: rail_width.value, nav: nav_width.value, collapsed: nav_collapsed.value, brief_collapsed: brief_collapsed.value, rail_collapsed: rail_collapsed.value })); }
+  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify({ reading: reading_width.value, effects: effects.value, rail: rail_width.value, nav: nav_width.value, collapsed: nav_collapsed.value, brief_collapsed: brief_collapsed.value, rail_collapsed: rail_collapsed.value })); }
   catch { /* The current page can still use the selected layout. */ }
 }
 
@@ -405,6 +411,6 @@ function resize_nav_by_key(event) {
         <UButton icon="i-lucide-pencil" color="neutral" variant="outline" block class="channel-surface-button" label="编辑议题" @click="info_open = false; modal = 'edit'" />
       </template></template>
     </USlideover>
-    <WorkspaceDialogs v-model="modal" v-model:reading-width="reading_width" :reading-options="width_options" :detail-id="detail_id" :target-room="managed_room" :target-folder="target_folder" />
+    <WorkspaceDialogs v-model="modal" v-model:reading-width="reading_width" v-model:effects="effects" :reading-options="width_options" :effect-options="EFFECT_OPTIONS" :detail-id="detail_id" :target-room="managed_room" :target-folder="target_folder" />
   </div>
 </template>
