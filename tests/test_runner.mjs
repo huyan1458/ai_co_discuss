@@ -737,7 +737,7 @@ test('tasks direct website work to the approved codiscuss subcommands', async t 
   const claude = task_files({ ...f.config, participants: { Codex: { adapter: 'claude' } } }, f.event, 'token-for-test', {});
   assert.match(claude.prompt, /接入程序已为本次执行完成 execution enter/);
   assert(!claude.prompt.includes('立即用'));
-  assert.match(claude.prompt, /--\*-file/);
+  assert.match(claude.prompt, /rg --encoding utf-8/);
   const agy = task_files({ ...f.config, participants: { Codex: { adapter: 'antigravity_cli' } } }, f.event, 'token-for-test', {});
   assert.match(agy.prompt, /接入程序已为本次执行完成 execution enter/);
   assert.equal(task.skills_directory, join(f.config.project, '.agents', 'skills'));
@@ -1614,4 +1614,24 @@ test('two instances of one platform keep separate sessions and credentials', asy
   assert.equal(store.binding('Claude').session_id, 'session-main');
   assert.equal(store.binding('Claude-评审').session_id, 'session-review');
   assert.equal(JSON.parse(readFileSync(join(config.directory, 'free-2.access.json'), 'utf8')).token, config.members['Claude-评审'].token);
+});
+
+test('the runner enters an auto-enter execution once even when the session is reported twice, and records a failed enter', async t => {
+  const f = await fixture(t);
+  const config = { ...f.config, participants: { Codex: { adapter: 'antigravity_cli', executable: process.execPath } } };
+  for (const failing of [false, true]) {
+    f.event.status = 'pending'; f.calls.length = 0;
+    if (failing) f.failures.enter = 'before';
+    const runner = new DiscussionRunner(config, f.store, async (adapter, binding, task) => {
+      task.on_binding('session-1'); task.on_binding('session-1');
+      await new Promise(resolve => setTimeout(resolve, 100));
+      return { session_id: 'session-1', status: 'accepted' };
+    });
+    const row = { id: 1, token: '', attempts: 0 };
+    f.store.receive({ events: [f.event], next_after: 1 });
+    await runner.dispatch(f.store.pending()[0], f.event);
+    assert.equal(f.calls.filter(action => action === 'enter').length, 1);
+    if (failing) assert.match(f.store.pending()[0].error, /接入程序进入执行失败/);
+    f.store.record(1, { status: 'pending', error: '' });
+  }
 });

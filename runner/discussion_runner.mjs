@@ -180,7 +180,7 @@ export function task_files(config, event, token, binding) {
     draft_directory,
     role: event.role, turn_id: event.turn_id, skills, cli, subcommands: TASK_SUBCOMMANDS, access_file: access_path,
     instructions: `读取指定技能；网站命令只用 ${cli} 的 subcommands 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口；${auto_enter ? '接入程序已进入本次执行，不要再执行 execution enter。' : `使用 ${cli} execution enter 房间 执行编号 --access-file 凭据路径 进入。进入成功后才处理本次安排；`}凭据文件由 CLI 内部读取，不要打印或读取其 token。每次业务写入都带 --access-file。答案草稿只保存到 draft_directory，不修改任务、凭据、日志或调度数据库；${project_rule}只处理本次工作，不建定时任务。主持创建下一安排或收束即结束，专家提交原文后结束。无效或已进入的任务不要重复执行。` });
-  const scope = `本次只放行任务内 subcommands 列出的 ${cli} 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口。任务内 cwd 是讨论项目目录；${project_rule}项目读写仍受软件实际权限和议题授权约束。不读取凭据内容。含中文的长字段（--goal、--background、--boundaries、--body、--brief、--question、--summary）一律先写成 draft_directory 下的 UTF-8 文件，再用对应的 --*-file 传入；不要把中文放在命令行参数里，Windows 会使其乱码。`;
+  const scope = `本次只放行任务内 subcommands 列出的 ${cli} 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口。任务内 cwd 是讨论项目目录；${project_rule}项目读写仍受软件实际权限和议题授权约束。不读取凭据内容。读取含中文的技能或文本文件时用 rg --encoding utf-8 . 文件路径，不用 Get-Content（Windows PowerShell 会按系统编码读出乱码，需要反复重试）。`;
   const intro = `用户已启动此房间的全自动讨论。请以 ${event.participant} 的${event.role === 'host' ? '主持' : '专家'}职责处理本次工作。`;
   const prompt = auto_enter
     ? `${intro}接入程序已为本次执行完成 execution enter，不要再执行。任务内容如下（同一份保存在 ${task_path}，无需再读）：
