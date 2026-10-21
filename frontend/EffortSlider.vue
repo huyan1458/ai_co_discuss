@@ -7,6 +7,7 @@ const props = defineProps({
   items: { type: Array, required: true },
   modelValue: { type: String, default: "" },
   label: { type: String, required: true },
+  caption: { type: String, default: "" },
 });
 const emit = defineEmits(["update:modelValue"]);
 // Feel.words("precise"): unit mass, 4.5 Hz, critical damping, no oscillation at a stop.
@@ -20,7 +21,9 @@ const track = ref(null);
 const maximum = computed(() => props.items.length - 1);
 const selected = computed(() => Math.max(0, props.items.findIndex((item) => item.value === props.modelValue)));
 const body = reactive({ x: selected.value, v: 0, target: selected.value, hand: null, pointer: null });
-const progress = computed(() => `${Math.min(maximum.value, Math.max(0, body.x)) / maximum.value * 100}%`);
+const ratio = computed(() => Math.min(maximum.value, Math.max(0, body.x)) / maximum.value);
+// The caption follows the stop nearest the moving thumb, so a drag previews its level before release.
+const live = computed(() => Math.round(Math.min(maximum.value, Math.max(0, body.x))));
 let frame = 0, previous_time = 0, origin = 0, grab_offset = 0, moved = false;
 const clamp = (value) => Math.min(maximum.value, Math.max(0, value));
 const spring = (distance, speed, frequency) => -((2 * Math.PI * frequency) ** 2) * distance - 4 * Math.PI * frequency * speed;
@@ -132,27 +135,44 @@ onBeforeUnmount(() => cancelAnimationFrame(frame));
 </script>
 
 <template>
-  <div ref="track" class="effort-slider" role="slider" tabindex="0" :aria-label="label"
-    aria-valuemin="0" :aria-valuemax="maximum" :aria-valuenow="selected" :aria-valuetext="items[selected].label"
-    @keydown="keydown" @pointerdown="grab" @pointermove="move" @pointerup="release"
-    @pointercancel="cancel" @lostpointercapture="cancel">
-    <span class="effort-slider-track" aria-hidden="true">
-      <span class="effort-slider-fill" :style="{ width: progress }" />
-      <span v-for="(item, index) in items" :key="item.value" class="effort-slider-stop"
-        :class="{ 'is-active': index <= body.x, 'is-default': index === 0 }"
-        :style="{ left: `${index / maximum * 100}%` }" :title="item.label" />
-      <span class="effort-slider-thumb" :style="{ left: progress }" />
-    </span>
+  <div class="effort-field">
+    <div v-if="caption" class="effort-caption" aria-hidden="true">
+      <span>{{ caption }}</span>
+      <Transition :name="reduced_motion ? '' : 'effort-value'" mode="out-in"><strong :key="live">{{ items[live].label }}</strong></Transition>
+    </div>
+    <div ref="track" class="effort-slider" :class="{ 'is-dragging': body.pointer !== null }" :style="{ '--progress': ratio }"
+      role="slider" tabindex="0" :aria-label="label"
+      aria-valuemin="0" :aria-valuemax="maximum" :aria-valuenow="selected" :aria-valuetext="items[selected].label"
+      @keydown="keydown" @pointerdown="grab" @pointermove="move" @pointerup="release"
+      @pointercancel="cancel" @lostpointercapture="cancel">
+      <span class="effort-slider-track" aria-hidden="true"><span class="effort-slider-fill" /></span>
+      <span v-for="(item, index) in items" :key="item.value" class="effort-slider-stop" aria-hidden="true"
+        :class="{ 'is-active': index < live, 'is-current': index === live }"
+        :style="{ '--at': index / maximum }" :title="item.label" />
+      <span class="effort-slider-thumb" aria-hidden="true" />
+    </div>
   </div>
 </template>
 
 <style scoped>
-.effort-slider { position: relative; display: flex; align-items: center; height: 36px; padding: 0 10px; touch-action: pan-y; cursor: pointer; outline: none; }
-.effort-slider-track { position: relative; width: 100%; height: 10px; border-radius: 999px; background: var(--ui-bg-accented); }
-.effort-slider-fill { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: var(--channel-accent); }
-.effort-slider-stop { position: absolute; top: 50%; width: 4px; height: 4px; border-radius: 50%; background: var(--ui-text-dimmed); transform: translate(-50%, -50%); }
-.effort-slider-stop.is-active { background: color-mix(in srgb, var(--channel-accent) 40%, white); }
-.effort-slider-stop.is-default { width: 6px; height: 6px; background: var(--ui-bg-elevated); border: 1px solid var(--ui-text-dimmed); }
-.effort-slider-thumb { position: absolute; top: 50%; width: 20px; height: 20px; border: 1px solid #00000012; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px #00000026; transform: translate(-50%, -50%); }
+.effort-field { display: grid; gap: 2px; }
+.effort-caption { display: flex; align-items: center; justify-content: space-between; min-height: 16px; color: var(--ui-text-dimmed); font-size: 11px; }
+.effort-caption strong { color: var(--channel-accent); font-size: 11px; font-weight: 600; }
+.effort-value-enter-active, .effort-value-leave-active { transition: opacity .1s ease, transform .1s ease; }
+.effort-value-enter-from { opacity: 0; transform: translateY(3px); }
+.effort-value-leave-to { opacity: 0; transform: translateY(-3px); }
+/* Stops, fill and thumb share the pointer mapping: an inset of one thumb radius at both ends. */
+.effort-slider { --inset: 10px; --travel: calc(100% - 2 * var(--inset)); position: relative; height: 28px; touch-action: pan-y; cursor: pointer; outline: none; }
+.effort-slider-track { position: absolute; top: 50%; left: var(--inset); right: var(--inset); height: 4px; border-radius: 999px; background: var(--ui-bg-accented); transform: translateY(-50%); }
+.effort-slider-fill { position: absolute; inset: 0 auto 0 0; width: calc(var(--progress) * 100%); border-radius: inherit; background: var(--channel-accent); }
+.effort-slider-stop { position: absolute; top: 50%; left: calc(var(--inset) + var(--travel) * var(--at)); width: 4px; height: 4px; border-radius: 50%; background: var(--ui-text-dimmed); transform: translate(-50%, -50%); transition: background-color .15s ease, transform .15s ease; }
+.effort-slider-stop.is-active { background: color-mix(in srgb, var(--channel-accent) 35%, white); }
+.effort-slider-stop.is-current { transform: translate(-50%, -50%) scale(0); }
+.effort-slider-thumb { position: absolute; top: 50%; left: calc(var(--inset) + var(--travel) * var(--progress)); width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px #0000004d, 0 0 0 0 transparent; transform: translate(-50%, -50%); transition: transform .15s ease, box-shadow .15s ease; }
+.effort-slider:hover .effort-slider-thumb { box-shadow: 0 1px 3px #0000004d, 0 0 0 4px color-mix(in srgb, var(--channel-accent) 20%, transparent); }
+.effort-slider:focus-visible .effort-slider-thumb { box-shadow: 0 1px 3px #0000004d, 0 0 0 3px color-mix(in srgb, var(--channel-accent) 55%, transparent); }
+.effort-slider.is-dragging { cursor: grabbing; }
+.effort-slider.is-dragging .effort-slider-thumb { transform: translate(-50%, -50%) scale(1.15); box-shadow: 0 2px 6px #0000004d, 0 0 0 6px color-mix(in srgb, var(--channel-accent) 22%, transparent); }
 @media (pointer: coarse) { .effort-slider { height: 44px; } }
+@media (prefers-reduced-motion: reduce) { .effort-slider-stop, .effort-slider-thumb { transition: none; } }
 </style>

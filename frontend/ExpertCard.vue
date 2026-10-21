@@ -143,8 +143,7 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
           </div>
           <div class="expert-card-catalog"><span>{{ models.loading ? '正在读取软件模型列表…' : models.error || models.source }}</span><button v-if="!models.loading && models.error && view.launch.available" type="button" @click="bridge.load_launch_models(name, true)">重试</button></div>
           <div v-if="effort_items" class="expert-card-effort">
-            <div><span>强度</span><strong>{{ effort_label }}</strong></div>
-            <EffortSlider :items="effort_items" :model-value="profile.effort || ''" :label="`${name} 的思考强度`" @update:model-value="bridge.write_launch(name, 'effort', $event)" />
+            <EffortSlider caption="强度" :items="effort_items" :model-value="profile.effort || ''" :label="`${name} 的思考强度`" @update:model-value="bridge.write_launch(name, 'effort', $event)" />
           </div>
           <p v-else class="expert-card-note">{{ models.effort_note }}</p>
           <button type="button" class="expert-card-defaults" title="留空使用 CLI 默认值" :aria-label="`恢复 ${name} 的默认模型与强度`" :disabled="!profile.model && !profile.effort" @click="reset_model">恢复默认</button>
@@ -197,9 +196,6 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
 .expert-card-catalog { display: flex; align-items: baseline; gap: 8px; margin: -5px 0 0 34px; color: var(--ui-text-dimmed); font-size: 10px; overflow-wrap: anywhere; }
 .expert-card-catalog > span { flex: 1; }
 .expert-card-catalog > button { flex-shrink: 0; color: var(--channel-accent); }
-.expert-card-effort > div { display: flex; align-items: center; justify-content: space-between; color: var(--ui-text-dimmed); font-size: 11px; }
-.expert-card-effort strong { color: var(--channel-accent); font-size: 11px; font-weight: 600; }
-.expert-card-effort :deep(.effort-slider) { height: 28px; }
 .expert-card-defaults { position: absolute; left: 8px; bottom: 8px; min-height: 22px; padding: 2px 4px; border-radius: 4px; color: var(--ui-text-muted); font-size: 11px; }
 .expert-card-defaults:hover:not(:disabled) { color: var(--channel-accent); }
 .expert-card-defaults:disabled { opacity: .4; }

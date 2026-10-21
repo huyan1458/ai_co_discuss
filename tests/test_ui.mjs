@@ -468,6 +468,19 @@ test("effort slider supports exact taps, every keyboard stop and explicit defaul
   fixture.cleanup();
 });
 
+test("effort caption previews the stop under a drag before the value is committed", async () => {
+  const fixture = effort_fixture(), { context, pointer, props } = fixture;
+  context.grab(pointer(10, true));
+  context.move(pointer(210));
+  await fixture.tick(30);
+  assert.equal(vm.runInContext("live.value", context), 2);
+  assert.equal(props.modelValue, "", "the saved value changes only on release");
+  context.cancel(pointer(210));
+  await fixture.finish();
+  assert.equal(vm.runInContext("live.value", context), 0);
+  fixture.cleanup();
+});
+
 test("effort drag keeps velocity on release and mid-flight grab; cancellation restores the saved stop", async () => {
   const fixture = effort_fixture(), { context, body, pointer } = fixture;
   context.grab(pointer(10, true));
