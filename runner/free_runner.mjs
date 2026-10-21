@@ -64,12 +64,17 @@ export function free_task_files(config, member, execution, binding) {
   const project_rule = !profile.cwd ? '未指定项目目录。'
     : profile.project_access === 'write' ? '用户允许按请求修改 cwd 中的项目文件。' : 'cwd 中的项目文件只读，不修改。';
   const messages = execution.requests.map(item => `#${item.message_id}`).join('、');
+  // The host routes unnamed messages and receives hand-backs; it may name members in its answer.
+  const host_rule = member.role === 'host'
+    ? `你是本房间的主持人：purpose 为 route 的请求是用户未点名的消息，handoff 表示你派出的成员都已结束。先用 ${cli} room view ${config.room} 查看成员与状态，再决定由谁处理；需要派活时在回答中加 --to 成员名（可重复，不能点名自己），被点名的成员都结束后你会再被唤醒一次。不需要他人时不加 --to，本次即结束。只派分给各成员的文件或模块，避免多人改同一文件。`
+    : '';
   atomic_json(task_path, { site: config.site, room: config.room, mode: 'free', member: member.name,
     execution_id: execution.id, request_messages: execution.requests.map(item => item.message_id),
+    request_purposes: execution.requests.map(item => item.purpose || 'ask'), role: member.role || 'member',
     read_after: execution.read_until, cwd: profile.cwd || null, project_access: profile.project_access, draft_directory,
     skills: [join(config.project, '.agents/skills/discuss-participant/SKILL.md')], cli, subcommands: TASK_SUBCOMMANDS,
     access_file: access_path,
-    instructions: `自由协作房间：用户点名了你（${messages}）。先用 ${cli} message list ${config.room} --after ${execution.read_until} --access-file 凭据路径 读取新消息，按时间顺序处理，后面的消息可能修正前面的，以最新指令为准。完成后用 ${cli} message post ${config.room} --as ${member.name} --kind chat --execution ${execution.id} --body-file 草稿 --submission-id 新UUID --access-file 凭据路径 提交一次回答。提交被拒绝说明本次执行已被打断或过期：保留草稿并结束，不要去掉 --execution 改作普通发言。草稿只写入 draft_directory；${project_rule}不读取或打印凭据内容，不建定时任务。` });
+    instructions: `自由协作房间：用户点名了你（${messages}）。先用 ${cli} message list ${config.room} --after ${execution.read_until} --access-file 凭据路径 读取新消息，按时间顺序处理，后面的消息可能修正前面的，以最新指令为准。${host_rule}完成后用 ${cli} message post ${config.room} --as ${member.name} --kind chat --execution ${execution.id} --body-file 草稿 --submission-id 新UUID --access-file 凭据路径 提交一次回答。提交被拒绝说明本次执行已被打断或过期：保留草稿并结束，不要去掉 --execution 改作普通发言。草稿只写入 draft_directory；${project_rule}不读取或打印凭据内容，不建定时任务。` });
   const prompt = `用户在自由协作房间点名了你（${member.name}），对应消息 ${messages}。请先读取任务文件：${task_path}，按其中说明读取新消息、完成请求，并用 ${cli} message post 带 --execution ${execution.id} 提交一次回答后结束。命令只用任务内 subcommands 列出的 ${cli} 子命令；${project_rule}不读取凭据内容。`;
   return { id, participant: member.name, directory: config.directory, draft_directory,
     skills_directory: join(config.project, '.agents', 'skills'), access_path, prompt };

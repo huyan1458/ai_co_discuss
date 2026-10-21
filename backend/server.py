@@ -19,9 +19,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit
 
-from .free_room import (add_member, after_free_message, authorize_free_write, check_answer, execution_action, free_view, inbox,
-                        interrupt_member, member_action, member_values, migrate_free_tables, reserve_execution, room_mode,
-                        save_free_room, view_execution)
+from .free_room import (add_member, after_free_message, authorize_free_write, check_answer, check_proxy, execution_action, free_view,
+                        inbox, interrupt_member, member_action, member_values, migrate_free_tables, proxy_member, reserve_execution,
+                        room_mode, save_free_room, view_execution)
 from .runtime import (authorize_write, begin_write, configure_runtime, event_action,
                      LIMIT_DEFAULTS, LIMITS_SQL, limit_values, limits_view, require_within_limits,
                      list_events, require_control, runtime_view, token_hash)
@@ -195,7 +195,13 @@ def require_room(connection, room_id):
     room["runtime"] = runtime_view(connection, room_id)
     room["limits"] = limits_view(connection.execute(LIMITS_SQL, (room_id,)).fetchone(), room)
     room["mode"] = room_mode(connection, room_id)
+    parent = connection.execute("""SELECT rooms.id,rooms.title FROM room_links JOIN rooms ON rooms.id=room_links.parent_id
+        WHERE room_links.room_id=?""", (room_id,)).fetchone()
+    room["parent_room"] = dict(parent) if parent else None
     if room["mode"] == "free":
+        room["linked_rooms"] = [dict(row) for row in connection.execute("""SELECT rooms.id,rooms.title,COALESCE(topic_settings.phase,'preparing') AS phase
+            FROM room_links JOIN rooms ON rooms.id=room_links.room_id LEFT JOIN topic_settings ON topic_settings.room_id=rooms.id
+            WHERE room_links.parent_id=? ORDER BY room_links.created_at""", (room_id,))]
         # Free rooms have no host hand-off: user messages go straight to the named members.
         room["held_since"] = 0
         room["free"] = free_view(connection, room_id)
@@ -515,7 +521,7 @@ def manage_room(connection, room_id, action, payload):
 
 def delete_room_records(connection, room_id):
     """Remove a room's dependent records in the caller's transaction."""
-    for table in ("member_requests", "member_executions", "room_members", "room_modes"):
+    for table in ("member_requests", "member_executions", "room_members", "room_modes", "free_batches", "free_chains", "room_links"):
         connection.execute(f"DELETE FROM {table} WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM message_timings WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)", (room_id,))
     connection.execute("DELETE FROM message_summaries WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)", (room_id,))
@@ -553,6 +559,9 @@ def create_room(connection, payload, control_token=""):
         raise ValueError("自动建房须提供有效的运行模式和控制凭据")
     if free and (automatic or not token_hash(control_token)):
         raise ValueError("自由房间须提供房间控制凭据，且不使用讨论运行模式")
+    parent_id = payload.get("parent_room_id")
+    if parent_id is not None and (free or not isinstance(parent_id, str) or room_mode(connection, parent_id) != "free"):
+        raise ValueError("只有从自由协作房间发起的讨论房间可以关联来源房间")
     identifier = submission_value(payload["submission_id"]) if "submission_id" in payload else None
     folder_id = payload.get("folder_id")
     if folder_id is not None and not isinstance(folder_id, str):
@@ -560,6 +569,8 @@ def create_room(connection, payload, control_token=""):
     request_text = creation_request(settings) + (":automatic" if automatic else "")
     if free:
         request_text += ":free:" + json.dumps([[member["name"], member["adapter"]] for member in members], ensure_ascii=False)
+    if parent_id is not None:
+        request_text += ":parent:" + parent_id
     if folder_id is not None:
         request_text += ":folder:" + json.dumps(folder_id, ensure_ascii=False)
     begin_write(connection)
@@ -579,6 +590,8 @@ def create_room(connection, payload, control_token=""):
     save_topic_settings(connection, room_id, settings)
     if free:
         save_free_room(connection, room_id, control_token, members, utc_now())
+    if parent_id is not None:
+        connection.execute("INSERT INTO room_links (room_id,parent_id,created_at) VALUES (?,?,?)", (room_id, parent_id, utc_now()))
     if automatic:
         configure_runtime(connection, room_id, control_token, {"revision": 0, "mode": "automatic"})
     return {**require_room(connection, room_id), "duplicate": False, "submission_id": identifier}
@@ -773,13 +786,21 @@ def record_message_timing(connection, message_id, token):
 
 
 def append_free_message(connection, room, payload, actor):
-    """Append a free-room message: the owner's creates requests, a member's completes its execution."""
+    """Append a free-room message: the owner's creates requests, a member's completes its execution.
+
+    The owner may also forward an online member's answer; it keeps the member as author and the
+    owner as submitter.
+    """
     author, text, submission_id, reply_to = message_values(payload)
-    if actor == "用户" and author != "用户":
-        raise PermissionError("房间控制凭据只能以用户身份发言；成员须使用自己的凭证")
     room_id = room["id"]
-    expected = {"author": author, "text": text, "reply_to": reply_to, "kind": "chat", "submitted_by": author,
-                "turn_id": None, "source": "user" if author == "用户" else "cli"}
+    proxy = None
+    if actor == "用户" and author != "用户":
+        proxy = proxy_member(connection, room_id, author)
+        if payload.get("submitted_by", "用户") != "用户":
+            raise PermissionError("代发在线成员的回答须由用户提交")
+    submitted_by = "用户" if proxy else author
+    expected = {"author": author, "text": text, "reply_to": reply_to, "kind": "chat", "submitted_by": submitted_by,
+                "turn_id": None, "source": "proxy" if proxy else ("user" if author == "用户" else "cli")}
     expected.update(message_summary(payload, expected))
     identifiers = attachment_ids(payload)
     previous = connection.execute(f"{MESSAGE_QUERY} WHERE room_id=? AND submission_id=?", (room_id, submission_id)).fetchone()
@@ -792,18 +813,20 @@ def append_free_message(connection, room, payload, actor):
     if room["archived"]:
         raise ValueError("频道已存档；恢复后才能继续协作")
     check_message_references(connection, room_id, expected)
-    check_message_attachments(connection, room_id, author, identifiers)
-    if actor != "用户":
+    check_message_attachments(connection, room_id, submitted_by, identifiers)
+    if proxy:
+        check_proxy(connection, room_id, proxy, payload)
+    elif actor != "用户":
         check_answer(connection, room_id, actor, payload)
     cursor = connection.execute("INSERT INTO messages (room_id,author,text,reply_to,source,submission_id,created_at) VALUES (?,?,?,?,?,?,?)",
                                 (room_id, author, text, reply_to, expected["source"], submission_id, utc_now()))
     connection.execute("INSERT INTO message_details (message_id,kind,submitted_by,turn_id) VALUES (?,?,?,NULL)",
-                       (cursor.lastrowid, "chat", author))
+                       (cursor.lastrowid, "chat", submitted_by))
     connection.execute("INSERT INTO message_summaries (message_id,text,author) VALUES (?,?,?)",
                        (cursor.lastrowid, expected["summary"], expected["summary_by"]))
     for position, identifier in enumerate(identifiers):
         connection.execute("UPDATE attachments SET message_id=?,position=? WHERE id=?", (cursor.lastrowid, position, identifier))
-    after_free_message(connection, room_id, cursor.lastrowid, actor, payload)
+    after_free_message(connection, room_id, cursor.lastrowid, proxy or actor, payload)
     return {"message": get_message(connection, room_id, cursor.lastrowid), "duplicate": False}
 
 

@@ -336,6 +336,135 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(conflicts, [{"members": ["Claude", "Codex"], "executions": [claude["id"], codex["id"]], "files": ["index.html"]}])
 
 
+class HostTests(FreeRoomTests):
+    """An AI host routes unnamed messages, dispatches members, and is woken once per finished batch."""
+
+    member_id = MultiMemberTests.member_id
+    reserve_for = MultiMemberTests.reserve_for
+    def say(self, text, token=None, **extra):
+        """Name Claude unless told otherwise, as in the multi-member cases."""
+        return FreeRoomTests.say(self, text, token, **({"to": ["Claude"]} | extra))
+
+    def setUp(self):
+        """Claude hosts; Codex and a third runner member, Gemini, work."""
+        super().setUp()
+        self.codex, self.gemini = uuid.uuid4().hex, uuid.uuid4().hex
+        self.request(f"{self.path}/members", {"name": "Codex", "token": self.codex}, self.owner)
+        self.request(f"{self.path}/members", {"name": "Gemini", "token": self.gemini}, self.owner)
+        status, view = self.request(f"{self.path}/members/{self.member_id('Claude')}", {"action": "role", "role": "host"}, self.owner)
+        self.assertEqual(status, 200, view)
+        self.tokens = {"Claude": self.member, "Codex": self.codex, "Gemini": self.gemini}
+
+    def requests(self):
+        """Current requests as (member, purpose, status) triples."""
+        return [(item["member"], item["purpose"], item["status"]) for item in self.request(self.path)[1]["free"]["requests"]]
+
+    def work(self, name, **extra):
+        """Reserve a member's requests and answer them, optionally naming members as the host."""
+        execution = self.reserve_for(name)[1]
+        status, saved = self.request(f"{self.path}/messages", {"author": name, "text": f"{name} 完成", "source": "cli",
+                                                               "submission_id": uuid.uuid4().hex, "execution_id": execution["id"], **extra}, self.tokens[name])
+        self.assertEqual(status, 201, saved)
+        return execution
+
+    def test_unnamed_message_with_several_members_is_only_a_note(self):
+        """With a host, an unnamed message is routed to the host instead of staying a note."""
+        FreeRoomTests.say(self, "没有点名")
+        self.assertEqual(self.requests(), [("Claude", "route", "pending")])
+
+    def test_host_dispatch_hands_back_once_after_every_member_finished(self):
+        """Two dispatched members produce exactly one hand-off, after the last of them finishes."""
+        FreeRoomTests.say(self, "请安排")
+        self.work("Claude", to=["Codex", "Gemini"])
+        self.assertEqual(self.requests()[1:], [("Codex", "ask", "pending"), ("Gemini", "ask", "pending")])
+        self.work("Codex")
+        self.assertNotIn(("Claude", "handoff", "pending"), self.requests())
+        self.work("Gemini")
+        self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 1)
+
+    def test_partial_failure_still_hands_back_but_all_failed_halts(self):
+        """One completed member is enough to hand back; a batch where all fail halts the chain."""
+        FreeRoomTests.say(self, "第一链")
+        self.work("Claude", to=["Codex", "Gemini"])
+        failing = self.reserve_for("Gemini")[1]
+        self.request(f"{self.path}/executions/{failing['id']}", {"action": "fail", "reason": "CLI 退出"}, self.owner)
+        self.work("Codex")
+        self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 1)
+        self.work("Claude", to=["Codex"])
+        failing = self.reserve_for("Codex")[1]
+        self.request(f"{self.path}/executions/{failing['id']}", {"action": "fail", "reason": "再次失败"}, self.owner)
+        free = self.request(self.path)[1]["free"]
+        self.assertEqual([item["reason"] for item in free["halted_chains"]], ["all_failed"])
+        self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 0)
+
+    def test_chain_budget_stops_automatic_progress_until_the_user_speaks(self):
+        """AI-created requests beyond the budget halt the chain; a new owner message starts fresh."""
+        from backend import free_room
+        original = free_room.MAX_AUTO_HOPS
+        free_room.MAX_AUTO_HOPS = 2
+        try:
+            FreeRoomTests.say(self, "预算")
+            self.work("Claude", to=["Codex"])
+            self.work("Codex")
+            self.work("Claude", to=["Gemini"])
+            free = self.request(self.path)[1]["free"]
+            self.assertEqual([item["reason"] for item in free["halted_chains"]], ["budget"])
+            self.assertEqual(self.requests()[-1], ("Claude", "handoff", "completed"))
+            FreeRoomTests.say(self, "新的一链", to=["Claude"])
+            self.work("Claude", to=["Gemini"])
+            self.assertEqual(self.requests()[-1], ("Gemini", "ask", "pending"))
+        finally:
+            free_room.MAX_AUTO_HOPS = original
+
+    def test_only_the_host_may_name_members_and_never_itself(self):
+        """A member naming others or the host naming itself is rejected before anything is saved."""
+        FreeRoomTests.say(self, "派活检查", to=["Codex", "Claude"])
+        codex = self.reserve_for("Codex")[1]
+        payload = {"author": "Codex", "text": "越权", "source": "cli", "submission_id": uuid.uuid4().hex, "execution_id": codex["id"], "to": ["Gemini"]}
+        self.assertEqual(self.request(f"{self.path}/messages", payload, self.codex)[0], 403)
+        host = self.reserve_for("Claude")[1]
+        payload = {"author": "Claude", "text": "点名自己", "source": "cli", "submission_id": uuid.uuid4().hex, "execution_id": host["id"], "to": ["Claude"]}
+        self.assertEqual(self.request(f"{self.path}/messages", payload, self.member)[0], 400)
+
+    def test_one_host_at_a_time(self):
+        """Making Codex host demotes Claude."""
+        self.request(f"{self.path}/members/{self.member_id('Codex')}", {"action": "role", "role": "host"}, self.owner)
+        roles = {member["name"]: member["role"] for member in self.request(self.path)[1]["free"]["members"]}
+        self.assertEqual(roles, {"Claude": "member", "Codex": "host", "Gemini": "member"})
+
+
+class OnlineAndLinkTests(FreeRoomTests):
+    """Online members are forwarded by the owner; brainstorm rooms remember the free room they came from."""
+
+    def test_owner_forwards_an_online_members_answer(self):
+        """The online member never posts itself; the owner's forward keeps it as author and closes its request."""
+        deepseek = uuid.uuid4().hex
+        self.request(f"{self.path}/members", {"name": "DeepSeek", "token": deepseek, "access": "online"}, self.owner)
+        self.assertEqual(self.request(f"{self.path}/members/{self.request(self.path)[1]['free']['members'][1]['id']}",
+                                      {"action": "role", "role": "host"}, self.owner)[0], 400)
+        self.say("请 DeepSeek 看看", to=["DeepSeek"])
+        request_id = self.request(self.path)[1]["free"]["requests"][0]["id"]
+        self.assertEqual(self.reserve()[0], 409)
+        own = {"author": "DeepSeek", "text": "自己发", "source": "cli", "submission_id": uuid.uuid4().hex}
+        self.assertEqual(self.request(f"{self.path}/messages", own, deepseek)[0], 403)
+        forward = {"author": "DeepSeek", "text": "在线回答原文", "submission_id": uuid.uuid4().hex, "request_ids": [request_id]}
+        self.assertEqual(self.request(f"{self.path}/messages", {**forward, "author": "Qwen"}, self.owner)[0], 403)
+        status, saved = self.request(f"{self.path}/messages", forward, self.owner)
+        self.assertEqual(status, 201, saved)
+        self.assertEqual((saved["message"]["author"], saved["message"]["submitted_by"], saved["message"]["source"]), ("DeepSeek", "用户", "proxy"))
+        self.assertEqual(self.request(self.path)[1]["free"]["requests"][0]["status"], "completed")
+
+    def test_brainstorm_room_links_back_to_its_free_room(self):
+        """A discussion started from a free room records its origin; free rooms cannot be linked children."""
+        status, child = self.request("/api/rooms", {"title": "方案头脑风暴", "goal": "x", "parent_room_id": self.room["id"]})
+        self.assertEqual(status, 201, child)
+        self.assertEqual(child["parent_room"], {"id": self.room["id"], "title": "自由单聊"})
+        self.assertEqual(self.request(self.path)[1]["linked_rooms"], [{"id": child["id"], "title": "方案头脑风暴", "phase": "preparing"}])
+        self.assertEqual(self.request("/api/rooms", {"title": "无效", "goal": "x", "parent_room_id": child["id"]})[0], 400)
+        self.assertEqual(self.request("/api/rooms", {"title": "无效", "goal": "x", "mode": "free", "parent_room_id": self.room["id"],
+                                                     "members": [{"name": "Claude", "token": uuid.uuid4().hex}]}, uuid.uuid4().hex)[0], 400)
+
+
 class MigrationTests(unittest.TestCase):
     """The floor trigger is replaced on existing databases, and legacy rooms stay brainstorm rooms."""
 

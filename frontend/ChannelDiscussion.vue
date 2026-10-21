@@ -157,6 +157,8 @@ const free_activity = computed(() => {
 });
 /** Active members a free-room message can name; chips appear only when there is a choice. */
 const free_members = computed(() => free.value ? (room.value.free?.members || []).filter((member) => member.status === "active") : []);
+const free_host = computed(() => free_members.value.find((member) => member.role === "host"));
+const free_online = computed(() => free_members.value.filter((member) => member.access === "online"));
 /** A chip is on when clicked or when the draft @mentions that member outside code. */
 const MENTION_PATTERN = (name) => new RegExp(`(^|[\\s(（，,。；;：:])@${name}(?![\\w-])`, "u");
 const draft_prose = computed(() => text.value.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "").replace(/^>.*$/gm, ""));
@@ -653,6 +655,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
         <div v-if="topic.boundaries" class="channel-topic-section"><h3>边界</h3><p class="channel-topic-text">{{ topic.boundaries }}</p></div>
         </div>
         <UButton v-if="topic_overflows || topic_expanded" :label="topic_expanded ? '收起' : '展开全文'" :trailing-icon="topic_expanded ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" variant="link" color="neutral" size="xs" class="channel-answer-toggle" @click="topic_expanded = !topic_expanded" />
+        <div v-if="room.parent_room" class="channel-topic-section"><h3>来源</h3><p class="channel-topic-text">从自由协作「<button type="button" class="channel-link-button" @click="act('room', room.parent_room.id)">{{ room.parent_room.title }}</button>」发起<template v-if="room.phase === 'concluded'"> · <button type="button" class="channel-link-button" @click="act('return_conclusion')">把结论发回</button></template></p></div>
         <div class="channel-topic-section channel-topic-config"><h3>参与配置</h3><div class="channel-topic-people">
           <span v-for="person in topic.experts" :key="person.name" class="channel-topic-person"><UAvatar :src="bridge.identities[person.name]?.icon" :text="bridge.identities[person.name]?.initials" :alt="person.name" size="2xs" class="channel-avatar" :class="bridge.identities[person.name]?.style" />{{ bridge.display_name(person.name) }}<small>{{ person.name === topic.host ? `主持 · ${person.mode}` : person.mode }}</small></span>
           <span v-if="topic.host === '用户'" class="channel-topic-person">{{ bridge.display_name('用户') }}<small>主持</small></span>
@@ -723,10 +726,15 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             </div>
           </div>
           <p v-if="view.composer_error || view.upload_status" class="attachment-status" :role="view.composer_error ? 'alert' : 'status'">{{ view.composer_error || view.upload_status }}</p>
-          <div v-if="free_members.length > 1" class="channel-free-recipients" role="group" aria-label="发给哪些成员">
+          <div v-if="free_online.length" class="channel-free-recipients" role="group" aria-label="代发在线成员的回答">
+            <span>代发</span>
+            <button v-for="member in free_online" :key="member.id" type="button" :aria-pressed="view.free_proxy === member.name" :class="{ 'is-on': view.free_proxy === member.name }" @click="act('set_proxy', member.name)">{{ bridge.display_name(member.name) }}</button>
+            <small>{{ view.free_proxy ? `本条作为 ${bridge.display_name(view.free_proxy)} 的回答原文保存，并关闭它的待处理请求` : '粘贴在线 AI 的回答时选择对应成员' }}</small>
+          </div>
+          <div v-if="free_members.length > 1 && !view.free_proxy" class="channel-free-recipients" role="group" aria-label="发给哪些成员">
             <span>发给</span>
             <button v-for="member in free_members" :key="member.id" type="button" :aria-pressed="recipient_on(member.name)" :class="{ 'is-on': recipient_on(member.name) }" @click="act('toggle_recipient', member.name)">{{ bridge.display_name(member.name) }}</button>
-            <small>{{ free_members.some((member) => recipient_on(member.name)) ? '可同时点名多位，也可在正文中 @ 成员' : '未点名任何成员：只作留言，不会唤醒 AI' }}</small>
+            <small>{{ free_members.some((member) => recipient_on(member.name)) ? '可同时点名多位，也可在正文中 @ 成员' : free_host ? `未点名：交给主持人 ${bridge.display_name(free_host.name)} 分配` : '未点名任何成员：只作留言，不会唤醒 AI' }}</small>
           </div>
           <div v-if="speaking_turn" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>新消息会在 {{ bridge.display_name(speaking_turn.expert) }} 回复后交给主持人；点「停止」取消本次安排</span></div>
           <div v-if="view.reply_to || view.turn_reply_to" class="channel-reply-draft"><UIcon name="i-lucide-corner-up-left" /><span>{{ view.turn_reply_to ? `回答安排 #${view.turn_reply_to} · ${bridge.display_name(room.host)} 代发` : `回复 #${view.reply_to}` }}</span><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" :aria-label="view.turn_reply_to ? '取消关联安排' : '取消回复'" @click="act(view.turn_reply_to ? 'cancel_answer' : 'cancel_reply')" /></div>
@@ -754,6 +762,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
 .channel-free-recipients button { min-height: 26px; padding: 2px 10px; border: 1px solid var(--ui-border); border-radius: 999px; color: var(--ui-text-toned); }
 .channel-free-recipients button.is-on { border-color: var(--channel-accent); background: color-mix(in srgb, var(--channel-accent) 14%, transparent); color: var(--ui-text-highlighted); }
 .channel-free-recipients small { flex-basis: 100%; color: var(--ui-text-dimmed); font-size: 11px; }
+.channel-link-button { color: var(--channel-accent); text-decoration: underline; text-underline-offset: 2px; }
 .channel-message-elapsed { align-self: flex-start; margin-left: auto; line-height: 28px; white-space: nowrap; }
 .channel-host-work { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; column-gap: 10px; row-gap: 2px; align-items: start; margin: 0 var(--message-inset-end, 16px) 20px 16px; padding: 12px 18px; border: 1px solid var(--ui-border-muted); border-radius: 10px; background: color-mix(in srgb, var(--ui-bg-elevated) 35%, transparent); }
 .channel-host-work > .channel-avatar { grid-row: 1 / 3; align-self: center; width: 28px; height: 28px; font-size: 9px; }

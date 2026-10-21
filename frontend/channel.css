@@ -288,6 +288,8 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 .channel-free-invite { display: grid; gap: 6px; margin: 14px 16px 0; font-size: 12px; }
 .channel-free-invite > div { display: flex; flex-wrap: wrap; gap: 6px; }
 .channel-free-error { margin: 12px 16px 0; color: #f0716b; font-size: 12px; }
+.channel-free-invite p { margin: 0; color: var(--ui-text-muted); }
+.channel-link-button { color: var(--channel-accent); text-decoration: underline; text-underline-offset: 2px; }
 .channel-free-members strong { color: var(--ui-text-highlighted); font-weight: 600; }
 .channel-free-members span { color: var(--ui-text-muted); overflow-wrap: anywhere; }
 .progress-drawer { max-width: min(420px, 100vw); }

@@ -736,3 +736,68 @@ test('Worker free answers are rejected atomically when the execution is cancelle
   assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM messages').get().count, before);
   assert.equal(f.sql.prepare('SELECT status FROM member_requests').get().status, 'delivering');
 });
+
+test('Worker free hosts route, dispatch, hand back once and stop at the chain budget', async t => {
+  const f = await worker_fixture(t);
+  const codex = 'codex-free'.repeat(4), gemini = 'gemini-free'.repeat(4);
+  const r = await free_worker_room(f, [{ name: 'Codex', token: codex }, { name: 'Gemini', token: gemini }]);
+  const tokens = { Claude: r.claude, Codex: codex, Gemini: gemini };
+  assert.equal((await f.request(`${r.path}/members/${await r.member_id('Claude')}`, { action: 'role', role: 'host' }, r.owner)).status, 200);
+  const requests = async () => (await f.request(r.path)).body.free.requests.map(item => [item.member, item.purpose, item.status]);
+  const work = async (name, extra = {}) => {
+    const execution = (await r.reserve(name)).body;
+    const saved = await r.answer(execution.id, tokens[name], name, extra);
+    assert.equal(saved.status, 201, JSON.stringify(saved.body));
+  };
+  await r.say('请安排');
+  assert.deepEqual(await requests(), [['Claude', 'route', 'pending']]);
+  const codex_execution = (await r.reserve('Codex'));
+  assert.equal(codex_execution.status, 409);
+  const host = (await r.reserve('Claude')).body;
+  assert.equal((await r.answer(host.id, r.claude, 'Claude', { to: ['Claude'] })).status, 400);
+  assert.equal((await r.answer(host.id, r.claude, 'Claude', { to: ['Codex', 'Gemini'] })).status, 201);
+  await work('Codex');
+  assert.equal((await requests()).filter(item => item[1] === 'handoff').length, 0);
+  await work('Gemini');
+  assert.deepEqual((await requests()).filter(item => item[1] === 'handoff'), [['Claude', 'handoff', 'pending']]);
+  const codex_bad = (await r.say('越权检查', { to: ['Codex'] })).body;
+  assert.ok(codex_bad.message);
+  const codex_run = (await r.reserve('Codex')).body;
+  assert.equal((await r.answer(codex_run.id, codex, 'Codex', { to: ['Gemini'] })).status, 403);
+  assert.equal((await r.answer(codex_run.id, codex, 'Codex')).status, 201);
+  // Chain one already used 3 AI requests; three dispatch/hand-off cycles reach 8, so the last hand-off is refused.
+  for (let cycle = 0; cycle < 3; cycle++) { await work('Claude', { to: ['Codex'] }); await work('Codex'); }
+  assert.deepEqual((await f.request(r.path)).body.free.halted_chains.map(item => item.reason), ['budget']);
+  assert.equal((await requests()).filter(item => item[0] === 'Claude' && item[2] === 'pending').length, 0);
+  const failing = await r.say('全失败', { to: ['Claude'] });
+  assert.equal(failing.status, 201);
+  await work('Claude', { to: ['Gemini'] });
+  const gemini_run = (await r.reserve('Gemini')).body;
+  await f.request(`${r.path}/executions/${gemini_run.id}`, { action: 'fail', reason: '退出' }, r.owner);
+  assert.deepEqual((await f.request(r.path)).body.free.halted_chains.map(item => item.reason).sort(), ['all_failed', 'budget']);
+  const roles = Object.fromEntries((await f.request(`${r.path}/members/${await r.member_id('Codex')}`, { action: 'role', role: 'host' }, r.owner)).body.members
+    .map(member => [member.name, member.role]));
+  assert.deepEqual(roles, { Claude: 'member', Codex: 'host', Gemini: 'member' });
+});
+
+test('Worker free rooms forward online answers and link brainstorm rooms', async t => {
+  const f = await worker_fixture(t);
+  const r = await free_worker_room(f);
+  const online = 'deepseek-free'.repeat(3);
+  assert.equal((await f.request(`${r.path}/members`, { name: 'DeepSeek', token: online, access: 'online' }, r.owner)).status, 200);
+  assert.equal((await f.request(`${r.path}/members/${await r.member_id('DeepSeek')}`, { action: 'role', role: 'host' }, r.owner)).status, 400);
+  await r.say('请 DeepSeek 看看', { to: ['DeepSeek'] });
+  const request_id = (await f.request(r.path)).body.free.requests[0].id;
+  assert.equal((await r.answer(null, online, 'DeepSeek')).status, 403);
+  const forward = { author: 'DeepSeek', text: '在线回答原文', submission_id: 'forward-0001', request_ids: [request_id] };
+  assert.equal((await f.request(`${r.path}/messages`, { ...forward, author: 'Qwen' }, r.owner)).status, 403);
+  const saved = await f.request(`${r.path}/messages`, forward, r.owner);
+  assert.equal(saved.status, 201, JSON.stringify(saved.body));
+  assert.deepEqual([saved.body.message.author, saved.body.message.submitted_by, saved.body.message.source], ['DeepSeek', '用户', 'proxy']);
+  assert.equal((await f.request(r.path)).body.free.requests[0].status, 'completed');
+  const child = await f.request('', { title: '方案头脑风暴', goal: 'x', parent_room_id: r.room.id });
+  assert.equal(child.status, 201, JSON.stringify(child.body));
+  assert.deepEqual(child.body.parent_room, { id: r.room.id, title: '自由协作' });
+  assert.deepEqual((await f.request(r.path)).body.linked_rooms, [{ id: child.body.id, title: '方案头脑风暴', phase: 'preparing' }]);
+  assert.equal((await f.request('', { title: '无效', goal: 'x', parent_room_id: child.body.id })).status, 400);
+});

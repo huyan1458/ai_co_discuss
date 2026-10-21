@@ -3,7 +3,9 @@
 A free room has no floor, turns or rounds. The user (holding the room control credential)
 names members; each named member gets one durable request per message. The local runner
 delivers a runner member's open requests as one execution, and the member's answer completes
-them. A manual member finds its own requests and answers by request id. No software is
+them. A manual member finds its own requests and answers by request id; an online member's
+answer is forwarded by the owner. An optional AI host routes unnamed messages, names members
+in its answers, and is woken once when everything it dispatched has finished. No software is
 launched here.
 """
 
@@ -19,14 +21,19 @@ RECENT_CHANGES = 50
 MAX_CHANGED_FILES = 200
 MAX_PATH_LENGTH = 500
 ACTIVE = ("dispatched", "started")
-ACCESS_MODES = ("runner", "manual")
+ACCESS_MODES = ("runner", "manual", "online")
+# AI-created requests (host dispatches and hand-offs) allowed per chain; each owner message starts a chain.
+MAX_AUTO_HOPS = 8
+TERMINAL = ("completed", "cancelled", "failed")
 SESSION_MODES = ("new", "borrowed")
 FREE_OPERATIONS = ("messages", "attachments", "move", "folder", "archive", "restore", "delete")
 MEMBER_FIELDS = ("id", "name", "adapter", "role", "status", "access", "session_mode", "read_until")
 EXECUTION_FIELDS = ("id", "member_id", "status", "session_id", "lease_until", "created_at", "finished_at", "result")
 # Columns added after the first free-room tables; Python databases created by that build gain them here.
 LATER_COLUMNS = {"room_members": {"access": "TEXT NOT NULL DEFAULT 'runner'", "session_mode": "TEXT NOT NULL DEFAULT 'new'"},
-                 "member_executions": {"changes": "TEXT NOT NULL DEFAULT ''", "cwd": "TEXT NOT NULL DEFAULT ''"}}
+                 "member_executions": {"changes": "TEXT NOT NULL DEFAULT ''", "cwd": "TEXT NOT NULL DEFAULT ''"},
+                 "member_requests": {"chain_id": "INTEGER NOT NULL DEFAULT 0", "batch_id": "INTEGER NOT NULL DEFAULT 0",
+                                     "purpose": "TEXT NOT NULL DEFAULT 'ask'", "created_by": "TEXT NOT NULL DEFAULT 'user'"}}
 
 
 def migrate_free_tables(connection):
@@ -55,7 +62,7 @@ def member_value(member, participants):
         raise ValueError("成员适配器名称无效")
     access, session_mode = member.get("access", "runner"), member.get("session_mode", "new")
     if access not in ACCESS_MODES or session_mode not in SESSION_MODES:
-        raise ValueError("成员接入方式须为 runner/manual，会话方式须为 new/borrowed")
+        raise ValueError("成员接入方式须为 runner/manual/online，会话方式须为 new/borrowed")
     return {"name": member["name"], "adapter": adapter, "token": member["token"], "access": access, "session_mode": session_mode}
 
 
@@ -147,10 +154,12 @@ def free_view(connection, room_id):
         members.append(member)
     names = {row["id"]: row["name"] for row in connection.execute("SELECT id,name FROM room_members WHERE room_id=?", (room_id,))}
     requests = [{**dict(row), "member": names.get(row["member_id"], "")} for row in connection.execute(
-        """SELECT id,member_id,message_id,status,execution_id,answer_id FROM member_requests
+        """SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by FROM member_requests
         WHERE room_id=? ORDER BY id DESC LIMIT ?""", (room_id, RECENT_REQUESTS))]
+    chains = [dict(row) for row in connection.execute(
+        "SELECT chain_id,reason FROM free_chains WHERE room_id=? ORDER BY chain_id DESC LIMIT 10", (room_id,))]
     return {"members": members, "requests": requests[::-1], "execution_minutes": execution_minutes(connection, room_id),
-            "conflicts": possible_conflicts(connection, room_id, names)}
+            "conflicts": possible_conflicts(connection, room_id, names), "halted_chains": chains, "max_auto_hops": MAX_AUTO_HOPS}
 
 
 def require_owner(connection, room_id, token):
@@ -192,23 +201,53 @@ def authorize_free_write(connection, room_id, token, operation, payload):
     return require_member(connection, room_id, token, author)
 
 
-def recipients(connection, room_id, payload):
-    """Resolve structured recipients; a single active member is named by default.
+def active_members(connection, room_id):
+    """Map active member names to their rows."""
+    return {row["name"]: row for row in connection.execute("SELECT * FROM room_members WHERE room_id=? AND status='active'", (room_id,))}
 
-    With several members and no recipients the message stays a plain note: nothing is broadcast.
+
+def named_members(active, names, exclude=None):
+    """Validate a structured recipient list against the active members."""
+    if not isinstance(names, list) or any(name not in active or name == exclude for name in names):
+        raise ValueError("点名对象须为本房间在场成员" + ("，且不能点名自己" if exclude else ""))
+    return [active[name]["id"] for name in dict.fromkeys(names)]
+
+
+def recipients(connection, room_id, payload):
+    """Resolve an owner message's recipients as (member id, purpose) pairs.
+
+    A single active member is named by default. With several, an unnamed message goes to the
+    AI host for routing when there is one, and otherwise stays a plain note: nothing is broadcast.
     """
-    active = {row["name"]: row["id"] for row in connection.execute(
-        "SELECT id,name FROM room_members WHERE room_id=? AND status='active'", (room_id,))}
-    names = payload.get("to")
-    if names is None:
-        return list(active.values()) if len(active) == 1 else []
-    if not isinstance(names, list) or any(name not in active for name in names):
-        raise ValueError("点名对象须为本房间在场成员")
-    return [active[name] for name in dict.fromkeys(names)]
+    active = active_members(connection, room_id)
+    if payload.get("to") is not None:
+        return [(member_id, "ask") for member_id in named_members(active, payload["to"])]
+    if len(active) == 1:
+        return [(next(iter(active.values()))["id"], "ask")]
+    host = next((row for row in active.values() if row["role"] == "host"), None)
+    return [(host["id"], "route")] if host else []
+
+
+def proxy_member(connection, room_id, author):
+    """Return the active online member the owner may forward an answer for."""
+    row = connection.execute("SELECT * FROM room_members WHERE room_id=? AND name=? AND status='active' AND access='online'",
+                             (room_id, author)).fetchone()
+    if not row:
+        raise PermissionError("房间控制凭据只能以用户身份发言，或代发在线成员的回答")
+    return row
 
 
 def check_answer(connection, room_id, member, payload):
-    """A runner member completes a live execution; a manual member may close its own open requests."""
+    """A runner member completes a live execution; a manual member may close its own open requests.
+
+    Only the AI host may name members in its answer; online members are forwarded by the owner.
+    """
+    if payload.get("to") is not None:
+        if member["role"] != "host":
+            raise PermissionError("只有主持人可以在回答中点名成员派活")
+        named_members(active_members(connection, room_id), payload["to"], exclude=member["name"])
+    if member["access"] == "online":
+        raise PermissionError("在线成员只读，回答由用户代发")
     if member["access"] == "manual":
         request_ids = payload.get("request_ids", [])
         if payload.get("execution_id") is not None or not isinstance(request_ids, list) or any(type(item) is not int for item in request_ids):
@@ -229,14 +268,94 @@ def check_answer(connection, room_id, member, payload):
     return row
 
 
+def check_proxy(connection, room_id, member, payload):
+    """The owner forwards an online member's answer and may close that member's open requests."""
+    request_ids = payload.get("request_ids", [])
+    if not isinstance(request_ids, list) or any(type(item) is not int for item in request_ids):
+        raise ValueError("request_ids 须为请求编号列表")
+    for request_id in request_ids:
+        row = connection.execute("SELECT * FROM member_requests WHERE room_id=? AND id=?", (room_id, request_id)).fetchone()
+        if not row or row["member_id"] != member["id"] or row["status"] != "pending":
+            raise FileExistsError(f"请求 {request_id} 不属于该在线成员或已处理")
+
+
+def insert_request(connection, room_id, member_id, message_id, chain_id, purpose, created_by, batch_id=0):
+    """Queue one request; every request belongs to the chain its owner message started."""
+    connection.execute("""INSERT INTO member_requests (room_id,member_id,message_id,chain_id,batch_id,purpose,created_by,created_at)
+        VALUES (?,?,?,?,?,?,?,?)""", (room_id, member_id, message_id, chain_id, batch_id, purpose, created_by, int(time.time())))
+
+
+def halt_chain(connection, room_id, chain_id, reason):
+    """Stop automatic progress on a chain; the user's next message starts a new one."""
+    connection.execute("INSERT OR IGNORE INTO free_chains (room_id,chain_id,reason) VALUES (?,?,?)", (room_id, chain_id, reason))
+
+
+def chain_budget(connection, room_id, chain_id):
+    """AI-created requests left in a chain, or zero once it is halted."""
+    if connection.execute("SELECT 1 FROM free_chains WHERE room_id=? AND chain_id=?", (room_id, chain_id)).fetchone():
+        return 0
+    used = connection.execute("SELECT COUNT(*) FROM member_requests WHERE room_id=? AND chain_id=? AND created_by='host'",
+                              (room_id, chain_id)).fetchone()[0]
+    return MAX_AUTO_HOPS - used
+
+
+def dispatch(connection, room_id, host, message_id, names, chain_id):
+    """Queue the host's named members as one batch that hands back to the host when it ends."""
+    member_ids = named_members(active_members(connection, room_id), names, exclude=host["name"])
+    if not member_ids or not chain_id:
+        return
+    if chain_budget(connection, room_id, chain_id) < len(member_ids):
+        halt_chain(connection, room_id, chain_id, "budget")
+        return
+    for member_id in member_ids:
+        insert_request(connection, room_id, member_id, message_id, chain_id, "ask", "host", batch_id=message_id)
+    connection.execute("INSERT INTO free_batches (room_id,batch_id,chain_id,host_id) VALUES (?,?,?,?)",
+                       (room_id, message_id, chain_id, host["id"]))
+
+
+def settle_batches(connection, room_id):
+    """Hand each finished batch back to its host once; an all-failed batch halts its chain instead."""
+    for batch in connection.execute("SELECT * FROM free_batches WHERE room_id=? AND settled=0", (room_id,)).fetchall():
+        statuses = [row[0] for row in connection.execute("SELECT status FROM member_requests WHERE room_id=? AND batch_id=?",
+                                                          (room_id, batch["batch_id"]))]
+        if any(status not in TERMINAL for status in statuses):
+            continue
+        connection.execute("UPDATE free_batches SET settled=1 WHERE room_id=? AND batch_id=?", (room_id, batch["batch_id"]))
+        host = connection.execute("SELECT * FROM room_members WHERE id=? AND status='active' AND role='host'", (batch["host_id"],)).fetchone()
+        if "completed" not in statuses:
+            halt_chain(connection, room_id, batch["chain_id"], "all_failed")
+        elif not host:
+            continue
+        elif chain_budget(connection, room_id, batch["chain_id"]) < 1:
+            halt_chain(connection, room_id, batch["chain_id"], "budget")
+        else:
+            insert_request(connection, room_id, host["id"], batch["batch_id"], batch["chain_id"], "handoff", "host")
+
+
+def answered_chain(connection, payload, actor):
+    """The chain an answer continues: the newest chain among the requests it completes."""
+    if actor["access"] == "manual":
+        ids = payload.get("request_ids") or [0]
+        marks = ",".join("?" * len(ids))
+        row = connection.execute(f"SELECT MAX(chain_id) FROM member_requests WHERE id IN ({marks})", ids).fetchone()
+    else:
+        row = connection.execute("SELECT MAX(chain_id) FROM member_requests WHERE execution_id=?", (payload["execution_id"],)).fetchone()
+    return row[0] or 0
+
+
 def after_free_message(connection, room_id, message_id, actor, payload):
     """Create requests for the owner's message, or close what the member's answer covers."""
     now = int(time.time())
     if actor == "用户":
-        for member_id in recipients(connection, room_id, payload):
-            connection.execute("INSERT INTO member_requests (room_id,member_id,message_id,created_at) VALUES (?,?,?,?)",
-                               (room_id, member_id, message_id, now))
+        for member_id, purpose in recipients(connection, room_id, payload):
+            insert_request(connection, room_id, member_id, message_id, message_id, purpose, "user")
         return
+    if actor["access"] == "online":
+        for request_id in payload.get("request_ids", []):
+            connection.execute("UPDATE member_requests SET status='completed',answer_id=? WHERE id=?", (message_id, request_id))
+        settle_batches(connection, room_id)
+        return
+    chain_id = answered_chain(connection, payload, actor)
     if actor["access"] == "manual":
         for request_id in payload.get("request_ids", []):
             connection.execute("UPDATE member_requests SET status='completed',answer_id=? WHERE id=?", (message_id, request_id))
@@ -247,6 +366,9 @@ def after_free_message(connection, room_id, message_id, actor, payload):
         connection.execute("UPDATE member_requests SET status='completed',answer_id=? WHERE execution_id=? AND status='delivering'",
                            (message_id, execution_id))
     connection.execute("UPDATE room_members SET read_until=MAX(read_until,?) WHERE id=?", (message_id, actor["id"]))
+    if actor["role"] == "host" and payload.get("to"):
+        dispatch(connection, room_id, actor, message_id, payload["to"], chain_id)
+    settle_batches(connection, room_id)
 
 
 def expire_executions(connection, room_id):
@@ -256,6 +378,8 @@ def expire_executions(connection, room_id):
         "SELECT id FROM member_executions WHERE room_id=? AND status IN ('dispatched','started') AND lease_until<=?", (room_id, now))]
     for execution_id in stale:
         finish_execution(connection, execution_id, "failed", "执行租约到期，接入程序未续租", "failed")
+    if stale:
+        settle_batches(connection, room_id)
 
 
 def finish_execution(connection, execution_id, status, result, request_status):
@@ -326,7 +450,7 @@ def execution_detail(connection, row):
     """Describe one execution with the requests it carries and the member's read cursor."""
     member = connection.execute("SELECT * FROM room_members WHERE id=?", (row["member_id"],)).fetchone()
     requests = [dict(item) for item in connection.execute(
-        "SELECT id,message_id,status FROM member_requests WHERE execution_id=? ORDER BY id", (row["id"],))]
+        "SELECT id,message_id,status,purpose FROM member_requests WHERE execution_id=? ORDER BY id", (row["id"],))]
     return {**public_execution(row), "member": member["name"], "read_until": member["read_until"], "requests": requests}
 
 
@@ -376,6 +500,7 @@ def execution_action(connection, room_id, execution_id, token, payload):
         connection.execute("UPDATE member_executions SET lease_until=? WHERE id=?", (min(now + LEASE_SECONDS, limit), execution_id))
     elif action == "fail":
         finish_execution(connection, execution_id, "failed", str(payload.get("reason") or "执行失败"), "failed")
+        settle_batches(connection, room_id)
     elif action == "release":
         # Only for proven non-delivery: the requests return to the queue unchanged.
         finish_execution(connection, execution_id, "cancelled", str(payload.get("reason") or "未送达"), "pending")
@@ -398,6 +523,7 @@ def interrupt_member(connection, room_id, member_id, token):
     """Owner stop: void the live execution and every open request."""
     owned_member(connection, room_id, member_id, token)
     stop_member_work(connection, member_id, "用户打断")
+    settle_batches(connection, room_id)
     return free_view(connection, room_id)
 
 
@@ -417,7 +543,8 @@ def member_action(connection, room_id, member_id, token, payload):
     """Owner sends a member away, brings it back with a new credential, or removes it.
 
     Leaving voids live work at once. Coming back requires a fresh credential, so copies of the
-    old one never revive; the software session is kept by the local runner, not here.
+    old one never revive; the software session is kept by the local runner, not here. The
+    `role` action makes one runner or manual member the AI host, replacing any previous host.
     """
     member = owned_member(connection, room_id, member_id, token)
     action = payload.get("action")
@@ -429,7 +556,15 @@ def member_action(connection, room_id, member_id, token, payload):
         if member["status"] != "away" or not hashed or hmac.compare_digest(hashed, member["token_hash"]):
             raise ValueError("只有离开的成员可以请回，且须提供新的成员凭证")
         connection.execute("UPDATE room_members SET status='active',token_hash=? WHERE id=?", (hashed, member_id))
+    elif action == "role":
+        role = payload.get("role")
+        if role not in ("host", "member") or (role == "host" and member["access"] == "online"):
+            raise ValueError("role 须为 host 或 member；在线成员不能担任主持人")
+        if role == "host":
+            connection.execute("UPDATE room_members SET role='member' WHERE room_id=? AND role='host'", (room_id,))
+        connection.execute("UPDATE room_members SET role=? WHERE id=?", (role, member_id))
     else:
-        raise ValueError("action 须为 away、active 或 remove")
+        raise ValueError("action 须为 away、active、remove 或 role")
+    settle_batches(connection, room_id)
     sync_participants(connection, room_id)
     return free_view(connection, room_id)

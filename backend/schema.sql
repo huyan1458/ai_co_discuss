@@ -542,6 +542,32 @@ CREATE TABLE IF NOT EXISTS member_requests (
     execution_id INTEGER REFERENCES member_executions(id),
     answer_id INTEGER REFERENCES messages(id),
     created_at INTEGER NOT NULL,
+    chain_id INTEGER NOT NULL DEFAULT 0,
+    batch_id INTEGER NOT NULL DEFAULT 0,
+    purpose TEXT NOT NULL DEFAULT 'ask',
+    created_by TEXT NOT NULL DEFAULT 'user',
     UNIQUE(message_id,member_id)
 );
 CREATE INDEX IF NOT EXISTS member_requests_open ON member_requests(member_id,status);
+-- A host's dispatch: its named requests form one batch that hands back to the host once.
+CREATE TABLE IF NOT EXISTS free_batches (
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    batch_id INTEGER NOT NULL,
+    chain_id INTEGER NOT NULL,
+    host_id INTEGER NOT NULL,
+    settled INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (room_id,batch_id)
+);
+-- Chains whose automatic progress stopped (budget reached or every dispatched member failed).
+CREATE TABLE IF NOT EXISTS free_chains (
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    chain_id INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    PRIMARY KEY (room_id,chain_id)
+);
+-- A brainstorm room started from a free room keeps its origin for the way back.
+CREATE TABLE IF NOT EXISTS room_links (
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+    parent_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);

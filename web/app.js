@@ -33,6 +33,7 @@ const IDENTITIES = {
   Qwen: { initials: "QW", style: "qwen", icon: "/icons/qwen.svg", description: "AI 身份" },
 };
 const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false, free_to: [], free_notice: "", free_error: "",
+  free_proxy: "", create_parent: null,
   archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
   reply_to: null, turn_reply_to: null, tab: "topic", refresh_version: 0, context_dirty: false, topic_dirty: false,
   snapshot_id: 0, pending_submission: null, pending_turn: null, pending_room: null, toast_timer: null,
@@ -757,6 +758,10 @@ function message_payload() {
   if ([...text].length > MAX_MESSAGE_LENGTH) throw new Error(`留言最多 ${MAX_MESSAGE_LENGTH} 字，原文已保留，请调整后提交`);
   // Free rooms: the owner always speaks as the user; naming members is the server's job.
   if (state.room.mode === "free") {
+    const online = (state.room.free?.members || []).find(member => member.name === state.free_proxy && member.access === "online" && member.status === "active");
+    // Forwarding an online member's answer closes every request still waiting for it.
+    if (online) return { author: online.name, text, reply_to: state.reply_to, kind: "chat", submitted_by: "用户",
+      request_ids: state.room.free.requests.filter(item => item.member === online.name && item.status === "pending").map(item => item.id) };
     const payload = { author: "用户", text, reply_to: state.reply_to, kind: "chat", submitted_by: "用户" };
     const active = (state.room.free?.members || []).filter(member => member.status === "active").map(member => member.name);
     // One member is named by default; with several, the chips and @mentions outside code decide, never a broadcast.
@@ -788,8 +793,44 @@ function toggle_recipient(name) {
   state.free_to = state.free_to.includes(name) ? state.free_to.filter(item => item !== name) : [...state.free_to, name];
 }
 
+/** Choose an online member to forward the next answer for, or clear the choice. */
+function set_proxy(name) { state.free_proxy = state.free_proxy === name ? "" : name; }
+
+/** Copy a reading notice for an online member: links and message numbers only, no context. */
+async function copy_online_notice(name) {
+  const ids = (state.room.free?.requests || []).filter(item => item.member === name && item.status === "pending").map(item => `#${item.message_id}`);
+  await copy_text(`请阅读 ${location.origin}/r/${state.room.id}?participant=${name} ，回应 ${ids.join("、") || "最新消息"}。单条原文：${location.origin}/r/${state.room.id}/messages/编号。请在你自己的窗口回答，不要操作网页或调用写入接口。`);
+  state.free_notice = `已复制给 ${name} 的阅读通知；复制不代表已送达。拿到回答后，在输入框选择“代发 ${name}”粘贴原文。`;
+}
+
+/** Prepare the creation form for a brainstorm room that remembers this free room. */
+function prepare_brainstorm() {
+  const room = state.room;
+  const members = (room.free?.members || []).filter(member => member.status === "active");
+  const host = members.find(member => member.role === "host" && member.access !== "online") || members.find(member => member.access !== "online");
+  // Online members cannot join an automatic discussion, so their presence selects manual advancement.
+  element("new-room-mode").value = members.some(member => member.access === "online") ? "manual" : "automatic";
+  update_creation_mode();
+  element("new-room-title").value = `头脑风暴：${room.title}`.slice(0, 80);
+  element("new-room-user_request").value = room.user_request || room.goal || "";
+  render_expert_inputs("new-expert-modes", Object.fromEntries(members.map(member => [member.name, member.access === "online" ? "online" : "cli"])));
+  element("new-room-host").value = host?.name || "";
+  state.create_parent = room.id;
+}
+
+/** Post a concluded brainstorm's result back to the free room it came from, as a plain note. */
+async function return_conclusion() {
+  const room = state.room, parent = room.parent_room;
+  if (!parent) return;
+  const summary = room.host_brief?.text || room.state_text || "（主持人尚未整理结论，请查看原文）";
+  await request_json(`/api/rooms/${parent.id}/messages`, { author: "用户", text: `头脑风暴「${room.title}」已收束。\n\n${summary}\n\n原文：${location.origin}/r/${room.id}`,
+    kind: "chat", submitted_by: "用户", submission_id: new_submission_id(), to: [] });
+  state.free_notice = `结论已发回「${parent.title}」`;
+  await select_room(parent.id);
+}
+
 /** Owner actions on one member: stop, leave or remove go to the website; bringing back needs the local launcher. */
-async function change_member({ member_id, name, action }) {
+async function change_member({ member_id, name, action, role }) {
   const room_id = state.room.id;
   state.free_error = ""; state.free_notice = "";
   try {
@@ -798,7 +839,7 @@ async function change_member({ member_id, name, action }) {
       await local_launch_request("room-member", { room_id, token, action: "rejoin", name });
     } else {
       await request_json(`/api/rooms/${room_id}/members/${member_id}${action === "interrupt" ? "/interrupt" : ""}`,
-        action === "interrupt" ? {} : { action });
+        action === "interrupt" ? {} : { action, ...(role ? { role } : {}) });
     }
     if (state.room?.id === room_id) await refresh_room();
   } catch (error) { state.free_error = error.message; }
@@ -818,6 +859,13 @@ async function invite_member({ name, access }) {
   try {
     const token = localStorage.getItem(`discuss-access:${room_id}`);
     if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
+    if (access === "online") {
+      // Online members never write themselves, so their credential is discarded right away.
+      await request_json(`/api/rooms/${room_id}/members`, { name, access, token: crypto.randomUUID() + crypto.randomUUID() });
+      state.free_notice = `${name} 已作为在线成员加入：点名它后，在成员栏复制阅读通知，拿到回答再代发。`;
+      if (state.room?.id === room_id) await refresh_room();
+      return;
+    }
     const draft = launch_options();
     const result = await local_launch_request("room-member", { room_id, token, action: "add", name, access,
       participants: draft.participants, cwd: draft.cwd, project_access: draft.project_access });
@@ -835,6 +883,7 @@ async function finish_message(result, room_id, drafts) {
   element("message-input").value = "";
   element("message-summary").value = "";
   state.pending_submission = null;
+  state.free_proxy = "";
   clear_attachment_drafts();
   cancel_reply();
   cancel_turn_reply();
@@ -1181,7 +1230,8 @@ function room_creation_payload(folder_id) {
   return { title: element("new-room-title").value, goal: element("new-room-goal").value,
     host: element("new-room-host").value, user_request: element("new-room-user_request").value, background: element("new-room-background").value,
     boundaries: element("new-room-boundaries").value, experts: read_expert_inputs("new-expert-modes"),
-    runtime_mode: element("new-room-mode").value, limits: read_limits("new-room"), folder_id };
+    runtime_mode: element("new-room-mode").value, limits: read_limits("new-room"), folder_id,
+    ...(state.create_parent ? { parent_room_id: state.create_parent } : {}) };
 }
 
 /** Retain an unresolved creation instead of silently replacing it with a new request. */
@@ -1228,6 +1278,7 @@ async function submit_room(event, folder_id = null) {
     throw error;
   }
   state.pending_room = null;
+  state.create_parent = null;
   if (JSON.stringify({ payload: room_creation_payload(folder_id), launch_draft: launching ? launch_options() : null }) === signature) {
     element("room-form").reset();
     reset_creation_mode();
@@ -2415,7 +2466,8 @@ function view_snapshot() {
     attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url })),
     composer_error: state.composer_error, upload_status: state.upload_status, sending_message: state.sending_message,
     mention_only: state.mention_only, reply_to: state.reply_to, turn_reply_to: state.turn_reply_to,
-    free_to: [...state.free_to], free_notice: state.free_notice, free_error: state.free_error,
+    free_to: [...state.free_to], free_notice: state.free_notice, free_error: state.free_error, free_proxy: state.free_proxy,
+    create_parent: state.create_parent,
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
     theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch) };
 }
@@ -2493,7 +2545,8 @@ async function execute_view_action(name, value) {
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
     choose_runtime, export_runtime, pause_runtime, check_limits, pause_discussion, restart_discussion, force_close, conclude_discussion,
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection: load_launch_settings,
-    load_room_configuration, save_room_configuration, interrupt_member, toggle_recipient, change_member, invite_member, interrupt_free,
+    load_room_configuration, save_room_configuration, interrupt_member, toggle_recipient, change_member, invite_member, interrupt_free, set_proxy, copy_online_notice,
+    prepare_brainstorm, return_conclusion, clear_create_parent: () => { state.create_parent = null; },
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };
   try {
     await actions[name](value);

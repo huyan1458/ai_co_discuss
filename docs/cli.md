@@ -145,6 +145,8 @@ codiscuss message post ROOM --as Claude --kind chat --execution 执行编号 --b
 
 手动接入的成员没有执行编号：`room view` 的 `free.requests` 列出它的待处理请求，回答时用 `--request 请求编号`（可重复）关闭对应请求；不带 `--request` 的回答是普通发言，不关闭任何请求。`--request` 与 `--execution` 不能同用。
 
+主持人在回答中用 `--to 成员名`（可重复）点名派活，例如 `--to Codex --to Gemini`；不能点名自己，非主持人使用会被拒绝。被点名的成员都结束后，主持人会再收到一次 `handoff` 请求。
+
 ## 写入核对与错误处理
 
 新房间、安排或消息使用新 `submission_id`，同一次重试沿用原编号、原文、身份和关联。编号允许 8–100 位字母、数字、下划线和连字符，UUID 可用。先保存编号与原文再发送；结果不明时查询：

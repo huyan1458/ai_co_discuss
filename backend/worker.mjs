@@ -162,7 +162,12 @@ async function require_room(database, room_id) {
   result.runtime = await runtime_view(database, room_id);
   result.limits = limits_view(await database.prepare(LIMITS_SQL).bind(room_id).first(), result);
   result.mode = await room_mode(database, room_id);
+  result.parent_room = await database.prepare("SELECT rooms.id,rooms.title FROM room_links JOIN rooms ON rooms.id=room_links.parent_id WHERE room_links.room_id=?")
+    .bind(room_id).first();
   if (result.mode === "free") {
+    result.linked_rooms = (await database.prepare(`SELECT rooms.id,rooms.title,COALESCE(topic_settings.phase,'preparing') AS phase
+      FROM room_links JOIN rooms ON rooms.id=room_links.room_id LEFT JOIN topic_settings ON topic_settings.room_id=rooms.id
+      WHERE room_links.parent_id=? ORDER BY room_links.created_at`).bind(room_id).all()).results;
     // Free rooms have no host hand-off: user messages go straight to the named members.
     result.held_since = 0;
     result.free = await free_view(database, room_id);
@@ -350,11 +355,16 @@ async function create_room(database, payload, control_token = "") {
   const hashed = await runtime_hash(control_token);
   if (!["manual", "automatic"].includes(payload.runtime_mode ?? "manual") || (automatic && !hashed)) throw new HttpError(400, "自动建房须提供有效的运行模式和控制凭据");
   if (free && (automatic || !hashed)) throw new HttpError(400, "自由房间须提供房间控制凭据，且不使用讨论运行模式");
+  const parent_id = payload.parent_room_id ?? null;
+  if (parent_id !== null && (free || typeof parent_id !== "string" || await room_mode(database, parent_id) !== "free")) {
+    throw new HttpError(400, "只有从自由协作房间发起的讨论房间可以关联来源房间");
+  }
   const identifier = Object.hasOwn(payload, "submission_id") ? submission_value(payload.submission_id) : null;
   const folder_id = payload.folder_id ?? null;
   if (folder_id !== null && typeof folder_id !== "string") throw new HttpError(400, "文件夹编号必须是文本或 null");
   const request_text = creation_request(settings) + (automatic ? ":automatic" : "")
     + (free ? `:free:${JSON.stringify(members.map(member => [member.name, member.adapter]))}` : "")
+    + (parent_id === null ? "" : `:parent:${parent_id}`)
     + (folder_id === null ? "" : `:folder:${JSON.stringify(folder_id)}`);
   const lookup = () => database.prepare("SELECT * FROM room_creations WHERE submission_id=?").bind(identifier).first();
   const previous = identifier ? await lookup() : null;
@@ -376,6 +386,7 @@ async function create_room(database, payload, control_token = "") {
     .bind(room_id, crypto.randomUUID(), hashed));
   if (free) statements.push(database.prepare("INSERT INTO room_modes (room_id,mode,control_hash) VALUES (?,'free',?)").bind(room_id, hashed),
     ...members.map(member => free_member_insert(database, room_id, member)));
+  if (parent_id !== null) statements.push(database.prepare("INSERT INTO room_links (room_id,parent_id,created_at) VALUES (?,?,?)").bind(room_id, parent_id, new Date().toISOString()));
   try {
     await database.batch(statements);
   } catch (error) {
@@ -484,6 +495,7 @@ async function manage_room(database, room_id, action, payload) {
     const queries = [
       "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?",
       "DELETE FROM room_members WHERE room_id=?", "DELETE FROM room_modes WHERE room_id=?",
+      "DELETE FROM free_batches WHERE room_id=?", "DELETE FROM free_chains WHERE room_id=?", "DELETE FROM room_links WHERE room_id=?",
       "DELETE FROM message_timings WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
       "DELETE FROM message_summaries WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
       "DELETE FROM message_details WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
@@ -1323,6 +1335,10 @@ const FREE_RECENT_CHANGES = 50;
 const FREE_MAX_CHANGED_FILES = 200;
 const FREE_MAX_PATH = 500;
 const FREE_LIVE = "status IN ('dispatched','started')";
+// AI-created requests (host dispatches and hand-offs) allowed per chain; each owner message starts a chain.
+const FREE_MAX_AUTO_HOPS = 8;
+const FREE_BATCH_DONE = "NOT EXISTS(SELECT 1 FROM member_requests r WHERE r.room_id=b.room_id AND r.batch_id=b.batch_id AND r.status NOT IN ('completed','cancelled','failed'))";
+const FREE_BATCH_ANSWERED = "EXISTS(SELECT 1 FROM member_requests r WHERE r.room_id=b.room_id AND r.batch_id=b.batch_id AND r.status='completed')";
 const FREE_OPERATIONS = ["messages", "attachments", "move", "folder", "archive", "restore", "delete"];
 const FREE_MEMBER_FIELDS = ["id", "name", "adapter", "role", "status", "access", "session_mode", "read_until"];
 const FREE_EXECUTION_FIELDS = ["id", "member_id", "status", "session_id", "lease_until", "created_at", "finished_at", "result"];
@@ -1351,8 +1367,8 @@ async function free_member_value(member) {
   const adapter = member.adapter ?? "";
   if (typeof adapter !== "string" || adapter.length > 40) throw new HttpError(400, "成员适配器名称无效");
   const access = member.access ?? "runner", session_mode = member.session_mode ?? "new";
-  if (!["runner", "manual"].includes(access) || !["new", "borrowed"].includes(session_mode)) {
-    throw new HttpError(400, "成员接入方式须为 runner/manual，会话方式须为 new/borrowed");
+  if (!["runner", "manual", "online"].includes(access) || !["new", "borrowed"].includes(session_mode)) {
+    throw new HttpError(400, "成员接入方式须为 runner/manual/online，会话方式须为 new/borrowed");
   }
   return { name: member.name, adapter, token_hash, access, session_mode };
 }
@@ -1413,10 +1429,12 @@ async function free_view(database, room_id) {
     return { ...pick(row, FREE_MEMBER_FIELDS), execution, pending };
   }));
   const names = Object.fromEntries((await database.prepare("SELECT id,name FROM room_members WHERE room_id=?").bind(room_id).all()).results.map(row => [row.id, row.name]));
-  const requests = (await database.prepare(`SELECT id,member_id,message_id,status,execution_id,answer_id FROM member_requests
+  const requests = (await database.prepare(`SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by FROM member_requests
     WHERE room_id=? ORDER BY id DESC LIMIT ?`).bind(room_id, FREE_RECENT_REQUESTS).all()).results
     .map(row => ({ ...row, member: names[row.member_id] ?? "" })).reverse();
-  return { members, requests, execution_minutes: await free_execution_minutes(database, room_id), conflicts: await free_conflicts(database, room_id, names) };
+  const halted_chains = (await database.prepare("SELECT chain_id,reason FROM free_chains WHERE room_id=? ORDER BY chain_id DESC LIMIT 10").bind(room_id).all()).results;
+  return { members, requests, execution_minutes: await free_execution_minutes(database, room_id), conflicts: await free_conflicts(database, room_id, names),
+    halted_chains, max_auto_hops: FREE_MAX_AUTO_HOPS };
 }
 
 /** Accept only the room control credential; declared names never grant ownership. */
@@ -1445,18 +1463,79 @@ async function authorize_free(database, room_id, token, operation, payload) {
   return require_free_member(database, room_id, token, author);
 }
 
-/** Structured recipients; a single active member is named by default, several stay a plain note. */
+/** Map active member names to their rows. */
+async function free_active_members(database, room_id) {
+  return Object.fromEntries((await database.prepare("SELECT * FROM room_members WHERE room_id=? AND status='active'").bind(room_id).all()).results
+    .map(row => [row.name, row]));
+}
+
+/** Validate a structured recipient list against the active members. */
+function free_named(active, names, exclude) {
+  if (!Array.isArray(names) || names.some(name => !Object.hasOwn(active, name) || name === exclude)) {
+    throw new HttpError(400, `点名对象须为本房间在场成员${exclude ? "，且不能点名自己" : ""}`);
+  }
+  return [...new Set(names)].map(name => active[name].id);
+}
+
+/** An owner message's recipients as {id, purpose}; unnamed messages go to the AI host when there is one. */
 async function free_recipients(database, room_id, payload) {
-  const active = Object.fromEntries((await database.prepare("SELECT id,name FROM room_members WHERE room_id=? AND status='active'").bind(room_id).all()).results
-    .map(row => [row.name, row.id]));
-  if (payload.to === undefined) return Object.keys(active).length === 1 ? Object.values(active) : [];
-  if (!Array.isArray(payload.to) || payload.to.some(name => !Object.hasOwn(active, name))) throw new HttpError(400, "点名对象须为本房间在场成员");
-  return [...new Set(payload.to)].map(name => active[name]);
+  const active = await free_active_members(database, room_id);
+  if (payload.to !== undefined) return free_named(active, payload.to).map(id => ({ id, purpose: "ask" }));
+  const rows = Object.values(active);
+  if (rows.length === 1) return [{ id: rows[0].id, purpose: "ask" }];
+  const host = rows.find(row => row.role === "host");
+  return host ? [{ id: host.id, purpose: "route" }] : [];
+}
+
+/** Hand finished batches back to their host once; all-failed batches and exhausted budgets halt the chain. */
+function free_settle_statements(database, room_id) {
+  const used = `(SELECT COUNT(*) FROM member_requests u WHERE u.room_id=b.room_id AND u.chain_id=b.chain_id AND u.created_by='host')`;
+  return [
+    database.prepare(`INSERT OR IGNORE INTO free_chains (room_id,chain_id,reason) SELECT b.room_id,b.chain_id,'all_failed'
+      FROM free_batches b WHERE b.room_id=? AND b.settled=0 AND ${FREE_BATCH_DONE} AND NOT ${FREE_BATCH_ANSWERED}`).bind(room_id),
+    database.prepare(`INSERT OR IGNORE INTO free_chains (room_id,chain_id,reason) SELECT b.room_id,b.chain_id,'budget'
+      FROM free_batches b JOIN room_members m ON m.id=b.host_id AND m.status='active' AND m.role='host'
+      WHERE b.room_id=? AND b.settled=0 AND ${FREE_BATCH_DONE} AND ${FREE_BATCH_ANSWERED} AND ${used}>=?`).bind(room_id, FREE_MAX_AUTO_HOPS),
+    // The hand-off is unique per (dispatch message, host), so repeating this statement never duplicates it.
+    database.prepare(`INSERT OR IGNORE INTO member_requests (room_id,member_id,message_id,chain_id,batch_id,purpose,created_by,created_at)
+      SELECT b.room_id,b.host_id,b.batch_id,b.chain_id,0,'handoff','host',unixepoch()
+      FROM free_batches b JOIN room_members m ON m.id=b.host_id AND m.status='active' AND m.role='host'
+      WHERE b.room_id=? AND b.settled=0 AND ${FREE_BATCH_DONE} AND ${FREE_BATCH_ANSWERED}
+      AND NOT EXISTS(SELECT 1 FROM free_chains c WHERE c.room_id=b.room_id AND c.chain_id=b.chain_id)`).bind(room_id),
+    database.prepare(`UPDATE free_batches AS b SET settled=1 WHERE b.room_id=? AND b.settled=0 AND ${FREE_BATCH_DONE}`).bind(room_id),
+  ];
+}
+
+/** The chain an answer continues: the newest chain among the requests it completes. */
+async function free_answered_chain(database, member, payload) {
+  const row = member.access === "manual"
+    ? await database.prepare("SELECT MAX(chain_id) AS chain FROM member_requests WHERE id IN (SELECT value FROM json_each(?))").bind(JSON.stringify(payload.request_ids ?? [])).first()
+    : await database.prepare("SELECT MAX(chain_id) AS chain FROM member_requests WHERE execution_id=?").bind(payload.execution_id).first();
+  return row?.chain || 0;
+}
+
+/** Statements queuing a host's named members as one batch, or halting the chain when the budget is spent. */
+async function free_dispatch_statements(database, room_id, host, names, chain_id, message_id, key) {
+  const member_ids = free_named(await free_active_members(database, room_id), names, host.name);
+  if (!member_ids.length || !chain_id) return [];
+  const halted = await database.prepare("SELECT 1 FROM free_chains WHERE room_id=? AND chain_id=?").bind(room_id, chain_id).first();
+  const used = (await database.prepare("SELECT COUNT(*) AS count FROM member_requests WHERE room_id=? AND chain_id=? AND created_by='host'").bind(room_id, chain_id).first()).count;
+  if (halted || used + member_ids.length > FREE_MAX_AUTO_HOPS) {
+    return [database.prepare("INSERT OR IGNORE INTO free_chains (room_id,chain_id,reason) VALUES (?,?,'budget')").bind(room_id, chain_id)];
+  }
+  return [...member_ids.map(member_id => database.prepare(`INSERT INTO member_requests (room_id,member_id,message_id,chain_id,batch_id,purpose,created_by,created_at)
+      SELECT ?,?,${message_id},?,${message_id},'ask','host',unixepoch()`).bind(room_id, member_id, ...key, chain_id, ...key)),
+    database.prepare(`INSERT INTO free_batches (room_id,batch_id,chain_id,host_id) SELECT ?,${message_id},?,?`).bind(room_id, ...key, chain_id, host.id)];
 }
 
 /** Check a member's answer before the batch; the batch asserts the same facts atomically. */
 async function free_answer_guard(database, room_id, member, payload) {
   const token_check = "EXISTS(SELECT 1 FROM room_members WHERE id=? AND token_hash=? AND status='active')";
+  if (payload.to !== undefined) {
+    if (member.role !== "host") throw new HttpError(403, "只有主持人可以在回答中点名成员派活");
+    free_named(await free_active_members(database, room_id), payload.to, member.name);
+  }
+  if (member.access === "online") throw new HttpError(403, "在线成员只读，回答由用户代发");
   if (member.access === "manual") {
     const ids = payload.request_ids ?? [];
     if (payload.execution_id !== undefined || !Array.isArray(ids) || ids.some(id => !Number.isSafeInteger(id))) throw new HttpError(400, "手动接入成员用 request_ids 关联请求，不使用执行编号");
@@ -1490,7 +1569,8 @@ function free_finish_statements(database, where, values, status, result, request
 
 /** Fail executions whose lease lapsed; their requests stay visible as failed, never silently retried. */
 function free_expire_statements(database, room_id) {
-  return free_finish_statements(database, "room_id=? AND lease_until<=unixepoch()", [room_id], "failed", "执行租约到期，接入程序未续租", "failed");
+  return [...free_finish_statements(database, "room_id=? AND lease_until<=unixepoch()", [room_id], "failed", "执行租约到期，接入程序未续租", "failed"),
+    ...free_settle_statements(database, room_id)];
 }
 
 /** Void a member's live execution and every open request, so nothing restarts by itself. */
@@ -1502,7 +1582,7 @@ function free_stop_statements(database, member_id, reason) {
 /** Describe one execution with the requests it carries and the member's read cursor. */
 async function free_execution_detail(database, row) {
   const member = await database.prepare("SELECT * FROM room_members WHERE id=?").bind(row.member_id).first();
-  const requests = (await database.prepare("SELECT id,message_id,status FROM member_requests WHERE execution_id=? ORDER BY id").bind(row.id).all()).results;
+  const requests = (await database.prepare("SELECT id,message_id,status,purpose FROM member_requests WHERE execution_id=? ORDER BY id").bind(row.id).all()).results;
   return { ...pick(row, FREE_EXECUTION_FIELDS), member: member.name, read_until: member.read_until, requests };
 }
 
@@ -1588,7 +1668,8 @@ async function free_execution_action(database, room_id, execution_id, token, pay
     await database.prepare(`UPDATE member_executions SET lease_until=MIN(unixepoch()+?,?) WHERE id=? AND ${FREE_LIVE} AND lease_until>unixepoch()`)
       .bind(FREE_LEASE_SECONDS, limit, execution_id).run();
   } else if (action === "fail") {
-    await database.batch(free_finish_statements(database, "id=?", [execution_id], "failed", String(payload.reason || "执行失败"), "failed"));
+    await database.batch([...free_finish_statements(database, "id=?", [execution_id], "failed", String(payload.reason || "执行失败"), "failed"),
+      ...free_settle_statements(database, room_id)]);
   } else if (action === "release") {
     // Only for proven non-delivery: the requests return to the queue unchanged.
     await database.batch(free_finish_statements(database, "id=?", [execution_id], "cancelled", String(payload.reason || "未送达"), "pending"));
@@ -1628,7 +1709,7 @@ async function handle_free_api(database, request, parts) {
   }
   if (parts.length === 6 && parts[3] === "members" && parts[5] === "interrupt" && method === "POST") {
     const member = await free_owned_member(database, room_id, integer(parts[4]), token);
-    await database.batch(free_stop_statements(database, member.id, "用户打断"));
+    await database.batch([...free_stop_statements(database, member.id, "用户打断"), ...free_settle_statements(database, room_id)]);
     return respond(await free_view(database, room_id));
   }
   if (parts.length === 5 && parts[3] === "members" && method === "POST") {
@@ -1637,13 +1718,20 @@ async function handle_free_api(database, request, parts) {
     if (["away", "remove"].includes(payload.action)) {
       await database.batch([...free_stop_statements(database, member.id, payload.action === "away" ? "成员已离开" : "成员已移除"),
         database.prepare("UPDATE room_members SET status=? WHERE id=?").bind(payload.action === "away" ? "away" : "removed", member.id),
-        free_participant_statement(database, room_id)]);
+        free_participant_statement(database, room_id), ...free_settle_statements(database, room_id)]);
     } else if (payload.action === "active") {
       const hashed = await runtime_hash(payload.token);
       if (member.status !== "away" || !hashed || hashed === member.token_hash) throw new HttpError(400, "只有离开的成员可以请回，且须提供新的成员凭证");
       await database.batch([database.prepare("UPDATE room_members SET status='active',token_hash=? WHERE id=? AND status='away'").bind(hashed, member.id),
         free_participant_statement(database, room_id)]);
-    } else throw new HttpError(400, "action 须为 away、active 或 remove");
+    } else if (payload.action === "role") {
+      if (!["host", "member"].includes(payload.role) || (payload.role === "host" && member.access === "online")) {
+        throw new HttpError(400, "role 须为 host 或 member；在线成员不能担任主持人");
+      }
+      await database.batch([
+        ...(payload.role === "host" ? [database.prepare("UPDATE room_members SET role='member' WHERE room_id=? AND role='host'").bind(room_id)] : []),
+        database.prepare("UPDATE room_members SET role=? WHERE id=?").bind(payload.role, member.id), ...free_settle_statements(database, room_id)]);
+    } else throw new HttpError(400, "action 须为 away、active、remove 或 role");
     return respond(await free_view(database, room_id));
   }
   throw new HttpError(404, "地址不存在");
@@ -1653,9 +1741,13 @@ async function handle_free_api(database, request, parts) {
 async function append_free_message(database, room, payload, actor) {
   const room_id = room.id;
   const values = message_values(payload);
-  if (actor === "用户" && values.author !== "用户") throw new HttpError(403, "房间控制凭据只能以用户身份发言；成员须使用自己的凭证");
-  const expected = { ...values, kind: "chat", submitted_by: values.author, turn_id: null, source: values.author === "用户" ? "user" : "cli",
-    attachment_ids: attachment_ids(payload) };
+  let proxy = null;
+  if (actor === "用户" && values.author !== "用户") {
+    proxy = await database.prepare("SELECT * FROM room_members WHERE room_id=? AND name=? AND status='active' AND access='online'").bind(room_id, values.author).first();
+    if (!proxy || (payload.submitted_by ?? "用户") !== "用户") throw new HttpError(403, "房间控制凭据只能以用户身份发言，或代发在线成员的回答");
+  }
+  const expected = { ...values, kind: "chat", submitted_by: proxy ? "用户" : values.author, turn_id: null,
+    source: proxy ? "proxy" : values.author === "用户" ? "user" : "cli", attachment_ids: attachment_ids(payload) };
   Object.assign(expected, message_summary(payload, expected));
   const lookup = () => database.prepare(`${MESSAGE_QUERY} WHERE room_id=? AND submission_id=?`).bind(room_id, values.submission_id).first();
   const previous = await lookup();
@@ -1664,16 +1756,28 @@ async function append_free_message(database, room, payload, actor) {
   await check_message_references(database, room_id, expected);
   await check_message_attachments(database, room_id, expected);
   const message_id = "(SELECT id FROM messages WHERE room_id=? AND submission_id=?)";
+  if (proxy && room.archived) throw new HttpError(400, "频道已存档；恢复后才能继续协作");
   const key = [room_id, values.submission_id];
   let guard = { condition: "NOT EXISTS(SELECT 1 FROM room_directory WHERE room_id=? AND archived=1)", values: [room_id] };
   const effects = [];
-  if (actor === "用户") {
-    for (const member_id of await free_recipients(database, room_id, payload)) {
-      effects.push(database.prepare(`INSERT INTO member_requests (room_id,member_id,message_id,created_at)
-        SELECT ?,?,${message_id},unixepoch() WHERE EXISTS(SELECT 1 FROM room_members WHERE id=? AND status='active')`).bind(room_id, member_id, ...key, member_id));
+  if (proxy) {
+    const ids = payload.request_ids ?? [];
+    if (!Array.isArray(ids) || ids.some(id => !Number.isSafeInteger(id))) throw new HttpError(400, "request_ids 须为请求编号列表");
+    for (const id of ids) {
+      const row = await database.prepare("SELECT * FROM member_requests WHERE room_id=? AND id=?").bind(room_id, id).first();
+      if (!row || row.member_id !== proxy.id || row.status !== "pending") throw new HttpError(409, `请求 ${id} 不属于该在线成员或已处理`);
+    }
+    effects.push(database.prepare(`UPDATE member_requests SET status='completed',answer_id=${message_id}
+      WHERE member_id=? AND status='pending' AND id IN (SELECT value FROM json_each(?))`).bind(...key, proxy.id, JSON.stringify([...new Set(ids)])));
+  } else if (actor === "用户") {
+    for (const recipient of await free_recipients(database, room_id, payload)) {
+      effects.push(database.prepare(`INSERT INTO member_requests (room_id,member_id,message_id,chain_id,purpose,created_by,created_at)
+        SELECT ?,?,${message_id},${message_id},?,'user',unixepoch() WHERE EXISTS(SELECT 1 FROM room_members WHERE id=? AND status='active')`)
+        .bind(room_id, recipient.id, ...key, ...key, recipient.purpose, recipient.id));
     }
   } else {
     guard = await free_answer_guard(database, room_id, actor, payload);
+    const chain_id = await free_answered_chain(database, actor, payload);
     if (guard.ids) {
       effects.push(database.prepare(`UPDATE member_requests SET status='completed',answer_id=${message_id}
         WHERE member_id=? AND status='pending' AND id IN (SELECT value FROM json_each(?))`).bind(...key, actor.id, JSON.stringify(guard.ids)));
@@ -1684,11 +1788,13 @@ async function append_free_message(database, room, payload, actor) {
           .bind(...key, guard.execution_id));
     }
     effects.push(database.prepare(`UPDATE room_members SET read_until=MAX(read_until,${message_id}) WHERE id=?`).bind(...key, actor.id));
+    if (actor.role === "host" && payload.to?.length) effects.push(...await free_dispatch_statements(database, room_id, actor, payload.to, chain_id, message_id, key));
   }
+  effects.push(...free_settle_statements(database, room_id));
   const statements = [
     database.prepare(`INSERT INTO messages (room_id,author,text,reply_to,source,submission_id,created_at) VALUES (?,?,?,?,?,?,?)`)
       .bind(room_id, expected.author, expected.text, expected.reply_to, expected.source, values.submission_id, new Date().toISOString()),
-    database.prepare(`INSERT INTO message_details (message_id,kind,submitted_by,turn_id) SELECT ${message_id},'chat',?,NULL`).bind(...key, expected.author),
+    database.prepare(`INSERT INTO message_details (message_id,kind,submitted_by,turn_id) SELECT ${message_id},'chat',?,NULL`).bind(...key, expected.submitted_by),
     database.prepare(`INSERT INTO message_summaries (message_id,text,author) SELECT ${message_id},?,?`).bind(...key, expected.summary, expected.summary_by),
     ...expected.attachment_ids.map((id, position) => database.prepare(`UPDATE attachments SET message_id=${message_id},position=? WHERE id=?`).bind(...key, position, id)),
     ...effects,

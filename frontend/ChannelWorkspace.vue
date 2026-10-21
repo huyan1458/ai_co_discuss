@@ -81,7 +81,9 @@ const tabs = computed(() => free_room.value ? ALL_TABS.slice(0, 1) : ALL_TABS);
 const invite_name = ref("");
 const invite_access = ref("runner");
 /** AIs not yet in the room; a member that left is brought back, not invited again. */
-const invite_choices = computed(() => Object.keys(bridge.launch_clients).filter((name) =>
+/** Open the creation dialog prefilled for a brainstorm room linked to this free room. */
+async function start_brainstorm() { await act("prepare_brainstorm"); target_folder.value = null; modal.value = "create"; }
+const invite_choices = computed(() => Object.keys(invite_access.value === "online" ? bridge.identities : bridge.launch_clients).filter((name) => name !== "用户" &&
   !(room.value?.free?.members || []).some((member) => member.name === name)).map((name) => ({ label: bridge.display_name(name), value: name })));
 /** A member is busy while it has a live execution or queued requests. */
 const free_member_busy = (member) => member.pending > 0 || ["dispatched", "started"].includes(member.execution?.status);
@@ -116,7 +118,7 @@ async function choose_room(id) { nav_open.value = false; await act("room", id); 
 function open_detail(id) { detail_id.value = id; modal.value = "message"; }
 
 /** Open the shared creation form from either navigation surface. */
-function create_channel(folder = null) { target_folder.value = folder; nav_open.value = false; modal.value = "create"; }
+function create_channel(folder = null) { act("clear_create_parent"); target_folder.value = folder; nav_open.value = false; modal.value = "create"; }
 
 /** Open folder creation after closing the mobile directory. */
 function create_folder() { target_folder.value = null; nav_open.value = false; modal.value = "folder"; }
@@ -316,16 +318,18 @@ function resize_nav_by_key(event) {
     </main>
     <div v-if="show_rail" class="channel-rail-resizer" role="separator" tabindex="0" aria-label="调整右侧栏宽度" aria-orientation="vertical" aria-controls="channel-member-rail" :aria-valuemin="RAIL_MIN" :aria-valuemax="RAIL_MAX" :aria-valuenow="rail_width" :aria-valuetext="`${rail_width} 像素`" title="拖动调整右侧栏宽度，也可使用左右方向键" @pointerdown="start_rail_resize" @pointermove="resize_rail" @pointerup="finish_rail_resize" @pointercancel="finish_rail_resize" @lostpointercapture="finish_rail_resize" @keydown="resize_rail_by_key"></div>
     <aside v-if="show_rail" id="channel-member-rail" class="channel-member-rail" aria-label="当前焦点与讨论进度">
-      <section class="channel-rail-board"><div v-if="room && free_room" class="progress-board is-docked"><header class="pb-header"><strong>自由协作</strong><span class="pb-mode">无主持 · 无轮次</span></header>
+      <section class="channel-rail-board"><div v-if="room && free_room" class="progress-board is-docked"><header class="pb-header"><strong>自由协作</strong><span class="pb-mode">{{ (room.free?.members || []).some((member) => member.role === 'host') ? `主持人 ${bridge.display_name(room.free.members.find((member) => member.role === 'host').name)}` : '无主持' }} · 无轮次</span></header>
         <ul class="channel-free-members">
           <li v-for="member in room.free?.members || []" :key="member.id">
-            <div class="channel-free-member-heading"><strong>{{ bridge.display_name(member.name) }}</strong><small>{{ member.access === 'manual' ? '手动接入' : '本机自动' }}{{ member.session_mode === 'borrowed' ? ' · 借用会话' : '' }}</small></div>
+            <div class="channel-free-member-heading"><strong>{{ bridge.display_name(member.name) }}</strong><small>{{ { manual: '手动接入', online: '在线只读' }[member.access] || '本机自动' }}{{ member.role === 'host' ? ' · 主持人' : '' }}{{ member.session_mode === 'borrowed' ? ' · 借用会话' : '' }}</small></div>
             <span>{{ free_member_status(member) }}</span>
             <small v-if="member.session_mode === 'borrowed'" class="channel-free-warning">该成员绑定了你正在使用的会话：它工作时请不要在原窗口继续操作，否则两个进程会同时写入同一份会话记录。</small>
             <div class="channel-free-actions">
               <UButton v-if="free_member_busy(member)" label="停止" size="xs" color="neutral" variant="outline" @click="act('change_member', { member_id: member.id, action: 'interrupt' })" />
               <UButton v-if="member.status === 'active'" label="离开" size="xs" color="neutral" variant="ghost" @click="act('change_member', { member_id: member.id, action: 'away' })" />
               <UButton v-else label="请回" size="xs" color="neutral" variant="outline" :disabled="!view.launch.available" :title="view.launch.available ? '换发新凭证并续接原会话' : '请回需要本机服务'" @click="act('change_member', { member_id: member.id, name: member.name, action: 'rejoin' })" />
+              <UButton v-if="member.status === 'active' && member.access !== 'online'" :label="member.role === 'host' ? '取消主持' : '设为主持人'" size="xs" color="neutral" variant="ghost" :title="member.role === 'host' ? '' : '主持人负责分配未点名的消息，并在派出的成员结束后接手'" @click="act('change_member', { member_id: member.id, action: 'role', role: member.role === 'host' ? 'member' : 'host' })" />
+              <UButton v-if="member.access === 'online' && member.pending" label="复制阅读通知" size="xs" color="neutral" variant="outline" @click="act('copy_online_notice', member.name)" />
               <UButton label="移除" size="xs" color="error" variant="ghost" @click="act('change_member', { member_id: member.id, action: 'remove' })" />
             </div>
           </li>
@@ -335,10 +339,21 @@ function resize_nav_by_key(event) {
           <p v-for="item in room.free.conflicts" :key="item.executions.join('-')">{{ item.members.map((name) => bridge.display_name(name)).join(' 与 ') }} 在重叠时段都改动了 {{ item.files.join('、') }}，请核对。</p>
           <small>依据执行前后的工作区对比，无法确定修改者；未出现提示不代表没有覆盖。</small>
         </div>
+        <div v-if="room.free?.halted_chains?.length" class="channel-free-conflicts" role="status">
+          <strong>自动推进已停</strong>
+          <p v-for="item in room.free.halted_chains.slice(0, 3)" :key="item.chain_id">消息 #{{ item.chain_id }} 引出的任务链{{ item.reason === 'budget' ? `已达 ${room.free.max_auto_hops} 次 AI 发起的请求上限` : '中派出的成员全部失败' }}，不再自动唤醒主持人。</p>
+          <small>发一条新消息即开始新的任务链。</small>
+        </div>
+        <div class="channel-free-invite">
+          <strong>头脑风暴</strong>
+          <p v-for="item in room.linked_rooms || []" :key="item.id"><button type="button" class="channel-link-button" @click="act('room', item.id)">{{ item.title }}</button> · {{ bridge.phases[item.phase] || item.phase }}</p>
+          <div><UButton label="发起头脑风暴" size="xs" color="neutral" variant="outline" @click="start_brainstorm" /></div>
+          <small>用当前成员新建一场讨论房间，轮次与时长独立；收束后可在那边把结论发回这里。</small>
+        </div>
         <form class="channel-free-invite" @submit.prevent="act('invite_member', { name: invite_name, access: invite_access })">
           <strong>邀请 AI</strong>
-          <div><USelect v-model="invite_name" :items="invite_choices" placeholder="选择 AI" size="xs" class="w-28" /><USelect v-model="invite_access" :items="[{ label: '本机自动', value: 'runner' }, { label: '手动接入', value: 'manual' }]" size="xs" class="w-24" />
-          <UButton type="submit" label="邀请" size="xs" :disabled="!invite_name || !view.launch.available" /></div>
+          <div><USelect v-model="invite_name" :items="invite_choices" placeholder="选择 AI" size="xs" class="w-28" /><USelect v-model="invite_access" :items="[{ label: '本机自动', value: 'runner' }, { label: '手动接入', value: 'manual' }, { label: '在线只读', value: 'online' }]" size="xs" class="w-24" />
+          <UButton type="submit" label="邀请" size="xs" :disabled="!invite_name || (invite_access !== 'online' && !view.launch.available)" /></div>
           <small>{{ view.launch.available ? '自动成员沿用本机软件配置与本房间工作目录；手动成员会得到一份私有凭据文件。' : '邀请需要本机服务：请在运行 AI 的电脑打开本机网站。' }}</small>
         </form>
         <p v-if="view.free_error" role="alert" class="channel-free-error">{{ view.free_error }}</p>

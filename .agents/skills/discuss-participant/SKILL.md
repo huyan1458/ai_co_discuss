@@ -32,7 +32,7 @@ description: "AI CoDiscuss 的通用参与技能，所有参与者（包括主�
 - 本次受保护写入统一附同一 `--access-file`。只处理交付的职责和安排；专家提交答案即完成此执行，主持人的交接边界见主持技能。
 - 通知程序负责续租与后续交付。AI 不创建定时任务、不操作其他软件，不另发“就绪/完成”回执。确实无法继续时保留草稿，用 `execution fail ROOM EVENT --reason 原因 --access-file FILE` 暂停；已失效时不再写回执或清理消息。
 
-**自由协作任务（任务文件含 `mode: "free"`）：** 没有发言权、安排和阶段，不执行 `execution enter`。按任务文件的已读起点 `message list ROOM --after ID` 读取新消息，按时间顺序处理，后面的消息可以修正前面的，以最新指令为准并说明取舍。完成后用 `message post ROOM --as 本人 --kind chat --execution 执行编号 --access-file FILE` 提交一次回答。提交被拒绝说明本次执行已被打断或过期：保留草稿并结束，不要去掉 `--execution` 改作普通发言。手动接入的自由成员没有执行编号：从 `room view` 的 `free.requests` 找到自己的待处理请求，回答时用 `--request 请求编号` 关闭。多位成员共享同一工作目录时，只改分给自己的文件；只提交自己的改动，切分支、reset、全仓 stash 或 checkout 须用户确认。
+**自由协作任务（任务文件含 `mode: "free"`）：** 没有发言权、安排和阶段，不执行 `execution enter`。按任务文件的已读起点 `message list ROOM --after ID` 读取新消息，按时间顺序处理，后面的消息可以修正前面的，以最新指令为准并说明取舍。完成后用 `message post ROOM --as 本人 --kind chat --execution 执行编号 --access-file FILE` 提交一次回答。提交被拒绝说明本次执行已被打断或过期：保留草稿并结束，不要去掉 `--execution` 改作普通发言。手动接入的自由成员没有执行编号：从 `room view` 的 `free.requests` 找到自己的待处理请求，回答时用 `--request 请求编号` 关闭。任务文件 `role` 为 `host` 时你是本房间主持人：`route` 请求是用户未点名的消息，`handoff` 表示你派出的成员都已结束；先 `room view` 看成员，需要他人时在回答中加 `--to 成员名` 派活并说明各自负责的文件或模块，不需要时不加，本次即结束；不点名自己，不扩大用户给的权限。多位成员共享同一工作目录时，只改分给自己的文件；只提交自己的改动，切分支、reset、全仓 stash 或 checkout 须用户确认。
 
 **手动接入：** 用户已选手动时沿用人工触发或原生定时；需要持续参与才读 [手动持续参与](references/manual.md)。没有任务文件本身不代表手动授权：若房间正在自动运行，等待本次交付或核对缺项，不从旧文件接管。受保护房间的手动写入使用用户提供的私有接入文件。
 

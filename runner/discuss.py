@@ -209,6 +209,8 @@ def message_commands(subcommands, registry):
     post.add_argument("--kind", choices=KINDS, default="opinion")
     post.add_argument("--turn", type=positive_int, help="所回答的安排编号，仅 opinion 可用")
     post.add_argument("--execution", type=positive_int, help="自由房间：本次执行编号，仅 chat 可用；执行失效后不能改作普通发言")
+    post.add_argument("--to", choices=PARTICIPANTS[1:], action="append", default=[],
+                      help="自由房间主持人：在回答中点名派活的成员，可重复；其他成员不能使用")
     post.add_argument("--request", type=positive_int, action="append", default=[],
                       help="自由房间手动接入成员：本次回答完成的请求编号，可重复；不能与 --execution 同用")
     post.add_argument("--reply-to", type=positive_int, help="被引用的原文编号")
@@ -418,7 +420,7 @@ def plan_message(args):
     actor = require_actor(args)
     if args.turn and args.kind != "opinion":
         raise CliError("只有 opinion 可以关联 --turn；receipt 不完成安排")
-    if (args.execution or args.request) and (args.kind != "chat" or args.turn):
+    if (args.execution or args.request or args.to) and (args.kind != "chat" or args.turn):
         raise CliError("--execution / --request 仅用于自由房间的 chat 回答，不能与 --turn 同时使用")
     if args.execution and args.request:
         raise CliError("--execution 用于接入程序交付的执行，--request 用于手动接入成员，二者不能同用")
@@ -443,6 +445,8 @@ def plan_message(args):
         payload["execution_id"] = args.execution
     if args.request:
         payload["request_ids"] = list(dict.fromkeys(args.request))
+    if args.to:
+        payload["to"] = list(dict.fromkeys(args.to))
     if args.reply_to:
         payload["reply_to"] = args.reply_to
     return RequestPlan(base, "POST", payload)

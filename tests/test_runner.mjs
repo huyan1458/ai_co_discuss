@@ -1356,7 +1356,7 @@ async function free_fixture(t) {
     state.calls.push(`${request.method} ${url}${body?.action ? ` ${body.action}` : ''}`);
     if (url === '/inbox') {
       result = { archived: state.archived, execution_minutes: 20,
-        members: [{ id: 7, name: 'Claude', pending: state.pending }, ...state.others],
+        members: [{ id: 7, name: 'Claude', role: state.claude_role || 'member', pending: state.pending }, ...state.others],
         executions: state.executions.filter(item => ['dispatched', 'started'].includes(item.status)) };
     } else if (url === '/executions') {
       let execution = state.executions.find(item => item.client_id === body.client_id);
@@ -1538,3 +1538,19 @@ test('changed files in a Git working tree are reported after the member exits', 
   assert.deepEqual(state.reports[1], ['added.css', 'index.html']);
 });
 
+test('the host task explains routing and hand-backs; other members get no dispatch rule', async t => {
+  const { state, store, config } = await free_fixture(t);
+  state.claude_role = 'host';
+  const tasks = [];
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => { tasks.push(task); return { status: 'accepted' }; });
+  await runner.tick();
+  const task = JSON.parse(readFileSync(join(config.directory, 'free-1.task.json'), 'utf8'));
+  assert.equal(task.role, 'host');
+  assert.match(task.instructions, /--to 成员名/);
+  state.claude_role = 'member';
+  state.executions[0].status = 'completed';
+  await runner.tick();
+  state.pending = [{ id: 9, message_id: 19 }];
+  await runner.tick();
+  assert.doesNotMatch(JSON.parse(readFileSync(join(config.directory, 'free-2.task.json'), 'utf8')).instructions, /--to 成员名/);
+});
