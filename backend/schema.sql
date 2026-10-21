@@ -347,11 +347,15 @@ CREATE TABLE IF NOT EXISTS turn_relay (
     room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
     held_since INTEGER NOT NULL DEFAULT 0
 );
-CREATE TRIGGER IF NOT EXISTS relay_turn_promoted AFTER UPDATE OF status ON discussion_turns
+-- Both triggers below clear the hold only when no user message arrived after the running host execution began; the host cannot have read it.
+DROP TRIGGER IF EXISTS relay_turn_promoted;
+CREATE TRIGGER relay_turn_promoted AFTER UPDATE OF status ON discussion_turns
 WHEN OLD.status='queued' AND NEW.status='pending'
 BEGIN
     UPDATE room_floor SET holder=NULL,next_speaker=NEW.expert,revision=revision+1 WHERE room_id=NEW.room_id;
-    UPDATE turn_relay SET held_since=0 WHERE room_id=NEW.room_id;
+    UPDATE turn_relay SET held_since=0 WHERE room_id=NEW.room_id
+        AND NOT EXISTS(SELECT 1 FROM messages m JOIN discussion_events e ON e.room_id=m.room_id AND e.role='host' AND e.status='started'
+        WHERE m.room_id=NEW.room_id AND m.author='用户' AND CAST(strftime('%s',m.created_at) AS INTEGER)>e.started_at);
     UPDATE discussion_events SET status='completed',result='turn:'||NEW.id
         WHERE room_id=NEW.room_id AND role='host' AND status IN ('pending','dispatched','started');
     INSERT OR IGNORE INTO discussion_events(room_id,run_id,generation,cause,participant,role,turn_id)
@@ -359,11 +363,14 @@ BEGIN
         FROM discussion_runtime WHERE room_id=NEW.room_id AND status='running';
 END;
 -- A new arrangement is the host's response: it replaces any older plan and clears the hold.
-CREATE TRIGGER IF NOT EXISTS relay_plan_replaced AFTER INSERT ON discussion_turns
+DROP TRIGGER IF EXISTS relay_plan_replaced;
+CREATE TRIGGER relay_plan_replaced AFTER INSERT ON discussion_turns
 WHEN NEW.status<>'queued'
 BEGIN
     UPDATE discussion_turns SET status='skipped' WHERE room_id=NEW.room_id AND status='queued' AND id<NEW.id;
-    UPDATE turn_relay SET held_since=0 WHERE room_id=NEW.room_id;
+    UPDATE turn_relay SET held_since=0 WHERE room_id=NEW.room_id
+        AND NOT EXISTS(SELECT 1 FROM messages m JOIN discussion_events e ON e.room_id=m.room_id AND e.role='host' AND e.status='started'
+        WHERE m.room_id=NEW.room_id AND m.author='用户' AND CAST(strftime('%s',m.created_at) AS INTEGER)>e.started_at);
 END;
 CREATE TRIGGER IF NOT EXISTS relay_hold_user_message AFTER INSERT ON message_details
 WHEN EXISTS(SELECT 1 FROM messages WHERE id=NEW.message_id AND author='用户')

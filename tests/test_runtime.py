@@ -499,6 +499,21 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.request(self.path + f"/turns/{created['turn']['id']}", {"actor": "用户", "status": "cancelled"})[0], 200)
         room = self.request(self.path)[1]
         self.assertEqual(([item["expert"] for item in room["queued_turns"]], self.events()[-1]["role"]), (["Gemini"], "host"))
+    def test_message_during_host_execution_survives_plan_creation(self):
+        """A user message that arrives after the host began is not cleared by the plan the host then creates."""
+        self.start()
+        host_token = self.enter(self.events()[0])
+        time.sleep(1.1)
+        self.assertEqual(self.request(self.path + "/messages", {"author": "用户", "text": "主持执行中的留言",
+            "submission_id": "late-user-note"})[0], 201)
+        status, created = self.request(self.path + "/turns", {"actor": "Codex", "submission_id": "late-plan",
+            "turns": [{"expert": "Claude", "question": "先答"}, {"expert": "Gemini", "question": "再答"}]}, host_token)
+        self.assertEqual(status, 201, created)
+        self.assertGreater(self.request(self.path)[1]["held_since"], 0)
+        self.answer("Claude", created["turn"]["id"], self.enter(self.events()[-1]), "late-answer")
+        room = self.request(self.path)[1]
+        self.assertEqual(([item["expert"] for item in room["queued_turns"]], self.events()[-1]["role"]), (["Gemini"], "host"))
+
         host = self.enter(self.events()[-1])
         self.take_floor("Codex", host)
         status, _ = self.request(self.path + "/turns", {"actor": "Codex", "expert": "Codex", "question": "重排",
