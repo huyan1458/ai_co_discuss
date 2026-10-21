@@ -391,7 +391,8 @@ function trace_cli_event(event, task) {
   if (!task.on_trace) return;
   const item = event.item;
   const command = item?.command ? String(item.command).replace(/^.*?-Command\s+/, '').slice(0, 100) : '';
-  task.on_trace(item ? `${event.type}:${item.type}` : event.type, command ? { command } : {});
+  const type = event.type ?? event.event ?? 'unknown';
+  task.on_trace(item ? `${type}:${item.type}` : type, command ? { command } : {});
 }
 
 /** Keep the actual resume failure even when later model-refresh logs replace the diagnostic tail. */
