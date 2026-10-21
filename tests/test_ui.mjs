@@ -222,82 +222,45 @@ test("changing the uploader never reuses an earlier actor's receipt after upload
   assert.equal(state.attachment_drafts[0].upload_submission, submission);
 });
 
-/** Run card face/focus transitions independently of the spring's browser clock. */
+/** Run row expansion and focus handling without a browser. */
 function expert_card_fixture() {
   const props = reactive({ name: "Codex", mode: "cli", automatic: true, status: {} });
   const view = ref({ launch: { profiles: { Codex: { adapter: "codex_cli", model: "saved-model", effort: "high" } } } });
-  const reduced = ref(false), calls = [], cleanups = [], listeners = new Set(), document = { activeElement: null };
-  const angle = { set: (target) => calls.push(["set", target]), jump(target) { calls.push(["jump", target]); this.advance(target); },
-    on: (event, callback) => { const listener = { event, callback }; listeners.add(listener); return () => listeners.delete(listener); },
-    advance: (position) => listeners.forEach(({ event, callback }) => event === "change" && callback(position)),
-    complete: () => listeners.forEach(({ event, callback }) => event === "animationComplete" && callback()),
-    stop: () => calls.push(["stop"]) };
+  const cleanups = [], document = { activeElement: null };
   const reads = [];
   const bridge = { launch_clients: { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }] },
     launch_model_state: (name, launch) => ({ supported: launch.profiles[name]?.adapter === "codex_cli", efforts: ["low", "high"] }),
     load_launch_models: name => reads.push(name),
     write_launch: (name, field, value) => { view.value.launch.profiles[name][field] = value; } };
   const context = vm.createContext({ computed, ref, nextTick, defineProps: () => props, defineEmits: () => () => {},
-    inject: () => ({ view, bridge }), useSpring: () => angle, useReducedMotion: () => reduced, document,
-    watch: (...args) => { const stop = watch(...args); cleanups.push(stop); return stop; },
-    onBeforeUnmount: (callback) => cleanups.push(callback) });
+    inject: () => ({ view, bridge }), document,
+    watch: (...args) => { const stop = watch(...args); cleanups.push(stop); return stop; } });
   const component = readFileSync(new URL("../frontend/ExpertCard.vue", import.meta.url), "utf8");
   vm.runInContext(component.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .*;$/gm, "")
-    + "\nglobalThis.card_refs = { card, front_button, back_button, back, visible_back };", context);
+    + "\nglobalThis.card_refs = { toggle_button, expanded };", context);
   const refs = context.card_refs;
-  for (const name of ["card", "front_button", "back_button"]) {
-    refs[name].value = { focus() { document.activeElement = refs[name].value; } };
-  }
-  return { context, props, view, reduced, angle, refs, document, calls, listeners, reads,
-    cleanup: () => cleanups.forEach((callback) => callback()) };
+  refs.toggle_button.value = { focus() { document.activeElement = refs.toggle_button.value; } };
+  return { context, props, view, refs, document, reads, cleanup: () => cleanups.forEach((callback) => callback()) };
 }
 
-test("expert card exposes one face and hands focus over only after crossing the edge", async () => {
-  const fixture = expert_card_fixture();
-  const { context, refs, angle, document, calls } = fixture;
-  context.flip(true);
-  await nextTick();
-  assert.deepEqual(calls, [["set", 180]]);
-  angle.advance(89);
-  assert.equal(refs.visible_back.value, false);
-  angle.advance(91);
-  await nextTick();
-  assert.equal(refs.visible_back.value, true);
-  assert.equal(document.activeElement, refs.back_button.value);
+test("expert row Escape closes its settings first and returns focus to the settings button", async () => {
+  const fixture = expert_card_fixture(), { context, refs, document } = fixture;
+  context.toggle();
+  assert.equal(refs.expanded.value, true);
   let stopped = 0;
   context.escape({ stopPropagation() { stopped++; }, preventDefault() {} });
   await nextTick();
   assert.equal(stopped, 1);
-  assert.deepEqual(calls.at(-1), ["set", 0], "reversal retargets the same spring without jumping");
-  angle.advance(89);
-  await nextTick();
-  assert.equal(document.activeElement, refs.front_button.value);
+  assert.equal(refs.expanded.value, false);
+  assert.equal(document.activeElement, refs.toggle_button.value);
   context.escape({ stopPropagation() { stopped++; } });
-  assert.equal(stopped, 1, "Escape on the front remains available to the enclosing dialog");
-  context.flip(true);
-  await nextTick();
-  angle.advance(30);
-  context.flip(false);
-  await nextTick();
-  angle.advance(0);
-  angle.complete();
-  await nextTick();
-  assert.equal(document.activeElement, refs.front_button.value, "a reversal before halfway still restores focus");
+  assert.equal(stopped, 1, "Escape on a closed row remains available to the enclosing dialog");
   fixture.cleanup();
-  assert.equal(fixture.listeners.size, 0);
 });
 
-test("expert card reduced motion keeps manual and online faces accessible without exposing launch overrides", async () => {
+test("expert row keeps manual and online notes without exposing launch overrides", async () => {
   const fixture = expert_card_fixture();
-  fixture.reduced.value = true;
-  fixture.context.flip(true);
-  await nextTick();
-  assert.deepEqual(fixture.calls.at(-1), ["jump", 180]);
-  assert.equal(fixture.refs.visible_back.value, true);
   fixture.props.automatic = false;
-  await nextTick();
-  assert.equal(fixture.refs.back.value, true);
-  assert.equal(fixture.refs.visible_back.value, true);
   assert.equal(vm.runInContext("configurable.value", fixture.context), false);
   assert.match(vm.runInContext("configuration_note.value", fixture.context), /已有 App 或 CLI/);
   fixture.props.mode = "online";
@@ -313,12 +276,10 @@ test("expert card reduced motion keeps manual and online faces accessible withou
   fixture.cleanup();
 });
 
-test("card defaults reset only the current instance and Escape returns directly to its front", async () => {
+test("row defaults reset only the current instance", async () => {
   const fixture = expert_card_fixture(), { context, view } = fixture;
   view.value.launch.profiles.Claude = { model: "other-model", effort: "low" };
-  context.flip(true);
-  context.escape({ stopPropagation() {}, preventDefault() {} });
-  assert.equal(fixture.refs.back.value, false);
+  assert.match(vm.runInContext("summary.value", context), /Codex CLI · saved-model · High/);
   context.reset_model();
   assert.equal(view.value.launch.profiles.Codex.model, "");
   assert.equal(view.value.launch.profiles.Codex.effort, "");
@@ -328,11 +289,11 @@ test("card defaults reset only the current instance and Escape returns directly 
   fixture.cleanup();
 });
 
-test("cards read model catalogs only for automatic CLI and pure web participants cannot flip", async () => {
+test("rows read model catalogs only for automatic CLI and pure web participants cannot expand", async () => {
   const fixture = expert_card_fixture();
   fixture.view.value.launch.available = true;
   fixture.props.automatic = false;
-  fixture.context.flip(true);
+  fixture.context.toggle(true);
   await nextTick();
   assert.deepEqual(fixture.reads, []);
   fixture.props.automatic = true;
@@ -341,13 +302,13 @@ test("cards read model catalogs only for automatic CLI and pure web participants
   fixture.view.value.launch.profiles.Codex.adapter = "codex";
   await nextTick();
   assert.equal(fixture.reads.length, 1);
-  fixture.context.flip(false);
+  fixture.context.toggle(false);
   fixture.props.name = "DeepSeek";
   fixture.props.mode = "online";
   await nextTick();
-  fixture.context.flip(true);
-  assert.equal(fixture.refs.back.value, false);
-  assert.equal(vm.runInContext("can_flip.value", fixture.context), false);
+  fixture.context.toggle(true);
+  assert.equal(fixture.refs.expanded.value, false);
+  assert.equal(vm.runInContext("can_expand.value", fixture.context), false);
   assert.equal(vm.runInContext("configurable.value", fixture.context), false);
   fixture.cleanup();
 });

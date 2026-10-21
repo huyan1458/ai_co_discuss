@@ -150,41 +150,35 @@ const summary = computed(() => {
       </section>
 
       <section class="create-section">
-        <h3><span>2</span>谁来参与</h3>
-        <div class="create-choice-group">
-        <h4>接入方式</h4>
-        <div class="create-modes" role="radiogroup" aria-label="接入方式" @keydown="navigate_choices">
-          <button v-for="option in MODES" :key="option.value" type="button" role="radio" class="create-mode" :class="{ 'is-selected': value('mode') === option.value }" :aria-checked="value('mode') === option.value" :tabindex="value('mode') === option.value ? 0 : -1" @click="choose_mode(option.value)">
-            <UIcon :name="option.icon" /><span class="create-mode-copy"><strong>{{ option.title }}</strong><small>{{ option.text }}</small></span>
-          </button>
-        </div>
-        </div>
-        <div class="create-choice-group">
-        <div class="create-expert-heading"><h4>AI 角色库</h4><span class="fine-print">每次添加一个独立实例</span></div>
-        <div ref="library" class="create-role-library" role="group" aria-label="AI 角色库">
-          <button v-for="name in experts" :key="name" type="button" :disabled="automatic && !bridge.launch_clients[name]" :aria-label="`添加 ${name} 实例`" @click="add_expert(name)">
-            <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="sm" class="channel-avatar" :class="bridge.identities[name]?.style" />
-            <span><strong>{{ name }}</strong><small>{{ library_description(name) }}</small></span><UIcon name="i-lucide-plus" />
-          </button>
-        </div>
-        <p class="fine-print create-hint">{{ automatic ? '程序唤醒支持已适配的本地软件；网页 AI 请使用手动接入。' : '手动接入本地 AI 后，它可自行提交回答；网页 AI 只读，由你或授权主持人代发。' }}</p>
-        <div class="create-expert-heading create-joined-heading"><h4>已加入 <span>{{ selected_names.length }}</span></h4><span class="fine-print">本地软件可翻面设置</span></div>
-        <div v-if="selected_names.length" class="create-experts" role="group" aria-label="参与的 AI">
-          <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :automatic="automatic"
-            :status="expert_status(name)" @remove="remove_expert(name)" @mode="set_expert_mode(name, $event)" />
-        </div>
-        <p v-else class="create-experts-empty">从上方角色库添加 AI；同一平台可以添加多位。</p>
-        <div class="create-host-setting">
-          <div class="create-host">
-            <span class="create-label">{{ free ? '谁来主持' : 'AI 主持人' }}</span>
-            <span v-if="!host_options.length" class="fine-print create-host-empty">先添加一位本地读写的 AI</span>
-            <div v-else class="create-host-choices" role="radiogroup" aria-label="主持人" @keydown="navigate_choices">
-              <button v-for="name in host_options" :key="name" type="button" role="radio" :aria-checked="host === name" :tabindex="host === name ? 0 : -1" @click="write('host', name)"><span aria-hidden="true" />{{ name === '用户' ? '我来主持' : bridge.display_name(name) }}</button>
-            </div>
+        <div class="create-section-heading">
+          <h3><span>2</span>谁来参与</h3>
+          <div class="create-segments" role="radiogroup" aria-label="接入方式" @keydown="navigate_choices">
+            <button v-for="option in MODES" :key="option.value" type="button" role="radio" :title="option.text" :aria-checked="value('mode') === option.value" :tabindex="value('mode') === option.value ? 0 : -1" @click="choose_mode(option.value)">
+              <UIcon :name="option.icon" />{{ option.title }}
+            </button>
           </div>
-          <p class="fine-print create-hint">{{ free ? '默认由你点名和分配任务，也可指定一位本地 AI 协助主持。' : '主持人须为本地读写 AI，负责补全议题、安排发言与收束，也可同时作为专家。' }}</p>
         </div>
+        <p class="fine-print create-hint">{{ automatic ? '本机服务交付任务并自动接续会话；仅支持已适配的本地软件，网页 AI 请用手动接入。' : '首次复制指令，之后人工或定时触发；本地 AI 可自行提交，网页 AI 由你或授权主持人代发。' }}</p>
+        <div class="create-roster">
+          <ul v-if="selected_names.length || free" class="create-roster-list" aria-label="参与成员">
+            <li v-if="free" class="create-roster-user" :class="{ 'is-host': host === '用户' }">
+              <span class="create-roster-self" aria-hidden="true"><UIcon name="i-lucide-user" /></span>
+              <span><strong>我<span v-if="host === '用户'">主持</span></strong><small>点名成员、分配任务</small></span>
+              <button type="button" :aria-pressed="host === '用户'" aria-label="由我主持" title="由我主持" @click="write('host', '用户')"><UIcon name="i-lucide-crown" /></button>
+            </li>
+            <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :automatic="automatic"
+              :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)"
+              @host="write('host', name)" @remove="remove_expert(name)" @mode="set_expert_mode(name, $event)" />
+          </ul>
+          <p v-if="!selected_names.length" class="create-roster-empty">从下方添加 AI；同一平台可添加多位，各自独立会话。</p>
+          <div ref="library" class="create-roster-add" role="group" aria-label="添加 AI">
+            <span class="create-label">添加</span>
+            <button v-for="name in experts" :key="name" type="button" :disabled="automatic && !bridge.launch_clients[name]" :title="library_description(name)" :aria-label="`添加 ${name} 实例`" @click="add_expert(name)">
+              <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="3xs" class="channel-avatar" :class="bridge.identities[name]?.style" />{{ name }}<UIcon name="i-lucide-plus" />
+            </button>
+          </div>
         </div>
+        <p class="fine-print create-hint create-host-hint"><UIcon name="i-lucide-crown" />{{ free ? '默认由你点名和分配任务，也可指定一位本地 AI 协助主持。' : host_options.length ? '点皇冠指定主持人：须为本地读写 AI，负责补全议题、安排发言与收束，也可同时作为专家。' : '先添加一位本地读写的 AI 担任主持人。' }}</p>
       </section>
 
       <section v-if="!free" class="create-section">
@@ -246,9 +240,6 @@ const summary = computed(() => {
 .create-section h3 { display: flex; align-items: center; gap: 9px; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
 .create-section h3 > span { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: color-mix(in srgb, var(--channel-accent) 18%, transparent); color: var(--channel-accent); font-size: 11px; }
 .create-more { align-self: flex-start; padding-inline: 0; color: var(--ui-text-muted); }
-.create-choice-group { display: flex; flex-direction: column; gap: 12px; }
-.create-choice-group + .create-choice-group { margin-top: 8px; }
-.create-choice-group h4 { margin: 0; color: var(--ui-text-toned); font-size: 12px; font-weight: 500; }
 .create-modes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
 .create-mode { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; text-align: left; background: color-mix(in srgb, var(--ui-bg-elevated) 35%, transparent); color: var(--ui-text-muted); }
 .create-mode:hover { border-color: var(--ui-border-accented); }
@@ -260,31 +251,38 @@ const summary = computed(() => {
 .create-mode.is-selected { background: color-mix(in srgb, var(--channel-accent) 7%, var(--ui-bg)); }
 .create-mode.is-selected > [class*="icon"] { color: var(--channel-accent); }
 .create-mode.is-selected::after { border-color: var(--channel-accent); background: radial-gradient(circle, var(--channel-accent) 3px, transparent 3.5px); }
-.create-experts { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); align-items: start; gap: 10px; }
-.create-expert-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.create-expert-heading h4 { display: flex; align-items: center; gap: 7px; }
-.create-expert-heading h4 > span { min-width: 19px; padding: 1px 5px; border-radius: 4px; background: var(--ui-bg-elevated); color: var(--ui-text-muted); font-size: 11px; text-align: center; font-variant-numeric: tabular-nums; }
-.create-joined-heading { margin-top: 8px; }
-.create-experts-empty { margin: 0; padding: 24px 12px; border: 1px dashed var(--ui-border); border-radius: 8px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }
-.create-role-library { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.create-role-library > button { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 66px; padding: 10px; border: 1px solid var(--ui-border-muted); border-radius: 6px; text-align: left; }
-.create-role-library > button:hover:not(:disabled) { border-color: var(--ui-border-accented); background: var(--ui-bg-elevated); }
-.create-role-library > button:disabled { opacity: .5; }
-.create-role-library .channel-avatar { flex-shrink: 0; width: 28px; height: 28px; }
-.create-role-library button > span:nth-child(2) { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; }
-.create-role-library strong { color: var(--ui-text-highlighted); font-size: 12px; font-weight: 500; }
-.create-role-library small { color: var(--ui-text-muted); font-size: 10px; line-height: 1.5; }
-.create-role-library button > span:last-child { width: 13px; height: 13px; flex-shrink: 0; color: var(--ui-text-muted); }
-@media (pointer: coarse) { .create-host-setting .create-host-choices button { min-height: 44px; } }
-.create-host-setting { display: grid; gap: 10px; margin-top: 4px; padding-top: 14px; border-top: 1px solid var(--ui-border-muted); }
-.create-host-choices { display: flex; flex-wrap: wrap; gap: 4px; }
-.create-host-choices button { display: inline-flex; align-items: center; gap: 7px; min-height: 30px; padding: 4px 9px; border: 1px solid transparent; border-radius: 5px; color: var(--ui-text-muted); font-size: 12px; }
-.create-host-choices button:hover { background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); }
-.create-host-choices button > span { width: 12px; height: 12px; border: 1px solid var(--ui-border-accented); border-radius: 50%; }
-.create-host-choices button[aria-checked="true"] { color: var(--ui-text-highlighted); background: var(--ui-bg-elevated); border-color: var(--channel-edge-control, var(--ui-border)); }
-.create-host-choices button[aria-checked="true"] > span { border-color: var(--channel-accent); background: radial-gradient(circle, var(--channel-accent) 2.5px, transparent 3px); }
+.create-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.create-segments { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 7px; background: var(--ui-bg-muted); }
+.create-segments button { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 3px 10px; border-radius: 5px; color: var(--ui-text-muted); font-size: 12px; }
+.create-segments button > span { width: 13px; height: 13px; }
+.create-segments button:hover { color: var(--ui-text-highlighted); }
+.create-segments button[aria-checked="true"] { background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); box-shadow: var(--channel-shadow-control); }
+.create-segments button[aria-checked="true"] > span { color: var(--channel-accent); }
+.create-roster { border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 35%, transparent); }
+.create-roster-list { margin: 0; padding: 0; list-style: none; }
+.create-roster-user { display: flex; align-items: center; gap: 10px; min-height: 46px; padding: 6px 6px 6px 12px; border-bottom: 1px solid var(--ui-border-muted); }
+.create-roster-user > span:nth-child(2) { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
+.create-roster-user strong { display: flex; align-items: center; gap: 6px; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
+.create-roster-user strong > span { padding: 0 5px; border-radius: 4px; background: color-mix(in srgb, #e0b44a 16%, transparent); color: #e0b44a; font-size: 10px; font-weight: 500; line-height: 16px; }
+.create-roster-user small { color: var(--ui-text-muted); font-size: 11px; }
+.create-roster-self { display: grid; place-items: center; flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; background: var(--ui-bg-accented); color: var(--ui-text-muted); }
+.create-roster-self > span { width: 13px; height: 13px; }
+.create-roster-user > button { display: grid; place-items: center; width: 28px; height: 28px; margin-right: 60px; border-radius: 5px; color: var(--ui-text-dimmed); }
+.create-roster-user > button > span { width: 14px; height: 14px; }
+.create-roster-user > button:hover { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
+.create-roster-user > button[aria-pressed="true"] { color: #e0b44a; }
+.create-roster-empty { margin: 0; padding: 14px 12px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }
+.create-roster-add { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--ui-border-muted); }
+.create-roster-add .create-label { min-width: 0; margin-right: 2px; }
+.create-roster-add > button { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 2px 8px 2px 4px; border: 1px solid var(--ui-border-muted); border-radius: 999px; color: var(--ui-text-toned); font-size: 12px; }
+.create-roster-add > button:hover:not(:disabled) { border-color: var(--ui-border-accented); background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); }
+.create-roster-add > button:disabled { opacity: .45; }
+.create-roster-add .channel-avatar { flex-shrink: 0; width: 20px; height: 20px; font-size: 9px; }
+.create-roster-add > button > span:last-child { width: 12px; height: 12px; color: var(--ui-text-muted); }
+.create-host-hint { display: flex; align-items: center; gap: 5px; }
+.create-host-hint > [class*="icon"] { flex-shrink: 0; width: 12px; height: 12px; color: #e0b44a; }
+@media (pointer: coarse) { .create-roster-add > button, .create-roster-user > button { min-height: 44px; min-width: 44px; } }
 .create-host { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
-.create-host-empty { margin: 0 !important; }
 .create-label { min-width: 64px; color: var(--ui-text-toned); font-size: 12px; }
 .create-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .create-chips button { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 4px 12px; border: 1px solid var(--ui-border); border-radius: 999px; color: var(--ui-text-toned); font-size: 12px; }
@@ -309,8 +307,7 @@ const summary = computed(() => {
 @media (max-width: 600px) {
   .create-discussion { max-height: calc(100dvh - 130px); }
   .create-scroll { padding: 18px 18px 20px; }
-  .create-modes, .create-experts { grid-template-columns: 1fr; }
-  .create-role-library { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .create-modes { grid-template-columns: 1fr; }
   .create-footer { padding: 12px 18px 14px; }
   .create-summary { display: none; }
   .create-footer-row { justify-content: flex-end; }
