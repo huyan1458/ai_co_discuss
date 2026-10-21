@@ -537,6 +537,7 @@ export function setup_sidecar(config, root = join(homedir(), '.gemini', 'config'
 
 /** Select only allowlisted adapter types from local configuration. */
 export async function deliver_task(config, binding, task, spawn_process = spawn, user_home = homedir()) {
+  if (config.adapter === 'api') return (await import('./api_participant.mjs')).api_delivery(config, binding, task);
   const adapters = { codex: codex_delivery, claude: claude_delivery, antigravity: antigravity_delivery,
     codex_cli: cli_delivery, antigravity_cli: cli_delivery };
   if (!adapters[config.adapter]) throw new Error('不支持的软件适配器');

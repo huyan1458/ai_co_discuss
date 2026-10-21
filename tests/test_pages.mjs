@@ -316,6 +316,19 @@ for (const role of ['host', 'expert']) test(`Worker freezes ${role} message time
   assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM message_timings').get().count, 0);
 });
 
+test('Worker accepts Grok and records API provenance and execution timing with the same authorization', async t => {
+  const f = await timed_message_fixture(t, 'expert');
+  const saved = await f.request(`${f.path}/messages`, { ...f.payload, source: 'api' }, f.token);
+  assert.equal(saved.status, 201, JSON.stringify(saved.body));
+  assert.equal(saved.body.message.source, 'api');
+  assert.equal(saved.body.message.submitted_by, 'Codex');
+  assert.ok(saved.body.message.elapsed_seconds >= 125);
+  const grok = await f.request('', { title: 'Grok API', host: 'Grok', experts: { Grok: 'cli', 'Grok-评审': 'cli' } });
+  assert.equal(grok.status, 201, JSON.stringify(grok.body));
+  assert.equal(grok.body.host, 'Grok');
+  assert.equal((await f.request(`${f.path}/messages`, { ...f.payload, source: 'api', submission_id: 'expired-api' }, f.token)).status, 403);
+});
+
 test('Worker leaves user timings unknown and refuses to proxy a local execution', async t => {
   const f = await timed_message_fixture(t, 'expert');
   const user = await f.request(`${f.path}/messages`, { author: '用户', text: '留言', submission_id: 'untimed-user', elapsed_seconds: 999999 });

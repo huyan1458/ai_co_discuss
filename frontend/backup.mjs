@@ -24,7 +24,7 @@ function original_block(value) {
 
 /** Convert one message and its separate provenance rows to a readable record. */
 function message_markdown(message, details, summary, attachments) {
-  const submitted_by = details?.submitted_by || (["cli", "url", "user"].includes(message.source) ? message.author : "用户");
+  const submitted_by = details?.submitted_by || (["cli", "api", "url", "user"].includes(message.source) ? message.author : "用户");
   const lines = [`<a id="message-${message.id}"></a>`, `### #${message.id} · ${message.author}`,
     `时间：${message.created_at}；来源：${message.source}；职责：${details?.kind || "opinion"}；代发/提交者：${submitted_by}`];
   if (message.reply_to) lines.push(`回复：[#${message.reply_to}](#message-${message.reply_to})`);

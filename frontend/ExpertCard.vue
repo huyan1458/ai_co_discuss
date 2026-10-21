@@ -3,6 +3,7 @@
 import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { motion, useReducedMotion, useSpring } from "motion-v";
 import EffortSlider from "./EffortSlider.vue";
+import ApiSettings from "./ApiSettings.vue";
 
 const props = defineProps({
   name: { type: String, required: true },
@@ -27,7 +28,7 @@ const entry_items = computed(() => bridge.launch_clients[props.name] || []);
 const entry_label = computed(() => props.mode === "online" ? "网页" : !props.automatic ? "本地 App / CLI"
   : entry_items.value.find((item) => item.value === profile.value.adapter)?.label || "待选择 App / CLI");
 const can_flip = computed(() => entry_items.value.length > 0);
-const card_label = computed(() => props.mode === "online" ? `设置 ${props.name} 的参与方式` : `配置 ${props.name} 的本地软件`);
+const card_label = computed(() => props.mode === "online" ? `设置 ${props.name} 的参与方式` : `配置 ${props.name} 的接入方式`);
 const models = computed(() => bridge.launch_model_state(props.name, view.value.launch));
 const configurable = computed(() => Boolean(props.automatic && props.mode === "cli" && models.value.supported));
 const configuration_note = computed(() => configurable.value && connection.value.length ? "补齐上方连接后，可在这里选择模型与思考强度。" : props.mode === "online" ? "模型与思考强度在原网页聊天中选择。回答由你或授权主持人代发。"
@@ -41,14 +42,17 @@ const effort_items = computed(() => {
 const effort_label = computed(() => effort_items.value?.find((item) => item.value === (profile.value.effort || ""))?.label
   || (profile.value.adapter === "antigravity_cli" ? "强度随模型" : profile.value.effort || "默认强度"));
 // The front lists the read-only configuration; strength appears only where this page sets it.
-// Each automatic CLI expert gets its own project permission; online experts can only read.
-const sets_access = computed(() => props.automatic && props.mode === "cli");
+// Only CLI experts choose project access; API and online experts remain read-only.
+const sets_access = computed(() => props.automatic && props.mode === "cli" && bridge.launch_can_set_access(props.name, view.value.launch));
+const fixed_read = computed(() => props.mode === "online" || props.automatic && profile.value.adapter === "api");
+const local_connection = computed(() => props.automatic && props.mode === "cli" && profile.value.adapter !== "api");
 const access = computed(() => profile.value.project_access || view.value.launch.workspace?.project_access || "read");
 const facts = computed(() => [
   { label: "软件", value: entry_label.value },
   { label: "模型", value: configurable.value ? profile.value.model || "默认模型" : props.mode === "online" ? "在原网页设置" : "在原软件设置" },
-  ...configurable.value ? [{ label: "强度", value: effort_label.value }] : [],
-  ...sets_access.value || props.mode === "online" ? [{ label: "项目", value: sets_access.value && access.value === "write" ? "可写" : "只读" }] : [],
+  ...configurable.value && profile.value.adapter !== "api" ? [{ label: "强度", value: effort_label.value }] : [],
+  ...profile.value.adapter === "api" ? [{ label: "上下文", value: "房间记录" }] : [],
+  ...sets_access.value || fixed_read.value ? [{ label: "项目", value: sets_access.value && access.value === "write" ? "可写" : "只读" }] : [],
 ]);
 // Ask only for connection values that are missing; a field stays while the back is open so typing does not hide it.
 const CONNECTION_FIELDS = { executable: { label: "路径", placeholder: "可执行文件完整路径" },
@@ -56,11 +60,11 @@ const CONNECTION_FIELDS = { executable: { label: "路径", placeholder: "可执�
 const asked = ref([]);
 const required_connection = () => {
   const adapter = profile.value.adapter;
-  if (!sets_access.value || !adapter) return [];
+  if (!local_connection.value || !adapter) return [];
   return (adapter === "antigravity" ? ["ipc_directory"] : adapter === "codex" ? ["executable", "source_thread_id"] : ["executable"])
     .filter(field => !profile.value[field]);
 };
-const connection = computed(() => !sets_access.value ? []
+const connection = computed(() => !local_connection.value ? []
   : [...new Set([...asked.value, ...required_connection()])].map(field => ({ field, ...CONNECTION_FIELDS[field] })));
 
 /** Restore focus only while the user is still waiting on this card. */
@@ -138,7 +142,7 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
 </script>
 
 <template>
-  <div ref="card" class="expert-card" :class="{ 'is-configurable': configurable, 'is-host': host }"
+  <div ref="card" class="expert-card" :class="{ 'is-configurable': configurable, 'is-host': host, 'is-api': automatic && profile.adapter === 'api' }"
     :data-identity="bridge.identities[name]?.style" :data-face="visible_back ? 'back' : 'front'" tabindex="-1" @keydown.esc="escape">
     <motion.div class="expert-card-turn" :style="{ rotateY: angle }">
       <div class="expert-card-face expert-card-front" :inert="visible_back" :aria-hidden="visible_back">
@@ -160,13 +164,13 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
         </span>
       </div>
       <div v-if="can_flip" class="expert-card-face expert-card-back" :inert="!visible_back" :aria-hidden="!visible_back">
-        <div class="expert-card-heading"><strong>{{ name }}<span>设置</span></strong></div>
+        <div class="expert-card-heading"><strong>{{ name }}<span>设置{{ fixed_read ? ' · 项目只读' : '' }}</span></strong></div>
         <div v-if="!automatic" class="expert-card-modes" role="radiogroup" :aria-label="`${name} 参与能力`" @keydown="choose_capability">
           <button v-for="option in [{ value: 'cli', label: '本地读写' }, { value: 'online', label: '在线只读' }]" :key="option.value" type="button"
             role="radio" :aria-checked="mode === option.value" :tabindex="mode === option.value ? 0 : -1" :data-mode="option.value" @click="emit('mode', option.value)">{{ option.label }}</button>
         </div>
         <div v-if="automatic && mode === 'cli' && entry_items.length" class="expert-card-field">
-          <span>软件</span><USelect :model-value="profile.adapter || ''" :items="entry_items" placeholder="选择 App / CLI" :aria-label="`${name} 软件入口`" size="xs" class="w-full" @update:model-value="bridge.write_launch(name, 'adapter', $event)" />
+          <span>接入</span><USelect :model-value="profile.adapter || ''" :items="entry_items" placeholder="选择 API / App / CLI" :aria-label="`${name} 软件入口`" size="xs" class="w-full" @update:model-value="bridge.write_launch(name, 'adapter', $event)" />
         </div>
         <div v-for="item in connection" :key="item.field" class="expert-card-field">
           <span>{{ item.label }}</span><UInput :model-value="profile[item.field] || ''" :placeholder="item.placeholder" :aria-label="`${name} ${item.placeholder}`" size="xs" class="w-full" @update:model-value="bridge.write_launch(name, item.field, $event)" />
@@ -178,7 +182,8 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
               :aria-checked="access === option.value" @click="bridge.write_launch(name, 'project_access', option.value)">{{ option.label }}</button>
           </div>
         </div>
-        <template v-if="configurable && !connection.length">
+        <ApiSettings v-if="automatic && profile.adapter === 'api'" :name="name" />
+        <template v-else-if="configurable && !connection.length">
           <div class="expert-card-field">
             <span>模型</span><USelect :model-value="profile.model || '__default__'" :items="models.items" :loading="models.loading" :title="models.source" :aria-label="`${name} 使用的模型`" size="xs" class="w-full" @update:model-value="bridge.write_launch_model(name, $event)" />
           </div>
@@ -203,6 +208,8 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
 .expert-card { min-width: 0; perspective: 900px; outline: none; }
 /* Every card keeps one height in both delivery modes; the back scrolls only if a long note overflows. */
 .expert-card-turn { display: grid; height: 224px; transform-style: preserve-3d; }
+.expert-card.is-api[data-face="back"] { grid-column: 1 / -1; }
+.expert-card.is-api[data-face="back"] .expert-card-turn { height: 370px; }
 .expert-card-face { grid-area: 1 / 1; min-width: 0; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); box-shadow: var(--channel-shadow-control); backface-visibility: hidden; }
 .expert-card.is-host .expert-card-front { border-color: color-mix(in srgb, #e0b44a 45%, var(--ui-border)); }
 .expert-card-front { position: relative; display: flex; }

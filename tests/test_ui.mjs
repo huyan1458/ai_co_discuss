@@ -3,9 +3,65 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
 import { computed, nextTick, reactive, ref, watch } from "vue";
+import { API_PROVIDERS } from "../runner/discussion_api.mjs";
 
 const source = readFileSync(new URL("../web/app.js", import.meta.url), "utf8").replace(/\nrestore_theme\(\);[\s\S]*$/, "");
 const discussion_source = readFileSync(new URL("../frontend/ChannelDiscussion.vue", import.meta.url), "utf8");
+
+test('all providers expose API without installed software and keys never enter drafts or storage', async () => {
+  const f = theme_fixture(), state = f.context.test_state, calls = [];
+  Object.assign(f.context, { render_launch_settings() {}, render_launch_summaries() {}, local_launch_request: async (route, input) => {
+    calls.push({ route, input });
+    return route === 'api-key' ? { api_key_ref: 'opaque-key-ref' } : { adapter: 'api', source: 'api', models: [{ id: 'vendor/model.1' }] };
+  } });
+  state.launch.api_providers = API_PROVIDERS;
+  state.launch.available = true;
+  for (const name of Object.keys(API_PROVIDERS)) {
+    assert.ok(f.context.window.discuss_view.launch_clients[name].some(item => item.value === 'api'));
+    f.context.write_launch_field(name, 'adapter', 'api');
+    assert.equal(state.launch.profiles[name].base_url, API_PROVIDERS[name].base_url);
+    assert.equal(state.launch.profiles[name].executable, undefined);
+  }
+  f.context.write_launch_field('Grok', 'base_url', 'https://openrouter.ai/api/v1');
+  f.context.write_launch_field('Grok', 'api_protocol', 'chat');
+  f.context.write_launch_field('Grok', 'model', 'vendor/model.1');
+  await f.context.save_launch_api_key('Grok', 'temporary-test-secret');
+  assert.ok(!JSON.stringify(state).includes('temporary-test-secret'));
+  assert.ok(!JSON.stringify(f.context.launch_options()).includes('temporary-test-secret'));
+  assert.ok(!JSON.stringify([...f.storage]).includes('temporary-test-secret'));
+  assert.equal(state.launch.profiles.Grok.api_key_ref, 'opaque-key-ref');
+  await f.context.load_launch_models('Grok');
+  assert.equal(calls.length, 1, 'API discovery is explicit, never automatic');
+  await f.context.load_launch_models('Grok', true);
+  assert.equal(f.context.launch_model_state('Grok').items[0].value, 'vendor/model.1');
+  f.context.write_launch_field('Grok', 'base_url', 'https://api.x.ai/v1');
+  assert.equal(state.launch.profiles.Grok.api_key_ref, undefined);
+});
+
+test('API project access stays read-only after switching from CLI, restoring old drafts and invitations', async () => {
+  const f = theme_fixture(), state = f.context.test_state, calls = [];
+  Object.assign(f.context, { render_launch_settings() {}, render_launch_summaries() {}, refresh_room: async () => {},
+    local_launch_request: async (route, payload) => { calls.push(payload); return { free: { members: [] } }; } });
+  state.launch.workspace = { cwd: 'C:\\project', project_access: 'write' };
+  state.launch.profiles.Codex = { adapter: 'codex_cli', project_access: 'write' };
+  assert.equal(f.context.launch_can_set_access('Codex'), true);
+  f.context.write_launch_field('Codex', 'adapter', 'api');
+  assert.equal(f.context.launch_can_set_access('Codex'), false);
+  assert.equal(state.launch.profiles.Codex.project_access, 'read');
+  f.context.write_launch_field('Codex', 'project_access', 'write');
+  assert.equal(state.launch.profiles.Codex.project_access, 'read');
+  state.launch.profiles.Codex.project_access = 'write';
+  assert.equal(f.context.launch_access('Codex'), 'read');
+  assert.equal(f.context.launch_summary('Codex').access, '项目只读');
+  assert.equal(f.context.launch_options().participants.Codex.project_access, 'read');
+  state.room = { id: 'one', mode: 'free', free: { members: [] } };
+  f.storage.set('discuss-access:one', 'owner-secret');
+  await f.context.invite_member({ name: 'Codex', access: 'runner', project_access: 'write' });
+  assert.equal(calls[0].participants.Codex.project_access, 'read');
+  f.context.write_launch_field('Codex', 'adapter', 'codex_cli');
+  f.context.write_launch_field('Codex', 'project_access', 'write');
+  assert.equal(f.context.launch_access('Codex'), 'write');
+});
 
 /** Exercise the real autocomplete against a native-editor stub and reactive room membership. */
 function mention_fixture() {
@@ -411,6 +467,7 @@ function expert_card_fixture() {
     stop: () => calls.push(["stop"]) };
   const reads = [];
   const bridge = { launch_clients: { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }] },
+    launch_can_set_access: (name, launch) => ['codex_cli', 'claude', 'antigravity_cli'].includes(launch.profiles[name]?.adapter),
     launch_model_state: (name, launch) => ({ supported: launch.profiles[name]?.adapter === "codex_cli", efforts: ["low", "high"] }),
     load_launch_models: name => reads.push(name),
     write_launch: (name, field, value) => { view.value.launch.profiles[name][field] = value; },
@@ -429,6 +486,21 @@ function expert_card_fixture() {
   return { context, props, view, reduced, angle, refs, document, calls, listeners, reads,
     cleanup: () => cleanups.forEach((callback) => callback()) };
 }
+
+test('expert card offers project permissions only for CLI and shows API and web experts as read-only', () => {
+  const f = expert_card_fixture();
+  f.view.value.launch.workspace = { project_access: 'write' };
+  assert.equal(vm.runInContext('sets_access.value', f.context), true);
+  f.view.value.launch.profiles.Codex = { adapter: 'api', project_access: 'write' };
+  assert.equal(vm.runInContext('sets_access.value', f.context), false);
+  assert.equal(vm.runInContext('facts.value.find(fact => fact.label === "项目").value', f.context), '只读');
+  f.view.value.launch.profiles.Codex.adapter = 'codex';
+  assert.equal(vm.runInContext('sets_access.value', f.context), false);
+  assert.ok(vm.runInContext('connection.value.length', f.context) > 0, 'App connection fields remain available');
+  f.props.mode = 'online';
+  assert.equal(vm.runInContext('facts.value.find(fact => fact.label === "项目").value', f.context), '只读');
+  f.cleanup();
+});
 
 test("expert card exposes one face and hands focus over only after crossing the edge", async () => {
   const fixture = expert_card_fixture();
@@ -1578,7 +1650,7 @@ test("automatic creation uses configured local clients and preserves independent
     Claude: { adapter: 'claude', executable: 'C:\\claude.exe' }, Gemini: { adapter: 'antigravity_cli' } };
   mode.value = 'automatic'; f.context.update_creation_mode();
   assert.equal(host.value, 'Codex');
-  assert.deepEqual(Object.entries(experts), [['Codex', 'cli'], ['Claude', 'cli']]);
+  assert.deepEqual(Object.entries(experts), [['Codex', 'cli'], ['Claude', 'cli'], ['DeepSeek', 'cli']]);
   host.value = 'Claude'; experts = { Claude: 'cli' };
   mode.value = 'manual'; f.context.update_creation_mode();
   assert.equal(host.value, '用户'); assert.equal(experts.DeepSeek, 'online');

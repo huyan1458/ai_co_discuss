@@ -24,7 +24,7 @@ const LOCAL_CONNECTION_TIMEOUT_MS = 15000;
 const MODEL_CATALOG_TIMEOUT_MS = 35000;
 let local_connection = null;
 const THEMES = ["channel", "channel-light"];
-const SOURCE_LABELS = { demo: "示例", user: "本人发言", proxy: "用户代发", cli: "CLI 发言", url: "历史 URL 发言", host_proxy: "主持人代发" };
+const SOURCE_LABELS = { demo: "示例", user: "本人发言", proxy: "用户代发", cli: "CLI 发言", api: "API 发言", url: "历史 URL 发言", host_proxy: "主持人代发" };
 const PHASE_LABELS = { preparing: "准备中", initial: "独立观点", discussing: "深入讨论", reviewing: "结论复核", paused: "已暂停", concluded: "已收束" };
 const TURN_LABELS = { pending: "待处理", notified: "已通知，待回答", answered: "已回答", cancelled: "已取消" };
 const PLATFORM_IDENTITIES = {
@@ -34,6 +34,7 @@ const PLATFORM_IDENTITIES = {
   Gemini: { initials: "GM", style: "gemini", icon: "/icons/gemini.svg", description: "AI 身份" },
   DeepSeek: { initials: "DS", style: "deepseek", icon: "/icons/deepseek.svg", description: "AI 身份" },
   Qwen: { initials: "QW", style: "qwen", icon: "/icons/qwen.svg", description: "AI 身份" },
+  Grok: { initials: "GK", style: "grok", description: "AI 身份" },
 };
 const IDENTITIES = by_platform(PLATFORM_IDENTITIES, (identity, name) => ({ ...identity, label: name, description: "AI 实例" }));
 const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false, free_to: [], free_notice: "", free_error: "",
@@ -62,9 +63,12 @@ state.launch = { available: false, remote: false, connect_command: "", profiles:
 const PLATFORM_CLIENTS = { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }],
   Claude: [{ value: "claude", label: "Claude Code CLI" }],
   Gemini: [{ value: "antigravity_cli", label: "Antigravity CLI" }, { value: "antigravity", label: "Antigravity App" }] };
+for (const name of Object.keys(PLATFORM_IDENTITIES).filter(name => name !== "用户")) {
+  (PLATFORM_CLIENTS[name] ||= []).push({ value: "api", label: `${name === "Codex" ? "OpenAI" : name} API` });
+}
 // A platform is a type; `Claude-评审` is another instance of it. Lookups by instance name fall back to the
 // platform, while iteration still lists the platforms only.
-const INSTANCE_PATTERN = /^(Codex|Claude|Gemini|DeepSeek|Qwen)(?:-[0-9A-Za-z_\u4e00-\u9fff]{1,16})?$/;
+const INSTANCE_PATTERN = /^(Codex|Claude|Gemini|DeepSeek|Qwen|Grok)(?:-[0-9A-Za-z_\u4e00-\u9fff]{1,16})?$/;
 /** The platform of an AI instance name, or null for the user and invalid names. */
 function platform_of(name) { return INSTANCE_PATTERN.exec(String(name))?.[1] ?? null; }
 /** Resolve instance names to their platform's entry without listing instances as keys. */
@@ -934,6 +938,7 @@ async function invite_member({ name, access, project_access = "read" }) {
       const draft = launch_options();
       const participants = { ...draft.participants, [record.member.name]: { ...draft.participants?.[name],
         ...draft.participants?.[record.member.name], project_access: record.options?.project_access || "read" } };
+      if (participants[record.member.name].adapter === "api") participants[record.member.name].project_access = "read";
       result = await local_launch_request("room-member", { room_id, token, action: "add", name: record.member.name, access,
         member_token: record.member.token, participants, cwd: draft.cwd });
     } else result = await request_json(`/api/rooms/${room_id}/members`, record.member);
@@ -1554,7 +1559,7 @@ async function load_launch_settings() {
     const settings = await local_launch_request("settings");
     // Keep the saved machine defaults so every new form can start from them again.
     state.launch.saved_profiles = JSON.parse(JSON.stringify(settings.participants || {}));
-    Object.assign(state.launch, { available: true, profiles: settings.participants, error: "",
+    Object.assign(state.launch, { available: true, profiles: settings.participants, api_providers: settings.api_providers || {}, error: "",
       notice: local_connection ? "已连接本机服务，讨论保存在当前网站" : "" });
     load_room_models();
   } catch (error) { state.launch.available = false; state.launch.room_models = null; state.launch.error = error.message; }
@@ -1598,12 +1603,30 @@ const MODEL_SOURCE_LABELS = { "codex-app-server": "来自 Codex CLI 模型列表
 
 /** Keep discoveries separate for each software executable, shared by its participant instances. */
 function model_catalog_key(profile) {
+  if (profile.adapter === "api") return JSON.stringify([profile.adapter, profile.base_url, profile.api_protocol, profile.api_key_ref]);
   return JSON.stringify([profile.adapter, profile.executable || ""]);
+}
+
+/** Send a key directly to the local private store; never put plaintext in snapshots or saved drafts. */
+async function save_launch_api_key(name, api_key) {
+  const profile = state.launch.profiles[name];
+  const base_url = profile.base_url;
+  const result = await local_launch_request("api-key", { base_url, api_key });
+  if (state.launch.profiles[name] === profile && profile.base_url === base_url) profile.api_key_ref = result.api_key_ref;
+  publish_view();
 }
 
 /** Provide selectable software results without turning an unavailable list into a text field. */
 function launch_model_state(name, launch = state.launch) {
   const profile = launch.profiles[name] || {};
+  if (profile.adapter === "api") {
+    const catalog = launch.model_catalogs?.[model_catalog_key(profile)];
+    const preset = launch.api_providers?.[platform_of(name)];
+    const official = profile.base_url?.replace(/\/$/, "") === preset?.base_url;
+    const models = catalog?.models || (official ? preset.models.map(id => ({ id, label: id })) : []);
+    return { supported: true, items: models.map(model => ({ label: model.label || model.id, value: model.id })),
+      loading: Boolean(catalog?.loading), error: catalog?.error || "", source: catalog ? "来自 API 模型列表" : "官方推荐，可输入其他模型 ID" };
+  }
   const catalog = launch.model_catalogs?.[model_catalog_key(profile)];
   const models = catalog?.models || [];
   const selected = models.find(model => model.id === profile.model);
@@ -1619,11 +1642,13 @@ function launch_model_state(name, launch = state.launch) {
 /** Read model metadata only; never launch an AI task or persist discovered choices as defaults. */
 async function load_launch_models(name, force = false) {
   const profile = state.launch.profiles[name] || {};
-  if (!state.launch.available || !MODEL_CLIENTS.includes(profile.adapter)) return;
+  if (!state.launch.available || (!MODEL_CLIENTS.includes(profile.adapter) && profile.adapter !== "api")) return;
+  if (profile.adapter === "api" && (!force || !profile.api_key_ref)) return;
   const catalogs = state.launch.model_catalogs ||= {}, key = model_catalog_key(profile);
   if (catalogs[key]?.loading || (!force && catalogs[key])) return;
   const current = { models: [], loading: true, error: "", source: "" };
-  const input = { adapter: profile.adapter, ...(profile.executable ? { executable: profile.executable } : {}), ...(force ? { refresh: true } : {}) };
+  const input = profile.adapter === "api" ? { adapter: "api", base_url: profile.base_url, api_protocol: profile.api_protocol, model: profile.model || "discovery", api_key_ref: profile.api_key_ref }
+    : { adapter: profile.adapter, ...(profile.executable ? { executable: profile.executable } : {}), ...(force ? { refresh: true } : {}) };
   catalogs[key] = current;
   publish_view();
   try {
@@ -1656,6 +1681,13 @@ function write_launch_field(name, field, value) {
     if (field === "allowed_tools") value = value.split("\n").map(item => item.trim()).filter(Boolean);
     if (["model", "effort"].includes(field)) value = value.trim();
     state.launch.profiles[name][field] = value;
+    if (field === "adapter" && value === "api") {
+      const profile = state.launch.profiles[name], preset = state.launch.api_providers?.[platform_of(name)];
+      if (preset && !profile.base_url) Object.assign(profile, { base_url: preset.base_url, api_protocol: preset.api_protocol, model: preset.models[0] });
+      for (const key of ["effort", "session_id", "project_access", "cwd", "project_id", "project_name", "executable", "source_thread_id", "ipc_directory", "allowed_tools"]) delete profile[key];
+    }
+    if (state.launch.profiles[name].adapter === "api") state.launch.profiles[name].project_access = "read";
+    if (field === "base_url") delete state.launch.profiles[name].api_key_ref;
   }
   state.launch.notice = "";
   if (field === "adapter") render_launch_settings();
@@ -1672,12 +1704,16 @@ function restore_launch_profile(name, profile) {
 
 /** Capture local overrides before asynchronous work or navigation can change the draft. */
 function launch_options() {
-  return JSON.parse(JSON.stringify({ participants: state.launch.profiles, ...state.launch.workspace, entry: "web" }));
+  const draft = JSON.parse(JSON.stringify({ participants: state.launch.profiles, ...state.launch.workspace, entry: "web" }));
+  for (const profile of Object.values(draft.participants)) if (profile.adapter === "api") profile.project_access = "read";
+  return draft;
 }
 
 /** Describe effective placement and binding from the same explicit draft sent to the launcher. */
 function launch_summary(name) {
   const profile = state.launch.profiles[name] || {};
+  if (profile.adapter === "api") return { client: `API · ${profile.model || "待选择模型"}`, session: "按房间记录接续",
+    cwd: "不访问本地文件", project: "房间上下文", access: "项目只读" };
   if (!profile.adapter) return { client: "尚未选择客户端", session: "尚未配置",
     cwd: "选择客户端后确定", project: "选择客户端后确定" };
   const cli_directory = ["codex_cli", "claude", "antigravity_cli"].includes(profile.adapter);
@@ -1700,8 +1736,14 @@ function launch_summary(name) {
       : directory || (cli_directory ? "本次讨论的私有目录" : "由 App 项目确定"), project, access };
 }
 
-/** Project files are read-only unless this launch or this participant explicitly allows writing. */
+/** Only native CLI adapters expose a project read/write choice in this page. */
+function launch_can_set_access(name, launch = state.launch) {
+  return MODEL_CLIENTS.includes(launch.profiles[name]?.adapter);
+}
+
+/** API participants remain read-only regardless of inherited workspace or stale profile settings. */
 function launch_access(name) {
+  if (state.launch.profiles[name]?.adapter === "api") return "read";
   return state.launch.profiles[name]?.project_access || state.launch.workspace.project_access || "read";
 }
 
@@ -1888,8 +1930,11 @@ function render_launch_settings() {
       fields.push(["session_id", "复用会话 ID（仅本次，可选）"], ["cwd", "此 AI 的工作目录（可选）"], ["project_name", "此 AI 的项目（可选）"]);
       if (["codex", "antigravity", "antigravity_cli"].includes(profile.adapter)) fields.push(["project_id", "软件中的项目 ID（可选）"]);
       const summary = launch_summary(name);
-      return `<fieldset><legend>${name}</legend><p class="local-note" data-launch-summary="${name}">${summary.session} · 工作目录：${escape_html(summary.cwd)}（${summary.access}） · 项目：${escape_html(summary.project)}</p><label>执行客户端<select data-launch-name="${name}" data-launch-field="adapter"><option value="">选择 CLI / App</option>${clients.map(client => `<option value="${client.value}" ${profile.adapter === client.value ? "selected" : ""}>${client.label}</option>`).join("")}</select></label>${render_launch_model_fields(name)}${fields.map(([field, label]) => `<label>${label}<textarea rows="${field === "allowed_tools" ? 2 : 1}" data-launch-name="${name}" data-launch-field="${field}">${escape_html(Array.isArray(profile[field]) ? profile[field].join("\n") : profile[field] || "")}</textarea></label>`).join("")}<label>此 AI 的项目文件<select data-launch-name="${name}" data-launch-field="project_access">${access_options(profile.project_access, "沿用本次设置")}</select></label></fieldset>`;
-    }).join("") + `<label>本次项目文件<select data-launch-name="workspace" data-launch-field="project_access">${access_options(state.launch.workspace.project_access)}</select></label><label>本次工作目录（可选）<input data-launch-name="workspace" data-launch-field="cwd" value="${escape_html(state.launch.workspace.cwd || "")}"></label><label>本次 AI 项目（可选）<input data-launch-name="workspace" data-launch-field="discussion_project" value="${escape_html(state.launch.workspace.discussion_project || "")}"></label>`;
+      const permission = launch_can_set_access(name) ? `<label>此 AI 的项目文件<select data-launch-name="${name}" data-launch-field="project_access">${access_options(profile.project_access, "沿用本次设置")}</select></label>`
+        : profile.adapter === "api" ? `<p class="local-note">项目文件只读</p>` : "";
+      return `<fieldset><legend>${name}</legend><p class="local-note" data-launch-summary="${name}">${summary.session} · 工作目录：${escape_html(summary.cwd)}（${summary.access}） · 项目：${escape_html(summary.project)}</p><label>执行客户端<select data-launch-name="${name}" data-launch-field="adapter"><option value="">选择 CLI / App</option>${clients.map(client => `<option value="${client.value}" ${profile.adapter === client.value ? "selected" : ""}>${client.label}</option>`).join("")}</select></label>${render_launch_model_fields(name)}${fields.map(([field, label]) => `<label>${label}<textarea rows="${field === "allowed_tools" ? 2 : 1}" data-launch-name="${name}" data-launch-field="${field}">${escape_html(Array.isArray(profile[field]) ? profile[field].join("\n") : profile[field] || "")}</textarea></label>`).join("")}${permission}</fieldset>`;
+    }).join("") + (Object.keys(state.launch.profiles).some(name => launch_can_set_access(name)) ? `<label>本次 CLI 项目文件<select data-launch-name="workspace" data-launch-field="project_access">${access_options(state.launch.workspace.project_access)}</select></label>` : "")
+      + `<label>本次工作目录（可选）<input data-launch-name="workspace" data-launch-field="cwd" value="${escape_html(state.launch.workspace.cwd || "")}"></label><label>本次 AI 项目（可选）<input data-launch-name="workspace" data-launch-field="discussion_project" value="${escape_html(state.launch.workspace.discussion_project || "")}"></label>`;
   }
   for (const id of ["local-launch-notice", "new-local-launch-notice"]) {
     if (element(id)) element(id).textContent = [state.launch.error || state.launch.notice,
@@ -2074,7 +2119,8 @@ function update_creation_mode() {
   state.creation_drafts[state.creation_mode] = previous;
   const configured = Object.entries(state.launch.profiles).filter(([name, profile]) =>
     LAUNCH_CLIENTS[name]?.some(client => client.value === profile.adapter)
-    && (profile.adapter === "antigravity" ? profile.ipc_directory : profile.executable)).map(([name]) => name);
+    && (profile.adapter === "api" ? profile.api_key_ref && profile.model && profile.base_url
+      : profile.adapter === "antigravity" ? profile.ipc_directory : profile.executable)).map(([name]) => name);
   const experts = Object.keys(previous.experts).length ? previous.experts
     : mode === "automatic" ? Object.fromEntries(configured.map(name => [name, "cli"])) : {};
   const eligible = mode === "automatic" ? Object.fromEntries(Object.keys(experts).filter(name => LAUNCH_CLIENTS[platform_of(name)]).map(name => [name, "cli"])) : experts;
@@ -2846,7 +2892,7 @@ function change_view_theme(theme) {
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
   write_launch: write_launch_field, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
-  launch_model_state, load_launch_models, write_launch_model, launch_summary, pick_launch_directory, restore_launch_profile, reset_create_form, empty_discussion_message,
+  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, launch_summary, launch_can_set_access, pick_launch_directory, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, platform_of, execute: execute_view_action, theme: change_view_theme,

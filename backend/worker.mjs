@@ -9,7 +9,7 @@ const MAX_BRIEF_LENGTH = 1600;
 const MAX_SUMMARY_LENGTH = 1000;
 const PAGE_SIZE = 20;
 const UNCATEGORIZED_FOLDER_ID = "__uncategorized__";
-const PARTICIPANTS = ["用户", "Codex", "Claude", "Gemini", "DeepSeek", "Qwen"];
+const PARTICIPANTS = ["用户", "Codex", "Claude", "Gemini", "DeepSeek", "Qwen", "Grok"];
 // A platform is a type; `Claude` and `Claude-评审` are two instances of it with their own sessions.
 const INSTANCE_PATTERN = new RegExp(`^(${PARTICIPANTS.slice(1).join("|")})(?:-[0-9A-Za-z_一-鿿]{1,16})?$`);
 const MAX_ROOM_AGENTS = 12;
@@ -49,7 +49,7 @@ const ROOM_BACKUP_QUERIES = {
     .map((table) => [table, `SELECT * FROM ${table} WHERE message_id IN (SELECT id FROM messages WHERE room_id=?) ORDER BY message_id`])),
 };
 const MESSAGE_QUERY = `SELECT messages.*, COALESCE(details.kind,'opinion') AS kind,
-  COALESCE(details.submitted_by, CASE WHEN messages.source IN ('cli','url','user')
+  COALESCE(details.submitted_by, CASE WHEN messages.source IN ('cli','api','url','user')
   THEN messages.author ELSE '用户' END) AS submitted_by, details.turn_id,
   COALESCE(summaries.text,'') AS summary, COALESCE(summaries.author,'') AS summary_by, timing.elapsed_seconds
   FROM messages LEFT JOIN message_details AS details ON details.message_id=messages.id
@@ -261,7 +261,7 @@ function topic_context(background, user_request) {
 /** Return independent defaults for legacy rooms without settings. */
 function topic_defaults() {
   return { host: "用户", background: "", boundaries: "", phase: "preparing", focus: "",
-    experts: Object.fromEntries(PARTICIPANTS.slice(1).map((name) => [name, name === "Codex" ? "cli" : "online"])) };
+    experts: Object.fromEntries(PARTICIPANTS.slice(1).filter(name => name !== "Grok").map((name) => [name, name === "Codex" ? "cli" : "online"])) };
 }
 
 /** Validate topic information and require an AI host to have CLI capability. */
@@ -663,13 +663,13 @@ async function check_message_attachments(database, room_id, message) {
 function message_details(room, payload) {
   const { author } = payload;
   const kind = payload.kind ?? "opinion";
-  const submitted_by = payload.submitted_by ?? (payload.source === "cli" ? author : "用户");
+  const submitted_by = payload.submitted_by ?? (["cli", "api"].includes(payload.source) ? author : "用户");
   if (!["opinion", "moderation", "receipt"].includes(kind) || !is_participant(submitted_by)) throw new HttpError(400, "发言职责或提交者无效");
   if (!["用户", room.host, author].includes(submitted_by)) throw new HttpError(400, "只有用户或主持人可以代发其他专家的观点");
   if (kind === "moderation" && (author !== room.host || !["用户", room.host].includes(submitted_by))) throw new HttpError(400, "主持发言必须保留当前主持人署名");
-  if (submitted_by === author && payload.source === "cli" && author !== "用户" && room.experts[author] !== "cli") throw new HttpError(400, "当前专家配置为在线只读，请由用户或主持人代发");
+  if (submitted_by === author && ["cli", "api"].includes(payload.source) && author !== "用户" && room.experts[author] !== "cli") throw new HttpError(400, "当前专家配置为在线只读，请由用户或主持人代发");
   const source = submitted_by === room.host && submitted_by !== author && submitted_by !== "用户" ? "host_proxy" :
-    (payload.source === "cli" && submitted_by === author ? "cli" : (author === "用户" ? "user" : "proxy"));
+    (["cli", "api"].includes(payload.source) && submitted_by === author ? payload.source : (author === "用户" ? "user" : "proxy"));
   return { kind, submitted_by, source, turn_id: payload.turn_id ? integer(payload.turn_id) : null };
 }
 
@@ -726,7 +726,7 @@ function message_statements(database, room_id, message, hashed) {
       FROM messages AS m JOIN message_details AS d ON d.message_id=m.id
       JOIN discussion_events AS e ON e.room_id=m.room_id AND e.participant=m.author
       JOIN event_timings AS t ON t.event_id=e.id
-      WHERE m.room_id=? AND m.submission_id=? AND m.source='cli' AND d.submitted_by=m.author
+      WHERE m.room_id=? AND m.submission_id=? AND m.source IN ('cli','api') AND d.submitted_by=m.author
         AND e.status='started' AND e.token_hash=? AND t.dispatched_at>0
       ON CONFLICT(message_id) DO NOTHING`).bind(room_id, submission_id, hashed),
     database.prepare(`UPDATE discussion_turns SET status='answered',answer_id=(SELECT id FROM messages WHERE room_id=? AND submission_id=?)
@@ -1056,6 +1056,7 @@ function protocol_text(room) {
     `维护话题：POST ${base}/topic；actor 加需要修改的上述字段，另可更新 phase（preparing/initial/discussing/reviewing/paused/concluded）、focus。收束前先完成或取消当前安排。暂停保留安排；恢复阶段后再继续。`,
     `安排发言：POST ${base}/turns；字段 actor、expert、question、submission_id（新 UUID）。同一话题同时只有一个未完成安排；重试沿用同一编号和问题。整轮安排改传 turns=[{expert,question},…]（最多 ${MAX_PLAN_TURNS} 项）：第一项立即生效，其余排队（queued）；每个回答保存后自动交给下一位，最后一位答完再交回主持人。用户留言或修改目标、背景、边界、焦点后（room.held_since 非 0），当前回答完成即交回主持人；主持人处理后用 POST ${base}/turns/continue（actor）按原计划继续，或直接创建新安排替换剩余排队（原排队改为 skipped）。`,
     `通知：仅把对象、问题、话题入口交给对应专家，不附背景、摘要或历史。使用已有且获准的会话通道；没有通道时交由用户协助。实际送达后 POST ${base}/turns/安排编号，字段 actor、status=notified；取消用 status=cancelled。复制不算送达。`,
+    `API 参与者由本机 runner 使用相同房间授权和执行约束提交，消息 source=api；CLI 仍使用 source=cli。兼容字段 experts 中的 cli 表示可自行提交，实际接入方式见成员 adapter。`,
     `专家观点：POST ${base}/messages；author、text、submission_id、source=cli，kind=opinion；必须关联 turn_id（回答的安排编号），可选 reply_to（本话题原文编号）。每次回答同时提供 summary（最多 ${MAX_SUMMARY_LENGTH} 字），通常 1–3 句结论先行，保留关键理由、条件和不确定性；summary_by 为原作者或提交者，默认提交者。text 保留完整正文，最多 ${MAX_TEXT_LENGTH} 个 Unicode 字符，请求最多 ${MAX_BODY_BYTES} 字节；不截断或用摘要完成安排。旧客户端缺少 summary 时不自动生成。`,
     `主持发言：同一消息接口，author=${room.host}、submitted_by=${room.host}、kind=moderation、source=cli；个人观点使用 kind=opinion，不能自动视为共识。`,
     `代发只读专家观点：author 保留原专家，submitted_by=${room.host}、kind=opinion、text 为原文；须关联 turn_id，可附 reply_to。服务保存代发来源；不要冒充专家直接提交。`,
@@ -1217,7 +1218,7 @@ function guarded_database(database, condition, values) {
 
 /** Use the same message attribution defaults as persisted message details. */
 function write_actor(operation, payload) {
-  return operation === "messages" ? payload.submitted_by ?? (payload.source === "cli" ? payload.author : "用户") : payload.actor ?? "用户";
+  return operation === "messages" ? payload.submitted_by ?? (["cli", "api"].includes(payload.source) ? payload.author : "用户") : payload.actor ?? "用户";
 }
 
 /** Limit authenticated participants to their own identity and assigned host duties. */
@@ -1960,7 +1961,7 @@ async function append_free_message(database, room, payload, actor) {
     if (!proxy || (payload.submitted_by ?? "用户") !== "用户") throw new HttpError(403, "房间控制凭据只能以用户身份发言，或代发在线成员的回答");
   }
   const expected = { ...values, kind: "chat", submitted_by: proxy ? "用户" : values.author, turn_id: null,
-    source: proxy ? "proxy" : values.author === "用户" ? "user" : "cli", attachment_ids: attachment_ids(payload) };
+    source: proxy ? "proxy" : values.author === "用户" ? "user" : payload.source === "api" ? "api" : "cli", attachment_ids: attachment_ids(payload) };
   Object.assign(expected, message_summary(payload, expected));
   const lookup = () => database.prepare(`${MESSAGE_QUERY} WHERE room_id=? AND submission_id=?`).bind(room_id, values.submission_id).first();
   const previous = await lookup();

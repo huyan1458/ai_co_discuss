@@ -149,7 +149,8 @@ export class FreeRoomRunner {
   /** A retried client id returns the original execution; a finished or refused one just goes idle. */
   async reserve(member, record) {
     let execution;
-    const cwd = cwd_key(this.config.participants[member.name]?.cwd || this.config.cwd);
+    const profile = this.config.participants[member.name];
+    const cwd = profile?.adapter === 'api' ? '' : cwd_key(profile?.cwd || this.config.cwd);
     try { execution = await api(this.config, '/executions', { member_id: member.id, client_id: record.client_id, cwd }); }
     catch (error) {
       if (/HTTP (404|409)/.test(error.message)) return this.save(member.name, { status: 'idle', error: '' });
@@ -164,7 +165,7 @@ export class FreeRoomRunner {
     const adapter = this.config.participants[member.name];
     if (!adapter) return this.fail(member.name, execution.id, `未配置 ${member.name} 的本机接入`);
     if (this.context_errors.has(member.name)) return this.fail(member.name, execution.id, this.context_errors.get(member.name));
-    const directory = adapter.cwd || this.config.cwd;
+    const directory = adapter.adapter === 'api' ? undefined : adapter.cwd || this.config.cwd;
     const before = workspace_snapshot(directory);
     if (before) this.snapshots.set(execution.id, { member: member.name, directory, before });
     const binding = this.store.binding(member.name);
@@ -174,6 +175,9 @@ export class FreeRoomRunner {
       const task = free_task_files(this.config, member, execution, binding);
       invoked = true;
       const result = await this.deliver(adapter, binding, { ...task, room_title: this.room_title,
+        api_context: { site: this.config.site, room: this.config.room, token: this.config.members[member.name].token,
+          home: this.config.api_home, mode: 'free', role: member.role || 'member', execution_id: execution.id,
+          requests: execution.requests, read_after: execution.read_until },
         on_binding: session => this.store.bind(member.name, session),
         on_process: child => this.track(member.name, child),
         on_output: (path, chunk) => appendFileSync(path, chunk, { mode: 0o600 }),

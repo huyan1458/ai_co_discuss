@@ -33,6 +33,7 @@ const limit_picker = ref(null);
 const launch_names = computed(() => [...new Set([host.value, ...Object.keys(selected.value)])].filter((name) => bridge.launch_clients[name]));
 const launch_ready = (name) => {
   const profile = view.value.launch.profiles[name] || {};
+  if (profile.adapter === "api") return Boolean(profile.base_url && profile.api_protocol && profile.api_key_ref && profile.model);
   return Boolean(profile.adapter && (profile.adapter === "antigravity" ? profile.ipc_directory : profile.executable));
 };
 const launching = computed(() => automatic.value && view.value.launch.available && (free.value || view.value.launch.create));
@@ -80,19 +81,22 @@ function set_expert_mode(name, mode) {
 function expert_status(name) {
   if (selected.value[name] === "online") return { text: "在线只读，回答由人代发", tone: "muted" };
   if (!automatic.value) return { text: "本地读写，可自行提交", tone: "muted" };
-  return launch_ready(name) ? { text: "已配置本机软件", tone: "ready" } : { text: "待补齐软件连接", tone: "warn" };
+  const api = view.value.launch.profiles[name]?.adapter === "api";
+  return launch_ready(name) ? { text: api ? "已配置 API" : "已配置本机软件", tone: "ready" } : { text: api ? "待补齐 API 配置" : "待补齐接入配置", tone: "warn" };
 }
 
 /** Describe a platform before adding an independent instance. */
 function library_description(name) {
   if (instance_count(name)) return `已加入 ${instance_count(name)} 位 · 可继续添加`;
-  return bridge.launch_clients[name] ? "本地 App / CLI" : "网页 AI · 手动接入";
+  return bridge.launch_clients[name]?.some(item => item.value !== "api") ? "API / 本地 App / CLI" : "API / 网页手动接入";
 }
 
 /** Admit one library role without toggling an existing participant. */
 function add_expert(name) {
   if (automatic.value && !bridge.launch_clients[name]) return;
-  const mode = bridge.launch_clients[name] ? "cli" : "online";
+  const local = bridge.launch_clients[name]?.some(item => item.value !== "api");
+  const mode = automatic.value || local ? "cli" : "online";
+  if (automatic.value && !local && !view.value.launch.profiles[name]?.adapter) bridge.write_launch(name, "adapter", "api");
   // A card already in use adds another instance with its own session, model and effort.
   if (instance_count(name)) bridge.add_instance(EXPERT_CONTAINER, name, mode);
   else set_expert_mode(name, mode);
@@ -162,7 +166,7 @@ const summary = computed(() => {
             </button>
           </div>
         </div>
-        <p class="fine-print create-hint">{{ automatic ? '本机服务交付任务并自动接续会话；仅支持已适配的本地软件，网页 AI 请用手动接入。' : '首次复制指令，之后人工或定时触发；本地 AI 可自行提交，网页 AI 由你或授权主持人代发。' }}</p>
+        <p class="fine-print create-hint">{{ automatic ? '本机服务自动接续 API 或已适配的软件；网页 AI 请用手动接入。' : '首次复制指令，之后人工或定时触发；本地 AI 可自行提交，网页 AI 由你或授权主持人代发。' }}</p>
         <div v-if="selected_names.length" class="create-experts" role="group" aria-label="参与的 AI">
           <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :automatic="automatic"
             :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)"
@@ -178,7 +182,7 @@ const summary = computed(() => {
         <div class="fine-print create-hint create-host-hint">
           <button v-if="free" type="button" class="create-host-self" :aria-pressed="host === '用户'" @click="write('host', '用户')"><UIcon name="i-lucide-crown" />我来主持</button>
           <UIcon v-else name="i-lucide-crown" />
-          <span>{{ free ? '默认由你点名和分配任务；也可点卡片上的皇冠，由一位本地 AI 协助主持。' : host_options.length ? '点卡片上的皇冠指定主持人：须为本地读写 AI，负责补全议题、安排发言与收束，也可同时作为专家。' : '先添加一位本地读写的 AI 担任主持人。' }}</span>
+          <span>{{ free ? '默认由你点名和分配任务；也可点卡片上的皇冠，指定 AI 主持人。' : host_options.length ? '点卡片上的皇冠指定主持人，负责补全议题、安排发言与收束，也可同时作为专家。' : '先添加一位可自行提交的 AI 担任主持人。' }}</span>
         </div>
       </section>
 
@@ -201,7 +205,7 @@ const summary = computed(() => {
       </section>
 
       <section v-if="automatic" class="create-section">
-        <h3><span>{{ free ? 3 : 4 }}</span>启动本机软件</h3>
+        <h3><span>{{ free ? 3 : 4 }}</span>启动 AI</h3>
         <p v-if="free && !view.launch.available" role="alert" class="fine-print create-hint">程序唤醒需要本机服务：请在运行 AI 的电脑打开本机网站，或先运行连接命令。</p>
         <template v-if="view.launch.available">
           <UCheckbox v-if="!free" :model-value="view.launch.create" label="创建后立即启动 AI" description="由本机服务创建会话并交付首个主持任务；不勾选则只建房，稍后在「接入」页启动。" @update:model-value="bridge.write_launch('create', '', $event)" />
@@ -211,7 +215,7 @@ const summary = computed(() => {
                 <template #trailing><UButton icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" aria-label="在本机选择项目目录" title="在本机选择文件夹" :loading="picking" @click="pick_directory" /></template>
               </UInput>
             </UFormField>
-            <p class="fine-print create-hint">要一起查看的项目；留空时 AI 只在讨论私有目录工作。读写权限在各专家卡片上设置。</p>
+            <p class="fine-print create-hint">供本地软件查看的项目，读写权限在专家卡片上设置。API 仅使用房间上下文。</p>
           </template>
         </template>
         <LaunchSettings v-else :participants="launch_names" :workspace="false" :model-selection="false" />

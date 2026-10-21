@@ -3,7 +3,7 @@ import { katex } from "@mdit/plugin-katex";
 
 const markdown = new MarkdownIt({ html: false, breaks: true, linkify: true })
   .use(katex, { delimiters: "all", throwOnError: false, trust: false, logger: () => "ignore" });
-const MENTION_PATTERN = /(@(?:Codex|Claude|Gemini|DeepSeek|Qwen|用户)(?!\w))/g;
+const MENTION_PATTERN = /(@(?:Codex|Claude|Gemini|DeepSeek|Qwen|Grok|用户)(?!\w))/g;
 
 // Work on text tokens so mentions never alter code, URLs, or generated math.
 markdown.renderer.rules.text = (tokens, index) => markdown.utils.escapeHtml(tokens[index].content)

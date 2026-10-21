@@ -9,12 +9,13 @@ import { parseArgs } from 'node:util';
 
 import { atomic_json } from './discussion_adapters.mjs';
 import { software_models } from './discussion_models.mjs';
+import { API_PROVIDERS, api_models, save_api_key, validate_api_profile } from './discussion_api.mjs';
 import { acquire_lock, api, CODEX_ADAPTERS, DiscussionStore, service_drafts, task_files, validate_config } from './discussion_runner.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 
-const CLIENTS = { Codex: ['codex_cli', 'codex'], Claude: ['claude'], Gemini: ['antigravity_cli', 'antigravity'] };
+const CLIENTS = { Codex: ['codex_cli', 'codex', 'api'], Claude: ['claude', 'api'], Gemini: ['antigravity_cli', 'antigravity', 'api'], DeepSeek: ['api'], Qwen: ['api'], Grok: ['api'] };
 // A platform is a type; `Claude-评审` is another Claude instance with its own session, model and effort.
-const INSTANCE_PATTERN = /^(Codex|Claude|Gemini|DeepSeek|Qwen)(?:-[0-9A-Za-z_一-鿿]{1,16})?$/;
+const INSTANCE_PATTERN = /^(Codex|Claude|Gemini|DeepSeek|Qwen|Grok)(?:-[0-9A-Za-z_一-鿿]{1,16})?$/;
 
 /** The platform of an AI instance name, or null. */
 export function platform_of(name) { return typeof name === 'string' ? INSTANCE_PATTERN.exec(name)?.[1] ?? null : null; }
@@ -29,7 +30,7 @@ export function next_instance(platform, taken) {
 function clients_of(name) { return CLIENTS[platform_of(name)]; }
 // Reasoning effort is a separate CLI argument only for Codex and Claude; agy encodes it in the model name.
 const EFFORT_LEVELS = { codex_cli: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], claude: ['low', 'medium', 'high', 'xhigh', 'max'] };
-const PROFILE_FIELDS = ['adapter', 'executable', 'model', 'effort', 'source_thread_id', 'ipc_directory', 'allowed_tools', 'cwd', 'project_name', 'project_id'];
+const PROFILE_FIELDS = ['adapter', 'executable', 'model', 'effort', 'source_thread_id', 'ipc_directory', 'allowed_tools', 'cwd', 'project_name', 'project_id', 'base_url', 'api_protocol', 'api_key_ref'];
 const MAX_MINUTES = 1440;
 const CONFIG_APPLY_TIMEOUT_MS = 6000;
 const CONFIG_APPLY_POLL_MS = 100;
@@ -38,6 +39,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch room-config --file FILE
       codiscuss launch room-models --file FILE
       codiscuss launch models --file FILE
+      codiscuss launch api-key --file FILE
       codiscuss launch room-member --file FILE
       codiscuss launch pick-directory
 
@@ -45,7 +47,8 @@ settings 读取本机软件默认配置；指定文件时保存，不启动 AI�
 start 使用启动 JSON 创建或接入房间并启动；--dry-run 只校验和预览。
 room-config 修正已暂停房间的软件路径或切换 Codex App / CLI，不启动讨论；须提供 site、room_id、token。
 room-models 只读指定 site、room_id 的本机登记模型与思考强度，不启动讨论。
-models 按 adapter、executable 读取本机 CLI 的模型目录，不启动讨论或生成回答。
+models 按 adapter、executable 或 API profile 读取模型目录，不启动讨论或生成回答。
+api-key 将 base_url、api_key 保存于本机私有目录，只返回 api_key_ref。
 pick-directory 在本机弹出系统目录选择窗口，返回所选路径；取消时不返回路径。
 room-member 为运行中的自由房间邀请或请回一位成员；须提供 site、room_id、token、action（add/rejoin）、name。
 JSON 指定 site、entry（conversation/web）、room（建房内容，含 submission_id）
@@ -128,7 +131,7 @@ export function room_models(home, raw) {
   if (paths.length > 1) throw new Error('本场存在多份登记配置，无法确定模型设置');
   const profiles = paths.length ? configuration_snapshot(paths[0]).config.participants : {};
   const participants = Object.fromEntries(Object.entries(profiles).map(([name, profile]) => {
-    const cli = ['codex_cli', 'claude', 'antigravity_cli'].includes(profile.adapter);
+    const cli = ['codex_cli', 'claude', 'antigravity_cli', 'api'].includes(profile.adapter);
     return [name, { adapter: profile.adapter, model: cli ? profile.model || '' : '',
       effort: EFFORT_LEVELS[profile.adapter] ? profile.effort || '' : '' }];
   }));
@@ -164,7 +167,8 @@ function validate_profile(name, profile, binding = false) {
     // The model is passed as one CLI argument, so it must not look like a flag or contain spaces.
     if (key === 'model' && value && !/^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]*$/.test(value)) throw new Error(`${name}.model 只能是模型名称，例如 gpt-6-astra、opus 或 gemini-4-argon-high`);
   }
-  if (profile.effort && !EFFORT_LEVELS[profile.adapter]?.includes(profile.effort)) {
+  if (profile.adapter === 'api') validate_api_profile(profile);
+  if (profile.effort && profile.adapter !== 'api' && !EFFORT_LEVELS[profile.adapter]?.includes(profile.effort)) {
     throw new Error(EFFORT_LEVELS[profile.adapter] ? `${name}.effort 只能是 ${EFFORT_LEVELS[profile.adapter].join(' / ')}`
       : `${name} 的思考档位不能单独设置；agy 请选择带档位的模型名，App 在软件内选择`);
   }
@@ -222,7 +226,7 @@ function launch_config(home, input, room, directory, options) {
     participants[name] = participant_profile(name, defaults, input, name === room.host);
   }
   const members = launch_members(input, Object.keys(participants), options);
-  return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, participants, members,
+  return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, participants, members, api_home: home,
     cwd: input.cwd, discussion_project: input.discussion_project, project_access: input.project_access || undefined,
     data_directory: join(directory, 'runtime'), draft_directory: service_drafts(home, join(directory, 'runtime')) }, directory);
 }
@@ -233,7 +237,7 @@ function free_launch_config(home, input, room, directory, options) {
   const names = room.members.map(member => typeof member === 'string' ? member : member.name);
   const participants = Object.fromEntries(names.map(name => [name, participant_profile(name, defaults, input, false)]));
   const members = launch_members(input, names, options);
-  return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, mode: 'free', participants, members,
+  return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, mode: 'free', participants, members, api_home: home,
     cwd: input.cwd, project_access: input.project_access || undefined,
     data_directory: join(directory, 'runtime'), draft_directory: service_drafts(home, join(directory, 'runtime')) }, directory);
 }
@@ -255,6 +259,10 @@ function participant_profile(name, defaults, input, current_host) {
   for (const field of ['cwd', 'model', 'effort', 'project_name', 'project_id', 'project_access']) if (profile[field] === '') delete profile[field];
   validate_profile(name, profile, true);
   if (!clients_of(name)?.includes(profile.adapter)) throw new Error(`请配置 ${name} 的 CLI / App 客户端`);
+  if (profile.adapter === 'api') {
+    if (input.entry === 'conversation' && current_host) throw new Error('API 主持人请从网页启动；当前软件会话主持须选择对应 CLI / App');
+    return profile;
+  }
   if (profile.adapter !== 'antigravity' && (!existsSync(profile.executable || '') || !statSync(profile.executable).isFile()
     || (process.platform === 'win32' && !/\.exe$/i.test(profile.executable)))) throw new Error(`${name}：请指定实际原生可执行文件，Windows 使用 .exe`);
   const cwd = profile.cwd || input.cwd;
@@ -301,6 +309,7 @@ export async function room_member(home, raw, locked = false) {
   const release = locked ? () => {} : acquire_lock(join(dirname(path), 'configuration-edit'));
   try {
     const config = configuration_snapshot(path).config;
+    config.api_home = home;
     const room = await site_request(input.site, `/api/rooms/${input.room_id}`, input.token);
     if (action === 'add' && input.new_instance) {
       // A name once bound keeps its session locally, so a new instance never reuses a removed member's name.
@@ -640,8 +649,10 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   const home = service_home();
   assert_shared_home(home);
   let result;
-  if (positionals[0] === 'settings') result = input ? save_launch_settings(home, input) : launch_settings(home);
+  if (positionals[0] === 'settings') result = { ...(input ? save_launch_settings(home, input) : launch_settings(home)), api_providers: API_PROVIDERS };
+  else if (positionals[0] === 'api-key' && input) result = save_api_key(home, input);
   else if (positionals[0] === 'room-models' && input) result = room_models(home, input);
+  else if (positionals[0] === 'models' && input?.adapter === 'api') result = await api_models(home, input);
   else if (positionals[0] === 'models' && input) {
     const saved = Object.values(launch_settings(home).participants).find(profile => profile.adapter === input.adapter);
     result = await cached_software_models(home, { adapter: input.adapter, executable: input.executable || saved?.executable }, { refresh: input.refresh === true });

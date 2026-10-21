@@ -1,4 +1,4 @@
-/** Resident local service that keeps every registered automatic room consumed; no model API orchestration. */
+/** Resident local service that dispatches registered rooms to software or configured API participants. */
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, unlinkSync } from 'node:fs';

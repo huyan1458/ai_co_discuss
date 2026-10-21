@@ -398,7 +398,8 @@ function resize_nav_by_key(event) {
             <form class="pb-free-invite" @submit.prevent="act('invite_member', { name: invite_name, access: invite_access, project_access: invite_project_access })">
               <USelect v-model="invite_name" :items="invite_choices" placeholder="选择 AI" size="sm" class="min-w-0 flex-1" />
               <USelect v-model="invite_access" :items="[{ label: '本机自动', value: 'runner' }, { label: '手动接入', value: 'manual' }, { label: '在线只读', value: 'online' }]" size="sm" class="w-26" />
-              <USelect v-if="invite_access === 'runner'" v-model="invite_project_access" :items="[{ label: '项目文件只读', value: 'read' }, { label: '项目文件可写', value: 'write' }]" aria-label="受邀成员的项目文件权限" size="sm" class="w-full" />
+              <USelect v-if="invite_access === 'runner' && bridge.launch_can_set_access(invite_name, view.launch)" v-model="invite_project_access" :items="[{ label: '项目文件只读', value: 'read' }, { label: '项目文件可写', value: 'write' }]" aria-label="受邀成员的项目文件权限" size="sm" class="w-full" />
+              <span v-else-if="invite_access === 'online' || invite_access === 'runner' && view.launch.profiles[invite_name]?.adapter === 'api'" class="pb-free-note">项目文件只读</span>
             </form>
             <p v-if="invite_access === 'runner' && !view.launch.available" class="pb-free-note">程序唤醒需要本机服务，请在运行 AI 的电脑打开本机网站。</p>
           </section>

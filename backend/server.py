@@ -89,7 +89,7 @@ FREE_BACKUP_QUERIES = {
     "member_suggestions": "SELECT s.* FROM member_suggestions s JOIN messages m ON m.id=s.message_id WHERE m.room_id=? ORDER BY s.message_id,s.member_id",
 }
 MESSAGE_QUERY = """SELECT messages.*, COALESCE(details.kind,'opinion') AS kind,
-COALESCE(details.submitted_by, CASE WHEN messages.source IN ('cli','url','user')
+COALESCE(details.submitted_by, CASE WHEN messages.source IN ('cli','api','url','user')
 THEN messages.author ELSE '用户' END) AS submitted_by, details.turn_id,
 COALESCE(summaries.text,'') AS summary, COALESCE(summaries.author,'') AS summary_by, timing.elapsed_seconds
 FROM messages LEFT JOIN message_details AS details ON details.message_id=messages.id
@@ -320,7 +320,7 @@ def topic_context(background, user_request=None):
 def topic_defaults():
     """Return independent participation defaults for existing rooms."""
     return {"host": "用户", "background": "", "boundaries": "", "phase": "preparing", "focus": "",
-            "experts": {name: "cli" if name == "Codex" else "online" for name in PARTICIPANTS[1:]}}
+            "experts": {name: "cli" if name == "Codex" else "online" for name in PARTICIPANTS[1:] if name != "Grok"}}
 
 
 def topic_values(payload, current=None):
@@ -749,17 +749,17 @@ def message_details(room, payload):
     """Validate declared author, moderator role, and forwarding attribution."""
     author = payload["author"]
     kind = payload.get("kind", "opinion")
-    submitted_by = payload.get("submitted_by", author if payload.get("source") == "cli" else "用户")
+    submitted_by = payload.get("submitted_by", author if payload.get("source") in ("cli", "api") else "用户")
     if kind not in ("opinion", "moderation", "receipt") or not is_participant(submitted_by):
         raise ValueError("发言职责或提交者无效")
     if submitted_by not in ("用户", room["host"], author):
         raise ValueError("只有用户或主持人可以代发其他专家的观点")
     if kind == "moderation" and (author != room["host"] or submitted_by not in ("用户", room["host"])):
         raise ValueError("主持发言必须保留当前主持人署名")
-    if submitted_by == author and payload.get("source") == "cli" and author != "用户" and room["experts"].get(author) != "cli":
+    if submitted_by == author and payload.get("source") in ("cli", "api") and author != "用户" and room["experts"].get(author) != "cli":
         raise ValueError("当前专家配置为在线只读，请由用户或主持人代发")
     source = "host_proxy" if submitted_by == room["host"] != author and submitted_by != "用户" else (
-        "cli" if payload.get("source") == "cli" and submitted_by == author else ("user" if author == "用户" else "proxy"))
+        payload["source"] if payload.get("source") in ("cli", "api") and submitted_by == author else ("user" if author == "用户" else "proxy"))
     return {"kind": kind, "submitted_by": submitted_by, "turn_id": int(payload["turn_id"]) if payload.get("turn_id") else None, "source": source}
 
 
@@ -795,7 +795,7 @@ def record_message_timing(connection, message_id, token):
         FROM messages AS m JOIN message_details AS d ON d.message_id=m.id
         JOIN discussion_events AS e ON e.room_id=m.room_id AND e.participant=m.author
         JOIN event_timings AS t ON t.event_id=e.id
-        WHERE m.id=? AND m.source='cli' AND d.submitted_by=m.author
+        WHERE m.id=? AND m.source IN ('cli','api') AND d.submitted_by=m.author
             AND e.status='started' AND e.token_hash=? AND t.dispatched_at>0
         ON CONFLICT(message_id) DO NOTHING""", (message_id, token_hash(token)))
 
@@ -815,7 +815,7 @@ def append_free_message(connection, room, payload, actor):
             raise PermissionError("代发在线成员的回答须由用户提交")
     submitted_by = "用户" if proxy else author
     expected = {"author": author, "text": text, "reply_to": reply_to, "kind": "chat", "submitted_by": submitted_by,
-                "turn_id": None, "source": "proxy" if proxy else ("user" if author == "用户" else "cli")}
+                "turn_id": None, "source": "proxy" if proxy else ("user" if author == "用户" else "api" if payload.get("source") == "api" else "cli")}
     expected.update(message_summary(payload, expected))
     identifiers = attachment_ids(payload)
     previous = connection.execute(f"{MESSAGE_QUERY} WHERE room_id=? AND submission_id=?", (room_id, submission_id)).fetchone()
@@ -1199,6 +1199,7 @@ def protocol_text(room):
         ])
     return "\n\n".join([
         "# 本地 CLI 读写与主持协议", f"当前主持人：{room['host']}。以下为留言板接口，不是模型服务 API。",
+        "API 参与者由本机 runner 使用相同房间授权和执行约束提交，消息 source=api；CLI 仍使用 source=cli。兼容字段 experts 中的 cli 表示可自行提交，实际接入方式见成员 adapter。",
         "写入使用 POST，通常为 Content-Type: application/json；附件上传使用 application/octet-stream 原始字节。主持操作填写 actor 为当前主持人或用户；这些是声明身份，不是认证凭据。",
         f"附件：POST {base}/attachments?actor=身份&file_name=文件名&submission_id=新编号，原文件最多 20 MiB；GET 同路径默认列已发送附件，加 submission_id 精确核对上传。GET {base}/attachments/ID 读元数据，/ID/content 下载原文件。消息可带 attachment_ids（最多 10 个有序编号）；只关联同房间、同提交者的未使用附件，可只有附件无正文。自动任务须在回答完成前上传；消息查询包含附件，按需下载后由当前软件读取，不自动解析。",
         "讨论上限：room.limits 返回轮次、总时长、单次执行、到限方式、收束预留和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长/单次执行时限。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理；附 force:true 可在进行中提前进入收束，由主持人在收束预留时间内总结。到限停止新专家安排与观点；总结由真实主持人完成，预留计入总时长；暂停期间不计时也不消耗总时长。",
@@ -1428,7 +1429,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Forward authenticated browser requests to the shared Node entrypoint and pin their website."""
         site = self.local_request_site(method)
         route = parts[2:]
-        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-member"], ["models"], ["pick-directory"]):
+        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-member"], ["models"], ["api-key"], ["pick-directory"]):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
             command = "settings"
@@ -1440,6 +1441,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = "room-models"
         elif route == ["models"] and method == "POST":
             command = "models"
+        elif route == ["api-key"] and method == "POST":
+            command = "api-key"
         elif route == ["room-member"] and method == "POST":
             command = "room-member"
         elif route == ["pick-directory"] and method == "POST":

@@ -1,5 +1,6 @@
 <script setup>
 import { computed, inject, watch } from "vue";
+import ApiSettings from "./ApiSettings.vue";
 
 // The create form shows directory, access and model choices beside their related controls.
 const props = defineProps({ participants: { type: Array, default: () => [] }, workspace: { type: Boolean, default: true },
@@ -30,22 +31,23 @@ watch(() => [props.modelSelection, view.value.launch.available, ...names.value.m
     </template>
     <template v-else>
     <h3>启动配置</h3>
-    <p class="fine-print">软件配置可保存供后续讨论复用。App 需要保持运行；CLI 按需启动，使用已有登录和工具权限。</p>
+    <p class="fine-print">接入配置可保存供后续讨论复用。API 不需要安装 AI 软件；App 需要保持运行；CLI 按需启动。</p>
     <details v-for="name in names" :key="name" open class="launch-client">
       <summary>{{ name }} · {{ bridge.launch_summary(name).client }} · {{ bridge.launch_summary(name).session }}</summary>
       <p class="launch-effective">工作目录：{{ bridge.launch_summary(name).cwd }}（{{ bridge.launch_summary(name).access }}）<br>项目：{{ bridge.launch_summary(name).project }}</p>
       <div class="launch-client-fields">
         <UFormField :label="`${name} 执行客户端`"><USelect :model-value="profile(name).adapter || ''" :items="bridge.launch_clients[name]" placeholder="选择 CLI / App" class="w-full" @update:model-value="write(name, 'adapter', $event)" /></UFormField>
         <UFormField v-if="profile(name).adapter === 'antigravity'" label="Sidecar IPC 目录"><UInput :model-value="profile(name).ipc_directory || ''" placeholder="已配置的 Sidecar 目录" class="w-full" @update:model-value="write(name, 'ipc_directory', $event)" /></UFormField>
-        <UFormField v-else label="原生可执行文件路径"><UInput :model-value="profile(name).executable || ''" placeholder="Windows 填写 .exe 的完整路径" class="w-full" @update:model-value="write(name, 'executable', $event)" @blur="props.modelSelection && bridge.load_launch_models(name)" /></UFormField>
-        <UFormField v-if="props.modelSelection && models(name).supported" label="模型" :help="models(name).loading ? '正在读取软件模型列表…' : models(name).error || models(name).source"><USelect :model-value="profile(name).model || '__default__'" :items="models(name).items" :loading="models(name).loading" class="w-full" @update:model-value="bridge.write_launch_model(name, $event)" /><button v-if="models(name).error && !models(name).loading" type="button" class="model-retry" @click="bridge.load_launch_models(name, true)">重新读取模型列表</button></UFormField>
+        <UFormField v-else-if="profile(name).adapter !== 'api'" label="原生可执行文件路径"><UInput :model-value="profile(name).executable || ''" placeholder="Windows 填写 .exe 的完整路径" class="w-full" @update:model-value="write(name, 'executable', $event)" @blur="props.modelSelection && bridge.load_launch_models(name)" /></UFormField>
+        <ApiSettings v-if="profile(name).adapter === 'api'" :name="name" />
+        <UFormField v-else-if="props.modelSelection && models(name).supported" label="模型" :help="models(name).loading ? '正在读取软件模型列表…' : models(name).error || models(name).source"><USelect :model-value="profile(name).model || '__default__'" :items="models(name).items" :loading="models(name).loading" class="w-full" @update:model-value="bridge.write_launch_model(name, $event)" /><button v-if="models(name).error && !models(name).loading" type="button" class="model-retry" @click="bridge.load_launch_models(name, true)">重新读取模型列表</button></UFormField>
         <UFormField v-if="props.modelSelection && models(name).efforts?.length" label="思考档位（可选）"><USelect :model-value="profile(name).effort || 'default'" :items="effort_items(name)" class="w-full" @update:model-value="write(name, 'effort', $event === 'default' ? '' : $event)" /></UFormField>
         <UFormField v-if="profile(name).adapter === 'codex'" label="来源聊天 ID"><UInput :model-value="profile(name).source_thread_id || ''" placeholder="用于在 Codex App 新建会话" class="w-full" @update:model-value="write(name, 'source_thread_id', $event)" /></UFormField>
         <UFormField v-if="profile(name).adapter === 'claude'" label="允许的工具（可选，每行一项）"><UTextarea :model-value="(profile(name).allowed_tools || []).join('\n')" :rows="2" placeholder="例如 Read、Write 及按需配置的 Bash 权限" class="w-full" @update:model-value="write(name, 'allowed_tools', $event)" /></UFormField>
-        <details><summary>会话与目录覆盖（可选）</summary><div class="launch-client-fields">
+        <details v-if="profile(name).adapter !== 'api'"><summary>会话与目录覆盖（可选）</summary><div class="launch-client-fields">
           <UFormField label="复用会话 ID（仅本次）"><UInput :model-value="profile(name).session_id || ''" placeholder="留空创建新会话" class="w-full" @update:model-value="write(name, 'session_id', $event)" /></UFormField>
           <UFormField label="此 AI 的工作目录"><UInput :model-value="profile(name).cwd || ''" placeholder="留空使用本次讨论目录" class="w-full" @update:model-value="write(name, 'cwd', $event)" /></UFormField>
-          <UFormField label="此 AI 的项目文件"><USelect :model-value="profile(name).project_access || 'inherit'" :items="PARTICIPANT_ACCESS" class="w-full" @update:model-value="write_access(name, $event)" /></UFormField>
+          <UFormField v-if="bridge.launch_can_set_access(name, view.launch)" label="此 AI 的项目文件"><USelect :model-value="profile(name).project_access || 'inherit'" :items="PARTICIPANT_ACCESS" class="w-full" @update:model-value="write_access(name, $event)" /></UFormField>
           <UFormField label="此 AI 的项目"><UInput :model-value="profile(name).project_name || ''" placeholder="留空使用本次讨论项目" class="w-full" @update:model-value="write(name, 'project_name', $event)" /></UFormField>
           <UFormField v-if="['codex', 'antigravity', 'antigravity_cli'].includes(profile(name).adapter)" label="软件中的项目 ID"><UInput :model-value="profile(name).project_id || ''" placeholder="可选；须与所选软件项目一致" class="w-full" @update:model-value="write(name, 'project_id', $event)" /></UFormField>
         </div></details>
@@ -54,7 +56,7 @@ watch(() => [props.modelSelection, view.value.launch.available, ...names.value.m
     <div class="form-two-columns">
       <UFormField v-if="props.workspace" label="本次工作目录（可选）" help="要一起查看的项目目录；留空时 AI 只在讨论私有目录工作"><UInput :model-value="view.launch.workspace.cwd || ''" placeholder="已有目录的完整路径" class="w-full" @update:model-value="write('workspace', 'cwd', $event)" /></UFormField>
       <UFormField label="本次 AI 项目（可选）"><UInput :model-value="view.launch.workspace.discussion_project || ''" placeholder="软件中已有的项目名称" class="w-full" @update:model-value="write('workspace', 'discussion_project', $event)" /></UFormField>
-      <UFormField v-if="props.workspace" label="项目文件" help="默认只读；可写允许 CLI 专家按议题修改工作目录中的文件，仅本次有效">
+      <UFormField v-if="props.workspace && names.some(name => bridge.launch_can_set_access(name, view.launch))" label="CLI 项目文件" help="默认只读；可写允许 CLI 专家按议题修改工作目录中的文件，仅本次有效">
         <USelect :model-value="view.launch.workspace.project_access || 'read'" :items="ACCESS" class="w-full" @update:model-value="write('workspace', 'project_access', $event)" />
       </UFormField>
     </div>

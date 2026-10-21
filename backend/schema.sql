@@ -300,7 +300,7 @@ INSERT INTO message_timings(message_id,elapsed_seconds)
     FROM messages AS m JOIN discussion_events AS e
         ON e.room_id=m.room_id AND e.result='message:'||m.id AND e.participant=m.author
     JOIN event_timings AS t ON t.event_id=e.id
-    WHERE m.source='cli' AND e.role='expert' AND e.status='completed'
+    WHERE m.source IN ('cli','api') AND e.role='expert' AND e.status='completed'
         AND e.started_at>0 AND t.dispatched_at>0 AND t.finished_at>0
     ON CONFLICT(message_id) DO NOTHING;
 CREATE TRIGGER IF NOT EXISTS record_event_timing AFTER UPDATE OF status ON discussion_events

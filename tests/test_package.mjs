@@ -72,7 +72,8 @@ function write_cli_stub(home) {
     const { join } = require('node:path');
     (async () => {
       const prompt = fs.readFileSync(0, 'utf8');
-      const task = JSON.parse(fs.readFileSync(prompt.match(/任务文件：(.*?)，立即/)[1], 'utf8'));
+      const task_path = prompt.match(/(?:任务文件：|同一份保存在 )(.*?)(?:，立即|，无需再读)/)[1];
+      const task = JSON.parse(fs.readFileSync(task_path, 'utf8'));
       const session = 'package-test-' + task.room;
       process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: session }) + '\\n');
       for (let attempt = 0; attempt < 250; attempt++) {
@@ -81,7 +82,19 @@ function write_cli_stub(home) {
       }
       // Run the package's codiscuss entry the way an approved task command would.
       const codiscuss = join(task.skills[0], '..', '..', '..', '..', 'runner', 'codiscuss.mjs');
-      for (const [action, ...args] of [['enter'], ['fail', '--reason', 'package-integration-complete']]) {
+      // Headless delivery now enters in the runner; wait for that acknowledgement instead of entering twice.
+      if (prompt.includes('接入程序已为本次执行完成 execution enter')) {
+        for (let attempt = 0; attempt < 250; attempt++) {
+          const access = JSON.parse(fs.readFileSync(task.access_file, 'utf8'));
+          const response = await fetch(task.site + '/api/rooms/' + task.room + '/events/' + task.event_id, {
+            method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Discussion-Token': access.token },
+            body: JSON.stringify({ action: 'view' }) });
+          if ((await response.json()).status === 'started') break;
+          await delay(20);
+        }
+      }
+      const actions = prompt.includes('接入程序已为本次执行完成 execution enter') ? [] : [['enter']];
+      for (const [action, ...args] of [...actions, ['fail', '--reason', 'package-integration-complete']]) {
         const result = spawnSync(process.execPath, [codiscuss, '--site', task.site, 'execution', action,
           task.room, String(task.event_id), '--access-file', task.access_file, ...args], { encoding: 'utf8', windowsHide: true });
         if (result.status !== 0) throw new Error(result.stderr);

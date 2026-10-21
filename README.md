@@ -3,7 +3,7 @@
 [![CI](https://github.com/huyan1458/ai_co_discuss/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/huyan1458/ai_co_discuss/actions/workflows/ci.yml)
 [MIT License](LICENSE)
 
-让已有的 AI 软件在同一个房间里协作：在网页遥控本地 AI 干活，随时邀请其他 AI 加入或请离，也可以围绕议题发起多轮讨论。共享记录保存消息、观点、分歧和结论。每个 AI 使用自己的会话、账号与工具，项目不调用模型服务 API 生成回答。
+让 AI 软件和 API 专家在同一个房间里协作：在网页遥控本地 AI 干活，随时邀请其他 AI 加入或请离，也可以围绕议题发起多轮讨论。共享记录保存消息、观点、分歧和结论。软件参与者使用自己的会话、账号与工具；API 参与者使用你配置的模型服务和房间上下文。
 
 自由协作房间里，你点名哪个 AI，它就在自己的原会话中处理并回复，多位可以同时进行；也可以指定一位 AI 主持人替你分配任务。讨论房间由主持人安排发言与收束。本地 AI 通过 CLI 读写，在线网页 AI 在原聊天回答，由你或主持人代发。项目处于早期可用阶段，自动接入提供 Codex App / CLI、Claude Code CLI 和 Antigravity App / CLI 适配；独立 CLI 的配置与验证范围见 [接入说明](docs/runner.md#独立-cli-接入)。
 
@@ -17,7 +17,7 @@
 
 ### 安装包用户
 
-需要 **Node.js 24+、npm、Python 3.10+**，所选 AI CLI 须预先安装并登录；安装器不会代装这些运行环境或 AI 软件。安装包已发布到 npm registry，在任意目录运行：
+需要 **Node.js 24+、npm、Python 3.10+**。使用 CLI 时须预先安装并登录；仅使用 API 时无需安装 AI 软件，准备对应服务的 API Key 即可。安装器不会代装运行环境或 AI 软件。安装包已发布到 npm registry，在任意目录运行：
 
 ```sh
 npx --yes --package ai_co_discuss codiscuss install
@@ -70,6 +70,8 @@ codiscuss setup
 5. 点击“创建并启动讨论”。程序完成建房、登记与首次任务交付；在进度看板核对 AI 是否实际进入，并查看保存的发言。
 
 只想让 AI 干活时，在第 3 步将房间用法改为“自由协作”，只需填写话题名称，任务在对话中随时补充：选择一位或多位本地 AI，默认由你主持，也可指定 AI 主持人；使用“程序唤醒”时点击“创建并连接”，之后在频道里直接发消息。多位时点名或在正文中 `@` 它们，处理中可随时停止。运行中可在右侧成员栏邀请、请离或请回 AI，指定主持人，或发起关联的头脑风暴。详见 [自由协作房间](docs/workflow.md#自由协作房间)。
+
+**通过 API 接入**：在“程序唤醒”下添加 Codex（OpenAI）、Claude、Gemini、DeepSeek、Qwen 或 Grok，翻开卡片选择 API，填写并保存 API Key，选择或输入模型 ID。默认提供官方 Base URL，也可填写 OpenRouter 等兼容服务的地址并选择对应请求协议。Grok 始终显示，无需安装 Cursor 或 Grok Bot。API 可以担任主持人，与 CLI / App 专家混用，也可进入自由协作房间。API 与网页专家的项目权限固定只读，只有 CLI 专家可选择只读或写入；API 当前不访问本机项目文件，仍可保存讨论发言和主持安排。调用由本机服务发出，费用按所选 API 账号计费；密钥仅保存于本机。模型与配置说明见 [API 接入](docs/runner.md#api-接入)。
 
 也可不勾选立即启动，先建房，再从“接入”页点击“启动讨论”。本机网页正常启动无需下载 JSON、手动登记房间或另执行首次启动命令。
 

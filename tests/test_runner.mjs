@@ -16,6 +16,21 @@ import { cwd_key, FreeRoomRunner, workspace_snapshot } from '../runner/free_runn
 import { assert_shared_home, DiscussionService, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
 import { launch_discussion, room_models } from '../runner/discussion_launch.mjs';
 import { agy_rule, antigravity_project, claude_exit_error, claude_rule_path, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
+import { save_api_key } from '../runner/discussion_api.mjs';
+
+test('API profiles need a bound key but no software or filesystem permission', t => {
+  const home = mkdtempSync(join(tmpdir(), 'api-config-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const base_url = 'https://openrouter.ai/api/v1';
+  const key = save_api_key(home, { base_url, api_key: 'test-only-key' });
+  const input = { site: 'https://discussion.test', room: 'api-room', token: 'owner'.repeat(8), api_home: home, project_access: 'write',
+    participants: { Grok: { adapter: 'api', api_protocol: 'chat', base_url, model: 'vendor/model.1', ...key, project_access: 'write', cwd: home } } };
+  const config = validate_config(input, home);
+  assert.equal(config.participants.Grok.project_access, 'read');
+  assert.equal(config.participants.Grok.cwd, undefined);
+  assert.equal(config.participants.Grok.executable, undefined);
+  assert.throws(() => validate_config({ ...input, participants: { Grok: { ...input.participants.Grok, base_url: 'https://api.x.ai/v1' } } }, home), /重新填写/);
+});
 
 /** Exercise the dispatcher against an HTTP contract without starting real software. */
 async function fixture(t) {

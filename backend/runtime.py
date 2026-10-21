@@ -157,7 +157,7 @@ def require_owner(connection, room_id, token):
 def write_actor(operation, payload):
     """Use the same message attribution defaults as persisted message details."""
     if operation == "messages":
-        return payload.get("submitted_by", payload.get("author") if payload.get("source") == "cli" else "用户")
+        return payload.get("submitted_by", payload.get("author") if payload.get("source") in ("cli", "api") else "用户")
     return payload.get("actor", "用户")
 
 

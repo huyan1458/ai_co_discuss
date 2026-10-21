@@ -14,6 +14,8 @@
 
 `codiscuss launch models --file FILE` 输入 `adapter` 和可选的完整 `executable`，读取对应 CLI 的模型目录与支持的档位，不发送提示词。详情与失败边界见 [本机模型目录](runner.md#本机模型目录)。
 
+API 入口使用 `adapter: "api"`，其 Base URL、请求协议、Key 引用和模型 ID 字段见 [API 接入](runner.md#api-接入)。`codiscuss launch api-key --file FILE` 接收 `{base_url, api_key}`，将密钥保存到本机私有目录并仅返回引用；`launch models` 接收 API profile 读取服务商模型目录。API 发言的 `source` 为 `api`，普通网站 CLI 的 `message post` 仍标记为 `cli`；两者使用相同的成员或执行授权。
+
 ## 连接与发现
 
 ```sh

@@ -7,7 +7,7 @@ own session, model and thinking effort. Platform names alone keep their historic
 import re
 
 USER = "用户"
-AI_PLATFORMS = ("Codex", "Claude", "Gemini", "DeepSeek", "Qwen")
+AI_PLATFORMS = ("Codex", "Claude", "Gemini", "DeepSeek", "Qwen", "Grok")
 PARTICIPANTS = [USER, *AI_PLATFORMS]
 MAX_INSTANCE_SUFFIX = 16
 # AI instances one room may hold, across platforms.

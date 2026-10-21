@@ -25,9 +25,9 @@ MAX_MESSAGE_ATTACHMENTS = 10
 MAX_TEXT_LENGTH = 32000
 MAX_SUMMARY_LENGTH = 1000
 MAX_BRIEF_LENGTH = 1600
-PARTICIPANTS = ("用户", "Codex", "Claude", "Gemini", "DeepSeek", "Qwen")
+PARTICIPANTS = ("用户", "Codex", "Claude", "Gemini", "DeepSeek", "Qwen", "Grok")
 # A platform is a type; `Claude-评审` is a second Claude instance with its own session. Mirrors backend/identity.py.
-INSTANCE_PATTERN = re.compile(r"(Codex|Claude|Gemini|DeepSeek|Qwen)(?:-[0-9A-Za-z_一-鿿]{1,16})?")
+INSTANCE_PATTERN = re.compile(r"(Codex|Claude|Gemini|DeepSeek|Qwen|Grok)(?:-[0-9A-Za-z_一-鿿]{1,16})?")
 PHASES = ("preparing", "initial", "discussing", "reviewing", "paused", "concluded")
 KINDS = ("opinion", "moderation", "receipt", "chat")
 OVERVIEW_FIELDS = ("id", "title", "goal", "host", "phase", "focus", "message_count",
@@ -96,7 +96,7 @@ def positive_int(value):
 def ai_name(value):
     """Accept an AI platform or a named instance of one, such as Claude-评审."""
     if not INSTANCE_PATTERN.fullmatch(value):
-        raise argparse.ArgumentTypeError("须为 Codex/Claude/Gemini/DeepSeek/Qwen，或平台名-后缀（后缀 1–16 个字母、数字、下划线或汉字）")
+        raise argparse.ArgumentTypeError("须为 Codex/Claude/Gemini/DeepSeek/Qwen/Grok，或平台名-后缀（后缀 1–16 个字母、数字、下划线或汉字）")
     return value
 
 

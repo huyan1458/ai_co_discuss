@@ -1,4 +1,4 @@
-/** Durable website-event delivery to existing AI software; no model API orchestration. */
+/** Durable website-event delivery to AI software and explicitly configured API participants. */
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -7,13 +7,14 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { atomic_json, deliver_task, remove_agy_projects, setup_sidecar, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
+import { read_api_key } from './discussion_api.mjs';
 
 const POLL_MS = 2000;
 /** Headless CLIs know their session at start, so the runner enters the execution instead of spending model turns on it. */
 const AUTO_ENTER_ADAPTERS = new Set(['codex_cli', 'claude', 'antigravity_cli']);
 const DELIVERY_RETRY_DELAYS_MS = [2000, 4000];
 const RENEW_MS = 30_000;
-const ADAPTER_NAMES = ['codex', 'claude', 'antigravity', 'codex_cli', 'antigravity_cli'];
+const ADAPTER_NAMES = ['codex', 'claude', 'antigravity', 'codex_cli', 'antigravity_cli', 'api'];
 export const CODEX_ADAPTERS = ['codex', 'codex_cli'];
 const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 /** Project files in cwd are read-only unless the launch or participant explicitly grants write. */
@@ -40,6 +41,12 @@ export function validate_config(input, base_directory) {
   if (!config.project || !existsSync(join(config.project, 'runner', 'discuss.py'))) throw new Error('cli_project 必须指向 AI CoDiscuss 项目；省略时默认使用本仓库');
   if (!config.participants || !Object.keys(config.participants).length) throw new Error('请配置本机参与软件');
   for (const participant of Object.values(config.participants)) {
+    if (participant.adapter === 'api') {
+      read_api_key(config.api_home, participant);
+      for (const field of ['cwd', 'project_name', 'project_id', 'executable', 'effort']) delete participant[field];
+      participant.project_access = 'read';
+      continue;
+    }
     participant.cwd = participant.cwd ?? config.cwd;
     participant.project_name = participant.project_name ?? config.discussion_project;
     participant.project_access = participant.project_access || config.project_access || 'read';
@@ -231,6 +238,8 @@ export class DiscussionRunner {
       const task = task_files(this.config, event, row.token, binding);
       invoked = true;
       const result = await this.deliver(adapter, binding, { ...task, room_title: this.room_title,
+        api_context: { site: this.config.site, room: this.config.room, token: row.token, home: this.config.api_home,
+          event_id: row.id, role: event.role, turn_id: event.turn_id },
         on_trace: (stage, detail) => this.trace(row.id, stage, detail),
         on_binding: session => {
           this.store.bind(event.participant, session);
@@ -304,7 +313,13 @@ export class DiscussionRunner {
   }
   /** Preserve the cause on the website and revoke work before asking for intervention. */
   async fail(row, reason) {
-    await api(this.config, `/events/${row.id}`, { action: 'fail', reason });
+    try { await api(this.config, `/events/${row.id}`, { action: 'fail', reason }); }
+    catch (error) {
+      if (!/HTTP 409/.test(error.message)) throw error;
+      const latest = await api(this.config, `/events/${row.id}`, { action: 'view' });
+      if (['completed', 'cancelled', 'failed'].includes(latest.status)) return this.reconcile(row, latest);
+      throw error;
+    }
     this.store.record(row.id, { status: 'failed', error: reason });
     this.stop_children();
   }

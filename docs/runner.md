@@ -1,6 +1,35 @@
 # 自动接入程序
 
-`runner/` 是本仓库自带的全自动讨论接入程序，只依赖 Node.js 24 内置模块。`discussion_runner.mjs` 输入显式房间配置，增量读取 CoDiscuss 事件，在独立 SQLite 保存游标、收件箱与真实会话绑定；`discussion_adapters.mjs` 只调用软件入口；`discussion_sidecar.mjs` 由 Antigravity App 管理；`codex_app_client.mjs` 连接运行中 Codex 桌面应用的 app-tools 管道。网站业务保存事件，显式开启的本机桥接可把启动请求交给 Node 接入服务；讨论决策与发言由实际 AI 负责，接入程序不生成专家答案。
+`runner/` 是本仓库自带的全自动讨论接入程序，只依赖 Node.js 24 内置模块。`discussion_runner.mjs` 输入显式房间配置，增量读取 CoDiscuss 事件，在独立 SQLite 保存游标、收件箱与真实会话绑定；`discussion_adapters.mjs` 分派软件和 API 入口；`discussion_sidecar.mjs` 由 Antigravity App 管理；`codex_app_client.mjs` 连接运行中 Codex 桌面应用的 app-tools 管道。网站业务保存事件，显式开启的本机桥接可把启动请求交给 Node 接入服务；讨论决策与发言由实际 AI 负责；软件入口交付原会话，API 入口使用用户明确配置的模型服务和房间工具。
+
+## API 接入
+
+“程序唤醒”支持 Codex（OpenAI）、Claude、Gemini、DeepSeek、Qwen、Grok 的 API 专家和主持人，也支持与已有 CLI / App 参与者混用。供应商列表固定显示，不依赖软件安装检测；API 主持人从网页启动。自由协作房间使用同一 API 适配器，但回答绑定成员执行，不使用讨论轮次。
+
+翻开专家卡片选择 API，核对 Base URL 和请求协议，填写并点击“保存密钥”，再选择推荐模型或输入完整模型 ID。“读取模型列表”只请求服务商的 `/models`，不生成回答；失败时仍可手输 ID。下面是 **2026-10-21** 核对的官方默认值，实际可用模型与额度由账号决定：
+
+| 房间身份 / 供应商 | 默认 Base URL | 请求协议 | 推荐模型 ID |
+| --- | --- | --- | --- |
+| Codex / OpenAI | `https://api.openai.com/v1` | Responses | `gpt-6.1-sol`、`gpt-6-astra`、`gpt-6-luna` |
+| Claude / Anthropic | `https://api.anthropic.com/v1` | Messages | `claude-sonnet-5-5`、`claude-opus-5-5`、`claude-haiku-5-5`、`claude-fable-5-1` |
+| Gemini / Google | `https://generativelanguage.googleapis.com/v1beta` | generateContent | `gemini-4-argon`、`gemini-3.8-flash` |
+| DeepSeek | `https://api.deepseek.com/v1` | Chat Completions | `deepseek-flash`、`deepseek-v4-pro` |
+| Qwen / 百炼（北京） | `https://dashscope.aliyuncs.com/compatible-mode/v1` | Chat Completions | `qwen3.8-flash`、`qwen3.7-plus`、`qwen3.8-max` |
+| Grok / xAI | `https://api.x.ai/v1` | Responses | `grok-4.7` |
+
+来源：[OpenAI 模型](https://developers.openai.com/api/docs/models)、[Claude 模型](https://platform.claude.com/docs/en/models/overview)、[Gemini 模型](https://ai.google.dev/gemini-api/docs/models)、[DeepSeek API](https://api-docs.deepseek.com/zh-cn/)、[百炼模型](https://help.aliyun.com/zh/model-studio/models)、[Grok 模型](https://docs.x.ai/developers/models/grok-4.7)。百炼不同地域的 Key 与地址须匹配。
+
+自定义地址保留完整路径前缀，填写到协议根路径，例如 [OpenRouter](https://openrouter.ai/docs/api_reference/overview) 的 `https://openrouter.ai/api/v1`，选择 Chat Completions 并填写其返回的 `provider/model` ID。程序分别追加 `/responses`、`/chat/completions`、`/messages` 或 `/models/{model}:generateContent`；不改写模型 ID 中的点号、横线或斜线，不按房间身份强制套用官方协议或思考参数。实现参考 [Cherry Studio 的供应商解析说明（固定版本）](https://github.com/CherryHQ/cherry-studio/blob/843a297fe73e9f527c8eb8291c0e1335f2279c04/docs/references/ai/provider-resolution.md) 对供应商、协议、Base URL 与 API 模型 ID 的拆分方式；协议转换独立实现，不引入其代码或 SDK。
+
+`POST /api/local/api-key`（CLI 为 `codiscuss launch api-key --file FILE`）接收 `{base_url, api_key}`，仅向本机服务目录的 `api-keys/UUID.json` 写入，返回 `{api_key_ref}`。文件依赖本机用户目录权限保护，不作加密保险库；不要共享此目录。Base URL 改动后必须重新填写该地址对应的 Key。浏览器密码输入仅在组件内存保留至保存成功，不进入控制器快照、localStorage、启动待办、房间数据或上游错误日志。
+
+启动配置中的 API profile 为 `{adapter:"api", base_url, api_protocol, api_key_ref, model}`；`api_protocol` 为 `responses/chat/anthropic/gemini`。启动器在私有房间配置保存 `api_home`，供服务解析密钥引用。API 不需要 executable、项目目录、会话 ID 或技能安装；API 会话编号是本机参与者绑定，不是厂商的聊天 ID。模型列表入口仍为 `launch models` / `/api/local/models`，传入此 profile，只返回模型元数据。
+
+每个有效任务重新读取房间与当前安排，按需读取原文。独立观点阶段不会把他人观点或主持总结送给专家；专家仅可提交本次安排，主持人可写主持说明、整理状态、调整阶段、安排整轮或收束。API 与网页专家的项目权限固定只读，只有 CLI 专家可选择只读或写入；API 配置即使残留 `project_access="write"` 或本场设置为可写，执行器也强制归一为 `read`。API 没有本机文件、浏览器、附件解析或任意 HTTP 工具，不继承 cwd 的读写权限；此权限不限制保存讨论发言及履行主持职责。模型看不到网站令牌和 API Key；房间 HTTP 请求由程序绑定身份与执行。
+
+执行器在后台请求模型，主循环继续续租和处理暂停。单次模型请求超时 180 秒，每个执行最多 24 次模型请求；需显式输出上限的协议使用 8192 tokens。Responses 保留加密 reasoning items，Anthropic 保留签名块，Gemini 保留 thoughtSignature，Chat Completions 保留工具历史；这些推理内容不作为公开发言。未调用保存工具、请求失败或超限时，讨论暂停并保留错误，自由房间只结束该成员的失败执行。暂停或撤销会取消本机请求，服务端继续校验执行有效性；不把迟到回答改作普通发言。每次写入前保存原提交编号和正文，网络结果不明时停止，不换号自动重试。
+
+共享协议为兼容旧房间，仍用 `experts[name]="cli"` 表示可自行提交；实际入口由本机 `adapter` 和成员记录区分。API 原文保存 `source="api"`，沿用原身份、职责、安排关联、耗时和备份规则。测试覆盖四种请求格式、六家身份、API 主持收束、自由回答及暂停取消，使用隔离网站和模拟 API；不代表六家真实账号均已验证。
 
 ## npm 安装与本机配置
 
@@ -95,7 +124,7 @@ Codex 切换必须已有实际会话；程序从原绑定读取编号，保留�
 
 新建表单切到全自动时，默认选入已配置路径的本地软件，并选择其中一位主持；没有配置则需明确选择和补齐。支持的软件列表不会全部自动参会，手动与自动模式各保留本次表单中的选择。只有自动模式显示单次 AI 执行上限，默认不限，留空或 0 表示不限，按需填写 1–60 分钟。“直接结束（不总结）”保留已有记录；需要主持总结时，在允许收尾的运行状态使用“请主持人收尾”。
 
-网页启动由显式启用的 Python 回环服务执行；Cloudflare、普通 Python 公共部署不提供本机配置或进程操作。`--local-launch` 拒绝非 `127.0.0.1` 监听，本机页面继续使用同源接口；线上页面须先完成下节的站点授权，随后由浏览器直接请求本机服务。Node 启动器生成私有配置并调用原接入服务，不调用模型 API。启动器会启动或复用讨论服务；网站与服务仍是独立进程。
+网页启动由显式启用的 Python 回环服务执行；Cloudflare、普通 Python 公共部署不提供本机配置或进程操作。`--local-launch` 拒绝非 `127.0.0.1` 监听，本机页面继续使用同源接口；线上页面须先完成下节的站点授权，随后由浏览器直接请求本机服务。Node 启动器生成私有配置并调用接入服务，API 模型调用仅发生在已启动房间的有效执行中。启动器会启动或复用讨论服务；网站与服务仍是独立进程。
 
 ### 线上网页连接本机
 
