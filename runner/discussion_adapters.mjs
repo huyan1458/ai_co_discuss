@@ -12,6 +12,8 @@ const CALL_TIMEOUT_MS = 30_000;
 const CLI_DIAGNOSTIC_CHARS = 1000;
 /** Codex exec may linger after its final event; the finished turn is already saved, so stop it to free the session. */
 const CLI_EXIT_GRACE_MS = 1500;
+// A hung CLI keeps its lease renewed forever when the room sets no execution limit, so cap every process.
+const CLI_MAX_RUN_MS = 2 * 60 * 60_000;
 const CODEX_PERMISSIONS_MIN_MINOR = 163;
 /** Website subcommands an automatic task may run; service, launch, run, api and setup stay unapproved. */
 export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'floor', 'execution', 'health', 'schema'];
@@ -416,6 +418,8 @@ function monitor_cli(child, config, binding, task) {
   const state = { child, session_id: binding.session_id || '', initialized: false, completed: false, error: '', diagnostic: '' };
   const log_path = resolve(task.directory, `${config.adapter}-${task.id}.log`);
   const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
+  const max_run_ms = Number(process.env.CODISCUSS_CLI_MAX_MS) || CLI_MAX_RUN_MS;
+  state.limit_timer = setTimeout(() => { state.error = `CLI 运行超过 ${Math.round(max_run_ms / 1000)} 秒仍未结束，已终止`; child.kill(); }, max_run_ms);
   child.stdout.on('data', chunk => task.on_output(log_path, chunk));
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', chunk => {
@@ -434,6 +438,7 @@ function monitor_cli(child, config, binding, task) {
   });
   child.once('close', (code, signal) => {
     clearTimeout(state.finish_timer);
+    clearTimeout(state.limit_timer);
     task.on_trace?.('cli_closed', { code, signal, killed_after_completed: Boolean(state.finished) });
     if (!state.spawned) return;
     const error = cli_exit_error(state, code, signal);

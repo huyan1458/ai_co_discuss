@@ -561,6 +561,20 @@ test(`${adapter} persists a streamed binding and resumes it after a dispatcher r
   }
 });
 
+test(`${adapter} is terminated and reported when it runs past the process time cap`, async t => {
+  const f = await fixture(t);
+  f.config.participants.Codex = { adapter, executable: process.execPath };
+  const process_fixture = fake_cli(cli_events(adapter).slice(0, 1), { linger: true });
+  const runner = new DiscussionRunner(f.config, f.store,
+    (config, binding, task) => deliver_task(config, binding, task, process_fixture.spawn_process, join(f.config.directory, 'user')));
+  process.env.CODISCUSS_CLI_MAX_MS = '300';
+  try {
+    await runner.tick();
+    await process_fixture.calls[0].closed;
+    assert.match(f.store.pending()[0].error, /仍未结束，已终止/);
+  } finally { delete process.env.CODISCUSS_CLI_MAX_MS; runner.stop_children(); }
+});
+
 test(`${adapter} is stopped with the runner when its discussion pauses`, async t => {
   const f = await fixture(t);
   f.config.participants.Codex = { adapter, executable: process.execPath };
