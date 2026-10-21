@@ -593,6 +593,20 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(retry[1]["id"], room["id"])
         self.assertEqual(self.request(path + "/events", token=self.owner)[1]["events"], [])
 
+    def test_directory_arrangement_needs_no_room_credential(self):
+        """Ordering and filing a protected room only rearrange the directory; archiving still needs control."""
+        payload = {"title": "目录整理验证", "runtime_mode": "automatic", "submission_id": uuid.uuid4().hex}
+        room = self.request("/api/rooms", payload, self.owner)[1]
+        path = f"/api/rooms/{room['id']}"
+        folder = self.request("/api/folders", {"name": "整理"}, "")[1]
+        status, filed = self.request(path + "/folder", {"actor": "用户", "folder_id": folder["id"]}, "")
+        self.assertEqual(status, 200, filed)
+        self.assertEqual(filed["folder_id"], folder["id"])
+        self.assertEqual(self.request(path + "/move", {"actor": "用户", "before_id": self.room}, "")[0], 200)
+        status, rejected = self.request(path + "/archive", {"actor": "用户"}, "")
+        self.assertEqual(status, 403)
+        self.assertIn("没有凭据只能阅读", rejected["error"])
+
     def test_failed_business_write_rolls_back_messages_and_events(self):
         """A rejected formal answer cannot leave a partial message or wakeup."""
         self.start()
@@ -642,7 +656,7 @@ class RuntimeTests(unittest.TestCase):
         run = self.start()
         token = self.enter(self.events()[-1])
         for key in ("", uuid.uuid4().hex, self.member_tokens["Codex"]):
-            self.assertEqual(self.request(self.path + "/folder", {"actor": "用户", "folder_id": None}, key)[0], 403)
+            self.assertEqual(self.request(self.path + "/archive", {"actor": "用户"}, key)[0], 403)
             self.assertEqual(self.request(self.path + "/runtime", {"action": "pause", "revision": run["revision"]}, key)[0], 403)
         status, paused = self.request(self.path + "/runtime", {"action": "pause", "revision": run["revision"]})
         self.assertEqual(status, 200, paused)

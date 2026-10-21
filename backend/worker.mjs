@@ -1252,7 +1252,7 @@ async function authorize_database(database, room_id, token, operation, payload) 
       + (proxy ? " AND EXISTS(SELECT 1 FROM room_members WHERE room_id=? AND name=? AND access='online' AND status='active')" : ""),
     [member.id, hashed, member.role, room_id, ...(proxy ? [room_id, payload.author] : [])]);
   }
-  if (!run) throw new HttpError(403, "需要房主或本成员的有效凭据；没有凭据只能阅读");
+  if (!run || !hashed) throw new HttpError(403, "需要房主或本成员的有效凭据；没有凭据只能阅读");
   const actor = write_actor(operation, payload);
   const event = await database.prepare("SELECT * FROM discussion_events WHERE room_id=? AND token_hash=? AND status='started'").bind(room_id, hashed).first();
   if (!hashed || !event || actor !== event.participant) throw new HttpError(403, "执行凭据与实际参与身份不符");
@@ -1409,6 +1409,8 @@ const FREE_LIVE = "status IN ('dispatched','started')";
 const FREE_MAX_AUTO_HOPS = 8;
 const FREE_BATCH_DONE = "NOT EXISTS(SELECT 1 FROM member_requests r WHERE r.room_id=b.room_id AND r.batch_id=b.batch_id AND r.status NOT IN ('completed','cancelled','failed'))";
 const FREE_BATCH_ANSWERED = "EXISTS(SELECT 1 FROM member_requests r WHERE r.room_id=b.room_id AND r.batch_id=b.batch_id AND r.status='completed')";
+// Ordering and filing a channel only rearrange the shared directory, like folder edits, so they need no room credential.
+const DIRECTORY_OPERATIONS = ["move", "folder"];
 const FREE_OPERATIONS = ["messages", "attachments", "move", "folder", "archive", "restore", "delete"];
 const FREE_MEMBER_FIELDS = ["id", "name", "adapter", "role", "status", "access", "session_mode", "read_until"];
 const FREE_EXECUTION_FIELDS = ["id", "member_id", "status", "session_id", "lease_until", "created_at", "finished_at", "result"];
@@ -1973,7 +1975,8 @@ async function handle_api(database, request, parts, params, bucket) {
     return handle_runtime_api(database, request, parts, params);
   }
   let free_actor = null;
-  if (method === "POST" && free) free_actor = await authorize_free(database, room_id,
+  if (method === "POST" && parts.length === 4 && DIRECTORY_OPERATIONS.includes(parts[3])) { /* directory arrangement */ }
+  else if (method === "POST" && free) free_actor = await authorize_free(database, room_id,
     request.headers.get("X-Discussion-Token") ?? "", parts[3] ?? "", await read_payload(request.clone()));
   else if (method === "POST") database = await authorize_database(database, room_id,
     request.headers.get("X-Discussion-Token") ?? "", parts[3], await read_payload(request.clone()));

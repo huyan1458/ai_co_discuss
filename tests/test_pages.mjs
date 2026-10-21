@@ -549,9 +549,11 @@ test('Worker requires the owner key for user controls in every room mode', async
   const started = await f.request(`/${id}/runtime`, { action: 'start', revision: 0, deadline: Math.floor(Date.now() / 1000) + 600 });
   assert.equal((await f.request(`/${id}/state`, { actor: 'Codex', text: '无执行' }, '')).status, 403);
   for (const token of ['', crypto.randomUUID(), f.member_tokens.Codex]) {
-    for (const [tail, payload] of [['/folder', { actor: '用户', folder_id: null }],
-      ['/runtime', { action: 'pause', revision: started.body.revision }], ['/archive', { actor: '用户' }],
+    for (const [tail, payload] of [['/runtime', { action: 'pause', revision: started.body.revision }], ['/archive', { actor: '用户' }],
       ['/delete', { actor: '用户', confirm_title: '目录保护' }]]) assert.equal((await f.request(`/${id}${tail}`, payload, token)).status, 403);
+    // Ordering and filing only rearrange the shared directory, like folder edits.
+    assert.equal((await f.request(`/${id}/folder`, { actor: '用户', folder_id: null }, token)).status, 200);
+    assert.equal((await f.request(`/${id}/move`, { actor: '用户' }, token)).status, 200);
   }
   const paused = await f.request(`/${id}/runtime`, { action: 'pause', revision: started.body.revision });
   assert.equal(paused.status, 200, JSON.stringify(paused.body));

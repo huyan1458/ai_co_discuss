@@ -36,6 +36,8 @@ MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 MAX_MESSAGE_ATTACHMENTS = 10
 MAX_FILENAME_LENGTH = 255
 LOCAL_LAUNCH_TIMEOUT = 60
+# Ordering and filing a channel only rearrange the shared directory, like folder edits, so they need no room credential.
+DIRECTORY_OPERATIONS = ("move", "folder")
 DIRECTORY_PICKER_TIMEOUT = 600  # the folder dialog waits for the person at the computer
 MAX_TEXT_LENGTH = 32000
 MAX_STATE_LENGTH = 4000
@@ -1535,7 +1537,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 raise ValueError("自由房间不使用讨论运行控制")
             return self.handle_runtime_api(connection, parts, params, method)
         free_actor = None
-        if method == "POST" and free:
+        if method == "POST" and len(parts) == 4 and parts[3] in DIRECTORY_OPERATIONS:
+            pass
+        elif method == "POST" and free:
             free_actor = authorize_free_write(connection, room_id, token, parts[3] if len(parts) > 3 else "", self.read_payload())
         elif method == "POST":
             authorize_write(connection, room_id, token, parts[3] if len(parts) > 3 else "", self.read_payload())

@@ -200,7 +200,7 @@ def authorize_write(connection, room_id, token, operation, payload):
     if member and (not run or run["mode"] == "manual"):
         authorize_participant(connection, room_id, member, operation, payload)
         return
-    if not run:
+    if not run or not hashed:
         raise PermissionError("需要房主或本成员的有效凭据；没有凭据只能阅读")
     actor = write_actor(operation, payload)
     work_seconds = execution_seconds(connection, room_id)

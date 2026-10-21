@@ -307,7 +307,8 @@ class DiscussionTests(unittest.TestCase):
         second = self.request("/api/rooms", {"title": "频道乙"})[1]
         third = self.request("/api/rooms", {"title": "频道丙"})[1]
         path = f"/api/rooms/{third['id']}/move"
-        self.assertEqual(self.request(path, {"actor": "Claude", "before_id": self.room["id"]})[0], 403)
+        # Ordering needs no room credential; the declared actor rule still applies.
+        self.assertEqual(self.request(path, {"actor": "Claude", "before_id": self.room["id"]})[0], 400)
         self.assertEqual(self.request(path, {"actor": "用户", "before_id": "missing"})[0], 400)
         self.assertEqual(self.request(path, {"actor": "用户", "before_id": self.room["id"]})[0], 200)
         base = f"/api/rooms/{self.room['id']}"
