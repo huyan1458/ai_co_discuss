@@ -16,6 +16,14 @@ const value = (key) => view.value.fields[field_id(key)] ?? "";
 const write = (key, next) => bridge.write_field(field_id(key), next);
 
 const automatic = computed(() => value("mode") === "automatic");
+/** Free collaboration: the user remote-controls one local AI; no host, rounds or limits. */
+const free = computed(() => value("mode") === "free");
+/** Both automatic discussions and free rooms run only local software through the launcher. */
+const local = computed(() => automatic.value || free.value);
+const MODES = [{ value: "automatic", icon: "i-lucide-zap", title: "全自动讨论", text: "本机服务按安排唤醒本地 AI" },
+  { value: "manual", icon: "i-lucide-copy", title: "手动复制冷启动", text: "支持在线 AI，由你或定时任务触发" },
+  { value: "free", icon: "i-lucide-message-circle", title: "自由协作", text: "在网页遥控一个本地 AI 干活" }];
+const current_mode = computed(() => free.value ? "free" : automatic.value ? "automatic" : "manual");
 const selected = computed(() => view.value.experts[EXPERT_CONTAINER] || {});
 const selected_names = computed(() => experts.filter((name) => selected.value[name]));
 const library_open = ref(false), library_trigger = ref(null);
@@ -27,7 +35,8 @@ const launch_ready = (name) => {
   const profile = view.value.launch.profiles[name] || {};
   return Boolean(profile.adapter && (profile.adapter === "antigravity" ? profile.ipc_directory : profile.executable));
 };
-const launching = computed(() => automatic.value && view.value.launch.available && view.value.launch.create);
+const launching = computed(() => free.value ? view.value.launch.available : automatic.value && view.value.launch.available && view.value.launch.create);
+const free_ready = computed(() => selected_names.value.length === 1 && launch_ready(selected_names.value[0]) && view.value.launch.available);
 const launch_open = ref(false);
 watch(() => [launching.value, launch_names.value.every(launch_ready), view.value.launch.error], ([on, ready, error]) => {
   if (on && (!ready || error)) launch_open.value = true;
@@ -55,8 +64,8 @@ function set_expert_mode(name, mode) {
 /** Explain each participant card from the current mode and local launch configuration. */
 function expert_status(name) {
   const mode = selected.value[name];
-  if (automatic.value && !bridge.launch_clients[name]) return { text: "仅在线只读", tone: "muted" };
-  if (automatic.value && view.value.launch.available) {
+  if (local.value && !bridge.launch_clients[name]) return { text: "仅在线只读", tone: "muted" };
+  if (local.value && view.value.launch.available) {
     const client = bridge.launch_clients[name]?.find((item) => item.value === view.value.launch.profiles[name]?.adapter);
     return launch_ready(name) ? { text: `本机 ${client?.label || 'AI'}`, tone: "ready" } : { text: "尚未配置本机软件", tone: "warn" };
   }
@@ -66,8 +75,10 @@ function expert_status(name) {
 
 /** Admit one library role without toggling an existing participant. */
 function add_expert(name) {
-  if (selected.value[name] || (automatic.value && !bridge.launch_clients[name])) return;
-  set_expert_mode(name, automatic.value || bridge.launch_clients[name] ? "cli" : "online");
+  if (selected.value[name] || (local.value && !bridge.launch_clients[name])) return;
+  // A free room has exactly one member in this version: choosing another replaces it.
+  if (free.value) for (const other of selected_names.value) bridge.write_expert(EXPERT_CONTAINER, other, "");
+  set_expert_mode(name, local.value || bridge.launch_clients[name] ? "cli" : "online");
   library_open.value = false;
 }
 
@@ -93,6 +104,7 @@ const limit_rule = computed(() => {
 
 const summary = computed(() => {
   const names = Object.keys(selected.value);
+  if (free.value) return [names.length ? `遥控 ${names.join("、")}` : "尚未选择 AI", "自由协作", "无主持人与轮次"].join(" · ");
   const rounds = value("limit-max_rounds"), minutes = value("limit-max_minutes");
   const limits = [rounds && Number(rounds) ? `${rounds} 轮` : "不限轮次", minutes && Number(minutes) ? format_duration(Number(minutes)) : "不限时长"].join(" / ");
   return [host.value ? `${bridge.display_name(host.value)} 主持` : "尚未选择主持人", names.length ? `${names.join("、")} 参与` : "尚未选择专家",
@@ -115,14 +127,14 @@ const summary = computed(() => {
         <div class="create-choice-group">
         <h4>推进方式</h4>
         <div class="create-modes" role="radiogroup" aria-label="讨论推进方式">
-          <button v-for="option in [{ value: 'automatic', icon: 'i-lucide-zap', title: '全自动讨论', text: '本机服务按安排唤醒本地 AI' }, { value: 'manual', icon: 'i-lucide-copy', title: '手动复制冷启动', text: '支持在线 AI，由你或定时任务触发' }]" :key="option.value" type="button" role="radio" class="create-mode" :class="{ 'is-selected': (automatic ? 'automatic' : 'manual') === option.value }" :aria-checked="(automatic ? 'automatic' : 'manual') === option.value" @click="choose_mode(option.value)">
+          <button v-for="option in MODES" :key="option.value" type="button" role="radio" class="create-mode" :class="{ 'is-selected': current_mode === option.value }" :aria-checked="current_mode === option.value" @click="choose_mode(option.value)">
             <UIcon :name="option.icon" /><span class="create-mode-copy"><strong>{{ option.title }}</strong><small>{{ option.text }}</small></span>
           </button>
         </div>
         </div>
         <div class="create-choice-group">
         <div class="create-expert-heading">
-          <h4>参与的 AI <span>{{ selected_names.length }}</span></h4>
+          <h4>{{ free ? '要遥控的 AI' : '参与的 AI' }} <span>{{ selected_names.length }}</span></h4>
           <UPopover v-model:open="library_open" :content="{ align: 'end', sideOffset: 8, collisionPadding: 12 }"
             :ui="{ content: 'create-role-library-popover' }">
             <button ref="library_trigger" type="button" class="create-library-trigger"><UIcon name="i-lucide-plus" />邀请 AI</button>
@@ -133,8 +145,8 @@ const summary = computed(() => {
                   <li v-for="name in experts" :key="name">
                     <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="sm" class="channel-avatar" :class="bridge.identities[name]?.style" />
                     <span class="create-library-description"><strong>{{ name }}</strong><small>{{ expert_status(name).text }}</small></span>
-                    <button type="button" :disabled="Boolean(selected[name]) || (automatic && !bridge.launch_clients[name])"
-                      :aria-label="selected[name] ? `${name} 已加入讨论` : `将 ${name} 加入讨论`" @click="add_expert(name)">{{ selected[name] ? '已加入' : automatic && !bridge.launch_clients[name] ? '仅手动接入' : '加入讨论' }}</button>
+                    <button type="button" :disabled="Boolean(selected[name]) || (local && !bridge.launch_clients[name])"
+                      :aria-label="selected[name] ? `${name} 已加入` : `将 ${name} 加入`" @click="add_expert(name)">{{ selected[name] ? '已加入' : local && !bridge.launch_clients[name] ? '仅手动接入' : free ? '选择' : '加入讨论' }}</button>
                   </li>
                 </ul>
               </div>
@@ -142,11 +154,12 @@ const summary = computed(() => {
           </UPopover>
         </div>
         <div v-if="selected_names.length" class="create-experts" role="group" aria-label="参与的 AI">
-          <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :automatic="automatic"
+          <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :automatic="local"
             :status="expert_status(name)" @remove="remove_expert(name)" @mode="set_expert_mode(name, $event)" />
         </div>
-        <p v-else class="create-experts-empty">点击“邀请 AI”，选择本场讨论的参与者</p>
-        <div class="create-host-setting">
+        <p v-else class="create-experts-empty">{{ free ? '点击“邀请 AI”，选择一位本地 AI；之后在网页发消息即交给它处理' : '点击“邀请 AI”，选择本场讨论的参与者' }}</p>
+        <p v-if="free" class="fine-print create-hint">无需主持人：你的每条消息都会交给这位 AI，它在自己的会话里工作并回到频道回复；随时可以停止。</p>
+        <div v-else class="create-host-setting">
           <div class="create-host">
             <span class="create-label">AI 主持人</span>
             <span v-if="!host_options.length" class="fine-print create-host-empty">先选择一位本地读写的专家</span>
@@ -159,7 +172,7 @@ const summary = computed(() => {
         </div>
       </section>
 
-      <section class="create-section">
+      <section v-if="!free" class="create-section">
         <h3><span>3</span>讨论多久</h3>
         <LimitPicker ref="limit_picker" :rounds="Number(value('limit-max_rounds'))" :minutes="Number(value('limit-max_minutes'))"
           @update:rounds="write('limit-max_rounds', String($event))" @update:minutes="write('limit-max_minutes', String($event))" />
@@ -177,14 +190,15 @@ const summary = computed(() => {
         <p class="create-limit-rule" aria-live="polite"><UIcon name="i-lucide-flag" />{{ limit_rule }}</p>
       </section>
 
-      <section v-if="automatic" class="create-section">
-        <h3><span>4</span>启动</h3>
+      <section v-if="local" class="create-section">
+        <h3><span>{{ free ? 3 : 4 }}</span>{{ free ? '连接本机' : '启动' }}</h3>
+        <p v-if="free && !view.launch.available" role="alert" class="fine-print create-hint">自由协作需要本机服务：请在运行 AI 的电脑打开本机网站，或先运行连接命令。</p>
         <template v-if="view.launch.available">
-          <UCheckbox :model-value="view.launch.create" label="创建后立即启动 AI" description="由本机服务创建会话并交付首个主持任务；不勾选则只建房，稍后在「接入」页启动。" @update:model-value="bridge.write_launch('create', '', $event)" />
-          <template v-if="view.launch.create">
+          <UCheckbox v-if="!free" :model-value="view.launch.create" label="创建后立即启动 AI" description="由本机服务创建会话并交付首个主持任务；不勾选则只建房，稍后在「接入」页启动。" @update:model-value="bridge.write_launch('create', '', $event)" />
+          <template v-if="free || view.launch.create">
             <div class="form-two-columns">
               <UFormField label="项目目录（可选）" help="要一起查看的项目；留空时 AI 只在讨论私有目录工作"><UInput :model-value="view.launch.workspace.cwd || ''" placeholder="已有目录的完整路径" class="w-full" @update:model-value="bridge.write_launch('workspace', 'cwd', $event)" /></UFormField>
-              <UFormField label="项目文件" help="默认只读；可写允许 CLI 专家按议题修改项目文件，仅本次有效"><USelect :model-value="view.launch.workspace.project_access || 'read'" :items="ACCESS_ITEMS" class="w-full" @update:model-value="bridge.write_launch('workspace', 'project_access', $event)" /></UFormField>
+              <UFormField label="项目文件" :help="free ? '默认只读；要让 AI 改代码请选可写，仅本房间有效' : '默认只读；可写允许 CLI 专家按议题修改项目文件，仅本次有效'"><USelect :model-value="view.launch.workspace.project_access || 'read'" :items="ACCESS_ITEMS" class="w-full" @update:model-value="bridge.write_launch('workspace', 'project_access', $event)" /></UFormField>
             </div>
             <ul class="create-launch-list">
               <li v-for="name in launch_names" :key="name"><UIcon :name="launch_ready(name) ? 'i-lucide-circle-check' : 'i-lucide-circle-alert'" :class="launch_ready(name) ? 'is-ready' : 'is-warn'" /><strong>{{ name }}</strong><span>{{ bridge.launch_summary(name).client }} · {{ bridge.launch_summary(name).session }} · {{ bridge.launch_summary(name).access }} · {{ bridge.launch_summary(name).cwd }}</span></li>
@@ -195,7 +209,7 @@ const summary = computed(() => {
             </UCollapsible>
           </template>
         </template>
-        <LaunchSettings v-else :participants="launch_names" :workspace="false" :model-selection="false" />
+        <LaunchSettings v-else-if="!free" :participants="launch_names" :workspace="false" :model-selection="false" />
       </section>
     </form>
     <footer class="create-footer">
@@ -203,7 +217,7 @@ const summary = computed(() => {
       <div class="create-footer-row">
         <span class="create-summary" :title="summary">{{ summary }}</span>
         <UButton label="取消" color="neutral" variant="ghost" @click="emit('cancel')" />
-        <UButton type="submit" form="create-discussion-form" class="channel-primary-button" :icon="launching ? 'i-lucide-play' : 'i-lucide-plus'" :label="launching ? '创建并启动讨论' : '创建讨论'" :disabled="!host" :loading="pending === 'create'" />
+        <UButton type="submit" form="create-discussion-form" class="channel-primary-button" :icon="launching ? 'i-lucide-play' : 'i-lucide-plus'" :label="free ? '创建并连接' : launching ? '创建并启动讨论' : '创建讨论'" :disabled="free ? !free_ready : !host" :loading="pending === 'create'" />
       </div>
     </footer>
   </div>
@@ -220,7 +234,7 @@ const summary = computed(() => {
 .create-choice-group { display: flex; flex-direction: column; gap: 12px; }
 .create-choice-group + .create-choice-group { margin-top: 8px; }
 .create-choice-group h4 { margin: 0; color: var(--ui-text-toned); font-size: 12px; font-weight: 500; }
-.create-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.create-modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .create-mode { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; text-align: left; background: color-mix(in srgb, var(--ui-bg-elevated) 35%, transparent); color: var(--ui-text-muted); transition: border-color .12s, background .12s; }
 .create-mode:hover { border-color: var(--ui-border-accented); }
 .create-mode-copy { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; }

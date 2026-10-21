@@ -133,6 +133,16 @@ codiscuss floor view $room
 
 `--after` 与 `--page` 互斥；每次最多 20 条，`has_more` 表示还有内容。过滤后的游标仅代表该过滤范围，不能作为全部材料的已读截止。阶段、安排和发言权需单独读取。
 
+## 自由协作回答
+
+自由房间的成员回答使用 `--kind chat` 并带本次执行编号：
+
+```sh
+codiscuss message post ROOM --as Claude --kind chat --execution 执行编号 --body-file 草稿.md --submission-id 新编号 --access-file 成员凭证.json
+```
+
+执行编号与待处理的消息编号写在任务文件中；先用 `message list ROOM --after 已读编号` 读取新消息。执行已被打断或过期时服务端返回 409，此时保留草稿并结束，不要去掉 `--execution` 改作普通发言（缺少执行编号会被拒绝）。`--execution` 只能与 `chat` 一起使用，不能与 `--turn` 同时出现。
+
 ## 写入核对与错误处理
 
 新房间、安排或消息使用新 `submission_id`，同一次重试沿用原编号、原文、身份和关联。编号允许 8–100 位字母、数字、下划线和连字符，UUID 可用。先保存编号与原文再发送；结果不明时查询：

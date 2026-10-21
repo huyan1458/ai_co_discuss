@@ -10,6 +10,7 @@ import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { atomic_json } from './discussion_adapters.mjs';
 import { DiscussionRunner, DiscussionStore, acquire_lock, api, load_config, pause_if_running, service_drafts, validate_config } from './discussion_runner.mjs';
+import { FreeRoomRunner } from './free_runner.mjs';
 
 const POLL_MS = 2000;
 const START_WAIT_MS = 5000;
@@ -188,7 +189,7 @@ class RoomWorker {
 
 /** Keep workers aligned with the registry and tick each one per poll. */
 export class DiscussionService {
-  constructor(home, create_runner = (config, store) => new DiscussionRunner(config, store), log = () => {}) {
+  constructor(home, create_runner = (config, store) => config.mode === 'free' ? new FreeRoomRunner(config, store) : new DiscussionRunner(config, store), log = () => {}) {
     this.home = home;
     this.create_runner = create_runner;
     this.log = log;

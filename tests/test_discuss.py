@@ -12,6 +12,7 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from backend.server import DiscussionServer, init_database
 from runner import discuss
@@ -130,6 +131,32 @@ class CliTests(unittest.TestCase):
         floor = self.cli("floor", "view", self.room)
         return self.cli("floor", "take", self.room, "--as", actor or speaker,
                         "--speaker", speaker, "--revision", floor["revision"])
+
+    def test_free_room_member_answers_through_its_execution(self):
+        """A member credential file and execution id are enough; reposting without them is refused."""
+        if self.external:
+            self.skipTest("Free rooms exist only on the Python backend in P1")
+        owner, member = uuid.uuid4().hex, uuid.uuid4().hex
+        def call(path, payload, token):
+            request = Request(self.base + path, data=json.dumps(payload).encode(),
+                              headers={"Content-Type": "application/json", "X-Discussion-Token": token})
+            with urlopen(request, timeout=10) as response:
+                return json.loads(response.read())
+        room = call("/api/rooms", {"title": "自由", "goal": "x", "mode": "free",
+                                   "members": [{"name": "Claude", "token": member}]}, owner)
+        call(f"/api/rooms/{room['id']}/messages", {"author": "用户", "text": "请处理", "submission_id": uuid.uuid4().hex}, owner)
+        execution = call(f"/api/rooms/{room['id']}/executions",
+                         {"member_id": room["free"]["members"][0]["id"], "client_id": uuid.uuid4().hex}, owner)
+        access = Path(self.directory.name) / f"member-{uuid.uuid4().hex}.json"
+        access.write_text(json.dumps({"site": self.base, "room": room["id"], "token": member}), encoding="utf-8")
+        args = ["message", "post", room["id"], "--as", "Claude", "--kind", "chat", "--body", "已完成",
+                "--access-file", access]
+        self.assertIn("--execution", str(self.rejected(["message", "post", room["id"], "--as", "Claude", "--body", "x",
+                                                        "--execution", 1, "--submission-id", str(uuid.uuid4())])))
+        saved = self.cli(*args, "--execution", execution["id"], "--submission-id", str(uuid.uuid4()))
+        self.assertEqual(saved["message"]["kind"], "chat")
+        self.rejected(args + ["--submission-id", str(uuid.uuid4())], code=1)
+        self.rejected(args + ["--execution", execution["id"], "--submission-id", str(uuid.uuid4())], code=1)
 
     def test_access_file_is_room_scoped_and_not_printed_in_preview(self):
         """A private capability is usable only for its configured site and room."""

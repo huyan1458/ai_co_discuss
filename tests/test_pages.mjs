@@ -610,3 +610,14 @@ test("Pages binds D1 directly and has no external Worker service dependency", as
   assert.match(scripts.deploy, /npm run build && wrangler pages deploy/);
   assert.equal(scripts["deploy:pages"], "npm run deploy");
 });
+
+test('Worker refuses free rooms until it implements owner and member credentials', async t => {
+  const f = await worker_fixture(t);
+  const refused = await f.request('', { title: '自由单聊', goal: 'x', mode: 'free', submission_id: 'free-worker-1',
+    members: [{ name: 'Claude', adapter: 'claude', token: 'member-credential'.repeat(3) }] });
+  assert.equal(refused.status, 400);
+  assert.match(refused.body.error, /自由协作/);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM rooms').get().count, 0);
+  assert.equal((await f.request('', { title: '讨论', goal: 'x', mode: 'other' })).status, 400);
+  assert.equal((await f.request('', { title: '讨论', goal: 'x', mode: 'brainstorm' })).status, 201);
+});

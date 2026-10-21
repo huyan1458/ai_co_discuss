@@ -163,10 +163,19 @@ BEGIN
         revision=revision+1 WHERE room_id=NEW.room_id
         AND NOT EXISTS (SELECT 1 FROM discussion_turns WHERE room_id=NEW.room_id AND status IN ('pending','notified') AND expert=OLD.host);
 END;
-CREATE TRIGGER IF NOT EXISTS require_message_floor BEFORE INSERT ON messages
+-- Free collaboration rooms. Rooms without a row are brainstorm rooms and keep every rule below.
+CREATE TABLE IF NOT EXISTS room_modes (
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+    mode TEXT NOT NULL CHECK(mode IN ('free','brainstorm')),
+    control_hash TEXT NOT NULL DEFAULT ''
+);
+-- Replaced on every start so existing databases drop the floor rule for free rooms.
+DROP TRIGGER IF EXISTS require_message_floor;
+CREATE TRIGGER require_message_floor BEFORE INSERT ON messages
 WHEN NEW.author<>'用户'
     AND NOT EXISTS (SELECT 1 FROM messages WHERE room_id=NEW.room_id AND submission_id=NEW.submission_id)
     AND NOT EXISTS (SELECT 1 FROM room_floor WHERE room_id=NEW.room_id AND holder=NEW.author)
+    AND NOT EXISTS (SELECT 1 FROM room_modes WHERE room_id=NEW.room_id AND mode='free')
 BEGIN
     SELECT RAISE(ABORT, 'floor_required');
 END;
@@ -489,3 +498,46 @@ BEGIN
     UPDATE discussion_pauses SET paused_seconds=paused_seconds+MAX(0,CAST(strftime('%s','now') AS INTEGER)-paused_at),paused_at=0
         WHERE room_id=NEW.room_id AND paused_at>0;
 END;
+-- Free rooms: members act with their own credential; each @ of a member is a durable request.
+CREATE TABLE IF NOT EXISTS room_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    adapter TEXT NOT NULL DEFAULT '',
+    role TEXT NOT NULL DEFAULT 'member' CHECK(role IN ('member','host')),
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','away','removed')),
+    token_hash TEXT NOT NULL,
+    read_until INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS member_name ON room_members(room_id,name) WHERE status<>'removed';
+CREATE TABLE IF NOT EXISTS member_executions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    member_id INTEGER NOT NULL REFERENCES room_members(id) ON DELETE CASCADE,
+    client_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'dispatched'
+        CHECK(status IN ('dispatched','started','completed','cancelled','failed')),
+    session_id TEXT NOT NULL DEFAULT '',
+    lease_until INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    finished_at INTEGER NOT NULL DEFAULT 0,
+    result TEXT NOT NULL DEFAULT '',
+    UNIQUE(room_id,client_id)
+);
+-- One live execution per member: different members may run in parallel, one session never twice.
+CREATE UNIQUE INDEX IF NOT EXISTS one_member_execution ON member_executions(member_id)
+    WHERE status IN ('dispatched','started');
+CREATE TABLE IF NOT EXISTS member_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    member_id INTEGER NOT NULL REFERENCES room_members(id) ON DELETE CASCADE,
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending','delivering','completed','cancelled','failed')),
+    execution_id INTEGER REFERENCES member_executions(id),
+    answer_id INTEGER REFERENCES messages(id),
+    created_at INTEGER NOT NULL,
+    UNIQUE(message_id,member_id)
+);
+CREATE INDEX IF NOT EXISTS member_requests_open ON member_requests(member_id,status);

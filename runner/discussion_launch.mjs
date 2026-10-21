@@ -113,6 +113,12 @@ function launch_input(input) {
   if (value.project_access && !['read', 'write'].includes(value.project_access)) throw new Error('project_access 只能为 read 或 write');
   if (value.room_id && !/^[A-Za-z0-9_-]+$/.test(value.room_id)) throw new Error('房间编号无效');
   if (!value.room_id && !value.room?.submission_id) throw new Error('新房间须提供 room.submission_id；重试沿用原编号');
+  if (value.room?.mode === 'free') {
+    // P1: a free room is launched once, at creation, from the web page.
+    if (value.entry !== 'web' || value.room_id) throw new Error('自由协作房间目前只能在网页创建时启动');
+    const members = value.room.members;
+    if (!Array.isArray(members) || members.length !== 1 || !CLIENTS[members[0]]) throw new Error('自由协作房间须选择 1 位支持自动接入的 AI 成员');
+  }
   if (value.access_file) {
     const access = JSON.parse(readFileSync(resolve(value.access_file), 'utf8'));
     if (access.site?.replace(/\/$/, '') !== value.site || access.room !== value.room_id) throw new Error('access_file 与本次站点或房间不符');
@@ -123,6 +129,7 @@ function launch_input(input) {
 
 /** Merge machine defaults and explicit room overrides, preserving the selected participants. */
 function launch_config(home, input, room, directory, options) {
+  if (room.mode === 'free') return free_launch_config(home, input, room, directory, options);
   if (!CLIENTS[room.host]) throw new Error('请选择支持全自动讨论的 AI 主持人');
   if (!room.experts || room.experts[room.host] !== 'cli' || !CLIENTS[room.host]) throw new Error('请将 AI 主持人的参与方式设为本地读写');
   const online = Object.entries(room.experts).filter(([, mode]) => mode !== 'cli').map(([name]) => name);
@@ -130,22 +137,37 @@ function launch_config(home, input, room, directory, options) {
   const defaults = options.defaults || launch_settings(home).participants;
   const participants = {};
   for (const name of new Set([room.host, ...Object.keys(room.experts)])) {
-    const profile = { ...defaults[name], ...input.participants?.[name] };
-    for (const field of ['cwd', 'model', 'effort', 'project_name', 'project_id', 'project_access']) if (profile[field] === '') delete profile[field];
-    validate_profile(name, profile, true);
-    if (!CLIENTS[name]?.includes(profile.adapter)) throw new Error(`请配置 ${name} 的 CLI / App 客户端`);
-    if (profile.adapter !== 'antigravity' && (!existsSync(profile.executable || '') || !statSync(profile.executable).isFile()
-      || (process.platform === 'win32' && !/\.exe$/i.test(profile.executable)))) throw new Error(`${name}：请指定实际原生可执行文件，Windows 使用 .exe`);
-    const cwd = profile.cwd || input.cwd;
-    if (cwd && (!existsSync(cwd) || !statSync(cwd).isDirectory())) throw new Error(`${name}：工作目录不存在或不是文件夹，请核对本次目录配置`);
-    if (input.entry === 'conversation' && name === room.host) profile.session_id = input.current_session_id;
-    // agy runs only in sessions this tool creates, so its native discussion project always applies.
-    if (profile.adapter === 'antigravity_cli' && profile.session_id) throw new Error(`${name}：agy 不能绑定已有会话或从当前 agy 对话主持全自动讨论；请从网页或其他软件发起，agy 会由讨论服务新建会话`);
-    participants[name] = profile;
+    participants[name] = participant_profile(name, defaults, input, name === room.host);
   }
   return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, participants,
     cwd: input.cwd, discussion_project: input.discussion_project, project_access: input.project_access || undefined,
     data_directory: join(directory, 'runtime'), draft_directory: service_drafts(home, join(directory, 'runtime')) }, directory);
+}
+
+/** Free rooms add one private credential per member, kept with the room configuration for retries. */
+function free_launch_config(home, input, room, directory, options) {
+  const defaults = options.defaults || launch_settings(home).participants;
+  const participants = Object.fromEntries(room.members.map(name => [name, participant_profile(name, defaults, input, false)]));
+  const members = Object.fromEntries(room.members.map(name => [name, { token: options.members?.[name]?.token || `${randomUUID()}${randomUUID()}` }]));
+  return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, mode: 'free', participants, members,
+    cwd: input.cwd, project_access: input.project_access || undefined,
+    data_directory: join(directory, 'runtime'), draft_directory: service_drafts(home, join(directory, 'runtime')) }, directory);
+}
+
+/** Merge one participant's machine defaults with this launch's overrides and check its software. */
+function participant_profile(name, defaults, input, current_host) {
+  const profile = { ...defaults[name], ...input.participants?.[name] };
+  for (const field of ['cwd', 'model', 'effort', 'project_name', 'project_id', 'project_access']) if (profile[field] === '') delete profile[field];
+  validate_profile(name, profile, true);
+  if (!CLIENTS[name]?.includes(profile.adapter)) throw new Error(`请配置 ${name} 的 CLI / App 客户端`);
+  if (profile.adapter !== 'antigravity' && (!existsSync(profile.executable || '') || !statSync(profile.executable).isFile()
+    || (process.platform === 'win32' && !/\.exe$/i.test(profile.executable)))) throw new Error(`${name}：请指定实际原生可执行文件，Windows 使用 .exe`);
+  const cwd = profile.cwd || input.cwd;
+  if (cwd && (!existsSync(cwd) || !statSync(cwd).isDirectory())) throw new Error(`${name}：工作目录不存在或不是文件夹，请核对本次目录配置`);
+  if (input.entry === 'conversation' && current_host) profile.session_id = input.current_session_id;
+  // agy runs only in sessions this tool creates, so its native discussion project always applies.
+  if (profile.adapter === 'antigravity_cli' && profile.session_id) throw new Error(`${name}：agy 不能绑定已有会话或从当前 agy 对话主持全自动讨论；请从网页或其他软件发起，agy 会由讨论服务新建会话`);
+  return profile;
 }
 
 /** Stable signatures make changed retry requests explicit without putting credentials in receipts. */
@@ -229,7 +251,7 @@ async function current_host_task(config, record, persist, room) {
 async function launch_receipt(config, record, config_path) {
   const room = await api(config, '');
   return { entry: record.entry, room, url: `${config.site}/?room=${config.room}`, config_path,
-    status: room.runtime.status, current_task: record.current_task || null };
+    status: room.mode === 'free' ? 'free' : room.runtime.status, current_task: record.current_task || null };
 }
 
 /** Read a saved launch without creating state during validation or preview. */
@@ -367,7 +389,7 @@ async function prepare_launch(home, input, directory, options = {}) {
   if (room.runtime?.protected && !input.token && !previous) throw new Error('已有房间需要原接入配置的 access_file');
   if (!previous && room.runtime && room.runtime.status !== 'ready') throw new Error('房间已启动过；请沿用原配置核对或从原进度看板明确继续');
   const config = previous?.request_signature ? { ...structuredClone(saved), token }
-    : launch_config(home, input, room, directory, { token, defaults: saved?.participants || legacy?.participants });
+    : launch_config(home, input, room, directory, { token, defaults: saved?.participants || legacy?.participants, members: saved?.members });
   config.draft_directory = service_drafts(home, config.directory);
   if (previous?.request_signature && !previous.finished) validate_config(config, directory);
   const minutes = previous?.minutes ?? legacy?.minutes ?? launch_minutes(input, room);
@@ -406,7 +428,10 @@ async function perform_launch(home, context, options) {
   const progress = { stage: 'unconfirmed' };
   try {
     let room = context.room;
-    if (!input.room_id) room = await site_request(input.site, '/api/rooms', config.token, { ...input.room, runtime_mode: 'automatic' });
+    const free = config.mode === 'free';
+    if (!input.room_id) room = await site_request(input.site, '/api/rooms', config.token, free
+      ? { ...input.room, members: input.room.members.map(name => ({ name, adapter: config.participants[name].adapter, token: config.members[name].token })) }
+      : { ...input.room, runtime_mode: 'automatic' });
     config.room = room.id;
     await verify_control(config, room);
     Object.assign(progress, { stage: 'created', room_id: room.id });
@@ -423,7 +448,8 @@ async function perform_launch(home, context, options) {
     atomic_json(config_path, config);
     const service = await (options.start_service || start_service)(home);
     if (!service?.running) throw new Error('讨论服务未就绪，未开始本次讨论');
-    await enable_run(config, record, persist, minutes);
+    // Free rooms have no discussion run: registering the room is what lets the service deliver requests.
+    if (!free) await enable_run(config, record, persist, minutes);
     progress.stage = 'started';
     if (input.entry === 'conversation') record.current_task = await current_host_task(config, record, persist, room);
     register_room(home, config_path);

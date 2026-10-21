@@ -277,6 +277,10 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 .pb-timing-stages { display: flex; flex-wrap: wrap; gap: 2px 10px; color: var(--ui-text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .pb-note { margin: 8px 0 0; color: var(--ui-text-dimmed); font-size: 11px; }
 .channel-rail-empty { margin: 20px 16px 0; color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.7; }
+.channel-free-members { display: grid; gap: 8px; margin: 16px 16px 0; }
+.channel-free-members li { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.channel-free-members strong { color: var(--ui-text-highlighted); font-weight: 600; }
+.channel-free-members span { color: var(--ui-text-muted); overflow-wrap: anywhere; }
 .progress-drawer { max-width: min(420px, 100vw); }
 .progress-drawer-body { display: flex; flex-direction: column; padding: 0; scrollbar-gutter: stable; }
 @media (max-width: 700px) {

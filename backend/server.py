@@ -19,6 +19,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit
 
+from .free_room import (after_free_message, authorize_free_write, check_answer, execution_action, free_view, inbox,
+                        interrupt_member, member_values, reserve_execution, room_mode, save_free_room, view_execution)
 from .runtime import (authorize_write, begin_write, configure_runtime, event_action,
                      LIMIT_DEFAULTS, LIMITS_SQL, limit_values, limits_view, require_within_limits,
                      list_events, require_control, runtime_view, token_hash)
@@ -73,6 +75,12 @@ ROOM_BACKUP_QUERIES = {
     **{table: f"SELECT * FROM {table} WHERE message_id IN (SELECT id FROM messages WHERE room_id=?) ORDER BY message_id"
        for table in ("message_details", "message_summaries", "message_timings")},
 }
+# Only free rooms carry these tables; credential hashes are never exported.
+FREE_BACKUP_QUERIES = {
+    "room_modes": "SELECT room_id,mode FROM room_modes WHERE room_id=?",
+    "room_members": "SELECT id,room_id,name,adapter,role,status,read_until,created_at FROM room_members WHERE room_id=? ORDER BY id",
+    "member_requests": "SELECT * FROM member_requests WHERE room_id=? ORDER BY id",
+}
 MESSAGE_QUERY = """SELECT messages.*, COALESCE(details.kind,'opinion') AS kind,
 COALESCE(details.submitted_by, CASE WHEN messages.source IN ('cli','url','user')
 THEN messages.author ELSE '用户' END) AS submitted_by, details.turn_id,
@@ -93,8 +101,9 @@ def room_backup(connection, room_id):
         A versioned backup containing original rows and their relationships.
     """
     connection.execute("BEGIN")
+    queries = {**ROOM_BACKUP_QUERIES, **(FREE_BACKUP_QUERIES if room_mode(connection, room_id) == "free" else {})}
     tables = {table: [dict(row) for row in connection.execute(query, (room_id,))]
-              for table, query in ROOM_BACKUP_QUERIES.items()}
+              for table, query in queries.items()}
     if not tables["rooms"]:
         raise LookupError("房间不存在")
     return {"format": "ai-codiscuss-room-backup", "version": 1,
@@ -183,6 +192,11 @@ def require_room(connection, room_id):
     room["floor"] = dict(connection.execute("SELECT holder,next_speaker,revision FROM room_floor WHERE room_id=?", (room_id,)).fetchone())
     room["runtime"] = runtime_view(connection, room_id)
     room["limits"] = limits_view(connection.execute(LIMITS_SQL, (room_id,)).fetchone(), room)
+    room["mode"] = room_mode(connection, room_id)
+    if room["mode"] == "free":
+        # Free rooms have no host hand-off: user messages go straight to the named members.
+        room["held_since"] = 0
+        room["free"] = free_view(connection, room_id)
     return room
 
 
@@ -499,6 +513,8 @@ def manage_room(connection, room_id, action, payload):
 
 def delete_room_records(connection, room_id):
     """Remove a room's dependent records in the caller's transaction."""
+    for table in ("member_requests", "member_executions", "room_members", "room_modes"):
+        connection.execute(f"DELETE FROM {table} WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM message_timings WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)", (room_id,))
     connection.execute("DELETE FROM message_summaries WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)", (room_id,))
     connection.execute("DELETE FROM message_details WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)", (room_id,))
@@ -523,15 +539,25 @@ def creation_request(settings):
 
 def create_room(connection, payload, control_token=""):
     """Create one room per explicit identifier, retaining legacy unkeyed requests."""
+    if payload.get("mode", "brainstorm") not in ("free", "brainstorm"):
+        raise ValueError("房间模式须为 free 或 brainstorm")
+    free = payload.get("mode") == "free"
+    members = member_values(payload.get("members"), PARTICIPANTS) if free else []
+    if free:
+        payload = {**payload, "host": "用户", "phase": "discussing", "experts": {member["name"]: "cli" for member in members}}
     settings = topic_values(payload)
     automatic = payload.get("runtime_mode") == "automatic"
     if payload.get("runtime_mode", "manual") not in ("manual", "automatic") or (automatic and not token_hash(control_token)):
         raise ValueError("自动建房须提供有效的运行模式和控制凭据")
+    if free and (automatic or not token_hash(control_token)):
+        raise ValueError("自由房间须提供房间控制凭据，且不使用讨论运行模式")
     identifier = submission_value(payload["submission_id"]) if "submission_id" in payload else None
     folder_id = payload.get("folder_id")
     if folder_id is not None and not isinstance(folder_id, str):
         raise ValueError("文件夹编号必须是文本或 null")
     request_text = creation_request(settings) + (":automatic" if automatic else "")
+    if free:
+        request_text += ":free:" + json.dumps([[member["name"], member["adapter"]] for member in members], ensure_ascii=False)
     if folder_id is not None:
         request_text += ":folder:" + json.dumps(folder_id, ensure_ascii=False)
     begin_write(connection)
@@ -549,6 +575,8 @@ def create_room(connection, payload, control_token=""):
     if identifier:
         connection.execute("INSERT INTO room_creations (submission_id,room_id,request_text) VALUES (?,?,?)", (identifier, room_id, request_text))
     save_topic_settings(connection, room_id, settings)
+    if free:
+        save_free_room(connection, room_id, control_token, members, utc_now())
     if automatic:
         configure_runtime(connection, room_id, control_token, {"revision": 0, "mode": "automatic"})
     return {**require_room(connection, room_id), "duplicate": False, "submission_id": identifier}
@@ -711,7 +739,7 @@ def message_summary(payload, message):
     if len(summary) > MAX_SUMMARY_LENGTH:
         raise ValueError(f"回答摘要最多 {MAX_SUMMARY_LENGTH} 字")
     summary_by = payload.get("summary_by", message["submitted_by"]) if summary else ""
-    if summary and (message["kind"] != "opinion" or summary_by not in (message["author"], message["submitted_by"])):
+    if summary and (message["kind"] not in ("opinion", "chat") or summary_by not in (message["author"], message["submitted_by"])):
         raise ValueError("摘要仅用于观点，撰写者须为原作者或实际提交者")
     return {"summary": summary, "summary_by": summary_by}
 
@@ -742,11 +770,48 @@ def record_message_timing(connection, message_id, token):
         ON CONFLICT(message_id) DO NOTHING""", (message_id, token_hash(token)))
 
 
-def append_message(connection, room_id, payload, token=""):
+def append_free_message(connection, room, payload, actor):
+    """Append a free-room message: the owner's creates requests, a member's completes its execution."""
+    author, text, submission_id, reply_to = message_values(payload)
+    if actor == "用户" and author != "用户":
+        raise PermissionError("房间控制凭据只能以用户身份发言；成员须使用自己的凭证")
+    room_id = room["id"]
+    expected = {"author": author, "text": text, "reply_to": reply_to, "kind": "chat", "submitted_by": author,
+                "turn_id": None, "source": "user" if author == "用户" else "cli"}
+    expected.update(message_summary(payload, expected))
+    identifiers = attachment_ids(payload)
+    previous = connection.execute(f"{MESSAGE_QUERY} WHERE room_id=? AND submission_id=?", (room_id, submission_id)).fetchone()
+    if previous:
+        previous = message_with_attachments(connection, previous)
+        if (any(previous[key] != expected[key] for key in ("author", "text", "reply_to", "kind", "submitted_by", "summary", "summary_by"))
+                or [item["id"] for item in previous["attachments"]] != identifiers):
+            raise FileExistsError("这个提交编号已被另一条内容使用，请为新发言生成新编号")
+        return {"message": previous, "duplicate": True}
+    if room["archived"]:
+        raise ValueError("频道已存档；恢复后才能继续协作")
+    check_message_references(connection, room_id, expected)
+    check_message_attachments(connection, room_id, author, identifiers)
+    if actor != "用户":
+        check_answer(connection, room_id, actor, payload)
+    cursor = connection.execute("INSERT INTO messages (room_id,author,text,reply_to,source,submission_id,created_at) VALUES (?,?,?,?,?,?,?)",
+                                (room_id, author, text, reply_to, expected["source"], submission_id, utc_now()))
+    connection.execute("INSERT INTO message_details (message_id,kind,submitted_by,turn_id) VALUES (?,?,?,NULL)",
+                       (cursor.lastrowid, "chat", author))
+    connection.execute("INSERT INTO message_summaries (message_id,text,author) VALUES (?,?,?)",
+                       (cursor.lastrowid, expected["summary"], expected["summary_by"]))
+    for position, identifier in enumerate(identifiers):
+        connection.execute("UPDATE attachments SET message_id=?,position=? WHERE id=?", (cursor.lastrowid, position, identifier))
+    after_free_message(connection, room_id, cursor.lastrowid, actor, payload)
+    return {"message": get_message(connection, room_id, cursor.lastrowid), "duplicate": False}
+
+
+def append_message(connection, room_id, payload, token="", free_actor=None):
     """Atomically append an attributed message and complete its scheduled turn."""
     author, text, submission_id, reply_to = message_values(payload)
     begin_write(connection)
     room = require_room(connection, room_id)
+    if room["mode"] == "free":
+        return append_free_message(connection, room, payload, free_actor)
     details = message_details(room, {**payload, "author": author})
     expected = {"author": author, "text": text, "reply_to": reply_to, **details}
     expected.update(message_summary(payload, expected))
@@ -937,7 +1002,7 @@ def message_filters(room_id, params):
         clauses.append("instr(messages.text, ?) > 0")
         values.append(f"@{mention}")
     if "kind" in params:
-        if params["kind"] not in ("opinion", "moderation", "receipt"):
+        if params["kind"] not in ("opinion", "moderation", "receipt", "chat"):
             raise ValueError("发言职责无效")
         clauses.append("COALESCE(details.kind,'opinion')=?")
         values.append(params["kind"])
@@ -1005,7 +1070,7 @@ def state_reading_text(room):
 def message_text(message):
     """Render an original message with its provenance and reply reference."""
     reply = f" · 回复 #{message['reply_to']}" if message["reply_to"] else ""
-    role = {"moderation": "主持发言", "receipt": "运行回执"}.get(message.get("kind"), "专家观点")
+    role = {"moderation": "主持发言", "receipt": "运行回执", "chat": "协作消息"}.get(message.get("kind"), "专家观点")
     summary = f"\n回答摘要（{message['summary_by']}）：\n{message['summary']}\n\n完整正文：\n" if message.get("summary") else "\n"
     attachments = "".join(f"\n附件：{item['file_name']}（{item['size']} 字节；ID: {item['id']}）\n{item['download_url']}"
                           for item in message.get("attachments", []))
@@ -1021,6 +1086,10 @@ def room_text(connection, room_id, params):
                f"当前记录截止 #{room['latest_id']}；共 {room['message_count']} 条；已完成 {room['completed_rounds']} 轮讨论（所有参与专家各发言一次）。"]
     limits = room["limits"]
     content.append(f"讨论上限：{limits['max_rounds'] or '不限'} 轮；总时长 {limits['max_minutes'] or '不限'} 分钟；单次自动执行 {str(limits['execution_minutes']) + ' 分钟' if limits['execution_minutes'] else '不限时长'}；到限 {limits['on_limit']}；收束预留 {limits['summary_minutes']} 分钟（计入总时长）。到限：{limits['reached']}；收束中：{limits['closing']}。")
+    if room["mode"] == "free":
+        members = "；".join(f"{item['name']}（已读至 #{item['read_until']}，待投递 {item['pending']}）" for item in room["free"]["members"])
+        content.append(f"自由协作房间：无发言权、安排与轮次。成员：{members or '无'}。用户的消息点名成员后生成请求；成员回答须带本次执行编号，执行结束、被打断或过期后的回答会被拒绝，不能改作普通发言。")
+        return "\n\n".join(content)
     turn = room["current_turn"]
     floor = room["floor"]
     content.append(f"发言权：{floor['holder'] + ' 持有' if floor['holder'] else '待 ' + floor['next_speaker'] + ' 领取'}；版本 {floor['revision']}。用户本人可随时留言，AI 发言前须领取。")
@@ -1401,11 +1470,19 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             raise LookupError("地址不存在")
         room_id = parts[2]
         token = self.headers.get("X-Discussion-Token", "")
+        free = room_mode(connection, room_id) == "free"
+        if free and parts[3:4] in (["inbox"], ["executions"], ["members"]):
+            return self.handle_free_api(connection, parts, method)
         if parts[3:4] == ["attachments"]:
             return self.handle_attachments(connection, parts, params, method)
         if parts[3:4] in (["runtime"], ["events"]):
+            if free and method == "POST":
+                raise ValueError("自由房间不使用讨论运行控制")
             return self.handle_runtime_api(connection, parts, params, method)
-        if method == "POST":
+        free_actor = None
+        if method == "POST" and free:
+            free_actor = authorize_free_write(connection, room_id, token, parts[3] if len(parts) > 3 else "", self.read_payload())
+        elif method == "POST":
             authorize_write(connection, room_id, token, parts[3] if len(parts) > 3 else "", self.read_payload())
         if parts[3:] == ["backup"] and method == "GET":
             return self.respond(room_backup(connection, room_id))
@@ -1439,7 +1516,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if method == "GET":
                 return self.respond(query_messages(connection, room_id, params))
             payload = self.read_payload()
-            result = append_message(connection, room_id, payload, self.headers.get("X-Discussion-Token", ""))
+            result = append_message(connection, room_id, payload, self.headers.get("X-Discussion-Token", ""), free_actor)
             connection.commit()
             return self.respond(result, 200 if result["duplicate"] else 201)
         if len(parts) == 5 and parts[3] == "messages" and method == "GET":
@@ -1457,7 +1534,13 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if method == "GET":
                 return self.respond(query_attachments(connection, room_id, params))
             metadata = attachment_metadata(params)
-            authorize_write(connection, room_id, self.headers.get("X-Discussion-Token", ""), "attachments", metadata)
+            token = self.headers.get("X-Discussion-Token", "")
+            if room_mode(connection, room_id) == "free":
+                actor = authorize_free_write(connection, room_id, token, "attachments", {"author": metadata["actor"]})
+                if (actor == "用户") != (metadata["actor"] == "用户"):
+                    raise PermissionError("附件上传者须与凭据身份一致")
+            else:
+                authorize_write(connection, room_id, token, "attachments", metadata)
             require_room(connection, room_id)
             length = int(self.headers.get("Content-Length", "-1"))
             if not 0 <= length <= MAX_ATTACHMENT_BYTES:
@@ -1506,6 +1589,25 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = list_events(connection, room_id, token, params.get("after", 0))
         elif len(parts) == 5 and parts[3] == "events" and method == "POST":
             result = event_action(connection, room_id, int(parts[4]), token, self.read_payload())
+        else:
+            raise LookupError("地址不存在")
+        connection.commit()
+        return self.respond(result)
+
+    def handle_free_api(self, connection, parts, method):
+        """Runner inbox, per-member executions and the owner's interrupt for free rooms."""
+        room_id = parts[2]
+        token = self.headers.get("X-Discussion-Token", "")
+        if parts[3:] == ["inbox"] and method == "GET":
+            result = inbox(connection, room_id, token)
+        elif parts[3:] == ["executions"] and method == "POST":
+            result = reserve_execution(connection, room_id, token, self.read_payload())
+        elif len(parts) == 5 and parts[3] == "executions":
+            execution_id = int(parts[4])
+            result = (view_execution(connection, room_id, execution_id, token) if method == "GET"
+                      else execution_action(connection, room_id, execution_id, token, self.read_payload()))
+        elif len(parts) == 6 and parts[3] == "members" and parts[5] == "interrupt" and method == "POST":
+            result = interrupt_member(connection, room_id, int(parts[4]), token)
         else:
             raise LookupError("地址不存在")
         connection.commit()

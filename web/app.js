@@ -562,6 +562,7 @@ function progress_speaker(room) {
 /** Explain an empty transcript using the room's actual progression state. */
 function empty_discussion_message(room) {
   if (room.archived || room.phase === 'concluded') return '讨论已结束，尚未产生发言记录。';
+  if (room.mode === 'free') return `发一条消息，${(room.free?.members || []).map(member => display_name(member.name)).join('、') || 'AI'} 会在自己的会话里接手处理。`;
   if (room.phase === 'paused' || room.runtime?.status === 'paused') return '讨论已暂停。核对暂停原因后，可在进度看板重启或结束。';
   if (room.runtime?.mode === 'automatic') {
     if (room.runtime.status === 'ready') return '讨论尚未启动。请在接入页核对软件配置并启动。';
@@ -752,6 +753,10 @@ function cancel_reply() {
 
 /** Read and validate the current composer before any upload starts. */
 function message_payload() {
+  const text = element("message-input").value.trim();
+  if ([...text].length > MAX_MESSAGE_LENGTH) throw new Error(`留言最多 ${MAX_MESSAGE_LENGTH} 字，原文已保留，请调整后提交`);
+  // Free rooms: the owner always speaks as the user; naming members is the server's job.
+  if (state.room.mode === "free") return { author: "用户", text, reply_to: state.reply_to, kind: "chat", submitted_by: "用户" };
   const mode = element("message-kind").value;
   const payload = { author: mode === "moderation" ? state.room.host : element("author-select").value,
     text: element("message-input").value.trim(), reply_to: state.reply_to, turn_id: state.turn_reply_to,
@@ -1111,6 +1116,11 @@ async function check_limits() {
 
 /** Capture a creation draft before closing its dialog or starting network work. */
 function room_creation_payload(folder_id) {
+  if (element("new-room-mode").value === "free") {
+    const members = Object.entries(read_expert_inputs("new-expert-modes")).filter(([, mode]) => mode === "cli").map(([name]) => name);
+    return { title: element("new-room-title").value, goal: element("new-room-goal").value,
+      user_request: element("new-room-user_request").value, mode: "free", members, folder_id };
+  }
   return { title: element("new-room-title").value, goal: element("new-room-goal").value,
     host: element("new-room-host").value, user_request: element("new-room-user_request").value, background: element("new-room-background").value,
     boundaries: element("new-room-boundaries").value, experts: read_expert_inputs("new-expert-modes"),
@@ -1132,7 +1142,10 @@ async function submit_room(event, folder_id = null) {
   event.preventDefault();
   if (state.directory_pending.has("create-room")) return;
   const payload = room_creation_payload(folder_id);
-  const launching = state.launch.create && payload.runtime_mode === "automatic";
+  const free = payload.mode === "free";
+  // A free room is only useful with its member connected, so it is always created through the local launcher.
+  const launching = free || (state.launch.create && payload.runtime_mode === "automatic");
+  if (free && !state.launch.available) throw new Error("自由协作需要连接本机服务：请在这台电脑打开本机网站，或先运行连接命令");
   const launch_draft = launching ? launch_options() : null;
   const signature = JSON.stringify({ payload, launch_draft });
   const navigation = state.navigation_version;
@@ -1141,7 +1154,7 @@ async function submit_room(event, folder_id = null) {
   let room;
   try {
     const pending = prepare_room_request(signature);
-    const token = payload.runtime_mode === "automatic" ? pending.token : undefined;
+    const token = payload.runtime_mode === "automatic" || free ? pending.token : undefined;
     room = await update_directory({ key: "create-room", label: `「${payload.title}」创建`,
     error_message: launching ? error => `「${payload.title}」${error.message}` : null,
     apply: () => { state.creating_room = payload; }, rollback: () => { state.creating_room = null; },
@@ -1747,12 +1760,20 @@ function update_creation_mode() {
   const names = Object.entries(state.launch.profiles).filter(([name, profile]) =>
     LAUNCH_CLIENTS[name]?.some(client => client.value === profile.adapter)
     && (profile.adapter === "antigravity" ? profile.ipc_directory : profile.executable)).map(([name]) => name);
-  const draft = state.creation_drafts[mode] || { host: names[0] || "", experts: Object.fromEntries(names.map(name => [name, "cli"])) };
+  const draft = state.creation_drafts[mode] || (mode === "free" ? { host: "", experts: names[0] ? { [names[0]]: "cli" } : {} }
+    : { host: names[0] || "", experts: Object.fromEntries(names.map(name => [name, "cli"])) });
   element("new-room-host").value = draft.host;
   render_expert_inputs("new-expert-modes", draft.experts);
   state.creation_mode = mode;
   element("new-room-limit-execution_minutes")?.closest("label")?.toggleAttribute("hidden", mode !== "automatic");
   publish_view();
+}
+
+/** Owner stop for a free room: void the member's live execution and queued requests. */
+async function interrupt_member(member_id) {
+  const room_id = state.room.id;
+  await request_json(`/api/rooms/${room_id}/members/${member_id}/interrupt`, {});
+  if (state.room?.id === room_id) await refresh_room();
 }
 
 /** A completed creation starts the next form with fresh mode defaults. */
@@ -2414,7 +2435,7 @@ async function execute_view_action(name, value) {
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
     choose_runtime, export_runtime, pause_runtime, check_limits, pause_discussion, restart_discussion, force_close, conclude_discussion,
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection: load_launch_settings,
-    load_room_configuration, save_room_configuration,
+    load_room_configuration, save_room_configuration, interrupt_member,
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };
   try {
     await actions[name](value);

@@ -12,6 +12,7 @@ import vm from 'node:vm';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DiscussionRunner, DiscussionStore, load_config, service_drafts, task_files, validate_config } from '../runner/discussion_runner.mjs';
+import { FreeRoomRunner } from '../runner/free_runner.mjs';
 import { assert_shared_home, DiscussionService, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
 import { launch_discussion, room_models } from '../runner/discussion_launch.mjs';
 import { agy_rule, antigravity_project, claude_exit_error, claude_rule_path, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
@@ -1340,4 +1341,125 @@ test('a Claude CLI launched from a hosting Claude session drops host variables a
   assert.deepEqual(env, { PATH: 'bin', CLAUDE_CODE_OAUTH_TOKEN: 'persisted' });
   const plain = { PATH: 'bin', CLAUDE_CODE_OAUTH_TOKEN: 'own' };
   assert.equal(standalone_claude_env(plain, () => { throw new Error('not read'); }), plain);
+});
+
+/** A minimal free-room website: one member, durable executions keyed by client id. */
+async function free_fixture(t) {
+  const directory = mkdtempSync(join(tmpdir(), 'free-room-test-'));
+  const state = { pending: [{ id: 1, message_id: 11 }, { id: 2, message_id: 12 }], executions: [], calls: [], archived: false };
+  const server = createServer(async (request, response) => {
+    let text = ''; for await (const chunk of request) text += chunk;
+    const body = text ? JSON.parse(text) : null;
+    const url = request.url.replace('/api/rooms/room', '');
+    let result;
+    state.calls.push(`${request.method} ${url}${body?.action ? ` ${body.action}` : ''}`);
+    if (url === '/inbox') {
+      result = { archived: state.archived, execution_minutes: 20,
+        members: [{ id: 7, name: 'Claude', pending: state.pending }],
+        executions: state.executions.filter(item => ['dispatched', 'started'].includes(item.status)) };
+    } else if (url === '/executions') {
+      let execution = state.executions.find(item => item.client_id === body.client_id);
+      if (!execution) {
+        execution = { id: state.executions.length + 1, client_id: body.client_id, status: 'dispatched', member: 'Claude',
+          created_at: Math.floor(Date.now() / 1000), read_until: 10, requests: state.pending.map(item => ({ ...item, status: 'delivering' })) };
+        state.executions.push(execution); state.pending = [];
+      }
+      result = execution;
+    } else if (url.startsWith('/executions/')) {
+      const execution = state.executions.find(item => item.id === Number(url.split('/')[2]));
+      if (body?.action === 'fail') execution.status = 'failed';
+      if (body?.action === 'release') { execution.status = 'cancelled'; state.pending = execution.requests; }
+      result = execution;
+    } else result = { title: '自由单聊', mode: 'free' };
+    response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(result));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const store = new DiscussionStore(directory);
+  t.after(async () => { store.close(); await new Promise(resolve => server.close(resolve));
+    rmSync(directory, { recursive: true, force: true }); rmSync(`${directory}-drafts`, { recursive: true, force: true }); });
+  const config = { site: `http://127.0.0.1:${server.address().port}`, room: 'room', token: 'owner-credential'.repeat(3), mode: 'free',
+    directory, project: directory, participants: { Claude: { adapter: 'claude' } }, members: { Claude: { token: 'member-credential'.repeat(3) } } };
+  return { state, store, config };
+}
+
+test('a free room delivers all open requests as one execution with the member credential only', async t => {
+  const { state, store, config } = await free_fixture(t);
+  const delivered = [];
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => { delivered.push(task); return { session_id: 'claude-session', status: 'accepted' }; });
+  await runner.tick();
+  await runner.tick();
+  assert.equal(delivered.length, 1);
+  assert.equal(state.executions.length, 1);
+  const task = JSON.parse(readFileSync(join(config.directory, 'free-1.task.json'), 'utf8'));
+  assert.deepEqual(task.request_messages, [11, 12]);
+  assert.equal(task.read_after, 10);
+  assert.match(delivered[0].prompt, /--execution 1/);
+  const access = JSON.parse(readFileSync(delivered[0].access_path, 'utf8'));
+  assert.equal(access.token, config.members.Claude.token);
+  assert.doesNotMatch(readFileSync(delivered[0].access_path, 'utf8') + readFileSync(join(config.directory, 'free-1.task.json'), 'utf8'), /owner-credential/);
+  assert.equal(store.binding('Claude').session_id, 'claude-session');
+});
+
+test('a free member that exits without answering fails only its own execution', async t => {
+  const { state, store, config } = await free_fixture(t);
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => { setImmediate(() => task.on_exit()); return { status: 'accepted' }; });
+  await runner.tick();
+  await runner.tick();
+  assert.equal(state.executions[0].status, 'failed');
+  assert.ok(state.calls.includes('POST /executions/1 fail'));
+});
+
+test('an interrupted free execution stops only that member and is not redelivered', async t => {
+  const { state, store, config } = await free_fixture(t);
+  const child = Object.assign(new EventEmitter(), { killed: false, kill() { this.killed = true; this.emit('close'); } });
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => { task.on_process(child); return { status: 'accepted' }; });
+  await runner.tick();
+  state.executions[0].status = 'cancelled';
+  await runner.tick();
+  assert.equal(child.killed, true);
+  assert.equal(state.executions.length, 1);
+});
+
+test('proven non-delivery is released and retried, then fails after three attempts', async t => {
+  const { state, store, config } = await free_fixture(t);
+  const runner = new FreeRoomRunner(config, store, async () => { throw Object.assign(new Error('未启动'), { delivery_status: 'not_sent' }); });
+  for (let index = 0; index < 3; index++) await runner.tick();
+  assert.deepEqual(state.executions.map(item => item.status), ['cancelled', 'cancelled', 'failed']);
+});
+
+test('a restart between persisting and invoking never resends the free task', async t => {
+  const { state, store, config } = await free_fixture(t);
+  let calls = 0;
+  const first = new FreeRoomRunner(config, store, async () => { calls++; return { status: 'accepted' }; });
+  await first.tick();
+  first.save('Claude', { status: 'delivering' });
+  await new FreeRoomRunner(config, store, async () => { calls++; return { status: 'accepted' }; }).tick();
+  assert.equal(calls, 1);
+  assert.equal(state.executions[0].status, 'failed');
+});
+
+test('free room configurations require a member credential for every participant', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'free-config-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const config = { site: 'http://127.0.0.1:8765', room: 'room', token: 'owner-credential'.repeat(3), mode: 'free',
+    participants: { Claude: { adapter: 'claude', executable: process.execPath } } };
+  assert.throws(() => validate_config(config, directory), /成员凭证/);
+  assert.equal(validate_config({ ...config, members: { Claude: { token: 'member-credential'.repeat(3) } } }, directory).mode, 'free');
+});
+
+test('a stopped free process reporting late cannot fail the next execution', async t => {
+  const { state, store, config } = await free_fixture(t);
+  const tasks = [];
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => { tasks.push(task); return { status: 'accepted' }; });
+  await runner.tick();
+  state.executions[0].status = 'cancelled';
+  await runner.tick();
+  state.pending = [{ id: 3, message_id: 13 }];
+  await runner.tick();
+  assert.equal(tasks.length, 2);
+  tasks[0].on_failure('Claude 退出码 null');
+  tasks[0].on_exit();
+  await runner.tick();
+  assert.equal(state.executions[1].status, 'dispatched');
+  assert.ok(!state.calls.includes('POST /executions/2 fail'));
 });

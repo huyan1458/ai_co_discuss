@@ -48,6 +48,10 @@ export function validate_config(input, base_directory) {
     if (participant.adapter !== 'antigravity' && !existsSync(participant.executable ?? '')) throw new Error('请指定实际原生可执行文件');
     if (participant.adapter === 'codex' && !participant.source_thread_id && !participant.session_id) throw new Error('Codex 新建入口需要实际来源聊天 ID');
   }
+  if (![undefined, 'free', 'brainstorm'].includes(config.mode)) throw new Error('房间模式只能为 free 或 brainstorm');
+  if (config.mode === 'free' && Object.keys(config.participants).some(name => typeof config.members?.[name]?.token !== 'string' || config.members[name].token.length < 32)) {
+    throw new Error('自由房间须为每位成员保存成员凭证');
+  }
   return { ...config, site: url.origin, project: resolve(config.project), directory: resolve(config.data_directory || join(base_directory, `discussion-${config.room}`)) };
 }
 

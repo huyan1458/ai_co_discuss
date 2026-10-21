@@ -335,6 +335,9 @@ async function replay_room(database, previous, request_text) {
 
 /** Create one room per explicit identifier, atomically with its saved request. */
 async function create_room(database, payload, control_token = "") {
+  // Free rooms need owner/member credential checks this backend does not implement yet; refuse before any write.
+  if (payload.mode === "free") throw new HttpError(400, "线上站点暂不支持自由协作房间，请在本机网站创建");
+  if (!["brainstorm", undefined].includes(payload.mode)) throw new HttpError(400, "房间模式须为 free 或 brainstorm");
   const settings = topic_values(payload);
   const automatic = payload.runtime_mode === "automatic";
   const hashed = await runtime_hash(control_token);

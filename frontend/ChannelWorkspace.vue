@@ -69,13 +69,25 @@ onBeforeUnmount(() => window.removeEventListener("resize", update_viewport_width
 onMounted(() => document.addEventListener("pointerdown", collapse_brief_outside));
 onBeforeUnmount(() => document.removeEventListener("pointerdown", collapse_brief_outside));
 const selected_tab = computed({ get: () => view.value.tab, set: (value) => act("tab", value) });
-const tabs = [
+const ALL_TABS = [
   { value: "discussion", label: "消息", icon: "i-lucide-message-square" },
   { value: "context", label: "共识", icon: "i-lucide-file-text" },
   { value: "topic", label: "主持", icon: "i-lucide-list-checks" },
   { value: "access", label: "接入", icon: "i-lucide-plug" },
 ];
-const view_links = computed(() => tabs.map((item) => ({
+/** Free rooms have no host, consensus state or run controls; only the conversation applies. */
+const free_room = computed(() => room.value?.mode === "free");
+const tabs = computed(() => free_room.value ? ALL_TABS.slice(0, 1) : ALL_TABS);
+/** One line per member: live execution, queued requests, or the last outcome. */
+function free_member_status(member) {
+  const execution = member.execution;
+  if (execution && ["dispatched", "started"].includes(execution.status)) return execution.stale ? "执行失联，停止未确认" : "正在处理";
+  if (member.pending) return `待投递 ${member.pending} 条`;
+  if (execution?.status === "failed") return `上次失败：${execution.result}`;
+  return execution ? "空闲" : "尚未收到消息";
+}
+watch(() => free_room.value && view.value.tab !== "discussion", (leave) => { if (leave) act("tab", "discussion"); }, { immediate: true });
+const view_links = computed(() => tabs.value.map((item) => ({
   ...item, active: !!room.value && view.value.tab === item.value, disabled: !room.value, onSelect: () => { nav_open.value = false; act("tab", item.value); },
 })));
 const participants = computed(() => [
@@ -241,7 +253,7 @@ function resize_nav_by_key(event) {
         <UTooltip :text="nav_collapsed ? '展开频道栏' : '收起频道栏'"><UButton icon="i-lucide-panel-left" color="neutral" variant="ghost" size="sm" class="channel-desktop-nav channel-icon-button channel-panel-toggle" :aria-label="nav_collapsed ? '展开频道栏' : '收起频道栏'" :aria-expanded="!nav_collapsed" aria-controls="channel-sidebar" @click="nav_collapsed = !nav_collapsed" /></UTooltip>
         <UButton icon="i-lucide-panel-left" color="neutral" variant="ghost" size="sm" class="channel-mobile-nav channel-icon-button channel-panel-toggle" aria-label="打开频道导航" :aria-expanded="nav_open" @click="nav_open = true" />
         <span class="channel-title-icon"><UIcon name="i-lucide-hash" /></span>
-        <div class="channel-title"><div class="channel-title-copy"><h1 :title="room?.title">{{ room?.title || '共议' }}</h1><div v-if="room?.floor" class="channel-floor-status" :class="{ 'is-held': room.floor.holder }" role="status" :title="`发言权：${bridge.floor_status(room)}`"><UIcon name="i-lucide-mic" /><span>发言权：{{ bridge.floor_status(room) }}</span></div></div><UBadge v-if="room?.archived" color="neutral" variant="subtle" size="sm">已存档</UBadge></div>
+        <div class="channel-title"><div class="channel-title-copy"><h1 :title="room?.title">{{ room?.title || '共议' }}</h1><div v-if="room?.floor && !free_room" class="channel-floor-status" :class="{ 'is-held': room.floor.holder }" role="status" :title="`发言权：${bridge.floor_status(room)}`"><UIcon name="i-lucide-mic" /><span>发言权：{{ bridge.floor_status(room) }}</span></div></div><UBadge v-if="room?.archived" color="neutral" variant="subtle" size="sm">已存档</UBadge></div>
         <span v-if="room" class="channel-header-context">{{ tabs.find((item) => item.value === view.tab)?.label }}<span>·</span>{{ room.message_count }} 条记录</span>
         <div class="channel-header-actions">
           <form v-if="view.tab === 'discussion'" class="channel-search" @submit.prevent="act('filter', { query: search })">
@@ -265,7 +277,7 @@ function resize_nav_by_key(event) {
       <div v-if="room" class="channel-tabbar">
         <UTabs v-model="selected_tab" :items="tabs" :content="false" variant="pill" color="neutral" size="sm" class="channel-tabs" aria-label="频道视图" />
       </div>
-      <section v-if="room" class="channel-host-brief" :class="{ 'is-collapsed': brief_collapsed }" aria-label="主持简报">
+      <section v-if="room && !free_room" class="channel-host-brief" :class="{ 'is-collapsed': brief_collapsed }" aria-label="主持简报">
         <div class="channel-brief-inner">
           <div class="channel-brief-heading">
             <button type="button" class="channel-brief-toggle" :aria-label="brief_collapsed ? '展开主持简报' : '收起主持简报'" :aria-expanded="!brief_collapsed" aria-controls="channel-brief-content" @click="toggle_brief"><UIcon :name="brief_collapsed ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" /><strong>主持简报{{ brief_collapsed ? '：' : '' }}</strong><span v-if="brief_collapsed" class="channel-brief-preview">{{ brief_preview }}</span></button>
@@ -296,7 +308,10 @@ function resize_nav_by_key(event) {
     </main>
     <div v-if="show_rail" class="channel-rail-resizer" role="separator" tabindex="0" aria-label="调整右侧栏宽度" aria-orientation="vertical" aria-controls="channel-member-rail" :aria-valuemin="RAIL_MIN" :aria-valuemax="RAIL_MAX" :aria-valuenow="rail_width" :aria-valuetext="`${rail_width} 像素`" title="拖动调整右侧栏宽度，也可使用左右方向键" @pointerdown="start_rail_resize" @pointermove="resize_rail" @pointerup="finish_rail_resize" @pointercancel="finish_rail_resize" @lostpointercapture="finish_rail_resize" @keydown="resize_rail_by_key"></div>
     <aside v-if="show_rail" id="channel-member-rail" class="channel-member-rail" aria-label="当前焦点与讨论进度">
-      <section class="channel-rail-board"><ProgressBoard v-if="room" docked /><div v-else class="progress-board is-docked"><header class="pb-header"><strong>讨论进度</strong></header><p class="channel-rail-empty">暂无频道，新建讨论后在这里查看进度与参与者。</p></div></section>
+      <section class="channel-rail-board"><div v-if="room && free_room" class="progress-board is-docked"><header class="pb-header"><strong>自由协作</strong><span class="pb-mode">无主持 · 无轮次</span></header>
+        <ul class="channel-free-members"><li v-for="member in room.free?.members || []" :key="member.id"><strong>{{ bridge.display_name(member.name) }}</strong><span>{{ free_member_status(member) }}</span></li></ul>
+        <p class="channel-rail-empty">每条消息交给成员处理；处理中可在输入框旁停止。单次执行最多 {{ room.free?.execution_minutes }} 分钟。</p></div>
+        <ProgressBoard v-else-if="room" docked /><div v-else class="progress-board is-docked"><header class="pb-header"><strong>讨论进度</strong></header><p class="channel-rail-empty">暂无频道，新建讨论后在这里查看进度与参与者。</p></div></section>
     </aside>
 
     <USlideover v-model:open="nav_open" side="left" title="讨论频道" description="共议 · AI CoDiscuss" :ui="{ content: 'channel-navigation-drawer', body: 'channel-drawer-body' }">

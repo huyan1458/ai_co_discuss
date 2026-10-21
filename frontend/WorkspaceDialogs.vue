@@ -124,7 +124,8 @@ async function save_form() {
   const action = mode.value === "create" ? "create" : mode.value === "edit" ? "save_topic" : "schedule";
   if (action === "create") {
     const folder_id = props.targetFolder?.id ?? null;
-    const launching = view.value.launch.create && view.value.fields['new-room-mode'] === 'automatic';
+    const room_mode = view.value.fields['new-room-mode'];
+    const launching = room_mode === 'free' || (view.value.launch.create && room_mode === 'automatic');
     if (!launching) mode.value = "";
     if (await act(action, folder_id) && launching && !view.value.launch.create) mode.value = "";
   } else if (await act(action)) mode.value = "";

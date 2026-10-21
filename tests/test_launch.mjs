@@ -11,6 +11,7 @@ import { test } from 'node:test';
 import { launch_discussion, launch_settings, room_configuration, save_launch_settings } from '../runner/discussion_launch.mjs';
 import { api, DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { DiscussionService, read_registry, register_room } from '../runner/discussion_service.mjs';
+import { FreeRoomRunner } from '../runner/free_runner.mjs';
 import { save_site_connection } from '../runner/discussion_local.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -723,4 +724,40 @@ for (const entry of ['web', 'conversation']) test(`${entry} survives process dea
     assert.equal(JSON.parse(replayed.stdout).room.runtime.generation, paused.generation);
     assert.equal((await api(config, '/events?after=0')).events.length, 1);
   });
+});
+
+test('a free room launches without a run, and a user message reaches its member through the service', async t => {
+  const f = await fixture(t);
+  const input = { site: f.site, entry: 'web', participants: f.input.participants, token: randomUUID() + randomUUID(),
+    room: { title: '自由单聊', goal: '遥控 Claude', mode: 'free', members: ['Claude'], submission_id: randomUUID() } };
+  const first = await launch_discussion(f.home, input, f.options);
+  const again = await launch_discussion(f.home, input, f.options);
+  assert.equal(first.room.id, again.room.id);
+  assert.equal(first.status, 'free');
+  assert.equal(first.room.runtime.mode, 'manual');
+  assert.deepEqual(first.room.free.members.map(member => member.name), ['Claude']);
+  const config = load_config(first.config_path);
+  assert.equal(config.mode, 'free');
+  assert.ok(!JSON.stringify(first).includes(config.members.Claude.token));
+  const path = `/api/rooms/${config.room}`;
+  assert.equal((await request(f.site, `${path}/messages`, { author: '用户', text: '改标题', submission_id: randomUUID() })).status, 403);
+  assert.equal((await request(f.site, `${path}/messages`, { author: '用户', text: '改标题', submission_id: randomUUID() },
+    { 'X-Discussion-Token': input.token })).status, 201);
+  const delivered = [];
+  const service = new DiscussionService(f.home, (current, store) => new FreeRoomRunner(current, store,
+    async (_, binding, task) => { delivered.push(task); return { status: 'accepted', session_id: 'claude-free' }; }));
+  let room;
+  try {
+    await service.tick();
+    assert.equal(delivered.length, 1);
+    const task = JSON.parse(readFileSync(join(config.directory, `${delivered[0].id}.task.json`), 'utf8'));
+    const access = JSON.parse(readFileSync(delivered[0].access_path, 'utf8'));
+    const answered = await request(f.site, `${path}/messages`, { author: 'Claude', text: '已改', source: 'cli',
+      execution_id: task.execution_id, submission_id: randomUUID() }, { 'X-Discussion-Token': access.token });
+    assert.equal(answered.status, 201);
+    await service.tick();
+    room = (await request(f.site, path)).body;
+  } finally { await service.close(); }
+  assert.deepEqual(room.free.requests.map(item => item.status), ['completed']);
+  assert.equal(delivered.length, 1);
 });

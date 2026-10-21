@@ -26,6 +26,7 @@ Python 与 Cloudflare 是两种部署实现，运行时选其一，不是请求�
 | --- | --- | --- |
 | `backend/server.py` | HTTP 请求、SQLite 路径、`backend/schema.sql` | JSON API、纯文本页面、静态资源；事务读写本地数据库；根目录 `server.py` 调用其启动函数 |
 | `backend/worker.mjs` | Pages Request、D1 `DB` binding | 与 Python 相同的业务响应；静态请求交由 Pages assets |
+| `backend/free_room.py` | 自由房间的控制凭据、成员凭证、请求与执行 | 成员凭证认证、按成员的执行唯一性、打断与失败隔离；只由 Python 后端调用，见 [自由协作协议](#自由协作协议) |
 | `backend/updates.mjs` | Pages 可选 `UPDATES` Durable Object binding | 跨 Worker 实例广播网页变更通知；不保存讨论数据，不提供公开发布入口 |
 | `runner/codiscuss.mjs` | 统一 `codiscuss` 命令与原样参数 | 无子命令时启动本机服务，`service` 管理进程；网站命令转交 Python 客户端，保留 stdin、相对路径与退出码 |
 | `runner/discussion_launch.mjs` | 本机默认软件配置、单场启动配置、对话 / 网页入口 | 校验后建房、保存私有配置、启用运行并登记接入服务；对话入口将首个主持任务交回当前会话；暂停后可凭原控制凭据和版本修正本场软件路径或切换 Codex App / CLI，保留原会话绑定，不自动重启 |
@@ -37,6 +38,7 @@ Python 与 Cloudflare 是两种部署实现，运行时选其一，不是请求�
 | `frontend/` | 同一控制器与 API | Vue / Nuxt UI 协作频道、资料/讨论/主持与接入、对话框 |
 | `frontend/markdown.mjs` | Markdown 原文 | 三个主题共用的安全 HTML 与公式渲染；原始 HTML 关闭 |
 | `runner/` | 私有房间配置、网站事件 | 接入 Codex App / CLI、Claude Code CLI、Antigravity App / CLI 的真实会话，续租与有限重试；`discussion_service.mjs` 常驻托管多个已登记房间；不生成回答，详见 [自动接入程序](runner.md) |
+| `runner/free_runner.mjs` | 自由房间的 inbox、私有房间配置 | 把成员名下的全部待投递请求打包为一次执行，复用同一组软件适配器；只停止该成员自己的进程 |
 | `scripts/build_pages.mjs` | 后端源码、已构建 `web/`、Pages 静态文件 | 清理固定输出并生成 `dist/pages/`；不部署 |
 
 两套后端、Python 运行协议与共用 schema 位于 `backend/`；前端源码及 Vite 配置在 `frontend/`，静态运行文件在 `web/`，测试和构建脚本分别在 `tests/`、`scripts/`。`deploy/` 保存 Docker 文件，`.github/` 保存 CI、贡献指南和安全说明，第三方声明位于 `docs/`。根目录保留用户启动入口和工具约定的配置文件；`python server.py` 仍以项目根目录定位网页与默认数据库，不受终端工作目录影响。
@@ -206,3 +208,15 @@ running 状态即使只有 pending 事件，也必须先暂停才能重新启动
 房间响应的 `runtime.timings` 汇总当前运行各执行的阶段耗时：排队（事件产生到 reserve）、唤醒（reserve 到 AI enter）、执行（enter 到完成、撤销或失败），未结束的阶段计到当前时间；返回最近 20 条与全部合计，进度看板据此展示。升级前的执行没有计时记录，不计入。
 
 每房间最多一个 dispatched/started 执行；写入同时校验运行代次、期限、身份及职责。租约 120 秒，通知程序每 30 秒续租，单步采用 discussion_limits.execution_minutes，新建默认 0（不限），非零值为 1–60 分钟；设置了整场截止时取更早期限。不限单步时长仍要求有效的租约、运行代次和身份，续租不设隐含执行截止。schema 重建建房触发器并显式写入 0，使旧表默认值为 20 的数据库中新建房间也默认不限，已有房间的配置保持不变。通知受理未必开始，开始未必完成。运行和最新执行状态对网页可见，控制哈希与执行哈希不公开。备份保持原有讨论数据范围，不导出运行凭据或本机绑定。
+
+## 自由协作协议
+
+自由房间（`room_modes.mode='free'`）与讨论房间共用房间、消息、附件与目录，没有发言权、安排、阶段推进和轮次。没有 `room_modes` 记录的房间都是讨论（头脑风暴）房间，行为不变；`require_message_floor` 触发器每次启动都会被替换，使自由房间的 AI 消息不受发言权约束。
+
+- **凭据**：建房时由客户端提供房间控制凭据和每位成员的成员凭证，服务端只存哈希。用户身份的所有写入（发言、附件、目录整理、存档、删除、打断）都须控制凭据；无凭据、错误凭据、成员凭证或他房凭据一律只读。成员凭证只能以该成员身份发言或上传附件。声明字段（`author`、`source`、localhost）不代替凭据。
+- **请求**：用户消息按结构化接收者 `to`（成员名）为每位成员生成一条请求；省略且仅有一位在场成员时默认点名该成员。请求状态为 `pending`（待投递）→ `delivering`（处理中）→ `completed` / `cancelled` / `failed`。
+- **执行**：`member_executions` 每位成员最多一个 `dispatched/started`（部分唯一索引），不同成员可并行。接入程序用控制凭据 `GET inbox`、`POST executions {member_id, client_id}`（同一 `client_id` 返回同一执行）把成员的全部待投递请求打包；`POST executions/ID {action}` 支持 `renew`（租约 120 秒，不超过单次执行时限，默认 20 分钟）、`fail`（请求标记失败）和 `release`（仅确认未送达时退回队列）。租约过期的执行在下次读取或领取时标记失败，不自动重发。
+- **回答**：成员回答须带 `execution_id` 并使用成员凭证；消息保存、执行完成、请求完成和成员已读游标在同一事务中写入。执行结束、被打断或过期后的回答返回 409；缺少执行编号返回 400，不能改作普通发言。消息类型为 `chat`，不计入讨论轮次。
+- **打断**：`POST members/ID/interrupt`（控制凭据）作废该成员的进行中执行及所有未投递请求，不会自动重新开始；成员的已读游标不前移，下一次请求从同一位置读起。执行失败只影响该成员的请求，房间不暂停。
+- **与讨论房间的差别**：讨论房间的用户写入仍不要求凭据（见上文），任何能访问站点的人都能以用户身份留言并触发主持事件，不应作为远程工作入口；控制凭据校验目前只覆盖自由房间。
+- **范围**：首版每个房间一位 AI 成员；数据结构已按 `member_id` 支持多成员。Cloudflare Worker 在实现同等校验前明确拒绝创建自由房间。备份只导出成员名称、状态与请求，不导出凭据哈希。
