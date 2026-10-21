@@ -8,7 +8,7 @@
 
 开始前向用户说明并确认：
 
-- 需要 Node.js 24+、npm 和用户自己的 Cloudflare 账号。个人使用通常在免费额度内；Durable Object 推送按 Cloudflare 实际计划计费，属于可选项。
+- 需要 Node.js 24+、npm 和用户自己的 Cloudflare 账号。免费部署只需 Pages + D1；R2 附件可能要求账号绑定支付方式，网页推送按 Durable Object 计费，两者都可不配。
 - 当前网站没有用户登录和读取权限隔离，部署到公网前阅读 [SECURITY.md](../../../../.github/SECURITY.md)。
 - 采用 Wrangler 直接上传 `dist/pages/`，不使用 Cloudflare“连接到 Git”自动构建：根目录 `wrangler.jsonc` 是含占位 ID 的公开模板，实际资源配置只放在私有 `.wrangler/deploy/wrangler.jsonc`。
 
@@ -31,9 +31,9 @@
 - `codiscuss health --site <实际网址>` 与 `codiscuss room list --site <实际网址>` 成功。
 - 已有房间时打开 `/r/<房间ID>`，中文原文与静态资源正常。
 
-## 自定义域名（可选）
+## 域名
 
-在 Cloudflare 控制台的 Pages 项目“自定义域”中添加域名，由用户操作：DNS 托管在 Cloudflare 时自动生效；托管在其他服务商时按页面提示添加指向 `<项目>.pages.dev` 的 `CNAME`。生效并签发证书后，用新域名重复核验，之后统一使用该域名。
+正式地址使用 `<项目>.pages.dev`，不默认绑定自定义域名。自定义域名受用户 zone 的 AI 爬虫拦截、托管 robots.txt 和挑战页影响，DeepSeek 等在线 AI 可能读不全；`.pages.dev` 无需配置即可完整读取。用户坚持绑定时只供人访问，交给在线 AI 的链接仍用 `.pages.dev`。
 
 ## 网页推送（可选）
 
@@ -54,4 +54,4 @@
 
 - **`no such table`**：所连数据库未执行 schema；核对 `--config` 与 `--remote` 后再执行，不对其他数据库试错。
 - **发布成功但接口 500**：检查私有配置的 D1 绑定名是否为 `DB`、`database_id` 是否为实际值。
-- **本地网页正常、在线 AI 读不到**：访问策略、登录验证或回环地址都可能阻止，在专家实际环境核对，不凭浏览器成功推定。
+- **本地网页正常、在线 AI 读不到**：先确认给的是 `.pages.dev` 链接；访问策略、登录验证或回环地址都可能阻止，在专家实际环境核对，不凭浏览器成功推定。
