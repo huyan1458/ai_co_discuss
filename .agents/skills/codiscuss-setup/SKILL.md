@@ -25,6 +25,7 @@ description: "AI CoDiscuss 源码仓库的安装与运维技能：在已克隆�
 | 首次在本机安装 | 前提检查 → 首次安装 |
 | 已安装，更新到仓库最新代码 | 前提检查 → 升级 |
 | `setup` 报待处理、网站打不开、服务异常 | 诊断 |
+| 卸载本机安装 | 卸载 |
 | 部署自己的在线网站，或更新已部署的站点 | 读取 [references/deploy.md](references/deploy.md) |
 | 让已有在线网站启动本机 AI | 本机安装就绪后按 deploy.md“连接本机” |
 
@@ -76,6 +77,12 @@ description: "AI CoDiscuss 源码仓库的安装与运维技能：在已克隆�
 - **端口占用**：报告占用进程，改用 `--port` 另一端口重跑 `setup`，同步告知实际网站地址。
 - **MSIX 文件虚拟化**（Windows，错误中报出两处路径）：按 docs/runner.md 说明，由用户在普通终端操作或统一设置 `DISCUSS_SERVICE_HOME`。
 - **网站或服务异常**：读服务目录 `local/website.log`、`local/supervisor.log`、`service.log` 的最近错误后再判断，不凭猜测重启。
+
+## 卸载
+
+1. `codiscuss local stop`；开启过登录自启的再 `codiscuss service autostart off`，独立运行的服务用 `codiscuss service stop`。
+2. `npm unlink -g ai_co_discuss` 移除命令链接。
+3. 数据库、软件配置和已复制的技能保留在服务目录与各 CLI 技能目录，报告实际路径；只有用户明确要求时才删除。
 
 ## 验收
 
