@@ -10,6 +10,8 @@ import { CodexAppClient } from './codex_app_client.mjs';
 
 const CALL_TIMEOUT_MS = 30_000;
 const CLI_DIAGNOSTIC_CHARS = 1000;
+/** Codex exec may linger after its final event; the finished turn is already saved, so stop it to free the session. */
+const CLI_EXIT_GRACE_MS = 1500;
 const CODEX_PERMISSIONS_MIN_MINOR = 163;
 /** Website subcommands an automatic task may run; service, launch, run, api and setup stay unapproved. */
 export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'floor', 'execution', 'health', 'schema'];
@@ -369,7 +371,7 @@ function bind_cli_session(state, session_id, task) {
 function cli_event(adapter, state, event, task) {
   if (adapter === 'codex_cli') {
     if (event.type === 'thread.started') bind_cli_session(state, event.thread_id, task);
-    if (event.type === 'turn.completed') state.completed = true;
+    if (event.type === 'turn.completed') { state.completed = true; state.finish_timer = setTimeout(() => { state.finished = true; task.on_trace?.('kill_after_completed'); state.child.kill(); }, CLI_EXIT_GRACE_MS); }
     if (event.type === 'turn.failed') state.error = event.error?.message || 'Codex CLI 执行失败';
     if (event.type === 'error') state.diagnostic = event.message || 'Codex CLI 返回错误';
     remember_writer_conflict(state, state.error || state.diagnostic);
@@ -384,6 +386,14 @@ function cli_event(adapter, state, event, task) {
   }
 }
 
+/** Record lifecycle events and tool commands with timestamps so slow stages can be located from the trace file. */
+function trace_cli_event(event, task) {
+  if (!task.on_trace) return;
+  const item = event.item;
+  const command = item?.command ? String(item.command).replace(/^.*?-Command\s+/, '').slice(0, 100) : '';
+  task.on_trace(item ? `${event.type}:${item.type}` : event.type, command ? { command } : {});
+}
+
 /** Keep the actual resume failure even when later model-refresh logs replace the diagnostic tail. */
 function remember_writer_conflict(state, diagnostic) {
   if (/thread-store conflict:[\s\S]*already has an active writer/.test(diagnostic)) state.writer_conflict = true;
@@ -393,6 +403,7 @@ function remember_writer_conflict(state, diagnostic) {
 function cli_exit_error(state, code, signal) {
   if (state.writer_conflict) return `Codex 会话 ${state.session_id} 已被另一进程持有（active writer），CLI 无法接管。若为 App 中的聊天，请使用 Codex App 接入；独立 CLI 须使用未被占用的会话。重复点击重试不会解除占用`;
   if (state.error) return state.error;
+  if (state.finished && state.completed) return '';
   if (code !== 0) return `CLI ${signal ? `被信号 ${signal} 终止` : `退出码 ${code}`}：${state.diagnostic}`;
   if (!state.initialized) return `CLI 未确认实际会话 ID：${state.diagnostic}`;
   if (!state.completed) return `CLI 未返回成功结束事件：${state.diagnostic}`;
@@ -401,7 +412,7 @@ function cli_exit_error(state, code, signal) {
 
 /** Parse complete UTF-8 JSON lines while keeping raw output in the private task log. */
 function monitor_cli(child, config, binding, task) {
-  const state = { session_id: binding.session_id || '', initialized: false, completed: false, error: '', diagnostic: '' };
+  const state = { child, session_id: binding.session_id || '', initialized: false, completed: false, error: '', diagnostic: '' };
   const log_path = resolve(task.directory, `${config.adapter}-${task.id}.log`);
   const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
   child.stdout.on('data', chunk => task.on_output(log_path, chunk));
@@ -416,10 +427,13 @@ function monitor_cli(child, config, binding, task) {
     let event;
     try { event = JSON.parse(line); }
     catch { state.diagnostic = 'CLI 输出中存在无效 JSON，详情见本机日志'; return; }
+    trace_cli_event(event, task);
     try { cli_event(config.adapter, state, event, task); }
     catch (error) { state.error = error.message; child.kill(); }
   });
   child.once('close', (code, signal) => {
+    clearTimeout(state.finish_timer);
+    task.on_trace?.('cli_closed', { code, signal, killed_after_completed: Boolean(state.finished) });
     if (!state.spawned) return;
     const error = cli_exit_error(state, code, signal);
     if (error) task.on_failure(error);
@@ -437,7 +451,11 @@ async function cli_delivery(config, binding, task, spawn_process, user_home) {
   let invocation;
   try { invocation = cli_invocation(config, binding, task, user_home); }
   catch (error) { throw not_sent(error); }
-  if (invocation.permissions) await check_codex_permissions(config, task, invocation.permissions, spawn_process);
+  if (invocation.permissions) {
+    task.on_trace?.('permission_check_start');
+    await check_codex_permissions(config, task, invocation.permissions, spawn_process);
+    task.on_trace?.('permission_check_done');
+  }
   if (invocation.project) {
     const on_binding = task.on_binding;
     task = { ...task, on_binding: session_id => { invocation.project.bind(session_id); on_binding(session_id); } };
@@ -451,11 +469,12 @@ async function cli_delivery(config, binding, task, spawn_process, user_home) {
   const state = monitor_cli(child, config, binding, task);
   task.on_process(child);
   await new Promise((resolve_spawn, reject) => {
-    child.once('spawn', () => { state.spawned = true; resolve_spawn(); });
+    child.once('spawn', () => { state.spawned = true; task.on_trace?.('cli_spawned'); resolve_spawn(); });
     child.once('error', error => state.spawned ? task.on_failure(error.message) : reject(not_sent(error)));
   });
   child.stdin.on('error', error => { if (error.code !== 'EPIPE') task.on_failure(error.message); });
   child.stdin.end(invocation.input);
+  task.on_trace?.('prompt_sent');
   return { session_id: state.session_id, status: 'accepted' };
 }
 

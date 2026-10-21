@@ -735,7 +735,8 @@ test('tasks direct website work to the approved codiscuss subcommands', async t 
   assert.equal(saved.cli, cli); assert.deepEqual(saved.subcommands, TASK_SUBCOMMANDS);
   assert(task.prompt.includes(`${cli} execution enter`)); assert.match(task.prompt, /不用 python discuss\.py/);
   const claude = task_files({ ...f.config, participants: { Codex: { adapter: 'claude' } } }, f.event, 'token-for-test', {});
-  assert.match(claude.prompt, /用 codiscuss execution enter/);
+  assert.match(claude.prompt, /接入程序已为本次执行完成 execution enter/);
+  assert(!claude.prompt.includes('立即用'));
   assert.equal(task.skills_directory, join(f.config.project, '.agents', 'skills'));
 });
 

@@ -9,6 +9,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { atomic_json, deliver_task, remove_agy_projects, setup_sidecar, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
 
 const POLL_MS = 2000;
+/** Headless CLIs know their session at start, so the runner enters the execution instead of spending model turns on it. */
+const AUTO_ENTER_ADAPTERS = new Set(['codex_cli', 'claude']);
 const DELIVERY_RETRY_DELAYS_MS = [2000, 4000];
 const RENEW_MS = 30_000;
 const ADAPTER_NAMES = ['codex', 'claude', 'antigravity', 'codex_cli', 'antigravity_cli'];
@@ -167,6 +169,7 @@ export function task_files(config, event, token, binding) {
   const skills = [join(config.project, '.agents/skills/discuss-participant/SKILL.md')];
   if (event.role === 'host') skills.push(join(config.project, '.agents/skills/discuss-host/SKILL.md'));
   const adapter = config.participants[event.participant];
+  const auto_enter = AUTO_ENTER_ADAPTERS.has(adapter.adapter);
   const skills_directory = join(config.project, '.agents', 'skills');
   // Codex and agy run commands through PowerShell on Windows, whose execution policy blocks npm's codiscuss.ps1 shim.
   const cli = process.platform === 'win32' && adapter.adapter !== 'claude' ? 'codiscuss.cmd' : 'codiscuss';
@@ -176,8 +179,14 @@ export function task_files(config, event, token, binding) {
     project_name: adapter.project_name || null, cwd: adapter.cwd || null, project_access: adapter.project_access,
     draft_directory,
     role: event.role, turn_id: event.turn_id, skills, cli, subcommands: TASK_SUBCOMMANDS, access_file: access_path,
-    instructions: `读取指定技能；网站命令只用 ${cli} 的 subcommands 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口；使用 ${cli} execution enter 房间 执行编号 --access-file 凭据路径 进入。凭据文件由 CLI 内部读取，不要打印或读取其 token。进入成功后才处理本次安排；每次业务写入都带 --access-file。答案草稿只保存到 draft_directory，不修改任务、凭据、日志或调度数据库；${project_rule}只处理本次工作，不建定时任务。主持创建下一安排或收束即结束，专家提交原文后结束。无效或已进入的任务不要重复执行。` });
-  const prompt = `用户已启动此房间的全自动讨论。请以 ${event.participant} 的${event.role === 'host' ? '主持' : '专家'}职责处理本次工作。先读取任务文件：${task_path}，立即用 ${cli} execution enter 进入，再读取指定版本的技能和网站现状。本次只放行任务内 subcommands 列出的 ${cli} 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口。任务内 cwd 是讨论项目目录；${project_rule}项目读写仍受软件实际权限和议题授权约束。不读取凭据内容。实际会话 ID 由接入程序写入凭据文件，尚未就绪只短暂重查，不编造。`;
+    instructions: `读取指定技能；网站命令只用 ${cli} 的 subcommands 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口；${auto_enter ? '接入程序已进入本次执行，不要再执行 execution enter。' : `使用 ${cli} execution enter 房间 执行编号 --access-file 凭据路径 进入。进入成功后才处理本次安排；`}凭据文件由 CLI 内部读取，不要打印或读取其 token。每次业务写入都带 --access-file。答案草稿只保存到 draft_directory，不修改任务、凭据、日志或调度数据库；${project_rule}只处理本次工作，不建定时任务。主持创建下一安排或收束即结束，专家提交原文后结束。无效或已进入的任务不要重复执行。` });
+  const scope = `本次只放行任务内 subcommands 列出的 ${cli} 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口。任务内 cwd 是讨论项目目录；${project_rule}项目读写仍受软件实际权限和议题授权约束。不读取凭据内容。`;
+  const intro = `用户已启动此房间的全自动讨论。请以 ${event.participant} 的${event.role === 'host' ? '主持' : '专家'}职责处理本次工作。`;
+  const prompt = auto_enter
+    ? `${intro}接入程序已为本次执行完成 execution enter，不要再执行。任务内容如下（同一份保存在 ${task_path}，无需再读）：
+${readFileSync(task_path, 'utf8')}
+请直接读取指定版本的技能和网站现状。${scope}实际会话 ID 已由接入程序写入凭据文件。`
+    : `${intro}先读取任务文件：${task_path}，立即用 ${cli} execution enter 进入，再读取指定版本的技能和网站现状。${scope}实际会话 ID 由接入程序写入凭据文件，尚未就绪只短暂重查，不编造。`;
   return { id, participant: event.participant, directory: config.directory, draft_directory, skills_directory, access_path, prompt };
 }
 
@@ -190,12 +199,21 @@ export class DiscussionRunner {
     this.children = new Set();
     this.exited = new Set();
     this.running = new Map();
+    this.seen = new Set();
+    this.blocked = new Set();
+  }
+  /** Append one timestamped stage to the event's trace file; tracing must never affect delivery. */
+  trace(id, stage, detail = {}) {
+    try { appendFileSync(join(this.config.directory, `event-${id}.trace.jsonl`), JSON.stringify({ t: new Date().toISOString(), stage, ...detail }) + '\n', { mode: 0o600 }); }
+    catch { /* Diagnostics only. */ }
   }
   /** Reserve with a durable token so a lost HTTP response can be reconciled. */
   async dispatch(row, event) {
     const token = row.token || randomUUID();
     this.store.record(row.id, { token, status: 'reserving' });
+    this.trace(row.id, 'reserve_start');
     await api(this.config, `/events/${row.id}`, { action: 'reserve', execution_token: token });
+    this.trace(row.id, 'reserve_done');
     await this.deliver_reserved({ ...row, token }, event);
   }
   /** Retry only proven non-delivery, keeping the event, token and task unchanged. */
@@ -211,7 +229,11 @@ export class DiscussionRunner {
       const task = task_files(this.config, event, row.token, binding);
       invoked = true;
       const result = await this.deliver(adapter, binding, { ...task, room_title: this.room_title,
-        on_binding: session => this.store.bind(event.participant, session),
+        on_trace: (stage, detail) => this.trace(row.id, stage, detail),
+        on_binding: session => {
+          this.store.bind(event.participant, session);
+          if (AUTO_ENTER_ADAPTERS.has(adapter.adapter)) this.enter(row, session);
+        },
         on_process: child => this.track(event.participant, child),
         on_output: (path, chunk) => appendFileSync(path, chunk, { mode: 0o600 }),
         on_failure: error => { try { this.store.record(row.id, { error }); } catch { /* Store may already be closed at shutdown. */ } },
@@ -224,6 +246,15 @@ export class DiscussionRunner {
       this.store.record(row.id, { status: not_sent ? 'retry_wait' : 'uncertain', error: error.message,
         retry_at: not_sent ? Date.now() + (DELIVERY_RETRY_DELAYS_MS[attempts - 1] ?? 0) : 0 });
     }
+  }
+  /** Enter once per delivery; a failure is recorded so reconcile revokes the execution. */
+  async enter(row, session_id) {
+    try {
+      this.trace(row.id, 'enter_start');
+      await api(this.config, `/events/${row.id}`, { action: 'enter', session_id }, row.token);
+      this.trace(row.id, 'enter_done');
+    }
+    catch (error) { try { this.store.record(row.id, { error: `接入程序进入执行失败：${error.message}` }); } catch { /* Store may already be closed at shutdown. */ } }
   }
   /** Reconcile business evidence; accepted delivery alone never completes a task. */
   async reconcile(row, event) {
@@ -316,7 +347,12 @@ export class DiscussionRunner {
     for (const { row, event } of pending) {
       if (event.generation !== run.generation || event.run_id !== run.run_id) this.store.record(row.id, { status: 'cancelled' });
     }
+    for (const { row } of pending) if (!this.seen.has(row.id)) { this.seen.add(row.id); this.trace(row.id, 'event_seen'); }
     const next = eligible.at(-1);
+    if (next && this.running.get(next.event.participant) && !this.blocked.has(next.row.id)) {
+      this.blocked.add(next.row.id);
+      this.trace(next.row.id, 'blocked_by_running_process', { participant: next.event.participant });
+    }
     // A host that just saved the next turn may still be exiting; the same session cannot accept a second writer yet.
     if (next && !this.running.get(next.event.participant)) {
       const fresh = await api(this.config, `/events/${next.row.id}`, { action: 'view' });
