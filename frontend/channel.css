@@ -60,9 +60,13 @@ html[data-theme^="channel"] .channel-panel-toggle { flex-shrink: 0; }
 /* Channel navigation and a persistent current-identity footer. */
 .channel-sidebar { min-height: 0; display: flex; flex-direction: column; background: #202127; border-right: 1px solid #16171b; }
 .channel-workspace-heading { display: flex; align-items: center; gap: 10px; height: 56px; flex-shrink: 0; padding: 0 18px; box-shadow: 0 1px 0 #12131880, 0 2px 4px #00000014; }
-.channel-brand-icon { display: grid; place-items: center; width: 28px; height: 28px; flex-shrink: 0; background: #5865f2; color: #fff; border-radius: 8px; font-size: 17px; }
-.channel-workspace-heading strong { color: #f2f3f5; font-size: var(--channel-nav-brand); font-weight: 650; letter-spacing: .06em; flex-shrink: 0; white-space: nowrap; }
-.channel-workspace-heading > span:last-child { color: #808792; font-size: var(--channel-nav-meta); margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Brand mark: Noto Serif SC Black "共" outline (SIL OFL); the two dots stand for participants. */
+.channel-brand-icon { display: grid; place-items: center; width: 28px; height: 28px; flex-shrink: 0; background: #173f3c; border-radius: 8px; }
+.channel-brand-icon svg { width: 21px; height: 21px; fill: #fff; }
+.channel-brand-icon .channel-brand-dot { fill: #f0b44c; }
+.channel-brand-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+.channel-workspace-heading strong { color: #f2f3f5; font-size: var(--channel-nav-brand); font-weight: 650; letter-spacing: .06em; white-space: nowrap; }
+.channel-brand-text > span { color: #808792; font-size: var(--channel-nav-meta); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .channel-sidebar-content { flex: 1; min-height: 0; overflow-y: auto; padding: 15px 8px; }
 .channel-directory-heading { display: flex; align-items: center; justify-content: space-between; min-height: 34px; padding: 0 8px; color: #969da8; font-size: var(--channel-nav-text); font-weight: 600; }
 .channel-directory-heading > span { display: flex; align-items: center; gap: 5px; }
@@ -796,7 +800,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-message-text, .channel-answer-summary > .channel-message-text, .channel-person,
   .channel-current-focus > span, .channel-reading-setting h3, .channel-editor,
   .info-section p, .topic-brief p, .turn-question, .message-prose, .access-address code { color: var(--ui-text); }
-  .channel-workspace-heading > span:last-child, .channel-directory-heading, .channel-link,
+  .channel-brand-text > span, .channel-directory-heading, .channel-link,
   .channel-room-row,
   .channel-connection, .channel-room-grip, .channel-link-icon,
   .channel-room-select > [class*="icon"], .channel-directory-empty,
@@ -913,9 +917,9 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 
   /* Neutral surfaces keep discussion content primary; blue marks interactions. */
   ::selection { background: #dbeafe; color: #171717; }
-  .channel-brand-icon { background: var(--channel-accent); border-radius: 6px; box-shadow: none; }
+  .channel-brand-icon { border-radius: 6px; box-shadow: none; }
   .channel-workspace-heading strong { letter-spacing: .02em; }
-  .channel-workspace-heading > span:last-child { color: #666666; letter-spacing: .02em; }
+  .channel-brand-text > span { color: #666666; letter-spacing: .02em; }
   .channel-sidebar-content { padding-top: 11px; }
   .channel-directory-heading { letter-spacing: .035em; }
   .channel-link { min-height: 38px; margin-block: 3px; }
