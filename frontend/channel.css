@@ -60,13 +60,11 @@ html[data-theme^="channel"] .channel-panel-toggle { flex-shrink: 0; }
 /* Channel navigation and a persistent current-identity footer. */
 .channel-sidebar { min-height: 0; display: flex; flex-direction: column; background: #202127; border-right: 1px solid #16171b; }
 .channel-workspace-heading { display: flex; align-items: center; gap: 10px; height: 56px; flex-shrink: 0; padding: 0 18px; box-shadow: 0 1px 0 #12131880, 0 2px 4px #00000014; }
-/* Brand mark: a variant # whose strokes are Claude, Codex, Gemini and Grok, two colors each like the navigation ticks. */
-.channel-brand-icon { --brand-gap: #202127; --brand-claude-1: #d77655; --brand-claude-2: #fcf2ee; --brand-codex-1: #7a9dff; --brand-codex-2: #b1a7ff; --brand-grok-1: #f2f2f2; --brand-grok-2: #6b7177; display: grid; place-items: center; width: 28px; height: 28px; flex-shrink: 0; }
+/* Brand mark: a woven variant # whose strokes are Claude, Codex, Gemini and Grok, each a soft gradient in its own colors.
+   The gaps are drawn in the sidebar color, so each theme has its own baked SVG. */
+.channel-brand-icon { display: grid; place-items: center; width: 28px; height: 28px; flex-shrink: 0; }
 .channel-brand-icon svg { width: 28px; height: 28px; }
-.channel-brand-gap { stroke: var(--brand-gap); stroke-width: 17.7; stroke-linecap: round; }
-.channel-brand-claude-1 { stop-color: var(--brand-claude-1); } .channel-brand-claude-2 { stop-color: var(--brand-claude-2); }
-.channel-brand-codex-1 { stop-color: var(--brand-codex-1); } .channel-brand-codex-2 { stop-color: var(--brand-codex-2); }
-.channel-brand-grok-1 { stop-color: var(--brand-grok-1); } .channel-brand-grok-2 { stop-color: var(--brand-grok-2); }
+.channel-brand-light { display: none; }
 .channel-brand-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
 .channel-workspace-heading strong { color: #f2f3f5; font-size: var(--channel-nav-brand); font-weight: 650; letter-spacing: .06em; white-space: nowrap; }
 .channel-brand-text > span { color: #808792; font-size: var(--channel-nav-meta); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -920,7 +918,8 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 
   /* Neutral surfaces keep discussion content primary; blue marks interactions. */
   ::selection { background: #dbeafe; color: #171717; }
-  .channel-brand-icon { --brand-gap: #f6f6f6; --brand-claude-2: #f0c3b0; --brand-codex-1: #3941ff; --brand-grok-1: #111111; --brand-grok-2: #b9bec4; }
+  .channel-brand-dark { display: none; }
+  .channel-brand-light { display: block; }
   .channel-workspace-heading strong { letter-spacing: .02em; }
   .channel-brand-text > span { color: #666666; letter-spacing: .02em; }
   .channel-sidebar-content { padding-top: 11px; }
