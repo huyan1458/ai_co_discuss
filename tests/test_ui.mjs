@@ -1342,6 +1342,28 @@ test("launch drafts retain explicit clears so saved participant defaults cannot 
   assert.equal(draft.cwd, 'C:\\this-discussion');
 });
 
+test("opening a new form restores every choice to defaults, including per-instance software overrides", () => {
+  const f = theme_fixture();
+  const state = f.context.test_state;
+  let resets = 0, experts = { Codex: 'cli', Claude: 'cli' };
+  f.nodes.set('room-form', { reset() { resets++; } });
+  Object.assign(f.context, { render_expert_inputs: (_id, value) => { experts = value; }, render_host_options() {}, render_launch_settings() {} });
+  Object.assign(state.launch, { create: false, workspace: { cwd: 'D:\上次项目' }, saved_profiles: { Codex: { adapter: 'codex_cli', executable: 'C:\codex.exe' } },
+    profiles: { Codex: { adapter: 'codex_cli', executable: 'C:\codex.exe', model: 'gpt-x', project_access: 'write' }, 'Codex-2': { adapter: 'codex_cli' } } });
+  state.creation_mode = 'free:manual';
+  state.create_parent = 'free-room';
+  f.context.reset_create_form();
+  assert.equal(resets, 1);
+  assert.deepEqual(Object.keys(experts), []);
+  assert.equal(state.creation_mode, 'brainstorm:automatic');
+  assert.equal(state.create_parent, null);
+  assert.equal(state.launch.create, true);
+  assert.deepEqual(Object.keys(state.launch.workspace), []);
+  assert.deepEqual(JSON.parse(JSON.stringify(state.launch.profiles)), { Codex: { adapter: 'codex_cli', executable: 'C:\codex.exe' } });
+  state.launch.profiles.Codex.model = 'changed';
+  assert.equal(state.launch.saved_profiles.Codex.model, undefined, "drafts never write back into the saved defaults");
+});
+
 test("automatic creation uses configured local clients and preserves independent mode choices", () => {
   const f = theme_fixture();
   const state = f.context.test_state;

@@ -820,8 +820,24 @@ async function copy_online_notice(name) {
   state.free_notice = `已复制给 ${name} 的阅读通知；复制不代表已送达。拿到回答后，在输入框选择“代发 ${name}”粘贴原文。`;
 }
 
+/** Start every new form from defaults: room use, delivery, text, roster, host, limits and software overrides. */
+function reset_create_form() {
+  element("room-form").reset();
+  reset_creation_mode();
+  render_expert_inputs("new-expert-modes", default_experts());
+  render_host_options("new-room-host", [], "");
+  state.create_parent = null;
+  state.launch.create = true;
+  state.launch.workspace = {};
+  state.launch.profiles = JSON.parse(JSON.stringify(state.launch.saved_profiles || {}));
+  state.launch.notice = "";
+  render_launch_settings();
+  publish_view();
+}
+
 /** Prepare the creation form for a brainstorm room that remembers this free room. */
 function prepare_brainstorm() {
+  reset_create_form();
   const room = state.room;
   const members = (room.free?.members || []).filter(member => member.status === "active");
   const host = members.find(member => member.role === "host" && member.access !== "online") || members.find(member => member.access !== "online");
@@ -1524,6 +1540,8 @@ async function load_launch_settings() {
     if (local_connection) state.launch.connect_command = `codiscuss local connect "${location.origin}"`;
     if (!local_connection && !local) return;
     const settings = await local_launch_request("settings");
+    // Keep the saved machine defaults so every new form can start from them again.
+    state.launch.saved_profiles = JSON.parse(JSON.stringify(settings.participants || {}));
     Object.assign(state.launch, { available: true, profiles: settings.participants, error: "",
       notice: local_connection ? "已连接本机服务，讨论保存在当前网站" : "" });
     load_room_models();
@@ -1724,6 +1742,7 @@ async function save_launch_defaults() {
   }));
   try {
     await local_launch_request("settings", { participants });
+    state.launch.saved_profiles = { ...state.launch.saved_profiles, ...JSON.parse(JSON.stringify(participants)) };
     state.launch.notice = "已保存本机软件配置，后续讨论可复用";
     state.launch.error = "";
   } catch (error) { state.launch.error = error.message; }
@@ -2506,7 +2525,8 @@ function finish_directory_drag(event) {
 /** Bind forms, filters, and explicit read/write actions. */
 function bind_controls() {
   document.addEventListener("input", () => { state.navigation_version++; });
-  const actions = { "new-room": () => element("room-dialog").showModal(), "empty-create": () => element("room-dialog").showModal(),
+  const open_create = () => { reset_create_form(); element("room-dialog").showModal(); };
+  const actions = { "new-room": open_create, "empty-create": open_create,
     "close-room-dialog": () => element("room-dialog").close(), "close-message-dialog": () => element("message-dialog").close(),
     "refresh": refresh_room, "cancel-reply": cancel_reply, "go-context": () => select_tab("context"),
     "copy-reading": () => copy_text(`${location.origin}/r/${state.room.id}`),
@@ -2783,7 +2803,7 @@ async function execute_view_action(name, value) {
     choose_runtime, export_runtime, download_member_access, copy_member_join, pause_runtime, check_limits, pause_discussion, restart_discussion, force_close, conclude_discussion,
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection: load_launch_settings,
     load_room_configuration, save_room_configuration, interrupt_member, toggle_recipient, change_member, invite_member, interrupt_free, set_proxy, copy_online_notice,
-    prepare_brainstorm, return_conclusion, clear_create_parent: () => { state.create_parent = null; },
+    prepare_brainstorm, return_conclusion,
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };
   try {
     await actions[name](value);
@@ -2803,7 +2823,7 @@ function change_view_theme(theme) {
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
   write_launch: write_launch_field, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
-  launch_model_state, load_launch_models, write_launch_model, launch_summary, pick_launch_directory, restore_launch_profile, empty_discussion_message,
+  launch_model_state, load_launch_models, write_launch_model, launch_summary, pick_launch_directory, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
