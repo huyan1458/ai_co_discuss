@@ -740,6 +740,9 @@ test('tasks direct website work to the approved codiscuss subcommands', async t 
   assert.match(claude.prompt, /rg --encoding utf-8/);
   const agy = task_files({ ...f.config, participants: { Codex: { adapter: 'antigravity_cli' } } }, f.event, 'token-for-test', {});
   assert.match(agy.prompt, /接入程序已为本次执行完成 execution enter/);
+  assert.match(agy.prompt, /turn create --plan-file/);
+  const expert = task_files(f.config, { ...f.event, role: 'expert' }, 'token-for-test', {});
+  assert.doesNotMatch(expert.prompt, /--plan-file/);
   assert.equal(task.skills_directory, join(f.config.project, '.agents', 'skills'));
 });
 
