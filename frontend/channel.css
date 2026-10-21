@@ -895,7 +895,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-brand-icon { background: var(--channel-accent); border-radius: 6px; box-shadow: none; }
   .channel-workspace-heading strong { letter-spacing: .02em; }
   .channel-workspace-heading > span:last-child { color: #666666; letter-spacing: .02em; }
-  .channel-sidebar-content { padding-top: 20px; }
+  .channel-sidebar-content { padding-top: 11px; }
   .channel-directory-heading { letter-spacing: .035em; }
   .channel-link { min-height: 38px; margin-block: 3px; }
   .channel-room-row { border-radius: 5px; }
