@@ -24,7 +24,7 @@ const THEMES = ["channel", "channel-light"];
 const SOURCE_LABELS = { demo: "示例", user: "本人发言", proxy: "用户代发", cli: "CLI 发言", url: "历史 URL 发言", host_proxy: "主持人代发" };
 const PHASE_LABELS = { preparing: "准备中", initial: "独立观点", discussing: "深入讨论", reviewing: "结论复核", paused: "已暂停", concluded: "已收束" };
 const TURN_LABELS = { pending: "待处理", notified: "已通知，待回答", answered: "已回答", cancelled: "已取消" };
-const IDENTITIES = {
+const PLATFORM_IDENTITIES = {
   "用户": { label: "User", initials: "U", style: "user", icon: "/icons/user.svg", description: "发起与协助" },
   Codex: { initials: "CX", style: "codex", icon: "/icons/openai.svg", description: "AI 身份" },
   Claude: { initials: "CL", style: "claude", icon: "/icons/claude.svg", description: "AI 身份" },
@@ -32,6 +32,7 @@ const IDENTITIES = {
   DeepSeek: { initials: "DS", style: "deepseek", icon: "/icons/deepseek.svg", description: "AI 身份" },
   Qwen: { initials: "QW", style: "qwen", icon: "/icons/qwen.svg", description: "AI 身份" },
 };
+const IDENTITIES = by_platform(PLATFORM_IDENTITIES, (identity, name) => ({ ...identity, label: name, description: "AI 实例" }));
 const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false, free_to: [], free_notice: "", free_error: "",
   free_proxy: "", create_parent: null,
   archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
@@ -55,9 +56,20 @@ state.directory_pending = new Map();
 state.directory_version = 0;
 state.navigation_version = 0;
 state.launch = { available: false, remote: false, connect_command: "", profiles: {}, workspace: {}, create: false, error: "", notice: "", recoveries: [] };
-const LAUNCH_CLIENTS = { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }],
+const PLATFORM_CLIENTS = { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }],
   Claude: [{ value: "claude", label: "Claude Code CLI" }],
   Gemini: [{ value: "antigravity_cli", label: "Antigravity CLI" }, { value: "antigravity", label: "Antigravity App" }] };
+// A platform is a type; `Claude-评审` is another instance of it. Lookups by instance name fall back to the
+// platform, while iteration still lists the platforms only.
+const INSTANCE_PATTERN = /^(Codex|Claude|Gemini|DeepSeek|Qwen)(?:-[0-9A-Za-z_\u4e00-\u9fff]{1,16})?$/;
+/** The platform of an AI instance name, or null for the user and invalid names. */
+function platform_of(name) { return INSTANCE_PATTERN.exec(String(name))?.[1] ?? null; }
+/** Resolve instance names to their platform's entry without listing instances as keys. */
+function by_platform(table, decorate = entry => entry) {
+  return new Proxy(table, { get: (target, name) => Object.hasOwn(target, name) || typeof name !== "string" ? target[name]
+    : platform_of(name) && target[platform_of(name)] ? decorate(target[platform_of(name)], name) : undefined });
+}
+const LAUNCH_CLIENTS = by_platform(PLATFORM_CLIENTS);
 
 /** Return a DOM element by its stable ID. */
 function element(id) { return document.getElementById(id); }
@@ -861,13 +873,17 @@ async function invite_member({ name, access }) {
     if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
     if (access === "online") {
       // Online members never write themselves, so their credential is discarded right away.
+      const taken = new Set((state.room.free?.members || []).map(member => member.name));
+      let instance = name;
+      for (let number = 2; taken.has(instance); number++) instance = `${name}-${number}`;
+      name = instance;
       await request_json(`/api/rooms/${room_id}/members`, { name, access, token: crypto.randomUUID() + crypto.randomUUID() });
       state.free_notice = `${name} 已作为在线成员加入：点名它后，在成员栏复制阅读通知，拿到回答再代发。`;
       if (state.room?.id === room_id) await refresh_room();
       return;
     }
     const draft = launch_options();
-    const result = await local_launch_request("room-member", { room_id, token, action: "add", name, access,
+    const result = await local_launch_request("room-member", { room_id, token, action: "add", name, access, new_instance: true,
       participants: draft.participants, cwd: draft.cwd, project_access: draft.project_access });
     state.free_notice = result.access_file
       ? `${name} 已作为手动成员加入。请在它的会话中使用 discuss-participant 技能，并用 --access-file "${result.access_file}" 读写本房间（room view 可看到它的待处理请求，回答时用 --request 关联）。`
@@ -1573,7 +1589,8 @@ function clear_launch_overrides(draft) {
 
 /** Save machine defaults without per-discussion session IDs or project write access. */
 async function save_launch_defaults() {
-  const participants = Object.fromEntries(Object.entries(launch_options().participants).map(([name, profile]) => {
+  // Defaults are per platform; an extra instance's model and effort apply to its own discussion only.
+  const participants = Object.fromEntries(Object.entries(launch_options().participants).filter(([name]) => platform_of(name) === name).map(([name, profile]) => {
     const { session_id, project_access, ...defaults } = profile;
     return [name, defaults];
   }));
@@ -1893,7 +1910,7 @@ function reset_creation_mode() {
 
 /** Render independently configurable expert modes without changing identity names. */
 function render_expert_inputs(container_id, experts) {
-  element(container_id).innerHTML = Object.keys(default_experts()).map((name) =>
+  element(container_id).innerHTML = [...new Set([...Object.keys(default_experts()), ...Object.keys(experts).filter(platform_of)])].map((name) =>
     `<label>${name}<select data-expert="${name}" aria-label="${name} 参与方式"><option value="">不参与</option><option value="cli">本地 CLI · 读写</option><option value="online">在线 AI · 只读</option></select></label>`).join("");
   element(container_id).querySelectorAll("[data-expert]").forEach((control) => { control.value = experts[control.dataset.expert] || ""; });
 }
@@ -2483,9 +2500,31 @@ function write_view_field(id, value) {
   publish_view();
 }
 
+/** A participation select for one AI name; instances beyond the platforms get their own control. */
+function expert_control(container_id, name) {
+  const container = element(container_id);
+  let control = container?.querySelector(`[data-expert="${CSS.escape(name)}"]`);
+  if (!control && container && platform_of(name)) {
+    container.insertAdjacentHTML("beforeend", `<label>${escape_html(name)}<select data-expert="${escape_html(name)}" aria-label="${escape_html(name)} 参与方式"><option value="">不参与</option><option value="cli">本地 CLI · 读写</option><option value="online">在线 AI · 只读</option></select></label>`);
+    control = container.querySelector(`[data-expert="${CSS.escape(name)}"]`);
+  }
+  return control;
+}
+
+/** Add another instance of a platform to a topic draft; it starts from the platform's software settings. */
+function add_view_instance(container_id, platform, value) {
+  const taken = new Set(Object.keys(read_expert_inputs(container_id)));
+  let name = platform;
+  for (let number = 2; taken.has(name); number++) name = `${platform}-${number}`;
+  const { session_id, ...profile } = state.launch.profiles[platform] || {};
+  if (name !== platform) state.launch.profiles[name] = structuredClone(profile);
+  write_view_expert(container_id, name, value);
+  return name;
+}
+
 /** Update one expert's participation mode in a shared topic draft. */
 function write_view_expert(container_id, name, value) {
-  const control = element(container_id)?.querySelector(`[data-expert="${CSS.escape(name)}"]`);
+  const control = expert_control(container_id, name);
   if (!control) return;
   control.value = value;
   control.dispatchEvent(new Event("input", { bubbles: true }));
@@ -2567,7 +2606,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
   write_launch: write_launch_field, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS, launch_model_hints: LAUNCH_MODEL_HINTS, launch_effort_levels: LAUNCH_EFFORT_LEVELS, launch_summary, empty_discussion_message,
   start_drag: start_directory_drag,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
-  write_expert: write_view_expert, execute: execute_view_action, theme: change_view_theme,
+  write_expert: write_view_expert, add_instance: add_view_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
   request: request_json, identities: IDENTITIES, display_name, sources: SOURCE_LABELS, phases: PHASE_LABELS,
   runtime_label, execution_label, limits_label, participant_model,
   turns: TURN_LABELS, turn_label, turn_guidance, floor_status, progress_round, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };

@@ -13,6 +13,7 @@ import hmac
 import json
 import time
 
+from .identity import MAX_ROOM_AGENTS, is_ai
 from .runtime import LEASE_SECONDS, begin_write, token_hash
 
 FREE_EXECUTION_MINUTES = 20
@@ -51,9 +52,9 @@ def room_mode(connection, room_id):
     return row[0] if row else "brainstorm"
 
 
-def member_value(member, participants):
+def member_value(member):
     """Validate one member and its client-generated credential."""
-    if not isinstance(member, dict) or member.get("name") not in participants[1:]:
+    if not isinstance(member, dict) or not is_ai(member.get("name")):
         raise ValueError("成员须为有效 AI 身份")
     if not token_hash(member.get("token")):
         raise ValueError("每位成员须提供 32–256 字符的成员凭证")
@@ -66,11 +67,11 @@ def member_value(member, participants):
     return {"name": member["name"], "adapter": adapter, "token": member["token"], "access": access, "session_mode": session_mode}
 
 
-def member_values(members, participants):
+def member_values(members):
     """Validate the initial members of a new free room."""
-    if not isinstance(members, list) or not 1 <= len(members) <= len(participants) - 1:
+    if not isinstance(members, list) or not 1 <= len(members) <= MAX_ROOM_AGENTS:
         raise ValueError("自由房间须有至少 1 位 AI 成员")
-    result = [member_value(member, participants) for member in members]
+    result = [member_value(member) for member in members]
     if len({member["name"] for member in result}) != len(result):
         raise ValueError("成员名称不能重复")
     return result
@@ -527,11 +528,11 @@ def interrupt_member(connection, room_id, member_id, token):
     return free_view(connection, room_id)
 
 
-def add_member(connection, room_id, token, payload, participants, now):
+def add_member(connection, room_id, token, payload, now):
     """Owner adds a member while the room keeps running; other members are not interrupted."""
     require_owner(connection, room_id, token)
     begin_write(connection)
-    member = member_value(payload, participants)
+    member = member_value(payload)
     if connection.execute("SELECT 1 FROM room_members WHERE room_id=? AND name=? AND status<>'removed'", (room_id, member["name"])).fetchone():
         raise FileExistsError(f"{member['name']} 已是本房间成员；离开的成员请用请回")
     insert_member(connection, room_id, member, now)

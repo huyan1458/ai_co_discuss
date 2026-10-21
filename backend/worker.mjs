@@ -10,6 +10,15 @@ const MAX_SUMMARY_LENGTH = 1000;
 const PAGE_SIZE = 20;
 const UNCATEGORIZED_FOLDER_ID = "__uncategorized__";
 const PARTICIPANTS = ["用户", "Codex", "Claude", "Gemini", "DeepSeek", "Qwen"];
+// A platform is a type; `Claude` and `Claude-评审` are two instances of it with their own sessions.
+const INSTANCE_PATTERN = new RegExp(`^(${PARTICIPANTS.slice(1).join("|")})(?:-[0-9A-Za-z_一-鿿]{1,16})?$`);
+const MAX_ROOM_AGENTS = 12;
+
+/** Whether a name is an AI platform or a named instance of one. */
+function is_ai(name) { return typeof name === "string" && INSTANCE_PATTERN.test(name); }
+
+/** Whether a name may author, submit or be scheduled: the user or any AI instance. */
+function is_participant(name) { return name === "用户" || is_ai(name); }
 const PHASES = { preparing: "准备中", initial: "独立观点", discussing: "深入讨论", reviewing: "结论复核", paused: "已暂停", concluded: "已收束" };
 const TURN_STATUSES = { pending: "待处理", notified: "已通知，待回答", answered: "已回答", cancelled: "已取消", queued: "排队中", skipped: "未开始即取消" };
 const MAX_TOPIC_DETAIL = 4000;
@@ -181,7 +190,7 @@ async function update_floor(database, room_id, payload) {
   const { actor, action, revision } = payload;
   const speaker = payload.speaker ?? actor;
   const proxy = actor === room.host && room.experts[speaker] === "online";
-  if (!PARTICIPANTS.includes(speaker) || (![speaker, "用户"].includes(actor) && !proxy)) throw new HttpError(400, "本地专家自行操作发言权；主持人仅代操作在线专家，用户可协助");
+  if (!is_participant(speaker) || (![speaker, "用户"].includes(actor) && !proxy)) throw new HttpError(400, "本地专家自行操作发言权；主持人仅代操作在线专家，用户可协助");
   if (!["take", "return"].includes(action) || !Number.isInteger(revision) || revision < 0) throw new HttpError(400, "请提供 take/return 和最新的发言权 revision");
   const statement = action === "take"
     ? database.prepare("UPDATE room_floor SET holder=?,revision=revision+1 WHERE room_id=? AND revision=? AND holder IS NULL AND next_speaker=? RETURNING holder,next_speaker,revision").bind(speaker, room_id, revision, speaker)
@@ -265,7 +274,7 @@ function topic_values(payload, current = {}) {
   for (const field of ["host", "phase", "experts"]) result[field] = payload[field] ?? result[field];
   const experts = result.experts;
   if (!experts || typeof experts !== "object" || Array.isArray(experts) ||
-    Object.entries(experts).some(([name, mode]) => !PARTICIPANTS.slice(1).includes(name) || !["cli", "online"].includes(mode))) {
+    Object.keys(experts).length > MAX_ROOM_AGENTS || Object.entries(experts).some(([name, mode]) => !is_ai(name) || !["cli", "online"].includes(mode))) {
     throw new HttpError(400, "专家需为有效 AI 身份，参与方式为 cli 或 online");
   }
   if (result.host !== "用户" && experts[result.host] !== "cli") throw new HttpError(400, "AI 主持人必须是可读可写的本地 CLI 参与者");
@@ -516,7 +525,7 @@ function message_values(payload) {
   const text = String(payload.text ?? "").trim();
   const submission_id = submission_value(payload.submission_id);
   const reply_to = payload.reply_to ? integer(payload.reply_to) : null;
-  if (!PARTICIPANTS.includes(author)) throw new HttpError(400, "请选择有效的发言者");
+  if (!is_participant(author)) throw new HttpError(400, "请选择有效的发言者");
   if ((!text && !attachment_ids(payload).length) || text_length(text) > MAX_TEXT_LENGTH) {
     throw new HttpError(400, `发言需包含正文或附件，正文最多 ${MAX_TEXT_LENGTH} 字`);
   }
@@ -541,7 +550,7 @@ function attachment_metadata(params) {
     || [".", ".."].includes(file_name) || /[/\\\x00-\x1f\x7f]/.test(file_name)) {
     throw new HttpError(400, `文件名需为 1–${MAX_FILENAME_LENGTH} 字，不能包含路径或控制字符`);
   }
-  if (!PARTICIPANTS.includes(params.actor)) throw new HttpError(400, "上传附件须声明有效的 actor");
+  if (!is_participant(params.actor)) throw new HttpError(400, "上传附件须声明有效的 actor");
   return { file_name, actor: params.actor, submission_id: submission_value(params.submission_id) };
 }
 
@@ -641,7 +650,7 @@ function message_details(room, payload) {
   const { author } = payload;
   const kind = payload.kind ?? "opinion";
   const submitted_by = payload.submitted_by ?? (payload.source === "cli" ? author : "用户");
-  if (!["opinion", "moderation", "receipt"].includes(kind) || !PARTICIPANTS.includes(submitted_by)) throw new HttpError(400, "发言职责或提交者无效");
+  if (!["opinion", "moderation", "receipt"].includes(kind) || !is_participant(submitted_by)) throw new HttpError(400, "发言职责或提交者无效");
   if (!["用户", room.host, author].includes(submitted_by)) throw new HttpError(400, "只有用户或主持人可以代发其他专家的观点");
   if (kind === "moderation" && (author !== room.host || !["用户", room.host].includes(submitted_by))) throw new HttpError(400, "主持发言必须保留当前主持人署名");
   if (submitted_by === author && payload.source === "cli" && author !== "用户" && room.experts[author] !== "cli") throw new HttpError(400, "当前专家配置为在线只读，请由用户或主持人代发");
@@ -1361,7 +1370,7 @@ function pick(row, fields) {
 
 /** Validate one member and hash its client-generated credential. */
 async function free_member_value(member) {
-  if (!member || typeof member !== "object" || !PARTICIPANTS.slice(1).includes(member.name)) throw new HttpError(400, "成员须为有效 AI 身份");
+  if (!member || typeof member !== "object" || !is_ai(member.name)) throw new HttpError(400, "成员须为有效 AI 身份");
   const token_hash = await runtime_hash(member.token);
   if (!token_hash) throw new HttpError(400, "每位成员须提供 32–256 字符的成员凭证");
   const adapter = member.adapter ?? "";
@@ -1375,7 +1384,7 @@ async function free_member_value(member) {
 
 /** Validate the initial members of a new free room. */
 async function free_member_values(members) {
-  if (!Array.isArray(members) || !members.length || members.length > PARTICIPANTS.length - 1) throw new HttpError(400, "自由房间须有至少 1 位 AI 成员");
+  if (!Array.isArray(members) || !members.length || members.length > MAX_ROOM_AGENTS) throw new HttpError(400, "自由房间须有至少 1 位 AI 成员");
   const result = await Promise.all(members.map(free_member_value));
   if (new Set(result.map(member => member.name)).size !== result.length) throw new HttpError(400, "成员名称不能重复");
   return result;

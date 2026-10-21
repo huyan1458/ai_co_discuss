@@ -759,7 +759,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
 
 <style scoped>
 .channel-free-recipients { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px 2px; font-size: 12px; color: var(--ui-text-muted); }
-.channel-free-recipients button { min-height: 26px; padding: 2px 10px; border: 1px solid var(--ui-border); border-radius: 999px; color: var(--ui-text-toned); }
+.channel-free-recipients button { min-height: 26px; padding: 2px 8px; border: 1px solid var(--ui-border); border-radius: 6px; color: var(--ui-text-toned); }
 .channel-free-recipients button.is-on { border-color: var(--channel-accent); background: color-mix(in srgb, var(--channel-accent) 14%, transparent); color: var(--ui-text-highlighted); }
 .channel-free-recipients small { flex-basis: 100%; color: var(--ui-text-dimmed); font-size: 11px; }
 .channel-link-button { color: var(--channel-accent); text-decoration: underline; text-underline-offset: 2px; }

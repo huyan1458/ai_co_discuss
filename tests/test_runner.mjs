@@ -1554,3 +1554,21 @@ test('the host task explains routing and hand-backs; other members get no dispat
   await runner.tick();
   assert.doesNotMatch(JSON.parse(readFileSync(join(config.directory, 'free-2.task.json'), 'utf8')).instructions, /--to 成员名/);
 });
+
+test('two instances of one platform keep separate sessions and credentials', async t => {
+  const { state, store, config } = await free_fixture(t);
+  config.participants['Claude-评审'] = { adapter: 'claude', model: 'opus' };
+  config.members['Claude-评审'] = { token: 'reviewer-credential'.repeat(2) };
+  state.others.push({ id: 8, name: 'Claude-评审', pending: [{ id: 3, message_id: 11 }] });
+  const sessions = { Claude: 'session-main', 'Claude-评审': 'session-review' };
+  const delivered = [];
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => {
+    delivered.push([task.participant, adapter.model || '', binding.session_id || '']);
+    return { status: 'accepted', session_id: sessions[task.participant] };
+  });
+  await runner.tick();
+  assert.deepEqual(delivered, [['Claude', '', ''], ['Claude-评审', 'opus', '']]);
+  assert.equal(store.binding('Claude').session_id, 'session-main');
+  assert.equal(store.binding('Claude-评审').session_id, 'session-review');
+  assert.equal(JSON.parse(readFileSync(join(config.directory, 'free-2.access.json'), 'utf8')).token, config.members['Claude-评审'].token);
+});

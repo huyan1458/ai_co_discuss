@@ -801,3 +801,16 @@ test('Worker free rooms forward online answers and link brainstorm rooms', async
   assert.deepEqual((await f.request(r.path)).body.linked_rooms, [{ id: child.body.id, title: '方案头脑风暴', phase: 'preparing' }]);
   assert.equal((await f.request('', { title: '无效', goal: 'x', parent_room_id: child.body.id })).status, 400);
 });
+
+test('Worker accepts named instances of one platform and rejects invalid names', async t => {
+  const f = await worker_fixture(t);
+  const room = await f.request('', { title: '双 Claude', goal: 'x', host: 'Claude-主持', experts: { 'Claude-主持': 'cli', Claude: 'cli' } });
+  assert.equal(room.status, 201, JSON.stringify(room.body));
+  assert.equal(room.body.floor.holder, 'Claude-主持');
+  assert.equal((await f.request('', { title: '无效', goal: 'x', experts: { Claudex: 'cli' } })).status, 400);
+  const r = await free_worker_room(f);
+  assert.equal((await f.request(`${r.path}/members`, { name: 'Claude-评审', token: 'reviewer-free'.repeat(4) }, r.owner)).status, 200);
+  assert.equal((await f.request(`${r.path}/members`, { name: 'Claude-', token: 'bad-free'.repeat(5) }, r.owner)).status, 400);
+  await r.say('请评审', { to: ['Claude-评审'] });
+  assert.deepEqual((await f.request(r.path)).body.free.requests.map(item => item.member), ['Claude-评审']);
+});

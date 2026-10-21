@@ -799,3 +799,28 @@ test('members join, leave and return while a free room keeps running', async t =
       { 'X-Discussion-Token': access.token })).status, 201);
   } finally { await service.close(); }
 });
+
+test('an extra instance inherits its platform settings but not its bound session, and names are never reused', async t => {
+  const f = await fixture(t);
+  assert.throws(() => save_launch_settings(f.home, { participants: { 'Claude-2': { adapter: 'claude', executable: process.execPath } } }), /按平台保存/);
+  const owner = randomUUID() + randomUUID();
+  const input = { site: f.site, entry: 'web', token: owner,
+    participants: { Claude: { ...f.input.participants.Claude, session_id: 'my-open-chat', model: 'sonnet' }, 'Claude-评审': { model: 'opus', effort: 'high' } },
+    room: { title: '双 Claude', goal: 'x', mode: 'free', members: ['Claude', 'Claude-评审'], submission_id: randomUUID() } };
+  const launched = await launch_discussion(f.home, input, f.options);
+  const config = load_config(launched.config_path);
+  assert.equal(config.participants.Claude.session_id, 'my-open-chat');
+  assert.equal(config.participants['Claude-评审'].session_id, undefined);
+  assert.deepEqual([config.participants['Claude-评审'].adapter, config.participants['Claude-评审'].model, config.participants['Claude-评审'].effort], ['claude', 'opus', 'high']);
+  assert.notEqual(config.members.Claude.token, config.members['Claude-评审'].token);
+  assert.deepEqual(launched.room.free.members.map(member => [member.name, member.session_mode]), [['Claude', 'borrowed'], ['Claude-评审', 'new']]);
+  const room_id = launched.room.id;
+  const added = await room_member(f.home, { site: f.site, room_id, token: owner, action: 'add', name: 'Claude', new_instance: true,
+    participants: { Claude: f.input.participants.Claude } });
+  assert.equal(added.member, 'Claude-2');
+  const member = added.free.members.find(item => item.name === 'Claude-2');
+  assert.equal((await request(f.site, `/api/rooms/${room_id}/members/${member.id}`, { action: 'remove' }, { 'X-Discussion-Token': owner })).status, 200);
+  const again = await room_member(f.home, { site: f.site, room_id, token: owner, action: 'add', name: 'Claude', new_instance: true,
+    participants: { Claude: f.input.participants.Claude } });
+  assert.equal(again.member, 'Claude-3', 'a removed instance name keeps its local session, so it is skipped');
+});

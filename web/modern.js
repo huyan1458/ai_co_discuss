@@ -5938,7 +5938,7 @@ var mf = {
 }), gf = !1;
 function _f(e) {
 	if (gf) return;
-	let t = JSON.parse("[{\"prefix\":\"lucide\",\"icons\":{\"archive\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"20\\\" height=\\\"5\\\" x=\\\"2\\\" y=\\\"3\\\" rx=\\\"1\\\"/><path d=\\\"M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8m-10 4h4\\\"/></g>\"},\"archive-restore\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"20\\\" height=\\\"5\\\" x=\\\"2\\\" y=\\\"3\\\" rx=\\\"1\\\"/><path d=\\\"M4 8v11a2 2 0 0 0 2 2h2M20 8v11a2 2 0 0 1-2 2h-2m-7-6l3-3l3 3m-3-3v9\\\"/></g>\"},\"arrow-down\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 5v14m7-7l-7 7l-7-7\\\"/>\"},\"arrow-left\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m12 19l-7-7l7-7m7 7H5\\\"/>\"},\"arrow-left-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M8 3L4 7l4 4M4 7h16m-4 14l4-4l-4-4m4 4H4\\\"/>\"},\"arrow-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 12h14m-7-7l7 7l-7 7\\\"/>\"},\"arrow-up\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m5 12l7-7l7 7m-7 7V5\\\"/>\"},\"arrow-up-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M7 7h10v10M7 17L17 7\\\"/>\"},\"at-sign\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"4\\\"/><path d=\\\"M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8\\\"/></g>\"},\"check\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20 6L9 17l-5-5\\\"/>\"},\"check-check\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M18 6L7 17l-5-5m20-2l-7.5 7.5L13 16\\\"/>\"},\"chevron-down\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m6 9l6 6l6-6\\\"/>\"},\"chevron-left\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m15 18l-6-6l6-6\\\"/>\"},\"chevron-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m9 18l6-6l-6-6\\\"/>\"},\"chevron-up\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m18 15l-6-6l-6 6\\\"/>\"},\"chevrons-left\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m11 17l-5-5l5-5m7 10l-5-5l5-5\\\"/>\"},\"chevrons-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m6 17l5-5l-5-5m7 10l5-5l-5-5\\\"/>\"},\"chevrons-up-down\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m7 15l5 5l5-5M7 9l5-5l5 5\\\"/>\"},\"circle-alert\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 8v4m0 4h.01\\\"/></g>\"},\"circle-check\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"m16 9l-5.5 5.5L8 12\\\"/></g>\"},\"circle-x\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"m15 9l-6 6m0-6l6 6\\\"/></g>\"},\"clock\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 6v6l4 2\\\"/></g>\"},\"copy\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"14\\\" height=\\\"14\\\" x=\\\"8\\\" y=\\\"8\\\" rx=\\\"2\\\" ry=\\\"2\\\"/><path d=\\\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\\\"/></g>\"},\"copy-check\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m12 15l2 2l4-4\\\"/><rect width=\\\"14\\\" height=\\\"14\\\" x=\\\"8\\\" y=\\\"8\\\" rx=\\\"2\\\" ry=\\\"2\\\"/><path d=\\\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\\\"/></g>\"},\"corner-down-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M20 4v7a4 4 0 0 1-4 4H4\\\"/><path d=\\\"m9 10l-5 5l5 5\\\"/></g>\"},\"corner-up-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M20 20v-7a4 4 0 0 0-4-4H4\\\"/><path d=\\\"M9 14L4 9l5-5\\\"/></g>\"},\"crown\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294zM5 21h14\\\"/>\"},\"download\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 15V3m9 12v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\\\"/><path d=\\\"m7 10l5 5l5-5\\\"/></g>\"},\"ellipsis\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"19\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"5\\\" cy=\\\"12\\\" r=\\\"1\\\"/></g>\"},\"expand\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m15 15l6 6M15 9l6-6m0 13v5h-5m5-13V3h-5M3 16v5h5m-5 0l6-6M3 8V3h5m1 6L3 3\\\"/>\"},\"eye\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M2.062 12.348a1 1 0 0 1 0-.696a10.75 10.75 0 0 1 19.876 0a1 1 0 0 1 0 .696a10.75 10.75 0 0 1-19.876 0\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"3\\\"/></g>\"},\"eye-off\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575a1 1 0 0 1 0 .696a10.8 10.8 0 0 1-1.444 2.49m-6.41-.679a3 3 0 0 1-4.242-4.242\\\"/><path d=\\\"M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151a1 1 0 0 1 0-.696a10.75 10.75 0 0 1 4.446-5.143M2 2l20 20\\\"/></g>\"},\"file\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\\\"/><path d=\\\"M14 2v5a1 1 0 0 0 1 1h5\\\"/></g>\"},\"file-text\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\\\"/><path d=\\\"M14 2v5a1 1 0 0 0 1 1h5M10 9H8m8 4H8m8 4H8\\\"/></g>\"},\"flag\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528\\\"/>\"},\"folder\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\\\"/>\"},\"folder-input\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1m0-4h10\\\"/><path d=\\\"m9 16l3-3l-3-3\\\"/></g>\"},\"folder-minus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M9 13h6m5 7a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\\\"/>\"},\"folder-open\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m6 14l1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2\\\"/>\"},\"forward\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m15 17l5-5l-5-5\\\"/><path d=\\\"M4 18v-2a4 4 0 0 1 4-4h12\\\"/></g>\"},\"globe\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 2a14.5 14.5 0 0 0 0 20a14.5 14.5 0 0 0 0-20M2 12h20\\\"/></g>\"},\"grip-vertical\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"9\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"9\\\" cy=\\\"5\\\" r=\\\"1\\\"/><circle cx=\\\"9\\\" cy=\\\"19\\\" r=\\\"1\\\"/><circle cx=\\\"15\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"15\\\" cy=\\\"5\\\" r=\\\"1\\\"/><circle cx=\\\"15\\\" cy=\\\"19\\\" r=\\\"1\\\"/></g>\"},\"hand\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2m0 4V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2m0 4.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8\\\"/><path d=\\\"M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15\\\"/></g>\"},\"hash\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M4 9h16M4 15h16M10 3L8 21m8-18l-2 18\\\"/>\"},\"infinity\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M6 16c5 0 7-8 12-8a4 4 0 0 1 0 8c-5 0-7-8-12-8a4 4 0 1 0 0 8\\\"/>\"},\"info\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 16v-4m0-4h.01\\\"/></g>\"},\"lightbulb\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M15 14c.2-1 .7-1.7 1.5-2.5c1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5c.7.7 1.3 1.5 1.5 2.5m0 4h6m-5 4h4\\\"/>\"},\"link\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\\\"/><path d=\\\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\\\"/></g>\"},\"list-checks\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M13 5h8m-8 7h8m-8 7h8M3 17l2 2l4-4M3 7l2 2l4-4\\\"/>\"},\"list-filter\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M2 5h20M6 12h12m-9 7h6\\\"/>\"},\"loader-circle\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M21 12a9 9 0 1 1-6.219-8.56\\\"/>\"},\"menu\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M4 5h16M4 12h16M4 19h16\\\"/>\"},\"message-circle\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092a10 10 0 1 0-4.777-4.719\\\"/>\"},\"message-square\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z\\\"/>\"},\"message-square-plus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2zM12 8v6m-3-3h6\\\"/>\"},\"messages-square\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2zm4-1a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1\\\"/>\"},\"mic\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 19v3m7-12v2a7 7 0 0 1-14 0v-2\\\"/><rect width=\\\"6\\\" height=\\\"13\\\" x=\\\"9\\\" y=\\\"2\\\" rx=\\\"3\\\"/></g>\"},\"minus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 12h14\\\"/>\"},\"monitor\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"20\\\" height=\\\"14\\\" x=\\\"2\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M8 21h8m-4-4v4\\\"/></g>\"},\"moon\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401\\\"/>\"},\"panel-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M9 3v18\\\"/></g>\"},\"panel-left-close\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M9 3v18m7-6l-3-3l3-3\\\"/></g>\"},\"panel-left-open\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M9 3v18m5-12l3 3l-3 3\\\"/></g>\"},\"panel-right\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M15 3v18\\\"/></g>\"},\"paperclip\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m16 6l-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551\\\"/>\"},\"pause\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"5\\\" height=\\\"18\\\" x=\\\"14\\\" y=\\\"3\\\" rx=\\\"1\\\"/><rect width=\\\"5\\\" height=\\\"18\\\" x=\\\"5\\\" y=\\\"3\\\" rx=\\\"1\\\"/></g>\"},\"pencil\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497zM15 5l4 4\\\"/>\"},\"play\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z\\\"/>\"},\"plug\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 22v-5m3-9V2m2 6a1 1 0 0 1 1 1v4a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1zM9 8V2\\\"/>\"},\"plus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 12h14m-7-7v14\\\"/>\"},\"refresh-cw\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M3 12a9 9 0 0 1 9-9a9.75 9.75 0 0 1 6.74 2.74L21 8\\\"/><path d=\\\"M21 3v5h-5m5 4a9 9 0 0 1-9 9a9.75 9.75 0 0 1-6.74-2.74L3 16\\\"/><path d=\\\"M8 16H3v5\\\"/></g>\"},\"rotate-ccw\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M3 12a9 9 0 1 0 9-9a9.75 9.75 0 0 0-6.74 2.74L3 8\\\"/><path d=\\\"M3 3v5h5\\\"/></g>\"},\"search\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m21 21l-4.34-4.34\\\"/><circle cx=\\\"11\\\" cy=\\\"11\\\" r=\\\"8\\\"/></g>\"},\"settings-2\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M14 17H5M19 7h-9\\\"/><circle cx=\\\"17\\\" cy=\\\"17\\\" r=\\\"3\\\"/><circle cx=\\\"7\\\" cy=\\\"7\\\" r=\\\"3\\\"/></g>\"},\"square\":{\"width\":24,\"height\":24,\"body\":\"<rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" rx=\\\"2\\\"/>\"},\"square-pen\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7\\\"/><path d=\\\"M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z\\\"/></g>\"},\"star\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.12 2.12 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.12 2.12 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.12 2.12 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.12 2.12 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.12 2.12 0 0 0 1.597-1.16z\\\"/>\"},\"sun\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"4\\\"/><path d=\\\"M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41\\\"/></g>\"},\"target\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"6\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"2\\\"/></g>\"},\"terminal\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 19h8M4 17l6-6l-6-6\\\"/>\"},\"trash-2\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M10 11v6m4-6v6m5-11v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\\\"/>\"},\"triangle-alert\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m21.73 18l-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3M12 9v4m0 4h.01\\\"/>\"},\"upload\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 3v12m5-7l-5-5l-5 5m14 7v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\\\"/>\"},\"x\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M18 6L6 18M6 6l12 12\\\"/>\"},\"zap\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M15.914 4a1.5 1.5 0 0 0-2.474-1.561l-9 9A1.5 1.5 0 0 0 5.5 14h4.002a.5.5 0 0 1 .471.666L8.086 20a1.5 1.5 0 0 0 2.475 1.56l9-9A1.5 1.5 0 0 0 18.5 10h-3.997a.5.5 0 0 1-.472-.667z\\\"/>\"}}}]");
+	let t = JSON.parse("[{\"prefix\":\"lucide\",\"icons\":{\"archive\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"20\\\" height=\\\"5\\\" x=\\\"2\\\" y=\\\"3\\\" rx=\\\"1\\\"/><path d=\\\"M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8m-10 4h4\\\"/></g>\"},\"archive-restore\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"20\\\" height=\\\"5\\\" x=\\\"2\\\" y=\\\"3\\\" rx=\\\"1\\\"/><path d=\\\"M4 8v11a2 2 0 0 0 2 2h2M20 8v11a2 2 0 0 1-2 2h-2m-7-6l3-3l3 3m-3-3v9\\\"/></g>\"},\"arrow-down\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 5v14m7-7l-7 7l-7-7\\\"/>\"},\"arrow-left\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m12 19l-7-7l7-7m7 7H5\\\"/>\"},\"arrow-left-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M8 3L4 7l4 4M4 7h16m-4 14l4-4l-4-4m4 4H4\\\"/>\"},\"arrow-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 12h14m-7-7l7 7l-7 7\\\"/>\"},\"arrow-up\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m5 12l7-7l7 7m-7 7V5\\\"/>\"},\"arrow-up-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M7 7h10v10M7 17L17 7\\\"/>\"},\"at-sign\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"4\\\"/><path d=\\\"M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8\\\"/></g>\"},\"check\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20 6L9 17l-5-5\\\"/>\"},\"check-check\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M18 6L7 17l-5-5m20-2l-7.5 7.5L13 16\\\"/>\"},\"chevron-down\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m6 9l6 6l6-6\\\"/>\"},\"chevron-left\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m15 18l-6-6l6-6\\\"/>\"},\"chevron-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m9 18l6-6l-6-6\\\"/>\"},\"chevron-up\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m18 15l-6-6l-6 6\\\"/>\"},\"chevrons-left\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m11 17l-5-5l5-5m7 10l-5-5l5-5\\\"/>\"},\"chevrons-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m6 17l5-5l-5-5m7 10l5-5l-5-5\\\"/>\"},\"chevrons-up-down\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m7 15l5 5l5-5M7 9l5-5l5 5\\\"/>\"},\"circle-alert\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 8v4m0 4h.01\\\"/></g>\"},\"circle-check\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"m16 9l-5.5 5.5L8 12\\\"/></g>\"},\"circle-x\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"m15 9l-6 6m0-6l6 6\\\"/></g>\"},\"clock\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 6v6l4 2\\\"/></g>\"},\"copy\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"14\\\" height=\\\"14\\\" x=\\\"8\\\" y=\\\"8\\\" rx=\\\"2\\\" ry=\\\"2\\\"/><path d=\\\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\\\"/></g>\"},\"copy-check\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m12 15l2 2l4-4\\\"/><rect width=\\\"14\\\" height=\\\"14\\\" x=\\\"8\\\" y=\\\"8\\\" rx=\\\"2\\\" ry=\\\"2\\\"/><path d=\\\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\\\"/></g>\"},\"corner-down-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M20 4v7a4 4 0 0 1-4 4H4\\\"/><path d=\\\"m9 10l-5 5l5 5\\\"/></g>\"},\"corner-up-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M20 20v-7a4 4 0 0 0-4-4H4\\\"/><path d=\\\"M9 14L4 9l5-5\\\"/></g>\"},\"crown\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294zM5 21h14\\\"/>\"},\"download\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 15V3m9 12v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\\\"/><path d=\\\"m7 10l5 5l5-5\\\"/></g>\"},\"ellipsis\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"19\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"5\\\" cy=\\\"12\\\" r=\\\"1\\\"/></g>\"},\"expand\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m15 15l6 6M15 9l6-6m0 13v5h-5m5-13V3h-5M3 16v5h5m-5 0l6-6M3 8V3h5m1 6L3 3\\\"/>\"},\"eye\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M2.062 12.348a1 1 0 0 1 0-.696a10.75 10.75 0 0 1 19.876 0a1 1 0 0 1 0 .696a10.75 10.75 0 0 1-19.876 0\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"3\\\"/></g>\"},\"eye-off\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575a1 1 0 0 1 0 .696a10.8 10.8 0 0 1-1.444 2.49m-6.41-.679a3 3 0 0 1-4.242-4.242\\\"/><path d=\\\"M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151a1 1 0 0 1 0-.696a10.75 10.75 0 0 1 4.446-5.143M2 2l20 20\\\"/></g>\"},\"file\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\\\"/><path d=\\\"M14 2v5a1 1 0 0 0 1 1h5\\\"/></g>\"},\"file-text\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\\\"/><path d=\\\"M14 2v5a1 1 0 0 0 1 1h5M10 9H8m8 4H8m8 4H8\\\"/></g>\"},\"flag\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528\\\"/>\"},\"folder\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\\\"/>\"},\"folder-input\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1m0-4h10\\\"/><path d=\\\"m9 16l3-3l-3-3\\\"/></g>\"},\"folder-minus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M9 13h6m5 7a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\\\"/>\"},\"folder-open\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m6 14l1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2\\\"/>\"},\"forward\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m15 17l5-5l-5-5\\\"/><path d=\\\"M4 18v-2a4 4 0 0 1 4-4h12\\\"/></g>\"},\"globe\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 2a14.5 14.5 0 0 0 0 20a14.5 14.5 0 0 0 0-20M2 12h20\\\"/></g>\"},\"grip-vertical\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"9\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"9\\\" cy=\\\"5\\\" r=\\\"1\\\"/><circle cx=\\\"9\\\" cy=\\\"19\\\" r=\\\"1\\\"/><circle cx=\\\"15\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"15\\\" cy=\\\"5\\\" r=\\\"1\\\"/><circle cx=\\\"15\\\" cy=\\\"19\\\" r=\\\"1\\\"/></g>\"},\"hand\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2m0 4V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2m0 4.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8\\\"/><path d=\\\"M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15\\\"/></g>\"},\"hash\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M4 9h16M4 15h16M10 3L8 21m8-18l-2 18\\\"/>\"},\"infinity\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M6 16c5 0 7-8 12-8a4 4 0 0 1 0 8c-5 0-7-8-12-8a4 4 0 1 0 0 8\\\"/>\"},\"info\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 16v-4m0-4h.01\\\"/></g>\"},\"lightbulb\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M15 14c.2-1 .7-1.7 1.5-2.5c1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5c.7.7 1.3 1.5 1.5 2.5m0 4h6m-5 4h4\\\"/>\"},\"link\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\\\"/><path d=\\\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\\\"/></g>\"},\"list-checks\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M13 5h8m-8 7h8m-8 7h8M3 17l2 2l4-4M3 7l2 2l4-4\\\"/>\"},\"list-filter\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M2 5h20M6 12h12m-9 7h6\\\"/>\"},\"loader-circle\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M21 12a9 9 0 1 1-6.219-8.56\\\"/>\"},\"log-in\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m10 17l5-5l-5-5m5 5H3m12-9h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4\\\"/>\"},\"log-out\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m16 17l5-5l-5-5m5 5H9m0 9H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4\\\"/>\"},\"menu\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M4 5h16M4 12h16M4 19h16\\\"/>\"},\"message-circle\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092a10 10 0 1 0-4.777-4.719\\\"/>\"},\"message-square\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z\\\"/>\"},\"message-square-plus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2zM12 8v6m-3-3h6\\\"/>\"},\"messages-square\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2zm4-1a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1\\\"/>\"},\"mic\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 19v3m7-12v2a7 7 0 0 1-14 0v-2\\\"/><rect width=\\\"6\\\" height=\\\"13\\\" x=\\\"9\\\" y=\\\"2\\\" rx=\\\"3\\\"/></g>\"},\"minus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 12h14\\\"/>\"},\"monitor\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"20\\\" height=\\\"14\\\" x=\\\"2\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M8 21h8m-4-4v4\\\"/></g>\"},\"moon\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401\\\"/>\"},\"panel-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M9 3v18\\\"/></g>\"},\"panel-left-close\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M9 3v18m7-6l-3-3l3-3\\\"/></g>\"},\"panel-left-open\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M9 3v18m5-12l3 3l-3 3\\\"/></g>\"},\"panel-right\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M15 3v18\\\"/></g>\"},\"paperclip\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m16 6l-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551\\\"/>\"},\"pause\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"5\\\" height=\\\"18\\\" x=\\\"14\\\" y=\\\"3\\\" rx=\\\"1\\\"/><rect width=\\\"5\\\" height=\\\"18\\\" x=\\\"5\\\" y=\\\"3\\\" rx=\\\"1\\\"/></g>\"},\"pencil\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497zM15 5l4 4\\\"/>\"},\"play\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z\\\"/>\"},\"plug\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 22v-5m3-9V2m2 6a1 1 0 0 1 1 1v4a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1zM9 8V2\\\"/>\"},\"plus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 12h14m-7-7v14\\\"/>\"},\"refresh-cw\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M3 12a9 9 0 0 1 9-9a9.75 9.75 0 0 1 6.74 2.74L21 8\\\"/><path d=\\\"M21 3v5h-5m5 4a9 9 0 0 1-9 9a9.75 9.75 0 0 1-6.74-2.74L3 16\\\"/><path d=\\\"M8 16H3v5\\\"/></g>\"},\"rotate-ccw\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M3 12a9 9 0 1 0 9-9a9.75 9.75 0 0 0-6.74 2.74L3 8\\\"/><path d=\\\"M3 3v5h5\\\"/></g>\"},\"search\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m21 21l-4.34-4.34\\\"/><circle cx=\\\"11\\\" cy=\\\"11\\\" r=\\\"8\\\"/></g>\"},\"settings-2\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M14 17H5M19 7h-9\\\"/><circle cx=\\\"17\\\" cy=\\\"17\\\" r=\\\"3\\\"/><circle cx=\\\"7\\\" cy=\\\"7\\\" r=\\\"3\\\"/></g>\"},\"square\":{\"width\":24,\"height\":24,\"body\":\"<rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" rx=\\\"2\\\"/>\"},\"square-pen\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7\\\"/><path d=\\\"M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z\\\"/></g>\"},\"star\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.12 2.12 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.12 2.12 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.12 2.12 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.12 2.12 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.12 2.12 0 0 0 1.597-1.16z\\\"/>\"},\"sun\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"4\\\"/><path d=\\\"M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41\\\"/></g>\"},\"target\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"6\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"2\\\"/></g>\"},\"terminal\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 19h8M4 17l6-6l-6-6\\\"/>\"},\"trash-2\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M10 11v6m4-6v6m5-11v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\\\"/>\"},\"triangle-alert\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m21.73 18l-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3M12 9v4m0 4h.01\\\"/>\"},\"upload\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 3v12m5-7l-5-5l-5 5m14 7v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\\\"/>\"},\"user-plus\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\\\"/><circle cx=\\\"9\\\" cy=\\\"7\\\" r=\\\"4\\\"/><path d=\\\"M19 8v6m3-3h-6\\\"/></g>\"},\"x\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M18 6L6 18M6 6l12 12\\\"/>\"},\"zap\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M15.914 4a1.5 1.5 0 0 0-2.474-1.561l-9 9A1.5 1.5 0 0 0 5.5 14h4.002a.5.5 0 0 1 .471.666L8.086 20a1.5 1.5 0 0 0 2.475 1.56l9-9A1.5 1.5 0 0 0 18.5 10h-3.997a.5.5 0 0 1-.472-.667z\\\"/>\"}}}]");
 	for (let n of t) for (let [t, r] of Object.entries(n.icons)) e(n.prefix ? n.prefix + ":" + t : t, r);
 	gf = !0;
 }
@@ -34474,6 +34474,1711 @@ var uV = {
 		]));
 	}
 }), mV = {
+	Root: GS,
+	Trigger: aC,
+	Portal: ZS,
+	Content: KS,
+	Arrow: VS,
+	Item: JS,
+	Group: qS,
+	Separator: eC,
+	CheckboxItem: HS,
+	ItemIndicator: YS,
+	Label: XS,
+	RadioGroup: QS,
+	RadioItem: $S,
+	Sub: tC,
+	SubContent: nC,
+	SubTrigger: rC
+}, hV = {
+	Root: SC,
+	Trigger: IC,
+	Portal: kC,
+	Content: CC,
+	Arrow: vC,
+	Item: EC,
+	Group: TC,
+	Separator: MC,
+	CheckboxItem: yC,
+	ItemIndicator: DC,
+	Label: OC,
+	RadioGroup: AC,
+	RadioItem: jC,
+	Sub: NC,
+	SubContent: PC,
+	SubTrigger: FC,
+	Filter: wC
+}, gV = {
+	Root: BC,
+	Trigger: KC,
+	Portal: GC,
+	Content: WC,
+	Arrow: LC
+}, _V = {
+	Root: cC,
+	Trigger: _C,
+	Portal: gC,
+	Content: hC,
+	Arrow: uC,
+	Close: dC,
+	Anchor: lC
+};
+//#endregion
+//#region node_modules/@nuxt/ui/dist/runtime/composables/useFilter.js
+function vV() {
+	let { contains: e, startsWith: t } = Zh({ sensitivity: "base" });
+	function n(n, r) {
+		return e(n, r) ? e(r, n) ? 0 : t(n, r) ? 1 : 2 : null;
+	}
+	function r(e, t, r) {
+		if (typeof e != "object" || !e) return n(String(e), t);
+		let i = null;
+		for (let a of r) {
+			let r = Vm(e, a);
+			if (r == null) continue;
+			let o = Array.isArray(r) ? r.map(String) : [String(r)];
+			for (let e of o) {
+				let r = n(e, t);
+				if (r !== null && (i === null || r < i) && (i = r), i === 0) return 0;
+			}
+		}
+		return i;
+	}
+	function i(e, t, n) {
+		if (!t) return e;
+		let i = [];
+		for (let a of e) {
+			let e = r(a, t, n);
+			e !== null && i.push({
+				item: a,
+				score: e
+			});
+		}
+		return i.sort((e, t) => e.score - t.score), i.map(({ item: e }) => e);
+	}
+	function a(e, t, n) {
+		return t ? e.map((e) => {
+			let i = [];
+			for (let a of e) {
+				if (a == null) continue;
+				if (n.isStructural?.(a)) {
+					i.push({
+						item: a,
+						score: -1
+					});
+					continue;
+				}
+				let e = r(a, t, n.fields);
+				e !== null && i.push({
+					item: a,
+					score: e
+				});
+			}
+			let a = 0;
+			for (let e = 0; e <= i.length; e++) (e === i.length || i[e].score === -1) && (i.splice(a, e - a, ...i.slice(a, e).sort((e, t) => e.score - t.score)), a = e + 1);
+			return i.map(({ item: e }) => e);
+		}).filter((e) => e.some((e) => !n.isStructural?.(e))) : e;
+	}
+	return {
+		score: n,
+		scoreItem: r,
+		filter: i,
+		filterGroups: a
+	};
+}
+//#endregion
+//#region virtual:nuxt-ui-templates/ui/input.ts
+var yV = {
+	slots: {
+		root: "relative inline-flex items-center",
+		base: ["w-full rounded-md border-0 appearance-none placeholder:text-dimmed disabled:cursor-not-allowed disabled:opacity-75", "transition-colors"],
+		leading: "absolute inset-y-0 start-0 flex items-center",
+		leadingIcon: "shrink-0 text-dimmed",
+		leadingAvatar: "shrink-0",
+		leadingAvatarSize: "",
+		trailing: "absolute inset-y-0 end-0 flex items-center",
+		trailingIcon: "shrink-0 text-dimmed"
+	},
+	variants: {
+		fieldGroup: {
+			horizontal: {
+				root: "group has-focus-visible:z-[1]",
+				base: "group-not-only:group-first:rounded-e-none group-not-only:group-last:rounded-s-none group-not-last:group-not-first:rounded-none"
+			},
+			vertical: {
+				root: "group has-focus-visible:z-[1]",
+				base: "group-not-only:group-first:rounded-b-none group-not-only:group-last:rounded-t-none group-not-last:group-not-first:rounded-none"
+			}
+		},
+		size: {
+			xs: {
+				base: "px-2 py-1 text-sm/4 gap-1",
+				leading: "ps-2",
+				trailing: "pe-2",
+				leadingIcon: "size-4",
+				leadingAvatarSize: "3xs",
+				trailingIcon: "size-4"
+			},
+			sm: {
+				base: "px-2.5 py-1.5 text-sm/4 gap-1.5",
+				leading: "ps-2.5",
+				trailing: "pe-2.5",
+				leadingIcon: "size-4",
+				leadingAvatarSize: "3xs",
+				trailingIcon: "size-4"
+			},
+			md: {
+				base: "px-2.5 py-1.5 text-base/5 gap-1.5",
+				leading: "ps-2.5",
+				trailing: "pe-2.5",
+				leadingIcon: "size-5",
+				leadingAvatarSize: "2xs",
+				trailingIcon: "size-5"
+			},
+			lg: {
+				base: "px-3 py-2 text-base/5 gap-2",
+				leading: "ps-3",
+				trailing: "pe-3",
+				leadingIcon: "size-5",
+				leadingAvatarSize: "2xs",
+				trailingIcon: "size-5"
+			},
+			xl: {
+				base: "px-3 py-2 text-base gap-2",
+				leading: "ps-3",
+				trailing: "pe-3",
+				leadingIcon: "size-6",
+				leadingAvatarSize: "xs",
+				trailingIcon: "size-6"
+			}
+		},
+		variant: {
+			outline: "text-highlighted bg-default ring ring-inset ring-accented",
+			soft: "text-highlighted bg-elevated/50 hover:bg-elevated focus:bg-elevated disabled:bg-elevated/50",
+			subtle: "text-highlighted bg-elevated ring ring-inset ring-accented",
+			ghost: "text-highlighted bg-transparent hover:bg-elevated focus:bg-elevated disabled:bg-transparent dark:disabled:bg-transparent",
+			none: "text-highlighted bg-transparent focus:outline-none"
+		},
+		color: {
+			primary: "",
+			secondary: "",
+			success: "",
+			info: "",
+			warning: "",
+			error: "",
+			neutral: ""
+		},
+		leading: { true: "" },
+		trailing: { true: "" },
+		loading: { true: "" },
+		highlight: { true: "" },
+		fixed: { false: "" },
+		type: { file: "file:me-1.5 file:font-medium file:text-muted file:outline-none" }
+	},
+	compoundVariants: [
+		{
+			color: "primary",
+			variant: ["outline", "subtle"],
+			class: "outline-primary/25 focus-visible:outline-3 focus-visible:ring-primary"
+		},
+		{
+			color: "secondary",
+			variant: ["outline", "subtle"],
+			class: "outline-secondary/25 focus-visible:outline-3 focus-visible:ring-secondary"
+		},
+		{
+			color: "success",
+			variant: ["outline", "subtle"],
+			class: "outline-success/25 focus-visible:outline-3 focus-visible:ring-success"
+		},
+		{
+			color: "info",
+			variant: ["outline", "subtle"],
+			class: "outline-info/25 focus-visible:outline-3 focus-visible:ring-info"
+		},
+		{
+			color: "warning",
+			variant: ["outline", "subtle"],
+			class: "outline-warning/25 focus-visible:outline-3 focus-visible:ring-warning"
+		},
+		{
+			color: "error",
+			variant: ["outline", "subtle"],
+			class: "outline-error/25 focus-visible:outline-3 focus-visible:ring-error"
+		},
+		{
+			color: "primary",
+			variant: ["soft", "ghost"],
+			class: "outline-primary/25 focus-visible:outline-3"
+		},
+		{
+			color: "secondary",
+			variant: ["soft", "ghost"],
+			class: "outline-secondary/25 focus-visible:outline-3"
+		},
+		{
+			color: "success",
+			variant: ["soft", "ghost"],
+			class: "outline-success/25 focus-visible:outline-3"
+		},
+		{
+			color: "info",
+			variant: ["soft", "ghost"],
+			class: "outline-info/25 focus-visible:outline-3"
+		},
+		{
+			color: "warning",
+			variant: ["soft", "ghost"],
+			class: "outline-warning/25 focus-visible:outline-3"
+		},
+		{
+			color: "error",
+			variant: ["soft", "ghost"],
+			class: "outline-error/25 focus-visible:outline-3"
+		},
+		{
+			color: "primary",
+			highlight: !0,
+			class: "ring ring-inset ring-primary"
+		},
+		{
+			color: "secondary",
+			highlight: !0,
+			class: "ring ring-inset ring-secondary"
+		},
+		{
+			color: "success",
+			highlight: !0,
+			class: "ring ring-inset ring-success"
+		},
+		{
+			color: "info",
+			highlight: !0,
+			class: "ring ring-inset ring-info"
+		},
+		{
+			color: "warning",
+			highlight: !0,
+			class: "ring ring-inset ring-warning"
+		},
+		{
+			color: "error",
+			highlight: !0,
+			class: "ring ring-inset ring-error"
+		},
+		{
+			color: "neutral",
+			variant: ["outline", "subtle"],
+			class: "outline-inverted/25 focus-visible:outline-3 focus-visible:ring-inverted"
+		},
+		{
+			color: "neutral",
+			variant: ["soft", "ghost"],
+			class: "outline-inverted/25 focus-visible:outline-3"
+		},
+		{
+			color: "neutral",
+			highlight: !0,
+			class: "ring ring-inset ring-inverted"
+		},
+		{
+			leading: !0,
+			size: "xs",
+			class: "ps-7"
+		},
+		{
+			leading: !0,
+			size: "sm",
+			class: "ps-8"
+		},
+		{
+			leading: !0,
+			size: "md",
+			class: "ps-9"
+		},
+		{
+			leading: !0,
+			size: "lg",
+			class: "ps-10"
+		},
+		{
+			leading: !0,
+			size: "xl",
+			class: "ps-11"
+		},
+		{
+			trailing: !0,
+			size: "xs",
+			class: "pe-7"
+		},
+		{
+			trailing: !0,
+			size: "sm",
+			class: "pe-8"
+		},
+		{
+			trailing: !0,
+			size: "md",
+			class: "pe-9"
+		},
+		{
+			trailing: !0,
+			size: "lg",
+			class: "pe-10"
+		},
+		{
+			trailing: !0,
+			size: "xl",
+			class: "pe-11"
+		},
+		{
+			loading: !0,
+			leading: !0,
+			class: { leadingIcon: "animate-spin" }
+		},
+		{
+			loading: !0,
+			leading: !1,
+			trailing: !0,
+			class: { trailingIcon: "animate-spin" }
+		},
+		{
+			fixed: !1,
+			size: "xs",
+			class: "md:text-xs"
+		},
+		{
+			fixed: !1,
+			size: "sm",
+			class: "md:text-xs"
+		},
+		{
+			fixed: !1,
+			size: "md",
+			class: "md:text-sm"
+		},
+		{
+			fixed: !1,
+			size: "lg",
+			class: "md:text-sm"
+		}
+	],
+	defaultVariants: {
+		size: "md",
+		color: "primary",
+		variant: "outline"
+	}
+}, bV = [
+	"id",
+	"type",
+	"value",
+	"name",
+	"placeholder",
+	"disabled",
+	"required",
+	"autocomplete"
+], xV = /*@__PURE__*/ Object.assign({ inheritAttrs: !1 }, {
+	__name: "Input",
+	props: {
+		as: {
+			type: null,
+			required: !1
+		},
+		id: {
+			type: String,
+			required: !1
+		},
+		name: {
+			type: String,
+			required: !1
+		},
+		type: {
+			type: null,
+			required: !1,
+			default: "text"
+		},
+		placeholder: {
+			type: String,
+			required: !1
+		},
+		color: {
+			type: null,
+			required: !1
+		},
+		variant: {
+			type: null,
+			required: !1
+		},
+		size: {
+			type: null,
+			required: !1
+		},
+		required: {
+			type: Boolean,
+			required: !1
+		},
+		autocomplete: {
+			type: [String, Object],
+			required: !1,
+			default: "off"
+		},
+		autofocus: {
+			type: Boolean,
+			required: !1
+		},
+		autofocusDelay: {
+			type: Number,
+			required: !1,
+			default: 0
+		},
+		disabled: {
+			type: Boolean,
+			required: !1
+		},
+		highlight: {
+			type: Boolean,
+			required: !1
+		},
+		fixed: {
+			type: Boolean,
+			required: !1
+		},
+		modelValue: {
+			type: null,
+			required: !1
+		},
+		defaultValue: {
+			type: null,
+			required: !1
+		},
+		modelModifiers: {
+			type: null,
+			required: !1
+		},
+		class: {
+			type: null,
+			required: !1
+		},
+		ui: {
+			type: Object,
+			required: !1
+		},
+		icon: {
+			type: null,
+			required: !1
+		},
+		avatar: {
+			type: Object,
+			required: !1
+		},
+		leading: {
+			type: Boolean,
+			required: !1
+		},
+		leadingIcon: {
+			type: null,
+			required: !1
+		},
+		trailing: {
+			type: Boolean,
+			required: !1
+		},
+		trailingIcon: {
+			type: null,
+			required: !1
+		},
+		loading: {
+			type: Boolean,
+			required: !1
+		},
+		loadingIcon: {
+			type: null,
+			required: !1
+		}
+	},
+	emits: [
+		"update:modelValue",
+		"blur",
+		"change"
+	],
+	setup(e, { expose: t, emit: n }) {
+		let r = e, i = n, a = Aa(), o = cE("input", r), s = ym(o, "modelValue", i, { defaultValue: o.defaultValue }), c = Sm(), { emitFormBlur: l, emitFormInput: u, emitFormChange: d, size: f, color: p, id: m, name: h, highlight: g, disabled: _, emitFormFocus: v, ariaAttrs: y } = rA(r, { deferInputValidation: !0 }), { orientation: b, size: x } = Jk(r), { isLeading: S, isTrailing: C, leadingIconName: w, trailingIconName: T } = Kk(o), E = Z(() => p.value ?? o.color), D = Z(() => g.value ?? o.highlight), O = Z(() => x.value ?? f.value ?? o.size), ee = Z(() => _.value ?? o.disabled), te = Z(() => Rk({
+			extend: yV,
+			...c.ui?.input || {}
+		})({
+			type: o.type,
+			color: E.value,
+			variant: o.variant,
+			size: O.value,
+			loading: o.loading,
+			highlight: D.value,
+			fixed: o.fixed,
+			leading: S.value || !!o.avatar || !!a.leading,
+			trailing: C.value || !!a.trailing,
+			fieldGroup: b.value
+		})), k = ci("inputRef");
+		function ne(e) {
+			o.modelModifiers?.trim && (typeof e == "string" || e == null) && (e = e?.trim() ?? null), (o.modelModifiers?.number || o.type === "number") && (e = Hm(e)), o.modelModifiers?.nullable && Wm(e) && (e = null), o.modelModifiers?.optional && !o.modelModifiers?.nullable && e !== null && Wm(e) && (e = void 0), s.value = e, u();
+		}
+		function re(e) {
+			o.modelModifiers?.lazy || ne(e.target.value);
+		}
+		function ie(e) {
+			let t = e.target.value;
+			o.modelModifiers?.lazy && ne(t), o.modelModifiers?.trim && (e.target.value = t.trim()), d(), i("change", e);
+		}
+		function ae(e) {
+			l(), i("blur", e);
+		}
+		function A() {
+			o.autofocus && k.value?.focus();
+		}
+		let oe;
+		return Qi(() => {
+			oe = setTimeout(() => {
+				A();
+			}, o.autofocusDelay);
+		}), Ne(() => clearTimeout(oe)), t({ inputRef: k }), (e, t) => (U(), G(I($), {
+			as: I(o).as,
+			"data-slot": e.$attrs["data-slot"] ?? "root",
+			class: M(te.value.root({ class: [I(o).ui?.root, I(o).class] }))
+		}, {
+			default: L(() => [
+				K("input", X({
+					id: I(m),
+					ref_key: "inputRef",
+					ref: k,
+					type: I(o).type,
+					value: I(s),
+					name: I(h),
+					placeholder: I(o).placeholder,
+					class: te.value.base({ class: I(o).ui?.base }),
+					disabled: ee.value,
+					required: I(o).required,
+					autocomplete: I(o).autocomplete
+				}, {
+					...e.$attrs,
+					...I(y)
+				}, {
+					"data-slot": "base",
+					onInput: re,
+					onBlur: ae,
+					onChange: ie,
+					onFocus: t[0] ||= (...e) => I(v) && I(v)(...e)
+				}), null, 16, bV),
+				V(e.$slots, "default", { ui: te.value }),
+				I(S) || I(o).avatar || a.leading ? (U(), W("span", {
+					key: 0,
+					"data-slot": "leading",
+					class: M(te.value.leading({ class: I(o).ui?.leading }))
+				}, [V(e.$slots, "leading", { ui: te.value }, () => [I(S) && I(w) ? (U(), G(zk, {
+					key: 0,
+					name: I(w),
+					"data-slot": "leadingIcon",
+					class: M(te.value.leadingIcon({ class: I(o).ui?.leadingIcon }))
+				}, null, 8, ["name", "class"])) : I(o).avatar ? (U(), G(Gk, X({
+					key: 1,
+					size: I(o).ui?.leadingAvatarSize || te.value.leadingAvatarSize()
+				}, I(o).avatar, {
+					"data-slot": "leadingAvatar",
+					class: te.value.leadingAvatar({ class: I(o).ui?.leadingAvatar })
+				}), null, 16, ["size", "class"])) : Y("", !0)])], 2)) : Y("", !0),
+				I(C) || a.trailing ? (U(), W("span", {
+					key: 1,
+					"data-slot": "trailing",
+					class: M(te.value.trailing({ class: I(o).ui?.trailing }))
+				}, [V(e.$slots, "trailing", { ui: te.value }, () => [I(T) ? (U(), G(zk, {
+					key: 0,
+					name: I(T),
+					"data-slot": "trailingIcon",
+					class: M(te.value.trailingIcon({ class: I(o).ui?.trailingIcon }))
+				}, null, 8, ["name", "class"])) : Y("", !0)])], 2)) : Y("", !0)
+			]),
+			_: 3
+		}, 8, [
+			"as",
+			"data-slot",
+			"class"
+		]));
+	}
+}), SV = {
+	base: "inline-flex items-center justify-center px-1 rounded-sm font-medium font-sans uppercase",
+	variants: {
+		color: {
+			primary: "",
+			secondary: "",
+			success: "",
+			info: "",
+			warning: "",
+			error: "",
+			neutral: ""
+		},
+		variant: {
+			solid: "",
+			outline: "",
+			soft: "",
+			subtle: ""
+		},
+		size: {
+			sm: "h-4 min-w-[16px] text-[10px]",
+			md: "h-5 min-w-[20px] text-[11px]",
+			lg: "h-6 min-w-[24px] text-[12px]"
+		}
+	},
+	compoundVariants: [
+		{
+			color: "primary",
+			variant: "solid",
+			class: "text-inverted bg-primary"
+		},
+		{
+			color: "secondary",
+			variant: "solid",
+			class: "text-inverted bg-secondary"
+		},
+		{
+			color: "success",
+			variant: "solid",
+			class: "text-inverted bg-success"
+		},
+		{
+			color: "info",
+			variant: "solid",
+			class: "text-inverted bg-info"
+		},
+		{
+			color: "warning",
+			variant: "solid",
+			class: "text-inverted bg-warning"
+		},
+		{
+			color: "error",
+			variant: "solid",
+			class: "text-inverted bg-error"
+		},
+		{
+			color: "primary",
+			variant: "outline",
+			class: "ring ring-inset ring-primary/50 text-primary"
+		},
+		{
+			color: "secondary",
+			variant: "outline",
+			class: "ring ring-inset ring-secondary/50 text-secondary"
+		},
+		{
+			color: "success",
+			variant: "outline",
+			class: "ring ring-inset ring-success/50 text-success"
+		},
+		{
+			color: "info",
+			variant: "outline",
+			class: "ring ring-inset ring-info/50 text-info"
+		},
+		{
+			color: "warning",
+			variant: "outline",
+			class: "ring ring-inset ring-warning/50 text-warning"
+		},
+		{
+			color: "error",
+			variant: "outline",
+			class: "ring ring-inset ring-error/50 text-error"
+		},
+		{
+			color: "primary",
+			variant: "soft",
+			class: "text-primary bg-primary/10"
+		},
+		{
+			color: "secondary",
+			variant: "soft",
+			class: "text-secondary bg-secondary/10"
+		},
+		{
+			color: "success",
+			variant: "soft",
+			class: "text-success bg-success/10"
+		},
+		{
+			color: "info",
+			variant: "soft",
+			class: "text-info bg-info/10"
+		},
+		{
+			color: "warning",
+			variant: "soft",
+			class: "text-warning bg-warning/10"
+		},
+		{
+			color: "error",
+			variant: "soft",
+			class: "text-error bg-error/10"
+		},
+		{
+			color: "primary",
+			variant: "subtle",
+			class: "text-primary ring ring-inset ring-primary/25 bg-primary/10"
+		},
+		{
+			color: "secondary",
+			variant: "subtle",
+			class: "text-secondary ring ring-inset ring-secondary/25 bg-secondary/10"
+		},
+		{
+			color: "success",
+			variant: "subtle",
+			class: "text-success ring ring-inset ring-success/25 bg-success/10"
+		},
+		{
+			color: "info",
+			variant: "subtle",
+			class: "text-info ring ring-inset ring-info/25 bg-info/10"
+		},
+		{
+			color: "warning",
+			variant: "subtle",
+			class: "text-warning ring ring-inset ring-warning/25 bg-warning/10"
+		},
+		{
+			color: "error",
+			variant: "subtle",
+			class: "text-error ring ring-inset ring-error/25 bg-error/10"
+		},
+		{
+			color: "neutral",
+			variant: "solid",
+			class: "text-inverted bg-inverted"
+		},
+		{
+			color: "neutral",
+			variant: "outline",
+			class: "ring ring-inset ring-accented text-default bg-default"
+		},
+		{
+			color: "neutral",
+			variant: "soft",
+			class: "text-default bg-elevated"
+		},
+		{
+			color: "neutral",
+			variant: "subtle",
+			class: "ring ring-inset ring-accented text-default bg-elevated"
+		}
+	],
+	defaultVariants: {
+		variant: "outline",
+		color: "neutral",
+		size: "md"
+	}
+}, CV = {
+	__name: "Kbd",
+	props: {
+		as: {
+			type: null,
+			required: !1,
+			default: "kbd"
+		},
+		value: {
+			type: null,
+			required: !1
+		},
+		color: {
+			type: null,
+			required: !1
+		},
+		variant: {
+			type: null,
+			required: !1
+		},
+		size: {
+			type: null,
+			required: !1
+		},
+		class: {
+			type: null,
+			required: !1
+		},
+		ui: {
+			type: Object,
+			required: !1
+		}
+	},
+	setup(e) {
+		let t = cE("kbd", e), { getKbdKey: n } = wm(), r = Sm(), i = Z(() => Rk({
+			extend: SV,
+			...r.ui?.kbd || {}
+		}));
+		return (e, r) => (U(), G(I($), {
+			as: I(t).as,
+			class: M(i.value({
+				class: [I(t).ui?.base, I(t).class],
+				color: I(t).color,
+				variant: I(t).variant,
+				size: I(t).size
+			}))
+		}, {
+			default: L(() => [V(e.$slots, "default", {}, () => [J(P(I(n)(I(t).value)), 1)])]),
+			_: 3
+		}, 8, ["as", "class"]));
+	}
+}, wV = {
+	__name: "DropdownMenuContent",
+	props: {
+		items: {
+			type: null,
+			required: !1
+		},
+		portal: {
+			type: [Boolean, String],
+			required: !1,
+			skipCheck: !0
+		},
+		sub: {
+			type: Boolean,
+			required: !1
+		},
+		labelKey: {
+			type: null,
+			required: !0
+		},
+		descriptionKey: {
+			type: null,
+			required: !0
+		},
+		checkedIcon: {
+			type: null,
+			required: !1
+		},
+		loadingIcon: {
+			type: null,
+			required: !1
+		},
+		externalIcon: {
+			type: [Boolean, String],
+			required: !1,
+			skipCheck: !0
+		},
+		size: {
+			type: null,
+			required: !1
+		},
+		filter: {
+			type: [Boolean, Object],
+			required: !1
+		},
+		filterFields: {
+			type: Array,
+			required: !1
+		},
+		ignoreFilter: {
+			type: Boolean,
+			required: !1
+		},
+		searchTerm: {
+			type: String,
+			required: !1
+		},
+		class: {
+			type: null,
+			required: !1
+		},
+		ui: {
+			type: null,
+			required: !0
+		},
+		uiOverride: {
+			type: null,
+			required: !1
+		},
+		loop: {
+			type: Boolean,
+			required: !1
+		},
+		memoDependencies: {
+			type: Array,
+			required: !1
+		},
+		side: {
+			type: null,
+			required: !1
+		},
+		sideOffset: {
+			type: Number,
+			required: !1
+		},
+		sideFlip: {
+			type: Boolean,
+			required: !1
+		},
+		align: {
+			type: null,
+			required: !1
+		},
+		alignOffset: {
+			type: Number,
+			required: !1
+		},
+		alignFlip: {
+			type: Boolean,
+			required: !1
+		},
+		avoidCollisions: {
+			type: Boolean,
+			required: !1
+		},
+		collisionBoundary: {
+			type: null,
+			required: !1
+		},
+		collisionPadding: {
+			type: [Number, Object],
+			required: !1
+		},
+		arrowPadding: {
+			type: Number,
+			required: !1
+		},
+		hideShiftedArrow: {
+			type: Boolean,
+			required: !1
+		},
+		sticky: {
+			type: String,
+			required: !1
+		},
+		hideWhenDetached: {
+			type: Boolean,
+			required: !1
+		},
+		positionStrategy: {
+			type: String,
+			required: !1
+		},
+		updatePositionStrategy: {
+			type: String,
+			required: !1
+		},
+		disableUpdateOnLayoutShift: {
+			type: Boolean,
+			required: !1
+		},
+		prioritizePosition: {
+			type: Boolean,
+			required: !1
+		},
+		reference: {
+			type: null,
+			required: !1
+		}
+	},
+	emits: [
+		"update:searchTerm",
+		"escapeKeyDown",
+		"pointerDownOutside",
+		"focusOutside",
+		"interactOutside",
+		"closeAutoFocus"
+	],
+	setup(e, { emit: t }) {
+		let n = e, r = t, i = Aa(), { t: a, dir: o } = eh(), s = Sm(), { filterGroups: c } = vV(), l = /* @__PURE__ */ F(""), u = Z({
+			get: () => n.searchTerm ?? l.value,
+			set: (e) => {
+				l.value = e, r("update:searchTerm", e);
+			}
+		}), d = /* @__PURE__ */ Sn(() => Om(n.filter, {
+			placeholder: a("dropdownMenu.search"),
+			variant: "none"
+		})), f = eE(/* @__PURE__ */ Sn(() => n.portal)), p = rg(im(n, "sub", "items", "portal", "labelKey", "descriptionKey", "checkedIcon", "loadingIcon", "externalIcon", "size", "filter", "filterFields", "ignoreFilter", "searchTerm", "class", "ui", "uiOverride"), r), m = () => Bm(i, ["default"]), [h, g] = gm(), _ = Z(() => o.value === "rtl" ? s.ui.icons.chevronLeft : s.ui.icons.chevronRight), v = Z(() => n.items?.length ? Km(n.items) ? n.items : [n.items] : []), y = (e) => !!e.type && ["label", "separator"].includes(e.type), b = Z(() => {
+			if (!n.filter || n.ignoreFilter || !u.value) return v.value;
+			let e = Array.isArray(n.filterFields) && n.filterFields.length ? n.filterFields : [n.labelKey];
+			return c(v.value, u.value, {
+				fields: e,
+				isStructural: y
+			});
+		}), x = Z(() => b.value.some((e) => e.some((e) => !y(e))));
+		return (t, r) => (U(), W(H, null, [q(I(h), null, {
+			default: L(({ item: r, active: a, index: o }) => [V(t.$slots, r.slot || "item", {
+				item: r,
+				index: o,
+				ui: e.ui
+			}, () => [
+				V(t.$slots, r.slot ? `${r.slot}-leading` : "item-leading", {
+					item: r,
+					active: a,
+					index: o,
+					ui: e.ui
+				}, () => [r.loading ? (U(), G(zk, {
+					key: 0,
+					name: e.loadingIcon || I(s).ui.icons.loading,
+					"data-slot": "itemLeadingIcon",
+					class: M(e.ui.itemLeadingIcon({
+						class: [e.uiOverride?.itemLeadingIcon, r.ui?.itemLeadingIcon],
+						color: r?.color,
+						loading: !0
+					}))
+				}, null, 8, ["name", "class"])) : r.icon ? (U(), G(zk, {
+					key: 1,
+					name: r.icon,
+					"data-slot": "itemLeadingIcon",
+					class: M(e.ui.itemLeadingIcon({
+						class: [e.uiOverride?.itemLeadingIcon, r.ui?.itemLeadingIcon],
+						color: r?.color,
+						active: a
+					}))
+				}, null, 8, ["name", "class"])) : r.avatar ? (U(), G(Gk, X({
+					key: 2,
+					size: r.ui?.itemLeadingAvatarSize || e.uiOverride?.itemLeadingAvatarSize || e.ui.itemLeadingAvatarSize()
+				}, r.avatar, {
+					"data-slot": "itemLeadingAvatar",
+					class: e.ui.itemLeadingAvatar({
+						class: [e.uiOverride?.itemLeadingAvatar, r.ui?.itemLeadingAvatar],
+						active: a
+					})
+				}), null, 16, ["size", "class"])) : Y("", !0)]),
+				I(Vm)(r, n.labelKey) || i[r.slot ? `${r.slot}-label` : "item-label"] || I(Vm)(r, n.descriptionKey) || i[r.slot ? `${r.slot}-description` : "item-description"] ? (U(), W("span", {
+					key: 0,
+					"data-slot": "itemWrapper",
+					class: M(e.ui.itemWrapper({ class: [e.uiOverride?.itemWrapper, r.ui?.itemWrapper] }))
+				}, [K("span", {
+					"data-slot": "itemLabel",
+					class: M(e.ui.itemLabel({
+						class: [e.uiOverride?.itemLabel, r.ui?.itemLabel],
+						active: a
+					}))
+				}, [V(t.$slots, r.slot ? `${r.slot}-label` : "item-label", {
+					item: r,
+					active: a,
+					index: o
+				}, () => [J(P(I(Vm)(r, n.labelKey)), 1)]), r.target === "_blank" && e.externalIcon !== !1 ? (U(), G(zk, {
+					key: 0,
+					name: typeof e.externalIcon == "string" ? e.externalIcon : I(s).ui.icons.external,
+					"data-slot": "itemLabelExternalIcon",
+					class: M(e.ui.itemLabelExternalIcon({
+						class: [e.uiOverride?.itemLabelExternalIcon, r.ui?.itemLabelExternalIcon],
+						color: r?.color,
+						active: a
+					}))
+				}, null, 8, ["name", "class"])) : Y("", !0)], 2), I(Vm)(r, n.descriptionKey) || i[r.slot ? `${r.slot}-description` : "item-description"] ? (U(), W("span", {
+					key: 0,
+					"data-slot": "itemDescription",
+					class: M(e.ui.itemDescription({ class: [e.uiOverride?.itemDescription, r.ui?.itemDescription] }))
+				}, [V(t.$slots, r.slot ? `${r.slot}-description` : "item-description", {
+					item: r,
+					active: a,
+					index: o
+				}, () => [J(P(I(Vm)(r, n.descriptionKey)), 1)])], 2)) : Y("", !0)], 2)) : Y("", !0),
+				K("span", {
+					"data-slot": "itemTrailing",
+					class: M(e.ui.itemTrailing({ class: [e.uiOverride?.itemTrailing, r.ui?.itemTrailing] }))
+				}, [V(t.$slots, r.slot ? `${r.slot}-trailing` : "item-trailing", {
+					item: r,
+					active: a,
+					index: o,
+					ui: e.ui
+				}, () => [r.children?.length ? (U(), G(zk, {
+					key: 0,
+					name: _.value,
+					"data-slot": "itemTrailingIcon",
+					class: M(e.ui.itemTrailingIcon({
+						class: [e.uiOverride?.itemTrailingIcon, r.ui?.itemTrailingIcon],
+						color: r?.color,
+						active: a
+					}))
+				}, null, 8, ["name", "class"])) : r.kbds?.length ? (U(), W("span", {
+					key: 1,
+					"data-slot": "itemTrailingKbds",
+					class: M(e.ui.itemTrailingKbds({ class: [e.uiOverride?.itemTrailingKbds, r.ui?.itemTrailingKbds] }))
+				}, [(U(!0), W(H, null, B(r.kbds, (t, n) => (U(), G(CV, X({
+					key: n,
+					size: r.ui?.itemTrailingKbdsSize || e.uiOverride?.itemTrailingKbdsSize || e.ui.itemTrailingKbdsSize()
+				}, { ref_for: !0 }, typeof t == "string" ? { value: t } : t), null, 16, ["size"]))), 128))], 2)) : Y("", !0)]), q(I(hV).ItemIndicator, { "as-child": "" }, {
+					default: L(() => [q(zk, {
+						name: e.checkedIcon || I(s).ui.icons.check,
+						"data-slot": "itemTrailingIcon",
+						class: M(e.ui.itemTrailingIcon({
+							class: [e.uiOverride?.itemTrailingIcon, r.ui?.itemTrailingIcon],
+							color: r?.color
+						}))
+					}, null, 8, ["name", "class"])]),
+					_: 2
+				}, 1024)], 2)
+			])]),
+			_: 3
+		}), q(I(hV).Portal, N(Ss(I(f))), {
+			default: L(() => [q(I(Yk), null, {
+				default: L(() => [(U(), G(da(e.sub ? I(hV).SubContent : I(hV).Content), X({
+					"data-slot": "content",
+					class: e.ui.content({ class: [e.uiOverride?.content, n.class] })
+				}, I(p)), {
+					default: L(() => [
+						e.filter ? (U(), G(I(hV).Filter, {
+							key: 0,
+							modelValue: u.value,
+							"onUpdate:modelValue": r[1] ||= (e) => u.value = e,
+							"as-child": ""
+						}, {
+							default: L(() => [q(xV, X({
+								autofocus: "",
+								autocomplete: "off",
+								size: e.size
+							}, d.value, {
+								"data-slot": "input",
+								class: e.ui.input({ class: e.uiOverride?.input }),
+								onChange: r[0] ||= uu(() => {}, ["stop"])
+							}), null, 16, ["size", "class"])]),
+							_: 1
+						}, 8, ["modelValue"])) : Y("", !0),
+						V(t.$slots, "content-top", { sub: e.sub ?? !1 }),
+						!u.value || x.value ? (U(), W("div", {
+							key: 1,
+							role: "presentation",
+							"data-slot": "viewport",
+							class: M(e.ui.viewport({ class: e.uiOverride?.viewport }))
+						}, [(U(!0), W(H, null, B(b.value, (r, i) => (U(), G(I(hV).Group, {
+							key: `group-${i}`,
+							"data-slot": "group",
+							class: M(e.ui.group({ class: e.uiOverride?.group }))
+						}, {
+							default: L(() => [(U(!0), W(H, null, B(r, (r, a) => (U(), W(H, { key: `group-${i}-${a}` }, [r.type === "label" ? (U(), G(I(hV).Label, {
+								key: 0,
+								"data-slot": "label",
+								class: M(e.ui.label({ class: [
+									e.uiOverride?.label,
+									r.ui?.label,
+									r.class
+								] }))
+							}, {
+								default: L(() => [q(I(g), {
+									item: r,
+									index: a
+								}, null, 8, ["item", "index"])]),
+								_: 2
+							}, 1032, ["class"])) : r.type === "separator" ? (U(), G(I(hV).Separator, {
+								key: 1,
+								"data-slot": "separator",
+								class: M(e.ui.separator({ class: [
+									e.uiOverride?.separator,
+									r.ui?.separator,
+									r.class
+								] }))
+							}, null, 8, ["class"])) : r?.children?.length ? (U(), G(I(hV).Sub, {
+								key: 2,
+								open: r.open,
+								"default-open": r.defaultOpen
+							}, {
+								default: L(() => [q(I(hV).SubTrigger, {
+									as: "button",
+									type: "button",
+									disabled: r.disabled,
+									"text-value": I(Vm)(r, n.labelKey),
+									"data-slot": "item",
+									class: M(e.ui.item({
+										class: [
+											e.uiOverride?.item,
+											r.ui?.item,
+											r.class
+										],
+										color: r?.color
+									}))
+								}, {
+									default: L(() => [q(I(g), {
+										item: r,
+										index: a
+									}, null, 8, ["item", "index"])]),
+									_: 2
+								}, 1032, [
+									"disabled",
+									"text-value",
+									"class"
+								]), q(wV, X({
+									sub: "",
+									class: r.ui?.content,
+									ui: e.ui,
+									"ui-override": e.uiOverride,
+									portal: e.portal,
+									items: r.children,
+									align: "start",
+									"align-offset": -4,
+									"side-offset": 3,
+									"label-key": e.labelKey,
+									"description-key": e.descriptionKey,
+									"checked-icon": e.checkedIcon,
+									"loading-icon": e.loadingIcon,
+									"external-icon": e.externalIcon,
+									size: e.size,
+									filter: r.filter,
+									"filter-fields": r.filterFields || e.filterFields,
+									"ignore-filter": r.ignoreFilter ?? e.ignoreFilter
+								}, { ref_for: !0 }, r.content), ha({ _: 2 }, [B(m(), (e, n) => ({
+									name: n,
+									fn: L((e) => [V(t.$slots, n, X({ ref_for: !0 }, e))])
+								}))]), 1040, [
+									"class",
+									"ui",
+									"ui-override",
+									"portal",
+									"items",
+									"label-key",
+									"description-key",
+									"checked-icon",
+									"loading-icon",
+									"external-icon",
+									"size",
+									"filter",
+									"filter-fields",
+									"ignore-filter"
+								])]),
+								_: 2
+							}, 1032, ["open", "default-open"])) : r.type === "checkbox" ? (U(), G(I(hV).CheckboxItem, {
+								key: 3,
+								"model-value": r.checked,
+								disabled: r.disabled,
+								"text-value": I(Vm)(r, n.labelKey),
+								"data-slot": "item",
+								class: M(e.ui.item({
+									class: [
+										e.uiOverride?.item,
+										r.ui?.item,
+										r.class
+									],
+									color: r?.color
+								})),
+								"onUpdate:modelValue": r.onUpdateChecked,
+								onSelect: r.onSelect
+							}, {
+								default: L(() => [q(I(g), {
+									item: r,
+									index: a
+								}, null, 8, ["item", "index"])]),
+								_: 2
+							}, 1032, [
+								"model-value",
+								"disabled",
+								"text-value",
+								"class",
+								"onUpdate:modelValue",
+								"onSelect"
+							])) : (U(), G(cA, X({
+								key: 4,
+								ref_for: !0
+							}, I(aA)(r), { custom: "" }), {
+								default: L(({ active: t, ...i }) => [q(I(hV).Item, {
+									"as-child": "",
+									disabled: r.disabled,
+									"text-value": I(Vm)(r, n.labelKey),
+									onSelect: r.onSelect
+								}, {
+									default: L(() => [q(oA, X({ ref_for: !0 }, i, {
+										"data-slot": "item",
+										class: e.ui.item({
+											class: [
+												e.uiOverride?.item,
+												r.ui?.item,
+												r.class
+											],
+											color: r?.color,
+											active: t
+										})
+									}), {
+										default: L(() => [q(I(g), {
+											item: r,
+											active: t,
+											index: a
+										}, null, 8, [
+											"item",
+											"active",
+											"index"
+										])]),
+										_: 2
+									}, 1040, ["class"])]),
+									_: 2
+								}, 1032, [
+									"disabled",
+									"text-value",
+									"onSelect"
+								])]),
+								_: 2
+							}, 1040))], 64))), 128))]),
+							_: 2
+						}, 1032, ["class"]))), 128))], 2)) : Y("", !0),
+						u.value && !x.value ? (U(), W("div", {
+							key: 2,
+							"data-slot": "empty",
+							class: M(e.ui.empty({ class: e.uiOverride?.empty }))
+						}, [V(t.$slots, "empty", { searchTerm: u.value }, () => [J(P(I(a)("dropdownMenu.noMatch", { searchTerm: u.value })), 1)])], 2)) : Y("", !0),
+						V(t.$slots, "default"),
+						V(t.$slots, "content-bottom", { sub: e.sub ?? !1 })
+					]),
+					_: 3
+				}, 16, ["class"]))]),
+				_: 3
+			})]),
+			_: 3
+		}, 16)], 64));
+	}
+}, TV = {
+	slots: {
+		content: "min-w-32 max-h-(--reka-dropdown-menu-content-available-height) bg-default shadow-lg rounded-md ring ring-default overflow-hidden data-[state=open]:animate-[scale-in_100ms_var(--ease-out)] data-[state=closed]:animate-[scale-out_100ms_var(--ease-out)] origin-(--reka-dropdown-menu-content-transform-origin) flex flex-col",
+		input: "border-b border-default",
+		empty: "text-center text-muted",
+		viewport: "relative divide-y divide-default scroll-py-1 overflow-y-auto flex-1",
+		arrow: "fill-bg stroke-default",
+		group: "p-1 isolate",
+		label: "w-full flex items-center font-semibold text-highlighted",
+		separator: "-mx-1 my-1 h-px bg-border",
+		item: "group relative w-full flex items-start select-none outline-none before:absolute before:z-[-1] before:inset-px before:rounded-md data-disabled:cursor-not-allowed data-disabled:opacity-75",
+		itemLeadingIcon: "shrink-0",
+		itemLeadingAvatar: "shrink-0",
+		itemLeadingAvatarSize: "",
+		itemTrailing: "ms-auto inline-flex gap-1.5 items-center",
+		itemTrailingIcon: "shrink-0",
+		itemTrailingKbds: "hidden lg:inline-flex items-center shrink-0",
+		itemTrailingKbdsSize: "",
+		itemWrapper: "flex-1 flex flex-col text-start min-w-0",
+		itemLabel: "truncate",
+		itemDescription: "truncate text-muted",
+		itemLabelExternalIcon: "inline-block size-3 align-top text-dimmed"
+	},
+	variants: {
+		color: {
+			primary: "",
+			secondary: "",
+			success: "",
+			info: "",
+			warning: "",
+			error: "",
+			neutral: ""
+		},
+		active: {
+			true: {
+				item: "text-highlighted before:bg-elevated",
+				itemLeadingIcon: "text-default"
+			},
+			false: {
+				item: ["text-default data-highlighted:text-highlighted data-[state=open]:text-highlighted data-highlighted:before:bg-elevated/50 data-[state=open]:before:bg-elevated/50", "transition-colors before:transition-colors"],
+				itemLeadingIcon: ["text-dimmed group-data-highlighted:text-default group-data-[state=open]:text-default", "transition-colors"]
+			}
+		},
+		loading: { true: { itemLeadingIcon: "animate-spin" } },
+		size: {
+			xs: {
+				label: "p-1 text-xs gap-1",
+				item: "p-1 text-xs gap-1",
+				empty: "p-2 text-xs",
+				itemLeadingIcon: "size-4",
+				itemLeadingAvatarSize: "3xs",
+				itemTrailingIcon: "size-4",
+				itemTrailingKbds: "gap-0.5",
+				itemTrailingKbdsSize: "sm"
+			},
+			sm: {
+				label: "p-1.5 text-xs gap-1.5",
+				item: "p-1.5 text-xs gap-1.5",
+				empty: "p-2.5 text-xs",
+				itemLeadingIcon: "size-4",
+				itemLeadingAvatarSize: "3xs",
+				itemTrailingIcon: "size-4",
+				itemTrailingKbds: "gap-0.5",
+				itemTrailingKbdsSize: "sm"
+			},
+			md: {
+				label: "p-1.5 text-sm gap-1.5",
+				item: "p-1.5 text-sm gap-1.5",
+				empty: "p-2.5 text-sm",
+				itemLeadingIcon: "size-5",
+				itemLeadingAvatarSize: "2xs",
+				itemTrailingIcon: "size-5",
+				itemTrailingKbds: "gap-0.5",
+				itemTrailingKbdsSize: "md"
+			},
+			lg: {
+				label: "p-2 text-sm gap-2",
+				item: "p-2 text-sm gap-2",
+				empty: "p-3 text-sm",
+				itemLeadingIcon: "size-5",
+				itemLeadingAvatarSize: "2xs",
+				itemTrailingIcon: "size-5",
+				itemTrailingKbds: "gap-1",
+				itemTrailingKbdsSize: "md"
+			},
+			xl: {
+				label: "p-2 text-base gap-2",
+				item: "p-2 text-base gap-2",
+				empty: "p-3 text-base",
+				itemLeadingIcon: "size-6",
+				itemLeadingAvatarSize: "xs",
+				itemTrailingIcon: "size-6",
+				itemTrailingKbds: "gap-1",
+				itemTrailingKbdsSize: "lg"
+			}
+		}
+	},
+	compoundVariants: [
+		{
+			color: "primary",
+			active: !1,
+			class: {
+				item: "text-primary data-highlighted:text-primary data-highlighted:before:bg-primary/10 data-[state=open]:before:bg-primary/10",
+				itemLeadingIcon: "text-primary/75 group-data-highlighted:text-primary group-data-[state=open]:text-primary"
+			}
+		},
+		{
+			color: "secondary",
+			active: !1,
+			class: {
+				item: "text-secondary data-highlighted:text-secondary data-highlighted:before:bg-secondary/10 data-[state=open]:before:bg-secondary/10",
+				itemLeadingIcon: "text-secondary/75 group-data-highlighted:text-secondary group-data-[state=open]:text-secondary"
+			}
+		},
+		{
+			color: "success",
+			active: !1,
+			class: {
+				item: "text-success data-highlighted:text-success data-highlighted:before:bg-success/10 data-[state=open]:before:bg-success/10",
+				itemLeadingIcon: "text-success/75 group-data-highlighted:text-success group-data-[state=open]:text-success"
+			}
+		},
+		{
+			color: "info",
+			active: !1,
+			class: {
+				item: "text-info data-highlighted:text-info data-highlighted:before:bg-info/10 data-[state=open]:before:bg-info/10",
+				itemLeadingIcon: "text-info/75 group-data-highlighted:text-info group-data-[state=open]:text-info"
+			}
+		},
+		{
+			color: "warning",
+			active: !1,
+			class: {
+				item: "text-warning data-highlighted:text-warning data-highlighted:before:bg-warning/10 data-[state=open]:before:bg-warning/10",
+				itemLeadingIcon: "text-warning/75 group-data-highlighted:text-warning group-data-[state=open]:text-warning"
+			}
+		},
+		{
+			color: "error",
+			active: !1,
+			class: {
+				item: "text-error data-highlighted:text-error data-highlighted:before:bg-error/10 data-[state=open]:before:bg-error/10",
+				itemLeadingIcon: "text-error/75 group-data-highlighted:text-error group-data-[state=open]:text-error"
+			}
+		},
+		{
+			color: "primary",
+			active: !0,
+			class: {
+				item: "text-primary before:bg-primary/10",
+				itemLeadingIcon: "text-primary"
+			}
+		},
+		{
+			color: "secondary",
+			active: !0,
+			class: {
+				item: "text-secondary before:bg-secondary/10",
+				itemLeadingIcon: "text-secondary"
+			}
+		},
+		{
+			color: "success",
+			active: !0,
+			class: {
+				item: "text-success before:bg-success/10",
+				itemLeadingIcon: "text-success"
+			}
+		},
+		{
+			color: "info",
+			active: !0,
+			class: {
+				item: "text-info before:bg-info/10",
+				itemLeadingIcon: "text-info"
+			}
+		},
+		{
+			color: "warning",
+			active: !0,
+			class: {
+				item: "text-warning before:bg-warning/10",
+				itemLeadingIcon: "text-warning"
+			}
+		},
+		{
+			color: "error",
+			active: !0,
+			class: {
+				item: "text-error before:bg-error/10",
+				itemLeadingIcon: "text-error"
+			}
+		}
+	],
+	defaultVariants: { size: "md" }
+}, EV = {
+	__name: "DropdownMenu",
+	props: /*@__PURE__*/ Fa({
+		size: {
+			type: null,
+			required: !1
+		},
+		items: {
+			type: null,
+			required: !1
+		},
+		checkedIcon: {
+			type: null,
+			required: !1
+		},
+		loadingIcon: {
+			type: null,
+			required: !1
+		},
+		externalIcon: {
+			type: [Boolean, String],
+			required: !1,
+			skipCheck: !0,
+			default: !0
+		},
+		content: {
+			type: Object,
+			required: !1
+		},
+		arrow: {
+			type: [Boolean, Object],
+			required: !1
+		},
+		portal: {
+			type: [Boolean, String],
+			required: !1,
+			skipCheck: !0,
+			default: !0
+		},
+		labelKey: {
+			type: null,
+			required: !1,
+			default: "label"
+		},
+		descriptionKey: {
+			type: null,
+			required: !1,
+			default: "description"
+		},
+		filter: {
+			type: [Boolean, Object],
+			required: !1,
+			default: !1
+		},
+		filterFields: {
+			type: Array,
+			required: !1
+		},
+		ignoreFilter: {
+			type: Boolean,
+			required: !1,
+			default: !1
+		},
+		disabled: {
+			type: Boolean,
+			required: !1
+		},
+		class: {
+			type: null,
+			required: !1
+		},
+		ui: {
+			type: Object,
+			required: !1
+		},
+		defaultOpen: {
+			type: Boolean,
+			required: !1
+		},
+		open: {
+			type: Boolean,
+			required: !1
+		},
+		modal: {
+			type: Boolean,
+			required: !1,
+			default: !0
+		}
+	}, {
+		searchTerm: {
+			type: String,
+			default: ""
+		},
+		searchTermModifiers: {}
+	}),
+	emits: /*@__PURE__*/ Fa(["update:open"], ["update:searchTerm"]),
+	setup(e, { emit: t }) {
+		let n = e, r = t, i = Aa(), a = ro(e, "searchTerm", {
+			type: String,
+			default: ""
+		}), o = cE("dropdownMenu", n), s = Sm(), c = lE(am(o, "defaultOpen", "open", "modal"), r), l = /* @__PURE__ */ Sn(() => Om(o.content, {
+			side: "bottom",
+			sideOffset: 8,
+			collisionPadding: 8
+		})), u = /* @__PURE__ */ Sn(() => Om(o.arrow, { rounded: !0 })), d = () => Bm(i, ["default"]), f = Z(() => Rk({
+			extend: TV,
+			...s.ui?.dropdownMenu || {}
+		})({ size: o.size }));
+		return (e, t) => (U(), G(I(SC), N(Ss(I(c))), {
+			default: L(({ open: n }) => [i.default ? (U(), G(I(IC), {
+				key: 0,
+				"as-child": "",
+				class: M(I(o).class),
+				disabled: I(o).disabled
+			}, {
+				default: L(() => [V(e.$slots, "default", { open: n })]),
+				_: 2
+			}, 1032, ["class", "disabled"])) : Y("", !0), q(wV, X({
+				"search-term": a.value,
+				"onUpdate:searchTerm": t[0] ||= (e) => a.value = e,
+				class: f.value.content({ class: [!i.default && I(o).class, I(o).ui?.content] }),
+				ui: f.value,
+				"ui-override": I(o).ui
+			}, l.value, {
+				items: I(o).items,
+				portal: I(o).portal,
+				"label-key": I(o).labelKey,
+				"description-key": I(o).descriptionKey,
+				"checked-icon": I(o).checkedIcon,
+				"loading-icon": I(o).loadingIcon,
+				"external-icon": I(o).externalIcon,
+				size: I(o).size,
+				filter: I(o).filter,
+				"filter-fields": I(o).filterFields,
+				"ignore-filter": I(o).ignoreFilter
+			}), ha({
+				default: L(() => [I(o).arrow ? (U(), G(I(vC), X({ key: 0 }, u.value, {
+					"data-slot": "arrow",
+					class: f.value.arrow({ class: I(o).ui?.arrow })
+				}), null, 16, ["class"])) : Y("", !0)]),
+				_: 2
+			}, [B(d(), (t, n) => ({
+				name: n,
+				fn: L((t) => [V(e.$slots, n, N(Ss(t)))])
+			}))]), 1040, [
+				"search-term",
+				"class",
+				"ui",
+				"ui-override",
+				"items",
+				"portal",
+				"label-key",
+				"description-key",
+				"checked-icon",
+				"loading-icon",
+				"external-icon",
+				"size",
+				"filter",
+				"filter-fields",
+				"ignore-filter"
+			])]),
+			_: 3
+		}, 16));
+	}
+}, DV = {
 	slots: {
 		root: "",
 		wrapper: "",
@@ -34500,7 +36205,7 @@ var uV = {
 		}
 	},
 	defaultVariants: { size: "md" }
-}, hV = ["id"], gV = ["id"], _V = ["id"], vV = ["id"], yV = {
+}, OV = ["id"], kV = ["id"], AV = ["id"], jV = ["id"], MV = {
 	__name: "FormField",
 	props: {
 		as: {
@@ -34568,7 +36273,7 @@ var uV = {
 	},
 	setup(e) {
 		let t = e, n = Aa(), r = cE("formField", t), i = Sm(), a = Z(() => Rk({
-			extend: mV,
+			extend: DV,
 			...i.ui?.formField || {}
 		})({
 			size: r.size,
@@ -34616,22 +36321,22 @@ var uV = {
 				id: `${I(l)}-hint`,
 				"data-slot": "hint",
 				class: M(a.value.hint({ class: I(r).ui?.hint }))
-			}, [V(e.$slots, "hint", { hint: I(r).hint }, () => [J(P(I(r).hint), 1)])], 10, hV)) : Y("", !0)], 2)) : Y("", !0), I(r).description || n.description ? (U(), W("p", {
+			}, [V(e.$slots, "hint", { hint: I(r).hint }, () => [J(P(I(r).hint), 1)])], 10, OV)) : Y("", !0)], 2)) : Y("", !0), I(r).description || n.description ? (U(), W("p", {
 				key: 1,
 				id: `${I(l)}-description`,
 				"data-slot": "description",
 				class: M(a.value.description({ class: I(r).ui?.description }))
-			}, [V(e.$slots, "description", { description: I(r).description }, () => [J(P(I(r).description), 1)])], 10, gV)) : Y("", !0)], 2), K("div", { class: M([(I(r).label || !!n.label || I(r).description || !!n.description) && a.value.container({ class: I(r).ui?.container })]) }, [V(e.$slots, "default", { error: s.value }), I(r).error !== !1 && (typeof s.value == "string" && s.value || n.error) ? (U(), W("div", {
+			}, [V(e.$slots, "description", { description: I(r).description }, () => [J(P(I(r).description), 1)])], 10, kV)) : Y("", !0)], 2), K("div", { class: M([(I(r).label || !!n.label || I(r).description || !!n.description) && a.value.container({ class: I(r).ui?.container })]) }, [V(e.$slots, "default", { error: s.value }), I(r).error !== !1 && (typeof s.value == "string" && s.value || n.error) ? (U(), W("div", {
 				key: 0,
 				id: `${I(l)}-error`,
 				"data-slot": "error",
 				class: M(a.value.error({ class: I(r).ui?.error }))
-			}, [V(e.$slots, "error", { error: s.value }, () => [J(P(s.value), 1)])], 10, _V)) : I(r).help || n.help ? (U(), W("div", {
+			}, [V(e.$slots, "error", { error: s.value }, () => [J(P(s.value), 1)])], 10, AV)) : I(r).help || n.help ? (U(), W("div", {
 				key: 1,
 				id: `${I(l)}-help`,
 				"data-slot": "help",
 				class: M(a.value.help({ class: I(r).ui?.help }))
-			}, [V(e.$slots, "help", { help: I(r).help }, () => [J(P(I(r).help), 1)])], 10, vV)) : Y("", !0)], 2)]),
+			}, [V(e.$slots, "help", { help: I(r).help }, () => [J(P(I(r).help), 1)])], 10, jV)) : Y("", !0)], 2)]),
 			_: 3
 		}, 8, [
 			"as",
@@ -34639,7 +36344,7 @@ var uV = {
 			"class"
 		]));
 	}
-}, bV = {
+}, NV = {
 	slots: {
 		root: "relative inline-flex items-center",
 		base: ["w-full rounded-md border-0 appearance-none placeholder:text-dimmed disabled:cursor-not-allowed disabled:opacity-75", "transition-colors"],
@@ -34920,7 +36625,7 @@ var uV = {
 		color: "primary",
 		variant: "outline"
 	}
-}, xV = [
+}, PV = [
 	"id",
 	"value",
 	"name",
@@ -34928,7 +36633,7 @@ var uV = {
 	"placeholder",
 	"disabled",
 	"required"
-], SV = /*@__PURE__*/ Object.assign({ inheritAttrs: !1 }, {
+], FV = /*@__PURE__*/ Object.assign({ inheritAttrs: !1 }, {
 	__name: "Textarea",
 	props: {
 		as: {
@@ -35063,7 +36768,7 @@ var uV = {
 	],
 	setup(e, { expose: t, emit: n }) {
 		let r = e, i = n, a = Aa(), o = cE("textarea", r), s = ym(o, "modelValue", i, { defaultValue: o.defaultValue }), c = Sm(), { emitFormFocus: l, emitFormBlur: u, emitFormInput: d, emitFormChange: f, size: p, color: m, id: h, name: g, highlight: _, disabled: v, ariaAttrs: y } = rA(r, { deferInputValidation: !0 }), b = Z(() => m.value ?? o.color), x = Z(() => _.value ?? o.highlight), S = Z(() => p.value ?? o.size), C = Z(() => v.value ?? o.disabled), { isLeading: w, isTrailing: T, leadingIconName: E, trailingIconName: D } = Kk(o), O = Z(() => Rk({
-			extend: bV,
+			extend: NV,
 			...c.ui?.textarea || {}
 		})({
 			color: b.value,
@@ -35142,7 +36847,7 @@ var uV = {
 					onBlur: re,
 					onChange: ne,
 					onFocus: t[0] ||= (...e) => I(l) && I(l)(...e)
-				}), null, 16, xV),
+				}), null, 16, PV),
 				V(e.$slots, "default", { ui: O.value }),
 				I(w) || I(o).avatar || a.leading ? (U(), W("span", {
 					key: 0,
@@ -35178,7 +36883,7 @@ var uV = {
 			"class"
 		]));
 	}
-}), CV = {
+}), IV = {
 	slots: {
 		base: "font-medium inline-flex items-center",
 		label: "truncate",
@@ -35413,7 +37118,7 @@ var uV = {
 		variant: "solid",
 		size: "md"
 	}
-}, wV = {
+}, LV = {
 	__name: "Badge",
 	props: {
 		as: {
@@ -35476,7 +37181,7 @@ var uV = {
 	},
 	setup(e) {
 		let t = e, n = Aa(), r = cE("badge", t), i = Sm(), { orientation: a, size: o } = Jk(t), { isLeading: s, isTrailing: c, leadingIconName: l, trailingIconName: u } = Kk(r), d = Z(() => Rk({
-			extend: CV,
+			extend: IV,
 			...i.ui?.badge || {}
 		})({
 			color: r.color,
@@ -35518,7 +37223,7 @@ var uV = {
 			_: 3
 		}, 8, ["as", "class"]));
 	}
-}, TV = {
+}, RV = {
 	slots: {
 		root: "flex items-center gap-2",
 		list: "relative flex p-1 group",
@@ -35745,7 +37450,7 @@ var uV = {
 		variant: "pill",
 		size: "md"
 	}
-}, EV = {
+}, zV = {
 	__name: "Tabs",
 	props: {
 		as: {
@@ -35818,7 +37523,7 @@ var uV = {
 	emits: ["update:modelValue"],
 	setup(e, { expose: t, emit: n }) {
 		let r = e, i = n, a = Aa(), o = cE("tabs", r), s = Sm(), c = lE(am(o, "as", "unmountOnHide"), i), l = Z(() => Rk({
-			extend: TV,
+			extend: RV,
 			...s.ui?.tabs || {}
 		})({
 			color: o.color,
@@ -35885,7 +37590,7 @@ var uV = {
 								item: t,
 								index: n,
 								ui: l.value
-							}, () => [t.badge || t.badge === 0 ? (U(), G(wV, X({
+							}, () => [t.badge || t.badge === 0 ? (U(), G(LV, X({
 								key: 0,
 								color: "neutral",
 								variant: "outline",
@@ -35930,748 +37635,13 @@ var uV = {
 			"class"
 		]));
 	}
-}, DV = {
-	slots: {
-		root: "relative inline-flex items-center",
-		base: ["w-full rounded-md border-0 appearance-none placeholder:text-dimmed disabled:cursor-not-allowed disabled:opacity-75", "transition-colors"],
-		leading: "absolute inset-y-0 start-0 flex items-center",
-		leadingIcon: "shrink-0 text-dimmed",
-		leadingAvatar: "shrink-0",
-		leadingAvatarSize: "",
-		trailing: "absolute inset-y-0 end-0 flex items-center",
-		trailingIcon: "shrink-0 text-dimmed"
-	},
-	variants: {
-		fieldGroup: {
-			horizontal: {
-				root: "group has-focus-visible:z-[1]",
-				base: "group-not-only:group-first:rounded-e-none group-not-only:group-last:rounded-s-none group-not-last:group-not-first:rounded-none"
-			},
-			vertical: {
-				root: "group has-focus-visible:z-[1]",
-				base: "group-not-only:group-first:rounded-b-none group-not-only:group-last:rounded-t-none group-not-last:group-not-first:rounded-none"
-			}
-		},
-		size: {
-			xs: {
-				base: "px-2 py-1 text-sm/4 gap-1",
-				leading: "ps-2",
-				trailing: "pe-2",
-				leadingIcon: "size-4",
-				leadingAvatarSize: "3xs",
-				trailingIcon: "size-4"
-			},
-			sm: {
-				base: "px-2.5 py-1.5 text-sm/4 gap-1.5",
-				leading: "ps-2.5",
-				trailing: "pe-2.5",
-				leadingIcon: "size-4",
-				leadingAvatarSize: "3xs",
-				trailingIcon: "size-4"
-			},
-			md: {
-				base: "px-2.5 py-1.5 text-base/5 gap-1.5",
-				leading: "ps-2.5",
-				trailing: "pe-2.5",
-				leadingIcon: "size-5",
-				leadingAvatarSize: "2xs",
-				trailingIcon: "size-5"
-			},
-			lg: {
-				base: "px-3 py-2 text-base/5 gap-2",
-				leading: "ps-3",
-				trailing: "pe-3",
-				leadingIcon: "size-5",
-				leadingAvatarSize: "2xs",
-				trailingIcon: "size-5"
-			},
-			xl: {
-				base: "px-3 py-2 text-base gap-2",
-				leading: "ps-3",
-				trailing: "pe-3",
-				leadingIcon: "size-6",
-				leadingAvatarSize: "xs",
-				trailingIcon: "size-6"
-			}
-		},
-		variant: {
-			outline: "text-highlighted bg-default ring ring-inset ring-accented",
-			soft: "text-highlighted bg-elevated/50 hover:bg-elevated focus:bg-elevated disabled:bg-elevated/50",
-			subtle: "text-highlighted bg-elevated ring ring-inset ring-accented",
-			ghost: "text-highlighted bg-transparent hover:bg-elevated focus:bg-elevated disabled:bg-transparent dark:disabled:bg-transparent",
-			none: "text-highlighted bg-transparent focus:outline-none"
-		},
-		color: {
-			primary: "",
-			secondary: "",
-			success: "",
-			info: "",
-			warning: "",
-			error: "",
-			neutral: ""
-		},
-		leading: { true: "" },
-		trailing: { true: "" },
-		loading: { true: "" },
-		highlight: { true: "" },
-		fixed: { false: "" },
-		type: { file: "file:me-1.5 file:font-medium file:text-muted file:outline-none" }
-	},
-	compoundVariants: [
-		{
-			color: "primary",
-			variant: ["outline", "subtle"],
-			class: "outline-primary/25 focus-visible:outline-3 focus-visible:ring-primary"
-		},
-		{
-			color: "secondary",
-			variant: ["outline", "subtle"],
-			class: "outline-secondary/25 focus-visible:outline-3 focus-visible:ring-secondary"
-		},
-		{
-			color: "success",
-			variant: ["outline", "subtle"],
-			class: "outline-success/25 focus-visible:outline-3 focus-visible:ring-success"
-		},
-		{
-			color: "info",
-			variant: ["outline", "subtle"],
-			class: "outline-info/25 focus-visible:outline-3 focus-visible:ring-info"
-		},
-		{
-			color: "warning",
-			variant: ["outline", "subtle"],
-			class: "outline-warning/25 focus-visible:outline-3 focus-visible:ring-warning"
-		},
-		{
-			color: "error",
-			variant: ["outline", "subtle"],
-			class: "outline-error/25 focus-visible:outline-3 focus-visible:ring-error"
-		},
-		{
-			color: "primary",
-			variant: ["soft", "ghost"],
-			class: "outline-primary/25 focus-visible:outline-3"
-		},
-		{
-			color: "secondary",
-			variant: ["soft", "ghost"],
-			class: "outline-secondary/25 focus-visible:outline-3"
-		},
-		{
-			color: "success",
-			variant: ["soft", "ghost"],
-			class: "outline-success/25 focus-visible:outline-3"
-		},
-		{
-			color: "info",
-			variant: ["soft", "ghost"],
-			class: "outline-info/25 focus-visible:outline-3"
-		},
-		{
-			color: "warning",
-			variant: ["soft", "ghost"],
-			class: "outline-warning/25 focus-visible:outline-3"
-		},
-		{
-			color: "error",
-			variant: ["soft", "ghost"],
-			class: "outline-error/25 focus-visible:outline-3"
-		},
-		{
-			color: "primary",
-			highlight: !0,
-			class: "ring ring-inset ring-primary"
-		},
-		{
-			color: "secondary",
-			highlight: !0,
-			class: "ring ring-inset ring-secondary"
-		},
-		{
-			color: "success",
-			highlight: !0,
-			class: "ring ring-inset ring-success"
-		},
-		{
-			color: "info",
-			highlight: !0,
-			class: "ring ring-inset ring-info"
-		},
-		{
-			color: "warning",
-			highlight: !0,
-			class: "ring ring-inset ring-warning"
-		},
-		{
-			color: "error",
-			highlight: !0,
-			class: "ring ring-inset ring-error"
-		},
-		{
-			color: "neutral",
-			variant: ["outline", "subtle"],
-			class: "outline-inverted/25 focus-visible:outline-3 focus-visible:ring-inverted"
-		},
-		{
-			color: "neutral",
-			variant: ["soft", "ghost"],
-			class: "outline-inverted/25 focus-visible:outline-3"
-		},
-		{
-			color: "neutral",
-			highlight: !0,
-			class: "ring ring-inset ring-inverted"
-		},
-		{
-			leading: !0,
-			size: "xs",
-			class: "ps-7"
-		},
-		{
-			leading: !0,
-			size: "sm",
-			class: "ps-8"
-		},
-		{
-			leading: !0,
-			size: "md",
-			class: "ps-9"
-		},
-		{
-			leading: !0,
-			size: "lg",
-			class: "ps-10"
-		},
-		{
-			leading: !0,
-			size: "xl",
-			class: "ps-11"
-		},
-		{
-			trailing: !0,
-			size: "xs",
-			class: "pe-7"
-		},
-		{
-			trailing: !0,
-			size: "sm",
-			class: "pe-8"
-		},
-		{
-			trailing: !0,
-			size: "md",
-			class: "pe-9"
-		},
-		{
-			trailing: !0,
-			size: "lg",
-			class: "pe-10"
-		},
-		{
-			trailing: !0,
-			size: "xl",
-			class: "pe-11"
-		},
-		{
-			loading: !0,
-			leading: !0,
-			class: { leadingIcon: "animate-spin" }
-		},
-		{
-			loading: !0,
-			leading: !1,
-			trailing: !0,
-			class: { trailingIcon: "animate-spin" }
-		},
-		{
-			fixed: !1,
-			size: "xs",
-			class: "md:text-xs"
-		},
-		{
-			fixed: !1,
-			size: "sm",
-			class: "md:text-xs"
-		},
-		{
-			fixed: !1,
-			size: "md",
-			class: "md:text-sm"
-		},
-		{
-			fixed: !1,
-			size: "lg",
-			class: "md:text-sm"
-		}
-	],
-	defaultVariants: {
-		size: "md",
-		color: "primary",
-		variant: "outline"
-	}
-}, OV = [
-	"id",
-	"type",
-	"value",
-	"name",
-	"placeholder",
-	"disabled",
-	"required",
-	"autocomplete"
-], kV = /*@__PURE__*/ Object.assign({ inheritAttrs: !1 }, {
-	__name: "Input",
-	props: {
-		as: {
-			type: null,
-			required: !1
-		},
-		id: {
-			type: String,
-			required: !1
-		},
-		name: {
-			type: String,
-			required: !1
-		},
-		type: {
-			type: null,
-			required: !1,
-			default: "text"
-		},
-		placeholder: {
-			type: String,
-			required: !1
-		},
-		color: {
-			type: null,
-			required: !1
-		},
-		variant: {
-			type: null,
-			required: !1
-		},
-		size: {
-			type: null,
-			required: !1
-		},
-		required: {
-			type: Boolean,
-			required: !1
-		},
-		autocomplete: {
-			type: [String, Object],
-			required: !1,
-			default: "off"
-		},
-		autofocus: {
-			type: Boolean,
-			required: !1
-		},
-		autofocusDelay: {
-			type: Number,
-			required: !1,
-			default: 0
-		},
-		disabled: {
-			type: Boolean,
-			required: !1
-		},
-		highlight: {
-			type: Boolean,
-			required: !1
-		},
-		fixed: {
-			type: Boolean,
-			required: !1
-		},
-		modelValue: {
-			type: null,
-			required: !1
-		},
-		defaultValue: {
-			type: null,
-			required: !1
-		},
-		modelModifiers: {
-			type: null,
-			required: !1
-		},
-		class: {
-			type: null,
-			required: !1
-		},
-		ui: {
-			type: Object,
-			required: !1
-		},
-		icon: {
-			type: null,
-			required: !1
-		},
-		avatar: {
-			type: Object,
-			required: !1
-		},
-		leading: {
-			type: Boolean,
-			required: !1
-		},
-		leadingIcon: {
-			type: null,
-			required: !1
-		},
-		trailing: {
-			type: Boolean,
-			required: !1
-		},
-		trailingIcon: {
-			type: null,
-			required: !1
-		},
-		loading: {
-			type: Boolean,
-			required: !1
-		},
-		loadingIcon: {
-			type: null,
-			required: !1
-		}
-	},
-	emits: [
-		"update:modelValue",
-		"blur",
-		"change"
-	],
-	setup(e, { expose: t, emit: n }) {
-		let r = e, i = n, a = Aa(), o = cE("input", r), s = ym(o, "modelValue", i, { defaultValue: o.defaultValue }), c = Sm(), { emitFormBlur: l, emitFormInput: u, emitFormChange: d, size: f, color: p, id: m, name: h, highlight: g, disabled: _, emitFormFocus: v, ariaAttrs: y } = rA(r, { deferInputValidation: !0 }), { orientation: b, size: x } = Jk(r), { isLeading: S, isTrailing: C, leadingIconName: w, trailingIconName: T } = Kk(o), E = Z(() => p.value ?? o.color), D = Z(() => g.value ?? o.highlight), O = Z(() => x.value ?? f.value ?? o.size), ee = Z(() => _.value ?? o.disabled), te = Z(() => Rk({
-			extend: DV,
-			...c.ui?.input || {}
-		})({
-			type: o.type,
-			color: E.value,
-			variant: o.variant,
-			size: O.value,
-			loading: o.loading,
-			highlight: D.value,
-			fixed: o.fixed,
-			leading: S.value || !!o.avatar || !!a.leading,
-			trailing: C.value || !!a.trailing,
-			fieldGroup: b.value
-		})), k = ci("inputRef");
-		function ne(e) {
-			o.modelModifiers?.trim && (typeof e == "string" || e == null) && (e = e?.trim() ?? null), (o.modelModifiers?.number || o.type === "number") && (e = Hm(e)), o.modelModifiers?.nullable && Wm(e) && (e = null), o.modelModifiers?.optional && !o.modelModifiers?.nullable && e !== null && Wm(e) && (e = void 0), s.value = e, u();
-		}
-		function re(e) {
-			o.modelModifiers?.lazy || ne(e.target.value);
-		}
-		function ie(e) {
-			let t = e.target.value;
-			o.modelModifiers?.lazy && ne(t), o.modelModifiers?.trim && (e.target.value = t.trim()), d(), i("change", e);
-		}
-		function ae(e) {
-			l(), i("blur", e);
-		}
-		function A() {
-			o.autofocus && k.value?.focus();
-		}
-		let oe;
-		return Qi(() => {
-			oe = setTimeout(() => {
-				A();
-			}, o.autofocusDelay);
-		}), Ne(() => clearTimeout(oe)), t({ inputRef: k }), (e, t) => (U(), G(I($), {
-			as: I(o).as,
-			"data-slot": e.$attrs["data-slot"] ?? "root",
-			class: M(te.value.root({ class: [I(o).ui?.root, I(o).class] }))
-		}, {
-			default: L(() => [
-				K("input", X({
-					id: I(m),
-					ref_key: "inputRef",
-					ref: k,
-					type: I(o).type,
-					value: I(s),
-					name: I(h),
-					placeholder: I(o).placeholder,
-					class: te.value.base({ class: I(o).ui?.base }),
-					disabled: ee.value,
-					required: I(o).required,
-					autocomplete: I(o).autocomplete
-				}, {
-					...e.$attrs,
-					...I(y)
-				}, {
-					"data-slot": "base",
-					onInput: re,
-					onBlur: ae,
-					onChange: ie,
-					onFocus: t[0] ||= (...e) => I(v) && I(v)(...e)
-				}), null, 16, OV),
-				V(e.$slots, "default", { ui: te.value }),
-				I(S) || I(o).avatar || a.leading ? (U(), W("span", {
-					key: 0,
-					"data-slot": "leading",
-					class: M(te.value.leading({ class: I(o).ui?.leading }))
-				}, [V(e.$slots, "leading", { ui: te.value }, () => [I(S) && I(w) ? (U(), G(zk, {
-					key: 0,
-					name: I(w),
-					"data-slot": "leadingIcon",
-					class: M(te.value.leadingIcon({ class: I(o).ui?.leadingIcon }))
-				}, null, 8, ["name", "class"])) : I(o).avatar ? (U(), G(Gk, X({
-					key: 1,
-					size: I(o).ui?.leadingAvatarSize || te.value.leadingAvatarSize()
-				}, I(o).avatar, {
-					"data-slot": "leadingAvatar",
-					class: te.value.leadingAvatar({ class: I(o).ui?.leadingAvatar })
-				}), null, 16, ["size", "class"])) : Y("", !0)])], 2)) : Y("", !0),
-				I(C) || a.trailing ? (U(), W("span", {
-					key: 1,
-					"data-slot": "trailing",
-					class: M(te.value.trailing({ class: I(o).ui?.trailing }))
-				}, [V(e.$slots, "trailing", { ui: te.value }, () => [I(T) ? (U(), G(zk, {
-					key: 0,
-					name: I(T),
-					"data-slot": "trailingIcon",
-					class: M(te.value.trailingIcon({ class: I(o).ui?.trailingIcon }))
-				}, null, 8, ["name", "class"])) : Y("", !0)])], 2)) : Y("", !0)
-			]),
-			_: 3
-		}, 8, [
-			"as",
-			"data-slot",
-			"class"
-		]));
-	}
-}), AV = {
-	base: "inline-flex items-center justify-center px-1 rounded-sm font-medium font-sans uppercase",
-	variants: {
-		color: {
-			primary: "",
-			secondary: "",
-			success: "",
-			info: "",
-			warning: "",
-			error: "",
-			neutral: ""
-		},
-		variant: {
-			solid: "",
-			outline: "",
-			soft: "",
-			subtle: ""
-		},
-		size: {
-			sm: "h-4 min-w-[16px] text-[10px]",
-			md: "h-5 min-w-[20px] text-[11px]",
-			lg: "h-6 min-w-[24px] text-[12px]"
-		}
-	},
-	compoundVariants: [
-		{
-			color: "primary",
-			variant: "solid",
-			class: "text-inverted bg-primary"
-		},
-		{
-			color: "secondary",
-			variant: "solid",
-			class: "text-inverted bg-secondary"
-		},
-		{
-			color: "success",
-			variant: "solid",
-			class: "text-inverted bg-success"
-		},
-		{
-			color: "info",
-			variant: "solid",
-			class: "text-inverted bg-info"
-		},
-		{
-			color: "warning",
-			variant: "solid",
-			class: "text-inverted bg-warning"
-		},
-		{
-			color: "error",
-			variant: "solid",
-			class: "text-inverted bg-error"
-		},
-		{
-			color: "primary",
-			variant: "outline",
-			class: "ring ring-inset ring-primary/50 text-primary"
-		},
-		{
-			color: "secondary",
-			variant: "outline",
-			class: "ring ring-inset ring-secondary/50 text-secondary"
-		},
-		{
-			color: "success",
-			variant: "outline",
-			class: "ring ring-inset ring-success/50 text-success"
-		},
-		{
-			color: "info",
-			variant: "outline",
-			class: "ring ring-inset ring-info/50 text-info"
-		},
-		{
-			color: "warning",
-			variant: "outline",
-			class: "ring ring-inset ring-warning/50 text-warning"
-		},
-		{
-			color: "error",
-			variant: "outline",
-			class: "ring ring-inset ring-error/50 text-error"
-		},
-		{
-			color: "primary",
-			variant: "soft",
-			class: "text-primary bg-primary/10"
-		},
-		{
-			color: "secondary",
-			variant: "soft",
-			class: "text-secondary bg-secondary/10"
-		},
-		{
-			color: "success",
-			variant: "soft",
-			class: "text-success bg-success/10"
-		},
-		{
-			color: "info",
-			variant: "soft",
-			class: "text-info bg-info/10"
-		},
-		{
-			color: "warning",
-			variant: "soft",
-			class: "text-warning bg-warning/10"
-		},
-		{
-			color: "error",
-			variant: "soft",
-			class: "text-error bg-error/10"
-		},
-		{
-			color: "primary",
-			variant: "subtle",
-			class: "text-primary ring ring-inset ring-primary/25 bg-primary/10"
-		},
-		{
-			color: "secondary",
-			variant: "subtle",
-			class: "text-secondary ring ring-inset ring-secondary/25 bg-secondary/10"
-		},
-		{
-			color: "success",
-			variant: "subtle",
-			class: "text-success ring ring-inset ring-success/25 bg-success/10"
-		},
-		{
-			color: "info",
-			variant: "subtle",
-			class: "text-info ring ring-inset ring-info/25 bg-info/10"
-		},
-		{
-			color: "warning",
-			variant: "subtle",
-			class: "text-warning ring ring-inset ring-warning/25 bg-warning/10"
-		},
-		{
-			color: "error",
-			variant: "subtle",
-			class: "text-error ring ring-inset ring-error/25 bg-error/10"
-		},
-		{
-			color: "neutral",
-			variant: "solid",
-			class: "text-inverted bg-inverted"
-		},
-		{
-			color: "neutral",
-			variant: "outline",
-			class: "ring ring-inset ring-accented text-default bg-default"
-		},
-		{
-			color: "neutral",
-			variant: "soft",
-			class: "text-default bg-elevated"
-		},
-		{
-			color: "neutral",
-			variant: "subtle",
-			class: "ring ring-inset ring-accented text-default bg-elevated"
-		}
-	],
-	defaultVariants: {
-		variant: "outline",
-		color: "neutral",
-		size: "md"
-	}
-}, jV = {
-	__name: "Kbd",
-	props: {
-		as: {
-			type: null,
-			required: !1,
-			default: "kbd"
-		},
-		value: {
-			type: null,
-			required: !1
-		},
-		color: {
-			type: null,
-			required: !1
-		},
-		variant: {
-			type: null,
-			required: !1
-		},
-		size: {
-			type: null,
-			required: !1
-		},
-		class: {
-			type: null,
-			required: !1
-		},
-		ui: {
-			type: Object,
-			required: !1
-		}
-	},
-	setup(e) {
-		let t = cE("kbd", e), { getKbdKey: n } = wm(), r = Sm(), i = Z(() => Rk({
-			extend: AV,
-			...r.ui?.kbd || {}
-		}));
-		return (e, r) => (U(), G(I($), {
-			as: I(t).as,
-			class: M(i.value({
-				class: [I(t).ui?.base, I(t).class],
-				color: I(t).color,
-				variant: I(t).variant,
-				size: I(t).size
-			}))
-		}, {
-			default: L(() => [V(e.$slots, "default", {}, () => [J(P(I(n)(I(t).value)), 1)])]),
-			_: 3
-		}, 8, ["as", "class"]));
-	}
-}, MV = { slots: {
+}, BV = { slots: {
 	content: "flex items-center gap-1 bg-default text-highlighted shadow-sm rounded-sm ring ring-default h-6 px-2.5 py-1 text-xs select-none data-[state=delayed-open]:animate-[scale-in_100ms_var(--ease-out)] data-[state=closed]:animate-[scale-out_100ms_var(--ease-out)] origin-(--reka-tooltip-content-transform-origin) pointer-events-auto",
 	arrow: "fill-bg stroke-default",
 	text: "truncate",
 	kbds: "hidden lg:inline-flex items-center shrink-0 gap-0.5 not-first-of-type:before:content-['·'] not-first-of-type:before:me-0.5",
 	kbdsSize: "sm"
-} }, NV = {
+} }, VV = {
 	__name: "Tooltip",
 	props: {
 		text: {
@@ -36744,7 +37714,7 @@ var uV = {
 			sideOffset: 8,
 			collisionPadding: 8
 		})), d = /* @__PURE__ */ Sn(() => Om(a.arrow, { rounded: !0 })), f = Z(() => Rk({
-			extend: MV,
+			extend: BV,
 			...o.ui?.tooltip || {}
 		})({ side: u.value.side }));
 		return (e, t) => (U(), G(I(qT), X(I(c), { disabled: !(I(a).text || I(a).kbds?.length || i.content) || I(a).disabled }), {
@@ -36769,7 +37739,7 @@ var uV = {
 							key: 1,
 							"data-slot": "kbds",
 							class: M(f.value.kbds({ class: I(a).ui?.kbds }))
-						}, [(U(!0), W(H, null, B(I(a).kbds, (e, t) => (U(), G(jV, X({
+						}, [(U(!0), W(H, null, B(I(a).kbds, (e, t) => (U(), G(CV, X({
 							key: t,
 							size: I(a).ui?.kbdsSize || f.value.kbdsSize()
 						}, { ref_for: !0 }, typeof e == "string" ? { value: e } : e), null, 16, ["size"]))), 128))], 2)) : Y("", !0)]), I(a).arrow ? (U(), G(I(BT), X({ key: 0 }, d.value, {
@@ -36785,59 +37755,10 @@ var uV = {
 			_: 3
 		}, 16, ["disabled"]));
 	}
-}, PV = {
-	Root: GS,
-	Trigger: aC,
-	Portal: ZS,
-	Content: KS,
-	Arrow: VS,
-	Item: JS,
-	Group: qS,
-	Separator: eC,
-	CheckboxItem: HS,
-	ItemIndicator: YS,
-	Label: XS,
-	RadioGroup: QS,
-	RadioItem: $S,
-	Sub: tC,
-	SubContent: nC,
-	SubTrigger: rC
-}, FV = {
-	Root: SC,
-	Trigger: IC,
-	Portal: kC,
-	Content: CC,
-	Arrow: vC,
-	Item: EC,
-	Group: TC,
-	Separator: MC,
-	CheckboxItem: yC,
-	ItemIndicator: DC,
-	Label: OC,
-	RadioGroup: AC,
-	RadioItem: jC,
-	Sub: NC,
-	SubContent: PC,
-	SubTrigger: FC,
-	Filter: wC
-}, IV = {
-	Root: BC,
-	Trigger: KC,
-	Portal: GC,
-	Content: WC,
-	Arrow: LC
-}, LV = {
-	Root: cC,
-	Trigger: _C,
-	Portal: gC,
-	Content: hC,
-	Arrow: uC,
-	Close: dC,
-	Anchor: lC
-}, RV = { slots: {
+}, HV = { slots: {
 	content: "bg-default shadow-lg rounded-md ring ring-default data-[state=open]:animate-[scale-in_100ms_var(--ease-out)] data-[state=closed]:animate-[scale-out_100ms_var(--ease-out)] origin-(--reka-popover-content-transform-origin) focus:outline-none pointer-events-auto",
 	arrow: "fill-bg stroke-default"
-} }, zV = {
+} }, UV = {
 	__name: "Popover",
 	props: {
 		mode: {
@@ -36912,9 +37833,9 @@ var uV = {
 		})), u = Z(() => a.dismissible ? { pointerDownOutside: lV } : ["interactOutside", "escapeKeyDown"].reduce((e, t) => (e[t] = (e) => {
 			e.preventDefault(), r("close:prevent");
 		}, e), {})), d = /* @__PURE__ */ Sn(() => Om(a.arrow, { rounded: !0 })), f = Z(() => Rk({
-			extend: RV,
+			extend: HV,
 			...o.ui?.popover || {}
-		})({ side: l.value.side })), p = Z(() => a.mode === "hover" ? IV : LV);
+		})({ side: l.value.side })), p = Z(() => a.mode === "hover" ? gV : _V);
 		return (e, t) => (U(), G(I(p).Root, N(Ss(I(s))), {
 			default: L(({ open: t, close: n }) => [
 				i.default ? (U(), G(I(p).Trigger, {
@@ -36953,7 +37874,7 @@ var uV = {
 			_: 3
 		}, 16));
 	}
-}, BV = {
+}, WV = {
 	slots: {
 		root: "relative flex gap-1.5 [&>div]:min-w-0",
 		list: "isolate min-w-0",
@@ -37363,7 +38284,7 @@ var uV = {
 		highlightColor: "primary",
 		variant: "pill"
 	}
-}, VV = /*@__PURE__*/ Object.assign({ inheritAttrs: !1 }, {
+}, GV = /*@__PURE__*/ Object.assign({ inheritAttrs: !1 }, {
 	__name: "NavigationMenu",
 	props: {
 		as: {
@@ -37524,7 +38445,7 @@ var uV = {
 			level: Number,
 			listIndex: Number
 		} }), g = Z(() => Rk({
-			extend: BV,
+			extend: WV,
 			...o.ui?.navigationMenu || {}
 		})({
 			orientation: a.orientation,
@@ -37623,7 +38544,7 @@ var uV = {
 							active: n,
 							index: r,
 							ui: g.value
-						}, () => [t.badge || t.badge === 0 ? (U(), G(wV, X({
+						}, () => [t.badge || t.badge === 0 ? (U(), G(LV, X({
 							key: 0,
 							color: "neutral",
 							variant: "outline",
@@ -37678,7 +38599,7 @@ var uV = {
 							disabled: t.disabled,
 							onSelect: t.onSelect
 						}, {
-							default: L(() => [I(a).orientation === "vertical" && I(a).collapsed && t.children?.length && (I(a).popover || t.popover) ? (U(), G(zV, X({ key: 0 }, {
+							default: L(() => [I(a).orientation === "vertical" && I(a).collapsed && t.children?.length && (I(a).popover || t.popover) ? (U(), G(UV, X({ key: 0 }, {
 								...d.value,
 								...typeof t.popover == "boolean" ? {} : t.popover || {}
 							}, { ui: { content: g.value.content({ class: [I(a).ui?.content, t.ui?.content] }) } }), {
@@ -37771,7 +38692,7 @@ var uV = {
 									_: 2
 								}, 1040, ["class"])]),
 								_: 2
-							}, 1040, ["ui"])) : I(a).orientation === "vertical" && I(a).collapsed && (I(a).tooltip || t.tooltip) || I(a).orientation === "horizontal" && t.tooltip ? (U(), G(NV, X({
+							}, 1040, ["ui"])) : I(a).orientation === "vertical" && I(a).collapsed && (I(a).tooltip || t.tooltip) || I(a).orientation === "horizontal" && t.tooltip ? (U(), G(VV, X({
 								key: 1,
 								text: I(Vm)(t, I(a).labelKey)
 							}, {
@@ -38015,7 +38936,7 @@ var uV = {
 });
 //#endregion
 //#region node_modules/@nuxt/ui/dist/runtime/composables/useIMEGuard.js
-function HV(e) {
+function KV(e) {
 	let t = !1;
 	function n(e) {
 		return e.isComposing || e.keyCode === 229;
@@ -38036,7 +38957,7 @@ function HV(e) {
 }
 //#endregion
 //#region virtual:nuxt-ui-templates/ui/chat-prompt.ts
-var UV = {
+var qV = {
 	slots: {
 		root: "relative flex flex-col items-stretch gap-2 px-2.5 py-2 w-full rounded-lg backdrop-blur-sm",
 		header: "flex items-center gap-1.5",
@@ -38137,7 +39058,7 @@ var UV = {
 		color: "primary",
 		variant: "outline"
 	}
-}, WV = /*@__PURE__*/ Object.assign({ inheritAttrs: !1 }, {
+}, JV = /*@__PURE__*/ Object.assign({ inheritAttrs: !1 }, {
 	__name: "ChatPrompt",
 	props: /*@__PURE__*/ Fa({
 		as: {
@@ -38238,7 +39159,7 @@ var UV = {
 			"footer",
 			"body"
 		]), f = Z(() => Rk({
-			extend: UV,
+			extend: qV,
 			...l.ui?.chatPrompt || {}
 		})({
 			color: o.color,
@@ -38250,7 +39171,7 @@ var UV = {
 		function h(e) {
 			p.value?.textareaRef?.blur(), i("close", e ?? new Event("close"));
 		}
-		let { onKeydown: g, onCompositionEnd: _ } = HV((e) => {
+		let { onKeydown: g, onCompositionEnd: _ } = KV((e) => {
 			m(e);
 		});
 		function v(e) {
@@ -38281,7 +39202,7 @@ var UV = {
 					placeholder: I(o).placeholder ?? I(c)("chatPrompt.placeholder"),
 					disabled: !!I(o).error || I(o).disabled,
 					ui: f.value
-				}, () => [q(SV, X({
+				}, () => [q(FV, X({
 					ref_key: "textareaRef",
 					ref: p,
 					modelValue: s.value,
@@ -38331,76 +39252,13 @@ var UV = {
 	}
 });
 //#endregion
-//#region node_modules/@nuxt/ui/dist/runtime/composables/useFilter.js
-function GV() {
-	let { contains: e, startsWith: t } = Zh({ sensitivity: "base" });
-	function n(n, r) {
-		return e(n, r) ? e(r, n) ? 0 : t(n, r) ? 1 : 2 : null;
-	}
-	function r(e, t, r) {
-		if (typeof e != "object" || !e) return n(String(e), t);
-		let i = null;
-		for (let a of r) {
-			let r = Vm(e, a);
-			if (r == null) continue;
-			let o = Array.isArray(r) ? r.map(String) : [String(r)];
-			for (let e of o) {
-				let r = n(e, t);
-				if (r !== null && (i === null || r < i) && (i = r), i === 0) return 0;
-			}
-		}
-		return i;
-	}
-	function i(e, t, n) {
-		if (!t) return e;
-		let i = [];
-		for (let a of e) {
-			let e = r(a, t, n);
-			e !== null && i.push({
-				item: a,
-				score: e
-			});
-		}
-		return i.sort((e, t) => e.score - t.score), i.map(({ item: e }) => e);
-	}
-	function a(e, t, n) {
-		return t ? e.map((e) => {
-			let i = [];
-			for (let a of e) {
-				if (a == null) continue;
-				if (n.isStructural?.(a)) {
-					i.push({
-						item: a,
-						score: -1
-					});
-					continue;
-				}
-				let e = r(a, t, n.fields);
-				e !== null && i.push({
-					item: a,
-					score: e
-				});
-			}
-			let a = 0;
-			for (let e = 0; e <= i.length; e++) (e === i.length || i[e].score === -1) && (i.splice(a, e - a, ...i.slice(a, e).sort((e, t) => e.score - t.score)), a = e + 1);
-			return i.map(({ item: e }) => e);
-		}).filter((e) => e.some((e) => !n.isStructural?.(e))) : e;
-	}
-	return {
-		score: n,
-		scoreItem: r,
-		filter: i,
-		filterGroups: a
-	};
-}
-//#endregion
 //#region node_modules/@nuxt/ui/dist/runtime/utils/virtualizer.js
-function KV(e, t) {
+function YV(e, t) {
 	if (typeof e != "object" || !e) return !1;
 	let n = Vm(e, t);
 	return n != null && n !== "";
 }
-function qV(e, t) {
+function XV(e, t) {
 	let n = t ? {
 		xs: 44,
 		sm: 48,
@@ -38416,13 +39274,13 @@ function qV(e, t) {
 	};
 	return n[e] ?? n.md;
 }
-function JV(e, t, n, r) {
-	let i = qV(t, !0), a = qV(t, !1);
-	return r ? () => i : n ? (t) => KV(e[t], n) ? i : a : () => a;
+function ZV(e, t, n, r) {
+	let i = XV(t, !0), a = XV(t, !1);
+	return r ? () => i : n ? (t) => YV(e[t], n) ? i : a : () => a;
 }
 //#endregion
 //#region virtual:nuxt-ui-templates/ui/select-menu.ts
-var YV = {
+var QV = {
 	slots: {
 		base: ["relative group rounded-md inline-flex items-center disabled:cursor-not-allowed disabled:opacity-75", "transition-colors"],
 		leading: "absolute inset-y-0 start-0 flex items-center",
@@ -38768,7 +39626,7 @@ var YV = {
 		variant: "outline",
 		position: "popper"
 	}
-}, XV = /*@__PURE__*/ Object.assign({ inheritAttrs: !1 }, {
+}, $V = /*@__PURE__*/ Object.assign({ inheritAttrs: !1 }, {
 	__name: "SelectMenu",
 	props: /*@__PURE__*/ Fa({
 		id: {
@@ -38998,12 +39856,12 @@ var YV = {
 		let r = e, i = n, a = Aa(), o = cE("selectMenu", r), s = ro(e, "searchTerm", {
 			type: String,
 			default: ""
-		}), { t: c } = eh(), l = Sm(), { filterGroups: u } = GV(), d = lE(am(o, "modelValue", "defaultValue", "open", "defaultOpen", "required", "multiple", "resetSearchTermOnBlur", "resetSearchTermOnSelect", "resetModelValueOnClear", "highlightOnHover", "by"), i), f = eE(/* @__PURE__ */ Sn(() => o.portal)), p = /* @__PURE__ */ Sn(() => Om(o.content, {
+		}), { t: c } = eh(), l = Sm(), { filterGroups: u } = vV(), d = lE(am(o, "modelValue", "defaultValue", "open", "defaultOpen", "required", "multiple", "resetSearchTermOnBlur", "resetSearchTermOnSelect", "resetModelValueOnClear", "highlightOnHover", "by"), i), f = eE(/* @__PURE__ */ Sn(() => o.portal)), p = /* @__PURE__ */ Sn(() => Om(o.content, {
 			side: "bottom",
 			sideOffset: 8,
 			collisionPadding: 8,
 			position: "popper"
-		})), m = /* @__PURE__ */ Sn(() => Om(o.arrow, { rounded: !0 })), h = Z(() => typeof o.clear == "object" ? o.clear : {}), g = /* @__PURE__ */ Sn(() => o.virtualize ? Om(typeof o.virtualize == "boolean" ? {} : o.virtualize, { estimateSize: JV(ge.value, oe.value ?? "md", o.descriptionKey, !!a["item-description"]) }) : !1), _ = /* @__PURE__ */ Sn(() => Om(o.searchInput, {
+		})), m = /* @__PURE__ */ Sn(() => Om(o.arrow, { rounded: !0 })), h = Z(() => typeof o.clear == "object" ? o.clear : {}), g = /* @__PURE__ */ Sn(() => o.virtualize ? Om(typeof o.virtualize == "boolean" ? {} : o.virtualize, { estimateSize: ZV(ge.value, oe.value ?? "md", o.descriptionKey, !!a["item-description"]) }) : !1), _ = /* @__PURE__ */ Sn(() => Om(o.searchInput, {
 			placeholder: c("selectMenu.search"),
 			variant: "none",
 			fixed: o.fixed
@@ -39030,7 +39888,7 @@ var YV = {
 				required: !1
 			}
 		} }), j = Z(() => Rk({
-			extend: YV,
+			extend: QV,
 			...l.ui?.selectMenu || {}
 		})({
 			color: ae.value,
@@ -39371,7 +40229,7 @@ var YV = {
 										"display-value": () => s.value,
 										"as-child": ""
 									}, {
-										default: L(() => [q(kV, X({
+										default: L(() => [q(xV, X({
 											autofocus: "",
 											autocomplete: "off",
 											size: oe.value
@@ -39460,7 +40318,7 @@ var YV = {
 			}, 16, ["name", "disabled"])
 		], 64));
 	}
-}), ZV = {
+}), eH = {
 	slots: {
 		root: "group/message relative w-full",
 		header: "flex mb-1.5",
@@ -39734,7 +40592,7 @@ var YV = {
 		variant: "naked",
 		color: "neutral"
 	}
-}, QV = {
+}, tH = {
 	__name: "ChatMessage",
 	props: {
 		as: {
@@ -39813,7 +40671,7 @@ var YV = {
 			"ui",
 			"content"
 		])), c = Z(() => Rk({
-			extend: ZV,
+			extend: eH,
 			...i.ui?.chatMessage || {}
 		})({
 			variant: r.variant,
@@ -39880,7 +40738,7 @@ var YV = {
 			}, [V(e.$slots, "actions", N(Ss({
 				...s.value,
 				actions: I(r).actions
-			})), () => [(U(!0), W(H, null, B(I(r).actions, (e, t) => (U(), G(NV, {
+			})), () => [(U(!0), W(H, null, B(I(r).actions, (e, t) => (U(), G(VV, {
 				key: t,
 				text: e.label
 			}, {
@@ -39900,861 +40758,6 @@ var YV = {
 			"data-role",
 			"class"
 		]));
-	}
-}, $V = {
-	__name: "DropdownMenuContent",
-	props: {
-		items: {
-			type: null,
-			required: !1
-		},
-		portal: {
-			type: [Boolean, String],
-			required: !1,
-			skipCheck: !0
-		},
-		sub: {
-			type: Boolean,
-			required: !1
-		},
-		labelKey: {
-			type: null,
-			required: !0
-		},
-		descriptionKey: {
-			type: null,
-			required: !0
-		},
-		checkedIcon: {
-			type: null,
-			required: !1
-		},
-		loadingIcon: {
-			type: null,
-			required: !1
-		},
-		externalIcon: {
-			type: [Boolean, String],
-			required: !1,
-			skipCheck: !0
-		},
-		size: {
-			type: null,
-			required: !1
-		},
-		filter: {
-			type: [Boolean, Object],
-			required: !1
-		},
-		filterFields: {
-			type: Array,
-			required: !1
-		},
-		ignoreFilter: {
-			type: Boolean,
-			required: !1
-		},
-		searchTerm: {
-			type: String,
-			required: !1
-		},
-		class: {
-			type: null,
-			required: !1
-		},
-		ui: {
-			type: null,
-			required: !0
-		},
-		uiOverride: {
-			type: null,
-			required: !1
-		},
-		loop: {
-			type: Boolean,
-			required: !1
-		},
-		memoDependencies: {
-			type: Array,
-			required: !1
-		},
-		side: {
-			type: null,
-			required: !1
-		},
-		sideOffset: {
-			type: Number,
-			required: !1
-		},
-		sideFlip: {
-			type: Boolean,
-			required: !1
-		},
-		align: {
-			type: null,
-			required: !1
-		},
-		alignOffset: {
-			type: Number,
-			required: !1
-		},
-		alignFlip: {
-			type: Boolean,
-			required: !1
-		},
-		avoidCollisions: {
-			type: Boolean,
-			required: !1
-		},
-		collisionBoundary: {
-			type: null,
-			required: !1
-		},
-		collisionPadding: {
-			type: [Number, Object],
-			required: !1
-		},
-		arrowPadding: {
-			type: Number,
-			required: !1
-		},
-		hideShiftedArrow: {
-			type: Boolean,
-			required: !1
-		},
-		sticky: {
-			type: String,
-			required: !1
-		},
-		hideWhenDetached: {
-			type: Boolean,
-			required: !1
-		},
-		positionStrategy: {
-			type: String,
-			required: !1
-		},
-		updatePositionStrategy: {
-			type: String,
-			required: !1
-		},
-		disableUpdateOnLayoutShift: {
-			type: Boolean,
-			required: !1
-		},
-		prioritizePosition: {
-			type: Boolean,
-			required: !1
-		},
-		reference: {
-			type: null,
-			required: !1
-		}
-	},
-	emits: [
-		"update:searchTerm",
-		"escapeKeyDown",
-		"pointerDownOutside",
-		"focusOutside",
-		"interactOutside",
-		"closeAutoFocus"
-	],
-	setup(e, { emit: t }) {
-		let n = e, r = t, i = Aa(), { t: a, dir: o } = eh(), s = Sm(), { filterGroups: c } = GV(), l = /* @__PURE__ */ F(""), u = Z({
-			get: () => n.searchTerm ?? l.value,
-			set: (e) => {
-				l.value = e, r("update:searchTerm", e);
-			}
-		}), d = /* @__PURE__ */ Sn(() => Om(n.filter, {
-			placeholder: a("dropdownMenu.search"),
-			variant: "none"
-		})), f = eE(/* @__PURE__ */ Sn(() => n.portal)), p = rg(im(n, "sub", "items", "portal", "labelKey", "descriptionKey", "checkedIcon", "loadingIcon", "externalIcon", "size", "filter", "filterFields", "ignoreFilter", "searchTerm", "class", "ui", "uiOverride"), r), m = () => Bm(i, ["default"]), [h, g] = gm(), _ = Z(() => o.value === "rtl" ? s.ui.icons.chevronLeft : s.ui.icons.chevronRight), v = Z(() => n.items?.length ? Km(n.items) ? n.items : [n.items] : []), y = (e) => !!e.type && ["label", "separator"].includes(e.type), b = Z(() => {
-			if (!n.filter || n.ignoreFilter || !u.value) return v.value;
-			let e = Array.isArray(n.filterFields) && n.filterFields.length ? n.filterFields : [n.labelKey];
-			return c(v.value, u.value, {
-				fields: e,
-				isStructural: y
-			});
-		}), x = Z(() => b.value.some((e) => e.some((e) => !y(e))));
-		return (t, r) => (U(), W(H, null, [q(I(h), null, {
-			default: L(({ item: r, active: a, index: o }) => [V(t.$slots, r.slot || "item", {
-				item: r,
-				index: o,
-				ui: e.ui
-			}, () => [
-				V(t.$slots, r.slot ? `${r.slot}-leading` : "item-leading", {
-					item: r,
-					active: a,
-					index: o,
-					ui: e.ui
-				}, () => [r.loading ? (U(), G(zk, {
-					key: 0,
-					name: e.loadingIcon || I(s).ui.icons.loading,
-					"data-slot": "itemLeadingIcon",
-					class: M(e.ui.itemLeadingIcon({
-						class: [e.uiOverride?.itemLeadingIcon, r.ui?.itemLeadingIcon],
-						color: r?.color,
-						loading: !0
-					}))
-				}, null, 8, ["name", "class"])) : r.icon ? (U(), G(zk, {
-					key: 1,
-					name: r.icon,
-					"data-slot": "itemLeadingIcon",
-					class: M(e.ui.itemLeadingIcon({
-						class: [e.uiOverride?.itemLeadingIcon, r.ui?.itemLeadingIcon],
-						color: r?.color,
-						active: a
-					}))
-				}, null, 8, ["name", "class"])) : r.avatar ? (U(), G(Gk, X({
-					key: 2,
-					size: r.ui?.itemLeadingAvatarSize || e.uiOverride?.itemLeadingAvatarSize || e.ui.itemLeadingAvatarSize()
-				}, r.avatar, {
-					"data-slot": "itemLeadingAvatar",
-					class: e.ui.itemLeadingAvatar({
-						class: [e.uiOverride?.itemLeadingAvatar, r.ui?.itemLeadingAvatar],
-						active: a
-					})
-				}), null, 16, ["size", "class"])) : Y("", !0)]),
-				I(Vm)(r, n.labelKey) || i[r.slot ? `${r.slot}-label` : "item-label"] || I(Vm)(r, n.descriptionKey) || i[r.slot ? `${r.slot}-description` : "item-description"] ? (U(), W("span", {
-					key: 0,
-					"data-slot": "itemWrapper",
-					class: M(e.ui.itemWrapper({ class: [e.uiOverride?.itemWrapper, r.ui?.itemWrapper] }))
-				}, [K("span", {
-					"data-slot": "itemLabel",
-					class: M(e.ui.itemLabel({
-						class: [e.uiOverride?.itemLabel, r.ui?.itemLabel],
-						active: a
-					}))
-				}, [V(t.$slots, r.slot ? `${r.slot}-label` : "item-label", {
-					item: r,
-					active: a,
-					index: o
-				}, () => [J(P(I(Vm)(r, n.labelKey)), 1)]), r.target === "_blank" && e.externalIcon !== !1 ? (U(), G(zk, {
-					key: 0,
-					name: typeof e.externalIcon == "string" ? e.externalIcon : I(s).ui.icons.external,
-					"data-slot": "itemLabelExternalIcon",
-					class: M(e.ui.itemLabelExternalIcon({
-						class: [e.uiOverride?.itemLabelExternalIcon, r.ui?.itemLabelExternalIcon],
-						color: r?.color,
-						active: a
-					}))
-				}, null, 8, ["name", "class"])) : Y("", !0)], 2), I(Vm)(r, n.descriptionKey) || i[r.slot ? `${r.slot}-description` : "item-description"] ? (U(), W("span", {
-					key: 0,
-					"data-slot": "itemDescription",
-					class: M(e.ui.itemDescription({ class: [e.uiOverride?.itemDescription, r.ui?.itemDescription] }))
-				}, [V(t.$slots, r.slot ? `${r.slot}-description` : "item-description", {
-					item: r,
-					active: a,
-					index: o
-				}, () => [J(P(I(Vm)(r, n.descriptionKey)), 1)])], 2)) : Y("", !0)], 2)) : Y("", !0),
-				K("span", {
-					"data-slot": "itemTrailing",
-					class: M(e.ui.itemTrailing({ class: [e.uiOverride?.itemTrailing, r.ui?.itemTrailing] }))
-				}, [V(t.$slots, r.slot ? `${r.slot}-trailing` : "item-trailing", {
-					item: r,
-					active: a,
-					index: o,
-					ui: e.ui
-				}, () => [r.children?.length ? (U(), G(zk, {
-					key: 0,
-					name: _.value,
-					"data-slot": "itemTrailingIcon",
-					class: M(e.ui.itemTrailingIcon({
-						class: [e.uiOverride?.itemTrailingIcon, r.ui?.itemTrailingIcon],
-						color: r?.color,
-						active: a
-					}))
-				}, null, 8, ["name", "class"])) : r.kbds?.length ? (U(), W("span", {
-					key: 1,
-					"data-slot": "itemTrailingKbds",
-					class: M(e.ui.itemTrailingKbds({ class: [e.uiOverride?.itemTrailingKbds, r.ui?.itemTrailingKbds] }))
-				}, [(U(!0), W(H, null, B(r.kbds, (t, n) => (U(), G(jV, X({
-					key: n,
-					size: r.ui?.itemTrailingKbdsSize || e.uiOverride?.itemTrailingKbdsSize || e.ui.itemTrailingKbdsSize()
-				}, { ref_for: !0 }, typeof t == "string" ? { value: t } : t), null, 16, ["size"]))), 128))], 2)) : Y("", !0)]), q(I(FV).ItemIndicator, { "as-child": "" }, {
-					default: L(() => [q(zk, {
-						name: e.checkedIcon || I(s).ui.icons.check,
-						"data-slot": "itemTrailingIcon",
-						class: M(e.ui.itemTrailingIcon({
-							class: [e.uiOverride?.itemTrailingIcon, r.ui?.itemTrailingIcon],
-							color: r?.color
-						}))
-					}, null, 8, ["name", "class"])]),
-					_: 2
-				}, 1024)], 2)
-			])]),
-			_: 3
-		}), q(I(FV).Portal, N(Ss(I(f))), {
-			default: L(() => [q(I(Yk), null, {
-				default: L(() => [(U(), G(da(e.sub ? I(FV).SubContent : I(FV).Content), X({
-					"data-slot": "content",
-					class: e.ui.content({ class: [e.uiOverride?.content, n.class] })
-				}, I(p)), {
-					default: L(() => [
-						e.filter ? (U(), G(I(FV).Filter, {
-							key: 0,
-							modelValue: u.value,
-							"onUpdate:modelValue": r[1] ||= (e) => u.value = e,
-							"as-child": ""
-						}, {
-							default: L(() => [q(kV, X({
-								autofocus: "",
-								autocomplete: "off",
-								size: e.size
-							}, d.value, {
-								"data-slot": "input",
-								class: e.ui.input({ class: e.uiOverride?.input }),
-								onChange: r[0] ||= uu(() => {}, ["stop"])
-							}), null, 16, ["size", "class"])]),
-							_: 1
-						}, 8, ["modelValue"])) : Y("", !0),
-						V(t.$slots, "content-top", { sub: e.sub ?? !1 }),
-						!u.value || x.value ? (U(), W("div", {
-							key: 1,
-							role: "presentation",
-							"data-slot": "viewport",
-							class: M(e.ui.viewport({ class: e.uiOverride?.viewport }))
-						}, [(U(!0), W(H, null, B(b.value, (r, i) => (U(), G(I(FV).Group, {
-							key: `group-${i}`,
-							"data-slot": "group",
-							class: M(e.ui.group({ class: e.uiOverride?.group }))
-						}, {
-							default: L(() => [(U(!0), W(H, null, B(r, (r, a) => (U(), W(H, { key: `group-${i}-${a}` }, [r.type === "label" ? (U(), G(I(FV).Label, {
-								key: 0,
-								"data-slot": "label",
-								class: M(e.ui.label({ class: [
-									e.uiOverride?.label,
-									r.ui?.label,
-									r.class
-								] }))
-							}, {
-								default: L(() => [q(I(g), {
-									item: r,
-									index: a
-								}, null, 8, ["item", "index"])]),
-								_: 2
-							}, 1032, ["class"])) : r.type === "separator" ? (U(), G(I(FV).Separator, {
-								key: 1,
-								"data-slot": "separator",
-								class: M(e.ui.separator({ class: [
-									e.uiOverride?.separator,
-									r.ui?.separator,
-									r.class
-								] }))
-							}, null, 8, ["class"])) : r?.children?.length ? (U(), G(I(FV).Sub, {
-								key: 2,
-								open: r.open,
-								"default-open": r.defaultOpen
-							}, {
-								default: L(() => [q(I(FV).SubTrigger, {
-									as: "button",
-									type: "button",
-									disabled: r.disabled,
-									"text-value": I(Vm)(r, n.labelKey),
-									"data-slot": "item",
-									class: M(e.ui.item({
-										class: [
-											e.uiOverride?.item,
-											r.ui?.item,
-											r.class
-										],
-										color: r?.color
-									}))
-								}, {
-									default: L(() => [q(I(g), {
-										item: r,
-										index: a
-									}, null, 8, ["item", "index"])]),
-									_: 2
-								}, 1032, [
-									"disabled",
-									"text-value",
-									"class"
-								]), q($V, X({
-									sub: "",
-									class: r.ui?.content,
-									ui: e.ui,
-									"ui-override": e.uiOverride,
-									portal: e.portal,
-									items: r.children,
-									align: "start",
-									"align-offset": -4,
-									"side-offset": 3,
-									"label-key": e.labelKey,
-									"description-key": e.descriptionKey,
-									"checked-icon": e.checkedIcon,
-									"loading-icon": e.loadingIcon,
-									"external-icon": e.externalIcon,
-									size: e.size,
-									filter: r.filter,
-									"filter-fields": r.filterFields || e.filterFields,
-									"ignore-filter": r.ignoreFilter ?? e.ignoreFilter
-								}, { ref_for: !0 }, r.content), ha({ _: 2 }, [B(m(), (e, n) => ({
-									name: n,
-									fn: L((e) => [V(t.$slots, n, X({ ref_for: !0 }, e))])
-								}))]), 1040, [
-									"class",
-									"ui",
-									"ui-override",
-									"portal",
-									"items",
-									"label-key",
-									"description-key",
-									"checked-icon",
-									"loading-icon",
-									"external-icon",
-									"size",
-									"filter",
-									"filter-fields",
-									"ignore-filter"
-								])]),
-								_: 2
-							}, 1032, ["open", "default-open"])) : r.type === "checkbox" ? (U(), G(I(FV).CheckboxItem, {
-								key: 3,
-								"model-value": r.checked,
-								disabled: r.disabled,
-								"text-value": I(Vm)(r, n.labelKey),
-								"data-slot": "item",
-								class: M(e.ui.item({
-									class: [
-										e.uiOverride?.item,
-										r.ui?.item,
-										r.class
-									],
-									color: r?.color
-								})),
-								"onUpdate:modelValue": r.onUpdateChecked,
-								onSelect: r.onSelect
-							}, {
-								default: L(() => [q(I(g), {
-									item: r,
-									index: a
-								}, null, 8, ["item", "index"])]),
-								_: 2
-							}, 1032, [
-								"model-value",
-								"disabled",
-								"text-value",
-								"class",
-								"onUpdate:modelValue",
-								"onSelect"
-							])) : (U(), G(cA, X({
-								key: 4,
-								ref_for: !0
-							}, I(aA)(r), { custom: "" }), {
-								default: L(({ active: t, ...i }) => [q(I(FV).Item, {
-									"as-child": "",
-									disabled: r.disabled,
-									"text-value": I(Vm)(r, n.labelKey),
-									onSelect: r.onSelect
-								}, {
-									default: L(() => [q(oA, X({ ref_for: !0 }, i, {
-										"data-slot": "item",
-										class: e.ui.item({
-											class: [
-												e.uiOverride?.item,
-												r.ui?.item,
-												r.class
-											],
-											color: r?.color,
-											active: t
-										})
-									}), {
-										default: L(() => [q(I(g), {
-											item: r,
-											active: t,
-											index: a
-										}, null, 8, [
-											"item",
-											"active",
-											"index"
-										])]),
-										_: 2
-									}, 1040, ["class"])]),
-									_: 2
-								}, 1032, [
-									"disabled",
-									"text-value",
-									"onSelect"
-								])]),
-								_: 2
-							}, 1040))], 64))), 128))]),
-							_: 2
-						}, 1032, ["class"]))), 128))], 2)) : Y("", !0),
-						u.value && !x.value ? (U(), W("div", {
-							key: 2,
-							"data-slot": "empty",
-							class: M(e.ui.empty({ class: e.uiOverride?.empty }))
-						}, [V(t.$slots, "empty", { searchTerm: u.value }, () => [J(P(I(a)("dropdownMenu.noMatch", { searchTerm: u.value })), 1)])], 2)) : Y("", !0),
-						V(t.$slots, "default"),
-						V(t.$slots, "content-bottom", { sub: e.sub ?? !1 })
-					]),
-					_: 3
-				}, 16, ["class"]))]),
-				_: 3
-			})]),
-			_: 3
-		}, 16)], 64));
-	}
-}, eH = {
-	slots: {
-		content: "min-w-32 max-h-(--reka-dropdown-menu-content-available-height) bg-default shadow-lg rounded-md ring ring-default overflow-hidden data-[state=open]:animate-[scale-in_100ms_var(--ease-out)] data-[state=closed]:animate-[scale-out_100ms_var(--ease-out)] origin-(--reka-dropdown-menu-content-transform-origin) flex flex-col",
-		input: "border-b border-default",
-		empty: "text-center text-muted",
-		viewport: "relative divide-y divide-default scroll-py-1 overflow-y-auto flex-1",
-		arrow: "fill-bg stroke-default",
-		group: "p-1 isolate",
-		label: "w-full flex items-center font-semibold text-highlighted",
-		separator: "-mx-1 my-1 h-px bg-border",
-		item: "group relative w-full flex items-start select-none outline-none before:absolute before:z-[-1] before:inset-px before:rounded-md data-disabled:cursor-not-allowed data-disabled:opacity-75",
-		itemLeadingIcon: "shrink-0",
-		itemLeadingAvatar: "shrink-0",
-		itemLeadingAvatarSize: "",
-		itemTrailing: "ms-auto inline-flex gap-1.5 items-center",
-		itemTrailingIcon: "shrink-0",
-		itemTrailingKbds: "hidden lg:inline-flex items-center shrink-0",
-		itemTrailingKbdsSize: "",
-		itemWrapper: "flex-1 flex flex-col text-start min-w-0",
-		itemLabel: "truncate",
-		itemDescription: "truncate text-muted",
-		itemLabelExternalIcon: "inline-block size-3 align-top text-dimmed"
-	},
-	variants: {
-		color: {
-			primary: "",
-			secondary: "",
-			success: "",
-			info: "",
-			warning: "",
-			error: "",
-			neutral: ""
-		},
-		active: {
-			true: {
-				item: "text-highlighted before:bg-elevated",
-				itemLeadingIcon: "text-default"
-			},
-			false: {
-				item: ["text-default data-highlighted:text-highlighted data-[state=open]:text-highlighted data-highlighted:before:bg-elevated/50 data-[state=open]:before:bg-elevated/50", "transition-colors before:transition-colors"],
-				itemLeadingIcon: ["text-dimmed group-data-highlighted:text-default group-data-[state=open]:text-default", "transition-colors"]
-			}
-		},
-		loading: { true: { itemLeadingIcon: "animate-spin" } },
-		size: {
-			xs: {
-				label: "p-1 text-xs gap-1",
-				item: "p-1 text-xs gap-1",
-				empty: "p-2 text-xs",
-				itemLeadingIcon: "size-4",
-				itemLeadingAvatarSize: "3xs",
-				itemTrailingIcon: "size-4",
-				itemTrailingKbds: "gap-0.5",
-				itemTrailingKbdsSize: "sm"
-			},
-			sm: {
-				label: "p-1.5 text-xs gap-1.5",
-				item: "p-1.5 text-xs gap-1.5",
-				empty: "p-2.5 text-xs",
-				itemLeadingIcon: "size-4",
-				itemLeadingAvatarSize: "3xs",
-				itemTrailingIcon: "size-4",
-				itemTrailingKbds: "gap-0.5",
-				itemTrailingKbdsSize: "sm"
-			},
-			md: {
-				label: "p-1.5 text-sm gap-1.5",
-				item: "p-1.5 text-sm gap-1.5",
-				empty: "p-2.5 text-sm",
-				itemLeadingIcon: "size-5",
-				itemLeadingAvatarSize: "2xs",
-				itemTrailingIcon: "size-5",
-				itemTrailingKbds: "gap-0.5",
-				itemTrailingKbdsSize: "md"
-			},
-			lg: {
-				label: "p-2 text-sm gap-2",
-				item: "p-2 text-sm gap-2",
-				empty: "p-3 text-sm",
-				itemLeadingIcon: "size-5",
-				itemLeadingAvatarSize: "2xs",
-				itemTrailingIcon: "size-5",
-				itemTrailingKbds: "gap-1",
-				itemTrailingKbdsSize: "md"
-			},
-			xl: {
-				label: "p-2 text-base gap-2",
-				item: "p-2 text-base gap-2",
-				empty: "p-3 text-base",
-				itemLeadingIcon: "size-6",
-				itemLeadingAvatarSize: "xs",
-				itemTrailingIcon: "size-6",
-				itemTrailingKbds: "gap-1",
-				itemTrailingKbdsSize: "lg"
-			}
-		}
-	},
-	compoundVariants: [
-		{
-			color: "primary",
-			active: !1,
-			class: {
-				item: "text-primary data-highlighted:text-primary data-highlighted:before:bg-primary/10 data-[state=open]:before:bg-primary/10",
-				itemLeadingIcon: "text-primary/75 group-data-highlighted:text-primary group-data-[state=open]:text-primary"
-			}
-		},
-		{
-			color: "secondary",
-			active: !1,
-			class: {
-				item: "text-secondary data-highlighted:text-secondary data-highlighted:before:bg-secondary/10 data-[state=open]:before:bg-secondary/10",
-				itemLeadingIcon: "text-secondary/75 group-data-highlighted:text-secondary group-data-[state=open]:text-secondary"
-			}
-		},
-		{
-			color: "success",
-			active: !1,
-			class: {
-				item: "text-success data-highlighted:text-success data-highlighted:before:bg-success/10 data-[state=open]:before:bg-success/10",
-				itemLeadingIcon: "text-success/75 group-data-highlighted:text-success group-data-[state=open]:text-success"
-			}
-		},
-		{
-			color: "info",
-			active: !1,
-			class: {
-				item: "text-info data-highlighted:text-info data-highlighted:before:bg-info/10 data-[state=open]:before:bg-info/10",
-				itemLeadingIcon: "text-info/75 group-data-highlighted:text-info group-data-[state=open]:text-info"
-			}
-		},
-		{
-			color: "warning",
-			active: !1,
-			class: {
-				item: "text-warning data-highlighted:text-warning data-highlighted:before:bg-warning/10 data-[state=open]:before:bg-warning/10",
-				itemLeadingIcon: "text-warning/75 group-data-highlighted:text-warning group-data-[state=open]:text-warning"
-			}
-		},
-		{
-			color: "error",
-			active: !1,
-			class: {
-				item: "text-error data-highlighted:text-error data-highlighted:before:bg-error/10 data-[state=open]:before:bg-error/10",
-				itemLeadingIcon: "text-error/75 group-data-highlighted:text-error group-data-[state=open]:text-error"
-			}
-		},
-		{
-			color: "primary",
-			active: !0,
-			class: {
-				item: "text-primary before:bg-primary/10",
-				itemLeadingIcon: "text-primary"
-			}
-		},
-		{
-			color: "secondary",
-			active: !0,
-			class: {
-				item: "text-secondary before:bg-secondary/10",
-				itemLeadingIcon: "text-secondary"
-			}
-		},
-		{
-			color: "success",
-			active: !0,
-			class: {
-				item: "text-success before:bg-success/10",
-				itemLeadingIcon: "text-success"
-			}
-		},
-		{
-			color: "info",
-			active: !0,
-			class: {
-				item: "text-info before:bg-info/10",
-				itemLeadingIcon: "text-info"
-			}
-		},
-		{
-			color: "warning",
-			active: !0,
-			class: {
-				item: "text-warning before:bg-warning/10",
-				itemLeadingIcon: "text-warning"
-			}
-		},
-		{
-			color: "error",
-			active: !0,
-			class: {
-				item: "text-error before:bg-error/10",
-				itemLeadingIcon: "text-error"
-			}
-		}
-	],
-	defaultVariants: { size: "md" }
-}, tH = {
-	__name: "DropdownMenu",
-	props: /*@__PURE__*/ Fa({
-		size: {
-			type: null,
-			required: !1
-		},
-		items: {
-			type: null,
-			required: !1
-		},
-		checkedIcon: {
-			type: null,
-			required: !1
-		},
-		loadingIcon: {
-			type: null,
-			required: !1
-		},
-		externalIcon: {
-			type: [Boolean, String],
-			required: !1,
-			skipCheck: !0,
-			default: !0
-		},
-		content: {
-			type: Object,
-			required: !1
-		},
-		arrow: {
-			type: [Boolean, Object],
-			required: !1
-		},
-		portal: {
-			type: [Boolean, String],
-			required: !1,
-			skipCheck: !0,
-			default: !0
-		},
-		labelKey: {
-			type: null,
-			required: !1,
-			default: "label"
-		},
-		descriptionKey: {
-			type: null,
-			required: !1,
-			default: "description"
-		},
-		filter: {
-			type: [Boolean, Object],
-			required: !1,
-			default: !1
-		},
-		filterFields: {
-			type: Array,
-			required: !1
-		},
-		ignoreFilter: {
-			type: Boolean,
-			required: !1,
-			default: !1
-		},
-		disabled: {
-			type: Boolean,
-			required: !1
-		},
-		class: {
-			type: null,
-			required: !1
-		},
-		ui: {
-			type: Object,
-			required: !1
-		},
-		defaultOpen: {
-			type: Boolean,
-			required: !1
-		},
-		open: {
-			type: Boolean,
-			required: !1
-		},
-		modal: {
-			type: Boolean,
-			required: !1,
-			default: !0
-		}
-	}, {
-		searchTerm: {
-			type: String,
-			default: ""
-		},
-		searchTermModifiers: {}
-	}),
-	emits: /*@__PURE__*/ Fa(["update:open"], ["update:searchTerm"]),
-	setup(e, { emit: t }) {
-		let n = e, r = t, i = Aa(), a = ro(e, "searchTerm", {
-			type: String,
-			default: ""
-		}), o = cE("dropdownMenu", n), s = Sm(), c = lE(am(o, "defaultOpen", "open", "modal"), r), l = /* @__PURE__ */ Sn(() => Om(o.content, {
-			side: "bottom",
-			sideOffset: 8,
-			collisionPadding: 8
-		})), u = /* @__PURE__ */ Sn(() => Om(o.arrow, { rounded: !0 })), d = () => Bm(i, ["default"]), f = Z(() => Rk({
-			extend: eH,
-			...s.ui?.dropdownMenu || {}
-		})({ size: o.size }));
-		return (e, t) => (U(), G(I(SC), N(Ss(I(c))), {
-			default: L(({ open: n }) => [i.default ? (U(), G(I(IC), {
-				key: 0,
-				"as-child": "",
-				class: M(I(o).class),
-				disabled: I(o).disabled
-			}, {
-				default: L(() => [V(e.$slots, "default", { open: n })]),
-				_: 2
-			}, 1032, ["class", "disabled"])) : Y("", !0), q($V, X({
-				"search-term": a.value,
-				"onUpdate:searchTerm": t[0] ||= (e) => a.value = e,
-				class: f.value.content({ class: [!i.default && I(o).class, I(o).ui?.content] }),
-				ui: f.value,
-				"ui-override": I(o).ui
-			}, l.value, {
-				items: I(o).items,
-				portal: I(o).portal,
-				"label-key": I(o).labelKey,
-				"description-key": I(o).descriptionKey,
-				"checked-icon": I(o).checkedIcon,
-				"loading-icon": I(o).loadingIcon,
-				"external-icon": I(o).externalIcon,
-				size: I(o).size,
-				filter: I(o).filter,
-				"filter-fields": I(o).filterFields,
-				"ignore-filter": I(o).ignoreFilter
-			}), ha({
-				default: L(() => [I(o).arrow ? (U(), G(I(vC), X({ key: 0 }, u.value, {
-					"data-slot": "arrow",
-					class: f.value.arrow({ class: I(o).ui?.arrow })
-				}), null, 16, ["class"])) : Y("", !0)]),
-				_: 2
-			}, [B(d(), (t, n) => ({
-				name: n,
-				fn: L((t) => [V(e.$slots, n, N(Ss(t)))])
-			}))]), 1040, [
-				"search-term",
-				"class",
-				"ui",
-				"ui-override",
-				"items",
-				"portal",
-				"label-key",
-				"description-key",
-				"checked-icon",
-				"loading-icon",
-				"external-icon",
-				"size",
-				"filter",
-				"filter-fields",
-				"ignore-filter"
-			])]),
-			_: 3
-		}, 16));
 	}
 }, nH = (e, t) => {
 	let n = e.__vccOpts || e;
@@ -41273,7 +41276,7 @@ var YV = {
 			l("copy", `${location.origin}/r/${Se.value.id}/messages/${e.id}`);
 		}
 		return (e, t) => {
-			let c = uA, S = Gk, D = zk, ee = cV, te = wV, A = NV, oe = tH, le = QV, ue = SV, pe = pV, _e = XV, ye = jV, Ce = WV;
+			let c = uA, S = Gk, D = zk, ee = cV, te = LV, A = VV, oe = EV, le = tH, ue = FV, pe = pV, _e = $V, ye = CV, Ce = JV;
 			return U(), W("section", {
 				class: M(["channel-conversation", { "channel-has-messages": I(o).messages.length }]),
 				role: "tabpanel",
@@ -42009,7 +42012,7 @@ var YV = {
 			], 2);
 		};
 	}
-}, [["__scopeId", "data-v-230a1b4b"]]), oW = {
+}, [["__scopeId", "data-v-02652cc4"]]), oW = {
 	class: "launch-settings",
 	"aria-label": "启动配置"
 }, sW = { class: "launch-connect-command" }, cW = {
@@ -42058,7 +42061,7 @@ var YV = {
 			value: e
 		}))];
 		return (e, m) => {
-			let h = uA, g = pV, _ = yV, v = kV, y = SV;
+			let h = uA, g = pV, _ = MV, v = xV, y = FV;
 			return U(), W("section", oW, [I(n).launch.available ? (U(), W(H, { key: 1 }, [
 				m[10] ||= K("h3", null, "启动配置", -1),
 				m[11] ||= K("p", { class: "fine-print" }, "软件配置可保存供后续讨论复用。App 需要保持运行；CLI 按需启动，使用已有登录和工具权限。", -1),
@@ -42392,7 +42395,7 @@ var YV = {
 			return `${e.max_rounds ? `${e.completed_rounds || 0} / ${e.max_rounds} 轮` : `${e.completed_rounds || 0} 轮`} · 已用 ${Math.floor((e.elapsed_seconds || 0) / 60)} 分钟`;
 		});
 		return (e, v) => {
-			let y = uA, b = wV, x = Gk, S = zk, C = pV, w = yV, T = kV;
+			let y = uA, b = LV, x = Gk, S = zk, C = pV, w = MV, T = xV;
 			return U(), G(I(QB).section, {
 				class: M(["content-page", {
 					"access-page": I(t).tab === "access",
@@ -43997,7 +44000,7 @@ var $G = /*#__PURE__*/ nH({
 				}), t === 0 ? v(l[0], n.selected) : (v(l[1], Math.floor(n.selected / 60)), y(), v(l[2], n.selected % 60)));
 			});
 		}, { immediate: !0 }), ta(() => cancelAnimationFrame(u)), t({ settle: oe }), (e, t) => {
-			let n = zk, r = zV;
+			let n = zk, r = UV;
 			return U(), W("div", FG, [(U(!0), W(H, null, B(c, (e) => (U(), W("div", {
 				key: e.key,
 				class: "limit-field"
@@ -44288,7 +44291,7 @@ var $G = /*#__PURE__*/ nH({
 		})), ta(() => {
 			C(), w(), o.stop();
 		}), (t, n) => {
-			let i = Gk, s = zk, d = kV, x = yV;
+			let i = Gk, s = zk, d = xV, x = MV;
 			return U(), W("div", {
 				ref_key: "card",
 				ref: c,
@@ -44537,28 +44540,28 @@ var $G = /*#__PURE__*/ nH({
 				title: "自由协作",
 				text: "在网页遥控一个本地 AI 干活"
 			}
-		], h = Z(() => f.value ? "free" : d.value ? "automatic" : "manual"), g = Z(() => r.value.experts[vq] || {}), _ = Z(() => s.filter((e) => g.value[e])), v = /* @__PURE__ */ F(!1), y = /* @__PURE__ */ F(null), b = Z(() => l("host")), x = Z(() => s.filter((e) => g.value[e] === "cli")), S = /* @__PURE__ */ F(null), C = Z(() => [.../* @__PURE__ */ new Set([b.value, ...Object.keys(g.value)])].filter((e) => i.launch_clients[e])), w = (e) => {
+		], h = Z(() => f.value ? "free" : d.value ? "automatic" : "manual"), g = Z(() => r.value.experts[vq] || {}), _ = Z(() => Object.keys(g.value).filter((e) => g.value[e]).sort((e, t) => s.indexOf(i.platform_of(e)) - s.indexOf(i.platform_of(t)) || e.localeCompare(t, "en", { numeric: !0 }))), v = (e) => _.value.filter((t) => i.platform_of(t) === e).length, y = /* @__PURE__ */ F(!1), b = /* @__PURE__ */ F(null), x = Z(() => l("host")), S = Z(() => _.value.filter((e) => g.value[e] === "cli")), C = /* @__PURE__ */ F(null), w = Z(() => [.../* @__PURE__ */ new Set([x.value, ...Object.keys(g.value)])].filter((e) => i.launch_clients[e])), T = (e) => {
 			let t = r.value.launch.profiles[e] || {};
 			return !!(t.adapter && (t.adapter === "antigravity" ? t.ipc_directory : t.executable));
-		}, T = Z(() => f.value ? r.value.launch.available : d.value && r.value.launch.available && r.value.launch.create), E = Z(() => _.value.length > 0 && _.value.every(w) && r.value.launch.available), D = /* @__PURE__ */ F(!1);
+		}, E = Z(() => f.value ? r.value.launch.available : d.value && r.value.launch.available && r.value.launch.create), D = Z(() => _.value.length > 0 && _.value.every(T) && r.value.launch.available), O = /* @__PURE__ */ F(!1);
 		R(() => [
-			T.value,
-			C.value.every(w),
+			E.value,
+			w.value.every(T),
 			r.value.launch.error
 		], ([e, t, n]) => {
-			e && (!t || n) && (D.value = !0);
+			e && (!t || n) && (O.value = !0);
 		}, { immediate: !0 });
-		function O() {
-			x.value.includes(b.value) || u("host", x.value[0] || "");
+		function ee() {
+			S.value.includes(x.value) || u("host", S.value[0] || "");
 		}
-		Qi(O);
-		function ee(e) {
-			u("mode", e), O();
+		Qi(ee);
+		function te(e) {
+			u("mode", e), ee();
 		}
-		function te(e, t) {
-			i.write_expert(vq, e, t), O();
+		function k(e, t) {
+			i.write_expert(vq, e, t), ee();
 		}
-		function k(e) {
+		function ne(e) {
 			let t = g.value[e];
 			if (p.value && !i.launch_clients[e]) return {
 				text: "仅在线只读",
@@ -44566,7 +44569,7 @@ var $G = /*#__PURE__*/ nH({
 			};
 			if (p.value && r.value.launch.available) {
 				let t = i.launch_clients[e]?.find((t) => t.value === r.value.launch.profiles[e]?.adapter);
-				return w(e) ? {
+				return T(e) ? {
 					text: `本机 ${t?.label || "AI"}`,
 					tone: "ready"
 				} : {
@@ -44582,21 +44585,23 @@ var $G = /*#__PURE__*/ nH({
 				tone: "muted"
 			};
 		}
-		function ne(e) {
-			g.value[e] || p.value && !i.launch_clients[e] || (te(e, p.value || i.launch_clients[e] ? "cli" : "online"), v.value = !1);
-		}
 		function re(e) {
-			te(e, ""), Qn(() => y.value?.focus({ preventScroll: !0 }));
+			if (p.value && !i.launch_clients[e]) return;
+			let t = p.value || i.launch_clients[e] ? "cli" : "online";
+			v(e) ? i.add_instance(vq, e, t) : k(e, t), ee(), y.value = !1;
 		}
-		function ie() {
-			S.value?.settle(), n("submit");
+		function ie(e) {
+			k(e, ""), Qn(() => b.value?.focus({ preventScroll: !0 }));
 		}
-		let ae = Z(() => {
+		function ae() {
+			C.value?.settle(), n("submit");
+		}
+		let A = Z(() => {
 			let e = Number(l("limit-max_rounds")), t = Number(l("limit-max_minutes")), n = [e && `${e} 轮`, t && QG(t)].filter(Boolean);
 			if (!n.length) return "不设轮次和时长上限。";
 			let r = l("limit-on_limit") === "summarize" ? "由主持人总结" : "暂停";
 			return `最多 ${n.join(" 或 ")}，${n.length === 2 ? "先到则" : "到限后"}${r}。`;
-		}), A = Z(() => {
+		}), oe = Z(() => {
 			let e = Object.keys(g.value);
 			if (f.value) return [
 				e.length ? `遥控 ${e.join("、")}` : "尚未选择 AI",
@@ -44605,27 +44610,27 @@ var $G = /*#__PURE__*/ nH({
 			].join(" · ");
 			let t = l("limit-max_rounds"), n = l("limit-max_minutes"), r = [t && Number(t) ? `${t} 轮` : "不限轮次", n && Number(n) ? QG(Number(n)) : "不限时长"].join(" / ");
 			return [
-				b.value ? `${i.display_name(b.value)} 主持` : "尚未选择主持人",
+				x.value ? `${i.display_name(x.value)} 主持` : "尚未选择主持人",
 				e.length ? `${e.join("、")} 参与` : "尚未选择专家",
 				d.value ? "全自动" : "手动推进",
 				r
 			].join(" · ");
 		});
 		return (t, c) => {
-			let O = zk, oe = kV, se = yV, ce = SV, le = Gk, ue = zV, de = PG, j = pV, fe = uA, pe = MG;
+			let v = zk, ee = xV, se = MV, ce = FV, le = Gk, ue = UV, de = PG, j = pV, fe = uA, pe = MG;
 			return U(), W("div", FK, [K("form", {
 				id: "create-discussion-form",
 				class: "create-scroll dialog-form",
-				onSubmit: uu(ie, ["prevent"])
+				onSubmit: uu(ae, ["prevent"])
 			}, [
-				e.targetFolder?.id ? (U(), W("p", IK, [q(O, { name: "i-lucide-folder" }), J(P(e.targetFolder.name), 1)])) : Y("", !0),
+				e.targetFolder?.id ? (U(), W("p", IK, [q(v, { name: "i-lucide-folder" }), J(P(e.targetFolder.name), 1)])) : Y("", !0),
 				K("section", LK, [
 					c[13] ||= K("h3", null, [K("span", null, "1"), J("讨论什么")], -1),
 					q(se, {
 						label: "话题名称",
 						required: ""
 					}, {
-						default: L(() => [q(oe, {
+						default: L(() => [q(ee, {
 							"model-value": l("title"),
 							maxlength: 80,
 							required: "",
@@ -44664,12 +44669,12 @@ var $G = /*#__PURE__*/ nH({
 						role: "radio",
 						class: M(["create-mode", { "is-selected": h.value === e.value }]),
 						"aria-checked": h.value === e.value,
-						onClick: (t) => ee(e.value)
-					}, [q(O, { name: e.icon }, null, 8, ["name"]), K("span", HK, [K("strong", null, P(e.title), 1), K("small", null, P(e.text), 1)])], 10, VK)), 64))])]),
+						onClick: (t) => te(e.value)
+					}, [q(v, { name: e.icon }, null, 8, ["name"]), K("span", HK, [K("strong", null, P(e.title), 1), K("small", null, P(e.text), 1)])], 10, VK)), 64))])]),
 					K("div", UK, [
 						K("div", WK, [K("h4", null, [J(P(f.value ? "要遥控的 AI" : "参与的 AI") + " ", 1), K("span", null, P(_.value.length), 1)]), q(ue, {
-							open: v.value,
-							"onUpdate:open": c[3] ||= (e) => v.value = e,
+							open: y.value,
+							"onUpdate:open": c[3] ||= (e) => y.value = e,
 							content: {
 								align: "end",
 								sideOffset: 8,
@@ -44680,8 +44685,8 @@ var $G = /*#__PURE__*/ nH({
 							content: L(() => [K("div", GK, [K("div", KK, [c[16] ||= K("strong", null, "选择参与的 AI", -1), K("button", {
 								type: "button",
 								"aria-label": "关闭 AI 选择",
-								onClick: c[2] ||= (e) => v.value = !1
-							}, [q(O, { name: "i-lucide-x" })])]), K("ul", null, [(U(!0), W(H, null, B(I(s), (e) => (U(), W("li", { key: e }, [
+								onClick: c[2] ||= (e) => y.value = !1
+							}, [q(v, { name: "i-lucide-x" })])]), K("ul", null, [(U(!0), W(H, null, B(I(s), (e) => (U(), W("li", { key: e }, [
 								q(le, {
 									src: I(i).identities[e]?.icon,
 									text: I(i).identities[e]?.initials,
@@ -44694,20 +44699,20 @@ var $G = /*#__PURE__*/ nH({
 									"alt",
 									"class"
 								]),
-								K("span", qK, [K("strong", null, P(e), 1), K("small", null, P(k(e).text), 1)]),
+								K("span", qK, [K("strong", null, P(e), 1), K("small", null, P(ne(e).text), 1)]),
 								K("button", {
 									type: "button",
-									disabled: !!g.value[e] || p.value && !I(i).launch_clients[e],
-									"aria-label": g.value[e] ? `${e} 已加入` : `将 ${e} 加入`,
-									onClick: (t) => ne(e)
-								}, P(g.value[e] ? "已加入" : p.value && !I(i).launch_clients[e] ? "仅手动接入" : f.value ? "选择" : "加入讨论"), 9, JK)
+									disabled: p.value && !I(i).launch_clients[e],
+									"aria-label": `将 ${e} 加入`,
+									onClick: (t) => re(e)
+								}, P(p.value && !I(i).launch_clients[e] ? "仅手动接入" : f.value ? "选择" : "加入讨论"), 9, JK)
 							]))), 128))])])]),
 							default: L(() => [K("button", {
 								ref_key: "library_trigger",
-								ref: y,
+								ref: b,
 								type: "button",
 								class: "create-library-trigger"
-							}, [q(O, { name: "i-lucide-plus" }), c[15] ||= J("邀请 AI", -1)], 512)]),
+							}, [q(v, { name: "i-lucide-plus" }), c[15] ||= J("邀请 AI", -1)], 512)]),
 							_: 1
 						}, 8, ["open"])]),
 						_.value.length ? (U(), W("div", YK, [(U(!0), W(H, null, B(_.value, (e) => (U(), G(PK, {
@@ -44715,9 +44720,9 @@ var $G = /*#__PURE__*/ nH({
 							name: e,
 							mode: g.value[e],
 							automatic: p.value,
-							status: k(e),
-							onRemove: (t) => re(e),
-							onMode: (t) => te(e, t)
+							status: ne(e),
+							onRemove: (t) => ie(e),
+							onMode: (t) => k(e, t)
 						}, null, 8, [
 							"name",
 							"mode",
@@ -44726,11 +44731,11 @@ var $G = /*#__PURE__*/ nH({
 							"onRemove",
 							"onMode"
 						]))), 128))])) : (U(), W("p", XK, P(f.value ? "点击“邀请 AI”，选择要遥控的本地 AI；之后也可随时邀请或请离" : "点击“邀请 AI”，选择本场讨论的参与者"), 1)),
-						f.value ? (U(), W("p", ZK, "无需主持人：只有一位 AI 时每条消息都交给它；多位时由你点名或在正文中 @，被点名的 AI 各自在自己的会话里工作并回到频道回复，随时可以停止。")) : (U(), W("div", QK, [K("div", $K, [c[18] ||= K("span", { class: "create-label" }, "AI 主持人", -1), x.value.length ? (U(), W("div", tq, [(U(!0), W(H, null, B(x.value, (e) => (U(), W("button", {
+						f.value ? (U(), W("p", ZK, "无需主持人：只有一位 AI 时每条消息都交给它；多位时由你点名或在正文中 @，被点名的 AI 各自在自己的会话里工作并回到频道回复，随时可以停止。")) : (U(), W("div", QK, [K("div", $K, [c[18] ||= K("span", { class: "create-label" }, "AI 主持人", -1), S.value.length ? (U(), W("div", tq, [(U(!0), W(H, null, B(S.value, (e) => (U(), W("button", {
 							key: e,
 							type: "button",
 							role: "radio",
-							"aria-checked": b.value === e,
+							"aria-checked": x.value === e,
 							onClick: (t) => u("host", e)
 						}, [c[17] ||= K("span", { "aria-hidden": "true" }, null, -1), J(P(I(i).display_name(e)), 1)], 8, nq))), 128))])) : (U(), W("span", eq, "先选择一位本地读写的专家"))]), K("p", rq, P(d.value ? "全自动要求主持人与专家都是本机 AI；在线 AI 请改用手动推进。" : "主持人须为本地读写的专家；") + "主持人会先补全议题资料，也可同时作为专家发言。", 1)]))
 					])
@@ -44739,7 +44744,7 @@ var $G = /*#__PURE__*/ nH({
 					c[22] ||= K("h3", null, [K("span", null, "3"), J("讨论多久")], -1),
 					q($G, {
 						ref_key: "limit_picker",
-						ref: S,
+						ref: C,
 						rounds: Number(l("limit-max_rounds")),
 						minutes: Number(l("limit-max_minutes")),
 						"onUpdate:rounds": c[4] ||= (e) => u("limit-max_rounds", String(e)),
@@ -44750,7 +44755,7 @@ var $G = /*#__PURE__*/ nH({
 						label: "单次 AI 执行（分钟）",
 						description: "留空或 0 表示不限"
 					}, {
-						default: L(() => [q(oe, {
+						default: L(() => [q(ee, {
 							"model-value": Number(l("limit-execution_minutes")) ? l("limit-execution_minutes") : "",
 							type: "number",
 							min: 0,
@@ -44778,7 +44783,7 @@ var $G = /*#__PURE__*/ nH({
 							class: M({ "is-selected": (l("limit-on_limit") || "pause") === e.value }),
 							onClick: (t) => u("limit-on_limit", e.value)
 						}, P(e.label), 11, cq)), 64))]),
-						l("limit-on_limit") === "summarize" ? (U(), G(oe, {
+						l("limit-on_limit") === "summarize" ? (U(), G(ee, {
 							key: 0,
 							"model-value": l("limit-summary_minutes"),
 							type: "number",
@@ -44793,7 +44798,7 @@ var $G = /*#__PURE__*/ nH({
 							_: 1
 						}, 8, ["model-value"])) : Y("", !0)
 					]),
-					K("p", lq, [q(O, { name: "i-lucide-flag" }), J(P(ae.value), 1)])
+					K("p", lq, [q(v, { name: "i-lucide-flag" }), J(P(A.value), 1)])
 				])),
 				p.value ? (U(), W("section", uq, [
 					K("h3", null, [K("span", null, P(f.value ? 3 : 4), 1), J(P(f.value ? "连接本机" : "启动"), 1)]),
@@ -44809,7 +44814,7 @@ var $G = /*#__PURE__*/ nH({
 							label: "项目目录（可选）",
 							help: "要一起查看的项目；留空时 AI 只在讨论私有目录工作"
 						}, {
-							default: L(() => [q(oe, {
+							default: L(() => [q(ee, {
 								"model-value": I(r).launch.workspace.cwd || "",
 								placeholder: "已有目录的完整路径",
 								class: "w-full",
@@ -44828,25 +44833,25 @@ var $G = /*#__PURE__*/ nH({
 							}, null, 8, ["model-value"])]),
 							_: 1
 						}, 8, ["help"])]),
-						K("ul", pq, [(U(!0), W(H, null, B(C.value, (e) => (U(), W("li", { key: e }, [
-							q(O, {
-								name: w(e) ? "i-lucide-circle-check" : "i-lucide-circle-alert",
-								class: M(w(e) ? "is-ready" : "is-warn")
+						K("ul", pq, [(U(!0), W(H, null, B(w.value, (e) => (U(), W("li", { key: e }, [
+							q(v, {
+								name: T(e) ? "i-lucide-circle-check" : "i-lucide-circle-alert",
+								class: M(T(e) ? "is-ready" : "is-warn")
 							}, null, 8, ["name", "class"]),
 							K("strong", null, P(e), 1),
 							K("span", null, P(I(i).launch_summary(e).client) + " · " + P(I(i).launch_summary(e).session) + " · " + P(I(i).launch_summary(e).access) + " · " + P(I(i).launch_summary(e).cwd), 1)
 						]))), 128))]),
 						q(pe, {
-							open: D.value,
-							"onUpdate:open": c[11] ||= (e) => D.value = e
+							open: O.value,
+							"onUpdate:open": c[11] ||= (e) => O.value = e
 						}, {
 							content: L(() => [q(hW, {
-								participants: C.value,
+								participants: w.value,
 								workspace: !1,
 								"model-selection": !1
 							}, null, 8, ["participants"])]),
 							default: L(() => [q(fe, {
-								icon: D.value ? "i-lucide-chevron-down" : "i-lucide-chevron-right",
+								icon: O.value ? "i-lucide-chevron-down" : "i-lucide-chevron-right",
 								label: "调整启动配置",
 								color: "neutral",
 								variant: "link",
@@ -44857,16 +44862,16 @@ var $G = /*#__PURE__*/ nH({
 						}, 8, ["open"])
 					], 64)) : Y("", !0)], 64)) : f.value ? Y("", !0) : (U(), G(hW, {
 						key: 2,
-						participants: C.value,
+						participants: w.value,
 						workspace: !1,
 						"model-selection": !1
 					}, null, 8, ["participants"]))
 				])) : Y("", !0)
-			], 32), K("footer", mq, [T.value && I(r).launch.error ? (U(), W("p", hq, P(I(r).launch.error), 1)) : Y("", !0), K("div", gq, [
+			], 32), K("footer", mq, [E.value && I(r).launch.error ? (U(), W("p", hq, P(I(r).launch.error), 1)) : Y("", !0), K("div", gq, [
 				K("span", {
 					class: "create-summary",
-					title: A.value
-				}, P(A.value), 9, _q),
+					title: oe.value
+				}, P(oe.value), 9, _q),
 				q(fe, {
 					label: "取消",
 					color: "neutral",
@@ -44877,9 +44882,9 @@ var $G = /*#__PURE__*/ nH({
 					type: "submit",
 					form: "create-discussion-form",
 					class: "channel-primary-button",
-					icon: T.value ? "i-lucide-play" : "i-lucide-plus",
-					label: f.value ? "创建并连接" : T.value ? "创建并启动讨论" : "创建讨论",
-					disabled: f.value ? !E.value : !b.value,
+					icon: E.value ? "i-lucide-play" : "i-lucide-plus",
+					label: f.value ? "创建并连接" : E.value ? "创建并启动讨论" : "创建讨论",
+					disabled: f.value ? !D.value : !x.value,
 					loading: I(a) === "create"
 				}, null, 8, [
 					"icon",
@@ -44890,7 +44895,7 @@ var $G = /*#__PURE__*/ nH({
 			])])]);
 		};
 	}
-}, [["__scopeId", "data-v-ec3c3d40"]]), bq = {
+}, [["__scopeId", "data-v-44c43618"]]), bq = {
 	key: 0,
 	class: "channel-archive-manager"
 }, xq = { class: "channel-archive-toolbar" }, Sq = {
@@ -45198,7 +45203,7 @@ var $G = /*#__PURE__*/ nH({
 			}
 		}
 		return (t, s) => {
-			let b = kV, x = pV, ce = uA, ue = yV, de = zk, ve = SV, Se = MG, Ce = wV, we = AG;
+			let b = xV, x = pV, ce = uA, ue = MV, de = zk, ve = FV, Se = MG, Ce = LV, we = AG;
 			return U(), G(we, {
 				open: u.value,
 				"onUpdate:open": s[24] ||= (e) => u.value = e,
@@ -45945,10 +45950,10 @@ var $G = /*#__PURE__*/ nH({
 					key: 1,
 					"data-slot": "itemTrailingKbds",
 					class: M(e.ui.itemTrailingKbds({ class: [e.uiOverride?.itemTrailingKbds, r.ui?.itemTrailingKbds] }))
-				}, [(U(!0), W(H, null, B(r.kbds, (t, n) => (U(), G(jV, X({
+				}, [(U(!0), W(H, null, B(r.kbds, (t, n) => (U(), G(CV, X({
 					key: n,
 					size: r.ui?.itemTrailingKbdsSize || e.uiOverride?.itemTrailingKbdsSize || e.ui.itemTrailingKbdsSize()
-				}, { ref_for: !0 }, typeof t == "string" ? { value: t } : t), null, 16, ["size"]))), 128))], 2)) : Y("", !0)]), q(I(PV).ItemIndicator, { "as-child": "" }, {
+				}, { ref_for: !0 }, typeof t == "string" ? { value: t } : t), null, 16, ["size"]))), 128))], 2)) : Y("", !0)]), q(I(mV).ItemIndicator, { "as-child": "" }, {
 					default: L(() => [q(zk, {
 						name: e.checkedIcon || I(o).ui.icons.check,
 						"data-slot": "itemTrailingIcon",
@@ -45961,9 +45966,9 @@ var $G = /*#__PURE__*/ nH({
 				}, 1024)], 2)
 			])]),
 			_: 3
-		}), q(I(PV).Portal, N(Ss(I(s))), {
+		}), q(I(mV).Portal, N(Ss(I(s))), {
 			default: L(() => [q(I(Yk), null, {
-				default: L(() => [(U(), G(da(e.sub ? I(PV).SubContent : I(PV).Content), X({
+				default: L(() => [(U(), G(da(e.sub ? I(mV).SubContent : I(mV).Content), X({
 					"data-slot": "content",
 					class: e.ui.content({ class: [e.uiOverride?.content, n.class] })
 				}, I(c)), {
@@ -45973,12 +45978,12 @@ var $G = /*#__PURE__*/ nH({
 							role: "presentation",
 							"data-slot": "viewport",
 							class: M(e.ui.viewport({ class: e.uiOverride?.viewport }))
-						}, [(U(!0), W(H, null, B(p.value, (r, i) => (U(), G(I(PV).Group, {
+						}, [(U(!0), W(H, null, B(p.value, (r, i) => (U(), G(I(mV).Group, {
 							key: `group-${i}`,
 							"data-slot": "group",
 							class: M(e.ui.group({ class: e.uiOverride?.group }))
 						}, {
-							default: L(() => [(U(!0), W(H, null, B(r, (r, a) => (U(), W(H, { key: `group-${i}-${a}` }, [r.type === "label" ? (U(), G(I(PV).Label, {
+							default: L(() => [(U(!0), W(H, null, B(r, (r, a) => (U(), W(H, { key: `group-${i}-${a}` }, [r.type === "label" ? (U(), G(I(mV).Label, {
 								key: 0,
 								"data-slot": "label",
 								class: M(e.ui.label({ class: [
@@ -45992,7 +45997,7 @@ var $G = /*#__PURE__*/ nH({
 									index: a
 								}, null, 8, ["item", "index"])]),
 								_: 2
-							}, 1032, ["class"])) : r.type === "separator" ? (U(), G(I(PV).Separator, {
+							}, 1032, ["class"])) : r.type === "separator" ? (U(), G(I(mV).Separator, {
 								key: 1,
 								"data-slot": "separator",
 								class: M(e.ui.separator({ class: [
@@ -46000,12 +46005,12 @@ var $G = /*#__PURE__*/ nH({
 									r.ui?.separator,
 									r.class
 								] }))
-							}, null, 8, ["class"])) : r?.children?.length ? (U(), G(I(PV).Sub, {
+							}, null, 8, ["class"])) : r?.children?.length ? (U(), G(I(mV).Sub, {
 								key: 2,
 								open: r.open,
 								"default-open": r.defaultOpen
 							}, {
-								default: L(() => [q(I(PV).SubTrigger, {
+								default: L(() => [q(I(mV).SubTrigger, {
 									as: "button",
 									type: "button",
 									disabled: r.disabled,
@@ -46058,7 +46063,7 @@ var $G = /*#__PURE__*/ nH({
 									"external-icon"
 								])]),
 								_: 2
-							}, 1032, ["open", "default-open"])) : r.type === "checkbox" ? (U(), G(I(PV).CheckboxItem, {
+							}, 1032, ["open", "default-open"])) : r.type === "checkbox" ? (U(), G(I(mV).CheckboxItem, {
 								key: 3,
 								"model-value": r.checked,
 								disabled: r.disabled,
@@ -46091,7 +46096,7 @@ var $G = /*#__PURE__*/ nH({
 								key: 4,
 								ref_for: !0
 							}, I(aA)(r), { custom: "" }), {
-								default: L(({ active: t, ...i }) => [q(I(PV).Item, {
+								default: L(({ active: t, ...i }) => [q(I(mV).Item, {
 									"as-child": "",
 									disabled: r.disabled,
 									"text-value": I(Vm)(r, n.labelKey),
@@ -46653,7 +46658,7 @@ var $G = /*#__PURE__*/ nH({
 			];
 		}
 		return (e, t) => {
-			let u = uA, h = zk, v = tH, y = NV, b = hJ;
+			let u = uA, h = zk, v = EV, y = VV, b = hJ;
 			return U(), W("div", gJ, [
 				q(u, {
 					label: "新建对话",
@@ -47072,7 +47077,7 @@ var $G = /*#__PURE__*/ nH({
 			await i(e) && (o.value = !1);
 		}
 		return (e, l) => {
-			let u = Gk, d = zk, O = uA, A = tH, se = pV, j = yV, pe = AG;
+			let u = Gk, d = zk, O = uA, A = EV, se = pV, j = MV, pe = AG;
 			return U(), W("div", { class: M(["progress-board", { "is-docked": t.docked }]) }, [
 				t.docked ? (U(), W("header", IJ, [l[11] ||= K("strong", null, "讨论进度", -1), K("span", LJ, P(_.value ? "全自动" : "手动"), 1)])) : Y("", !0),
 				K("section", {
@@ -47342,7 +47347,7 @@ var $G = /*#__PURE__*/ nH({
 			};
 		}), s = Z(() => a.value.max_rounds ? `${a.value.completed_rounds || 0}/${a.value.max_rounds} 轮` : n.progress_round(i.value)), c = Z(() => `${o.value.title} · ${s.value}`);
 		return (e, t) => {
-			let n = NV, a = dV;
+			let n = VV, a = dV;
 			return U(), W("div", wY, [q(n, { text: "查看讨论进度" }, {
 				default: L(() => [K("button", {
 					type: "button",
@@ -47412,29 +47417,42 @@ var $G = /*#__PURE__*/ nH({
 }, hX = { class: "channel-rail-board" }, gX = {
 	key: 0,
 	class: "progress-board is-docked"
-}, _X = { class: "pb-header" }, vX = { class: "pb-mode" }, yX = { class: "channel-free-members" }, bX = { class: "channel-free-member-heading" }, xX = {
+}, _X = { class: "pb-header" }, vX = { class: "pb-mode" }, yX = {
+	class: "pb-section",
+	"aria-label": "成员"
+}, bX = { class: "pb-members" }, xX = { class: "pb-member-body" }, SX = { class: "pb-member-name" }, CX = {
 	key: 0,
-	class: "channel-free-warning"
-}, SX = { class: "channel-free-actions" }, CX = {
-	key: 0,
-	class: "channel-free-conflicts",
-	role: "status"
+	class: "pb-member-model",
+	title: "它工作时请不要在原窗口继续操作"
 }, wX = {
-	key: 1,
-	class: "channel-free-conflicts",
-	role: "status"
-}, TX = { class: "channel-free-invite" }, EX = ["onClick"], DX = {
-	key: 2,
+	key: 0,
+	class: "pb-section",
+	"aria-label": "提示"
+}, TX = {
+	key: 0,
 	role: "alert",
-	class: "channel-free-error"
-}, OX = {
-	key: 3,
+	class: "pb-free-note is-error"
+}, EX = {
+	key: 1,
 	role: "status",
-	class: "channel-rail-empty"
-}, kX = { class: "channel-rail-empty" }, AX = {
+	class: "pb-free-note"
+}, DX = {
+	class: "pb-section",
+	"aria-label": "邀请"
+}, OX = {
+	key: 0,
+	class: "pb-free-note"
+}, kX = {
+	key: 1,
+	class: "pb-section",
+	"aria-label": "头脑风暴"
+}, AX = ["onClick"], jX = {
+	class: "pb-actions",
+	"aria-label": "操作"
+}, MX = {
 	key: 2,
 	class: "progress-board is-docked"
-}, jX = { class: "channel-detail-title" }, MX = { class: "info-section" }, NX = "ai-codiscuss-channel-layout", PX = 220, FX = 440, IX = 280, LX = 16, RX = 180, zX = 400, BX = 248, VX = 16, HX = 480, UX = 1200, WX = 6, GX = {
+}, NX = { class: "channel-detail-title" }, PX = { class: "info-section" }, FX = "ai-codiscuss-channel-layout", IX = 220, LX = 440, RX = 280, zX = 16, BX = 180, VX = 400, HX = 248, UX = 16, WX = 480, GX = 1200, KX = 6, qX = {
 	__name: "ChannelWorkspace",
 	setup(e) {
 		let { view: t, bridge: n, field: r, act: i, pending: a } = xr("discussion"), o = Z(() => t.value.room), s = /* @__PURE__ */ F(""), c = /* @__PURE__ */ F(null), l = /* @__PURE__ */ F(null), u = /* @__PURE__ */ F(null), d = /* @__PURE__ */ F(!1), f = /* @__PURE__ */ F(!0), p = /* @__PURE__ */ F(!1), m = r("state-input"), h = r("brief-input"), g = r("search-input"), _ = r("author-select"), v = {
@@ -47450,18 +47468,18 @@ var $G = /*#__PURE__*/ nH({
 				label: "宽",
 				width: 1240
 			}
-		}, y = Te(), b = /* @__PURE__ */ F(y.reading), x = /* @__PURE__ */ F(y.rail), S = /* @__PURE__ */ F(y.nav), C = /* @__PURE__ */ F(typeof window > "u" ? 734 : window.innerWidth), w = /* @__PURE__ */ F(y.collapsed), T = /* @__PURE__ */ F(!0), E = /* @__PURE__ */ F(y.rail_collapsed), D = Z(() => C.value >= UX), O = Z(() => t.value.tab === "discussion" && !E.value), ee = Z(() => D.value && t.value.tab === "discussion" ? E.value ? "展开频道概览" : "收起频道概览" : "频道资料与参与者"), te = Z(() => {
+		}, y = Oe(), b = /* @__PURE__ */ F(y.reading), x = /* @__PURE__ */ F(y.rail), S = /* @__PURE__ */ F(y.nav), C = /* @__PURE__ */ F(typeof window > "u" ? 734 : window.innerWidth), w = /* @__PURE__ */ F(y.collapsed), T = /* @__PURE__ */ F(!0), E = /* @__PURE__ */ F(y.rail_collapsed), D = Z(() => C.value >= GX), O = Z(() => t.value.tab === "discussion" && !E.value), ee = Z(() => D.value && t.value.tab === "discussion" ? E.value ? "展开频道概览" : "收起频道概览" : "频道资料与参与者"), te = Z(() => {
 			let e = document.createElement("template");
 			return e.innerHTML = o.value?.rendered_brief || "", e.content.textContent.replace(/\s+/g, " ").trim();
-		}), k = /* @__PURE__ */ F(null), ne = /* @__PURE__ */ F(null), re = Z(() => Math.min(zX, Math.max(RX, C.value - HX - WX))), ie = Z(() => Math.min(S.value, re.value)), ae = Z(() => ({
+		}), k = /* @__PURE__ */ F(null), ne = /* @__PURE__ */ F(null), re = Z(() => Math.min(VX, Math.max(BX, C.value - WX - KX))), ie = Z(() => Math.min(S.value, re.value)), ae = Z(() => ({
 			"--channel-reading-width": `${v[b.value].width}px`,
 			"--channel-rail-width": `${x.value}px`,
-			"--channel-main-columns": w.value ? "minmax(0, 1fr)" : `${ie.value}px ${WX}px minmax(0, 1fr)`
+			"--channel-main-columns": w.value ? "minmax(0, 1fr)" : `${ie.value}px ${KX}px minmax(0, 1fr)`
 		})), A = Object.entries(v).map(([e, t]) => ({
 			value: e,
 			label: t.label
 		}));
-		R(b, De), R(w, De), R(E, De), Qi(() => window.addEventListener("resize", ke)), ta(() => window.removeEventListener("resize", ke)), Qi(() => document.addEventListener("pointerdown", je)), ta(() => document.removeEventListener("pointerdown", je));
+		R(b, Ae), R(w, Ae), R(E, Ae), Qi(() => window.addEventListener("resize", Me)), ta(() => window.removeEventListener("resize", Me)), Qi(() => document.addEventListener("pointerdown", Pe)), ta(() => document.removeEventListener("pointerdown", Pe));
 		let oe = Z({
 			get: () => t.value.tab,
 			set: (e) => i("tab", e)
@@ -47490,11 +47508,42 @@ var $G = /*#__PURE__*/ nH({
 		async function j() {
 			await i("prepare_brainstorm"), l.value = null, s.value = "create";
 		}
-		let pe = Z(() => Object.keys(de.value === "online" ? n.identities : n.launch_clients).filter((e) => e !== "用户" && !(o.value?.free?.members || []).some((t) => t.name === e)).map((e) => ({
+		let pe = Z(() => Object.keys(de.value === "online" ? n.identities : n.launch_clients).filter((e) => e !== "用户").map((e) => ({
 			label: n.display_name(e),
 			value: e
-		}))), me = (e) => e.pending > 0 || ["dispatched", "started"].includes(e.execution?.status);
-		function he(e) {
+		}))), me = (e) => e.pending > 0 || ["dispatched", "started"].includes(e.execution?.status), he = Z(() => (o.value?.free?.members || []).find((e) => e.role === "host"));
+		function ge(e) {
+			return e.status === "away" ? "idle" : e.execution?.stale ? "error" : me(e) ? e.pending && !["dispatched", "started"].includes(e.execution?.status) ? "warning" : "primary" : e.execution?.status === "failed" ? "error" : "success";
+		}
+		function N(e) {
+			let n = (t, n, r, a = {}) => ({
+				label: t,
+				icon: n,
+				onSelect: () => i("change_member", {
+					member_id: e.id,
+					name: e.name,
+					action: r,
+					...a
+				})
+			});
+			return [[
+				...me(e) ? [n("停止", "i-lucide-square", "interrupt")] : [],
+				...e.access === "online" && e.pending ? [{
+					label: "复制阅读通知",
+					icon: "i-lucide-copy",
+					onSelect: () => i("copy_online_notice", e.name)
+				}] : [],
+				...e.status === "active" && e.access !== "online" ? [n(e.role === "host" ? "取消主持" : "设为主持人", "i-lucide-crown", "role", { role: e.role === "host" ? "member" : "host" })] : [],
+				e.status === "active" ? n("离开", "i-lucide-log-out", "away") : {
+					...n("请回", "i-lucide-log-in", "rejoin"),
+					disabled: !t.value.launch.available
+				}
+			], [{
+				...n("移除", "i-lucide-trash-2", "remove"),
+				color: "error"
+			}]];
+		}
+		function _e(e) {
 			if (e.status === "away") return "已离开：不会被唤醒，可请回";
 			let t = e.execution;
 			return t && ["dispatched", "started"].includes(t.status) ? t.stale ? "执行失联，停止未确认" : "正在处理" : e.pending ? `待投递 ${e.pending} 条` : t?.status === "failed" ? `上次失败：${t.result}` : t ? "空闲" : "尚未收到消息";
@@ -47502,51 +47551,51 @@ var $G = /*#__PURE__*/ nH({
 		R(() => ce.value && t.value.tab !== "discussion", (e) => {
 			e && i("tab", "discussion");
 		}, { immediate: !0 });
-		let ge = Z(() => le.value.map((e) => ({
+		let ve = Z(() => le.value.map((e) => ({
 			...e,
 			active: !!o.value && t.value.tab === e.value,
 			disabled: !o.value,
 			onSelect: () => {
 				d.value = !1, i("tab", e.value);
 			}
-		}))), N = Z(() => [{
+		}))), ye = Z(() => [{
 			name: "用户",
 			mode: "发起与协助"
 		}, ...Object.entries(o.value?.experts || {}).map(([e, t]) => ({
 			name: e,
 			mode: t === "cli" ? "CLI · 读写" : "在线 AI · 只读"
 		}))]);
-		function _e({ room: e, action: t }) {
+		function be({ room: e, action: t }) {
 			c.value = e, d.value = !1, s.value = t;
 		}
-		function ve() {
+		function xe() {
 			d.value = !1, s.value = "archives";
 		}
-		async function ye(e) {
+		async function Se(e) {
 			d.value = !1, await i("room", e);
 		}
-		function be(e) {
+		function Ce(e) {
 			u.value = e, s.value = "message";
 		}
-		function xe(e = null) {
+		function we(e = null) {
 			i("clear_create_parent"), l.value = e, d.value = !1, s.value = "create";
 		}
-		function Se() {
+		function Te() {
 			l.value = null, d.value = !1, s.value = "folder";
 		}
-		function Ce(e) {
+		function Ee(e) {
 			l.value = e, d.value = !1, s.value = "rename-folder";
 		}
-		function we(e) {
+		function De(e) {
 			l.value = e, d.value = !1, s.value = "delete-folder";
 		}
-		function Te() {
+		function Oe() {
 			try {
-				let e = JSON.parse(localStorage.getItem(NX)) || {};
+				let e = JSON.parse(localStorage.getItem(FX)) || {};
 				return {
 					reading: Object.hasOwn(v, e.reading) ? e.reading : "default",
-					rail: Number.isFinite(e.rail) ? Math.min(FX, Math.max(PX, e.rail)) : IX,
-					nav: Number.isFinite(e.nav) ? Math.min(zX, Math.max(RX, e.nav)) : Ee(),
+					rail: Number.isFinite(e.rail) ? Math.min(LX, Math.max(IX, e.rail)) : RX,
+					nav: Number.isFinite(e.nav) ? Math.min(VX, Math.max(BX, e.nav)) : ke(),
 					collapsed: e.collapsed === !0,
 					brief_collapsed: e.brief_collapsed === !0,
 					rail_collapsed: e.rail_collapsed === !0
@@ -47554,20 +47603,20 @@ var $G = /*#__PURE__*/ nH({
 			} catch {
 				return {
 					reading: "default",
-					rail: IX,
-					nav: Ee(),
+					rail: RX,
+					nav: ke(),
 					collapsed: !1,
 					brief_collapsed: !1,
 					rail_collapsed: !1
 				};
 			}
 		}
-		function Ee() {
-			return typeof window > "u" ? BX : window.innerWidth >= 1900 ? 280 : window.innerWidth <= 980 ? 220 : BX;
+		function ke() {
+			return typeof window > "u" ? HX : window.innerWidth >= 1900 ? 280 : window.innerWidth <= 980 ? 220 : HX;
 		}
-		function De() {
+		function Ae() {
 			try {
-				localStorage.setItem(NX, JSON.stringify({
+				localStorage.setItem(FX, JSON.stringify({
 					reading: b.value,
 					rail: x.value,
 					nav: S.value,
@@ -47577,64 +47626,64 @@ var $G = /*#__PURE__*/ nH({
 				}));
 			} catch {}
 		}
-		function Oe() {
+		function je() {
 			D.value && t.value.tab === "discussion" ? E.value = !E.value : p.value = !0;
 		}
-		function ke() {
+		function Me() {
 			C.value = window.innerWidth;
 		}
-		function Ae() {
+		function Ne() {
 			T.value = !T.value;
 		}
-		function je(e) {
+		function Pe(e) {
 			!T.value && !e.target.closest?.(".channel-host-brief") && (T.value = !0);
 		}
-		function Me(e) {
+		function Fe(e) {
 			e.button === 0 && (e.preventDefault(), e.currentTarget.focus(), k.value = {
 				pointer: e.pointerId,
 				x: e.clientX,
 				width: x.value
 			}, e.currentTarget.setPointerCapture(e.pointerId));
 		}
-		function Ne(e) {
-			k.value?.pointer === e.pointerId && (x.value = Math.round(Math.min(FX, Math.max(PX, k.value.width + k.value.x - e.clientX))));
-		}
-		function Pe(e) {
-			k.value?.pointer === e.pointerId && (k.value = null, e.currentTarget.hasPointerCapture(e.pointerId) && e.currentTarget.releasePointerCapture(e.pointerId), De());
-		}
-		function Fe(e) {
-			let t = {
-				ArrowLeft: x.value + LX,
-				ArrowRight: x.value - LX,
-				Home: PX,
-				End: FX
-			};
-			Object.hasOwn(t, e.key) && (e.preventDefault(), x.value = Math.min(FX, Math.max(PX, t[e.key])), De());
-		}
 		function Ie(e) {
+			k.value?.pointer === e.pointerId && (x.value = Math.round(Math.min(LX, Math.max(IX, k.value.width + k.value.x - e.clientX))));
+		}
+		function Le(e) {
+			k.value?.pointer === e.pointerId && (k.value = null, e.currentTarget.hasPointerCapture(e.pointerId) && e.currentTarget.releasePointerCapture(e.pointerId), Ae());
+		}
+		function Re(e) {
+			let t = {
+				ArrowLeft: x.value + zX,
+				ArrowRight: x.value - zX,
+				Home: IX,
+				End: LX
+			};
+			Object.hasOwn(t, e.key) && (e.preventDefault(), x.value = Math.min(LX, Math.max(IX, t[e.key])), Ae());
+		}
+		function ze(e) {
 			e.button === 0 && (e.preventDefault(), e.currentTarget.focus(), ne.value = {
 				pointer: e.pointerId,
 				x: e.clientX,
 				width: ie.value
 			}, e.currentTarget.setPointerCapture(e.pointerId));
 		}
-		function Le(e) {
-			ne.value?.pointer === e.pointerId && (S.value = Math.round(Math.min(re.value, Math.max(RX, ne.value.width + e.clientX - ne.value.x))));
+		function Be(e) {
+			ne.value?.pointer === e.pointerId && (S.value = Math.round(Math.min(re.value, Math.max(BX, ne.value.width + e.clientX - ne.value.x))));
 		}
-		function Re(e) {
-			ne.value?.pointer === e.pointerId && (ne.value = null, e.currentTarget.hasPointerCapture(e.pointerId) && e.currentTarget.releasePointerCapture(e.pointerId), De());
+		function Ve(e) {
+			ne.value?.pointer === e.pointerId && (ne.value = null, e.currentTarget.hasPointerCapture(e.pointerId) && e.currentTarget.releasePointerCapture(e.pointerId), Ae());
 		}
-		function ze(e) {
+		function He(e) {
 			let t = {
-				ArrowLeft: ie.value - VX,
-				ArrowRight: ie.value + VX,
-				Home: RX,
+				ArrowLeft: ie.value - UX,
+				ArrowRight: ie.value + UX,
+				Home: BX,
 				End: re.value
 			};
-			Object.hasOwn(t, e.key) && (e.preventDefault(), S.value = Math.min(re.value, Math.max(RX, t[e.key])), De());
+			Object.hasOwn(t, e.key) && (e.preventDefault(), S.value = Math.min(re.value, Math.max(BX, t[e.key])), Ae());
 		}
 		return (e, r) => {
-			let v = zk, y = VV, S = Gk, C = uA, E = NV, se = wV, Te = kV, Ee = EV, De = SV, ke = yV, je = pV, Be = dV, Ve = cV;
+			let v = zk, y = GV, S = Gk, C = uA, E = VV, se = LV, me = xV, Oe = zV, ke = FV, Ae = MV, Me = EV, Pe = pV, Ue = dV, We = cV;
 			return U(), W("div", {
 				class: M(["channel-shell", {
 					"channel-resizing": k.value || ne.value,
@@ -47646,28 +47695,28 @@ var $G = /*#__PURE__*/ nH({
 				K("aside", kY, [
 					K("header", AY, [
 						K("span", jY, [q(v, { name: "i-lucide-messages-square" })]),
-						r[25] ||= K("strong", null, "共议", -1),
-						r[26] ||= K("span", null, "AI CoDiscuss", -1)
+						r[26] ||= K("strong", null, "共议", -1),
+						r[27] ||= K("span", null, "AI CoDiscuss", -1)
 					]),
 					K("div", MY, [
 						q(FJ, {
-							onSelect: ye,
-							onManage: _e,
-							onCreate: xe,
-							onCreateFolder: Se,
-							onManageFolder: Ce,
-							onDeleteFolder: we,
-							onArchives: ve
+							onSelect: Se,
+							onManage: be,
+							onCreate: we,
+							onCreateFolder: Te,
+							onManageFolder: Ee,
+							onDeleteFolder: De,
+							onArchives: xe
 						}),
 						K("div", NY, [K("button", {
 							type: "button",
 							class: "channel-section-toggle",
 							"aria-expanded": f.value,
 							onClick: r[0] ||= (e) => f.value = !f.value
-						}, [q(v, { name: f.value ? "i-lucide-chevron-down" : "i-lucide-chevron-right" }, null, 8, ["name"]), r[27] ||= J("频道工具", -1)], 8, PY)]),
+						}, [q(v, { name: f.value ? "i-lucide-chevron-down" : "i-lucide-chevron-right" }, null, 8, ["name"]), r[28] ||= J("频道工具", -1)], 8, PY)]),
 						f.value ? (U(), G(y, {
 							key: 0,
-							items: ge.value,
+							items: ve.value,
 							orientation: "vertical",
 							color: "neutral",
 							variant: "pill",
@@ -47716,17 +47765,17 @@ var $G = /*#__PURE__*/ nH({
 					"aria-label": "调整频道栏宽度",
 					"aria-orientation": "vertical",
 					"aria-controls": "channel-sidebar",
-					"aria-valuemin": RX,
+					"aria-valuemin": BX,
 					"aria-valuemax": re.value,
 					"aria-valuenow": ie.value,
 					"aria-valuetext": `${ie.value} 像素`,
 					title: "拖动调整频道栏宽度，也可使用方向键",
-					onPointerdown: Ie,
-					onPointermove: Le,
-					onPointerup: Re,
-					onPointercancel: Re,
-					onLostpointercapture: Re,
-					onKeydown: ze
+					onPointerdown: ze,
+					onPointermove: Be,
+					onPointerup: Ve,
+					onPointercancel: Ve,
+					onLostpointercapture: Ve,
+					onKeydown: He
 				}, null, 40, RY)),
 				K("main", zY, [
 					K("header", BY, [
@@ -47766,12 +47815,12 @@ var $G = /*#__PURE__*/ nH({
 							variant: "subtle",
 							size: "sm"
 						}, {
-							default: L(() => [...r[28] ||= [J("已存档", -1)]]),
+							default: L(() => [...r[29] ||= [J("已存档", -1)]]),
 							_: 1
 						})) : Y("", !0)]),
 						o.value ? (U(), W("span", KY, [
 							J(P(le.value.find((e) => e.value === I(t).tab)?.label), 1),
-							r[29] ||= K("span", null, "·", -1),
+							r[30] ||= K("span", null, "·", -1),
 							J(P(o.value.message_count) + " 条记录", 1)
 						])) : Y("", !0),
 						K("div", qY, [
@@ -47779,7 +47828,7 @@ var $G = /*#__PURE__*/ nH({
 								key: 0,
 								class: "channel-search",
 								onSubmit: r[6] ||= uu((e) => I(i)("filter", { query: I(g) }), ["prevent"])
-							}, [q(Te, {
+							}, [q(me, {
 								modelValue: I(g),
 								"onUpdate:modelValue": r[5] ||= (e) => /* @__PURE__ */ ln(g) ? g.value = e : null,
 								icon: "i-lucide-search",
@@ -47844,7 +47893,7 @@ var $G = /*#__PURE__*/ nH({
 								"aria-label": ee.value,
 								disabled: !o.value && !(D.value && I(t).tab === "discussion"),
 								"aria-expanded": D.value && I(t).tab === "discussion" ? O.value : p.value,
-								onClick: Oe
+								onClick: je
 							}, null, 8, [
 								"aria-label",
 								"disabled",
@@ -47854,7 +47903,7 @@ var $G = /*#__PURE__*/ nH({
 						}, 8, ["text"])
 					]),
 					I(t).launch.available && I(t).launch.recoveries.length ? (U(), W("section", JY, [
-						r[30] ||= K("h2", null, "继续未完成的启动", -1),
+						r[31] ||= K("h2", null, "继续未完成的启动", -1),
 						(U(!0), W(H, null, B(I(t).launch.recoveries, (e) => (U(), W("article", { key: e.id }, [
 							K("strong", null, P(e.title), 1),
 							K("p", YY, P(e.error || "启动结果尚未确认；原请求已保存在此浏览器中。"), 1),
@@ -47888,9 +47937,9 @@ var $G = /*#__PURE__*/ nH({
 								}, null, 8, ["disabled", "onClick"])
 							])
 						]))), 128)),
-						r[31] ||= K("small", null, "移除待办不会删除房间或停止讨论。", -1)
+						r[32] ||= K("small", null, "移除待办不会删除房间或停止讨论。", -1)
 					])) : Y("", !0),
-					o.value ? (U(), W("div", ZY, [q(Ee, {
+					o.value ? (U(), W("div", ZY, [q(Oe, {
 						modelValue: oe.value,
 						"onUpdate:modelValue": r[8] ||= (e) => oe.value = e,
 						items: le.value,
@@ -47911,7 +47960,7 @@ var $G = /*#__PURE__*/ nH({
 						"aria-label": T.value ? "展开主持简报" : "收起主持简报",
 						"aria-expanded": !T.value,
 						"aria-controls": "channel-brief-content",
-						onClick: Ae
+						onClick: Ne
 					}, [
 						q(v, { name: T.value ? "i-lucide-chevron-right" : "i-lucide-chevron-down" }, null, 8, ["name"]),
 						K("strong", null, "主持简报" + P(T.value ? "：" : ""), 1),
@@ -47933,11 +47982,11 @@ var $G = /*#__PURE__*/ nH({
 						class: M(["channel-body", { "channel-body-discussion": I(t).tab === "discussion" }])
 					}, [K("div", oX, [
 						vr(q(aW, {
-							onDetail: be,
+							onDetail: Ce,
 							onEdit: r[10] ||= (e) => s.value = "edit"
 						}, null, 512), [[Vc, I(t).tab === "discussion"]]),
 						I(t).tab === "context" ? (U(), W("section", sX, [
-							K("div", cX, [r[32] ||= K("div", null, [K("h2", null, "共识与分歧"), K("p", null, "整理讨论进展，用 #消息编号 保留依据。")], -1), q(se, {
+							K("div", cX, [r[33] ||= K("div", null, [K("h2", null, "共识与分歧"), K("p", null, "整理讨论进展，用 #消息编号 保留依据。")], -1), q(se, {
 								color: "neutral",
 								variant: "outline"
 							}, {
@@ -47945,26 +47994,26 @@ var $G = /*#__PURE__*/ nH({
 								_: 1
 							})]),
 							Array.isArray(o.value.latest_receipts) && o.value.latest_receipts.length ? (U(), W("section", lX, [
-								r[33] ||= K("h3", null, "最新运行回执", -1),
-								r[34] ||= K("p", { class: "fine-print" }, "以下回执独立于摘要更新；晚于摘要的回执可能尚未整理，实际运行结果请查看原文。", -1),
+								r[34] ||= K("h3", null, "最新运行回执", -1),
+								r[35] ||= K("p", { class: "fine-print" }, "以下回执独立于摘要更新；晚于摘要的回执可能尚未整理，实际运行结果请查看原文。", -1),
 								K("div", uX, [(U(!0), W(H, null, B(o.value.latest_receipts, (e) => (U(), G(C, {
 									key: e.id,
 									label: `${I(n).display_name(e.author)} #${e.id} · ${new Date(e.created_at).toLocaleString("zh-CN")}${e.id > o.value.state_until ? " · 晚于摘要" : ""}`,
 									variant: "link",
 									color: "neutral",
-									onClick: (t) => be(e.id)
+									onClick: (t) => Ce(e.id)
 								}, null, 8, ["label", "onClick"]))), 128))])
 							])) : Y("", !0),
 							K("form", {
 								class: "summary-form",
 								onSubmit: r[13] ||= uu((e) => I(i)("save_context"), ["prevent"])
 							}, [
-								q(ke, {
+								q(Ae, {
 									label: "主持简报",
 									description: "简述结论、共识、歧义，以及接下来要追问或调整什么、为什么。",
 									class: "channel-brief-editor"
 								}, {
-									default: L(() => [q(De, {
+									default: L(() => [q(ke, {
 										modelValue: I(h),
 										"onUpdate:modelValue": r[11] ||= (e) => /* @__PURE__ */ ln(h) ? h.value = e : null,
 										"aria-label": "主持简报正文",
@@ -47974,12 +48023,12 @@ var $G = /*#__PURE__*/ nH({
 									}, null, 8, ["modelValue"])]),
 									_: 1
 								}),
-								q(ke, {
+								q(Ae, {
 									label: "详细共识与进度",
 									description: "已达成的共识、尚未解决的问题与下一步，用 #消息编号 标注依据。",
 									class: "channel-state-field"
 								}, {
-									default: L(() => [q(De, {
+									default: L(() => [q(ke, {
 										modelValue: I(m),
 										"onUpdate:modelValue": r[12] ||= (e) => /* @__PURE__ */ ln(m) ? m.value = e : null,
 										"aria-label": "共识与分歧正文",
@@ -48003,17 +48052,17 @@ var $G = /*#__PURE__*/ nH({
 						I(t).tab === "topic" || I(t).tab === "access" ? (U(), G(OG, {
 							key: I(t).tab,
 							onOpen: r[14] ||= (e) => s.value = e,
-							onDetail: be
+							onDetail: Ce
 						})) : Y("", !0)
 					])], 2)) : (U(), W("div", fX, [
 						q(v, { name: "i-lucide-hash" }),
-						r[35] ||= K("h2", null, "新建一个讨论频道", -1),
-						r[36] ||= K("p", null, "每个频道围绕一个议题，保留所有人的观点。", -1),
+						r[36] ||= K("h2", null, "新建一个讨论频道", -1),
+						r[37] ||= K("p", null, "每个频道围绕一个议题，保留所有人的观点。", -1),
 						q(C, {
 							icon: "i-lucide-plus",
 							label: "新建讨论",
 							color: "neutral",
-							onClick: r[15] ||= (e) => xe()
+							onClick: r[15] ||= (e) => we()
 						})
 					]))
 				]),
@@ -48025,185 +48074,152 @@ var $G = /*#__PURE__*/ nH({
 					"aria-label": "调整右侧栏宽度",
 					"aria-orientation": "vertical",
 					"aria-controls": "channel-member-rail",
-					"aria-valuemin": PX,
-					"aria-valuemax": FX,
+					"aria-valuemin": IX,
+					"aria-valuemax": LX,
 					"aria-valuenow": x.value,
 					"aria-valuetext": `${x.value} 像素`,
 					title: "拖动调整右侧栏宽度，也可使用左右方向键",
-					onPointerdown: Me,
-					onPointermove: Ne,
-					onPointerup: Pe,
-					onPointercancel: Pe,
-					onLostpointercapture: Pe,
-					onKeydown: Fe
+					onPointerdown: Fe,
+					onPointermove: Ie,
+					onPointerup: Le,
+					onPointercancel: Le,
+					onLostpointercapture: Le,
+					onKeydown: Re
 				}, null, 40, pX)) : Y("", !0),
 				O.value ? (U(), W("aside", mX, [K("section", hX, [o.value && ce.value ? (U(), W("div", gX, [
-					K("header", _X, [r[37] ||= K("strong", null, "自由协作", -1), K("span", vX, P((o.value.free?.members || []).some((e) => e.role === "host") ? `主持人 ${I(n).display_name(o.value.free.members.find((e) => e.role === "host").name)}` : "无主持") + " · 无轮次", 1)]),
-					K("ul", yX, [(U(!0), W(H, null, B(o.value.free?.members || [], (e) => (U(), W("li", { key: e.id }, [
-						K("div", bX, [K("strong", null, P(I(n).display_name(e.name)), 1), K("small", null, P({
-							manual: "手动接入",
-							online: "在线只读"
-						}[e.access] || "本机自动") + P(e.role === "host" ? " · 主持人" : "") + P(e.session_mode === "borrowed" ? " · 借用会话" : ""), 1)]),
-						K("span", null, P(he(e)), 1),
-						e.session_mode === "borrowed" ? (U(), W("small", xX, "该成员绑定了你正在使用的会话：它工作时请不要在原窗口继续操作，否则两个进程会同时写入同一份会话记录。")) : Y("", !0),
-						K("div", SX, [
-							me(e) ? (U(), G(C, {
-								key: 0,
-								label: "停止",
-								size: "xs",
-								color: "neutral",
-								variant: "outline",
-								onClick: (t) => I(i)("change_member", {
-									member_id: e.id,
-									action: "interrupt"
-								})
-							}, null, 8, ["onClick"])) : Y("", !0),
-							e.status === "active" ? (U(), G(C, {
-								key: 1,
-								label: "离开",
-								size: "xs",
-								color: "neutral",
-								variant: "ghost",
-								onClick: (t) => I(i)("change_member", {
-									member_id: e.id,
-									action: "away"
-								})
-							}, null, 8, ["onClick"])) : (U(), G(C, {
-								key: 2,
-								label: "请回",
-								size: "xs",
-								color: "neutral",
-								variant: "outline",
-								disabled: !I(t).launch.available,
-								title: I(t).launch.available ? "换发新凭证并续接原会话" : "请回需要本机服务",
-								onClick: (t) => I(i)("change_member", {
-									member_id: e.id,
-									name: e.name,
-									action: "rejoin"
-								})
-							}, null, 8, [
-								"disabled",
-								"title",
-								"onClick"
-							])),
-							e.status === "active" && e.access !== "online" ? (U(), G(C, {
-								key: 3,
-								label: e.role === "host" ? "取消主持" : "设为主持人",
-								size: "xs",
-								color: "neutral",
-								variant: "ghost",
-								title: e.role === "host" ? "" : "主持人负责分配未点名的消息，并在派出的成员结束后接手",
-								onClick: (t) => I(i)("change_member", {
-									member_id: e.id,
-									action: "role",
-									role: e.role === "host" ? "member" : "host"
-								})
-							}, null, 8, [
-								"label",
-								"title",
-								"onClick"
-							])) : Y("", !0),
-							e.access === "online" && e.pending ? (U(), G(C, {
-								key: 4,
-								label: "复制阅读通知",
-								size: "xs",
-								color: "neutral",
-								variant: "outline",
-								onClick: (t) => I(i)("copy_online_notice", e.name)
-							}, null, 8, ["onClick"])) : Y("", !0),
-							q(C, {
-								label: "移除",
-								size: "xs",
-								color: "error",
-								variant: "ghost",
-								onClick: (t) => I(i)("change_member", {
-									member_id: e.id,
-									action: "remove"
-								})
-							}, null, 8, ["onClick"])
-						])
-					]))), 128))]),
-					o.value.free?.conflicts?.length ? (U(), W("div", CX, [
-						r[38] ||= K("strong", null, "可能的改动冲突", -1),
-						(U(!0), W(H, null, B(o.value.free.conflicts, (e) => (U(), W("p", { key: e.executions.join("-") }, P(e.members.map((e) => I(n).display_name(e)).join(" 与 ")) + " 在重叠时段都改动了 " + P(e.files.join("、")) + "，请核对。", 1))), 128)),
-						r[39] ||= K("small", null, "依据执行前后的工作区对比，无法确定修改者；未出现提示不代表没有覆盖。", -1)
-					])) : Y("", !0),
-					o.value.free?.halted_chains?.length ? (U(), W("div", wX, [
-						r[40] ||= K("strong", null, "自动推进已停", -1),
-						(U(!0), W(H, null, B(o.value.free.halted_chains.slice(0, 3), (e) => (U(), W("p", { key: e.chain_id }, "消息 #" + P(e.chain_id) + " 引出的任务链" + P(e.reason === "budget" ? `已达 ${o.value.free.max_auto_hops} 次 AI 发起的请求上限` : "中派出的成员全部失败") + "，不再自动唤醒主持人。", 1))), 128)),
-						r[41] ||= K("small", null, "发一条新消息即开始新的任务链。", -1)
-					])) : Y("", !0),
-					K("div", TX, [
-						r[42] ||= K("strong", null, "头脑风暴", -1),
-						(U(!0), W(H, null, B(o.value.linked_rooms || [], (e) => (U(), W("p", { key: e.id }, [K("button", {
-							type: "button",
-							class: "channel-link-button",
-							onClick: (t) => I(i)("room", e.id)
-						}, P(e.title), 9, EX), J(" · " + P(I(n).phases[e.phase] || e.phase), 1)]))), 128)),
-						K("div", null, [q(C, {
-							label: "发起头脑风暴",
+					K("header", _X, [r[38] ||= K("strong", null, "自由协作", -1), K("span", vX, P(he.value ? `主持人 ${I(n).display_name(he.value.name)}` : "无主持"), 1)]),
+					K("section", yX, [r[40] ||= K("h4", null, "成员", -1), K("ul", bX, [(U(!0), W(H, null, B(o.value.free?.members || [], (e) => (U(), W("li", {
+						key: e.id,
+						class: "pb-member"
+					}, [
+						q(S, {
+							src: I(n).identities[e.name]?.icon,
+							text: I(n).identities[e.name]?.initials,
+							alt: e.name,
 							size: "xs",
-							color: "neutral",
-							variant: "outline",
-							onClick: j
-						})]),
-						r[43] ||= K("small", null, "用当前成员新建一场讨论房间，轮次与时长独立；收束后可在那边把结论发回这里。", -1)
+							class: M(["channel-avatar", I(n).identities[e.name]?.style])
+						}, null, 8, [
+							"src",
+							"text",
+							"alt",
+							"class"
+						]),
+						K("div", xX, [
+							K("div", SX, [
+								J(P(I(n).display_name(e.name)), 1),
+								e.role === "host" ? (U(), G(v, {
+									key: 0,
+									name: "i-lucide-crown",
+									title: "主持人"
+								})) : Y("", !0),
+								K("small", null, P({
+									manual: "手动接入",
+									online: "在线只读"
+								}[e.access] || "本机自动"), 1)
+							]),
+							K("div", { class: M(["pb-member-status", `is-${ge(e)}`]) }, [r[39] ||= K("span", { class: "pb-dot" }, null, -1), J(P(_e(e)), 1)], 2),
+							e.session_mode === "borrowed" ? (U(), W("p", CX, "借用你正在使用的会话")) : Y("", !0)
+						]),
+						q(Me, {
+							items: N(e),
+							content: { align: "end" },
+							ui: { content: "channel-menu" }
+						}, {
+							default: L(() => [q(C, {
+								icon: "i-lucide-ellipsis",
+								color: "neutral",
+								variant: "ghost",
+								size: "xs",
+								class: "pb-member-more",
+								"aria-label": `${e.name} 的更多操作`
+							}, null, 8, ["aria-label"])]),
+							_: 2
+						}, 1032, ["items"])
+					]))), 128))])]),
+					o.value.free?.conflicts?.length || o.value.free?.halted_chains?.length || I(t).free_error || I(t).free_notice ? (U(), W("section", wX, [
+						r[41] ||= K("h4", null, "提示", -1),
+						(U(!0), W(H, null, B(o.value.free?.conflicts || [], (e) => (U(), W("p", {
+							key: e.executions.join("-"),
+							class: "pb-free-note is-warning"
+						}, "可能冲突：" + P(e.members.map((e) => I(n).display_name(e)).join(" 与 ")) + " 都改动了 " + P(e.files.join("、")), 1))), 128)),
+						(U(!0), W(H, null, B((o.value.free?.halted_chains || []).slice(0, 3), (e) => (U(), W("p", {
+							key: e.chain_id,
+							class: "pb-free-note"
+						}, "#" + P(e.chain_id) + " 的任务链已停：" + P(e.reason === "budget" ? `达到 ${o.value.free.max_auto_hops} 次上限` : "派出的成员都失败了") + "；发新消息即重新开始", 1))), 128)),
+						I(t).free_error ? (U(), W("p", TX, P(I(t).free_error), 1)) : I(t).free_notice ? (U(), W("p", EX, P(I(t).free_notice), 1)) : Y("", !0)
+					])) : Y("", !0),
+					K("section", DX, [
+						r[42] ||= K("h4", null, "邀请 AI", -1),
+						K("form", {
+							class: "pb-free-invite",
+							onSubmit: r[18] ||= uu((e) => I(i)("invite_member", {
+								name: ue.value,
+								access: de.value
+							}), ["prevent"])
+						}, [q(Pe, {
+							modelValue: ue.value,
+							"onUpdate:modelValue": r[16] ||= (e) => ue.value = e,
+							items: pe.value,
+							placeholder: "选择 AI",
+							size: "sm",
+							class: "min-w-0 flex-1"
+						}, null, 8, ["modelValue", "items"]), q(Pe, {
+							modelValue: de.value,
+							"onUpdate:modelValue": r[17] ||= (e) => de.value = e,
+							items: [
+								{
+									label: "本机自动",
+									value: "runner"
+								},
+								{
+									label: "手动接入",
+									value: "manual"
+								},
+								{
+									label: "在线只读",
+									value: "online"
+								}
+							],
+							size: "sm",
+							class: "w-26"
+						}, null, 8, ["modelValue"])], 32),
+						de.value !== "online" && !I(t).launch.available ? (U(), W("p", OX, "需要本机服务：请在运行 AI 的电脑打开本机网站。")) : Y("", !0)
 					]),
-					K("form", {
-						class: "channel-free-invite",
-						onSubmit: r[18] ||= uu((e) => I(i)("invite_member", {
+					o.value.linked_rooms?.length ? (U(), W("section", kX, [r[43] ||= K("h4", null, "头脑风暴", -1), (U(!0), W(H, null, B(o.value.linked_rooms, (e) => (U(), W("button", {
+						key: e.id,
+						type: "button",
+						class: "pb-link pb-free-linked",
+						onClick: (t) => I(i)("room", e.id)
+					}, [J(P(e.title), 1), K("small", null, P(I(n).phases[e.phase] || e.phase), 1)], 8, AX))), 128))])) : Y("", !0),
+					K("section", jX, [q(C, {
+						icon: "i-lucide-user-plus",
+						label: "邀请",
+						size: "sm",
+						color: "neutral",
+						variant: "outline",
+						class: "pb-action",
+						disabled: !ue.value || de.value !== "online" && !I(t).launch.available,
+						onClick: r[19] ||= (e) => I(i)("invite_member", {
 							name: ue.value,
 							access: de.value
-						}), ["prevent"])
-					}, [
-						r[44] ||= K("strong", null, "邀请 AI", -1),
-						K("div", null, [
-							q(je, {
-								modelValue: ue.value,
-								"onUpdate:modelValue": r[16] ||= (e) => ue.value = e,
-								items: pe.value,
-								placeholder: "选择 AI",
-								size: "xs",
-								class: "w-28"
-							}, null, 8, ["modelValue", "items"]),
-							q(je, {
-								modelValue: de.value,
-								"onUpdate:modelValue": r[17] ||= (e) => de.value = e,
-								items: [
-									{
-										label: "本机自动",
-										value: "runner"
-									},
-									{
-										label: "手动接入",
-										value: "manual"
-									},
-									{
-										label: "在线只读",
-										value: "online"
-									}
-								],
-								size: "xs",
-								class: "w-24"
-							}, null, 8, ["modelValue"]),
-							q(C, {
-								type: "submit",
-								label: "邀请",
-								size: "xs",
-								disabled: !ue.value || de.value !== "online" && !I(t).launch.available
-							}, null, 8, ["disabled"])
-						]),
-						K("small", null, P(I(t).launch.available ? "自动成员沿用本机软件配置与本房间工作目录；手动成员会得到一份私有凭据文件。" : "邀请需要本机服务：请在运行 AI 的电脑打开本机网站。"), 1)
-					], 32),
-					I(t).free_error ? (U(), W("p", DX, P(I(t).free_error), 1)) : I(t).free_notice ? (U(), W("p", OX, P(I(t).free_notice), 1)) : Y("", !0),
-					K("p", kX, "点名的成员各自处理；处理中可随时停止。单次执行最多 " + P(o.value.free?.execution_minutes) + " 分钟。", 1)
+						})
+					}, null, 8, ["disabled"]), q(C, {
+						icon: "i-lucide-messages-square",
+						label: "发起头脑风暴",
+						size: "sm",
+						color: "neutral",
+						variant: "outline",
+						class: "pb-action",
+						title: "用当前成员新建一场讨论房间，收束后可把结论发回这里",
+						onClick: j
+					})])
 				])) : o.value ? (U(), G(CY, {
 					key: 1,
 					docked: ""
-				})) : (U(), W("div", AX, [...r[45] ||= [K("header", { class: "pb-header" }, [K("strong", null, "讨论进度")], -1), K("p", { class: "channel-rail-empty" }, "暂无频道，新建讨论后在这里查看进度与参与者。", -1)]]))])])) : Y("", !0),
-				q(Be, {
+				})) : (U(), W("div", MX, [...r[44] ||= [K("header", { class: "pb-header" }, [K("strong", null, "讨论进度")], -1), K("p", { class: "channel-rail-empty" }, "暂无频道，新建讨论后在这里查看进度与参与者。", -1)]]))])])) : Y("", !0),
+				q(Ue, {
 					open: d.value,
-					"onUpdate:open": r[20] ||= (e) => d.value = e,
+					"onUpdate:open": r[21] ||= (e) => d.value = e,
 					side: "left",
 					title: "讨论频道",
 					description: "共议 · AI CoDiscuss",
@@ -48213,28 +48229,28 @@ var $G = /*#__PURE__*/ nH({
 					}
 				}, {
 					body: L(() => [q(FJ, {
-						onSelect: ye,
-						onManage: _e,
-						onCreate: xe,
-						onCreateFolder: Se,
-						onManageFolder: Ce,
-						onDeleteFolder: we,
-						onArchives: ve
+						onSelect: Se,
+						onManage: be,
+						onCreate: we,
+						onCreateFolder: Te,
+						onManageFolder: Ee,
+						onDeleteFolder: De,
+						onArchives: xe
 					}), q(C, {
 						block: "",
 						icon: "i-lucide-settings-2",
 						color: "neutral",
 						variant: "ghost",
 						label: "外观设置",
-						onClick: r[19] ||= (e) => {
+						onClick: r[20] ||= (e) => {
 							d.value = !1, s.value = "settings";
 						}
 					})]),
 					_: 1
 				}, 8, ["open"]),
-				q(Be, {
+				q(Ue, {
 					open: p.value,
-					"onUpdate:open": r[22] ||= (e) => p.value = e,
+					"onUpdate:open": r[23] ||= (e) => p.value = e,
 					title: "频道资料",
 					description: "目标、背景与参与方式",
 					ui: {
@@ -48243,7 +48259,7 @@ var $G = /*#__PURE__*/ nH({
 					}
 				}, {
 					body: L(() => [o.value ? (U(), W(H, { key: 0 }, [
-						K("div", jX, [q(v, { name: "i-lucide-hash" }), K("h2", null, P(o.value.title), 1)]),
+						K("div", NX, [q(v, { name: "i-lucide-hash" }), K("h2", null, P(o.value.title), 1)]),
 						(U(), W(H, null, B([
 							{
 								key: "goal",
@@ -48269,8 +48285,8 @@ var $G = /*#__PURE__*/ nH({
 							key: e.key,
 							class: "info-section"
 						}, [K("h3", null, P(e.label), 1), K("p", null, P(o.value[e.key] || "尚未填写"), 1)])), 64)),
-						q(Ve),
-						K("section", MX, [r[46] ||= K("h3", null, "参与身份", -1), (U(!0), W(H, null, B(N.value, (e) => (U(), W("div", {
+						q(We),
+						K("section", PX, [r[45] ||= K("h3", null, "参与身份", -1), (U(!0), W(H, null, B(ye.value, (e) => (U(), W("div", {
 							key: e.name,
 							class: "expert-row"
 						}, [
@@ -48296,7 +48312,7 @@ var $G = /*#__PURE__*/ nH({
 							block: "",
 							class: "channel-surface-button",
 							label: "编辑议题",
-							onClick: r[21] ||= (e) => {
+							onClick: r[22] ||= (e) => {
 								p.value = !1, s.value = "edit";
 							}
 						})
@@ -48305,9 +48321,9 @@ var $G = /*#__PURE__*/ nH({
 				}, 8, ["open"]),
 				q(fJ, {
 					modelValue: s.value,
-					"onUpdate:modelValue": r[23] ||= (e) => s.value = e,
+					"onUpdate:modelValue": r[24] ||= (e) => s.value = e,
 					"reading-width": b.value,
-					"onUpdate:readingWidth": r[24] ||= (e) => b.value = e,
+					"onUpdate:readingWidth": r[25] ||= (e) => b.value = e,
 					"reading-options": I(A),
 					"detail-id": u.value,
 					"target-room": c.value,
@@ -48323,7 +48339,7 @@ var $G = /*#__PURE__*/ nH({
 			], 6);
 		};
 	}
-}, KX = {
+}, JX = {
 	__name: "App",
 	setup(e) {
 		return br("discussion", oV()), (e, t) => {
@@ -48334,7 +48350,7 @@ var $G = /*#__PURE__*/ nH({
 				toaster: null
 			}, {
 				default: L(() => [q(I(Az), { "reduced-motion": "user" }, {
-					default: L(() => [q(GX)]),
+					default: L(() => [q(qX)]),
 					_: 1
 				})]),
 				_: 1
@@ -48344,8 +48360,8 @@ var $G = /*#__PURE__*/ nH({
 };
 //#endregion
 //#region frontend/main.js
-function qX() {
-	bu(KX).use(fh).mount("#modern-root");
+function YX() {
+	bu(JX).use(fh).mount("#modern-root");
 }
-document.readyState === "loading" ? document.addEventListener("DOMContentLoaded", qX) : qX();
+document.readyState === "loading" ? document.addEventListener("DOMContentLoaded", YX) : YX();
 //#endregion

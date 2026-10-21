@@ -162,6 +162,11 @@ class CliTests(unittest.TestCase):
         self.assertEqual(preview["body"]["request_ids"], [3])
         preview = self.cli(*args, "--execution", 4, "--to", "Codex", "--to", "Codex", "--submission-id", str(uuid.uuid4()), "--dry-run")
         self.assertEqual(preview["body"]["to"], ["Codex"])
+        preview = self.cli("message", "post", room["id"], "--as", "Claude-评审", "--kind", "chat", "--body", "x", "--to", "Codex-2",
+                           "--execution", 4, "--submission-id", str(uuid.uuid4()), "--dry-run")
+        self.assertEqual((preview["body"]["author"], preview["body"]["to"]), ("Claude-评审", ["Codex-2"]))
+        self.assertIn("平台名-后缀", str(self.rejected(["message", "post", room["id"], "--as", "Claudex", "--body", "x",
+                                                    "--submission-id", str(uuid.uuid4()), "--dry-run"])))
 
     def test_access_file_is_room_scoped_and_not_printed_in_preview(self):
         """A private capability is usable only for its configured site and room."""

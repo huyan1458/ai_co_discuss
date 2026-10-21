@@ -11,6 +11,20 @@ import { acquire_lock, api, CODEX_ADAPTERS, DiscussionStore, service_drafts, tas
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 
 const CLIENTS = { Codex: ['codex_cli', 'codex'], Claude: ['claude'], Gemini: ['antigravity_cli', 'antigravity'] };
+// A platform is a type; `Claude-评审` is another Claude instance with its own session, model and effort.
+const INSTANCE_PATTERN = /^(Codex|Claude|Gemini|DeepSeek|Qwen)(?:-[0-9A-Za-z_一-鿿]{1,16})?$/;
+
+/** The platform of an AI instance name, or null. */
+export function platform_of(name) { return typeof name === 'string' ? INSTANCE_PATTERN.exec(name)?.[1] ?? null : null; }
+
+/** The first unused instance name of a platform: the platform itself, then platform-2, platform-3, …. */
+export function next_instance(platform, taken) {
+  if (!taken.has(platform)) return platform;
+  for (let number = 2; ; number++) if (!taken.has(`${platform}-${number}`)) return `${platform}-${number}`;
+}
+
+/** Supported local clients of an instance's platform. */
+function clients_of(name) { return CLIENTS[platform_of(name)]; }
 // Reasoning effort is a separate CLI argument only for Codex and Claude; agy encodes it in the model name.
 const EFFORT_LEVELS = { codex_cli: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], claude: ['low', 'medium', 'high', 'xhigh', 'max'] };
 const PROFILE_FIELDS = ['adapter', 'executable', 'model', 'effort', 'source_thread_id', 'ipc_directory', 'allowed_tools', 'cwd', 'project_name', 'project_id'];
@@ -63,6 +77,7 @@ export function room_models(home, raw) {
 export function save_launch_settings(home, input) {
   const participants = {};
   for (const [name, profile] of Object.entries(input.participants || {})) {
+    if (platform_of(name) !== name) throw new Error(`本机默认配置按平台保存；${name} 的模型与强度只用于本场讨论`);
     validate_profile(name, profile);
     participants[name] = profile;
   }
@@ -74,8 +89,8 @@ export function save_launch_settings(home, input) {
 
 /** Reject malformed client fields before saving defaults or creating any discussion. */
 function validate_profile(name, profile, binding = false) {
-  if (!CLIENTS[name] || !profile || typeof profile !== 'object' || Array.isArray(profile)) throw new Error(`不支持的软件配置：${name}`);
-  if (profile.adapter && !CLIENTS[name].includes(profile.adapter)) throw new Error(`${name} 的客户端不匹配`);
+  if (!clients_of(name) || !profile || typeof profile !== 'object' || Array.isArray(profile)) throw new Error(`不支持的软件配置：${name}`);
+  if (profile.adapter && !clients_of(name).includes(profile.adapter)) throw new Error(`${name} 的客户端不匹配`);
   // Session bindings and project write access apply to one launch only, never to machine defaults.
   const fields = binding ? [...PROFILE_FIELDS, 'session_id', 'project_access'] : PROFILE_FIELDS;
   if (Object.keys(profile).some(key => !fields.includes(key))) throw new Error('软件配置包含不支持的字段；默认配置不能保存房间或会话绑定');
@@ -119,7 +134,7 @@ function launch_input(input) {
     // P1: a free room is launched once, at creation, from the web page.
     if (value.entry !== 'web' || value.room_id) throw new Error('自由协作房间目前只能在网页创建时启动');
     const members = value.room.members;
-    if (!Array.isArray(members) || !members.length || new Set(members).size !== members.length || members.some(name => !CLIENTS[name])) {
+    if (!Array.isArray(members) || !members.length || new Set(members).size !== members.length || members.some(name => !clients_of(name))) {
       throw new Error('自由协作房间须选择至少 1 位支持自动接入的 AI 成员，且不能重复');
     }
   }
@@ -134,8 +149,8 @@ function launch_input(input) {
 /** Merge machine defaults and explicit room overrides, preserving the selected participants. */
 function launch_config(home, input, room, directory, options) {
   if (room.mode === 'free') return free_launch_config(home, input, room, directory, options);
-  if (!CLIENTS[room.host]) throw new Error('请选择支持全自动讨论的 AI 主持人');
-  if (!room.experts || room.experts[room.host] !== 'cli' || !CLIENTS[room.host]) throw new Error('请将 AI 主持人的参与方式设为本地读写');
+  if (!clients_of(room.host)) throw new Error('请选择支持全自动讨论的 AI 主持人');
+  if (!room.experts || room.experts[room.host] !== 'cli') throw new Error('请将 AI 主持人的参与方式设为本地读写');
   const online = Object.entries(room.experts).filter(([, mode]) => mode !== 'cli').map(([name]) => name);
   if (online.length) throw new Error(`全自动无法接入在线专家：${online.join('、')}。请调整参与方式或改用手动推进`);
   const defaults = options.defaults || launch_settings(home).participants;
@@ -160,10 +175,13 @@ function free_launch_config(home, input, room, directory, options) {
 
 /** Merge one participant's machine defaults with this launch's overrides and check its software. */
 function participant_profile(name, defaults, input, current_host) {
-  const profile = { ...defaults[name], ...input.participants?.[name] };
+  const platform = platform_of(name);
+  // An extra instance starts from its platform's settings but never from another instance's bound session.
+  const { session_id: ignored_session, ...inherited } = name === platform ? {} : input.participants?.[platform] || {};
+  const profile = { ...defaults[platform], ...(name === platform ? {} : defaults[name]), ...inherited, ...input.participants?.[name] };
   for (const field of ['cwd', 'model', 'effort', 'project_name', 'project_id', 'project_access']) if (profile[field] === '') delete profile[field];
   validate_profile(name, profile, true);
-  if (!CLIENTS[name]?.includes(profile.adapter)) throw new Error(`请配置 ${name} 的 CLI / App 客户端`);
+  if (!clients_of(name)?.includes(profile.adapter)) throw new Error(`请配置 ${name} 的 CLI / App 客户端`);
   if (profile.adapter !== 'antigravity' && (!existsSync(profile.executable || '') || !statSync(profile.executable).isFile()
     || (process.platform === 'win32' && !/\.exe$/i.test(profile.executable)))) throw new Error(`${name}：请指定实际原生可执行文件，Windows 使用 .exe`);
   const cwd = profile.cwd || input.cwd;
@@ -200,18 +218,24 @@ function manual_access(path, input, name, token) {
  * Invite (add) or bring back (rejoin) one member of a running free room.
  * The local configuration is written before the website call, so a retry reuses the same credential.
  */
-export async function room_member(home, raw) {
+export async function room_member(home, raw, locked = false) {
   const { input, path } = await free_room_context(home, raw);
   const { action, name } = input;
   const access = input.access || 'runner';
-  if (!['add', 'rejoin'].includes(action) || !CLIENTS[name] || !['runner', 'manual'].includes(access)) {
+  if (!['add', 'rejoin'].includes(action) || !platform_of(name) || (access !== 'manual' && !clients_of(name)) || !['runner', 'manual'].includes(access)) {
     throw new Error('action 须为 add/rejoin，成员须为支持的 AI，接入方式须为 runner/manual');
   }
-  const release = acquire_lock(join(dirname(path), 'configuration-edit'));
+  const release = locked ? () => {} : acquire_lock(join(dirname(path), 'configuration-edit'));
   try {
     const config = configuration_snapshot(path).config;
     const room = await site_request(input.site, `/api/rooms/${input.room_id}`, input.token);
+    if (action === 'add' && input.new_instance) {
+      // A name once bound keeps its session locally, so a new instance never reuses a removed member's name.
+      const taken = new Set([...room.free.members.map(member => member.name), ...Object.keys(config.participants), ...Object.keys(config.members || {})]);
+      return room_member(home, { ...raw, name: next_instance(platform_of(name), taken), new_instance: false }, true);
+    }
     const current = room.free.members.find(member => member.name === name);
+    if (action === 'add' && !current && config.participants[name] && !locked) throw new Error(`${name} 曾在本房间使用过并绑定了会话；请换一个名称`);
     if (action === 'rejoin' && current?.status !== 'away') throw new Error(`${name} 不是离开状态，无需请回`);
     if (action === 'add' && current) throw new Error(`${name} 已是本房间成员；离开的成员请用请回`);
     const manual = action === 'rejoin' ? current.access === 'manual' : access === 'manual';
@@ -496,7 +520,8 @@ async function perform_launch(home, context, options) {
     let room = context.room;
     const free = config.mode === 'free';
     if (!input.room_id) room = await site_request(input.site, '/api/rooms', config.token, free
-      ? { ...input.room, members: input.room.members.map(name => ({ name, adapter: config.participants[name].adapter, token: config.members[name].token })) }
+      ? { ...input.room, members: input.room.members.map(name => ({ name, adapter: config.participants[name].adapter, token: config.members[name].token,
+        session_mode: config.participants[name].session_id ? 'borrowed' : 'new' })) }
       : { ...input.room, runtime_mode: 'automatic' });
     config.room = room.id;
     await verify_control(config, room);

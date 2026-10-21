@@ -25,10 +25,14 @@ const MODES = [{ value: "automatic", icon: "i-lucide-zap", title: "全自动讨�
   { value: "free", icon: "i-lucide-message-circle", title: "自由协作", text: "在网页遥控一个本地 AI 干活" }];
 const current_mode = computed(() => free.value ? "free" : automatic.value ? "automatic" : "manual");
 const selected = computed(() => view.value.experts[EXPERT_CONTAINER] || {});
-const selected_names = computed(() => experts.filter((name) => selected.value[name]));
+// Cards in the library are types; each selected name is one instance, e.g. Claude and Claude-2.
+const selected_names = computed(() => Object.keys(selected.value).filter((name) => selected.value[name])
+  .sort((left, right) => experts.indexOf(bridge.platform_of(left)) - experts.indexOf(bridge.platform_of(right)) || left.localeCompare(right, "en", { numeric: true })));
+/** Instances already taken from one library card. */
+const instance_count = (platform) => selected_names.value.filter((name) => bridge.platform_of(name) === platform).length;
 const library_open = ref(false), library_trigger = ref(null);
 const host = computed(() => value("host"));
-const host_options = computed(() => experts.filter((name) => selected.value[name] === "cli"));
+const host_options = computed(() => selected_names.value.filter((name) => selected.value[name] === "cli"));
 const limit_picker = ref(null);
 const launch_names = computed(() => [...new Set([host.value, ...Object.keys(selected.value)])].filter((name) => bridge.launch_clients[name]));
 const launch_ready = (name) => {
@@ -75,8 +79,12 @@ function expert_status(name) {
 
 /** Admit one library role without toggling an existing participant. */
 function add_expert(name) {
-  if (selected.value[name] || (local.value && !bridge.launch_clients[name])) return;
-  set_expert_mode(name, local.value || bridge.launch_clients[name] ? "cli" : "online");
+  if (local.value && !bridge.launch_clients[name]) return;
+  const mode = local.value || bridge.launch_clients[name] ? "cli" : "online";
+  // A card already in use adds another instance with its own session, model and effort.
+  if (instance_count(name)) bridge.add_instance(EXPERT_CONTAINER, name, mode);
+  else set_expert_mode(name, mode);
+  ensure_host();
   library_open.value = false;
 }
 
@@ -143,8 +151,8 @@ const summary = computed(() => {
                   <li v-for="name in experts" :key="name">
                     <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="sm" class="channel-avatar" :class="bridge.identities[name]?.style" />
                     <span class="create-library-description"><strong>{{ name }}</strong><small>{{ expert_status(name).text }}</small></span>
-                    <button type="button" :disabled="Boolean(selected[name]) || (local && !bridge.launch_clients[name])"
-                      :aria-label="selected[name] ? `${name} 已加入` : `将 ${name} 加入`" @click="add_expert(name)">{{ selected[name] ? '已加入' : local && !bridge.launch_clients[name] ? '仅手动接入' : free ? '选择' : '加入讨论' }}</button>
+                    <button type="button" :disabled="local && !bridge.launch_clients[name]"
+                      :aria-label="`将 ${name} 加入`" @click="add_expert(name)">{{ local && !bridge.launch_clients[name] ? '仅手动接入' : free ? '选择' : '加入讨论' }}</button>
                   </li>
                 </ul>
               </div>

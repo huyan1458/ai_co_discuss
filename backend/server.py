@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 from .free_room import (add_member, after_free_message, authorize_free_write, check_answer, check_proxy, execution_action, free_view,
                         inbox, interrupt_member, member_action, member_values, migrate_free_tables, proxy_member, reserve_execution,
                         room_mode, save_free_room, view_execution)
+from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, is_ai, is_participant
 from .runtime import (authorize_write, begin_write, configure_runtime, event_action,
                      LIMIT_DEFAULTS, LIMITS_SQL, limit_values, limits_view, require_within_limits,
                      list_events, require_control, runtime_view, token_hash)
@@ -41,7 +42,6 @@ MAX_BRIEF_LENGTH = 1600
 MAX_SUMMARY_LENGTH = 1000
 PAGE_SIZE = 20
 UNCATEGORIZED_FOLDER_ID = "__uncategorized__"
-PARTICIPANTS = ["用户", "Codex", "Claude", "Gemini", "DeepSeek", "Qwen"]
 ASSETS = {"/": ("index.html", "text/html"),
           "/app.js": ("app.js", "text/javascript"),
           "/modern.js": ("modern.js", "text/javascript"),
@@ -217,7 +217,7 @@ def update_floor(connection, room_id, payload):
     action = payload.get("action")
     revision = payload.get("revision")
     proxy = actor == room["host"] and room["experts"].get(speaker) == "online"
-    if speaker not in PARTICIPANTS or (actor not in (speaker, "用户") and not proxy):
+    if not is_participant(speaker) or (actor not in (speaker, "用户") and not proxy):
         raise ValueError("请以本人、主持人或用户身份操作被点名者的发言权")
     if action not in ("take", "return") or type(revision) is not int or revision < 0:
         raise ValueError("请提供 take/return 和最新的发言权 revision")
@@ -329,7 +329,8 @@ def topic_values(payload, current=None):
     result["phase"] = payload.get("phase", result["phase"])
     result["experts"] = payload.get("experts", result["experts"])
     experts = result["experts"]
-    if not isinstance(experts, dict) or any(name not in PARTICIPANTS[1:] or mode not in ("cli", "online") for name, mode in experts.items()):
+    if (not isinstance(experts, dict) or len(experts) > MAX_ROOM_AGENTS
+            or any(not is_ai(name) or mode not in ("cli", "online") for name, mode in experts.items())):
         raise ValueError("专家需为有效 AI 身份，参与方式为 cli 或 online")
     if result["host"] != "用户" and experts.get(result["host"]) != "cli":
         raise ValueError("AI 主持人必须是可读可写的本地 CLI 参与者")
@@ -550,7 +551,7 @@ def create_room(connection, payload, control_token=""):
     if payload.get("mode", "brainstorm") not in ("free", "brainstorm"):
         raise ValueError("房间模式须为 free 或 brainstorm")
     free = payload.get("mode") == "free"
-    members = member_values(payload.get("members"), PARTICIPANTS) if free else []
+    members = member_values(payload.get("members")) if free else []
     if free:
         payload = {**payload, "host": "用户", "phase": "discussing", "experts": {member["name"]: "cli" for member in members}}
     settings = topic_values(payload)
@@ -602,7 +603,7 @@ def message_values(payload):
     author = str(payload.get("author", "")).strip()
     text = str(payload.get("text", "")).strip()
     submission_id = submission_value(payload.get("submission_id"))
-    if author not in PARTICIPANTS:
+    if not is_participant(author):
         raise ValueError("请选择有效的发言者")
     if (not text and not attachment_ids(payload)) or len(text) > MAX_TEXT_LENGTH:
         raise ValueError(f"发言需包含正文或附件，正文最多 {MAX_TEXT_LENGTH} 字")
@@ -627,7 +628,7 @@ def attachment_metadata(params):
     if (not isinstance(name, str) or not name.strip() or len(name) > MAX_FILENAME_LENGTH
             or name in (".", "..") or re.search(r"[/\\\x00-\x1f\x7f]", name)):
         raise ValueError(f"文件名需为 1–{MAX_FILENAME_LENGTH} 字，不能包含路径或控制字符")
-    if actor not in PARTICIPANTS:
+    if not is_participant(actor):
         raise ValueError("上传附件须声明有效的 actor")
     return {"file_name": name, "actor": actor, "submission_id": submission_value(params.get("submission_id"))}
 
@@ -735,7 +736,7 @@ def message_details(room, payload):
     author = payload["author"]
     kind = payload.get("kind", "opinion")
     submitted_by = payload.get("submitted_by", author if payload.get("source") == "cli" else "用户")
-    if kind not in ("opinion", "moderation", "receipt") or submitted_by not in PARTICIPANTS:
+    if kind not in ("opinion", "moderation", "receipt") or not is_participant(submitted_by):
         raise ValueError("发言职责或提交者无效")
     if submitted_by not in ("用户", room["host"], author):
         raise ValueError("只有用户或主持人可以代发其他专家的观点")
@@ -1634,7 +1635,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = (view_execution(connection, room_id, execution_id, token) if method == "GET"
                       else execution_action(connection, room_id, execution_id, token, self.read_payload()))
         elif parts[3:] == ["members"] and method == "POST":
-            result = add_member(connection, room_id, token, self.read_payload(), PARTICIPANTS, utc_now())
+            result = add_member(connection, room_id, token, self.read_payload(), utc_now())
         elif len(parts) == 5 and parts[3] == "members" and method == "POST":
             result = member_action(connection, room_id, int(parts[4]), token, self.read_payload())
         elif len(parts) == 6 and parts[3] == "members" and parts[5] == "interrupt" and method == "POST":

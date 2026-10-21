@@ -465,6 +465,37 @@ class OnlineAndLinkTests(FreeRoomTests):
                                                      "members": [{"name": "Claude", "token": uuid.uuid4().hex}]}, uuid.uuid4().hex)[0], 400)
 
 
+class InstanceTests(FreeRoomTests):
+    """Two instances of one platform are separate members with their own credentials and requests."""
+
+    def test_two_claude_instances_are_distinct_members(self):
+        """Claude and Claude-评审 receive separate requests and answer only with their own credential."""
+        reviewer = uuid.uuid4().hex
+        self.assertEqual(self.request(f"{self.path}/members", {"name": "Claude-评审", "adapter": "claude", "token": reviewer}, self.owner)[0], 200)
+        for name in ("Claudex", "Claude-", "Foo-1", "Claude-a b"):
+            self.assertEqual(self.request(f"{self.path}/members", {"name": name, "token": uuid.uuid4().hex}, self.owner)[0], 400, name)
+        self.say("请评审", to=["Claude-评审"])
+        requests = self.request(self.path)[1]["free"]["requests"]
+        self.assertEqual([item["member"] for item in requests], ["Claude-评审"])
+        member_id = next(member["id"] for member in self.request(self.path)[1]["free"]["members"] if member["name"] == "Claude-评审")
+        execution = self.request(f"{self.path}/executions", {"member_id": member_id, "client_id": uuid.uuid4().hex}, self.owner)[1]
+        self.assertEqual(self.answer(execution["id"], token=reviewer)[0], 403)
+        payload = {"author": "Claude-评审", "text": "评审意见", "source": "cli", "submission_id": uuid.uuid4().hex, "execution_id": execution["id"]}
+        self.assertEqual(self.request(f"{self.path}/messages", payload, self.member)[0], 403)
+        status, saved = self.request(f"{self.path}/messages", payload, reviewer)
+        self.assertEqual((status, saved["message"]["author"]), (201, "Claude-评审"))
+
+    def test_discussion_rooms_accept_instances_as_experts_and_host(self):
+        """A brainstorm room may hold two Claude instances, one of them hosting."""
+        status, room = self.request("/api/rooms", {"title": "双 Claude", "goal": "x", "host": "Claude-主持",
+                                                   "experts": {"Claude-主持": "cli", "Claude": "cli", "Codex": "online"}})
+        self.assertEqual(status, 201, room)
+        self.assertEqual(room["floor"]["holder"], "Claude-主持")
+        self.assertEqual(self.request("/api/rooms", {"title": "无效", "goal": "x", "experts": {"Claudex": "cli"}})[0], 400)
+        many = {f"Claude-{number}": "cli" for number in range(13)}
+        self.assertEqual(self.request("/api/rooms", {"title": "过多", "goal": "x", "experts": many})[0], 400)
+
+
 class MigrationTests(unittest.TestCase):
     """The floor trigger is replaced on existing databases, and legacy rooms stay brainstorm rooms."""
 

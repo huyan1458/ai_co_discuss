@@ -24,6 +24,8 @@ MAX_TEXT_LENGTH = 32000
 MAX_SUMMARY_LENGTH = 1000
 MAX_BRIEF_LENGTH = 1600
 PARTICIPANTS = ("用户", "Codex", "Claude", "Gemini", "DeepSeek", "Qwen")
+# A platform is a type; `Claude-评审` is a second Claude instance with its own session. Mirrors backend/identity.py.
+INSTANCE_PATTERN = re.compile(r"(Codex|Claude|Gemini|DeepSeek|Qwen)(?:-[0-9A-Za-z_一-鿿]{1,16})?")
 PHASES = ("preparing", "initial", "discussing", "reviewing", "paused", "concluded")
 KINDS = ("opinion", "moderation", "receipt", "chat")
 OVERVIEW_FIELDS = ("id", "title", "goal", "host", "phase", "focus", "message_count",
@@ -88,6 +90,18 @@ def positive_int(value):
     return number
 
 
+def ai_name(value):
+    """Accept an AI platform or a named instance of one, such as Claude-评审."""
+    if not INSTANCE_PATTERN.fullmatch(value):
+        raise argparse.ArgumentTypeError("须为 Codex/Claude/Gemini/DeepSeek/Qwen，或平台名-后缀（后缀 1–16 个字母、数字、下划线或汉字）")
+    return value
+
+
+def participant(value):
+    """Accept the user or any AI instance."""
+    return value if value == PARTICIPANTS[0] else ai_name(value)
+
+
 def room_id(value):
     """Accept an existing room identifier without allowing path components."""
     if not re.fullmatch(r"[A-Za-z0-9_-]+", value):
@@ -124,7 +138,7 @@ def add_common(parser):
     """Allow common flags before or after subcommands without shared state."""
     options = {"default": argparse.SUPPRESS}
     parser.add_argument("--site", help="HTTP 服务地址；未指定时读 DISCUSS_URL", **options)
-    parser.add_argument("--as", dest="actor", choices=PARTICIPANTS,
+    parser.add_argument("--as", dest="actor", type=participant,
                         help="业务写入的声明操作者；不是登录认证；api 使用原始请求体", **options)
     parser.add_argument("-o", "--output", choices=("json", "text"),
                         help="默认 json；成功 stdout，错误 stderr", **options)
@@ -145,7 +159,7 @@ def add_topic(parser, create=False):
     """Expose topic fields, using a full experts map to avoid hidden merging."""
     for field in ("title", "goal", "user_request", "background", "boundaries", "focus"):
         add_text(parser, field.replace("_", "-"), required=create and field == "title")
-    parser.add_argument("--host", choices=PARTICIPANTS, default=argparse.SUPPRESS,
+    parser.add_argument("--host", type=participant, default=argparse.SUPPRESS,
                         help="主持人；创建时默认 --as 操作者")
     parser.add_argument("--phase", choices=PHASES, default=argparse.SUPPRESS)
     parser.add_argument("--experts-file", default=argparse.SUPPRESS,
@@ -193,8 +207,8 @@ def message_commands(subcommands, registry):
     paging.add_argument("--page", type=positive_int, default=1)
     paging.add_argument("--after", type=non_negative_int, help="只读此消息编号之后的内容；按 next_after 续读")
     listing.add_argument("--query", help="关键词或消息编号")
-    listing.add_argument("--author", choices=PARTICIPANTS)
-    listing.add_argument("--mention", choices=PARTICIPANTS)
+    listing.add_argument("--author", type=participant)
+    listing.add_argument("--mention", type=participant)
     listing.add_argument("--kind", choices=KINDS, help="筛选观点、主持说明或运行回执")
     listing.add_argument("--submission-id", type=submission_id, help="按提交编号精确查询结果")
     view = add_leaf(subcommands, registry, "message view", "读取一条精确原文与来源", True)
@@ -204,12 +218,12 @@ def message_commands(subcommands, registry):
     post.add_argument("--attachment", action="append", type=attachment_id, default=[],
                       help="已上传附件 ID；可重复指定，最多 10 个")
     add_text(post, "summary")
-    post.add_argument("--summary-by", choices=PARTICIPANTS, help="摘要撰写者：原作者或实际操作者；默认操作者")
-    post.add_argument("--author", choices=PARTICIPANTS, help="原作者；默认等于 --as；不同即代发")
+    post.add_argument("--summary-by", type=participant, help="摘要撰写者：原作者或实际操作者；默认操作者")
+    post.add_argument("--author", type=participant, help="原作者；默认等于 --as；不同即代发")
     post.add_argument("--kind", choices=KINDS, default="opinion")
     post.add_argument("--turn", type=positive_int, help="所回答的安排编号，仅 opinion 可用")
     post.add_argument("--execution", type=positive_int, help="自由房间：本次执行编号，仅 chat 可用；执行失效后不能改作普通发言")
-    post.add_argument("--to", choices=PARTICIPANTS[1:], action="append", default=[],
+    post.add_argument("--to", type=ai_name, action="append", default=[],
                       help="自由房间主持人：在回答中点名派活的成员，可重复；其他成员不能使用")
     post.add_argument("--request", type=positive_int, action="append", default=[],
                       help="自由房间手动接入成员：本次回答完成的请求编号，可重复；不能与 --execution 同用")
@@ -249,7 +263,7 @@ def turn_commands(subcommands, registry):
         elif action not in ("create", "current", "continue"):
             parser.add_argument("id", type=positive_int, help="安排编号")
         if action == "create":
-            parser.add_argument("--expert", choices=PARTICIPANTS[1:], help="单个安排的专家；与 --plan-file 二选一")
+            parser.add_argument("--expert", type=ai_name, help="单个安排的专家；与 --plan-file 二选一")
             add_text(parser, "question")
             parser.add_argument("--plan-file", help='整轮安排 JSON 数组 [{"expert":"Claude","question":"…"}]，按顺序接力；- 从标准输入读取')
             parser.add_argument("--submission-id", type=submission_id, required=True,
@@ -270,7 +284,7 @@ def floor_commands(subcommands, registry):
     add_leaf(subcommands, registry, "floor view", "读取当前持有者、下一位与版本", True)
     for action in ("take", "return"):
         parser = add_leaf(subcommands, registry, f"floor {action}", "领取或归还发言权", True)
-        parser.add_argument("--speaker", choices=PARTICIPANTS, help="实际持有者；代操作时显式指定，默认 --as")
+        parser.add_argument("--speaker", type=participant, help="实际持有者；代操作时显式指定，默认 --as")
         parser.add_argument("--revision", type=non_negative_int, required=True, help="刚读取的发言权版本；变化后需重新核对")
 
 
@@ -375,7 +389,7 @@ def topic_payload(args):
             payload[field] = getattr(args, field)
     if hasattr(args, "experts_file"):
         experts = read_object(args.experts_file)
-        if any(name not in PARTICIPANTS[1:] or mode not in ("cli", "online")
+        if any(not INSTANCE_PATTERN.fullmatch(name) or mode not in ("cli", "online")
                for name, mode in experts.items()):
             raise CliError("专家映射的名称必须是有效 AI，模式必须是 cli 或 online")
         payload["experts"] = experts
