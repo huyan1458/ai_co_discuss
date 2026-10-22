@@ -264,6 +264,11 @@ function format_elapsed(seconds) {
   return `${Math.floor(seconds / 3600)}小时${Math.floor((seconds % 3600) / 60)}分${String(seconds % 60).padStart(2, "0")}秒`;
 }
 const pending_duration = computed(() => format_elapsed(pending_seconds.value));
+/** A reply's recorded time: the discussion turn's timing, or in a free room the execution that delivered it. */
+function message_elapsed(message) {
+  if (message.elapsed_seconds != null) return message.elapsed_seconds;
+  return execution_reports.value.get(message.id)?.find((report) => report.answer_id === message.id)?.seconds ?? null;
+}
 const identities = computed(() => ["用户", ...Object.keys(room.value?.experts || {}).filter(name => room.value.experts[name] === "online")].map(name => {
   const identity = bridge.identities[name];
   return { label: bridge.display_name(name), value: name,
@@ -820,7 +825,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
                 <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><span class="channel-message-round">{{ message_round_labels.get(message.id) }}</span><UBadge size="xs" color="neutral" variant="soft" class="channel-source">{{ bridge.sources[message.source] }}</UBadge><UBadge v-if="message.kind === 'moderation'" size="xs" color="neutral" variant="soft" class="channel-source">主持人</UBadge><UBadge v-if="message.kind === 'receipt'" size="xs" color="neutral" variant="soft" class="channel-source">运行回执</UBadge><UBadge v-if="waits_for_host(message)" size="xs" color="warning" variant="soft" class="channel-source" :title="speaking_turn ? `${bridge.display_name(speaking_turn.expert)} 说完后交给主持人处理` : '等待主持人处理'">待主持人处理</UBadge><UBadge v-for="badge in request_badges.get(message.id) || []" :key="badge.key" size="xs" :color="badge.color" variant="soft" class="channel-source" :title="badge.title">{{ badge.label }}</UBadge></div>
                 <div class="channel-message-provenance"><time :title="new Date(message.created_at).toLocaleString('zh-CN')">{{ bridge.format_time(message.created_at) }}</time><UButton :label="`#${message.id}`" color="neutral" variant="link" size="xs" :aria-label="`查看原文 #${message.id}`" class="channel-message-id" @click="emit('detail', message.id)" /><span v-if="message.submitted_by && message.submitted_by !== message.author && !(message.source === 'proxy' && message.submitted_by === '用户')">{{ bridge.display_name(message.submitted_by) }} 代发</span><span v-if="message.turn_id">回答安排 #{{ message.turn_id }}</span></div>
               </div>
-              <span class="channel-message-provenance channel-message-elapsed">耗时 {{ format_elapsed(message.elapsed_seconds) }}</span>
+              <span v-if="message_elapsed(message) !== null" class="channel-message-provenance channel-message-elapsed">耗时 {{ format_elapsed(message_elapsed(message)) }}</span>
             </div>
             <UButton v-if="message.reply_to" :label="`回复 #${message.reply_to}`" icon="i-lucide-corner-up-left" variant="link" color="neutral" size="xs" class="channel-message-reference" :aria-label="`回复 #${message.reply_to} 查看原文`" @click="emit('detail', message.reply_to)" />
             <details v-if="message.kind === 'receipt'" class="channel-receipt">
