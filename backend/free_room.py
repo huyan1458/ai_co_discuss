@@ -408,7 +408,7 @@ def convert_suggestion(connection, room_id, token, payload):
     if target["status"] != "active":
         raise FileExistsError("该成员已离开，不能转为请求")
     if connection.execute("SELECT 1 FROM room_directory WHERE room_id=? AND archived=1", (room_id,)).fetchone():
-        raise ValueError("频道已存档；恢复后才能继续协作")
+        raise ValueError("房间已存档；恢复后才能继续协作")
     previous = connection.execute("SELECT * FROM member_requests WHERE message_id=? AND member_id=?", (message_id, member_id)).fetchone()
     if previous:
         return {"request": dict(previous), "duplicate": True}
@@ -566,7 +566,7 @@ def reserve_execution(connection, room_id, token, payload):
         return execution_detail(connection, previous)
     expire_executions(connection, room_id)
     if connection.execute("SELECT archived FROM room_directory WHERE room_id=?", (room_id,)).fetchone()[0]:
-        raise FileExistsError("频道已存档，不再投递")
+        raise FileExistsError("房间已存档，不再投递")
     member = connection.execute("SELECT * FROM room_members WHERE room_id=? AND id=? AND status='active' AND access='runner'",
                                 (room_id, payload.get("member_id"))).fetchone()
     if not member:

@@ -384,7 +384,7 @@ def update_topic(connection, room_id, payload):
     require_host(room, payload)
     settings = topic_values(payload, room)
     if room["archived"] and settings["phase"] not in ("paused", "concluded"):
-        raise ValueError("请先恢复已存档频道，再调整讨论阶段")
+        raise ValueError("请先恢复已存档房间，再调整讨论阶段")
     turn = room["current_turn"]
     if turn and turn["status"] in ("pending", "notified"):
         if settings["phase"] == "concluded" or turn["expert"] not in settings["experts"]:
@@ -510,7 +510,7 @@ def manage_room(connection, room_id, action, payload):
         rooms = [item["id"] for item in list_rooms(connection)["rooms"] if item["id"] != room_id]
         before = payload.get("before_id")
         if before is not None and before not in rooms:
-            raise ValueError("目标频道不存在或与当前频道相同")
+            raise ValueError("目标房间不存在或与当前房间相同")
         rooms.insert(rooms.index(before) if before else len(rooms), room_id)
         connection.executemany("UPDATE room_directory SET position=? WHERE room_id=?", enumerate(rooms, 1))
     elif action == "folder":
@@ -526,7 +526,7 @@ def manage_room(connection, room_id, action, payload):
         connection.execute("UPDATE room_directory SET archived=? WHERE room_id=?", (int(action == "archive"), room_id))
     elif action == "delete":
         if payload.get("confirm_title") != room["title"]:
-            raise ValueError("请输入完整频道名称确认删除")
+            raise ValueError("请输入完整房间名称确认删除")
         delete_room_records(connection, room_id)
         return {"deleted": True, "id": room_id}
     else:
@@ -833,7 +833,7 @@ def append_free_message(connection, room, payload, actor):
             raise FileExistsError("这个提交编号已被另一条内容使用，请为新发言生成新编号")
         return {"message": previous, "duplicate": True}
     if room["archived"]:
-        raise ValueError("频道已存档；恢复后才能继续协作")
+        raise ValueError("房间已存档；恢复后才能继续协作")
     check_message_references(connection, room_id, expected)
     check_message_attachments(connection, room_id, submitted_by, identifiers)
     if proxy:
@@ -1146,7 +1146,7 @@ def room_text(connection, room_id, params):
     if room["phase"] == "initial":
         content.append("本阶段先独立形成详细观点：仅阅读目标、背景、边界和自己的已有讨论；暂不阅读他人观点或主持总结。提交后再交叉阅读。这是参与约定，不是权限隔离。")
     if room["archived"]:
-        content.append("频道已存档，记录仍可查阅；先恢复频道，再由用户明确恢复讨论阶段。")
+        content.append("房间已存档，记录仍可查阅；先恢复房间，再由用户明确恢复讨论阶段。")
     if room["phase"] in ("paused", "concluded"):
         content.append("停止处理发言安排，取消本讨论自己的后台任务并核对实际状态；非必要不生成回执，正常停止无需回执。不要因旧通知恢复讨论。")
     if turn:

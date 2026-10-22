@@ -478,7 +478,7 @@ async function update_topic(database, room_id, payload) {
   const room = await require_room(database, room_id);
   require_host(room, payload);
   const settings = topic_values(payload, room);
-  if (room.archived && !["paused", "concluded"].includes(settings.phase)) throw new HttpError(400, "请先恢复已存档频道，再调整讨论阶段");
+  if (room.archived && !["paused", "concluded"].includes(settings.phase)) throw new HttpError(400, "请先恢复已存档房间，再调整讨论阶段");
   const turn = room.current_turn;
   if (turn && ["pending", "notified"].includes(turn.status) && (settings.phase === "concluded" || !settings.experts[turn.expert])) {
     throw new HttpError(400, "请先完成或取消当前发言安排");
@@ -497,7 +497,7 @@ async function update_topic(database, room_id, payload) {
     ]);
   } catch (error) {
     if (String(error).includes("open_turn")) throw new HttpError(400, "请先完成或取消当前发言安排");
-    if (String(error).includes("topic_archived")) throw new HttpError(400, "请先恢复已存档频道，再调整讨论阶段");
+    if (String(error).includes("topic_archived")) throw new HttpError(400, "请先恢复已存档房间，再调整讨论阶段");
     throw error;
   }
   return require_room(database, room_id);
@@ -664,7 +664,7 @@ async function manage_room(database, room_id, action, payload) {
   if (action === "move") {
     const rooms = (await query_rooms(database, {})).rooms.map((item) => item.id).filter((id) => id !== room_id);
     const before = payload.before_id ?? null;
-    if (before !== null && !rooms.includes(before)) throw new HttpError(400, "目标频道不存在或与当前频道相同");
+    if (before !== null && !rooms.includes(before)) throw new HttpError(400, "目标房间不存在或与当前房间相同");
     rooms.splice(before ? rooms.indexOf(before) : rooms.length, 0, room_id);
     statements.push(...rooms.map((id, index) => database.prepare("UPDATE room_directory SET position=? WHERE room_id=?").bind(index + 1, id)));
   } else if (action === "folder") {
@@ -677,7 +677,7 @@ async function manage_room(database, room_id, action, payload) {
     if (action === "archive" && room.phase !== "concluded") statements.push(...topic_statements(database, room_id, { ...room, phase: "paused" }));
     statements.push(database.prepare("UPDATE room_directory SET archived=? WHERE room_id=?").bind(Number(action === "archive"), room_id));
   } else if (action === "delete") {
-    if (payload.confirm_title !== room.title) throw new HttpError(400, "请输入完整频道名称确认删除");
+    if (payload.confirm_title !== room.title) throw new HttpError(400, "请输入完整房间名称确认删除");
     const queries = [
       "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?",
       "DELETE FROM room_members WHERE room_id=?", "DELETE FROM room_modes WHERE room_id=?",
@@ -692,7 +692,7 @@ async function manage_room(database, room_id, action, payload) {
     statements.push(...queries.map((query) => database.prepare(`${query} AND EXISTS (SELECT 1 FROM rooms WHERE id=? AND title=?)`).bind(room_id, room_id, payload.confirm_title)));
   } else throw new HttpError(404, "地址不存在");
   const results = await database.batch(statements);
-  if (action === "delete" && !results.at(-1).meta.changes) throw new HttpError(400, "频道名称已变化，请重新确认删除");
+  if (action === "delete" && !results.at(-1).meta.changes) throw new HttpError(400, "房间名称已变化，请重新确认删除");
   return action === "delete" ? { deleted: true, id: room_id } : require_room(database, room_id);
 }
 
@@ -1161,7 +1161,7 @@ async function room_text(database, room_id, params) {
   const turn = room.current_turn;
   content.push(`发言权：${room.floor.holder ? `${room.floor.holder} 持有` : `待 ${room.floor.next_speaker} 领取`}；版本 ${room.floor.revision}。用户本人可随时留言，AI 发言前须领取。`);
   if (room.phase === "initial") content.push("本阶段先独立形成详细观点：仅阅读目标、背景、边界和自己的已有讨论；暂不阅读他人观点或主持总结。提交后再交叉阅读。这是参与约定，不是权限隔离。");
-  if (room.archived) content.push("频道已存档，记录仍可查阅；先恢复频道，再由用户明确恢复讨论阶段。");
+  if (room.archived) content.push("房间已存档，记录仍可查阅；先恢复房间，再由用户明确恢复讨论阶段。");
   if (["paused", "concluded"].includes(room.phase)) content.push("停止处理发言安排，取消本讨论自己的后台任务并核对实际状态；非必要不生成回执，正常停止无需回执。不要因旧通知恢复讨论。");
   if (turn) content.push(`当前安排 #${turn.id}：${turn.expert} · ${turn_status_label(turn, room)}`, `待回应问题：${turn.question}`, `安排详情：${base}/turns/${turn.id}`);
   if (room.queued_turns.length) content.push(`本轮排队：${room.queued_turns.map((item) => `#${item.id} ${item.expert}`).join(" → ")}`);
@@ -1930,7 +1930,7 @@ async function free_reserve(database, room_id, token, payload) {
   const previous = await lookup();
   if (previous) return free_execution_detail(database, previous);
   await database.batch(await free_expire_statements(database, room_id));
-  if ((await database.prepare("SELECT archived FROM room_directory WHERE room_id=?").bind(room_id).first()).archived) throw new HttpError(409, "频道已存档，不再投递");
+  if ((await database.prepare("SELECT archived FROM room_directory WHERE room_id=?").bind(room_id).first()).archived) throw new HttpError(409, "房间已存档，不再投递");
   const member = await database.prepare("SELECT * FROM room_members WHERE room_id=? AND id=? AND status='active' AND access='runner'").bind(room_id, payload.member_id ?? 0).first();
   if (!member) throw new HttpError(404, "成员不存在、已离开或为手动接入");
   if (await database.prepare(`SELECT 1 FROM member_executions WHERE member_id=? AND ${FREE_LIVE}`).bind(member.id).first()) throw new HttpError(409, "该成员已有进行中的执行；同一会话不并发续接");
@@ -2156,7 +2156,7 @@ async function free_convert_suggestion(database, room_id, token, payload) {
     WHERE source.room_id=? AND m.room_id=? AND s.message_id=? AND s.member_id=?`).bind(room_id, room_id, message_id, member_id).first();
   if (!target) throw new HttpError(404, "这条消息没有该成员的回应建议");
   if (target.status !== "active") throw new HttpError(409, "该成员已离开，不能转为请求");
-  if (await database.prepare("SELECT 1 FROM room_directory WHERE room_id=? AND archived=1").bind(room_id).first()) throw new HttpError(400, "频道已存档；恢复后才能继续协作");
+  if (await database.prepare("SELECT 1 FROM room_directory WHERE room_id=? AND archived=1").bind(room_id).first()) throw new HttpError(400, "房间已存档；恢复后才能继续协作");
   const lookup = () => database.prepare("SELECT * FROM member_requests WHERE message_id=? AND member_id=?").bind(message_id, member_id).first();
   const previous = await lookup();
   if (previous) return { request: previous, duplicate: true };
@@ -2193,11 +2193,11 @@ async function append_free_message(database, room, payload, actor) {
   const lookup = () => database.prepare(`${MESSAGE_QUERY} WHERE room_id=? AND submission_id=?`).bind(room_id, values.submission_id).first();
   const previous = await lookup();
   if (previous) { await attach_message_files(database, [previous]); check_retry(previous, expected); return { message: previous, duplicate: true }; }
-  if (room.archived) throw new HttpError(400, "频道已存档；恢复后才能继续协作");
+  if (room.archived) throw new HttpError(400, "房间已存档；恢复后才能继续协作");
   await check_message_references(database, room_id, expected);
   await check_message_attachments(database, room_id, expected);
   const message_id = "(SELECT id FROM messages WHERE room_id=? AND submission_id=?)";
-  if (proxy && room.archived) throw new HttpError(400, "频道已存档；恢复后才能继续协作");
+  if (proxy && room.archived) throw new HttpError(400, "房间已存档；恢复后才能继续协作");
   const key = [room_id, values.submission_id];
   let guard = { condition: "NOT EXISTS(SELECT 1 FROM room_directory WHERE room_id=? AND archived=1)", values: [room_id] };
   const effects = [];

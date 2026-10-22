@@ -78,7 +78,7 @@ test("standard ZIP reader recovers complete Unicode JSON, transcript and referen
   for (const reference of ["代发/提交者：Codex", "简述（作者：Gemini）", "#message-1", "#turn-7", "#message-46"])
     assert.ok(markdown.includes(reference), reference);
   assert.ok(markdown.includes("````text"));
-  assert.ok(decoded["备份说明.txt"].includes("导入频道"));
+  assert.ok(decoded["备份说明.txt"].includes("导入房间"));
 });
 
 /** Exercise the real shared download action without relying on either UI theme. */

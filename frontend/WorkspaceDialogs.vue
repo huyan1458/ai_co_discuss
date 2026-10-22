@@ -11,15 +11,15 @@ watch(mode, (value) => { if (value) rendered_mode.value = value; });
 const { view, bridge, field, act, pending } = inject("discussion");
 const open = computed({ get: () => Boolean(mode.value), set: (value) => { if (!value) mode.value = ""; } });
 const titles = { settings: "外观设置", create: "新建房间", folder: "新建文件夹", "rename-folder": "重命名文件夹", "delete-folder": "移除文件夹", edit: "编辑议题", schedule: "安排专家发言", message: "消息原文" };
-Object.assign(titles, { rename: "重命名频道", archive: "存档频道", restore: "恢复频道", delete: "删除频道" });
+Object.assign(titles, { rename: "重命名房间", archive: "存档房间", restore: "恢复房间", delete: "删除房间" });
 const descriptions = { settings: "选择适合你的讨论界面。", create: "组织一场讨论，或邀请 AI 一起完成任务。", edit: "维护目标、参与身份与当前进度。", schedule: "只填写本轮问题，专家按需阅读讨论资料。", message: "保留作者、来源、提交人和引用关系。" };
-Object.assign(descriptions, { rename: "名称变化不会影响讨论记录和阅读地址。", archive: "保留所有记录，并暂停尚未收束的讨论。", restore: "移回讨论列表，保持当前讨论阶段。", delete: "永久删除频道及其所有记录，无法撤销。" });
-titles.archives = "已存档频道";
-descriptions.archives = "查看记录、恢复频道或彻底删除。";
+Object.assign(descriptions, { rename: "名称变化不会影响讨论记录和阅读地址。", archive: "保留所有记录，并暂停尚未收束的讨论。", restore: "移回讨论列表，保持当前讨论阶段。", delete: "永久删除房间及其所有记录，无法撤销。" });
+titles.archives = "已存档房间";
+descriptions.archives = "查看记录、恢复房间或彻底删除。";
 const archived_rooms = computed(() => view.value.rooms.filter((room) => room.archived));
 const archive_query = ref("");
 const archive_content = ref("all");
-const archive_content_options = [{ label: "全部频道", value: "all" }, { label: "有消息", value: "messages" }, { label: "无消息", value: "empty" }];
+const archive_content_options = [{ label: "全部房间", value: "all" }, { label: "有消息", value: "messages" }, { label: "无消息", value: "empty" }];
 const archive_results = computed(() => filter_archived_channels(view.value.rooms,
   { query: archive_query.value, content: archive_content.value }));
 const archive_delete_id = ref(null);
@@ -113,7 +113,7 @@ const detail = ref(null);
 const detail_error = ref("");
 const turn_expert = field("turn-expert-select");
 const turn_question = field("turn-question-input");
-const themes = [{ value: "channel", title: "协作频道", description: "深灰界面 · 频道导航 · 成员侧栏" }, { value: "channel-light", title: "协作频道 · 浅色", description: "纯白界面 · 中性灰阶 · 清晰阅读" }];
+const themes = [{ value: "channel", title: "协作频道", description: "深灰界面 · 房间导航 · 成员侧栏" }, { value: "channel-light", title: "协作频道 · 浅色", description: "纯白界面 · 中性灰阶 · 清晰阅读" }];
 
 /** Map the topic form onto the existing controller's draft fields. */
 function form_id(key) {
@@ -186,14 +186,14 @@ async function follow_reply() {
     <template #body>
       <section v-if="rendered_mode === 'archives'" class="channel-archive-manager">
         <div class="channel-archive-toolbar">
-          <UInput v-model="archive_query" icon="i-lucide-search" placeholder="搜索已存档频道" aria-label="搜索已存档频道" class="channel-archive-search" />
-          <USelect v-model="archive_content" :items="archive_content_options" icon="i-lucide-list-filter" aria-label="筛选频道内容" />
+          <UInput v-model="archive_query" icon="i-lucide-search" placeholder="搜索已存档房间" aria-label="搜索已存档房间" class="channel-archive-search" />
+          <USelect v-model="archive_content" :items="archive_content_options" icon="i-lucide-list-filter" aria-label="筛选房间内容" />
           <UButton :label="`全部删除（${archive_results.length}）`" icon="i-lucide-trash-2" color="error" variant="soft" size="sm" class="channel-archive-delete-all" :disabled="!archive_results.length" @click="archive_delete_all = true; archive_delete_id = null" />
         </div>
-        <div v-if="archive_delete_all && archive_results.length" class="channel-archive-confirm channel-archive-bulk" role="alert"><span>将永久删除当前列表中的 {{ archive_results.length }} 个频道及其全部记录，无法撤销。</span><UButton label="取消" color="neutral" variant="ghost" size="xs" @click="archive_delete_all = false" /><UButton label="全部删除" color="error" size="xs" @click="delete_all_archives" /></div>
+        <div v-if="archive_delete_all && archive_results.length" class="channel-archive-confirm channel-archive-bulk" role="alert"><span>将永久删除当前列表中的 {{ archive_results.length }} 个房间及其全部记录，无法撤销。</span><UButton label="取消" color="neutral" variant="ghost" size="xs" @click="archive_delete_all = false" /><UButton label="全部删除" color="error" size="xs" @click="delete_all_archives" /></div>
         <p v-if="view.directory_error" role="alert" class="channel-directory-error">{{ view.directory_error }}</p>
         <div class="channel-archive-results">
-          <ul v-if="archive_results.length" class="channel-archive-list" aria-label="已存档频道列表">
+          <ul v-if="archive_results.length" class="channel-archive-list" aria-label="已存档房间列表">
           <li v-for="room in archive_results" :key="room.id" class="channel-archive-item">
             <div class="channel-archive-row">
               <div class="channel-archive-info"><button class="channel-archive-title" :title="room.title" :disabled="Boolean(pending)" @click="read_archive(room)">{{ room.title }}</button><small><span v-if="room.created_at">创建于 <time :datetime="room.created_at">{{ archive_created(room.created_at) }}</time> · </span>{{ room.message_count }} 条消息</small></div>
@@ -205,11 +205,11 @@ async function follow_reply() {
             <div v-if="archive_delete_id === room.id" class="channel-archive-confirm channel-archive-bulk" role="alert"><span>永久删除「{{ room.title }}」及其全部记录，无法撤销。</span><UButton label="取消" color="neutral" variant="ghost" size="xs" @click="archive_delete_id = null" /><UButton label="删除" color="error" size="xs" :disabled="archive_busy(room)" @click="delete_archive" /></div>
           </li>
           </ul>
-        <p v-else class="channel-archive-empty">{{ archived_rooms.length ? '没有匹配的存档频道' : '暂无已存档频道' }}</p>
+        <p v-else class="channel-archive-empty">{{ archived_rooms.length ? '没有匹配的存档房间' : '暂无已存档房间' }}</p>
         </div>
       </section>
       <form v-else-if="rendered_mode === 'delete-folder'" class="dialog-form" @submit.prevent="remove_folder">
-        <p class="fine-print">移除「{{ targetFolder?.name }}」后，频道不再归属文件夹，所有消息和存档状态都会保留。</p>
+        <p class="fine-print">移除「{{ targetFolder?.name }}」后，房间不再归属文件夹，所有消息和存档状态都会保留。</p>
         <div class="dialog-actions"><UButton label="取消" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" label="移除文件夹" color="neutral" variant="solid" /></div>
       </form>
       <form v-else-if="folder_dialog" class="dialog-form" @submit.prevent="save_folder">
@@ -221,7 +221,7 @@ async function follow_reply() {
         <p v-if="rendered_mode === 'archive'" class="fine-print">存档后可在侧栏「已存档」中查阅与恢复。已有发言安排会保留；专家需在下次检查时停止自己的定时任务。</p>
         <p v-if="rendered_mode === 'restore'" class="fine-print">恢复不会自动继续讨论；需要继续时，在主持设置中调整阶段。</p>
         <p v-if="rendered_mode === 'delete'" class="fine-print">消息、共识和发言安排将一起删除，无法撤销。</p>
-        <UFormField v-if="rendered_mode === 'rename'" label="频道名称" required><UInput v-model="management_title" autofocus :maxlength="80" required class="w-full" autocomplete="off" /></UFormField>
+        <UFormField v-if="rendered_mode === 'rename'" label="房间名称" required><UInput v-model="management_title" autofocus :maxlength="80" required class="w-full" autocomplete="off" /></UFormField>
         <div class="dialog-actions"><UButton label="取消" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" :label="rendered_mode === 'delete' ? '永久删除' : rendered_mode === 'rename' ? '保存名称' : titles[rendered_mode]" :color="rendered_mode === 'delete' ? 'error' : 'primary'" :loading="pending === 'manage_channel'" :disabled="rendered_mode === 'rename' && !management_title.trim()" /></div>
       </form>
       <div v-else-if="rendered_mode === 'settings'">

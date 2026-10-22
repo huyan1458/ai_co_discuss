@@ -47424,7 +47424,7 @@ var PK = /*#__PURE__*/ EH({
 			])])]);
 		};
 	}
-}, [["__scopeId", "data-v-fc83f78b"]]), Qq = {
+}, [["__scopeId", "data-v-4231d551"]]), Qq = {
 	key: 0,
 	class: "channel-archive-manager"
 }, $q = { class: "channel-archive-toolbar" }, eJ = {
@@ -47438,7 +47438,7 @@ var PK = /*#__PURE__*/ EH({
 }, nJ = { class: "channel-archive-results" }, rJ = {
 	key: 0,
 	class: "channel-archive-list",
-	"aria-label": "已存档频道列表"
+	"aria-label": "已存档房间列表"
 }, iJ = { class: "channel-archive-row" }, aJ = { class: "channel-archive-info" }, oJ = [
 	"title",
 	"disabled",
@@ -47548,10 +47548,10 @@ var PK = /*#__PURE__*/ EH({
 			message: "消息原文"
 		};
 		Object.assign(f, {
-			rename: "重命名频道",
-			archive: "存档频道",
-			restore: "恢复频道",
-			delete: "删除频道"
+			rename: "重命名房间",
+			archive: "存档房间",
+			restore: "恢复房间",
+			delete: "删除房间"
 		});
 		let p = {
 			settings: "选择适合你的讨论界面。",
@@ -47564,11 +47564,11 @@ var PK = /*#__PURE__*/ EH({
 			rename: "名称变化不会影响讨论记录和阅读地址。",
 			archive: "保留所有记录，并暂停尚未收束的讨论。",
 			restore: "移回讨论列表，保持当前讨论阶段。",
-			delete: "永久删除频道及其所有记录，无法撤销。"
-		}), f.archives = "已存档频道", p.archives = "查看记录、恢复频道或彻底删除。";
+			delete: "永久删除房间及其所有记录，无法撤销。"
+		}), f.archives = "已存档房间", p.archives = "查看记录、恢复房间或彻底删除。";
 		let m = Z(() => o.value.rooms.filter((e) => e.archived)), h = /* @__PURE__ */ F(""), g = /* @__PURE__ */ F("all"), _ = [
 			{
-				label: "全部频道",
+				label: "全部房间",
 				value: "all"
 			},
 			{
@@ -47694,7 +47694,7 @@ var PK = /*#__PURE__*/ EH({
 		], ue = Z(() => le.filter((e) => e.key !== "execution_minutes" || o.value.room?.runtime?.mode === "automatic")), de = /* @__PURE__ */ F(null), fe = /* @__PURE__ */ F(null), j = /* @__PURE__ */ F(null), pe = /* @__PURE__ */ F(""), me = c("turn-expert-select"), he = c("turn-question-input"), ge = [{
 			value: "channel",
 			title: "协作频道",
-			description: "深灰界面 · 频道导航 · 成员侧栏"
+			description: "深灰界面 · 房间导航 · 成员侧栏"
 		}, {
 			value: "channel-light",
 			title: "协作频道 · 浅色",
@@ -47772,8 +47772,8 @@ var PK = /*#__PURE__*/ EH({
 							modelValue: h.value,
 							"onUpdate:modelValue": c[0] ||= (e) => h.value = e,
 							icon: "i-lucide-search",
-							placeholder: "搜索已存档频道",
-							"aria-label": "搜索已存档频道",
+							placeholder: "搜索已存档房间",
+							"aria-label": "搜索已存档房间",
 							class: "channel-archive-search"
 						}, null, 8, ["modelValue"]),
 						q(S, {
@@ -47781,7 +47781,7 @@ var PK = /*#__PURE__*/ EH({
 							"onUpdate:modelValue": c[1] ||= (e) => g.value = e,
 							items: _,
 							icon: "i-lucide-list-filter",
-							"aria-label": "筛选频道内容"
+							"aria-label": "筛选房间内容"
 						}, null, 8, ["modelValue"]),
 						q(le, {
 							label: `全部删除（${v.value.length}）`,
@@ -47797,7 +47797,7 @@ var PK = /*#__PURE__*/ EH({
 						}, null, 8, ["label", "disabled"])
 					]),
 					b.value && v.value.length ? (U(), W("div", eJ, [
-						K("span", null, "将永久删除当前列表中的 " + P(v.value.length) + " 个频道及其全部记录，无法撤销。", 1),
+						K("span", null, "将永久删除当前列表中的 " + P(v.value.length) + " 个房间及其全部记录，无法撤销。", 1),
 						q(le, {
 							label: "取消",
 							color: "neutral",
@@ -47873,12 +47873,12 @@ var PK = /*#__PURE__*/ EH({
 							disabled: w(e),
 							onClick: E
 						}, null, 8, ["disabled"])
-					])) : Y("", !0)]))), 128))])) : (U(), W("p", dJ, P(m.value.length ? "没有匹配的存档频道" : "暂无已存档频道"), 1))])
+					])) : Y("", !0)]))), 128))])) : (U(), W("p", dJ, P(m.value.length ? "没有匹配的存档房间" : "暂无已存档房间"), 1))])
 				])) : a.value === "delete-folder" ? (U(), W("form", {
 					key: 1,
 					class: "dialog-form",
 					onSubmit: uu(ie, ["prevent"])
-				}, [K("p", fJ, "移除「" + P(e.targetFolder?.name) + "」后，频道不再归属文件夹，所有消息和存档状态都会保留。", 1), K("div", pJ, [q(le, {
+				}, [K("p", fJ, "移除「" + P(e.targetFolder?.name) + "」后，房间不再归属文件夹，所有消息和存档状态都会保留。", 1), K("div", pJ, [q(le, {
 					label: "取消",
 					color: "neutral",
 					variant: "ghost",
@@ -47940,7 +47940,7 @@ var PK = /*#__PURE__*/ EH({
 					a.value === "delete" ? (U(), W("p", vJ, "消息、共识和发言安排将一起删除，无法撤销。")) : Y("", !0),
 					a.value === "rename" ? (U(), G(de, {
 						key: 3,
-						label: "频道名称",
+						label: "房间名称",
 						required: ""
 					}, {
 						default: L(() => [q(x, {
@@ -49013,7 +49013,7 @@ var PK = /*#__PURE__*/ EH({
 		}, 16));
 	}
 }, XJ = { class: "channel-directory-manager" }, ZJ = { class: "channel-directory-heading" }, QJ = ["aria-expanded"], $J = { class: "channel-directory-actions" }, eY = {
-	"aria-label": "讨论频道列表",
+	"aria-label": "讨论房间列表",
 	class: "channel-room-list",
 	"data-room-directory": ""
 }, tY = ["data-room-folder", "data-drag-folder"], nY = {
@@ -49088,18 +49088,18 @@ var PK = /*#__PURE__*/ EH({
 			})),
 			{ type: "separator" },
 			{
-				label: "导入频道…",
+				label: "导入房间…",
 				icon: "i-lucide-upload",
 				disabled: r.value.backup_pending,
 				onSelect: () => f.value?.click()
 			},
 			{
-				label: "导出全部频道",
+				label: "导出全部房间",
 				icon: "i-lucide-download",
 				disabled: r.value.backup_pending || !r.value.rooms.length,
 				onSelect: () => a("backup_rooms", {
 					ids: r.value.rooms.map((e) => e.id),
-					name: "全部频道"
+					name: "全部房间"
 				})
 			}
 		]), f = /* @__PURE__ */ F(null);
@@ -49250,7 +49250,7 @@ var PK = /*#__PURE__*/ EH({
 					})
 				}],
 				[{
-					label: e.archived ? "恢复频道" : "存档频道",
+					label: e.archived ? "恢复房间" : "存档房间",
 					icon: e.archived ? "i-lucide-archive-restore" : "i-lucide-archive",
 					disabled: r.value.archive_pending.includes(e.id),
 					onSelect: () => n("manage", {
@@ -49284,7 +49284,7 @@ var PK = /*#__PURE__*/ EH({
 					class: "channel-section-toggle",
 					"aria-expanded": m.value,
 					onClick: t[1] ||= (e) => m.value = !m.value
-				}, [q(_, { name: m.value ? "i-lucide-chevron-down" : "i-lucide-chevron-right" }, null, 8, ["name"]), t[7] ||= J("讨论频道", -1)], 8, QJ), K("div", $J, [
+				}, [q(_, { name: m.value ? "i-lucide-chevron-down" : "i-lucide-chevron-right" }, null, 8, ["name"]), t[7] ||= J("讨论房间", -1)], 8, QJ), K("div", $J, [
 					q(v, {
 						items: d.value,
 						content: {
@@ -49295,7 +49295,7 @@ var PK = /*#__PURE__*/ EH({
 					}, {
 						default: L(() => [q(u, {
 							icon: "i-lucide-ellipsis",
-							"aria-label": "频道目录选项",
+							"aria-label": "房间目录选项",
 							title: "排列、导入与导出",
 							size: "xs",
 							color: "neutral",
@@ -49322,7 +49322,7 @@ var PK = /*#__PURE__*/ EH({
 						accept: ".zip,.json",
 						multiple: "",
 						hidden: "",
-						"aria-label": "选择频道备份",
+						"aria-label": "选择房间备份",
 						onChange: p
 					}, null, 544)
 				])]),
@@ -49430,7 +49430,7 @@ var PK = /*#__PURE__*/ EH({
 							onClick: (e) => n("select", s.id)
 						}, [K("span", null, P(s.title), 1)], 40, dY),
 						K("div", fY, [q(x, {
-							text: s.archived ? "恢复频道" : "存档频道",
+							text: s.archived ? "恢复房间" : "存档房间",
 							ui: { content: "channel-topic-tooltip" }
 						}, {
 							default: L(() => [q(u, {
@@ -49472,7 +49472,7 @@ var PK = /*#__PURE__*/ EH({
 						}, 1032, ["items"])])
 					], 10, lY)]),
 					_: 2
-				}, 1032, ["items"]))), 128))], 10, sY)) : Y("", !0)], 8, tY))), 128)), s.value.length ? Y("", !0) : (U(), W("p", pY, "暂无讨论频道"))], 512), [[Vc, m.value]]),
+				}, 1032, ["items"]))), 128))], 10, sY)) : Y("", !0)], 8, tY))), 128)), s.value.length ? Y("", !0) : (U(), W("p", pY, "暂无讨论房间"))], 512), [[Vc, m.value]]),
 				vr(q(u, {
 					icon: "i-lucide-archive",
 					color: "neutral",
@@ -50166,7 +50166,7 @@ var PK = /*#__PURE__*/ EH({
 }, yX = {
 	id: "channel-sidebar",
 	class: "channel-sidebar",
-	"aria-label": "频道导航"
+	"aria-label": "房间导航"
 }, bX = { class: "channel-sidebar-content" }, xX = { class: "channel-directory-heading channel-tools-heading" }, SX = ["aria-expanded"], CX = { class: "channel-sidebar-footer" }, wX = { class: "channel-self" }, TX = { class: "channel-connection" }, EX = [
 	"aria-valuemax",
 	"aria-valuenow",
@@ -50280,7 +50280,7 @@ var PK = /*#__PURE__*/ EH({
 				label: "宽",
 				width: 1240
 			}
-		}, b = Fe(), x = /* @__PURE__ */ F(b.reading), S = /* @__PURE__ */ F(b.effects), C = /* @__PURE__ */ F(b.rail), w = /* @__PURE__ */ F(b.nav), T = /* @__PURE__ */ F(typeof window > "u" ? 728 : window.innerWidth), E = /* @__PURE__ */ F(b.collapsed), D = /* @__PURE__ */ F(!0), O = /* @__PURE__ */ F(b.rail_collapsed), ee = Z(() => T.value >= RZ), te = Z(() => t.value.tab === "discussion" && !O.value), ne = Z(() => ee.value && t.value.tab === "discussion" ? O.value ? "展开频道概览" : "收起频道概览" : "频道资料与参与者"), re = Z(() => {
+		}, b = Fe(), x = /* @__PURE__ */ F(b.reading), S = /* @__PURE__ */ F(b.effects), C = /* @__PURE__ */ F(b.rail), w = /* @__PURE__ */ F(b.nav), T = /* @__PURE__ */ F(typeof window > "u" ? 728 : window.innerWidth), E = /* @__PURE__ */ F(b.collapsed), D = /* @__PURE__ */ F(!0), O = /* @__PURE__ */ F(b.rail_collapsed), ee = Z(() => T.value >= RZ), te = Z(() => t.value.tab === "discussion" && !O.value), ne = Z(() => ee.value && t.value.tab === "discussion" ? O.value ? "展开房间概览" : "收起房间概览" : "房间资料与参与者"), re = Z(() => {
 			let e = document.createElement("template");
 			return e.innerHTML = o.value?.rendered_brief || "", e.content.textContent.replace(/\s+/g, " ").trim();
 		}), ie = /* @__PURE__ */ F(null), ae = /* @__PURE__ */ F(0), k = null, A = /* @__PURE__ */ F(null), oe = /* @__PURE__ */ F(null), se = Z(() => Math.min(PZ, Math.max(NZ, T.value - LZ - zZ))), ce = Z(() => Math.min(w.value, se.value)), le = Z(() => ({
@@ -50556,7 +50556,7 @@ var PK = /*#__PURE__*/ EH({
 							color: "neutral",
 							variant: "pill",
 							class: "channel-directory channel-view-links",
-							"aria-label": "频道视图",
+							"aria-label": "房间视图",
 							ui: {
 								link: "channel-link",
 								linkLabel: "channel-link-label",
@@ -50597,14 +50597,14 @@ var PK = /*#__PURE__*/ EH({
 					class: "channel-nav-resizer",
 					role: "separator",
 					tabindex: "0",
-					"aria-label": "调整频道栏宽度",
+					"aria-label": "调整房间栏宽度",
 					"aria-orientation": "vertical",
 					"aria-controls": "channel-sidebar",
 					"aria-valuemin": NZ,
 					"aria-valuemax": se.value,
 					"aria-valuenow": ce.value,
 					"aria-valuetext": `${ce.value} 像素`,
-					title: "拖动调整频道栏宽度，也可使用方向键",
+					title: "拖动调整房间栏宽度，也可使用方向键",
 					onPointerdown: Ke,
 					onPointermove: qe,
 					onPointerup: Je,
@@ -50618,14 +50618,14 @@ var PK = /*#__PURE__*/ EH({
 					class: M(["channel-topbar", { "is-overlay": o.value && I(t).tab === "discussion" }])
 				}, [
 					K("header", OX, [
-						q(O, { text: E.value ? "展开频道栏" : "收起频道栏" }, {
+						q(O, { text: E.value ? "展开房间栏" : "收起房间栏" }, {
 							default: L(() => [q(T, {
 								icon: "i-lucide-panel-left",
 								color: "neutral",
 								variant: "ghost",
 								size: "sm",
 								class: "channel-desktop-nav channel-icon-button channel-panel-toggle",
-								"aria-label": E.value ? "展开频道栏" : "收起频道栏",
+								"aria-label": E.value ? "展开房间栏" : "收起房间栏",
 								"aria-expanded": !E.value,
 								"aria-controls": "channel-sidebar",
 								onClick: r[2] ||= (e) => E.value = !E.value
@@ -50638,7 +50638,7 @@ var PK = /*#__PURE__*/ EH({
 							variant: "ghost",
 							size: "sm",
 							class: "channel-mobile-nav channel-icon-button channel-panel-toggle",
-							"aria-label": "打开频道导航",
+							"aria-label": "打开房间导航",
 							"aria-expanded": d.value,
 							onClick: r[3] ||= (e) => d.value = !0
 						}, null, 8, ["aria-expanded"]),
@@ -50788,7 +50788,7 @@ var PK = /*#__PURE__*/ EH({
 						color: "neutral",
 						size: "sm",
 						class: "channel-tabs",
-						"aria-label": "频道视图"
+						"aria-label": "房间视图"
 					}, null, 8, ["modelValue", "items"])])) : Y("", !0),
 					o.value && !pe.value ? (U(), W("section", {
 						key: 2,
@@ -50896,8 +50896,8 @@ var PK = /*#__PURE__*/ EH({
 					})) : Y("", !0)
 				])], 2)) : (U(), W("div", eZ, [
 					q(y, { name: "i-lucide-hash" }),
-					r[38] ||= K("h2", null, "新建一个讨论频道", -1),
-					r[39] ||= K("p", null, "每个频道围绕一个议题，保留所有人的观点。", -1),
+					r[38] ||= K("h2", null, "新建一个讨论房间", -1),
+					r[39] ||= K("p", null, "每个房间围绕一个议题，保留所有人的观点。", -1),
 					q(T, {
 						icon: "i-lucide-plus",
 						label: "新建讨论",
@@ -51089,12 +51089,12 @@ var PK = /*#__PURE__*/ EH({
 				])) : o.value ? (U(), G(pX, {
 					key: 1,
 					docked: ""
-				})) : (U(), W("div", TZ, [...r[46] ||= [K("header", { class: "pb-header" }, [K("strong", null, "讨论进度")], -1), K("p", { class: "channel-rail-empty" }, "暂无频道，新建讨论后在这里查看进度与参与者。", -1)]]))])])) : Y("", !0),
+				})) : (U(), W("div", TZ, [...r[46] ||= [K("header", { class: "pb-header" }, [K("strong", null, "讨论进度")], -1), K("p", { class: "channel-rail-empty" }, "暂无房间，新建讨论后在这里查看进度与参与者。", -1)]]))])])) : Y("", !0),
 				q(ze, {
 					open: d.value,
 					"onUpdate:open": r[23] ||= (e) => d.value = e,
 					side: "left",
-					title: "讨论频道",
+					title: "讨论房间",
 					description: "共议 · AI CoDiscuss",
 					ui: {
 						content: "channel-navigation-drawer",
@@ -51124,7 +51124,7 @@ var PK = /*#__PURE__*/ EH({
 				q(ze, {
 					open: p.value,
 					"onUpdate:open": r[25] ||= (e) => p.value = e,
-					title: "频道资料",
+					title: "房间资料",
 					description: "目标、背景与参与方式",
 					ui: {
 						content: "channel-details",

@@ -12,12 +12,12 @@ const BACKUP_README = `AI CoDiscuss 聊天室备份
 附件/：本聊天室已发送附件的原文件，与完整数据中的附件编号对应。
 外部网页、外链图片和外部附件仅保留原链接，不下载其内容；未发送的上传不在备份内。
 这是导出时刻的快照，之后的新消息不在包内。
-导入：在任一共议网站的频道目录选“导入频道”并选择本 ZIP，即建成可继续使用的副本；已有同一频道时跳过。
+导入：在任一共议网站的房间目录选“导入房间”并选择本 ZIP，即建成可继续使用的副本；已有同一房间时跳过。
 `;
-const BATCH_README = `AI CoDiscuss 频道批量备份
+const BATCH_README = `AI CoDiscuss 房间批量备份
 
-每个子文件夹是一个频道的完整备份，结构与单个频道备份相同（完整数据.json、讨论记录.md、附件/）。
-在任一共议网站的频道目录选“导入频道”并选择本 ZIP，可一次导入全部频道；已有同一频道时跳过。
+每个子文件夹是一个房间的完整备份，结构与单个房间备份相同（完整数据.json、讨论记录.md、附件/）。
+在任一共议网站的房间目录选“导入房间”并选择本 ZIP，可一次导入全部房间；已有同一房间时跳过。
 `;
 
 /** Wrap original text safely, including embedded Markdown fences and HTML. */
@@ -148,7 +148,7 @@ export async function read_room_archives(file) {
     const files = new Map((snapshot.tables?.attachments || []).map(item => [item.id, entries[prefix + attachment_archive_path(item)]]).filter(([, data]) => data));
     return { snapshot, files };
   });
-  if (!rooms.length) throw new Error(`${file.name} 中没有频道备份（完整数据.json）`);
+  if (!rooms.length) throw new Error(`${file.name} 中没有房间备份（完整数据.json）`);
   return rooms;
 }
 
