@@ -1,13 +1,12 @@
 <script setup>
 /** New-discussion form: the user states the topic in their own words; the AI host drafts goal, background and boundaries. */
-import { computed, inject, nextTick, onMounted, ref } from "vue";
-import LaunchSettings from "./LaunchSettings.vue";
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import LimitPicker, { format_duration } from "./LimitPicker.vue";
 import ExpertCard from "./ExpertCard.vue";
 
 const props = defineProps({ targetFolder: { type: Object, default: null } });
 const emit = defineEmits(["submit", "cancel"]);
-const { view, bridge, pending } = inject("discussion");
+const { view, bridge, pending, act } = inject("discussion");
 const EXPERT_CONTAINER = "new-expert-modes";
 const experts = Object.keys(bridge.identities).filter((name) => name !== "用户");
 const field_id = (key) => `new-room-${key}`;
@@ -19,8 +18,13 @@ const KINDS = [{ value: "brainstorm", icon: "i-lucide-messages-square", title: "
   { value: "free", icon: "i-lucide-message-circle", title: "自由协作", text: "按需点名 AI，在各自会话中工作" }];
 const selected = computed(() => view.value.experts[EXPERT_CONTAINER] || {});
 // Cards in the library are types; each selected name is one instance, e.g. Claude and Claude-2.
-const selected_names = computed(() => Object.keys(selected.value).filter((name) => selected.value[name])
-  .sort((left, right) => experts.indexOf(bridge.platform_of(left)) - experts.indexOf(bridge.platform_of(right)) || left.localeCompare(right, "en", { numeric: true })));
+// The view lists members in platform order; remember the order they were added in so a new card lands at the end.
+const added_order = ref([]);
+const chosen_names = computed(() => Object.keys(selected.value).filter((name) => selected.value[name]));
+watch(chosen_names, (names) => {
+  added_order.value = [...added_order.value.filter((name) => names.includes(name)), ...names.filter((name) => !added_order.value.includes(name))];
+}, { immediate: true });
+const selected_names = computed(() => [...chosen_names.value].sort((left, right) => added_order.value.indexOf(left) - added_order.value.indexOf(right)));
 /** Instances already taken from one library card. */
 const instance_count = (platform) => selected_names.value.filter((name) => bridge.platform_of(name) === platform).length;
 const library = ref(null);
@@ -31,7 +35,6 @@ const limit_picker = ref(null);
 // Discussions run automatically; a free room needs the local service only for the members it wakes.
 const woken_names = computed(() => selected_names.value.filter((name) => selected.value[name] === "cli"));
 const automatic = computed(() => !free.value || woken_names.value.length > 0);
-const launch_names = computed(() => woken_names.value.filter((name) => bridge.launch_clients[name]));
 const launch_ready = (name) => {
   const profile = view.value.launch.profiles[name] || {};
   if (profile.adapter === "api") return Boolean(profile.base_url && profile.api_protocol && profile.api_key_ref && profile.model);
@@ -39,12 +42,30 @@ const launch_ready = (name) => {
 };
 const launching = computed(() => automatic.value && view.value.launch.available && (free.value || view.value.launch.create));
 const free_ready = computed(() => selected_names.value.length > 0 && woken_names.value.every(launch_ready) && (!woken_names.value.length || view.value.launch.available));
+const CONNECTION_POLL_MS = 3000;
+const needs_connection = computed(() => automatic.value && !view.value.launch.available);
+let connection_timer = 0;
+/** Why the create button is disabled, in the order the user can fix it. */
+const blocker = computed(() => {
+  if (free.value) {
+    if (!selected_names.value.length) return "先添加 AI";
+    if (needs_connection.value) return "先连接本机服务";
+    const unready = woken_names.value.filter((name) => !launch_ready(name));
+    return unready.length ? `补齐 ${unready.join("、")} 的接入配置` : "";
+  }
+  return host.value ? "" : "先添加 AI 并选定主持人";
+});
 
 /** Keep the host inside the selected members that answer by themselves. */
 function ensure_host() {
   if (!host_options.value.includes(host.value)) write("host", host_options.value[0] || "");
 }
-onMounted(ensure_host);
+onMounted(() => {
+  ensure_host();
+  // The user connects in another window, so detect it here instead of asking them to recheck.
+  connection_timer = window.setInterval(() => { if (needs_connection.value && !document.hidden) act("check_launch_connection"); }, CONNECTION_POLL_MS);
+});
+onBeforeUnmount(() => window.clearInterval(connection_timer));
 
 /** Change the room use independently of its delivery method. */
 function choose_kind(kind) {
@@ -142,6 +163,10 @@ const summary = computed(() => {
 <template>
   <div class="create-discussion">
     <form id="create-discussion-form" class="create-scroll dialog-form" @submit.prevent="submit">
+      <div v-if="needs_connection" class="create-connect" role="status">
+        <p><UIcon name="i-lucide-plug-zap" />本机服务未连接，连接后才能唤醒本机 AI。在运行 AI 的电脑上执行下面的命令并完成网页授权，连上后自动检测。</p>
+        <div class="create-connect-command"><code>{{ view.launch.connect_command }}</code><UButton icon="i-lucide-copy" aria-label="复制本机连接命令" variant="ghost" color="neutral" @click="act('copy', view.launch.connect_command)" /></div>
+      </div>
       <p v-if="targetFolder?.id" class="channel-create-location"><UIcon name="i-lucide-folder" />{{ targetFolder.name }}</p>
       <section class="create-section">
         <h3><span>1</span>这次做什么</h3>
@@ -194,10 +219,10 @@ const summary = computed(() => {
         <p class="create-limit-rule" aria-live="polite"><UIcon name="i-lucide-flag" />{{ limit_rule }}</p>
       </section>
 
-      <section v-if="automatic" class="create-section">
+      <section class="create-section">
         <h3><span>{{ free ? 3 : 4 }}</span>启动 AI</h3>
-        <p v-if="free && !view.launch.available" role="alert" class="fine-print create-hint">本机唤醒的成员需要本机服务：请在运行 AI 的电脑打开本机网站，或先运行连接命令。</p>
-        <template v-if="view.launch.available">
+        <p v-if="!view.launch.available" class="fine-print create-hint">连接本机服务后，可在此设置项目目录和启动方式。</p>
+        <template v-else>
           <UCheckbox v-if="!free" :model-value="view.launch.create" label="创建后立即启动 AI" description="由本机服务创建会话并交付首个主持任务；不勾选则只建房，稍后在「接入」页启动。" @update:model-value="bridge.write_launch('create', '', $event)" />
           <template v-if="free || view.launch.create">
             <UFormField label="项目目录（可选）">
@@ -208,13 +233,12 @@ const summary = computed(() => {
             <p class="fine-print create-hint">供本地软件查看的项目，读写权限在专家卡片上设置。API 仅使用房间上下文。</p>
           </template>
         </template>
-        <LaunchSettings v-else :participants="launch_names" :workspace="false" :model-selection="false" />
       </section>
     </form>
     <footer class="create-footer">
       <p v-if="launching && view.launch.error" role="alert" class="create-error">{{ view.launch.error }}</p>
       <div class="create-footer-row">
-        <span class="create-summary" :title="summary">{{ summary }}</span>
+        <span class="create-summary" :class="{ 'is-blocked': blocker }" :title="summary">{{ blocker ? `还差：${blocker}` : summary }}</span>
         <UButton label="取消" color="neutral" variant="ghost" @click="emit('cancel')" />
         <UButton type="submit" form="create-discussion-form" class="channel-primary-button" :icon="launching ? 'i-lucide-play' : 'i-lucide-plus'" :label="free ? automatic ? '创建并连接' : '创建协作房间' : launching ? '创建并启动讨论' : '创建讨论'" :disabled="free ? !free_ready : !host" :loading="pending === 'create'" />
       </div>
@@ -268,13 +292,19 @@ const summary = computed(() => {
 .create-footer { flex-shrink: 0; padding: 14px 26px 16px; border-top: 1px solid var(--ui-border-muted); }
 .create-footer-row { display: flex; align-items: center; gap: 8px; }
 .create-summary { flex: 1; min-width: 0; overflow: hidden; color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
+.create-connect { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid color-mix(in srgb, #e0b44a 45%, transparent); border-radius: 8px; background: color-mix(in srgb, #e0b44a 8%, transparent); font-size: 12px; }
+.create-connect p { display: flex; align-items: flex-start; gap: 8px; margin: 0; color: var(--ui-text-toned); line-height: 1.6; }
+.create-connect p > [class*="icon"] { flex-shrink: 0; width: 14px; height: 14px; margin-top: 3px; color: #e0b44a; }
+.create-connect-command { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 6px; background: var(--ui-bg-elevated); }
+.create-connect-command code { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.create-summary.is-blocked { color: #e0b44a; }
 .create-error { margin-bottom: 10px; color: #f0716b; font-size: 12px; }
 @media (max-width: 600px) {
   .create-discussion { height: calc(100dvh - 130px); }
   .create-scroll { padding: 18px 18px 20px; }
   .create-modes, .create-experts { grid-template-columns: 1fr; }
   .create-footer { padding: 12px 18px 14px; }
-  .create-summary { display: none; }
+  .create-summary:not(.is-blocked) { display: none; }
   .create-footer-row { justify-content: flex-end; }
 }
 </style>

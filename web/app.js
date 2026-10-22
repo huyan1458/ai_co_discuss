@@ -2968,7 +2968,7 @@ async function execute_view_action(name, value) {
     take_floor: () => change_floor("take"), return_floor: () => change_floor("return"),
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
     choose_runtime, export_runtime, download_member_access, copy_member_join, pause_runtime, check_limits, pause_discussion, restart_discussion, force_close, conclude_discussion,
-    save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection,
+    save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
     load_room_configuration, save_room_configuration, interrupt_member, change_member, invite_member, interrupt_free, set_proxy, copy_online_notice,
     prepare_brainstorm, return_conclusion, convert_suggestion,
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };

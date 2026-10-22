@@ -497,6 +497,7 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 .channel-composer-column { max-width: var(--channel-reading-width); margin: 0 auto; padding: 0 16px; }
 .channel-composer { background: #383a40 !important; border-radius: 8px !important; border: 1px solid #ffffff0b; box-shadow: 0 1px 3px #0002 !important; padding: 0 !important; gap: 0 !important; overflow: hidden; transition: border-color .12s; }
 html[data-theme^="channel"] .channel-composer, html[data-theme^="channel"] .channel-composer :focus { --tw-ring-shadow: 0 0 #0000 !important; --tw-inset-ring-color: transparent !important; }
+html[data-theme^="channel"] .channel-composer :is(textarea, input):focus { box-shadow: none !important; }
 .channel-composer-header { display: block !important; padding: 0 !important; }
 .channel-editor { padding: 13px 15px 7px !important; font-size: 15px !important; line-height: 1.6 !important; min-height: 49px; resize: none; color: #e2e6ee; outline: none !important; }
 .channel-editor::placeholder { color: #9ba3b1; }
@@ -1055,7 +1056,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 :root[data-effects="reduced"] * { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
 :root[data-theme^="channel"] :is(.channel-search-input input:not(:focus), .channel-composer-identity > button:not(:hover, [data-state="open"]), .channel-surface-button:not(:hover), .pb-action:not(:hover), .progress-chip:not(:hover)) { border-color: var(--channel-edge-control); }
 :root[data-theme^="channel"] :is(.channel-search-input input, .channel-composer-identity > button:not(:disabled), .channel-surface-button, .pb-action:not(:disabled), .progress-chip) { box-shadow: var(--channel-shadow-control); }
-:root[data-theme^="channel"] :is(.channel-message:not(:hover, :focus-within), .channel-composer:not(:focus-within), .turn-panel, .summary-form) { border-color: var(--channel-edge-panel); }
+:root[data-theme^="channel"] :is(.channel-message:not(:hover, :focus-within), .channel-composer, .turn-panel, .summary-form) { border-color: var(--channel-edge-panel); }
 :root[data-theme^="channel"] :is(.channel-message, .turn-panel, .summary-form) { box-shadow: var(--channel-shadow-panel); }
 :root[data-theme^="channel"] .channel-message.channel-topic-card { box-shadow: inset 3px 0 0 var(--channel-accent), var(--channel-shadow-panel); }
 :root[data-theme^="channel"] .channel-composer { box-shadow: var(--channel-shadow-panel) !important; }

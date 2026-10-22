@@ -664,7 +664,8 @@ function create_form_fixture() {
       view.value.experts[id][`${name}-${number}`] = mode;
     } };
   const context = vm.createContext({ computed, ref, nextTick, defineProps: () => ({}), defineEmits: () => () => {},
-    inject: () => ({ view, bridge, pending: ref("") }), onMounted: callback => callback(),
+    inject: () => ({ view, bridge, pending: ref(""), act: () => {} }), onMounted: callback => callback(), onBeforeUnmount: () => {},
+    window: { setInterval: () => 0, clearInterval: () => {} }, document: { hidden: false },
     watch: (...args) => { const stop = watch(...args); cleanups.push(stop); return stop; } });
   const component = readFileSync(new URL("../frontend/CreateDiscussion.vue", import.meta.url), "utf8");
   vm.runInContext(component.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .*;$/gm, ""), context);
