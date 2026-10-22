@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { API_PROVIDERS, api_base_url, api_generate, api_history, api_models, api_request, api_response, api_tool_results, read_api_key, save_api_key } from '../runner/discussion_api.mjs';
+import { API_PROVIDERS, api_base_url, api_check, api_generate, api_history, api_models, api_request, api_response, api_tool_results, read_api_key, save_api_key } from '../runner/discussion_api.mjs';
 import { participant_tools, system_prompt } from '../runner/api_participant.mjs';
 import { launch_discussion } from '../runner/discussion_launch.mjs';
 import { api, DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
@@ -120,6 +120,7 @@ test('four protocols authenticate correctly and preserve tool result pairing and
     if (api_protocol === 'gemini') assert.equal(context.history[1].parts[0].thoughtSignature, 'opaque-signature');
     if (api_protocol === 'chat') assert.equal(context.history[1].reasoning_content, 'opaque-reasoning');
     assert.equal((await api_models(f.home, profile)).models[0].id, 'vendor/model.1');
+    assert.deepEqual(await api_check(f.home, profile), { ok: true });
   }
   const profile = { api_protocol: 'responses' }, history = [];
   api_response(profile, { output: [{ type: 'reasoning', encrypted_content: 'opaque' }, { type: 'function_call', call_id: 'c', name: 'read_room', arguments: '{}' }] }, history);

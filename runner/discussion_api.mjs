@@ -14,6 +14,8 @@ export const API_PROVIDERS = {
 const PROTOCOLS = ['responses', 'chat', 'anthropic', 'gemini'];
 const REQUEST_TIMEOUT_MS = 180_000;
 const MAX_OUTPUT_TOKENS = 8192;
+const CHECK_TIMEOUT_MS = 30_000;
+const CHECK_TOOL = { name: 'noop', description: '连通性检查，无需调用', parameters: { type: 'object', properties: {} } };
 
 /** Validate an explicit API root, keeping custom gateway paths intact. */
 export function api_base_url(value) {
@@ -110,6 +112,14 @@ export async function api_models(home, profile) {
   const models = (data.data || data.models || []).map(model => ({ id: model.id || model.name?.replace(/^models\//, ''), label: model.displayName || model.name || model.id }))
     .filter(model => typeof model.id === 'string');
   return { adapter: 'api', models, error: '', source: 'api' };
+}
+
+/** Send one tiny tool-enabled request so address, key, protocol and model are checked together. */
+export async function api_check(home, profile) {
+  const key = read_api_key(home, profile);
+  const context = { system: '这是连通性检查。', history: api_history(profile, '只回复 OK。'), tools: [CHECK_TOOL] };
+  await api_generate(profile, key, context, AbortSignal.timeout(CHECK_TIMEOUT_MS));
+  return { ok: true };
 }
 
 /** Start protocol-specific history with a user request. */

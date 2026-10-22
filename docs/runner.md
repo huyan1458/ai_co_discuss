@@ -21,7 +21,9 @@
 
 自定义地址保留完整路径前缀，填写到协议根路径，例如 [OpenRouter](https://openrouter.ai/docs/api_reference/overview) 的 `https://openrouter.ai/api/v1`，选择 Chat Completions 并填写其返回的 `provider/model` ID。程序分别追加 `/responses`、`/chat/completions`、`/messages` 或 `/models/{model}:generateContent`；不改写模型 ID 中的点号、横线或斜线，不按房间身份强制套用官方协议或思考参数。实现参考 [Cherry Studio 的供应商解析说明（固定版本）](https://github.com/CherryHQ/cherry-studio/blob/843a297fe73e9f527c8eb8291c0e1335f2279c04/docs/references/ai/provider-resolution.md) 对供应商、协议、Base URL 与 API 模型 ID 的拆分方式；协议转换独立实现，不引入其代码或 SDK。
 
-`POST /api/local/api-key`（CLI 为 `codiscuss launch api-key --file FILE`）接收 `{base_url, api_key}`，仅向本机服务目录的 `api-keys/UUID.json` 写入，返回 `{api_key_ref}`。文件依赖本机用户目录权限保护，不作加密保险库；不要共享此目录。Base URL 改动后必须重新填写该地址对应的 Key。`launch settings` 读取结果附带 `api_keys`（`{Base URL: api_key_ref}`，同一地址取最近保存的一份，不含密钥），新建表单与改 Base URL 时自动带出该地址已保存的 Key，无需重复填写。网页密钥输入框不设保存按钮，失焦或回车即保存，可切换明文显示；输入仅在组件内存保留至保存成功，不进入控制器快照、localStorage、启动待办、房间数据或上游错误日志。
+`POST /api/local/api-key`（CLI 为 `codiscuss launch api-key --file FILE`）接收 `{base_url, api_key}`，仅向本机服务目录的 `api-keys/UUID.json` 写入，返回 `{api_key_ref}`。文件依赖本机用户目录权限保护，不作加密保险库；不要共享此目录。Base URL 改动后必须重新填写该地址对应的 Key。`launch settings` 读取结果附带 `api_keys`（`{Base URL: api_key_ref}`，同一地址取最近保存的一份，不含密钥），新建表单与改 Base URL 时自动带出该地址已保存的 Key，无需重复填写。网页密钥输入框不设保存按钮，失焦或回车即保存，可切换明文显示；它是用 CSS 遮挡的文本框，避免浏览器提示生成或保存密码。输入仅在组件内存保留至保存成功，保存后清空输入框，只在占位文字显示末四位以示确认；密钥不进入控制器快照、localStorage、启动待办、房间数据或上游错误日志。
+
+`POST /api/local/api-check`（CLI 为 `codiscuss launch api-check --file FILE`）接收 API profile，用该 profile 带一个空工具向模型发送一次极短请求（30 秒超时），一并核对地址、密钥、协议、模型与工具调用支持，成功返回 `{ok:true}`，失败只报 HTTP 状态。会产生一次极小的模型调用费用。网页 API 卡片背面的闪电按钮调用此入口。
 
 启动配置中的 API profile 为 `{adapter:"api", base_url, api_protocol, api_key_ref, model}`；`api_protocol` 为 `responses/chat/anthropic/gemini`。启动器在私有房间配置保存 `api_home`，供服务解析密钥引用。API 不需要 executable、项目目录、会话 ID 或技能安装；API 会话编号是本机参与者绑定，不是厂商的聊天 ID。模型列表入口仍为 `launch models` / `/api/local/models`，传入此 profile，只返回模型元数据。
 

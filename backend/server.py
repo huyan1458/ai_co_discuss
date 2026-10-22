@@ -1442,7 +1442,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Forward authenticated browser requests to the shared Node entrypoint and pin their website."""
         site = self.local_request_site(method)
         route = parts[2:]
-        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-member"], ["models"], ["api-key"], ["pick-directory"]):
+        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-member"], ["models"], ["api-key"], ["api-check"], ["pick-directory"]):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
             command = "settings"
@@ -1456,6 +1456,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = "models"
         elif route == ["api-key"] and method == "POST":
             command = "api-key"
+        elif route == ["api-check"] and method == "POST":
+            command = "api-check"
         elif route == ["room-member"] and method == "POST":
             command = "room-member"
         elif route == ["pick-directory"] and method == "POST":

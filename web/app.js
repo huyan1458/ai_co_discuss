@@ -1437,8 +1437,8 @@ async function local_launch_request(action, payload) {
     response = await fetch(`${local_connection?.endpoint || ""}/api/local/${action}`, {
       method: payload === undefined ? "GET" : "POST", headers, credentials: "omit", redirect: "error",
       body: payload === undefined ? undefined : JSON.stringify(payload),
-      ...(payload === undefined || ["room-models", "models"].includes(action)
-        ? { signal: AbortSignal.timeout(action === "models" ? MODEL_CATALOG_TIMEOUT_MS : LOCAL_CONNECTION_TIMEOUT_MS) } : {}) });
+      ...(payload === undefined || ["room-models", "models", "api-check"].includes(action)
+        ? { signal: AbortSignal.timeout(["models", "api-check"].includes(action) ? MODEL_CATALOG_TIMEOUT_MS : LOCAL_CONNECTION_TIMEOUT_MS) } : {}) });
   } catch (error) {
     if (!local_connection) throw error;
     throw new Error("无法连接本机服务：请在这台电脑运行 codiscuss local open，并允许浏览器访问本机网络，再重试原请求");
@@ -1621,6 +1621,12 @@ async function save_launch_api_key(name, api_key) {
   state.launch.api_keys = { ...state.launch.api_keys, [new URL(base_url).href.replace(/\/+$/, "")]: result.api_key_ref };
   if (state.launch.profiles[name] === profile && profile.base_url === base_url) profile.api_key_ref = result.api_key_ref;
   publish_view();
+}
+
+/** Ask the local service to send one tiny request with the current API profile; throws its reason on failure. */
+async function check_launch_api(name) {
+  const { base_url, api_protocol, model, api_key_ref } = state.launch.profiles[name] || {};
+  await local_launch_request("api-check", { adapter: "api", base_url, api_protocol, model, api_key_ref });
 }
 
 /** Provide selectable software results without turning an unavailable list into a text field. */
@@ -2983,7 +2989,7 @@ function change_view_theme(theme) {
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
   write_launch: write_launch_field, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
-  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, launch_summary, launch_can_set_access, launch_can_bind_session, pick_launch_directory, restore_launch_profile, reset_create_form, empty_discussion_message,
+  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, check_launch_api, launch_summary, launch_can_set_access, launch_can_bind_session, pick_launch_directory, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, platform_of, execute: execute_view_action, theme: change_view_theme,

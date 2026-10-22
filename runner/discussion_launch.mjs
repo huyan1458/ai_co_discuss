@@ -10,7 +10,7 @@ import { parseArgs } from 'node:util';
 
 import { atomic_json } from './discussion_adapters.mjs';
 import { software_models } from './discussion_models.mjs';
-import { API_PROVIDERS, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
+import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { acquire_lock, api, CODEX_ADAPTERS, DiscussionStore, service_drafts, task_files, validate_config } from './discussion_runner.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 
@@ -44,6 +44,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch room-models --file FILE
       codiscuss launch models --file FILE
       codiscuss launch api-key --file FILE
+      codiscuss launch api-check --file FILE
       codiscuss launch room-member --file FILE
       codiscuss launch pick-directory
 
@@ -53,6 +54,7 @@ room-config 修正已暂停房间的软件路径或切换 Codex App / CLI，不�
 room-models 只读指定 site、room_id 的本机登记模型与思考强度，不启动讨论。
 models 按 adapter、executable 或 API profile 读取模型目录，不启动讨论或生成回答。
 api-key 将 base_url、api_key 保存于本机私有目录，只返回 api_key_ref。
+api-check 用 API profile 向模型发送一次极短请求，核对地址、密钥、协议与模型是否可用。
 pick-directory 在本机弹出系统目录选择窗口，返回所选路径；取消时不返回路径。
 room-member 为运行中的自由房间或讨论邀请、请回一位成员（讨论只接受本机唤醒的成员）；须提供 site、room_id、token、action（add/rejoin）、name。
 JSON 指定 site、entry（conversation/web）、room（建房内容，含 submission_id）
@@ -705,6 +707,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   if (positionals[0] === 'settings') result = { ...(input ? save_launch_settings(home, input) : launch_settings(home)), api_providers: API_PROVIDERS,
     api_keys: saved_api_keys(home) };
   else if (positionals[0] === 'api-key' && input) result = save_api_key(home, input);
+  else if (positionals[0] === 'api-check' && input) result = await api_check(home, input);
   else if (positionals[0] === 'room-models' && input) result = room_models(home, input);
   else if (positionals[0] === 'models' && input?.adapter === 'api') result = await api_models(home, input);
   else if (positionals[0] === 'models' && input) {
