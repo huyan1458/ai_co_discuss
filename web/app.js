@@ -37,7 +37,7 @@ const PLATFORM_IDENTITIES = {
   Grok: { initials: "GK", style: "grok", description: "AI 身份" },
 };
 const IDENTITIES = by_platform(PLATFORM_IDENTITIES, (identity, name) => ({ ...identity, label: name, description: "AI 实例" }));
-const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false, free_to: [], free_notice: "", free_error: "",
+const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false, free_notice: "", free_error: "",
   free_proxy: "", create_parent: null,
   archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
   reply_to: null, turn_reply_to: null, tab: "topic", refresh_version: 0, context_dirty: false, topic_dirty: false,
@@ -795,8 +795,9 @@ function message_payload() {
       request_ids: state.room.free.requests.filter(item => item.member === online.name && item.status === "pending").map(item => item.id) };
     const payload = { author: "用户", text, reply_to: state.reply_to, kind: "chat", submitted_by: "用户" };
     const active = (state.room.free?.members || []).filter(member => member.status === "active").map(member => member.name);
-    // One member is named by default; with several, the chips and @mentions outside code decide, never a broadcast.
-    if (active.length > 1) payload.to = active.filter(name => state.free_to.includes(name) || mentioned(text, name));
+    // @mentions outside code name members; without any, the server gives the message to the only member or the host.
+    const named = active.filter(name => mentioned(text, name));
+    if (named.length) payload.to = named;
     return payload;
   }
   const mode = element("message-kind").value;
@@ -818,11 +819,6 @@ function message_payload() {
 function mentioned(text, name) {
   const prose = text.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "").replace(/^>.*$/gm, "");
   return new RegExp(`(^|[\\s(（，,。；;：:])@${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`, "u").test(prose);
-}
-
-/** Toggle one member chip of the free-room composer. */
-function toggle_recipient(name) {
-  state.free_to = state.free_to.includes(name) ? state.free_to.filter(item => item !== name) : [...state.free_to, name];
 }
 
 /** Choose an online member to forward the next answer for, or clear the choice. */
@@ -2791,7 +2787,7 @@ function view_snapshot() {
     attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url })),
     composer_error: state.composer_error, upload_status: state.upload_status, sending_message: state.sending_message,
     mention_only: state.mention_only, reply_to: state.reply_to, turn_reply_to: state.turn_reply_to,
-    free_to: [...state.free_to], free_notice: state.free_notice, free_error: state.free_error, free_proxy: state.free_proxy,
+    free_notice: state.free_notice, free_error: state.free_error, free_proxy: state.free_proxy,
     create_parent: state.create_parent, access: access_snapshot(),
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
     theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch) };
@@ -2965,7 +2961,7 @@ async function execute_view_action(name, value) {
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
     choose_runtime, export_runtime, download_member_access, copy_member_join, pause_runtime, check_limits, pause_discussion, restart_discussion, force_close, conclude_discussion,
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection: load_launch_settings,
-    load_room_configuration, save_room_configuration, interrupt_member, toggle_recipient, change_member, invite_member, interrupt_free, set_proxy, copy_online_notice,
+    load_room_configuration, save_room_configuration, interrupt_member, change_member, invite_member, interrupt_free, set_proxy, copy_online_notice,
     prepare_brainstorm, return_conclusion, convert_suggestion,
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };
   try {

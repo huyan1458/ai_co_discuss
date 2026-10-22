@@ -164,7 +164,7 @@ test('response suggestions track live conversion membership ownership and pendin
   const pending = ref('');
   const context = vm.createContext({ computed, room, view, pending, free: ref(true) });
   const start = discussion_source.indexOf('const response_suggestions = computed(');
-  const end = discussion_source.indexOf('/** A chip is on', start);
+  const end = discussion_source.indexOf('/** A draft @mentions a member', start);
   vm.runInContext(discussion_source.slice(start, end) + '\nglobalThis.suggestions = response_suggestions;', context);
   const suggestion = () => context.suggestions.value.get(7)[0];
   assert.equal(Boolean(suggestion().can_convert), false);

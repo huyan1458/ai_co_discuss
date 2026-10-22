@@ -155,12 +155,13 @@ const free_activity = computed(() => {
   const text = others.length ? [first, ...others].map((item) => `${bridge.display_name(item.author)}：${item.text}`).join(" · ") : first.text;
   return { ...first, is_host: false, round: "", text };
 });
-/** Explains the footer recipient chips in the note line instead of above the editor. */
+/** Says in the note line who the draft will reach: the @mentioned members, else the host. */
 const recipient_hint = computed(() => {
-  if (free_online.value.length) return view.value.free_proxy ? `本条作为 ${bridge.display_name(view.value.free_proxy)} 的回答原文保存，并关闭它的待处理请求` : "粘贴在线 AI 的回答时选择对应成员";
-  if (free_members.value.length < 2 || view.value.free_proxy) return "";
-  if (free_members.value.some((member) => recipient_on(member.name))) return "可同时点名多位，也可在正文中 @ 成员";
-  return free_host.value ? `未点名：交给主持人 ${bridge.display_name(free_host.value.name)} 分配` : "未点名任何成员：只作留言，不会唤醒 AI";
+  if (view.value.free_proxy) return `本条作为 ${bridge.display_name(view.value.free_proxy)} 的回答原文保存，并关闭它的待处理请求`;
+  const named = free_members.value.filter((member) => MENTION_PATTERN(member.name).test(draft_prose.value));
+  if (named.length) return `发给 ${named.map((member) => bridge.display_name(member.name)).join("、")}`;
+  if (free_members.value.length === 1) return `发给 ${bridge.display_name(free_members.value[0].name)}`;
+  return free_host.value ? `发给主持人 ${bridge.display_name(free_host.value.name)}；@ 其他成员让它们发言` : "未 @ 任何成员：只作留言，不会唤醒 AI";
 });
 /** The one running action the composer can interrupt; it replaces the send button while the draft is empty. */
 const stop_action = computed(() => speaking_turn.value
@@ -185,10 +186,9 @@ const response_suggestions = computed(() => {
       can_convert: !request_id && status === "active" && view.value.access?.can_manage && !room.value.archived && !pending.value };
   })]));
 });
-/** A chip is on when clicked or when the draft @mentions that member outside code. */
+/** A draft @mentions a member only outside code and quotes. */
 const MENTION_PATTERN = (name) => new RegExp(`(^|[\\s(（，,。；;：:])@${name}(?![\\w-])`, "u");
 const draft_prose = computed(() => text.value.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "").replace(/^>.*$/gm, ""));
-const recipient_on = (name) => view.value.free_to.includes(name) || MENTION_PATTERN(name).test(draft_prose.value);
 const FREE_REQUEST_LABELS = { pending: ["待投递", "neutral"], delivering: ["处理中", "info"], completed: ["已回复", "success"],
   cancelled: ["已停止", "neutral"], failed: ["失败", "error"] };
 /** Each user message in a free room shows what happened to its request for every named member. */
@@ -912,10 +912,6 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             <span>代发</span>
             <button v-for="member in free_online" :key="member.id" type="button" :aria-pressed="view.free_proxy === member.name" :class="{ 'is-on': view.free_proxy === member.name }" @click="act('set_proxy', member.name)">{{ bridge.display_name(member.name) }}</button>
           </div>
-          <div v-if="free_members.length > 1 && !view.free_proxy" class="channel-free-recipients" role="group" aria-label="发给哪些成员">
-            <span>发给</span>
-            <button v-for="member in free_members" :key="member.id" type="button" :aria-pressed="recipient_on(member.name)" :class="{ 'is-on': recipient_on(member.name) }" @click="act('toggle_recipient', member.name)">{{ bridge.display_name(member.name) }}</button>
-          </div>
           <div v-if="!free" class="channel-composer-identity">
             <USelectMenu v-model="author" :items="identities" value-key="value" :avatar="selected_identity?.avatar" :disabled="['moderation', 'receipt'].includes(kind)" :search-input="{ placeholder: '搜索身份…', icon: 'i-lucide-search' }" :content="{ side: 'top', align: 'start', sideOffset: 10 }" variant="none" size="sm" aria-label="发言身份" class="channel-author-select" :ui="{ content: 'channel-select-menu channel-identity-menu', itemLeadingAvatarSize: 'xs' }" />
             <USelect v-model="kind" :items="kinds" :icon="kinds.find((item) => item.value === kind)?.icon" :content="{ side: 'top', align: 'start', sideOffset: 10 }" variant="none" size="sm" aria-label="发言职责" class="channel-kind-select" :ui="{ content: 'channel-select-menu' }" />
@@ -924,7 +920,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           <UButton v-else type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" aria-label="发送" title="发送 · Enter" :disabled="!has_draft || (needs_summary && !answer_summary.trim())" :loading="pending === 'send' || view.sending_message" @click="send" />
         </template>
       </UChatPrompt>
-      <div class="channel-composer-note"><span v-if="free">{{ recipient_hint || '点名分配任务' }}<span class="channel-note-divider">·</span>手动成员需在原会话触发</span><span v-else>{{ author_note }}<span class="channel-note-divider">·</span>在线 AI 的观点需代发</span><span class="channel-draft-length">{{ text_length }} / {{ bridge.max_message_length }}<span class="channel-note-divider">·</span>Enter 发送<span class="channel-note-divider">·</span>Shift+Enter 换行</span></div>
+      <div class="channel-composer-note"><span v-if="free">{{ recipient_hint }}<span class="channel-note-divider">·</span>手动成员需在原会话触发</span><span v-else>{{ author_note }}<span class="channel-note-divider">·</span>在线 AI 的观点需代发</span><span class="channel-draft-length">{{ text_length }} / {{ bridge.max_message_length }}<span class="channel-note-divider">·</span>Enter 发送<span class="channel-note-divider">·</span>Shift+Enter 换行</span></div>
     </div></div>
   </section>
 </template>
