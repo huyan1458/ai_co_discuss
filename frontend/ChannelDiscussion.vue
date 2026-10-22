@@ -155,6 +155,20 @@ const free_activity = computed(() => {
   const text = others.length ? [first, ...others].map((item) => `${bridge.display_name(item.author)}：${item.text}`).join(" · ") : first.text;
   return { ...first, is_host: false, round: "", text };
 });
+/** Explains the footer recipient chips in the note line instead of above the editor. */
+const recipient_hint = computed(() => {
+  if (free_online.value.length) return view.value.free_proxy ? `本条作为 ${bridge.display_name(view.value.free_proxy)} 的回答原文保存，并关闭它的待处理请求` : "粘贴在线 AI 的回答时选择对应成员";
+  if (free_members.value.length < 2 || view.value.free_proxy) return "";
+  if (free_members.value.some((member) => recipient_on(member.name))) return "可同时点名多位，也可在正文中 @ 成员";
+  return free_host.value ? `未点名：交给主持人 ${bridge.display_name(free_host.value.name)} 分配` : "未点名任何成员：只作留言，不会唤醒 AI";
+});
+/** The one running action the composer can interrupt; it replaces the send button while the draft is empty. */
+const stop_action = computed(() => speaking_turn.value
+  ? { name: "cancel_turn", label: "停止", title: `打断 ${bridge.display_name(speaking_turn.value.expert)} 的发言（本次作废），交给主持人` }
+  : free_activity.value
+    ? { name: "interrupt_free", label: "停止", title: `停止 ${free_busy.value.map((item) => bridge.display_name(item.author)).join("、")} 当前的工作，并取消尚未投递的请求` }
+    : null);
+const has_draft = computed(() => Boolean(text.value.trim() || view.value.attachment_drafts.length));
 /** Active members a free-room message can name; chips appear only when there is a choice. */
 const free_members = computed(() => free.value ? (room.value.free?.members || []).filter((member) => member.status === "active") : []);
 const free_host = computed(() => free_members.value.find((member) => member.role === "host"));
@@ -336,7 +350,7 @@ async function select_mention(name) {
   editor?.setSelectionRange(start + insertion.length, start + insertion.length);
 }
 
-/** Keep suggestion keys local to the editor; Ctrl/Cmd+Enter still sends. */
+/** Keep suggestion keys local to the editor; modified Enter is left to the editor. */
 function mention_keydown(event) {
   if (event.target !== prompt.value?.textareaRef || !mention_context.value || event.isComposing || event.keyCode === 229) return;
   if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
@@ -734,16 +748,16 @@ async function reply_to(message) { await act("reply", message); prompt.value?.te
 
 /** Send the shared draft through the established idempotent controller. */
 async function send() {
-  if ((!text.value.trim() && !view.value.attachment_drafts.length) || pending.value || view.value.sending_message) return;
+  if (!has_draft.value || pending.value || view.value.sending_message) return;
   mention_context.value = null;
   follow_tail.value = true;
   await act("send");
   await follow_messages();
 }
 
-/** Let attachment-only drafts use the same shortcut as text messages. */
+/** The chat prompt ignores empty text, so attachment-only drafts send on Enter here. */
 function attachment_shortcut(event) {
-  if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey) || event.isComposing || text.value.trim()) return;
+  if (event.key !== "Enter" || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.isComposing || text.value.trim()) return;
   if (!view.value.attachment_drafts.length) return;
   event.preventDefault();
   event.stopPropagation();
@@ -874,7 +888,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           </div>
         </template>
       </UPopover>
-      <UChatPrompt ref="prompt" v-model="text" :disabled="view.sending_message" :submit-on-enter="false" :autofocus="false" :rows="1" :maxrows="6" :placeholder="`发消息到 # ${room.title}`" aria-label="留言正文" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_members.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :class="{ 'has-mentions': mention_mirror }" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
+      <UChatPrompt ref="prompt" v-model="text" :disabled="view.sending_message" :submit-on-enter="true" :autofocus="false" :rows="1" :maxrows="6" :placeholder="`发消息到 # ${room.title}`" aria-label="留言正文" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_members.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :class="{ 'has-mentions': mention_mirror }" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
         <template #header>
           <div v-if="view.attachment_drafts.length" class="attachment-drafts">
             <div v-for="file in view.attachment_drafts" :key="file.id" :class="file.preview_url ? 'attachment-draft-image' : 'attachment-draft-file'">
@@ -887,16 +901,6 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             </div>
           </div>
           <p v-if="view.composer_error || view.upload_status" class="attachment-status" :role="view.composer_error ? 'alert' : 'status'">{{ view.composer_error || view.upload_status }}</p>
-          <div v-if="free_online.length" class="channel-free-recipients" role="group" aria-label="代发在线成员的回答">
-            <span>代发</span>
-            <button v-for="member in free_online" :key="member.id" type="button" :aria-pressed="view.free_proxy === member.name" :class="{ 'is-on': view.free_proxy === member.name }" @click="act('set_proxy', member.name)">{{ bridge.display_name(member.name) }}</button>
-            <small>{{ view.free_proxy ? `本条作为 ${bridge.display_name(view.free_proxy)} 的回答原文保存，并关闭它的待处理请求` : '粘贴在线 AI 的回答时选择对应成员' }}</small>
-          </div>
-          <div v-if="free_members.length > 1 && !view.free_proxy" class="channel-free-recipients" role="group" aria-label="发给哪些成员">
-            <span>发给</span>
-            <button v-for="member in free_members" :key="member.id" type="button" :aria-pressed="recipient_on(member.name)" :class="{ 'is-on': recipient_on(member.name) }" @click="act('toggle_recipient', member.name)">{{ bridge.display_name(member.name) }}</button>
-            <small>{{ free_members.some((member) => recipient_on(member.name)) ? '可同时点名多位，也可在正文中 @ 成员' : free_host ? `未点名：交给主持人 ${bridge.display_name(free_host.name)} 分配` : '未点名任何成员：只作留言，不会唤醒 AI' }}</small>
-          </div>
           <div v-if="speaking_turn" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>新消息会在 {{ bridge.display_name(speaking_turn.expert) }} 回复后交给主持人；点「停止」取消本次安排</span></div>
           <div v-if="view.reply_to || view.turn_reply_to" class="channel-reply-draft"><UIcon name="i-lucide-corner-up-left" /><span>{{ view.turn_reply_to ? `回答安排 #${view.turn_reply_to} · ${bridge.display_name(room.host)} 代发` : `回复 #${view.reply_to}` }}</span><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" :aria-label="view.turn_reply_to ? '取消关联安排' : '取消回复'" @click="act(view.turn_reply_to ? 'cancel_answer' : 'cancel_reply')" /></div>
           <div v-if="needs_summary" class="channel-answer-editor"><UTextarea v-model="answer_summary" :rows="2" aria-label="回答摘要" class="w-full" placeholder="先说结论，保留关键理由、条件和不确定性。完整内容写在正文中。" /><USelect v-model="summary_source" :items="summary_sources" aria-label="摘要提供者" size="xs" /></div>
@@ -904,26 +908,32 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
         <div v-if="mention_mirror" ref="mirror" class="channel-editor channel-editor-mirror" aria-hidden="true" v-html="mention_mirror"></div>
         <template #footer>
           <UButton type="button" icon="i-lucide-paperclip" aria-label="添加附件" title="图片、PDF 或其他文件 · 每个最多 20 MiB" color="neutral" variant="ghost" size="sm" :disabled="view.sending_message" @click="act('choose_attachments')" />
+          <div v-if="free_online.length" class="channel-free-recipients" role="group" aria-label="代发在线成员的回答">
+            <span>代发</span>
+            <button v-for="member in free_online" :key="member.id" type="button" :aria-pressed="view.free_proxy === member.name" :class="{ 'is-on': view.free_proxy === member.name }" @click="act('set_proxy', member.name)">{{ bridge.display_name(member.name) }}</button>
+          </div>
+          <div v-if="free_members.length > 1 && !view.free_proxy" class="channel-free-recipients" role="group" aria-label="发给哪些成员">
+            <span>发给</span>
+            <button v-for="member in free_members" :key="member.id" type="button" :aria-pressed="recipient_on(member.name)" :class="{ 'is-on': recipient_on(member.name) }" @click="act('toggle_recipient', member.name)">{{ bridge.display_name(member.name) }}</button>
+          </div>
           <div v-if="!free" class="channel-composer-identity">
             <USelectMenu v-model="author" :items="identities" value-key="value" :avatar="selected_identity?.avatar" :disabled="['moderation', 'receipt'].includes(kind)" :search-input="{ placeholder: '搜索身份…', icon: 'i-lucide-search' }" :content="{ side: 'top', align: 'start', sideOffset: 10 }" variant="none" size="sm" aria-label="发言身份" class="channel-author-select" :ui="{ content: 'channel-select-menu channel-identity-menu', itemLeadingAvatarSize: 'xs' }" />
             <USelect v-model="kind" :items="kinds" :icon="kinds.find((item) => item.value === kind)?.icon" :content="{ side: 'top', align: 'start', sideOffset: 10 }" variant="none" size="sm" aria-label="发言职责" class="channel-kind-select" :ui="{ content: 'channel-select-menu' }" />
           </div>
-          <span class="channel-shortcut"><UKbd value="ctrl" /><UKbd value="enter" /></span>
-          <UButton v-if="free_activity" icon="i-lucide-square" label="停止" color="neutral" variant="outline" size="sm" class="channel-stop" :title="`停止 ${free_busy.map((item) => bridge.display_name(item.author)).join('、')} 当前的工作，并取消尚未投递的请求`" :loading="pending === 'interrupt_free'" @click="act('interrupt_free')" />
-          <UButton v-if="speaking_turn" icon="i-lucide-square" label="停止" color="neutral" variant="outline" size="sm" class="channel-stop" :title="`打断 ${bridge.display_name(speaking_turn.expert)} 的发言（本次作废），交给主持人`" :loading="pending === 'cancel_turn'" @click="act('cancel_turn')" />
-          <UButton type="button" trailing-icon="i-lucide-arrow-up" color="neutral" label="发送" size="sm" class="channel-primary-button channel-send" :disabled="(!text.trim() && !view.attachment_drafts.length) || (needs_summary && !answer_summary.trim())" :loading="pending === 'send' || view.sending_message" @click="send" />
+          <UButton v-if="stop_action && !has_draft" type="button" icon="i-lucide-square" color="error" size="sm" class="channel-round-button channel-stop" :aria-label="stop_action.label" :title="stop_action.title" :loading="pending === stop_action.name" @click="act(stop_action.name)" />
+          <UButton v-else type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" aria-label="发送" title="发送 · Enter" :disabled="!has_draft || (needs_summary && !answer_summary.trim())" :loading="pending === 'send' || view.sending_message" @click="send" />
         </template>
       </UChatPrompt>
-      <div class="channel-composer-note"><span v-if="free">点名分配任务<span class="channel-note-divider">·</span>手动成员需在原会话触发</span><span v-else>{{ author_note }}<span class="channel-note-divider">·</span>在线 AI 的观点需代发</span><span class="channel-draft-length">{{ text_length }} / {{ bridge.max_message_length }}<span class="channel-note-divider">·</span>Enter 换行</span></div>
+      <div class="channel-composer-note"><span v-if="free">{{ recipient_hint || '点名分配任务' }}<span class="channel-note-divider">·</span>手动成员需在原会话触发</span><span v-else>{{ author_note }}<span class="channel-note-divider">·</span>在线 AI 的观点需代发</span><span class="channel-draft-length">{{ text_length }} / {{ bridge.max_message_length }}<span class="channel-note-divider">·</span>Enter 发送<span class="channel-note-divider">·</span>Shift+Enter 换行</span></div>
     </div></div>
   </section>
 </template>
 
 <style scoped>
-.channel-free-recipients { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px 2px; font-size: 12px; color: var(--ui-text-muted); }
-.channel-free-recipients button { min-height: 26px; padding: 2px 8px; border: 1px solid var(--ui-border); border-radius: 6px; color: var(--ui-text-toned); }
-.channel-free-recipients button.is-on { background: color-mix(in srgb, var(--channel-accent) 14%, transparent); color: var(--ui-text-highlighted); }
-.channel-free-recipients small { flex-basis: 100%; color: var(--ui-text-dimmed); font-size: 11px; }
+.channel-free-recipients { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; font-size: 12px; color: var(--ui-text-muted); }
+.channel-free-recipients button { min-height: 24px; padding: 0 8px; border: 1px solid transparent; border-radius: 4px; color: var(--ui-text-muted); transition: background .12s, color .12s; }
+.channel-free-recipients button:hover { background: #ffffff0d; color: var(--ui-text-highlighted); }
+.channel-free-recipients button.is-on { border-color: color-mix(in srgb, var(--channel-accent) 40%, transparent); background: color-mix(in srgb, var(--channel-accent) 14%, transparent); color: var(--ui-text-highlighted); }
 .channel-link-button { color: var(--channel-accent); text-decoration: underline; text-underline-offset: 2px; }
 .channel-message-elapsed { align-self: flex-start; margin-left: auto; line-height: 28px; white-space: nowrap; }
 .channel-host-work { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; column-gap: 10px; row-gap: 2px; align-items: start; margin: 0 var(--message-inset-end, 16px) 20px 16px; padding: 12px 18px; border: 1px solid var(--ui-border-muted); border-radius: 10px; background: color-mix(in srgb, var(--ui-bg-elevated) 35%, transparent); }
