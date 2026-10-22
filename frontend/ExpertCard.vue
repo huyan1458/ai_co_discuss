@@ -28,6 +28,17 @@ const profile = computed(() => view.value.launch.profiles[props.name] || {});
 const entry_items = computed(() => bridge.launch_clients[props.name] || []);
 const automatic = computed(() => props.mode === "cli");
 const ACCESS_LABELS = { cli: "本机唤醒", manual: "手动接入", online: "网页代发" };
+const api_mode = computed(() => automatic.value && profile.value.adapter === "api");
+const api_check = ref({ state: "", message: "" });
+// A previous check result no longer applies once any checked field changes.
+watch(() => [profile.value.base_url, profile.value.api_protocol, profile.value.model, profile.value.api_key_ref], () => { api_check.value = { state: "", message: "" }; });
+
+/** Send one tiny request through the local service with the current address, key, protocol and model. */
+async function check_api() {
+  api_check.value = { state: "loading", message: "" };
+  try { await bridge.check_launch_api(props.name); api_check.value = { state: "ok", message: "检查通过：模型已响应" }; }
+  catch (failure) { api_check.value = { state: "error", message: failure.message }; }
+}
 const entry_label = computed(() => props.mode === "online" ? "网页聊天" : props.mode === "manual" ? "你的 App / CLI 会话"
   : entry_items.value.find((item) => item.value === profile.value.adapter)?.label || "待选择 App / CLI");
 const can_flip = computed(() => props.choices.length > 1 || automatic.value && entry_items.value.length > 0);
@@ -171,7 +182,9 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
       </div>
       <div v-if="can_flip" class="expert-card-face expert-card-back" :inert="!visible_back" :aria-hidden="!visible_back">
         <div class="expert-card-back-body">
-        <div class="expert-card-heading"><strong>{{ name }}<span>设置{{ no_files ? ' · 不访问项目' : '' }}</span></strong></div>
+        <div class="expert-card-heading"><strong>{{ name }}<span>设置{{ no_files ? ' · 不访问项目' : '' }}</span></strong>
+          <UButton v-if="api_mode" icon="i-lucide-zap" :aria-label="`检查 ${name} 的 API 配置`" title="检查配置：发送一次极短请求，核对地址、密钥、协议与模型" size="xs" :color="api_check.state === 'ok' ? 'success' : api_check.state === 'error' ? 'error' : 'neutral'" variant="ghost" :loading="api_check.state === 'loading'" :disabled="!profile.api_key_ref || !profile.model || !view.launch.available" @click="check_api" /></div>
+        <p v-if="api_mode && api_check.message" :role="api_check.state === 'error' ? 'alert' : 'status'" class="expert-card-check">{{ api_check.message }}</p>
         <div v-if="choices.length > 1" class="expert-card-modes" role="radiogroup" :aria-label="`${name} 接入方式`" @keydown="choose_capability">
           <button v-for="option in choices" :key="option" type="button"
             role="radio" :aria-checked="mode === option" :tabindex="mode === option ? 0 : -1" :data-mode="option" @click="emit('mode', option)">{{ ACCESS_LABELS[option] }}</button>
@@ -189,7 +202,7 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
               :aria-checked="access === option.value" @click="bridge.write_launch(name, 'project_access', option.value)">{{ option.label }}</button>
           </div>
         </div>
-        <ApiSettings v-if="automatic && profile.adapter === 'api'" :name="name" />
+        <ApiSettings v-if="api_mode" :name="name" />
         <template v-else-if="configurable && !connection.length">
           <div class="expert-card-field">
             <span>模型</span><USelect :model-value="profile.model || '__default__'" :items="models.items" :loading="models.loading" :title="models.source" :aria-label="`${name} 使用的模型`" size="xs" class="w-full" @update:model-value="bridge.write_launch_model(name, $event)" />
@@ -232,8 +245,8 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
 .expert-card-facts .expert-card-status.is-ready > i { background: var(--ui-success, #3fb27f); }
 .expert-card-facts .expert-card-status.is-warn > i { background: var(--ui-warning, #e0a33a); }
 .expert-card-facts { display: grid; gap: 4px; width: 100%; margin: 0; padding-top: 10px; border-top: 1px solid var(--ui-border-muted); font-size: 11px; }
-.expert-card-facts > div { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 8px; }
-.expert-card-facts dt { color: var(--ui-text-dimmed); }
+.expert-card-facts > div { display: grid; grid-template-columns: 3em minmax(0, 1fr); gap: 8px; }
+.expert-card-facts dt { color: var(--ui-text-dimmed); white-space: nowrap; }
 .expert-card-facts dd { overflow: hidden; margin: 0; color: var(--ui-text-toned); white-space: nowrap; text-overflow: ellipsis; }
 .expert-card-flip { position: absolute; right: 8px; bottom: 8px; display: inline-flex; align-items: center; gap: 4px; min-height: 22px; padding: 2px 6px; border-radius: 4px; color: var(--ui-text-dimmed); font-size: 11px; }
 .expert-card-flip > span { width: 12px; height: 12px; }
@@ -256,6 +269,7 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
 .expert-card-field { display: grid; grid-template-columns: 26px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--ui-text-dimmed); font-size: 11px; }
 .expert-card-catalog { display: flex; align-items: baseline; gap: 8px; margin: -5px 0 0 34px; color: var(--ui-text-dimmed); font-size: 10px; overflow-wrap: anywhere; }
 .expert-card-catalog > span { flex: 1; }
+.expert-card-check { margin: -4px 0 0; color: var(--ui-text-muted); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
 .expert-card-catalog > button { flex-shrink: 0; color: var(--channel-accent); }
 .expert-card-defaults { position: absolute; left: 8px; bottom: 8px; min-height: 22px; padding: 2px 4px; border-radius: 4px; color: var(--ui-text-muted); font-size: 11px; }
 .expert-card-defaults:hover:not(:disabled) { color: var(--channel-accent); }
