@@ -1662,16 +1662,19 @@ test("discussions keep only woken members while free rooms keep each member's de
   state.launch.profiles = { Codex: { adapter: 'codex_cli', executable: 'C:\\codex.exe' },
     Claude: { adapter: 'claude', executable: 'C:\\claude.exe' }, Gemini: { adapter: 'antigravity_cli' } };
   f.context.update_creation_mode();
-  assert.equal(host.value, 'Codex');
-  assert.deepEqual(Object.entries(experts), [['Codex', 'cli'], ['Claude', 'cli']], "configured software fills an empty discussion");
+  assert.equal(host.value, '');
+  assert.deepEqual(Object.entries(experts), [], "configured software never fills the roster by itself");
   kind.value = 'free'; f.context.update_creation_mode();
-  experts = { Codex: 'cli', Claude: 'manual', DeepSeek: 'online' }; host.value = '用户';
+  assert.deepEqual(Object.entries(experts), []);
+  experts = { Codex: 'cli', Claude: 'manual', DeepSeek: 'online' }; host.value = 'Codex';
+  state.creation_drafts = {};
   kind.value = 'brainstorm'; f.context.update_creation_mode();
-  assert.deepEqual(Object.entries(experts), [['Codex', 'cli'], ['Claude', 'cli']], "the discussion keeps its own draft");
+  assert.deepEqual(Object.entries(experts), [['Codex', 'cli']], "a first visit carries over only woken members");
+  assert.equal(host.value, 'Codex');
   experts = {};
   kind.value = 'free'; f.context.update_creation_mode();
-  assert.deepEqual(Object.entries(experts), [['Codex', 'cli'], ['Claude', 'manual'], ['DeepSeek', 'online']]);
-  assert.equal(host.value, '用户');
+  assert.deepEqual(Object.entries(experts), [['Codex', 'cli'], ['Claude', 'manual'], ['DeepSeek', 'online']], "each use keeps its own draft");
+  assert.equal(host.value, 'Codex');
 });
 
 /** Exercise the participant menu's pause boundary with the shared controller actions. */

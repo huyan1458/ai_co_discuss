@@ -2147,16 +2147,13 @@ function update_creation_mode() {
   if (key === state.creation_mode) return;
   const previous = { host: element("new-room-host").value, experts: read_expert_inputs("new-expert-modes") };
   state.creation_drafts[state.creation_mode] = previous;
-  const configured = Object.entries(state.launch.profiles).filter(([name, profile]) =>
-    LAUNCH_CLIENTS[name]?.some(client => client.value === profile.adapter)
-    && (profile.adapter === "api" ? profile.api_key_ref && profile.model && profile.base_url
-      : profile.adapter === "antigravity" ? profile.ipc_directory : profile.executable)).map(([name]) => name);
-  const experts = Object.keys(previous.experts).length ? previous.experts : Object.fromEntries(configured.map(name => [name, "cli"]));
+  // The roster starts empty and carries over only members the user added; configured software is never added for them.
+  const experts = previous.experts;
   // Discussions run automatically; manual and web members stay available only in free rooms.
   const eligible = kind === "free" ? experts : Object.fromEntries(Object.keys(experts)
     .filter(name => experts[name] === "cli" && LAUNCH_CLIENTS[platform_of(name)]).map(name => [name, "cli"]));
   const local_names = Object.keys(eligible).filter(name => eligible[name] !== "online");
-  const draft = state.creation_drafts[key] || { experts: eligible, host: kind === "free" ? "用户" : local_names.includes(previous.host) ? previous.host : local_names[0] || "" };
+  const draft = state.creation_drafts[key] || { experts: eligible, host: local_names.includes(previous.host) ? previous.host : local_names[0] || "" };
   render_expert_inputs("new-expert-modes", draft.experts);
   render_host_options("new-room-host", Object.keys(draft.experts), draft.host);
   state.creation_mode = key;
