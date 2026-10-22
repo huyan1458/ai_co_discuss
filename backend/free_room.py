@@ -673,6 +673,70 @@ def add_member(connection, room_id, token, payload, now):
     return free_view(connection, room_id)
 
 
+def discussion_roster(connection, room_id):
+    """Return a discussion's host, active experts and phase; away experts keep only their member row."""
+    row = connection.execute("SELECT host,experts,phase FROM topic_settings WHERE room_id=?", (room_id,)).fetchone()
+    return row["host"], json.loads(row["experts"]), row["phase"]
+
+
+def save_discussion_experts(connection, room_id, experts):
+    """Write the active roster; a running discussion keeps going and its host is asked to re-plan."""
+    connection.execute("UPDATE topic_settings SET experts=? WHERE room_id=?", (json.dumps(experts, ensure_ascii=False), room_id))
+
+
+def add_discussion_member(connection, room_id, token, payload, now):
+    """Owner invites one expert into a discussion using the room's delivery method."""
+    require_owner(connection, room_id, token)
+    begin_write(connection)
+    member = member_value(payload)
+    _, experts, phase = discussion_roster(connection, room_id)
+    run = connection.execute("SELECT mode FROM discussion_runtime WHERE room_id=?", (room_id,)).fetchone()
+    if member["access"] != ("runner" if run and run["mode"] == "automatic" else "manual"):
+        raise ValueError("新专家的接入方式须与讨论的推进方式一致")
+    existing = connection.execute("SELECT * FROM room_members WHERE room_id=? AND name=? AND status<>'removed'", (room_id, member["name"])).fetchone()
+    if existing and existing["status"] == "active" and existing["token_hash"] == token_hash(member["token"]):
+        return
+    if existing:
+        raise FileExistsError(f"{member['name']} 已是本房间成员；离开的成员请用请回")
+    if phase == "concluded":
+        raise ValueError("讨论已收束，不能再邀请专家")
+    if len(experts) >= MAX_ROOM_AGENTS:
+        raise ValueError("房间成员已达上限")
+    require_fresh_member_token(connection, room_id, member["token"])
+    insert_member(connection, room_id, member, now)
+    save_discussion_experts(connection, room_id, {**experts, member["name"]: "cli"})
+
+
+def discussion_member_action(connection, room_id, member_id, token, payload):
+    """Owner sends an expert away (keeping its seat), brings it back with a new credential, or removes it.
+
+    Leaving cancels the expert's open assignments; the host keeps its role and cannot leave.
+    """
+    member = owned_member(connection, room_id, member_id, token)
+    host, experts, _ = discussion_roster(connection, room_id)
+    action = payload.get("action")
+    if action in ("away", "remove"):
+        if member["name"] == host:
+            raise ValueError("主持人不能离开或移除；请先更换主持人")
+        connection.execute("UPDATE discussion_turns SET status='cancelled' WHERE room_id=? AND expert=? AND status IN ('pending','notified')",
+                           (room_id, member["name"]))
+        connection.execute("UPDATE discussion_turns SET status='skipped' WHERE room_id=? AND expert=? AND status='queued'", (room_id, member["name"]))
+        connection.execute("UPDATE room_members SET status=? WHERE id=?", ("away" if action == "away" else "removed", member_id))
+        experts.pop(member["name"], None)
+    elif action == "active":
+        hashed = token_hash(payload.get("token"))
+        if member["status"] == "active" and hashed and hmac.compare_digest(hashed, member["token_hash"]):
+            return
+        if member["status"] != "away" or not hashed or hmac.compare_digest(hashed, member["token_hash"]):
+            raise ValueError("只有离开的成员可以请回，且须提供新的成员凭证")
+        require_fresh_member_token(connection, room_id, payload.get("token"))
+        connection.execute("UPDATE room_members SET status='active',token_hash=? WHERE id=?", (hashed, member_id))
+        experts[member["name"]] = "online" if member["access"] == "online" else "cli"
+    else:
+        raise ValueError("action 须为 away、active 或 remove")
+    save_discussion_experts(connection, room_id, experts)
+
+
 def require_fresh_member_token(connection, room_id, token):
     """Prevent owner or another member's credential from being reused for a new identity."""
     hashed = token_hash(token)

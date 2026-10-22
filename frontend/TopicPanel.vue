@@ -47,19 +47,10 @@ const progress_summary = computed(() => {
     </template>
     <template v-else>
       <div class="page-heading access-heading">
-        <div><h2>接入 AI</h2><p>选择任务交付方式，再将对应身份的参与说明交给 AI。</p></div>
+        <div><h2>接入 AI</h2><p>讨论由本机服务唤醒 AI：在这里启动、修正软件连接或查看参与说明；成员进出在进度看板操作。</p></div>
         <UBadge v-if="automatic" :color="room.runtime?.status === 'running' ? 'primary' : 'neutral'" variant="subtle">{{ runtime_status }}</UBadge>
       </div>
-      <div class="access-modes" aria-label="接入方式">
-        <button type="button" class="access-mode" :class="{ 'is-selected': automatic }" :aria-pressed="automatic" :disabled="Boolean(pending)" @click="act('choose_runtime', 'automatic')">
-          <UIcon name="i-lucide-zap" class="mode-icon" /><span><strong>程序唤醒</strong><small>本机服务按安排唤醒 AI，接续讨论。</small></span><UIcon v-if="automatic" name="i-lucide-check" class="mode-check" />
-        </button>
-        <button type="button" class="access-mode" :class="{ 'is-selected': !automatic }" :aria-pressed="!automatic" :disabled="Boolean(pending)" @click="act('choose_runtime', 'manual')">
-          <UIcon name="i-lucide-copy" class="mode-icon" /><span><strong>手动接入</strong><small>首次复制指令，之后人工或软件定时触发。</small></span><UIcon v-if="!automatic" name="i-lucide-check" class="mode-check" />
-        </button>
-      </div>
       <section v-if="automatic" class="access-evidence" aria-label="实际执行进展" role="status"><strong>实际执行进展</strong><p>{{ bridge.execution_label(execution) }}</p><p v-if="room.runtime?.status === 'running' && (!execution || ['pending', 'dispatched'].includes(execution.status))" class="fine-print">尚无 AI 进入记录。请核对本机服务及对应软件的登录和工具权限。</p></section>
-      <div v-if="room.runtime?.status === 'running'" class="access-running"><span>切换方式前，先暂停讨论并核对原会话。</span><UButton label="暂停讨论" variant="outline" color="neutral" class="channel-surface-button" :loading="pending === 'pause_runtime'" @click="act('pause_runtime')" /></div>
       <section v-if="automatic && view.launch.available" class="access-setup" aria-label="网页启动入口">
         <div class="access-section-title"><h3>从网页启动</h3><span class="fine-print">本机执行</span></div>
         <template v-if="room.runtime?.status === 'ready'">
@@ -150,15 +141,6 @@ const progress_summary = computed(() => {
 .access-evidence { margin-bottom: 18px; padding: 12px 0; overflow-wrap: anywhere; }
 .access-evidence strong { font-size: 13px; }
 .access-evidence p { margin: 6px 0 0; }
-.access-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 28px; }
-.access-mode { display: flex; align-items: flex-start; gap: 12px; min-width: 0; padding: 17px 16px; border: 1px solid var(--ui-border); border-radius: 8px; background: transparent; color: var(--ui-text-muted); text-align: left; cursor: pointer; }
-.access-mode:hover { background: var(--ui-bg-elevated); }
-.access-mode.is-selected { background: color-mix(in srgb, var(--channel-accent) 6%, transparent); }
-.access-mode > span:not(.mode-icon):not(.mode-check) { flex: 1; min-width: 0; }
-.access-mode strong { display: block; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
-.access-mode small { display: block; margin-top: 5px; font-size: 12px; line-height: 1.6; }
-.mode-icon { flex-shrink: 0; width: 18px; height: 18px; margin-top: 1px; }
-.mode-check { flex-shrink: 0; width: 16px; height: 16px; color: var(--channel-accent); margin-top: 1px; }
 .access-section-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
 .access-section-title h3 { font-size: 13px; font-weight: 600; color: var(--ui-text-highlighted); }
 .access-repair { display: grid; gap: 14px; margin: 16px 0; padding: 18px; border: 1px solid var(--ui-border); border-radius: 8px; }
@@ -206,15 +188,11 @@ const progress_summary = computed(() => {
 .access-failure strong { color: var(--ui-text-highlighted); font-size: 12px; font-weight: 500; }
 .access-failure summary { cursor: pointer; margin-top: 6px; color: var(--ui-text-muted); font-size: 11px; }
 .access-failure p { margin-top: 8px; color: var(--ui-text-muted); font-size: 12px; overflow-wrap: anywhere; line-height: 1.7; }
-.access-running { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; font-size: 12px; color: var(--ui-text-muted); }
-.access-running > button { flex-shrink: 0; }
 @media (max-width: 640px) {
   .access-member-list > li { flex-wrap: wrap; }
   .access-member-list .button-row { width: 100%; margin-left: 44px; }
 
   .access-page .access-repair button { min-height: 44px; }
-  .access-modes { grid-template-columns: 1fr; gap: 8px; margin-bottom: 22px; }
-  .access-mode { padding: 14px; }
   .access-workspace .form-two-columns { grid-template-columns: 1fr; }
   .access-steps > li { flex-wrap: wrap; gap: 10px; padding: 17px 0; }
   .access-steps > li > div { flex-basis: calc(100% - 34px); }
@@ -223,7 +201,6 @@ const progress_summary = computed(() => {
   .access-page :is(button, a), .access-reading > summary, .access-failure summary { min-height: 44px; }
   .access-reading > summary, .access-failure summary { display: flex; align-items: center; }
   .access-limit-summary { max-width: 45%; text-align: right; }
-  .access-instructions .button-row > :is(button, a), .access-running > button { min-height: 44px; }
-  .access-running { flex-wrap: wrap; gap: 10px; }
+  .access-instructions .button-row > :is(button, a) { min-height: 44px; }
 }
 </style>

@@ -22,7 +22,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 from .free_room import (add_member, after_free_message, authorize_free_write, check_answer, check_proxy, execution_action, free_view,
                         inbox, interrupt_member, member_action, member_values, migrate_free_tables, proxy_member, reserve_execution,
                         discussion_members, room_mode, save_room_access, sync_discussion_members, view_execution)
-from .free_room import convert_suggestion, message_suggestions, save_suggestions
+from .free_room import add_discussion_member, convert_suggestion, discussion_member_action, message_suggestions, save_suggestions
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, is_ai, is_participant
 from .runtime import (authorize_write, begin_write, configure_runtime, event_action,
                      LIMIT_DEFAULTS, LIMITS_SQL, limit_values, limits_view, require_within_limits,
@@ -387,6 +387,9 @@ def update_topic(connection, room_id, payload):
     if turn and turn["status"] in ("pending", "notified"):
         if settings["phase"] == "concluded" or turn["expert"] not in settings["experts"]:
             raise ValueError("请先完成或取消当前发言安排")
+    running = connection.execute("SELECT 1 FROM discussion_runtime WHERE room_id=? AND status='running'", (room_id,)).fetchone()
+    if running and settings["experts"] != room["experts"]:
+        raise ValueError("讨论运行中请在进度看板邀请、暂离或移除专家")
     connection.execute("UPDATE rooms SET title=?,goal=? WHERE id=?", (settings["title"], settings["goal"], room_id))
     sync_discussion_members(connection, room_id, payload, settings)
     save_topic_settings(connection, room_id, settings)
@@ -1130,6 +1133,8 @@ def room_text(connection, room_id, params):
     if room["mode"] == "free":
         members = "；".join(f"{item['name']}（已读至 #{item['read_until']}，待投递 {item['pending']}）" for item in room["free"]["members"])
         content.append(f"自由协作房间：无发言权、安排与轮次。成员：{members or '无'}。用户的消息点名成员后生成请求；成员回答须带本次执行编号，执行结束、被打断或过期后的回答会被拒绝，不能改作普通发言。")
+        content.extend(["", "## 读取", f"完整历史（分页）：{base}/messages?page=1", f"单条原文：{base}/messages/消息编号"])
+        content.extend(participation_text(params, free=True))
         return "\n\n".join(content)
     turn = room["current_turn"]
     floor = room["floor"]
@@ -1154,18 +1159,24 @@ def room_text(connection, room_id, params):
     content.extend(["", "## 读取与检索", f"完整历史（分页）：{base}/messages?page=1",
                     f"单条原文：{base}/messages/消息编号", f"检索：{base}/search?q=关键词&page=1",
                     f"按作者检索：{base}/search?author=Claude", f"发言安排历史：{base}/turns?page=1"])
-    if params.get("mode") == "cli":
-        content.extend(["", "## 本地 CLI AI · 可读可写",
-                        f"POST /api/rooms/{room_id}/messages", "Content-Type: application/json",
-                        'JSON 字段：author、text、submission_id（新 UUID）、source（填写 "cli"）；可选 reply_to、turn_id。',
-                        f"完整写入与主持协议：{base}/protocol",
-                        "重试沿用编号和正文；收到回执后按 message.id 重新读取核对。"])
-    else:
-        content.extend(["", "## 在线 AI · 只读参与",
-                        "请读取议题、状态和相关原文，在你自己的聊天窗口输出观点：先给通常 1–3 句的回答摘要，再给完整正文，保留关键条件、不确定性及引用编号；需要留档时由用户代发。",
-                        "不要操作网页表单、调用写入接口或生成发布链接，不要求获取发布回执。读取失败时如实报告，由用户提供复制的材料。"])
-    content.append("参与方式按运行环境区分；主持人可以兼任专家；作者、职责与来源尚未认证。不调用模型服务 API。")
+    content.extend(participation_text(params))
     return "\n\n".join(content)
+
+
+def participation_text(params, free=False):
+    """Local AIs follow the skills; web AIs read this short guide in place of them."""
+    footer = "参与方式按运行环境区分；主持人可以兼任专家；作者、职责与来源尚未认证。"
+    if params.get("mode") == "cli":
+        return ["", "## 本地 AI", "本地 AI 请调用 discuss-participant（主持人另调用 discuss-host），用 codiscuss 命令读写；"
+                "字段与写入规则以 codiscuss room protocol 为准，不直接调用网站接口。", footer]
+    return ["", "## 在线 AI · 只读参与",
+            "你是只读成员：读取议题、状态和与你相关的原文，在自己的聊天窗口回答；回答由用户代发留档。",
+            "先回答真正的问题，给出理由、证据、适用条件与不确定性；区分事实、推断和建议，引用原文编号，不编造他人的回答。"
+            "讨论初始阶段先独立判断，暂不读他人观点；深入讨论先理解对方主张及其最有力的依据，再说明同意、分歧或需要补的证据。"
+            "可以坚持有依据的少数意见，也可因新证据修改判断并说明变化。",
+            "输出：先 1–3 句摘要，再给完整正文。",
+            "不要操作网页表单、调用写入接口或生成发布链接。读取失败时如实报告，由用户提供复制的材料。",
+            *(["自由协作：只回应点名给你的消息（编号见阅读通知），按时间顺序处理，后面的消息可以修正前面的。"] if free else []), footer]
 
 
 def brief_text(room):
@@ -1538,6 +1549,14 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         free = room_mode(connection, room_id) == "free"
         if free and parts[3:4] in (["inbox"], ["executions"], ["members"], ["suggestions"]):
             return self.handle_free_api(connection, parts, method)
+        if parts[3:4] == ["members"] and method == "POST" and len(parts) in (4, 5):
+            if len(parts) == 4:
+                add_discussion_member(connection, room_id, token, self.read_payload(), utc_now())
+            else:
+                discussion_member_action(connection, room_id, int(parts[4]), token, self.read_payload())
+            result = require_room(connection, room_id)
+            connection.commit()
+            return self.respond(result)
         if parts[3:4] == ["attachments"]:
             return self.handle_attachments(connection, parts, params, method)
         if parts[3:4] in (["runtime"], ["events"]):

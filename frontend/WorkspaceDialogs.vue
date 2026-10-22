@@ -125,8 +125,9 @@ async function save_form() {
   const action = mode.value === "create" ? "create" : mode.value === "edit" ? "save_topic" : "schedule";
   if (action === "create") {
     const folder_id = props.targetFolder?.id ?? null;
-    const room_mode = view.value.fields['new-room-mode'];
-    const launching = room_mode === 'free' || (view.value.launch.create && room_mode === 'automatic');
+    // Keep the dialog open while the local service starts members, matching submit_room.
+    const launching = view.value.fields['new-room-kind'] === 'free'
+      ? Object.values(view.value.experts['new-expert-modes'] || {}).includes('cli') : view.value.launch.create && view.value.launch.available;
     if (!launching) mode.value = "";
     if (await act(action, folder_id) && launching) mode.value = "";
   } else if (await act(action)) mode.value = "";

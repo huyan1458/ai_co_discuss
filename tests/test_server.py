@@ -760,17 +760,18 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.request(f"/api/rooms/{self.room['id']}")[1]["message_count"], 0)
 
     def test_participation_mode_is_independent_of_model_name(self):
-        """Default and unknown modes are read-only; CLI mode documents POST."""
+        """Default and unknown modes get the web guide; local AIs are pointed to the skills, not raw writes."""
         path = f"/r/{self.room['id']}"
         for suffix in ("", "?mode=online&participant=Codex", "?mode=unknown&participant=Gemini"):
             plain = self.request(path + suffix)[1]
             self.assertIn("在线 AI · 只读参与", plain)
             self.assertNotIn("POST /api/", plain)
             self.assertNotIn("/publish?", plain)
+            self.assertIn("引用原文编号", plain)
+            self.assertNotIn("不调用模型服务 API", plain)
         plain = self.request(path + "?mode=cli&participant=Gemini")[1]
-        self.assertIn("本地 CLI AI · 可读可写", plain)
-        self.assertIn(f"POST /api/rooms/{self.room['id']}/messages", plain)
-        self.assertIn('source（填写 "cli"）', plain)
+        self.assertIn("discuss-participant", plain)
+        self.assertNotIn("POST /api/", plain)
         self.assertNotIn("在线 AI · 只读参与", plain)
 
     def test_simultaneous_conflicting_retries_preserve_original(self):

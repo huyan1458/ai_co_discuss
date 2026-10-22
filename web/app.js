@@ -42,7 +42,7 @@ const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: ""
   archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
   reply_to: null, turn_reply_to: null, tab: "topic", refresh_version: 0, context_dirty: false, topic_dirty: false,
   snapshot_id: 0, pending_submission: null, pending_turn: null, pending_room: null, toast_timer: null,
-  creation_mode: "brainstorm:automatic", creation_drafts: {}, access_notice: "", access_error: "" };
+  creation_mode: "brainstorm", creation_drafts: {}, access_notice: "", access_error: "" };
 const live_updates = { source: null, connected: false, enabled: false, timer: null, poll_timer: null,
   running: false, dirty: false };
 state.messages = [];
@@ -853,15 +853,14 @@ function reset_create_form() {
 function prepare_brainstorm() {
   reset_create_form();
   const room = state.room;
-  const members = (room.free?.members || []).filter(member => member.status === "active");
-  const host = members.find(member => member.role === "host" && member.access !== "online") || members.find(member => member.access !== "online");
-  // Online members cannot join an automatic discussion, so their presence selects manual advancement.
+  // Discussions run automatically, so only members the local service wakes come along.
+  const members = (room.free?.members || []).filter(member => member.status === "active" && member.access === "runner");
+  const host = members.find(member => member.role === "host") || members[0];
   element("new-room-kind").value = "brainstorm";
-  element("new-room-mode").value = members.some(member => member.access !== "runner") ? "manual" : "automatic";
   update_creation_mode();
   element("new-room-title").value = `头脑风暴：${room.title}`.slice(0, 80);
   element("new-room-user_request").value = room.user_request || room.goal || "";
-  render_expert_inputs("new-expert-modes", Object.fromEntries(members.map(member => [member.name, member.access === "online" ? "online" : "cli"])));
+  render_expert_inputs("new-expert-modes", Object.fromEntries(members.map(member => [member.name, "cli"])));
   render_host_options("new-room-host", members.map(member => member.name), host?.name || "");
   state.create_parent = room.id;
 }
@@ -888,7 +887,7 @@ function prepare_member_request(room_id, operation, member, options = {}) {
 
 /** Keep a successful membership receipt and its private file together. */
 function finish_member_request(room_id, token, record, result) {
-  const members = result.free?.members || result.members || [];
+  const members = result.free?.members || result.room?.members || result.members || [];
   save_room_credentials({ id: room_id, members }, token, [record.member]);
   localStorage.removeItem(record.key);
 }
@@ -899,14 +898,14 @@ async function change_member({ member_id, name, action, role }) {
   state.free_error = ""; state.free_notice = "";
   try {
     if (action === "rejoin") {
-      const member = state.room.free.members.find(item => item.id === member_id);
+      const member = (state.room.free?.members || state.room.members).find(item => item.id === member_id);
       const token = localStorage.getItem(`discuss-access:${room_id}`);
       const record = prepare_member_request(room_id, `rejoin:${member_id}`, { name, access: member.access });
       const result = member.access === "runner"
         ? await local_launch_request("room-member", { room_id, token, action: "rejoin", name, member_token: record.member.token })
         : await request_json(`/api/rooms/${room_id}/members/${member_id}`, { action: "active", token: record.member.token });
       finish_member_request(room_id, token, record, result);
-      if (state.room?.id === room_id) state.free_notice = `${name} 已请回；手动成员请下载更新后的私有配置。`;
+      if (state.room?.id === room_id) state.free_notice = member.access === "manual" ? `${name} 已请回；请下载更新后的私有配置。` : `${name} 已请回，续接原会话。`;
     } else {
       await request_json(`/api/rooms/${room_id}/members/${member_id}${action === "interrupt" ? "/interrupt" : ""}`,
         action === "interrupt" ? {} : { action, ...(role ? { role } : {}) });
@@ -929,7 +928,7 @@ async function invite_member({ name, access, project_access = "read" }) {
   try {
     const token = localStorage.getItem(`discuss-access:${room_id}`);
     if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
-    const taken = new Set((state.room.free?.members || []).map(member => member.name));
+    const taken = new Set((state.room.free?.members || state.room.members || []).map(member => member.name));
     let instance = name;
     for (let number = 2; taken.has(instance); number++) instance = `${name}-${number}`;
     const record = prepare_member_request(room_id, `add:${name}:${access}`, { name: instance, access, adapter: "", session_mode: "new" }, { project_access });
@@ -946,7 +945,8 @@ async function invite_member({ name, access, project_access = "read" }) {
     if (state.room?.id === room_id) {
       state.free_notice = access === "online" ? `${record.member.name} 已加入，阅读通知与真实回答由你或授权主持人转交。`
         : access === "manual" ? `${record.member.name} 已加入；在成员菜单下载私有配置、复制参与说明，再交给它的本地会话。`
-          : `${record.member.name} 已加入，之后点名它即会由本机服务唤醒。`;
+          : state.room.mode === "free" ? `${record.member.name} 已加入，之后点名它即会由本机服务唤醒。`
+            : `${record.member.name} 已加入讨论，主持人会重新安排发言。`;
       await refresh_room();
     }
   } catch (error) { if (state.room?.id === room_id) state.free_error = error.message; }
@@ -1326,10 +1326,10 @@ function access_snapshot() {
     })), notice: state.access_notice, error: state.access_error };
 }
 
-/** Generate a separate random credential for each declared participant instance. */
-function creation_members(experts, automatic) {
+/** Generate a separate random credential for each declared participant instance; `cli` members are woken locally. */
+function creation_members(experts) {
   return Object.entries(experts || {}).map(([name, capability]) => ({ name, token: crypto.randomUUID() + crypto.randomUUID(),
-    adapter: "", access: capability === "online" ? "online" : automatic ? "runner" : "manual", session_mode: "new" }));
+    adapter: "", access: capability === "cli" ? "runner" : capability, session_mode: "new" }));
 }
 
 /** Capture public form choices separately from the private credentials added at submission. */
@@ -1340,7 +1340,7 @@ function room_creation_payload(folder_id) {
   // Free rooms carry their task in the conversation, so no opening brief is sent even if one was typed for a discussion.
   if (element("new-room-kind").value === "free") return { ...common, user_request: "", mode: "free", host: common.host || "用户" };
   return { ...common, mode: "brainstorm", background: element("new-room-background").value,
-    boundaries: element("new-room-boundaries").value, runtime_mode: element("new-room-mode").value, limits: read_limits("new-room"),
+    boundaries: element("new-room-boundaries").value, runtime_mode: "automatic", limits: read_limits("new-room"),
     ...(state.create_parent ? { parent_room_id: state.create_parent } : {}) };
 }
 
@@ -1362,10 +1362,10 @@ async function submit_room(event, folder_id = null) {
   if (state.directory_pending.has("create-room")) return;
   const payload = room_creation_payload(folder_id);
   const free = payload.mode === "free";
-  const automatic = free ? element("new-room-mode").value === "automatic" : payload.runtime_mode === "automatic";
-  // A discussion can still be created without the local service and started later from the room.
-  const launching = automatic && (free || state.launch.create && state.launch.available);
-  if (launching && !state.launch.available) throw new Error("程序唤醒需要连接本机服务；也可改用手动接入");
+  // A discussion can still be created without the local service and started later from the room;
+  // a free room needs the service only for members it wakes.
+  const launching = free ? Object.values(payload.experts).includes("cli") : state.launch.create && state.launch.available;
+  if (launching && !state.launch.available) throw new Error("本机唤醒的成员需要连接本机服务；也可改为手动接入或网页代发");
   const launch_draft = launching ? launch_options() : null;
   const signature = JSON.stringify({ payload, launch_draft });
   const navigation = state.navigation_version;
@@ -1375,7 +1375,7 @@ async function submit_room(event, folder_id = null) {
   try {
     const pending = prepare_room_request(signature);
     const token = pending.token;
-    pending.members ||= creation_members(payload.experts, automatic);
+    pending.members ||= creation_members(payload.experts);
     const input = { ...(launch_draft || {}), room: { ...payload, members: pending.members, submission_id: pending.id }, token };
     room = await update_directory({ key: "create-room", label: `「${payload.title}」创建`,
     error_message: launching ? error => `「${payload.title}」${error.message}` : null,
@@ -1622,7 +1622,8 @@ function launch_model_state(name, launch = state.launch) {
   if (profile.adapter === "api") {
     const catalog = launch.model_catalogs?.[model_catalog_key(profile)];
     const preset = launch.api_providers?.[platform_of(name)];
-    const official = profile.base_url?.replace(/\/$/, "") === preset?.base_url;
+    // Without the local service there are no presets, and two missing addresses are not an official match.
+    const official = Boolean(preset) && profile.base_url?.replace(/\/$/, "") === preset.base_url;
     const models = catalog?.models || (official ? preset.models.map(id => ({ id, label: id })) : []);
     return { supported: true, items: models.map(model => ({ label: model.label || model.id, value: model.id })),
       loading: Boolean(catalog?.loading), error: catalog?.error || "", source: catalog ? "来自 API 模型列表" : "官方推荐，可输入其他模型 ID" };
@@ -2112,8 +2113,8 @@ function default_experts() { return {}; }
 
 /** Keep a roster per room use and delivery method; software drafts remain per instance. */
 function update_creation_mode() {
-  const kind = element("new-room-kind").value, mode = element("new-room-mode").value;
-  const key = `${kind}:${mode}`;
+  const kind = element("new-room-kind").value;
+  const key = kind;
   if (key === state.creation_mode) return;
   const previous = { host: element("new-room-host").value, experts: read_expert_inputs("new-expert-modes") };
   state.creation_drafts[state.creation_mode] = previous;
@@ -2121,15 +2122,15 @@ function update_creation_mode() {
     LAUNCH_CLIENTS[name]?.some(client => client.value === profile.adapter)
     && (profile.adapter === "api" ? profile.api_key_ref && profile.model && profile.base_url
       : profile.adapter === "antigravity" ? profile.ipc_directory : profile.executable)).map(([name]) => name);
-  const experts = Object.keys(previous.experts).length ? previous.experts
-    : mode === "automatic" ? Object.fromEntries(configured.map(name => [name, "cli"])) : {};
-  const eligible = mode === "automatic" ? Object.fromEntries(Object.keys(experts).filter(name => LAUNCH_CLIENTS[platform_of(name)]).map(name => [name, "cli"])) : experts;
-  const local_names = Object.keys(eligible).filter(name => eligible[name] === "cli");
+  const experts = Object.keys(previous.experts).length ? previous.experts : Object.fromEntries(configured.map(name => [name, "cli"]));
+  // Discussions run automatically; manual and web members stay available only in free rooms.
+  const eligible = kind === "free" ? experts : Object.fromEntries(Object.keys(experts)
+    .filter(name => experts[name] === "cli" && LAUNCH_CLIENTS[platform_of(name)]).map(name => [name, "cli"]));
+  const local_names = Object.keys(eligible).filter(name => eligible[name] !== "online");
   const draft = state.creation_drafts[key] || { experts: eligible, host: kind === "free" ? "用户" : local_names.includes(previous.host) ? previous.host : local_names[0] || "" };
   render_expert_inputs("new-expert-modes", draft.experts);
   render_host_options("new-room-host", Object.keys(draft.experts), draft.host);
   state.creation_mode = key;
-  element("new-room-limit-execution_minutes")?.closest("label")?.toggleAttribute("hidden", mode !== "automatic");
   publish_view();
 }
 
@@ -2160,15 +2161,14 @@ async function convert_suggestion({ message_id, member_id }) {
 
 /** A completed creation starts the next form with fresh mode defaults. */
 function reset_creation_mode() {
-  state.creation_mode = "brainstorm:automatic";
+  state.creation_mode = "brainstorm";
   state.creation_drafts = {};
-  element("new-room-limit-execution_minutes")?.closest("label")?.removeAttribute("hidden");
 }
 
 /** Render independently configurable expert modes without changing identity names. */
 function render_expert_inputs(container_id, experts) {
   element(container_id).innerHTML = [...new Set([...Object.keys(default_experts()), ...Object.keys(experts).filter(platform_of)])].map((name) =>
-    `<label>${name}<select data-expert="${name}" aria-label="${name} 参与方式"><option value="">不参与</option><option value="cli">本地 CLI · 读写</option><option value="online">在线 AI · 只读</option></select></label>`).join("");
+    `<label>${name}<select data-expert="${name}" aria-label="${name} 参与方式"><option value="">不参与</option><option value="cli">本机唤醒</option><option value="manual">手动接入</option><option value="online">网页代发 · 只读</option></select></label>`).join("");
   element(container_id).querySelectorAll("[data-expert]").forEach((control) => { control.value = experts[control.dataset.expert] || ""; });
 }
 
@@ -2709,7 +2709,6 @@ async function initialize() {
   bind_host_controls();
   reset_creation_mode();
   element("new-room-kind").addEventListener("change", update_creation_mode);
-  element("new-room-mode").addEventListener("change", update_creation_mode);
   document.addEventListener("focusin", event => {
     if (event.target.dataset?.launchField === "model") load_launch_models(event.target.dataset.launchName);
   });

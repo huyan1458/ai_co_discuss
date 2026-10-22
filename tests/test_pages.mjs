@@ -522,6 +522,27 @@ for (const on_limit of ['pause', 'summarize']) {
   });
 }
 
+test('Worker running discussions admit and release experts without pausing, like Python', async t => {
+  const f = await worker_fixture(t);
+  const id = (await f.request('', { title: '成员进出', host: 'Codex', experts: { Codex: 'cli', Claude: 'cli' } })).body.id;
+  assert.equal((await f.request(`/${id}/runtime`, { action: 'start', revision: 0, deadline: 0 })).status, 200);
+  const turn = (await f.request(`/${id}/turns`, { actor: '用户', expert: 'Claude', question: '观点', submission_id: 'member-turn' })).body.turn;
+  const members = Object.fromEntries((await f.request(`/${id}`)).body.members.map(member => [member.name, member]));
+  assert.equal((await f.request(`/${id}/members/${members.Codex.id}`, { action: 'away' })).status, 400);
+  let room = (await f.request(`/${id}/members/${members.Claude.id}`, { action: 'away' })).body;
+  assert.deepEqual([room.runtime.status, Object.keys(room.experts), room.current_turn.id, room.current_turn.status], ['running', ['Codex'], turn.id, 'cancelled']);
+  const events = (await f.request(`/${id}/events`)).body.events;
+  assert.deepEqual([events.at(-1).participant, events.at(-1).role, events.at(-1).status], ['Codex', 'host', 'pending']);
+  assert.equal((await f.request(`/${id}/topic`, { actor: '用户', experts: { Codex: 'cli', Claude: 'cli' } })).status, 400);
+  const invited = { name: 'DeepSeek', token: crypto.randomUUID(), access: 'manual', adapter: '' };
+  assert.equal((await f.request(`/${id}/members`, invited)).status, 400);
+  room = (await f.request(`/${id}/members`, { ...invited, access: 'runner', adapter: 'api' })).body;
+  assert.deepEqual([room.runtime.status, room.experts.DeepSeek], ['running', 'cli']);
+  assert.equal((await f.request(`/${id}/members/${members.Claude.id}`, { action: 'active', token: f.member_tokens.Claude })).status, 400);
+  room = (await f.request(`/${id}/members/${members.Claude.id}`, { action: 'active', token: crypto.randomUUID() })).body;
+  assert.deepEqual([room.runtime.status, room.experts.Claude], ['running', 'cli']);
+});
+
 test('Worker zero deadline cannot bypass finite topic limits and rejects invalid deadlines', async t => {
   const f = await worker_fixture(t);
   const id = (await f.request('', { title: '有限时长', host: 'Codex', experts: { Codex: 'cli' } })).body.id;

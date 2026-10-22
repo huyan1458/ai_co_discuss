@@ -458,11 +458,23 @@ BEGIN
     UPDATE discussion_runtime SET status='stopped',generation=generation+1,revision=revision+1
         WHERE room_id=NEW.room_id;
 END;
-CREATE TRIGGER IF NOT EXISTS runtime_participants_changed AFTER UPDATE OF host,experts ON topic_settings
-WHEN NEW.host<>OLD.host OR NEW.experts<>OLD.experts
+DROP TRIGGER IF EXISTS runtime_participants_changed;
+-- A new host needs a new run. Experts joining or leaving keep the run going; the host is woken to re-plan.
+CREATE TRIGGER runtime_participants_changed AFTER UPDATE OF host ON topic_settings
+WHEN NEW.host<>OLD.host
 BEGIN
     UPDATE discussion_runtime SET status='paused',generation=generation+1,revision=revision+1
         WHERE room_id=NEW.room_id AND status='running';
+END;
+DROP TRIGGER IF EXISTS runtime_experts_changed;
+CREATE TRIGGER runtime_experts_changed AFTER UPDATE OF experts ON topic_settings
+WHEN NEW.host=OLD.host AND NEW.experts<>OLD.experts
+BEGIN
+    INSERT OR IGNORE INTO discussion_events(room_id,run_id,generation,cause,participant,role)
+        SELECT NEW.room_id,run_id,generation,'members:'||COALESCE((SELECT MAX(id) FROM discussion_events),0),NEW.host,'host'
+        FROM discussion_runtime WHERE room_id=NEW.room_id AND status='running'
+        AND NOT EXISTS(SELECT 1 FROM discussion_events WHERE room_id=NEW.room_id AND role='host' AND status IN ('pending','dispatched','started'))
+        AND NOT EXISTS(SELECT 1 FROM discussion_turns WHERE room_id=NEW.room_id AND status IN ('pending','notified'));
 END;
 CREATE TRIGGER IF NOT EXISTS runtime_goal_changed AFTER UPDATE OF goal ON rooms
 WHEN NEW.goal<>OLD.goal

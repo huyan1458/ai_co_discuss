@@ -1,6 +1,6 @@
 <script setup>
 /** Progress content shared by the docked right rail and the tablet/phone drawer. */
-import { computed, inject, ref } from "vue";
+import { computed, inject, ref, watch } from "vue";
 
 const props = defineProps({ docked: { type: Boolean, default: false } });
 const { view, bridge, act, pending } = inject("discussion");
@@ -36,6 +36,15 @@ const can_close = computed(() => !inactive.value && room.value.phase !== "prepar
 const members = computed(() => [room.value.host, ...Object.keys(room.value.experts || {}).filter((name) => name !== room.value.host)]
   .filter((name) => name && name !== "用户").map(member_status));
 const failed_member = computed(() => members.value.find((member) => member.result));
+// An away expert keeps its seat and session; it is not scheduled until brought back.
+const away_members = computed(() => (room.value.members || []).filter((member) => member.status === "away"));
+const record = (name) => (room.value.members || []).find((member) => member.name === name);
+// Discussions only admit members the local service wakes; a used platform adds another instance.
+const can_invite = computed(() => automatic.value && !settled.value);
+const invite_name = ref("");
+const invite_project_access = ref("read");
+const invite_choices = computed(() => Object.keys(bridge.launch_clients).map((name) => ({ label: bridge.display_name(name), value: name })));
+watch(() => room.value.id, () => { invite_name.value = ""; invite_project_access.value = "read"; });
 const focus = computed(() => turn.value?.question || room.value.focus || room.value.goal || "");
 const focus_long = computed(() => focus.value.length > FOCUS_PREVIEW_LENGTH);
 const timings = computed(() => runtime.value.timings || { items: [], totals: {}, count: 0 });
@@ -110,13 +119,26 @@ function member_status(name) {
 
 /** Menu entries for one participant; the session ID stays out of the row until needed. */
 function member_menu(member) {
-  const items = [{ label: "复制会话 ID", icon: "i-lucide-copy", onSelect: () => act("copy", member.session) }];
-  if (member.name === "Codex" && automatic.value && !settled.value && view.value.launch.available
+  const items = member.session ? [{ label: "复制会话 ID", icon: "i-lucide-copy", onSelect: () => act("copy", member.session) }] : [];
+  if (member.name === "Codex" && member.session && automatic.value && !settled.value && view.value.launch.available
     && !view.value.launch.remote && ["running", "paused"].includes(runtime.value.status)) {
     items.push({ label: "切换 App / CLI", icon: "i-lucide-arrow-left-right",
       disabled: Boolean(pending.value), onSelect: () => open_connection(member) });
   }
-  return [items];
+  const seat = record(member.name);
+  if (!seat || member.is_host || settled.value) return [items].filter((group) => group.length);
+  const change = (label, icon, action, extra = {}) => ({ label, icon, ...extra,
+    onSelect: () => act("change_member", { member_id: seat.id, name: member.name, action }) });
+  return [items, [seat.status === "away"
+    ? change("请回", "i-lucide-log-in", "rejoin", { disabled: !view.value.launch.available })
+    : change("暂离", "i-lucide-log-out", "away")],
+  [change("移除", "i-lucide-trash-2", "remove", { color: "error" })]].filter((group) => group.length);
+}
+
+/** Invite through the local service, which configures the expert before the room admits it. */
+async function invite() {
+  await act("invite_member", { name: invite_name.value, access: "runner", project_access: invite_project_access.value });
+  if (!view.value.free_error) invite_name.value = "";
 }
 
 /** Open the participant's connection editor without leaving the discussion. */
@@ -190,9 +212,26 @@ async function finish(action) {
             <div class="pb-member-model" title="本场启动配置；默认模型与默认强度由对应软件决定">{{ member.model }}</div>
             <div v-if="!settled" class="pb-member-status" :class="`is-${member.tone}`"><span class="pb-dot"></span>{{ member.text }}<small v-if="member.failures"> · 失败 {{ member.failures }} 次</small></div>
           </div>
-          <UDropdownMenu v-if="member.session" :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="`${member.name} 的更多操作`" /></UDropdownMenu>
+          <UDropdownMenu v-if="member_menu(member).length" :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="`${member.name} 的更多操作`" /></UDropdownMenu>
+        </li>
+        <li v-for="member in away_members" :key="member.id" class="pb-member is-away">
+          <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
+          <div class="pb-member-body">
+            <div class="pb-member-name">{{ bridge.display_name(member.name) }}<small>暂离</small></div>
+            <div class="pb-member-status is-neutral"><span class="pb-dot"></span>保留位置和会话，不参与安排</div>
+          </div>
+          <UDropdownMenu v-if="member_menu({ name: member.name }).length" :items="member_menu({ name: member.name })" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="`${member.name} 的更多操作`" /></UDropdownMenu>
         </li>
       </ul>
+      <p v-if="view.free_error" role="alert" class="pb-free-note is-error">{{ view.free_error }}</p>
+      <p v-else-if="view.free_notice" role="status" class="pb-free-note">{{ view.free_notice }}</p>
+      <form v-if="can_invite" class="pb-free-invite" aria-label="邀请专家" @submit.prevent="invite">
+        <USelect v-model="invite_name" :items="invite_choices" placeholder="邀请 AI 加入讨论" size="sm" class="min-w-0 flex-1" />
+        <UButton type="submit" icon="i-lucide-user-plus" label="邀请" size="sm" color="neutral" variant="outline" :disabled="!invite_name || !view.launch.available" :loading="pending === 'invite_member'" />
+        <USelect v-if="invite_name && bridge.launch_can_set_access(invite_name, view.launch)" v-model="invite_project_access" :items="[{ label: '项目文件只读', value: 'read' }, { label: '项目文件可写', value: 'write' }]" aria-label="受邀专家的项目文件权限" size="sm" class="w-full" />
+      </form>
+      <p v-if="can_invite && !view.launch.available" class="pb-free-note">邀请需要本机服务，请在运行 AI 的电脑打开本机网站。</p>
+      <p v-else-if="can_invite" class="pb-free-note">新专家沿用本机软件配置，讨论不中断；主持人会重新安排发言。</p>
     </section>
     <section v-if="has_actions" class="pb-actions" aria-label="操作">
       <UButton v-if="can_restart" icon="i-lucide-rotate-ccw" label="重启" size="sm" color="neutral" variant="outline" class="pb-action pb-restart" title="原安排重新交给对应 AI，需本机接入程序在运行" :loading="pending === 'restart_discussion'" @click="act('restart_discussion')" />
@@ -256,6 +295,7 @@ async function finish(action) {
 </template>
 
 <style scoped>
+.pb-member.is-away { opacity: .6; }
 .pb-member-model { margin: 2px 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .pb-connection { display: grid; gap: 16px; }
 .pb-connection > p { margin: 0; }

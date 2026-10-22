@@ -155,6 +155,7 @@ class RoomWorker {
       this.store.context(updated, true);
     }
     this.config.token = updated.token;
+    for (const [name, profile] of Object.entries(updated.participants)) this.config.participants[name] ??= profile;
     for (const [name, profile] of Object.entries(this.config.participants)) {
       for (const field of [...CONNECTION_FIELDS, 'adapter', 'session_id']) {
         if (updated.participants[name][field] === undefined) delete profile[field];

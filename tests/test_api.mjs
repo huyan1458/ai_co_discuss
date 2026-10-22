@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { API_PROVIDERS, api_base_url, api_generate, api_history, api_models, api_request, api_response, api_tool_results, read_api_key, save_api_key } from '../runner/discussion_api.mjs';
-import { participant_tools } from '../runner/api_participant.mjs';
+import { participant_tools, system_prompt } from '../runner/api_participant.mjs';
 import { launch_discussion } from '../runner/discussion_launch.mjs';
 import { api, DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
@@ -213,4 +213,20 @@ test('provider errors pause without leaking an upstream key or repeating the mod
   assert.match(JSON.stringify(events), /HTTP 500/);
   assert.ok(!JSON.stringify(events).includes(SECRET));
   assert.equal(mock.calls.length, 1);
+});
+
+test('API participants load the shared skills and map CLI commands onto their room tools', () => {
+  const host = system_prompt({ participant: 'DeepSeek', role: 'host', mode: 'brainstorm' });
+  const expert = system_prompt({ participant: 'Qwen', role: 'expert', mode: 'brainstorm' });
+  const free = system_prompt({ participant: 'Grok', role: 'host', mode: 'free' });
+  for (const prompt of [host, expert, free]) {
+    assert.match(prompt, /# 讨论参与（discuss-participant）/);
+    assert.doesNotMatch(prompt, /^name: discuss/m, 'skill frontmatter stays out of the prompt');
+  }
+  assert.match(host, /# 讨论主持（discuss-host）/);
+  assert.match(host, /turn create --plan-file → arrange_turns/);
+  assert.doesNotMatch(expert, /# 讨论主持/);
+  assert.doesNotMatch(expert, /arrange_turns/, 'experts are not told about host tools');
+  assert.match(free, /submit_chat（派活用 to）/);
+  assert.doesNotMatch(free, /# 讨论主持/, 'free-room hosts route work without the discussion host skill');
 });

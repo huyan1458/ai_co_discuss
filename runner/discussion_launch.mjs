@@ -32,6 +32,8 @@ function clients_of(name) { return CLIENTS[platform_of(name)]; }
 const EFFORT_LEVELS = { codex_cli: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], claude: ['low', 'medium', 'high', 'xhigh', 'max'] };
 const PROFILE_FIELDS = ['adapter', 'executable', 'model', 'effort', 'source_thread_id', 'ipc_directory', 'allowed_tools', 'cwd', 'project_name', 'project_id', 'base_url', 'api_protocol', 'api_key_ref'];
 const MAX_MINUTES = 1440;
+// Reading events after this id proves the owner credential without transferring any.
+const MAX_EVENT_ID = 2147483647;
 const CONFIG_APPLY_TIMEOUT_MS = 6000;
 const CONFIG_APPLY_POLL_MS = 100;
 const HELP = `用法：codiscuss launch settings [--file FILE]
@@ -50,7 +52,7 @@ room-models 只读指定 site、room_id 的本机登记模型与思考强度，�
 models 按 adapter、executable 或 API profile 读取模型目录，不启动讨论或生成回答。
 api-key 将 base_url、api_key 保存于本机私有目录，只返回 api_key_ref。
 pick-directory 在本机弹出系统目录选择窗口，返回所选路径；取消时不返回路径。
-room-member 为运行中的自由房间邀请或请回一位成员；须提供 site、room_id、token、action（add/rejoin）、name。
+room-member 为运行中的自由房间或讨论邀请、请回一位成员（讨论只接受本机唤醒的成员）；须提供 site、room_id、token、action（add/rejoin）、name。
 JSON 指定 site、entry（conversation/web）、room（建房内容，含 submission_id）
 或 room_id（已有房间）、participants（本次软件覆盖配置）。
 conversation 还须 current_session_id，当前会话接手首个主持任务。
@@ -201,7 +203,8 @@ function launch_input(input) {
     if (value.entry !== 'web' || value.room_id) throw new Error('自由协作房间目前只能在网页创建时启动');
     const members = value.room.members;
     const names = members?.map(member => typeof member === 'string' ? member : member.name);
-    if (!Array.isArray(members) || !members.length || new Set(names).size !== names.length || names.some(name => !clients_of(name))) {
+    const woken = Array.isArray(members) ? members.filter(woken_member).map(member => typeof member === 'string' ? member : member.name) : [];
+    if (!woken.length || new Set(names).size !== names.length || woken.some(name => !clients_of(name))) {
       throw new Error('自由协作房间须选择至少 1 位支持自动接入的 AI 成员，且不能重复');
     }
   }
@@ -231,10 +234,13 @@ function launch_config(home, input, room, directory, options) {
     data_directory: join(directory, 'runtime'), draft_directory: service_drafts(home, join(directory, 'runtime')) }, directory);
 }
 
-/** Free rooms add one private credential per member, kept with the room configuration for retries. */
+/** A free-room member the local service wakes; manual and online members join without local configuration. */
+function woken_member(member) { return typeof member === 'string' || !member.access || member.access === 'runner'; }
+
+/** Free rooms add one private credential per woken member, kept with the room configuration for retries. */
 function free_launch_config(home, input, room, directory, options) {
   const defaults = options.defaults || launch_settings(home).participants;
-  const names = room.members.map(member => typeof member === 'string' ? member : member.name);
+  const names = room.members.filter(woken_member).map(member => typeof member === 'string' ? member : member.name);
   const participants = Object.fromEntries(names.map(name => [name, participant_profile(name, defaults, input, false)]));
   const members = launch_members(input, names, options);
   return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, mode: 'free', participants, members, api_home: home,
@@ -273,18 +279,18 @@ function participant_profile(name, defaults, input, current_host) {
   return profile;
 }
 
-/** Find the one registered configuration of a free room after proving the owner's credential. */
-async function free_room_context(home, raw) {
+/** Find the one registered configuration of a room after proving the owner's credential. */
+async function member_room_context(home, raw) {
   const input = launch_input({ ...raw, entry: 'web' });
   if (!input.room_id || typeof input.token !== 'string' || !input.token.trim()) throw new Error('管理成员须提供房间编号和房间控制凭据');
-  await site_request(input.site, `/api/rooms/${input.room_id}/inbox`, input.token);
   const paths = read_registry(home).filter(path => {
     const identity = registered_identity(path);
     return identity?.site === input.site && identity.room === input.room_id;
   });
   if (paths.length !== 1) throw new Error('未找到本房间唯一的已登记配置，请核对本机接入服务');
   const config = configuration_snapshot(paths[0]).config;
-  if (config.mode !== 'free') throw new Error('只有自由协作房间可以在运行中增减成员');
+  // Both reads need the owner credential; a discussion reads past its last event so nothing is transferred.
+  await site_request(input.site, `/api/rooms/${input.room_id}/${config.mode === 'free' ? 'inbox' : `events?after=${MAX_EVENT_ID}`}`, input.token);
   return { input, path: paths[0], config };
 }
 
@@ -296,31 +302,34 @@ function manual_access(path, input, name, token) {
 }
 
 /**
- * Invite (add) or bring back (rejoin) one member of a running free room.
+ * Invite (add) or bring back (rejoin) one member of a running free room or discussion.
  * The local configuration is written before the website call, so a retry reuses the same credential.
+ * Discussions only admit members the local service wakes.
  */
 export async function room_member(home, raw, locked = false) {
-  const { input, path } = await free_room_context(home, raw);
+  const { input, path, config: registered } = await member_room_context(home, raw);
   const { action, name } = input;
   const access = input.access || 'runner';
-  if (!['add', 'rejoin'].includes(action) || !platform_of(name) || (access !== 'manual' && !clients_of(name)) || !['runner', 'manual'].includes(access)) {
-    throw new Error('action 须为 add/rejoin，成员须为支持的 AI，接入方式须为 runner/manual');
+  const free = registered.mode === 'free';
+  if (!['add', 'rejoin'].includes(action) || !platform_of(name) || (access !== 'manual' && !clients_of(name)) || !(free ? ['runner', 'manual'] : ['runner']).includes(access)) {
+    throw new Error(free ? 'action 须为 add/rejoin，成员须为支持的 AI，接入方式须为 runner/manual' : '讨论房间只接受本机唤醒的成员；action 须为 add/rejoin');
   }
   const release = locked ? () => {} : acquire_lock(join(dirname(path), 'configuration-edit'));
   try {
     const config = configuration_snapshot(path).config;
     config.api_home = home;
     const room = await site_request(input.site, `/api/rooms/${input.room_id}`, input.token);
+    const roster = free ? room.free.members : room.members;
     if (action === 'add' && input.new_instance) {
       // A name once bound keeps its session locally, so a new instance never reuses a removed member's name.
-      const taken = new Set([...room.free.members.map(member => member.name), ...Object.keys(config.participants), ...Object.keys(config.members || {})]);
+      const taken = new Set([...roster.map(member => member.name), ...Object.keys(config.participants), ...Object.keys(config.members || {})]);
       return room_member(home, { ...raw, name: next_instance(platform_of(name), taken), new_instance: false }, true);
     }
-    const current = room.free.members.find(member => member.name === name);
+    const current = roster.find(member => member.name === name);
     if (input.member_token !== undefined && (typeof input.member_token !== 'string' || input.member_token.length < 32 || input.member_token.length > 256)) throw new Error('member_token 须为 32–256 字符');
     if (current?.status === 'active' && input.member_token && config.members?.[name]?.token === input.member_token) {
       const view = await site_request(input.site, `/api/rooms/${input.room_id}/members/${current.id}`, input.token, { action: 'active', token: input.member_token });
-      return { room_id: input.room_id, member: name, access: current.access, free: view, access_file: null };
+      return { room_id: input.room_id, member: name, access: current.access, [free ? 'free' : 'room']: view, access_file: null };
     }
     if (action === 'add' && !current && config.participants[name] && !locked) throw new Error(`${name} 曾在本房间使用过并绑定了会话；请换一个名称`);
     if (action === 'rejoin' && current?.status !== 'away') throw new Error(`${name} 不是离开状态，无需请回`);
@@ -343,7 +352,7 @@ export async function room_member(home, raw, locked = false) {
       : { action: 'active', token };
     const view = await site_request(input.site, action === 'add' ? `/api/rooms/${input.room_id}/members` : `/api/rooms/${input.room_id}/members/${current.id}`,
       input.token, body);
-    return { room_id: input.room_id, member: name, access: manual ? 'manual' : 'runner', free: view, access_file };
+    return { room_id: input.room_id, member: name, access: manual ? 'manual' : 'runner', [free ? 'free' : 'room']: view, access_file };
   } finally { release(); }
 }
 
@@ -608,8 +617,11 @@ async function perform_launch(home, context, options) {
     const free = config.mode === 'free';
     if (!input.room_id) room = await site_request(input.site, '/api/rooms', config.token, {
       ...input.room, ...(free ? {} : { runtime_mode: 'automatic' }),
-      members: Object.keys(config.participants).map(name => ({ name, adapter: config.participants[name].adapter,
+      members: [...Object.keys(config.participants).map(name => ({ name, adapter: config.participants[name].adapter,
         token: config.members[name].token, access: 'runner', session_mode: config.participants[name].session_id ? 'borrowed' : 'new' })),
+      // Manual and online members keep the credentials the browser generated; nothing local is configured for them.
+      ...(free ? input.room.members.filter(member => !woken_member(member))
+        .map(({ name, token, access }) => ({ name, token, access, adapter: '', session_mode: 'new' })) : [])],
     });
     config.room = room.id;
     await verify_control(config, room);

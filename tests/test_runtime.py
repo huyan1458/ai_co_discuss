@@ -473,6 +473,47 @@ class RuntimeTests(unittest.TestCase):
         self.answer("Gemini", created["queued"][0]["id"], self.enter(events[-1]), "plan-answer-2")
         self.assertEqual((self.events()[-1]["participant"], self.events()[-1]["role"]), ("Codex", "host"))
 
+    def test_running_discussion_admits_and_releases_experts_without_pausing(self):
+        """Leaving cancels only that expert's work and wakes the host; inviting and rejoining keep the run going."""
+        self.plan_round("members-plan")
+        members = {member["name"]: member for member in self.request(self.path)[1]["members"]}
+        host = self.request(self.path + f"/members/{members['Codex']['id']}", {"action": "away"}, self.owner)
+        self.assertEqual(host[0], 400, host[1])
+        status, room = self.request(self.path + f"/members/{members['Claude']['id']}", {"action": "away"}, self.owner)
+        self.assertEqual(status, 200, room)
+        self.assertEqual((room["runtime"]["status"], sorted(room["experts"]), room["queued_turns"]), ("running", ["Codex", "Gemini"], []))
+        self.assertEqual(room["current_turn"]["status"], "cancelled")
+        self.assertEqual(next(member for member in room["members"] if member["name"] == "Claude")["status"], "away")
+        events = self.events()
+        self.assertEqual(next(event for event in events if event["participant"] == "Claude")["status"], "cancelled")
+        self.assertEqual((events[-1]["participant"], events[-1]["role"], events[-1]["status"]), ("Codex", "host", "pending"))
+        self.assertEqual(self.request(self.path + "/topic", {"actor": "用户", "experts": {"Codex": "cli"}}, self.owner)[0], 400)
+        manual = {"name": "DeepSeek", "token": uuid.uuid4().hex, "access": "manual", "adapter": ""}
+        self.assertEqual(self.request(self.path + "/members", manual, self.owner)[0], 400)
+        invited = {**manual, "access": "runner", "adapter": "api"}
+        status, room = self.request(self.path + "/members", invited, self.owner)
+        self.assertEqual((status, room["runtime"]["status"], "DeepSeek" in room["experts"]), (200, "running", True), room)
+        self.assertEqual(self.request(self.path + "/members", invited, self.owner)[0], 200, "an identical retry returns the same member")
+        rejoin = self.path + f"/members/{members['Claude']['id']}"
+        self.assertEqual(self.request(rejoin, {"action": "active", "token": self.member_tokens["Claude"]}, self.owner)[0], 400)
+        status, room = self.request(rejoin, {"action": "active", "token": uuid.uuid4().hex}, self.owner)
+        self.assertEqual((status, room["experts"].get("Claude"), room["runtime"]["status"]), (200, "cli", "running"), room)
+
+    def test_message_during_host_execution_survives_plan_creation(self):
+        """A user message that arrives after the host began is not cleared by the plan the host then creates."""
+        self.start()
+        host_token = self.enter(self.events()[0])
+        time.sleep(1.1)
+        self.assertEqual(self.request(self.path + "/messages", {"author": "用户", "text": "主持执行中的留言",
+            "submission_id": "late-user-note"})[0], 201)
+        status, created = self.request(self.path + "/turns", {"actor": "Codex", "submission_id": "late-plan",
+            "turns": [{"expert": "Claude", "question": "先答"}, {"expert": "Gemini", "question": "再答"}]}, host_token)
+        self.assertEqual(status, 201, created)
+        self.assertGreater(self.request(self.path)[1]["held_since"], 0)
+        self.answer("Claude", created["turn"]["id"], self.enter(self.events()[-1]), "late-answer")
+        room = self.request(self.path)[1]
+        self.assertEqual(([item["expert"] for item in room["queued_turns"]], self.events()[-1]["role"]), (["Gemini"], "host"))
+
     def test_user_action_returns_round_to_host_who_may_continue(self):
         """A user message waits for the speaking expert, then the host resumes or replaces the plan."""
         created, _ = self.plan_round()
@@ -499,21 +540,6 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.request(self.path + f"/turns/{created['turn']['id']}", {"actor": "用户", "status": "cancelled"})[0], 200)
         room = self.request(self.path)[1]
         self.assertEqual(([item["expert"] for item in room["queued_turns"]], self.events()[-1]["role"]), (["Gemini"], "host"))
-    def test_message_during_host_execution_survives_plan_creation(self):
-        """A user message that arrives after the host began is not cleared by the plan the host then creates."""
-        self.start()
-        host_token = self.enter(self.events()[0])
-        time.sleep(1.1)
-        self.assertEqual(self.request(self.path + "/messages", {"author": "用户", "text": "主持执行中的留言",
-            "submission_id": "late-user-note"})[0], 201)
-        status, created = self.request(self.path + "/turns", {"actor": "Codex", "submission_id": "late-plan",
-            "turns": [{"expert": "Claude", "question": "先答"}, {"expert": "Gemini", "question": "再答"}]}, host_token)
-        self.assertEqual(status, 201, created)
-        self.assertGreater(self.request(self.path)[1]["held_since"], 0)
-        self.answer("Claude", created["turn"]["id"], self.enter(self.events()[-1]), "late-answer")
-        room = self.request(self.path)[1]
-        self.assertEqual(([item["expert"] for item in room["queued_turns"]], self.events()[-1]["role"]), (["Gemini"], "host"))
-
         host = self.enter(self.events()[-1])
         self.take_floor("Codex", host)
         status, _ = self.request(self.path + "/turns", {"actor": "Codex", "expert": "Codex", "question": "重排",

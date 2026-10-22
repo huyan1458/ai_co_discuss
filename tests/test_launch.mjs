@@ -912,6 +912,39 @@ test('members join, leave and return while a free room keeps running', async t =
   } finally { await service.close(); }
 });
 
+test('a free room is created with woken, manual and online members chosen one by one', async t => {
+  const f = await fixture(t);
+  const owner = randomUUID() + randomUUID(), manual_token = randomUUID() + randomUUID();
+  const members = [{ name: 'Claude', access: 'runner', token: randomUUID() + randomUUID() },
+    { name: 'Codex', access: 'manual', token: manual_token }, { name: 'DeepSeek', access: 'online', token: randomUUID() + randomUUID() }];
+  const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token: owner,
+    room: { title: '混合接入', goal: 'x', mode: 'free', members, submission_id: randomUUID() } }, f.options);
+  assert.deepEqual(launched.room.free.members.map(member => [member.name, member.access]), [['Claude', 'runner'], ['Codex', 'manual'], ['DeepSeek', 'online']]);
+  assert.deepEqual(Object.keys(load_config(launched.config_path).participants), ['Claude'], 'only woken members get local configuration');
+  assert.equal((await request(f.site, `/api/rooms/${launched.room.id}/messages`, { author: 'Codex', text: '手动成员', source: 'cli', submission_id: randomUUID() },
+    { 'X-Discussion-Token': manual_token })).status, 201);
+});
+
+test('a running discussion admits a woken expert without pausing and rejects manual members', async t => {
+  const f = await fixture(t);
+  const owner = randomUUID() + randomUUID();
+  const launched = await launch_discussion(f.home, { ...f.input, token: owner }, f.options);
+  const room_id = launched.room.id;
+  assert.equal((await request(f.site, `/api/rooms/${room_id}`)).body.runtime.status, 'running');
+  const store = new DiscussionStore(join(f.directory, 'context-check'));
+  try {
+    store.context(load_config(launched.config_path));
+    await assert.rejects(room_member(f.home, { site: f.site, room_id, token: owner, action: 'add', name: 'Gemini', access: 'manual' }), /只接受本机唤醒/);
+    const added = await room_member(f.home, { site: f.site, room_id, token: owner, action: 'add', name: 'Claude', new_instance: true,
+      participants: { Claude: f.input.participants.Claude } });
+    assert.equal(added.member, 'Claude-2');
+    assert.deepEqual([added.room.runtime.status, added.room.experts['Claude-2']], ['running', 'cli']);
+    const after = load_config(launched.config_path);
+    assert.doesNotThrow(() => store.context(after), 'an invited expert only adds a context entry');
+    assert.throws(() => store.context({ ...after, participants: { ...after.participants, Claude: { ...after.participants.Claude, cwd: f.directory } } }), /发生变化/);
+  } finally { store.close(); }
+});
+
 test('an extra instance inherits its platform settings but not its bound session, and names are never reused', async t => {
   const f = await fixture(t);
   assert.throws(() => save_launch_settings(f.home, { participants: { 'Claude-2': { adapter: 'claude', executable: process.execPath } } }), /按平台保存/);

@@ -8,7 +8,8 @@ import ApiSettings from "./ApiSettings.vue";
 const props = defineProps({
   name: { type: String, required: true },
   mode: { type: String, default: "" },
-  automatic: Boolean,
+  // Delivery options this card offers: cli (woken by the local service), manual or online; empty when fixed.
+  choices: { type: Array, default: () => [] },
   status: { type: Object, required: true },
   host: Boolean,
   hostable: Boolean,
@@ -25,14 +26,16 @@ const card = ref(null), front_button = ref(null), back_button = ref(null);
 const back = ref(false), visible_back = ref(false);
 const profile = computed(() => view.value.launch.profiles[props.name] || {});
 const entry_items = computed(() => bridge.launch_clients[props.name] || []);
-const entry_label = computed(() => props.mode === "online" ? "网页" : !props.automatic ? "本地 App / CLI"
+const automatic = computed(() => props.mode === "cli");
+const ACCESS_LABELS = { cli: "本机唤醒", manual: "手动接入", online: "网页代发" };
+const entry_label = computed(() => props.mode === "online" ? "网页聊天" : props.mode === "manual" ? "你的 App / CLI 会话"
   : entry_items.value.find((item) => item.value === profile.value.adapter)?.label || "待选择 App / CLI");
-const can_flip = computed(() => entry_items.value.length > 0);
+const can_flip = computed(() => props.choices.length > 1 || automatic.value && entry_items.value.length > 0);
 const card_label = computed(() => props.mode === "online" ? `设置 ${props.name} 的参与方式` : `配置 ${props.name} 的接入方式`);
 const models = computed(() => bridge.launch_model_state(props.name, view.value.launch));
-const configurable = computed(() => Boolean(props.automatic && props.mode === "cli" && models.value.supported));
+const configurable = computed(() => Boolean(automatic.value && models.value.supported));
 const configuration_note = computed(() => configurable.value && connection.value.length ? "补齐上方连接后，可在这里选择模型与思考强度。" : props.mode === "online" ? "模型与思考强度在原网页聊天中选择。回答由你或授权主持人代发。"
-  : !props.automatic ? "在已有 App 或 CLI 会话中选择模型与强度，再交给它参与指令。本地 AI 可自行提交回答。"
+  : props.mode === "manual" ? "在已有 App 或 CLI 会话中选择模型与强度，再交给它参与指令。本地 AI 可自行提交回答。"
   : profile.value.adapter ? "模型与思考强度在 App 原聊天中选择，本页不覆盖 App 设置。" : "先选择软件入口。支持启动参数的 CLI 可在这里设置模型与强度。");
 const effort_items = computed(() => {
   const levels = models.value.efforts;
@@ -43,15 +46,15 @@ const effort_label = computed(() => effort_items.value?.find((item) => item.valu
   || (profile.value.adapter === "antigravity_cli" ? "强度随模型" : profile.value.effort || "默认强度"));
 // The front lists the read-only configuration; strength appears only where this page sets it.
 // Only CLI experts choose project access; API and online experts remain read-only.
-const sets_access = computed(() => props.automatic && props.mode === "cli" && bridge.launch_can_set_access(props.name, view.value.launch));
-const fixed_read = computed(() => props.mode === "online" || props.automatic && profile.value.adapter === "api");
-const local_connection = computed(() => props.automatic && props.mode === "cli" && profile.value.adapter !== "api");
+const sets_access = computed(() => automatic.value && bridge.launch_can_set_access(props.name, view.value.launch));
+const fixed_read = computed(() => props.mode === "online" || automatic.value && profile.value.adapter === "api");
+const local_connection = computed(() => automatic.value && profile.value.adapter !== "api");
 const access = computed(() => profile.value.project_access || view.value.launch.workspace?.project_access || "read");
 const facts = computed(() => [
   { label: "软件", value: entry_label.value },
   { label: "模型", value: configurable.value ? profile.value.model || "默认模型" : props.mode === "online" ? "在原网页设置" : "在原软件设置" },
   ...configurable.value && profile.value.adapter !== "api" ? [{ label: "强度", value: effort_label.value }] : [],
-  ...profile.value.adapter === "api" ? [{ label: "上下文", value: "房间记录" }] : [],
+  ...automatic.value && profile.value.adapter === "api" ? [{ label: "上下文", value: "房间记录" }] : [],
   ...sets_access.value || fixed_read.value ? [{ label: "项目", value: sets_access.value && access.value === "write" ? "可写" : "只读" }] : [],
 ]);
 // Ask only for connection values that are missing; a field stays while the back is open so typing does not hide it.
@@ -113,11 +116,13 @@ function reset_model() {
   bridge.write_launch(props.name, "effort", "");
 }
 
-/** Keep the two capability choices usable as one keyboard radio group. */
+/** Keep the delivery choices usable as one keyboard radio group. */
 function choose_capability(event) {
-  if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+  const keys = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 };
+  if (!(event.key in keys) && !["Home", "End"].includes(event.key)) return;
   event.preventDefault();
-  const next = event.key === "Home" ? "cli" : event.key === "End" ? "online" : props.mode === "cli" ? "online" : "cli";
+  const options = props.choices, index = options.indexOf(props.mode);
+  const next = event.key === "Home" ? options[0] : event.key === "End" ? options.at(-1) : options[(index + keys[event.key] + options.length) % options.length];
   emit("mode", next);
   event.currentTarget.querySelector(`[data-mode="${next}"]`)?.focus();
 }
@@ -142,7 +147,7 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
 </script>
 
 <template>
-  <div ref="card" class="expert-card" :class="{ 'is-configurable': configurable, 'is-host': host, 'is-api': automatic && profile.adapter === 'api' }"
+  <div ref="card" class="expert-card" :class="{ 'is-configurable': configurable, 'is-host': host }"
     :data-identity="bridge.identities[name]?.style" :data-face="visible_back ? 'back' : 'front'" tabindex="-1" @keydown.esc="escape">
     <motion.div class="expert-card-turn" :style="{ rotateY: angle }">
       <div class="expert-card-face expert-card-front" :inert="visible_back" :aria-hidden="visible_back">
@@ -164,12 +169,13 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
         </span>
       </div>
       <div v-if="can_flip" class="expert-card-face expert-card-back" :inert="!visible_back" :aria-hidden="!visible_back">
+        <div class="expert-card-back-body">
         <div class="expert-card-heading"><strong>{{ name }}<span>设置{{ fixed_read ? ' · 项目只读' : '' }}</span></strong></div>
-        <div v-if="!automatic" class="expert-card-modes" role="radiogroup" :aria-label="`${name} 参与能力`" @keydown="choose_capability">
-          <button v-for="option in [{ value: 'cli', label: '本地读写' }, { value: 'online', label: '在线只读' }]" :key="option.value" type="button"
-            role="radio" :aria-checked="mode === option.value" :tabindex="mode === option.value ? 0 : -1" :data-mode="option.value" @click="emit('mode', option.value)">{{ option.label }}</button>
+        <div v-if="choices.length > 1" class="expert-card-modes" role="radiogroup" :aria-label="`${name} 接入方式`" @keydown="choose_capability">
+          <button v-for="option in choices" :key="option" type="button"
+            role="radio" :aria-checked="mode === option" :tabindex="mode === option ? 0 : -1" :data-mode="option" @click="emit('mode', option)">{{ ACCESS_LABELS[option] }}</button>
         </div>
-        <div v-if="automatic && mode === 'cli' && entry_items.length" class="expert-card-field">
+        <div v-if="automatic && entry_items.length > 1" class="expert-card-field">
           <span>接入</span><USelect :model-value="profile.adapter || ''" :items="entry_items" placeholder="选择 API / App / CLI" :aria-label="`${name} 软件入口`" size="xs" class="w-full" @update:model-value="bridge.write_launch(name, 'adapter', $event)" />
         </div>
         <div v-for="item in connection" :key="item.field" class="expert-card-field">
@@ -195,6 +201,7 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
           <button type="button" class="expert-card-defaults" title="留空使用 CLI 默认值" :aria-label="`恢复 ${name} 的默认模型与强度`" :disabled="!profile.model && !profile.effort" @click="reset_model">恢复默认</button>
         </template>
         <p v-else class="expert-card-note"><UIcon :name="mode === 'online' ? 'i-lucide-globe' : 'i-lucide-monitor'" />{{ configuration_note }}</p>
+        </div>
         <span class="expert-card-flip-actions">
           <button type="button" class="expert-card-flip is-cancel" :aria-label="`放弃 ${name} 的修改`" @click="cancel">取消</button>
           <button ref="back_button" type="button" class="expert-card-flip is-done" :aria-label="`保存并返回 ${name} 角色卡片`" @click="flip(false)"><UIcon name="i-lucide-check" />完成</button>
@@ -206,14 +213,13 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
 
 <style scoped>
 .expert-card { min-width: 0; perspective: 900px; outline: none; }
-/* Every card keeps one height in both delivery modes; the back scrolls only if a long note overflows. */
-.expert-card-turn { display: grid; height: 224px; transform-style: preserve-3d; }
-.expert-card.is-api[data-face="back"] { grid-column: 1 / -1; }
-.expert-card.is-api[data-face="back"] .expert-card-turn { height: 370px; }
-.expert-card-face { grid-area: 1 / 1; min-width: 0; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); box-shadow: var(--channel-shadow-control); backface-visibility: hidden; }
+/* Both faces keep one size; long settings scroll inside the back while its actions stay in place. */
+.expert-card-turn { display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); height: 224px; transform-style: preserve-3d; }
+.expert-card-face { grid-area: 1 / 1; min-width: 0; min-height: 0; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); box-shadow: var(--channel-shadow-control); backface-visibility: hidden; }
 .expert-card.is-host .expert-card-front { border-color: color-mix(in srgb, #e0b44a 45%, var(--ui-border)); }
 .expert-card-front { position: relative; display: flex; }
-.expert-card-back { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 34px; overflow-y: auto; scrollbar-width: thin; transform: rotateY(180deg); }
+.expert-card-back { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 10px 12px 8px; transform: rotateY(180deg); }
+.expert-card-back-body { display: flex; flex: 1; flex-direction: column; gap: 8px; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
 .expert-card:hover .expert-card-face { border-color: var(--ui-border-accented); }
 .expert-card-open { display: flex; flex: 1; flex-direction: column; gap: 10px; width: 100%; min-width: 0; padding: 12px 12px 30px; text-align: left; border-radius: inherit; outline: none; }
 .expert-card-open.is-static { cursor: default; padding-bottom: 12px; }
@@ -232,7 +238,7 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
 .expert-card-flip > span { width: 12px; height: 12px; }
 .expert-card-open:hover .expert-card-flip, .expert-card-flip.is-done { color: var(--channel-accent); }
 .expert-card-flip.is-done:hover, .expert-card-flip.is-cancel:hover { background: var(--ui-bg-accented); }
-.expert-card-flip-actions { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 2px; }
+.expert-card-flip-actions { display: flex; flex-shrink: 0; justify-content: flex-end; gap: 2px; margin-right: -4px; }
 .expert-card-flip-actions > .expert-card-flip { position: static; }
 .expert-card-flip.is-cancel:hover { color: var(--ui-text-highlighted); }
 .expert-card-tools { position: absolute; top: 9px; right: 8px; display: flex; gap: 2px; }

@@ -316,6 +316,8 @@ async function update_topic(database, room_id, payload) {
   if (turn && ["pending", "notified"].includes(turn.status) && (settings.phase === "concluded" || !settings.experts[turn.expert])) {
     throw new HttpError(400, "请先完成或取消当前发言安排");
   }
+  const changed = Object.keys({ ...settings.experts, ...room.experts }).some(name => settings.experts[name] !== room.experts[name]);
+  if (changed && room.runtime?.status === "running") throw new HttpError(400, "讨论运行中请在进度看板邀请、暂离或移除专家");
   if (settings.save_limits) database = guarded_database(database,
     "EXISTS(SELECT 1 FROM topic_settings JOIN discussion_limits USING(room_id) WHERE room_id=? AND phase IN ('preparing','paused') AND revision=?)",
     [room_id, room.limits.revision]);
@@ -985,6 +987,7 @@ async function room_text(database, room_id, params) {
   if (room.mode === "free") {
     const members = room.free.members.map(item => `${item.name}（已读至 #${item.read_until}，待投递 ${item.pending}）`).join("；");
     content.push(`自由协作房间：无发言权、安排与轮次。成员：${members || "无"}。用户的消息点名成员后生成请求；成员回答须带本次执行编号，执行结束、被打断或过期后的回答会被拒绝，不能改作普通发言。`);
+    content.push("", "## 读取", `完整历史（分页）：${base}/messages?page=1`, `单条原文：${base}/messages/消息编号`, ...participation_text(params, true));
     return content.join("\n\n");
   }
   const turn = room.current_turn;
@@ -1001,18 +1004,23 @@ async function room_text(database, room_id, params) {
   content.push("", "## 读取与检索", `完整历史（分页）：${base}/messages?page=1`,
     `单条原文：${base}/messages/消息编号`, `检索：${base}/search?q=关键词&page=1`,
     `按作者检索：${base}/search?author=Claude`, `发言安排历史：${base}/turns?page=1`);
-  if (params.mode === "cli") {
-    content.push("", "## 本地 CLI AI · 可读可写", `POST /api/rooms/${room_id}/messages`,
-      "Content-Type: application/json",
-      'JSON 字段：author、text、submission_id（新 UUID）、source（填写 "cli"）；可选 reply_to、turn_id。',
-      `完整写入与主持协议：${base}/protocol`, "重试沿用编号和正文；收到回执后按 message.id 重新读取核对。");
-  } else {
-    content.push("", "## 在线 AI · 只读参与",
-      "请读取议题、状态和相关原文，在你自己的聊天窗口输出观点：先给通常 1–3 句的回答摘要，再给完整正文，保留关键条件、不确定性及引用编号；需要留档时由用户代发。",
-      "不要操作网页表单、调用写入接口或生成发布链接，不要求获取发布回执。读取失败时如实报告，由用户提供复制的材料。");
-  }
-  content.push("参与方式按运行环境区分；主持人可以兼任专家；作者、职责与来源尚未认证。不调用模型服务 API。");
+  content.push(...participation_text(params));
   return content.join("\n\n");
+}
+
+/** Local AIs follow the skills; web AIs read this short guide in place of them. */
+function participation_text(params, free = false) {
+  const footer = "参与方式按运行环境区分；主持人可以兼任专家；作者、职责与来源尚未认证。";
+  if (params.mode === "cli") return ["", "## 本地 AI", "本地 AI 请调用 discuss-participant（主持人另调用 discuss-host），用 codiscuss 命令读写；"
+    + "字段与写入规则以 codiscuss room protocol 为准，不直接调用网站接口。", footer];
+  return ["", "## 在线 AI · 只读参与",
+    "你是只读成员：读取议题、状态和与你相关的原文，在自己的聊天窗口回答；回答由用户代发留档。",
+    "先回答真正的问题，给出理由、证据、适用条件与不确定性；区分事实、推断和建议，引用原文编号，不编造他人的回答。"
+      + "讨论初始阶段先独立判断，暂不读他人观点；深入讨论先理解对方主张及其最有力的依据，再说明同意、分歧或需要补的证据。"
+      + "可以坚持有依据的少数意见，也可因新证据修改判断并说明变化。",
+    "输出：先 1–3 句摘要，再给完整正文。",
+    "不要操作网页表单、调用写入接口或生成发布链接。读取失败时如实报告，由用户提供复制的材料。",
+    ...(free ? ["自由协作：只回应点名给你的消息（编号见阅读通知），按时间顺序处理，后面的消息可以修正前面的。"] : []), footer];
 }
 
 /** Render the detailed brief only when selected by a reader. */
@@ -1881,6 +1889,48 @@ async function handle_free_api(database, request, parts) {
   throw new HttpError(404, "地址不存在");
 }
 
+/** Owner invites, sends away (keeping the seat), brings back or removes one discussion expert; the run keeps going. */
+async function handle_discussion_members(database, request, parts) {
+  const room_id = parts[2];
+  const token = request.headers.get("X-Discussion-Token") ?? "";
+  const payload = await read_payload(request);
+  const room = await require_room(database, room_id);
+  const experts = { ...room.experts };
+  const save = () => database.prepare("UPDATE topic_settings SET experts=? WHERE room_id=?").bind(JSON.stringify(experts), room_id);
+  if (parts.length === 4) {
+    await require_free_owner(database, room_id, token);
+    const member = await free_member_value(payload);
+    if (member.access !== (room.runtime?.mode === "automatic" ? "runner" : "manual")) throw new HttpError(400, "新专家的接入方式须与讨论的推进方式一致");
+    const existing = await database.prepare("SELECT * FROM room_members WHERE room_id=? AND name=? AND status<>'removed'").bind(room_id, member.name).first();
+    if (existing?.status === "active" && existing.token_hash === member.token_hash) return respond(room);
+    if (existing) throw new HttpError(409, `${member.name} 已是本房间成员；离开的成员请用请回`);
+    if (room.phase === "concluded") throw new HttpError(400, "讨论已收束，不能再邀请专家");
+    if (Object.keys(experts).length >= MAX_ROOM_AGENTS) throw new HttpError(400, "房间成员已达上限");
+    await require_fresh_member_hash(database, room_id, member.token_hash);
+    experts[member.name] = "cli";
+    try { await database.batch([free_member_insert(database, room_id, member), save()]); }
+    catch (error) { if (String(error).includes("UNIQUE constraint")) throw new HttpError(409, `${member.name} 已是本房间成员`); throw error; }
+  } else {
+    const member = await free_owned_member(database, room_id, integer(parts[4]), token);
+    if (["away", "remove"].includes(payload.action)) {
+      if (member.name === room.host) throw new HttpError(400, "主持人不能离开或移除；请先更换主持人");
+      delete experts[member.name];
+      await database.batch([
+        database.prepare("UPDATE discussion_turns SET status='cancelled' WHERE room_id=? AND expert=? AND status IN ('pending','notified')").bind(room_id, member.name),
+        database.prepare("UPDATE discussion_turns SET status='skipped' WHERE room_id=? AND expert=? AND status='queued'").bind(room_id, member.name),
+        database.prepare("UPDATE room_members SET status=? WHERE id=?").bind(payload.action === "away" ? "away" : "removed", member.id), save()]);
+    } else if (payload.action === "active") {
+      const hashed = await runtime_hash(payload.token);
+      if (member.status === "active" && hashed && hashed === member.token_hash) return respond(room);
+      if (member.status !== "away" || !hashed || hashed === member.token_hash) throw new HttpError(400, "只有离开的成员可以请回，且须提供新的成员凭证");
+      await require_fresh_member_hash(database, room_id, hashed);
+      experts[member.name] = member.access === "online" ? "online" : "cli";
+      await database.batch([database.prepare("UPDATE room_members SET status='active',token_hash=? WHERE id=? AND status='away'").bind(hashed, member.id), save()]);
+    } else throw new HttpError(400, "action 须为 away、active 或 remove");
+  }
+  return respond(await require_room(database, room_id));
+}
+
 /** Prevent reuse of an existing member or owner credential. */
 async function require_fresh_member_hash(database, room_id, hashed) {
   if (!hashed || await database.prepare("SELECT 1 FROM room_members WHERE room_id=? AND token_hash=? UNION ALL SELECT 1 FROM room_modes WHERE room_id=? AND control_hash=?")
@@ -2061,6 +2111,7 @@ async function handle_api(database, request, parts, params, bucket) {
   const room_id = parts[2];
   const free = await room_mode(database, room_id) === "free";
   if (free && ["inbox", "executions", "members", "suggestions"].includes(parts[3])) return handle_free_api(database, request, parts);
+  if (parts[3] === "members" && method === "POST" && [4, 5].includes(parts.length)) return handle_discussion_members(database, request, parts);
   if (parts[3] === "attachments") return handle_attachments(database, request, parts, params, bucket, free);
   if (["runtime", "events"].includes(parts[3])) {
     if (free && method === "POST") throw new HttpError(400, "自由房间不使用讨论运行控制");

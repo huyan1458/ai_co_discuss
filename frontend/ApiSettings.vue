@@ -22,29 +22,26 @@ async function save_key() {
 </script>
 
 <template>
+  <!-- Label-beside-field rows keep the API back within the same card height as every other face. -->
   <div class="api-settings">
-    <UFormField label="Base URL"><UInput :model-value="profile.base_url || ''" :aria-label="`${name} Base URL`" class="w-full" size="xs" @update:model-value="write('base_url', $event)" /></UFormField>
-    <UFormField label="请求协议"><USelect :model-value="profile.api_protocol || ''" :items="protocols" :aria-label="`${name} API 请求协议`" class="w-full" size="xs" @update:model-value="write('api_protocol', $event)" /></UFormField>
-    <UFormField label="API Key">
-      <div class="api-key-row"><UInput v-model="api_key" type="password" autocomplete="new-password" :placeholder="profile.api_key_ref ? '已保存，输入可更换' : '填写此地址对应的密钥'" :aria-label="`${name} API Key`" size="xs" class="w-full" />
-        <UButton label="保存密钥" size="xs" color="neutral" variant="outline" :loading="saving" :disabled="!api_key.trim() || !view.launch.available" @click="save_key" /></div>
-    </UFormField>
-    <UFormField label="模型 ID">
-      <UInput :model-value="profile.model || ''" :list="`api-models-${name}`" :aria-label="`${name} API 模型 ID`" placeholder="选择推荐模型或输入完整 ID" class="w-full" size="xs" @update:model-value="write('model', $event)" />
-      <datalist :id="`api-models-${name}`"><option v-for="item in models.items" :key="item.value" :value="item.value">{{ item.label }}</option></datalist>
-    </UFormField>
-    <div class="api-model-row"><span>仅使用房间上下文</span><button type="button" :disabled="!profile.api_key_ref || models.loading" @click="bridge.load_launch_models(name, true)">{{ models.loading ? '读取中…' : '读取模型列表' }}</button></div>
+    <label class="api-field" title="Base URL"><span>地址</span><UInput :model-value="profile.base_url || ''" :aria-label="`${name} Base URL`" placeholder="Base URL" class="w-full" size="xs" @update:model-value="write('base_url', $event)" /></label>
+    <div class="api-field" title="OpenRouter 等兼容服务可选 Chat Completions，并填写该服务的完整模型 ID。"><span>协议</span><USelect :model-value="profile.api_protocol || ''" :items="protocols" :aria-label="`${name} API 请求协议`" class="w-full" size="xs" @update:model-value="write('api_protocol', $event)" /></div>
+    <div class="api-field"><span>密钥</span>
+      <div class="api-inline"><UInput v-model="api_key" type="password" autocomplete="new-password" :placeholder="profile.api_key_ref ? '已保存，输入可更换' : '填写 API Key'" :aria-label="`${name} API Key`" size="xs" class="w-full" />
+        <UButton label="保存" :aria-label="`保存 ${name} 的 API Key`" title="保存密钥" size="xs" color="neutral" variant="outline" :loading="saving" :disabled="!api_key.trim() || !view.launch.available" @click="save_key" /></div>
+    </div>
+    <div class="api-field"><span>模型</span>
+      <div class="api-inline"><UInputMenu mode="autocomplete" ignore-filter :model-value="profile.model || ''" :items="models.items" value-key="value" :aria-label="`${name} API 模型 ID`" placeholder="推荐模型或完整 ID" class="w-full min-w-0" size="xs" :ui="{ content: 'min-w-72' }" @update:model-value="write('model', $event)" />
+        <UButton icon="i-lucide-refresh-cw" :aria-label="`读取 ${name} 的模型列表`" title="读取模型列表" size="xs" color="neutral" variant="ghost" :loading="models.loading" :disabled="!profile.api_key_ref" @click="bridge.load_launch_models(name, true)" /></div>
+    </div>
     <p v-if="error || models.error" role="alert">{{ error || models.error }}</p>
-    <p v-else>OpenRouter 等兼容服务可选 Chat Completions，并填写该服务的完整模型 ID。</p>
   </div>
 </template>
 
 <style scoped>
 .api-settings { display: grid; gap: 7px; min-width: 0; }
-.api-key-row { display: flex; gap: 5px; }
-.api-key-row > button { flex-shrink: 0; }
-.api-settings p, .api-model-row { font-size: 10px; line-height: 1.5; color: var(--ui-text-muted); margin: 0; }
-.api-model-row { display: flex; justify-content: space-between; gap: 8px; }
-.api-model-row button { color: var(--channel-accent); }
-.api-model-row button:disabled { opacity: .5; }
+.api-field { display: grid; grid-template-columns: 26px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--ui-text-dimmed); font-size: 11px; }
+.api-inline { display: flex; gap: 4px; min-width: 0; }
+.api-inline > button { flex-shrink: 0; }
+.api-settings p { margin: 0; color: var(--ui-text-muted); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
 </style>

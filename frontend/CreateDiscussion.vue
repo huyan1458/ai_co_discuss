@@ -14,12 +14,9 @@ const field_id = (key) => `new-room-${key}`;
 const value = (key) => view.value.fields[field_id(key)] ?? "";
 const write = (key, next) => bridge.write_field(field_id(key), next);
 
-const automatic = computed(() => value("mode") === "automatic");
 const free = computed(() => value("kind") === "free");
 const KINDS = [{ value: "brainstorm", icon: "i-lucide-messages-square", title: "讨论", text: "围绕议题轮流发言，形成结论" },
   { value: "free", icon: "i-lucide-message-circle", title: "自由协作", text: "按需点名 AI，在各自会话中工作" }];
-const MODES = [{ value: "automatic", icon: "i-lucide-zap", title: "程序唤醒", text: "本机服务交付任务，自动接续会话" },
-  { value: "manual", icon: "i-lucide-copy", title: "手动接入", text: "首次复制指令，之后人工或定时触发" }];
 const selected = computed(() => view.value.experts[EXPERT_CONTAINER] || {});
 // Cards in the library are types; each selected name is one instance, e.g. Claude and Claude-2.
 const selected_names = computed(() => Object.keys(selected.value).filter((name) => selected.value[name])
@@ -28,16 +25,20 @@ const selected_names = computed(() => Object.keys(selected.value).filter((name) 
 const instance_count = (platform) => selected_names.value.filter((name) => bridge.platform_of(name) === platform).length;
 const library = ref(null);
 const host = computed(() => value("host"));
-const host_options = computed(() => [...(free.value ? ["用户"] : []), ...selected_names.value.filter((name) => selected.value[name] === "cli")]);
+// Members that submit their own answers can host; web members only read.
+const host_options = computed(() => [...(free.value ? ["用户"] : []), ...selected_names.value.filter((name) => selected.value[name] !== "online")]);
 const limit_picker = ref(null);
-const launch_names = computed(() => [...new Set([host.value, ...Object.keys(selected.value)])].filter((name) => bridge.launch_clients[name]));
+// Discussions run automatically; a free room needs the local service only for the members it wakes.
+const woken_names = computed(() => selected_names.value.filter((name) => selected.value[name] === "cli"));
+const automatic = computed(() => !free.value || woken_names.value.length > 0);
+const launch_names = computed(() => woken_names.value.filter((name) => bridge.launch_clients[name]));
 const launch_ready = (name) => {
   const profile = view.value.launch.profiles[name] || {};
   if (profile.adapter === "api") return Boolean(profile.base_url && profile.api_protocol && profile.api_key_ref && profile.model);
   return Boolean(profile.adapter && (profile.adapter === "antigravity" ? profile.ipc_directory : profile.executable));
 };
 const launching = computed(() => automatic.value && view.value.launch.available && (free.value || view.value.launch.create));
-const free_ready = computed(() => selected_names.value.length > 0 && (!automatic.value || selected_names.value.every(launch_ready) && view.value.launch.available));
+const free_ready = computed(() => selected_names.value.length > 0 && woken_names.value.every(launch_ready) && (!woken_names.value.length || view.value.launch.available));
 
 /** Keep the host inside the selected local members; free rooms also allow the user. */
 function ensure_host() {
@@ -48,12 +49,6 @@ onMounted(ensure_host);
 /** Change the room use independently of its delivery method. */
 function choose_kind(kind) {
   write("kind", kind);
-  ensure_host();
-}
-
-/** Change delivery without changing the room use. */
-function choose_mode(mode) {
-  write("mode", mode);
   ensure_host();
 }
 
@@ -71,16 +66,22 @@ function navigate_choices(event) {
   target.click();
 }
 
-/** Change one selected expert's participation mode and keep the host valid. */
+/** A platform with local software can also join by hand; an API-only platform cannot. */
+const has_local = (name) => bridge.launch_clients[name]?.some((item) => item.value !== "api");
+/** Free rooms choose delivery per member; discussions are always woken by the local service. */
+const access_choices = (name) => free.value ? ["cli", ...(has_local(name) ? ["manual"] : []), "online"] : [];
+
+/** Change one selected expert's delivery, defaulting a woken API-only platform to its API, and keep the host valid. */
 function set_expert_mode(name, mode) {
+  if (mode === "cli" && !has_local(name) && !view.value.launch.profiles[name]?.adapter) bridge.write_launch(name, "adapter", "api");
   bridge.write_expert(EXPERT_CONTAINER, name, mode);
   ensure_host();
 }
 
-/** Explain capability separately from whether the launcher has software configured. */
+/** Explain delivery separately from whether the launcher has software configured. */
 function expert_status(name) {
-  if (selected.value[name] === "online") return { text: "在线只读，回答由人代发", tone: "muted" };
-  if (!automatic.value) return { text: "本地读写，可自行提交", tone: "muted" };
+  if (selected.value[name] === "online") return { text: "网页代发，只读", tone: "muted" };
+  if (selected.value[name] === "manual") return { text: "手动接入，自行提交", tone: "muted" };
   const api = view.value.launch.profiles[name]?.adapter === "api";
   return launch_ready(name) ? { text: api ? "已配置 API" : "已配置本机软件", tone: "ready" } : { text: api ? "待补齐 API 配置" : "待补齐接入配置", tone: "warn" };
 }
@@ -88,18 +89,16 @@ function expert_status(name) {
 /** Describe a platform before adding an independent instance. */
 function library_description(name) {
   if (instance_count(name)) return `已加入 ${instance_count(name)} 位 · 可继续添加`;
-  return bridge.launch_clients[name]?.some(item => item.value !== "api") ? "API / 本地 App / CLI" : "API / 网页手动接入";
+  return has_local(name) ? "API / 本地 App / CLI" : free.value ? "API / 网页代发" : "API";
 }
 
-/** Admit one library role without toggling an existing participant. */
+/** Admit one library role, woken by the local service until its card says otherwise. */
 function add_expert(name) {
-  if (automatic.value && !bridge.launch_clients[name]) return;
-  const local = bridge.launch_clients[name]?.some(item => item.value !== "api");
-  const mode = automatic.value || local ? "cli" : "online";
-  if (automatic.value && !local && !view.value.launch.profiles[name]?.adapter) bridge.write_launch(name, "adapter", "api");
+  if (!bridge.launch_clients[name]) return;
+  if (!has_local(name) && !view.value.launch.profiles[name]?.adapter) bridge.write_launch(name, "adapter", "api");
   // A card already in use adds another instance with its own session, model and effort.
-  if (instance_count(name)) bridge.add_instance(EXPERT_CONTAINER, name, mode);
-  else set_expert_mode(name, mode);
+  if (instance_count(name)) bridge.add_instance(EXPERT_CONTAINER, name, "cli");
+  else set_expert_mode(name, "cli");
   ensure_host();
 }
 
@@ -133,11 +132,10 @@ const limit_rule = computed(() => {
 
 const summary = computed(() => {
   const names = Object.keys(selected.value);
-  if (free.value) return ["自由协作", `${names.length} 位 AI`, host.value === "用户" ? "你来主持" : `${host.value} 协助主持`, automatic.value ? "程序唤醒" : "手动接入"].join(" · ");
+  if (free.value) return ["自由协作", `${names.length} 位 AI`, host.value === "用户" ? "你来主持" : `${host.value} 协助主持`].join(" · ");
   const rounds = value("limit-max_rounds"), minutes = value("limit-max_minutes");
   const limits = [rounds && Number(rounds) ? `${rounds} 轮` : "不限轮次", minutes && Number(minutes) ? format_duration(Number(minutes)) : "不限时长"].join(" / ");
-  return [host.value ? `${bridge.display_name(host.value)} 主持` : "尚未选择主持人", names.length ? `${names.join("、")} 参与` : "尚未选择专家",
-    automatic.value ? "程序唤醒" : "手动接入", limits].join(" · ");
+  return [host.value ? `${bridge.display_name(host.value)} 主持` : "尚未选择主持人", names.length ? `${names.join("、")} 参与` : "尚未选择专家", limits].join(" · ");
 });
 </script>
 
@@ -158,31 +156,24 @@ const summary = computed(() => {
       </section>
 
       <section class="create-section">
-        <div class="create-section-heading">
-          <h3><span>2</span>谁来参与</h3>
-          <div class="create-segments" role="radiogroup" aria-label="接入方式" @keydown="navigate_choices">
-            <button v-for="option in MODES" :key="option.value" type="button" role="radio" :title="option.text" :aria-checked="value('mode') === option.value" :tabindex="value('mode') === option.value ? 0 : -1" @click="choose_mode(option.value)">
-              <UIcon :name="option.icon" />{{ option.title }}
-            </button>
-          </div>
-        </div>
-        <p class="fine-print create-hint">{{ automatic ? '本机服务自动接续 API 或已适配的软件；网页 AI 请用手动接入。' : '首次复制指令，之后人工或定时触发；本地 AI 可自行提交，网页 AI 由你或授权主持人代发。' }}</p>
+        <h3><span>2</span>谁来参与</h3>
+        <p class="fine-print create-hint">{{ free ? '每位成员单独选接入：本机唤醒（App / CLI / API）、手动接入（凭证交给你自己的会话）或网页代发（只读）。' : '讨论全程由本机服务唤醒 AI，可用 App、CLI 或 API；手动接入和网页 AI 请用自由协作。' }}</p>
         <div v-if="selected_names.length" class="create-experts" role="group" aria-label="参与的 AI">
-          <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :automatic="automatic"
+          <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :choices="access_choices(name)"
             :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)"
             @host="write('host', name)" @remove="remove_expert(name)" @mode="set_expert_mode(name, $event)" />
         </div>
         <p v-else class="create-experts-empty">从下方添加 AI；同一平台可添加多位，各自独立会话。</p>
         <div ref="library" class="create-roster-add" role="group" aria-label="添加 AI">
           <span class="create-label">添加</span>
-          <button v-for="name in experts" :key="name" type="button" :disabled="automatic && !bridge.launch_clients[name]" :title="library_description(name)" :aria-label="`添加 ${name} 实例`" @click="add_expert(name)">
+          <button v-for="name in experts" :key="name" type="button" :disabled="!bridge.launch_clients[name]" :title="library_description(name)" :aria-label="`添加 ${name} 实例`" @click="add_expert(name)">
             <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="3xs" class="channel-avatar" :class="bridge.identities[name]?.style" />{{ name }}<UIcon name="i-lucide-plus" />
           </button>
         </div>
         <div class="fine-print create-hint create-host-hint">
           <button v-if="free" type="button" class="create-host-self" :aria-pressed="host === '用户'" @click="write('host', '用户')"><UIcon name="i-lucide-crown" />我来主持</button>
           <UIcon v-else name="i-lucide-crown" />
-          <span>{{ free ? '默认由你点名和分配任务；也可点卡片上的皇冠，指定 AI 主持人。' : host_options.length ? '点卡片上的皇冠指定主持人，负责补全议题、安排发言与收束，也可同时作为专家。' : '先添加一位可自行提交的 AI 担任主持人。' }}</span>
+          <span>{{ free ? '默认由你点名和分配任务；也可点卡片上的皇冠，指定 AI 主持人。' : host_options.length ? '点卡片上的皇冠指定主持人，负责补全议题、安排发言与收束，也可同时作为专家。' : '先添加一位 AI 担任主持人。' }}</span>
         </div>
       </section>
 
@@ -191,7 +182,7 @@ const summary = computed(() => {
         <LimitPicker ref="limit_picker" :rounds="Number(value('limit-max_rounds'))" :minutes="Number(value('limit-max_minutes'))"
           @update:rounds="write('limit-max_rounds', String($event))" @update:minutes="write('limit-max_minutes', String($event))" />
         <p class="fine-print create-hint">一轮指每位专家各完成一次观点；首次进入讨论或创建安排后计时，暂停期间不计时。</p>
-        <div v-if="automatic" class="form-two-columns">
+        <div class="form-two-columns">
           <UFormField label="单次 AI 执行（分钟）" description="留空或 0 表示不限"><UInput :model-value="Number(value('limit-execution_minutes')) ? value('limit-execution_minutes') : ''" type="number" :min="0" :max="60" :step="1" placeholder="不限时长" class="w-full" @update:model-value="write('limit-execution_minutes', $event)" /></UFormField>
         </div>
         <div class="create-host">
@@ -206,7 +197,7 @@ const summary = computed(() => {
 
       <section v-if="automatic" class="create-section">
         <h3><span>{{ free ? 3 : 4 }}</span>启动 AI</h3>
-        <p v-if="free && !view.launch.available" role="alert" class="fine-print create-hint">程序唤醒需要本机服务：请在运行 AI 的电脑打开本机网站，或先运行连接命令。</p>
+        <p v-if="free && !view.launch.available" role="alert" class="fine-print create-hint">本机唤醒的成员需要本机服务：请在运行 AI 的电脑打开本机网站，或先运行连接命令。</p>
         <template v-if="view.launch.available">
           <UCheckbox v-if="!free" :model-value="view.launch.create" label="创建后立即启动 AI" description="由本机服务创建会话并交付首个主持任务；不勾选则只建房，稍后在「接入」页启动。" @update:model-value="bridge.write_launch('create', '', $event)" />
           <template v-if="free || view.launch.create">
@@ -252,13 +243,6 @@ const summary = computed(() => {
 .create-mode.is-selected { background: color-mix(in srgb, var(--channel-accent) 7%, var(--ui-bg)); }
 .create-mode.is-selected > [class*="icon"] { color: var(--channel-accent); }
 .create-mode.is-selected::after { border-color: var(--channel-accent); background: radial-gradient(circle, var(--channel-accent) 3px, transparent 3.5px); }
-.create-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.create-segments { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 7px; background: var(--ui-bg-muted); }
-.create-segments button { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 3px 10px; border-radius: 5px; color: var(--ui-text-muted); font-size: 12px; }
-.create-segments button > span { width: 13px; height: 13px; }
-.create-segments button:hover { color: var(--ui-text-highlighted); }
-.create-segments button[aria-checked="true"] { background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); box-shadow: var(--channel-shadow-control); }
-.create-segments button[aria-checked="true"] > span { color: var(--channel-accent); }
 .create-experts { display: grid; grid-template-columns: repeat(auto-fill, minmax(196px, 1fr)); align-items: start; gap: 8px; }
 .create-experts-empty { margin: 0; padding: 18px 12px; border: 1px dashed var(--ui-border); border-radius: 8px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }
 .create-roster-add { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }

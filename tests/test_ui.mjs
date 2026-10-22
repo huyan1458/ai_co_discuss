@@ -12,7 +12,7 @@ test('all providers expose API without installed software and keys never enter d
   const f = theme_fixture(), state = f.context.test_state, calls = [];
   Object.assign(f.context, { render_launch_settings() {}, render_launch_summaries() {}, local_launch_request: async (route, input) => {
     calls.push({ route, input });
-    return route === 'api-key' ? { api_key_ref: 'opaque-key-ref' } : { adapter: 'api', source: 'api', models: [{ id: 'vendor/model.1' }] };
+    return route === 'api-key' ? { api_key_ref: 'opaque-key-ref' } : { adapter: 'api', source: 'api', models: [{ id: 'vendor/model.1', label: 'Vendor Model' }] };
   } });
   state.launch.api_providers = API_PROVIDERS;
   state.launch.available = true;
@@ -34,6 +34,7 @@ test('all providers expose API without installed software and keys never enter d
   assert.equal(calls.length, 1, 'API discovery is explicit, never automatic');
   await f.context.load_launch_models('Grok', true);
   assert.equal(f.context.launch_model_state('Grok').items[0].value, 'vendor/model.1');
+  assert.equal(f.context.launch_model_state('Grok').items[0].label, 'Vendor Model · vendor/model.1');
   f.context.write_launch_field('Grok', 'base_url', 'https://api.x.ai/v1');
   assert.equal(state.launch.profiles.Grok.api_key_ref, undefined);
 });
@@ -457,7 +458,7 @@ test("changing the uploader never reuses an earlier actor's receipt after upload
 
 /** Run card face/focus transitions independently of the spring's browser clock. */
 function expert_card_fixture() {
-  const props = reactive({ name: "Codex", mode: "cli", automatic: true, status: {} });
+  const props = reactive({ name: "Codex", mode: "cli", choices: [], status: {} });
   const view = ref({ launch: { profiles: { Codex: { adapter: "codex_cli", model: "saved-model", effort: "high" } } } });
   const reduced = ref(false), calls = [], cleanups = [], listeners = new Set(), document = { activeElement: null };
   const angle = { set: (target) => calls.push(["set", target]), jump(target) { calls.push(["jump", target]); this.advance(target); },
@@ -544,7 +545,7 @@ test("expert card reduced motion keeps manual and online faces accessible withou
   await nextTick();
   assert.deepEqual(fixture.calls.at(-1), ["jump", 180]);
   assert.equal(fixture.refs.visible_back.value, true);
-  fixture.props.automatic = false;
+  fixture.props.mode = "manual";
   await nextTick();
   assert.equal(fixture.refs.back.value, true);
   assert.equal(fixture.refs.visible_back.value, true);
@@ -552,9 +553,9 @@ test("expert card reduced motion keeps manual and online faces accessible withou
   assert.match(vm.runInContext("configuration_note.value", fixture.context), /已有 App 或 CLI/);
   fixture.props.mode = "online";
   assert.match(vm.runInContext("configuration_note.value", fixture.context), /原网页/);
-  assert.equal(vm.runInContext("entry_label.value", fixture.context), "网页");
+  assert.equal(vm.runInContext("entry_label.value", fixture.context), "网页聊天");
   fixture.props.mode = "cli";
-  fixture.props.automatic = true;
+  fixture.props.mode = "cli";
   fixture.view.value.launch.profiles.Codex.adapter = "codex";
   assert.equal(vm.runInContext("configurable.value", fixture.context), false);
   assert.match(vm.runInContext("configuration_note.value", fixture.context), /App 原聊天/);
@@ -608,9 +609,9 @@ test("each automatic CLI card sets its own project access and asks only for a mi
   props.mode = "online";
   assert.equal(fact("项目"), "只读", "online experts never get write access");
   props.mode = "cli";
-  props.automatic = false;
+  props.mode = "manual";
   assert.equal(fact("项目"), undefined, "manual sessions keep the permissions of their own software");
-  props.automatic = true;
+  props.mode = "cli";
   assert.deepEqual(Array.from(vm.runInContext("connection.value", context), item => item.field), ["executable"]);
   context.flip(true);
   view.value.launch.profiles.Codex.executable = "C";
@@ -623,11 +624,11 @@ test("each automatic CLI card sets its own project access and asks only for a mi
 test("cards read model catalogs only for automatic CLI and pure web participants cannot flip", async () => {
   const fixture = expert_card_fixture();
   fixture.view.value.launch.available = true;
-  fixture.props.automatic = false;
+  fixture.props.mode = "manual";
   fixture.context.flip(true);
   await nextTick();
   assert.deepEqual(fixture.reads, []);
-  fixture.props.automatic = true;
+  fixture.props.mode = "cli";
   await nextTick();
   assert.deepEqual(fixture.reads, ["Codex"]);
   fixture.view.value.launch.profiles.Codex.adapter = "codex";
@@ -646,11 +647,13 @@ test("cards read model catalogs only for automatic CLI and pure web participants
 
 /** Use actual create-form handlers with isolated drafts; no AI or website is started. */
 function create_form_fixture() {
-  const view = ref({ fields: { "new-room-kind": "free", "new-room-mode": "manual", "new-room-host": "用户" },
+  const view = ref({ fields: { "new-room-kind": "free", "new-room-host": "用户" },
     experts: { "new-expert-modes": {} }, launch: { profiles: {}, available: false, create: false } });
   const events = [], cleanups = [];
-  const bridge = { identities: { 用户: {}, Codex: {}, Claude: {}, DeepSeek: {} }, launch_clients: { Codex: [{}], Claude: [{}] },
+  const bridge = { identities: { 用户: {}, Codex: {}, Claude: {}, DeepSeek: {} },
+    launch_clients: { Codex: [{ value: "codex_cli" }, { value: "api" }], Claude: [{ value: "claude" }, { value: "api" }], DeepSeek: [{ value: "api" }] },
     platform_of: name => name.split("-")[0], display_name: name => name,
+    write_launch: (name, field, value) => { (view.value.launch.profiles[name] ||= {})[field] = value; },
     write_field: (id, value) => { events.push([id, value]); view.value.fields[id] = value; },
     write_expert: (id, name, mode) => { if (mode) view.value.experts[id][name] = mode; else delete view.value.experts[id][name]; },
     add_instance: (id, name, mode) => {
@@ -671,21 +674,26 @@ test("create form shares a role library, keeps independent instances and default
   context.add_expert("Codex");
   context.add_expert("Codex");
   context.add_expert("DeepSeek");
-  assert.deepEqual(Object.keys(view.value.experts["new-expert-modes"]), ["Codex", "Codex-2", "DeepSeek"]);
+  const modes = view.value.experts["new-expert-modes"];
+  assert.deepEqual(Object.entries(modes), [["Codex", "cli"], ["Codex-2", "cli"], ["DeepSeek", "cli"]], "every member starts woken by the local service");
+  assert.equal(view.value.launch.profiles.DeepSeek.adapter, "api", "an API-only platform is woken through its API");
   assert.equal(view.value.fields["new-room-host"], "用户");
-  assert.equal(vm.runInContext("free_ready.value", context), true, "manual free rooms need no launcher");
+  assert.deepEqual(Array.from(vm.runInContext('access_choices("Codex")', context)), ["cli", "manual", "online"]);
+  assert.deepEqual(Array.from(vm.runInContext('access_choices("DeepSeek")', context)), ["cli", "online"], "an API-only platform has no software to join by hand");
+  context.set_expert_mode("Codex", "manual");
+  context.set_expert_mode("Codex-2", "manual");
+  context.set_expert_mode("DeepSeek", "online");
+  assert.equal(vm.runInContext("free_ready.value", context), true, "free rooms without woken members need no launcher");
   view.value.fields["new-room-host"] = "Codex-2";
   context.remove_expert("Codex");
-  assert.equal(view.value.fields["new-room-host"], "Codex-2");
+  assert.equal(view.value.fields["new-room-host"], "Codex-2", "a manual member can host");
   context.set_expert_mode("Codex-2", "online");
   assert.equal(view.value.fields["new-room-host"], "用户", "an online instance cannot remain AI host");
   context.choose_kind("brainstorm");
-  assert.equal(view.value.fields["new-room-mode"], "manual", "room use does not change delivery");
   assert.equal(view.value.fields["new-room-host"], "");
+  assert.equal(vm.runInContext('access_choices("Codex-2")', context).length, 0, "discussions offer no delivery choice");
   context.set_expert_mode("Codex-2", "cli");
   assert.equal(view.value.fields["new-room-host"], "Codex-2");
-  context.choose_mode("automatic");
-  assert.equal(view.value.fields["new-room-kind"], "brainstorm");
   await nextTick();
   f.cleanup();
 });
@@ -1363,8 +1371,7 @@ test("light channel survives reload and selects the Vue renderer without dark mo
 
 test("manual creation retains distinct member credentials across reload and a lost receipt", async () => {
   const f = theme_fixture(), requests = [];
-  const payload = { title: "手动协作", mode: "free", host: "用户", experts: { Codex: "cli", "Codex-2": "cli", DeepSeek: "online" } };
-  f.nodes.set('new-room-mode', { value: 'manual' });
+  const payload = { title: "手动协作", mode: "free", host: "用户", experts: { Codex: "manual", "Codex-2": "manual", DeepSeek: "online" } };
   f.nodes.set('room-dialog', { close() {} });
   Object.assign(f.context, { room_creation_payload: () => payload, render_rooms() {}, render_room() {}, show_toast() {},
     request_json: async (_path, input, token) => { requests.push({ input, token }); throw new Error('lost manual receipt'); } });
@@ -1621,12 +1628,12 @@ test("opening a new form restores every choice to defaults, including per-instan
   Object.assign(f.context, { render_expert_inputs: (_id, value) => { experts = value; }, render_host_options() {}, render_launch_settings() {} });
   Object.assign(state.launch, { create: false, workspace: { cwd: 'D:\上次项目' }, saved_profiles: { Codex: { adapter: 'codex_cli', executable: 'C:\codex.exe' } },
     profiles: { Codex: { adapter: 'codex_cli', executable: 'C:\codex.exe', model: 'gpt-x', project_access: 'write' }, 'Codex-2': { adapter: 'codex_cli' } } });
-  state.creation_mode = 'free:manual';
+  state.creation_mode = 'free';
   state.create_parent = 'free-room';
   f.context.reset_create_form();
   assert.equal(resets, 1);
   assert.deepEqual(Object.keys(experts), []);
-  assert.equal(state.creation_mode, 'brainstorm:automatic');
+  assert.equal(state.creation_mode, 'brainstorm');
   assert.equal(state.create_parent, null);
   assert.equal(state.launch.create, true);
   assert.deepEqual(Object.keys(state.launch.workspace), []);
@@ -1635,27 +1642,29 @@ test("opening a new form restores every choice to defaults, including per-instan
   assert.equal(state.launch.saved_profiles.Codex.model, undefined, "drafts never write back into the saved defaults");
 });
 
-test("automatic creation uses configured local clients and preserves independent mode choices", () => {
+test("discussions keep only woken members while free rooms keep each member's delivery", () => {
   const f = theme_fixture();
   const state = f.context.test_state;
-  const mode = { value: 'manual' };
+  const kind = { value: 'brainstorm' };
   const host = { value: '用户' };
-  state.creation_mode = 'brainstorm:manual';
-  f.nodes.set('new-room-kind', { value: 'brainstorm' });
-  f.nodes.set('new-room-mode', mode); f.nodes.set('new-room-host', host);
-  let experts = { Codex: 'cli', Claude: 'online', DeepSeek: 'online' };
+  state.creation_mode = 'free';
+  f.nodes.set('new-room-kind', kind); f.nodes.set('new-room-host', host);
+  let experts = {};
   f.context.read_expert_inputs = () => experts;
   f.context.render_expert_inputs = (_id, value) => { experts = value; };
   state.launch.profiles = { Codex: { adapter: 'codex_cli', executable: 'C:\\codex.exe' },
     Claude: { adapter: 'claude', executable: 'C:\\claude.exe' }, Gemini: { adapter: 'antigravity_cli' } };
-  mode.value = 'automatic'; f.context.update_creation_mode();
+  f.context.update_creation_mode();
   assert.equal(host.value, 'Codex');
-  assert.deepEqual(Object.entries(experts), [['Codex', 'cli'], ['Claude', 'cli'], ['DeepSeek', 'cli']]);
-  host.value = 'Claude'; experts = { Claude: 'cli' };
-  mode.value = 'manual'; f.context.update_creation_mode();
-  assert.equal(host.value, '用户'); assert.equal(experts.DeepSeek, 'online');
-  mode.value = 'automatic'; f.context.update_creation_mode();
-  assert.equal(host.value, 'Claude'); assert.deepEqual(Object.entries(experts), [['Claude', 'cli']]);
+  assert.deepEqual(Object.entries(experts), [['Codex', 'cli'], ['Claude', 'cli']], "configured software fills an empty discussion");
+  kind.value = 'free'; f.context.update_creation_mode();
+  experts = { Codex: 'cli', Claude: 'manual', DeepSeek: 'online' }; host.value = '用户';
+  kind.value = 'brainstorm'; f.context.update_creation_mode();
+  assert.deepEqual(Object.entries(experts), [['Codex', 'cli'], ['Claude', 'cli']], "the discussion keeps its own draft");
+  experts = {};
+  kind.value = 'free'; f.context.update_creation_mode();
+  assert.deepEqual(Object.entries(experts), [['Codex', 'cli'], ['Claude', 'manual'], ['DeepSeek', 'online']]);
+  assert.equal(host.value, '用户');
 });
 
 /** Exercise the participant menu's pause boundary with the shared controller actions. */
@@ -1676,13 +1685,28 @@ function participant_connection_fixture(status = "running") {
     }
     return true;
   };
-  const context = vm.createContext({ computed, ref, defineProps: () => ({}),
-    inject: () => ({ view, bridge: {}, pending, act }) });
+  const context = vm.createContext({ computed, ref, watch, defineProps: () => ({}),
+    inject: () => ({ view, bridge: { launch_clients: {} }, pending, act }) });
   const component = readFileSync(new URL("../frontend/ProgressBoard.vue", import.meta.url), "utf8");
   vm.runInContext(component.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .*;$/gm, "")
     + "\nglobalThis.connection_refs = { connection_open, connection_profile };", context);
   return { context, view, calls, controls, refs: context.connection_refs };
 }
+
+test("discussion experts can leave, return or be removed from the board, but the host stays", async () => {
+  const { context, view, calls } = participant_connection_fixture();
+  Object.assign(view.value.room, { host: "Claude", experts: { Claude: "cli", Codex: "cli" },
+    members: [{ id: 1, name: "Claude", status: "active" }, { id: 2, name: "Codex", status: "active" }, { id: 3, name: "Gemini", status: "away" }] });
+  assert.equal(context.member_menu({ name: "Claude", is_host: true }).length, 0, "the host cannot leave");
+  const labels = menu => Array.from(menu.flat(), item => item.label);
+  assert.deepEqual(labels(context.member_menu({ name: "Codex" })), ["暂离", "移除"]);
+  const away = context.member_menu({ name: "Gemini" });
+  assert.deepEqual(labels(away), ["请回", "移除"]);
+  await away[0][0].onSelect();
+  assert.deepEqual(calls, ["change_member"]);
+  view.value.room.phase = "concluded";
+  assert.equal(context.member_menu({ name: "Codex" }).length, 0, "a concluded discussion keeps its roster");
+});
 
 test("participant menu opens an inline switch and waits for explicit pause before reading configuration", async () => {
   const { context, view, calls, refs } = participant_connection_fixture();
