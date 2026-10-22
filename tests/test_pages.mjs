@@ -23,6 +23,7 @@ async function worker_fixture(test_case) {
     put: async (key, bytes) => { fixture.objects.set(key, new Uint8Array(bytes)); },
     get: async key => fixture.objects.has(key) ? { body: new Response(fixture.objects.get(key)).body } : null,
     delete: async key => { fixture.objects.delete(key); },
+    head: async key => fixture.objects.has(key) ? {} : null,
   };
   function prepare(query, values = []) {
     const statement = sql.prepare(query);
@@ -213,6 +214,41 @@ test('Worker attachments preserve bytes and metadata through upload, publication
   assert.equal((await f.request(`/${room.id}/delete`, { actor: '用户', confirm_title: '附件' })).status, 200);
   assert.equal(f.objects.size, 0);
   assert.equal((await f.raw(`/${room.id}/attachments/${file.id}/content`)).status, 404);
+});
+
+test('Worker imports a backup under fresh numbers, rewritten references and the importer credential, like Python', async t => {
+  const f = await worker_fixture(t);
+  const room = (await f.request('', { title: '导入', host: 'Codex', phase: 'initial', experts: { Codex: 'cli', Qwen: 'online' } })).body;
+  const path = `/${room.id}`;
+  const first = (await f.request(`${path}/messages`, { author: '用户', text: '原始问题', submission_id: 'import-first' })).body.message;
+  const data = new TextEncoder().encode('%PDF-1.7\nimported');
+  const params = new URLSearchParams({ actor: '用户', file_name: '资料.pdf', submission_id: 'import-file' });
+  const file = (await (await f.raw(`${path}/attachments?${params}`, { method: 'POST', body: data })).json()).attachment;
+  await f.request(`${path}/messages`, { author: '用户', text: `补充 #${first.id}`, reply_to: first.id, attachment_ids: [file.id], submission_id: 'import-second' });
+  const turn = (await f.request(`${path}/turns`, { actor: '用户', expert: 'Qwen', question: `请回应 #${first.id}`, submission_id: 'import-turn' })).body.turn;
+  const floor = (await f.request(`${path}/floor`)).body;
+  await f.request(`${path}/floor`, { actor: '用户', speaker: 'Qwen', action: 'take', revision: floor.revision });
+  const answer = await f.request(`${path}/messages`, { author: 'Qwen', submitted_by: '用户', source: 'proxy', text: `回应 #${first.id}`, turn_id: turn.id, submission_id: 'import-answer' });
+  assert.equal(answer.status, 201, JSON.stringify(answer.body));
+  const backup = JSON.parse(JSON.stringify((await f.request(`${path}/backup`)).body).replaceAll(room.id, 'importedroom'));
+  await f.request(`${path}/messages`, { author: '用户', text: '占用新编号', submission_id: 'import-later' });
+  const imported = await f.request('/import', backup);
+  assert.equal(imported.status, 201, JSON.stringify(imported.body));
+  assert.deepEqual(Object.keys(imported.body.attachments), [file.id]);
+  assert.equal((await f.request('/import', backup)).body.skipped, true);
+  const copy = (await f.request('/importedroom')).body;
+  assert.deepEqual([copy.host, copy.phase], ['Codex', 'paused']);
+  const [new_first, second, new_answer] = (await f.request('/importedroom/messages')).body.messages.sort((a, b) => a.id - b.id);
+  assert.ok(new_first.id > answer.body.message.id + 1);
+  assert.deepEqual([second.text, second.reply_to], [`补充 #${new_first.id}`, new_first.id]);
+  assert.deepEqual([new_answer.text, new_answer.turn_id], [`回应 #${new_first.id}`, copy.current_turn.id]);
+  assert.deepEqual([copy.current_turn.answer_id, copy.current_turn.question], [new_answer.id, `请回应 #${new_first.id}`]);
+  const attachment = `/importedroom/attachments/${imported.body.attachments[file.id]}`;
+  assert.equal((await f.raw(`${attachment}/content`)).status, 404);
+  assert.equal((await f.raw(`${attachment}/import`, { method: 'POST', body: new TextEncoder().encode('changed') })).status, 400);
+  assert.equal((await f.raw(`${attachment}/import`, { method: 'POST', body: data, headers: { 'X-Discussion-Token': crypto.randomUUID() } })).status, 403);
+  assert.equal((await f.raw(`${attachment}/import`, { method: 'POST', body: data })).status, 200);
+  assert.deepEqual(new Uint8Array(await (await f.raw(`${attachment}/content`)).arrayBuffer()), data);
 });
 
 test('Worker attachment routes reject unsafe metadata, missing storage and cross-room links', async t => {

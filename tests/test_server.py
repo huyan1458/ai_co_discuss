@@ -293,6 +293,43 @@ class DiscussionTests(unittest.TestCase):
         self.assertNotIn("OTHER_SECRET", json.dumps(snapshot))
         self.assertEqual(self.request(base + "/backup", {}, method="POST")[0], 404)
 
+    def test_room_import_renumbers_history_and_skips_a_repeat(self):
+        """An imported backup keeps its relationships and references under fresh IDs and the importer's credential."""
+        self.configure_host()
+        base = f"/api/rooms/{self.room['id']}"
+        first = self.post("原始问题", "import-first")[1]["message"]
+        data = b"\x89PNG\r\n\x1a\nimported-image"
+        upload = urlencode({"actor": "用户", "file_name": "图.png", "submission_id": "import-file"})
+        file = json.loads(self.attachment_request(base + "/attachments?" + upload, data)[2])["attachment"]
+        self.request(base + "/messages", {"author": "用户", "text": f"补充 #{first['id']}", "attachment_ids": [file["id"]],
+                                          "submission_id": "import-second", "reply_to": first["id"]})
+        payload = {"author": "Gemini", "submitted_by": "Codex", "source": "cli", "text": f"回应 #{first['id']}",
+                   "summary": f"摘要 #{first['id']}", "summary_by": "Gemini", "submission_id": "import-answer"}
+        payload.update(self.prepare_speech("Gemini"))
+        answer = self.request(base + "/messages", payload)[1]["message"]
+        backup = json.loads(json.dumps(self.request(base + "/backup")[1]).replace(self.room["id"], "importedroom"))
+        self.post("占用新编号", "import-later")
+        status, result = self.request("/api/rooms/import", backup)
+        self.assertEqual(status, 201, result)
+        self.assertEqual((result["id"], list(result["attachments"])), ("importedroom", [file["id"]]))
+        self.assertEqual(self.request("/api/rooms/import", backup)[1]["skipped"], True)
+        room = self.request("/api/rooms/importedroom")[1]
+        self.assertEqual((room["host"], room["phase"], room["title"]), ("Codex", "paused", self.room["title"]))
+        messages = self.request("/api/rooms/importedroom/messages")[1]["messages"]
+        new_first, second, new_answer = sorted(messages, key=lambda message: message["id"])
+        self.assertGreater(new_first["id"], answer["id"] + 1)
+        self.assertEqual((second["text"], second["reply_to"]), (f"补充 #{new_first['id']}", new_first["id"]))
+        self.assertEqual((new_answer["text"], new_answer["summary"], new_answer["submitted_by"]),
+                         (f"回应 #{new_first['id']}", f"摘要 #{new_first['id']}", "Codex"))
+        self.assertEqual(new_answer["turn_id"], room["current_turn"]["id"])
+        self.assertEqual(room["current_turn"]["answer_id"], new_answer["id"])
+        path = f"/api/rooms/importedroom/attachments/{result['attachments'][file['id']]}"
+        self.assertEqual(self.attachment_request(path + "/content")[0], 404)
+        request = Request(self.base + path + "/import", data=data, headers={"X-Discussion-Token": self.owner})
+        with urlopen(request, timeout=10) as response:
+            self.assertEqual(response.status, 200)
+        self.assertEqual(self.attachment_request(path + "/content")[2], data)
+
     def test_room_backup_handles_empty_and_missing_rooms(self):
         """A new room is exportable; missing rooms never produce an empty success."""
         status, snapshot = self.request(f"/api/rooms/{self.room['id']}/backup")

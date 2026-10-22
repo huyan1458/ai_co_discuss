@@ -14,7 +14,19 @@ const directory_actions = computed(() => [
     label: item.label, icon: (view.value.directory_sort || "manual") === item.value ? "i-lucide-check" : undefined,
     onSelect: () => act("sort_directory", item.value),
   })),
+  { type: "separator" },
+  { label: "导入频道…", icon: "i-lucide-upload", disabled: view.value.backup_pending, onSelect: () => import_input.value?.click() },
+  { label: "导出全部频道", icon: "i-lucide-download", disabled: view.value.backup_pending || !view.value.rooms.length,
+    onSelect: () => act("backup_rooms", { ids: view.value.rooms.map((room) => room.id), name: "全部频道" }) },
 ]);
+const import_input = ref(null);
+
+/** Hand the chosen backup files to the controller, then clear the input so the same file can be chosen again. */
+function choose_imports(event) {
+  const files = [...event.target.files];
+  event.target.value = "";
+  if (files.length) act("import_rooms", files);
+}
 const rooms_open = ref(true);
 const collapsed = ref(read_collapsed());
 watch(() => view.value.room?.id, () => {
@@ -28,11 +40,18 @@ function folder_actions(folder, index) {
   return [...(folder.id ? [[{ label: "重命名", icon: "i-lucide-pencil", disabled: folder.pending || view.value.directory_pending.includes(`folder-name:${folder.id}`), onSelect: () => emit("manage-folder", folder) }]] : []), [
     { label: "上移", icon: "i-lucide-arrow-up", disabled: ordering || index === 0 || Boolean(pending.value), onSelect: () => act("move_folder", { id: folder.order_id, direction: -1 }) },
     { label: "下移", icon: "i-lucide-arrow-down", disabled: ordering || index === folders.value.length - 1 || Boolean(pending.value), onSelect: () => act("move_folder", { id: folder.order_id, direction: 1 }) },
-  ], ...(folder.id ? [[{ label: "移除文件夹", icon: "i-lucide-folder-minus",
+  ], [folder_export(folder)], ...(folder.id ? [[{ label: "移除文件夹", icon: "i-lucide-folder-minus",
     disabled: folder.pending || ordering || view.value.directory_pending.includes(`folder-name:${folder.id}`)
       || view.value.creating_room?.folder_id === folder.id
       || view.value.rooms.some(room => room.folder_id === folder.id && view.value.folder_pending.includes(room.id)),
     onSelect: () => emit("delete-folder", folder) }]] : [])];
+}
+
+/** Export every channel filed in a folder, archived ones included. */
+function folder_export(folder) {
+  const ids = view.value.rooms.filter((room) => (room.folder_id || "") === folder.id).map((room) => room.id);
+  return { label: "导出文件夹", icon: "i-lucide-download", disabled: view.value.backup_pending || !ids.length,
+    onSelect: () => act("backup_rooms", { ids, name: folder.name || "未分组" }) };
 }
 
 /** Restore the user's collapsed folder IDs when local storage is available. */
@@ -78,8 +97,9 @@ function actions(room, index, folder_id, folder_room_count) {
     <div class="channel-directory-heading">
       <button type="button" class="channel-section-toggle" :aria-expanded="rooms_open" @click="rooms_open = !rooms_open"><UIcon :name="rooms_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />讨论频道</button>
       <div class="channel-directory-actions">
-        <UDropdownMenu :items="directory_actions" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu channel-directory-menu' }"><UButton icon="i-lucide-ellipsis" aria-label="频道目录选项" title="排列方式" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
+        <UDropdownMenu :items="directory_actions" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu channel-directory-menu' }"><UButton icon="i-lucide-ellipsis" aria-label="频道目录选项" title="排列、导入与导出" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
         <UTooltip text="新建文件夹"><UButton icon="i-lucide-plus" color="neutral" variant="ghost" size="xs" aria-label="新建文件夹" :disabled="view.directory_pending.includes('create-folder')" @click="emit('create-folder')" /></UTooltip>
+        <input ref="import_input" type="file" accept=".zip,.json" multiple hidden aria-label="选择频道备份" @change="choose_imports">
       </div>
     </div>
     <nav v-show="rooms_open" aria-label="讨论频道列表" class="channel-room-list" data-room-directory>
@@ -111,6 +131,7 @@ function actions(room, index, folder_id, folder_room_count) {
       <p v-if="!rooms.length" class="channel-directory-empty">暂无讨论频道</p>
     </nav>
     <UButton v-show="rooms_open" icon="i-lucide-archive" color="neutral" variant="ghost" class="channel-archive-toggle" aria-haspopup="dialog" @click="emit('archives')"><span class="channel-archive-label">已存档</span><small v-if="archived_count" class="channel-archive-count">{{ archived_count }}</small></UButton>
+    <p v-if="view.directory_notice" role="status" class="channel-directory-notice">{{ view.directory_notice }}</p>
     <p v-if="view.directory_error" role="alert" class="channel-directory-error">{{ view.directory_error }}</p>
   </div>
 </template>

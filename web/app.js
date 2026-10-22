@@ -56,6 +56,7 @@ state.attachment_preview = null;
 state.archive_changes = new Map();
 state.archive_version = 0;
 state.directory_error = "";
+state.directory_notice = "";
 state.directory_pending = new Map();
 state.directory_version = 0;
 state.navigation_version = 0;
@@ -2781,7 +2782,7 @@ function view_snapshot() {
   const experts = Object.fromEntries(["new-expert-modes", "topic-expert-modes"].map((id) =>
     [id, element(id) ? read_expert_inputs(id) : {}]));
   return { rooms: ordered_rooms(), folders: state.folders, folder_groups: ordered_folders(), room: state.room, archive_view: state.archive_view, directory_sort: state.directory_sort, messages: state.messages, total: state.message_total,
-    archive_pending: [...state.archive_changes.keys()], directory_error: state.directory_error,
+    archive_pending: [...state.archive_changes.keys()], directory_error: state.directory_error, directory_notice: state.directory_notice,
     directory_pending: [...state.directory_pending.keys()], folder_pending: [...state.folder_moves.keys()], creating_room: state.creating_room,
     connected: state.connected, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
     attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url })),
@@ -2876,12 +2877,81 @@ async function backup_room(room_id = state.room?.id) {
   }
 }
 
+/** Download several rooms, such as a folder or the whole directory, as one importable archive. */
+async function backup_rooms({ ids, name }) {
+  if (!ids.length || state.backup_pending) return;
+  state.backup_pending = true;
+  state.directory_notice = state.directory_error = "";
+  publish_view();
+  try {
+    const snapshots = [];
+    for (const id of ids) {
+      const snapshot = await request_json(`/api/rooms/${encodeURIComponent(id)}/backup`);
+      snapshots.push({ ...snapshot, source_url: `${location.origin}/r/${encodeURIComponent(id)}` });
+    }
+    await window.discuss_backup.download_rooms_backup(snapshots, name);
+    state.directory_notice = `已生成 ${snapshots.length} 个频道的备份，请查看浏览器下载。`;
+  } catch (error) {
+    state.directory_error = `导出失败，未生成备份：${error.message}`;
+  } finally {
+    state.backup_pending = false;
+    publish_view();
+  }
+}
+
+/** Upload one imported room's original files to the new attachment IDs; returns how many were missing. */
+async function upload_imported_files(room_id, token, mapping, files) {
+  let missing = 0;
+  for (const [old_id, new_id] of Object.entries(mapping)) {
+    const data = files.get(old_id);
+    const response = data && await fetch(`/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(new_id)}/import`,
+      { method: "POST", headers: { "X-Discussion-Token": token }, body: data });
+    if (!response?.ok) missing++;
+  }
+  return missing;
+}
+
+/** Import every room in the chosen backup files; each imported room is owned by this browser, existing rooms are skipped. */
+async function import_rooms(files) {
+  if (!files?.length || state.backup_pending) return;
+  state.backup_pending = true;
+  state.directory_notice = state.directory_error = "";
+  publish_view();
+  const imported = [], skipped = [], failed = [];
+  let missing = 0;
+  try {
+    for (const file of files) {
+      let rooms;
+      try { rooms = await window.discuss_backup.read_room_archives(file); }
+      catch (error) { failed.push(error.message.includes(file.name) ? error.message : `${file.name}：${error.message}`); continue; }
+      for (const { snapshot, files: originals } of rooms) {
+        const title = snapshot.tables?.rooms?.[0]?.title || file.name, token = crypto.randomUUID() + crypto.randomUUID();
+        try {
+          const result = await request_json("/api/rooms/import", snapshot, token);
+          if (result.skipped) { skipped.push(result.title); continue; }
+          save_room_credentials({ id: result.id }, token);
+          missing += await upload_imported_files(result.id, token, result.attachments, originals);
+          imported.push(result.title);
+        } catch (error) { failed.push(`${title}：${error.message}`); }
+      }
+    }
+    await refresh_room();
+  } finally {
+    state.backup_pending = false;
+    publish_view();
+  }
+  state.directory_notice = [`已导入 ${imported.length} 个频道`, skipped.length && `跳过已存在的 ${skipped.length} 个（${skipped.join("、")}）`]
+    .filter(Boolean).join("；");
+  state.directory_error = [missing && `${missing} 个附件原文件缺失，消息中的这些附件无法打开`, failed.length && `未导入 ${failed.length} 项：${failed.join("；")}`]
+    .filter(Boolean).join("；");
+}
+
 /** Execute a named view command, retaining existing retry and provenance rules. */
 async function execute_view_action(name, value) {
   if (!["refresh", "create"].includes(name)) state.navigation_version++;
   const event = { preventDefault() {} };
   const actions = { refresh: refresh_room, room: select_room, tab: select_tab,
-    archives: toggle_archives, backup: backup_room, manage_channel, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
+    archives: toggle_archives, backup: backup_room, backup_rooms, import_rooms, manage_channel, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
     send: () => send_message(event), choose_attachments: () => element("attachment-input").click(), remove_attachment, preview_attachment,
     create: (folder_id) => submit_room(event, folder_id),
     save_context: () => save_context(event), save_topic: () => save_topic(event),

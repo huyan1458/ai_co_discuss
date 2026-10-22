@@ -5,7 +5,7 @@ import test from "node:test";
 import vm from "node:vm";
 import { unzipSync } from "fflate";
 
-import { create_room_archive, room_markdown } from "../frontend/backup.mjs";
+import { create_room_archive, create_rooms_archive, read_room_archives, room_markdown } from "../frontend/backup.mjs";
 
 test("backups include original binary attachments and safe relative Markdown links", async () => {
   const snapshot = backup_fixture(), bytes = new Uint8Array([0, 255, 10, 13]);
@@ -19,6 +19,21 @@ test("backups include original binary attachments and safe relative Markdown lin
   assert.deepEqual(archive[path], bytes);
   assert.match(new TextDecoder().decode(archive["讨论记录.md"]), /%28%231%29/);
   await assert.rejects(create_room_archive(snapshot, async () => { throw new Error("原文件缺失"); }), /原文件缺失/);
+});
+
+test("single and batch archives read back every room with its original files for import", async () => {
+  const first = backup_fixture(), second = backup_fixture(), bytes = new Uint8Array([1, 2, 3]);
+  second.tables.rooms[0] = { ...second.tables.rooms[0], id: "two", title: "第二个" };
+  first.tables.attachments = [{ id: "b".repeat(32), room_id: "one", message_id: 1, file_name: "图.png", size: 3, sha256: "hash" }];
+  const as_file = (data, name) => ({ name, arrayBuffer: async () => data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) });
+  const batch = await create_rooms_archive([first, second], async () => bytes);
+  const rooms = await read_room_archives(as_file(batch, "批量.zip"));
+  assert.deepEqual(rooms.map(room => room.snapshot.tables.rooms[0].id).sort(), ["one", "two"]);
+  assert.deepEqual(rooms.find(room => room.snapshot.tables.rooms[0].id === "one").files.get("b".repeat(32)), bytes);
+  assert.ok(new TextDecoder().decode(unzipSync(batch)["备份说明.txt"]).includes("批量备份"));
+  const single = await read_room_archives(as_file(await create_room_archive(first, async () => bytes), "单个.zip"));
+  assert.deepEqual([single.length, single[0].files.get("b".repeat(32))], [1, bytes]);
+  await assert.rejects(read_room_archives(as_file(new TextEncoder().encode("not zip"), "坏.zip")), /不是有效的 ZIP/);
 });
 
 /** Build a multi-page Unicode record that crosses the async compressor threshold. */
@@ -63,7 +78,7 @@ test("standard ZIP reader recovers complete Unicode JSON, transcript and referen
   for (const reference of ["代发/提交者：Codex", "简述（作者：Gemini）", "#message-1", "#turn-7", "#message-46"])
     assert.ok(markdown.includes(reference), reference);
   assert.ok(markdown.includes("````text"));
-  assert.ok(decoded["备份说明.txt"].includes("当前未提供导入恢复"));
+  assert.ok(decoded["备份说明.txt"].includes("导入频道"));
 });
 
 /** Exercise the real shared download action without relying on either UI theme. */

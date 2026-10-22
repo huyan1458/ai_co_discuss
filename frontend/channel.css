@@ -120,7 +120,8 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .channel-connection > span.connected { background: #79b698; }
 
 /* One channel toolbar; secondary views live in the left navigation. */
-.channel-directory-error { margin: 8px 16px; color: var(--ui-error); font-size: var(--channel-nav-text); line-height: 1.5; overflow-wrap: anywhere; }
+.channel-directory-error, .channel-directory-notice { margin: 8px 16px; color: var(--ui-error); font-size: var(--channel-nav-text); line-height: 1.5; overflow-wrap: anywhere; }
+.channel-directory-notice { color: var(--ui-text-muted); }
 .channel-room-list { padding: 0 8px; }
 .channel-room-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; padding-right: 8px; border-radius: 8px; position: relative; color: #a8afbc; margin-bottom: 2px; }
 .channel-room-row:hover { background: #ffffff08; }

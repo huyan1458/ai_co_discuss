@@ -119,8 +119,8 @@ async function read_bytes(request, limit) {
 }
 
 /** Read a bounded JSON object from a browser request. */
-async function read_payload(request) {
-  const data = await read_bytes(request, MAX_BODY_BYTES);
+async function read_payload(request, limit = MAX_BODY_BYTES) {
+  const data = await read_bytes(request, limit);
   let payload;
   try {
     payload = JSON.parse(new TextDecoder().decode(data));
@@ -141,6 +141,173 @@ async function room_backup(database, room_id) {
   const tables = Object.fromEntries(entries.map(([table], index) => [table, results[index].results]));
   if (!tables.rooms.length) throw new HttpError(404, "房间不存在");
   return { format: "ai-codiscuss-room-backup", version: 1, exported_at: new Date().toISOString(), tables };
+}
+
+// Import mirrors backend/room_import.py: same room ID, renumbered rows, triggers kept from replaying history.
+const MAX_IMPORT_BYTES = 32 * 1024 * 1024;
+const IMPORT_ACTIVE_PHASES = ["initial", "discussing", "reviewing"];
+const IMPORT_RENUMBERED = ["messages", "discussion_turns", "room_members", "member_requests"];
+const IMPORT_LIMIT_FIELDS = ["max_rounds", "max_minutes", "execution_minutes", "on_limit", "summary_minutes", "started_at", "closing_at", "stop_reason", "revision"];
+// D1 binds at most 100 parameters per statement, so multi-row writes are chunked.
+const D1_MAX_PARAMETERS = 100;
+
+/** Validate the backup envelope and return its tables and the single room row. */
+function backup_tables(backup) {
+  if (backup?.format !== "ai-codiscuss-room-backup" || backup.version !== 1) throw new HttpError(400, "不是可导入的房间备份（需要 ai-codiscuss-room-backup 第 1 版）");
+  const tables = backup.tables;
+  if (!tables || typeof tables !== "object" || !Array.isArray(tables.rooms) || tables.rooms.length !== 1) throw new HttpError(400, "备份须恰好包含一个房间");
+  for (const [name, rows] of Object.entries(tables)) {
+    if (!Array.isArray(rows) || rows.some(row => !row || typeof row !== "object" || Array.isArray(row))) throw new HttpError(400, `备份表 ${name} 格式无效`);
+  }
+  const room = tables.rooms[0];
+  if (typeof room.id !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(room.id)) throw new HttpError(400, "备份中的房间编号无效");
+  return { tables, room };
+}
+
+/** Number renumbered rows after the target's maximum, in backup order; files get new IDs. */
+function import_maps(tables, bases) {
+  const maps = Object.fromEntries(IMPORT_RENUMBERED.map(table => [table, new Map((tables[table] || []).map((row, index) => [row.id, bases[table] + index + 1]))]));
+  maps.attachments = new Map((tables.attachments || []).map(row => [row.id, crypto.randomUUID().replaceAll("-", "")]));
+  return maps;
+}
+
+/** Point `#ID` references at renumbered messages, and map a "covers up to ID" mark. */
+const remap_text = (value, messages) => (value || "").replace(/#(\d+)/g, (match, id) => messages.has(Number(id)) ? `#${messages.get(Number(id))}` : match);
+const remap_until = (value, messages) => Math.max(0, ...[...messages].filter(([old]) => old <= (value || 0)).map(([, renumbered]) => renumbered));
+
+/** Insert many rows with as few statements as D1's parameter limit allows. */
+function insert_rows(table, columns, rows) {
+  const size = Math.floor(D1_MAX_PARAMETERS / columns.length), statements = [];
+  for (let index = 0; index < rows.length; index += size) {
+    const chunk = rows.slice(index, index + size);
+    statements.push([`INSERT INTO ${table} (${columns.join(",")}) VALUES ${chunk.map(() => `(${columns.map(() => "?").join(",")})`).join(",")}`, chunk.flat()]);
+  }
+  return statements;
+}
+
+/** Update several rows' columns by key in chunked statements. */
+function update_rows(table, key, columns, rows) {
+  const size = Math.floor(D1_MAX_PARAMETERS / (columns.length + 1)), statements = [];
+  for (let index = 0; index < rows.length; index += size) {
+    const chunk = rows.slice(index, index + size), names = ["k", ...columns.map((_, position) => `c${position}`)];
+    statements.push([`WITH v(${names.join(",")}) AS (VALUES ${chunk.map(() => `(${names.map(() => "?").join(",")})`).join(",")})
+      UPDATE ${table} SET ${columns.map((column, position) => `${column}=(SELECT c${position} FROM v WHERE k=${key})`).join(",")} WHERE ${key} IN (SELECT k FROM v)`, chunk.flat()]);
+  }
+  return statements;
+}
+
+/** Room, directory, folder, a temporary free mode (history needs no floor) and away members. */
+function import_room_rows(tables, room, maps, control_hash) {
+  const messages = maps.messages, experts = JSON.parse(tables.topic_settings?.[0]?.experts || "{}");
+  const statements = [["INSERT INTO rooms (id,title,goal,state_text,state_until,created_at) VALUES (?,?,?,?,?,?)",
+    [room.id, room.title, remap_text(room.goal, messages), remap_text(room.state_text, messages), remap_until(room.state_until, messages), room.created_at]],
+  ["UPDATE room_directory SET archived=? WHERE room_id=?", [tables.room_directory?.[0]?.archived ? 1 : 0, room.id]],
+  ["INSERT INTO room_modes (room_id,mode,control_hash) VALUES (?,'free',?)", [room.id, control_hash]]];
+  for (const folder of (tables.topic_folders || []).slice(0, 1)) statements.push(
+    ["INSERT INTO topic_folders (id,name,position) SELECT ?,?,COALESCE(MAX(position),0)+1 FROM topic_folders WHERE NOT EXISTS (SELECT 1 FROM topic_folders WHERE id=?)", [folder.id, folder.name, folder.id]],
+    ["UPDATE room_folder_assignments SET folder_id=? WHERE room_id=?", [folder.id, room.id]]);
+  statements.push(...insert_rows("room_members", ["id", "room_id", "name", "adapter", "role", "status", "token_hash", "read_until", "created_at", "access", "session_mode"],
+    (tables.room_members || []).map(member => [maps.room_members.get(member.id), room.id, member.name, member.adapter || "", member.role || "member",
+      member.status === "removed" ? "removed" : "away", crypto.randomUUID().replaceAll("-", "").repeat(2), remap_until(member.read_until, messages), member.created_at,
+      member.access || (experts[member.name] === "online" ? "online" : "manual"), member.session_mode || "new"])));
+  return statements;
+}
+
+/** Messages and turns as queued placeholders, then their real kinds, links and statuses. */
+function import_history_rows(tables, room_id, maps) {
+  const { messages, discussion_turns: turns } = maps, link = (map, id) => map.get(id) ?? null;
+  const statements = [
+    ...insert_rows("messages", ["id", "room_id", "author", "text", "reply_to", "source", "submission_id", "created_at"], (tables.messages || []).map(row =>
+      [messages.get(row.id), room_id, row.author, remap_text(row.text, messages), link(messages, row.reply_to), row.source, row.submission_id, row.created_at])),
+    ...insert_rows("discussion_turns", ["id", "room_id", "expert", "question", "status", "submission_id", "created_at", "notified_at", "answer_id"], (tables.discussion_turns || []).map(row =>
+      [turns.get(row.id), room_id, row.expert, remap_text(row.question, messages), "queued", row.submission_id, row.created_at, row.notified_at || "", link(messages, row.answer_id)])),
+    ...insert_rows("message_details", ["message_id", "kind", "submitted_by"], (tables.message_details || []).map(row => [messages.get(row.message_id), "import", row.submitted_by])),
+    ...update_rows("message_details", "message_id", ["kind", "turn_id"], (tables.message_details || []).map(row => [messages.get(row.message_id), row.kind, link(turns, row.turn_id)])),
+    // A held relay stops an answered turn from promoting the next queued one; open turns are restored last.
+    ["INSERT INTO turn_relay (room_id,held_since) VALUES (?,1) ON CONFLICT(room_id) DO UPDATE SET held_since=1", [room_id]]];
+  const settled = (tables.discussion_turns || []).filter(row => !["queued", "notified", "pending"].includes(row.status));
+  const open = (tables.discussion_turns || []).filter(row => ["notified", "pending"].includes(row.status));
+  statements.push(...update_rows("discussion_turns", "id", ["status"], settled.map(row => [turns.get(row.id), row.status])),
+    ...open.map(row => ["UPDATE discussion_turns SET status=? WHERE id=?", [row.status, turns.get(row.id)]]));
+  return statements;
+}
+
+/** Topic, floor, limits, idle clock and texts; an active brainstorm arrives paused because it has no run. */
+function import_setting_rows(tables, room_id, maps, now) {
+  const messages = maps.messages, statements = [];
+  const free = (tables.room_modes || []).some(row => row.mode === "free");
+  for (const row of (tables.topic_settings || []).slice(0, 1)) {
+    const phase = !free && IMPORT_ACTIVE_PHASES.includes(row.phase) ? "paused" : row.phase;
+    statements.push(["INSERT INTO topic_settings (room_id,host,background,boundaries,experts,phase,focus) VALUES (?,?,?,?,?,?,?)",
+      [room_id, row.host, remap_text(row.background, messages), remap_text(row.boundaries, messages), row.experts, phase, remap_text(row.focus, messages)]],
+    ["INSERT INTO discussion_pauses (room_id,paused_at) VALUES (?,?)", [room_id, IMPORT_ACTIVE_PHASES.includes(phase) ? 0 : now]]);
+  }
+  for (const row of (tables.room_floor || []).slice(0, 1)) statements.push([`INSERT INTO room_floor (room_id,holder,next_speaker,revision) VALUES (?,?,?,?) ON CONFLICT(room_id)
+    DO UPDATE SET holder=excluded.holder,next_speaker=excluded.next_speaker,revision=excluded.revision`, [room_id, row.holder ?? null, row.next_speaker, row.revision ?? 0]]);
+  for (const row of (tables.discussion_limits || []).slice(0, 1)) statements.push([`UPDATE discussion_limits SET ${IMPORT_LIMIT_FIELDS.map(field => `${field}=?`).join(",")} WHERE room_id=?`,
+    [...IMPORT_LIMIT_FIELDS.map(field => row[field]), room_id]]);
+  for (const row of (tables.room_user_requests || []).slice(0, 1)) statements.push(["INSERT INTO room_user_requests (room_id,text) VALUES (?,?)", [room_id, remap_text(row.text, messages)]]);
+  for (const row of (tables.room_briefs || []).slice(0, 1)) statements.push(["INSERT INTO room_briefs (room_id,text,until,updated_at) VALUES (?,?,?,?)",
+    [room_id, remap_text(row.text, messages), remap_until(row.until, messages), row.updated_at]]);
+  return statements;
+}
+
+/** Summaries, timings, attachment records and free-room requests attached to renumbered rows. */
+function import_record_rows(tables, room_id, maps) {
+  const { messages, room_members: members, member_requests: requests, attachments } = maps;
+  return [
+    ...insert_rows("message_summaries", ["message_id", "text", "author"], (tables.message_summaries || []).map(row => [messages.get(row.message_id), remap_text(row.text, messages), row.author])),
+    ...insert_rows("message_timings", ["message_id", "elapsed_seconds"], (tables.message_timings || []).map(row => [messages.get(row.message_id), row.elapsed_seconds])),
+    ...insert_rows("attachments", ["id", "room_id", "message_id", "position", "file_name", "content_type", "size", "sha256", "actor", "submission_id", "created_at"],
+      (tables.attachments || []).map(row => [attachments.get(row.id), room_id, messages.get(row.message_id), row.position, row.file_name, row.content_type, row.size, row.sha256, row.actor, row.submission_id, row.created_at])),
+    ...insert_rows("member_requests", ["id", "room_id", "member_id", "message_id", "status", "answer_id", "created_at", "chain_id", "batch_id", "purpose", "created_by"],
+      (tables.member_requests || []).map(row => [requests.get(row.id), room_id, members.get(row.member_id), messages.get(row.message_id),
+        ["pending", "delivering"].includes(row.status) ? "cancelled" : row.status, messages.get(row.answer_id) ?? null, row.created_at,
+        row.chain_id ?? 0, row.batch_id ?? 0, row.purpose ?? "ask", row.created_by ?? "user"])),
+    ...insert_rows("member_suggestions", ["message_id", "member_id"], (tables.member_suggestions || []).map(row => [messages.get(row.message_id), members.get(row.member_id)])),
+  ];
+}
+
+/** Recreate a backup under the importer's control credential in one D1 batch, or skip an existing room. */
+async function import_room(database, backup, control_token) {
+  const control_hash = await runtime_hash(control_token);
+  if (!control_hash) throw new HttpError(400, "导入须提供 32–256 字符的房间控制凭据");
+  const { tables, room } = backup_tables(backup);
+  const skipped = { id: room.id, title: room.title, skipped: true };
+  if (await database.prepare("SELECT 1 FROM rooms WHERE id=?").bind(room.id).first()) return skipped;
+  const bases = await database.prepare(`SELECT ${IMPORT_RENUMBERED.map(table => `(SELECT COALESCE(MAX(id),0) FROM ${table}) AS ${table}`).join(",")}`).first();
+  const maps = import_maps(tables, bases), mode = tables.room_modes?.[0]?.mode || "brainstorm";
+  let rows;
+  try {
+    rows = [...import_room_rows(tables, room, maps, control_hash), ...import_history_rows(tables, room.id, maps),
+      ...import_setting_rows(tables, room.id, maps, Math.floor(Date.now() / 1000)), ...import_record_rows(tables, room.id, maps),
+      ["UPDATE room_modes SET mode=? WHERE room_id=?", [mode, room.id]], ["DELETE FROM turn_relay WHERE room_id=?", [room.id]]];
+  } catch (error) { throw new HttpError(400, `备份内容不完整，未导入：${error.message}`); }
+  const statements = rows.map(([sql, values]) => database.prepare(sql).bind(...values.map(value => value === undefined ? null : value)));
+  // The numbering is only valid while no other write has taken those IDs; a conflict rolls the whole batch back.
+  const condition = `NOT EXISTS(SELECT 1 FROM rooms WHERE id=?) AND ${IMPORT_RENUMBERED.map(table => `(SELECT COALESCE(MAX(id),0) FROM ${table})=?`).join(" AND ")}`;
+  try { await checked_batch(database, condition, [room.id, ...IMPORT_RENUMBERED.map(table => bases[table])], statements); }
+  catch (error) {
+    if (await database.prepare("SELECT 1 FROM rooms WHERE id=?").bind(room.id).first()) return skipped;
+    if (error instanceof HttpError) throw new HttpError(409, "导入期间本站有新写入，请重试导入");
+    throw new HttpError(400, `备份内容与本站数据冲突，未导入：${error.message}`);
+  }
+  return { id: room.id, title: room.title, imported: true, attachments: Object.fromEntries(maps.attachments) };
+}
+
+/** Store an imported attachment's original bytes once the owner's upload matches its record. */
+async function import_attachment(database, bucket, room_id, attachment_id, token, data) {
+  if (!bucket) throw new HttpError(503, "附件存储未配置；请绑定 ATTACHMENTS R2 存储桶");
+  const hashed = await runtime_hash(token);
+  if (!hashed || !await database.prepare("SELECT 1 FROM room_modes WHERE room_id=? AND control_hash=?").bind(room_id, hashed).first()) {
+    throw new HttpError(403, "需要本房间的控制凭据；没有凭据只能阅读");
+  }
+  const file = await get_attachment(database, room_id, attachment_id);
+  const sha256 = [...new Uint8Array(await crypto.subtle.digest("SHA-256", data))].map(byte => byte.toString(16).padStart(2, "0")).join("");
+  if (data.length !== file.size || sha256 !== file.sha256) throw new HttpError(400, "附件内容与备份记录不一致");
+  const key = `rooms/${room_id}/${attachment_id}`;
+  if (!await bucket.head(key)) await bucket.put(key, data, { httpMetadata: { contentType: file.content_type } });
+  return { attachment: file };
 }
 
 /** Confirm a room exists without loading its full view; for polled endpoints that only need the 404. */
@@ -1435,7 +1602,7 @@ const FREE_RECENT_EXECUTIONS = 100;
 // Only free rooms carry these tables; credential hashes are never exported.
 const FREE_BACKUP_QUERIES = {
   room_modes: "SELECT room_id,mode FROM room_modes WHERE room_id=?",
-  room_members: "SELECT id,room_id,name,adapter,role,status,read_until,created_at FROM room_members WHERE room_id=? ORDER BY id",
+  room_members: "SELECT id,room_id,name,adapter,role,status,read_until,created_at,access,session_mode FROM room_members WHERE room_id=? ORDER BY id",
   member_requests: "SELECT * FROM member_requests WHERE room_id=? ORDER BY id",
   member_suggestions: "SELECT s.* FROM member_suggestions s JOIN messages m ON m.id=s.message_id WHERE m.room_id=? ORDER BY s.message_id,s.member_id",
 };
@@ -2089,6 +2256,10 @@ async function handle_api(database, request, parts, params, bucket) {
     const room = await create_room(database, await read_payload(request), request.headers.get("X-Discussion-Token") ?? "");
     return respond(room, room.duplicate ? 200 : 201);
   }
+  if (route === "api/rooms/import" && method === "POST") {
+    const result = await import_room(database, await read_payload(request, MAX_IMPORT_BYTES), request.headers.get("X-Discussion-Token") ?? "");
+    return respond(result, result.skipped ? 200 : 201);
+  }
   if (route === "api/folders" && method === "POST") {
     const name = folder_name_value(await read_payload(request));
     const id = crypto.randomUUID().replaceAll("-", "");
@@ -2168,6 +2339,11 @@ async function handle_attachments(database, request, parts, params, bucket, free
     if (Number(request.headers.get("Content-Length")) > MAX_ATTACHMENT_BYTES) throw new HttpError(413, "单个附件最多 20 MiB");
     const result = await store_attachment(database, bucket, room_id, metadata, await read_bytes(request, MAX_ATTACHMENT_BYTES));
     return respond(result, result.duplicate ? 200 : 201);
+  }
+  if (request.method === "POST" && parts.length === 6 && parts[5] === "import") {
+    if (Number(request.headers.get("Content-Length")) > MAX_ATTACHMENT_BYTES) throw new HttpError(413, "单个附件最多 20 MiB");
+    return respond(await import_attachment(database, bucket, room_id, parts[4], request.headers.get("X-Discussion-Token") ?? "",
+      await read_bytes(request, MAX_ATTACHMENT_BYTES)));
   }
   if (request.method === "GET" && [5, 6].includes(parts.length)) {
     const file = await get_attachment(database, room_id, parts[4]);

@@ -85,6 +85,27 @@ class FreeRoomTests(unittest.TestCase):
         self.assertNotIn("token_hash", json.dumps(backup))
         self.assertNotIn("control_hash", json.dumps(backup))
 
+    def test_imported_free_room_keeps_requests_and_invites_members_back(self):
+        """Requests follow renumbered members and messages; members return only with new credentials."""
+        self.assertEqual(self.say("请看看")[0], 201)
+        execution = self.reserve()[1]
+        self.assertEqual(self.answer(execution["id"], "看完了")[0], 201)
+        self.assertEqual(self.say("再看一处")[0], 201)
+        backup = json.loads(json.dumps(self.request(f"{self.path}/backup")[1]).replace(self.room["id"], "freecopy"))
+        importer = uuid.uuid4().hex
+        status, result = self.request("/api/rooms/import", backup, importer)
+        self.assertEqual(status, 201, result)
+        room = self.request("/api/rooms/freecopy")[1]
+        self.assertEqual((room["mode"], room["phase"]), ("free", "discussing"))
+        member = room["free"]["members"][0]
+        self.assertEqual((member["name"], member["status"]), ("Claude", "away"))
+        requests = sorted(room["free"]["requests"], key=lambda item: item["id"])
+        self.assertEqual([item["status"] for item in requests], ["completed", "cancelled"])
+        self.assertEqual(self.request("/api/rooms/freecopy/messages", {"author": "用户", "text": "旧凭据", "submission_id": "old-credential"}, self.owner)[0], 403)
+        renewed = uuid.uuid4().hex
+        self.assertEqual(self.request(f"/api/rooms/freecopy/members/{member['id']}", {"action": "active", "token": renewed}, importer)[0], 200)
+        self.assertEqual(self.request("/api/rooms/freecopy/messages", {"author": "用户", "text": "继续", "submission_id": "continue-after-import", "to": ["Claude"]}, importer)[0], 201)
+
     def test_creation_requires_owner_credential_and_retries_idempotently(self):
         """A free room needs a control credential; the same submission returns the original room."""
         payload = {"title": "无凭据", "goal": "x", "mode": "free",

@@ -24,6 +24,7 @@ from .free_room import (add_member, after_free_message, authorize_free_write, ch
                         discussion_members, room_mode, save_room_access, sync_discussion_members, view_execution)
 from .free_room import add_discussion_member, convert_suggestion, discussion_member_action, message_suggestions, save_suggestions
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, is_ai, is_participant
+from .room_import import import_room, imported_attachment
 from .runtime import (authorize_write, begin_write, configure_runtime, event_action,
                      LIMIT_DEFAULTS, LIMITS_SQL, limit_values, limits_view, require_within_limits,
                      list_events, require_control, runtime_view, token_hash)
@@ -33,6 +34,7 @@ WEB_ROOT = ROOT / "web"
 DEFAULT_PORT = 8765
 UPDATE_HEARTBEAT_SECONDS = 15
 MAX_BODY_BYTES = 512 * 1024
+MAX_IMPORT_BYTES = 32 * 1024 * 1024
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 MAX_MESSAGE_ATTACHMENTS = 10
 MAX_FILENAME_LENGTH = 255
@@ -84,7 +86,7 @@ ROOM_BACKUP_QUERIES["room_creations"] = "SELECT submission_id,room_id FROM room_
 # Shared membership plus free-room requests; credential hashes are never exported.
 FREE_BACKUP_QUERIES = {
     "room_modes": "SELECT room_id,mode FROM room_modes WHERE room_id=?",
-    "room_members": "SELECT id,room_id,name,adapter,role,status,read_until,created_at FROM room_members WHERE room_id=? ORDER BY id",
+    "room_members": "SELECT id,room_id,name,adapter,role,status,read_until,created_at,access,session_mode FROM room_members WHERE room_id=? ORDER BY id",
     "member_requests": "SELECT * FROM member_requests WHERE room_id=? ORDER BY id",
     "member_suggestions": "SELECT s.* FROM member_suggestions s JOIN messages m ON m.id=s.message_id WHERE m.room_id=? ORDER BY s.message_id,s.member_id",
 }
@@ -1307,12 +1309,12 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def read_payload(self):
+    def read_payload(self, limit=MAX_BODY_BYTES):
         """Read a bounded JSON object from an incoming form API request."""
         if getattr(self, "payload_cache", None) is not None:
             return self.payload_cache
         length = int(self.headers.get("Content-Length", "0"))
-        if not 0 < length <= MAX_BODY_BYTES:
+        if not 0 < length <= limit:
             raise ValueError("请求内容为空或过大")
         payload = json.loads(self.rfile.read(length))
         if not isinstance(payload, dict):
@@ -1523,6 +1525,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             room = create_room(connection, self.read_payload(), self.headers.get("X-Discussion-Token", ""))
             connection.commit()
             return self.respond(room, 200 if room["duplicate"] else 201)
+        if parts == ["api", "rooms", "import"] and method == "POST":
+            result = import_room(connection, self.read_payload(MAX_IMPORT_BYTES), self.headers.get("X-Discussion-Token", ""), int(time.time()))
+            connection.commit()
+            return self.respond(result, 200 if result.get("skipped") else 201)
         if parts == ["api", "folders"] and method == "POST":
             name = folder_name_value(self.read_payload())
             folder_id = uuid.uuid4().hex
@@ -1636,6 +1642,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 raise ValueError("附件内容不完整")
             result = store_attachment(connection, self.server.database, room_id, metadata, data)
             return self.respond(result, 200 if result["duplicate"] else 201)
+        if method == "POST" and len(parts) == 6 and parts[5] == "import":
+            return self.import_attachment(connection, room_id, parts[4])
         if method == "GET" and len(parts) in (5, 6):
             attachment = get_attachment(connection, room_id, parts[4])
             if len(parts) == 5:
@@ -1643,6 +1651,19 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if parts[5] == "content":
                 return self.respond_attachment(attachment, params.get("download") == "1")
         raise LookupError("地址不存在")
+
+    def import_attachment(self, connection, room_id, attachment_id):
+        """Store the original bytes of an attachment recorded by an import; an existing file is kept."""
+        length = int(self.headers.get("Content-Length", "-1"))
+        if not 0 <= length <= MAX_ATTACHMENT_BYTES:
+            return self.respond({"error": "单个附件最多 20 MiB，须提供 Content-Length"}, 413)
+        data = self.rfile.read(length)
+        attachment = imported_attachment(connection, room_id, attachment_id, self.headers.get("X-Discussion-Token", ""), data)
+        path = attachment_path(self.server.database, attachment)
+        if not path.is_file():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        return self.respond({"attachment": attachment_view(attachment)})
 
     def respond_attachment(self, attachment, download):
         """Serve stored bytes with a safe disposition, never as executable HTML."""

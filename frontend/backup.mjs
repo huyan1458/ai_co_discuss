@@ -1,4 +1,4 @@
-import { strToU8, zip } from "fflate";
+import { strFromU8, strToU8, unzip, zip } from "fflate";
 
 const DOWNLOAD_RELEASE_MS = 60000;
 const FILENAME_TITLE_LIMIT = 80;
@@ -11,7 +11,13 @@ const BACKUP_README = `AI CoDiscuss 聊天室备份
 仅保存本聊天室及其所属文件夹信息，不包含其他聊天室、账号或本机配置。
 附件/：本聊天室已发送附件的原文件，与完整数据中的附件编号对应。
 外部网页、外链图片和外部附件仅保留原链接，不下载其内容；未发送的上传不在备份内。
-这是导出时刻的快照，之后的新消息不在包内。当前未提供导入恢复功能。
+这是导出时刻的快照，之后的新消息不在包内。
+导入：在任一共议网站的频道目录选“导入频道”并选择本 ZIP，即建成可继续使用的副本；已有同一频道时跳过。
+`;
+const BATCH_README = `AI CoDiscuss 频道批量备份
+
+每个子文件夹是一个频道的完整备份，结构与单个频道备份相同（完整数据.json、讨论记录.md、附件/）。
+在任一共议网站的频道目录选“导入频道”并选择本 ZIP，可一次导入全部频道；已有同一频道时跳过。
 `;
 
 /** Wrap original text safely, including embedded Markdown fences and HTML. */
@@ -96,30 +102,75 @@ async function fetch_attachment(file) {
   return bytes;
 }
 
-/** Package a versioned snapshot and all published original files without partial success. */
-export async function create_room_archive(snapshot, load_attachment = fetch_attachment) {
-  const files = {
-    "完整数据.json": strToU8(JSON.stringify(snapshot, null, 2) + "\n"),
-    "讨论记录.md": strToU8(room_markdown(snapshot)),
-    "备份说明.txt": strToU8(BACKUP_README),
-  };
-  for (const file of snapshot.tables.attachments || []) files[attachment_archive_path(file)] = [await load_attachment(file), { level: 0 }];
+/** Add one room's snapshot, readable record and original files under a folder prefix. */
+async function add_room_files(files, snapshot, prefix, load_attachment) {
+  files[`${prefix}完整数据.json`] = strToU8(JSON.stringify(snapshot, null, 2) + "\n");
+  files[`${prefix}讨论记录.md`] = strToU8(room_markdown(snapshot));
+  for (const file of snapshot.tables.attachments || []) files[prefix + attachment_archive_path(file)] = [await load_attachment(file), { level: 0 }];
+}
+
+/** Compress archive entries, resolving only once the whole package exists. */
+function compress(files) {
   return new Promise((resolve, reject) => {
     zip(files, { level: 6 }, (error, data) => error ? reject(error) : resolve(data));
   });
 }
 
-/** Start a browser download after the whole archive has been successfully built. */
-export async function download_room_backup(snapshot) {
-  const archive = await create_room_archive(snapshot);
-  const title = [...snapshot.tables.rooms[0].title.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")]
-    .slice(0, FILENAME_TITLE_LIMIT).join("").replace(/[. ]+$/, "") || "讨论";
-  const timestamp = snapshot.exported_at.replace(/[:.]/g, "-");
+/** Make a title usable as a portable file or folder name. */
+function safe_title(title) {
+  return [...title.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")].slice(0, FILENAME_TITLE_LIMIT).join("").replace(/[. ]+$/, "") || "讨论";
+}
+
+/** Package a versioned snapshot and all published original files without partial success. */
+export async function create_room_archive(snapshot, load_attachment = fetch_attachment) {
+  const files = { "备份说明.txt": strToU8(BACKUP_README) };
+  await add_room_files(files, snapshot, "", load_attachment);
+  return compress(files);
+}
+
+/** Package several rooms, one folder each, so the whole set imports in one step. */
+export async function create_rooms_archive(snapshots, load_attachment = fetch_attachment) {
+  const files = { "备份说明.txt": strToU8(BATCH_README) };
+  for (const snapshot of snapshots) {
+    const room = snapshot.tables.rooms[0];
+    await add_room_files(files, snapshot, `${safe_title(room.title)}_${room.id}/`, load_attachment);
+  }
+  return compress(files);
+}
+
+/** Read every room backup in a single or batch ZIP (or a bare 完整数据.json), with original files keyed by attachment ID. */
+export async function read_room_archives(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (file.name.toLowerCase().endsWith(".json")) return [{ snapshot: JSON.parse(strFromU8(bytes)), files: new Map() }];
+  const entries = await new Promise((resolve, reject) => unzip(bytes, (error, data) => error ? reject(new Error(`${file.name} 不是有效的 ZIP 备份`)) : resolve(data)));
+  const rooms = Object.keys(entries).filter(path => /^(?:[^/]+\/)?完整数据\.json$/.test(path)).map(path => {
+    const prefix = path.slice(0, -"完整数据.json".length), snapshot = JSON.parse(strFromU8(entries[path]));
+    const files = new Map((snapshot.tables?.attachments || []).map(item => [item.id, entries[prefix + attachment_archive_path(item)]]).filter(([, data]) => data));
+    return { snapshot, files };
+  });
+  if (!rooms.length) throw new Error(`${file.name} 中没有频道备份（完整数据.json）`);
+  return rooms;
+}
+
+/** Start a browser download of a finished archive. */
+function save_archive(archive, name) {
   const url = URL.createObjectURL(new Blob([archive], { type: "application/zip" }));
   const link = document.createElement("a");
   link.href = url;
-  link.download = `${title}_${timestamp}.zip`;
+  link.download = name;
   document.body.append(link);
   try { link.click(); }
   finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), DOWNLOAD_RELEASE_MS); }
+}
+
+/** Start a browser download after the whole archive has been successfully built. */
+export async function download_room_backup(snapshot) {
+  const archive = await create_room_archive(snapshot);
+  save_archive(archive, `${safe_title(snapshot.tables.rooms[0].title)}_${snapshot.exported_at.replace(/[:.]/g, "-")}.zip`);
+}
+
+/** Download several rooms as one batch archive named after the selection. */
+export async function download_rooms_backup(snapshots, name) {
+  const archive = await create_rooms_archive(snapshots);
+  save_archive(archive, `${safe_title(name)}_${new Date().toISOString().replace(/[:.]/g, "-")}.zip`);
 }
