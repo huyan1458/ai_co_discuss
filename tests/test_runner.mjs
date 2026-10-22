@@ -1001,6 +1001,26 @@ test('a room failure is reported without stopping the other rooms', async t => {
   assert.deepEqual(rooms.map(room => [room.room, room.status, room.error]), [['room1', 'error', 'HTTP 500'], ['room2', 'running', '']]);
 });
 
+test('a room deleted on the website is unregistered, while a missing route alone is only reported', async t => {
+  const server = createServer((request, response) => {
+    response.statusCode = 404;
+    response.setHeader('Content-Type', 'application/json');
+    response.end(JSON.stringify({ error: request.url === '/api/rooms/gone' ? '房间不存在' : '地址不存在' }));
+  });
+  await new Promise(done => server.listen(0, '127.0.0.1', done));
+  const site = `http://127.0.0.1:${server.address().port}`;
+  const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
+  const gone = room_config(home, site, 'gone'), kept = room_config(home, site, 'kept');
+  register_room(home, gone); register_room(home, kept);
+  const service = new DiscussionService(home, () => ({ stop_children() {}, tick: async () => { throw new Error('HTTP 404: 地址不存在'); } }));
+  t.after(async () => { await service.close(); await new Promise(done => server.close(done)); rmSync(home, { recursive: true, force: true }); });
+  await service.tick();
+  assert.deepEqual(read_registry(home), [kept]);
+  assert.ok(!existsSync(join(home, 'data-gone', 'runner.lock')), 'the deleted room releases its data-directory lock');
+  const rooms = JSON.parse(readFileSync(join(home, 'status.json'), 'utf8')).rooms;
+  assert.deepEqual(rooms.map(room => [room.room, room.status]), [['kept', 'error']]);
+});
+
 test('a resident worker adopts connection corrections but rejects changes to its bound conversation context', async t => {
   const f = await fixture(t);
   const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));

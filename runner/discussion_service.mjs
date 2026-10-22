@@ -228,6 +228,7 @@ class RoomWorker {
       const result = await this.runner.tick();
       Object.assign(this.state, { status: TICK_STATES[result], error: '' });
     } catch (error) {
+      if (await this.deleted(error)) { this.removed = true; return; }
       if (error.message !== this.state.error) this.log(`${this.state.room || this.path}: ${error.message}`);
       Object.assign(this.state, { status: 'error', error: error.message });
     }
@@ -235,6 +236,14 @@ class RoomWorker {
       this.log(`${this.state.site || ''}/${this.state.room || this.path}: ${STATUS_LABELS[this.state.status]}`);
     }
     this.state.checked_at = Math.floor(Date.now() / 1000);
+  }
+  /** Confirm a 404 against the room itself, so a room deleted on the website is told apart from a missing route. */
+  async deleted(error) {
+    if (!error.message.startsWith('HTTP 404')) return false;
+    try {
+      await api(this.config || validate_config(configuration_snapshot(this.path).config, dirname(this.path)), '');
+      return false;
+    } catch (failure) { return failure.message === 'HTTP 404: 房间不存在'; }
   }
   /** Stopping the service pauses its runs, so the website does not wait for absent consumers. */
   async close(pause) {
@@ -266,7 +275,14 @@ export class DiscussionService {
     }
     for (const path of configs) {
       if (!this.workers.has(path)) this.workers.set(path, new RoomWorker(path, this.create_runner, this.log, this.home));
-      await this.workers.get(path).tick();
+      const worker = this.workers.get(path);
+      await worker.tick();
+      if (!worker.removed) continue;
+      // The room no longer exists on its website, so there is nothing to pause; drop the registration once.
+      await worker.close(false);
+      this.workers.delete(path);
+      try { unregister_room(this.home, path); } catch { /* Already removed by another command. */ }
+      this.log(`${worker.state.site || ''}/${worker.state.room || path}: 房间已在网站删除，已撤销登记`);
     }
     atomic_json(join(this.home, 'status.json'), { pid: process.pid, updated_at: Math.floor(Date.now() / 1000),
       rooms: [...this.workers.values()].map(worker => worker.state) });
