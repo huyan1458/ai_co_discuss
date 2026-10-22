@@ -242,7 +242,7 @@ const summary = computed(() => {
 .create-mode.is-selected { background: color-mix(in srgb, var(--channel-accent) 7%, var(--ui-bg)); }
 .create-mode.is-selected > [class*="icon"] { color: var(--channel-accent); }
 .create-mode.is-selected::after { border-color: var(--channel-accent); background: radial-gradient(circle, var(--channel-accent) 3px, transparent 3.5px); }
-.create-experts { display: grid; grid-template-columns: repeat(auto-fill, minmax(196px, 1fr)); align-items: start; gap: 8px; }
+.create-experts { display: grid; grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); align-items: start; gap: 8px; }
 .create-experts-empty { margin: 0; padding: 18px 12px; border: 1px dashed var(--ui-border); border-radius: 8px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }
 .create-roster-add { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .create-roster-add .create-label { min-width: 0; margin-right: 2px; }
