@@ -47033,7 +47033,7 @@ var PK = /*#__PURE__*/ EH({
 			}, 8, ["style"])], 42, YK);
 		};
 	}
-}, [["__scopeId", "data-v-1440390a"]]), Dq = { class: "create-discussion" }, Oq = {
+}, [["__scopeId", "data-v-5fa320b7"]]), Dq = { class: "create-discussion" }, Oq = {
 	key: 0,
 	class: "channel-create-location"
 }, kq = { class: "create-section" }, Aq = [

@@ -228,7 +228,7 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
 <style scoped>
 .expert-card { min-width: 0; perspective: 900px; outline: none; }
 /* Both faces keep one size; long settings scroll inside the back while its actions stay in place. */
-.expert-card-turn { display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); height: 224px; transform-style: preserve-3d; }
+.expert-card-turn { display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); height: 272px; transform-style: preserve-3d; }
 .expert-card-face { grid-area: 1 / 1; min-width: 0; min-height: 0; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); box-shadow: var(--channel-shadow-control); backface-visibility: hidden; }
 .expert-card.is-host .expert-card-front { border-color: color-mix(in srgb, #e0b44a 45%, var(--ui-border)); }
 .expert-card-front { position: relative; display: flex; }
@@ -278,7 +278,7 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
 .expert-card-note > span { flex-shrink: 0; width: 13px; height: 13px; margin-top: 3px; }
 @media (pointer: coarse) {
   .expert-card-flip, .expert-card-defaults, .expert-card-tools > button { min-width: 44px; min-height: 44px; }
-  .expert-card-turn { height: 244px; }
+  .expert-card-turn { height: 292px; }
   .expert-card-tools { top: 4px; right: 4px; }
   .expert-card-identity { padding-right: 92px; }
   .expert-card-modes button { min-height: 44px; }
