@@ -10,7 +10,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { cached_software_models, launch_discussion, pick_directory, launch_settings, room_configuration, room_member, save_launch_settings } from '../runner/discussion_launch.mjs';
+import { borrowed_session, cached_software_models, launch_discussion, pick_directory, launch_settings, room_configuration, room_member, save_launch_settings } from '../runner/discussion_launch.mjs';
 import { api, DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { DiscussionService, read_registry, register_room } from '../runner/discussion_service.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
@@ -943,6 +943,30 @@ test('a running discussion admits a woken expert without pausing and rejects man
     assert.doesNotThrow(() => store.context(after), 'an invited expert only adds a context entry');
     assert.throws(() => store.context({ ...after, participants: { ...after.participants, Claude: { ...after.participants.Claude, cwd: f.directory } } }), /发生变化/);
   } finally { store.close(); }
+});
+
+test('an invited existing session must exist locally, and Claude resumes only from its original directory', async t => {
+  const f = await fixture(t);
+  const env = { CODEX_HOME: join(f.directory, 'codex-home'), CLAUDE_CONFIG_DIR: join(f.directory, 'claude-home') };
+  const codex_id = '019ffa5b-9022-7450-b9e0-3c058026dd94', claude_id = randomUUID();
+  mkdirSync(join(env.CODEX_HOME, 'sessions', '2026', '10', '21'), { recursive: true });
+  writeFileSync(join(env.CODEX_HOME, 'sessions', '2026', '10', '21', `rollout-2026-10-21T10-00-00-${codex_id}.jsonl`), '{}\n');
+  const original = join(f.directory, 'original'), other = join(f.directory, 'other');
+  for (const path of [original, other, join(env.CLAUDE_CONFIG_DIR, 'projects', 'encoded-original')]) mkdirSync(path, { recursive: true });
+  writeFileSync(join(env.CLAUDE_CONFIG_DIR, 'projects', 'encoded-original', `${claude_id}.jsonl`),
+    `{"type":"queue-operation"}\n${JSON.stringify({ type: 'user', cwd: original })}\n`);
+  assert.equal(borrowed_session('Codex', { adapter: 'codex', session_id: codex_id }, '', env).session_id, codex_id);
+  assert.throws(() => borrowed_session('Codex', { adapter: 'codex_cli', session_id: randomUUID() }, '', env), /找不到 Codex 会话/);
+  assert.throws(() => borrowed_session('Codex', { adapter: 'codex_cli', session_id: '../../x' }, '', env), /格式不正确/);
+  assert.equal(borrowed_session('Claude', { adapter: 'claude', session_id: claude_id }, '', env).cwd, original, 'without a project the session keeps its directory');
+  assert.equal(borrowed_session('Claude', { adapter: 'claude', session_id: claude_id }, original, env).cwd, original);
+  assert.throws(() => borrowed_session('Claude', { adapter: 'claude', session_id: claude_id }, other, env), /只能在原目录续接/);
+  assert.throws(() => borrowed_session('Gemini', { adapter: 'antigravity_cli', session_id: claude_id }, '', env), /只有 Codex 与 Claude/);
+  const owner = randomUUID() + randomUUID();
+  const launched = await launch_discussion(f.home, { ...f.input, token: owner }, f.options);
+  await assert.rejects(room_member(f.home, { site: f.site, room_id: launched.room.id, token: owner, action: 'add', name: 'Claude-2',
+    participants: { 'Claude-2': { ...f.input.participants.Claude, session_id: randomUUID() } } }), /找不到 Claude 会话/, 'a mistyped ID never reaches the room');
+  assert.equal((await request(f.site, `/api/rooms/${launched.room.id}`)).body.experts['Claude-2'], undefined);
 });
 
 test('an extra instance inherits its platform settings but not its bound session, and names are never reused', async t => {

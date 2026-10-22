@@ -1730,6 +1730,20 @@ test("participant menu opens an inline switch and waits for explicit pause befor
   assert.equal(context.member_menu({ name: "Codex", session: "original" })[0].length, 1);
 });
 
+test("every Codex instance can switch, a borrowed one before its first execution, and an App writer conflict offers the App directly", async () => {
+  const { context, view, calls, refs } = participant_connection_fixture();
+  vm.runInContext("bridge", context).write_room_adapter = (name, adapter) => { view.value.launch.repair.participants[name].adapter = adapter; };
+  view.value.room.members = [{ id: 4, name: "Codex-2", status: "active", session_mode: "borrowed" }];
+  const labels = menu => Array.from(menu.flat(), item => item.label);
+  assert.ok(labels(context.member_menu({ name: "Codex-2" })).includes("切换 App / CLI"), "the borrowed ID is already known");
+  view.value.room.members[0].session_mode = "new";
+  assert.ok(!labels(context.member_menu({ name: "Codex-2" })).includes("切换 App / CLI"), "a new session has nothing to switch yet");
+  await context.open_connection({ name: "Codex" }, "codex");
+  await context.read_connection();
+  assert.deepEqual(calls, ["pause_runtime", "load_room_configuration"]);
+  assert.equal(refs.connection_profile.value.adapter, "codex", "the conflict path preselects the App without saving");
+});
+
 test("participant switch stops on pause failure and discards a configuration after navigating rooms", async () => {
   const { context, view, calls, controls, refs } = participant_connection_fixture();
   await context.open_connection({ name: "Codex" });

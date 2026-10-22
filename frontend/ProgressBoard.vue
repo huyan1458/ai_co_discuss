@@ -36,6 +36,10 @@ const can_close = computed(() => !inactive.value && room.value.phase !== "prepar
 const members = computed(() => [room.value.host, ...Object.keys(room.value.experts || {}).filter((name) => name !== room.value.host)]
   .filter((name) => name && name !== "用户").map(member_status));
 const failed_member = computed(() => members.value.find((member) => member.result));
+// The Codex App often takes a conversation's writer from the CLI; that failure offers the switch directly.
+const codex_instance = (name) => /^Codex(?:-|$)/.test(name);
+const writer_conflict = computed(() => failed_member.value && codex_instance(failed_member.value.name)
+  && /active writer/.test(failed_member.value.result) ? failed_member.value : null);
 // An away expert keeps its seat and session; it is not scheduled until brought back.
 const away_members = computed(() => (room.value.members || []).filter((member) => member.status === "away"));
 const record = (name) => (room.value.members || []).find((member) => member.name === name);
@@ -121,7 +125,8 @@ function member_status(name) {
 /** Menu entries for one participant; the session ID stays out of the row until needed. */
 function member_menu(member) {
   const items = member.session ? [{ label: "复制会话 ID", icon: "i-lucide-copy", onSelect: () => act("copy", member.session) }] : [];
-  if (member.name === "Codex" && member.session && automatic.value && !settled.value && view.value.launch.available
+  // A borrowed conversation already has its ID before the first successful execution records one.
+  if (codex_instance(member.name) && (member.session || record(member.name)?.session_mode === "borrowed") && automatic.value && !settled.value && view.value.launch.available
     && !view.value.launch.remote && ["running", "paused"].includes(runtime.value.status)) {
     items.push({ label: "切换 App / CLI", icon: "i-lucide-arrow-left-right",
       disabled: Boolean(pending.value), onSelect: () => open_connection(member) });
@@ -144,8 +149,8 @@ async function invite() {
 }
 
 /** Open the participant's connection editor without leaving the discussion. */
-async function open_connection(member) {
-  connection.value = { room_id: room.value.id, name: member.name };
+async function open_connection(member, prefer = "") {
+  connection.value = { room_id: room.value.id, name: member.name, prefer };
   connection_ready.value = false;
   if (runtime.value.status === "paused") await read_connection();
 }
@@ -159,6 +164,7 @@ async function read_connection() {
   await act("load_room_configuration");
   if (connection.value === opened && room.value.id === opened.room_id) {
     connection_ready.value = !view.value.launch.repair_error && view.value.launch.repair?.room_id === opened.room_id;
+    if (connection_ready.value && opened.prefer && connection_profile.value?.adapter !== opened.prefer) bridge.write_room_adapter(opened.name, opened.prefer);
   }
 }
 
@@ -191,6 +197,7 @@ async function finish(action) {
       <div class="pb-status-line"><span class="pb-dot"></span><strong role="status">{{ status.title }}</strong><span v-if="!props.docked" class="pb-mode">{{ automatic ? '全自动' : '手动' }}</span></div>
       <p v-if="status.detail" class="pb-status-detail">{{ status.detail }}</p>
       <details v-if="status.full_detail" class="pb-status-detail"><summary>查看错误详情</summary><pre class="pb-error-detail">{{ status.full_detail }}</pre></details>
+      <UButton v-if="writer_conflict && view.launch.available && !view.launch.remote" icon="i-lucide-arrow-left-right" label="切换到 Codex App" size="xs" color="neutral" variant="outline" title="会话正被 Codex App 占用时，改由 App 接入，沿用原聊天和讨论进度" :disabled="Boolean(pending)" @click="open_connection(writer_conflict, 'codex')" />
       <div v-if="meters.length" class="pb-meters">
         <div v-for="meter in meters" :key="meter.label" class="pb-meter">
           <div class="pb-meter-label"><span>{{ meter.label }}</span><b>{{ meter.text }}</b></div>
@@ -212,6 +219,7 @@ async function finish(action) {
           <div class="pb-member-body">
             <div class="pb-member-name">{{ bridge.display_name(member.name) }}<UIcon v-if="member.is_host" name="i-lucide-crown" title="主持人" /><small>{{ member.is_host ? `主持 · ${member.mode}` : member.mode }}</small></div>
             <div class="pb-member-model" title="本场启动配置；默认模型与默认强度由对应软件决定">{{ member.model }}</div>
+            <div v-if="record(member.name)?.session_mode === 'borrowed'" class="pb-member-model" title="续接你已有的会话；它工作时请不要在原窗口继续操作">借用已有会话</div>
             <div v-if="!settled" class="pb-member-status" :class="`is-${member.tone}`"><span class="pb-dot"></span>{{ member.text }}<small v-if="member.failures"> · 失败 {{ member.failures }} 次</small></div>
           </div>
           <UDropdownMenu v-if="member_menu(member).length" :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="`${member.name} 的更多操作`" /></UDropdownMenu>
@@ -275,6 +283,7 @@ async function finish(action) {
               <p class="fine-print">{{ connection_profile.adapter === 'codex' ? 'App 需保持运行，模型与权限沿用原聊天设置。' : '切回 CLI 前，需让 App 释放原聊天；仍被占用时无法执行。' }}</p>
               <UButton label="保存接入方式" class="channel-primary-button" :loading="pending === 'save_room_configuration'" :disabled="Boolean(pending)" @click="act('save_room_configuration')" />
               <p v-if="view.launch.repair?.notice" role="status" class="fine-print">{{ view.launch.repair.notice }}</p>
+              <UButton v-if="view.launch.repair?.applied && can_restart" label="重启讨论" icon="i-lucide-rotate-ccw" variant="outline" color="neutral" :loading="pending === 'restart_discussion'" :disabled="Boolean(pending)" @click="act('restart_discussion'); connection_open = false" />
             </template>
             <UButton v-else label="读取本场配置" variant="outline" color="neutral" :loading="Boolean(pending)" @click="read_connection" />
             <p v-if="view.launch.repair_error" role="alert" class="fine-print">{{ view.launch.repair_error }}</p>

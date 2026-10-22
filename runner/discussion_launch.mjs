@@ -1,7 +1,8 @@
 /** Shared launch configuration for an existing AI conversation and the local website. */
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
@@ -32,6 +33,7 @@ function clients_of(name) { return CLIENTS[platform_of(name)]; }
 const EFFORT_LEVELS = { codex_cli: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], claude: ['low', 'medium', 'high', 'xhigh', 'max'] };
 const PROFILE_FIELDS = ['adapter', 'executable', 'model', 'effort', 'source_thread_id', 'ipc_directory', 'allowed_tools', 'cwd', 'project_name', 'project_id', 'base_url', 'api_protocol', 'api_key_ref'];
 const MAX_MINUTES = 1440;
+const SESSION_ID_PATTERN = /^[0-9A-Za-z_-]{8,128}$/;
 // Reading events after this id proves the owner credential without transferring any.
 const MAX_EVENT_ID = 2147483647;
 const CONFIG_APPLY_TIMEOUT_MS = 6000;
@@ -279,6 +281,42 @@ function participant_profile(name, defaults, input, current_host) {
   return profile;
 }
 
+/** List every file below a directory, or nothing when the software has never stored a session there. */
+function session_files(directory) {
+  return existsSync(directory) ? readdirSync(directory, { recursive: true }).map(path => join(directory, String(path))) : [];
+}
+
+/** Compare directories as the operating system resolves them (Windows short names and case). */
+function same_directory(left, right) {
+  const real = path => { try { return realpathSync.native(path); } catch { return resolve(path); } };
+  const [a, b] = [real(left), real(right)];
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+/**
+ * Prove an invited existing conversation is on this machine before it can hold a turn, so a mistyped ID
+ * fails here instead of pausing the discussion later. Claude stores sessions per directory and resumes only
+ * from the original one, so its cwd follows the session; a different room project is refused.
+ */
+export function borrowed_session(name, profile, room_cwd, env = process.env) {
+  const id = profile.session_id;
+  if (!SESSION_ID_PATTERN.test(id)) throw new Error(`${name}：会话 ID 格式不正确`);
+  if (CODEX_ADAPTERS.includes(profile.adapter)) {
+    const sessions = join(env.CODEX_HOME || join(homedir(), '.codex'), 'sessions');
+    if (!session_files(sessions).some(path => path.endsWith(`-${id}.jsonl`))) throw new Error(`${name}：本机找不到 Codex 会话 ${id}，请核对会话 ID`);
+    return profile;
+  }
+  if (profile.adapter !== 'claude') throw new Error(`${name}：只有 Codex 与 Claude 可以接入已有会话`);
+  const projects = join(env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'projects');
+  const file = session_files(projects).find(path => path.endsWith(`${id}.jsonl`) && dirname(dirname(path)) === projects);
+  if (!file) throw new Error(`${name}：本机找不到 Claude 会话 ${id}，请核对会话 ID`);
+  const cwd = readFileSync(file, 'utf8').split('\n').map(line => { try { return JSON.parse(line).cwd; } catch { return undefined; } }).find(Boolean);
+  if (!cwd) throw new Error(`${name}：Claude 会话 ${id} 没有记录原工作目录，无法续接`);
+  const wanted = profile.cwd || room_cwd;
+  if (wanted && !same_directory(wanted, cwd)) throw new Error(`${name}：这个 Claude 会话属于 ${cwd}，只能在原目录续接；请让项目目录与它一致，或留空会话 ID 新建会话`);
+  return { ...profile, cwd: wanted || cwd };
+}
+
 /** Find the one registered configuration of a room after proving the owner's credential. */
 async function member_room_context(home, raw) {
   const input = launch_input({ ...raw, entry: 'web' });
@@ -339,7 +377,10 @@ export async function room_member(home, raw, locked = false) {
     const token = input.member_token || (pending ? config.members[name].token : `${randomUUID()}${randomUUID()}`);
     let profile = config.participants[name];
     if (!manual) {
-      if (action === 'add') profile = participant_profile(name, launch_settings(home).participants, { ...input, cwd: input.cwd || config.cwd }, false);
+      if (action === 'add') {
+        profile = participant_profile(name, launch_settings(home).participants, { ...input, cwd: input.cwd || config.cwd }, false);
+        if (profile.session_id) profile = borrowed_session(name, profile, input.cwd || config.cwd);
+      }
       if (!profile) throw new Error(`${name} 没有本机接入配置；请移除后重新邀请`);
       const next = { ...config, participants: { ...config.participants, [name]: profile },
         members: { ...config.members, [name]: { token, pending: input.retry_token || '' } } };
