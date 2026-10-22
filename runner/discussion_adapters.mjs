@@ -148,14 +148,13 @@ export function agy_rule() {
 /** Read optional native settings; malformed settings must not silently disable a permission check. */
 function read_json(path) { return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {}; }
 
-/** Native headless review blocks unapproved shell commands; any global command grant could bypass the project rules. */
+/** Native headless review blocks unapproved shell commands; only a global grant of every command could bypass the project rules. */
 function check_agy_shell(user_home) {
   const cli = read_json(join(user_home, '.gemini', 'antigravity-cli', 'settings.json'));
   const shared = read_json(join(user_home, '.gemini', 'config', 'config.json'));
   const grants = [...(cli.permissions?.allow || []), ...(shared.userSettings?.globalPermissionGrants?.allow || [])];
-  if ((cli.toolPermission && cli.toolPermission !== 'request-review')
-    || grants.some(rule => rule === '*' || /^(?:command|unsandboxed|unsandboxed_command)\(/.test(rule))) {
-    throw new Error('agy 全局设置放行了命令或改了 toolPermission，会绕过讨论项目的权限；请移除全局 command / unsandboxed 放行并保留 request-review（本工具旧版写入的规则可运行 codiscuss setup 清理），未交付讨论任务');
+  if (grants.some(rule => rule === '*' || /^(?:command|unsandboxed|unsandboxed_command)\((?:\*|regex:\.\*)\)$/.test(rule))) {
+    throw new Error('agy 全局设置放行了所有命令，会绕过讨论项目的权限；请移除全局 command(*) / unsandboxed(*) 放行，具体命令的放行不受影响（本工具旧版写入的规则可运行 codiscuss setup 清理），未交付讨论任务');
   }
 }
 

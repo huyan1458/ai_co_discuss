@@ -283,7 +283,7 @@ agy 只用一套方法控制权限：
 
 1. **只在本工具新建的会话中执行**：每位参与者对应一个独立原生讨论项目，权限只写在该项目里。外部已有会话（包括从当前 agy 对话发起主持、在启动配置中填写 `session_id`）会恢复其原项目，无法套用讨论项目权限，因此启动时即拒绝，交付时也再次拒绝。
 2. **项目内规则**：allow 为受限的讨论命令规则与草稿目录写入（`write` 时加项目目录写入）；deny 为项目目录写入（`read` 时）、运行目录、技能目录、`~/.gemini` 写入与 `mcp(*)`。规则按目录前缀递归匹配，不使用 `/**`；Deny > Ask > Allow，因此草稿不得位于受保护目录中，冲突在交付前报告。
-3. **交付前检查全局设置**：CLI 的 `toolPermission` 须未设置或为 `request-review`；CLI 与共享全局 allow 中不得有任何 `command(...)`、`unsandboxed(...)`、`unsandboxed_command(...)` 或 `*` 放行，否则拒绝交付，因为全局放行会让 shell 绕过项目的文件规则。未授权 shell 在非交互模式下被拒绝。
+3. **交付前检查全局设置**：CLI 与共享全局 allow 中若有 `*`、`command(*)`、`unsandboxed(*)` 或 `unsandboxed_command(*)` 这类放行全部命令的规则，则拒绝交付，因为它会让 shell 绕过项目的文件规则。具体命令的放行和 `toolPermission` 不检查，属于用户自己的授权。未授权 shell 在非交互模式下被拒绝。
 4. **不改用户全局设置**：本工具不向 agy 全局设置写入任何规则；`setup` 只移除早期版本记录在 `agy-permission.json` 中的全局规则（先备份到服务目录 `agy-settings.backup.json`），其他设置与用户规则不变。
 
 原生工具权限不是操作系统沙箱；工具被拒绝时 agy 仍可能退出码为 0，验收以实际文件和网站结果为准。[原生权限文档](https://antigravity.google/docs/permissions?tab=cli)、[CLI 设置](https://antigravity.google/docs/settings?tab=cli)。

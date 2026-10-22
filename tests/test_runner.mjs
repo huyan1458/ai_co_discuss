@@ -703,11 +703,9 @@ test('agy refuses inherited shell bypasses before invoking a model and leaves se
   mkdirSync(join(user_home, '.gemini', 'config'), { recursive: true });
   const task = task_files(f.config, f.event, 'test-token', {});
   for (const [cli, shared] of [
-    [{ toolPermission: 'always-proceed' }, {}], [{ toolPermission: 'proceed-in-sandbox' }, {}],
-    [{ permissions: { allow: ['command(*)'] } }, {}],
+    [{ permissions: { allow: ['command(*)'] } }, {}], [{ permissions: { allow: ['*'] } }, {}],
     [{}, { userSettings: { globalPermissionGrants: { allow: ['unsandboxed_command(*)'] } } }],
     [{}, { userSettings: { globalPermissionGrants: { allow: ['unsandboxed(*)'] } } }],
-    [{ permissions: { allow: [agy_rule()] } }, {}],
   ]) {
     writeFileSync(cli_path, JSON.stringify(cli)); writeFileSync(shared_path, JSON.stringify(shared));
     await assert.rejects(deliver_task({ adapter: 'antigravity_cli' }, {}, task,
@@ -715,7 +713,7 @@ test('agy refuses inherited shell bypasses before invoking a model and leaves se
     assert.deepEqual(JSON.parse(readFileSync(cli_path, 'utf8')), cli);
     assert.deepEqual(JSON.parse(readFileSync(shared_path, 'utf8')), shared);
   }
-  writeFileSync(cli_path, JSON.stringify({ toolPermission: 'request-review', permissions: { allow: ['read_file(*)'] } }));
+  writeFileSync(cli_path, JSON.stringify({ toolPermission: 'always-proceed', permissions: { allow: ['read_file(*)', 'command(git status)'] } }));
   writeFileSync(shared_path, JSON.stringify({ userSettings: { globalPermissionGrants: { allow: ['read_url(https://example.com)'] } } }));
   assert.ok(prepare_agy_project({}, {}, task, user_home).project_id);
 });
