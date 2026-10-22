@@ -1,6 +1,6 @@
 /** Provider presets and independent wire protocols; model IDs are never rewritten. */
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export const API_PROVIDERS = {
@@ -40,6 +40,18 @@ export function save_api_key(home, input) {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   writeFileSync(join(directory, `${api_key_ref}.json`), JSON.stringify({ base_url, api_key }), { flag: 'wx', mode: 0o600 });
   return { api_key_ref };
+}
+
+/** Map each API root to its most recently saved key reference, so a new form need not ask again. */
+export function saved_api_keys(home) {
+  const directory = join(home, 'api-keys');
+  if (!existsSync(directory)) return {};
+  const saved = readdirSync(directory).filter(name => /^[a-f0-9-]{36}\.json$/i.test(name)).map(name => {
+    const path = join(directory, name);
+    try { return { ref: name.slice(0, -5), base_url: JSON.parse(readFileSync(path, 'utf8')).base_url, time: statSync(path).mtimeMs }; }
+    catch { return null; }
+  }).filter(Boolean).sort((a, b) => a.time - b.time);
+  return Object.fromEntries(saved.map(item => [item.base_url, item.ref]));
 }
 
 /** Resolve only a validated reference bound to this exact API root. */

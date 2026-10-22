@@ -10,7 +10,7 @@ import { parseArgs } from 'node:util';
 
 import { atomic_json } from './discussion_adapters.mjs';
 import { software_models } from './discussion_models.mjs';
-import { API_PROVIDERS, api_models, save_api_key, validate_api_profile } from './discussion_api.mjs';
+import { API_PROVIDERS, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { acquire_lock, api, CODEX_ADAPTERS, DiscussionStore, service_drafts, task_files, validate_config } from './discussion_runner.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 
@@ -702,7 +702,8 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   const home = service_home();
   assert_shared_home(home);
   let result;
-  if (positionals[0] === 'settings') result = { ...(input ? save_launch_settings(home, input) : launch_settings(home)), api_providers: API_PROVIDERS };
+  if (positionals[0] === 'settings') result = { ...(input ? save_launch_settings(home, input) : launch_settings(home)), api_providers: API_PROVIDERS,
+    api_keys: saved_api_keys(home) };
   else if (positionals[0] === 'api-key' && input) result = save_api_key(home, input);
   else if (positionals[0] === 'room-models' && input) result = room_models(home, input);
   else if (positionals[0] === 'models' && input?.adapter === 'api') result = await api_models(home, input);

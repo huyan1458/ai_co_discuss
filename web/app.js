@@ -844,6 +844,7 @@ function reset_create_form() {
   state.launch.create = true;
   state.launch.workspace = {};
   state.launch.profiles = JSON.parse(JSON.stringify(state.launch.saved_profiles || {}));
+  Object.values(state.launch.profiles).forEach(fill_api_key);
   state.launch.notice = "";
   render_launch_settings();
   publish_view();
@@ -1562,8 +1563,9 @@ async function load_launch_settings() {
     const settings = await local_launch_request("settings");
     // Keep the saved machine defaults so every new form can start from them again.
     state.launch.saved_profiles = JSON.parse(JSON.stringify(settings.participants || {}));
-    Object.assign(state.launch, { available: true, profiles: settings.participants, api_providers: settings.api_providers || {}, error: "",
+    Object.assign(state.launch, { available: true, profiles: settings.participants, api_providers: settings.api_providers || {}, api_keys: settings.api_keys || {}, error: "",
       notice: local_connection ? "已连接本机服务，讨论保存在当前网站" : "" });
+    Object.values(state.launch.profiles).forEach(fill_api_key);
     load_room_models();
   } catch (error) { state.launch.available = false; state.launch.room_models = null; state.launch.error = error.message; }
   finally { refresh_launch_recoveries(); render_launch_settings(); publish_view(); }
@@ -1615,6 +1617,7 @@ async function save_launch_api_key(name, api_key) {
   const profile = state.launch.profiles[name];
   const base_url = profile.base_url;
   const result = await local_launch_request("api-key", { base_url, api_key });
+  state.launch.api_keys = { ...state.launch.api_keys, [new URL(base_url).href.replace(/\/+$/, "")]: result.api_key_ref };
   if (state.launch.profiles[name] === profile && profile.base_url === base_url) profile.api_key_ref = result.api_key_ref;
   publish_view();
 }
@@ -1676,6 +1679,15 @@ function write_launch_model(name, value) {
   if (!levels?.includes(state.launch.profiles[name].effort)) write_launch_field(name, "effort", "");
 }
 
+/** Reuse the key last saved on this machine for the same API root instead of asking again. */
+function fill_api_key(profile) {
+  if (profile?.adapter !== "api" || profile.api_key_ref || !profile.base_url) return;
+  let root;
+  try { root = new URL(profile.base_url).href.replace(/\/+$/, ""); } catch { return; }
+  const ref = state.launch.api_keys?.[root];
+  if (ref) profile.api_key_ref = ref;
+}
+
 /** Keep software drafts separate from shared room records and from discussion advancement mode. */
 function write_launch_field(name, field, value) {
   if (name === "workspace") state.launch.workspace[field] = value;
@@ -1692,6 +1704,7 @@ function write_launch_field(name, field, value) {
     }
     if (state.launch.profiles[name].adapter === "api") state.launch.profiles[name].project_access = "read";
     if (field === "base_url") delete state.launch.profiles[name].api_key_ref;
+    fill_api_key(state.launch.profiles[name]);
   }
   state.launch.notice = "";
   if (field === "adapter") render_launch_settings();

@@ -13,10 +13,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DiscussionRunner, DiscussionStore, load_config, service_drafts, task_files, validate_config } from '../runner/discussion_runner.mjs';
 import { cwd_key, FreeRoomRunner, workspace_snapshot } from '../runner/free_runner.mjs';
-import { assert_shared_home, DiscussionService, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
+import { assert_shared_home, DiscussionService, migrate_service_home, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
 import { launch_discussion, room_models } from '../runner/discussion_launch.mjs';
 import { agy_rule, antigravity_project, claude_exit_error, claude_rule_path, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
-import { save_api_key } from '../runner/discussion_api.mjs';
+import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
 
 test('API profiles need a bound key but no software or filesystem permission', t => {
   const home = mkdtempSync(join(tmpdir(), 'api-config-'));
@@ -30,6 +30,32 @@ test('API profiles need a bound key but no software or filesystem permission', t
   assert.equal(config.participants.Grok.cwd, undefined);
   assert.equal(config.participants.Grok.executable, undefined);
   assert.throws(() => validate_config({ ...input, participants: { Grok: { ...input.participants.Grok, base_url: 'https://api.x.ai/v1' } } }, home), /重新填写/);
+  assert.deepEqual(saved_api_keys(home), { [base_url]: key.api_key_ref });
+});
+
+test('a stopped legacy service directory moves with its paths and drafts rewritten', t => {
+  const root = mkdtempSync(join(tmpdir(), 'service-move-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const from = join(root, 'legacy'), to = join(root, '.codiscuss'), runtime = join(from, 'launches', 'key', 'runtime');
+  const external = join(root, 'external-config.json');
+  mkdirSync(runtime, { recursive: true });
+  mkdirSync(service_drafts(from, runtime), { recursive: true });
+  writeFileSync(join(service_drafts(from, runtime), 'turn-1-submission.json'), '{}');
+  const config = { api_home: from, data_directory: runtime, draft_directory: service_drafts(from, runtime), note: `see ${from}` };
+  writeFileSync(join(from, 'launches', 'key', 'config.json'), JSON.stringify(config));
+  writeFileSync(external, JSON.stringify({ api_home: from, data_directory: join(root, 'elsewhere') }));
+  writeFileSync(join(from, 'rooms.json'), JSON.stringify({ configs: [join(from, 'launches', 'key', 'config.json'), external] }));
+  writeFileSync(join(from, 'runner.lock'), String(process.pid));
+  assert.equal(migrate_service_home(from, to), false);
+  rmSync(join(from, 'runner.lock'));
+  assert.equal(migrate_service_home(from, to), true);
+  const moved_runtime = join(to, 'launches', 'key', 'runtime');
+  assert.deepEqual(JSON.parse(readFileSync(join(to, 'launches', 'key', 'config.json'), 'utf8')),
+    { ...config, api_home: to, data_directory: moved_runtime, draft_directory: service_drafts(to, moved_runtime) });
+  assert.deepEqual(read_registry(to), [join(to, 'launches', 'key', 'config.json'), external]);
+  assert.equal(JSON.parse(readFileSync(external, 'utf8')).api_home, to);
+  assert.ok(existsSync(join(service_drafts(to, moved_runtime), 'turn-1-submission.json')));
+  assert.ok(!existsSync(from));
 });
 
 /** Exercise the dispatcher against an HTTP contract without starting real software. */

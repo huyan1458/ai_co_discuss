@@ -21,7 +21,7 @@
 
 自定义地址保留完整路径前缀，填写到协议根路径，例如 [OpenRouter](https://openrouter.ai/docs/api_reference/overview) 的 `https://openrouter.ai/api/v1`，选择 Chat Completions 并填写其返回的 `provider/model` ID。程序分别追加 `/responses`、`/chat/completions`、`/messages` 或 `/models/{model}:generateContent`；不改写模型 ID 中的点号、横线或斜线，不按房间身份强制套用官方协议或思考参数。实现参考 [Cherry Studio 的供应商解析说明（固定版本）](https://github.com/CherryHQ/cherry-studio/blob/843a297fe73e9f527c8eb8291c0e1335f2279c04/docs/references/ai/provider-resolution.md) 对供应商、协议、Base URL 与 API 模型 ID 的拆分方式；协议转换独立实现，不引入其代码或 SDK。
 
-`POST /api/local/api-key`（CLI 为 `codiscuss launch api-key --file FILE`）接收 `{base_url, api_key}`，仅向本机服务目录的 `api-keys/UUID.json` 写入，返回 `{api_key_ref}`。文件依赖本机用户目录权限保护，不作加密保险库；不要共享此目录。Base URL 改动后必须重新填写该地址对应的 Key。浏览器密码输入仅在组件内存保留至保存成功，不进入控制器快照、localStorage、启动待办、房间数据或上游错误日志。
+`POST /api/local/api-key`（CLI 为 `codiscuss launch api-key --file FILE`）接收 `{base_url, api_key}`，仅向本机服务目录的 `api-keys/UUID.json` 写入，返回 `{api_key_ref}`。文件依赖本机用户目录权限保护，不作加密保险库；不要共享此目录。Base URL 改动后必须重新填写该地址对应的 Key。`launch settings` 读取结果附带 `api_keys`（`{Base URL: api_key_ref}`，同一地址取最近保存的一份，不含密钥），新建表单与改 Base URL 时自动带出该地址已保存的 Key，无需重复填写。网页密钥输入框不设保存按钮，失焦或回车即保存，可切换明文显示；输入仅在组件内存保留至保存成功，不进入控制器快照、localStorage、启动待办、房间数据或上游错误日志。
 
 启动配置中的 API profile 为 `{adapter:"api", base_url, api_protocol, api_key_ref, model}`；`api_protocol` 为 `responses/chat/anthropic/gemini`。启动器在私有房间配置保存 `api_home`，供服务解析密钥引用。API 不需要 executable、项目目录、会话 ID 或技能安装；API 会话编号是本机参与者绑定，不是厂商的聊天 ID。模型列表入口仍为 `launch models` / `/api/local/models`，传入此 profile，只返回模型元数据。
 
@@ -71,7 +71,7 @@ codiscuss local stop
 
 网站数据库为服务目录下 `local/discuss.sqlite3`，配置、登记表和讨论执行数据也位于包外；服务目录位置及 `DISCUSS_SERVICE_HOME` 见下文。源码运行的 `data/discuss.sqlite3` 不自动迁移。网站仍在而讨论服务已停止时，显式 `local open/start` 会要求网站管理进程恢复服务；不会自动恢复已暂停的房间。`local status` 的 `running` 要求网站和讨论服务同时运行，`website_running` 单独表示网站状态。`local stop` 关闭它创建的网站，并停止它启动或恢复且仍由相同 PID 持有的讨论服务；预先运行或后来独立启动的服务会保留。停止服务会暂停其托管中的活动讨论，数据库保留。日志在 `local/website.log`、`local/supervisor.log` 与原 `service.log`。
 
-Windows 的 MSIX 应用（如 Claude 桌面版）可能把派生进程对 AppData 的写入重定向到 `Packages/<包名>/LocalCache/Local/`；同名数据库、锁和停止请求因此与普通终端分离。管理命令在读状态、建房或启动进程前，用临时文件核实实际写入位置，发现重定向就报出两处路径并停止，避免误报已启动或已停止；帮助和纯 HTTP 网站命令仍可使用。检测依据是文件实际位置，不依赖进程是否报告包身份。Python 启动别名与直接执行原生 Python 也可能进入不同文件视图，排查时须核对网站实际使用的可执行文件与数据库。此机制见 [Microsoft MSIX 文件虚拟化说明](https://learn.microsoft.com/en-us/windows/msix/desktop/desktop-to-uwp-behind-the-scenes)。
+默认服务目录 `~/.codiscuss` 不在 AppData，不受下述重定向影响；以下适用于旧版 AppData 目录或设在 AppData 内的 `DISCUSS_SERVICE_HOME`。Windows 的 MSIX 应用（如 Claude 桌面版）可能把派生进程对 AppData 的写入重定向到 `Packages/<包名>/LocalCache/Local/`；同名数据库、锁和停止请求因此与普通终端分离。管理命令在读状态、建房或启动进程前，用临时文件核实实际写入位置，发现重定向就报出两处路径并停止，避免误报已启动或已停止；帮助和纯 HTTP 网站命令仍可使用。检测依据是文件实际位置，不依赖进程是否报告包身份。Python 启动别名与直接执行原生 Python 也可能进入不同文件视图，排查时须核对网站实际使用的可执行文件与数据库。此机制见 [Microsoft MSIX 文件虚拟化说明](https://learn.microsoft.com/en-us/windows/msix/desktop/desktop-to-uwp-behind-the-scenes)。
 
 遇到该错误，从应用外的普通终端管理服务；需要所有入口直接管理时，为它们统一设置 AppData 之外的 `DISCUSS_SERVICE_HOME`，已有数据需停机备份后迁移，不会自动合并两份库。若旧版本已在包私有目录启动服务，先核对该目录的 `local/status.json`、`status.json` 和实际 PID，再在普通终端将 `DISCUSS_SERVICE_HOME` 显式设为该物理目录执行 `local stop`；独立启动的讨论服务仍需单独 `service stop`，`local stop` 会明确报告保留的 PID。停止请求必须与目标进程使用同一份目录，仅看到另一个目录没有锁不能证明目标已退出。
 
@@ -358,7 +358,7 @@ codiscuss service --help
 
 ### 快捷方式、自启与数据目录
 
-`codiscuss service shortcut` 在 Windows 桌面创建「AI CoDiscuss 讨论服务」快捷方式：双击即启动后台服务（已运行则复用），并用默认浏览器打开已登记的讨论网站。`codiscuss service autostart on|off` 在当前用户的启动文件夹添加或删除登录自启快捷方式，默认不开启。登记表、锁、`status.json` 与 `service.log` 位于 `%LOCALAPPDATA%/ai-codiscuss/service`（其他系统为 `~/.local/state/ai-codiscuss/service`），可用 `DISCUSS_SERVICE_HOME` 改变；各房间的游标、收件箱与会话绑定仍在各自数据目录。
+`codiscuss service shortcut` 在 Windows 桌面创建「AI CoDiscuss 讨论服务」快捷方式：双击即启动后台服务（已运行则复用），并用默认浏览器打开已登记的讨论网站。`codiscuss service autostart on|off` 在当前用户的启动文件夹添加或删除登录自启快捷方式，默认不开启。登记表、锁、`status.json` 与 `service.log` 位于用户目录的 `~/.codiscuss`（Windows 为 `%USERPROFILE%\.codiscuss`），不随 npm 包升级变化，可用 `DISCUSS_SERVICE_HOME` 改变。旧版本的 `%LOCALAPPDATA%/ai-codiscuss/service`（其他系统 `~/.local/state/ai-codiscuss/service`）在新目录不存在、且旧目录的讨论服务与本机网站都已停止时，由下一次命令整体移入新目录，并把 `rooms.json`、`launches/` 等 JSON 及已登记外部房间配置中指向旧目录的绝对路径改写为新路径，运行目录的草稿随之改名；旧服务仍在运行时继续使用旧目录，执行 `codiscuss local stop`（独立服务另需 `service stop`）后再运行命令即可迁移。各房间的游标、收件箱与会话绑定仍在各自数据目录。
 
 ## Antigravity Sidecar
 

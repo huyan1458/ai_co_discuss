@@ -1,7 +1,7 @@
 /** Resident local service that dispatches registered rooms to software or configured API participants. */
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, unlinkSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -30,10 +30,63 @@ export function configuration_snapshot(path) {
   return { config: JSON.parse(content), version: createHash('sha256').update(content).digest('hex') };
 }
 
-/** Private per-user directory holding the registry, lock, status and log. */
+/** Private per-user directory holding the registry, lock, status and log; moves the legacy AppData location once. */
 export function service_home() {
   if (process.env.DISCUSS_SERVICE_HOME) return resolve(process.env.DISCUSS_SERVICE_HOME);
-  return join(process.env.LOCALAPPDATA || join(homedir(), '.local', 'state'), 'ai-codiscuss', 'service');
+  const home = join(homedir(), '.codiscuss');
+  const legacy = join(process.env.LOCALAPPDATA || join(homedir(), '.local', 'state'), 'ai-codiscuss', 'service');
+  if (existsSync(home) || !existsSync(legacy)) return home;
+  return migrate_service_home(legacy, home) ? home : legacy;
+}
+
+/** Move a stopped service directory and rewrite absolute paths that pointed into it; a running one stays put. */
+export function migrate_service_home(from, to) {
+  if (service_pid(from) || service_pid(join(from, 'local'))) return false;
+  try { renameSync(from, to); }
+  catch { return existsSync(to); }
+  try {
+    const moved = new Map();
+    for (const path of json_files(to)) rewrite_json(path, from, to, moved);
+    for (const path of read_registry(to)) if (!inside(path, to) && existsSync(path)) rewrite_json(path, from, to, moved);
+    // Drafts are keyed by the run directory, so a moved run directory needs its drafts renamed too.
+    for (const [before, after] of moved) {
+      const source = service_drafts(to, before), target = service_drafts(to, after);
+      if (existsSync(source) && !existsSync(target)) renameSync(source, target);
+    }
+    process.stderr.write(`服务目录已迁移：${from} → ${to}\n`);
+  } catch (error) { process.stderr.write(`服务目录已迁移到 ${to}，但部分旧路径未改写：${error.message}\n`); }
+  return true;
+}
+
+/** Compare path prefixes with the platform's case rules. */
+function inside(path, directory) {
+  const [a, b] = process.platform === 'win32' ? [path, directory].map(item => item.replaceAll('/', '\\').toLowerCase()) : [path, directory];
+  return a === b || (a.startsWith(b) && /[\\/]/.test(a[b.length]));
+}
+
+/** List JSON files under a directory, recursively. */
+function json_files(directory) {
+  return readdirSync(directory, { withFileTypes: true, recursive: true })
+    .filter(entry => entry.isFile() && entry.name.endsWith('.json')).map(entry => join(entry.parentPath, entry.name));
+}
+
+/** Rewrite one JSON file's moved path strings, recording run directories whose drafts must follow. */
+function rewrite_json(path, from, to, moved) {
+  const replace = value => {
+    if (typeof value === 'string') return inside(value, from) ? to + value.slice(from.length) : value;
+    if (Array.isArray(value)) return value.map(replace);
+    if (!value || typeof value !== 'object') return value;
+    const result = Object.fromEntries(Object.entries(value).map(([key, item]) => [key, replace(item)]));
+    if (typeof value.data_directory === 'string' && result.data_directory !== value.data_directory) {
+      moved.set(value.data_directory, result.data_directory);
+      if (typeof result.draft_directory === 'string') result.draft_directory = service_drafts(to, result.data_directory);
+    }
+    return result;
+  };
+  let original;
+  try { original = JSON.parse(readFileSync(path, 'utf8')); } catch { return; }
+  const updated = replace(original);
+  if (JSON.stringify(updated) !== JSON.stringify(original)) atomic_json(path, updated);
 }
 
 /** Reject an MSIX-private write view before reading shared service state or changing it. */
