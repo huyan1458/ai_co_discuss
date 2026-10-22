@@ -703,21 +703,21 @@ test("create form shares a role library, keeps independent instances and makes t
 test("free member delivery never offers writable credentials to online or unavailable identities", async () => {
   const view = ref({ access: { can_manage: true, members: [{ name: "Codex", access: "manual", available: false }] }, launch: { available: false } });
   const calls = [];
-  const context = vm.createContext({ view, free_member_busy: () => false, act: (...args) => calls.push(args) });
-  const component = readFileSync(new URL("../frontend/ChannelWorkspace.vue", import.meta.url), "utf8");
-  vm.runInContext(component.match(/function free_member_menu\(member\) \{[\s\S]*?\n\}/)[0], context);
+  const context = vm.createContext({ view, busy: () => false, act: (...args) => calls.push(args) });
+  const component = readFileSync(new URL("../frontend/FreeBoard.vue", import.meta.url), "utf8");
+  vm.runInContext(component.match(/function member_menu\(member\) \{[\s\S]*?\n\}/)[0], context);
   const manual = { name: "Codex", access: "manual", status: "away" };
-  let menu = context.free_member_menu(manual).flat();
+  let menu = context.member_menu(manual).flat();
   assert.equal(menu.find(item => item.label === "下载私有配置").disabled, true);
   assert.equal(menu.find(item => item.label === "请回").disabled, false, "manual rejoin needs no launcher");
   view.value.access.members[0].available = true;
-  menu = context.free_member_menu(manual).flat();
+  menu = context.member_menu(manual).flat();
   await menu.find(item => item.label === "下载私有配置").onSelect();
   assert.deepEqual(calls, [["download_member_access", "Codex"]]);
-  const online = context.free_member_menu({ ...manual, access: "online" }).flat();
+  const online = context.member_menu({ ...manual, access: "online" }).flat();
   assert.equal(online.some(item => item.label === "下载私有配置"), false);
   view.value.access.can_manage = false;
-  assert.equal(context.free_member_menu(manual)[0][0].disabled, true);
+  assert.equal(context.member_menu(manual)[0][0].disabled, true);
 });
 
 /** Drive the real slider with a deterministic clock and no live client. */

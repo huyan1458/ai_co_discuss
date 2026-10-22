@@ -1,0 +1,211 @@
+<script setup>
+/** Right-rail board of a free room, laid out like the discussion progress board. */
+import { computed, inject, ref, watch } from "vue";
+
+const emit = defineEmits(["brainstorm"]);
+const { view, bridge, act, pending } = inject("discussion");
+const LIVE = ["dispatched", "started"];
+const EXECUTION_STATUS_TEXT = { dispatched: "唤醒中", started: "执行中", completed: "完成", cancelled: "已停止", failed: "失败" };
+const ACCESS_LABELS = { runner: "本机唤醒", manual: "手动接入", online: "网页代发" };
+const TASK_PREVIEW_LENGTH = 90;
+const room = computed(() => view.value.room);
+const free = computed(() => room.value.free || {});
+const host = computed(() => (free.value.members || []).find((member) => member.role === "host" && member.status === "active"));
+// The host leads the list, then members in the order they joined.
+const members = computed(() => [...(free.value.members || [])].sort((a, b) => (b.role === "host") - (a.role === "host")));
+const busy = (member) => member.pending > 0 || LIVE.includes(member.execution?.status);
+const name_of = (member_id) => bridge.display_name((free.value.members || []).find((member) => member.id === member_id)?.name || "成员");
+
+/** Status dot colour, matching the discussion progress board. */
+function member_tone(member) {
+  if (member.status === "away") return "neutral";
+  if (member.execution?.stale) return "error";
+  if (busy(member)) return member.pending && !LIVE.includes(member.execution?.status) ? "warning" : "primary";
+  return member.execution?.status === "failed" ? "error" : "success";
+}
+
+/** One line per member: live execution, queued requests, or the last outcome. */
+function member_status(member) {
+  if (member.status === "away") return "已离开：不会被唤醒，可请回";
+  const execution = member.execution;
+  if (execution && LIVE.includes(execution.status)) return execution.stale ? "执行失联，停止未确认" : "正在处理";
+  if (member.pending) return `待投递 ${member.pending} 条`;
+  if (execution?.status === "failed") return `上次失败：${execution.result}`;
+  return execution ? "空闲" : "尚未收到消息";
+}
+
+/** Online and manual members choose their model in their own chat; woken ones show the registered launch. */
+function member_model(member) {
+  if (member.access === "online") return "网页 AI · 回答由你代发";
+  if (member.access === "manual") return "模型与强度在原会话设置";
+  return bridge.participant_model(member.name, room.value, view.value.launch.room_models);
+}
+
+const status = computed(() => {
+  if (room.value.archived) return { tone: "neutral", title: "已存档", detail: "" };
+  const working = (free.value.members || []).filter(busy);
+  if (working.some((member) => member.execution?.stale)) return { tone: "error", title: "执行失联", detail: "停止未确认，可在成员菜单中停止后重发" };
+  if (working.length) return { tone: "primary", title: "处理中",
+    detail: working.map((member) => `${bridge.display_name(member.name)} ${LIVE.includes(member.execution?.status) ? "正在处理" : `待投递 ${member.pending} 条`}`).join(" · ") };
+  const latest_chain = Math.max(0, ...(free.value.requests || []).map((request) => request.chain_id));
+  const halted = (free.value.halted_chains || []).find((chain) => chain.chain_id === latest_chain);
+  if (halted) return { tone: "warning", title: "任务链已停",
+    detail: halted.reason === "budget" ? `AI 之间派活达到 ${free.value.max_auto_hops} 次上限；发新消息即重新开始` : "派出的成员都失败了；发新消息即重新开始" };
+  if (!(free.value.members || []).length) return { tone: "neutral", title: "暂无成员", detail: "在下方邀请 AI 加入" };
+  return { tone: "success", title: "空闲", detail: host.value
+    ? `消息默认交给 ${bridge.display_name(host.value.name)}；@ 其他成员让它们发言` : "只有网页 AI：消息只作留言，需要你代发回答" };
+});
+
+/** Recent requests and executions; the server keeps the latest hundred of each. */
+const meters = computed(() => {
+  const requests = free.value.requests || [];
+  const answered = requests.filter((request) => request.status === "completed").length;
+  const executions = free.value.executions || [];
+  return [
+    { label: "请求", text: `${answered} / ${requests.length} 已回复`, ratio: requests.length ? answered / requests.length : null },
+    { label: "执行", text: `${executions.length} 次`, ratio: null },
+  ];
+});
+
+/** The user message behind the newest request, so the rail says what the room is working on. */
+const task = computed(() => {
+  const request = (free.value.requests || []).filter((item) => item.created_by === "user").at(-1);
+  if (!request) return "";
+  const message = (view.value.messages || []).find((item) => item.id === request.message_id);
+  return message ? message.text : `#${request.message_id}`;
+});
+const task_expanded = ref(false);
+watch(() => room.value.id, () => { task_expanded.value = false; });
+
+/** Each execution runs from delivery to its end; one still running counts up to now. */
+const timings = computed(() => {
+  const now = Math.floor(Date.now() / 1000);
+  const items = (free.value.executions || []).map((execution) => ({ ...execution,
+    seconds: execution.created_at ? (execution.finished_at || (LIVE.includes(execution.status) ? now : execution.created_at)) - execution.created_at : null }));
+  return { items, total: items.reduce((sum, item) => sum + (item.seconds || 0), 0) };
+});
+
+/** Render whole seconds compactly, as the discussion board does. */
+function duration(seconds) {
+  if (seconds === null || seconds === undefined) return "—";
+  if (seconds < 60) return `${seconds}秒`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}分${String(seconds % 60).padStart(2, "0")}秒`;
+  return `${Math.floor(seconds / 3600)}小时${Math.floor((seconds % 3600) / 60)}分`;
+}
+
+/** Owner actions for one member, kept in its menu like the discussion board's member actions. */
+function member_menu(member) {
+  const item = (label, icon, action, extra = {}) => ({ label, icon, onSelect: () => act("change_member", { member_id: member.id, name: member.name, action, ...extra }) });
+  const access = view.value.access;
+  const available = access?.members?.find((entry) => entry.name === member.name)?.available;
+  return [[
+    { label: "复制参与说明", icon: "i-lucide-copy", disabled: !access?.can_manage, onSelect: () => act("copy_member_join", member.name) },
+    ...(member.access !== "online" ? [{ label: "下载私有配置", icon: "i-lucide-download", disabled: !access?.can_manage || !available, onSelect: () => act("download_member_access", member.name) }] : []),
+  ], [
+    ...(busy(member) ? [item("停止", "i-lucide-square", "interrupt")] : []),
+    ...(member.access === "online" && member.pending ? [{ label: "复制阅读通知", icon: "i-lucide-copy", onSelect: () => act("copy_online_notice", member.name) }] : []),
+    ...(member.status === "active" && member.access !== "online" && member.role !== "host" ? [item("设为主持人", "i-lucide-crown", "role", { role: "host" })] : []),
+    member.status === "active" ? item("离开", "i-lucide-log-out", "away") : { ...item("请回", "i-lucide-log-in", "rejoin"), disabled: member.access === "runner" && !view.value.launch.available },
+  ], [{ ...item("移除", "i-lucide-trash-2", "remove"), color: "error" }]];
+}
+
+const invite_name = ref("");
+const invite_access = ref("runner");
+const invite_project_access = ref("read");
+const invite_session = ref("");
+watch(() => room.value.id, () => {
+  invite_name.value = "";
+  invite_project_access.value = "read";
+  invite_session.value = "";
+  invite_access.value = (free.value.members || []).some((member) => member.access === "runner") ? "runner" : "manual";
+}, { immediate: true });
+/** Library cards to invite from; a card already in the room adds another instance (Claude-2, …). */
+const invite_choices = computed(() => Object.keys(invite_access.value === "online" ? bridge.identities : bridge.launch_clients).filter((name) => name !== "用户")
+  .map((name) => ({ label: bridge.display_name(name), value: name })));
+const can_bind_session = computed(() => invite_access.value === "runner" && bridge.launch_can_bind_session(invite_name.value, view.value.launch));
+const invite_note = computed(() => {
+  if (invite_access.value === "runner" && !view.value.launch.available) return "本机唤醒需要本机服务，请在运行 AI 的电脑打开本机网站。";
+  if (can_bind_session.value && invite_session.value.trim()) return "将续接这个原会话，保留它原有的上下文；它工作时请不要在原窗口继续操作。";
+  if (invite_access.value === "online" || invite_access.value === "runner" && view.value.launch.profiles[invite_name.value]?.adapter === "api") return "新成员不访问项目文件，加入后不打断其他成员。";
+  return "新成员加入后不打断其他成员；填写已有会话 ID 可请一个带着自己上下文的原会话加入。";
+});
+
+/** Invite the chosen AI; the form keeps its choices when the invitation fails. */
+function invite() {
+  act("invite_member", { name: invite_name.value, access: invite_access.value, project_access: invite_project_access.value,
+    session_id: can_bind_session.value ? invite_session.value : "" });
+}
+</script>
+
+<template>
+  <div class="progress-board is-docked">
+    <header class="pb-header"><strong>自由协作</strong><span class="pb-mode">{{ host ? `${bridge.display_name(host.name)} 主持` : '无主持人' }}</span></header>
+    <section class="pb-status" :class="`is-${status.tone}`" aria-label="房间状态">
+      <div class="pb-status-line"><span class="pb-dot"></span><strong role="status">{{ status.title }}</strong></div>
+      <p v-if="status.detail" class="pb-status-detail">{{ status.detail }}</p>
+      <div class="pb-meters">
+        <div v-for="meter in meters" :key="meter.label" class="pb-meter">
+          <div class="pb-meter-label"><span>{{ meter.label }}</span><b>{{ meter.text }}</b></div>
+          <div v-if="meter.ratio !== null" class="pb-bar"><i :style="{ width: `${Math.min(100, Math.round(meter.ratio * 100))}%` }"></i></div>
+        </div>
+      </div>
+    </section>
+    <section v-if="task" class="pb-section" aria-label="当前任务">
+      <h4>当前任务</h4>
+      <p class="pb-focus" :class="{ 'is-expanded': task_expanded }">{{ task }}</p>
+      <button v-if="task.length > TASK_PREVIEW_LENGTH" type="button" class="pb-link" @click="task_expanded = !task_expanded">{{ task_expanded ? '收起' : '展开' }}</button>
+    </section>
+    <section class="pb-section" aria-label="成员">
+      <h4>成员</h4>
+      <ul class="pb-members">
+        <li v-for="member in members" :key="member.id" class="pb-member" :class="{ 'is-away': member.status === 'away' }">
+          <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
+          <div class="pb-member-body">
+            <div class="pb-member-name">{{ bridge.display_name(member.name) }}<UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /><small>{{ member.role === 'host' ? `主持 · ${ACCESS_LABELS[member.access]}` : ACCESS_LABELS[member.access] }}</small></div>
+            <div class="pb-member-model">{{ member_model(member) }}</div>
+            <div v-if="member.session_mode === 'borrowed'" class="pb-member-model" title="它工作时请不要在原窗口继续操作">借用已有会话</div>
+            <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span>{{ member_status(member) }}</div>
+          </div>
+          <UDropdownMenu :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="`${member.name} 的更多操作`" /></UDropdownMenu>
+        </li>
+      </ul>
+      <p v-for="item in free.conflicts || []" :key="item.executions.join('-')" class="pb-free-note is-warning">可能冲突：{{ item.members.map((name) => bridge.display_name(name)).join(' 与 ') }} 的重叠执行观察到 {{ item.files.join('、') }} 变化；修改者未确认。</p>
+      <p v-if="view.free_error" role="alert" class="pb-free-note is-error">{{ view.free_error }}</p>
+      <p v-else-if="view.free_notice" role="status" class="pb-free-note">{{ view.free_notice }}</p>
+      <p v-if="view.access?.error" role="alert" class="pb-free-note is-error">{{ view.access.error }}</p>
+      <p v-else-if="view.access?.notice" role="status" class="pb-free-note">{{ view.access.notice }}</p>
+      <form v-if="!room.archived" class="pb-free-invite" aria-label="邀请 AI" @submit.prevent="invite">
+        <USelect v-model="invite_name" :items="invite_choices" placeholder="邀请 AI 加入" size="sm" class="min-w-0 flex-1" />
+        <UButton type="submit" icon="i-lucide-user-plus" label="邀请" size="sm" color="neutral" variant="outline" :disabled="!invite_name || (invite_access === 'runner' && !view.launch.available)" :loading="pending === 'invite_member'" />
+        <USelect v-model="invite_access" :items="Object.entries(ACCESS_LABELS).map(([value, label]) => ({ label, value }))" aria-label="受邀成员的接入方式" size="sm" class="min-w-0 flex-1" />
+        <USelect v-if="invite_access === 'runner' && bridge.launch_can_set_access(invite_name, view.launch)" v-model="invite_project_access" :items="[{ label: '项目文件只读', value: 'read' }, { label: '项目文件可写', value: 'write' }]" aria-label="受邀成员的项目文件权限" size="sm" class="min-w-0 flex-1" />
+        <UInput v-if="can_bind_session" v-model="invite_session" placeholder="已有会话 ID（可选，留空则新建）" title="在原会话中用 /status 查看，或直接问它当前会话 ID；Codex App 填聊天 ID" aria-label="受邀成员的已有会话 ID" size="sm" class="w-full" />
+      </form>
+      <p v-if="!room.archived" class="pb-free-note">{{ invite_note }}</p>
+    </section>
+    <section v-if="room.linked_rooms?.length" class="pb-section" aria-label="头脑风暴">
+      <h4>头脑风暴</h4>
+      <button v-for="item in room.linked_rooms" :key="item.id" type="button" class="pb-link pb-free-linked" @click="act('room', item.id)">{{ item.title }}<small>{{ bridge.phases[item.phase] || item.phase }}</small></button>
+    </section>
+    <section v-if="!room.archived" class="pb-actions" aria-label="操作">
+      <UButton icon="i-lucide-messages-square" label="发起头脑风暴" size="sm" color="neutral" variant="outline" class="pb-action" title="用当前成员新建一场讨论房间，收束后可把结论发回这里" @click="emit('brainstorm')" />
+    </section>
+    <section v-if="timings.items.length" class="pb-section" aria-label="执行耗时">
+      <div class="pb-timing-heading"><h4>耗时</h4><small>共 {{ timings.items.length }} 次执行 · {{ duration(timings.total) }}</small></div>
+      <details class="pb-timings">
+        <summary>查看每次执行</summary>
+        <ol>
+          <li v-for="item in timings.items" :key="item.id">
+            <span class="pb-timing-who">#{{ item.id }} {{ name_of(item.member_id) }}<small>{{ EXECUTION_STATUS_TEXT[item.status] || item.status }}</small></span>
+            <span class="pb-timing-stages"><span>用时 {{ duration(item.seconds) }}</span></span>
+          </li>
+        </ol>
+      </details>
+    </section>
+  </div>
+</template>
+
+<style scoped>
+.pb-member.is-away { opacity: .6; }
+.pb-member-model { margin: 2px 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+</style>
