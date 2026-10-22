@@ -1568,6 +1568,14 @@ async function load_launch_settings() {
   finally { refresh_launch_recoveries(); render_launch_settings(); publish_view(); }
 }
 
+/** Re-check the local connection and explain when nothing has been connected yet. */
+async function retry_launch_connection() {
+  await load_launch_settings();
+  if (state.launch.available || state.launch.error) return;
+  state.launch.error = "尚未检测到本机连接，请先在运行 AI 的电脑上执行上方命令并完成网页授权。";
+  publish_view();
+}
+
 /** Read saved choices for the active room without using drafts or delaying discussion refreshes. */
 async function load_room_models() {
   const room = state.room;
@@ -2960,7 +2968,7 @@ async function execute_view_action(name, value) {
     take_floor: () => change_floor("take"), return_floor: () => change_floor("return"),
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
     choose_runtime, export_runtime, download_member_access, copy_member_join, pause_runtime, check_limits, pause_discussion, restart_discussion, force_close, conclude_discussion,
-    save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection: load_launch_settings,
+    save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection,
     load_room_configuration, save_room_configuration, interrupt_member, change_member, invite_member, interrupt_free, set_proxy, copy_online_notice,
     prepare_brainstorm, return_conclusion, convert_suggestion,
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };
