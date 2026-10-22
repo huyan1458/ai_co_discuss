@@ -261,6 +261,32 @@ const kinds = [{ label: "运行回执", value: "receipt" }, { label: "普通发�
 const date_formatter = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" });
 const author_note = computed(() => kind.value === "receipt" ? "运行回执，由用户录入" : kind.value === "forward" ? "由用户代发" : kind.value === "moderation" ? "主持发言" : author.value === "用户" ? "本人发言" : `代发 ${author.value} 的观点`);
 
+const blank = (match) => " ".repeat(match.length);
+const escape_html = (value) => value.replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[char]);
+/** Paint the @mentions that will wake a member behind the transparent editor text; code and quotes do not count. */
+const mention_mirror = computed(() => {
+  const value = text.value;
+  if (!free_members.value.length || !value.includes("@")) return "";
+  // Masking keeps every offset, so matches in the masked copy point at the same characters of the draft.
+  const masked = value.replace(/```[\s\S]*?```/g, blank).replace(/`[^`\n]*`/g, blank).replace(/^>.*$/gm, blank);
+  const ranges = free_members.value.flatMap(({ name }) => [...masked.matchAll(new RegExp(MENTION_PATTERN(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).source, "gu"))]
+    .map((match) => [match.index + match[1].length, match.index + match[0].length])).sort((a, b) => a[0] - b[0]);
+  if (!ranges.length) return "";
+  let html = "", cursor = 0;
+  for (const [start, end] of ranges) {
+    html += `${escape_html(value.slice(cursor, start))}<span class="channel-mention">${escape_html(value.slice(start, end))}</span>`;
+    cursor = end;
+  }
+  // The trailing space keeps a final empty line, which the textarea also shows.
+  return `${html}${escape_html(value.slice(cursor))} `;
+});
+const mirror = ref(null);
+/** Keep the painted copy at the editor's scroll position. */
+function sync_mirror() {
+  if (mirror.value && prompt.value?.textareaRef) mirror.value.scrollTop = prompt.value.textareaRef.scrollTop;
+}
+watch(mention_mirror, () => nextTick(sync_mirror), { flush: "post" });
+
 const mention_context = ref(null);
 const mention_index = ref(0);
 const mention_list = ref(null);
@@ -835,7 +861,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
       <div v-if="!view.messages.length && !pending_message" class="channel-empty"><UIcon :name="view.query || view.mention_only ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.mention_only ? '没有找到消息' : room.title }}</h2><p>{{ view.query || view.mention_only ? '试试其他关键词，或清除筛选。' : bridge.empty_discussion_message(room) }}</p></div>
     </div>
     <div v-if="(view.messages.length || pending_message) && !follow_tail" class="channel-latest-dock"><UButton icon="i-lucide-arrow-down" color="neutral" variant="outline" aria-label="回到最新消息" class="channel-latest-button" @click="return_to_latest" /></div>
-    <div class="channel-composer-dock"><div class="channel-composer-column" @dragover="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments" @keydown.capture="mention_keydown($event); attachment_shortcut($event)" @input="update_mention" @click="update_mention" @keyup="update_mention" @select="update_mention" @compositionstart="mention_composition" @compositionend="mention_composition">
+    <div class="channel-composer-dock"><div class="channel-composer-column" @dragover="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments" @keydown.capture="mention_keydown($event); attachment_shortcut($event)" @input="update_mention" @click="update_mention" @keyup="update_mention" @select="update_mention" @compositionstart="mention_composition" @compositionend="mention_composition" @scroll.capture="sync_mirror">
       <UPopover :open="!!mention_context" :reference="prompt?.$el" :content="{ side: 'top', align: 'start', sideOffset: 8, onOpenAutoFocus: keep_mention_focus, onCloseAutoFocus: keep_mention_focus }" :ui="{ content: 'channel-select-menu channel-mention-menu' }" @update:open="!$event && (mention_context = null)">
         <template #content>
           <div class="channel-mention-heading"><span>选择成员</span><small>↑↓ 选择 · Enter 确认</small></div>
@@ -848,7 +874,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           </div>
         </template>
       </UPopover>
-      <UChatPrompt ref="prompt" v-model="text" :disabled="view.sending_message" :submit-on-enter="false" :autofocus="false" :rows="1" :maxrows="6" :placeholder="`发消息到 # ${room.title}`" aria-label="留言正文" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_members.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
+      <UChatPrompt ref="prompt" v-model="text" :disabled="view.sending_message" :submit-on-enter="false" :autofocus="false" :rows="1" :maxrows="6" :placeholder="`发消息到 # ${room.title}`" aria-label="留言正文" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_members.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :class="{ 'has-mentions': mention_mirror }" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
         <template #header>
           <div v-if="view.attachment_drafts.length" class="attachment-drafts">
             <div v-for="file in view.attachment_drafts" :key="file.id" :class="file.preview_url ? 'attachment-draft-image' : 'attachment-draft-file'">
@@ -875,6 +901,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           <div v-if="view.reply_to || view.turn_reply_to" class="channel-reply-draft"><UIcon name="i-lucide-corner-up-left" /><span>{{ view.turn_reply_to ? `回答安排 #${view.turn_reply_to} · ${bridge.display_name(room.host)} 代发` : `回复 #${view.reply_to}` }}</span><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" :aria-label="view.turn_reply_to ? '取消关联安排' : '取消回复'" @click="act(view.turn_reply_to ? 'cancel_answer' : 'cancel_reply')" /></div>
           <div v-if="needs_summary" class="channel-answer-editor"><UTextarea v-model="answer_summary" :rows="2" aria-label="回答摘要" class="w-full" placeholder="先说结论，保留关键理由、条件和不确定性。完整内容写在正文中。" /><USelect v-model="summary_source" :items="summary_sources" aria-label="摘要提供者" size="xs" /></div>
         </template>
+        <div v-if="mention_mirror" ref="mirror" class="channel-editor channel-editor-mirror" aria-hidden="true" v-html="mention_mirror"></div>
         <template #footer>
           <UButton type="button" icon="i-lucide-paperclip" aria-label="添加附件" title="图片、PDF 或其他文件 · 每个最多 20 MiB" color="neutral" variant="ghost" size="sm" :disabled="view.sending_message" @click="act('choose_attachments')" />
           <div v-if="!free" class="channel-composer-identity">
