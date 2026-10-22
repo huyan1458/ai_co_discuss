@@ -1625,7 +1625,7 @@ function launch_model_state(name, launch = state.launch) {
     // Without the local service there are no presets, and two missing addresses are not an official match.
     const official = Boolean(preset) && profile.base_url?.replace(/\/$/, "") === preset.base_url;
     const models = catalog?.models || (official ? preset.models.map(id => ({ id, label: id })) : []);
-    return { supported: true, items: models.map(model => ({ label: model.label || model.id, value: model.id })),
+    return { supported: true, items: models.map(model => ({ label: model.label && model.label !== model.id ? `${model.label} · ${model.id}` : model.id, value: model.id })),
       loading: Boolean(catalog?.loading), error: catalog?.error || "", source: catalog ? "来自 API 模型列表" : "官方推荐，可输入其他模型 ID" };
   }
   const catalog = launch.model_catalogs?.[model_catalog_key(profile)];

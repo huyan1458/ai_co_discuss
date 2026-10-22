@@ -126,6 +126,21 @@ test('four protocols authenticate correctly and preserve tool result pairing and
   assert.equal(history[0].encrypted_content, 'opaque');
 });
 
+test('DeepSeek model discovery preserves display names separately from callable model IDs', async t => {
+  const f = await site_fixture(t);
+  const mock = await model_fixture(t, () => ({ object: 'list', data: [
+    { id: 'deepseek-flash', name: 'DeepSeek-V4.1-Flash', object: 'model', owned_by: 'deepseek' },
+    { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro', object: 'model', owned_by: 'deepseek' },
+  ] }));
+  const result = await api_models(f.home, profiles(f.home, mock.base_url).DeepSeek);
+  assert.deepEqual(result.models, [
+    { id: 'deepseek-flash', label: 'DeepSeek-V4.1-Flash' },
+    { id: 'deepseek-v4-pro', label: 'DeepSeek-V4-Pro' },
+  ]);
+  assert.equal(mock.calls[0].path, '/custom/v1/models');
+  assert.equal(mock.calls[0].body, null);
+});
+
 test('API host and six providers complete a real round through execution credentials and save API provenance', async t => {
   const f = await site_fixture(t);
   const host_steps = new Map();

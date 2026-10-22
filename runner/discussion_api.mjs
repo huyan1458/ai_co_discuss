@@ -95,7 +95,7 @@ async function provider_fetch(profile, key, request, signal) {
 export async function api_models(home, profile) {
   const key = read_api_key(home, profile);
   const data = await provider_fetch(profile, key, { path: '/models' });
-  const models = (data.data || data.models || []).map(model => ({ id: model.id || model.name?.replace(/^models\//, ''), label: model.displayName || model.id || model.name }))
+  const models = (data.data || data.models || []).map(model => ({ id: model.id || model.name?.replace(/^models\//, ''), label: model.displayName || model.name || model.id }))
     .filter(model => typeof model.id === 'string');
   return { adapter: 'api', models, error: '', source: 'api' };
 }
