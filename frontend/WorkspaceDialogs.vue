@@ -179,10 +179,13 @@ async function follow_reply() {
   try { detail.value = await bridge.request(`/api/rooms/${view.value.room.id}/messages/${detail.value.reply_to}`); }
   catch (error) { detail_error.value = error.message; }
 }
+
+/** A half-filled create form closes only through its own Cancel, close button or Escape. */
+const keep_open = (event) => event.preventDefault();
 </script>
 
 <template>
-  <UModal v-model:open="open" :title="titles[rendered_mode] || '讨论'" :description="descriptions[rendered_mode]" :ui="{ content: ['glass-panel studio-modal', folder_dialog && 'channel-folder-modal', rendered_mode === 'archives' && 'channel-archive-modal', rendered_mode === 'create' && 'channel-create-modal'], body: 'dialog-body' }" @after:leave="after_dialog_leave">
+  <UModal v-model:open="open" :title="titles[rendered_mode] || '讨论'" :description="descriptions[rendered_mode]" :ui="{ content: ['glass-panel studio-modal', folder_dialog && 'channel-folder-modal', rendered_mode === 'archives' && 'channel-archive-modal', rendered_mode === 'create' && 'channel-create-modal'], body: 'dialog-body' }" :content="rendered_mode === 'create' ? { onPointerDownOutside: keep_open, onInteractOutside: keep_open } : undefined" @after:leave="after_dialog_leave">
     <template #body>
       <section v-if="rendered_mode === 'archives'" class="channel-archive-manager">
         <div class="channel-archive-toolbar">
