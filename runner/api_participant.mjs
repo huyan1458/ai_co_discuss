@@ -55,10 +55,18 @@ async function room_request(context, path, body) {
   return data;
 }
 
+const PEER_READING_EXCEPTION = /独立阅读.{0,8}例外/;
+
+/** The host lifts the boundary for one nominated participant by stating the user's exception in that turn's question. */
+export function peer_reading_granted(room, participant) {
+  return room.current_turn?.expert === participant && PEER_READING_EXCEPTION.test(room.current_turn.question || '');
+}
+
 /** Apply the independent-entry reading boundary before any content reaches the model. */
 async function read_room(context) {
   const room = await room_request(context, '');
-  context.independent = context.mode !== 'free' && context.role !== 'host' && room.phase === 'initial';
+  context.independent = context.mode !== 'free' && context.role !== 'host' && room.phase === 'initial'
+    && !peer_reading_granted(room, context.participant);
   const fields = context.independent ? ROOM_FIELDS : [...ROOM_FIELDS, 'state_text', 'state_until', 'host_brief'];
   return Object.fromEntries(fields.filter(field => room[field] !== undefined).map(field => [field, room[field]]));
 }

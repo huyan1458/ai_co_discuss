@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { API_PROVIDERS, api_base_url, api_check, api_generate, api_history, api_models, api_request, api_response, api_tool_results, read_api_key, save_api_key } from '../runner/discussion_api.mjs';
-import { participant_tools, system_prompt } from '../runner/api_participant.mjs';
+import { participant_tools, peer_reading_granted, system_prompt } from '../runner/api_participant.mjs';
 import { launch_discussion } from '../runner/discussion_launch.mjs';
 import { api, DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
@@ -140,6 +140,14 @@ test('DeepSeek model discovery preserves display names separately from callable 
   ]);
   assert.equal(mock.calls[0].path, '/custom/v1/models');
   assert.equal(mock.calls[0].body, null);
+});
+
+test('a host-stated reading exception lifts the independent boundary only for the nominated participant', () => {
+  const room = { current_turn: { expert: 'DeepSeek', question: '用户明确允许你从他人的对话中了解项目，这是对本轮 initial 独立阅读限制的明确例外。' } };
+  assert.equal(peer_reading_granted(room, 'DeepSeek'), true);
+  assert.equal(peer_reading_granted(room, 'Claude'), false);
+  assert.equal(peer_reading_granted({ current_turn: { expert: 'DeepSeek', question: '请独立论证。' } }, 'DeepSeek'), false);
+  assert.equal(peer_reading_granted({ current_turn: null }, 'DeepSeek'), false);
 });
 
 test('API host and six providers complete a real round through execution credentials and save API provenance', async t => {
