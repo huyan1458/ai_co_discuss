@@ -432,6 +432,13 @@ class CliTests(unittest.TestCase):
         self.rejected(["message", "post", self.room, "--body", "不能猜身份", "--submission-id", "no-actor-01"])
         self.assertEqual(self.invoke(["health"]).returncode, 2)
 
+    def test_access_file_supplies_its_own_site(self):
+        """A delivered task's access file is enough to reach its site, so the AI need not guess --site."""
+        access = self.room_access[self.room]["用户"]
+        result = self.invoke(["room", "view", self.room, "--access-file", access])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["meta"]["site"], self.base)
+
     def test_cross_room_references_and_wrong_host_are_rejected(self):
         """The CLI retains server room and role checks rather than bypassing them."""
         message = self.cli("message", "post", self.room, "--body", "房间甲", "--as", "用户",

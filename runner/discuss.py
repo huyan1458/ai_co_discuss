@@ -140,7 +140,7 @@ def attachment_id(value):
 def add_common(parser):
     """Allow common flags before or after subcommands without shared state."""
     options = {"default": argparse.SUPPRESS}
-    parser.add_argument("--site", help="HTTP 服务地址；未指定时读 DISCUSS_URL", **options)
+    parser.add_argument("--site", help="HTTP 服务地址；未指定时读 DISCUSS_URL，再读 --access-file 中的 site", **options)
     parser.add_argument("--as", dest="actor", type=participant,
                         help="业务写入的声明操作者；不是登录认证；api 使用原始请求体", **options)
     parser.add_argument("-o", "--output", choices=("json", "text"),
@@ -317,7 +317,7 @@ def execution_commands(subcommands, registry):
 def build_parser(prog="discuss"):
     """Build help and schema from the same command definitions."""
     parser = Parser(prog=prog, description="AI CoDiscuss CLI：通过 HTTP 操作现有讨论网站。",
-                    allow_abbrev=False, epilog="站点用 --site 或 DISCUSS_URL；不保存当前房间，不自动重试写入。")
+                    allow_abbrev=False, epilog="站点用 --site、DISCUSS_URL 或凭据文件中的 site；不保存当前房间，不自动重试写入。")
     add_common(parser)
     parser.add_argument("--version", action="version", version=f"{prog} {VERSION}")
     subcommands = parser.add_subparsers(dest="resource", required=True)
@@ -616,12 +616,15 @@ def build_plan(args):
 
 
 def resolve_site(args):
-    """Resolve an explicit flag or environment URL without implicit production writes."""
+    """Resolve the flag, then the environment, then the site the access file is bound to; never a built-in default."""
     site = getattr(args, "site", None) or os.getenv("DISCUSS_URL", "")
+    if not site and getattr(args, "access_file", None):
+        # The file's own credential is only ever sent back to this same site.
+        site = str(read_object(args.access_file).get("site", ""))
     parsed = urlsplit(site)
     if (parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username
             or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/")):
-        raise CliError("请用 --site 或 DISCUSS_URL 指定 http(s)://主机[:端口]，不带路径、凭据或查询")
+        raise CliError("请用 --site、DISCUSS_URL 或凭据文件指定 http(s)://主机[:端口]，不带路径、凭据或查询")
     try:
         parsed.port
     except ValueError as error:
@@ -746,7 +749,7 @@ def command_schema(args, registry):
     name = " ".join(args.command)
     if not name:
         return {"version": VERSION, "commands": {key: item.description for key, item in registry.items()},
-                "exit_codes": EXIT_CODES, "site": "--site > DISCUSS_URL；无内置默认站点",
+                "exit_codes": EXIT_CODES, "site": "--site > DISCUSS_URL > --access-file 中的 site；无内置默认站点",
                 "output": "默认 JSON；成功 stdout，错误 stderr；无交互提示、无自动重试"}
     if name not in registry:
         raise CliError(f"未知命令 {name}；运行 discuss schema 查看可用命令")

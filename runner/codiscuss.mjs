@@ -34,7 +34,7 @@ const HELP = `AI CoDiscuss CLI
   codiscuss room --help
   codiscuss health --site http://127.0.0.1:8765
 
-网站操作使用 --site 或 DISCUSS_URL，并需要 Python 3.10+。
+网站操作使用 --site、DISCUSS_URL 或 --access-file 中的站点，并需要 Python 3.10+。
 原有 start、status、stop、add 等服务命令继续兼容。
 `;
 const SERVICE_HELP = `AI CoDiscuss 讨论服务

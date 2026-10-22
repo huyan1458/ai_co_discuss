@@ -31,7 +31,7 @@ $env:DISCUSS_URL = 'http://127.0.0.1:8765'
 codiscuss room list
 ```
 
-Bash 对应 `export DISCUSS_URL=http://127.0.0.1:8765`，CMD 对应 `set DISCUSS_URL=http://127.0.0.1:8765`。`--site` 优先于环境变量；没有任何配置则报错，不默认写入线上。站点须为根地址，不带路径、查询、用户名或密码。客户端使用标准代理设置、校验证书且不跟随重定向。
+Bash 对应 `export DISCUSS_URL=http://127.0.0.1:8765`，CMD 对应 `set DISCUSS_URL=http://127.0.0.1:8765`。`--site` 优先于环境变量；两者都没有时，使用 `--access-file` 凭据文件中绑定的站点（凭据只会发回该站点），因此自动任务只带凭据文件即可；没有任何配置则报错，不默认写入线上。站点须为根地址，不带路径、查询、用户名或密码。客户端使用标准代理设置、校验证书且不跟随重定向。
 
 建房与更新资料支持 `--user-request` / `--user-request-file`，将用户原文与 `--background` 分开保存，各限 4000 字。`room brief` 返回两者，概要和通知不自动展开原文。
 
