@@ -77,7 +77,8 @@ class FreeRoomTests(unittest.TestCase):
         """The public view lists members and states but never any credential hash."""
         room = self.request(self.path)[1]
         self.assertEqual(room["mode"], "free")
-        self.assertEqual(room["host"], getattr(self, "expected_host", "用户"))
+        # The user is the client; the only member that answers by itself hosts.
+        self.assertEqual(room["host"], getattr(self, "expected_host", "Claude"))
         self.assertEqual(room["free"]["members"][0]["name"], "Claude")
         self.assertNotIn("token_hash", json.dumps(room))
         self.assertNotIn("control_hash", json.dumps(room))
@@ -284,11 +285,16 @@ class FreeRoomTests(unittest.TestCase):
 class MultiMemberTests(FreeRoomTests):
     """Several members: structured recipients, parallel work, membership changes and manual members."""
 
+    expected_host = "Codex"
+
     def setUp(self):
         """Reuse the single-member room and add Codex as a second runner member."""
         super().setUp()
         self.codex = uuid.uuid4().hex
         status, view = self.request(f"{self.path}/members", {"name": "Codex", "adapter": "codex_cli", "token": self.codex}, self.owner)
+        self.assertEqual(status, 200, view)
+        # Codex hosts so that Claude's mentions stay suggestions.
+        status, view = self.request(f"{self.path}/members/{self.member_id('Codex')}", {"action": "role", "role": "host"}, self.owner)
         self.assertEqual(status, 200, view)
 
     def member_id(self, name):
@@ -304,10 +310,10 @@ class MultiMemberTests(FreeRoomTests):
         """Single-member defaults do not apply here: name Claude unless told otherwise."""
         return super().say(text, token, **({"to": ["Claude"]} | extra))
 
-    def test_unnamed_message_with_several_members_is_only_a_note(self):
-        """With two members an unnamed message creates no request; nothing is broadcast."""
+    def test_unnamed_message_with_several_members_goes_only_to_the_host(self):
+        """With two members an unnamed message is routed by the host; nothing is broadcast."""
         self.assertEqual(super().say("没有点名")[0], 201)
-        self.assertEqual(self.request(self.path)[1]["free"]["requests"], [])
+        self.assertEqual([(item["member"], item["purpose"]) for item in self.request(self.path)[1]["free"]["requests"]], [("Codex", "route")])
 
     def test_naming_two_members_creates_two_requests_that_run_in_parallel(self):
         """One message to both members queues one request each; both can execute at once."""
@@ -545,13 +551,25 @@ class HostTests(FreeRoomTests):
         self.assertEqual(self.request(f"{self.path}/messages", payload, self.member)[0], 400)
 
     def test_one_host_at_a_time(self):
-        """Making Codex host demotes Claude."""
+        """Making Codex host demotes Claude; the host cannot step down, and when it leaves another member takes over."""
         self.request(f"{self.path}/members/{self.member_id('Codex')}", {"action": "role", "role": "host"}, self.owner)
         roles = {member["name"]: member["role"] for member in self.request(self.path)[1]["free"]["members"]}
         self.assertEqual(roles, {"Claude": "member", "Codex": "host", "Gemini": "member"})
         self.assertEqual(self.request(self.path)[1]["host"], "Codex")
+        self.assertEqual(self.request(f"{self.path}/members/{self.member_id('Codex')}", {"action": "role", "role": "member"}, self.owner)[0], 400)
         self.request(f"{self.path}/members/{self.member_id('Codex')}", {"action": "away"}, self.owner)
-        self.assertEqual(self.request(self.path)[1]["host"], "用户")
+        self.assertEqual(self.request(self.path)[1]["host"], "Claude")
+        self.request(f"{self.path}/members/{self.member_id('Codex')}", {"action": "active", "token": uuid.uuid4().hex}, self.owner)
+        roles = {member["name"]: member["role"] for member in self.request(self.path)[1]["free"]["members"]}
+        self.assertEqual(roles, {"Claude": "host", "Codex": "member", "Gemini": "member"})
+
+    def test_a_room_left_without_a_host_gets_one_on_the_next_message(self):
+        """Rooms the user used to host route the next unnamed message through a newly assigned AI host."""
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("UPDATE room_members SET role='member'")
+        self.assertEqual(FreeRoomTests.say(self, "没有点名")[0], 201)
+        self.assertEqual(self.request(self.path)[1]["host"], "Claude")
+        self.assertEqual(self.requests(), [("Claude", "route", "pending")])
 
 
 class OnlineAndLinkTests(FreeRoomTests):

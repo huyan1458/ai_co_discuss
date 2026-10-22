@@ -793,7 +793,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
         <div v-if="room.parent_room" class="channel-topic-section"><h3>来源</h3><p class="channel-topic-text">从自由协作「<button type="button" class="channel-link-button" @click="act('room', room.parent_room.id)">{{ room.parent_room.title }}</button>」发起<template v-if="room.phase === 'concluded'"> · <button type="button" class="channel-link-button" @click="act('return_conclusion')">把结论发回</button></template></p></div>
         <div class="channel-topic-section channel-topic-config"><h3>参与配置</h3><div class="channel-topic-people">
           <span v-for="person in topic.experts" :key="person.name" class="channel-topic-person"><UAvatar :src="bridge.identities[person.name]?.icon" :text="bridge.identities[person.name]?.initials" :alt="person.name" size="2xs" class="channel-avatar" :class="bridge.identities[person.name]?.style" />{{ bridge.display_name(person.name) }}<small>{{ person.name === topic.host ? `主持 · ${person.mode}` : person.mode }}</small></span>
-          <span v-if="topic.host === '用户'" class="channel-topic-person">{{ bridge.display_name('用户') }}<small>主持</small></span>
+          <span v-if="free || topic.host === '用户'" class="channel-topic-person">{{ bridge.display_name('用户') }}<small>{{ free ? '需求方' : '主持' }}</small></span>
         </div><small class="channel-topic-bounds">{{ topic.bounds }}</small></div>
       </section></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">

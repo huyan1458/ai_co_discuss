@@ -770,7 +770,7 @@ test('Worker free rooms need the owner credential and keep secrets out of views 
   assert.equal((await f.request('', { title: '讨论', goal: 'x', mode: 'other' })).status, 400);
   const r = await free_worker_room(f);
   assert.equal(r.room.mode, 'free');
-  assert.equal(r.room.host, '用户');
+  assert.equal(r.room.host, 'Claude');
   for (const token of ['', 'x'.repeat(40), r.claude]) assert.equal((await r.say('冒充', {}, token)).status, 403);
   assert.equal((await r.say('主人冒充成员', { author: 'Claude' })).status, 403);
   for (const tail of ['/turns', '/floor', '/topic', '/runtime']) {
@@ -825,7 +825,8 @@ test('Worker free rooms keep runner lifecycle, membership and manual members con
   const codex = 'codex-free'.repeat(4);
   const r = await free_worker_room(f, [{ name: 'Codex', adapter: 'codex_cli', token: codex }]);
   assert.equal((await r.say('没有点名')).status, 201);
-  assert.deepEqual((await f.request(r.path)).body.free.requests, []);
+  // The user is the client: Claude, the first runner member, hosts and routes the unnamed message.
+  assert.deepEqual((await f.request(r.path)).body.free.requests.map(item => [item.member, item.purpose]), [['Claude', 'route']]);
   assert.equal((await r.say('不在场', { to: ['Gemini'] })).status, 400);
   await r.say('两位都看', { to: ['Claude', 'Codex'] });
   const claude = (await r.reserve('Claude')).body, other = (await r.reserve('Codex')).body;
@@ -942,8 +943,9 @@ test('Worker free hosts route, dispatch, hand back once and stop at the chain bu
     .map(member => [member.name, member.role]));
   assert.deepEqual(roles, { Claude: 'member', Codex: 'host', Gemini: 'member' });
   assert.equal((await f.request(r.path)).body.host, 'Codex');
+  assert.equal((await f.request(`${r.path}/members/${await r.member_id('Codex')}`, { action: 'role', role: 'member' }, r.owner)).status, 400);
   await f.request(`${r.path}/members/${await r.member_id('Codex')}`, { action: 'away' }, r.owner);
-  assert.equal((await f.request(r.path)).body.host, '用户');
+  assert.equal((await f.request(r.path)).body.host, 'Claude');
 });
 
 test('Worker free rooms forward online answers and link brainstorm rooms', async t => {
@@ -985,6 +987,8 @@ test('Worker accepts named instances of one platform and rejects invalid names',
 test('Worker member suggestions require owner confirmation and concurrent retries create one request', async t => {
   const f = await worker_fixture(t), codex = 'suggestion-codex'.repeat(3);
   const r = await free_worker_room(f, [{ name: 'Codex', token: codex }]);
+  // Codex hosts so that Claude's mentions stay suggestions.
+  await f.request(`${r.path}/members/${await r.member_id('Codex')}`, { action: 'role', role: 'host' }, r.owner);
   const original = (await r.say('先看', { to: ['Claude'] })).body.message;
   const execution = (await r.reserve()).body;
   const saved = await r.answer(execution.id, r.claude, 'Claude', { text: '请 @Codex 检查', to: ['Codex', 'Codex'] });
@@ -1018,6 +1022,8 @@ test('Worker member suggestions require owner confirmation and concurrent retrie
 test('Worker suggestion parsing excludes code quotes partial names and self mentions', async t => {
   const f = await worker_fixture(t);
   const r = await free_worker_room(f, [{ name: 'Codex', token: 'suggestion-target'.repeat(3) }]);
+  // Codex hosts so that Claude's mentions stay suggestions.
+  await f.request(`${r.path}/members/${await r.member_id('Codex')}`, { action: 'role', role: 'host' }, r.owner);
   for (const text of ['`@Codex`', '`` @Codex ` nested ``', '```txt\n@Codex\n```', '~~~\n@Codex\n~~~',
     '    @Codex', '  > quote\n@Codex', '> @Codex', '@Codex-评审', '@Claude', '```\n@Codex']) {
     await r.say('查看', { to: ['Claude'] });
@@ -1034,6 +1040,8 @@ test('Worker suggestion parsing excludes code quotes partial names and self ment
 test('Worker conversion rechecks membership archive and owner inside the transaction', async t => {
   const f = await worker_fixture(t);
   const r = await free_worker_room(f, [{ name: 'Codex', token: 'suggestion-target'.repeat(3) }]);
+  // Codex hosts so that Claude's mentions stay suggestions.
+  await f.request(`${r.path}/members/${await r.member_id('Codex')}`, { action: 'role', role: 'host' }, r.owner);
   await r.say('查看', { to: ['Claude'] });
   const source = (await r.answer((await r.reserve()).body.id, r.claude, 'Claude', { to: ['Codex'] })).body.message;
   const payload = { message_id: source.id, member_id: await r.member_id('Codex') };

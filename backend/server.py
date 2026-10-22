@@ -22,7 +22,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 from .free_room import (add_member, after_free_message, authorize_free_write, check_answer, check_proxy, execution_action, free_view,
                         inbox, interrupt_member, member_action, member_values, migrate_free_tables, proxy_member, reserve_execution,
                         discussion_members, room_mode, save_room_access, sync_discussion_members, view_execution)
-from .free_room import add_discussion_member, convert_suggestion, discussion_member_action, message_suggestions, save_suggestions
+from .free_room import add_discussion_member, convert_suggestion, discussion_member_action, message_suggestions, save_suggestions, sync_participants
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, is_ai, is_participant
 from .room_import import import_room, imported_attachment
 from .runtime import (authorize_write, begin_write, configure_runtime, event_action,
@@ -609,6 +609,8 @@ def create_room(connection, payload, control_token=""):
     save_topic_settings(connection, room_id, settings)
     save_room_access(connection, room_id, control_token, members,
                      {"mode": "free" if free else "brainstorm", "host": settings["host"], "created_at": utc_now()})
+    if free:
+        sync_participants(connection, room_id)
     if parent_id is not None:
         connection.execute("INSERT INTO room_links (room_id,parent_id,created_at) VALUES (?,?,?)", (room_id, parent_id, utc_now()))
     if automatic:

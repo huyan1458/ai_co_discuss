@@ -129,7 +129,7 @@ function free_member_menu(member) {
   ], [
     ...(free_member_busy(member) ? [item("停止", "i-lucide-square", "interrupt")] : []),
     ...(member.access === "online" && member.pending ? [{ label: "复制阅读通知", icon: "i-lucide-copy", onSelect: () => act("copy_online_notice", member.name) }] : []),
-    ...(member.status === "active" && member.access !== "online" ? [item(member.role === "host" ? "取消主持" : "设为主持人", "i-lucide-crown", "role", { role: member.role === "host" ? "member" : "host" })] : []),
+    ...(member.status === "active" && member.access !== "online" && member.role !== "host" ? [item("设为主持人", "i-lucide-crown", "role", { role: "host" })] : []),
     member.status === "active" ? item("离开", "i-lucide-log-out", "away") : { ...item("请回", "i-lucide-log-in", "rejoin"), disabled: member.access === "runner" && !view.value.launch.available },
   ], [{ ...item("移除", "i-lucide-trash-2", "remove"), color: "error" }]];
 }
@@ -371,7 +371,7 @@ function resize_nav_by_key(event) {
     <div v-if="show_rail" class="channel-rail-resizer" role="separator" tabindex="0" aria-label="调整右侧栏宽度" aria-orientation="vertical" aria-controls="channel-member-rail" :aria-valuemin="RAIL_MIN" :aria-valuemax="RAIL_MAX" :aria-valuenow="rail_width" :aria-valuetext="`${rail_width} 像素`" title="拖动调整右侧栏宽度，也可使用左右方向键" @pointerdown="start_rail_resize" @pointermove="resize_rail" @pointerup="finish_rail_resize" @pointercancel="finish_rail_resize" @lostpointercapture="finish_rail_resize" @keydown="resize_rail_by_key"></div>
     <aside v-if="show_rail" id="channel-member-rail" class="channel-member-rail" aria-label="当前焦点与讨论进度">
       <section class="channel-rail-board"><div v-if="room && free_room" class="progress-board is-docked">
-          <header class="pb-header"><strong>自由协作</strong><span class="pb-mode">{{ free_host ? `${bridge.display_name(free_host.name)} 协助主持` : '你来主持' }}</span></header>
+          <header class="pb-header"><strong>自由协作</strong><span class="pb-mode">{{ free_host ? `${bridge.display_name(free_host.name)} 主持` : '无主持人' }}</span></header>
           <section class="pb-section" aria-label="成员">
             <h4>成员</h4>
             <ul class="pb-members">

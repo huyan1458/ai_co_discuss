@@ -671,7 +671,7 @@ function create_form_fixture() {
   return { context, view, events, cleanup: () => cleanups.forEach(stop => stop()) };
 }
 
-test("create form shares a role library, keeps independent instances and defaults free hosting to the user", async () => {
+test("create form shares a role library, keeps independent instances and makes the first AI host a free room", async () => {
   const f = create_form_fixture(), { context, view } = f;
   context.add_expert("Codex");
   context.add_expert("Codex");
@@ -679,7 +679,7 @@ test("create form shares a role library, keeps independent instances and default
   const modes = view.value.experts["new-expert-modes"];
   assert.deepEqual(Object.entries(modes), [["Codex", "cli"], ["Codex-2", "cli"], ["DeepSeek", "cli"]], "every member starts woken by the local service");
   assert.equal(view.value.launch.profiles.DeepSeek.adapter, "api", "an API-only platform is woken through its API");
-  assert.equal(view.value.fields["new-room-host"], "用户");
+  assert.equal(view.value.fields["new-room-host"], "Codex", "the user is the client of a free room, never its host");
   assert.deepEqual(Array.from(vm.runInContext('access_choices("Codex")', context)), ["cli", "manual", "online"]);
   assert.deepEqual(Array.from(vm.runInContext('access_choices("DeepSeek")', context)), ["cli", "online"], "an API-only platform has no software to join by hand");
   context.set_expert_mode("Codex", "manual");
@@ -690,7 +690,7 @@ test("create form shares a role library, keeps independent instances and default
   context.remove_expert("Codex");
   assert.equal(view.value.fields["new-room-host"], "Codex-2", "a manual member can host");
   context.set_expert_mode("Codex-2", "online");
-  assert.equal(view.value.fields["new-room-host"], "用户", "an online instance cannot remain AI host");
+  assert.equal(view.value.fields["new-room-host"], "", "an online instance cannot host, and the user never does");
   context.choose_kind("brainstorm");
   assert.equal(view.value.fields["new-room-host"], "");
   assert.equal(vm.runInContext('access_choices("Codex-2")', context).length, 0, "discussions offer no delivery choice");

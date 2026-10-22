@@ -570,7 +570,8 @@ async function create_room(database, payload, control_token = "") {
     .bind(room_id, crypto.randomUUID(), hashed));
   statements.push(database.prepare("INSERT INTO room_modes (room_id,mode,control_hash) VALUES (?,?,?)").bind(room_id, free ? "free" : "brainstorm", hashed),
     ...members.map(member => free_member_insert(database, room_id, member)),
-    database.prepare("UPDATE room_members SET role='host' WHERE room_id=? AND name=?").bind(room_id, settings.host));
+    database.prepare("UPDATE room_members SET role='host' WHERE room_id=? AND name=?").bind(room_id, settings.host),
+    ...(free ? free_participant_statements(database, room_id) : []));
   if (parent_id !== null) statements.push(database.prepare("INSERT INTO room_links (room_id,parent_id,created_at) VALUES (?,?,?)").bind(room_id, parent_id, new Date().toISOString()));
   try {
     await database.batch(statements);
@@ -1684,12 +1685,18 @@ function free_member_insert(database, room_id, member) {
     VALUES (?,?,?,?,?,?,?)`).bind(room_id, member.name, member.adapter, member.token_hash, member.access, member.session_mode, new Date().toISOString());
 }
 
-/** Mirror non-removed members into the participant list the page already shows. */
-function free_participant_statement(database, room_id) {
-  return database.prepare(`UPDATE topic_settings SET experts=(SELECT COALESCE(json_group_object(name,CASE WHEN access='online' THEN 'online' ELSE 'cli' END),'{}')
+/** Keep one active AI host, then mirror non-removed members into the participant list the page already shows.
+ * The user is the client of a free room, never its host; a host that left gives up the role and the first
+ * active runner member (else manual) takes it. Only a room of online members has no host. */
+function free_participant_statements(database, room_id) {
+  return [database.prepare("UPDATE room_members SET role='member' WHERE room_id=? AND role='host' AND status<>'active'").bind(room_id),
+    database.prepare(`UPDATE room_members SET role='host' WHERE id=(SELECT id FROM room_members WHERE room_id=? AND status='active'
+      AND access<>'online' ORDER BY access='runner' DESC, id LIMIT 1)
+      AND NOT EXISTS (SELECT 1 FROM room_members WHERE room_id=? AND role='host' AND status='active')`).bind(room_id, room_id),
+    database.prepare(`UPDATE topic_settings SET experts=(SELECT COALESCE(json_group_object(name,CASE WHEN access='online' THEN 'online' ELSE 'cli' END),'{}')
     FROM (SELECT name,access FROM room_members WHERE room_id=? AND status<>'removed' ORDER BY id)),
     host=COALESCE((SELECT name FROM room_members WHERE room_id=? AND role='host' AND status='active' LIMIT 1),'用户')
-    WHERE room_id=?`).bind(room_id, room_id, room_id);
+    WHERE room_id=?`).bind(room_id, room_id, room_id)];
 }
 
 /** Free rooms always bound one execution; zero in the shared limits means the default. */
@@ -1790,6 +1797,8 @@ function free_named(active, names, exclude) {
 
 /** An owner message's recipients as {id, purpose}; unnamed messages go to the AI host when there is one. */
 async function free_recipients(database, room_id, payload) {
+  // Rooms created while the user could host get their AI host on the next message.
+  await database.batch(free_participant_statements(database, room_id));
   const active = await free_active_members(database, room_id);
   if (payload.to !== undefined) return free_named(active, payload.to).map(id => ({ id, purpose: "ask" }));
   const rows = Object.values(active);
@@ -2019,7 +2028,7 @@ async function handle_free_api(database, request, parts) {
       throw new HttpError(409, `${member.name} 已是本房间成员；离开的成员请用请回`);
     }
     await require_fresh_member_hash(database, room_id, member.token_hash);
-    try { await database.batch([free_member_insert(database, room_id, member), free_participant_statement(database, room_id)]); }
+    try { await database.batch([free_member_insert(database, room_id, member), ...free_participant_statements(database, room_id)]); }
     catch (error) { if (String(error).includes("UNIQUE constraint")) throw new HttpError(409, `${member.name} 已是本房间成员`); throw error; }
     return respond(await free_view(database, room_id));
   }
@@ -2034,22 +2043,23 @@ async function handle_free_api(database, request, parts) {
     if (["away", "remove"].includes(payload.action)) {
       await database.batch([...free_stop_statements(database, member.id, payload.action === "away" ? "成员已离开" : "成员已移除"),
         database.prepare("UPDATE room_members SET status=? WHERE id=?").bind(payload.action === "away" ? "away" : "removed", member.id),
-        free_participant_statement(database, room_id), ...free_settle_statements(database, room_id)]);
+        ...free_participant_statements(database, room_id), ...free_settle_statements(database, room_id)]);
     } else if (payload.action === "active") {
       const hashed = await runtime_hash(payload.token);
       if (member.status === "active" && hashed && hashed === member.token_hash) return respond(await free_view(database, room_id));
       if (member.status !== "away" || !hashed || hashed === member.token_hash) throw new HttpError(400, "只有离开的成员可以请回，且须提供新的成员凭证");
       await require_fresh_member_hash(database, room_id, hashed);
       await database.batch([database.prepare("UPDATE room_members SET status='active',token_hash=? WHERE id=? AND status='away'").bind(hashed, member.id),
-        free_participant_statement(database, room_id)]);
+        ...free_participant_statements(database, room_id)]);
     } else if (payload.action === "role") {
       if (!["host", "member"].includes(payload.role) || (payload.role === "host" && member.access === "online")) {
         throw new HttpError(400, "role 须为 host 或 member；在线成员不能担任主持人");
       }
+      if (payload.role === "member" && member.role === "host") throw new HttpError(400, "自由房间须由一位 AI 主持；请指定另一位成员担任主持人");
       await database.batch([
         ...(payload.role === "host" ? [database.prepare("UPDATE room_members SET role='member' WHERE room_id=? AND role='host'").bind(room_id)] : []),
         database.prepare("UPDATE room_members SET role=? WHERE id=?").bind(payload.role, member.id),
-        free_participant_statement(database, room_id), ...free_settle_statements(database, room_id)]);
+        ...free_participant_statements(database, room_id), ...free_settle_statements(database, room_id)]);
     } else throw new HttpError(400, "action 须为 away、active、remove 或 role");
     return respond(await free_view(database, room_id));
   }

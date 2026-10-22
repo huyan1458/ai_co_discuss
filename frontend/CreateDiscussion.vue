@@ -25,8 +25,8 @@ const selected_names = computed(() => Object.keys(selected.value).filter((name) 
 const instance_count = (platform) => selected_names.value.filter((name) => bridge.platform_of(name) === platform).length;
 const library = ref(null);
 const host = computed(() => value("host"));
-// Members that submit their own answers can host; web members only read.
-const host_options = computed(() => [...(free.value ? ["用户"] : []), ...selected_names.value.filter((name) => selected.value[name] !== "online")]);
+// Members that submit their own answers can host; web members only read. The user is the client, never the host.
+const host_options = computed(() => selected_names.value.filter((name) => selected.value[name] !== "online"));
 const limit_picker = ref(null);
 // Discussions run automatically; a free room needs the local service only for the members it wakes.
 const woken_names = computed(() => selected_names.value.filter((name) => selected.value[name] === "cli"));
@@ -40,7 +40,7 @@ const launch_ready = (name) => {
 const launching = computed(() => automatic.value && view.value.launch.available && (free.value || view.value.launch.create));
 const free_ready = computed(() => selected_names.value.length > 0 && woken_names.value.every(launch_ready) && (!woken_names.value.length || view.value.launch.available));
 
-/** Keep the host inside the selected local members; free rooms also allow the user. */
+/** Keep the host inside the selected members that answer by themselves. */
 function ensure_host() {
   if (!host_options.value.includes(host.value)) write("host", host_options.value[0] || "");
 }
@@ -132,7 +132,7 @@ const limit_rule = computed(() => {
 
 const summary = computed(() => {
   const names = Object.keys(selected.value);
-  if (free.value) return ["自由协作", `${names.length} 位 AI`, host.value === "用户" ? "你来主持" : `${host.value} 协助主持`].join(" · ");
+  if (free.value) return ["自由协作", `${names.length} 位 AI`, host.value ? `${host.value} 主持` : "无主持人"].join(" · ");
   const rounds = value("limit-max_rounds"), minutes = value("limit-max_minutes");
   const limits = [rounds && Number(rounds) ? `${rounds} 轮` : "不限轮次", minutes && Number(minutes) ? format_duration(Number(minutes)) : "不限时长"].join(" / ");
   return [host.value ? `${bridge.display_name(host.value)} 主持` : "尚未选择主持人", names.length ? `${names.join("、")} 参与` : "尚未选择专家", limits].join(" · ");
@@ -171,9 +171,8 @@ const summary = computed(() => {
           </button>
         </div>
         <div class="fine-print create-hint create-host-hint">
-          <button v-if="free" type="button" class="create-host-self" :aria-pressed="host === '用户'" @click="write('host', '用户')"><UIcon name="i-lucide-crown" />我来主持</button>
-          <UIcon v-else name="i-lucide-crown" />
-          <span>{{ free ? '默认由你点名和分配任务；也可点卡片上的皇冠，指定 AI 主持人。' : host_options.length ? '点卡片上的皇冠指定主持人，负责补全议题、安排发言与收束，也可同时作为专家。' : '先添加一位 AI 担任主持人。' }}</span>
+          <UIcon name="i-lucide-crown" />
+          <span>{{ free ? host_options.length ? '点卡片上的皇冠指定主持人：没 @ 任何人的消息由它分配；其他成员只在被你或主持人点名时发言。' : '网页 AI 不能主持；添加一位本地 AI 后，没 @ 的消息才有人接。' : host_options.length ? '点卡片上的皇冠指定主持人，负责补全议题、安排发言与收束，也可同时作为专家。' : '先添加一位 AI 担任主持人。' }}</span>
         </div>
       </section>
 
@@ -254,10 +253,7 @@ const summary = computed(() => {
 .create-roster-add > button > span:last-child { width: 12px; height: 12px; color: var(--ui-text-muted); }
 .create-host-hint { display: flex; align-items: center; gap: 5px; }
 .create-host-hint > [class*="icon"] { flex-shrink: 0; width: 12px; height: 12px; color: #e0b44a; }
-.create-host-self { display: inline-flex; flex-shrink: 0; align-items: center; gap: 5px; min-height: 24px; padding: 2px 8px; border: 1px solid var(--ui-border); border-radius: 999px; color: var(--ui-text-toned); font-size: 11px; }
-.create-host-self > span { width: 12px; height: 12px; }
-.create-host-self[aria-pressed="true"] { border-color: color-mix(in srgb, #e0b44a 50%, transparent); background: color-mix(in srgb, #e0b44a 12%, transparent); color: #e0b44a; }
-@media (pointer: coarse) { .create-roster-add > button, .create-host-self { min-height: 44px; } }
+@media (pointer: coarse) { .create-roster-add > button { min-height: 44px; } }
 .create-host { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .create-label { min-width: 64px; color: var(--ui-text-toned); font-size: 12px; }
 .create-chips { display: flex; flex-wrap: wrap; gap: 6px; }

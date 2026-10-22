@@ -4,9 +4,9 @@ A free room has no floor, turns or rounds. The user (holding the room control cr
 names members; each named member gets one durable request per message. The local runner
 delivers a runner member's open requests as one execution, and the member's answer completes
 them. A manual member finds its own requests and answers by request id; an online member's
-answer is forwarded by the owner. An optional AI host routes unnamed messages, names members
-in its answers, and is woken once when everything it dispatched has finished. No software is
-launched here.
+answer is forwarded by the owner. The user is the client, never the host: one member that
+answers by itself always hosts, routes unnamed messages, names members in its answers, and is
+woken once when everything it dispatched has finished. No software is launched here.
 """
 
 import hmac
@@ -28,6 +28,11 @@ ACTIVE = ("dispatched", "started")
 ACCESS_MODES = ("runner", "manual", "online")
 # AI-created requests (host dispatches and hand-offs) allowed per chain; each owner message starts a chain.
 MAX_AUTO_HOPS = 8
+# A host that left gives up the role; the first active runner member (else manual) then takes it.
+RELEASE_HOST = "UPDATE room_members SET role='member' WHERE room_id=? AND role='host' AND status<>'active'"
+ASSIGN_HOST = """UPDATE room_members SET role='host' WHERE id=(SELECT id FROM room_members WHERE room_id=? AND status='active'
+    AND access<>'online' ORDER BY access='runner' DESC, id LIMIT 1)
+    AND NOT EXISTS (SELECT 1 FROM room_members WHERE room_id=? AND role='host' AND status='active')"""
 TERMINAL = ("completed", "cancelled", "failed")
 SESSION_MODES = ("new", "borrowed")
 FREE_OPERATIONS = ("messages", "attachments", "move", "folder", "archive", "restore", "delete")
@@ -141,7 +146,9 @@ def sync_discussion_members(connection, room_id, payload, settings):
 
 
 def sync_participants(connection, room_id):
-    """Mirror member capabilities and the active host into shared room metadata."""
+    """Keep one active AI host, then mirror member capabilities and the host into shared room metadata."""
+    connection.execute(RELEASE_HOST, (room_id,))
+    connection.execute(ASSIGN_HOST, (room_id, room_id))
     members = connection.execute("SELECT name,access,role,status FROM room_members WHERE room_id=? AND status<>'removed' ORDER BY id", (room_id,)).fetchall()
     experts = {row["name"]: "online" if row["access"] == "online" else "cli" for row in members}
     host = next((row["name"] for row in members if row["role"] == "host" and row["status"] == "active"), "用户")
@@ -270,8 +277,10 @@ def recipients(connection, room_id, payload):
     """Resolve an owner message's recipients as (member id, purpose) pairs.
 
     A single active member is named by default. With several, an unnamed message goes to the
-    AI host for routing when there is one, and otherwise stays a plain note: nothing is broadcast.
+    AI host for routing; only a room of online members has none, and then it stays a plain note.
     """
+    # Rooms created while the user could host get their AI host on the next message.
+    sync_participants(connection, room_id)
     active = active_members(connection, room_id)
     if payload.get("to") is not None:
         return [(member_id, "ask") for member_id in named_members(active, payload["to"])]
@@ -769,6 +778,8 @@ def member_action(connection, room_id, member_id, token, payload):
         role = payload.get("role")
         if role not in ("host", "member") or (role == "host" and member["access"] == "online"):
             raise ValueError("role 须为 host 或 member；在线成员不能担任主持人")
+        if role == "member" and member["role"] == "host":
+            raise ValueError("自由房间须由一位 AI 主持；请指定另一位成员担任主持人")
         if role == "host":
             connection.execute("UPDATE room_members SET role='member' WHERE room_id=? AND role='host'", (room_id,))
         connection.execute("UPDATE room_members SET role=? WHERE id=?", (role, member_id))
