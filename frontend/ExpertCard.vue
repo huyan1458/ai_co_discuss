@@ -45,9 +45,10 @@ const effort_items = computed(() => {
 const effort_label = computed(() => effort_items.value?.find((item) => item.value === (profile.value.effort || ""))?.label
   || (profile.value.adapter === "antigravity_cli" ? "强度随模型" : profile.value.effort || "默认强度"));
 // The front lists the read-only configuration; strength appears only where this page sets it.
-// Only CLI experts choose project access; API and online experts remain read-only.
+// Room speech and project files are separate: only woken CLIs get a project choice from this page,
+// Apps and manual sessions keep their own settings, and API or web members never see project files.
 const sets_access = computed(() => automatic.value && bridge.launch_can_set_access(props.name, view.value.launch));
-const fixed_read = computed(() => props.mode === "online" || automatic.value && profile.value.adapter === "api");
+const no_files = computed(() => props.mode === "online" || automatic.value && profile.value.adapter === "api");
 const local_connection = computed(() => automatic.value && profile.value.adapter !== "api");
 const access = computed(() => profile.value.project_access || view.value.launch.workspace?.project_access || "read");
 const facts = computed(() => [
@@ -55,7 +56,7 @@ const facts = computed(() => [
   { label: "模型", value: configurable.value ? profile.value.model || "默认模型" : props.mode === "online" ? "在原网页设置" : "在原软件设置" },
   ...configurable.value && profile.value.adapter !== "api" ? [{ label: "强度", value: effort_label.value }] : [],
   ...automatic.value && profile.value.adapter === "api" ? [{ label: "上下文", value: "房间记录" }] : [],
-  ...sets_access.value || fixed_read.value ? [{ label: "项目", value: sets_access.value && access.value === "write" ? "可写" : "只读" }] : [],
+  { label: "项目", value: sets_access.value ? access.value === "write" ? "可写" : "只读" : no_files.value ? "不访问" : "由软件设置" },
 ]);
 // Ask only for connection values that are missing; a field stays while the back is open so typing does not hide it.
 const CONNECTION_FIELDS = { executable: { label: "路径", placeholder: "可执行文件完整路径" },
@@ -170,7 +171,7 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
       </div>
       <div v-if="can_flip" class="expert-card-face expert-card-back" :inert="!visible_back" :aria-hidden="!visible_back">
         <div class="expert-card-back-body">
-        <div class="expert-card-heading"><strong>{{ name }}<span>设置{{ fixed_read ? ' · 项目只读' : '' }}</span></strong></div>
+        <div class="expert-card-heading"><strong>{{ name }}<span>设置{{ no_files ? ' · 不访问项目' : '' }}</span></strong></div>
         <div v-if="choices.length > 1" class="expert-card-modes" role="radiogroup" :aria-label="`${name} 接入方式`" @keydown="choose_capability">
           <button v-for="option in choices" :key="option" type="button"
             role="radio" :aria-checked="mode === option" :tabindex="mode === option ? 0 : -1" :data-mode="option" @click="emit('mode', option)">{{ ACCESS_LABELS[option] }}</button>

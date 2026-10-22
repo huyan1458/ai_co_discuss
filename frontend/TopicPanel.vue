@@ -99,11 +99,11 @@ const progress_summary = computed(() => {
       <details class="access-disclosure access-instructions" :open="!automatic">
         <summary><span>{{ automatic ? '成员参与说明与阅读地址' : '复制指令，交给对应的 AI' }}</span><UIcon name="i-lucide-chevron-down" class="disclosure-icon" /></summary>
         <div class="access-disclosure-body">
-          <p class="fine-print">手动接入的本地 AI 使用自己的私有配置；程序唤醒的成员等待本机任务，使用本次执行凭据。在线 AI 只读，真实回答由你或授权主持人代发。</p>
+          <p class="fine-print">手动接入的本地 AI 使用自己的私有配置；程序唤醒的成员等待本机任务，使用本次执行凭据。网页 AI 只能阅读房间，真实回答由你或授权主持人代发。</p>
           <ul class="access-member-list" aria-label="成员接入">
             <li v-for="member in access.members || []" :key="member.name">
               <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="sm" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
-              <div class="access-member-copy"><strong>{{ member.name }}</strong><span>{{ member.access === 'online' ? '在线只读 · 由人代发' : member.access === 'runner' ? '程序唤醒 · 本地读写' : '手动接入 · 自行提交' }}</span><small v-if="member.access !== 'online' && !member.available">当前浏览器没有此成员的私有配置</small></div>
+              <div class="access-member-copy"><strong>{{ member.name }}</strong><span>{{ member.access === 'online' ? '网页代发' : member.access === 'runner' ? '本机唤醒 · 自行发言' : '手动接入 · 自行发言' }}</span><small v-if="member.access !== 'online' && !member.available">当前浏览器没有此成员的私有配置</small></div>
               <div class="button-row">
                 <UButton v-if="member.access !== 'online'" icon="i-lucide-download" label="私有配置" :aria-label="`下载 ${member.name} 私有配置`" :disabled="!access.can_manage || !member.available" variant="outline" color="neutral" size="sm" @click="act('download_member_access', member.name)" />
                 <UButton icon="i-lucide-copy" label="参与说明" :aria-label="`复制 ${member.name} 参与说明`" variant="outline" color="neutral" size="sm" :disabled="!access.can_manage" @click="act('copy_member_join', member.name)" />

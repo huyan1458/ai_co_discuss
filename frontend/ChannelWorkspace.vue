@@ -96,9 +96,11 @@ const tabs = computed(() => free_room.value ? ALL_TABS.slice(0, 1) : ALL_TABS);
 const invite_name = ref("");
 const invite_access = ref("runner");
 const invite_project_access = ref("read");
+const invite_session = ref("");
 watch(() => room.value?.id, () => {
   invite_name.value = "";
   invite_project_access.value = "read";
+  invite_session.value = "";
   invite_access.value = (room.value?.free?.members || []).some(member => member.access === "runner") ? "runner" : "manual";
 }, { immediate: true });
 /** Open the creation dialog prefilled for a brainstorm room linked to this free room. */
@@ -146,7 +148,7 @@ const view_links = computed(() => tabs.value.map((item) => ({
 })));
 const participants = computed(() => [
   { name: "用户", mode: "发起与协助" },
-  ...Object.entries(room.value?.experts || {}).map(([name, mode]) => ({ name, mode: mode === "cli" ? "CLI · 读写" : "在线 AI · 只读" })),
+  ...Object.entries(room.value?.experts || {}).map(([name, mode]) => ({ name, mode: mode === "cli" ? "本地 AI · 自行发言" : "在线 AI · 由人代发" })),
 ]);
 
 /** Open management for the exact sidebar item while leaving its draft untouched. */
@@ -376,7 +378,7 @@ function resize_nav_by_key(event) {
               <li v-for="member in room.free?.members || []" :key="member.id" class="pb-member">
                 <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
                 <div class="pb-member-body">
-                  <div class="pb-member-name">{{ bridge.display_name(member.name) }}<UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /><small>{{ { manual: '手动接入', online: '在线只读' }[member.access] || '本机自动' }}</small></div>
+                  <div class="pb-member-name">{{ bridge.display_name(member.name) }}<UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /><small>{{ { manual: '手动接入', online: '网页代发' }[member.access] || '本机唤醒' }}</small></div>
                   <div class="pb-member-status" :class="`is-${free_member_tone(member)}`"><span class="pb-dot"></span>{{ free_member_status(member) }}</div>
                   <p v-if="member.session_mode === 'borrowed'" class="pb-member-model" title="它工作时请不要在原窗口继续操作">借用你正在使用的会话</p>
                 </div>
@@ -395,12 +397,15 @@ function resize_nav_by_key(event) {
           </section>
           <section class="pb-section" aria-label="邀请">
             <h4>邀请 AI</h4>
-            <form class="pb-free-invite" @submit.prevent="act('invite_member', { name: invite_name, access: invite_access, project_access: invite_project_access })">
+            <form class="pb-free-invite" @submit.prevent="act('invite_member', { name: invite_name, access: invite_access, project_access: invite_project_access, session_id: invite_access === 'runner' && bridge.launch_can_bind_session(invite_name, view.launch) ? invite_session : '' })">
               <USelect v-model="invite_name" :items="invite_choices" placeholder="选择 AI" size="sm" class="min-w-0 flex-1" />
-              <USelect v-model="invite_access" :items="[{ label: '本机自动', value: 'runner' }, { label: '手动接入', value: 'manual' }, { label: '在线只读', value: 'online' }]" size="sm" class="w-26" />
+              <USelect v-model="invite_access" :items="[{ label: '本机唤醒', value: 'runner' }, { label: '手动接入', value: 'manual' }, { label: '网页代发', value: 'online' }]" size="sm" class="w-26" />
               <USelect v-if="invite_access === 'runner' && bridge.launch_can_set_access(invite_name, view.launch)" v-model="invite_project_access" :items="[{ label: '项目文件只读', value: 'read' }, { label: '项目文件可写', value: 'write' }]" aria-label="受邀成员的项目文件权限" size="sm" class="w-full" />
-              <span v-else-if="invite_access === 'online' || invite_access === 'runner' && view.launch.profiles[invite_name]?.adapter === 'api'" class="pb-free-note">项目文件只读</span>
+              <span v-else-if="invite_access === 'online' || invite_access === 'runner' && view.launch.profiles[invite_name]?.adapter === 'api'" class="pb-free-note">不访问项目文件</span>
+              <span v-else-if="invite_name" class="pb-free-note">项目文件由其软件设置</span>
+              <UInput v-if="invite_access === 'runner' && bridge.launch_can_bind_session(invite_name, view.launch)" v-model="invite_session" placeholder="已有会话 ID（可选，留空则新建）" title="在原会话中用 /status 查看，或直接问它当前会话 ID；Codex App 填聊天 ID" aria-label="受邀成员的已有会话 ID" size="sm" class="w-full" />
             </form>
+            <p v-if="invite_access === 'runner' && bridge.launch_can_bind_session(invite_name, view.launch) && invite_session.trim()" class="pb-free-note">将续接这个原会话，保留它原有的上下文；它工作时请不要在原窗口继续操作。</p>
             <p v-if="invite_access === 'runner' && !view.launch.available" class="pb-free-note">程序唤醒需要本机服务，请在运行 AI 的电脑打开本机网站。</p>
           </section>
           <section v-if="room.linked_rooms?.length" class="pb-section" aria-label="头脑风暴">
@@ -408,7 +413,7 @@ function resize_nav_by_key(event) {
             <button v-for="item in room.linked_rooms" :key="item.id" type="button" class="pb-link pb-free-linked" @click="act('room', item.id)">{{ item.title }}<small>{{ bridge.phases[item.phase] || item.phase }}</small></button>
           </section>
           <section class="pb-actions" aria-label="操作">
-            <UButton icon="i-lucide-user-plus" label="邀请" size="sm" color="neutral" variant="outline" class="pb-action" :disabled="!invite_name || (invite_access === 'runner' && !view.launch.available)" @click="act('invite_member', { name: invite_name, access: invite_access, project_access: invite_project_access })" />
+            <UButton icon="i-lucide-user-plus" label="邀请" size="sm" color="neutral" variant="outline" class="pb-action" :disabled="!invite_name || (invite_access === 'runner' && !view.launch.available)" @click="act('invite_member', { name: invite_name, access: invite_access, project_access: invite_project_access, session_id: invite_access === 'runner' && bridge.launch_can_bind_session(invite_name, view.launch) ? invite_session : '' })" />
             <UButton icon="i-lucide-messages-square" label="发起头脑风暴" size="sm" color="neutral" variant="outline" class="pb-action" title="用当前成员新建一场讨论房间，收束后可把结论发回这里" @click="start_brainstorm" />
           </section>
         </div>

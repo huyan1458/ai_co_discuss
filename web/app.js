@@ -922,7 +922,7 @@ async function interrupt_free() {
 }
 
 /** Invite an independent member, retaining its credential before either delivery path runs. */
-async function invite_member({ name, access, project_access = "read" }) {
+async function invite_member({ name, access, project_access = "read", session_id = "" }) {
   const room_id = state.room.id;
   state.free_error = ""; state.free_notice = "";
   try {
@@ -931,12 +931,14 @@ async function invite_member({ name, access, project_access = "read" }) {
     const taken = new Set((state.room.free?.members || state.room.members || []).map(member => member.name));
     let instance = name;
     for (let number = 2; taken.has(instance); number++) instance = `${name}-${number}`;
-    const record = prepare_member_request(room_id, `add:${name}:${access}`, { name: instance, access, adapter: "", session_mode: "new" }, { project_access });
+    const record = prepare_member_request(room_id, `add:${name}:${access}`, { name: instance, access, adapter: "", session_mode: "new" }, { project_access, session_id: session_id.trim() });
     let result;
     if (access === "runner") {
       const draft = launch_options();
       const participants = { ...draft.participants, [record.member.name]: { ...draft.participants?.[name],
-        ...draft.participants?.[record.member.name], project_access: record.options?.project_access || "read" } };
+        ...draft.participants?.[record.member.name], project_access: record.options?.project_access || "read",
+        // An existing conversation joins with its own context; the runner resumes it instead of starting a new one.
+        ...(record.options?.session_id ? { session_id: record.options.session_id } : {}) } };
       if (participants[record.member.name].adapter === "api") participants[record.member.name].project_access = "read";
       result = await local_launch_request("room-member", { room_id, token, action: "add", name: record.member.name, access,
         member_token: record.member.token, participants, cwd: draft.cwd });
@@ -945,6 +947,7 @@ async function invite_member({ name, access, project_access = "read" }) {
     if (state.room?.id === room_id) {
       state.free_notice = access === "online" ? `${record.member.name} 已加入，阅读通知与真实回答由你或授权主持人转交。`
         : access === "manual" ? `${record.member.name} 已加入；在成员菜单下载私有配置、复制参与说明，再交给它的本地会话。`
+          : record.options?.session_id ? `${record.member.name} 已接入原会话；它工作时请不要在原窗口继续操作。`
           : state.room.mode === "free" ? `${record.member.name} 已加入，之后点名它即会由本机服务唤醒。`
             : `${record.member.name} 已加入讨论，主持人会重新安排发言。`;
       await refresh_room();
@@ -1735,6 +1738,12 @@ function launch_summary(name) {
     session: profile.session_id ? "复用指定会话" : "新建会话",
     cwd: !cli_directory && profile.session_id ? "沿用指定会话的目录"
       : directory || (cli_directory ? "本次讨论的私有目录" : "由 App 项目确定"), project, access };
+}
+
+/** Clients whose existing conversation the runner can resume by ID; agy and API always start their own. */
+const SESSION_CLIENTS = ["codex_cli", "codex", "claude"];
+function launch_can_bind_session(name, launch = state.launch) {
+  return SESSION_CLIENTS.includes(launch.profiles[name]?.adapter);
 }
 
 /** Only native CLI adapters expose a project read/write choice in this page. */
@@ -2891,7 +2900,7 @@ function change_view_theme(theme) {
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
   write_launch: write_launch_field, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
-  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, launch_summary, launch_can_set_access, pick_launch_directory, restore_launch_profile, reset_create_form, empty_discussion_message,
+  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, launch_summary, launch_can_set_access, launch_can_bind_session, pick_launch_directory, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, platform_of, execute: execute_view_action, theme: change_view_theme,

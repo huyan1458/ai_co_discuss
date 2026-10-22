@@ -101,7 +101,7 @@ const expert_container = "topic-expert-modes";
 const experts = Object.keys(bridge.identities).filter((name) => name !== "用户");
 const participants = Object.keys(bridge.identities).map((value) => ({ value, label: bridge.display_name(value) }));
 const phases = Object.entries(bridge.phases).map(([value, label]) => ({ value, label }));
-const expert_modes = [{ value: "none", label: "不参与" }, { value: "cli", label: "本地 AI · 读写" }, { value: "online", label: "在线 AI · 只读" }];
+const expert_modes = [{ value: "none", label: "不参与" }, { value: "cli", label: "本地 AI · 自行发言" }, { value: "online", label: "在线 AI · 由人代发" }];
 const details_open = ref(false);
 const limits_locked = computed(() => !["preparing", "paused"].includes(view.value.room?.phase));
 const limit_fields = [{ key: 'max_rounds', label: '讨论轮次上限', min: 0, max: 100 }, { key: 'max_minutes', label: '总时长（分钟）', min: 0, max: 1440 }, { key: 'execution_minutes', label: '单次 AI 执行（分钟，仅自动）', min: 0, max: 60 }];

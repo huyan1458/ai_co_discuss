@@ -43,8 +43,9 @@ const record = (name) => (room.value.members || []).find((member) => member.name
 const can_invite = computed(() => automatic.value && !settled.value);
 const invite_name = ref("");
 const invite_project_access = ref("read");
+const invite_session = ref("");
 const invite_choices = computed(() => Object.keys(bridge.launch_clients).map((name) => ({ label: bridge.display_name(name), value: name })));
-watch(() => room.value.id, () => { invite_name.value = ""; invite_project_access.value = "read"; });
+watch(() => room.value.id, () => { invite_name.value = ""; invite_project_access.value = "read"; invite_session.value = ""; });
 const focus = computed(() => turn.value?.question || room.value.focus || room.value.goal || "");
 const focus_long = computed(() => focus.value.length > FOCUS_PREVIEW_LENGTH);
 const timings = computed(() => runtime.value.timings || { items: [], totals: {}, count: 0 });
@@ -137,8 +138,9 @@ function member_menu(member) {
 
 /** Invite through the local service, which configures the expert before the room admits it. */
 async function invite() {
-  await act("invite_member", { name: invite_name.value, access: "runner", project_access: invite_project_access.value });
-  if (!view.value.free_error) invite_name.value = "";
+  await act("invite_member", { name: invite_name.value, access: "runner", project_access: invite_project_access.value,
+    session_id: bridge.launch_can_bind_session(invite_name.value, view.value.launch) ? invite_session.value : "" });
+  if (!view.value.free_error) { invite_name.value = ""; invite_session.value = ""; }
 }
 
 /** Open the participant's connection editor without leaving the discussion. */
@@ -229,9 +231,11 @@ async function finish(action) {
         <USelect v-model="invite_name" :items="invite_choices" placeholder="邀请 AI 加入讨论" size="sm" class="min-w-0 flex-1" />
         <UButton type="submit" icon="i-lucide-user-plus" label="邀请" size="sm" color="neutral" variant="outline" :disabled="!invite_name || !view.launch.available" :loading="pending === 'invite_member'" />
         <USelect v-if="invite_name && bridge.launch_can_set_access(invite_name, view.launch)" v-model="invite_project_access" :items="[{ label: '项目文件只读', value: 'read' }, { label: '项目文件可写', value: 'write' }]" aria-label="受邀专家的项目文件权限" size="sm" class="w-full" />
+        <UInput v-if="invite_name && bridge.launch_can_bind_session(invite_name, view.launch)" v-model="invite_session" placeholder="已有会话 ID（可选，留空则新建）" title="在原会话中用 /status 查看，或直接问它当前会话 ID；Codex App 填聊天 ID" aria-label="受邀成员的已有会话 ID" size="sm" class="w-full" />
       </form>
+      <p v-if="can_invite && invite_name && invite_session.trim()" class="pb-free-note">将续接这个原会话，保留它原有的上下文；它工作时请不要在原窗口继续操作。</p>
       <p v-if="can_invite && !view.launch.available" class="pb-free-note">邀请需要本机服务，请在运行 AI 的电脑打开本机网站。</p>
-      <p v-else-if="can_invite" class="pb-free-note">新专家沿用本机软件配置，讨论不中断；主持人会重新安排发言。</p>
+      <p v-else-if="can_invite" class="pb-free-note">新专家沿用本机软件配置，讨论不中断；主持人会重新安排发言。填写已有会话 ID 可请一个带着自己上下文的原会话加入。</p>
     </section>
     <section v-if="has_actions" class="pb-actions" aria-label="操作">
       <UButton v-if="can_restart" icon="i-lucide-rotate-ccw" label="重启" size="sm" color="neutral" variant="outline" class="pb-action pb-restart" title="原安排重新交给对应 AI，需本机接入程序在运行" :loading="pending === 'restart_discussion'" @click="act('restart_discussion')" />

@@ -488,18 +488,20 @@ function expert_card_fixture() {
     cleanup: () => cleanups.forEach((callback) => callback()) };
 }
 
-test('expert card offers project permissions only for CLI and shows API and web experts as read-only', () => {
+test('expert card offers project permissions only for CLI and shows that API and web experts never see project files', () => {
   const f = expert_card_fixture();
+  const project = () => vm.runInContext('facts.value.find(fact => fact.label === "项目").value', f.context);
   f.view.value.launch.workspace = { project_access: 'write' };
   assert.equal(vm.runInContext('sets_access.value', f.context), true);
   f.view.value.launch.profiles.Codex = { adapter: 'api', project_access: 'write' };
   assert.equal(vm.runInContext('sets_access.value', f.context), false);
-  assert.equal(vm.runInContext('facts.value.find(fact => fact.label === "项目").value', f.context), '只读');
+  assert.equal(project(), '不访问');
   f.view.value.launch.profiles.Codex.adapter = 'codex';
   assert.equal(vm.runInContext('sets_access.value', f.context), false);
+  assert.equal(project(), '由软件设置', 'an App keeps its own file permissions');
   assert.ok(vm.runInContext('connection.value.length', f.context) > 0, 'App connection fields remain available');
   f.props.mode = 'online';
-  assert.equal(vm.runInContext('facts.value.find(fact => fact.label === "项目").value', f.context), '只读');
+  assert.equal(project(), '不访问');
   f.cleanup();
 });
 
@@ -607,10 +609,10 @@ test("each automatic CLI card sets its own project access and asks only for a mi
   view.value.launch.profiles.Codex.project_access = "write";
   assert.equal(fact("项目"), "可写");
   props.mode = "online";
-  assert.equal(fact("项目"), "只读", "online experts never get write access");
+  assert.equal(fact("项目"), "不访问", "web members never see project files");
   props.mode = "cli";
   props.mode = "manual";
-  assert.equal(fact("项目"), undefined, "manual sessions keep the permissions of their own software");
+  assert.equal(fact("项目"), "由软件设置", "manual sessions keep the permissions of their own software");
   props.mode = "cli";
   assert.deepEqual(Array.from(vm.runInContext("connection.value", context), item => item.field), ["executable"]);
   context.flip(true);
@@ -1518,6 +1520,11 @@ test("automatic invitations keep explicit project permissions across an uncertai
   assert.equal(inputs[0].payload.participants.Claude.model, 'sonnet');
   await f.context.invite_member({ name: 'Codex', access: 'runner' });
   assert.equal(inputs[2].payload.participants.Codex.project_access, 'read');
+  assert.equal(inputs[2].payload.participants.Codex.session_id, undefined, 'a blank session field starts a new conversation');
+  f.context.test_state.room.mode = 'brainstorm';
+  await f.context.invite_member({ name: 'Codex', access: 'runner', session_id: ' thread-from-history ' });
+  assert.equal(inputs[3].payload.participants[inputs[3].payload.name].session_id, 'thread-from-history', 'the runner resumes the existing conversation');
+  assert.match(f.context.test_state.free_notice, /原会话/);
 });
 
 test("topic retry retains a pending credential after live refresh has already revealed the new member", () => {

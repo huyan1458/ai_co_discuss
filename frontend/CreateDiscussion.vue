@@ -80,7 +80,7 @@ function set_expert_mode(name, mode) {
 
 /** Explain delivery separately from whether the launcher has software configured. */
 function expert_status(name) {
-  if (selected.value[name] === "online") return { text: "网页代发，只读", tone: "muted" };
+  if (selected.value[name] === "online") return { text: "网页代发，由你转发回答", tone: "muted" };
   if (selected.value[name] === "manual") return { text: "手动接入，自行提交", tone: "muted" };
   const api = view.value.launch.profiles[name]?.adapter === "api";
   return launch_ready(name) ? { text: api ? "已配置 API" : "已配置本机软件", tone: "ready" } : { text: api ? "待补齐 API 配置" : "待补齐接入配置", tone: "warn" };
@@ -157,7 +157,7 @@ const summary = computed(() => {
 
       <section class="create-section">
         <h3><span>2</span>谁来参与</h3>
-        <p class="fine-print create-hint">{{ free ? '每位成员单独选接入：本机唤醒（App / CLI / API）、手动接入（凭证交给你自己的会话）或网页代发（只读）。' : '讨论全程由本机服务唤醒 AI，可用 App、CLI 或 API；手动接入和网页 AI 请用自由协作。' }}</p>
+        <p class="fine-print create-hint">{{ free ? '每位成员单独选接入：本机唤醒（App / CLI / API）、手动接入（凭证交给你自己的会话）或网页代发（由你转发回答）。' : '讨论全程由本机服务唤醒 AI，可用 App、CLI 或 API；手动接入和网页 AI 请用自由协作。' }}</p>
         <div v-if="selected_names.length" class="create-experts" role="group" aria-label="参与的 AI">
           <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :choices="access_choices(name)"
             :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)"
