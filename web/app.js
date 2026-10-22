@@ -1607,6 +1607,14 @@ function participant_model(name, room, saved) {
   return `${model} · ${effort}`;
 }
 
+/** Label how a member answers: the registered adapter says API / App; other locally woken members are CLI. */
+function participant_access(name, room) {
+  const adapter = (room?.members || []).find(member => member.name === name)?.adapter;
+  if (adapter === "api") return "API";
+  if (["codex", "antigravity"].includes(adapter)) return "App";
+  return room?.experts?.[name] === "cli" ? "CLI" : "在线";
+}
+
 // App and web clients keep model selection in the original conversation.
 const MODEL_CLIENTS = ["codex_cli", "claude", "antigravity_cli"];
 const MODEL_SOURCE_LABELS = { "codex-app-server": "来自 Codex CLI 模型列表", "claude-cli": "来自 Claude CLI 模型列表", "antigravity-cli": "来自 Antigravity CLI 模型列表" };
@@ -2995,7 +3003,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
   request: request_json, identities: IDENTITIES, display_name, sources: SOURCE_LABELS, phases: PHASE_LABELS,
-  runtime_label, execution_label, limits_label, participant_model,
+  runtime_label, execution_label, limits_label, participant_model, participant_access,
   turns: TURN_LABELS, turn_label, turn_guidance, floor_status, progress_round, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();

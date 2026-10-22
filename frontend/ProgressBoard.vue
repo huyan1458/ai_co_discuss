@@ -138,7 +138,7 @@ function member_status(name) {
   if (execution?.stale) { text = "疑似卡住（租约已过期）"; tone = "warning"; }
   return { name, is_host, text, tone, failures: execution?.failures || 0, result: execution?.status === "failed" ? execution.result : "",
     model: bridge.participant_model(name, room.value, view.value.launch.room_models),
-    session: execution?.session_id || "", mode: room.value.experts?.[name] === "cli" ? "CLI" : "在线" };
+    session: execution?.session_id || "", mode: bridge.participant_access(name, room.value) };
 }
 
 /** Menu entries for one participant; the session ID stays out of the row until needed. */

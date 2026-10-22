@@ -33,7 +33,7 @@ const answer_previews = computed(() => new Map(view.value.messages.map((message)
 const topic = computed(() => {
   const value = room.value || {};
   const request = value.user_request?.trim() ? { label: "用户原文", text: value.user_request } : value.background?.trim() ? { label: "背景", text: value.background } : null;
-  const experts = Object.entries(value.experts || {}).map(([name, mode]) => ({ name, mode: mode === "cli" ? "CLI" : "在线" }));
+  const experts = Object.entries(value.experts || {}).map(([name]) => ({ name, mode: bridge.participant_access(name, value) }));
   const limits = value.limits || {};
   const bounds = value.mode === "free" ? `自由协作 · 单次执行最多 ${value.free?.execution_minutes || 20} 分钟`
     : [limits.max_rounds ? `${limits.max_rounds} 轮` : "轮次不限", limits.max_minutes ? `${limits.max_minutes} 分钟` : "时长不限",

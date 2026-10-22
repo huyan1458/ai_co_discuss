@@ -41721,9 +41721,9 @@ var _H = {
 			} : e.background?.trim() ? {
 				label: "背景",
 				text: e.background
-			} : null, n = Object.entries(e.experts || {}).map(([e, t]) => ({
-				name: e,
-				mode: t === "cli" ? "CLI" : "在线"
+			} : null, n = Object.entries(e.experts || {}).map(([t]) => ({
+				name: t,
+				mode: s.participant_access(t, e)
 			})), r = e.limits || {}, i = e.mode === "free" ? `自由协作 · 单次执行最多 ${e.free?.execution_minutes || 20} 分钟` : [
 				r.max_rounds ? `${r.max_rounds} 轮` : "轮次不限",
 				r.max_minutes ? `${r.max_minutes} 分钟` : "时长不限",
@@ -43079,7 +43079,7 @@ var _H = {
 			], 2);
 		};
 	}
-}, [["__scopeId", "data-v-05c91cfd"]]), FW = {
+}, [["__scopeId", "data-v-cee427d4"]]), FW = {
 	slots: {
 		root: "relative inline-flex items-center",
 		base: ["rounded-md", "transition-colors"],
@@ -47758,9 +47758,10 @@ var MK = /*#__PURE__*/ EH({
 				pe.value = e.message;
 			}
 		}
+		let Ce = (e) => e.preventDefault();
 		return (t, c) => {
-			let x = YV, S = bH, le = MA, de = zV, fe = sA, ye = HV, Ce = dK, we = WV, Te = lK;
-			return U(), G(Te, {
+			let x = YV, S = bH, le = MA, de = zV, fe = sA, ye = HV, we = dK, Te = WV, Ee = lK;
+			return U(), G(Ee, {
 				open: d.value,
 				"onUpdate:open": c[24] ||= (e) => d.value = e,
 				title: f[a.value] || "讨论",
@@ -47774,6 +47775,10 @@ var MK = /*#__PURE__*/ EH({
 					],
 					body: "dialog-body"
 				},
+				content: a.value === "create" ? {
+					onPointerDownOutside: Ce,
+					onInteractOutside: Ce
+				} : void 0,
 				"onAfter:leave": xe
 			}, {
 				body: L(() => [a.value === "archives" ? (U(), W("section", $q, [
@@ -48168,7 +48173,7 @@ var MK = /*#__PURE__*/ EH({
 						c[32] ||= K("p", { class: "fine-print" }, "轮次、总时长、单次执行留空或 0 表示不限。一轮指每位专家各完成一次观点；首次进入讨论阶段或创建安排后计时，暂停期间不计时。收束预留计入总时长。", -1),
 						ce.value ? (U(), W("p", MJ, "修改上限前，请先把阶段保存为“已暂停”。")) : Y("", !0)
 					]),
-					q(Ce, {
+					q(we, {
 						open: se.value,
 						"onUpdate:open": c[19] ||= (e) => se.value = e,
 						class: "advanced-fields"
@@ -48281,7 +48286,7 @@ var MK = /*#__PURE__*/ EH({
 					K("div", zJ, [
 						K("strong", null, P(I(s).display_name(j.value.author)), 1),
 						K("span", null, "#" + P(j.value.id), 1),
-						q(we, {
+						q(Te, {
 							color: "neutral",
 							variant: "subtle"
 						}, {
@@ -48312,7 +48317,8 @@ var MK = /*#__PURE__*/ EH({
 				"open",
 				"title",
 				"description",
-				"ui"
+				"ui",
+				"content"
 			]);
 		};
 	}
@@ -49722,7 +49728,7 @@ var MK = /*#__PURE__*/ EH({
 				result: t?.status === "failed" ? t.result : "",
 				model: r.participant_model(e, m.value, n.value.launch.room_models),
 				session: t?.session_id || "",
-				mode: m.value.experts?.[e] === "cli" ? "CLI" : "在线"
+				mode: r.participant_access(e, m.value)
 			};
 		}
 		function ye(e) {
@@ -50175,7 +50181,7 @@ var MK = /*#__PURE__*/ EH({
 			], 2);
 		};
 	}
-}, [["__scopeId", "data-v-45999eda"]]), bX = { class: "progress-panel-anchor" }, xX = ["aria-expanded", "aria-label"], SX = { class: "progress-chip-text" }, CX = { class: "progress-chip-rounds" }, wX = {
+}, [["__scopeId", "data-v-6ae9a622"]]), bX = { class: "progress-panel-anchor" }, xX = ["aria-expanded", "aria-label"], SX = { class: "progress-chip-text" }, CX = { class: "progress-chip-rounds" }, wX = {
 	__name: "ProgressPanel",
 	setup(e) {
 		let { view: t, bridge: n } = xr("discussion"), r = /* @__PURE__ */ F(!1), i = Z(() => t.value.room), a = Z(() => i.value.limits || {}), o = Z(() => {
