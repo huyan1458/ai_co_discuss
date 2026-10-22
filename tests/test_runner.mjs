@@ -422,6 +422,21 @@ function fake_cli(events, options = {}) {
 }
 
 /** Represent the documented startup and terminal events of the two CLI protocols. */
+test('an agy turn ended by a denied command names the command in the pause reason', async t => {
+  const f = await fixture(t);
+  f.config.participants.Codex = { adapter: 'antigravity_cli', executable: process.execPath };
+  const denied = { event: 'step_update', step_update: { state: 'ERROR', step_type: 'tool', tool_name: 'run_command',
+    tool_info: { parameters: { CommandLine: 'Get-ChildItem -Recurse' }, error: { type: 'TOOL_ERROR', message: 'permission check failed: user denied permission' } } } };
+  const events = [{ event: 'init', conversation_id: 'agy-session' }, denied,
+    { event: 'result', result: { conversation_id: 'agy-session', status: 'SUCCESS', response: '' } }];
+  const process_fixture = fake_cli(events);
+  const runner = new DiscussionRunner(f.config, f.store,
+    (config, binding, task) => deliver_task(config, binding, task, process_fixture.spawn_process, join(f.config.directory, 'user')));
+  await runner.tick(); await process_fixture.calls[0].closed; await runner.tick();
+  assert.equal(f.event.status, 'failed');
+  assert.match(f.event.result, /会话已结束，但未保存本次结果：运行了未授权的命令「Get-ChildItem -Recurse」/);
+});
+
 function cli_events(adapter, session_id = 'actual-cli-session') {
   return adapter === 'codex_cli'
     ? [{ type: 'thread.started', thread_id: session_id }, { type: 'item.completed', item: { text: '中文' } }, { type: 'turn.completed' }]

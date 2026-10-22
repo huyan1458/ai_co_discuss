@@ -380,6 +380,12 @@ function cli_event(adapter, state, event, task) {
     return;
   }
   if (event.event === 'init') bind_cli_session(state, event.conversation_id, task);
+  const step = event.step_update;
+  // Headless agy ends its turn when a command needs approval; remember which one so the pause can name it.
+  if (step?.state === 'ERROR' && /permission/.test(step.tool_info?.error?.message || '')) {
+    const command = step.tool_info.parameters?.CommandLine || step.tool_name || '';
+    state.denial = `运行了未授权的命令「${String(command).slice(0, 120)}」，无人值守模式下无法确认权限而被自动拒绝，随后会话结束`;
+  }
   if (event.event === 'result') {
     const result = event.result || {};
     if (result.conversation_id) bind_cli_session(state, result.conversation_id, task);
@@ -443,7 +449,7 @@ function monitor_cli(child, config, binding, task) {
     if (!state.spawned) return;
     const error = cli_exit_error(state, code, signal);
     if (error) task.on_failure(error);
-    else task.on_exit?.();
+    else task.on_exit?.(state.denial);
   });
   return state;
 }

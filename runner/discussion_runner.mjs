@@ -197,7 +197,7 @@ export function task_files(config, event, token, binding) {
     project_name: adapter.project_name || null, cwd: adapter.cwd || null, project_access: adapter.project_access,
     draft_directory,
     role: event.role, turn_id: event.turn_id, skills, cli, subcommands: TASK_SUBCOMMANDS, access_file: access_path,
-    instructions: `读取指定技能；网站命令只用 ${cli} 的 subcommands 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口；${auto_enter ? '接入程序已进入本次执行，不要再执行 execution enter。' : `使用 ${cli} execution enter 房间 执行编号 --access-file 凭据路径 进入。进入成功后才处理本次安排；`}凭据文件由 CLI 内部读取，不要打印或读取其 token。每次业务写入都带 --access-file。答案草稿只保存到 draft_directory，不修改任务、凭据、日志或调度数据库；${project_rule}只处理本次工作，不建定时任务。主持创建下一安排或收束即结束，专家提交原文后结束。无效或已进入的任务不要重复执行。` });
+    instructions: `${adapter.adapter === 'antigravity_cli' ? `无人值守下 run_command 只能运行 ${cli} 的 subcommands 子命令，其他命令会被自动拒绝并使会话直接结束；浏览项目用 list_dir、find_by_name、grep_search、view_file。` : ''}读取指定技能；网站命令只用 ${cli} 的 subcommands 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口；${auto_enter ? '接入程序已进入本次执行，不要再执行 execution enter。' : `使用 ${cli} execution enter 房间 执行编号 --access-file 凭据路径 进入。进入成功后才处理本次安排；`}凭据文件由 CLI 内部读取，不要打印或读取其 token。每次业务写入都带 --access-file。答案草稿只保存到 draft_directory，不修改任务、凭据、日志或调度数据库；${project_rule}只处理本次工作，不建定时任务。主持创建下一安排或收束即结束，专家提交原文后结束。无效或已进入的任务不要重复执行。` });
   const read_rule = windows_rg() ? '读取含中文的技能或文本文件时用 rg --encoding utf-8 . 文件路径，不用 Get-Content（Windows PowerShell 会按系统编码读出乱码，需要反复重试）。' : '';
   const scope = `本次只放行任务内 subcommands 列出的 ${cli} 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口。任务内 cwd 是讨论项目目录；${project_rule}项目读写仍受软件实际权限和议题授权约束。不读取凭据内容。${read_rule}`;
   const plan_rule = event.role === 'host' ? '安排专家回应时先写发言计划，用 turn create --plan-file 一次排满本轮每位专家，不要每次只排一位。' : '';
@@ -217,7 +217,7 @@ export class DiscussionRunner {
     this.store = store;
     this.deliver = deliver;
     this.children = new Set();
-    this.exited = new Set();
+    this.exited = new Map();
     this.running = new Map();
     this.seen = new Set();
     this.blocked = new Set();
@@ -262,7 +262,7 @@ export class DiscussionRunner {
         on_process: child => this.track(event.participant, child),
         on_output: (path, chunk) => appendFileSync(path, chunk, { mode: 0o600 }),
         on_failure: error => { try { this.store.record(row.id, { error }); } catch { /* Store may already be closed at shutdown. */ } },
-        on_exit: () => this.exited.add(row.id),
+        on_exit: detail => this.exited.set(row.id, detail || ''),
       });
       if (result.session_id) this.store.bind(event.participant, result.session_id);
       this.store.record(row.id, { status: result.status, receipt: result.receipt || '' });
@@ -311,7 +311,7 @@ export class DiscussionRunner {
     if (this.exited.has(row.id) && ['dispatched', 'started'].includes(event.status)) {
       // A business write may have just completed the task; recheck before declaring a silent exit.
       const latest = await api(this.config, `/events/${row.id}`, { action: 'view' });
-      if (['dispatched', 'started'].includes(latest.status)) return this.fail(row, `${event.participant} 会话已结束，但未保存本次结果`);
+      if (['dispatched', 'started'].includes(latest.status)) return this.fail(row, `${event.participant} 会话已结束，但未保存本次结果${this.exited.get(row.id) ? `：${this.exited.get(row.id)}` : ''}`);
       return this.reconcile(row, latest);
     }
     if (event.status === 'started' && event.lease_until <= Math.floor(Date.now() / 1000)) return this.fail(row, '执行租约到期；旧会话不能继续写入');
