@@ -42,6 +42,8 @@ export function service_home() {
 /** Move a stopped service directory and rewrite absolute paths that pointed into it; a running one stays put. */
 export function migrate_service_home(from, to) {
   if (service_pid(from) || service_pid(join(from, 'local'))) return false;
+  // An MSIX-redirected view would move only the app's private copy; leave that to an ordinary terminal.
+  try { assert_shared_home(from); } catch { return false; }
   try { renameSync(from, to); }
   catch { return existsSync(to); }
   try {
