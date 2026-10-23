@@ -2981,11 +2981,13 @@ async function execute_view_action(name, value) {
     prepare_brainstorm, return_conclusion, convert_suggestion,
     busy: () => { throw new Error("上一个操作仍在处理中，请稍候；长时间无响应请刷新页面"); },
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };
+  if (!["refresh", "busy"].includes(name)) state.free_error = "";
   try {
     await actions[name](value);
     return true;
   } catch (error) {
     if (["download_member_access", "copy_member_join"].includes(name)) state.access_error = error.message;
+    else if (!state.free_error) state.free_error = error.message;
     show_toast(error.message, true);
     return false;
   } finally { publish_view(); }
