@@ -277,7 +277,31 @@ test('an interjection the provider assigns to one expert is answered next, befor
   assert.deepEqual(room.queued_turns.map(turn => turn.expert), ['Qwen', 'Grok']);
   assert.deepEqual(Object.keys(r.sent[0].questions.handling.criteria), ['DeepSeek', 'Qwen', '__host__', '__note__']);
   assert.equal(r.host_turns(), 2);
-  assert.deepEqual(room.scheduler_decisions.map(item => [item.kind, item.applied, item.after_message_id]), [['interjection', 1, posted.message.id]]);
+  // The record closes the card that just finished speaking, not the user's message.
+  const answer = (await api(r.config, '/messages')).messages.find(message => message.author === 'DeepSeek');
+  assert.deepEqual(room.scheduler_decisions.map(item => [item.kind, item.applied, item.after_message_id]), [['interjection', 1, answer.id]]);
+});
+
+test('a roster change mid-round restores the voided plan without waking the host', async t => {
+  let release, deepseek_started = false;
+  const held = new Promise(resolve => { release = resolve; });
+  const r = await smart_discussion(t, { named_followup: false, order: ['DeepSeek', 'Qwen', 'Grok'],
+    expert_reply: async (call, room) => {
+      if (room.current_turn.expert === 'DeepSeek') { deepseek_started = true; await held; }
+      return tool_reply(call, 'submit_opinion', { text: `${room.current_turn.expert} 的观点。`, summary: '摘要。' });
+    }, decisions: [] });
+  await until(async () => deepseek_started, () => r.runner.tick());
+  // Qwen steps away while DeepSeek speaks: the website voids the queued turns.
+  const qwen = (await api(r.config, '')).members.find(member => member.name === 'Qwen');
+  await api(r.config, `/members/${qwen.id}`, { action: 'away' });
+  assert.deepEqual((await api(r.config, '')).queued_turns, []);
+  release();
+  await until(async () => (await api(r.config, '')).current_turn?.expert === 'Grok', () => r.runner.tick());
+  const room = await api(r.config, '');
+  assert.equal(room.current_turn.question, '请独立论证。');
+  assert.equal(r.host_turns(), 2, 'the host is not woken to re-plan');
+  assert.equal(r.sent.length, 0, 'restoring a plan needs no model call');
+  assert.deepEqual(room.scheduler_decisions.map(item => [item.label, item.applied, item.confidence]), [['成员有变化：补回原计划（Grok）', 1, null]]);
 });
 
 test('free-room API replies bind to their reserved execution and complete the request', async t => {

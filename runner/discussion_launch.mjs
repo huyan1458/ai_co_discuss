@@ -11,7 +11,7 @@ import { parseArgs } from 'node:util';
 import { atomic_json } from './discussion_adapters.mjs';
 import { software_models } from './discussion_models.mjs';
 import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
-import { SCHEDULER_PROVIDERS } from './scheduler.mjs';
+import { SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
 import { acquire_lock, api, CODEX_ADAPTERS, DiscussionStore, service_drafts, task_files, validate_config } from './discussion_runner.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 
@@ -46,6 +46,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch models --file FILE
       codiscuss launch api-key --file FILE
       codiscuss launch api-check --file FILE
+      codiscuss launch scheduler-check --file FILE
       codiscuss launch room-member --file FILE
       codiscuss launch pick-directory
 
@@ -56,6 +57,7 @@ room-models 只读指定 site、room_id 的本机登记模型与思考强度，�
 models 按 adapter、executable 或 API profile 读取模型目录，不启动讨论或生成回答。
 api-key 将 base_url、api_key 保存于本机私有目录，只返回 api_key_ref。
 api-check 用 API profile 向模型发送一次极短请求，核对地址、密钥、协议与模型是否可用。
+scheduler-check 用智能调度配置（provider、model、api_key_ref）向决策模型发送一道是非题，核对供应商、模型与密钥是否可用。
 pick-directory 在本机弹出系统目录选择窗口，返回所选路径；取消时不返回路径。
 room-member 为运行中的自由房间或讨论邀请、请回一位成员（讨论只接受本机唤醒的成员）；须提供 site、room_id、token、action（add/rejoin）、name。
 JSON 指定 site、entry（conversation/web）、room（建房内容，含 submission_id）
@@ -409,6 +411,22 @@ export async function room_member(home, raw, locked = false) {
   } finally { release(); }
 }
 
+/**
+ * Register a manual Claude expert's own session as a hosted participant, so the service resumes it for later turns.
+ * Throws when the local Claude software is not configured or the session is not found on this machine; the member then stays manual.
+ */
+export function adopt_member_profile(home, path, name, session_id) {
+  const release = acquire_lock(join(dirname(path), 'configuration-edit'));
+  try {
+    const config = configuration_snapshot(path).config;
+    const input = { cwd: config.cwd, participants: { [name]: { adapter: 'claude', session_id } } };
+    const profile = borrowed_session(name, participant_profile(name, launch_settings(home).participants, input, false), config.cwd);
+    const next = { ...config, participants: { ...config.participants, [name]: profile } };
+    validate_config(next, dirname(path));
+    atomic_json(path, next);
+  } finally { release(); }
+}
+
 /** Stable signatures make changed retry requests explicit without putting credentials in receipts. */
 function signature(value) {
   if (Array.isArray(value)) return `[${value.map(signature).join(',')}]`;
@@ -718,6 +736,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     scheduler_providers: SCHEDULER_PROVIDERS, api_keys: saved_api_keys(home) };
   else if (positionals[0] === 'api-key' && input) result = save_api_key(home, input);
   else if (positionals[0] === 'api-check' && input) result = await api_check(home, input);
+  else if (positionals[0] === 'scheduler-check' && input) result = await scheduler_check(home, input);
   else if (positionals[0] === 'room-models' && input) result = room_models(home, input);
   else if (positionals[0] === 'models' && input?.adapter === 'api') result = await api_models(home, input);
   else if (positionals[0] === 'models' && input) {

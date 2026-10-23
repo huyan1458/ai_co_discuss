@@ -559,6 +559,33 @@ class RuntimeTests(unittest.TestCase):
         access = {m["name"]: m["access"] for m in self.request(self.path)[1]["members"]}
         self.assertEqual((access["Qwen"], access["Claude"]), ("manual", "runner"))
 
+    def test_manual_expert_reports_its_session_and_the_owner_adopts_it_once(self):
+        """The session a manual expert posts from is kept for the local service; only a matching report allows hosting it."""
+        self.start()
+        manual = {"name": "Qwen", "token": self.member_tokens["Qwen"], "access": "manual", "adapter": ""}
+        room = self.request(self.path + "/members", manual, self.owner)[1]
+        member_id = next(m for m in room["members"] if m["name"] == "Qwen")["id"]
+        member_path = f"{self.path}/members/{member_id}"
+        adopt = {"action": "adopt", "adapter": "claude", "session_id": "5f0d2c1e-1111-2222-3333-444455556666"}
+        self.assertEqual(self.request(member_path, adopt, self.owner)[0], 400)
+        host_token = self.enter(self.events()[0])
+        turn = self.request(self.path + "/turns", {"actor": "Codex", "expert": "Qwen", "question": "给出判断",
+                                                   "submission_id": "adopt-turn"}, host_token)[1]["turn"]
+        self.take_floor("Qwen", self.member_tokens["Qwen"])
+        status, saved = self.request(self.path + "/messages", {"author": "Qwen", "source": "cli", "kind": "opinion", "turn_id": turn["id"],
+            "text": "实际回答", "summary": "摘要", "submission_id": "adopt-answer", "session_id": adopt["session_id"], "session_client": "claude"},
+            self.member_tokens["Qwen"])
+        self.assertEqual(status, 201, saved)
+        reported = next(m for m in self.request(self.path)[1]["members"] if m["name"] == "Qwen")["reported_session"]
+        self.assertEqual(reported, adopt["session_id"])
+        self.assertEqual(self.request(member_path, {**adopt, "session_id": "other-session-0000"}, self.owner)[0], 400)
+        self.assertNotEqual(self.request(member_path, adopt, self.member_tokens["Qwen"])[0], 200)
+        status, adopted = self.request(member_path, adopt, self.owner)
+        self.assertEqual(status, 200, adopted)
+        member = next(m for m in adopted["members"] if m["name"] == "Qwen")
+        self.assertEqual((member["access"], member["adapter"], member["session_mode"], member["reported_session"]), ("runner", "claude", "borrowed", ""))
+        self.assertEqual(self.request(member_path, adopt, self.owner)[0], 400)
+
     def test_manual_host_is_rejected_in_a_woken_discussion(self):
         """The host is continued by the local service, so only experts may be manual."""
         members = [{"name": "Codex", "token": uuid.uuid4().hex, "access": "manual"},

@@ -53,6 +53,8 @@ const invite_session = ref("");
 // A discussion's invited expert is woken by the local service or answers by hand with its own credential.
 const invite_mode = ref("cli");
 const inviting = ref(false);
+// Instance name of a just-invited manual member; the dialog then shows its start step.
+const invited_manual = ref("");
 // Board errors from earlier actions stay out of the dialog until this invite is submitted.
 const invite_tried = ref(false);
 const invite_choices = computed(() => Object.keys(bridge.launch_clients));
@@ -128,7 +130,7 @@ function member_status(name) {
   const queue_index = (room.value.queued_turns || []).findIndex((item) => item.expert === name);
   if (turn.value?.expert === name) {
     const round = room.value.rounds?.at(-1)?.completed === false ? room.value.rounds.at(-1).number : (room.value.completed_rounds || 0) + 1;
-    text = `第 ${round} 轮 · ${live && execution.turn_id === turn.value.id ? live : inactive.value ? "原安排保留" : record(name)?.access === "manual" ? "等待其手动提交" : "轮到发言"}`;
+    text = `第 ${round} 轮 · ${live && execution.turn_id === turn.value.id ? live : inactive.value ? "原安排保留" : record(name)?.access === "manual" ? "轮到它了，请去它的 AI 会话触发" : "轮到发言"}`;
     tone = inactive.value ? "neutral" : "primary";
   } else if (is_host && !turn.value && !inactive.value) {
     const duty = limits.value.closing ? "总结收尾中" : "安排下一步";
@@ -142,7 +144,7 @@ function member_status(name) {
   }
   if (execution?.status === "failed") { text = "执行失败"; tone = "error"; }
   if (execution?.stale) { text = "疑似卡住（租约已过期）"; tone = "warning"; }
-  return { name, is_host, text, tone, failures: execution?.failures || 0, result: execution?.status === "failed" ? execution.result : "",
+  return { name, is_host, text, tone, manual: record(name)?.access === "manual", failures: execution?.failures || 0, result: execution?.status === "failed" ? execution.result : "",
     model: bridge.participant_model(name, room.value, view.value.launch.room_models),
     session: execution?.session_id || "", mode: bridge.participant_access(name, room.value) };
 }
@@ -150,6 +152,7 @@ function member_status(name) {
 /** Menu entries for one participant; the session ID stays out of the row until needed. */
 function member_menu(member) {
   const items = member.session ? [{ label: "复制会话 ID", icon: "i-lucide-copy", onSelect: () => act("copy", member.session) }] : [];
+  if (record(member.name)?.access === "manual") items.push({ label: "复制启动指令（含凭证）", icon: "i-lucide-rocket", onSelect: () => act("copy_member_launch", member.name) });
   // A borrowed conversation already has its ID before the first successful execution records one.
   if (codex_instance(member.name) && (member.session || record(member.name)?.session_mode === "borrowed") && automatic.value && !settled.value && view.value.launch.available
     && !view.value.launch.remote && ["running", "paused"].includes(runtime.value.status)) {
@@ -175,6 +178,7 @@ function open_invite() {
   invite_session.value = "";
   invite_mode.value = "cli";
   invite_tried.value = false;
+  invited_manual.value = "";
   inviting.value = true;
 }
 
@@ -189,10 +193,15 @@ function pick_invite(name) {
 async function invite() {
   const profile = view.value.launch.profiles[invite_name.value] || {};
   invite_tried.value = true;
-  await act("invite_member", { name: invite_name.value, access: invite_mode.value === "manual" ? "manual" : "runner",
+  const manual = invite_mode.value === "manual";
+  const instance = invite_instance.value;
+  await act("invite_member", { name: invite_name.value, access: manual ? "manual" : "runner",
     project_access: profile.project_access || view.value.launch.workspace?.project_access || "read",
     session_id: bridge.launch_can_bind_session(invite_name.value, view.value.launch) ? invite_session.value : "" });
-  if (!view.value.free_error) inviting.value = false;
+  if (view.value.free_error) return;
+  // A manual member only starts when its launch instruction reaches the user's own AI session, so the dialog stays for that step.
+  if (manual) invited_manual.value = instance;
+  else inviting.value = false;
 }
 
 /** Open the participant's connection editor without leaving the discussion. */
@@ -268,6 +277,7 @@ async function finish(action) {
             <div v-if="member.model" class="pb-member-model" title="本场启动配置；默认模型与默认强度由对应软件决定">{{ member.model }}</div>
             <div v-if="record(member.name)?.session_mode === 'borrowed'" class="pb-member-model" title="续接你已有的会话；它工作时请不要在原窗口继续操作">借用已有会话</div>
             <div v-if="!settled" class="pb-member-status" :class="`is-${member.tone}`"><span class="pb-dot"></span>{{ member.text }}<small v-if="member.failures"> · 失败 {{ member.failures }} 次</small></div>
+            <button v-if="member.manual && !settled && can_control" type="button" class="pb-link" @click="act('copy_member_launch', member.name)"><UIcon name="i-lucide-rocket" />复制启动指令</button>
           </div>
           <UDropdownMenu v-if="member_menu(member).length" :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="`${member.name} 的更多操作`" /></UDropdownMenu>
         </li>
@@ -332,7 +342,22 @@ async function finish(action) {
     </UModal>
     <UModal v-model:open="inviting" title="邀请专家" description="新专家沿用本机软件配置或手动接入，讨论不中断；主持人会重新安排发言。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
       <template #body>
-        <form class="pb-invite" aria-label="邀请专家" @submit.prevent="invite">
+        <div v-if="invited_manual" class="pb-invite" aria-label="启动手动成员">
+          <p><strong>{{ invited_manual }}</strong> 已加入。要让它开始发言：</p>
+          <ol class="fine-print">
+            <li>点下方「复制启动指令」。</li>
+            <li>粘贴到你要用的 {{ bridge.platform_of(invited_manual) }} 会话。</li>
+            <li>它首次发言后，本机服务会自动接管这个会话，之后每轮自动唤醒；未被接管时，需你或该软件的定时任务触发。</li>
+          </ol>
+          <p class="fine-print">指令含该成员的凭证，只交给这个会话。暂时不用，可稍后在参与者列表里点它的「复制启动指令」；不想让它参与，选「暂离」或「移除」。</p>
+          <p v-if="view.access?.error" role="alert" class="pb-free-note is-error">{{ view.access.error }}</p>
+          <p v-else-if="view.access?.notice" role="status" class="pb-free-note">{{ view.access.notice }}</p>
+          <div class="pb-invite-footer">
+            <UButton label="稍后再复制" color="neutral" variant="ghost" @click="inviting = false" />
+            <UButton icon="i-lucide-rocket" label="复制启动指令" class="channel-primary-button" @click="act('copy_member_launch', invited_manual)" />
+          </div>
+        </div>
+        <form v-else class="pb-invite" aria-label="邀请专家" @submit.prevent="invite">
           <div class="pb-invite-library" role="group" aria-label="选择 AI">
             <button v-for="name in invite_choices" :key="name" type="button" :aria-pressed="invite_name === name" :title="invite_count(name) ? `已在场 ${invite_count(name)} 位 · 将添加新实例` : ''" @click="pick_invite(name)">
               <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="3xs" class="channel-avatar" :class="bridge.identities[name]?.style" />{{ name }}

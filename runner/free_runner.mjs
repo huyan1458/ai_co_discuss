@@ -179,7 +179,7 @@ export class FreeRoomRunner {
     const message = page.messages.find(item => item.id === request.message_id);
     if (!message) return;
     const decision = await route_free_message(this.config.api_home, this.config.scheduler,
-      { title: room.title, context: page.messages, message, host: host.name, members }, this.fetch);
+      { title: room.title, goal: room.goal, context: page.messages, message, host: host.name, members }, this.fetch);
     this.log(`智能调度 #${message.id}：${decision.member ? `推荐 ${decision.member}` : '不推荐，交主持人'}（选择 ${decision.choice ?? '-'}，置信度 ${decision.confidence ?? '-'}）`);
     if (!decision.member) return;
     await api(this.config, '/recommendations', { message_id: message.id, member_id: members.find(member => member.name === decision.member).id,

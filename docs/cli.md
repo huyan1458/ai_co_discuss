@@ -35,7 +35,7 @@ Bash 对应 `export DISCUSS_URL=http://127.0.0.1:8765`，CMD 对应 `set DISCUSS
 
 建房与更新资料支持 `--user-request` / `--user-request-file`，将用户原文与 `--background` 分开保存，各限 4000 字。`room brief` 返回两者，概要和通知不自动展开原文。
 
-`room create` 必须指定 `--access-file 私有文件`，CLI 在请求前原子保存建房编号、房主和各成员凭据，确认房间后另写各本地成员的独立文件，回执只返回 `member_access_files` 路径。结果不明时沿用同一文件、编号和创建参数；不能换文件重建。后续每次写入使用对应身份的文件，不能拿房主文件冒充成员；自动讨论使用本次任务文件中的执行凭据。文件含 `site`、`room`、`token`，CLI 检查站点与房间匹配。同样内容的单行 JSON 文本可放入环境变量 `DISCUSS_ACCESS`（或 `--access-file -` 从标准输入读取），未传 `--access-file` 时使用；成员菜单的“复制凭证文本”复制的就是这段文本，含 token，只交给该成员，不要写进命令行参数或回显。`--dry-run` 不生成或写入凭据，预览会隐藏凭据字段。
+`room create` 必须指定 `--access-file 私有文件`，CLI 在请求前原子保存建房编号、房主和各成员凭据，确认房间后另写各本地成员的独立文件，回执只返回 `member_access_files` 路径。结果不明时沿用同一文件、编号和创建参数；不能换文件重建。后续每次写入使用对应身份的文件，不能拿房主文件冒充成员；自动讨论使用本次任务文件中的执行凭据。文件含 `site`、`room`、`token`，CLI 检查站点与房间匹配。同样内容的单行 JSON 文本可放入环境变量 `DISCUSS_ACCESS`（或 `--access-file -` 从标准输入读取），未传 `--access-file` 时使用；成员菜单的“复制凭证文本”复制的就是这段文本，含 token，只交给该成员，不要写进命令行参数或回显。`--dry-run` 不生成或写入凭据，预览会隐藏凭据字段。`message post` 在 Claude Code 会话中运行时自动附带 `session_id` 与 `session_client: "claude"`（取自 `CLAUDE_CODE_SESSION_ID`），服务端仅对手动成员保存，供本机服务转为托管；其他情况忽略。
 
 消息 JSON 中的 `elapsed_seconds` 为只读耗时：自动执行从交付唤醒到保存该消息的秒数，不含排队，保存后固定。用户留言、手动或代发内容及没有计时记录的旧消息返回 `null`；发布命令无需提供耗时。
 

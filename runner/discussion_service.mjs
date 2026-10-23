@@ -173,6 +173,7 @@ class RoomWorker {
     this.create_runner = create_runner;
     this.log = log;
     this.state = { config: path, status: 'starting', error: '' };
+    this.adopt_failed = new Set();
   }
   /** Open lazily so a busy lock or broken file is retried instead of stopping the service. */
   open() {
@@ -219,6 +220,23 @@ class RoomWorker {
     }
     this.state.config_version = snapshot.version;
   }
+  /** A manual Claude expert whose CLI reported its session is handed to the service, which resumes that session from the next turn on. */
+  async adopt_manual_members() {
+    if (this.config.mode === 'free') return;
+    for (const member of this.runner.members || []) {
+      const key = `${member.name}:${member.reported_session}`;
+      if (member.access !== 'manual' || member.status !== 'active' || !member.reported_session || this.adopt_failed.has(key)) continue;
+      try {
+        const { adopt_member_profile } = await import('./discussion_launch.mjs');
+        adopt_member_profile(this.home, this.path, member.name, member.reported_session);
+        await api(this.config, `/members/${member.id}`, { action: 'adopt', adapter: 'claude', session_id: member.reported_session });
+        this.log(`${this.config.room}: ${member.name} 已转为本机托管`);
+      } catch (error) {
+        this.adopt_failed.add(key);
+        this.log(`${this.config.room}: ${member.name} 未能转为托管，保持手动：${error.message}`);
+      }
+    }
+  }
   /** Run one bounded dispatcher iteration and keep the last result for status. */
   async tick() {
     const previous_status = this.state.status;
@@ -226,6 +244,7 @@ class RoomWorker {
       if (!this.runner) this.open();
       await this.refresh_control();
       const result = await this.runner.tick();
+      await this.adopt_manual_members();
       Object.assign(this.state, { status: TICK_STATES[result], error: '' });
     } catch (error) {
       if (await this.deleted(error)) { this.removed = true; return; }

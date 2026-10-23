@@ -841,9 +841,24 @@ def discussion_member_action(connection, room_id, member_id, token, payload):
         require_fresh_member_token(connection, room_id, payload.get("token"))
         connection.execute("UPDATE room_members SET status='active',token_hash=? WHERE id=?", (hashed, member_id))
         experts[member["name"]] = "online" if member["access"] == "online" else "cli"
+    elif action == "adopt":
+        adopt_manual_member(connection, room_id, member, payload)
+        return
     else:
-        raise ValueError("action 须为 away、active、remove 或 redo")
+        raise ValueError("action 须为 away、active、remove、redo 或 adopt")
     save_discussion_experts(connection, room_id, experts)
+
+
+def adopt_manual_member(connection, room_id, member, payload):
+    """Hand a manual expert to the local service once its CLI reported the session it runs in; the owner's service resumes that session."""
+    reported = connection.execute("SELECT session_id FROM member_sessions WHERE member_id=?", (member["id"],)).fetchone()
+    run = connection.execute("SELECT mode FROM discussion_runtime WHERE room_id=?", (room_id,)).fetchone()
+    if not reported or reported["session_id"] != payload.get("session_id") or payload.get("adapter") != "claude":
+        raise ValueError("成员尚未上报与之相符的会话，不能转为托管")
+    if member["access"] != "manual" or member["status"] != "active" or not run or run["mode"] != "automatic":
+        raise ValueError("只有全自动讨论中在场的手动专家可以转为托管")
+    connection.execute("UPDATE room_members SET access='runner',adapter='claude',session_mode='borrowed' WHERE id=?", (member["id"],))
+    connection.execute("DELETE FROM member_sessions WHERE member_id=?", (member["id"],))
 
 
 def void_latest_opinion(connection, room_id, name, phase):

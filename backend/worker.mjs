@@ -349,7 +349,8 @@ async function require_room(database, room_id) {
   result.runtime = await runtime_view(database, room_id);
   result.limits = limits_view(await database.prepare(LIMITS_SQL).bind(room_id).first(), result);
   result.mode = await room_mode(database, room_id);
-  result.members = (await database.prepare("SELECT id,name,adapter,role,status,access,session_mode FROM room_members WHERE room_id=? AND status<>'removed' ORDER BY id").bind(room_id).all()).results;
+  result.members = (await database.prepare(`SELECT m.id,m.name,m.adapter,m.role,m.status,m.access,m.session_mode,COALESCE(s.session_id,'') AS reported_session
+    FROM room_members AS m LEFT JOIN member_sessions AS s ON s.member_id=m.id WHERE m.room_id=? AND m.status<>'removed' ORDER BY m.id`).bind(room_id).all()).results;
   const option = await database.prepare("SELECT named_followup FROM discussion_options WHERE room_id=?").bind(room_id).first();
   // Rooms created before the option keep the host's named follow-ups.
   result.named_followup = option ? Boolean(option.named_followup) : true;
@@ -697,7 +698,7 @@ async function manage_room(database, room_id, action, payload) {
   } else if (action === "delete") {
     if (payload.confirm_title !== room.title) throw new HttpError(400, "请输入完整房间名称确认删除");
     const queries = [
-      "DELETE FROM member_recommendations WHERE room_id=?", "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?",
+      "DELETE FROM member_recommendations WHERE room_id=?", "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?", "DELETE FROM member_sessions WHERE room_id=?",
       "DELETE FROM room_members WHERE room_id=?", "DELETE FROM room_modes WHERE room_id=?",
       "DELETE FROM free_batches WHERE room_id=?", "DELETE FROM free_chains WHERE room_id=?", "DELETE FROM room_links WHERE room_id=?",
       "DELETE FROM discussion_options WHERE room_id=?", "DELETE FROM scheduler_decisions WHERE room_id=?",
@@ -958,7 +959,22 @@ async function append_message(database, room_id, payload, token = "", free_actor
   const message = results.at(-1).results[0];
   await attach_message_files(database, [message]);
   check_retry(message, expected);
+  await record_reported_session(database, room_id, token, payload);
   return { message, duplicate: results[0].results.length === 0 };
+}
+
+const SESSION_ID_PATTERN = /^[0-9A-Za-z_-]{8,128}$/;
+
+/** Keep the software session a manual member posted from, so the local service can take the member over. */
+async function record_reported_session(database, room_id, token, payload) {
+  const { session_id, session_client } = payload;
+  if (session_client !== "claude" || typeof session_id !== "string" || !SESSION_ID_PATTERN.test(session_id) || !token) return;
+  const member = await database.prepare("SELECT id FROM room_members WHERE room_id=? AND token_hash=? AND status='active' AND access='manual' AND adapter='manual'")
+    .bind(room_id, await runtime_hash(token)).first();
+  if (member) {
+    await database.prepare(`INSERT INTO member_sessions (member_id,room_id,session_id,client) VALUES (?,?,?,?)
+      ON CONFLICT(member_id) DO UPDATE SET session_id=excluded.session_id,client=excluded.client`).bind(member.id, room_id, session_id, session_client).run();
+  }
 }
 
 /** Read one assignment constrained to its topic. */
@@ -2233,7 +2249,14 @@ async function handle_discussion_members(database, request, parts) {
       await require_fresh_member_hash(database, room_id, hashed);
       experts[member.name] = member.access === "online" ? "online" : "cli";
       await database.batch([database.prepare("UPDATE room_members SET status='active',token_hash=? WHERE id=? AND status='away'").bind(hashed, member.id), save()]);
-    } else throw new HttpError(400, "action 须为 away、active、remove 或 redo");
+    } else if (payload.action === "adopt") {
+      const reported = await database.prepare("SELECT session_id FROM member_sessions WHERE member_id=?").bind(member.id).first();
+      if (!reported || reported.session_id !== payload.session_id || payload.adapter !== "claude") throw new HttpError(400, "成员尚未上报与之相符的会话，不能转为托管");
+      if (member.access !== "manual" || member.status !== "active" || room.runtime?.mode !== "automatic") throw new HttpError(400, "只有全自动讨论中在场的手动专家可以转为托管");
+      await database.batch([
+        database.prepare("UPDATE room_members SET access='runner',adapter='claude',session_mode='borrowed' WHERE id=?").bind(member.id),
+        database.prepare("DELETE FROM member_sessions WHERE member_id=?").bind(member.id)]);
+    } else throw new HttpError(400, "action 须为 away、active、remove、redo 或 adopt");
   }
   return respond(await require_room(database, room_id));
 }

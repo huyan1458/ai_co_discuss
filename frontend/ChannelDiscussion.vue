@@ -899,10 +899,6 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             </div>
             <div v-if="message.summary" class="channel-answer-summary"><small>回答摘要<span v-if="message.summary_by && message.summary_by !== message.author"> · {{ bridge.display_name(message.summary_by) }} 整理</span></small><div class="channel-message-text markdown-body" v-html="message.rendered_summary"></div></div>
             <div v-if="message.attachments?.length" v-html="bridge.attachment_markup(message.attachments)"></div>
-            <div v-for="decision in scheduler_decisions.get(message.id) || []" :key="`decision-${decision.id}`" class="channel-recommendation" :class="decision.applied ? 'is-open' : 'is-adopted'" :title="decision.title" aria-label="智能调度决策">
-              <UIcon name="i-lucide-zap" class="channel-recommendation-icon" />
-              <span>智能调度：{{ decision.label }}<small v-if="decision.confidence !== null">置信度 {{ Number(decision.confidence).toFixed(2) }}</small></span>
-            </div>
             <div v-if="recommendations.get(message.id)" class="channel-recommendation" :class="`is-${recommendations.get(message.id).status}`" aria-label="智能调度推荐" aria-live="polite">
               <template v-for="item in [recommendations.get(message.id)]" :key="item.message_id">
                 <UIcon name="i-lucide-zap" class="channel-recommendation-icon" />
@@ -933,6 +929,11 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
               <p>工作区观察：{{ report.files_text }}</p>
               <p v-if="report.status !== 'completed' && report.result">{{ report.result }}</p>
             </section>
+            <!-- A round's decision closes the card that ended the round. -->
+            <div v-for="decision in scheduler_decisions.get(message.id) || []" :key="`decision-${decision.id}`" class="channel-recommendation" :class="decision.applied ? 'is-open' : 'is-adopted'" :title="decision.title" aria-label="智能调度决策">
+              <UIcon name="i-lucide-zap" class="channel-recommendation-icon" />
+              <span>智能调度：{{ decision.label }}<small v-if="decision.confidence !== null">置信度 {{ Number(decision.confidence).toFixed(2) }}</small></span>
+            </div>
           </template>
           <template #header><div class="channel-message-actions"><div class="channel-message-toolbar">
             <UTooltip text="回复"><UButton icon="i-lucide-corner-up-left" size="xs" color="neutral" variant="ghost" :aria-label="`回复 #${message.id}`" @click="reply_to(message)" /></UTooltip>
@@ -987,7 +988,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             </div>
           </div>
           <p v-if="view.composer_error || view.upload_status" class="attachment-status" :role="view.composer_error ? 'alert' : 'status'">{{ view.composer_error || view.upload_status }}</p>
-          <div v-if="speaking_turn" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>新消息会在 {{ bridge.display_name(speaking_turn.expert) }} 回复后交给主持人；点「停止」取消本次安排</span></div>
+          <div v-if="speaking_turn" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>{{ (room.members || []).find((member) => member.name === speaking_turn.expert)?.access === 'manual' ? `${bridge.display_name(speaking_turn.expert)} 是手动接入，需把启动指令粘贴到其 AI 会话才会发言；不接入可点「停止」取消本次安排` : `新消息会在 ${bridge.display_name(speaking_turn.expert)} 回复后交给主持人；点「停止」取消本次安排` }}</span><UButton v-if="(room.members || []).find((member) => member.name === speaking_turn.expert)?.access === 'manual' && view.access?.can_manage" icon="i-lucide-rocket" label="复制启动指令" size="xs" color="neutral" variant="outline" @click="act('copy_member_launch', speaking_turn.expert)" /></div>
           <div v-if="view.reply_to || view.turn_reply_to" class="channel-reply-draft"><UIcon name="i-lucide-corner-up-left" /><span>{{ view.turn_reply_to ? `回答安排 #${view.turn_reply_to} · ${bridge.display_name(room.host)} 代发` : `回复 #${view.reply_to}` }}</span><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" :aria-label="view.turn_reply_to ? '取消关联安排' : '取消回复'" @click="act(view.turn_reply_to ? 'cancel_answer' : 'cancel_reply')" /></div>
           <div v-if="needs_summary" class="channel-answer-editor"><UTextarea v-model="answer_summary" :rows="2" aria-label="回答摘要" class="w-full" placeholder="先说结论，保留关键理由、条件和不确定性。完整内容写在正文中。" /><USelect v-model="summary_source" :items="summary_sources" aria-label="摘要提供者" size="xs" /></div>
         </template>

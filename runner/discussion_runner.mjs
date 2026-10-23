@@ -308,7 +308,7 @@ export class DiscussionRunner {
   async smart_schedule(row, event) {
     if (!this.config.scheduler) return {};
     let plan;
-    try { plan = await this.plan_schedule(); }
+    try { plan = await this.plan_schedule(event); }
     catch (error) { this.log(`智能调度判断失败，交给主持人：${error.message}`); return {}; }
     if (!plan) return {};
     const suggestions = plan.message_id ? [{ message_id: plan.message_id, suggestion: plan.label, confidence: plan.confidence }] : [];
@@ -337,22 +337,30 @@ export class DiscussionRunner {
     }
     return { done: true };
   }
-  /** Read the room and decide one interjection, or the next round when named follow-ups are off. Null leaves the host alone. */
-  async plan_schedule() {
+  /**
+   * Read the room and decide one interjection, restore a plan voided by a roster change, or decide the next round
+   * when named follow-ups are off. Anything left to the host says why; null (the opening, or nothing to do) records nothing.
+   */
+  async plan_schedule(event) {
+    if (String(event.cause || '').startsWith('start')) return null;
     const room = await api(this.config, '');
-    if (room.limits?.reached || !ACTIVE_PHASES.includes(room.phase)) return null;
+    if (!ACTIVE_PHASES.includes(room.phase)) return null;
     if (room.current_turn && ['pending', 'notified'].includes(room.current_turn.status)) return null;
+    // Every record sits at the end of the latest expert answer, the card that just finished speaking.
+    const anchor = room.current_turn?.answer_id || room.latest_id;
+    const skip = (kind, reason) => ({ action: 'host', kind, confidence: null, label: `未判断：${reason}，交给主持人`, after_message_id: anchor });
+    if (room.limits?.reached) return skip('round', '已到讨论上限');
     const page = await api(this.config, `/messages?after=${Math.max(0, room.latest_id - CONTEXT_MESSAGES)}`);
     const experts = Object.keys(room.experts || {});
-    const context = { title: room.title, context: page.messages, host: room.host };
+    const context = { title: room.title, goal: room.goal, user_request: room.user_request, context: page.messages, host: room.host };
     if (room.held_since) {
       const pending = page.messages.filter(item => item.id >= room.held_since && item.author === '用户');
       // Topic edits and several messages at once need the host's judgement.
-      if (pending.length !== 1) return null;
+      if (pending.length !== 1) return skip('interjection', pending.length ? '同时有多条留言' : '话题设置有修改');
       const message = pending[0];
       const decision = await decide_interjection(this.config.api_home, this.config.scheduler,
         { ...context, message, experts: experts.filter(name => name !== room.host) }, this.fetch);
-      const plan = { ...decision, kind: 'interjection', message_id: message.id, after_message_id: message.id };
+      const plan = { ...decision, kind: 'interjection', message_id: message.id, after_message_id: anchor };
       if (decision.action === 'ask') {
         return { ...plan, turns: [{ expert: decision.expert, question: interjection_question(message) },
           ...room.queued_turns.map(({ expert, question }) => ({ expert, question }))].slice(0, MAX_PLAN_TURNS) };
@@ -361,15 +369,40 @@ export class DiscussionRunner {
       // A note after the plan ran out falls through to deciding the next round.
       if (decision.action !== 'note') return plan;
     }
-    if (room.named_followup || room.queued_turns.length || !room.rounds?.at(-1)?.completed) return null;
+    if (room.queued_turns.length) return null;
+    const round_open = !room.rounds?.at(-1)?.completed;
+    if (round_open) {
+      const restored = await this.restore_voided_plan(room, experts, anchor);
+      return restored || skip('round', '本轮还有专家未发言但没有后续安排');
+    }
+    if (room.named_followup) return skip('round', '点名追问已开启，由主持人安排下一轮');
     const decision = await decide_round(this.config.api_home, this.config.scheduler,
       { ...context, experts, last_speaker: room.current_turn?.expert }, this.fetch);
-    const plan = { ...decision, kind: 'round', after_message_id: room.latest_id };
+    const plan = { ...decision, kind: 'round', after_message_id: anchor };
     if (decision.action !== 'continue') return plan;
     const round = room.completed_rounds + 1;
     const order = [decision.first, ...experts.filter(name => name !== decision.first)].slice(0, MAX_PLAN_TURNS);
     return { ...plan, phase: room.phase === 'initial' ? 'discussing' : undefined,
       turns: order.map(expert => ({ expert, question: peer_round_question(round) })) };
+  }
+  /**
+   * A roster change voids queued turns, leaving them skipped after the last real arrangement. Put back the ones whose
+   * experts are still present, then ask each expert who has not spoken this round (such as a new member) to open.
+   * This needs no model: it only reinstates what the host had already planned.
+   */
+  async restore_voided_plan(room, experts, anchor) {
+    const turns = (await api(this.config, '/turns')).turns || [];
+    const last_real = Math.max(0, ...turns.filter(turn => turn.status !== 'skipped').map(turn => turn.id));
+    const voided = turns.filter(turn => turn.status === 'skipped' && turn.id > last_real && experts.includes(turn.expert));
+    if (!turns.some(turn => turn.status === 'skipped' && turn.id > last_real)) return null;
+    const spoken = new Set(room.rounds?.at(-1)?.speakers || []);
+    const planned = new Set(voided.map(turn => turn.expert));
+    const joining = experts.filter(name => !spoken.has(name) && !planned.has(name));
+    const opening = room.phase === 'initial' ? '欢迎加入：请先读取议题，独立给出你的开场观点。' : '欢迎加入：请先读取议题和已有回答，给出你的观点。';
+    const plan_turns = [...voided.map(({ expert, question }) => ({ expert, question })), ...joining.map(expert => ({ expert, question: opening }))].slice(0, MAX_PLAN_TURNS);
+    if (!plan_turns.length) return null;
+    const label = `成员有变化：${voided.length ? `补回原计划（${voided.map(turn => turn.expert).join('、')}）` : '原计划成员已离开'}${joining.length ? `，请 ${joining.join('、')} 开场` : ''}`;
+    return { action: 'restore', kind: 'round', confidence: null, label, after_message_id: anchor, turns: plan_turns };
   }
   /** Perform the host's writes for a decided plan under its own execution credential. */
   async apply_schedule(plan, token) {
@@ -468,6 +501,7 @@ export class DiscussionRunner {
       if (room.runtime.generation !== generation) this.stop_children();
     }
     this.room_title = room.title;
+    this.members = room.members || [];
     const run = room.runtime;
     if (run.run_id) this.store.scope(this.config, run.run_id);
     if (run.mode !== 'automatic' || run.status !== 'running' || run.expired) {

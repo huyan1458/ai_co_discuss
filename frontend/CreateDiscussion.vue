@@ -46,6 +46,10 @@ const launching = computed(() => automatic.value && view.value.launch.available 
 const free_ready = computed(() => selected_names.value.length > 0 && woken_names.value.every(launch_ready) && (!woken_names.value.length || view.value.launch.available));
 // Smart scheduling runs in the local service, so it is offered only when this room will be launched there.
 const scheduling = computed(() => view.value.launch.available && (free.value ? woken_names.value.length > 0 : view.value.launch.create));
+// Always shown; when it cannot run yet, say what is missing instead of hiding it.
+const scheduling_blocker = computed(() => !view.value.launch.available ? "连接本机服务后可开启"
+  : free.value && !woken_names.value.length ? "添加一位本机唤醒的成员后可开启"
+  : !free.value && !view.value.launch.create ? "勾选「创建后立即启动 AI」后可开启" : "");
 const scheduler_unready = computed(() => {
   const scheduler = view.value.launch.scheduler || {};
   return scheduling.value && scheduler.enabled && !(scheduler.provider && scheduler.model && scheduler.api_key_ref);
@@ -209,7 +213,7 @@ const summary = computed(() => {
           <UIcon name="i-lucide-crown" />
           <span>{{ free ? host_options.length ? '点卡片上的皇冠指定主持人：没 @ 任何人的消息由它分配；其他成员只在被你或主持人点名时发言。' : '网页 AI 不能主持；添加一位本地 AI 后，没 @ 的消息才有人接。' : host_options.length ? '点卡片上的皇冠指定主持人，负责补全议题、安排发言与收束，也可同时作为专家。' : '先添加一位 AI 担任主持人。' }}</span>
         </div>
-        <SchedulerSettings v-if="scheduling && selected_names.length" :free="free" />
+        <SchedulerSettings :free="free" :blocker="scheduling_blocker" />
       </section>
 
       <section v-if="!free" class="create-section">

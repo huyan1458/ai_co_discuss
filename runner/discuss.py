@@ -482,6 +482,11 @@ def plan_message(args):
         payload["to"] = list(dict.fromkeys(args.to))
     if args.reply_to:
         payload["reply_to"] = args.reply_to
+    # A hosting Claude Code session exposes its own ID; the room records it so the local service can take the member over.
+    session_id = os.getenv("CLAUDE_CODE_SESSION_ID", "").strip()
+    if session_id:
+        payload["session_id"] = session_id
+        payload["session_client"] = "claude"
     return RequestPlan(base, "POST", payload)
 
 

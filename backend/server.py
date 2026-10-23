@@ -44,6 +44,7 @@ LOCAL_LAUNCH_TIMEOUT = 60
 DIRECTORY_OPERATIONS = ("move", "folder")
 DIRECTORY_PICKER_TIMEOUT = 600  # the folder dialog waits for the person at the computer
 MAX_TEXT_LENGTH = 32000
+SESSION_ID_PATTERN = re.compile(r"[0-9A-Za-z_-]{8,128}")
 MAX_STATE_LENGTH = 4000
 MAX_BRIEF_LENGTH = 1600
 MAX_SUMMARY_LENGTH = 1000
@@ -210,7 +211,8 @@ def require_room(connection, room_id):
     room["limits"] = limits_view(connection.execute(LIMITS_SQL, (room_id,)).fetchone(), room)
     room["mode"] = room_mode(connection, room_id)
     room["members"] = [dict(row) for row in connection.execute(
-        "SELECT id,name,adapter,role,status,access,session_mode FROM room_members WHERE room_id=? AND status<>'removed' ORDER BY id", (room_id,))]
+        """SELECT m.id,m.name,m.adapter,m.role,m.status,m.access,m.session_mode,COALESCE(s.session_id,'') AS reported_session
+        FROM room_members AS m LEFT JOIN member_sessions AS s ON s.member_id=m.id WHERE m.room_id=? AND m.status<>'removed' ORDER BY m.id""", (room_id,))]
     option = connection.execute("SELECT named_followup FROM discussion_options WHERE room_id=?", (room_id,)).fetchone()
     # Rooms created before the option keep the host's named follow-ups.
     room["named_followup"] = bool(option[0]) if option else True
@@ -547,7 +549,7 @@ def manage_room(connection, room_id, action, payload):
 
 def delete_room_records(connection, room_id):
     """Remove a room's dependent records in the caller's transaction."""
-    for table in ("member_recommendations", "member_requests", "member_executions", "room_members", "room_modes", "free_batches", "free_chains", "room_links",
+    for table in ("member_recommendations", "member_requests", "member_executions", "member_sessions", "room_members", "room_modes", "free_batches", "free_chains", "room_links",
                   "discussion_options", "scheduler_decisions"):
         connection.execute(f"DELETE FROM {table} WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM message_timings WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)", (room_id,))
@@ -872,6 +874,18 @@ def append_free_message(connection, room, payload, actor):
     return {"message": get_message(connection, room_id, cursor.lastrowid), "duplicate": False}
 
 
+def record_reported_session(connection, room_id, token, payload):
+    """Keep the software session a manual member posted from, so the local service can take the member over."""
+    session_id, client = payload.get("session_id"), payload.get("session_client")
+    if client != "claude" or not isinstance(session_id, str) or not SESSION_ID_PATTERN.fullmatch(session_id) or not token:
+        return
+    member = connection.execute("SELECT id FROM room_members WHERE room_id=? AND token_hash=? AND status='active' AND access='manual' AND adapter='manual'",
+                                (room_id, token_hash(token))).fetchone()
+    if member:
+        connection.execute("""INSERT INTO member_sessions (member_id,room_id,session_id,client) VALUES (?,?,?,?)
+            ON CONFLICT(member_id) DO UPDATE SET session_id=excluded.session_id,client=excluded.client""", (member["id"], room_id, session_id, client))
+
+
 def append_message(connection, room_id, payload, token="", free_actor=None):
     """Atomically append an attributed message and complete its scheduled turn."""
     author, text, submission_id, reply_to = message_values(payload)
@@ -910,6 +924,7 @@ def append_message(connection, room_id, payload, token="", free_actor=None):
         connection.execute("UPDATE attachments SET message_id=?,position=? WHERE id=?",
                            (cursor.lastrowid, position, identifier))
     record_message_timing(connection, cursor.lastrowid, token)
+    record_reported_session(connection, room_id, token, payload)
     if details["turn_id"]:
         connection.execute("UPDATE discussion_turns SET status='answered',answer_id=? WHERE id=?", (cursor.lastrowid, details["turn_id"]))
     return {"message": get_message(connection, room_id, cursor.lastrowid), "duplicate": False}
@@ -1480,7 +1495,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Forward authenticated browser requests to the shared Node entrypoint and pin their website."""
         site = self.local_request_site(method)
         route = parts[2:]
-        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-member"], ["models"], ["api-key"], ["api-check"], ["pick-directory"]):
+        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-member"], ["models"], ["api-key"], ["api-check"],
+                                             ["scheduler-check"], ["pick-directory"]):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
             command = "settings"
@@ -1496,6 +1512,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = "api-key"
         elif route == ["api-check"] and method == "POST":
             command = "api-check"
+        elif route == ["scheduler-check"] and method == "POST":
+            command = "scheduler-check"
         elif route == ["room-member"] and method == "POST":
             command = "room-member"
         elif route == ["pick-directory"] and method == "POST":

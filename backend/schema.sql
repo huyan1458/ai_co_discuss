@@ -533,6 +533,13 @@ CREATE TABLE IF NOT EXISTS room_members (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS member_name ON room_members(room_id,name) WHERE status<>'removed';
 CREATE UNIQUE INDEX IF NOT EXISTS member_credential ON room_members(room_id,token_hash);
+-- A manual member's own software session, reported by its CLI on posting; the local service uses it to take the member over.
+CREATE TABLE IF NOT EXISTS member_sessions (
+    member_id INTEGER PRIMARY KEY REFERENCES room_members(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    client TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS member_executions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,

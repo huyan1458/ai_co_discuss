@@ -17,7 +17,7 @@ import { assert_shared_home, DiscussionService, migrate_service_home, read_regis
 import { launch_discussion, room_models } from '../runner/discussion_launch.mjs';
 import { agy_rule, antigravity_project, claude_exit_error, claude_rule_path, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
-import { decide, decide_interjection, decide_round, ROUTE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_request, SCHEDULER_PROVIDERS, validate_scheduler } from '../runner/scheduler.mjs';
+import { certainty, decide, decide_interjection, decide_round, ROUTE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, validate_scheduler } from '../runner/scheduler.mjs';
 
 test('smart scheduling maps one neutral question set to both providers and reads their answers alike', async t => {
   const home = mkdtempSync(join(tmpdir(), 'scheduler-'));
@@ -45,6 +45,13 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.equal((await route_free_message(home, jev, input, reply('Codex', 0.95))).member, 'Codex');
   assert.equal((await route_free_message(home, jev, input, reply('Codex', ROUTE_CONFIDENCE - 0.01))).member, null);
   assert.equal((await route_free_message(home, jev, input, reply('__host__', 0.99))).member, null);
+  // The configuration check asks one yes/no question and rejects an answer without a probability.
+  const checked = [];
+  assert.deepEqual(await scheduler_check(home, jev, async (url, init) => { checked.push([url, JSON.parse(init.body)]);
+    return { ok: true, json: async () => ({ answers: { check: { type: 'noul', noul: 0.97 } } }) }; }), { ok: true });
+  assert.deepEqual([checked[0][0], Object.keys(checked[0][1].questions)], ['https://api.typesafe.ai/v1/systemone', ['check']]);
+  await assert.rejects(scheduler_check(home, jev, async () => ({ ok: true, json: async () => ({ answers: {} }) })), /未返回可用答案/);
+  await assert.rejects(scheduler_check(home, { ...jev, provider: 'other' }), /供应商只能为/);
   // Discussion interjections act only on a confident note or ask; anything else goes to the host.
   const handling = (choice, confidence) => async () => ({ ok: true, json: async () => ({ answers: { handling: { type: 'choice', choice, confidence, probabilities: {} } } }) });
   const interjection = { ...input, experts: ['Codex'] };
@@ -61,6 +68,12 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.equal((await decide_round(home, jev, discussion, round('continue', 0.9, 'Grok'))).first, 'Codex');
   assert.equal((await decide_round(home, jev, discussion, round('continue', 0.79, 'Codex'))).action, 'host');
   assert.equal((await decide_round(home, jev, discussion, round('__host__', 0.99, 'Codex'))).action, 'host');
+  // The chosen option's probability decides; Jev's lower two-way `confidence` is only a fallback.
+  const probable = async () => ({ ok: true, json: async () => ({ answers: { next: { type: 'choice', choice: 'continue', confidence: 0.64,
+    probabilities: { continue: 0.82, __host__: 0.18 } } } }) });
+  assert.deepEqual([(await decide_round(home, jev, discussion, probable)).action, (await decide_round(home, jev, discussion, probable)).confidence], ['continue', 0.82]);
+  assert.equal(certainty({ choice: 'a', confidence: 0.5, probabilities: {} }), 0.5);
+  assert.equal((await decide_round(home, jev, discussion, round('continue', 0.7, 'Codex'))).label, '拿不准是否继续下一轮，交给主持人');
 });
 
 test('host tasks carry scheduling suggestions only when there are some', async t => {

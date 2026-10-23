@@ -190,6 +190,15 @@ class CliTests(unittest.TestCase):
         self.assertIn("平台名-后缀", str(self.rejected(["message", "post", room["id"], "--as", "Claudex", "--body", "x",
                                                     "--submission-id", str(uuid.uuid4()), "--dry-run"])))
 
+    def test_message_post_reports_the_hosting_claude_session(self):
+        """A Claude Code session's own ID rides along on posts so the local service can take a manual member over."""
+        args = ["--site", self.base, "message", "post", self.room, "--as", "用户", "--body", "x", "--submission-id", str(uuid.uuid4()), "--dry-run"]
+        plain = self.invoke(args, environment={"CLAUDE_CODE_SESSION_ID": ""})
+        self.assertNotIn("session_id", json.loads(plain.stdout)["data"]["body"])
+        reported = self.invoke(args, environment={"CLAUDE_CODE_SESSION_ID": "5f0d2c1e-1111-2222-3333-444455556666"})
+        body = json.loads(reported.stdout)["data"]["body"]
+        self.assertEqual((body["session_id"], body["session_client"]), ("5f0d2c1e-1111-2222-3333-444455556666", "claude"))
+
     def test_access_file_is_room_scoped_and_not_printed_in_preview(self):
         """A private capability is usable only for its configured site and room."""
         path = Path(self.directory.name) / "runtime-access.json"

@@ -10,7 +10,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { borrowed_session, cached_software_models, launch_discussion, pick_directory, launch_settings, room_configuration, room_member, save_launch_settings } from '../runner/discussion_launch.mjs';
+import { adopt_member_profile, borrowed_session, cached_software_models, launch_discussion, pick_directory, launch_settings, room_configuration, room_member, save_launch_settings } from '../runner/discussion_launch.mjs';
 import { api, DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { DiscussionService, read_registry, register_room } from '../runner/discussion_service.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
@@ -982,6 +982,28 @@ test('an invited existing session must exist locally, and Claude resumes only fr
   await assert.rejects(room_member(f.home, { site: f.site, room_id: launched.room.id, token: owner, action: 'add', name: 'Claude-2',
     participants: { 'Claude-2': { ...f.input.participants.Claude, session_id: randomUUID() } } }), /找不到 Claude 会话/, 'a mistyped ID never reaches the room');
   assert.equal((await request(f.site, `/api/rooms/${launched.room.id}`)).body.experts['Claude-2'], undefined);
+});
+
+test('a manual Claude expert\'s reported session is registered as a hosted participant, and a missing session is refused', async t => {
+  const f = await fixture(t);
+  const claude_home = join(f.directory, 'claude-home-adopt'), claude_id = randomUUID();
+  const launched = await launch_discussion(f.home, { ...f.input, token: randomUUID() + randomUUID() }, f.options);
+  const cwd = load_config(launched.config_path).cwd || join(f.directory, 'original');
+  mkdirSync(cwd, { recursive: true });
+  mkdirSync(join(claude_home, 'projects', 'encoded'), { recursive: true });
+  writeFileSync(join(claude_home, 'projects', 'encoded', `${claude_id}.jsonl`), `${JSON.stringify({ type: 'user', cwd })}\n`);
+  save_launch_settings(f.home, { participants: { Claude: { adapter: 'claude', executable: process.execPath } } });
+  const previous = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = claude_home;
+  try {
+    assert.throws(() => adopt_member_profile(f.home, launched.config_path, 'Claude-2', randomUUID()), /找不到 Claude 会话/);
+    assert.equal(Object.hasOwn(load_config(launched.config_path).participants, 'Claude-2'), false);
+    adopt_member_profile(f.home, launched.config_path, 'Claude-2', claude_id);
+    const profile = load_config(launched.config_path).participants['Claude-2'];
+    assert.deepEqual([profile.adapter, profile.session_id], ['claude', claude_id]);
+  } finally {
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previous;
+  }
 });
 
 test('an extra instance inherits its platform settings but not its bound session, and names are never reused', async t => {
