@@ -15,7 +15,7 @@ import { DiscussionRunner, DiscussionStore, load_config, service_drafts, task_fi
 import { cwd_key, FreeRoomRunner, workspace_snapshot } from '../runner/free_runner.mjs';
 import { assert_shared_home, DiscussionService, migrate_service_home, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
 import { launch_discussion, room_models } from '../runner/discussion_launch.mjs';
-import { agy_rule, antigravity_project, claude_exit_error, claude_rule_path, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
+import { agy_rule, antigravity_project, claude_exit_error, claude_rule_path, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
 
 test('API profiles need a bound key but no software or filesystem permission', t => {
@@ -760,6 +760,56 @@ test('claude allows only codiscuss website subcommands and draft writes, then us
   assert.ok(!args.some(arg => /(Bash|PowerShell)\(codiscuss (service|launch|run|api|setup|install|local)/.test(arg)));
   assert.equal(args.at(-1), f.task.prompt);
   if (process.platform === 'win32') assert.equal(claude_rule_path('C:\\Data\\room'), '//c/Data/room');
+});
+
+test('a stopped process tree is ended with taskkill on Windows and falls back to the plain kill otherwise', () => {
+  const running = () => ({ pid: 4242, exitCode: null, signalCode: null });
+  const attempt = (child, platform, run) => {
+    const calls = []; let plain = 0;
+    const result = kill_process_tree(child, () => { plain++; return 'plain'; }, platform, (...call) => { calls.push(call); return run(); });
+    return { calls, plain, result };
+  };
+  const windows = attempt(running(), 'win32', () => ({ status: 0 }));
+  assert.deepEqual(windows.calls[0].slice(0, 2), ['taskkill', ['/PID', '4242', '/T', '/F']]);
+  assert.equal(windows.plain, 0);
+  assert.equal(windows.result, true);
+  assert.equal(attempt(running(), 'win32', () => ({ status: 128 })).plain, 1);
+  assert.equal(attempt(running(), 'win32', () => { throw new Error('taskkill missing'); }).plain, 1);
+  assert.equal(attempt({ pid: undefined, exitCode: null, signalCode: null }, 'win32', () => ({ status: 0 })).plain, 1);
+  assert.equal(attempt({ pid: 4242, exitCode: 0, signalCode: null }, 'win32', () => ({ status: 0 })).calls.length, 0);
+  const posix = attempt(running(), 'linux', () => ({ status: 0 }));
+  assert.equal(posix.calls.length, 0);
+  assert.equal(posix.plain, 1);
+});
+
+test('stopping a Claude run on Windows also ends the tool process its non-Node parent started', { skip: process.platform !== 'win32' }, async t => {
+  const root = mkdtempSync(join(tmpdir(), 'discussion-claude-tree-'));
+  const directory = join(root, 'runtime'); const draft_directory = join(root, 'drafts');
+  mkdirSync(directory); mkdirSync(draft_directory);
+  const access_path = join(directory, 'access.json');
+  writeFileSync(access_path, JSON.stringify({ token: 'test-only', session_id: '' }));
+  const grandchild_script = join(root, 'tool.mjs');
+  writeFileSync(grandchild_script, 'console.log(process.pid); setInterval(() => {}, 1000);');
+  const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
+  let grandchild = 0; let started;
+  const ready = new Promise(resolve => { started = resolve; });
+  // cmd.exe is not a Node process, so killing it alone would leave its child running.
+  const spawn_process = (executable, args, settings) => {
+    const child = spawn('cmd.exe', ['/d', '/s', '/c', `""${process.execPath}" "${grandchild_script}""`],
+      { ...settings, windowsVerbatimArguments: true });
+    child.stdout.on('data', chunk => { grandchild = Number(String(chunk).trim()); started(); });
+    return child;
+  };
+  let run;
+  const task = { id: 'event-tree', participant: 'Claude', directory, draft_directory, access_path, prompt: 'test', skills_directory: join(directory, 'skills'),
+    on_binding: () => {}, on_process: child => { run = child; }, on_output: () => {}, on_failure: () => {}, on_exit: () => {} };
+  t.after(() => { if (grandchild && alive(grandchild)) process.kill(grandchild); if (run && run.exitCode === null) run.kill(); rmSync(root, { recursive: true, force: true }); });
+  await deliver_task({ adapter: 'claude', executable: process.execPath }, {}, task, spawn_process);
+  await ready;
+  assert.ok(alive(grandchild), 'the tool process runs before the stop');
+  run.kill();
+  for (let waited = 0; alive(grandchild) && waited < 5000; waited += 100) await delay(100);
+  assert.equal(alive(grandchild), false, 'stopping the Claude run leaves no tool process behind');
 });
 
 test('claude edits a project only when the launch grants write access', async t => {

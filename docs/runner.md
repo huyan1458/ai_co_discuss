@@ -219,7 +219,7 @@ codiscuss launch start --file 本次启动.json
 | 软件 | 项目 / cwd 的实际处理 |
 | --- | --- |
 | Codex App | 按真实已保存项目 ID、名称和目录唯一匹配后创建；目录必须已加入 App。均省略时新建无项目聊天。现有绑定不能通过改提示迁移到另一目录。 |
-| Claude Code CLI | 进程以 cwd 启动，后续按实际 session ID `--resume`。未指定目录时使用本场独立草稿目录；项目名仅作接入元数据，不声称关联 Claude 桌面 App 的项目分组。从 Claude Code 会话内启动接入程序或服务时，会去掉宿主会话注入的 `CLAUDECODE`、`CLAUDE_CODE_*` 等变量，Windows 上再读回用户与系统保存的 `ANTHROPIC_*`/`CLAUDE*` 变量（如 `claude setup-token` 的 `CLAUDE_CODE_OAUTH_TOKEN`），保证子进程使用自己的登录。 |
+| Claude Code CLI | 进程以 cwd 启动，后续按实际 session ID `--resume`。未指定目录时使用本场独立草稿目录；项目名仅作接入元数据，不声称关联 Claude 桌面 App 的项目分组。从 Claude Code 会话内启动接入程序或服务时，会去掉宿主会话注入的 `CLAUDECODE`、`CLAUDE_CODE_*` 等变量，Windows 上再读回用户与系统保存的 `ANTHROPIC_*`/`CLAUDE*` 变量（如 `claude setup-token` 的 `CLAUDE_CODE_OAUTH_TOKEN`），保证子进程使用自己的登录。停止或打断时，Windows 上用 `taskkill /T /F` 结束整个进程树，否则 Claude 已启动的 PowerShell / Bash 工具命令会在停止后继续运行；其他系统和 `taskkill` 不可用时回退为普通结束。已知边界：Codex 0.163.0 的同类实测未复现，Antigravity CLI 未验证，超时与完成后清理路径未单独验证。 |
 | Antigravity App | 显式 setup-sidecar 将 Sidecar 绑定到实际项目，核对其资源目录及 App 返回的项目 ID；均省略时使用 Outside of Project。使用 App 2.23 当前配置版本，升级后须复核兼容性。 |
 
 cwd 是工作目录，不等于操作系统沙箱或权限提升。讨论材料在用户指定的 cwd，回答草稿只放任务中的 `draft_directory`；CLI 与凭据是显式的工具路径。路径和项目配置仅保存在本机，不进入公开事件。

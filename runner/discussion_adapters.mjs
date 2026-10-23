@@ -240,6 +240,19 @@ export function claude_permissions(config, task) {
     ...commands, ...writable.map(directory => `Edit(${claude_rule_path(directory)}/**)`), ...(config.allowed_tools || [])];
 }
 
+/**
+ * Windows leaves a killed process's descendants running, so a stopped Claude turn kept its tool commands working.
+ * End the whole tree there; elsewhere, or when taskkill cannot run, use the plain kill.
+ */
+export function kill_process_tree(child, plain_kill, platform = process.platform, run = spawnSync) {
+  if (platform === 'win32' && child.pid && child.exitCode === null && child.signalCode === null) {
+    try {
+      if (run('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: CALL_TIMEOUT_MS }).status === 0) return true;
+    } catch { /* Fall through to the plain kill. */ }
+  }
+  return plain_kill();
+}
+
 async function claude_delivery(config, binding, task, spawn_process = spawn) {
   const session_id = binding.session_id || randomUUID();
   try { bind_access(task.access_path, session_id); }
@@ -253,6 +266,10 @@ async function claude_delivery(config, binding, task, spawn_process = spawn) {
       env: standalone_claude_env(),
     });
   } catch (error) { throw not_sent(error); }
+  if (typeof child.kill === 'function') {
+    const plain_kill = child.kill.bind(child);
+    child.kill = () => kill_process_tree(child, plain_kill);
+  }
   let spawned = false;
   const log_path = resolve(task.directory, `claude-${task.id}.log`);
   let output = '';
