@@ -59,10 +59,16 @@ export function saved_api_keys(home) {
 /** Resolve only a validated reference bound to this exact API root. */
 export function read_api_key(home, profile) {
   validate_api_profile(profile);
+  return read_saved_api_key(home, profile.base_url, profile.api_key_ref);
+}
+
+/** Read one saved key by reference, refusing a key saved for a different root. */
+export function read_saved_api_key(home, base_url, api_key_ref) {
+  if (!/^[a-f0-9-]{36}$/i.test(api_key_ref || '')) throw new Error('请保存此 Base URL 对应的 API Key');
   let saved;
-  try { saved = JSON.parse(readFileSync(join(home, 'api-keys', `${profile.api_key_ref}.json`), 'utf8')); }
+  try { saved = JSON.parse(readFileSync(join(home, 'api-keys', `${api_key_ref}.json`), 'utf8')); }
   catch { throw new Error('本机 API Key 不存在，请重新保存'); }
-  if (saved.base_url !== api_base_url(profile.base_url)) throw new Error('Base URL 已变化，请为新地址重新填写 API Key');
+  if (saved.base_url !== api_base_url(base_url)) throw new Error('Base URL 已变化，请为新地址重新填写 API Key');
   return saved.api_key;
 }
 

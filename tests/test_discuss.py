@@ -206,6 +206,20 @@ class CliTests(unittest.TestCase):
         path.write_text(json.dumps({"site": "http://localhost:1", "room": self.room, "token": secret}), encoding="utf-8")
         self.assertIn("凭据文件不属于", str(self.rejected(["run", "view", self.room, "--access-file", path])))
 
+    def test_access_text_in_environment_replaces_the_file_and_stays_room_scoped(self):
+        """DISCUSS_ACCESS carries the same JSON as a file: it supplies the site, is hidden in previews and room-scoped."""
+        secret = json.loads(Path(self.room_access[self.room]["用户"]).read_text(encoding="utf-8"))["token"]
+        text = json.dumps({"site": self.base, "room": self.room, "token": secret})
+        view = self.invoke(["run", "view", self.room], environment={"DISCUSS_ACCESS": text})
+        self.assertEqual(view.returncode, 0, view.stderr)
+        preview = self.invoke(["run", "pause", self.room, "--revision", 0, "--dry-run"], environment={"DISCUSS_ACCESS": text})
+        self.assertEqual(preview.returncode, 0, preview.stderr)
+        self.assertNotIn(secret, preview.stdout + preview.stderr)
+        other = self.invoke(["run", "view", "other-room"], environment={"DISCUSS_ACCESS": text})
+        self.assertIn("凭据文件不属于", other.stderr)
+        broken = self.invoke(["run", "view", self.room], environment={"DISCUSS_ACCESS": "{bad"})
+        self.assertIn("DISCUSS_ACCESS", broken.stderr)
+
     def plan_speech(self, speaker="Codex", actor=None):
         """Create and claim a valid assignment for a content-focused CLI regression."""
         if self.cli("floor", "view", self.room)["holder"] is None:

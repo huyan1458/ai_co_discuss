@@ -221,6 +221,55 @@ test('free-room API replies bind to their reserved execution and complete the re
   assert.equal(messages.find(message => message.author === 'Grok').source, 'api');
 });
 
+test('smart scheduling gives a confident unnamed free-room message straight to a member, bypassing the host', async t => {
+  const f = await site_fixture(t);
+  const mock = await model_fixture(t, call => tool_reply(call, 'submit_chat', { text: '已处理。', summary: '已处理。' }));
+  const { Grok, DeepSeek } = profiles(f.home, mock.base_url);
+  const scheduler = { provider: 'jev', model: 'jev-latest', ...save_api_key(f.home, { base_url: 'https://api.typesafe.ai/v1', api_key: SECRET }) };
+  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: { Grok, DeepSeek }, scheduler,
+    room: { title: '智能调度', mode: 'free', host: '用户', members: ['Grok', 'DeepSeek'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
+  const decisions = [];
+  const fake_fetch = async (url, init) => {
+    decisions.push({ url, body: JSON.parse(init.body), authorization: init.headers.Authorization });
+    return { ok: true, json: async () => ({ answers: { handler: { type: 'choice', choice: 'DeepSeek', confidence: 0.95, probabilities: { DeepSeek: 0.95, __host__: 0.05 } } } }) };
+  };
+  const config = load_config(started.config_path), store = new DiscussionStore(config.directory);
+  const runner = new FreeRoomRunner(config, store, undefined, () => {}, fake_fetch);
+  f.cleanup.push(() => { runner.stop_children(); store.close(); });
+  await api(config, '/messages', { author: '用户', text: '帮我查一下这个接口为什么返回 500。', source: 'user', kind: 'chat', submission_id: randomUUID() });
+  await until(async () => (await api(config, '/messages')).messages.some(message => message.author === 'DeepSeek'), () => runner.tick());
+  assert.equal(decisions.length, 1);
+  assert.equal(decisions[0].url, 'https://api.typesafe.ai/v1/systemone');
+  assert.equal(decisions[0].authorization, `Bearer ${SECRET}`);
+  assert.deepEqual(Object.keys(decisions[0].body.questions.handler.criteria), ['DeepSeek', '__host__']);
+  const room = await api(config, '');
+  const request = room.free.requests.find(item => item.member === 'DeepSeek');
+  assert.deepEqual([request.purpose, request.schedule_provider, request.schedule_confidence], ['scheduled', 'jev', 0.95]);
+  assert.ok(!room.free.requests.some(item => item.member === 'Grok'));
+  const backup = await api(config, '/backup');
+  assert.deepEqual(backup.tables.request_schedules.map(row => [row.request_id, row.provider, row.confidence]), [[request.id, 'jev', 0.95]]);
+  assert.ok(!mock.calls.some(call => call.body?.model === 'Grok/model.1'));
+  assert.ok(!readFileSync(started.config_path, 'utf8').includes(SECRET));
+});
+
+test('smart scheduling below the confidence threshold leaves the unnamed message with the host', async t => {
+  const f = await site_fixture(t);
+  const mock = await model_fixture(t, call => tool_reply(call, 'submit_chat', { text: '主持人处理。', summary: '已处理。' }));
+  const { Grok, DeepSeek } = profiles(f.home, mock.base_url);
+  const scheduler = { provider: 'decisions', model: 'gpt-6-luna', ...save_api_key(f.home, { base_url: 'https://api.openai.com/v1', api_key: SECRET }) };
+  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: { Grok, DeepSeek }, scheduler,
+    room: { title: '低置信度', mode: 'free', host: '用户', members: ['Grok', 'DeepSeek'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
+  const fake_fetch = async () => ({ ok: true, json: async () => ({ answers: [{ type: 'choice', name: 'handler', choice: 'DeepSeek', confidence: 0.5,
+    probabilities: [{ value: 'DeepSeek', probability: 0.6 }, { value: '__host__', probability: 0.4 }] }] }) });
+  const config = load_config(started.config_path), store = new DiscussionStore(config.directory);
+  const runner = new FreeRoomRunner(config, store, undefined, () => {}, fake_fetch);
+  f.cleanup.push(() => { runner.stop_children(); store.close(); });
+  await api(config, '/messages', { author: '用户', text: '大家看看下一步做什么。', source: 'user', kind: 'chat', submission_id: randomUUID() });
+  await until(async () => (await api(config, '/messages')).messages.some(message => message.author === 'Grok'), () => runner.tick());
+  const room = await api(config, '');
+  assert.deepEqual(room.free.requests.map(item => [item.member, item.purpose]), [['Grok', 'route']]);
+});
+
 test('pause aborts an in-flight API request and prevents a late tool response from writing', async t => {
   const f = await site_fixture(t);
   let release;

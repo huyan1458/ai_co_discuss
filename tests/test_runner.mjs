@@ -17,6 +17,49 @@ import { assert_shared_home, DiscussionService, migrate_service_home, read_regis
 import { launch_discussion, room_models } from '../runner/discussion_launch.mjs';
 import { agy_rule, antigravity_project, claude_exit_error, claude_rule_path, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
+import { decide, ROUTE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_request, SCHEDULER_PROVIDERS, suggest_interjection, validate_scheduler } from '../runner/scheduler.mjs';
+
+test('smart scheduling maps one neutral question set to both providers and reads their answers alike', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'scheduler-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const questions = [{ type: 'choice', name: 'handler', instructions: '交给谁？', choices: [{ value: 'Codex', description: '写代码' }, { value: '__host__', description: '主持人' }] },
+    { type: 'predicate', name: 'urgent', instructions: '是否紧急？' }];
+  const jev = validate_scheduler(home, { provider: 'jev', model: 'jev-1.13', ...save_api_key(home, { base_url: SCHEDULER_PROVIDERS.jev.base_url, api_key: 'jev-key' }) });
+  assert.deepEqual(scheduler_request(jev, '状态', questions), { path: '/systemone', body: { model: 'jev-1.13', state: '状态', questions: {
+    handler: { type: 'choice', instructions: '交给谁？', criteria: { Codex: '写代码', __host__: '主持人' } }, urgent: { type: 'noul', instructions: '是否紧急？' } } } });
+  assert.deepEqual(scheduler_answers(jev, { answers: { handler: { type: 'choice', choice: 'Codex', confidence: 0.9, probabilities: { Codex: 0.9, __host__: 0.1 } }, urgent: { type: 'noul', noul: 0.2 } } }),
+    { handler: { choice: 'Codex', confidence: 0.9, probabilities: { Codex: 0.9, __host__: 0.1 } }, urgent: { probability: 0.2 } });
+  const decisions = validate_scheduler(home, { provider: 'decisions', model: 'gpt-6-luna', ...save_api_key(home, { base_url: SCHEDULER_PROVIDERS.decisions.base_url, api_key: 'openai-key' }) });
+  assert.deepEqual(scheduler_request(decisions, '状态', questions).body.questions, [
+    { type: 'choice', name: 'handler', instructions: '交给谁？', choices: [{ value: 'Codex', description: '写代码' }, { value: '__host__', description: '主持人' }] },
+    { type: 'predicate', name: 'urgent', instructions: '是否紧急？' }]);
+  assert.deepEqual(scheduler_answers(decisions, { answers: [{ type: 'choice', name: 'handler', choice: 'Codex', confidence: 0.9, probabilities: [{ value: 'Codex', probability: 0.9 }, { value: '__host__', probability: 0.1 }] },
+    { type: 'predicate', name: 'urgent', probability: 0.2 }] }), { handler: { choice: 'Codex', confidence: 0.9, probabilities: { Codex: 0.9, __host__: 0.1 } }, urgent: { probability: 0.2 } });
+  // A key saved for another root is refused, and a provider error exposes only its status.
+  assert.throws(() => validate_scheduler(home, { ...jev, provider: 'decisions' }), /Base URL 已变化/);
+  const failing = async () => ({ ok: false, status: 401, json: async () => ({ error: 'secret detail' }) });
+  await assert.rejects(decide(home, jev, '状态', questions, failing), error => /HTTP 401/.test(error.message) && !error.message.includes('secret detail'));
+  // Only a confident member choice moves a free-room message; the host choice or low confidence returns null.
+  const reply = (choice, confidence) => async () => ({ ok: true, json: async () => ({ answers: { handler: { type: 'choice', choice, confidence, probabilities: {} } } }) });
+  const input = { title: '房间', context: [], message: { id: 3, author: '用户', text: '修一下登录' }, host: 'Claude', members: [{ name: 'Codex', description: 'Codex CLI' }] };
+  assert.equal((await route_free_message(home, jev, input, reply('Codex', 0.95))).member, 'Codex');
+  assert.equal((await route_free_message(home, jev, input, reply('Codex', ROUTE_CONFIDENCE - 0.01))).member, null);
+  assert.equal((await route_free_message(home, jev, input, reply('__host__', 0.99))).member, null);
+  const suggestion = await suggest_interjection(home, jev, { ...input, experts: ['Codex'] }, async () => ({ ok: true,
+    json: async () => ({ answers: { handling: { type: 'choice', choice: '__note__', confidence: 0.7, probabilities: {} } } }) }));
+  assert.deepEqual(suggestion, { message_id: 3, suggestion: '仅补充信息，按原计划继续', confidence: 0.7 });
+});
+
+test('host tasks carry scheduling suggestions only when there are some', async t => {
+  const f = await fixture(t);
+  task_files(f.config, f.event, 'test-token', {});
+  assert.equal(JSON.parse(readFileSync(join(f.config.directory, 'event-1.task.json'), 'utf8')).scheduler_suggestions, undefined);
+  const suggestions = [{ message_id: 9, suggestion: '请 Claude 回应', confidence: 0.82 }];
+  task_files(f.config, f.event, 'test-token', {}, suggestions);
+  const task = JSON.parse(readFileSync(join(f.config.directory, 'event-1.task.json'), 'utf8'));
+  assert.deepEqual(task.scheduler_suggestions, suggestions);
+  assert.match(task.instructions, /仅供参考/);
+});
 
 test('API profiles need a bound key but no software or filesystem permission', t => {
   const home = mkdtempSync(join(tmpdir(), 'api-config-'));
@@ -158,6 +201,13 @@ test('replayed events and a restarted dispatcher do not deliver a second notific
   assert.equal(sent, 1); assert.equal(f.store.cursor(), 1);
   assert.equal(f.store.binding('Codex').session_id, 'actual-chat');
   assert.equal(f.calls.filter(action => action === 'reserve').length, 1);
+});
+
+test('an event of a manual expert without local configuration is left for the member to answer', async t => {
+  const f = await fixture(t); let sent = 0;
+  f.event.participant = 'Qwen';
+  await new DiscussionRunner(f.config, f.store, async () => { sent++; return { status: 'accepted' }; }).tick();
+  assert.equal(sent, 0); assert.equal(f.calls.filter(action => action === 'reserve').length, 0);
 });
 
 test('a participant whose previous process is still exiting is not resumed until it closes', async t => {

@@ -569,6 +569,13 @@ CREATE TABLE IF NOT EXISTS member_requests (
     UNIQUE(message_id,member_id)
 );
 CREATE INDEX IF NOT EXISTS member_requests_open ON member_requests(member_id,status);
+-- Smart scheduling's decision for a request it moved from the host to a member; a separate table so D1 needs no column change.
+CREATE TABLE IF NOT EXISTS request_schedules (
+    request_id INTEGER PRIMARY KEY REFERENCES member_requests(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    confidence REAL NOT NULL
+);
 -- Ordinary members can suggest a response without creating work or spending a chain budget.
 CREATE TABLE IF NOT EXISTS member_suggestions (
     message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,

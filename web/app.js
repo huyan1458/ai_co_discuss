@@ -60,7 +60,7 @@ state.directory_notice = "";
 state.directory_pending = new Map();
 state.directory_version = 0;
 state.navigation_version = 0;
-state.launch = { available: false, remote: false, connect_command: "", profiles: {}, workspace: {}, create: true, error: "", notice: "", recoveries: [] };
+state.launch = { available: false, remote: false, connect_command: "", profiles: {}, workspace: {}, scheduler: {}, create: true, error: "", notice: "", recoveries: [] };
 const PLATFORM_CLIENTS = { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }],
   Claude: [{ value: "claude", label: "Claude Code CLI" }],
   Gemini: [{ value: "antigravity_cli", label: "Antigravity CLI" }, { value: "antigravity", label: "Antigravity App" }] };
@@ -840,6 +840,7 @@ function reset_create_form() {
   state.create_parent = null;
   state.launch.create = true;
   state.launch.workspace = {};
+  state.launch.scheduler = {};
   state.launch.profiles = JSON.parse(JSON.stringify(state.launch.saved_profiles || {}));
   Object.values(state.launch.profiles).forEach(fill_api_key);
   state.launch.notice = "";
@@ -944,7 +945,7 @@ async function invite_member({ name, access, project_access = "read", session_id
     finish_member_request(room_id, token, record, result);
     if (state.room?.id === room_id) {
       state.free_notice = access === "online" ? `${record.member.name} 已加入，阅读通知与真实回答由你或授权主持人转交。`
-        : access === "manual" ? `${record.member.name} 已加入；在成员菜单下载私有配置、复制参与说明，再交给它的本地会话。`
+        : access === "manual" ? `${record.member.name} 已加入；点它的“启动指令”复制含凭证的整段说明，粘贴到你要用的 AI 会话即可。`
           : record.options?.session_id ? `${record.member.name} 已接入原会话；它工作时请不要在原窗口继续操作。`
           : state.room.mode === "free" ? `${record.member.name} 已加入，之后点名它即会由本机服务唤醒。`
             : `${record.member.name} 已加入讨论，主持人会重新安排发言。`;
@@ -1367,7 +1368,7 @@ async function submit_room(event, folder_id = null) {
   // a free room needs the service only for members it wakes.
   const launching = free ? Object.values(payload.experts).includes("cli") : state.launch.create && state.launch.available;
   if (launching && !state.launch.available) throw new Error("本机唤醒的成员需要连接本机服务；也可改为手动接入或网页代发");
-  const launch_draft = launching ? launch_options() : null;
+  const launch_draft = launching ? creation_launch_options() : null;
   const signature = JSON.stringify({ payload, launch_draft });
   const navigation = state.navigation_version;
   if (!launching) element("room-dialog").close();
@@ -1377,7 +1378,9 @@ async function submit_room(event, folder_id = null) {
     const pending = prepare_room_request(signature);
     const token = pending.token;
     pending.members ||= creation_members(payload.experts);
-    const input = { ...(launch_draft || {}), room: { ...payload, members: pending.members, submission_id: pending.id }, token };
+    // The website tracks capabilities (cli/online); a manual expert is a local reader and writer whose delivery lives in its member record.
+    const experts = Object.fromEntries(Object.entries(payload.experts || {}).map(([name, mode]) => [name, mode === "manual" ? "cli" : mode]));
+    const input = { ...(launch_draft || {}), room: { ...payload, ...(payload.experts ? { experts } : {}), members: pending.members, submission_id: pending.id }, token };
     room = await update_directory({ key: "create-room", label: `「${payload.title}」创建`,
     error_message: launching ? error => `「${payload.title}」${error.message}` : null,
     apply: () => { state.creating_room = payload; }, rollback: () => { state.creating_room = null; },
@@ -1392,7 +1395,7 @@ async function submit_room(event, folder_id = null) {
   }
   state.pending_room = null;
   state.create_parent = null;
-  if (JSON.stringify({ payload: room_creation_payload(folder_id), launch_draft: launching ? launch_options() : null }) === signature) {
+  if (JSON.stringify({ payload: room_creation_payload(folder_id), launch_draft: launching ? creation_launch_options() : null }) === signature) {
     element("room-form").reset();
     reset_creation_mode();
     render_expert_inputs("new-expert-modes", default_experts());
@@ -1521,7 +1524,7 @@ async function resume_launch(id) {
   try {
     const result = await submit_local_launch(record.input, record.title, record.direct, record.signature);
     if (state.pending_room?.id === id && state.pending_room.signature === JSON.stringify({
-      payload: room_creation_payload(record.input.room?.folder_id ?? null), launch_draft: record.direct ? null : launch_options() })) {
+      payload: room_creation_payload(record.input.room?.folder_id ?? null), launch_draft: record.direct ? null : creation_launch_options() })) {
       element("room-form").reset();
       reset_creation_mode();
       render_expert_inputs("new-expert-modes", default_experts());
@@ -1560,7 +1563,8 @@ async function load_launch_settings() {
     const settings = await local_launch_request("settings");
     // Keep the saved machine defaults so every new form can start from them again.
     state.launch.saved_profiles = JSON.parse(JSON.stringify(settings.participants || {}));
-    Object.assign(state.launch, { available: true, profiles: settings.participants, api_providers: settings.api_providers || {}, api_keys: settings.api_keys || {}, error: "",
+    Object.assign(state.launch, { available: true, profiles: settings.participants, api_providers: settings.api_providers || {}, api_keys: settings.api_keys || {},
+      scheduler_providers: settings.scheduler_providers || {}, error: "",
       notice: local_connection ? "已连接本机服务，讨论保存在当前网站" : "" });
     Object.values(state.launch.profiles).forEach(fill_api_key);
     load_room_models();
@@ -1598,9 +1602,10 @@ async function load_room_models() {
 
 /** Describe registered launch choices without claiming the software's effective defaults are known. */
 function participant_model(name, room, saved) {
-  if (room?.runtime?.mode !== "automatic") return "模型与强度在原聊天设置";
+  // Nothing to say beats a placeholder: a manual member's settings live in its own session and unread ones are not guessed.
+  if (room?.runtime?.mode !== "automatic" || (room.members || []).find(member => member.name === name)?.access === "manual") return "";
   const profile = saved?.room_id === room.id ? saved.participants?.[name] : null;
-  if (!profile) return "模型与强度未获取";
+  if (!profile) return "";
   if (["codex", "antigravity"].includes(profile.adapter)) return "模型与强度由 App 设置";
   const model = profile.model || "默认模型";
   const effort = profile.adapter === "antigravity_cli" ? "强度随模型" : profile.effort || "默认强度";
@@ -1609,7 +1614,9 @@ function participant_model(name, room, saved) {
 
 /** Label how a member answers: the registered adapter says API / App; other locally woken members are CLI. */
 function participant_access(name, room) {
-  const adapter = (room?.members || []).find(member => member.name === name)?.adapter;
+  const member = (room?.members || []).find(item => item.name === name);
+  const adapter = member?.adapter;
+  if (member?.access === "manual") return "手动";
   if (adapter === "api") return "API";
   if (["codex", "antigravity"].includes(adapter)) return "App";
   return room?.experts?.[name] === "cli" ? "CLI" : "在线";
@@ -1743,6 +1750,36 @@ function launch_options() {
   const draft = JSON.parse(JSON.stringify({ participants: state.launch.profiles, ...state.launch.workspace, entry: "web" }));
   for (const profile of Object.values(draft.participants)) if (profile.adapter === "api") profile.project_access = "read";
   return draft;
+}
+
+/** A new room also carries the optional smart scheduling choice; only a complete, enabled choice is sent. */
+function creation_launch_options() {
+  const { enabled, provider, model, api_key_ref } = state.launch.scheduler;
+  return { ...launch_options(), ...(enabled && provider && model && api_key_ref ? { scheduler: { provider, model, api_key_ref } } : {}) };
+}
+
+/** Change the smart scheduling draft; a new provider starts from its preset model and any key saved for its root. */
+function write_scheduler(field, value) {
+  const scheduler = state.launch.scheduler;
+  scheduler[field] = value;
+  if (field === "provider" || (field === "enabled" && value && !scheduler.provider)) {
+    scheduler.provider ||= Object.keys(state.launch.scheduler_providers || {})[0] || "";
+    const preset = state.launch.scheduler_providers?.[scheduler.provider];
+    scheduler.model = preset?.models[0] || "";
+    scheduler.api_key_ref = preset ? state.launch.api_keys?.[preset.base_url] || "" : "";
+  }
+  publish_view();
+}
+
+/** Save the scheduling provider's key to the local private store, under that provider's official root. */
+async function save_scheduler_api_key(api_key) {
+  const scheduler = state.launch.scheduler;
+  const base_url = state.launch.scheduler_providers?.[scheduler.provider]?.base_url;
+  if (!base_url) throw new Error("请先选择智能调度供应商");
+  const result = await local_launch_request("api-key", { base_url, api_key });
+  state.launch.api_keys = { ...state.launch.api_keys, [base_url]: result.api_key_ref };
+  if (state.launch.scheduler === scheduler && state.launch.scheduler_providers[scheduler.provider].base_url === base_url) scheduler.api_key_ref = result.api_key_ref;
+  publish_view();
 }
 
 /** Describe effective placement and binding from the same explicit draft sent to the launcher. */
@@ -2116,23 +2153,47 @@ function download_member_access(name) {
     : `已下载 ${name} 的私有配置；交给该成员的本地会话，下载不代表已接入。`;
 }
 
-/** Copy a member-specific entry instruction without copying its credential or conversation context. */
-async function copy_member_join(name) {
+/** Copy the same room-scoped credential as one line of text for an agent that cannot take a file. */
+async function copy_member_access_text(name) {
+  const room = state.room, access = access_snapshot();
+  const member = access.members.find(item => item.name === name);
+  if (!access.can_manage || !member?.available || member.access === "online") throw new Error("当前浏览器没有此成员可复制的凭证");
+  await copy_text(JSON.stringify({ site: location.origin, room: room.id, token: member_credentials(room.id)[name].token }));
+  state.access_error = "";
+  state.access_notice = `已复制 ${name} 的凭证文本，含 token，仅交给该成员；用环境变量 DISCUSS_ACCESS 或 --access-file - 使用，复制不代表已接入。`;
+}
+
+/** Copy a member-specific entry instruction; only the launch variant carries the credential, never conversation context. */
+async function copy_member_join(name, with_credential = false) {
   const room = state.room, access = access_snapshot();
   const member = access.members.find(item => item.name === name);
   if (!access.can_manage || !member) throw new Error("请使用房主浏览器选择本房间成员");
+  if (with_credential && (member.access !== "manual" || !member.available)) throw new Error("当前浏览器没有此成员可复制的凭证");
   const params = new URLSearchParams({ participant: name, mode: member.access === "online" ? "online" : "cli" });
   const address = `${location.origin}/r/${room.id}?${params}`;
   const skills = `请调用 discuss-participant${room.host === name ? " 和 discuss-host" : ""}。`;
   let instruction;
   if (member.access === "online") instruction = "你是在线只读成员，请在原聊天回答，由用户或授权主持人代发；不要尝试直接写入房间。模型与思考强度在原网页设置。";
   else if (member.access === "runner") instruction = `${skills}等待本机程序交付有效任务，按 task 中的 access_file 和 execution 凭据操作${room.mode === "free" ? "；自由协作的回答必须绑定本次有效 execution_id" : ""}。不要另建定时任务；只处理本次有效执行，失效或撤销后停止提交。下载的持久成员私有文件不能替代自动执行凭据。`;
-  else instruction = `${skills}使用属于你的私有文件 member-${room.id}-${name}.json，由用户提供它在本机的实际完整路径；先执行 codiscuss room view ${room.id} --site ${location.origin} --as ${name} --access-file "实际完整路径"，后续命令保持本站点、房间和身份。不要读取或公开文件中的 token。模型与思考强度在原软件中设置。首次复制后，可由人工或软件原生定时触发；自行提交，不必每轮复制回答。${workspace_instruction()}`;
-  await copy_text(`请以 ${name} 身份参与房间。\n${instruction}\n房间入口：${address}\n先核对最新阶段、任务和原文编号，再按房间协议参与。`);
+  else if (with_credential) instruction = `${skills}凭证文本在下方：原样设为环境变量 DISCUSS_ACCESS（不要回显，不要写进命令行参数），命令省略 --access-file；先执行 codiscuss room view ${room.id} --site ${location.origin} --as ${name}，后续命令保持本站点、房间和身份。模型与思考强度在原软件中设置。${manual_trigger_instruction(room)}${workspace_instruction()}`;
+  else instruction = `${skills}使用属于你的私有文件 member-${room.id}-${name}.json，由用户提供它在本机的实际完整路径；先执行 codiscuss room view ${room.id} --site ${location.origin} --as ${name} --access-file "实际完整路径"，后续命令保持本站点、房间和身份。不要读取或公开文件中的 token；若用户给的是凭证文本而非文件，把它设为环境变量 DISCUSS_ACCESS（不要回显）并省略 --access-file。模型与思考强度在原软件中设置。${manual_trigger_instruction(room)}${workspace_instruction()}`;
+  const credential = with_credential ? `
+凭证文本（含 token，仅限你使用）：${JSON.stringify({ site: location.origin, room: room.id, token: member_credentials(room.id)[name].token })}` : "";
+  await copy_text(`请以 ${name} 身份参与房间。
+${instruction}
+房间入口：${address}
+先核对最新阶段、任务和原文编号，再按房间协议参与。${credential}`);
   if (state.room?.id === room.id) {
     state.access_error = "";
-    state.access_notice = `已复制 ${name} 的参与说明，未包含凭据；复制不代表已经送达或接入。`;
+    state.access_notice = with_credential ? `已复制 ${name} 的启动指令，含 token，只交给该成员；复制不代表已经送达或接入。`
+      : `已复制 ${name} 的参与说明，未包含凭据；复制不代表已经送达或接入。`;
   }
+}
+
+/** How a manual member learns it is its turn: free rooms are pulled by the member, discussions only on the host's assignment. */
+function manual_trigger_instruction(room) {
+  return room.mode === "free" ? "首次复制后，可由人工或软件原生定时触发；自行提交，不必每轮复制回答。"
+    : "这是全自动讨论：只在主持人给你安排发言时才参与，先核对 turn current 是否轮到你，再按参与技能认领发言权并提交；没有安排就结束本次检查。你不会被自动唤醒，需要你或软件原生定时触发。";
 }
 
 /** Download a private per-room setup file for the independent local runner. */
@@ -2140,9 +2201,11 @@ function export_runtime() {
   const token = localStorage.getItem(`discuss-access:${state.room.id}`);
   if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
   const saved = member_credentials(state.room.id);
-  const participants = Object.fromEntries(Object.keys(state.room.experts).filter(name => state.room.experts[name] === "cli")
+  // A manual expert answers with its own credential and has nothing for the local service to configure.
+  const manual = new Set((state.room.members || []).filter(member => member.access === "manual").map(member => member.name));
+  const participants = Object.fromEntries(Object.keys(state.room.experts).filter(name => state.room.experts[name] === "cli" && !manual.has(name))
     .map(name => [name, { adapter: state.launch.profiles[name]?.adapter || "待配置" }]));
-  const members = Object.fromEntries(Object.entries(saved).map(([name, value]) => [name, { token: value.token }]));
+  const members = Object.fromEntries(Object.entries(saved).filter(([name]) => !manual.has(name)).map(([name, value]) => [name, { token: value.token }]));
   const workspace = runtime_workspace();
   const config = { site: location.origin, room: state.room.id, token, ...workspace, participants, members };
   download_private_json(config, `discussion-${state.room.id}.json`);
@@ -2829,7 +2892,7 @@ function expert_control(container_id, name) {
   const container = element(container_id);
   let control = container?.querySelector(`[data-expert="${CSS.escape(name)}"]`);
   if (!control && container && platform_of(name)) {
-    container.insertAdjacentHTML("beforeend", `<label>${escape_html(name)}<select data-expert="${escape_html(name)}" aria-label="${escape_html(name)} 参与方式"><option value="">不参与</option><option value="cli">本地 CLI · 读写</option><option value="online">在线 AI · 只读</option></select></label>`);
+    container.insertAdjacentHTML("beforeend", `<label>${escape_html(name)}<select data-expert="${escape_html(name)}" aria-label="${escape_html(name)} 参与方式"><option value="">不参与</option><option value="cli">本地 CLI · 读写</option><option value="manual">手动接入</option><option value="online">在线 AI · 只读</option></select></label>`);
     control = container.querySelector(`[data-expert="${CSS.escape(name)}"]`);
   }
   return control;
@@ -2975,7 +3038,7 @@ async function execute_view_action(name, value) {
     copy_turn, notify: () => change_turn_status("notified"), cancel_turn: () => change_turn_status("cancelled"),
     take_floor: () => change_floor("take"), return_floor: () => change_floor("return"),
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
-    choose_runtime, export_runtime, download_member_access, copy_member_join, pause_runtime, check_limits, pause_discussion, restart_discussion, force_close, conclude_discussion,
+    choose_runtime, export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, force_close, conclude_discussion,
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
     load_room_configuration, save_room_configuration, interrupt_member, change_member, invite_member, interrupt_free, set_proxy, copy_online_notice,
     prepare_brainstorm, return_conclusion, convert_suggestion,
@@ -2986,7 +3049,7 @@ async function execute_view_action(name, value) {
     await actions[name](value);
     return true;
   } catch (error) {
-    if (["download_member_access", "copy_member_join"].includes(name)) state.access_error = error.message;
+    if (["download_member_access", "copy_member_access_text", "copy_member_join", "copy_member_launch"].includes(name)) state.access_error = error.message;
     else if (!state.free_error) state.free_error = error.message;
     show_toast(error.message, true);
     return false;
@@ -3001,7 +3064,7 @@ function change_view_theme(theme) {
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
   write_launch: write_launch_field, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
-  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, check_launch_api, launch_summary, launch_can_set_access, launch_can_bind_session, pick_launch_directory, restore_launch_profile, reset_create_form, empty_discussion_message,
+  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_launch_api, launch_summary, launch_can_set_access, launch_can_bind_session, pick_launch_directory, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, platform_of, execute: execute_view_action, theme: change_view_theme,

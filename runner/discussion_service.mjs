@@ -261,7 +261,7 @@ class RoomWorker {
 
 /** Keep workers aligned with the registry and tick each one per poll. */
 export class DiscussionService {
-  constructor(home, create_runner = (config, store, log) => config.mode === 'free' ? new FreeRoomRunner(config, store) : new DiscussionRunner(config, store, undefined, log), log = () => {}) {
+  constructor(home, create_runner = (config, store, log) => config.mode === 'free' ? new FreeRoomRunner(config, store, undefined, log) : new DiscussionRunner(config, store, undefined, log), log = () => {}) {
     this.home = home;
     this.create_runner = create_runner;
     this.log = log;

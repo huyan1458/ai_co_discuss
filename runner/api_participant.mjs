@@ -154,7 +154,8 @@ async function run_participant(profile, key, context) {
   const room = await read_room(context);
   const definitions = participant_tools(context);
   const prompt = JSON.stringify({ room, task: { role: context.role, turn_id: context.turn_id,
-    execution_id: context.execution_id, requests: context.requests, read_after: context.read_after } });
+    execution_id: context.execution_id, requests: context.requests, read_after: context.read_after,
+    ...(context.scheduler_suggestions?.length ? { scheduler_suggestions: context.scheduler_suggestions } : {}) } });
   const state = { system: system_prompt(context), history: api_history(profile, prompt), tools: definitions };
   for (let index = 0; index < MAX_MODEL_TURNS; index++) {
     const calls = await api_generate(profile, key, state, context.signal);

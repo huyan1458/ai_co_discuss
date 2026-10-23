@@ -11,6 +11,7 @@ import { parseArgs } from 'node:util';
 import { atomic_json } from './discussion_adapters.mjs';
 import { software_models } from './discussion_models.mjs';
 import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
+import { SCHEDULER_PROVIDERS } from './scheduler.mjs';
 import { acquire_lock, api, CODEX_ADAPTERS, DiscussionStore, service_drafts, task_files, validate_config } from './discussion_runner.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 
@@ -220,6 +221,11 @@ function launch_input(input) {
   return value;
 }
 
+/** Discussion experts the member list marks as manual: they answer with their own credential and need no local software. */
+function manual_experts(room) {
+  return new Set((room.members || []).filter(member => member && typeof member === 'object' && member.access === 'manual').map(member => member.name));
+}
+
 /** Merge machine defaults and explicit room overrides, preserving the selected participants. */
 function launch_config(home, input, room, directory, options) {
   if (room.mode === 'free') return free_launch_config(home, input, room, directory, options);
@@ -228,12 +234,15 @@ function launch_config(home, input, room, directory, options) {
   const online = Object.entries(room.experts).filter(([, mode]) => mode !== 'cli').map(([name]) => name);
   if (online.length) throw new Error(`全自动无法接入在线专家：${online.join('、')}。请调整参与方式或改用手动推进`);
   const defaults = options.defaults || launch_settings(home).participants;
+  const manual = manual_experts(room);
+  if (manual.has(room.host)) throw new Error('AI 主持人由本机服务续接，不能选择手动接入');
   const participants = {};
   for (const name of new Set([room.host, ...Object.keys(room.experts)])) {
-    participants[name] = participant_profile(name, defaults, input, name === room.host);
+    if (!manual.has(name)) participants[name] = participant_profile(name, defaults, input, name === room.host);
   }
   const members = launch_members(input, Object.keys(participants), options);
   return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, participants, members, api_home: home,
+    scheduler: input.scheduler || undefined,
     cwd: input.cwd, discussion_project: input.discussion_project, project_access: input.project_access || undefined,
     data_directory: join(directory, 'runtime'), draft_directory: service_drafts(home, join(directory, 'runtime')) }, directory);
 }
@@ -248,7 +257,7 @@ function free_launch_config(home, input, room, directory, options) {
   const participants = Object.fromEntries(names.map(name => [name, participant_profile(name, defaults, input, false)]));
   const members = launch_members(input, names, options);
   return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, mode: 'free', participants, members, api_home: home,
-    cwd: input.cwd, project_access: input.project_access || undefined,
+    scheduler: input.scheduler || undefined, cwd: input.cwd, project_access: input.project_access || undefined,
     data_directory: join(directory, 'runtime'), draft_directory: service_drafts(home, join(directory, 'runtime')) }, directory);
 }
 
@@ -344,15 +353,15 @@ function manual_access(path, input, name, token) {
 /**
  * Invite (add) or bring back (rejoin) one member of a running free room or discussion.
  * The local configuration is written before the website call, so a retry reuses the same credential.
- * Discussions only admit members the local service wakes.
+ * A discussion's manual expert answers with its own credential and is never woken.
  */
 export async function room_member(home, raw, locked = false) {
   const { input, path, config: registered } = await member_room_context(home, raw);
   const { action, name } = input;
   const access = input.access || 'runner';
   const free = registered.mode === 'free';
-  if (!['add', 'rejoin'].includes(action) || !platform_of(name) || (access !== 'manual' && !clients_of(name)) || !(free ? ['runner', 'manual'] : ['runner']).includes(access)) {
-    throw new Error(free ? 'action 须为 add/rejoin，成员须为支持的 AI，接入方式须为 runner/manual' : '讨论房间只接受本机唤醒的成员；action 须为 add/rejoin');
+  if (!['add', 'rejoin'].includes(action) || !platform_of(name) || (access !== 'manual' && !clients_of(name)) || !['runner', 'manual'].includes(access)) {
+    throw new Error('action 须为 add/rejoin，成员须为支持的 AI，接入方式须为 runner/manual');
   }
   const release = locked ? () => {} : acquire_lock(join(dirname(path), 'configuration-edit'));
   try {
@@ -663,8 +672,8 @@ async function perform_launch(home, context, options) {
       members: [...Object.keys(config.participants).map(name => ({ name, adapter: config.participants[name].adapter,
         token: config.members[name].token, access: 'runner', session_mode: config.participants[name].session_id ? 'borrowed' : 'new' })),
       // Manual and online members keep the credentials the browser generated; nothing local is configured for them.
-      ...(free ? input.room.members.filter(member => !woken_member(member))
-        .map(({ name, token, access }) => ({ name, token, access, adapter: '', session_mode: 'new' })) : [])],
+      ...(input.room.members || []).filter(member => free ? !woken_member(member) : member?.access === 'manual')
+        .map(({ name, token, access }) => ({ name, token, access, adapter: '', session_mode: 'new' }))],
     });
     config.room = room.id;
     await verify_control(config, room);
@@ -705,7 +714,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   assert_shared_home(home);
   let result;
   if (positionals[0] === 'settings') result = { ...(input ? save_launch_settings(home, input) : launch_settings(home)), api_providers: API_PROVIDERS,
-    api_keys: saved_api_keys(home) };
+    scheduler_providers: SCHEDULER_PROVIDERS, api_keys: saved_api_keys(home) };
   else if (positionals[0] === 'api-key' && input) result = save_api_key(home, input);
   else if (positionals[0] === 'api-check' && input) result = await api_check(home, input);
   else if (positionals[0] === 'room-models' && input) result = room_models(home, input);

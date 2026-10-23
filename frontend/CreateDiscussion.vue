@@ -3,6 +3,7 @@
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import LimitPicker, { format_duration } from "./LimitPicker.vue";
 import ExpertCard from "./ExpertCard.vue";
+import SchedulerSettings from "./SchedulerSettings.vue";
 
 const props = defineProps({ targetFolder: { type: Object, default: null } });
 const emit = defineEmits(["submit", "cancel"]);
@@ -30,7 +31,8 @@ const instance_count = (platform) => selected_names.value.filter((name) => bridg
 const library = ref(null);
 const host = computed(() => value("host"));
 // Members that submit their own answers can host; web members only read. The user is the client, never the host.
-const host_options = computed(() => selected_names.value.filter((name) => selected.value[name] !== "online"));
+// A discussion's host is continued by the local service, so it cannot be a manual member.
+const host_options = computed(() => selected_names.value.filter((name) => selected.value[name] !== "online" && (free.value || selected.value[name] !== "manual")));
 const limit_picker = ref(null);
 // Discussions run automatically; a free room needs the local service only for the members it wakes.
 const woken_names = computed(() => selected_names.value.filter((name) => selected.value[name] === "cli"));
@@ -42,6 +44,12 @@ const launch_ready = (name) => {
 };
 const launching = computed(() => automatic.value && view.value.launch.available && (free.value || view.value.launch.create));
 const free_ready = computed(() => selected_names.value.length > 0 && woken_names.value.every(launch_ready) && (!woken_names.value.length || view.value.launch.available));
+// Smart scheduling runs in the local service, so it is offered only when this room will be launched there.
+const scheduling = computed(() => view.value.launch.available && (free.value ? woken_names.value.length > 0 : view.value.launch.create));
+const scheduler_unready = computed(() => {
+  const scheduler = view.value.launch.scheduler || {};
+  return scheduling.value && scheduler.enabled && !(scheduler.provider && scheduler.model && scheduler.api_key_ref);
+});
 const CONNECTION_POLL_MS = 3000;
 const needs_connection = computed(() => automatic.value && !view.value.launch.available);
 let connection_timer = 0;
@@ -51,9 +59,10 @@ const blocker = computed(() => {
     if (!selected_names.value.length) return "先添加 AI";
     if (needs_connection.value) return "先连接本机服务";
     const unready = woken_names.value.filter((name) => !launch_ready(name));
-    return unready.length ? `补齐 ${unready.join("、")} 的接入配置` : "";
+    return unready.length ? `补齐 ${unready.join("、")} 的接入配置` : scheduler_unready.value ? "补齐智能调度配置，或取消勾选" : "";
   }
-  return host.value ? "" : "先添加 AI 并选定主持人";
+  if (!host.value) return "先添加 AI 并选定主持人";
+  return scheduler_unready.value ? "补齐智能调度配置，或取消勾选" : "";
 });
 
 /** Keep the host inside the selected members that answer by themselves. */
@@ -89,8 +98,9 @@ function navigate_choices(event) {
 
 /** A platform with local software can also join by hand; an API-only platform cannot. */
 const has_local = (name) => bridge.launch_clients[name]?.some((item) => item.value !== "api");
-/** Free rooms choose delivery per member; discussions are always woken by the local service. */
-const access_choices = (name) => free.value ? ["cli", ...(has_local(name) ? ["manual"] : []), "online"] : [];
+/** Free rooms choose delivery per member; a discussion's experts are woken or manual, its host always woken. */
+// Manual needs no local software, so any platform can be pasted into whichever AI the user runs by hand.
+const access_choices = (name) => free.value ? ["cli", "manual", "online"] : name !== host.value ? ["cli", "manual"] : [];
 
 /** Change one selected expert's delivery, defaulting a woken API-only platform to its API, and keep the host valid. */
 function set_expert_mode(name, mode) {
@@ -110,7 +120,7 @@ function expert_status(name) {
 /** Describe a platform before adding an independent instance. */
 function library_description(name) {
   if (instance_count(name)) return `已加入 ${instance_count(name)} 位 · 可继续添加`;
-  return has_local(name) ? "API / 本地 App / CLI" : free.value ? "API / 网页代发" : "API";
+  return has_local(name) ? "API / 本地 App / CLI / 手动接入" : free.value ? "API / 手动接入 / 网页代发" : "API / 手动接入";
 }
 
 /** Admit one library role, woken by the local service until its card says otherwise. */
@@ -182,10 +192,10 @@ const summary = computed(() => {
 
       <section class="create-section">
         <h3><span>2</span>谁来参与</h3>
-        <p class="fine-print create-hint">{{ free ? '每位成员单独选接入：本机唤醒（App / CLI / API）、手动接入（凭证交给你自己的会话）或网页代发（由你转发回答）。' : '讨论全程由本机服务唤醒 AI，可用 App、CLI 或 API；手动接入和网页 AI 请用自由协作。' }}</p>
+        <p class="fine-print create-hint">{{ free ? '每位成员单独选：自动（本机唤醒）、手动（你来启动）或网页（由你转发回答）。' : '主持人由本机自动启动，专家可选自动或手动。网页 AI 请用自由协作。' }}</p>
         <div v-if="selected_names.length" class="create-experts" role="group" aria-label="参与的 AI">
           <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :choices="access_choices(name)"
-            :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)"
+            :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)" hosting
             @host="write('host', name)" @remove="remove_expert(name)" @mode="set_expert_mode(name, $event)" />
         </div>
         <p v-else class="create-experts-empty">从下方添加 AI；同一平台可添加多位，各自独立会话。</p>
@@ -199,6 +209,7 @@ const summary = computed(() => {
           <UIcon name="i-lucide-crown" />
           <span>{{ free ? host_options.length ? '点卡片上的皇冠指定主持人：没 @ 任何人的消息由它分配；其他成员只在被你或主持人点名时发言。' : '网页 AI 不能主持；添加一位本地 AI 后，没 @ 的消息才有人接。' : host_options.length ? '点卡片上的皇冠指定主持人，负责补全议题、安排发言与收束，也可同时作为专家。' : '先添加一位 AI 担任主持人。' }}</span>
         </div>
+        <SchedulerSettings v-if="scheduling && selected_names.length" :free="free" />
       </section>
 
       <section v-if="!free" class="create-section">
@@ -240,7 +251,7 @@ const summary = computed(() => {
       <div class="create-footer-row">
         <span class="create-summary" :class="{ 'is-blocked': blocker }" :title="summary">{{ blocker ? `还差：${blocker}` : summary }}</span>
         <UButton label="取消" color="neutral" variant="ghost" @click="emit('cancel')" />
-        <UButton type="submit" form="create-discussion-form" class="channel-primary-button" :icon="launching ? 'i-lucide-play' : 'i-lucide-plus'" :label="free ? automatic ? '创建并连接' : '创建协作房间' : launching ? '创建并启动讨论' : '创建讨论'" :disabled="free ? !free_ready : !host" :loading="pending === 'create'" />
+        <UButton type="submit" form="create-discussion-form" class="channel-primary-button" :icon="launching ? 'i-lucide-play' : 'i-lucide-plus'" :label="free ? automatic ? '创建并连接' : '创建协作房间' : launching ? '创建并启动讨论' : '创建讨论'" :disabled="(free ? !free_ready : !host) || scheduler_unready" :loading="pending === 'create'" />
       </div>
     </footer>
   </div>

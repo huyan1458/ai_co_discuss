@@ -197,7 +197,7 @@ def authorize_write(connection, room_id, token, operation, payload):
         return
     member = connection.execute("SELECT * FROM room_members WHERE room_id=? AND token_hash=? AND status='active' AND access<>'online'",
                                 (room_id, hashed)).fetchone() if hashed else None
-    if member and (not run or run["mode"] == "manual"):
+    if member and (not run or run["mode"] == "manual" or member["access"] == "manual"):
         authorize_participant(connection, room_id, member, operation, payload)
         return
     if not run or not hashed:
@@ -259,8 +259,10 @@ def configure_runtime(connection, room_id, token, payload):
     if action in ("pause", "stop"):
         connection.execute("UPDATE topic_settings SET phase='paused' WHERE room_id=? AND phase<>'concluded'", (room_id,))
     connection.execute("UPDATE discussion_runtime SET status=? WHERE room_id=?", (status, room_id))
-    connection.execute("UPDATE room_members SET access=? WHERE room_id=? AND access<>'online'",
-                       ("runner" if mode == "automatic" else "manual", room_id))
+    # Only a real mode change converts members; a manual expert of a woken discussion (adapter 'manual') stays manual.
+    if mode != current["mode"]:
+        connection.execute("UPDATE room_members SET access='manual' WHERE room_id=? AND access='runner'" if mode == "manual" else
+                           "UPDATE room_members SET access='runner' WHERE room_id=? AND access='manual' AND adapter<>'manual'", (room_id,))
     return runtime_view(connection, room_id)
 
 

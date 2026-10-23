@@ -18,6 +18,21 @@ const execution = computed(() => room.value?.runtime?.latest_execution);
 const repair = computed(() => view.value.launch.repair?.room_id === room.value?.id ? view.value.launch.repair : null);
 const runtime_status = computed(() => room.value?.runtime?.expired ? "已到截止时间" : ({ ready: "尚未启动", running: "自动推进已启用", paused: "已暂停", stopped: "已停止", concluded: "已收束" }[room.value?.runtime?.status] || "尚未启动"));
 const register_command = computed(() => `codiscuss add --config "discussion-${room.value?.id}.json"`);
+// A manual expert answers with its own credential, so the local service has nothing to configure for it.
+const woken_participants = computed(() => {
+  const manual = new Set((access.value.members || []).filter((member) => member.access === "manual").map((member) => member.name));
+  return [room.value?.host, ...Object.keys(room.value?.experts || {})].filter((name) => !manual.has(name));
+});
+const has_manual = computed(() => (access.value.members || []).some((member) => member.access === "manual"));
+const has_online = computed(() => (access.value.members || []).some((member) => member.access === "online"));
+/** A manual member's one-click launch comes first; the separate credential pieces sit in its menu. */
+function manual_menu(member) {
+  const unavailable = !access.value.can_manage || !member.available;
+  return [[
+    { label: "复制凭证文本", icon: "i-lucide-key-round", disabled: unavailable, onSelect: () => act("copy_member_access_text", member.name) },
+    { label: "下载私有配置", icon: "i-lucide-download", disabled: unavailable, onSelect: () => act("download_member_access", member.name) },
+  ]];
+}
 const progress_summary = computed(() => {
   const limits = room.value?.limits || {};
   const rounds = limits.max_rounds ? `${limits.completed_rounds || 0} / ${limits.max_rounds} 轮` : `${limits.completed_rounds || 0} 轮`;
@@ -54,7 +69,7 @@ const progress_summary = computed(() => {
       <section v-if="automatic && view.launch.available" class="access-setup" aria-label="网页启动入口">
         <div class="access-section-title"><h3>从网页启动</h3><span class="fine-print">本机执行</span></div>
         <template v-if="room.runtime?.status === 'ready'">
-          <LaunchSettings :participants="[room.host, ...Object.keys(room.experts || {})]" />
+          <LaunchSettings :participants="woken_participants" />
           <UButton label="启动讨论" icon="i-lucide-play" class="channel-primary-button" :loading="pending === 'launch_current_room'" @click="act('launch_current_room')" />
         </template>
         <div v-else-if="room.runtime?.status === 'paused' && !room.archived && !view.launch.remote" class="access-repair">
@@ -82,7 +97,7 @@ const progress_summary = computed(() => {
         <p class="access-host-entry">另一种入口：在 AI 工具对话中调用 <code>discuss-host</code>，由当前会话主持。</p>
       </section>
       <section v-else-if="automatic" class="access-setup" aria-label="全自动接入步骤">
-        <LaunchSettings :participants="[room.host, ...Object.keys(room.experts || {})]" />
+        <LaunchSettings :participants="woken_participants" />
         <details><summary>手动下载与登记配置</summary>
         <div class="access-section-title"><h3>首次接入</h3><a href="https://github.com/huyan1458/ai_co_discuss/blob/main/docs/runner.md#常驻讨论服务" target="_blank" rel="noopener" class="subtle-link">配置说明 <UIcon name="i-lucide-arrow-up-right" /></a></div>
         <ol class="access-steps">
@@ -96,17 +111,23 @@ const progress_summary = computed(() => {
         <summary><span>项目与工作目录 <small>可选</small></span><UIcon name="i-lucide-chevron-down" class="disclosure-icon" /></summary>
         <div class="access-disclosure-body"><p>指定 AI 使用的本机项目和目录，留空使用默认位置。仅保存在本机配置中。</p><div class="form-two-columns"><UFormField label="AI 软件中的项目"><UInput :model-value="view.fields['runtime-project']" placeholder="项目名称" class="w-full" @update:model-value="bridge.write_field('runtime-project', $event)" /></UFormField><UFormField label="工作目录"><UInput :model-value="view.fields['runtime-cwd']" placeholder="已有本机目录的完整路径" class="w-full" @update:model-value="bridge.write_field('runtime-cwd', $event)" /></UFormField></div></div>
       </details>
-      <details class="access-disclosure access-instructions" :open="!automatic">
+      <details class="access-disclosure access-instructions" :open="!automatic || has_manual">
         <summary><span>{{ automatic ? '成员参与说明与阅读地址' : '复制指令，交给对应的 AI' }}</span><UIcon name="i-lucide-chevron-down" class="disclosure-icon" /></summary>
         <div class="access-disclosure-body">
-          <p class="fine-print">手动接入的本地 AI 使用自己的私有配置；程序唤醒的成员等待本机任务，使用本次执行凭据。网页 AI 只能阅读房间，真实回答由你或授权主持人代发。</p>
+          <p v-if="has_manual || has_online" class="fine-print">{{ [has_manual && '手动成员：复制启动指令，交给你自己的 AI 会话。', has_online && '网页成员只读，回答由你或授权主持人代发。'].filter(Boolean).join('') }}</p>
           <ul class="access-member-list" aria-label="成员接入">
             <li v-for="member in access.members || []" :key="member.name">
               <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="sm" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
               <div class="access-member-copy"><strong>{{ member.name }}</strong><span>{{ member.access === 'online' ? '网页代发' : member.access === 'runner' ? '本机唤醒 · 自行发言' : '手动接入 · 自行发言' }}</span><small v-if="member.access !== 'online' && !member.available">当前浏览器没有此成员的私有配置</small></div>
               <div class="button-row">
-                <UButton v-if="member.access !== 'online'" icon="i-lucide-download" label="私有配置" :aria-label="`下载 ${member.name} 私有配置`" :disabled="!access.can_manage || !member.available" variant="outline" color="neutral" size="sm" @click="act('download_member_access', member.name)" />
-                <UButton icon="i-lucide-copy" label="参与说明" :aria-label="`复制 ${member.name} 参与说明`" variant="outline" color="neutral" size="sm" :disabled="!access.can_manage" @click="act('copy_member_join', member.name)" />
+                <template v-if="member.access === 'manual'">
+                  <UButton icon="i-lucide-rocket" label="复制启动指令" :aria-label="`复制 ${member.name} 含凭证的启动指令`" :disabled="!access.can_manage || !member.available" color="neutral" size="sm" @click="act('copy_member_launch', member.name)" />
+                  <UDropdownMenu :items="manual_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" :aria-label="`${member.name} 的更多接入方式`" /></UDropdownMenu>
+                </template>
+                <template v-else>
+                  <UButton v-if="member.access !== 'online'" icon="i-lucide-download" label="私有配置" :aria-label="`下载 ${member.name} 私有配置`" :disabled="!access.can_manage || !member.available" variant="outline" color="neutral" size="sm" @click="act('download_member_access', member.name)" />
+                  <UButton icon="i-lucide-copy" label="参与说明" :aria-label="`复制 ${member.name} 参与说明`" variant="outline" color="neutral" size="sm" :disabled="!access.can_manage" @click="act('copy_member_join', member.name)" />
+                </template>
               </div>
             </li>
           </ul>

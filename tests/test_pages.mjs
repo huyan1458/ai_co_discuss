@@ -575,9 +575,8 @@ test('Worker running discussions admit and release experts without pausing, like
   const events = (await f.request(`/${id}/events`)).body.events;
   assert.deepEqual([events.at(-1).participant, events.at(-1).role, events.at(-1).status], ['Codex', 'host', 'pending']);
   assert.equal((await f.request(`/${id}/topic`, { actor: '用户', experts: { Codex: 'cli', Claude: 'cli' } })).status, 400);
-  const invited = { name: 'DeepSeek', token: crypto.randomUUID(), access: 'manual', adapter: '' };
-  assert.equal((await f.request(`/${id}/members`, invited)).status, 400);
-  room = (await f.request(`/${id}/members`, { ...invited, access: 'runner', adapter: 'api' })).body;
+  const invited = { name: 'DeepSeek', token: crypto.randomUUID(), access: 'runner', adapter: 'api' };
+  room = (await f.request(`/${id}/members`, invited)).body;
   assert.deepEqual([room.runtime.status, room.experts.DeepSeek], ['running', 'cli']);
   assert.equal((await f.request(`/${id}/members/${members.Claude.id}`, { action: 'active', token: f.member_tokens.Claude })).status, 400);
   room = (await f.request(`/${id}/members/${members.Claude.id}`, { action: 'active', token: crypto.randomUUID() })).body;
@@ -590,6 +589,33 @@ test('Worker running discussions admit and release experts without pausing, like
   assert.equal((await f.request(`/${id}/members/${members.Codex.id}`, { action: 'redo' })).status, 404, 'no opinion yet');
   assert.equal((await f.request(`/${id}/members/${members.Claude.id}`, { action: 'redo' })).status, 200);
   assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM messages WHERE id=?').get(saved.lastInsertRowid).count, 0);
+});
+
+test('Worker manual expert answers a woken discussion with its own credential and mode switches keep it manual', async t => {
+  const f = await worker_fixture(t);
+  const id = (await f.request('', { title: '手动专家', host: 'Codex', experts: { Codex: 'cli', Claude: 'cli' } })).body.id;
+  assert.equal((await f.request(`/${id}/runtime`, { action: 'start', revision: 0, deadline: 0 })).status, 200);
+  const manual = { name: 'Qwen', token: f.member_tokens.Qwen = crypto.randomUUID(), access: 'manual', adapter: '' };
+  const joined = await f.request(`/${id}/members`, manual);
+  assert.equal(joined.status, 200, JSON.stringify(joined.body));
+  assert.equal(joined.body.members.find(member => member.name === 'Qwen').access, 'manual');
+  const turn = (await f.request(`/${id}/turns`, { actor: '用户', expert: 'Qwen', question: '观点', submission_id: 'manual-turn' })).body.turn;
+  const floor = (await f.request(`/${id}/floor`)).body;
+  assert.equal((await f.request(`/${id}/floor`, { actor: 'Qwen', action: 'take', revision: floor.revision })).status, 200);
+  const answer = await f.request(`/${id}/messages`, { author: 'Qwen', submitted_by: 'Qwen', source: 'cli', kind: 'opinion',
+    turn_id: turn.id, text: '实际回答', summary: '摘要', submission_id: 'manual-answer' });
+  assert.equal(answer.status, 201, JSON.stringify(answer.body));
+  const events = (await f.request(`/${id}/events`)).body.events;
+  assert.deepEqual([events.at(-1).participant, events.at(-1).role, events.at(-1).status], ['Codex', 'host', 'pending']);
+  assert.equal((await f.request(`/${id}/state`, { actor: 'Codex', text: 'x' })).status, 403, 'a woken host still needs its execution');
+  let run = (await f.request(`/${id}/runtime`, { action: 'pause', revision: (await f.request(`/${id}`)).body.runtime.revision })).body;
+  run = (await f.request(`/${id}/runtime`, { mode: 'manual', revision: run.revision })).body;
+  assert.equal((await f.request(`/${id}/runtime`, { mode: 'automatic', revision: run.revision })).status, 200);
+  const access = Object.fromEntries((await f.request(`/${id}`)).body.members.map(member => [member.name, member.access]));
+  assert.deepEqual([access.Qwen, access.Claude], ['manual', 'runner']);
+  const refused = await f.request('', { title: '手动主持', host: 'Codex', phase: 'initial', runtime_mode: 'automatic', experts: { Codex: 'cli', Claude: 'cli' },
+    members: [{ name: 'Codex', token: crypto.randomUUID(), access: 'manual' }, { name: 'Claude', token: crypto.randomUUID(), access: 'runner' }] });
+  assert.equal(refused.status, 400);
 });
 
 test('Worker zero deadline cannot bypass finite topic limits and rejects invalid deadlines', async t => {
@@ -796,6 +822,30 @@ test('Worker free rooms need the owner credential and keep secrets out of views 
   const again = await f.request('', { title: '自由协作', goal: 'x', mode: 'free', submission_id: 'free-worker-1',
     members: [{ name: 'Claude', adapter: 'claude', token: r.claude }] }, r.owner);
   assert.deepEqual([again.status, again.body.id], [200, r.room.id]);
+});
+
+test('Worker smart scheduling moves only a pending unnamed request from the host to a woken member', async t => {
+  const f = await worker_fixture(t);
+  const codex = 'codex-free'.repeat(4);
+  const r = await free_worker_room(f, [{ name: 'Codex', adapter: 'codex_cli', token: codex }]);
+  await r.say('帮我看看登录报错');
+  const inbox = (await f.request(`${r.path}/inbox`, undefined, r.owner)).body;
+  const pending = inbox.members.find(member => member.name === 'Claude').pending;
+  assert.deepEqual(pending.map(item => item.purpose), ['route']);
+  const codex_id = await r.member_id('Codex');
+  const schedule = (member_id, extra = {}, token = r.owner) => f.request(`${r.path}/requests/${pending[0].id}`,
+    { action: 'schedule', member_id, provider: 'jev', confidence: 0.91, ...extra }, token);
+  assert.equal((await schedule(codex_id, {}, r.claude)).status, 403);
+  assert.equal((await schedule(codex_id, { confidence: 1.5 })).status, 400);
+  assert.equal((await schedule(codex_id, { provider: 'other' })).status, 400);
+  assert.equal((await schedule(await r.member_id('Claude'))).status, 404);
+  const moved = await schedule(codex_id);
+  assert.deepEqual([moved.status, moved.body.member_id, moved.body.purpose], [200, codex_id, 'scheduled']);
+  assert.equal((await schedule(codex_id)).status, 409);
+  const after = (await f.request(`${r.path}/inbox`, undefined, r.owner)).body.members;
+  assert.deepEqual(after.map(member => [member.name, member.pending.length]), [['Claude', 0], ['Codex', 1]]);
+  const request = (await f.request(r.path)).body.free.requests.find(item => item.id === pending[0].id);
+  assert.deepEqual([request.schedule_provider, request.schedule_confidence], ['jev', 0.91]);
 });
 
 test('Worker free rooms bundle requests into one execution and reject late or unbound answers', async t => {

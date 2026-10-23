@@ -159,6 +159,8 @@ def record_statements(tables, room_id, maps):
                    for row in tables.get("member_requests", [])]
     statements += [("INSERT INTO member_suggestions (message_id,member_id) VALUES (?,?)", (messages[row["message_id"]], members[row["member_id"]]))
                    for row in tables.get("member_suggestions", [])]
+    statements += [("INSERT INTO request_schedules (request_id,room_id,provider,confidence) VALUES (?,?,?,?)",
+                    (requests[row["request_id"]], room_id, row["provider"], row["confidence"])) for row in tables.get("request_schedules", [])]
     return statements
 
 

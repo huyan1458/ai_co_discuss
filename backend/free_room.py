@@ -26,6 +26,7 @@ MAX_CHANGED_FILES = 200
 MAX_PATH_LENGTH = 500
 ACTIVE = ("dispatched", "started")
 ACCESS_MODES = ("runner", "manual", "online")
+SCHEDULER_PROVIDERS = ("jev", "decisions")
 # AI-created requests (host dispatches and hand-offs) allowed per chain; each owner message starts a chain.
 MAX_AUTO_HOPS = 8
 # A host that left gives up the role; the first active runner member (else manual) then takes it.
@@ -107,17 +108,30 @@ def save_room_access(connection, room_id, control_token, members, settings):
     connection.execute("UPDATE room_members SET role='host' WHERE room_id=? AND name=?", (room_id, settings["host"]))
 
 
+def discussion_access_ok(access, capability, automatic, is_host):
+    """Online experts stay online; a woken discussion also takes manual experts, but never a manual host."""
+    if capability == "online":
+        return access == "online"
+    if not automatic:
+        return access == "manual"
+    return access == "runner" or (access == "manual" and not is_host)
+
+
+def mark_manual(member, automatic):
+    """A manual expert of a woken discussion carries adapter 'manual', so mode switches never turn it into a woken member."""
+    return {**member, "adapter": "manual"} if automatic and member["access"] == "manual" else member
+
+
 def discussion_members(payload, settings):
     """Validate credentials against the room's declared participants and delivery mode."""
     members = member_values(payload.get("members")) if settings["experts"] else []
     if {member["name"] for member in members} != set(settings["experts"]):
         raise ValueError("成员凭证名单须与参与者名单一致")
     for member in members:
-        expected = "online" if settings["experts"][member["name"]] == "online" else (
-            "runner" if payload.get("runtime_mode") == "automatic" else "manual")
-        if member["access"] != expected:
+        if not discussion_access_ok(member["access"], settings["experts"][member["name"]],
+                                    payload.get("runtime_mode") == "automatic", member["name"] == settings["host"]):
             raise ValueError("成员接入方式与房间参与能力、任务交付方式不符")
-    return members
+    return [mark_manual(member, payload.get("runtime_mode") == "automatic") for member in members]
 
 
 def sync_discussion_members(connection, room_id, payload, settings):
@@ -126,15 +140,15 @@ def sync_discussion_members(connection, room_id, payload, settings):
     supplied = {member["name"]: member_value(member) for member in payload.get("members", [])}
     run = connection.execute("SELECT mode FROM discussion_runtime WHERE room_id=?", (room_id,)).fetchone()
     for name, capability in settings["experts"].items():
-        access = "online" if capability == "online" else ("runner" if run and run[0] == "automatic" else "manual")
+        automatic = bool(run and run[0] == "automatic")
         old = current.get(name)
-        if old and (old["access"] == "online") == (access == "online"):
+        if old and (old["access"] == "online") == (capability == "online"):
             if name in supplied and token_hash(supplied[name]["token"]) != old["token_hash"]:
                 raise FileExistsError("成员凭证与已登记身份不符；请核对原接入文件")
             continue
-        if name not in supplied or supplied[name]["access"] != access:
+        if name not in supplied or not discussion_access_ok(supplied[name]["access"], capability, automatic, name == settings["host"]):
             raise ValueError(f"新增或改变接入方式的成员 {name} 须提供独立的新凭证")
-        member = supplied[name]
+        member = mark_manual(supplied[name], automatic)
         hashed = token_hash(member["token"])
         if connection.execute("SELECT 1 FROM room_members WHERE room_id=? AND token_hash=? UNION ALL SELECT 1 FROM room_modes WHERE room_id=? AND control_hash=?", (room_id, hashed, room_id, hashed)).fetchone():
             raise ValueError("新成员凭证不能复用已有凭证")
@@ -222,7 +236,9 @@ def free_view(connection, room_id):
         members.append(member)
     names = {row["id"]: row["name"] for row in connection.execute("SELECT id,name FROM room_members WHERE room_id=?", (room_id,))}
     requests = [{**dict(row), "member": names.get(row["member_id"], "")} for row in connection.execute(
-        """SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by FROM member_requests
+        """SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by,
+        (SELECT provider FROM request_schedules WHERE request_id=member_requests.id) AS schedule_provider,
+        (SELECT confidence FROM request_schedules WHERE request_id=member_requests.id) AS schedule_confidence FROM member_requests
         WHERE room_id=? ORDER BY id DESC LIMIT ?""", (room_id, RECENT_REQUESTS))]
     chains = [dict(row) for row in connection.execute(
         "SELECT chain_id,reason FROM free_chains WHERE room_id=? ORDER BY chain_id DESC LIMIT 10", (room_id,))]
@@ -545,13 +561,37 @@ def inbox(connection, room_id, token):
     members = []
     for row in connection.execute("SELECT * FROM room_members WHERE room_id=? AND status='active' AND access='runner' ORDER BY id", (room_id,)):
         pending = [dict(item) for item in connection.execute(
-            "SELECT id,message_id FROM member_requests WHERE member_id=? AND status='pending' ORDER BY id", (row["id"],))]
+            "SELECT id,message_id,purpose FROM member_requests WHERE member_id=? AND status='pending' ORDER BY id", (row["id"],))]
         members.append({**{key: row[key] for key in MEMBER_FIELDS}, "pending": pending})
     executions = [{**public_execution(row), "member": row["name"]} for row in connection.execute(
         """SELECT member_executions.*,room_members.name FROM member_executions JOIN room_members ON room_members.id=member_id
         WHERE member_executions.room_id=? AND member_executions.status IN ('dispatched','started') ORDER BY member_executions.id""", (room_id,))]
     return {"room_id": room_id, "archived": bool(archived), "members": members, "executions": executions,
             "execution_minutes": execution_minutes(connection, room_id)}
+
+
+def schedule_request(connection, room_id, token, request_id, payload):
+    """Smart scheduling moves one unnamed message from the host to a woken member before the host takes it."""
+    require_owner(connection, room_id, token)
+    begin_write(connection)
+    if payload.get("action") != "schedule":
+        raise ValueError("只支持 action=schedule")
+    confidence = payload.get("confidence")
+    if payload.get("provider") not in SCHEDULER_PROVIDERS or type(confidence) not in (int, float) or not 0 <= confidence <= 1:
+        raise ValueError("须提供智能调度供应商 provider 与 0–1 的置信度 confidence")
+    request = connection.execute("SELECT * FROM member_requests WHERE room_id=? AND id=?", (room_id, request_id)).fetchone()
+    if not request:
+        raise LookupError("请求不存在")
+    if request["purpose"] != "route" or request["status"] != "pending":
+        raise FileExistsError("请求已由主持人接手或已处理，不能改派")
+    target = connection.execute("""SELECT * FROM room_members WHERE room_id=? AND id=? AND status='active'
+        AND access='runner' AND role<>'host'""", (room_id, payload.get("member_id"))).fetchone()
+    if not target:
+        raise LookupError("改派对象须为在场、由本机唤醒的非主持成员")
+    connection.execute("UPDATE member_requests SET member_id=?,purpose='scheduled' WHERE id=?", (target["id"], request_id))
+    connection.execute("INSERT OR REPLACE INTO request_schedules (request_id,room_id,provider,confidence) VALUES (?,?,?,?)",
+                       (request_id, room_id, payload["provider"], float(confidence)))
+    return dict(connection.execute("SELECT * FROM member_requests WHERE id=?", (request_id,)).fetchone())
 
 
 def reserve_execution(connection, room_id, token, payload):
@@ -700,7 +740,7 @@ def add_discussion_member(connection, room_id, token, payload, now):
     member = member_value(payload)
     _, experts, phase = discussion_roster(connection, room_id)
     run = connection.execute("SELECT mode FROM discussion_runtime WHERE room_id=?", (room_id,)).fetchone()
-    if member["access"] != ("runner" if run and run["mode"] == "automatic" else "manual"):
+    if not discussion_access_ok(member["access"], "cli", bool(run and run["mode"] == "automatic"), False):
         raise ValueError("新专家的接入方式须与讨论的推进方式一致")
     existing = connection.execute("SELECT * FROM room_members WHERE room_id=? AND name=? AND status<>'removed'", (room_id, member["name"])).fetchone()
     if existing and existing["status"] == "active" and existing["token_hash"] == token_hash(member["token"]):
@@ -712,7 +752,7 @@ def add_discussion_member(connection, room_id, token, payload, now):
     if len(experts) >= MAX_ROOM_AGENTS:
         raise ValueError("房间成员已达上限")
     require_fresh_member_token(connection, room_id, member["token"])
-    insert_member(connection, room_id, member, now)
+    insert_member(connection, room_id, mark_manual(member, bool(run and run["mode"] == "automatic")), now)
     save_discussion_experts(connection, room_id, {**experts, member["name"]: "cli"})
 
 

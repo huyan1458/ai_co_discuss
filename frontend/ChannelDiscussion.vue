@@ -189,6 +189,7 @@ const response_suggestions = computed(() => {
 /** A draft @mentions a member only outside code and quotes. */
 const MENTION_PATTERN = (name) => new RegExp(`(^|[\\s(（，,。；;：:])@${name}(?![\\w-])`, "u");
 const draft_prose = computed(() => text.value.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "").replace(/^>.*$/gm, ""));
+const SCHEDULER_LABELS = { jev: "TypeSafe Jev", decisions: "OpenAI Decisions" };
 const FREE_REQUEST_LABELS = { pending: ["待投递", "neutral"], delivering: ["处理中", "info"], completed: ["已回复", "success"],
   cancelled: ["已停止", "neutral"], failed: ["失败", "error"] };
 /** Each user message in a free room shows what happened to its request for every named member. */
@@ -199,8 +200,13 @@ const request_badges = computed(() => {
   for (const request of room.value.free?.requests || []) {
     const [label, color] = FREE_REQUEST_LABELS[request.status];
     const title = request.status === "failed" ? failures.get(request.execution_id) || "执行失败" : "";
+    // A request smart scheduling gave a member directly says so, since the user named no one; hovering shows how sure it was.
+    const scheduled = request.purpose === "scheduled";
+    const decision = scheduled && request.schedule_provider
+      ? `智能调度：${SCHEDULER_LABELS[request.schedule_provider] || request.schedule_provider}，置信度 ${Number(request.schedule_confidence).toFixed(2)}` : "";
     badges.set(request.message_id, [...(badges.get(request.message_id) || []),
-      { key: request.id, label: `${bridge.display_name(request.member)} · ${label}`, color, title }]);
+      { key: request.id, label: `${scheduled ? "智能调度 → " : ""}${bridge.display_name(request.member)} · ${label}`, color,
+        title: [decision, title].filter(Boolean).join("\n") }]);
   }
   return badges;
 });

@@ -42,6 +42,7 @@ Python 与 Cloudflare 是两种部署实现，运行时选其一，不是请求�
 | `frontend/markdown.mjs` | Markdown 原文 | 三个主题共用的安全 HTML 与公式渲染；原始 HTML 关闭 |
 | `runner/` | 私有房间配置、网站事件 | 接入 Codex App / CLI、Claude Code CLI、Antigravity App / CLI 的真实会话，续租与有限重试；`discussion_service.mjs` 常驻托管多个已登记房间；不生成回答，详见 [自动接入程序](runner.md) |
 | `runner/free_runner.mjs` | 自由房间的 inbox、私有房间配置 | 把成员名下的全部待投递请求打包为一次执行，复用同一组软件适配器；只停止该成员自己的进程 |
+| `runner/scheduler.mjs` | 房间配置中的 `scheduler`、本机私有密钥 | 可选智能调度：把中立的选择/判断题转换为 TypeSafe Jev 或 OpenAI Decisions 请求，返回带置信度的类型化答案；不生成文本，不保存密钥 |
 | `scripts/build_pages.mjs` | 后端源码、已构建 `web/`、Pages 静态文件 | 清理固定输出并生成 `dist/pages/`；不部署 |
 
 两套后端、Python 运行协议与共用 schema 位于 `backend/`；前端源码及 Vite 配置在 `frontend/`，静态运行文件在 `web/`，测试和构建脚本分别在 `tests/`、`scripts/`。`deploy/` 保存 Docker 文件，`.github/` 保存 CI、贡献指南和安全说明，第三方声明位于 `docs/`。根目录保留用户启动入口和工具约定的配置文件；`python server.py` 仍以项目根目录定位网页与默认数据库，不受终端工作目录影响。
@@ -226,7 +227,7 @@ Python 通过进程内条件变量唤醒订阅者，不占用数据库连接，�
 
 running 状态即使只有 pending 事件，也必须先暂停才能重新启动或配置模式。网页模式选择先读取最新状态，重试复用既有控制凭据；操作始终绑定点击时的房间，避免慢响应影响后来选中的房间。
 
-两种房间的用户写入、运行控制及成员管理都必须携带建房时的房主控制凭据；`actor`、`author`、`submitted_by` 只是声明。`room_modes` 为所有新房间保存控制哈希，`room_members` 保存每个实例的独立成员哈希、能力和主持职责。讨论房间的手动本地成员用自己的持久成员凭证；在线成员不能自行写入，由房主或获授主持职责的本地成员代发。成员主持可维护资料、摘要、阶段和安排，不能改名单、授予主持权限、控制自动运行或删除房间。房主凭据不能冒充本地成员提交观点。自动讨论仍要求本次有效执行凭据，持久成员凭证不能替代执行租约。
+两种房间的用户写入、运行控制及成员管理都必须携带建房时的房主控制凭据；`actor`、`author`、`submitted_by` 只是声明。`room_modes` 为所有新房间保存控制哈希，`room_members` 保存每个实例的独立成员哈希、能力和主持职责。讨论房间的手动本地成员用自己的持久成员凭证；在线成员不能自行写入，由房主或获授主持职责的本地成员代发。成员主持可维护资料、摘要、阶段和安排，不能改名单、授予主持权限、控制自动运行或删除房间。房主凭据不能冒充本地成员提交观点。自动讨论里本机唤醒的成员仍要求本次有效执行凭据，持久成员凭证不能替代执行租约；手动接入的专家（`access=manual`、`adapter=manual`，主持人除外）用自己的成员凭证回答安排，其待派发事件由接入程序跳过，回答保存后由触发器完成事件并唤醒主持人。
 
 房间响应的 `runtime.timings` 汇总当前运行各执行的阶段耗时：排队（事件产生到 reserve）、唤醒（reserve 到 AI enter）、执行（enter 到完成、撤销或失败），未结束的阶段计到当前时间；返回最近 20 条与全部合计，进度看板据此展示。升级前的执行没有计时记录，不计入。
 
@@ -243,6 +244,7 @@ running 状态即使只有 pending 事件，也必须先暂停才能重新启动
 - **请求**：用户消息按结构化接收者 `to`（成员名）为每位成员生成一条请求；省略且仅有一位在场成员时默认点名该成员，多位成员时交给主持人（`route`），只有在线成员而没有主持人时只作留言，不广播。网页只从正文中代码与引用之外的 `@成员` 生成 `to`，没有 @ 时省略 `to`。请求状态为 `pending`（待投递）→ `delivering`（处理中）→ `completed` / `cancelled` / `failed`。
 - **执行**：`member_executions` 每位成员最多一个 `dispatched/started`（部分唯一索引），不同成员可并行。接入程序用控制凭据 `GET inbox`、`POST executions {member_id, client_id}`（同一 `client_id` 返回同一执行）把成员的全部待投递请求打包；`POST executions/ID {action}` 支持 `renew`（租约 120 秒，不超过单次执行时限，默认 20 分钟）、`fail`（请求标记失败）和 `release`（仅确认未送达时退回队列）。租约过期的执行在下次读取或领取时标记失败，不自动重发。
 - **主持人与任务链**：用户是需求方，不担任主持人。只要有在场的非在线成员，房间就保持恰好一位主持人：成员变动时，离开或移出的主持人失去角色，由第一位在场的 runner 成员（没有则手动成员）接任；建房和每条房主消息前也做同样的补位，因此旧房间在下一条消息时自动获得主持人。房主用 `POST members/ID {action:"role", role:"host"}` 更换主持人（在线成员不能担任），把现任主持人改为 `member` 会被拒绝。多位成员时未点名的房主消息生成给主持人的 `route` 请求。主持人的回答可带 `to` 点名其他成员（不能点名自己），这些请求组成一个批次（`free_batches`）；批次内全部进入终态后，只要有一个完成就给主持人生成一次 `handoff` 请求，全部失败则停下该任务链。每条房主消息开启一条任务链（`chain_id` 为该消息编号），链上 AI 发起的请求（派活与回交）最多 8 次，超出即停下（`free_chains`，原因 `budget` / `all_failed`），房主发新消息开启新链。Worker 用同一批次内的集合 SQL 完成回交，回交请求按（派活消息，主持人）唯一，重复执行不会重复唤醒。
+- **智能调度改派**：接入程序用控制凭据 `POST requests/ID {action:"schedule", member_id, provider, confidence}` 把一条仍为 `pending` 的 `route` 请求改给一位在场、由本机唤醒的非主持成员，`purpose` 改为 `scheduled`，`created_by` 与 `chain_id` 不变，不消耗任务链预算；同一事务把供应商（`jev` / `decisions`）与 0–1 置信度写入 `request_schedules`（独立表，D1 重新应用 schema 即可，无需改旧表列），房间视图的请求带 `schedule_provider`、`schedule_confidence`，备份、导入与删除一并处理。请求已被主持人领取或已处理返回 409，目标不合格返回 404，供应商或置信度无效返回 400；Worker 用带条件的 `UPDATE` 与同批次 `INSERT … SELECT` 防止与主持人领取并发时丢失请求或留下孤立记录。`inbox` 的待投递项带 `purpose` 供接入程序识别。
 - **回应建议**：普通成员新发言的结构化 `to` 与正文在场成员 @ 合并保存到 `member_suggestions`（原消息编号、稳定成员编号），排除自己、代码与引用；不会创建请求。消息读取返回 `suggestions`，包含目标在场状态及已转换的请求编号。房主用 `POST suggestions {message_id,member_id}` 转换：同一事务记录用户确认消息，调用现有建请求路径，`message_id` 保留原回答、`chain_id` 使用用户确认消息编号、`created_by=user`。`UNIQUE(message_id,member_id)` 使重复或并发点击只生成一个请求及一条确认，终态不重新派发。权限、在场状态和未存档条件在写入事务内校验；Worker 使用批次断言。升级须应用包含新表的 schema；Python 重启时自动建表，D1 发布前显式执行。已有历史消息不补写建议。
 - **在线成员**：`access=online` 的成员只读，不进入 `inbox`，不能用自己的凭证发言；房主以控制凭据代发其回答（`author` 为该成员、`submitted_by` 为用户、`source=proxy`），可带 `request_ids` 关闭它的待处理请求。
 - **关联房间**：从自由房间发起的讨论房间在建房时带 `parent_room_id`，记录在 `room_links`；讨论房间视图有 `parent_room`，自由房间视图列出 `linked_rooms`。头脑风暴的轮次、时长与名单因此天然独立于自由房间。

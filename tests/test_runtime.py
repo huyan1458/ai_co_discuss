@@ -527,9 +527,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(next(event for event in events if event["participant"] == "Claude")["status"], "cancelled")
         self.assertEqual((events[-1]["participant"], events[-1]["role"], events[-1]["status"]), ("Codex", "host", "pending"))
         self.assertEqual(self.request(self.path + "/topic", {"actor": "用户", "experts": {"Codex": "cli"}}, self.owner)[0], 400)
-        manual = {"name": "DeepSeek", "token": uuid.uuid4().hex, "access": "manual", "adapter": ""}
-        self.assertEqual(self.request(self.path + "/members", manual, self.owner)[0], 400)
-        invited = {**manual, "access": "runner", "adapter": "api"}
+        invited = {"name": "DeepSeek", "token": uuid.uuid4().hex, "access": "runner", "adapter": "api"}
         status, room = self.request(self.path + "/members", invited, self.owner)
         self.assertEqual((status, room["runtime"]["status"], "DeepSeek" in room["experts"]), (200, "running", True), room)
         self.assertEqual(self.request(self.path + "/members", invited, self.owner)[0], 200, "an identical retry returns the same member")
@@ -537,6 +535,37 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.request(rejoin, {"action": "active", "token": self.member_tokens["Claude"]}, self.owner)[0], 400)
         status, room = self.request(rejoin, {"action": "active", "token": uuid.uuid4().hex}, self.owner)
         self.assertEqual((status, room["experts"].get("Claude"), room["runtime"]["status"]), (200, "cli", "running"), room)
+
+    def test_manual_expert_answers_a_woken_discussion_with_its_own_credential(self):
+        """A manual expert joins a running automatic discussion; its answer drives the host and mode switches keep it manual."""
+        run = self.start()
+        manual = {"name": "Qwen", "token": self.member_tokens["Qwen"], "access": "manual", "adapter": ""}
+        status, room = self.request(self.path + "/members", manual, self.owner)
+        self.assertEqual(status, 200, room)
+        self.assertEqual(next(m for m in room["members"] if m["name"] == "Qwen")["access"], "manual")
+        host_token = self.enter(self.events()[0])
+        status, created = self.request(self.path + "/turns", {"actor": "Codex", "expert": "Qwen", "question": "给出判断",
+                                                              "submission_id": "manual-expert-turn"}, host_token)
+        self.assertEqual(status, 201, created)
+        turn = created["turn"]
+        self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "x"}, self.member_tokens["Codex"])[0], 403)
+        self.answer("Qwen", turn["id"], self.member_tokens["Qwen"], "manual-expert-answer")
+        events = self.events()
+        self.assertEqual((events[1]["participant"], events[1]["status"]), ("Qwen", "completed"))
+        self.assertEqual((events[2]["participant"], events[2]["role"], events[2]["status"]), ("Codex", "host", "pending"))
+        paused = self.request(self.path + "/runtime", {"action": "pause", "revision": self.request(self.path)[1]["runtime"]["revision"]}, self.owner)[1]
+        manual_mode = self.request(self.path + "/runtime", {"mode": "manual", "revision": paused["revision"]}, self.owner)[1]
+        self.assertEqual(self.request(self.path + "/runtime", {"mode": "automatic", "revision": manual_mode["revision"]}, self.owner)[0], 200)
+        access = {m["name"]: m["access"] for m in self.request(self.path)[1]["members"]}
+        self.assertEqual((access["Qwen"], access["Claude"]), ("manual", "runner"))
+
+    def test_manual_host_is_rejected_in_a_woken_discussion(self):
+        """The host is continued by the local service, so only experts may be manual."""
+        members = [{"name": "Codex", "token": uuid.uuid4().hex, "access": "manual"},
+                   {"name": "Claude", "token": uuid.uuid4().hex, "access": "runner"}]
+        status, refused = self.request("/api/rooms", {"title": "手动主持", "host": "Codex", "phase": "initial", "runtime_mode": "automatic",
+                                                       "experts": {"Codex": "cli", "Claude": "cli"}, "members": members})
+        self.assertEqual(status, 400, refused)
 
     def test_message_during_host_execution_survives_plan_creation(self):
         """A user message that arrives after the host began is not cleared by the plan the host then creates."""

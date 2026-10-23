@@ -925,7 +925,20 @@ test('a free room is created with woken, manual and online members chosen one by
     { 'X-Discussion-Token': manual_token })).status, 201);
 });
 
-test('a running discussion admits a woken expert without pausing and rejects manual members', async t => {
+test('a discussion is created with a manual expert that gets no local configuration and answers with its own credential', async t => {
+  const f = await fixture(t);
+  const owner = randomUUID() + randomUUID(), manual_token = randomUUID() + randomUUID();
+  const room = { ...f.input.room, experts: { Codex: 'cli', Claude: 'cli', Gemini: 'cli' },
+    members: [{ name: 'Gemini', access: 'manual', token: manual_token }], submission_id: randomUUID() };
+  const launched = await launch_discussion(f.home, { ...f.input, room, token: owner }, f.options);
+  assert.deepEqual(Object.keys(load_config(launched.config_path).participants).sort(), ['Claude', 'Codex']);
+  const access = Object.fromEntries(launched.room.members.map(member => [member.name, member.access]));
+  assert.deepEqual(access, { Codex: 'runner', Claude: 'runner', Gemini: 'manual' });
+  await assert.rejects(launch_discussion(f.home, { ...f.input, token: owner, room: { ...f.input.room, host: 'Gemini', experts: { Gemini: 'cli', Claude: 'cli' },
+    members: [{ name: 'Gemini', access: 'manual', token: manual_token }], submission_id: randomUUID() } }, f.options), /不能选择手动接入/);
+});
+
+test('a running discussion admits a woken or manual expert without pausing', async t => {
   const f = await fixture(t);
   const owner = randomUUID() + randomUUID();
   const launched = await launch_discussion(f.home, { ...f.input, token: owner }, f.options);
@@ -934,7 +947,9 @@ test('a running discussion admits a woken expert without pausing and rejects man
   const store = new DiscussionStore(join(f.directory, 'context-check'));
   try {
     store.context(load_config(launched.config_path));
-    await assert.rejects(room_member(f.home, { site: f.site, room_id, token: owner, action: 'add', name: 'Gemini', access: 'manual' }), /只接受本机唤醒/);
+    const manual = await room_member(f.home, { site: f.site, room_id, token: owner, action: 'add', name: 'Gemini', access: 'manual' });
+    assert.deepEqual([manual.room.runtime.status, manual.room.experts.Gemini, manual.access], ['running', 'cli', 'manual']);
+    assert.equal(Object.hasOwn(load_config(launched.config_path).participants, 'Gemini'), false);
     const added = await room_member(f.home, { site: f.site, room_id, token: owner, action: 'add', name: 'Claude', new_instance: true,
       participants: { Claude: f.input.participants.Claude } });
     assert.equal(added.member, 'Claude-2');

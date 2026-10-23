@@ -265,6 +265,7 @@ function import_record_rows(tables, room_id, maps) {
         ["pending", "delivering"].includes(row.status) ? "cancelled" : row.status, messages.get(row.answer_id) ?? null, row.created_at,
         row.chain_id ?? 0, row.batch_id ?? 0, row.purpose ?? "ask", row.created_by ?? "user"])),
     ...insert_rows("member_suggestions", ["message_id", "member_id"], (tables.member_suggestions || []).map(row => [messages.get(row.message_id), members.get(row.member_id)])),
+    ...insert_rows("request_schedules", ["request_id", "room_id", "provider", "confidence"], (tables.request_schedules || []).map(row => [requests.get(row.request_id), room_id, row.provider, row.confidence])),
   ];
 }
 
@@ -679,7 +680,7 @@ async function manage_room(database, room_id, action, payload) {
   } else if (action === "delete") {
     if (payload.confirm_title !== room.title) throw new HttpError(400, "请输入完整房间名称确认删除");
     const queries = [
-      "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?",
+      "DELETE FROM request_schedules WHERE room_id=?", "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?",
       "DELETE FROM room_members WHERE room_id=?", "DELETE FROM room_modes WHERE room_id=?",
       "DELETE FROM free_batches WHERE room_id=?", "DELETE FROM free_chains WHERE room_id=?", "DELETE FROM room_links WHERE room_id=?",
       "DELETE FROM message_timings WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
@@ -1223,7 +1224,7 @@ function protocol_text(room) {
     "写入使用 POST，通常为 Content-Type: application/json；附件上传使用 application/octet-stream 原始字节。主持操作填写 actor 为当前主持人或用户；这些是声明身份，不是认证凭据。",
     `附件：POST ${base}/attachments?actor=身份&file_name=文件名&submission_id=新编号，原文件最多 20 MiB；GET 同路径默认列已发送附件，加 submission_id 精确核对上传。GET ${base}/attachments/ID 读元数据，/ID/content 下载原文件。消息可带 attachment_ids（最多 10 个有序编号）；只关联同房间、同提交者的未使用附件，可只有附件无正文。自动任务须在回答完成前上传；消息查询包含附件，按需下载后由当前软件读取，不自动解析。`,
     "讨论上限：room.limits 返回轮次、总时长、单次执行、到限方式、收束预留和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长/单次执行时限。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理；附 force:true 可在进行中提前进入收束，由主持人在收束预留时间内总结。到限停止新专家安排与观点；总结由真实主持人完成，预留计入总时长；暂停期间不计时也不消耗总时长。",
-    "运行方式：room.runtime 显示 manual/automatic、状态及真实执行回执。所有房间写入须带 X-Discussion-Token，CLI 用 --access-file 读取私有文件。用户及运行控制使用房主凭据，手动本地成员使用自己的成员凭证，不能相互冒充；在线成员只读，由房主或讨论主持人代发。自动讨论先 execution enter，创建安排或保存关联回答即完成本步，不创建原生定时任务；持久成员凭证不能替代自动执行，暂停、停止、换代、租约到期后的旧执行失效。run view/start/pause/stop/configure 字段查 CLI schema。",
+    "运行方式：room.runtime 显示 manual/automatic、状态及真实执行回执。所有房间写入须带 X-Discussion-Token，CLI 用 --access-file 读取私有文件。用户及运行控制使用房主凭据，手动本地成员使用自己的成员凭证，不能相互冒充；在线成员只读，由房主或讨论主持人代发。自动讨论先 execution enter，创建安排或保存关联回答即完成本步，不创建原生定时任务；本机唤醒成员的持久凭证不能替代自动执行，手动接入的专家用自己的成员凭证回答安排，暂停、停止、换代、租约到期后的旧执行失效。run view/start/pause/stop/configure 字段查 CLI schema。",
     `发言权：GET ${base}/floor 返回 holder、next_speaker、revision；POST 同路径，字段 actor、speaker（默认 actor）、action=take/return、revision（刚读到的整数版本）。仅无人持有且 next_speaker 为本人时可领取；持有者可主动归还，下一位回到主持人。版本变化返回 409，先读回核对。主持人仅可代操作 online 专家，cli 专家自行操作；用户可协助。`,
     "新房间由主持人持有发言权。创建安排须主持人持有，保存成功即归还并点名该专家；AI 的 opinion、moderation、receipt 都须实际作者持有，代发不豁免，opinion 必须关联有效 turn_id。消息保存成功自动归还，下一位为主持人。失败不归还，同编号重试不再次交接。用户本人发言不受发言权限制，也不改变发言权；@ 不改变顺序。维护状态、阶段及通知回执不占用发言权。取消安排须主持人持有，用户可直接取消失效安排；取消后归还给主持人领取。",
     '创建话题：POST /api/rooms，携带房主控制凭据；字段 title、goal、user_request、background、boundaries、host、experts、members、submission_id（新 UUID）。members 与 experts 名单一致，各项含 name、独立 token、access（手动本地 manual、自动 runner、在线 online）。AI 主持人必须为本地可写成员。CLI room create --access-file 私有房主文件 在请求前保存凭据，确认后返回各本地成员文件路径；同编号重试沿用原资料和全部凭据。名单、主持职责变更仅房主可做。',
@@ -1429,13 +1430,15 @@ async function authorize_database(database, room_id, token, operation, payload) 
     [room_id, hashed, ...(proxy ? [room_id, payload.author] : [])]);
   }
   const member = hashed && await database.prepare("SELECT * FROM room_members WHERE room_id=? AND token_hash=? AND status='active' AND access<>'online'").bind(room_id, hashed).first();
-  if (member && (!run || run.mode === "manual")) {
+  if (member && (!run || run.mode === "manual" || member.access === "manual")) {
     await authorize_participant(database, room_id, member, operation, payload);
     const proxy = operation === "messages" && payload.author !== member.name;
-    return guarded_database(database, `EXISTS(SELECT 1 FROM room_members WHERE id=? AND token_hash=? AND status='active' AND role=? AND access<>'online')
-      AND NOT EXISTS(SELECT 1 FROM discussion_runtime WHERE room_id=? AND mode='automatic')`
+    // A manual member keeps its own credential even while the local service wakes the others.
+    const woken_run = member.access !== "manual";
+    return guarded_database(database, `EXISTS(SELECT 1 FROM room_members WHERE id=? AND token_hash=? AND status='active' AND role=? AND access<>'online')`
+      + (woken_run ? " AND NOT EXISTS(SELECT 1 FROM discussion_runtime WHERE room_id=? AND mode='automatic')" : "")
       + (proxy ? " AND EXISTS(SELECT 1 FROM room_members WHERE room_id=? AND name=? AND access='online' AND status='active')" : ""),
-    [member.id, hashed, member.role, room_id, ...(proxy ? [room_id, payload.author] : [])]);
+    [member.id, hashed, member.role, ...(woken_run ? [room_id] : []), ...(proxy ? [room_id, payload.author] : [])]);
   }
   if (!run || !hashed) throw new HttpError(403, "需要房主或本成员的有效凭据；没有凭据只能阅读");
   const actor = write_actor(operation, payload);
@@ -1505,7 +1508,9 @@ async function configure_runtime(database, room_id, token, payload) {
     .bind(room_id, mode, crypto.randomUUID(), hashed, action === "start" ? payload.deadline : current.deadline ?? 0));
   if (["pause", "stop"].includes(action)) statements.push(database.prepare("UPDATE topic_settings SET phase='paused' WHERE room_id=? AND phase<>'concluded'").bind(room_id));
   statements.push(database.prepare("UPDATE discussion_runtime SET status=? WHERE room_id=?").bind(status, room_id));
-  statements.push(database.prepare("UPDATE room_members SET access=? WHERE room_id=? AND access<>'online'").bind(mode === "automatic" ? "runner" : "manual", room_id));
+  // Only a real mode change converts members; a manual expert of a woken discussion (adapter 'manual') stays manual.
+  if (mode !== current.mode) statements.push(database.prepare(mode === "manual" ? "UPDATE room_members SET access='manual' WHERE room_id=? AND access='runner'"
+    : "UPDATE room_members SET access='runner' WHERE room_id=? AND access='manual' AND adapter<>'manual'").bind(room_id));
   await checked_batch(database, condition + idle, values, statements);
   return runtime_view(database, room_id);
 }
@@ -1606,6 +1611,7 @@ const FREE_BACKUP_QUERIES = {
   room_members: "SELECT id,room_id,name,adapter,role,status,read_until,created_at,access,session_mode FROM room_members WHERE room_id=? ORDER BY id",
   member_requests: "SELECT * FROM member_requests WHERE room_id=? ORDER BY id",
   member_suggestions: "SELECT s.* FROM member_suggestions s JOIN messages m ON m.id=s.message_id WHERE m.room_id=? ORDER BY s.message_id,s.member_id",
+  request_schedules: "SELECT * FROM request_schedules WHERE room_id=? ORDER BY request_id",
 };
 
 /** Return 'free' for free rooms; every legacy room is a brainstorm room. */
@@ -1641,6 +1647,18 @@ async function free_member_values(members) {
   return result;
 }
 
+/** Online experts stay online; a woken discussion also takes manual experts, but never a manual host. */
+function discussion_access_ok(access, capability, automatic, is_host) {
+  if (capability === "online") return access === "online";
+  if (!automatic) return access === "manual";
+  return access === "runner" || (access === "manual" && !is_host);
+}
+
+/** A manual expert of a woken discussion carries adapter "manual", so mode switches never turn it into a woken member. */
+function mark_manual(member, automatic) {
+  return automatic && member.access === "manual" ? { ...member, adapter: "manual" } : member;
+}
+
 /** Bind credentials to the declared participant list and delivery mode. */
 async function discussion_members(payload, settings) {
   const members = Object.keys(settings.experts).length ? await free_member_values(payload.members) : [];
@@ -1648,10 +1666,9 @@ async function discussion_members(payload, settings) {
     throw new HttpError(400, "成员凭证名单须与参与者名单一致");
   }
   for (const member of members) {
-    const expected = settings.experts[member.name] === "online" ? "online" : payload.runtime_mode === "automatic" ? "runner" : "manual";
-    if (member.access !== expected) throw new HttpError(400, "成员接入方式与房间参与能力、任务交付方式不符");
+    if (!discussion_access_ok(member.access, settings.experts[member.name], payload.runtime_mode === "automatic", member.name === settings.host)) throw new HttpError(400, "成员接入方式与房间参与能力、任务交付方式不符");
   }
-  return members;
+  return members.map(member => mark_manual(member, payload.runtime_mode === "automatic"));
 }
 
 /** Preserve unchanged credentials and revoke removed or changed identities atomically. */
@@ -1661,13 +1678,12 @@ async function discussion_member_statements(database, room_id, payload, settings
   const supplied = Object.fromEntries(await Promise.all((payload.members ?? []).map(async member => [member.name, await free_member_value(member)])));
   const run = await runtime_view(database, room_id), statements = [];
   for (const [name, capability] of Object.entries(settings.experts)) {
-    const access = capability === "online" ? "online" : run.mode === "automatic" ? "runner" : "manual";
-    if (current[name] && (current[name].access === "online") === (access === "online")) {
+    if (current[name] && (current[name].access === "online") === (capability === "online")) {
       if (supplied[name] && supplied[name].token_hash !== current[name].token_hash) throw new HttpError(409, "成员凭证与已登记身份不符；请核对原接入文件");
       continue;
     }
-    const member = supplied[name];
-    if (!member || member.access !== access) throw new HttpError(400, `新增或改变接入方式的成员 ${name} 须提供独立的新凭证`);
+    const member = supplied[name] && mark_manual(supplied[name], run.mode === "automatic");
+    if (!member || !discussion_access_ok(member.access, capability, run.mode === "automatic", name === settings.host)) throw new HttpError(400, `新增或改变接入方式的成员 ${name} 须提供独立的新凭证`);
     const reused = await database.prepare("SELECT 1 FROM room_members WHERE room_id=? AND token_hash=? UNION ALL SELECT 1 FROM room_modes WHERE room_id=? AND control_hash=?")
       .bind(room_id, member.token_hash, room_id, member.token_hash).first();
     if (reused || Object.values(supplied).filter(item => item.token_hash === member.token_hash).length > 1) throw new HttpError(400, "新成员凭证不能复用已有凭证");
@@ -1747,7 +1763,9 @@ async function free_view(database, room_id) {
     return { ...pick(row, FREE_MEMBER_FIELDS), execution, pending };
   }));
   const names = Object.fromEntries((await database.prepare("SELECT id,name FROM room_members WHERE room_id=?").bind(room_id).all()).results.map(row => [row.id, row.name]));
-  const requests = (await database.prepare(`SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by FROM member_requests
+  const requests = (await database.prepare(`SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by,
+    (SELECT provider FROM request_schedules WHERE request_id=member_requests.id) AS schedule_provider,
+    (SELECT confidence FROM request_schedules WHERE request_id=member_requests.id) AS schedule_confidence FROM member_requests
     WHERE room_id=? ORDER BY id DESC LIMIT ?`).bind(room_id, FREE_RECENT_REQUESTS).all()).results
     .map(row => ({ ...row, member: names[row.member_id] ?? "" })).reverse();
   const halted_chains = (await database.prepare("SELECT chain_id,reason FROM free_chains WHERE room_id=? ORDER BY chain_id DESC LIMIT 10").bind(room_id).all()).results;
@@ -1914,11 +1932,36 @@ async function free_inbox(database, room_id, token) {
   const archived = Boolean((await database.prepare("SELECT archived FROM room_directory WHERE room_id=?").bind(room_id).first()).archived);
   const rows = (await database.prepare("SELECT * FROM room_members WHERE room_id=? AND status='active' AND access='runner' ORDER BY id").bind(room_id).all()).results;
   const members = await Promise.all(rows.map(async row => ({ ...pick(row, FREE_MEMBER_FIELDS),
-    pending: (await database.prepare("SELECT id,message_id FROM member_requests WHERE member_id=? AND status='pending' ORDER BY id").bind(row.id).all()).results })));
+    pending: (await database.prepare("SELECT id,message_id,purpose FROM member_requests WHERE member_id=? AND status='pending' ORDER BY id").bind(row.id).all()).results })));
   const executions = (await database.prepare(`SELECT member_executions.*,room_members.name FROM member_executions JOIN room_members ON room_members.id=member_id
     WHERE member_executions.room_id=? AND member_executions.${FREE_LIVE} ORDER BY member_executions.id`).bind(room_id).all()).results
     .map(row => ({ ...pick(row, FREE_EXECUTION_FIELDS), member: row.name }));
   return { room_id, archived, members, executions, execution_minutes: await free_execution_minutes(database, room_id) };
+}
+
+/** Smart scheduling moves one unnamed message from the host to a woken member before the host takes it. */
+async function free_schedule_request(database, room_id, token, request_id, payload) {
+  await require_free_owner(database, room_id, token);
+  if (payload.action !== "schedule") throw new HttpError(400, "只支持 action=schedule");
+  const { provider, confidence } = payload;
+  if (!["jev", "decisions"].includes(provider) || typeof confidence !== "number" || !(confidence >= 0 && confidence <= 1)) {
+    throw new HttpError(400, "须提供智能调度供应商 provider 与 0–1 的置信度 confidence");
+  }
+  const request = await database.prepare("SELECT * FROM member_requests WHERE room_id=? AND id=?").bind(room_id, request_id).first();
+  if (!request) throw new HttpError(404, "请求不存在");
+  if (request.purpose !== "route" || request.status !== "pending") throw new HttpError(409, "请求已由主持人接手或已处理，不能改派");
+  const target = await database.prepare(`SELECT * FROM room_members WHERE room_id=? AND id=? AND status='active'
+    AND access='runner' AND role<>'host'`).bind(room_id, payload.member_id ?? 0).first();
+  if (!target) throw new HttpError(404, "改派对象须为在场、由本机唤醒的非主持成员");
+  // The guard keeps a concurrent reservation by the host from losing the request; the decision is kept only when the move happened.
+  const [moved] = await database.batch([
+    database.prepare(`UPDATE member_requests SET member_id=?,purpose='scheduled'
+      WHERE id=? AND purpose='route' AND status='pending'`).bind(target.id, request_id),
+    database.prepare(`INSERT OR REPLACE INTO request_schedules (request_id,room_id,provider,confidence)
+      SELECT id,room_id,?,? FROM member_requests WHERE id=? AND purpose='scheduled' AND member_id=?`).bind(provider, confidence, request_id, target.id),
+  ]);
+  if (!moved.meta.changes) throw new HttpError(409, "请求已由主持人接手或已处理，不能改派");
+  return database.prepare("SELECT * FROM member_requests WHERE id=?").bind(request_id).first();
 }
 
 /** Bundle a member's open requests into one execution; a retried client_id returns the same one. */
@@ -2014,6 +2057,7 @@ async function handle_free_api(database, request, parts) {
   if (parts.length === 4 && parts[3] === "suggestions" && method === "POST") return respond(await free_convert_suggestion(database, room_id, token, await read_payload(request)));
   if (parts.length === 4 && parts[3] === "inbox" && method === "GET") return respond(await free_inbox(database, room_id, token));
   if (parts.length === 4 && parts[3] === "executions" && method === "POST") return respond(await free_reserve(database, room_id, token, await read_payload(request)));
+  if (parts.length === 5 && parts[3] === "requests" && method === "POST") return respond(await free_schedule_request(database, room_id, token, integer(parts[4]), await read_payload(request)));
   if (parts.length === 5 && parts[3] === "executions") {
     const execution_id = integer(parts[4]);
     return respond(method === "GET" ? await free_view_execution(database, room_id, execution_id, token)
@@ -2077,7 +2121,7 @@ async function handle_discussion_members(database, request, parts) {
   if (parts.length === 4) {
     await require_free_owner(database, room_id, token);
     const member = await free_member_value(payload);
-    if (member.access !== (room.runtime?.mode === "automatic" ? "runner" : "manual")) throw new HttpError(400, "新专家的接入方式须与讨论的推进方式一致");
+    if (!discussion_access_ok(member.access, "cli", room.runtime?.mode === "automatic", false)) throw new HttpError(400, "新专家的接入方式须与讨论的推进方式一致");
     const existing = await database.prepare("SELECT * FROM room_members WHERE room_id=? AND name=? AND status<>'removed'").bind(room_id, member.name).first();
     if (existing?.status === "active" && existing.token_hash === member.token_hash) return respond(room);
     if (existing) throw new HttpError(409, `${member.name} 已是本房间成员；离开的成员请用请回`);
@@ -2085,7 +2129,7 @@ async function handle_discussion_members(database, request, parts) {
     if (Object.keys(experts).length >= MAX_ROOM_AGENTS) throw new HttpError(400, "房间成员已达上限");
     await require_fresh_member_hash(database, room_id, member.token_hash);
     experts[member.name] = "cli";
-    try { await database.batch([free_member_insert(database, room_id, member), save()]); }
+    try { await database.batch([free_member_insert(database, room_id, mark_manual(member, room.runtime?.mode === "automatic")), save()]); }
     catch (error) { if (String(error).includes("UNIQUE constraint")) throw new HttpError(409, `${member.name} 已是本房间成员`); throw error; }
   } else {
     const member = await free_owned_member(database, room_id, integer(parts[4]), token);
@@ -2305,7 +2349,7 @@ async function handle_api(database, request, parts, params, bucket) {
   }
   const room_id = parts[2];
   const free = await room_mode(database, room_id) === "free";
-  if (free && ["inbox", "executions", "members", "suggestions"].includes(parts[3])) return handle_free_api(database, request, parts);
+  if (free && ["inbox", "executions", "members", "suggestions", "requests"].includes(parts[3])) return handle_free_api(database, request, parts);
   if (parts[3] === "members" && method === "POST" && [4, 5].includes(parts.length)) return handle_discussion_members(database, request, parts);
   if (parts[3] === "attachments") return handle_attachments(database, request, parts, params, bucket, free);
   if (["runtime", "events"].includes(parts[3])) {

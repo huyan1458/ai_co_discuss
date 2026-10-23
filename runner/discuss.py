@@ -140,14 +140,14 @@ def attachment_id(value):
 def add_common(parser):
     """Allow common flags before or after subcommands without shared state."""
     options = {"default": argparse.SUPPRESS}
-    parser.add_argument("--site", help="HTTP 服务地址；未指定时读 DISCUSS_URL，再读 --access-file 中的 site", **options)
+    parser.add_argument("--site", help="HTTP 服务地址；未指定时读 DISCUSS_URL，再读凭据中的 site", **options)
     parser.add_argument("--as", dest="actor", type=participant,
                         help="业务写入的声明操作者；不是登录认证；api 使用原始请求体", **options)
     parser.add_argument("-o", "--output", choices=("json", "text"),
                         help="默认 json；成功 stdout，错误 stderr", **options)
     parser.add_argument("--timeout", type=float, help="请求超时秒数，默认 20", **options)
     parser.add_argument("--dry-run", action="store_true", help="只预览写入请求，不联网", **options)
-    parser.add_argument("--access-file", help="本房间的受限凭据 JSON；不输出其 token", **options)
+    parser.add_argument("--access-file", help="本房间的受限凭据 JSON 文件（- 读标准输入）；未指定时读环境变量 DISCUSS_ACCESS 中的同样 JSON 文本；不输出其 token", **options)
 
 
 def add_text(parser, name, required=False):
@@ -359,6 +359,22 @@ def read_object(path):
         raise CliError(f"无效 JSON: {error}") from error
     if not isinstance(value, dict):
         raise CliError("JSON 文件必须包含对象")
+    return value
+
+
+def load_access(args):
+    """Read the room credential from --access-file, else from the DISCUSS_ACCESS JSON text; empty when neither is given."""
+    if getattr(args, "access_file", None):
+        return read_object(args.access_file)
+    text = os.getenv("DISCUSS_ACCESS", "").strip()
+    if not text:
+        return {}
+    try:
+        value = json.loads(text)
+    except ValueError as error:
+        raise CliError(f"DISCUSS_ACCESS 不是有效 JSON: {error}") from error
+    if not isinstance(value, dict):
+        raise CliError("DISCUSS_ACCESS 必须是 JSON 对象")
     return value
 
 
@@ -588,7 +604,7 @@ def plan_execution(args):
     """Use the bound actual session when acknowledging a delivered execution."""
     body = {"action": args.action}
     if args.action == "enter":
-        access = read_object(args.access_file) if getattr(args, "access_file", None) else {}
+        access = load_access(args)
         body["session_id"] = args.session_id or access.get("session_id")
         if not body["session_id"]:
             raise CliError("尚未取得实际 session_id，请先核对接入回执")
@@ -618,13 +634,13 @@ def build_plan(args):
 def resolve_site(args):
     """Resolve the flag, then the environment, then the site the access file is bound to; never a built-in default."""
     site = getattr(args, "site", None) or os.getenv("DISCUSS_URL", "")
-    if not site and getattr(args, "access_file", None):
-        # The file's own credential is only ever sent back to this same site.
-        site = str(read_object(args.access_file).get("site", ""))
+    if not site:
+        # The credential's own site is the only place it is ever sent back to.
+        site = str(load_access(args).get("site", ""))
     parsed = urlsplit(site)
     if (parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username
             or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/")):
-        raise CliError("请用 --site、DISCUSS_URL 或凭据文件指定 http(s)://主机[:端口]，不带路径、凭据或查询")
+        raise CliError("请用 --site、DISCUSS_URL 或凭据（--access-file / DISCUSS_ACCESS）指定 http(s)://主机[:端口]，不带路径、凭据或查询")
     try:
         parsed.port
     except ValueError as error:
@@ -749,7 +765,7 @@ def command_schema(args, registry):
     name = " ".join(args.command)
     if not name:
         return {"version": VERSION, "commands": {key: item.description for key, item in registry.items()},
-                "exit_codes": EXIT_CODES, "site": "--site > DISCUSS_URL > --access-file 中的 site；无内置默认站点",
+                "exit_codes": EXIT_CODES, "site": "--site > DISCUSS_URL > 凭据（--access-file 或 DISCUSS_ACCESS）中的 site；无内置默认站点",
                 "output": "默认 JSON；成功 stdout，错误 stderr；无交互提示、无自动重试"}
     if name not in registry:
         raise CliError(f"未知命令 {name}；运行 discuss schema 查看可用命令")
@@ -858,9 +874,9 @@ def finish_creation_access(args, site, plan, value):
 
 def access_headers(args, site, path):
     """Load a room-scoped secret only for its exact site and room."""
-    if not getattr(args, "access_file", None):
+    access = load_access(args)
+    if not access:
         return {}
-    access = read_object(args.access_file)
     expected = f"/api/rooms/{access.get('room', '')}"
     target = urlsplit(path).path
     creation = target == "/api/rooms" and bool(access.get("submission_id"))

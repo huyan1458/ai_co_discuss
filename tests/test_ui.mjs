@@ -490,7 +490,7 @@ function expert_card_fixture() {
 
 test('expert card offers project permissions only for CLI and shows that API and web experts never see project files', () => {
   const f = expert_card_fixture();
-  const project = () => vm.runInContext('facts.value.find(fact => fact.label === "项目").value', f.context);
+  const project = () => vm.runInContext('facts.value.find(fact => fact.label === "项目")?.value', f.context);
   f.view.value.launch.workspace = { project_access: 'write' };
   assert.equal(vm.runInContext('sets_access.value', f.context), true);
   f.view.value.launch.profiles.Codex = { adapter: 'api', project_access: 'write' };
@@ -498,7 +498,7 @@ test('expert card offers project permissions only for CLI and shows that API and
   assert.equal(project(), '不访问');
   f.view.value.launch.profiles.Codex.adapter = 'codex';
   assert.equal(vm.runInContext('sets_access.value', f.context), false);
-  assert.equal(project(), '由软件设置', 'an App keeps its own file permissions');
+  assert.equal(project(), undefined, 'an App keeps its own file permissions, so the front shows no placeholder');
   assert.ok(vm.runInContext('connection.value.length', f.context) > 0, 'App connection fields remain available');
   f.props.mode = 'online';
   assert.equal(project(), '不访问');
@@ -552,10 +552,8 @@ test("expert card reduced motion keeps manual and online faces accessible withou
   assert.equal(fixture.refs.back.value, true);
   assert.equal(fixture.refs.visible_back.value, true);
   assert.equal(vm.runInContext("configurable.value", fixture.context), false);
-  assert.match(vm.runInContext("configuration_note.value", fixture.context), /已有 App 或 CLI/);
   fixture.props.mode = "online";
-  assert.match(vm.runInContext("configuration_note.value", fixture.context), /原网页/);
-  assert.equal(vm.runInContext("entry_label.value", fixture.context), "网页聊天");
+  assert.equal(vm.runInContext("can_flip.value", fixture.context), false, "manual and web cards have nothing to configure on a back face");
   fixture.props.mode = "cli";
   fixture.props.mode = "cli";
   fixture.view.value.launch.profiles.Codex.adapter = "codex";
@@ -612,7 +610,23 @@ test("each automatic CLI card sets its own project access and asks only for a mi
   assert.equal(fact("项目"), "不访问", "web members never see project files");
   props.mode = "cli";
   props.mode = "manual";
-  assert.equal(fact("项目"), "由软件设置", "manual sessions keep the permissions of their own software");
+  assert.equal(fact("项目"), undefined, "manual sessions keep the permissions of their own software, so no placeholder row");
+  props.mode = "cli";
+  assert.match(fact("启动"), /^程序启动/);
+  props.mode = "manual";
+  assert.match(fact("启动"), /^你来启动/);
+  props.mode = "online";
+  assert.match(fact("启动"), /^你转发回答/);
+  assert.equal(fact("主持"), undefined, "a card outside a host choice says nothing about hosting");
+  props.hosting = true;
+  assert.match(fact("主持"), /不可（网页只读）/);
+  props.mode = "manual";
+  assert.match(fact("主持"), /不可（须本机唤醒）/);
+  props.hostable = true;
+  assert.equal(fact("主持"), undefined, "the crown already offers hosting, so only a refusal gets a row");
+  props.host = true;
+  assert.equal(fact("主持"), undefined, "the badge already names the host");
+  props.host = false; props.hostable = false; props.hosting = false;
   props.mode = "cli";
   assert.deepEqual(Array.from(vm.runInContext("connection.value", context), item => item.field), ["executable"]);
   context.flip(true);
@@ -682,7 +696,7 @@ test("create form shares a role library, keeps independent instances and makes t
   assert.equal(view.value.launch.profiles.DeepSeek.adapter, "api", "an API-only platform is woken through its API");
   assert.equal(view.value.fields["new-room-host"], "Codex", "the user is the client of a free room, never its host");
   assert.deepEqual(Array.from(vm.runInContext('access_choices("Codex")', context)), ["cli", "manual", "online"]);
-  assert.deepEqual(Array.from(vm.runInContext('access_choices("DeepSeek")', context)), ["cli", "online"], "an API-only platform has no software to join by hand");
+  assert.deepEqual(Array.from(vm.runInContext('access_choices("DeepSeek")', context)), ["cli", "manual", "online"], "manual needs no local software, so any platform may be pasted into the AI the user runs by hand");
   context.set_expert_mode("Codex", "manual");
   context.set_expert_mode("Codex-2", "manual");
   context.set_expert_mode("DeepSeek", "online");
@@ -694,9 +708,10 @@ test("create form shares a role library, keeps independent instances and makes t
   assert.equal(view.value.fields["new-room-host"], "", "an online instance cannot host, and the user never does");
   context.choose_kind("brainstorm");
   assert.equal(view.value.fields["new-room-host"], "");
-  assert.equal(vm.runInContext('access_choices("Codex-2")', context).length, 0, "discussions offer no delivery choice");
+  assert.deepEqual(Array.from(vm.runInContext('access_choices("Codex-2")', context)), ["cli", "manual"], "a discussion expert is woken or manual");
   context.set_expert_mode("Codex-2", "cli");
   assert.equal(view.value.fields["new-room-host"], "Codex-2");
+  assert.deepEqual(Array.from(vm.runInContext('access_choices("Codex-2")', context)), [], "the host is always woken by the local service");
   await nextTick();
   f.cleanup();
 });
@@ -1414,6 +1429,13 @@ test("member downloads contain only their credential and copied instructions con
   f.context.download_member_access('Codex-2');
   assert.deepEqual(JSON.parse(JSON.stringify(downloaded)), { site: 'https://discussion.example', room: 'one', token: 'Codex-2-secret' });
   assert.throws(() => f.context.download_member_access('DeepSeek'), /没有此成员/);
+  await f.context.copy_member_access_text('Codex-2');
+  assert.deepEqual(JSON.parse(copied), { site: 'https://discussion.example', room: 'one', token: 'Codex-2-secret' });
+  await assert.rejects(() => f.context.copy_member_access_text('DeepSeek'), /没有此成员/);
+  await f.context.copy_member_join('Codex-2', true);
+  assert.match(copied, /DISCUSS_ACCESS/);
+  assert.equal(JSON.parse(copied.slice(copied.indexOf('{"site"'))).token, 'Codex-2-secret', 'only the launch text carries the credential');
+  await assert.rejects(() => f.context.copy_member_join('DeepSeek', true), /没有此成员|没有此成员可复制/);
   await f.context.copy_member_join('Codex');
   assert.match(copied, /discuss-host/);
   assert.match(copied, /--as Codex --access-file/);
@@ -1907,11 +1929,12 @@ test("participant model labels distinguish explicit choices, software defaults a
   assert.equal(label('Codex', room, saved), 'gpt-6-astra · xhigh');
   assert.equal(label('Claude', room, saved), '默认模型 · 默认强度');
   assert.equal(label('Gemini', room, saved), 'gemini-4-argon-high · 强度随模型');
-  assert.equal(label('Codex', { ...room, id: 'two' }, saved), '模型与强度未获取');
-  assert.equal(label('Codex', room, null), '模型与强度未获取');
+  assert.equal(label('Codex', { ...room, id: 'two' }, saved), '', 'unread settings are not guessed or shown as a placeholder');
+  assert.equal(label('Codex', room, null), '');
   saved.participants.Codex.adapter = 'codex';
   assert.equal(label('Codex', room, saved), '模型与强度由 App 设置');
-  assert.equal(label('Codex', { ...room, runtime: { mode: 'manual' } }, saved), '模型与强度在原聊天设置');
+  assert.equal(label('Codex', { ...room, runtime: { mode: 'manual' } }, saved), '');
+  assert.equal(label('Codex', { ...room, members: [{ name: 'Codex', access: 'manual' }] }, saved), '', 'a manual member sets its model in its own session');
 });
 
 test("empty automatic discussions describe their actual state instead of requiring another message", () => {

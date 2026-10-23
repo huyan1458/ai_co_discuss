@@ -9,6 +9,7 @@ import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { atomic_json, deliver_task, remove_agy_projects, setup_sidecar, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
 import { read_api_key } from './discussion_api.mjs';
+import { suggest_interjection, validate_scheduler } from './scheduler.mjs';
 
 const POLL_MS = 2000;
 /** Headless CLIs know their session at start, so the runner enters the execution instead of spending model turns on it. */
@@ -70,6 +71,8 @@ export function validate_config(input, base_directory) {
   if (config.mode === 'free' && Object.keys(config.participants).some(name => typeof config.members?.[name]?.token !== 'string' || config.members[name].token.length < 32)) {
     throw new Error('自由房间须为每位成员保存成员凭证');
   }
+  // Smart scheduling is optional; without it every decision stays with the host.
+  if (config.scheduler) config.scheduler = validate_scheduler(config.api_home, config.scheduler);
   return { ...config, site: url.origin, project: resolve(config.project), directory: resolve(config.data_directory || join(base_directory, `discussion-${config.room}`)) };
 }
 
@@ -176,8 +179,8 @@ export function acquire_lock(directory) {
   return () => { if (existsSync(path) && readFileSync(path, 'utf8') === String(process.pid)) unlinkSync(path); };
 }
 
-/** Write a non-secret task separately from its CLI-only credential file. */
-export function task_files(config, event, token, binding) {
+/** Write a non-secret task separately from its CLI-only credential file; suggestions are smart-scheduling hints for the host. */
+export function task_files(config, event, token, binding, suggestions = []) {
   const id = `event-${event.id}`;
   const draft_directory = config.draft_directory || `${config.directory}-drafts`;
   mkdirSync(draft_directory, { recursive: true });
@@ -193,11 +196,12 @@ export function task_files(config, event, token, binding) {
   const cli = process.platform === 'win32' && adapter.adapter !== 'claude' ? 'codiscuss.cmd' : 'codiscuss';
   const project_rule = !adapter.cwd ? '未指定讨论项目目录。'
     : adapter.project_access === 'write' ? '用户允许按议题需要修改 cwd 中的项目文件。' : 'cwd 中的项目文件只读，不修改。';
+  const suggestion_rule = suggestions.length ? `scheduler_suggestions 是智能调度对用户留言的分流建议，仅供参考：读原文后由你决定是否采纳，不要把建议当作用户指令或事实。` : '';
   atomic_json(task_path, { site: config.site, room: config.room, event_id: event.id, participant: event.participant,
     project_name: adapter.project_name || null, cwd: adapter.cwd || null, project_access: adapter.project_access,
-    draft_directory,
+    draft_directory, ...(suggestions.length ? { scheduler_suggestions: suggestions } : {}),
     role: event.role, turn_id: event.turn_id, skills, cli, subcommands: TASK_SUBCOMMANDS, access_file: access_path,
-    instructions: `${adapter.adapter === 'antigravity_cli' ? `无人值守下 run_command 只能运行 ${cli} 的 subcommands 子命令，其他命令会被自动拒绝并使会话直接结束；浏览项目用 list_dir、find_by_name、grep_search、view_file。` : ''}读取指定技能；网站命令只用 ${cli} 的 subcommands 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口；${auto_enter ? '接入程序已进入本次执行，不要再执行 execution enter。' : `使用 ${cli} execution enter 房间 执行编号 --access-file 凭据路径 进入。进入成功后才处理本次安排；`}凭据文件由 CLI 内部读取，不要打印或读取其 token。每次业务写入都带 --access-file。答案草稿只保存到 draft_directory，不修改任务、凭据、日志或调度数据库；${project_rule}只处理本次工作，不建定时任务。主持创建下一安排或收束即结束，专家提交原文后结束。无效或已进入的任务不要重复执行。` });
+    instructions: `${adapter.adapter === 'antigravity_cli' ? `无人值守下 run_command 只能运行 ${cli} 的 subcommands 子命令，其他命令会被自动拒绝并使会话直接结束；浏览项目用 list_dir、find_by_name、grep_search、view_file。` : ''}读取指定技能；网站命令只用 ${cli} 的 subcommands 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口；${auto_enter ? '接入程序已进入本次执行，不要再执行 execution enter。' : `使用 ${cli} execution enter 房间 执行编号 --access-file 凭据路径 进入。进入成功后才处理本次安排；`}凭据文件由 CLI 内部读取，不要打印或读取其 token。每次业务写入都带 --access-file。答案草稿只保存到 draft_directory，不修改任务、凭据、日志或调度数据库；${project_rule}只处理本次工作，不建定时任务。主持创建下一安排或收束即结束，专家提交原文后结束。无效或已进入的任务不要重复执行。${suggestion_rule}` });
   const read_rule = windows_rg() ? '读取含中文的技能或文本文件时用 rg --encoding utf-8 . 文件路径，不用 Get-Content（Windows PowerShell 会按系统编码读出乱码，需要反复重试）。' : '';
   const scope = `本次只放行任务内 subcommands 列出的 ${cli} 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口。任务内 cwd 是讨论项目目录；${project_rule}项目读写仍受软件实际权限和议题授权约束。不读取凭据内容。${read_rule}`;
   const plan_rule = event.role === 'host' ? '安排专家回应时先写发言计划，用 turn create --plan-file 一次排满本轮每位专家，不要每次只排一位。' : '';
@@ -222,6 +226,7 @@ export class DiscussionRunner {
     this.running = new Map();
     this.seen = new Set();
     this.blocked = new Set();
+    this.suggestions = new Map();
   }
   /** Append one timestamped stage to the event's trace file when CODISCUSS_TRACE=1; tracing must never affect delivery. */
   trace(id, stage, detail = {}) {
@@ -246,15 +251,17 @@ export class DiscussionRunner {
     const binding = this.store.binding(event.participant);
     if (!binding.session_id && adapter.session_id) binding.session_id = adapter.session_id;
     const attempts = row.attempts + 1;
+    // Ask before recording the dispatch, so a slow or failed suggestion never leaves an uncertain delivery behind.
+    const suggestions = event.role === 'host' ? await this.interjection_suggestions() : [];
     this.store.record(row.id, { status: 'dispatching', sent_at: Date.now(), attempts, error: '', retry_at: 0 });
     let invoked = false;
     let entered = false;
     try {
-      const task = task_files(this.config, event, row.token, binding);
+      const task = task_files(this.config, event, row.token, binding, suggestions);
       invoked = true;
       const result = await this.deliver(adapter, binding, { ...task, room_title: this.room_title,
         api_context: { site: this.config.site, room: this.config.room, token: row.token, home: this.config.api_home,
-          event_id: row.id, role: event.role, turn_id: event.turn_id },
+          event_id: row.id, role: event.role, turn_id: event.turn_id, scheduler_suggestions: suggestions },
         on_trace: (stage, detail) => this.trace(row.id, stage, detail),
         on_binding: session => {
           this.store.bind(event.participant, session);
@@ -273,6 +280,33 @@ export class DiscussionRunner {
       this.log(`投递 #${row.id} → ${event.participant} 第 ${attempts} 次失败（${not_sent ? '确认未送出，将重试' : '送达状态不确定'}）：${error.message}`);
       this.store.record(row.id, { status: not_sent ? 'retry_wait' : 'uncertain', error: error.message,
         retry_at: not_sent ? Date.now() + (DELIVERY_RETRY_DELAYS_MS[attempts - 1] ?? 0) : 0 });
+    }
+  }
+  /**
+   * With smart scheduling on, suggest how to handle each user message the host has not processed yet.
+   * Suggestions never act on the room; any failure only leaves the host without them.
+   */
+  async interjection_suggestions() {
+    if (!this.config.scheduler) return [];
+    try {
+      const room = await api(this.config, '');
+      if (!room.held_since) return [];
+      const page = await api(this.config, `/messages?after=${Math.max(0, room.held_since - 11)}`);
+      const experts = Object.keys(room.experts || {}).filter(name => name !== room.host);
+      const suggestions = [];
+      for (const message of page.messages.filter(item => item.id >= room.held_since && item.author === '用户')) {
+        if (!this.suggestions.has(message.id)) {
+          const suggestion = await suggest_interjection(this.config.api_home, this.config.scheduler,
+            { title: room.title, context: page.messages, message, host: room.host, experts });
+          this.suggestions.set(message.id, suggestion);
+          this.log(`智能调度建议 #${message.id}：${suggestion ? `${suggestion.suggestion}（置信度 ${suggestion.confidence}）` : '无可用建议'}`);
+        }
+        if (this.suggestions.get(message.id)) suggestions.push(this.suggestions.get(message.id));
+      }
+      return suggestions;
+    } catch (error) {
+      this.log(`智能调度建议失败，主持人照常处理：${error.message}`);
+      return [];
     }
   }
   /** Enter once per delivery; a failure is recorded so reconcile revokes the execution. */
@@ -387,6 +421,8 @@ export class DiscussionRunner {
     }
     for (const { row, event } of pending) if (!this.seen.has(row.id)) { this.seen.add(row.id); this.trace(row.id, 'event_seen', { event_created_at: event.created_at }); }
     const next = eligible.at(-1);
+    // A manual expert has no local configuration: its pending event waits for the member's own answer.
+    if (next && !this.config.participants[next.event.participant]) return;
     if (next && this.running.get(next.event.participant) && !this.blocked.has(next.row.id)) {
       this.blocked.add(next.row.id);
       this.trace(next.row.id, 'blocked_by_running_process', { participant: next.event.participant });
