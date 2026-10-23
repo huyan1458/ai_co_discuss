@@ -1330,6 +1330,111 @@ test("web restart delegates duration to the topic without adding a hidden time l
   assert.equal(posts[2].deadline, 0, 'the backend applies the configured topic deadline, including summary time');
 });
 
+test("skip cancels only the current assignment, and resumes a paused run using its observed revision", async () => {
+  for (const status of ["running", "paused"]) {
+    const { context } = theme_fixture(), requests = [], notices = [];
+    let refreshed = 0;
+    context.test_state.room = { id: "skip-room", current_turn: { id: 7, status: "pending" },
+      runtime: { mode: "automatic", status, revision: 4 } };
+    Object.assign(context, { request_json: async (path, payload) => requests.push({ path, ...payload }),
+      refresh_room: async () => { refreshed++; }, show_toast: text => notices.push(text) });
+    await context.skip_turn();
+    assert.deepEqual(requests[0], { path: "/api/rooms/skip-room/turns/7", actor: "用户", status: "cancelled" });
+    assert.equal(requests.length, status === "paused" ? 2 : 1);
+    if (status === "paused") assert.deepEqual(requests[1], { path: "/api/rooms/skip-room/runtime",
+      action: "start", mode: "automatic", revision: 4, deadline: 0 });
+    assert.equal(refreshed, 1);
+    assert.match(notices[0], /已跳过本次发言/);
+  }
+});
+
+test("skip stops after cancellation errors and explains a successful skip when resuming fails", async () => {
+  for (const fail_at of [1, 2]) {
+    const { context } = theme_fixture();
+    let calls = 0, refreshed = 0;
+    context.test_state.room = { id: "skip-room", current_turn: { id: 7, status: "pending" },
+      runtime: { mode: "automatic", status: "paused", revision: 4 } };
+    Object.assign(context, { request_json: async () => { if (++calls === fail_at) throw new Error("状态已变化"); },
+      refresh_room: async () => { refreshed++; }, show_toast() {} });
+    await assert.rejects(context.skip_turn(), fail_at === 1 ? /^Error: 状态已变化$/ : /本次发言已跳过，但未能继续讨论.*重启/);
+    assert.equal(calls, fail_at);
+    assert.equal(refreshed, 1);
+  }
+});
+
+test("skip keeps the original room and revision when navigation changes during cancellation", async () => {
+  const { context } = theme_fixture(), paths = [];
+  context.test_state.room = { id: "one", current_turn: { id: 7, status: "pending" },
+    runtime: { mode: "automatic", status: "paused", revision: 4 } };
+  Object.assign(context, { request_json: async path => { paths.push(path); context.test_state.room = { id: "two" }; },
+    refresh_room: async () => assert.fail("must not refresh the next room"), show_toast: () => assert.fail("must not toast on the next room") });
+  await context.skip_turn();
+  assert.deepEqual(paths, ["/api/rooms/one/turns/7", "/api/rooms/one/runtime"]);
+});
+
+test("failure-card retry rechecks the retained task and never restarts an obsolete attempt", async () => {
+  const fixture = theme_fixture(), posts = [];
+  const failure = { id: 9, participant: 'Claude', role: 'expert', turn_id: 7 };
+  const room = { id: 'retry-room', phase: 'paused', host: 'Codex', current_turn: { id: 7, expert: 'Claude', status: 'notified' },
+    runtime: { mode: 'automatic', status: 'paused', revision: 5, latest_execution: { id: 9, status: 'failed' }, failures: [failure] } };
+  fixture.context.test_state.room = room;
+  Object.assign(fixture.context, { refresh_room: async () => {}, show_toast() {}, request_json: async (path, payload) => {
+    if (payload) posts.push({ path, payload });
+    return room;
+  } });
+  assert.equal(fixture.context.can_retry_execution(failure, room), true);
+  await fixture.context.retry_execution(9);
+  assert.equal(posts[0].path, '/api/rooms/retry-room/runtime');
+  assert.equal(posts[0].payload.revision, 5);
+  assert.equal(posts[0].payload.deadline, 0);
+  for (const [object, key, value] of [[room.runtime.latest_execution, 'id', 10], [room.runtime, 'status', 'running'],
+    [room.current_turn, 'id', 8], [room.current_turn, 'status', 'cancelled'], [room, 'phase', 'concluded'], [room, 'archived', true]]) {
+    const previous = object[key];
+    object[key] = value;
+    assert.equal(Boolean(fixture.context.can_retry_execution(failure, room)), false);
+    await assert.rejects(fixture.context.retry_execution(9), /安排已变化/);
+    object[key] = previous;
+  }
+  assert.equal(posts.length, 1);
+  failure.role = 'host'; failure.participant = 'Codex'; failure.turn_id = null;
+  assert.equal(fixture.context.can_retry_execution(failure, room), false, 'host retry cannot replace an expert task');
+  room.current_turn = null;
+  assert.equal(fixture.context.can_retry_execution(failure, room), true);
+});
+
+test("failed cards survive fresh snapshots and retry beside messages without becoming answers", () => {
+  const fixture = theme_fixture();
+  const failure = { id: 9, participant: 'Claude', role: 'expert', turn_id: 7, created_at: '2026-10-23T09:00:02Z', result: '工具调用失败', elapsed_seconds: 10 };
+  const view = ref({ messages: [{ id: 1, author: 'Codex', created_at: '2026-10-23T09:00:00Z' }], access: { can_manage: true },
+    room: { phase: 'paused', current_turn: { id: 7, expert: 'Claude', status: 'notified' }, runtime: {
+      mode: 'automatic', status: 'paused', latest_execution: { id: 9, status: 'failed' }, failures: [failure] } } });
+  const context = vm.createContext({ computed, view, free: ref(false), room: computed(() => view.value.room),
+    bridge: { can_retry_execution: fixture.context.can_retry_execution }, date_formatter: new Intl.DateTimeFormat('zh-CN') });
+  const start = discussion_source.indexOf('const failed_messages =');
+  const end = discussion_source.indexOf('/** Preserve room-wide round', start);
+  vm.runInContext(`${discussion_source.slice(start, end)}\nglobalThis.cards = failed_messages; globalThis.transcript = transcript_messages;`, context);
+  assert.equal(context.cards.value[0].can_retry, true);
+  assert.deepEqual(Array.from(context.transcript.value, item => item.id), [1, 'execution-9']);
+  view.value = JSON.parse(JSON.stringify(view.value));
+  assert.equal(context.cards.value[0].failure.result, '工具调用失败', 'server history survives a browser reload');
+  view.value.room.runtime.status = 'running';
+  view.value.room.runtime.latest_execution = { id: 10, status: 'started' };
+  assert.equal(context.cards.value[0].can_retry, false);
+  view.value.messages.push({ id: 2, author: 'Claude', turn_id: 7, created_at: failure.created_at });
+  assert.deepEqual(Array.from(context.transcript.value, item => item.id), [1, 'execution-9', 2]);
+  assert.equal(view.value.messages.length, 2, 'failure cards never enter the real message list');
+  view.value.room.phase = 'concluded'; view.value.room.archived = true;
+  assert.equal(context.cards.value.length, 1);
+  view.value.query = '筛选';
+  assert.equal(context.cards.value.length, 0);
+  view.value.query = ''; view.value.mention_only = true;
+  assert.equal(context.cards.value.length, 0);
+  view.value.mention_only = false; view.value.access.can_manage = false;
+  assert.equal(context.cards.value[0].can_retry, false);
+  view.value.room = {};
+  assert.equal(context.cards.value.length, 0, 'changing rooms cannot carry the old failure across');
+});
+
 test("finished discussions show their conclusion instead of a live timer or a later deadline warning", () => {
   const fixture = theme_fixture();
   fixture.context.test_state.room = { phase: 'concluded' };
@@ -1726,6 +1831,29 @@ function participant_connection_fixture(status = "running") {
     + "\nglobalThis.connection_refs = { connection_open, connection_profile };", context);
   return { context, view, calls, controls, refs: context.connection_refs };
 }
+
+test("the skip control stays available for retained assignments after execution failure pauses the room", () => {
+  const { context, view } = participant_connection_fixture("paused");
+  Object.assign(view.value.room, { phase: "paused", current_turn: { id: 7, expert: "DeepSeek", status: "pending" } });
+  assert.equal(vm.runInContext("can_skip.value && can_restart.value", context), true);
+  view.value.room.runtime.status = "running";
+  view.value.room.phase = "discussing";
+  assert.equal(vm.runInContext("can_skip.value && !can_restart.value", context), true);
+  for (const phase of ["paused", "discussing"]) {
+    view.value.room.phase = phase;
+    view.value.room.runtime.status = phase === "paused" ? "paused" : "running";
+    for (const status of ["answered", "cancelled"]) {
+      view.value.room.current_turn.status = status;
+      assert.equal(vm.runInContext("can_skip.value", context), false);
+    }
+  }
+  view.value.room.current_turn.status = "pending";
+  view.value.room.archived = true;
+  assert.equal(vm.runInContext("can_skip.value", context), false);
+  view.value.room.archived = false;
+  view.value.room.phase = "concluded";
+  assert.equal(vm.runInContext("can_skip.value", context), false);
+});
 
 test("manual invitation closes after a successful copy and stays open on clipboard failure", async () => {
   const { context, controls, calls } = participant_connection_fixture();

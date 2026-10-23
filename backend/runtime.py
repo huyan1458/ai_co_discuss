@@ -106,8 +106,18 @@ def runtime_view(connection, room_id):
     event = connection.execute("SELECT id,participant,role,status,result FROM discussion_events WHERE room_id=? ORDER BY id DESC LIMIT 1", (room_id,)).fetchone()
     result["latest_execution"] = dict(event) if event else None
     result["participants"] = participant_executions(connection, room_id)
+    result["failures"] = failed_executions(connection, room_id)
     result["timings"] = execution_timings(connection, room_id, row["run_id"])
     return result
+
+
+def failed_executions(connection, room_id):
+    """Keep failed attempts readable after a retry, without exposing execution credentials."""
+    return [dict(row) for row in connection.execute("""SELECT e.id,e.participant,e.role,e.turn_id,
+        e.result,e.created_at,CASE WHEN t.dispatched_at>0 AND t.finished_at>0
+        THEN MAX(0,t.finished_at-t.dispatched_at) END AS elapsed_seconds
+        FROM discussion_events AS e LEFT JOIN event_timings AS t ON t.event_id=e.id
+        WHERE e.room_id=? AND e.status='failed' ORDER BY e.id""", (room_id,))]
 
 
 def execution_timings(connection, room_id, run_id):

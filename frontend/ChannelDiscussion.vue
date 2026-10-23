@@ -478,10 +478,28 @@ function build_answer_preview(message) {
   return { truncated: true, html: template.innerHTML };
 }
 
+/** Retain failed attempts in the transcript, including after retry, refresh and conclusion. */
+const failed_messages = computed(() => {
+  if (free.value || view.value.query || view.value.mention_only) return [];
+  return (room.value.runtime?.failures || []).map(execution => ({
+    id: `execution-${execution.id}`, author: execution.participant, created_at: execution.created_at,
+    failure: execution, can_retry: Boolean(view.value.access?.can_manage && bridge.can_retry_execution(execution, room.value)),
+  }));
+});
+/** Merge execution cards without adding them to message counts, references or round navigation. */
+const transcript_messages = computed(() => {
+  const messages = [...view.value.messages];
+  for (const failure of failed_messages.value) {
+    const index = messages.findIndex(message => new Date(message.created_at) > new Date(failure.created_at)
+      || (!message.failure && failure.failure.turn_id && message.turn_id === failure.failure.turn_id));
+    messages.splice(index < 0 ? messages.length : index, 0, failure);
+  }
+  return messages;
+});
 /** Split continuous chronological history at local calendar boundaries. */
 const message_groups = computed(() => {
   const groups = [];
-  for (const message of view.value.messages) {
+  for (const message of transcript_messages.value) {
     const date = new Date(message.created_at);
     const key = date.toLocaleDateString();
     if (groups.at(-1)?.key !== key) groups.push({ key, label: date_formatter.format(date), messages: [] });
@@ -553,7 +571,7 @@ async function follow_messages() {
   if (follow_tail.value && transcript.value) transcript.value.scrollTop = transcript.value.scrollHeight;
   track_scroll();
 }
-watch([() => view.value.messages, pending_message], follow_messages, { immediate: true });
+watch([() => view.value.messages, pending_message, failed_messages], follow_messages, { immediate: true });
 watch([() => view.value.room?.id, () => view.value.query, () => view.value.mention_only], () => {
   jump_target.value = null;
   active_message.value = null;
@@ -881,7 +899,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
         </div>
       </motion.div>
     </Teleport>
-    <div ref="transcript" v-memo="[message_groups, message_round_labels, active_message, expanded_answers.size, room.title, view.query, view.mention_only, topic_key, topic_expanded, topic_overflows, pending_message, pending_seconds, request_badges, execution_reports, response_suggestions, recommendations, adopting, scheduler_decisions]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
+    <div ref="transcript" v-memo="[message_groups, message_round_labels, active_message, expanded_answers.size, room.title, view.query, view.mention_only, topic_key, topic_expanded, topic_overflows, pending_message, pending_seconds, request_badges, execution_reports, response_suggestions, recommendations, adopting, scheduler_decisions, pending, view.free_error]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
       <div v-if="!view.query && !view.mention_only" class="channel-message-group channel-topic-group"><section class="channel-message channel-topic-card" :class="{ 'is-expanded': topic_expanded }" aria-label="议题">
         <header class="channel-topic-heading"><span class="channel-topic-eyebrow"><UIcon name="i-lucide-target" />议题</span><h2>{{ room.title }}</h2><UButton icon="i-lucide-pencil" label="编辑" color="neutral" variant="ghost" size="xs" @click="emit('edit')" /></header>
         <div ref="topic_body" class="channel-topic-body" :class="{ 'is-clamped': topic_overflows && !topic_expanded }">
@@ -899,6 +917,22 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
         <template v-for="message in group.messages" :key="message.id">
+        <section v-if="message.failure" :id="message.id" class="channel-message channel-failed-execution" :data-author="bridge.identities[message.author]?.style" :aria-label="`${bridge.display_name(message.author)} 执行失败`">
+          <div class="channel-message-byline">
+            <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
+            <div class="channel-message-meta">
+              <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><span v-if="message.failure.role === 'host'" class="channel-message-round">主持工作</span><UBadge label="执行失败" color="error" variant="soft" size="xs" /></div>
+              <div class="channel-message-provenance"><time :title="new Date(message.created_at).toLocaleString('zh-CN')">{{ bridge.format_time(message.created_at) }}</time><span>执行 #{{ message.failure.id }}</span><span v-if="message.failure.turn_id">安排 #{{ message.failure.turn_id }}</span></div>
+            </div>
+            <span v-if="message.failure.elapsed_seconds != null" class="channel-message-provenance channel-message-elapsed">耗时 {{ format_elapsed(message.failure.elapsed_seconds) }}</span>
+          </div>
+          <p class="channel-message-text channel-failure-reason">{{ message.failure.result || '执行失败，未提供原因' }}</p>
+          <div v-if="message.can_retry" class="channel-failure-actions">
+            <UButton label="重试" icon="i-lucide-rotate-ccw" size="sm" variant="soft" color="primary" :aria-label="`重试 ${bridge.display_name(message.author)} 的失败执行`" :loading="pending === 'retry_execution'" :disabled="!!pending" @click="act('retry_execution', message.failure.id)" />
+            <p v-if="view.free_error" class="channel-failure-error" role="alert">{{ view.free_error }}</p>
+          </div>
+        </section>
+        <template v-else>
         <UChatMessage :id="String(message.id)" v-memo="[message, message_round_labels.get(message.id), expanded_answers.has(message.id), active_message === message.id, waits_for_host(message), request_badges.get(message.id), execution_reports.get(message.id), response_suggestions.get(message.id), recommendations.get(message.id), adopting === message.id]" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="{ 'channel-current-message': active_message === message.id }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
             <div class="channel-message-byline">
@@ -962,6 +996,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           <span>智能调度：{{ decision.label }}<small v-if="decision.confidence !== null">置信度 {{ Number(decision.confidence).toFixed(2) }}</small></span>
         </div>
         </template>
+        </template>
       </div>
       <div v-if="pending_message" class="channel-message-group">
         <section v-if="pending_message.is_host" :id="`execution-${pending_message.id}`" class="channel-host-work" :aria-label="`${bridge.display_name(pending_message.author)} 主持工作`">
@@ -975,15 +1010,15 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[pending_message.author]?.icon" :text="bridge.identities[pending_message.author]?.initials || '?'" :alt="bridge.display_name(pending_message.author)" size="md" class="channel-avatar" :class="bridge.identities[pending_message.author]?.style" />
               <div class="channel-message-meta"><div class="channel-message-author"><strong>{{ bridge.display_name(pending_message.author) }}</strong><span v-if="pending_message.round" class="channel-message-round">{{ pending_message.round }}</span></div></div>
-              <span class="channel-message-provenance channel-message-elapsed">{{ pending_message.manual ? '手动接入' : `已用 ${pending_duration}` }}</span>
+              <span class="channel-message-provenance channel-message-elapsed">{{ pending_message.manual ? '手动启动' : `已用 ${pending_duration}` }}</span>
             </div>
             <div class="channel-message-text" role="status" :aria-label="`${bridge.display_name(pending_message.author)} ${pending_message.text}`"><span v-if="pending_message.manual">{{ pending_message.text }}</span><span v-else ref="reply_glow" class="channel-reply-glow">{{ pending_message.text }}</span></div>
           </template>
         </UChatMessage>
       </div>
-      <div v-if="!view.messages.length && !pending_message" class="channel-empty"><UIcon :name="view.query || view.mention_only ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.mention_only ? '没有找到消息' : room.title }}</h2><p>{{ view.query || view.mention_only ? '试试其他关键词，或清除筛选。' : bridge.empty_discussion_message(room) }}</p></div>
+      <div v-if="!transcript_messages.length && !pending_message" class="channel-empty"><UIcon :name="view.query || view.mention_only ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.mention_only ? '没有找到消息' : room.title }}</h2><p>{{ view.query || view.mention_only ? '试试其他关键词，或清除筛选。' : bridge.empty_discussion_message(room) }}</p></div>
     </div>
-    <div v-if="(view.messages.length || pending_message) && !follow_tail" class="channel-latest-dock"><UButton icon="i-lucide-arrow-down" color="neutral" variant="outline" aria-label="回到最新消息" class="channel-latest-button" @click="return_to_latest" /></div>
+    <div v-if="(transcript_messages.length || pending_message) && !follow_tail" class="channel-latest-dock"><UButton icon="i-lucide-arrow-down" color="neutral" variant="outline" aria-label="回到最新消息" class="channel-latest-button" @click="return_to_latest" /></div>
     <div class="channel-composer-dock"><div class="channel-composer-column" @dragover="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments" @keydown.capture="mention_keydown($event); attachment_shortcut($event)" @input="update_mention" @click="update_mention" @keyup="update_mention" @select="update_mention" @compositionstart="mention_composition" @compositionend="mention_composition" @scroll.capture="sync_mirror">
       <UPopover :open="!!mention_context" :reference="prompt?.$el" :content="{ side: 'top', align: 'start', sideOffset: 8, onOpenAutoFocus: keep_mention_focus, onCloseAutoFocus: keep_mention_focus }" :ui="{ content: 'channel-select-menu channel-mention-menu' }" @update:open="!$event && (mention_context = null)">
         <template #content>
@@ -1010,7 +1045,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             </div>
           </div>
           <p v-if="view.composer_error || view.upload_status" class="attachment-status" :role="view.composer_error ? 'alert' : 'status'">{{ view.composer_error || view.upload_status }}</p>
-          <div v-if="speaking_turn" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>{{ (room.members || []).find((member) => member.name === speaking_turn.expert)?.access === 'manual' ? `${bridge.display_name(speaking_turn.expert)} 是手动接入，需把启动指令粘贴到其 AI 会话才会发言；不接入可在进度看板点「跳过」本次发言` : `新消息会在 ${bridge.display_name(speaking_turn.expert)} 回复后交给主持人；可在进度看板点「跳过」本次发言` }}</span><UButton v-if="(room.members || []).find((member) => member.name === speaking_turn.expert)?.access === 'manual' && view.access?.can_manage" :icon="launch_copied ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied ? '已复制' : '复制启动指令'" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch" /></div>
+          <div v-if="speaking_turn" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>{{ (room.members || []).find((member) => member.name === speaking_turn.expert)?.access === 'manual' ? `${bridge.display_name(speaking_turn.expert)} 是手动启动，需把启动指令粘贴到其 AI 会话才会发言；不接入可在进度看板点「跳过」本次发言` : `新消息会在 ${bridge.display_name(speaking_turn.expert)} 回复后交给主持人；可在进度看板点「跳过」本次发言` }}</span><UButton v-if="(room.members || []).find((member) => member.name === speaking_turn.expert)?.access === 'manual' && view.access?.can_manage" :icon="launch_copied ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied ? '已复制' : '复制启动指令'" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch" /></div>
           <div v-if="view.reply_to || view.turn_reply_to" class="channel-reply-draft"><UIcon name="i-lucide-corner-up-left" /><span>{{ view.turn_reply_to ? `回答安排 #${view.turn_reply_to} · ${bridge.display_name(room.host)} 代发` : `回复 #${view.reply_to}` }}</span><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" :aria-label="view.turn_reply_to ? '取消关联安排' : '取消回复'" @click="act(view.turn_reply_to ? 'cancel_answer' : 'cancel_reply')" /></div>
           <div v-if="needs_summary" class="channel-answer-editor"><UTextarea v-model="answer_summary" :rows="2" aria-label="回答摘要" class="w-full" placeholder="先说结论，保留关键理由、条件和不确定性。完整内容写在正文中。" /><USelect v-model="summary_source" :items="summary_sources" aria-label="摘要提供者" size="xs" /></div>
         </template>

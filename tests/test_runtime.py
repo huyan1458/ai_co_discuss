@@ -47,7 +47,7 @@ class RuntimeTests(unittest.TestCase):
             self.thread.join()
         self.directory.cleanup()
 
-    def request(self, path, payload=None, token=None):
+    def request(self, path, payload=None, token=None, extra_headers=None):
         """Return JSON and status for successes and rejected writes alike."""
         headers = {"Content-Type": "application/json"}
         if payload is not None and path == "/api/rooms":
@@ -60,6 +60,7 @@ class RuntimeTests(unittest.TestCase):
             token = self.owner if actor == "用户" or path == "/api/rooms" else self.member_tokens.get(actor, "")
         if token:
             headers["X-Discussion-Token"] = token
+        headers.update(extra_headers or {})
         request = Request(self.base + path, headers=headers,
                           data=json.dumps(payload).encode() if payload is not None else None)
         try:
@@ -246,6 +247,39 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(len(claude["session_id"]), 36)
         self.assertNotIn("token_hash", claude)
         self.assertEqual(run["participants"][0]["participant"], "Claude")
+
+    def test_failed_attempts_survive_retry_and_remain_separate_from_messages(self):
+        """Retry creates another execution while preserving public failure history and its timing."""
+        turn = self.request(self.path + "/turns", {"actor": "用户", "expert": "Claude", "question": "失败重试",
+            "submission_id": "failed-turn"})[1]["turn"]
+        self.start()
+        failures = []
+        for reason in ("模型未调用房间工具保存结果", "第二次执行失败"):
+            event = self.events()[-1]
+            self.enter(event)
+            self.assertEqual(self.request(self.path + f"/events/{event['id']}",
+                {"action": "fail", "reason": reason}, self.owner)[0], 200)
+            room = self.request(self.path)[1]
+            failure = room["runtime"]["failures"][-1]
+            self.assertEqual(set(failure), {"id", "participant", "role", "turn_id", "result", "created_at", "elapsed_seconds"})
+            self.assertEqual((failure["id"], failure["turn_id"], failure["result"]), (event["id"], turn["id"], reason))
+            self.assertGreaterEqual(failure["elapsed_seconds"], 0)
+            failures.append(failure)
+            self.assertEqual(room["runtime"]["failures"], failures)
+            self.assertEqual(room["message_count"], 0)
+            status, restarted = self.request(self.path + "/runtime", {"action": "start",
+                "revision": room["runtime"]["revision"], "deadline": 0}, self.owner)
+            self.assertEqual(status, 200, restarted)
+            self.assertNotEqual(restarted["latest_execution"]["id"], event["id"])
+            self.assertEqual(restarted["failures"], failures)
+            self.assertEqual(self.request(self.path)[1]["current_turn"]["id"], turn["id"])
+        token = self.enter(self.events()[-1])
+        floor = self.request(self.path + "/floor")[1]
+        self.request(self.path + "/floor", {"actor": "Claude", "action": "take", "revision": floor["revision"]}, token)
+        status, answer = self.request(self.path + "/messages", {"author": "Claude", "source": "cli", "kind": "opinion",
+            "text": "重试后的回答", "summary": "回答已保存", "turn_id": turn["id"], "submission_id": "retried-answer"}, token)
+        self.assertEqual(status, 201, answer)
+        self.assertEqual(self.request(self.path)[1]["runtime"]["failures"], failures)
 
     def test_runtime_reports_stage_timings_of_current_run(self):
         """Each dispatched execution exposes queue, wake and work durations."""
@@ -602,6 +636,29 @@ class RuntimeTests(unittest.TestCase):
         access = {m["name"]: m["access"] for m in self.request(self.path)[1]["members"]}
         self.assertEqual((access["Qwen"], access["Claude"]), ("manual", "runner"))
 
+    def test_skip_failed_expert_resumes_with_host_instead_of_retrying_failed_turn(self):
+        """A paused failed assignment can be cancelled before restart, preserving queued speakers."""
+        created, _ = self.plan_round()
+        event = self.events()[-1]
+        old_token = self.enter(event)
+        self.assertEqual(self.request(self.path + f"/events/{event['id']}",
+            {"action": "fail", "reason": "模型未保存结果"}, old_token)[0], 200)
+        paused = self.request(self.path)[1]
+        self.assertEqual((paused["phase"], paused["runtime"]["status"]), ("paused", "paused"))
+        self.assertEqual(self.request(self.path + f"/turns/{created['turn']['id']}",
+            {"actor": "用户", "status": "cancelled"})[0], 200)
+        self.assertEqual(self.request(self.path + "/runtime", {"action": "start", "mode": "automatic",
+            "revision": paused["runtime"]["revision"], "deadline": 0})[0], 200)
+        room = self.request(self.path)[1]
+        self.assertEqual((room["current_turn"]["status"], room["runtime"]["status"]), ("cancelled", "running"))
+        self.assertEqual([turn["expert"] for turn in room["queued_turns"]], ["Gemini"])
+        self.assertEqual((self.events()[-1]["participant"], self.events()[-1]["role"]), ("Codex", "host"))
+        self.assertEqual(self.request(self.path + "/state", {"actor": "Claude", "text": "迟到"}, old_token)[0], 403)
+        host = self.enter(self.events()[-1])
+        self.take_floor("Codex", host)
+        self.assertEqual(self.request(self.path + "/turns/continue", {"actor": "Codex"}, host)[0], 200)
+        self.assertEqual(self.request(self.path)[1]["current_turn"]["expert"], "Gemini")
+
     def test_skip_manual_expert_returns_to_host_and_continues_the_queue(self):
         """Skipping revokes the current manual answer without pausing or discarding the remaining plan."""
         self.start()
@@ -656,6 +713,18 @@ class RuntimeTests(unittest.TestCase):
         member = next(m for m in adopted["members"] if m["name"] == "Qwen")
         self.assertEqual((member["access"], member["adapter"], member["session_mode"], member["reported_session"]), ("runner", "codex", "borrowed", ""))
         self.assertEqual(self.request(member_path, adopt, self.owner)[0], 400)
+
+    def test_manual_expert_reports_its_session_on_a_read_before_it_ever_speaks(self):
+        """Reading the room with the member credential is enough to be taken over; only that member's own credential counts."""
+        self.start()
+        manual = {"name": "Qwen", "token": self.member_tokens["Qwen"], "access": "manual", "adapter": ""}
+        self.request(self.path + "/members", manual, self.owner)
+        session = {"X-Discussion-Session": "01a1694f-764d-7141-b2b8-47c433be027c", "X-Discussion-Session-Client": "codex"}
+        self.request(self.path, token=self.owner, extra_headers=session)
+        self.assertEqual(next(m for m in self.request(self.path)[1]["members"] if m["name"] == "Qwen")["reported_session"], "")
+        self.request(self.path, token=self.member_tokens["Qwen"], extra_headers=session)
+        member = next(m for m in self.request(self.path)[1]["members"] if m["name"] == "Qwen")
+        self.assertEqual((member["reported_session"], member["reported_client"]), (session["X-Discussion-Session"], "codex"))
 
     def test_manual_host_is_rejected_in_a_woken_discussion(self):
         """The host is continued by the local service, so only experts may be manual."""

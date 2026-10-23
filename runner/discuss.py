@@ -894,7 +894,14 @@ def access_headers(args, site, path):
     token = access.get("token")
     if not isinstance(token, str) or not 32 <= len(token) <= 256:
         raise CliError("凭据文件中的 token 无效")
-    return {"X-Discussion-Token": token}
+    headers = {"X-Discussion-Token": token}
+    # A hosting Claude Code or Codex session reports itself on any call, so a manual member can be taken over before it first speaks.
+    for variable, client in (("CLAUDE_CODE_SESSION_ID", "claude"), ("CODEX_THREAD_ID", "codex")):
+        session_id = os.getenv(variable, "").strip()
+        if session_id:
+            headers.update({"X-Discussion-Session": session_id, "X-Discussion-Session-Client": client})
+            break
+    return headers
 
 
 def preview_body(value):

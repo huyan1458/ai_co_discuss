@@ -1366,8 +1366,19 @@ async function runtime_view(database, room_id) {
   const { control_hash, ...visible } = row;
   const latest_execution = await database.prepare("SELECT id,participant,role,status,result FROM discussion_events WHERE room_id=? ORDER BY id DESC LIMIT 1").bind(room_id).first();
   const participants = await participant_executions(database, room_id);
+  const failures = await failed_executions(database, room_id);
   const timings = await execution_timings(database, room_id, row.run_id);
-  return { ...visible, latest_execution, participants, timings, protected: true, expired: row.status === "running" && row.deadline > 0 && row.deadline <= Math.floor(Date.now() / 1000) };
+  return { ...visible, latest_execution, participants, failures, timings, protected: true, expired: row.status === "running" && row.deadline > 0 && row.deadline <= Math.floor(Date.now() / 1000) };
+}
+
+/** Keep failed attempts readable after a retry, without exposing execution credentials. */
+async function failed_executions(database, room_id) {
+  const { results } = await database.prepare(`SELECT e.id,e.participant,e.role,e.turn_id,
+    e.result,e.created_at,CASE WHEN t.dispatched_at>0 AND t.finished_at>0
+    THEN MAX(0,t.finished_at-t.dispatched_at) END AS elapsed_seconds
+    FROM discussion_events AS e LEFT JOIN event_timings AS t ON t.event_id=e.id
+    WHERE e.room_id=? AND e.status='failed' ORDER BY e.id`).bind(room_id).all();
+  return results;
 }
 
 /** Summarize each participant's latest execution and failure count for the progress panel. */
@@ -2462,6 +2473,9 @@ async function handle_api(database, request, parts, params, bucket) {
     throw new HttpError(404, "地址不存在");
   }
   const room_id = parts[2];
+  const reported = request.headers.get("X-Discussion-Session");
+  if (reported) await record_reported_session(database, room_id, request.headers.get("X-Discussion-Token") ?? "",
+    { session_id: reported, session_client: request.headers.get("X-Discussion-Session-Client") });
   const free = await room_mode(database, room_id) === "free";
   if (free && ["inbox", "executions", "members", "suggestions", "recommendations"].includes(parts[3])) return handle_free_api(database, request, parts);
   if (parts[3] === "members" && method === "POST" && [4, 5].includes(parts.length)) return handle_discussion_members(database, request, parts);

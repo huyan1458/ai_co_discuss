@@ -256,7 +256,7 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .pb-meter-label b { color: var(--ui-text); font-weight: 500; font-variant-numeric: tabular-nums; }
 .pb-bar { height: 3px; margin-top: 6px; overflow: hidden; border-radius: 999px; background: var(--ui-bg-accented); }
 .pb-bar > i { display: block; height: 100%; border-radius: inherit; background: var(--channel-accent); }
-.progress-board > .pb-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 14px; }
+.progress-board > .pb-actions { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; margin-top: 14px; }
 html[data-theme^="channel"] .pb-action { flex-shrink: 0; white-space: nowrap; min-height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--ui-border) 70%, transparent); background: color-mix(in srgb, var(--ui-bg-elevated) 60%, transparent); box-shadow: none; color: var(--ui-text-muted); }
 html[data-theme^="channel"] .pb-action:hover { border-color: var(--ui-border-accented); background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); }
 html[data-theme^="channel"] .pb-action [class*="icon"] { width: 14px; height: 14px; }
@@ -452,6 +452,9 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 .channel-message-provenance { color: #929aa7; font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
 .channel-message-id { font-size: 11px !important; font-weight: 400; color: #929aa7; padding: 0 !important; }
 .channel-message-text { margin-top: 2px; color: #d7dbe3; font-size: 16px; line-height: 1.6; overflow-wrap: anywhere; }
+.channel-failure-reason { white-space: pre-wrap; }
+.channel-failure-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 16px; }
+.channel-failure-error { margin: 0; color: var(--ui-error); font-size: 13px; overflow-wrap: anywhere; }
 .channel-mention { background: #5865f22b; color: #c6ceff; border-radius: 3px; padding: 0 2px; }
 .channel-message-reference { color: #a3b2ce; font-size: 11px !important; font-weight: 400; padding: 2px 0 !important; gap: 5px; }
 .channel-message-reference [class*="icon"] { width: 12px; height: 12px; }
@@ -791,7 +794,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 }
 @media (prefers-reduced-motion: reduce) {
   html[data-theme^="channel"] *, html[data-theme^="channel"] *::before, html[data-theme^="channel"] *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
-  html[data-theme^="channel"] .animate-spin { animation: none !important; }
+  html[data-theme^="channel"] .animate-spin { animation-duration: 3s !important; }
 }
 
 /* Both channel palettes share the layout above, including portalled controls. */

@@ -116,7 +116,7 @@ function set_expert_mode(name, mode) {
 /** Explain delivery separately from whether the launcher has software configured. */
 function expert_status(name) {
   if (selected.value[name] === "online") return { text: "网页代发，由你转发回答", tone: "muted" };
-  if (selected.value[name] === "manual") return { text: "手动接入，自行提交", tone: "muted" };
+  if (selected.value[name] === "manual") return { text: "手动启动，自行提交", tone: "muted" };
   const api = view.value.launch.profiles[name]?.adapter === "api";
   return launch_ready(name) ? { text: api ? "已配置 API" : "已配置本机软件", tone: "ready" } : { text: api ? "待补齐 API 配置" : "待补齐接入配置", tone: "warn" };
 }
@@ -124,7 +124,7 @@ function expert_status(name) {
 /** Describe a platform before adding an independent instance. */
 function library_description(name) {
   if (instance_count(name)) return `已加入 ${instance_count(name)} 位 · 可继续添加`;
-  return has_local(name) ? "API / 本地 App / CLI / 手动接入" : free.value ? "API / 手动接入 / 网页代发" : "API / 手动接入";
+  return has_local(name) ? "API / 本地 App / CLI / 手动启动" : free.value ? "API / 手动启动 / 网页代发" : "API / 手动启动";
 }
 
 /** Admit one library role, woken by the local service until its card says otherwise. */

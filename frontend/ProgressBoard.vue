@@ -29,8 +29,9 @@ const concluded = computed(() => room.value.phase === "concluded");
 const settled = computed(() => concluded.value || room.value.archived);
 const can_restart = computed(() => automatic.value && (runtime.value.status === "paused" || runtime.value.expired)
   && !concluded.value && !room.value.archived);
-// Actions appear only when they apply: running phases can pause, skip or end; paused ones restart or end.
+// A paused run can also skip its retained assignment and resume with the host.
 const active = computed(() => ["initial", "discussing", "reviewing"].includes(room.value.phase) && !room.value.archived);
+const can_skip = computed(() => Boolean(turn.value && (active.value || can_restart.value)));
 /** Writes need this browser's room control credential; without it the board is read-only. */
 const can_control = computed(() => Boolean(view.value.access?.can_manage));
 const can_end = computed(() => (active.value || room.value.phase === "paused") && !room.value.archived);
@@ -74,7 +75,7 @@ const invite_status = computed(() => {
     : Boolean(profile.adapter && (profile.adapter === "antigravity" ? profile.ipc_directory : profile.executable));
   return ready ? { text: api ? "已配置 API" : "已配置本机软件", tone: "ready" } : { text: api ? "待补齐 API 配置" : "待补齐接入配置", tone: "warn" };
 });
-const invite_card_status = computed(() => invite_mode.value === "manual" ? { text: "手动接入，自行提交", tone: "muted" } : invite_status.value);
+const invite_card_status = computed(() => invite_mode.value === "manual" ? { text: "手动启动，自行提交", tone: "muted" } : invite_status.value);
 watch(() => room.value.id, () => { inviting.value = false; invite_name.value = ""; invite_session.value = ""; invite_mode.value = "cli"; });
 const focus = computed(() => turn.value?.question || room.value.focus || room.value.goal || "");
 const focus_long = computed(() => focus.value.length > FOCUS_PREVIEW_LENGTH);
@@ -301,7 +302,7 @@ async function finish(action) {
     <section v-if="has_actions" class="pb-actions" aria-label="操作">
       <UButton v-if="can_restart" icon="i-lucide-rotate-ccw" label="重启" size="sm" color="neutral" variant="outline" class="pb-action pb-restart" title="原安排重新交给对应 AI，需本机接入程序在运行" :loading="pending === 'restart_discussion'" :disabled="!can_control" @click="act('restart_discussion')" />
       <UButton v-if="active" icon="i-lucide-pause" label="暂停" size="sm" color="neutral" variant="outline" class="pb-action" title="暂停讨论，原安排保留" :loading="pending === 'pause_discussion'" :disabled="!can_control" @click="act('pause_discussion')" />
-      <UButton v-if="active && turn" icon="i-lucide-skip-forward" label="跳过" size="sm" color="neutral" variant="outline" class="pb-action" :title="`跳过 ${bridge.display_name(turn.expert)} 本次发言，交给主持人继续安排`" :loading="pending === 'cancel_turn'" :disabled="!can_control || Boolean(pending)" @click="act('cancel_turn')" />
+      <UButton v-if="can_skip" icon="i-lucide-skip-forward" label="跳过" size="sm" color="neutral" variant="outline" class="pb-action" :title="`跳过 ${bridge.display_name(turn.expert)} 本次发言，${can_restart ? '恢复讨论，' : ''}交给主持人继续安排`" :loading="pending === 'skip_turn'" :disabled="!can_control || Boolean(pending)" @click="act('skip_turn')" />
       <UButton v-if="can_end" icon="i-lucide-flag" label="结束" size="sm" color="neutral" variant="outline" class="pb-action pb-end" title="结束讨论：选择主持人收尾或直接结束" :disabled="!can_control" @click="ending = true" />
     </section>
     <section v-if="automatic && timings.count" class="pb-section" aria-label="阶段耗时">
@@ -345,14 +346,14 @@ async function finish(action) {
         </div>
       </template>
     </UModal>
-    <UModal v-model:open="inviting" title="邀请专家" description="新专家沿用本机软件配置或手动接入，追加到本轮发言队列末尾。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
+    <UModal v-model:open="inviting" title="邀请专家" description="新专家由程序按本机软件配置启动，或由你手动启动，追加到本轮发言队列末尾。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
       <template #body>
         <div v-if="invited_manual" class="pb-invite" aria-label="启动手动成员">
           <p><strong>{{ invited_manual }}</strong> 已加入。要让它开始发言：</p>
           <ol class="fine-print">
             <li>点下方「复制启动指令」。</li>
             <li>粘贴到你要用的 {{ bridge.platform_of(invited_manual) }} 会话。</li>
-            <li>轮到它时，由该会话提交回答；支持自动接管的软件在首次发言后由本机服务继续唤醒。</li>
+            <li>轮到它时，由该会话提交回答；Claude Code / Codex 会话读取房间后即由本机服务接管，之后自动唤醒。</li>
           </ol>
           <p class="fine-print">指令含该成员的凭证，只交给这个会话。关闭后仍可在参与者列表中复制。</p>
           <p v-if="view.access?.error" role="alert" class="pb-free-note is-error">{{ view.access.error }}</p>
@@ -367,10 +368,10 @@ async function finish(action) {
             </button>
           </div>
           <template v-if="invite_name">
-            <div class="pb-invite-mode" role="radiogroup" aria-label="接入方式">
-              <span>接入方式</span>
+            <div class="pb-invite-mode" role="radiogroup" aria-label="启动方式">
+              <span>启动方式</span>
               <div class="pb-invite-options">
-                <label v-for="option in [{ value: 'cli', label: '自动' }, { value: 'manual', label: '手动' }]" :key="option.value" :class="{ 'is-selected': invite_mode === option.value }">
+                <label v-for="option in [{ value: 'cli', label: '程序启动' }, { value: 'manual', label: '手动启动' }]" :key="option.value" :class="{ 'is-selected': invite_mode === option.value }">
                   <input v-model="invite_mode" type="radio" name="invite-mode" :value="option.value" />{{ option.label }}
                 </label>
               </div>
@@ -416,7 +417,8 @@ async function finish(action) {
 .pb-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .pb-heading h4 { margin: 0; }
 .pb-heading .pb-link { display: inline-flex; align-items: center; gap: 3px; margin: 0; }
-.pb-heading .pb-link > span { width: 12px; height: 12px; }
+.pb-member-body .pb-link { display: inline-flex; align-items: center; gap: 3px; }
+.pb-heading .pb-link > span, .pb-member-body .pb-link > span { width: 12px; height: 12px; }
 .pb-invite { display: flex; flex-direction: column; gap: 14px; }
 .pb-invite > .expert-card { width: 100%; }
 .pb-invite-mode { display: flex; align-items: center; gap: 12px; color: var(--ui-text-muted); font-size: 12px; }

@@ -678,6 +678,26 @@ test('Worker zero deadline cannot bypass finite topic limits and rejects invalid
   assert.ok(run.deadline <= Math.floor(Date.now() / 1000) + 60);
 });
 
+test('Worker retains failed attempts and frozen timing after retry, including legacy failures', async t => {
+  const f = await timed_message_fixture(t, 'expert');
+  const failed = await f.request(`${f.path}/events/${f.event}`, { action: 'fail', reason: '模型未调用房间工具保存结果' });
+  assert.equal(failed.status, 200);
+  const room = (await f.request(f.path)).body;
+  const failure = room.runtime.failures[0];
+  assert.deepEqual(Object.keys(failure).sort(), ['id', 'participant', 'role', 'turn_id', 'result', 'created_at', 'elapsed_seconds'].sort());
+  assert.equal(failure.result, '模型未调用房间工具保存结果');
+  assert.equal(failure.turn_id, f.payload.turn_id);
+  assert.ok(failure.elapsed_seconds >= 125 && failure.elapsed_seconds < 130);
+  assert.equal(room.message_count, 0);
+  const restarted = await f.request(`${f.path}/runtime`, { action: 'start', revision: room.runtime.revision, deadline: 0 });
+  assert.equal(restarted.status, 200, JSON.stringify(restarted.body));
+  assert.deepEqual(restarted.body.failures, [failure]);
+  assert.notEqual(restarted.body.latest_execution.id, failure.id);
+  assert.equal((await f.request(f.path)).body.current_turn.id, failure.turn_id);
+  f.sql.prepare('DELETE FROM event_timings WHERE event_id=?').run(f.event);
+  assert.deepEqual((await f.request(f.path)).body.runtime.failures, [{ ...failure, elapsed_seconds: null }]);
+});
+
 test('Worker forces an early host summary and reports per-participant executions', async t => {
   const f = await worker_fixture(t);
   const created = await f.request('', { title: '提前收尾', host: 'Codex', experts: { Codex: 'cli' }, limits: { max_rounds: 3, summary_minutes: 2 } });

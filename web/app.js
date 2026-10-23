@@ -1610,7 +1610,7 @@ function participant_model(name, room, saved) {
 function participant_access(name, room) {
   const member = (room?.members || []).find(item => item.name === name);
   const adapter = member?.adapter;
-  if (member?.access === "manual") return "手动";
+  if (member?.access === "manual") return "手动启动";
   if (adapter === "api") return "API";
   if (["codex", "antigravity"].includes(adapter)) return "App";
   return room?.experts?.[name] === "cli" ? "CLI" : "在线";
@@ -2121,6 +2121,55 @@ async function restart_discussion() {
   show_toast("已重启，原安排会重新交给对应 AI；需本机接入程序保持运行");
 }
 
+/** Only the failed attempt for the still-retained task can restart this discussion. */
+function can_retry_execution(execution, room) {
+  const runtime = room.runtime;
+  if (!execution || room.archived || room.phase !== "paused" || runtime?.mode !== "automatic"
+    || runtime.status !== "paused" || runtime.latest_execution?.id !== execution.id
+    || runtime.latest_execution.status !== "failed") return false;
+  const turn = room.current_turn;
+  const active_turn = turn && ["pending", "notified"].includes(turn.status);
+  return execution.role === "host" ? !active_turn && execution.participant === room.host
+    : active_turn && turn.id === execution.turn_id && turn.expert === execution.participant;
+}
+
+/** Recheck the selected failed attempt before resuming its retained task with a new execution. */
+async function retry_execution(event_id) {
+  const room_id = state.room.id;
+  const room = await request_json(`/api/rooms/${room_id}`);
+  const execution = room.runtime?.failures?.find(item => item.id === event_id);
+  if (!can_retry_execution(execution, room)) throw new Error("执行或安排已变化，请刷新后重试");
+  await request_json(`/api/rooms/${room_id}/runtime`, {
+    action: "start", mode: "automatic", revision: room.runtime.revision, deadline: 0,
+  });
+  if (state.room?.id !== room_id) return;
+  await refresh_room();
+  show_toast(`已重新安排 ${execution.participant} 执行，原失败记录保留`);
+}
+
+/** Skip the selected assignment; a paused automatic run resumes with the host instead of retrying it. */
+async function skip_turn() {
+  const room = state.room;
+  const turn = room.current_turn;
+  if (!turn || !["pending", "notified"].includes(turn.status)) throw new Error("当前没有可跳过的发言安排，请刷新后核对");
+  const room_id = room.id, path = `/api/rooms/${room_id}`;
+  const runtime = room.runtime || {};
+  const resume = runtime.mode === "automatic" && (runtime.status === "paused" || runtime.expired);
+  const revision = runtime.revision;
+  let cancelled = false;
+  try {
+    await request_json(`${path}/turns/${turn.id}`, { actor: "用户", status: "cancelled" });
+    cancelled = true;
+    if (resume) await request_json(`${path}/runtime`, { action: "start", mode: "automatic", revision, deadline: 0 });
+  } catch (error) {
+    if (cancelled && resume) throw new Error(`本次发言已跳过，但未能继续讨论：${error.message}。核对后可点“重启”继续`);
+    throw error;
+  } finally {
+    if (state.room?.id === room_id) await refresh_room();
+  }
+  if (state.room?.id === room_id) show_toast(resume ? "已跳过本次发言并恢复讨论，等待主持人继续安排" : "已跳过本次发言，等待主持人继续安排");
+}
+
 /** End early with a host summary limited to the configured closing reserve. */
 async function force_close() {
   await request_json(`/api/rooms/${state.room.id}/limits`, { actor: "用户", force: true });
@@ -2205,7 +2254,7 @@ ${instruction}
 /** How a manual member learns it is its turn: free rooms are pulled by the member, discussions only on the host's assignment. */
 function manual_trigger_instruction(room) {
   return room.mode === "free" ? "首次复制后，可由人工或软件原生定时触发；自行提交，不必每轮复制回答。"
-    : "这是全自动讨论：只在主持人给你安排发言时才参与，先核对 turn current 是否轮到你，再按参与技能认领发言权并提交；没有安排就结束本次检查。首次提交后，若你运行在 Claude Code 或 Codex 中，本机服务会自动接管你的会话并在后续轮次唤醒你；未被接管时才需要你或软件原生定时触发。";
+    : "这是全自动讨论。现在只先了解房间（议题、参与者、已有发言），不要发言，不要自建定时任务；轮到你时会被唤醒。唤醒后先重读最新内容（turn current、新增发言），确认轮到你再认领发言权并提交；没有安排就结束本次检查。";
 }
 
 /** Download a private per-room setup file for the independent local runner. */
@@ -3054,10 +3103,10 @@ async function execute_view_action(name, value) {
     save_context: () => save_context(event), save_topic: () => save_topic(event),
     schedule: () => schedule_turn(event), filter: filter_view, reply: set_view_reply,
     cancel_reply, cancel_answer: cancel_turn_reply, prepare_answer: prepare_turn_answer,
-    copy_turn, notify: () => change_turn_status("notified"), cancel_turn: () => change_turn_status("cancelled"),
+    copy_turn, notify: () => change_turn_status("notified"), cancel_turn: () => change_turn_status("cancelled"), skip_turn,
     take_floor: () => change_floor("take"), return_floor: () => change_floor("return"),
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
-    choose_runtime, export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, force_close, conclude_discussion,
+    choose_runtime, export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, retry_execution, force_close, conclude_discussion,
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
     load_room_configuration, save_room_configuration, interrupt_member, change_member, invite_member, set_proxy, copy_online_notice,
     prepare_brainstorm, return_conclusion, convert_suggestion, adopt_recommendation,
@@ -3088,7 +3137,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
   request: request_json, identities: IDENTITIES, display_name, sources: SOURCE_LABELS, phases: PHASE_LABELS,
-  runtime_label, execution_label, limits_label, participant_model, participant_access,
+  runtime_label, execution_label, limits_label, participant_model, participant_access, can_retry_execution,
   turns: TURN_LABELS, turn_label, turn_guidance, floor_status, progress_round, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();

@@ -116,8 +116,10 @@ async function provider_fetch(profile, key, request, signal) {
       body: request.body === undefined ? undefined : JSON.stringify(request.body),
       signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]) : AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
-  } catch { throw new Error(signal?.aborted ? 'API 执行已取消' : 'API 请求超时或连接失败：可能是网络暂时不通或 Base URL 有误，请核对'); }
-  if (!response.ok) throw new Error(api_status_message(response.status));
+  } catch {
+    throw Object.assign(new Error(signal?.aborted ? 'API 执行已取消' : 'API 请求超时或连接失败：可能是网络暂时不通或 Base URL 有误，请核对'), { retryable: !signal?.aborted });
+  }
+  if (!response.ok) throw Object.assign(new Error(api_status_message(response.status)), { retryable: response.status === 429 || response.status >= 500 });
   try { return await response.json(); } catch { throw new Error('模型 API 返回的内容不是有效 JSON'); }
 }
 

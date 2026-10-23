@@ -1610,6 +1610,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             raise LookupError("地址不存在")
         room_id = parts[2]
         token = self.headers.get("X-Discussion-Token", "")
+        if self.headers.get("X-Discussion-Session"):
+            record_reported_session(connection, room_id, token, {"session_id": self.headers.get("X-Discussion-Session"),
+                                                                 "session_client": self.headers.get("X-Discussion-Session-Client")})
+            connection.commit()
         free = room_mode(connection, room_id) == "free"
         if free and parts[3:4] in (["inbox"], ["executions"], ["members"], ["suggestions"], ["recommendations"]):
             return self.handle_free_api(connection, parts, method)

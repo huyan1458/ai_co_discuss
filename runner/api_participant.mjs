@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { api_generate, api_history, api_tool_results, read_api_key } from './discussion_api.mjs';
 
@@ -10,6 +11,9 @@ const MAX_MODEL_TURNS = 24;
 // API participants follow the same skills that local software loads, read fresh for every execution.
 const SKILLS = fileURLToPath(new URL('../.agents/skills/', import.meta.url));
 const SITE_TIMEOUT_MS = 10_000;
+const MODEL_RETRIES = 2;
+const MODEL_RETRY_DELAY_MS = 3000;
+const NO_TOOL_REMINDER = '普通文本不会被保存。请调用写入工具提交真实结果；确实无法继续才不调用工具直接结束。';
 const TEXT = { type: 'string' };
 const NUMBER = { type: 'integer', minimum: 1 };
 const ROOM_FIELDS = ['id', 'title', 'goal', 'host', 'user_request', 'background', 'boundaries', 'experts', 'phase', 'focus',
@@ -150,6 +154,17 @@ export function system_prompt(context) {
   return [environment, skill_text('discuss-participant'), ...(host && context.mode !== 'free' ? [skill_text('discuss-host')] : [])].join('\n\n---\n\n');
 }
 
+/** Retry a model request that failed before any room write; history is only extended on success. */
+async function generate_with_retry(profile, key, state, signal) {
+  for (let attempt = 0; ; attempt++) {
+    try { return await api_generate(profile, key, state, signal); }
+    catch (error) {
+      if (!error.retryable || attempt >= MODEL_RETRIES) throw error;
+      await setTimeout(MODEL_RETRY_DELAY_MS * (attempt + 1), undefined, { signal });
+    }
+  }
+}
+
 /** Run bounded tool turns while the parent dispatcher continues renewing leases and observing pause. */
 async function run_participant(profile, key, context) {
   const room = await read_room(context);
@@ -158,9 +173,16 @@ async function run_participant(profile, key, context) {
     execution_id: context.execution_id, requests: context.requests, read_after: context.read_after,
     ...(context.scheduler_suggestions?.length ? { scheduler_suggestions: context.scheduler_suggestions } : {}) } });
   const state = { system: system_prompt(context), history: api_history(profile, prompt), tools: definitions };
+  let reminded = false;
   for (let index = 0; index < MAX_MODEL_TURNS; index++) {
-    const calls = await api_generate(profile, key, state, context.signal);
-    if (!calls.length) throw new Error('模型未调用房间工具保存结果，请核对模型是否支持工具调用');
+    const calls = await generate_with_retry(profile, key, state, context.signal);
+    if (!calls.length) {
+      // Some models answer in plain text mid-run; one reminder avoids pausing on a recoverable slip.
+      if (reminded) throw new Error('模型未调用房间工具保存结果，请核对模型是否支持工具调用');
+      reminded = true;
+      state.history.push(profile.api_protocol === 'gemini' ? { role: 'user', parts: [{ text: NO_TOOL_REMINDER }] } : { role: 'user', content: NO_TOOL_REMINDER });
+      continue;
+    }
     const results = [];
     for (const call of calls) {
       context.signal.throwIfAborted();

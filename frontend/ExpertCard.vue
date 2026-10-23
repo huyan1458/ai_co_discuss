@@ -31,7 +31,7 @@ const profile = computed(() => view.value.launch.profiles[props.name] || {});
 const entry_items = computed(() => bridge.launch_clients[props.name] || []);
 const automatic = computed(() => props.mode === "cli");
 // Short labels for the front control; the 启动 row spells out what each one means.
-const ACCESS_LABELS = { cli: "自动", manual: "手动", online: "网页" };
+const ACCESS_LABELS = { cli: "程序启动", manual: "手动启动", online: "网页" };
 const api_mode = computed(() => automatic.value && profile.value.adapter === "api");
 const api_check = ref({ state: "", message: "" });
 // A previous check result no longer applies once any checked field changes.
@@ -45,7 +45,7 @@ async function check_api() {
 }
 const entry_label = computed(() => entry_items.value.find((item) => item.value === profile.value.adapter)?.label || "待选择 App / CLI");
 const can_flip = computed(() => automatic.value && entry_items.value.length > 0);
-const card_label = computed(() => props.mode === "online" ? `设置 ${props.name} 的参与方式` : `配置 ${props.name} 的接入方式`);
+const card_label = computed(() => props.mode === "online" ? `设置 ${props.name} 的参与方式` : `配置 ${props.name} 的启动方式`);
 const models = computed(() => bridge.launch_model_state(props.name, view.value.launch));
 const configurable = computed(() => Boolean(automatic.value && models.value.supported));
 const configuration_note = computed(() => configurable.value && connection.value.length ? "补齐上方连接后，可在这里选择模型与思考强度。"
@@ -185,7 +185,7 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
           </dl>
           <span v-if="can_flip" class="expert-card-flip"><UIcon name="i-lucide-settings-2" />设置</span>
         </component>
-        <div v-if="choices.length > 1" class="expert-card-modes expert-card-front-modes" role="radiogroup" :aria-label="`${name} 接入方式`" @keydown="choose_capability">
+        <div v-if="choices.length > 1" class="expert-card-modes expert-card-front-modes" role="radiogroup" :aria-label="`${name} 启动方式`" @keydown="choose_capability">
           <button v-for="option in choices" :key="option" type="button"
             role="radio" :aria-checked="mode === option" :tabindex="mode === option ? 0 : -1" :data-mode="option" @click="emit('mode', option)">{{ ACCESS_LABELS[option] }}</button>
         </div>

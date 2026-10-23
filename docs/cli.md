@@ -35,7 +35,7 @@ Bash 对应 `export DISCUSS_URL=http://127.0.0.1:8765`，CMD 对应 `set DISCUSS
 
 建房与更新资料支持 `--user-request` / `--user-request-file`，将用户原文与 `--background` 分开保存，各限 4000 字。`room brief` 返回两者，概要和通知不自动展开原文。
 
-`room create` 必须指定 `--access-file 私有文件`，CLI 在请求前原子保存建房编号、房主和各成员凭据，确认房间后另写各本地成员的独立文件，回执只返回 `member_access_files` 路径。结果不明时沿用同一文件、编号和创建参数；不能换文件重建。后续每次写入使用对应身份的文件，不能拿房主文件冒充成员；自动讨论使用本次任务文件中的执行凭据。文件含 `site`、`room`、`token`，CLI 检查站点与房间匹配。同样内容的单行 JSON 文本可放入环境变量 `DISCUSS_ACCESS`（或 `--access-file -` 从标准输入读取），未传 `--access-file` 时使用；成员菜单的“复制凭证文本”复制的就是这段文本，含 token，只交给该成员，不要写进命令行参数或回显。`--dry-run` 不生成或写入凭据，预览会隐藏凭据字段。`message post` 在 Claude Code 会话中运行时自动附带 `session_id` 与 `session_client: "claude"`（取自 `CLAUDE_CODE_SESSION_ID`；Codex 为 `session_client: "codex"`，取自 `CODEX_THREAD_ID`），服务端仅对手动成员保存，供本机服务转为托管；其他情况忽略。
+`room create` 必须指定 `--access-file 私有文件`，CLI 在请求前原子保存建房编号、房主和各成员凭据，确认房间后另写各本地成员的独立文件，回执只返回 `member_access_files` 路径。结果不明时沿用同一文件、编号和创建参数；不能换文件重建。后续每次写入使用对应身份的文件，不能拿房主文件冒充成员；自动讨论使用本次任务文件中的执行凭据。文件含 `site`、`room`、`token`，CLI 检查站点与房间匹配。同样内容的单行 JSON 文本可放入环境变量 `DISCUSS_ACCESS`（或 `--access-file -` 从标准输入读取），未传 `--access-file` 时使用；成员菜单的“复制凭证文本”复制的就是这段文本，含 token，只交给该成员，不要写进命令行参数或回显。`--dry-run` 不生成或写入凭据，预览会隐藏凭据字段。CLI 在 Claude Code / Codex 会话中运行时，所有带凭据的请求自动附带请求头 `X-Discussion-Session` 与 `X-Discussion-Session-Client`，`message post` 另在正文带 `session_id` 与 `session_client`（`claude` 取自 `CLAUDE_CODE_SESSION_ID`，`codex` 取自 `CODEX_THREAD_ID`），服务端仅对手动成员保存，供本机服务转为托管；其他情况忽略。
 
 接入程序新启动的 CLI 使用 `DISCUSS_ACCESS_FILE` 绑定本次凭据文件，日常读写可省略 `--access-file`；文件每次重新读取，保留会话绑定与房间、站点检查。优先级为显式 `--access-file` → `DISCUSS_ACCESS_FILE` 文件 → `DISCUSS_ACCESS` JSON；已指定文件损坏或缺失时直接报错，不回退其他身份。首次接入已有会话和 App 仍使用交付的文件路径。建房仍须显式指定新凭据的保存路径。
 
