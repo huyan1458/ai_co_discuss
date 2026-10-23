@@ -1715,6 +1715,11 @@ test("discussion experts can leave, return or be removed from the board, but the
   assert.deepEqual(labels(away), ["请回", "移除"]);
   await away[0][0].onSelect();
   assert.deepEqual(calls, ["change_member"]);
+  view.value.room.rounds = [{ number: 1, speakers: ["Codex"], completed: false }];
+  assert.ok(!labels(context.member_menu({ name: "Codex" })).includes("作废本轮发言"), "voiding needs a pause");
+  view.value.room.phase = "paused";
+  assert.ok(labels(context.member_menu({ name: "Codex" })).includes("作废本轮发言"));
+  assert.ok(!labels(context.member_menu({ name: "Gemini" })).includes("作废本轮发言"), "only experts counted in the round");
   view.value.room.phase = "concluded";
   assert.equal(context.member_menu({ name: "Codex" }).length, 0, "a concluded discussion keeps its roster");
 });

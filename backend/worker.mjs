@@ -2089,8 +2089,22 @@ async function handle_discussion_members(database, request, parts) {
     catch (error) { if (String(error).includes("UNIQUE constraint")) throw new HttpError(409, `${member.name} 已是本房间成员`); throw error; }
   } else {
     const member = await free_owned_member(database, room_id, integer(parts[4]), token);
-    if (["away", "remove"].includes(payload.action)) {
+    if (payload.action === "redo") {
+      if (room.phase !== "paused") throw new HttpError(400, "请先暂停讨论，再作废专家的发言");
+      const row = await database.prepare(`SELECT messages.id FROM messages JOIN message_details AS details ON details.message_id=messages.id
+        WHERE messages.room_id=? AND messages.author=? AND details.kind='opinion' ORDER BY messages.id DESC LIMIT 1`).bind(room_id, member.name).first();
+      if (!row) throw new HttpError(404, `${member.name} 还没有可作废的发言`);
+      await database.batch([
+        database.prepare("UPDATE discussion_turns SET status='cancelled',answer_id=NULL WHERE answer_id=?").bind(row.id),
+        database.prepare("UPDATE messages SET reply_to=NULL WHERE reply_to=?").bind(row.id),
+        database.prepare("DELETE FROM message_timings WHERE message_id=?").bind(row.id),
+        database.prepare("DELETE FROM message_summaries WHERE message_id=?").bind(row.id),
+        database.prepare("DELETE FROM message_details WHERE message_id=?").bind(row.id),
+        database.prepare("DELETE FROM messages WHERE id=?").bind(row.id)]);
+    } else if (["away", "remove"].includes(payload.action)) {
       if (member.name === room.host) throw new HttpError(400, "主持人不能离开或移除；请先更换主持人");
+      const speaking = await database.prepare("SELECT 1 FROM discussion_turns WHERE room_id=? AND expert=? AND status IN ('pending','notified')").bind(room_id, member.name).first();
+      if (speaking && room.phase !== "paused") throw new HttpError(400, "该专家正在发言；请先暂停讨论再离开或移除");
       delete experts[member.name];
       await database.batch([
         database.prepare("UPDATE discussion_turns SET status='cancelled' WHERE room_id=? AND expert=? AND status IN ('pending','notified')").bind(room_id, member.name),
@@ -2103,7 +2117,7 @@ async function handle_discussion_members(database, request, parts) {
       await require_fresh_member_hash(database, room_id, hashed);
       experts[member.name] = member.access === "online" ? "online" : "cli";
       await database.batch([database.prepare("UPDATE room_members SET status='active',token_hash=? WHERE id=? AND status='away'").bind(hashed, member.id), save()]);
-    } else throw new HttpError(400, "action 须为 away、active 或 remove");
+    } else throw new HttpError(400, "action 须为 away、active、remove 或 redo");
   }
   return respond(await require_room(database, room_id));
 }

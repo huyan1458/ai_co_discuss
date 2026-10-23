@@ -449,6 +449,41 @@ class RuntimeTests(unittest.TestCase):
             "turn_id": turn_id, "text": "实际回答", "summary": "摘要", "submission_id": submission_id}, token)
         self.assertEqual(status, 201, saved)
 
+    def cancel_turn(self, turn_id):
+        """Close an open assignment directly so its expert no longer counts as speaking."""
+        connection = sqlite3.connect(self.database)
+        try:
+            with connection:
+                connection.execute("UPDATE discussion_turns SET status='cancelled' WHERE id=?", (turn_id,))
+        finally:
+            connection.close()
+
+    def set_phase(self, phase):
+        """Move the topic phase directly so member actions can be exercised while paused."""
+        connection = sqlite3.connect(self.database)
+        try:
+            with connection:
+                connection.execute("UPDATE topic_settings SET phase=? WHERE room_id=?", (phase, self.room))
+        finally:
+            connection.close()
+
+    def test_paused_discussion_voids_an_experts_latest_opinion(self):
+        """Redo deletes the expert's latest opinion so the round no longer counts it, and only while paused."""
+        created, _ = self.plan_round("redo-plan")
+        self.answer("Claude", created["turn"]["id"], self.enter(self.events()[-1]), "redo-answer")
+        members = {member["name"]: member for member in self.request(self.path)[1]["members"]}
+        redo = self.path + f"/members/{members['Claude']['id']}"
+        self.assertEqual(self.request(redo, {"action": "redo"}, self.owner)[0], 400, "redo needs a paused discussion")
+        self.set_phase("paused")
+        room = self.request(self.path)[1]
+        self.assertEqual(room["rounds"][-1]["speakers"], ["Claude"])
+        status, voided = self.request(redo, {"action": "redo"}, self.owner)
+        self.assertEqual(status, 200, voided)
+        room = self.request(self.path)[1]
+        self.assertEqual(room["rounds"], [])
+        self.assertEqual(self.request(self.path + f"/messages?author=Claude")[1]["messages"], [])
+        self.assertEqual(self.request(redo, {"action": "redo"}, self.owner)[0], 404, "nothing left to void")
+
     def plan_round(self, submission_id="round-plan-1"):
         """Let the host arrange Claude then Gemini in one execution."""
         self.start()
@@ -475,11 +510,15 @@ class RuntimeTests(unittest.TestCase):
 
     def test_running_discussion_admits_and_releases_experts_without_pausing(self):
         """Leaving cancels only that expert's work and wakes the host; inviting and rejoining keep the run going."""
-        self.plan_round("members-plan")
+        created, _ = self.plan_round("members-plan")
         members = {member["name"]: member for member in self.request(self.path)[1]["members"]}
         host = self.request(self.path + f"/members/{members['Codex']['id']}", {"action": "away"}, self.owner)
         self.assertEqual(host[0], 400, host[1])
-        status, room = self.request(self.path + f"/members/{members['Claude']['id']}", {"action": "away"}, self.owner)
+        speaker = self.path + f"/members/{members['Claude']['id']}"
+        status, refused = self.request(speaker, {"action": "away"}, self.owner)
+        self.assertEqual((status, "正在发言" in refused["error"]), (400, True), refused)
+        self.cancel_turn(created["turn"]["id"])
+        status, room = self.request(speaker, {"action": "away"}, self.owner)
         self.assertEqual(status, 200, room)
         self.assertEqual((room["runtime"]["status"], sorted(room["experts"]), room["queued_turns"]), ("running", ["Codex", "Gemini"], []))
         self.assertEqual(room["current_turn"]["status"], "cancelled")

@@ -565,6 +565,11 @@ test('Worker running discussions admit and release experts without pausing, like
   const turn = (await f.request(`/${id}/turns`, { actor: '用户', expert: 'Claude', question: '观点', submission_id: 'member-turn' })).body.turn;
   const members = Object.fromEntries((await f.request(`/${id}`)).body.members.map(member => [member.name, member]));
   assert.equal((await f.request(`/${id}/members/${members.Codex.id}`, { action: 'away' })).status, 400);
+  assert.equal((await f.request(`/${id}/members/${members.Claude.id}`, { action: 'redo' })).status, 400, 'redo needs a pause');
+  const speaking = await f.request(`/${id}/members/${members.Claude.id}`, { action: 'away' });
+  assert.deepEqual([speaking.status, speaking.body.error.includes('正在发言')], [400, true]);
+  const set_phase = phase => f.sql.prepare('UPDATE topic_settings SET phase=? WHERE room_id=?').run(phase, id);
+  f.sql.prepare("UPDATE discussion_turns SET status='cancelled' WHERE id=?").run(turn.id);
   let room = (await f.request(`/${id}/members/${members.Claude.id}`, { action: 'away' })).body;
   assert.deepEqual([room.runtime.status, Object.keys(room.experts), room.current_turn.id, room.current_turn.status], ['running', ['Codex'], turn.id, 'cancelled']);
   const events = (await f.request(`/${id}/events`)).body.events;
@@ -577,6 +582,14 @@ test('Worker running discussions admit and release experts without pausing, like
   assert.equal((await f.request(`/${id}/members/${members.Claude.id}`, { action: 'active', token: f.member_tokens.Claude })).status, 400);
   room = (await f.request(`/${id}/members/${members.Claude.id}`, { action: 'active', token: crypto.randomUUID() })).body;
   assert.deepEqual([room.runtime.status, room.experts.Claude], ['running', 'cli']);
+  // Voiding deletes the latest opinion, so the round no longer counts the speaker.
+  const saved = f.sql.prepare("INSERT INTO messages (room_id,author,text,source,submission_id,created_at) VALUES (?,?,?,?,?,datetime('now'))").run(id, '用户', '观点', 'cli', 'void-me');
+  f.sql.prepare("INSERT INTO message_details (message_id,kind,submitted_by) VALUES (?,?,?)").run(saved.lastInsertRowid, 'opinion', 'Claude');
+  f.sql.prepare("UPDATE messages SET author='Claude' WHERE id=?").run(saved.lastInsertRowid);
+  set_phase('paused');
+  assert.equal((await f.request(`/${id}/members/${members.Codex.id}`, { action: 'redo' })).status, 404, 'no opinion yet');
+  assert.equal((await f.request(`/${id}/members/${members.Claude.id}`, { action: 'redo' })).status, 200);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM messages WHERE id=?').get(saved.lastInsertRowid).count, 0);
 });
 
 test('Worker zero deadline cannot bypass finite topic limits and rejects invalid deadlines', async t => {
