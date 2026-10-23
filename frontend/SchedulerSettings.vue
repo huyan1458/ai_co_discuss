@@ -13,8 +13,8 @@ const SAVED_MARK = "••••••••••••";
 // A key entered for one provider does not belong to another.
 watch(() => scheduler.value.provider, () => { api_key.value = ""; error.value = ""; });
 const description = computed(() => props.free
-  ? "没点名的消息先由调度模型判断：能直接交给某位成员时立即派给它，拿不准时仍交给主持人。"
-  : "讨论中你的插话会附上分流建议（请某位专家回应、主持人处理或仅补充信息），只供主持人参考，不自动执行。");
+  ? "接入决策模型，推荐更适合回答的成员，由你一键采纳。"
+  : "接入决策模型，自动安排插话回应与下一轮发言。");
 
 /** Persist the entered key once input is committed (blur or Enter). */
 async function save_key() {
@@ -29,7 +29,9 @@ async function save_key() {
 
 <template>
   <div class="scheduler-settings">
-    <UCheckbox :model-value="Boolean(scheduler.enabled)" label="智能调度（可选）" :description="description" @update:model-value="bridge.write_scheduler('enabled', $event)" />
+    <UCheckbox :model-value="Boolean(scheduler.enabled)" :description="description" @update:model-value="bridge.write_scheduler('enabled', $event)">
+      <template #label><span class="scheduler-title">智能调度<UBadge size="xs" variant="soft" class="scheduler-badge">决策模型</UBadge><small>可选</small></span></template>
+    </UCheckbox>
     <div v-if="scheduler.enabled" class="scheduler-fields">
       <div class="scheduler-field"><span>供应商</span><USelect :model-value="scheduler.provider || ''" :items="providers" aria-label="智能调度供应商" size="xs" class="w-full" @update:model-value="bridge.write_scheduler('provider', $event)" /></div>
       <div class="scheduler-field"><span>模型</span><UInputMenu mode="autocomplete" ignore-filter :model-value="scheduler.model || ''" :items="models" value-key="value" aria-label="智能调度模型" placeholder="模型 ID" size="xs" class="w-full" @update:model-value="bridge.write_scheduler('model', $event)" /></div>
@@ -40,16 +42,18 @@ async function save_key() {
         </UInput>
       </div>
       <p v-if="error" role="alert" class="scheduler-error">{{ error }}</p>
-      <p class="fine-print">每次判断会把房间标题、最近 10 条消息和待判断的消息发送给所选供应商，并按次计费；密钥只保存在本机。</p>
+      <p class="fine-print">决策模型只做选择、不生成文本，只按输入计费。判断时会把房间标题和最近 10 条消息发给所选供应商；密钥只存本机。</p>
     </div>
   </div>
 </template>
 
 <style scoped>
 .scheduler-settings { display: flex; flex-direction: column; gap: 10px; padding-top: 14px; border-top: 1px solid var(--ui-border-muted); }
-.scheduler-fields { display: grid; gap: 7px; max-width: 420px; padding-left: 26px; }
-.scheduler-field { display: grid; grid-template-columns: 40px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--ui-text-dimmed); font-size: 11px; }
+.scheduler-fields { display: grid; gap: 7px; max-width: 330px; padding-left: 26px; }.scheduler-field { display: grid; grid-template-columns: 40px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--ui-text-dimmed); font-size: 11px; }
 .scheduler-settings :deep(.scheduler-key-masked) { -webkit-text-security: disc; }
+.scheduler-title { display: inline-flex; align-items: center; gap: 6px; }
+.scheduler-title small { color: var(--ui-text-dimmed); font-size: 11px; font-weight: 400; }
+.scheduler-badge { color: var(--channel-accent); }
 .scheduler-error { margin: 0; color: #f0716b; font-size: 11px; }
 @media (max-width: 600px) { .scheduler-fields { padding-left: 0; } }
 </style>

@@ -17,7 +17,7 @@ import { assert_shared_home, DiscussionService, migrate_service_home, read_regis
 import { launch_discussion, room_models } from '../runner/discussion_launch.mjs';
 import { agy_rule, antigravity_project, claude_exit_error, claude_rule_path, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
-import { decide, ROUTE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_request, SCHEDULER_PROVIDERS, suggest_interjection, validate_scheduler } from '../runner/scheduler.mjs';
+import { decide, decide_interjection, decide_round, ROUTE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_request, SCHEDULER_PROVIDERS, validate_scheduler } from '../runner/scheduler.mjs';
 
 test('smart scheduling maps one neutral question set to both providers and reads their answers alike', async t => {
   const home = mkdtempSync(join(tmpdir(), 'scheduler-'));
@@ -45,9 +45,22 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.equal((await route_free_message(home, jev, input, reply('Codex', 0.95))).member, 'Codex');
   assert.equal((await route_free_message(home, jev, input, reply('Codex', ROUTE_CONFIDENCE - 0.01))).member, null);
   assert.equal((await route_free_message(home, jev, input, reply('__host__', 0.99))).member, null);
-  const suggestion = await suggest_interjection(home, jev, { ...input, experts: ['Codex'] }, async () => ({ ok: true,
-    json: async () => ({ answers: { handling: { type: 'choice', choice: '__note__', confidence: 0.7, probabilities: {} } } }) }));
-  assert.deepEqual(suggestion, { message_id: 3, suggestion: '仅补充信息，按原计划继续', confidence: 0.7 });
+  // Discussion interjections act only on a confident note or ask; anything else goes to the host.
+  const handling = (choice, confidence) => async () => ({ ok: true, json: async () => ({ answers: { handling: { type: 'choice', choice, confidence, probabilities: {} } } }) });
+  const interjection = { ...input, experts: ['Codex'] };
+  assert.equal((await decide_interjection(home, jev, interjection, handling('__note__', 0.9))).action, 'note');
+  assert.deepEqual(await decide_interjection(home, jev, interjection, handling('Codex', 0.85)), { action: 'ask', expert: 'Codex', confidence: 0.85, label: '先请 Codex 回应这条留言' });
+  assert.equal((await decide_interjection(home, jev, interjection, handling('__note__', 0.7))).action, 'host');
+  // A round continues only on a confident "continue", and never opens with the last speaker.
+  let sent;
+  const round = (next, confidence, first) => async (url, init) => { sent = JSON.parse(init.body);
+    return { ok: true, json: async () => ({ answers: { next: { type: 'choice', choice: next, confidence, probabilities: {} }, first: { type: 'choice', choice: first, confidence: 0.6, probabilities: {} } } }) }; };
+  const discussion = { title: '讨论', context: [], host: 'Claude', experts: ['Codex', 'Gemini', 'Grok'], last_speaker: 'Grok' };
+  assert.deepEqual(await decide_round(home, jev, discussion, round('continue', 0.9, 'Gemini')), { action: 'continue', first: 'Gemini', confidence: 0.9, label: '继续下一轮，先请 Gemini 发言' });
+  assert.deepEqual(Object.keys(sent.questions.first.criteria), ['Codex', 'Gemini']);
+  assert.equal((await decide_round(home, jev, discussion, round('continue', 0.9, 'Grok'))).first, 'Codex');
+  assert.equal((await decide_round(home, jev, discussion, round('continue', 0.79, 'Codex'))).action, 'host');
+  assert.equal((await decide_round(home, jev, discussion, round('__host__', 0.99, 'Codex'))).action, 'host');
 });
 
 test('host tasks carry scheduling suggestions only when there are some', async t => {

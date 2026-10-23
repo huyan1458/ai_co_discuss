@@ -137,6 +137,12 @@ def settings_statements(tables, room, maps, now):
     for row in tables.get("room_briefs", [])[:1]:
         statements.append(("INSERT INTO room_briefs (room_id,text,until,updated_at) VALUES (?,?,?,?)",
                            (room_id, remap_text(row["text"], messages), remap_until(row["until"], messages), row["updated_at"])))
+    for row in tables.get("discussion_options", [])[:1]:
+        statements.append(("INSERT INTO discussion_options (room_id,named_followup) VALUES (?,?)", (room_id, row["named_followup"])))
+    statements += [("""INSERT INTO scheduler_decisions (room_id,after_message_id,kind,label,confidence,applied,provider,created_at)
+                       VALUES (?,?,?,?,?,?,?,?)""", (room_id, messages.get(row["after_message_id"], 0), row["kind"], row["label"],
+                                                     row.get("confidence"), row["applied"], row["provider"], row["created_at"]))
+                   for row in tables.get("scheduler_decisions", [])]
     return statements
 
 
@@ -159,8 +165,11 @@ def record_statements(tables, room_id, maps):
                    for row in tables.get("member_requests", [])]
     statements += [("INSERT INTO member_suggestions (message_id,member_id) VALUES (?,?)", (messages[row["message_id"]], members[row["member_id"]]))
                    for row in tables.get("member_suggestions", [])]
-    statements += [("INSERT INTO request_schedules (request_id,room_id,provider,confidence) VALUES (?,?,?,?)",
-                    (requests[row["request_id"]], room_id, row["provider"], row["confidence"])) for row in tables.get("request_schedules", [])]
+    # Imported recommendations are history only: an open or waiting one no longer acts.
+    statements += [("""INSERT INTO member_recommendations (message_id,room_id,member_id,provider,confidence,created_at,expires_at,status,mode)
+                       VALUES (?,?,?,?,?,?,?,?,?)""", (messages[row["message_id"]], room_id, members[row["member_id"]], row["provider"], row["confidence"],
+                                                       row["created_at"], row["expires_at"], "adopted" if row["status"] == "adopted" else "open", row.get("mode", "")))
+                   for row in tables.get("member_recommendations", [])]
     return statements
 
 

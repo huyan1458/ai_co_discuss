@@ -9,7 +9,7 @@ import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { atomic_json, deliver_task, remove_agy_projects, setup_sidecar, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
 import { read_api_key } from './discussion_api.mjs';
-import { suggest_interjection, validate_scheduler } from './scheduler.mjs';
+import { decide_interjection, decide_round, validate_scheduler } from './scheduler.mjs';
 
 const POLL_MS = 2000;
 /** Headless CLIs know their session at start, so the runner enters the execution instead of spending model turns on it. */
@@ -29,6 +29,23 @@ export const CODEX_ADAPTERS = ['codex', 'codex_cli'];
 const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 /** Project files in cwd are read-only unless the launch or participant explicitly grants write. */
 const PROJECT_ACCESS = ['read', 'write'];
+const ACTIVE_PHASES = ['initial', 'discussing', 'reviewing'];
+const MAX_PLAN_TURNS = 10;
+const CONTEXT_MESSAGES = 12;
+/** Session recorded when smart scheduling performs the host's writes without waking its software. */
+const SCHEDULER_SESSION = 'smart-scheduler';
+const MAX_QUOTE_CHARS = 300;
+
+/** The shared prompt for rounds bridged without named follow-ups: experts answer and question each other. */
+export function peer_round_question(round) {
+  return `第 ${round} 轮：先读取上一轮其他专家的最新回答，回应你不同意或需要补充的观点；被其他专家 @ 提问时优先回答，也可以 @ 某位专家提出问题。`;
+}
+
+/** Ask one expert to answer a user's interjection before the rest of the plan continues. */
+function interjection_question(message) {
+  const text = String(message.text || '').replace(/\s+/g, ' ').trim();
+  return `用户在 #${message.id} 留言：「${text.length > MAX_QUOTE_CHARS ? `${text.slice(0, MAX_QUOTE_CHARS)}…` : text}」请先读取原文并回应这条留言，再继续你的观点。`;
+}
 
 /** Explicit per-room configuration is the only source of software paths and capabilities. */
 export function load_config(path) {
@@ -180,7 +197,7 @@ export function acquire_lock(directory) {
 }
 
 /** Write a non-secret task separately from its CLI-only credential file; suggestions are smart-scheduling hints for the host. */
-export function task_files(config, event, token, binding, suggestions = []) {
+export function task_files(config, event, token, binding, suggestions = [], entered = false) {
   const id = `event-${event.id}`;
   const draft_directory = config.draft_directory || `${config.directory}-drafts`;
   mkdirSync(draft_directory, { recursive: true });
@@ -190,7 +207,7 @@ export function task_files(config, event, token, binding, suggestions = []) {
   const skills = [join(config.project, '.agents/skills/discuss-participant/SKILL.md')];
   if (event.role === 'host') skills.push(join(config.project, '.agents/skills/discuss-host/SKILL.md'));
   const adapter = config.participants[event.participant];
-  const auto_enter = AUTO_ENTER_ADAPTERS.has(adapter.adapter);
+  const auto_enter = entered || AUTO_ENTER_ADAPTERS.has(adapter.adapter);
   const skills_directory = join(config.project, '.agents', 'skills');
   // Codex and agy run commands through PowerShell on Windows, whose execution policy blocks npm's codiscuss.ps1 shim.
   const cli = process.platform === 'win32' && adapter.adapter !== 'claude' ? 'codiscuss.cmd' : 'codiscuss';
@@ -216,7 +233,7 @@ ${readFileSync(task_path, 'utf8')}
 
 /** A running dispatcher retains only the processes it created itself. */
 export class DiscussionRunner {
-  constructor(config, store, deliver = deliver_task, log = () => {}) {
+  constructor(config, store, deliver = deliver_task, log = () => {}, fetch_impl = fetch) {
     this.config = config;
     this.store = store;
     this.deliver = deliver;
@@ -226,7 +243,7 @@ export class DiscussionRunner {
     this.running = new Map();
     this.seen = new Set();
     this.blocked = new Set();
-    this.suggestions = new Map();
+    this.fetch = fetch_impl;
   }
   /** Append one timestamped stage to the event's trace file when CODISCUSS_TRACE=1; tracing must never affect delivery. */
   trace(id, stage, detail = {}) {
@@ -235,33 +252,34 @@ export class DiscussionRunner {
     catch { /* Diagnostics only. */ }
   }
   /** Reserve with a durable token so a lost HTTP response can be reconciled. */
-  async dispatch(row, event) {
+  async dispatch(row, event, options = {}) {
     const token = row.token || randomUUID();
     this.store.record(row.id, { token, status: 'reserving' });
     this.log(`派发 #${row.id} → ${event.participant}（${event.role}，turn ${event.turn_id ?? '-'}）`);
     this.trace(row.id, 'reserve_start');
     await api(this.config, `/events/${row.id}`, { action: 'reserve', execution_token: token });
     this.trace(row.id, 'reserve_done');
-    await this.deliver_reserved({ ...row, token }, event);
+    await this.deliver_reserved({ ...row, token }, event, options);
   }
-  /** Retry only proven non-delivery, keeping the event, token and task unchanged. */
-  async deliver_reserved(row, event) {
+  /**
+   * Retry only proven non-delivery, keeping the event, token and task unchanged. `entered` marks an execution
+   * smart scheduling already entered before handing it back, so the software must not enter it again.
+   */
+  async deliver_reserved(row, event, { suggestions = [], entered: pre_entered = false } = {}) {
     const adapter = this.config.participants[event.participant];
     if (!adapter) throw new Error(`未配置 ${event.participant} 的本机接入`);
     const binding = this.store.binding(event.participant);
     if (!binding.session_id && adapter.session_id) binding.session_id = adapter.session_id;
     const attempts = row.attempts + 1;
-    // Ask before recording the dispatch, so a slow or failed suggestion never leaves an uncertain delivery behind.
-    const suggestions = event.role === 'host' ? await this.interjection_suggestions() : [];
     this.store.record(row.id, { status: 'dispatching', sent_at: Date.now(), attempts, error: '', retry_at: 0 });
     let invoked = false;
-    let entered = false;
+    let entered = pre_entered;
     try {
-      const task = task_files(this.config, event, row.token, binding, suggestions);
+      const task = task_files(this.config, event, row.token, binding, suggestions, pre_entered);
       invoked = true;
       const result = await this.deliver(adapter, binding, { ...task, room_title: this.room_title,
         api_context: { site: this.config.site, room: this.config.room, token: row.token, home: this.config.api_home,
-          event_id: row.id, role: event.role, turn_id: event.turn_id, scheduler_suggestions: suggestions },
+          event_id: row.id, role: event.role, turn_id: event.turn_id, scheduler_suggestions: suggestions, entered: pre_entered },
         on_trace: (stage, detail) => this.trace(row.id, stage, detail),
         on_binding: session => {
           this.store.bind(event.participant, session);
@@ -283,31 +301,91 @@ export class DiscussionRunner {
     }
   }
   /**
-   * With smart scheduling on, suggest how to handle each user message the host has not processed yet.
-   * Suggestions never act on the room; any failure only leaves the host without them.
+   * Smart scheduling before waking the host: decide read-only first; only a confident decision reserves the host's
+   * execution, enters it and performs the host's own writes with that credential. Returns {done} when the host
+   * need not be woken, otherwise the suggestions to hand over. Every decision is recorded for the transcript.
    */
-  async interjection_suggestions() {
-    if (!this.config.scheduler) return [];
-    try {
-      const room = await api(this.config, '');
-      if (!room.held_since) return [];
-      const page = await api(this.config, `/messages?after=${Math.max(0, room.held_since - 11)}`);
-      const experts = Object.keys(room.experts || {}).filter(name => name !== room.host);
-      const suggestions = [];
-      for (const message of page.messages.filter(item => item.id >= room.held_since && item.author === '用户')) {
-        if (!this.suggestions.has(message.id)) {
-          const suggestion = await suggest_interjection(this.config.api_home, this.config.scheduler,
-            { title: room.title, context: page.messages, message, host: room.host, experts });
-          this.suggestions.set(message.id, suggestion);
-          this.log(`智能调度建议 #${message.id}：${suggestion ? `${suggestion.suggestion}（置信度 ${suggestion.confidence}）` : '无可用建议'}`);
-        }
-        if (this.suggestions.get(message.id)) suggestions.push(this.suggestions.get(message.id));
-      }
-      return suggestions;
-    } catch (error) {
-      this.log(`智能调度建议失败，主持人照常处理：${error.message}`);
-      return [];
+  async smart_schedule(row, event) {
+    if (!this.config.scheduler) return {};
+    let plan;
+    try { plan = await this.plan_schedule(); }
+    catch (error) { this.log(`智能调度判断失败，交给主持人：${error.message}`); return {}; }
+    if (!plan) return {};
+    const suggestions = plan.message_id ? [{ message_id: plan.message_id, suggestion: plan.label, confidence: plan.confidence }] : [];
+    if (plan.action === 'host') {
+      await this.record_decision(plan, false);
+      return { suggestions };
     }
+    const token = randomUUID();
+    this.store.record(row.id, { token, status: 'reserving' });
+    await api(this.config, `/events/${row.id}`, { action: 'reserve', execution_token: token });
+    try { await api(this.config, `/events/${row.id}`, { action: 'enter', session_id: SCHEDULER_SESSION }, token); }
+    catch (error) {
+      this.log(`智能调度进入执行失败，交给主持人：${error.message}`);
+      await this.deliver_reserved({ ...row, token }, event, { suggestions });
+      return { done: true };
+    }
+    this.store.record(row.id, { status: 'started', last_renew: Date.now() });
+    try {
+      await this.apply_schedule(plan, token);
+      await this.record_decision(plan, true);
+      this.log(`智能调度 #${row.id}：${plan.label}（置信度 ${plan.confidence}）`);
+    } catch (error) {
+      this.log(`智能调度执行失败，交给主持人：${error.message}`);
+      await this.record_decision({ ...plan, label: `${plan.label}；执行未成功，已交给主持人` }, false);
+      await this.deliver_reserved({ ...row, token }, event, { suggestions, entered: true });
+    }
+    return { done: true };
+  }
+  /** Read the room and decide one interjection, or the next round when named follow-ups are off. Null leaves the host alone. */
+  async plan_schedule() {
+    const room = await api(this.config, '');
+    if (room.limits?.reached || !ACTIVE_PHASES.includes(room.phase)) return null;
+    if (room.current_turn && ['pending', 'notified'].includes(room.current_turn.status)) return null;
+    const page = await api(this.config, `/messages?after=${Math.max(0, room.latest_id - CONTEXT_MESSAGES)}`);
+    const experts = Object.keys(room.experts || {});
+    const context = { title: room.title, context: page.messages, host: room.host };
+    if (room.held_since) {
+      const pending = page.messages.filter(item => item.id >= room.held_since && item.author === '用户');
+      // Topic edits and several messages at once need the host's judgement.
+      if (pending.length !== 1) return null;
+      const message = pending[0];
+      const decision = await decide_interjection(this.config.api_home, this.config.scheduler,
+        { ...context, message, experts: experts.filter(name => name !== room.host) }, this.fetch);
+      const plan = { ...decision, kind: 'interjection', message_id: message.id, after_message_id: message.id };
+      if (decision.action === 'ask') {
+        return { ...plan, turns: [{ expert: decision.expert, question: interjection_question(message) },
+          ...room.queued_turns.map(({ expert, question }) => ({ expert, question }))].slice(0, MAX_PLAN_TURNS) };
+      }
+      if (decision.action === 'note' && room.queued_turns.length) return { ...plan, continue_plan: true };
+      // A note after the plan ran out falls through to deciding the next round.
+      if (decision.action !== 'note') return plan;
+    }
+    if (room.named_followup || room.queued_turns.length || !room.rounds?.at(-1)?.completed) return null;
+    const decision = await decide_round(this.config.api_home, this.config.scheduler,
+      { ...context, experts, last_speaker: room.current_turn?.expert }, this.fetch);
+    const plan = { ...decision, kind: 'round', after_message_id: room.latest_id };
+    if (decision.action !== 'continue') return plan;
+    const round = room.completed_rounds + 1;
+    const order = [decision.first, ...experts.filter(name => name !== decision.first)].slice(0, MAX_PLAN_TURNS);
+    return { ...plan, phase: room.phase === 'initial' ? 'discussing' : undefined,
+      turns: order.map(expert => ({ expert, question: peer_round_question(round) })) };
+  }
+  /** Perform the host's writes for a decided plan under its own execution credential. */
+  async apply_schedule(plan, token) {
+    const room = await api(this.config, '');
+    const actor = room.host;
+    if (room.floor.holder !== actor) await api(this.config, '/floor', { actor, speaker: actor, action: 'take', revision: room.floor.revision }, token);
+    if (plan.phase) await api(this.config, '/topic', { actor, phase: plan.phase }, token);
+    if (plan.continue_plan) await api(this.config, '/turns/continue', { actor }, token);
+    else await api(this.config, '/turns', { actor, turns: plan.turns, submission_id: randomUUID() }, token);
+  }
+  /** Show the decision in the transcript; a failed record never affects the discussion. */
+  async record_decision(plan, applied) {
+    try {
+      await api(this.config, '/scheduler-decisions', { kind: plan.kind, label: plan.label, confidence: plan.confidence ?? null,
+        applied, provider: this.config.scheduler.provider, after_message_id: plan.after_message_id || 0 });
+    } catch (error) { this.log(`智能调度决策记录未保存：${error.message}`); }
   }
   /** Enter once per delivery; a failure is recorded so reconcile revokes the execution. */
   async enter(row, session_id) {
@@ -431,7 +509,8 @@ export class DiscussionRunner {
     if (next && !this.running.get(next.event.participant)) {
       const fresh = await api(this.config, `/events/${next.row.id}`, { action: 'view' });
       if (fresh.status === 'pending') {
-        await this.dispatch(next.row, fresh);
+        const scheduled = fresh.role === 'host' ? await this.smart_schedule(next.row, fresh) : {};
+        if (!scheduled.done) await this.dispatch(next.row, fresh, scheduled);
       }
       else this.store.record(next.row.id, { status: fresh.status });
     }

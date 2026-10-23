@@ -85,15 +85,41 @@ export async function route_free_message(home, scheduler, { title, context, mess
   return { member, choice: answer.choice ?? null, confidence: answer.confidence ?? null };
 }
 
-/** Suggest how the host might handle one interjection in a discussion; the host decides and may ignore it. */
-export async function suggest_interjection(home, scheduler, { title, context, message, host, experts }, fetch_impl) {
+/**
+ * Decide one interjection in a discussion: continue the plan (note), ask one expert (ask) or wake the host (host).
+ * Anything but a confident note or ask is returned as host.
+ */
+export async function decide_interjection(home, scheduler, { title, context, message, host, experts }, fetch_impl) {
   const choices = [...experts.map(name => ({ value: name, description: `请 ${name} 回应这条留言` })),
     { value: HOST_CHOICE, description: `由主持人 ${host} 处理：调整目标、方向、安排，或需要主持人决定` },
     { value: NOTE_CHOICE, description: '仅补充信息：不需要专人回应，按原计划继续' }];
   const answers = await decide(home, scheduler, scheduler_state(title, context, message), [{ type: 'choice', name: 'handling',
     instructions: '讨论进行中用户发来这条留言。判断它最适合怎样处理。', choices }], fetch_impl);
-  const answer = answers.handling || {};
-  const label = answer.choice === HOST_CHOICE ? '主持人处理' : answer.choice === NOTE_CHOICE ? '仅补充信息，按原计划继续'
-    : experts.includes(answer.choice) ? `请 ${answer.choice} 回应` : '';
-  return label ? { message_id: message.id, suggestion: label, confidence: answer.confidence ?? null } : null;
+  const { choice, confidence = null } = answers.handling || {};
+  const sure = confidence !== null && confidence >= ROUTE_CONFIDENCE;
+  if (sure && choice === NOTE_CHOICE) return { action: 'note', confidence, label: '仅补充信息，按原计划继续' };
+  if (sure && experts.includes(choice)) return { action: 'ask', expert: choice, confidence, label: `先请 ${choice} 回应这条留言` };
+  return { action: 'host', confidence, label: '交给主持人处理这条留言' };
+}
+
+/**
+ * At the end of a round without named follow-ups: continue with another peer round, or wake the host
+ * (to conclude, or because the discussion drifted, repeats itself or is stuck). The first speaker is never the last one.
+ */
+export async function decide_round(home, scheduler, { title, context, host, experts, last_speaker }, fetch_impl) {
+  const candidates = experts.filter(name => name !== last_speaker);
+  const recent = context.slice(-CONTEXT_MESSAGES).map(excerpt);
+  const state = [`讨论：${title || ''}`, recent.length ? `本轮及最近发言（旧→新）：\n${recent.join('\n')}` : '还没有发言。'].join('\n\n');
+  const questions = [{ type: 'choice', name: 'next', instructions: '一轮发言刚结束。判断下一步：专家之间是否还有值得继续交锋的分歧？', choices: [
+    { value: 'continue', description: '继续下一轮：仍有未回应的质疑、分歧或新观点' },
+    { value: HOST_CHOICE, description: `交给主持人 ${host}：已可收束，或讨论跑偏、重复立场、卡住，需要主持人引导` }] }];
+  if (candidates.length > 1) questions.push({ type: 'choice', name: 'first', instructions: '下一轮应先请谁发言？优先选被其他专家点名追问、最需要回应的人。',
+    choices: candidates.map(name => ({ value: name, description: `先请 ${name}` })) });
+  const answers = await decide(home, scheduler, state, questions, fetch_impl);
+  const { choice, confidence = null } = answers.next || {};
+  if (choice !== 'continue' || confidence === null || confidence < ROUTE_CONFIDENCE || !candidates.length) {
+    return { action: 'host', confidence, label: '交给主持人：判断是否收束或调整方向' };
+  }
+  const first = candidates.includes(answers.first?.choice) ? answers.first.choice : candidates[0];
+  return { action: 'continue', first, confidence, label: `继续下一轮，先请 ${first} 发言` };
 }

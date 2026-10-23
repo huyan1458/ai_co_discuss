@@ -203,13 +203,8 @@ const request_badges = computed(() => {
   for (const request of room.value.free?.requests || []) {
     const [label, color] = FREE_REQUEST_LABELS[request.status];
     const title = request.status === "failed" ? failures.get(request.execution_id) || "执行失败" : "";
-    // A request smart scheduling gave a member directly says so, since the user named no one; hovering shows how sure it was.
-    const scheduled = request.purpose === "scheduled";
-    const decision = scheduled && request.schedule_provider
-      ? `智能调度：${SCHEDULER_LABELS[request.schedule_provider] || request.schedule_provider}，置信度 ${Number(request.schedule_confidence).toFixed(2)}` : "";
     badges.set(request.message_id, [...(badges.get(request.message_id) || []),
-      { key: request.id, label: `${scheduled ? "智能调度 → " : ""}${bridge.display_name(request.member)} · ${label}`, color,
-        title: [decision, title].filter(Boolean).join("\n") }]);
+      { key: request.id, label: `${bridge.display_name(request.member)} · ${label}`, color, title }]);
   }
   return badges;
 });
@@ -253,6 +248,45 @@ const pending_message = computed(() => {
 });
 /** A user's message is waiting for the host while it is at or after the relay hold. */
 const waits_for_host = (message) => message.author === "用户" && room.value?.held_since > 0 && message.id >= room.value.held_since;
+/** Smart scheduling's recommendations count down from when the room view arrived; an expired open one disappears. */
+const recommendation_clock = ref(Date.now());
+const recommendation_received = ref(Date.now());
+watch(() => room.value.free?.recommendations, () => { recommendation_received.value = recommendation_clock.value = Date.now(); });
+const adopting = ref(0);
+const recommendations = computed(() => {
+  const rows = new Map();
+  if (!free.value) return rows;
+  const elapsed = Math.floor((recommendation_clock.value - recommendation_received.value) / 1000);
+  const routes = new Map((room.value.free?.requests || []).filter((request) => request.purpose === "route").map((request) => [request.message_id, request]));
+  for (const item of room.value.free?.recommendations || []) {
+    const remaining = item.expires_in - elapsed;
+    if (item.status === "open" && remaining <= 0) continue;
+    const host_busy = ["pending", "delivering"].includes(routes.get(item.message_id)?.status);
+    rows.set(item.message_id, { ...item, remaining, host_busy, label: SCHEDULER_LABELS[item.provider] || item.provider,
+      can_adopt: item.status === "open" && view.value.access?.can_manage && !room.value.archived && !pending.value });
+  }
+  return rows;
+});
+// Tick only while an open recommendation is counting down.
+const recommendation_timer = window.setInterval(() => {
+  if ((room.value.free?.recommendations || []).some((item) => item.status === "open")) recommendation_clock.value = Date.now();
+}, 1000);
+onBeforeUnmount(() => window.clearInterval(recommendation_timer));
+/** Adopt with the chosen timing; a finished host leaves only "ask now", sent as mode after. */
+/** In a discussion, each smart-scheduling decision shows under the message it followed. */
+const scheduler_decisions = computed(() => {
+  const rows = new Map();
+  if (free.value) return rows;
+  for (const item of room.value.scheduler_decisions || []) {
+    rows.set(item.after_message_id, [...(rows.get(item.after_message_id) || []),
+      { ...item, title: `${SCHEDULER_LABELS[item.provider] || item.provider}${item.confidence === null ? "" : `，置信度 ${Number(item.confidence).toFixed(2)}`}` }]);
+  }
+  return rows;
+});
+function adopt(message_id, mode) {
+  adopting.value = 0;
+  act("adopt_recommendation", { message_id, mode });
+}
 const ELAPSED_TICK_MS = 1000;
 const pending_seconds = ref(null);
 /** Tick from dispatch time, resync with each server snapshot, and stop when the card disappears. */
@@ -827,7 +861,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
         </div>
       </motion.div>
     </Teleport>
-    <div ref="transcript" v-memo="[message_groups, message_round_labels, active_message, expanded_answers.size, room.title, view.query, view.mention_only, topic_key, topic_expanded, topic_overflows, pending_message, pending_seconds, request_badges, execution_reports, response_suggestions]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
+    <div ref="transcript" v-memo="[message_groups, message_round_labels, active_message, expanded_answers.size, room.title, view.query, view.mention_only, topic_key, topic_expanded, topic_overflows, pending_message, pending_seconds, request_badges, execution_reports, response_suggestions, recommendations, adopting, scheduler_decisions]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
       <div v-if="!view.query && !view.mention_only" class="channel-message-group channel-topic-group"><section class="channel-message channel-topic-card" :class="{ 'is-expanded': topic_expanded }" aria-label="议题">
         <header class="channel-topic-heading"><span class="channel-topic-eyebrow"><UIcon name="i-lucide-target" />议题</span><h2>{{ room.title }}</h2><UButton icon="i-lucide-pencil" label="编辑" color="neutral" variant="ghost" size="xs" @click="emit('edit')" /></header>
         <div ref="topic_body" class="channel-topic-body" :class="{ 'is-clamped': topic_overflows && !topic_expanded }">
@@ -844,7 +878,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
       </section></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
-        <UChatMessage v-for="message in group.messages" :id="String(message.id)" :key="message.id" v-memo="[message, message_round_labels.get(message.id), expanded_answers.has(message.id), active_message === message.id, waits_for_host(message), request_badges.get(message.id), execution_reports.get(message.id), response_suggestions.get(message.id)]" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="{ 'channel-current-message': active_message === message.id }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
+        <UChatMessage v-for="message in group.messages" :id="String(message.id)" :key="message.id" v-memo="[message, message_round_labels.get(message.id), expanded_answers.has(message.id), active_message === message.id, waits_for_host(message), request_badges.get(message.id), execution_reports.get(message.id), response_suggestions.get(message.id), recommendations.get(message.id), adopting === message.id, scheduler_decisions.get(message.id)]" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="{ 'channel-current-message': active_message === message.id }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
@@ -865,6 +899,26 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             </div>
             <div v-if="message.summary" class="channel-answer-summary"><small>回答摘要<span v-if="message.summary_by && message.summary_by !== message.author"> · {{ bridge.display_name(message.summary_by) }} 整理</span></small><div class="channel-message-text markdown-body" v-html="message.rendered_summary"></div></div>
             <div v-if="message.attachments?.length" v-html="bridge.attachment_markup(message.attachments)"></div>
+            <div v-for="decision in scheduler_decisions.get(message.id) || []" :key="`decision-${decision.id}`" class="channel-recommendation" :class="decision.applied ? 'is-open' : 'is-adopted'" :title="decision.title" aria-label="智能调度决策">
+              <UIcon name="i-lucide-zap" class="channel-recommendation-icon" />
+              <span>智能调度：{{ decision.label }}<small v-if="decision.confidence !== null">置信度 {{ Number(decision.confidence).toFixed(2) }}</small></span>
+            </div>
+            <div v-if="recommendations.get(message.id)" class="channel-recommendation" :class="`is-${recommendations.get(message.id).status}`" aria-label="智能调度推荐" aria-live="polite">
+              <template v-for="item in [recommendations.get(message.id)]" :key="item.message_id">
+                <UIcon name="i-lucide-zap" class="channel-recommendation-icon" />
+                <span v-if="item.status === 'open'">智能调度建议让 <strong>{{ bridge.display_name(item.member) }}</strong> 回答<small :title="`${item.label}，置信度 ${Number(item.confidence).toFixed(2)}`">置信度 {{ Number(item.confidence).toFixed(2) }} · {{ item.remaining }} 秒</small></span>
+                <span v-else-if="item.status === 'waiting'">已采纳：主持人答完后请 {{ bridge.display_name(item.member) }} 回答</span>
+                <span v-else>已采纳：{{ item.mode === 'interrupt' ? `已打断主持人，改由 ${bridge.display_name(item.member)} 回答` : `已请 ${bridge.display_name(item.member)} 回答` }}</span>
+                <template v-if="item.can_adopt">
+                  <UButton v-if="adopting !== item.message_id" label="采纳" icon="i-lucide-check" size="xs" variant="soft" color="primary" :aria-label="`采纳建议，请 ${item.member} 回答 #${item.message_id}`" @click="item.host_busy ? adopting = item.message_id : adopt(item.message_id, 'after')" />
+                  <template v-else>
+                    <UButton :label="`打断主持人，改由 ${bridge.display_name(item.member)} 回答`" size="xs" variant="soft" color="warning" @click="adopt(item.message_id, 'interrupt')" />
+                    <UButton :label="`主持人答完后再请 ${bridge.display_name(item.member)}`" size="xs" variant="soft" color="neutral" @click="adopt(item.message_id, 'after')" />
+                    <UButton icon="i-lucide-x" aria-label="取消采纳" size="xs" variant="ghost" color="neutral" @click="adopting = 0" />
+                  </template>
+                </template>
+              </template>
+            </div>
             <div v-if="free && message.suggestions?.length" class="channel-response-suggestions" aria-label="回应建议">
               <div v-for="suggestion in response_suggestions.get(message.id) || []" :key="suggestion.member_id">
                 <span>建议请 {{ bridge.display_name(suggestion.member) }} 回应</span>

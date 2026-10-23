@@ -23,7 +23,7 @@ from .free_room import (add_member, after_free_message, authorize_free_write, ch
                         inbox, interrupt_member, member_action, member_values, migrate_free_tables, proxy_member, reserve_execution,
                         discussion_members, room_mode, save_room_access, sync_discussion_members, view_execution)
 from .free_room import add_discussion_member, convert_suggestion, discussion_member_action, message_suggestions, save_suggestions, sync_participants
-from .free_room import schedule_request
+from .free_room import adopt_recommendation, recommend_member
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, is_ai, is_participant
 from .room_import import import_room, imported_attachment
 from .runtime import (authorize_write, begin_write, configure_runtime, event_action,
@@ -71,11 +71,15 @@ TURN_STATUSES = {"pending": "待处理", "notified": "已通知，待回答", "a
 MAX_TOPIC_DETAIL = 4000
 MAX_QUESTION_LENGTH = 1000
 MAX_PLAN_TURNS = 10
+RECENT_DECISIONS = 100
+MAX_DECISION_LABEL = 200
+SCHEDULER_PROVIDERS = ("jev", "decisions")
 ROOM_BACKUP_QUERIES = {
     "rooms": "SELECT * FROM rooms WHERE id=?",
     **{table: f"SELECT * FROM {table} WHERE room_id=?" for table in (
         "room_directory", "room_folder_assignments", "room_creations", "room_briefs", "room_user_requests",
-        "topic_settings", "room_floor", "discussion_limits")},
+        "topic_settings", "room_floor", "discussion_limits", "discussion_options")},
+    "scheduler_decisions": "SELECT * FROM scheduler_decisions WHERE room_id=? ORDER BY id",
     "topic_folders": "SELECT * FROM topic_folders WHERE id IN (SELECT folder_id FROM room_folder_assignments WHERE room_id=?)",
     "messages": "SELECT * FROM messages WHERE room_id=? ORDER BY id",
     "attachments": "SELECT * FROM attachments WHERE room_id=? AND message_id IS NOT NULL ORDER BY message_id,position",
@@ -90,7 +94,7 @@ FREE_BACKUP_QUERIES = {
     "room_members": "SELECT id,room_id,name,adapter,role,status,read_until,created_at,access,session_mode FROM room_members WHERE room_id=? ORDER BY id",
     "member_requests": "SELECT * FROM member_requests WHERE room_id=? ORDER BY id",
     "member_suggestions": "SELECT s.* FROM member_suggestions s JOIN messages m ON m.id=s.message_id WHERE m.room_id=? ORDER BY s.message_id,s.member_id",
-    "request_schedules": "SELECT * FROM request_schedules WHERE room_id=? ORDER BY request_id",
+    "member_recommendations": "SELECT * FROM member_recommendations WHERE room_id=? ORDER BY message_id",
 }
 MESSAGE_QUERY = """SELECT messages.*, COALESCE(details.kind,'opinion') AS kind,
 COALESCE(details.submitted_by, CASE WHEN messages.source IN ('cli','api','url','user')
@@ -207,6 +211,11 @@ def require_room(connection, room_id):
     room["mode"] = room_mode(connection, room_id)
     room["members"] = [dict(row) for row in connection.execute(
         "SELECT id,name,adapter,role,status,access,session_mode FROM room_members WHERE room_id=? AND status<>'removed' ORDER BY id", (room_id,))]
+    option = connection.execute("SELECT named_followup FROM discussion_options WHERE room_id=?", (room_id,)).fetchone()
+    # Rooms created before the option keep the host's named follow-ups.
+    room["named_followup"] = bool(option[0]) if option else True
+    room["scheduler_decisions"] = [dict(row) for row in connection.execute(
+        "SELECT * FROM scheduler_decisions WHERE room_id=? ORDER BY id DESC LIMIT ?", (room_id, RECENT_DECISIONS))][::-1]
     parent = connection.execute("""SELECT rooms.id,rooms.title FROM room_links JOIN rooms ON rooms.id=room_links.parent_id
         WHERE room_links.room_id=?""", (room_id,)).fetchone()
     room["parent_room"] = dict(parent) if parent else None
@@ -538,7 +547,8 @@ def manage_room(connection, room_id, action, payload):
 
 def delete_room_records(connection, room_id):
     """Remove a room's dependent records in the caller's transaction."""
-    for table in ("request_schedules", "member_requests", "member_executions", "room_members", "room_modes", "free_batches", "free_chains", "room_links"):
+    for table in ("member_recommendations", "member_requests", "member_executions", "room_members", "room_modes", "free_batches", "free_chains", "room_links",
+                  "discussion_options", "scheduler_decisions"):
         connection.execute(f"DELETE FROM {table} WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM message_timings WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)", (room_id,))
     connection.execute("DELETE FROM message_summaries WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)", (room_id,))
@@ -578,6 +588,9 @@ def create_room(connection, payload, control_token=""):
         raise ValueError("建房须提供有效的运行模式和房主控制凭据")
     if free and (automatic or not token_hash(control_token)):
         raise ValueError("自由房间须提供房间控制凭据，且不使用讨论运行模式")
+    named_followup = payload.get("named_followup", False)
+    if type(named_followup) is not bool:
+        raise ValueError("named_followup 须为布尔值")
     parent_id = payload.get("parent_room_id")
     if parent_id is not None and (free or not isinstance(parent_id, str) or room_mode(connection, parent_id) != "free"):
         raise ValueError("只有从自由协作房间发起的讨论房间可以关联来源房间")
@@ -590,6 +603,8 @@ def create_room(connection, payload, control_token=""):
         [[member["name"], member["adapter"], member["access"], member["session_mode"], token_hash(member["token"])] for member in members], ensure_ascii=False)
     if free:
         request_text += ":free"
+    elif named_followup:
+        request_text += ":named_followup"
     if parent_id is not None:
         request_text += ":parent:" + parent_id
     if folder_id is not None:
@@ -613,6 +628,8 @@ def create_room(connection, payload, control_token=""):
                      {"mode": "free" if free else "brainstorm", "host": settings["host"], "created_at": utc_now()})
     if free:
         sync_participants(connection, room_id)
+    else:
+        connection.execute("INSERT INTO discussion_options (room_id,named_followup) VALUES (?,?)", (room_id, int(named_followup)))
     if parent_id is not None:
         connection.execute("INSERT INTO room_links (room_id,parent_id,created_at) VALUES (?,?,?)", (room_id, parent_id, utc_now()))
     if automatic:
@@ -965,6 +982,23 @@ def create_turn(connection, room_id, payload):
         ids.append(cursor.lastrowid)
     return {"turn": get_turn(connection, room_id, ids[0]),
             "queued": [get_turn(connection, room_id, turn_id) for turn_id in ids[1:]], "duplicate": False}
+
+
+def record_scheduler_decision(connection, room_id, token, payload):
+    """The dispatcher records one smart-scheduling decision so the transcript shows what it did and how sure it was."""
+    begin_write(connection)
+    require_control(connection, room_id, token)
+    kind, label, confidence = payload.get("kind"), payload.get("label"), payload.get("confidence")
+    after = payload.get("after_message_id", 0)
+    if kind not in ("interjection", "round") or not isinstance(label, str) or not 0 < len(label.strip()) <= MAX_DECISION_LABEL:
+        raise ValueError(f"决策记录须有 kind（interjection/round）与 1–{MAX_DECISION_LABEL} 字的 label")
+    if confidence is not None and (type(confidence) not in (int, float) or not 0 <= confidence <= 1):
+        raise ValueError("confidence 须为 0–1 或 null")
+    if payload.get("provider") not in SCHEDULER_PROVIDERS or type(payload.get("applied")) is not bool or type(after) is not int or after < 0:
+        raise ValueError("须提供供应商 provider、是否执行 applied 与非负的 after_message_id")
+    cursor = connection.execute("""INSERT INTO scheduler_decisions (room_id,after_message_id,kind,label,confidence,applied,provider,created_at)
+        VALUES (?,?,?,?,?,?,?,?)""", (room_id, after, kind, label.strip(), confidence, int(payload["applied"]), payload["provider"], utc_now()))
+    return dict(connection.execute("SELECT * FROM scheduler_decisions WHERE id=?", (cursor.lastrowid,)).fetchone())
 
 
 def continue_turns(connection, room_id, payload):
@@ -1559,7 +1593,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         room_id = parts[2]
         token = self.headers.get("X-Discussion-Token", "")
         free = room_mode(connection, room_id) == "free"
-        if free and parts[3:4] in (["inbox"], ["executions"], ["members"], ["suggestions"], ["requests"]):
+        if free and parts[3:4] in (["inbox"], ["executions"], ["members"], ["suggestions"], ["recommendations"]):
             return self.handle_free_api(connection, parts, method)
         if parts[3:4] == ["members"] and method == "POST" and len(parts) in (4, 5):
             if len(parts) == 4:
@@ -1571,7 +1605,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.respond(result)
         if parts[3:4] == ["attachments"]:
             return self.handle_attachments(connection, parts, params, method)
-        if parts[3:4] in (["runtime"], ["events"]):
+        if parts[3:4] in (["runtime"], ["events"], ["scheduler-decisions"]):
             if free and method == "POST":
                 raise ValueError("自由房间不使用讨论运行控制")
             return self.handle_runtime_api(connection, parts, params, method)
@@ -1702,6 +1736,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = list_events(connection, room_id, token, params.get("after", 0))
         elif len(parts) == 5 and parts[3] == "events" and method == "POST":
             result = event_action(connection, room_id, int(parts[4]), token, self.read_payload())
+        elif parts[3:] == ["scheduler-decisions"] and method == "POST":
+            result = record_scheduler_decision(connection, room_id, token, self.read_payload())
         else:
             raise LookupError("地址不存在")
         connection.commit()
@@ -1717,8 +1753,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = convert_suggestion(connection, room_id, token, self.read_payload())
         elif parts[3:] == ["executions"] and method == "POST":
             result = reserve_execution(connection, room_id, token, self.read_payload())
-        elif len(parts) == 5 and parts[3] == "requests" and method == "POST":
-            result = schedule_request(connection, room_id, token, int(parts[4]), self.read_payload())
+        elif parts[3:] == ["recommendations"] and method == "POST":
+            result = recommend_member(connection, room_id, token, self.read_payload())
+        elif len(parts) == 5 and parts[3] == "recommendations" and method == "POST":
+            result = adopt_recommendation(connection, room_id, token, int(parts[4]), self.read_payload())
         elif len(parts) == 5 and parts[3] == "executions":
             execution_id = int(parts[4])
             result = (view_execution(connection, room_id, execution_id, token) if method == "GET"

@@ -38,7 +38,7 @@ const PLATFORM_IDENTITIES = {
 };
 const IDENTITIES = by_platform(PLATFORM_IDENTITIES, (identity, name) => ({ ...identity, label: name, description: "AI 实例" }));
 const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false, free_notice: "", free_error: "",
-  free_proxy: "", create_parent: null,
+  free_proxy: "", create_parent: null, named_followup: false,
   archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
   reply_to: null, turn_reply_to: null, tab: "topic", refresh_version: 0, context_dirty: false, topic_dirty: false,
   snapshot_id: 0, pending_submission: null, pending_turn: null, pending_room: null, toast_timer: null,
@@ -841,6 +841,7 @@ function reset_create_form() {
   state.launch.create = true;
   state.launch.workspace = {};
   state.launch.scheduler = {};
+  state.named_followup = false;
   state.launch.profiles = JSON.parse(JSON.stringify(state.launch.saved_profiles || {}));
   Object.values(state.launch.profiles).forEach(fill_api_key);
   state.launch.notice = "";
@@ -1342,7 +1343,7 @@ function room_creation_payload(folder_id) {
   // Free rooms carry their task in the conversation, so no opening brief is sent even if one was typed for a discussion.
   if (element("new-room-kind").value === "free") return { ...common, user_request: "", mode: "free", host: common.host || "用户" };
   return { ...common, mode: "brainstorm", background: element("new-room-background").value,
-    boundaries: element("new-room-boundaries").value, runtime_mode: "automatic", limits: read_limits("new-room"),
+    boundaries: element("new-room-boundaries").value, runtime_mode: "automatic", limits: read_limits("new-room"), named_followup: state.named_followup,
     ...(state.create_parent ? { parent_room_id: state.create_parent } : {}) };
 }
 
@@ -1756,6 +1757,12 @@ function launch_options() {
 function creation_launch_options() {
   const { enabled, provider, model, api_key_ref } = state.launch.scheduler;
   return { ...launch_options(), ...(enabled && provider && model && api_key_ref ? { scheduler: { provider, model, api_key_ref } } : {}) };
+}
+
+/** Choose whether the new discussion's host writes named follow-ups for each expert between rounds. */
+function write_named_followup(value) {
+  state.named_followup = Boolean(value);
+  publish_view();
 }
 
 /** Change the smart scheduling draft; a new provider starts from its preset model and any key saved for its root. */
@@ -2258,6 +2265,13 @@ async function convert_suggestion({ message_id, member_id }) {
     suggestions: message.suggestions.map(suggestion => suggestion.member_id === member_id
       ? { ...suggestion, request_id: result.request.id } : suggestion) } : message);
   await refresh_room();
+}
+
+/** Adopt smart scheduling's recommendation: interrupt the host now, or ask the member once the host is done. */
+async function adopt_recommendation({ message_id, mode }) {
+  const room_id = state.room.id;
+  await request_json(`/api/rooms/${room_id}/recommendations/${message_id}`, { action: "adopt", mode });
+  if (state.room?.id === room_id) await refresh_room();
 }
 
 /** A completed creation starts the next form with fresh mode defaults. */
@@ -2869,7 +2883,7 @@ function view_snapshot() {
     free_notice: state.free_notice, free_error: state.free_error, free_proxy: state.free_proxy,
     create_parent: state.create_parent, access: access_snapshot(),
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
-    theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch) };
+    theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup };
 }
 
 /** Update a shared draft using the same input events as the original controls. */
@@ -3041,7 +3055,7 @@ async function execute_view_action(name, value) {
     choose_runtime, export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, force_close, conclude_discussion,
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
     load_room_configuration, save_room_configuration, interrupt_member, change_member, invite_member, interrupt_free, set_proxy, copy_online_notice,
-    prepare_brainstorm, return_conclusion, convert_suggestion,
+    prepare_brainstorm, return_conclusion, convert_suggestion, adopt_recommendation,
     busy: () => { throw new Error("上一个操作仍在处理中，请稍候；长时间无响应请刷新页面"); },
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };
   if (!["refresh", "busy"].includes(name)) state.free_error = "";
@@ -3064,7 +3078,7 @@ function change_view_theme(theme) {
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
   write_launch: write_launch_field, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
-  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_launch_api, launch_summary, launch_can_set_access, launch_can_bind_session, pick_launch_directory, restore_launch_profile, reset_create_form, empty_discussion_message,
+  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, write_named_followup, check_launch_api, launch_summary, launch_can_set_access, launch_can_bind_session, pick_launch_directory, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, platform_of, execute: execute_view_action, theme: change_view_theme,

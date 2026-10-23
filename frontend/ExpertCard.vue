@@ -214,7 +214,7 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
         <ApiSettings v-if="api_mode" :name="name" />
         <template v-else-if="configurable && !connection.length">
           <div class="expert-card-field">
-            <span>模型</span><USelect :model-value="profile.model || '__default__'" :items="models.items" :loading="models.loading" :title="models.source" :aria-label="`${name} 使用的模型`" size="xs" class="w-full" @update:model-value="bridge.write_launch_model(name, $event)" />
+            <span>模型</span><USelect :model-value="profile.model || '__default__'" :items="models.items" :title="models.source" :aria-label="`${name} 使用的模型`" size="xs" class="w-full" @update:model-value="bridge.write_launch_model(name, $event)" />
           </div>
           <div v-if="models.loading || models.error" class="expert-card-catalog"><span>{{ models.loading ? '正在读取软件模型列表…' : models.error }}</span><button v-if="!models.loading && models.error && view.launch.available" type="button" @click="bridge.load_launch_models(name, true)">重试</button></div>
           <div v-if="effort_items" class="expert-card-effort">
@@ -235,10 +235,13 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
 </template>
 
 <style scoped>
-.expert-card { min-width: 0; perspective: 900px; outline: none; }
-/* Both faces keep one size; long settings scroll inside the back while its actions stay in place. */
-.expert-card-turn { display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); height: 240px; transform-style: preserve-3d; }
-.expert-card-face { grid-area: 1 / 1; min-width: 0; min-height: 0; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); box-shadow: var(--channel-shadow-control); backface-visibility: hidden; }
+.expert-card { min-width: 0; outline: none; }
+/* Both faces keep one size; long settings scroll inside the back while its actions stay in place.
+   Without perspective the turn's rotateY only narrows the card, so the flip needs no 3D compositing;
+   the hidden face is switched by data-face at 90°, where the card has no width. */
+.expert-card-turn { display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); height: 240px; }
+.expert-card-face { grid-area: 1 / 1; min-width: 0; min-height: 0; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); box-shadow: var(--channel-shadow-control); }
+.expert-card[data-face="front"] .expert-card-back, .expert-card[data-face="back"] .expert-card-front { visibility: hidden; }
 .expert-card.is-host .expert-card-front { border-color: color-mix(in srgb, #e0b44a 45%, var(--ui-border)); }
 .expert-card-front { position: relative; display: flex; flex-direction: column; }
 .expert-card-back { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 10px 12px 8px; transform: rotateY(180deg); }

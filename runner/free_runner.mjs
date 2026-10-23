@@ -69,15 +69,13 @@ export function free_task_files(config, member, execution, binding) {
   const host_rule = member.role === 'host'
     ? `你是本房间的主持人：purpose 为 route 的请求是用户未点名的消息，handoff 表示你派出的成员都已结束。先用 ${cli} room view ${config.room} 查看成员与状态，再决定由谁处理；需要派活时在回答中加 --to 成员名（可重复，不能点名自己），被点名的成员都结束后你会再被唤醒一次。不需要他人时不加 --to，本次即结束。只派分给各成员的文件或模块，避免多人改同一文件。`
     : '';
-  const scheduled_rule = execution.requests.some(item => item.purpose === 'scheduled')
-    ? 'purpose 为 scheduled 的消息用户没有点名，是智能调度判断交给你的；若它其实需要主持人拆分或协调，简短说明后结束即可。' : '';
   atomic_json(task_path, { site: config.site, room: config.room, mode: 'free', member: member.name,
     execution_id: execution.id, request_messages: execution.requests.map(item => item.message_id),
     request_purposes: execution.requests.map(item => item.purpose || 'ask'), role: member.role || 'member',
     read_after: execution.read_until, cwd: profile.cwd || null, project_access: profile.project_access, draft_directory,
     skills: [join(config.project, '.agents/skills/discuss-participant/SKILL.md')], cli, subcommands: TASK_SUBCOMMANDS,
     access_file: access_path,
-    instructions: `自由协作房间：用户点名了你（${messages}）。先用 ${cli} message list ${config.room} --after ${execution.read_until} --access-file 凭据路径 读取新消息，按时间顺序处理，后面的消息可能修正前面的，以最新指令为准。${host_rule}${scheduled_rule}完成后用 ${cli} message post ${config.room} --as ${member.name} --kind chat --execution ${execution.id} --body-file 草稿 --submission-id 新UUID --access-file 凭据路径 提交一次回答。提交被拒绝说明本次执行已被打断或过期：保留草稿并结束，不要去掉 --execution 改作普通发言。草稿只写入 draft_directory；${project_rule}不读取或打印凭据内容，不建定时任务。` });
+    instructions: `自由协作房间：用户点名了你（${messages}）。先用 ${cli} message list ${config.room} --after ${execution.read_until} --access-file 凭据路径 读取新消息，按时间顺序处理，后面的消息可能修正前面的，以最新指令为准。${host_rule}完成后用 ${cli} message post ${config.room} --as ${member.name} --kind chat --execution ${execution.id} --body-file 草稿 --submission-id 新UUID --access-file 凭据路径 提交一次回答。提交被拒绝说明本次执行已被打断或过期：保留草稿并结束，不要去掉 --execution 改作普通发言。草稿只写入 draft_directory；${project_rule}不读取或打印凭据内容，不建定时任务。` });
   const prompt = `用户在自由协作房间点名了你（${member.name}），对应消息 ${messages}。请先读取任务文件：${task_path}，按其中说明读取新消息、完成请求，并用 ${cli} message post 带 --execution ${execution.id} 提交一次回答后结束。命令只用任务内 subcommands 列出的 ${cli} 子命令；${project_rule}不读取凭据内容。`;
   return { id, participant: member.name, directory: config.directory, draft_directory,
     skills_directory: join(config.project, '.agents', 'skills'), access_path, prompt };
@@ -101,6 +99,7 @@ export class FreeRoomRunner {
     this.log = log;
     this.fetch = fetch_impl;
     this.routed = new Set();
+    this.decisions = new Set();
     this.children = new Set();
     this.members = new Map();
     this.exited = new Set();
@@ -139,10 +138,10 @@ export class FreeRoomRunner {
   }
   /** One bounded iteration: reconcile live executions, then deliver idle members with open requests. */
   async tick() {
-    let inbox = await api(this.config, '/inbox');
+    const inbox = await api(this.config, '/inbox');
     const room = await api(this.config, '');
-    // Re-read after smart scheduling moved a request, so the host is not woken for it in this same pass.
-    if (this.config.scheduler && !inbox.archived && await this.route_unnamed(inbox, room)) inbox = await api(this.config, '/inbox');
+    // Smart scheduling runs beside delivery: the host gets the message now, a recommendation may follow.
+    if (this.config.scheduler && !inbox.archived) this.recommend_unnamed(inbox, room);
     this.room_title = room.title;
     const active = new Map(inbox.executions.map(item => [item.id, item]));
     const present = new Set(inbox.members.map(member => member.name));
@@ -158,36 +157,33 @@ export class FreeRoomRunner {
     }
   }
   /**
-   * Smart scheduling: give each unnamed message waiting for the host directly to one woken member when the
-   * provider is confident. Each message is decided once; a failure or low confidence leaves it with the host.
+   * Smart scheduling: for each new unnamed message routed to the host, ask the provider in the background whether
+   * another woken member suits it better, and post a recommendation the user may adopt. Nothing waits on it.
    */
-  async route_unnamed(inbox, room) {
+  recommend_unnamed(inbox, room) {
     const host = inbox.members.find(member => member.role === 'host');
     const waiting = host?.pending.filter(request => request.purpose === 'route' && !this.routed.has(request.id)) || [];
-    const members = inbox.members.filter(member => member !== host && this.config.participants[member.name]).map(member => ({ name: member.name,
+    const members = inbox.members.filter(member => member !== host && this.config.participants[member.name]).map(member => ({ id: member.id, name: member.name,
       description: member_description(member.name, this.config.participants[member.name]) }));
-    let moved = false;
     for (const request of waiting) {
       this.routed.add(request.id);
       if (!members.length) continue;
-      try {
-        const page = await api(this.config, `/messages?after=${Math.max(0, request.message_id - 11)}`);
-        const message = page.messages.find(item => item.id === request.message_id);
-        if (!message) continue;
-        const decision = await route_free_message(this.config.api_home, this.config.scheduler,
-          { title: room.title, context: page.messages, message, host: host.name, members }, this.fetch);
-        this.log(`智能调度 #${message.id}：${decision.member ? `派给 ${decision.member}` : '交回主持人'}（选择 ${decision.choice ?? '-'}，置信度 ${decision.confidence ?? '-'}）`);
-        if (!decision.member) continue;
-        const target = inbox.members.find(member => member.name === decision.member);
-        await api(this.config, `/requests/${request.id}`, { action: 'schedule', member_id: target.id,
-          provider: this.config.scheduler.provider, confidence: decision.confidence });
-        moved = true;
-      } catch (error) {
-        // A request the host already took, or any provider failure, simply stays with the host.
-        this.log(`智能调度 #${request.message_id} 未改派，交回主持人：${error.message}`);
-      }
+      const decision = this.recommend(request, room, host, members).catch(error => this.log(`智能调度 #${request.message_id} 未给出推荐：${error.message}`));
+      this.decisions.add(decision);
+      decision.finally(() => this.decisions.delete(decision));
     }
-    return moved;
+  }
+  /** Decide one message and record a confident recommendation; the host's handling is unaffected either way. */
+  async recommend(request, room, host, members) {
+    const page = await api(this.config, `/messages?after=${Math.max(0, request.message_id - 11)}`);
+    const message = page.messages.find(item => item.id === request.message_id);
+    if (!message) return;
+    const decision = await route_free_message(this.config.api_home, this.config.scheduler,
+      { title: room.title, context: page.messages, message, host: host.name, members }, this.fetch);
+    this.log(`智能调度 #${message.id}：${decision.member ? `推荐 ${decision.member}` : '不推荐，交主持人'}（选择 ${decision.choice ?? '-'}，置信度 ${decision.confidence ?? '-'}）`);
+    if (!decision.member) return;
+    await api(this.config, '/recommendations', { message_id: message.id, member_id: members.find(member => member.name === decision.member).id,
+      provider: this.config.scheduler.provider, confidence: decision.confidence });
   }
   /** Reserve with a persisted client id before invoking any software. */
   async start(member, row) {

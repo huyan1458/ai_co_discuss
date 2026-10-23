@@ -618,6 +618,25 @@ test('Worker manual expert answers a woken discussion with its own credential an
   assert.equal(refused.status, 400);
 });
 
+test('Worker keeps the named follow-up option and records smart-scheduling decisions for the transcript', async t => {
+  const f = await worker_fixture(t);
+  const id = (await f.request('', { title: '点名追问', host: 'Codex', experts: { Codex: 'cli' }, named_followup: true })).body.id;
+  assert.equal((await f.request(`/${id}`)).body.named_followup, true);
+  const plain = (await f.request('', { title: '默认关闭', host: 'Codex', experts: { Codex: 'cli' } })).body;
+  assert.equal(plain.named_followup, false);
+  f.sql.prepare('DELETE FROM discussion_options WHERE room_id=?').run(plain.id);
+  assert.equal((await f.request(`/${plain.id}`)).body.named_followup, true, 'a room created before the option keeps named follow-ups');
+  assert.equal((await f.request('', { title: '无效', host: 'Codex', experts: { Codex: 'cli' }, named_followup: 'yes' })).status, 400);
+  await f.request(`/${id}/runtime`, { action: 'start', revision: 0, deadline: 0 });
+  const decision = { kind: 'round', label: '继续下一轮，先请 Codex 发言', confidence: 0.9, applied: true, provider: 'jev', after_message_id: 0 };
+  assert.equal((await f.request(`/${id}/scheduler-decisions`, decision)).status, 200);
+  assert.equal((await f.request(`/${id}/scheduler-decisions`, { ...decision, kind: 'other' })).status, 400);
+  assert.equal((await f.request(`/${id}/scheduler-decisions`, { ...decision, confidence: 2 })).status, 400);
+  assert.equal((await f.request(`/${id}/scheduler-decisions`, decision, 'x'.repeat(40))).status, 403);
+  assert.deepEqual((await f.request(`/${id}`)).body.scheduler_decisions.map(item => [item.kind, item.label, item.applied, item.confidence]),
+    [['round', '继续下一轮，先请 Codex 发言', 1, 0.9]]);
+});
+
 test('Worker zero deadline cannot bypass finite topic limits and rejects invalid deadlines', async t => {
   const f = await worker_fixture(t);
   const id = (await f.request('', { title: '有限时长', host: 'Codex', experts: { Codex: 'cli' } })).body.id;
@@ -824,28 +843,42 @@ test('Worker free rooms need the owner credential and keep secrets out of views 
   assert.deepEqual([again.status, again.body.id], [200, r.room.id]);
 });
 
-test('Worker smart scheduling moves only a pending unnamed request from the host to a woken member', async t => {
+test('Worker smart scheduling recommendations wait for the user, then interrupt the host or follow it', async t => {
   const f = await worker_fixture(t);
   const codex = 'codex-free'.repeat(4);
   const r = await free_worker_room(f, [{ name: 'Codex', adapter: 'codex_cli', token: codex }]);
-  await r.say('帮我看看登录报错');
-  const inbox = (await f.request(`${r.path}/inbox`, undefined, r.owner)).body;
-  const pending = inbox.members.find(member => member.name === 'Claude').pending;
-  assert.deepEqual(pending.map(item => item.purpose), ['route']);
   const codex_id = await r.member_id('Codex');
-  const schedule = (member_id, extra = {}, token = r.owner) => f.request(`${r.path}/requests/${pending[0].id}`,
-    { action: 'schedule', member_id, provider: 'jev', confidence: 0.91, ...extra }, token);
-  assert.equal((await schedule(codex_id, {}, r.claude)).status, 403);
-  assert.equal((await schedule(codex_id, { confidence: 1.5 })).status, 400);
-  assert.equal((await schedule(codex_id, { provider: 'other' })).status, 400);
-  assert.equal((await schedule(await r.member_id('Claude'))).status, 404);
-  const moved = await schedule(codex_id);
-  assert.deepEqual([moved.status, moved.body.member_id, moved.body.purpose], [200, codex_id, 'scheduled']);
-  assert.equal((await schedule(codex_id)).status, 409);
-  const after = (await f.request(`${r.path}/inbox`, undefined, r.owner)).body.members;
-  assert.deepEqual(after.map(member => [member.name, member.pending.length]), [['Claude', 0], ['Codex', 1]]);
-  const request = (await f.request(r.path)).body.free.requests.find(item => item.id === pending[0].id);
-  assert.deepEqual([request.schedule_provider, request.schedule_confidence], ['jev', 0.91]);
+  const recommend = (message_id, extra = {}, token = r.owner) => f.request(`${r.path}/recommendations`,
+    { message_id, member_id: codex_id, provider: 'jev', confidence: 0.91, ...extra }, token);
+  const adopt = (message_id, mode) => f.request(`${r.path}/recommendations/${message_id}`, { action: 'adopt', mode }, r.owner);
+  const pending = async name => (await f.request(`${r.path}/inbox`, undefined, r.owner)).body.members.find(member => member.name === name).pending;
+  // Interrupt while the host has not started: its request is cancelled and the member is asked instead.
+  const first = (await r.say('帮我看看登录报错')).body.message.id;
+  assert.deepEqual((await pending('Claude')).map(item => item.purpose), ['route']);
+  assert.equal((await recommend(first, {}, r.claude)).status, 403);
+  assert.equal((await recommend(first, { confidence: 1.5 })).status, 400);
+  assert.equal((await recommend(first, { member_id: await r.member_id('Claude') })).status, 404);
+  assert.equal((await recommend(first)).status, 200);
+  assert.deepEqual((await pending('Claude')).length, 1);
+  const view = (await f.request(r.path)).body.free.recommendations[0];
+  assert.deepEqual([view.member, view.status, view.confidence], ['Codex', 'open', 0.91]);
+  assert.ok(view.expires_in > 55 && view.expires_in <= 60);
+  assert.equal((await adopt(first, 'interrupt')).body.recommendation.status, 'adopted');
+  assert.deepEqual([(await pending('Claude')).length, (await pending('Codex')).map(item => item.message_id)], [0, [first]]);
+  // After: the host keeps working; the member is asked once the host's request ends.
+  const second = (await r.say('再看看注册')).body.message.id;
+  await recommend(second);
+  const host_execution = (await r.reserve('Claude')).body;
+  assert.equal((await adopt(second, 'after')).body.recommendation.status, 'waiting');
+  assert.deepEqual((await pending('Codex')).map(item => item.message_id), [first]);
+  assert.equal((await r.answer(host_execution.id)).status, 201);
+  assert.deepEqual((await pending('Codex')).map(item => item.message_id), [first, second]);
+  assert.equal((await f.request(r.path)).body.free.recommendations.find(item => item.message_id === second).status, 'adopted');
+  // An expired recommendation can no longer be adopted.
+  const third = (await r.say('第三条')).body.message.id;
+  await recommend(third);
+  f.sql.prepare('UPDATE member_recommendations SET expires_at=unixepoch()-30 WHERE message_id=?').run(third);
+  assert.equal((await adopt(third, 'after')).status, 409);
 });
 
 test('Worker free rooms bundle requests into one execution and reject late or unbound answers', async t => {

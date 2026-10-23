@@ -569,12 +569,36 @@ CREATE TABLE IF NOT EXISTS member_requests (
     UNIQUE(message_id,member_id)
 );
 CREATE INDEX IF NOT EXISTS member_requests_open ON member_requests(member_id,status);
--- Smart scheduling's decision for a request it moved from the host to a member; a separate table so D1 needs no column change.
-CREATE TABLE IF NOT EXISTS request_schedules (
-    request_id INTEGER PRIMARY KEY REFERENCES member_requests(id) ON DELETE CASCADE,
+-- Discussion options chosen at creation. A room without a row predates the option and keeps named follow-ups.
+CREATE TABLE IF NOT EXISTS discussion_options (
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+    named_followup INTEGER NOT NULL DEFAULT 0 CHECK(named_followup IN (0,1))
+);
+-- Visible record of each smart-scheduling decision in a discussion; it is not a message and moves no round or floor.
+CREATE TABLE IF NOT EXISTS scheduler_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    after_message_id INTEGER NOT NULL DEFAULT 0,
+    kind TEXT NOT NULL CHECK(kind IN ('interjection','round')),
+    label TEXT NOT NULL,
+    confidence REAL,
+    applied INTEGER NOT NULL DEFAULT 0 CHECK(applied IN (0,1)),
     provider TEXT NOT NULL,
-    confidence REAL NOT NULL
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS scheduler_decisions_room ON scheduler_decisions(room_id,id);
+-- Smart scheduling's suggestion that another member answer an unnamed message. The host keeps the message;
+-- the user may adopt before expires_at (waiting until the host's request ends for mode 'after'), otherwise it lapses.
+CREATE TABLE IF NOT EXISTS member_recommendations (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    member_id INTEGER NOT NULL REFERENCES room_members(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','waiting','adopted')),
+    mode TEXT NOT NULL DEFAULT ''
 );
 -- Ordinary members can suggest a response without creating work or spending a chain budget.
 CREATE TABLE IF NOT EXISTS member_suggestions (

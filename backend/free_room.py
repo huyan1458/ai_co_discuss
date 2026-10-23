@@ -27,6 +27,9 @@ MAX_PATH_LENGTH = 500
 ACTIVE = ("dispatched", "started")
 ACCESS_MODES = ("runner", "manual", "online")
 SCHEDULER_PROVIDERS = ("jev", "decisions")
+RECOMMEND_SECONDS = 60
+# A click sent just before the hint disappears still counts.
+RECOMMEND_GRACE_SECONDS = 5
 # AI-created requests (host dispatches and hand-offs) allowed per chain; each owner message starts a chain.
 MAX_AUTO_HOPS = 8
 # A host that left gives up the role; the first active runner member (else manual) then takes it.
@@ -236,14 +239,13 @@ def free_view(connection, room_id):
         members.append(member)
     names = {row["id"]: row["name"] for row in connection.execute("SELECT id,name FROM room_members WHERE room_id=?", (room_id,))}
     requests = [{**dict(row), "member": names.get(row["member_id"], "")} for row in connection.execute(
-        """SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by,
-        (SELECT provider FROM request_schedules WHERE request_id=member_requests.id) AS schedule_provider,
-        (SELECT confidence FROM request_schedules WHERE request_id=member_requests.id) AS schedule_confidence FROM member_requests
+        """SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by FROM member_requests
         WHERE room_id=? ORDER BY id DESC LIMIT ?""", (room_id, RECENT_REQUESTS))]
     chains = [dict(row) for row in connection.execute(
         "SELECT chain_id,reason FROM free_chains WHERE room_id=? ORDER BY chain_id DESC LIMIT 10", (room_id,))]
     return {"members": members, "requests": requests[::-1], "executions": recent_executions(connection, room_id), "execution_minutes": execution_minutes(connection, room_id),
-            "conflicts": possible_conflicts(connection, room_id, names), "halted_chains": chains, "max_auto_hops": MAX_AUTO_HOPS}
+            "conflicts": possible_conflicts(connection, room_id, names), "halted_chains": chains, "max_auto_hops": MAX_AUTO_HOPS,
+            "recommendations": recent_recommendations(connection, room_id, now)[::-1]}
 
 
 def require_member(connection, room_id, token, name=None):
@@ -557,6 +559,7 @@ def inbox(connection, room_id, token):
     require_owner(connection, room_id, token)
     begin_write(connection)
     expire_executions(connection, room_id)
+    release_recommendations(connection, room_id)
     archived = connection.execute("SELECT archived FROM room_directory WHERE room_id=?", (room_id,)).fetchone()[0]
     members = []
     for row in connection.execute("SELECT * FROM room_members WHERE room_id=? AND status='active' AND access='runner' ORDER BY id", (room_id,)):
@@ -570,28 +573,76 @@ def inbox(connection, room_id, token):
             "execution_minutes": execution_minutes(connection, room_id)}
 
 
-def schedule_request(connection, room_id, token, request_id, payload):
-    """Smart scheduling moves one unnamed message from the host to a woken member before the host takes it."""
+def host_route_request(connection, message_id):
+    """The host's request for one unnamed owner message, if the message was routed."""
+    return connection.execute("SELECT * FROM member_requests WHERE message_id=? AND purpose='route'", (message_id,)).fetchone()
+
+
+def recommend_member(connection, room_id, token, payload):
+    """Smart scheduling suggests another member for an unnamed message; the host keeps it until the user adopts."""
     require_owner(connection, room_id, token)
     begin_write(connection)
-    if payload.get("action") != "schedule":
-        raise ValueError("只支持 action=schedule")
     confidence = payload.get("confidence")
     if payload.get("provider") not in SCHEDULER_PROVIDERS or type(confidence) not in (int, float) or not 0 <= confidence <= 1:
         raise ValueError("须提供智能调度供应商 provider 与 0–1 的置信度 confidence")
-    request = connection.execute("SELECT * FROM member_requests WHERE room_id=? AND id=?", (room_id, request_id)).fetchone()
-    if not request:
-        raise LookupError("请求不存在")
-    if request["purpose"] != "route" or request["status"] != "pending":
-        raise FileExistsError("请求已由主持人接手或已处理，不能改派")
+    message_id = payload.get("message_id")
+    route = host_route_request(connection, message_id) if type(message_id) is int else None
+    if not route or route["room_id"] != room_id:
+        raise LookupError("只能为交给主持人的未点名消息给出推荐")
     target = connection.execute("""SELECT * FROM room_members WHERE room_id=? AND id=? AND status='active'
-        AND access='runner' AND role<>'host'""", (room_id, payload.get("member_id"))).fetchone()
+        AND access='runner' AND id<>?""", (room_id, payload.get("member_id"), route["member_id"])).fetchone()
     if not target:
-        raise LookupError("改派对象须为在场、由本机唤醒的非主持成员")
-    connection.execute("UPDATE member_requests SET member_id=?,purpose='scheduled' WHERE id=?", (target["id"], request_id))
-    connection.execute("INSERT OR REPLACE INTO request_schedules (request_id,room_id,provider,confidence) VALUES (?,?,?,?)",
-                       (request_id, room_id, payload["provider"], float(confidence)))
-    return dict(connection.execute("SELECT * FROM member_requests WHERE id=?", (request_id,)).fetchone())
+        raise LookupError("推荐对象须为在场、由本机唤醒的其他成员")
+    now = int(time.time())
+    connection.execute("""INSERT OR IGNORE INTO member_recommendations (message_id,room_id,member_id,provider,confidence,created_at,expires_at)
+        VALUES (?,?,?,?,?,?,?)""", (message_id, room_id, target["id"], payload["provider"], float(confidence), now, now + RECOMMEND_SECONDS))
+    return dict(connection.execute("SELECT * FROM member_recommendations WHERE message_id=?", (message_id,)).fetchone())
+
+
+def release_recommendations(connection, room_id):
+    """Ask each adopted-later member once the host's request for that message has ended in any way."""
+    for row in connection.execute("""SELECT rec.* FROM member_recommendations rec JOIN member_requests r ON r.message_id=rec.message_id AND r.purpose='route'
+        WHERE rec.room_id=? AND rec.status='waiting' AND r.status IN ('completed','cancelled','failed')""", (room_id,)).fetchall():
+        connection.execute("UPDATE member_recommendations SET status='adopted' WHERE message_id=?", (row["message_id"],))
+        if connection.execute("SELECT 1 FROM room_members WHERE id=? AND status='active'", (row["member_id"],)).fetchone():
+            connection.execute("""INSERT OR IGNORE INTO member_requests (room_id,member_id,message_id,chain_id,purpose,created_by,created_at)
+                VALUES (?,?,?,?,'ask','user',?)""", (room_id, row["member_id"], row["message_id"], row["message_id"], int(time.time())))
+
+
+def adopt_recommendation(connection, room_id, token, message_id, payload):
+    """The user adopts a recommendation before it expires: interrupt the host now, or ask the member after the host."""
+    require_owner(connection, room_id, token)
+    begin_write(connection)
+    if payload.get("action") != "adopt" or payload.get("mode") not in ("interrupt", "after"):
+        raise ValueError("采纳须为 action=adopt，mode 为 interrupt 或 after")
+    row = connection.execute("SELECT * FROM member_recommendations WHERE room_id=? AND message_id=?", (room_id, message_id)).fetchone()
+    if not row:
+        raise LookupError("这条消息没有智能调度推荐")
+    if row["status"] != "open":
+        return {"recommendation": dict(row), "duplicate": True}
+    if int(time.time()) > row["expires_at"] + RECOMMEND_GRACE_SECONDS:
+        raise FileExistsError("推荐已过期，可直接 @ 该成员")
+    if not connection.execute("SELECT 1 FROM room_members WHERE id=? AND status='active'", (row["member_id"],)).fetchone():
+        raise FileExistsError("推荐的成员已离开")
+    route = host_route_request(connection, message_id)
+    mode = payload["mode"]
+    if mode == "interrupt" and route["status"] == "delivering":
+        # The host's execution may carry other messages too; stopping it voids that whole execution.
+        finish_execution(connection, route["execution_id"], "cancelled", "用户采纳智能调度推荐，改由其他成员回答", "cancelled")
+    elif mode == "interrupt" and route["status"] == "pending":
+        connection.execute("UPDATE member_requests SET status='cancelled' WHERE id=?", (route["id"],))
+    connection.execute("UPDATE member_recommendations SET status='waiting',mode=? WHERE message_id=?", (mode, message_id))
+    release_recommendations(connection, room_id)
+    settle_batches(connection, room_id)
+    return {"recommendation": dict(connection.execute("SELECT * FROM member_recommendations WHERE message_id=?", (message_id,)).fetchone()),
+            "duplicate": False}
+
+
+def recent_recommendations(connection, room_id, now):
+    """Recommendations shown beside their messages, with seconds left to adopt an open one."""
+    return [{**dict(row), "expires_in": max(0, row["expires_at"] - now)} for row in connection.execute(
+        """SELECT rec.*,m.name AS member FROM member_recommendations rec JOIN room_members m ON m.id=rec.member_id
+        WHERE rec.room_id=? ORDER BY rec.message_id DESC LIMIT ?""", (room_id, RECENT_REQUESTS))]
 
 
 def reserve_execution(connection, room_id, token, payload):

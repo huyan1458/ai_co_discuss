@@ -1069,7 +1069,6 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 :root[data-theme^="channel"] :is(.channel-message, .turn-panel, .summary-form) { box-shadow: var(--channel-shadow-panel); }
 :root[data-theme^="channel"] .channel-message.channel-topic-card { box-shadow: inset 3px 0 0 var(--channel-accent), var(--channel-shadow-panel); }
 :root[data-theme^="channel"] .channel-composer { box-shadow: var(--channel-shadow-panel) !important; }
-:root[data-theme^="channel"] .channel-composer:focus-within { border-color: color-mix(in srgb, var(--channel-accent) 55%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--channel-accent) 16%, transparent), var(--channel-shadow-panel) !important; }
 :root[data-theme^="channel"] :is(.channel-menu, .channel-select-menu, .channel-topic-menu, .channel-nav-preview, .channel-message-toolbar, .channel-latest-button, .channel-details, .channel-navigation-drawer, .glass-panel) { border-color: var(--channel-edge-float); box-shadow: var(--channel-shadow-float); }
 :root[data-theme="channel"] :is(.channel-menu, .channel-select-menu, .channel-topic-menu, .channel-nav-preview, .channel-message-toolbar, .channel-latest-button, .channel-details, .channel-navigation-drawer, .glass-panel) { background: var(--channel-glass-bg) !important; -webkit-backdrop-filter: var(--channel-glass-filter); backdrop-filter: var(--channel-glass-filter); }
 /* Like the light theme, the dark seams show only the resize handle's line. */
@@ -1077,6 +1076,10 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 :root[data-theme="channel"] :is(.channel-nav-resizer, .channel-rail-resizer) { background: transparent; }
 .channel-response-suggestions { display: grid; gap: 6px; margin-top: 10px; font-size: 12px; color: var(--ui-text-muted); }
 .channel-response-suggestions > div { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.channel-recommendation { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: fit-content; max-width: 100%; margin-top: 10px; padding: 6px 10px; border: 1px solid color-mix(in srgb, var(--channel-accent) 35%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--channel-accent) 7%, transparent); color: var(--ui-text-toned); font-size: 12px; }
+.channel-recommendation small { margin-left: 8px; color: var(--ui-text-dimmed); font-variant-numeric: tabular-nums; }
+.channel-recommendation-icon { flex-shrink: 0; width: 13px; height: 13px; color: var(--channel-accent); }
+.channel-recommendation:not(.is-open) { border-color: var(--ui-border-muted); background: transparent; color: var(--ui-text-muted); }
 /* Dark composer matches the message cards (#313338, lit top rim) as one surface with its footer; the mention panel keeps the frosted float style. */
 :root[data-theme="channel"] .channel-composer { background: #313338 !important; }
 :root[data-theme="channel"] .channel-mention-heading { border-bottom: 1px solid #ffffff0d; }

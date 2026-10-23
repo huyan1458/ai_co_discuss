@@ -215,6 +215,12 @@ Python 通过进程内条件变量唤醒订阅者，不占用数据库连接，�
 
 未提供用户登录、讨论并行发言队列或跨站数据同步。自动执行保护不替代账号认证。Skill 行为、浏览器实际送达、软件原生任务启停与 API 账号的真实可用性必须通过实际环境验证；测试替身成功不能替代这些外部结果。
 
+## 讨论选项与智能调度记录
+
+- `discussion_options`：建房时的讨论选项，目前只有 `named_followup`（0/1，建房 `named_followup` 布尔值，默认 false，计入建房幂等比对）。没有记录的旧房间视为 true；房间视图返回 `named_followup`。
+- `scheduler_decisions`：讨论中每次智能调度判断的可见记录（`kind` 为 `interjection` / `round`，`label`、`confidence`、`applied`、`provider`、`after_message_id`），由接入程序用运行控制凭据 `POST scheduler-decisions` 写入，不是消息，不影响轮次、发言权与暂扣；房间视图 `scheduler_decisions` 返回最近 100 条。
+- 两表都是独立表，D1 重新应用 schema 即可；备份、导入（`after_message_id` 随消息重编号）与删除一并处理。智能调度代主持人执行的写入不新增权限，沿用该主持事件的执行凭据。
+
 ## 自动运行协议
 
 `discussion_limits` 保存房间上限及开始/收束时间。房间响应附 `limits` 的只读进度；`POST /api/rooms/:id/limits` 由声明的主持人或用户检查并执行到限处理，沿用房间凭据保护。配置通过创建房间/更新话题的 `limits` 对象写入，仅准备或暂停阶段可修改；时钟不重置。SQLite 在写事务中校验，D1 在同一批次断言参数版本、消息截止及时间边界，避免并发越界。到限处理取消未完成安排并撤销旧代次；总结需真实主持消息与阶段更新，不由服务器生成。GET 不改变阶段。请求附 `force: true` 时，用户可在进行中的讨论提前收尾：不论是否到限、到限方式为何，均按 `stop_reason=user_stop` 进入收束，由主持人在收束预留内总结；准备、暂停、收束或存档状态返回 400。
@@ -244,7 +250,7 @@ running 状态即使只有 pending 事件，也必须先暂停才能重新启动
 - **请求**：用户消息按结构化接收者 `to`（成员名）为每位成员生成一条请求；省略且仅有一位在场成员时默认点名该成员，多位成员时交给主持人（`route`），只有在线成员而没有主持人时只作留言，不广播。网页只从正文中代码与引用之外的 `@成员` 生成 `to`，没有 @ 时省略 `to`。请求状态为 `pending`（待投递）→ `delivering`（处理中）→ `completed` / `cancelled` / `failed`。
 - **执行**：`member_executions` 每位成员最多一个 `dispatched/started`（部分唯一索引），不同成员可并行。接入程序用控制凭据 `GET inbox`、`POST executions {member_id, client_id}`（同一 `client_id` 返回同一执行）把成员的全部待投递请求打包；`POST executions/ID {action}` 支持 `renew`（租约 120 秒，不超过单次执行时限，默认 20 分钟）、`fail`（请求标记失败）和 `release`（仅确认未送达时退回队列）。租约过期的执行在下次读取或领取时标记失败，不自动重发。
 - **主持人与任务链**：用户是需求方，不担任主持人。只要有在场的非在线成员，房间就保持恰好一位主持人：成员变动时，离开或移出的主持人失去角色，由第一位在场的 runner 成员（没有则手动成员）接任；建房和每条房主消息前也做同样的补位，因此旧房间在下一条消息时自动获得主持人。房主用 `POST members/ID {action:"role", role:"host"}` 更换主持人（在线成员不能担任），把现任主持人改为 `member` 会被拒绝。多位成员时未点名的房主消息生成给主持人的 `route` 请求。主持人的回答可带 `to` 点名其他成员（不能点名自己），这些请求组成一个批次（`free_batches`）；批次内全部进入终态后，只要有一个完成就给主持人生成一次 `handoff` 请求，全部失败则停下该任务链。每条房主消息开启一条任务链（`chain_id` 为该消息编号），链上 AI 发起的请求（派活与回交）最多 8 次，超出即停下（`free_chains`，原因 `budget` / `all_failed`），房主发新消息开启新链。Worker 用同一批次内的集合 SQL 完成回交，回交请求按（派活消息，主持人）唯一，重复执行不会重复唤醒。
-- **智能调度改派**：接入程序用控制凭据 `POST requests/ID {action:"schedule", member_id, provider, confidence}` 把一条仍为 `pending` 的 `route` 请求改给一位在场、由本机唤醒的非主持成员，`purpose` 改为 `scheduled`，`created_by` 与 `chain_id` 不变，不消耗任务链预算；同一事务把供应商（`jev` / `decisions`）与 0–1 置信度写入 `request_schedules`（独立表，D1 重新应用 schema 即可，无需改旧表列），房间视图的请求带 `schedule_provider`、`schedule_confidence`，备份、导入与删除一并处理。请求已被主持人领取或已处理返回 409，目标不合格返回 404，供应商或置信度无效返回 400；Worker 用带条件的 `UPDATE` 与同批次 `INSERT … SELECT` 防止与主持人领取并发时丢失请求或留下孤立记录。`inbox` 的待投递项带 `purpose` 供接入程序识别。
+- **智能调度推荐**：接入程序用控制凭据 `POST recommendations {message_id, member_id, provider, confidence}` 为一条已交给主持人（`route`）的未点名消息记录推荐对象（在场、由本机唤醒、非该主持人），写入 `member_recommendations`（每条消息一条，重复提交忽略；独立表，D1 重新应用 schema 即可），有效期 60 秒，主持人的请求不受影响。房主用 `POST recommendations/MESSAGE_ID {action:"adopt", mode}` 采纳：`interrupt` 取消主持人这条请求（已投递则作废主持人本次整个执行），`after` 等主持人这条请求进入终态。两种方式都先置为 `waiting`，由 `release`（采纳时与每次 `inbox` 读取时执行）在主持人请求已终态时为推荐成员建一条 `ask` 请求（`created_by=user`、`chain_id` 为原消息），状态改为 `adopted`。过期 5 秒宽限后采纳返回 409，重复采纳返回原结果。房间视图 `free.recommendations` 带成员名、状态、方式、置信度与剩余秒数 `expires_in`；备份、导入（仅作历史，不再生效）与删除一并处理。`inbox` 的待投递项带 `purpose` 供接入程序识别。
 - **回应建议**：普通成员新发言的结构化 `to` 与正文在场成员 @ 合并保存到 `member_suggestions`（原消息编号、稳定成员编号），排除自己、代码与引用；不会创建请求。消息读取返回 `suggestions`，包含目标在场状态及已转换的请求编号。房主用 `POST suggestions {message_id,member_id}` 转换：同一事务记录用户确认消息，调用现有建请求路径，`message_id` 保留原回答、`chain_id` 使用用户确认消息编号、`created_by=user`。`UNIQUE(message_id,member_id)` 使重复或并发点击只生成一个请求及一条确认，终态不重新派发。权限、在场状态和未存档条件在写入事务内校验；Worker 使用批次断言。升级须应用包含新表的 schema；Python 重启时自动建表，D1 发布前显式执行。已有历史消息不补写建议。
 - **在线成员**：`access=online` 的成员只读，不进入 `inbox`，不能用自己的凭证发言；房主以控制凭据代发其回答（`author` 为该成员、`submitted_by` 为用户、`source=proxy`），可带 `request_ids` 关闭它的待处理请求。
 - **关联房间**：从自由房间发起的讨论房间在建房时带 `parent_room_id`，记录在 `room_links`；讨论房间视图有 `parent_room`，自由房间视图列出 `linked_rooms`。头脑风暴的轮次、时长与名单因此天然独立于自由房间。
