@@ -212,10 +212,11 @@ ${readFileSync(task_path, 'utf8')}
 
 /** A running dispatcher retains only the processes it created itself. */
 export class DiscussionRunner {
-  constructor(config, store, deliver = deliver_task) {
+  constructor(config, store, deliver = deliver_task, log = () => {}) {
     this.config = config;
     this.store = store;
     this.deliver = deliver;
+    this.log = log;
     this.children = new Set();
     this.exited = new Map();
     this.running = new Map();
@@ -232,6 +233,7 @@ export class DiscussionRunner {
   async dispatch(row, event) {
     const token = row.token || randomUUID();
     this.store.record(row.id, { token, status: 'reserving' });
+    this.log(`派发 #${row.id} → ${event.participant}（${event.role}，turn ${event.turn_id ?? '-'}）`);
     this.trace(row.id, 'reserve_start');
     await api(this.config, `/events/${row.id}`, { action: 'reserve', execution_token: token });
     this.trace(row.id, 'reserve_done');
@@ -268,6 +270,7 @@ export class DiscussionRunner {
       this.store.record(row.id, { status: result.status, receipt: result.receipt || '' });
     } catch (error) {
       const not_sent = !invoked || error.delivery_status === 'not_sent';
+      this.log(`投递 #${row.id} → ${event.participant} 第 ${attempts} 次失败（${not_sent ? '确认未送出，将重试' : '送达状态不确定'}）：${error.message}`);
       this.store.record(row.id, { status: not_sent ? 'retry_wait' : 'uncertain', error: error.message,
         retry_at: not_sent ? Date.now() + (DELIVERY_RETRY_DELAYS_MS[attempts - 1] ?? 0) : 0 });
     }
@@ -326,6 +329,7 @@ export class DiscussionRunner {
   }
   /** Preserve the cause on the website and revoke work before asking for intervention. */
   async fail(row, reason) {
+    this.log(`执行 #${row.id} 失败：${reason}`);
     try { await api(this.config, `/events/${row.id}`, { action: 'fail', reason }); }
     catch (error) {
       if (!/HTTP 409/.test(error.message)) throw error;
@@ -376,7 +380,10 @@ export class DiscussionRunner {
     const eligible = pending.filter(({ event }) => event.generation === run.generation && event.run_id === run.run_id
       && (current && ['pending', 'notified'].includes(current.status) ? event.turn_id === current.id : event.role === 'host'));
     for (const { row, event } of pending) {
-      if (event.generation !== run.generation || event.run_id !== run.run_id) this.store.record(row.id, { status: 'cancelled' });
+      if (event.generation !== run.generation || event.run_id !== run.run_id) {
+        this.log(`撤销过期事件 #${row.id}（事件代次 ${event.generation}，当前 ${run.generation}）`);
+        this.store.record(row.id, { status: 'cancelled' });
+      }
     }
     for (const { row, event } of pending) if (!this.seen.has(row.id)) { this.seen.add(row.id); this.trace(row.id, 'event_seen', { event_created_at: event.created_at }); }
     const next = eligible.at(-1);

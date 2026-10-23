@@ -362,6 +362,8 @@ codiscuss service --help
 
 `codiscuss service shortcut` 在 Windows 桌面创建「AI CoDiscuss 讨论服务」快捷方式：双击即启动后台服务（已运行则复用），并用默认浏览器打开已登记的讨论网站。`codiscuss service autostart on|off` 在当前用户的启动文件夹添加或删除登录自启快捷方式，默认不开启。登记表、锁、`status.json` 与 `service.log` 位于用户目录的 `~/.codiscuss`（Windows 为 `%USERPROFILE%\.codiscuss`），不随 npm 包升级变化，可用 `DISCUSS_SERVICE_HOME` 改变。旧版本的 `%LOCALAPPDATA%/ai-codiscuss/service`（其他系统 `~/.local/state/ai-codiscuss/service`）在新目录不存在、且旧目录的讨论服务与本机网站都已停止时，由下一次命令整体移入新目录，并把 `rooms.json`、`launches/` 等 JSON 及已登记外部房间配置中指向旧目录的绝对路径改写为新路径，运行目录的草稿随之改名；旧服务仍在运行，或命令在会重定向 AppData 的 MSIX 应用内执行时，继续使用旧目录（须从普通终端完成迁移），执行 `codiscuss local stop`（独立服务另需 `service stop`）后再运行命令即可迁移。各房间的游标、收件箱与会话绑定仍在各自数据目录。
 
+`service.log` 除房间状态变化外，还按房间记录全自动讨论的派发（事件、参与者、角色）、每次投递失败（次数、是否确认未送出）、执行失败原因和因运行代次变化被撤销的过期事件，用于排查“重启后原安排又回到暂停”。
+
 ## Antigravity Sidecar
 
 ```sh

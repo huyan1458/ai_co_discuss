@@ -184,7 +184,7 @@ class RoomWorker {
     catch (error) { release(); throw error; }
     this.config = config;
     this.release = release;
-    this.runner = this.create_runner(config, this.store);
+    this.runner = this.create_runner(config, this.store, message => this.log(`${config.room}: ${message}`));
     Object.assign(this.state, { site: config.site, room: config.room, config_version: snapshot.version });
   }
   /** Reload connection paths and credentials while retaining the exact conversation context. */
@@ -261,7 +261,7 @@ class RoomWorker {
 
 /** Keep workers aligned with the registry and tick each one per poll. */
 export class DiscussionService {
-  constructor(home, create_runner = (config, store) => config.mode === 'free' ? new FreeRoomRunner(config, store) : new DiscussionRunner(config, store), log = () => {}) {
+  constructor(home, create_runner = (config, store, log) => config.mode === 'free' ? new FreeRoomRunner(config, store) : new DiscussionRunner(config, store, undefined, log), log = () => {}) {
     this.home = home;
     this.create_runner = create_runner;
     this.log = log;
