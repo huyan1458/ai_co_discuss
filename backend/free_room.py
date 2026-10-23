@@ -780,8 +780,23 @@ def discussion_roster(connection, room_id):
 
 
 def save_discussion_experts(connection, room_id, experts):
-    """Write the active roster; a running discussion keeps going and its host is asked to re-plan."""
+    """Write the active roster; additions preserve its plan, other changes ask the host to re-plan."""
     connection.execute("UPDATE topic_settings SET experts=? WHERE room_id=?", (json.dumps(experts, ensure_ascii=False), room_id))
+
+
+def queue_invited_expert(connection, room_id, name, now):
+    """Append a new expert to an existing live plan without changing its current speaker or hold."""
+    connection.execute("""INSERT INTO discussion_turns (room_id,expert,question,status,submission_id,created_at)
+        SELECT settings.room_id,member.name,
+            CASE WHEN settings.phase='initial' THEN '欢迎加入：请先读取议题，独立给出你的开场观点。'
+                 ELSE '欢迎加入：请先读取议题和已有回答，给出你的观点。' END,
+            'queued','invite:'||member.id,?
+        FROM topic_settings AS settings JOIN room_members AS member ON member.room_id=settings.room_id
+        WHERE settings.room_id=? AND member.name=? AND member.status='active'
+        AND settings.phase NOT IN ('paused','concluded')
+        AND NOT EXISTS (SELECT 1 FROM discussion_limits WHERE room_id=settings.room_id AND closing_at>0)
+        AND EXISTS (SELECT 1 FROM discussion_turns WHERE room_id=settings.room_id AND status IN ('pending','notified','queued'))""",
+        (now, room_id, name))
 
 
 def add_discussion_member(connection, room_id, token, payload, now):
@@ -805,6 +820,7 @@ def add_discussion_member(connection, room_id, token, payload, now):
     require_fresh_member_token(connection, room_id, member["token"])
     insert_member(connection, room_id, mark_manual(member, bool(run and run["mode"] == "automatic")), now)
     save_discussion_experts(connection, room_id, {**experts, member["name"]: "cli"})
+    queue_invited_expert(connection, room_id, member["name"], now)
 
 
 def discussion_member_action(connection, room_id, member_id, token, payload):
@@ -839,6 +855,7 @@ def discussion_member_action(connection, room_id, member_id, token, payload):
         if member["status"] != "away" or not hashed or hmac.compare_digest(hashed, member["token_hash"]):
             raise ValueError("只有离开的成员可以请回，且须提供新的成员凭证")
         require_fresh_member_token(connection, room_id, payload.get("token"))
+        connection.execute("UPDATE discussion_turns SET status='skipped' WHERE room_id=? AND status='queued'", (room_id,))
         connection.execute("UPDATE room_members SET status='active',token_hash=? WHERE id=?", (hashed, member_id))
         experts[member["name"]] = "online" if member["access"] == "online" else "cli"
     elif action == "adopt":
@@ -849,15 +866,18 @@ def discussion_member_action(connection, room_id, member_id, token, payload):
     save_discussion_experts(connection, room_id, experts)
 
 
+ADOPTABLE_ADAPTERS = ("claude", "codex", "codex_cli")
+
+
 def adopt_manual_member(connection, room_id, member, payload):
     """Hand a manual expert to the local service once its CLI reported the session it runs in; the owner's service resumes that session."""
     reported = connection.execute("SELECT session_id FROM member_sessions WHERE member_id=?", (member["id"],)).fetchone()
     run = connection.execute("SELECT mode FROM discussion_runtime WHERE room_id=?", (room_id,)).fetchone()
-    if not reported or reported["session_id"] != payload.get("session_id") or payload.get("adapter") != "claude":
+    if not reported or reported["session_id"] != payload.get("session_id") or payload.get("adapter") not in ADOPTABLE_ADAPTERS:
         raise ValueError("成员尚未上报与之相符的会话，不能转为托管")
     if member["access"] != "manual" or member["status"] != "active" or not run or run["mode"] != "automatic":
         raise ValueError("只有全自动讨论中在场的手动专家可以转为托管")
-    connection.execute("UPDATE room_members SET access='runner',adapter='claude',session_mode='borrowed' WHERE id=?", (member["id"],))
+    connection.execute("UPDATE room_members SET access='runner',adapter=?,session_mode='borrowed' WHERE id=?", (payload["adapter"], member["id"]))
     connection.execute("DELETE FROM member_sessions WHERE member_id=?", (member["id"],))
 
 

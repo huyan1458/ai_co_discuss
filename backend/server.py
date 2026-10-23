@@ -211,7 +211,7 @@ def require_room(connection, room_id):
     room["limits"] = limits_view(connection.execute(LIMITS_SQL, (room_id,)).fetchone(), room)
     room["mode"] = room_mode(connection, room_id)
     room["members"] = [dict(row) for row in connection.execute(
-        """SELECT m.id,m.name,m.adapter,m.role,m.status,m.access,m.session_mode,COALESCE(s.session_id,'') AS reported_session
+        """SELECT m.id,m.name,m.adapter,m.role,m.status,m.access,m.session_mode,COALESCE(s.session_id,'') AS reported_session,COALESCE(s.client,'') AS reported_client
         FROM room_members AS m LEFT JOIN member_sessions AS s ON s.member_id=m.id WHERE m.room_id=? AND m.status<>'removed' ORDER BY m.id""", (room_id,))]
     option = connection.execute("SELECT named_followup FROM discussion_options WHERE room_id=?", (room_id,)).fetchone()
     # Rooms created before the option keep the host's named follow-ups.
@@ -877,7 +877,7 @@ def append_free_message(connection, room, payload, actor):
 def record_reported_session(connection, room_id, token, payload):
     """Keep the software session a manual member posted from, so the local service can take the member over."""
     session_id, client = payload.get("session_id"), payload.get("session_client")
-    if client != "claude" or not isinstance(session_id, str) or not SESSION_ID_PATTERN.fullmatch(session_id) or not token:
+    if client not in ("claude", "codex") or not isinstance(session_id, str) or not SESSION_ID_PATTERN.fullmatch(session_id) or not token:
         return
     member = connection.execute("SELECT id FROM room_members WHERE room_id=? AND token_hash=? AND status='active' AND access='manual' AND adapter='manual'",
                                 (room_id, token_hash(token))).fetchone()
@@ -1615,6 +1615,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.handle_free_api(connection, parts, method)
         if parts[3:4] == ["members"] and method == "POST" and len(parts) in (4, 5):
             if len(parts) == 4:
+                # Membership and its queued opening are committed together; the current plan stays in order.
                 add_discussion_member(connection, room_id, token, self.read_payload(), utc_now())
             else:
                 discussion_member_action(connection, room_id, int(parts[4]), token, self.read_payload())

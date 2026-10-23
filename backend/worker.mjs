@@ -349,7 +349,7 @@ async function require_room(database, room_id) {
   result.runtime = await runtime_view(database, room_id);
   result.limits = limits_view(await database.prepare(LIMITS_SQL).bind(room_id).first(), result);
   result.mode = await room_mode(database, room_id);
-  result.members = (await database.prepare(`SELECT m.id,m.name,m.adapter,m.role,m.status,m.access,m.session_mode,COALESCE(s.session_id,'') AS reported_session
+  result.members = (await database.prepare(`SELECT m.id,m.name,m.adapter,m.role,m.status,m.access,m.session_mode,COALESCE(s.session_id,'') AS reported_session,COALESCE(s.client,'') AS reported_client
     FROM room_members AS m LEFT JOIN member_sessions AS s ON s.member_id=m.id WHERE m.room_id=? AND m.status<>'removed' ORDER BY m.id`).bind(room_id).all()).results;
   const option = await database.prepare("SELECT named_followup FROM discussion_options WHERE room_id=?").bind(room_id).first();
   // Rooms created before the option keep the host's named follow-ups.
@@ -968,7 +968,7 @@ const SESSION_ID_PATTERN = /^[0-9A-Za-z_-]{8,128}$/;
 /** Keep the software session a manual member posted from, so the local service can take the member over. */
 async function record_reported_session(database, room_id, token, payload) {
   const { session_id, session_client } = payload;
-  if (session_client !== "claude" || typeof session_id !== "string" || !SESSION_ID_PATTERN.test(session_id) || !token) return;
+  if (!["claude", "codex"].includes(session_client) || typeof session_id !== "string" || !SESSION_ID_PATTERN.test(session_id) || !token) return;
   const member = await database.prepare("SELECT id FROM room_members WHERE room_id=? AND token_hash=? AND status='active' AND access='manual' AND adapter='manual'")
     .bind(room_id, await runtime_hash(token)).first();
   if (member) {
@@ -2198,6 +2198,21 @@ async function handle_free_api(database, request, parts) {
   throw new HttpError(404, "地址不存在");
 }
 
+/** Append a newly invited expert to the live plan in the same transaction as its membership. */
+function queue_invited_expert(database, room_id, name) {
+  return database.prepare(`INSERT INTO discussion_turns (room_id,expert,question,status,submission_id,created_at)
+    SELECT settings.room_id,member.name,
+      CASE WHEN settings.phase='initial' THEN '欢迎加入：请先读取议题，独立给出你的开场观点。'
+           ELSE '欢迎加入：请先读取议题和已有回答，给出你的观点。' END,
+      'queued','invite:'||member.id,strftime('%Y-%m-%dT%H:%M:%SZ','now')
+    FROM topic_settings AS settings JOIN room_members AS member ON member.room_id=settings.room_id
+    WHERE settings.room_id=? AND member.name=? AND member.status='active'
+      AND settings.phase NOT IN ('paused','concluded')
+      AND NOT EXISTS (SELECT 1 FROM discussion_limits WHERE room_id=settings.room_id AND closing_at>0)
+      AND EXISTS (SELECT 1 FROM discussion_turns WHERE room_id=settings.room_id AND status IN ('pending','notified','queued'))`)
+    .bind(room_id, name);
+}
+
 /** Owner invites, sends away (keeping the seat), brings back or removes one discussion expert; the run keeps going. */
 async function handle_discussion_members(database, request, parts) {
   const room_id = parts[2];
@@ -2216,8 +2231,10 @@ async function handle_discussion_members(database, request, parts) {
     if (room.phase === "concluded") throw new HttpError(400, "讨论已收束，不能再邀请专家");
     if (Object.keys(experts).length >= MAX_ROOM_AGENTS) throw new HttpError(400, "房间成员已达上限");
     await require_fresh_member_hash(database, room_id, member.token_hash);
-    experts[member.name] = "cli";
-    try { await database.batch([free_member_insert(database, room_id, mark_manual(member, room.runtime?.mode === "automatic")), save()]); }
+    try { await database.batch([
+      free_member_insert(database, room_id, mark_manual(member, room.runtime?.mode === "automatic")),
+      database.prepare("UPDATE topic_settings SET experts=json_set(experts,?,'cli') WHERE room_id=?").bind(`$."${member.name}"`, room_id),
+      queue_invited_expert(database, room_id, member.name)]); }
     catch (error) { if (String(error).includes("UNIQUE constraint")) throw new HttpError(409, `${member.name} 已是本房间成员`); throw error; }
   } else {
     const member = await free_owned_member(database, room_id, integer(parts[4]), token);
@@ -2248,13 +2265,15 @@ async function handle_discussion_members(database, request, parts) {
       if (member.status !== "away" || !hashed || hashed === member.token_hash) throw new HttpError(400, "只有离开的成员可以请回，且须提供新的成员凭证");
       await require_fresh_member_hash(database, room_id, hashed);
       experts[member.name] = member.access === "online" ? "online" : "cli";
-      await database.batch([database.prepare("UPDATE room_members SET status='active',token_hash=? WHERE id=? AND status='away'").bind(hashed, member.id), save()]);
+      await database.batch([
+        database.prepare("UPDATE discussion_turns SET status='skipped' WHERE room_id=? AND status='queued'").bind(room_id),
+        database.prepare("UPDATE room_members SET status='active',token_hash=? WHERE id=? AND status='away'").bind(hashed, member.id), save()]);
     } else if (payload.action === "adopt") {
       const reported = await database.prepare("SELECT session_id FROM member_sessions WHERE member_id=?").bind(member.id).first();
-      if (!reported || reported.session_id !== payload.session_id || payload.adapter !== "claude") throw new HttpError(400, "成员尚未上报与之相符的会话，不能转为托管");
+      if (!reported || reported.session_id !== payload.session_id || !["claude", "codex", "codex_cli"].includes(payload.adapter)) throw new HttpError(400, "成员尚未上报与之相符的会话，不能转为托管");
       if (member.access !== "manual" || member.status !== "active" || room.runtime?.mode !== "automatic") throw new HttpError(400, "只有全自动讨论中在场的手动专家可以转为托管");
       await database.batch([
-        database.prepare("UPDATE room_members SET access='runner',adapter='claude',session_mode='borrowed' WHERE id=?").bind(member.id),
+        database.prepare("UPDATE room_members SET access='runner',adapter=?,session_mode='borrowed' WHERE id=?").bind(payload.adapter, member.id),
         database.prepare("DELETE FROM member_sessions WHERE member_id=?").bind(member.id)]);
     } else throw new HttpError(400, "action 须为 away、active、remove、redo 或 adopt");
   }

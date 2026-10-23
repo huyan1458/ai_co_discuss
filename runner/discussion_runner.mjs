@@ -197,7 +197,7 @@ export function acquire_lock(directory) {
 }
 
 /** Write a non-secret task separately from its CLI-only credential file; suggestions are smart-scheduling hints for the host. */
-export function task_files(config, event, token, binding, suggestions = [], entered = false) {
+export function task_files(config, event, token, binding, { suggestions = [], entered = false, process_access = false } = {}) {
   const id = `event-${event.id}`;
   const draft_directory = config.draft_directory || `${config.directory}-drafts`;
   mkdirSync(draft_directory, { recursive: true });
@@ -208,6 +208,9 @@ export function task_files(config, event, token, binding, suggestions = [], ente
   if (event.role === 'host') skills.push(join(config.project, '.agents/skills/discuss-host/SKILL.md'));
   const adapter = config.participants[event.participant];
   const auto_enter = entered || AUTO_ENTER_ADAPTERS.has(adapter.adapter);
+  const bound_access = process_access && AUTO_ENTER_ADAPTERS.has(adapter.adapter);
+  const access_rule = bound_access ? '本次凭据文件已通过进程环境 DISCUSS_ACCESS_FILE 绑定，codiscuss 自动读取，命令无需 --access-file。'
+    : '每次业务写入都带 --access-file。';
   const skills_directory = join(config.project, '.agents', 'skills');
   // Codex and agy run commands through PowerShell on Windows, whose execution policy blocks npm's codiscuss.ps1 shim.
   const cli = process.platform === 'win32' && adapter.adapter !== 'claude' ? 'codiscuss.cmd' : 'codiscuss';
@@ -217,8 +220,9 @@ export function task_files(config, event, token, binding, suggestions = [], ente
   atomic_json(task_path, { site: config.site, room: config.room, event_id: event.id, participant: event.participant,
     project_name: adapter.project_name || null, cwd: adapter.cwd || null, project_access: adapter.project_access,
     draft_directory, ...(suggestions.length ? { scheduler_suggestions: suggestions } : {}),
-    role: event.role, turn_id: event.turn_id, skills, cli, subcommands: TASK_SUBCOMMANDS, access_file: access_path,
-    instructions: `${adapter.adapter === 'antigravity_cli' ? `无人值守下 run_command 只能运行 ${cli} 的 subcommands 子命令，其他命令会被自动拒绝并使会话直接结束；浏览项目用 list_dir、find_by_name、grep_search、view_file。` : ''}读取指定技能；网站命令只用 ${cli} 的 subcommands 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口；${auto_enter ? '接入程序已进入本次执行，不要再执行 execution enter。' : `使用 ${cli} execution enter 房间 执行编号 --access-file 凭据路径 进入。进入成功后才处理本次安排；`}凭据文件由 CLI 内部读取，不要打印或读取其 token。每次业务写入都带 --access-file。答案草稿只保存到 draft_directory，不修改任务、凭据、日志或调度数据库；${project_rule}只处理本次工作，不建定时任务。主持创建下一安排或收束即结束，专家提交原文后结束。无效或已进入的任务不要重复执行。${suggestion_rule}` });
+    role: event.role, turn_id: event.turn_id, skills, cli, subcommands: TASK_SUBCOMMANDS,
+    ...(bound_access ? { access_env: 'DISCUSS_ACCESS_FILE' } : { access_file: access_path }),
+    instructions: `${adapter.adapter === 'antigravity_cli' ? `无人值守下 run_command 只能运行 ${cli} 的 subcommands 子命令，其他命令会被自动拒绝并使会话直接结束；浏览项目用 list_dir、find_by_name、grep_search、view_file。` : ''}读取指定技能；网站命令只用 ${cli} 的 subcommands 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口；${auto_enter ? '接入程序已进入本次执行，不要再执行 execution enter。' : `使用 ${cli} execution enter 房间 执行编号 --access-file 凭据路径 进入。进入成功后才处理本次安排；`}凭据文件由 CLI 内部读取，不要打印或读取其 token。${access_rule}答案草稿只保存到 draft_directory，不修改任务、凭据、日志或调度数据库；${project_rule}只处理本次工作，不建定时任务。主持创建下一安排或收束即结束，专家提交原文后结束。无效或已进入的任务不要重复执行。${suggestion_rule}` });
   const read_rule = windows_rg() ? '读取含中文的技能或文本文件时用 rg --encoding utf-8 . 文件路径，不用 Get-Content（Windows PowerShell 会按系统编码读出乱码，需要反复重试）。' : '';
   const scope = `本次只放行任务内 subcommands 列出的 ${cli} 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口。任务内 cwd 是讨论项目目录；${project_rule}项目读写仍受软件实际权限和议题授权约束。不读取凭据内容。${read_rule}`;
   const plan_rule = event.role === 'host' ? '安排专家回应时先写发言计划，用 turn create --plan-file 一次排满本轮每位专家，不要每次只排一位。' : '';
@@ -275,7 +279,7 @@ export class DiscussionRunner {
     let invoked = false;
     let entered = pre_entered;
     try {
-      const task = task_files(this.config, event, row.token, binding, suggestions, pre_entered);
+      const task = task_files(this.config, event, row.token, binding, { suggestions, entered: pre_entered, process_access: true });
       invoked = true;
       const result = await this.deliver(adapter, binding, { ...task, room_title: this.room_title,
         api_context: { site: this.config.site, room: this.config.room, token: row.token, home: this.config.api_home,

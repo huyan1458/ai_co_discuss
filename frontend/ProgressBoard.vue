@@ -29,7 +29,7 @@ const concluded = computed(() => room.value.phase === "concluded");
 const settled = computed(() => concluded.value || room.value.archived);
 const can_restart = computed(() => automatic.value && (runtime.value.status === "paused" || runtime.value.expired)
   && !concluded.value && !room.value.archived);
-// Actions appear only when they apply: running phases can pause, interrupt or end; paused ones restart or end.
+// Actions appear only when they apply: running phases can pause, skip or end; paused ones restart or end.
 const active = computed(() => ["initial", "discussing", "reviewing"].includes(room.value.phase) && !room.value.archived);
 /** Writes need this browser's room control credential; without it the board is read-only. */
 const can_control = computed(() => Boolean(view.value.access?.can_manage));
@@ -204,6 +204,11 @@ async function invite() {
   else inviting.value = false;
 }
 
+/** Close the invitation only after the manual member's launch instruction is copied. */
+async function copy_invited_launch() {
+  if (await act("copy_member_launch", invited_manual.value)) inviting.value = false;
+}
+
 /** Open the participant's connection editor without leaving the discussion. */
 async function open_connection(member, prefer = "") {
   connection.value = { room_id: room.value.id, name: member.name, prefer };
@@ -296,7 +301,7 @@ async function finish(action) {
     <section v-if="has_actions" class="pb-actions" aria-label="操作">
       <UButton v-if="can_restart" icon="i-lucide-rotate-ccw" label="重启" size="sm" color="neutral" variant="outline" class="pb-action pb-restart" title="原安排重新交给对应 AI，需本机接入程序在运行" :loading="pending === 'restart_discussion'" :disabled="!can_control" @click="act('restart_discussion')" />
       <UButton v-if="active" icon="i-lucide-pause" label="暂停" size="sm" color="neutral" variant="outline" class="pb-action" title="暂停讨论，原安排保留" :loading="pending === 'pause_discussion'" :disabled="!can_control" @click="act('pause_discussion')" />
-      <UButton v-if="active && turn" icon="i-lucide-hand" label="打断" size="sm" color="neutral" variant="outline" class="pb-action" :title="`打断 ${bridge.display_name(turn.expert)}：本次发言作废，交给主持人`" :loading="pending === 'cancel_turn'" :disabled="!can_control" @click="act('cancel_turn')" />
+      <UButton v-if="active && turn" icon="i-lucide-skip-forward" label="跳过" size="sm" color="neutral" variant="outline" class="pb-action" :title="`跳过 ${bridge.display_name(turn.expert)} 本次发言，交给主持人继续安排`" :loading="pending === 'cancel_turn'" :disabled="!can_control || Boolean(pending)" @click="act('cancel_turn')" />
       <UButton v-if="can_end" icon="i-lucide-flag" label="结束" size="sm" color="neutral" variant="outline" class="pb-action pb-end" title="结束讨论：选择主持人收尾或直接结束" :disabled="!can_control" @click="ending = true" />
     </section>
     <section v-if="automatic && timings.count" class="pb-section" aria-label="阶段耗时">
@@ -340,21 +345,19 @@ async function finish(action) {
         </div>
       </template>
     </UModal>
-    <UModal v-model:open="inviting" title="邀请专家" description="新专家沿用本机软件配置或手动接入，讨论不中断；主持人会重新安排发言。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
+    <UModal v-model:open="inviting" title="邀请专家" description="新专家沿用本机软件配置或手动接入，追加到本轮发言队列末尾。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
       <template #body>
         <div v-if="invited_manual" class="pb-invite" aria-label="启动手动成员">
           <p><strong>{{ invited_manual }}</strong> 已加入。要让它开始发言：</p>
           <ol class="fine-print">
             <li>点下方「复制启动指令」。</li>
             <li>粘贴到你要用的 {{ bridge.platform_of(invited_manual) }} 会话。</li>
-            <li>它首次发言后，本机服务会自动接管这个会话，之后每轮自动唤醒；未被接管时，需你或该软件的定时任务触发。</li>
+            <li>轮到它时，由该会话提交回答；支持自动接管的软件在首次发言后由本机服务继续唤醒。</li>
           </ol>
-          <p class="fine-print">指令含该成员的凭证，只交给这个会话。暂时不用，可稍后在参与者列表里点它的「复制启动指令」；不想让它参与，选「暂离」或「移除」。</p>
+          <p class="fine-print">指令含该成员的凭证，只交给这个会话。关闭后仍可在参与者列表中复制。</p>
           <p v-if="view.access?.error" role="alert" class="pb-free-note is-error">{{ view.access.error }}</p>
-          <p v-else-if="view.access?.notice" role="status" class="pb-free-note">{{ view.access.notice }}</p>
           <div class="pb-invite-footer">
-            <UButton label="稍后再复制" color="neutral" variant="ghost" @click="inviting = false" />
-            <UButton icon="i-lucide-rocket" label="复制启动指令" class="channel-primary-button" @click="act('copy_member_launch', invited_manual)" />
+            <UButton icon="i-lucide-rocket" label="复制启动指令" class="channel-primary-button" :loading="pending === 'copy_member_launch'" :disabled="Boolean(pending)" @click="copy_invited_launch" />
           </div>
         </div>
         <form v-else class="pb-invite" aria-label="邀请专家" @submit.prevent="invite">
@@ -364,7 +367,16 @@ async function finish(action) {
             </button>
           </div>
           <template v-if="invite_name">
-            <ExpertCard :key="invite_name" :name="invite_name" :mode="invite_mode" :choices="['cli', 'manual']" :status="invite_card_status" @mode="invite_mode = $event" @remove="invite_name = ''" />
+            <div class="pb-invite-mode" role="radiogroup" aria-label="接入方式">
+              <span>接入方式</span>
+              <div class="pb-invite-options">
+                <label v-for="option in [{ value: 'cli', label: '自动' }, { value: 'manual', label: '手动' }]" :key="option.value" :class="{ 'is-selected': invite_mode === option.value }">
+                  <input v-model="invite_mode" type="radio" name="invite-mode" :value="option.value" />{{ option.label }}
+                </label>
+              </div>
+            </div>
+            <ExpertCard :key="invite_name" :name="invite_name" :mode="invite_mode" :status="invite_card_status" compact @remove="invite_name = ''" />
+            <p v-if="invite_mode === 'manual'" class="fine-print">邀请后复制启动指令，粘贴到你要使用的 AI 会话；模型与文件权限沿用该软件的设置。</p>
             <p v-if="invite_instance !== invite_name" class="fine-print">已有 {{ invite_name }} 在场，将以 {{ invite_instance }} 加入，使用独立会话。</p>
             <UFormField v-if="invite_mode === 'cli' && bridge.launch_can_bind_session(invite_name, view.launch)" label="已有会话 ID（可选）" :description="invite_session.trim() ? '将续接这个原会话，保留它原有的上下文；它工作时请不要在原窗口继续操作。' : '留空则新建会话。'">
               <UInput v-model="invite_session" placeholder="在原会话中用 /status 查看；Codex App 填聊天 ID" aria-label="受邀成员的已有会话 ID" class="w-full" />
@@ -406,7 +418,13 @@ async function finish(action) {
 .pb-heading .pb-link { display: inline-flex; align-items: center; gap: 3px; margin: 0; }
 .pb-heading .pb-link > span { width: 12px; height: 12px; }
 .pb-invite { display: flex; flex-direction: column; gap: 14px; }
-.pb-invite > .expert-card { width: min(100%, 320px); }
+.pb-invite > .expert-card { width: 100%; }
+.pb-invite-mode { display: flex; align-items: center; gap: 12px; color: var(--ui-text-muted); font-size: 12px; }
+.pb-invite-options { display: flex; gap: 3px; padding: 3px; border-radius: 6px; background: var(--ui-bg-muted); }
+.pb-invite-options label { position: relative; display: grid; place-items: center; min-width: 56px; min-height: 28px; border-radius: 4px; cursor: pointer; }
+.pb-invite-options label.is-selected { color: var(--ui-text-highlighted); background: var(--ui-bg-elevated); box-shadow: var(--channel-shadow-control); }
+.pb-invite-options input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.pb-invite-options label:focus-within { outline: 1px solid var(--channel-accent); }
 .pb-invite .fine-print { margin: -6px 0 0; }
 .pb-invite-library { display: flex; flex-wrap: wrap; gap: 6px; }
 .pb-invite-library > button { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 2px 10px 2px 4px; border: 1px solid var(--ui-border-muted); border-radius: 999px; color: var(--ui-text-toned); font-size: 12px; }
@@ -415,5 +433,5 @@ async function finish(action) {
 .pb-invite-library .channel-avatar { flex-shrink: 0; width: 20px; height: 20px; font-size: 9px; }
 .pb-invite-empty { margin: 0; padding: 18px 12px; border: 1px dashed var(--ui-border); border-radius: 8px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }
 .pb-invite-footer { display: flex; justify-content: flex-end; gap: 8px; }
-@media (pointer: coarse) { .pb-invite-library > button { min-height: 44px; } }
+@media (pointer: coarse) { .pb-invite-library > button, .pb-invite-options label { min-height: 44px; } }
 </style>

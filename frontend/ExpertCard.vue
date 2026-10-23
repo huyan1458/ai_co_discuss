@@ -15,6 +15,7 @@ const props = defineProps({
   hostable: Boolean,
   // True where the form picks a host, so the card states whether this one may host.
   hosting: Boolean,
+  compact: Boolean,
 });
 const emit = defineEmits(["remove", "mode", "host"]);
 const { view, bridge } = inject("discussion");
@@ -55,7 +56,7 @@ const effort_items = computed(() => {
   return levels?.length ? [{ label: "默认强度", value: "" }, ...levels.map((level) => ({ label: labels[level] || level, value: level }))] : null;
 });
 const effort_label = computed(() => effort_items.value?.find((item) => item.value === (profile.value.effort || ""))?.label
-  || (profile.value.adapter === "antigravity_cli" ? "强度随模型" : profile.value.effort || "默认强度"));
+  || profile.value.effort || (profile.value.adapter === "antigravity_cli" ? "模型默认强度" : "默认强度"));
 // The front lists the read-only configuration; strength appears only where this page sets it.
 // Room speech and project files are separate: only woken CLIs get a project choice from this page,
 // Apps and manual sessions keep their own settings, and API or web members never see project files.
@@ -169,7 +170,7 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
 </script>
 
 <template>
-  <div ref="card" class="expert-card" :class="{ 'is-configurable': configurable, 'is-host': host }"
+  <div ref="card" class="expert-card" :class="{ 'is-configurable': configurable, 'is-host': host, 'is-compact': compact, 'is-static': !automatic }"
     :data-identity="bridge.identities[name]?.style" :data-face="visible_back ? 'back' : 'front'" tabindex="-1" @keydown.esc="escape">
     <motion.div class="expert-card-turn" :style="{ rotateY: angle }">
       <div class="expert-card-face expert-card-front" :inert="visible_back" :aria-hidden="visible_back">
@@ -240,12 +241,13 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
    Without perspective the turn's rotateY only narrows the card, so the flip needs no 3D compositing;
    the hidden face is switched by data-face at 90°, where the card has no width. */
 .expert-card-turn { display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); height: 240px; }
+.expert-card.is-compact.is-static .expert-card-turn { height: auto; }
 .expert-card-face { grid-area: 1 / 1; min-width: 0; min-height: 0; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); box-shadow: var(--channel-shadow-control); }
 .expert-card[data-face="front"] .expert-card-back, .expert-card[data-face="back"] .expert-card-front { visibility: hidden; }
 .expert-card.is-host .expert-card-front { border-color: color-mix(in srgb, #e0b44a 45%, var(--ui-border)); }
 .expert-card-front { position: relative; display: flex; flex-direction: column; }
 .expert-card-back { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 10px 12px 8px; transform: rotateY(180deg); }
-.expert-card-back-body { display: flex; flex: 1; flex-direction: column; gap: 8px; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.expert-card-back-body { display: flex; flex: 1; flex-direction: column; gap: 8px; min-height: 0; padding: 2px; overflow-y: auto; scrollbar-width: thin; }
 .expert-card:hover .expert-card-face { border-color: var(--ui-border-accented); }
 .expert-card-open { display: flex; flex: 1; flex-direction: column; gap: 10px; width: 100%; min-width: 0; padding: 12px 12px 30px; text-align: left; border-radius: inherit; outline: none; }
 .expert-card-open.is-static { cursor: default; padding-bottom: 12px; }

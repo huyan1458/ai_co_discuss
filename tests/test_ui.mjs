@@ -229,7 +229,7 @@ test('execution reports bind answers and failed requests and distinguish unknown
   ] } });
   const context = vm.createContext({ computed, room, free: ref(true) });
   const start = discussion_source.indexOf('const execution_reports = computed(');
-  const end = discussion_source.indexOf('/** Show only a live automatic execution', start);
+  const end = discussion_source.indexOf('const pending_message =', start);
   vm.runInContext(discussion_source.slice(start, end) + '\nglobalThis.reports = execution_reports;', context);
   const reports = context.reports.value;
   assert.equal(reports.get(8)[0].files_text, 'index.html');
@@ -1705,9 +1705,10 @@ function participant_connection_fixture(status = "running") {
   const view = ref({ room: { id: "one", phase: "discussing", runtime: { mode: "automatic", status } },
     launch: { available: true, remote: false, repair: null, repair_error: "" } });
   const pending = ref(""), calls = [];
-  const controls = { pause_allowed: true, changed_room: false };
+  const controls = { pause_allowed: true, changed_room: false, copy_allowed: true };
   const act = async (name) => {
     calls.push(name);
+    if (name === "copy_member_launch") return controls.copy_allowed;
     if (name === "pause_runtime") {
       if (!controls.pause_allowed) return false;
       view.value.room.runtime.status = "paused";
@@ -1725,6 +1726,18 @@ function participant_connection_fixture(status = "running") {
     + "\nglobalThis.connection_refs = { connection_open, connection_profile };", context);
   return { context, view, calls, controls, refs: context.connection_refs };
 }
+
+test("manual invitation closes after a successful copy and stays open on clipboard failure", async () => {
+  const { context, controls, calls } = participant_connection_fixture();
+  vm.runInContext('inviting.value = true; invited_manual.value = "Codex-2";', context);
+  controls.copy_allowed = false;
+  await context.copy_invited_launch();
+  assert.equal(vm.runInContext('inviting.value', context), true);
+  controls.copy_allowed = true;
+  await context.copy_invited_launch();
+  assert.equal(vm.runInContext('inviting.value', context), false);
+  assert.deepEqual(calls, ["copy_member_launch", "copy_member_launch"]);
+});
 
 test("discussion experts can leave, return or be removed from the board, but the host stays", async () => {
   const { context, view, calls } = participant_connection_fixture();
@@ -1859,6 +1872,33 @@ test("model discovery failure keeps only software defaults and saved values unti
   assert.equal(state.launch.profiles.Claude.model, "previous-model");
 });
 
+test("agy effort choices follow the selected native model without overriding software defaults", async () => {
+  const f = theme_fixture(), state = f.context.test_state, requests = [];
+  Object.assign(f.context, { render_launch_settings() {}, render_launch_summaries() {} });
+  Object.assign(state.launch, { available: true, profiles: { Gemini: { adapter: "antigravity_cli", executable: "agy.exe" } } });
+  f.context.local_launch_request = async (_action, input) => {
+    requests.push(input);
+    return { adapter: "antigravity_cli", models: [{ id: "native-model" }],
+      efforts: input.model ? ["low", "high"] : ["low", "medium", "high"] };
+  };
+  await f.context.load_launch_models("Gemini");
+  assert.equal(state.launch.profiles.Gemini.model, undefined);
+  assert.equal(state.launch.profiles.Gemini.effort, undefined);
+  assert.deepEqual(Array.from(f.context.launch_model_state("Gemini").efforts), ["low", "medium", "high"]);
+  f.context.write_launch_field("Gemini", "effort", "medium");
+  f.context.write_launch_model("Gemini", "native-model");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(requests[1].model, "native-model");
+  assert.equal(state.launch.profiles.Gemini.effort, "");
+  assert.deepEqual(Array.from(f.context.launch_model_state("Gemini").efforts), ["low", "high"]);
+  f.context.write_launch_field("Gemini", "effort", "low");
+  const room = { id: "room", runtime: { mode: "automatic" }, members: [{ name: "Gemini", access: "runner" }] };
+  assert.match(f.context.participant_model("Gemini", room, { room_id: "room", participants: { Gemini: state.launch.profiles.Gemini } }), /low/);
+  f.context.write_launch_model("Gemini", "__default__");
+  assert.equal(requests.length, 2, "returning to the default model reuses its native capability query");
+  assert.deepEqual(Array.from(f.context.launch_model_state("Gemini").efforts), ["low", "medium", "high"]);
+});
+
 test("choosing a discovered model applies its effort choices only to the selected instance", async () => {
   const f = theme_fixture(), state = f.context.test_state;
   Object.assign(f.context, { render_launch_settings() {}, render_launch_summaries() {} });
@@ -1928,7 +1968,7 @@ test("participant model labels distinguish explicit choices, software defaults a
   } };
   assert.equal(label('Codex', room, saved), 'gpt-6-astra · xhigh');
   assert.equal(label('Claude', room, saved), '默认模型 · 默认强度');
-  assert.equal(label('Gemini', room, saved), 'gemini-4-argon-high · 强度随模型');
+  assert.equal(label('Gemini', room, saved), 'gemini-4-argon-high · 模型默认强度');
   assert.equal(label('Codex', { ...room, id: 'two' }, saved), '', 'unread settings are not guessed or shown as a placeholder');
   assert.equal(label('Codex', room, null), '');
   saved.participants.Codex.adapter = 'codex';
@@ -2067,6 +2107,50 @@ test("pending reply cards disappear when execution is invalid or the transcript 
   }
   view.room = { phase: "preparing" };
   assert.equal(card.value, null, "switching to an unstarted room clears the previous card");
+});
+
+test("manual experts show an assignment wait without execution timing, then switch to their managed execution", () => {
+  const { room, execution, card } = pending_message_fixture();
+  room.members = [{ name: "Codex", access: "manual", status: "active" }];
+  room.runtime.participants = [];
+  for (const status of ["pending", "notified"]) {
+    room.current_turn.status = status;
+    assert.equal(card.value.id, "turn-7");
+    assert.equal(card.value.author, "Codex");
+    assert.equal(card.value.round, "第 2 轮");
+    assert.equal(card.value.manual, true);
+    assert.equal(card.value.is_host, false);
+    assert.equal(card.value.seconds, null, "manual waits do not invent execution time");
+    assert.match(card.value.text, /等待发言.*启动指令/);
+  }
+  room.rounds = [{ number: 2, completed: true }];
+  room.completed_rounds = 2;
+  assert.equal(card.value.round, "第 3 轮");
+  room.members[0].access = "runner";
+  assert.equal(card.value, null, "a managed expert needs a live execution before showing as working");
+  room.runtime.participants = [execution];
+  assert.equal(card.value.id, 9);
+  assert.equal(card.value.manual, undefined);
+  assert.equal(card.value.text, "正在唤醒…");
+});
+
+test("manual wait cards clear on skip, answer, pause, departure and filtering", () => {
+  const { view, room, card } = pending_message_fixture();
+  room.members = [{ name: "Codex", access: "manual", status: "active" }];
+  room.runtime.participants = [];
+  for (const [object, key, next] of [[room.current_turn, "status", "cancelled"], [room.current_turn, "status", "answered"],
+    [room.members[0], "status", "away"], [room.members[0], "status", "removed"], [room, "archived", true],
+    [room, "phase", "paused"], [room, "phase", "concluded"], [room.runtime, "status", "paused"],
+    [room.runtime, "status", "stopped"], [room.runtime, "expired", true],
+    [view, "query", "历史"], [view, "mention_only", true]]) {
+    const previous = object[key];
+    object[key] = next;
+    assert.equal(card.value, null, `${key}=${next}`);
+    object[key] = previous;
+    assert.equal(card.value.author, "Codex");
+  }
+  room.current_turn = { id: 8, expert: "Gemini", status: "pending" };
+  assert.equal(card.value, null, "the previous manual expert must not linger after the next assignment");
 });
 
 test("pending reply elapsed time includes wake and work, ticks locally, resyncs and stops with the execution", async () => {

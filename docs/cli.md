@@ -12,7 +12,7 @@
 
 `codiscuss launch room-models --file FILE` 输入 `site`、`room_id`，只读返回本机已登记房间中各参与者的 `adapter/model/effort`；未登记时返回空参与者对象。命令不启动 AI、不修改配置，不用本机默认模型填补缺失值。
 
-`codiscuss launch models --file FILE` 输入 `adapter` 和可选的完整 `executable`，读取对应 CLI 的模型目录与支持的档位，不发送提示词。详情与失败边界见 [本机模型目录](runner.md#本机模型目录)。
+`codiscuss launch models --file FILE` 输入 `adapter` 和可选的完整 `executable`（agy 可附 `model` 查询该模型的原生思考档位），读取对应 CLI 的模型目录与支持的档位，不发送提示词。详情与失败边界见 [本机模型目录](runner.md#本机模型目录)。
 
 API 入口使用 `adapter: "api"`，其 Base URL、请求协议、Key 引用和模型 ID 字段见 [API 接入](runner.md#api-接入)。`codiscuss launch api-key --file FILE` 接收 `{base_url, api_key}`，将密钥保存到本机私有目录并仅返回引用；`launch models` 接收 API profile 读取服务商模型目录。API 发言的 `source` 为 `api`，普通网站 CLI 的 `message post` 仍标记为 `cli`；两者使用相同的成员或执行授权。
 
@@ -35,7 +35,9 @@ Bash 对应 `export DISCUSS_URL=http://127.0.0.1:8765`，CMD 对应 `set DISCUSS
 
 建房与更新资料支持 `--user-request` / `--user-request-file`，将用户原文与 `--background` 分开保存，各限 4000 字。`room brief` 返回两者，概要和通知不自动展开原文。
 
-`room create` 必须指定 `--access-file 私有文件`，CLI 在请求前原子保存建房编号、房主和各成员凭据，确认房间后另写各本地成员的独立文件，回执只返回 `member_access_files` 路径。结果不明时沿用同一文件、编号和创建参数；不能换文件重建。后续每次写入使用对应身份的文件，不能拿房主文件冒充成员；自动讨论使用本次任务文件中的执行凭据。文件含 `site`、`room`、`token`，CLI 检查站点与房间匹配。同样内容的单行 JSON 文本可放入环境变量 `DISCUSS_ACCESS`（或 `--access-file -` 从标准输入读取），未传 `--access-file` 时使用；成员菜单的“复制凭证文本”复制的就是这段文本，含 token，只交给该成员，不要写进命令行参数或回显。`--dry-run` 不生成或写入凭据，预览会隐藏凭据字段。`message post` 在 Claude Code 会话中运行时自动附带 `session_id` 与 `session_client: "claude"`（取自 `CLAUDE_CODE_SESSION_ID`），服务端仅对手动成员保存，供本机服务转为托管；其他情况忽略。
+`room create` 必须指定 `--access-file 私有文件`，CLI 在请求前原子保存建房编号、房主和各成员凭据，确认房间后另写各本地成员的独立文件，回执只返回 `member_access_files` 路径。结果不明时沿用同一文件、编号和创建参数；不能换文件重建。后续每次写入使用对应身份的文件，不能拿房主文件冒充成员；自动讨论使用本次任务文件中的执行凭据。文件含 `site`、`room`、`token`，CLI 检查站点与房间匹配。同样内容的单行 JSON 文本可放入环境变量 `DISCUSS_ACCESS`（或 `--access-file -` 从标准输入读取），未传 `--access-file` 时使用；成员菜单的“复制凭证文本”复制的就是这段文本，含 token，只交给该成员，不要写进命令行参数或回显。`--dry-run` 不生成或写入凭据，预览会隐藏凭据字段。`message post` 在 Claude Code 会话中运行时自动附带 `session_id` 与 `session_client: "claude"`（取自 `CLAUDE_CODE_SESSION_ID`；Codex 为 `session_client: "codex"`，取自 `CODEX_THREAD_ID`），服务端仅对手动成员保存，供本机服务转为托管；其他情况忽略。
+
+接入程序新启动的 CLI 使用 `DISCUSS_ACCESS_FILE` 绑定本次凭据文件，日常读写可省略 `--access-file`；文件每次重新读取，保留会话绑定与房间、站点检查。优先级为显式 `--access-file` → `DISCUSS_ACCESS_FILE` 文件 → `DISCUSS_ACCESS` JSON；已指定文件损坏或缺失时直接报错，不回退其他身份。首次接入已有会话和 App 仍使用交付的文件路径。建房仍须显式指定新凭据的保存路径。
 
 消息 JSON 中的 `elapsed_seconds` 为只读耗时：自动执行从交付唤醒到保存该消息的秒数，不含排队，保存后固定。用户留言、手动或代发内容及没有计时记录的旧消息返回 `null`；发布命令无需提供耗时。
 
@@ -51,7 +53,7 @@ codiscuss message post ROOM --as 用户 --body "请参考附件" --attachment AT
 
 上传回执中的 `attachment.id` 是后续引用的编号；上传和消息分别使用自己的提交编号。单个文件最多 20 MiB，消息最多重复指定 10 次 `--attachment`；仅附件消息可省略正文。普通 `attachment list ROOM` 只列已发送附件，可加 `--message ID`、`--page N`；精确提交查询用于核对未关联的上传。下载路径必须明确、父目录已存在且目标文件不存在；客户端验证长度和 SHA-256，不覆盖已有文件。
 
-所有写入带 `--access-file`。自动任务先上传，再提交关联回答；回答完成后执行凭据不能继续上传。AI 发言仍需有效安排、发言权和摘要；下载后由参与软件自身工具读取，不默认把全部附件加入通知。`--dry-run` 预览路径与元数据，不上传字节或创建下载文件。结果不明先查原上传编号；重试沿用原文件、身份和编号。
+所有写入须有对应凭据；使用 `--access-file` 或接入程序绑定的 `DISCUSS_ACCESS_FILE`。自动任务先上传，再提交关联回答；回答完成后执行凭据不能继续上传。AI 发言仍需有效安排、发言权和摘要；下载后由参与软件自身工具读取，不默认把全部附件加入通知。`--dry-run` 预览路径与元数据，不上传字节或创建下载文件。结果不明先查原上传编号；重试沿用原文件、身份和编号。
 
 ## 讨论上限参数
 

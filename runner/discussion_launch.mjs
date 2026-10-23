@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { atomic_json } from './discussion_adapters.mjs';
-import { software_models } from './discussion_models.mjs';
+import { software_effort, software_models } from './discussion_models.mjs';
 import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
 import { acquire_lock, api, CODEX_ADAPTERS, DiscussionStore, service_drafts, task_files, validate_config } from './discussion_runner.mjs';
@@ -30,8 +30,9 @@ export function next_instance(platform, taken) {
 
 /** Supported local clients of an instance's platform. */
 function clients_of(name) { return CLIENTS[platform_of(name)]; }
-// Reasoning effort is a separate CLI argument only for Codex and Claude; agy encodes it in the model name.
-const EFFORT_LEVELS = { codex_cli: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], claude: ['low', 'medium', 'high', 'xhigh', 'max'] };
+// The UI discovers each model's supported subset; omitted values keep the CLI's own default.
+const EFFORT_LEVELS = { codex_cli: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], claude: ['low', 'medium', 'high', 'xhigh', 'max'],
+  antigravity_cli: ['low', 'medium', 'high', 'xhigh', 'max'] };
 const PROFILE_FIELDS = ['adapter', 'executable', 'model', 'effort', 'source_thread_id', 'ipc_directory', 'allowed_tools', 'cwd', 'project_name', 'project_id', 'base_url', 'api_protocol', 'api_key_ref'];
 const MAX_MINUTES = 1440;
 const SESSION_ID_PATTERN = /^[0-9A-Za-z_-]{8,128}$/;
@@ -106,22 +107,31 @@ export function pick_directory({ platform = process.platform, spawn_process = sp
 const MODEL_CACHE_MS = 24 * 60 * 60 * 1000;
 
 /** Return the software catalog, served from the private service home when still valid. */
-export async function cached_software_models(home, profile, { refresh = false, query = software_models } = {}) {
+export async function cached_software_models(home, profile, { refresh = false, query = software_models, query_effort = software_effort } = {}) {
   const path = join(home, 'model-catalogs.json');
   let stamp = '';
   try { const file = statSync(profile.executable); stamp = `${file.size}:${file.mtimeMs}`; } catch {}
   const key = JSON.stringify([profile.adapter, profile.executable || '', stamp]);
+  const effort_key = JSON.stringify([profile.adapter, profile.executable || '', stamp, 'effort', profile.model || '']);
   let cache = {};
   try { cache = JSON.parse(readFileSync(path, 'utf8')); } catch {}
-  const hit = cache[key];
-  if (!refresh && hit && Date.now() - hit.at < MODEL_CACHE_MS) return hit.result;
-  const result = await query(profile);
-  if (!result.error && result.models.length) {
-    const prefix = JSON.stringify([profile.adapter, profile.executable || '']).slice(0, -1);
-    for (const old of Object.keys(cache)) if (old.startsWith(prefix)) delete cache[old];
-    atomic_json(path, { ...cache, [key]: { at: Date.now(), result } });
+  const cached = entry => !refresh && entry && Date.now() - entry.at < MODEL_CACHE_MS ? entry.result : null;
+  const [result, effort] = await Promise.all([cached(cache[key]) || query(profile),
+    profile.adapter === 'antigravity_cli' ? cached(cache[effort_key]) || query_effort(profile) : null]);
+  const updates = {};
+  if (!cached(cache[key]) && !result.error && result.models.length) {
+    updates[key] = { at: Date.now(), result };
   }
-  return result;
+  if (effort && !effort.error && !cached(cache[effort_key])) {
+    updates[effort_key] = { at: Date.now(), result: effort };
+  }
+  if (Object.keys(updates).length) {
+    try { cache = JSON.parse(readFileSync(path, 'utf8')); } catch {}
+    const prefix = JSON.stringify([profile.adapter, profile.executable || '']).slice(0, -1);
+    for (const old of Object.keys(cache)) if (old.startsWith(prefix) && !old.startsWith(key.slice(0, -1))) delete cache[old];
+    atomic_json(path, { ...cache, ...updates });
+  }
+  return effort ? { ...result, efforts: effort.levels, ...(effort.error ? { effort_error: effort.error } : {}) } : result;
 }
 
 /** Read private defaults without selecting a global room or identity. */
@@ -180,7 +190,7 @@ function validate_profile(name, profile, binding = false) {
   if (profile.adapter === 'api') validate_api_profile(profile);
   if (profile.effort && profile.adapter !== 'api' && !EFFORT_LEVELS[profile.adapter]?.includes(profile.effort)) {
     throw new Error(EFFORT_LEVELS[profile.adapter] ? `${name}.effort 只能是 ${EFFORT_LEVELS[profile.adapter].join(' / ')}`
-      : `${name} 的思考档位不能单独设置；agy 请选择带档位的模型名，App 在软件内选择`);
+      : `${name} 的思考档位在原软件中选择`);
   }
 }
 
@@ -411,19 +421,29 @@ export async function room_member(home, raw, locked = false) {
   } finally { release(); }
 }
 
+/** A Codex desktop chat is resumed through the app, any other Codex session through the CLI. */
+function codex_session_adapter(session_id, env = process.env) {
+  const sessions = join(env.CODEX_HOME || join(homedir(), '.codex'), 'sessions');
+  const file = session_files(sessions).find(path => path.endsWith(`-${session_id}.jsonl`));
+  const meta = file ? readFileSync(file, 'utf8').split('\n', 1)[0] : '';
+  return /"originator":"Codex Desktop"/.test(meta) ? 'codex' : 'codex_cli';
+}
+
 /**
- * Register a manual Claude expert's own session as a hosted participant, so the service resumes it for later turns.
- * Throws when the local Claude software is not configured or the session is not found on this machine; the member then stays manual.
+ * Register a manual Claude or Codex expert's own session as a hosted participant, so the service resumes it for later turns.
+ * Returns the adapter used. Throws when the local software is not configured or the session is not found on this machine; the member then stays manual.
  */
-export function adopt_member_profile(home, path, name, session_id) {
+export function adopt_member_profile(home, path, name, session_id, client = 'claude') {
   const release = acquire_lock(join(dirname(path), 'configuration-edit'));
   try {
     const config = configuration_snapshot(path).config;
-    const input = { cwd: config.cwd, participants: { [name]: { adapter: 'claude', session_id } } };
+    const adapter = client === 'codex' ? codex_session_adapter(session_id) : 'claude';
+    const input = { cwd: config.cwd, participants: { [name]: { adapter, session_id } } };
     const profile = borrowed_session(name, participant_profile(name, launch_settings(home).participants, input, false), config.cwd);
     const next = { ...config, participants: { ...config.participants, [name]: profile } };
     validate_config(next, dirname(path));
     atomic_json(path, next);
+    return adapter;
   } finally { release(); }
 }
 
@@ -741,7 +761,8 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'models' && input?.adapter === 'api') result = await api_models(home, input);
   else if (positionals[0] === 'models' && input) {
     const saved = Object.values(launch_settings(home).participants).find(profile => profile.adapter === input.adapter);
-    result = await cached_software_models(home, { adapter: input.adapter, executable: input.executable || saved?.executable }, { refresh: input.refresh === true });
+    result = await cached_software_models(home, { adapter: input.adapter, executable: input.executable || saved?.executable,
+      ...(input.model ? { model: input.model } : {}) }, { refresh: input.refresh === true });
   }
   else if (positionals[0] === 'room-member' && input) result = await room_member(home, input);
   else if (positionals[0] === 'pick-directory') result = await pick_directory();

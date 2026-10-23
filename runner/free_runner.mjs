@@ -62,6 +62,9 @@ export function free_task_files(config, member, execution, binding) {
   atomic_json(access_path, { site: config.site, room: config.room, token: config.members[member.name].token,
     session_id: binding.session_id || '' });
   const cli = process.platform === 'win32' && profile.adapter !== 'claude' ? 'codiscuss.cmd' : 'codiscuss';
+  const bound_access = ['claude', 'codex_cli', 'antigravity_cli'].includes(profile.adapter);
+  const access_arg = bound_access ? '' : ' --access-file 凭据路径';
+  const access_rule = bound_access ? '本次凭据文件已通过进程环境 DISCUSS_ACCESS_FILE 绑定，codiscuss 自动读取，命令无需 --access-file。' : '';
   const project_rule = !profile.cwd ? '未指定项目目录。'
     : profile.project_access === 'write' ? '用户允许按请求修改 cwd 中的项目文件。' : 'cwd 中的项目文件只读，不修改。';
   const messages = execution.requests.map(item => `#${item.message_id}`).join('、');
@@ -74,8 +77,8 @@ export function free_task_files(config, member, execution, binding) {
     request_purposes: execution.requests.map(item => item.purpose || 'ask'), role: member.role || 'member',
     read_after: execution.read_until, cwd: profile.cwd || null, project_access: profile.project_access, draft_directory,
     skills: [join(config.project, '.agents/skills/discuss-participant/SKILL.md')], cli, subcommands: TASK_SUBCOMMANDS,
-    access_file: access_path,
-    instructions: `自由协作房间：用户点名了你（${messages}）。先用 ${cli} message list ${config.room} --after ${execution.read_until} --access-file 凭据路径 读取新消息，按时间顺序处理，后面的消息可能修正前面的，以最新指令为准。${host_rule}完成后用 ${cli} message post ${config.room} --as ${member.name} --kind chat --execution ${execution.id} --body-file 草稿 --submission-id 新UUID --access-file 凭据路径 提交一次回答。提交被拒绝说明本次执行已被打断或过期：保留草稿并结束，不要去掉 --execution 改作普通发言。草稿只写入 draft_directory；${project_rule}不读取或打印凭据内容，不建定时任务。` });
+    ...(bound_access ? { access_env: 'DISCUSS_ACCESS_FILE' } : { access_file: access_path }),
+    instructions: `自由协作房间：用户点名了你（${messages}）。${access_rule}先用 ${cli} message list ${config.room} --after ${execution.read_until}${access_arg} 读取新消息，按时间顺序处理，后面的消息可能修正前面的，以最新指令为准。${host_rule}完成后用 ${cli} message post ${config.room} --as ${member.name} --kind chat --execution ${execution.id} --body-file 草稿 --submission-id 新UUID${access_arg} 提交一次回答。提交被拒绝说明本次执行已被打断或过期：保留草稿并结束，不要去掉 --execution 改作普通发言。草稿只写入 draft_directory；${project_rule}不读取或打印凭据内容，不建定时任务。` });
   const prompt = `用户在自由协作房间点名了你（${member.name}），对应消息 ${messages}。请先读取任务文件：${task_path}，按其中说明读取新消息、完成请求，并用 ${cli} message post 带 --execution ${execution.id} 提交一次回答后结束。命令只用任务内 subcommands 列出的 ${cli} 子命令；${project_rule}不读取凭据内容。`;
   return { id, participant: member.name, directory: config.directory, draft_directory,
     skills_directory: join(config.project, '.agents', 'skills'), access_path, prompt };

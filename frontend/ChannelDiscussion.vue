@@ -166,12 +166,6 @@ const recipient_hint = computed(() => {
   if (free_members.value.length === 1) return `发给 ${bridge.display_name(free_members.value[0].name)}`;
   return free_host.value ? `发给主持人 ${bridge.display_name(free_host.value.name)}；@ 其他成员让它们发言` : "未 @ 任何成员：只作留言，不会唤醒 AI";
 });
-/** The one running action the composer can interrupt; it replaces the send button while the draft is empty. */
-const stop_action = computed(() => speaking_turn.value
-  ? { name: "cancel_turn", label: "停止", title: `打断 ${bridge.display_name(speaking_turn.value.expert)} 的发言（本次作废），交给主持人` }
-  : free_activity.value
-    ? { name: "interrupt_free", label: "停止", title: `停止 ${free_busy.value.map((item) => bridge.display_name(item.author)).join("、")} 当前的工作，并取消尚未投递的请求` }
-    : null);
 const has_draft = computed(() => Boolean(text.value.trim() || view.value.attachment_drafts.length));
 /** Active members a free-room message can name; chips appear only when there is a choice. */
 const free_members = computed(() => free.value ? (room.value.free?.members || []).filter((member) => member.status === "active") : []);
@@ -223,7 +217,7 @@ const execution_reports = computed(() => {
   }
   return reports;
 });
-/** Show only a live automatic execution; assignments alone are not evidence of a reply in progress. */
+/** Show live executions or an explicit manual wait, without implying that a manual expert is working. */
 const pending_message = computed(() => {
   const value = room.value;
   if (free.value) return view.value.query || view.value.mention_only ? null : free_activity.value;
@@ -234,10 +228,16 @@ const pending_message = computed(() => {
     && ["dispatched", "started"].includes(item.status)
     && (item.role === "host" ? item.participant === value.host
       : item.turn_id === speaking_turn.value?.id && item.participant === speaking_turn.value?.expert));
-  if (!execution) return null;
   const latest_round = value.rounds?.at(-1);
-  const round = latest_round?.completed === false || execution.role === "host"
+  const round = latest_round?.completed === false || execution?.role === "host"
     ? latest_round?.number : (value.completed_rounds || 0) + 1;
+  if (!execution) {
+    const turn = speaking_turn.value;
+    const member = (value.members || []).find((item) => item.name === turn?.expert);
+    if (!turn || member?.access !== "manual" || member.status !== "active") return null;
+    return { id: `turn-${turn.id}`, author: turn.expert, is_host: false, manual: true,
+      round: `第 ${round} 轮`, text: "等待发言，请在该 AI 会话中发送启动指令。", seconds: null };
+  }
   const timing = runtime.timings?.items.find((item) => item.id === execution.id);
   const is_host = execution.role === "host";
   const text = is_host ? (execution.status === "dispatched" ? "正在唤醒主持人…" : "正在安排下一步…")
@@ -801,6 +801,26 @@ onMounted(() => prompt.value?.textareaRef && editor_observer.observe(prompt.valu
 onBeforeUnmount(() => editor_observer.disconnect());
 onBeforeUnmount(cancel_navigation_press);
 
+const COPY_FEEDBACK_MS = 2000;
+const launch_copied = ref(false);
+let launch_copy_timer;
+/** Clear the composer copy feedback when it expires or the arrangement changes. */
+function reset_launch_copy() {
+  clearTimeout(launch_copy_timer);
+  launch_copied.value = false;
+}
+/** Confirm the copy only after the clipboard write succeeds for this arrangement. */
+async function copy_launch() {
+  const room_id = room.value.id, turn_id = speaking_turn.value.id;
+  reset_launch_copy();
+  if (!await act("copy_member_launch", speaking_turn.value.expert)) return;
+  if (room.value?.id !== room_id || speaking_turn.value?.id !== turn_id) return;
+  launch_copied.value = true;
+  launch_copy_timer = setTimeout(reset_launch_copy, COPY_FEEDBACK_MS);
+}
+watch([() => room.value?.id, () => speaking_turn.value?.id], reset_launch_copy);
+onBeforeUnmount(reset_launch_copy);
+
 /** Reuse the existing original-record actions in the message overflow menu. */
 function message_actions(message) {
   return [[
@@ -878,7 +898,8 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
       </section></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
-        <UChatMessage v-for="message in group.messages" :id="String(message.id)" :key="message.id" v-memo="[message, message_round_labels.get(message.id), expanded_answers.has(message.id), active_message === message.id, waits_for_host(message), request_badges.get(message.id), execution_reports.get(message.id), response_suggestions.get(message.id), recommendations.get(message.id), adopting === message.id, scheduler_decisions.get(message.id)]" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="{ 'channel-current-message': active_message === message.id }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
+        <template v-for="message in group.messages" :key="message.id">
+        <UChatMessage :id="String(message.id)" v-memo="[message, message_round_labels.get(message.id), expanded_answers.has(message.id), active_message === message.id, waits_for_host(message), request_badges.get(message.id), execution_reports.get(message.id), response_suggestions.get(message.id), recommendations.get(message.id), adopting === message.id]" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="{ 'channel-current-message': active_message === message.id }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
@@ -929,17 +950,18 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
               <p>工作区观察：{{ report.files_text }}</p>
               <p v-if="report.status !== 'completed' && report.result">{{ report.result }}</p>
             </section>
-            <!-- A round's decision closes the card that ended the round. -->
-            <div v-for="decision in scheduler_decisions.get(message.id) || []" :key="`decision-${decision.id}`" class="channel-recommendation" :class="decision.applied ? 'is-open' : 'is-adopted'" :title="decision.title" aria-label="智能调度决策">
-              <UIcon name="i-lucide-zap" class="channel-recommendation-icon" />
-              <span>智能调度：{{ decision.label }}<small v-if="decision.confidence !== null">置信度 {{ Number(decision.confidence).toFixed(2) }}</small></span>
-            </div>
           </template>
           <template #header><div class="channel-message-actions"><div class="channel-message-toolbar">
             <UTooltip text="回复"><UButton icon="i-lucide-corner-up-left" size="xs" color="neutral" variant="ghost" :aria-label="`回复 #${message.id}`" @click="reply_to(message)" /></UTooltip>
             <UDropdownMenu :items="message_actions(message)" :content="{ align: 'end', sideOffset: 5 }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" :aria-label="`消息 #${message.id} 的更多操作`" /></UDropdownMenu>
           </div></div></template>
         </UChatMessage>
+        <!-- A decision stands between the card that ended the round and the next speaker. -->
+        <div v-for="decision in scheduler_decisions.get(message.id) || []" :key="`decision-${decision.id}`" class="channel-schedule-card" :class="{ 'is-skipped': !decision.applied }" :title="decision.title" aria-label="智能调度决策">
+          <UIcon name="i-lucide-zap" class="channel-schedule-icon" />
+          <span>智能调度：{{ decision.label }}<small v-if="decision.confidence !== null">置信度 {{ Number(decision.confidence).toFixed(2) }}</small></span>
+        </div>
+        </template>
       </div>
       <div v-if="pending_message" class="channel-message-group">
         <section v-if="pending_message.is_host" :id="`execution-${pending_message.id}`" class="channel-host-work" :aria-label="`${bridge.display_name(pending_message.author)} 主持工作`">
@@ -953,9 +975,9 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[pending_message.author]?.icon" :text="bridge.identities[pending_message.author]?.initials || '?'" :alt="bridge.display_name(pending_message.author)" size="md" class="channel-avatar" :class="bridge.identities[pending_message.author]?.style" />
               <div class="channel-message-meta"><div class="channel-message-author"><strong>{{ bridge.display_name(pending_message.author) }}</strong><span v-if="pending_message.round" class="channel-message-round">{{ pending_message.round }}</span></div></div>
-              <span class="channel-message-provenance channel-message-elapsed">已用 {{ pending_duration }}</span>
+              <span class="channel-message-provenance channel-message-elapsed">{{ pending_message.manual ? '手动接入' : `已用 ${pending_duration}` }}</span>
             </div>
-            <div class="channel-message-text" role="status" :aria-label="`${bridge.display_name(pending_message.author)} ${pending_message.text}`"><span ref="reply_glow" class="channel-reply-glow">{{ pending_message.text }}</span></div>
+            <div class="channel-message-text" role="status" :aria-label="`${bridge.display_name(pending_message.author)} ${pending_message.text}`"><span v-if="pending_message.manual">{{ pending_message.text }}</span><span v-else ref="reply_glow" class="channel-reply-glow">{{ pending_message.text }}</span></div>
           </template>
         </UChatMessage>
       </div>
@@ -988,7 +1010,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             </div>
           </div>
           <p v-if="view.composer_error || view.upload_status" class="attachment-status" :role="view.composer_error ? 'alert' : 'status'">{{ view.composer_error || view.upload_status }}</p>
-          <div v-if="speaking_turn" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>{{ (room.members || []).find((member) => member.name === speaking_turn.expert)?.access === 'manual' ? `${bridge.display_name(speaking_turn.expert)} 是手动接入，需把启动指令粘贴到其 AI 会话才会发言；不接入可点「停止」取消本次安排` : `新消息会在 ${bridge.display_name(speaking_turn.expert)} 回复后交给主持人；点「停止」取消本次安排` }}</span><UButton v-if="(room.members || []).find((member) => member.name === speaking_turn.expert)?.access === 'manual' && view.access?.can_manage" icon="i-lucide-rocket" label="复制启动指令" size="xs" color="neutral" variant="outline" @click="act('copy_member_launch', speaking_turn.expert)" /></div>
+          <div v-if="speaking_turn" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>{{ (room.members || []).find((member) => member.name === speaking_turn.expert)?.access === 'manual' ? `${bridge.display_name(speaking_turn.expert)} 是手动接入，需把启动指令粘贴到其 AI 会话才会发言；不接入可在进度看板点「跳过」本次发言` : `新消息会在 ${bridge.display_name(speaking_turn.expert)} 回复后交给主持人；可在进度看板点「跳过」本次发言` }}</span><UButton v-if="(room.members || []).find((member) => member.name === speaking_turn.expert)?.access === 'manual' && view.access?.can_manage" :icon="launch_copied ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied ? '已复制' : '复制启动指令'" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch" /></div>
           <div v-if="view.reply_to || view.turn_reply_to" class="channel-reply-draft"><UIcon name="i-lucide-corner-up-left" /><span>{{ view.turn_reply_to ? `回答安排 #${view.turn_reply_to} · ${bridge.display_name(room.host)} 代发` : `回复 #${view.reply_to}` }}</span><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" :aria-label="view.turn_reply_to ? '取消关联安排' : '取消回复'" @click="act(view.turn_reply_to ? 'cancel_answer' : 'cancel_reply')" /></div>
           <div v-if="needs_summary" class="channel-answer-editor"><UTextarea v-model="answer_summary" :rows="2" aria-label="回答摘要" class="w-full" placeholder="先说结论，保留关键理由、条件和不确定性。完整内容写在正文中。" /><USelect v-model="summary_source" :items="summary_sources" aria-label="摘要提供者" size="xs" /></div>
         </template>
@@ -1003,8 +1025,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             <USelectMenu v-model="author" :items="identities" value-key="value" :avatar="selected_identity?.avatar" :disabled="['moderation', 'receipt'].includes(kind)" :search-input="{ placeholder: '搜索身份…', icon: 'i-lucide-search' }" :content="{ side: 'top', align: 'start', sideOffset: 10 }" variant="none" size="sm" aria-label="发言身份" class="channel-author-select" :ui="{ content: 'channel-select-menu channel-identity-menu', itemLeadingAvatarSize: 'xs' }" />
             <USelect v-model="kind" :items="kinds" :icon="kinds.find((item) => item.value === kind)?.icon" :content="{ side: 'top', align: 'start', sideOffset: 10 }" variant="none" size="sm" aria-label="发言职责" class="channel-kind-select" :ui="{ content: 'channel-select-menu' }" />
           </div>
-          <UButton v-if="stop_action && !has_draft" type="button" icon="i-lucide-square" color="error" size="sm" class="channel-round-button channel-stop" :aria-label="stop_action.label" :title="stop_action.title" :loading="pending === stop_action.name" @click="act(stop_action.name)" />
-          <UButton v-else type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" aria-label="发送" title="发送 · Enter" :disabled="!has_draft || (needs_summary && !answer_summary.trim())" :loading="pending === 'send' || view.sending_message" @click="send" />
+          <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" aria-label="发送" title="发送 · Enter" :disabled="!has_draft || (needs_summary && !answer_summary.trim())" :loading="pending === 'send' || view.sending_message" @click="send" />
         </template>
       </UChatPrompt>
       <div class="channel-composer-note"><span v-if="free">{{ recipient_hint }}<span class="channel-note-divider">·</span>手动成员需在原会话触发</span><span v-else>{{ author_note }}<span class="channel-note-divider">·</span>在线 AI 的观点需代发</span><span class="channel-draft-length"><span v-if="text_length" :class="{ 'is-near-limit': near_length_limit }">{{ text_length }} / {{ bridge.max_message_length }}<span class="channel-note-divider">·</span></span><span class="channel-key-hint"><kbd>Enter</kbd> 发送<span class="channel-note-divider">·</span><kbd>Shift</kbd>+<kbd>Enter</kbd> 换行</span></span></div>

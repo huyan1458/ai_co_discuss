@@ -220,7 +220,7 @@ class RoomWorker {
     }
     this.state.config_version = snapshot.version;
   }
-  /** A manual Claude expert whose CLI reported its session is handed to the service, which resumes that session from the next turn on. */
+  /** A manual Claude or Codex expert whose CLI reported its session is handed to the service, which resumes that session from the next turn on. */
   async adopt_manual_members() {
     if (this.config.mode === 'free') return;
     for (const member of this.runner.members || []) {
@@ -228,8 +228,8 @@ class RoomWorker {
       if (member.access !== 'manual' || member.status !== 'active' || !member.reported_session || this.adopt_failed.has(key)) continue;
       try {
         const { adopt_member_profile } = await import('./discussion_launch.mjs');
-        adopt_member_profile(this.home, this.path, member.name, member.reported_session);
-        await api(this.config, `/members/${member.id}`, { action: 'adopt', adapter: 'claude', session_id: member.reported_session });
+        const adapter = adopt_member_profile(this.home, this.path, member.name, member.reported_session, member.reported_client);
+        await api(this.config, `/members/${member.id}`, { action: 'adopt', adapter, session_id: member.reported_session });
         this.log(`${this.config.room}: ${member.name} 已转为本机托管`);
       } catch (error) {
         this.adopt_failed.add(key);

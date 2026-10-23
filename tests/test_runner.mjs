@@ -81,7 +81,7 @@ test('host tasks carry scheduling suggestions only when there are some', async t
   task_files(f.config, f.event, 'test-token', {});
   assert.equal(JSON.parse(readFileSync(join(f.config.directory, 'event-1.task.json'), 'utf8')).scheduler_suggestions, undefined);
   const suggestions = [{ message_id: 9, suggestion: '请 Claude 回应', confidence: 0.82 }];
-  task_files(f.config, f.event, 'test-token', {}, suggestions);
+  task_files(f.config, f.event, 'test-token', {}, { suggestions });
   const task = JSON.parse(readFileSync(join(f.config.directory, 'event-1.task.json'), 'utf8'));
   assert.deepEqual(task.scheduler_suggestions, suggestions);
   assert.match(task.instructions, /仅供参考/);
@@ -808,9 +808,10 @@ test('each CLI receives the configured model and effort as its own arguments', a
   const codex_args = codex.calls[0].args;
   assert.equal(codex_args[codex_args.indexOf('-m') + 1], 'gpt-6-astra'); assert.equal(codex_args.at(-1), '-');
   assert.ok(codex_args.includes('model_reasoning_effort="xhigh"'));
-  const agy = await cli_delivery_fixture(t, 'antigravity_cli', { config: { model: 'gemini-4-argon-high' } });
+  const agy = await cli_delivery_fixture(t, 'antigravity_cli', { config: { model: 'gemini-4-argon-high', effort: 'low' } });
   const agy_args = agy.calls[0].args;
   assert.equal(agy_args[agy_args.indexOf('--model') + 1], 'gemini-4-argon-high'); assert.ok(agy_args.indexOf('--model') < agy_args.indexOf('-p'));
+  assert.equal(agy_args[agy_args.indexOf('--effort') + 1], 'low');
   const claude = await cli_delivery_fixture(t, 'claude', { events: [{ type: 'result', is_error: false, result: '完成' }], config: { model: 'opus', effort: 'max' } });
   const claude_args = claude.calls[0].args;
   assert.equal(claude_args[claude_args.indexOf('--model') + 1], 'opus');
@@ -818,6 +819,14 @@ test('each CLI receives the configured model and effort as its own arguments', a
   const plain = await cli_delivery_fixture(t, 'codex_cli');
   assert.equal(plain.calls[0].args.includes('-m'), false);
   assert.equal(plain.calls[0].args.some(arg => arg.startsWith('model_reasoning_effort')), false);
+  const agy_default = await cli_delivery_fixture(t, 'antigravity_cli');
+  assert.equal(agy_default.calls[0].args.includes('--effort'), false);
+  assert.equal(agy_default.calls[0].args.includes('--model'), false);
+  for (const fixture of [codex, agy, claude]) {
+    assert.equal(fixture.calls[0].settings.env.DISCUSS_ACCESS_FILE, fixture.access_path);
+    assert.equal(Object.entries(fixture.calls[0].settings.env).find(([key]) => key.toLowerCase() === 'path')?.[1], process.env.PATH);
+    assert.notEqual(process.env.DISCUSS_ACCESS_FILE, fixture.access_path);
+  }
 });
 
 test('claude allows only codiscuss website subcommands and draft writes, then user rules', async t => {
@@ -936,6 +945,14 @@ test('tasks direct website work to the approved codiscuss subcommands', async t 
   const agy = task_files({ ...f.config, participants: { Codex: { adapter: 'antigravity_cli' } } }, f.event, 'token-for-test', {});
   assert.match(agy.prompt, /接入程序已为本次执行完成 execution enter/);
   assert.match(agy.prompt, /turn create --plan-file/);
+  assert.equal(JSON.parse(readFileSync(join(f.config.directory, 'event-1.task.json'), 'utf8')).access_file, agy.access_path,
+    'an existing conversation cannot inherit a newly spawned process environment');
+  const delivered = task_files({ ...f.config, participants: { Codex: { adapter: 'antigravity_cli' } } },
+    f.event, 'token-for-test', {}, { process_access: true });
+  const bound = JSON.parse(readFileSync(join(f.config.directory, 'event-1.task.json'), 'utf8'));
+  assert.equal(bound.access_env, 'DISCUSS_ACCESS_FILE'); assert.equal(bound.access_file, undefined);
+  assert.match(delivered.prompt, /命令无需 --access-file/);
+  assert.ok(!delivered.prompt.includes(JSON.stringify(delivered.access_path).slice(1, -1)));
   const expert = task_files(f.config, { ...f.event, role: 'expert' }, 'token-for-test', {});
   assert.doesNotMatch(expert.prompt, /--plan-file/);
   assert.equal(task.skills_directory, join(f.config.project, '.agents', 'skills'));

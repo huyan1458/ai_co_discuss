@@ -30,6 +30,7 @@
 html[data-theme^="channel"] body { margin: 0; font: 14px/1.5 var(--font-sans); color: var(--ui-text); -webkit-font-smoothing: antialiased; }
 html[data-theme^="channel"] button { cursor: pointer; }
 html[data-theme^="channel"] button:disabled { cursor: not-allowed; }
+html[data-theme^="channel"] .animate-spin { animation-duration: 3s; }
 /* Focus uses neutral control edges; selection is conveyed by fill, text and checkmarks. */
 html[data-theme^="channel"] :focus {
   outline: none !important;
@@ -259,8 +260,6 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 html[data-theme^="channel"] .pb-action { flex-shrink: 0; white-space: nowrap; min-height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--ui-border) 70%, transparent); background: color-mix(in srgb, var(--ui-bg-elevated) 60%, transparent); box-shadow: none; color: var(--ui-text-muted); }
 html[data-theme^="channel"] .pb-action:hover { border-color: var(--ui-border-accented); background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); }
 html[data-theme^="channel"] .pb-action [class*="icon"] { width: 14px; height: 14px; }
-html[data-theme^="channel"] .pb-action .animate-spin { animation-duration: 1.6s; }
-html[data-theme^="channel"] .pb-restart .animate-spin { animation-duration: 3s; }
 html[data-theme^="channel"] .pb-restart { border-color: color-mix(in srgb, var(--channel-accent) 45%, transparent); background: color-mix(in srgb, var(--channel-accent) 14%, transparent); color: var(--channel-accent); }
 html[data-theme^="channel"] .pb-restart:hover { background: color-mix(in srgb, var(--channel-accent) 24%, transparent); color: var(--channel-accent); }
 html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f05252 45%, transparent); background: color-mix(in srgb, #f05252 12%, transparent); color: #f05252; }
@@ -521,11 +520,12 @@ html[data-theme^="channel"] .channel-composer :is(textarea, input):focus { box-s
 html[data-theme^="channel"] .channel-round-button { width: 32px; height: 32px; min-width: 32px; min-height: 32px; padding: 0; justify-content: center; border-radius: 50%; transition: background .12s, transform .1s; }
 html[data-theme^="channel"] .channel-round-button:active:not(:disabled) { transform: scale(.95); }
 .channel-round-button > [class*="icon"] { width: 16px; height: 16px; }
-html[data-theme^="channel"] .channel-stop { color: #fff; background: #ff3b30; border: 0; box-shadow: none; }
-html[data-theme^="channel"] .channel-stop:hover:not(:disabled) { background: #e0352b; }
-html[data-theme^="channel"] .channel-stop > [class*="icon"] { width: 14px; height: 14px; }
 .channel-reply-draft { display: flex; gap: 7px; align-items: center; padding: 7px 12px; border-bottom: 1px solid #ffffff0b; color: #c6d1ef; font-size: 12px; background: #2d3038; }
 .channel-reply-draft > button { margin-left: auto; }
+.channel-queue-hint > .channel-launch-copy { flex-shrink: 0; gap: 5px; min-height: 28px; padding: 4px 6px; border: 0; border-radius: 4px; background: transparent; box-shadow: none; color: inherit; font-size: 12px; font-weight: 500; white-space: nowrap; }
+.channel-queue-hint > .channel-launch-copy:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
+.channel-queue-hint > .channel-launch-copy:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
+.channel-launch-copy [data-slot="leadingIcon"] { width: 13px; height: 13px; }
 .channel-composer-note { display: flex; justify-content: space-between; gap: 10px; padding: 7px 4px 0; font-size: 11px; line-height: 16px; color: #929cad; }
 .channel-note-divider { margin-inline: 6px; color: #677181; }
 .channel-draft-length { white-space: nowrap; font-variant-numeric: tabular-nums; color: #858f9f; }
@@ -791,7 +791,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 }
 @media (prefers-reduced-motion: reduce) {
   html[data-theme^="channel"] *, html[data-theme^="channel"] *::before, html[data-theme^="channel"] *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
-  html[data-theme^="channel"] .pb-restart .animate-spin { animation: none !important; }
+  html[data-theme^="channel"] .animate-spin { animation: none !important; }
 }
 
 /* Both channel palettes share the layout above, including portalled controls. */
@@ -1080,6 +1080,13 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 .channel-recommendation small { margin-left: 8px; color: var(--ui-text-dimmed); font-variant-numeric: tabular-nums; }
 .channel-recommendation-icon { flex-shrink: 0; width: 13px; height: 13px; color: var(--channel-accent); }
 .channel-recommendation:not(.is-open) { border-color: var(--ui-border-muted); background: transparent; color: var(--ui-text-muted); }
+/* A smart-scheduling decision is its own slim card between two speakers, aligned with the message cards. */
+.channel-schedule-card { display: flex; align-items: center; gap: 8px; margin: -6px 16px 20px; padding: 8px 14px; border: 1px dashed color-mix(in srgb, var(--channel-accent) 45%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--channel-accent) 6%, transparent); color: var(--ui-text-toned); font-size: 12px; }
+.channel-schedule-card small { margin-left: 8px; color: var(--ui-text-dimmed); font-variant-numeric: tabular-nums; }
+.channel-schedule-icon { flex-shrink: 0; width: 13px; height: 13px; color: var(--channel-accent); }
+.channel-schedule-card.is-skipped { border-color: var(--ui-border); background: transparent; color: var(--ui-text-muted); }
+.channel-schedule-card.is-skipped .channel-schedule-icon { color: var(--ui-text-dimmed); }
+@media (max-width: 767px) { .channel-schedule-card { margin: -4px 8px 14px; } }
 /* Dark composer matches the message cards (#313338, lit top rim) as one surface with its footer; the mention panel keeps the frosted float style. */
 :root[data-theme="channel"] .channel-composer { background: #313338 !important; }
 :root[data-theme="channel"] .channel-mention-heading { border-bottom: 1px solid #ffffff0d; }

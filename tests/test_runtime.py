@@ -508,6 +508,49 @@ class RuntimeTests(unittest.TestCase):
         self.answer("Gemini", created["queued"][0]["id"], self.enter(events[-1]), "plan-answer-2")
         self.assertEqual((self.events()[-1]["participant"], self.events()[-1]["role"]), ("Codex", "host"))
 
+    def test_invited_experts_append_to_the_round_without_reordering_or_restarting(self):
+        """Automatic and manual invitees follow the existing plan; retries never duplicate their turns."""
+        created, _ = self.plan_round("invite-tail-plan")
+        before = self.request(self.path)[1]
+        current_token = self.enter(self.events()[-1])
+        for name, access in (("DeepSeek", "runner"), ("Qwen", "manual")):
+            payload = {"name": name, "token": self.member_tokens[name], "access": access, "adapter": "api" if access == "runner" else ""}
+            status, room = self.request(self.path + "/members", payload, self.owner)
+            self.assertEqual(status, 200, room)
+            retry = self.request(self.path + "/members", payload, self.owner)[1]
+            self.assertEqual(retry["queued_turns"], room["queued_turns"])
+        self.assertEqual(room["current_turn"]["id"], created["turn"]["id"])
+        self.assertEqual(room["runtime"]["generation"], before["runtime"]["generation"])
+        self.assertEqual([turn["expert"] for turn in room["queued_turns"]], ["Gemini", "DeepSeek", "Qwen"])
+        self.assertEqual(room["queued_turns"][0], before["queued_turns"][0])
+        self.assertEqual(self.events()[-1]["participant"], "Claude", "joining does not wake anyone early")
+        self.answer("Claude", created["turn"]["id"], current_token, "invite-tail-Claude")
+        for turn in room["queued_turns"]:
+            event = self.events()[-1]
+            self.assertEqual((event["participant"], event["role"]), (turn["expert"], "expert"))
+            token = self.member_tokens["Qwen"] if turn["expert"] == "Qwen" else self.enter(event)
+            self.answer(turn["expert"], turn["id"], token, f"invite-tail-{turn['expert']}")
+        self.assertEqual((self.events()[-1]["participant"], self.events()[-1]["role"]), ("Codex", "host"))
+
+    def test_invitation_preserves_user_hold_and_does_not_schedule_while_paused(self):
+        """An invitation cannot clear pending user input or resume a paused discussion."""
+        created, _ = self.plan_round("invite-held-plan")
+        current_token = self.enter(self.events()[-1])
+        self.request(self.path + "/messages", {"author": "用户", "text": "先处理这条补充", "submission_id": "invite-held-note"})
+        held = self.request(self.path)[1]["held_since"]
+        status, joined = self.request(self.path + "/members", {"name": "DeepSeek", "access": "runner",
+            "adapter": "api", "token": self.member_tokens["DeepSeek"]}, self.owner)
+        self.assertEqual((status, joined["held_since"]), (200, held))
+        self.answer("Claude", created["turn"]["id"], current_token, "invite-held-answer")
+        room = self.request(self.path)[1]
+        self.assertEqual([turn["expert"] for turn in room["queued_turns"]], ["Gemini", "DeepSeek"])
+        self.assertEqual((room["current_turn"]["status"], self.events()[-1]["role"]), ("answered", "host"))
+        self.set_phase("paused")
+        status, joined = self.request(self.path + "/members", {"name": "Qwen", "access": "manual",
+            "token": self.member_tokens["Qwen"]}, self.owner)
+        self.assertEqual((status, joined["phase"], joined["runtime"]["status"]), (200, "paused", "paused"))
+        self.assertEqual(joined["queued_turns"], room["queued_turns"])
+
     def test_running_discussion_admits_and_releases_experts_without_pausing(self):
         """Leaving cancels only that expert's work and wakes the host; inviting and rejoining keep the run going."""
         created, _ = self.plan_round("members-plan")
@@ -559,6 +602,33 @@ class RuntimeTests(unittest.TestCase):
         access = {m["name"]: m["access"] for m in self.request(self.path)[1]["members"]}
         self.assertEqual((access["Qwen"], access["Claude"]), ("manual", "runner"))
 
+    def test_skip_manual_expert_returns_to_host_and_continues_the_queue(self):
+        """Skipping revokes the current manual answer without pausing or discarding the remaining plan."""
+        self.start()
+        self.assertEqual(self.request(self.path + "/members", {"name": "Qwen", "token": self.member_tokens["Qwen"],
+            "access": "manual", "adapter": ""}, self.owner)[0], 200)
+        host = self.enter(self.events()[0])
+        status, created = self.request(self.path + "/turns", {"actor": "Codex", "submission_id": "skip-manual-plan",
+            "turns": [{"expert": "Qwen", "question": "手动发言"}, {"expert": "Gemini", "question": "下一位"}]}, host)
+        self.assertEqual(status, 201, created)
+        turn_id = created["turn"]["id"]
+        self.take_floor("Qwen", self.member_tokens["Qwen"])
+        self.assertEqual(self.request(self.path + f"/turns/{turn_id}", {"actor": "用户", "status": "cancelled"})[0], 200)
+        room = self.request(self.path)[1]
+        self.assertEqual((room["current_turn"]["status"], room["runtime"]["status"]), ("cancelled", "running"))
+        self.assertEqual([item["expert"] for item in room["queued_turns"]], ["Gemini"])
+        self.assertEqual(self.events()[-2]["status"], "cancelled")
+        self.assertEqual((self.events()[-1]["role"], self.events()[-1]["status"]), ("host", "pending"))
+        late = self.request(self.path + "/messages", {"author": "Qwen", "source": "cli", "kind": "opinion",
+            "turn_id": turn_id, "text": "迟到回答", "summary": "迟到", "submission_id": "skipped-late-answer"}, self.member_tokens["Qwen"])
+        self.assertIn(late[0], (400, 403, 409))
+        host = self.enter(self.events()[-1])
+        self.take_floor("Codex", host)
+        self.assertEqual(self.request(self.path + "/turns/continue", {"actor": "Codex"}, host)[0], 200)
+        room = self.request(self.path)[1]
+        self.assertEqual((room["current_turn"]["expert"], room["current_turn"]["status"]), ("Gemini", "pending"))
+        self.answer("Gemini", room["current_turn"]["id"], self.enter(self.events()[-1]), "after-manual-skip")
+
     def test_manual_expert_reports_its_session_and_the_owner_adopts_it_once(self):
         """The session a manual expert posts from is kept for the local service; only a matching report allows hosting it."""
         self.start()
@@ -566,24 +636,25 @@ class RuntimeTests(unittest.TestCase):
         room = self.request(self.path + "/members", manual, self.owner)[1]
         member_id = next(m for m in room["members"] if m["name"] == "Qwen")["id"]
         member_path = f"{self.path}/members/{member_id}"
-        adopt = {"action": "adopt", "adapter": "claude", "session_id": "5f0d2c1e-1111-2222-3333-444455556666"}
+        adopt = {"action": "adopt", "adapter": "codex", "session_id": "5f0d2c1e-1111-2222-3333-444455556666"}
         self.assertEqual(self.request(member_path, adopt, self.owner)[0], 400)
         host_token = self.enter(self.events()[0])
         turn = self.request(self.path + "/turns", {"actor": "Codex", "expert": "Qwen", "question": "给出判断",
                                                    "submission_id": "adopt-turn"}, host_token)[1]["turn"]
         self.take_floor("Qwen", self.member_tokens["Qwen"])
         status, saved = self.request(self.path + "/messages", {"author": "Qwen", "source": "cli", "kind": "opinion", "turn_id": turn["id"],
-            "text": "实际回答", "summary": "摘要", "submission_id": "adopt-answer", "session_id": adopt["session_id"], "session_client": "claude"},
+            "text": "实际回答", "summary": "摘要", "submission_id": "adopt-answer", "session_id": adopt["session_id"], "session_client": "codex"},
             self.member_tokens["Qwen"])
         self.assertEqual(status, 201, saved)
-        reported = next(m for m in self.request(self.path)[1]["members"] if m["name"] == "Qwen")["reported_session"]
-        self.assertEqual(reported, adopt["session_id"])
+        reported = next(m for m in self.request(self.path)[1]["members"] if m["name"] == "Qwen")
+        self.assertEqual((reported["reported_session"], reported["reported_client"]), (adopt["session_id"], "codex"))
+        self.assertEqual(self.request(member_path, {**adopt, "adapter": "antigravity_cli"}, self.owner)[0], 400)
         self.assertEqual(self.request(member_path, {**adopt, "session_id": "other-session-0000"}, self.owner)[0], 400)
         self.assertNotEqual(self.request(member_path, adopt, self.member_tokens["Qwen"])[0], 200)
         status, adopted = self.request(member_path, adopt, self.owner)
         self.assertEqual(status, 200, adopted)
         member = next(m for m in adopted["members"] if m["name"] == "Qwen")
-        self.assertEqual((member["access"], member["adapter"], member["session_mode"], member["reported_session"]), ("runner", "claude", "borrowed", ""))
+        self.assertEqual((member["access"], member["adapter"], member["session_mode"], member["reported_session"]), ("runner", "codex", "borrowed", ""))
         self.assertEqual(self.request(member_path, adopt, self.owner)[0], 400)
 
     def test_manual_host_is_rejected_in_a_woken_discussion(self):

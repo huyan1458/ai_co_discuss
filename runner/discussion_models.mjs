@@ -17,7 +17,8 @@ function model_entry(id, label, efforts) {
 }
 
 /** Keep all query processes noninteractive and avoid user/project startup hooks. */
-function query_arguments(adapter) {
+function query_arguments({ adapter, model }, effort = false) {
+  if (effort) return ['-p', '/effort', '--output-format', 'json', ...(model ? ['--model', model] : [])];
   if (adapter === 'codex_cli') return ['app-server', '--listen', 'stdio://'];
   if (adapter === 'antigravity_cli') return ['models'];
   return ['--safe-mode', '-p', '--input-format', 'stream-json', '--output-format', 'stream-json',
@@ -29,7 +30,7 @@ function query_catalog(profile, options) {
   return new Promise((resolve_result, reject) => {
     const env = { ...process.env };
     delete env.CLAUDECODE;
-    const child = (options.spawn || spawn)(profile.executable, query_arguments(profile.adapter), {
+    const child = (options.spawn || spawn)(profile.executable, query_arguments(profile, options.effort), {
       cwd: tmpdir(), env, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
     });
     let finished = false, bytes = 0;
@@ -41,7 +42,7 @@ function query_catalog(profile, options) {
     const timer = setTimeout(() => finish(new Error('读取模型列表超时，请检查软件登录和网络后重试')), options.timeout_ms ?? QUERY_TIMEOUT_MS);
     const lines = createInterface({ input: child.stdout });
     const send = value => child.stdin.write(`${JSON.stringify(value)}\n`);
-    const receive = catalog_reader(profile.adapter, send, finish);
+    const receive = catalog_reader(profile.adapter, send, finish, options.effort);
     child.once('error', () => finish(new Error('无法启动模型查询，请检查 CLI 路径')));
     child.stdin.on('error', () => finish(new Error('模型查询连接已关闭')));
     child.stderr.on('data', () => {}); // CLI diagnostics can contain private account or configuration data.
@@ -93,7 +94,13 @@ function json_line(line) {
 }
 
 /** Claude initialization exposes its picker; agy emits tab-separated ids and labels. */
-function catalog_reader(adapter, send, finish) {
+function catalog_reader(adapter, send, finish, effort = false) {
+  if (effort) return { start: () => {}, line: line => {
+    const reply = json_line(line), data = reply?.command?.data;
+    if (reply?.status === 'SUCCESS' && reply.command?.name === 'effort' && Array.isArray(data?.available)) {
+      finish(null, data.adjustable ? data.available.filter(level => typeof level === 'string') : []);
+    }
+  } };
   if (adapter === 'codex_cli') return codex_reader(send, finish);
   if (adapter === 'claude') return {
     start: () => send({ type: 'control_request', request_id: 'catalog', request: { subtype: 'initialize' } }),
@@ -124,4 +131,12 @@ export async function software_models(profile, options = {}) {
     if (!result.models.length) result.error = '软件未返回可选模型，请检查版本、登录与网络；仍可使用软件默认模型';
   } catch (error) { result.error = error.message; }
   return result;
+}
+
+/** Read native effort capabilities for the selected agy model, without an agent turn or saved setting changes. */
+export async function software_effort(profile, options = {}) {
+  if (profile.adapter !== 'antigravity_cli' || !isAbsolute(profile.executable || '')
+    || (profile.model && !MODEL_PATTERN.test(profile.model))) return { error: '无法读取所选模型的思考档位' };
+  try { return { levels: await query_catalog(profile, { ...options, effort: true }) }; }
+  catch { return { error: '无法读取原生思考档位；保留 CLI 默认值，或检查软件版本后重试' }; }
 }

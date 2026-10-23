@@ -104,7 +104,7 @@ class CliTests(unittest.TestCase):
 
     def invoke(self, arguments, stdin=None, environment=None):
         """Run the actual entrypoint with UTF-8 streams and no inherited target."""
-        env = {**os.environ, "DISCUSS_URL": "", **(environment or {})}
+        env = {**os.environ, "DISCUSS_URL": "", "DISCUSS_ACCESS_FILE": "", "DISCUSS_ACCESS": "", **(environment or {})}
         return subprocess.run([sys.executable, str(ROOT / "runner" / "discuss.py"), *map(str, arguments)],
                               input=stdin, capture_output=True, text=True, encoding="utf-8",
                               env=env, timeout=10)
@@ -193,11 +193,13 @@ class CliTests(unittest.TestCase):
     def test_message_post_reports_the_hosting_claude_session(self):
         """A Claude Code session's own ID rides along on posts so the local service can take a manual member over."""
         args = ["--site", self.base, "message", "post", self.room, "--as", "用户", "--body", "x", "--submission-id", str(uuid.uuid4()), "--dry-run"]
-        plain = self.invoke(args, environment={"CLAUDE_CODE_SESSION_ID": ""})
+        plain = self.invoke(args, environment={"CLAUDE_CODE_SESSION_ID": "", "CODEX_THREAD_ID": ""})
         self.assertNotIn("session_id", json.loads(plain.stdout)["data"]["body"])
-        reported = self.invoke(args, environment={"CLAUDE_CODE_SESSION_ID": "5f0d2c1e-1111-2222-3333-444455556666"})
+        reported = self.invoke(args, environment={"CLAUDE_CODE_SESSION_ID": "5f0d2c1e-1111-2222-3333-444455556666", "CODEX_THREAD_ID": ""})
         body = json.loads(reported.stdout)["data"]["body"]
         self.assertEqual((body["session_id"], body["session_client"]), ("5f0d2c1e-1111-2222-3333-444455556666", "claude"))
+        codex = self.invoke(args, environment={"CLAUDE_CODE_SESSION_ID": "", "CODEX_THREAD_ID": "01a1694f-764d-7141-b2b8-47c433be027c"})
+        self.assertEqual(json.loads(codex.stdout)["data"]["body"]["session_client"], "codex")
 
     def test_access_file_is_room_scoped_and_not_printed_in_preview(self):
         """A private capability is usable only for its configured site and room."""
@@ -214,6 +216,27 @@ class CliTests(unittest.TestCase):
         self.assertIn("凭据文件不属于", str(error))
         path.write_text(json.dumps({"site": "http://localhost:1", "room": self.room, "token": secret}), encoding="utf-8")
         self.assertIn("凭据文件不属于", str(self.rejected(["run", "view", self.room, "--access-file", path])))
+
+    def test_process_bound_access_file_preserves_explicit_override_and_room_scope(self):
+        """A spawned CLI reads its current credential file without exposing or copying the token."""
+        path = self.room_access[self.room]["用户"]
+        text = Path(path).read_text(encoding="utf-8")
+        env = {"DISCUSS_ACCESS_FILE": path, "DISCUSS_ACCESS": "{invalid"}
+        posted = self.invoke(["message", "post", self.room, "--as", "用户", "--body", "环境绑定",
+                              "--submission-id", str(uuid.uuid4())], environment=env)
+        self.assertEqual(posted.returncode, 0, posted.stderr)
+        self.assertEqual(json.loads(posted.stdout)["data"]["message"]["text"], "环境绑定")
+        preview = self.invoke(["run", "pause", self.room, "--revision", 0, "--dry-run"], environment=env)
+        self.assertNotIn(json.loads(text)["token"], preview.stdout + preview.stderr)
+        wrong_room = self.invoke(["run", "view", "other-room"], environment=env)
+        self.assertNotEqual(wrong_room.returncode, 0)
+        self.assertIn("凭据文件不属于", wrong_room.stderr)
+        override = self.invoke(["room", "view", self.room, "--access-file", path],
+                               environment={"DISCUSS_ACCESS_FILE": "missing-file"})
+        self.assertEqual(override.returncode, 0, override.stderr)
+        missing = self.invoke(["room", "view", self.room],
+                              environment={"DISCUSS_ACCESS_FILE": "missing-file", "DISCUSS_ACCESS": text})
+        self.assertNotEqual(missing.returncode, 0, "a broken binding must not fall back to a different credential")
 
     def test_access_text_in_environment_replaces_the_file_and_stays_room_scoped(self):
         """DISCUSS_ACCESS carries the same JSON as a file: it supplies the site, is hidden in previews and room-scoped."""

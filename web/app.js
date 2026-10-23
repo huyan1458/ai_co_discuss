@@ -914,13 +914,6 @@ async function change_member({ member_id, name, action, role }) {
   } catch (error) { if (state.room?.id === room_id) state.free_error = error.message; }
 }
 
-/** Composer stop in a free room: interrupt every member that is working or queued. */
-async function interrupt_free() {
-  const busy = (state.room.free?.members || []).filter(member => member.pending
-    || ["dispatched", "started"].includes(member.execution?.status));
-  for (const member of busy) await change_member({ member_id: member.id, action: "interrupt" });
-}
-
 /** Invite an independent member, retaining its credential before either delivery path runs. */
 async function invite_member({ name, access, project_access = "read", session_id = "" }) {
   const room_id = state.room.id;
@@ -1609,7 +1602,7 @@ function participant_model(name, room, saved) {
   if (!profile) return "";
   if (["codex", "antigravity"].includes(profile.adapter)) return "模型与强度由 App 设置";
   const model = profile.model || "默认模型";
-  const effort = profile.adapter === "antigravity_cli" ? "强度随模型" : profile.effort || "默认强度";
+  const effort = profile.effort || (profile.adapter === "antigravity_cli" ? "模型默认强度" : "默认强度");
   return `${model} · ${effort}`;
 }
 
@@ -1630,6 +1623,7 @@ const MODEL_SOURCE_LABELS = { "codex-app-server": "来自 Codex CLI 模型列表
 /** Keep discoveries separate for each software executable, shared by its participant instances. */
 function model_catalog_key(profile) {
   if (profile.adapter === "api") return JSON.stringify([profile.adapter, profile.base_url, profile.api_protocol, profile.api_key_ref]);
+  if (profile.adapter === "antigravity_cli") return JSON.stringify([profile.adapter, profile.executable || "", profile.model || ""]);
   return JSON.stringify([profile.adapter, profile.executable || ""]);
 }
 
@@ -1667,8 +1661,8 @@ function launch_model_state(name, launch = state.launch) {
   const items = [{ label: "软件默认模型", value: "__default__" }, ...models.map(model => ({ label: model.label || model.id, value: model.id }))];
   if (profile.model && !selected) items.push({ label: `${profile.model}（已保存，列表未确认）`, value: profile.model, disabled: true });
   return { supported: MODEL_CLIENTS.includes(profile.adapter), items, loading: Boolean(catalog?.loading),
-    efforts: selected?.efforts, source: MODEL_SOURCE_LABELS[catalog?.source] || catalog?.source || "",
-    effort_note: profile.adapter === "antigravity_cli" ? "思考强度随模型选择。" : !selected
+    efforts: profile.adapter === "antigravity_cli" ? catalog?.efforts : selected?.efforts, source: MODEL_SOURCE_LABELS[catalog?.source] || catalog?.source || "",
+    effort_note: profile.adapter === "antigravity_cli" ? catalog?.effort_error || (catalog?.loading ? "正在读取原生思考档位…" : "默认强度由 CLI 决定。") : !selected
       ? "选择模型后显示可用思考强度；默认值由软件决定。" : "所选模型不提供单独思考强度。",
     error: catalog?.error || (!launch.available ? "连接本机服务后读取模型列表" : !catalog ? "尚未读取此软件的模型列表" : "") };
 }
@@ -1680,9 +1674,11 @@ async function load_launch_models(name, force = false) {
   if (profile.adapter === "api" && (!force || !profile.api_key_ref)) return;
   const catalogs = state.launch.model_catalogs ||= {}, key = model_catalog_key(profile);
   if (catalogs[key]?.loading || (!force && catalogs[key])) return;
-  const current = { models: [], loading: true, error: "", source: "" };
+  const fallback = profile.adapter === "antigravity_cli" ? catalogs[model_catalog_key({ ...profile, model: "" })] : null;
+  const current = { models: fallback?.models || [], loading: true, error: "", source: "" };
   const input = profile.adapter === "api" ? { adapter: "api", base_url: profile.base_url, api_protocol: profile.api_protocol, model: profile.model || "discovery", api_key_ref: profile.api_key_ref }
-    : { adapter: profile.adapter, ...(profile.executable ? { executable: profile.executable } : {}), ...(force ? { refresh: true } : {}) };
+    : { adapter: profile.adapter, ...(profile.executable ? { executable: profile.executable } : {}),
+      ...(profile.adapter === "antigravity_cli" && profile.model ? { model: profile.model } : {}), ...(force ? { refresh: true } : {}) };
   catalogs[key] = current;
   publish_view();
   try {
@@ -1690,6 +1686,8 @@ async function load_launch_models(name, force = false) {
     if (result.adapter !== input.adapter) throw new Error("模型列表与所选软件不一致");
     current.models = result.models || [];
     current.source = result.source || "";
+    current.efforts = result.efforts;
+    current.effort_error = result.effort_error || "";
     current.error = result.error || (!current.models.length ? "软件未返回可用模型，可使用默认模型" : "");
   } catch (error) { current.error = error.message; }
   finally {
@@ -1704,6 +1702,7 @@ function write_launch_model(name, value) {
   write_launch_field(name, "model", model);
   const levels = launch_model_state(name).efforts;
   if (!levels?.includes(state.launch.profiles[name].effort)) write_launch_field(name, "effort", "");
+  if (state.launch.profiles[name].adapter === "antigravity_cli") load_launch_models(name);
 }
 
 /** Reuse the key last saved on this machine for the same API root instead of asking again. */
@@ -2206,7 +2205,7 @@ ${instruction}
 /** How a manual member learns it is its turn: free rooms are pulled by the member, discussions only on the host's assignment. */
 function manual_trigger_instruction(room) {
   return room.mode === "free" ? "首次复制后，可由人工或软件原生定时触发；自行提交，不必每轮复制回答。"
-    : "这是全自动讨论：只在主持人给你安排发言时才参与，先核对 turn current 是否轮到你，再按参与技能认领发言权并提交；没有安排就结束本次检查。首次提交后，若你运行在 Claude Code 中，本机服务会自动接管你的会话并在后续轮次唤醒你；未被接管时才需要你或软件原生定时触发。";
+    : "这是全自动讨论：只在主持人给你安排发言时才参与，先核对 turn current 是否轮到你，再按参与技能认领发言权并提交；没有安排就结束本次检查。首次提交后，若你运行在 Claude Code 或 Codex 中，本机服务会自动接管你的会话并在后续轮次唤醒你；未被接管时才需要你或软件原生定时触发。";
 }
 
 /** Download a private per-room setup file for the independent local runner. */
@@ -3060,7 +3059,7 @@ async function execute_view_action(name, value) {
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
     choose_runtime, export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, force_close, conclude_discussion,
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
-    load_room_configuration, save_room_configuration, interrupt_member, change_member, invite_member, interrupt_free, set_proxy, copy_online_notice,
+    load_room_configuration, save_room_configuration, interrupt_member, change_member, invite_member, set_proxy, copy_online_notice,
     prepare_brainstorm, return_conclusion, convert_suggestion, adopt_recommendation,
     busy: () => { throw new Error("上一个操作仍在处理中，请稍候；长时间无响应请刷新页面"); },
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };

@@ -147,7 +147,7 @@ def add_common(parser):
                         help="默认 json；成功 stdout，错误 stderr", **options)
     parser.add_argument("--timeout", type=float, help="请求超时秒数，默认 20", **options)
     parser.add_argument("--dry-run", action="store_true", help="只预览写入请求，不联网", **options)
-    parser.add_argument("--access-file", help="本房间的受限凭据 JSON 文件（- 读标准输入）；未指定时读环境变量 DISCUSS_ACCESS 中的同样 JSON 文本；不输出其 token", **options)
+    parser.add_argument("--access-file", help="本房间的受限凭据 JSON 文件（- 读标准输入）；未指定时依次读取 DISCUSS_ACCESS_FILE 文件、DISCUSS_ACCESS JSON 文本；不输出其 token", **options)
 
 
 def add_text(parser, name, required=False):
@@ -363,9 +363,10 @@ def read_object(path):
 
 
 def load_access(args):
-    """Read the room credential from --access-file, else from the DISCUSS_ACCESS JSON text; empty when neither is given."""
-    if getattr(args, "access_file", None):
-        return read_object(args.access_file)
+    """Read an explicit file, a process-bound file, or inline credentials, in that order."""
+    path = getattr(args, "access_file", None) or os.getenv("DISCUSS_ACCESS_FILE", "").strip()
+    if path:
+        return read_object(path)
     text = os.getenv("DISCUSS_ACCESS", "").strip()
     if not text:
         return {}
@@ -482,11 +483,13 @@ def plan_message(args):
         payload["to"] = list(dict.fromkeys(args.to))
     if args.reply_to:
         payload["reply_to"] = args.reply_to
-    # A hosting Claude Code session exposes its own ID; the room records it so the local service can take the member over.
-    session_id = os.getenv("CLAUDE_CODE_SESSION_ID", "").strip()
-    if session_id:
-        payload["session_id"] = session_id
-        payload["session_client"] = "claude"
+    # A hosting Claude Code or Codex session exposes its own ID; the room records it so the local service can take the member over.
+    for variable, client in (("CLAUDE_CODE_SESSION_ID", "claude"), ("CODEX_THREAD_ID", "codex")):
+        session_id = os.getenv(variable, "").strip()
+        if session_id:
+            payload["session_id"] = session_id
+            payload["session_client"] = client
+            break
     return RequestPlan(base, "POST", payload)
 
 
@@ -645,7 +648,7 @@ def resolve_site(args):
     parsed = urlsplit(site)
     if (parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username
             or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/")):
-        raise CliError("请用 --site、DISCUSS_URL 或凭据（--access-file / DISCUSS_ACCESS）指定 http(s)://主机[:端口]，不带路径、凭据或查询")
+        raise CliError("请用 --site、DISCUSS_URL 或凭据（--access-file / DISCUSS_ACCESS_FILE / DISCUSS_ACCESS）指定 http(s)://主机[:端口]，不带路径、凭据或查询")
     try:
         parsed.port
     except ValueError as error:
@@ -770,7 +773,7 @@ def command_schema(args, registry):
     name = " ".join(args.command)
     if not name:
         return {"version": VERSION, "commands": {key: item.description for key, item in registry.items()},
-                "exit_codes": EXIT_CODES, "site": "--site > DISCUSS_URL > 凭据（--access-file 或 DISCUSS_ACCESS）中的 site；无内置默认站点",
+                "exit_codes": EXIT_CODES, "site": "--site > DISCUSS_URL > 凭据（--access-file / DISCUSS_ACCESS_FILE / DISCUSS_ACCESS）中的 site；无内置默认站点",
                 "output": "默认 JSON；成功 stdout，错误 stderr；无交互提示、无自动重试"}
     if name not in registry:
         raise CliError(f"未知命令 {name}；运行 discuss schema 查看可用命令")

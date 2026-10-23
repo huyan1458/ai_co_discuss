@@ -558,6 +558,35 @@ for (const on_limit of ['pause', 'summarize']) {
   });
 }
 
+test('Worker invitations append automatic and manual experts while preserving the live plan and user hold', async t => {
+  const f = await worker_fixture(t);
+  const id = (await f.request('', { title: '追加本轮', host: 'Codex', phase: 'initial', experts: { Codex: 'cli', Claude: 'cli', Gemini: 'cli' } })).body.id;
+  await f.request(`/${id}/runtime`, { action: 'start', revision: 0, deadline: 0 });
+  const plan = await f.request(`/${id}/turns`, { actor: '用户', submission_id: 'invite-tail-plan',
+    turns: [{ expert: 'Claude', question: '先答' }, { expert: 'Gemini', question: '再答' }] });
+  assert.equal(plan.status, 201, JSON.stringify(plan.body));
+  await f.request(`/${id}/messages`, { author: '用户', text: '补充材料', submission_id: 'invite-hold' });
+  const before = (await f.request(`/${id}`)).body;
+  for (const [name, access] of [['DeepSeek', 'runner'], ['Qwen', 'manual']]) {
+    const payload = { name, access, adapter: access === 'runner' ? 'api' : '', token: crypto.randomUUID() };
+    const joined = await f.request(`/${id}/members`, payload);
+    assert.equal(joined.status, 200, JSON.stringify(joined.body));
+    assert.deepEqual((await f.request(`/${id}/members`, payload)).body.queued_turns, joined.body.queued_turns);
+  }
+  const after = (await f.request(`/${id}`)).body;
+  assert.deepEqual(after.current_turn, before.current_turn);
+  assert.deepEqual(after.queued_turns.map(turn => turn.expert), ['Gemini', 'DeepSeek', 'Qwen']);
+  assert.deepEqual(after.queued_turns[0], before.queued_turns[0]);
+  assert.equal(after.held_since, before.held_since);
+  assert.equal(after.runtime.generation, before.runtime.generation);
+  assert.match(after.queued_turns[1].question, /独立/);
+  await f.request(`/${id}/topic`, { actor: '用户', phase: 'paused' });
+  const paused = await f.request(`/${id}/members`, { name: 'Grok', access: 'manual', token: crypto.randomUUID() });
+  assert.equal(paused.status, 200, JSON.stringify(paused.body));
+  assert.deepEqual(paused.body.queued_turns, after.queued_turns);
+  assert.equal(paused.body.runtime.status, 'paused');
+});
+
 test('Worker running discussions admit and release experts without pausing, like Python', async t => {
   const f = await worker_fixture(t);
   const id = (await f.request('', { title: '成员进出', host: 'Codex', experts: { Codex: 'cli', Claude: 'cli' } })).body.id;

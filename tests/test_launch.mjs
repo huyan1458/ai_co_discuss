@@ -15,7 +15,7 @@ import { api, DiscussionRunner, DiscussionStore, load_config } from '../runner/d
 import { DiscussionService, read_registry, register_room } from '../runner/discussion_service.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
 import { save_site_connection } from '../runner/discussion_local.mjs';
-import { software_models } from '../runner/discussion_models.mjs';
+import { software_effort, software_models } from '../runner/discussion_models.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -96,15 +96,47 @@ test('slow model catalogs are reused until the executable changes or the user re
     ? { adapter: profile.adapter, models: [], source: 'antigravity-cli', error: '超时' }
     : { adapter: profile.adapter, models: [{ id: `model-${calls.length}`, label: 'Model' }], source: 'antigravity-cli' }; };
   const profile = { adapter: 'antigravity_cli', executable };
-  assert.equal((await cached_software_models(home, profile, { query })).models[0].id, 'model-1');
-  assert.equal((await cached_software_models(home, profile, { query })).models[0].id, 'model-1', 'a new page reads the saved list');
+  const effort_calls = [], query_effort = async profile => { effort_calls.push(profile.model || ''); return { levels: ['low', 'medium', 'high'] }; };
+  const options = { query, query_effort };
+  assert.equal((await cached_software_models(home, profile, options)).models[0].id, 'model-1');
+  assert.equal((await cached_software_models(home, profile, options)).models[0].id, 'model-1', 'a new page reads the saved list');
   assert.equal(calls.length, 1);
-  assert.equal((await cached_software_models(home, profile, { query, refresh: true })).models[0].id, 'model-2');
-  assert.match((await cached_software_models(home, profile, { query, refresh: true })).error, /超时/);
-  assert.equal((await cached_software_models(home, profile, { query })).models[0].id, 'model-2', 'a failed retry keeps the last good list');
+  assert.equal(effort_calls.length, 1);
+  await cached_software_models(home, { ...profile, model: 'model-1' }, options);
+  assert.deepEqual(effort_calls, ['', 'model-1']); assert.equal(calls.length, 1, 'changing models only queries native effort');
+  assert.equal((await cached_software_models(home, profile, { ...options, refresh: true })).models[0].id, 'model-2');
+  assert.match((await cached_software_models(home, profile, { ...options, refresh: true })).error, /超时/);
+  assert.equal((await cached_software_models(home, profile, options)).models[0].id, 'model-2', 'a failed retry keeps the last good list');
   writeFileSync(executable, 'v2 upgraded');
-  assert.equal((await cached_software_models(home, profile, { query })).models[0].id, 'model-4');
-  assert.equal(Object.keys(JSON.parse(readFileSync(join(home, 'model-catalogs.json'), 'utf8'))).length, 1, 'old executable entries are replaced');
+  assert.equal((await cached_software_models(home, profile, options)).models[0].id, 'model-4');
+  assert.equal(Object.keys(JSON.parse(readFileSync(join(home, 'model-catalogs.json'), 'utf8'))).length, 2, 'old catalog and effort entries are replaced');
+});
+
+test('agy effort discovery uses a read-only native command and never guesses on failure', async () => {
+  const f = catalog_process();
+  const pending = software_effort({ adapter: 'antigravity_cli', executable: process.execPath, model: 'native-model' }, f);
+  f.child.stdout.write(JSON.stringify({ status: 'SUCCESS', command: { name: 'effort', data: {
+    adjustable: true, current: 'medium', available: ['low', 'medium', 'high'] } } }) + '\n');
+  assert.deepEqual(await pending, { levels: ['low', 'medium', 'high'] });
+  assert.deepEqual(f.invocations[0][1], ['-p', '/effort', '--output-format', 'json', '--model', 'native-model']);
+  assert.equal(f.child.killed, true); assert.deepEqual(f.requests, []);
+  const older = catalog_process();
+  const unsupported = software_effort({ adapter: 'antigravity_cli', executable: process.execPath }, older);
+  older.child.emit('close', 1);
+  assert.equal((await unsupported).levels, undefined);
+  const fixed = catalog_process();
+  const immutable = software_effort({ adapter: 'antigravity_cli', executable: process.execPath }, fixed);
+  fixed.child.stdout.write(JSON.stringify({ status: 'SUCCESS', command: { name: 'effort', data: {
+    adjustable: false, available: [] } } }) + '\n');
+  assert.deepEqual(await immutable, { levels: [] });
+});
+
+test('agy explicit effort can be saved without changing its native default model', t => {
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-effort-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const profile = { adapter: 'antigravity_cli', executable: process.execPath, effort: 'low' };
+  assert.deepEqual(save_launch_settings(home, { participants: { Gemini: profile } }).participants.Gemini, profile);
+  assert.throws(() => save_launch_settings(home, { participants: { Gemini: { ...profile, effort: 'turbo' } } }), /effort 只能是/);
 });
 
 test('agy discovery parses native model output and failure never invents choices', async () => {
@@ -1003,6 +1035,28 @@ test('a manual Claude expert\'s reported session is registered as a hosted parti
     assert.deepEqual([profile.adapter, profile.session_id], ['claude', claude_id]);
   } finally {
     if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previous;
+  }
+});
+
+test('a manual Codex expert is hosted through the app for a desktop chat and the CLI otherwise', async t => {
+  const f = await fixture(t);
+  const codex_home = join(f.directory, 'codex-home-adopt'), [desktop_id, cli_id] = [randomUUID(), randomUUID()];
+  const launched = await launch_discussion(f.home, { ...f.input, token: randomUUID() + randomUUID() }, f.options);
+  mkdirSync(join(codex_home, 'sessions', '2026', '10', '23'), { recursive: true });
+  for (const [id, originator] of [[desktop_id, 'Codex Desktop'], [cli_id, 'codex_cli_rs']]) {
+    writeFileSync(join(codex_home, 'sessions', '2026', '10', '23', `rollout-2026-10-23T08-00-00-${id}.jsonl`), `${JSON.stringify({ type: 'session_meta', payload: { id, originator } })}
+`);
+  }
+  save_launch_settings(f.home, { participants: { Codex: { adapter: 'codex_cli', executable: process.execPath } } });
+  const previous = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = codex_home;
+  try {
+    assert.equal(adopt_member_profile(f.home, launched.config_path, 'Codex-2', desktop_id, 'codex'), 'codex');
+    assert.equal(adopt_member_profile(f.home, launched.config_path, 'Codex-3', cli_id, 'codex'), 'codex_cli');
+    const { participants } = load_config(launched.config_path);
+    assert.deepEqual([participants['Codex-2'].session_id, participants['Codex-3'].session_id], [desktop_id, cli_id]);
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previous;
   }
 });
 

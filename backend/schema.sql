@@ -394,14 +394,20 @@ BEGIN
     UPDATE turn_relay SET held_since=(SELECT COALESCE(MAX(id),0)+1 FROM messages WHERE room_id=NEW.room_id)
         WHERE room_id=NEW.room_id AND held_since=0;
 END;
--- Concluding or changing participants voids plans that have not started.
+-- Concluding, replacing the host or removing/changing an expert voids plans that have not started.
+-- Adding experts preserves the current plan; the invitation transaction appends their opening turns.
 CREATE TRIGGER IF NOT EXISTS relay_plan_concluded AFTER UPDATE OF phase ON topic_settings
 WHEN NEW.phase='concluded'
 BEGIN
     UPDATE discussion_turns SET status='skipped' WHERE room_id=NEW.room_id AND status='queued';
 END;
-CREATE TRIGGER IF NOT EXISTS relay_plan_participants AFTER UPDATE OF host,experts ON topic_settings
-WHEN NEW.host<>OLD.host OR NEW.experts<>OLD.experts
+DROP TRIGGER IF EXISTS relay_plan_participants;
+CREATE TRIGGER relay_plan_participants AFTER UPDATE OF host,experts ON topic_settings
+WHEN NEW.host<>OLD.host OR EXISTS (
+    SELECT 1 FROM json_each(OLD.experts) AS previous
+    WHERE NOT EXISTS (SELECT 1 FROM json_each(NEW.experts) AS current
+                      WHERE current.key=previous.key AND current.value=previous.value)
+)
 BEGIN
     UPDATE discussion_turns SET status='skipped' WHERE room_id=NEW.room_id AND status='queued';
 END;

@@ -263,7 +263,7 @@ async function claude_delivery(config, binding, task, spawn_process = spawn) {
   try {
     child = spawn_process(config.executable, [...args, '--', task.prompt], {
       cwd: launch_directory(config, task), windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'],
-      env: standalone_claude_env(),
+      env: { ...standalone_claude_env(), DISCUSS_ACCESS_FILE: task.access_path },
     });
   } catch (error) { throw not_sent(error); }
   if (typeof child.kill === 'function') {
@@ -371,6 +371,7 @@ function cli_invocation(config, binding, task, user_home) {
   args.push('--mode', 'accept-edits', '--project', project.project_id);
   if (binding.session_id) args.push('--conversation', binding.session_id);
   if (config.model) args.push('--model', config.model);
+  if (config.effort) args.push('--effort', config.effort);
   args.push('-p', task.prompt);
   return { args, project };
 }
@@ -492,6 +493,7 @@ async function cli_delivery(config, binding, task, spawn_process, user_home) {
   try {
     child = spawn_process(config.executable, invocation.args, {
       cwd: launch_directory(config, task), windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, DISCUSS_ACCESS_FILE: task.access_path },
     });
   } catch (error) { throw not_sent(error); }
   const state = monitor_cli(child, config, binding, task);
