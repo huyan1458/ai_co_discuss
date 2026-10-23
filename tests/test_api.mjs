@@ -401,7 +401,7 @@ test('pause aborts an in-flight API request and prevents a late tool response fr
   assert.equal(mock.calls.length, 1);
 });
 
-test('provider errors pause without leaking an upstream key or repeating the model request', async t => {
+test('provider errors pause without leaking an upstream key after the bounded retries', async t => {
   const f = await site_fixture(t);
   const mock = await model_fixture(t, () => { throw new Error(`upstream echoed ${SECRET}`); });
   const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: { Grok: profiles(f.home, mock.base_url).Grok },
@@ -413,7 +413,7 @@ test('provider errors pause without leaking an upstream key or repeating the mod
   const events = await api(config, '/events');
   assert.match(JSON.stringify(events), /HTTP 500/);
   assert.ok(!JSON.stringify(events).includes(SECRET));
-  assert.equal(mock.calls.length, 1);
+  assert.equal(mock.calls.length, 3, 'a 5xx is retried twice, then the run pauses without a third retry');
 });
 
 test('API participants load the shared skills and map CLI commands onto their room tools', () => {

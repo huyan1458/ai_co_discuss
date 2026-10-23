@@ -11,6 +11,7 @@ const MAX_MODEL_TURNS = 24;
 // API participants follow the same skills that local software loads, read fresh for every execution.
 const SKILLS = fileURLToPath(new URL('../.agents/skills/', import.meta.url));
 const SITE_TIMEOUT_MS = 10_000;
+const REPLY_EXCERPT_CHARS = 300;
 const MODEL_RETRIES = 2;
 const MODEL_RETRY_DELAY_MS = 3000;
 const NO_TOOL_REMINDER = '普通文本不会被保存。请调用写入工具提交真实结果；确实无法继续才不调用工具直接结束。';
@@ -154,6 +155,13 @@ export function system_prompt(context) {
   return [environment, skill_text('discuss-participant'), ...(host && context.mode !== 'free' ? [skill_text('discuss-host')] : [])].join('\n\n---\n\n');
 }
 
+/** Plain text of the model's latest reply, so a stop without a write can show its stated reason. */
+function last_reply_text(history) {
+  const item = history.at(-1) || {};
+  const parts = item.parts || (Array.isArray(item.content) ? item.content : [{ text: item.content }]);
+  return parts.map(part => (typeof part === 'string' ? part : part.text || '')).join('').trim().slice(0, REPLY_EXCERPT_CHARS);
+}
+
 /** Retry a model request that failed before any room write; history is only extended on success. */
 async function generate_with_retry(profile, key, state, signal) {
   for (let attempt = 0; ; attempt++) {
@@ -174,15 +182,21 @@ async function run_participant(profile, key, context) {
     ...(context.scheduler_suggestions?.length ? { scheduler_suggestions: context.scheduler_suggestions } : {}) } });
   const state = { system: system_prompt(context), history: api_history(profile, prompt), tools: definitions };
   let reminded = false;
+  let used_tools = false;
   for (let index = 0; index < MAX_MODEL_TURNS; index++) {
     const calls = await generate_with_retry(profile, key, state, context.signal);
     if (!calls.length) {
       // Some models answer in plain text mid-run; one reminder avoids pausing on a recoverable slip.
-      if (reminded) throw new Error('模型未调用房间工具保存结果，请核对模型是否支持工具调用');
+      if (reminded) {
+        const reply = last_reply_text(state.history);
+        throw new Error(used_tools ? `模型未提交结果就结束了本次执行，可能在等你决定或补充${reply ? `。模型说明：${reply}` : ''}`
+          : `模型未调用房间工具保存结果，请核对模型是否支持工具调用${reply ? `（其回复：${reply}）` : ''}`);
+      }
       reminded = true;
       state.history.push(profile.api_protocol === 'gemini' ? { role: 'user', parts: [{ text: NO_TOOL_REMINDER }] } : { role: 'user', content: NO_TOOL_REMINDER });
       continue;
     }
+    used_tools = true;
     const results = [];
     for (const call of calls) {
       context.signal.throwIfAborted();

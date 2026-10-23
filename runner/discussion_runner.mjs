@@ -9,7 +9,7 @@ import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { atomic_json, deliver_task, remove_agy_projects, setup_sidecar, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
 import { read_api_key } from './discussion_api.mjs';
-import { decide_interjection, decide_round, validate_scheduler } from './scheduler.mjs';
+import { decide_interjection, decide_next_speaker, decide_round, validate_scheduler } from './scheduler.mjs';
 
 const POLL_MS = 2000;
 /** Headless CLIs know their session at start, so the runner enters the execution instead of spending model turns on it. */
@@ -39,6 +39,11 @@ const MAX_QUOTE_CHARS = 300;
 /** The shared prompt for rounds bridged without named follow-ups: experts answer and question each other. */
 export function peer_round_question(round) {
   return `第 ${round} 轮：先读取上一轮其他专家的最新回答，回应你不同意或需要补充的观点；被其他专家 @ 提问时优先回答，也可以 @ 某位专家提出问题。`;
+}
+
+/** The prompt for an expert speaking for the first time, such as a newly invited one. */
+function opening_question(phase) {
+  return phase === 'initial' ? '欢迎加入：请先读取议题，独立给出你的开场观点。' : '欢迎加入：请先读取议题和已有回答，给出你的观点。';
 }
 
 /** Ask one expert to answer a user's interjection before the rest of the plan continues. */
@@ -356,6 +361,8 @@ export class DiscussionRunner {
     if (room.limits?.reached) return skip('round', '已到讨论上限');
     const page = await api(this.config, `/messages?after=${Math.max(0, room.latest_id - CONTEXT_MESSAGES)}`);
     const experts = Object.keys(room.experts || {});
+    // Only experts the runner can wake are offered to the decision model; manual ones wait for the host.
+    const automatic = experts.filter(name => this.config.participants[name]);
     const context = { title: room.title, goal: room.goal, user_request: room.user_request, context: page.messages, host: room.host };
     if (room.held_since) {
       const pending = page.messages.filter(item => item.id >= room.held_since && item.author === '用户');
@@ -363,7 +370,7 @@ export class DiscussionRunner {
       if (pending.length !== 1) return skip('interjection', pending.length ? '同时有多条留言' : '话题设置有修改');
       const message = pending[0];
       const decision = await decide_interjection(this.config.api_home, this.config.scheduler,
-        { ...context, message, experts: experts.filter(name => name !== room.host) }, this.fetch);
+        { ...context, message, experts: automatic.filter(name => name !== room.host) }, this.fetch);
       const plan = { ...decision, kind: 'interjection', message_id: message.id, after_message_id: anchor };
       if (decision.action === 'ask') {
         return { ...plan, turns: [{ expert: decision.expert, question: interjection_question(message) },
@@ -377,17 +384,33 @@ export class DiscussionRunner {
     const round_open = !room.rounds?.at(-1)?.completed;
     if (round_open) {
       const restored = await this.restore_voided_plan(room, experts, anchor);
-      return restored || skip('round', '本轮还有专家未发言但没有后续安排');
+      if (restored) return restored;
+      const spoken = new Set(room.rounds?.at(-1)?.speakers || []);
+      // Experts without local software cannot be woken by the runner, so only automatic ones are candidates.
+      const waiting = experts.filter(name => name !== room.host && !spoken.has(name) && this.config.participants[name]);
+      if (!waiting.length) return skip('round', '本轮未发言的专家都是手动接入，无法自动安排');
+      // An expert the user just skipped is not picked again unless nobody else is left.
+      const skipped = room.current_turn?.status === 'cancelled' ? room.current_turn.expert : null;
+      const candidates = waiting.filter(name => name !== skipped);
+      return this.next_speaker_plan(room, context, candidates.length ? candidates : waiting, anchor);
     }
     if (room.named_followup) return skip('round', '点名追问已开启，由主持人安排下一轮');
     const decision = await decide_round(this.config.api_home, this.config.scheduler,
-      { ...context, experts, last_speaker: room.current_turn?.expert }, this.fetch);
+      { ...context, experts: automatic, last_speaker: room.current_turn?.expert }, this.fetch);
     const plan = { ...decision, kind: 'round', after_message_id: anchor };
     if (decision.action !== 'continue') return plan;
-    const round = room.completed_rounds + 1;
-    const order = [decision.first, ...experts.filter(name => name !== decision.first)].slice(0, MAX_PLAN_TURNS);
+    // Only the first speaker is arranged; each answer ends with an empty queue, so the next one is judged then.
     return { ...plan, phase: room.phase === 'initial' ? 'discussing' : undefined,
-      turns: order.map(expert => ({ expert, question: peer_round_question(round) })) };
+      turns: [{ expert: decision.first, question: peer_round_question(room.completed_rounds + 1) }] };
+  }
+  /** Ask the decision model for the next speaker among candidates; an expert who never spoke gets the opening prompt. */
+  async next_speaker_plan(room, context, candidates, anchor) {
+    const next = await decide_next_speaker(this.config.api_home, this.config.scheduler, { ...context, candidates }, this.fetch);
+    const plan = { ...next, kind: 'round', after_message_id: anchor };
+    if (next.action !== 'next') return plan;
+    const has_spoken = (room.rounds || []).some(round => round.speakers.includes(next.expert));
+    const question = has_spoken ? peer_round_question(room.completed_rounds + 1) : opening_question(room.phase);
+    return { ...plan, turns: [{ expert: next.expert, question }] };
   }
   /**
    * A roster change voids queued turns, leaving them skipped after the last real arrangement. Put back the ones whose
@@ -402,7 +425,7 @@ export class DiscussionRunner {
     const spoken = new Set(room.rounds?.at(-1)?.speakers || []);
     const planned = new Set(voided.map(turn => turn.expert));
     const joining = experts.filter(name => !spoken.has(name) && !planned.has(name));
-    const opening = room.phase === 'initial' ? '欢迎加入：请先读取议题，独立给出你的开场观点。' : '欢迎加入：请先读取议题和已有回答，给出你的观点。';
+    const opening = opening_question(room.phase);
     const plan_turns = [...voided.map(({ expert, question }) => ({ expert, question })), ...joining.map(expert => ({ expert, question: opening }))].slice(0, MAX_PLAN_TURNS);
     if (!plan_turns.length) return null;
     const label = `成员有变化：${voided.length ? `补回原计划（${voided.map(turn => turn.expert).join('、')}）` : '原计划成员已离开'}${joining.length ? `，请 ${joining.join('、')} 开场` : ''}`;

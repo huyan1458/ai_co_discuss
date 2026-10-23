@@ -17,7 +17,7 @@ import { assert_shared_home, DiscussionService, migrate_service_home, read_regis
 import { launch_discussion, room_models } from '../runner/discussion_launch.mjs';
 import { agy_rule, antigravity_project, claude_exit_error, claude_rule_path, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
-import { certainty, decide, decide_interjection, decide_round, ROUTE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, validate_scheduler } from '../runner/scheduler.mjs';
+import { certainty, decide, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, validate_scheduler } from '../runner/scheduler.mjs';
 
 test('smart scheduling maps one neutral question set to both providers and reads their answers alike', async t => {
   const home = mkdtempSync(join(tmpdir(), 'scheduler-'));
@@ -74,6 +74,12 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.deepEqual([(await decide_round(home, jev, discussion, probable)).action, (await decide_round(home, jev, discussion, probable)).confidence], ['continue', 0.82]);
   assert.equal(certainty({ choice: 'a', confidence: 0.5, probabilities: {} }), 0.5);
   assert.equal((await decide_round(home, jev, discussion, round('continue', 0.7, 'Codex'))).label, '拿不准是否继续下一轮，交给主持人');
+  // Mid-round, the next speaker comes from the unspoken candidates; unsure or host goes back to the host.
+  const speaker = (choice, confidence) => async () => ({ ok: true, json: async () => ({ answers: { speaker: { type: 'choice', choice, confidence, probabilities: {} } } }) });
+  const midround = { title: '讨论', context: [], host: 'Claude', candidates: ['Codex', 'Gemini'] };
+  assert.deepEqual(await decide_next_speaker(home, jev, midround, speaker('Gemini', 0.9)), { action: 'next', expert: 'Gemini', confidence: 0.9, label: '本轮继续，请 Gemini 接着发言' });
+  assert.equal((await decide_next_speaker(home, jev, midround, speaker('Gemini', 0.7))).action, 'host');
+  assert.equal((await decide_next_speaker(home, jev, midround, speaker('__host__', 0.95))).action, 'host');
 });
 
 test('host tasks carry scheduling suggestions only when there are some', async t => {

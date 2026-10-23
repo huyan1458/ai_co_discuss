@@ -127,6 +127,25 @@ export async function decide_interjection(home, scheduler, { title, goal, user_r
 }
 
 /**
+ * Mid-round with no queued turn left: pick the next speaker among the experts who can be woken and have not spoken
+ * this round, or hand back to the host when unsure or when the discussion needs steering.
+ */
+export async function decide_next_speaker(home, scheduler, { title, goal, user_request, context, host, candidates }, fetch_impl) {
+  const recent = context.slice(-CONTEXT_MESSAGES).map(excerpt);
+  const state = [topic_lines(title, goal, user_request), recent.length ? `本轮及最近发言（旧→新）：\n${recent.join('\n')}` : '还没有发言。'].join('\n\n');
+  const choices = [...candidates.map(name => ({ value: name, description: `请 ${name} 接着发言` })),
+    { value: HOST_CHOICE, description: `交给主持人 ${host}：讨论偏离目标、卡住，或需要主持人调整安排` }];
+  const answers = await decide(home, scheduler, state, [{ type: 'choice', name: 'speaker',
+    instructions: '本轮还有专家没发言，安排被取消或用完。结合已有发言判断下一位应请谁发言：优先选被点名追问、最能回应当前焦点的人。', choices }], fetch_impl);
+  const choice = answers.speaker?.choice;
+  const confidence = certainty(answers.speaker);
+  if (candidates.includes(choice) && confidence !== null && confidence >= ROUTE_CONFIDENCE) {
+    return { action: 'next', expert: choice, confidence, label: `本轮继续，请 ${choice} 接着发言` };
+  }
+  return { action: 'host', confidence, label: '拿不准下一位该请谁发言，交给主持人' };
+}
+
+/**
  * At the end of a round without named follow-ups: continue with another peer round, or wake the host
  * (to conclude, or because the discussion drifted, repeats itself or is stuck). The first speaker is never the last one.
  */
