@@ -16,7 +16,6 @@ MEMORY.local.md
 # Repository skills: only whitelisted skills are shared
 .agents/skills/*
 !.agents/skills/codiscuss-setup/
-!.agents/skills/codiscuss-release/
 !.agents/skills/discuss-host/
 !.agents/skills/discuss-participant/
 !.agents/skills/discuss-report/
