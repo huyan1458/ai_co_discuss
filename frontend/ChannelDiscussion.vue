@@ -10,6 +10,9 @@ const TOPIC_BODY_MAX_HEIGHT = 240;
 const { view, bridge, field, act, pending } = inject("discussion");
 const text = field("message-input");
 const text_length = computed(() => [...text.value].length);
+const EDITOR_MAX_ROWS = 6;
+const LENGTH_WARNING_RATIO = 0.9;
+const near_length_limit = computed(() => text_length.value >= bridge.max_message_length * LENGTH_WARNING_RATIO);
 const author = field("author-select");
 const kind = field("message-kind");
 const answer_summary = field("message-summary");
@@ -744,6 +747,24 @@ watch([preview_open, reduced_motion], () => {
 });
 onMounted(() => window.addEventListener("resize", refresh_layout));
 onBeforeUnmount(() => window.removeEventListener("resize", refresh_layout));
+
+/** Re-fits the editor rows when its width changes; Nuxt UI only measures on mount and on input, so a draft measured while the column was narrow stays too tall. */
+function fit_editor() {
+  const editor = prompt.value?.textareaRef;
+  if (!editor) return;
+  editor.rows = 1;
+  const style = getComputedStyle(editor);
+  const lines = (editor.scrollHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)) / parseFloat(style.lineHeight);
+  editor.rows = Math.min(Math.max(Math.floor(lines), 1), EDITOR_MAX_ROWS);
+}
+let editor_width = 0;
+const editor_observer = new ResizeObserver(([entry]) => {
+  if (Math.round(entry.contentRect.width) === editor_width) return;
+  editor_width = Math.round(entry.contentRect.width);
+  fit_editor();
+});
+onMounted(() => prompt.value?.textareaRef && editor_observer.observe(prompt.value.textareaRef));
+onBeforeUnmount(() => editor_observer.disconnect());
 onBeforeUnmount(cancel_navigation_press);
 
 /** Reuse the existing original-record actions in the message overflow menu. */
@@ -899,7 +920,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           </div>
         </template>
       </UPopover>
-      <UChatPrompt ref="prompt" v-model="text" :disabled="view.sending_message" :submit-on-enter="true" :autofocus="false" :rows="1" :maxrows="6" :placeholder="`发消息到 # ${room.title}`" aria-label="留言正文" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_members.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :class="{ 'has-mentions': mention_mirror }" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
+      <UChatPrompt ref="prompt" v-model="text" :disabled="view.sending_message" :submit-on-enter="true" :autofocus="false" :rows="1" :maxrows="EDITOR_MAX_ROWS" :placeholder="`发消息到 # ${room.title}`" aria-label="留言正文" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_members.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :class="{ 'has-mentions': mention_mirror }" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
         <template #header>
           <div v-if="view.attachment_drafts.length" class="attachment-drafts">
             <div v-for="file in view.attachment_drafts" :key="file.id" :class="file.preview_url ? 'attachment-draft-image' : 'attachment-draft-file'">
@@ -931,7 +952,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           <UButton v-else type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" aria-label="发送" title="发送 · Enter" :disabled="!has_draft || (needs_summary && !answer_summary.trim())" :loading="pending === 'send' || view.sending_message" @click="send" />
         </template>
       </UChatPrompt>
-      <div class="channel-composer-note"><span v-if="free">{{ recipient_hint }}<span class="channel-note-divider">·</span>手动成员需在原会话触发</span><span v-else>{{ author_note }}<span class="channel-note-divider">·</span>在线 AI 的观点需代发</span><span class="channel-draft-length">{{ text_length }} / {{ bridge.max_message_length }}<span class="channel-note-divider">·</span>Enter 发送<span class="channel-note-divider">·</span>Shift+Enter 换行</span></div>
+      <div class="channel-composer-note"><span v-if="free">{{ recipient_hint }}<span class="channel-note-divider">·</span>手动成员需在原会话触发</span><span v-else>{{ author_note }}<span class="channel-note-divider">·</span>在线 AI 的观点需代发</span><span class="channel-draft-length"><span v-if="text_length" :class="{ 'is-near-limit': near_length_limit }">{{ text_length }} / {{ bridge.max_message_length }}<span class="channel-note-divider">·</span></span><span class="channel-key-hint"><kbd>Enter</kbd> 发送<span class="channel-note-divider">·</span><kbd>Shift</kbd>+<kbd>Enter</kbd> 换行</span></span></div>
     </div></div>
   </section>
 </template>
