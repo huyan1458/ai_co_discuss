@@ -31,6 +31,8 @@ const can_restart = computed(() => automatic.value && (runtime.value.status === 
   && !concluded.value && !room.value.archived);
 // Actions appear only when they apply: running phases can pause, interrupt or end; paused ones restart or end.
 const active = computed(() => ["initial", "discussing", "reviewing"].includes(room.value.phase) && !room.value.archived);
+/** Writes need this browser's room control credential; without it the board is read-only. */
+const can_control = computed(() => Boolean(view.value.access?.can_manage));
 const can_end = computed(() => (active.value || room.value.phase === "paused") && !room.value.archived);
 const has_actions = computed(() => active.value || can_restart.value || can_end.value);
 const can_close = computed(() => !inactive.value && room.value.phase !== "preparing" && !room.value.archived && !limits.value.closing);
@@ -86,6 +88,7 @@ const status = computed(() => {
   if (limits.value.closing) return { tone: "warning", title: "正在收尾", detail: `等待 ${bridge.display_name(value.host)} 总结` };
   if (value.phase === "preparing") return { tone: "neutral", title: "准备中", detail: "讨论尚未开始" };
   if (value.phase === "paused") {
+    if (view.value.free_error && !inviting.value) return { tone: "error", title: "操作失败", detail: view.value.free_error };
     const failure = failed_member.value;
     if (failure) {
       const detail = failure.result.startsWith(failure.name) ? failure.result : `${bridge.display_name(failure.name)} 执行失败：${failure.result}`;
@@ -272,14 +275,14 @@ async function finish(action) {
           <UDropdownMenu v-if="member_menu({ name: member.name }).length" :items="member_menu({ name: member.name })" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="`${member.name} 的更多操作`" /></UDropdownMenu>
         </li>
       </ul>
-      <p v-if="!inviting && view.free_error" role="alert" class="pb-free-note is-error">{{ view.free_error }}</p>
+      <p v-if="!inviting && view.free_error && room.phase !== 'paused'" role="alert" class="pb-free-note is-error">{{ view.free_error }}</p>
       <p v-else-if="view.free_notice" role="status" class="pb-free-note">{{ view.free_notice }}</p>
     </section>
     <section v-if="has_actions" class="pb-actions" aria-label="操作">
-      <UButton v-if="can_restart" icon="i-lucide-rotate-ccw" label="重启" size="sm" color="neutral" variant="outline" class="pb-action pb-restart" title="原安排重新交给对应 AI，需本机接入程序在运行" :loading="pending === 'restart_discussion'" @click="act('restart_discussion')" />
-      <UButton v-if="active" icon="i-lucide-pause" label="暂停" size="sm" color="neutral" variant="outline" class="pb-action" title="暂停讨论，原安排保留" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" />
-      <UButton v-if="active && turn" icon="i-lucide-hand" label="打断" size="sm" color="neutral" variant="outline" class="pb-action" :title="`打断 ${bridge.display_name(turn.expert)}：本次发言作废，交给主持人`" :loading="pending === 'cancel_turn'" @click="act('cancel_turn')" />
-      <UButton v-if="can_end" icon="i-lucide-flag" label="结束" size="sm" color="neutral" variant="outline" class="pb-action pb-end" title="结束讨论：选择主持人收尾或直接结束" @click="ending = true" />
+      <UButton v-if="can_restart" icon="i-lucide-rotate-ccw" label="重启" size="sm" color="neutral" variant="outline" class="pb-action pb-restart" title="原安排重新交给对应 AI，需本机接入程序在运行" :loading="pending === 'restart_discussion'" :disabled="!can_control" @click="act('restart_discussion')" />
+      <UButton v-if="active" icon="i-lucide-pause" label="暂停" size="sm" color="neutral" variant="outline" class="pb-action" title="暂停讨论，原安排保留" :loading="pending === 'pause_discussion'" :disabled="!can_control" @click="act('pause_discussion')" />
+      <UButton v-if="active && turn" icon="i-lucide-hand" label="打断" size="sm" color="neutral" variant="outline" class="pb-action" :title="`打断 ${bridge.display_name(turn.expert)}：本次发言作废，交给主持人`" :loading="pending === 'cancel_turn'" :disabled="!can_control" @click="act('cancel_turn')" />
+      <UButton v-if="can_end" icon="i-lucide-flag" label="结束" size="sm" color="neutral" variant="outline" class="pb-action pb-end" title="结束讨论：选择主持人收尾或直接结束" :disabled="!can_control" @click="ending = true" />
     </section>
     <section v-if="automatic && timings.count" class="pb-section" aria-label="阶段耗时">
       <div class="pb-timing-heading"><h4>耗时</h4><small>共 {{ timings.count }} 次执行</small></div>

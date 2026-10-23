@@ -49626,12 +49626,12 @@ var MK = /*#__PURE__*/ EH({
 			"initial",
 			"discussing",
 			"reviewing"
-		].includes(m.value.phase) && !m.value.archived), w = Z(() => (C.value || m.value.phase === "paused") && !m.value.archived), T = Z(() => C.value || S.value || w.value), E = Z(() => !y.value && m.value.phase !== "preparing" && !m.value.archived && !h.value.closing), D = Z(() => [m.value.host, ...Object.keys(m.value.experts || {}).filter((e) => e !== m.value.host)].filter((e) => e && e !== "用户").map(ve)), O = Z(() => D.value.find((e) => e.result)), ee = (e) => /^Codex(?:-|$)/.test(e), te = Z(() => O.value && ee(O.value.name) && /active writer/.test(O.value.result) ? O.value : null), ne = Z(() => (m.value.members || []).filter((e) => e.status === "away")), re = (e) => (m.value.members || []).find((t) => t.name === e), ie = Z(() => _.value && !x.value), ae = /* @__PURE__ */ F(""), k = /* @__PURE__ */ F(""), A = /* @__PURE__ */ F(!1), oe = /* @__PURE__ */ F(!1), se = Z(() => Object.keys(r.launch_clients)), ce = Z(() => (m.value.members || []).map((e) => e.name)), le = (e) => ce.value.filter((t) => r.platform_of(t) === e).length, ue = Z(() => {
-			let e = ae.value;
-			for (let t = 2; ce.value.includes(e); t++) e = `${ae.value}-${t}`;
+		].includes(m.value.phase) && !m.value.archived), w = Z(() => !!n.value.access?.can_manage), T = Z(() => (C.value || m.value.phase === "paused") && !m.value.archived), E = Z(() => C.value || S.value || T.value), D = Z(() => !y.value && m.value.phase !== "preparing" && !m.value.archived && !h.value.closing), O = Z(() => [m.value.host, ...Object.keys(m.value.experts || {}).filter((e) => e !== m.value.host)].filter((e) => e && e !== "用户").map(ye)), ee = Z(() => O.value.find((e) => e.result)), te = (e) => /^Codex(?:-|$)/.test(e), ne = Z(() => ee.value && te(ee.value.name) && /active writer/.test(ee.value.result) ? ee.value : null), re = Z(() => (m.value.members || []).filter((e) => e.status === "away")), ie = (e) => (m.value.members || []).find((t) => t.name === e), ae = Z(() => _.value && !x.value), k = /* @__PURE__ */ F(""), A = /* @__PURE__ */ F(""), oe = /* @__PURE__ */ F(!1), se = /* @__PURE__ */ F(!1), ce = Z(() => Object.keys(r.launch_clients)), le = Z(() => (m.value.members || []).map((e) => e.name)), ue = (e) => le.value.filter((t) => r.platform_of(t) === e).length, de = Z(() => {
+			let e = k.value;
+			for (let t = 2; le.value.includes(e); t++) e = `${k.value}-${t}`;
 			return e;
-		}), de = Z(() => {
-			let e = n.value.launch.profiles[ae.value] || {}, t = e.adapter === "api";
+		}), fe = Z(() => {
+			let e = n.value.launch.profiles[k.value] || {}, t = e.adapter === "api";
 			return (t ? e.base_url && e.api_protocol && e.api_key_ref && e.model : e.adapter && (e.adapter === "antigravity" ? e.ipc_directory : e.executable)) ? {
 				text: t ? "已配置 API" : "已配置本机软件",
 				tone: "ready"
@@ -49641,18 +49641,18 @@ var MK = /*#__PURE__*/ EH({
 			};
 		});
 		R(() => m.value.id, () => {
-			A.value = !1, ae.value = "", k.value = "";
+			oe.value = !1, k.value = "", A.value = "";
 		});
-		let fe = Z(() => v.value?.question || m.value.focus || m.value.goal || ""), pe = Z(() => fe.value.length > _X), me = Z(() => g.value.timings || {
+		let pe = Z(() => v.value?.question || m.value.focus || m.value.goal || ""), me = Z(() => pe.value.length > _X), he = Z(() => g.value.timings || {
 			items: [],
 			totals: {},
 			count: 0
-		}), he = Z({
+		}), ge = Z({
 			get: () => c.value?.room_id === m.value.id,
 			set: (e) => {
 				e || (c.value = null);
 			}
-		}), ge = Z(() => l.value && n.value.launch.repair?.room_id === m.value.id ? n.value.launch.repair.participants[c.value?.name] : null), N = Z(() => {
+		}), N = Z(() => l.value && n.value.launch.repair?.room_id === m.value.id ? n.value.launch.repair.participants[c.value?.name] : null), _e = Z(() => {
 			let e = m.value;
 			if (e.archived) return {
 				tone: "neutral",
@@ -49675,7 +49675,12 @@ var MK = /*#__PURE__*/ EH({
 				detail: "讨论尚未开始"
 			};
 			if (e.phase === "paused") {
-				let e = O.value;
+				if (n.value.free_error && !oe.value) return {
+					tone: "error",
+					title: "操作失败",
+					detail: n.value.free_error
+				};
+				let e = ee.value;
 				if (e) {
 					let t = e.result.startsWith(e.name) ? e.result : `${r.display_name(e.name)} 执行失败：${e.result}`, n = t.split("\n")[0], i = n.length > vX ? `${n.slice(0, vX)}…` : n;
 					return {
@@ -49700,7 +49705,7 @@ var MK = /*#__PURE__*/ EH({
 				title: "进行中",
 				detail: r.progress_speaker(e)
 			};
-		}), _e = Z(() => {
+		}), ve = Z(() => {
 			let e = h.value, t = Math.floor((e.elapsed_seconds || 0) / 60);
 			return x.value ? [] : [{
 				label: "轮次",
@@ -49712,7 +49717,7 @@ var MK = /*#__PURE__*/ EH({
 				ratio: e.max_minutes ? t / e.max_minutes : null
 			}].filter((t) => t.label !== "用时" || e.started_at);
 		});
-		function ve(e) {
+		function ye(e) {
 			let t = (g.value.participants || []).find((t) => t.participant === e), i = m.value.rounds?.at(-1)?.completed === !1 ? m.value.rounds.at(-1).speakers : [], a = e === m.value.host, o = "等待", s = "neutral", c = d[t?.status] || "", l = (m.value.queued_turns || []).findIndex((t) => t.expert === e);
 			if (v.value?.expert === e) o = `第 ${m.value.rounds?.at(-1)?.completed === !1 ? m.value.rounds.at(-1).number : (m.value.completed_rounds || 0) + 1} 轮 · ${c && t.turn_id === v.value.id ? c : y.value ? "原安排保留" : "轮到发言"}`, s = y.value ? "neutral" : "primary";
 			else if (a && !v.value && !y.value) {
@@ -49731,19 +49736,19 @@ var MK = /*#__PURE__*/ EH({
 				mode: r.participant_access(e, m.value)
 			};
 		}
-		function ye(e) {
+		function be(e) {
 			let t = e.session ? [{
 				label: "复制会话 ID",
 				icon: "i-lucide-copy",
 				onSelect: () => i("copy", e.session)
 			}] : [];
-			ee(e.name) && (e.session || re(e.name)?.session_mode === "borrowed") && _.value && !x.value && n.value.launch.available && !n.value.launch.remote && ["running", "paused"].includes(g.value.status) && t.push({
+			te(e.name) && (e.session || ie(e.name)?.session_mode === "borrowed") && _.value && !x.value && n.value.launch.available && !n.value.launch.remote && ["running", "paused"].includes(g.value.status) && t.push({
 				label: "切换 App / CLI",
 				icon: "i-lucide-arrow-left-right",
 				disabled: !!a.value,
-				onSelect: () => Ce(e)
+				onSelect: () => we(e)
 			});
-			let r = re(e.name);
+			let r = ie(e.name);
 			if (!r || e.is_host || x.value) return [t].filter((e) => e.length);
 			let o = (t, n, a, o = {}) => ({
 				label: t,
@@ -49762,62 +49767,62 @@ var MK = /*#__PURE__*/ EH({
 				[o("移除", "i-lucide-trash-2", "remove", { color: "error" })]
 			].filter((e) => e.length);
 		}
-		function be() {
-			ae.value = "", k.value = "", oe.value = !1, A.value = !0;
+		function xe() {
+			k.value = "", A.value = "", se.value = !1, oe.value = !0;
 		}
-		function xe(e) {
-			!r.launch_clients[e]?.some((e) => e.value !== "api") && !n.value.launch.profiles[e]?.adapter && r.write_launch(e, "adapter", "api"), ae.value = e;
+		function Se(e) {
+			!r.launch_clients[e]?.some((e) => e.value !== "api") && !n.value.launch.profiles[e]?.adapter && r.write_launch(e, "adapter", "api"), k.value = e;
 		}
-		async function Se() {
-			let e = n.value.launch.profiles[ae.value] || {};
-			oe.value = !0, await i("invite_member", {
-				name: ae.value,
+		async function Ce() {
+			let e = n.value.launch.profiles[k.value] || {};
+			se.value = !0, await i("invite_member", {
+				name: k.value,
 				access: "runner",
 				project_access: e.project_access || n.value.launch.workspace?.project_access || "read",
-				session_id: r.launch_can_bind_session(ae.value, n.value.launch) ? k.value : ""
-			}), n.value.free_error || (A.value = !1);
+				session_id: r.launch_can_bind_session(k.value, n.value.launch) ? A.value : ""
+			}), n.value.free_error || (oe.value = !1);
 		}
-		async function Ce(e, t = "") {
+		async function we(e, t = "") {
 			c.value = {
 				room_id: m.value.id,
 				name: e.name,
 				prefer: t
-			}, l.value = !1, g.value.status === "paused" && await we();
+			}, l.value = !1, g.value.status === "paused" && await Te();
 		}
-		async function we() {
+		async function Te() {
 			let e = c.value;
-			e && e.room_id === m.value.id && (g.value.status !== "running" || await i("pause_runtime")) && c.value === e && m.value.id === e.room_id && g.value.status === "paused" && (await i("load_room_configuration"), c.value === e && m.value.id === e.room_id && (l.value = !n.value.launch.repair_error && n.value.launch.repair?.room_id === e.room_id, l.value && e.prefer && ge.value?.adapter !== e.prefer && r.write_room_adapter(e.name, e.prefer)));
+			e && e.room_id === m.value.id && (g.value.status !== "running" || await i("pause_runtime")) && c.value === e && m.value.id === e.room_id && g.value.status === "paused" && (await i("load_room_configuration"), c.value === e && m.value.id === e.room_id && (l.value = !n.value.launch.repair_error && n.value.launch.repair?.room_id === e.room_id, l.value && e.prefer && N.value?.adapter !== e.prefer && r.write_room_adapter(e.name, e.prefer)));
 		}
-		let Te = Z(() => {
-			let e = me.value.totals || {}, t = f.reduce((t, n) => t + (e[n.key] || 0), 0);
+		let Ee = Z(() => {
+			let e = he.value.totals || {}, t = f.reduce((t, n) => t + (e[n.key] || 0), 0);
 			return f.map((n) => ({
 				...n,
 				seconds: e[n.key] || 0,
 				percent: t ? Math.round((e[n.key] || 0) / t * 100) : 0
 			}));
 		});
-		function Ee(e) {
+		function De(e) {
 			return e == null ? "—" : e < 60 ? `${e}秒` : e < 3600 ? `${Math.floor(e / 60)}分${String(e % 60).padStart(2, "0")}秒` : `${Math.floor(e / 3600)}小时${Math.floor(e % 3600 / 60)}分`;
 		}
-		async function De(e) {
+		async function Oe(e) {
 			await i(e) && (o.value = !1);
 		}
 		return (e, l) => {
-			let u = MA, d = sA, O = pA, ee = TH, ce = bH, ve = zV, Oe = lK, ke = YV;
+			let u = MA, d = sA, ee = pA, te = TH, le = bH, ye = zV, ke = lK, Ae = YV;
 			return U(), W("div", { class: M(["progress-board", { "is-docked": t.docked }]) }, [
 				t.docked ? (U(), W("header", yY, [l[17] ||= K("strong", null, "讨论进度", -1), K("span", bY, P(_.value ? "全自动" : "手动"), 1)])) : Y("", !0),
 				K("section", {
-					class: M(["pb-status", `is-${N.value.tone}`]),
+					class: M(["pb-status", `is-${_e.value.tone}`]),
 					"aria-label": "讨论状态"
 				}, [
 					K("div", xY, [
 						l[18] ||= K("span", { class: "pb-dot" }, null, -1),
-						K("strong", SY, P(N.value.title), 1),
+						K("strong", SY, P(_e.value.title), 1),
 						t.docked ? Y("", !0) : (U(), W("span", CY, P(_.value ? "全自动" : "手动"), 1))
 					]),
-					N.value.detail ? (U(), W("p", wY, P(N.value.detail), 1)) : Y("", !0),
-					N.value.full_detail ? (U(), W("details", TY, [l[19] ||= K("summary", null, "查看错误详情", -1), K("pre", EY, P(N.value.full_detail), 1)])) : Y("", !0),
-					te.value && I(n).launch.available && !I(n).launch.remote ? (U(), G(u, {
+					_e.value.detail ? (U(), W("p", wY, P(_e.value.detail), 1)) : Y("", !0),
+					_e.value.full_detail ? (U(), W("details", TY, [l[19] ||= K("summary", null, "查看错误详情", -1), K("pre", EY, P(_e.value.full_detail), 1)])) : Y("", !0),
+					ne.value && I(n).launch.available && !I(n).launch.remote ? (U(), G(u, {
 						key: 2,
 						icon: "i-lucide-arrow-left-right",
 						label: "切换到 Codex App",
@@ -49826,17 +49831,17 @@ var MK = /*#__PURE__*/ EH({
 						variant: "outline",
 						title: "会话正被 Codex App 占用时，改由 App 接入，沿用原聊天和讨论进度",
 						disabled: !!I(a),
-						onClick: l[0] ||= (e) => Ce(te.value, "codex")
+						onClick: l[0] ||= (e) => we(ne.value, "codex")
 					}, null, 8, ["disabled"])) : Y("", !0),
-					_e.value.length ? (U(), W("div", DY, [(U(!0), W(H, null, B(_e.value, (e) => (U(), W("div", {
+					ve.value.length ? (U(), W("div", DY, [(U(!0), W(H, null, B(ve.value, (e) => (U(), W("div", {
 						key: e.label,
 						class: "pb-meter"
 					}, [K("div", OY, [K("span", null, P(e.label), 1), K("b", null, P(e.text), 1)]), e.ratio === null ? Y("", !0) : (U(), W("div", kY, [K("i", { style: j({ width: `${Math.min(100, Math.round(e.ratio * 100))}%` }) }, null, 4)]))]))), 128))])) : Y("", !0)
 				], 2),
-				fe.value ? (U(), W("section", AY, [
+				pe.value ? (U(), W("section", AY, [
 					l[20] ||= K("h4", null, "当前焦点", -1),
-					K("p", { class: M(["pb-focus", { "is-expanded": s.value }]) }, P(fe.value), 3),
-					pe.value ? (U(), W("button", {
+					K("p", { class: M(["pb-focus", { "is-expanded": s.value }]) }, P(pe.value), 3),
+					me.value ? (U(), W("button", {
 						key: 0,
 						type: "button",
 						class: "pb-link",
@@ -49844,18 +49849,18 @@ var MK = /*#__PURE__*/ EH({
 					}, P(s.value ? "收起" : "展开"), 1)) : Y("", !0)
 				])) : Y("", !0),
 				K("section", jY, [
-					K("div", MY, [l[22] ||= K("h4", null, "参与者", -1), ie.value ? (U(), W("button", {
+					K("div", MY, [l[22] ||= K("h4", null, "参与者", -1), ae.value ? (U(), W("button", {
 						key: 0,
 						type: "button",
 						class: "pb-link",
-						onClick: be
+						onClick: xe
 					}, [q(d, { name: "i-lucide-plus" }), l[21] ||= J("邀请", -1)])) : Y("", !0)]),
 					m.value.held_since && v.value && !y.value ? (U(), W("p", NY, "用户有新操作，" + P(I(r).display_name(v.value.expert)) + " 说完后交给主持人", 1)) : Y("", !0),
-					K("ul", PY, [(U(!0), W(H, null, B(D.value, (e) => (U(), W("li", {
+					K("ul", PY, [(U(!0), W(H, null, B(O.value, (e) => (U(), W("li", {
 						key: e.name,
 						class: "pb-member"
 					}, [
-						q(O, {
+						q(ee, {
 							src: I(r).identities[e.name]?.icon,
 							text: I(r).identities[e.name]?.initials,
 							alt: e.name,
@@ -49878,7 +49883,7 @@ var MK = /*#__PURE__*/ EH({
 								K("small", null, P(e.is_host ? `主持 · ${e.mode}` : e.mode), 1)
 							]),
 							K("div", LY, P(e.model), 1),
-							re(e.name)?.session_mode === "borrowed" ? (U(), W("div", RY, "借用已有会话")) : Y("", !0),
+							ie(e.name)?.session_mode === "borrowed" ? (U(), W("div", RY, "借用已有会话")) : Y("", !0),
 							x.value ? Y("", !0) : (U(), W("div", {
 								key: 1,
 								class: M(["pb-member-status", `is-${e.tone}`])
@@ -49888,9 +49893,9 @@ var MK = /*#__PURE__*/ EH({
 								e.failures ? (U(), W("small", zY, " · 失败 " + P(e.failures) + " 次", 1)) : Y("", !0)
 							], 2))
 						]),
-						ye(e).length ? (U(), G(ee, {
+						be(e).length ? (U(), G(te, {
 							key: 0,
-							items: ye(e),
+							items: be(e),
 							content: { align: "end" },
 							ui: { content: "channel-menu" }
 						}, {
@@ -49904,11 +49909,11 @@ var MK = /*#__PURE__*/ EH({
 							}, null, 8, ["aria-label"])]),
 							_: 2
 						}, 1032, ["items"])) : Y("", !0)
-					]))), 128)), (U(!0), W(H, null, B(ne.value, (e) => (U(), W("li", {
+					]))), 128)), (U(!0), W(H, null, B(re.value, (e) => (U(), W("li", {
 						key: e.id,
 						class: "pb-member is-away"
 					}, [
-						q(O, {
+						q(ee, {
 							src: I(r).identities[e.name]?.icon,
 							text: I(r).identities[e.name]?.initials,
 							alt: e.name,
@@ -49921,9 +49926,9 @@ var MK = /*#__PURE__*/ EH({
 							"class"
 						]),
 						K("div", BY, [K("div", VY, [J(P(I(r).display_name(e.name)), 1), l[24] ||= K("small", null, "暂离", -1)]), l[25] ||= K("div", { class: "pb-member-status is-neutral" }, [K("span", { class: "pb-dot" }), J("保留位置和会话，不参与安排")], -1)]),
-						ye({ name: e.name }).length ? (U(), G(ee, {
+						be({ name: e.name }).length ? (U(), G(te, {
 							key: 0,
-							items: ye({ name: e.name }),
+							items: be({ name: e.name }),
 							content: { align: "end" },
 							ui: { content: "channel-menu" }
 						}, {
@@ -49938,9 +49943,9 @@ var MK = /*#__PURE__*/ EH({
 							_: 2
 						}, 1032, ["items"])) : Y("", !0)
 					]))), 128))]),
-					!A.value && I(n).free_error ? (U(), W("p", HY, P(I(n).free_error), 1)) : I(n).free_notice ? (U(), W("p", UY, P(I(n).free_notice), 1)) : Y("", !0)
+					!oe.value && I(n).free_error && m.value.phase !== "paused" ? (U(), W("p", HY, P(I(n).free_error), 1)) : I(n).free_notice ? (U(), W("p", UY, P(I(n).free_notice), 1)) : Y("", !0)
 				]),
-				T.value ? (U(), W("section", WY, [
+				E.value ? (U(), W("section", WY, [
 					S.value ? (U(), G(u, {
 						key: 0,
 						icon: "i-lucide-rotate-ccw",
@@ -49951,8 +49956,9 @@ var MK = /*#__PURE__*/ EH({
 						class: "pb-action pb-restart",
 						title: "原安排重新交给对应 AI，需本机接入程序在运行",
 						loading: I(a) === "restart_discussion",
+						disabled: !w.value,
 						onClick: l[2] ||= (e) => I(i)("restart_discussion")
-					}, null, 8, ["loading"])) : Y("", !0),
+					}, null, 8, ["loading", "disabled"])) : Y("", !0),
 					C.value ? (U(), G(u, {
 						key: 1,
 						icon: "i-lucide-pause",
@@ -49963,8 +49969,9 @@ var MK = /*#__PURE__*/ EH({
 						class: "pb-action",
 						title: "暂停讨论，原安排保留",
 						loading: I(a) === "pause_discussion",
+						disabled: !w.value,
 						onClick: l[3] ||= (e) => I(i)("pause_discussion")
-					}, null, 8, ["loading"])) : Y("", !0),
+					}, null, 8, ["loading", "disabled"])) : Y("", !0),
 					C.value && v.value ? (U(), G(u, {
 						key: 2,
 						icon: "i-lucide-hand",
@@ -49975,9 +49982,14 @@ var MK = /*#__PURE__*/ EH({
 						class: "pb-action",
 						title: `打断 ${I(r).display_name(v.value.expert)}：本次发言作废，交给主持人`,
 						loading: I(a) === "cancel_turn",
+						disabled: !w.value,
 						onClick: l[4] ||= (e) => I(i)("cancel_turn")
-					}, null, 8, ["title", "loading"])) : Y("", !0),
-					w.value ? (U(), G(u, {
+					}, null, 8, [
+						"title",
+						"loading",
+						"disabled"
+					])) : Y("", !0),
+					T.value ? (U(), G(u, {
 						key: 3,
 						icon: "i-lucide-flag",
 						label: "结束",
@@ -49986,36 +49998,37 @@ var MK = /*#__PURE__*/ EH({
 						variant: "outline",
 						class: "pb-action pb-end",
 						title: "结束讨论：选择主持人收尾或直接结束",
+						disabled: !w.value,
 						onClick: l[5] ||= (e) => o.value = !0
-					})) : Y("", !0)
+					}, null, 8, ["disabled"])) : Y("", !0)
 				])) : Y("", !0),
-				_.value && me.value.count ? (U(), W("section", GY, [
-					K("div", KY, [l[26] ||= K("h4", null, "耗时", -1), K("small", null, "共 " + P(me.value.count) + " 次执行", 1)]),
+				_.value && he.value.count ? (U(), W("section", GY, [
+					K("div", KY, [l[26] ||= K("h4", null, "耗时", -1), K("small", null, "共 " + P(he.value.count) + " 次执行", 1)]),
 					K("div", {
 						class: "pb-timing-bar",
 						role: "img",
-						"aria-label": Te.value.map((e) => `${e.label} ${e.percent}%`).join("，")
-					}, [(U(!0), W(H, null, B(Te.value, (e) => (U(), W("i", {
+						"aria-label": Ee.value.map((e) => `${e.label} ${e.percent}%`).join("，")
+					}, [(U(!0), W(H, null, B(Ee.value, (e) => (U(), W("i", {
 						key: e.key,
 						class: M(`is-${e.key}`),
 						style: j({ width: `${e.percent}%` })
 					}, null, 6))), 128))], 8, qY),
-					K("dl", JY, [(U(!0), W(H, null, B(Te.value, (e) => (U(), W("div", {
+					K("dl", JY, [(U(!0), W(H, null, B(Ee.value, (e) => (U(), W("div", {
 						key: e.key,
 						title: e.hint
-					}, [K("dt", null, [K("span", { class: M(`pb-timing-dot is-${e.key}`) }, null, 2), J(P(e.label), 1)]), K("dd", null, [J(P(Ee(e.seconds)), 1), K("small", null, P(e.percent) + "%", 1)])], 8, YY))), 128))]),
+					}, [K("dt", null, [K("span", { class: M(`pb-timing-dot is-${e.key}`) }, null, 2), J(P(e.label), 1)]), K("dd", null, [J(P(De(e.seconds)), 1), K("small", null, P(e.percent) + "%", 1)])], 8, YY))), 128))]),
 					K("details", XY, [
 						l[27] ||= K("summary", null, "查看每次执行", -1),
-						K("ol", null, [(U(!0), W(H, null, B(me.value.items, (e) => (U(), W("li", { key: e.id }, [K("span", ZY, [J("#" + P(e.id) + " " + P(I(r).display_name(e.participant)), 1), K("small", null, P(e.role === "host" ? "主持" : "专家") + " · " + P(p[e.status] || e.status), 1)]), K("span", QY, [(U(), W(H, null, B(f, (t) => K("span", {
+						K("ol", null, [(U(!0), W(H, null, B(he.value.items, (e) => (U(), W("li", { key: e.id }, [K("span", ZY, [J("#" + P(e.id) + " " + P(I(r).display_name(e.participant)), 1), K("small", null, P(e.role === "host" ? "主持" : "专家") + " · " + P(p[e.status] || e.status), 1)]), K("span", QY, [(U(), W(H, null, B(f, (t) => K("span", {
 							key: t.key,
 							title: t.hint
-						}, P(t.label) + " " + P(Ee(e[t.key])), 9, $Y)), 64))])]))), 128))]),
-						me.value.count > me.value.items.length ? (U(), W("p", eX, "只列出最近 " + P(me.value.items.length) + " 次，共 " + P(me.value.count) + " 次执行。", 1)) : Y("", !0)
+						}, P(t.label) + " " + P(De(e[t.key])), 9, $Y)), 64))])]))), 128))]),
+						he.value.count > he.value.items.length ? (U(), W("p", eX, "只列出最近 " + P(he.value.items.length) + " 次，共 " + P(he.value.count) + " 次执行。", 1)) : Y("", !0)
 					])
 				])) : Y("", !0),
-				q(Oe, {
-					open: he.value,
-					"onUpdate:open": l[9] ||= (e) => he.value = e,
+				q(ke, {
+					open: ge.value,
+					"onUpdate:open": l[9] ||= (e) => ge.value = e,
 					title: "切换 Codex 接入方式",
 					description: "沿用原聊天和讨论进度，仅修改本场讨论。",
 					ui: {
@@ -50028,11 +50041,11 @@ var MK = /*#__PURE__*/ EH({
 						icon: "i-lucide-pause",
 						class: "channel-primary-button",
 						loading: !!I(a),
-						onClick: we
-					}, null, 8, ["loading"])], 64)) : g.value.status === "paused" ? (U(), W(H, { key: 1 }, [ge.value ? (U(), W(H, { key: 0 }, [
-						q(ve, { label: "接入方式" }, {
-							default: L(() => [q(ce, {
-								"model-value": ge.value.adapter,
+						onClick: Te
+					}, null, 8, ["loading"])], 64)) : g.value.status === "paused" ? (U(), W(H, { key: 1 }, [N.value ? (U(), W(H, { key: 0 }, [
+						q(ye, { label: "接入方式" }, {
+							default: L(() => [q(le, {
+								"model-value": N.value.adapter,
 								items: [{
 									label: "Codex App",
 									value: "codex"
@@ -50046,7 +50059,7 @@ var MK = /*#__PURE__*/ EH({
 							}, null, 8, ["model-value", "disabled"])]),
 							_: 1
 						}),
-						K("p", nX, P(ge.value.adapter === "codex" ? "App 需保持运行，模型与权限沿用原聊天设置。" : "切回 CLI 前，需让 App 释放原聊天；仍被占用时无法执行。"), 1),
+						K("p", nX, P(N.value.adapter === "codex" ? "App 需保持运行，模型与权限沿用原聊天设置。" : "切回 CLI 前，需让 App 释放原聊天；仍被占用时无法执行。"), 1),
 						q(u, {
 							label: "保存接入方式",
 							class: "channel-primary-button",
@@ -50064,7 +50077,7 @@ var MK = /*#__PURE__*/ EH({
 							loading: I(a) === "restart_discussion",
 							disabled: !!I(a),
 							onClick: l[8] ||= (e) => {
-								I(i)("restart_discussion"), he.value = !1;
+								I(i)("restart_discussion"), ge.value = !1;
 							}
 						}, null, 8, ["loading", "disabled"])) : Y("", !0)
 					], 64)) : (U(), G(u, {
@@ -50073,13 +50086,13 @@ var MK = /*#__PURE__*/ EH({
 						variant: "outline",
 						color: "neutral",
 						loading: !!I(a),
-						onClick: we
+						onClick: Te
 					}, null, 8, ["loading"])), I(n).launch.repair_error ? (U(), W("p", iX, P(I(n).launch.repair_error), 1)) : Y("", !0)], 64)) : (U(), W("p", aX, "本场状态已变化，请关闭后重新核对。"))])]),
 					_: 1
 				}, 8, ["open"]),
-				q(Oe, {
-					open: A.value,
-					"onUpdate:open": l[13] ||= (e) => A.value = e,
+				q(ke, {
+					open: oe.value,
+					"onUpdate:open": l[13] ||= (e) => oe.value = e,
 					title: "邀请专家",
 					description: "新专家沿用本机软件配置，讨论不中断；主持人会重新安排发言。",
 					ui: {
@@ -50090,15 +50103,15 @@ var MK = /*#__PURE__*/ EH({
 					body: L(() => [K("form", {
 						class: "pb-invite",
 						"aria-label": "邀请专家",
-						onSubmit: uu(Se, ["prevent"])
+						onSubmit: uu(Ce, ["prevent"])
 					}, [
-						K("div", oX, [(U(!0), W(H, null, B(se.value, (e) => (U(), W("button", {
+						K("div", oX, [(U(!0), W(H, null, B(ce.value, (e) => (U(), W("button", {
 							key: e,
 							type: "button",
-							"aria-pressed": ae.value === e,
-							title: le(e) ? `已在场 ${le(e)} 位 · 将添加新实例` : "",
-							onClick: (t) => xe(e)
-						}, [q(O, {
+							"aria-pressed": k.value === e,
+							title: ue(e) ? `已在场 ${ue(e)} 位 · 将添加新实例` : "",
+							onClick: (t) => Se(e)
+						}, [q(ee, {
 							src: I(r).identities[e]?.icon,
 							text: I(r).identities[e]?.initials,
 							alt: e,
@@ -50110,23 +50123,23 @@ var MK = /*#__PURE__*/ EH({
 							"alt",
 							"class"
 						]), J(P(e), 1)], 8, sX))), 128))]),
-						ae.value ? (U(), W(H, { key: 0 }, [
+						k.value ? (U(), W(H, { key: 0 }, [
 							(U(), G(wq, {
-								key: ae.value,
-								name: ae.value,
+								key: k.value,
+								name: k.value,
 								mode: "cli",
-								status: de.value,
-								onRemove: l[10] ||= (e) => ae.value = ""
+								status: fe.value,
+								onRemove: l[10] ||= (e) => k.value = ""
 							}, null, 8, ["name", "status"])),
-							ue.value === ae.value ? Y("", !0) : (U(), W("p", cX, "已有 " + P(ae.value) + " 在场，将以 " + P(ue.value) + " 加入，使用独立会话。", 1)),
-							I(r).launch_can_bind_session(ae.value, I(n).launch) ? (U(), G(ve, {
+							de.value === k.value ? Y("", !0) : (U(), W("p", cX, "已有 " + P(k.value) + " 在场，将以 " + P(de.value) + " 加入，使用独立会话。", 1)),
+							I(r).launch_can_bind_session(k.value, I(n).launch) ? (U(), G(ye, {
 								key: 1,
 								label: "已有会话 ID（可选）",
-								description: k.value.trim() ? "将续接这个原会话，保留它原有的上下文；它工作时请不要在原窗口继续操作。" : "留空则新建会话。"
+								description: A.value.trim() ? "将续接这个原会话，保留它原有的上下文；它工作时请不要在原窗口继续操作。" : "留空则新建会话。"
 							}, {
-								default: L(() => [q(ke, {
-									modelValue: k.value,
-									"onUpdate:modelValue": l[11] ||= (e) => k.value = e,
+								default: L(() => [q(Ae, {
+									modelValue: A.value,
+									"onUpdate:modelValue": l[11] ||= (e) => A.value = e,
 									placeholder: "在原会话中用 /status 查看；Codex App 填聊天 ID",
 									"aria-label": "受邀成员的已有会话 ID",
 									class: "w-full"
@@ -50135,24 +50148,24 @@ var MK = /*#__PURE__*/ EH({
 							}, 8, ["description"])) : Y("", !0)
 						], 64)) : (U(), W("p", lX, "选择一位 AI，点卡片翻面设置软件、模型与项目权限。")),
 						I(n).launch.available ? Y("", !0) : (U(), W("p", uX, "邀请需要本机服务，请在运行 AI 的电脑打开本机网站。")),
-						oe.value && I(n).free_error ? (U(), W("p", dX, P(I(n).free_error), 1)) : Y("", !0),
+						se.value && I(n).free_error ? (U(), W("p", dX, P(I(n).free_error), 1)) : Y("", !0),
 						K("div", fX, [q(u, {
 							label: "取消",
 							color: "neutral",
 							variant: "ghost",
-							onClick: l[12] ||= (e) => A.value = !1
+							onClick: l[12] ||= (e) => oe.value = !1
 						}), q(u, {
 							type: "submit",
 							icon: "i-lucide-user-plus",
 							label: "邀请",
 							class: "channel-primary-button",
-							disabled: !ae.value || !I(n).launch.available || de.value.tone === "warn",
+							disabled: !k.value || !I(n).launch.available || fe.value.tone === "warn",
 							loading: I(a) === "invite_member"
 						}, null, 8, ["disabled", "loading"])])
 					], 32)]),
 					_: 1
 				}, 8, ["open"]),
-				q(Oe, {
+				q(ke, {
 					open: o.value,
 					"onUpdate:open": l[16] ||= (e) => o.value = e,
 					title: "提前结束讨论",
@@ -50165,24 +50178,24 @@ var MK = /*#__PURE__*/ EH({
 					body: L(() => [K("div", pX, [K("button", {
 						type: "button",
 						class: "progress-ending-option",
-						disabled: !E.value || !!I(a),
-						onClick: l[14] ||= (e) => De("force_close")
+						disabled: !D.value || !!I(a),
+						onClick: l[14] ||= (e) => Oe("force_close")
 					}, [
 						l[29] ||= K("strong", null, "请主持人收尾", -1),
 						K("span", null, "立即进入收束，由 " + P(I(r).display_name(m.value.host)) + " 在 " + P(h.value.summary_minutes || 5) + " 分钟收束预留内根据已有材料总结。", 1),
-						E.value ? Y("", !0) : (U(), W("small", hX, P(h.value.closing ? "已在收尾中。" : "仅进行中的讨论可以收尾；暂停后可先重启再收尾，或直接结束并保留记录。"), 1))
+						D.value ? Y("", !0) : (U(), W("small", hX, P(h.value.closing ? "已在收尾中。" : "仅进行中的讨论可以收尾；暂停后可先重启再收尾，或直接结束并保留记录。"), 1))
 					], 8, mX), K("button", {
 						type: "button",
 						class: "progress-ending-option",
 						disabled: b.value || !!I(a),
-						onClick: l[15] ||= (e) => De("conclude_discussion")
+						onClick: l[15] ||= (e) => Oe("conclude_discussion")
 					}, [...l[30] ||= [K("strong", null, "直接结束（不总结）", -1), K("span", null, "保留全部记录，阶段设为“已收束”，自动运行随之停止。", -1)]], 8, gX)])]),
 					_: 1
 				}, 8, ["open"])
 			], 2);
 		};
 	}
-}, [["__scopeId", "data-v-6bdb31f8"]]), bX = { class: "progress-panel-anchor" }, xX = ["aria-expanded", "aria-label"], SX = { class: "progress-chip-text" }, CX = { class: "progress-chip-rounds" }, wX = {
+}, [["__scopeId", "data-v-796b267c"]]), bX = { class: "progress-panel-anchor" }, xX = ["aria-expanded", "aria-label"], SX = { class: "progress-chip-text" }, CX = { class: "progress-chip-rounds" }, wX = {
 	__name: "ProgressPanel",
 	setup(e) {
 		let { view: t, bridge: n } = xr("discussion"), r = /* @__PURE__ */ F(!1), i = Z(() => t.value.room), a = Z(() => i.value.limits || {}), o = Z(() => {
