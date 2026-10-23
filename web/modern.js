@@ -33912,7 +33912,7 @@ function OV() {
 			"move_folder",
 			"create"
 		].includes(t)) return e.execute(t, r);
-		if (n.value) return !1;
+		if (n.value) return e.execute("busy", n.value);
 		n.value = t;
 		try {
 			return await e.execute(t, r);

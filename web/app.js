@@ -2979,6 +2979,7 @@ async function execute_view_action(name, value) {
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
     load_room_configuration, save_room_configuration, interrupt_member, change_member, invite_member, interrupt_free, set_proxy, copy_online_notice,
     prepare_brainstorm, return_conclusion, convert_suggestion,
+    busy: () => { throw new Error("上一个操作仍在处理中，请稍候；长时间无响应请刷新页面"); },
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };
   try {
     await actions[name](value);

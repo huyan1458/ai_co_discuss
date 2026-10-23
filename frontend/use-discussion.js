@@ -12,7 +12,7 @@ export function use_discussion() {
     set: (value) => bridge.write_field(id, value) });
   async function act(name, value) {
     if (["manage_channel", "move_channel", "create_folder", "rename_folder", "delete_folder", "move_folder", "create"].includes(name)) return bridge.execute(name, value);
-    if (pending.value) return false;
+    if (pending.value) return bridge.execute("busy", pending.value);
     pending.value = name;
     try { return await bridge.execute(name, value); }
     finally { pending.value = ""; }
