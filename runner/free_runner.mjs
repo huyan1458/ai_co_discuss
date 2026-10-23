@@ -216,10 +216,10 @@ export class FreeRoomRunner {
     if (row.error) return this.fail(member.name, execution.id, row.error);
     if (this.exited.has(execution.id)) {
       const latest = await api(this.config, `/executions/${execution.id}`);
-      if (['dispatched', 'started'].includes(latest.status)) return this.fail(member.name, execution.id, `${member.name} 会话已结束，但未提交本次回答`);
+      if (['dispatched', 'started'].includes(latest.status)) return this.fail(member.name, execution.id, `${member.name} 会话已结束，但未提交本次回答；请核对原会话确认是否已有内容`);
       return this.save(member.name, { status: 'idle' });
     }
-    if (Date.now() >= execution.created_at * 1000 + minutes * 60_000) return this.fail(member.name, execution.id, `超过单次执行时限 ${minutes} 分钟`);
+    if (Date.now() >= execution.created_at * 1000 + minutes * 60_000) return this.fail(member.name, execution.id, `超过单次执行时限 ${minutes} 分钟；请核对原会话确认是否已有内容`);
     if (Date.now() - row.last_renew >= RENEW_MS) {
       await api(this.config, `/executions/${execution.id}`, { action: 'renew' });
       this.save(member.name, { last_renew: Date.now() });

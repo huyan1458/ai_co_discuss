@@ -314,7 +314,7 @@ export class DiscussionRunner {
     if (this.exited.has(row.id) && ['dispatched', 'started'].includes(event.status)) {
       // A business write may have just completed the task; recheck before declaring a silent exit.
       const latest = await api(this.config, `/events/${row.id}`, { action: 'view' });
-      if (['dispatched', 'started'].includes(latest.status)) return this.fail(row, `${event.participant} 会话已结束，但未保存本次结果${this.exited.get(row.id) ? `：${this.exited.get(row.id)}` : ''}`);
+      if (['dispatched', 'started'].includes(latest.status)) return this.fail(row, `${event.participant} 会话已结束，但未保存本次结果${this.exited.get(row.id) ? `：${this.exited.get(row.id)}` : ''}；请核对原会话确认是否已有内容`);
       return this.reconcile(row, latest);
     }
     if (event.status === 'started' && event.lease_until <= Math.floor(Date.now() / 1000)) return this.fail(row, '执行租约到期；旧会话不能继续写入');

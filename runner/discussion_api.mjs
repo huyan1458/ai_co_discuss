@@ -90,6 +90,16 @@ function api_headers(protocol, key) {
   return { Authorization: `Bearer ${key}` };
 }
 
+/** Say whether fixing the setup or waiting helps; a wait hint never implies an uncertain run may be replayed. */
+export function api_status_message(status) {
+  const head = `模型 API 返回 HTTP ${status}`;
+  if (status === 401 || status === 403) return `${head}：密钥无效或无权访问该模型，请核对 API Key 与模型权限`;
+  if (status === 404) return `${head}：地址或模型 ID 不存在，请核对 Base URL、请求协议和模型 ID`;
+  if (status === 429) return `${head}：请求过多或额度已用尽，请等待恢复后再试（执行中出现时，先核对房间里是否已有本次内容）`;
+  if (status >= 500) return `${head}：服务暂时不可用，请稍后再试（执行中出现时，先核对房间里是否已有本次内容）`;
+  return `${head}，请核对地址、密钥、模型和请求协议`;
+}
+
 /** A bounded request; errors expose only status, never provider bodies or authorization. */
 async function provider_fetch(profile, key, request, signal) {
   let response;
@@ -100,8 +110,8 @@ async function provider_fetch(profile, key, request, signal) {
       body: request.body === undefined ? undefined : JSON.stringify(request.body),
       signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]) : AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
-  } catch { throw new Error(signal?.aborted ? 'API 执行已取消' : 'API 请求超时或连接失败，请核对 Base URL'); }
-  if (!response.ok) throw new Error(`模型 API 返回 HTTP ${response.status}，请核对地址、密钥、模型和请求协议`);
+  } catch { throw new Error(signal?.aborted ? 'API 执行已取消' : 'API 请求超时或连接失败：可能是网络暂时不通或 Base URL 有误，请核对'); }
+  if (!response.ok) throw new Error(api_status_message(response.status));
   try { return await response.json(); } catch { throw new Error('模型 API 返回的内容不是有效 JSON'); }
 }
 

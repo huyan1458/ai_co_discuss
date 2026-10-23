@@ -345,7 +345,7 @@ test('a session that exits without saving its result pauses after rechecking the
   await runner.tick(); await delay(5);
   f.event.status = 'started'; f.event.lease_until = Math.floor(Date.now() / 1000) + 120;
   await runner.tick();
-  assert.equal(f.event.status, 'failed'); assert.match(f.event.result, /会话已结束，但未保存本次结果/);
+  assert.equal(f.event.status, 'failed'); assert.match(f.event.result, /会话已结束，但未保存本次结果.*请核对原会话/);
 });
 
 test('a late Sidecar receipt is reconciled without another request', async t => {
@@ -1520,7 +1520,7 @@ async function free_fixture(t) {
       result = execution;
     } else if (url.startsWith('/executions/')) {
       const execution = state.executions.find(item => item.id === Number(url.split('/')[2]));
-      if (body?.action === 'fail') execution.status = 'failed';
+      if (body?.action === 'fail') { execution.status = 'failed'; execution.result = body.reason; }
       if (body?.action === 'release') { execution.status = 'cancelled'; state.pending = execution.requests; }
       if (body?.action === 'report') state.reports[execution.id] = body.changes;
       result = execution;
@@ -1590,6 +1590,7 @@ test('a free member that exits without answering fails only its own execution', 
   await runner.tick();
   assert.equal(state.executions[0].status, 'failed');
   assert.ok(state.calls.includes('POST /executions/1 fail'));
+  assert.match(state.executions[0].result, /会话已结束，但未提交本次回答.*请核对原会话/);
 });
 
 test('an interrupted free execution stops only that member and is not redelivered', async t => {

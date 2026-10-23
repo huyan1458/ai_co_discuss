@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { API_PROVIDERS, api_base_url, api_check, api_generate, api_history, api_models, api_request, api_response, api_tool_results, read_api_key, save_api_key } from '../runner/discussion_api.mjs';
+import { API_PROVIDERS, api_base_url, api_check, api_generate, api_status_message, api_history, api_models, api_request, api_response, api_tool_results, read_api_key, save_api_key } from '../runner/discussion_api.mjs';
 import { participant_tools, peer_reading_granted, system_prompt } from '../runner/api_participant.mjs';
 import { launch_discussion } from '../runner/discussion_launch.mjs';
 import { api, DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
@@ -125,6 +125,24 @@ test('four protocols authenticate correctly and preserve tool result pairing and
   const profile = { api_protocol: 'responses' }, history = [];
   api_response(profile, { output: [{ type: 'reasoning', encrypted_content: 'opaque' }, { type: 'function_call', call_id: 'c', name: 'read_room', arguments: '{}' }] }, history);
   assert.equal(history[0].encrypted_content, 'opaque');
+});
+
+test('API HTTP errors say whether to fix the setup or wait, without implying a replay', async t => {
+  const f = await site_fixture(t);
+  for (const [status, expected] of [[401, /密钥无效或无权访问/], [403, /密钥无效或无权访问/], [404, /地址或模型 ID 不存在/],
+    [429, /请求过多或额度已用尽.*先核对房间/], [503, /服务暂时不可用.*先核对房间/], [418, /请核对地址、密钥、模型和请求协议/]]) {
+    const server = createServer((request, response) => { response.statusCode = status; response.end('{}'); });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+    const base_url = `http://127.0.0.1:${server.address().port}/custom/v1`;
+    await assert.rejects(api_models(f.home, profiles(f.home, base_url).Codex), error => {
+      assert.match(error.message, new RegExp(`HTTP ${status}`));
+      assert.match(error.message, expected);
+      assert.ok(!/稍后重启|立即重试|直接重发/.test(error.message));
+      return true;
+    });
+  }
+  assert.equal(api_status_message(200), '模型 API 返回 HTTP 200，请核对地址、密钥、模型和请求协议');
 });
 
 test('DeepSeek model discovery preserves display names separately from callable model IDs', async t => {
