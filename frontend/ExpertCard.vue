@@ -173,6 +173,19 @@ function escape(event) {
   cancel();
 }
 
+// Dropdowns of the back's selects render outside the card, so they count as inside.
+const FLOATING_SELECTOR = "[role='listbox'], [role='menu'], [data-reka-popper-content-wrapper]";
+
+/** Clicking anywhere outside the open back keeps its edits and returns to the front. */
+function close_on_outside(event) {
+  if (card.value?.contains(event.target) || event.target.closest?.(FLOATING_SELECTOR)) return;
+  flip(false);
+}
+watch(back, (open) => {
+  if (open) document.addEventListener("pointerdown", close_on_outside, true);
+  else document.removeEventListener("pointerdown", close_on_outside, true);
+});
+
 watch([back, reduced_motion], ([next, reduced]) => {
   const target = next ? BACK_ANGLE : 0;
   if (reduced) { angle.jump(target); focus_face(); }
@@ -181,7 +194,7 @@ watch([back, reduced_motion], ([next, reduced]) => {
 // Prefetch as soon as the card can use a catalog, so flipping does not wait on a slow CLI query.
 watch(() => [configurable.value, view.value.launch.available, profile.value.adapter],
   ([enabled, available]) => { if (enabled && available) bridge.load_launch_models(props.name); }, { immediate: true });
-onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
+onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_outside, true); stop_observing(); stop_settling(); angle.stop(); });
 </script>
 
 <template>

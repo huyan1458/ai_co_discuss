@@ -1379,6 +1379,7 @@ async function check_limits(database, room_id, payload) {
     database.prepare("UPDATE room_floor SET holder=NULL,next_speaker=?,revision=revision+1 WHERE room_id=?").bind(room.host, room_id),
     closing ? database.prepare("UPDATE discussion_runtime SET generation=generation+1,revision=revision+1,deadline=CASE WHEN deadline=0 THEN ? ELSE MIN(deadline,?) END WHERE room_id=? AND status='running'").bind(summary_deadline, summary_deadline, room_id)
       : database.prepare("UPDATE topic_settings SET phase='paused' WHERE room_id=?").bind(room_id)];
+  if (!closing) statements.push(database.prepare("UPDATE discussion_runtime SET status='paused',generation=generation+1,revision=revision+1 WHERE room_id=? AND status='running'").bind(room_id));
   await checked_batch(database, `EXISTS(SELECT 1 FROM discussion_limits WHERE room_id=? AND revision=?)
     AND EXISTS(SELECT 1 FROM topic_settings WHERE room_id=? AND phase=? AND host=? AND json(experts)=json(?))
     AND COALESCE((SELECT MAX(id) FROM messages WHERE room_id=?),0)=?`,

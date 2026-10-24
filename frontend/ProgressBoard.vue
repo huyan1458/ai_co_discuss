@@ -51,6 +51,7 @@ const record = (name) => (room.value.members || []).find((member) => member.name
 const can_invite = computed(() => automatic.value && !settled.value);
 // Everyone picked for one invitation, one card per platform: [{ name, mode, session }].
 const invite_picks = ref([]);
+let invite_pick_seq = 0;
 const inviting = ref(false);
 // Instance names of just-invited manual members; the dialog then shows their start step.
 const invited_manual = ref([]);
@@ -59,12 +60,18 @@ const invite_tried = ref(false);
 const invite_choices = computed(() => Object.keys(bridge.launch_clients));
 const taken_names = computed(() => (room.value.members || []).map((member) => member.name));
 const invite_count = (platform) => taken_names.value.filter((name) => bridge.platform_of(name) === platform).length;
-// Mirrors the instance name the invite assigns, so the dialog says which seat the card will take.
-function invite_instance(name) {
-  let instance = name;
-  for (let number = 2; taken_names.value.includes(instance); number++) instance = `${name}-${number}`;
-  return instance;
-}
+// Woken members join first so a manual member that has not registered yet never holds them up.
+const ordered_picks = computed(() => [...invite_picks.value.filter((pick) => pick.mode !== "manual"), ...invite_picks.value.filter((pick) => pick.mode === "manual")]);
+// Mirrors the instance names the invite assigns in join order, so each card says which seat it will take.
+const pick_instances = computed(() => {
+  const taken = [...taken_names.value];
+  return new Map(ordered_picks.value.map((pick) => {
+    let instance = pick.name;
+    for (let number = 2; taken.includes(instance); number++) instance = `${pick.name}-${number}`;
+    taken.push(instance);
+    return [pick, instance];
+  }));
+});
 /** Same readiness rule as the create form: the card's back must name a runnable entry. */
 function invite_status(name) {
   const profile = view.value.launch.profiles[name] || {};
@@ -189,26 +196,22 @@ function open_invite() {
   inviting.value = true;
 }
 
-/** Add or drop a library card; a platform without local software starts on its API, as in the create form. */
-function toggle_invite(name) {
-  if (invite_picks.value.some((pick) => pick.name === name)) {
-    invite_picks.value = invite_picks.value.filter((pick) => pick.name !== name);
-    return;
-  }
+/** Add a card for a platform, again for a second instance; one without local software starts on its API, as in the create form. */
+function add_invite(name) {
   if (!bridge.launch_clients[name]?.some((item) => item.value !== "api") && !view.value.launch.profiles[name]?.adapter) bridge.write_launch(name, "adapter", "api");
-  invite_picks.value = [...invite_picks.value, { name, mode: "cli", session: "" }];
+  invite_picks.value = [...invite_picks.value, { id: ++invite_pick_seq, name, mode: "cli", session: "" }];
 }
 
 /** Invite one by one through the local service, which configures each expert from its card before the room admits it; stop at the first failure and keep the rest picked. */
 async function invite() {
   invite_tried.value = true;
   const manual_names = [];
-  // Woken members join first so a manual member that has not registered yet never holds them up.
-  const ordered = [...invite_picks.value.filter((pick) => pick.mode !== "manual"), ...invite_picks.value.filter((pick) => pick.mode === "manual")];
-  for (const pick of ordered) {
+  // Snapshot before the loop: removing invited picks would otherwise shift the names of the rest.
+  const instances = new Map(pick_instances.value);
+  for (const pick of [...ordered_picks.value]) {
     const profile = view.value.launch.profiles[pick.name] || {};
     const manual = pick.mode === "manual";
-    const instance = invite_instance(pick.name);
+    const instance = instances.get(pick);
     await act("invite_member", { name: pick.name, access: manual ? "manual" : "runner",
       project_access: profile.project_access || view.value.launch.workspace?.project_access || "read",
       session_id: bridge.launch_can_bind_session(pick.name, view.value.launch) ? pick.session : "" });
@@ -378,18 +381,19 @@ async function finish(action) {
         </div>
         <form v-else class="pb-invite" aria-label="邀请专家" @submit.prevent="invite">
           <div class="pb-invite-library" role="group" aria-label="选择 AI（可多选）">
-            <button v-for="name in invite_choices" :key="name" type="button" :aria-pressed="invite_picks.some((pick) => pick.name === name)" :title="invite_count(name) ? `已在场 ${invite_count(name)} 位 · 将添加新实例` : ''" @click="toggle_invite(name)">
+            <button v-for="name in invite_choices" :key="name" type="button" :aria-pressed="invite_picks.some((pick) => pick.name === name)" :title="invite_count(name) ? `已在场 ${invite_count(name)} 位 · 将添加新实例` : ''" @click="add_invite(name)">
               <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="3xs" class="channel-avatar" :class="bridge.identities[name]?.style" />{{ name }}
             </button>
           </div>
           <div v-if="invite_picks.length" class="pb-invite-cards">
-            <div v-for="pick in invite_picks" :key="pick.name" class="pb-invite-pick">
-              <ExpertCard :name="pick.name" :mode="pick.mode" :choices="['cli', 'manual']" :status="invite_card_status(pick)" :session="pick.session" @mode="pick.mode = $event" @session="pick.session = $event" @remove="toggle_invite(pick.name)" />
-              <p v-if="invite_instance(pick.name) !== pick.name" class="fine-print">已有 {{ pick.name }} 在场，将以 {{ invite_instance(pick.name) }} 加入，使用独立会话。</p>
+            <div v-for="pick in invite_picks" :key="pick.id" class="pb-invite-pick">
+              <ExpertCard :name="pick.name" :mode="pick.mode" :choices="['cli', 'manual']" :status="invite_card_status(pick)" :session="pick.session" @mode="pick.mode = $event" @session="pick.session = $event" @remove="invite_picks = invite_picks.filter((item) => item !== pick)" />
+              <p v-if="pick_instances.get(pick) !== pick.name" class="fine-print">同一 AI 已有实例，将以 {{ pick_instances.get(pick) }} 加入，使用独立会话。</p>
             </div>
           </div>
-          <p v-if="invite_picks.some((pick) => pick.mode === 'manual') && invite_picks.some((pick) => pick.mode !== 'manual')" class="fine-print">手动启动的成员排在程序启动的成员之后加入队列。</p>
-          <p v-else-if="!invite_picks.length" class="pb-invite-empty">选择一位或多位 AI，点卡片翻面设置软件、模型与项目权限。</p>
+          <!-- Always rendered once cards exist, so switching a card's mode never changes the dialog height. -->
+          <p v-if="invite_picks.length" class="fine-print" :class="{ 'pb-invite-reserved': !(invite_picks.some((pick) => pick.mode === 'manual') && invite_picks.some((pick) => pick.mode !== 'manual')) }" :aria-hidden="!(invite_picks.some((pick) => pick.mode === 'manual') && invite_picks.some((pick) => pick.mode !== 'manual'))">手动启动的成员排在程序启动的成员之后加入队列。</p>
+          <p v-else class="pb-invite-empty">选择一位或多位 AI（同一 AI 可重复添加），点卡片翻面设置软件、模型与项目权限。</p>
           <p v-if="invite_picks.some((pick) => pick.mode === 'cli') && !view.launch.available" role="alert" class="fine-print">邀请需要本机服务，请在运行 AI 的电脑打开本机网站。</p>
           <p v-if="invite_tried && view.free_error" role="alert" class="pb-free-note is-error">{{ view.free_error }}</p>
           <div class="pb-invite-footer">
@@ -451,6 +455,7 @@ async function finish(action) {
 .pb-invite-library > button:hover { border-color: var(--ui-border-accented); background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); }
 .pb-invite-library > button[aria-pressed="true"] { border-color: color-mix(in srgb, var(--channel-accent) 55%, transparent); background: color-mix(in srgb, var(--channel-accent) 12%, transparent); color: var(--ui-text-highlighted); }
 .pb-invite-library .channel-avatar { flex-shrink: 0; width: 20px; height: 20px; font-size: 9px; }
+.pb-invite-reserved { visibility: hidden; }
 .pb-invite-empty { margin: 0; padding: 18px 12px; border: 1px dashed var(--ui-border); border-radius: 8px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }
 .pb-invite-footer { display: flex; justify-content: flex-end; gap: 8px; }
 @media (pointer: coarse) { .pb-invite-library > button, .pb-invite-options label { min-height: 44px; } }

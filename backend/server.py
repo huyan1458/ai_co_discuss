@@ -1092,6 +1092,8 @@ def check_limits(connection, room_id, payload):
                            (summary_deadline, summary_deadline, room_id))
     else:
         connection.execute("UPDATE topic_settings SET phase='paused' WHERE room_id=?", (room_id,))
+        # Pausing at the limit also pauses the run, so the board offers restart and the old execution is superseded.
+        connection.execute("UPDATE discussion_runtime SET status='paused',generation=generation+1,revision=revision+1 WHERE room_id=? AND status='running'", (room_id,))
     return require_room(connection, room_id)
 
 
