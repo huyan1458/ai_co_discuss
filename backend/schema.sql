@@ -607,6 +607,11 @@ CREATE TABLE IF NOT EXISTS scheduler_decisions (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS scheduler_decisions_room ON scheduler_decisions(room_id,id);
+-- What the decision model was asked and chose, shown folded under the decision; not part of backups.
+CREATE TABLE IF NOT EXISTS scheduler_decision_details (
+    decision_id INTEGER PRIMARY KEY REFERENCES scheduler_decisions(id) ON DELETE CASCADE,
+    detail TEXT NOT NULL
+);
 -- Smart scheduling's suggestion that another member answer an unnamed message. The host keeps the message;
 -- the user may adopt before expires_at (waiting until the host's request ends for mode 'after'), otherwise it lapses.
 CREATE TABLE IF NOT EXISTS member_recommendations (

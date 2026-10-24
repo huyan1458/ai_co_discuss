@@ -576,6 +576,8 @@ class RuntimeTests(unittest.TestCase):
         token = self.enter(self.events()[-1])
         self.answer("Gemini", room["current_turn"]["id"], token, "arrangement-Gemini")
         host_token = self.enter(self.events()[-1])
+        self.take_floor("Codex", host_token)
+        time.sleep(1.1)  # plans are grouped by creation second, as real experts always take longer than this
         status, plan = self.request(self.path + "/turns", {"actor": "Codex", "submission_id": "arrangement-next",
             "turns": [{"expert": "Gemini", "question": "补充"}, {"expert": "Claude", "question": "回应"}]}, host_token)
         self.assertEqual(status, 201, plan)

@@ -252,6 +252,8 @@ test('without named follow-ups smart scheduling opens the next peer round itself
   assert.ok(turns.every(turn => turn.question === peer_round_question(2)));
   assert.deepEqual(Object.keys(r.sent[0].questions.first.criteria), ['Grok', 'DeepSeek']);
   assert.deepEqual(room.scheduler_decisions.map(item => [item.kind, item.applied, item.confidence]), [['round', 1, 0.9], ['round', 1, 0.9], ['round', 1, 0.9], ['round', 0, 0.95]]);
+  // What was asked and chosen is stored beside each decision, without the room excerpts.
+  assert.deepEqual(room.scheduler_decisions[1].detail.map(item => [item.choice, item.choices]), [['Grok', ['Grok', 'Qwen', '__host__']]]);
 });
 
 test('an interjection the provider assigns to one expert is answered next, before the rest of the plan', async t => {

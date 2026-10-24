@@ -74,6 +74,7 @@ MAX_QUESTION_LENGTH = 1000
 MAX_PLAN_TURNS = 10
 RECENT_DECISIONS = 100
 MAX_DECISION_LABEL = 200
+MAX_DECISION_DETAIL = 4000
 SCHEDULER_PROVIDERS = ("jev", "decisions")
 ROOM_BACKUP_QUERIES = {
     "rooms": "SELECT * FROM rooms WHERE id=?",
@@ -220,6 +221,10 @@ def require_room(connection, room_id):
     room["named_followup"] = bool(option[0]) if option else True
     room["scheduler_decisions"] = [dict(row) for row in connection.execute(
         "SELECT * FROM scheduler_decisions WHERE room_id=? ORDER BY id DESC LIMIT ?", (room_id, RECENT_DECISIONS))][::-1]
+    details = {row[0]: json.loads(row[1]) for row in connection.execute(
+        "SELECT decision_id,detail FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)", (room_id,))}
+    for decision in room["scheduler_decisions"]:
+        decision["detail"] = details.get(decision["id"])
     room["host_arrangements"] = host_arrangements(connection, room_id, room["scheduler_decisions"])
     parent = connection.execute("""SELECT rooms.id,rooms.title FROM room_links JOIN rooms ON rooms.id=room_links.parent_id
         WHERE room_links.room_id=?""", (room_id,)).fetchone()
@@ -571,6 +576,8 @@ def delete_room_records(connection, room_id):
     """Remove a room's dependent records in the caller's transaction."""
     for table in ("member_recommendations", "member_requests", "member_executions", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "room_links",
                   "discussion_options", "scheduler_decisions"):
+        if table == "scheduler_decisions":
+            connection.execute("DELETE FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)", (room_id,))
         connection.execute(f"DELETE FROM {table} WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM message_timings WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)", (room_id,))
     connection.execute("DELETE FROM message_summaries WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)", (room_id,))
@@ -1033,6 +1040,12 @@ def record_scheduler_decision(connection, room_id, token, payload):
         raise ValueError("须提供供应商 provider、是否执行 applied 与非负的 after_message_id")
     cursor = connection.execute("""INSERT INTO scheduler_decisions (room_id,after_message_id,kind,label,confidence,applied,provider,created_at)
         VALUES (?,?,?,?,?,?,?,?)""", (room_id, after, kind, label.strip(), confidence, int(payload["applied"]), payload["provider"], utc_now()))
+    detail = payload.get("detail")
+    if detail is not None:
+        text = json.dumps(detail, ensure_ascii=False)
+        if not isinstance(detail, list) or len(detail) > 4 or len(text) > MAX_DECISION_DETAIL:
+            raise ValueError(f"detail 须为最多 4 项、不超过 {MAX_DECISION_DETAIL} 字的列表")
+        connection.execute("INSERT INTO scheduler_decision_details (decision_id,detail) VALUES (?,?)", (cursor.lastrowid, text))
     return dict(connection.execute("SELECT * FROM scheduler_decisions WHERE id=?", (cursor.lastrowid,)).fetchone())
 
 

@@ -26,6 +26,7 @@ const MAX_QUESTION_LENGTH = 1000;
 const MAX_PLAN_TURNS = 10;
 const RECENT_DECISIONS = 100;
 const MAX_DECISION_LABEL = 200;
+const MAX_DECISION_DETAIL = 4000;
 const LIMIT_DEFAULTS = { max_rounds: 0, max_minutes: 0, execution_minutes: 0, on_limit: "pause", summary_minutes: 5 };
 // Idle (paused, preparing or concluded) seconds are excluded from elapsed time and total-duration deadlines.
 const LIMITS_SQL = `SELECT limits.*,COALESCE(pauses.paused_seconds,0)+CASE WHEN COALESCE(pauses.paused_at,0)>0
@@ -358,6 +359,9 @@ async function require_room(database, room_id) {
   result.named_followup = option ? Boolean(option.named_followup) : true;
   result.scheduler_decisions = (await database.prepare("SELECT * FROM scheduler_decisions WHERE room_id=? ORDER BY id DESC LIMIT ?")
     .bind(room_id, RECENT_DECISIONS).all()).results.reverse();
+  const details = new Map((await database.prepare("SELECT decision_id,detail FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)")
+    .bind(room_id).all()).results.map((row) => [row.decision_id, JSON.parse(row.detail)]));
+  for (const decision of result.scheduler_decisions) decision.detail = details.get(decision.id) ?? null;
   result.host_arrangements = await host_arrangements(database, room_id, result.scheduler_decisions);
   result.parent_room = await database.prepare("SELECT rooms.id,rooms.title FROM room_links JOIN rooms ON rooms.id=room_links.parent_id WHERE room_links.room_id=?")
     .bind(room_id).first();
@@ -723,7 +727,8 @@ async function manage_room(database, room_id, action, payload) {
       "DELETE FROM member_recommendations WHERE room_id=?", "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?", "DELETE FROM member_sessions WHERE room_id=?", "DELETE FROM member_registrations WHERE room_id=?",
       "DELETE FROM room_members WHERE room_id=?", "DELETE FROM room_modes WHERE room_id=?",
       "DELETE FROM free_batches WHERE room_id=?", "DELETE FROM free_chains WHERE room_id=?", "DELETE FROM room_links WHERE room_id=?",
-      "DELETE FROM discussion_options WHERE room_id=?", "DELETE FROM scheduler_decisions WHERE room_id=?",
+      "DELETE FROM discussion_options WHERE room_id=?",
+      "DELETE FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)", "DELETE FROM scheduler_decisions WHERE room_id=?",
       "DELETE FROM message_timings WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
       "DELETE FROM message_summaries WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
       "DELETE FROM message_details WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
@@ -1669,8 +1674,15 @@ async function record_scheduler_decision(database, room_id, token, payload) {
   if (!["jev", "decisions"].includes(provider) || typeof applied !== "boolean" || !Number.isInteger(after) || after < 0) {
     throw new HttpError(400, "须提供供应商 provider、是否执行 applied 与非负的 after_message_id");
   }
-  return database.prepare(`INSERT INTO scheduler_decisions (room_id,after_message_id,kind,label,confidence,applied,provider,created_at)
+  const { detail } = payload;
+  const detail_text = detail === undefined || detail === null ? null : JSON.stringify(detail);
+  if (detail_text !== null && (!Array.isArray(detail) || detail.length > 4 || detail_text.length > MAX_DECISION_DETAIL)) {
+    throw new HttpError(400, `detail 须为最多 4 项、不超过 ${MAX_DECISION_DETAIL} 字的列表`);
+  }
+  const row = await database.prepare(`INSERT INTO scheduler_decisions (room_id,after_message_id,kind,label,confidence,applied,provider,created_at)
     VALUES (?,?,?,?,?,?,?,?) RETURNING *`).bind(room_id, after, kind, label.trim(), confidence, Number(applied), provider, new Date().toISOString()).first();
+  if (detail_text !== null) await database.prepare("INSERT INTO scheduler_decision_details (decision_id,detail) VALUES (?,?)").bind(row.id, detail_text).run();
+  return row;
 }
 
 // Free collaboration rooms: the D1 counterpart of backend/free_room.py. Rooms without a

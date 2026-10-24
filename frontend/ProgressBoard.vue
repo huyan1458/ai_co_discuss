@@ -49,34 +49,35 @@ const away_members = computed(() => (room.value.members || []).filter((member) =
 const record = (name) => (room.value.members || []).find((member) => member.name === name);
 // A used platform adds another instance; the invite dialog picks woken or manual delivery.
 const can_invite = computed(() => automatic.value && !settled.value);
-const invite_name = ref("");
-const invite_session = ref("");
-// A discussion's invited expert is woken by the local service or answers by hand with its own credential.
-const invite_mode = ref("cli");
+// Everyone picked for one invitation, one card per platform: [{ name, mode, session }].
+const invite_picks = ref([]);
 const inviting = ref(false);
-// Instance name of a just-invited manual member; the dialog then shows its start step.
-const invited_manual = ref("");
+// Instance names of just-invited manual members; the dialog then shows their start step.
+const invited_manual = ref([]);
 // Board errors from earlier actions stay out of the dialog until this invite is submitted.
 const invite_tried = ref(false);
 const invite_choices = computed(() => Object.keys(bridge.launch_clients));
 const taken_names = computed(() => (room.value.members || []).map((member) => member.name));
 const invite_count = (platform) => taken_names.value.filter((name) => bridge.platform_of(name) === platform).length;
 // Mirrors the instance name the invite assigns, so the dialog says which seat the card will take.
-const invite_instance = computed(() => {
-  let instance = invite_name.value;
-  for (let number = 2; taken_names.value.includes(instance); number++) instance = `${invite_name.value}-${number}`;
+function invite_instance(name) {
+  let instance = name;
+  for (let number = 2; taken_names.value.includes(instance); number++) instance = `${name}-${number}`;
   return instance;
-});
+}
 /** Same readiness rule as the create form: the card's back must name a runnable entry. */
-const invite_status = computed(() => {
-  const profile = view.value.launch.profiles[invite_name.value] || {};
+function invite_status(name) {
+  const profile = view.value.launch.profiles[name] || {};
   const api = profile.adapter === "api";
   const ready = api ? Boolean(profile.base_url && profile.api_protocol && profile.api_key_ref && profile.model)
     : Boolean(profile.adapter && (profile.adapter === "antigravity" ? profile.ipc_directory : profile.executable));
   return ready ? { text: api ? "已配置 API" : "已配置本机软件", tone: "ready" } : { text: api ? "待补齐 API 配置" : "待补齐接入配置", tone: "warn" };
-});
-const invite_card_status = computed(() => invite_mode.value === "manual" ? { text: "手动启动，自行提交", tone: "muted" } : invite_status.value);
-watch(() => room.value.id, () => { inviting.value = false; invite_name.value = ""; invite_session.value = ""; invite_mode.value = "cli"; });
+}
+const invite_card_status = (pick) => pick.mode === "manual" ? { text: "手动启动，自行提交", tone: "muted" } : invite_status(pick.name);
+// Woken picks need the local service and a runnable entry; manual ones need neither.
+const invite_blocked = computed(() => !invite_picks.value.length
+  || invite_picks.value.some((pick) => pick.mode === "cli" && (!view.value.launch.available || invite_status(pick.name).tone === "warn")));
+watch(() => room.value.id, () => { inviting.value = false; invite_picks.value = []; });
 const focus = computed(() => turn.value?.question || room.value.focus || room.value.goal || "");
 const focus_long = computed(() => focus.value.length > FOCUS_PREVIEW_LENGTH);
 const timings = computed(() => runtime.value.timings || { items: [], totals: {}, count: 0 });
@@ -182,39 +183,42 @@ function member_menu(member) {
 
 /** Open the card library with a clean choice; earlier notices belong to the board. */
 function open_invite() {
-  invite_name.value = "";
-  invite_session.value = "";
-  invite_mode.value = "cli";
+  invite_picks.value = [];
   invite_tried.value = false;
-  invited_manual.value = "";
+  invited_manual.value = [];
   inviting.value = true;
 }
 
-/** Pick a library card; a platform without local software starts on its API, as in the create form. */
-function pick_invite(name) {
+/** Add or drop a library card; a platform without local software starts on its API, as in the create form. */
+function toggle_invite(name) {
+  if (invite_picks.value.some((pick) => pick.name === name)) {
+    invite_picks.value = invite_picks.value.filter((pick) => pick.name !== name);
+    return;
+  }
   if (!bridge.launch_clients[name]?.some((item) => item.value !== "api") && !view.value.launch.profiles[name]?.adapter) bridge.write_launch(name, "adapter", "api");
-  invite_name.value = name;
-  invite_mode.value = "cli";
+  invite_picks.value = [...invite_picks.value, { name, mode: "cli", session: "" }];
 }
 
-/** Invite through the local service, which configures the expert from its card before the room admits it. */
+/** Invite one by one through the local service, which configures each expert from its card before the room admits it; stop at the first failure and keep the rest picked. */
 async function invite() {
-  const profile = view.value.launch.profiles[invite_name.value] || {};
   invite_tried.value = true;
-  const manual = invite_mode.value === "manual";
-  const instance = invite_instance.value;
-  await act("invite_member", { name: invite_name.value, access: manual ? "manual" : "runner",
-    project_access: profile.project_access || view.value.launch.workspace?.project_access || "read",
-    session_id: bridge.launch_can_bind_session(invite_name.value, view.value.launch) ? invite_session.value : "" });
-  if (view.value.free_error) return;
-  // A manual member only starts when its launch instruction reaches the user's own AI session, so the dialog stays for that step.
-  if (manual) invited_manual.value = instance;
-  else inviting.value = false;
-}
-
-/** Close the invitation only after the manual member's launch instruction is copied. */
-async function copy_invited_launch() {
-  if (await act("copy_member_launch", invited_manual.value)) inviting.value = false;
+  const manual_names = [];
+  // Woken members join first so a manual member that has not registered yet never holds them up.
+  const ordered = [...invite_picks.value.filter((pick) => pick.mode !== "manual"), ...invite_picks.value.filter((pick) => pick.mode === "manual")];
+  for (const pick of ordered) {
+    const profile = view.value.launch.profiles[pick.name] || {};
+    const manual = pick.mode === "manual";
+    const instance = invite_instance(pick.name);
+    await act("invite_member", { name: pick.name, access: manual ? "manual" : "runner",
+      project_access: profile.project_access || view.value.launch.workspace?.project_access || "read",
+      session_id: bridge.launch_can_bind_session(pick.name, view.value.launch) ? pick.session : "" });
+    if (view.value.free_error) break;
+    // A manual member only starts when its launch instruction reaches the user's own AI session, so the dialog stays for that step.
+    if (manual) manual_names.push(instance);
+    invite_picks.value = invite_picks.value.filter((item) => item !== pick);
+  }
+  invited_manual.value = [...invited_manual.value, ...manual_names];
+  if (!invite_picks.value.length && !invited_manual.value.length) inviting.value = false;
 }
 
 /** Open the participant's connection editor without leaving the discussion. */
@@ -290,8 +294,10 @@ async function finish(action) {
             <div v-if="member.model" class="pb-member-model" title="本场启动配置；默认模型与默认强度由对应软件决定">{{ member.model }}</div>
             <div v-if="record(member.name)?.session_mode === 'borrowed'" class="pb-member-model" title="续接你已有的会话；它工作时请不要在原窗口继续操作">借用已有会话</div>
             <div v-if="!settled" class="pb-member-status" :class="`is-${member.tone}`"><span class="pb-dot"></span>{{ member.text }}<small v-if="member.failures"> · 失败 {{ member.failures }} 次</small></div>
-            <p v-if="member.manual && !settled && !record(member.name)?.registered_at && !member.is_host" class="pb-status-detail">把启动指令粘贴到它的 AI 会话，由它自己注册后才算到场。</p>
-            <button v-if="member.manual && !settled && can_control" type="button" class="pb-link" @click="act('copy_member_launch', member.name)"><UIcon name="i-lucide-rocket" />复制启动指令</button>
+            <div v-if="member.manual && !settled" class="pb-member-manual">
+              <span v-if="!record(member.name)?.registered_at && !member.is_host">需在它的会话中注册，才算到场</span>
+              <button v-if="can_control" type="button" class="pb-link" @click="act('copy_member_launch', member.name)"><UIcon name="i-lucide-rocket" />复制启动指令</button>
+            </div>
           </div>
           <UDropdownMenu v-if="member_menu(member).length" :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="`${member.name} 的更多操作`" /></UDropdownMenu>
         </li>
@@ -354,49 +360,43 @@ async function finish(action) {
         </div>
       </template>
     </UModal>
-    <UModal v-model:open="inviting" title="邀请专家" description="新专家由程序按本机软件配置启动，或由你手动启动，追加到本轮发言队列末尾。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
+    <UModal v-model:open="inviting" title="邀请专家" description="新专家由程序按本机软件配置启动，或由你手动启动，加入本轮发言队列。" :ui="{ content: 'glass-panel studio-modal pb-invite-modal', body: 'dialog-body' }">
       <template #body>
-        <div v-if="invited_manual" class="pb-invite" aria-label="启动手动成员">
-          <p><strong>{{ invited_manual }}</strong> 已加入。要让它开始发言：</p>
+        <div v-if="invited_manual.length && !invite_picks.length" class="pb-invite" aria-label="启动手动成员">
+          <p>{{ invited_manual.length > 1 ? '这些手动成员' : '这位手动成员' }}已加入，须在各自的会话里注册后才算到场：</p>
           <ol class="fine-print">
-            <li>点下方「复制启动指令」。</li>
-            <li>粘贴到你要用的 {{ bridge.platform_of(invited_manual) }} 会话。</li>
-            <li>轮到它时，由该会话提交回答；Claude Code / Codex 会话读取房间后即由本机服务接管，之后自动唤醒。</li>
+            <li>逐个点「复制启动指令」，粘贴到对应的 AI 会话（含该成员的凭证，不要交给别的会话）。</li>
+            <li>关闭后仍可在参与者列表中复制。</li>
           </ol>
-          <p class="fine-print">指令含该成员的凭证，只交给这个会话。关闭后仍可在参与者列表中复制。</p>
           <p v-if="view.access?.error" role="alert" class="pb-free-note is-error">{{ view.access.error }}</p>
-          <div class="pb-invite-footer">
-            <UButton icon="i-lucide-rocket" label="复制启动指令" class="channel-primary-button" :loading="pending === 'copy_member_launch'" :disabled="Boolean(pending)" @click="copy_invited_launch" />
-          </div>
+          <ul class="pb-invite-launches">
+            <li v-for="name in invited_manual" :key="name"><span>{{ bridge.display_name(name) }}<small :class="{ 'is-registered': record(name)?.registered_at }">{{ record(name)?.registered_at ? '已注册' : '待注册' }}</small></span>
+              <UButton icon="i-lucide-rocket" label="复制启动指令" size="xs" color="neutral" variant="outline" :loading="pending === 'copy_member_launch'" :disabled="Boolean(pending)" @click="act('copy_member_launch', name)" /></li>
+          </ul>
+          <div class="pb-invite-footer"><UButton label="完成" class="channel-primary-button" @click="inviting = false" /></div>
         </div>
         <form v-else class="pb-invite" aria-label="邀请专家" @submit.prevent="invite">
-          <div class="pb-invite-library" role="group" aria-label="选择 AI">
-            <button v-for="name in invite_choices" :key="name" type="button" :aria-pressed="invite_name === name" :title="invite_count(name) ? `已在场 ${invite_count(name)} 位 · 将添加新实例` : ''" @click="pick_invite(name)">
+          <div class="pb-invite-library" role="group" aria-label="选择 AI（可多选）">
+            <button v-for="name in invite_choices" :key="name" type="button" :aria-pressed="invite_picks.some((pick) => pick.name === name)" :title="invite_count(name) ? `已在场 ${invite_count(name)} 位 · 将添加新实例` : ''" @click="toggle_invite(name)">
               <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="3xs" class="channel-avatar" :class="bridge.identities[name]?.style" />{{ name }}
             </button>
           </div>
-          <template v-if="invite_name">
-            <div class="pb-invite-mode" role="radiogroup" aria-label="启动方式">
-              <span>启动方式</span>
-              <div class="pb-invite-options">
-                <label v-for="option in [{ value: 'cli', label: '程序启动' }, { value: 'manual', label: '手动启动' }]" :key="option.value" :class="{ 'is-selected': invite_mode === option.value }">
-                  <input v-model="invite_mode" type="radio" name="invite-mode" :value="option.value" />{{ option.label }}
-                </label>
-              </div>
+          <div v-if="invite_picks.length" class="pb-invite-cards">
+            <div v-for="pick in invite_picks" :key="pick.name" class="pb-invite-pick">
+              <ExpertCard :name="pick.name" :mode="pick.mode" :choices="['cli', 'manual']" :status="invite_card_status(pick)" @mode="pick.mode = $event" @remove="toggle_invite(pick.name)" />
+              <p v-if="invite_instance(pick.name) !== pick.name" class="fine-print">已有 {{ pick.name }} 在场，将以 {{ invite_instance(pick.name) }} 加入，使用独立会话。</p>
+              <UFormField v-if="pick.mode === 'cli' && bridge.launch_can_bind_session(pick.name, view.launch)" label="已有会话 ID（可选）" :description="pick.session.trim() ? '将续接这个原会话；它工作时请不要在原窗口继续操作。' : '留空则新建会话。'">
+                <UInput v-model="pick.session" placeholder="在原会话中用 /status 查看；Codex App 填聊天 ID" :aria-label="`${pick.name} 的已有会话 ID`" size="xs" class="w-full" />
+              </UFormField>
             </div>
-            <ExpertCard :key="invite_name" :name="invite_name" :mode="invite_mode" :status="invite_card_status" compact @remove="invite_name = ''" />
-            <p v-if="invite_mode === 'manual'" class="fine-print">邀请后复制启动指令，粘贴到你要使用的 AI 会话；模型与文件权限沿用该软件的设置。</p>
-            <p v-if="invite_instance !== invite_name" class="fine-print">已有 {{ invite_name }} 在场，将以 {{ invite_instance }} 加入，使用独立会话。</p>
-            <UFormField v-if="invite_mode === 'cli' && bridge.launch_can_bind_session(invite_name, view.launch)" label="已有会话 ID（可选）" :description="invite_session.trim() ? '将续接这个原会话，保留它原有的上下文；它工作时请不要在原窗口继续操作。' : '留空则新建会话。'">
-              <UInput v-model="invite_session" placeholder="在原会话中用 /status 查看；Codex App 填聊天 ID" aria-label="受邀成员的已有会话 ID" class="w-full" />
-            </UFormField>
-          </template>
-          <p v-else class="pb-invite-empty">选择一位 AI，点卡片翻面设置软件、模型与项目权限。</p>
-          <p v-if="invite_mode === 'cli' && !view.launch.available" role="alert" class="fine-print">邀请需要本机服务，请在运行 AI 的电脑打开本机网站。</p>
+          </div>
+          <p v-if="invite_picks.some((pick) => pick.mode === 'manual') && invite_picks.some((pick) => pick.mode !== 'manual')" class="fine-print">手动启动的成员排在程序启动的成员之后加入队列。</p>
+          <p v-else-if="!invite_picks.length" class="pb-invite-empty">选择一位或多位 AI，点卡片翻面设置软件、模型与项目权限。</p>
+          <p v-if="invite_picks.some((pick) => pick.mode === 'cli') && !view.launch.available" role="alert" class="fine-print">邀请需要本机服务，请在运行 AI 的电脑打开本机网站。</p>
           <p v-if="invite_tried && view.free_error" role="alert" class="pb-free-note is-error">{{ view.free_error }}</p>
           <div class="pb-invite-footer">
             <UButton label="取消" color="neutral" variant="ghost" @click="inviting = false" />
-            <UButton type="submit" icon="i-lucide-user-plus" label="邀请" class="channel-primary-button" :disabled="!invite_name || (invite_mode === 'cli' && (!view.launch.available || invite_status.tone === 'warn'))" :loading="pending === 'invite_member'" />
+            <UButton type="submit" icon="i-lucide-user-plus" :label="invite_picks.length > 1 ? `邀请 ${invite_picks.length} 位` : '邀请'" class="channel-primary-button" :disabled="invite_blocked" :loading="pending === 'invite_member'" />
           </div>
         </form>
       </template>
@@ -425,10 +425,19 @@ async function finish(action) {
 .pb-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .pb-heading h4 { margin: 0; }
 .pb-heading .pb-link { display: inline-flex; align-items: center; gap: 3px; margin: 0; }
+.pb-member-manual { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin-top: 4px; color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.5; }
+.pb-member-manual .pb-link { margin-top: 0; }
 .pb-member-body .pb-link { display: inline-flex; align-items: center; gap: 3px; }
 .pb-heading .pb-link > span, .pb-member-body .pb-link > span { width: 12px; height: 12px; }
 .pb-invite { display: flex; flex-direction: column; gap: 14px; }
-.pb-invite > .expert-card { width: 100%; }
+.pb-invite-modal.studio-modal { max-width: 580px; }
+.pb-invite-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(248px, 248px)); align-items: start; gap: 10px 8px; }
+.pb-invite-pick { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.pb-invite-pick .fine-print { margin: 0; }
+.pb-invite-launches { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.pb-invite-launches small { margin-left: 8px; color: var(--ui-warning, #e0a33a); font-size: 11px; }
+.pb-invite-launches small.is-registered { color: var(--ui-success, #3fb27f); }
+.pb-invite-launches li { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
 .pb-invite-mode { display: flex; align-items: center; gap: 12px; color: var(--ui-text-muted); font-size: 12px; }
 .pb-invite-options { display: flex; gap: 3px; padding: 3px; border-radius: 6px; background: var(--ui-bg-muted); }
 .pb-invite-options label { position: relative; display: grid; place-items: center; min-width: 56px; min-height: 28px; border-radius: 4px; cursor: pointer; }

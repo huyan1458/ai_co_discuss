@@ -1084,15 +1084,20 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 .channel-recommendation-icon { flex-shrink: 0; width: 13px; height: 13px; color: var(--channel-accent); }
 .channel-recommendation:not(.is-open) { border-color: var(--ui-border-muted); background: transparent; color: var(--ui-text-muted); }
 /* A smart-scheduling decision is its own slim card between two speakers, aligned with the message cards. */
-.channel-schedule-card { display: flex; align-items: center; gap: 8px; margin: -6px 16px 20px; padding: 8px 14px; border: 1px dashed color-mix(in srgb, var(--channel-accent) 45%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--channel-accent) 6%, transparent); color: var(--ui-text-toned); font-size: 12px; }
+.channel-schedule-card { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: -6px 16px 20px; padding: 8px 14px; border: 1px dashed color-mix(in srgb, var(--channel-accent) 45%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--channel-accent) 6%, transparent); color: var(--ui-text-toned); font-size: 12px; }
 .channel-schedule-card small { margin-left: 8px; color: var(--ui-text-dimmed); font-variant-numeric: tabular-nums; }
 .channel-schedule-icon { flex-shrink: 0; width: 13px; height: 13px; color: var(--channel-accent); }
-.channel-arrangement { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.channel-arrangement small { margin-left: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: normal; }
-.channel-arrangement small strong { color: var(--ui-text-toned); font-weight: 600; }
-.channel-arrangement a { color: var(--channel-accent); font-size: 11px; }
+.channel-schedule-text { flex: 1; min-width: 0; }
+.channel-schedule-toggle { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--ui-text-dimmed); cursor: pointer; }
+.channel-schedule-toggle:hover { color: var(--ui-text-toned); background: #ffffff0c; }
+.channel-schedule-toggle [class*="icon"] { width: 14px; height: 14px; transition: transform .12s; }
+.channel-schedule-card.is-open .channel-schedule-toggle [class*="icon"] { transform: rotate(180deg); }
+.channel-schedule-detail { flex-basis: 100%; display: flex; flex-direction: column; gap: 4px; margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--ui-border); color: var(--ui-text-muted); overflow-wrap: anywhere; }
+.channel-schedule-detail p { display: flex; flex-direction: column; gap: 1px; margin: 0; }
 .channel-schedule-card.is-skipped { border-color: var(--ui-border); background: transparent; color: var(--ui-text-muted); }
 .channel-schedule-card.is-skipped .channel-schedule-icon { color: var(--ui-text-dimmed); }
+/* Same right inset as the message cards, which leave room for their action column. */
+@media (min-width: 701px) { .channel-schedule-card { margin-right: var(--message-inset-end); } }
 @media (max-width: 767px) { .channel-schedule-card { margin: -4px 8px 14px; } }
 /* Dark composer matches the message cards (#313338, lit top rim) as one surface with its footer; the mention panel keeps the frosted float style. */
 :root[data-theme="channel"] .channel-composer { background: #313338 !important; }

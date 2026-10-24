@@ -444,7 +444,7 @@ export class DiscussionRunner {
   async record_decision(plan, applied) {
     try {
       await api(this.config, '/scheduler-decisions', { kind: plan.kind, label: plan.label, confidence: plan.confidence ?? null,
-        applied, provider: this.config.scheduler.provider, after_message_id: plan.after_message_id || 0 });
+        applied, provider: this.config.scheduler.provider, after_message_id: plan.after_message_id || 0, detail: plan.detail });
     } catch (error) { this.log(`智能调度决策记录未保存：${error.message}`); }
   }
   /** Enter once per delivery; a failure is recorded so reconcile revokes the execution. */

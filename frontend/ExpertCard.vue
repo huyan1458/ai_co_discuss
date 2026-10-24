@@ -15,7 +15,6 @@ const props = defineProps({
   hostable: Boolean,
   // True where the form picks a host, so the card states whether this one may host.
   hosting: Boolean,
-  compact: Boolean,
 });
 const emit = defineEmits(["remove", "mode", "host"]);
 const { view, bridge } = inject("discussion");
@@ -44,8 +43,16 @@ async function check_api() {
   catch (failure) { api_check.value = { state: "error", message: failure.message }; }
 }
 const entry_label = computed(() => entry_items.value.find((item) => item.value === profile.value.adapter)?.label || "待选择 App / CLI");
-const can_flip = computed(() => automatic.value && entry_items.value.length > 0);
-const card_label = computed(() => props.mode === "online" ? `设置 ${props.name} 的参与方式` : `配置 ${props.name} 的启动方式`);
+const manual = computed(() => props.mode === "manual");
+// A manual card's back carries no settings, only what testing showed about taking over a window that is already open.
+const MANUAL_NOTES = {
+  Codex: "已实测：消息实时显示在已开窗口。",
+  Gemini: "已实测：已开窗口需重启才显示后台发言。",
+  Claude: "已实测：后台接管会分叉，原窗口看不到。",
+};
+const manual_note = computed(() => MANUAL_NOTES[bridge.platform_of(props.name)] || "");
+const can_flip = computed(() => manual.value || automatic.value && entry_items.value.length > 0);
+const card_label = computed(() => manual.value ? `查看 ${props.name} 的手动启动说明` : props.mode === "online" ? `设置 ${props.name} 的参与方式` : `配置 ${props.name} 的启动方式`);
 const models = computed(() => bridge.launch_model_state(props.name, view.value.launch));
 const configurable = computed(() => Boolean(automatic.value && models.value.supported));
 const configuration_note = computed(() => configurable.value && connection.value.length ? "补齐上方连接后，可在这里选择模型与思考强度。"
@@ -170,12 +177,12 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
 </script>
 
 <template>
-  <div ref="card" class="expert-card" :class="{ 'is-configurable': configurable, 'is-host': host, 'is-compact': compact, 'is-static': !automatic }"
+  <div ref="card" class="expert-card" :class="{ 'is-configurable': configurable, 'is-host': host, 'is-static': !automatic }"
     :data-identity="bridge.identities[name]?.style" :data-face="visible_back ? 'back' : 'front'" tabindex="-1" @keydown.esc="escape">
     <motion.div class="expert-card-turn" :style="{ rotateY: angle }">
       <div class="expert-card-face expert-card-front" :inert="visible_back" :aria-hidden="visible_back">
         <component :is="can_flip ? 'button' : 'div'" ref="front_button" :type="can_flip ? 'button' : undefined" class="expert-card-open" :class="{ 'is-static': !can_flip, 'has-modes': choices.length > 1 }"
-          :aria-label="can_flip ? card_label : undefined" :title="can_flip ? '点击翻面设置' : undefined" @click="flip(true)">
+          :aria-label="can_flip ? card_label : undefined" :title="can_flip ? (manual ? '点击翻面查看说明' : '点击翻面设置') : undefined" @click="flip(true)">
           <span class="expert-card-identity">
             <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="sm" class="channel-avatar expert-card-avatar" :class="bridge.identities[name]?.style" />
             <strong>{{ name }}</strong><span v-if="host" class="expert-card-badge">主持</span>
@@ -183,7 +190,7 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
           <dl class="expert-card-facts">
             <div v-for="fact in facts" :key="fact.label"><dt>{{ fact.label }}</dt><dd :class="fact.tone ? ['expert-card-status', `is-${fact.tone}`] : ''" :title="fact.value"><i v-if="fact.tone" aria-hidden="true" />{{ fact.value }}</dd></div>
           </dl>
-          <span v-if="can_flip" class="expert-card-flip"><UIcon name="i-lucide-settings-2" />设置</span>
+          <span v-if="can_flip" class="expert-card-flip"><UIcon :name="manual ? 'i-lucide-info' : 'i-lucide-settings-2'" />{{ manual ? '说明' : '设置' }}</span>
         </component>
         <div v-if="choices.length > 1" class="expert-card-modes expert-card-front-modes" role="radiogroup" :aria-label="`${name} 启动方式`" @keydown="choose_capability">
           <button v-for="option in choices" :key="option" type="button"
@@ -196,8 +203,13 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
       </div>
       <div v-if="can_flip" class="expert-card-face expert-card-back" :inert="!visible_back" :aria-hidden="!visible_back">
         <div class="expert-card-back-body">
-        <div class="expert-card-heading"><strong>{{ name }}<span>设置{{ no_files ? ' · 不访问项目' : '' }}</span></strong>
+        <div class="expert-card-heading"><strong>{{ name }}<span>{{ manual ? '手动启动' : `设置${no_files ? ' · 不访问项目' : ''}` }}</span></strong>
           <UButton v-if="api_mode" icon="i-lucide-zap" :aria-label="`检查 ${name} 的 API 配置`" title="检查配置：发送一次极短请求，核对地址、密钥、协议与模型" size="xs" :color="api_check.state === 'ok' ? 'success' : api_check.state === 'error' ? 'error' : 'neutral'" variant="ghost" :loading="api_check.state === 'loading'" :disabled="!profile.api_key_ref || !profile.model || !view.launch.available" @click="check_api" /></div>
+        <div v-if="manual" class="expert-card-manual">
+          <p>会话自行注册后才算到场。</p>
+          <p v-if="manual_note">{{ manual_note }}</p>
+        </div>
+        <template v-else>
         <p v-if="api_mode && api_check.message" :role="api_check.state === 'error' ? 'alert' : 'status'" class="expert-card-check">{{ api_check.message }}</p>
         <div v-if="automatic && entry_items.length > 1" class="expert-card-field">
           <span>接入</span><USelect :model-value="profile.adapter || ''" :items="entry_items" placeholder="选择 API / App / CLI" :aria-label="`${name} 软件入口`" size="xs" class="w-full" @update:model-value="bridge.write_launch(name, 'adapter', $event)" />
@@ -225,10 +237,11 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
           <button type="button" class="expert-card-defaults" title="留空使用 CLI 默认值" :aria-label="`恢复 ${name} 的默认模型与强度`" :disabled="!profile.model && !profile.effort" @click="reset_model">恢复默认</button>
         </template>
         <p v-else class="expert-card-note"><UIcon :name="mode === 'online' ? 'i-lucide-globe' : 'i-lucide-monitor'" />{{ configuration_note }}</p>
+        </template>
         </div>
         <span class="expert-card-flip-actions">
-          <button type="button" class="expert-card-flip is-cancel" :aria-label="`放弃 ${name} 的修改`" @click="cancel">取消</button>
-          <button ref="back_button" type="button" class="expert-card-flip is-done" :aria-label="`保存并返回 ${name} 角色卡片`" @click="flip(false)"><UIcon name="i-lucide-check" />完成</button>
+          <button v-if="!manual" type="button" class="expert-card-flip is-cancel" :aria-label="`放弃 ${name} 的修改`" @click="cancel">取消</button>
+          <button ref="back_button" type="button" class="expert-card-flip is-done" :aria-label="`保存并返回 ${name} 角色卡片`" @click="flip(false)"><UIcon name="i-lucide-check" />{{ manual ? '返回' : '完成' }}</button>
         </span>
       </div>
     </motion.div>
@@ -241,7 +254,6 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
    Without perspective the turn's rotateY only narrows the card, so the flip needs no 3D compositing;
    the hidden face is switched by data-face at 90°, where the card has no width. */
 .expert-card-turn { display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); height: 240px; }
-.expert-card.is-compact.is-static .expert-card-turn { height: auto; }
 .expert-card-face { grid-area: 1 / 1; min-width: 0; min-height: 0; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); box-shadow: var(--channel-shadow-control); }
 .expert-card[data-face="front"] .expert-card-back, .expert-card[data-face="back"] .expert-card-front { visibility: hidden; }
 .expert-card.is-host .expert-card-front { border-color: color-mix(in srgb, #e0b44a 45%, var(--ui-border)); }
@@ -292,6 +304,8 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
 .expert-card-defaults:hover:not(:disabled) { color: var(--channel-accent); }
 .expert-card-defaults:disabled { opacity: .4; }
 .expert-card-note { display: flex; gap: 6px; margin: 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
+.expert-card-manual { display: grid; gap: 8px; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
+.expert-card-manual > p { margin: 0; }
 .expert-card-note > span { flex-shrink: 0; width: 13px; height: 13px; margin-top: 3px; }
 @media (pointer: coarse) {
   .expert-card-flip, .expert-card-defaults, .expert-card-tools > button { min-width: 44px; min-height: 44px; }

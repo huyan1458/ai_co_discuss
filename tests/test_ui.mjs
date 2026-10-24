@@ -1808,12 +1808,18 @@ test("discussions keep only woken members while free rooms keep each member's de
 /** Exercise the participant menu's pause boundary with the shared controller actions. */
 function participant_connection_fixture(status = "running") {
   const view = ref({ room: { id: "one", phase: "discussing", runtime: { mode: "automatic", status } },
-    launch: { available: true, remote: false, repair: null, repair_error: "" } });
+    launch: { available: true, remote: false, repair: null, repair_error: "", profiles: {}, workspace: {} } });
   const pending = ref(""), calls = [];
-  const controls = { pause_allowed: true, changed_room: false, copy_allowed: true };
-  const act = async (name) => {
+  const controls = { pause_allowed: true, changed_room: false, copy_allowed: true, fail_invite_at: 0 };
+  const invites = [];
+  const act = async (name, payload) => {
     calls.push(name);
+    if (name === "invite_member") invites.push(payload.name);
     if (name === "copy_member_launch") return controls.copy_allowed;
+    if (name === "invite_member" && calls.filter((item) => item === "invite_member").length === controls.fail_invite_at) {
+      view.value.free_error = "邀请失败";
+      return false;
+    }
     if (name === "pause_runtime") {
       if (!controls.pause_allowed) return false;
       view.value.room.runtime.status = "paused";
@@ -1825,11 +1831,11 @@ function participant_connection_fixture(status = "running") {
     return true;
   };
   const context = vm.createContext({ computed, ref, watch, defineProps: () => ({}),
-    inject: () => ({ view, bridge: { launch_clients: {} }, pending, act }) });
+    inject: () => ({ view, bridge: { launch_clients: {}, launch_can_bind_session: () => false }, pending, act }) });
   const component = readFileSync(new URL("../frontend/ProgressBoard.vue", import.meta.url), "utf8");
   vm.runInContext(component.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .*;$/gm, "")
     + "\nglobalThis.connection_refs = { connection_open, connection_profile };", context);
-  return { context, view, calls, controls, refs: context.connection_refs };
+  return { context, view, calls, invites, controls, refs: context.connection_refs };
 }
 
 test("the skip control stays available for retained assignments after execution failure pauses the room", () => {
@@ -1855,16 +1861,25 @@ test("the skip control stays available for retained assignments after execution 
   assert.equal(vm.runInContext("can_skip.value", context), false);
 });
 
-test("manual invitation closes after a successful copy and stays open on clipboard failure", async () => {
-  const { context, controls, calls } = participant_connection_fixture();
-  vm.runInContext('inviting.value = true; invited_manual.value = "Codex-2";', context);
-  controls.copy_allowed = false;
-  await context.copy_invited_launch();
-  assert.equal(vm.runInContext('inviting.value', context), true);
-  controls.copy_allowed = true;
-  await context.copy_invited_launch();
-  assert.equal(vm.runInContext('inviting.value', context), false);
-  assert.deepEqual(calls, ["copy_member_launch", "copy_member_launch"]);
+test("batch invitation admits woken members before manual ones and lists the manual members for copying", async () => {
+  const { context, invites } = participant_connection_fixture();
+  vm.runInContext('invite_picks.value = [["Codex", "manual"], ["Claude", "cli"], ["Gemini", "manual"], ["DeepSeek", "cli"]].map(([name, mode]) => ({ name, mode, session: "" })); inviting.value = true;', context);
+  await context.invite();
+  assert.equal(invites.join(), "Claude,DeepSeek,Codex,Gemini");
+  assert.equal(vm.runInContext("invited_manual.value.join()", context), "Codex,Gemini");
+  assert.equal(vm.runInContext("invite_picks.value.length", context), 0);
+  assert.equal(vm.runInContext("inviting.value", context), true, "the dialog stays for the copy step");
+});
+
+test("batch invitation stops at the first failure and keeps the remaining picks for a retry", async () => {
+  const { context, calls, controls, view } = participant_connection_fixture();
+  controls.fail_invite_at = 2;
+  vm.runInContext('invite_picks.value = ["Codex", "Claude", "Gemini"].map((name) => ({ name, mode: "manual", session: "" })); inviting.value = true;', context);
+  await context.invite();
+  assert.deepEqual(calls, ["invite_member", "invite_member"]);
+  assert.equal(vm.runInContext("invite_picks.value.map((pick) => pick.name).join()", context), "Claude,Gemini");
+  assert.equal(vm.runInContext("invited_manual.value.join()", context), "Codex");
+  assert.equal(view.value.free_error, "邀请失败");
 });
 
 test("discussion experts can leave, return or be removed from the board, but the host stays", async () => {

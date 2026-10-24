@@ -19,6 +19,9 @@ import { agy_rule, antigravity_project, claude_exit_error, claude_rule_path, kil
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
 import { certainty, decide, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, validate_scheduler } from '../runner/scheduler.mjs';
 
+/** The folded record of what the provider was asked is checked on its own. */
+const without_detail = ({ detail, ...plan }) => (assert.ok(Array.isArray(detail) && detail[0].choices.length), plan);
+
 test('smart scheduling maps one neutral question set to both providers and reads their answers alike', async t => {
   const home = mkdtempSync(join(tmpdir(), 'scheduler-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
@@ -56,29 +59,29 @@ test('smart scheduling maps one neutral question set to both providers and reads
   const handling = (choice, confidence) => async () => ({ ok: true, json: async () => ({ answers: { handling: { type: 'choice', choice, confidence, probabilities: {} } } }) });
   const interjection = { ...input, experts: ['Codex'] };
   assert.equal((await decide_interjection(home, jev, interjection, handling('__note__', 0.9))).action, 'note');
-  assert.deepEqual(await decide_interjection(home, jev, interjection, handling('Codex', 0.85)), { action: 'ask', expert: 'Codex', confidence: 0.85, label: '先请 Codex 回应这条留言' });
-  assert.equal((await decide_interjection(home, jev, interjection, handling('__note__', 0.7))).action, 'host');
+  assert.deepEqual(without_detail(await decide_interjection(home, jev, interjection, handling('Codex', 0.85))), { action: 'ask', expert: 'Codex', confidence: 0.85, label: '先请 Codex 回应这条留言' });
+  assert.equal((await decide_interjection(home, jev, interjection, handling('__note__', 0.6))).action, 'host');
   // A round continues only on a confident "continue", and never opens with the last speaker.
   let sent;
   const round = (next, confidence, first) => async (url, init) => { sent = JSON.parse(init.body);
     return { ok: true, json: async () => ({ answers: { next: { type: 'choice', choice: next, confidence, probabilities: {} }, first: { type: 'choice', choice: first, confidence: 0.6, probabilities: {} } } }) }; };
   const discussion = { title: '讨论', context: [], host: 'Claude', experts: ['Codex', 'Gemini', 'Grok'], last_speaker: 'Grok' };
-  assert.deepEqual(await decide_round(home, jev, discussion, round('continue', 0.9, 'Gemini')), { action: 'continue', first: 'Gemini', confidence: 0.9, label: '继续下一轮，先请 Gemini 发言' });
+  assert.deepEqual(without_detail(await decide_round(home, jev, discussion, round('continue', 0.9, 'Gemini'))), { action: 'continue', first: 'Gemini', confidence: 0.9, label: '继续下一轮，先请 Gemini 发言' });
   assert.deepEqual(Object.keys(sent.questions.first.criteria), ['Codex', 'Gemini']);
   assert.equal((await decide_round(home, jev, discussion, round('continue', 0.9, 'Grok'))).first, 'Codex');
-  assert.equal((await decide_round(home, jev, discussion, round('continue', 0.79, 'Codex'))).action, 'host');
+  assert.equal((await decide_round(home, jev, discussion, round('continue', 0.69, 'Codex'))).action, 'host');
   assert.equal((await decide_round(home, jev, discussion, round('__host__', 0.99, 'Codex'))).action, 'host');
   // The chosen option's probability decides; Jev's lower two-way `confidence` is only a fallback.
   const probable = async () => ({ ok: true, json: async () => ({ answers: { next: { type: 'choice', choice: 'continue', confidence: 0.64,
     probabilities: { continue: 0.82, __host__: 0.18 } } } }) });
   assert.deepEqual([(await decide_round(home, jev, discussion, probable)).action, (await decide_round(home, jev, discussion, probable)).confidence], ['continue', 0.82]);
   assert.equal(certainty({ choice: 'a', confidence: 0.5, probabilities: {} }), 0.5);
-  assert.equal((await decide_round(home, jev, discussion, round('continue', 0.7, 'Codex'))).label, '拿不准是否继续下一轮，交给主持人');
+  assert.equal((await decide_round(home, jev, discussion, round('continue', 0.6, 'Codex'))).label, '倾向继续下一轮，把握不足，交给主持人');
   // Mid-round, the next speaker comes from the unspoken candidates; unsure or host goes back to the host.
   const speaker = (choice, confidence) => async () => ({ ok: true, json: async () => ({ answers: { speaker: { type: 'choice', choice, confidence, probabilities: {} } } }) });
   const midround = { title: '讨论', context: [], host: 'Claude', candidates: ['Codex', 'Gemini'] };
-  assert.deepEqual(await decide_next_speaker(home, jev, midround, speaker('Gemini', 0.9)), { action: 'next', expert: 'Gemini', confidence: 0.9, label: '本轮继续，请 Gemini 接着发言' });
-  assert.equal((await decide_next_speaker(home, jev, midround, speaker('Gemini', 0.7))).action, 'host');
+  assert.deepEqual(without_detail(await decide_next_speaker(home, jev, midround, speaker('Gemini', 0.9))), { action: 'next', expert: 'Gemini', confidence: 0.9, label: '本轮继续，请 Gemini 接着发言' });
+  assert.equal((await decide_next_speaker(home, jev, midround, speaker('Gemini', 0.6))).action, 'host');
   assert.equal((await decide_next_speaker(home, jev, midround, speaker('__host__', 0.95))).action, 'host');
 });
 

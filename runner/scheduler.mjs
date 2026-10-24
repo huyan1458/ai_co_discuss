@@ -7,8 +7,8 @@ export const SCHEDULER_PROVIDERS = {
   decisions: { label: 'OpenAI Decisions', base_url: 'https://api.openai.com/v1', path: '/decisions', models: ['gpt-6-luna'] },
 };
 const REQUEST_TIMEOUT_MS = 30_000;
-/** Below this confidence a free-room message stays with the host, exactly as without scheduling. */
-export const ROUTE_CONFIDENCE = 0.8;
+/** Below this confidence a decision stays with the host, exactly as without scheduling. */
+export const ROUTE_CONFIDENCE = 0.7;
 const HOST_CHOICE = '__host__';
 const NOTE_CHOICE = '__note__';
 const CONTEXT_MESSAGES = 10;
@@ -67,6 +67,17 @@ export async function scheduler_check(home, input, fetch_impl = fetch) {
   return { ok: true };
 }
 
+/** What was asked (the instruction and options only, never the room excerpts) and what the provider chose, for the folded record. */
+function detail_of(questions, answers) {
+  return questions.map(question => ({ question: question.instructions, choices: question.choices.map(choice => choice.value),
+    choice: answers[question.name]?.choice ?? null, probabilities: answers[question.name]?.probabilities ?? {} }));
+}
+
+/** Say which option the provider leaned to when it was not sure enough, so the transcript shows how close it was. */
+function unsure_label(lean) {
+  return lean ? `倾向${lean}，把握不足，交给主持人` : '拿不准，交给主持人';
+}
+
 /** Shorten a message so recent context stays small; the decision never needs whole answers. */
 function excerpt(message) {
   const text = String(message.text || '').replace(/\s+/g, ' ').trim();
@@ -116,14 +127,16 @@ export async function decide_interjection(home, scheduler, { title, goal, user_r
   const choices = [...experts.map(name => ({ value: name, description: `请 ${name} 回应这条留言` })),
     { value: HOST_CHOICE, description: `由主持人 ${host} 处理：调整目标、方向、安排，或需要主持人决定` },
     { value: NOTE_CHOICE, description: '仅补充信息：不需要专人回应，按原计划继续' }];
-  const answers = await decide(home, scheduler, scheduler_state(title, context, message, goal, user_request), [{ type: 'choice', name: 'handling',
-    instructions: '讨论进行中用户发来这条留言。结合讨论目标判断它最适合怎样处理。', choices }], fetch_impl);
+  const questions = [{ type: 'choice', name: 'handling', instructions: '讨论进行中用户发来这条留言。结合讨论目标判断它最适合怎样处理。', choices }];
+  const answers = await decide(home, scheduler, scheduler_state(title, context, message, goal, user_request), questions, fetch_impl);
+  const detail = detail_of(questions, answers);
   const choice = answers.handling?.choice;
   const confidence = certainty(answers.handling);
   const sure = confidence !== null && confidence >= ROUTE_CONFIDENCE;
-  if (sure && choice === NOTE_CHOICE) return { action: 'note', confidence, label: '仅补充信息，按原计划继续' };
-  if (sure && experts.includes(choice)) return { action: 'ask', expert: choice, confidence, label: `先请 ${choice} 回应这条留言` };
-  return { action: 'host', confidence, label: choice === HOST_CHOICE && sure ? '这条留言需要主持人处理' : '拿不准这条留言如何处理，交给主持人' };
+  if (sure && choice === NOTE_CHOICE) return { action: 'note', confidence, detail, label: '仅补充信息，按原计划继续' };
+  if (sure && experts.includes(choice)) return { action: 'ask', expert: choice, confidence, detail, label: `先请 ${choice} 回应这条留言` };
+  const lean = choice === NOTE_CHOICE ? '按原计划继续' : experts.includes(choice) ? `请 ${choice} 回应` : choice === HOST_CHOICE ? '由主持人处理' : '';
+  return { action: 'host', confidence, detail, label: choice === HOST_CHOICE && sure ? '这条留言需要主持人处理' : unsure_label(lean) };
 }
 
 /**
@@ -135,14 +148,16 @@ export async function decide_next_speaker(home, scheduler, { title, goal, user_r
   const state = [topic_lines(title, goal, user_request), recent.length ? `本轮及最近发言（旧→新）：\n${recent.join('\n')}` : '还没有发言。'].join('\n\n');
   const choices = [...candidates.map(name => ({ value: name, description: `请 ${name} 接着发言` })),
     { value: HOST_CHOICE, description: `交给主持人 ${host}：讨论偏离目标、卡住，或需要主持人调整安排` }];
-  const answers = await decide(home, scheduler, state, [{ type: 'choice', name: 'speaker',
-    instructions: '本轮还有专家没发言，安排被取消或用完。结合已有发言判断下一位应请谁发言：优先选被点名追问、最能回应当前焦点的人。', choices }], fetch_impl);
+  const questions = [{ type: 'choice', name: 'speaker',
+    instructions: '本轮还有专家没发言，安排被取消或用完。结合已有发言判断下一位应请谁发言：优先选被点名追问、最能回应当前焦点的人。', choices }];
+  const answers = await decide(home, scheduler, state, questions, fetch_impl);
+  const detail = detail_of(questions, answers);
   const choice = answers.speaker?.choice;
   const confidence = certainty(answers.speaker);
   if (candidates.includes(choice) && confidence !== null && confidence >= ROUTE_CONFIDENCE) {
-    return { action: 'next', expert: choice, confidence, label: `本轮继续，请 ${choice} 接着发言` };
+    return { action: 'next', expert: choice, confidence, detail, label: `本轮继续，请 ${choice} 接着发言` };
   }
-  return { action: 'host', confidence, label: '拿不准下一位该请谁发言，交给主持人' };
+  return { action: 'host', confidence, detail, label: choice === HOST_CHOICE && confidence >= ROUTE_CONFIDENCE ? '建议由主持人调整安排，交给主持人' : unsure_label(candidates.includes(choice) ? `请 ${choice} 发言` : choice === HOST_CHOICE ? '交给主持人' : '') };
 }
 
 /**
@@ -159,12 +174,13 @@ export async function decide_round(home, scheduler, { title, goal, user_request,
   if (candidates.length > 1) questions.push({ type: 'choice', name: 'first', instructions: '下一轮应先请谁发言？优先选被其他专家点名追问、最需要回应的人。',
     choices: candidates.map(name => ({ value: name, description: `先请 ${name}` })) });
   const answers = await decide(home, scheduler, state, questions, fetch_impl);
+  const detail = detail_of(questions, answers);
   const choice = answers.next?.choice;
   const confidence = certainty(answers.next);
   if (choice !== 'continue' || confidence === null || confidence < ROUTE_CONFIDENCE || !candidates.length) {
     const sure = confidence !== null && confidence >= ROUTE_CONFIDENCE;
-    return { action: 'host', confidence, label: choice === HOST_CHOICE && sure ? '建议收束或调整方向，交给主持人' : '拿不准是否继续下一轮，交给主持人' };
+    return { action: 'host', confidence, detail, label: choice === HOST_CHOICE && sure ? '建议收束或调整方向，交给主持人' : unsure_label(choice === 'continue' ? '继续下一轮' : choice === HOST_CHOICE ? '收束或调整方向' : '') };
   }
   const first = candidates.includes(answers.first?.choice) ? answers.first.choice : candidates[0];
-  return { action: 'continue', first, confidence, label: `继续下一轮，先请 ${first} 发言` };
+  return { action: 'continue', first, confidence, detail, label: `继续下一轮，先请 ${first} 发言` };
 }
