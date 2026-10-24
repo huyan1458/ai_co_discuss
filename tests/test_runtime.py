@@ -29,6 +29,7 @@ class RuntimeTests(unittest.TestCase):
             self.database = Path(self.directory.name) / "runtime.db"
             init_database(self.database, seed=False)
             self.server = DiscussionServer(("127.0.0.1", 0), self.database)
+            self.server.local_site = False  # these tests exercise room credential rules, not the account-free local site
             self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
             self.thread.start()
             self.base = f"http://127.0.0.1:{self.server.server_port}"

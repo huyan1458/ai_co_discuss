@@ -26,6 +26,8 @@ python server.py --host 127.0.0.1 --port 8765 --no-demo
 
 命令行参数优先于环境变量。使用独立测试库可加 `--database data/test.sqlite3`。停止后重新启动沿用原库；`--no-demo` 不清理已有数据。长期部署应使用自己的进程管理和反向代理提供 HTTPS，按需要限制访问与请求规模。
 
+管理员账号：绑定 127.0.0.1 时无需账号，访问者即管理员，可存档、恢复、永久删除任意房间。绑定其他地址（如 `--host 0.0.0.0`）时须注册：首次打开网站在左下角注册，需要安装令牌。环境变量 `DISCUSS_ADMIN_SETUP_KEY` 可固定令牌，未设置时每次启动随机生成并写入启动日志（仅在尚未注册时打印）。注册后可存档、恢复、永久删除任意房间；忘记密码运行 `python server.py --reset-admin`（不停服务也可执行）后重新注册。
+
 网页 SSE 推送在 Python 服务中默认启用，无需额外进程或数据库迁移。反向代理应关闭 `/api/updates` 的响应缓冲并允许长连接；服务每 15 秒发送心跳。页面隐藏时断开，重新打开后补取最新数据；代理不支持推送时回退轮询。
 
 附件保存在数据库旁的 `<数据库文件名>.attachments/`，例如 `data/discuss.sqlite3.attachments/`；Docker 中同样位于数据卷内。备份时先停止对应写入进程，再一并复制数据库和附件目录；只备份 SQLite 不包含原文件。无附件时也可用 SQLite 的在线备份工具生成一致快照，不要仅复制正在写入的主文件而遗漏 WAL。恢复前保留原库和附件目录，再用 `--database` 指向恢复副本核验。
@@ -117,6 +119,8 @@ cp wrangler.jsonc .wrangler/deploy/wrangler.jsonc
 npx wrangler d1 execute DB --remote --config .wrangler/deploy/wrangler.jsonc --file backend/schema.sql
 npm run deploy -- --cwd .wrangler/deploy
 ```
+
+管理员注册：Cloudflare 站点须先设置安装令牌机密，未设置则无法注册管理员：`npx wrangler pages secret put ADMIN_SETUP_KEY --project-name YOUR_PROJECT_NAME`。忘记密码时在 D1 执行 `DELETE FROM admin_sessions; DELETE FROM site_admin;` 后重新注册。
 
 第一次对新库执行 schema；升级已有站点前先备份并在本地副本核验迁移。当前 schema 以增量表、索引和触发器扩展数据结构，重复执行不应清空已有记录或重置发言权；仍需按实际升级版本测试。
 

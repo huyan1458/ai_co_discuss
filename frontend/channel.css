@@ -1103,3 +1103,29 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 :root[data-theme="channel"] .channel-composer { background: #313338 !important; }
 :root[data-theme="channel"] .channel-mention-heading { border-bottom: 1px solid #ffffff0d; }
 :root[data-theme="channel"] .channel-mention-option[aria-selected="true"] { background: #ffffff0f; box-shadow: inset 0 1px #ffffff0a; }
+
+/* Account section of the settings dialog, the clickable footer identity and the room takeover prompt. */
+.channel-self-button { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1; padding: 4px; margin: -4px; border-radius: 8px; background: none; border: 0; color: inherit; text-align: left; cursor: pointer; }
+.channel-sidebar-footer > .channel-self-button { margin: -4px 0 -4px -4px; }
+.channel-self-button:hover { background: #ffffff0d; }
+.channel-self-button:focus-visible { outline: 2px solid var(--ui-border-accented); outline-offset: 1px; }
+.channel-self-button > .channel-avatar { width: 34px; height: 34px; }
+.channel-self-button .channel-self { display: block; min-width: 0; }
+.channel-self-button strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.channel-connection.is-action { color: var(--ui-text-highlighted, inherit); }
+.account-settings { padding-bottom: 4px; }
+.account-settings h3, .account-appearance-heading { margin-bottom: 10px; color: var(--ui-text-muted); font-size: 12px; font-weight: 500; }
+.account-appearance-heading { margin: 22px 0 10px; padding-top: 20px; border-top: 1px solid var(--ui-border-muted); }
+.account-form { gap: 14px; }
+.account-intro { margin-top: 0; }
+.account-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.account-message { margin: 0; font-size: 12px; line-height: 1.6; color: var(--ui-text-muted); overflow-wrap: anywhere; }
+.account-message.is-error { color: #f05252; }
+.account-profile { display: flex; flex-direction: column; gap: 16px; }
+.account-identity { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.account-avatar { width: 56px; height: 56px; }
+.account-avatar img { object-fit: cover; }
+.account-avatar-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.account-file { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
+.account-signout { padding-top: 16px; border-top: 1px solid var(--ui-border-muted); }
+@media (max-width: 767px) { .account-actions { justify-content: stretch; } .account-actions > button { flex: 1 1 auto; } }

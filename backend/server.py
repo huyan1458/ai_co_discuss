@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import socket
 import sqlite3
 import subprocess
@@ -19,6 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit
 
+from .admin import AdminError, admin_status, login_admin, logout_admin, register_admin, session_valid, update_profile
 from .free_room import (add_member, after_free_message, authorize_free_write, check_answer, check_proxy, execution_action, free_view,
                         inbox, interrupt_member, member_action, member_values, migrate_free_tables, proxy_member, reserve_execution,
                         discussion_members, room_mode, save_room_access, sync_discussion_members, view_execution)
@@ -42,6 +44,7 @@ MAX_FILENAME_LENGTH = 255
 LOCAL_LAUNCH_TIMEOUT = 60
 # Ordering and filing a channel only rearrange the shared directory, like folder edits, so they need no room credential.
 DIRECTORY_OPERATIONS = ("move", "folder")
+ADMIN_OPERATIONS = ("archive", "restore", "delete")
 DIRECTORY_PICKER_TIMEOUT = 600  # the folder dialog waits for the person at the computer
 MAX_TEXT_LENGTH = 32000
 SESSION_ID_PATTERN = re.compile(r"[0-9A-Za-z_-]{8,128}")
@@ -1340,6 +1343,8 @@ class DiscussionServer(ThreadingHTTPServer):
         if local_launch and address[0] != "127.0.0.1":
             raise ValueError("本机启动入口须绑定 127.0.0.1")
         self.local_launch = local_launch
+        self.local_site = address[0] in ("127.0.0.1", "::1", "localhost")
+        self.admin_setup_key = os.getenv("DISCUSS_ADMIN_SETUP_KEY") or secrets.token_urlsafe(18)
         service_home = os.getenv("DISCUSS_SERVICE_HOME")
         self.connections_file = Path(service_home) / "site-connections.json" if service_home else None
         super().__init__(address, DiscussionHandler)
@@ -1432,6 +1437,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 if text_mode and method == "GET":
                     return self.handle_text(connection, parts, params)
                 return self.handle_api(connection, parts, params, method)
+        except AdminError as error:
+            return self.respond({"error": str(error)}, error.status)
         except PermissionError as error:
             return self.respond({"error": str(error)}, 403)
         except (ValueError, TypeError) as error:
@@ -1608,10 +1615,43 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.respond(failure, 400)
         return self.respond(json.loads(result.stdout))
 
+    def admin_token(self):
+        """The administrator session token supplied by the browser."""
+        return self.headers.get("X-Discussion-Admin", "")
+
+    def admin_session(self, connection):
+        """Whether the request is from the administrator: any visitor of a loopback-only site, else a valid session."""
+        return self.server.local_site or session_valid(connection, self.admin_token())
+
+    def handle_admin_api(self, connection, parts, method):
+        """Serve administrator registration, login sessions and profile."""
+        token = self.admin_token()
+        if parts == ["api", "admin"] and method == "GET":
+            result = admin_status(connection, token, True, self.server.local_site)
+            connection.commit()
+            return self.respond(result)
+        if len(parts) != 3 or method != "POST":
+            raise LookupError("地址不存在")
+        payload = self.read_payload()
+        now = int(time.time())
+        if self.server.local_site and parts[2] != "profile":
+            raise ValueError("本地站点无需管理员账号")
+        actions = {"register": lambda: register_admin(connection, payload, self.server.admin_setup_key, now),
+                   "login": lambda: login_admin(connection, payload, now),
+                   "logout": lambda: logout_admin(connection, token),
+                   "profile": lambda: update_profile(connection, token, payload, self.server.local_site)}
+        if parts[2] not in actions:
+            raise LookupError("地址不存在")
+        result = actions[parts[2]]()
+        connection.commit()
+        return self.respond(result, 201 if parts[2] == "register" else 200)
+
     def handle_api(self, connection, parts, params, method):
         """Handle room, state, and message operations used by the web UI."""
         if parts == ["api", "health"] and method == "GET":
             return self.respond({"ok": True})
+        if parts[:2] == ["api", "admin"]:
+            return self.handle_admin_api(connection, parts, method)
         if parts == ["api", "rooms"]:
             if method == "GET":
                 return self.respond({**list_rooms(connection, params), "participants": PARTICIPANTS})
@@ -1672,7 +1712,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 raise ValueError("自由房间不使用讨论运行控制")
             return self.handle_runtime_api(connection, parts, params, method)
         free_actor = None
-        if method == "POST" and len(parts) == 4 and parts[3] in DIRECTORY_OPERATIONS:
+        if method == "POST" and len(parts) == 4 and (parts[3] in DIRECTORY_OPERATIONS
+                                                      or parts[3] in ADMIN_OPERATIONS and self.admin_session(connection)):
             pass
         elif method == "POST" and free:
             free_actor = authorize_free_write(connection, room_id, token, parts[3] if len(parts) > 3 else "", self.read_payload())
@@ -1894,11 +1935,22 @@ def main():
     parser.add_argument("--database", default=os.getenv("DATABASE_PATH", str(ROOT / "data" / "discuss.sqlite3")))
     parser.add_argument("--no-demo", action="store_true", help="Do not seed sample data in a new database")
     parser.add_argument("--local-launch", action="store_true", help="Enable local AI launch and configuration (127.0.0.1 only)")
+    parser.add_argument("--reset-admin", action="store_true", help="Delete the administrator account and sessions, then exit")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     init_database(args.database, seed=not args.no_demo)
+    if args.reset_admin:
+        with closing(connect_db(args.database)) as connection, connection:
+            connection.execute("DELETE FROM admin_sessions")
+            connection.execute("DELETE FROM site_admin")
+        logging.info("管理员账号已清除；再次打开网站时可用安装令牌重新注册")
+        return
     server = DiscussionServer((args.host, args.port), args.database, local_launch=args.local_launch)
     logging.info("AI CoDiscuss ready at http://%s:%s", args.host, args.port)
+    with closing(connect_db(args.database)) as connection:
+        if not server.local_site and connection.execute("SELECT 1 FROM site_admin").fetchone() is None:
+            logging.info("尚未注册管理员账号；注册所需安装令牌：%s",
+                         "见环境变量 DISCUSS_ADMIN_SETUP_KEY" if os.getenv("DISCUSS_ADMIN_SETUP_KEY") else server.admin_setup_key)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

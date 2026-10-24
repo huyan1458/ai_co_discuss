@@ -17,12 +17,22 @@ const DIRECTORY_DRAG_OFFSET = 12;
 const THEME_STORAGE_KEY = "ai-codiscuss-theme";
 const DIRECTORY_SORT_KEY = "ai-codiscuss-directory-sort";
 const LAUNCH_PENDING_PREFIX = "discuss-launch:";
+const ADMIN_SESSION_KEY = "discuss-admin-session";
+const ADMIN_USERNAME_MAX = 30;
+const ADMIN_PASSWORD_MIN = 8;
+const ADMIN_PASSWORD_MAX = 128;
+const ADMIN_AVATAR_MAX_CHARS = 60000;
+const ADMIN_AVATAR_SIZE = 96;
+const ADMIN_AVATAR_QUALITY = 0.8;
 const MEMBER_ACCESS_PREFIX = "discuss-members:";
 const MEMBER_PENDING_PREFIX = "discuss-member-pending:";
 const LOCAL_CONNECTION_KEY = "discuss-local-connection";
 const LOCAL_CONNECTION_TIMEOUT_MS = 15000;
 const MODEL_CATALOG_TIMEOUT_MS = 35000;
 let local_connection = null;
+const DEFAULT_USER_LABEL = "User";
+const DEFAULT_USER_ICON = "/icons/user.svg";
+const MANAGEMENT_LOGIN_HINT = "需要登录管理员账号或使用创建该房间的浏览器";
 const THEMES = ["channel", "channel-light"];
 const SOURCE_LABELS = { demo: "示例", user: "本人发言", proxy: "用户代发", cli: "CLI 发言", api: "API 发言", url: "历史 URL 发言", host_proxy: "主持人代发" };
 const PHASE_LABELS = { preparing: "准备中", initial: "独立观点", discussing: "深入讨论", reviewing: "结论复核", paused: "已暂停", concluded: "已收束" };
@@ -60,6 +70,7 @@ state.directory_notice = "";
 state.directory_pending = new Map();
 state.directory_version = 0;
 state.navigation_version = 0;
+state.admin = { loaded: false, local: false, registered: false, setup_available: false, logged_in: false, profile: null, identity_version: 0 };
 state.launch = { available: false, remote: false, connect_command: "", profiles: {}, workspace: {}, scheduler: {}, create: true, error: "", notice: "", recoveries: [] };
 const PLATFORM_CLIENTS = { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }],
   Claude: [{ value: "claude", label: "Claude Code CLI" }],
@@ -125,12 +136,31 @@ function show_toast(message, is_error = false) {
   state.toast_timer = setTimeout(() => { element("toast").hidden = true; }, TOAST_DURATION_MS);
 }
 
+/** The administrator session token kept by this browser, or an empty string. */
+function admin_token() {
+  if (state.admin.local) return "";
+  try { return localStorage.getItem(ADMIN_SESSION_KEY) || ""; } catch { return ""; }
+}
+
+/** Store or clear the administrator session token; storage failures only lose persistence. */
+function store_admin_token(token) {
+  try { token ? localStorage.setItem(ADMIN_SESSION_KEY, token) : localStorage.removeItem(ADMIN_SESSION_KEY); } catch { /* Keep the session in memory only. */ }
+}
+
+/** The administrator header for writes that bypass request_json, or no header without a session. */
+function admin_headers() {
+  const session = admin_token();
+  return session ? { "X-Discussion-Admin": session } : {};
+}
+
 /** Request JSON from the local or remotely hosted discussion service. */
 async function request_json(path, payload, access_token) {
   const options = { cache: "no-store" };
   const target_room = path.match(/^\/api\/rooms\/([^/?]+)/)?.[1];
   const token = access_token || (target_room ? localStorage.getItem(`discuss-access:${target_room}`) : null);
+  const session = admin_token();
   options.headers = token ? { "X-Discussion-Token": token } : {};
+  if (session) options.headers["X-Discussion-Admin"] = session;
   if (payload !== undefined) {
     options.method = "POST";
     options.headers["Content-Type"] = "application/json";
@@ -138,8 +168,125 @@ async function request_json(path, payload, access_token) {
   }
   const response = await fetch(path, options);
   const result = await response.json();
-  if (!response.ok) throw Object.assign(new Error(result.error || "请求失败，请重试"), { preflight: response.status >= 400 && response.status < 500 });
+  if (!response.ok) throw Object.assign(new Error(result.error || "请求失败，请重试"), { preflight: response.status >= 400 && response.status < 500, status: response.status });
   return result;
+}
+
+/** The owner's public name and avatar replace the default "User" identity for every visitor. */
+function apply_admin_identity(profile) {
+  Object.assign(PLATFORM_IDENTITIES["用户"], { label: profile?.username || DEFAULT_USER_LABEL, icon: profile?.avatar || DEFAULT_USER_ICON });
+  state.admin.identity_version++;
+  if (!element("participants")) return;
+  for (const id of ["author-select", "topic-host-select", "new-room-host"]) {
+    const option = Array.from(element(id)?.options || []).find(item => item.value === "用户");
+    if (option) option.textContent = display_name("用户");
+  }
+  render_participants();
+}
+
+/** Record the server's administrator state and refresh every identity-dependent view without a reload. */
+function apply_admin_state(info) {
+  const local = info.local === true;
+  if (local || !info.logged_in) store_admin_token("");
+  Object.assign(state.admin, { loaded: true, local, registered: Boolean(info.registered), setup_available: Boolean(info.setup_available),
+    logged_in: Boolean(info.logged_in), profile: info.profile ? { username: info.profile.username, avatar: info.profile.avatar || "" } : null });
+  apply_admin_identity(state.admin.profile);
+  publish_view();
+}
+
+/** Read the public administrator state; a failure leaves the visitor view unchanged. */
+async function load_admin_state() {
+  try { apply_admin_state(await request_json("/api/admin")); }
+  catch { /* The directory request reports connection problems. */ }
+}
+
+/** Return the first problem with an administrator form, matching the server's limits. */
+function validate_admin_form({ username, password, confirm, check_password = true }) {
+  const name_length = [...String(username ?? "").trim()].length;
+  if (username !== undefined && (name_length < 1 || name_length > ADMIN_USERNAME_MAX)) return `用户名需要 1–${ADMIN_USERNAME_MAX} 个字符`;
+  if (!check_password) return "";
+  const length = [...String(password ?? "")].length;
+  if (length < ADMIN_PASSWORD_MIN || length > ADMIN_PASSWORD_MAX) return `密码需要 ${ADMIN_PASSWORD_MIN}–${ADMIN_PASSWORD_MAX} 个字符`;
+  if (confirm !== undefined && confirm !== password) return "两次输入的密码不一致";
+  return "";
+}
+
+/** Keep the Chinese server message and add a retry hint when a locked response lacks the delay. */
+function admin_error(error) {
+  if (error.status === 429 && !/\d/.test(error.message)) error.message += "，请稍后再试";
+  return error;
+}
+
+/** Store the new session and show the owner's identity. */
+function accept_admin_session({ token, profile }) {
+  store_admin_token(token);
+  apply_admin_state({ registered: true, setup_available: false, logged_in: true, profile });
+}
+
+/** Create the single administrator account and sign in with it. */
+async function register_admin({ username, password, confirm, setup_key }) {
+  const problem = validate_admin_form({ username, password, confirm }) || (String(setup_key ?? "").trim() ? "" : "请填写安装令牌");
+  if (problem) throw new Error(problem);
+  try { accept_admin_session(await request_json("/api/admin/register", { username: username.trim(), password, setup_key: setup_key.trim() })); }
+  catch (error) { throw admin_error(error); }
+}
+
+/** Sign in and keep the session in this browser. */
+async function login_admin({ username, password }) {
+  if (!String(username ?? "").trim() || !password) throw new Error("请填写用户名和密码");
+  try { accept_admin_session(await request_json("/api/admin/login", { username: username.trim(), password })); }
+  catch (error) { throw admin_error(error); }
+}
+
+/** Leave this browser; the local session is dropped even if the server cannot be reached. */
+async function logout_admin() {
+  try { await request_json("/api/admin/logout", {}); }
+  catch { /* The token is removed below either way. */ }
+  store_admin_token("");
+  state.admin.logged_in = false;
+  publish_view();
+}
+
+/** Save the display name and/or avatar; an empty avatar restores the default. */
+async function update_admin_profile(patch) {
+  if (patch.username !== undefined) {
+    const problem = validate_admin_form({ username: patch.username, check_password: false });
+    if (problem) throw new Error(problem);
+    patch = { ...patch, username: patch.username.trim() };
+  }
+  const result = await request_json("/api/admin/profile", patch);
+  apply_admin_state({ local: state.admin.local, registered: true, setup_available: false, logged_in: true, profile: result.profile });
+}
+
+/** Shrink the chosen image into a small square data URL that fits the server limit. */
+async function admin_avatar_from_file(file) {
+  if (!file?.type?.startsWith("image/")) throw new Error("请选择图片文件");
+  const url = URL.createObjectURL(file);
+  try {
+    const image = await new Promise((resolve, reject) => {
+      const loaded = new Image();
+      loaded.onload = () => resolve(loaded);
+      loaded.onerror = () => reject(new Error("无法读取这张图片"));
+      loaded.src = url;
+    });
+    const side = Math.min(image.naturalWidth, image.naturalHeight);
+    if (!side) throw new Error("无法读取这张图片");
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = ADMIN_AVATAR_SIZE;
+    const context = canvas.getContext("2d");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, ADMIN_AVATAR_SIZE, ADMIN_AVATAR_SIZE);
+    context.drawImage(image, (image.naturalWidth - side) / 2, (image.naturalHeight - side) / 2, side, side, 0, 0, ADMIN_AVATAR_SIZE, ADMIN_AVATAR_SIZE);
+    const data_url = canvas.toDataURL("image/jpeg", ADMIN_AVATAR_QUALITY);
+    if (data_url.length > ADMIN_AVATAR_MAX_CHARS) throw new Error("图片过大，请换一张");
+    return data_url;
+  } finally { URL.revokeObjectURL(url); }
+}
+
+/** Explain why a management write failed when this browser has neither credential. */
+function management_error_message(room_id, error) {
+  if (error.status === 403 && !state.admin.logged_in && !localStorage.getItem(`discuss-access:${room_id}`)) return MANAGEMENT_LOGIN_HINT;
+  return error.message;
 }
 
 /** Show connection state without claiming that any AI is online. */
@@ -179,18 +326,23 @@ function display_name(name) { return IDENTITIES[name]?.label || name; }
 
 /** Render an identity avatar from a local SVG. */
 function identity_avatar(identity) {
-  return identity.icon ? `<img src="${identity.icon}" alt="">` : identity.initials;
+  return identity.icon ? `<img src="${escape_html(identity.icon)}" alt="">` : identity.initials;
 }
 
 /** Render identity controls and distinguish selectable identities from connections. */
 function render_identities() {
-  const options = Object.keys(IDENTITIES).map((name) => `<option value="${name}">${display_name(name)}</option>`).join("");
+  const options = Object.keys(IDENTITIES).map((name) => `<option value="${name}">${escape_html(display_name(name))}</option>`).join("");
   element("author-select").innerHTML = options;
   element("topic-host-select").innerHTML = options;
   element("new-room-host").innerHTML = options;
   render_expert_inputs("new-expert-modes", default_experts());
+  render_participants();
+}
+
+/** List the selectable identities in the classic sidebar. */
+function render_participants() {
   element("participants").innerHTML = Object.entries(IDENTITIES).map(([name, identity]) =>
-    `<div class="participant ${identity.style}"><span class="avatar" aria-hidden="true">${identity_avatar(identity)}</span><span class="participant-name">${display_name(name)}</span><span class="participant-role">${identity.description}</span></div>`).join("");
+    `<div class="participant ${identity.style}"><span class="avatar" aria-hidden="true">${identity_avatar(identity)}</span><span class="participant-name">${escape_html(display_name(name))}</span><span class="participant-role">${identity.description}</span></div>`).join("");
 }
 
 /** Render rooms while retaining the selected room. */
@@ -331,6 +483,7 @@ async function delete_channel(id) {
   if (!room) return;
   const previous = state.rooms.map(item => item.id);
   return update_directory({ key: `delete:${id}`, label: `「${room.title}」删除`,
+    error_message: error => `「${room.title}」删除失败，已恢复原状态：${management_error_message(id, error)}`,
     apply: () => {
       state.rooms = state.rooms.filter(item => item.id !== id);
       if (state.room?.id === id) run_action(() => select_room(visible_rooms()[0]?.id));
@@ -370,7 +523,7 @@ async function archive_channel(id, archived) {
     const saved = await request_json(`/api/rooms/${id}/${archived ? "archive" : "restore"}`, { actor: "用户" });
     display_channel_archive(id, { archived: Boolean(saved.archived), phase: saved.phase }, change);
   } catch (error) {
-    state.directory_error = `「${room.title}」${archived ? "存档" : "恢复"}失败，已恢复原状态：${error.message}`;
+    state.directory_error = `「${room.title}」${archived ? "存档" : "恢复"}失败，已恢复原状态：${management_error_message(id, error)}`;
     display_channel_archive(id, previous, change);
     throw error;
   } finally {
@@ -1077,7 +1230,7 @@ async function upload_message_attachments(room_id, actor, drafts) {
       const params = new URLSearchParams({ file_name: item.file.name, actor, submission_id: item.upload_submission });
       const token = localStorage.getItem(`discuss-access:${room_id}`);
       const response = await fetch(`/api/rooms/${room_id}/attachments?${params}`, { method: "POST",
-        headers: { "Content-Type": "application/octet-stream", ...(token ? { "X-Discussion-Token": token } : {}) }, body: item.file });
+        headers: { "Content-Type": "application/octet-stream", ...(token ? { "X-Discussion-Token": token } : {}), ...admin_headers() }, body: item.file });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "附件上传失败");
       item.uploaded = result.attachment.id;
@@ -1308,6 +1461,12 @@ function save_room_credentials(room, token, members = []) {
     saved[member.name] = { token: member.token, access: member.access, id: public_member?.id };
   }
   localStorage.setItem(MEMBER_ACCESS_PREFIX + room.id, JSON.stringify(saved));
+}
+
+/** Public administrator state for the account UI; the session token never leaves the controller. */
+function admin_snapshot() {
+  const { loaded, local, registered, setup_available, logged_in, profile, identity_version } = state.admin;
+  return { loaded, local, registered, setup_available, logged_in, identity_version, profile: profile && { ...profile } };
 }
 
 /** Build only non-secret status metadata for the currently selected room. */
@@ -2900,6 +3059,7 @@ async function initialize() {
     if (button?.dataset.launchDiscard) discard_launch(button.dataset.launchDiscard);
     if (button?.dataset.launchRoom) run_action(() => select_room(button.dataset.launchRoom));
   });
+  load_admin_state();
   try {
     const result = await request_json("/api/rooms");
     state.rooms = result.rooms;
@@ -2911,7 +3071,7 @@ async function initialize() {
   start_live_updates();
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) stop_live_updates();
-    else start_live_updates();
+    else { start_live_updates(); load_admin_state(); }
   });
   window.addEventListener("pagehide", stop_live_updates);
   window.addEventListener("pageshow", start_live_updates);
@@ -2936,7 +3096,7 @@ function view_snapshot() {
     composer_error: state.composer_error, upload_status: state.upload_status, sending_message: state.sending_message,
     mention_only: state.mention_only, reply_to: state.reply_to, turn_reply_to: state.turn_reply_to,
     free_notice: state.free_notice, free_error: state.free_error, free_proxy: state.free_proxy,
-    create_parent: state.create_parent, access: access_snapshot(),
+    create_parent: state.create_parent, access: access_snapshot(), admin: admin_snapshot(),
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
     theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup };
 }
@@ -3052,7 +3212,7 @@ async function upload_imported_files(room_id, token, mapping, files) {
   for (const [old_id, new_id] of Object.entries(mapping)) {
     const data = files.get(old_id);
     const response = data && await fetch(`/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(new_id)}/import`,
-      { method: "POST", headers: { "X-Discussion-Token": token }, body: data });
+      { method: "POST", headers: { "X-Discussion-Token": token, ...admin_headers() }, body: data });
     if (!response?.ok) missing++;
   }
   return missing;
@@ -3137,6 +3297,8 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
   start_drag: start_directory_drag,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
+  admin: { register: register_admin, login: login_admin, logout: logout_admin,
+    update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form },
   request: request_json, identities: IDENTITIES, display_name, sources: SOURCE_LABELS, phases: PHASE_LABELS,
   runtime_label, execution_label, limits_label, participant_model, participant_access, can_retry_execution,
   turns: TURN_LABELS, turn_label, turn_guidance, floor_status, progress_round, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };

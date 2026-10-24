@@ -1242,3 +1242,95 @@ test('Worker conversion rechecks membership archive and owner inside the transac
   await f.request(`${r.path}/members/${payload.member_id}`, { action: 'away' }, r.owner);
   assert.equal((await f.request(`${r.path}/suggestions`, payload, r.owner)).status, 409);
 });
+
+/** Call /api/admin* or any path with an optional admin session header. */
+async function admin_call(f, path, payload, session) {
+  const response = await worker.fetch(new Request(`https://discussion.test${path}`, {
+    method: payload === undefined ? 'GET' : 'POST',
+    headers: { 'Content-Type': 'application/json', ...(session ? { 'X-Discussion-Admin': session } : {}) },
+    body: payload === undefined ? undefined : JSON.stringify(payload),
+  }), f.env);
+  return { status: response.status, body: await response.json() };
+}
+
+async function admin_fixture(t) {
+  const f = await worker_fixture(t);
+  f.env.ADMIN_SETUP_KEY = 'setup-key-for-tests';
+  const account = { username: '房主', password: 'correct-horse', setup_key: 'setup-key-for-tests' };
+  f.register = () => admin_call(f, '/api/admin/register', account);
+  f.login = password => admin_call(f, '/api/admin/login', { username: '房主', password });
+  return f;
+}
+
+test('Worker admin registration needs the setup key and only succeeds once', async t => {
+  const f = await admin_fixture(t);
+  assert.deepEqual((await admin_call(f, '/api/admin')).body, { registered: false, setup_available: true, logged_in: false, profile: null });
+  const wrong = await admin_call(f, '/api/admin/register', { username: '房主', password: 'correct-horse', setup_key: 'nope' });
+  assert.equal(wrong.status, 403);
+  const short = await admin_call(f, '/api/admin/register', { username: '房主', password: 'short', setup_key: 'setup-key-for-tests' });
+  assert.equal(short.status, 400);
+  const unconfigured = await worker_fixture(t);
+  assert.equal((await admin_call(unconfigured, '/api/admin/register', { username: 'a', password: 'correct-horse', setup_key: 'x' })).status, 503);
+  const created = await f.register();
+  assert.equal(created.status, 201);
+  assert.match(created.body.token, /^[0-9a-f]{64}$/);
+  assert.equal((await f.register()).status, 409);
+  const state = (await admin_call(f, '/api/admin', undefined, created.body.token)).body;
+  assert.deepEqual(state, { registered: true, setup_available: false, logged_in: true, profile: { username: '房主', avatar: '' } });
+  assert.match(f.sql.prepare('SELECT password_hash FROM site_admin').get().password_hash, /^pbkdf2_sha256\$100000\$[0-9a-f]{32}\$[0-9a-f]{64}$/);
+});
+
+test('Worker admin login locks for a fixed time after five failures and clears on success', async t => {
+  const f = await admin_fixture(t);
+  await f.register();
+  assert.equal((await f.login('wrong-password')).status, 401);
+  assert.equal((await admin_call(f, '/api/admin/login', { username: '陌生人', password: 'correct-horse' })).status, 401);
+  for (let attempt = 0; attempt < 3; attempt++) await f.login('wrong-password');
+  const row = f.sql.prepare('SELECT failed_attempts, locked_until FROM site_admin').get();
+  assert.equal(row.failed_attempts, 0);
+  assert.ok(Math.abs(row.locked_until - (Math.floor(Date.now() / 1000) + 300)) <= 5);
+  assert.equal((await f.login('correct-horse')).status, 429);
+  f.sql.prepare('UPDATE site_admin SET locked_until=0').run();
+  await f.login('wrong-password');
+  const ok = await f.login('correct-horse');
+  assert.equal(ok.status, 200);
+  assert.equal(f.sql.prepare('SELECT failed_attempts FROM site_admin').get().failed_attempts, 0);
+  assert.equal((await admin_call(f, '/api/admin', undefined, ok.body.token)).body.logged_in, true);
+});
+
+test('Worker admin sessions persist until logout', async t => {
+  const f = await admin_fixture(t);
+  const a = (await f.register()).body.token, b = (await f.login('correct-horse')).body.token;
+  f.sql.exec('UPDATE admin_sessions SET created_at=1');
+  assert.equal((await admin_call(f, '/api/admin', undefined, a)).body.logged_in, true);
+  assert.equal((await admin_call(f, '/api/admin/logout', {}, a)).status, 200);
+  assert.equal((await admin_call(f, '/api/admin', undefined, a)).body.logged_in, false);
+  assert.equal((await admin_call(f, '/api/admin', undefined, b)).body.logged_in, true);
+  assert.equal((await admin_call(f, '/api/admin/logout', {})).status, 200);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM admin_sessions').get().n, 1);
+});
+
+test('Worker admin profile changes need a session', async t => {
+  const f = await admin_fixture(t);
+  const current = (await f.register()).body.token;
+  assert.equal((await admin_call(f, '/api/admin/profile', { username: '新名' })).status, 401);
+  const avatar = 'data:image/png;base64,AAAA';
+  assert.deepEqual((await admin_call(f, '/api/admin/profile', { avatar }, current)).body, { profile: { username: '房主', avatar } });
+  assert.deepEqual((await admin_call(f, '/api/admin/profile', { username: ' 新名 ' }, current)).body, { profile: { username: '新名', avatar } });
+  assert.equal((await admin_call(f, '/api/admin/profile', { avatar: 'http://x/y.png' }, current)).status, 400);
+});
+
+test('Worker admin session bypasses room credentials for archive restore delete', async t => {
+  const f = await admin_fixture(t);
+  const session = (await f.register()).body.token;
+  const room = (await f.request('', { title: '管理员清理', host: 'Codex', phase: 'initial', experts: { Codex: 'cli' } })).body;
+  const path = `/${room.id}`, stranger = 'stranger-credential'.repeat(3);
+  for (const action of ['archive', 'restore']) {
+    assert.equal((await f.request(`${path}/${action}`, { actor: '用户' }, stranger)).status, 403);
+    assert.equal((await admin_call(f, `/api/rooms${path}/${action}`, { actor: '用户' }, session)).status, 200);
+  }
+  assert.equal((await f.request(`${path}/delete`, { actor: '用户', confirm_title: '管理员清理' }, stranger)).status, 403);
+  const wrong = await admin_call(f, `/api/rooms${path}/delete`, { actor: '用户', confirm_title: '错误名称' }, session);
+  assert.equal(wrong.status, 400);
+  assert.equal((await admin_call(f, `/api/rooms${path}/delete`, { actor: '用户', confirm_title: '管理员清理' }, session)).status, 200);
+});

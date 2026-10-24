@@ -1,6 +1,7 @@
 <script setup>
 import { computed, inject, ref, watch } from "vue";
 import CreateDiscussion from "./CreateDiscussion.vue";
+import AccountSettings from "./AccountSettings.vue";
 
 const props = defineProps({ detailId: { type: Number, default: null }, targetRoom: { type: Object, default: null }, targetFolder: { type: Object, default: null }, readingOptions: { type: Array, default: () => [] }, effectOptions: { type: Array, default: () => [] } });
 const mode = defineModel({ type: String, default: "" });
@@ -10,9 +11,9 @@ const rendered_mode = ref(mode.value);
 watch(mode, (value) => { if (value) rendered_mode.value = value; });
 const { view, bridge, field, act, pending } = inject("discussion");
 const open = computed({ get: () => Boolean(mode.value), set: (value) => { if (!value) mode.value = ""; } });
-const titles = { settings: "外观设置", create: "新建房间", folder: "新建文件夹", "rename-folder": "重命名文件夹", "delete-folder": "移除文件夹", edit: "编辑议题", schedule: "安排专家发言", message: "消息原文" };
+const titles = { settings: "设置", create: "新建房间", folder: "新建文件夹", "rename-folder": "重命名文件夹", "delete-folder": "移除文件夹", edit: "编辑议题", schedule: "安排专家发言", message: "消息原文" };
 Object.assign(titles, { rename: "重命名房间", archive: "存档房间", restore: "恢复房间", delete: "删除房间" });
-const descriptions = { settings: "选择适合你的讨论界面。", create: "组织一场讨论，或邀请 AI 一起完成任务。", edit: "维护目标、参与身份与当前进度。", schedule: "只填写本轮问题，专家按需阅读讨论资料。", message: "保留作者、来源、提交人和引用关系。" };
+const descriptions = { settings: "管理员账号与界面外观。", create: "组织一场讨论，或邀请 AI 一起完成任务。", edit: "维护目标、参与身份与当前进度。", schedule: "只填写本轮问题，专家按需阅读讨论资料。", message: "保留作者、来源、提交人和引用关系。" };
 Object.assign(descriptions, { rename: "名称变化不会影响讨论记录和阅读地址。", archive: "保留所有记录，并暂停尚未收束的讨论。", restore: "移回讨论列表，保持当前讨论阶段。", delete: "永久删除房间及其所有记录，无法撤销。" });
 titles.archives = "已存档房间";
 descriptions.archives = "查看记录、恢复房间或彻底删除。";
@@ -228,6 +229,8 @@ const keep_open = (event) => event.preventDefault();
         <div class="dialog-actions"><UButton label="取消" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" :label="rendered_mode === 'delete' ? '永久删除' : rendered_mode === 'rename' ? '保存名称' : titles[rendered_mode]" :color="rendered_mode === 'delete' ? 'error' : 'primary'" :loading="pending === 'manage_channel'" :disabled="rendered_mode === 'rename' && !management_title.trim()" /></div>
       </form>
       <div v-else-if="rendered_mode === 'settings'">
+        <AccountSettings />
+        <h3 class="account-appearance-heading">外观</h3>
         <div class="theme-choices"><button v-for="theme in themes" :key="theme.value" :class="{ chosen: view.theme === theme.value }" :aria-pressed="view.theme === theme.value" @click="choose_theme(theme.value)"><span class="theme-preview" :class="theme.value" aria-hidden="true"><i class="theme-preview-side"></i><i class="theme-preview-main"><b></b><b></b><b></b></i></span><span><strong>{{ theme.title }}</strong><small>{{ theme.description }}</small></span><span class="theme-check"><UIcon v-if="view.theme === theme.value" name="i-lucide-check" /></span></button></div>
         <section class="channel-reading-setting">
           <h3 id="channel-reading-label">对话宽度</h3>

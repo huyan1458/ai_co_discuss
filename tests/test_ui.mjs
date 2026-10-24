@@ -364,7 +364,7 @@ function attachment_fixture() {
     MAX_MESSAGE_ATTACHMENTS: 10, MAX_ATTACHMENT_BYTES: 20 * 1024 * 1024, URLSearchParams,
     new_submission_id: () => String(++identifier), escape_html: text => text,
     URL: { createObjectURL: () => "blob:test", revokeObjectURL: url => revoked.push(url) },
-    localStorage: { getItem: () => null }, publish_view() {}, show_toast() {}, cancel_reply() {}, cancel_turn_reply() {},
+    localStorage: { getItem: () => null }, admin_headers: () => ({}), publish_view() {}, show_toast() {}, cancel_reply() {}, cancel_turn_reply() {},
     refresh_room: async () => {},
     fetch: async (url, options) => { uploads.push([url, options]); return { ok: true, json: async () => ({ attachment: { id: "a".repeat(32) } }) }; },
     request_json: async (url, payload) => {
@@ -3426,4 +3426,100 @@ test("a failed later batch keeps the previous complete history available for ret
   await assert.rejects(fixture.load, /连接中断/);
   assert.equal(fixture.state.message_history, saved);
   assert.equal(saved.messages.length, 1);
+});
+
+/** A theme fixture whose network answers come from a route table. */
+function admin_fixture(routes) {
+  const fixture = theme_fixture(), requests = [];
+  fixture.context.fetch = async (url, options = {}) => {
+    requests.push({ url, options, body: options.body && JSON.parse(options.body) });
+    const answer = routes[url];
+    const result = typeof answer === "function" ? answer(requests.at(-1)) : answer;
+    return { ok: !result.error, status: result.status || (result.error ? 400 : 200), json: async () => result };
+  };
+  return { ...fixture, requests, admin: fixture.context.test_state.admin };
+}
+
+test("admin state applies the owner's name and avatar to every visitor and drops a rejected session", async () => {
+  const profile = { username: "Ada", avatar: "data:image/png;base64,AAAA" };
+  const { context, storage, requests, admin } = admin_fixture({ "/api/admin": { registered: true, setup_available: false, logged_in: false, profile } });
+  assert.equal(context.display_name("用户"), "User");
+  assert.equal(context.window.discuss_view.identities["用户"].icon, "/icons/user.svg");
+  storage.set("discuss-admin-session", "stale-token");
+  await context.load_admin_state();
+  assert.equal(requests[0].options.headers["X-Discussion-Admin"], "stale-token");
+  assert.equal(storage.has("discuss-admin-session"), false, "a session the server rejects is cleared");
+  assert.equal(admin.logged_in, false);
+  assert.equal(context.display_name("用户"), "Ada", "visitors see the owner's name");
+  assert.equal(context.window.discuss_view.identities["用户"].icon, profile.avatar);
+  assert.equal(context.display_name("Claude"), "Claude", "AI identities are untouched");
+  context.apply_admin_state({ registered: false, setup_available: true, logged_in: false, profile: null });
+  assert.equal(context.display_name("用户"), "User");
+  assert.equal(context.window.discuss_view.identities["用户"].icon, "/icons/user.svg");
+});
+
+test("admin login stores the session, sends it on later writes, and logout clears it", async () => {
+  const profile = { username: "Ada", avatar: "" };
+  const { context, storage, requests, admin } = admin_fixture({
+    "/api/admin/login": ({ body }) => body.password === "right-password" ? { token: "t".repeat(64), profile } : { error: "用户名或密码错误", status: 401 },
+    "/api/rooms/one/archive": {}, "/api/admin/logout": { ok: true },
+  });
+  await assert.rejects(context.login_admin({ username: "Ada", password: "wrong-password" }), /用户名或密码错误/);
+  assert.equal(storage.has("discuss-admin-session"), false);
+  await context.login_admin({ username: " Ada ", password: "right-password" });
+  assert.equal(requests.at(-1).body.username, "Ada");
+  assert.equal(storage.get("discuss-admin-session"), "t".repeat(64));
+  assert.equal(admin.logged_in, true);
+  assert.equal(context.display_name("用户"), "Ada");
+  await context.request_json("/api/rooms/one/archive", { actor: "用户" });
+  assert.equal(requests.at(-1).options.headers["X-Discussion-Admin"], "t".repeat(64));
+  await context.logout_admin();
+  assert.deepEqual(requests.at(-1).body, {});
+  assert.equal(storage.has("discuss-admin-session"), false);
+  assert.equal(admin.logged_in, false);
+  assert.equal(context.display_name("用户"), "Ada", "the public name stays after signing out");
+});
+
+test("admin forms follow the server limits and show the lock delay", async () => {
+  const { context } = admin_fixture({ "/api/admin/login": { error: "登录已锁定", status: 429 }, "/api/admin/register": { error: "x" } });
+  const check = context.validate_admin_form;
+  assert.match(check({ username: "", password: "12345678", confirm: "12345678" }), /用户名/);
+  assert.match(check({ username: "a".repeat(31), password: "12345678" }), /用户名/);
+  assert.match(check({ username: "Ada", password: "1234567" }), /密码/);
+  assert.match(check({ username: "Ada", password: "12345678", confirm: "other" }), /不一致/);
+  assert.equal(check({ username: "Ada", password: "12345678", confirm: "12345678" }), "");
+  await assert.rejects(context.register_admin({ username: "Ada", password: "12345678", confirm: "12345678", setup_key: " " }), /安装令牌/);
+  await assert.rejects(context.login_admin({ username: "Ada", password: "12345678" }), /登录已锁定，请稍后再试/);
+});
+
+test("without a room credential a management failure says how to get permission", async () => {
+  const { context, storage, admin } = admin_fixture({});
+  const denied = Object.assign(new Error("需要房主或本成员的有效凭据；没有凭据只能阅读"), { status: 403 });
+  assert.match(context.management_error_message("one", denied), /登录管理员账号或使用创建该房间的浏览器/);
+  storage.set("discuss-access:one", "owner");
+  assert.equal(context.management_error_message("one", denied), denied.message);
+  storage.delete("discuss-access:one");
+  admin.logged_in = true;
+  assert.equal(context.management_error_message("one", denied), denied.message);
+});
+
+test("a local site applies the owner's profile without a login, session token or login guidance", async () => {
+  const profile = { username: "本机", avatar: "" };
+  const { context, storage, requests, admin } = admin_fixture({
+    "/api/admin": { local: true, registered: true, setup_available: false, logged_in: true, profile },
+    "/api/admin/profile": ({ body }) => ({ profile: { username: body.username, avatar: "" } }),
+  });
+  storage.set("discuss-admin-session", "old-token");
+  await context.load_admin_state();
+  assert.equal(admin.local, true);
+  assert.equal(storage.has("discuss-admin-session"), false, "no session token is kept on a local site");
+  assert.equal(context.display_name("用户"), "本机");
+  assert.equal(context.window.discuss_view.identities["用户"].icon, "/icons/user.svg");
+  await context.update_admin_profile({ username: "新名字" });
+  assert.equal(requests.at(-1).options.headers["X-Discussion-Admin"], undefined);
+  assert.equal(admin.local, true, "profile updates keep the local state");
+  assert.equal(context.display_name("用户"), "新名字");
+  assert.equal(context.admin_snapshot().local, true);
+  const denied = Object.assign(new Error("拒绝"), { status: 403 });
+  assert.equal(context.management_error_message("one", denied), "拒绝");
 });

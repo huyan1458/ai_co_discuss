@@ -163,6 +163,21 @@ BEGIN
         revision=revision+1 WHERE room_id=NEW.room_id
         AND NOT EXISTS (SELECT 1 FROM discussion_turns WHERE room_id=NEW.room_id AND status IN ('pending','notified') AND expert=OLD.host);
 END;
+-- Site administrator account (single user) and its login sessions. Raw tokens and passwords are never stored.
+CREATE TABLE IF NOT EXISTS site_admin (
+    id INTEGER PRIMARY KEY CHECK(id=1),
+    username TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    avatar TEXT NOT NULL DEFAULT '',
+    failed_attempts INTEGER NOT NULL DEFAULT 0,
+    locked_until INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS admin_sessions (
+    token_hash TEXT PRIMARY KEY,
+    created_at INTEGER NOT NULL
+);
+
 -- Free collaboration rooms. Rooms without a row are brainstorm rooms and keep every rule below.
 CREATE TABLE IF NOT EXISTS room_modes (
     room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,

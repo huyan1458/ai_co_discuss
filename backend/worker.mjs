@@ -2515,11 +2515,176 @@ async function append_free_message(database, room, payload, actor) {
   return { message, duplicate: false };
 }
 
+const ADMIN_ITERATIONS = 100000;
+const ADMIN_LOCK_THRESHOLD = 5;
+const ADMIN_LOCK_SECONDS = 300;
+const ADMIN_AVATAR_LIMIT = 60000;
+// With a valid admin session these skip the room credential, like directory arrangement.
+const ADMIN_ROOM_OPERATIONS = ["archive", "restore", "delete"];
+
+/** Lowercase hex of raw bytes. */
+function to_hex(bytes) {
+  return Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** SHA-256 hex of any string, without the length bounds of runtime_hash. */
+async function digest_hex(text) {
+  return to_hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
+}
+
+/** Compare equal-purpose hex strings without an early exit. */
+function constant_time_equal(left, right) {
+  const a = new TextEncoder().encode(left), b = new TextEncoder().encode(right);
+  let difference = a.length ^ b.length;
+  for (let index = 0; index < Math.max(a.length, b.length); index++) difference |= (a[index] ?? 0) ^ (b[index] ?? 0);
+  return difference === 0;
+}
+
+/** PBKDF2-HMAC-SHA256 as hex. */
+async function pbkdf2_hex(password, salt, iterations) {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+  return to_hex(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations }, key, 256));
+}
+
+/** Format: pbkdf2_sha256$iterations$salt_hex$hash_hex. */
+async function hash_password(password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  return `pbkdf2_sha256$${ADMIN_ITERATIONS}$${to_hex(salt)}$${await pbkdf2_hex(password, salt, ADMIN_ITERATIONS)}`;
+}
+
+/** Check a password against a stored hash string. */
+async function verify_password(password, stored) {
+  const [scheme, iterations, salt_hex, expected] = String(stored).split("$");
+  if (scheme !== "pbkdf2_sha256" || !/^([0-9a-f]{2})+$/.test(salt_hex ?? "")) return false;
+  const salt = Uint8Array.from(salt_hex.match(/../g), pair => parseInt(pair, 16));
+  return constant_time_equal(await pbkdf2_hex(password, salt, Number(iterations)), expected ?? "");
+}
+
+function admin_profile(row) {
+  return row ? { username: row.username, avatar: row.avatar } : null;
+}
+
+function now_seconds() {
+  return Math.floor(Date.now() / 1000);
+}
+
+/** Return the session row for the request header, or null; sessions never expire. */
+async function admin_session(database, request) {
+  const token = request.headers.get("X-Discussion-Admin") ?? "";
+  if (!/^[0-9a-f]{64}$/.test(token)) return null;
+  return database.prepare("SELECT * FROM admin_sessions WHERE token_hash=?").bind(await digest_hex(token)).first();
+}
+
+async function require_admin_session(database, request) {
+  const session = await admin_session(database, request);
+  if (!session) throw new HttpError(401, "需要管理员登录");
+  return session;
+}
+
+/** Create a session and return the raw token, which is never stored. */
+async function create_admin_session(database) {
+  const token = to_hex(crypto.getRandomValues(new Uint8Array(32)));
+  await database.prepare("INSERT INTO admin_sessions (token_hash,created_at) VALUES (?,?)").bind(await digest_hex(token), now_seconds()).run();
+  return token;
+}
+
+function admin_username(value) {
+  const username = typeof value === "string" ? value.trim() : "";
+  if (!username || text_length(username) > 30) throw new HttpError(400, "用户名须为 1–30 个字符");
+  return username;
+}
+
+function admin_password(value, label = "密码") {
+  if (typeof value !== "string" || text_length(value) < 8 || text_length(value) > 128) throw new HttpError(400, `${label}须为 8–128 个字符`);
+  return value;
+}
+
+function admin_avatar(value) {
+  if (typeof value !== "string" || (value && !value.startsWith("data:image/")) || value.length > ADMIN_AVATAR_LIMIT) {
+    throw new HttpError(400, "头像须为 data:image/ 数据，且不超过 60000 字符；空字符串表示默认头像");
+  }
+  return value;
+}
+
+/** Reject while locked; otherwise verify the password and lock for a fixed time after repeated failures. */
+async function check_admin_password(database, admin, password) {
+  const now = now_seconds();
+  if (admin.locked_until > now) throw new HttpError(429, `尝试次数过多，请 ${admin.locked_until - now} 秒后再试`);
+  if (typeof password === "string" && await verify_password(password, admin.password_hash)) {
+    await database.prepare("UPDATE site_admin SET failed_attempts=0, locked_until=0 WHERE id=1").run();
+    return;
+  }
+  const locked = admin.failed_attempts + 1 >= ADMIN_LOCK_THRESHOLD;
+  await database.prepare("UPDATE site_admin SET failed_attempts=?, locked_until=? WHERE id=1")
+    .bind(locked ? 0 : admin.failed_attempts + 1, locked ? now + ADMIN_LOCK_SECONDS : 0).run();
+  throw new HttpError(401, "用户名或密码错误");
+}
+
+async function admin_state(database, request, setup_key) {
+  const admin = await database.prepare("SELECT * FROM site_admin WHERE id=1").first();
+  return { registered: Boolean(admin), setup_available: !admin && Boolean(setup_key),
+    logged_in: Boolean(await admin_session(database, request)), profile: admin_profile(admin) };
+}
+
+async function register_admin(database, request, payload, setup_key) {
+  if (await database.prepare("SELECT 1 FROM site_admin WHERE id=1").first()) throw new HttpError(409, "管理员账号已存在");
+  if (!setup_key) throw new HttpError(503, "未配置安装令牌");
+  const username = admin_username(payload.username), password = admin_password(payload.password);
+  const supplied = typeof payload.setup_key === "string" ? payload.setup_key : "";
+  if (!constant_time_equal(await digest_hex(supplied), await digest_hex(String(setup_key)))) throw new HttpError(403, "安装令牌错误");
+  const hashed = await hash_password(password);
+  try {
+    await database.prepare("INSERT INTO site_admin (id,username,password_hash,avatar,created_at) VALUES (1,?,?,'',?)").bind(username, hashed, now_seconds()).run();
+  } catch (error) {
+    if (String(error).includes("UNIQUE") || String(error).includes("PRIMARY")) throw new HttpError(409, "管理员账号已存在");
+    throw error;
+  }
+  return { token: await create_admin_session(database), profile: { username, avatar: "" } };
+}
+
+async function login_admin(database, request, payload) {
+  const admin = await database.prepare("SELECT * FROM site_admin WHERE id=1").first();
+  const username = typeof payload.username === "string" ? payload.username.trim().toLowerCase() : "";
+  if (!admin) throw new HttpError(401, "用户名或密码错误");
+  // The username is checked after the lock so a wrong name and a wrong password are indistinguishable.
+  await check_admin_password(database, admin, username === admin.username.toLowerCase() ? payload.password : null);
+  return { token: await create_admin_session(database), profile: admin_profile(admin) };
+}
+
+async function update_admin_profile(database, request, payload) {
+  await require_admin_session(database, request);
+  const admin = await database.prepare("SELECT * FROM site_admin WHERE id=1").first();
+  const username = Object.hasOwn(payload, "username") ? admin_username(payload.username) : admin.username;
+  const avatar = Object.hasOwn(payload, "avatar") ? admin_avatar(payload.avatar) : admin.avatar;
+  await database.prepare("UPDATE site_admin SET username=?, avatar=? WHERE id=1").bind(username, avatar).run();
+  return { profile: { username, avatar } };
+}
+
+async function logout_admin(database, request) {
+  const session = await admin_session(database, request);
+  if (session) await database.prepare("DELETE FROM admin_sessions WHERE token_hash=?").bind(session.token_hash).run();
+  return { ok: true };
+}
+
+/** Route /api/admin*; GET is public, every POST is JSON. */
+async function handle_admin_api(database, request, parts, setup_key) {
+  const action = parts[2] ?? "";
+  if (parts.length === 2 && request.method === "GET") return respond(await admin_state(database, request, setup_key));
+  if (parts.length !== 3 || request.method !== "POST") throw new HttpError(404, "地址不存在");
+  const payload = await read_payload(request);
+  if (action === "register") return respond(await register_admin(database, request, payload, setup_key), 201);
+  if (action === "login") return respond(await login_admin(database, request, payload));
+  if (action === "logout") return respond(await logout_admin(database, request));
+  if (action === "profile") return respond(await update_admin_profile(database, request, payload));
+  throw new HttpError(404, "地址不存在");
+}
+
 /** Route JSON operations alongside explicitly bounded binary attachment routes. */
-async function handle_api(database, request, parts, params, bucket) {
+async function handle_api(database, request, parts, params, bucket, setup_key = "") {
   const route = parts.join("/");
   const method = request.method;
   if (route === "api/health" && method === "GET") return respond({ ok: true });
+  if (parts[0] === "api" && parts[1] === "admin") return handle_admin_api(database, request, parts, setup_key);
   if (route === "api/rooms") {
     if (method === "GET") return respond(await query_rooms(database, params));
     const room = await create_room(database, await read_payload(request), request.headers.get("X-Discussion-Token") ?? "");
@@ -2562,7 +2727,9 @@ async function handle_api(database, request, parts, params, bucket) {
     return handle_runtime_api(database, request, parts, params);
   }
   let free_actor = null;
+  const admin_bypass = method === "POST" && parts.length === 4 && ADMIN_ROOM_OPERATIONS.includes(parts[3]) && Boolean(await admin_session(database, request));
   if (method === "POST" && parts.length === 4 && DIRECTORY_OPERATIONS.includes(parts[3])) { /* directory arrangement */ }
+  else if (admin_bypass) { /* valid admin session replaces the room credential */ }
   else if (method === "POST" && free) free_actor = await authorize_free(database, room_id,
     request.headers.get("X-Discussion-Token") ?? "", parts[3] ?? "", await read_payload(request.clone()));
   else if (method === "POST") database = await authorize_database(database, room_id,
@@ -2726,7 +2893,7 @@ async function fetch_request(request, env, context) {
     }
     const quiet_renewal = parts[3] === "events" && request.method === "POST"
       && (await request.clone().json().catch(() => ({}))).action === "renew";
-    const response = await handle_api(env.DB, request, parts, params, env.ATTACHMENTS);
+    const response = await handle_api(env.DB, request, parts, params, env.ATTACHMENTS, env.ADMIN_SETUP_KEY);
     if (request.method === "POST" && response.ok && ["rooms", "folders"].includes(parts[1]) && !quiet_renewal && env.UPDATES) {
       const notification = notify_update(env);
       if (context) context.waitUntil(notification);

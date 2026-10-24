@@ -100,6 +100,13 @@ watch(() => free_room.value && view.value.tab !== "discussion", (leave) => { if 
 const view_links = computed(() => tabs.value.map((item) => ({
   ...item, active: !!room.value && view.value.tab === item.value, disabled: !room.value, onSelect: () => { nav_open.value = false; act("tab", item.value); },
 })));
+/** The footer's second line: the account call to action until signed in, then the site connection. */
+const account_status = computed(() => {
+  const admin = view.value.admin;
+  if (!admin?.loaded) return "";
+  if (!admin.registered) return "设置管理员账号";
+  return admin.logged_in ? "" : "未登录 · 点击登录";
+});
 const participants = computed(() => [
   { name: "用户", mode: "发起与协助" },
   ...Object.entries(room.value?.experts || {}).map(([name, mode]) => ({ name, mode: mode === "cli" ? "本地 AI · 自行发言" : "在线 AI · 由人代发" })),
@@ -255,9 +262,11 @@ function resize_nav_by_key(event) {
         <UNavigationMenu v-if="tools_open" :items="view_links" orientation="vertical" color="neutral" variant="pill" class="channel-directory channel-view-links" aria-label="房间视图" :ui="{ link: 'channel-link', linkLabel: 'channel-link-label', linkLeadingIcon: 'channel-link-icon' }" />
       </div>
       <footer class="channel-sidebar-footer">
-        <UAvatar :src="bridge.identities[author]?.icon" :text="bridge.identities[author]?.initials" :alt="bridge.display_name(author)" size="sm" class="channel-avatar" :class="bridge.identities[author]?.style" />
-        <div class="channel-self"><strong>{{ bridge.display_name(author) }}</strong><div class="channel-connection"><span :class="{ connected: view.connected }"></span>{{ view.connected ? '网站已连接' : '网站未连接' }}</div></div>
-        <UTooltip text="外观设置"><UButton icon="i-lucide-settings-2" color="neutral" variant="ghost" size="sm" class="channel-icon-button" aria-label="外观设置" @click="modal = 'settings'" /></UTooltip>
+        <button type="button" class="channel-self-button" :aria-label="`账号与设置：${bridge.display_name(author)}${account_status ? '，' + account_status : ''}`" @click="modal = 'settings'">
+          <UAvatar :src="bridge.identities[author]?.icon" :text="bridge.identities[author]?.initials" :alt="bridge.display_name(author)" size="sm" class="channel-avatar" :class="bridge.identities[author]?.style" />
+          <span class="channel-self"><strong>{{ bridge.display_name(author) }}</strong><span class="channel-connection" :class="{ 'is-action': account_status }"><span :class="{ connected: view.connected }" :title="view.connected ? '网站已连接' : '网站未连接'"></span>{{ account_status || (view.connected ? '网站已连接' : '网站未连接') }}</span></span>
+        </button>
+        <UTooltip text="设置"><UButton icon="i-lucide-settings-2" color="neutral" variant="ghost" size="sm" class="channel-icon-button" aria-label="设置" @click="modal = 'settings'" /></UTooltip>
       </footer>
     </aside>
     <div v-if="!nav_collapsed" class="channel-nav-resizer" role="separator" tabindex="0" aria-label="调整房间栏宽度" aria-orientation="vertical" aria-controls="channel-sidebar" :aria-valuemin="NAV_MIN" :aria-valuemax="nav_max" :aria-valuenow="effective_nav_width" :aria-valuetext="`${effective_nav_width} 像素`" title="拖动调整房间栏宽度，也可使用方向键" @pointerdown="start_nav_resize" @pointermove="resize_nav" @pointerup="finish_nav_resize" @pointercancel="finish_nav_resize" @lostpointercapture="finish_nav_resize" @keydown="resize_nav_by_key"></div>
@@ -331,7 +340,7 @@ function resize_nav_by_key(event) {
     <USlideover v-model:open="nav_open" side="left" title="讨论房间" description="共议 · AI CoDiscuss" :ui="{ content: 'channel-navigation-drawer', body: 'channel-drawer-body' }">
       <template #body>
         <ChannelDirectory @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archives="open_archives" />
-        <UButton block icon="i-lucide-settings-2" color="neutral" variant="ghost" label="外观设置" @click="nav_open = false; modal = 'settings'" />
+        <UButton block icon="i-lucide-settings-2" color="neutral" variant="ghost" label="设置" @click="nav_open = false; modal = 'settings'" />
       </template>
     </USlideover>
     <USlideover v-model:open="info_open" title="房间资料" description="目标、背景与参与方式" :ui="{ content: 'channel-details', body: 'space-y-6' }">
