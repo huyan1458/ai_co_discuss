@@ -220,12 +220,12 @@ class RoomWorker {
     }
     this.state.config_version = snapshot.version;
   }
-  /** A manual Claude or Codex expert whose CLI reported its session is handed to the service, which resumes that session from the next turn on. */
+  /** A manual Claude or Codex expert that has registered and whose CLI reported its session is handed to the service, which resumes that session from the next turn on. */
   async adopt_manual_members() {
     if (this.config.mode === 'free') return;
     for (const member of this.runner.members || []) {
       const key = `${member.name}:${member.reported_session}`;
-      if (member.access !== 'manual' || member.status !== 'active' || !member.reported_session || this.adopt_failed.has(key)) continue;
+      if (member.access !== 'manual' || member.status !== 'active' || !member.registered_at || !member.reported_session || this.adopt_failed.has(key)) continue;
       try {
         const { adopt_member_profile } = await import('./discussion_launch.mjs');
         const adapter = adopt_member_profile(this.home, this.path, member.name, member.reported_session, member.reported_client);

@@ -143,6 +143,13 @@ function member_status(name) {
     text = "本轮已发言";
     tone = "success";
   }
+  // A manual expert counts as present only after its own session registered with the room.
+  const seat = record(name);
+  if (seat?.access === "manual" && seat.status === "active" && !is_host) {
+    const spoken = speakers.includes(name);
+    if (!seat.registered_at) { text = `待注册${text === "等待" ? "" : ` · ${text}`}`; tone = "warning"; }
+    else if (!spoken) text = `已注册${text === "等待" ? "" : ` · ${text}`}`;
+  }
   if (execution?.status === "failed") { text = "执行失败"; tone = "error"; }
   if (execution?.stale) { text = "疑似卡住（租约已过期）"; tone = "warning"; }
   return { name, is_host, text, tone, manual: record(name)?.access === "manual", failures: execution?.failures || 0, result: execution?.status === "failed" ? execution.result : "",
@@ -283,6 +290,7 @@ async function finish(action) {
             <div v-if="member.model" class="pb-member-model" title="本场启动配置；默认模型与默认强度由对应软件决定">{{ member.model }}</div>
             <div v-if="record(member.name)?.session_mode === 'borrowed'" class="pb-member-model" title="续接你已有的会话；它工作时请不要在原窗口继续操作">借用已有会话</div>
             <div v-if="!settled" class="pb-member-status" :class="`is-${member.tone}`"><span class="pb-dot"></span>{{ member.text }}<small v-if="member.failures"> · 失败 {{ member.failures }} 次</small></div>
+            <p v-if="member.manual && !settled && !record(member.name)?.registered_at && !member.is_host" class="pb-status-detail">把启动指令粘贴到它的 AI 会话，由它自己注册后才算到场。</p>
             <button v-if="member.manual && !settled && can_control" type="button" class="pb-link" @click="act('copy_member_launch', member.name)"><UIcon name="i-lucide-rocket" />复制启动指令</button>
           </div>
           <UDropdownMenu v-if="member_menu(member).length" :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="`${member.name} 的更多操作`" /></UDropdownMenu>

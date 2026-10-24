@@ -23,7 +23,7 @@ from .free_room import (add_member, after_free_message, authorize_free_write, ch
                         inbox, interrupt_member, member_action, member_values, migrate_free_tables, proxy_member, reserve_execution,
                         discussion_members, room_mode, save_room_access, sync_discussion_members, view_execution)
 from .free_room import add_discussion_member, convert_suggestion, discussion_member_action, message_suggestions, save_suggestions, sync_participants
-from .free_room import adopt_recommendation, recommend_member
+from .free_room import adopt_recommendation, recommend_member, register_member
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, is_ai, is_participant
 from .room_import import import_room, imported_attachment
 from .runtime import (authorize_write, begin_write, configure_runtime, event_action,
@@ -211,13 +211,16 @@ def require_room(connection, room_id):
     room["limits"] = limits_view(connection.execute(LIMITS_SQL, (room_id,)).fetchone(), room)
     room["mode"] = room_mode(connection, room_id)
     room["members"] = [dict(row) for row in connection.execute(
-        """SELECT m.id,m.name,m.adapter,m.role,m.status,m.access,m.session_mode,COALESCE(s.session_id,'') AS reported_session,COALESCE(s.client,'') AS reported_client
-        FROM room_members AS m LEFT JOIN member_sessions AS s ON s.member_id=m.id WHERE m.room_id=? AND m.status<>'removed' ORDER BY m.id""", (room_id,))]
+        """SELECT m.id,m.name,m.adapter,m.role,m.status,m.access,m.session_mode,COALESCE(s.session_id,'') AS reported_session,COALESCE(s.client,'') AS reported_client,
+        COALESCE(r.registered_at,'') AS registered_at
+        FROM room_members AS m LEFT JOIN member_sessions AS s ON s.member_id=m.id
+        LEFT JOIN member_registrations AS r ON r.member_id=m.id AND r.token_hash=m.token_hash WHERE m.room_id=? AND m.status<>'removed' ORDER BY m.id""", (room_id,))]
     option = connection.execute("SELECT named_followup FROM discussion_options WHERE room_id=?", (room_id,)).fetchone()
     # Rooms created before the option keep the host's named follow-ups.
     room["named_followup"] = bool(option[0]) if option else True
     room["scheduler_decisions"] = [dict(row) for row in connection.execute(
         "SELECT * FROM scheduler_decisions WHERE room_id=? ORDER BY id DESC LIMIT ?", (room_id, RECENT_DECISIONS))][::-1]
+    room["host_arrangements"] = host_arrangements(connection, room_id, room["scheduler_decisions"])
     parent = connection.execute("""SELECT rooms.id,rooms.title FROM room_links JOIN rooms ON rooms.id=room_links.parent_id
         WHERE room_links.room_id=?""", (room_id,)).fetchone()
     room["parent_room"] = dict(parent) if parent else None
@@ -262,6 +265,23 @@ def require_floor(room, speaker):
     """Reject a declared speaker who does not currently hold the floor."""
     if room["floor"]["holder"] != speaker:
         raise FileExistsError("请先领取本人发言权；他人持有或尚未被点名时不能发言或安排")
+
+
+def host_arrangements(connection, room_id, decisions):
+    """Each plan the host created (turns saved in one batch), anchored after the latest answer before it.
+
+    Invitation turns are not plans, and a plan the smart scheduler applied is already shown by its own decision.
+    """
+    plans, latest_answer = [], 0
+    for row in connection.execute("SELECT id,expert,question,answer_id,created_at,submission_id FROM discussion_turns WHERE room_id=? ORDER BY id", (room_id,)):
+        if not row["submission_id"].startswith("invite:"):
+            if plans and plans[-1]["created_at"] == row["created_at"]:
+                plans[-1]["turns"].append({"expert": row["expert"], "question": row["question"]})
+            else:
+                plans.append({"id": row["id"], "after_message_id": latest_answer, "created_at": row["created_at"], "turns": [{"expert": row["expert"], "question": row["question"]}]})
+        latest_answer = max(latest_answer, row["answer_id"] or 0)
+    applied = {item["after_message_id"] for item in decisions if item["applied"]}
+    return [plan for plan in plans if plan["after_message_id"] and plan["after_message_id"] not in applied][-RECENT_DECISIONS:]
 
 
 def discussion_rounds(connection, room_id, experts):
@@ -549,7 +569,7 @@ def manage_room(connection, room_id, action, payload):
 
 def delete_room_records(connection, room_id):
     """Remove a room's dependent records in the caller's transaction."""
-    for table in ("member_recommendations", "member_requests", "member_executions", "member_sessions", "room_members", "room_modes", "free_batches", "free_chains", "room_links",
+    for table in ("member_recommendations", "member_requests", "member_executions", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "room_links",
                   "discussion_options", "scheduler_decisions"):
         connection.execute(f"DELETE FROM {table} WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM message_timings WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)", (room_id,))
@@ -1614,6 +1634,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             record_reported_session(connection, room_id, token, {"session_id": self.headers.get("X-Discussion-Session"),
                                                                  "session_client": self.headers.get("X-Discussion-Session-Client")})
             connection.commit()
+        if parts[3:] == ["register"] and method == "POST":
+            result = register_member(connection, room_id, token, utc_now())
+            connection.commit()
+            return self.respond(result)
         free = room_mode(connection, room_id) == "free"
         if free and parts[3:4] in (["inbox"], ["executions"], ["members"], ["suggestions"], ["recommendations"]):
             return self.handle_free_api(connection, parts, method)

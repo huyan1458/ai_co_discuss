@@ -314,6 +314,11 @@ def execution_commands(subcommands, registry):
             parser.add_argument("--reason", required=True)
 
 
+def member_commands(subcommands, registry):
+    """Let a manual member announce itself; the CLI attaches the hosting session on its own."""
+    add_leaf(subcommands, registry, "member register", "手动接入成员用自己的凭据向房间注册；会话 ID 由本程序自动附带，无需填写", True)
+
+
 def build_parser(prog="discuss"):
     """Build help and schema from the same command definitions."""
     parser = Parser(prog=prog, description="AI CoDiscuss CLI：通过 HTTP 操作现有讨论网站。",
@@ -325,7 +330,7 @@ def build_parser(prog="discuss"):
     for name, register in (("room", room_commands), ("message", message_commands),
                            ("attachment", attachment_commands),
                            ("turn", turn_commands), ("state", state_commands), ("floor", floor_commands),
-                           ("run", run_commands), ("execution", execution_commands)):
+                           ("run", run_commands), ("execution", execution_commands), ("member", member_commands)):
         group = subcommands.add_parser(name, help=f"{name} 操作", allow_abbrev=False)
         add_common(group)
         register(group.add_subparsers(dest="action", required=True), registry)
@@ -621,6 +626,13 @@ def plan_execution(args):
     return RequestPlan(f"/api/rooms/{args.room}/events/{args.id}", "POST", body)
 
 
+def plan_member(args):
+    """Register with the credential file; the token itself decides which member this is."""
+    if not load_access(args):
+        raise CliError("注册须使用成员自己的凭据文件（--access-file 或 DISCUSS_ACCESS_FILE）")
+    return RequestPlan(f"/api/rooms/{args.room}/register", "POST", {})
+
+
 def build_plan(args):
     """Validate local input before constructing any network request."""
     stdin_count = sum(value == "-" for key, value in vars(args).items()
@@ -630,7 +642,7 @@ def build_plan(args):
     handlers = {"room": plan_room, "message": plan_message, "turn": plan_turn,
                 "attachment": plan_attachment,
                 "state": plan_state, "floor": plan_floor, "api": plan_api,
-                "run": plan_run, "execution": plan_execution}
+                "run": plan_run, "execution": plan_execution, "member": plan_member}
     plan = RequestPlan("/api/health") if args.resource == "health" else handlers[args.resource](args)
     if getattr(args, "dry_run", False) and plan.method != "POST" and plan.download_file is None:
         raise CliError("--dry-run 仅用于写入命令；读取命令本身不会修改数据")

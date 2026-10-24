@@ -240,7 +240,8 @@ test('without named follow-ups smart scheduling opens the next peer round itself
   const choice = (choice, confidence) => ({ type: 'choice', choice, confidence, probabilities: {} });
   const r = await smart_discussion(t, { named_followup: false, order: ['Grok', 'DeepSeek', 'Qwen'],
     expert_reply: (call, room) => tool_reply(call, 'submit_opinion', { text: `${room.current_turn.expert} 的观点。`, summary: '摘要。' }),
-    decisions: [{ next: choice('continue', 0.9), first: choice('DeepSeek', 0.7) }, { next: choice('__host__', 0.95), first: choice('Grok', 0.5) }] });
+    decisions: [{ next: choice('continue', 0.9), first: choice('DeepSeek', 0.7) }, { speaker: choice('Grok', 0.9) }, { speaker: choice('Qwen', 0.9) },
+      { next: choice('__host__', 0.95), first: choice('Grok', 0.5) }] });
   await until(async () => r.host_turns() === 3, () => r.runner.tick());
   const room = await api(r.config, '');
   assert.equal(room.named_followup, false);
@@ -250,7 +251,7 @@ test('without named follow-ups smart scheduling opens the next peer round itself
   assert.deepEqual(turns.map(turn => turn.expert), ['DeepSeek', 'Grok', 'Qwen']);
   assert.ok(turns.every(turn => turn.question === peer_round_question(2)));
   assert.deepEqual(Object.keys(r.sent[0].questions.first.criteria), ['Grok', 'DeepSeek']);
-  assert.deepEqual(room.scheduler_decisions.map(item => [item.kind, item.applied, item.confidence]), [['round', 1, 0.9], ['round', 0, 0.95]]);
+  assert.deepEqual(room.scheduler_decisions.map(item => [item.kind, item.applied, item.confidence]), [['round', 1, 0.9], ['round', 1, 0.9], ['round', 1, 0.9], ['round', 0, 0.95]]);
 });
 
 test('an interjection the provider assigns to one expert is answered next, before the rest of the plan', async t => {

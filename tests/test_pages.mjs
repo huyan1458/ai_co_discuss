@@ -587,6 +587,19 @@ test('Worker invitations append automatic and manual experts while preserving th
   assert.equal(paused.body.runtime.status, 'paused');
 });
 
+test('Worker invitation completes the current round before a repeat pass, like Python', async t => {
+  const f = await worker_fixture(t);
+  const id = (await f.request('', { title: '补齐本轮', host: 'Codex', phase: 'initial', experts: { Codex: 'cli', Claude: 'cli', Gemini: 'cli' } })).body.id;
+  await f.request(`/${id}/runtime`, { action: 'start', revision: 0, deadline: 0 });
+  const names = ['Claude', 'Gemini', 'Claude', 'Gemini'];
+  const plan = await f.request(`/${id}/turns`, { actor: '用户', submission_id: 'invite-slot-plan', turns: names.map((expert, index) => ({ expert, question: `第 ${index} 句` })) });
+  assert.equal(plan.status, 201, JSON.stringify(plan.body));
+  const joined = await f.request(`/${id}/members`, { name: 'DeepSeek', access: 'runner', adapter: 'api', token: crypto.randomUUID() });
+  assert.equal(joined.status, 200, JSON.stringify(joined.body));
+  assert.deepEqual(joined.body.queued_turns.map(turn => [turn.expert, turn.question]),
+    [['Gemini', '第 1 句'], ['DeepSeek', '欢迎加入：请先读取议题，独立给出你的开场观点。'], ['Claude', '第 2 句'], ['Gemini', '第 3 句']]);
+});
+
 test('Worker running discussions admit and release experts without pausing, like Python', async t => {
   const f = await worker_fixture(t);
   const id = (await f.request('', { title: '成员进出', host: 'Codex', experts: { Codex: 'cli', Claude: 'cli' } })).body.id;
@@ -618,6 +631,26 @@ test('Worker running discussions admit and release experts without pausing, like
   assert.equal((await f.request(`/${id}/members/${members.Codex.id}`, { action: 'redo' })).status, 404, 'no opinion yet');
   assert.equal((await f.request(`/${id}/members/${members.Claude.id}`, { action: 'redo' })).status, 200);
   assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM messages WHERE id=?').get(saved.lastInsertRowid).count, 0);
+});
+
+test('Worker manual expert registers with its own credential, keeps the first time and must register again with a new credential', async t => {
+  const f = await worker_fixture(t);
+  const id = (await f.request('', { title: '注册', host: 'Codex', experts: { Codex: 'cli', Claude: 'cli' } })).body.id;
+  const token = f.member_tokens.Qwen = crypto.randomUUID();
+  const joined = await f.request(`/${id}/members`, { name: 'Qwen', token, access: 'manual', adapter: '' });
+  const member = joined.body.members.find(item => item.name === 'Qwen');
+  assert.equal(member.registered_at, '');
+  assert.equal((await f.request(`/${id}/register`, {})).status, 403, 'the owner cannot register for a member');
+  const first = await f.request(`/${id}/register`, {}, token);
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  assert.equal((await f.request(`/${id}/register`, {}, token)).body.registered_at, first.body.registered_at);
+  const room = () => f.request(`/${id}`).then(response => response.body.members.find(item => item.name === 'Qwen'));
+  assert.equal((await room()).registered_at, first.body.registered_at);
+  assert.equal((await f.request(`/${id}/members/${member.id}`, { action: 'away' })).status, 200);
+  const renewed = crypto.randomUUID();
+  assert.equal((await f.request(`/${id}/members/${member.id}`, { action: 'active', token: renewed })).status, 200);
+  assert.equal((await room()).registered_at, '');
+  assert.equal((await f.request(`/${id}/register`, {}, renewed)).status, 200);
 });
 
 test('Worker manual expert answers a woken discussion with its own credential and mode switches keep it manual', async t => {

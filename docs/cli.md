@@ -157,6 +157,8 @@ codiscuss message post ROOM --as Claude --kind chat --execution 执行编号 --b
 
 手动接入的成员没有执行编号：`room view` 的 `free.requests` 列出它的待处理请求，回答时用 `--request 请求编号`（可重复）关闭对应请求；不带 `--request` 的回答是普通发言，不关闭任何请求。`--request` 与 `--execution` 不能同用。
 
+手动接入成员首次读取房间后执行一次 `member register ROOM --as 本人 --access-file FILE`：网站记录该成员已用自己的凭证注册，重复执行保留首次时间，房主凭据或他人凭证被拒绝（403），自动接入成员不需要注册（400）。命令不带会话 ID，CLI 在每次请求头中自动附带宿主会话（`CLAUDE_CODE_SESSION_ID` / `CODEX_THREAD_ID`）。未注册的成员在网页显示“待注册”，也不会被本机服务接管。
+
 主持人在回答中用 `--to 成员名`（可重复）点名派活，例如 `--to Codex --to Gemini`；不能点名自己。被点名的成员都结束后，主持人会再收到一次 `handoff` 请求。普通成员也可用 `--to` 或正文 `@成员` 提出回应建议，但不会派发；房主在网页点击“转为请求”后才建立关联原消息的新用户任务链。代码与引用里的正文 @ 不生成建议。
 
 ## 写入核对与错误处理

@@ -190,6 +190,29 @@ class CliTests(unittest.TestCase):
         self.assertIn("平台名-后缀", str(self.rejected(["message", "post", room["id"], "--as", "Claudex", "--body", "x",
                                                     "--submission-id", str(uuid.uuid4()), "--dry-run"])))
 
+    def test_manual_member_registers_through_the_cli_with_its_own_credential(self):
+        """`member register` needs the member's credential file; automatic members are refused."""
+        if self.external:
+            self.skipTest("Free rooms exist only on the Python backend in P1")
+        owner, manual, automatic = uuid.uuid4().hex, uuid.uuid4().hex, uuid.uuid4().hex
+        def call(path, payload, token):
+            request = Request(self.base + path, data=json.dumps(payload).encode(),
+                              headers={"Content-Type": "application/json", "X-Discussion-Token": token})
+            with urlopen(request, timeout=10) as response:
+                return json.loads(response.read())
+        room = call("/api/rooms", {"title": "注册", "goal": "x", "mode": "free",
+                                   "members": [{"name": "Claude", "token": manual, "access": "manual"},
+                                               {"name": "Codex", "token": automatic}]}, owner)
+        def access_file(token):
+            path = Path(self.directory.name) / f"member-{uuid.uuid4().hex}.json"
+            path.write_text(json.dumps({"site": self.base, "room": room["id"], "token": token}), encoding="utf-8")
+            return path
+        self.rejected(["member", "register", room["id"]], code=2)
+        registered = self.cli("member", "register", room["id"], "--as", "Claude", "--access-file", access_file(manual))
+        self.assertEqual(registered["member"], "Claude")
+        self.assertEqual(self.cli("member", "register", room["id"], "--access-file", access_file(manual))["registered_at"], registered["registered_at"])
+        self.rejected(["member", "register", room["id"], "--access-file", access_file(automatic)], code=1)
+
     def test_message_post_reports_the_hosting_claude_session(self):
         """A Claude Code session's own ID rides along on posts so the local service can take a manual member over."""
         args = ["--site", self.base, "message", "post", self.room, "--as", "用户", "--body", "x", "--submission-id", str(uuid.uuid4()), "--dry-run"]

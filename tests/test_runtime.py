@@ -566,6 +566,39 @@ class RuntimeTests(unittest.TestCase):
             self.answer(turn["expert"], turn["id"], token, f"invite-tail-{turn['expert']}")
         self.assertEqual((self.events()[-1]["participant"], self.events()[-1]["role"]), ("Codex", "host"))
 
+    def test_host_plans_after_an_answer_are_listed_for_the_transcript(self):
+        """A plan made after answers follows the latest answer; the opening plan has nothing to follow."""
+        created, _ = self.plan_round("arrangement-plan")
+        token = self.enter(self.events()[-1])
+        self.answer("Claude", created["turn"]["id"], token, "arrangement-Claude")
+        room = self.request(self.path)[1]
+        self.assertEqual(room["host_arrangements"], [])
+        token = self.enter(self.events()[-1])
+        self.answer("Gemini", room["current_turn"]["id"], token, "arrangement-Gemini")
+        host_token = self.enter(self.events()[-1])
+        status, plan = self.request(self.path + "/turns", {"actor": "Codex", "submission_id": "arrangement-next",
+            "turns": [{"expert": "Gemini", "question": "补充"}, {"expert": "Claude", "question": "回应"}]}, host_token)
+        self.assertEqual(status, 201, plan)
+        arrangements = self.request(self.path)[1]["host_arrangements"]
+        self.assertEqual([[(turn["expert"], turn["question"]) for turn in item["turns"]] for item in arrangements], [[("Gemini", "补充"), ("Claude", "回应")]])
+        self.assertGreater(arrangements[0]["after_message_id"], 0)
+
+    def test_invited_expert_completes_the_current_round_before_a_repeat_pass(self):
+        """A plan that loops through the experts twice places the newcomer where this round completes."""
+        self.start()
+        host_token = self.enter(self.events()[0])
+        names = ["Claude", "Gemini", "Claude", "Gemini"]
+        status, created = self.request(self.path + "/turns", {"actor": "Codex", "submission_id": "invite-slot-plan",
+            "turns": [{"expert": name, "question": f"第 {index} 句"} for index, name in enumerate(names)]}, host_token)
+        self.assertEqual(status, 201, created)
+        payload = {"name": "DeepSeek", "token": self.member_tokens["DeepSeek"], "access": "runner", "adapter": "api"}
+        status, room = self.request(self.path + "/members", payload, self.owner)
+        self.assertEqual(status, 200, room)
+        self.assertEqual([(turn["expert"], turn["question"]) for turn in room["queued_turns"]],
+                         [("Gemini", "第 1 句"), ("DeepSeek", "欢迎加入：请先读取议题，独立给出你的开场观点。"), ("Claude", "第 2 句"), ("Gemini", "第 3 句")])
+        # The invitation is not a plan, and a plan with nothing answered before it has no message to follow.
+        self.assertEqual(room["host_arrangements"], [])
+
     def test_invitation_preserves_user_hold_and_does_not_schedule_while_paused(self):
         """An invitation cannot clear pending user input or resume a paused discussion."""
         created, _ = self.plan_round("invite-held-plan")
@@ -708,6 +741,8 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.request(member_path, {**adopt, "adapter": "antigravity_cli"}, self.owner)[0], 400)
         self.assertEqual(self.request(member_path, {**adopt, "session_id": "other-session-0000"}, self.owner)[0], 400)
         self.assertNotEqual(self.request(member_path, adopt, self.member_tokens["Qwen"])[0], 200)
+        self.assertEqual(self.request(member_path, adopt, self.owner)[0], 400, "未注册的成员不能转为托管")
+        self.assertEqual(self.request(self.path + "/register", {}, self.member_tokens["Qwen"])[0], 200)
         status, adopted = self.request(member_path, adopt, self.owner)
         self.assertEqual(status, 200, adopted)
         member = next(m for m in adopted["members"] if m["name"] == "Qwen")
@@ -725,6 +760,28 @@ class RuntimeTests(unittest.TestCase):
         self.request(self.path, token=self.member_tokens["Qwen"], extra_headers=session)
         member = next(m for m in self.request(self.path)[1]["members"] if m["name"] == "Qwen")
         self.assertEqual((member["reported_session"], member["reported_client"]), (session["X-Discussion-Session"], "codex"))
+
+    def test_manual_expert_registers_with_its_own_credential_and_must_register_again_after_rejoining(self):
+        """Registration is the expert's own call, keeps its first time, and belongs to the credential it used."""
+        self.start()
+        manual = {"name": "Qwen", "token": self.member_tokens["Qwen"], "access": "manual", "adapter": ""}
+        room = self.request(self.path + "/members", manual, self.owner)[1]
+        qwen = next(m for m in room["members"] if m["name"] == "Qwen")
+        self.assertEqual(qwen["registered_at"], "")
+        self.assertEqual(self.request(self.path + "/register", {}, self.owner)[0], 403)
+        session = {"X-Discussion-Session": "01a1694f-764d-7141-b2b8-47c433be027c", "X-Discussion-Session-Client": "codex"}
+        status, first = self.request(self.path + "/register", {}, self.member_tokens["Qwen"], extra_headers=session)
+        self.assertEqual((status, first["member"], first["session_client"]), (200, "Qwen", "codex"), first)
+        self.assertEqual(self.request(self.path + "/register", {}, self.member_tokens["Qwen"])[1]["registered_at"], first["registered_at"])
+        qwen = next(m for m in self.request(self.path)[1]["members"] if m["name"] == "Qwen")
+        self.assertEqual(qwen["registered_at"], first["registered_at"])
+        member_path = f"{self.path}/members/{qwen['id']}"
+        self.assertEqual(self.request(member_path, {"action": "away"}, self.owner)[0], 200)
+        new_token = uuid.uuid4().hex
+        self.assertEqual(self.request(member_path, {"action": "active", "token": new_token}, self.owner)[0], 200)
+        qwen = next(m for m in self.request(self.path)[1]["members"] if m["name"] == "Qwen")
+        self.assertEqual(qwen["registered_at"], "", "换发新凭证后须重新注册")
+        self.assertEqual(self.request(self.path + "/register", {}, new_token)[0], 200)
 
     def test_manual_host_is_rejected_in_a_woken_discussion(self):
         """The host is continued by the local service, so only experts may be manual."""

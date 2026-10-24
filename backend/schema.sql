@@ -546,6 +546,13 @@ CREATE TABLE IF NOT EXISTS member_sessions (
     session_id TEXT NOT NULL,
     client TEXT NOT NULL
 );
+-- A manual member's own registration; it is bound to the credential it used, so a re-issued credential must register again.
+CREATE TABLE IF NOT EXISTS member_registrations (
+    member_id INTEGER PRIMARY KEY REFERENCES room_members(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL,
+    token_hash TEXT NOT NULL,
+    registered_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS member_executions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,

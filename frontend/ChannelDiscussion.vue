@@ -137,6 +137,18 @@ watch([reply_glow, reduced_motion], ([element, reduce_motion], _previous, cleanu
 }, { flush: "post" });
 const speaking_turn = computed(() => ["pending", "notified"].includes(room.value?.current_turn?.status)
   && !["paused", "concluded"].includes(room.value.phase) ? room.value.current_turn : null);
+const is_manual_member = (member) => member?.access === "manual" && member.status === "active";
+const speaking_member = computed(() => (room.value.members || []).find((member) => member.name === speaking_turn.value?.expert));
+// The first invited manual expert that has not registered yet; the notice stays until it does.
+const unregistered_member = computed(() => ["paused", "concluded"].includes(room.value?.phase) ? null
+  : (room.value?.members || []).find((member) => is_manual_member(member) && !member.registered_at) || null);
+const queue_hint = computed(() => {
+  const member = speaking_member.value;
+  if (!speaking_turn.value || !member) return "";
+  const name = bridge.display_name(member.name);
+  if (is_manual_member(member)) return member.registered_at ? `${name} 是手动启动，轮到它时需到其 AI 会话触发；不接入可在进度看板点「跳过」本次发言` : "";
+  return text.value.trim() ? `新消息会在 ${name} 回复后交给主持人；可在进度看板点「跳过」本次发言` : "";
+});
 const free = computed(() => room.value?.mode === "free");
 /** Members of a free room that are working on a live execution, or have requests nobody has picked up yet. */
 const free_busy = computed(() => {
@@ -280,6 +292,18 @@ const scheduler_decisions = computed(() => {
   for (const item of room.value.scheduler_decisions || []) {
     rows.set(item.after_message_id, [...(rows.get(item.after_message_id) || []),
       { ...item, title: `${SCHEDULER_LABELS[item.provider] || item.provider}${item.confidence === null ? "" : `，置信度 ${Number(item.confidence).toFixed(2)}`}` }]);
+  }
+  return rows;
+});
+const ARRANGEMENT_PREVIEW = 3;
+const expanded_plans = ref(new Set());
+/** The host's own plans stand beside the decisions, under the message they followed. */
+const host_arrangements = computed(() => {
+  const rows = new Map();
+  if (free.value) return rows;
+  for (const item of room.value.host_arrangements || []) {
+    rows.set(item.after_message_id, [...(rows.get(item.after_message_id) || []),
+      { ...item, shown: item.turns.slice(0, ARRANGEMENT_PREVIEW), hidden: item.turns.length - ARRANGEMENT_PREVIEW }]);
   }
   return rows;
 });
@@ -820,20 +844,20 @@ onBeforeUnmount(() => editor_observer.disconnect());
 onBeforeUnmount(cancel_navigation_press);
 
 const COPY_FEEDBACK_MS = 2000;
-const launch_copied = ref(false);
+const launch_copied = ref("");
 let launch_copy_timer;
 /** Clear the composer copy feedback when it expires or the arrangement changes. */
 function reset_launch_copy() {
   clearTimeout(launch_copy_timer);
-  launch_copied.value = false;
+  launch_copied.value = "";
 }
-/** Confirm the copy only after the clipboard write succeeds for this arrangement. */
-async function copy_launch() {
-  const room_id = room.value.id, turn_id = speaking_turn.value.id;
+/** Confirm the copy only after the clipboard write succeeds for this member in this room. */
+async function copy_launch(name) {
+  const room_id = room.value.id;
   reset_launch_copy();
-  if (!await act("copy_member_launch", speaking_turn.value.expert)) return;
-  if (room.value?.id !== room_id || speaking_turn.value?.id !== turn_id) return;
-  launch_copied.value = true;
+  if (!await act("copy_member_launch", name)) return;
+  if (room.value?.id !== room_id) return;
+  launch_copied.value = name;
   launch_copy_timer = setTimeout(reset_launch_copy, COPY_FEEDBACK_MS);
 }
 watch([() => room.value?.id, () => speaking_turn.value?.id], reset_launch_copy);
@@ -995,6 +1019,14 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           <UIcon name="i-lucide-zap" class="channel-schedule-icon" />
           <span>智能调度：{{ decision.label }}<small v-if="decision.confidence !== null">置信度 {{ Number(decision.confidence).toFixed(2) }}</small></span>
         </div>
+        <div v-for="plan in host_arrangements.get(message.id) || []" :key="`arrangement-${plan.id}`" class="channel-schedule-card" :title="`${bridge.display_name(room.host)} 创建的发言安排`" aria-label="主持人安排">
+          <UIcon name="i-lucide-list-ordered" class="channel-schedule-icon" />
+          <span class="channel-arrangement">
+            <span>主持人安排</span>
+            <small v-for="turn in expanded_plans.has(plan.id) ? plan.turns : plan.shown" :key="`${plan.id}-${turn.expert}-${turn.question}`" :title="turn.question"><strong>{{ bridge.display_name(turn.expert) }}</strong>：{{ turn.question }}</small>
+            <a v-if="plan.hidden > 0 && !expanded_plans.has(plan.id)" href="#" @click.prevent="expanded_plans = new Set([...expanded_plans, plan.id])">展开另外 {{ plan.hidden }} 条</a>
+          </span>
+        </div>
         </template>
         </template>
       </div>
@@ -1045,7 +1077,8 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             </div>
           </div>
           <p v-if="view.composer_error || view.upload_status" class="attachment-status" :role="view.composer_error ? 'alert' : 'status'">{{ view.composer_error || view.upload_status }}</p>
-          <div v-if="speaking_turn" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>{{ (room.members || []).find((member) => member.name === speaking_turn.expert)?.access === 'manual' ? `${bridge.display_name(speaking_turn.expert)} 是手动启动，需把启动指令粘贴到其 AI 会话才会发言；不接入可在进度看板点「跳过」本次发言` : `新消息会在 ${bridge.display_name(speaking_turn.expert)} 回复后交给主持人；可在进度看板点「跳过」本次发言` }}</span><UButton v-if="(room.members || []).find((member) => member.name === speaking_turn.expert)?.access === 'manual' && view.access?.can_manage" :icon="launch_copied ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied ? '已复制' : '复制启动指令'" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch" /></div>
+          <div v-if="unregistered_member" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-user-round-x" /><span>{{ bridge.display_name(unregistered_member.name) }} 尚未注册：需把启动指令粘贴到其 AI 会话，由它自己注册后才算到场</span><UButton v-if="view.access?.can_manage" :icon="launch_copied === unregistered_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === unregistered_member.name ? '已复制' : '复制启动指令'" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(unregistered_member.name)" /></div>
+          <div v-if="queue_hint" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>{{ queue_hint }}</span><UButton v-if="is_manual_member(speaking_member) && view.access?.can_manage" :icon="launch_copied === speaking_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === speaking_member.name ? '已复制' : '复制启动指令'" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(speaking_member.name)" /></div>
           <div v-if="view.reply_to || view.turn_reply_to" class="channel-reply-draft"><UIcon name="i-lucide-corner-up-left" /><span>{{ view.turn_reply_to ? `回答安排 #${view.turn_reply_to} · ${bridge.display_name(room.host)} 代发` : `回复 #${view.reply_to}` }}</span><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" :aria-label="view.turn_reply_to ? '取消关联安排' : '取消回复'" @click="act(view.turn_reply_to ? 'cancel_answer' : 'cancel_reply')" /></div>
           <div v-if="needs_summary" class="channel-answer-editor"><UTextarea v-model="answer_summary" :rows="2" aria-label="回答摘要" class="w-full" placeholder="先说结论，保留关键理由、条件和不确定性。完整内容写在正文中。" /><USelect v-model="summary_source" :items="summary_sources" aria-label="摘要提供者" size="xs" /></div>
         </template>

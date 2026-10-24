@@ -1087,6 +1087,10 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 .channel-schedule-card { display: flex; align-items: center; gap: 8px; margin: -6px 16px 20px; padding: 8px 14px; border: 1px dashed color-mix(in srgb, var(--channel-accent) 45%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--channel-accent) 6%, transparent); color: var(--ui-text-toned); font-size: 12px; }
 .channel-schedule-card small { margin-left: 8px; color: var(--ui-text-dimmed); font-variant-numeric: tabular-nums; }
 .channel-schedule-icon { flex-shrink: 0; width: 13px; height: 13px; color: var(--channel-accent); }
+.channel-arrangement { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.channel-arrangement small { margin-left: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: normal; }
+.channel-arrangement small strong { color: var(--ui-text-toned); font-weight: 600; }
+.channel-arrangement a { color: var(--channel-accent); font-size: 11px; }
 .channel-schedule-card.is-skipped { border-color: var(--ui-border); background: transparent; color: var(--ui-text-muted); }
 .channel-schedule-card.is-skipped .channel-schedule-icon { color: var(--ui-text-dimmed); }
 @media (max-width: 767px) { .channel-schedule-card { margin: -4px 8px 14px; } }

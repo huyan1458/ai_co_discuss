@@ -229,6 +229,7 @@ def free_view(connection, room_id):
     members = []
     for row in connection.execute("SELECT * FROM room_members WHERE room_id=? AND status<>'removed' ORDER BY id", (room_id,)):
         member = {key: row[key] for key in MEMBER_FIELDS}
+        member["registered_at"] = registered_at(connection, row)
         latest = connection.execute("SELECT * FROM member_executions WHERE member_id=? ORDER BY id DESC LIMIT 1",
                                     (row["id"],)).fetchone()
         member["execution"] = public_execution(latest)
@@ -256,6 +257,30 @@ def require_member(connection, room_id, token, name=None):
     if not row or (name is not None and row["name"] != name):
         raise PermissionError("成员凭证无效、已停用或与发言身份不符")
     return row
+
+
+def registered_at(connection, member):
+    """Return when the member registered with its current credential, or '' while it has not."""
+    row = connection.execute("SELECT registered_at FROM member_registrations WHERE member_id=? AND token_hash=?",
+                             (member["id"], member["token_hash"])).fetchone()
+    return row[0] if row else ""
+
+
+def register_member(connection, room_id, token, now):
+    """A manual member announces itself with its own credential; repeating it keeps the first time.
+
+    The session ID is not part of the request: the CLI attaches it to every call and the room records it separately.
+    """
+    begin_write(connection)
+    member = require_member(connection, room_id, token)
+    if member["access"] != "manual":
+        raise ValueError("只有手动接入的成员需要注册")
+    stamp = registered_at(connection, member) or now
+    connection.execute("""INSERT INTO member_registrations (member_id,room_id,token_hash,registered_at) VALUES (?,?,?,?)
+        ON CONFLICT(member_id) DO UPDATE SET token_hash=excluded.token_hash,registered_at=excluded.registered_at""",
+                       (member["id"], room_id, member["token_hash"], stamp))
+    reported = connection.execute("SELECT client FROM member_sessions WHERE member_id=?", (member["id"],)).fetchone()
+    return {"member": member["name"], "registered_at": stamp, "session_client": reported[0] if reported else ""}
 
 
 def authorize_free_write(connection, room_id, token, operation, payload):
@@ -784,8 +809,45 @@ def save_discussion_experts(connection, room_id, experts):
     connection.execute("UPDATE topic_settings SET experts=? WHERE room_id=?", (json.dumps(experts, ensure_ascii=False), room_id))
 
 
+def current_round_speakers(connection, room_id, experts):
+    """Experts who have given an opinion in the latest unfinished round (empty when it just completed)."""
+    spoken = set()
+    rows = connection.execute("""SELECT messages.author FROM messages
+        JOIN message_details AS details ON details.message_id=messages.id AND details.kind='opinion'
+        WHERE messages.room_id=? ORDER BY messages.id""", (room_id,))
+    for row in rows:
+        if row["author"] not in experts:
+            continue
+        spoken.add(row["author"])
+        if len(spoken) == len(experts):
+            spoken = set()
+    return spoken
+
+
+def place_invited_expert(connection, room_id, name):
+    """Move the just-queued newcomer to where the current round completes: after the last queued expert who
+    has not spoken this round, before the first one who would speak again. Rows keep their ids; only who and what shift."""
+    rows = connection.execute("SELECT id,expert,question FROM discussion_turns WHERE room_id=? AND status='queued' ORDER BY id", (room_id,)).fetchall()
+    if len(rows) < 2 or rows[-1]["expert"] != name:
+        return
+    _, experts, _ = discussion_roster(connection, room_id)
+    spoken = current_round_speakers(connection, room_id, experts)
+    open_turn = connection.execute("SELECT expert FROM discussion_turns WHERE room_id=? AND status IN ('pending','notified')", (room_id,)).fetchone()
+    if open_turn:
+        spoken.add(open_turn["expert"])
+    slot = len(rows) - 1
+    for index, row in enumerate(rows[:-1]):
+        if row["expert"] in spoken:
+            slot = index
+            break
+        spoken.add(row["expert"])
+    ordered = rows[:slot] + [rows[-1]] + rows[slot:-1]
+    for target, source in zip(rows, ordered):
+        connection.execute("UPDATE discussion_turns SET expert=?,question=? WHERE id=? AND status='queued'", (source["expert"], source["question"], target["id"]))
+
+
 def queue_invited_expert(connection, room_id, name, now):
-    """Append a new expert to an existing live plan without changing its current speaker or hold."""
+    """Queue a new expert in an existing live plan at its round-completing slot, without changing the current speaker or hold."""
     connection.execute("""INSERT INTO discussion_turns (room_id,expert,question,status,submission_id,created_at)
         SELECT settings.room_id,member.name,
             CASE WHEN settings.phase='initial' THEN '欢迎加入：请先读取议题，独立给出你的开场观点。'
@@ -797,6 +859,7 @@ def queue_invited_expert(connection, room_id, name, now):
         AND NOT EXISTS (SELECT 1 FROM discussion_limits WHERE room_id=settings.room_id AND closing_at>0)
         AND EXISTS (SELECT 1 FROM discussion_turns WHERE room_id=settings.room_id AND status IN ('pending','notified','queued'))""",
         (now, room_id, name))
+    place_invited_expert(connection, room_id, name)
 
 
 def add_discussion_member(connection, room_id, token, payload, now):
@@ -873,6 +936,8 @@ def adopt_manual_member(connection, room_id, member, payload):
     """Hand a manual expert to the local service once its CLI reported the session it runs in; the owner's service resumes that session."""
     reported = connection.execute("SELECT session_id FROM member_sessions WHERE member_id=?", (member["id"],)).fetchone()
     run = connection.execute("SELECT mode FROM discussion_runtime WHERE room_id=?", (room_id,)).fetchone()
+    if not registered_at(connection, member):
+        raise ValueError("成员尚未注册，不能转为托管")
     if not reported or reported["session_id"] != payload.get("session_id") or payload.get("adapter") not in ADOPTABLE_ADAPTERS:
         raise ValueError("成员尚未上报与之相符的会话，不能转为托管")
     if member["access"] != "manual" or member["status"] != "active" or not run or run["mode"] != "automatic":

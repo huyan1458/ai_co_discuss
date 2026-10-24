@@ -349,13 +349,16 @@ async function require_room(database, room_id) {
   result.runtime = await runtime_view(database, room_id);
   result.limits = limits_view(await database.prepare(LIMITS_SQL).bind(room_id).first(), result);
   result.mode = await room_mode(database, room_id);
-  result.members = (await database.prepare(`SELECT m.id,m.name,m.adapter,m.role,m.status,m.access,m.session_mode,COALESCE(s.session_id,'') AS reported_session,COALESCE(s.client,'') AS reported_client
-    FROM room_members AS m LEFT JOIN member_sessions AS s ON s.member_id=m.id WHERE m.room_id=? AND m.status<>'removed' ORDER BY m.id`).bind(room_id).all()).results;
+  result.members = (await database.prepare(`SELECT m.id,m.name,m.adapter,m.role,m.status,m.access,m.session_mode,COALESCE(s.session_id,'') AS reported_session,COALESCE(s.client,'') AS reported_client,
+    COALESCE(r.registered_at,'') AS registered_at
+    FROM room_members AS m LEFT JOIN member_sessions AS s ON s.member_id=m.id
+    LEFT JOIN member_registrations AS r ON r.member_id=m.id AND r.token_hash=m.token_hash WHERE m.room_id=? AND m.status<>'removed' ORDER BY m.id`).bind(room_id).all()).results;
   const option = await database.prepare("SELECT named_followup FROM discussion_options WHERE room_id=?").bind(room_id).first();
   // Rooms created before the option keep the host's named follow-ups.
   result.named_followup = option ? Boolean(option.named_followup) : true;
   result.scheduler_decisions = (await database.prepare("SELECT * FROM scheduler_decisions WHERE room_id=? ORDER BY id DESC LIMIT ?")
     .bind(room_id, RECENT_DECISIONS).all()).results.reverse();
+  result.host_arrangements = await host_arrangements(database, room_id, result.scheduler_decisions);
   result.parent_room = await database.prepare("SELECT rooms.id,rooms.title FROM room_links JOIN rooms ON rooms.id=room_links.parent_id WHERE room_links.room_id=?")
     .bind(room_id).first();
   if (result.mode === "free") {
@@ -383,6 +386,25 @@ async function update_floor(database, room_id, payload) {
   const result = await statement.first();
   if (!result) throw new HttpError(409, "发言权已变化，或尚未轮到本人；请重新读取后核对");
   return result;
+}
+
+/**
+ * Each plan the host created (turns saved in one batch), anchored after the latest answer before it.
+ * Invitation turns are not plans, and a plan the smart scheduler applied is already shown by its own decision.
+ */
+async function host_arrangements(database, room_id, decisions) {
+  const plans = [];
+  let latest_answer = 0;
+  const rows = (await database.prepare("SELECT id,expert,question,answer_id,created_at,submission_id FROM discussion_turns WHERE room_id=? ORDER BY id").bind(room_id).all()).results;
+  for (const row of rows) {
+    if (!row.submission_id.startsWith("invite:")) {
+      if (plans.length && plans.at(-1).created_at === row.created_at) plans.at(-1).turns.push({ expert: row.expert, question: row.question });
+      else plans.push({ id: row.id, after_message_id: latest_answer, created_at: row.created_at, turns: [{ expert: row.expert, question: row.question }] });
+    }
+    latest_answer = Math.max(latest_answer, row.answer_id || 0);
+  }
+  const applied = new Set(decisions.filter((item) => item.applied).map((item) => item.after_message_id));
+  return plans.filter((plan) => plan.after_message_id && !applied.has(plan.after_message_id)).slice(-RECENT_DECISIONS);
 }
 
 /** Group complete history metadata until every configured expert has spoken. */
@@ -698,7 +720,7 @@ async function manage_room(database, room_id, action, payload) {
   } else if (action === "delete") {
     if (payload.confirm_title !== room.title) throw new HttpError(400, "请输入完整房间名称确认删除");
     const queries = [
-      "DELETE FROM member_recommendations WHERE room_id=?", "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?", "DELETE FROM member_sessions WHERE room_id=?",
+      "DELETE FROM member_recommendations WHERE room_id=?", "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?", "DELETE FROM member_sessions WHERE room_id=?", "DELETE FROM member_registrations WHERE room_id=?",
       "DELETE FROM room_members WHERE room_id=?", "DELETE FROM room_modes WHERE room_id=?",
       "DELETE FROM free_batches WHERE room_id=?", "DELETE FROM free_chains WHERE room_id=?", "DELETE FROM room_links WHERE room_id=?",
       "DELETE FROM discussion_options WHERE room_id=?", "DELETE FROM scheduler_decisions WHERE room_id=?",
@@ -1829,7 +1851,7 @@ async function free_view(database, room_id) {
     const execution = pick(latest, FREE_EXECUTION_FIELDS);
     if (latest && ["dispatched", "started"].includes(latest.status)) execution.stale = latest.lease_until <= now;
     const pending = (await database.prepare("SELECT COUNT(*) AS count FROM member_requests WHERE member_id=? AND status='pending'").bind(row.id).first()).count;
-    return { ...pick(row, FREE_MEMBER_FIELDS), execution, pending };
+    return { ...pick(row, FREE_MEMBER_FIELDS), registered_at: await registered_at(database, row), execution, pending };
   }));
   const names = Object.fromEntries((await database.prepare("SELECT id,name FROM room_members WHERE room_id=?").bind(room_id).all()).results.map(row => [row.id, row.name]));
   const requests = (await database.prepare(`SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by FROM member_requests
@@ -2209,7 +2231,29 @@ async function handle_free_api(database, request, parts) {
   throw new HttpError(404, "地址不存在");
 }
 
-/** Append a newly invited expert to the live plan in the same transaction as its membership. */
+/**
+ * Move the just-queued newcomer to where the current round completes: after the last queued expert who has not
+ * spoken this round, before the first one who would speak again. Rows keep their ids; only who and what shift.
+ */
+async function place_invited_expert(database, room_id, name) {
+  const queued = (await database.prepare("SELECT id,expert,question FROM discussion_turns WHERE room_id=? AND status='queued' ORDER BY id").bind(room_id).all()).results;
+  if (queued.length < 2 || queued.at(-1).expert !== name) return;
+  const experts = (await require_room(database, room_id)).experts;
+  const round = (await discussion_rounds(database, room_id, experts)).at(-1);
+  const spoken = new Set(round && !round.completed ? round.speakers : []);
+  const open = await database.prepare("SELECT expert FROM discussion_turns WHERE room_id=? AND status IN ('pending','notified')").bind(room_id).first();
+  if (open) spoken.add(open.expert);
+  let slot = queued.length - 1;
+  for (const [index, row] of queued.slice(0, -1).entries()) {
+    if (spoken.has(row.expert)) { slot = index; break; }
+    spoken.add(row.expert);
+  }
+  const ordered = [...queued.slice(0, slot), queued.at(-1), ...queued.slice(slot, -1)];
+  await database.batch(queued.map((target, index) => database.prepare("UPDATE discussion_turns SET expert=?,question=? WHERE id=? AND status='queued'")
+    .bind(ordered[index].expert, ordered[index].question, target.id)));
+}
+
+/** Queue a newly invited expert in the live plan in the same transaction as its membership; place_invited_expert then orders it. */
 function queue_invited_expert(database, room_id, name) {
   return database.prepare(`INSERT INTO discussion_turns (room_id,expert,question,status,submission_id,created_at)
     SELECT settings.room_id,member.name,
@@ -2247,6 +2291,7 @@ async function handle_discussion_members(database, request, parts) {
       database.prepare("UPDATE topic_settings SET experts=json_set(experts,?,'cli') WHERE room_id=?").bind(`$."${member.name}"`, room_id),
       queue_invited_expert(database, room_id, member.name)]); }
     catch (error) { if (String(error).includes("UNIQUE constraint")) throw new HttpError(409, `${member.name} 已是本房间成员`); throw error; }
+    await place_invited_expert(database, room_id, member.name);
   } else {
     const member = await free_owned_member(database, room_id, integer(parts[4]), token);
     if (payload.action === "redo") {
@@ -2281,6 +2326,7 @@ async function handle_discussion_members(database, request, parts) {
         database.prepare("UPDATE room_members SET status='active',token_hash=? WHERE id=? AND status='away'").bind(hashed, member.id), save()]);
     } else if (payload.action === "adopt") {
       const reported = await database.prepare("SELECT session_id FROM member_sessions WHERE member_id=?").bind(member.id).first();
+      if (!await registered_at(database, member)) throw new HttpError(400, "成员尚未注册，不能转为托管");
       if (!reported || reported.session_id !== payload.session_id || !["claude", "codex", "codex_cli"].includes(payload.adapter)) throw new HttpError(400, "成员尚未上报与之相符的会话，不能转为托管");
       if (member.access !== "manual" || member.status !== "active" || room.runtime?.mode !== "automatic") throw new HttpError(400, "只有全自动讨论中在场的手动专家可以转为托管");
       await database.batch([
@@ -2289,6 +2335,23 @@ async function handle_discussion_members(database, request, parts) {
     } else throw new HttpError(400, "action 须为 away、active、remove、redo 或 adopt");
   }
   return respond(await require_room(database, room_id));
+}
+
+/** Return when the member registered with its current credential, or '' while it has not. */
+async function registered_at(database, member) {
+  return (await database.prepare("SELECT registered_at FROM member_registrations WHERE member_id=? AND token_hash=?")
+    .bind(member.id, member.token_hash).first())?.registered_at ?? "";
+}
+
+/** A manual member announces itself with its own credential; repeating it keeps the first time. The session ID is recorded separately from the CLI's headers. */
+async function register_member(database, room_id, token) {
+  const member = await require_free_member(database, room_id, token);
+  if (member.access !== "manual") throw new HttpError(400, "只有手动接入的成员需要注册");
+  const stamp = await registered_at(database, member) || new Date().toISOString();
+  await database.prepare(`INSERT INTO member_registrations (member_id,room_id,token_hash,registered_at) VALUES (?,?,?,?)
+    ON CONFLICT(member_id) DO UPDATE SET token_hash=excluded.token_hash,registered_at=excluded.registered_at`).bind(member.id, room_id, member.token_hash, stamp).run();
+  const reported = await database.prepare("SELECT client FROM member_sessions WHERE member_id=?").bind(member.id).first();
+  return { member: member.name, registered_at: stamp, session_client: reported?.client ?? "" };
 }
 
 /** Prevent reuse of an existing member or owner credential. */
@@ -2476,6 +2539,7 @@ async function handle_api(database, request, parts, params, bucket) {
   const reported = request.headers.get("X-Discussion-Session");
   if (reported) await record_reported_session(database, room_id, request.headers.get("X-Discussion-Token") ?? "",
     { session_id: reported, session_client: request.headers.get("X-Discussion-Session-Client") });
+  if (parts[3] === "register" && parts.length === 4 && method === "POST") return respond(await register_member(database, room_id, request.headers.get("X-Discussion-Token") ?? ""));
   const free = await room_mode(database, room_id) === "free";
   if (free && ["inbox", "executions", "members", "suggestions", "recommendations"].includes(parts[3])) return handle_free_api(database, request, parts);
   if (parts[3] === "members" && method === "POST" && [4, 5].includes(parts.length)) return handle_discussion_members(database, request, parts);

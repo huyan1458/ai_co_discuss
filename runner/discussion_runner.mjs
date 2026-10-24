@@ -387,7 +387,7 @@ export class DiscussionRunner {
       if (restored) return restored;
       const spoken = new Set(room.rounds?.at(-1)?.speakers || []);
       // Experts without local software cannot be woken by the runner, so only automatic ones are candidates.
-      const waiting = experts.filter(name => name !== room.host && !spoken.has(name) && this.config.participants[name]);
+      const waiting = automatic.filter(name => !spoken.has(name));
       if (!waiting.length) return skip('round', '本轮未发言的专家都是手动接入，无法自动安排');
       // An expert the user just skipped is not picked again unless nobody else is left.
       const skipped = room.current_turn?.status === 'cancelled' ? room.current_turn.expert : null;
