@@ -230,7 +230,7 @@ export function task_files(config, event, token, binding, { suggestions = [], en
     instructions: `${adapter.adapter === 'antigravity_cli' ? `无人值守下 run_command 只能运行 ${cli} 的 subcommands 子命令，其他命令会被自动拒绝并使会话直接结束；浏览项目用 list_dir、find_by_name、grep_search、view_file。` : ''}读取指定技能；网站命令只用 ${cli} 的 subcommands 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口；${auto_enter ? '接入程序已进入本次执行，不要再执行 execution enter。' : `使用 ${cli} execution enter 房间 执行编号 --access-file 凭据路径 进入。进入成功后才处理本次安排；`}凭据文件由 CLI 内部读取，不要打印或读取其 token。${access_rule}答案草稿只保存到 draft_directory，不修改任务、凭据、日志或调度数据库；${project_rule}只处理本次工作，不建定时任务。主持创建下一安排或收束即结束，专家提交原文后结束。无效或已进入的任务不要重复执行。${suggestion_rule}` });
   const read_rule = windows_rg() ? '读取含中文的技能或文本文件时用 rg --encoding utf-8 . 文件路径，不用 Get-Content（Windows PowerShell 会按系统编码读出乱码，需要反复重试）。' : '';
   const scope = `本次只放行任务内 subcommands 列出的 ${cli} 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口。任务内 cwd 是讨论项目目录；${project_rule}项目读写仍受软件实际权限和议题授权约束。不读取凭据内容。${read_rule}`;
-  const plan_rule = event.role === 'host' ? '安排专家回应时先写发言计划，用 turn create --plan-file 一次排满本轮每位专家，不要每次只排一位。' : '';
+  const plan_rule = event.role === 'host' ? '安排专家回应时先写发言计划，先用 turn roster 取得最新专家状态，再用 turn create --plan-file 加 --roster 一次排满 waiting 中的每位专家，不要每次只排一位。' : '';
   const intro = `用户已启动此房间的全自动讨论。请以 ${event.participant} 的${event.role === 'host' ? '主持' : '专家'}职责处理本次工作。${plan_rule}`;
   const prompt = auto_enter
     ? `${intro}接入程序已为本次执行完成 execution enter，不要再执行。任务内容如下（同一份保存在 ${task_path}，无需再读）：
@@ -316,8 +316,13 @@ export class DiscussionRunner {
    */
   async smart_schedule(row, event) {
     if (!this.config.scheduler) return {};
-    let plan;
-    try { plan = await this.plan_schedule(event); }
+    let plan, seen;
+    try {
+      // What the decision is based on; applying it first checks nothing new (a message or a topic edit) arrived since.
+      const room = await api(this.config, '');
+      seen = { latest_id: room.latest_id, held_since: room.held_since || 0 };
+      plan = await this.plan_schedule(event);
+    }
     catch (error) { this.log(`智能调度判断失败，交给主持人：${error.message}`); return {}; }
     if (!plan) return {};
     const suggestions = plan.message_id ? [{ message_id: plan.message_id, suggestion: plan.label, confidence: plan.confidence }] : [];
@@ -336,7 +341,7 @@ export class DiscussionRunner {
     }
     this.store.record(row.id, { status: 'started', last_renew: Date.now() });
     try {
-      await this.apply_schedule(plan, token);
+      await this.apply_schedule(plan, token, seen);
       await this.record_decision(plan, true);
       this.log(`智能调度 #${row.id}：${plan.label}（置信度 ${plan.confidence}）`);
     } catch (error) {
@@ -394,6 +399,8 @@ export class DiscussionRunner {
       if (!waiting.length) return skip('round', '本轮未发言的专家都是手动接入，无法自动安排');
       // An expert the user just skipped is not picked again unless nobody else is left.
       const skipped = room.current_turn?.status === 'cancelled' ? room.current_turn.expert : null;
+      // Asking whether to call on the host alone is pointless: handing back already wakes it.
+      if (waiting.length === 1 && waiting[0] === room.host) return skip('round', '本轮只剩主持人未发言');
       const candidates = waiting.filter(name => name !== skipped);
       return this.next_speaker_plan(room, { ...context, spoken: [...spoken] }, candidates.length ? candidates : waiting, anchor);
     }
@@ -435,13 +442,18 @@ export class DiscussionRunner {
     return { action: 'restore', kind: 'round', confidence: null, label, after_message_id: anchor, turns: plan_turns };
   }
   /** Perform the host's writes for a decided plan under its own execution credential. */
-  async apply_schedule(plan, token) {
+  async apply_schedule(plan, token, seen) {
     const room = await api(this.config, '');
+    if (room.latest_id !== seen.latest_id || (room.held_since || 0) !== seen.held_since) throw new Error('判断期间房间有新留言或用户操作，放弃应用');
     const actor = room.host;
     if (room.floor.holder !== actor) await api(this.config, '/floor', { actor, speaker: actor, action: 'take', revision: room.floor.revision }, token);
     if (plan.phase) await api(this.config, '/topic', { actor, phase: plan.phase }, token);
     if (plan.continue_plan) await api(this.config, '/turns/continue', { actor }, token);
-    else await api(this.config, '/turns', { actor, turns: plan.turns, submission_id: randomUUID() }, token);
+    else {
+      // Like any host, the program asks for the latest roster right before it arranges turns.
+      const { revision } = await api(this.config, '/turns/roster');
+      await api(this.config, '/turns', { actor, turns: plan.turns, roster: revision, submission_id: randomUUID() }, token);
+    }
   }
   /** Show the decision in the transcript; a failed record never affects the discussion. */
   async record_decision(plan, applied) {

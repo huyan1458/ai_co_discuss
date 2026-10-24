@@ -35,7 +35,7 @@ function manual_menu(member) {
 }
 const progress_summary = computed(() => {
   const limits = room.value?.limits || {};
-  const rounds = limits.max_rounds ? `${limits.completed_rounds || 0} / ${limits.max_rounds} 轮` : `${limits.completed_rounds || 0} 轮`;
+  const rounds = bridge.limit_rounds(limits).text;
   return `${rounds} · 已用 ${Math.floor((limits.elapsed_seconds || 0) / 60)} 分钟`;
 });
 </script>

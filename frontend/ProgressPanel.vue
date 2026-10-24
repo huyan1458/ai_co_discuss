@@ -18,8 +18,8 @@ const state = computed(() => {
   if (limits.value.reached) return { tone: "warning", title: "已达上限" };
   return { tone: "primary", title: "进行中" };
 });
-const rounds = computed(() => limits.value.max_rounds
-  ? `${limits.value.completed_rounds || 0}/${limits.value.max_rounds} 轮` : bridge.progress_round(room.value));
+const rounds = computed(() => limits.value.round_cap || limits.value.max_rounds
+  ? bridge.limit_rounds(limits.value).text.replace(" / ", "/") : bridge.progress_round(room.value));
 const label = computed(() => `${state.value.title} · ${rounds.value}`);
 </script>
 

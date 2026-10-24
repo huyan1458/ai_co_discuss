@@ -227,7 +227,7 @@ async function smart_discussion(t, { named_followup, order, expert_reply, decisi
   const sent = [];
   const fake_fetch = async (url, init) => {
     sent.push(JSON.parse(init.body));
-    return { ok: true, json: async () => ({ answers: decisions.shift() }) };
+    return { ok: true, json: async () => { const next = decisions.shift(); return { answers: typeof next === 'function' ? await next() : next }; } };
   };
   const config = load_config(started.config_path), store = new DiscussionStore(config.directory);
   const log = [];
@@ -285,6 +285,27 @@ test('an interjection the provider assigns to one expert is answered next, befor
   assert.deepEqual(room.scheduler_decisions.map(item => [item.kind, item.applied, item.after_message_id]), [['interjection', 1, answer.id]]);
 });
 
+test('a decision is dropped, and the host handed the room, when a message arrives while it was being made', async t => {
+  let release, deepseek_started = false, r;
+  const held = new Promise(resolve => { release = resolve; });
+  r = await smart_discussion(t, { named_followup: true, order: ['DeepSeek', 'Qwen', 'Grok'],
+    expert_reply: async (call, room) => {
+      if (room.current_turn.expert === 'DeepSeek') { deepseek_started = true; await held; }
+      return tool_reply(call, 'submit_opinion', { text: `${room.current_turn.expert} 的观点。`, summary: '摘要。' });
+    },
+    decisions: [async () => {
+      await api(r.config, '/messages', { author: '用户', text: '补充一句。', source: 'user', submission_id: randomUUID() });
+      return { handling: { type: 'choice', choice: 'Qwen', confidence: 0.9, probabilities: {} } };
+    }] });
+  await until(async () => deepseek_started, () => r.runner.tick());
+  await api(r.config, '/messages', { author: '用户', text: '@Qwen 你的方案成本怎么估？', source: 'user', submission_id: randomUUID() });
+  release();
+  await until(async () => r.log.some(line => line.includes('放弃应用')), () => r.runner.tick());
+  const room = await api(r.config, '');
+  assert.deepEqual(room.scheduler_decisions.map(item => [item.kind, item.applied]), [['interjection', 0]]);
+  assert.ok(room.held_since, 'the new message stays held for the host');
+});
+
 test('a roster change mid-round restores the voided plan without waking the host', async t => {
   let release, deepseek_started = false;
   const held = new Promise(resolve => { release = resolve; });

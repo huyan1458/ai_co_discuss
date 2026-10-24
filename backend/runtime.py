@@ -68,16 +68,25 @@ def limits_view(row, room):
         deadline = min(deadline or closing_deadline, closing_deadline)
     cutoff = deadline - result["summary_minutes"] * 60 if deadline and result["on_limit"] == "summarize" and not result["closing_at"] else deadline
     reason = ""
+    budget = room.get("round_budget")
+    experts = len(room.get("experts") or {})
+    # A budgeted room counts rounds from the budget base; a legacy room counts whole-roster rounds from the start.
+    if budget:
+        segment_rounds = max(0, room["opinion_count"] - budget["base"]) // experts if experts else 0
+    else:
+        segment_rounds = room["completed_rounds"]
+    round_cap = (budget["cap"] or result["max_rounds"]) if budget else result["max_rounds"]
     if deadline and now >= deadline:
         reason = "time_limit"
     elif result["closing_at"]:
         reason = result["stop_reason"]
-    elif result["max_rounds"] and room["completed_rounds"] >= result["max_rounds"]:
+    elif round_cap and segment_rounds >= round_cap:
         reason = "round_limit"
     elif cutoff and now >= cutoff:
         reason = "summary_reserved" if result["on_limit"] == "summarize" else "time_limit"
     result.update(deadline=deadline, cutoff=cutoff, reached=bool(reason), reason=reason,
                   closing=bool(result["closing_at"]) and room["phase"] not in ("paused", "concluded"), completed_rounds=room["completed_rounds"],
+                  segment_rounds=segment_rounds, round_cap=round_cap, extra_rounds=budget["extra"] if budget else 0,
                   remaining_seconds=max(0, deadline - now) if deadline else None,
                   elapsed_seconds=max(0, now - result["started_at"] - idle) if result["started_at"] else 0)
     return result

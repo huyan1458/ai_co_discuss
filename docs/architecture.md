@@ -88,7 +88,7 @@ Python 服务独占监听端口：Windows 使用 `SO_EXCLUSIVEADDRUSE`，关闭�
 
 ## 读写协议
 
-常用 API 为 `/api/health`、`/api/rooms` 和 `/api/rooms/ROOM_ID` 下的 messages、state、turns、floor 等接口。具体方法、字段与当前限制通过 `codiscuss schema` 和 `codiscuss room protocol ROOM` 获取；原 Python 入口继续兼容，避免维护第二套过期请求样例。
+常用 API 为 `/api/health`、`/api/rooms` 和 `/api/rooms/ROOM_ID` 下的 messages、state、turns、floor 等接口。写入结果取决于房间整体状态的操作遵循“先读取、带凭据、服务端校验”（见 AGENTS.md）：排整轮计划先 `turns/roster`，主持人收束或宣告完成先 `conclusion`，作废发言须带所见的 `latest_id`，状态截止编号 `until` 不回退。具体方法、字段与当前限制通过 `codiscuss schema` 和 `codiscuss room protocol ROOM` 获取；原 Python 入口继续兼容，避免维护第二套过期请求样例。
 
 附件使用 `/api/rooms/ROOM_ID/attachments`：POST 接收原始字节，查询参数为 `actor`、`file_name`、`submission_id`，限制 20 MiB；GET 默认分页列出已发送文件，也可用 `submission_id` 精确核对尚未关联消息的上传。`/attachments/ID` 返回元数据，`/attachments/ID/content` 返回原文件，`?download=1` 强制下载。消息传有序 `attachment_ids`（最多 10 个、不重复），可以只有附件；关联与消息在同一事务保存，同编号重试比较原文及附件顺序。
 
@@ -222,6 +222,7 @@ Python 通过进程内条件变量唤醒订阅者，不占用数据库连接，�
 
 ## 讨论选项与智能调度记录
 
+- `round_budgets`：程序统计轮次的预算（`base` 为本段计数起点的专家观点数，`cap` 为本段轮次上限、0 表示取 `discussion_limits.max_rounds`，`extra` 为用户累计追加轮数）。建房时写入；没有记录的旧房间沿用按花名册逐轮统计的旧口径。房间视图的 `limits` 返回 `segment_rounds`、`round_cap`、`extra_rounds`。
 - `discussion_options`：建房时的讨论选项，目前只有 `named_followup`（0/1，建房 `named_followup` 布尔值，默认 false，计入建房幂等比对）。没有记录的旧房间视为 true；房间视图返回 `named_followup`。
 - `scheduler_decisions`：讨论中每次智能调度判断的可见记录（`kind` 为 `interjection` / `round`，`label`、`confidence`、`applied`、`provider`、`after_message_id`），由接入程序用运行控制凭据 `POST scheduler-decisions` 写入，不是消息，不影响轮次、发言权与暂扣；房间视图 `scheduler_decisions` 返回最近 100 条；每条可带 `detail`（独立表 `scheduler_decision_details`，由 `POST scheduler-decisions` 的 `detail` 写入：每个问题的题目说明、选项，以及决策模型选了哪项和各选项概率，最多 4 项、4000 字，不含房间消息摘录，不随备份导出），网页默认折叠，点开才显示“问 / 答”。房间视图另附 `host_arrangements`：由 `discussion_turns` 按同一批创建时间分组得到的主持人安排（不含邀请追加的开场安排，也不含已由智能调度写入决策的那一批），`after_message_id` 取该批之前最新的回答，网页在该回答后显示与智能调度卡片同样式的“主持人安排：A → B → C”一行，点开才逐条显示专家与主持人写的任务说明（`turns`）；没有可跟随的回答（讨论开场）时不显示。不新增表。
 - 两表都是独立表，D1 重新应用 schema 即可；备份、导入（`after_message_id` 随消息重编号）与删除一并处理。智能调度代主持人执行的写入不新增权限，沿用该主持事件的执行凭据。

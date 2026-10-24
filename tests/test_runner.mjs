@@ -91,7 +91,7 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.equal((await decide_next_speaker(home, jev, midround, speaker('__host__', 0.95))).action, 'host');
   // Without an explicit obligation to speak, even a confident pick goes back to the host.
   const idle = await decide_next_speaker(home, jev, midround, speaker('Gemini', 0.95, 0.3));
-  assert.deepEqual([idle.action, idle.label, idle.detail[1].choice], ['host', '没有明确该谁接着发言的依据，交给主持人安排', '否']);
+  assert.deepEqual([idle.action, idle.label, idle.detail[1].choice], ['host', '有明确依据的概率 0.30，未达 0.70，交给主持人安排', '否']);
 });
 
 test('host tasks carry scheduling suggestions only when there are some', async t => {

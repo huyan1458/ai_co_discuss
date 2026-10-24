@@ -38,15 +38,24 @@ const turn = computed(() => ACTIVE_TURN.includes(room.value.current_turn?.status
 const inactive = computed(() => ["paused", "concluded"].includes(room.value.phase));
 const concluded = computed(() => room.value.phase === "concluded");
 const settled = computed(() => concluded.value || room.value.archived);
+// A budgeted room paused by a round limit or a declared completion waits for the user's choice; a plain restart would hit the limit again.
+// Rooms without a round budget keep the old flow: edit the limits, then restart.
+const limit_decision = computed(() => room.value.phase === "paused" && !room.value.archived && Boolean(room.value.round_budget) && ["round_limit", "goal_done"].includes(limits.value.stop_reason));
+const extend_count = ref(1);
+const reopening = ref(false);
+const reopen_rounds = ref(0);
+const reopen_minutes = ref(0);
+const rounds_info = computed(() => bridge.limit_rounds(limits.value));
+const can_reopen = computed(() => concluded.value && automatic.value && Boolean(room.value.round_budget) && !room.value.archived);
 const can_restart = computed(() => automatic.value && (runtime.value.status === "paused" || runtime.value.expired)
-  && !concluded.value && !room.value.archived);
+  && !concluded.value && !room.value.archived && !limit_decision.value);
 // A paused run can also skip its retained assignment and resume with the host.
 const active = computed(() => ["initial", "discussing", "reviewing"].includes(room.value.phase) && !room.value.archived);
 const can_skip = computed(() => Boolean(turn.value && (active.value || can_restart.value)));
 /** Writes need this browser's room control credential; without it the board is read-only. */
 const can_control = computed(() => Boolean(view.value.access?.can_manage));
 const can_end = computed(() => (active.value || room.value.phase === "paused") && !room.value.archived);
-const has_actions = computed(() => active.value || can_restart.value || can_end.value);
+const has_actions = computed(() => active.value || can_restart.value || can_end.value || can_reopen.value);
 const can_close = computed(() => !inactive.value && room.value.phase !== "preparing" && !room.value.archived && !limits.value.closing);
 const members = computed(() => [room.value.host, ...Object.keys(room.value.experts || {}).filter((name) => name !== room.value.host)]
   .filter((name) => name && name !== "用户").map(member_status));
@@ -121,6 +130,7 @@ const status = computed(() => {
       const preview = summary.length > ERROR_PREVIEW_LENGTH ? `${summary.slice(0, ERROR_PREVIEW_LENGTH)}…` : summary;
       return { tone: "error", title: "已暂停", detail: preview, full_detail: detail !== preview ? detail : '' };
     }
+    if (limit_decision.value) return { tone: "warning", title: limits.value.stop_reason === "goal_done" ? "目标已完成，已暂停" : "已达轮次上限，已暂停", detail: "现场已保留，请选择后续" };
     return { tone: "warning", title: runtime.value.expired ? "已到截止时间" : "已暂停", detail: turn.value ? `原安排 ${bridge.display_name(turn.value.expert)} 保留` : "" };
   }
   if (limits.value.reached) return { tone: "warning", title: "已达上限", detail: "停止新增安排" };
@@ -132,12 +142,14 @@ const meters = computed(() => {
   const used = Math.floor((value.elapsed_seconds || 0) / 60);
   if (settled.value) return [];
   // Show the round being discussed; once the limit is reached, show the limit.
+  const info = rounds_info.value;
+  const budgeted = Boolean(room.value.round_budget);
   const last_round = room.value.rounds?.at(-1);
-  const current = last_round?.completed === false ? last_round.number : (value.completed_rounds || 0) + 1;
-  const round = value.max_rounds ? Math.min(current, value.max_rounds) : current;
+  const current = budgeted ? info.done + (value.reached ? 0 : 1) : last_round?.completed === false ? last_round.number : (value.completed_rounds || 0) + 1;
+  const round = info.cap ? Math.min(current, info.cap) : current;
   return [
-    { label: "轮次", text: value.max_rounds ? `${round} / ${value.max_rounds}` : `${round} 轮`,
-      ratio: value.max_rounds ? round / value.max_rounds : null },
+    { label: "轮次", text: info.cap ? `${round} / ${info.cap}${info.total ? `（${info.total}）` : ""}` : `${round} 轮`,
+      ratio: info.cap ? round / info.cap : null },
     { label: "用时", text: value.max_minutes ? `${used} / ${value.max_minutes} 分钟` : `${used} 分钟`,
       ratio: value.max_minutes ? used / value.max_minutes : null },
   ].filter((meter) => meter.label !== "用时" || value.started_at);
@@ -193,7 +205,7 @@ function member_menu(member) {
   const seat = record(member.name);
   if (!seat || member.is_host || settled.value) return [items].filter((group) => group.length);
   const change = (label, icon, action, extra = {}) => ({ label, icon, ...extra,
-    onSelect: () => act("change_member", { member_id: seat.id, name: member.name, action }) });
+    onSelect: () => act("change_member", { member_id: seat.id, name: member.name, action, ...(action === "redo" ? { latest_id: room.value.latest_id } : {}) }) });
   // Voiding is only offered while paused, for an expert counted in the unfinished round.
   const last_round = room.value.rounds?.at(-1);
   const voidable = room.value.phase === "paused" && last_round?.completed === false && last_round.speakers.includes(member.name);
@@ -275,6 +287,19 @@ function duration(seconds) {
   return `${Math.floor(seconds / 3600)}小时${Math.floor((seconds % 3600) / 60)}分`;
 }
 
+/** Open the reopen dialog prefilled with the previous limits. */
+function open_reopen() {
+  reopen_rounds.value = limits.value.max_rounds || 0;
+  reopen_minutes.value = limits.value.max_minutes || 0;
+  reopening.value = true;
+}
+
+/** Reopen with the chosen limits; blank or invalid numbers fall back to unlimited. */
+async function reopen() {
+  const whole = (value) => Number.isInteger(value) && value >= 0 ? value : 0;
+  if (await act("reopen_discussion", { max_rounds: whole(reopen_rounds.value), max_minutes: whole(reopen_minutes.value) })) reopening.value = false;
+}
+
 /** Apply one of the two early-ending choices and close the confirmation. */
 async function finish(action) {
   if (await act(action)) ending.value = false;
@@ -288,6 +313,14 @@ async function finish(action) {
       <div class="pb-status-line"><span class="pb-dot"></span><strong role="status">{{ status.title }}</strong><span v-if="!props.docked" class="pb-mode">{{ automatic ? '全自动' : '手动' }}</span></div>
       <p v-if="status.detail" class="pb-status-detail">{{ status.detail }}</p>
       <details v-if="status.full_detail" class="pb-status-detail"><summary>查看错误详情</summary><pre class="pb-error-detail">{{ status.full_detail }}</pre></details>
+      <div v-if="limit_decision && automatic && can_control" class="pb-decision" aria-label="暂停后的选择">
+        <div class="pb-decision-row">
+          <label class="pb-extend">追加<input v-model.number="extend_count" type="number" min="1" max="100" inputmode="numeric" aria-label="追加轮数" />轮</label>
+          <UButton label="追加并继续" icon="i-lucide-plus" size="xs" color="neutral" variant="outline" :loading="pending === 'extend_rounds'" :disabled="Boolean(pending) || !(extend_count >= 1 && extend_count <= 100)" @click="act('extend_rounds', extend_count)" />
+        </div>
+        <UButton label="请主持人总结" icon="i-lucide-file-text" size="xs" color="neutral" variant="outline" title="主持人根据已有材料总结，之后讨论收束" :loading="pending === 'request_summary'" :disabled="Boolean(pending)" @click="act('request_summary')" />
+        <small>也可点“结束”直接收束，不总结。</small>
+      </div>
       <UButton v-if="writer_conflict && view.launch.available && !view.launch.remote" icon="i-lucide-arrow-left-right" label="切换到 Codex App" size="xs" color="neutral" variant="outline" title="会话正被 Codex App 占用时，改由 App 接入，沿用原聊天和讨论进度" :disabled="Boolean(pending)" @click="open_connection(writer_conflict, 'codex')" />
       <div v-if="meters.length" class="pb-meters">
         <div v-for="meter in meters" :key="meter.label" class="pb-meter">
@@ -335,6 +368,7 @@ async function finish(action) {
       <UButton v-if="can_restart" icon="i-lucide-rotate-ccw" label="重启" size="sm" color="neutral" variant="outline" class="pb-action pb-restart" title="原安排重新交给对应 AI，需本机接入程序在运行" :loading="pending === 'restart_discussion'" :disabled="!can_control" @click="act('restart_discussion')" />
       <UButton v-if="active" icon="i-lucide-pause" label="暂停" size="sm" color="neutral" variant="outline" class="pb-action" title="暂停讨论，原安排保留" :loading="pending === 'pause_discussion'" :disabled="!can_control" @click="act('pause_discussion')" />
       <UButton v-if="can_skip" icon="i-lucide-skip-forward" label="跳过" size="sm" color="neutral" variant="outline" class="pb-action" :title="`跳过 ${bridge.display_name(turn.expert)} 本次发言，${can_restart ? '恢复讨论，' : ''}交给主持人继续安排`" :loading="pending === 'skip_turn'" :disabled="!can_control || Boolean(pending)" @click="act('skip_turn')" />
+      <UButton v-if="can_reopen" icon="i-lucide-rotate-ccw" label="重新开始" size="sm" color="neutral" variant="outline" class="pb-action pb-restart" title="保留全部记录，设定新的轮次与时长上限后继续讨论，需本机接入程序在运行" :disabled="!can_control || Boolean(pending)" @click="open_reopen" />
       <UButton v-if="can_end" icon="i-lucide-flag" label="结束" size="sm" color="neutral" variant="outline" class="pb-action pb-end" title="结束讨论：选择主持人收尾或直接结束" :disabled="!can_control" @click="ending = true" />
     </section>
     <section v-if="automatic && timings.count" class="pb-section" aria-label="阶段耗时">
@@ -418,6 +452,18 @@ async function finish(action) {
         </form>
       </template>
     </UModal>
+    <UModal v-model:open="reopening" title="重新开始讨论" description="保留全部记录和原结论，按新的上限继续。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
+      <template #body>
+        <form class="pb-reopen" @submit.prevent="reopen">
+          <label>轮次上限<input v-model.number="reopen_rounds" type="number" min="0" max="100" inputmode="numeric" /><small>0 表示不限</small></label>
+          <label>总时长（分钟）<input v-model.number="reopen_minutes" type="number" min="0" max="1440" inputmode="numeric" /><small>0 表示不限</small></label>
+          <div class="pb-invite-footer">
+            <UButton label="取消" color="neutral" variant="ghost" @click="reopening = false" />
+            <UButton type="submit" icon="i-lucide-rotate-ccw" label="重新开始" class="channel-primary-button" :loading="pending === 'reopen_discussion'" :disabled="Boolean(pending)" />
+          </div>
+        </form>
+      </template>
+    </UModal>
     <UModal v-model:open="ending" title="提前结束讨论" description="当前发言安排会被取消，已有消息全部保留。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
       <template #body>
         <div class="progress-ending">
@@ -436,6 +482,14 @@ async function finish(action) {
 <style scoped>
 .pb-member.is-away { opacity: .6; }
 .pb-member-model { margin: 2px 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.pb-decision { display: grid; gap: 8px; margin-top: 8px; }
+.pb-decision small { color: var(--ui-text-dimmed); font-size: 11px; }
+.pb-decision-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.pb-extend { display: inline-flex; align-items: center; gap: 6px; color: var(--ui-text-muted); font-size: 12px; }
+.pb-extend input, .pb-reopen input { width: 64px; min-height: 28px; padding: 2px 8px; border: 1px solid var(--ui-border-muted); border-radius: 6px; background: var(--ui-bg); color: var(--ui-text-highlighted); font: inherit; }
+.pb-reopen { display: grid; gap: 14px; }
+.pb-reopen label { display: flex; align-items: center; gap: 10px; color: var(--ui-text-toned); font-size: 13px; }
+.pb-reopen label small { color: var(--ui-text-dimmed); font-size: 11px; }
 .pb-connection { display: grid; gap: 16px; }
 .pb-connection > p { margin: 0; }
 .pb-connection > button { justify-self: start; }

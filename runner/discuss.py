@@ -188,12 +188,15 @@ def room_commands(subcommands, registry):
     """Register room discovery, progressive reading, creation, and updates."""
     for action, description in (("list", "列出房间概要"), ("view", "只读目标、阶段、焦点及当前安排"),
                                 ("brief", "按需读取背景、边界和专家配置"),
+                                ("conclusion", "收束前申请最新收束状态（阻碍项与 revision）；主持人收束前必做"),
                                 ("protocol", "按需读取当前服务的参与协议")):
         parser = add_leaf(subcommands, registry, f"room {action}", description, action != "list")
         if action == "list":
             parser.add_argument("--submission-id", type=submission_id, help="按建房提交编号精确查询")
-    limits = add_leaf(subcommands, registry, "room limits", "查看上限；--check 检查并执行到限处理", True)
+    limits = add_leaf(subcommands, registry, "room limits", "查看上限；--check 检查并执行到限处理；--done 通知程序目标已完成", True)
     limits.add_argument("--check", action="store_true")
+    limits.add_argument("--done", action="store_true", help="主持人宣告目标已完成：按到限方式暂停或进入总结，不直接收束；须带 --conclusion")
+    limits.add_argument("--conclusion", help="room conclusion 返回的 revision；--done 必填")
     create = add_leaf(subcommands, registry, "room create", "创建话题；不自动启动讨论或监控")
     create.add_argument("--folder-id", help="直接在指定文件夹中创建；省略则未归类")
     add_topic(create, create=True)
@@ -201,6 +204,7 @@ def room_commands(subcommands, registry):
                         help="新话题唯一编号；未知结果先查询，重试沿用编号和原始资料")
     update = add_leaf(subcommands, registry, "room update", "维护话题；省略的字段保持不变", True)
     add_topic(update)
+    update.add_argument("--conclusion", help="room conclusion 返回的 revision；主持人设为 concluded 时必填，状态变化后需重新获取")
 
 
 def message_commands(subcommands, registry):
@@ -255,7 +259,8 @@ def turn_commands(subcommands, registry):
     """Keep planning, notification text, and delivery confirmation distinct."""
     descriptions = {"list": "分页读取安排历史", "current": "读取阶段和最近安排；需核对状态及专家",
                     "view": "读取一个安排", "prompt": "生成简短通知；不发送、不标记送达",
-                    "create": "安排一位专家，或用 --plan-file 一次安排整轮；不发送通知",
+                    "roster": "申请最新专家状态（在场专家、本轮待发言者与 revision）；整轮安排前必做",
+                    "create": "安排一位专家，或用 --plan-file 一次安排整轮（须带 --roster）；不发送通知",
                     "continue": "处理用户操作或打断后，按原排队继续下一位",
                     "mark-notified": "实际送达后显式确认", "cancel": "取消指定未完成安排"}
     for action, description in descriptions.items():
@@ -263,12 +268,13 @@ def turn_commands(subcommands, registry):
         if action == "list":
             parser.add_argument("--page", type=positive_int, default=1)
             parser.add_argument("--submission-id", type=submission_id, help="按安排提交编号精确查询结果")
-        elif action not in ("create", "current", "continue"):
+        elif action not in ("create", "current", "continue", "roster"):
             parser.add_argument("id", type=positive_int, help="安排编号")
         if action == "create":
             parser.add_argument("--expert", type=ai_name, help="单个安排的专家；与 --plan-file 二选一")
             add_text(parser, "question")
             parser.add_argument("--plan-file", help='整轮安排 JSON 数组 [{"expert":"Claude","question":"…"}]，按顺序接力；- 从标准输入读取')
+            parser.add_argument("--roster", help="turn roster 返回的 revision；整轮安排（--plan-file）必填，专家状态变化后需重新获取")
             parser.add_argument("--submission-id", type=submission_id, required=True,
                                 help="新安排唯一编号；重试沿用同编号和内容")
 
@@ -435,13 +441,20 @@ def plan_room(args):
         return RequestPlan("/api/rooms", "POST", payload, "overview")
     base = f"/api/rooms/{args.room}"
     if args.action == "limits":
+        if args.done:
+            return RequestPlan(base + "/limits", "POST", {"actor": require_actor(args), "action": "done",
+                                                          **({"conclusion": args.conclusion} if args.conclusion else {})}, "overview")
         return RequestPlan(base + "/limits", "POST", {"actor": require_actor(args)}, "overview") if args.check else RequestPlan(base + "/limits")
     if args.action == "update":
         payload = topic_payload(args)
         if not payload:
             raise CliError("room update 至少需要一个话题字段")
         payload["actor"] = require_actor(args)
+        if args.conclusion:
+            payload["conclusion"] = args.conclusion
         return RequestPlan(base + "/topic", "POST", payload, "overview")
+    if args.action == "conclusion":
+        return RequestPlan(base + "/conclusion")
     if args.action == "protocol":
         return RequestPlan(f"/r/{args.room}/protocol")
     return RequestPlan(base, view="brief" if args.action == "brief" else "overview")
@@ -531,6 +544,8 @@ def plan_turn(args):
         if args.submission_id:
             params["submission_id"] = args.submission_id
         return RequestPlan(base + "/turns", params=params)
+    if args.action == "roster":
+        return RequestPlan(base + "/turns/roster")
     if args.action == "create":
         return RequestPlan(base + "/turns", "POST", turn_payload(args))
     if args.action == "continue":
@@ -555,7 +570,7 @@ def turn_payload(args):
             raise CliError(f"无效 JSON: {error}") from error
         if not isinstance(turns, list) or not all(isinstance(item, dict) for item in turns):
             raise CliError("--plan-file 必须是由 expert、question 对象组成的数组")
-        return {**payload, "turns": turns}
+        return {**payload, "turns": turns, **({"roster": args.roster} if args.roster else {})}
     if not args.expert or question is None:
         raise CliError("需要 --expert 与 --question/--question-file，或改用 --plan-file")
     return {**payload, "expert": args.expert, "question": question}

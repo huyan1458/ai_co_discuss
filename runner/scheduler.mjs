@@ -179,7 +179,7 @@ export async function decide_next_speaker(home, scheduler, { title, goal, user_r
     return { action: 'next', expert: choice, confidence, detail, label: `本轮继续，请 ${choice} 接着发言` };
   }
   if (typeof obligation === 'number' && obligation < ROUTE_CONFIDENCE) {
-    return { action: 'host', confidence, detail, label: '没有明确该谁接着发言的依据，交给主持人安排' };
+    return { action: 'host', confidence, detail, label: `有明确依据的概率 ${obligation.toFixed(2)}，未达 ${ROUTE_CONFIDENCE.toFixed(2)}，交给主持人安排` };
   }
   return { action: 'host', confidence, detail, label: choice === HOST_CHOICE && confidence >= ROUTE_CONFIDENCE ? '建议由主持人调整安排，交给主持人' : unsure_label(candidates.includes(choice) ? `请 ${choice} 发言` : choice === HOST_CHOICE ? '交给主持人' : '') };
 }

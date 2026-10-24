@@ -48,7 +48,8 @@ async function save_key() {
     <UCheckbox :model-value="Boolean(scheduler.enabled) && !blocker" :disabled="Boolean(blocker)" :description="blocker ? `${description}（${blocker}）` : description" @update:model-value="bridge.write_scheduler('enabled', $event)">
       <template #label><span class="scheduler-title">智能调度<UBadge size="xs" variant="soft" class="scheduler-badge">决策模型</UBadge><small>可选</small></span></template>
     </UCheckbox>
-    <div v-if="scheduler.enabled && !blocker" class="scheduler-card" :class="{ 'is-editing': editing }">
+    <div v-if="scheduler.enabled && !blocker" class="scheduler-cards">
+    <div class="scheduler-card" :class="{ 'is-editing': editing }">
       <template v-if="!editing">
         <button type="button" class="scheduler-open" aria-label="设置智能调度的决策模型" title="点击设置" @click="editing = true">
           <strong>决策模型</strong>
@@ -82,16 +83,18 @@ async function save_key() {
         <button type="button" class="scheduler-flip is-done" aria-label="完成并返回决策模型卡片" @click="editing = false"><UIcon name="i-lucide-check" />完成</button>
       </template>
     </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .scheduler-settings { display: flex; flex-direction: column; gap: 10px; padding-top: 14px; border-top: 1px solid var(--ui-border-muted); }
 /* Same size front and back, so flipping never moves the dialog; long back content scrolls inside. */
-.scheduler-card { position: relative; display: flex; flex-direction: column; width: 100%; max-width: 280px; height: 240px; margin-left: 26px; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); box-shadow: var(--channel-shadow-control); }
+.scheduler-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); gap: 8px; }
+.scheduler-card { position: relative; display: flex; flex-direction: column; min-width: 0; height: 240px; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); box-shadow: var(--channel-shadow-control); }
 .scheduler-card:hover { border-color: var(--ui-border-accented); }
 .scheduler-open { display: flex; flex: 1; flex-direction: column; gap: 10px; width: 100%; padding: 12px 12px 30px; text-align: left; border-radius: inherit; outline: none; }
-.scheduler-open > strong { color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
+.scheduler-open > strong { display: flex; align-items: center; min-height: 26px; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
 .scheduler-facts { display: grid; gap: 4px; margin: 0; padding-top: 10px; border-top: 1px solid var(--ui-border-muted); font-size: 11px; }
 .scheduler-facts > div { display: grid; grid-template-columns: 3em minmax(0, 1fr); gap: 8px; }
 .scheduler-facts dt { color: var(--ui-text-dimmed); white-space: nowrap; }
@@ -115,5 +118,5 @@ async function save_key() {
 .scheduler-badge { color: var(--channel-accent); }
 .scheduler-error { margin: 0; color: #f0716b; font-size: 11px; }
 .scheduler-ok { margin: 0; color: var(--ui-success); font-size: 11px; }
-@media (max-width: 600px) { .scheduler-card { margin-left: 0; } }
+@media (max-width: 600px) { .scheduler-cards { grid-template-columns: 1fr; } }
 </style>

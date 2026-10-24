@@ -139,6 +139,8 @@ def settings_statements(tables, room, maps, now):
                            (room_id, remap_text(row["text"], messages), remap_until(row["until"], messages), row["updated_at"])))
     for row in tables.get("discussion_options", [])[:1]:
         statements.append(("INSERT INTO discussion_options (room_id,named_followup) VALUES (?,?)", (room_id, row["named_followup"])))
+    for row in tables.get("round_budgets", [])[:1]:
+        statements.append(("INSERT INTO round_budgets (room_id,base,cap,extra) VALUES (?,?,?,?)", (room_id, row["base"], row["cap"], row["extra"])))
     statements += [("""INSERT INTO scheduler_decisions (room_id,after_message_id,kind,label,confidence,applied,provider,created_at)
                        VALUES (?,?,?,?,?,?,?,?)""", (room_id, messages.get(row["after_message_id"], 0), row["kind"], row["label"],
                                                      row.get("confidence"), row["applied"], row["provider"], row["created_at"]))

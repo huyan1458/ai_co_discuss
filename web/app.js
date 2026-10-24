@@ -1046,7 +1046,7 @@ function finish_member_request(room_id, token, record, result) {
 }
 
 /** Owner changes use the website; only automatic members need the local service to reconnect. */
-async function change_member({ member_id, name, action, role }) {
+async function change_member({ member_id, name, action, role, latest_id }) {
   const room_id = state.room.id;
   state.free_error = ""; state.free_notice = "";
   try {
@@ -1061,7 +1061,7 @@ async function change_member({ member_id, name, action, role }) {
       if (state.room?.id === room_id) state.free_notice = member.access === "manual" ? `${name} 已请回，凭证已更新；请用新的启动指令让它重新注册。` : `${name} 已请回，续接原会话。`;
     } else {
       await request_json(`/api/rooms/${room_id}/members/${member_id}${action === "interrupt" ? "/interrupt" : ""}`,
-        action === "interrupt" ? {} : { action, ...(role ? { role } : {}) });
+        action === "interrupt" ? {} : { action, ...(role ? { role } : {}), ...(latest_id !== undefined ? { latest_id } : {}) });
     }
     if (state.room?.id === room_id) await refresh_room();
   } catch (error) { if (state.room?.id === room_id) state.free_error = error.message; }
@@ -1426,10 +1426,18 @@ function read_limits(prefix) {
   }));
 }
 
+/** Rounds against the limit: the current segment, with rounds the user appended shown as M+N (M is the original limit). */
+function limit_rounds(limits = {}) {
+  const done = limits.segment_rounds ?? limits.completed_rounds ?? 0;
+  const cap = limits.round_cap ?? limits.max_rounds ?? 0;
+  const total = limits.extra_rounds ? `${limits.max_rounds}+${limits.extra_rounds}` : "";
+  return { done, cap, total, text: cap ? `${done} / ${cap}${total ? `（${total}）` : ""} 轮` : `${done} 轮` };
+}
+
 /** Describe configured boundaries and actual progress without implying completion. */
 function limits_label(limits = {}) {
   const finished = state.room?.phase === "concluded";
-  const rounds = limits.max_rounds ? `${limits.completed_rounds || 0} / ${limits.max_rounds} 轮` : `${limits.completed_rounds || 0} 轮 · 未设轮次上限`;
+  const rounds = limits.round_cap || limits.max_rounds ? limit_rounds(limits).text : `${limits.completed_rounds || 0} 轮 · 未设轮次上限`;
   const duration = limits.max_minutes ? `总时长 ${limits.max_minutes} 分钟` : "未设总时长";
   const progress = finished ? "讨论已收束" : !limits.started_at ? "尚未计时" : `已用 ${Math.floor((limits.elapsed_seconds || 0) / 60)} 分钟${limits.remaining_seconds == null ? "" : ` · 剩余 ${Math.ceil(limits.remaining_seconds / 60)} 分钟`}`;
   const status = finished ? "" : limits.closing ? "正在收束" : limits.reached ? "已达上限，停止新增安排" : "";
@@ -2328,6 +2336,38 @@ async function skip_turn() {
     if (state.room?.id === room_id) await refresh_room();
   }
   if (state.room?.id === room_id) show_toast(resume ? "已跳过本次发言并恢复讨论，等待主持人继续安排" : "已跳过本次发言，等待主持人继续安排");
+}
+
+/** Resume the automatic run after a user decision made while paused or just reopened. */
+async function resume_after_limit_decision() {
+  const path = `/api/rooms/${state.room.id}/runtime`;
+  const runtime = await request_json(path);
+  await request_json(path, { action: "start", mode: "automatic", revision: runtime.revision, deadline: 0 });
+}
+
+/** Append rounds after a limit pause: counting restarts from now and the board shows M+N. */
+async function extend_rounds(rounds) {
+  const room_id = state.room.id;
+  await request_json(`/api/rooms/${room_id}/limits`, { actor: "用户", action: "extend", rounds });
+  await resume_after_limit_decision();
+  await refresh_room();
+  show_toast(`已追加 ${rounds} 轮并重启讨论`);
+}
+
+/** Ask the host for a summary of the paused discussion; it ends in the concluded state. */
+async function request_summary() {
+  await request_json(`/api/rooms/${state.room.id}/limits`, { actor: "用户", action: "summarize" });
+  await resume_after_limit_decision();
+  await refresh_room();
+  show_toast("已请主持人总结，总结后讨论收束");
+}
+
+/** Reopen a concluded discussion with a fresh round and time budget; history stays. */
+async function reopen_discussion({ max_rounds, max_minutes }) {
+  await request_json(`/api/rooms/${state.room.id}/limits`, { actor: "用户", action: "reopen", max_rounds, max_minutes });
+  await resume_after_limit_decision();
+  await refresh_room();
+  show_toast("讨论已重启，按新的轮次与时长上限继续");
 }
 
 /** End early with a host summary limited to the configured closing reserve. */
@@ -3267,7 +3307,7 @@ async function execute_view_action(name, value) {
     copy_turn, notify: () => change_turn_status("notified"), cancel_turn: () => change_turn_status("cancelled"), skip_turn,
     take_floor: () => change_floor("take"), return_floor: () => change_floor("return"),
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
-    choose_runtime, export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, retry_execution, force_close, conclude_discussion,
+    choose_runtime, export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, retry_execution, force_close, conclude_discussion, extend_rounds, request_summary, reopen_discussion,
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
     load_room_configuration, save_room_configuration, interrupt_member, change_member, invite_member, set_proxy, copy_online_notice,
     prepare_brainstorm, return_conclusion, convert_suggestion, adopt_recommendation,
@@ -3301,7 +3341,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form },
   request: request_json, identities: IDENTITIES, display_name, sources: SOURCE_LABELS, phases: PHASE_LABELS,
   runtime_label, execution_label, limits_label, participant_model, participant_access, can_retry_execution,
-  turns: TURN_LABELS, turn_label, turn_guidance, floor_status, progress_round, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
+  turns: TURN_LABELS, turn_label, turn_guidance, floor_status, progress_round, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();
 restore_directory_sort();

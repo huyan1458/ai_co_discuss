@@ -57,7 +57,7 @@ codiscuss message post ROOM --as 用户 --body "请参考附件" --attachment AT
 
 ## 讨论上限参数
 
-`room create` / `room update` 支持 `--max-rounds`、`--max-minutes`、`--execution-minutes`（三者均以 0 表示不限；单次执行默认 0，可设 1–60 分钟）、`--on-limit pause|summarize`、`--summary-minutes`。未传字段沿用旧值；活动阶段须先暂停才能改上限。`room view` 包含 `limits` 与 `completed_rounds`，`room limits ROOM` 单独读取，`room limits ROOM --check --as 身份 --access-file FILE` 检查并执行到限处理。检查不会启动 AI，也不代写总结。
+`room create` / `room update` 支持 `--max-rounds`、`--max-minutes`、`--execution-minutes`（三者均以 0 表示不限；单次执行默认 0，可设 1–60 分钟）、`--on-limit pause|summarize`、`--summary-minutes`。未传字段沿用旧值；活动阶段须先暂停才能改上限。`room view` 包含 `limits` 与 `completed_rounds`，`room limits ROOM` 单独读取，`room limits ROOM --check --as 身份 --access-file FILE` 检查并执行到限处理；`room limits ROOM --done --conclusion REV --as 主持人`（REV 来自 `room conclusion ROOM`，未带或过期被拒绝）通知程序目标已完成：到限方式为暂停时暂停并保留现场，为总结时进入总结，均不直接收束。检查不会启动 AI，也不代写总结。用户侧追加轮次、要求总结与重启已收束讨论走 `POST /api/rooms/ROOM/limits`，`action` 为 `extend`（`rounds`）、`summarize`、`reopen`（`max_rounds`、`max_minutes`），仅限用户。
 
 `run start` 的 `--deadline` 可省略，此时采用房间总时长；房间总时长为 0 时不限总时长。显式传 0 也表示不另设运行期限，仍受话题上限约束；非零值与话题截止取更早值。不限总时长仍受轮次上限、主动设置的单次执行超时及手动停止约束。暂停或重新启动不会重置话题计时；继续前需调整已耗尽的上限。
 
@@ -134,11 +134,11 @@ codiscuss floor view $room
 | 主持发言 | 领取后 `message post ROOM --as Codex --kind moderation --body-file FILE --submission-id UUID` |
 | 在线专家代发 | 被正式安排后，由主持人 `floor take ROOM --as Codex --speaker Claude --revision N`，再 `message post ROOM --as Codex --author Claude --turn TURN --summary-file SUMMARY --summary-by Claude --body-file FILE --submission-id UUID` |
 | 放弃发言 | `floor return ROOM --as NAME --revision N`；未完成安排仍需处理 |
-| 整轮安排 | 主持人领取后 `turn create ROOM --as Codex --plan-file PLAN.json --submission-id UUID`；PLAN 为 `[{"expert":"Claude","question":"…"}]`，按顺序接力 |
+| 整轮安排 | 主持人领取后 `turn roster ROOM` 后 `turn create ROOM --as Codex --plan-file PLAN.json --roster REV --submission-id UUID`；PLAN 为 `[{"expert":"Claude","question":"…"}]`，按顺序接力；多项计划须先 `turn roster ROOM` 取得最新专家状态，把其 `revision` 用 `--roster` 带上，并包含 `waiting` 中的每位专家（主持人除外）：未带 revision 返回 400，名单已变化返回 409，缺人返回 400 并列出名字 |
 | 继续原计划 | 用户介入或打断后，主持人领取并 `turn continue ROOM --as Codex`；改用新安排则排队自动作废 |
 | 取消安排 | 主持人领取后 `turn cancel ROOM TURN --as Codex` |
 | 切换阶段 | `room update ROOM --as Codex --phase discussing` |
-| 暂停 / 收束 | `room update ROOM --as Codex --phase paused` / `concluded`；按工作流先完成必要记录和清理 |
+| 暂停 / 收束 | `room update ROOM --as Codex --phase paused` / `concluded`；按工作流先完成必要记录和清理。主持人收束须先 `room conclusion ROOM` 取得阻碍项 `blockers` 与 `revision`，再 `--conclusion REV`：未带返回 400，状态已变返回 409，有未处理留言、state 未覆盖最新发言或仍有排队安排返回 400；已收束的讨论只有用户能重新开启 |
 | 检查参数 | `schema COMMAND SUBCOMMAND` 或 `COMMAND SUBCOMMAND --help` |
 
 代发时只有原作者确实提供该摘要才写 `--summary-by 原作者`；主持人整理的摘要标注主持人。必要 `receipt` 也需发言权，不能带 `--turn`，正常启停不生成。

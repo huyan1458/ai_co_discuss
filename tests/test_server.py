@@ -260,7 +260,7 @@ class DiscussionTests(unittest.TestCase):
         tables = snapshot["tables"]
         self.assertEqual(set(tables), {"rooms", "room_directory", "room_folder_assignments", "topic_folders", "room_creations",
                                       "room_briefs", "room_user_requests", "topic_settings", "room_floor", "discussion_limits", "messages", "message_details", "message_summaries", "message_timings", "discussion_turns", "attachments", "room_modes", "room_members", "member_requests", "member_suggestions", "member_recommendations",
-                                      "discussion_options", "scheduler_decisions"})
+                                      "discussion_options", "round_budgets", "scheduler_decisions"})
         self.assertEqual([row["id"] for row in tables["messages"]], [row["id"] for row in originals] + [answer["id"]])
         for original, row in zip(originals + [answer], tables["messages"]):
             self.assertEqual(row, {key: original[key] for key in row})
@@ -1225,14 +1225,14 @@ class DiscussionTests(unittest.TestCase):
         self.configure_host()
         turn = self.schedule()[1]["turn"]
         topic_path = f"/api/rooms/{self.room['id']}/topic"
-        self.assertEqual(self.request(topic_path, {"actor": "Codex", "phase": "concluded"})[0], 400)
+        self.assertEqual(self.request(topic_path, {"actor": "用户", "phase": "concluded"})[0], 400)
         other = self.request("/api/rooms", {"title": "另一个话题"})[1]
         self.assertEqual(self.request(f"/api/rooms/{other['id']}/turns/{turn['id']}")[0], 404)
         path = f"/api/rooms/{self.room['id']}/messages"
         self.assertEqual(self.request(path, {"author": "Codex", "source": "cli", "text": "错误专家", "turn_id": turn["id"], "submission_id": "wrong-expert-001"})[0], 400)
         self.request(f"/api/rooms/{self.room['id']}/turns/{turn['id']}", {"actor": "用户", "status": "cancelled"})
         self.assertEqual(self.request(path, {"author": "Gemini", "text": "迟到回答", "turn_id": turn["id"], "submission_id": "late-answer-001"})[0], 409)
-        self.assertEqual(self.request(topic_path, {"actor": "Codex", "phase": "concluded"})[0], 200)
+        self.assertEqual(self.request(topic_path, {"actor": "用户", "phase": "concluded"})[0], 200)
         self.assertEqual(self.schedule("closed-topic-001")[0], 400)
 
     def test_independent_pause_review_and_receipt_lifecycle(self):
@@ -1258,7 +1258,7 @@ class DiscussionTests(unittest.TestCase):
         answer.update(self.prepare_speech("Gemini"))
         self.assertEqual(self.request(base + "/messages", answer)[0], 201)
         self.assertEqual(self.request(base + "/topic", {"actor": "Codex", "phase": "reviewing"})[0], 200)
-        self.assertEqual(self.request(base + "/topic", {"actor": "Codex", "phase": "concluded"})[0], 200)
+        self.assertEqual(self.request(base + "/topic", {"actor": "用户", "phase": "concluded"})[0], 200)
         self.assertTrue(self.request(base + "/messages", answer)[1]["duplicate"])
         self.assertEqual(self.request(base + "/messages", {**answer, "turn_id": None, "submission_id": "late-opinion-001"})[0], 400)
         self.assertEqual(self.request(base + "/messages", {**receipt, "submission_id": "final-receipt-001"})[0], 409)

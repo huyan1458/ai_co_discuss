@@ -9,6 +9,7 @@ import time
 import unittest
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -204,6 +205,64 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(self.request(self.path + "/limits", {"actor": "Codex"}, token)[1]["phase"], "paused")
 
+    def test_round_limit_counts_expert_opinions_not_roster_coverage(self):
+        """A plan that never asks one expert still exhausts the budget; legacy rooms keep the roster count."""
+        if not hasattr(self, "database"):
+            self.skipTest("direct history seeding needs the local SQLite database")
+        status, room = self.request("/api/rooms", {"title": "发言量计轮", "host": "Codex",
+            "experts": {"Codex": "cli", "Gemini": "cli"}, "limits": {"max_rounds": 2}})
+        self.assertEqual(status, 201, room)
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            for index in range(4):
+                connection.execute("INSERT INTO messages (room_id,author,text,source,submission_id,created_at) VALUES (?,?,?,?,?,?)",
+                                   (room["id"], "Codex", f"观点{index}", "cli", f"volume-{index:04d}-id", "2026-01-01T00:00:00Z"))
+        limits = self.request(f"/api/rooms/{room['id']}")[1]["limits"]
+        self.assertEqual((limits["segment_rounds"], limits["reached"], limits["reason"]), (2, True, "round_limit"))
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("DELETE FROM round_budgets WHERE room_id=?", (room["id"],))
+        legacy = self.request(f"/api/rooms/{room['id']}")[1]
+        self.assertEqual((legacy["completed_rounds"], legacy["limits"]["reached"], legacy["limits"]["extra_rounds"]), (0, False, 0))
+
+    def test_host_done_pauses_and_user_chooses_extend_or_summary(self):
+        """Goal completion pauses a pause-mode room; only the user appends rounds or asks for the summary."""
+        self.limited_room(max_rounds=2)
+        self.start()
+        token = self.enter(self.events()[0])
+        self.assertEqual(self.request(self.path + "/topic", {"actor": "Codex", "phase": "concluded"}, token)[0], 400)
+        self.assertEqual(self.request(self.path + "/limits", {"actor": "Codex", "action": "done"}, token)[0], 400, "done needs the conclusion revision too")
+        revision = self.request(self.path + "/conclusion")[1]["revision"]
+        status, room = self.request(self.path + "/limits", {"actor": "Codex", "action": "done", "conclusion": revision}, token)
+        self.assertEqual((status, room["phase"], room["limits"]["stop_reason"]), (200, "paused", "goal_done"))
+        self.assertEqual(self.request(self.path + "/limits", {"actor": "Codex", "action": "extend", "rounds": 1},
+                                      self.member_tokens["Codex"])[0], 403)
+        status, room = self.request(self.path + "/limits", {"actor": "用户", "action": "extend", "rounds": 3}, self.owner)
+        self.assertEqual(status, 200, room)
+        limits = room["limits"]
+        self.assertEqual((limits["max_rounds"], limits["extra_rounds"], limits["round_cap"], limits["segment_rounds"], limits["stop_reason"]),
+                         (2, 3, 3, 0, ""))
+        status, room = self.request(self.path + "/limits", {"actor": "用户", "action": "summarize"}, self.owner)
+        self.assertEqual((status, room["phase"], room["limits"]["stop_reason"]), (200, "paused", "user_summary"))
+        revision = self.request(self.path + "/runtime")[1]["revision"]
+        self.assertEqual(self.request(self.path + "/runtime", {"action": "start", "mode": "automatic", "revision": revision,
+                                                              "deadline": int(time.time()) + 600}, self.owner)[0], 200)
+        room = self.request(self.path)[1]
+        self.assertTrue(room["limits"]["closing"])
+        token = self.enter(self.events()[-1])
+        self.assertEqual(self.conclude_as_host(token), 200)
+
+    def test_concluded_room_can_be_reopened_with_new_limits(self):
+        """Reopening resets the round and time budget but keeps the history and the old conclusion."""
+        self.limited_room(max_rounds=1)
+        self.complete_round()
+        self.assertEqual(self.request(self.path + "/topic", {"actor": "用户", "phase": "concluded"}, self.owner)[0], 200)
+        self.assertEqual(self.request(self.path + "/limits", {"actor": "用户", "action": "extend", "rounds": 1}, self.owner)[0], 400)
+        status, room = self.request(self.path + "/limits", {"actor": "用户", "action": "reopen", "max_rounds": 2, "max_minutes": 30}, self.owner)
+        self.assertEqual(status, 200, room)
+        limits = room["limits"]
+        self.assertEqual((room["phase"], limits["max_rounds"], limits["max_minutes"], limits["segment_rounds"], limits["reached"]),
+                         ("paused", 2, 30, 0, False))
+        self.assertEqual(room["message_count"], 1)
+
     def test_summary_replaces_old_execution_and_does_not_fake_conclusion(self):
         """Round exhaustion hands a bounded closing task to the actual host."""
         self.limited_room(max_rounds=1, max_minutes=60, on_limit="summarize", summary_minutes=2)
@@ -219,7 +278,7 @@ class RuntimeTests(unittest.TestCase):
         token = self.enter(self.events()[-1])
         revision = room["runtime"]["revision"]
         self.assertEqual(self.request(self.path + "/limits", {"actor": "用户"}, self.owner)[1]["runtime"]["revision"], revision)
-        self.assertEqual(self.request(self.path + "/topic", {"actor": "Codex", "phase": "concluded"}, token)[0], 200)
+        self.assertEqual(self.conclude_as_host(token), 200)
 
     def test_forced_close_hands_summary_to_host_before_limits(self):
         """A user can end early; the expert is cancelled and the host gets the closing reserve."""
@@ -517,23 +576,58 @@ class RuntimeTests(unittest.TestCase):
         self.answer("Claude", created["turn"]["id"], self.enter(self.events()[-1]), "redo-answer")
         members = {member["name"]: member for member in self.request(self.path)[1]["members"]}
         redo = self.path + f"/members/{members['Claude']['id']}"
-        self.assertEqual(self.request(redo, {"action": "redo"}, self.owner)[0], 400, "redo needs a paused discussion")
+        latest = lambda: self.request(self.path)[1]["latest_id"]
+        self.assertEqual(self.request(redo, {"action": "redo", "latest_id": latest()}, self.owner)[0], 400, "redo needs a paused discussion")
         self.set_phase("paused")
         room = self.request(self.path)[1]
         self.assertEqual(room["rounds"][-1]["speakers"], ["Claude"])
-        status, voided = self.request(redo, {"action": "redo"}, self.owner)
+        self.assertEqual(self.request(redo, {"action": "redo"}, self.owner)[0], 400, "redo needs the latest id the page saw")
+        self.assertEqual(self.request(redo, {"action": "redo", "latest_id": latest() - 1}, self.owner)[0], 409, "a stale page cannot void")
+        status, voided = self.request(redo, {"action": "redo", "latest_id": latest()}, self.owner)
         self.assertEqual(status, 200, voided)
         room = self.request(self.path)[1]
         self.assertEqual(room["rounds"], [])
         self.assertEqual(self.request(self.path + f"/messages?author=Claude")[1]["messages"], [])
-        self.assertEqual(self.request(redo, {"action": "redo"}, self.owner)[0], 404, "nothing left to void")
+        self.assertEqual(self.request(redo, {"action": "redo", "latest_id": latest()}, self.owner)[0], 404, "nothing left to void")
+
+    def conclude_as_host(self, token):
+        """The host saves a state covering the latest opinion, reads the conclusion state, then concludes against it."""
+        latest = self.request(self.path)[1]["latest_id"]
+        self.request(self.path + "/state", {"actor": "Codex", "text": "结论", "until": latest}, token)
+        revision = self.request(self.path + "/conclusion")[1]["revision"]
+        return self.request(self.path + "/topic", {"actor": "Codex", "phase": "concluded", "conclusion": revision}, token)[0]
+
+    def test_host_conclusion_needs_the_latest_conclusion_state_and_nothing_blocking(self):
+        """A host cannot conclude without the revision or over a stale one, and concludes once nothing blocks."""
+        self.limited_room(on_limit="summarize")
+        self.start()
+        token = self.enter(self.events()[0])
+        topic = lambda extra: self.request(self.path + "/topic", {"actor": "Codex", "phase": "concluded", **extra}, token)
+        self.assertEqual(topic({})[0], 400)
+        self.assertEqual(topic({"conclusion": "stale"})[0], 409)
+        view = self.request(self.path + "/conclusion")[1]
+        self.assertTrue(view["ready"], view)
+        self.assertEqual(self.conclude_as_host(token), 200)
+
+    def test_state_cutoff_never_moves_backwards(self):
+        """A later state cannot claim an earlier cutoff than the one already saved."""
+        self.start()
+        token = self.enter(self.events()[0])
+        latest = self.request(self.path)[1]["latest_id"]
+        self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "新", "until": latest}, token)[0], 200)
+        status, refused = self.request(self.path + "/state", {"actor": "Codex", "text": "旧", "until": latest - 1}, token)
+        self.assertEqual(status, 400, refused)
+
+    def roster_revision(self):
+        """The host asks for the latest expert state before arranging a round."""
+        return self.request(self.path + "/turns/roster")[1]["revision"]
 
     def plan_round(self, submission_id="round-plan-1"):
         """Let the host arrange Claude then Gemini in one execution."""
         self.start()
         host_token = self.enter(self.events()[0])
         status, created = self.request(self.path + "/turns", {"actor": "Codex", "submission_id": submission_id,
-            "turns": [{"expert": "Claude", "question": "先答"}, {"expert": "Gemini", "question": "再答"}]}, host_token)
+            "roster": self.roster_revision(), "turns": [{"expert": "Claude", "question": "先答"}, {"expert": "Gemini", "question": "再答"}]}, host_token)
         self.assertEqual(status, 201, created)
         return created, host_token
 
@@ -589,7 +683,7 @@ class RuntimeTests(unittest.TestCase):
         self.take_floor("Codex", host_token)
         time.sleep(1.1)  # plans are grouped by creation second, as real experts always take longer than this
         status, plan = self.request(self.path + "/turns", {"actor": "Codex", "submission_id": "arrangement-next",
-            "turns": [{"expert": "Gemini", "question": "补充"}, {"expert": "Claude", "question": "回应"}]}, host_token)
+            "roster": self.roster_revision(), "turns": [{"expert": "Gemini", "question": "补充"}, {"expert": "Claude", "question": "回应"}]}, host_token)
         self.assertEqual(status, 201, plan)
         arrangements = self.request(self.path)[1]["host_arrangements"]
         self.assertEqual([[(turn["expert"], turn["question"]) for turn in item["turns"]] for item in arrangements], [[("Gemini", "补充"), ("Claude", "回应")]])
@@ -601,7 +695,7 @@ class RuntimeTests(unittest.TestCase):
         host_token = self.enter(self.events()[0])
         names = ["Claude", "Gemini", "Claude", "Gemini"]
         status, created = self.request(self.path + "/turns", {"actor": "Codex", "submission_id": "invite-slot-plan",
-            "turns": [{"expert": name, "question": f"第 {index} 句"} for index, name in enumerate(names)]}, host_token)
+            "roster": self.roster_revision(), "turns": [{"expert": name, "question": f"第 {index} 句"} for index, name in enumerate(names)]}, host_token)
         self.assertEqual(status, 201, created)
         payload = {"name": "DeepSeek", "token": self.member_tokens["DeepSeek"], "access": "runner", "adapter": "api"}
         status, room = self.request(self.path + "/members", payload, self.owner)
@@ -704,6 +798,25 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.request(self.path + "/turns/continue", {"actor": "Codex"}, host)[0], 200)
         self.assertEqual(self.request(self.path)[1]["current_turn"]["expert"], "Gemini")
 
+    def test_round_plan_must_schedule_every_expert_who_has_not_spoken(self):
+        """A multi-turn plan that leaves out a present expert is refused with the name; a single arrangement is not."""
+        self.start()
+        self.assertEqual(self.request(self.path + "/members", {"name": "Qwen", "token": self.member_tokens["Qwen"],
+            "access": "manual", "adapter": ""}, self.owner)[0], 200)
+        host = self.enter(self.events()[0])
+        turns = [{"expert": "Claude", "question": "先答"}, {"expert": "Gemini", "question": "再答"}]
+        status, refused = self.request(self.path + "/turns", {"actor": "Codex", "submission_id": "plan-missing", "roster": self.roster_revision(), "turns": turns}, host)
+        self.assertEqual(status, 400)
+        self.assertIn("Qwen", refused["error"])
+        self.assertEqual(self.request(self.path + "/turns", {"actor": "Codex", "submission_id": "plan-no-roster", "turns": turns}, host)[0], 400)
+        stale = self.request(self.path + "/turns", {"actor": "Codex", "submission_id": "plan-stale", "roster": "stale", "turns": turns}, host)
+        self.assertEqual(stale[0], 409, stale)
+        roster = self.request(self.path + "/turns/roster")[1]
+        self.assertEqual(roster["waiting"], ["Claude", "Gemini", "Qwen"])
+        status, created = self.request(self.path + "/turns", {"actor": "Codex", "submission_id": "plan-complete",
+            "roster": self.roster_revision(), "turns": [*turns, {"expert": "Qwen", "question": "补上"}]}, host)
+        self.assertEqual(status, 201, created)
+
     def test_skip_manual_expert_returns_to_host_and_continues_the_queue(self):
         """Skipping revokes the current manual answer without pausing or discarding the remaining plan."""
         self.start()
@@ -711,14 +824,14 @@ class RuntimeTests(unittest.TestCase):
             "access": "manual", "adapter": ""}, self.owner)[0], 200)
         host = self.enter(self.events()[0])
         status, created = self.request(self.path + "/turns", {"actor": "Codex", "submission_id": "skip-manual-plan",
-            "turns": [{"expert": "Qwen", "question": "手动发言"}, {"expert": "Gemini", "question": "下一位"}]}, host)
+            "roster": self.roster_revision(), "turns": [{"expert": "Qwen", "question": "手动发言"}, {"expert": "Gemini", "question": "下一位"}, {"expert": "Claude", "question": "再下一位"}]}, host)
         self.assertEqual(status, 201, created)
         turn_id = created["turn"]["id"]
         self.take_floor("Qwen", self.member_tokens["Qwen"])
         self.assertEqual(self.request(self.path + f"/turns/{turn_id}", {"actor": "用户", "status": "cancelled"})[0], 200)
         room = self.request(self.path)[1]
         self.assertEqual((room["current_turn"]["status"], room["runtime"]["status"]), ("cancelled", "running"))
-        self.assertEqual([item["expert"] for item in room["queued_turns"]], ["Gemini"])
+        self.assertEqual([item["expert"] for item in room["queued_turns"]], ["Gemini", "Claude"])
         self.assertEqual(self.events()[-2]["status"], "cancelled")
         self.assertEqual((self.events()[-1]["role"], self.events()[-1]["status"]), ("host", "pending"))
         late = self.request(self.path + "/messages", {"author": "Qwen", "source": "cli", "kind": "opinion",
@@ -811,7 +924,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.request(self.path + "/messages", {"author": "用户", "text": "主持执行中的留言",
             "submission_id": "late-user-note"})[0], 201)
         status, created = self.request(self.path + "/turns", {"actor": "Codex", "submission_id": "late-plan",
-            "turns": [{"expert": "Claude", "question": "先答"}, {"expert": "Gemini", "question": "再答"}]}, host_token)
+            "roster": self.roster_revision(), "turns": [{"expert": "Claude", "question": "先答"}, {"expert": "Gemini", "question": "再答"}]}, host_token)
         self.assertEqual(status, 201, created)
         self.assertGreater(self.request(self.path)[1]["held_since"], 0)
         self.answer("Claude", created["turn"]["id"], self.enter(self.events()[-1]), "late-answer")
@@ -975,9 +1088,10 @@ class RuntimeTests(unittest.TestCase):
 
     def test_conclusion_completes_host_and_rejects_old_capability(self):
         """A host's final action completes its execution instead of cancelling it."""
+        self.limited_room(on_limit="summarize")
         self.start()
         token = self.enter(self.events()[0])
-        self.assertEqual(self.request(self.path + "/topic", {"actor": "Codex", "phase": "concluded"}, token)[0], 200)
+        self.assertEqual(self.conclude_as_host(token), 200)
         self.assertEqual(self.events()[0]["status"], "completed")
         self.assertEqual(self.events()[0]["result"], "concluded")
         self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "迟到"}, token)[0], 403)
@@ -1061,7 +1175,7 @@ class RuntimeTests(unittest.TestCase):
                     resumed = self.request(self.path + "/runtime", {"action": "start", "revision": paused["revision"], "deadline": 0}, self.owner)[1]
                     self.assertEqual(resumed["deadline"], deadline)
                     token = self.enter(self.events()[-1])
-                    self.assertEqual(self.request(self.path + "/topic", {"actor": "Codex", "phase": "concluded"}, token)[0], 200)
+                    self.assertEqual(self.conclude_as_host(token), 200)
 
     def test_zero_deadline_cannot_bypass_configured_duration(self):
         """Zero inherits a configured topic cutoff; invalid deadlines still fail."""

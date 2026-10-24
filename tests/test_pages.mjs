@@ -553,7 +553,9 @@ for (const on_limit of ['pause', 'summarize']) {
       const reserved = await f.request(`/${id}/events/${event.id}`, { action: 'reserve', execution_token: token });
       assert.equal(reserved.status, 200, JSON.stringify({ result: reserved.body, event, runtime: resumed.body }));
       assert.equal((await f.request(`/${id}/events/${event.id}`, { action: 'enter', session_id: 'host' }, token)).status, 200);
-      assert.equal((await f.request(`/${id}/topic`, { actor: 'Codex', phase: 'concluded' }, token)).status, 200);
+      await f.request(`/${id}/state`, { actor: 'Codex', text: '结论', until: (await f.request(`/${id}`)).body.latest_id }, token);
+      const conclusion = (await f.request(`/${id}/conclusion`)).body.revision;
+      assert.equal((await f.request(`/${id}/topic`, { actor: 'Codex', phase: 'concluded', conclusion }, token)).status, 200);
     }
   });
 }
@@ -562,7 +564,7 @@ test('Worker invitations append automatic and manual experts while preserving th
   const f = await worker_fixture(t);
   const id = (await f.request('', { title: '追加本轮', host: 'Codex', phase: 'initial', experts: { Codex: 'cli', Claude: 'cli', Gemini: 'cli' } })).body.id;
   await f.request(`/${id}/runtime`, { action: 'start', revision: 0, deadline: 0 });
-  const plan = await f.request(`/${id}/turns`, { actor: '用户', submission_id: 'invite-tail-plan',
+  const plan = await f.request(`/${id}/turns`, { actor: '用户', submission_id: 'invite-tail-plan', roster: (await f.request(`/${id}/turns/roster`)).body.revision,
     turns: [{ expert: 'Claude', question: '先答' }, { expert: 'Gemini', question: '再答' }] });
   assert.equal(plan.status, 201, JSON.stringify(plan.body));
   await f.request(`/${id}/messages`, { author: '用户', text: '补充材料', submission_id: 'invite-hold' });
@@ -592,7 +594,7 @@ test('Worker invitation completes the current round before a repeat pass, like P
   const id = (await f.request('', { title: '补齐本轮', host: 'Codex', phase: 'initial', experts: { Codex: 'cli', Claude: 'cli', Gemini: 'cli' } })).body.id;
   await f.request(`/${id}/runtime`, { action: 'start', revision: 0, deadline: 0 });
   const names = ['Claude', 'Gemini', 'Claude', 'Gemini'];
-  const plan = await f.request(`/${id}/turns`, { actor: '用户', submission_id: 'invite-slot-plan', turns: names.map((expert, index) => ({ expert, question: `第 ${index} 句` })) });
+  const plan = await f.request(`/${id}/turns`, { actor: '用户', submission_id: 'invite-slot-plan', roster: (await f.request(`/${id}/turns/roster`)).body.revision, turns: names.map((expert, index) => ({ expert, question: `第 ${index} 句` })) });
   assert.equal(plan.status, 201, JSON.stringify(plan.body));
   const joined = await f.request(`/${id}/members`, { name: 'DeepSeek', access: 'runner', adapter: 'api', token: crypto.randomUUID() });
   assert.equal(joined.status, 200, JSON.stringify(joined.body));
@@ -628,8 +630,11 @@ test('Worker running discussions admit and release experts without pausing, like
   f.sql.prepare("INSERT INTO message_details (message_id,kind,submitted_by) VALUES (?,?,?)").run(saved.lastInsertRowid, 'opinion', 'Claude');
   f.sql.prepare("UPDATE messages SET author='Claude' WHERE id=?").run(saved.lastInsertRowid);
   set_phase('paused');
-  assert.equal((await f.request(`/${id}/members/${members.Codex.id}`, { action: 'redo' })).status, 404, 'no opinion yet');
-  assert.equal((await f.request(`/${id}/members/${members.Claude.id}`, { action: 'redo' })).status, 200);
+  const latest_id = () => f.sql.prepare('SELECT MAX(id) AS id FROM messages WHERE room_id=?').get(id).id;
+  assert.equal((await f.request(`/${id}/members/${members.Codex.id}`, { action: 'redo', latest_id: latest_id() })).status, 404, 'no opinion yet');
+  assert.equal((await f.request(`/${id}/members/${members.Claude.id}`, { action: 'redo' })).status, 400, 'redo needs the latest id the page saw');
+  assert.equal((await f.request(`/${id}/members/${members.Claude.id}`, { action: 'redo', latest_id: latest_id() - 1 })).status, 409, 'a stale page cannot void');
+  assert.equal((await f.request(`/${id}/members/${members.Claude.id}`, { action: 'redo', latest_id: latest_id() })).status, 200);
   assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM messages WHERE id=?').get(saved.lastInsertRowid).count, 0);
 });
 
@@ -750,6 +755,33 @@ test('Worker forces an early host summary and reports per-participant executions
   assert.ok(closed.body.runtime.deadline > Date.now() / 1000);
   await f.request(`/${id}/runtime`, { action: 'pause', revision: closed.body.runtime.revision });
   assert.equal((await f.request(`/${id}/limits`, { actor: '用户', force: true })).status, 400);
+});
+
+test('Worker pauses on declared completion, lets the user extend or summarize, and reopens a concluded room', async t => {
+  const f = await worker_fixture(t);
+  const id = (await f.request('', { title: '到限暂停', host: 'Codex', experts: { Codex: 'cli' }, limits: { max_rounds: 2 } })).body.id;
+  assert.equal((await f.request(`/${id}/runtime`, { action: 'start', revision: 0, deadline: 0 })).status, 200);
+  const event = (await f.request(`/${id}/events`)).body.events.at(-1), token = 'declared-done-token'.repeat(3);
+  assert.equal((await f.request(`/${id}/events/${event.id}`, { action: 'reserve', execution_token: token })).status, 200);
+  assert.equal((await f.request(`/${id}/events/${event.id}`, { action: 'enter', session_id: 'host' }, token)).status, 200);
+  const host_conclude = await f.request(`/${id}/topic`, { actor: 'Codex', phase: 'concluded' }, token);
+  assert.equal(host_conclude.status, 400, JSON.stringify(host_conclude.body));
+  assert.equal((await f.request(`/${id}/limits`, { actor: 'Codex', action: 'done' }, token)).status, 400, 'done needs the conclusion revision');
+  const conclusion = (await f.request(`/${id}/conclusion`)).body.revision;
+  const done = await f.request(`/${id}/limits`, { actor: 'Codex', action: 'done', conclusion }, token);
+  assert.deepEqual([done.status, done.body.phase, done.body.limits.stop_reason], [200, 'paused', 'goal_done']);
+  const extended = await f.request(`/${id}/limits`, { actor: '用户', action: 'extend', rounds: 3 });
+  assert.equal(extended.status, 200, JSON.stringify(extended.body));
+  const { max_rounds, extra_rounds, round_cap, segment_rounds, stop_reason } = extended.body.limits;
+  assert.deepEqual([max_rounds, extra_rounds, round_cap, segment_rounds, stop_reason], [2, 3, 3, 0, '']);
+  const summary = await f.request(`/${id}/limits`, { actor: '用户', action: 'summarize' });
+  assert.deepEqual([summary.status, summary.body.phase, summary.body.limits.stop_reason], [200, 'paused', 'user_summary']);
+  assert.equal((await f.request(`/${id}/limits`, { actor: '用户', action: 'reopen', max_rounds: 1 })).status, 400);
+  assert.equal((await f.request(`/${id}/topic`, { actor: '用户', phase: 'concluded' })).status, 200);
+  const reopened = await f.request(`/${id}/limits`, { actor: '用户', action: 'reopen', max_rounds: 2, max_minutes: 30 });
+  assert.equal(reopened.status, 200, JSON.stringify(reopened.body));
+  assert.deepEqual([reopened.body.phase, reopened.body.limits.max_rounds, reopened.body.limits.max_minutes, reopened.body.limits.extra_rounds, reopened.body.limits.reached],
+    ['paused', 2, 30, 0, false]);
 });
 
 test('Worker requires the owner key for user controls in every room mode', async t => {

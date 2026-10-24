@@ -897,7 +897,7 @@ def discussion_member_action(connection, room_id, member_id, token, payload):
     host, experts, phase = discussion_roster(connection, room_id)
     action = payload.get("action")
     if action == "redo":
-        void_latest_opinion(connection, room_id, member["name"], phase)
+        void_latest_opinion(connection, room_id, member["name"], phase, payload.get("latest_id"))
         return
     if action in ("away", "remove"):
         if member["name"] == host:
@@ -946,10 +946,17 @@ def adopt_manual_member(connection, room_id, member, payload):
     connection.execute("DELETE FROM member_sessions WHERE member_id=?", (member["id"],))
 
 
-def void_latest_opinion(connection, room_id, name, phase):
-    """Delete an expert's latest opinion while paused; its assignment is cancelled and the round no longer counts it."""
+def void_latest_opinion(connection, room_id, name, phase, seen_latest_id):
+    """Delete an expert's latest opinion while paused; its assignment is cancelled and the round no longer counts it.
+
+    The caller states the latest message id it saw, so a stale page cannot void an opinion that is no longer the one on screen.
+    """
     if phase != "paused":
         raise ValueError("请先暂停讨论，再作废专家的发言")
+    if seen_latest_id is None:
+        raise ValueError("作废发言须带上所见的最新消息编号 latest_id")
+    if seen_latest_id != connection.execute("SELECT COALESCE(MAX(id),0) FROM messages WHERE room_id=?", (room_id,)).fetchone()[0]:
+        raise FileExistsError("房间已有新内容，请刷新后再作废")
     row = connection.execute("""SELECT messages.id,details.turn_id FROM messages JOIN message_details AS details ON details.message_id=messages.id
         WHERE messages.room_id=? AND messages.author=? AND details.kind='opinion' ORDER BY messages.id DESC LIMIT 1""",
                              (room_id, name)).fetchone()

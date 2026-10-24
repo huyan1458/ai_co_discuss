@@ -609,6 +609,15 @@ CREATE TABLE IF NOT EXISTS discussion_options (
     room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
     named_followup INTEGER NOT NULL DEFAULT 0 CHECK(named_followup IN (0,1))
 );
+-- Program-controlled round budget: rounds are expert opinions per active expert counted from `base`, so a roster that skips
+-- someone cannot stall the limit. `cap` is the current segment's round limit (0 = discussion_limits.max_rounds); `extra` is the
+-- total rounds the user appended. A room without a row predates the budget and keeps the per-roster round count.
+CREATE TABLE IF NOT EXISTS round_budgets (
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+    base INTEGER NOT NULL DEFAULT 0,
+    cap INTEGER NOT NULL DEFAULT 0,
+    extra INTEGER NOT NULL DEFAULT 0
+);
 -- Visible record of each smart-scheduling decision in a discussion; it is not a message and moves no round or floor.
 CREATE TABLE IF NOT EXISTS scheduler_decisions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

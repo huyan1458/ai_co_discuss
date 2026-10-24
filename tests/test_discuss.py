@@ -288,17 +288,21 @@ class CliTests(unittest.TestCase):
         """A plan file queues later experts; an answer relays without returning to the host."""
         if self.cli("floor", "view", self.room)["holder"] is None:
             self.take_floor()
-        plan = json.dumps([{"expert": "Codex", "question": "先答"}, {"expert": "Gemini", "question": "再答"}], ensure_ascii=False)
-        created = self.cli("turn", "create", self.room, "--plan-file", "-", "--as", "Codex",
+        plan = json.dumps([{"expert": name, "question": "先答" if name == "Codex" else "再答"}
+                           for name in ("Codex", "Gemini", "Claude", "DeepSeek", "Qwen", "Grok")], ensure_ascii=False)
+        roster = self.cli("turn", "roster", self.room)
+        self.assertEqual(sorted(roster["waiting"]), ["Claude", "DeepSeek", "Gemini", "Grok", "Qwen"])
+        created = self.cli("turn", "create", self.room, "--plan-file", "-", "--as", "Codex", "--roster", roster["revision"],
                            "--submission-id", str(uuid.uuid4()), stdin=plan)
         current = self.cli("turn", "current", self.room)
-        self.assertEqual((current["current_turn"]["expert"], [item["expert"] for item in current["queued_turns"]]), ("Codex", ["Gemini"]))
+        self.assertEqual((current["current_turn"]["expert"], [item["expert"] for item in current["queued_turns"]]), ("Codex", ["Gemini", "Claude", "DeepSeek", "Qwen", "Grok"]))
         self.assertEqual(self.rejected(["turn", "continue", self.room, "--as", "Codex"], 1)["http_status"], 409)
         self.take_floor("Codex")
         self.cli("message", "post", self.room, "--body", "回答", "--as", "Codex", "--turn", created["turn"]["id"],
                  "--summary", "摘要", "--submission-id", str(uuid.uuid4()))
         current = self.cli("turn", "current", self.room)
-        self.assertEqual((current["current_turn"]["expert"], current["queued_turns"], current["floor"]["next_speaker"]), ("Gemini", [], "Gemini"))
+        self.assertEqual((current["current_turn"]["expert"], [item["expert"] for item in current["queued_turns"]], current["floor"]["next_speaker"]),
+                         ("Gemini", ["Claude", "DeepSeek", "Qwen", "Grok"], "Gemini"))
         self.rejected(["turn", "create", self.room, "--plan-file", "-", "--expert", "Codex", "--as", "Codex",
                        "--submission-id", str(uuid.uuid4())])
 
@@ -345,7 +349,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual((current["status"], current["answer_id"]), ("answered", message["id"]))
         self.cli("state", "set", self.room, "--body", f"结论依据 #{message['id']}",
                  "--until", message["id"], "--as", "Codex")
-        self.cli("room", "update", self.room, "--phase", "concluded", "--as", "Codex")
+        self.cli("room", "update", self.room, "--phase", "concluded", "--as", "用户")
         self.assertEqual(self.cli("room", "view", self.room)["phase"], "concluded")
 
     def test_resume_recovers_completed_action_and_preserves_citations(self):
@@ -366,7 +370,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self.cli("message", "view", self.room, answer["id"])["text"], original)
         final_state = f"已处理 #{answer['id']}；试用与上线有别。43% 未核验；下一步待验证。任务清理待确认。"
         self.cli("state", "set", self.room, "--body", final_state, "--until", answer["id"], "--as", "Codex")
-        self.cli("room", "update", self.room, "--phase", "concluded", "--as", "Codex")
+        self.cli("room", "update", self.room, "--phase", "concluded", "--as", "用户")
         self.take_floor()
         receipt = self.cli("message", "post", self.room, "--kind", "receipt", "--body", "run=recover；task-1 已停止",
                            "--as", "Codex", "--submission-id", "recover-stop")["message"]
@@ -423,7 +427,7 @@ class CliTests(unittest.TestCase):
         self.rejected(["room", "update", self.room, "--phase", "concluded", "--as", "Codex"], 1)
         self.cli("turn", "cancel", self.room, turn["id"], "--as", "用户")
         self.assertEqual(self.cli("turn", "list", self.room)["turns"][0]["status"], "cancelled")
-        self.cli("room", "update", self.room, "--phase", "concluded", "--as", "Codex")
+        self.cli("room", "update", self.room, "--phase", "concluded", "--as", "用户")
 
     def test_forwarded_author_and_online_write_boundary(self):
         """Forwarding preserves the expert; online experts cannot submit as CLI selves."""
