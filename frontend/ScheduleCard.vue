@@ -8,13 +8,15 @@ defineProps({
   label: { type: String, required: true },
   toggleLabel: { type: String, default: "展开或收起详情" },
   skipped: Boolean,
+  /** Neutral look without implying a skipped decision, for the host's own plans. */
+  plain: Boolean,
   expandable: { type: Boolean, default: true },
 });
 const open = ref(false);
 </script>
 
 <template>
-  <div class="channel-schedule-card" :class="{ 'is-skipped': skipped, 'is-open': open }" :title="title" :aria-label="label">
+  <div class="channel-schedule-card" :class="{ 'is-skipped': skipped || plain, 'is-open': open }" :title="title" :aria-label="label">
     <UIcon :name="icon" class="channel-schedule-icon" />
     <span class="channel-schedule-text"><slot name="text" /></span>
     <button v-if="expandable" type="button" class="channel-schedule-toggle" :aria-expanded="open" :aria-label="toggleLabel" @click="open = !open"><UIcon name="i-lucide-chevron-down" /></button>

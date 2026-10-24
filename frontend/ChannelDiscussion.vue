@@ -332,6 +332,15 @@ function format_elapsed(seconds) {
   return `${Math.floor(seconds / 3600)}小时${Math.floor((seconds % 3600) / 60)}分${String(seconds % 60).padStart(2, "0")}秒`;
 }
 const pending_duration = computed(() => format_elapsed(pending_seconds.value));
+/** A scheduler call's milliseconds: sub-second calls stay in milliseconds, longer ones use the shared format. */
+function format_ms(ms) {
+  return ms < 1000 ? `${ms}毫秒` : ms < 10_000 ? `${(ms / 1000).toFixed(1)}秒` : format_elapsed(Math.round(ms / 1000));
+}
+/** The host's arrangement time: from the answer it followed to the moment the plan was saved. */
+function arrangement_seconds(plan, anchor) {
+  const seconds = Math.round((new Date(plan.created_at) - new Date(anchor.created_at)) / 1000);
+  return Number.isFinite(seconds) ? Math.max(0, seconds) : null;
+}
 /** A reply's recorded time: the discussion turn's timing, or in a free room the execution that delivered it. */
 function message_elapsed(message) {
   if (message.elapsed_seconds != null) return message.elapsed_seconds;
@@ -1017,11 +1026,11 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
         </UChatMessage>
         <!-- A decision stands between the card that ended the round and the next speaker. -->
         <ScheduleCard v-for="decision in scheduler_decisions.get(message.id) || []" :key="`decision-${decision.id}`" icon="i-lucide-zap" :skipped="!decision.applied" :title="decision.title" label="智能调度决策" toggle-label="展开或收起判断详情" :expandable="Boolean(decision.detail?.length)">
-          <template #text>智能调度：{{ decision.label }}<small v-if="decision.confidence !== null">置信度 {{ Number(decision.confidence).toFixed(2) }}</small></template>
+          <template #text>智能调度：{{ decision.label }}<small v-if="decision.confidence !== null">置信度 {{ Number(decision.confidence).toFixed(2) }}</small><small v-if="decision.detail?.[0]?.duration_ms != null">耗时 {{ format_ms(decision.detail[0].duration_ms) }}</small></template>
           <p v-for="(item, index) in decision.detail" :key="index"><span>问：{{ item.question }}（{{ item.choices.map(option_name).join(" / ") }}）</span><span>答：{{ item.choice ? option_name(item.choice) : "无" }}<small v-if="item.probabilities[item.choice] !== undefined">概率 {{ Number(item.probabilities[item.choice]).toFixed(2) }}</small></span></p>
         </ScheduleCard>
-        <ScheduleCard v-for="plan in host_arrangements.get(message.id) || []" :key="`arrangement-${plan.id}`" icon="i-lucide-list-ordered" :title="`${bridge.display_name(room.host)} 创建的发言安排`" label="主持人安排" toggle-label="展开或收起各专家的任务">
-          <template #text>主持人安排：{{ plan.label }}</template>
+        <ScheduleCard v-for="plan in host_arrangements.get(message.id) || []" :key="`arrangement-${plan.id}`" icon="i-lucide-list-ordered" plain :title="`${bridge.display_name(room.host)} 创建的发言安排`" label="主持人安排" toggle-label="展开或收起各专家的任务">
+          <template #text>主持人安排：{{ plan.label }}<small>耗时 {{ format_elapsed(arrangement_seconds(plan, message)) }}</small></template>
           <p v-for="turn in plan.turns" :key="`${plan.id}-${turn.expert}-${turn.question}`"><span>{{ bridge.display_name(turn.expert) }}：{{ turn.question }}</span></p>
         </ScheduleCard>
         </template>

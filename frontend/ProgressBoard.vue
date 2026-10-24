@@ -6,6 +6,17 @@ import ExpertCard from "./ExpertCard.vue";
 const props = defineProps({ docked: { type: Boolean, default: false } });
 const { view, bridge, act, pending } = inject("discussion");
 const ending = ref(false);
+const COPY_FEEDBACK_MS = 2000;
+const launch_copied = ref("");
+let launch_copy_timer;
+/** Show "已复制" on the member's copy button only after the clipboard write succeeds. */
+async function copy_launch(name) {
+  clearTimeout(launch_copy_timer);
+  launch_copied.value = "";
+  if (!await act("copy_member_launch", name)) return;
+  launch_copied.value = name;
+  launch_copy_timer = setTimeout(() => { launch_copied.value = ""; }, COPY_FEEDBACK_MS);
+}
 const focus_expanded = ref(false);
 const connection = ref(null);
 const connection_ready = ref(false);
@@ -120,9 +131,13 @@ const meters = computed(() => {
   const value = limits.value;
   const used = Math.floor((value.elapsed_seconds || 0) / 60);
   if (settled.value) return [];
+  // Show the round being discussed; once the limit is reached, show the limit.
+  const last_round = room.value.rounds?.at(-1);
+  const current = last_round?.completed === false ? last_round.number : (value.completed_rounds || 0) + 1;
+  const round = value.max_rounds ? Math.min(current, value.max_rounds) : current;
   return [
-    { label: "轮次", text: value.max_rounds ? `${value.completed_rounds || 0} / ${value.max_rounds}` : `${value.completed_rounds || 0} 轮`,
-      ratio: value.max_rounds ? (value.completed_rounds || 0) / value.max_rounds : null },
+    { label: "轮次", text: value.max_rounds ? `${round} / ${value.max_rounds}` : `${round} 轮`,
+      ratio: value.max_rounds ? round / value.max_rounds : null },
     { label: "用时", text: value.max_minutes ? `${used} / ${value.max_minutes} 分钟` : `${used} 分钟`,
       ratio: value.max_minutes ? used / value.max_minutes : null },
   ].filter((meter) => meter.label !== "用时" || value.started_at);
@@ -299,7 +314,7 @@ async function finish(action) {
             <div v-if="!settled" class="pb-member-status" :class="`is-${member.tone}`"><span class="pb-dot"></span>{{ member.text }}<small v-if="member.failures"> · 失败 {{ member.failures }} 次</small></div>
             <div v-if="member.manual && !settled" class="pb-member-manual">
               <span v-if="!record(member.name)?.registered_at && !member.is_host">需在它的会话中注册，才算到场</span>
-              <button v-if="can_control" type="button" class="pb-link" @click="act('copy_member_launch', member.name)"><UIcon name="i-lucide-rocket" />复制启动指令</button>
+              <button v-if="can_control" type="button" class="pb-link" @click="copy_launch(member.name)"><UIcon :name="launch_copied === member.name ? 'i-lucide-check' : 'i-lucide-rocket'" />{{ launch_copied === member.name ? '已复制' : '复制启动指令' }}</button>
             </div>
           </div>
           <UDropdownMenu v-if="member_menu(member).length" :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="`${member.name} 的更多操作`" /></UDropdownMenu>
@@ -373,7 +388,7 @@ async function finish(action) {
               <UAvatar :src="bridge.identities[bridge.platform_of(name)]?.icon" :text="bridge.identities[bridge.platform_of(name)]?.initials" :alt="name" size="xs" class="channel-avatar" :class="bridge.identities[bridge.platform_of(name)]?.style" />
               <strong>{{ bridge.display_name(name) }}</strong>
               <small :class="{ 'is-registered': record(name)?.registered_at }">{{ record(name)?.registered_at ? '已注册' : '待注册' }}</small>
-              <UButton icon="i-lucide-rocket" label="复制启动指令" size="xs" color="neutral" variant="outline" :loading="pending === 'copy_member_launch'" :disabled="Boolean(pending)" @click="act('copy_member_launch', name)" />
+              <UButton :icon="launch_copied === name ? 'i-lucide-check' : 'i-lucide-rocket'" :label="launch_copied === name ? '已复制' : '复制启动指令'" size="sm" :color="launch_copied === name ? 'success' : 'primary'" variant="soft" class="pb-launch-button" :loading="pending === 'copy_member_launch'" :disabled="Boolean(pending)" @click="copy_launch(name)" />
             </li>
           </ul>
           <p class="fine-print">指令含该成员的凭证，只交给对应的会话；关闭后仍可在参与者列表中复制。</p>
@@ -437,11 +452,11 @@ async function finish(action) {
 .pb-invite-pick .fine-print { margin: 0; }
 .pb-invite-lead { margin: 0; color: var(--ui-text-toned); font-size: 13px; }
 .pb-invite-launches { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
-.pb-invite-launches li { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--ui-border-muted); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); }
+.pb-invite-launches li { display: flex; align-items: center; gap: 8px; padding: 12px; border: 1px solid var(--ui-border-muted); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); }
 .pb-invite-launches strong { min-width: 0; overflow: hidden; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.pb-invite-launches small { color: var(--ui-warning, #e0a33a); font-size: 11px; }
-.pb-invite-launches small.is-registered { color: var(--ui-success, #3fb27f); }
-.pb-invite-launches li > button { margin-left: auto; }
+.pb-invite-launches small { padding: 1px 8px; border-radius: 999px; color: var(--ui-warning, #e0a33a); background: color-mix(in srgb, var(--ui-warning, #e0a33a) 14%, transparent); font-size: 11px; }
+.pb-invite-launches small.is-registered { color: var(--ui-success, #3fb27f); background: color-mix(in srgb, var(--ui-success, #3fb27f) 14%, transparent); }
+.pb-invite-launches li > .pb-launch-button { margin-left: auto; min-width: 112px; justify-content: center; }
 .pb-invite-launches .channel-avatar { flex-shrink: 0; width: 22px; height: 22px; font-size: 9px; }
 .pb-invite-mode { display: flex; align-items: center; gap: 12px; color: var(--ui-text-muted); font-size: 12px; }
 .pb-invite-options { display: flex; gap: 3px; padding: 3px; border-radius: 6px; background: var(--ui-bg-muted); }

@@ -363,7 +363,10 @@ export class DiscussionRunner {
     const experts = Object.keys(room.experts || {});
     // Only experts the runner can wake are offered to the decision model; manual ones wait for the host.
     const automatic = experts.filter(name => this.config.participants[name]);
-    const context = { title: room.title, goal: room.goal, user_request: room.user_request, context: page.messages, host: room.host };
+    const last_plan = room.host_arrangements?.at(-1);
+    const context = { title: room.title, goal: room.goal, user_request: room.user_request, context: page.messages, host: room.host,
+      brief: room.host_brief?.text, focus: room.focus,
+      arrangement: last_plan?.turns.map(turn => `${turn.expert}：${String(turn.question).slice(0, 120)}`).join('；') };
     if (room.held_since) {
       const pending = page.messages.filter(item => item.id >= room.held_since && item.author === '用户');
       // Topic edits and several messages at once need the host's judgement.
@@ -392,7 +395,7 @@ export class DiscussionRunner {
       // An expert the user just skipped is not picked again unless nobody else is left.
       const skipped = room.current_turn?.status === 'cancelled' ? room.current_turn.expert : null;
       const candidates = waiting.filter(name => name !== skipped);
-      return this.next_speaker_plan(room, context, candidates.length ? candidates : waiting, anchor);
+      return this.next_speaker_plan(room, { ...context, spoken: [...spoken] }, candidates.length ? candidates : waiting, anchor);
     }
     if (room.named_followup) return skip('round', '点名追问已开启，由主持人安排下一轮');
     const decision = await decide_round(this.config.api_home, this.config.scheduler,

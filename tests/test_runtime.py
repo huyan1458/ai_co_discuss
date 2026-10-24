@@ -195,6 +195,15 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(status, 200, room)
         self.assertEqual(room["phase"], "paused")
 
+    def test_host_cannot_conclude_at_pause_limit(self):
+        """A reached limit with on_limit=pause must pause, not be concluded by the host."""
+        self.limited_room(max_rounds=1)
+        self.complete_round()
+        token = self.member_tokens["Codex"]
+        status, _ = self.request(self.path + "/topic", {"actor": "Codex", "phase": "concluded"}, token)
+        self.assertEqual(status, 400)
+        self.assertEqual(self.request(self.path + "/limits", {"actor": "Codex"}, token)[1]["phase"], "paused")
+
     def test_summary_replaces_old_execution_and_does_not_fake_conclusion(self):
         """Round exhaustion hands a bounded closing task to the actual host."""
         self.limited_room(max_rounds=1, max_minutes=60, on_limit="summarize", summary_minutes=2)

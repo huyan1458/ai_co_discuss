@@ -78,11 +78,20 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.equal(certainty({ choice: 'a', confidence: 0.5, probabilities: {} }), 0.5);
   assert.equal((await decide_round(home, jev, discussion, round('continue', 0.6, 'Codex'))).label, '倾向继续下一轮，把握不足，交给主持人');
   // Mid-round, the next speaker comes from the unspoken candidates; unsure or host goes back to the host.
-  const speaker = (choice, confidence) => async () => ({ ok: true, json: async () => ({ answers: { speaker: { type: 'choice', choice, confidence, probabilities: {} } } }) });
+  const speaker = (choice, confidence, obligation = 0.9) => async () => ({ ok: true, json: async () => ({ answers: { speaker: { type: 'choice', choice, confidence, probabilities: {} }, obligation: { type: 'noul', noul: obligation } } }) });
   const midround = { title: '讨论', context: [], host: 'Claude', candidates: ['Codex', 'Gemini'] };
+  const asked = [];
+  await decide_next_speaker(home, jev, { ...midround, brief: '甲出上句', focus: '接龙', arrangement: 'Codex：出句', spoken: ['Claude'] }, async (url, init) => { asked.push(JSON.parse(init.body)); return speaker('Gemini', 0.9)(); });
+  assert.match(asked[0].state, /主持简报[^\n]*甲出上句/);
+  assert.match(asked[0].state, /本轮已发言：Claude；本轮尚未发言：Codex、Gemini/);
+  assert.match(asked[0].state, /主持人最近的安排：Codex：出句/);
+  assert.equal(typeof (await decide_next_speaker(home, jev, midround, speaker('Gemini', 0.9))).detail[0].duration_ms, 'number');
   assert.deepEqual(without_detail(await decide_next_speaker(home, jev, midround, speaker('Gemini', 0.9))), { action: 'next', expert: 'Gemini', confidence: 0.9, label: '本轮继续，请 Gemini 接着发言' });
   assert.equal((await decide_next_speaker(home, jev, midround, speaker('Gemini', 0.6))).action, 'host');
   assert.equal((await decide_next_speaker(home, jev, midround, speaker('__host__', 0.95))).action, 'host');
+  // Without an explicit obligation to speak, even a confident pick goes back to the host.
+  const idle = await decide_next_speaker(home, jev, midround, speaker('Gemini', 0.95, 0.3));
+  assert.deepEqual([idle.action, idle.label, idle.detail[1].choice], ['host', '没有明确该谁接着发言的依据，交给主持人安排', '否']);
 });
 
 test('host tasks carry scheduling suggestions only when there are some', async t => {

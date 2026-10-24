@@ -430,6 +430,10 @@ def update_topic(connection, room_id, payload):
     if turn and turn["status"] in ("pending", "notified"):
         if settings["phase"] == "concluded" or turn["expert"] not in settings["experts"]:
             raise ValueError("请先完成或取消当前发言安排")
+    limits = room["limits"]
+    if settings["phase"] == "concluded" and room["phase"] != "concluded" and payload.get("actor") != "用户" \
+            and limits["reached"] and not limits["closing"] and limits["on_limit"] == "pause":
+        raise ValueError("已到讨论上限且到限方式为暂停保留现场，请先执行 room limits --check，不得直接收束")
     running = connection.execute("SELECT 1 FROM discussion_runtime WHERE room_id=? AND status='running'", (room_id,)).fetchone()
     if running and settings["experts"] != room["experts"]:
         raise ValueError("讨论运行中请在进度看板邀请、暂离或移除专家")

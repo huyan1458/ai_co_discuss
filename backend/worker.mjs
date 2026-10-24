@@ -525,6 +525,11 @@ async function update_topic(database, room_id, payload) {
   if (turn && ["pending", "notified"].includes(turn.status) && (settings.phase === "concluded" || !settings.experts[turn.expert])) {
     throw new HttpError(400, "请先完成或取消当前发言安排");
   }
+  const limits = room.limits;
+  if (settings.phase === "concluded" && room.phase !== "concluded" && payload.actor !== "用户"
+    && limits.reached && !limits.closing && limits.on_limit === "pause") {
+    throw new HttpError(400, "已到讨论上限且到限方式为暂停保留现场，请先执行 room limits --check，不得直接收束");
+  }
   const changed = Object.keys({ ...settings.experts, ...room.experts }).some(name => settings.experts[name] !== room.experts[name]);
   if (changed && room.runtime?.status === "running") throw new HttpError(400, "讨论运行中请在进度看板邀请、暂离或移除专家");
   if (settings.save_limits) database = guarded_database(database,
