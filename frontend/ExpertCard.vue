@@ -15,8 +15,10 @@ const props = defineProps({
   hostable: Boolean,
   // True where the form picks a host, so the card states whether this one may host.
   hosting: Boolean,
+  // An existing conversation to resume; null where the form offers no such choice (the invite dialog does).
+  session: { type: String, default: null },
 });
-const emit = defineEmits(["remove", "mode", "host"]);
+const emit = defineEmits(["remove", "mode", "host", "session"]);
 const { view, bridge } = inject("discussion");
 // Feel.words("smooth, crisp"): 2.615 Hz reads as a deliberate turn; ζ .96 avoids bounce.
 // Unit mass: this is a button-controlled angular spring, with no drag-weight effect.
@@ -28,6 +30,8 @@ const card = ref(null), front_button = ref(null), back_button = ref(null);
 const back = ref(false), visible_back = ref(false);
 const profile = computed(() => view.value.launch.profiles[props.name] || {});
 const entry_items = computed(() => bridge.launch_clients[props.name] || []);
+// Manual start needs a local AI session; a platform reachable only through its API cannot offer it.
+const offered = computed(() => props.choices.filter((option) => option !== "manual" || entry_items.value.some((item) => item.value !== "api")));
 const automatic = computed(() => props.mode === "cli");
 // Short labels for the front control; the 启动 row spells out what each one means.
 const ACCESS_LABELS = { cli: "程序启动", manual: "手动启动", online: "网页" };
@@ -44,15 +48,17 @@ async function check_api() {
 }
 const entry_label = computed(() => entry_items.value.find((item) => item.value === profile.value.adapter)?.label || "待选择 App / CLI");
 const manual = computed(() => props.mode === "manual");
-// A manual card's back carries no settings, only what testing showed about taking over a window that is already open.
+// A manual card has nothing to configure, so the front states what testing showed about taking over a window that is already open.
 const MANUAL_NOTES = {
   Codex: "已实测：消息实时显示在已开窗口。",
   Gemini: "已实测：已开窗口需重启才显示后台发言。",
   Claude: "已实测：后台接管会分叉，原窗口看不到。",
 };
 const manual_note = computed(() => MANUAL_NOTES[bridge.platform_of(props.name)] || "");
-const can_flip = computed(() => manual.value || automatic.value && entry_items.value.length > 0);
-const card_label = computed(() => manual.value ? `查看 ${props.name} 的手动启动说明` : props.mode === "online" ? `设置 ${props.name} 的参与方式` : `配置 ${props.name} 的启动方式`);
+const can_bind = computed(() => automatic.value && props.session !== null && bridge.launch_can_bind_session(props.name, view.value.launch));
+const resuming = computed(() => Boolean(profile.value.session_id || props.session?.trim()));
+const can_flip = computed(() => automatic.value && entry_items.value.length > 0);
+const card_label = computed(() => props.mode === "online" ? `设置 ${props.name} 的参与方式` : `配置 ${props.name} 的启动方式`);
 const models = computed(() => bridge.launch_model_state(props.name, view.value.launch));
 const configurable = computed(() => Boolean(automatic.value && models.value.supported));
 const configuration_note = computed(() => configurable.value && connection.value.length ? "补齐上方连接后，可在这里选择模型与思考强度。"
@@ -74,7 +80,7 @@ const access = computed(() => profile.value.project_access || view.value.launch.
 // Who starts the member and whether it can host: the two things the delivery choice changes and a user must see before inviting.
 const launch_fact = computed(() => props.mode === "online" ? "你转发回答 · 网页聊天"
   : props.mode === "manual" ? "你来启动 · 自主发言"
-  : `程序启动 · ${profile.value.session_id ? "续接会话" : profile.value.adapter === "api" ? "调用 API" : "新会话"}`);
+  : `程序启动 · ${resuming.value ? "续接会话" : profile.value.adapter === "api" ? "调用 API" : "新会话"}`);
 const host_fact = computed(() => props.mode === "online" ? "不可（网页只读）" : "不可（须本机唤醒）");
 // The front states only what is decided or an exception; placeholders such as "set in the original software" stay off it.
 const facts = computed(() => [
@@ -121,12 +127,13 @@ const stop_settling = angle.on("animationComplete", focus_face);
 /** Retarget the same spring so a reversal carries its current angle and velocity. */
 // Opening the back remembers this instance's settings so Cancel can restore them exactly.
 let opened_with = null;
+let opened_session = "";
 
 function flip(next) {
   if (next && !can_flip.value) return;
   card.value?.focus({ preventScroll: true });
   asked.value = next ? required_connection() : [];
-  if (next && !back.value) opened_with = { profile: JSON.parse(JSON.stringify(profile.value)), mode: props.mode };
+  if (next && !back.value) { opened_with = { profile: JSON.parse(JSON.stringify(profile.value)), mode: props.mode }; opened_session = props.session ?? ""; }
   back.value = next;
 }
 
@@ -135,6 +142,7 @@ function cancel() {
   if (opened_with) {
     bridge.restore_launch_profile(props.name, opened_with.profile);
     if (opened_with.mode !== props.mode) emit("mode", opened_with.mode);
+    if (props.session !== null && props.session !== opened_session) emit("session", opened_session);
     opened_with = null;
   }
   flip(false);
@@ -151,7 +159,7 @@ function choose_capability(event) {
   const keys = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 };
   if (!(event.key in keys) && !["Home", "End"].includes(event.key)) return;
   event.preventDefault();
-  const options = props.choices, index = options.indexOf(props.mode);
+  const options = offered.value, index = options.indexOf(props.mode);
   const next = event.key === "Home" ? options[0] : event.key === "End" ? options.at(-1) : options[(index + keys[event.key] + options.length) % options.length];
   emit("mode", next);
   event.currentTarget.querySelector(`[data-mode="${next}"]`)?.focus();
@@ -181,8 +189,8 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
     :data-identity="bridge.identities[name]?.style" :data-face="visible_back ? 'back' : 'front'" tabindex="-1" @keydown.esc="escape">
     <motion.div class="expert-card-turn" :style="{ rotateY: angle }">
       <div class="expert-card-face expert-card-front" :inert="visible_back" :aria-hidden="visible_back">
-        <component :is="can_flip ? 'button' : 'div'" ref="front_button" :type="can_flip ? 'button' : undefined" class="expert-card-open" :class="{ 'is-static': !can_flip, 'has-modes': choices.length > 1 }"
-          :aria-label="can_flip ? card_label : undefined" :title="can_flip ? (manual ? '点击翻面查看说明' : '点击翻面设置') : undefined" @click="flip(true)">
+        <component :is="can_flip ? 'button' : 'div'" ref="front_button" :type="can_flip ? 'button' : undefined" class="expert-card-open" :class="{ 'is-static': !can_flip, 'has-modes': offered.length > 1 }"
+          :aria-label="can_flip ? card_label : undefined" :title="can_flip ? '点击翻面设置' : undefined" @click="flip(true)">
           <span class="expert-card-identity">
             <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="sm" class="channel-avatar expert-card-avatar" :class="bridge.identities[name]?.style" />
             <strong>{{ name }}</strong><span v-if="host" class="expert-card-badge">主持</span>
@@ -190,10 +198,14 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
           <dl class="expert-card-facts">
             <div v-for="fact in facts" :key="fact.label"><dt>{{ fact.label }}</dt><dd :class="fact.tone ? ['expert-card-status', `is-${fact.tone}`] : ''" :title="fact.value"><i v-if="fact.tone" aria-hidden="true" />{{ fact.value }}</dd></div>
           </dl>
-          <span v-if="can_flip" class="expert-card-flip"><UIcon :name="manual ? 'i-lucide-info' : 'i-lucide-settings-2'" />{{ manual ? '说明' : '设置' }}</span>
+          <div v-if="manual" class="expert-card-manual">
+            <p>会话自行注册后才算到场。</p>
+            <p v-if="manual_note">{{ manual_note }}</p>
+          </div>
+          <span v-if="can_flip" class="expert-card-flip"><UIcon name="i-lucide-settings-2" />设置</span>
         </component>
-        <div v-if="choices.length > 1" class="expert-card-modes expert-card-front-modes" role="radiogroup" :aria-label="`${name} 启动方式`" @keydown="choose_capability">
-          <button v-for="option in choices" :key="option" type="button"
+        <div v-if="offered.length > 1" class="expert-card-modes expert-card-front-modes" role="radiogroup" :aria-label="`${name} 启动方式`" @keydown="choose_capability">
+          <button v-for="option in offered" :key="option" type="button"
             role="radio" :aria-checked="mode === option" :tabindex="mode === option ? 0 : -1" :data-mode="option" @click="emit('mode', option)">{{ ACCESS_LABELS[option] }}</button>
         </div>
         <span class="expert-card-tools">
@@ -203,13 +215,8 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
       </div>
       <div v-if="can_flip" class="expert-card-face expert-card-back" :inert="!visible_back" :aria-hidden="!visible_back">
         <div class="expert-card-back-body">
-        <div class="expert-card-heading"><strong>{{ name }}<span>{{ manual ? '手动启动' : `设置${no_files ? ' · 不访问项目' : ''}` }}</span></strong>
+        <div class="expert-card-heading"><strong>{{ name }}<span>设置{{ no_files ? ' · 不访问项目' : '' }}</span></strong>
           <UButton v-if="api_mode" icon="i-lucide-zap" :aria-label="`检查 ${name} 的 API 配置`" title="检查配置：发送一次极短请求，核对地址、密钥、协议与模型" size="xs" :color="api_check.state === 'ok' ? 'success' : api_check.state === 'error' ? 'error' : 'neutral'" variant="ghost" :loading="api_check.state === 'loading'" :disabled="!profile.api_key_ref || !profile.model || !view.launch.available" @click="check_api" /></div>
-        <div v-if="manual" class="expert-card-manual">
-          <p>会话自行注册后才算到场。</p>
-          <p v-if="manual_note">{{ manual_note }}</p>
-        </div>
-        <template v-else>
         <p v-if="api_mode && api_check.message" :role="api_check.state === 'error' ? 'alert' : 'status'" class="expert-card-check">{{ api_check.message }}</p>
         <div v-if="automatic && entry_items.length > 1" class="expert-card-field">
           <span>接入</span><USelect :model-value="profile.adapter || ''" :items="entry_items" placeholder="选择 API / App / CLI" :aria-label="`${name} 软件入口`" size="xs" class="w-full" @update:model-value="bridge.write_launch(name, 'adapter', $event)" />
@@ -217,6 +224,10 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
         <div v-for="item in connection" :key="item.field" class="expert-card-field">
           <span>{{ item.label }}</span><UInput :model-value="profile[item.field] || ''" :placeholder="item.placeholder" :aria-label="`${name} ${item.placeholder}`" size="xs" class="w-full" @update:model-value="bridge.write_launch(name, item.field, $event)" />
         </div>
+        <div v-if="can_bind" class="expert-card-field">
+          <span>会话</span><UInput :model-value="session" placeholder="续接已有会话 ID，留空则新建" :aria-label="`${name} 要续接的已有会话 ID`" size="xs" class="w-full" @update:model-value="emit('session', $event)" />
+        </div>
+        <p v-if="can_bind && session.trim() && manual_note" class="expert-card-check">{{ manual_note }}</p>
         <div v-if="sets_access" class="expert-card-field">
           <span>项目</span>
           <div class="expert-card-modes" role="radiogroup" :aria-label="`${name} 的项目文件权限`">
@@ -237,11 +248,10 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
           <button type="button" class="expert-card-defaults" title="留空使用 CLI 默认值" :aria-label="`恢复 ${name} 的默认模型与强度`" :disabled="!profile.model && !profile.effort" @click="reset_model">恢复默认</button>
         </template>
         <p v-else class="expert-card-note"><UIcon :name="mode === 'online' ? 'i-lucide-globe' : 'i-lucide-monitor'" />{{ configuration_note }}</p>
-        </template>
         </div>
         <span class="expert-card-flip-actions">
-          <button v-if="!manual" type="button" class="expert-card-flip is-cancel" :aria-label="`放弃 ${name} 的修改`" @click="cancel">取消</button>
-          <button ref="back_button" type="button" class="expert-card-flip is-done" :aria-label="`保存并返回 ${name} 角色卡片`" @click="flip(false)"><UIcon name="i-lucide-check" />{{ manual ? '返回' : '完成' }}</button>
+          <button type="button" class="expert-card-flip is-cancel" :aria-label="`放弃 ${name} 的修改`" @click="cancel">取消</button>
+          <button ref="back_button" type="button" class="expert-card-flip is-done" :aria-label="`保存并返回 ${name} 角色卡片`" @click="flip(false)"><UIcon name="i-lucide-check" />完成</button>
         </span>
       </div>
     </motion.div>
@@ -304,7 +314,7 @@ onBeforeUnmount(() => { stop_observing(); stop_settling(); angle.stop(); });
 .expert-card-defaults:hover:not(:disabled) { color: var(--channel-accent); }
 .expert-card-defaults:disabled { opacity: .4; }
 .expert-card-note { display: flex; gap: 6px; margin: 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
-.expert-card-manual { display: grid; gap: 8px; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
+.expert-card-manual { display: grid; gap: 4px; width: 100%; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
 .expert-card-manual > p { margin: 0; }
 .expert-card-note > span { flex-shrink: 0; width: 13px; height: 13px; margin-top: 3px; }
 @media (pointer: coarse) {

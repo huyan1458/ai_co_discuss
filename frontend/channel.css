@@ -588,7 +588,7 @@ html[data-theme^="channel"] .channel-folder-modal [data-slot="header"] { min-hei
 html[data-theme^="channel"] .channel-folder-modal .dialog-body { padding: 0 20px 20px; }
 html[data-theme^="channel"] .channel-folder-modal .dialog-actions { border: 0; padding-top: 4px; margin: 0; gap: 8px; }
 html[data-theme^="channel"] .channel-folder-modal input { height: 40px; font-size: 13px; outline: none; }
-html[data-theme^="channel"] .studio-modal.channel-create-modal { width: calc(100vw - 32px); max-width: 860px; }
+html[data-theme^="channel"] .studio-modal.channel-create-modal, html[data-theme^="channel"] .studio-modal.pb-invite-modal { width: calc(100vw - 32px); max-width: 860px; }
 html[data-theme^="channel"] .channel-create-modal .dialog-body { padding: 0; max-height: none; overflow: hidden; }
 html[data-theme^="channel"] .studio-modal.channel-archive-modal { width: calc(100vw - 48px); max-width: 900px; height: min(780px, calc(100dvh - 64px)); border-radius: 18px; }
 html[data-theme^="channel"] .channel-archive-modal [data-slot="header"] { padding: 36px 44px 28px; border: 0; }

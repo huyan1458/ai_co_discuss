@@ -905,7 +905,7 @@ async function change_member({ member_id, name, action, role }) {
         ? await local_launch_request("room-member", { room_id, token, action: "rejoin", name, member_token: record.member.token })
         : await request_json(`/api/rooms/${room_id}/members/${member_id}`, { action: "active", token: record.member.token });
       finish_member_request(room_id, token, record, result);
-      if (state.room?.id === room_id) state.free_notice = member.access === "manual" ? `${name} 已请回；请下载更新后的私有配置。` : `${name} 已请回，续接原会话。`;
+      if (state.room?.id === room_id) state.free_notice = member.access === "manual" ? `${name} 已请回，凭证已更新；请用新的启动指令让它重新注册。` : `${name} 已请回，续接原会话。`;
     } else {
       await request_json(`/api/rooms/${room_id}/members/${member_id}${action === "interrupt" ? "/interrupt" : ""}`,
         action === "interrupt" ? {} : { action, ...(role ? { role } : {}) });
@@ -939,7 +939,8 @@ async function invite_member({ name, access, project_access = "read", session_id
     finish_member_request(room_id, token, record, result);
     if (state.room?.id === room_id) {
       state.free_notice = access === "online" ? `${record.member.name} 已加入，阅读通知与真实回答由你或授权主持人转交。`
-        : access === "manual" ? `${record.member.name} 已加入；点它的“复制启动指令”，粘贴到你要用的 AI 会话即可。`
+        // A manual member's start step lives on the board row, the composer bar and the invite dialog; no extra notice.
+        : access === "manual" ? ""
           : record.options?.session_id ? `${record.member.name} 已接入原会话；它工作时请不要在原窗口继续操作。`
           : state.room.mode === "free" ? `${record.member.name} 已加入，之后点名它即会由本机服务唤醒。`
             : `${record.member.name} 已加入讨论，主持人会重新安排发言。`;

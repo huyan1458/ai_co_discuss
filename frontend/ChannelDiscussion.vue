@@ -1,5 +1,6 @@
 <script setup>
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import ScheduleCard from "./ScheduleCard.vue";
 import { motion, useReducedMotion, useSpring, useTransform } from "motion-v";
 
 const emit = defineEmits(["detail", "edit"]);
@@ -297,13 +298,6 @@ const scheduler_decisions = computed(() => {
 });
 const DECISION_OPTIONS = { __host__: "交给主持人", __note__: "仅补充信息", continue: "继续下一轮" };
 const option_name = (name) => DECISION_OPTIONS[name] || bridge.display_name(name);
-/** Cards fold their details (what was asked and chosen, or the host's per-expert tasks) until clicked. */
-const open_cards = ref(new Set());
-function toggle_card(key) {
-  const next = new Set(open_cards.value);
-  if (!next.delete(key)) next.add(key);
-  open_cards.value = next;
-}
 /** The host's own plans stand beside the decisions, under the message they followed. */
 const host_arrangements = computed(() => {
   const rows = new Map();
@@ -1022,22 +1016,14 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           </div></div></template>
         </UChatMessage>
         <!-- A decision stands between the card that ended the round and the next speaker. -->
-        <div v-for="decision in scheduler_decisions.get(message.id) || []" :key="`decision-${decision.id}`" class="channel-schedule-card" :class="{ 'is-skipped': !decision.applied, 'is-open': open_cards.has(`d${decision.id}`) }" :title="decision.title" aria-label="智能调度决策">
-          <UIcon name="i-lucide-zap" class="channel-schedule-icon" />
-          <span class="channel-schedule-text">智能调度：{{ decision.label }}<small v-if="decision.confidence !== null">置信度 {{ Number(decision.confidence).toFixed(2) }}</small></span>
-          <button v-if="decision.detail?.length" type="button" class="channel-schedule-toggle" :aria-expanded="open_cards.has(`d${decision.id}`)" aria-label="展开或收起判断详情" @click="toggle_card(`d${decision.id}`)"><UIcon name="i-lucide-chevron-down" /></button>
-          <div v-if="open_cards.has(`d${decision.id}`)" class="channel-schedule-detail">
-            <p v-for="(item, index) in decision.detail" :key="index"><span>问：{{ item.question }}（{{ item.choices.map(option_name).join(" / ") }}）</span><span>答：{{ item.choice ? option_name(item.choice) : "无" }}<small v-if="item.probabilities[item.choice] !== undefined">概率 {{ Number(item.probabilities[item.choice]).toFixed(2) }}</small></span></p>
-          </div>
-        </div>
-        <div v-for="plan in host_arrangements.get(message.id) || []" :key="`arrangement-${plan.id}`" class="channel-schedule-card" :class="{ 'is-open': open_cards.has(`a${plan.id}`) }" :title="`${bridge.display_name(room.host)} 创建的发言安排`" aria-label="主持人安排">
-          <UIcon name="i-lucide-list-ordered" class="channel-schedule-icon" />
-          <span class="channel-schedule-text">主持人安排：{{ plan.label }}</span>
-          <button type="button" class="channel-schedule-toggle" :aria-expanded="open_cards.has(`a${plan.id}`)" aria-label="展开或收起各专家的任务" @click="toggle_card(`a${plan.id}`)"><UIcon name="i-lucide-chevron-down" /></button>
-          <div v-if="open_cards.has(`a${plan.id}`)" class="channel-schedule-detail">
-            <p v-for="turn in plan.turns" :key="`${plan.id}-${turn.expert}-${turn.question}`"><span>{{ bridge.display_name(turn.expert) }}：{{ turn.question }}</span></p>
-          </div>
-        </div>
+        <ScheduleCard v-for="decision in scheduler_decisions.get(message.id) || []" :key="`decision-${decision.id}`" icon="i-lucide-zap" :skipped="!decision.applied" :title="decision.title" label="智能调度决策" toggle-label="展开或收起判断详情" :expandable="Boolean(decision.detail?.length)">
+          <template #text>智能调度：{{ decision.label }}<small v-if="decision.confidence !== null">置信度 {{ Number(decision.confidence).toFixed(2) }}</small></template>
+          <p v-for="(item, index) in decision.detail" :key="index"><span>问：{{ item.question }}（{{ item.choices.map(option_name).join(" / ") }}）</span><span>答：{{ item.choice ? option_name(item.choice) : "无" }}<small v-if="item.probabilities[item.choice] !== undefined">概率 {{ Number(item.probabilities[item.choice]).toFixed(2) }}</small></span></p>
+        </ScheduleCard>
+        <ScheduleCard v-for="plan in host_arrangements.get(message.id) || []" :key="`arrangement-${plan.id}`" icon="i-lucide-list-ordered" :title="`${bridge.display_name(room.host)} 创建的发言安排`" label="主持人安排" toggle-label="展开或收起各专家的任务">
+          <template #text>主持人安排：{{ plan.label }}</template>
+          <p v-for="turn in plan.turns" :key="`${plan.id}-${turn.expert}-${turn.question}`"><span>{{ bridge.display_name(turn.expert) }}：{{ turn.question }}</span></p>
+        </ScheduleCard>
         </template>
         </template>
       </div>

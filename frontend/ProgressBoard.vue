@@ -363,16 +363,17 @@ async function finish(action) {
     <UModal v-model:open="inviting" title="邀请专家" description="新专家由程序按本机软件配置启动，或由你手动启动，加入本轮发言队列。" :ui="{ content: 'glass-panel studio-modal pb-invite-modal', body: 'dialog-body' }">
       <template #body>
         <div v-if="invited_manual.length && !invite_picks.length" class="pb-invite" aria-label="启动手动成员">
-          <p>{{ invited_manual.length > 1 ? '这些手动成员' : '这位手动成员' }}已加入，须在各自的会话里注册后才算到场：</p>
-          <ol class="fine-print">
-            <li>逐个点「复制启动指令」，粘贴到对应的 AI 会话（含该成员的凭证，不要交给别的会话）。</li>
-            <li>关闭后仍可在参与者列表中复制。</li>
-          </ol>
+          <p class="pb-invite-lead">{{ invited_manual.length > 1 ? `${invited_manual.length} 位手动成员已加入` : '手动成员已加入' }}，把启动指令交给各自的 AI 会话，注册后才算到场。</p>
           <p v-if="view.access?.error" role="alert" class="pb-free-note is-error">{{ view.access.error }}</p>
           <ul class="pb-invite-launches">
-            <li v-for="name in invited_manual" :key="name"><span>{{ bridge.display_name(name) }}<small :class="{ 'is-registered': record(name)?.registered_at }">{{ record(name)?.registered_at ? '已注册' : '待注册' }}</small></span>
-              <UButton icon="i-lucide-rocket" label="复制启动指令" size="xs" color="neutral" variant="outline" :loading="pending === 'copy_member_launch'" :disabled="Boolean(pending)" @click="act('copy_member_launch', name)" /></li>
+            <li v-for="name in invited_manual" :key="name">
+              <UAvatar :src="bridge.identities[bridge.platform_of(name)]?.icon" :text="bridge.identities[bridge.platform_of(name)]?.initials" :alt="name" size="xs" class="channel-avatar" :class="bridge.identities[bridge.platform_of(name)]?.style" />
+              <strong>{{ bridge.display_name(name) }}</strong>
+              <small :class="{ 'is-registered': record(name)?.registered_at }">{{ record(name)?.registered_at ? '已注册' : '待注册' }}</small>
+              <UButton icon="i-lucide-rocket" label="复制启动指令" size="xs" color="neutral" variant="outline" :loading="pending === 'copy_member_launch'" :disabled="Boolean(pending)" @click="act('copy_member_launch', name)" />
+            </li>
           </ul>
+          <p class="fine-print">指令含该成员的凭证，只交给对应的会话；关闭后仍可在参与者列表中复制。</p>
           <div class="pb-invite-footer"><UButton label="完成" class="channel-primary-button" @click="inviting = false" /></div>
         </div>
         <form v-else class="pb-invite" aria-label="邀请专家" @submit.prevent="invite">
@@ -383,11 +384,8 @@ async function finish(action) {
           </div>
           <div v-if="invite_picks.length" class="pb-invite-cards">
             <div v-for="pick in invite_picks" :key="pick.name" class="pb-invite-pick">
-              <ExpertCard :name="pick.name" :mode="pick.mode" :choices="['cli', 'manual']" :status="invite_card_status(pick)" @mode="pick.mode = $event" @remove="toggle_invite(pick.name)" />
+              <ExpertCard :name="pick.name" :mode="pick.mode" :choices="['cli', 'manual']" :status="invite_card_status(pick)" :session="pick.session" @mode="pick.mode = $event" @session="pick.session = $event" @remove="toggle_invite(pick.name)" />
               <p v-if="invite_instance(pick.name) !== pick.name" class="fine-print">已有 {{ pick.name }} 在场，将以 {{ invite_instance(pick.name) }} 加入，使用独立会话。</p>
-              <UFormField v-if="pick.mode === 'cli' && bridge.launch_can_bind_session(pick.name, view.launch)" label="已有会话 ID（可选）" :description="pick.session.trim() ? '将续接这个原会话；它工作时请不要在原窗口继续操作。' : '留空则新建会话。'">
-                <UInput v-model="pick.session" placeholder="在原会话中用 /status 查看；Codex App 填聊天 ID" :aria-label="`${pick.name} 的已有会话 ID`" size="xs" class="w-full" />
-              </UFormField>
             </div>
           </div>
           <p v-if="invite_picks.some((pick) => pick.mode === 'manual') && invite_picks.some((pick) => pick.mode !== 'manual')" class="fine-print">手动启动的成员排在程序启动的成员之后加入队列。</p>
@@ -430,14 +428,17 @@ async function finish(action) {
 .pb-member-body .pb-link { display: inline-flex; align-items: center; gap: 3px; }
 .pb-heading .pb-link > span, .pb-member-body .pb-link > span { width: 12px; height: 12px; }
 .pb-invite { display: flex; flex-direction: column; gap: 14px; }
-.pb-invite-modal.studio-modal { max-width: 580px; }
-.pb-invite-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(248px, 248px)); align-items: start; gap: 10px 8px; }
+.pb-invite-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); align-items: start; gap: 8px; }
 .pb-invite-pick { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .pb-invite-pick .fine-print { margin: 0; }
+.pb-invite-lead { margin: 0; color: var(--ui-text-toned); font-size: 13px; }
 .pb-invite-launches { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
-.pb-invite-launches small { margin-left: 8px; color: var(--ui-warning, #e0a33a); font-size: 11px; }
+.pb-invite-launches li { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--ui-border-muted); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); }
+.pb-invite-launches strong { min-width: 0; overflow: hidden; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.pb-invite-launches small { color: var(--ui-warning, #e0a33a); font-size: 11px; }
 .pb-invite-launches small.is-registered { color: var(--ui-success, #3fb27f); }
-.pb-invite-launches li { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
+.pb-invite-launches li > button { margin-left: auto; }
+.pb-invite-launches .channel-avatar { flex-shrink: 0; width: 22px; height: 22px; font-size: 9px; }
 .pb-invite-mode { display: flex; align-items: center; gap: 12px; color: var(--ui-text-muted); font-size: 12px; }
 .pb-invite-options { display: flex; gap: 3px; padding: 3px; border-radius: 6px; background: var(--ui-bg-muted); }
 .pb-invite-options label { position: relative; display: grid; place-items: center; min-width: 56px; min-height: 28px; border-radius: 4px; cursor: pointer; }

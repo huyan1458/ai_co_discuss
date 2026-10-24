@@ -118,7 +118,7 @@ const progress_summary = computed(() => {
           <ul class="access-member-list" aria-label="成员接入">
             <li v-for="member in access.members || []" :key="member.name">
               <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="sm" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
-              <div class="access-member-copy"><strong>{{ member.name }}</strong><span>{{ member.access === 'online' ? '网页代发' : member.access === 'runner' ? '本机唤醒 · 自行发言' : '手动接入 · 自行发言' }}</span><small v-if="member.access !== 'online' && !member.available">当前浏览器没有此成员的私有配置</small></div>
+              <div class="access-member-copy"><strong>{{ member.name }}</strong><span>{{ member.access === 'online' ? '网页代发' : member.access === 'runner' ? '本机唤醒 · 自行发言' : '手动接入 · 自行发言' }}</span><small v-if="member.access === 'manual'" :class="{ 'is-registered': (room.members || []).find((item) => item.name === member.name)?.registered_at }">{{ (room.members || []).find((item) => item.name === member.name)?.registered_at ? '已注册' : '待注册' }}</small><small v-if="member.access !== 'online' && !member.available">当前浏览器没有此成员的私有配置</small></div>
               <div class="button-row">
                 <template v-if="member.access === 'manual'">
                   <UButton icon="i-lucide-rocket" label="复制启动指令" :aria-label="`复制 ${member.name} 含凭证的启动指令`" :disabled="!access.can_manage || !member.available" color="neutral" size="sm" @click="act('copy_member_launch', member.name)" />
@@ -154,6 +154,8 @@ const progress_summary = computed(() => {
 .access-member-copy > strong { color: var(--ui-text-highlighted); font-size: 13px; }
 .access-member-copy > span { color: var(--ui-text-muted); font-size: 11px; }
 .access-member-copy > small { color: var(--ui-text-dimmed); font-size: 11px; }
+.access-member-copy > small:not(.is-registered):first-of-type { color: var(--ui-warning, #e0a33a); }
+.access-member-copy > small.is-registered { color: var(--ui-success, #3fb27f); }
 .access-member-list .button-row { flex-shrink: 0; }
 .access-member-error { color: var(--ui-error); font-size: 12px; }
 .access-page { color: var(--ui-text); }

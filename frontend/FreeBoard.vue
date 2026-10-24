@@ -17,8 +17,10 @@ const busy = (member) => member.pending > 0 || LIVE.includes(member.execution?.s
 const name_of = (member_id) => bridge.display_name((free.value.members || []).find((member) => member.id === member_id)?.name || "成员");
 
 /** Status dot colour, matching the discussion progress board. */
+const unregistered = (member) => member.access === "manual" && member.status === "active" && !member.registered_at;
 function member_tone(member) {
   if (member.status === "away") return "neutral";
+  if (unregistered(member)) return "warning";
   if (member.execution?.stale) return "error";
   if (busy(member)) return member.pending && !LIVE.includes(member.execution?.status) ? "warning" : "primary";
   return member.execution?.status === "failed" ? "error" : "success";
@@ -27,11 +29,12 @@ function member_tone(member) {
 /** One line per member: live execution, queued requests, or the last outcome. */
 function member_status(member) {
   if (member.status === "away") return "已离开：不会被唤醒，可请回";
+  if (unregistered(member)) return "待注册：须在它的会话中注册，才算到场";
   const execution = member.execution;
   if (execution && LIVE.includes(execution.status)) return execution.stale ? "执行失联，停止未确认" : "正在处理";
   if (member.pending) return `待投递 ${member.pending} 条`;
   if (execution?.status === "failed") return `上次失败：${execution.result}`;
-  return execution ? "空闲" : "尚未收到消息";
+  return execution ? "空闲" : member.access === "manual" ? "已注册" : "尚未收到消息";
 }
 
 /** Online and manual members choose their model in their own chat; woken ones show the registered launch. */
