@@ -10,6 +10,21 @@ const models = computed(() => (view.value.launch.scheduler_providers?.[scheduler
 const api_key = ref(""), key_visible = ref(false), saving = ref(false), error = ref("");
 // The card shows a summary; its settings stay behind "设置" like the participant cards.
 const editing = ref(false);
+// Opening the back remembers the settings so Cancel can restore them.
+let opened_with = null;
+function open_settings() {
+  const { provider, model, api_key_ref } = scheduler.value;
+  opened_with = { provider, model, api_key_ref };
+  editing.value = true;
+}
+/** Discard edits made since the back opened. Provider goes first because changing it resets model and key. */
+function cancel_settings() {
+  if (opened_with) for (const field of ["provider", "model", "api_key_ref"]) bridge.write_scheduler(field, opened_with[field]);
+  opened_with = null;
+  api_key.value = "";
+  error.value = "";
+  editing.value = false;
+}
 const provider_label = computed(() => providers.value.find((item) => item.value === scheduler.value.provider)?.label || "未选择");
 const status = computed(() => !scheduler.value.model ? { tone: "warn", text: "未选模型" } : !scheduler.value.api_key_ref ? { tone: "warn", text: "缺少密钥" } : { tone: "ready", text: "已配置" });
 // A key saved earlier is never sent back to the page, so only a masked mark stands in for it.
@@ -51,7 +66,7 @@ async function save_key() {
     <div v-if="scheduler.enabled && !blocker" class="scheduler-cards">
     <div class="scheduler-card" :class="{ 'is-editing': editing }">
       <template v-if="!editing">
-        <button type="button" class="scheduler-open" aria-label="设置智能调度的决策模型" title="点击设置" @click="editing = true">
+        <button type="button" class="scheduler-open" aria-label="设置智能调度的决策模型" title="点击设置" @click="open_settings">
           <strong>决策模型</strong>
           <dl class="scheduler-facts">
             <div><dt>状态</dt><dd :class="`is-${status.tone}`"><i aria-hidden="true" />{{ status.text }}</dd></div>
@@ -80,7 +95,10 @@ async function save_key() {
           <p v-if="check.message" :role="check.state === 'error' ? 'alert' : 'status'" :class="check.state === 'error' ? 'scheduler-error' : 'scheduler-ok'">{{ check.message }}</p>
           <p class="scheduler-note">决策模型只做选择、不生成文本，只按输入计费。判断时会把房间标题和最近 10 条消息发给所选供应商；密钥只存本机。</p>
         </div>
-        <button type="button" class="scheduler-flip is-done" aria-label="完成并返回决策模型卡片" @click="editing = false"><UIcon name="i-lucide-check" />完成</button>
+        <span class="scheduler-flip-actions">
+          <button type="button" class="scheduler-flip is-cancel" aria-label="放弃决策模型的修改" @click="cancel_settings">取消</button>
+          <button type="button" class="scheduler-flip is-done" aria-label="完成并返回决策模型卡片" @click="editing = false"><UIcon name="i-lucide-check" />完成</button>
+        </span>
       </template>
     </div>
     </div>
@@ -105,7 +123,10 @@ async function save_key() {
 .scheduler-flip { position: absolute; right: 8px; bottom: 8px; display: inline-flex; align-items: center; gap: 4px; min-height: 22px; padding: 2px 6px; border-radius: 4px; color: var(--ui-text-dimmed); font-size: 11px; }
 .scheduler-flip > span { width: 12px; height: 12px; }
 .scheduler-open:hover .scheduler-flip, .scheduler-flip.is-done { color: var(--channel-accent); }
-.scheduler-flip.is-done:hover { background: var(--ui-bg-accented); }
+.scheduler-flip.is-done:hover, .scheduler-flip.is-cancel:hover { background: var(--ui-bg-accented); }
+.scheduler-flip.is-cancel:hover { color: var(--ui-text-highlighted); }
+.scheduler-flip-actions { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 2px; }
+.scheduler-flip-actions > .scheduler-flip { position: static; }
 .scheduler-back { display: flex; flex: 1; flex-direction: column; gap: 8px; min-height: 0; padding: 10px 12px 34px; overflow-y: auto; scrollbar-width: thin; }
 .scheduler-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .scheduler-heading strong { color: var(--ui-text-highlighted); font-size: 12px; font-weight: 600; }

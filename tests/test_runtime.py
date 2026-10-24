@@ -610,13 +610,15 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.conclude_as_host(token), 200)
 
     def test_state_cutoff_never_moves_backwards(self):
-        """A later state cannot claim an earlier cutoff than the one already saved."""
+        """A saved brief's cutoff cannot be replaced by an earlier one; a plain state update without a brief is unaffected."""
         self.start()
         token = self.enter(self.events()[0])
+        self.assertEqual(self.request(self.path + "/messages", {"author": "用户", "text": "材料", "submission_id": "cutoff-note"})[0], 201)
         latest = self.request(self.path)[1]["latest_id"]
-        self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "新", "until": latest}, token)[0], 200)
-        status, refused = self.request(self.path + "/state", {"actor": "Codex", "text": "旧", "until": latest - 1}, token)
+        self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "新", "brief": "简报", "until": latest}, token)[0], 200)
+        status, refused = self.request(self.path + "/state", {"actor": "Codex", "text": "旧", "brief": "旧简报", "until": latest - 1}, token)
         self.assertEqual(status, 400, refused)
+        self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "只更新详细状态", "until": latest - 1}, token)[0], 200)
 
     def roster_revision(self):
         """The host asks for the latest expert state before arranging a round."""

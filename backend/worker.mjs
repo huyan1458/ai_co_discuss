@@ -1251,6 +1251,8 @@ async function update_state(database, room_id, payload) {
   require_host(room, { actor: payload.actor ?? "用户" });
   const until = integer(payload.until ?? room.latest_id);
   if (until < 0 || until > room.latest_id) throw new HttpError(400, "讨论状态的截止编号无效");
+  const saved_brief = await database.prepare("SELECT until FROM room_briefs WHERE room_id=?").bind(room_id).first();
+  if (Object.hasOwn(payload, "brief") && saved_brief && until < saved_brief.until) throw new HttpError(400, `简报已整理至 #${saved_brief.until}，截止编号不能回退；请先读取最新状态`);
   const statements = [database.prepare("UPDATE rooms SET state_text=?,state_until=? WHERE id=?").bind(text, until, room_id)];
   if (Object.hasOwn(payload, "brief")) statements.push(database.prepare(`INSERT INTO room_briefs (room_id,text,until,updated_at) VALUES (?,?,?,?)
     ON CONFLICT(room_id) DO UPDATE SET text=excluded.text,until=excluded.until,updated_at=excluded.updated_at`).bind(room_id, brief, until, new Date().toISOString()));
@@ -1481,6 +1483,7 @@ async function check_limits(database, room_id, payload) {
   if (force && (["preparing", "paused", "concluded"].includes(room.phase) || room.archived)) throw new HttpError(400, "仅进行中的讨论可以提前收尾");
   const inactive = ["paused", "concluded"].includes(room.phase) || room.archived || (done && room.phase === "preparing");
   if ((!limits.reached && !force && !done) || inactive) return room;
+  if (done || force) await require_conclusion_ready(database, room, payload, true);
   const reason = done ? "goal_done" : limits.reason || "user_stop";
   const closing = (force || limits.on_limit === "summarize") && reason !== "time_limit";
   if (closing && limits.closing) return room;

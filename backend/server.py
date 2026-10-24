@@ -1320,8 +1320,9 @@ def update_state(connection, room_id, payload):
     until = int(payload.get("until", room["latest_id"]))
     if until < 0 or until > room["latest_id"]:
         raise ValueError("讨论状态的截止编号无效")
-    if until < room["state_until"]:
-        raise ValueError(f"状态已整理至 #{room['state_until']}，截止编号不能回退；请先读取最新状态")
+    saved_brief = connection.execute("SELECT until FROM room_briefs WHERE room_id=?", (room_id,)).fetchone()
+    if "brief" in payload and saved_brief and until < saved_brief["until"]:
+        raise ValueError(f"简报已整理至 #{saved_brief['until']}，截止编号不能回退；请先读取最新状态")
     connection.execute("UPDATE rooms SET state_text=?,state_until=? WHERE id=?", (text, until, room_id))
     if "brief" in payload:
         connection.execute("""INSERT INTO room_briefs (room_id,text,until,updated_at) VALUES (?,?,?,?)
