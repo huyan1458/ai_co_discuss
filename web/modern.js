@@ -47829,7 +47829,7 @@ var uq = /*#__PURE__*/ jH({
 		let g = Z(() => [...h.value].sort((e, t) => m.value.indexOf(e) - m.value.indexOf(t))), _ = (e) => g.value.filter((t) => i.platform_of(t) === e).length, v = /* @__PURE__ */ F(null), y = Z(() => l("host")), b = Z(() => g.value.filter((e) => p.value[e] !== "online" && (d.value || p.value[e] !== "manual"))), x = /* @__PURE__ */ F(null), S = Z(() => g.value.filter((e) => p.value[e] === "cli")), C = Z(() => !d.value || S.value.length > 0 || D.value), w = (e) => {
 			let t = r.value.launch.profiles[e] || {};
 			return t.adapter === "api" ? !!(t.base_url && t.api_protocol && t.api_key_ref && t.model) : !!(t.adapter && (t.adapter === "antigravity" ? t.ipc_directory : t.executable));
-		}, T = Z(() => C.value && r.value.launch.available && (d.value || r.value.launch.create)), ee = Z(() => g.value.length > 0 && S.value.every(w) && (!S.value.length || r.value.launch.available)), E = Z(() => r.value.launch.available && (d.value ? g.value.length > 0 : r.value.launch.create)), D = Z(() => d.value && E.value && !!r.value.launch.scheduler?.enabled), O = Z(() => r.value.launch.available ? d.value && !g.value.length ? "添加成员后可开启" : !d.value && !r.value.launch.create ? "勾选「创建后立即启动 AI」后可开启" : "" : "连接本机服务后可开启"), k = Z(() => {
+		}, T = Z(() => C.value && r.value.launch.available && (d.value || r.value.launch.create)), ee = Z(() => g.value.length > 0 && S.value.every(w) && (!S.value.length || r.value.launch.available)), E = Z(() => r.value.launch.available && (d.value || r.value.launch.create)), D = Z(() => d.value && E.value && !!r.value.launch.scheduler?.enabled), O = Z(() => r.value.launch.available ? !d.value && !r.value.launch.create ? "勾选「创建后立即启动 AI」后可开启" : "" : "连接本机服务后可开启"), k = Z(() => {
 			let e = r.value.launch.scheduler || {};
 			return E.value && e.enabled && !(e.provider && e.model && e.api_key_ref);
 		}), te = Z(() => C.value && !r.value.launch.available), ne = 0, re = Z(() => {
@@ -48178,7 +48178,7 @@ var uq = /*#__PURE__*/ jH({
 			])])]);
 		};
 	}
-}, [["__scopeId", "data-v-5b33a1de"]]), QJ = {
+}, [["__scopeId", "data-v-7968c15b"]]), QJ = {
 	class: "account-settings",
 	"aria-labelledby": "account-heading"
 }, $J = {

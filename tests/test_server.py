@@ -371,6 +371,20 @@ class DiscussionTests(unittest.TestCase):
                 pass
         self.assertEqual(self.request("/api/health"), (200, {"ok": True}))
 
+    def test_discussion_session_mirrors_the_topic_phase_and_is_rebuilt_for_legacy_rooms(self):
+        """Every discussion room has one thin session that follows its phase; databases without sessions are backfilled."""
+        self.configure_host()
+        base = f"/api/rooms/{self.room['id']}"
+        phase = self.request(base)[1]["phase"]
+        self.assertEqual(self.request(base)[1]["session"]["status"], "active" if phase == "discussing" else "paused")
+        self.assertEqual(self.request(base + "/topic", {"actor": "用户", "phase": "paused"})[0], 200)
+        self.assertEqual(self.request(base)[1]["session"]["status"], "paused")
+        if not self.external:
+            with closing(sqlite3.connect(self.database)) as connection, connection:
+                connection.execute("DELETE FROM discussion_sessions")
+            init_database(self.database)
+            self.assertEqual(self.request(base)[1]["session"]["status"], "paused")
+
     def test_user_can_message_while_paused(self):
         """A paused topic still accepts the user's own question."""
         self.configure_host()

@@ -72,6 +72,7 @@ Python 服务独占监听端口：Windows 使用 `SO_EXCLUSIVEADDRUSE`，关闭�
 | `message_summaries` | 回答简述及其实际撰写者 |
 | `message_details` | 消息职责、代发操作者、关联安排 |
 | `message_timings` | 自动执行从交付唤醒到消息保存的秒数，随消息固定保存 |
+| `discussion_sessions` | 每次讨论一条薄记录（目标、`active/paused/concluded`、起止消息）；状态由触发器跟随旧阶段 `topic_settings.phase`，旧库重复执行 schema 时按阶段回填；自由房间没有会话。房间视图 `session` 返回最近一条。讨论并入自由房间的过渡结构，见 `.dev/plans/讨论模式并入自由房间/` |
 | `discussion_turns` | 问题、专家、通知状态、回答与取消 |
 | `room_floor` | 发言权持有人、下一位和版本 |
 | `turn_relay` | 整轮接力暂停标记：`held_since` 为首个待主持人处理的用户操作，非 0 时回答交回主持人而不接力 |

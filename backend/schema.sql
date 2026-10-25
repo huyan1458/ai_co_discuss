@@ -679,3 +679,47 @@ CREATE TABLE IF NOT EXISTS room_links (
     parent_id TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+
+-- A discussion is a switch on a room, not a room type: one thin session per started discussion. Its status mirrors the legacy
+-- topic phase until the phase machinery is retired. Free rooms have none.
+CREATE TABLE IF NOT EXISTS discussion_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    goal TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'paused' CHECK(status IN ('active','paused','concluded')),
+    started_message_id INTEGER NOT NULL DEFAULT 0,
+    ended_message_id INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS one_open_session ON discussion_sessions(room_id) WHERE status IN ('active','paused');
+-- Rooms that predate sessions: every non-free room with topic settings gets one, mapped from its phase. Safe to repeat.
+INSERT INTO discussion_sessions (room_id,goal,status,started_message_id,ended_message_id,created_at)
+SELECT rooms.id,rooms.goal,
+       CASE WHEN topic_settings.phase='concluded' THEN 'concluded' WHEN topic_settings.phase IN ('preparing','paused') THEN 'paused' ELSE 'active' END,
+       0,CASE WHEN topic_settings.phase='concluded' THEN COALESCE((SELECT MAX(id) FROM messages WHERE room_id=rooms.id),0) ELSE 0 END,rooms.created_at
+FROM rooms JOIN topic_settings ON topic_settings.room_id=rooms.id
+WHERE NOT EXISTS (SELECT 1 FROM room_modes WHERE room_id=rooms.id AND mode='free')
+  AND NOT EXISTS (SELECT 1 FROM discussion_sessions WHERE room_id=rooms.id);
+DROP TRIGGER IF EXISTS session_for_new_discussion;
+CREATE TRIGGER session_for_new_discussion AFTER INSERT ON room_modes
+WHEN NEW.mode='brainstorm' AND NOT EXISTS (SELECT 1 FROM discussion_sessions WHERE room_id=NEW.room_id)
+BEGIN
+    INSERT INTO discussion_sessions (room_id,goal,status,created_at)
+    SELECT rooms.id,rooms.goal,
+           COALESCE((SELECT CASE WHEN phase='concluded' THEN 'concluded' WHEN phase IN ('preparing','paused') THEN 'paused' ELSE 'active' END
+                     FROM topic_settings WHERE room_id=rooms.id),'paused'),rooms.created_at
+    FROM rooms WHERE rooms.id=NEW.room_id;
+END;
+DROP TRIGGER IF EXISTS session_follows_phase_insert;
+CREATE TRIGGER session_follows_phase_insert AFTER INSERT ON topic_settings
+BEGIN
+    UPDATE discussion_sessions SET status=CASE WHEN NEW.phase='concluded' THEN 'concluded' WHEN NEW.phase IN ('preparing','paused') THEN 'paused' ELSE 'active' END
+    WHERE id=(SELECT MAX(id) FROM discussion_sessions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS session_follows_phase;
+CREATE TRIGGER session_follows_phase AFTER UPDATE OF phase ON topic_settings
+BEGIN
+    UPDATE discussion_sessions SET status=CASE WHEN NEW.phase='concluded' THEN 'concluded' WHEN NEW.phase IN ('preparing','paused') THEN 'paused' ELSE 'active' END,
+        ended_message_id=CASE WHEN NEW.phase='concluded' THEN COALESCE((SELECT MAX(id) FROM messages WHERE room_id=NEW.room_id),0) ELSE 0 END
+    WHERE id=(SELECT MAX(id) FROM discussion_sessions WHERE room_id=NEW.room_id);
+END;

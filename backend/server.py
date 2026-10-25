@@ -219,6 +219,8 @@ def require_room(connection, room_id):
     room["runtime"] = runtime_view(connection, room_id)
     room["limits"] = limits_view(connection.execute(LIMITS_SQL, (room_id,)).fetchone(), room)
     room["mode"] = room_mode(connection, room_id)
+    session = connection.execute("SELECT id,goal,status,started_message_id,ended_message_id,created_at FROM discussion_sessions WHERE room_id=? ORDER BY id DESC LIMIT 1", (room_id,)).fetchone()
+    room["session"] = dict(session) if session else None
     room["members"] = [dict(row) for row in connection.execute(
         """SELECT m.id,m.name,m.adapter,m.role,m.status,m.access,m.session_mode,COALESCE(s.session_id,'') AS reported_session,COALESCE(s.client,'') AS reported_client,
         COALESCE(r.registered_at,'') AS registered_at
@@ -684,7 +686,7 @@ def manage_room(connection, room_id, action, payload):
 def delete_room_records(connection, room_id):
     """Remove a room's dependent records in the caller's transaction."""
     for table in ("member_recommendations", "member_requests", "member_executions", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "room_links",
-                  "discussion_options", "round_budgets", "scheduler_decisions"):
+                  "discussion_options", "round_budgets", "scheduler_decisions", "discussion_sessions"):
         if table == "scheduler_decisions":
             connection.execute("DELETE FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)", (room_id,))
         connection.execute(f"DELETE FROM {table} WHERE room_id=?", (room_id,))

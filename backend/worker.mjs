@@ -362,6 +362,7 @@ async function require_room(database, room_id) {
   result.runtime = await runtime_view(database, room_id);
   result.limits = limits_view(await database.prepare(LIMITS_SQL).bind(room_id).first(), result);
   result.mode = await room_mode(database, room_id);
+  result.session = await database.prepare("SELECT id,goal,status,started_message_id,ended_message_id,created_at FROM discussion_sessions WHERE room_id=? ORDER BY id DESC LIMIT 1").bind(room_id).first() ?? null;
   result.members = (await database.prepare(`SELECT m.id,m.name,m.adapter,m.role,m.status,m.access,m.session_mode,COALESCE(s.session_id,'') AS reported_session,COALESCE(s.client,'') AS reported_client,
     COALESCE(r.registered_at,'') AS registered_at
     FROM room_members AS m LEFT JOIN member_sessions AS s ON s.member_id=m.id
@@ -821,7 +822,7 @@ async function manage_room(database, room_id, action, payload) {
       "DELETE FROM room_members WHERE room_id=?", "DELETE FROM room_modes WHERE room_id=?",
       "DELETE FROM free_batches WHERE room_id=?", "DELETE FROM free_chains WHERE room_id=?", "DELETE FROM room_links WHERE room_id=?",
       "DELETE FROM discussion_options WHERE room_id=?",
-      "DELETE FROM round_budgets WHERE room_id=?",
+      "DELETE FROM round_budgets WHERE room_id=?", "DELETE FROM discussion_sessions WHERE room_id=?",
       "DELETE FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)", "DELETE FROM scheduler_decisions WHERE room_id=?",
       "DELETE FROM message_timings WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
       "DELETE FROM message_summaries WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",

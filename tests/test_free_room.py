@@ -426,6 +426,7 @@ class MultiMemberTests(FreeRoomTests):
 
     def test_smart_scheduling_may_recommend_a_manual_member(self):
         """A manual member is a valid recommendation target, and adopting asks it like any other member."""
+        self.assertIsNone(self.request(self.path)[1]["session"], "a free room has no discussion session")
         self.request(f"{self.path}/members", {"name": "Gemini", "token": uuid.uuid4().hex, "access": "manual"}, self.owner)
         route = self.request(f"{self.path}/messages", {"author": "用户", "text": "没点名的问题", "submission_id": uuid.uuid4().hex}, self.owner)[1]["message"]["id"]
         gemini_id = self.member_id("Gemini")

@@ -46,11 +46,10 @@ const launch_ready = (name) => {
 const launching = computed(() => automatic.value && view.value.launch.available && (free.value || view.value.launch.create));
 const free_ready = computed(() => selected_names.value.length > 0 && woken_names.value.every(launch_ready) && (!woken_names.value.length || view.value.launch.available));
 // Smart scheduling runs in the local service, so it is offered only when this room will be launched there.
-const scheduling = computed(() => view.value.launch.available && (free.value ? selected_names.value.length > 0 : view.value.launch.create));
+const scheduling = computed(() => view.value.launch.available && (free.value || view.value.launch.create));
 const scheduler_active = computed(() => free.value && scheduling.value && Boolean(view.value.launch.scheduler?.enabled));
 // Always shown; when it cannot run yet, say what is missing instead of hiding it.
 const scheduling_blocker = computed(() => !view.value.launch.available ? "连接本机服务后可开启"
-  : free.value && !selected_names.value.length ? "添加成员后可开启"
   : !free.value && !view.value.launch.create ? "勾选「创建后立即启动 AI」后可开启" : "");
 const scheduler_unready = computed(() => {
   const scheduler = view.value.launch.scheduler || {};
@@ -268,7 +267,7 @@ const summary = computed(() => {
 /* A fixed height keeps the dialog still when switching room use or delivery adds or removes sections. */
 .create-discussion { display: flex; flex-direction: column; height: min(78dvh, 820px); }
 .create-scroll { flex: 1; min-height: 0; }
-.create-scroll { overflow-y: auto; padding: 20px 26px 24px; gap: 26px !important; }
+.create-scroll { overflow-y: auto; scrollbar-gutter: stable; padding: 20px 26px 24px; gap: 26px !important; }
 .create-section { display: flex; flex-direction: column; gap: 14px; }
 .create-section + .create-section { padding-top: 22px; border-top: 1px solid var(--ui-border-muted); }
 .create-section h3 { display: flex; align-items: center; gap: 9px; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
