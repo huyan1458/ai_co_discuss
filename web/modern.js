@@ -47962,20 +47962,20 @@ var vq = /*#__PURE__*/ MH({
 }, VJ = { class: "create-section" }, HJ = { class: "create-section" }, UJ = {
 	key: 0,
 	class: "fine-print create-hint"
-}, WJ = {
-	key: 1,
-	class: "create-experts",
-	role: "group",
-	"aria-label": "参与的 AI"
-}, GJ = {
-	key: 2,
-	class: "create-experts-empty"
-}, KJ = [
+}, WJ = [
 	"disabled",
 	"title",
 	"aria-label",
 	"onClick"
-], qJ = {
+], GJ = {
+	key: 1,
+	class: "create-experts",
+	role: "group",
+	"aria-label": "参与的 AI"
+}, KJ = {
+	key: 2,
+	class: "create-experts-empty"
+}, qJ = {
 	key: 3,
 	class: "fine-print create-hint create-host-hint"
 }, JJ = { class: "create-section" }, YJ = { class: "create-footer" }, XJ = {
@@ -48136,29 +48136,6 @@ var vq = /*#__PURE__*/ MH({
 				K("section", HJ, [
 					c[13] ||= K("h3", null, [K("span", null, "2"), J("谁来参与")], -1),
 					h.value.length ? (U(), W("p", UJ, "每位成员可选本机唤醒，或手动（你来启动或代发，网页 AI 选手动）。")) : Y("", !0),
-					h.value.length ? (U(), W("div", WJ, [(U(!0), W(H, null, B(h.value, (e) => (U(), G(bJ, {
-						key: e,
-						name: e,
-						mode: f.value[e],
-						choices: se(e),
-						status: le(e),
-						host: v.value === e,
-						hostable: y.value.includes(e),
-						hosting: "",
-						onHost: (t) => u("host", e),
-						onRemove: (t) => fe(e),
-						onMode: (t) => ce(e, t)
-					}, null, 8, [
-						"name",
-						"mode",
-						"choices",
-						"status",
-						"host",
-						"hostable",
-						"onHost",
-						"onRemove",
-						"onMode"
-					]))), 128))])) : (U(), W("p", GJ, "可以先不添加成员，建房后再邀请。同一平台可添加多位，各自独立会话。")),
 					K("div", {
 						ref_key: "library",
 						ref: _,
@@ -48187,7 +48164,30 @@ var vq = /*#__PURE__*/ MH({
 						]),
 						J(P(e), 1),
 						q(p, { name: "i-lucide-plus" })
-					], 8, KJ))), 128))], 512),
+					], 8, WJ))), 128))], 512),
+					h.value.length ? (U(), W("div", GJ, [(U(!0), W(H, null, B(h.value, (e) => (U(), G(bJ, {
+						key: e,
+						name: e,
+						mode: f.value[e],
+						choices: se(e),
+						status: le(e),
+						host: v.value === e,
+						hostable: y.value.includes(e),
+						hosting: "",
+						onHost: (t) => u("host", e),
+						onRemove: (t) => fe(e),
+						onMode: (t) => ce(e, t)
+					}, null, 8, [
+						"name",
+						"mode",
+						"choices",
+						"status",
+						"host",
+						"hostable",
+						"onHost",
+						"onRemove",
+						"onMode"
+					]))), 128))])) : (U(), W("p", KJ, "可以先不添加成员，建房后再邀请。同一平台可添加多位，各自独立会话。")),
 					h.value.length ? (U(), W("div", qJ, [q(p, { name: "i-lucide-crown" }), K("span", null, P(y.value.length ? "点卡片上的皇冠指定主持人：没 @ 任何人的消息由它分配；其他成员只在被你或主持人点名时发言。" : "需要一位本地 AI 做主持人，没 @ 的消息才有人接。"), 1)])) : Y("", !0),
 					q(IJ, {
 						free: !0,
@@ -48272,7 +48272,7 @@ var vq = /*#__PURE__*/ MH({
 			])])]);
 		};
 	}
-}, [["__scopeId", "data-v-1310345e"]]), nY = {
+}, [["__scopeId", "data-v-e3d9b738"]]), nY = {
 	class: "account-settings",
 	"aria-labelledby": "account-heading"
 }, rY = {

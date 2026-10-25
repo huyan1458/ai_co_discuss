@@ -174,18 +174,18 @@ const summary = computed(() => {
       <section class="create-section">
         <h3><span>2</span>谁来参与</h3>
         <p v-if="selected_names.length" class="fine-print create-hint">每位成员可选本机唤醒，或手动（你来启动或代发，网页 AI 选手动）。</p>
-        <div v-if="selected_names.length" class="create-experts" role="group" aria-label="参与的 AI">
-          <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :choices="access_choices(name)"
-            :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)" hosting
-            @host="write('host', name)" @remove="remove_expert(name)" @mode="set_expert_mode(name, $event)" />
-        </div>
-        <p v-else class="create-experts-empty">可以先不添加成员，建房后再邀请。同一平台可添加多位，各自独立会话。</p>
         <div ref="library" class="create-roster-add" role="group" aria-label="添加 AI">
           <span class="create-label">添加</span>
           <button v-for="name in experts" :key="name" type="button" :disabled="!bridge.launch_clients[name]" :title="library_description(name)" :aria-label="`添加 ${name} 实例`" @click="add_expert(name)">
             <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="3xs" class="channel-avatar" :class="bridge.identities[name]?.style" />{{ name }}<UIcon name="i-lucide-plus" />
           </button>
         </div>
+        <div v-if="selected_names.length" class="create-experts" role="group" aria-label="参与的 AI">
+          <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :choices="access_choices(name)"
+            :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)" hosting
+            @host="write('host', name)" @remove="remove_expert(name)" @mode="set_expert_mode(name, $event)" />
+        </div>
+        <p v-else class="create-experts-empty">可以先不添加成员，建房后再邀请。同一平台可添加多位，各自独立会话。</p>
         <div v-if="selected_names.length" class="fine-print create-hint create-host-hint">
           <UIcon name="i-lucide-crown" />
           <span>{{ host_options.length ? '点卡片上的皇冠指定主持人：没 @ 任何人的消息由它分配；其他成员只在被你或主持人点名时发言。' : '需要一位本地 AI 做主持人，没 @ 的消息才有人接。' }}</span>
