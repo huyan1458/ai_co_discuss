@@ -480,15 +480,23 @@ class MultiMemberTests(FreeRoomTests):
         gemini = uuid.uuid4().hex
         self.request(f"{self.path}/members", {"name": "Gemini", "token": gemini, "access": "manual"}, self.owner)
         gemini_id = self.member_id("Gemini")
-        adopt = {"action": "adopt", "adapter": "antigravity_cli", "session_id": "session-1"}
+        renewed = uuid.uuid4().hex + uuid.uuid4().hex
+        adopt = {"action": "adopt", "adapter": "antigravity_cli", "session_id": "session-1", "token": renewed}
         self.assertEqual(self.request(f"{self.path}/members/{gemini_id}", adopt, self.owner)[0], 400)
         self.assertEqual(self.request(f"{self.path}/register", {}, gemini)[0], 200)
         self.assertEqual(self.request(f"{self.path}/members/{gemini_id}", adopt, self.owner)[0], 400, "no session reported yet")
         # The CLI reports its session in headers on any call; reading the room is enough.
         urlopen(Request(self.base + self.path, headers={"X-Discussion-Token": gemini, "X-Discussion-Session": adopt["session_id"],
                                                          "X-Discussion-Session-Client": "antigravity"}), timeout=10).close()
+        self.assertEqual(self.request(f"{self.path}/members/{gemini_id}", {**adopt, "token": self.member}, self.owner)[0], 400, "a credential already in use")
         status, adopted = self.request(f"{self.path}/members/{gemini_id}", adopt, self.owner)
         self.assertEqual(status, 200, adopted)
+        member = next(item for item in adopted["members"] if item["name"] == "Gemini")
+        self.assertEqual((member["access"], member["session_mode"]), ("runner", "borrowed"))
+        # The service now answers with the credential it generated; the browser-made one no longer works.
+        self.assertEqual(self.request(f"{self.path}/register", {}, gemini)[0], 403)
+        inbox = self.request(f"{self.path}/inbox", token=self.owner)[1]
+        self.assertIn("Gemini", [item["name"] for item in inbox["members"]])
 
     def test_manual_member_answers_by_request_and_is_never_delivered(self):
         """A manual member is skipped by the runner and closes only its own open requests."""

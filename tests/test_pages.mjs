@@ -1050,6 +1050,26 @@ test('Worker smart scheduling can recommend a manual member, which the inbox lis
   assert.deepEqual((await inbox()).observers[0].pending.map(item => item.message_id), [first]);
 });
 
+test('Worker free rooms take over a registered manual member with a credential the service generates', async t => {
+  const f = await worker_fixture(t);
+  const gemini = 'gemini-free'.repeat(4);
+  const r = await free_worker_room(f, [{ name: 'Gemini', access: 'manual', token: gemini }]);
+  const id = await r.member_id('Gemini');
+  const renewed = 'service-made-credential'.repeat(2);
+  const adopt = { action: 'adopt', adapter: 'antigravity_cli', session_id: 'session-1', token: renewed };
+  assert.equal((await f.request(`${r.path}/members/${id}`, adopt, r.owner)).status, 400, 'not registered yet');
+  assert.equal((await f.request(`${r.path}/register`, {}, gemini)).status, 200);
+  assert.equal((await f.request(`${r.path}/members/${id}`, adopt, r.owner)).status, 400, 'no session reported yet');
+  await f.raw(r.path, { headers: { 'X-Discussion-Token': gemini, 'X-Discussion-Session': 'session-1', 'X-Discussion-Session-Client': 'antigravity' } });
+  assert.equal((await f.request(`${r.path}/members/${id}`, { ...adopt, token: 'short' }, r.owner)).status, 400, 'an invalid credential is refused');
+  const adopted = await f.request(`${r.path}/members/${id}`, adopt, r.owner);
+  assert.equal(adopted.status, 200, JSON.stringify(adopted.body));
+  const member = adopted.body.members.find(item => item.name === 'Gemini');
+  assert.deepEqual([member.access, member.session_mode], ['runner', 'borrowed']);
+  assert.equal((await f.request(`${r.path}/register`, {}, gemini)).status, 403, 'the browser-made credential no longer works');
+  assert.ok((await f.request(`${r.path}/inbox`, undefined, r.owner)).body.members.some(item => item.name === 'Gemini'));
+});
+
 test('Worker free rooms bundle requests into one execution and reject late or unbound answers', async t => {
   const f = await worker_fixture(t);
   const r = await free_worker_room(f);

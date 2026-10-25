@@ -1070,6 +1070,30 @@ test('a manual Claude expert\'s reported session is registered as a hosted parti
   }
 });
 
+test('a manual Claude member of a free room is hosted with a credential the service generates', async t => {
+  const f = await fixture(t);
+  const owner = randomUUID() + randomUUID(), claude_home = join(f.directory, 'claude-home-free'), claude_id = randomUUID();
+  const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token: owner,
+    room: { title: '自由托管', goal: 'x', mode: 'free', members: ['Claude'], submission_id: randomUUID() } }, f.options);
+  const cwd = load_config(launched.config_path).cwd || join(f.directory, 'original');
+  mkdirSync(cwd, { recursive: true });
+  mkdirSync(join(claude_home, 'projects', 'encoded'), { recursive: true });
+  writeFileSync(join(claude_home, 'projects', 'encoded', `${claude_id}.jsonl`), `${JSON.stringify({ type: 'user', cwd })}
+`);
+  save_launch_settings(f.home, { participants: { Claude: { adapter: 'claude', executable: process.execPath } } });
+  const previous = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = claude_home;
+  try {
+    const member_token = randomUUID() + randomUUID();
+    adopt_member_profile(f.home, launched.config_path, 'Claude-2', claude_id, 'claude', member_token);
+    const config = load_config(launched.config_path);
+    assert.equal(config.participants['Claude-2'].session_id, claude_id);
+    assert.equal(config.members['Claude-2'].token, member_token, 'a free room delivers with the credential the service generated');
+  } finally {
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previous;
+  }
+});
+
 test('a manual Codex expert is hosted through the app for a desktop chat and the CLI otherwise', async t => {
   const f = await fixture(t);
   const codex_home = join(f.directory, 'codex-home-adopt'), [desktop_id, cli_id] = [randomUUID(), randomUUID()];

@@ -453,18 +453,16 @@ function codex_session_adapter(session_id, env = process.env) {
  * Register a manual Claude or Codex expert's own session as a hosted participant, so the service resumes it for later turns.
  * Returns the adapter used. Throws when the local software is not configured or the session is not found on this machine; the member then stays manual.
  */
-export function adopt_member_profile(home, path, name, session_id, client = 'claude') {
+export function adopt_member_profile(home, path, name, session_id, client = 'claude', member_token = '') {
   const release = acquire_lock(join(dirname(path), 'configuration-edit'));
   try {
     const config = configuration_snapshot(path).config;
     const adapter = client === 'codex' ? codex_session_adapter(session_id) : client === 'antigravity' ? 'antigravity_cli' : 'claude';
     const input = { cwd: config.cwd, adopt: true, participants: { [name]: { adapter, session_id } } };
     const profile = borrowed_session(name, participant_profile(name, launch_settings(home).participants, input, false), config.cwd);
-    // A free room delivers with each member's own credential; a manual member's is kept in its access file.
-    const access_path = join(dirname(path), `manual-${name}.access.json`);
-    const manual_token = config.mode === 'free' && existsSync(access_path) ? JSON.parse(readFileSync(access_path, 'utf8')).token : '';
+    // A free room delivers with each member's own credential; the browser-made one is not kept locally, so the owner issues a new one.
     const next = { ...config, participants: { ...config.participants, [name]: profile },
-      ...(manual_token ? { members: { ...config.members, [name]: { token: manual_token, pending: '' } } } : {}) };
+      ...(member_token ? { members: { ...config.members, [name]: { token: member_token, pending: '' } } } : {}) };
     validate_config(next, dirname(path));
     atomic_json(path, next);
     return adapter;

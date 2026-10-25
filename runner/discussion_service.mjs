@@ -273,8 +273,9 @@ class RoomWorker {
       if (member.access !== 'manual' || member.status !== 'active' || !member.registered_at || !member.reported_session || this.adopt_failed.has(key)) continue;
       try {
         const { adopt_member_profile } = await import('./discussion_launch.mjs');
-        const adapter = adopt_member_profile(this.home, this.path, member.name, member.reported_session, member.reported_client);
-        await api(this.config, `/members/${member.id}`, { action: 'adopt', adapter, session_id: member.reported_session });
+        const member_token = this.config.mode === 'free' ? `${randomUUID()}${randomUUID()}` : '';
+        const adapter = adopt_member_profile(this.home, this.path, member.name, member.reported_session, member.reported_client, member_token);
+        await api(this.config, `/members/${member.id}`, { action: 'adopt', adapter, session_id: member.reported_session, ...(member_token ? { token: member_token } : {}) });
         this.log(`${this.config.room}: ${member.name} 已转为本机托管`);
       } catch (error) {
         this.adopt_failed.add(key);

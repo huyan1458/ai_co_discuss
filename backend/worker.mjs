@@ -2528,8 +2528,10 @@ async function handle_free_api(database, request, parts) {
       if (!await registered_at(database, member)) throw new HttpError(400, "成员尚未注册，不能转为托管");
       if (!reported || reported.session_id !== payload.session_id || !["claude", "codex", "codex_cli", "antigravity_cli"].includes(payload.adapter)) throw new HttpError(400, "成员尚未上报与之相符的会话，不能转为托管");
       if (member.access !== "manual" || member.status !== "active") throw new HttpError(400, "只有在场的手动成员可以转为托管");
+      const hashed = payload.token === undefined ? null : await runtime_hash(payload.token);
+      if (hashed !== null) await require_fresh_member_hash(database, room_id, hashed);
       await database.batch([
-        database.prepare("UPDATE room_members SET access='runner',adapter=?,session_mode='borrowed' WHERE id=?").bind(payload.adapter, member.id),
+        database.prepare("UPDATE room_members SET access='runner',adapter=?,session_mode='borrowed',token_hash=COALESCE(?,token_hash) WHERE id=?").bind(payload.adapter, hashed, member.id),
         database.prepare("DELETE FROM member_sessions WHERE member_id=?").bind(member.id),
         ...free_participant_statements(database, room_id), ...free_settle_statements(database, room_id)]);
     } else if (payload.action === "role") {

@@ -994,6 +994,10 @@ def adopt_manual_member(connection, room_id, member, payload):
         raise ValueError("只有自由协作或全自动讨论中在场的手动专家可以转为托管")
     connection.execute("UPDATE room_members SET access='runner',adapter=?,session_mode='borrowed' WHERE id=?", (payload["adapter"], member["id"]))
     connection.execute("DELETE FROM member_sessions WHERE member_id=?", (member["id"],))
+    # A free room's service answers as the member, so it takes over with a credential the owner's side generated.
+    if payload.get("token") is not None:
+        require_fresh_member_token(connection, room_id, payload["token"])
+        connection.execute("UPDATE room_members SET token_hash=? WHERE id=?", (token_hash(payload["token"]), member["id"]))
 
 
 def require_fresh_member_token(connection, room_id, token):
