@@ -938,9 +938,9 @@ function message_payload() {
     if (online) return { author: online.name, text, reply_to: state.reply_to, kind: "chat", submitted_by: "用户",
       request_ids: state.room.free.requests.filter(item => item.member === online.name && item.status === "pending").map(item => item.id) };
     const payload = { author: "用户", text, reply_to: state.reply_to, kind: "chat", submitted_by: "用户" };
-    const active = (state.room.free?.members || []).filter(member => member.status === "active").map(member => member.name);
-    // @mentions outside code name members; without any, the server gives the message to the only member or the host.
-    const named = active.filter(name => mentioned(text, name));
+    const active = (state.room.free?.members || []).filter(member => member.status === "active" && (member.access !== "manual" || member.registered_at)).map(member => member.name);
+    // @mentions outside code name members (@全体成员 names them all); without any, the server gives the message to the only member or the host.
+    const named = mentioned(text, "全体成员") ? active : active.filter(name => mentioned(text, name));
     if (named.length) payload.to = named;
     return payload;
   }
@@ -2446,7 +2446,7 @@ function download_member_access(name) {
   if (!access.can_manage || !member?.available || member.access === "online") throw new Error("当前浏览器没有此成员可下载的私有配置");
   download_private_json({ site: location.origin, room: room.id, token: member_credentials(room.id)[name].token }, `member-${room.id}-${name}.json`);
   state.access_error = "";
-  show_toast(`已下载 ${name} 的私有配置`);
+  flash_access_notice(`已下载 ${name} 的私有配置`);
 }
 
 /** Copy the same room-scoped credential as one line of text for an agent that cannot take a file. */
@@ -2455,8 +2455,19 @@ async function copy_member_access_text(name) {
   const member = access.members.find(item => item.name === name);
   if (!access.can_manage || !member?.available || member.access === "online") throw new Error("当前浏览器没有此成员可复制的凭证");
   await copy_text(JSON.stringify({ site: location.origin, room: room.id, token: member_credentials(room.id)[name].token }));
+  flash_access_notice(`已复制 ${name} 的凭证文本（含 token）`);
+}
+
+/** Confirm a copy or download briefly in the member rail; the note clears itself. */
+function flash_access_notice(message) {
   state.access_error = "";
-  show_toast(`已复制 ${name} 的凭证文本（含 token）`);
+  state.access_notice = message;
+  clearTimeout(state.access_notice_timer);
+  state.access_notice_timer = setTimeout(() => {
+    if (state.access_notice !== message) return;
+    state.access_notice = "";
+    publish_view();
+  }, TOAST_DURATION_MS);
 }
 
 /** Copy a member-specific entry instruction; only the launch variant carries the credential, never conversation context. */
@@ -2479,10 +2490,7 @@ async function copy_member_join(name, with_credential = false) {
 ${instruction}
 房间入口：${address}
 先核对最新阶段、任务和原文编号，再按房间协议参与。${credential}`);
-  if (state.room?.id === room.id) {
-    state.access_error = "";
-    show_toast(with_credential ? `已复制 ${name} 的启动指令（含 token）` : `已复制 ${name} 的参与说明`);
-  }
+  if (state.room?.id === room.id) flash_access_notice(with_credential ? `已复制 ${name} 的启动指令（含 token）` : `已复制 ${name} 的参与说明`);
 }
 
 /** How a manual member learns it is its turn: free rooms are pulled by the member, discussions only on the host's assignment. */

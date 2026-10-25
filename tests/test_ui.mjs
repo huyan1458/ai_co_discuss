@@ -127,8 +127,10 @@ test("mention selection replaces the caret token without dropping surrounding dr
 test("mention arrows wrap, Enter selects, Escape dismisses and send modifiers remain available", async () => {
   const fixture = mention_fixture();
   fixture.type("@");
+  assert.deepEqual([...fixture.state.members.value], ["全体成员", "Codex", "Claude-评审"], "several free members offer @全体成员 first");
   fixture.key("ArrowUp");
   assert.equal(fixture.state.active.value, "Claude-评审");
+  fixture.key("ArrowDown");
   fixture.key("ArrowDown");
   assert.equal(fixture.state.active.value, "Codex");
   for (const options of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { isComposing: true }, { keyCode: 229 }]) {
@@ -1163,7 +1165,7 @@ function theme_fixture(saved_theme = null, shared_storage = null) {
     getElementById: (id) => nodes.get(id), querySelectorAll: () => buttons,
     createElement: () => ({}), head: { append(node) { nodes.set(node.id, node); loaded.push(node); } },
   };
-  const context = vm.createContext({ window: {}, document, crypto: globalThis.crypto, URL, URLSearchParams, AbortSignal, localStorage: {
+  const context = vm.createContext({ window: {}, document, crypto: globalThis.crypto, URL, URLSearchParams, AbortSignal, setTimeout: () => 0, clearTimeout: () => {}, localStorage: {
     getItem: (key) => storage.get(key), setItem: (key, value) => storage.set(key, value),
     removeItem: key => storage.delete(key), key: index => [...storage.keys()][index], get length() { return storage.size; },
   } });
