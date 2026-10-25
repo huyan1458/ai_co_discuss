@@ -1036,8 +1036,11 @@ test('Worker free room starts and ends a discussion and stays one room', async t
 
 test('Worker smart scheduling can recommend a manual member, which the inbox lists apart from woken ones', async t => {
   const f = await worker_fixture(t);
-  const r = await free_worker_room(f, [{ name: 'Gemini', access: 'manual', token: 'gemini-free'.repeat(4) }]);
+  const gemini_token = 'gemini-free'.repeat(4);
+  const r = await free_worker_room(f, [{ name: 'Gemini', access: 'manual', token: gemini_token }]);
   const inbox = async () => (await f.request(`${r.path}/inbox`, undefined, r.owner)).body;
+  assert.deepEqual((await inbox()).observers, [], 'an unregistered manual member does not exist yet');
+  assert.equal((await f.request(`${r.path}/register`, {}, gemini_token)).status, 200);
   const first = (await r.say('帮我看看登录报错')).body.message.id;
   const listed = await inbox();
   assert.deepEqual([listed.members.map(member => member.name), listed.observers.map(member => member.name)], [['Claude'], ['Gemini']]);
@@ -1122,6 +1125,8 @@ test('Worker free rooms keep runner lifecycle, membership and manual members con
   const gemini = 'gemini-free'.repeat(4);
   assert.equal((await f.request(`${r.path}/members`, { name: 'Gemini', token: gemini, access: 'manual' }, r.owner)).status, 200);
   assert.equal((await f.request(`${r.path}/members`, { name: 'Gemini', token: gemini }, r.owner)).status, 409);
+  assert.equal((await r.say('先别点 Gemini', { to: ['Gemini'] })).status, 400, 'an unregistered manual member cannot be named');
+  assert.equal((await f.request(`${r.path}/register`, {}, gemini)).status, 200);
   await r.say('请 Gemini 看看', { to: ['Gemini'] });
   assert.deepEqual((await f.request(`${r.path}/inbox`, undefined, r.owner)).body.members.map(member => member.name), ['Claude', 'Codex']);
   assert.equal((await r.reserve('Gemini')).status, 404);

@@ -464,7 +464,9 @@ class MultiMemberTests(FreeRoomTests):
     def test_smart_scheduling_may_recommend_a_manual_member(self):
         """A manual member is a valid recommendation target, and adopting asks it like any other member."""
         self.assertIsNone(self.request(self.path)[1]["session"], "a free room has no discussion session")
-        self.request(f"{self.path}/members", {"name": "Gemini", "token": uuid.uuid4().hex, "access": "manual"}, self.owner)
+        gemini = uuid.uuid4().hex
+        self.request(f"{self.path}/members", {"name": "Gemini", "token": gemini, "access": "manual"}, self.owner)
+        self.assertEqual(self.request(f"{self.path}/register", {}, gemini)[0], 200)
         route = self.request(f"{self.path}/messages", {"author": "用户", "text": "没点名的问题", "submission_id": uuid.uuid4().hex}, self.owner)[1]["message"]["id"]
         gemini_id = self.member_id("Gemini")
         self.assertEqual(self.request(f"{self.path}/recommendations", {"message_id": route, "member_id": gemini_id, "provider": "jev",
@@ -473,10 +475,23 @@ class MultiMemberTests(FreeRoomTests):
         observers = self.request(f"{self.path}/inbox", token=self.owner)[1]["observers"]
         self.assertEqual([item["message_id"] for item in observers[0]["pending"]], [route])
 
+    def test_registered_manual_member_can_be_adopted_in_a_free_room(self):
+        """Once registered and its CLI reported a session, the owner's service takes the member over like a woken one."""
+        gemini = uuid.uuid4().hex
+        self.request(f"{self.path}/members", {"name": "Gemini", "token": gemini, "access": "manual"}, self.owner)
+        gemini_id = self.member_id("Gemini")
+        adopt = {"action": "adopt", "adapter": "antigravity_cli", "session_id": "session-1"}
+        self.assertEqual(self.request(f"{self.path}/members/{gemini_id}", adopt, self.owner)[0], 400)
+        self.assertEqual(self.request(f"{self.path}/register", {}, gemini)[0], 200)
+        self.assertEqual(self.request(f"{self.path}/members/{gemini_id}", adopt, self.owner)[0], 400, "no session reported yet")
+
     def test_manual_member_answers_by_request_and_is_never_delivered(self):
         """A manual member is skipped by the runner and closes only its own open requests."""
         gemini = uuid.uuid4().hex
         self.request(f"{self.path}/members", {"name": "Gemini", "token": gemini, "access": "manual"}, self.owner)
+        self.assertEqual(self.say("先别点 Gemini", to=["Gemini"])[0], 400, "an unregistered manual member does not exist yet")
+        self.assertEqual(self.request(f"{self.path}/inbox", token=self.owner)[1]["observers"], [])
+        self.assertEqual(self.request(f"{self.path}/register", {}, gemini)[0], 200)
         self.say("请 Gemini 看看", to=["Gemini", "Claude"])
         inbox = self.request(f"{self.path}/inbox", token=self.owner)[1]
         self.assertEqual([member["name"] for member in inbox["members"]], ["Claude", "Codex"])

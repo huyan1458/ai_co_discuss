@@ -112,12 +112,12 @@ const REPLY_GLOW_MASS = 1;
 const REPLY_GLOW_DAMPING = 18.566573373612275;
 const REPLY_GLOW_FORCE = 78.16726685662772 / 8;
 /** Move only the text's highlight; removal and reduced motion cancel the loop. */
-watch([reply_glow, reduced_motion], ([element, reduce_motion], _previous, cleanup) => {
-  if (!element || reduce_motion) return;
+watch([() => [].concat(reply_glow.value ?? []), reduced_motion], ([elements, reduce_motion], _previous, cleanup) => {
+  if (!elements.length || reduce_motion) return;
   const relaxation = REPLY_GLOW_MASS / REPLY_GLOW_DAMPING;
   const terminal_speed = REPLY_GLOW_FORCE / REPLY_GLOW_DAMPING;
   let position = 0, velocity = 0, previous_time = performance.now(), frame = 0;
-  element.classList.add("is-glowing");
+  elements.forEach((element) => element.classList.add("is-glowing"));
   /** Integrate m·x″ = F − c·x′ exactly, independent of frame rate. */
   function advance_glow(now) {
     const seconds = (now - previous_time) / 1000;
@@ -126,14 +126,16 @@ watch([reply_glow, reduced_motion], ([element, reduce_motion], _previous, cleanu
       + (velocity - terminal_speed) * relaxation * (1 - decay)) % 1;
     velocity = terminal_speed + (velocity - terminal_speed) * decay;
     previous_time = now;
-    element.style.setProperty("--reply-glow-position", `${100 * (1 - position)}%`);
+    elements.forEach((element) => element.style.setProperty("--reply-glow-position", `${100 * (1 - position)}%`));
     frame = requestAnimationFrame(advance_glow);
   }
   frame = requestAnimationFrame(advance_glow);
   cleanup(() => {
     cancelAnimationFrame(frame);
-    element.classList.remove("is-glowing");
-    element.style.removeProperty("--reply-glow-position");
+    elements.forEach((element) => {
+      element.classList.remove("is-glowing");
+      element.style.removeProperty("--reply-glow-position");
+    });
   });
 }, { flush: "post" });
 const speaking_turn = computed(() => ["pending", "notified"].includes(room.value?.current_turn?.status)
@@ -158,19 +160,26 @@ const free_busy = computed(() => {
     const execution = member.execution;
     if (execution && ["dispatched", "started"].includes(execution.status)) {
       return [{ id: `free-${execution.id}`, author: member.name, member_id: member.id,
-        text: execution.stale ? "执行失联：网站已不再接受本次回答，软件停止未确认" : "正在处理…",
-        seconds: Math.max(0, Math.floor(Date.now() / 1000) - execution.created_at) }];
+        text: execution.stale ? "执行失联：网站已不再接受本次回答，软件停止未确认" : "正在处理",
+        working: !execution.stale, created_at: execution.created_at }];
+    }
+    // A manual member is never woken by the program, so its card waits for the user to trigger it.
+    if (member.pending > 0 && member.access === "manual") {
+      return [{ id: `free-wait-${member.id}`, author: member.name, member_id: member.id,
+        text: `待投递 ${member.pending} 条：需在其 AI 会话中触发`, working: false, waiting: true }];
     }
     return [];
   });
 });
-/** One working card: the first busy member leads, the others are listed in the same line. */
-const free_activity = computed(() => {
-  const [first, ...others] = free_busy.value;
-  if (!first) return null;
-  const text = others.length ? [first, ...others].map((item) => `${bridge.display_name(item.author)}：${item.text}`).join(" · ") : first.text;
-  return { ...first, is_host: false, round: "", text };
-});
+const free_now = ref(Math.floor(Date.now() / 1000));
+/** Each busy member keeps its own working card, so the elapsed time ticks while any is shown. */
+watch(() => free_busy.value.length > 0, (busy, _previous, cleanup) => {
+  if (!busy) return;
+  free_now.value = Math.floor(Date.now() / 1000);
+  const timer = setInterval(() => { free_now.value = Math.floor(Date.now() / 1000); }, 1000);
+  cleanup(() => clearInterval(timer));
+}, { immediate: true });
+const free_working = computed(() => view.value.query || view.value.mention_only ? [] : free_busy.value);
 /** Says in the note line who the draft will reach: the @mentioned members, else the host. */
 const recipient_hint = computed(() => {
   if (view.value.free_proxy) return `本条作为 ${bridge.display_name(view.value.free_proxy)} 的回答原文保存，并关闭它的待处理请求`;
@@ -181,7 +190,7 @@ const recipient_hint = computed(() => {
 });
 const has_draft = computed(() => Boolean(text.value.trim() || view.value.attachment_drafts.length));
 /** Active members a free-room message can name; chips appear only when there is a choice. */
-const free_members = computed(() => free.value ? (room.value.free?.members || []).filter((member) => member.status === "active") : []);
+const free_members = computed(() => free.value ? (room.value.free?.members || []).filter((member) => member.status === "active" && (member.access !== "manual" || member.registered_at)) : []);
 const free_host = computed(() => free_members.value.find((member) => member.role === "host"));
 const free_online = computed(() => free_members.value.filter((member) => member.access === "online"));
 /** In a discussion, an @mention of an active member is a direct question: it wakes that member outside turns, rounds and limits. */
@@ -238,7 +247,7 @@ const execution_reports = computed(() => {
 /** Show live executions or an explicit manual wait, without implying that a manual expert is working. */
 const pending_message = computed(() => {
   const value = room.value;
-  if (free.value) return view.value.query || view.value.mention_only ? null : free_activity.value;
+  if (free.value) return null;
   const runtime = value?.runtime;
   if (view.value.query || view.value.mention_only || value?.archived || ["paused", "concluded"].includes(value?.phase)
     || runtime?.mode !== "automatic" || runtime.status !== "running" || runtime.expired) return null;
@@ -637,7 +646,7 @@ async function follow_messages() {
   if (follow_tail.value && transcript.value) transcript.value.scrollTop = transcript.value.scrollHeight;
   track_scroll();
 }
-watch([() => view.value.messages, pending_message, failed_messages], follow_messages, { immediate: true });
+watch([() => view.value.messages, pending_message, free_working, failed_messages], follow_messages, { immediate: true });
 watch([() => view.value.room?.id, () => view.value.query, () => view.value.mention_only], () => {
   jump_target.value = null;
   active_message.value = null;
@@ -1112,7 +1121,22 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           </template>
         </UChatMessage>
       </div>
-      <div v-if="!transcript_messages.length && !pending_message" class="channel-empty"><UIcon :name="view.query || view.mention_only ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.mention_only ? '没有找到消息' : room.title }}</h2><p>{{ view.query || view.mention_only ? '试试其他关键词，或清除筛选。' : bridge.empty_discussion_message(room) }}</p></div>
+      <div v-if="free_working.length" class="channel-message-group">
+        <UChatMessage v-for="item in free_working" :id="`execution-${item.id}`" :key="item.id" :data-author="bridge.identities[item.author]?.style" role="assistant" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
+          <template #body>
+            <div class="channel-message-byline">
+              <UAvatar :src="bridge.identities[item.author]?.icon" :text="bridge.identities[item.author]?.initials || '?'" :alt="bridge.display_name(item.author)" size="md" class="channel-avatar" :class="bridge.identities[item.author]?.style" />
+              <div class="channel-message-meta"><div class="channel-message-author"><strong>{{ bridge.display_name(item.author) }}</strong></div></div>
+              <span class="channel-message-provenance channel-message-elapsed">{{ item.waiting ? '手动启动' : `已用 ${format_elapsed(Math.max(0, free_now - item.created_at))}` }}</span>
+            </div>
+            <div class="channel-message-text" role="status" :aria-label="`${bridge.display_name(item.author)} ${item.text}`">
+              <span v-if="item.waiting">{{ item.text }}</span>
+              <span v-else ref="reply_glow" class="channel-reply-glow">{{ item.text }}<span v-if="item.working" class="channel-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></span>
+            </div>
+          </template>
+        </UChatMessage>
+      </div>
+      <div v-if="!transcript_messages.length && !pending_message && !free_working.length" class="channel-empty"><UIcon :name="view.query || view.mention_only ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.mention_only ? '没有找到消息' : room.title }}</h2><p>{{ view.query || view.mention_only ? '试试其他关键词，或清除筛选。' : bridge.empty_discussion_message(room) }}</p></div>
     </div>
     <div v-if="(transcript_messages.length || pending_message) && !follow_tail" class="channel-latest-dock"><UButton icon="i-lucide-arrow-down" color="neutral" variant="outline" aria-label="回到最新消息" class="channel-latest-button" @click="return_to_latest" /></div>
     <div class="channel-composer-dock"><div class="channel-composer-column" @dragover="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments" @keydown.capture="mention_keydown($event); attachment_shortcut($event)" @input="update_mention" @click="update_mention" @keyup="update_mention" @select="update_mention" @compositionstart="mention_composition" @compositionend="mention_composition" @scroll.capture="sync_mirror">
@@ -1173,7 +1197,12 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
 .channel-link-button { color: var(--channel-accent); text-decoration: underline; text-underline-offset: 2px; }
 .channel-message-elapsed { align-self: center; margin-left: auto; white-space: nowrap; }
 .channel-reply-glow { display: inline-block; max-width: 100%; }
+.channel-dots i { font-style: normal; }
 @media (prefers-reduced-motion: no-preference) {
+  .channel-dots i { animation: channel-dot-blink 1.2s infinite both; }
+  .channel-dots i:nth-child(2) { animation-delay: .2s; }
+  .channel-dots i:nth-child(3) { animation-delay: .4s; }
+  @keyframes channel-dot-blink { 0%, 80%, 100% { opacity: .2; } 40% { opacity: 1; } }
   .channel-reply-glow.is-glowing {
     background-image: linear-gradient(90deg,
       color-mix(in srgb, currentColor 76%, transparent) 40%,

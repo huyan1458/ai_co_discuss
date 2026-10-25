@@ -989,7 +989,7 @@ function reset_create_form() {
   state.create_parent = null;
   state.launch.create = true;
   state.launch.workspace = {};
-  state.launch.scheduler = {};
+  state.launch.scheduler = default_scheduler();
   state.named_followup = false;
   state.create_discussion = false;
   state.launch.profiles = JSON.parse(JSON.stringify(state.launch.saved_profiles || {}));
@@ -1744,6 +1744,8 @@ async function load_launch_settings() {
       scheduler_providers: settings.scheduler_providers || {}, error: "",
       notice: local_connection ? "已连接本机服务，讨论保存在当前网站" : "" });
     Object.values(state.launch.profiles).forEach(fill_api_key);
+    // Settings arrive after the form was reset; only an untouched draft gets the default.
+    if (!Object.keys(state.launch.scheduler).length) state.launch.scheduler = default_scheduler();
     load_room_models();
   } catch (error) { state.launch.available = false; state.launch.room_models = null; state.launch.error = error.message; }
   finally { refresh_launch_recoveries(); render_launch_settings(); publish_view(); }
@@ -1951,6 +1953,15 @@ function write_named_followup(value) {
 function write_create_discussion(value) {
   state.create_discussion = Boolean(value);
   publish_view();
+}
+
+/** A fresh form turns smart scheduling on when some provider already has a saved key. */
+function default_scheduler() {
+  const providers = state.launch.scheduler_providers || {};
+  const provider = Object.keys(providers).find((name) => state.launch.api_keys?.[providers[name].base_url]);
+  if (!provider) return {};
+  const { base_url, models } = providers[provider];
+  return { enabled: true, provider, model: models[0] || "", api_key_ref: state.launch.api_keys[base_url] };
 }
 
 /** Change the smart scheduling draft; a new provider starts from its preset model and any key saved for its root. */

@@ -223,6 +223,11 @@ def possible_conflicts(connection, room_id, names):
     return conflicts
 
 
+# An invited manual member that has not registered counts as absent: it receives no request and is never a target.
+REGISTERED_MEMBER = """(room_members.access<>'manual' OR EXISTS(SELECT 1 FROM member_registrations r
+    WHERE r.member_id=room_members.id AND r.token_hash=room_members.token_hash))"""
+
+
 def free_view(connection, room_id):
     """Summarize members, their live execution, recent requests and possible file conflicts."""
     now = int(time.time())
@@ -230,6 +235,8 @@ def free_view(connection, room_id):
     for row in connection.execute("SELECT * FROM room_members WHERE room_id=? AND status<>'removed' ORDER BY id", (room_id,)):
         member = {key: row[key] for key in MEMBER_FIELDS}
         member["registered_at"] = registered_at(connection, row)
+        reported = connection.execute("SELECT session_id,client FROM member_sessions WHERE member_id=?", (row["id"],)).fetchone()
+        member["reported_session"], member["reported_client"] = (reported["session_id"], reported["client"]) if reported else ("", "")
         latest = connection.execute("SELECT * FROM member_executions WHERE member_id=? ORDER BY id DESC LIMIT 1",
                                     (row["id"],)).fetchone()
         member["execution"] = public_execution(latest)
@@ -307,9 +314,10 @@ def authorize_free_write(connection, room_id, token, operation, payload):
     return require_member(connection, room_id, token, author)
 
 
-def active_members(connection, room_id):
-    """Map active member names to their rows."""
-    return {row["name"]: row for row in connection.execute("SELECT * FROM room_members WHERE room_id=? AND status='active'", (room_id,))}
+def active_members(connection, room_id, registered_only=True):
+    """Map active member names to their rows; unregistered manual members are left out unless a discussion start needs them pending."""
+    return {row["name"]: row for row in connection.execute(
+        f"SELECT * FROM room_members WHERE room_id=? AND status='active' AND ({REGISTERED_MEMBER} OR ?=0)", (room_id, int(registered_only)))}
 
 
 def named_members(active, names, exclude=None):
@@ -636,7 +644,7 @@ def inbox(connection, room_id, token):
     archived = connection.execute("SELECT archived FROM room_directory WHERE room_id=?", (room_id,)).fetchone()[0]
     members, observers = [], []
     # Manual and online members are never delivered to; the runner only reads them so smart scheduling can route to them too.
-    for row in connection.execute("SELECT * FROM room_members WHERE room_id=? AND status='active' ORDER BY id", (room_id,)):
+    for row in connection.execute(f"SELECT * FROM room_members WHERE room_id=? AND status='active' AND {REGISTERED_MEMBER} ORDER BY id", (room_id,)):
         pending = [dict(item) for item in connection.execute(
             "SELECT id,message_id,purpose FROM member_requests WHERE member_id=? AND status='pending' ORDER BY id", (row["id"],))]
         (members if row["access"] == "runner" else observers).append({**{key: row[key] for key in MEMBER_FIELDS}, "pending": pending})
@@ -663,8 +671,8 @@ def recommend_member(connection, room_id, token, payload):
     route = host_route_request(connection, message_id) if type(message_id) is int else None
     if not route or route["room_id"] != room_id:
         raise LookupError("只能为交给主持人的未点名消息给出推荐")
-    target = connection.execute("""SELECT * FROM room_members WHERE room_id=? AND id=? AND status='active'
-        AND id<>?""", (room_id, payload.get("member_id"), route["member_id"])).fetchone()
+    target = connection.execute(f"""SELECT * FROM room_members WHERE room_id=? AND id=? AND status='active'
+        AND {REGISTERED_MEMBER} AND id<>?""", (room_id, payload.get("member_id"), route["member_id"])).fetchone()
     if not target:
         raise LookupError("推荐对象须为在场的其他成员")
     now = int(time.time())
@@ -698,8 +706,8 @@ def route_wide(connection, room_id, message_id, action):
     else:
         # The host keeps its row (one request per message and member) and now answers its own share, without dispatching.
         connection.execute("UPDATE member_requests SET purpose='all' WHERE id=?", (route["id"],))
-        connection.execute("""INSERT OR IGNORE INTO member_requests (room_id,member_id,message_id,chain_id,purpose,created_by,created_at)
-            SELECT room_id,id,?,?,'all','user',? FROM room_members WHERE room_id=? AND status='active' ORDER BY id""",
+        connection.execute(f"""INSERT OR IGNORE INTO member_requests (room_id,member_id,message_id,chain_id,purpose,created_by,created_at)
+            SELECT room_id,id,?,?,'all','user',? FROM room_members WHERE room_id=? AND status='active' AND {REGISTERED_MEMBER} ORDER BY id""",
                            (message_id, message_id, int(time.time()), room_id))
     requests = connection.execute("SELECT * FROM member_requests WHERE message_id=? ORDER BY id", (message_id,)).fetchall()
     return {"action": action, "requests": [dict(row) for row in requests]}
@@ -982,8 +990,8 @@ def adopt_manual_member(connection, room_id, member, payload):
         raise ValueError("成员尚未注册，不能转为托管")
     if not reported or reported["session_id"] != payload.get("session_id") or payload.get("adapter") not in ADOPTABLE_ADAPTERS:
         raise ValueError("成员尚未上报与之相符的会话，不能转为托管")
-    if member["access"] != "manual" or member["status"] != "active" or not run or run["mode"] != "automatic":
-        raise ValueError("只有全自动讨论中在场的手动专家可以转为托管")
+    if member["access"] != "manual" or member["status"] != "active" or not (room_mode(connection, room_id) == "free" or (run and run["mode"] == "automatic")):
+        raise ValueError("只有自由协作或全自动讨论中在场的手动专家可以转为托管")
     connection.execute("UPDATE room_members SET access='runner',adapter=?,session_mode='borrowed' WHERE id=?", (payload["adapter"], member["id"]))
     connection.execute("DELETE FROM member_sessions WHERE member_id=?", (member["id"],))
 
@@ -1016,6 +1024,8 @@ def member_action(connection, room_id, member_id, token, payload):
             raise ValueError("只有离开的成员可以请回，且须提供新的成员凭证")
         require_fresh_member_token(connection, room_id, payload.get("token"))
         connection.execute("UPDATE room_members SET status='active',token_hash=? WHERE id=?", (hashed, member_id))
+    elif action == "adopt":
+        adopt_manual_member(connection, room_id, member, payload)
     elif action == "role":
         role = payload.get("role")
         if role not in ("host", "member") or (role == "host" and member["access"] == "online"):
@@ -1026,7 +1036,7 @@ def member_action(connection, room_id, member_id, token, payload):
             connection.execute("UPDATE room_members SET role='member' WHERE room_id=? AND role='host'", (room_id,))
         connection.execute("UPDATE room_members SET role=? WHERE id=?", (role, member_id))
     else:
-        raise ValueError("action 须为 away、active、remove 或 role")
+        raise ValueError("action 须为 away、active、remove、role 或 adopt")
     settle_batches(connection, room_id)
     sync_participants(connection, room_id)
     return free_view(connection, room_id)

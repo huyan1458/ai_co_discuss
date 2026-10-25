@@ -619,7 +619,7 @@ async function start_discussion(database, room_id, token, payload) {
   const room = await require_room(database, room_id);
   if (room.mode !== "free") throw new HttpError(409, "房间正在讨论中；先结束当前讨论");
   if (room.archived) throw new HttpError(400, "房间已存档；恢复后才能开启讨论");
-  const active = await free_active_members(database, room_id);
+  const active = await free_active_members(database, room_id, false);
   const host = Object.values(active).find(row => row.role === "host");
   if (!host || host.access !== "runner") throw new HttpError(400, "开启讨论需要一位由本机托管的 AI 主持人；先在成员栏指定或转为自动");
   const experts = Object.fromEntries(Object.entries(active).map(([name, row]) => [name, row.access === "online" ? "online" : "cli"]));
@@ -2110,7 +2110,9 @@ async function free_view(database, room_id) {
     const execution = pick(latest, FREE_EXECUTION_FIELDS);
     if (latest && ["dispatched", "started"].includes(latest.status)) execution.stale = latest.lease_until <= now;
     const pending = (await database.prepare("SELECT COUNT(*) AS count FROM member_requests WHERE member_id=? AND status='pending'").bind(row.id).first()).count;
-    return { ...pick(row, FREE_MEMBER_FIELDS), registered_at: await registered_at(database, row), execution, pending };
+    const reported = await database.prepare("SELECT session_id,client FROM member_sessions WHERE member_id=?").bind(row.id).first();
+    return { ...pick(row, FREE_MEMBER_FIELDS), registered_at: await registered_at(database, row),
+      reported_session: reported?.session_id ?? "", reported_client: reported?.client ?? "", execution, pending };
   }));
   const names = Object.fromEntries((await database.prepare("SELECT id,name FROM room_members WHERE room_id=?").bind(room_id).all()).results.map(row => [row.id, row.name]));
   const requests = (await database.prepare(`SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by FROM member_requests
@@ -2151,9 +2153,13 @@ async function authorize_free(database, room_id, token, operation, payload) {
   return require_free_member(database, room_id, token, author);
 }
 
+/** An invited manual member that has not registered counts as absent: it receives no request and is never a target. */
+const FREE_REGISTERED = `(room_members.access<>'manual' OR EXISTS(SELECT 1 FROM member_registrations r
+  WHERE r.member_id=room_members.id AND r.token_hash=room_members.token_hash))`;
+
 /** Map active member names to their rows. */
-async function free_active_members(database, room_id) {
-  return Object.fromEntries((await database.prepare("SELECT * FROM room_members WHERE room_id=? AND status='active'").bind(room_id).all()).results
+async function free_active_members(database, room_id, registered_only = true) {
+  return Object.fromEntries((await database.prepare(`SELECT * FROM room_members WHERE room_id=? AND status='active' AND (${FREE_REGISTERED} OR ?=0)`).bind(room_id, registered_only ? 1 : 0).all()).results
     .map(row => [row.name, row]));
 }
 
@@ -2295,7 +2301,7 @@ async function free_inbox(database, room_id, token) {
   await require_free_owner(database, room_id, token);
   await database.batch([...await free_expire_statements(database, room_id), ...free_release_statements(database, room_id)]);
   const archived = Boolean((await database.prepare("SELECT archived FROM room_directory WHERE room_id=?").bind(room_id).first()).archived);
-  const rows = (await database.prepare("SELECT * FROM room_members WHERE room_id=? AND status='active' ORDER BY id").bind(room_id).all()).results;
+  const rows = (await database.prepare(`SELECT * FROM room_members WHERE room_id=? AND status='active' AND ${FREE_REGISTERED} ORDER BY id`).bind(room_id).all()).results;
   // Manual and online members are never delivered to; the runner only reads them so smart scheduling can route to them too.
   const listed = await Promise.all(rows.map(async row => ({ ...pick(row, FREE_MEMBER_FIELDS),
     pending: (await database.prepare("SELECT id,message_id,purpose FROM member_requests WHERE member_id=? AND status='pending' ORDER BY id").bind(row.id).all()).results })));
@@ -2316,7 +2322,7 @@ async function free_recommend(database, room_id, token, payload) {
   const route = Number.isInteger(message_id) ? await database.prepare("SELECT * FROM member_requests WHERE message_id=? AND purpose='route'").bind(message_id).first() : null;
   if (!route || route.room_id !== room_id) throw new HttpError(404, "只能为交给主持人的未点名消息给出推荐");
   const target = await database.prepare(`SELECT * FROM room_members WHERE room_id=? AND id=? AND status='active'
-    AND id<>?`).bind(room_id, payload.member_id ?? 0, route.member_id).first();
+    AND ${FREE_REGISTERED} AND id<>?`).bind(room_id, payload.member_id ?? 0, route.member_id).first();
   if (!target) throw new HttpError(404, "推荐对象须为在场的其他成员");
   await database.prepare(`INSERT OR IGNORE INTO member_recommendations (message_id,room_id,member_id,provider,confidence,created_at,expires_at)
     VALUES (?,?,?,?,?,unixepoch(),unixepoch()+?)`).bind(message_id, room_id, target.id, provider, confidence, FREE_RECOMMEND_SECONDS).run();
@@ -2348,7 +2354,7 @@ async function free_route_wide(database, room_id, message_id, action) {
     // The host keeps its row (one request per message and member) and now answers its own share, without dispatching.
     : [database.prepare(`UPDATE member_requests SET purpose='all' WHERE id=? ${pending}`).bind(route.id),
       database.prepare(`INSERT OR IGNORE INTO member_requests (room_id,member_id,message_id,chain_id,purpose,created_by,created_at)
-        SELECT room_id,id,?,?,'all','user',unixepoch() FROM room_members WHERE room_id=? AND status='active'
+        SELECT room_id,id,?,?,'all','user',unixepoch() FROM room_members WHERE room_id=? AND status='active' AND ${FREE_REGISTERED}
         AND EXISTS(SELECT 1 FROM member_requests WHERE id=? AND purpose='all' AND status='pending') ORDER BY id`).bind(message_id, message_id, room_id, route.id)];
   const results = await database.batch(statements);
   if (!results[0].meta.changes) throw new HttpError(409, "主持人已开始处理这条消息，不再改派");
@@ -2517,6 +2523,15 @@ async function handle_free_api(database, request, parts) {
       await require_fresh_member_hash(database, room_id, hashed);
       await database.batch([database.prepare("UPDATE room_members SET status='active',token_hash=? WHERE id=? AND status='away'").bind(hashed, member.id),
         ...free_participant_statements(database, room_id)]);
+    } else if (payload.action === "adopt") {
+      const reported = await database.prepare("SELECT session_id FROM member_sessions WHERE member_id=?").bind(member.id).first();
+      if (!await registered_at(database, member)) throw new HttpError(400, "成员尚未注册，不能转为托管");
+      if (!reported || reported.session_id !== payload.session_id || !["claude", "codex", "codex_cli", "antigravity_cli"].includes(payload.adapter)) throw new HttpError(400, "成员尚未上报与之相符的会话，不能转为托管");
+      if (member.access !== "manual" || member.status !== "active") throw new HttpError(400, "只有在场的手动成员可以转为托管");
+      await database.batch([
+        database.prepare("UPDATE room_members SET access='runner',adapter=?,session_mode='borrowed' WHERE id=?").bind(payload.adapter, member.id),
+        database.prepare("DELETE FROM member_sessions WHERE member_id=?").bind(member.id),
+        ...free_participant_statements(database, room_id), ...free_settle_statements(database, room_id)]);
     } else if (payload.action === "role") {
       if (!["host", "member"].includes(payload.role) || (payload.role === "host" && member.access === "online")) {
         throw new HttpError(400, "role 须为 host 或 member；在线成员不能担任主持人");
@@ -2526,7 +2541,7 @@ async function handle_free_api(database, request, parts) {
         ...(payload.role === "host" ? [database.prepare("UPDATE room_members SET role='member' WHERE room_id=? AND role='host'").bind(room_id)] : []),
         database.prepare("UPDATE room_members SET role=? WHERE id=?").bind(payload.role, member.id),
         ...free_participant_statements(database, room_id), ...free_settle_statements(database, room_id)]);
-    } else throw new HttpError(400, "action 须为 away、active、remove 或 role");
+    } else throw new HttpError(400, "action 须为 away、active、remove、role 或 adopt");
     return respond(await free_view(database, room_id));
   }
   throw new HttpError(404, "地址不存在");

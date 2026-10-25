@@ -266,8 +266,9 @@ class RoomWorker {
   }
   /** A manual Claude or Codex expert that has registered and whose CLI reported its session is handed to the service, which resumes that session from the next turn on. */
   async adopt_manual_members() {
-    if (this.config.mode === 'free') return;
-    for (const member of this.runner.members || []) {
+    // A discussion runner lists members itself; a free room's registered manual members come from the room view.
+    const members = this.config.mode === 'free' ? (await api(this.config, '')).free?.members || [] : this.runner.members || [];
+    for (const member of members) {
       const key = `${member.name}:${member.reported_session}`;
       if (member.access !== 'manual' || member.status !== 'active' || !member.registered_at || !member.reported_session || this.adopt_failed.has(key)) continue;
       try {

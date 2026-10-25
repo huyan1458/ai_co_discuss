@@ -738,7 +738,7 @@ def start_discussion(connection, room_id, token, payload):
     if room["archived"]:
         raise ValueError("房间已存档；恢复后才能开启讨论")
     sync_participants(connection, room_id)
-    active = active_members(connection, room_id)
+    active = active_members(connection, room_id, registered_only=False)
     host = next((row for row in active.values() if row["role"] == "host"), None)
     if not host or host["access"] != "runner":
         raise ValueError("开启讨论需要一位由本机托管的 AI 主持人；先在成员栏指定或转为自动")

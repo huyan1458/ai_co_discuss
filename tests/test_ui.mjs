@@ -2235,7 +2235,7 @@ function pending_message_fixture() {
     rounds: [{ number: 2, completed: false }], completed_rounds: 1,
     runtime: { mode: "automatic", status: "running", expired: false, participants: [execution] },
   } } });
-  const context = vm.createContext({ computed, view, room: computed(() => view.value.room) });
+  const context = vm.createContext({ computed, ref, watch, view, room: computed(() => view.value.room) });
   const start = discussion_source.indexOf("const speaking_turn =");
   const end = discussion_source.indexOf("/** A user's message", start);
   vm.runInContext(`${discussion_source.slice(start, end)}\nglobalThis.card = pending_message;`, context);
