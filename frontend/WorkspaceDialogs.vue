@@ -13,7 +13,7 @@ const { view, bridge, field, act, pending } = inject("discussion");
 const open = computed({ get: () => Boolean(mode.value), set: (value) => { if (!value) mode.value = ""; } });
 const titles = { settings: "设置", create: "新建房间", folder: "新建文件夹", "rename-folder": "重命名文件夹", "delete-folder": "移除文件夹", edit: "编辑议题", schedule: "安排专家发言", message: "消息原文" };
 Object.assign(titles, { rename: "重命名房间", archive: "存档房间", restore: "恢复房间", delete: "删除房间" });
-const descriptions = { settings: "管理员账号与界面外观。", create: "组织一场讨论，或邀请 AI 一起完成任务。", edit: "维护目标、参与身份与当前进度。", schedule: "只填写本轮问题，专家按需阅读讨论资料。", message: "保留作者、来源、提交人和引用关系。" };
+const descriptions = { settings: "管理员账号与界面外观。", create: "邀请 AI 一起协作；需要深入讨论时，可在创建时或之后随时开启。", edit: "维护目标、参与身份与当前进度。", schedule: "只填写本轮问题，专家按需阅读讨论资料。", message: "保留作者、来源、提交人和引用关系。" };
 Object.assign(descriptions, { rename: "名称变化不会影响讨论记录和阅读地址。", archive: "保留所有记录，并暂停尚未收束的讨论。", restore: "移回讨论列表，保持当前讨论阶段。", delete: "永久删除房间及其所有记录，无法撤销。" });
 titles.archives = "已存档房间";
 descriptions.archives = "查看记录、恢复房间或彻底删除。";
@@ -127,8 +127,9 @@ async function save_form() {
   if (action === "create") {
     const folder_id = props.targetFolder?.id ?? null;
     // Keep the dialog open while the local service starts members, matching submit_room.
-    const launching = view.value.fields['new-room-kind'] === 'free'
-      ? Object.values(view.value.experts['new-expert-modes'] || {}).includes('cli') : view.value.launch.create && view.value.launch.available;
+    const scheduler = view.value.launch.scheduler || {};
+    const launching = Object.values(view.value.experts['new-expert-modes'] || {}).includes('cli')
+      || (view.value.launch.available && Boolean(scheduler.enabled && scheduler.provider && scheduler.model && scheduler.api_key_ref));
     if (!launching) mode.value = "";
     if (await act(action, folder_id) && launching) mode.value = "";
   } else if (await act(action)) mode.value = "";

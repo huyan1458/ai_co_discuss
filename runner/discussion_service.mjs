@@ -185,6 +185,30 @@ export class DiscussionWithQuestions {
   stop_children() { this.discussion.stop_children(); this.questions.stop_children(); }
 }
 
+/**
+ * A free room's dispatcher. Its requests are always delivered; once the website says the room is in a discussion
+ * (the owner opened one), the discussion engine runs beside them, and when it ends the room simply goes on freely.
+ */
+export class FreeRoomWithDiscussion {
+  constructor(questions) { this.questions = questions; this.discussion = null; }
+  get config() { return this.questions.config; }
+  get members() { return this.discussion?.members; }
+  get children() { return new Set([...(this.discussion?.children || []), ...this.questions.children]); }
+  adopt(config) { this.questions.adopt(config); }
+  async tick() {
+    const room = await api(this.questions.config, '');
+    let result;
+    if (room.mode !== 'free') {
+      this.discussion ??= new DiscussionRunner(this.questions.config, this.questions.store, undefined, this.questions.log);
+      this.discussion.config = this.questions.config;
+      result = await this.discussion.tick();
+    }
+    await this.questions.tick();
+    return result;
+  }
+  stop_children() { this.discussion?.stop_children(); this.questions.stop_children(); }
+}
+
 /** One registered room: its own data-directory lock, store and dispatcher. */
 class RoomWorker {
   constructor(path, create_runner, log, home) {
@@ -300,7 +324,7 @@ class RoomWorker {
 
 /** Keep workers aligned with the registry and tick each one per poll. */
 export class DiscussionService {
-  constructor(home, create_runner = (config, store, log) => config.mode === 'free' ? new FreeRoomRunner(config, store, undefined, log)
+  constructor(home, create_runner = (config, store, log) => config.mode === 'free' ? new FreeRoomWithDiscussion(new FreeRoomRunner(config, store, undefined, log))
       : new DiscussionWithQuestions(new DiscussionRunner(config, store, undefined, log), new FreeRoomRunner(config, store, undefined, log)), log = () => {}) {
     this.home = home;
     this.create_runner = create_runner;

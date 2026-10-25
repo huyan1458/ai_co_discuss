@@ -680,6 +680,7 @@ function create_form_fixture() {
     platform_of: name => name.split("-")[0], display_name: name => name,
     write_launch: (name, field, value) => { (view.value.launch.profiles[name] ||= {})[field] = value; },
     write_field: (id, value) => { events.push([id, value]); view.value.fields[id] = value; },
+    write_create_discussion: value => { view.value.create_discussion = Boolean(value); },
     write_expert: (id, name, mode) => { if (mode) view.value.experts[id][name] = mode; else delete view.value.experts[id][name]; },
     add_instance: (id, name, mode) => {
       let number = 2;
@@ -709,18 +710,23 @@ test("create form shares a role library, keeps independent instances and makes t
   context.set_expert_mode("Codex", "manual");
   context.set_expert_mode("Codex-2", "manual");
   context.set_expert_mode("DeepSeek", "online");
-  assert.equal(vm.runInContext("free_ready.value", context), true, "free rooms without woken members need no launcher");
+  assert.equal(vm.runInContext("room_ready.value", context), true, "rooms without woken members need no launcher");
   view.value.fields["new-room-host"] = "Codex-2";
   context.remove_expert("Codex");
   assert.equal(view.value.fields["new-room-host"], "Codex-2", "a manual member can host");
   context.set_expert_mode("Codex-2", "online");
   assert.equal(view.value.fields["new-room-host"], "", "an online instance cannot host, and the user never does");
-  context.choose_kind("brainstorm");
+  // A discussion is only an optional way to push the room: opening one needs a host the local service wakes.
+  context.set_expert_mode("Codex-2", "manual");
+  view.value.fields["new-room-host"] = "Codex-2";
+  context.toggle_discussion(true);
+  await nextTick();
   assert.equal(view.value.fields["new-room-host"], "");
+  assert.ok(vm.runInContext("blocker.value", context), "a discussion without a woken host cannot be created");
   assert.deepEqual(Array.from(vm.runInContext('access_choices("Codex-2")', context)), ["cli", "manual"], "a discussion expert is woken or manual");
   context.set_expert_mode("Codex-2", "cli");
   assert.equal(view.value.fields["new-room-host"], "Codex-2");
-  assert.deepEqual(Array.from(vm.runInContext('access_choices("Codex-2")', context)), [], "the host is always woken by the local service");
+  assert.deepEqual(Array.from(vm.runInContext('access_choices("Codex-2")', context)), [], "the host of a discussion is always woken by the local service");
   await nextTick();
   f.cleanup();
 });
@@ -1727,6 +1733,31 @@ for (const recovery of [false, true]) test(`local defaults exclude session bindi
   assert.equal(state.launch.error, '');
 });
 
+test("a new room that asks for a discussion is created as a collaboration room, then opened and started", async () => {
+  const fixture = theme_fixture();
+  const state = fixture.context.test_state;
+  const calls = [];
+  fixture.nodes.set('room-dialog', { close() {} });
+  fixture.nodes.set('room-form', { reset() {} });
+  Object.assign(state.launch, { available: true, create: true, profiles: { Codex: { adapter: 'codex_cli', executable: 'C:\\codex.exe' } }, workspace: {} });
+  state.create_discussion = true;
+  state.named_followup = true;
+  Object.assign(fixture.context, {
+    crypto: { randomUUID: () => 'token' }, new_submission_id: () => 'submission-1',
+    room_creation_payload: () => ({ title: '讨论', goal: ' 选方案 ', mode: 'free', host: 'Codex', experts: { Codex: 'cli' } }),
+    read_limits: () => ({ max_rounds: 2, max_minutes: 30, execution_minutes: 0, on_limit: 'summarize', summary_minutes: 5 }),
+    render_launch_settings() {}, render_expert_inputs() {}, default_experts: () => ({}), select_room: async () => {}, show_toast() {},
+    update_directory: async ({ save, commit }) => { const result = await save(); commit(result); return result; },
+    local_launch_request: async () => ({ room: { id: 'created' } }),
+    request_json: async (path, body) => { calls.push([path, body]); return path.endsWith('/runtime') && !body ? { revision: 3 } : {}; },
+  });
+  await fixture.context.submit_room({ preventDefault() {} });
+  assert.deepEqual(calls.map(call => call[0]), ['/api/rooms/created/discussion', '/api/rooms/created/runtime', '/api/rooms/created/runtime']);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0][1])), { action: 'start', goal: '选方案', named_followup: true,
+    limits: { max_rounds: 2, max_minutes: 30, execution_minutes: 0, on_limit: 'pause', summary_minutes: 5 } });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[2][1])), { action: 'start', mode: 'automatic', revision: 3, deadline: 0 });
+});
+
 test("an existing-room launch keeps its target and preserves newer configuration edits", async () => {
   const fixture = theme_fixture();
   fixture.storage.set('discuss-access:room-a', 'owner-token');
@@ -1774,12 +1805,14 @@ test("opening a new form restores every choice to defaults, including per-instan
   Object.assign(f.context, { render_expert_inputs: (_id, value) => { experts = value; }, render_host_options() {}, render_launch_settings() {} });
   Object.assign(state.launch, { create: false, workspace: { cwd: 'D:\上次项目' }, saved_profiles: { Codex: { adapter: 'codex_cli', executable: 'C:\codex.exe' } },
     profiles: { Codex: { adapter: 'codex_cli', executable: 'C:\codex.exe', model: 'gpt-x', project_access: 'write' }, 'Codex-2': { adapter: 'codex_cli' } } });
-  state.creation_mode = 'free';
+  state.creation_mode = 'brainstorm';
   state.create_parent = 'free-room';
+  state.create_discussion = true;
   f.context.reset_create_form();
   assert.equal(resets, 1);
   assert.deepEqual(Object.keys(experts), []);
-  assert.equal(state.creation_mode, 'brainstorm');
+  assert.equal(state.creation_mode, 'free', 'every new room starts as a collaboration room');
+  assert.equal(state.create_discussion, false);
   assert.equal(state.create_parent, null);
   assert.equal(state.launch.create, true);
   assert.deepEqual(Object.keys(state.launch.workspace), []);

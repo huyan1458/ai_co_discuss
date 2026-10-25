@@ -311,6 +311,36 @@ class MultiMemberTests(FreeRoomTests):
         """Single-member defaults do not apply here: name Claude unless told otherwise."""
         return super().say(text, token, **({"to": ["Claude"]} | extra))
 
+    def test_a_free_room_starts_and_ends_a_discussion_and_stays_one_room(self):
+        """Starting turns the free room into a discussion with its members and history; ending returns it to free collaboration."""
+        discussion = f"{self.path}/discussion"
+        self.request(f"{self.path}/members", {"name": "Gemini", "token": uuid.uuid4().hex, "access": "manual"}, self.owner)
+        first = self.say("先聊几句")[1]["message"]["id"]
+        self.assertEqual(self.request(discussion, {"action": "start"}, self.member)[0], 403)
+        self.assertEqual(self.request(discussion, {"action": "pause"}, self.owner)[0], 400)
+        self.assertEqual(self.request(discussion, {"action": "end"}, self.owner)[0], 409)
+        status, started = self.request(discussion, {"action": "start", "goal": "选方案", "limits": {"max_rounds": 2, "max_minutes": 30}}, self.owner)
+        self.assertEqual(status, 200, started)
+        self.assertEqual((started["mode"], started["host"], started["goal"], started["limits"]["max_rounds"]), ("brainstorm", "Codex", "选方案", 2))
+        self.assertEqual(started["experts"], {"Claude": "cli", "Codex": "cli", "Gemini": "cli"})
+        self.assertEqual({member["name"]: member["access"] for member in started["members"]}, {"Claude": "runner", "Codex": "runner", "Gemini": "manual"})
+        self.assertEqual((started["session"]["status"], started["runtime"]["mode"], started["round_budget"]["base"]), ("paused", "automatic", 0))
+        self.assertEqual(self.request(discussion, {"action": "start"}, self.owner)[0], 409)
+        self.assertEqual(self.request(f"{self.path}/messages/{first}")[1]["text"], "先聊几句")
+        # A direct question still wakes a member inside the discussion.
+        self.assertEqual(self.request(f"{self.path}/messages", {"author": "用户", "text": "@Claude 现在怎么样", "to": ["Claude"], "submission_id": uuid.uuid4().hex}, self.owner)[0], 201)
+        self.assertEqual([item["status"] for item in self.request(self.path)[1]["asks"]["requests"] if item["message_id"] > first], ["pending"])
+        status, ended = self.request(discussion, {"action": "end"}, self.owner)
+        self.assertEqual(status, 200, ended)
+        self.assertEqual((ended["mode"], ended["phase"], ended["session"]["status"], ended["runtime"]["status"]), ("free", "concluded", "concluded", "concluded"))
+        # The room goes on as a free room, and a later discussion starts a new session with a fresh budget.
+        self.assertEqual(super().say("没有点名")[0], 201)
+        status, again = self.request(discussion, {"action": "start", "goal": "第二轮"}, self.owner)
+        self.assertEqual(status, 200, again)
+        self.assertEqual(again["session"]["goal"], "第二轮")
+        sessions = self.request(self.path)[1]["session"]
+        self.assertEqual((sessions["status"], sessions["id"]), ("paused", 2))
+
     def test_unnamed_message_with_several_members_goes_only_to_the_host(self):
         """With two members an unnamed message is routed by the host; nothing is broadcast."""
         self.assertEqual(super().say("没有点名")[0], 201)

@@ -639,6 +639,61 @@ async function update_topic(database, room_id, payload) {
   return require_room(database, room_id);
 }
 
+/**
+ * Turn a free room into a discussion; its AI host then pushes speakers within the limits until end_discussion.
+ * The room, members and history stay; the run is prepared, not started: the local service starts it once it takes the room over.
+ */
+async function start_discussion(database, room_id, token, payload) {
+  await require_free_owner(database, room_id, token);
+  const room = await require_room(database, room_id);
+  if (room.mode !== "free") throw new HttpError(409, "房间正在讨论中；先结束当前讨论");
+  if (room.archived) throw new HttpError(400, "房间已存档；恢复后才能开启讨论");
+  const active = await free_active_members(database, room_id);
+  const host = Object.values(active).find(row => row.role === "host");
+  if (!host || host.access !== "runner") throw new HttpError(400, "开启讨论需要一位由本机托管的 AI 主持人；先在成员栏指定或转为自动");
+  const experts = Object.fromEntries(Object.entries(active).map(([name, row]) => [name, row.access === "online" ? "online" : "cli"]));
+  const values = Object.fromEntries(["goal", "background", "boundaries", "focus", "user_request", "limits"].filter(key => Object.hasOwn(payload, key)).map(key => [key, payload[key]]));
+  const settings = topic_values({ ...values, host: host.name, experts, phase: "preparing" }, { ...room, phase: "paused" });
+  const named_followup = payload.named_followup ?? false;
+  if (typeof named_followup !== "boolean") throw new HttpError(400, "named_followup 须为布尔值");
+  const open = await database.prepare("SELECT 1 FROM discussion_sessions WHERE room_id=? AND status IN ('active','paused')").bind(room_id).first();
+  // A fresh session first, so the phase mirror follows it and not a concluded earlier one.
+  await database.batch([
+    ...(open ? [] : [database.prepare("INSERT INTO discussion_sessions (room_id,goal,status,created_at) VALUES (?,?,'paused',?)").bind(room_id, settings.goal, new Date().toISOString())]),
+    database.prepare("UPDATE rooms SET goal=? WHERE id=?").bind(settings.goal, room_id),
+    ...limit_statements(database, room_id, settings),
+    ...topic_statements(database, room_id, settings),
+    database.prepare("UPDATE room_modes SET mode='brainstorm' WHERE room_id=?").bind(room_id),
+    database.prepare(`INSERT INTO discussion_options (room_id,named_followup) VALUES (?,?) ON CONFLICT(room_id) DO UPDATE SET named_followup=excluded.named_followup`)
+      .bind(room_id, Number(named_followup)),
+    database.prepare("INSERT INTO round_budgets (room_id,base) VALUES (?,?) ON CONFLICT(room_id) DO UPDATE SET base=excluded.base,cap=0,extra=0")
+      .bind(room_id, await opinion_count(database, room_id, experts)),
+    database.prepare("UPDATE discussion_limits SET started_at=0,closing_at=0,stop_reason='',revision=revision+1 WHERE room_id=?").bind(room_id),
+    database.prepare("UPDATE discussion_pauses SET paused_seconds=0,paused_at=0 WHERE room_id=?").bind(room_id),
+    database.prepare("UPDATE room_floor SET holder=?,next_speaker=?,revision=revision+1 WHERE room_id=?").bind(host.name, host.name, room_id),
+    // Switching the run to automatic converts manual members that carry an adapter; a manual expert of a woken discussion is marked and stays manual.
+    database.prepare("UPDATE room_members SET adapter='manual' WHERE room_id=? AND access='manual' AND status='active'").bind(room_id),
+  ]);
+  await configure_runtime(database, room_id, token, { revision: (await runtime_view(database, room_id)).revision, mode: "automatic" });
+  return require_room(database, room_id);
+}
+
+/** Conclude the discussion for good and return the room to free collaboration; history and conclusion stay. */
+async function end_discussion(database, room_id, token) {
+  await require_free_owner(database, room_id, token);
+  const room = await require_room(database, room_id);
+  if (room.mode === "free") throw new HttpError(409, "房间没有进行中的讨论");
+  if (["running", "ready", "paused"].includes(room.runtime.status)) await configure_runtime(database, room_id, token, { action: "stop", revision: room.runtime.revision });
+  await database.batch([
+    database.prepare("UPDATE discussion_turns SET status='cancelled' WHERE room_id=? AND status IN ('pending','notified')").bind(room_id),
+    database.prepare("UPDATE discussion_turns SET status='skipped' WHERE room_id=? AND status='queued'").bind(room_id),
+    database.prepare("UPDATE topic_settings SET phase='concluded' WHERE room_id=?").bind(room_id),
+    database.prepare("UPDATE room_modes SET mode='free' WHERE room_id=?").bind(room_id),
+    database.prepare("UPDATE room_floor SET holder=NULL,next_speaker=?,revision=revision+1 WHERE room_id=?").bind(room.host, room_id),
+  ]);
+  return require_room(database, room_id);
+}
+
 /** Validate a replay identifier for writes or exact result lookup. */
 function submission_value(value) {
   const identifier = String(value ?? "").trim();
@@ -2941,6 +2996,12 @@ async function handle_api(database, request, parts, params, bucket, setup_key = 
   const reported = request.headers.get("X-Discussion-Session");
   if (reported) await record_reported_session(database, room_id, request.headers.get("X-Discussion-Token") ?? "",
     { session_id: reported, session_client: request.headers.get("X-Discussion-Session-Client") });
+  if (parts[3] === "discussion" && parts.length === 4 && method === "POST") {
+    const body = await read_payload(request);
+    if (!["start", "end"].includes(body.action)) throw new HttpError(400, "action 须为 start 或 end");
+    const token = request.headers.get("X-Discussion-Token") ?? "";
+    return respond(body.action === "start" ? await start_discussion(database, room_id, token, body) : await end_discussion(database, room_id, token));
+  }
   if (parts[3] === "register" && parts.length === 4 && method === "POST") return respond(await register_member(database, room_id, request.headers.get("X-Discussion-Token") ?? ""));
   const free = await room_mode(database, room_id) === "free";
   // A discussion keeps the local service's inbox and per-member executions for the user's direct questions.

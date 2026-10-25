@@ -57,7 +57,9 @@ const can_skip = computed(() => Boolean(turn.value && (active.value || can_resta
 const can_control = computed(() => Boolean(view.value.access?.can_manage));
 const can_end = computed(() => (active.value || room.value.phase === "paused") && !room.value.archived);
 const can_decide = computed(() => limit_decision.value && automatic.value && can_control.value);
-const has_actions = computed(() => active.value || can_restart.value || can_end.value || can_reopen.value || can_decide.value);
+/** A concluded discussion in a room with a control credential hands the room back to free collaboration. */
+const can_return = computed(() => concluded.value && !room.value.archived && room.value.mode !== "free");
+const has_actions = computed(() => active.value || can_restart.value || can_end.value || can_reopen.value || can_decide.value || can_return.value);
 const can_close = computed(() => !inactive.value && room.value.phase !== "preparing" && !room.value.archived && !limits.value.closing);
 const members = computed(() => [room.value.host, ...Object.keys(room.value.experts || {}).filter((name) => name !== room.value.host)]
   .filter((name) => name && name !== "用户").map(member_status));
@@ -370,7 +372,8 @@ async function extend() {
       <UButton v-if="active" icon="i-lucide-pause" label="暂停" size="sm" color="neutral" variant="outline" class="pb-action" title="暂停讨论，原安排保留" :loading="pending === 'pause_discussion'" :disabled="!can_control" @click="act('pause_discussion')" />
       <UButton v-if="can_skip" icon="i-lucide-skip-forward" label="跳过" size="sm" color="neutral" variant="outline" class="pb-action" :title="`跳过 ${bridge.display_name(turn.expert)} 本次发言，${can_restart ? '恢复讨论，' : ''}交给主持人继续安排`" :loading="pending === 'skip_turn'" :disabled="!can_control || Boolean(pending)" @click="act('skip_turn')" />
       <UButton v-if="can_reopen" icon="i-lucide-rotate-ccw" label="重新开始" size="sm" color="neutral" variant="outline" class="pb-action pb-restart" title="保留全部记录，设定新的轮次与时长上限后继续讨论，需本机接入程序在运行" :disabled="!can_control || Boolean(pending)" @click="open_reopen" />
-      <UButton v-if="can_end" icon="i-lucide-flag" label="结束" size="sm" color="neutral" variant="outline" class="pb-action pb-end" title="结束讨论：选择主持人收尾或直接结束" :disabled="!can_control" @click="ending = true" />
+      <UButton v-if="can_return" icon="i-lucide-users" label="回到自由协作" size="sm" color="neutral" variant="outline" class="pb-action pb-restart" title="结束讨论，房间继续自由协作；全部记录与结论保留" :loading="pending === 'end_room_discussion'" :disabled="!can_control || Boolean(pending)" @click="act('end_room_discussion')" />
+      <UButton v-if="can_end" icon="i-lucide-flag" label="结束"size="sm" color="neutral" variant="outline" class="pb-action pb-end" title="结束讨论：选择主持人收尾或直接结束" :disabled="!can_control" @click="ending = true" />
     </section>
     <section v-if="automatic && timings.count" class="pb-section" aria-label="阶段耗时">
       <div class="pb-timing-heading"><h4>耗时</h4><small>共 {{ timings.count }} 次执行</small></div>
@@ -487,8 +490,8 @@ async function extend() {
           <button type="button" class="progress-ending-option" :disabled="!can_close || !!pending" @click="finish('force_close')">
             <strong>请主持人收尾</strong><span>立即进入收束，由 {{ bridge.display_name(room.host) }} 在 {{ limits.summary_minutes || 5 }} 分钟收束预留内根据已有材料总结。</span><small v-if="!can_close">{{ limits.closing ? '已在收尾中。' : '仅进行中的讨论可以收尾；暂停后可先重启再收尾，或直接结束并保留记录。' }}</small>
           </button>
-          <button type="button" class="progress-ending-option" :disabled="concluded || !!pending" @click="finish('conclude_discussion')">
-            <strong>直接结束（不总结）</strong><span>保留全部记录，阶段设为“已收束”，自动运行随之停止。</span>
+          <button type="button" class="progress-ending-option" :disabled="concluded || !!pending" @click="finish('end_room_discussion')">
+            <strong>直接结束（不总结）</strong><span>保留全部记录，自动运行随之停止，房间回到自由协作。</span>
           </button>
         </div>
       </template>

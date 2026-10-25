@@ -94,8 +94,6 @@ const ALL_TABS = [
 /** Free rooms keep coordination in the conversation and member rail. */
 const free_room = computed(() => room.value?.mode === "free");
 const tabs = computed(() => free_room.value ? ALL_TABS.slice(0, 1) : ALL_TABS);
-/** Open the creation dialog prefilled for a brainstorm room linked to this free room. */
-async function start_brainstorm() { await act("prepare_brainstorm"); target_folder.value = null; modal.value = "create"; }
 watch(() => free_room.value && view.value.tab !== "discussion", (leave) => { if (leave) act("tab", "discussion"); }, { immediate: true });
 const view_links = computed(() => tabs.value.map((item) => ({
   ...item, active: !!room.value && view.value.tab === item.value, disabled: !room.value, onSelect: () => { nav_open.value = false; act("tab", item.value); },
@@ -333,7 +331,7 @@ function resize_nav_by_key(event) {
     </main>
     <div v-if="show_rail" class="channel-rail-resizer" role="separator" tabindex="0" aria-label="调整右侧栏宽度" aria-orientation="vertical" aria-controls="channel-member-rail" :aria-valuemin="RAIL_MIN" :aria-valuemax="RAIL_MAX" :aria-valuenow="rail_width" :aria-valuetext="`${rail_width} 像素`" title="拖动调整右侧栏宽度，也可使用左右方向键" @pointerdown="start_rail_resize" @pointermove="resize_rail" @pointerup="finish_rail_resize" @pointercancel="finish_rail_resize" @lostpointercapture="finish_rail_resize" @keydown="resize_rail_by_key"></div>
     <aside v-if="show_rail" id="channel-member-rail" class="channel-member-rail" aria-label="当前焦点与讨论进度">
-      <section class="channel-rail-board"><FreeBoard v-if="room && free_room" @brainstorm="start_brainstorm" />
+      <section class="channel-rail-board"><FreeBoard v-if="room && free_room" />
         <ProgressBoard v-else-if="room" docked /><div v-else class="progress-board is-docked"><header class="pb-header"><strong>讨论进度</strong></header><p class="channel-rail-empty">暂无房间，新建讨论后在这里查看进度与参与者。</p></div></section>
     </aside>
 

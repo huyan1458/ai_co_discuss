@@ -14,9 +14,8 @@ const field_id = (key) => `new-room-${key}`;
 const value = (key) => view.value.fields[field_id(key)] ?? "";
 const write = (key, next) => bridge.write_field(field_id(key), next);
 
-const free = computed(() => value("kind") === "free");
-const KINDS = [{ value: "brainstorm", icon: "i-lucide-messages-square", title: "讨论", text: "围绕议题轮流发言，形成结论" },
-  { value: "free", icon: "i-lucide-message-circle", title: "自由协作", text: "按需点名 AI，在各自会话中工作" }];
+// Every new room is a collaboration room; a discussion is only an optional way to push it forward, opened right away or later.
+const discussing = computed(() => Boolean(view.value.create_discussion));
 const selected = computed(() => view.value.experts[EXPERT_CONTAINER] || {});
 // Cards in the library are types; each selected name is one instance, e.g. Claude and Claude-2.
 // The view lists members in platform order; remember the order they were added in so a new card lands at the end.
@@ -32,25 +31,24 @@ const library = ref(null);
 const host = computed(() => value("host"));
 // Members that submit their own answers can host; web members only read. The user is the client, never the host.
 // A discussion's host is continued by the local service, so it cannot be a manual member.
-const host_options = computed(() => selected_names.value.filter((name) => selected.value[name] !== "online" && (free.value || selected.value[name] !== "manual")));
+const host_options = computed(() => selected_names.value.filter((name) => selected.value[name] !== "online" && (!discussing.value || selected.value[name] !== "manual")));
 const limit_picker = ref(null);
-// Discussions run automatically; a free room needs the local service only for the members it wakes.
+// A room needs the local service only for the members it wakes, smart scheduling or a discussion.
 const woken_names = computed(() => selected_names.value.filter((name) => selected.value[name] === "cli"));
-// Smart scheduling alone also registers a free room with the local service, even when every member is manual or online.
-const automatic = computed(() => !free.value || woken_names.value.length > 0 || scheduler_active.value);
+// Smart scheduling alone also registers a room with the local service, even when every member is manual or online.
+const automatic = computed(() => woken_names.value.length > 0 || scheduler_active.value);
 const launch_ready = (name) => {
   const profile = view.value.launch.profiles[name] || {};
   if (profile.adapter === "api") return Boolean(profile.base_url && profile.api_protocol && profile.api_key_ref && profile.model);
   return Boolean(profile.adapter && (profile.adapter === "antigravity" ? profile.ipc_directory : profile.executable));
 };
-const launching = computed(() => automatic.value && view.value.launch.available && (free.value || view.value.launch.create));
-const free_ready = computed(() => selected_names.value.length > 0 && woken_names.value.every(launch_ready) && (!woken_names.value.length || view.value.launch.available));
-// Smart scheduling runs in the local service, so it is offered only when this room will be launched there.
-const scheduling = computed(() => view.value.launch.available && (free.value || view.value.launch.create));
-const scheduler_active = computed(() => free.value && scheduling.value && Boolean(view.value.launch.scheduler?.enabled));
+const launching = computed(() => automatic.value && view.value.launch.available);
+const room_ready = computed(() => selected_names.value.length > 0 && woken_names.value.every(launch_ready) && (!woken_names.value.length || view.value.launch.available));
+// Smart scheduling runs in the local service, so it is offered whenever the service is connected.
+const scheduling = computed(() => view.value.launch.available);
+const scheduler_active = computed(() => scheduling.value && Boolean(view.value.launch.scheduler?.enabled));
 // Always shown; when it cannot run yet, say what is missing instead of hiding it.
-const scheduling_blocker = computed(() => !view.value.launch.available ? "连接本机服务后可开启"
-  : !free.value && !view.value.launch.create ? "勾选「创建后立即启动 AI」后可开启" : "");
+const scheduling_blocker = computed(() => !view.value.launch.available ? "连接本机服务后可开启" : "");
 const scheduler_unready = computed(() => {
   const scheduler = view.value.launch.scheduler || {};
   return scheduling.value && scheduler.enabled && !(scheduler.provider && scheduler.model && scheduler.api_key_ref);
@@ -60,14 +58,11 @@ const needs_connection = computed(() => automatic.value && !view.value.launch.av
 let connection_timer = 0;
 /** Why the create button is disabled, in the order the user can fix it. */
 const blocker = computed(() => {
-  if (free.value) {
-    if (!selected_names.value.length) return "先添加 AI";
-    if (needs_connection.value) return "先连接本机服务";
-    const unready = woken_names.value.filter((name) => !launch_ready(name));
-    return unready.length ? `补齐 ${unready.join("、")} 的接入配置` : scheduler_unready.value ? "补齐智能调度配置，或取消勾选" : "";
-  }
-  if (!host.value) return "先添加 AI 并选定主持人";
-  return scheduler_unready.value ? "补齐智能调度配置，或取消勾选" : "";
+  if (!selected_names.value.length) return "先添加 AI";
+  if (needs_connection.value || (discussing.value && !view.value.launch.available)) return "先连接本机服务";
+  if (discussing.value && selected.value[host.value] !== "cli") return "开启讨论需要一位由本机唤醒的主持人";
+  const unready = woken_names.value.filter((name) => !launch_ready(name));
+  return unready.length ? `补齐 ${unready.join("、")} 的接入配置` : scheduler_unready.value ? "补齐智能调度配置，或取消勾选" : "";
 });
 
 /** Keep the host inside the selected members that answer by themselves. */
@@ -81,31 +76,17 @@ onMounted(() => {
 });
 onBeforeUnmount(() => window.clearInterval(connection_timer));
 
-/** Change the room use independently of its delivery method. */
-function choose_kind(kind) {
-  write("kind", kind);
-  ensure_host();
-}
-
-/** Arrow keys move and select within a radio group; Tab enters only its current choice. */
-function navigate_choices(event) {
-  const controls = [...event.currentTarget.querySelectorAll('[role="radio"]')];
-  const current = controls.indexOf(event.target);
-  const destinations = { ArrowRight: (current + 1) % controls.length, ArrowDown: (current + 1) % controls.length,
-    ArrowLeft: (current + controls.length - 1) % controls.length, ArrowUp: (current + controls.length - 1) % controls.length,
-    Home: 0, End: controls.length - 1 };
-  if (!(event.key in destinations)) return;
-  event.preventDefault();
-  const target = controls[destinations[event.key]];
-  target.focus();
-  target.click();
+/** Opening a discussion needs a host the local service wakes, so the host moves off a manual member. */
+function toggle_discussion(enabled) {
+  bridge.write_create_discussion(enabled);
+  nextTick(ensure_host);
 }
 
 /** A platform with local software can also join by hand; an API-only platform cannot. */
 const has_local = (name) => bridge.launch_clients[name]?.some((item) => item.value !== "api");
-/** Free rooms choose delivery per member; a discussion's experts are woken or manual, its host always woken. */
+/** Each member chooses its delivery: woken by the local service, or started by hand. A web AI joins as a manual member. */
 // Manual needs no local software, so any platform can be pasted into whichever AI the user runs by hand.
-const access_choices = (name) => free.value || name !== host.value ? ["cli", "manual"] : [];
+const access_choices = (name) => discussing.value && name === host.value ? [] : ["cli", "manual"];
 
 /** Change one selected expert's delivery, defaulting a woken API-only platform to its API, and keep the host valid. */
 function set_expert_mode(name, mode) {
@@ -162,16 +143,17 @@ const limit_rule = computed(() => {
   const rounds = Number(value("limit-max_rounds")), minutes = Number(value("limit-max_minutes"));
   const limits = [rounds && `${rounds} 轮`, minutes && format_duration(minutes)].filter(Boolean);
   if (!limits.length) return "不设轮次和时长上限。";
-  const action = value("limit-on_limit") === "summarize" ? "由主持人总结" : "暂停";
-  return `最多 ${limits.join(" 或 ")}，${limits.length === 2 ? "先到则" : "到限后"}${action}。`;
+  return `最多 ${limits.join(" 或 ")}，${limits.length === 2 ? "先到则" : "到限后"}暂停，由你决定追加轮次或结束。`;
 });
 
 const summary = computed(() => {
   const names = Object.keys(selected.value);
-  if (free.value) return ["自由协作", `${names.length} 位 AI`, host.value ? `${host.value} 主持` : "无主持人"].join(" · ");
-  const rounds = value("limit-max_rounds"), minutes = value("limit-max_minutes");
-  const limits = [rounds && Number(rounds) ? `${rounds} 轮` : "不限轮次", minutes && Number(minutes) ? format_duration(Number(minutes)) : "不限时长"].join(" / ");
-  return [host.value ? `${bridge.display_name(host.value)} 主持` : "尚未选择主持人", names.length ? `${names.join("、")} 参与` : "尚未选择专家", limits].join(" · ");
+  const parts = ["协作房间", `${names.length} 位 AI`, host.value ? `${host.value} 主持` : "无主持人"];
+  if (discussing.value) {
+    const rounds = value("limit-max_rounds"), minutes = value("limit-max_minutes");
+    parts.push("开启讨论", [rounds && Number(rounds) ? `${rounds} 轮` : "不限轮次", minutes && Number(minutes) ? format_duration(Number(minutes)) : "不限时长"].join(" / "));
+  }
+  return parts.join(" · ");
 });
 </script>
 
@@ -185,19 +167,12 @@ const summary = computed(() => {
       <p v-if="targetFolder?.id" class="channel-create-location"><UIcon name="i-lucide-folder" />{{ targetFolder.name }}</p>
       <section class="create-section">
         <h3><span>1</span>这次做什么</h3>
-        <div class="create-modes" role="radiogroup" aria-label="房间用法" @keydown="navigate_choices">
-          <button v-for="option in KINDS" :key="option.value" type="button" role="radio" class="create-mode" :class="{ 'is-selected': (value('kind') || 'brainstorm') === option.value }" :aria-checked="(value('kind') || 'brainstorm') === option.value" :tabindex="(value('kind') || 'brainstorm') === option.value ? 0 : -1" @click="choose_kind(option.value)">
-            <UIcon :name="option.icon" /><span class="create-mode-copy"><strong>{{ option.title }}</strong><small>{{ option.text }}</small></span>
-          </button>
-        </div>
-        <UFormField label="话题名称" required><UInput :model-value="value('title')" :maxlength="80" required autofocus size="lg" :placeholder="free ? '这次要一起做什么？' : '这次想讨论什么？'" class="w-full" @update:model-value="write('title', $event)" /></UFormField>
-        <!-- A free room's task evolves in the conversation itself, so only the discussion form asks for an opening brief. -->
-        <UFormField v-if="!free" label="用户原文" required description="写下问题、背景和顾虑，AI 主持人据此补全讨论资料。"><UTextarea :model-value="value('user_request')" :maxlength="4000" :rows="5" autoresize :maxrows="12" required placeholder="例如：我们在 A、B 两个方案之间犹豫，主要顾虑是成本和上线时间……" class="w-full" @update:model-value="write('user_request', $event)" /></UFormField>
+        <UFormField label="话题名称" required><UInput :model-value="value('title')" :maxlength="80" required autofocus size="lg" placeholder="这次要一起做什么？" class="w-full" @update:model-value="write('title', $event)" /></UFormField>
       </section>
 
       <section class="create-section">
         <h3><span>2</span>谁来参与</h3>
-        <p class="fine-print create-hint">{{ free ? '每位成员单独选：程序启动（本机唤醒）或手动启动（你来启动）。' : '主持人由本机自动启动，专家可选自动或手动。' }}</p>
+        <p class="fine-print create-hint">每位成员单独选：程序启动（本机唤醒）或手动启动（你来启动；网页 AI 也选手动，回答由你代发）。</p>
         <div v-if="selected_names.length" class="create-experts" role="group" aria-label="参与的 AI">
           <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :choices="access_choices(name)"
             :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)" hosting
@@ -212,36 +187,32 @@ const summary = computed(() => {
         </div>
         <div class="fine-print create-hint create-host-hint">
           <UIcon name="i-lucide-crown" />
-          <span>{{ free ? host_options.length ? '点卡片上的皇冠指定主持人：没 @ 任何人的消息由它分配；其他成员只在被你或主持人点名时发言。' : '添加一位本地 AI 后，没 @ 的消息才有人接。' : host_options.length ? '点卡片上的皇冠指定主持人，负责补全议题、安排发言与收束，也可同时作为专家。' : '先添加一位 AI 担任主持人。' }}</span>
+          <span>{{ host_options.length ? '点卡片上的皇冠指定主持人：没 @ 任何人的消息由它分配；其他成员只在被你或主持人点名时发言。' : '添加一位本地 AI 后，没 @ 的消息才有人接。' }}</span>
         </div>
-        <SchedulerSettings :free="free" :blocker="scheduling_blocker" />
-      </section>
-
-      <section v-if="!free" class="create-section">
-        <h3><span>3</span>讨论多久</h3>
-        <LimitPicker ref="limit_picker" :rounds="Number(value('limit-max_rounds'))" :minutes="Number(value('limit-max_minutes'))"
-          @update:rounds="write('limit-max_rounds', String($event))" @update:minutes="write('limit-max_minutes', String($event))" />
-        <p class="fine-print create-hint">一轮指每位专家各完成一次观点；首次进入讨论或创建安排后计时，暂停期间不计时。</p>
-        <UCheckbox :model-value="Boolean(view.named_followup)" label="点名追问" description="开启后，主持人每轮读完回答再逐位点名追问；关闭时专家之间互相回应、互相提问，主持人只开场和收尾。" @update:model-value="bridge.write_named_followup($event)" />
-        <div class="form-two-columns">
-          <UFormField label="单次 AI 执行（分钟）" description="留空或 0 表示不限"><UInput :model-value="Number(value('limit-execution_minutes')) ? value('limit-execution_minutes') : ''" type="number" :min="0" :max="60" :step="1" placeholder="不限时长" class="w-full" @update:model-value="write('limit-execution_minutes', $event)" /></UFormField>
-        </div>
-        <div class="create-host">
-          <span class="create-label">达到任一上限后</span>
-          <div class="create-chips" role="radiogroup" aria-label="达到上限后">
-            <button v-for="option in [{ value: 'pause', label: '暂停保留现场' }, { value: 'summarize', label: '由主持人总结' }]" :key="option.value" type="button" role="radio" :aria-checked="(value('limit-on_limit') || 'pause') === option.value" :class="{ 'is-selected': (value('limit-on_limit') || 'pause') === option.value }" @click="write('limit-on_limit', option.value)">{{ option.label }}</button>
-          </div>
-          <UInput v-if="value('limit-on_limit') === 'summarize'" :model-value="value('limit-summary_minutes')" type="number" :min="1" :max="60" :step="1" aria-label="收束预留（分钟）" class="create-summary-minutes" @update:model-value="write('limit-summary_minutes', $event)"><template #trailing><span class="fine-print">分钟收束</span></template></UInput>
-        </div>
-        <p class="create-limit-rule" aria-live="polite"><UIcon name="i-lucide-flag" />{{ limit_rule }}</p>
+        <SchedulerSettings :free="true" :blocker="scheduling_blocker" />
       </section>
 
       <section class="create-section">
-        <h3><span>{{ free ? 3 : 4 }}</span>启动 AI</h3>
+        <h3><span>3</span>推进方式</h3>
+        <UCheckbox :model-value="discussing" label="创建后开启讨论" description="由主持人安排成员轮流发言，到上限或结束后房间继续自由协作。不勾选也可以随时在房间里开启。" @update:model-value="toggle_discussion($event)" />
+        <template v-if="discussing">
+          <UFormField label="讨论目标" description="写下问题、背景和顾虑，主持人据此推进。"><UTextarea :model-value="value('goal')" :maxlength="1000" :rows="4" autoresize :maxrows="10" placeholder="例如：我们在 A、B 两个方案之间犹豫，主要顾虑是成本和上线时间……" class="w-full" @update:model-value="write('goal', $event)" /></UFormField>
+          <LimitPicker ref="limit_picker" :rounds="Number(value('limit-max_rounds'))" :minutes="Number(value('limit-max_minutes'))"
+            @update:rounds="write('limit-max_rounds', String($event))" @update:minutes="write('limit-max_minutes', String($event))" />
+          <p class="fine-print create-hint">一轮指每位专家各完成一次观点；开启后计时，暂停期间不计时。</p>
+          <UCheckbox :model-value="Boolean(view.named_followup)" label="点名追问" description="开启后，主持人每轮读完回答再逐位点名追问；关闭时专家之间互相回应、互相提问，主持人只开场和收尾。" @update:model-value="bridge.write_named_followup($event)" />
+          <div class="form-two-columns">
+            <UFormField label="单次 AI 执行（分钟）" description="留空或 0 表示不限"><UInput :model-value="Number(value('limit-execution_minutes')) ? value('limit-execution_minutes') : ''" type="number" :min="0" :max="60" :step="1" placeholder="不限时长" class="w-full" @update:model-value="write('limit-execution_minutes', $event)" /></UFormField>
+          </div>
+          <p class="create-limit-rule" aria-live="polite"><UIcon name="i-lucide-flag" />{{ limit_rule }}</p>
+        </template>
+      </section>
+
+      <section class="create-section">
+        <h3><span>4</span>启动 AI</h3>
         <p v-if="!view.launch.available" class="fine-print create-hint">连接本机服务后，可在此设置项目目录和启动方式。</p>
         <template v-else>
-          <UCheckbox v-if="!free" :model-value="view.launch.create" label="创建后立即启动 AI" description="由本机服务创建会话并交付首个主持任务；不勾选则只建房，稍后在「接入」页启动。" @update:model-value="bridge.write_launch('create', '', $event)" />
-          <template v-if="free || view.launch.create">
+          <template v-if="launching">
             <UFormField label="项目目录（可选）">
               <UInput :model-value="view.launch.workspace.cwd || ''" placeholder="输入完整路径，或点右侧图标选择" class="w-full" :ui="{ trailing: 'pe-1' }" @update:model-value="bridge.write_launch('workspace', 'cwd', $event)">
                 <template #trailing><UButton icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" aria-label="在本机选择项目目录" :title="picking ? '目录选择窗口已打开，请在本机窗口中选择' : '在本机选择文件夹'" :disabled="picking" @click="pick_directory" /></template>
@@ -257,7 +228,7 @@ const summary = computed(() => {
       <div class="create-footer-row">
         <span class="create-summary" :class="{ 'is-blocked': blocker }" :title="summary">{{ blocker ? `还差：${blocker}` : summary }}</span>
         <UButton label="取消" color="neutral" variant="ghost" @click="emit('cancel')" />
-        <UButton type="submit" form="create-discussion-form" class="channel-primary-button" :icon="launching ? 'i-lucide-play' : 'i-lucide-plus'" :label="free ? automatic ? '创建并连接' : '创建协作房间' : launching ? '创建并启动讨论' : '创建讨论'" :disabled="(free ? !free_ready : !host) || scheduler_unready" :loading="pending === 'create'" />
+        <UButton type="submit" form="create-discussion-form" class="channel-primary-button" :icon="launching ? 'i-lucide-play' : 'i-lucide-plus'" :label="discussing ? '创建并开启讨论' : automatic ? '创建并连接' : '创建协作房间'" :disabled="!room_ready || Boolean(blocker) || scheduler_unready" :loading="pending === 'create'" />
       </div>
     </footer>
   </div>

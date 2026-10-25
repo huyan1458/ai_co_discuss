@@ -1029,6 +1029,30 @@ test('Worker discussion members answer direct questions from the user outside th
   assert.deepEqual([view.completed_rounds, view.current_turn], [0, null]);
 });
 
+test('Worker free room starts and ends a discussion and stays one room', async t => {
+  const f = await worker_fixture(t);
+  const r = await free_worker_room(f, [{ name: 'Gemini', access: 'manual', token: 'gemini-free'.repeat(4) }]);
+  const discussion = `${r.path}/discussion`;
+  const first = (await r.say('先聊几句')).body.message.id;
+  assert.equal((await f.request(discussion, { action: 'start' }, r.claude)).status, 403);
+  assert.equal((await f.request(discussion, { action: 'pause' }, r.owner)).status, 400);
+  assert.equal((await f.request(discussion, { action: 'end' }, r.owner)).status, 409);
+  const started = await f.request(discussion, { action: 'start', goal: '选方案', limits: { max_rounds: 2, max_minutes: 30 } }, r.owner);
+  assert.equal(started.status, 200, JSON.stringify(started.body));
+  assert.deepEqual([started.body.mode, started.body.host, started.body.goal, started.body.limits.max_rounds], ['brainstorm', 'Claude', '选方案', 2]);
+  assert.deepEqual(started.body.experts, { Claude: 'cli', Gemini: 'cli' });
+  assert.deepEqual(Object.fromEntries(started.body.members.map(member => [member.name, member.access])), { Claude: 'runner', Gemini: 'manual' });
+  assert.deepEqual([started.body.session.status, started.body.runtime.mode, started.body.round_budget.base], ['paused', 'automatic', 0]);
+  assert.equal((await f.request(discussion, { action: 'start' }, r.owner)).status, 409);
+  assert.equal((await f.request(`${r.path}/messages/${first}`)).body.text, '先聊几句');
+  const ended = await f.request(discussion, { action: 'end' }, r.owner);
+  assert.equal(ended.status, 200, JSON.stringify(ended.body));
+  assert.deepEqual([ended.body.mode, ended.body.phase, ended.body.session.status, ended.body.runtime.status], ['free', 'concluded', 'concluded', 'concluded']);
+  const again = await f.request(discussion, { action: 'start', goal: '第二轮' }, r.owner);
+  assert.equal(again.status, 200, JSON.stringify(again.body));
+  assert.deepEqual([again.body.session.goal, again.body.session.id], ['第二轮', 2]);
+});
+
 test('Worker smart scheduling can recommend a manual member, which the inbox lists apart from woken ones', async t => {
   const f = await worker_fixture(t);
   const r = await free_worker_room(f, [{ name: 'Gemini', access: 'manual', token: 'gemini-free'.repeat(4) }]);

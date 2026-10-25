@@ -48,7 +48,7 @@ const PLATFORM_IDENTITIES = {
 };
 const IDENTITIES = by_platform(PLATFORM_IDENTITIES, (identity, name) => ({ ...identity, label: name, description: "AI 实例" }));
 const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false, free_notice: "", free_error: "",
-  free_proxy: "", create_parent: null, named_followup: false,
+  free_proxy: "", create_parent: null, named_followup: false, create_discussion: false,
   archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
   reply_to: null, turn_reply_to: null, tab: "topic", refresh_version: 0, context_dirty: false, topic_dirty: false,
   snapshot_id: 0, pending_submission: null, pending_turn: null, pending_room: null, toast_timer: null,
@@ -1007,6 +1007,7 @@ function reset_create_form() {
   state.launch.workspace = {};
   state.launch.scheduler = {};
   state.named_followup = false;
+  state.create_discussion = false;
   state.launch.profiles = JSON.parse(JSON.stringify(state.launch.saved_profiles || {}));
   Object.values(state.launch.profiles).forEach(fill_api_key);
   state.launch.notice = "";
@@ -1543,7 +1544,13 @@ async function submit_room(event, folder_id = null) {
   const launching = free ? Object.values(payload.experts).includes("cli") || (state.launch.available && Boolean(creation_launch_options().scheduler)) : state.launch.create && state.launch.available;
   if (launching && !state.launch.available) throw new Error("本机唤醒的成员需要连接本机服务；也可改为手动接入或网页代发");
   const launch_draft = launching ? creation_launch_options() : null;
-  const signature = JSON.stringify({ payload, launch_draft });
+  // A discussion is only a way to push the room forward: the room is created as a free room, then opened with these limits.
+  const discussion = free && state.create_discussion ? { goal: payload.goal.trim(), named_followup: state.named_followup,
+    limits: { ...read_limits("new-room"), on_limit: "pause" } } : null;
+  if (discussion && !(launching && payload.host && payload.experts[payload.host] === "cli")) throw new Error("开启讨论需要一位由本机唤醒的 AI 主持人；请先添加并设为主持人");
+  // The key joins the signature only when a discussion is requested, so recovered requests keep matching their stored signature.
+  const signed = (current_payload, current_draft) => JSON.stringify(discussion ? { payload: current_payload, launch_draft: current_draft, discussion } : { payload: current_payload, launch_draft: current_draft });
+  const signature = signed(payload, launch_draft);
   const navigation = state.navigation_version;
   if (!launching) element("room-dialog").close();
   state.launch.error = "";
@@ -1569,7 +1576,8 @@ async function submit_room(event, folder_id = null) {
   }
   state.pending_room = null;
   state.create_parent = null;
-  if (JSON.stringify({ payload: room_creation_payload(folder_id), launch_draft: launching ? creation_launch_options() : null }) === signature) {
+  if (discussion) await open_discussion_after_creation(room.id, discussion);
+  if (signed(room_creation_payload(folder_id), launching ? creation_launch_options() : null) === signature) {
     element("room-form").reset();
     reset_creation_mode();
     render_expert_inputs("new-expert-modes", default_experts());
@@ -1578,6 +1586,18 @@ async function submit_room(event, folder_id = null) {
   }
   if (launching) clear_launch_overrides(launch_draft);
   if (state.navigation_version === navigation) { state.archive_view = false; await select_room(room.id); }
+}
+
+/** Open and start the discussion of a room just created; a failure leaves the room as an ordinary free room. */
+async function open_discussion_after_creation(room_id, { goal, named_followup, limits }) {
+  const path = `/api/rooms/${room_id}`;
+  try {
+    await request_json(`${path}/discussion`, { action: "start", ...(goal ? { goal } : {}), limits, named_followup });
+    const runtime = await request_json(`${path}/runtime`);
+    await request_json(`${path}/runtime`, { action: "start", mode: "automatic", revision: runtime.revision, deadline: 0 });
+  } catch (error) {
+    show_toast(`房间已创建，但开启讨论失败：${error.message}；可在右侧成员栏重试`);
+  }
 }
 
 /** Read a site-bound connection without exposing its credential to the shared view snapshot. */
@@ -1941,6 +1961,12 @@ function creation_launch_options() {
 /** Choose whether the new discussion's host writes named follow-ups for each expert between rounds. */
 function write_named_followup(value) {
   state.named_followup = Boolean(value);
+  publish_view();
+}
+
+/** Choose whether a new room opens a discussion right away; the room itself is always the same collaboration room. */
+function write_create_discussion(value) {
+  state.create_discussion = Boolean(value);
   publish_view();
 }
 
@@ -2403,6 +2429,24 @@ async function conclude_discussion() {
   show_toast("讨论已直接收束，历史记录保留");
 }
 
+/** Turn this free room into a discussion within the given limits and start the run; the local service takes it over at its next check. */
+async function start_room_discussion({ goal, max_rounds, max_minutes }) {
+  const room_id = state.room.id, path = `/api/rooms/${room_id}`;
+  if (!localStorage.getItem(`discuss-access:${room_id}`)) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
+  await request_json(`${path}/discussion`, { action: "start", ...(goal ? { goal } : {}), limits: { max_rounds, max_minutes } });
+  const runtime = await request_json(`${path}/runtime`);
+  await request_json(`${path}/runtime`, { action: "start", mode: "automatic", revision: runtime.revision, deadline: 0 });
+  await refresh_room();
+  show_toast("讨论已开启，由主持人推进；需本机接入程序保持运行");
+}
+
+/** Conclude the discussion and go on as a free room; every message and the conclusion stay. */
+async function end_room_discussion() {
+  await request_json(`/api/rooms/${state.room.id}/discussion`, { action: "end" });
+  await refresh_room();
+  show_toast("讨论已结束，房间回到自由协作，历史记录保留");
+}
+
 /** Revoke active execution before the local adapters are stopped. */
 async function pause_runtime() {
   await request_json(`/api/rooms/${state.room.id}/runtime`, { action: "pause", revision: state.room.runtime.revision });
@@ -2545,7 +2589,7 @@ async function adopt_recommendation({ message_id, mode }) {
 
 /** A completed creation starts the next form with fresh mode defaults. */
 function reset_creation_mode() {
-  state.creation_mode = "brainstorm";
+  state.creation_mode = "free";
   state.creation_drafts = {};
 }
 
@@ -3153,7 +3197,7 @@ function view_snapshot() {
     free_notice: state.free_notice, free_error: state.free_error, free_proxy: state.free_proxy,
     create_parent: state.create_parent, access: access_snapshot(), admin: admin_snapshot(),
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
-    theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup };
+    theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion };
 }
 
 /** Update a shared draft using the same input events as the original controls. */
@@ -3322,7 +3366,7 @@ async function execute_view_action(name, value) {
     copy_turn, notify: () => change_turn_status("notified"), cancel_turn: () => change_turn_status("cancelled"), skip_turn,
     take_floor: () => change_floor("take"), return_floor: () => change_floor("return"),
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
-    choose_runtime, export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, retry_execution, force_close, conclude_discussion, extend_rounds, request_summary, reopen_discussion,
+    choose_runtime, export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, retry_execution, force_close, conclude_discussion, start_room_discussion, end_room_discussion, extend_rounds, request_summary, reopen_discussion,
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
     load_room_configuration, save_room_configuration, interrupt_member, change_member, invite_member, set_proxy, copy_online_notice,
     prepare_brainstorm, return_conclusion, convert_suggestion, adopt_recommendation,
@@ -3348,7 +3392,7 @@ function change_view_theme(theme) {
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
   write_launch: write_launch_field, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
-  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, check_launch_api, launch_summary, launch_can_set_access, launch_can_bind_session, pick_launch_directory, restore_launch_profile, reset_create_form, empty_discussion_message,
+  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, check_launch_api, launch_summary, launch_can_set_access, launch_can_bind_session, pick_launch_directory, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, platform_of, execute: execute_view_action, theme: change_view_theme,

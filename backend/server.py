@@ -25,12 +25,12 @@ from .free_room import (add_member, after_free_message, authorize_free_write, ch
                         inbox, interrupt_member, member_action, member_values, migrate_free_tables, proxy_member, reserve_execution,
                         discussion_members, room_mode, save_room_access, sync_discussion_members, view_execution)
 from .free_room import add_discussion_member, convert_suggestion, discussion_member_action, message_suggestions, save_suggestions, sync_participants
-from .free_room import adopt_recommendation, ask_members, asks_view, checked_asks, recommend_member, register_member
+from .free_room import active_members, adopt_recommendation, ask_members, asks_view, checked_asks, recommend_member, register_member
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, is_ai, is_participant
 from .room_import import import_room, imported_attachment
 from .runtime import (authorize_write, begin_write, configure_runtime, event_action,
                      LIMIT_DEFAULTS, LIMITS_SQL, limit_values, limits_view, require_within_limits,
-                     list_events, require_control, runtime_view, token_hash)
+                     list_events, require_control, require_owner, runtime_view, token_hash)
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB_ROOT = ROOT / "web"
@@ -778,6 +778,66 @@ def create_room(connection, payload, control_token=""):
     if automatic:
         configure_runtime(connection, room_id, control_token, {"revision": 0, "mode": "automatic"})
     return {**require_room(connection, room_id), "duplicate": False, "submission_id": identifier}
+
+
+def start_discussion(connection, room_id, token, payload):
+    """Turn a free room into a discussion; its AI host then pushes speakers within the limits until end_discussion.
+
+    The room, its members and history stay; only the discussion state (topic, limits, floor, budget, session) is set up and the
+    run is prepared, not started: the local service starts it once it takes the room over.
+    """
+    require_owner(connection, room_id, token)
+    begin_write(connection)
+    room = require_room(connection, room_id)
+    if room["mode"] != "free":
+        raise FileExistsError("房间正在讨论中；先结束当前讨论")
+    if room["archived"]:
+        raise ValueError("房间已存档；恢复后才能开启讨论")
+    sync_participants(connection, room_id)
+    active = active_members(connection, room_id)
+    host = next((row for row in active.values() if row["role"] == "host"), None)
+    if not host or host["access"] != "runner":
+        raise ValueError("开启讨论需要一位由本机托管的 AI 主持人；先在成员栏指定或转为自动")
+    experts = {name: "online" if row["access"] == "online" else "cli" for name, row in active.items()}
+    values = {key: payload[key] for key in ("goal", "background", "boundaries", "focus", "user_request", "limits") if key in payload}
+    settings = topic_values({**values, "host": host["name"], "experts": experts, "phase": "preparing"}, {**room, "phase": "paused"})
+    named_followup = payload.get("named_followup", False)
+    if type(named_followup) is not bool:
+        raise ValueError("named_followup 须为布尔值")
+    # A fresh session first, so the phase mirror follows it and not a concluded earlier one.
+    if not connection.execute("SELECT 1 FROM discussion_sessions WHERE room_id=? AND status IN ('active','paused')", (room_id,)).fetchone():
+        connection.execute("INSERT INTO discussion_sessions (room_id,goal,status,created_at) VALUES (?,?,'paused',?)", (room_id, settings["goal"], utc_now()))
+    connection.execute("UPDATE rooms SET goal=? WHERE id=?", (settings["goal"], room_id))
+    save_topic_settings(connection, room_id, settings)
+    connection.execute("UPDATE room_modes SET mode='brainstorm' WHERE room_id=?", (room_id,))
+    connection.execute("INSERT INTO discussion_options (room_id,named_followup) VALUES (?,?) ON CONFLICT(room_id) DO UPDATE SET named_followup=excluded.named_followup",
+                       (room_id, int(named_followup)))
+    connection.execute("INSERT INTO round_budgets (room_id,base) VALUES (?,?) ON CONFLICT(room_id) DO UPDATE SET base=excluded.base,cap=0,extra=0",
+                       (room_id, opinion_count(connection, room_id, experts)))
+    connection.execute("UPDATE discussion_limits SET started_at=0,closing_at=0,stop_reason='',revision=revision+1 WHERE room_id=?", (room_id,))
+    connection.execute("UPDATE discussion_pauses SET paused_seconds=0,paused_at=0 WHERE room_id=?", (room_id,))
+    connection.execute("UPDATE room_floor SET holder=?,next_speaker=?,revision=revision+1 WHERE room_id=?", (host["name"], host["name"], room_id))
+    # Switching the run to automatic converts manual members that carry an adapter; a manual expert of a woken discussion is marked and stays manual.
+    connection.execute("UPDATE room_members SET adapter='manual' WHERE room_id=? AND access='manual' AND status='active'", (room_id,))
+    configure_runtime(connection, room_id, token, {"revision": runtime_view(connection, room_id)["revision"], "mode": "automatic"})
+    return require_room(connection, room_id)
+
+
+def end_discussion(connection, room_id, token, payload):
+    """Conclude the discussion for good and return the room to free collaboration; history and conclusion stay."""
+    require_owner(connection, room_id, token)
+    begin_write(connection)
+    room = require_room(connection, room_id)
+    if room["mode"] == "free":
+        raise FileExistsError("房间没有进行中的讨论")
+    if room["runtime"]["status"] in ("running", "ready", "paused"):
+        configure_runtime(connection, room_id, token, {"action": "stop", "revision": room["runtime"]["revision"]})
+    connection.execute("UPDATE discussion_turns SET status='cancelled' WHERE room_id=? AND status IN ('pending','notified')", (room_id,))
+    connection.execute("UPDATE discussion_turns SET status='skipped' WHERE room_id=? AND status='queued'", (room_id,))
+    connection.execute("UPDATE topic_settings SET phase='concluded' WHERE room_id=?", (room_id,))
+    connection.execute("UPDATE room_modes SET mode='free' WHERE room_id=?", (room_id,))
+    connection.execute("UPDATE room_floor SET holder=NULL,next_speaker=?,revision=revision+1 WHERE room_id=?", (room["host"], room_id))
+    return require_room(connection, room_id)
 
 
 def message_values(payload):
@@ -1897,6 +1957,13 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             record_reported_session(connection, room_id, token, {"session_id": self.headers.get("X-Discussion-Session"),
                                                                  "session_client": self.headers.get("X-Discussion-Session-Client")})
             connection.commit()
+        if parts[3:] == ["discussion"] and method == "POST":
+            body = self.read_payload()
+            if body.get("action") not in ("start", "end"):
+                raise ValueError("action 须为 start 或 end")
+            result = (start_discussion if body["action"] == "start" else end_discussion)(connection, room_id, token, body)
+            connection.commit()
+            return self.respond(result)
         if parts[3:] == ["register"] and method == "POST":
             result = register_member(connection, room_id, token, utc_now())
             connection.commit()
