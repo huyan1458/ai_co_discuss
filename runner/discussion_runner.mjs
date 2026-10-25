@@ -181,6 +181,8 @@ export class DiscussionStore {
   binding(participant) { return this.db.prepare('SELECT session_id FROM bindings WHERE participant=?').get(participant) || {}; }
   /** Commit a returned session before later notifications can use it. */
   bind(participant, session_id) { this.db.prepare('INSERT INTO bindings VALUES (?,?) ON CONFLICT(participant) DO UPDATE SET session_id=excluded.session_id').run(participant, session_id); }
+  /** The failure recorded for one task now; a row read earlier in the tick may predate it. */
+  recorded_error(id) { return this.db.prepare('SELECT error FROM inbox WHERE id=?').get(id)?.error || ''; }
   /** List work that still needs dispatch or reconciliation. */
   pending() { return this.db.prepare("SELECT * FROM inbox WHERE status NOT IN ('completed','cancelled','failed') ORDER BY id").all(); }
   /** Release this instance's database connection. */
@@ -502,6 +504,9 @@ export class DiscussionRunner {
     if (this.exited.has(row.id) && ['dispatched', 'started'].includes(event.status)) {
       // A business write may have just completed the task; recheck before declaring a silent exit.
       const latest = await api(this.config, `/events/${row.id}`, { action: 'view' });
+      // The child records its own failure just before exiting; prefer that cause over the generic one.
+      const cause = row.error || this.store.recorded_error(row.id);
+      if (['dispatched', 'started'].includes(latest.status) && cause) return this.fail(row, cause);
       if (['dispatched', 'started'].includes(latest.status)) return this.fail(row, `${event.participant} 会话已结束，但未保存本次结果${this.exited.get(row.id) ? `：${this.exited.get(row.id)}` : ''}；请核对原会话确认是否已有内容`);
       return this.reconcile(row, latest);
     }
