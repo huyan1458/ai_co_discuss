@@ -460,7 +460,11 @@ export function adopt_member_profile(home, path, name, session_id, client = 'cla
     const adapter = client === 'codex' ? codex_session_adapter(session_id) : client === 'antigravity' ? 'antigravity_cli' : 'claude';
     const input = { cwd: config.cwd, adopt: true, participants: { [name]: { adapter, session_id } } };
     const profile = borrowed_session(name, participant_profile(name, launch_settings(home).participants, input, false), config.cwd);
-    const next = { ...config, participants: { ...config.participants, [name]: profile } };
+    // A free room delivers with each member's own credential; a manual member's is kept in its access file.
+    const access_path = join(dirname(path), `manual-${name}.access.json`);
+    const manual_token = config.mode === 'free' && existsSync(access_path) ? JSON.parse(readFileSync(access_path, 'utf8')).token : '';
+    const next = { ...config, participants: { ...config.participants, [name]: profile },
+      ...(manual_token ? { members: { ...config.members, [name]: { token: manual_token, pending: '' } } } : {}) };
     validate_config(next, dirname(path));
     atomic_json(path, next);
     return adapter;
