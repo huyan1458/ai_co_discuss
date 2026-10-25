@@ -403,7 +403,7 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(archived["current_turn"]["id"], turn["id"])
         self.assertEqual(self.post("拒绝新观点", "archived-new-001")[0], 400)
         self.assertEqual(self.request(base + "/topic", {"actor": "用户", "phase": "discussing"})[0], 400)
-        self.assertEqual(self.request(base + "/messages", {"author": "用户", "kind": "receipt", "text": "已停止任务", "submission_id": "archive-receipt"})[0], 201)
+        self.assertEqual(self.request(base + "/messages", {"author": "用户", "kind": "receipt", "text": "已停止任务", "submission_id": "archive-receipt"})[0], 400, "run receipts no longer exist")
         self.assertEqual(self.request(base + f"/messages/{original['id']}")[1]["text"], "存档原文")
         if not self.external:
             init_database(self.database)
@@ -670,7 +670,7 @@ class DiscussionTests(unittest.TestCase):
         self.request(base + f"/turns/{cancelled['id']}", {"actor": "用户", "status": "cancelled"})
         self.post("没有关联安排的观点", "round-free")
         self.floor("take")
-        self.request(base + "/messages", {"author": "Codex", "kind": "receipt", "text": "运行回执", "submission_id": "round-receipt"})
+        self.request(base + "/messages", {"author": "Codex", "kind": "moderation", "text": "主持说明", "submission_id": "round-moderation"})
         self.floor("take")
         turn = self.schedule("round-answered")[1]["turn"]
         self.assertEqual(self.request(base)[1]["answered_turns"], 0)
@@ -875,31 +875,14 @@ class DiscussionTests(unittest.TestCase):
         plain = self.request(f"/r/{self.room['id']}")[1]
         self.assertIn(f"整理至 #{first_id}", plain)
 
-    def test_latest_receipts_survive_late_arrival_and_history_pagination(self):
-        """Late reports remain discoverable without silently changing an older summary."""
+    def test_run_receipts_are_no_longer_written_and_the_view_has_no_receipt_list(self):
+        """The receipt message kind is retired: it is refused, and the room view and state text carry no receipt references."""
         self.configure_host()
         base = f"/api/rooms/{self.room['id']}"
-        self.assertEqual(self.request(base)[1]["latest_receipts"], [])
-        first = self.request(base + "/messages", {"author": "Codex", "kind": "receipt", "text": "旧运行已启动", "submission_id": "old-start"})[1]["message"]
-        self.request(base + "/state", {"text": "本次清理待确认", "until": first["id"]})
-        for index in range(21):
-            self.post(f"历史观点 {index}", f"receipt-history-{index}")
-        self.request(base + "/topic", {"actor": "用户", "phase": "concluded"})
-        self.floor("take")
-        late = self.request(base + "/messages", {"author": "Codex", "kind": "receipt", "text": "本次运行已停止，任务 task-2", "submission_id": "late-stop"})[1]["message"]
-        other = self.request(base + "/messages", {"author": "用户", "kind": "receipt", "text": "运行结果仍待核验", "submission_id": "other-stop"})[1]["message"]
-        foreign = self.request("/api/rooms", {"title": "另一房间", "host": "Codex"})[1]
-        self.request(f"/api/rooms/{foreign['id']}/messages", {"author": "Codex", "kind": "receipt", "text": "不应出现在目标房间", "submission_id": "foreign-stop"})
-        room = self.request(base)[1]
-        self.assertEqual((room["state_text"], room["state_until"], room["phase"]), ("本次清理待确认", first["id"], "concluded"))
-        self.assertEqual([row["id"] for row in room["latest_receipts"]], [late["id"], other["id"]])
-        self.assertTrue(all(set(row) == {"id", "author", "created_at", "submitted_by"} for row in room["latest_receipts"]))
-        self.assertNotIn(late["id"], [row["id"] for row in self.request(base + "/messages?page=1")[1]["messages"]])
-        plain = self.request(f"/r/{self.room['id']}/state")[1]
-        self.assertIn("晚于摘要", plain)
-        self.assertIn(f"/messages/{late['id']}", plain)
-        self.assertNotIn(late["text"], plain)
-        self.assertEqual(self.request(base + f"/messages/{late['id']}")[1]["text"], late["text"])
+        self.assertNotIn("latest_receipts", self.request(base)[1])
+        for author in ("Codex", "用户"):
+            self.assertEqual(self.request(base + "/messages", {"author": author, "kind": "receipt", "text": "旧运行已启动", "submission_id": f"receipt-{author}"})[0], 400)
+        self.assertNotIn("回执", self.request(f"/r/{self.room['id']}/state")[1])
 
     def test_pending_labels_follow_participation_without_claiming_delivery(self):
         """Local discovery and external contact share pending without inventing notification."""
@@ -1158,7 +1141,7 @@ class DiscussionTests(unittest.TestCase):
         experts = {"Codex": "cli", "Gemini": "online", "DeepSeek": "online"}
         self.request(base + "/topic", {"actor": "用户", "host": "Codex", "experts": experts})
         records = [("Codex", "moderation"), ("用户", "opinion"), ("用户", "opinion"),
-                   ("Gemini", "receipt"), ("Codex", "opinion"), ("Codex", "opinion"),
+                   ("Codex", "moderation"), ("Codex", "opinion"), ("Codex", "opinion"),
                    ("Gemini", "opinion"), ("DeepSeek", "opinion")]
         messages = []
         for index, (author, kind) in enumerate(records):
@@ -1176,9 +1159,9 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(room["rounds"], [{"number": 1, "start_id": messages[0]["id"],
                                          "speakers": list(experts), "completed": True}])
         self.assertEqual(room["answered_turns"], 4)
-        self.prepare_speech("Gemini", "receipt")
-        receipt = self.request(base + "/messages", {"author": "Gemini", "kind": "receipt",
-            "text": "停止回执", "submission_id": "round-final-receipt"})[1]["message"]
+        self.prepare_speech("Codex", "moderation")
+        receipt = self.request(base + "/messages", {"author": "Codex", "kind": "moderation",
+            "text": "主持说明", "submission_id": "round-final-receipt"})[1]["message"]
         self.assertEqual(self.request(base)[1]["rounds"], room["rounds"])
         association = self.prepare_speech("Gemini")
         self.request(base + "/messages", {**association, "author": "Gemini", "text": "下一轮完整观点",
@@ -1194,7 +1177,7 @@ class DiscussionTests(unittest.TestCase):
         base = f"/api/rooms/{self.room['id']}"
         self.request(base + "/topic", {"actor": "用户", "experts": {"Codex": "cli", "Gemini": "online"}})
         records = [("Codex", "opinion")] * 18 + [("Gemini", "opinion"),
-            ("用户", "moderation"), ("Codex", "opinion"), ("Gemini", "opinion"), ("Codex", "receipt")]
+            ("用户", "moderation"), ("Codex", "opinion"), ("Gemini", "opinion"), ("用户", "moderation")]
         messages = []
         for index, (author, kind) in enumerate(records):
             association = self.prepare_speech(author, kind)
@@ -1260,8 +1243,8 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.request(topic_path, {"actor": "用户", "phase": "concluded"})[0], 200)
         self.assertEqual(self.schedule("closed-topic-001")[0], 400)
 
-    def test_independent_pause_review_and_receipt_lifecycle(self):
-        """Pausing retains the assignment; receipts never answer it or reopen discussion."""
+    def test_independent_pause_and_review_lifecycle(self):
+        """Pausing retains the assignment; a refused run receipt never answers it, and review and conclusion keep their order."""
         self.configure_host()
         base = f"/api/rooms/{self.room['id']}"
         self.assertEqual(self.request(base + "/topic", {"actor": "Codex", "phase": "initial"})[0], 200)
@@ -1275,10 +1258,8 @@ class DiscussionTests(unittest.TestCase):
         receipt = {"author": "Gemini", "kind": "receipt", "text": "run=test；任务 task-1 已停止，工具结果 confirmed", "submission_id": "stop-receipt-001"}
         self.floor("take", "Gemini", "Codex")
         self.assertEqual(self.request(base + "/messages", {**receipt, "turn_id": turn["id"]})[0], 400)
-        result = self.request(base + "/messages", receipt)
-        self.assertEqual(result[0], 201)
+        self.assertEqual(self.request(base + "/messages", receipt)[0], 400, "run receipts are no longer written")
         self.assertEqual(self.request(base)[1]["current_turn"]["status"], "pending")
-        self.assertIn("运行回执", self.request(f"/r/{self.room['id']}/messages/{result[1]['message']['id']}")[1])
         self.request(base + "/topic", {"actor": "Codex", "phase": "initial"})
         answer.update(self.prepare_speech("Gemini"))
         self.assertEqual(self.request(base + "/messages", answer)[0], 201)
@@ -1286,7 +1267,6 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.request(base + "/topic", {"actor": "用户", "phase": "concluded"})[0], 200)
         self.assertTrue(self.request(base + "/messages", answer)[1]["duplicate"])
         self.assertEqual(self.request(base + "/messages", {**answer, "turn_id": None, "submission_id": "late-opinion-001"})[0], 400)
-        self.assertEqual(self.request(base + "/messages", {**receipt, "submission_id": "final-receipt-001"})[0], 409)
         self.floor("take")
         self.assertEqual(self.request(base + "/messages", {"author": "Codex", "kind": "moderation", "text": "结论及清理缺项", "submission_id": "final-summary-001"})[0], 201)
 

@@ -31,16 +31,18 @@ PARTICIPANTS = ("用户", "Codex", "Claude", "Gemini", "DeepSeek", "Qwen", "Grok
 # A platform is a type; `Claude-评审` is a second Claude instance with its own session. Mirrors backend/identity.py.
 INSTANCE_PATTERN = re.compile(r"(Codex|Claude|Gemini|DeepSeek|Qwen|Grok)(?:-[0-9A-Za-z_一-鿿]{1,16})?")
 PHASES = ("preparing", "initial", "discussing", "reviewing", "paused", "concluded")
-KINDS = ("opinion", "moderation", "receipt", "chat")
+KINDS = ("opinion", "moderation", "chat")
+# Old rooms keep receipts they already hold, so reading can still filter them; new ones cannot be written.
+READ_KINDS = (*KINDS, "receipt")
 OVERVIEW_FIELDS = ("id", "title", "goal", "host", "phase", "focus", "message_count",
-                   "latest_id", "state_until", "current_turn", "queued_turns", "held_since", "floor", "runtime", "limits", "completed_rounds", "latest_receipts", "answered_turns", "duplicate", "submission_id",
+                   "latest_id", "state_until", "current_turn", "queued_turns", "held_since", "floor", "runtime", "limits", "completed_rounds", "answered_turns", "duplicate", "submission_id",
                    "mode", "members", "free", "parent_room", "linked_rooms")
 BRIEF_FIELDS = ("id", "title", "goal", "host", "user_request", "background", "boundaries", "experts")
 ROOM_LIST_FIELDS = ("id", "title", "goal", "message_count", "latest_id", "created_at")
 GUIDANCE = {
     "initial": "先基于目标、背景和边界独立形成观点；提交前不读他人观点或主持总结。",
-    "paused": "停止处理安排并停止本讨论自己的后台任务，核对实际状态；非必要不生成 receipt，正常停止无需回执。",
-    "concluded": "话题已收束；停止本讨论自己的后台任务并核对实际状态；非必要不生成 receipt，正常停止无需回执。",
+    "paused": "停止处理安排并停止本讨论自己的后台任务，核对实际状态。",
+    "concluded": "话题已收束；停止本讨论自己的后台任务并核对实际状态。",
 }
 EXIT_CODES = {"0": "成功", "1": "HTTP/API 错误", "2": "参数或输入错误",
               "3": "网络失败或响应无法确认", "130": "被中断，写入结果需核对"}
@@ -217,11 +219,11 @@ def message_commands(subcommands, registry):
     listing.add_argument("--query", help="关键词或消息编号")
     listing.add_argument("--author", type=participant)
     listing.add_argument("--mention", type=participant)
-    listing.add_argument("--kind", choices=KINDS, help="筛选观点、主持说明或运行回执")
+    listing.add_argument("--kind", choices=READ_KINDS, help="筛选观点、主持说明、协作消息或旧房间的历史回执")
     listing.add_argument("--submission-id", type=submission_id, help="按提交编号精确查询结果")
     view = add_leaf(subcommands, registry, "message view", "读取一条精确原文与来源", True)
     view.add_argument("id", type=positive_int, help="消息编号")
-    post = add_leaf(subcommands, registry, "message post", "提交观点、主持说明、代发或运行回执", True)
+    post = add_leaf(subcommands, registry, "message post", "提交观点、主持说明、协作回答或代发", True)
     add_text(post, "body")
     post.add_argument("--attachment", action="append", type=attachment_id, default=[],
                       help="已上传附件 ID；可重复指定，最多 10 个")
@@ -472,7 +474,7 @@ def plan_message(args):
         return RequestPlan(base, params={key: value for key, value in params.items() if value is not None})
     actor = require_actor(args)
     if args.turn and args.kind != "opinion":
-        raise CliError("只有 opinion 可以关联 --turn；receipt 不完成安排")
+        raise CliError("只有 opinion 可以关联 --turn")
     if (args.execution or args.request or args.to) and (args.kind != "chat" or args.turn):
         raise CliError("--execution / --request 仅用于自由房间的 chat 回答，不能与 --turn 同时使用")
     if args.execution and args.request:
@@ -781,7 +783,7 @@ def project_result(value, plan, site):
         return {"rooms": [select_fields(room, ROOM_LIST_FIELDS) for room in value["rooms"]]}
     if plan.view in ("overview", "brief", "state", "current"):
         fields = {"overview": OVERVIEW_FIELDS, "brief": BRIEF_FIELDS,
-                  "state": ("id", "state_text", "state_until", "host_brief", "latest_receipts", "answered_turns"),
+                  "state": ("id", "state_text", "state_until", "host_brief", "answered_turns"),
                   "current": ("id", "phase", "current_turn", "queued_turns", "held_since", "floor", "answered_turns")}[plan.view]
         result = select_fields(value, fields)
         if plan.view in ("overview", "current"):

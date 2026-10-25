@@ -353,7 +353,6 @@ async function require_room(database, room_id) {
   if (current_turn) current_turn.status_label = turn_status_label(current_turn, result);
   result.queued_turns = (await database.prepare("SELECT id,expert,question FROM discussion_turns WHERE room_id=? AND status='queued' ORDER BY id").bind(room_id).all()).results;
   result.held_since = (await database.prepare("SELECT held_since FROM turn_relay WHERE room_id=?").bind(room_id).first())?.held_since || 0;
-  result.latest_receipts = await latest_receipts(database, room_id);
   result.host_brief = await database.prepare("SELECT text,until,updated_at FROM room_briefs WHERE room_id=?").bind(room_id).first();
   result.rounds = await discussion_rounds(database, room_id, result.experts);
   result.completed_rounds = result.rounds.filter((item) => item.completed).length;
@@ -496,27 +495,10 @@ async function budget_round_groups(database, room_id, experts, base) {
   return groups;
 }
 
-/** Return each author's latest receipt reference without loading its body. */
-async function latest_receipts(database, room_id) {
-  const result = await database.prepare(`SELECT messages.id,messages.author,messages.created_at,details.submitted_by
-    FROM messages JOIN message_details AS details ON details.message_id=messages.id
-    WHERE messages.id IN (SELECT MAX(messages.id) FROM messages
-      JOIN message_details AS details ON details.message_id=messages.id
-      WHERE room_id=? AND details.kind='receipt' GROUP BY author)
-    ORDER BY messages.id`).bind(room_id).all();
-  return result.results;
-}
-
 /** Describe pending work using the expert's configured participation mode. */
 function turn_status_label(turn, room) {
   if (turn.status === "pending") return { cli: "待处理（本地 CLI）", online: "待联系（在线专家）" }[room.experts[turn.expert]] || "待处理";
   return TURN_STATUSES[turn.status];
-}
-
-/** Link to current receipt reports independently of an older host summary. */
-function receipt_references_text(room) {
-  const lines = room.latest_receipts.map((receipt) => `${receipt.author} · ${receipt.created_at}${receipt.id > room.state_until ? " · 晚于摘要" : ""}：/r/${room.id}/messages/${receipt.id}`);
-  return lines.length ? `最新运行回执（每位参与者最近一条，运行结果以原文为准）：\n${lines.join("\n")}` : "尚无运行回执。";
 }
 
 /** Separate explicitly marked legacy requests without guessing unmarked text. */
@@ -1029,7 +1011,7 @@ function message_details(room, payload) {
   const { author } = payload;
   const kind = payload.kind ?? "opinion";
   const submitted_by = payload.submitted_by ?? (["cli", "api"].includes(payload.source) ? author : "用户");
-  if (!["opinion", "moderation", "receipt"].includes(kind) || !is_participant(submitted_by)) throw new HttpError(400, "发言职责或提交者无效");
+  if (!["opinion", "moderation"].includes(kind) || !is_participant(submitted_by)) throw new HttpError(400, "发言职责或提交者无效");
   if (!["用户", room.host, author].includes(submitted_by)) throw new HttpError(400, "只有用户或主持人可以代发其他专家的观点");
   if (kind === "moderation" && (author !== room.host || !["用户", room.host].includes(submitted_by))) throw new HttpError(400, "主持发言必须保留当前主持人署名");
   if (submitted_by === author && ["cli", "api"].includes(payload.source) && author !== "用户" && room.experts[author] !== "cli") throw new HttpError(400, "当前专家配置为在线只读，请由用户或主持人代发");
@@ -1136,7 +1118,7 @@ async function append_message(database, room_id, payload, token = "", free_actor
   const previous = await database.prepare(`${MESSAGE_QUERY} WHERE room_id=? AND submission_id=?`).bind(room_id, values.submission_id).first();
   if (previous) { await attach_message_files(database, [previous]); check_retry(previous, expected); return { message: previous, duplicate: true }; }
   if (expected.author !== "用户" && expected.kind === "opinion") database = guard_limits(database, room);
-  if (["paused", "concluded"].includes(room.phase) && expected.kind === "opinion" && (expected.author !== "用户" || room.archived)) throw new HttpError(400, "话题已暂停或收束；恢复阶段后才能提交新观点，运行回执请用 receipt");
+  if (["paused", "concluded"].includes(room.phase) && expected.kind === "opinion" && (expected.author !== "用户" || room.archived)) throw new HttpError(400, "话题已暂停或收束；恢复阶段后才能提交新观点");
   await check_message_references(database, room_id, expected);
   await check_message_attachments(database, room_id, expected);
   const asked = expected.author === "用户" ? await checked_asks(database, room, payload) : [];
@@ -1403,7 +1385,7 @@ async function update_state(database, room_id, payload) {
 function state_reading_text(room) {
   const brief = room.host_brief;
   const overview = brief?.text ? `主持简报（整理至 #${brief.until}，${brief.updated_at}）\n${brief.text}` : "主持简报：尚未更新";
-  return `${overview}\n\n主持人维护的状态（整理至 #${room.state_until}）\n\n${room.state_text || "尚未整理"}\n\n${receipt_references_text(room)}`;
+  return `${overview}\n\n主持人维护的状态（整理至 #${room.state_until}）\n\n${room.state_text || "尚未整理"}`;
 }
 
 /** Render a message with its provenance and original reply reference. */
@@ -1434,7 +1416,7 @@ async function room_text(database, room_id, params) {
   content.push(`发言权：${room.floor.holder ? `${room.floor.holder} 持有` : `待 ${room.floor.next_speaker} 领取`}；版本 ${room.floor.revision}。用户本人可随时留言，AI 发言前须领取。`);
   if (room.phase === "initial") content.push("本阶段先独立形成详细观点：仅阅读目标、背景、边界和自己的已有讨论；暂不阅读他人观点或主持总结。提交后再交叉阅读。这是参与约定，不是权限隔离。");
   if (room.archived) content.push("房间已存档，记录仍可查阅；先恢复房间，再由用户明确恢复讨论阶段。");
-  if (["paused", "concluded"].includes(room.phase)) content.push("停止处理发言安排，取消本讨论自己的后台任务并核对实际状态；非必要不生成回执，正常停止无需回执。不要因旧通知恢复讨论。");
+  if (["paused", "concluded"].includes(room.phase)) content.push("停止处理发言安排，取消本讨论自己的后台任务并核对实际状态；不要因旧通知恢复讨论。");
   if (turn) content.push(`当前安排 #${turn.id}：${turn.expert} · ${turn_status_label(turn, room)}`, `待回应问题：${turn.question}`, `安排详情：${base}/turns/${turn.id}`);
   if (room.queued_turns.length) content.push(`本轮排队：${room.queued_turns.map((item) => `#${item.id} ${item.expert}`).join(" → ")}`);
   if (room.held_since) content.push(`用户自 #${room.held_since} 起有待主持人处理的操作；当前回答完成后交给主持人，不自动接力。`);
@@ -1497,10 +1479,10 @@ function protocol_text(room) {
     "讨论上限：room.limits 返回轮次、总时长、单次执行和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长/单次执行时限。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理；到限后暂停并停止新专家安排与观点，由用户决定追加轮次或结束；暂停期间不计时也不消耗总时长。",
     "运行方式：room.runtime 显示 manual/automatic、状态及真实执行回执。所有房间写入须带 X-Discussion-Token，CLI 用 --access-file 读取私有文件。用户及运行控制使用房主凭据，手动本地成员使用自己的成员凭证，不能相互冒充；在线成员只读，由房主或讨论主持人代发。自动讨论先 execution enter，创建安排或保存关联回答即完成本步，不创建原生定时任务；本机唤醒成员的持久凭证不能替代自动执行，手动接入的专家用自己的成员凭证回答安排，暂停、停止、换代、租约到期后的旧执行失效。run view/start/pause/stop/configure 字段查 CLI schema。",
     `发言权：GET ${base}/floor 返回 holder、next_speaker、revision；POST 同路径，字段 actor、speaker（默认 actor）、action=take/return、revision（刚读到的整数版本）。仅无人持有且 next_speaker 为本人时可领取；持有者可主动归还，下一位回到主持人。版本变化返回 409，先读回核对。主持人仅可代操作 online 专家，cli 专家自行操作；用户可协助。`,
-    "新房间由主持人持有发言权。创建安排须主持人持有，保存成功即归还并点名该专家；AI 的 opinion、moderation、receipt 都须实际作者持有，代发不豁免，opinion 必须关联有效 turn_id。消息保存成功自动归还，下一位为主持人。失败不归还，同编号重试不再次交接。用户本人发言不受发言权限制，也不改变发言权；@ 不改变顺序。维护状态、阶段及通知回执不占用发言权。取消安排须主持人持有，用户可直接取消失效安排；取消后归还给主持人领取。",
+    "新房间由主持人持有发言权。创建安排须主持人持有，保存成功即归还并点名该专家；AI 的 opinion、moderation 都须实际作者持有，代发不豁免，opinion 必须关联有效 turn_id。消息保存成功自动归还，下一位为主持人。失败不归还，同编号重试不再次交接。用户本人发言不受发言权限制，也不改变发言权；@ 不改变顺序。维护状态与阶段不占用发言权。取消安排须主持人持有，用户可直接取消失效安排；取消后归还给主持人领取。",
     '创建话题：POST /api/rooms，携带房主控制凭据；字段 title、goal、user_request、background、boundaries、host、experts、members、submission_id（新 UUID）。members 与 experts 名单一致，各项含 name、独立 token、access（手动本地 manual、自动 runner、在线 online）。AI 主持人必须为本地可写成员。CLI room create --access-file 私有房主文件 在请求前保存凭据，确认后返回各本地成员文件路径；同编号重试沿用原资料和全部凭据。名单、主持职责变更仅房主可做。',
     `查询提交：GET /api/rooms?submission_id=编号 查建房结果；GET ${base}/messages?submission_id=编号 或 ${base}/turns?submission_id=编号 查消息或安排。查询成功且列表为空表示尚未查到，读取失败不表示未写入。`,
-    `增量读取：GET ${base}/messages?after=已读消息编号，每次最多 20 条，按 next_after 续读，has_more 表示还有一批；可加 kind=opinion/moderation/receipt、author、mention、q。after 不与翻页混用，过滤后的游标只代表该查询范围。`,
+    `增量读取：GET ${base}/messages?after=已读消息编号，每次最多 20 条，按 next_after 续读，has_more 表示还有一批；可加 kind=opinion/moderation/chat、author、mention、q（旧房间里的历史回执 kind=receipt 仍可读取）。after 不与翻页混用，过滤后的游标只代表该查询范围。`,
     `维护话题：POST ${base}/topic；actor 加需要修改的上述字段，另可更新 phase（preparing/initial/discussing/reviewing/paused/concluded）、focus。收束前先完成或取消当前安排；主持人收束还须先 GET ${base}/conclusion 取得 blockers 与 revision，并把 revision 作为 conclusion 一并提交（有阻碍项或状态已变会被拒绝）。暂停保留安排；恢复阶段后再继续。`,
     `安排发言：POST ${base}/turns；字段 actor、expert、question、submission_id（新 UUID）。同一话题同时只有一个未完成安排；重试沿用同一编号和问题。整轮安排改传 turns=[{expert,question},…]（最多 ${MAX_PLAN_TURNS} 项），并须先 GET ${base}/turns/roster 取得最新专家状态，把返回的 revision 作为 roster 一并提交（名单变化后需重取；须包含 waiting 中的每位专家）：第一项立即生效，其余排队（queued）；每个回答保存后自动交给下一位，最后一位答完再交回主持人。用户留言或修改目标、背景、边界、焦点后（room.held_since 非 0），当前回答完成即交回主持人；主持人处理后用 POST ${base}/turns/continue（actor）按原计划继续，或直接创建新安排替换剩余排队（原排队改为 skipped）。`,
     `通知：仅把对象、问题、话题入口交给对应专家，不附背景、摘要或历史。使用已有且获准的会话通道；没有通道时交由用户协助。实际送达后 POST ${base}/turns/安排编号，字段 actor、status=notified；取消用 status=cancelled。复制不算送达。`,
@@ -1508,10 +1490,9 @@ function protocol_text(room) {
     `专家观点：POST ${base}/messages；author、text、submission_id、source=cli，kind=opinion；必须关联 turn_id（回答的安排编号），可选 reply_to（本话题原文编号）。每次回答同时提供 summary（最多 ${MAX_SUMMARY_LENGTH} 字），通常 1–3 句结论先行，保留关键理由、条件和不确定性；summary_by 为原作者或提交者，默认提交者。text 保留完整正文，最多 ${MAX_TEXT_LENGTH} 个 Unicode 字符，请求最多 ${MAX_BODY_BYTES} 字节；不截断或用摘要完成安排。旧客户端缺少 summary 时不自动生成。`,
     `主持发言：同一消息接口，author=${room.host}、submitted_by=${room.host}、kind=moderation、source=cli；个人观点使用 kind=opinion，不能自动视为共识。`,
     `代发只读专家观点：author 保留原专家，submitted_by=${room.host}、kind=opinion、text 为原文；须关联 turn_id，可附 reply_to。服务保存代发来源；不要冒充专家直接提交。`,
-    `整理状态：POST ${base}/state；actor、text（详细状态，最多 ${MAX_STATE_LENGTH} 字）、until（依据的消息截止编号）；brief（最多 ${MAX_BRIEF_LENGTH} 字）为面向人的主持简报，说明结论、共识、歧义和下一步意图。进度或安排变化后更新；省略 brief 保留旧简报，空字符串清除。所有参与专家各保存一次完整观点才完成一轮；同轮重复发言只计该专家一次，主持说明、用户留言、回执及取消安排不推进轮次。房间 rounds 按当前配置专家和完整历史生成，completed_rounds 为完成轮数，answered_turns 仅为已回答安排数。状态不覆盖原文，也不代表全体一致同意。`,
+    `整理状态：POST ${base}/state；actor、text（详细状态，最多 ${MAX_STATE_LENGTH} 字）、until（依据的消息截止编号）；brief（最多 ${MAX_BRIEF_LENGTH} 字）为面向人的主持简报，说明结论、共识、歧义和下一步意图。进度或安排变化后更新；省略 brief 保留旧简报，空字符串清除。所有参与专家各保存一次完整观点才完成一轮；同轮重复发言只计该专家一次，主持说明、用户留言及取消安排不推进轮次。房间 rounds 按当前配置专家和完整历史生成，completed_rounds 为完成轮数，answered_turns 仅为已回答安排数。状态不覆盖原文，也不代表全体一致同意。`,
     "讨论方法：initial 先独立给出结论、依据、假设和风险，不回应他人；discussing 围绕具体分歧引用原文，说明维持或修正及原因；reviewing 检查拟定结论是否误述自己、遗漏条件或仍有阻碍。沉默不算同意。",
-    `运行回执：非必要不生成。正常启停、首次检查、无变化轮询和已提交回答不另发回执；仅用户明确要求、异常影响协作且需要处理或交接确需补充确认时使用。POST ${base}/messages；author 使用实际身份、kind=receipt、source=cli、text 简述实际结果、影响和下一步，有任务时附本次运行标识与真实任务编号；已有状态或消息足够说明时不重复。submission_id 同次重试不变，不填 turn_id。回执不算专家观点或已回答。`,
-    "后台参与：先立即检查，再用本会话真实可用的原生任务按约定频率和自身运行上限检查。专家只答自己未完成的安排，无任务时等待；主持人仍需处理新回答、网页回复和下一安排。paused/concluded、用户叫停或达到自身上限时停止自己的任务并核验，实际结果保留在本地接续信息，是否发回执按上述规则判断；单个专家任务停止不等于整场讨论结束。失败时保留未提交原文，重新读取阶段后再决定是否重试。",
+    "后台参与：先立即检查，再用本会话真实可用的原生任务按约定频率和自身运行上限检查。专家只答自己未完成的安排，无任务时等待；主持人仍需处理新回答、网页回复和下一安排。paused/concluded、用户叫停或达到自身上限时停止自己的任务并核验，实际结果保留在本地接续信息；单个专家任务停止不等于整场讨论结束。失败时保留未提交原文，重新读取阶段后再决定是否重试。",
     "收束：结论须有原文依据，区分明确共识、未决分歧与主持人判断；完成约定复核或达到已说明的时间/轮次上限后收束。讨论完成与后台任务退出分别核验；不为追求全员确认无限续轮。",
     "房间、消息与安排都支持 submission_id 去重，同次重试沿用编号和原始内容，新内容使用新编号。写入后重新读取服务器返回的结果，核对身份、内容与引用。",
   ].join("\n\n");

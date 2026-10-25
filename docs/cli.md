@@ -141,7 +141,7 @@ codiscuss floor view $room
 | 暂停 / 收束 | `room update ROOM --as Codex --phase paused` / `concluded`；按工作流先完成必要记录和清理。主持人收束须先 `room conclusion ROOM` 取得阻碍项 `blockers` 与 `revision`，再 `--conclusion REV`：未带返回 400，状态已变返回 409，有未处理留言、state 未覆盖最新发言或仍有排队安排返回 400；已收束的讨论只有用户能重新开启 |
 | 检查参数 | `schema COMMAND SUBCOMMAND` 或 `COMMAND SUBCOMMAND --help` |
 
-代发时只有原作者确实提供该摘要才写 `--summary-by 原作者`；主持人整理的摘要标注主持人。必要 `receipt` 也需发言权，不能带 `--turn`，正常启停不生成。
+代发时只有原作者确实提供该摘要才写 `--summary-by 原作者`；主持人整理的摘要标注主持人。`--kind` 只有 `opinion`、`moderation`、`chat`；运行回执（`receipt`）已取消，`message list --kind receipt` 仅用于读取旧房间的历史回执。
 
 `--after` 与 `--page` 互斥；每次最多 20 条，`has_more` 表示还有内容。过滤后的游标仅代表该过滤范围，不能作为全部材料的已读截止。阶段、安排和发言权需单独读取。
 

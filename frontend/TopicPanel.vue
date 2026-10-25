@@ -56,7 +56,7 @@ const progress_summary = computed(() => {
         </template><p v-else class="turn-empty">把下一轮需要回答的问题，交给一位参与者。</p>
         <p v-if="active_turn" class="fine-print">{{ bridge.turn_guidance(turn, room) }}</p>
       </section>
-      <section v-if="Array.isArray(room.latest_receipts)" class="info-section host-receipts"><h3>最新运行回执</h3><p class="fine-print">每位参与者最近一条；实际运行结果请查看原文。晚于摘要的回执可能尚未整理。</p><div class="button-row"><UButton v-for="receipt in room.latest_receipts" :key="receipt.id" :label="`${bridge.display_name(receipt.author)} #${receipt.id} · ${new Date(receipt.created_at).toLocaleString('zh-CN')}${receipt.id > room.state_until ? ' · 晚于摘要' : ''}`" variant="link" color="neutral" @click="$emit('detail', receipt.id)" /><span v-if="!room.latest_receipts.length" class="fine-print">尚无运行回执。</span></div></section>
+      
       <div class="form-footer"><a :href="`${base}/turns`" target="_blank" rel="noopener" class="subtle-link">发言安排历史 <UIcon name="i-lucide-arrow-up-right" /></a><UButton icon="i-lucide-plus" label="安排下一位专家" class="channel-primary-button" :disabled="!can_schedule" @click="$emit('open', 'schedule')" /></div>
       <p v-if="!can_schedule" class="fine-print host-schedule-hint">{{ inactive ? '话题已暂停或收束，修改阶段后可以继续安排。' : active_turn ? '先完成或取消当前安排，再安排下一位。' : room.limits?.reached ? '已达到讨论上限，请检查到限处理；需要继续时先暂停并调整参数。' : room.floor?.holder !== room.host ? '主持人领取发言权后可安排下一位。' : '请先在议题资料中配置参与专家。' }}</p>
     </template>

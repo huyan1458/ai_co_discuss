@@ -371,13 +371,11 @@ class CliTests(unittest.TestCase):
         final_state = f"已处理 #{answer['id']}；试用与上线有别。43% 未核验；下一步待验证。任务清理待确认。"
         self.cli("state", "set", self.room, "--body", final_state, "--until", answer["id"], "--as", "Codex")
         self.cli("room", "update", self.room, "--phase", "concluded", "--as", "用户")
-        self.take_floor()
-        receipt = self.cli("message", "post", self.room, "--kind", "receipt", "--body", "run=recover；task-1 已停止",
-                           "--as", "Codex", "--submission-id", "recover-stop")["message"]
+        self.rejected(["message", "post", self.room, "--kind", "receipt", "--body", "run=recover；task-1 已停止",
+                       "--as", "Codex", "--submission-id", "recover-stop"])
         for view in (self.cli("room", "view", self.room), self.cli("state", "view", self.room)):
-            self.assertEqual(view["latest_receipts"][0]["id"], receipt["id"])
+            self.assertNotIn("latest_receipts", view)
             self.assertEqual(view["state_until"], answer["id"])
-            self.assertNotIn("text", view["latest_receipts"][0])
         self.assertEqual(self.cli("state", "view", self.room)["state_text"], final_state)
 
     def test_message_retry_conflict_and_exact_original(self):
@@ -443,18 +441,15 @@ class CliTests(unittest.TestCase):
                         "--as", "Codex", "--submission-id", "moderator-note")["message"]
         self.assertEqual(note["kind"], "moderation")
 
-    def test_pause_blocks_opinions_but_accepts_independent_receipts(self):
-        """Paused state guards stay on the server and receipts never answer a turn."""
+    def test_pause_blocks_opinions_and_run_receipts_are_gone(self):
+        """Paused state guards stay on the server, and the retired receipt kind is refused before any request."""
         self.cli("room", "update", self.room, "--phase", "paused", "--as", "Codex")
         self.rejected(["message", "post", self.room, "--body", "迟到观点", "--as", "Codex",
                        "--submission-id", "late-opinion"], 1)
         self.rejected(["turn", "create", self.room, "--expert", "Codex", "--question", "迟到安排",
                        "--as", "Codex", "--submission-id", "late-turn-01"], 1)
-        receipt = self.cli("message", "post", self.room, "--body", "已核对退出结果", "--kind", "receipt",
-                           "--as", "Codex", "--submission-id", "exit-receipt")["message"]
-        self.assertIsNone(receipt["turn_id"])
-        self.rejected(["message", "post", self.room, "--body", "伪回答", "--kind", "receipt", "--turn", "1",
-                       "--as", "Codex", "--submission-id", "invalid-receipt"])
+        self.rejected(["message", "post", self.room, "--body", "已核对退出结果", "--kind", "receipt",
+                       "--as", "Codex", "--submission-id", "exit-receipt"])
 
     def test_files_stdin_unicode_and_quote_roundtrip(self):
         """BOM files and stdin preserve interior whitespace, quotes, and Unicode."""
@@ -480,8 +475,8 @@ class CliTests(unittest.TestCase):
         incremental = self.cli("message", "list", self.room, "--after", "0", "--kind", "opinion")
         self.assertEqual(incremental["messages"], first["messages"])
         self.assertTrue(incremental["has_more"])
-        receipt = self.cli("message", "post", self.room, "--body", "运行记录", "--kind", "receipt",
-                           "--as", "Codex", "--submission-id", "paging-receipt")["message"]
+        note = self.cli("message", "post", self.room, "--body", "主持记录", "--kind", "moderation",
+                        "--as", "Codex", "--submission-id", "paging-moderation")["message"]
         latest = self.cli("message", "post", self.room, "--body", "新到观点", "--as", "用户",
                           "--submission-id", "paging-new-opinion")["message"]
         following = self.cli("message", "list", self.room, "--after", incremental["next_after"], "--kind", "opinion")
@@ -490,7 +485,7 @@ class CliTests(unittest.TestCase):
         self.assertFalse(following["has_more"])
         empty = self.cli("message", "list", self.room, "--after", latest["id"])
         self.assertEqual((empty["messages"], empty["next_after"], empty["has_more"]), ([], latest["id"], False))
-        self.assertEqual(self.cli("message", "list", self.room, "--kind", "receipt")["messages"], [receipt])
+        self.assertEqual(self.cli("message", "list", self.room, "--kind", "moderation")["messages"], [note])
         self.rejected(["message", "list", self.room, "--after", "0", "--page", "2"])
 
     def test_explicit_site_overrides_environment_and_room_is_required(self):

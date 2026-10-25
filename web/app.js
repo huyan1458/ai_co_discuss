@@ -704,7 +704,6 @@ function render_room() {
   }
   render_access();
   render_topic();
-  render_receipts();
   render_host_brief();
   update_composer_role();
 }
@@ -769,16 +768,6 @@ function render_host_brief() {
   element("progress-speaker").textContent = progress_speaker(room);
   element("host-brief-text").innerHTML = room.rendered_brief;
   element("host-brief-meta").textContent = brief_meta(room);
-}
-
-/** Show bounded receipt references without interpreting free-form reports as status. */
-function render_receipts() {
-  const receipts = state.room.latest_receipts;
-  const links = receipts?.map((receipt) => `<button type="button" class="text-button" data-receipt-detail="${receipt.id}">${escape_html(display_name(receipt.author))} #${receipt.id} · ${escape_html(new Date(receipt.created_at).toLocaleString("zh-CN"))}${receipt.id > state.room.state_until ? " · 晚于摘要" : ""}</button>`).join("") || "尚无运行回执。";
-  for (const id of ["topic-receipts", "state-receipts"]) {
-    element(id).hidden = !Array.isArray(receipts);
-    element(`${id}-links`).innerHTML = links;
-  }
 }
 
 /** Describe roles separately from authors and the actual submitter. */
@@ -961,10 +950,10 @@ function message_payload() {
     return payload;
   }
   const mode = element("message-kind").value;
-  const author = ["moderation", "receipt"].includes(mode) ? "用户" : element("author-select").value;
+  const author = mode === "moderation" ? "用户" : element("author-select").value;
   if (author !== "用户" && state.room.experts?.[author] !== "online") throw new Error("本地 AI 须自行提交回答；网页仅代发在线成员的真实原文");
   const payload = { author, text, reply_to: state.reply_to, turn_id: state.turn_reply_to,
-    kind: ["moderation", "receipt"].includes(mode) ? mode : "opinion", submitted_by: "用户" };
+    kind: mode === "moderation" ? mode : "opinion", submitted_by: "用户" };
   // @mentions of active members outside code are direct questions; the website queues them beside the discussion.
   if (payload.kind === "opinion" && payload.author === "用户") {
     const named = (state.room.members || []).filter(member => member.status === "active" && member.name !== "用户" && mentioned(text, member.name)).map(member => member.name);
@@ -2752,12 +2741,12 @@ function cancel_turn_reply() {
 /** Keep moderator statements distinct from opinions in the same identity. */
 function update_composer_role() {
   const mode = element("message-kind").value;
-  element("author-select").disabled = ["moderation", "receipt"].includes(mode);
-  if (["moderation", "receipt"].includes(mode)) element("author-select").value = "用户";
+  element("author-select").disabled = mode === "moderation";
+  if (mode === "moderation") element("author-select").value = "用户";
   const needs_summary = ["opinion", "forward"].includes(mode) && element("author-select").value !== "用户";
   element("message-summary-fields").hidden = !needs_summary;
   element("message-summary").required = needs_summary;
-  element("author-note").textContent = mode === "receipt" ? "运行回执，由用户录入" : mode === "moderation" ? "主持发言" :
+  element("author-note").textContent = mode === "moderation" ? "主持发言" :
     (mode === "forward" ? "由用户代发" : (element("author-select").value === "用户" ? "发言" : "的观点代发"));
 }
 
@@ -2791,10 +2780,6 @@ async function run_action(action) {
 
 /** Delegate room and message actions to their actual visible controls. */
 function bind_delegated_actions() {
-  element("room-content").addEventListener("click", (event) => {
-    const receipt = event.target.closest("[data-receipt-detail]");
-    if (receipt) run_action(() => show_message(receipt.dataset.receiptDetail));
-  });
   element("room-list").addEventListener("click", (event) => {
     const management = event.target.closest("[data-manage-room]");
     if (management) {
