@@ -1,6 +1,7 @@
 <script setup>
 /** Right-rail board of a free room, laid out like the discussion progress board. */
 import { computed, inject, ref, watch } from "vue";
+import InviteDialog from "./InviteDialog.vue";
 
 const { view, bridge, act, pending } = inject("discussion");
 const LIVE = ["dispatched", "started"];
@@ -113,26 +114,8 @@ function member_menu(member) {
   ], [{ ...item("移除", "i-lucide-trash-2", "remove"), color: "error" }]];
 }
 
-const invite_name = ref("");
-const invite_access = ref("runner");
-const invite_project_access = ref("read");
-const invite_session = ref("");
-watch(() => room.value.id, () => {
-  invite_name.value = "";
-  invite_project_access.value = "read";
-  invite_session.value = "";
-  invite_access.value = (free.value.members || []).some((member) => member.access === "runner") ? "runner" : "manual";
-}, { immediate: true });
-/** Library cards to invite from; a card already in the room adds another instance (Claude-2, …). */
-const invite_choices = computed(() => Object.keys(invite_access.value === "online" ? bridge.identities : bridge.launch_clients).filter((name) => name !== "用户")
-  .map((name) => ({ label: bridge.display_name(name), value: name })));
-const can_bind_session = computed(() => invite_access.value === "runner" && bridge.launch_can_bind_session(invite_name.value, view.value.launch));
-const invite_note = computed(() => {
-  if (invite_access.value === "runner" && !view.value.launch.available) return "本机唤醒需要本机服务，请在运行 AI 的电脑打开本机网站。";
-  if (can_bind_session.value && invite_session.value.trim()) return "将续接这个原会话，保留它原有的上下文；它工作时请不要在原窗口继续操作。";
-  if (invite_access.value === "online" || invite_access.value === "runner" && view.value.launch.profiles[invite_name.value]?.adapter === "api") return "新成员不访问项目文件，加入后不打断其他成员。";
-  return "新成员加入后不打断其他成员；填写已有会话 ID 可请一个带着自己上下文的原会话加入。";
-});
+const inviting = ref(false);
+watch(() => room.value.id, () => { inviting.value = false; });
 
 const starting = ref(false);
 const discussion_goal = ref("");
@@ -144,12 +127,6 @@ const can_start = computed(() => Boolean(host.value && host.value.access === "ru
 async function start_discussion() {
   const whole = (value) => Number.isInteger(value) && value >= 0 ? value : 0;
   if (await act("start_room_discussion", { goal: discussion_goal.value.trim(), max_rounds: whole(discussion_rounds.value), max_minutes: whole(discussion_minutes.value) })) starting.value = false;
-}
-
-/** Invite the chosen AI; the form keeps its choices when the invitation fails. */
-function invite() {
-  act("invite_member", { name: invite_name.value, access: invite_access.value, project_access: invite_project_access.value,
-    session_id: can_bind_session.value ? invite_session.value : "" });
 }
 </script>
 
@@ -190,14 +167,7 @@ function invite() {
       <p v-else-if="view.free_notice" role="status" class="pb-free-note">{{ view.free_notice }}</p>
       <p v-if="view.access?.error" role="alert" class="pb-free-note is-error">{{ view.access.error }}</p>
       <p v-else-if="view.access?.notice" role="status" class="pb-free-note">{{ view.access.notice }}</p>
-      <form v-if="!room.archived" class="pb-free-invite" aria-label="邀请 AI" @submit.prevent="invite">
-        <USelect v-model="invite_name" :items="invite_choices" placeholder="邀请 AI 加入" size="sm" class="min-w-0 flex-1" />
-        <UButton type="submit" icon="i-lucide-user-plus" label="邀请" size="sm" color="neutral" variant="outline" :disabled="!invite_name || (invite_access === 'runner' && !view.launch.available)" :loading="pending === 'invite_member'" />
-        <USelect v-model="invite_access" :items="Object.entries(ACCESS_LABELS).map(([value, label]) => ({ label, value }))" aria-label="受邀成员的接入方式" size="sm" class="min-w-0 flex-1" />
-        <USelect v-if="invite_access === 'runner' && bridge.launch_can_set_access(invite_name, view.launch)" v-model="invite_project_access" :items="[{ label: '项目文件只读', value: 'read' }, { label: '项目文件可写', value: 'write' }]" aria-label="受邀成员的项目文件权限" size="sm" class="min-w-0 flex-1" />
-        <UInput v-if="can_bind_session" v-model="invite_session" placeholder="已有会话 ID（可选，留空则新建）" title="在原会话中用 /status 查看，或直接问它当前会话 ID；Codex App 填聊天 ID" aria-label="受邀成员的已有会话 ID" size="sm" class="w-full" />
-      </form>
-      <p v-if="!room.archived" class="pb-free-note">{{ invite_note }}</p>
+      <UButton v-if="!room.archived" icon="i-lucide-user-plus" label="邀请 AI 加入" size="sm" color="neutral" variant="outline" class="pb-action" @click="inviting = true" />
     </section>
     <section v-if="room.linked_rooms?.length" class="pb-section" aria-label="头脑风暴">
       <h4>头脑风暴</h4>
@@ -228,6 +198,7 @@ function invite() {
         </ol>
       </details>
     </section>
+  <InviteDialog v-model:open="inviting" description="新成员加入后不打断其他成员；点卡片翻面可设置软件、模型、项目权限和要续接的已有会话。" />
   </div>
 </template>
 

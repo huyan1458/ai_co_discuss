@@ -1878,7 +1878,12 @@ function participant_connection_fixture(status = "running") {
   const component = readFileSync(new URL("../frontend/ProgressBoard.vue", import.meta.url), "utf8");
   vm.runInContext(component.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .*;$/gm, "")
     + "\nglobalThis.connection_refs = { connection_open, connection_profile };", context);
-  return { context, view, calls, invites, controls, refs: context.connection_refs };
+  // The invite dialog is its own component; it shares the board's injected state.
+  const dialog = vm.createContext({ computed, ref, watch, defineProps: () => ({}), defineModel: () => ref(false),
+    inject: () => ({ view, bridge: { launch_clients: {}, launch_can_bind_session: () => false, platform_of: (name) => name.split("-")[0] }, pending, act }) });
+  const invite_dialog = readFileSync(new URL("../frontend/InviteDialog.vue", import.meta.url), "utf8");
+  vm.runInContext(invite_dialog.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .*;$/gm, ""), dialog);
+  return { context, dialog, view, calls, invites, controls, refs: context.connection_refs };
 }
 
 test("the skip control stays available for retained assignments after execution failure pauses the room", () => {
@@ -1905,8 +1910,10 @@ test("the skip control stays available for retained assignments after execution 
 });
 
 test("batch invitation admits woken members before manual ones and lists the manual members for copying", async () => {
-  const { context, invites } = participant_connection_fixture();
-  vm.runInContext('invite_picks.value = [["Codex", "manual"], ["Claude", "cli"], ["Gemini", "manual"], ["DeepSeek", "cli"]].map(([name, mode]) => ({ name, mode, session: "" })); inviting.value = true;', context);
+  const { dialog: context, invites } = participant_connection_fixture();
+  vm.runInContext("inviting.value = true", context);
+  await Promise.resolve();
+  vm.runInContext('invite_picks.value = [["Codex", "manual"], ["Claude", "cli"], ["Gemini", "manual"], ["DeepSeek", "cli"]].map(([name, mode]) => ({ name, mode, session: "" }));', context);
   await context.invite();
   assert.equal(invites.join(), "Claude,DeepSeek,Codex,Gemini");
   assert.equal(vm.runInContext("invited_manual.value.join()", context), "Codex,Gemini");
@@ -1915,9 +1922,11 @@ test("batch invitation admits woken members before manual ones and lists the man
 });
 
 test("batch invitation stops at the first failure and keeps the remaining picks for a retry", async () => {
-  const { context, calls, controls, view } = participant_connection_fixture();
+  const { dialog: context, calls, controls, view } = participant_connection_fixture();
   controls.fail_invite_at = 2;
-  vm.runInContext('invite_picks.value = ["Codex", "Claude", "Gemini"].map((name) => ({ name, mode: "manual", session: "" })); inviting.value = true;', context);
+  vm.runInContext("inviting.value = true", context);
+  await Promise.resolve();
+  vm.runInContext('invite_picks.value = ["Codex", "Claude", "Gemini"].map((name) => ({ name, mode: "manual", session: "" }));', context);
   await context.invite();
   assert.deepEqual(calls, ["invite_member", "invite_member"]);
   assert.equal(vm.runInContext("invite_picks.value.map((pick) => pick.name).join()", context), "Claude,Gemini");
