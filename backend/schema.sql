@@ -586,6 +586,20 @@ CREATE TABLE IF NOT EXISTS scheduler_decision_details (
     decision_id INTEGER PRIMARY KEY REFERENCES scheduler_decisions(id) ON DELETE CASCADE,
     detail TEXT NOT NULL
 );
+-- The owner's verdict on one decision; a 'bad' one may also say who should have answered and why.
+-- Kept apart from the decision so older databases need no column change.
+CREATE TABLE IF NOT EXISTS scheduler_feedback (
+    decision_id INTEGER PRIMARY KEY REFERENCES scheduler_decisions(id) ON DELETE CASCADE,
+    rating TEXT NOT NULL CHECK(rating IN ('good','bad')),
+    should_be TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+-- What produced a decision (model, threshold, prompt and package versions), so ratings stay comparable across versions.
+CREATE TABLE IF NOT EXISTS scheduler_decision_context (
+    decision_id INTEGER PRIMARY KEY REFERENCES scheduler_decisions(id) ON DELETE CASCADE,
+    context TEXT NOT NULL
+);
 -- Smart scheduling's suggestion that another member answer an unnamed message. The host keeps the message;
 -- the user may adopt before expires_at (waiting until the host's request ends for mode 'after'), otherwise it lapses.
 CREATE TABLE IF NOT EXISTS member_recommendations (

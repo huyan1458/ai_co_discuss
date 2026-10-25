@@ -227,6 +227,8 @@ test('Worker imports a backup under fresh numbers, rewritten references and the 
   const answer = await f.request(`${path}/messages`, { author: 'Qwen', submitted_by: '用户', source: 'proxy', text: `回应 #${first.id}`, turn_id: turn.id, submission_id: 'import-answer' });
   assert.equal(answer.status, 201, JSON.stringify(answer.body));
   const backup = JSON.parse(JSON.stringify((await f.request(`${path}/backup`)).body).replaceAll(room.id, 'importedroom'));
+  backup.tables.scheduler_decisions = [{ id: 1, after_message_id: first.id, kind: 'interjection', label: '交给主持人 Codex', confidence: 0.66, applied: 0, provider: 'jev',
+    created_at: '2026-10-25T00:00:00Z', feedback: 'bad', should_be: 'Qwen', note: '该问 Qwen', context: '{"prompt":2}' }];
   await f.request(`${path}/messages`, { author: '用户', text: '占用新编号', submission_id: 'import-later' });
   const imported = await f.request('/import', backup);
   assert.equal(imported.status, 201, JSON.stringify(imported.body));
@@ -234,6 +236,7 @@ test('Worker imports a backup under fresh numbers, rewritten references and the 
   assert.equal((await f.request('/import', backup)).body.skipped, true);
   const copy = (await f.request('/importedroom')).body;
   assert.deepEqual([copy.host, copy.phase], ['Codex', 'paused']);
+  assert.deepEqual(copy.scheduler_decisions.map(item => [item.feedback, item.should_be, item.note, item.context]), [['bad', 'Qwen', '该问 Qwen', '{"prompt":2}']]);
   const [new_first, second, new_answer] = (await f.request('/importedroom/messages')).body.messages.sort((a, b) => a.id - b.id);
   assert.ok(new_first.id > answer.body.message.id + 1);
   assert.deepEqual([second.text, second.reply_to], [`补充 #${new_first.id}`, new_first.id]);
@@ -926,6 +929,26 @@ test('Worker free rooms need the owner credential and keep secrets out of views 
   assert.deepEqual([again.status, again.body.id], [200, r.room.id]);
 });
 
+test('Worker free rooms record every scheduling decision with the owner credential and keep the rating of the owner', async t => {
+  const f = await worker_fixture(t);
+  const r = await free_worker_room(f);
+  const message_id = (await r.say('claude在吗')).body.message.id;
+  const body = { kind: 'interjection', label: '交给主持人 Claude', confidence: 0.66, applied: false, provider: 'jev', after_message_id: message_id, context: { model: 'jev-latest', threshold: 0.7 } };
+  assert.equal((await f.request(`${r.path}/scheduler-decisions`, body, r.claude)).status, 403);
+  const saved = await f.request(`${r.path}/scheduler-decisions`, body, r.owner);
+  assert.equal(saved.status, 200);
+  const rate = (rating, token = r.owner) => f.request(`${r.path}/scheduler-decisions/${saved.body.id}`, { rating }, token);
+  assert.equal((await rate('bad', r.claude)).status, 403);
+  assert.equal((await rate('great')).status, 400);
+  assert.equal((await f.request(`${r.path}/scheduler-decisions/${saved.body.id}`, { rating: 'bad', note: 'x'.repeat(201) }, r.owner)).status, 400);
+  assert.equal((await f.request(`${r.path}/scheduler-decisions/${saved.body.id}`, { rating: 'bad', should_be: 'Codex', note: '该直接问它' }, r.owner)).status, 200);
+  const feedback = async () => (await f.request(r.path)).body.scheduler_decisions.map(item => [item.after_message_id, item.applied, item.feedback]);
+  assert.deepEqual(await feedback(), [[message_id, 0, 'bad']]);
+  assert.deepEqual((await f.request(r.path)).body.scheduler_decisions.map(item => [item.should_be, item.note, item.context]), [['Codex', '该直接问它', '{"model":"jev-latest","threshold":0.7}']]);
+  assert.equal((await rate(null)).status, 200);
+  assert.deepEqual(await feedback(), [[message_id, 0, null]]);
+});
+
 test('Worker smart scheduling recommendations wait for the user, then interrupt the host or follow it', async t => {
   const f = await worker_fixture(t);
   const codex = 'codex-free'.repeat(4);
@@ -1168,8 +1191,8 @@ test('Worker free hosts route, dispatch, hand back once and stop at the chain bu
   const codex_run = (await r.reserve('Codex')).body;
   assert.equal((await r.answer(codex_run.id, codex, 'Codex', { to: ['Gemini'] })).status, 201);
   assert.equal((await requests()).filter(item => item[0] === 'Gemini' && item[2] === 'pending').length, 0);
-  // Chain one already used 3 AI requests; three dispatch/hand-off cycles reach 8, so the last hand-off is refused.
-  for (let cycle = 0; cycle < 3; cycle++) { await work('Claude', { to: ['Codex'] }); await work('Codex'); }
+  // Chain one already used 3 AI requests; two two-member dispatch/hand-off cycles reach 8, so the last hand-off is refused.
+  for (let cycle = 0; cycle < 2; cycle++) { await work('Claude', { to: ['Codex', 'Gemini'] }); await work('Codex'); await work('Gemini'); }
   assert.deepEqual((await f.request(r.path)).body.free.halted_chains.map(item => item.reason), ['budget']);
   assert.equal((await requests()).filter(item => item[0] === 'Claude' && item[2] === 'pending').length, 0);
   const failing = await r.say('全失败', { to: ['Claude'] });

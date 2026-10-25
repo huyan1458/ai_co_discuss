@@ -5,8 +5,9 @@ import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { atomic_json, deliver_task, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
 import { api } from './discussion_runner.mjs';
-import { route_free_message } from './scheduler.mjs';
+import { ROUTE_CONFIDENCE, ROUTE_PROMPT_VERSION, route_free_message } from './scheduler.mjs';
 
+const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const RENEW_MS = 30_000;
 const MAX_DELIVERY_ATTEMPTS = 3;
 const LIVE = ['reserving', 'delivering', 'sidecar_pending', 'running'];
@@ -71,7 +72,7 @@ export function free_task_files(config, member, execution, binding) {
   // The host routes unnamed messages and receives hand-backs; it may name members in its answer.
   const discussion = config.mode !== 'free';
   const host_rule = member.role === 'host' && !discussion
-    ? `你是本房间的主持人：purpose 为 route 的请求是用户未点名的消息，handoff 表示你派出的成员都已结束。先用 ${cli} room view ${config.room} 查看成员与状态，再决定由谁处理；需要派活时在回答中加 --to 成员名（可重复，不能点名自己），被点名的成员都结束后你会再被唤醒一次。不需要他人时不加 --to，本次即结束。只派分给各成员的文件或模块，避免多人改同一文件。`
+    ? `你是本房间的主持人：purpose 为 route 的请求是用户未点名的消息，handoff 表示你派出的成员都已结束。先用 ${cli} room view ${config.room} 查看成员与状态，再决定由谁处理；需要派活时在回答中加 --to 成员名（可重复，不能点名自己），只点名一位成员时，其回答直接面向用户，你不会再被唤醒；同时点名多位时，全部结束后你会再被唤醒一次汇总。不需要他人时不加 --to，本次即结束。只派分给各成员的文件或模块，避免多人改同一文件。`
     : '';
   atomic_json(task_path, { site: config.site, room: config.room, mode: 'free', member: member.name,
     execution_id: execution.id, request_messages: execution.requests.map(item => item.message_id),
@@ -180,7 +181,7 @@ export class FreeRoomRunner {
       decision.finally(() => this.decisions.delete(decision));
     }
   }
-  /** Decide one message and record a confident recommendation; the host's handling is unaffected either way. */
+  /** Decide one message; a confident pick is recorded and applied, otherwise the host keeps it. */
   async recommend(request, room, host, members) {
     const page = await api(this.config, `/messages?after=${Math.max(0, request.message_id - 11)}`);
     const message = page.messages.find(item => item.id === request.message_id);
@@ -188,9 +189,21 @@ export class FreeRoomRunner {
     const decision = await route_free_message(this.config.api_home, this.config.scheduler,
       { title: room.title, goal: room.goal, context: page.messages, message, host: host.name, members }, this.fetch);
     this.log(`智能调度 #${message.id}：${decision.member ? `推荐 ${decision.member}` : '不推荐，交主持人'}（选择 ${decision.choice ?? '-'}，置信度 ${decision.confidence ?? '-'}）`);
-    if (!decision.member) return;
+    if (!decision.member) return this.record_decision(message.id, decision, `交给主持人 ${host.name}`, false);
     await api(this.config, '/recommendations', { message_id: message.id, member_id: members.find(member => member.name === decision.member).id,
       provider: this.config.scheduler.provider, confidence: decision.confidence });
+    // A confident pick is applied at once, interrupting the host; if that fails the recommendation stays for the user to adopt.
+    const adopted = await api(this.config, `/recommendations/${message.id}`, { action: 'adopt', mode: 'interrupt' })
+      .then(() => true, error => { this.log(`智能调度 #${message.id} 自动改派失败，保留推荐：${error.message}`); return false; });
+    await this.record_decision(message.id, decision, adopted ? `改由 ${decision.member} 回答` : `建议让 ${decision.member} 回答（未能自动改派）`, adopted);
+  }
+  /** Show each judgment under its message so the user can rate it; a failed record never affects delivery. */
+  async record_decision(message_id, decision, label, applied) {
+    try {
+      await api(this.config, '/scheduler-decisions', { kind: 'interjection', label, confidence: decision.confidence ?? null,
+        applied, provider: this.config.scheduler.provider, after_message_id: message_id,
+        context: { model: this.config.scheduler.model, threshold: ROUTE_CONFIDENCE, prompt: ROUTE_PROMPT_VERSION, package: PACKAGE_VERSION } });
+    } catch (error) { this.log(`智能调度 #${message_id} 决策记录未保存：${error.message}`); }
   }
   /** Reserve with a persisted client id before invoking any software. */
   async start(member, row) {

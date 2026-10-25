@@ -342,7 +342,7 @@ test('free-room API replies bind to their reserved execution and complete the re
   assert.equal(messages.find(message => message.author === 'Grok').source, 'api');
 });
 
-test('smart scheduling recommends a better member without delaying the host, and adopting asks it after the host', async t => {
+test('smart scheduling never delays the host, and a confident pick is adopted automatically', async t => {
   const f = await site_fixture(t);
   let release_decision;
   const decided = new Promise(resolve => { release_decision = resolve; });
@@ -369,19 +369,27 @@ test('smart scheduling recommends a better member without delaying the host, and
   assert.equal(decisions[0].authorization, `Bearer ${SECRET}`);
   assert.deepEqual(Object.keys(decisions[0].body.questions.handler.criteria), ['DeepSeek', '__host__']);
   release_decision();
-  await until(async () => (await api(config, '')).free.recommendations.length === 1, () => runner.tick());
+  await until(async () => (await api(config, '')).free.recommendations.some(item => item.status === 'adopted'), () => runner.tick());
   const recommendation = (await api(config, '')).free.recommendations[0];
   assert.deepEqual([recommendation.message_id, recommendation.member, recommendation.status, recommendation.provider, recommendation.confidence],
-    [message_id, 'DeepSeek', 'open', 'jev', 0.95]);
-  assert.ok(recommendation.expires_in > 50 && recommendation.expires_in <= 60);
-  const adopted = await api(config, `/recommendations/${message_id}`, { action: 'adopt', mode: 'after' });
-  assert.equal(adopted.recommendation.status, 'adopted');
+    [message_id, 'DeepSeek', 'adopted', 'jev', 0.95]);
   await until(async () => (await api(config, '/messages')).messages.some(message => message.author === 'DeepSeek'), () => runner.tick());
   const room = await api(config, '');
   assert.deepEqual(room.free.requests.map(item => [item.member, item.purpose, item.status]), [['Grok', 'route', 'completed'], ['DeepSeek', 'ask', 'completed']]);
   assert.equal((await api(config, `/recommendations/${message_id}`, { action: 'adopt', mode: 'interrupt' })).duplicate, true);
+  const decision = room.scheduler_decisions.at(-1);
+  assert.deepEqual([decision.after_message_id, decision.label, decision.applied, decision.provider, decision.feedback], [message_id, '改由 DeepSeek 回答', 1, 'jev', null]);
+  assert.deepEqual(JSON.parse(decision.context), { model: 'jev-latest', threshold: 0.7, prompt: 2, package: JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version });
+  await api(config, `/scheduler-decisions/${decision.id}`, { rating: 'bad', should_be: 'Grok', note: '应该先问主持人' });
+  const rated = (await api(config, '')).scheduler_decisions.at(-1);
+  assert.deepEqual([rated.feedback, rated.should_be, rated.note], ['bad', 'Grok', '应该先问主持人']);
+  assert.equal((await api(config, '/backup')).tables.scheduler_decisions[0].note, '应该先问主持人');
+  await assert.rejects(api(config, `/scheduler-decisions/${decision.id}`, { rating: 'bad', note: 'x'.repeat(201) }), /HTTP 400/);
+  await assert.rejects(api(config, `/scheduler-decisions/${decision.id}`, { rating: 'great' }), /HTTP 400/);
+  await api(config, `/scheduler-decisions/${decision.id}`, { rating: null });
+  assert.equal((await api(config, '')).scheduler_decisions.at(-1).feedback, null);
   const backup = await api(config, '/backup');
-  assert.deepEqual(backup.tables.member_recommendations.map(row => [row.message_id, row.status, row.mode]), [[message_id, 'adopted', 'after']]);
+  assert.deepEqual(backup.tables.member_recommendations.map(row => [row.message_id, row.status, row.mode]), [[message_id, 'adopted', 'interrupt']]);
   assert.ok(!readFileSync(started.config_path, 'utf8').includes(SECRET));
 });
 

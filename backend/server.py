@@ -76,6 +76,11 @@ MAX_TOPIC_DETAIL = 4000
 MAX_QUESTION_LENGTH = 1000
 MAX_PLAN_TURNS = 10
 RECENT_DECISIONS = 100
+MAX_DECISION_NOTE = 200
+MAX_DECISION_MEMBER = 60
+MAX_DECISION_CONTEXT = 500
+DECISION_SELECT = """SELECT d.*,f.rating AS feedback,COALESCE(f.should_be,'') AS should_be,COALESCE(f.note,'') AS note,c.context
+FROM scheduler_decisions d LEFT JOIN scheduler_feedback f ON f.decision_id=d.id LEFT JOIN scheduler_decision_context c ON c.decision_id=d.id"""
 MAX_DECISION_LABEL = 200
 MAX_DECISION_DETAIL = 4000
 SCHEDULER_PROVIDERS = ("jev", "decisions")
@@ -84,7 +89,7 @@ ROOM_BACKUP_QUERIES = {
     **{table: f"SELECT * FROM {table} WHERE room_id=?" for table in (
         "room_directory", "room_folder_assignments", "room_creations", "room_briefs", "room_user_requests",
         "topic_settings", "discussion_limits", "discussion_options", "round_budgets")},
-    "scheduler_decisions": "SELECT * FROM scheduler_decisions WHERE room_id=? ORDER BY id",
+    "scheduler_decisions": f"{DECISION_SELECT} WHERE d.room_id=? ORDER BY d.id",
     "topic_folders": "SELECT * FROM topic_folders WHERE id IN (SELECT folder_id FROM room_folder_assignments WHERE room_id=?)",
     "messages": "SELECT * FROM messages WHERE room_id=? ORDER BY id",
     "attachments": "SELECT * FROM attachments WHERE room_id=? AND message_id IS NOT NULL ORDER BY message_id,position",
@@ -225,7 +230,7 @@ def require_room(connection, room_id):
     # Rooms created before the option keep the host's named follow-ups.
     room["named_followup"] = bool(option[0]) if option else True
     room["scheduler_decisions"] = [dict(row) for row in connection.execute(
-        "SELECT * FROM scheduler_decisions WHERE room_id=? ORDER BY id DESC LIMIT ?", (room_id, RECENT_DECISIONS))][::-1]
+        f"{DECISION_SELECT} WHERE d.room_id=? ORDER BY d.id DESC LIMIT ?", (room_id, RECENT_DECISIONS))][::-1]
     details = {row[0]: json.loads(row[1]) for row in connection.execute(
         "SELECT decision_id,detail FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)", (room_id,))}
     for decision in room["scheduler_decisions"]:
@@ -627,6 +632,8 @@ def delete_room_records(connection, room_id):
     for table in ("member_recommendations", "member_requests", "member_executions", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "room_links",
                   "discussion_options", "round_budgets", "scheduler_decisions", "discussion_sessions"):
         if table == "scheduler_decisions":
+            for child in ("scheduler_feedback", "scheduler_decision_context"):
+                connection.execute(f"DELETE FROM {child} WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)", (room_id,))
             connection.execute("DELETE FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)", (room_id,))
         connection.execute(f"DELETE FROM {table} WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM message_timings WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)", (room_id,))
@@ -1187,10 +1194,33 @@ def create_turn(connection, room_id, payload):
             "queued": [get_turn(connection, room_id, turn_id) for turn_id in ids[1:]], "duplicate": False}
 
 
-def record_scheduler_decision(connection, room_id, token, payload):
-    """The dispatcher records one smart-scheduling decision so the transcript shows what it did and how sure it was."""
+def rate_scheduler_decision(connection, room_id, decision_id, token, payload):
+    """The owner marks a decision good or bad (a bad one may name who should have answered and why); rating null withdraws it."""
     begin_write(connection)
-    require_control(connection, room_id, token)
+    require_owner(connection, room_id, token)
+    rating, should_be, note = payload.get("rating"), payload.get("should_be", ""), payload.get("note", "")
+    if rating not in ("good", "bad", None):
+        raise ValueError("rating 须为 good、bad 或 null")
+    if not isinstance(should_be, str) or not isinstance(note, str) or len(should_be) > MAX_DECISION_MEMBER or len(note.strip()) > MAX_DECISION_NOTE:
+        raise ValueError(f"should_be 须为成员名，note 不超过 {MAX_DECISION_NOTE} 字")
+    if not connection.execute("SELECT 1 FROM scheduler_decisions WHERE id=? AND room_id=?", (decision_id, room_id)).fetchone():
+        raise LookupError("没有这条智能调度决策")
+    if rating is None:
+        connection.execute("DELETE FROM scheduler_feedback WHERE decision_id=?", (decision_id,))
+    else:
+        connection.execute("""INSERT INTO scheduler_feedback (decision_id,rating,should_be,note,created_at) VALUES (?,?,?,?,?)
+            ON CONFLICT(decision_id) DO UPDATE SET rating=excluded.rating,should_be=excluded.should_be,note=excluded.note,created_at=excluded.created_at""",
+                           (decision_id, rating, should_be.strip(), note.strip(), utc_now()))
+    return {"decision_id": decision_id, "feedback": rating, "should_be": should_be.strip(), "note": note.strip()}
+
+
+def record_scheduler_decision(connection, room_id, token, payload, owner=False):
+    """The dispatcher records one smart-scheduling decision so the transcript shows what it did and how sure it was.
+
+    A free room has no run control: its local service records with the owner credential.
+    """
+    begin_write(connection)
+    (require_owner if owner else require_control)(connection, room_id, token)
     kind, label, confidence = payload.get("kind"), payload.get("label"), payload.get("confidence")
     after = payload.get("after_message_id", 0)
     if kind not in ("interjection", "round") or not isinstance(label, str) or not 0 < len(label.strip()) <= MAX_DECISION_LABEL:
@@ -1201,6 +1231,12 @@ def record_scheduler_decision(connection, room_id, token, payload):
         raise ValueError("须提供供应商 provider、是否执行 applied 与非负的 after_message_id")
     cursor = connection.execute("""INSERT INTO scheduler_decisions (room_id,after_message_id,kind,label,confidence,applied,provider,created_at)
         VALUES (?,?,?,?,?,?,?,?)""", (room_id, after, kind, label.strip(), confidence, int(payload["applied"]), payload["provider"], utc_now()))
+    context = payload.get("context")
+    if context is not None:
+        text = json.dumps(context, ensure_ascii=False)
+        if not isinstance(context, dict) or len(text) > MAX_DECISION_CONTEXT:
+            raise ValueError(f"context 须为不超过 {MAX_DECISION_CONTEXT} 字的对象")
+        connection.execute("INSERT INTO scheduler_decision_context (decision_id,context) VALUES (?,?)", (cursor.lastrowid, text))
     detail = payload.get("detail")
     if detail is not None:
         text = json.dumps(detail, ensure_ascii=False)
@@ -1898,7 +1934,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if parts[3:4] == ["attachments"]:
             return self.handle_attachments(connection, parts, params, method)
         if parts[3:4] in (["runtime"], ["events"], ["scheduler-decisions"]):
-            if free and method == "POST":
+            if free and method == "POST" and parts[3:4] != ["scheduler-decisions"]:
                 raise ValueError("自由房间不使用讨论运行控制")
             return self.handle_runtime_api(connection, parts, params, method)
         free_actor = None
@@ -2028,7 +2064,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         elif len(parts) == 5 and parts[3] == "events" and method == "POST":
             result = event_action(connection, room_id, int(parts[4]), token, self.read_payload())
         elif parts[3:] == ["scheduler-decisions"] and method == "POST":
-            result = record_scheduler_decision(connection, room_id, token, self.read_payload())
+            result = record_scheduler_decision(connection, room_id, token, self.read_payload(), owner=room_mode(connection, room_id) == "free")
+        elif len(parts) == 5 and parts[3] == "scheduler-decisions" and method == "POST":
+            result = rate_scheduler_decision(connection, room_id, int(parts[4]), token, self.read_payload())
         else:
             raise LookupError("地址不存在")
         connection.commit()

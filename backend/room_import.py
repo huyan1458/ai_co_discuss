@@ -138,10 +138,16 @@ def settings_statements(tables, room, maps, now):
         statements.append(("INSERT INTO discussion_options (room_id,named_followup) VALUES (?,?)", (room_id, row["named_followup"])))
     for row in tables.get("round_budgets", [])[:1]:
         statements.append(("INSERT INTO round_budgets (room_id,base,cap,extra) VALUES (?,?,?,?)", (room_id, row["base"], row["cap"], row["extra"])))
-    statements += [("""INSERT INTO scheduler_decisions (room_id,after_message_id,kind,label,confidence,applied,provider,created_at)
+    for row in tables.get("scheduler_decisions", []):
+        statements.append(("""INSERT INTO scheduler_decisions (room_id,after_message_id,kind,label,confidence,applied,provider,created_at)
                        VALUES (?,?,?,?,?,?,?,?)""", (room_id, messages.get(row["after_message_id"], 0), row["kind"], row["label"],
-                                                     row.get("confidence"), row["applied"], row["provider"], row["created_at"]))
-                   for row in tables.get("scheduler_decisions", [])]
+                                                     row.get("confidence"), row["applied"], row["provider"], row["created_at"])))
+        if row.get("feedback"):
+            statements.append(("""INSERT INTO scheduler_feedback (decision_id,rating,should_be,note,created_at) VALUES (last_insert_rowid(),?,?,?,?)""",
+                               (row["feedback"], row.get("should_be", ""), row.get("note", ""), row["created_at"])))
+        if row.get("context"):
+            statements.append(("INSERT INTO scheduler_decision_context (decision_id,context) SELECT id,? FROM scheduler_decisions WHERE room_id=? ORDER BY id DESC LIMIT 1",
+                               (row["context"], room_id)))
     return statements
 
 

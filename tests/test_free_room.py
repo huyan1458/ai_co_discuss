@@ -575,11 +575,12 @@ class HostTests(FreeRoomTests):
         """AI-created requests beyond the budget halt the chain; a new owner message starts fresh."""
         from backend import free_room
         original = free_room.MAX_AUTO_HOPS
-        free_room.MAX_AUTO_HOPS = 2
+        free_room.MAX_AUTO_HOPS = 3
         try:
             FreeRoomTests.say(self, "预算")
-            self.work("Claude", to=["Codex"])
+            self.work("Claude", to=["Codex", "Gemini"])
             self.work("Codex")
+            self.work("Gemini")
             self.work("Claude", to=["Gemini"])
             free = self.request(self.path)[1]["free"]
             self.assertEqual([item["reason"] for item in free["halted_chains"]], ["budget"])
@@ -589,6 +590,13 @@ class HostTests(FreeRoomTests):
             self.assertEqual(self.requests()[-1], ("Gemini", "ask", "pending"))
         finally:
             free_room.MAX_AUTO_HOPS = original
+
+    def test_single_member_dispatch_is_not_handed_back(self):
+        """One member's answer goes straight to the user; the host is woken again only when several answered."""
+        FreeRoomTests.say(self, "单人派活")
+        self.work("Claude", to=["Codex"])
+        self.work("Codex")
+        self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 0)
 
     def test_only_the_host_dispatches_and_never_itself(self):
         """Members suggest without dispatching; the host cannot name itself."""

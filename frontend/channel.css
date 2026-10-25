@@ -1088,6 +1088,16 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 .channel-schedule-icon { flex-shrink: 0; width: 13px; height: 13px; color: var(--channel-accent); }
 .channel-schedule-text { flex: 1; min-width: 0; }
 .channel-schedule-toggle { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--ui-text-dimmed); cursor: pointer; }
+.channel-schedule-correction { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: -14px 16px 20px; padding: 8px 14px; border: 1px dashed var(--ui-border); border-radius: 8px; font-size: 12px; color: var(--ui-text-muted); }
+.channel-schedule-correction label { display: inline-flex; align-items: center; gap: 6px; }
+.channel-schedule-correction select, .channel-schedule-correction input { padding: 3px 6px; border: 1px solid var(--ui-border); border-radius: 4px; background: transparent; color: inherit; font: inherit; }
+.channel-schedule-correction input { flex: 1; min-width: 160px; }
+@media (min-width: 701px) { .channel-schedule-correction { margin-right: var(--message-inset-end); } }
+.channel-schedule-actions { display: inline-flex; gap: 2px; }
+.channel-schedule-rate { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--ui-text-dimmed); cursor: pointer; }
+.channel-schedule-rate [class*="icon"] { width: 13px; height: 13px; }
+.channel-schedule-rate:hover { color: var(--ui-text-toned); background: #ffffff0c; }
+.channel-schedule-rate.is-on { color: var(--channel-accent); }
 .channel-schedule-toggle:hover { color: var(--ui-text-toned); background: #ffffff0c; }
 .channel-schedule-toggle [class*="icon"] { width: 14px; height: 14px; transition: transform .12s; }
 .channel-schedule-card.is-open .channel-schedule-toggle [class*="icon"] { transform: rotate(180deg); }

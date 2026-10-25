@@ -506,7 +506,8 @@ def settle_batches(connection, room_id):
         host = connection.execute("SELECT * FROM room_members WHERE id=? AND status='active' AND role='host'", (batch["host_id"],)).fetchone()
         if "completed" not in statuses:
             halt_chain(connection, room_id, batch["chain_id"], "all_failed")
-        elif not host:
+        elif not host or len(statuses) < 2:
+            # One member's answer already reaches the user; only several answers need the host to put them together.
             continue
         elif chain_budget(connection, room_id, batch["chain_id"]) < 1:
             halt_chain(connection, room_id, batch["chain_id"], "budget")

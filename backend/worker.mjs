@@ -27,6 +27,11 @@ const MAX_PLAN_TURNS = 10;
 const RECENT_DECISIONS = 100;
 const MAX_DECISION_LABEL = 200;
 const MAX_DECISION_DETAIL = 4000;
+const MAX_DECISION_NOTE = 200;
+const MAX_DECISION_MEMBER = 60;
+const MAX_DECISION_CONTEXT = 500;
+const DECISION_SELECT = `SELECT d.*,f.rating AS feedback,COALESCE(f.should_be,'') AS should_be,COALESCE(f.note,'') AS note,c.context
+  FROM scheduler_decisions d LEFT JOIN scheduler_feedback f ON f.decision_id=d.id LEFT JOIN scheduler_decision_context c ON c.decision_id=d.id`;
 const LIMIT_DEFAULTS = { max_rounds: 0, max_minutes: 0, execution_minutes: 0 };
 // Older clients may still send these; reaching a limit always pauses, so only the pause value is accepted and the reserve is ignored.
 const LEGACY_LIMIT_FIELDS = ["on_limit", "summary_minutes"];
@@ -46,7 +51,7 @@ const ROOM_BACKUP_QUERIES = {
   rooms: "SELECT * FROM rooms WHERE id=?",
   ...Object.fromEntries(["room_directory", "room_folder_assignments", "room_creations", "room_briefs", "room_user_requests", "topic_settings", "discussion_limits", "discussion_options", "round_budgets"]
     .map((table) => [table, `SELECT * FROM ${table} WHERE room_id=?`])),
-  scheduler_decisions: "SELECT * FROM scheduler_decisions WHERE room_id=? ORDER BY id",
+  scheduler_decisions: `${DECISION_SELECT} WHERE d.room_id=? ORDER BY d.id`,
   topic_folders: "SELECT * FROM topic_folders WHERE id IN (SELECT folder_id FROM room_folder_assignments WHERE room_id=?)",
   messages: "SELECT * FROM messages WHERE room_id=? ORDER BY id",
   attachments: "SELECT * FROM attachments WHERE room_id=? AND message_id IS NOT NULL ORDER BY message_id,position",
@@ -256,8 +261,13 @@ function import_setting_rows(tables, room_id, maps, now) {
     [room_id, remap_text(row.text, messages), remap_until(row.until, messages), row.updated_at]]);
   for (const row of (tables.discussion_options || []).slice(0, 1)) statements.push(["INSERT INTO discussion_options (room_id,named_followup) VALUES (?,?)", [room_id, row.named_followup]]);
   for (const row of (tables.round_budgets || []).slice(0, 1)) statements.push(["INSERT INTO round_budgets (room_id,base,cap,extra) VALUES (?,?,?,?)", [room_id, row.base, row.cap, row.extra]]);
-  for (const row of tables.scheduler_decisions || []) statements.push(["INSERT INTO scheduler_decisions (room_id,after_message_id,kind,label,confidence,applied,provider,created_at) VALUES (?,?,?,?,?,?,?,?)",
-    [room_id, messages.get(row.after_message_id) ?? 0, row.kind, row.label, row.confidence ?? null, row.applied, row.provider, row.created_at]]);
+  for (const row of tables.scheduler_decisions || []) {
+    statements.push(["INSERT INTO scheduler_decisions (room_id,after_message_id,kind,label,confidence,applied,provider,created_at) VALUES (?,?,?,?,?,?,?,?)",
+      [room_id, messages.get(row.after_message_id) ?? 0, row.kind, row.label, row.confidence ?? null, row.applied, row.provider, row.created_at]]);
+    if (row.feedback) statements.push(["INSERT INTO scheduler_feedback (decision_id,rating,should_be,note,created_at) VALUES (last_insert_rowid(),?,?,?,?)",
+      [row.feedback, row.should_be ?? "", row.note ?? "", row.created_at]]);
+    if (row.context) statements.push(["INSERT INTO scheduler_decision_context (decision_id,context) SELECT id,? FROM scheduler_decisions WHERE room_id=? ORDER BY id DESC LIMIT 1", [row.context, room_id]]);
+  }
   return statements;
 }
 
@@ -370,7 +380,7 @@ async function require_room(database, room_id) {
   const option = await database.prepare("SELECT named_followup FROM discussion_options WHERE room_id=?").bind(room_id).first();
   // Rooms created before the option keep the host's named follow-ups.
   result.named_followup = option ? Boolean(option.named_followup) : true;
-  result.scheduler_decisions = (await database.prepare("SELECT * FROM scheduler_decisions WHERE room_id=? ORDER BY id DESC LIMIT ?")
+  result.scheduler_decisions = (await database.prepare(`${DECISION_SELECT} WHERE d.room_id=? ORDER BY d.id DESC LIMIT ?`)
     .bind(room_id, RECENT_DECISIONS).all()).results.reverse();
   const details = new Map((await database.prepare("SELECT decision_id,detail FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)")
     .bind(room_id).all()).results.map((row) => [row.decision_id, JSON.parse(row.detail)]));
@@ -838,6 +848,8 @@ async function manage_room(database, room_id, action, payload) {
       "DELETE FROM free_batches WHERE room_id=?", "DELETE FROM free_chains WHERE room_id=?", "DELETE FROM room_links WHERE room_id=?",
       "DELETE FROM discussion_options WHERE room_id=?",
       "DELETE FROM round_budgets WHERE room_id=?", "DELETE FROM discussion_sessions WHERE room_id=?",
+      "DELETE FROM scheduler_feedback WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)",
+      "DELETE FROM scheduler_decision_context WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)",
       "DELETE FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)", "DELETE FROM scheduler_decisions WHERE room_id=?",
       "DELETE FROM message_timings WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
       "DELETE FROM message_summaries WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
@@ -1854,15 +1866,37 @@ async function handle_runtime_api(database, request, parts, params) {
     return respond({ events, next_after: events.at(-1)?.id ?? after });
   }
   if (parts.length === 4 && parts[3] === "scheduler-decisions" && request.method === "POST") {
-    return respond(await record_scheduler_decision(database, room_id, token, await read_payload(request)));
+    return respond(await record_scheduler_decision(database, room_id, token, await read_payload(request), await room_mode(database, room_id) === "free"));
+  }
+  if (parts.length === 5 && parts[3] === "scheduler-decisions" && request.method === "POST") {
+    return respond(await rate_scheduler_decision(database, room_id, integer(parts[4]), token, await read_payload(request)));
   }
   throw new HttpError(404, "地址不存在");
 }
 
-/** The dispatcher records one smart-scheduling decision so the transcript shows what it did and how sure it was. */
-async function record_scheduler_decision(database, room_id, token, payload) {
-  const control = await database.prepare("SELECT 1 FROM discussion_runtime WHERE room_id=? AND control_hash=?").bind(room_id, await runtime_hash(token)).first();
-  if (!control) throw new HttpError(403, "需要本房间的运行控制凭据");
+/** The owner marks a decision good or bad; rating null withdraws the verdict. */
+async function rate_scheduler_decision(database, room_id, decision_id, token, payload) {
+  await require_free_owner(database, room_id, token);
+  const { rating = null, should_be = "", note = "" } = payload;
+  if (!["good", "bad", null].includes(rating)) throw new HttpError(400, "rating 须为 good、bad 或 null");
+  if (typeof should_be !== "string" || typeof note !== "string" || should_be.length > MAX_DECISION_MEMBER || note.trim().length > MAX_DECISION_NOTE) {
+    throw new HttpError(400, `should_be 须为成员名，note 不超过 ${MAX_DECISION_NOTE} 字`);
+  }
+  if (!await database.prepare("SELECT 1 FROM scheduler_decisions WHERE id=? AND room_id=?").bind(decision_id, room_id).first()) throw new HttpError(404, "没有这条智能调度决策");
+  if (rating === null) await database.prepare("DELETE FROM scheduler_feedback WHERE decision_id=?").bind(decision_id).run();
+  else await database.prepare(`INSERT INTO scheduler_feedback (decision_id,rating,should_be,note,created_at) VALUES (?,?,?,?,?)
+    ON CONFLICT(decision_id) DO UPDATE SET rating=excluded.rating,should_be=excluded.should_be,note=excluded.note,created_at=excluded.created_at`)
+    .bind(decision_id, rating, should_be.trim(), note.trim(), new Date().toISOString()).run();
+  return { decision_id, feedback: rating, should_be: should_be.trim(), note: note.trim() };
+}
+
+/** The dispatcher records one smart-scheduling decision so the transcript shows what it did and how sure it was.
+ *  A free room has no run control: its local service records with the owner credential. */
+async function record_scheduler_decision(database, room_id, token, payload, owner = false) {
+  if (owner) await require_free_owner(database, room_id, token);
+  else if (!await database.prepare("SELECT 1 FROM discussion_runtime WHERE room_id=? AND control_hash=?").bind(room_id, await runtime_hash(token)).first()) {
+    throw new HttpError(403, "需要本房间的运行控制凭据");
+  }
   const { kind, label, confidence = null, applied, provider } = payload;
   const after = payload.after_message_id ?? 0;
   if (!["interjection", "round"].includes(kind) || typeof label !== "string" || !label.trim() || label.trim().length > MAX_DECISION_LABEL) {
@@ -1877,9 +1911,15 @@ async function record_scheduler_decision(database, room_id, token, payload) {
   if (detail_text !== null && (!Array.isArray(detail) || detail.length > 4 || detail_text.length > MAX_DECISION_DETAIL)) {
     throw new HttpError(400, `detail 须为最多 4 项、不超过 ${MAX_DECISION_DETAIL} 字的列表`);
   }
+  const { context } = payload;
+  const context_text = context === undefined || context === null ? null : JSON.stringify(context);
+  if (context_text !== null && (typeof context !== "object" || Array.isArray(context) || context_text.length > MAX_DECISION_CONTEXT)) {
+    throw new HttpError(400, `context 须为不超过 ${MAX_DECISION_CONTEXT} 字的对象`);
+  }
   const row = await database.prepare(`INSERT INTO scheduler_decisions (room_id,after_message_id,kind,label,confidence,applied,provider,created_at)
     VALUES (?,?,?,?,?,?,?,?) RETURNING *`).bind(room_id, after, kind, label.trim(), confidence, Number(applied), provider, new Date().toISOString()).first();
   if (detail_text !== null) await database.prepare("INSERT INTO scheduler_decision_details (decision_id,detail) VALUES (?,?)").bind(row.id, detail_text).run();
+  if (context_text !== null) await database.prepare("INSERT INTO scheduler_decision_context (decision_id,context) VALUES (?,?)").bind(row.id, context_text).run();
   return row;
 }
 
@@ -2151,6 +2191,7 @@ function free_settle_statements(database, room_id) {
       SELECT b.room_id,b.host_id,b.batch_id,b.chain_id,0,'handoff','host',unixepoch()
       FROM free_batches b JOIN room_members m ON m.id=b.host_id AND m.status='active' AND m.role='host'
       WHERE b.room_id=? AND b.settled=0 AND ${FREE_BATCH_DONE} AND ${FREE_BATCH_ANSWERED}
+      AND (SELECT COUNT(*) FROM member_requests q WHERE q.room_id=b.room_id AND q.batch_id=b.batch_id)>=2
       AND NOT EXISTS(SELECT 1 FROM free_chains c WHERE c.room_id=b.room_id AND c.chain_id=b.chain_id)`).bind(room_id),
     database.prepare(`UPDATE free_batches AS b SET settled=1 WHERE b.room_id=? AND b.settled=0 AND ${FREE_BATCH_DONE}`).bind(room_id),
   ];
@@ -2909,7 +2950,7 @@ async function handle_api(database, request, parts, params, bucket, setup_key = 
   if (parts[3] === "members" && method === "POST" && [4, 5].includes(parts.length)) return handle_discussion_members(database, request, parts);
   if (parts[3] === "attachments") return handle_attachments(database, request, parts, params, bucket, free);
   if (["runtime", "events", "scheduler-decisions"].includes(parts[3])) {
-    if (free && method === "POST") throw new HttpError(400, "自由房间不使用讨论运行控制");
+    if (free && method === "POST" && parts[3] !== "scheduler-decisions") throw new HttpError(400, "自由房间不使用讨论运行控制");
     return handle_runtime_api(database, request, parts, params);
   }
   let free_actor = null;

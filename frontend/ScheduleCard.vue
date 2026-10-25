@@ -19,6 +19,7 @@ const open = ref(false);
   <div class="channel-schedule-card" :class="{ 'is-skipped': skipped || plain, 'is-open': open }" :title="title" :aria-label="label">
     <UIcon :name="icon" class="channel-schedule-icon" />
     <span class="channel-schedule-text"><slot name="text" /></span>
+    <span class="channel-schedule-actions"><slot name="actions" /></span>
     <button v-if="expandable" type="button" class="channel-schedule-toggle" :aria-expanded="open" :aria-label="toggleLabel" @click="open = !open"><UIcon name="i-lucide-chevron-down" /></button>
     <div v-if="open" class="channel-schedule-detail"><slot /></div>
   </div>

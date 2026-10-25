@@ -9,6 +9,8 @@ export const SCHEDULER_PROVIDERS = {
 const REQUEST_TIMEOUT_MS = 30_000;
 /** Below this confidence a decision stays with the host, exactly as without scheduling. */
 export const ROUTE_CONFIDENCE = 0.7;
+/** Bump when the routing question or its option descriptions change, so ratings can be compared across wordings. */
+export const ROUTE_PROMPT_VERSION = 2;
 const HOST_CHOICE = '__host__';
 const NOTE_CHOICE = '__note__';
 const CONTEXT_MESSAGES = 10;
@@ -126,9 +128,9 @@ export function certainty(answer) {
  */
 export async function route_free_message(home, scheduler, { title, goal, context, message, host, members }, fetch_impl) {
   const choices = [...members.map(member => ({ value: member.name, description: member.description })),
-    { value: HOST_CHOICE, description: `交回主持人 ${host}：需要拆分任务、补充说明、多人协作，或无法确定由谁处理` }];
+    { value: HOST_CHOICE, description: `交回主持人 ${host}：需要拆分任务、多人协作，或消息与任何成员都无关` }];
   const answers = await decide(home, scheduler, scheduler_state(title, context, message, goal), [{ type: 'choice', name: 'handler',
-    instructions: '这条用户消息没有点名成员。判断它能否直接交给一位成员独立处理；需要主持人先理解、拆分或协调时选交回主持人。', choices }], fetch_impl);
+    instructions: '这条用户消息没有用 @ 点名成员，但正文可能直接提到某位成员的名字或在向其提问（如“某某在吗”），此时应选该成员。判断它能否直接交给一位成员独立处理；需要主持人先理解、拆分或协调时选交回主持人。', choices }], fetch_impl);
   const answer = answers.handler || {};
   const confidence = certainty(answer);
   const member = members.some(item => item.name === answer.choice) && confidence >= ROUTE_CONFIDENCE ? answer.choice : null;

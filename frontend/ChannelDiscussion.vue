@@ -151,7 +151,7 @@ const queue_hint = computed(() => {
   return text.value.trim() ? `新消息会在 ${name} 回复后交给主持人；可在进度看板点「跳过」本次发言` : "";
 });
 const free = computed(() => room.value?.mode === "free");
-/** Members of a free room that are working on a live execution, or have requests nobody has picked up yet. */
+/** Members of a free room that are working on a live execution; queued requests are shown in the side panel only. */
 const free_busy = computed(() => {
   if (!free.value || room.value.archived) return [];
   return (room.value.free?.members || []).flatMap((member) => {
@@ -161,7 +161,7 @@ const free_busy = computed(() => {
         text: execution.stale ? "执行失联：网站已不再接受本次回答，软件停止未确认" : "正在处理…",
         seconds: Math.max(0, Math.floor(Date.now() / 1000) - execution.created_at) }];
     }
-    return member.pending ? [{ id: `queue-${member.id}`, author: member.name, member_id: member.id, text: "待投递：等待本机服务接手", seconds: null }] : [];
+    return [];
   });
 });
 /** One working card: the first busy member leads, the others are listed in the same line. */
@@ -227,11 +227,10 @@ const execution_reports = computed(() => {
   if (!source) return reports;
   for (const execution of source.executions || []) {
     if (!["completed", "failed", "cancelled"].includes(execution.status)) continue;
+    // A clean completion adds nothing to the message header; only failures and observed file changes earn a card.
+    if (execution.status === "completed" && !execution.changes?.length) continue;
     const message_id = execution.answer_id || execution.request_message_id;
-    const report = { ...execution, label: { completed: "已完成", failed: "失败", cancelled: "已停止" }[execution.status],
-      seconds: Math.max(0, execution.finished_at - execution.created_at),
-      files_text: !execution.changes_recorded ? "未提供自动改动检测（非 Git 目录或未上报）"
-        : execution.changes.length ? execution.changes.join("、") : "未观察到文件变化" };
+    const report = { ...execution, label: { completed: "已完成", failed: "失败", cancelled: "已停止" }[execution.status] };
     reports.set(message_id, [...(reports.get(message_id) || []), report]);
   }
   return reports;
@@ -287,7 +286,8 @@ const recommendations = computed(() => {
   const routes = new Map((room.value.free?.requests || []).filter((request) => request.purpose === "route").map((request) => [request.message_id, request]));
   for (const item of room.value.free?.recommendations || []) {
     const remaining = item.expires_in - elapsed;
-    if (item.status === "open" && remaining <= 0) continue;
+    // Only an open fallback shows here; an applied decision is shown by its decision card.
+    if (item.status !== "open" || remaining <= 0) continue;
     const host_busy = ["pending", "delivering"].includes(routes.get(item.message_id)?.status);
     rows.set(item.message_id, { ...item, remaining, host_busy, label: SCHEDULER_LABELS[item.provider] || item.provider,
       can_adopt: item.status === "open" && view.value.access?.can_manage && !room.value.archived && !pending.value });
@@ -303,7 +303,6 @@ onBeforeUnmount(() => window.clearInterval(recommendation_timer));
 /** In a discussion, each smart-scheduling decision shows under the message it followed. */
 const scheduler_decisions = computed(() => {
   const rows = new Map();
-  if (free.value) return rows;
   for (const item of room.value.scheduler_decisions || []) {
     // A skip asked the model nothing (no confidence, nothing applied, no question), so there is no decision to show.
     if (item.confidence === null && !item.applied && !item.detail?.length) continue;
@@ -324,6 +323,22 @@ const host_arrangements = computed(() => {
   }
   return rows;
 });
+/** Clicking the current verdict again withdraws it; a bad one saves at once and opens an optional correction form. */
+const correcting = ref({ id: 0, should_be: "", note: "" });
+function rate_decision(decision, rating) {
+  const withdraw = decision.feedback === rating;
+  correcting.value = { id: !withdraw && rating === "bad" ? decision.id : 0, should_be: decision.should_be || "", note: decision.note || "" };
+  act("rate_decision", { decision_id: decision.id, rating: withdraw ? null : rating,
+    ...(rating === "bad" && !withdraw ? { should_be: decision.should_be, note: decision.note } : {}) });
+}
+function save_correction(decision) {
+  const { should_be, note } = correcting.value;
+  correcting.value = { id: 0, should_be: "", note: "" };
+  act("rate_decision", { decision_id: decision.id, rating: "bad", should_be, note });
+}
+/** Who could have answered: every member present, plus the host. */
+const correction_options = computed(() => [{ label: "未指定", value: "" }, ...(room.value.members || []).filter((member) => member.status === "active")
+  .map((member) => ({ label: bridge.display_name(member.name), value: member.name }))]);
 function adopt(message_id, mode) {
   adopting.value = 0;
   act("adopt_recommendation", { message_id, mode });
@@ -949,7 +964,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
         </div>
       </motion.div>
     </Teleport>
-    <div ref="transcript" v-memo="[message_groups, message_round_labels, active_message, expanded_answers.size, room.title, view.query, view.mention_only, topic_key, topic_expanded, topic_overflows, pending_message, pending_seconds, request_badges, execution_reports, response_suggestions, recommendations, adopting, scheduler_decisions, pending, view.free_error]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
+    <div ref="transcript" v-memo="[message_groups, message_round_labels, active_message, expanded_answers.size, room.title, view.query, view.mention_only, topic_key, topic_expanded, topic_overflows, pending_message, pending_seconds, request_badges, execution_reports, response_suggestions, recommendations, adopting, scheduler_decisions, correcting, pending, view.free_error]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
       <div v-if="!view.query && !view.mention_only" class="channel-message-group channel-topic-group"><section class="channel-message channel-topic-card" :class="{ 'is-expanded': topic_expanded }" aria-label="议题">
         <header class="channel-topic-heading"><span class="channel-topic-eyebrow"><UIcon name="i-lucide-target" />议题</span><h2>{{ room.title }}</h2><UButton icon="i-lucide-pencil" label="编辑" color="neutral" variant="ghost" size="xs" @click="emit('edit')" /></header>
         <div ref="topic_body" class="channel-topic-body" :class="{ 'is-clamped': topic_overflows && !topic_expanded }">
@@ -1015,8 +1030,8 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
               <template v-for="item in [recommendations.get(message.id)]" :key="item.message_id">
                 <UIcon name="i-lucide-zap" class="channel-recommendation-icon" />
                 <span v-if="item.status === 'open'">智能调度建议让 <strong>{{ bridge.display_name(item.member) }}</strong> 回答<small :title="`${item.label}，置信度 ${Number(item.confidence).toFixed(2)}`">置信度 {{ Number(item.confidence).toFixed(2) }} · {{ item.remaining }} 秒</small></span>
-                <span v-else-if="item.status === 'waiting'">已采纳：主持人答完后请 {{ bridge.display_name(item.member) }} 回答</span>
-                <span v-else>已采纳：{{ item.mode === 'interrupt' ? `已打断主持人，改由 ${bridge.display_name(item.member)} 回答` : `已请 ${bridge.display_name(item.member)} 回答` }}</span>
+                <span v-else-if="item.status === 'waiting'">智能调度：主持人答完后请 {{ bridge.display_name(item.member) }} 回答</span>
+                <span v-else>智能调度：{{ item.mode === 'interrupt' ? `已打断主持人，改由 ${bridge.display_name(item.member)} 回答` : `已请 ${bridge.display_name(item.member)} 回答` }}</span>
                 <template v-if="item.can_adopt">
                   <UButton v-if="adopting !== item.message_id" label="采纳" icon="i-lucide-check" size="xs" variant="soft" color="primary" :aria-label="`采纳建议，请 ${item.member} 回答 #${item.message_id}`" @click="item.host_busy ? adopting = item.message_id : adopt(item.message_id, 'after')" />
                   <template v-else>
@@ -1036,9 +1051,8 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
               </div>
             </div>
             <section v-for="report in execution_reports.get(message.id) || []" :key="report.id" class="channel-execution-report" :aria-label="`执行报告 #${report.id}`">
-              <div><strong>执行 #{{ report.id }} · {{ report.label }}</strong><span>{{ format_elapsed(report.seconds) }}</span></div>
-              <p>请求 {{ report.request_ids.map((id) => `#${id}`).join('、') }}</p>
-              <p>工作区观察：{{ report.files_text }}</p>
+              <div><strong>执行 #{{ report.id }} · {{ report.label }}</strong></div>
+              <p v-if="report.changes?.length">文件变化：{{ report.changes.join('、') }}</p>
               <p v-if="report.status !== 'completed' && report.result">{{ report.result }}</p>
             </section>
           </template>
@@ -1050,8 +1064,20 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
         <!-- A decision stands between the card that ended the round and the next speaker. -->
         <ScheduleCard v-for="decision in scheduler_decisions.get(message.id) || []" :key="`decision-${decision.id}`" icon="i-lucide-zap" :skipped="!decision.applied" :title="decision.title" label="智能调度决策" toggle-label="展开或收起判断详情" :expandable="Boolean(decision.detail?.length)">
           <template #text>智能调度：{{ decision.label }}<small v-if="decision.confidence !== null">置信度 {{ Number(decision.confidence).toFixed(2) }}</small><small v-if="decision.detail?.[0]?.duration_ms != null">耗时 {{ format_ms(decision.detail[0].duration_ms) }}</small></template>
+          <template #actions>
+            <button v-if="view.access?.can_manage" type="button" class="channel-schedule-rate" :class="{ 'is-on': decision.feedback === 'good' }" :aria-pressed="decision.feedback === 'good'" aria-label="这次调度判断得好" title="判断得好" @click="rate_decision(decision, 'good')"><UIcon name="i-lucide-thumbs-up" /></button>
+            <button v-if="view.access?.can_manage" type="button" class="channel-schedule-rate" :class="{ 'is-on': decision.feedback === 'bad' }" :aria-pressed="decision.feedback === 'bad'" aria-label="这次调度判断得不好" title="判断得不好" @click="rate_decision(decision, 'bad')"><UIcon name="i-lucide-thumbs-down" /></button>
+          </template>
           <p v-for="(item, index) in decision.detail" :key="index"><span>问：{{ item.question }}（{{ item.choices.map(option_name).join(" / ") }}）</span><span>答：{{ item.choice ? option_name(item.choice) : "无" }}<small v-if="item.probabilities[item.choice] !== undefined">概率 {{ Number(item.probabilities[item.choice]).toFixed(2) }}</small></span></p>
         </ScheduleCard>
+        <template v-for="decision in scheduler_decisions.get(message.id) || []" :key="`correction-${decision.id}`">
+          <form v-if="correcting.id === decision.id && decision.feedback === 'bad'" class="channel-schedule-correction" @submit.prevent="save_correction(decision)">
+            <label>应该由谁回答<select v-model="correcting.should_be"><option v-for="option in correction_options" :key="option.value" :value="option.value">{{ option.label }}</option></select></label>
+            <input v-model="correcting.note" type="text" maxlength="200" placeholder="想说的话（可选）" aria-label="对这次调度判断想说的话">
+            <UButton type="submit" label="保存" size="xs" variant="soft" color="primary" />
+            <UButton label="关闭" size="xs" variant="ghost" color="neutral" @click="correcting = { id: 0, should_be: '', note: '' }" />
+          </form>
+        </template>
         <ScheduleCard v-for="plan in host_arrangements.get(message.id) || []" :key="`arrangement-${plan.id}`" icon="i-lucide-list-ordered" plain :title="`${bridge.display_name(room.host)} 创建的发言安排`" label="主持人安排" toggle-label="展开或收起各专家的任务">
           <template #text>主持人安排：{{ plan.label }}<small>耗时 {{ format_elapsed(arrangement_seconds(plan, message)) }}</small></template>
           <p v-for="turn in plan.turns" :key="`${plan.id}-${turn.expert}-${turn.question}`"><span>{{ bridge.display_name(turn.expert) }}：{{ turn.question }}</span></p>
