@@ -1005,6 +1005,30 @@ test('Worker smart scheduling recommendations wait for the user, then interrupt 
   assert.equal((await adopt(third, 'after')).status, 409);
 });
 
+test('Worker discussion members answer direct questions from the user outside the floor, turns and rounds', async t => {
+  const f = await worker_fixture(t);
+  const created = await f.request('', { title: '直接提问', host: 'Codex', phase: 'paused', runtime_mode: 'automatic', experts: { Codex: 'cli', Claude: 'cli' } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const path = `/${created.body.id}`;
+  const floor_before = (await f.request(path)).body.floor;
+  const ask = (text, to) => f.request(`${path}/messages`, { author: '用户', text, to, submission_id: crypto.randomUUID().replaceAll('-', '') });
+  assert.equal((await ask('谁是主持？', ['Nobody'])).status, 400);
+  assert.equal((await ask('@Claude 你怎么看？', ['Claude'])).status, 201);
+  const inbox = (await f.request(`${path}/inbox`, undefined, 'owner-credential'.repeat(3))).body;
+  const claude = inbox.members.find(member => member.name === 'Claude');
+  assert.deepEqual(claude.pending.map(item => item.purpose), ['ask']);
+  const execution = await f.request(`${path}/executions`, { member_id: claude.id, client_id: crypto.randomUUID(), cwd: '' }, 'owner-credential'.repeat(3));
+  assert.equal(execution.status, 200, JSON.stringify(execution.body));
+  const answer = { author: 'Claude', text: '我的看法', source: 'cli', kind: 'chat', execution_id: execution.body.id, submission_id: crypto.randomUUID().replaceAll('-', '') };
+  assert.equal((await f.request(`${path}/messages`, { ...answer, execution_id: 0 }, f.member_tokens.Claude)).status, 403);
+  const saved = await f.request(`${path}/messages`, answer, f.member_tokens.Claude);
+  assert.equal(saved.status, 201, JSON.stringify(saved.body));
+  const view = (await f.request(path)).body;
+  assert.deepEqual(view.floor, floor_before);
+  assert.deepEqual(view.asks.requests.map(item => item.status), ['completed']);
+  assert.deepEqual([view.completed_rounds, view.current_turn], [0, null]);
+});
+
 test('Worker smart scheduling can recommend a manual member, which the inbox lists apart from woken ones', async t => {
   const f = await worker_fixture(t);
   const r = await free_worker_room(f, [{ name: 'Gemini', access: 'manual', token: 'gemini-free'.repeat(4) }]);

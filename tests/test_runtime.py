@@ -79,6 +79,31 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(status, 200, value)
         return value
 
+    def test_user_asks_members_directly_while_the_discussion_is_paused(self):
+        """A named member answers a direct question outside the floor, turns and rounds, even when the topic is paused."""
+        status, room = self.request("/api/rooms", {"title": "直接提问", "host": "Codex", "phase": "paused", "runtime_mode": "automatic",
+            "experts": {"Codex": "cli", "Claude": "cli"}})
+        self.assertEqual(status, 201, room)
+        path = f"/api/rooms/{room['id']}"
+        floor_before = self.request(path)[1]["floor"]
+        ask = lambda text, to: self.request(path + "/messages", {"author": "用户", "text": text, "to": to, "submission_id": uuid.uuid4().hex})
+        self.assertEqual(ask("谁是主持？", ["Nobody"])[0], 400)
+        question = ask("@Claude 你怎么看？", ["Claude"])
+        self.assertEqual(question[0], 201, question)
+        inbox = self.request(path + "/inbox", token=self.owner)[1]
+        claude = next(member for member in inbox["members"] if member["name"] == "Claude")
+        self.assertEqual([item["purpose"] for item in claude["pending"]], ["ask"])
+        execution = self.request(path + "/executions", {"member_id": claude["id"], "client_id": uuid.uuid4().hex, "cwd": ""}, self.owner)
+        self.assertEqual(execution[0], 200, execution)
+        answer = {"author": "Claude", "text": "我的看法", "source": "cli", "kind": "chat", "execution_id": execution[1]["id"], "submission_id": uuid.uuid4().hex}
+        self.assertEqual(self.request(path + "/messages", {**answer, "execution_id": 0}, self.member_tokens["Claude"])[0], 403)
+        saved = self.request(path + "/messages", answer, self.member_tokens["Claude"])
+        self.assertEqual(saved[0], 201, saved)
+        view = self.request(path)[1]
+        self.assertEqual(view["floor"], floor_before)
+        self.assertEqual([item["status"] for item in view["asks"]["requests"]], ["completed"])
+        self.assertEqual((view["completed_rounds"], view["current_turn"]), (0, None))
+
     def test_manual_room_requires_distinct_owner_and_member_capabilities(self):
         """Manual delivery grants scoped member access, never implicit owner authority."""
         message = {"author": "用户", "text": "要求", "submission_id": "manual-user-note"}
@@ -881,7 +906,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(status, 201, saved)
         reported = next(m for m in self.request(self.path)[1]["members"] if m["name"] == "Qwen")
         self.assertEqual((reported["reported_session"], reported["reported_client"]), (adopt["session_id"], "codex"))
-        self.assertEqual(self.request(member_path, {**adopt, "adapter": "antigravity_cli"}, self.owner)[0], 400)
+        self.assertEqual(self.request(member_path, {**adopt, "adapter": "gemini_cli"}, self.owner)[0], 400)
         self.assertEqual(self.request(member_path, {**adopt, "session_id": "other-session-0000"}, self.owner)[0], 400)
         self.assertNotEqual(self.request(member_path, adopt, self.member_tokens["Qwen"])[0], 200)
         status, adopted = self.request(member_path, adopt, self.owner)

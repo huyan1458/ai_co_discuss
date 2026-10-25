@@ -553,6 +553,39 @@ def after_free_message(connection, room_id, message_id, actor, payload):
     settle_batches(connection, room_id)
 
 
+def discussion_host_handles(connection, room):
+    """A running discussion already wakes its host for every user message, so a question to the host needs no request of its own."""
+    return room["phase"] not in ("paused", "concluded") and bool(connection.execute(
+        "SELECT 1 FROM discussion_runtime WHERE room_id=? AND status='running'", (room["id"],)).fetchone())
+
+
+def checked_asks(connection, room, payload):
+    """Validate the user's direct questions to members of a discussion before the message is stored."""
+    names = payload.get("to")
+    if names is None:
+        return []
+    return named_members(active_members(connection, room["id"]), names)
+
+
+def ask_members(connection, room, message_id, member_ids):
+    """Queue one 'ask' request per named member, outside the discussion's turns, rounds and limits."""
+    host_busy = discussion_host_handles(connection, room)
+    for member_id in member_ids:
+        row = connection.execute("SELECT name FROM room_members WHERE id=?", (member_id,)).fetchone()
+        if host_busy and row["name"] == room["host"]:
+            continue
+        insert_request(connection, room["id"], member_id, message_id, message_id, "ask", "user")
+
+
+def asks_view(connection, room_id):
+    """Direct questions of a discussion room: recent requests with their member, for status badges beside messages."""
+    names = {row["id"]: row["name"] for row in connection.execute("SELECT id,name FROM room_members WHERE room_id=?", (room_id,))}
+    requests = [{**dict(row), "member": names.get(row["member_id"], "")} for row in connection.execute(
+        """SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by FROM member_requests
+        WHERE room_id=? ORDER BY id DESC LIMIT ?""", (room_id, RECENT_REQUESTS))]
+    return {"requests": requests[::-1], "executions": recent_executions(connection, room_id), "execution_minutes": execution_minutes(connection, room_id)}
+
+
 def expire_executions(connection, room_id):
     """Fail executions whose lease lapsed; their requests stay visible as failed, never silently retried."""
     now = int(time.time())
@@ -694,6 +727,9 @@ def reserve_execution(connection, room_id, token, payload):
     if connection.execute("SELECT 1 FROM member_executions WHERE member_id=? AND status IN ('dispatched','started')",
                           (member["id"],)).fetchone():
         raise FileExistsError("该成员已有进行中的执行；同一会话不并发续接")
+    if connection.execute("SELECT 1 FROM discussion_events WHERE room_id=? AND participant=? AND status IN ('dispatched','started')",
+                          (room_id, member["name"])).fetchone():
+        raise FileExistsError("该成员正在处理讨论安排；同一会话不并发续接")
     if not connection.execute("SELECT 1 FROM member_requests WHERE member_id=? AND status='pending'", (member["id"],)).fetchone():
         raise FileExistsError("该成员没有待投递的请求")
     now = int(time.time())

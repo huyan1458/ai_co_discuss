@@ -193,6 +193,9 @@ WHEN NEW.author<>'用户'
     AND NOT EXISTS (SELECT 1 FROM messages WHERE room_id=NEW.room_id AND submission_id=NEW.submission_id)
     AND NOT EXISTS (SELECT 1 FROM room_floor WHERE room_id=NEW.room_id AND holder=NEW.author)
     AND NOT EXISTS (SELECT 1 FROM room_modes WHERE room_id=NEW.room_id AND mode='free')
+    -- A member answering a user's direct question in a discussion has its own execution instead of the floor.
+    AND NOT EXISTS (SELECT 1 FROM member_executions JOIN room_members ON room_members.id=member_executions.member_id
+                    WHERE member_executions.room_id=NEW.room_id AND room_members.name=NEW.author AND member_executions.status IN ('dispatched','started'))
 BEGIN
     SELECT RAISE(ABORT, 'floor_required');
 END;
@@ -203,8 +206,10 @@ WHEN NEW.kind='opinion' AND NEW.turn_id IS NULL
 BEGIN
     SELECT RAISE(ABORT, 'floor_turn_required');
 END;
-CREATE TRIGGER IF NOT EXISTS return_message_floor AFTER INSERT ON message_details
-WHEN EXISTS (SELECT 1 FROM messages WHERE id=NEW.message_id AND author<>'用户')
+DROP TRIGGER IF EXISTS return_message_floor;
+-- A chat answer to a direct question never touches the discussion's floor.
+CREATE TRIGGER return_message_floor AFTER INSERT ON message_details
+WHEN NEW.kind<>'chat' AND EXISTS (SELECT 1 FROM messages WHERE id=NEW.message_id AND author<>'用户')
 BEGIN
     UPDATE room_floor SET holder=NULL,
         next_speaker=COALESCE((SELECT host FROM topic_settings WHERE room_id=room_floor.room_id),'用户'),

@@ -12,7 +12,7 @@ import { test } from 'node:test';
 
 import { adopt_member_profile, borrowed_session, cached_software_models, launch_discussion, pick_directory, launch_settings, room_configuration, room_member, save_launch_settings } from '../runner/discussion_launch.mjs';
 import { api, DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
-import { DiscussionService, read_registry, register_room } from '../runner/discussion_service.mjs';
+import { DiscussionService, DiscussionWithQuestions, read_registry, register_room } from '../runner/discussion_service.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
 import { save_api_key } from '../runner/discussion_api.mjs';
 import { SCHEDULER_PROVIDERS } from '../runner/scheduler.mjs';
@@ -957,6 +957,24 @@ test('a free room is created with woken, manual and online members chosen one by
   assert.deepEqual(Object.keys(load_config(launched.config_path).participants), ['Claude'], 'only woken members get local configuration');
   assert.equal((await request(f.site, `/api/rooms/${launched.room.id}/messages`, { author: 'Codex', text: '手动成员', source: 'cli', submission_id: randomUUID() },
     { 'X-Discussion-Token': manual_token })).status, 201);
+});
+
+test('a discussion room delivers a direct question to a named member even while paused', async t => {
+  const f = await fixture(t);
+  const owner = randomUUID() + randomUUID();
+  const launched = await launch_discussion(f.home, { ...f.input, token: owner }, f.options);
+  const path = `/api/rooms/${launched.room.id}`, auth = { 'X-Discussion-Token': owner };
+  const delivered = [];
+  const idle_discussion = (config) => ({ config, members: [], children: new Set(), tick: async () => false, stop_children() {} });
+  const service = new DiscussionService(f.home, (current, store) => new DiscussionWithQuestions(idle_discussion(current),
+    new FreeRoomRunner(current, store, async (_, binding, task) => { delivered.push([task.participant, task.prompt.includes('讨论房间')]); return { status: 'accepted' }; })));
+  try {
+    await service.tick();
+    assert.equal((await request(f.site, `${path}/messages`, { author: '用户', text: '@Claude 你怎么看', to: ['Claude'], submission_id: randomUUID() }, auth)).status, 201);
+    await service.tick();
+    assert.deepEqual(delivered, [['Claude', true]]);
+    assert.deepEqual((await request(f.site, path)).body.asks.requests.map(item => [item.member, item.status]), [['Claude', 'delivering']]);
+  } finally { await service.close(); }
 });
 
 test('a free room of only manual members is launched for smart scheduling alone', async t => {

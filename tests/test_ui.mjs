@@ -394,6 +394,15 @@ test("attachment rendering separates images from files and keeps preview capabil
   assert.match(binary, /title="设计&quot;&lt;图&gt;\.png"/);
 });
 
+test("a discussion draft names active members it @mentions outside code as direct questions", () => {
+  const { context, state, element } = attachment_fixture();
+  state.room.members = [{ name: "Claude", status: "active" }, { name: "Gemini", status: "away" }, { name: "Codex", status: "active" }];
+  element("message-input").value = "@Claude 你怎么看？ @Gemini 在吗";
+  assert.deepEqual(Array.from(context.message_payload().to), ["Claude"]);
+  element("message-input").value = "没有点名，`@Codex` 只是引用";
+  assert.equal(context.message_payload().to, undefined);
+});
+
 test("attachment retries retain files and reuse both upload and message receipts", async () => {
   const fixture = attachment_fixture(), { context, state, uploads, posts } = fixture;
   context.add_attachments([{ name: "截图.png", size: 10, type: "image/png" }]);
@@ -460,7 +469,7 @@ test("changing the uploader never reuses an earlier actor's receipt after upload
 function expert_card_fixture() {
   const props = reactive({ name: "Codex", mode: "cli", choices: [], status: {} });
   const view = ref({ launch: { profiles: { Codex: { adapter: "codex_cli", model: "saved-model", effort: "high" } } } });
-  const reduced = ref(false), calls = [], cleanups = [], listeners = new Set(), document = { activeElement: null };
+  const reduced = ref(false), calls = [], cleanups = [], listeners = new Set(), document = { activeElement: null, addEventListener() {}, removeEventListener() {} };
   const angle = { set: (target) => calls.push(["set", target]), jump(target) { calls.push(["jump", target]); this.advance(target); },
     on: (event, callback) => { const listener = { event, callback }; listeners.add(listener); return () => listeners.delete(listener); },
     advance: (position) => listeners.forEach(({ event, callback }) => event === "change" && callback(position)),
@@ -695,8 +704,8 @@ test("create form shares a role library, keeps independent instances and makes t
   assert.deepEqual(Object.entries(modes), [["Codex", "cli"], ["Codex-2", "cli"], ["DeepSeek", "cli"]], "every member starts woken by the local service");
   assert.equal(view.value.launch.profiles.DeepSeek.adapter, "api", "an API-only platform is woken through its API");
   assert.equal(view.value.fields["new-room-host"], "Codex", "the user is the client of a free room, never its host");
-  assert.deepEqual(Array.from(vm.runInContext('access_choices("Codex")', context)), ["cli", "manual", "online"]);
-  assert.deepEqual(Array.from(vm.runInContext('access_choices("DeepSeek")', context)), ["cli", "manual", "online"], "manual needs no local software, so any platform may be pasted into the AI the user runs by hand");
+  assert.deepEqual(Array.from(vm.runInContext('access_choices("Codex")', context)), ["cli", "manual"], "a web AI is a manual member, not a third kind");
+  assert.deepEqual(Array.from(vm.runInContext('access_choices("DeepSeek")', context)), ["cli", "manual"], "manual needs no local software, so any platform may be pasted into the AI the user runs by hand");
   context.set_expert_mode("Codex", "manual");
   context.set_expert_mode("Codex-2", "manual");
   context.set_expert_mode("DeepSeek", "online");

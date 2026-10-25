@@ -379,6 +379,10 @@ def reserve_event(connection, event, payload):
     if connection.execute("SELECT 1 FROM discussion_events WHERE room_id=? AND status IN ('dispatched','started')",
                           (event["room_id"],)).fetchone():
         raise FileExistsError("已有在途执行")
+    if connection.execute("""SELECT 1 FROM member_executions JOIN room_members ON room_members.id=member_executions.member_id
+                          WHERE member_executions.room_id=? AND room_members.name=? AND member_executions.status IN ('dispatched','started')""",
+                          (event["room_id"], event["participant"])).fetchone():
+        raise FileExistsError("该参与者正在回答用户的直接提问；同一会话不并发续接")
     connection.execute("UPDATE discussion_events SET status='dispatched',token_hash=? WHERE id=?", (hashed, event["id"]))
     if event["role"] == "host":
         connection.execute("UPDATE discussion_events SET status='completed',result=? WHERE room_id=? AND role='host' AND status='pending' AND id<?",

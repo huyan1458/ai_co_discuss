@@ -362,6 +362,7 @@ async function require_room(database, room_id) {
   result.runtime = await runtime_view(database, room_id);
   result.limits = limits_view(await database.prepare(LIMITS_SQL).bind(room_id).first(), result);
   result.mode = await room_mode(database, room_id);
+  if (result.mode !== "free") result.asks = await asks_view(database, room_id);
   result.session = await database.prepare("SELECT id,goal,status,started_message_id,ended_message_id,created_at FROM discussion_sessions WHERE room_id=? ORDER BY id DESC LIMIT 1").bind(room_id).first() ?? null;
   result.members = (await database.prepare(`SELECT m.id,m.name,m.adapter,m.role,m.status,m.access,m.session_mode,COALESCE(s.session_id,'') AS reported_session,COALESCE(s.client,'') AS reported_client,
     COALESCE(r.registered_at,'') AS registered_at
@@ -1018,7 +1019,7 @@ async function check_message_references(database, room_id, message) {
 }
 
 /** Prepare one atomic message, attribution, and assignment completion batch. */
-function message_statements(database, room_id, message, hashed) {
+function message_statements(database, room_id, message, hashed, asked = []) {
   const { author, text, submission_id, reply_to, source, kind, submitted_by, turn_id, summary, summary_by } = message;
   return [
     database.prepare(`INSERT INTO messages (room_id,author,text,reply_to,source,submission_id,created_at)
@@ -1046,15 +1047,38 @@ function message_statements(database, room_id, message, hashed) {
       (SELECT 1 FROM messages JOIN message_details ON messages.id=message_details.message_id
       WHERE messages.room_id=? AND messages.submission_id=? AND message_details.turn_id=discussion_turns.id)`)
       .bind(room_id, submission_id, turn_id, room_id, submission_id),
+    // The user's direct questions to members: requests outside the discussion's turns, rounds and limits.
+    ...asked.map(member_id => database.prepare(`INSERT OR IGNORE INTO member_requests (room_id,member_id,message_id,chain_id,purpose,created_by,created_at)
+      SELECT ?,?,id,id,'ask','user',unixepoch() FROM messages WHERE room_id=? AND submission_id=? AND author='用户'`).bind(room_id, member_id, room_id, submission_id)),
     database.prepare(`${MESSAGE_QUERY} WHERE room_id=? AND submission_id=?`).bind(room_id, submission_id),
   ];
+}
+
+/** A running discussion already wakes its host for every user message, so a question to the host needs no request of its own. */
+async function discussion_host_handles(database, room) {
+  return !["paused", "concluded"].includes(room.phase)
+    && Boolean(await database.prepare("SELECT 1 FROM discussion_runtime WHERE room_id=? AND status='running'").bind(room.id).first());
+}
+
+/** Validate the user's direct questions to members of a discussion before the message is stored. */
+async function checked_asks(database, room, payload) {
+  if (payload.to === undefined || payload.to === null) return [];
+  const active = await free_active_members(database, room.id);
+  const ids = free_named(active, payload.to);
+  const hosted = await discussion_host_handles(database, room);
+  return ids.filter(id => !(hosted && active[room.host]?.id === id));
+}
+
+/** A discussion message that closes the user's direct question: it names an execution or the requests it answers. */
+function answers_direct_question(payload) {
+  return Number.isInteger(payload.execution_id) || (Array.isArray(payload.request_ids) && payload.request_ids.length > 0);
 }
 
 /** Atomically append a message, preserving idempotency under concurrent retries. */
 async function append_message(database, room_id, payload, token = "", free_actor = null) {
   const values = message_values(payload);
   const room = await require_room(database, room_id);
-  if (room.mode === "free") return append_free_message(database, room, payload, free_actor);
+  if (room.mode === "free" || free_actor !== null) return append_free_message(database, room, payload, free_actor);
   const expected = { ...values, ...message_details(room, { ...payload, author: values.author }), attachment_ids: attachment_ids(payload) };
   Object.assign(expected, message_summary(payload, expected));
   const previous = await database.prepare(`${MESSAGE_QUERY} WHERE room_id=? AND submission_id=?`).bind(room_id, values.submission_id).first();
@@ -1063,9 +1087,10 @@ async function append_message(database, room_id, payload, token = "", free_actor
   if (["paused", "concluded"].includes(room.phase) && expected.kind === "opinion" && (expected.author !== "用户" || room.archived)) throw new HttpError(400, "话题已暂停或收束；恢复阶段后才能提交新观点，运行回执请用 receipt");
   await check_message_references(database, room_id, expected);
   await check_message_attachments(database, room_id, expected);
+  const asked = expected.author === "用户" ? await checked_asks(database, room, payload) : [];
   if (expected.author !== "用户" && expected.kind === "opinion" && !expected.turn_id) throw new HttpError(400, "专家观点必须关联当前有效的 turn_id");
   let results;
-  try { results = await database.batch(message_statements(database, room_id, expected, token ? await runtime_hash(token) : "")); }
+  try { results = await database.batch(message_statements(database, room_id, expected, token ? await runtime_hash(token) : "", asked)); }
   catch (error) {
     if (String(error).includes("UNIQUE constraint")) {
       const saved = await database.prepare(`${MESSAGE_QUERY} WHERE room_id=? AND submission_id=?`).bind(room_id, values.submission_id).first();
@@ -1810,10 +1835,10 @@ async function runtime_event_action(database, room_id, event_id, token, payload)
   const condition = `EXISTS(SELECT 1 FROM discussion_events e JOIN discussion_runtime r USING(room_id)
     WHERE e.id=? AND e.status=? AND e.generation=r.generation AND e.run_id=r.run_id AND r.status='running'
     AND (r.deadline=0 OR r.deadline>unixepoch()) AND (r.control_hash=? OR e.token_hash=?))`;
-  const idle = payload.action === "reserve" ? " AND NOT EXISTS(SELECT 1 FROM discussion_events WHERE room_id=? AND status IN ('dispatched','started'))" : "";
+  const idle = payload.action === "reserve" ? " AND NOT EXISTS(SELECT 1 FROM discussion_events WHERE room_id=? AND status IN ('dispatched','started')) AND NOT EXISTS(SELECT 1 FROM member_executions e JOIN room_members m ON m.id=e.member_id WHERE e.room_id=? AND m.name=? AND e.status IN ('dispatched','started'))" : "";
   const live_lease = payload.action === "renew" ? " AND EXISTS(SELECT 1 FROM discussion_events e JOIN discussion_limits l USING(room_id) WHERE e.id=? AND e.lease_until>unixepoch() AND (l.execution_minutes=0 OR e.started_at+l.execution_minutes*60>unixepoch()))" : "";
   await checked_batch(database, condition + idle + live_lease,
-    [event.id, event.status, hashed, hashed, ...(idle ? [room_id] : []), ...(live_lease ? [event.id] : [])], statements);
+    [event.id, event.status, hashed, hashed, ...(idle ? [room_id, room_id, event.participant] : []), ...(live_lease ? [event.id] : [])], statements);
   return public_event(await database.prepare("SELECT * FROM discussion_events WHERE id=?").bind(event.id).first());
 }
 
@@ -2034,6 +2059,15 @@ async function free_recent_executions(database, room_id) {
 }
 
 /** Summarize members, recent requests and execution reports without credentials. */
+/** Direct questions of a discussion room: recent requests with their member, for status badges beside messages. */
+async function asks_view(database, room_id) {
+  const names = Object.fromEntries((await database.prepare("SELECT id,name FROM room_members WHERE room_id=?").bind(room_id).all()).results.map(row => [row.id, row.name]));
+  const requests = (await database.prepare(`SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by FROM member_requests
+    WHERE room_id=? ORDER BY id DESC LIMIT ?`).bind(room_id, FREE_RECENT_REQUESTS).all()).results
+    .map(row => ({ ...row, member: names[row.member_id] ?? "" })).reverse();
+  return { requests, executions: await free_recent_executions(database, room_id), execution_minutes: await free_execution_minutes(database, room_id) };
+}
+
 async function free_view(database, room_id) {
   const now = Math.floor(Date.now() / 1000);
   const rows = (await database.prepare("SELECT * FROM room_members WHERE room_id=? AND status<>'removed' ORDER BY id").bind(room_id).all()).results;
@@ -2290,13 +2324,15 @@ async function free_reserve(database, room_id, token, payload) {
   const member = await database.prepare("SELECT * FROM room_members WHERE room_id=? AND id=? AND status='active' AND access='runner'").bind(room_id, payload.member_id ?? 0).first();
   if (!member) throw new HttpError(404, "成员不存在、已离开或为手动接入");
   if (await database.prepare(`SELECT 1 FROM member_executions WHERE member_id=? AND ${FREE_LIVE}`).bind(member.id).first()) throw new HttpError(409, "该成员已有进行中的执行；同一会话不并发续接");
+  if (await database.prepare("SELECT 1 FROM discussion_events WHERE room_id=? AND participant=? AND status IN ('dispatched','started')").bind(room_id, member.name).first()) throw new HttpError(409, "该成员正在处理讨论安排；同一会话不并发续接");
   if (!await database.prepare("SELECT 1 FROM member_requests WHERE member_id=? AND status='pending'").bind(member.id).first()) throw new HttpError(409, "该成员没有待投递的请求");
   const cwd = String(payload.cwd || "").slice(0, FREE_MAX_PATH);
   try {
     // The partial unique index keeps one live execution per member even under concurrent reservations.
     await checked_batch(database, `EXISTS(SELECT 1 FROM room_members WHERE id=? AND status='active' AND access='runner')
       AND EXISTS(SELECT 1 FROM member_requests WHERE member_id=? AND status='pending')
-      AND NOT EXISTS(SELECT 1 FROM room_directory WHERE room_id=? AND archived=1)`, [member.id, member.id, room_id], [
+      AND NOT EXISTS(SELECT 1 FROM room_directory WHERE room_id=? AND archived=1)
+      AND NOT EXISTS(SELECT 1 FROM discussion_events WHERE room_id=? AND participant=? AND status IN ('dispatched','started'))`, [member.id, member.id, room_id, room_id, member.name], [
       database.prepare(`INSERT INTO member_executions (room_id,member_id,client_id,lease_until,created_at,cwd)
         VALUES (?,?,?,unixepoch()+?,unixepoch(),?)`).bind(room_id, member.id, client_id, FREE_LEASE_SECONDS, cwd),
       database.prepare(`UPDATE member_requests SET status='delivering',execution_id=(SELECT id FROM member_executions WHERE room_id=? AND client_id=?)
@@ -2907,7 +2943,8 @@ async function handle_api(database, request, parts, params, bucket, setup_key = 
     { session_id: reported, session_client: request.headers.get("X-Discussion-Session-Client") });
   if (parts[3] === "register" && parts.length === 4 && method === "POST") return respond(await register_member(database, room_id, request.headers.get("X-Discussion-Token") ?? ""));
   const free = await room_mode(database, room_id) === "free";
-  if (free && ["inbox", "executions", "members", "suggestions", "recommendations"].includes(parts[3])) return handle_free_api(database, request, parts);
+  // A discussion keeps the local service's inbox and per-member executions for the user's direct questions.
+  if (["inbox", "executions"].includes(parts[3]) || (free && ["members", "suggestions", "recommendations"].includes(parts[3]))) return handle_free_api(database, request, parts);
   if (parts[3] === "members" && method === "POST" && [4, 5].includes(parts.length)) return handle_discussion_members(database, request, parts);
   if (parts[3] === "attachments") return handle_attachments(database, request, parts, params, bucket, free);
   if (["runtime", "events", "scheduler-decisions"].includes(parts[3])) {
@@ -2920,6 +2957,8 @@ async function handle_api(database, request, parts, params, bucket, setup_key = 
   else if (admin_bypass) { /* valid admin session replaces the room credential */ }
   else if (method === "POST" && free) free_actor = await authorize_free(database, room_id,
     request.headers.get("X-Discussion-Token") ?? "", parts[3] ?? "", await read_payload(request.clone()));
+  else if (method === "POST" && parts.length === 4 && parts[3] === "messages" && answers_direct_question(await read_payload(request.clone()))) free_actor = await authorize_free(database, room_id,
+    request.headers.get("X-Discussion-Token") ?? "", "messages", await read_payload(request.clone()));
   else if (method === "POST") database = await authorize_database(database, room_id,
     request.headers.get("X-Discussion-Token") ?? "", parts[3], await read_payload(request.clone()));
   if (parts.slice(3).join("/") === "backup" && method === "GET") return respond(await room_backup(database, room_id));

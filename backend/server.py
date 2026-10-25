@@ -25,7 +25,7 @@ from .free_room import (add_member, after_free_message, authorize_free_write, ch
                         inbox, interrupt_member, member_action, member_values, migrate_free_tables, proxy_member, reserve_execution,
                         discussion_members, room_mode, save_room_access, sync_discussion_members, view_execution)
 from .free_room import add_discussion_member, convert_suggestion, discussion_member_action, message_suggestions, save_suggestions, sync_participants
-from .free_room import adopt_recommendation, recommend_member, register_member
+from .free_room import adopt_recommendation, ask_members, asks_view, checked_asks, recommend_member, register_member
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, is_ai, is_participant
 from .room_import import import_room, imported_attachment
 from .runtime import (authorize_write, begin_write, configure_runtime, event_action,
@@ -240,6 +240,8 @@ def require_room(connection, room_id):
     parent = connection.execute("""SELECT rooms.id,rooms.title FROM room_links JOIN rooms ON rooms.id=room_links.parent_id
         WHERE room_links.room_id=?""", (room_id,)).fetchone()
     room["parent_room"] = dict(parent) if parent else None
+    if room["mode"] != "free":
+        room["asks"] = asks_view(connection, room_id)
     if room["mode"] == "free":
         room["linked_rooms"] = [dict(row) for row in connection.execute("""SELECT rooms.id,rooms.title,COALESCE(topic_settings.phase,'preparing') AS phase
             FROM room_links JOIN rooms ON rooms.id=room_links.room_id LEFT JOIN topic_settings ON topic_settings.room_id=rooms.id
@@ -1025,12 +1027,17 @@ def record_reported_session(connection, room_id, token, payload):
             ON CONFLICT(member_id) DO UPDATE SET session_id=excluded.session_id,client=excluded.client""", (member["id"], room_id, session_id, client))
 
 
+def answers_direct_question(payload):
+    """A discussion message that closes the user's direct question: it names an execution or the requests it answers."""
+    return type(payload.get("execution_id")) is int or bool(payload.get("request_ids"))
+
+
 def append_message(connection, room_id, payload, token="", free_actor=None):
     """Atomically append an attributed message and complete its scheduled turn."""
     author, text, submission_id, reply_to = message_values(payload)
     begin_write(connection)
     room = require_room(connection, room_id)
-    if room["mode"] == "free":
+    if room["mode"] == "free" or free_actor is not None:
         return append_free_message(connection, room, payload, free_actor)
     details = message_details(room, {**payload, "author": author})
     expected = {"author": author, "text": text, "reply_to": reply_to, **details}
@@ -1049,6 +1056,7 @@ def append_message(connection, room_id, payload, token="", free_actor=None):
         raise ValueError("话题已暂停或收束；恢复阶段后才能提交新观点，运行回执请用 receipt")
     check_message_references(connection, room_id, expected)
     check_message_attachments(connection, room_id, details["submitted_by"], identifiers)
+    asked = checked_asks(connection, room, payload) if author == "用户" else []
     if author != "用户":
         if details["kind"] == "opinion" and not details["turn_id"]:
             raise ValueError("专家观点必须关联当前有效的 turn_id")
@@ -1064,6 +1072,7 @@ def append_message(connection, room_id, payload, token="", free_actor=None):
                            (cursor.lastrowid, position, identifier))
     record_message_timing(connection, cursor.lastrowid, token)
     record_reported_session(connection, room_id, token, payload)
+    ask_members(connection, room, cursor.lastrowid, asked)
     if details["turn_id"]:
         connection.execute("UPDATE discussion_turns SET status='answered',answer_id=? WHERE id=?", (cursor.lastrowid, details["turn_id"]))
     return {"message": get_message(connection, room_id, cursor.lastrowid), "duplicate": False}
@@ -1893,7 +1902,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             connection.commit()
             return self.respond(result)
         free = room_mode(connection, room_id) == "free"
-        if free and parts[3:4] in (["inbox"], ["executions"], ["members"], ["suggestions"], ["recommendations"]):
+        # A discussion keeps the local service's inbox and per-member executions for the user's direct questions.
+        if parts[3:4] in (["inbox"], ["executions"]) or (free and parts[3:4] in (["members"], ["suggestions"], ["recommendations"])):
             return self.handle_free_api(connection, parts, method)
         if parts[3:4] == ["members"] and method == "POST" and len(parts) in (4, 5):
             if len(parts) == 4:
@@ -1916,6 +1926,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             pass
         elif method == "POST" and free:
             free_actor = authorize_free_write(connection, room_id, token, parts[3] if len(parts) > 3 else "", self.read_payload())
+        elif method == "POST" and parts[3:] == ["messages"] and answers_direct_question(self.read_payload()):
+            free_actor = authorize_free_write(connection, room_id, token, "messages", self.read_payload())
         elif method == "POST":
             authorize_write(connection, room_id, token, parts[3] if len(parts) > 3 else "", self.read_payload())
         if parts[3:] == ["backup"] and method == "GET":

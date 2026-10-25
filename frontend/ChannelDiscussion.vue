@@ -184,6 +184,10 @@ const has_draft = computed(() => Boolean(text.value.trim() || view.value.attachm
 const free_members = computed(() => free.value ? (room.value.free?.members || []).filter((member) => member.status === "active") : []);
 const free_host = computed(() => free_members.value.find((member) => member.role === "host"));
 const free_online = computed(() => free_members.value.filter((member) => member.access === "online"));
+/** In a discussion, an @mention of an active member is a direct question: it wakes that member outside turns, rounds and limits. */
+const ask_members = computed(() => free.value ? [] : (room.value?.members || []).filter((member) => member.status === "active" && member.name !== "用户"));
+const asked_names = computed(() => ask_members.value.filter((member) => MENTION_PATTERN(member.name).test(draft_prose.value)).map((member) => bridge.display_name(member.name)));
+const mention_pool = computed(() => free.value ? free_members.value : ask_members.value);
 /** Combine immutable suggestions with live membership and conversion status. */
 const response_suggestions = computed(() => {
   if (!free.value) return new Map();
@@ -205,9 +209,10 @@ const FREE_REQUEST_LABELS = { pending: ["待投递", "neutral"], delivering: ["�
 /** Each user message in a free room shows what happened to its request for every named member. */
 const request_badges = computed(() => {
   const badges = new Map();
-  if (!free.value) return badges;
-  const failures = new Map((room.value.free?.executions || []).map((execution) => [execution.id, execution.result]));
-  for (const request of room.value.free?.requests || []) {
+  const source = free.value ? room.value.free : room.value.asks;
+  if (!source) return badges;
+  const failures = new Map((source.executions || []).map((execution) => [execution.id, execution.result]));
+  for (const request of source.requests || []) {
     const [label, color] = FREE_REQUEST_LABELS[request.status];
     const title = request.status === "failed" ? failures.get(request.execution_id) || "执行失败" : "";
     badges.set(request.message_id, [...(badges.get(request.message_id) || []),
@@ -218,8 +223,9 @@ const request_badges = computed(() => {
 /** Attach each terminal execution to its answer, or to the original request when it has no answer. */
 const execution_reports = computed(() => {
   const reports = new Map();
-  if (!free.value) return reports;
-  for (const execution of room.value.free?.executions || []) {
+  const source = free.value ? room.value.free : room.value.asks;
+  if (!source) return reports;
+  for (const execution of source.executions || []) {
     if (!["completed", "failed", "cancelled"].includes(execution.status)) continue;
     const message_id = execution.answer_id || execution.request_message_id;
     const report = { ...execution, label: { completed: "已完成", failed: "失败", cancelled: "已停止" }[execution.status],
@@ -372,10 +378,10 @@ const escape_html = (value) => value.replace(/[&<>"]/g, (char) => ({ "&": "&amp;
 /** Paint the @mentions that will wake a member behind the transparent editor text; code and quotes do not count. */
 const mention_mirror = computed(() => {
   const value = text.value;
-  if (!free_members.value.length || !value.includes("@")) return "";
+  if (!mention_pool.value.length || !value.includes("@")) return "";
   // Masking keeps every offset, so matches in the masked copy point at the same characters of the draft.
   const masked = value.replace(/```[\s\S]*?```/g, blank).replace(/`[^`\n]*`/g, blank).replace(/^>.*$/gm, blank);
-  const ranges = free_members.value.flatMap(({ name }) => [...masked.matchAll(new RegExp(MENTION_PATTERN(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).source, "gu"))]
+  const ranges = mention_pool.value.flatMap(({ name }) => [...masked.matchAll(new RegExp(MENTION_PATTERN(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).source, "gu"))]
     .map((match) => [match.index + match[1].length, match.index + match[0].length])).sort((a, b) => a[0] - b[0]);
   if (!ranges.length) return "";
   let html = "", cursor = 0;
@@ -1127,7 +1133,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" aria-label="发送" title="发送 · Enter" :disabled="!has_draft || (needs_summary && !answer_summary.trim())" :loading="pending === 'send' || view.sending_message" @click="send" />
         </template>
       </UChatPrompt>
-      <div class="channel-composer-note"><span v-if="free">{{ recipient_hint }}<span class="channel-note-divider">·</span>手动成员需在原会话触发</span><span v-else>{{ author_note }}<span class="channel-note-divider">·</span>在线 AI 的观点需代发</span><span class="channel-draft-length"><span v-if="text_length" :class="{ 'is-near-limit': near_length_limit }">{{ text_length }} / {{ bridge.max_message_length }}<span class="channel-note-divider">·</span></span><span class="channel-key-hint"><kbd>Enter</kbd> 发送<span class="channel-note-divider">·</span><kbd>Shift</kbd>+<kbd>Enter</kbd> 换行</span></span></div>
+      <div class="channel-composer-note"><span v-if="free">{{ recipient_hint }}<span class="channel-note-divider">·</span>手动成员需在原会话触发</span><span v-else>{{ author_note }}<template v-if="asked_names.length"><span class="channel-note-divider">·</span>直接提问 {{ asked_names.join("、") }}，不计轮次</template><span class="channel-note-divider">·</span>在线 AI 的观点需代发</span><span class="channel-draft-length"><span v-if="text_length" :class="{ 'is-near-limit': near_length_limit }">{{ text_length }} / {{ bridge.max_message_length }}<span class="channel-note-divider">·</span></span><span class="channel-key-hint"><kbd>Enter</kbd> 发送<span class="channel-note-divider">·</span><kbd>Shift</kbd>+<kbd>Enter</kbd> 换行</span></span></div>
     </div></div>
   </section>
 </template>

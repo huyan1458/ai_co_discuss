@@ -318,6 +318,8 @@ Codex 要求 CLI 0.163.0 或更新版本，使用 permission profiles 和本地 
 
 运行中的讨论同样可用 `room-member` 邀请或请回专家，但只接受由本机唤醒的成员（不接受 `access: manual`）。`participants[name].session_id` 指定已有会话时，成员标记为 `borrowed`，首次投递即续接该会话；网页仅对 Codex CLI / App 与 Claude 提供此项，agy 照旧拒绝。邀请前在本机核对会话确实存在（Codex 查 `CODEX_HOME/sessions`，Claude 查 `CLAUDE_CONFIG_DIR/projects`），填错时当场报错，不会让讨论在轮到它时暂停；Claude 会话只能在原目录续接，未指定项目时沿用原目录，项目目录不同则拒绝。Codex 会话若正被 App 持有，CLI 续接报 active writer，进度看板在暂停原因下提供“切换到 Codex App”，保存采用后可在弹窗内重启。常驻服务每轮检查成员视图：已注册（`registered_at` 非空）且带 `reported_session` 的手动 Claude 专家，`adopt_member_profile` 在本机配置登记其借用会话（会话须存在于 `CLAUDE_CONFIG_DIR/projects` 且 Claude 软件已配置），随后调用 `adopt` 把成员转为托管；任一步失败则保持手动并记录一次日志，同一会话 ID 不重试。讨论配置只新增参与者时常驻服务直接采用，讨论不暂停；已有参与者的项目、cwd 或身份变化仍须暂停后重新接入。
 
+讨论房间同样登记一个 `FreeRoomRunner`（`DiscussionWithQuestions`）：只投递用户的直接提问（`ask`），任务文件说明“这不是发言安排，不领取发言权、不改变讨论进度”；与讨论执行互斥由网站保证。
+
 每次检查读取 `inbox`：成员没有进行中的执行且有待投递消息时，先持久化本地 `client_id` 再领取执行，然后用原适配器续接该成员的绑定会话；任务文件列出执行编号、待处理消息和已读起点，凭据文件只含成员凭证。进程退出而网站未收到回答、软件报错或超过单次执行时限时报告失败；只有确认未送达才退回队列重试，最多 3 次。领取后、调用前中断的投递不自动重发。主持人的任务文件带 `role: "host"` 和每条请求的 `request_purposes`（`ask` / `route` / `handoff`），说明里写明如何用 `--to` 派活与何时结束。网站上执行被打断、成员离开或被移除后，只停止该成员的进程；不同成员各自投递，可以并行。成员配置了 cwd 且位于 Git 工作区时，执行前后各做一次快照，执行结束且进程退出后报告改动的文件，供网站提示可能冲突；服务重启会丢失尚未报告的快照。只能在网页创建自由房间，不支持对话入口。
 
 ### 智能调度（可选）

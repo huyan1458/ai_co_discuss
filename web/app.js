@@ -965,6 +965,11 @@ function message_payload() {
   if (author !== "用户" && state.room.experts?.[author] !== "online") throw new Error("本地 AI 须自行提交回答；网页仅代发在线成员的真实原文");
   const payload = { author, text, reply_to: state.reply_to, turn_id: state.turn_reply_to,
     kind: ["moderation", "receipt"].includes(mode) ? mode : "opinion", submitted_by: "用户" };
+  // @mentions of active members outside code are direct questions; the website queues them beside the discussion.
+  if (payload.kind === "opinion" && payload.author === "用户") {
+    const named = (state.room.members || []).filter(member => member.status === "active" && member.name !== "用户" && mentioned(text, member.name)).map(member => member.name);
+    if (named.length) payload.to = named;
+  }
   if (payload.kind === "opinion" && payload.author !== "用户") {
     payload.summary = element("message-summary").value.trim();
     payload.summary_by = element("message-summary-source").value === "submitter" ? payload.submitted_by : payload.author;

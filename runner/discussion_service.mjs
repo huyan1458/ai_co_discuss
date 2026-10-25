@@ -165,6 +165,26 @@ export function unregister_room(home, config_path) {
   });
 }
 
+/**
+ * A discussion room's dispatcher plus delivery of the user's direct questions. The questions are free-room requests that sit
+ * beside the discussion's turns: they wake a named member at any phase, and the website refuses to run one member's question
+ * and discussion turn at the same time, so one session never has two writers.
+ */
+export class DiscussionWithQuestions {
+  constructor(discussion, questions) { this.discussion = discussion; this.questions = questions; }
+  get members() { return this.discussion.members; }
+  get children() { return new Set([...this.discussion.children, ...this.questions.children]); }
+  get config() { return this.discussion.config; }
+  async tick() {
+    const result = await this.discussion.tick();
+    this.questions.adopt({ ...this.discussion.config, draft_directory: this.discussion.config.draft_directory });
+    try { await this.questions.tick(); }
+    catch (error) { this.questions.log(`直接提问投递出错：${error.message}`); }
+    return result;
+  }
+  stop_children() { this.discussion.stop_children(); this.questions.stop_children(); }
+}
+
 /** One registered room: its own data-directory lock, store and dispatcher. */
 class RoomWorker {
   constructor(path, create_runner, log, home) {
@@ -280,7 +300,8 @@ class RoomWorker {
 
 /** Keep workers aligned with the registry and tick each one per poll. */
 export class DiscussionService {
-  constructor(home, create_runner = (config, store, log) => config.mode === 'free' ? new FreeRoomRunner(config, store, undefined, log) : new DiscussionRunner(config, store, undefined, log), log = () => {}) {
+  constructor(home, create_runner = (config, store, log) => config.mode === 'free' ? new FreeRoomRunner(config, store, undefined, log)
+      : new DiscussionWithQuestions(new DiscussionRunner(config, store, undefined, log), new FreeRoomRunner(config, store, undefined, log)), log = () => {}) {
     this.home = home;
     this.create_runner = create_runner;
     this.log = log;
