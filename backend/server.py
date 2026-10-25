@@ -69,7 +69,7 @@ ASSETS.update({"/pdfjs/" + file.relative_to(WEB_ROOT / "pdfjs").as_posix():
                for file in (WEB_ROOT / "pdfjs").rglob("*") if file.is_file()})
 SCHEMA = (Path(__file__).resolve().parent / "schema.sql").read_text(encoding="utf-8")
 PHASES = {"preparing": "准备中", "initial": "独立观点", "discussing": "深入讨论",
-          "reviewing": "结论复核", "paused": "已暂停", "concluded": "已收束"}
+          "paused": "已暂停", "concluded": "已收束"}
 TURN_STATUSES = {"pending": "待处理", "notified": "已通知，待回答", "answered": "已回答", "cancelled": "已取消",
                  "queued": "排队中", "skipped": "未开始即取消"}
 MAX_TOPIC_DETAIL = 4000

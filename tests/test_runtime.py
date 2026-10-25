@@ -1043,14 +1043,14 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "迟到"}, token)[0], 403)
 
     def test_resume_preserves_phase_and_archive_revokes_execution(self):
-        """Reviewing is not reset to initial when resuming; archive stops the run."""
+        """A running phase is not reset to initial when resuming; archive stops the run."""
         run = self.start()
-        self.request(self.path + "/topic", {"actor": "用户", "phase": "reviewing"}, self.owner)
+        self.request(self.path + "/topic", {"actor": "用户", "phase": "discussing"}, self.owner)
         _, paused = self.request(self.path + "/runtime", {"action": "pause", "revision": run["revision"]}, self.owner)
         status, _ = self.request(self.path + "/runtime", {"action": "start", "revision": paused["revision"],
             "deadline": int(time.time()) + 600}, self.owner)
         self.assertEqual(status, 200)
-        self.assertEqual(self.request(self.path)[1]["phase"], "reviewing")
+        self.assertEqual(self.request(self.path)[1]["phase"], "discussing")
         token = self.enter(self.events()[-1])
         self.assertEqual(self.request(self.path + "/archive", {"actor": "用户"}, self.owner)[0], 200)
         self.assertEqual(self.request(self.path)[1]["runtime"]["status"], "stopped")

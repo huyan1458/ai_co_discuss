@@ -19,7 +19,7 @@ function is_ai(name) { return typeof name === "string" && INSTANCE_PATTERN.test(
 
 /** Whether a name may author, submit or be scheduled: the user or any AI instance. */
 function is_participant(name) { return name === "用户" || is_ai(name); }
-const PHASES = { preparing: "准备中", initial: "独立观点", discussing: "深入讨论", reviewing: "结论复核", paused: "已暂停", concluded: "已收束" };
+const PHASES = { preparing: "准备中", initial: "独立观点", discussing: "深入讨论", paused: "已暂停", concluded: "已收束" };
 const TURN_STATUSES = { pending: "待处理", notified: "已通知，待回答", answered: "已回答", cancelled: "已取消", queued: "排队中", skipped: "未开始即取消" };
 const MAX_TOPIC_DETAIL = 4000;
 const MAX_QUESTION_LENGTH = 1000;
@@ -151,6 +151,7 @@ async function room_backup(database, room_id) {
 
 // Import mirrors backend/room_import.py: same room ID, renumbered rows, triggers kept from replaying history.
 const MAX_IMPORT_BYTES = 32 * 1024 * 1024;
+// "reviewing" only appears in backups made before that phase was retired; it imports like discussing.
 const IMPORT_ACTIVE_PHASES = ["initial", "discussing", "reviewing"];
 const IMPORT_RENUMBERED = ["messages", "discussion_turns", "room_members", "member_requests"];
 const IMPORT_LIMIT_FIELDS = ["max_rounds", "max_minutes", "execution_minutes", "on_limit", "summary_minutes", "started_at", "closing_at", "stop_reason", "revision"];
@@ -1736,7 +1737,7 @@ function runtime_start(database, room, payload) {
   if (!Number.isInteger(payload.deadline) || (payload.deadline !== 0 && (payload.deadline <= now || payload.deadline > now + 86400))) throw new HttpError(400, "deadline 须为 0（不限时长）或未来 24 小时内的 Unix 秒数");
   if (room.archived || room.phase === "concluded" || room.host === "用户" || !Object.keys(room.experts).length || Object.values(room.experts).some(mode => mode !== "cli")) throw new HttpError(400, "自动运行需要未归档、未收束的话题及具有 CLI 读写能力的 AI 主持和参与者");
   const phase = payload.phase ?? room.runtime.resume_phase ?? (room.phase === "preparing" ? "initial" : "discussing");
-  if (!["initial", "discussing", "reviewing"].includes(phase)) throw new HttpError(400, "恢复阶段无效");
+  if (!["initial", "discussing"].includes(phase)) throw new HttpError(400, "恢复阶段无效");
   return [database.prepare("UPDATE topic_settings SET phase=? WHERE room_id=? AND phase IN ('preparing','paused')").bind(phase, room_id),
     database.prepare("UPDATE discussion_limits SET started_at=? WHERE room_id=? AND started_at=0").bind(now, room_id)];
 }

@@ -35,7 +35,7 @@ const DEFAULT_USER_ICON = "/icons/user.svg";
 const MANAGEMENT_LOGIN_HINT = "需要登录管理员账号或使用创建该房间的浏览器";
 const THEMES = ["channel", "channel-light"];
 const SOURCE_LABELS = { demo: "示例", user: "本人发言", proxy: "用户代发", cli: "CLI 发言", api: "API 发言", url: "历史 URL 发言", host_proxy: "主持人代发" };
-const PHASE_LABELS = { preparing: "准备中", initial: "独立观点", discussing: "深入讨论", reviewing: "结论复核", paused: "已暂停", concluded: "已收束" };
+const PHASE_LABELS = { preparing: "准备中", initial: "独立观点", discussing: "深入讨论", paused: "已暂停", concluded: "已收束" };
 const TURN_LABELS = { pending: "待处理", notified: "已通知，待回答", answered: "已回答", cancelled: "已取消" };
 const PLATFORM_IDENTITIES = {
   "用户": { label: "User", initials: "U", style: "user", icon: "/icons/user.svg", description: "发起与协助" },

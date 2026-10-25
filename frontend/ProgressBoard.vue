@@ -55,7 +55,7 @@ const can_reopen = computed(() => concluded.value && automatic.value && Boolean(
 const can_restart = computed(() => automatic.value && (runtime.value.status === "paused" || runtime.value.expired)
   && !concluded.value && !room.value.archived && !limit_decision.value);
 // A paused run can also skip its retained assignment and resume with the host.
-const active = computed(() => ["initial", "discussing", "reviewing"].includes(room.value.phase) && !room.value.archived);
+const active = computed(() => ["initial", "discussing"].includes(room.value.phase) && !room.value.archived);
 const can_skip = computed(() => Boolean(turn.value && (active.value || can_restart.value)));
 /** Writes need this browser's room control credential; without it the board is read-only. */
 const can_control = computed(() => Boolean(view.value.access?.can_manage));

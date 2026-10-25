@@ -18,6 +18,7 @@ from .runtime import begin_write, require_owner, token_hash
 BACKUP_FORMAT = "ai-codiscuss-room-backup"
 ROOM_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 REFERENCE = re.compile(r"#(\d+)")
+# "reviewing" only appears in backups made before that phase was retired; it imports like discussing.
 ACTIVE_PHASES = ("initial", "discussing", "reviewing")
 OPEN_REQUESTS = ("pending", "delivering")
 LIMIT_FIELDS = ("max_rounds", "max_minutes", "execution_minutes", "on_limit", "summary_minutes",

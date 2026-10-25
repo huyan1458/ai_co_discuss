@@ -29,7 +29,7 @@ export const CODEX_ADAPTERS = ['codex', 'codex_cli'];
 const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 /** Project files in cwd are read-only unless the launch or participant explicitly grants write. */
 const PROJECT_ACCESS = ['read', 'write'];
-const ACTIVE_PHASES = ['initial', 'discussing', 'reviewing'];
+const ACTIVE_PHASES = ['initial', 'discussing'];
 const MAX_PLAN_TURNS = 10;
 const CONTEXT_MESSAGES = 12;
 /** Session recorded when smart scheduling performs the host's writes without waking its software. */

@@ -289,8 +289,8 @@ def validate_start(connection, room_id, payload):
     if not experts or any(mode != "cli" for mode in experts.values()):
         raise ValueError("自动运行的参与者须均具有本地 CLI 读写能力")
     phase = payload.get("phase", "initial" if row["phase"] == "preparing" else "discussing")
-    if phase not in ("initial", "discussing", "reviewing"):
-        raise ValueError("恢复阶段必须为 initial/discussing/reviewing")
+    if phase not in ("initial", "discussing"):
+        raise ValueError("恢复阶段必须为 initial/discussing")
     if row["phase"] in ("preparing", "paused"):
         connection.execute("UPDATE topic_settings SET phase=? WHERE room_id=?", (phase, room_id))
     connection.execute("UPDATE discussion_limits SET started_at=? WHERE room_id=? AND started_at=0",

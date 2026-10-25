@@ -202,12 +202,12 @@ BEGIN
     INSERT INTO discussion_limits(room_id,execution_minutes) VALUES (NEW.id,0);
 END;
 CREATE TRIGGER IF NOT EXISTS limits_topic_started AFTER INSERT ON topic_settings
-WHEN NEW.phase IN ('initial','discussing','reviewing')
+WHEN NEW.phase IN ('initial','discussing')
 BEGIN
     UPDATE discussion_limits SET started_at=CAST(strftime('%s','now') AS INTEGER) WHERE room_id=NEW.room_id AND started_at=0;
 END;
 CREATE TRIGGER IF NOT EXISTS limits_phase_started AFTER UPDATE OF phase ON topic_settings
-WHEN NEW.phase IN ('initial','discussing','reviewing') AND NEW.phase<>OLD.phase
+WHEN NEW.phase IN ('initial','discussing') AND NEW.phase<>OLD.phase
 BEGIN
     UPDATE discussion_limits SET started_at=CAST(strftime('%s','now') AS INTEGER) WHERE room_id=NEW.room_id AND started_at=0;
 END;
@@ -400,7 +400,7 @@ BEGIN
     UPDATE discussion_events SET status='completed',result='concluded' WHERE room_id=NEW.room_id
         AND role='host' AND status='started' AND NEW.phase='concluded';
     UPDATE discussion_runtime SET status=NEW.phase,generation=generation+1,revision=revision+1,
-        resume_phase=CASE WHEN OLD.phase IN ('initial','discussing','reviewing') THEN OLD.phase ELSE resume_phase END,
+        resume_phase=CASE WHEN OLD.phase IN ('initial','discussing') THEN OLD.phase ELSE resume_phase END,
         updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE room_id=NEW.room_id;
 END;
 CREATE TRIGGER IF NOT EXISTS runtime_user_message AFTER INSERT ON message_details
@@ -476,14 +476,14 @@ INSERT INTO discussion_pauses(room_id,paused_at)
         CAST(strftime('%s','now') AS INTEGER)) ELSE 0 END
     FROM topic_settings WHERE NOT EXISTS(SELECT 1 FROM discussion_pauses WHERE discussion_pauses.room_id=topic_settings.room_id);
 CREATE TRIGGER IF NOT EXISTS pause_clock_stopped AFTER UPDATE OF phase ON topic_settings
-WHEN OLD.phase IN ('initial','discussing','reviewing') AND NEW.phase NOT IN ('initial','discussing','reviewing')
+WHEN OLD.phase IN ('initial','discussing') AND NEW.phase NOT IN ('initial','discussing')
 BEGIN
     INSERT INTO discussion_pauses(room_id) SELECT NEW.room_id
         WHERE NOT EXISTS(SELECT 1 FROM discussion_pauses WHERE room_id=NEW.room_id);
     UPDATE discussion_pauses SET paused_at=CAST(strftime('%s','now') AS INTEGER) WHERE room_id=NEW.room_id AND paused_at=0;
 END;
 CREATE TRIGGER IF NOT EXISTS pause_clock_resumed AFTER UPDATE OF phase ON topic_settings
-WHEN NEW.phase IN ('initial','discussing','reviewing') AND OLD.phase NOT IN ('initial','discussing','reviewing')
+WHEN NEW.phase IN ('initial','discussing') AND OLD.phase NOT IN ('initial','discussing')
 BEGIN
     UPDATE discussion_pauses SET paused_seconds=paused_seconds+MAX(0,CAST(strftime('%s','now') AS INTEGER)-paused_at),paused_at=0
         WHERE room_id=NEW.room_id AND paused_at>0;
@@ -671,3 +671,7 @@ BEGIN
         ended_message_id=CASE WHEN NEW.phase='concluded' THEN COALESCE((SELECT MAX(id) FROM messages WHERE room_id=NEW.room_id),0) ELSE 0 END
     WHERE id=(SELECT MAX(id) FROM discussion_sessions WHERE room_id=NEW.room_id);
 END;
+
+-- The review phase behaved exactly like discussing and was retired; move rows left in it.
+UPDATE topic_settings SET phase='discussing' WHERE phase='reviewing';
+UPDATE discussion_runtime SET resume_phase='discussing' WHERE resume_phase='reviewing';
