@@ -126,7 +126,7 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .channel-room-list { padding: 0 8px; }
 .channel-room-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; padding-right: 8px; border-radius: 8px; position: relative; color: #a8afbc; margin-bottom: 2px; }
 .channel-room-row:hover { background: #ffffff08; }
-.channel-room-row.active { color: #f1f2f5; background: #ffffff12; }
+.channel-room-row.active, .channel-folder-row.active { color: #f1f2f5; background: #ffffff12; }
 .channel-room-row.drag-source, .channel-folder-section.drag-source { opacity: .45; }
 .directory-dragging, .directory-dragging * { cursor: grabbing !important; }
 .channel-drag-preview { position: fixed; top: 0; left: 0; z-index: 100; max-width: min(240px, calc(100vw - 24px)); padding: 7px 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; border: 1px solid #ffffff24; border-radius: 7px; background: #34373f; color: #eef0f5; box-shadow: 0 6px 18px #0005; font: 12px/1.5 var(--font-sans); }
@@ -136,7 +136,7 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .channel-room-row.drop-before::before { top: 0; }
 .channel-room-row.drop-after::after { bottom: 0; }
 .channel-room-select { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 8px 4px; text-align: left; cursor: pointer; font-size: var(--channel-nav-text); user-select: none; touch-action: pan-y; }
-.channel-room-row.active .channel-room-select { font-weight: 600; }
+.channel-room-row.active .channel-room-select, .channel-folder-row.active .channel-folder-heading { color: var(--ui-text-highlighted); font-weight: 600; }
 .channel-room-select > [class*="icon"] { flex-shrink: 0; width: 17px; height: 17px; color: #808998; }
 .channel-room-select > span:not([class*="icon"]) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .channel-directory-count { min-width: 16px; padding-left: 4px; color: var(--ui-text-dimmed); font-size: var(--channel-nav-meta); font-variant-numeric: tabular-nums; text-align: right; }
@@ -159,8 +159,6 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .channel-folder-section.drop-after::after { bottom: 0; }
 .channel-folder-heading.drop-folder, .channel-root-rooms.drop-folder { border-radius: 6px; background: #8791ff20; outline: 2px solid var(--channel-accent); outline-offset: -2px; color: #e5e8ff; }
 .channel-folder-heading > .channel-folder-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.channel-folder-heading > .channel-folder-name:has(+ .channel-folder-current) { flex: 0 1 auto; }
-.channel-folder-heading > .channel-folder-current { min-width: 0; flex: 1; overflow: hidden; padding-left: 6px; border-left: 1px solid var(--ui-border-accented); color: var(--channel-accent); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .channel-folder-heading > [class*="icon"] { width: 14px; height: 14px; flex-shrink: 0; }
 .channel-create-location { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ui-text-muted); }
 .channel-management-target { color: #eef0f5; overflow-wrap: anywhere; }
@@ -856,7 +854,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-room-row:hover, .channel-person:hover,
   .channel-message-actions button:hover, .channel-composer-identity > button:hover,
   .channel-composer-identity > button[data-state="open"] { background: #ededed; color: var(--ui-text-highlighted); }
-  .channel-room-row.active { background: #e7e7e7; color: var(--ui-text-highlighted); box-shadow: none; }
+  .channel-room-row.active, .channel-folder-row.active { background: #e7e7e7; color: var(--ui-text-highlighted); box-shadow: none; }
   .channel-link:hover { color: var(--ui-text-highlighted); }
   .channel-link:hover::before { background: #ededed !important; }
   .channel-link[data-active], .channel-link[data-active] .channel-link-icon { color: var(--ui-text-highlighted); }
