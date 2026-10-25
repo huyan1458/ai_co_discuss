@@ -47768,9 +47768,9 @@ var iq = /*#__PURE__*/ jH({
 			let e = r.value.launch.scheduler || {};
 			return D.value && e.enabled && !(e.provider && e.model && e.api_key_ref);
 		}), te = Z(() => S.value && !r.value.launch.available), ne = 0, re = Z(() => {
+			if (d.value && f.value[v.value] !== "cli") return "开启讨论需要先添加一位由本机唤醒的主持人";
 			if (te.value) return "先连接本机服务，或把成员改为手动启动";
 			if (d.value && !r.value.launch.available) return "先连接本机服务";
-			if (d.value && f.value[v.value] !== "cli") return "开启讨论需要一位由本机唤醒的主持人";
 			let e = x.value.filter((e) => !w(e));
 			return e.length ? `补齐 ${e.join("、")} 的接入配置` : ee.value ? "补齐智能调度配置，或取消勾选" : "";
 		});
@@ -48055,7 +48055,7 @@ var iq = /*#__PURE__*/ jH({
 			])])]);
 		};
 	}
-}, [["__scopeId", "data-v-f8b68ddf"]]), zJ = {
+}, [["__scopeId", "data-v-e1aaca01"]]), zJ = {
 	class: "account-settings",
 	"aria-labelledby": "account-heading"
 }, BJ = {

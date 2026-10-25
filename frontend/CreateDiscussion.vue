@@ -60,9 +60,9 @@ const needs_connection = computed(() => automatic.value && !view.value.launch.av
 let connection_timer = 0;
 /** Why the create button is disabled, in the order the user can fix it. */
 const blocker = computed(() => {
+  if (discussing.value && selected.value[host.value] !== "cli") return "开启讨论需要先添加一位由本机唤醒的主持人";
   if (needs_connection.value) return "先连接本机服务，或把成员改为手动启动";
   if (discussing.value && !view.value.launch.available) return "先连接本机服务";
-  if (discussing.value && selected.value[host.value] !== "cli") return "开启讨论需要一位由本机唤醒的主持人";
   const unready = woken_names.value.filter((name) => !launch_ready(name));
   return unready.length ? `补齐 ${unready.join("、")} 的接入配置` : scheduler_unready.value ? "补齐智能调度配置，或取消勾选" : "";
 });
