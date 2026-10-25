@@ -2578,21 +2578,7 @@ async function handle_discussion_members(database, request, parts) {
     await place_invited_expert(database, room_id, member.name);
   } else {
     const member = await free_owned_member(database, room_id, integer(parts[4]), token);
-    if (payload.action === "redo") {
-      if (room.phase !== "paused") throw new HttpError(400, "请先暂停讨论，再作废专家的发言");
-      if (payload.latest_id === undefined || payload.latest_id === null) throw new HttpError(400, "作废发言须带上所见的最新消息编号 latest_id");
-      if (payload.latest_id !== room.latest_id) throw new HttpError(409, "房间已有新内容，请刷新后再作废");
-      const row = await database.prepare(`SELECT messages.id FROM messages JOIN message_details AS details ON details.message_id=messages.id
-        WHERE messages.room_id=? AND messages.author=? AND details.kind='opinion' ORDER BY messages.id DESC LIMIT 1`).bind(room_id, member.name).first();
-      if (!row) throw new HttpError(404, `${member.name} 还没有可作废的发言`);
-      await database.batch([
-        database.prepare("UPDATE discussion_turns SET status='cancelled',answer_id=NULL WHERE answer_id=?").bind(row.id),
-        database.prepare("UPDATE messages SET reply_to=NULL WHERE reply_to=?").bind(row.id),
-        database.prepare("DELETE FROM message_timings WHERE message_id=?").bind(row.id),
-        database.prepare("DELETE FROM message_summaries WHERE message_id=?").bind(row.id),
-        database.prepare("DELETE FROM message_details WHERE message_id=?").bind(row.id),
-        database.prepare("DELETE FROM messages WHERE id=?").bind(row.id)]);
-    } else if (["away", "remove"].includes(payload.action)) {
+    if (["away", "remove"].includes(payload.action)) {
       if (member.name === room.host) throw new HttpError(400, "主持人不能离开或移除；请先更换主持人");
       const speaking = await database.prepare("SELECT 1 FROM discussion_turns WHERE room_id=? AND expert=? AND status IN ('pending','notified')").bind(room_id, member.name).first();
       if (speaking && room.phase !== "paused") throw new HttpError(400, "该专家正在发言；请先暂停讨论再离开或移除");
@@ -2618,7 +2604,7 @@ async function handle_discussion_members(database, request, parts) {
       await database.batch([
         database.prepare("UPDATE room_members SET access='runner',adapter=?,session_mode='borrowed' WHERE id=?").bind(payload.adapter, member.id),
         database.prepare("DELETE FROM member_sessions WHERE member_id=?").bind(member.id)]);
-    } else throw new HttpError(400, "action 须为 away、active、remove、redo 或 adopt");
+    } else throw new HttpError(400, "action 须为 away、active、remove 或 adopt");
   }
   return respond(await require_room(database, room_id));
 }

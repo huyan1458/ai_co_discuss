@@ -210,11 +210,8 @@ function member_menu(member) {
   const seat = record(member.name);
   if (!seat || member.is_host || settled.value) return [items].filter((group) => group.length);
   const change = (label, icon, action, extra = {}) => ({ label, icon, ...extra,
-    onSelect: () => act("change_member", { member_id: seat.id, name: member.name, action, ...(action === "redo" ? { latest_id: room.value.latest_id } : {}) }) });
-  // Voiding is only offered while paused, for an expert counted in the unfinished round.
-  const last_round = room.value.rounds?.at(-1);
-  const voidable = room.value.phase === "paused" && last_round?.completed === false && last_round.speakers.includes(member.name);
-  return [items, voidable ? [change("作废本轮发言", "i-lucide-undo-2", "redo")] : [], [seat.status === "away"
+    onSelect: () => act("change_member", { member_id: seat.id, name: member.name, action }) });
+  return [items, [seat.status === "away"
     ? change("请回", "i-lucide-log-in", "rejoin", { disabled: !view.value.launch.available })
     : change("暂离", "i-lucide-log-out", "away")],
   [change("移除", "i-lucide-trash-2", "remove", { color: "error" })]].filter((group) => group.length);

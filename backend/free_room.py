@@ -936,15 +936,11 @@ def discussion_member_action(connection, room_id, member_id, token, payload):
     """Owner sends an expert away (keeping its seat), brings it back with a new credential, or removes it.
 
     Leaving cancels the expert's open assignments; the host keeps its role and cannot leave, and an
-    expert with an open assignment can only leave while the discussion is paused. While paused,
-    `redo` voids the expert's latest opinion by deleting it so the expert counts as not yet having spoken.
+    expert with an open assignment can only leave while the discussion is paused.
     """
     member = owned_member(connection, room_id, member_id, token)
     host, experts, phase = discussion_roster(connection, room_id)
     action = payload.get("action")
-    if action == "redo":
-        void_latest_opinion(connection, room_id, member["name"], phase, payload.get("latest_id"))
-        return
     if action in ("away", "remove"):
         if member["name"] == host:
             raise ValueError("主持人不能离开或移除；请先更换主持人")
@@ -971,7 +967,7 @@ def discussion_member_action(connection, room_id, member_id, token, payload):
         adopt_manual_member(connection, room_id, member, payload)
         return
     else:
-        raise ValueError("action 须为 away、active、remove、redo 或 adopt")
+        raise ValueError("action 须为 away、active、remove 或 adopt")
     save_discussion_experts(connection, room_id, experts)
 
 
@@ -990,30 +986,6 @@ def adopt_manual_member(connection, room_id, member, payload):
         raise ValueError("只有全自动讨论中在场的手动专家可以转为托管")
     connection.execute("UPDATE room_members SET access='runner',adapter=?,session_mode='borrowed' WHERE id=?", (payload["adapter"], member["id"]))
     connection.execute("DELETE FROM member_sessions WHERE member_id=?", (member["id"],))
-
-
-def void_latest_opinion(connection, room_id, name, phase, seen_latest_id):
-    """Delete an expert's latest opinion while paused; its assignment is cancelled and the round no longer counts it.
-
-    The caller states the latest message id it saw, so a stale page cannot void an opinion that is no longer the one on screen.
-    """
-    if phase != "paused":
-        raise ValueError("请先暂停讨论，再作废专家的发言")
-    if seen_latest_id is None:
-        raise ValueError("作废发言须带上所见的最新消息编号 latest_id")
-    if seen_latest_id != connection.execute("SELECT COALESCE(MAX(id),0) FROM messages WHERE room_id=?", (room_id,)).fetchone()[0]:
-        raise FileExistsError("房间已有新内容，请刷新后再作废")
-    row = connection.execute("""SELECT messages.id,details.turn_id FROM messages JOIN message_details AS details ON details.message_id=messages.id
-        WHERE messages.room_id=? AND messages.author=? AND details.kind='opinion' ORDER BY messages.id DESC LIMIT 1""",
-                             (room_id, name)).fetchone()
-    if not row:
-        raise LookupError(f"{name} 还没有可作废的发言")
-    message_id = row["id"]
-    connection.execute("UPDATE discussion_turns SET status='cancelled',answer_id=NULL WHERE answer_id=?", (message_id,))
-    connection.execute("UPDATE messages SET reply_to=NULL WHERE reply_to=?", (message_id,))
-    for table in ("message_timings", "message_summaries", "message_details"):
-        connection.execute(f"DELETE FROM {table} WHERE message_id=?", (message_id,))
-    connection.execute("DELETE FROM messages WHERE id=?", (message_id,))
 
 
 def require_fresh_member_token(connection, room_id, token):

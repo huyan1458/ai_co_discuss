@@ -613,7 +613,6 @@ test('Worker running discussions admit and release experts without pausing, like
   const turn = (await f.request(`/${id}/turns`, { actor: '用户', expert: 'Claude', question: '观点', submission_id: 'member-turn' })).body.turn;
   const members = Object.fromEntries((await f.request(`/${id}`)).body.members.map(member => [member.name, member]));
   assert.equal((await f.request(`/${id}/members/${members.Codex.id}`, { action: 'away' })).status, 400);
-  assert.equal((await f.request(`/${id}/members/${members.Claude.id}`, { action: 'redo' })).status, 400, 'redo needs a pause');
   const speaking = await f.request(`/${id}/members/${members.Claude.id}`, { action: 'away' });
   assert.deepEqual([speaking.status, speaking.body.error.includes('正在发言')], [400, true]);
   const set_phase = phase => f.sql.prepare('UPDATE topic_settings SET phase=? WHERE room_id=?').run(phase, id);
@@ -629,17 +628,9 @@ test('Worker running discussions admit and release experts without pausing, like
   assert.equal((await f.request(`/${id}/members/${members.Claude.id}`, { action: 'active', token: f.member_tokens.Claude })).status, 400);
   room = (await f.request(`/${id}/members/${members.Claude.id}`, { action: 'active', token: crypto.randomUUID() })).body;
   assert.deepEqual([room.runtime.status, room.experts.Claude], ['running', 'cli']);
-  // Voiding deletes the latest opinion, so the round no longer counts the speaker.
-  const saved = f.sql.prepare("INSERT INTO messages (room_id,author,text,source,submission_id,created_at) VALUES (?,?,?,?,?,datetime('now'))").run(id, '用户', '观点', 'cli', 'void-me');
-  f.sql.prepare("INSERT INTO message_details (message_id,kind,submitted_by) VALUES (?,?,?)").run(saved.lastInsertRowid, 'opinion', 'Claude');
-  f.sql.prepare("UPDATE messages SET author='Claude' WHERE id=?").run(saved.lastInsertRowid);
+  // An opinion is part of the record: no member action deletes it any more.
   set_phase('paused');
-  const latest_id = () => f.sql.prepare('SELECT MAX(id) AS id FROM messages WHERE room_id=?').get(id).id;
-  assert.equal((await f.request(`/${id}/members/${members.Codex.id}`, { action: 'redo', latest_id: latest_id() })).status, 404, 'no opinion yet');
-  assert.equal((await f.request(`/${id}/members/${members.Claude.id}`, { action: 'redo' })).status, 400, 'redo needs the latest id the page saw');
-  assert.equal((await f.request(`/${id}/members/${members.Claude.id}`, { action: 'redo', latest_id: latest_id() - 1 })).status, 409, 'a stale page cannot void');
-  assert.equal((await f.request(`/${id}/members/${members.Claude.id}`, { action: 'redo', latest_id: latest_id() })).status, 200);
-  assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM messages WHERE id=?').get(saved.lastInsertRowid).count, 0);
+  assert.equal((await f.request(`/${id}/members/${members.Claude.id}`, { action: 'redo', latest_id: 1 })).status, 400);
 });
 
 test('Worker manual expert registers with its own credential, keeps the first time and must register again with a new credential', async t => {

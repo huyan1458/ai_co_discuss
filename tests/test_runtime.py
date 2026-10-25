@@ -595,25 +595,15 @@ class RuntimeTests(unittest.TestCase):
         finally:
             connection.close()
 
-    def test_paused_discussion_voids_an_experts_latest_opinion(self):
-        """Redo deletes the expert's latest opinion so the round no longer counts it, and only while paused."""
+    def test_voiding_an_experts_opinion_is_gone(self):
+        """An expert's opinion is part of the record: there is no member action that deletes it."""
         created, _ = self.plan_round("redo-plan")
         self.answer("Claude", created["turn"]["id"], self.enter(self.events()[-1]), "redo-answer")
         members = {member["name"]: member for member in self.request(self.path)[1]["members"]}
-        redo = self.path + f"/members/{members['Claude']['id']}"
-        latest = lambda: self.request(self.path)[1]["latest_id"]
-        self.assertEqual(self.request(redo, {"action": "redo", "latest_id": latest()}, self.owner)[0], 400, "redo needs a paused discussion")
         self.set_phase("paused")
-        room = self.request(self.path)[1]
-        self.assertEqual(room["rounds"][-1]["speakers"], ["Claude"])
-        self.assertEqual(self.request(redo, {"action": "redo"}, self.owner)[0], 400, "redo needs the latest id the page saw")
-        self.assertEqual(self.request(redo, {"action": "redo", "latest_id": latest() - 1}, self.owner)[0], 409, "a stale page cannot void")
-        status, voided = self.request(redo, {"action": "redo", "latest_id": latest()}, self.owner)
-        self.assertEqual(status, 200, voided)
-        room = self.request(self.path)[1]
-        self.assertEqual(room["rounds"], [])
-        self.assertEqual(self.request(self.path + f"/messages?author=Claude")[1]["messages"], [])
-        self.assertEqual(self.request(redo, {"action": "redo", "latest_id": latest()}, self.owner)[0], 404, "nothing left to void")
+        status, refused = self.request(self.path + f"/members/{members['Claude']['id']}", {"action": "redo", "latest_id": self.request(self.path)[1]["latest_id"]}, self.owner)
+        self.assertEqual(status, 400, refused)
+        self.assertEqual(self.request(self.path)[1]["rounds"][-1]["speakers"], ["Claude"])
 
     def conclude_as_host(self, token):
         """The host saves a state covering the latest opinion, reads the conclusion state, then concludes against it."""
