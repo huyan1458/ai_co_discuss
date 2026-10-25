@@ -95,14 +95,14 @@ function actions(room, index, folder_id, folder_room_count) {
   <div class="channel-directory-manager">
     <UButton label="新建对话" icon="i-lucide-plus" color="neutral" class="channel-primary-button channel-new-conversation" :disabled="view.directory_pending.includes('create-room')" @click="emit('create', null)" />
     <div class="channel-directory-heading">
-      <button type="button" class="channel-section-toggle" :aria-expanded="rooms_open" @click="rooms_open = !rooms_open"><UIcon :name="rooms_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />讨论房间</button>
+      <button type="button" class="channel-section-toggle" :aria-expanded="rooms_open" @click="rooms_open = !rooms_open"><UIcon :name="rooms_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />协作房间</button>
       <div class="channel-directory-actions">
         <UDropdownMenu :items="directory_actions" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu channel-directory-menu' }"><UButton icon="i-lucide-ellipsis" aria-label="房间目录选项" title="排列、导入与导出" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
         <UTooltip text="新建文件夹"><UButton icon="i-lucide-plus" color="neutral" variant="ghost" size="xs" aria-label="新建文件夹" :disabled="view.directory_pending.includes('create-folder')" @click="emit('create-folder')" /></UTooltip>
         <input ref="import_input" type="file" accept=".zip,.json" multiple hidden aria-label="选择房间备份" @change="choose_imports">
       </div>
     </div>
-    <nav v-show="rooms_open" aria-label="讨论房间列表" class="channel-room-list" data-room-directory>
+    <nav v-show="rooms_open" aria-label="协作房间列表" class="channel-room-list" data-room-directory>
       <section v-for="(folder, folder_index) in folders" :key="folder.order_id" class="channel-folder-section" :data-room-folder="folder.id" :data-drag-folder="folder.order_id">
        <div v-if="folder.id" class="channel-folder-row">
        <button class="channel-folder-heading" data-drop-folder data-drag-handle type="button" :disabled="folder.pending" :aria-label="`${folder.name} ${folder.rooms.length}`" :aria-expanded="!collapsed.has(folder.id)" title="拖动文件夹排序；上下方向键移动" @pointerdown="!pending && bridge.start_drag($event)" @keydown.up.prevent="act('move_folder', { id: folder.order_id, direction: -1 })" @keydown.down.prevent="act('move_folder', { id: folder.order_id, direction: 1 })" @click="toggle_folder(folder.id)"><UIcon :name="collapsed.has(folder.id) ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" /><UIcon name="i-lucide-folder" /><span class="channel-folder-name">{{ folder.name }}</span></button>
@@ -128,7 +128,7 @@ function actions(room, index, folder_id, folder_room_count) {
       </UContextMenu>
        </div>
       </section>
-      <p v-if="!rooms.length" class="channel-directory-empty">暂无讨论房间</p>
+      <p v-if="!rooms.length" class="channel-directory-empty">暂无协作房间</p>
     </nav>
     <UButton v-show="rooms_open" icon="i-lucide-archive" color="neutral" variant="ghost" class="channel-archive-toggle" aria-haspopup="dialog" @click="emit('archives')"><span class="channel-archive-label">已存档</span><small v-if="archived_count" class="channel-archive-count">{{ archived_count }}</small></UButton>
     <p v-if="view.directory_notice" role="status" class="channel-directory-notice">{{ view.directory_notice }}</p>

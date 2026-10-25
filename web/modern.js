@@ -49965,7 +49965,7 @@ var uq = /*#__PURE__*/ jH({
 		}, 16));
 	}
 }, cX = { class: "channel-directory-manager" }, lX = { class: "channel-directory-heading" }, uX = ["aria-expanded"], dX = { class: "channel-directory-actions" }, fX = {
-	"aria-label": "讨论房间列表",
+	"aria-label": "协作房间列表",
 	class: "channel-room-list",
 	"data-room-directory": ""
 }, pX = ["data-room-folder", "data-drag-folder"], mX = {
@@ -50236,7 +50236,7 @@ var uq = /*#__PURE__*/ jH({
 					class: "channel-section-toggle",
 					"aria-expanded": m.value,
 					onClick: t[1] ||= (e) => m.value = !m.value
-				}, [q(_, { name: m.value ? "i-lucide-chevron-down" : "i-lucide-chevron-right" }, null, 8, ["name"]), t[7] ||= J("讨论房间", -1)], 8, uX), K("div", dX, [
+				}, [q(_, { name: m.value ? "i-lucide-chevron-down" : "i-lucide-chevron-right" }, null, 8, ["name"]), t[7] ||= J("协作房间", -1)], 8, uX), K("div", dX, [
 					q(v, {
 						items: d.value,
 						content: {
@@ -50424,7 +50424,7 @@ var uq = /*#__PURE__*/ jH({
 						}, 1032, ["items"])])
 					], 10, xX)]),
 					_: 2
-				}, 1032, ["items"]))), 128))], 10, yX)) : Y("", !0)], 8, pX))), 128)), s.value.length ? Y("", !0) : (U(), W("p", TX, "暂无讨论房间"))], 512), [[Vc, m.value]]),
+				}, 1032, ["items"]))), 128))], 10, yX)) : Y("", !0)], 8, pX))), 128)), s.value.length ? Y("", !0) : (U(), W("p", TX, "暂无协作房间"))], 512), [[Vc, m.value]]),
 				vr(q(u, {
 					icon: "i-lucide-archive",
 					color: "neutral",
@@ -52541,11 +52541,11 @@ var uq = /*#__PURE__*/ jH({
 					})) : Y("", !0)
 				])], 2)) : (U(), W("div", f$, [
 					q(y, { name: "i-lucide-hash" }),
-					r[33] ||= K("h2", null, "新建一个讨论房间", -1),
-					r[34] ||= K("p", null, "每个房间围绕一个议题，保留所有人的观点。", -1),
+					r[33] ||= K("h2", null, "新建一个协作房间", -1),
+					r[34] ||= K("p", null, "邀请 AI 一起协作，随时 @ 提问；需要时开启讨论，保留所有人的观点。", -1),
 					q(T, {
 						icon: "i-lucide-plus",
-						label: "新建讨论",
+						label: "新建房间",
 						color: "neutral",
 						onClick: r[16] ||= (e) => xe()
 					})
@@ -52578,7 +52578,7 @@ var uq = /*#__PURE__*/ jH({
 					open: d.value,
 					"onUpdate:open": r[18] ||= (e) => d.value = e,
 					side: "left",
-					title: "讨论房间",
+					title: "协作房间",
 					description: "共议 · AI CoDiscuss",
 					ui: {
 						content: "channel-navigation-drawer",
