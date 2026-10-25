@@ -71,8 +71,8 @@ export function validate_config(input, base_directory) {
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('站点必须是无路径和凭据的 HTTP(S) 根地址');
   if (!/^[A-Za-z0-9_-]+$/.test(config.room ?? '') || typeof config.token !== 'string' || config.token.length < 32) throw new Error('缺少房间及本房间凭据');
   if (!config.project || !existsSync(join(config.project, 'runner', 'discuss.py'))) throw new Error('cli_project 必须指向 AI CoDiscuss 项目；省略时默认使用本仓库');
-  // A free room of manual members runs here only for smart scheduling, which needs no local software.
-  if (!config.participants || (!Object.keys(config.participants).length && !(config.mode === 'free' && config.scheduler))) throw new Error('请配置本机参与软件');
+  // A free room of manual members runs here only for smart scheduling or a preset project directory, which need no local software.
+  if (!config.participants || (!Object.keys(config.participants).length && !(config.mode === 'free' && (config.scheduler || config.cwd)))) throw new Error('请配置本机参与软件');
   for (const participant of Object.values(config.participants)) {
     if (participant.adapter === 'api') {
       read_api_key(config.api_home, participant);

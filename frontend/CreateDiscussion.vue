@@ -36,7 +36,9 @@ const limit_picker = ref(null);
 // A room needs the local service only for the members it wakes, smart scheduling or a discussion.
 const woken_names = computed(() => selected_names.value.filter((name) => selected.value[name] === "cli"));
 // Smart scheduling alone also registers a room with the local service, even when every member is manual or online.
-const automatic = computed(() => woken_names.value.length > 0 || scheduler_active.value);
+const automatic = computed(() => woken_names.value.length > 0 || scheduler_active.value || cwd_preset.value);
+// A project directory set before any member joins is remembered by the local service for members added later.
+const cwd_preset = computed(() => view.value.launch.available && Boolean(view.value.launch.workspace.cwd));
 const launch_ready = (name) => {
   const profile = view.value.launch.profiles[name] || {};
   if (profile.adapter === "api") return Boolean(profile.base_url && profile.api_protocol && profile.api_key_ref && profile.model);
@@ -167,6 +169,11 @@ const summary = computed(() => {
       <section class="create-section">
         <h3><span>1</span>这次做什么</h3>
         <UFormField label="话题名称" required><UInput :model-value="value('title')" :maxlength="80" required autofocus size="lg" placeholder="这次要一起做什么？" class="w-full" @update:model-value="write('title', $event)" /></UFormField>
+        <UFormField v-if="view.launch.available" label="项目目录（推荐）" description="本机唤醒的成员在此目录读写文件；不填则各用软件默认目录，成员开工后再改很麻烦。">
+          <UInput :model-value="view.launch.workspace.cwd || ''" placeholder="输入完整路径，或点右侧图标选择" class="w-full" :ui="{ trailing: 'pe-1' }" @update:model-value="bridge.write_launch('workspace', 'cwd', $event)">
+            <template #trailing><UButton icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" aria-label="在本机选择项目目录" :title="picking ? '目录选择窗口已打开，请在本机窗口中选择' : '在本机选择文件夹'" :disabled="picking" @click="pick_directory" /></template>
+          </UInput>
+        </UFormField>
       </section>
 
       <section class="create-section">
@@ -208,16 +215,6 @@ const summary = computed(() => {
           </div>
           <p class="create-limit-rule" aria-live="polite"><UIcon name="i-lucide-flag" />{{ limit_rule }}</p>
         </template>
-      </section>
-
-      <section v-if="launching" class="create-section">
-        <h3><span>4</span>项目目录</h3>
-        <UFormField label="可选，供本地软件查看">
-          <UInput :model-value="view.launch.workspace.cwd || ''" placeholder="输入完整路径，或点右侧图标选择" class="w-full" :ui="{ trailing: 'pe-1' }" @update:model-value="bridge.write_launch('workspace', 'cwd', $event)">
-            <template #trailing><UButton icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" aria-label="在本机选择项目目录" :title="picking ? '目录选择窗口已打开，请在本机窗口中选择' : '在本机选择文件夹'" :disabled="picking" @click="pick_directory" /></template>
-          </UInput>
-        </UFormField>
-        <p class="fine-print create-hint">读写权限在专家卡片上设置；API 仅使用房间上下文。</p>
       </section>
     </form>
     <footer class="create-footer">
