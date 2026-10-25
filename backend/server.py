@@ -1022,7 +1022,7 @@ def record_reported_session(connection, room_id, token, payload):
     session_id, client = payload.get("session_id"), payload.get("session_client")
     if client not in ("claude", "codex", "antigravity") or not isinstance(session_id, str) or not SESSION_ID_PATTERN.fullmatch(session_id) or not token:
         return
-    member = connection.execute("SELECT id FROM room_members WHERE room_id=? AND token_hash=? AND status='active' AND access='manual' AND adapter='manual'",
+    member = connection.execute("SELECT id FROM room_members WHERE room_id=? AND token_hash=? AND status='active' AND access='manual' AND adapter IN ('manual','')",
                                 (room_id, token_hash(token))).fetchone()
     if member:
         connection.execute("""INSERT INTO member_sessions (member_id,room_id,session_id,client) VALUES (?,?,?,?)

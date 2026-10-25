@@ -247,7 +247,7 @@ def free_view(connection, room_id):
         members.append(member)
     names = {row["id"]: row["name"] for row in connection.execute("SELECT id,name FROM room_members WHERE room_id=?", (room_id,))}
     requests = [{**dict(row), "member": names.get(row["member_id"], "")} for row in connection.execute(
-        """SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by FROM member_requests
+        """SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by,created_at FROM member_requests
         WHERE room_id=? ORDER BY id DESC LIMIT ?""", (room_id, RECENT_REQUESTS))]
     chains = [dict(row) for row in connection.execute(
         "SELECT chain_id,reason FROM free_chains WHERE room_id=? ORDER BY chain_id DESC LIMIT 10", (room_id,))]
@@ -601,7 +601,7 @@ def asks_view(connection, room_id):
     """Direct questions of a discussion room: recent requests with their member, for status badges beside messages."""
     names = {row["id"]: row["name"] for row in connection.execute("SELECT id,name FROM room_members WHERE room_id=?", (room_id,))}
     requests = [{**dict(row), "member": names.get(row["member_id"], "")} for row in connection.execute(
-        """SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by FROM member_requests
+        """SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by,created_at FROM member_requests
         WHERE room_id=? ORDER BY id DESC LIMIT ?""", (room_id, RECENT_REQUESTS))]
     return {"requests": requests[::-1], "executions": recent_executions(connection, room_id), "execution_minutes": execution_minutes(connection, room_id)}
 

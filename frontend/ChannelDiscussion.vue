@@ -165,8 +165,11 @@ const free_busy = computed(() => {
     }
     // A manual member is never woken by the program, so its card waits for the user to trigger it.
     if (member.pending > 0 && member.access === "manual") {
+      const waiting_since = Math.min(...(room.value.free?.requests || [])
+        .filter((request) => request.member_id === member.id && request.status === "pending").map((request) => request.created_at));
       return [{ id: `free-wait-${member.id}`, author: member.name, member_id: member.id,
-        text: `待投递 ${member.pending} 条：需在其 AI 会话中触发`, working: false, waiting: true }];
+        text: `待投递 ${member.pending} 条：需在其 AI 会话中触发`, working: false, waiting: true,
+        created_at: Number.isFinite(waiting_since) ? waiting_since : null }];
     }
     return [];
   });
@@ -386,7 +389,8 @@ function arrangement_seconds(plan, anchor) {
 /** A reply's recorded time: the discussion turn's timing, or in a free room the execution that delivered it. */
 function message_elapsed(message) {
   if (message.elapsed_seconds != null) return message.elapsed_seconds;
-  return execution_reports.value.get(message.id)?.find((report) => report.answer_id === message.id)?.seconds ?? null;
+  // Read every execution, not the reports: a clean completion earns no report card but still has its time.
+  return ((free.value ? room.value.free : room.value.asks)?.executions || []).find((execution) => execution.answer_id === message.id)?.seconds ?? null;
 }
 const identities = computed(() => ["用户", ...Object.keys(room.value?.experts || {}).filter(name => room.value.experts[name] === "online")].map(name => {
   const identity = bridge.identities[name];
@@ -1132,7 +1136,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[item.author]?.icon" :text="bridge.identities[item.author]?.initials || '?'" :alt="bridge.display_name(item.author)" size="md" class="channel-avatar" :class="bridge.identities[item.author]?.style" />
               <div class="channel-message-meta"><div class="channel-message-author"><strong>{{ bridge.display_name(item.author) }}</strong></div></div>
-              <span class="channel-message-provenance channel-message-elapsed">{{ item.waiting ? '手动启动' : `已用 ${format_elapsed(Math.max(0, free_now - item.created_at))}` }}</span>
+              <span class="channel-message-provenance channel-message-elapsed">{{ item.waiting ? `手动启动${item.created_at ? ` · 已等 ${format_elapsed(Math.max(0, free_now - item.created_at))}` : ''}` : `已用 ${format_elapsed(Math.max(0, free_now - item.created_at))}` }}</span>
             </div>
             <div class="channel-message-text" role="status" :aria-label="`${bridge.display_name(item.author)} ${item.text}`">
               <span v-if="item.waiting">{{ item.text }}</span>

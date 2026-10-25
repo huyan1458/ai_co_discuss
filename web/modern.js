@@ -41858,21 +41858,27 @@ var _H = {
 			return De(e) ? e.registered_at ? `${t} 是手动启动，轮到它时需到其 AI 会话触发；不接入可在进度看板点「跳过」本次发言` : "" : d.value.trim() ? `新消息会在 ${t} 回复后交给主持人；可在进度看板点「跳过」本次发言` : "";
 		}), je = Z(() => N.value?.mode === "free"), Me = Z(() => !je.value || N.value.archived ? [] : (N.value.free?.members || []).flatMap((e) => {
 			let t = e.execution;
-			return t && ["dispatched", "started"].includes(t.status) ? [{
+			if (t && ["dispatched", "started"].includes(t.status)) return [{
 				id: `free-${t.id}`,
 				author: e.name,
 				member_id: e.id,
 				text: t.stale ? "执行失联：网站已不再接受本次回答，软件停止未确认" : "正在处理",
 				working: !t.stale,
 				created_at: t.created_at
-			}] : e.pending > 0 && e.access === "manual" ? [{
-				id: `free-wait-${e.id}`,
-				author: e.name,
-				member_id: e.id,
-				text: `待投递 ${e.pending} 条：需在其 AI 会话中触发`,
-				working: !1,
-				waiting: !0
-			}] : [];
+			}];
+			if (e.pending > 0 && e.access === "manual") {
+				let t = Math.min(...(N.value.free?.requests || []).filter((t) => t.member_id === e.id && t.status === "pending").map((e) => e.created_at));
+				return [{
+					id: `free-wait-${e.id}`,
+					author: e.name,
+					member_id: e.id,
+					text: `待投递 ${e.pending} 条：需在其 AI 会话中触发`,
+					working: !1,
+					waiting: !0,
+					created_at: Number.isFinite(t) ? t : null
+				}];
+			}
+			return [];
 		})), Ne = /* @__PURE__ */ F(Math.floor(Date.now() / 1e3));
 		R(() => Me.value.length > 0, (e, t, n) => {
 			if (!e) return;
@@ -42092,7 +42098,7 @@ var _H = {
 			return Number.isFinite(n) ? Math.max(0, n) : null;
 		}
 		function vt(e) {
-			return e.elapsed_seconds == null ? Ye.value.get(e.id)?.find((t) => t.answer_id === e.id)?.seconds ?? null : e.elapsed_seconds;
+			return e.elapsed_seconds == null ? ((je.value ? N.value.free : N.value.asks)?.executions || []).find((t) => t.answer_id === e.id)?.seconds ?? null : e.elapsed_seconds;
 		}
 		let yt = Z(() => ["用户", ...Object.keys(N.value?.experts || {}).filter((e) => N.value.experts[e] === "online")].map((e) => {
 			let t = s.identities[e];
@@ -43295,7 +43301,7 @@ var _H = {
 								"class"
 							]),
 							K("div", gW, [K("div", _W, [K("strong", null, P(I(s).display_name(e.author)), 1)])]),
-							K("span", vW, P(e.waiting ? "手动启动" : `已用 ${mt(Math.max(0, Ne.value - e.created_at))}`), 1)
+							K("span", vW, P(e.waiting ? `手动启动${e.created_at ? ` · 已等 ${mt(Math.max(0, Ne.value - e.created_at))}` : ""}` : `已用 ${mt(Math.max(0, Ne.value - e.created_at))}`), 1)
 						]), K("div", {
 							class: "channel-message-text",
 							role: "status",
@@ -43629,7 +43635,7 @@ var _H = {
 			], 2);
 		};
 	}
-}, [["__scopeId", "data-v-aad25ca7"]]), DG = {
+}, [["__scopeId", "data-v-0a19b1a3"]]), DG = {
 	slots: {
 		root: "relative inline-flex items-center",
 		base: ["rounded-md", "transition-colors"],

@@ -484,6 +484,11 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(self.request(f"{self.path}/members/{gemini_id}", adopt, self.owner)[0], 400)
         self.assertEqual(self.request(f"{self.path}/register", {}, gemini)[0], 200)
         self.assertEqual(self.request(f"{self.path}/members/{gemini_id}", adopt, self.owner)[0], 400, "no session reported yet")
+        # The CLI reports its session in headers on any call; reading the room is enough.
+        urlopen(Request(self.base + self.path, headers={"X-Discussion-Token": gemini, "X-Discussion-Session": adopt["session_id"],
+                                                         "X-Discussion-Session-Client": "antigravity"}), timeout=10).close()
+        status, adopted = self.request(f"{self.path}/members/{gemini_id}", adopt, self.owner)
+        self.assertEqual(status, 200, adopted)
 
     def test_manual_member_answers_by_request_and_is_never_delivered(self):
         """A manual member is skipped by the runner and closes only its own open requests."""

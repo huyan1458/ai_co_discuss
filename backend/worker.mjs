@@ -1147,7 +1147,7 @@ const SESSION_ID_PATTERN = /^[0-9A-Za-z_-]{8,128}$/;
 async function record_reported_session(database, room_id, token, payload) {
   const { session_id, session_client } = payload;
   if (!["claude", "codex", "antigravity"].includes(session_client) || typeof session_id !== "string" || !SESSION_ID_PATTERN.test(session_id) || !token) return;
-  const member = await database.prepare("SELECT id FROM room_members WHERE room_id=? AND token_hash=? AND status='active' AND access='manual' AND adapter='manual'")
+  const member = await database.prepare("SELECT id FROM room_members WHERE room_id=? AND token_hash=? AND status='active' AND access='manual' AND adapter IN ('manual','')")
     .bind(room_id, await runtime_hash(token)).first();
   if (member) {
     await database.prepare(`INSERT INTO member_sessions (member_id,room_id,session_id,client) VALUES (?,?,?,?)
@@ -2096,7 +2096,7 @@ async function free_recent_executions(database, room_id) {
 /** Direct questions of a discussion room: recent requests with their member, for status badges beside messages. */
 async function asks_view(database, room_id) {
   const names = Object.fromEntries((await database.prepare("SELECT id,name FROM room_members WHERE room_id=?").bind(room_id).all()).results.map(row => [row.id, row.name]));
-  const requests = (await database.prepare(`SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by FROM member_requests
+  const requests = (await database.prepare(`SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by,created_at FROM member_requests
     WHERE room_id=? ORDER BY id DESC LIMIT ?`).bind(room_id, FREE_RECENT_REQUESTS).all()).results
     .map(row => ({ ...row, member: names[row.member_id] ?? "" })).reverse();
   return { requests, executions: await free_recent_executions(database, room_id), execution_minutes: await free_execution_minutes(database, room_id) };
@@ -2115,7 +2115,7 @@ async function free_view(database, room_id) {
       reported_session: reported?.session_id ?? "", reported_client: reported?.client ?? "", execution, pending };
   }));
   const names = Object.fromEntries((await database.prepare("SELECT id,name FROM room_members WHERE room_id=?").bind(room_id).all()).results.map(row => [row.id, row.name]));
-  const requests = (await database.prepare(`SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by FROM member_requests
+  const requests = (await database.prepare(`SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by,created_at FROM member_requests
     WHERE room_id=? ORDER BY id DESC LIMIT ?`).bind(room_id, FREE_RECENT_REQUESTS).all()).results
     .map(row => ({ ...row, member: names[row.member_id] ?? "" })).reverse();
   const halted_chains = (await database.prepare("SELECT chain_id,reason FROM free_chains WHERE room_id=? ORDER BY chain_id DESC LIMIT 10").bind(room_id).all()).results;
