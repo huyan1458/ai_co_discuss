@@ -161,14 +161,14 @@ watch(() => room.value.id, () => { starting.value = false; });
       <p v-else-if="view.free_notice" role="status" class="pb-free-note">{{ view.free_notice }}</p>
       <p v-if="view.access?.error" role="alert" class="pb-free-note is-error">{{ view.access.error }}</p>
       <p v-else-if="view.access?.notice" role="status" class="pb-free-note">{{ view.access.notice }}</p>
+      <UButton v-if="!room.archived" icon="i-lucide-plus" label="邀请 AI 加入" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block pb-action-add" @click="inviting = true" />
     </section>
     <section v-if="room.linked_rooms?.length" class="pb-section" aria-label="头脑风暴">
       <h4>头脑风暴</h4>
       <button v-for="item in room.linked_rooms" :key="item.id" type="button" class="pb-link pb-free-linked" @click="act('room', item.id)">{{ item.title }}<small>{{ bridge.phases[item.phase] || item.phase }}</small></button>
     </section>
-    <section v-if="!room.archived" class="pb-actions pb-actions-pair" aria-label="操作">
-      <UButton icon="i-lucide-user-plus" label="邀请 AI 加入" size="sm" color="neutral" variant="outline" class="pb-action" @click="inviting = true" />
-      <UButton icon="i-lucide-messages-square" label="开启讨论" size="sm" color="neutral" variant="outline" class="pb-action" title="由主持人推进成员轮流发言，到上限或结束后房间回到自由协作" :disabled="!can_start" @click="starting = true" />
+    <section v-if="!room.archived" class="pb-actions" aria-label="操作">
+      <UButton icon="i-lucide-messages-square" label="开启讨论" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block" title="由主持人推进成员轮流发言，到上限或结束后房间回到自由协作" :disabled="!can_start" @click="starting = true" />
       <p v-if="!can_start" class="pb-free-note">开启讨论需要一位由本机唤醒的 AI 主持人。</p>
     </section>
     <section v-if="timings.items.length" class="pb-section" aria-label="执行耗时">

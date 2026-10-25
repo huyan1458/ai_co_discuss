@@ -51540,7 +51540,7 @@ var iq = /*#__PURE__*/ jH({
 	"aria-label": "头脑风暴"
 }, hQ = ["onClick"], gQ = {
 	key: 2,
-	class: "pb-actions pb-actions-pair",
+	class: "pb-actions",
 	"aria-label": "操作"
 }, _Q = {
 	key: 0,
@@ -51781,7 +51781,17 @@ var iq = /*#__PURE__*/ jH({
 						class: "pb-free-note is-warning"
 					}, "可能冲突：" + P(e.members.map((e) => I(n).display_name(e)).join(" 与 ")) + " 的重叠执行观察到 " + P(e.files.join("、")) + " 变化；修改者未确认。", 1))), 128)),
 					I(t).free_error ? (U(), W("p", uQ, P(I(t).free_error), 1)) : I(t).free_notice ? (U(), W("p", dQ, P(I(t).free_notice), 1)) : Y("", !0),
-					I(t).access?.error ? (U(), W("p", fQ, P(I(t).access.error), 1)) : I(t).access?.notice ? (U(), W("p", pQ, P(I(t).access.notice), 1)) : Y("", !0)
+					I(t).access?.error ? (U(), W("p", fQ, P(I(t).access.error), 1)) : I(t).access?.notice ? (U(), W("p", pQ, P(I(t).access.notice), 1)) : Y("", !0),
+					c.value.archived ? Y("", !0) : (U(), G(m, {
+						key: 4,
+						icon: "i-lucide-plus",
+						label: "邀请 AI 加入",
+						size: "sm",
+						color: "neutral",
+						variant: "outline",
+						class: "pb-action pb-action-block pb-action-add",
+						onClick: i[1] ||= (e) => T.value = !0
+					}))
 				]),
 				c.value.linked_rooms?.length ? (U(), W("section", mQ, [i[10] ||= K("h4", null, "头脑风暴", -1), (U(!0), W(H, null, B(c.value.linked_rooms, (e) => (U(), W("button", {
 					key: e.id,
@@ -51789,29 +51799,17 @@ var iq = /*#__PURE__*/ jH({
 					class: "pb-link pb-free-linked",
 					onClick: (t) => I(r)("room", e.id)
 				}, [J(P(e.title), 1), K("small", null, P(I(n).phases[e.phase] || e.phase), 1)], 8, hQ))), 128))])) : Y("", !0),
-				c.value.archived ? Y("", !0) : (U(), W("section", gQ, [
-					q(m, {
-						icon: "i-lucide-user-plus",
-						label: "邀请 AI 加入",
-						size: "sm",
-						color: "neutral",
-						variant: "outline",
-						class: "pb-action",
-						onClick: i[1] ||= (e) => T.value = !0
-					}),
-					q(m, {
-						icon: "i-lucide-messages-square",
-						label: "开启讨论",
-						size: "sm",
-						color: "neutral",
-						variant: "outline",
-						class: "pb-action",
-						title: "由主持人推进成员轮流发言，到上限或结束后房间回到自由协作",
-						disabled: !E.value,
-						onClick: i[2] ||= (e) => ee.value = !0
-					}, null, 8, ["disabled"]),
-					E.value ? Y("", !0) : (U(), W("p", _Q, "开启讨论需要一位由本机唤醒的 AI 主持人。"))
-				])),
+				c.value.archived ? Y("", !0) : (U(), W("section", gQ, [q(m, {
+					icon: "i-lucide-messages-square",
+					label: "开启讨论",
+					size: "sm",
+					color: "neutral",
+					variant: "outline",
+					class: "pb-action pb-action-block",
+					title: "由主持人推进成员轮流发言，到上限或结束后房间回到自由协作",
+					disabled: !E.value,
+					onClick: i[2] ||= (e) => ee.value = !0
+				}, null, 8, ["disabled"]), E.value ? Y("", !0) : (U(), W("p", _Q, "开启讨论需要一位由本机唤醒的 AI 主持人。"))])),
 				S.value.items.length ? (U(), W("section", vQ, [K("div", yQ, [i[11] ||= K("h4", null, "耗时", -1), K("small", null, "共 " + P(S.value.items.length) + " 次执行 · " + P(C(S.value.total)), 1)]), K("details", bQ, [i[12] ||= K("summary", null, "查看每次执行", -1), K("ol", null, [(U(!0), W(H, null, B(S.value.items, (e) => (U(), W("li", { key: e.id }, [K("span", xQ, [J("#" + P(e.id) + " " + P(p(e.member_id)), 1), K("small", null, P(o[e.status] || e.status), 1)]), K("span", SQ, [K("span", null, "用时 " + P(C(e.seconds)), 1)])]))), 128))])])])) : Y("", !0),
 				q(qZ, {
 					open: ee.value,
@@ -51825,7 +51823,7 @@ var iq = /*#__PURE__*/ jH({
 			]);
 		};
 	}
-}, [["__scopeId", "data-v-457aadf3"]]), TQ = {
+}, [["__scopeId", "data-v-77cfac40"]]), TQ = {
 	id: "channel-sidebar",
 	class: "channel-sidebar",
 	"aria-label": "房间导航"
