@@ -579,7 +579,7 @@ test('Worker invitations append automatic and manual experts while preserving th
   assert.equal(paused.body.runtime.status, 'paused');
 });
 
-test('Worker invitation completes the current round before a repeat pass, like Python', async t => {
+test('Worker invitation joins at the tail of the plan, like Python', async t => {
   const f = await worker_fixture(t);
   const id = (await f.request('', { title: '补齐本轮', host: 'Codex', phase: 'initial', experts: { Codex: 'cli', Claude: 'cli', Gemini: 'cli' } })).body.id;
   await f.request(`/${id}/runtime`, { action: 'start', revision: 0, deadline: 0 });
@@ -589,7 +589,7 @@ test('Worker invitation completes the current round before a repeat pass, like P
   const joined = await f.request(`/${id}/members`, { name: 'DeepSeek', access: 'runner', adapter: 'api', token: crypto.randomUUID() });
   assert.equal(joined.status, 200, JSON.stringify(joined.body));
   assert.deepEqual(joined.body.queued_turns.map(turn => [turn.expert, turn.question]),
-    [['Gemini', '第 1 句'], ['DeepSeek', '欢迎加入：请先读取议题，独立给出你的开场观点。'], ['Claude', '第 2 句'], ['Gemini', '第 3 句']]);
+    [['Gemini', '第 1 句'], ['Claude', '第 2 句'], ['Gemini', '第 3 句'], ['DeepSeek', '欢迎加入：请先读取议题，独立给出你的开场观点。']]);
 });
 
 test('Worker running discussions admit and release experts without pausing, like Python', async t => {

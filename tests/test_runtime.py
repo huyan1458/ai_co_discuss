@@ -653,8 +653,8 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(arrangements[0]["after_message_id"], 0)
         self.assertGreater(arrangements[-1]["after_message_id"], 0)
 
-    def test_invited_expert_completes_the_current_round_before_a_repeat_pass(self):
-        """A plan that loops through the experts twice places the newcomer where this round completes."""
+    def test_invited_expert_joins_at_the_tail_of_the_plan(self):
+        """A newcomer is queued after everyone already planned, without reordering the plan."""
         self.start()
         host_token = self.enter(self.events()[0])
         names = ["Claude", "Gemini", "Claude", "Gemini"]
@@ -665,7 +665,7 @@ class RuntimeTests(unittest.TestCase):
         status, room = self.request(self.path + "/members", payload, self.owner)
         self.assertEqual(status, 200, room)
         self.assertEqual([(turn["expert"], turn["question"]) for turn in room["queued_turns"]],
-                         [("Gemini", "第 1 句"), ("DeepSeek", "欢迎加入：请先读取议题，独立给出你的开场观点。"), ("Claude", "第 2 句"), ("Gemini", "第 3 句")])
+                         [("Gemini", "第 1 句"), ("Claude", "第 2 句"), ("Gemini", "第 3 句"), ("DeepSeek", "欢迎加入：请先读取议题，独立给出你的开场观点。")])
         # The invitation is not a plan: only the host's opening plan is listed.
         self.assertEqual([len(item["turns"]) for item in room["host_arrangements"]], [4])
 

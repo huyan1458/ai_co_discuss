@@ -2475,29 +2475,7 @@ async function handle_free_api(database, request, parts) {
   throw new HttpError(404, "地址不存在");
 }
 
-/**
- * Move the just-queued newcomer to where the current round completes: after the last queued expert who has not
- * spoken this round, before the first one who would speak again. Rows keep their ids; only who and what shift.
- */
-async function place_invited_expert(database, room_id, name) {
-  const queued = (await database.prepare("SELECT id,expert,question FROM discussion_turns WHERE room_id=? AND status='queued' ORDER BY id").bind(room_id).all()).results;
-  if (queued.length < 2 || queued.at(-1).expert !== name) return;
-  const experts = (await require_room(database, room_id)).experts;
-  const round = (await discussion_rounds(database, room_id, experts)).at(-1);
-  const spoken = new Set(round && !round.completed ? round.speakers : []);
-  const open = await database.prepare("SELECT expert FROM discussion_turns WHERE room_id=? AND status IN ('pending','notified')").bind(room_id).first();
-  if (open) spoken.add(open.expert);
-  let slot = queued.length - 1;
-  for (const [index, row] of queued.slice(0, -1).entries()) {
-    if (spoken.has(row.expert)) { slot = index; break; }
-    spoken.add(row.expert);
-  }
-  const ordered = [...queued.slice(0, slot), queued.at(-1), ...queued.slice(slot, -1)];
-  await database.batch(queued.map((target, index) => database.prepare("UPDATE discussion_turns SET expert=?,question=? WHERE id=? AND status='queued'")
-    .bind(ordered[index].expert, ordered[index].question, target.id)));
-}
-
-/** Queue a newly invited expert in the live plan in the same transaction as its membership; place_invited_expert then orders it. */
+/** Queue a newly invited expert at the tail of the live plan in the same transaction as its membership. */
 function queue_invited_expert(database, room_id, name) {
   return database.prepare(`INSERT OR IGNORE INTO discussion_turns (room_id,expert,question,status,submission_id,created_at)
     SELECT settings.room_id,member.name,
@@ -2534,7 +2512,6 @@ async function handle_discussion_members(database, request, parts) {
       database.prepare("UPDATE topic_settings SET experts=json_set(experts,?,'cli') WHERE room_id=?").bind(`$."${member.name}"`, room_id),
       ...(room.runtime?.mode === "automatic" && member.access === "manual" ? [] : [queue_invited_expert(database, room_id, member.name)])]); }
     catch (error) { if (String(error).includes("UNIQUE constraint")) throw new HttpError(409, `${member.name} 已是本房间成员`); throw error; }
-    await place_invited_expert(database, room_id, member.name);
   } else {
     const member = await free_owned_member(database, room_id, integer(parts[4]), token);
     if (["away", "remove"].includes(payload.action)) {
@@ -2585,7 +2562,6 @@ async function register_member(database, room_id, token) {
   if (!previous) {
     // A manual discussion expert joins the live round plan only now that it has registered.
     await queue_invited_expert(database, room_id, member.name).run();
-    await place_invited_expert(database, room_id, member.name);
   }
   const reported = await database.prepare("SELECT client FROM member_sessions WHERE member_id=?").bind(member.id).first();
   return { member: member.name, registered_at: stamp, session_client: reported?.client ?? "" };

@@ -849,45 +849,8 @@ def save_discussion_experts(connection, room_id, experts):
     connection.execute("UPDATE topic_settings SET experts=? WHERE room_id=?", (json.dumps(experts, ensure_ascii=False), room_id))
 
 
-def current_round_speakers(connection, room_id, experts):
-    """Experts who have given an opinion in the latest unfinished round (empty when it just completed)."""
-    spoken = set()
-    rows = connection.execute("""SELECT messages.author FROM messages
-        JOIN message_details AS details ON details.message_id=messages.id AND details.kind='opinion'
-        WHERE messages.room_id=? ORDER BY messages.id""", (room_id,))
-    for row in rows:
-        if row["author"] not in experts:
-            continue
-        spoken.add(row["author"])
-        if len(spoken) == len(experts):
-            spoken = set()
-    return spoken
-
-
-def place_invited_expert(connection, room_id, name):
-    """Move the just-queued newcomer to where the current round completes: after the last queued expert who
-    has not spoken this round, before the first one who would speak again. Rows keep their ids; only who and what shift."""
-    rows = connection.execute("SELECT id,expert,question FROM discussion_turns WHERE room_id=? AND status='queued' ORDER BY id", (room_id,)).fetchall()
-    if len(rows) < 2 or rows[-1]["expert"] != name:
-        return
-    _, experts, _ = discussion_roster(connection, room_id)
-    spoken = current_round_speakers(connection, room_id, experts)
-    open_turn = connection.execute("SELECT expert FROM discussion_turns WHERE room_id=? AND status IN ('pending','notified')", (room_id,)).fetchone()
-    if open_turn:
-        spoken.add(open_turn["expert"])
-    slot = len(rows) - 1
-    for index, row in enumerate(rows[:-1]):
-        if row["expert"] in spoken:
-            slot = index
-            break
-        spoken.add(row["expert"])
-    ordered = rows[:slot] + [rows[-1]] + rows[slot:-1]
-    for target, source in zip(rows, ordered):
-        connection.execute("UPDATE discussion_turns SET expert=?,question=? WHERE id=? AND status='queued'", (source["expert"], source["question"], target["id"]))
-
-
 def queue_invited_expert(connection, room_id, name, now):
-    """Queue a new expert in an existing live plan at its round-completing slot, without changing the current speaker or hold.
+    """Queue a new expert at the tail of an existing live plan, without changing the current speaker or hold.
 
     A manual expert is queued only once it has registered (the invite alone does not), and only once per invitation.
     """
@@ -904,7 +867,6 @@ def queue_invited_expert(connection, room_id, name, now):
         AND settings.phase NOT IN ('paused','concluded')
         AND EXISTS (SELECT 1 FROM discussion_turns WHERE room_id=settings.room_id AND status IN ('pending','notified','queued'))""",
         (now, room_id, name))
-    place_invited_expert(connection, room_id, name)
 
 
 def add_discussion_member(connection, room_id, token, payload, now):
