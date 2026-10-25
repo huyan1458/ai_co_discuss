@@ -43,7 +43,7 @@ const launch_ready = (name) => {
   return Boolean(profile.adapter && (profile.adapter === "antigravity" ? profile.ipc_directory : profile.executable));
 };
 const launching = computed(() => automatic.value && view.value.launch.available);
-const room_ready = computed(() => selected_names.value.length > 0 && woken_names.value.every(launch_ready) && (!woken_names.value.length || view.value.launch.available));
+const room_ready = computed(() => woken_names.value.every(launch_ready) && (!woken_names.value.length || view.value.launch.available));
 // Smart scheduling runs in the local service, so it is offered whenever the service is connected.
 const scheduling = computed(() => view.value.launch.available);
 const scheduler_active = computed(() => scheduling.value && Boolean(view.value.launch.scheduler?.enabled));
@@ -58,7 +58,6 @@ const needs_connection = computed(() => automatic.value && !view.value.launch.av
 let connection_timer = 0;
 /** Why the create button is disabled, in the order the user can fix it. */
 const blocker = computed(() => {
-  if (!selected_names.value.length) return "先添加 AI";
   if (needs_connection.value || (discussing.value && !view.value.launch.available)) return "先连接本机服务";
   if (discussing.value && selected.value[host.value] !== "cli") return "开启讨论需要一位由本机唤醒的主持人";
   const unready = woken_names.value.filter((name) => !launch_ready(name));
@@ -148,7 +147,7 @@ const limit_rule = computed(() => {
 
 const summary = computed(() => {
   const names = Object.keys(selected.value);
-  const parts = ["协作房间", `${names.length} 位 AI`, host.value ? `${host.value} 主持` : "无主持人"];
+  const parts = ["协作房间", names.length ? `${names.length} 位 AI` : "暂无成员", host.value ? `${host.value} 主持` : "暂无主持人"];
   if (discussing.value) {
     const rounds = value("limit-max_rounds"), minutes = value("limit-max_minutes");
     parts.push("开启讨论", [rounds && Number(rounds) ? `${rounds} 轮` : "不限轮次", minutes && Number(minutes) ? format_duration(Number(minutes)) : "不限时长"].join(" / "));
@@ -172,13 +171,13 @@ const summary = computed(() => {
 
       <section class="create-section">
         <h3><span>2</span>谁来参与</h3>
-        <p class="fine-print create-hint">每位成员单独选：程序启动（本机唤醒）或手动启动（你来启动；网页 AI 也选手动，回答由你代发）。</p>
+        <p class="fine-print create-hint">每位成员可选本机唤醒，或手动（你来启动或代发，网页 AI 选手动）。</p>
         <div v-if="selected_names.length" class="create-experts" role="group" aria-label="参与的 AI">
           <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :choices="access_choices(name)"
             :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)" hosting
             @host="write('host', name)" @remove="remove_expert(name)" @mode="set_expert_mode(name, $event)" />
         </div>
-        <p v-else class="create-experts-empty">从下方添加 AI；同一平台可添加多位，各自独立会话。</p>
+        <p v-else class="create-experts-empty">可以先不添加成员，建房后再邀请；同一平台可添加多位，各自独立会话。</p>
         <div ref="library" class="create-roster-add" role="group" aria-label="添加 AI">
           <span class="create-label">添加</span>
           <button v-for="name in experts" :key="name" type="button" :disabled="!bridge.launch_clients[name]" :title="library_description(name)" :aria-label="`添加 ${name} 实例`" @click="add_expert(name)">
@@ -189,11 +188,14 @@ const summary = computed(() => {
           <UIcon name="i-lucide-crown" />
           <span>{{ host_options.length ? '点卡片上的皇冠指定主持人：没 @ 任何人的消息由它分配；其他成员只在被你或主持人点名时发言。' : '添加一位本地 AI 后，没 @ 的消息才有人接。' }}</span>
         </div>
-        <SchedulerSettings :free="true" :blocker="scheduling_blocker" />
+        <details class="create-advanced" :open="scheduler_active">
+          <summary>高级：智能调度（可选）</summary>
+          <SchedulerSettings :free="true" :blocker="scheduling_blocker" />
+        </details>
       </section>
 
       <section class="create-section">
-        <h3><span>3</span>推进方式</h3>
+        <h3><span>3</span>推进方式（可选）</h3>
         <UCheckbox :model-value="discussing" label="创建后开启讨论" description="由主持人安排成员轮流发言，到上限或结束后房间继续自由协作。不勾选也可以随时在房间里开启。" @update:model-value="toggle_discussion($event)" />
         <template v-if="discussing">
           <UFormField label="讨论目标" description="写下问题、背景和顾虑，主持人据此推进。"><UTextarea :model-value="value('goal')" :maxlength="1000" :rows="4" autoresize :maxrows="10" placeholder="例如：我们在 A、B 两个方案之间犹豫，主要顾虑是成本和上线时间……" class="w-full" @update:model-value="write('goal', $event)" /></UFormField>
@@ -208,25 +210,20 @@ const summary = computed(() => {
         </template>
       </section>
 
-      <section class="create-section">
-        <h3><span>4</span>启动 AI</h3>
-        <p v-if="!view.launch.available" class="fine-print create-hint">连接本机服务后，可在此设置项目目录和启动方式。</p>
-        <template v-else>
-          <template v-if="launching">
-            <UFormField label="项目目录（可选）">
-              <UInput :model-value="view.launch.workspace.cwd || ''" placeholder="输入完整路径，或点右侧图标选择" class="w-full" :ui="{ trailing: 'pe-1' }" @update:model-value="bridge.write_launch('workspace', 'cwd', $event)">
-                <template #trailing><UButton icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" aria-label="在本机选择项目目录" :title="picking ? '目录选择窗口已打开，请在本机窗口中选择' : '在本机选择文件夹'" :disabled="picking" @click="pick_directory" /></template>
-              </UInput>
-            </UFormField>
-            <p class="fine-print create-hint">供本地软件查看的项目，读写权限在专家卡片上设置。API 仅使用房间上下文。</p>
-          </template>
-        </template>
+      <section v-if="launching" class="create-section">
+        <h3><span>4</span>项目目录</h3>
+        <UFormField label="可选，供本地软件查看">
+          <UInput :model-value="view.launch.workspace.cwd || ''" placeholder="输入完整路径，或点右侧图标选择" class="w-full" :ui="{ trailing: 'pe-1' }" @update:model-value="bridge.write_launch('workspace', 'cwd', $event)">
+            <template #trailing><UButton icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" aria-label="在本机选择项目目录" :title="picking ? '目录选择窗口已打开，请在本机窗口中选择' : '在本机选择文件夹'" :disabled="picking" @click="pick_directory" /></template>
+          </UInput>
+        </UFormField>
+        <p class="fine-print create-hint">读写权限在专家卡片上设置；API 仅使用房间上下文。</p>
       </section>
     </form>
     <footer class="create-footer">
       <p v-if="launching && view.launch.error" role="alert" class="create-error">{{ view.launch.error }}</p>
       <div class="create-footer-row">
-        <span class="create-summary" :class="{ 'is-blocked': blocker }" :title="summary">{{ blocker ? `还差：${blocker}` : summary }}</span>
+        <span class="create-summary" :class="{ 'is-blocked': blocker }" :title="blocker || summary" role="status"><UIcon v-if="blocker" name="i-lucide-circle-alert" />{{ blocker ? `还差：${blocker}` : summary }}</span>
         <UButton label="取消" color="neutral" variant="ghost" @click="emit('cancel')" />
         <UButton type="submit" form="create-discussion-form" class="channel-primary-button" :icon="launching ? 'i-lucide-play' : 'i-lucide-plus'" :label="discussing ? '创建并开启讨论' : automatic ? '创建并连接' : '创建协作房间'" :disabled="!room_ready || Boolean(blocker) || scheduler_unready" :loading="pending === 'create'" />
       </div>
@@ -285,7 +282,10 @@ const summary = computed(() => {
 .create-connect p > [class*="icon"] { flex-shrink: 0; width: 14px; height: 14px; margin-top: 3px; color: #e0b44a; }
 .create-connect-command { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 6px; background: var(--ui-bg-elevated); }
 .create-connect-command code { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.create-summary.is-blocked { color: #e0b44a; }
+.create-summary.is-blocked { display: flex; align-items: center; gap: 6px; color: #e0b44a; font-weight: 600; }
+.create-summary.is-blocked > [class*="icon"] { flex-shrink: 0; width: 14px; height: 14px; }
+.create-advanced > summary { cursor: pointer; color: var(--ui-text-toned); font-size: 12px; }
+.create-advanced[open] > summary { margin-bottom: 10px; }
 .create-error { margin-bottom: 10px; color: #f0716b; font-size: 12px; }
 @media (max-width: 600px) {
   .create-discussion { height: calc(100dvh - 130px); }

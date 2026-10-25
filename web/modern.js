@@ -47736,12 +47736,12 @@ var iq = /*#__PURE__*/ jH({
 	"title",
 	"aria-label",
 	"onClick"
-], DJ = { class: "fine-print create-hint create-host-hint" }, OJ = { class: "create-section" }, kJ = { class: "form-two-columns" }, AJ = {
+], DJ = { class: "fine-print create-hint create-host-hint" }, OJ = ["open"], kJ = { class: "create-section" }, AJ = { class: "form-two-columns" }, jJ = {
 	class: "create-limit-rule",
 	"aria-live": "polite"
-}, jJ = { class: "create-section" }, MJ = {
-	key: 0,
-	class: "fine-print create-hint"
+}, MJ = {
+	key: 2,
+	class: "create-section"
 }, NJ = { class: "create-footer" }, PJ = {
 	key: 0,
 	role: "alert",
@@ -47761,11 +47761,10 @@ var iq = /*#__PURE__*/ jH({
 		let h = Z(() => [...m.value].sort((e, t) => p.value.indexOf(e) - p.value.indexOf(t))), g = (e) => h.value.filter((t) => i.platform_of(t) === e).length, _ = /* @__PURE__ */ F(null), v = Z(() => l("host")), y = Z(() => h.value.filter((e) => f.value[e] !== "online" && (!d.value || f.value[e] !== "manual"))), b = /* @__PURE__ */ F(null), x = Z(() => h.value.filter((e) => f.value[e] === "cli")), S = Z(() => x.value.length > 0 || D.value), C = (e) => {
 			let t = r.value.launch.profiles[e] || {};
 			return t.adapter === "api" ? !!(t.base_url && t.api_protocol && t.api_key_ref && t.model) : !!(t.adapter && (t.adapter === "antigravity" ? t.ipc_directory : t.executable));
-		}, w = Z(() => S.value && r.value.launch.available), T = Z(() => h.value.length > 0 && x.value.every(C) && (!x.value.length || r.value.launch.available)), E = Z(() => r.value.launch.available), D = Z(() => E.value && !!r.value.launch.scheduler?.enabled), O = Z(() => r.value.launch.available ? "" : "连接本机服务后可开启"), k = Z(() => {
+		}, w = Z(() => S.value && r.value.launch.available), T = Z(() => x.value.every(C) && (!x.value.length || r.value.launch.available)), E = Z(() => r.value.launch.available), D = Z(() => E.value && !!r.value.launch.scheduler?.enabled), O = Z(() => r.value.launch.available ? "" : "连接本机服务后可开启"), k = Z(() => {
 			let e = r.value.launch.scheduler || {};
 			return E.value && e.enabled && !(e.provider && e.model && e.api_key_ref);
 		}), ee = Z(() => S.value && !r.value.launch.available), te = 0, ne = Z(() => {
-			if (!h.value.length) return "先添加 AI";
 			if (ee.value || d.value && !r.value.launch.available) return "先连接本机服务";
 			if (d.value && f.value[v.value] !== "cli") return "开启讨论需要一位由本机唤醒的主持人";
 			let e = x.value.filter((e) => !C(e));
@@ -47829,19 +47828,19 @@ var iq = /*#__PURE__*/ jH({
 			let e = Number(l("limit-max_rounds")), t = Number(l("limit-max_minutes")), n = [e && `${e} 轮`, t && rq(t)].filter(Boolean);
 			return n.length ? `最多 ${n.join(" 或 ")}，${n.length === 2 ? "先到则" : "到限后"}暂停，由你决定追加轮次或结束。` : "不设轮次和时长上限。";
 		}), me = Z(() => {
-			let e = [
+			let e = Object.keys(f.value), t = [
 				"协作房间",
-				`${Object.keys(f.value).length} 位 AI`,
-				v.value ? `${v.value} 主持` : "无主持人"
+				e.length ? `${e.length} 位 AI` : "暂无成员",
+				v.value ? `${v.value} 主持` : "暂无主持人"
 			];
 			if (d.value) {
-				let t = l("limit-max_rounds"), n = l("limit-max_minutes");
-				e.push("开启讨论", [t && Number(t) ? `${t} 轮` : "不限轮次", n && Number(n) ? rq(Number(n)) : "不限时长"].join(" / "));
+				let e = l("limit-max_rounds"), n = l("limit-max_minutes");
+				t.push("开启讨论", [e && Number(e) ? `${e} 轮` : "不限轮次", n && Number(n) ? rq(Number(n)) : "不限时长"].join(" / "));
 			}
-			return e.join(" · ");
+			return t.join(" · ");
 		});
 		return (t, c) => {
-			let p = sA, m = MA, g = YV, x = zV, C = pA, E = zK, D = HV;
+			let p = sA, m = MA, g = YV, x = zV, C = pA, E = zK, te = HV;
 			return U(), W("div", vJ, [K("form", {
 				id: "create-discussion-form",
 				class: "create-scroll dialog-form",
@@ -47872,8 +47871,8 @@ var iq = /*#__PURE__*/ jH({
 					_: 1
 				})]),
 				K("section", CJ, [
-					c[13] ||= K("h3", null, [K("span", null, "2"), J("谁来参与")], -1),
-					c[14] ||= K("p", { class: "fine-print create-hint" }, "每位成员单独选：程序启动（本机唤醒）或手动启动（你来启动；网页 AI 也选手动，回答由你代发）。", -1),
+					c[14] ||= K("h3", null, [K("span", null, "2"), J("谁来参与")], -1),
+					c[15] ||= K("p", { class: "fine-print create-hint" }, "每位成员可选本机唤醒，或手动（你来启动或代发，网页 AI 选手动）。", -1),
 					h.value.length ? (U(), W("div", wJ, [(U(!0), W(H, null, B(h.value, (e) => (U(), G(tJ, {
 						key: e,
 						name: e,
@@ -47896,7 +47895,7 @@ var iq = /*#__PURE__*/ jH({
 						"onHost",
 						"onRemove",
 						"onMode"
-					]))), 128))])) : (U(), W("p", TJ, "从下方添加 AI；同一平台可添加多位，各自独立会话。")),
+					]))), 128))])) : (U(), W("p", TJ, "可以先不添加成员，建房后再邀请；同一平台可添加多位，各自独立会话。")),
 					K("div", {
 						ref_key: "library",
 						ref: _,
@@ -47927,13 +47926,16 @@ var iq = /*#__PURE__*/ jH({
 						q(p, { name: "i-lucide-plus" })
 					], 8, EJ))), 128))], 512),
 					K("div", DJ, [q(p, { name: "i-lucide-crown" }), K("span", null, P(y.value.length ? "点卡片上的皇冠指定主持人：没 @ 任何人的消息由它分配；其他成员只在被你或主持人点名时发言。" : "添加一位本地 AI 后，没 @ 的消息才有人接。"), 1)]),
-					q(_J, {
+					K("details", {
+						class: "create-advanced",
+						open: D.value
+					}, [c[13] ||= K("summary", null, "高级：智能调度（可选）", -1), q(_J, {
 						free: !0,
 						blocker: O.value
-					}, null, 8, ["blocker"])
+					}, null, 8, ["blocker"])], 8, OJ)
 				]),
-				K("section", OJ, [
-					c[16] ||= K("h3", null, [K("span", null, "3"), J("推进方式")], -1),
+				K("section", kJ, [
+					c[17] ||= K("h3", null, [K("span", null, "3"), J("推进方式（可选）")], -1),
 					q(E, {
 						"model-value": d.value,
 						label: "创建后开启讨论",
@@ -47945,7 +47947,7 @@ var iq = /*#__PURE__*/ jH({
 							label: "讨论目标",
 							description: "写下问题、背景和顾虑，主持人据此推进。"
 						}, {
-							default: L(() => [q(D, {
+							default: L(() => [q(te, {
 								"model-value": l("goal"),
 								maxlength: 1e3,
 								rows: 4,
@@ -47965,14 +47967,14 @@ var iq = /*#__PURE__*/ jH({
 							"onUpdate:rounds": c[4] ||= (e) => u("limit-max_rounds", String(e)),
 							"onUpdate:minutes": c[5] ||= (e) => u("limit-max_minutes", String(e))
 						}, null, 8, ["rounds", "minutes"]),
-						c[15] ||= K("p", { class: "fine-print create-hint" }, "一轮指每位专家各完成一次观点；开启后计时，暂停期间不计时。", -1),
+						c[16] ||= K("p", { class: "fine-print create-hint" }, "一轮指每位专家各完成一次观点；开启后计时，暂停期间不计时。", -1),
 						q(E, {
 							"model-value": !!I(r).named_followup,
 							label: "点名追问",
 							description: "开启后，主持人每轮读完回答再逐位点名追问；关闭时专家之间互相回应、互相提问，主持人只开场和收尾。",
 							"onUpdate:modelValue": c[6] ||= (e) => I(i).write_named_followup(e)
 						}, null, 8, ["model-value"]),
-						K("div", kJ, [q(x, {
+						K("div", AJ, [q(x, {
 							label: "单次 AI 执行（分钟）",
 							description: "留空或 0 表示不限"
 						}, {
@@ -47988,36 +47990,44 @@ var iq = /*#__PURE__*/ jH({
 							}, null, 8, ["model-value"])]),
 							_: 1
 						})]),
-						K("p", AJ, [q(p, { name: "i-lucide-flag" }), J(P(pe.value), 1)])
+						K("p", jJ, [q(p, { name: "i-lucide-flag" }), J(P(pe.value), 1)])
 					], 64)) : Y("", !0)
 				]),
-				K("section", jJ, [c[18] ||= K("h3", null, [K("span", null, "4"), J("启动 AI")], -1), I(r).launch.available ? (U(), W(H, { key: 1 }, [w.value ? (U(), W(H, { key: 0 }, [q(x, { label: "项目目录（可选）" }, {
-					default: L(() => [q(g, {
-						"model-value": I(r).launch.workspace.cwd || "",
-						placeholder: "输入完整路径，或点右侧图标选择",
-						class: "w-full",
-						ui: { trailing: "pe-1" },
-						"onUpdate:modelValue": c[8] ||= (e) => I(i).write_launch("workspace", "cwd", e)
-					}, {
-						trailing: L(() => [q(m, {
-							icon: "i-lucide-folder-open",
-							color: "neutral",
-							variant: "ghost",
-							size: "xs",
-							"aria-label": "在本机选择项目目录",
-							title: de.value ? "目录选择窗口已打开，请在本机窗口中选择" : "在本机选择文件夹",
-							disabled: de.value,
-							onClick: fe
-						}, null, 8, ["title", "disabled"])]),
+				w.value ? (U(), W("section", MJ, [
+					c[18] ||= K("h3", null, [K("span", null, "4"), J("项目目录")], -1),
+					q(x, { label: "可选，供本地软件查看" }, {
+						default: L(() => [q(g, {
+							"model-value": I(r).launch.workspace.cwd || "",
+							placeholder: "输入完整路径，或点右侧图标选择",
+							class: "w-full",
+							ui: { trailing: "pe-1" },
+							"onUpdate:modelValue": c[8] ||= (e) => I(i).write_launch("workspace", "cwd", e)
+						}, {
+							trailing: L(() => [q(m, {
+								icon: "i-lucide-folder-open",
+								color: "neutral",
+								variant: "ghost",
+								size: "xs",
+								"aria-label": "在本机选择项目目录",
+								title: de.value ? "目录选择窗口已打开，请在本机窗口中选择" : "在本机选择文件夹",
+								disabled: de.value,
+								onClick: fe
+							}, null, 8, ["title", "disabled"])]),
+							_: 1
+						}, 8, ["model-value"])]),
 						_: 1
-					}, 8, ["model-value"])]),
-					_: 1
-				}), c[17] ||= K("p", { class: "fine-print create-hint" }, "供本地软件查看的项目，读写权限在专家卡片上设置。API 仅使用房间上下文。", -1)], 64)) : Y("", !0)], 64)) : (U(), W("p", MJ, "连接本机服务后，可在此设置项目目录和启动方式。"))])
+					}),
+					c[19] ||= K("p", { class: "fine-print create-hint" }, "读写权限在专家卡片上设置；API 仅使用房间上下文。", -1)
+				])) : Y("", !0)
 			], 32), K("footer", NJ, [w.value && I(r).launch.error ? (U(), W("p", PJ, P(I(r).launch.error), 1)) : Y("", !0), K("div", FJ, [
 				K("span", {
 					class: M(["create-summary", { "is-blocked": ne.value }]),
-					title: me.value
-				}, P(ne.value ? `还差：${ne.value}` : me.value), 11, IJ),
+					title: ne.value || me.value,
+					role: "status"
+				}, [ne.value ? (U(), G(p, {
+					key: 0,
+					name: "i-lucide-circle-alert"
+				})) : Y("", !0), J(P(ne.value ? `还差：${ne.value}` : me.value), 1)], 10, IJ),
 				q(m, {
 					label: "取消",
 					color: "neutral",
@@ -48041,7 +48051,7 @@ var iq = /*#__PURE__*/ jH({
 			])])]);
 		};
 	}
-}, [["__scopeId", "data-v-c130a6c2"]]), BJ = {
+}, [["__scopeId", "data-v-386f472e"]]), BJ = {
 	class: "account-settings",
 	"aria-labelledby": "account-heading"
 }, VJ = {

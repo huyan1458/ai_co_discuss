@@ -81,8 +81,8 @@ def member_value(member):
 
 def member_values(members):
     """Validate independent member credentials for a room."""
-    if not isinstance(members, list) or not 1 <= len(members) <= MAX_ROOM_AGENTS:
-        raise ValueError("房间须有至少 1 位 AI 成员，且不超过成员上限")
+    if not isinstance(members, list) or not len(members) <= MAX_ROOM_AGENTS:
+        raise ValueError("房间成员须为列表，且不超过成员上限")
     result = [member_value(member) for member in members]
     if len({member["name"] for member in result}) != len(result):
         raise ValueError("成员名称不能重复")

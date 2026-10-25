@@ -36,6 +36,13 @@ class FreeRoomTests(unittest.TestCase):
         self.room = room
         self.path = f"/api/rooms/{room['id']}"
 
+    def test_room_without_members_can_be_created(self):
+        """A room may start empty; members are invited later."""
+        status, room = self.request("/api/rooms", {"title": "空房间", "goal": "x", "mode": "free", "host": "用户", "members": [],
+                                                   "submission_id": "free-room-empty"}, uuid.uuid4().hex)
+        self.assertEqual(status, 201, room)
+        self.assertEqual(room["experts"], {})
+
     def tearDown(self):
         """Release the server and temporary files."""
         self.server.shutdown()

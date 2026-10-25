@@ -1940,7 +1940,7 @@ async function free_member_value(member) {
 
 /** Validate the initial members of a new free room. */
 async function free_member_values(members) {
-  if (!Array.isArray(members) || !members.length || members.length > MAX_ROOM_AGENTS) throw new HttpError(400, "自由房间须有至少 1 位 AI 成员");
+  if (!Array.isArray(members) || members.length > MAX_ROOM_AGENTS) throw new HttpError(400, "自由房间成员须为列表，且不超过成员上限");
   const result = await Promise.all(members.map(free_member_value));
   if (new Set(result.map(member => member.name)).size !== result.length) throw new HttpError(400, "成员名称不能重复");
   if (new Set(result.map(member => member.token_hash)).size !== result.length) throw new HttpError(400, "每位成员须使用独立凭证");
