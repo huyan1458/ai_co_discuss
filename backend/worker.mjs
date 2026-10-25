@@ -2336,7 +2336,7 @@ async function free_adopt(database, room_id, token, message_id, payload) {
   const statements = [];
   // The host's execution may carry other messages too; stopping it voids that whole execution.
   if (payload.mode === "interrupt" && route.status === "delivering") {
-    statements.push(...free_finish_statements(database, "id=?", [route.execution_id], "cancelled", "用户采纳智能调度推荐，改由其他成员回答", "cancelled"));
+    statements.push(...free_finish_statements(database, "id=?", [route.execution_id], "cancelled", "智能调度改派，改由其他成员回答", "cancelled"));
   } else if (payload.mode === "interrupt" && route.status === "pending") {
     statements.push(database.prepare("UPDATE member_requests SET status='cancelled' WHERE id=?").bind(route.id));
   }

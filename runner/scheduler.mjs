@@ -14,6 +14,8 @@ export const ROUTE_PROMPT_VERSION = 2;
 const HOST_CHOICE = '__host__';
 const NOTE_CHOICE = '__note__';
 const CONTEXT_MESSAGES = 10;
+/** A free-room route sees a longer stretch, enough to tell who has not spoken for a while. */
+export const ROUTE_CONTEXT_MESSAGES = 20;
 const MAX_MESSAGE_CHARS = 600;
 const MAX_BRIEF_CHARS = 1200;
 
@@ -108,8 +110,8 @@ function topic_lines(title, goal, user_request, { brief, focus, arrangement, pro
 }
 
 /** State shared by both uses: the room, a few earlier messages, and the message to place. */
-export function scheduler_state(title, context, message, goal = '', user_request = '', extra = {}) {
-  const earlier = context.filter(item => item.id < message.id).slice(-CONTEXT_MESSAGES).map(excerpt);
+export function scheduler_state(title, context, message, goal = '', user_request = '', extra = {}, limit = CONTEXT_MESSAGES) {
+  const earlier = context.filter(item => item.id < message.id).slice(-limit).map(excerpt);
   return [topic_lines(title, goal, user_request, extra), earlier.length ? `近期消息（旧→新）：\n${earlier.join('\n')}` : '近期没有其他消息。', `待处理的用户消息：\n${excerpt(message)}`].join('\n\n');
 }
 
@@ -129,7 +131,7 @@ export function certainty(answer) {
 export async function route_free_message(home, scheduler, { title, goal, context, message, host, members }, fetch_impl) {
   const choices = [...members.map(member => ({ value: member.name, description: member.description })),
     { value: HOST_CHOICE, description: `交回主持人 ${host}：需要拆分任务、多人协作，或消息与任何成员都无关` }];
-  const answers = await decide(home, scheduler, scheduler_state(title, context, message, goal), [{ type: 'choice', name: 'handler',
+  const answers = await decide(home, scheduler, scheduler_state(title, context, message, goal, '', {}, ROUTE_CONTEXT_MESSAGES), [{ type: 'choice', name: 'handler',
     instructions: '这条用户消息没有用 @ 点名成员，但正文可能直接提到某位成员的名字或在向其提问（如“某某在吗”），此时应选该成员。判断它能否直接交给一位成员独立处理；需要主持人先理解、拆分或协调时选交回主持人。', choices }], fetch_impl);
   const answer = answers.handler || {};
   const confidence = certainty(answer);

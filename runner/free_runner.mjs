@@ -5,7 +5,7 @@ import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { atomic_json, deliver_task, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
 import { api } from './discussion_runner.mjs';
-import { ROUTE_CONFIDENCE, ROUTE_PROMPT_VERSION, route_free_message } from './scheduler.mjs';
+import { ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, route_free_message } from './scheduler.mjs';
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const RENEW_MS = 30_000;
@@ -183,7 +183,7 @@ export class FreeRoomRunner {
   }
   /** Decide one message; a confident pick is recorded and applied, otherwise the host keeps it. */
   async recommend(request, room, host, members) {
-    const page = await api(this.config, `/messages?after=${Math.max(0, request.message_id - 11)}`);
+    const page = await api(this.config, `/messages?after=${Math.max(0, request.message_id - ROUTE_CONTEXT_MESSAGES - 1)}`);
     const message = page.messages.find(item => item.id === request.message_id);
     if (!message) return;
     const decision = await route_free_message(this.config.api_home, this.config.scheduler,

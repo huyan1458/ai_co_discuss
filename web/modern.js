@@ -43059,7 +43059,7 @@ var _H = {
 						(U(!0), W(H, null, B(rt.value.get(e.id) || [], (e) => (U(), G(jH, {
 							key: `decision-${e.id}`,
 							icon: "i-lucide-zap",
-							skipped: !e.applied,
+							skipped: je.value ? !0 : !e.applied,
 							title: e.title,
 							label: "智能调度决策",
 							"toggle-label": "展开或收起判断详情",
@@ -43548,7 +43548,7 @@ var _H = {
 			], 2);
 		};
 	}
-}, [["__scopeId", "data-v-d33a1499"]]), vG = {
+}, [["__scopeId", "data-v-54f67ce7"]]), vG = {
 	slots: {
 		root: "relative inline-flex items-center",
 		base: ["rounded-md", "transition-colors"],
@@ -51891,7 +51891,7 @@ var uq = /*#__PURE__*/ MH({
 					size: "sm",
 					color: "neutral",
 					variant: "outline",
-					class: "pb-action pb-action-block",
+					class: "pb-action pb-action-block pb-restart",
 					title: "由主持人推进成员轮流发言，到上限或结束后房间回到自由协作",
 					disabled: !E.value,
 					onClick: i[2] ||= (e) => ee.value = !0
@@ -51909,7 +51909,7 @@ var uq = /*#__PURE__*/ MH({
 			]);
 		};
 	}
-}, [["__scopeId", "data-v-77cfac40"]]), jQ = {
+}, [["__scopeId", "data-v-4d27f349"]]), jQ = {
 	id: "channel-sidebar",
 	class: "channel-sidebar",
 	"aria-label": "房间导航"

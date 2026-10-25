@@ -691,7 +691,7 @@ def adopt_recommendation(connection, room_id, token, message_id, payload):
     mode = payload["mode"]
     if mode == "interrupt" and route["status"] == "delivering":
         # The host's execution may carry other messages too; stopping it voids that whole execution.
-        finish_execution(connection, route["execution_id"], "cancelled", "用户采纳智能调度推荐，改由其他成员回答", "cancelled")
+        finish_execution(connection, route["execution_id"], "cancelled", "智能调度改派，改由其他成员回答", "cancelled")
     elif mode == "interrupt" and route["status"] == "pending":
         connection.execute("UPDATE member_requests SET status='cancelled' WHERE id=?", (route["id"],))
     connection.execute("UPDATE member_recommendations SET status='waiting',mode=? WHERE message_id=?", (mode, message_id))
