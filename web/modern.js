@@ -47725,18 +47725,24 @@ var iq = /*#__PURE__*/ jH({
 	class: "channel-create-location"
 }, SJ = { class: "create-section" }, CJ = { class: "create-section" }, wJ = {
 	key: 0,
+	class: "fine-print create-hint"
+}, TJ = {
+	key: 1,
 	class: "create-experts",
 	role: "group",
 	"aria-label": "参与的 AI"
-}, TJ = {
-	key: 1,
+}, EJ = {
+	key: 2,
 	class: "create-experts-empty"
-}, EJ = [
+}, DJ = [
 	"disabled",
 	"title",
 	"aria-label",
 	"onClick"
-], DJ = { class: "fine-print create-hint create-host-hint" }, OJ = ["open"], kJ = { class: "create-section" }, AJ = { class: "form-two-columns" }, jJ = {
+], OJ = {
+	key: 3,
+	class: "fine-print create-hint create-host-hint"
+}, kJ = { class: "create-section" }, AJ = { class: "form-two-columns" }, jJ = {
 	class: "create-limit-rule",
 	"aria-live": "polite"
 }, MJ = { class: "create-footer" }, NJ = {
@@ -47762,7 +47768,8 @@ var iq = /*#__PURE__*/ jH({
 			let e = r.value.launch.scheduler || {};
 			return D.value && e.enabled && !(e.provider && e.model && e.api_key_ref);
 		}), te = Z(() => S.value && !r.value.launch.available), ne = 0, re = Z(() => {
-			if (te.value || d.value && !r.value.launch.available) return "先连接本机服务";
+			if (te.value) return "先连接本机服务，或把成员改为手动启动";
+			if (d.value && !r.value.launch.available) return "先连接本机服务";
 			if (d.value && f.value[v.value] !== "cli") return "开启讨论需要一位由本机唤醒的主持人";
 			let e = x.value.filter((e) => !w(e));
 			return e.length ? `补齐 ${e.join("、")} 的接入配置` : ee.value ? "补齐智能调度配置，或取消勾选" : "";
@@ -47869,16 +47876,16 @@ var iq = /*#__PURE__*/ jH({
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
-					I(r).launch.available ? (U(), G(x, {
-						key: 0,
+					q(x, {
 						label: "项目目录（推荐）",
-						description: "本机唤醒的成员在此目录读写文件；不填则各用软件默认目录，成员开工后再改很麻烦。"
+						description: I(r).launch.available ? "本机唤醒的成员在此目录读写文件；不填则各用软件默认目录，开工后再改很麻烦。" : "连接本机服务后可指定：本机唤醒的成员将在此目录读写文件。"
 					}, {
 						default: L(() => [q(g, {
 							"model-value": I(r).launch.workspace.cwd || "",
 							placeholder: "输入完整路径，或点右侧图标选择",
 							class: "w-full",
 							ui: { trailing: "pe-1" },
+							disabled: !I(r).launch.available,
 							"onUpdate:modelValue": c[2] ||= (e) => I(i).write_launch("workspace", "cwd", e)
 						}, {
 							trailing: L(() => [q(m, {
@@ -47888,18 +47895,18 @@ var iq = /*#__PURE__*/ jH({
 								size: "xs",
 								"aria-label": "在本机选择项目目录",
 								title: fe.value ? "目录选择窗口已打开，请在本机窗口中选择" : "在本机选择文件夹",
-								disabled: fe.value,
+								disabled: fe.value || !I(r).launch.available,
 								onClick: j
 							}, null, 8, ["title", "disabled"])]),
 							_: 1
-						}, 8, ["model-value"])]),
+						}, 8, ["model-value", "disabled"])]),
 						_: 1
-					})) : Y("", !0)
+					}, 8, ["description"])
 				]),
 				K("section", CJ, [
-					c[14] ||= K("h3", null, [K("span", null, "2"), J("谁来参与")], -1),
-					c[15] ||= K("p", { class: "fine-print create-hint" }, "每位成员可选本机唤醒，或手动（你来启动或代发，网页 AI 选手动）。", -1),
-					h.value.length ? (U(), W("div", wJ, [(U(!0), W(H, null, B(h.value, (e) => (U(), G(tJ, {
+					c[13] ||= K("h3", null, [K("span", null, "2"), J("谁来参与")], -1),
+					h.value.length ? (U(), W("p", wJ, "每位成员可选本机唤醒，或手动（你来启动或代发，网页 AI 选手动）。")) : Y("", !0),
+					h.value.length ? (U(), W("div", TJ, [(U(!0), W(H, null, B(h.value, (e) => (U(), G(tJ, {
 						key: e,
 						name: e,
 						mode: f.value[e],
@@ -47921,7 +47928,7 @@ var iq = /*#__PURE__*/ jH({
 						"onHost",
 						"onRemove",
 						"onMode"
-					]))), 128))])) : (U(), W("p", TJ, "可以先不添加成员，建房后再邀请；同一平台可添加多位，各自独立会话。")),
+					]))), 128))])) : (U(), W("p", EJ, "可以先不添加成员，建房后再邀请。同一平台可添加多位，各自独立会话。")),
 					K("div", {
 						ref_key: "library",
 						ref: _,
@@ -47950,22 +47957,19 @@ var iq = /*#__PURE__*/ jH({
 						]),
 						J(P(e), 1),
 						q(p, { name: "i-lucide-plus" })
-					], 8, EJ))), 128))], 512),
-					K("div", DJ, [q(p, { name: "i-lucide-crown" }), K("span", null, P(y.value.length ? "点卡片上的皇冠指定主持人：没 @ 任何人的消息由它分配；其他成员只在被你或主持人点名时发言。" : "添加一位本地 AI 后，没 @ 的消息才有人接。"), 1)]),
-					K("details", {
-						class: "create-advanced",
-						open: O.value
-					}, [c[13] ||= K("summary", null, "高级：智能调度（可选）", -1), q(_J, {
+					], 8, DJ))), 128))], 512),
+					h.value.length ? (U(), W("div", OJ, [q(p, { name: "i-lucide-crown" }), K("span", null, P(y.value.length ? "点卡片上的皇冠指定主持人：没 @ 任何人的消息由它分配；其他成员只在被你或主持人点名时发言。" : "需要一位本地 AI 做主持人，没 @ 的消息才有人接。"), 1)])) : Y("", !0),
+					q(_J, {
 						free: !0,
 						blocker: k.value
-					}, null, 8, ["blocker"])], 8, OJ)
+					}, null, 8, ["blocker"])
 				]),
 				K("section", kJ, [
-					c[17] ||= K("h3", null, [K("span", null, "3"), J("推进方式（可选）")], -1),
+					c[15] ||= K("h3", null, [K("span", null, "3"), J("推进方式（可选）")], -1),
 					q(w, {
 						"model-value": d.value,
 						label: "创建后开启讨论",
-						description: "由主持人安排成员轮流发言，到上限或结束后房间继续自由协作。不勾选也可以随时在房间里开启。",
+						description: "主持人安排成员轮流发言，到上限或结束后回到自由协作。也可以建房后再开启。",
 						"onUpdate:modelValue": c[3] ||= (e) => ae(e)
 					}, null, 8, ["model-value"]),
 					d.value ? (U(), W(H, { key: 0 }, [
@@ -47993,7 +47997,7 @@ var iq = /*#__PURE__*/ jH({
 							"onUpdate:rounds": c[5] ||= (e) => u("limit-max_rounds", String(e)),
 							"onUpdate:minutes": c[6] ||= (e) => u("limit-max_minutes", String(e))
 						}, null, 8, ["rounds", "minutes"]),
-						c[16] ||= K("p", { class: "fine-print create-hint" }, "一轮指每位专家各完成一次观点；开启后计时，暂停期间不计时。", -1),
+						c[14] ||= K("p", { class: "fine-print create-hint" }, "一轮指每位专家各完成一次观点；开启后计时，暂停期间不计时。", -1),
 						q(w, {
 							"model-value": !!I(r).named_followup,
 							label: "点名追问",
@@ -48027,7 +48031,7 @@ var iq = /*#__PURE__*/ jH({
 				}, [re.value ? (U(), G(p, {
 					key: 0,
 					name: "i-lucide-circle-alert"
-				})) : Y("", !0), J(P(re.value ? `还差：${re.value}` : he.value), 1)], 10, FJ),
+				})) : Y("", !0), J(P(re.value ? `还差：${re.value}` : h.value.length || d.value ? he.value : ""), 1)], 10, FJ),
 				q(m, {
 					label: "取消",
 					color: "neutral",
@@ -48051,7 +48055,7 @@ var iq = /*#__PURE__*/ jH({
 			])])]);
 		};
 	}
-}, [["__scopeId", "data-v-86ff46ad"]]), zJ = {
+}, [["__scopeId", "data-v-f8b68ddf"]]), zJ = {
 	class: "account-settings",
 	"aria-labelledby": "account-heading"
 }, BJ = {

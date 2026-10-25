@@ -60,7 +60,8 @@ const needs_connection = computed(() => automatic.value && !view.value.launch.av
 let connection_timer = 0;
 /** Why the create button is disabled, in the order the user can fix it. */
 const blocker = computed(() => {
-  if (needs_connection.value || (discussing.value && !view.value.launch.available)) return "先连接本机服务";
+  if (needs_connection.value) return "先连接本机服务，或把成员改为手动启动";
+  if (discussing.value && !view.value.launch.available) return "先连接本机服务";
   if (discussing.value && selected.value[host.value] !== "cli") return "开启讨论需要一位由本机唤醒的主持人";
   const unready = woken_names.value.filter((name) => !launch_ready(name));
   return unready.length ? `补齐 ${unready.join("、")} 的接入配置` : scheduler_unready.value ? "补齐智能调度配置，或取消勾选" : "";
@@ -169,41 +170,38 @@ const summary = computed(() => {
       <section class="create-section">
         <h3><span>1</span>这次做什么</h3>
         <UFormField label="话题名称" required><UInput :model-value="value('title')" :maxlength="80" required autofocus size="lg" placeholder="这次要一起做什么？" class="w-full" @update:model-value="write('title', $event)" /></UFormField>
-        <UFormField v-if="view.launch.available" label="项目目录（推荐）" description="本机唤醒的成员在此目录读写文件；不填则各用软件默认目录，成员开工后再改很麻烦。">
-          <UInput :model-value="view.launch.workspace.cwd || ''" placeholder="输入完整路径，或点右侧图标选择" class="w-full" :ui="{ trailing: 'pe-1' }" @update:model-value="bridge.write_launch('workspace', 'cwd', $event)">
-            <template #trailing><UButton icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" aria-label="在本机选择项目目录" :title="picking ? '目录选择窗口已打开，请在本机窗口中选择' : '在本机选择文件夹'" :disabled="picking" @click="pick_directory" /></template>
+        <UFormField label="项目目录（推荐）" :description="view.launch.available ? '本机唤醒的成员在此目录读写文件；不填则各用软件默认目录，开工后再改很麻烦。' : '连接本机服务后可指定：本机唤醒的成员将在此目录读写文件。'">
+          <UInput :model-value="view.launch.workspace.cwd || ''" placeholder="输入完整路径，或点右侧图标选择" class="w-full" :ui="{ trailing: 'pe-1' }" :disabled="!view.launch.available" @update:model-value="bridge.write_launch('workspace', 'cwd', $event)">
+            <template #trailing><UButton icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" aria-label="在本机选择项目目录" :title="picking ? '目录选择窗口已打开，请在本机窗口中选择' : '在本机选择文件夹'" :disabled="picking || !view.launch.available" @click="pick_directory" /></template>
           </UInput>
         </UFormField>
       </section>
 
       <section class="create-section">
         <h3><span>2</span>谁来参与</h3>
-        <p class="fine-print create-hint">每位成员可选本机唤醒，或手动（你来启动或代发，网页 AI 选手动）。</p>
+        <p v-if="selected_names.length" class="fine-print create-hint">每位成员可选本机唤醒，或手动（你来启动或代发，网页 AI 选手动）。</p>
         <div v-if="selected_names.length" class="create-experts" role="group" aria-label="参与的 AI">
           <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :choices="access_choices(name)"
             :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)" hosting
             @host="write('host', name)" @remove="remove_expert(name)" @mode="set_expert_mode(name, $event)" />
         </div>
-        <p v-else class="create-experts-empty">可以先不添加成员，建房后再邀请；同一平台可添加多位，各自独立会话。</p>
+        <p v-else class="create-experts-empty">可以先不添加成员，建房后再邀请。同一平台可添加多位，各自独立会话。</p>
         <div ref="library" class="create-roster-add" role="group" aria-label="添加 AI">
           <span class="create-label">添加</span>
           <button v-for="name in experts" :key="name" type="button" :disabled="!bridge.launch_clients[name]" :title="library_description(name)" :aria-label="`添加 ${name} 实例`" @click="add_expert(name)">
             <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="3xs" class="channel-avatar" :class="bridge.identities[name]?.style" />{{ name }}<UIcon name="i-lucide-plus" />
           </button>
         </div>
-        <div class="fine-print create-hint create-host-hint">
+        <div v-if="selected_names.length" class="fine-print create-hint create-host-hint">
           <UIcon name="i-lucide-crown" />
-          <span>{{ host_options.length ? '点卡片上的皇冠指定主持人：没 @ 任何人的消息由它分配；其他成员只在被你或主持人点名时发言。' : '添加一位本地 AI 后，没 @ 的消息才有人接。' }}</span>
+          <span>{{ host_options.length ? '点卡片上的皇冠指定主持人：没 @ 任何人的消息由它分配；其他成员只在被你或主持人点名时发言。' : '需要一位本地 AI 做主持人，没 @ 的消息才有人接。' }}</span>
         </div>
-        <details class="create-advanced" :open="scheduler_active">
-          <summary>高级：智能调度（可选）</summary>
-          <SchedulerSettings :free="true" :blocker="scheduling_blocker" />
-        </details>
+        <SchedulerSettings :free="true" :blocker="scheduling_blocker" />
       </section>
 
       <section class="create-section">
         <h3><span>3</span>推进方式（可选）</h3>
-        <UCheckbox :model-value="discussing" label="创建后开启讨论" description="由主持人安排成员轮流发言，到上限或结束后房间继续自由协作。不勾选也可以随时在房间里开启。" @update:model-value="toggle_discussion($event)" />
+        <UCheckbox :model-value="discussing" label="创建后开启讨论" description="主持人安排成员轮流发言，到上限或结束后回到自由协作。也可以建房后再开启。" @update:model-value="toggle_discussion($event)" />
         <template v-if="discussing">
           <UFormField label="讨论目标" description="写下问题、背景和顾虑，主持人据此推进。"><UTextarea :model-value="value('goal')" :maxlength="1000" :rows="4" autoresize :maxrows="10" placeholder="例如：我们在 A、B 两个方案之间犹豫，主要顾虑是成本和上线时间……" class="w-full" @update:model-value="write('goal', $event)" /></UFormField>
           <LimitPicker ref="limit_picker" :rounds="Number(value('limit-max_rounds'))" :minutes="Number(value('limit-max_minutes'))"
@@ -220,7 +218,7 @@ const summary = computed(() => {
     <footer class="create-footer">
       <p v-if="launching && view.launch.error" role="alert" class="create-error">{{ view.launch.error }}</p>
       <div class="create-footer-row">
-        <span class="create-summary" :class="{ 'is-blocked': blocker }" :title="blocker || summary" role="status"><UIcon v-if="blocker" name="i-lucide-circle-alert" />{{ blocker ? `还差：${blocker}` : summary }}</span>
+        <span class="create-summary" :class="{ 'is-blocked': blocker }" :title="blocker || summary" role="status"><UIcon v-if="blocker" name="i-lucide-circle-alert" />{{ blocker ? `还差：${blocker}` : selected_names.length || discussing ? summary : "" }}</span>
         <UButton label="取消" color="neutral" variant="ghost" @click="emit('cancel')" />
         <UButton type="submit" form="create-discussion-form" class="channel-primary-button" :icon="launching ? 'i-lucide-play' : 'i-lucide-plus'" :label="discussing ? '创建并开启讨论' : automatic ? '创建并连接' : '创建协作房间'" :disabled="!room_ready || Boolean(blocker) || scheduler_unready" :loading="pending === 'create'" />
       </div>
@@ -281,8 +279,7 @@ const summary = computed(() => {
 .create-connect-command code { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .create-summary.is-blocked { display: flex; align-items: center; gap: 6px; color: #e0b44a; font-weight: 600; }
 .create-summary.is-blocked > [class*="icon"] { flex-shrink: 0; width: 14px; height: 14px; }
-.create-advanced > summary { cursor: pointer; color: var(--ui-text-toned); font-size: 12px; }
-.create-advanced[open] > summary { margin-bottom: 10px; }
+
 .create-error { margin-bottom: 10px; color: #f0716b; font-size: 12px; }
 @media (max-width: 600px) {
   .create-discussion { height: calc(100dvh - 130px); }
