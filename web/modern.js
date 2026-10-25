@@ -47947,8 +47947,8 @@ var iq = /*#__PURE__*/ jH({
 						_: 1
 					}),
 					q(x, {
-						label: "项目目录（推荐）",
-						description: I(r).launch.available ? "本机唤醒的成员在此目录读写文件；不填则各用软件默认目录，开工后再改很麻烦。" : "连接本机服务后可指定：本机唤醒的成员将在此目录读写文件。"
+						label: "项目目录（可选）",
+						description: I(r).launch.available ? "本机唤醒的成员在此目录读写文件；不填则各用软件默认目录。" : "连接本机服务后可指定：本机唤醒的成员将在此目录读写文件。"
 					}, {
 						default: L(() => [q(g, {
 							"model-value": I(r).launch.workspace.cwd || "",
@@ -48112,7 +48112,7 @@ var iq = /*#__PURE__*/ jH({
 			])])]);
 		};
 	}
-}, [["__scopeId", "data-v-5d750c0d"]]), VJ = {
+}, [["__scopeId", "data-v-1310345e"]]), VJ = {
 	class: "account-settings",
 	"aria-labelledby": "account-heading"
 }, HJ = {

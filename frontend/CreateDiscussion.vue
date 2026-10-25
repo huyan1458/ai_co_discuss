@@ -164,7 +164,7 @@ const summary = computed(() => {
       <section class="create-section">
         <h3><span>1</span>这次做什么</h3>
         <UFormField label="话题名称" required><UInput :model-value="value('title')" :maxlength="80" required autofocus size="lg" placeholder="这次要一起做什么？" class="w-full" @update:model-value="write('title', $event)" /></UFormField>
-        <UFormField label="项目目录（推荐）" :description="view.launch.available ? '本机唤醒的成员在此目录读写文件；不填则各用软件默认目录，开工后再改很麻烦。' : '连接本机服务后可指定：本机唤醒的成员将在此目录读写文件。'">
+        <UFormField label="项目目录（可选）" :description="view.launch.available ? '本机唤醒的成员在此目录读写文件；不填则各用软件默认目录。' : '连接本机服务后可指定：本机唤醒的成员将在此目录读写文件。'">
           <UInput :model-value="view.launch.workspace.cwd || ''" placeholder="输入完整路径，或点右侧图标选择" class="w-full" :ui="{ trailing: 'pe-1' }" :disabled="!view.launch.available" @update:model-value="bridge.write_launch('workspace', 'cwd', $event)">
             <template #trailing><UButton icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" aria-label="在本机选择项目目录" :title="picking ? '目录选择窗口已打开，请在本机窗口中选择' : '在本机选择文件夹'" :disabled="picking || !view.launch.available" @click="pick_directory" /></template>
           </UInput>
