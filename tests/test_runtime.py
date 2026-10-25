@@ -659,9 +659,14 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(status, 200, room)
             retry = self.request(self.path + "/members", payload, self.owner)[1]
             self.assertEqual(retry["queued_turns"], room["queued_turns"])
+        self.assertEqual([turn["expert"] for turn in room["queued_turns"]], ["Gemini", "DeepSeek"], "an unregistered manual invitee is not queued")
+        self.assertEqual(self.request(self.path + "/register", {}, self.member_tokens["Qwen"])[0], 200)
+        room = self.request(self.path)[1]
         self.assertEqual(room["current_turn"]["id"], created["turn"]["id"])
         self.assertEqual(room["runtime"]["generation"], before["runtime"]["generation"])
-        self.assertEqual([turn["expert"] for turn in room["queued_turns"]], ["Gemini", "DeepSeek", "Qwen"])
+        self.assertEqual([turn["expert"] for turn in room["queued_turns"]], ["Gemini", "DeepSeek", "Qwen"], "registering queues it once")
+        self.assertEqual(self.request(self.path + "/register", {}, self.member_tokens["Qwen"])[0], 200)
+        self.assertEqual(len(self.request(self.path)[1]["queued_turns"]), 3)
         self.assertEqual(room["queued_turns"][0], before["queued_turns"][0])
         self.assertEqual(self.events()[-1]["participant"], "Claude", "joining does not wake anyone early")
         self.answer("Claude", created["turn"]["id"], current_token, "invite-tail-Claude")
@@ -763,6 +768,13 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(status, 200, room)
         self.assertEqual(next(m for m in room["members"] if m["name"] == "Qwen")["access"], "manual")
         host_token = self.enter(self.events()[0])
+        refused = self.request(self.path + "/turns", {"actor": "Codex", "expert": "Qwen", "question": "给出判断",
+                                                      "submission_id": "manual-expert-unregistered"}, host_token)
+        self.assertEqual(refused[0], 400, refused)
+        self.assertIn("Qwen", refused[1]["error"])
+        roster = self.request(self.path + "/turns/roster")[1]
+        self.assertEqual((roster["unregistered"], "Qwen" in roster["waiting"]), (["Qwen"], False))
+        self.assertEqual(self.request(self.path + "/register", {}, self.member_tokens["Qwen"])[0], 200)
         status, created = self.request(self.path + "/turns", {"actor": "Codex", "expert": "Qwen", "question": "给出判断",
                                                               "submission_id": "manual-expert-turn"}, host_token)
         self.assertEqual(status, 201, created)
@@ -806,6 +818,7 @@ class RuntimeTests(unittest.TestCase):
         self.start()
         self.assertEqual(self.request(self.path + "/members", {"name": "Qwen", "token": self.member_tokens["Qwen"],
             "access": "manual", "adapter": ""}, self.owner)[0], 200)
+        self.assertEqual(self.request(self.path + "/register", {}, self.member_tokens["Qwen"])[0], 200)
         host = self.enter(self.events()[0])
         turns = [{"expert": "Claude", "question": "先答"}, {"expert": "Gemini", "question": "再答"}]
         status, refused = self.request(self.path + "/turns", {"actor": "Codex", "submission_id": "plan-missing", "roster": self.roster_revision(), "turns": turns}, host)
@@ -825,6 +838,7 @@ class RuntimeTests(unittest.TestCase):
         self.start()
         self.assertEqual(self.request(self.path + "/members", {"name": "Qwen", "token": self.member_tokens["Qwen"],
             "access": "manual", "adapter": ""}, self.owner)[0], 200)
+        self.assertEqual(self.request(self.path + "/register", {}, self.member_tokens["Qwen"])[0], 200)
         host = self.enter(self.events()[0])
         status, created = self.request(self.path + "/turns", {"actor": "Codex", "submission_id": "skip-manual-plan",
             "roster": self.roster_revision(), "turns": [{"expert": "Qwen", "question": "手动发言"}, {"expert": "Gemini", "question": "下一位"}, {"expert": "Claude", "question": "再下一位"}]}, host)
@@ -856,6 +870,7 @@ class RuntimeTests(unittest.TestCase):
         member_path = f"{self.path}/members/{member_id}"
         adopt = {"action": "adopt", "adapter": "codex", "session_id": "5f0d2c1e-1111-2222-3333-444455556666"}
         self.assertEqual(self.request(member_path, adopt, self.owner)[0], 400)
+        self.assertEqual(self.request(self.path + "/register", {}, self.member_tokens["Qwen"])[0], 200)
         host_token = self.enter(self.events()[0])
         turn = self.request(self.path + "/turns", {"actor": "Codex", "expert": "Qwen", "question": "给出判断",
                                                    "submission_id": "adopt-turn"}, host_token)[1]["turn"]
@@ -869,8 +884,6 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.request(member_path, {**adopt, "adapter": "antigravity_cli"}, self.owner)[0], 400)
         self.assertEqual(self.request(member_path, {**adopt, "session_id": "other-session-0000"}, self.owner)[0], 400)
         self.assertNotEqual(self.request(member_path, adopt, self.member_tokens["Qwen"])[0], 200)
-        self.assertEqual(self.request(member_path, adopt, self.owner)[0], 400, "未注册的成员不能转为托管")
-        self.assertEqual(self.request(self.path + "/register", {}, self.member_tokens["Qwen"])[0], 200)
         status, adopted = self.request(member_path, adopt, self.owner)
         self.assertEqual(status, 200, adopted)
         member = next(m for m in adopted["members"] if m["name"] == "Qwen")

@@ -115,8 +115,10 @@ BEGIN
     SELECT RAISE(ABORT, 'turn_unavailable');
 END;
 
-CREATE TRIGGER IF NOT EXISTS reject_inactive_opinion BEFORE INSERT ON message_details
+DROP TRIGGER IF EXISTS reject_inactive_opinion;
+CREATE TRIGGER reject_inactive_opinion BEFORE INSERT ON message_details
 WHEN NEW.kind='opinion'
+    AND (SELECT author FROM messages WHERE id=NEW.message_id)<>'用户'
     AND NOT EXISTS (SELECT 1 FROM message_details WHERE message_id=NEW.message_id)
     AND EXISTS (SELECT 1 FROM messages JOIN topic_settings ON topic_settings.room_id=messages.room_id
                 WHERE messages.id=NEW.message_id AND topic_settings.phase IN ('paused','concluded'))

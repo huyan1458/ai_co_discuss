@@ -241,9 +241,10 @@ const pending_message = computed(() => {
     && ["dispatched", "started"].includes(item.status)
     && (item.role === "host" ? item.participant === value.host
       : item.turn_id === speaking_turn.value?.id && item.participant === speaking_turn.value?.expert));
-  const latest_round = value.rounds?.at(-1);
+  const groups = value.round_groups || value.rounds || [];
+  const latest_round = groups.at(-1);
   const round = latest_round?.completed === false || execution?.role === "host"
-    ? latest_round?.number : (value.completed_rounds || 0) + 1;
+    ? latest_round?.number : groups.filter((item) => item.completed).length + 1;
   if (!execution) {
     const turn = speaking_turn.value;
     const member = (value.members || []).find((item) => item.name === turn?.expert);
@@ -258,6 +259,13 @@ const pending_message = computed(() => {
   return { id: execution.id, author: execution.participant, is_host,
     round: round ? `第 ${round} 轮` : "", text,
     seconds: timing?.wake_seconds == null ? null : timing.wake_seconds + (timing.work_seconds || 0) };
+});
+/** Cancelled assignments stay in the transcript under the message they followed. */
+const cancelled_turns = computed(() => {
+  const rows = new Map();
+  if (free.value) return rows;
+  for (const turn of room.value.cancelled_turns || []) rows.set(turn.after_message_id, [...(rows.get(turn.after_message_id) || []), turn]);
+  return rows;
 });
 /** A user's message is waiting for the host while it is at or after the relay hold. */
 const waits_for_host = (message) => message.author === "用户" && room.value?.held_since > 0 && message.id >= room.value.held_since;
@@ -548,11 +556,11 @@ const message_groups = computed(() => {
 const navigation_groups = computed(() => {
   const groups = [];
   for (const message of view.value.messages) {
-    const round = room.value.rounds?.findLast((item) => item.start_id <= message.id);
+    const round = bridge.round_groups(room.value)?.findLast((item) => item.start_id <= message.id);
     const number = round?.number || 0;
     if (groups.at(-1)?.number !== number) {
       const label = number ? `第 ${number} 轮` : "未分组";
-      const progress = round ? `${round.speakers.length}/${Object.keys(room.value.experts).length} 人已发言` : "尚无参与专家的观点";
+      const progress = round ? `${round.opinions ?? round.speakers.length}/${Object.keys(room.value.experts).length} 人已发言` : "尚无参与专家的观点";
       groups.push({ number, label, description: `${label} · ${round?.completed ? '已完成' : progress}`, messages: [] });
     }
     groups.at(-1).messages.push(message);
@@ -951,10 +959,12 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
         </div><small class="channel-topic-bounds">{{ topic.bounds }}</small></div>
       </section></div>
       <!-- The opening plan has no answer to follow, so it stands right under the topic. -->
-      <ScheduleCard v-for="plan in host_arrangements.get(0) || []" :key="`arrangement-${plan.id}`" icon="i-lucide-list-ordered" plain :title="`${bridge.display_name(room.host)} 创建的发言安排`" label="主持人安排" toggle-label="展开或收起各专家的任务">
-        <template #text>主持人安排：{{ plan.label }}</template>
-        <p v-for="turn in plan.turns" :key="`${plan.id}-${turn.expert}-${turn.question}`"><span>{{ bridge.display_name(turn.expert) }}：{{ turn.question }}</span></p>
-      </ScheduleCard>
+      <div v-if="host_arrangements.get(0)?.length" class="channel-message-group">
+        <ScheduleCard v-for="plan in host_arrangements.get(0)" :key="`arrangement-${plan.id}`" icon="i-lucide-list-ordered" plain :title="`${bridge.display_name(room.host)} 创建的发言安排`" label="主持人安排" toggle-label="展开或收起各专家的任务">
+          <template #text>主持人安排：{{ plan.label }}</template>
+          <p v-for="turn in plan.turns" :key="`${plan.id}-${turn.expert}-${turn.question}`"><span>{{ bridge.display_name(turn.expert) }}：{{ turn.question }}</span></p>
+        </ScheduleCard>
+      </div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
         <template v-for="message in group.messages" :key="message.id">
@@ -1040,6 +1050,17 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           <template #text>主持人安排：{{ plan.label }}<small>耗时 {{ format_elapsed(arrangement_seconds(plan, message)) }}</small></template>
           <p v-for="turn in plan.turns" :key="`${plan.id}-${turn.expert}-${turn.question}`"><span>{{ bridge.display_name(turn.expert) }}：{{ turn.question }}</span></p>
         </ScheduleCard>
+        <!-- A cancelled assignment keeps the card that waited for it, marked as missed. -->
+        <UChatMessage v-for="turn in cancelled_turns.get(message.id) || []" :key="`cancelled-${turn.id}`" :id="`turn-${turn.id}`" :data-author="bridge.identities[turn.expert]?.style" role="assistant" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
+          <template #body>
+            <div class="channel-message-byline">
+              <UAvatar :src="bridge.identities[turn.expert]?.icon" :text="bridge.identities[turn.expert]?.initials || '?'" :alt="bridge.display_name(turn.expert)" size="md" class="channel-avatar" :class="bridge.identities[turn.expert]?.style" />
+              <div class="channel-message-meta"><div class="channel-message-author"><strong>{{ bridge.display_name(turn.expert) }}</strong></div></div>
+              <span class="channel-message-provenance channel-message-elapsed">已错过 · 安排 #{{ turn.id }}</span>
+            </div>
+            <div class="channel-message-text" role="status">本次发言已被跳过或取消，未回答。</div>
+          </template>
+        </UChatMessage>
         </template>
         </template>
       </div>

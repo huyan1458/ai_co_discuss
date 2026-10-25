@@ -146,7 +146,7 @@ const meters = computed(() => {
   // Show the round being discussed; once the limit is reached, show the limit.
   const info = rounds_info.value;
   const budgeted = Boolean(room.value.round_budget);
-  const last_round = room.value.rounds?.at(-1);
+  const last_round = bridge.round_groups(room.value)?.at(-1);
   const current = budgeted ? info.done + (value.reached ? 0 : 1) : last_round?.completed === false ? last_round.number : (value.completed_rounds || 0) + 1;
   const round = info.cap ? Math.min(current, info.cap) : current;
   return [
@@ -167,7 +167,8 @@ function member_status(name) {
   const live = LIVE_EXECUTION_TEXT[execution?.status] || "";
   const queue_index = (room.value.queued_turns || []).findIndex((item) => item.expert === name);
   if (turn.value?.expert === name) {
-    const round = room.value.rounds?.at(-1)?.completed === false ? room.value.rounds.at(-1).number : (room.value.completed_rounds || 0) + 1;
+    const groups = bridge.round_groups(room.value) || [];
+    const round = groups.at(-1)?.completed === false ? groups.at(-1).number : groups.filter((item) => item.completed).length + 1;
     text = `第 ${round} 轮 · ${live && execution.turn_id === turn.value.id ? live : inactive.value ? "原安排保留" : record(name)?.access === "manual" ? "轮到它了，请去它的 AI 会话触发" : "轮到发言"}`;
     tone = inactive.value ? "neutral" : "primary";
   } else if (is_host && !turn.value && !inactive.value) {

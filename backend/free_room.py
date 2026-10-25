@@ -275,10 +275,13 @@ def register_member(connection, room_id, token, now):
     member = require_member(connection, room_id, token)
     if member["access"] != "manual":
         raise ValueError("只有手动接入的成员需要注册")
-    stamp = registered_at(connection, member) or now
+    previous = registered_at(connection, member)
+    stamp = previous or now
     connection.execute("""INSERT INTO member_registrations (member_id,room_id,token_hash,registered_at) VALUES (?,?,?,?)
         ON CONFLICT(member_id) DO UPDATE SET token_hash=excluded.token_hash,registered_at=excluded.registered_at""",
                        (member["id"], room_id, member["token_hash"], stamp))
+    if not previous:
+        queue_invited_expert(connection, room_id, member["name"], now)
     reported = connection.execute("SELECT client FROM member_sessions WHERE member_id=?", (member["id"],)).fetchone()
     return {"member": member["name"], "registered_at": stamp, "session_client": reported[0] if reported else ""}
 
@@ -847,8 +850,14 @@ def place_invited_expert(connection, room_id, name):
 
 
 def queue_invited_expert(connection, room_id, name, now):
-    """Queue a new expert in an existing live plan at its round-completing slot, without changing the current speaker or hold."""
-    connection.execute("""INSERT INTO discussion_turns (room_id,expert,question,status,submission_id,created_at)
+    """Queue a new expert in an existing live plan at its round-completing slot, without changing the current speaker or hold.
+
+    A manual expert is queued only once it has registered (the invite alone does not), and only once per invitation.
+    """
+    member = connection.execute("SELECT * FROM room_members WHERE room_id=? AND name=? AND status='active'", (room_id, name)).fetchone()
+    if not member or (member["adapter"] == "manual" and not registered_at(connection, member)):
+        return
+    connection.execute("""INSERT OR IGNORE INTO discussion_turns (room_id,expert,question,status,submission_id,created_at)
         SELECT settings.room_id,member.name,
             CASE WHEN settings.phase='initial' THEN '欢迎加入：请先读取议题，独立给出你的开场观点。'
                  ELSE '欢迎加入：请先读取议题和已有回答，给出你的观点。' END,
@@ -929,7 +938,7 @@ def discussion_member_action(connection, room_id, member_id, token, payload):
     save_discussion_experts(connection, room_id, experts)
 
 
-ADOPTABLE_ADAPTERS = ("claude", "codex", "codex_cli")
+ADOPTABLE_ADAPTERS = ("claude", "codex", "codex_cli", "antigravity_cli")
 
 
 def adopt_manual_member(connection, room_id, member, payload):

@@ -569,15 +569,19 @@ test('Worker invitations append automatic and manual experts while preserving th
   assert.equal(plan.status, 201, JSON.stringify(plan.body));
   await f.request(`/${id}/messages`, { author: '用户', text: '补充材料', submission_id: 'invite-hold' });
   const before = (await f.request(`/${id}`)).body;
+  const qwen_token = crypto.randomUUID();
   for (const [name, access] of [['DeepSeek', 'runner'], ['Qwen', 'manual']]) {
-    const payload = { name, access, adapter: access === 'runner' ? 'api' : '', token: crypto.randomUUID() };
+    const payload = { name, access, adapter: access === 'runner' ? 'api' : '', token: name === 'Qwen' ? qwen_token : crypto.randomUUID() };
     const joined = await f.request(`/${id}/members`, payload);
     assert.equal(joined.status, 200, JSON.stringify(joined.body));
     assert.deepEqual((await f.request(`/${id}/members`, payload)).body.queued_turns, joined.body.queued_turns);
   }
+  assert.deepEqual((await f.request(`/${id}`)).body.queued_turns.map(turn => turn.expert), ['Gemini', 'DeepSeek'], 'an unregistered manual invitee is not queued');
+  assert.equal((await f.request(`/${id}/register`, {}, qwen_token)).status, 200);
+  assert.equal((await f.request(`/${id}/register`, {}, qwen_token)).status, 200);
   const after = (await f.request(`/${id}`)).body;
   assert.deepEqual(after.current_turn, before.current_turn);
-  assert.deepEqual(after.queued_turns.map(turn => turn.expert), ['Gemini', 'DeepSeek', 'Qwen']);
+  assert.deepEqual(after.queued_turns.map(turn => turn.expert), ['Gemini', 'DeepSeek', 'Qwen'], 'registering queues it once');
   assert.deepEqual(after.queued_turns[0], before.queued_turns[0]);
   assert.equal(after.held_since, before.held_since);
   assert.equal(after.runtime.generation, before.runtime.generation);
@@ -666,6 +670,12 @@ test('Worker manual expert answers a woken discussion with its own credential an
   const joined = await f.request(`/${id}/members`, manual);
   assert.equal(joined.status, 200, JSON.stringify(joined.body));
   assert.equal(joined.body.members.find(member => member.name === 'Qwen').access, 'manual');
+  const refused_turn = await f.request(`/${id}/turns`, { actor: '用户', expert: 'Qwen', question: '观点', submission_id: 'manual-turn-early' });
+  assert.equal(refused_turn.status, 400);
+  assert.match(refused_turn.body.error, /Qwen/);
+  const roster = (await f.request(`/${id}/turns/roster`)).body;
+  assert.deepEqual([roster.unregistered, roster.waiting.includes('Qwen')], [['Qwen'], false]);
+  assert.equal((await f.request(`/${id}/register`, {}, manual.token)).status, 200);
   const turn = (await f.request(`/${id}/turns`, { actor: '用户', expert: 'Qwen', question: '观点', submission_id: 'manual-turn' })).body.turn;
   const floor = (await f.request(`/${id}/floor`)).body;
   assert.equal((await f.request(`/${id}/floor`, { actor: 'Qwen', action: 'take', revision: floor.revision })).status, 200);

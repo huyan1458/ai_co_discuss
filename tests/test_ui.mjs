@@ -1330,46 +1330,48 @@ test("web restart delegates duration to the topic without adding a hidden time l
   assert.equal(posts[2].deadline, 0, 'the backend applies the configured topic deadline, including summary time');
 });
 
-test("skip cancels only the current assignment, and resumes a paused run using its observed revision", async () => {
+const skip_room = (id, status = "paused") => ({ id, current_turn: { id: 7, expert: "Gemini", status: "pending" },
+  floor: { holder: null, next_speaker: "Gemini", revision: 3 }, runtime: { mode: "automatic", status, revision: 4 } });
+
+test("skip posts a skipped answer for the expert so the plan relays on, and resumes a paused run using its observed revision", async () => {
   for (const status of ["running", "paused"]) {
     const { context } = theme_fixture(), requests = [], notices = [];
     let refreshed = 0;
-    context.test_state.room = { id: "skip-room", current_turn: { id: 7, status: "pending" },
-      runtime: { mode: "automatic", status, revision: 4 } };
+    context.test_state.room = skip_room("skip-room", status);
     Object.assign(context, { request_json: async (path, payload) => requests.push({ path, ...payload }),
       refresh_room: async () => { refreshed++; }, show_toast: text => notices.push(text) });
     await context.skip_turn();
-    assert.deepEqual(requests[0], { path: "/api/rooms/skip-room/turns/7", actor: "用户", status: "cancelled" });
-    assert.equal(requests.length, status === "paused" ? 2 : 1);
-    if (status === "paused") assert.deepEqual(requests[1], { path: "/api/rooms/skip-room/runtime",
+    assert.deepEqual(requests[0], { path: "/api/rooms/skip-room/floor", actor: "用户", speaker: "Gemini", action: "take", revision: 3 });
+    assert.equal(requests[1].path, "/api/rooms/skip-room/messages");
+    assert.deepEqual([requests[1].author, requests[1].submitted_by, requests[1].kind, requests[1].turn_id], ["Gemini", "用户", "opinion", 7]);
+    assert.equal(requests.length, status === "paused" ? 3 : 2);
+    if (status === "paused") assert.deepEqual(requests[2], { path: "/api/rooms/skip-room/runtime",
       action: "start", mode: "automatic", revision: 4, deadline: 0 });
     assert.equal(refreshed, 1);
     assert.match(notices[0], /已跳过本次发言/);
   }
 });
 
-test("skip stops after cancellation errors and explains a successful skip when resuming fails", async () => {
-  for (const fail_at of [1, 2]) {
+test("skip stops after write errors and explains a successful skip when resuming fails", async () => {
+  for (const fail_at of [1, 2, 3]) {
     const { context } = theme_fixture();
     let calls = 0, refreshed = 0;
-    context.test_state.room = { id: "skip-room", current_turn: { id: 7, status: "pending" },
-      runtime: { mode: "automatic", status: "paused", revision: 4 } };
+    context.test_state.room = skip_room("skip-room");
     Object.assign(context, { request_json: async () => { if (++calls === fail_at) throw new Error("状态已变化"); },
       refresh_room: async () => { refreshed++; }, show_toast() {} });
-    await assert.rejects(context.skip_turn(), fail_at === 1 ? /^Error: 状态已变化$/ : /本次发言已跳过，但未能继续讨论.*重启/);
+    await assert.rejects(context.skip_turn(), fail_at < 3 ? /^Error: 状态已变化$/ : /本次发言已跳过，但未能继续讨论.*重启/);
     assert.equal(calls, fail_at);
     assert.equal(refreshed, 1);
   }
 });
 
-test("skip keeps the original room and revision when navigation changes during cancellation", async () => {
+test("skip keeps the original room and revision when navigation changes during the writes", async () => {
   const { context } = theme_fixture(), paths = [];
-  context.test_state.room = { id: "one", current_turn: { id: 7, status: "pending" },
-    runtime: { mode: "automatic", status: "paused", revision: 4 } };
+  context.test_state.room = skip_room("one");
   Object.assign(context, { request_json: async path => { paths.push(path); context.test_state.room = { id: "two" }; },
     refresh_room: async () => assert.fail("must not refresh the next room"), show_toast: () => assert.fail("must not toast on the next room") });
   await context.skip_turn();
-  assert.deepEqual(paths, ["/api/rooms/one/turns/7", "/api/rooms/one/runtime"]);
+  assert.deepEqual(paths, ["/api/rooms/one/floor", "/api/rooms/one/messages", "/api/rooms/one/runtime"]);
 });
 
 test("failure-card retry rechecks the retained task and never restarts an obsolete attempt", async () => {
@@ -2266,7 +2268,7 @@ test("manual experts show an assignment wait without execution timing, then swit
     assert.equal(card.value.seconds, null, "manual waits do not invent execution time");
     assert.match(card.value.text, /等待发言.*启动指令/);
   }
-  room.rounds = [{ number: 2, completed: true }];
+  room.rounds = [{ number: 1, completed: true }, { number: 2, completed: true }];
   room.completed_rounds = 2;
   assert.equal(card.value.round, "第 3 轮");
   room.members[0].access = "runner";

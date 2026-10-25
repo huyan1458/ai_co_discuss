@@ -135,7 +135,7 @@ async function execute_tool(context, call, definitions) {
   writeFileSync(path, JSON.stringify(action), { flag: 'wx', mode: 0o600 });
   try { return { result: await room_request(context, action.path, action.body), terminal: action.terminal }; }
   catch (error) {
-    if (/房间 HTTP 400:/.test(error.message)) return { result: { error: error.message } };
+    if (/房间 HTTP (400|409):/.test(error.message)) return { result: { error: error.message } };
     throw error; // Never retry an uncertain write with a new submission ID.
   }
 }

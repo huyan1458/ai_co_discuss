@@ -365,10 +365,11 @@ function cli_invocation(config, binding, task, user_home) {
       ...(config.effort ? ['-c', `model_reasoning_effort="${config.effort}"`] : []), '-');
     return { args, input: task.prompt, permissions };
   }
-  const project = prepare_agy_project(config, binding, task, user_home);
+  // An agy expert the owner chose to host keeps the project and permissions of its own conversation; only new conversations get the discussion project.
+  const project = config.session_id ? null : prepare_agy_project(config, binding, task, user_home);
   const args = ['--output-format', 'stream-json', '--print-timeout', '0', '--add-dir', task.directory,
     '--add-dir', task.draft_directory, '--add-dir', task.skills_directory];
-  args.push('--mode', 'accept-edits', '--project', project.project_id);
+  args.push('--mode', 'accept-edits', ...(project ? ['--project', project.project_id] : []));
   if (binding.session_id) args.push('--conversation', binding.session_id);
   if (config.model) args.push('--model', config.model);
   if (config.effort) args.push('--effort', config.effort);

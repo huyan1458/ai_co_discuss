@@ -620,6 +620,11 @@ test(`${adapter} resumes only the bound conversation and honors its configured c
     // agy runs only in sessions this tool created; an external conversation cannot take the discussion project.
     await assert.rejects(cli_delivery_fixture(t, adapter, { binding: { session_id: 'actual-cli-session' }, config: { cwd: project } }),
       error => error.delivery_status === 'not_sent' && /本工具新建/.test(error.message));
+    // A hosted manual expert (configured session) resumes its own conversation under its own project and permissions.
+    const hosted = await cli_delivery_fixture(t, adapter, { binding: { session_id: 'actual-cli-session' }, config: { cwd: project, session_id: 'actual-cli-session' } });
+    const args = hosted.calls[0].args;
+    assert.equal(args[args.indexOf('--conversation') + 1], 'actual-cli-session');
+    assert.equal(args.includes('--project'), false); assert.deepEqual(hosted.errors, []);
     return;
   }
   const f = await cli_delivery_fixture(t, adapter, { binding: { session_id: 'actual-cli-session' },

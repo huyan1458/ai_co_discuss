@@ -371,6 +371,13 @@ class DiscussionTests(unittest.TestCase):
                 pass
         self.assertEqual(self.request("/api/health"), (200, {"ok": True}))
 
+    def test_user_can_message_while_paused(self):
+        """A paused topic still accepts the user's own question."""
+        self.configure_host()
+        base = f"/api/rooms/{self.room['id']}"
+        self.assertEqual(self.request(base + "/topic", {"actor": "用户", "phase": "paused"})[0], 200)
+        self.assertEqual(self.post("@主持人 讨论结束了吗", "paused-user-question")[0], 201)
+
     def test_archive_preserves_pending_turn_and_requires_explicit_resume(self):
         """Archive pauses writes, retains evidence, and restoration never resumes work."""
         self.configure_host()
@@ -1188,6 +1195,10 @@ class DiscussionTests(unittest.TestCase):
             self.assertEqual(self.request(base)[1]["rounds"], expected)
         room = self.request(base)[1]
         self.assertEqual(room["completed_rounds"], 2)
+        # round_groups follows the budget rule: every two opinions form a round, whoever spoke.
+        groups = room["round_groups"]
+        self.assertEqual((len(groups), groups[0]["opinions"], groups[0]["start_id"]), (11, 2, messages[0]["id"]))
+        self.assertEqual([item["completed"] for item in groups], [True] * 10 + [False])
         self.assertEqual(self.request(base + "/messages?page=2")[1]["messages"][0]["id"], messages[20]["id"])
         pending = room["current_turn"]
         self.request(base + f"/turns/{pending['id']}", {"actor": "用户", "status": "cancelled"})
@@ -1348,10 +1359,10 @@ class LegacyStorageTests(unittest.TestCase):
                 room = create_room(connection, {"title": "并发阶段校验", "phase": "paused", "experts": {"Codex": "cli"},
                     "members": [{"name": "Codex", "access": "manual", "token": uuid.uuid4().hex}]}, uuid.uuid4().hex)
                 connection.commit()
-                with self.assertRaisesRegex(sqlite3.IntegrityError, "topic_inactive"), connection:
-                    message = connection.execute("INSERT INTO messages(room_id,author,text,source,submission_id,created_at) VALUES (?,'用户','迟到观点','user','late-opinion-001','test')", (room["id"],))
+                with connection:
+                    message = connection.execute("INSERT INTO messages(room_id,author,text,source,submission_id,created_at) VALUES (?,'用户','暂停期间提问','user','paused-question-001','test')", (room["id"],))
                     connection.execute("INSERT INTO message_details(message_id,kind,submitted_by) VALUES (?,'opinion','用户')", (message.lastrowid,))
-                self.assertEqual(connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 0)
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 1)
                 turn_sql = "INSERT INTO discussion_turns(room_id,expert,question,submission_id,created_at) VALUES (?,'Codex','问题','late-turn-001','test')"
                 with self.assertRaisesRegex(sqlite3.IntegrityError, "topic_inactive"), connection:
                     connection.execute(turn_sql, (room["id"],))

@@ -357,6 +357,7 @@ async function require_room(database, room_id) {
   result.completed_rounds = result.rounds.filter((item) => item.completed).length;
   result.round_budget = await database.prepare("SELECT base,cap,extra FROM round_budgets WHERE room_id=?").bind(room_id).first() ?? null;
   if (result.round_budget) result.opinion_count = await opinion_count(database, room_id, result.experts);
+  result.round_groups = result.round_budget ? await budget_round_groups(database, room_id, result.experts, result.round_budget.base) : result.rounds;
   result.floor = await database.prepare("SELECT holder,next_speaker,revision FROM room_floor WHERE room_id=?").bind(room_id).first();
   result.runtime = await runtime_view(database, room_id);
   result.limits = limits_view(await database.prepare(LIMITS_SQL).bind(room_id).first(), result);
@@ -374,6 +375,7 @@ async function require_room(database, room_id) {
     .bind(room_id).all()).results.map((row) => [row.decision_id, JSON.parse(row.detail)]));
   for (const decision of result.scheduler_decisions) decision.detail = details.get(decision.id) ?? null;
   result.host_arrangements = await host_arrangements(database, room_id, result.scheduler_decisions);
+  result.cancelled_turns = await cancelled_turns(database, room_id);
   result.parent_room = await database.prepare("SELECT rooms.id,rooms.title FROM room_links JOIN rooms ON rooms.id=room_links.parent_id WHERE room_links.room_id=?")
     .bind(room_id).first();
   if (result.mode === "free") {
@@ -422,6 +424,23 @@ async function host_arrangements(database, room_id, decisions) {
   return plans.filter((plan) => !applied.has(plan.after_message_id)).slice(-RECENT_DECISIONS);
 }
 
+/**
+ * Assignments that ended without an answer, anchored where their wake card first appeared:
+ * the later of the previous turn's answer and the latest message at creation time.
+ */
+async function cancelled_turns(database, room_id) {
+  const rows = (await database.prepare(`SELECT id,expert,question,status,answer_id,
+    (SELECT COALESCE(MAX(messages.id),0) FROM messages WHERE messages.room_id=discussion_turns.room_id AND messages.created_at<=discussion_turns.created_at) AS created_after
+    FROM discussion_turns WHERE room_id=? ORDER BY id`).bind(room_id).all()).results;
+  const cancelled = [];
+  let latest_answer = 0;
+  for (const row of rows) {
+    if (row.status === "cancelled") cancelled.push({ id: row.id, expert: row.expert, question: row.question, after_message_id: Math.max(latest_answer, row.created_after) });
+    latest_answer = Math.max(latest_answer, row.answer_id || 0);
+  }
+  return cancelled.slice(-RECENT_DECISIONS);
+}
+
 /** Group complete history metadata until every configured expert has spoken. */
 async function discussion_rounds(database, room_id, experts) {
   const participants = Object.keys(experts);
@@ -444,6 +463,33 @@ async function discussion_rounds(database, room_id, experts) {
     if (current.completed) next_start = null;
   }
   return rounds;
+}
+
+/**
+ * Group history by the round budget's rule: every expert-count opinions form a round, and a new segment (base) starts a new one.
+ * `rounds` stays speaker-based because scheduling needs who still owes a turn; this view only labels history.
+ */
+async function budget_round_groups(database, room_id, experts, base) {
+  const participants = Object.keys(experts);
+  if (!participants.length) return [];
+  const rows = await database.prepare(`SELECT messages.id,messages.author,
+    COALESCE(details.kind,'opinion') AS kind FROM messages
+    LEFT JOIN message_details AS details ON details.message_id=messages.id
+    WHERE room_id=? ORDER BY messages.id`).bind(room_id).all();
+  const groups = [];
+  let next_start = null;
+  let seen = 0;
+  for (const message of rows.results) {
+    next_start ??= message.id;
+    if (message.kind !== "opinion" || !participants.includes(message.author)) continue;
+    if (!groups.length || groups.at(-1).completed) groups.push({ number: groups.length + 1, start_id: next_start, opinions: 0, completed: false });
+    const current = groups.at(-1);
+    seen += 1;
+    current.opinions += 1;
+    current.completed = current.opinions >= participants.length || seen === base;
+    if (current.completed) next_start = null;
+  }
+  return groups;
 }
 
 /** Return each author's latest receipt reference without loading its body. */
@@ -1013,7 +1059,7 @@ async function append_message(database, room_id, payload, token = "", free_actor
   const previous = await database.prepare(`${MESSAGE_QUERY} WHERE room_id=? AND submission_id=?`).bind(room_id, values.submission_id).first();
   if (previous) { await attach_message_files(database, [previous]); check_retry(previous, expected); return { message: previous, duplicate: true }; }
   if (expected.author !== "用户" && expected.kind === "opinion") database = guard_limits(database, room);
-  if (["paused", "concluded"].includes(room.phase) && expected.kind === "opinion") throw new HttpError(400, "话题已暂停或收束；恢复阶段后才能提交新观点，运行回执请用 receipt");
+  if (["paused", "concluded"].includes(room.phase) && expected.kind === "opinion" && (expected.author !== "用户" || room.archived)) throw new HttpError(400, "话题已暂停或收束；恢复阶段后才能提交新观点，运行回执请用 receipt");
   await check_message_references(database, room_id, expected);
   await check_message_attachments(database, room_id, expected);
   if (expected.author !== "用户" && expected.kind === "opinion" && !expected.turn_id) throw new HttpError(400, "专家观点必须关联当前有效的 turn_id");
@@ -1043,7 +1089,7 @@ const SESSION_ID_PATTERN = /^[0-9A-Za-z_-]{8,128}$/;
 /** Keep the software session a manual member posted from, so the local service can take the member over. */
 async function record_reported_session(database, room_id, token, payload) {
   const { session_id, session_client } = payload;
-  if (!["claude", "codex"].includes(session_client) || typeof session_id !== "string" || !SESSION_ID_PATTERN.test(session_id) || !token) return;
+  if (!["claude", "codex", "antigravity"].includes(session_client) || typeof session_id !== "string" || !SESSION_ID_PATTERN.test(session_id) || !token) return;
   const member = await database.prepare("SELECT id FROM room_members WHERE room_id=? AND token_hash=? AND status='active' AND access='manual' AND adapter='manual'")
     .bind(room_id, await runtime_hash(token)).first();
   if (member) {
@@ -1104,9 +1150,22 @@ async function plan_rows(database, room_id, plan) {
 async function roster_view(room) {
   const last = room.rounds.at(-1);
   const spoken = new Set(last && !last.completed ? last.speakers : []);
-  const experts = Object.entries(room.experts).map(([name, mode]) => ({ name, mode, host: name === room.host, spoken: spoken.has(name) }));
-  const state = JSON.stringify([Object.keys(room.experts).sort(), [...spoken].sort()]);
-  return { experts, waiting: experts.filter((item) => !item.spoken && !item.host).map((item) => item.name), revision: (await digest_hex(state)).slice(0, 12) };
+  const unregistered = unregistered_experts(room);
+  const experts = Object.entries(room.experts).map(([name, mode]) => ({ name, mode, host: name === room.host, spoken: spoken.has(name), registered: !unregistered.includes(name) }));
+  const state = JSON.stringify([Object.keys(room.experts).sort(), [...spoken].sort(), [...unregistered].sort()]);
+  return { experts, unregistered, waiting: experts.filter((item) => !item.spoken && !item.host && item.registered).map((item) => item.name), revision: (await digest_hex(state)).slice(0, 12) };
+}
+
+/** Manual experts that have not registered from their own session; they cannot be scheduled until they do. */
+function unregistered_experts(room) {
+  return room.members.filter((member) => member.adapter === "manual" && member.status === "active" && !member.registered_at && member.name in room.experts).map((member) => member.name);
+}
+
+/** Reject scheduling an expert that has not registered yet; it joins the round queue by itself once it registers. */
+function require_registered(room, names) {
+  const pending = unregistered_experts(room);
+  const missing = [...new Set(names)].filter((name) => pending.includes(name));
+  if (missing.length) throw new HttpError(400, `以下手动专家尚未注册，不能安排发言：${missing.join("、")}；它在自己的会话中注册后会自动加入本轮队列，也可先让其暂离`);
 }
 
 /** A multi-turn plan is only accepted against the latest roster and must schedule everyone still waiting in the round. */
@@ -1131,6 +1190,7 @@ async function create_turn(database, room_id, payload) {
   }
   database = guard_limits(database, room);
   if (plan.some((item) => !room.experts[item.expert] || text_length(item.question) > MAX_QUESTION_LENGTH)) throw new HttpError(400, "请选择参与专家，待回应问题最多 1000 字");
+  require_registered(room, plan.map((item) => item.expert));
   await require_round_coverage(room, plan, payload);
   if (["paused", "concluded"].includes(room.phase)) throw new HttpError(400, "话题已暂停或收束，请先调整阶段");
   const created_at = new Date().toISOString();
@@ -1157,6 +1217,7 @@ async function continue_turns(database, room_id, payload) {
   if (room.current_turn && ["pending", "notified"].includes(room.current_turn.status)) throw new HttpError(409, "当前已有进行中的发言安排");
   if (!room.queued_turns.length) throw new HttpError(409, "没有排队中的安排；请创建新的安排");
   database = guard_limits(database, room);
+  require_registered(room, [room.queued_turns[0].expert]);
   const turn_id = room.queued_turns[0].id;
   const [result] = await database.batch([database.prepare(`UPDATE discussion_turns SET status='pending' WHERE id=? AND status='queued'
     AND NOT EXISTS (SELECT 1 FROM discussion_turns WHERE room_id=? AND status IN ('pending','notified'))
@@ -1172,7 +1233,7 @@ async function update_turn(database, room_id, turn_id, payload) {
   const turn = await get_turn(database, room_id, turn_id);
   const { status } = payload;
   if (!["notified", "cancelled"].includes(status)) throw new HttpError(400, "安排状态仅可显式改为 notified 或 cancelled");
-  if (turn.status === status) return turn;
+  if (turn.status === status || (status === "cancelled" && turn.status === "skipped")) return turn;
   if (status === "notified" && ["paused", "concluded"].includes(room.phase)) throw new HttpError(400, "话题已暂停或收束，不能继续通知");
   if (!["pending", "notified"].includes(turn.status)) throw new HttpError(409, "该发言安排已结束");
   await database.prepare(`UPDATE discussion_turns SET status=?,notified_at=? WHERE id=? AND status IN ('pending','notified')
@@ -2384,7 +2445,7 @@ async function place_invited_expert(database, room_id, name) {
 
 /** Queue a newly invited expert in the live plan in the same transaction as its membership; place_invited_expert then orders it. */
 function queue_invited_expert(database, room_id, name) {
-  return database.prepare(`INSERT INTO discussion_turns (room_id,expert,question,status,submission_id,created_at)
+  return database.prepare(`INSERT OR IGNORE INTO discussion_turns (room_id,expert,question,status,submission_id,created_at)
     SELECT settings.room_id,member.name,
       CASE WHEN settings.phase='initial' THEN '欢迎加入：请先读取议题，独立给出你的开场观点。'
            ELSE '欢迎加入：请先读取议题和已有回答，给出你的观点。' END,
@@ -2418,7 +2479,7 @@ async function handle_discussion_members(database, request, parts) {
     try { await database.batch([
       free_member_insert(database, room_id, mark_manual(member, room.runtime?.mode === "automatic")),
       database.prepare("UPDATE topic_settings SET experts=json_set(experts,?,'cli') WHERE room_id=?").bind(`$."${member.name}"`, room_id),
-      queue_invited_expert(database, room_id, member.name)]); }
+      ...(room.runtime?.mode === "automatic" && member.access === "manual" ? [] : [queue_invited_expert(database, room_id, member.name)])]); }
     catch (error) { if (String(error).includes("UNIQUE constraint")) throw new HttpError(409, `${member.name} 已是本房间成员`); throw error; }
     await place_invited_expert(database, room_id, member.name);
   } else {
@@ -2458,7 +2519,7 @@ async function handle_discussion_members(database, request, parts) {
     } else if (payload.action === "adopt") {
       const reported = await database.prepare("SELECT session_id FROM member_sessions WHERE member_id=?").bind(member.id).first();
       if (!await registered_at(database, member)) throw new HttpError(400, "成员尚未注册，不能转为托管");
-      if (!reported || reported.session_id !== payload.session_id || !["claude", "codex", "codex_cli"].includes(payload.adapter)) throw new HttpError(400, "成员尚未上报与之相符的会话，不能转为托管");
+      if (!reported || reported.session_id !== payload.session_id || !["claude", "codex", "codex_cli", "antigravity_cli"].includes(payload.adapter)) throw new HttpError(400, "成员尚未上报与之相符的会话，不能转为托管");
       if (member.access !== "manual" || member.status !== "active" || room.runtime?.mode !== "automatic") throw new HttpError(400, "只有全自动讨论中在场的手动专家可以转为托管");
       await database.batch([
         database.prepare("UPDATE room_members SET access='runner',adapter=?,session_mode='borrowed' WHERE id=?").bind(payload.adapter, member.id),
@@ -2478,9 +2539,15 @@ async function registered_at(database, member) {
 async function register_member(database, room_id, token) {
   const member = await require_free_member(database, room_id, token);
   if (member.access !== "manual") throw new HttpError(400, "只有手动接入的成员需要注册");
-  const stamp = await registered_at(database, member) || new Date().toISOString();
+  const previous = await registered_at(database, member);
+  const stamp = previous || new Date().toISOString();
   await database.prepare(`INSERT INTO member_registrations (member_id,room_id,token_hash,registered_at) VALUES (?,?,?,?)
     ON CONFLICT(member_id) DO UPDATE SET token_hash=excluded.token_hash,registered_at=excluded.registered_at`).bind(member.id, room_id, member.token_hash, stamp).run();
+  if (!previous) {
+    // A manual discussion expert joins the live round plan only now that it has registered.
+    await queue_invited_expert(database, room_id, member.name).run();
+    await place_invited_expert(database, room_id, member.name);
+  }
   const reported = await database.prepare("SELECT client FROM member_sessions WHERE member_id=?").bind(member.id).first();
   return { member: member.name, registered_at: stamp, session_client: reported?.client ?? "" };
 }

@@ -22,6 +22,8 @@ DEFAULT_TIMEOUT = 20
 MAX_BODY_BYTES = 512 * 1024
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 MAX_MESSAGE_ATTACHMENTS = 10
+# Environment variables a hosting AI session exposes its own ID through, with the client name the room records.
+SESSION_VARIABLES = (("CLAUDE_CODE_SESSION_ID", "claude"), ("CODEX_THREAD_ID", "codex"), ("ANTIGRAVITY_CONVERSATION_ID", "antigravity"))
 MAX_TEXT_LENGTH = 32000
 MAX_SUMMARY_LENGTH = 1000
 MAX_BRIEF_LENGTH = 1600
@@ -502,7 +504,7 @@ def plan_message(args):
     if args.reply_to:
         payload["reply_to"] = args.reply_to
     # A hosting Claude Code or Codex session exposes its own ID; the room records it so the local service can take the member over.
-    for variable, client in (("CLAUDE_CODE_SESSION_ID", "claude"), ("CODEX_THREAD_ID", "codex")):
+    for variable, client in SESSION_VARIABLES:
         session_id = os.getenv(variable, "").strip()
         if session_id:
             payload["session_id"] = session_id
@@ -923,7 +925,7 @@ def access_headers(args, site, path):
         raise CliError("凭据文件中的 token 无效")
     headers = {"X-Discussion-Token": token}
     # A hosting Claude Code or Codex session reports itself on any call, so a manual member can be taken over before it first speaks.
-    for variable, client in (("CLAUDE_CODE_SESSION_ID", "claude"), ("CODEX_THREAD_ID", "codex")):
+    for variable, client in SESSION_VARIABLES:
         session_id = os.getenv(variable, "").strip()
         if session_id:
             headers.update({"X-Discussion-Session": session_id, "X-Discussion-Session-Client": client})

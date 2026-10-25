@@ -134,7 +134,7 @@ codiscuss floor view $room
 | 主持发言 | 领取后 `message post ROOM --as Codex --kind moderation --body-file FILE --submission-id UUID` |
 | 在线专家代发 | 被正式安排后，由主持人 `floor take ROOM --as Codex --speaker Claude --revision N`，再 `message post ROOM --as Codex --author Claude --turn TURN --summary-file SUMMARY --summary-by Claude --body-file FILE --submission-id UUID` |
 | 放弃发言 | `floor return ROOM --as NAME --revision N`；未完成安排仍需处理 |
-| 整轮安排 | 主持人领取后 `turn roster ROOM` 后 `turn create ROOM --as Codex --plan-file PLAN.json --roster REV --submission-id UUID`；PLAN 为 `[{"expert":"Claude","question":"…"}]`，按顺序接力；多项计划须先 `turn roster ROOM` 取得最新专家状态，把其 `revision` 用 `--roster` 带上，并包含 `waiting` 中的每位专家（主持人除外）：未带 revision 返回 400，名单已变化返回 409，缺人返回 400 并列出名字 |
+| 整轮安排 | 主持人领取后 `turn roster ROOM` 后 `turn create ROOM --as Codex --plan-file PLAN.json --roster REV --submission-id UUID`；PLAN 为 `[{"expert":"Claude","question":"…"}]`，按顺序接力；多项计划须先 `turn roster ROOM` 取得最新专家状态，把其 `revision` 用 `--roster` 带上，并包含 `waiting` 中的每位专家（主持人除外；尚未注册的手动专家列在 `unregistered`，不在 `waiting` 中，也不能被安排，否则返回 400 并列出名字）：未带 revision 返回 400，名单已变化返回 409，缺人返回 400 并列出名字 |
 | 继续原计划 | 用户介入或打断后，主持人领取并 `turn continue ROOM --as Codex`；改用新安排则排队自动作废 |
 | 取消安排 | 主持人领取后 `turn cancel ROOM TURN --as Codex` |
 | 切换阶段 | `room update ROOM --as Codex --phase discussing` |

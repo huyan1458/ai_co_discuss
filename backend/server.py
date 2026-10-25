@@ -214,6 +214,7 @@ def require_room(connection, room_id):
     room["round_budget"] = dict(budget) if budget else None
     if budget:
         room["opinion_count"] = opinion_count(connection, room_id, room["experts"])
+    room["round_groups"] = budget_round_groups(connection, room_id, room["experts"], budget["base"]) if budget else room["rounds"]
     room["floor"] = dict(connection.execute("SELECT holder,next_speaker,revision FROM room_floor WHERE room_id=?", (room_id,)).fetchone())
     room["runtime"] = runtime_view(connection, room_id)
     room["limits"] = limits_view(connection.execute(LIMITS_SQL, (room_id,)).fetchone(), room)
@@ -233,6 +234,7 @@ def require_room(connection, room_id):
     for decision in room["scheduler_decisions"]:
         decision["detail"] = details.get(decision["id"])
     room["host_arrangements"] = host_arrangements(connection, room_id, room["scheduler_decisions"])
+    room["cancelled_turns"] = cancelled_turns(connection, room_id)
     parent = connection.execute("""SELECT rooms.id,rooms.title FROM room_links JOIN rooms ON rooms.id=room_links.parent_id
         WHERE room_links.room_id=?""", (room_id,)).fetchone()
     room["parent_room"] = dict(parent) if parent else None
@@ -296,6 +298,21 @@ def host_arrangements(connection, room_id, decisions):
     return [plan for plan in plans if plan["after_message_id"] not in applied][-RECENT_DECISIONS:]
 
 
+def cancelled_turns(connection, room_id):
+    """Assignments that ended without an answer, anchored where their wake card first appeared.
+
+    The anchor is the later of the previous turn's answer and the latest message at creation time, so the card keeps its place in the transcript.
+    """
+    rows, latest_answer = [], 0
+    for row in connection.execute("""SELECT id,expert,question,status,answer_id,
+        (SELECT COALESCE(MAX(messages.id),0) FROM messages WHERE messages.room_id=discussion_turns.room_id AND messages.created_at<=discussion_turns.created_at) AS created_after
+        FROM discussion_turns WHERE room_id=? ORDER BY id""", (room_id,)):
+        if row["status"] == "cancelled":
+            rows.append({"id": row["id"], "expert": row["expert"], "question": row["question"], "after_message_id": max(latest_answer, row["created_after"])})
+        latest_answer = max(latest_answer, row["answer_id"] or 0)
+    return rows[-RECENT_DECISIONS:]
+
+
 def discussion_rounds(connection, room_id, experts):
     """Group complete history metadata until every configured expert has spoken.
 
@@ -325,6 +342,34 @@ def discussion_rounds(connection, room_id, experts):
         if current["completed"]:
             next_start = None
     return rounds
+
+
+def budget_round_groups(connection, room_id, experts, base):
+    """Group history by the round budget's rule: every len(experts) opinions form a round, and a new segment (base) starts a new one.
+
+    `rounds` stays speaker-based because scheduling needs who still owes a turn; this view only labels history.
+    """
+    if not experts:
+        return []
+    rows = connection.execute("""SELECT messages.id,messages.author,
+        COALESCE(details.kind,'opinion') AS kind FROM messages
+        LEFT JOIN message_details AS details ON details.message_id=messages.id
+        WHERE room_id=? ORDER BY messages.id""", (room_id,))
+    groups, next_start, seen = [], None, 0
+    for message in rows:
+        if next_start is None:
+            next_start = message["id"]
+        if message["kind"] != "opinion" or message["author"] not in experts:
+            continue
+        if not groups or groups[-1]["completed"]:
+            groups.append({"number": len(groups) + 1, "start_id": next_start, "opinions": 0, "completed": False})
+        current = groups[-1]
+        seen += 1
+        current["opinions"] += 1
+        current["completed"] = current["opinions"] >= len(experts) or seen == base
+        if current["completed"]:
+            next_start = None
+    return groups
 
 
 def opinion_count(connection, room_id, experts):
@@ -969,7 +1014,7 @@ def append_free_message(connection, room, payload, actor):
 def record_reported_session(connection, room_id, token, payload):
     """Keep the software session a manual member posted from, so the local service can take the member over."""
     session_id, client = payload.get("session_id"), payload.get("session_client")
-    if client not in ("claude", "codex") or not isinstance(session_id, str) or not SESSION_ID_PATTERN.fullmatch(session_id) or not token:
+    if client not in ("claude", "codex", "antigravity") or not isinstance(session_id, str) or not SESSION_ID_PATTERN.fullmatch(session_id) or not token:
         return
     member = connection.execute("SELECT id FROM room_members WHERE room_id=? AND token_hash=? AND status='active' AND access='manual' AND adapter='manual'",
                                 (room_id, token_hash(token))).fetchone()
@@ -998,7 +1043,7 @@ def append_message(connection, room_id, payload, token="", free_actor=None):
         return {"message": previous, "duplicate": True}
     if author != "用户" and details["kind"] == "opinion":
         require_within_limits(room)
-    if room["phase"] in ("paused", "concluded") and details["kind"] == "opinion":
+    if room["phase"] in ("paused", "concluded") and details["kind"] == "opinion" and (author != "用户" or room["archived"]):
         raise ValueError("话题已暂停或收束；恢复阶段后才能提交新观点，运行回执请用 receipt")
     check_message_references(connection, room_id, expected)
     check_message_attachments(connection, room_id, details["submitted_by"], identifiers)
@@ -1065,10 +1110,26 @@ def roster_view(room):
     """Who is present and who still owes a turn in the open round; its revision changes whenever either changes."""
     last = room["rounds"][-1] if room["rounds"] else None
     spoken = set(last["speakers"]) if last and not last["completed"] else set()
-    experts = [{"name": name, "mode": mode, "host": name == room["host"], "spoken": name in spoken} for name, mode in room["experts"].items()]
-    state = json.dumps([sorted(room["experts"]), sorted(spoken)], ensure_ascii=False)
-    return {"experts": experts, "waiting": [item["name"] for item in experts if not item["spoken"] and not item["host"]],
+    pending_registration = unregistered_experts(room)
+    experts = [{"name": name, "mode": mode, "host": name == room["host"], "spoken": name in spoken,
+                "registered": name not in pending_registration} for name, mode in room["experts"].items()]
+    state = json.dumps([sorted(room["experts"]), sorted(spoken), sorted(pending_registration)], ensure_ascii=False)
+    return {"experts": experts, "unregistered": pending_registration,
+            "waiting": [item["name"] for item in experts if not item["spoken"] and not item["host"] and item["registered"]],
             "revision": hashlib.sha256(state.encode("utf-8")).hexdigest()[:12]}
+
+
+def unregistered_experts(room):
+    """Manual experts of a woken discussion (adapter 'manual') that have not registered from their own session; they cannot be scheduled until they do."""
+    return [member["name"] for member in room["members"]
+            if member["adapter"] == "manual" and member["status"] == "active" and not member["registered_at"] and member["name"] in room["experts"]]
+
+
+def require_registered(room, names):
+    """Reject scheduling an expert that has not registered yet; it joins the round queue by itself once it registers."""
+    missing = [name for name in dict.fromkeys(names) if name in unregistered_experts(room)]
+    if missing:
+        raise ValueError(f"以下手动专家尚未注册，不能安排发言：{'、'.join(missing)}；它在自己的会话中注册后会自动加入本轮队列，也可先让其暂离")
 
 
 def require_round_coverage(room, plan, payload):
@@ -1100,6 +1161,7 @@ def create_turn(connection, room_id, payload):
     require_within_limits(room)
     if any(expert not in room["experts"] or len(question) > MAX_QUESTION_LENGTH for expert, question, _ in plan):
         raise ValueError("请选择参与专家，待回应问题最多 1000 字")
+    require_registered(room, [expert for expert, _, _ in plan])
     require_round_coverage(room, plan, payload)
     if room["phase"] in ("paused", "concluded"):
         raise ValueError("话题已暂停或收束，请先调整阶段")
@@ -1151,6 +1213,7 @@ def continue_turns(connection, room_id, payload):
     if not room["queued_turns"]:
         raise FileExistsError("没有排队中的安排；请创建新的安排")
     require_within_limits(room)
+    require_registered(room, [room["queued_turns"][0]["expert"]])
     require_floor(room, room["host"])
     turn_id = room["queued_turns"][0]["id"]
     connection.execute("UPDATE discussion_turns SET status='pending' WHERE id=? AND status='queued'", (turn_id,))
@@ -1240,7 +1303,7 @@ def update_turn(connection, room_id, turn_id, payload):
     status = payload.get("status")
     if status not in ("notified", "cancelled"):
         raise ValueError("安排状态仅可显式改为 notified 或 cancelled")
-    if turn["status"] == status:
+    if turn["status"] == status or (status == "cancelled" and turn["status"] == "skipped"):
         return turn
     if status == "notified" and room["phase"] in ("paused", "concluded"):
         raise ValueError("话题已暂停或收束，不能继续通知")

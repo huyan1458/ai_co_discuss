@@ -716,12 +716,19 @@ function floor_status(room) {
 
 /** A round completes only after all configured experts have contributed. */
 function progress_round(room) {
-  if (!Array.isArray(room.rounds)) return "轮次待同步";
-  const latest = room.rounds.at(-1);
+  const groups = round_groups(room);
+  if (!groups) return "轮次待同步";
+  const latest = groups.at(-1);
   const participants = Object.keys(room.experts).length;
-  if (latest && !latest.completed) return `第 ${latest.number} 轮 · ${latest.speakers.length}/${participants} 人已发言`;
+  const completed = groups.filter((item) => item.completed).length;
+  if (latest && !latest.completed) return `第 ${latest.number} 轮 · ${latest.opinions ?? latest.speakers.length}/${participants} 人已发言`;
   return ["pending", "notified"].includes(room.current_turn?.status)
-    ? `第 ${room.completed_rounds + 1} 轮 · 0/${participants} 人已发言` : `已完成 ${room.completed_rounds} 轮`;
+    ? `第 ${completed + 1} 轮 · 0/${participants} 人已发言` : `已完成 ${completed} 轮`;
+}
+
+/** Rounds as labelled in the UI: counted by the round budget when the room has one, otherwise by the roster. */
+function round_groups(room) {
+  return Array.isArray(room.round_groups) ? room.round_groups : Array.isArray(room.rounds) ? room.rounds : null;
 }
 
 /** Describe the designated respondent without claiming that their app is generating. */
@@ -2315,7 +2322,7 @@ async function retry_execution(event_id) {
   show_toast(`已重新安排 ${execution.participant} 执行，原失败记录保留`);
 }
 
-/** Skip the selected assignment; a paused automatic run resumes with the host instead of retrying it. */
+/** Skip the selected assignment: the user posts a "skipped" answer for the expert, so the plan moves on to the next one like after any answer. */
 async function skip_turn() {
   const room = state.room;
   const turn = room.current_turn;
@@ -2324,18 +2331,21 @@ async function skip_turn() {
   const runtime = room.runtime || {};
   const resume = runtime.mode === "automatic" && (runtime.status === "paused" || runtime.expired);
   const revision = runtime.revision;
-  let cancelled = false;
+  let saved = false;
   try {
-    await request_json(`${path}/turns/${turn.id}`, { actor: "用户", status: "cancelled" });
-    cancelled = true;
+    const floor = room.floor;
+    if (floor.holder !== turn.expert) await request_json(`${path}/floor`, { actor: "用户", speaker: turn.expert, action: "take", revision: floor.revision });
+    await request_json(`${path}/messages`, { author: turn.expert, submitted_by: "用户", kind: "opinion", turn_id: turn.id,
+      text: "（本次发言已被用户跳过）", submission_id: new_submission_id() });
+    saved = true;
     if (resume) await request_json(`${path}/runtime`, { action: "start", mode: "automatic", revision, deadline: 0 });
   } catch (error) {
-    if (cancelled && resume) throw new Error(`本次发言已跳过，但未能继续讨论：${error.message}。核对后可点“重启”继续`);
+    if (saved && resume) throw new Error(`本次发言已跳过，但未能继续讨论：${error.message}。核对后可点“重启”继续`);
     throw error;
   } finally {
     if (state.room?.id === room_id) await refresh_room();
   }
-  if (state.room?.id === room_id) show_toast(resume ? "已跳过本次发言并恢复讨论，等待主持人继续安排" : "已跳过本次发言，等待主持人继续安排");
+  if (state.room?.id === room_id) show_toast("已跳过本次发言，按计划交给下一位");
 }
 
 /** Resume the automatic run after a user decision made while paused or just reopened. */
@@ -3341,7 +3351,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form },
   request: request_json, identities: IDENTITIES, display_name, sources: SOURCE_LABELS, phases: PHASE_LABELS,
   runtime_label, execution_label, limits_label, participant_model, participant_access, can_retry_execution,
-  turns: TURN_LABELS, turn_label, turn_guidance, floor_status, progress_round, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
+  turns: TURN_LABELS, turn_label, turn_guidance, floor_status, progress_round, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();
 restore_directory_sort();

@@ -1008,7 +1008,8 @@ test('an invited existing session must exist locally, and Claude resumes only fr
   assert.equal(borrowed_session('Claude', { adapter: 'claude', session_id: claude_id }, '', env).cwd, original, 'without a project the session keeps its directory');
   assert.equal(borrowed_session('Claude', { adapter: 'claude', session_id: claude_id }, original, env).cwd, original);
   assert.throws(() => borrowed_session('Claude', { adapter: 'claude', session_id: claude_id }, other, env), /只能在原目录续接/);
-  assert.throws(() => borrowed_session('Gemini', { adapter: 'antigravity_cli', session_id: claude_id }, '', env), /只有 Codex 与 Claude/);
+  assert.throws(() => borrowed_session('Gemini', { adapter: 'antigravity_cli', session_id: claude_id }, '', env), /找不到 agy 会话/);
+  assert.throws(() => borrowed_session('Grok', { adapter: 'api', session_id: claude_id }, '', env), /只有 Codex、Claude 与 agy/);
   const owner = randomUUID() + randomUUID();
   const launched = await launch_discussion(f.home, { ...f.input, token: owner }, f.options);
   await assert.rejects(room_member(f.home, { site: f.site, room_id: launched.room.id, token: owner, action: 'add', name: 'Claude-2',
@@ -1057,6 +1058,25 @@ test('a manual Codex expert is hosted through the app for a desktop chat and the
     assert.deepEqual([participants['Codex-2'].session_id, participants['Codex-3'].session_id], [desktop_id, cli_id]);
   } finally {
     if (previous === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previous;
+  }
+});
+
+test('a manual agy expert\'s reported conversation is hosted under its own project, and a missing conversation is refused', async t => {
+  const f = await fixture(t);
+  const home = join(f.directory, 'agy-user-home'), conversation_id = randomUUID();
+  const launched = await launch_discussion(f.home, { ...f.input, token: randomUUID() + randomUUID() }, f.options);
+  mkdirSync(join(home, '.gemini', 'antigravity-cli', 'conversations'), { recursive: true });
+  writeFileSync(join(home, '.gemini', 'antigravity-cli', 'conversations', `${conversation_id}.db`), '');
+  save_launch_settings(f.home, { participants: { Gemini: { adapter: 'antigravity_cli', executable: process.execPath } } });
+  const previous = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  process.env.HOME = process.env.USERPROFILE = home;
+  try {
+    assert.throws(() => adopt_member_profile(f.home, launched.config_path, 'Gemini-2', randomUUID(), 'antigravity'), /找不到 agy 会话/);
+    assert.equal(adopt_member_profile(f.home, launched.config_path, 'Gemini-2', conversation_id, 'antigravity'), 'antigravity_cli');
+    const profile = load_config(launched.config_path).participants['Gemini-2'];
+    assert.deepEqual([profile.adapter, profile.session_id], ['antigravity_cli', conversation_id]);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
   }
 });
 

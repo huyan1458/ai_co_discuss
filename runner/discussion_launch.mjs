@@ -300,8 +300,8 @@ function participant_profile(name, defaults, input, current_host) {
   const cwd = profile.cwd || input.cwd;
   if (cwd && (!existsSync(cwd) || !statSync(cwd).isDirectory())) throw new Error(`${name}：工作目录不存在或不是文件夹，请核对本次目录配置`);
   if (input.entry === 'conversation' && current_host) profile.session_id = input.current_session_id;
-  // agy runs only in sessions this tool creates, so its native discussion project always applies.
-  if (profile.adapter === 'antigravity_cli' && profile.session_id) throw new Error(`${name}：agy 不能绑定已有会话或从当前 agy 对话主持全自动讨论；请从网页或其他软件发起，agy 会由讨论服务新建会话`);
+  // A new agy conversation always gets this tool's discussion project; only a manual agy expert the owner chose to host (input.adopt) keeps its own.
+  if (profile.adapter === 'antigravity_cli' && profile.session_id && !input.adopt) throw new Error(`${name}：agy 不能绑定已有会话或从当前 agy 对话主持全自动讨论；请从网页或其他软件发起，agy 会由讨论服务新建会话`);
   return profile;
 }
 
@@ -330,7 +330,11 @@ export function borrowed_session(name, profile, room_cwd, env = process.env) {
     if (!session_files(sessions).some(path => path.endsWith(`-${id}.jsonl`))) throw new Error(`${name}：本机找不到 Codex 会话 ${id}，请核对会话 ID`);
     return profile;
   }
-  if (profile.adapter !== 'claude') throw new Error(`${name}：只有 Codex 与 Claude 可以接入已有会话`);
+  if (profile.adapter === 'antigravity_cli') {
+    if (!existsSync(join(homedir(), '.gemini', 'antigravity-cli', 'conversations', `${id}.db`))) throw new Error(`${name}：本机找不到 agy 会话 ${id}，请核对会话 ID`);
+    return profile;
+  }
+  if (profile.adapter !== 'claude') throw new Error(`${name}：只有 Codex、Claude 与 agy 可以接入已有会话`);
   const projects = join(env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'projects');
   const file = session_files(projects).find(path => path.endsWith(`${id}.jsonl`) && dirname(dirname(path)) === projects);
   if (!file) throw new Error(`${name}：本机找不到 Claude 会话 ${id}，请核对会话 ID`);
@@ -437,8 +441,8 @@ export function adopt_member_profile(home, path, name, session_id, client = 'cla
   const release = acquire_lock(join(dirname(path), 'configuration-edit'));
   try {
     const config = configuration_snapshot(path).config;
-    const adapter = client === 'codex' ? codex_session_adapter(session_id) : 'claude';
-    const input = { cwd: config.cwd, participants: { [name]: { adapter, session_id } } };
+    const adapter = client === 'codex' ? codex_session_adapter(session_id) : client === 'antigravity' ? 'antigravity_cli' : 'claude';
+    const input = { cwd: config.cwd, adopt: true, participants: { [name]: { adapter, session_id } } };
     const profile = borrowed_session(name, participant_profile(name, launch_settings(home).participants, input, false), config.cwd);
     const next = { ...config, participants: { ...config.participants, [name]: profile } };
     validate_config(next, dirname(path));
