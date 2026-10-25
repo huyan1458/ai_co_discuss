@@ -41879,7 +41879,7 @@ var _H = {
 				}];
 			}
 			return [];
-		})), Ne = /* @__PURE__ */ F(Math.floor(Date.now() / 1e3));
+		}).sort((e, t) => (e.created_at ?? Infinity) - (t.created_at ?? Infinity))), Ne = /* @__PURE__ */ F(Math.floor(Date.now() / 1e3));
 		R(() => Me.value.length > 0, (e, t, n) => {
 			if (!e) return;
 			Ne.value = Math.floor(Date.now() / 1e3);
@@ -43635,7 +43635,7 @@ var _H = {
 			], 2);
 		};
 	}
-}, [["__scopeId", "data-v-c2895335"]]), DG = {
+}, [["__scopeId", "data-v-d8f5d4c5"]]), DG = {
 	slots: {
 		root: "relative inline-flex items-center",
 		base: ["rounded-md", "transition-colors"],

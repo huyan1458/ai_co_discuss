@@ -172,7 +172,7 @@ const free_busy = computed(() => {
         created_at: Number.isFinite(waiting_since) ? waiting_since : null }];
     }
     return [];
-  });
+  }).sort((left, right) => (left.created_at ?? Infinity) - (right.created_at ?? Infinity));
 });
 const free_now = ref(Math.floor(Date.now() / 1000));
 /** Each busy member keeps its own working card, so the elapsed time ticks while any is shown. */
