@@ -71,11 +71,27 @@ conversation 还须 current_session_id，当前会话接手首个主持任务。
 // Windows PowerShell 5.1 ships WinForms. A background process cannot take the foreground, so the owner must be
 // shown (off-screen) as a topmost window; the dialog it owns then stays above the browser that asked for it.
 // windowsHide turns the process's first Show into a hide, so the owner is shown a second time to really appear.
+// Foreground rights are not guaranteed to a background process either, so a timer in the dialog's message loop pins the dialog owned by the hidden form topmost.
+// The C# source must not contain single quotes: it is embedded in a single-quoted PowerShell string.
+const PICKER_RAISE_SOURCE = [
+  'using System; using System.Runtime.InteropServices;',
+  'public static class PickerRaise {',
+  '  delegate bool EnumProc(IntPtr handle, IntPtr arg);',
+  '  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc proc, IntPtr arg);',
+  '  [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr handle, uint command);',
+  '  [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr handle, IntPtr after, int x, int y, int width, int height, uint flags);',
+  '  public static void OwnedBy(IntPtr owner) {',
+  '    EnumWindows((handle, arg) => { if (GetWindow(handle, 4) == owner) SetWindowPos(handle, (IntPtr)(-1), 0, 0, 0, 0, 0x13); return true; }, IntPtr.Zero);',
+  '  }',
+  '}',
+].join(' ');
 const WINDOWS_PICKER = [
   'Add-Type -AssemblyName System.Windows.Forms',
   '[Console]::OutputEncoding = [Text.Encoding]::UTF8',
   '$owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; ShowInTaskbar = $false; FormBorderStyle = "None"; StartPosition = "Manual"; Location = New-Object System.Drawing.Point(-32000, -32000); Size = New-Object System.Drawing.Size(1, 1) }',
+  `Add-Type -TypeDefinition '${PICKER_RAISE_SOURCE}'`,
   '$owner.Show(); $owner.Hide(); $owner.Show(); $owner.Activate()',
+  '$timer = New-Object System.Windows.Forms.Timer -Property @{ Interval = 150 }; $timer.Add_Tick({ [PickerRaise]::OwnedBy($owner.Handle) }); $timer.Start()',
   '$dialog = New-Object System.Windows.Forms.FolderBrowserDialog -Property @{ Description = "选择项目目录"; ShowNewFolderButton = $true }',
   'if ($dialog.ShowDialog($owner) -eq "OK") { $dialog.SelectedPath }',
   '$owner.Close()',
