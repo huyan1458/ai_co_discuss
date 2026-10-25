@@ -17,7 +17,7 @@ import { assert_shared_home, DiscussionService, migrate_service_home, read_regis
 import { launch_discussion, room_models } from '../runner/discussion_launch.mjs';
 import { agy_rule, antigravity_project, claude_exit_error, claude_rule_path, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
-import { certainty, decide, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, validate_scheduler } from '../runner/scheduler.mjs';
+import { certainty, decide, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
 
 /** The folded record of what the provider was asked is checked on its own. */
 const without_detail = ({ detail, ...plan }) => (assert.ok(Array.isArray(detail) && detail[0].choices.length), plan);
@@ -42,12 +42,18 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.throws(() => validate_scheduler(home, { ...jev, provider: 'decisions' }), /Base URL 已变化/);
   const failing = async () => ({ ok: false, status: 401, json: async () => ({ error: 'secret detail' }) });
   await assert.rejects(decide(home, jev, '状态', questions, failing), error => /HTTP 401/.test(error.message) && !error.message.includes('secret detail'));
-  // Only a confident member choice moves a free-room message; the host choice or low confidence returns null.
+  // A free-room message moves only on a confident pick; everyone or no one needs the higher threshold, anything else stays with the host.
   const reply = (choice, confidence) => async () => ({ ok: true, json: async () => ({ answers: { handler: { type: 'choice', choice, confidence, probabilities: {} } } }) });
-  const input = { title: '房间', context: [], message: { id: 3, author: '用户', text: '修一下登录' }, host: 'Claude', members: [{ name: 'Codex', description: 'Codex CLI' }] };
-  assert.equal((await route_free_message(home, jev, input, reply('Codex', 0.95))).member, 'Codex');
-  assert.equal((await route_free_message(home, jev, input, reply('Codex', ROUTE_CONFIDENCE - 0.01))).member, null);
-  assert.equal((await route_free_message(home, jev, input, reply('__host__', 0.99))).member, null);
+  const input = { title: '房间', context: [], message: { id: 3, author: '用户', text: '修一下登录', reply_to: 2 }, host: { name: 'Claude', description: 'Claude（Claude Code）' },
+    members: [{ name: 'Codex', description: 'Codex CLI' }] };
+  const routed = await route_free_message(home, jev, input, reply('Codex', 0.95));
+  assert.deepEqual([routed.action, routed.member, routed.detail[0].choices], ['member', 'Codex', ['Codex', '__host__', '__all__', '__none__']]);
+  assert.equal((await route_free_message(home, jev, input, reply('Codex', ROUTE_CONFIDENCE - 0.01))).action, 'host');
+  assert.equal((await route_free_message(home, jev, input, reply('__host__', 0.99))).action, 'host');
+  assert.equal((await route_free_message(home, jev, input, reply('__all__', ROUTE_WIDE_CONFIDENCE))).action, 'all');
+  assert.equal((await route_free_message(home, jev, input, reply('__all__', ROUTE_WIDE_CONFIDENCE - 0.01))).action, 'host');
+  assert.equal((await route_free_message(home, jev, input, reply('__none__', 0.99))).action, 'none');
+  assert.match(scheduler_state('房间', [], input.message), /#3 用户（回复 #2）：修一下登录/);
   // The configuration check asks one yes/no question and rejects an answer without a probability.
   const checked = [];
   assert.deepEqual(await scheduler_check(home, jev, async (url, init) => { checked.push([url, JSON.parse(init.body)]);

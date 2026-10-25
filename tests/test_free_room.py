@@ -598,6 +598,27 @@ class HostTests(FreeRoomTests):
         self.work("Codex")
         self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 0)
 
+    def test_smart_scheduling_asks_everyone_or_no_one(self):
+        """Everyone answers once without a hand-off and the host may not dispatch; no one cancels the host's request."""
+        everyone = FreeRoomTests.say(self, "都出来打个招呼")[1]["message"]["id"]
+        status, result = self.request(f"{self.path}/recommendations/{everyone}", {"action": "all"}, self.owner)
+        self.assertEqual(status, 200, result)
+        self.assertEqual(self.requests(), [("Claude", "all", "pending"), ("Codex", "all", "pending"), ("Gemini", "all", "pending")])
+        host = self.reserve_for("Claude")[1]
+        payload = {"author": "Claude", "text": "派活", "source": "cli", "submission_id": uuid.uuid4().hex, "execution_id": host["id"], "to": ["Codex"]}
+        self.assertEqual(self.request(f"{self.path}/messages", payload, self.member)[0], 400)
+        del payload["to"]
+        self.assertEqual(self.request(f"{self.path}/messages", {**payload, "submission_id": uuid.uuid4().hex}, self.member)[0], 201)
+        self.work("Codex")
+        self.work("Gemini")
+        self.assertNotIn("handoff", [purpose for _, purpose, _ in self.requests()])
+        thanks = FreeRoomTests.say(self, "好的，谢谢")[1]["message"]["id"]
+        self.assertEqual(self.request(f"{self.path}/recommendations/{thanks}", {"action": "none"}, self.owner)[0], 200)
+        self.assertEqual(self.requests()[-1], ("Claude", "route", "cancelled"))
+        started = FreeRoomTests.say(self, "已经开始处理的消息")[1]["message"]["id"]
+        self.reserve_for("Claude")
+        self.assertEqual(self.request(f"{self.path}/recommendations/{started}", {"action": "all"}, self.owner)[0], 409)
+
     def test_only_the_host_dispatches_and_never_itself(self):
         """Members suggest without dispatching; the host cannot name itself."""
         FreeRoomTests.say(self, "派活检查", to=["Codex", "Claude"])

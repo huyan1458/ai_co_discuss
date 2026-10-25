@@ -358,10 +358,13 @@ def check_answer(connection, room_id, member, payload):
         request_ids = payload.get("request_ids", [])
         if payload.get("execution_id") is not None or not isinstance(request_ids, list) or any(type(item) is not int for item in request_ids):
             raise ValueError("手动接入成员用 request_ids 关联请求，不使用执行编号")
+        purposes = []
         for request_id in request_ids:
             row = connection.execute("SELECT * FROM member_requests WHERE room_id=? AND id=?", (room_id, request_id)).fetchone()
             if not row or row["member_id"] != member["id"] or row["status"] != "pending":
                 raise FileExistsError(f"请求 {request_id} 不属于本成员或已处理")
+            purposes.append(row["purpose"])
+        check_dispatch(member, payload, purposes)
         return None
     execution_id = payload.get("execution_id")
     if type(execution_id) is not int:
@@ -371,7 +374,15 @@ def check_answer(connection, room_id, member, payload):
         raise PermissionError("执行编号不属于本成员")
     if row["status"] not in ACTIVE or row["lease_until"] <= int(time.time()):
         raise FileExistsError("本次执行已结束、被打断或已过期；回答不能改作普通发言，请保留草稿")
+    check_dispatch(member, payload, [item[0] for item in connection.execute(
+        "SELECT purpose FROM member_requests WHERE execution_id=? AND status='delivering'", (execution_id,))])
     return row
+
+
+def check_dispatch(member, payload, purposes):
+    """A host answering only its share of an everyone request answers as a member, so it may not dispatch others."""
+    if member["role"] == "host" and payload.get("to") and purposes and all(purpose == "all" for purpose in purposes):
+        raise ValueError("这次是请全体成员各自回应，其他成员已收到请求；主持人只回答自己的部分，不能用 --to 派活")
 
 
 def check_proxy(connection, room_id, member, payload):
@@ -672,12 +683,39 @@ def release_recommendations(connection, room_id):
                 VALUES (?,?,?,?,'ask','user',?)""", (room_id, row["member_id"], row["message_id"], row["message_id"], int(time.time())))
 
 
+def route_wide(connection, room_id, message_id, action):
+    """Smart scheduling answers an unnamed message with everyone (each member once, as if the user named them all) or no one.
+
+    Only a host request that has not started changes; a started host already handles the message its own way.
+    """
+    route = host_route_request(connection, message_id)
+    if not route or route["room_id"] != room_id:
+        raise LookupError("只能处理交给主持人的未点名消息")
+    if route["status"] != "pending":
+        raise FileExistsError("主持人已开始处理这条消息，不再改派")
+    if action == "none":
+        connection.execute("UPDATE member_requests SET status='cancelled' WHERE id=?", (route["id"],))
+    else:
+        # The host keeps its row (one request per message and member) and now answers its own share, without dispatching.
+        connection.execute("UPDATE member_requests SET purpose='all' WHERE id=?", (route["id"],))
+        connection.execute("""INSERT OR IGNORE INTO member_requests (room_id,member_id,message_id,chain_id,purpose,created_by,created_at)
+            SELECT room_id,id,?,?,'all','user',? FROM room_members WHERE room_id=? AND status='active' ORDER BY id""",
+                           (message_id, message_id, int(time.time()), room_id))
+    requests = connection.execute("SELECT * FROM member_requests WHERE message_id=? ORDER BY id", (message_id,)).fetchall()
+    return {"action": action, "requests": [dict(row) for row in requests]}
+
+
 def adopt_recommendation(connection, room_id, token, message_id, payload):
-    """The user adopts a recommendation before it expires: interrupt the host now, or ask the member after the host."""
+    """The user adopts a recommendation before it expires: interrupt the host now, or ask the member after the host.
+
+    Smart scheduling also sends action all or none here to have everyone or no one answer an unnamed message.
+    """
     require_owner(connection, room_id, token)
     begin_write(connection)
+    if payload.get("action") in ("all", "none"):
+        return route_wide(connection, room_id, message_id, payload["action"])
     if payload.get("action") != "adopt" or payload.get("mode") not in ("interrupt", "after"):
-        raise ValueError("采纳须为 action=adopt，mode 为 interrupt 或 after")
+        raise ValueError("采纳须为 action=adopt，mode 为 interrupt 或 after；全体或无需回应为 action=all 或 none")
     row = connection.execute("SELECT * FROM member_recommendations WHERE room_id=? AND message_id=?", (room_id, message_id)).fetchone()
     if not row:
         raise LookupError("这条消息没有智能调度推荐")

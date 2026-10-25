@@ -54,7 +54,7 @@ html[data-theme^="channel"] .channel-primary-button:hover:not(:disabled) { backg
 html[data-theme^="channel"] .channel-primary-button:active:not(:disabled) { background: #4752c4; }
 html[data-theme^="channel"] .channel-primary-button:disabled { opacity: 1; color: #8b909c; background: #424650; border-color: transparent; box-shadow: none; }
 html[data-theme^="channel"] .channel-icon-button { width: 32px; height: 32px; padding: 7px; justify-content: center; border-radius: 5px; color: #b7bec8; }
-html[data-theme^="channel"] .channel-icon-button:hover { background: #ffffff09; color: #f2f3f5; }
+html[data-theme^="channel"] .channel-icon-button:hover { background: var(--channel-ghost-hover); color: #f2f3f5; }
 html[data-theme^="channel"] .channel-icon-button > [class*="icon"] { width: 19px; height: 19px; }
 html[data-theme^="channel"] .channel-panel-toggle { flex-shrink: 0; }
 
@@ -78,12 +78,12 @@ html[data-theme^="channel"] .channel-panel-toggle { flex-shrink: 0; }
 .channel-directory-actions { display: flex; align-items: center; gap: 0; opacity: 0; pointer-events: none; }
 .channel-directory-heading:is(:hover, :focus-within) .channel-directory-actions, .channel-directory-heading:has([data-state="open"]) .channel-directory-actions { opacity: 1; pointer-events: auto; }
 .channel-archive-toggle { display: flex; justify-content: flex-start; gap: 6px; width: 100%; min-height: 30px; padding: 5px 10px 5px 13px; border-radius: 5px; color: var(--ui-text-dimmed); font-size: 12px; font-weight: 400; }
-html[data-theme^="channel"] .channel-new-conversation { display: flex; justify-content: center; width: 100%; min-height: 34px; margin: 2px 0 12px; border-radius: 8px; }
+html[data-theme^="channel"] .channel-new-conversation { display: flex; justify-content: flex-start; width: 100%; min-height: 34px; margin: 2px 0 12px; border-radius: 8px; }
 .channel-new-conversation > [class*="icon"] { width: 16px; height: 16px; }
-html[data-theme^="channel"] .channel-new-conversation { color: #e6e8f0; background: linear-gradient(180deg, #333648, #2b2d3d); border-color: #43475e; box-shadow: inset 0 1px 0 #ffffff12, 0 1px 2px #0000004d; }
-html[data-theme^="channel"] .channel-new-conversation:hover:not(:disabled) { background: linear-gradient(180deg, #3a3e54, #313448); border-color: #51567a; }
-html[data-theme^="channel"] .channel-new-conversation:active:not(:disabled) { background: #2a2c3b; box-shadow: inset 0 1px 2px #00000040; }
-html[data-theme^="channel"] .channel-new-conversation > [class*="icon"] { color: #aab1ff; }
+html[data-theme^="channel"] .channel-new-conversation { color: var(--ui-text-toned); background: transparent; border: 0; box-shadow: none; }
+html[data-theme^="channel"] .channel-new-conversation:hover:not(:disabled) { color: var(--ui-text-highlighted); background: var(--channel-ghost-hover); }
+html[data-theme^="channel"] .channel-new-conversation:active:not(:disabled) { background: var(--channel-ghost-active); box-shadow: none; }
+html[data-theme^="channel"] .channel-new-conversation > [class*="icon"] { color: var(--ui-text-muted); }
 .channel-archive-toggle:hover { background: color-mix(in srgb, var(--ui-text) 6%, transparent); color: var(--ui-text-toned); }
 .channel-archive-toggle > [class*="icon"] { width: 14px; height: 14px; color: inherit; flex-shrink: 0; }
 .channel-archive-toggle { margin: 4px 0 0 !important; }
@@ -125,8 +125,8 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .channel-directory-notice { color: var(--ui-text-muted); }
 .channel-room-list { padding: 0 8px; }
 .channel-room-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; padding-right: 8px; border-radius: 8px; position: relative; color: #a8afbc; margin-bottom: 2px; }
-.channel-room-row:hover { background: #ffffff08; }
-.channel-room-row.active, .channel-folder-row.active { color: #f1f2f5; background: #ffffff12; }
+.channel-room-row:hover { background: var(--channel-ghost-hover); }
+.channel-room-row.active, .channel-folder-row.active { color: #f1f2f5; background: var(--channel-ghost-active); }
 .channel-room-row.drag-source, .channel-folder-section.drag-source { opacity: .45; }
 .directory-dragging, .directory-dragging * { cursor: grabbing !important; }
 .channel-drag-preview { position: fixed; top: 0; left: 0; z-index: 100; max-width: min(240px, calc(100vw - 24px)); padding: 7px 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; border: 1px solid #ffffff24; border-radius: 7px; background: #34373f; color: #eef0f5; box-shadow: 0 6px 18px #0005; font: 12px/1.5 var(--font-sans); }
@@ -149,7 +149,7 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .channel-folder-section, .channel-folder-rooms, .channel-root-rooms { min-width: 0; }
 .channel-folder-section { position: relative; }
 .channel-folder-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto max-content; align-items: center; padding-right: 8px; border-radius: 6px; }
-.channel-folder-row:hover { background: color-mix(in srgb, var(--ui-text) 4%, transparent); }
+.channel-folder-row:hover { background: var(--channel-ghost-hover); }
 .channel-folder-row:is(:hover, :focus-within) .channel-folder-actions, .channel-folder-row:has([data-state="open"]) .channel-folder-actions { opacity: 1; pointer-events: auto; }
 .channel-folder-rooms { padding-left: 24px; }
 .channel-folder-heading { display: flex; width: 100%; min-width: 0; align-items: center; gap: 5px; padding: 7px 4px; color: var(--ui-text-muted); font-size: var(--channel-nav-text); text-align: left; user-select: none; }
@@ -460,7 +460,7 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 .channel-message-actions { position: absolute; inset: 12px 12px 12px auto; z-index: 2; width: 66px; pointer-events: none; }
 .channel-message-toolbar { position: sticky; top: 8px; display: flex; gap: 2px; padding: 3px; width: fit-content; border: 1px solid #ffffff18; border-radius: 7px; background: #24262c; box-shadow: 0 2px 6px #0004; pointer-events: auto; }
 .channel-message-actions button { color: #a7b0c0; width: 28px; height: 28px; padding: 5px; justify-content: center; border-radius: 4px; }
-.channel-message-actions button:hover { color: #f2f3f5; background: #ffffff0c; }
+.channel-message-actions button:hover { color: #f2f3f5; background: var(--channel-ghost-hover); }
 @media (hover: hover) and (pointer: fine) {
   .channel-message-toolbar { opacity: 0; pointer-events: none; transition: opacity .12s; }
   .channel-message:hover .channel-message-toolbar, .channel-message:focus-within .channel-message-toolbar, .channel-message-toolbar:has([data-state="open"]) { opacity: 1; pointer-events: auto; }
@@ -513,9 +513,9 @@ html[data-theme^="channel"] .channel-composer:is(:focus, :focus-within, :has(:fo
 .channel-composer-footer > .channel-round-button { margin-left: auto; }
 /* Footer controls are quiet ghost chips; only hover and the open menu give them a surface. */
 .channel-composer-identity > button { width: auto; min-width: 0; height: 30px; border: 0; border-radius: 8px; color: var(--ui-text-toned); font-size: 12px; box-shadow: none; transition: background .12s, color .12s; }
-.channel-composer-identity > button:hover, .channel-composer-identity > button[data-state="open"] { background: #ffffff0f; color: var(--ui-text-highlighted); }
+.channel-composer-identity > button:hover, .channel-composer-identity > button[data-state="open"] { background: var(--channel-ghost-hover); color: var(--ui-text-highlighted); }
 .channel-composer-footer > button[aria-label="添加附件"] { width: 30px; height: 30px; justify-content: center; border-radius: 8px; color: var(--ui-text-muted); }
-.channel-composer-footer > button[aria-label="添加附件"]:hover:not(:disabled) { background: #ffffff0f; color: var(--ui-text-highlighted); }
+.channel-composer-footer > button[aria-label="添加附件"]:hover:not(:disabled) { background: var(--channel-ghost-hover); color: var(--ui-text-highlighted); }
 .channel-composer-identity > button:disabled { opacity: .55; }
 .channel-composer-identity > button [data-slot="leadingIcon"] { width: 14px; height: 14px; color: var(--ui-text-muted); }
 .channel-composer-identity .channel-avatar { width: 20px; height: 20px; font-size: 8px; }
@@ -554,7 +554,7 @@ html[data-theme^="channel"] :is(.channel-menu, .channel-select-menu) { min-width
 html[data-theme^="channel"] .channel-identity-menu { min-width: 248px; max-height: min(370px, var(--reka-combobox-content-available-height, 370px)); }
 html[data-theme^="channel"] :is(.channel-menu, .channel-select-menu) [data-slot="item"] { min-height: 33px; margin: 1px 0; padding: 7px 8px; gap: 9px; border-radius: 6px; font-size: 12px; }
 html[data-theme^="channel"] :is(.channel-menu, .channel-select-menu) [data-slot="item"]::before { border-radius: 6px; }
-html[data-theme^="channel"] :is(.channel-menu, .channel-select-menu) [data-slot="item"][data-highlighted]::before { background: #ffffff0c; }
+html[data-theme^="channel"] :is(.channel-menu, .channel-select-menu) [data-slot="item"][data-highlighted]::before { background: var(--channel-ghost-hover); }
 html[data-theme^="channel"] :is(.channel-menu, .channel-select-menu) [data-slot="itemLeadingIcon"] { width: 14px; height: 14px; color: #a4aebe; }
 html[data-theme^="channel"] .channel-menu [data-slot="label"] { color: #8e97a9; padding: 7px 8px 5px; font-size: 10px; font-weight: 400; }
 html[data-theme^="channel"] .channel-identity-menu [data-slot="item"] { padding: 8px; }
@@ -854,8 +854,8 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-editor::placeholder, .channel-search-input input::placeholder { color: var(--ui-text-dimmed); }
   .channel-room-row:hover, .channel-person:hover,
   .channel-message-actions button:hover, .channel-composer-identity > button:hover,
-  .channel-composer-identity > button[data-state="open"] { background: #ededed; color: var(--ui-text-highlighted); }
-  .channel-room-row.active, .channel-folder-row.active { background: #e7e7e7; color: var(--ui-text-highlighted); box-shadow: none; }
+  .channel-composer-identity > button[data-state="open"] { background: var(--channel-ghost-hover); color: var(--ui-text-highlighted); }
+  .channel-room-row.active, .channel-folder-row.active { background: var(--channel-ghost-active); color: var(--ui-text-highlighted); box-shadow: none; }
   .channel-link:hover { color: var(--ui-text-highlighted); }
   .channel-link:hover::before { background: #ededed !important; }
   .channel-link[data-active], .channel-link[data-active] .channel-link-icon { color: var(--ui-text-highlighted); }
@@ -865,7 +865,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-answer-toggle, .channel-answer-toggle:hover { color: var(--channel-accent); }
   .channel-view-links .channel-link[data-active]::before { background: #eaf2fc !important; }
   .channel-icon-button { color: var(--ui-text-muted); }
-  .channel-icon-button:hover { color: var(--ui-text-highlighted); background: #00000008; }
+  .channel-icon-button:hover { color: var(--ui-text-highlighted); background: var(--channel-ghost-hover); }
   .channel-surface-button { color: var(--ui-text); background: #fff; border-color: var(--ui-border); }
   .channel-surface-button:hover { background: #f6f6f6; border-color: var(--ui-border-accented); }
   .channel-surface-button:active { background: #ededed; }
@@ -873,10 +873,10 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-primary-button:hover:not(:disabled) { background: #075bbd; }
   .channel-primary-button:active:not(:disabled) { background: #064c9e; }
   .channel-primary-button:disabled { color: #8c8c8c; background: #ededed; border-color: transparent; }
-  .channel-new-conversation { color: var(--ui-text-highlighted); background: #fff; border-color: var(--ui-border); box-shadow: 0 1px 2px #2432480f; }
-  .channel-new-conversation:hover:not(:disabled) { background: #fff; border-color: var(--ui-border-accented); box-shadow: 0 1px 3px #24324824; }
-  .channel-new-conversation:active:not(:disabled) { background: #f6f6f6; }
-  .channel-new-conversation > [class*="icon"] { color: var(--channel-accent); }
+  .channel-new-conversation { color: var(--ui-text-toned); background: transparent; border-color: transparent; box-shadow: none; }
+  .channel-new-conversation:hover:not(:disabled) { color: var(--ui-text-highlighted); background: var(--channel-ghost-hover); box-shadow: none; }
+  .channel-new-conversation:active:not(:disabled) { background: var(--channel-ghost-active); }
+  .channel-new-conversation > [class*="icon"] { color: var(--ui-text-muted); }
   .channel-search-input input { color: var(--ui-text); background: #f6f6f6; }
   .channel-mention-filter[aria-pressed="true"] { color: var(--channel-accent) !important; background: #0969da12; }
   .channel-mention { color: #0969da; background: #0969da12; }
@@ -925,12 +925,12 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-answer .markdown-body :is(th, td) { border-color: var(--ui-border); }
   .channel-answer .markdown-body th { background: #f6f6f6; }
   .channel-composer { background: #fff !important; border-color: #c9c9c9; box-shadow: none !important; }
-  :is(.channel-composer-identity > button, .channel-composer-footer > button[aria-label="添加附件"]):hover:not(:disabled) { background: #0000000a; }
+  :is(.channel-composer-identity > button, .channel-composer-footer > button[aria-label="添加附件"]):hover:not(:disabled) { background: var(--channel-ghost-hover); }
   .channel-key-hint kbd { border-color: #0000001f; }
   .channel-draft-length .is-near-limit { color: #9a6700; }
   .channel-reply-draft { color: #0969da; background: #f3f7fd; border-color: var(--ui-border-muted); }
   :is(.channel-menu, .channel-select-menu), .channel-topic-menu { background: #ffffff; border-color: var(--ui-border); box-shadow: 0 8px 28px #0000001c, 0 2px 6px #0000000d; }
-  :is(.channel-menu, .channel-select-menu) [data-slot="item"][data-highlighted]::before { background: #00000008; }
+  :is(.channel-menu, .channel-select-menu) [data-slot="item"][data-highlighted]::before { background: var(--channel-ghost-hover); }
   :is(.channel-menu, .channel-select-menu) [data-slot="itemLeadingIcon"], .channel-menu [data-slot="label"],
   .channel-identity-menu [data-slot="itemDescription"] { color: var(--ui-text-muted); }
   .channel-topic-menu [data-slot="item"] { color: var(--ui-text); }
@@ -1025,6 +1025,9 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
    floating layers are frosted glass. Light rims are thin cool lines, an inner top highlight, a faint
    inner bottom shade and a layered blue-gray drop shadow; light surfaces themselves stay opaque. */
 :root[data-theme="channel"] {
+  /* Ghost controls (nav rows, icon buttons, menu items): no fill at rest, one shared faint fill on hover/open, a slightly stronger one when pressed. */
+  --channel-ghost-hover: #ffffff0a;
+  --channel-ghost-active: #ffffff12;
   --channel-edge-control: #ffffff14;
   --channel-edge-panel: #ffffff17;
   --channel-edge-float: #ffffff1c;
@@ -1038,6 +1041,8 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   --channel-shadow-bar: 0 8px 24px #00000047;
 }
 :root[data-theme="channel-light"] {
+  --channel-ghost-hover: #0000000a;
+  --channel-ghost-active: #00000012;
   --channel-edge-control: #5b6c8233;
   --channel-edge-panel: #5b6c8233;
   --channel-edge-float: #000a1e1f;
@@ -1077,7 +1082,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 /* 消息操作按钮使用频率低：去掉浮层底色、边框与阴影，仅保留淡色图标。 */
 :root[data-theme^="channel"] .channel-message-toolbar { background: transparent !important; border-color: transparent; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
 :root[data-theme^="channel"] .channel-message-actions button { color: var(--ui-text-dimmed); }
-:root[data-theme^="channel"] .channel-message-actions button:hover { color: var(--ui-text-highlighted); }
+:root[data-theme^="channel"] .channel-message-actions button:is(:hover, [data-state="open"], [aria-expanded="true"]) { color: var(--ui-text-highlighted); background: var(--channel-ghost-hover) !important; }
 /* Like the light theme, the dark seams show only the resize handle's line. */
 :root[data-theme="channel"] .channel-sidebar { border-right-color: transparent; }
 :root[data-theme="channel"] :is(.channel-nav-resizer, .channel-rail-resizer) { background: transparent; }
@@ -1101,9 +1106,9 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 .channel-schedule-actions { display: inline-flex; gap: 2px; }
 .channel-schedule-rate { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--ui-text-dimmed); cursor: pointer; }
 .channel-schedule-rate [class*="icon"] { width: 13px; height: 13px; }
-.channel-schedule-rate:hover { color: var(--ui-text-toned); background: #ffffff0c; }
+.channel-schedule-rate:hover { color: var(--ui-text-toned); background: var(--channel-ghost-hover); }
 .channel-schedule-rate.is-on { color: var(--channel-accent); }
-.channel-schedule-toggle:hover { color: var(--ui-text-toned); background: #ffffff0c; }
+.channel-schedule-toggle:hover { color: var(--ui-text-toned); background: var(--channel-ghost-hover); }
 .channel-schedule-toggle [class*="icon"] { width: 14px; height: 14px; transition: transform .12s; }
 .channel-schedule-card.is-open .channel-schedule-toggle [class*="icon"] { transform: rotate(180deg); }
 .channel-schedule-detail { flex-basis: 100%; display: flex; flex-direction: column; gap: 4px; margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--ui-border); color: var(--ui-text-muted); overflow-wrap: anywhere; }
@@ -1121,7 +1126,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 /* Account section of the settings dialog, the clickable footer identity and the room takeover prompt. */
 .channel-self-button { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1; padding: 4px; margin: -4px; border-radius: 8px; background: none; border: 0; color: inherit; text-align: left; cursor: pointer; }
 .channel-sidebar-footer > .channel-self-button { margin: -4px 0 -4px -4px; }
-.channel-self-button:hover { background: #ffffff0d; }
+.channel-self-button:hover { background: var(--channel-ghost-hover); }
 .channel-self-button:focus-visible { outline: 2px solid var(--ui-border-accented); outline-offset: 1px; }
 .channel-self-button > .channel-avatar { width: 34px; height: 34px; }
 .channel-self-button .channel-self { display: block; min-width: 0; }

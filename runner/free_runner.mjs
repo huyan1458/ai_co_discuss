@@ -2,10 +2,10 @@
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { atomic_json, deliver_task, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
 import { api } from './discussion_runner.mjs';
-import { ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, route_free_message } from './scheduler.mjs';
+import { ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, route_free_message } from './scheduler.mjs';
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const RENEW_MS = 30_000;
@@ -72,7 +72,7 @@ export function free_task_files(config, member, execution, binding) {
   // The host routes unnamed messages and receives hand-backs; it may name members in its answer.
   const discussion = config.mode !== 'free';
   const host_rule = member.role === 'host' && !discussion
-    ? `你是本房间的主持人：purpose 为 route 的请求是用户未点名的消息，handoff 表示你派出的成员都已结束。先用 ${cli} room view ${config.room} 查看成员与状态，再决定由谁处理；需要派活时在回答中加 --to 成员名（可重复，不能点名自己），只点名一位成员时，其回答直接面向用户，你不会再被唤醒；同时点名多位时，全部结束后你会再被唤醒一次汇总。不需要他人时不加 --to，本次即结束。只派分给各成员的文件或模块，避免多人改同一文件。`
+    ? `你是本房间的主持人：purpose 为 route 的请求是用户未点名的消息，handoff 表示你派出的成员都已结束，all 表示用户请全体成员各自回应一次（其他成员已同时收到，你只回答自己的部分，不加 --to）。先用 ${cli} room view ${config.room} 查看成员与状态，再决定由谁处理；需要派活时在回答中加 --to 成员名（可重复，不能点名自己），只点名一位成员时，其回答直接面向用户，你不会再被唤醒；同时点名多位时，全部结束后你会再被唤醒一次汇总。不需要他人时不加 --to，本次即结束。只派分给各成员的文件或模块，避免多人改同一文件。`
     : '';
   atomic_json(task_path, { site: config.site, room: config.room, mode: 'free', member: member.name,
     execution_id: execution.id, request_messages: execution.requests.map(item => item.message_id),
@@ -89,10 +89,27 @@ export function free_task_files(config, member, execution, binding) {
 const ADAPTER_LABELS = { codex: 'Codex App', codex_cli: 'Codex CLI', claude: 'Claude Code', antigravity: 'Antigravity App',
   antigravity_cli: 'Antigravity CLI', api: '模型 API，只能读写房间消息' };
 
-/** What a scheduler can know about a member without a role field: its software and project access. */
-function member_description(name, profile) {
-  const access = profile.adapter === 'api' ? '' : profile.project_access === 'write' ? '，可修改项目文件' : '，项目文件只读';
-  return `${name}（${ADAPTER_LABELS[profile.adapter] || profile.adapter}${access}）`;
+/** What a scheduler can know about a member without a role field: its software, project access and the messages it is on. */
+function member_description(name, profile, work) {
+  const project = profile.project_name || (profile.cwd ? basename(profile.cwd) : '');
+  const access = profile.adapter === 'api' ? '' : !profile.cwd ? '，未指定项目目录'
+    : profile.project_access === 'write' ? `，可修改项目 ${project} 的文件` : `，项目 ${project} 只读`;
+  return `${name}（${ADAPTER_LABELS[profile.adapter] || profile.adapter}${access}${work}）`;
+}
+
+/** The other messages a member is answering or has queued, so a correction can follow the message it corrects. */
+function member_work(requests, name, message_id) {
+  const open = requests.filter(item => item.member === name && item.message_id !== message_id);
+  const ids = status => [...new Set(open.filter(item => item.status === status).map(item => `#${item.message_id}`))].join('、');
+  return [ids('delivering') && `；正在处理 ${ids('delivering')}`, ids('pending') && `；待处理 ${ids('pending')}`].filter(Boolean).join('');
+}
+
+/** Why a message stayed with the host: the scheduler chose the host, or leaned elsewhere without enough certainty. */
+function route_host_label(decision, host, members) {
+  if (decision.choice === '__host__' || decision.confidence === null) return `交给主持人 ${host}`;
+  const lean = decision.choice === '__all__' ? '全体各自回应' : decision.choice === '__none__' ? '无需回应'
+    : members.some(member => member.name === decision.choice) ? `请 ${decision.choice} 回答` : '';
+  return lean ? `倾向${lean}，把握不足，交给主持人 ${host}` : `交给主持人 ${host}`;
 }
 
 /** Delivers free-room requests through the same software adapters as discussions. */
@@ -105,6 +122,8 @@ export class FreeRoomRunner {
     this.fetch = fetch_impl;
     this.routed = new Set();
     this.decisions = new Set();
+    // Routed requests whose decision is still pending: their host waits, so one pick replaces the host's start.
+    this.routing = new Set();
     this.children = new Set();
     this.members = new Map();
     this.exited = new Set();
@@ -158,38 +177,59 @@ export class FreeRoomRunner {
     for (const member of inbox.members) {
       const row = this.row(member.name);
       if (row && LIVE.includes(row.status)) await this.reconcile(member, row, active, inbox.execution_minutes);
-      else if (!inbox.archived && member.pending.length && !this.members.get(member.name)?.size) await this.start(member, row);
+      else if (!inbox.archived && member.pending.length && !this.members.get(member.name)?.size
+        && !member.pending.some(request => this.routing.has(request.id))) await this.start(member, row);
     }
   }
   /**
-   * Smart scheduling: for each new unnamed message routed to the host, ask the provider in the background whether
-   * another woken member suits it better, and post a recommendation the user may adopt. Nothing waits on it.
+   * Smart scheduling: for each new unnamed message routed to the host, ask the provider whether another woken
+   * member suits it better and apply a confident pick. The host waits for the answer (or its failure) before starting.
    */
   recommend_unnamed(inbox, room) {
     // Manual and online members are listed apart; they are never delivered to but may host or be recommended.
     const everyone = [...inbox.members, ...(inbox.observers || [])];
     const host = everyone.find(member => member.role === 'host');
     const waiting = host?.pending.filter(request => request.purpose === 'route' && !this.routed.has(request.id)) || [];
-    const members = everyone.filter(member => member !== host).map(member => ({ id: member.id, name: member.name,
-      description: this.config.participants[member.name] ? member_description(member.name, this.config.participants[member.name])
-        : `${member.name}（${member.access === 'online' ? '网页 AI' : '手动接入'}，由用户代为触发）` }));
     for (const request of waiting) {
       this.routed.add(request.id);
-      if (!members.length) continue;
-      const decision = this.recommend(request, room, host, members).catch(error => this.log(`智能调度 #${request.message_id} 未给出推荐：${error.message}`));
+      if (everyone.length < 2) continue;
+      this.routing.add(request.id);
+      const decision = this.recommend(request, room, everyone).catch(error => this.log(`智能调度 #${request.message_id} 未给出推荐：${error.message}`))
+        .finally(() => this.routing.delete(request.id));
       this.decisions.add(decision);
       decision.finally(() => this.decisions.delete(decision));
     }
   }
-  /** Decide one message; a confident pick is recorded and applied, otherwise the host keeps it. */
-  async recommend(request, room, host, members) {
+  /** Describe each member as the scheduler sees it: software, project access and the other messages it is on. */
+  route_members(everyone, room, message_id) {
+    const requests = (room.free?.requests || []).filter(item => ['pending', 'delivering'].includes(item.status));
+    return everyone.map(member => {
+      const work = member_work(requests, member.name, message_id);
+      const profile = this.config.participants[member.name];
+      return { id: member.id, name: member.name, role: member.role, description: profile ? member_description(member.name, profile, work)
+        : `${member.name}（${member.access === 'online' ? '网页 AI' : '手动接入'}，由用户代为触发${work}）` };
+    });
+  }
+  /** Decide one message and apply a confident pick: one member, everyone, or no one; otherwise the host keeps it. */
+  async recommend(request, room, everyone) {
     const page = await api(this.config, `/messages?after=${Math.max(0, request.message_id - ROUTE_CONTEXT_MESSAGES - 1)}`);
     const message = page.messages.find(item => item.id === request.message_id);
     if (!message) return;
+    const described = this.route_members(everyone, room, message.id);
+    const host = described.find(member => member.role === 'host');
+    const members = described.filter(member => member !== host);
     const decision = await route_free_message(this.config.api_home, this.config.scheduler,
-      { title: room.title, goal: room.goal, context: page.messages, message, host: host.name, members }, this.fetch);
-    this.log(`智能调度 #${message.id}：${decision.member ? `推荐 ${decision.member}` : '不推荐，交主持人'}（选择 ${decision.choice ?? '-'}，置信度 ${decision.confidence ?? '-'}）`);
-    if (!decision.member) return this.record_decision(message.id, decision, `交给主持人 ${host.name}`, false);
+      { title: room.title, goal: room.goal, context: page.messages, message, host, members }, this.fetch);
+    this.log(`智能调度 #${message.id}：${decision.action}${decision.member ? ` ${decision.member}` : ''}（选择 ${decision.choice ?? '-'}，置信度 ${decision.confidence ?? '-'}）`);
+    if (decision.action === 'host') return this.record_decision(message.id, decision, route_host_label(decision, host.name, members), false);
+    if (decision.action !== 'member') {
+      // Everyone or no one replaces the host's request in one step; a host that already started keeps the message.
+      const applied = await api(this.config, `/recommendations/${message.id}`, { action: decision.action })
+        .then(() => true, error => { this.log(`智能调度 #${message.id} 未能改派：${error.message}`); return false; });
+      const names = described.map(member => member.name).join('、');
+      const label = decision.action === 'all' ? `请全体各自回应（${names}）` : '无需回应，未唤醒任何成员';
+      return this.record_decision(message.id, decision, applied ? label : `${label}（未生效，仍由主持人处理）`, applied);
+    }
     await api(this.config, '/recommendations', { message_id: message.id, member_id: members.find(member => member.name === decision.member).id,
       provider: this.config.scheduler.provider, confidence: decision.confidence });
     // A confident pick is applied at once, interrupting the host; if that fails the recommendation stays for the user to adopt.
@@ -201,8 +241,9 @@ export class FreeRoomRunner {
   async record_decision(message_id, decision, label, applied) {
     try {
       await api(this.config, '/scheduler-decisions', { kind: 'interjection', label, confidence: decision.confidence ?? null,
-        applied, provider: this.config.scheduler.provider, after_message_id: message_id,
-        context: { model: this.config.scheduler.model, threshold: ROUTE_CONFIDENCE, prompt: ROUTE_PROMPT_VERSION, package: PACKAGE_VERSION } });
+        applied, provider: this.config.scheduler.provider, after_message_id: message_id, detail: decision.detail,
+        context: { model: this.config.scheduler.model, threshold: ROUTE_CONFIDENCE, wide_threshold: ROUTE_WIDE_CONFIDENCE,
+          prompt: ROUTE_PROMPT_VERSION, package: PACKAGE_VERSION } });
     } catch (error) { this.log(`智能调度 #${message_id} 决策记录未保存：${error.message}`); }
   }
   /** Reserve with a persisted client id before invoking any software. */

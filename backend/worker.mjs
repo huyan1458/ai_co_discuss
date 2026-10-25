@@ -2219,6 +2219,13 @@ async function free_dispatch_statements(database, room_id, host, names, chain_id
     database.prepare(`INSERT INTO free_batches (room_id,batch_id,chain_id,host_id) SELECT ?,${message_id},?,?`).bind(room_id, ...key, chain_id, host.id)];
 }
 
+/** A host answering only its share of an everyone request answers as a member, so it may not dispatch others. */
+function free_check_dispatch(member, payload, purposes) {
+  if (member.role === "host" && payload.to?.length && purposes.length && purposes.every(purpose => purpose === "all")) {
+    throw new HttpError(400, "这次是请全体成员各自回应，其他成员已收到请求；主持人只回答自己的部分，不能用 --to 派活");
+  }
+}
+
 /** Check a member's answer before the batch; the batch asserts the same facts atomically. */
 async function free_answer_guard(database, room_id, member, payload) {
   const token_check = "EXISTS(SELECT 1 FROM room_members WHERE id=? AND token_hash=? AND status='active')";
@@ -2229,10 +2236,13 @@ async function free_answer_guard(database, room_id, member, payload) {
   if (member.access === "manual") {
     const ids = payload.request_ids ?? [];
     if (payload.execution_id !== undefined || !Array.isArray(ids) || ids.some(id => !Number.isSafeInteger(id))) throw new HttpError(400, "手动接入成员用 request_ids 关联请求，不使用执行编号");
+    const purposes = [];
     for (const id of ids) {
       const row = await database.prepare("SELECT * FROM member_requests WHERE room_id=? AND id=?").bind(room_id, id).first();
       if (!row || row.member_id !== member.id || row.status !== "pending") throw new HttpError(409, `请求 ${id} 不属于本成员或已处理`);
+      purposes.push(row.purpose);
     }
+    free_check_dispatch(member, payload, purposes);
     const unique = [...new Set(ids)];
     return { ids: unique, condition: `${token_check} AND (SELECT COUNT(*) FROM member_requests WHERE member_id=? AND status='pending' AND id IN (SELECT value FROM json_each(?)))=?`,
       values: [member.id, member.token_hash, member.id, JSON.stringify(unique), unique.length] };
@@ -2244,6 +2254,8 @@ async function free_answer_guard(database, room_id, member, payload) {
   if (!["dispatched", "started"].includes(row.status) || row.lease_until <= Math.floor(Date.now() / 1000)) {
     throw new HttpError(409, "本次执行已结束、被打断或已过期；回答不能改作普通发言，请保留草稿");
   }
+  free_check_dispatch(member, payload, (await database.prepare("SELECT purpose FROM member_requests WHERE execution_id=? AND status='delivering'")
+    .bind(execution_id).all()).results.map(item => item.purpose));
   return { execution_id, condition: `${token_check} AND EXISTS(SELECT 1 FROM member_executions WHERE id=? AND member_id=? AND ${FREE_LIVE} AND lease_until>unixepoch())`,
     values: [member.id, member.token_hash, execution_id, member.id] };
 }
@@ -2323,10 +2335,35 @@ function free_release_statements(database, room_id) {
   ];
 }
 
-/** The user adopts a recommendation before it expires: interrupt the host now, or ask the member after the host. */
+/**
+ * Smart scheduling answers an unnamed message with everyone (each member once, as if the user named them all) or no one.
+ * Only a host request that has not started changes; a started host already handles the message its own way.
+ */
+async function free_route_wide(database, room_id, message_id, action) {
+  const route = await database.prepare("SELECT * FROM member_requests WHERE message_id=? AND purpose='route'").bind(message_id).first();
+  if (!route || route.room_id !== room_id) throw new HttpError(404, "只能处理交给主持人的未点名消息");
+  const pending = "AND status='pending'";
+  const statements = action === "none"
+    ? [database.prepare(`UPDATE member_requests SET status='cancelled' WHERE id=? ${pending}`).bind(route.id)]
+    // The host keeps its row (one request per message and member) and now answers its own share, without dispatching.
+    : [database.prepare(`UPDATE member_requests SET purpose='all' WHERE id=? ${pending}`).bind(route.id),
+      database.prepare(`INSERT OR IGNORE INTO member_requests (room_id,member_id,message_id,chain_id,purpose,created_by,created_at)
+        SELECT room_id,id,?,?,'all','user',unixepoch() FROM room_members WHERE room_id=? AND status='active'
+        AND EXISTS(SELECT 1 FROM member_requests WHERE id=? AND purpose='all' AND status='pending') ORDER BY id`).bind(message_id, message_id, room_id, route.id)];
+  const results = await database.batch(statements);
+  if (!results[0].meta.changes) throw new HttpError(409, "主持人已开始处理这条消息，不再改派");
+  const requests = (await database.prepare("SELECT * FROM member_requests WHERE message_id=? ORDER BY id").bind(message_id).all()).results;
+  return { action, requests };
+}
+
+/**
+ * The user adopts a recommendation before it expires: interrupt the host now, or ask the member after the host.
+ * Smart scheduling also sends action all or none here to have everyone or no one answer an unnamed message.
+ */
 async function free_adopt(database, room_id, token, message_id, payload) {
   await require_free_owner(database, room_id, token);
-  if (payload.action !== "adopt" || !["interrupt", "after"].includes(payload.mode)) throw new HttpError(400, "采纳须为 action=adopt，mode 为 interrupt 或 after");
+  if (["all", "none"].includes(payload.action)) return free_route_wide(database, room_id, message_id, payload.action);
+  if (payload.action !== "adopt" || !["interrupt", "after"].includes(payload.mode)) throw new HttpError(400, "采纳须为 action=adopt，mode 为 interrupt 或 after；全体或无需回应为 action=all 或 none");
   const row = await database.prepare("SELECT * FROM member_recommendations WHERE room_id=? AND message_id=?").bind(room_id, message_id).first();
   if (!row) throw new HttpError(404, "这条消息没有智能调度推荐");
   if (row.status !== "open") return { recommendation: row, duplicate: true };

@@ -9,10 +9,14 @@ export const SCHEDULER_PROVIDERS = {
 const REQUEST_TIMEOUT_MS = 30_000;
 /** Below this confidence a decision stays with the host, exactly as without scheduling. */
 export const ROUTE_CONFIDENCE = 0.7;
+/** Waking everyone or no one costs more when wrong (N runs, or an ignored message), so it needs more certainty. */
+export const ROUTE_WIDE_CONFIDENCE = 0.85;
 /** Bump when the routing question or its option descriptions change, so ratings can be compared across wordings. */
-export const ROUTE_PROMPT_VERSION = 2;
+export const ROUTE_PROMPT_VERSION = 3;
 const HOST_CHOICE = '__host__';
 const NOTE_CHOICE = '__note__';
+const ALL_CHOICE = '__all__';
+const NONE_CHOICE = '__none__';
 const CONTEXT_MESSAGES = 10;
 /** A free-room route sees a longer stretch, enough to tell who has not spoken for a while. */
 export const ROUTE_CONTEXT_MESSAGES = 20;
@@ -99,7 +103,8 @@ function unsure_label(lean) {
 /** Shorten a message so recent context stays small; the decision never needs whole answers. */
 function excerpt(message) {
   const text = String(message.text || '').replace(/\s+/g, ' ').trim();
-  return `#${message.id} ${message.author}：${text.length > MAX_MESSAGE_CHARS ? `${text.slice(0, MAX_MESSAGE_CHARS)}…` : text}`;
+  const reply = message.reply_to ? `（回复 #${message.reply_to}）` : '';
+  return `#${message.id} ${message.author}${reply}：${text.length > MAX_MESSAGE_CHARS ? `${text.slice(0, MAX_MESSAGE_CHARS)}…` : text}`;
 }
 
 /** The room's purpose in the user's words, so a decision can tell drifting from progress. */
@@ -125,18 +130,27 @@ export function certainty(answer) {
 }
 
 /**
- * Pick the member for one unnamed free-room message, or null to leave it with the host.
- * Members are [{name, description}] without the host; only a confident member choice is returned.
+ * Decide who answers one unnamed free-room message: whether its addressee is already settled by the text or the thread.
+ * Members are [{name, description}] without the host; host is {name, description}. Returns action member (with member),
+ * all, none, or host for anything unsettled or not confident enough.
  */
 export async function route_free_message(home, scheduler, { title, goal, context, message, host, members }, fetch_impl) {
   const choices = [...members.map(member => ({ value: member.name, description: member.description })),
-    { value: HOST_CHOICE, description: `交回主持人 ${host}：需要拆分任务、多人协作，或消息与任何成员都无关` }];
-  const answers = await decide(home, scheduler, scheduler_state(title, context, message, goal, '', {}, ROUTE_CONTEXT_MESSAGES), [{ type: 'choice', name: 'handler',
-    instructions: '这条用户消息没有用 @ 点名成员，但正文可能直接提到某位成员的名字或在向其提问（如“某某在吗”），此时应选该成员。判断它能否直接交给一位成员独立处理；需要主持人先理解、拆分或协调时选交回主持人。', choices }], fetch_impl);
-  const answer = answers.handler || {};
-  const confidence = certainty(answer);
-  const member = members.some(item => item.name === answer.choice) && confidence >= ROUTE_CONFIDENCE ? answer.choice : null;
-  return { member, choice: answer.choice ?? null, confidence };
+    { value: HOST_CHOICE, description: `主持人 ${host.description}：消息在延续主持人自己的回答，或对象不明确，或需要分工、排先后、互相回应` },
+    { value: ALL_CHOICE, description: '全体成员（含主持人）各自回应一次，彼此不需要配合，如打招呼、自我介绍、各说一句看法' },
+    { value: NONE_CHOICE, description: '无需回应：只是确认、致谢或旁注，不需要任何人回答' }];
+  const questions = [{ type: 'choice', name: 'handler', choices,
+    instructions: '这条用户消息没有用 @ 点名成员。判断它的回应对象是否已经确定：正文叫了某位成员的名字或在向其提问；在延续某位成员的回答（追问、要求修改、引用，或“回复”指向其消息）；在补充或纠正一条正由某位成员处理的消息。以上情况选该成员，是主持人就选主持人。要求所有成员各自回应一次选全体；只是确认、致谢或旁注选无需回应；对象不明确，或需要分工、排先后、互相回应时选主持人。' }];
+  const answers = await decide(home, scheduler, scheduler_state(title, context, message, goal, '', {}, ROUTE_CONTEXT_MESSAGES), questions, fetch_impl);
+  const detail = detail_of(questions, answers);
+  const choice = answers.handler?.choice ?? null;
+  const confidence = certainty(answers.handler);
+  const wide = choice === ALL_CHOICE || choice === NONE_CHOICE;
+  const sure = confidence !== null && confidence >= (wide ? ROUTE_WIDE_CONFIDENCE : ROUTE_CONFIDENCE);
+  if (sure && choice === ALL_CHOICE) return { action: 'all', choice, confidence, detail };
+  if (sure && choice === NONE_CHOICE) return { action: 'none', choice, confidence, detail };
+  if (sure && members.some(item => item.name === choice)) return { action: 'member', member: choice, choice, confidence, detail };
+  return { action: 'host', choice, confidence, detail };
 }
 
 /**

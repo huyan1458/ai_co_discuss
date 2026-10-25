@@ -1210,6 +1210,31 @@ test('Worker free hosts route, dispatch, hand back once and stop at the chain bu
   assert.equal((await f.request(r.path)).body.host, 'Claude');
 });
 
+test('Worker smart scheduling asks everyone without a hand-off, or no one, like Python', async t => {
+  const f = await worker_fixture(t);
+  const codex = 'codex-wide'.repeat(4), gemini = 'gemini-wide'.repeat(4);
+  const r = await free_worker_room(f, [{ name: 'Codex', token: codex }, { name: 'Gemini', token: gemini }]);
+  const tokens = { Claude: r.claude, Codex: codex, Gemini: gemini };
+  await f.request(`${r.path}/members/${await r.member_id('Claude')}`, { action: 'role', role: 'host' }, r.owner);
+  const requests = async () => (await f.request(r.path)).body.free.requests.map(item => [item.member, item.purpose, item.status]);
+  const route = async (text, action) => {
+    const message_id = (await r.say(text)).body.message.id;
+    return f.request(`${r.path}/recommendations/${message_id}`, { action }, r.owner);
+  };
+  assert.equal((await route('都出来打个招呼', 'all')).status, 200);
+  assert.deepEqual(await requests(), [['Claude', 'all', 'pending'], ['Codex', 'all', 'pending'], ['Gemini', 'all', 'pending']]);
+  const host = (await r.reserve('Claude')).body;
+  assert.equal((await r.answer(host.id, r.claude, 'Claude', { to: ['Codex'] })).status, 400);
+  assert.equal((await r.answer(host.id, r.claude, 'Claude')).status, 201);
+  for (const name of ['Codex', 'Gemini']) assert.equal((await r.answer((await r.reserve(name)).body.id, tokens[name], name)).status, 201);
+  assert.ok(!(await requests()).some(item => item[1] === 'handoff'));
+  assert.equal((await route('好的，谢谢', 'none')).status, 200);
+  assert.deepEqual((await requests()).at(-1), ['Claude', 'route', 'cancelled']);
+  const started = (await r.say('已经开始处理')).body.message.id;
+  await r.reserve('Claude');
+  assert.equal((await f.request(`${r.path}/recommendations/${started}`, { action: 'all' }, r.owner)).status, 409);
+});
+
 test('Worker free rooms forward online answers and link brainstorm rooms', async t => {
   const f = await worker_fixture(t);
   const r = await free_worker_room(f);

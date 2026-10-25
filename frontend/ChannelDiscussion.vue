@@ -311,7 +311,7 @@ const scheduler_decisions = computed(() => {
   }
   return rows;
 });
-const DECISION_OPTIONS = { __host__: "交给主持人", __note__: "仅补充信息", continue: "继续下一轮" };
+const DECISION_OPTIONS = { __host__: "交给主持人", __note__: "仅补充信息", continue: "继续下一轮", __all__: "全体各自回应", __none__: "无需回应" };
 const option_name = (name) => DECISION_OPTIONS[name] || bridge.display_name(name);
 /** The host's own plans stand beside the decisions, under the message they followed. */
 const host_arrangements = computed(() => {
@@ -336,9 +336,10 @@ function save_correction(decision) {
   correcting.value = { id: 0, should_be: "", note: "" };
   act("rate_decision", { decision_id: decision.id, rating: "bad", should_be, note });
 }
-/** Who could have answered: every member present, plus the host. */
+/** Who could have answered: every member present, plus the host; a free room's routing can also pick everyone or no one. */
 const correction_options = computed(() => [{ label: "未指定", value: "" }, ...(room.value.members || []).filter((member) => member.status === "active")
-  .map((member) => ({ label: bridge.display_name(member.name), value: member.name }))]);
+  .map((member) => ({ label: bridge.display_name(member.name), value: member.name })),
+  ...(free.value ? ["__all__", "__none__"].map((value) => ({ label: DECISION_OPTIONS[value], value })) : [])]);
 function adopt(message_id, mode) {
   adopting.value = 0;
   act("adopt_recommendation", { message_id, mode });

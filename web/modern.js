@@ -41992,7 +41992,9 @@ var _H = {
 		}), it = {
 			__host__: "交给主持人",
 			__note__: "仅补充信息",
-			continue: "继续下一轮"
+			continue: "继续下一轮",
+			__all__: "全体各自回应",
+			__none__: "无需回应"
 		}, at = (e) => it[e] || s.display_name(e), ot = Z(() => {
 			let e = /* @__PURE__ */ new Map();
 			if (je.value) return e;
@@ -42034,13 +42036,20 @@ var _H = {
 				note: n
 			});
 		}
-		let ut = Z(() => [{
-			label: "未指定",
-			value: ""
-		}, ...(N.value.members || []).filter((e) => e.status === "active").map((e) => ({
-			label: s.display_name(e.name),
-			value: e.name
-		}))]);
+		let ut = Z(() => [
+			{
+				label: "未指定",
+				value: ""
+			},
+			...(N.value.members || []).filter((e) => e.status === "active").map((e) => ({
+				label: s.display_name(e.name),
+				value: e.name
+			})),
+			...je.value ? ["__all__", "__none__"].map((e) => ({
+				label: it[e],
+				value: e
+			})) : []
+		]);
 		function dt(e, t) {
 			et.value = 0, l("adopt_recommendation", {
 				message_id: e,
@@ -43548,7 +43557,7 @@ var _H = {
 			], 2);
 		};
 	}
-}, [["__scopeId", "data-v-54f67ce7"]]), vG = {
+}, [["__scopeId", "data-v-b853a900"]]), vG = {
 	slots: {
 		root: "relative inline-flex items-center",
 		base: ["rounded-md", "transition-colors"],
