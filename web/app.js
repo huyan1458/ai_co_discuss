@@ -2396,10 +2396,10 @@ async function conclude_discussion() {
 }
 
 /** Turn this free room into a discussion within the given limits and start the run; the local service takes it over at its next check. */
-async function start_room_discussion({ goal, max_rounds, max_minutes }) {
+async function start_room_discussion({ goal, max_rounds, max_minutes, execution_minutes = 0, named_followup = false }) {
   const room_id = state.room.id, path = `/api/rooms/${room_id}`;
   if (!localStorage.getItem(`discuss-access:${room_id}`)) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
-  await request_json(`${path}/discussion`, { action: "start", ...(goal ? { goal } : {}), limits: { max_rounds, max_minutes } });
+  await request_json(`${path}/discussion`, { action: "start", ...(goal ? { goal } : {}), limits: { max_rounds, max_minutes, execution_minutes }, named_followup });
   const runtime = await request_json(`${path}/runtime`);
   await request_json(`${path}/runtime`, { action: "start", mode: "automatic", revision: runtime.revision, deadline: 0 });
   await refresh_room();

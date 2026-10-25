@@ -2,6 +2,7 @@
 /** Right-rail board of a free room, laid out like the discussion progress board. */
 import { computed, inject, ref, watch } from "vue";
 import InviteDialog from "./InviteDialog.vue";
+import StartDiscussionDialog from "./StartDiscussionDialog.vue";
 
 const { view, bridge, act, pending } = inject("discussion");
 const LIVE = ["dispatched", "started"];
@@ -118,16 +119,9 @@ const inviting = ref(false);
 watch(() => room.value.id, () => { inviting.value = false; });
 
 const starting = ref(false);
-const discussion_goal = ref("");
-const discussion_rounds = ref(3);
-const discussion_minutes = ref(0);
 /** A discussion needs an AI host the local service wakes. */
 const can_start = computed(() => Boolean(host.value && host.value.access === "runner") && view.value.launch.available);
-/** Open the discussion with the chosen limits; blank or invalid numbers mean unlimited. */
-async function start_discussion() {
-  const whole = (value) => Number.isInteger(value) && value >= 0 ? value : 0;
-  if (await act("start_room_discussion", { goal: discussion_goal.value.trim(), max_rounds: whole(discussion_rounds.value), max_minutes: whole(discussion_minutes.value) })) starting.value = false;
-}
+watch(() => room.value.id, () => { starting.value = false; });
 </script>
 
 <template>
@@ -174,18 +168,9 @@ async function start_discussion() {
       <button v-for="item in room.linked_rooms" :key="item.id" type="button" class="pb-link pb-free-linked" @click="act('room', item.id)">{{ item.title }}<small>{{ bridge.phases[item.phase] || item.phase }}</small></button>
     </section>
     <section v-if="!room.archived" class="pb-actions" aria-label="操作">
-      <UButton icon="i-lucide-messages-square" label="开启讨论" size="sm" color="neutral" variant="outline" class="pb-action" title="由主持人推进成员轮流发言，到上限或结束后房间回到自由协作" :disabled="!can_start" @click="starting = !starting" />
+      <UButton icon="i-lucide-messages-square" label="开启讨论" size="sm" color="neutral" variant="outline" class="pb-action" title="由主持人推进成员轮流发言，到上限或结束后房间回到自由协作" :disabled="!can_start" @click="starting = true" />
       <p v-if="!can_start" class="pb-free-note">开启讨论需要一位由本机唤醒的 AI 主持人。</p>
     </section>
-    <form v-if="starting && !room.archived" class="pb-reopen" aria-label="开启讨论" @submit.prevent="start_discussion">
-      <UFormField label="讨论目标" hint="可留空，沿用房间目标"><UInput v-model="discussion_goal" size="sm" class="w-full" /></UFormField>
-      <label>轮次上限<input v-model.number="discussion_rounds" type="number" min="0" max="100" inputmode="numeric" /><small>0 表示不限</small></label>
-      <label>总时长（分钟）<input v-model.number="discussion_minutes" type="number" min="0" max="1440" inputmode="numeric" /><small>0 表示不限</small></label>
-      <div class="pb-invite-footer">
-        <UButton label="取消" color="neutral" variant="ghost" size="sm" @click="starting = false" />
-        <UButton type="submit" icon="i-lucide-play" label="开始" size="sm" class="channel-primary-button" :loading="pending === 'start_room_discussion'" :disabled="Boolean(pending) || !view.access?.can_manage" />
-      </div>
-    </form>
     <section v-if="timings.items.length" class="pb-section" aria-label="执行耗时">
       <div class="pb-timing-heading"><h4>耗时</h4><small>共 {{ timings.items.length }} 次执行 · {{ duration(timings.total) }}</small></div>
       <details class="pb-timings">
@@ -198,6 +183,7 @@ async function start_discussion() {
         </ol>
       </details>
     </section>
+  <StartDiscussionDialog v-model:open="starting" />
   <InviteDialog v-model:open="inviting" description="新成员加入后不打断其他成员；点卡片翻面可设置软件、模型、项目权限和要续接的已有会话。" />
   </div>
 </template>
@@ -205,8 +191,4 @@ async function start_discussion() {
 <style scoped>
 .pb-member.is-away { opacity: .6; }
 .pb-member-model { margin: 2px 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
-.pb-reopen { display: grid; gap: 12px; margin: 10px 0; }
-.pb-reopen label { display: flex; align-items: center; gap: 10px; color: var(--ui-text-toned); font-size: 13px; }
-.pb-reopen label small { color: var(--ui-text-dimmed); font-size: 11px; }
-.pb-reopen input[type="number"] { width: 64px; min-height: 28px; padding: 2px 8px; border: 1px solid var(--ui-border-muted); border-radius: 6px; background: var(--ui-bg); color: var(--ui-text-highlighted); font: inherit; }
 </style>
