@@ -291,6 +291,8 @@ const scheduler_decisions = computed(() => {
   const rows = new Map();
   if (free.value) return rows;
   for (const item of room.value.scheduler_decisions || []) {
+    // A skip asked the model nothing (no confidence, nothing applied, no question), so there is no decision to show.
+    if (item.confidence === null && !item.applied && !item.detail?.length) continue;
     rows.set(item.after_message_id, [...(rows.get(item.after_message_id) || []),
       { ...item, title: `${SCHEDULER_LABELS[item.provider] || item.provider}${item.confidence === null ? "" : `，置信度 ${Number(item.confidence).toFixed(2)}`}` }]);
   }
@@ -948,6 +950,11 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           <span v-if="free || topic.host === '用户'" class="channel-topic-person">{{ bridge.display_name('用户') }}<small>{{ free ? '需求方' : '主持' }}</small></span>
         </div><small class="channel-topic-bounds">{{ topic.bounds }}</small></div>
       </section></div>
+      <!-- The opening plan has no answer to follow, so it stands right under the topic. -->
+      <ScheduleCard v-for="plan in host_arrangements.get(0) || []" :key="`arrangement-${plan.id}`" icon="i-lucide-list-ordered" plain :title="`${bridge.display_name(room.host)} 创建的发言安排`" label="主持人安排" toggle-label="展开或收起各专家的任务">
+        <template #text>主持人安排：{{ plan.label }}</template>
+        <p v-for="turn in plan.turns" :key="`${plan.id}-${turn.expert}-${turn.question}`"><span>{{ bridge.display_name(turn.expert) }}：{{ turn.question }}</span></p>
+      </ScheduleCard>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
         <template v-for="message in group.messages" :key="message.id">
@@ -1037,12 +1044,9 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
         </template>
       </div>
       <div v-if="pending_message" class="channel-message-group">
-        <section v-if="pending_message.is_host" :id="`execution-${pending_message.id}`" class="channel-host-work" :aria-label="`${bridge.display_name(pending_message.author)} 主持工作`">
-          <UAvatar :src="bridge.identities[pending_message.author]?.icon" :text="bridge.identities[pending_message.author]?.initials || '?'" :alt="bridge.display_name(pending_message.author)" size="md" class="channel-avatar" :class="bridge.identities[pending_message.author]?.style" />
-          <div class="channel-host-work-heading"><strong>{{ bridge.display_name(pending_message.author) }}</strong><span>主持工作</span></div>
-          <span class="channel-host-work-elapsed">已用 {{ pending_duration }}</span>
-          <p class="channel-host-work-status" role="status" :aria-label="`${bridge.display_name(pending_message.author)} ${pending_message.text}`"><span ref="reply_glow" class="channel-reply-glow">{{ pending_message.text }}</span></p>
-        </section>
+        <ScheduleCard v-if="pending_message.is_host" :id="`execution-${pending_message.id}`" icon="i-lucide-list-ordered" plain :expandable="false" :label="`${bridge.display_name(pending_message.author)} 主持工作`">
+          <template #text><span role="status" :aria-label="`${bridge.display_name(pending_message.author)} ${pending_message.text}`">{{ bridge.display_name(pending_message.author) }} 主持工作：<span ref="reply_glow" class="channel-reply-glow">{{ pending_message.text }}</span></span><small>已用 {{ pending_duration }}</small></template>
+        </ScheduleCard>
         <UChatMessage v-else :id="`execution-${pending_message.id}`" :data-author="bridge.identities[pending_message.author]?.style" role="assistant" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
             <div class="channel-message-byline">
@@ -1114,16 +1118,6 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
 .channel-free-recipients button.is-on { border-color: color-mix(in srgb, var(--channel-accent) 40%, transparent); background: color-mix(in srgb, var(--channel-accent) 14%, transparent); color: var(--ui-text-highlighted); }
 .channel-link-button { color: var(--channel-accent); text-decoration: underline; text-underline-offset: 2px; }
 .channel-message-elapsed { align-self: center; margin-left: auto; white-space: nowrap; }
-.channel-host-work { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; column-gap: 10px; row-gap: 2px; align-items: start; margin: 0 var(--message-inset-end, 16px) 20px 16px; padding: 12px 18px; border: 1px solid var(--ui-border-muted); border-radius: 10px; background: color-mix(in srgb, var(--ui-bg-elevated) 35%, transparent); }
-.channel-host-work > .channel-avatar { grid-row: 1 / 3; align-self: center; width: 28px; height: 28px; font-size: 9px; }
-.channel-host-work-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; min-width: 0; line-height: 20px; }
-.channel-host-work-heading strong { color: var(--ui-text); font-size: 13px; font-weight: 600; }
-.channel-host-work-heading span, .channel-host-work-elapsed { color: var(--ui-text-dimmed); font-size: 11px; line-height: 20px; }
-.channel-host-work-elapsed { white-space: nowrap; font-variant-numeric: tabular-nums; }
-.channel-host-work-status { grid-column: 2 / -1; margin: 0; color: var(--ui-text-toned); font-size: 13px; line-height: 20px; }
-@media (max-width: 700px) {
-  .channel-host-work { margin: 0 8px 14px; padding: 12px 15px; }
-}
 .channel-reply-glow { display: inline-block; max-width: 100%; }
 @media (prefers-reduced-motion: no-preference) {
   .channel-reply-glow.is-glowing {

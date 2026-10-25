@@ -327,7 +327,8 @@ export class DiscussionRunner {
     if (!plan) return {};
     const suggestions = plan.message_id ? [{ message_id: plan.message_id, suggestion: plan.label, confidence: plan.confidence }] : [];
     if (plan.action === 'host') {
-      await this.record_decision(plan, false);
+      // A skip made no judgment (no model call, so no detail); only a decision actually asked of the model is shown.
+      if (plan.detail) await this.record_decision(plan, false);
       return { suggestions };
     }
     const token = randomUUID();

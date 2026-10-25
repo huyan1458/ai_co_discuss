@@ -282,7 +282,7 @@ def require_floor(room, speaker):
 def host_arrangements(connection, room_id, decisions):
     """Each plan the host created (turns saved in one batch), anchored after the latest answer before it.
 
-    Invitation turns are not plans, and a plan the smart scheduler applied is already shown by its own decision.
+    The opening plan has no answer to follow and is anchored at 0. Invitation turns are not plans, and a plan the smart scheduler applied is already shown by its own decision.
     """
     plans, latest_answer = [], 0
     for row in connection.execute("SELECT id,expert,question,answer_id,created_at,submission_id FROM discussion_turns WHERE room_id=? ORDER BY id", (room_id,)):
@@ -293,7 +293,7 @@ def host_arrangements(connection, room_id, decisions):
                 plans.append({"id": row["id"], "after_message_id": latest_answer, "created_at": row["created_at"], "turns": [{"expert": row["expert"], "question": row["question"]}]})
         latest_answer = max(latest_answer, row["answer_id"] or 0)
     applied = {item["after_message_id"] for item in decisions if item["applied"]}
-    return [plan for plan in plans if plan["after_message_id"] and plan["after_message_id"] not in applied][-RECENT_DECISIONS:]
+    return [plan for plan in plans if plan["after_message_id"] not in applied][-RECENT_DECISIONS:]
 
 
 def discussion_rounds(connection, room_id, experts):

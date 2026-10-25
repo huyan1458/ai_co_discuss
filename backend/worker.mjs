@@ -405,7 +405,7 @@ async function update_floor(database, room_id, payload) {
 
 /**
  * Each plan the host created (turns saved in one batch), anchored after the latest answer before it.
- * Invitation turns are not plans, and a plan the smart scheduler applied is already shown by its own decision.
+ * The opening plan has no answer to follow and is anchored at 0. Invitation turns are not plans, and a plan the smart scheduler applied is already shown by its own decision.
  */
 async function host_arrangements(database, room_id, decisions) {
   const plans = [];
@@ -419,7 +419,7 @@ async function host_arrangements(database, room_id, decisions) {
     latest_answer = Math.max(latest_answer, row.answer_id || 0);
   }
   const applied = new Set(decisions.filter((item) => item.applied).map((item) => item.after_message_id));
-  return plans.filter((plan) => plan.after_message_id && !applied.has(plan.after_message_id)).slice(-RECENT_DECISIONS);
+  return plans.filter((plan) => !applied.has(plan.after_message_id)).slice(-RECENT_DECISIONS);
 }
 
 /** Group complete history metadata until every configured expert has spoken. */

@@ -673,12 +673,12 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual((self.events()[-1]["participant"], self.events()[-1]["role"]), ("Codex", "host"))
 
     def test_host_plans_after_an_answer_are_listed_for_the_transcript(self):
-        """A plan made after answers follows the latest answer; the opening plan has nothing to follow."""
+        """A plan made after answers follows the latest answer; the opening plan is anchored at 0."""
         created, _ = self.plan_round("arrangement-plan")
         token = self.enter(self.events()[-1])
         self.answer("Claude", created["turn"]["id"], token, "arrangement-Claude")
         room = self.request(self.path)[1]
-        self.assertEqual(room["host_arrangements"], [])
+        self.assertEqual([item["after_message_id"] for item in room["host_arrangements"]], [0])
         token = self.enter(self.events()[-1])
         self.answer("Gemini", room["current_turn"]["id"], token, "arrangement-Gemini")
         host_token = self.enter(self.events()[-1])
@@ -688,8 +688,9 @@ class RuntimeTests(unittest.TestCase):
             "roster": self.roster_revision(), "turns": [{"expert": "Gemini", "question": "补充"}, {"expert": "Claude", "question": "回应"}]}, host_token)
         self.assertEqual(status, 201, plan)
         arrangements = self.request(self.path)[1]["host_arrangements"]
-        self.assertEqual([[(turn["expert"], turn["question"]) for turn in item["turns"]] for item in arrangements], [[("Gemini", "补充"), ("Claude", "回应")]])
-        self.assertGreater(arrangements[0]["after_message_id"], 0)
+        self.assertEqual([[(turn["expert"], turn["question"]) for turn in item["turns"]] for item in arrangements][-1], [("Gemini", "补充"), ("Claude", "回应")])
+        self.assertEqual(arrangements[0]["after_message_id"], 0)
+        self.assertGreater(arrangements[-1]["after_message_id"], 0)
 
     def test_invited_expert_completes_the_current_round_before_a_repeat_pass(self):
         """A plan that loops through the experts twice places the newcomer where this round completes."""
@@ -704,8 +705,8 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(status, 200, room)
         self.assertEqual([(turn["expert"], turn["question"]) for turn in room["queued_turns"]],
                          [("Gemini", "第 1 句"), ("DeepSeek", "欢迎加入：请先读取议题，独立给出你的开场观点。"), ("Claude", "第 2 句"), ("Gemini", "第 3 句")])
-        # The invitation is not a plan, and a plan with nothing answered before it has no message to follow.
-        self.assertEqual(room["host_arrangements"], [])
+        # The invitation is not a plan: only the host's opening plan is listed.
+        self.assertEqual([len(item["turns"]) for item in room["host_arrangements"]], [4])
 
     def test_invitation_preserves_user_hold_and_does_not_schedule_while_paused(self):
         """An invitation cannot clear pending user input or resume a paused discussion."""
