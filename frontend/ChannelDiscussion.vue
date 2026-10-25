@@ -183,7 +183,7 @@ const free_working = computed(() => view.value.query || view.value.mention_only 
 /** Says in the note line who the draft will reach: the @mentioned members, else the host. */
 const recipient_hint = computed(() => {
   if (view.value.free_proxy) return `本条作为 ${bridge.display_name(view.value.free_proxy)} 的回答原文保存，并关闭它的待处理请求`;
-  const named = MENTION_PATTERN(ALL_MENTION).test(draft_prose.value) ? free_members.value
+  const named = ALL_ALIASES.some((alias) => MENTION_PATTERN(alias).test(draft_prose.value)) ? free_members.value
     : free_members.value.filter((member) => MENTION_PATTERN(member.name).test(draft_prose.value));
   if (named.length) return `发给 ${named.map((member) => bridge.display_name(member.name)).join("、")}`;
   if (free_members.value.length === 1) return `发给 ${bridge.display_name(free_members.value[0].name)}`;
@@ -197,7 +197,7 @@ const free_online = computed(() => free_members.value.filter((member) => member.
 /** In a discussion, an @mention of an active member is a direct question: it wakes that member outside turns, rounds and limits. */
 const ask_members = computed(() => free.value ? [] : (room.value?.members || []).filter((member) => member.status === "active" && member.name !== "用户"));
 const asked_names = computed(() => ask_members.value.filter((member) => MENTION_PATTERN(member.name).test(draft_prose.value)).map((member) => bridge.display_name(member.name)));
-const mention_pool = computed(() => free.value ? [...(mention_all.value ? [{ name: ALL_MENTION }] : []), ...free_members.value] : ask_members.value);
+const mention_pool = computed(() => free.value ? [...(mention_all.value ? ALL_ALIASES.map((name) => ({ name })) : []), ...free_members.value] : ask_members.value);
 /** Combine immutable suggestions with live membership and conversion status. */
 const response_suggestions = computed(() => {
   if (!free.value) return new Map();
@@ -426,8 +426,9 @@ function sync_mirror() {
 watch(mention_mirror, () => nextTick(sync_mirror), { flush: "post" });
 
 const mention_context = ref(null);
-/** @全体成员 names every member a free-room message can reach, offered once there is more than one. */
+/** @全体成员 (or @all) names every member a free-room message can reach, offered once there is more than one. */
 const ALL_MENTION = "全体成员";
+const ALL_ALIASES = [ALL_MENTION, "all"];
 const mention_all = computed(() => free_members.value.length > 1);
 const mention_index = ref(0);
 const mention_list = ref(null);

@@ -939,8 +939,8 @@ function message_payload() {
       request_ids: state.room.free.requests.filter(item => item.member === online.name && item.status === "pending").map(item => item.id) };
     const payload = { author: "用户", text, reply_to: state.reply_to, kind: "chat", submitted_by: "用户" };
     const active = (state.room.free?.members || []).filter(member => member.status === "active" && (member.access !== "manual" || member.registered_at)).map(member => member.name);
-    // @mentions outside code name members (@全体成员 names them all); without any, the server gives the message to the only member or the host.
-    const named = mentioned(text, "全体成员") ? active : active.filter(name => mentioned(text, name));
+    // @mentions outside code name members (@全体成员 or @all names them all); without any, the server gives the message to the only member or the host.
+    const named = mentioned(text, "全体成员") || mentioned(text, "all") ? active : active.filter(name => mentioned(text, name));
     if (named.length) payload.to = named;
     return payload;
   }
