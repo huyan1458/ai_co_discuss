@@ -1,6 +1,7 @@
 <script setup>
 import { computed, inject, ref, watch } from "vue";
 import CreateDiscussion from "./CreateDiscussion.vue";
+import DiscussionLimits from "./DiscussionLimits.vue";
 import AccountSettings from "./AccountSettings.vue";
 
 const props = defineProps({ detailId: { type: Number, default: null }, targetRoom: { type: Object, default: null }, targetFolder: { type: Object, default: null }, readingOptions: { type: Array, default: () => [] }, effectOptions: { type: Array, default: () => [] } });
@@ -104,10 +105,8 @@ const participants = Object.keys(bridge.identities).map((value) => ({ value, lab
 const phases = Object.entries(bridge.phases).map(([value, label]) => ({ value, label }));
 const expert_modes = [{ value: "none", label: "不参与" }, { value: "cli", label: "本地 AI · 自行发言" }, { value: "online", label: "在线 AI · 由人代发" }];
 const details_open = ref(false);
+const topic_limits = ref(null);
 const limits_locked = computed(() => !["preparing", "paused"].includes(view.value.room?.phase));
-const limit_fields = [{ key: 'max_rounds', label: '讨论轮次上限', min: 0, max: 100 }, { key: 'max_minutes', label: '总时长（分钟）', min: 0, max: 1440 }, { key: 'execution_minutes', label: '单次 AI 执行（分钟，仅自动）', min: 0, max: 60 }];
-const visible_limits = computed(() => limit_fields.filter(item => item.key !== 'execution_minutes'
-  || view.value.room?.runtime?.mode === 'automatic'));
 const pending_theme = ref(null);
 const pending_attachment = ref(null);
 const detail = ref(null);
@@ -123,6 +122,7 @@ function form_id(key) {
 
 /** Close a write dialog only after the controller confirms a successful save. */
 async function save_form() {
+  topic_limits.value?.settle();
   const action = mode.value === "create" ? "create" : mode.value === "edit" ? "save_topic" : "schedule";
   if (action === "create") {
     const folder_id = props.targetFolder?.id ?? null;
@@ -249,9 +249,11 @@ const keep_open = (event) => event.preventDefault();
         <UFormField label="讨论目标"><UTextarea :model-value="view.fields[form_id('goal')]" :maxlength="1000" :rows="2" placeholder="希望通过讨论解决的问题" class="w-full" @update:model-value="bridge.write_field(form_id('goal'), $event)" /></UFormField>
         <div class="form-two-columns"><UFormField label="主持人"><USelect :model-value="view.fields[form_id('host')]" :items="participants" placeholder="选择主持人" class="w-full" @update:model-value="bridge.write_field(form_id('host'), $event)" /></UFormField><UFormField v-if="rendered_mode === 'edit'" label="阶段"><USelect :model-value="view.fields[form_id('phase')]" :items="phases" class="w-full" @update:model-value="bridge.write_field(form_id('phase'), $event)" /></UFormField></div>
         <UFormField v-if="rendered_mode === 'edit'" label="当前焦点"><UInput :model-value="view.fields[form_id('focus')]" :maxlength="1000" placeholder="当前最需要回应的问题" class="w-full" @update:model-value="bridge.write_field(form_id('focus'), $event)" /></UFormField>
-        <section class="advanced-content"><h3>讨论上限</h3><div class="form-two-columns">
-          <UFormField v-for="item in visible_limits" :key="item.key" :label="item.label"><UInput :model-value="view.fields[form_id(`limit-${item.key}`)]" type="number" :min="item.min" :max="item.max" :step="1" :disabled="limits_locked" :required="item.min > 0" :placeholder="item.min === 0 ? '留空不限' : '1–60'" class="w-full" @update:model-value="bridge.write_field(form_id(`limit-${item.key}`), $event)" /></UFormField>
-        </div><p class="fine-print">轮次、总时长、单次执行留空或 0 表示不限。一轮指每位专家各完成一次观点；首次进入讨论阶段或创建安排后计时，暂停期间不计时；到限后暂停，由用户决定追加轮次或结束。</p><p v-if="limits_locked" class="fine-print">修改上限前，请先把阶段保存为“已暂停”。</p></section>
+        <section class="advanced-content"><h3>讨论上限</h3>
+          <DiscussionLimits ref="topic_limits" :rounds="Number(view.fields[form_id('limit-max_rounds')])" :minutes="Number(view.fields[form_id('limit-max_minutes')])" :execution_minutes="view.fields[form_id('limit-execution_minutes')]"
+            :execution="view.room?.runtime?.mode === 'automatic'" :disabled="limits_locked"
+            @update:rounds="bridge.write_field(form_id('limit-max_rounds'), String($event))" @update:minutes="bridge.write_field(form_id('limit-max_minutes'), String($event))" @update:execution_minutes="bridge.write_field(form_id('limit-execution_minutes'), $event)" />
+          <p v-if="limits_locked" class="fine-print">修改上限前，请先把阶段保存为“已暂停”。</p></section>
         <UCollapsible v-model:open="details_open" class="advanced-fields"><UButton :trailing-icon="details_open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" label="用户原文、背景、边界与参与专家" color="neutral" variant="ghost" block class="advanced-trigger" /><template #content><div class="advanced-content"><UFormField v-for="item in [{ key: 'user_request', label: '用户原文' }, { key: 'background', label: '背景' }, { key: 'boundaries', label: '讨论边界' }]" :key="item.key" :label="item.label"><UTextarea :model-value="view.fields[form_id(item.key)]" :maxlength="4000" :rows="2" class="w-full" @update:model-value="bridge.write_field(form_id(item.key), $event)" /></UFormField><div class="expert-fields"><div v-for="name in experts" :key="name"><label>{{ name }}</label><USelect :model-value="view.experts[expert_container]?.[name] || 'none'" :items="expert_modes" :aria-label="`${name} 参与方式`" @update:model-value="bridge.write_expert(expert_container, name, $event === 'none' ? '' : $event)" /></div></div><p class="fine-print">AI 主持人需设为本地 CLI，可同时作为专家参与。</p></div></template></UCollapsible>
         <div class="dialog-actions"><UButton label="取消" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" class="channel-primary-button" label="保存议题" :loading="pending === 'create' || pending === 'save_topic'" /></div>
       </form>

@@ -7,9 +7,10 @@ export function format_duration(minutes) {
 </script>
 
 <script setup>
-import { onBeforeUnmount, reactive, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, watch } from "vue";
 
-const props = defineProps({ rounds: { type: Number, default: 3 }, minutes: { type: Number, default: 0 } });
+// append: only the round count, to add rounds to a running discussion (never unlimited).
+const props = defineProps({ rounds: { type: Number, default: 3 }, minutes: { type: Number, default: 0 }, append: Boolean });
 const emit = defineEmits(["update:rounds", "update:minutes"]);
 const ROW_HEIGHT = 32;
 const ROW_ANGLE = Math.PI / 7;
@@ -40,6 +41,8 @@ const wheels = reactive([
 let frame_id = 0, previous_time = 0;
 const clamp = (next, max, min = 0) => Math.min(max, Math.max(min, next));
 const nearest = (wheel) => clamp(Math.round(wheel.x), wheel.max, wheel.min);
+const shown = computed(() => props.append ? fields.slice(0, 1) : fields);
+const field_label = (field) => props.append ? "追加轮数" : field.label;
 const field_wheels = (field) => wheels.filter((wheel) => wheel.field === field.key);
 const wheel_field = (wheel) => fields.find((field) => field.key === wheel.field);
 const field_text = (field) => field.key === "rounds" ? `${field.selected} 轮` : format_duration(field.selected);
@@ -294,11 +297,11 @@ defineExpose({ settle });
 </script>
 
 <template>
-  <div class="limit-picker" role="group" aria-label="讨论轮次和时长">
-    <div v-for="field in fields" :key="field.key" class="limit-field">
+  <div class="limit-picker" :class="{ 'is-append': append }" role="group" :aria-label="append ? '追加轮数' : '讨论轮次和时长'">
+    <div v-for="field in shown" :key="field.key" class="limit-field">
       <div class="limit-field-heading">
-        <label :for="`limit-trigger-${field.key}`">{{ field.label }}</label>
-        <button type="button" class="limit-unlimited" :aria-pressed="field.unlimited"
+        <label :for="`limit-trigger-${field.key}`">{{ field_label(field) }}</label>
+        <button v-if="!append" type="button" class="limit-unlimited" :aria-pressed="field.unlimited"
           :aria-label="`不限${field.key === 'rounds' ? '轮次' : '时长'}`" @click="set_unlimited(field, !field.unlimited)">
           <UIcon name="i-lucide-infinity" aria-hidden="true" /><span>不限</span>
         </button>
@@ -343,6 +346,7 @@ defineExpose({ settle });
 
 <style scoped>
 .limit-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; width: 100%; }
+.limit-picker.is-append { grid-template-columns: minmax(0, 1fr); }
 .limit-field { min-width: 0; }
 .limit-field-heading { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 8px; color: var(--ui-text-toned); font-size: 12px; }
 .limit-unlimited { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; gap: 4px; min-height: 26px; padding: 3px 6px; border: 1px solid var(--ui-border-muted); border-radius: 6px; background: var(--ui-bg-muted); color: var(--ui-text-muted); font-size: 11px; line-height: 16px; cursor: pointer; }

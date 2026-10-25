@@ -2,6 +2,8 @@
 /** Progress content shared by the docked right rail and the tablet/phone drawer. */
 import { computed, inject, ref, watch } from "vue";
 import InviteDialog from "./InviteDialog.vue";
+import DiscussionLimits from "./DiscussionLimits.vue";
+import LimitPicker from "./LimitPicker.vue";
 
 const props = defineProps({ docked: { type: Boolean, default: false } });
 const { view, bridge, act, pending } = inject("discussion");
@@ -44,6 +46,8 @@ const limit_decision = computed(() => room.value.phase === "paused" && !room.val
 const extend_count = ref(1);
 const deciding = ref(false);
 const reopening = ref(false);
+const reopen_limits = ref(null);
+const extend_picker = ref(null);
 const reopen_rounds = ref(0);
 const reopen_minutes = ref(0);
 const rounds_info = computed(() => bridge.limit_rounds(limits.value));
@@ -231,6 +235,7 @@ function open_reopen() {
 
 /** Reopen with the chosen limits; blank or invalid numbers fall back to unlimited. */
 async function reopen() {
+  reopen_limits.value?.settle();
   const whole = (value) => Number.isInteger(value) && value >= 0 ? value : 0;
   if (await act("reopen_discussion", { max_rounds: whole(reopen_rounds.value), max_minutes: whole(reopen_minutes.value) })) reopening.value = false;
 }
@@ -242,6 +247,7 @@ async function finish(action, dialog = "ending") {
 
 /** Add the chosen number of rounds and resume. */
 async function extend() {
+  extend_picker.value?.settle();
   if (await act("extend_rounds", extend_count.value)) deciding.value = false;
 }
 </script>
@@ -350,8 +356,7 @@ async function extend() {
     <UModal v-model:open="reopening" title="重新开始讨论" description="保留全部记录和原结论，按新的上限继续。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
       <template #body>
         <form class="pb-reopen" @submit.prevent="reopen">
-          <label>轮次上限<input v-model.number="reopen_rounds" type="number" min="0" max="100" inputmode="numeric" /><small>0 表示不限</small></label>
-          <label>总时长（分钟）<input v-model.number="reopen_minutes" type="number" min="0" max="1440" inputmode="numeric" /><small>0 表示不限</small></label>
+          <DiscussionLimits ref="reopen_limits" v-model:rounds="reopen_rounds" v-model:minutes="reopen_minutes" :execution="false" />
           <div class="pb-invite-footer">
             <UButton label="取消" color="neutral" variant="ghost" @click="reopening = false" />
             <UButton type="submit" icon="i-lucide-rotate-ccw" label="重新开始" class="channel-primary-button" :loading="pending === 'reopen_discussion'" :disabled="Boolean(pending)" />
@@ -362,7 +367,7 @@ async function extend() {
     <UModal v-model:open="deciding" title="选择后续" description="现场已保留，追加轮数继续；也可以直接结束讨论。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
       <template #body>
         <form class="pb-reopen" @submit.prevent="extend">
-          <UFormField label="追加轮数" hint="1–100"><UInput v-model.number="extend_count" type="number" :min="1" :max="100" inputmode="numeric" class="w-full" /></UFormField>
+          <LimitPicker ref="extend_picker" v-model:rounds="extend_count" append />
           <div class="pb-invite-footer">
             <UButton label="取消" color="neutral" variant="ghost" @click="deciding = false" />
             <UButton type="submit" icon="i-lucide-plus" label="追加并继续" class="channel-primary-button" :loading="pending === 'extend_rounds'" :disabled="Boolean(pending) || !(extend_count >= 1 && extend_count <= 100)" />
@@ -391,10 +396,7 @@ async function extend() {
 .pb-member.is-away { opacity: .6; }
 .pb-member-model { margin: 2px 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .pb-decision-summary { margin-top: 14px; }
-.pb-reopen input { width: 64px; min-height: 28px; padding: 2px 8px; border: 1px solid var(--ui-border-muted); border-radius: 6px; background: var(--ui-bg); color: var(--ui-text-highlighted); font: inherit; }
 .pb-reopen { display: grid; gap: 14px; }
-.pb-reopen label { display: flex; align-items: center; gap: 10px; color: var(--ui-text-toned); font-size: 13px; }
-.pb-reopen label small { color: var(--ui-text-dimmed); font-size: 11px; }
 .pb-connection { display: grid; gap: 16px; }
 .pb-connection > p { margin: 0; }
 .pb-connection > button { justify-self: start; }

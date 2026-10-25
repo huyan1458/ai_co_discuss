@@ -1,7 +1,8 @@
 <script setup>
 /** New-discussion form: the user states the topic in their own words; the AI host drafts goal, background and boundaries. */
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import LimitPicker, { format_duration } from "./LimitPicker.vue";
+import { format_duration } from "./LimitPicker.vue";
+import DiscussionLimits from "./DiscussionLimits.vue";
 import ExpertCard from "./ExpertCard.vue";
 import SchedulerSettings from "./SchedulerSettings.vue";
 
@@ -141,13 +142,6 @@ function submit() {
   emit("submit");
 }
 
-const limit_rule = computed(() => {
-  const rounds = Number(value("limit-max_rounds")), minutes = Number(value("limit-max_minutes"));
-  const limits = [rounds && `${rounds} 轮`, minutes && format_duration(minutes)].filter(Boolean);
-  if (!limits.length) return "不设轮次和时长上限。";
-  return `最多 ${limits.join(" 或 ")}，${limits.length === 2 ? "先到则" : "到限后"}暂停，由你决定追加轮次或结束。`;
-});
-
 const summary = computed(() => {
   const names = Object.keys(selected.value);
   const parts = ["协作房间", names.length ? `${names.length} 位 AI` : "暂无成员", host.value ? `${host.value} 主持` : "暂无主持人"];
@@ -204,14 +198,10 @@ const summary = computed(() => {
         <UCheckbox :model-value="discussing" label="创建后开启讨论" description="主持人安排成员轮流发言，到上限或结束后回到自由协作。也可以建房后再开启。" @update:model-value="toggle_discussion($event)" />
         <template v-if="discussing">
           <UFormField label="讨论目标" description="写下问题、背景和顾虑，主持人据此推进。"><UTextarea :model-value="value('goal')" :maxlength="1000" :rows="4" autoresize :maxrows="10" placeholder="例如：我们在 A、B 两个方案之间犹豫，主要顾虑是成本和上线时间……" class="w-full" @update:model-value="write('goal', $event)" /></UFormField>
-          <LimitPicker ref="limit_picker" :rounds="Number(value('limit-max_rounds'))" :minutes="Number(value('limit-max_minutes'))"
-            @update:rounds="write('limit-max_rounds', String($event))" @update:minutes="write('limit-max_minutes', String($event))" />
-          <p class="fine-print create-hint">一轮指每位专家各完成一次观点；开启后计时，暂停期间不计时。</p>
-          <UCheckbox :model-value="Boolean(view.named_followup)" label="点名追问" description="开启后，主持人每轮读完回答再逐位点名追问；关闭时专家之间互相回应、互相提问，主持人只开场和收尾。" @update:model-value="bridge.write_named_followup($event)" />
-          <div class="form-two-columns">
-            <UFormField label="单次 AI 执行（分钟）" description="留空或 0 表示不限"><UInput :model-value="Number(value('limit-execution_minutes')) ? value('limit-execution_minutes') : ''" type="number" :min="0" :max="60" :step="1" placeholder="不限时长" class="w-full" @update:model-value="write('limit-execution_minutes', $event)" /></UFormField>
-          </div>
-          <p class="create-limit-rule" aria-live="polite"><UIcon name="i-lucide-flag" />{{ limit_rule }}</p>
+          <DiscussionLimits ref="limit_picker" :rounds="Number(value('limit-max_rounds'))" :minutes="Number(value('limit-max_minutes'))" :execution_minutes="value('limit-execution_minutes')"
+            @update:rounds="write('limit-max_rounds', String($event))" @update:minutes="write('limit-max_minutes', String($event))" @update:execution_minutes="write('limit-execution_minutes', $event)">
+            <UCheckbox :model-value="Boolean(view.named_followup)" label="点名追问" description="开启后，主持人每轮读完回答再逐位点名追问；关闭时专家之间互相回应、互相提问，主持人只开场和收尾。" @update:model-value="bridge.write_named_followup($event)" />
+          </DiscussionLimits>
         </template>
       </section>
     </form>
@@ -267,8 +257,6 @@ const summary = computed(() => {
 .create-chips button [class*="icon"] { width: 13px; height: 13px; color: #e0b44a; }
 .create-summary-minutes { width: 150px; }
 .create-hint { margin-top: -4px !important; }
-.create-limit-rule { display: flex; align-items: flex-start; gap: 8px; padding-top: 14px; border-top: 1px solid var(--ui-border-muted); color: var(--ui-text-muted); font-size: 12px; }
-.create-limit-rule > [class*="icon"] { flex-shrink: 0; width: 13px; height: 13px; margin-top: 2px; color: var(--channel-accent); }
 .create-footer { flex-shrink: 0; padding: 14px 26px 16px; border-top: 1px solid var(--ui-border-muted); }
 .create-footer-row { display: flex; align-items: center; gap: 8px; }
 .create-summary { flex: 1; min-width: 0; overflow: hidden; color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
