@@ -51674,8 +51674,11 @@ var vq = /*#__PURE__*/ MH({
 }, vQ = {
 	class: "pb-section",
 	"aria-label": "成员"
-}, yQ = { class: "pb-members" }, bQ = { class: "pb-member-body" }, xQ = { class: "pb-member-name" }, SQ = { class: "pb-member-model" }, CQ = {
+}, yQ = { class: "pb-members" }, bQ = { class: "pb-member-body" }, xQ = { class: "pb-member-name" }, SQ = {
 	key: 0,
+	class: "pb-member-model"
+}, CQ = {
+	key: 1,
 	class: "pb-member-model",
 	title: "它工作时请不要在原窗口继续操作"
 }, wQ = {
@@ -51728,12 +51731,12 @@ var vq = /*#__PURE__*/ MH({
 		}
 		function g(e) {
 			if (e.status === "away") return "已离开：不会被唤醒，可请回";
-			if (m(e)) return "待注册：须在它的会话中注册，才算到场";
+			if (m(e)) return "待注册";
 			let t = e.execution;
-			return t && a.includes(t.status) ? t.stale ? "执行失联，停止未确认" : "正在处理" : e.pending ? `待投递 ${e.pending} 条` : t?.status === "failed" ? `上次失败：${t.result}` : t ? "空闲" : e.access === "manual" ? "已注册" : "尚未收到消息";
+			return t && a.includes(t.status) ? t.stale ? "执行失联，停止未确认" : "正在处理" : e.pending ? `待投递 ${e.pending} 条` : t?.status === "failed" ? `上次失败：${t.result}` : !t && e.access === "manual" ? "已注册" : "空闲";
 		}
 		function _(e) {
-			return e.access === "online" ? "网页 AI · 回答由你代发" : e.access === "manual" ? "模型与强度在原会话设置" : n.participant_model(e.name, c.value, t.value.launch.room_models);
+			return e.access === "runner" ? n.participant_model(e.name, c.value, t.value.launch.room_models) : "";
 		}
 		let v = Z(() => {
 			if (c.value.archived) return {
@@ -51916,7 +51919,7 @@ var vq = /*#__PURE__*/ MH({
 								})) : Y("", !0),
 								K("small", null, P(e.role === "host" ? `主持 · ${s[e.access]}` : s[e.access]), 1)
 							]),
-							K("div", SQ, P(_(e)), 1),
+							_(e) ? (U(), W("div", SQ, P(_(e)), 1)) : Y("", !0),
 							e.session_mode === "borrowed" ? (U(), W("div", CQ, "借用已有会话")) : Y("", !0),
 							K("div", { class: j(["pb-member-status", `is-${h(e)}`]) }, [i[8] ||= K("span", { class: "pb-dot" }, null, -1), J(P(g(e)), 1)], 2)
 						]),
@@ -51983,7 +51986,7 @@ var vq = /*#__PURE__*/ MH({
 			]);
 		};
 	}
-}, [["__scopeId", "data-v-4d27f349"]]), zQ = {
+}, [["__scopeId", "data-v-567c6ac8"]]), zQ = {
 	id: "channel-sidebar",
 	class: "channel-sidebar",
 	"aria-label": "房间导航"

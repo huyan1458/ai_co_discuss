@@ -266,8 +266,8 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 .pb-focus { margin: 0; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
 .pb-focus.is-expanded { display: block; }
 .pb-link { margin-top: 4px; padding: 0; color: var(--channel-accent); font-size: 12px; }
-.pb-members { display: grid; gap: 2px; margin: 0 -8px; padding: 0; list-style: none; }
-.pb-member { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 44px; padding: 4px 8px; border-radius: 6px; }
+.pb-members { display: grid; gap: 4px; margin: 0 -8px; padding: 0; list-style: none; }
+.pb-member { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 10px; min-height: 44px; padding: 6px 8px; border-radius: 6px; }
 .pb-member:hover { background: color-mix(in srgb, var(--ui-bg-accented) 60%, transparent); }
 .pb-member-body { min-width: 0; }
 .pb-member-name { display: flex; align-items: center; gap: 5px; color: var(--ui-text-highlighted); font-weight: 500; }

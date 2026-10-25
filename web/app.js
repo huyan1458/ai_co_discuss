@@ -2446,8 +2446,7 @@ function download_member_access(name) {
   if (!access.can_manage || !member?.available || member.access === "online") throw new Error("当前浏览器没有此成员可下载的私有配置");
   download_private_json({ site: location.origin, room: room.id, token: member_credentials(room.id)[name].token }, `member-${room.id}-${name}.json`);
   state.access_error = "";
-  state.access_notice = member.access === "runner" ? `已下载 ${name} 的持久成员配置；自动执行仍须使用本次任务凭据。`
-    : `已下载 ${name} 的私有配置；交给该成员的本地会话，下载不代表已接入。`;
+  show_toast(`已下载 ${name} 的私有配置`);
 }
 
 /** Copy the same room-scoped credential as one line of text for an agent that cannot take a file. */
@@ -2457,7 +2456,7 @@ async function copy_member_access_text(name) {
   if (!access.can_manage || !member?.available || member.access === "online") throw new Error("当前浏览器没有此成员可复制的凭证");
   await copy_text(JSON.stringify({ site: location.origin, room: room.id, token: member_credentials(room.id)[name].token }));
   state.access_error = "";
-  state.access_notice = `已复制 ${name} 的凭证文本，含 token，仅交给该成员；用环境变量 DISCUSS_ACCESS 或 --access-file - 使用，复制不代表已接入。`;
+  show_toast(`已复制 ${name} 的凭证文本（含 token）`);
 }
 
 /** Copy a member-specific entry instruction; only the launch variant carries the credential, never conversation context. */
@@ -2482,8 +2481,7 @@ ${instruction}
 先核对最新阶段、任务和原文编号，再按房间协议参与。${credential}`);
   if (state.room?.id === room.id) {
     state.access_error = "";
-    state.access_notice = with_credential ? `已复制 ${name} 的启动指令，含 token，只交给该成员；复制不代表已经送达或接入。`
-      : `已复制 ${name} 的参与说明，未包含凭据；复制不代表已经送达或接入。`;
+    show_toast(with_credential ? `已复制 ${name} 的启动指令（含 token）` : `已复制 ${name} 的参与说明`);
   }
 }
 

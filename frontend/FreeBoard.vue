@@ -30,19 +30,17 @@ function member_tone(member) {
 /** One line per member: live execution, queued requests, or the last outcome. */
 function member_status(member) {
   if (member.status === "away") return "已离开：不会被唤醒，可请回";
-  if (unregistered(member)) return "待注册：须在它的会话中注册，才算到场";
+  if (unregistered(member)) return "待注册";
   const execution = member.execution;
   if (execution && LIVE.includes(execution.status)) return execution.stale ? "执行失联，停止未确认" : "正在处理";
   if (member.pending) return `待投递 ${member.pending} 条`;
   if (execution?.status === "failed") return `上次失败：${execution.result}`;
-  return execution ? "空闲" : member.access === "manual" ? "已注册" : "尚未收到消息";
+  return !execution && member.access === "manual" ? "已注册" : "空闲";
 }
 
-/** Online and manual members choose their model in their own chat; woken ones show the registered launch. */
+/** Only woken members have a model the site knows; others choose it in their own chat. */
 function member_model(member) {
-  if (member.access === "online") return "网页 AI · 回答由你代发";
-  if (member.access === "manual") return "模型与强度在原会话设置";
-  return bridge.participant_model(member.name, room.value, view.value.launch.room_models);
+  return member.access === "runner" ? bridge.participant_model(member.name, room.value, view.value.launch.room_models) : "";
 }
 
 const status = computed(() => {
@@ -149,7 +147,7 @@ watch(() => room.value.id, () => { starting.value = false; });
           <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
           <div class="pb-member-body">
             <div class="pb-member-name">{{ bridge.display_name(member.name) }}<UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /><small>{{ member.role === 'host' ? `主持 · ${ACCESS_LABELS[member.access]}` : ACCESS_LABELS[member.access] }}</small></div>
-            <div class="pb-member-model">{{ member_model(member) }}</div>
+            <div v-if="member_model(member)" class="pb-member-model">{{ member_model(member) }}</div>
             <div v-if="member.session_mode === 'borrowed'" class="pb-member-model" title="它工作时请不要在原窗口继续操作">借用已有会话</div>
             <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span>{{ member_status(member) }}</div>
           </div>
