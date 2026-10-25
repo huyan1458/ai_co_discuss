@@ -455,18 +455,17 @@ def topic_values(payload, current=None):
         if changed and current["phase"] not in ("preparing", "paused"):
             raise ValueError("请先暂停讨论，再修改上限参数")
         result["save_limits"] = not current or changed
-        result["reset_closing"] = not current or any(result["limits"][key] != current["limits"][key]
-                                                    for key in LIMIT_DEFAULTS if key != "execution_minutes")
+        result["reset_stop"] = not current or any(result["limits"][key] != current["limits"][key]
+                                                  for key in LIMIT_DEFAULTS if key != "execution_minutes")
     return result
 
 
 def save_topic_settings(connection, room_id, settings):
     """Persist topic settings without modifying any original messages."""
     if settings.get("save_limits"):
-        connection.execute("""UPDATE discussion_limits SET max_rounds=?,max_minutes=?,execution_minutes=?,on_limit=?,summary_minutes=?,
-            closing_at=CASE WHEN ? THEN 0 ELSE closing_at END,stop_reason=CASE WHEN ? THEN '' ELSE stop_reason END,
-            revision=revision+1 WHERE room_id=?""",
-                           [*(settings["limits"][key] for key in LIMIT_DEFAULTS), settings["reset_closing"], settings["reset_closing"], room_id])
+        connection.execute("""UPDATE discussion_limits SET max_rounds=?,max_minutes=?,execution_minutes=?,
+            stop_reason=CASE WHEN ? THEN '' ELSE stop_reason END,revision=revision+1 WHERE room_id=?""",
+                           [*(settings["limits"][key] for key in LIMIT_DEFAULTS), settings["reset_stop"], room_id])
     values = [settings[key] for key in ("host", "background", "boundaries")]
     values.extend([json.dumps(settings["experts"], ensure_ascii=False), settings["phase"], settings["focus"]])
     connection.execute("INSERT INTO topic_settings (room_id,host,background,boundaries,experts,phase,focus) VALUES (?,?,?,?,?,?,?) ON CONFLICT(room_id) DO UPDATE SET host=excluded.host,background=excluded.background,boundaries=excluded.boundaries,experts=excluded.experts,phase=excluded.phase,focus=excluded.focus", [room_id, *values])
@@ -536,10 +535,6 @@ def update_topic(connection, room_id, payload):
         require_conclusion_ready(connection, room, payload)
     if room["phase"] == "concluded" and settings["phase"] != "concluded" and payload.get("actor") != "用户":
         raise ValueError("已收束的讨论只有用户能重新开启")
-    limits = room["limits"]
-    if settings["phase"] == "concluded" and room["phase"] != "concluded" and payload.get("actor") != "用户" \
-            and limits["on_limit"] == "pause" and not limits["closing"] and (room["round_budget"] or limits["reached"]):
-        raise ValueError("到限方式为暂停保留现场，主持人不得直接收束；目标已完成请执行 room limits --done，由用户决定追加轮次或总结")
     running = connection.execute("SELECT 1 FROM discussion_runtime WHERE room_id=? AND status='running'", (room_id,)).fetchone()
     if running and settings["experts"] != room["experts"]:
         raise ValueError("讨论运行中请在进度看板邀请、暂离或移除专家")
@@ -814,7 +809,7 @@ def start_discussion(connection, room_id, token, payload):
                        (room_id, int(named_followup)))
     connection.execute("INSERT INTO round_budgets (room_id,base) VALUES (?,?) ON CONFLICT(room_id) DO UPDATE SET base=excluded.base,cap=0,extra=0",
                        (room_id, opinion_count(connection, room_id, experts)))
-    connection.execute("UPDATE discussion_limits SET started_at=0,closing_at=0,stop_reason='',revision=revision+1 WHERE room_id=?", (room_id,))
+    connection.execute("UPDATE discussion_limits SET started_at=0,stop_reason='',revision=revision+1 WHERE room_id=?", (room_id,))
     connection.execute("UPDATE discussion_pauses SET paused_seconds=0,paused_at=0 WHERE room_id=?", (room_id,))
     connection.execute("UPDATE room_floor SET holder=?,next_speaker=?,revision=revision+1 WHERE room_id=?", (host["name"], host["name"], room_id))
     # Switching the run to automatic converts manual members that carry an adapter; a manual expert of a woken discussion is marked and stays manual.
@@ -1291,34 +1286,29 @@ def continue_turns(connection, room_id, payload):
     return {"turn": get_turn(connection, room_id, turn_id), "queued": room["queued_turns"][1:]}
 
 def adjust_limits(connection, room_id, payload, action):
-    """User-only follow-ups after a limit: append rounds, ask for a summary, or reopen a concluded discussion."""
+    """User-only follow-ups after a limit: append rounds, or reopen a concluded discussion."""
     begin_write(connection)
     room = require_room(connection, room_id)
     if payload.get("actor") != "用户":
-        raise ValueError("仅用户可以追加轮次、要求总结或重启已收束的讨论")
+        raise ValueError("仅用户可以追加轮次或重启已收束的讨论")
     if room["archived"]:
         raise ValueError("请先恢复已存档房间")
-    budget = room["round_budget"]
-    if action != "summarize" and not budget:
+    if not room["round_budget"]:
         raise ValueError("该房间沿用旧轮次计数，不支持追加轮次或重启")
     required_phase = "concluded" if action == "reopen" else "paused"
     if room["phase"] != required_phase:
-        raise ValueError("仅已收束的讨论可以重启" if action == "reopen" else "仅已暂停的讨论可以追加轮次或要求总结")
-    if action == "summarize":
-        connection.execute("UPDATE discussion_limits SET closing_at=?,stop_reason='user_summary',revision=revision+1 WHERE room_id=?",
-                           (int(time.time()), room_id))
-        return require_room(connection, room_id)
+        raise ValueError("仅已收束的讨论可以重启" if action == "reopen" else "仅已暂停的讨论可以追加轮次")
     rounds = payload.get("rounds") if action == "extend" else payload.get("max_rounds", room["limits"]["max_rounds"])
     if type(rounds) is not int or not (1 if action == "extend" else 0) <= rounds <= 100:
         raise ValueError("轮次须为整数（追加 1–100，重启 0–100，0 表示不限）")
     count = opinion_count(connection, room_id, room["experts"])
     if action == "extend":
         connection.execute("UPDATE round_budgets SET base=?,cap=?,extra=extra+? WHERE room_id=?", (count, rounds, rounds, room_id))
-        connection.execute("UPDATE discussion_limits SET closing_at=0,stop_reason='',revision=revision+1 WHERE room_id=?", (room_id,))
+        connection.execute("UPDATE discussion_limits SET stop_reason='',revision=revision+1 WHERE room_id=?", (room_id,))
         return require_room(connection, room_id)
     limits = limit_values({"max_rounds": rounds, "max_minutes": payload.get("max_minutes", room["limits"]["max_minutes"])}, room["limits"])
     connection.execute("UPDATE round_budgets SET base=?,cap=0,extra=0 WHERE room_id=?", (count, room_id))
-    connection.execute("""UPDATE discussion_limits SET max_rounds=?,max_minutes=?,started_at=0,closing_at=0,stop_reason='',revision=revision+1
+    connection.execute("""UPDATE discussion_limits SET max_rounds=?,max_minutes=?,started_at=0,stop_reason='',revision=revision+1
         WHERE room_id=?""", (limits["max_rounds"], limits["max_minutes"], room_id))
     connection.execute("UPDATE discussion_pauses SET paused_seconds=0,paused_at=0 WHERE room_id=?", (room_id,))
     connection.execute("UPDATE topic_settings SET phase='paused' WHERE room_id=?", (room_id,))
@@ -1326,42 +1316,30 @@ def adjust_limits(connection, room_id, payload, action):
 
 
 def check_limits(connection, room_id, payload):
-    """Apply a reached boundary once; the host must author the actual summary."""
+    """Pause at a reached boundary (or once the host declares the goal done); the user then extends or ends the discussion."""
     action = payload.get("action", "check")
-    if action not in ("check", "done", "extend", "summarize", "reopen"):
-        raise ValueError("action 须为 check/done/extend/summarize/reopen")
-    if action in ("extend", "summarize", "reopen"):
+    if action not in ("check", "done", "extend", "reopen"):
+        raise ValueError("action 须为 check/done/extend/reopen")
+    if action in ("extend", "reopen"):
         return adjust_limits(connection, room_id, payload, action)
     begin_write(connection)
     room = require_room(connection, room_id)
     require_host(room, payload)
     limits = room["limits"]
     done = action == "done"
-    force = payload.get("force") is True
-    if force and (room["phase"] in ("preparing", "paused", "concluded") or room["archived"]):
-        raise ValueError("仅进行中的讨论可以提前收尾")
     inactive = room["phase"] in ("paused", "concluded") or room["archived"] or (done and room["phase"] == "preparing")
-    if (not limits["reached"] and not force and not done) or inactive:
+    if (not limits["reached"] and not done) or inactive:
         return room
-    if done or force:
+    if done:
         require_conclusion_ready(connection, room, payload, allow_queued=True)
     reason = "goal_done" if done else limits["reason"] or "user_stop"
-    closing = (force or limits["on_limit"] == "summarize") and reason != "time_limit"
-    if closing and limits["closing"]:
-        return room
-    connection.execute("UPDATE discussion_limits SET closing_at=?,stop_reason=?,revision=revision+1 WHERE room_id=?",
-                       (int(time.time()) if closing else limits["closing_at"], reason, room_id))
+    connection.execute("UPDATE discussion_limits SET stop_reason=?,revision=revision+1 WHERE room_id=?", (reason, room_id))
     connection.execute("UPDATE discussion_turns SET status='cancelled' WHERE room_id=? AND status IN ('pending','notified')", (room_id,))
     connection.execute("UPDATE discussion_turns SET status='skipped' WHERE room_id=? AND status='queued'", (room_id,))
     connection.execute("UPDATE room_floor SET holder=NULL,next_speaker=?,revision=revision+1 WHERE room_id=?", (room["host"], room_id))
-    if closing:
-        summary_deadline = int(time.time()) + limits["summary_minutes"] * 60
-        connection.execute("UPDATE discussion_runtime SET generation=generation+1,revision=revision+1,deadline=CASE WHEN deadline=0 THEN ? ELSE MIN(deadline,?) END WHERE room_id=? AND status='running'",
-                           (summary_deadline, summary_deadline, room_id))
-    else:
-        connection.execute("UPDATE topic_settings SET phase='paused' WHERE room_id=?", (room_id,))
-        # Pausing at the limit also pauses the run, so the board offers restart and the old execution is superseded.
-        connection.execute("UPDATE discussion_runtime SET status='paused',generation=generation+1,revision=revision+1 WHERE room_id=? AND status='running'", (room_id,))
+    connection.execute("UPDATE topic_settings SET phase='paused' WHERE room_id=?", (room_id,))
+    # Pausing at the limit also pauses the run, so the board offers restart and the old execution is superseded.
+    connection.execute("UPDATE discussion_runtime SET status='paused',generation=generation+1,revision=revision+1 WHERE room_id=? AND status='running'", (room_id,))
     return require_room(connection, room_id)
 
 
@@ -1490,7 +1468,7 @@ def room_text(connection, room_id, params):
                f"主持人：{room['host']}；阶段：{PHASES[room['phase']]}；当前焦点：{room['focus'] or '尚未填写'}",
                f"当前记录截止 #{room['latest_id']}；共 {room['message_count']} 条；已完成 {room['completed_rounds']} 轮讨论（所有参与专家各发言一次）。"]
     limits = room["limits"]
-    content.append(f"讨论上限：{limits['max_rounds'] or '不限'} 轮；总时长 {limits['max_minutes'] or '不限'} 分钟；单次自动执行 {str(limits['execution_minutes']) + ' 分钟' if limits['execution_minutes'] else '不限时长'}；到限 {limits['on_limit']}；收束预留 {limits['summary_minutes']} 分钟（计入总时长）。到限：{limits['reached']}；收束中：{limits['closing']}。")
+    content.append(f"讨论上限：{limits['max_rounds'] or '不限'} 轮；总时长 {limits['max_minutes'] or '不限'} 分钟；单次自动执行 {str(limits['execution_minutes']) + ' 分钟' if limits['execution_minutes'] else '不限时长'}；到限后暂停，由用户决定追加轮次或结束。到限：{limits['reached']}。")
     if room["mode"] == "free":
         members = "；".join(f"{item['name']}（已读至 #{item['read_until']}，待投递 {item['pending']}）" for item in room["free"]["members"])
         content.append(f"自由协作房间：无发言权、安排与轮次。成员：{members or '无'}。用户的消息点名成员后生成请求；成员回答须带本次执行编号，执行结束、被打断或过期后的回答会被拒绝，不能改作普通发言。")
@@ -1574,7 +1552,7 @@ def protocol_text(room):
         "API 参与者由本机 runner 使用相同房间授权和执行约束提交，消息 source=api；CLI 仍使用 source=cli。兼容字段 experts 中的 cli 表示可自行提交，实际接入方式见成员 adapter。",
         "写入使用 POST，通常为 Content-Type: application/json；附件上传使用 application/octet-stream 原始字节。主持操作填写 actor 为当前主持人或用户；这些是声明身份，不是认证凭据。",
         f"附件：POST {base}/attachments?actor=身份&file_name=文件名&submission_id=新编号，原文件最多 20 MiB；GET 同路径默认列已发送附件，加 submission_id 精确核对上传。GET {base}/attachments/ID 读元数据，/ID/content 下载原文件。消息可带 attachment_ids（最多 10 个有序编号）；只关联同房间、同提交者的未使用附件，可只有附件无正文。自动任务须在回答完成前上传；消息查询包含附件，按需下载后由当前软件读取，不自动解析。",
-        "讨论上限：room.limits 返回轮次、总时长、单次执行、到限方式、收束预留和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长/单次执行时限。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理；附 force:true 可在进行中提前进入收束，由主持人在收束预留时间内总结。到限停止新专家安排与观点；总结由真实主持人完成，预留计入总时长；暂停期间不计时也不消耗总时长。",
+        "讨论上限：room.limits 返回轮次、总时长、单次执行和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长/单次执行时限。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理；到限后暂停并停止新专家安排与观点，由用户决定追加轮次或结束；暂停期间不计时也不消耗总时长。",
         "运行方式：room.runtime 显示 manual/automatic、状态及真实执行回执。所有房间写入须带 X-Discussion-Token，CLI 用 --access-file 读取私有文件。用户及运行控制使用房主凭据，手动本地成员使用自己的成员凭证，不能相互冒充；在线成员只读，由房主或讨论主持人代发。自动讨论先 execution enter，创建安排或保存关联回答即完成本步，不创建原生定时任务；本机唤醒成员的持久凭证不能替代自动执行，手动接入的专家用自己的成员凭证回答安排，暂停、停止、换代、租约到期后的旧执行失效。run view/start/pause/stop/configure 字段查 CLI schema。",
         f"发言权：GET {base}/floor 返回 holder、next_speaker、revision；POST 同路径，字段 actor、speaker（默认 actor）、action=take/return、revision（刚读到的整数版本）。仅无人持有且 next_speaker 为本人时可领取；持有者可主动归还，下一位回到主持人。版本变化返回 409，先读回核对。主持人仅可代操作 online 专家，cli 专家自行操作；用户可协助。",
         "新房间由主持人持有发言权。创建安排须主持人持有，保存成功即归还并点名该专家；AI 的 opinion、moderation、receipt 都须实际作者持有，代发不豁免，opinion 必须关联有效 turn_id。消息保存成功自动归还，下一位为主持人。失败不归还，同编号重试不再次交接。用户本人发言不受发言权限制，也不改变发言权；@ 不改变顺序。维护状态、阶段及通知回执不占用发言权。取消安排须主持人持有，用户可直接取消失效安排；取消后归还给主持人领取。",

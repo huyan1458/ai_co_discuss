@@ -902,7 +902,6 @@ def queue_invited_expert(connection, room_id, name, now):
         FROM topic_settings AS settings JOIN room_members AS member ON member.room_id=settings.room_id
         WHERE settings.room_id=? AND member.name=? AND member.status='active'
         AND settings.phase NOT IN ('paused','concluded')
-        AND NOT EXISTS (SELECT 1 FROM discussion_limits WHERE room_id=settings.room_id AND closing_at>0)
         AND EXISTS (SELECT 1 FROM discussion_turns WHERE room_id=settings.room_id AND status IN ('pending','notified','queued'))""",
         (now, room_id, name))
     place_invited_expert(connection, room_id, name)

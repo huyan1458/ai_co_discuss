@@ -27,7 +27,9 @@ const MAX_PLAN_TURNS = 10;
 const RECENT_DECISIONS = 100;
 const MAX_DECISION_LABEL = 200;
 const MAX_DECISION_DETAIL = 4000;
-const LIMIT_DEFAULTS = { max_rounds: 0, max_minutes: 0, execution_minutes: 0, on_limit: "pause", summary_minutes: 5 };
+const LIMIT_DEFAULTS = { max_rounds: 0, max_minutes: 0, execution_minutes: 0 };
+// Older clients may still send these; reaching a limit always pauses, so only the pause value is accepted and the reserve is ignored.
+const LEGACY_LIMIT_FIELDS = ["on_limit", "summary_minutes"];
 // Idle (paused, preparing or concluded) seconds are excluded from elapsed time and total-duration deadlines.
 const LIMITS_SQL = `SELECT limits.*,COALESCE(pauses.paused_seconds,0)+CASE WHEN COALESCE(pauses.paused_at,0)>0
   THEN MAX(0,CAST(strftime('%s','now') AS INTEGER)-pauses.paused_at) ELSE 0 END AS idle_seconds
@@ -554,7 +556,7 @@ function topic_values(payload, current = {}) {
     const changed = current.limits && Object.keys(LIMIT_DEFAULTS).some(key => result.limits[key] !== current.limits[key]);
     if (changed && !["preparing", "paused"].includes(current.phase)) throw new HttpError(400, "请先暂停讨论，再修改上限参数");
     result.save_limits = !current.limits || changed;
-    result.reset_closing = !current.limits || Object.keys(LIMIT_DEFAULTS).some(key => key !== "execution_minutes" && result.limits[key] !== current.limits[key]);
+    result.reset_stop = !current.limits || Object.keys(LIMIT_DEFAULTS).some(key => key !== "execution_minutes" && result.limits[key] !== current.limits[key]);
   }
   return result;
 }
@@ -614,11 +616,6 @@ async function update_topic(database, room_id, payload) {
   }
   if (settings.phase === "concluded" && room.phase !== "concluded") await require_conclusion_ready(database, room, payload);
   if (room.phase === "concluded" && settings.phase !== "concluded" && payload.actor !== "用户") throw new HttpError(400, "已收束的讨论只有用户能重新开启");
-  const limits = room.limits;
-  if (settings.phase === "concluded" && room.phase !== "concluded" && payload.actor !== "用户"
-    && limits.on_limit === "pause" && !limits.closing && (room.round_budget || limits.reached)) {
-    throw new HttpError(400, "到限方式为暂停保留现场，主持人不得直接收束；目标已完成请执行 room limits --done，由用户决定追加轮次或总结");
-  }
   const changed = Object.keys({ ...settings.experts, ...room.experts }).some(name => settings.experts[name] !== room.experts[name]);
   if (changed && room.runtime?.status === "running") throw new HttpError(400, "讨论运行中请在进度看板邀请、暂离或移除专家");
   if (settings.save_limits) database = guarded_database(database,
@@ -668,7 +665,7 @@ async function start_discussion(database, room_id, token, payload) {
       .bind(room_id, Number(named_followup)),
     database.prepare("INSERT INTO round_budgets (room_id,base) VALUES (?,?) ON CONFLICT(room_id) DO UPDATE SET base=excluded.base,cap=0,extra=0")
       .bind(room_id, await opinion_count(database, room_id, experts)),
-    database.prepare("UPDATE discussion_limits SET started_at=0,closing_at=0,stop_reason='',revision=revision+1 WHERE room_id=?").bind(room_id),
+    database.prepare("UPDATE discussion_limits SET started_at=0,stop_reason='',revision=revision+1 WHERE room_id=?").bind(room_id),
     database.prepare("UPDATE discussion_pauses SET paused_seconds=0,paused_at=0 WHERE room_id=?").bind(room_id),
     database.prepare("UPDATE room_floor SET holder=?,next_speaker=?,revision=revision+1 WHERE room_id=?").bind(host.name, host.name, room_id),
     // Switching the run to automatic converts manual members that carry an adapter; a manual expert of a woken discussion is marked and stays manual.
@@ -1426,7 +1423,7 @@ async function room_text(database, room_id, params) {
     `主持人：${room.host}；阶段：${PHASES[room.phase]}；当前焦点：${room.focus || "尚未填写"}`,
     `当前记录截止 #${room.latest_id}；共 ${room.message_count} 条；已完成 ${room.completed_rounds} 轮讨论（所有参与专家各发言一次）。`];
   const limits = room.limits;
-  content.push(`讨论上限：${limits.max_rounds || '不限'} 轮；总时长 ${limits.max_minutes || '不限'} 分钟；单次自动执行 ${limits.execution_minutes ? `${limits.execution_minutes} 分钟` : "不限时长"}；到限 ${limits.on_limit}；收束预留 ${limits.summary_minutes} 分钟（计入总时长）。到限：${limits.reached}；收束中：${limits.closing}。`);
+  content.push(`讨论上限：${limits.max_rounds || '不限'} 轮；总时长 ${limits.max_minutes || '不限'} 分钟；单次自动执行 ${limits.execution_minutes ? `${limits.execution_minutes} 分钟` : "不限时长"}；到限后暂停，由用户决定追加轮次或结束。到限：${limits.reached}。`);
   if (room.mode === "free") {
     const members = room.free.members.map(item => `${item.name}（已读至 #${item.read_until}，待投递 ${item.pending}）`).join("；");
     content.push(`自由协作房间：无发言权、安排与轮次。成员：${members || "无"}。用户的消息点名成员后生成请求；成员回答须带本次执行编号，执行结束、被打断或过期后的回答会被拒绝，不能改作普通发言。`);
@@ -1497,7 +1494,7 @@ function protocol_text(room) {
   return ["# 本地 CLI 读写与主持协议", `当前主持人：${room.host}。以下为留言板接口，不是模型服务 API。`,
     "写入使用 POST，通常为 Content-Type: application/json；附件上传使用 application/octet-stream 原始字节。主持操作填写 actor 为当前主持人或用户；这些是声明身份，不是认证凭据。",
     `附件：POST ${base}/attachments?actor=身份&file_name=文件名&submission_id=新编号，原文件最多 20 MiB；GET 同路径默认列已发送附件，加 submission_id 精确核对上传。GET ${base}/attachments/ID 读元数据，/ID/content 下载原文件。消息可带 attachment_ids（最多 10 个有序编号）；只关联同房间、同提交者的未使用附件，可只有附件无正文。自动任务须在回答完成前上传；消息查询包含附件，按需下载后由当前软件读取，不自动解析。`,
-    "讨论上限：room.limits 返回轮次、总时长、单次执行、到限方式、收束预留和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长/单次执行时限。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理；附 force:true 可在进行中提前进入收束，由主持人在收束预留时间内总结。到限停止新专家安排与观点；总结由真实主持人完成，预留计入总时长；暂停期间不计时也不消耗总时长。",
+    "讨论上限：room.limits 返回轮次、总时长、单次执行和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长/单次执行时限。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理；到限后暂停并停止新专家安排与观点，由用户决定追加轮次或结束；暂停期间不计时也不消耗总时长。",
     "运行方式：room.runtime 显示 manual/automatic、状态及真实执行回执。所有房间写入须带 X-Discussion-Token，CLI 用 --access-file 读取私有文件。用户及运行控制使用房主凭据，手动本地成员使用自己的成员凭证，不能相互冒充；在线成员只读，由房主或讨论主持人代发。自动讨论先 execution enter，创建安排或保存关联回答即完成本步，不创建原生定时任务；本机唤醒成员的持久凭证不能替代自动执行，手动接入的专家用自己的成员凭证回答安排，暂停、停止、换代、租约到期后的旧执行失效。run view/start/pause/stop/configure 字段查 CLI schema。",
     `发言权：GET ${base}/floor 返回 holder、next_speaker、revision；POST 同路径，字段 actor、speaker（默认 actor）、action=take/return、revision（刚读到的整数版本）。仅无人持有且 next_speaker 为本人时可领取；持有者可主动归还，下一位回到主持人。版本变化返回 409，先读回核对。主持人仅可代操作 online 专家，cli 专家自行操作；用户可协助。`,
     "新房间由主持人持有发言权。创建安排须主持人持有，保存成功即归还并点名该专家；AI 的 opinion、moderation、receipt 都须实际作者持有，代发不豁免，opinion 必须关联有效 turn_id。消息保存成功自动归还，下一位为主持人。失败不归还，同编号重试不再次交接。用户本人发言不受发言权限制，也不改变发言权；@ 不改变顺序。维护状态、阶段及通知回执不占用发言权。取消安排须主持人持有，用户可直接取消失效安排；取消后归还给主持人领取。",
@@ -1530,22 +1527,21 @@ async function runtime_hash(token) {
 
 /** Validate the same bounded settings as the SQLite backend. */
 function limit_values(payload, current = {}) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload) || Object.keys(payload).some(key => !Object.hasOwn(LIMIT_DEFAULTS, key))) throw new HttpError(400, "limits 仅接受讨论上限配置字段");
+  if (!payload || typeof payload !== "object" || Array.isArray(payload) || Object.keys(payload).some(key => !Object.hasOwn(LIMIT_DEFAULTS, key) && !LEGACY_LIMIT_FIELDS.includes(key))) throw new HttpError(400, "limits 仅接受讨论上限配置字段");
+  if ((payload.on_limit ?? "pause") !== "pause") throw new HttpError(400, "到限后只会暂停；需要总结时请主持人在暂停后按你的要求写出");
   const result = Object.fromEntries(Object.entries(LIMIT_DEFAULTS).map(([key, value]) => [key, current[key] ?? value]));
-  Object.assign(result, payload);
-  for (const [key, minimum, maximum] of [["max_rounds", 0, 100], ["max_minutes", 0, 1440], ["execution_minutes", 0, 60], ["summary_minutes", 1, 60]]) {
+  Object.assign(result, Object.fromEntries(Object.entries(payload).filter(([key]) => Object.hasOwn(LIMIT_DEFAULTS, key))));
+  for (const [key, minimum, maximum] of [["max_rounds", 0, 100], ["max_minutes", 0, 1440], ["execution_minutes", 0, 60]]) {
     if (!Number.isInteger(result[key]) || result[key] < minimum || result[key] > maximum) throw new HttpError(400, `${key} 须为 ${minimum}–${maximum} 的整数`);
   }
-  if (!["pause", "summarize"].includes(result.on_limit)) throw new HttpError(400, "on_limit 须为 pause 或 summarize");
-  if (result.on_limit === "summarize" && result.max_minutes && result.summary_minutes >= result.max_minutes) throw new HttpError(400, "收束预留时间必须小于讨论总时长");
   return result;
 }
 
 /** Prepare settings updates without restarting the discussion clock. */
 function limit_statements(database, room_id, settings) {
-  return settings.save_limits ? [database.prepare(`UPDATE discussion_limits SET max_rounds=?,max_minutes=?,execution_minutes=?,on_limit=?,summary_minutes=?,
-    closing_at=CASE WHEN ? THEN 0 ELSE closing_at END,stop_reason=CASE WHEN ? THEN '' ELSE stop_reason END,revision=revision+1 WHERE room_id=?`)
-    .bind(...Object.keys(LIMIT_DEFAULTS).map(key => settings.limits[key]), Number(settings.reset_closing), Number(settings.reset_closing), room_id)] : [];
+  return settings.save_limits ? [database.prepare(`UPDATE discussion_limits SET max_rounds=?,max_minutes=?,execution_minutes=?,
+    stop_reason=CASE WHEN ? THEN '' ELSE stop_reason END,revision=revision+1 WHERE room_id=?`)
+    .bind(...Object.keys(LIMIT_DEFAULTS).map(key => settings.limits[key]), Number(settings.reset_stop), room_id)] : [];
 }
 
 /** Derive public progress; reads never perform lifecycle mutations. */
@@ -1554,90 +1550,74 @@ function limits_view(row, room) {
   const idle = row.idle_seconds || 0;
   let deadline = row.started_at && row.max_minutes ? row.started_at + row.max_minutes * 60 + idle : 0;
   if (room.runtime?.deadline && (room.runtime.status === "running" || row.stop_reason)) deadline = Math.min(deadline || room.runtime.deadline, room.runtime.deadline);
-  if (row.closing_at) deadline = Math.min(deadline || Infinity, row.closing_at + row.summary_minutes * 60);
-  const cutoff = deadline && row.on_limit === "summarize" && !row.closing_at ? deadline - row.summary_minutes * 60 : deadline;
   // A budgeted room counts rounds from the budget base; a legacy room counts whole-roster rounds from the start.
   const budget = room.round_budget;
   const experts = Object.keys(room.experts || {}).length;
   const segment_rounds = budget ? (experts ? Math.floor(Math.max(0, room.opinion_count - budget.base) / experts) : 0) : room.completed_rounds;
   const round_cap = budget ? budget.cap || row.max_rounds : row.max_rounds;
-  const reason = deadline && now >= deadline ? "time_limit" : row.closing_at ? row.stop_reason
-    : round_cap && segment_rounds >= round_cap ? "round_limit"
-    : cutoff && now >= cutoff ? row.on_limit === "summarize" ? "summary_reserved" : "time_limit" : "";
-  return { ...row, deadline, cutoff, reason, reached: Boolean(reason), closing: Boolean(row.closing_at) && !["paused", "concluded"].includes(room.phase),
+  const reason = deadline && now >= deadline ? "time_limit" : round_cap && segment_rounds >= round_cap ? "round_limit" : "";
+  return { ...row, deadline, reason, reached: Boolean(reason),
     completed_rounds: room.completed_rounds, segment_rounds, round_cap, extra_rounds: budget?.extra ?? 0, remaining_seconds: deadline ? Math.max(0, deadline - now) : null,
     elapsed_seconds: row.started_at ? Math.max(0, now - row.started_at - idle) : 0 };
 }
 
 /** Fence new expert work against concurrent answers, settings and the clock. */
 function guard_limits(database, room) {
-  if (room.limits.reached) throw new HttpError(409, "已达到讨论上限；请检查上限并暂停或由主持人总结");
-  return guarded_database(database, `EXISTS(SELECT 1 FROM discussion_limits WHERE room_id=? AND revision=? AND closing_at=0)
+  if (room.limits.reached) throw new HttpError(409, "已达到讨论上限；请检查上限并暂停，由用户决定追加轮次或结束");
+  return guarded_database(database, `EXISTS(SELECT 1 FROM discussion_limits WHERE room_id=? AND revision=?)
     AND COALESCE((SELECT MAX(id) FROM messages WHERE room_id=?),0)=? AND (?=0 OR unixepoch()<?)
     AND EXISTS(SELECT 1 FROM topic_settings WHERE room_id=? AND json(experts)=json(?))`,
-    [room.id, room.limits.revision, room.id, room.latest_id, room.limits.cutoff, room.limits.cutoff, room.id, JSON.stringify(room.experts)]);
+    [room.id, room.limits.revision, room.id, room.latest_id, room.limits.deadline, room.limits.deadline, room.id, JSON.stringify(room.experts)]);
 }
 
-/** User-only follow-ups after a limit: append rounds, ask for a summary, or reopen a concluded discussion. */
+/** User-only follow-ups after a limit: append rounds, or reopen a concluded discussion. */
 async function adjust_limits(database, room_id, payload, action) {
   const room = await require_room(database, room_id);
-  if (payload.actor !== "用户") throw new HttpError(400, "仅用户可以追加轮次、要求总结或重启已收束的讨论");
+  if (payload.actor !== "用户") throw new HttpError(400, "仅用户可以追加轮次或重启已收束的讨论");
   if (room.archived) throw new HttpError(400, "请先恢复已存档房间");
-  if (action !== "summarize" && !room.round_budget) throw new HttpError(400, "该房间沿用旧轮次计数，不支持追加轮次或重启");
+  if (!room.round_budget) throw new HttpError(400, "该房间沿用旧轮次计数，不支持追加轮次或重启");
   const required_phase = action === "reopen" ? "concluded" : "paused";
-  if (room.phase !== required_phase) throw new HttpError(400, action === "reopen" ? "仅已收束的讨论可以重启" : "仅已暂停的讨论可以追加轮次或要求总结");
+  if (room.phase !== required_phase) throw new HttpError(400, action === "reopen" ? "仅已收束的讨论可以重启" : "仅已暂停的讨论可以追加轮次");
   const fence = "EXISTS(SELECT 1 FROM discussion_limits WHERE room_id=? AND revision=?) AND EXISTS(SELECT 1 FROM topic_settings WHERE room_id=? AND phase=?)";
   const fence_values = [room_id, room.limits.revision, room_id, required_phase];
-  if (action === "summarize") {
-    await checked_batch(database, fence, fence_values, [database.prepare("UPDATE discussion_limits SET closing_at=?,stop_reason='user_summary',revision=revision+1 WHERE room_id=?")
-      .bind(Math.floor(Date.now() / 1000), room_id)]);
-    return require_room(database, room_id);
-  }
   const rounds = action === "extend" ? payload.rounds : payload.max_rounds ?? room.limits.max_rounds;
   if (!Number.isInteger(rounds) || rounds < (action === "extend" ? 1 : 0) || rounds > 100) throw new HttpError(400, "轮次须为整数（追加 1–100，重启 0–100，0 表示不限）");
   const count = await opinion_count(database, room_id, room.experts);
   if (action === "extend") {
     await checked_batch(database, fence, fence_values, [
       database.prepare("UPDATE round_budgets SET base=?,cap=?,extra=extra+? WHERE room_id=?").bind(count, rounds, rounds, room_id),
-      database.prepare("UPDATE discussion_limits SET closing_at=0,stop_reason='',revision=revision+1 WHERE room_id=?").bind(room_id)]);
+      database.prepare("UPDATE discussion_limits SET stop_reason='',revision=revision+1 WHERE room_id=?").bind(room_id)]);
     return require_room(database, room_id);
   }
   const limits = limit_values({ max_rounds: rounds, max_minutes: payload.max_minutes ?? room.limits.max_minutes }, room.limits);
   await checked_batch(database, fence, fence_values, [
     database.prepare("UPDATE round_budgets SET base=?,cap=0,extra=0 WHERE room_id=?").bind(count, room_id),
-    database.prepare("UPDATE discussion_limits SET max_rounds=?,max_minutes=?,started_at=0,closing_at=0,stop_reason='',revision=revision+1 WHERE room_id=?")
+    database.prepare("UPDATE discussion_limits SET max_rounds=?,max_minutes=?,started_at=0,stop_reason='',revision=revision+1 WHERE room_id=?")
       .bind(limits.max_rounds, limits.max_minutes, room_id),
     database.prepare("UPDATE discussion_pauses SET paused_seconds=0,paused_at=0 WHERE room_id=?").bind(room_id),
     database.prepare("UPDATE topic_settings SET phase='paused' WHERE room_id=?").bind(room_id)]);
   return require_room(database, room_id);
 }
 
-/** Apply a reached boundary once, leaving authorship of the summary to the host. */
+/** Pause at a reached boundary (or once the host declares the goal done); the user then extends or ends the discussion. */
 async function check_limits(database, room_id, payload) {
   const action = payload.action ?? "check";
-  if (!["check", "done", "extend", "summarize", "reopen"].includes(action)) throw new HttpError(400, "action 须为 check/done/extend/summarize/reopen");
-  if (["extend", "summarize", "reopen"].includes(action)) return adjust_limits(database, room_id, payload, action);
+  if (!["check", "done", "extend", "reopen"].includes(action)) throw new HttpError(400, "action 须为 check/done/extend/reopen");
+  if (["extend", "reopen"].includes(action)) return adjust_limits(database, room_id, payload, action);
   const room = await require_room(database, room_id);
   require_host(room, payload);
   const limits = room.limits;
   const done = action === "done";
-  const force = payload.force === true;
-  if (force && (["preparing", "paused", "concluded"].includes(room.phase) || room.archived)) throw new HttpError(400, "仅进行中的讨论可以提前收尾");
   const inactive = ["paused", "concluded"].includes(room.phase) || room.archived || (done && room.phase === "preparing");
-  if ((!limits.reached && !force && !done) || inactive) return room;
-  if (done || force) await require_conclusion_ready(database, room, payload, true);
+  if ((!limits.reached && !done) || inactive) return room;
+  if (done) await require_conclusion_ready(database, room, payload, true);
   const reason = done ? "goal_done" : limits.reason || "user_stop";
-  const closing = (force || limits.on_limit === "summarize") && reason !== "time_limit";
-  if (closing && limits.closing) return room;
-  const summary_deadline = Math.floor(Date.now() / 1000) + limits.summary_minutes * 60;
-  const statements = [database.prepare("UPDATE discussion_limits SET closing_at=?,stop_reason=?,revision=revision+1 WHERE room_id=?")
-    .bind(closing ? Math.floor(Date.now() / 1000) : limits.closing_at, reason, room_id),
+  const statements = [database.prepare("UPDATE discussion_limits SET stop_reason=?,revision=revision+1 WHERE room_id=?").bind(reason, room_id),
     database.prepare("UPDATE discussion_turns SET status='cancelled' WHERE room_id=? AND status IN ('pending','notified')").bind(room_id),
     database.prepare("UPDATE discussion_turns SET status='skipped' WHERE room_id=? AND status='queued'").bind(room_id),
     database.prepare("UPDATE room_floor SET holder=NULL,next_speaker=?,revision=revision+1 WHERE room_id=?").bind(room.host, room_id),
-    closing ? database.prepare("UPDATE discussion_runtime SET generation=generation+1,revision=revision+1,deadline=CASE WHEN deadline=0 THEN ? ELSE MIN(deadline,?) END WHERE room_id=? AND status='running'").bind(summary_deadline, summary_deadline, room_id)
-      : database.prepare("UPDATE topic_settings SET phase='paused' WHERE room_id=?").bind(room_id)];
-  if (!closing) statements.push(database.prepare("UPDATE discussion_runtime SET status='paused',generation=generation+1,revision=revision+1 WHERE room_id=? AND status='running'").bind(room_id));
+    database.prepare("UPDATE topic_settings SET phase='paused' WHERE room_id=?").bind(room_id),
+    database.prepare("UPDATE discussion_runtime SET status='paused',generation=generation+1,revision=revision+1 WHERE room_id=? AND status='running'").bind(room_id)];
   await checked_batch(database, `EXISTS(SELECT 1 FROM discussion_limits WHERE room_id=? AND revision=?)
     AND EXISTS(SELECT 1 FROM topic_settings WHERE room_id=? AND phase=? AND host=? AND json(experts)=json(?))
     AND COALESCE((SELECT MAX(id) FROM messages WHERE room_id=?),0)=?`,
@@ -1792,7 +1772,6 @@ function runtime_start(database, room, payload) {
   const room_id = room.id;
   const now = Math.floor(Date.now() / 1000);
   let configured = room.limits.max_minutes ? (room.limits.started_at || now) + room.limits.max_minutes * 60 + (room.limits.idle_seconds || 0) : 0;
-  if (room.limits.closing_at) configured = Math.min(...[configured, room.limits.closing_at + room.limits.summary_minutes * 60, room.runtime.deadline].filter(Boolean));
   payload.deadline ??= configured;
   if (Number.isInteger(payload.deadline) && configured) payload.deadline = Math.min(payload.deadline || configured, configured);
   if (!Number.isInteger(payload.deadline) || (payload.deadline !== 0 && (payload.deadline <= now || payload.deadline > now + 86400))) throw new HttpError(400, "deadline 须为 0（不限时长）或未来 24 小时内的 Unix 秒数");
@@ -2547,7 +2526,6 @@ function queue_invited_expert(database, room_id, name) {
     FROM topic_settings AS settings JOIN room_members AS member ON member.room_id=settings.room_id
     WHERE settings.room_id=? AND member.name=? AND member.status='active'
       AND settings.phase NOT IN ('paused','concluded')
-      AND NOT EXISTS (SELECT 1 FROM discussion_limits WHERE room_id=settings.room_id AND closing_at>0)
       AND EXISTS (SELECT 1 FROM discussion_turns WHERE room_id=settings.room_id AND status IN ('pending','notified','queued'))`)
     .bind(room_id, name);
 }

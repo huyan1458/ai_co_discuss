@@ -221,8 +221,8 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(status, 200, room)
         self.assertEqual(room["phase"], "paused")
 
-    def test_host_cannot_conclude_at_pause_limit(self):
-        """A reached limit with on_limit=pause must pause, not be concluded by the host."""
+    def test_reached_limit_pauses_and_a_host_conclusion_still_needs_the_conclusion_state(self):
+        """A reached limit pauses the discussion; concluding is still guarded by the conclusion revision."""
         self.limited_room(max_rounds=1)
         self.complete_round()
         token = self.member_tokens["Codex"]
@@ -248,8 +248,8 @@ class RuntimeTests(unittest.TestCase):
         legacy = self.request(f"/api/rooms/{room['id']}")[1]
         self.assertEqual((legacy["completed_rounds"], legacy["limits"]["reached"], legacy["limits"]["extra_rounds"]), (0, False, 0))
 
-    def test_host_done_pauses_and_user_chooses_extend_or_summary(self):
-        """Goal completion pauses a pause-mode room; only the user appends rounds or asks for the summary."""
+    def test_host_done_pauses_and_only_the_user_extends(self):
+        """Goal completion pauses the room; only the user appends rounds, and there is no summary closing mode."""
         self.limited_room(max_rounds=2)
         self.start()
         token = self.enter(self.events()[0])
@@ -265,15 +265,7 @@ class RuntimeTests(unittest.TestCase):
         limits = room["limits"]
         self.assertEqual((limits["max_rounds"], limits["extra_rounds"], limits["round_cap"], limits["segment_rounds"], limits["stop_reason"]),
                          (2, 3, 3, 0, ""))
-        status, room = self.request(self.path + "/limits", {"actor": "用户", "action": "summarize"}, self.owner)
-        self.assertEqual((status, room["phase"], room["limits"]["stop_reason"]), (200, "paused", "user_summary"))
-        revision = self.request(self.path + "/runtime")[1]["revision"]
-        self.assertEqual(self.request(self.path + "/runtime", {"action": "start", "mode": "automatic", "revision": revision,
-                                                              "deadline": int(time.time()) + 600}, self.owner)[0], 200)
-        room = self.request(self.path)[1]
-        self.assertTrue(room["limits"]["closing"])
-        token = self.enter(self.events()[-1])
-        self.assertEqual(self.conclude_as_host(token), 200)
+        self.assertEqual(self.request(self.path + "/limits", {"actor": "用户", "action": "summarize"}, self.owner)[0], 400)
 
     def test_concluded_room_can_be_reopened_with_new_limits(self):
         """Reopening resets the round and time budget but keeps the history and the old conclusion."""
@@ -288,42 +280,20 @@ class RuntimeTests(unittest.TestCase):
                          ("paused", 2, 30, 0, False))
         self.assertEqual(room["message_count"], 1)
 
-    def test_summary_replaces_old_execution_and_does_not_fake_conclusion(self):
-        """Round exhaustion hands a bounded closing task to the actual host."""
-        self.limited_room(max_rounds=1, max_minutes=60, on_limit="summarize", summary_minutes=2)
+    def test_round_limit_pauses_the_run_and_supersedes_the_old_execution(self):
+        """Round exhaustion pauses at once: the old execution is revoked and no closing or summary task is created."""
+        self.limited_room(max_rounds=1, max_minutes=60)
         self.start()
         self.complete_round()
         old_token = self.enter(self.events()[-1])
         status, room = self.request(self.path + "/limits", {"actor": "用户"}, self.owner)
         self.assertEqual(status, 200, room)
-        self.assertTrue(room["limits"]["closing"])
-        self.assertNotEqual(room["phase"], "concluded")
-        self.assertLessEqual(room["runtime"]["deadline"], int(time.time()) + 120)
+        self.assertEqual((room["phase"], room["runtime"]["status"], room["limits"]["reason"]), ("paused", "paused", "round_limit"))
+        self.assertNotIn("closing", room["limits"])
         self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "旧执行"}, old_token)[0], 403)
-        token = self.enter(self.events()[-1])
-        revision = room["runtime"]["revision"]
-        self.assertEqual(self.request(self.path + "/limits", {"actor": "用户"}, self.owner)[1]["runtime"]["revision"], revision)
-        self.assertEqual(self.conclude_as_host(token), 200)
-
-    def test_forced_close_hands_summary_to_host_before_limits(self):
-        """A user can end early; the expert is cancelled and the host gets the closing reserve."""
-        self.limited_room(max_rounds=3, summary_minutes=2)
-        self.request(self.path + "/turns", {"actor": "用户", "expert": "Codex", "question": "待打断",
-            "submission_id": "forced-turn"})
-        self.start()
-        expert_token = self.enter(self.events()[-1])
-        status, room = self.request(self.path + "/limits", {"actor": "用户", "force": True}, self.owner)
-        self.assertEqual(status, 200, room)
-        self.assertTrue(room["limits"]["closing"])
-        self.assertEqual(room["limits"]["stop_reason"], "user_stop")
-        self.assertEqual(room["current_turn"]["status"], "cancelled")
-        self.assertLessEqual(room["runtime"]["deadline"], int(time.time()) + 120)
-        self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "旧执行"}, expert_token)[0], 403)
-        self.assertEqual(self.events()[-1]["role"], "host")
-        status, _ = self.request(self.path + "/limits", {"actor": "用户", "force": True}, self.owner)
-        self.assertEqual(status, 200)
-        self.request(self.path + "/runtime", {"action": "pause", "revision": room["runtime"]["revision"]}, self.owner)
-        self.assertEqual(self.request(self.path + "/limits", {"actor": "用户", "force": True}, self.owner)[0], 400)
+        # A client that still asks for the removed closing flows is refused instead of silently pausing.
+        self.assertEqual(self.request(self.path + "/limits", {"actor": "用户", "action": "summarize"}, self.owner)[0], 400)
+        self.assertEqual(self.request("/api/rooms", {"title": "旧总结方式", "limits": {"on_limit": "summarize"}})[0], 400)
 
     def test_runtime_reports_latest_execution_per_participant(self):
         """The progress panel sees each participant's latest execution and failure count."""
@@ -454,7 +424,7 @@ class RuntimeTests(unittest.TestCase):
         """Bad settings fail; limits are editable only before start or while paused."""
         for limits in ({"max_rounds": -1}, {"max_minutes": 1441}, {"max_rounds": True},
                        {"execution_minutes": -1}, {"execution_minutes": 61}, {"on_limit": "ignore"},
-                       {"max_minutes": 5, "on_limit": "summarize", "summary_minutes": 5}, {"started_at": 0}):
+                       {"max_minutes": 5, "on_limit": "summarize"}, {"started_at": 0}):
             self.assertEqual(self.request("/api/rooms", {"title": "invalid", "limits": limits})[0], 400)
         room = self.limited_room(max_minutes=60, execution_minutes=1)
         self.assertEqual(room["limits"]["started_at"], 0)
@@ -471,24 +441,20 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(status, 200, updated)
         self.assertEqual(updated["limits"]["started_at"], started)
 
-    def test_reserved_time_cancels_expert_and_hard_deadline_pauses(self):
-        """Summary time is inside the total deadline and never extends the run."""
-        self.limited_room(max_minutes=10, on_limit="summarize", summary_minutes=1)
+    def test_hard_deadline_cancels_the_open_assignment_and_pauses(self):
+        """The total duration is a hard boundary: at the deadline the open assignment is cancelled and the room pauses."""
+        self.limited_room(max_minutes=10)
         self.request(self.path + "/turns", {"actor": "用户", "expert": "Codex", "question": "待回答",
             "submission_id": "reserve-timing"})
         deadline = int(time.time()) + 3
         self.assertEqual(self.request(self.path + "/runtime", {"action": "start", "revision": 0, "deadline": deadline}, self.owner)[0], 200)
-        status, room = self.request(self.path + "/limits", {"actor": "用户"}, self.owner)
-        self.assertEqual(status, 200, room)
-        self.assertTrue(room["limits"]["closing"])
-        self.assertEqual(room["current_turn"]["status"], "cancelled")
-        self.assertEqual(room["runtime"]["deadline"], deadline)
+        self.assertFalse(self.request(self.path)[1]["limits"]["reached"])
         time.sleep(3)
         room = self.request(self.path + "/limits", {"actor": "用户"}, self.owner)[1]
         self.assertEqual(room["phase"], "paused")
+        self.assertEqual(room["current_turn"]["status"], "cancelled")
         self.assertEqual(room["limits"]["stop_reason"], "time_limit")
         self.assertEqual(room["limits"]["deadline"], deadline)
-        self.assertFalse(room["limits"]["closing"])
         self.assertEqual(room["limits"]["remaining_seconds"], 0)
 
     def test_manual_is_default_and_does_not_create_events(self):
@@ -512,31 +478,6 @@ class RuntimeTests(unittest.TestCase):
             current = self.request(self.path)[1]["runtime"]
             self.assertEqual({k: v for k, v in current.items() if k != "timings"}, {k: v for k, v in run.items() if k != "timings"})
 
-    def test_resuming_summary_preserves_deadline_and_rejects_expired_start(self):
-        """Pausing a closing task does not grant another summary budget."""
-        self.limited_room(max_minutes=10, on_limit="summarize", summary_minutes=1)
-        deadline = int(time.time()) + 4
-        run = self.request(self.path + "/runtime", {"action": "start", "revision": 0,
-            "deadline": deadline}, self.owner)[1]
-        room = self.request(self.path + "/limits", {"actor": "用户"}, self.owner)[1]
-        self.assertTrue(room["limits"]["closing"])
-        paused = self.request(self.path + "/runtime", {"action": "pause",
-            "revision": room["runtime"]["revision"]}, self.owner)[1]
-        updated = self.request(self.path + "/topic", {"actor": "用户",
-            "limits": {"execution_minutes": 2}}, self.owner)[1]
-        self.assertEqual(updated["limits"]["closing_at"], room["limits"]["closing_at"])
-        self.assertEqual(updated["limits"]["deadline"], deadline)
-        status, resumed = self.request(self.path + "/runtime", {"action": "start",
-            "revision": paused["revision"], "deadline": int(time.time()) + 600}, self.owner)
-        self.assertEqual(status, 200, resumed)
-        self.assertEqual(resumed["deadline"], deadline)
-        paused = self.request(self.path + "/runtime", {"action": "pause",
-            "revision": resumed["revision"]}, self.owner)[1]
-        time.sleep(max(0, deadline - time.time()) + 0.1)
-        status, result = self.request(self.path + "/runtime", {"action": "start",
-            "revision": paused["revision"], "deadline": int(time.time()) + 600}, self.owner)
-        self.assertEqual(status, 400, result)
-        self.assertEqual(self.request(self.path)[1]["runtime"]["status"], "paused")
 
     def test_answer_transaction_drives_host_without_duplicate_events(self):
         """A real formal answer completes its execution and wakes the host once."""
@@ -614,7 +555,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_host_conclusion_needs_the_latest_conclusion_state_and_nothing_blocking(self):
         """A host cannot conclude without the revision or over a stale one, and concludes once nothing blocks."""
-        self.limited_room(on_limit="summarize")
+        self.limited_room()
         self.start()
         token = self.enter(self.events()[0])
         topic = lambda extra: self.request(self.path + "/topic", {"actor": "Codex", "phase": "concluded", **extra}, token)
@@ -1119,7 +1060,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_conclusion_completes_host_and_rejects_old_capability(self):
         """A host's final action completes its execution instead of cancelling it."""
-        self.limited_room(on_limit="summarize")
+        self.limited_room()
         self.start()
         token = self.enter(self.events()[0])
         self.assertEqual(self.conclude_as_host(token), 200)
@@ -1185,28 +1126,17 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual((resumed["deadline"], resumed["expired"]), (0, False))
         self.assertEqual(self.request(self.path + "/runtime", {"action": "stop", "revision": resumed["revision"]}, self.owner)[1]["status"], "stopped")
 
-    def test_unlimited_run_still_stops_or_summarizes_at_round_limit(self):
-        """Round limits stop unlimited runs and summaries get a finite reserve."""
-        for action in ("pause", "summarize"):
-            with self.subTest(action=action):
-                self.limited_room(max_rounds=1, on_limit=action, summary_minutes=1)
-                self.start(0)
-                self.complete_round()
-                old_token = self.enter(self.events()[-1])
-                status, room = self.request(self.path + "/limits", {"actor": "用户"}, self.owner)
-                self.assertEqual(status, 200, room)
-                self.assertEqual(room["limits"]["reason"], "round_limit")
-                self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "旧执行"}, old_token)[0], 403)
-                if action == "pause":
-                    self.assertEqual(room["runtime"]["status"], "paused")
-                else:
-                    deadline = room["runtime"]["deadline"]
-                    self.assertTrue(int(time.time()) < deadline <= int(time.time()) + 60)
-                    paused = self.request(self.path + "/runtime", {"action": "pause", "revision": room["runtime"]["revision"]}, self.owner)[1]
-                    resumed = self.request(self.path + "/runtime", {"action": "start", "revision": paused["revision"], "deadline": 0}, self.owner)[1]
-                    self.assertEqual(resumed["deadline"], deadline)
-                    token = self.enter(self.events()[-1])
-                    self.assertEqual(self.conclude_as_host(token), 200)
+    def test_unlimited_run_still_stops_at_round_limit(self):
+        """Round limits stop runs that have no total duration."""
+        self.limited_room(max_rounds=1)
+        self.start(0)
+        self.complete_round()
+        old_token = self.enter(self.events()[-1])
+        status, room = self.request(self.path + "/limits", {"actor": "用户"}, self.owner)
+        self.assertEqual(status, 200, room)
+        self.assertEqual(room["limits"]["reason"], "round_limit")
+        self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "旧执行"}, old_token)[0], 403)
+        self.assertEqual(room["runtime"]["status"], "paused")
 
     def test_zero_deadline_cannot_bypass_configured_duration(self):
         """Zero inherits a configured topic cutoff; invalid deadlines still fail."""

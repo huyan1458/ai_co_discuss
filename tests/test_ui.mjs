@@ -1174,7 +1174,7 @@ function theme_fixture(saved_theme = null, shared_storage = null) {
 
 test('empty execution limits submit as unlimited and remain clear in the progress label', () => {
   const { context, nodes } = theme_fixture();
-  for (const [key, value] of Object.entries({ max_rounds: '3', max_minutes: '0', execution_minutes: '', on_limit: 'pause', summary_minutes: '5' })) {
+  for (const [key, value] of Object.entries({ max_rounds: '3', max_minutes: '0', execution_minutes: '' })) {
     nodes.set(`new-room-limit-${key}`, { value });
   }
   const limits = context.read_limits('new-room');
@@ -1745,7 +1745,7 @@ test("a new room that asks for a discussion is created as a collaboration room, 
   Object.assign(fixture.context, {
     crypto: { randomUUID: () => 'token' }, new_submission_id: () => 'submission-1',
     room_creation_payload: () => ({ title: '讨论', goal: ' 选方案 ', mode: 'free', host: 'Codex', experts: { Codex: 'cli' } }),
-    read_limits: () => ({ max_rounds: 2, max_minutes: 30, execution_minutes: 0, on_limit: 'summarize', summary_minutes: 5 }),
+    read_limits: () => ({ max_rounds: 2, max_minutes: 30, execution_minutes: 0 }),
     render_launch_settings() {}, render_expert_inputs() {}, default_experts: () => ({}), select_room: async () => {}, show_toast() {},
     update_directory: async ({ save, commit }) => { const result = await save(); commit(result); return result; },
     local_launch_request: async () => ({ room: { id: 'created' } }),
@@ -1754,7 +1754,7 @@ test("a new room that asks for a discussion is created as a collaboration room, 
   await fixture.context.submit_room({ preventDefault() {} });
   assert.deepEqual(calls.map(call => call[0]), ['/api/rooms/created/discussion', '/api/rooms/created/runtime', '/api/rooms/created/runtime']);
   assert.deepEqual(JSON.parse(JSON.stringify(calls[0][1])), { action: 'start', goal: '选方案', named_followup: true,
-    limits: { max_rounds: 2, max_minutes: 30, execution_minutes: 0, on_limit: 'pause', summary_minutes: 5 } });
+    limits: { max_rounds: 2, max_minutes: 30, execution_minutes: 0 } });
   assert.deepEqual(JSON.parse(JSON.stringify(calls[2][1])), { action: 'start', mode: 'automatic', revision: 3, deadline: 0 });
 });
 

@@ -169,9 +169,8 @@ def add_topic(parser, create=False):
     parser.add_argument("--phase", choices=PHASES, default=argparse.SUPPRESS)
     parser.add_argument("--experts-file", default=argparse.SUPPRESS,
                         help='完整参与者映射 JSON，如 {"Codex":"cli","Gemini":"cli"}；替换整个映射')
-    for name in ("max-rounds", "max-minutes", "execution-minutes", "summary-minutes"):
+    for name in ("max-rounds", "max-minutes", "execution-minutes"):
         parser.add_argument(f"--{name}", type=non_negative_int, default=argparse.SUPPRESS)
-    parser.add_argument("--on-limit", choices=("pause", "summarize"), default=argparse.SUPPRESS)
 
 
 def add_leaf(subcommands, registry, name, description, needs_room=False):
@@ -197,7 +196,7 @@ def room_commands(subcommands, registry):
             parser.add_argument("--submission-id", type=submission_id, help="按建房提交编号精确查询")
     limits = add_leaf(subcommands, registry, "room limits", "查看上限；--check 检查并执行到限处理；--done 通知程序目标已完成", True)
     limits.add_argument("--check", action="store_true")
-    limits.add_argument("--done", action="store_true", help="主持人宣告目标已完成：按到限方式暂停或进入总结，不直接收束；须带 --conclusion")
+    limits.add_argument("--done", action="store_true", help="主持人宣告目标已完成：暂停讨论，由用户决定追加轮次或结束；须带 --conclusion")
     limits.add_argument("--conclusion", help="room conclusion 返回的 revision；--done 必填")
     create = add_leaf(subcommands, registry, "room create", "创建话题；不自动启动讨论或监控")
     create.add_argument("--folder-id", help="直接在指定文件夹中创建；省略则未归类")
@@ -410,7 +409,7 @@ def require_actor(args):
 def topic_payload(args):
     """Collect only supplied topic fields; expert configuration is a full map."""
     payload = {}
-    limits = {key: getattr(args, key) for key in ("max_rounds", "max_minutes", "execution_minutes", "on_limit", "summary_minutes") if hasattr(args, key)}
+    limits = {key: getattr(args, key) for key in ("max_rounds", "max_minutes", "execution_minutes") if hasattr(args, key)}
     if limits:
         payload["limits"] = limits
     for field in ("title", "goal", "user_request", "background", "boundaries", "focus"):

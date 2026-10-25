@@ -12,7 +12,6 @@ const state = computed(() => {
   const value = room.value;
   if (value.archived) return { tone: "neutral", title: "已存档" };
   if (value.phase === "concluded") return { tone: "neutral", title: "已收束" };
-  if (limits.value.closing) return { tone: "warning", title: "正在收尾" };
   if (value.phase === "preparing") return { tone: "neutral", title: "准备中" };
   if (value.phase === "paused") return { tone: "warning", title: "已暂停" };
   if (limits.value.reached) return { tone: "warning", title: "已达上限" };

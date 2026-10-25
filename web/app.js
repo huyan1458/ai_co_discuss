@@ -1433,9 +1433,9 @@ function render_access() {
 
 /** Read numeric limits from the shared classic/modern form controls. */
 function read_limits(prefix) {
-  return Object.fromEntries(["max_rounds", "max_minutes", "execution_minutes", "on_limit", "summary_minutes"].map(key => {
+  return Object.fromEntries(["max_rounds", "max_minutes", "execution_minutes"].map(key => {
     const value = element(`${prefix}-limit-${key}${prefix === "topic" ? "-input" : ""}`).value;
-    return [key, key === "on_limit" ? value : Number(value)];
+    return [key, Number(value)];
   }));
 }
 
@@ -1453,9 +1453,8 @@ function limits_label(limits = {}) {
   const rounds = limits.round_cap || limits.max_rounds ? limit_rounds(limits).text : `${limits.completed_rounds || 0} 轮 · 未设轮次上限`;
   const duration = limits.max_minutes ? `总时长 ${limits.max_minutes} 分钟` : "未设总时长";
   const progress = finished ? "讨论已收束" : !limits.started_at ? "尚未计时" : `已用 ${Math.floor((limits.elapsed_seconds || 0) / 60)} 分钟${limits.remaining_seconds == null ? "" : ` · 剩余 ${Math.ceil(limits.remaining_seconds / 60)} 分钟`}`;
-  const status = finished ? "" : limits.closing ? "正在收束" : limits.reached ? "已达上限，停止新增安排" : "";
-  const summary = limits.max_minutes || limits.deadline ? `总时长内预留 ${limits.summary_minutes} 分钟` : `收束最多 ${limits.summary_minutes} 分钟`;
-  const action = limits.on_limit === "summarize" ? `主持人总结 · ${summary}` : "到限暂停";
+  const status = finished ? "" : limits.reached ? "已达上限，停止新增安排" : "";
+  const action = "到限暂停";
   const execution = limits.execution_minutes ? `${limits.execution_minutes} 分钟` : "不限时长";
   return `${rounds}；${duration}；${progress}。单次自动执行 ${execution}。${action}${status ? `；${status}` : ""}。`;
 }
@@ -1546,7 +1545,7 @@ async function submit_room(event, folder_id = null) {
   const launch_draft = launching ? creation_launch_options() : null;
   // A discussion is only a way to push the room forward: the room is created as a free room, then opened with these limits.
   const discussion = free && state.create_discussion ? { goal: payload.goal.trim(), named_followup: state.named_followup,
-    limits: { ...read_limits("new-room"), on_limit: "pause" } } : null;
+    limits: read_limits("new-room") } : null;
   if (discussion && !(launching && payload.host && payload.experts[payload.host] === "cli")) throw new Error("开启讨论需要一位由本机唤醒的 AI 主持人；请先添加并设为主持人");
   // The key joins the signature only when a discussion is requested, so recovered requests keep matching their stored signature.
   const signed = (current_payload, current_draft) => JSON.stringify(discussion ? { payload: current_payload, launch_draft: current_draft, discussion } : { payload: current_payload, launch_draft: current_draft });
@@ -2395,27 +2394,12 @@ async function extend_rounds(rounds) {
   show_toast(`已追加 ${rounds} 轮并重启讨论`);
 }
 
-/** Ask the host for a summary of the paused discussion; it ends in the concluded state. */
-async function request_summary() {
-  await request_json(`/api/rooms/${state.room.id}/limits`, { actor: "用户", action: "summarize" });
-  await resume_after_limit_decision();
-  await refresh_room();
-  show_toast("已请主持人总结，总结后讨论收束");
-}
-
 /** Reopen a concluded discussion with a fresh round and time budget; history stays. */
 async function reopen_discussion({ max_rounds, max_minutes }) {
   await request_json(`/api/rooms/${state.room.id}/limits`, { actor: "用户", action: "reopen", max_rounds, max_minutes });
   await resume_after_limit_decision();
   await refresh_room();
   show_toast("讨论已重启，按新的轮次与时长上限继续");
-}
-
-/** End early with a host summary limited to the configured closing reserve. */
-async function force_close() {
-  await request_json(`/api/rooms/${state.room.id}/limits`, { actor: "用户", force: true });
-  await refresh_room();
-  show_toast("已取消当前安排，等待主持人总结收尾");
 }
 
 /** End early without a summary, keeping every original message. */
@@ -2623,9 +2607,9 @@ function render_topic() {
     for (const field of ["title", "goal", "focus", "user_request", "background", "boundaries"]) element(`topic-${field}-input`).value = room[field] || "";
     render_host_options("topic-host-select", Object.keys(room.experts).filter(name => room.experts[name] === "cli"), room.host);
     element("topic-phase-select").value = room.phase;
-    for (const key of ["max_rounds", "max_minutes", "execution_minutes", "on_limit", "summary_minutes"]) {
+    for (const key of ["max_rounds", "max_minutes", "execution_minutes"]) {
       const input = element(`topic-limit-${key}-input`);
-      input.value = room.limits?.[key] || (key === "on_limit" ? "pause" : "");
+      input.value = room.limits?.[key] || "";
       input.disabled = !["preparing", "paused"].includes(room.phase);
     }
     render_expert_inputs("topic-expert-modes", room.experts);
@@ -3366,7 +3350,7 @@ async function execute_view_action(name, value) {
     copy_turn, notify: () => change_turn_status("notified"), cancel_turn: () => change_turn_status("cancelled"), skip_turn,
     take_floor: () => change_floor("take"), return_floor: () => change_floor("return"),
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
-    choose_runtime, export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, retry_execution, force_close, conclude_discussion, start_room_discussion, end_room_discussion, extend_rounds, request_summary, reopen_discussion,
+    choose_runtime, export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, retry_execution, conclude_discussion, start_room_discussion, end_room_discussion, extend_rounds, reopen_discussion,
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
     load_room_configuration, save_room_configuration, interrupt_member, change_member, invite_member, set_proxy, copy_online_notice,
     prepare_brainstorm, return_conclusion, convert_suggestion, adopt_recommendation,

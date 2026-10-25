@@ -539,7 +539,7 @@ export class DiscussionRunner {
       if (/^HTTP 404: 房间不存在/.test(error.message)) remove_agy_projects(this.config.directory);
       throw error;
     }
-    if (room.limits?.reached && (!room.limits.closing || room.limits.reason === 'time_limit') && room.runtime.status === 'running') {
+    if (room.limits?.reached && room.runtime.status === 'running') {
       const generation = room.runtime.generation;
       room = await api(this.config, '/limits', { actor: '用户' });
       if (room.runtime.generation !== generation) this.stop_children();

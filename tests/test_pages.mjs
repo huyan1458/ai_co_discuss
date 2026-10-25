@@ -523,11 +523,12 @@ test('Worker unlimited runs keep bounded execution leases, authorization and pau
   assert.equal((await f.request(`/${id}/runtime`, { action: 'stop', revision: resumed.body.revision })).body.status, 'stopped');
 });
 
-for (const on_limit of ['pause', 'summarize']) {
-  test(`Worker unlimited runs honor round limits with ${on_limit}`, async t => {
+{
+  test('Worker unlimited runs pause at the round limit, and the removed summary mode is refused', async t => {
     const f = await worker_fixture(t);
+    assert.equal((await f.request('', { title: '旧总结方式', host: 'Codex', experts: { Codex: 'cli' }, limits: { on_limit: 'summarize' } })).status, 400);
     const id = (await f.request('', { title: '轮次到限', host: 'Codex', experts: { Codex: 'cli' },
-      limits: { max_rounds: 1, on_limit, summary_minutes: 1 } })).body.id;
+      limits: { max_rounds: 1 } })).body.id;
     assert.equal((await f.request(`/${id}/runtime`, { action: 'start', revision: 0, deadline: 0 })).status, 200);
     const turn = (await f.request(`/${id}/turns`, { actor: '用户', expert: 'Codex', question: '观点', submission_id: 'unlimited-turn' })).body.turn;
     const execution = (await f.request(`/${id}/events`)).body.events.at(-1);
@@ -540,23 +541,8 @@ for (const on_limit of ['pause', 'summarize']) {
       text: '原文', submission_id: 'unlimited-answer', turn_id: turn.id }, answer_token)).status, 201);
     const room = (await f.request(`/${id}/limits`, { actor: '用户' })).body;
     assert.equal(room.limits.reason, 'round_limit');
-    if (on_limit === 'pause') assert.equal(room.runtime.status, 'paused');
-    else {
-      assert.ok(room.runtime.deadline > Date.now() / 1000);
-      assert.ok(room.runtime.deadline <= Math.floor(Date.now() / 1000) + 60);
-      const paused = (await f.request(`/${id}/runtime`, { action: 'pause', revision: room.runtime.revision })).body;
-      const resumed = await f.request(`/${id}/runtime`, { action: 'start', revision: paused.revision, deadline: 0 });
-      assert.equal(resumed.status, 200, JSON.stringify(resumed.body));
-      assert.equal(resumed.body.deadline, room.runtime.deadline);
-      const event = (await f.request(`/${id}/events`)).body.events.at(-1);
-      const token = 'closing-execution-token'.repeat(3);
-      const reserved = await f.request(`/${id}/events/${event.id}`, { action: 'reserve', execution_token: token });
-      assert.equal(reserved.status, 200, JSON.stringify({ result: reserved.body, event, runtime: resumed.body }));
-      assert.equal((await f.request(`/${id}/events/${event.id}`, { action: 'enter', session_id: 'host' }, token)).status, 200);
-      await f.request(`/${id}/state`, { actor: 'Codex', text: '结论', until: (await f.request(`/${id}`)).body.latest_id }, token);
-      const conclusion = (await f.request(`/${id}/conclusion`)).body.revision;
-      assert.equal((await f.request(`/${id}/topic`, { actor: 'Codex', phase: 'concluded', conclusion }, token)).status, 200);
-    }
+    assert.equal(room.runtime.status, 'paused');
+    assert.equal(room.limits.closing, undefined);
   });
 }
 
@@ -737,9 +723,9 @@ test('Worker retains failed attempts and frozen timing after retry, including le
   assert.deepEqual((await f.request(f.path)).body.runtime.failures, [{ ...failure, elapsed_seconds: null }]);
 });
 
-test('Worker forces an early host summary and reports per-participant executions', async t => {
+test('Worker reports per-participant executions and has no forced summary closing', async t => {
   const f = await worker_fixture(t);
-  const created = await f.request('', { title: '提前收尾', host: 'Codex', experts: { Codex: 'cli' }, limits: { max_rounds: 3, summary_minutes: 2 } });
+  const created = await f.request('', { title: '提前收尾', host: 'Codex', experts: { Codex: 'cli' }, limits: { max_rounds: 3 } });
   const id = created.body.id;
   await f.request(`/${id}/turns`, { actor: '用户', expert: 'Codex', question: '待打断', submission_id: 'forced-turn' });
   const started = await f.request(`/${id}/runtime`, { action: 'start', revision: 0, deadline: 0 });
@@ -747,18 +733,13 @@ test('Worker forces an early host summary and reports per-participant executions
   assert.deepEqual(started.body.participants.map(item => [item.participant, item.status, item.failures, item.stale]), [['Codex', 'pending', 0, false]]);
   assert.equal(started.body.participants[0].lease_until, undefined);
   assert.equal(started.body.participants[0].session_id, '');
-  const closed = await f.request(`/${id}/limits`, { actor: '用户', force: true });
-  assert.equal(closed.status, 200, JSON.stringify(closed.body));
-  assert.equal(closed.body.limits.closing, true);
-  assert.equal(closed.body.limits.stop_reason, 'user_stop');
-  assert.equal(closed.body.current_turn.status, 'cancelled');
-  assert.equal(closed.body.runtime.participants.at(-1).role, 'host');
-  assert.ok(closed.body.runtime.deadline > Date.now() / 1000);
-  await f.request(`/${id}/runtime`, { action: 'pause', revision: closed.body.runtime.revision });
-  assert.equal((await f.request(`/${id}/limits`, { actor: '用户', force: true })).status, 400);
+  // `force` is gone: asking for it changes nothing, and a limit that is not reached leaves the run alone.
+  const unchanged = await f.request(`/${id}/limits`, { actor: '用户', force: true });
+  assert.equal(unchanged.status, 200, JSON.stringify(unchanged.body));
+  assert.deepEqual([unchanged.body.limits.stop_reason, unchanged.body.current_turn.status, unchanged.body.runtime.status], ['', 'pending', 'running']);
 });
 
-test('Worker pauses on declared completion, lets the user extend or summarize, and reopens a concluded room', async t => {
+test('Worker pauses on declared completion, lets the user extend, and reopens a concluded room', async t => {
   const f = await worker_fixture(t);
   const id = (await f.request('', { title: '到限暂停', host: 'Codex', experts: { Codex: 'cli' }, limits: { max_rounds: 2 } })).body.id;
   assert.equal((await f.request(`/${id}/runtime`, { action: 'start', revision: 0, deadline: 0 })).status, 200);
@@ -775,8 +756,7 @@ test('Worker pauses on declared completion, lets the user extend or summarize, a
   assert.equal(extended.status, 200, JSON.stringify(extended.body));
   const { max_rounds, extra_rounds, round_cap, segment_rounds, stop_reason } = extended.body.limits;
   assert.deepEqual([max_rounds, extra_rounds, round_cap, segment_rounds, stop_reason], [2, 3, 3, 0, '']);
-  const summary = await f.request(`/${id}/limits`, { actor: '用户', action: 'summarize' });
-  assert.deepEqual([summary.status, summary.body.phase, summary.body.limits.stop_reason], [200, 'paused', 'user_summary']);
+  assert.equal((await f.request(`/${id}/limits`, { actor: '用户', action: 'summarize' })).status, 400);
   assert.equal((await f.request(`/${id}/limits`, { actor: '用户', action: 'reopen', max_rounds: 1 })).status, 400);
   assert.equal((await f.request(`/${id}/topic`, { actor: '用户', phase: 'concluded' })).status, 200);
   const reopened = await f.request(`/${id}/limits`, { actor: '用户', action: 'reopen', max_rounds: 2, max_minutes: 30 });

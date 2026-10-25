@@ -171,8 +171,7 @@ async function fixture(t) {
     } else if (request.url.endsWith('/limits')) {
       calls.push('limits');
       run.generation++;
-      if (limits.on_limit === 'summarize' && limits.reason !== 'time_limit') { limits.closing = true; event.generation = run.generation; }
-      else { run.status = 'paused'; event.status = 'cancelled'; }
+      run.status = 'paused'; event.status = 'cancelled';
       result = { runtime: run, limits, current_turn: null };
     } else if (request.url.endsWith('/runtime')) result = run;
     else result = { runtime: run, limits, current_turn: null };
@@ -275,24 +274,13 @@ test('a reached limit pauses before another app can be invoked', async t => {
   assert.deepEqual(f.calls, ['limits']);
 });
 
-test('summary handoff dispatches only the replacement host generation', async t => {
-  const f = await fixture(t); let sent = 0;
-  Object.assign(f.limits, { reached: true, on_limit: 'summarize' });
-  await new DiscussionRunner(f.config, f.store, async () => { sent++; return { status: 'accepted' }; }).tick();
-  assert.equal(sent, 1); assert.equal(f.event.generation, 2);
-  assert.equal(f.calls[0], 'limits');
-});
-
-test('summary polling avoids repeated mutations and still pauses at the final deadline', async t => {
+test('a reached round or time limit pauses once and is not polled again while paused', async t => {
   const f = await fixture(t);
-  Object.assign(f.limits, { reached: true, on_limit: 'summarize', reason: 'round_limit' });
+  Object.assign(f.limits, { reached: true, reason: 'round_limit' });
   const runner = new DiscussionRunner(f.config, f.store, async () => ({ status: 'accepted' }));
-  await runner.tick();
-  await runner.tick();
-  assert.equal(f.calls.filter(action => action === 'limits').length, 1);
-  f.limits.reason = 'time_limit';
   assert.equal(await runner.tick(), 'waiting');
-  assert.equal(f.calls.filter(action => action === 'limits').length, 2);
+  assert.equal(await runner.tick(), 'waiting');
+  assert.equal(f.calls.filter(action => action === 'limits').length, 1);
   assert.equal(f.run.status, 'paused');
 });
 

@@ -7,8 +7,9 @@ import uuid
 
 LEASE_SECONDS = 120
 MAX_RUN_SECONDS = 86400
-LIMIT_DEFAULTS = {"max_rounds": 0, "max_minutes": 0, "execution_minutes": 0,
-                  "on_limit": "pause", "summary_minutes": 5}
+LIMIT_DEFAULTS = {"max_rounds": 0, "max_minutes": 0, "execution_minutes": 0}
+# Older clients may still send these; reaching a limit always pauses, so only the pause value is accepted and the reserve is ignored.
+LEGACY_LIMIT_FIELDS = ("on_limit", "summary_minutes")
 PUBLIC_EVENT_FIELDS = ("id", "room_id", "run_id", "generation", "cause", "participant",
                        "role", "turn_id", "status", "session_id", "lease_until", "result", "created_at")
 LIMITS_SQL = """SELECT limits.*,COALESCE(pauses.paused_seconds,0)+CASE WHEN COALESCE(pauses.paused_at,0)>0
@@ -39,18 +40,15 @@ def begin_write(connection):
 
 def limit_values(payload, current=None):
     """Validate bounded discussion settings; zero means no round/time preset."""
-    if not isinstance(payload, dict) or set(payload) - set(LIMIT_DEFAULTS):
+    if not isinstance(payload, dict) or set(payload) - set(LIMIT_DEFAULTS) - set(LEGACY_LIMIT_FIELDS):
         raise ValueError("limits 仅接受讨论上限配置字段")
+    if payload.get("on_limit", "pause") != "pause":
+        raise ValueError("到限后只会暂停；需要总结时请主持人在暂停后按你的要求写出")
     result = {key: (current or {}).get(key, value) for key, value in LIMIT_DEFAULTS.items()}
-    result.update(payload)
-    for key, minimum, maximum in (("max_rounds", 0, 100), ("max_minutes", 0, 1440),
-                                  ("execution_minutes", 0, 60), ("summary_minutes", 1, 60)):
+    result.update({key: value for key, value in payload.items() if key in LIMIT_DEFAULTS})
+    for key, minimum, maximum in (("max_rounds", 0, 100), ("max_minutes", 0, 1440), ("execution_minutes", 0, 60)):
         if type(result[key]) is not int or not minimum <= result[key] <= maximum:
             raise ValueError(f"{key} 须为 {minimum}–{maximum} 的整数")
-    if result["on_limit"] not in ("pause", "summarize"):
-        raise ValueError("on_limit 须为 pause 或 summarize")
-    if result["on_limit"] == "summarize" and result["max_minutes"] and result["summary_minutes"] >= result["max_minutes"]:
-        raise ValueError("收束预留时间必须小于讨论总时长")
     return result
 
 
@@ -63,10 +61,6 @@ def limits_view(row, room):
     if room.get("runtime", {}).get("deadline") and (room["runtime"]["status"] == "running" or result["stop_reason"]):
         runtime_deadline = room["runtime"]["deadline"]
         deadline = min(deadline or runtime_deadline, runtime_deadline)
-    if result["closing_at"]:
-        closing_deadline = result["closing_at"] + result["summary_minutes"] * 60
-        deadline = min(deadline or closing_deadline, closing_deadline)
-    cutoff = deadline - result["summary_minutes"] * 60 if deadline and result["on_limit"] == "summarize" and not result["closing_at"] else deadline
     reason = ""
     budget = room.get("round_budget")
     experts = len(room.get("experts") or {})
@@ -78,14 +72,9 @@ def limits_view(row, room):
     round_cap = (budget["cap"] or result["max_rounds"]) if budget else result["max_rounds"]
     if deadline and now >= deadline:
         reason = "time_limit"
-    elif result["closing_at"]:
-        reason = result["stop_reason"]
     elif round_cap and segment_rounds >= round_cap:
         reason = "round_limit"
-    elif cutoff and now >= cutoff:
-        reason = "summary_reserved" if result["on_limit"] == "summarize" else "time_limit"
-    result.update(deadline=deadline, cutoff=cutoff, reached=bool(reason), reason=reason,
-                  closing=bool(result["closing_at"]) and room["phase"] not in ("paused", "concluded"), completed_rounds=room["completed_rounds"],
+    result.update(deadline=deadline, reached=bool(reason), reason=reason, completed_rounds=room["completed_rounds"],
                   segment_rounds=segment_rounds, round_cap=round_cap, extra_rounds=budget["extra"] if budget else 0,
                   remaining_seconds=max(0, deadline - now) if deadline else None,
                   elapsed_seconds=max(0, now - result["started_at"] - idle) if result["started_at"] else 0)
@@ -95,7 +84,7 @@ def limits_view(row, room):
 def require_within_limits(room):
     """Stop new expert work at the configured boundary, preserving user notes."""
     if room["limits"]["reached"]:
-        raise FileExistsError("已达到讨论上限；请检查上限并暂停或由主持人总结")
+        raise FileExistsError("已达到讨论上限；请检查上限并暂停，由用户决定追加轮次或结束")
 
 
 def execution_seconds(connection, room_id):
@@ -292,10 +281,6 @@ def validate_start(connection, room_id, payload):
     limits = connection.execute(LIMITS_SQL, (room_id,)).fetchone()
     configured = ((limits["started_at"] or int(time.time())) + limits["max_minutes"] * 60 + limits["idle_seconds"]
                   if limits["max_minutes"] else 0)
-    if limits["closing_at"]:
-        closing_deadline = limits["closing_at"] + limits["summary_minutes"] * 60
-        previous_deadline = runtime_view(connection, room_id).get("deadline", 0)
-        configured = min(value for value in (configured, closing_deadline, previous_deadline) if value)
     deadline = payload.get("deadline", configured)
     if type(deadline) is int and configured:
         deadline = min(deadline or configured, configured)

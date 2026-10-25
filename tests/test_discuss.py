@@ -61,7 +61,7 @@ class CliTests(unittest.TestCase):
         """Typed options survive create/read/update and a non-triggered check."""
         room = self.cli("room", "create", "--title", "参数", "--as", "Codex",
                         "--submission-id", str(uuid.uuid4()), "--max-rounds", "3", "--max-minutes", "60",
-                        "--execution-minutes", "10", "--on-limit", "summarize", "--summary-minutes", "5")
+                        "--execution-minutes", "10")
         self.assertEqual(room["limits"]["max_rounds"], 3)
         self.assertEqual(self.cli("room", "limits", room["id"])["max_minutes"], 60)
         self.assertEqual(self.cli("room", "limits", room["id"], "--check", "--as", "Codex")["phase"], "preparing")

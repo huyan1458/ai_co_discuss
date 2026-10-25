@@ -194,7 +194,7 @@ test('API host and six providers complete a real round through execution credent
   const participants = profiles(f.home, mock.base_url);
   const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
     room: { title: 'API 模拟讨论', host: 'Codex', experts: Object.fromEntries(Object.keys(participants).map(name => [name, 'cli'])),
-      limits: { max_rounds: 1, on_limit: 'summarize' }, submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
+      limits: { max_rounds: 2 }, submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
   const config = load_config(started.config_path), store = new DiscussionStore(config.directory), runner = new DiscussionRunner(config, store);
   f.cleanup.push(() => { runner.stop_children(); store.close(); });
   try { await until(async () => (await api(config, '')).phase === 'concluded', () => runner.tick()); }
