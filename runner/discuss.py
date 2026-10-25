@@ -30,12 +30,12 @@ MAX_BRIEF_LENGTH = 1600
 PARTICIPANTS = ("用户", "Codex", "Claude", "Gemini", "DeepSeek", "Qwen", "Grok")
 # A platform is a type; `Claude-评审` is a second Claude instance with its own session. Mirrors backend/identity.py.
 INSTANCE_PATTERN = re.compile(r"(Codex|Claude|Gemini|DeepSeek|Qwen|Grok)(?:-[0-9A-Za-z_一-鿿]{1,16})?")
-PHASES = ("preparing", "initial", "discussing", "reviewing", "paused", "concluded")
+PHASES = ("preparing", "initial", "discussing", "paused", "concluded")
 KINDS = ("opinion", "moderation", "chat")
 # Old rooms keep receipts they already hold, so reading can still filter them; new ones cannot be written.
 READ_KINDS = (*KINDS, "receipt")
 OVERVIEW_FIELDS = ("id", "title", "goal", "host", "phase", "focus", "message_count",
-                   "latest_id", "state_until", "current_turn", "queued_turns", "held_since", "floor", "runtime", "limits", "completed_rounds", "answered_turns", "duplicate", "submission_id",
+                   "latest_id", "state_until", "current_turn", "queued_turns", "held_since", "runtime", "limits", "completed_rounds", "answered_turns", "duplicate", "submission_id",
                    "mode", "members", "free", "parent_room", "linked_rooms")
 BRIEF_FIELDS = ("id", "title", "goal", "host", "user_request", "background", "boundaries", "experts")
 ROOM_LIST_FIELDS = ("id", "title", "goal", "message_count", "latest_id", "created_at")
@@ -231,7 +231,7 @@ def message_commands(subcommands, registry):
     post.add_argument("--summary-by", type=participant, help="摘要撰写者：原作者或实际操作者；默认操作者")
     post.add_argument("--author", type=participant, help="原作者；默认等于 --as；不同即代发")
     post.add_argument("--kind", choices=KINDS, default="opinion")
-    post.add_argument("--turn", type=positive_int, help="所回答的安排编号，仅 opinion 可用")
+    post.add_argument("--turn", type=positive_int, help="所回答的安排编号，仅 opinion 可用；省略时回答你当前有效的安排")
     post.add_argument("--execution", type=positive_int, help="自由房间：本次执行编号，仅 chat 可用；执行失效后不能改作普通发言")
     post.add_argument("--to", type=ai_name, action="append", default=[],
                       help="自由房间：主持人点名派活，普通成员提出回应建议（须房主确认）；可重复")
@@ -291,15 +291,6 @@ def state_commands(subcommands, registry):
     parser.add_argument("--until", type=int, required=True, help="实际已读的材料截止编号，可为 0")
 
 
-def floor_commands(subcommands, registry):
-    """Expose explicit floor inspection, nominated claims and early returns."""
-    add_leaf(subcommands, registry, "floor view", "读取当前持有者、下一位与版本", True)
-    for action in ("take", "return"):
-        parser = add_leaf(subcommands, registry, f"floor {action}", "领取或归还发言权", True)
-        parser.add_argument("--speaker", type=participant, help="实际持有者；代操作时显式指定，默认 --as")
-        parser.add_argument("--revision", type=non_negative_int, required=True, help="刚读取的发言权版本；变化后需重新核对")
-
-
 def run_commands(subcommands, registry):
     """Expose mode and lifecycle controls independently of discussion phases."""
     for action in ("view", "configure", "start", "pause", "stop"):
@@ -309,7 +300,7 @@ def run_commands(subcommands, registry):
             parser.add_argument("--mode", choices=("manual", "automatic"))
         if action == "start":
             parser.add_argument("--deadline", type=non_negative_int, help="截止时间 Unix 秒数；0 表示不限时长，仍受话题上限约束；省略时使用话题上限")
-            parser.add_argument("--phase", choices=("initial", "discussing", "reviewing"))
+            parser.add_argument("--phase", choices=("initial", "discussing"))
 
 
 def execution_commands(subcommands, registry):
@@ -338,7 +329,7 @@ def build_parser(prog="discuss"):
     registry = {}
     for name, register in (("room", room_commands), ("message", message_commands),
                            ("attachment", attachment_commands),
-                           ("turn", turn_commands), ("state", state_commands), ("floor", floor_commands),
+                           ("turn", turn_commands), ("state", state_commands),
                            ("run", run_commands), ("execution", execution_commands), ("member", member_commands)):
         group = subcommands.add_parser(name, help=f"{name} 操作", allow_abbrev=False)
         add_common(group)
@@ -579,16 +570,6 @@ def turn_payload(args):
     return {**payload, "expert": args.expert, "question": question}
 
 
-def plan_floor(args):
-    """Send one versioned operation without silently claiming on a failed write."""
-    path = f"/api/rooms/{args.room}/floor"
-    if args.action == "view":
-        return RequestPlan(path)
-    actor = require_actor(args)
-    return RequestPlan(path, "POST", {"actor": actor, "speaker": args.speaker or actor,
-                                      "action": args.action, "revision": args.revision})
-
-
 def plan_state(args):
     """Keep a host summary's cutoff explicit instead of assuming latest means read."""
     base = f"/api/rooms/{args.room}"
@@ -659,7 +640,7 @@ def build_plan(args):
         raise CliError("一次命令只能有一个字段从标准输入读取")
     handlers = {"room": plan_room, "message": plan_message, "turn": plan_turn,
                 "attachment": plan_attachment,
-                "state": plan_state, "floor": plan_floor, "api": plan_api,
+                "state": plan_state, "api": plan_api,
                 "run": plan_run, "execution": plan_execution, "member": plan_member}
     plan = RequestPlan("/api/health") if args.resource == "health" else handlers[args.resource](args)
     if getattr(args, "dry_run", False) and plan.method != "POST" and plan.download_file is None:
@@ -784,7 +765,7 @@ def project_result(value, plan, site):
     if plan.view in ("overview", "brief", "state", "current"):
         fields = {"overview": OVERVIEW_FIELDS, "brief": BRIEF_FIELDS,
                   "state": ("id", "state_text", "state_until", "host_brief", "answered_turns"),
-                  "current": ("id", "phase", "current_turn", "queued_turns", "held_since", "floor", "answered_turns")}[plan.view]
+                  "current": ("id", "phase", "current_turn", "queued_turns", "held_since", "answered_turns")}[plan.view]
         result = select_fields(value, fields)
         if plan.view in ("overview", "current"):
             result["guidance"] = GUIDANCE.get(value["phase"], "按本次主持或专家职责，结合最新阶段、安排和必要原文决定下一步。")

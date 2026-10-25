@@ -669,8 +669,6 @@ test('conversation entry gives the first host task to the real current session, 
     assert.deepEqual(calls, []);
     await api(config, `/events/${result.current_task.event_id}`, { action: 'enter', session_id: access.session_id }, access.token);
     await runner.tick();
-    const room = await api(config, '');
-    if (room.floor.holder !== 'Codex') await api(config, '/floor', { action: 'take', actor: 'Codex', revision: room.floor.revision }, access.token);
     await api(config, '/turns', { actor: 'Codex', expert: 'Claude', question: '请给出独立观点', submission_id: randomUUID() }, access.token);
     await runner.tick();
     assert.deepEqual(calls, ['Claude']);

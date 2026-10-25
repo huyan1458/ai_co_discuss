@@ -83,7 +83,7 @@ ROOM_BACKUP_QUERIES = {
     "rooms": "SELECT * FROM rooms WHERE id=?",
     **{table: f"SELECT * FROM {table} WHERE room_id=?" for table in (
         "room_directory", "room_folder_assignments", "room_creations", "room_briefs", "room_user_requests",
-        "topic_settings", "room_floor", "discussion_limits", "discussion_options", "round_budgets")},
+        "topic_settings", "discussion_limits", "discussion_options", "round_budgets")},
     "scheduler_decisions": "SELECT * FROM scheduler_decisions WHERE room_id=? ORDER BY id",
     "topic_folders": "SELECT * FROM topic_folders WHERE id IN (SELECT folder_id FROM room_folder_assignments WHERE room_id=?)",
     "messages": "SELECT * FROM messages WHERE room_id=? ORDER BY id",
@@ -156,15 +156,12 @@ def seed_demo(connection):
         ("Qwen", "无联网时，可以由用户传入本轮材料。我仍可提出检索请求，例如：请提供 #2 的完整原文。", 2),
     ]
     base_time = datetime.now(timezone.utc) - timedelta(minutes=len(samples) * 3)
-    connection.execute("INSERT INTO room_floor (room_id,holder,next_speaker) VALUES ('welcome','用户','用户')")
     for index, (author, text, reply_to) in enumerate(samples):
-        connection.execute("UPDATE room_floor SET holder=? WHERE room_id='welcome'", (author,))
         created_at = (base_time + timedelta(minutes=index * 3)).isoformat(timespec="seconds")
         connection.execute("INSERT INTO messages (room_id,author,text,reply_to,source,submission_id,created_at) VALUES (?,?,?,?,?,?,?)",
                            ("welcome", author, text, reply_to, "demo", f"demo-{index}", created_at))
     summary = "已达成共识\n• 完整历史只追加，支持按编号查阅和关键词检索。〔#2、#3〕\n• 本地 CLI AI 读写记录；在线 AI 只读，观点由用户代发。〔#4、#5〕\n\n待验证\n• 在线 AI 是否能直接读取和检索原文。〔#4〕\n• 复制材料与代发流程是否清楚。〔#5、#6〕"
     connection.execute("UPDATE rooms SET state_text=?,state_until=6 WHERE id='welcome'", (summary,))
-    connection.execute("UPDATE room_floor SET holder='用户' WHERE room_id='welcome'")
 
 
 def init_database(database, seed=True):
@@ -214,7 +211,6 @@ def require_room(connection, room_id):
     if budget:
         room["opinion_count"] = opinion_count(connection, room_id, room["experts"])
     room["round_groups"] = budget_round_groups(connection, room_id, room["experts"], budget["base"]) if budget else room["rounds"]
-    room["floor"] = dict(connection.execute("SELECT holder,next_speaker,revision FROM room_floor WHERE room_id=?", (room_id,)).fetchone())
     room["runtime"] = runtime_view(connection, room_id)
     room["limits"] = limits_view(connection.execute(LIMITS_SQL, (room_id,)).fetchone(), room)
     room["mode"] = room_mode(connection, room_id)
@@ -249,39 +245,6 @@ def require_room(connection, room_id):
         room["held_since"] = 0
         room["free"] = free_view(connection, room_id)
     return room
-
-
-def update_floor(connection, room_id, payload):
-    """Claim or return the nominated speaker's floor using a checked revision."""
-    begin_write(connection)
-    room = require_room(connection, room_id)
-    actor = payload.get("actor")
-    speaker = payload.get("speaker", actor)
-    action = payload.get("action")
-    revision = payload.get("revision")
-    proxy = actor == room["host"] and room["experts"].get(speaker) == "online"
-    if not is_participant(speaker) or (actor not in (speaker, "用户") and not proxy):
-        raise ValueError("请以本人、主持人或用户身份操作被点名者的发言权")
-    if action not in ("take", "return") or type(revision) is not int or revision < 0:
-        raise ValueError("请提供 take/return 和最新的发言权 revision")
-    floor = room["floor"]
-    if revision != floor["revision"]:
-        raise FileExistsError("发言权已变化，请重新读取")
-    if action == "take":
-        if floor["holder"] is not None or floor["next_speaker"] != speaker:
-            raise FileExistsError("仅被点名的下一位可在无人持有时领取发言权")
-        connection.execute("UPDATE room_floor SET holder=?,revision=revision+1 WHERE room_id=?", (speaker, room_id))
-    else:
-        if floor["holder"] != speaker:
-            raise FileExistsError("只能归还自己持有的发言权")
-        connection.execute("UPDATE room_floor SET holder=NULL,next_speaker=?,revision=revision+1 WHERE room_id=?", (room["host"], room_id))
-    return require_room(connection, room_id)["floor"]
-
-
-def require_floor(room, speaker):
-    """Reject a declared speaker who does not currently hold the floor."""
-    if room["floor"]["holder"] != speaker:
-        raise FileExistsError("请先领取本人发言权；他人持有或尚未被点名时不能发言或安排")
 
 
 def host_arrangements(connection, room_id, decisions):
@@ -757,7 +720,7 @@ def create_room(connection, payload, control_token=""):
 def start_discussion(connection, room_id, token, payload):
     """Turn a free room into a discussion; its AI host then pushes speakers within the limits until end_discussion.
 
-    The room, its members and history stay; only the discussion state (topic, limits, floor, budget, session) is set up and the
+    The room, its members and history stay; only the discussion state (topic, limits, budget, session) is set up and the
     run is prepared, not started: the local service starts it once it takes the room over.
     """
     require_owner(connection, room_id, token)
@@ -790,7 +753,6 @@ def start_discussion(connection, room_id, token, payload):
                        (room_id, opinion_count(connection, room_id, experts)))
     connection.execute("UPDATE discussion_limits SET started_at=0,stop_reason='',revision=revision+1 WHERE room_id=?", (room_id,))
     connection.execute("UPDATE discussion_pauses SET paused_seconds=0,paused_at=0 WHERE room_id=?", (room_id,))
-    connection.execute("UPDATE room_floor SET holder=?,next_speaker=?,revision=revision+1 WHERE room_id=?", (host["name"], host["name"], room_id))
     # Switching the run to automatic converts manual members that carry an adapter; a manual expert of a woken discussion is marked and stays manual.
     connection.execute("UPDATE room_members SET adapter='manual' WHERE room_id=? AND access='manual' AND status='active'", (room_id,))
     configure_runtime(connection, room_id, token, {"revision": runtime_view(connection, room_id)["revision"], "mode": "automatic"})
@@ -810,7 +772,6 @@ def end_discussion(connection, room_id, token, payload):
     connection.execute("UPDATE discussion_turns SET status='skipped' WHERE room_id=? AND status='queued'", (room_id,))
     connection.execute("UPDATE topic_settings SET phase='concluded' WHERE room_id=?", (room_id,))
     connection.execute("UPDATE room_modes SET mode='free' WHERE room_id=?", (room_id,))
-    connection.execute("UPDATE room_floor SET holder=NULL,next_speaker=?,revision=revision+1 WHERE room_id=?", (room["host"], room_id))
     return require_room(connection, room_id)
 
 
@@ -1074,16 +1035,24 @@ def append_message(connection, room_id, payload, token="", free_actor=None):
     if room["mode"] == "free" or free_actor is not None:
         return append_free_message(connection, room, payload, free_actor)
     details = message_details(room, {**payload, "author": author})
+    # An expert's opinion answers the arrangement open for that expert; naming it with turn_id is optional.
+    implied_turn = author != "用户" and details["kind"] == "opinion" and not details["turn_id"]
     expected = {"author": author, "text": text, "reply_to": reply_to, **details}
     expected.update(message_summary(payload, expected))
     identifiers = attachment_ids(payload)
     previous = connection.execute(f"{MESSAGE_QUERY} WHERE room_id=? AND submission_id=?", (room_id, submission_id)).fetchone()
     if previous:
         previous = message_with_attachments(connection, previous)
-        if (any(previous[key] != expected[key] for key in ("author", "text", "reply_to", "kind", "submitted_by", "turn_id", "summary", "summary_by"))
+        same_turn = implied_turn or previous["turn_id"] == expected["turn_id"]
+        if (any(previous[key] != expected[key] for key in ("author", "text", "reply_to", "kind", "submitted_by", "summary", "summary_by")) or not same_turn
                 or [item["id"] for item in previous["attachments"]] != identifiers):
             raise FileExistsError("这个提交编号已被另一条内容使用，请为新发言生成新编号")
         return {"message": previous, "duplicate": True}
+    if implied_turn:
+        open_turn = connection.execute("SELECT id FROM discussion_turns WHERE room_id=? AND expert=? AND status IN ('pending','notified')", (room_id, author)).fetchone()
+        if not open_turn:
+            raise ValueError("专家观点只能回答为你安排的发言；当前没有轮到你的有效安排")
+        details["turn_id"] = expected["turn_id"] = open_turn["id"]
     if author != "用户" and details["kind"] == "opinion":
         require_within_limits(room)
     if room["phase"] in ("paused", "concluded") and details["kind"] == "opinion" and (author != "用户" or room["archived"]):
@@ -1091,10 +1060,6 @@ def append_message(connection, room_id, payload, token="", free_actor=None):
     check_message_references(connection, room_id, expected)
     check_message_attachments(connection, room_id, details["submitted_by"], identifiers)
     asked = checked_asks(connection, room, payload) if author == "用户" else []
-    if author != "用户":
-        if details["kind"] == "opinion" and not details["turn_id"]:
-            raise ValueError("专家观点必须关联当前有效的 turn_id")
-        require_floor(room, author)
     cursor = connection.execute("INSERT INTO messages (room_id,author,text,reply_to,source,submission_id,created_at) VALUES (?,?,?,?,?,?,?)",
                                 (room_id, author, text, reply_to, details["source"], submission_id, utc_now()))
     connection.execute("INSERT INTO message_details (message_id,kind,submitted_by,turn_id) VALUES (?,?,?,?)",
@@ -1212,7 +1177,6 @@ def create_turn(connection, room_id, payload):
         raise ValueError("话题已暂停或收束，请先调整阶段")
     if room["current_turn"] and room["current_turn"]["status"] in ("pending", "notified"):
         raise FileExistsError("请先完成或取消当前发言安排")
-    require_floor(room, room["host"])
     ids = []
     for index, (expert, question, submission_id) in enumerate(plan):
         cursor = connection.execute(
@@ -1259,7 +1223,6 @@ def continue_turns(connection, room_id, payload):
         raise FileExistsError("没有排队中的安排；请创建新的安排")
     require_within_limits(room)
     require_registered(room, [room["queued_turns"][0]["expert"]])
-    require_floor(room, room["host"])
     turn_id = room["queued_turns"][0]["id"]
     connection.execute("UPDATE discussion_turns SET status='pending' WHERE id=? AND status='queued'", (turn_id,))
     return {"turn": get_turn(connection, room_id, turn_id), "queued": room["queued_turns"][1:]}
@@ -1315,7 +1278,6 @@ def check_limits(connection, room_id, payload):
     connection.execute("UPDATE discussion_limits SET stop_reason=?,revision=revision+1 WHERE room_id=?", (reason, room_id))
     connection.execute("UPDATE discussion_turns SET status='cancelled' WHERE room_id=? AND status IN ('pending','notified')", (room_id,))
     connection.execute("UPDATE discussion_turns SET status='skipped' WHERE room_id=? AND status='queued'", (room_id,))
-    connection.execute("UPDATE room_floor SET holder=NULL,next_speaker=?,revision=revision+1 WHERE room_id=?", (room["host"], room_id))
     connection.execute("UPDATE topic_settings SET phase='paused' WHERE room_id=?", (room_id,))
     # Pausing at the limit also pauses the run, so the board offers restart and the old execution is superseded.
     connection.execute("UPDATE discussion_runtime SET status='paused',generation=generation+1,revision=revision+1 WHERE room_id=? AND status='running'", (room_id,))
@@ -1337,8 +1299,6 @@ def update_turn(connection, room_id, turn_id, payload):
         raise ValueError("话题已暂停或收束，不能继续通知")
     if turn["status"] not in ("pending", "notified"):
         raise FileExistsError("该发言安排已结束")
-    if status == "cancelled" and payload.get("actor") != "用户":
-        require_floor(room, room["host"])
     notified_at = utc_now() if status == "notified" else turn["notified_at"]
     connection.execute("UPDATE discussion_turns SET status=?,notified_at=? WHERE id=?", (status, notified_at, turn["id"]))
     return get_turn(connection, room_id, turn_id)
@@ -1455,8 +1415,7 @@ def room_text(connection, room_id, params):
         content.extend(participation_text(params, free=True))
         return "\n\n".join(content)
     turn = room["current_turn"]
-    floor = room["floor"]
-    content.append(f"发言权：{floor['holder'] + ' 持有' if floor['holder'] else '待 ' + floor['next_speaker'] + ' 领取'}；版本 {floor['revision']}。用户本人可随时留言，AI 发言前须领取。")
+    content.append("没有发言权：被安排的专家直接回答自己的安排；用户本人和任何人的 @ 直接提问可随时发出。")
     if room["phase"] == "initial":
         content.append("本阶段先独立形成详细观点：仅阅读目标、背景、边界和自己的已有讨论；暂不阅读他人观点或主持总结。提交后再交叉阅读。这是参与约定，不是权限隔离。")
     if room["archived"]:
@@ -1533,19 +1492,18 @@ def protocol_text(room):
         f"附件：POST {base}/attachments?actor=身份&file_name=文件名&submission_id=新编号，原文件最多 20 MiB；GET 同路径默认列已发送附件，加 submission_id 精确核对上传。GET {base}/attachments/ID 读元数据，/ID/content 下载原文件。消息可带 attachment_ids（最多 10 个有序编号）；只关联同房间、同提交者的未使用附件，可只有附件无正文。自动任务须在回答完成前上传；消息查询包含附件，按需下载后由当前软件读取，不自动解析。",
         "讨论上限：room.limits 返回轮次、总时长、单次执行和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长/单次执行时限。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理；到限后暂停并停止新专家安排与观点，由用户决定追加轮次或结束；暂停期间不计时也不消耗总时长。",
         "运行方式：room.runtime 显示 manual/automatic、状态及真实执行回执。所有房间写入须带 X-Discussion-Token，CLI 用 --access-file 读取私有文件。用户及运行控制使用房主凭据，手动本地成员使用自己的成员凭证，不能相互冒充；在线成员只读，由房主或讨论主持人代发。自动讨论先 execution enter，创建安排或保存关联回答即完成本步，不创建原生定时任务；本机唤醒成员的持久凭证不能替代自动执行，手动接入的专家用自己的成员凭证回答安排，暂停、停止、换代、租约到期后的旧执行失效。run view/start/pause/stop/configure 字段查 CLI schema。",
-        f"发言权：GET {base}/floor 返回 holder、next_speaker、revision；POST 同路径，字段 actor、speaker（默认 actor）、action=take/return、revision（刚读到的整数版本）。仅无人持有且 next_speaker 为本人时可领取；持有者可主动归还，下一位回到主持人。版本变化返回 409，先读回核对。主持人仅可代操作 online 专家，cli 专家自行操作；用户可协助。",
-        "新房间由主持人持有发言权。创建安排须主持人持有，保存成功即归还并点名该专家；AI 的 opinion、moderation 都须实际作者持有，代发不豁免，opinion 必须关联有效 turn_id。消息保存成功自动归还，下一位为主持人。失败不归还，同编号重试不再次交接。用户本人发言不受发言权限制，也不改变发言权；@ 不改变顺序。维护状态与阶段不占用发言权。取消安排须主持人持有，用户可直接取消失效安排；取消后归还给主持人领取。",
+        "没有发言权：同一话题同时只有一个未完成的发言安排，被安排的专家直接回答它；专家观点自动回答该专家当前有效的安排，turn_id 可省略（填写则须与之相符），没有轮到你时被拒绝。主持发言（moderation）只能由当前主持人署名，任何时候都可发出；创建、取消安排由主持人或用户操作。用户的 @ 直接提问不占安排也不计轮次。失败的写入不会改变安排状态，同编号重试沿用原内容。",
         '创建话题：POST /api/rooms，携带房主控制凭据；字段 title、goal、user_request、background、boundaries、host、experts、members、submission_id（新 UUID）。members 与 experts 名单一致，各项含 name、独立 token、access（手动本地 manual、自动 runner、在线 online）。AI 主持人必须为本地可写成员。CLI room create --access-file 私有房主文件 在请求前保存凭据，确认后返回各本地成员文件路径；同编号重试沿用原资料和全部凭据。名单、主持职责变更仅房主可做。',
         f"查询提交：GET /api/rooms?submission_id=编号 查建房结果；GET {base}/messages?submission_id=编号 或 {base}/turns?submission_id=编号 查消息或安排。查询成功且列表为空表示尚未查到，读取失败不表示未写入。",
         f"增量读取：GET {base}/messages?after=已读消息编号，每次最多 20 条，按 next_after 续读，has_more 表示还有一批；可加 kind=opinion/moderation/chat、author、mention、q（旧房间里的历史回执 kind=receipt 仍可读取）。after 不与翻页混用，过滤后的游标只代表该查询范围。",
-        f"维护话题：POST {base}/topic；actor 加需要修改的上述字段，另可更新 phase（preparing/initial/discussing/reviewing/paused/concluded）、focus。收束前先完成或取消当前安排；主持人收束还须先 GET {base}/conclusion 取得 blockers 与 revision，并把 revision 作为 conclusion 一并提交（有阻碍项或状态已变会被拒绝）。暂停保留安排；恢复阶段后再继续。",
+        f"维护话题：POST {base}/topic；actor 加需要修改的上述字段，另可更新 phase（preparing/initial/discussing/paused/concluded）、focus。收束前先完成或取消当前安排；主持人收束还须先 GET {base}/conclusion 取得 blockers 与 revision，并把 revision 作为 conclusion 一并提交（有阻碍项或状态已变会被拒绝）。暂停保留安排；恢复阶段后再继续。",
         f"安排发言：POST {base}/turns；字段 actor、expert、question、submission_id（新 UUID）。同一话题同时只有一个未完成安排；重试沿用同一编号和问题。整轮安排改传 turns=[{{expert,question}},…]（最多 {MAX_PLAN_TURNS} 项），并须先 GET {base}/turns/roster 取得最新专家状态，把返回的 revision 作为 roster 一并提交（名单变化后需重取；须包含 waiting 中的每位专家）：第一项立即生效，其余排队（queued）；每个回答保存后自动交给下一位，最后一位答完再交回主持人。用户留言或修改目标、背景、边界、焦点后（room.held_since 非 0），当前回答完成即交回主持人；主持人处理后用 POST {base}/turns/continue（actor）按原计划继续，或直接创建新安排替换剩余排队（原排队改为 skipped）。",
         f"通知：仅把对象、问题、话题入口交给对应专家，不附背景、摘要或历史。使用已有且获准的会话通道；没有通道时交由用户协助。实际送达后 POST {base}/turns/安排编号，字段 actor、status=notified；取消用 status=cancelled。复制不算送达。",
-        f"专家观点：POST {base}/messages；author、text、submission_id、source=cli，kind=opinion；必须关联 turn_id（回答的安排编号），可选 reply_to（本话题原文编号）。每次回答同时提供 summary（最多 {MAX_SUMMARY_LENGTH} 字），通常 1–3 句结论先行，保留关键理由、条件和不确定性；summary_by 为原作者或提交者，默认提交者。text 保留完整正文，最多 {MAX_TEXT_LENGTH} 个 Unicode 字符，请求最多 {MAX_BODY_BYTES} 字节；不截断或用摘要完成安排。旧客户端缺少 summary 时不自动生成。",
+        f"专家观点：POST {base}/messages；author、text、submission_id、source=cli，kind=opinion；turn_id（回答的安排编号）可省略，省略时回答你当前有效的安排；可选 reply_to（本话题原文编号）。每次回答同时提供 summary（最多 {MAX_SUMMARY_LENGTH} 字），通常 1–3 句结论先行，保留关键理由、条件和不确定性；summary_by 为原作者或提交者，默认提交者。text 保留完整正文，最多 {MAX_TEXT_LENGTH} 个 Unicode 字符，请求最多 {MAX_BODY_BYTES} 字节；不截断或用摘要完成安排。旧客户端缺少 summary 时不自动生成。",
         f"主持发言：同一消息接口，author={room['host']}、submitted_by={room['host']}、kind=moderation、source=cli；个人观点使用 kind=opinion，不能自动视为共识。",
-        f"代发只读专家观点：author 保留原专家，submitted_by={room['host']}、kind=opinion、text 为原文；须关联 turn_id，可附 reply_to。服务保存代发来源；不要冒充专家直接提交。",
+        f"代发只读专家观点：author 保留原专家，submitted_by={room['host']}、kind=opinion、text 为原文；须关联 turn_id，可附 reply_to。服务保存代发来源；不要冒充专家直接提交。该专家须有当前有效的安排。",
         f"整理状态：POST {base}/state；actor、text（详细状态，最多 {MAX_STATE_LENGTH} 字）、until（依据的消息截止编号）；brief（最多 {MAX_BRIEF_LENGTH} 字）为面向人的主持简报，说明结论、共识、歧义和下一步意图。进度或安排变化后更新；省略 brief 保留旧简报，空字符串清除。所有参与专家各保存一次完整观点才完成一轮；同轮重复发言只计该专家一次，主持说明、用户留言及取消安排不推进轮次。房间 rounds 按当前配置专家和完整历史生成，completed_rounds 为完成轮数，answered_turns 仅为已回答安排数。状态不覆盖原文，也不代表全体一致同意。",
-        "讨论方法：initial 先独立给出结论、依据、假设和风险，不回应他人；discussing 围绕具体分歧引用原文，说明维持或修正及原因；reviewing 检查拟定结论是否误述自己、遗漏条件或仍有阻碍。沉默不算同意。",
+        "讨论方法：initial 先独立给出结论、依据、假设和风险，不回应他人；discussing 围绕具体分歧引用原文，说明维持或修正及原因；拟定结论时检查是否误述自己、遗漏条件或仍有阻碍。沉默不算同意。",
         "后台参与：先立即检查，再用本会话真实可用的原生任务按约定频率和自身运行上限检查。专家只答自己未完成的安排，无任务时等待；主持人仍需处理新回答、网页回复和下一安排。paused/concluded、用户叫停或达到自身上限时停止自己的任务并核验，实际结果保留在本地接续信息；单个专家任务停止不等于整场讨论结束。失败时保留未提交原文，重新读取阶段后再决定是否重试。",
         "收束：结论须有原文依据，区分明确共识、未决分歧与主持人判断；完成约定复核或达到已说明的时间/轮次上限后收束。讨论完成与后台任务退出分别核验；不为追求全员确认无限续轮。",
         "房间、消息与安排都支持 submission_id 去重，同次重试沿用编号和原始内容，新内容使用新编号。写入后重新读取服务器返回的结果，核对身份、内容与引用。",
@@ -1973,12 +1931,6 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if method == "GET":
                 return self.respond(require_room(connection, room_id)["limits"])
             result = check_limits(connection, room_id, self.read_payload())
-            connection.commit()
-            return self.respond(result)
-        if parts[3:] == ["floor"]:
-            if method == "GET":
-                return self.respond(require_room(connection, room_id)["floor"])
-            result = update_floor(connection, room_id, self.read_payload())
             connection.commit()
             return self.respond(result)
         if parts[3:4] in (["topic"], ["turns"]):

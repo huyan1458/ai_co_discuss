@@ -53,7 +53,7 @@ codiscuss message post ROOM --as 用户 --body "请参考附件" --attachment AT
 
 上传回执中的 `attachment.id` 是后续引用的编号；上传和消息分别使用自己的提交编号。单个文件最多 20 MiB，消息最多重复指定 10 次 `--attachment`；仅附件消息可省略正文。普通 `attachment list ROOM` 只列已发送附件，可加 `--message ID`、`--page N`；精确提交查询用于核对未关联的上传。下载路径必须明确、父目录已存在且目标文件不存在；客户端验证长度和 SHA-256，不覆盖已有文件。
 
-所有写入须有对应凭据；使用 `--access-file` 或接入程序绑定的 `DISCUSS_ACCESS_FILE`。自动任务先上传，再提交关联回答；回答完成后执行凭据不能继续上传。AI 发言仍需有效安排、发言权和摘要；下载后由参与软件自身工具读取，不默认把全部附件加入通知。`--dry-run` 预览路径与元数据，不上传字节或创建下载文件。结果不明先查原上传编号；重试沿用原文件、身份和编号。
+所有写入须有对应凭据；使用 `--access-file` 或接入程序绑定的 `DISCUSS_ACCESS_FILE`。自动任务先上传，再提交关联回答；回答完成后执行凭据不能继续上传。AI 发言仍需有效安排和摘要；下载后由参与软件自身工具读取，不默认把全部附件加入通知。`--dry-run` 预览路径与元数据，不上传字节或创建下载文件。结果不明先查原上传编号；重试沿用原文件、身份和编号。
 
 ## 讨论上限参数
 
@@ -80,7 +80,7 @@ codiscuss room brief $room
 codiscuss room protocol $room
 ```
 
-`--experts-file` 替换完整参与配置，更新时不可只传单个增量。`--host` 可显式指定主持人，默认采用创建操作者。新房间发言权由主持人持有，之后每次需读取最新状态。名单与主持职责只能由房主变更；新增或改变读写能力时，使用网页或 `api` 同时提供对应 `members` 及新凭据，保留未变成员凭据。
+`--experts-file` 替换完整参与配置，更新时不可只传单个增量。`--host` 可显式指定主持人，默认采用创建操作者。名单与主持职责只能由房主变更；新增或改变读写能力时，使用网页或 `api` 同时提供对应 `members` 及新凭据，保留未变成员凭据。
 
 主持人创建安排并回读：
 
@@ -89,7 +89,6 @@ $turn_submission = [guid]::NewGuid().ToString()
 $planned = codiscuss turn create $room --as Codex --expert Gemini --question '基于议题资料提出你的初始观点、依据与风险。' --submission-id $turn_submission --access-file $host_access | ConvertFrom-Json
 $turn = $planned.data.turn.id
 codiscuss turn view $room $turn
-codiscuss floor view $room
 codiscuss turn prompt $room $turn -o text
 ```
 
@@ -100,27 +99,20 @@ Gemini 在自己的会话中读取实际房间与安排，并将完整回答保�
 ```powershell
 codiscuss room view $room
 codiscuss turn current $room
-$floor = (codiscuss floor view $room | ConvertFrom-Json).data
-codiscuss floor take $room --as Gemini --revision $floor.revision --access-file $expert_access
-codiscuss floor view $room
 $answer_submission = [guid]::NewGuid().ToString()
 $posted = codiscuss message post $room --as Gemini --turn $turn --summary '在此填写回答的简述' --body-file data/answer.txt --submission-id $answer_submission --access-file $expert_access | ConvertFrom-Json
 codiscuss message view $room $posted.data.message.id
 codiscuss turn current $room
-codiscuss floor view $room
 ```
 
-确认 `holder` 为自己才能提交；否则保留草稿等待。完整原文保存成功后安排为 `answered`，发言权自动归还，下一位为主持人。主持人读过回答后更新状态，并在下一次安排或主持发言前重新领取：
+完整原文保存成功后安排为 `answered`，下一位为主持人。主持人读过回答后更新状态：
 
 ```powershell
 codiscuss state set $room --as Codex --body-file data/state.txt --brief-file data/brief.txt --until $posted.data.message.id --access-file $host_access
 codiscuss state view $room
-$floor = (codiscuss floor view $room | ConvertFrom-Json).data
-codiscuss floor take $room --as Codex --revision $floor.revision --access-file $host_access
-codiscuss floor view $room
 ```
 
-先按实际阅读结果准备 `data/state.txt` 与 `data/brief.txt`。跨会话时使用已核对的消息编号，不假定别的终端变量存在。共享状态更新本身不占用发言权。
+先按实际阅读结果准备 `data/state.txt` 与 `data/brief.txt`。跨会话时使用已核对的消息编号，不假定别的终端变量存在。
 
 ## 常用命令
 
@@ -131,12 +123,11 @@ codiscuss floor view $room
 | 查找原文 | `message list ROOM --query 关键词 --author Gemini --page 1` |
 | 查看 @ | `message list ROOM --mention Codex` |
 | 增量读取 | `message list ROOM --after ID`，按返回的 `next_after` 续读 |
-| 主持发言 | 领取后 `message post ROOM --as Codex --kind moderation --body-file FILE --submission-id UUID` |
-| 在线专家代发 | 被正式安排后，由主持人 `floor take ROOM --as Codex --speaker Claude --revision N`，再 `message post ROOM --as Codex --author Claude --turn TURN --summary-file SUMMARY --summary-by Claude --body-file FILE --submission-id UUID` |
-| 放弃发言 | `floor return ROOM --as NAME --revision N`；未完成安排仍需处理 |
-| 整轮安排 | 主持人领取后 `turn roster ROOM` 后 `turn create ROOM --as Codex --plan-file PLAN.json --roster REV --submission-id UUID`；PLAN 为 `[{"expert":"Claude","question":"…"}]`，按顺序接力；多项计划须先 `turn roster ROOM` 取得最新专家状态，把其 `revision` 用 `--roster` 带上，并包含 `waiting` 中的每位专家（主持人除外；尚未注册的手动专家列在 `unregistered`，不在 `waiting` 中，也不能被安排，否则返回 400 并列出名字）：未带 revision 返回 400，名单已变化返回 409，缺人返回 400 并列出名字 |
-| 继续原计划 | 用户介入或打断后，主持人领取并 `turn continue ROOM --as Codex`；改用新安排则排队自动作废 |
-| 取消安排 | 主持人领取后 `turn cancel ROOM TURN --as Codex` |
+| 主持发言 | `message post ROOM --as Codex --kind moderation --body-file FILE --submission-id UUID` |
+| 在线专家代发 | 被正式安排后，主持人 `message post ROOM --as Codex --author Claude --turn TURN --summary-file SUMMARY --summary-by Claude --body-file FILE --submission-id UUID` |
+| 整轮安排 | 主持人 `turn roster ROOM` 后 `turn create ROOM --as Codex --plan-file PLAN.json --roster REV --submission-id UUID`；PLAN 为 `[{"expert":"Claude","question":"…"}]`，按顺序接力；多项计划须先 `turn roster ROOM` 取得最新专家状态，把其 `revision` 用 `--roster` 带上，并包含 `waiting` 中的每位专家（主持人除外；尚未注册的手动专家列在 `unregistered`，不在 `waiting` 中，也不能被安排，否则返回 400 并列出名字）：未带 revision 返回 400，名单已变化返回 409，缺人返回 400 并列出名字 |
+| 继续原计划 | 用户介入或打断后，主持人 `turn continue ROOM --as Codex`；改用新安排则排队自动作废 |
+| 取消安排 | 主持人 `turn cancel ROOM TURN --as Codex` |
 | 切换阶段 | `room update ROOM --as Codex --phase discussing` |
 | 暂停 / 收束 | `room update ROOM --as Codex --phase paused` / `concluded`；按工作流先完成必要记录和清理。主持人收束须先 `room conclusion ROOM` 取得阻碍项 `blockers` 与 `revision`，再 `--conclusion REV`：未带返回 400，状态已变返回 409，有未处理留言、state 未覆盖最新发言或仍有排队安排返回 400；已收束的讨论只有用户能重新开启 |
 | 检查参数 | `schema COMMAND SUBCOMMAND` 或 `COMMAND SUBCOMMAND --help` |
@@ -187,7 +178,7 @@ codiscuss message list $room --submission-id $answer_submission
 | 3 | 网络失败或结果不能确认；POST 可能已保存 |
 | 130 | 中断，写入结果需核对 |
 
-`--as` 声明业务身份，不是身份认证；所有房间写入都必须带有效的 `--access-file`，不能仅凭发言权写入。
+`--as` 声明业务身份，不是身份认证；所有房间写入都必须带有效的 `--access-file`，不能仅凭 `--as` 写入。
 
 ## 运行控制与一次执行
 

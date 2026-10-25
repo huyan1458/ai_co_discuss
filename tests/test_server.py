@@ -259,7 +259,7 @@ class DiscussionTests(unittest.TestCase):
         self.assertTrue(snapshot["exported_at"])
         tables = snapshot["tables"]
         self.assertEqual(set(tables), {"rooms", "room_directory", "room_folder_assignments", "topic_folders", "room_creations",
-                                      "room_briefs", "room_user_requests", "topic_settings", "room_floor", "discussion_limits", "messages", "message_details", "message_summaries", "message_timings", "discussion_turns", "attachments", "room_modes", "room_members", "member_requests", "member_suggestions", "member_recommendations",
+                                      "room_briefs", "room_user_requests", "topic_settings", "discussion_limits", "messages", "message_details", "message_summaries", "message_timings", "discussion_turns", "attachments", "room_modes", "room_members", "member_requests", "member_suggestions", "member_recommendations",
                                       "discussion_options", "round_budgets", "scheduler_decisions"})
         self.assertEqual([row["id"] for row in tables["messages"]], [row["id"] for row in originals] + [answer["id"]])
         for original, row in zip(originals + [answer], tables["messages"]):
@@ -574,7 +574,6 @@ class DiscussionTests(unittest.TestCase):
         turn = self.schedule()[1]["turn"]
         base = f"/api/rooms/{self.room['id']}"
         answer = {"author": "Gemini", "text": "回答", "summary": "回答摘要", "submission_id": "delete-answer-001", "turn_id": turn["id"]}
-        self.floor("take", "Gemini", "Codex")
         self.assertEqual(self.request(base + "/messages", answer)[0], 201)
         self.assertEqual(self.request(base + "/state", {"actor": "Codex", "text": "状态", "brief": "主持简报"})[0], 200)
         other = self.request("/api/rooms", {"title": "保留频道"})[1]
@@ -637,7 +636,6 @@ class DiscussionTests(unittest.TestCase):
             self.assertEqual(self.request(base + "/messages", {**payload, **change})[0], 400)
         self.assertEqual(self.request(base)[1]["current_turn"]["status"], "pending")
         self.assertEqual(self.request(base)[1]["message_count"], 0)
-        self.assertEqual(self.floor("take", "Gemini", "Codex")[0], 200)
         status, result = self.request(base + "/messages", payload)
         self.assertEqual(status, 201)
         self.assertEqual((result["message"]["summary"], result["message"]["summary_by"]), (payload["summary"], "Codex"))
@@ -669,15 +667,11 @@ class DiscussionTests(unittest.TestCase):
         cancelled = self.schedule("round-cancelled")[1]["turn"]
         self.request(base + f"/turns/{cancelled['id']}", {"actor": "用户", "status": "cancelled"})
         self.post("没有关联安排的观点", "round-free")
-        self.floor("take")
         self.request(base + "/messages", {"author": "Codex", "kind": "moderation", "text": "主持说明", "submission_id": "round-moderation"})
-        self.floor("take")
         turn = self.schedule("round-answered")[1]["turn"]
         self.assertEqual(self.request(base)[1]["answered_turns"], 0)
-        self.floor("take", "Gemini", "Codex")
         self.request(base + "/messages", {"author": "Gemini", "text": "本轮回答", "summary": "简短摘要", "turn_id": turn["id"], "submission_id": "round-answer"})
         self.assertEqual(self.request(base)[1]["answered_turns"], 1)
-        self.floor("take")
         pending = self.schedule("round-pending")[1]["turn"]
         room = self.request(base)[1]
         self.assertEqual((room["answered_turns"], room["current_turn"]["id"]), (1, pending["id"]))
@@ -789,7 +783,6 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.request(base + "/messages", payload)[0], 400)
         self.assertEqual(self.request(base)[1]["current_turn"]["status"], "pending")
         payload["text"] = "🙂" * 32000
-        self.floor("take", "Gemini", "Codex")
         status, result = self.request(base + "/messages", payload)
         self.assertEqual(status, 201)
         self.assertEqual(self.request(base + f"/messages/{result['message']['id']}")[1]["text"], payload["text"])
@@ -889,25 +882,14 @@ class DiscussionTests(unittest.TestCase):
         self.configure_host()
         base = f"/api/rooms/{self.room['id']}"
         for expert, expected in (("Codex", "待处理（本地 CLI）"), ("Gemini", "待联系（在线专家）")):
-            if self.floor()["holder"] is None:
-                self.floor("take")
             turn = self.schedule(f"label-{expert}", expert=expert)[1]["turn"]
             current = self.request(base)[1]["current_turn"]
             self.assertEqual((current["status"], current["notified_at"], current["status_label"]), ("pending", "", expected))
             self.assertIn(expected, self.request(f"/r/{self.room['id']}/turns/{turn['id']}")[1])
             self.request(base + f"/turns/{turn['id']}", {"actor": "用户", "status": "cancelled"})
 
-    def floor(self, action=None, speaker="Codex", actor=None, revision=None):
-        """Inspect or explicitly operate the current test room's floor."""
-        path = f"/api/rooms/{self.room['id']}/floor"
-        current = self.request(path)[1]
-        if action is None:
-            return current
-        return self.request(path, {"action": action, "speaker": speaker, "actor": actor or speaker,
-                                   "revision": current["revision"] if revision is None else revision})
-
     def prepare_speech(self, author, kind="opinion"):
-        """Arrange and claim a valid speech explicitly for non-floor regression cases."""
+        """Arrange a valid speech explicitly: cancel any open arrangement, then nominate the author."""
         if author == "用户":
             return {}
         base = f"/api/rooms/{self.room['id']}"
@@ -915,105 +897,47 @@ class DiscussionTests(unittest.TestCase):
         turn = room["current_turn"]
         if turn and turn["status"] in ("pending", "notified"):
             self.assertEqual(self.request(base + f"/turns/{turn['id']}", {"actor": "用户", "status": "cancelled"})[0], 200)
-        floor = self.floor()
-        if floor["holder"] and floor["holder"] != room["host"]:
-            self.assertEqual(self.floor("return", floor["holder"], "用户")[0], 200)
-        if self.floor()["holder"] is None:
-            self.assertEqual(self.floor("take", room["host"], "用户")[0], 200)
         if kind != "opinion" and author == room["host"]:
             return {}
         status, result = self.request(base + "/turns", {"actor": room["host"], "expert": author,
             "question": "为回归测试准备有效发言", "submission_id": str(uuid.uuid4())})
         self.assertEqual(status, 201, result)
-        self.assertEqual(self.floor("take", author, "用户")[0], 200)
         return {"turn_id": result["turn"]["id"]} if kind == "opinion" else {}
 
-    def test_floor_serial_handoff_proxy_and_user_interjection(self):
-        """Only the nominated expert speaks; proxy and user identities stay distinct."""
+    def test_answers_need_no_speaking_floor(self):
+        """The nominated expert answers directly; user remarks, host moderation and retries never touch the arrangement."""
         self.configure_host()
         base = f"/api/rooms/{self.room['id']}"
-        self.assertEqual(self.floor()["holder"], "Codex")
+        self.assertNotIn("floor", self.request(base)[1])
+        self.assertEqual(self.request(base + "/floor")[0], 404)
         turn = self.schedule()[1]["turn"]
-        self.assertEqual(self.floor()["next_speaker"], turn["expert"])
-        self.assertIsNone(self.floor()["holder"])
-        self.assertEqual(self.floor("take", "Qwen")[0], 403)
         answer = {"author": turn["expert"], "submitted_by": "用户", "kind": "opinion",
-                  "text": "被点名者的真实回答", "submission_id": "floor-answer", "turn_id": turn["id"]}
-        self.assertEqual(self.request(base + "/messages", answer)[0], 409)
-        self.assertEqual(self.floor("take", turn["expert"], "Codex")[0], 200)
-        held = self.floor()
+                  "text": "被点名者的真实回答", "submission_id": "floor-answer"}
+        self.assertIn(self.request(base + "/messages", {**answer, "author": "Qwen", "submission_id": "floor-wrong"})[0], (400, 403))
         self.assertEqual(self.request(base + "/messages", {"author": "用户", "text": "补充约束", "submission_id": "floor-user"})[0], 201)
-        self.assertEqual(self.floor(), held)
-        self.assertEqual(self.request(base + "/messages", {"author": "Codex", "kind": "moderation", "text": "越序主持", "submission_id": "floor-host"})[0], 409)
-        self.assertEqual(self.request(base + "/messages", answer)[0], 201)
-        self.assertEqual((self.floor()["holder"], self.floor()["next_speaker"]), (None, "Codex"))
-        self.assertEqual(self.floor("take")[0], 200)
-        held = self.floor()
+        self.assertEqual(self.request(base + "/messages", {"author": "Codex", "kind": "moderation", "text": "插入主持说明", "submission_id": "floor-host"})[0], 201)
+        self.assertEqual(self.request(base)[1]["current_turn"]["status"], "pending")
+        status, saved = self.request(base + "/messages", answer)
+        self.assertEqual(status, 201, saved)
+        self.assertEqual(saved["message"]["turn_id"], turn["id"], "the answer binds to the expert's open arrangement")
+        self.assertEqual(self.request(base)[1]["current_turn"]["status"], "answered")
         self.assertTrue(self.request(base + "/messages", answer)[1]["duplicate"])
-        self.assertEqual(self.floor(), held)
+        self.assertEqual(self.request(base + "/messages", {**answer, "text": "改过的回答"})[0], 409)
+        # With nothing open there is nothing to answer, and naming a stale arrangement is refused.
+        self.assertEqual(self.request(base + "/messages", {**answer, "submission_id": "floor-late"})[0], 400)
+        self.assertEqual(self.request(base + "/messages", {**answer, "submission_id": "floor-named", "turn_id": turn["id"]})[0], 409)
 
-    def test_floor_race_failed_write_and_stale_return(self):
-        """Competing claims and stale returns never steal a subsequent lease."""
+    def test_failed_answers_leave_the_arrangement_open_and_the_host_may_cancel_it_any_time(self):
+        """A refused attribution changes nothing; the host (not another expert) can cancel the open arrangement."""
         self.configure_host()
-        self.assertEqual(self.floor("return")[0], 200)
-        revision = self.floor()["revision"]
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            statuses = list(pool.map(lambda _: self.floor("take", revision=revision)[0], range(2)))
-        self.assertEqual(sorted(statuses), [200, 409])
-        held = self.floor()
-        self.assertEqual(self.floor("return", revision=revision)[0], 409)
-        self.assertEqual(self.floor(), held)
         base = f"/api/rooms/{self.room['id']}"
-        invalid = {"author": "Codex", "kind": "opinion", "text": "没有安排", "submission_id": "floor-invalid"}
-        self.assertEqual(self.request(base + "/messages", invalid)[0], 400)
-        self.assertEqual(self.floor(), held)
-        self.assertEqual(self.request(base + "/messages", {**invalid, "kind": "moderation"})[0], 201)
-        self.assertIsNone(self.floor()["holder"])
-        self.assertEqual(self.schedule("floor-no-holder")[0], 409)
-
-    def test_floor_host_expert_and_arrangement_retry(self):
-        """A host speaking as expert takes the nominated floor like every expert."""
-        self.configure_host()
-        turn = self.schedule("floor-self", expert="Codex")[1]["turn"]
-        nominated = self.floor()
-        self.assertTrue(self.schedule("floor-self", expert="Codex")[1]["duplicate"])
-        self.assertEqual(self.floor(), nominated)
-        self.assertEqual(self.floor("take")[0], 200)
-        held = self.floor()
-        self.assertTrue(self.schedule("floor-self", expert="Codex")[1]["duplicate"])
-        self.assertEqual(self.floor(), held)
-        answer = {"author": "Codex", "source": "cli", "kind": "opinion", "text": "独立观点",
-                  "turn_id": turn["id"], "submission_id": "floor-self-answer"}
-        self.assertEqual(self.request(f"/api/rooms/{self.room['id']}/messages", answer)[0], 201)
-        self.assertIsNone(self.floor()["holder"])
-
-    def test_floor_host_cannot_take_local_expert_or_cancel_while_held(self):
-        """A host cannot take a local expert's floor or revoke it through cancellation."""
-        base = f"/api/rooms/{self.room['id']}"
-        self.request(base + "/topic", {"actor": "用户", "host": "Codex", "experts": {"Codex": "cli", "Gemini": "cli"}})
-        turn = self.schedule("floor-local")[1]["turn"]
-        self.assertEqual(self.floor("take", "Gemini", "Codex")[0], 403)
-        self.assertEqual(self.floor("take", "Gemini")[0], 200)
-        held = self.floor()
-        self.assertEqual(self.floor("return", "Gemini", "Codex")[0], 403)
-        self.assertEqual(self.request(base + f"/turns/{turn['id']}", {"actor": "Codex", "status": "cancelled"})[0], 409)
-        self.assertEqual(self.floor(), held)
-        self.assertEqual(self.floor("return", "Gemini")[0], 200)
-        self.assertEqual(self.floor("take")[0], 200)
-        self.assertEqual(self.request(base + f"/turns/{turn['id']}", {"actor": "Codex", "status": "cancelled"})[0], 200)
-        self.assertIsNone(self.floor()["holder"])
-
-    def test_floor_failed_answer_does_not_release_or_allow_unauthorized_proxy(self):
-        """Attribution failures retain the lease; a competing expert cannot use it."""
-        self.configure_host()
         turn = self.schedule("floor-attribution")[1]["turn"]
-        self.floor("take", "Gemini", "Codex")
-        held = self.floor()
-        payload = {"author": "Gemini", "submitted_by": "Claude", "text": "错误代发",
-                   "turn_id": turn["id"], "submission_id": "floor-bad-proxy"}
-        self.assertEqual(self.request(f"/api/rooms/{self.room['id']}/messages", payload)[0], 403)
-        self.assertEqual(self.floor(), held)
-        self.assertEqual(self.floor("take", "Qwen")[0], 403)
+        bad = {"author": "Gemini", "submitted_by": "Claude", "text": "错误代发", "turn_id": turn["id"], "submission_id": "floor-bad-proxy"}
+        self.assertEqual(self.request(base + "/messages", bad)[0], 403)
+        self.assertEqual(self.request(base)[1]["current_turn"]["status"], "pending")
+        self.assertEqual(self.request(base + f"/turns/{turn['id']}", {"actor": "Codex", "status": "cancelled"})[0], 200)
+        self.assertEqual(self.request(base)[1]["current_turn"]["status"], "cancelled")
+        self.assertEqual(self.schedule("floor-after-cancel")[0], 201)
 
     def configure_host(self):
         """Set Codex as both host and CLI expert, leaving Gemini read-only."""
@@ -1218,14 +1142,12 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.request(path)[1]["status"], "pending")
         self.assertEqual(self.request(path, {"actor": "Codex", "status": "notified"})[1]["status"], "notified")
         payload = {"author": "Gemini", "submitted_by": "Codex", "text": "专家的回答", "turn_id": turn["id"], "submission_id": "turn-answer-001"}
-        self.floor("take", "Gemini", "Codex")
         message_path = f"/api/rooms/{self.room['id']}/messages"
         result = self.request(message_path, payload)[1]
         self.assertEqual(self.request(path)[1]["answer_id"], result["message"]["id"])
         self.assertEqual(self.request(path)[1]["status"], "answered")
         self.assertTrue(self.request(message_path, payload)[1]["duplicate"])
         self.assertEqual(self.request(path, {"actor": "Codex", "status": "cancelled"})[0], 409)
-        self.floor("take")
         self.assertEqual(self.schedule("schedule-next-001")[0], 201)
 
     def test_turn_cancellation_phase_and_cross_room_constraints(self):
@@ -1256,7 +1178,6 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.schedule("paused-turn-001")[0], 400)
         self.assertEqual(self.request(base + f"/turns/{turn['id']}", {"actor": "Codex", "status": "notified"})[0], 400)
         receipt = {"author": "Gemini", "kind": "receipt", "text": "run=test；任务 task-1 已停止，工具结果 confirmed", "submission_id": "stop-receipt-001"}
-        self.floor("take", "Gemini", "Codex")
         self.assertEqual(self.request(base + "/messages", {**receipt, "turn_id": turn["id"]})[0], 400)
         self.assertEqual(self.request(base + "/messages", receipt)[0], 400, "run receipts are no longer written")
         self.assertEqual(self.request(base)[1]["current_turn"]["status"], "pending")
@@ -1267,7 +1188,6 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.request(base + "/topic", {"actor": "用户", "phase": "concluded"})[0], 200)
         self.assertTrue(self.request(base + "/messages", answer)[1]["duplicate"])
         self.assertEqual(self.request(base + "/messages", {**answer, "turn_id": None, "submission_id": "late-opinion-001"})[0], 400)
-        self.floor("take")
         self.assertEqual(self.request(base + "/messages", {"author": "Codex", "kind": "moderation", "text": "结论及清理缺项", "submission_id": "final-summary-001"})[0], 201)
 
     def test_concurrent_scheduling_creates_only_one_open_turn(self):
@@ -1283,7 +1203,6 @@ class DiscussionTests(unittest.TestCase):
         self.configure_host()
         turn = self.schedule()[1]["turn"]
         payload = {"author": "Gemini", "submitted_by": "Codex", "text": "并发回答", "turn_id": turn["id"]}
-        self.floor("take", "Gemini", "Codex")
         path = f"/api/rooms/{self.room['id']}/messages"
         with ThreadPoolExecutor(max_workers=5) as executor:
             results = list(executor.map(lambda index: self.request(path, {**payload, "submission_id": f"answer-race-{index}"}), range(5)))
@@ -1295,7 +1214,6 @@ class DiscussionTests(unittest.TestCase):
         self.configure_host()
         turn = self.schedule()[1]["turn"]
         barrier = threading.Barrier(2)
-        self.floor("take", "Gemini", "Codex")
 
         def cancel_or_answer(cancel):
             barrier.wait()
@@ -1319,29 +1237,28 @@ class DiscussionTests(unittest.TestCase):
 class LegacyStorageTests(unittest.TestCase):
     """Verify additive migration from the actual pre-host schema."""
 
-    def test_floor_migration_preserves_pending_turn_and_claim_on_reapply(self):
-        """An existing pending expert becomes eligible without changing historical data."""
+    def test_a_database_with_the_retired_floor_keeps_its_data_and_loses_the_floor_rules(self):
+        """Old floor rows stay untouched, and an old trigger can no longer block an answer."""
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "floor-migration.sqlite3"
             schema = (Path(__file__).resolve().parent.parent / "backend" / "schema.sql").read_text(encoding="utf-8")
             with closing(sqlite3.connect(database)) as connection, connection:
-                connection.executescript(schema.split("CREATE TABLE IF NOT EXISTS room_floor")[0])
+                connection.executescript(schema)
                 connection.execute("INSERT INTO rooms(id,title,goal,created_at) VALUES ('old','旧房间','保留历史','test')")
                 connection.execute("INSERT INTO topic_settings(room_id,host,experts) VALUES ('old','Codex',?)", ('{"Codex":"cli","Gemini":"online"}',))
+                connection.execute("INSERT INTO room_floor(room_id,holder,next_speaker,revision) VALUES ('old','Codex','Gemini',3) ON CONFLICT(room_id) DO UPDATE SET revision=3")
                 connection.execute("INSERT INTO discussion_turns(room_id,expert,question,submission_id,created_at) VALUES ('old','Gemini','原问题','old-turn','test')")
-                connection.execute("INSERT INTO messages(room_id,author,text,source,submission_id,created_at) VALUES ('old','用户','旧原文','user','old-text','test')")
+                connection.execute("""CREATE TRIGGER require_message_floor BEFORE INSERT ON messages WHEN NEW.author<>'用户'
+                    BEGIN SELECT RAISE(ABORT, 'floor_required'); END""")
             init_database(database, seed=False)
             with closing(sqlite3.connect(database)) as connection, connection:
                 connection.row_factory = sqlite3.Row
                 room = require_room(connection, "old")
-                self.assertEqual(room["floor"], {"holder": None, "next_speaker": "Gemini", "revision": 0})
+                self.assertNotIn("floor", room)
                 self.assertEqual(room["current_turn"]["question"], "原问题")
-                self.assertEqual(get_message(connection, "old", 1)["text"], "旧原文")
-                connection.execute("UPDATE room_floor SET holder='Gemini',revision=1 WHERE room_id='old'")
-            init_database(database, seed=False)
-            with closing(sqlite3.connect(database)) as connection:
-                connection.row_factory = sqlite3.Row
-                self.assertEqual(require_room(connection, "old")["floor"], {"holder": "Gemini", "next_speaker": "Gemini", "revision": 1})
+                self.assertEqual(connection.execute("SELECT revision FROM room_floor WHERE room_id='old'").fetchone()[0], 3)
+                names = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+                self.assertFalse({"require_message_floor", "return_message_floor", "require_host_floor", "nominate_expert_floor", "cancel_turn_floor"} & names)
 
     def test_database_guards_cover_phase_changes_after_a_client_read(self):
         """Atomic writes reject stale actions even if the adapter read an older phase."""
@@ -1391,7 +1308,6 @@ class LegacyStorageTests(unittest.TestCase):
                 self.assertEqual((message["source"], message["text"]), ("url", "历史 URL 原文 & 中文"))
                 self.assertEqual((message["summary"], message["summary_by"]), ("", ""))
                 self.assertIsNone(room["host_brief"])
-                self.assertEqual(room["floor"], {"holder": "用户", "next_speaker": "用户", "revision": 0})
 
 
 if __name__ == "__main__":

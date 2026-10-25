@@ -690,7 +690,7 @@ function render_room() {
   if (!state.room) return;
   const room = state.room;
   element("room-title").textContent = room.title;
-  element("room-subtitle").textContent = `${room.archived ? '已存档 · ' : ''}${room.message_count} 条发言 · 发言权：${floor_status(room)}`;
+  element("room-subtitle").textContent = `${room.archived ? '已存档 · ' : ''}${room.message_count} 条发言`;
   element("message-count").textContent = room.message_count;
   element("room-goal").textContent = room.goal || "尚未填写议题目标。";
   element("latest-id").textContent = `#${room.latest_id}`;
@@ -706,11 +706,6 @@ function render_room() {
   render_topic();
   render_host_brief();
   update_composer_role();
-}
-
-/** Describe the actual holder or nominated recipient for both themes. */
-function floor_status(room) {
-  return room.floor?.holder ? `${display_name(room.floor.holder)} 持有` : `待 ${display_name(room.floor?.next_speaker || room.host)} 领取`;
 }
 
 /** A round completes only after all configured experts have contributed. */
@@ -2352,8 +2347,6 @@ async function skip_turn() {
   const revision = runtime.revision;
   let saved = false;
   try {
-    const floor = room.floor;
-    if (floor.holder !== turn.expert) await request_json(`${path}/floor`, { actor: "用户", speaker: turn.expert, action: "take", revision: floor.revision });
     await request_json(`${path}/messages`, { author: turn.expert, submitted_by: "用户", kind: "opinion", turn_id: turn.id,
       text: "（本次发言已被用户跳过）", submission_id: new_submission_id() });
     saved = true;
@@ -2611,11 +2604,6 @@ function render_topic() {
 
 /** Display the actual assignment state without implying an external delivery. */
 function render_current_turn() {
-  const floor = state.room.floor;
-  element("floor-status").textContent = floor_status(state.room);
-  element("take-floor").disabled = !floor || Boolean(floor.holder);
-  element("take-floor").textContent = `为 ${display_name(floor?.next_speaker || state.room.host)} 领取`;
-  element("return-floor").disabled = !floor?.holder;
   const turn = state.room.current_turn;
   const active = turn && ["pending", "notified"].includes(turn.status);
   const inactive = ["paused", "concluded"].includes(state.room.phase);
@@ -2629,20 +2617,10 @@ function render_current_turn() {
   element("cancel-turn").disabled = !active;
   element("view-turn-answer").hidden = !turn?.answer_id;
   const limited = state.room.limits?.reached;
-  const unavailable = active || inactive || limited || !Object.keys(state.room.experts).length || floor?.holder !== state.room.host;
+  const unavailable = active || inactive || limited || !Object.keys(state.room.experts).length;
   element("schedule-turn").disabled = Boolean(unavailable);
   element("schedule-note").textContent = inactive ? "话题已暂停或收束；恢复阶段后才能继续安排。" :
-    (active ? "先完成或取消当前安排，再安排下一位。" : limited ? "已达到讨论上限，请检查到限处理；需要继续时先暂停并调整参数。" : floor?.holder !== state.room.host ? "主持人领取发言权后可安排下一位。" : "创建后本地专家可自行检查；在线专家需由主持人或用户联系。");
-}
-
-/** Perform one explicit, versioned floor operation on behalf of its speaker. */
-async function change_floor(action) {
-  const floor = state.room.floor;
-  const speaker = action === "take" ? floor.next_speaker : floor.holder;
-  try {
-    await request_json(`/api/rooms/${state.room.id}/floor`, { actor: "用户", speaker, action, revision: floor.revision });
-    show_toast(action === "take" ? `${display_name(speaker)} 已领取发言权` : "发言权已归还");
-  } finally { await refresh_room(); }
+    (active ? "先完成或取消当前安排，再安排下一位。" : limited ? "已达到讨论上限，请检查到限处理；需要继续时先暂停并调整参数。" : "创建后本地专家可自行检查；在线专家需由主持人或用户联系。");
 }
 
 /** Distinguish local work discovery from contacting an online expert. */
@@ -2760,7 +2738,6 @@ function bind_host_controls() {
     "local-room-configuration-load": load_room_configuration, "local-room-configuration-save": save_room_configuration,
     "local-room-configuration-restart": restart_discussion,
     "runtime-pause": pause_runtime, "check-discussion-limits": check_limits,
-    "take-floor": () => change_floor("take"), "return-floor": () => change_floor("return"),
     "copy-turn": copy_turn, "confirm-notified": () => change_turn_status("notified"), "cancel-turn": () => change_turn_status("cancelled"),
     "forward-turn": prepare_turn_answer, "cancel-turn-answer": cancel_turn_reply,
     "view-turn-answer": () => show_message(state.room.current_turn.answer_id),
@@ -3333,7 +3310,6 @@ async function execute_view_action(name, value) {
     schedule: () => schedule_turn(event), filter: filter_view, reply: set_view_reply,
     cancel_reply, cancel_answer: cancel_turn_reply, prepare_answer: prepare_turn_answer,
     copy_turn, notify: () => change_turn_status("notified"), cancel_turn: () => change_turn_status("cancelled"), skip_turn,
-    take_floor: () => change_floor("take"), return_floor: () => change_floor("return"),
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
     choose_runtime, export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, retry_execution, conclude_discussion, start_room_discussion, end_room_discussion, extend_rounds, reopen_discussion,
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
@@ -3369,7 +3345,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form },
   request: request_json, identities: IDENTITIES, display_name, sources: SOURCE_LABELS, phases: PHASE_LABELS,
   runtime_label, execution_label, limits_label, participant_model, participant_access, can_retry_execution,
-  turns: TURN_LABELS, turn_label, turn_guidance, floor_status, progress_round, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
+  turns: TURN_LABELS, turn_label, turn_guidance, progress_round, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();
 restore_directory_sort();

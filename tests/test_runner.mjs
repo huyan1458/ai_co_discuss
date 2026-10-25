@@ -849,7 +849,7 @@ test('claude allows only codiscuss website subcommands and draft writes, then us
   const directories = args.indexOf('--add-dir');
   assert.deepEqual(args.slice(directories + 1, directories + 4), [f.directory, f.task.draft_directory, f.task.skills_directory]);
   assert.deepEqual(args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--')),
-    [...['room', 'message', 'turn', 'state', 'floor', 'execution', 'health', 'schema']
+    [...['room', 'message', 'turn', 'state', 'execution', 'health', 'schema']
       .flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]),
     `Edit(${claude_rule_path(f.task.draft_directory)}/**)`, 'Read(//d/materials/**)']);
   assert.ok(!args.includes(`Edit(${claude_rule_path(f.directory)}/**)`));

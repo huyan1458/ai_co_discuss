@@ -144,27 +144,9 @@ CREATE TABLE IF NOT EXISTS room_floor (
     next_speaker TEXT NOT NULL,
     revision INTEGER NOT NULL DEFAULT 0
 );
-INSERT OR IGNORE INTO room_floor (room_id,holder,next_speaker)
-    SELECT rooms.id,CASE WHEN turns.id IS NULL THEN COALESCE(settings.host,'用户') END,
-        COALESCE(turns.expert,settings.host,'用户')
-    FROM rooms LEFT JOIN topic_settings AS settings ON settings.room_id=rooms.id
-    LEFT JOIN discussion_turns AS turns ON turns.room_id=rooms.id AND turns.status IN ('pending','notified');
-CREATE TRIGGER IF NOT EXISTS initialize_room_floor AFTER INSERT ON topic_settings
-BEGIN
-    INSERT INTO room_floor (room_id,holder,next_speaker) VALUES (NEW.room_id,NEW.host,NEW.host)
-        ON CONFLICT(room_id) DO UPDATE SET
-        holder=CASE WHEN holder='用户' THEN NEW.host ELSE holder END,
-        next_speaker=CASE WHEN next_speaker='用户' THEN NEW.host ELSE next_speaker END,
-        revision=revision+1;
-END;
-CREATE TRIGGER IF NOT EXISTS transfer_host_floor AFTER UPDATE OF host ON topic_settings
-WHEN OLD.host<>NEW.host
-BEGIN
-    UPDATE room_floor SET holder=CASE WHEN holder=OLD.host THEN NEW.host ELSE holder END,
-        next_speaker=CASE WHEN next_speaker=OLD.host THEN NEW.host ELSE next_speaker END,
-        revision=revision+1 WHERE room_id=NEW.room_id
-        AND NOT EXISTS (SELECT 1 FROM discussion_turns WHERE room_id=NEW.room_id AND status IN ('pending','notified') AND expert=OLD.host);
-END;
+-- The speaking floor is retired: the table stays only so old databases and backups load, and nothing reads or writes it.
+DROP TRIGGER IF EXISTS initialize_room_floor;
+DROP TRIGGER IF EXISTS transfer_host_floor;
 -- Site administrator account (single user) and its login sessions. Raw tokens and passwords are never stored.
 CREATE TABLE IF NOT EXISTS site_admin (
     id INTEGER PRIMARY KEY CHECK(id=1),
@@ -186,56 +168,18 @@ CREATE TABLE IF NOT EXISTS room_modes (
     mode TEXT NOT NULL CHECK(mode IN ('free','brainstorm')),
     control_hash TEXT NOT NULL DEFAULT ''
 );
--- Replaced on every start so existing databases drop the floor rule for free rooms.
+-- Replaced on every start so existing databases drop every speaking-floor rule.
 DROP TRIGGER IF EXISTS require_message_floor;
-CREATE TRIGGER require_message_floor BEFORE INSERT ON messages
-WHEN NEW.author<>'用户'
-    AND NOT EXISTS (SELECT 1 FROM messages WHERE room_id=NEW.room_id AND submission_id=NEW.submission_id)
-    AND NOT EXISTS (SELECT 1 FROM room_floor WHERE room_id=NEW.room_id AND holder=NEW.author)
-    AND NOT EXISTS (SELECT 1 FROM room_modes WHERE room_id=NEW.room_id AND mode='free')
-    -- A member answering a user's direct question in a discussion has its own execution instead of the floor.
-    AND NOT EXISTS (SELECT 1 FROM member_executions JOIN room_members ON room_members.id=member_executions.member_id
-                    WHERE member_executions.room_id=NEW.room_id AND room_members.name=NEW.author AND member_executions.status IN ('dispatched','started'))
-BEGIN
-    SELECT RAISE(ABORT, 'floor_required');
-END;
+DROP TRIGGER IF EXISTS return_message_floor;
+DROP TRIGGER IF EXISTS require_host_floor;
+DROP TRIGGER IF EXISTS nominate_expert_floor;
+DROP TRIGGER IF EXISTS cancel_turn_floor;
 CREATE TRIGGER IF NOT EXISTS require_opinion_turn BEFORE INSERT ON message_details
 WHEN NEW.kind='opinion' AND NEW.turn_id IS NULL
     AND NOT EXISTS (SELECT 1 FROM message_details WHERE message_id=NEW.message_id)
     AND EXISTS (SELECT 1 FROM messages WHERE id=NEW.message_id AND author<>'用户')
 BEGIN
     SELECT RAISE(ABORT, 'floor_turn_required');
-END;
-DROP TRIGGER IF EXISTS return_message_floor;
--- A chat answer to a direct question never touches the discussion's floor.
-CREATE TRIGGER return_message_floor AFTER INSERT ON message_details
-WHEN NEW.kind<>'chat' AND EXISTS (SELECT 1 FROM messages WHERE id=NEW.message_id AND author<>'用户')
-BEGIN
-    UPDATE room_floor SET holder=NULL,
-        next_speaker=COALESCE((SELECT host FROM topic_settings WHERE room_id=room_floor.room_id),'用户'),
-        revision=revision+1 WHERE room_id=(SELECT room_id FROM messages WHERE id=NEW.message_id);
-END;
-DROP TRIGGER IF EXISTS require_host_floor;
--- Queued turns of a round plan are inserted after the first one has already nominated an expert.
-CREATE TRIGGER require_host_floor BEFORE INSERT ON discussion_turns
-WHEN NEW.status<>'queued' AND NOT EXISTS (SELECT 1 FROM discussion_turns WHERE room_id=NEW.room_id AND submission_id=NEW.submission_id)
-    AND NOT EXISTS (SELECT 1 FROM room_floor WHERE room_id=NEW.room_id
-                    AND holder=COALESCE((SELECT host FROM topic_settings WHERE room_id=NEW.room_id),'用户'))
-BEGIN
-    SELECT RAISE(ABORT, 'floor_required');
-END;
-DROP TRIGGER IF EXISTS nominate_expert_floor;
-CREATE TRIGGER nominate_expert_floor AFTER INSERT ON discussion_turns
-WHEN NEW.status<>'queued'
-BEGIN
-    UPDATE room_floor SET holder=NULL,next_speaker=NEW.expert,revision=revision+1 WHERE room_id=NEW.room_id;
-END;
-CREATE TRIGGER IF NOT EXISTS cancel_turn_floor AFTER UPDATE OF status ON discussion_turns
-WHEN NEW.status='cancelled' AND OLD.status<>NEW.status
-BEGIN
-    UPDATE room_floor SET holder=NULL,
-        next_speaker=COALESCE((SELECT host FROM topic_settings WHERE room_id=NEW.room_id),'用户'),
-        revision=revision+1 WHERE room_id=NEW.room_id;
 END;
 
 -- Runtime control is opt-in. Legacy rooms have no runtime row and keep manual entry.
@@ -374,7 +318,6 @@ DROP TRIGGER IF EXISTS relay_turn_promoted;
 CREATE TRIGGER relay_turn_promoted AFTER UPDATE OF status ON discussion_turns
 WHEN OLD.status='queued' AND NEW.status='pending'
 BEGIN
-    UPDATE room_floor SET holder=NULL,next_speaker=NEW.expert,revision=revision+1 WHERE room_id=NEW.room_id;
     UPDATE turn_relay SET held_since=0 WHERE room_id=NEW.room_id
         AND NOT EXISTS(SELECT 1 FROM messages m JOIN discussion_events e ON e.room_id=m.room_id AND e.role='host' AND e.status='started'
         WHERE m.room_id=NEW.room_id AND m.author='用户' AND CAST(strftime('%s',m.created_at) AS INTEGER)>e.started_at);

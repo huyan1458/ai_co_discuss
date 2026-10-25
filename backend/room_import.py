@@ -115,7 +115,7 @@ def history_statements(tables, room_id, maps):
 
 
 def settings_statements(tables, room, maps, now):
-    """Topic, floor, limits and idle clock; an active brainstorm arrives paused because it has no run."""
+    """Topic, limits and idle clock (a backup's retired speaking floor is ignored); an active brainstorm arrives paused because it has no run."""
     room_id, messages, statements = room["id"], maps["messages"], []
     free = any(row.get("mode") == "free" for row in tables.get("room_modes", []))
     for row in tables.get("topic_settings", [])[:1]:
@@ -125,10 +125,6 @@ def settings_statements(tables, room, maps, now):
                          row["experts"], phase, remap_text(row.get("focus"), messages))),
                        ("INSERT INTO discussion_pauses (room_id,paused_at) VALUES (?,?)",
                         (room_id, 0 if phase in ACTIVE_PHASES else now))]
-    for row in tables.get("room_floor", [])[:1]:
-        statements.append(("""INSERT INTO room_floor (room_id,holder,next_speaker,revision) VALUES (?,?,?,?) ON CONFLICT(room_id)
-            DO UPDATE SET holder=excluded.holder,next_speaker=excluded.next_speaker,revision=excluded.revision""",
-                           (room_id, row.get("holder"), row["next_speaker"], row.get("revision", 0))))
     for row in tables.get("discussion_limits", [])[:1]:
         statements.append((f"UPDATE discussion_limits SET {','.join(f'{field}=?' for field in LIMIT_FIELDS)} WHERE room_id=?",
                            (*(row[field] for field in LIMIT_FIELDS), room_id)))

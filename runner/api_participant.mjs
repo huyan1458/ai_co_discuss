@@ -38,7 +38,7 @@ export function participant_tools(context) {
     tool('host_message', '保存主持说明，不能代替专家观点或伪造共识', { text: answer.text }, ['text']),
     tool('save_state', '根据实际原文更新详细状态和主持简报，标明分歧、依据与下一步', { text: { ...TEXT, maxLength: 4000 }, brief: { ...TEXT, maxLength: 1600 }, until: { type: 'integer', minimum: 0 } }, ['text', 'brief', 'until']),
     tool('update_topic', '根据用户原文完善目标、背景和边界，或调整讨论阶段；保留用户原意，不能改变成员、上限或权限',
-      { goal: TEXT, background: TEXT, boundaries: TEXT, phase: { type: 'string', enum: ['initial', 'discussing', 'reviewing'] }, focus: TEXT }),
+      { goal: TEXT, background: TEXT, boundaries: TEXT, phase: { type: 'string', enum: ['initial', 'discussing'] }, focus: TEXT }),
     tool('cancel_turn', '讨论方向变化时取消当前未完成安排；先用 host_message 说明原因，不能虚构回答', { id: NUMBER }, ['id']),
     tool('arrange_turns', '一次排满本轮的专家发言序列；创建成功结束本次主持执行', { turns: { type: 'array', minItems: 1, maxItems: 10,
       items: { type: 'object', properties: { expert: TEXT, question: { ...TEXT, maxLength: 1000 } }, required: ['expert', 'question'], additionalProperties: false } } }, ['turns']),
@@ -75,15 +75,6 @@ async function read_room(context) {
     && !peer_reading_granted(room, context.participant);
   const fields = context.independent ? ROOM_FIELDS : [...ROOM_FIELDS, 'state_text', 'state_until', 'host_brief'];
   return Object.fromEntries(fields.filter(field => room[field] !== undefined).map(field => [field, room[field]]));
-}
-
-/** Claim only the nominated participant's floor immediately before a business write. */
-async function take_floor(context) {
-  if (context.mode === 'free') return;
-  const room = await room_request(context, '');
-  if (room.floor.holder !== context.participant) await room_request(context, '/floor', {
-    actor: context.participant, speaker: context.participant, action: 'take', revision: room.floor.revision,
-  });
 }
 
 /** Build a business write without letting the model choose identity, execution or credentials. */
@@ -126,7 +117,6 @@ async function execute_tool(context, call, definitions) {
     const query = args.after === undefined ? `page=${page}` : `after=${after}`;
     return { result: await room_request(context, call.name === 'read_message' ? `/messages/${args.id}` : `/messages?${query}`) };
   }
-  await take_floor(context);
   // The tool requests the latest roster itself, so a plan is always checked against current experts.
   if (call.name === 'arrange_turns') args.roster = (await room_request(context, '/turns/roster')).revision;
   if (['finish_discussion', 'declare_done'].includes(call.name)) args.conclusion = (await room_request(context, '/conclusion')).revision;

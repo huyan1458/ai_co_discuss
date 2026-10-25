@@ -16,7 +16,7 @@ const CLI_EXIT_GRACE_MS = 1500;
 const CLI_MAX_RUN_MS = 2 * 60 * 60_000;
 const CODEX_PERMISSIONS_MIN_MINOR = 163;
 /** Website subcommands an automatic task may run; service, launch, run, api and setup stay unapproved. */
-export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'floor', 'execution', 'health', 'schema'];
+export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'execution', 'health', 'schema'];
 
 /** Only failures before a software invocation are safe for automatic redelivery. */
 function not_sent(error) { return Object.assign(error, { delivery_status: 'not_sent' }); }

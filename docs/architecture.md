@@ -74,7 +74,7 @@ Python 服务独占监听端口：Windows 使用 `SO_EXCLUSIVEADDRUSE`，关闭�
 | `message_timings` | 自动执行从交付唤醒到消息保存的秒数，随消息固定保存 |
 | `discussion_sessions` | 每次讨论一条薄记录（目标、`active/paused/concluded`、起止消息）；状态由触发器跟随旧阶段 `topic_settings.phase`，旧库重复执行 schema 时按阶段回填；自由房间没有会话。房间视图 `session` 返回最近一条。讨论并入自由房间的过渡结构，见 `.dev/plans/讨论模式并入自由房间/` |
 | `discussion_turns` | 问题、专家、通知状态、回答与取消 |
-| `room_floor` | 发言权持有人、下一位和版本 |
+| `room_floor` | 已停用的旧发言权记录，保留旧库数据，不再读写 |
 | `turn_relay` | 整轮接力暂停标记：`held_since` 为首个待主持人处理的用户操作，非 0 时回答交回主持人而不接力 |
 | `discussion_runtime` | 显式模式、运行 ID、代次、截止时间、版本及控制凭据哈希 |
 | `discussion_events` | 持久业务原因和对应的一次执行、身份、状态、真实会话及租约；事件 ID 兼执行 ID |
@@ -83,13 +83,13 @@ Python 服务独占监听端口：Windows 使用 `SO_EXCLUSIVEADDRUSE`，关闭�
 
 数据库唯一约束阻止重复提交和多个未完成安排；触发器检查阶段、安排关联及持有人，并在保存消息/安排时完成交接。两套后端也执行相应业务校验；修改协议需同步服务、schema、CLI 和相关测试。
 
-旧库初始化会补齐缺失表和记录，保留已有消息与安排。迁移不能重置当前 `room_floor`；新增迁移需要验证旧库和重复执行行为。Python 服务启动会应用 schema；远端 D1 更新由部署者明确执行。
+旧库初始化会补齐缺失表和记录，保留已有消息与安排。发言权已取消，旧 `room_floor` 只保留不用；新增迁移需要验证旧库和重复执行行为。Python 服务启动会应用 schema；远端 D1 更新由部署者明确执行。
 
 房间资料将“用户原文”与“背景”作为同级章节，新建和编辑资料分别填写；两套后端、CLI 的 `room brief`、纯文本资料页与可读备份均提供独立原文。`user_request` 限 4000 字并保留首尾空白，由增量表 `room_user_requests` 保存；D1 升级须先应用 schema。旧房间没有独立记录时，仅对背景开头“用户原文：”及后续独占一行的“项目背景与入口：”或“背景：”明确分隔进行兼容读取，读取不改原始数据；下次保存资料时分开落库。未明确分隔的旧背景保持原样。
 
 ## 读写协议
 
-常用 API 为 `/api/health`、`/api/rooms` 和 `/api/rooms/ROOM_ID` 下的 messages、state、turns、floor 等接口。写入结果取决于房间整体状态的操作遵循“先读取、带凭据、服务端校验”（见 AGENTS.md）：排整轮计划先 `turns/roster`，主持人收束或宣告完成先 `conclusion`，作废发言须带所见的 `latest_id`，状态截止编号 `until` 不回退。具体方法、字段与当前限制通过 `codiscuss schema` 和 `codiscuss room protocol ROOM` 获取；原 Python 入口继续兼容，避免维护第二套过期请求样例。
+常用 API 为 `/api/health`、`/api/rooms` 和 `/api/rooms/ROOM_ID` 下的 messages、state、turns等接口。写入结果取决于房间整体状态的操作遵循“先读取、带凭据、服务端校验”（见 AGENTS.md）：排整轮计划先 `turns/roster`，主持人收束或宣告完成先 `conclusion`，作废发言须带所见的 `latest_id`，状态截止编号 `until` 不回退。具体方法、字段与当前限制通过 `codiscuss schema` 和 `codiscuss room protocol ROOM` 获取；原 Python 入口继续兼容，避免维护第二套过期请求样例。
 
 附件使用 `/api/rooms/ROOM_ID/attachments`：POST 接收原始字节，查询参数为 `actor`、`file_name`、`submission_id`，限制 20 MiB；GET 默认分页列出已发送文件，也可用 `submission_id` 精确核对尚未关联消息的上传。`/attachments/ID` 返回元数据，`/attachments/ID/content` 返回原文件，`?download=1` 强制下载。消息传有序 `attachment_ids`（最多 10 个、不重复），可以只有附件；关联与消息在同一事务保存，同编号重试比较原文及附件顺序。
 
@@ -122,7 +122,7 @@ GET / HEAD 不发布消息；旧 `/r/ROOM_ID/publish` 返回 410。新增内容�
 
 ## 聊天室本地备份
 
-`GET /api/rooms/ROOM_ID/backup` 返回 `format=ai-codiscuss-room-backup`、`version=1`、`exported_at` 和 `tables`。`tables` 包含讨论资料相关的 16 张表中属于指定房间的原始行，保留编号、时间、正文、创建请求、摘要与摘要作者、代发者、引用、安排、消息耗时、已发送附件元数据和发言权版本；只带所属文件夹自身，不带同文件夹的其他房间。它不接受分页或搜索过滤，不修改房间状态；空房间可导出，不存在的房间返回 404。
+`GET /api/rooms/ROOM_ID/backup` 返回 `format=ai-codiscuss-room-backup`、`version=1`、`exported_at` 和 `tables`。`tables` 包含讨论资料相关的 16 张表中属于指定房间的原始行，保留编号、时间、正文、创建请求、摘要与摘要作者、代发者、引用、安排、消息耗时、已发送附件元数据；只带所属文件夹自身，不带同文件夹的其他房间。它不接受分页或搜索过滤，不修改房间状态；空房间可导出，不存在的房间返回 404。
 
 Python 在一个只读事务快照中查询；D1 使用同一个 batch 事务读取，避免导出中途新增消息导致正文与关联元数据不一致。浏览器随后下载快照中不可变的附件原文件；外部链接只保留地址，未发送上传、未保存草稿与其他部署配置不在备份内。旧版快照缺少 `attachments` 时仍可导出。
 
@@ -135,7 +135,7 @@ Python 在一个只读事务快照中查询；D1 使用同一个 batch 事务读
 - **身份与去重**：保留备份中的房间编号；本站已有该编号时返回 200 `{skipped:true}`，不覆盖、不重复，重复导入安全。导入成功返回 201 与附件编号映射。
 - **重新编号**：消息、发言安排、成员和自由协作请求在本站当前最大编号之后按原顺序重排；回复、回答、安排关联、摘要、耗时、附件、请求与建议随之映射；房间目标、共识、简报、议题字段、安排问题和消息正文中的 `#编号` 若指向本房间消息则改写为新编号，其他数字原样保留。共识与简报的“覆盖至”取所覆盖的最后一条新编号。附件获得新编号。
 - **继续使用**：导入者成为房主；成员保留名称、职责与接入方式，状态改为离开（已移除者保持移除），凭据不导出也不可用，需在成员卡片“请回”换发新凭证。讨论房间没有运行记录，进行中的阶段改为已暂停，由房主重新启动；自由协作保持可用，未完成的请求改为已取消。所属文件夹按编号复用，本站没有时新建；存档状态保留；建房提交编号与来源房间关联不导入。
-- **写入顺序**：消息先以自由协作模式、安排先以排队状态、消息职责先以占位类型写入，再恢复真实值，避免发言权、安排与运行触发器把历史当作新动作；全部写入在一个事务（D1 为带编号断言的单个 batch）中完成，失败整体回滚。D1 写入按 100 个参数分块合并多行。
+- **写入顺序**：消息先以自由协作模式、安排先以排队状态、消息职责先以占位类型写入，再恢复真实值，避免安排与运行触发器把历史当作新动作；全部写入在一个事务（D1 为带编号断言的单个 batch）中完成，失败整体回滚。D1 写入按 100 个参数分块合并多行。
 - **附件原文件**：导入后浏览器把 ZIP 中的原文件逐个 `POST /api/rooms/ROOM_ID/attachments/新编号/import`，需房主凭据，大小与 SHA-256 须与记录一致；已有文件不覆盖。缺少原文件时消息仍导入，附件显示缺失。
 - **结果**：房间目录下方列出导入、跳过与失败数量；失败项写明文件或房间及原因。
 
@@ -225,7 +225,7 @@ Python 通过进程内条件变量唤醒订阅者，不占用数据库连接，�
 
 - `round_budgets`：程序统计轮次的预算（`base` 为本段计数起点的专家观点数，`cap` 为本段轮次上限、0 表示取 `discussion_limits.max_rounds`，`extra` 为用户累计追加轮数）。建房时写入；没有记录的旧房间沿用按花名册逐轮统计的旧口径。房间视图的 `limits` 返回 `segment_rounds`、`round_cap`、`extra_rounds`。
 - `discussion_options`：建房时的讨论选项，目前只有 `named_followup`（0/1，建房 `named_followup` 布尔值，默认 false，计入建房幂等比对）。没有记录的旧房间视为 true；房间视图返回 `named_followup`。
-- `scheduler_decisions`：讨论中每次智能调度判断的可见记录（`kind` 为 `interjection` / `round`，`label`、`confidence`、`applied`、`provider`、`after_message_id`），由接入程序用运行控制凭据 `POST scheduler-decisions` 写入，不是消息，不影响轮次、发言权与暂扣；房间视图 `scheduler_decisions` 返回最近 100 条；每条可带 `detail`（独立表 `scheduler_decision_details`，由 `POST scheduler-decisions` 的 `detail` 写入：每个问题的题目说明、选项，以及决策模型选了哪项和各选项概率，最多 4 项、4000 字，不含房间消息摘录，不随备份导出），网页默认折叠，点开才显示“问 / 答”。房间视图另附 `host_arrangements`：由 `discussion_turns` 按同一批创建时间分组得到的主持人安排（不含邀请追加的开场安排，也不含已由智能调度写入决策的那一批），`after_message_id` 取该批之前最新的回答（开场安排前没有回答，取 0，显示在议题卡片下方），网页在该回答后显示与智能调度卡片同样式的“主持人安排：A → B → C”一行，点开才逐条显示专家与主持人写的任务说明（`turns`）；没有可跟随的回答（讨论开场）时不显示。不新增表。
+- `scheduler_decisions`：讨论中每次智能调度判断的可见记录（`kind` 为 `interjection` / `round`，`label`、`confidence`、`applied`、`provider`、`after_message_id`），由接入程序用运行控制凭据 `POST scheduler-decisions` 写入，不是消息，不影响轮次与暂扣；房间视图 `scheduler_decisions` 返回最近 100 条；每条可带 `detail`（独立表 `scheduler_decision_details`，由 `POST scheduler-decisions` 的 `detail` 写入：每个问题的题目说明、选项，以及决策模型选了哪项和各选项概率，最多 4 项、4000 字，不含房间消息摘录，不随备份导出），网页默认折叠，点开才显示“问 / 答”。房间视图另附 `host_arrangements`：由 `discussion_turns` 按同一批创建时间分组得到的主持人安排（不含邀请追加的开场安排，也不含已由智能调度写入决策的那一批），`after_message_id` 取该批之前最新的回答（开场安排前没有回答，取 0，显示在议题卡片下方），网页在该回答后显示与智能调度卡片同样式的“主持人安排：A → B → C”一行，点开才逐条显示专家与主持人写的任务说明（`turns`）；没有可跟随的回答（讨论开场）时不显示。不新增表。
 - 两表都是独立表，D1 重新应用 schema 即可；备份、导入（`after_message_id` 随消息重编号）与删除一并处理。智能调度代主持人执行的写入不新增权限，沿用该主持事件的执行凭据。
 
 ## 自动运行协议
@@ -234,7 +234,7 @@ Python 通过进程内条件变量唤醒订阅者，不占用数据库连接，�
 
 启动事务也校验话题阶段、参与配置、归档状态及上限版本；校验后发生变化则整批回滚。迁移数据中的专家 JSON 按规范化值比较，避免序列化空格差异导致误拒绝。恢复收束采用原收束截止、原运行截止和总截止的最早值；仅修改单次执行时限保留收束时钟。未计时的旧活动房间在首次自动启动时补记开始时间。
 
-`backend/runtime.py` 实现 Python 运行控制；Worker 实现同一协议，SQL 触发器与业务保存处于同一事务。正式安排完成主持步骤并入队专家；关联答案完成专家步骤并入队主持。用户留言和约束修改可入队主持；摘要、心跳及发言权变化不触发 AI。领取主持工作时合并更早的待处理主持事件。暂停、收束、归档或参与配置变化撤销旧资格；恢复只重建当前工作，不重放历史。
+`backend/runtime.py` 实现 Python 运行控制；Worker 实现同一协议，SQL 触发器与业务保存处于同一事务。正式安排完成主持步骤并入队专家；关联答案完成专家步骤并入队主持。用户留言和约束修改可入队主持；摘要和心跳不触发 AI。领取主持工作时合并更早的待处理主持事件。暂停、收束、归档或参与配置变化撤销旧资格；恢复只重建当前工作，不重放历史。
 
 所有新建房间均须提供房主控制凭据及与参与者名单一致的 `members`：每项包含 `name`、独立随机 `token`、`access`（runner/manual/online），可选 `adapter`、`session_mode`。服务端仅保存哈希；同一建房 `submission_id` 的重试必须保持控制凭据、成员配置和成员凭据一致。`runtime_mode=automatic` 在创建事务中初始化 ready 运行；省略或 manual 不启动运行，但仍有成员鉴权。`GET/POST /api/rooms/ROOM/runtime` 查询或按 `revision` 配置、启动、暂停、停止，POST 仅房主可用；`deadline=0` 表示不限运行总时长，非零值须为未来 24 小时内的 Unix 秒数，且不能延长话题或收束截止。暂停保存原阶段。`GET events?after=ID` 仅控制凭据可读，每页最多 100 条；`POST events/ID` 接受 `reserve/enter/view/renew/fail`，程序持久化执行令牌后 reserve，AI 用令牌 enter 一次，业务保存完成执行，不提供 finish。
 
@@ -250,7 +250,7 @@ running 状态即使只有 pending 事件，也必须先暂停才能重新启动
 
 执行报告：`free.executions` 返回最近 100 次执行的白名单字段，不含凭据或 `client_id`；包含 `cwd`、数组 `changes`、`changes_recorded`、完整 `request_ids`、`answer_id` 与首条 `request_message_id`。报告不依赖最近请求列表是否截断：完成的报告挂在回答下，失败/取消的报告挂在原请求下。`changes_recorded=false` 表示非 Git 或未取得报告，不能当成无变化；已上报的 `[]` 才表示未观察到文件变化。单次时限与续租中断使用不同失败原因。
 
-自由房间（`room_modes.mode='free'`）与讨论房间共用房间、成员登记、消息、附件与目录，没有发言权、安排、阶段推进和轮次。没有控制凭据登记的旧房间只供阅读，不支持通过首次运行配置认领；本次不迁移历史房间。
+自由房间（`room_modes.mode='free'`）与讨论房间共用房间、成员登记、消息、附件与目录，没有安排、阶段推进和轮次。没有控制凭据登记的旧房间只供阅读，不支持通过首次运行配置认领；本次不迁移历史房间。
 
 - **凭据**：建房时由客户端提供房间控制凭据和每位成员的成员凭证，服务端只存哈希。用户身份的房间写入（发言、附件、存档、恢复、删除、打断）都须控制凭据（存档、恢复、删除也可凭管理员会话）；房间排序和归入文件夹只改共享目录，与站点级文件夹操作一样不需要凭据；无凭据、错误凭据、成员凭证或他房凭据一律只读。**站点管理员**：绑定 127.0.0.1 的本地站点没有账号，访问者即管理员（存档、恢复、删除免凭据，名称与头像存在 `site_admin`，密码哈希为不可登录的占位值）；其余部署需要账号：单个账号（`site_admin`，用户名+PBKDF2 密码哈希，会话令牌只存哈希于 `admin_sessions`，登录后一直有效直至退出）。首次注册须提供安装令牌（本地版读 `DISCUSS_ADMIN_SETUP_KEY`，未设置则启动时随机生成并写日志；Worker 读机密 `ADMIN_SETUP_KEY`，未配置则不能注册）；连续 5 次登录失败锁定 5 分钟。请求头 `X-Discussion-Admin` 携带有效会话时，存档、恢复、永久删除（仍须确认房间名）免房间凭据；其余写入不变。`GET /api/admin` 公开，返回名称与头像供所有访客显示。接口为 `/api/admin` 下的 `register`、`login`、`logout`、`profile`。忘记密码：本地版 `python server.py --reset-admin`，Cloudflare 版执行 `DELETE FROM admin_sessions; DELETE FROM site_admin;`，之后重新注册。成员凭证只能以该成员身份发言或上传附件。声明字段（`author`、`source`、localhost）不代替凭据。
 - **成员**：`room_members` 以 `id` 为稳定主键，`access` 为 `runner`（接入程序投递）、`manual`（成员自行读写）或 `online`（只读、原文代发），`session_mode` 标记是否借用用户正在使用的会话。房主用控制凭据 `POST members` 运行中加入成员，`POST members/ID {action}` 让成员离开（`away`，作废其进行中执行与未投递请求）、请回（`active`，必须提供不同于原凭证的新凭证，旧凭证副本不再有效）或移除（`remove`，保留历史发言）。同一成员凭证不能复用于其他成员或房主；相同凭证与配置的邀请、请回重试返回已有结果。会话续接由本机接入程序负责，服务端不保存会话绑定；唯一例外是手动成员上报的会话：带凭据的请求可带请求头 `X-Discussion-Session` 与 `X-Discussion-Session-Client`，`message post` 也可在正文带 `session_id` 与 `session_client`（CLI 读取 `CLAUDE_CODE_SESSION_ID` 或 `CODEX_THREAD_ID`，取值 `claude` / `codex`），服务端在 `member_sessions` 保存该手动成员最近上报的会话，成员视图以 `reported_session` 暴露。房主用 `POST members/ID {action:"adopt", adapter:"claude", session_id}`（须与上报一致、仅全自动讨论中在场的手动成员）把成员改为 `runner`、`borrowed` 并清除上报，本机接入程序据此接管。两套后端行为一致。
@@ -260,7 +260,7 @@ running 状态即使只有 pending 事件，也必须先暂停才能重新启动
 - **主持人与任务链**：用户是需求方，不担任主持人。只要有在场的非在线成员，房间就保持恰好一位主持人：成员变动时，离开或移出的主持人失去角色，由第一位在场的 runner 成员（没有则手动成员）接任；建房和每条房主消息前也做同样的补位，因此旧房间在下一条消息时自动获得主持人。房主用 `POST members/ID {action:"role", role:"host"}` 更换主持人（在线成员不能担任），把现任主持人改为 `member` 会被拒绝。多位成员时未点名的房主消息生成给主持人的 `route` 请求。主持人的回答可带 `to` 点名其他成员（不能点名自己），这些请求组成一个批次（`free_batches`）；批次内全部进入终态后，只要有一个完成就给主持人生成一次 `handoff` 请求，全部失败则停下该任务链。每条房主消息开启一条任务链（`chain_id` 为该消息编号），链上 AI 发起的请求（派活与回交）最多 8 次，超出即停下（`free_chains`，原因 `budget` / `all_failed`），房主发新消息开启新链。Worker 用同一批次内的集合 SQL 完成回交，回交请求按（派活消息，主持人）唯一，重复执行不会重复唤醒。
 - **智能调度推荐**：接入程序用控制凭据 `POST recommendations {message_id, member_id, provider, confidence}` 为一条已交给主持人（`route`）的未点名消息记录推荐对象（在场的非该主持人成员，含手动与在线成员），写入 `member_recommendations`（每条消息一条，重复提交忽略；独立表，D1 重新应用 schema 即可），有效期 60 秒，主持人的请求不受影响。房主用 `POST recommendations/MESSAGE_ID {action:"adopt", mode}` 采纳：`interrupt` 取消主持人这条请求（已投递则作废主持人本次整个执行），`after` 等主持人这条请求进入终态。两种方式都先置为 `waiting`，由 `release`（采纳时与每次 `inbox` 读取时执行）在主持人请求已终态时为推荐成员建一条 `ask` 请求（`created_by=user`、`chain_id` 为原消息），状态改为 `adopted`。过期 5 秒宽限后采纳返回 409，重复采纳返回原结果。房间视图 `free.recommendations` 带成员名、状态、方式、置信度与剩余秒数 `expires_in`；备份、导入（仅作历史，不再生效）与删除一并处理。`inbox` 的待投递项带 `purpose` 供接入程序识别。`inbox.members` 只列由本机唤醒的成员；手动与在线成员另列于 `inbox.observers`（含待处理请求，供智能调度识别主持人与推荐对象），接入程序从不向它们投递。
 - **回应建议**：普通成员新发言的结构化 `to` 与正文在场成员 @ 合并保存到 `member_suggestions`（原消息编号、稳定成员编号），排除自己、代码与引用；不会创建请求。消息读取返回 `suggestions`，包含目标在场状态及已转换的请求编号。房主用 `POST suggestions {message_id,member_id}` 转换：同一事务记录用户确认消息，调用现有建请求路径，`message_id` 保留原回答、`chain_id` 使用用户确认消息编号、`created_by=user`。`UNIQUE(message_id,member_id)` 使重复或并发点击只生成一个请求及一条确认，终态不重新派发。权限、在场状态和未存档条件在写入事务内校验；Worker 使用批次断言。升级须应用包含新表的 schema；Python 重启时自动建表，D1 发布前显式执行。已有历史消息不补写建议。
-- **讨论中的直接提问**：讨论房间的用户消息带 `to`（点名成员名列表）时，除保存消息外为每位被点名的在场成员建一条 `ask` 请求（`created_by=user`，不入 `free_batches`，不占任务链预算之外的发言权或安排）；讨论运行中点名主持人不重复建请求。`GET inbox`、`POST executions` 与 `executions/ID` 对讨论房间同样可用，成员以 `execution_id`（接入程序交付）或 `request_ids`（手动 / 代发）提交 `chat` 回答，走自由房间的写入校验，不要求发言权；触发器 `require_message_floor` 对持有进行中 `member_executions` 的作者放行，`return_message_floor` 不因 `chat` 释放发言权。同一成员的 `member_executions` 与 `discussion_events` 互斥（任一方领取时另一方有进行中则返回 409）。房间视图 `asks` 给出最近请求与执行，供消息旁的状态徽标。本机服务以 `DiscussionWithQuestions`（`runner/discussion_service.mjs`）并行运行讨论 runner 与 `FreeRoomRunner`，共用同一成员会话绑定。
+- **讨论中的直接提问**：讨论房间的用户消息带 `to`（点名成员名列表）时，除保存消息外为每位被点名的在场成员建一条 `ask` 请求（`created_by=user`，不入 `free_batches`，不占安排）；讨论运行中点名主持人不重复建请求。`GET inbox`、`POST executions` 与 `executions/ID` 对讨论房间同样可用，成员以 `execution_id`（接入程序交付）或 `request_ids`（手动 / 代发）提交 `chat` 回答，走自由房间的写入校验。同一成员的 `member_executions` 与 `discussion_events` 互斥（任一方领取时另一方有进行中则返回 409）。房间视图 `asks` 给出最近请求与执行，供消息旁的状态徽标。本机服务以 `DiscussionWithQuestions`（`runner/discussion_service.mjs`）并行运行讨论 runner 与 `FreeRoomRunner`，共用同一成员会话绑定。
 - **在线成员**：`access=online` 的成员只读，不进入 `inbox`，不能用自己的凭证发言；房主以控制凭据代发其回答（`author` 为该成员、`submitted_by` 为用户、`source=proxy`），可带 `request_ids` 关闭它的待处理请求。
 - **关联房间**：从自由房间发起的讨论房间在建房时带 `parent_room_id`，记录在 `room_links`；讨论房间视图有 `parent_room`，自由房间视图列出 `linked_rooms`。头脑风暴的轮次、时长与名单因此天然独立于自由房间。
 - **手动成员**：手动成员不进入 `inbox`，也不能被领取执行；它用成员凭证读写，回答时可带 `request_ids` 关闭自己的待处理请求，不带则是普通发言、不关闭任何请求。
@@ -272,5 +272,5 @@ running 状态即使只有 pending 事件，也必须先暂停才能重新启动
 
 ## 参与者身份
 
-平台是类型，参与者是实例。`backend/identity.py`、Worker、CLI、启动器与网页使用同一规则：用户，或 `平台名` / `平台名-后缀`（后缀 1–16 个字母、数字、下划线或汉字）。各端按前缀确定平台，用于头像、可用客户端和适配器；消息作者、发言权、安排、成员、会话绑定与私有配置都按完整实例名区分，因此两个 Claude 实例有各自的会话和凭证。房间最多 12 位 AI。启动器为新实例继承平台的本机配置，但不继承另一实例绑定的会话；运行中邀请时由启动器取未用过的名称（`Claude-2`、`Claude-3` …），已移除成员的名称不会复用，以免续接到它的旧会话。
+平台是类型，参与者是实例。`backend/identity.py`、Worker、CLI、启动器与网页使用同一规则：用户，或 `平台名` / `平台名-后缀`（后缀 1–16 个字母、数字、下划线或汉字）。各端按前缀确定平台，用于头像、可用客户端和适配器；消息作者、安排、成员、会话绑定与私有配置都按完整实例名区分，因此两个 Claude 实例有各自的会话和凭证。房间最多 12 位 AI。启动器为新实例继承平台的本机配置，但不继承另一实例绑定的会话；运行中邀请时由启动器取未用过的名称（`Claude-2`、`Claude-3` …），已移除成员的名称不会复用，以免续接到它的旧会话。
 

@@ -148,12 +148,6 @@ class CliTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         return payload["error"]
 
-    def take_floor(self, speaker="Codex", actor=None):
-        """Claim the actual nominated floor using the public CLI and latest revision."""
-        floor = self.cli("floor", "view", self.room)
-        return self.cli("floor", "take", self.room, "--as", actor or speaker,
-                        "--speaker", speaker, "--revision", floor["revision"])
-
     def test_free_room_member_answers_through_its_execution(self):
         """A member credential file and execution id are enough; reposting without them is refused."""
         if self.external:
@@ -276,18 +270,13 @@ class CliTests(unittest.TestCase):
         self.assertIn("DISCUSS_ACCESS", broken.stderr)
 
     def plan_speech(self, speaker="Codex", actor=None):
-        """Create and claim a valid assignment for a content-focused CLI regression."""
-        if self.cli("floor", "view", self.room)["holder"] is None:
-            self.take_floor()
+        """Create a valid assignment for a content-focused CLI regression."""
         turn = self.cli("turn", "create", self.room, "--expert", speaker,
                         "--question", "测试安排", "--as", "Codex", "--submission-id", str(uuid.uuid4()))["turn"]
-        self.take_floor(speaker, actor)
         return turn["id"]
 
     def test_round_plan_from_stdin_relays_and_continue_needs_host_turn(self):
         """A plan file queues later experts; an answer relays without returning to the host."""
-        if self.cli("floor", "view", self.room)["holder"] is None:
-            self.take_floor()
         plan = json.dumps([{"expert": name, "question": "先答" if name == "Codex" else "再答"}
                            for name in ("Codex", "Gemini", "Claude", "DeepSeek", "Qwen", "Grok")], ensure_ascii=False)
         roster = self.cli("turn", "roster", self.room)
@@ -297,12 +286,11 @@ class CliTests(unittest.TestCase):
         current = self.cli("turn", "current", self.room)
         self.assertEqual((current["current_turn"]["expert"], [item["expert"] for item in current["queued_turns"]]), ("Codex", ["Gemini", "Claude", "DeepSeek", "Qwen", "Grok"]))
         self.assertEqual(self.rejected(["turn", "continue", self.room, "--as", "Codex"], 1)["http_status"], 409)
-        self.take_floor("Codex")
         self.cli("message", "post", self.room, "--body", "回答", "--as", "Codex", "--turn", created["turn"]["id"],
                  "--summary", "摘要", "--submission-id", str(uuid.uuid4()))
         current = self.cli("turn", "current", self.room)
-        self.assertEqual((current["current_turn"]["expert"], [item["expert"] for item in current["queued_turns"]], current["floor"]["next_speaker"]),
-                         ("Gemini", ["Claude", "DeepSeek", "Qwen", "Grok"], "Gemini"))
+        self.assertEqual((current["current_turn"]["expert"], [item["expert"] for item in current["queued_turns"]]),
+                         ("Gemini", ["Claude", "DeepSeek", "Qwen", "Grok"]))
         self.rejected(["turn", "create", self.room, "--plan-file", "-", "--expert", "Codex", "--as", "Codex",
                        "--submission-id", str(uuid.uuid4())])
 
@@ -342,7 +330,6 @@ class CliTests(unittest.TestCase):
         self.assertNotIn("mode=cli", prompt["prompt"])
         self.assertEqual(self.cli("turn", "view", self.room, turn["id"])["status"], "pending")
         self.cli("turn", "mark-notified", self.room, turn["id"], "--as", "Codex")
-        self.take_floor()
         message = self.cli("message", "post", self.room, "--body", "原文依据", "--turn", turn["id"],
                            "--submission-id", "workflow-answer", "--as", "Codex")["message"]
         current = self.cli("turn", "current", self.room)["current_turn"]
@@ -364,7 +351,6 @@ class CliTests(unittest.TestCase):
         self.assertTrue(self.cli(*args)["duplicate"])
         self.assertEqual(len(self.cli("turn", "list", self.room)["turns"]), 1)
         original = "只建议试用，不代表上线验收。\n条件：小范围验证；反例：已有合规问答工具。[6]\n\n主持人从原回答提取的引用：\n[6] https://example.org/source#conditions\n未核验的 43% 仅为候选条件。"
-        self.take_floor()
         answer = self.cli("message", "post", self.room, "--body", original, "--as", "Codex", "--turn", turn["id"],
                           "--submission-id", "recover-answer")["message"]
         self.assertEqual(self.cli("message", "view", self.room, answer["id"])["text"], original)
@@ -436,7 +422,6 @@ class CliTests(unittest.TestCase):
                              "--as", "Codex", "--author", "Claude", "--submission-id", "online-forward", "--turn", turn_id)["message"]
         self.assertEqual((forwarded["author"], forwarded["submitted_by"], forwarded["source"]),
                          ("Claude", "Codex", "host_proxy"))
-        self.take_floor()
         note = self.cli("message", "post", self.room, "--body", "主持说明", "--kind", "moderation",
                         "--as", "Codex", "--submission-id", "moderator-note")["message"]
         self.assertEqual(note["kind"], "moderation")
@@ -591,7 +576,6 @@ class CliTests(unittest.TestCase):
         self.assertEqual(oversized.returncode, 2)
         self.assertEqual(self.cli("turn", "current", self.room)["current_turn"]["status"], "pending")
         original = "🙂" * 32000
-        self.take_floor("Gemini", "Codex")
         message = self.cli(*arguments, stdin=original)["message"]
         self.assertEqual(self.cli("message", "view", self.room, message["id"])["text"], original)
         self.assertTrue(self.cli(*arguments, stdin=original)["duplicate"])

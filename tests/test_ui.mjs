@@ -1346,7 +1346,7 @@ test("web restart delegates duration to the topic without adding a hidden time l
 });
 
 const skip_room = (id, status = "paused") => ({ id, current_turn: { id: 7, expert: "Gemini", status: "pending" },
-  floor: { holder: null, next_speaker: "Gemini", revision: 3 }, runtime: { mode: "automatic", status, revision: 4 } });
+  runtime: { mode: "automatic", status, revision: 4 } });
 
 test("skip posts a skipped answer for the expert so the plan relays on, and resumes a paused run using its observed revision", async () => {
   for (const status of ["running", "paused"]) {
@@ -1356,11 +1356,10 @@ test("skip posts a skipped answer for the expert so the plan relays on, and resu
     Object.assign(context, { request_json: async (path, payload) => requests.push({ path, ...payload }),
       refresh_room: async () => { refreshed++; }, show_toast: text => notices.push(text) });
     await context.skip_turn();
-    assert.deepEqual(requests[0], { path: "/api/rooms/skip-room/floor", actor: "用户", speaker: "Gemini", action: "take", revision: 3 });
-    assert.equal(requests[1].path, "/api/rooms/skip-room/messages");
-    assert.deepEqual([requests[1].author, requests[1].submitted_by, requests[1].kind, requests[1].turn_id], ["Gemini", "用户", "opinion", 7]);
-    assert.equal(requests.length, status === "paused" ? 3 : 2);
-    if (status === "paused") assert.deepEqual(requests[2], { path: "/api/rooms/skip-room/runtime",
+    assert.equal(requests[0].path, "/api/rooms/skip-room/messages");
+    assert.deepEqual([requests[0].author, requests[0].submitted_by, requests[0].kind, requests[0].turn_id], ["Gemini", "用户", "opinion", 7]);
+    assert.equal(requests.length, status === "paused" ? 2 : 1);
+    if (status === "paused") assert.deepEqual(requests[1], { path: "/api/rooms/skip-room/runtime",
       action: "start", mode: "automatic", revision: 4, deadline: 0 });
     assert.equal(refreshed, 1);
     assert.match(notices[0], /已跳过本次发言/);
@@ -1368,13 +1367,13 @@ test("skip posts a skipped answer for the expert so the plan relays on, and resu
 });
 
 test("skip stops after write errors and explains a successful skip when resuming fails", async () => {
-  for (const fail_at of [1, 2, 3]) {
+  for (const fail_at of [1, 2]) {
     const { context } = theme_fixture();
     let calls = 0, refreshed = 0;
     context.test_state.room = skip_room("skip-room");
     Object.assign(context, { request_json: async () => { if (++calls === fail_at) throw new Error("状态已变化"); },
       refresh_room: async () => { refreshed++; }, show_toast() {} });
-    await assert.rejects(context.skip_turn(), fail_at < 3 ? /^Error: 状态已变化$/ : /本次发言已跳过，但未能继续讨论.*重启/);
+    await assert.rejects(context.skip_turn(), fail_at < 2 ? /^Error: 状态已变化$/ : /本次发言已跳过，但未能继续讨论.*重启/);
     assert.equal(calls, fail_at);
     assert.equal(refreshed, 1);
   }
@@ -1386,7 +1385,7 @@ test("skip keeps the original room and revision when navigation changes during t
   Object.assign(context, { request_json: async path => { paths.push(path); context.test_state.room = { id: "two" }; },
     refresh_room: async () => assert.fail("must not refresh the next room"), show_toast: () => assert.fail("must not toast on the next room") });
   await context.skip_turn();
-  assert.deepEqual(paths, ["/api/rooms/one/floor", "/api/rooms/one/messages", "/api/rooms/one/runtime"]);
+  assert.deepEqual(paths, ["/api/rooms/one/messages", "/api/rooms/one/runtime"]);
 });
 
 test("failure-card retry rechecks the retained task and never restarts an obsolete attempt", async () => {
@@ -1462,9 +1461,9 @@ test("finished discussions show their conclusion instead of a live timer or a la
 
 test("classic scheduling disables new work and explains a reached limit", () => {
   const fixture = theme_fixture();
-  for (const id of ['floor-status', 'take-floor', 'return-floor', 'turn-status', 'turn-note', 'turn-expert', 'turn-question', 'copy-turn', 'confirm-notified', 'forward-turn', 'cancel-turn', 'view-turn-answer', 'schedule-turn', 'schedule-note']) fixture.nodes.set(id, {});
+  for (const id of ['turn-status', 'turn-note', 'turn-expert', 'turn-question', 'copy-turn', 'confirm-notified', 'forward-turn', 'cancel-turn', 'view-turn-answer', 'schedule-turn', 'schedule-note']) fixture.nodes.set(id, {});
   fixture.context.test_state.room = { phase: 'discussing', host: 'Codex', experts: { Codex: 'cli' },
-    floor: { holder: 'Codex' }, limits: { reached: true } };
+    limits: { reached: true } };
   fixture.context.render_current_turn();
   assert.equal(fixture.nodes.get('schedule-turn').disabled, true);
   assert.match(fixture.nodes.get('schedule-note').textContent, /已达到讨论上限/);

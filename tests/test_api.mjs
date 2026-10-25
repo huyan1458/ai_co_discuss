@@ -272,7 +272,7 @@ test('an interjection the provider assigns to one expert is answered next, befor
   catch (error) {
     const view = await api(r.config, '');
     t.diagnostic(JSON.stringify({ held: view.held_since, turn: view.current_turn, queued: view.queued_turns, decisions: view.scheduler_decisions,
-      phase: view.phase, floor: view.floor, rows: r.store.pending().map(({ token, ...row }) => row), log: r.log }));
+      phase: view.phase, rows: r.store.pending().map(({ token, ...row }) => row), log: r.log }));
     throw error;
   }
   const room = await api(r.config, '');

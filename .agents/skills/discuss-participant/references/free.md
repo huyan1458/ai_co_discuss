@@ -4,7 +4,7 @@
 
 ## 成员回答
 
-没有发言权、安排和阶段，不执行 `execution enter`。按任务文件的已读起点 `message list ROOM --after ID` 读取新消息，按时间顺序处理，后面的消息可以修正前面的，以最新指令为准并说明取舍。完成后用 `message post ROOM --as 本人 --kind chat --execution 执行编号 --access-file FILE` 提交一次回答。
+没有安排和阶段，不执行 `execution enter`。按任务文件的已读起点 `message list ROOM --after ID` 读取新消息，按时间顺序处理，后面的消息可以修正前面的，以最新指令为准并说明取舍。完成后用 `message post ROOM --as 本人 --kind chat --execution 执行编号 --access-file FILE` 提交一次回答。
 
 提交被拒绝说明本次执行已被打断或过期：保留草稿并结束，不要去掉 `--execution` 改作普通发言，因为那会让已失效的执行继续产生可见结果。
 

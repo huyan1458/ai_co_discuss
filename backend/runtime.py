@@ -180,12 +180,6 @@ def authorize_participant(connection, room_id, identity, operation, payload):
                                     (room_id, author)).fetchone()
         if author != actor and not (online and identity["role"] in ("owner", "host")):
             raise PermissionError("只能提交本人观点，或由房主、主持人代发在线成员原文")
-    elif operation == "floor":
-        speaker = payload.get("speaker", actor)
-        online = connection.execute("SELECT 1 FROM room_members WHERE room_id=? AND name=? AND access='online' AND status='active'",
-                                    (room_id, speaker)).fetchone()
-        if identity["role"] != "owner" and speaker != actor and not (identity["role"] == "host" and online):
-            raise PermissionError("只能操作本人发言权")
     elif operation != "attachments" and identity["role"] != "owner":
         if identity["role"] != "host" or operation not in ("topic", "state", "turns", "limits"):
             raise PermissionError("本成员没有此管理权限")
@@ -224,11 +218,14 @@ def authorize_write(connection, room_id, token, operation, payload):
     if operation == "messages":
         if payload.get("author") != actor:
             raise PermissionError("自动执行不能代发其他参与者")
-        if event["role"] == "expert" and payload.get("turn_id") != event["turn_id"]:
+        if event["role"] == "expert" and payload.get("turn_id") not in (None, event["turn_id"]):
             raise PermissionError("回答必须关联本次安排")
-    elif operation == "floor":
-        if payload.get("speaker", actor) != actor:
-            raise PermissionError("自动执行只能操作本人发言权")
+        if event["role"] == "expert" and payload.get("turn_id") is None:
+            # Without a named arrangement the answer belongs to the expert's open one, which must be this execution's.
+            open_turn = connection.execute("SELECT id FROM discussion_turns WHERE room_id=? AND expert=? AND status IN ('pending','notified')",
+                                           (room_id, actor)).fetchone()
+            if not open_turn or open_turn["id"] != event["turn_id"]:
+                raise PermissionError("回答必须关联本次安排")
     elif operation == "attachments":
         pass
     elif event["role"] != "host" or operation not in ("topic", "state", "turns", "limits"):

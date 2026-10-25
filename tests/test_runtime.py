@@ -80,12 +80,11 @@ class RuntimeTests(unittest.TestCase):
         return value
 
     def test_user_asks_members_directly_while_the_discussion_is_paused(self):
-        """A named member answers a direct question outside the floor, turns and rounds, even when the topic is paused."""
+        """A named member answers a direct question outside turns and rounds, even when the topic is paused."""
         status, room = self.request("/api/rooms", {"title": "直接提问", "host": "Codex", "phase": "paused", "runtime_mode": "automatic",
             "experts": {"Codex": "cli", "Claude": "cli"}})
         self.assertEqual(status, 201, room)
         path = f"/api/rooms/{room['id']}"
-        floor_before = self.request(path)[1]["floor"]
         ask = lambda text, to: self.request(path + "/messages", {"author": "用户", "text": text, "to": to, "submission_id": uuid.uuid4().hex})
         self.assertEqual(ask("谁是主持？", ["Nobody"])[0], 400)
         question = ask("@Claude 你怎么看？", ["Claude"])
@@ -100,7 +99,7 @@ class RuntimeTests(unittest.TestCase):
         saved = self.request(path + "/messages", answer, self.member_tokens["Claude"])
         self.assertEqual(saved[0], 201, saved)
         view = self.request(path)[1]
-        self.assertEqual(view["floor"], floor_before)
+        self.assertNotIn("floor", view)
         self.assertEqual([item["status"] for item in view["asks"]["requests"]], ["completed"])
         self.assertEqual((view["completed_rounds"], view["current_turn"]), (0, None))
 
@@ -134,8 +133,6 @@ class RuntimeTests(unittest.TestCase):
                    "members": [{"name": "Qwen", "access": "online", "token": token}]}
         self.assertEqual(self.request(self.path + "/topic", payload, self.owner)[0], 200)
         turn = self.request(self.path + "/turns", {"actor": "用户", "expert": "Qwen", "question": "问题", "submission_id": "manual-online-turn"})[1]["turn"]
-        floor = self.request(self.path + "/floor")[1]
-        self.assertEqual(self.request(self.path + "/floor", {"actor": "用户", "speaker": "Qwen", "action": "take", "revision": floor["revision"]})[0], 200)
         answer = {"author": "Qwen", "submitted_by": "Qwen", "source": "cli", "text": "原文", "turn_id": turn["id"], "submission_id": "online-answer"}
         self.assertEqual(self.request(self.path + "/messages", answer, token)[0], 403)
         answer.update(submitted_by="用户", source="proxy")
@@ -198,9 +195,6 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(status, 201, result)
         runtime = self.request(self.path + "/runtime")[1]
         token = self.enter(self.events()[-1]) if runtime["mode"] == "automatic" else self.member_tokens["Codex"]
-        floor = self.request(self.path + "/floor")[1]
-        self.assertEqual(self.request(self.path + "/floor", {"actor": "Codex", "action": "take",
-            "revision": floor["revision"]}, token)[0], 200)
         answer = {"author": "Codex", "kind": "opinion", "source": "cli", "text": "测试原文",
                   "submission_id": "limited-answer", "turn_id": result["turn"]["id"]}
         self.assertEqual(self.request(self.path + "/messages", answer, token)[0], 201)
@@ -338,8 +332,6 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(restarted["failures"], failures)
             self.assertEqual(self.request(self.path)[1]["current_turn"]["id"], turn["id"])
         token = self.enter(self.events()[-1])
-        floor = self.request(self.path + "/floor")[1]
-        self.request(self.path + "/floor", {"actor": "Claude", "action": "take", "revision": floor["revision"]}, token)
         status, answer = self.request(self.path + "/messages", {"author": "Claude", "source": "cli", "kind": "opinion",
             "text": "重试后的回答", "summary": "回答已保存", "turn_id": turn["id"], "submission_id": "retried-answer"}, token)
         self.assertEqual(status, 201, answer)
@@ -377,11 +369,9 @@ class RuntimeTests(unittest.TestCase):
         user = self.request(self.path + "/messages", {"author": "用户", "text": "用户留言",
                             "submission_id": "timed-user", "elapsed_seconds": 999999})[1]["message"]
         self.assertIsNone(user["elapsed_seconds"])
-        self.take_floor("Codex", host_token)
         turn = self.request(self.path + "/turns", {"actor": "Codex", "expert": "Claude",
             "question": "给出回答", "submission_id": "timed-turn"}, host_token)[1]["turn"]
         expert_token = self.enter(self.events()[-1])
-        self.take_floor("Claude", expert_token)
         answer = {"author": "Claude", "source": "cli", "text": "专家回答",
                   "turn_id": turn["id"], "submission_id": "timed-answer"}
         status, saved = self.request(self.path + "/messages", answer, expert_token)
@@ -492,8 +482,6 @@ class RuntimeTests(unittest.TestCase):
         # The owner cannot impersonate a completed host execution, even on replay.
         self.assertEqual(self.request(self.path + "/turns", payload, self.owner)[0], 403)
         token = self.enter(self.events()[-1])
-        floor = self.request(self.path + "/floor")[1]
-        self.assertEqual(self.request(self.path + "/floor", {"actor": "Claude", "action": "take", "revision": floor["revision"]}, token)[0], 200)
         answer = {"author": "Claude", "submitted_by": "Claude", "source": "cli", "kind": "opinion",
             "turn_id": turn["id"], "text": "实际回答", "summary": "摘要", "submission_id": "runtime-answer"}
         status, saved = self.request(self.path + "/messages", answer, token)
@@ -505,15 +493,8 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(events[2]["participant"], "Codex")
         self.assertNotIn("token_hash", json.dumps(events))
 
-    def take_floor(self, actor, token):
-        """Claim the floor that the last handoff nominated."""
-        floor = self.request(self.path + "/floor")[1]
-        self.assertEqual(self.request(self.path + "/floor", {"actor": actor, "action": "take",
-            "revision": floor["revision"]}, token)[0], 200)
-
     def answer(self, expert, turn_id, token, submission_id):
-        """Take the floor and save one formal answer with the expert's execution token."""
-        self.take_floor(expert, token)
+        """Save one formal answer with the expert's execution token."""
         status, saved = self.request(self.path + "/messages", {"author": expert, "source": "cli", "kind": "opinion",
             "turn_id": turn_id, "text": "实际回答", "summary": "摘要", "submission_id": submission_id}, token)
         self.assertEqual(status, 201, saved)
@@ -600,7 +581,7 @@ class RuntimeTests(unittest.TestCase):
         events = self.events()
         self.assertEqual((events[-1]["participant"], events[-1]["role"]), ("Gemini", "expert"))
         room = self.request(self.path)[1]
-        self.assertEqual((room["current_turn"]["expert"], room["queued_turns"], room["floor"]["next_speaker"]), ("Gemini", [], "Gemini"))
+        self.assertEqual((room["current_turn"]["expert"], room["queued_turns"]), ("Gemini", []))
         self.answer("Gemini", created["queued"][0]["id"], self.enter(events[-1]), "plan-answer-2")
         self.assertEqual((self.events()[-1]["participant"], self.events()[-1]["role"]), ("Codex", "host"))
 
@@ -643,7 +624,6 @@ class RuntimeTests(unittest.TestCase):
         token = self.enter(self.events()[-1])
         self.answer("Gemini", room["current_turn"]["id"], token, "arrangement-Gemini")
         host_token = self.enter(self.events()[-1])
-        self.take_floor("Codex", host_token)
         time.sleep(1.1)  # plans are grouped by creation second, as real experts always take longer than this
         status, plan = self.request(self.path + "/turns", {"actor": "Codex", "submission_id": "arrangement-next",
             "roster": self.roster_revision(), "turns": [{"expert": "Gemini", "question": "补充"}, {"expert": "Claude", "question": "回应"}]}, host_token)
@@ -765,7 +745,6 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual((self.events()[-1]["participant"], self.events()[-1]["role"]), ("Codex", "host"))
         self.assertEqual(self.request(self.path + "/state", {"actor": "Claude", "text": "迟到"}, old_token)[0], 403)
         host = self.enter(self.events()[-1])
-        self.take_floor("Codex", host)
         self.assertEqual(self.request(self.path + "/turns/continue", {"actor": "Codex"}, host)[0], 200)
         self.assertEqual(self.request(self.path)[1]["current_turn"]["expert"], "Gemini")
 
@@ -800,7 +779,6 @@ class RuntimeTests(unittest.TestCase):
             "roster": self.roster_revision(), "turns": [{"expert": "Qwen", "question": "手动发言"}, {"expert": "Gemini", "question": "下一位"}, {"expert": "Claude", "question": "再下一位"}]}, host)
         self.assertEqual(status, 201, created)
         turn_id = created["turn"]["id"]
-        self.take_floor("Qwen", self.member_tokens["Qwen"])
         self.assertEqual(self.request(self.path + f"/turns/{turn_id}", {"actor": "用户", "status": "cancelled"})[0], 200)
         room = self.request(self.path)[1]
         self.assertEqual((room["current_turn"]["status"], room["runtime"]["status"]), ("cancelled", "running"))
@@ -811,7 +789,6 @@ class RuntimeTests(unittest.TestCase):
             "turn_id": turn_id, "text": "迟到回答", "summary": "迟到", "submission_id": "skipped-late-answer"}, self.member_tokens["Qwen"])
         self.assertIn(late[0], (400, 403, 409))
         host = self.enter(self.events()[-1])
-        self.take_floor("Codex", host)
         self.assertEqual(self.request(self.path + "/turns/continue", {"actor": "Codex"}, host)[0], 200)
         room = self.request(self.path)[1]
         self.assertEqual((room["current_turn"]["expert"], room["current_turn"]["status"]), ("Gemini", "pending"))
@@ -830,7 +807,6 @@ class RuntimeTests(unittest.TestCase):
         host_token = self.enter(self.events()[0])
         turn = self.request(self.path + "/turns", {"actor": "Codex", "expert": "Qwen", "question": "给出判断",
                                                    "submission_id": "adopt-turn"}, host_token)[1]["turn"]
-        self.take_floor("Qwen", self.member_tokens["Qwen"])
         status, saved = self.request(self.path + "/messages", {"author": "Qwen", "source": "cli", "kind": "opinion", "turn_id": turn["id"],
             "text": "实际回答", "summary": "摘要", "submission_id": "adopt-answer", "session_id": adopt["session_id"], "session_client": "codex"},
             self.member_tokens["Qwen"])
@@ -916,7 +892,6 @@ class RuntimeTests(unittest.TestCase):
         room = self.request(self.path)[1]
         self.assertEqual((room["current_turn"]["status"], [item["expert"] for item in room["queued_turns"]]), ("answered", ["Gemini"]))
         host = self.enter(self.events()[-1])
-        self.take_floor("Codex", host)
         status, resumed = self.request(self.path + "/turns/continue", {"actor": "Codex"}, host)
         self.assertEqual(status, 200, resumed)
         room = self.request(self.path)[1]
@@ -930,7 +905,6 @@ class RuntimeTests(unittest.TestCase):
         room = self.request(self.path)[1]
         self.assertEqual(([item["expert"] for item in room["queued_turns"]], self.events()[-1]["role"]), (["Gemini"], "host"))
         host = self.enter(self.events()[-1])
-        self.take_floor("Codex", host)
         status, _ = self.request(self.path + "/turns", {"actor": "Codex", "expert": "Codex", "question": "重排",
             "submission_id": "plan-replaced"}, host)
         self.assertEqual(status, 201)
@@ -973,7 +947,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(results.count(200), 1)
         self.assertTrue(any(code in (403, 409) for code in results))
 
-    def test_schema_reinitialization_preserves_runtime_and_floor(self):
+    def test_schema_reinitialization_preserves_runtime(self):
         """Repeated startup never resets active work or creates new wakeups."""
         if not hasattr(self, "database"):
             self.skipTest("SQLite initialization is covered locally; Worker migration uses separate smoke checks")

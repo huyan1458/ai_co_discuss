@@ -214,10 +214,6 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .channel-title > :not(.channel-title-copy) { flex-shrink: 0; }
 .channel-title-copy { display: grid; gap: 1px; min-width: 0; }
 .channel-title h1 { color: #f1f2f5; font-size: 16px; font-weight: 650; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.channel-floor-status { display: flex; align-items: center; gap: 4px; min-width: 0; color: #a6afbe; font-size: 11px; line-height: 1.4; }
-.channel-floor-status.is-held { color: #b8c5ed; }
-.channel-floor-status > [class*="icon"] { width: 12px; height: 12px; flex-shrink: 0; }
-.channel-floor-status > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .channel-header-context { display: flex; align-items: center; gap: 8px; padding-left: 15px; margin-left: 5px; border-left: 1px solid #ffffff13; color: #929ba9; font-size: 12px; white-space: nowrap; }
 .channel-header-context > span { color: #656d7b; }
 .channel-header-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
@@ -962,7 +958,6 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-room-row.active .channel-room-select > [class*="icon"] { color: var(--channel-accent); }
   .channel-title h1 { font-weight: 600; letter-spacing: .01em; }
   .channel-title-icon { color: #8c8c8c; }
-  .channel-floor-status.is-held { color: #666666; }
   .channel-search-input input { border: 1px solid #dedede; border-radius: 6px; background: #ffffff; }
   .channel-brief-toggle { color: #242424; }
   .channel-brief-toggle strong { font-weight: 600; }

@@ -448,7 +448,6 @@ export class DiscussionRunner {
     const room = await api(this.config, '');
     if (room.latest_id !== seen.latest_id || (room.held_since || 0) !== seen.held_since) throw new Error('判断期间房间有新留言或用户操作，放弃应用');
     const actor = room.host;
-    if (room.floor.holder !== actor) await api(this.config, '/floor', { actor, speaker: actor, action: 'take', revision: room.floor.revision }, token);
     if (plan.phase) await api(this.config, '/topic', { actor, phase: plan.phase }, token);
     if (plan.continue_plan) await api(this.config, '/turns/continue', { actor }, token);
     else {

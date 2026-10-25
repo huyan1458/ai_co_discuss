@@ -676,33 +676,30 @@ class InstanceTests(FreeRoomTests):
             "members": [{"name": name, "token": uuid.uuid4().hex, "access": "online" if name == "Codex" else "manual"}
                         for name in ("Claude-主持", "Claude", "Codex")]}, uuid.uuid4().hex)
         self.assertEqual(status, 201, room)
-        self.assertEqual(room["floor"]["holder"], "Claude-主持")
+        self.assertEqual(room["host"], "Claude-主持")
         self.assertEqual(self.request("/api/rooms", {"title": "无效", "goal": "x", "experts": {"Claudex": "cli"}})[0], 400)
         many = {f"Claude-{number}": "cli" for number in range(13)}
         self.assertEqual(self.request("/api/rooms", {"title": "过多", "goal": "x", "experts": many})[0], 400)
 
 
 class MigrationTests(unittest.TestCase):
-    """The floor trigger is replaced on existing databases, and legacy rooms stay brainstorm rooms."""
+    """The retired floor trigger is dropped on existing databases, and legacy rooms stay brainstorm rooms."""
 
-    def test_existing_floor_trigger_is_replaced_and_rerun_is_harmless(self):
-        """An old trigger definition is upgraded; repeating initialization changes nothing."""
+    def test_existing_floor_trigger_is_dropped_and_rerun_is_harmless(self):
+        """An old trigger definition disappears; repeating initialization changes nothing."""
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "old.db"
             init_database(database, seed=True)
             with closing(sqlite3.connect(database)) as connection, connection:
-                connection.execute("DROP TRIGGER require_message_floor")
                 connection.execute("""CREATE TRIGGER require_message_floor BEFORE INSERT ON messages
                     WHEN NEW.author<>'用户' AND NOT EXISTS (SELECT 1 FROM room_floor WHERE room_id=NEW.room_id AND holder=NEW.author)
                     BEGIN SELECT RAISE(ABORT, 'floor_required'); END""")
             init_database(database)
             init_database(database)
-            with closing(sqlite3.connect(database)) as connection:
-                sql = connection.execute("SELECT sql FROM sqlite_master WHERE name='require_message_floor'").fetchone()[0]
-                self.assertIn("room_modes", sql)
+            with closing(sqlite3.connect(database)) as connection, connection:
+                self.assertIsNone(connection.execute("SELECT sql FROM sqlite_master WHERE name='require_message_floor'").fetchone())
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM room_modes").fetchone()[0], 0)
-                with self.assertRaises(sqlite3.IntegrityError):
-                    connection.execute("INSERT INTO messages (room_id,author,text,source,submission_id,created_at) VALUES ('welcome','Codex','x','cli','late-0001','now')")
+                connection.execute("INSERT INTO messages (room_id,author,text,source,submission_id,created_at) VALUES ('welcome','Codex','x','cli','late-0001','now')")
 
     def test_early_free_tables_gain_later_columns(self):
         """A database created before the member columns existed is upgraded in place."""

@@ -101,8 +101,6 @@ test('Worker proxies only active online members and rechecks that identity atomi
   const room = (await f.request('', { title: '在线代发', host: 'Codex', phase: 'initial', experts: { Codex: 'cli', Qwen: 'online' } })).body;
   const path = `/${room.id}`;
   const turn = (await f.request(`${path}/turns`, { actor: '用户', expert: 'Qwen', question: '问题', submission_id: 'proxy-turn' })).body.turn;
-  const floor = (await f.request(`${path}/floor`)).body;
-  assert.equal((await f.request(`${path}/floor`, { actor: '用户', speaker: 'Qwen', action: 'take', revision: floor.revision })).status, 200);
   const answer = { author: 'Qwen', submitted_by: 'Qwen', source: 'cli', text: '在线原文', turn_id: turn.id, submission_id: 'proxy-answer' };
   assert.equal((await f.request(`${path}/messages`, answer, f.member_tokens.Qwen)).status, 403);
   answer.submitted_by = '用户'; answer.source = 'proxy';
@@ -226,8 +224,6 @@ test('Worker imports a backup under fresh numbers, rewritten references and the 
   const file = (await (await f.raw(`${path}/attachments?${params}`, { method: 'POST', body: data })).json()).attachment;
   await f.request(`${path}/messages`, { author: '用户', text: `补充 #${first.id}`, reply_to: first.id, attachment_ids: [file.id], submission_id: 'import-second' });
   const turn = (await f.request(`${path}/turns`, { actor: '用户', expert: 'Qwen', question: `请回应 #${first.id}`, submission_id: 'import-turn' })).body.turn;
-  const floor = (await f.request(`${path}/floor`)).body;
-  await f.request(`${path}/floor`, { actor: '用户', speaker: 'Qwen', action: 'take', revision: floor.revision });
   const answer = await f.request(`${path}/messages`, { author: 'Qwen', submitted_by: '用户', source: 'proxy', text: `回应 #${first.id}`, turn_id: turn.id, submission_id: 'import-answer' });
   assert.equal(answer.status, 201, JSON.stringify(answer.body));
   const backup = JSON.parse(JSON.stringify((await f.request(`${path}/backup`)).body).replaceAll(room.id, 'importedroom'));
@@ -323,8 +319,6 @@ async function timed_message_fixture(test_case, role) {
     .run(f.dispatched - 200, f.dispatched + 25, f.event);
   f.sql.prepare('UPDATE event_timings SET dispatched_at=? WHERE event_id=?').run(f.dispatched, f.event);
   if (role === 'expert') {
-    const floor = (await f.request(`${f.path}/floor`)).body;
-    assert.equal((await f.request(`${f.path}/floor`, { actor: 'Codex', action: 'take', revision: floor.revision }, f.token)).status, 200);
   }
   f.payload = { author: 'Codex', source: 'cli', text: '定时保存的正文', submission_id: 'timed-message',
     kind: role === 'host' ? 'moderation' : 'opinion', ...(turn_id ? { turn_id } : {}), elapsed_seconds: 999999 };
@@ -445,8 +439,6 @@ test('Worker accepts SQLite-formatted expert JSON after migration, including rea
   f.sql.prepare('UPDATE topic_settings SET experts=? WHERE room_id=?').run('{"Codex": "cli"}', id);
   const turn = await f.request(`/${id}/turns`, { actor: '用户', expert: 'Codex', question: '迁移后继续', submission_id: 'migration-turn' });
   assert.equal(turn.status, 201, JSON.stringify(turn.body));
-  const floor = await f.request(`/${id}/floor`);
-  assert.equal((await f.request(`/${id}/floor`, { actor: 'Codex', action: 'take', revision: floor.body.revision })).status, 200);
   const answer = await f.request(`/${id}/messages`, { author: 'Codex', kind: 'opinion', source: 'cli', text: '迁移后的回答', turn_id: turn.body.turn.id, submission_id: 'migration-answer' });
   assert.equal(answer.status, 201, JSON.stringify(answer.body));
   const checked = await f.request(`/${id}/limits`, { actor: '用户' });
@@ -535,8 +527,6 @@ test('Worker unlimited runs keep bounded execution leases, authorization and pau
     const answer_token = crypto.randomUUID();
     assert.equal((await f.request(`/${id}/events/${execution.id}`, { action: 'reserve', execution_token: answer_token })).status, 200);
     assert.equal((await f.request(`/${id}/events/${execution.id}`, { action: 'enter', session_id: 'answer' }, answer_token)).status, 200);
-    const floor = (await f.request(`/${id}/floor`)).body;
-    assert.equal((await f.request(`/${id}/floor`, { actor: 'Codex', action: 'take', revision: floor.revision }, answer_token)).status, 200);
     assert.equal((await f.request(`/${id}/messages`, { author: 'Codex', kind: 'opinion', source: 'cli',
       text: '原文', submission_id: 'unlimited-answer', turn_id: turn.id }, answer_token)).status, 201);
     const room = (await f.request(`/${id}/limits`, { actor: '用户' })).body;
@@ -654,8 +644,6 @@ test('Worker manual expert answers a woken discussion with its own credential an
   assert.deepEqual([roster.unregistered, roster.waiting.includes('Qwen')], [['Qwen'], false]);
   assert.equal((await f.request(`/${id}/register`, {}, manual.token)).status, 200);
   const turn = (await f.request(`/${id}/turns`, { actor: '用户', expert: 'Qwen', question: '观点', submission_id: 'manual-turn' })).body.turn;
-  const floor = (await f.request(`/${id}/floor`)).body;
-  assert.equal((await f.request(`/${id}/floor`, { actor: 'Qwen', action: 'take', revision: floor.revision })).status, 200);
   const answer = await f.request(`/${id}/messages`, { author: 'Qwen', submitted_by: 'Qwen', source: 'cli', kind: 'opinion',
     turn_id: turn.id, text: '实际回答', summary: '摘要', submission_id: 'manual-answer' });
   assert.equal(answer.status, 201, JSON.stringify(answer.body));
@@ -976,12 +964,11 @@ test('Worker smart scheduling recommendations wait for the user, then interrupt 
   assert.equal((await adopt(third, 'after')).status, 409);
 });
 
-test('Worker discussion members answer direct questions from the user outside the floor, turns and rounds', async t => {
+test('Worker discussion members answer direct questions from the user outside turns and rounds', async t => {
   const f = await worker_fixture(t);
   const created = await f.request('', { title: '直接提问', host: 'Codex', phase: 'paused', runtime_mode: 'automatic', experts: { Codex: 'cli', Claude: 'cli' } });
   assert.equal(created.status, 201, JSON.stringify(created.body));
   const path = `/${created.body.id}`;
-  const floor_before = (await f.request(path)).body.floor;
   const ask = (text, to) => f.request(`${path}/messages`, { author: '用户', text, to, submission_id: crypto.randomUUID().replaceAll('-', '') });
   assert.equal((await ask('谁是主持？', ['Nobody'])).status, 400);
   assert.equal((await ask('@Claude 你怎么看？', ['Claude'])).status, 201);
@@ -995,7 +982,7 @@ test('Worker discussion members answer direct questions from the user outside th
   const saved = await f.request(`${path}/messages`, answer, f.member_tokens.Claude);
   assert.equal(saved.status, 201, JSON.stringify(saved.body));
   const view = (await f.request(path)).body;
-  assert.deepEqual(view.floor, floor_before);
+  assert.equal(view.floor, undefined);
   assert.deepEqual(view.asks.requests.map(item => item.status), ['completed']);
   assert.deepEqual([view.completed_rounds, view.current_turn], [0, null]);
 });
@@ -1227,7 +1214,7 @@ test('Worker accepts named instances of one platform and rejects invalid names',
   const f = await worker_fixture(t);
   const room = await f.request('', { title: '双 Claude', goal: 'x', host: 'Claude-主持', experts: { 'Claude-主持': 'cli', Claude: 'cli' } });
   assert.equal(room.status, 201, JSON.stringify(room.body));
-  assert.equal(room.body.floor.holder, 'Claude-主持');
+  assert.equal(room.body.host, 'Claude-主持');
   assert.equal((await f.request('', { title: '无效', goal: 'x', experts: { Claudex: 'cli' } })).status, 400);
   const r = await free_worker_room(f);
   assert.equal((await f.request(`${r.path}/members`, { name: 'Claude-评审', token: 'reviewer-free'.repeat(4) }, r.owner)).status, 200);

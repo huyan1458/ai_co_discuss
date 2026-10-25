@@ -10,7 +10,7 @@ const room = computed(() => view.value.room);
 const turn = computed(() => room.value?.current_turn);
 const active_turn = computed(() => turn.value && ["pending", "notified"].includes(turn.value.status));
 const inactive = computed(() => ["paused", "concluded"].includes(room.value?.phase));
-const can_schedule = computed(() => !active_turn.value && !inactive.value && !room.value?.limits?.reached && room.value?.floor?.holder === room.value?.host && Object.keys(room.value?.experts || {}).length > 0);
+const can_schedule = computed(() => !active_turn.value && !inactive.value && !room.value?.limits?.reached && Object.keys(room.value?.experts || {}).length > 0);
 const base = computed(() => `${location.origin}/r/${room.value?.id}`);
 const automatic = computed(() => room.value?.runtime?.mode === "automatic");
 const access = computed(() => view.value.access || {});
@@ -47,7 +47,6 @@ const progress_summary = computed(() => {
       <div class="topic-brief"><div><h3>讨论目标</h3><p>{{ room.goal || '待主持人根据用户原文补全' }}</p></div><div><h3>当前焦点</h3><p>{{ room.focus || '尚未设置当前焦点' }}</p></div></div>
       <div class="host-status">
         <section v-if="room.limits" class="turn-panel"><div class="turn-header"><h3>讨论上限与进度</h3><UBadge :color="room.limits.reached && room.phase !== 'concluded' ? 'warning' : 'neutral'" variant="subtle">{{ room.phase === 'concluded' ? '已收束' : room.limits.reached ? '已达上限' : room.limits.started_at ? '已开始计时' : '尚未计时' }}</UBadge></div><p>{{ bridge.limits_label(room.limits) }}</p><UButton v-if="room.limits.reached && !inactive" label="检查并执行到限处理" variant="outline" color="neutral" :loading="pending === 'check_limits'" @click="act('check_limits')" /><p class="fine-print">在“编辑议题”中调整参数。自动模式由接入程序检查；手动模式由主持人或此按钮执行到限处理。</p></section>
-        <section v-if="room.floor" class="turn-panel"><div class="turn-header"><h3>发言权</h3><UBadge color="neutral" variant="subtle">{{ bridge.floor_status(room) }}</UBadge></div><div class="button-row"><UButton v-if="!room.floor.holder" :label="`为 ${bridge.display_name(room.floor.next_speaker)} 领取`" :loading="pending === 'take_floor'" class="channel-primary-button" @click="act('take_floor')" /><UButton v-else label="归还发言权" :loading="pending === 'return_floor'" variant="outline" color="neutral" class="channel-surface-button" @click="act('return_floor')" /></div><p class="fine-print">发言或安排保存后自动归还；用户本人可随时留言。</p></section>
       </div>
       <section class="turn-panel host-turn"><div class="turn-header"><h3>当前发言安排</h3><UBadge :color="active_turn ? 'primary' : 'neutral'" variant="subtle">{{ bridge.turn_label(turn, room) }}</UBadge></div>
         <template v-if="turn"><div class="turn-expert"><UAvatar :src="bridge.identities[turn.expert]?.icon" :text="bridge.identities[turn.expert]?.initials" :alt="turn.expert" class="message-mark channel-avatar" :class="bridge.identities[turn.expert]?.style" /><div><strong>{{ turn.expert }}</strong><small>发言安排 #{{ turn.id }}</small></div></div><p class="turn-question">{{ turn.question }}</p>
@@ -58,7 +57,7 @@ const progress_summary = computed(() => {
       </section>
       
       <div class="form-footer"><a :href="`${base}/turns`" target="_blank" rel="noopener" class="subtle-link">发言安排历史 <UIcon name="i-lucide-arrow-up-right" /></a><UButton icon="i-lucide-plus" label="安排下一位专家" class="channel-primary-button" :disabled="!can_schedule" @click="$emit('open', 'schedule')" /></div>
-      <p v-if="!can_schedule" class="fine-print host-schedule-hint">{{ inactive ? '话题已暂停或收束，修改阶段后可以继续安排。' : active_turn ? '先完成或取消当前安排，再安排下一位。' : room.limits?.reached ? '已达到讨论上限，请检查到限处理；需要继续时先暂停并调整参数。' : room.floor?.holder !== room.host ? '主持人领取发言权后可安排下一位。' : '请先在议题资料中配置参与专家。' }}</p>
+      <p v-if="!can_schedule" class="fine-print host-schedule-hint">{{ inactive ? '话题已暂停或收束，修改阶段后可以继续安排。' : active_turn ? '先完成或取消当前安排，再安排下一位。' : room.limits?.reached ? '已达到讨论上限，请检查到限处理；需要继续时先暂停并调整参数。' : '请先在议题资料中配置参与专家。' }}</p>
     </template>
     <template v-else>
       <div class="page-heading access-heading">

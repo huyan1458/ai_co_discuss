@@ -23,7 +23,6 @@ const HELP = `AI CoDiscuss CLI
   attachment COMMAND    上传、查询与下载讨论附件
   turn COMMAND          安排发言、读取待办与回答
   state COMMAND         读取或保存共享状态
-  floor COMMAND         查看、领取或归还发言权
   run COMMAND           配置、启动或暂停网站上的讨论
   execution COMMAND     进入或查询一次 AI 执行
   health                检查网站健康状态

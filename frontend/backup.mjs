@@ -68,7 +68,7 @@ export function room_markdown(snapshot) {
   if (brief) lines.push("## 主持简报", `覆盖至 #${brief.until}；更新：${brief.updated_at}`, original_block(brief.text));
   if (tables.discussion_limits?.[0]) lines.push("## 讨论上限", original_block(JSON.stringify(tables.discussion_limits[0], null, 2)));
   lines.push("## 共识与分歧", `覆盖至 #${room.state_until}`, original_block(room.state_text),
-    "## 发言权", original_block(JSON.stringify(tables.room_floor[0] || {}, null, 2)), "## 全部消息");
+    "## 全部消息");
   for (const message of tables.messages) lines.push(message_markdown(message, details.get(message.id), summaries.get(message.id),
     (tables.attachments || []).filter(file => file.message_id === message.id)));
   if (!tables.messages.length) lines.push("暂无消息。");
