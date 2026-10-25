@@ -43460,7 +43460,7 @@ var _H = {
 							}, P(I(o).composer_error || I(o).upload_status), 9, NW)) : Y("", !0),
 							ke.value ? (U(), W("div", PW, [
 								q(D, { name: "i-lucide-user-round-x" }),
-								K("span", null, P(I(s).display_name(ke.value.name)) + " 尚未注册：需把启动指令粘贴到其 AI 会话，由它自己注册后才算到场", 1),
+								K("span", null, P(I(s).display_name(ke.value.name)) + " 待注册：在其会话中粘贴启动指令", 1),
 								I(o).access?.can_manage ? (U(), G(c, {
 									key: 0,
 									icon: On.value === ke.value.name ? "i-lucide-check" : "i-lucide-copy",
@@ -43635,7 +43635,7 @@ var _H = {
 			], 2);
 		};
 	}
-}, [["__scopeId", "data-v-0a19b1a3"]]), DG = {
+}, [["__scopeId", "data-v-c2895335"]]), DG = {
 	slots: {
 		root: "relative inline-flex items-center",
 		base: ["rounded-md", "transition-colors"],
