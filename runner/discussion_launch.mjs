@@ -222,8 +222,8 @@ function launch_input(input) {
     const members = value.room.members;
     const names = members?.map(member => typeof member === 'string' ? member : member.name);
     const woken = Array.isArray(members) ? members.filter(woken_member).map(member => typeof member === 'string' ? member : member.name) : [];
-    if (!woken.length || new Set(names).size !== names.length || woken.some(name => !clients_of(name))) {
-      throw new Error('自由协作房间须选择至少 1 位支持自动接入的 AI 成员，且不能重复');
+    if ((!woken.length && !value.scheduler) || !names?.length || new Set(names).size !== names.length || woken.some(name => !clients_of(name))) {
+      throw new Error('自由协作房间须选择至少 1 位支持自动接入的 AI 成员（或开启智能调度），且不能重复');
     }
   }
   if (value.access_file) {

@@ -36,7 +36,8 @@ const host_options = computed(() => selected_names.value.filter((name) => select
 const limit_picker = ref(null);
 // Discussions run automatically; a free room needs the local service only for the members it wakes.
 const woken_names = computed(() => selected_names.value.filter((name) => selected.value[name] === "cli"));
-const automatic = computed(() => !free.value || woken_names.value.length > 0);
+// Smart scheduling alone also registers a free room with the local service, even when every member is manual or online.
+const automatic = computed(() => !free.value || woken_names.value.length > 0 || scheduler_active.value);
 const launch_ready = (name) => {
   const profile = view.value.launch.profiles[name] || {};
   if (profile.adapter === "api") return Boolean(profile.base_url && profile.api_protocol && profile.api_key_ref && profile.model);
@@ -45,10 +46,11 @@ const launch_ready = (name) => {
 const launching = computed(() => automatic.value && view.value.launch.available && (free.value || view.value.launch.create));
 const free_ready = computed(() => selected_names.value.length > 0 && woken_names.value.every(launch_ready) && (!woken_names.value.length || view.value.launch.available));
 // Smart scheduling runs in the local service, so it is offered only when this room will be launched there.
-const scheduling = computed(() => view.value.launch.available && (free.value ? woken_names.value.length > 0 : view.value.launch.create));
+const scheduling = computed(() => view.value.launch.available && (free.value ? selected_names.value.length > 0 : view.value.launch.create));
+const scheduler_active = computed(() => free.value && scheduling.value && Boolean(view.value.launch.scheduler?.enabled));
 // Always shown; when it cannot run yet, say what is missing instead of hiding it.
 const scheduling_blocker = computed(() => !view.value.launch.available ? "连接本机服务后可开启"
-  : free.value && !woken_names.value.length ? "添加一位本机唤醒的成员后可开启"
+  : free.value && !selected_names.value.length ? "添加成员后可开启"
   : !free.value && !view.value.launch.create ? "勾选「创建后立即启动 AI」后可开启" : "");
 const scheduler_unready = computed(() => {
   const scheduler = view.value.launch.scheduler || {};
@@ -104,7 +106,7 @@ function navigate_choices(event) {
 const has_local = (name) => bridge.launch_clients[name]?.some((item) => item.value !== "api");
 /** Free rooms choose delivery per member; a discussion's experts are woken or manual, its host always woken. */
 // Manual needs no local software, so any platform can be pasted into whichever AI the user runs by hand.
-const access_choices = (name) => free.value ? ["cli", "manual", "online"] : name !== host.value ? ["cli", "manual"] : [];
+const access_choices = (name) => free.value || name !== host.value ? ["cli", "manual"] : [];
 
 /** Change one selected expert's delivery, defaulting a woken API-only platform to its API, and keep the host valid. */
 function set_expert_mode(name, mode) {
@@ -124,7 +126,7 @@ function expert_status(name) {
 /** Describe a platform before adding an independent instance. */
 function library_description(name) {
   if (instance_count(name)) return `已加入 ${instance_count(name)} 位 · 可继续添加`;
-  return has_local(name) ? "API / 本地 App / CLI / 手动启动" : free.value ? "API / 手动启动 / 网页代发" : "API / 手动启动";
+  return has_local(name) ? "API / 本地 App / CLI / 手动启动" : "API / 手动启动";
 }
 
 /** Admit one library role, woken by the local service until its card says otherwise. */
@@ -196,7 +198,7 @@ const summary = computed(() => {
 
       <section class="create-section">
         <h3><span>2</span>谁来参与</h3>
-        <p class="fine-print create-hint">{{ free ? '每位成员单独选：自动（本机唤醒）、手动（你来启动）或网页（由你转发回答）。' : '主持人由本机自动启动，专家可选自动或手动。网页 AI 请用自由协作。' }}</p>
+        <p class="fine-print create-hint">{{ free ? '每位成员单独选：程序启动（本机唤醒）或手动启动（你来启动）。' : '主持人由本机自动启动，专家可选自动或手动。' }}</p>
         <div v-if="selected_names.length" class="create-experts" role="group" aria-label="参与的 AI">
           <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :choices="access_choices(name)"
             :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)" hosting
@@ -211,7 +213,7 @@ const summary = computed(() => {
         </div>
         <div class="fine-print create-hint create-host-hint">
           <UIcon name="i-lucide-crown" />
-          <span>{{ free ? host_options.length ? '点卡片上的皇冠指定主持人：没 @ 任何人的消息由它分配；其他成员只在被你或主持人点名时发言。' : '网页 AI 不能主持；添加一位本地 AI 后，没 @ 的消息才有人接。' : host_options.length ? '点卡片上的皇冠指定主持人，负责补全议题、安排发言与收束，也可同时作为专家。' : '先添加一位 AI 担任主持人。' }}</span>
+          <span>{{ free ? host_options.length ? '点卡片上的皇冠指定主持人：没 @ 任何人的消息由它分配；其他成员只在被你或主持人点名时发言。' : '添加一位本地 AI 后，没 @ 的消息才有人接。' : host_options.length ? '点卡片上的皇冠指定主持人，负责补全议题、安排发言与收束，也可同时作为专家。' : '先添加一位 AI 担任主持人。' }}</span>
         </div>
         <SchedulerSettings :free="free" :blocker="scheduling_blocker" />
       </section>

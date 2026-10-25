@@ -589,15 +589,16 @@ def inbox(connection, room_id, token):
     expire_executions(connection, room_id)
     release_recommendations(connection, room_id)
     archived = connection.execute("SELECT archived FROM room_directory WHERE room_id=?", (room_id,)).fetchone()[0]
-    members = []
-    for row in connection.execute("SELECT * FROM room_members WHERE room_id=? AND status='active' AND access='runner' ORDER BY id", (room_id,)):
+    members, observers = [], []
+    # Manual and online members are never delivered to; the runner only reads them so smart scheduling can route to them too.
+    for row in connection.execute("SELECT * FROM room_members WHERE room_id=? AND status='active' ORDER BY id", (room_id,)):
         pending = [dict(item) for item in connection.execute(
             "SELECT id,message_id,purpose FROM member_requests WHERE member_id=? AND status='pending' ORDER BY id", (row["id"],))]
-        members.append({**{key: row[key] for key in MEMBER_FIELDS}, "pending": pending})
+        (members if row["access"] == "runner" else observers).append({**{key: row[key] for key in MEMBER_FIELDS}, "pending": pending})
     executions = [{**public_execution(row), "member": row["name"]} for row in connection.execute(
         """SELECT member_executions.*,room_members.name FROM member_executions JOIN room_members ON room_members.id=member_id
         WHERE member_executions.room_id=? AND member_executions.status IN ('dispatched','started') ORDER BY member_executions.id""", (room_id,))]
-    return {"room_id": room_id, "archived": bool(archived), "members": members, "executions": executions,
+    return {"room_id": room_id, "archived": bool(archived), "members": members, "observers": observers, "executions": executions,
             "execution_minutes": execution_minutes(connection, room_id)}
 
 
@@ -618,9 +619,9 @@ def recommend_member(connection, room_id, token, payload):
     if not route or route["room_id"] != room_id:
         raise LookupError("只能为交给主持人的未点名消息给出推荐")
     target = connection.execute("""SELECT * FROM room_members WHERE room_id=? AND id=? AND status='active'
-        AND access='runner' AND id<>?""", (room_id, payload.get("member_id"), route["member_id"])).fetchone()
+        AND id<>?""", (room_id, payload.get("member_id"), route["member_id"])).fetchone()
     if not target:
-        raise LookupError("推荐对象须为在场、由本机唤醒的其他成员")
+        raise LookupError("推荐对象须为在场的其他成员")
     now = int(time.time())
     connection.execute("""INSERT OR IGNORE INTO member_recommendations (message_id,room_id,member_id,provider,confidence,created_at,expires_at)
         VALUES (?,?,?,?,?,?,?)""", (message_id, room_id, target["id"], payload["provider"], float(confidence), now, now + RECOMMEND_SECONDS))

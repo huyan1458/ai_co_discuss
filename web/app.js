@@ -1534,8 +1534,8 @@ async function submit_room(event, folder_id = null) {
   const payload = room_creation_payload(folder_id);
   const free = payload.mode === "free";
   // A discussion can still be created without the local service and started later from the room;
-  // a free room needs the service only for members it wakes.
-  const launching = free ? Object.values(payload.experts).includes("cli") : state.launch.create && state.launch.available;
+  // a free room needs the service only for members it wakes or for smart scheduling.
+  const launching = free ? Object.values(payload.experts).includes("cli") || (state.launch.available && Boolean(creation_launch_options().scheduler)) : state.launch.create && state.launch.available;
   if (launching && !state.launch.available) throw new Error("本机唤醒的成员需要连接本机服务；也可改为手动接入或网页代发");
   const launch_draft = launching ? creation_launch_options() : null;
   const signature = JSON.stringify({ payload, launch_draft });

@@ -1005,6 +1005,19 @@ test('Worker smart scheduling recommendations wait for the user, then interrupt 
   assert.equal((await adopt(third, 'after')).status, 409);
 });
 
+test('Worker smart scheduling can recommend a manual member, which the inbox lists apart from woken ones', async t => {
+  const f = await worker_fixture(t);
+  const r = await free_worker_room(f, [{ name: 'Gemini', access: 'manual', token: 'gemini-free'.repeat(4) }]);
+  const inbox = async () => (await f.request(`${r.path}/inbox`, undefined, r.owner)).body;
+  const first = (await r.say('帮我看看登录报错')).body.message.id;
+  const listed = await inbox();
+  assert.deepEqual([listed.members.map(member => member.name), listed.observers.map(member => member.name)], [['Claude'], ['Gemini']]);
+  const gemini_id = await r.member_id('Gemini');
+  assert.equal((await f.request(`${r.path}/recommendations`, { message_id: first, member_id: gemini_id, provider: 'jev', confidence: 0.9 }, r.owner)).status, 200);
+  assert.equal((await f.request(`${r.path}/recommendations/${first}`, { action: 'adopt', mode: 'interrupt' }, r.owner)).body.recommendation.status, 'adopted');
+  assert.deepEqual((await inbox()).observers[0].pending.map(item => item.message_id), [first]);
+});
+
 test('Worker free rooms bundle requests into one execution and reject late or unbound answers', async t => {
   const f = await worker_fixture(t);
   const r = await free_worker_room(f);

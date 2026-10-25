@@ -2213,13 +2213,15 @@ async function free_inbox(database, room_id, token) {
   await require_free_owner(database, room_id, token);
   await database.batch([...await free_expire_statements(database, room_id), ...free_release_statements(database, room_id)]);
   const archived = Boolean((await database.prepare("SELECT archived FROM room_directory WHERE room_id=?").bind(room_id).first()).archived);
-  const rows = (await database.prepare("SELECT * FROM room_members WHERE room_id=? AND status='active' AND access='runner' ORDER BY id").bind(room_id).all()).results;
-  const members = await Promise.all(rows.map(async row => ({ ...pick(row, FREE_MEMBER_FIELDS),
+  const rows = (await database.prepare("SELECT * FROM room_members WHERE room_id=? AND status='active' ORDER BY id").bind(room_id).all()).results;
+  // Manual and online members are never delivered to; the runner only reads them so smart scheduling can route to them too.
+  const listed = await Promise.all(rows.map(async row => ({ ...pick(row, FREE_MEMBER_FIELDS),
     pending: (await database.prepare("SELECT id,message_id,purpose FROM member_requests WHERE member_id=? AND status='pending' ORDER BY id").bind(row.id).all()).results })));
+  const members = listed.filter(member => member.access === "runner"), observers = listed.filter(member => member.access !== "runner");
   const executions = (await database.prepare(`SELECT member_executions.*,room_members.name FROM member_executions JOIN room_members ON room_members.id=member_id
     WHERE member_executions.room_id=? AND member_executions.${FREE_LIVE} ORDER BY member_executions.id`).bind(room_id).all()).results
     .map(row => ({ ...pick(row, FREE_EXECUTION_FIELDS), member: row.name }));
-  return { room_id, archived, members, executions, execution_minutes: await free_execution_minutes(database, room_id) };
+  return { room_id, archived, members, observers, executions, execution_minutes: await free_execution_minutes(database, room_id) };
 }
 
 /** Smart scheduling suggests another member for an unnamed message; the host keeps it until the user adopts. */
@@ -2232,8 +2234,8 @@ async function free_recommend(database, room_id, token, payload) {
   const route = Number.isInteger(message_id) ? await database.prepare("SELECT * FROM member_requests WHERE message_id=? AND purpose='route'").bind(message_id).first() : null;
   if (!route || route.room_id !== room_id) throw new HttpError(404, "只能为交给主持人的未点名消息给出推荐");
   const target = await database.prepare(`SELECT * FROM room_members WHERE room_id=? AND id=? AND status='active'
-    AND access='runner' AND id<>?`).bind(room_id, payload.member_id ?? 0, route.member_id).first();
-  if (!target) throw new HttpError(404, "推荐对象须为在场、由本机唤醒的其他成员");
+    AND id<>?`).bind(room_id, payload.member_id ?? 0, route.member_id).first();
+  if (!target) throw new HttpError(404, "推荐对象须为在场的其他成员");
   await database.prepare(`INSERT OR IGNORE INTO member_recommendations (message_id,room_id,member_id,provider,confidence,created_at,expires_at)
     VALUES (?,?,?,?,?,unixepoch(),unixepoch()+?)`).bind(message_id, room_id, target.id, provider, confidence, FREE_RECOMMEND_SECONDS).run();
   return database.prepare("SELECT * FROM member_recommendations WHERE message_id=?").bind(message_id).first();

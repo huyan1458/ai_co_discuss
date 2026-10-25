@@ -164,10 +164,13 @@ export class FreeRoomRunner {
    * another woken member suits it better, and post a recommendation the user may adopt. Nothing waits on it.
    */
   recommend_unnamed(inbox, room) {
-    const host = inbox.members.find(member => member.role === 'host');
+    // Manual and online members are listed apart; they are never delivered to but may host or be recommended.
+    const everyone = [...inbox.members, ...(inbox.observers || [])];
+    const host = everyone.find(member => member.role === 'host');
     const waiting = host?.pending.filter(request => request.purpose === 'route' && !this.routed.has(request.id)) || [];
-    const members = inbox.members.filter(member => member !== host && this.config.participants[member.name]).map(member => ({ id: member.id, name: member.name,
-      description: member_description(member.name, this.config.participants[member.name]) }));
+    const members = everyone.filter(member => member !== host).map(member => ({ id: member.id, name: member.name,
+      description: this.config.participants[member.name] ? member_description(member.name, this.config.participants[member.name])
+        : `${member.name}（${member.access === 'online' ? '网页 AI' : '手动接入'}，由用户代为触发）` }));
     for (const request of waiting) {
       this.routed.add(request.id);
       if (!members.length) continue;

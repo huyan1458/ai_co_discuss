@@ -14,6 +14,8 @@ import { adopt_member_profile, borrowed_session, cached_software_models, launch_
 import { api, DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { DiscussionService, read_registry, register_room } from '../runner/discussion_service.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
+import { save_api_key } from '../runner/discussion_api.mjs';
+import { SCHEDULER_PROVIDERS } from '../runner/scheduler.mjs';
 import { save_site_connection } from '../runner/discussion_local.mjs';
 import { software_effort, software_models } from '../runner/discussion_models.mjs';
 
@@ -955,6 +957,19 @@ test('a free room is created with woken, manual and online members chosen one by
   assert.deepEqual(Object.keys(load_config(launched.config_path).participants), ['Claude'], 'only woken members get local configuration');
   assert.equal((await request(f.site, `/api/rooms/${launched.room.id}/messages`, { author: 'Codex', text: '手动成员', source: 'cli', submission_id: randomUUID() },
     { 'X-Discussion-Token': manual_token })).status, 201);
+});
+
+test('a free room of only manual members is launched for smart scheduling alone', async t => {
+  const f = await fixture(t);
+  const members = () => [{ name: 'Codex', access: 'manual', token: randomUUID() + randomUUID() }, { name: 'DeepSeek', access: 'online', token: randomUUID() + randomUUID() }];
+  const input = scheduler => ({ site: f.site, entry: 'web', participants: f.input.participants, token: randomUUID() + randomUUID(),
+    room: { title: '全手动', goal: 'x', mode: 'free', members: members(), submission_id: randomUUID() }, ...(scheduler ? { scheduler } : {}) });
+  await assert.rejects(launch_discussion(f.home, input(), f.options), /开启智能调度/);
+  const scheduler = { provider: 'jev', model: 'jev-1', ...save_api_key(f.home, { base_url: SCHEDULER_PROVIDERS.jev.base_url, api_key: 'jev-key' }) };
+  const launched = await launch_discussion(f.home, input(scheduler), f.options);
+  assert.deepEqual(Object.keys(load_config(launched.config_path).participants), [], 'nothing is woken locally');
+  assert.equal(load_config(launched.config_path).scheduler.provider, 'jev');
+  assert.deepEqual(launched.room.free.members.map(member => member.access), ['manual', 'online']);
 });
 
 test('a discussion is created with a manual expert that gets no local configuration and answers with its own credential', async t => {

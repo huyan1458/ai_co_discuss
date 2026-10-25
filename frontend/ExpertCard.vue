@@ -288,7 +288,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card-open.is-static { cursor: default; padding-bottom: 12px; }
 .expert-card-open.has-modes { padding-bottom: 8px; }
 .expert-card-front-modes { flex-shrink: 0; width: fit-content; margin: 0 0 10px 12px; }
-.expert-card-front-modes button { flex: none; padding: 0 12px; }
+.expert-card-front-modes button { flex: none; padding: 0 8px; white-space: nowrap; }
 .expert-card-identity { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 26px; padding-right: 50px; }
 .expert-card-avatar { flex-shrink: 0; width: 26px; height: 26px; font-size: 10px; }
 .expert-card-identity strong { overflow: hidden; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }

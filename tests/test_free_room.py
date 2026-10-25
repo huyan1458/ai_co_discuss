@@ -424,6 +424,17 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(room["experts"], {"Claude": "cli"})
         self.assertEqual(self.request(f"{self.path}/members/{codex_id}", {"action": "active", "token": uuid.uuid4().hex}, self.owner)[0], 404)
 
+    def test_smart_scheduling_may_recommend_a_manual_member(self):
+        """A manual member is a valid recommendation target, and adopting asks it like any other member."""
+        self.request(f"{self.path}/members", {"name": "Gemini", "token": uuid.uuid4().hex, "access": "manual"}, self.owner)
+        route = self.request(f"{self.path}/messages", {"author": "用户", "text": "没点名的问题", "submission_id": uuid.uuid4().hex}, self.owner)[1]["message"]["id"]
+        gemini_id = self.member_id("Gemini")
+        self.assertEqual(self.request(f"{self.path}/recommendations", {"message_id": route, "member_id": gemini_id, "provider": "jev",
+                                                                         "confidence": 0.8}, self.owner)[0], 200)
+        self.assertEqual(self.request(f"{self.path}/recommendations/{route}", {"action": "adopt", "mode": "interrupt"}, self.owner)[0], 200)
+        observers = self.request(f"{self.path}/inbox", token=self.owner)[1]["observers"]
+        self.assertEqual([item["message_id"] for item in observers[0]["pending"]], [route])
+
     def test_manual_member_answers_by_request_and_is_never_delivered(self):
         """A manual member is skipped by the runner and closes only its own open requests."""
         gemini = uuid.uuid4().hex
@@ -431,6 +442,7 @@ class MultiMemberTests(FreeRoomTests):
         self.say("请 Gemini 看看", to=["Gemini", "Claude"])
         inbox = self.request(f"{self.path}/inbox", token=self.owner)[1]
         self.assertEqual([member["name"] for member in inbox["members"]], ["Claude", "Codex"])
+        self.assertEqual([member["name"] for member in inbox["observers"]], ["Gemini"])
         self.assertEqual(self.reserve_for("Gemini")[0], 404)
         requests = {item["member"]: item["id"] for item in self.request(self.path)[1]["free"]["requests"]}
 
