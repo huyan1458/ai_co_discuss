@@ -71,7 +71,9 @@ conversation 还须 current_session_id，当前会话接手首个主持任务。
 // Windows PowerShell 5.1 ships WinForms. A background process cannot take the foreground, so the owner must be
 // shown (off-screen) as a topmost window; the dialog it owns then stays above the browser that asked for it.
 // windowsHide turns the process's first Show into a hide, so the owner is shown a second time to really appear.
-// Foreground rights are not guaranteed to a background process either, so a timer in the dialog's message loop pins the dialog owned by the hidden form topmost.
+// Under the local service the whole process chain has no console and no foreground rights: Windows then silently ignores
+// SetWindowPos(HWND_TOPMOST) on the dialog (it returns success). So once the dialog exists, a timer in its message loop
+// briefly attaches to the foreground window's input thread (the browser that asked) to borrow its right to raise the dialog.
 // The C# source must not contain single quotes: it is embedded in a single-quoted PowerShell string.
 const PICKER_RAISE_SOURCE = [
   'using System; using System.Runtime.InteropServices;',
@@ -80,8 +82,21 @@ const PICKER_RAISE_SOURCE = [
   '  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc proc, IntPtr arg);',
   '  [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr handle, uint command);',
   '  [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr handle, IntPtr after, int x, int y, int width, int height, uint flags);',
-  '  public static void OwnedBy(IntPtr owner) {',
-  '    EnumWindows((handle, arg) => { if (GetWindow(handle, 4) == owner) SetWindowPos(handle, (IntPtr)(-1), 0, 0, 0, 0, 0x13); return true; }, IntPtr.Zero);',
+  '  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();',
+  '  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr handle, IntPtr process);',
+  '  [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();',
+  '  [DllImport("user32.dll")] static extern bool AttachThreadInput(uint attach, uint to, bool on);',
+  '  [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr handle);',
+  '  [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr handle);',
+  '  public static bool OwnedBy(IntPtr owner) {',
+  '    IntPtr dialog = IntPtr.Zero;',
+  '    EnumWindows((handle, arg) => { if (GetWindow(handle, 4) == owner) dialog = handle; return dialog == IntPtr.Zero; }, IntPtr.Zero);',
+  '    if (dialog == IntPtr.Zero) return false;',
+  '    uint current = GetCurrentThreadId(), foreground = GetWindowThreadProcessId(GetForegroundWindow(), IntPtr.Zero);',
+  '    bool attached = foreground != 0 && foreground != current && AttachThreadInput(current, foreground, true);',
+  '    SetWindowPos(dialog, (IntPtr)(-1), 0, 0, 0, 0, 0x13); BringWindowToTop(dialog); SetForegroundWindow(dialog);',
+  '    if (attached) AttachThreadInput(current, foreground, false);',
+  '    return true;',
   '  }',
   '}',
 ].join(' ');
@@ -91,7 +106,7 @@ const WINDOWS_PICKER = [
   '$owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; ShowInTaskbar = $false; FormBorderStyle = "None"; StartPosition = "Manual"; Location = New-Object System.Drawing.Point(-32000, -32000); Size = New-Object System.Drawing.Size(1, 1) }',
   `Add-Type -TypeDefinition '${PICKER_RAISE_SOURCE}'`,
   '$owner.Show(); $owner.Hide(); $owner.Show(); $owner.Activate()',
-  '$timer = New-Object System.Windows.Forms.Timer -Property @{ Interval = 150 }; $timer.Add_Tick({ [PickerRaise]::OwnedBy($owner.Handle) }); $timer.Start()',
+  '$timer = New-Object System.Windows.Forms.Timer -Property @{ Interval = 150 }; $timer.Add_Tick({ if ([PickerRaise]::OwnedBy($owner.Handle)) { $timer.Stop() } }); $timer.Start()',
   '$dialog = New-Object System.Windows.Forms.FolderBrowserDialog -Property @{ Description = "选择项目目录"; ShowNewFolderButton = $true }',
   'if ($dialog.ShowDialog($owner) -eq "OK") { $dialog.SelectedPath }',
   '$owner.Close()',
