@@ -186,9 +186,11 @@ const free_working = computed(() => view.value.query || view.value.mention_only 
 /** Says in the note line who the draft will reach: the @mentioned members, else the host. */
 const recipient_hint = computed(() => {
   if (view.value.free_proxy) return `本条作为 ${bridge.display_name(view.value.free_proxy)} 的回答原文保存，并关闭它的待处理请求`;
-  const named = ALL_ALIASES.some((alias) => MENTION_PATTERN(alias).test(draft_prose.value)) ? free_members.value
+  const named_group = (aliases) => aliases.some((alias) => MENTION_PATTERN(alias).test(draft_prose.value));
+  if (named_group(SEQUENTIAL_ALIASES)) return `依次发给 ${in_turn(free_members.value).map((member) => bridge.display_name(member.name)).join(" → ")}，前一位结束后下一位开始`;
+  const named = named_group(ALL_ALIASES) ? free_members.value
     : free_members.value.filter((member) => MENTION_PATTERN(member.name).test(draft_prose.value));
-  if (named.length) return `发给 ${named.map((member) => bridge.display_name(member.name)).join("、")}`;
+  if (named.length) return `${named.length > 1 ? "同时" : ""}发给 ${named.map((member) => bridge.display_name(member.name)).join("、")}`;
   if (free_members.value.length === 1) return `发给 ${bridge.display_name(free_members.value[0].name)}`;
   return free_host.value ? `发给主持人 ${bridge.display_name(free_host.value.name)}；@ 其他成员让它们发言` : "未 @ 任何成员：只作留言，不会唤醒 AI";
 });
@@ -200,7 +202,7 @@ const free_online = computed(() => free_members.value.filter((member) => member.
 /** In a discussion, an @mention of an active member is a direct question: it wakes that member outside turns, rounds and limits. */
 const ask_members = computed(() => free.value ? [] : (room.value?.members || []).filter((member) => member.status === "active" && member.name !== "用户"));
 const asked_names = computed(() => ask_members.value.filter((member) => MENTION_PATTERN(member.name).test(draft_prose.value)).map((member) => bridge.display_name(member.name)));
-const mention_pool = computed(() => free.value ? [...(mention_all.value ? ALL_ALIASES.map((name) => ({ name })) : []), ...free_members.value] : ask_members.value);
+const mention_pool = computed(() => free.value ? [...(mention_all.value ? [...ALL_ALIASES, ...SEQUENTIAL_ALIASES].map((name) => ({ name })) : []), ...free_members.value] : ask_members.value);
 /** Combine immutable suggestions with live membership and conversion status. */
 const response_suggestions = computed(() => {
   if (!free.value) return new Map();
@@ -435,15 +437,26 @@ const mention_context = ref(null);
 /** @全体成员 (or @all) names every member a free-room message can reach, offered once there is more than one. */
 const ALL_MENTION = "全体成员";
 const ALL_ALIASES = [ALL_MENTION, "all"];
+/** @全体依次 (or @all-seq) names them all to answer one after another, in the room's speaking order. */
+const SEQUENTIAL_MENTION = "全体依次";
+const SEQUENTIAL_ALIASES = [SEQUENTIAL_MENTION, "all-seq"];
+const GROUP_MENTIONS = { [ALL_MENTION]: { search: "all 同时 并行", label: "同时回答", icon: "i-lucide-users" },
+  [SEQUENTIAL_MENTION]: { search: "all-seq 依次 串行", label: "按发言顺序依次回答", icon: "i-lucide-list-ordered" } };
+/** The order the server asks members in: the room's default speaking order. */
+const in_turn = (members) => {
+  const rank = room.value.speaking_order?.default || [];
+  const place = (name) => rank.includes(name) ? rank.indexOf(name) : rank.length;
+  return [...members].sort((left, right) => place(left.name) - place(right.name));
+};
 const mention_all = computed(() => free_members.value.length > 1);
 const mention_index = ref(0);
 const mention_list = ref(null);
 let mention_composing = false;
 const mention_members = computed(() => {
-  const names = free.value ? [...(mention_all.value ? [ALL_MENTION] : []), ...free_members.value.map(member => member.name)]
+  const names = free.value ? [...(mention_all.value ? Object.keys(GROUP_MENTIONS) : []), ...free_members.value.map(member => member.name)]
     : [...new Set([room.value?.host, ...Object.keys(room.value?.experts || {})])].filter(name => name && name !== "用户");
   const query = mention_context.value?.query.toLocaleLowerCase() || "";
-  return names.filter(name => (name === ALL_MENTION ? `${name} all` : `${name} ${bridge.display_name(name)}`).toLocaleLowerCase().includes(query));
+  return names.filter(name => (GROUP_MENTIONS[name] ? `${name} ${GROUP_MENTIONS[name].search}` : `${name} ${bridge.display_name(name)}`).toLocaleLowerCase().includes(query));
 });
 const mention_active = computed(() => mention_members.value[Math.min(mention_index.value, mention_members.value.length - 1)]);
 watch([() => room.value?.id, () => view.value.tab], () => { mention_context.value = null; });
@@ -925,6 +938,20 @@ async function copy_launch(name) {
 watch([() => room.value?.id, () => speaking_turn.value?.id], reset_launch_copy);
 onBeforeUnmount(reset_launch_copy);
 
+/** The user message a failed free-room execution was working on, when it is still in the loaded history. */
+function failed_request_message(report) {
+  return free.value && report.status === "failed" && view.value.access?.can_manage
+    ? view.value.messages.find((message) => message.id === report.request_message_id) : null;
+}
+/** Put the original text back in the input for the user to send again; a named request keeps its @member. */
+function resend_failed(report) {
+  const original = failed_request_message(report);
+  if (!original) return;
+  const request = (room.value.free?.requests || []).find((item) => report.request_ids?.includes(item.id));
+  text.value = request?.purpose === "ask" && request.member ? `@${request.member} ${original.text}` : original.text;
+  prompt.value?.textareaRef?.focus();
+}
+
 /** Reuse the existing original-record actions in the message overflow menu. */
 function message_actions(message) {
   return [[
@@ -1075,6 +1102,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
               <div><strong>执行 #{{ report.id }} · {{ report.label }}</strong></div>
               <p v-if="report.changes?.length">文件变化：{{ report.changes.join('、') }}</p>
               <p v-if="report.status !== 'completed' && report.result">{{ report.result }}</p>
+              <UButton v-if="failed_request_message(report)" label="重发" icon="i-lucide-rotate-ccw" size="xs" variant="soft" color="neutral" :aria-label="`把执行 #${report.id} 的原消息填回输入框重发`" @click="resend_failed(report)" />
             </section>
           </template>
           <template #header><div class="channel-message-actions"><div class="channel-message-toolbar">
@@ -1159,9 +1187,9 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           <div class="channel-mention-heading"><span>选择成员</span><small>↑↓ 选择 · Enter 确认</small></div>
           <div id="channel-mention-list" ref="mention_list" role="listbox" aria-label="选择成员" class="channel-mention-list">
             <button v-for="(name, index) in mention_members" :id="`channel-mention-${index}`" :key="name" type="button" role="option" :aria-selected="name === mention_active" tabindex="-1" class="channel-mention-option" @pointerdown.prevent @click="select_mention(name)" @pointermove="mention_index = index">
-              <UAvatar v-if="name === ALL_MENTION" icon="i-lucide-users" :alt="name" size="xs" class="channel-avatar" />
+              <UAvatar v-if="GROUP_MENTIONS[name]" :icon="GROUP_MENTIONS[name].icon" :alt="name" size="xs" class="channel-avatar" />
               <UAvatar v-else :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="bridge.display_name(name)" size="xs" :class="['channel-avatar', bridge.identities[name]?.style]" />
-              <span>{{ name === ALL_MENTION ? `全体成员（${free_members.length} 位）` : bridge.display_name(name) }}</span><small>@{{ name }}</small>
+              <span>{{ GROUP_MENTIONS[name] ? `全体成员 ${GROUP_MENTIONS[name].label}（${free_members.length} 位）` : bridge.display_name(name) }}</span><small>@{{ name }}</small>
             </button>
             <p v-if="!mention_members.length" class="channel-mention-empty">没有匹配的成员</p>
           </div>

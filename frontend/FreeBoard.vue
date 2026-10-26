@@ -3,6 +3,7 @@
 import { computed, inject, ref, watch } from "vue";
 import InviteDialog from "./InviteDialog.vue";
 import StartDiscussionDialog from "./StartDiscussionDialog.vue";
+import SpeakingOrder from "./SpeakingOrder.vue";
 
 const { view, bridge, act, pending } = inject("discussion");
 const LIVE = ["dispatched", "started"];
@@ -12,8 +13,9 @@ const TASK_PREVIEW_LENGTH = 90;
 const room = computed(() => view.value.room);
 const free = computed(() => room.value.free || {});
 const host = computed(() => (free.value.members || []).find((member) => member.role === "host" && member.status === "active"));
-// The host leads the list, then members in the order they joined.
-const members = computed(() => [...(free.value.members || [])].sort((a, b) => (b.role === "host") - (a.role === "host")));
+// Rows follow the room's speaking order; members who left are listed after it.
+const member_named = (name) => (free.value.members || []).find((member) => member.name === name);
+const away_names = computed(() => (free.value.members || []).filter((member) => member.status === "away").map((member) => member.name));
 const busy = (member) => member.pending > 0 || LIVE.includes(member.execution?.status);
 const name_of = (member_id) => bridge.display_name((free.value.members || []).find((member) => member.id === member_id)?.name || "成员");
 
@@ -27,13 +29,14 @@ function member_tone(member) {
   return member.execution?.status === "failed" ? "error" : "success";
 }
 
-/** One line per member: live execution, queued requests, or the last outcome. */
-function member_status(member) {
+/** One line per member: live execution, queued requests, its place in a one-after-another queue, or the last outcome. */
+function member_status(member, state) {
   if (member.status === "away") return "已离开：不会被唤醒，可请回";
   if (unregistered(member)) return "待注册";
   const execution = member.execution;
   if (execution && LIVE.includes(execution.status)) return execution.stale ? "执行失联，停止未确认" : "正在处理";
   if (member.pending) return `待投递 ${member.pending} 条`;
+  if (state === "queued") return "等待依次发言";
   if (execution?.status === "failed") return `上次失败：${execution.result}`;
   return !execution && member.access === "manual" ? "已注册" : "空闲";
 }
@@ -140,20 +143,22 @@ watch(() => room.value.id, () => { starting.value = false; });
       <p class="pb-focus" :class="{ 'is-expanded': task_expanded }">{{ task }}</p>
       <button v-if="task.length > TASK_PREVIEW_LENGTH" type="button" class="pb-link" @click="task_expanded = !task_expanded">{{ task_expanded ? '收起' : '展开' }}</button>
     </section>
-    <section class="pb-section" aria-label="成员">
-      <h4>成员</h4>
-      <ul class="pb-members">
-        <li v-for="member in members" :key="member.id" class="pb-member" :class="{ 'is-away': member.status === 'away' }">
-          <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
-          <div class="pb-member-body">
-            <div class="pb-member-name">{{ bridge.display_name(member.name) }}<UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /><small>{{ member.role === 'host' ? `主持 · ${ACCESS_LABELS[member.access]}` : ACCESS_LABELS[member.access] }}</small></div>
-            <div v-if="member_model(member)" class="pb-member-model">{{ member_model(member) }}</div>
-            <div v-if="member.session_mode === 'borrowed'" class="pb-member-model" title="它工作时请不要在原窗口继续操作">借用已有会话</div>
-            <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span>{{ member_status(member) }}</div>
-          </div>
-          <UDropdownMenu :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="`${member.name} 的更多操作`" /></UDropdownMenu>
-        </li>
-      </ul>
+    <section class="pb-section" aria-label="发言顺序">
+      <h4>发言顺序</h4>
+      <SpeakingOrder :away="away_names">
+        <template #default="{ item }">
+          <template v-for="member in [member_named(item.name)].filter(Boolean)" :key="member.id">
+            <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
+            <div class="pb-member-body">
+              <div class="pb-member-name">{{ bridge.display_name(member.name) }}<UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /><small>{{ member.role === 'host' ? `主持 · ${ACCESS_LABELS[member.access]}` : ACCESS_LABELS[member.access] }}</small></div>
+              <div v-if="member_model(member)" class="pb-member-model">{{ member_model(member) }}</div>
+              <div v-if="member.session_mode === 'borrowed'" class="pb-member-model" title="它工作时请不要在原窗口继续操作">借用已有会话</div>
+              <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span>{{ member_status(member, item.state) }}</div>
+            </div>
+            <UDropdownMenu :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="`${member.name} 的更多操作`" /></UDropdownMenu>
+          </template>
+        </template>
+      </SpeakingOrder>
       <p v-for="item in free.conflicts || []" :key="item.executions.join('-')" class="pb-free-note is-warning">可能冲突：{{ item.members.map((name) => bridge.display_name(name)).join(' 与 ') }} 的重叠执行观察到 {{ item.files.join('、') }} 变化；修改者未确认。</p>
       <p v-if="view.free_error" role="alert" class="pb-free-note is-error">{{ view.free_error }}</p>
       <p v-else-if="view.free_notice" role="status" class="pb-free-note">{{ view.free_notice }}</p>

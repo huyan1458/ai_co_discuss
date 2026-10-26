@@ -164,7 +164,7 @@ export class FreeRoomRunner {
   async tick() {
     const inbox = await api(this.config, '/inbox');
     const room = await api(this.config, '');
-    // Smart scheduling runs beside delivery: the host gets the message now, a recommendation may follow.
+    // Smart scheduling runs beside delivery: the host waits for its answer (or failure) before starting, see `routing`.
     if (this.config.scheduler && !inbox.archived) this.recommend_unnamed(inbox, room);
     this.room_title = room.title;
     const active = new Map(inbox.executions.map(item => [item.id, item]));

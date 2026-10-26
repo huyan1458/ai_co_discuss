@@ -26,6 +26,7 @@ from .free_room import (add_member, after_free_message, authorize_free_write, ch
                         discussion_members, room_mode, save_room_access, sync_discussion_members, view_execution)
 from .free_room import add_discussion_member, convert_suggestion, discussion_member_action, message_suggestions, save_suggestions, sync_participants
 from .free_room import active_members, adopt_recommendation, ask_members, asks_view, checked_asks, recommend_member, register_member, route_held_messages
+from .free_room import reorder_speakers, speaking_order, stop_room_work
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, is_ai, is_participant
 from .room_import import import_room, imported_attachment
 from .runtime import (authorize_write, begin_write, configure_runtime, event_action,
@@ -252,6 +253,7 @@ def require_room(connection, room_id):
         # Free rooms have no host hand-off: user messages go straight to the named members.
         room["held_since"] = 0
         room["free"] = free_view(connection, room_id)
+    room["speaking_order"] = speaking_order(connection, room)
     return room
 
 
@@ -621,6 +623,9 @@ def manage_room(connection, room_id, action, payload):
     elif action in ("archive", "restore"):
         if action == "archive" and room["phase"] != "concluded":
             save_topic_settings(connection, room_id, {**room, "phase": "paused"})
+        if action == "archive" and room["mode"] == "free":
+            # An archived room is read-only: nothing it still owes may be delivered or answered later.
+            stop_room_work(connection, room_id, "房间已归档", "archived")
         connection.execute("UPDATE room_directory SET archived=? WHERE room_id=?", (int(action == "archive"), room_id))
     elif action == "delete":
         if payload.get("confirm_title") != room["title"]:
@@ -634,7 +639,7 @@ def manage_room(connection, room_id, action, payload):
 
 def delete_room_records(connection, room_id):
     """Remove a room's dependent records in the caller's transaction."""
-    for table in ("member_recommendations", "member_requests", "member_executions", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "room_links",
+    for table in ("member_recommendations", "free_queue", "speaking_orders", "member_requests", "member_executions", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "room_links",
                   "discussion_options", "round_budgets", "scheduler_decisions", "scheduler_routing", "discussion_sessions"):
         if table == "scheduler_decisions":
             for child in ("scheduler_feedback", "scheduler_decision_context"):
@@ -1144,8 +1149,10 @@ def roster_view(room):
     last = room["rounds"][-1] if room["rounds"] else None
     spoken = set(last["speakers"]) if last and not last["completed"] else set()
     pending_registration = unregistered_experts(room)
-    experts = [{"name": name, "mode": mode, "host": name == room["host"], "spoken": name in spoken,
-                "registered": name not in pending_registration} for name, mode in room["experts"].items()]
+    # Experts follow the room's speaking order, so a round plan can take the user's preferred order from the roster.
+    rank = {item["name"]: index for index, item in enumerate(room["speaking_order"]["items"])}
+    experts = [{"name": name, "mode": room["experts"][name], "host": name == room["host"], "spoken": name in spoken,
+                "registered": name not in pending_registration} for name in sorted(room["experts"], key=lambda name: rank.get(name, len(rank)))]
     state = json.dumps([sorted(room["experts"]), sorted(spoken), sorted(pending_registration)], ensure_ascii=False)
     return {"experts": experts, "unregistered": pending_registration,
             "waiting": [item["name"] for item in experts if not item["spoken"] and not item["host"] and item["registered"]],
@@ -1941,6 +1948,15 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.respond(result)
         if parts[3:] == ["register"] and method == "POST":
             result = register_member(connection, room_id, token, utc_now())
+            connection.commit()
+            return self.respond(result)
+        if parts[3:] == ["speaking-order"]:
+            if method == "GET":
+                return self.respond(require_room(connection, room_id)["speaking_order"])
+            payload = self.read_payload()
+            begin_write(connection)
+            reorder_speakers(connection, require_room(connection, room_id), token, payload)
+            result = require_room(connection, room_id)
             connection.commit()
             return self.respond(result)
         free = room_mode(connection, room_id) == "free"

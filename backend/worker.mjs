@@ -400,6 +400,7 @@ async function require_room(database, room_id) {
     result.held_since = 0;
     result.free = await free_view(database, room_id);
   }
+  result.speaking_order = await speaking_order(database, result);
   return result;
 }
 
@@ -876,11 +877,13 @@ async function manage_room(database, room_id, action, payload) {
     statements.push(database.prepare("UPDATE room_folder_assignments SET folder_id=? WHERE room_id=?").bind(folder_id, room_id));
   } else if (["archive", "restore"].includes(action)) {
     if (action === "archive" && room.phase !== "concluded") statements.push(...topic_statements(database, room_id, { ...room, phase: "paused" }));
+    // An archived room is read-only: nothing it still owes may be delivered or answered later.
+    if (action === "archive" && room.mode === "free") statements.push(...free_stop_room_statements(database, room_id, "房间已归档", "archived"));
     statements.push(database.prepare("UPDATE room_directory SET archived=? WHERE room_id=?").bind(Number(action === "archive"), room_id));
   } else if (action === "delete") {
     if (payload.confirm_title !== room.title) throw new HttpError(400, "请输入完整房间名称确认删除");
     const queries = [
-      "DELETE FROM member_recommendations WHERE room_id=?", "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?", "DELETE FROM member_sessions WHERE room_id=?", "DELETE FROM member_registrations WHERE room_id=?",
+      "DELETE FROM member_recommendations WHERE room_id=?", "DELETE FROM free_queue WHERE room_id=?", "DELETE FROM speaking_orders WHERE room_id=?", "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?", "DELETE FROM member_sessions WHERE room_id=?", "DELETE FROM member_registrations WHERE room_id=?",
       "DELETE FROM room_members WHERE room_id=?", "DELETE FROM room_modes WHERE room_id=?",
       "DELETE FROM free_batches WHERE room_id=?", "DELETE FROM free_chains WHERE room_id=?", "DELETE FROM room_links WHERE room_id=?",
       "DELETE FROM discussion_options WHERE room_id=?",
@@ -1253,7 +1256,11 @@ async function roster_view(room) {
   const last = room.rounds.at(-1);
   const spoken = new Set(last && !last.completed ? last.speakers : []);
   const unregistered = unregistered_experts(room);
-  const experts = Object.entries(room.experts).map(([name, mode]) => ({ name, mode, host: name === room.host, spoken: spoken.has(name), registered: !unregistered.includes(name) }));
+  // Experts follow the room's speaking order, so a round plan can take the user's preferred order from the roster.
+  const rank = new Map(room.speaking_order.items.map((item, index) => [item.name, index]));
+  const place = (name) => rank.get(name) ?? rank.size;
+  const experts = Object.entries(room.experts).sort(([left], [right]) => place(left) - place(right))
+    .map(([name, mode]) => ({ name, mode, host: name === room.host, spoken: spoken.has(name), registered: !unregistered.includes(name) }));
   const state = JSON.stringify([Object.keys(room.experts).sort(), [...spoken].sort(), [...unregistered].sort()]);
   return { experts, unregistered, waiting: experts.filter((item) => !item.spoken && !item.host && item.registered).map((item) => item.name), revision: (await digest_hex(state)).slice(0, 12) };
 }
@@ -2147,7 +2154,8 @@ async function free_recent_executions(database, room_id) {
 /** Direct questions of a discussion room: recent requests with their member, for status badges beside messages. */
 async function asks_view(database, room_id) {
   const names = Object.fromEntries((await database.prepare("SELECT id,name FROM room_members WHERE room_id=?").bind(room_id).all()).results.map(row => [row.id, row.name]));
-  const requests = (await database.prepare(`SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by,created_at FROM member_requests
+  const requests = (await database.prepare(`SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by,created_at,
+    (SELECT reason FROM request_cancel_reasons c WHERE c.request_id=member_requests.id) AS cancel_reason FROM member_requests
     WHERE room_id=? ORDER BY id DESC LIMIT ?`).bind(room_id, FREE_RECENT_REQUESTS).all()).results
     .map(row => ({ ...row, member: names[row.member_id] ?? "" })).reverse();
   return { requests, executions: await free_recent_executions(database, room_id), execution_minutes: await free_execution_minutes(database, room_id) };
@@ -2166,7 +2174,8 @@ async function free_view(database, room_id) {
       reported_session: reported?.session_id ?? "", reported_client: reported?.client ?? "", execution, pending };
   }));
   const names = Object.fromEntries((await database.prepare("SELECT id,name FROM room_members WHERE room_id=?").bind(room_id).all()).results.map(row => [row.id, row.name]));
-  const requests = (await database.prepare(`SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by,created_at FROM member_requests
+  const requests = (await database.prepare(`SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by,created_at,
+    (SELECT reason FROM request_cancel_reasons c WHERE c.request_id=member_requests.id) AS cancel_reason FROM member_requests
     WHERE room_id=? ORDER BY id DESC LIMIT ?`).bind(room_id, FREE_RECENT_REQUESTS).all()).results
     .map(row => ({ ...row, member: names[row.member_id] ?? "" })).reverse();
   const halted_chains = (await database.prepare("SELECT chain_id,reason FROM free_chains WHERE room_id=? ORDER BY chain_id DESC LIMIT 10").bind(room_id).all()).results;
@@ -2251,7 +2260,101 @@ function free_settle_statements(database, room_id) {
       AND (SELECT COUNT(*) FROM member_requests q WHERE q.room_id=b.room_id AND q.batch_id=b.batch_id)>=2
       AND NOT EXISTS(SELECT 1 FROM free_chains c WHERE c.room_id=b.room_id AND c.chain_id=b.chain_id)`).bind(room_id),
     database.prepare(`UPDATE free_batches AS b SET settled=1 WHERE b.room_id=? AND b.settled=0 AND ${FREE_BATCH_DONE}`).bind(room_id),
+    ...free_advance_statements(database, room_id),
   ];
+}
+
+// A queued member has been asked once its request for that message exists.
+const FREE_QUEUE_ASKED = (row) => `EXISTS(SELECT 1 FROM member_requests r WHERE r.message_id=${row}.message_id AND r.member_id=${row}.member_id)`;
+// The room's speaking order: saved members by their saved place, the rest after them, the host first, then by joining order.
+const SPEAKING_RANK = "(SELECT CAST(key AS INTEGER) FROM json_each((SELECT member_ids FROM speaking_orders WHERE room_id=room_members.room_id)) WHERE value=room_members.id)";
+const SPEAKING_ORDER_BY = `${SPEAKING_RANK} IS NULL, ${SPEAKING_RANK}, role<>'host', id`;
+
+/**
+ * Ask the next queued member of each message whose previous request ended; members no longer present are skipped.
+ * Asked rows stay, so the speaking order can still show who already answered.
+ */
+function free_advance_statements(database, room_id) {
+  return [
+    database.prepare(`DELETE FROM free_queue WHERE room_id=? AND NOT ${FREE_QUEUE_ASKED("free_queue")}
+      AND NOT EXISTS(SELECT 1 FROM room_members m WHERE m.id=free_queue.member_id AND m.status='active')`).bind(room_id),
+    database.prepare(`INSERT OR IGNORE INTO member_requests (room_id,member_id,message_id,chain_id,batch_id,purpose,created_by,created_at)
+      SELECT q.room_id,q.member_id,q.message_id,q.message_id,0,'ask','user',unixepoch() FROM free_queue q
+      WHERE q.room_id=? AND q.id=(SELECT MIN(x.id) FROM free_queue x WHERE x.message_id=q.message_id AND NOT ${FREE_QUEUE_ASKED("x")})
+      AND NOT EXISTS(SELECT 1 FROM member_requests r WHERE r.message_id=q.message_id AND r.status IN ('pending','delivering'))`).bind(room_id),
+  ];
+}
+
+/**
+ * Who spoke, who speaks now and who is next, shared by free rooms and discussions; only the not-yet-spoken part may be reordered.
+ * A free room shows its latest unfinished one-after-another queue, else every member in the room's default order;
+ * a discussion shows the open round: speakers so far, the current turn, then queued turns. The revision changes with any of it.
+ */
+async function speaking_order(database, room) {
+  const active = (await database.prepare(`SELECT id,name FROM room_members WHERE room_id=? AND status='active' ORDER BY ${SPEAKING_ORDER_BY}`).bind(room.id).all()).results;
+  const by_id = new Map(active.map((member) => [member.id, member.name]));
+  let ordered = active.map((member) => member.name);
+  let items = [], kind = "default", target = 0;
+  if (room.mode === "free") {
+    target = (await database.prepare(`SELECT MAX(q.message_id) AS target FROM free_queue q LEFT JOIN member_requests r ON r.message_id=q.message_id
+      AND r.member_id=q.member_id WHERE q.room_id=? AND (r.id IS NULL OR r.status IN ('pending','delivering'))`).bind(room.id).first())?.target || 0;
+    if (target) {
+      kind = "queue";
+      const rows = (await database.prepare(`SELECT q.member_id,r.status FROM free_queue q LEFT JOIN member_requests r
+        ON r.message_id=q.message_id AND r.member_id=q.member_id WHERE q.message_id=? ORDER BY q.id`).bind(target).all()).results;
+      items = rows.filter((row) => by_id.has(row.member_id)).map((row) => ({ name: by_id.get(row.member_id),
+        state: row.status === null ? "queued" : ["pending", "delivering"].includes(row.status) ? "speaking" : "done" }));
+    }
+  } else {
+    kind = "turns";
+    const last = room.rounds.at(-1);
+    items = (last && !last.completed ? last.speakers : []).map((name) => ({ name, state: "done" }));
+    if (["pending", "notified"].includes(room.current_turn?.status)) items.push({ name: room.current_turn.expert, state: "speaking" });
+    items.push(...room.queued_turns.map((item) => ({ name: item.expert, state: "queued" })));
+    // The user may still hold the host seat of an old discussion; only AI participants have a place.
+    ordered = [room.host, ...ordered, ...Object.keys(room.experts)].filter((name) => (Object.hasOwn(room.experts, name) || name === room.host) && name !== "用户");
+  }
+  const listed = new Set(items.map((item) => item.name));
+  items.push(...[...new Set(ordered)].filter((name) => !listed.has(name)).map((name) => ({ name, state: "idle" })));
+  const movable = kind === "default" ? "idle" : "queued";
+  const state = JSON.stringify([kind, target, items.map((item) => [item.name, item.state])]);
+  return { kind, message_id: target, items, movable: items.filter((item) => item.state === movable).map((item) => item.name), default: active.map((member) => member.name),
+    revision: (await digest_hex(state)).slice(0, 12) };
+}
+
+/**
+ * Owner reorders the not-yet-spoken part of the speaking order; who already spoke or speaks now stays put.
+ * Read the speaking order first and send its revision: a missing revision is refused, a changed one conflicts,
+ * and the new order must list exactly the movable members.
+ */
+async function reorder_speakers(database, room, token, payload) {
+  await require_free_owner(database, room.id, token);
+  const current = room.speaking_order;
+  if (payload.revision === undefined || payload.revision === null) throw new HttpError(400, "调整发言顺序前须先读取最新顺序（speaking-order），并带上其 revision");
+  if (payload.revision !== current.revision) throw new HttpError(409, "发言顺序已变化，请重新读取后再调整");
+  const order = payload.order, movable = current.movable;
+  const given = Array.isArray(order) ? order.map(String) : [];
+  const count = (list, name) => list.filter((item) => item === name).length;
+  if (!Array.isArray(order) || JSON.stringify([...given].sort()) !== JSON.stringify([...movable].sort())) {
+    const missing = [...new Set(movable)].filter((name) => count(given, name) < count(movable, name));
+    const extra = [...new Set(given)].filter((name) => count(movable, name) < count(given, name));
+    throw new HttpError(400, `新顺序须恰好包含尚未发言的成员${missing.length ? `；缺少：${missing.join("、")}` : ""}${extra.length ? `；多出：${extra.join("、")}` : ""}`);
+  }
+  const names = new Map((await database.prepare("SELECT id,name FROM room_members WHERE room_id=? AND status='active'").bind(room.id).all()).results.map((row) => [row.name, row.id]));
+  if (current.kind === "queue") {
+    await database.batch([database.prepare(`DELETE FROM free_queue WHERE message_id=? AND NOT ${FREE_QUEUE_ASKED("free_queue")}`).bind(current.message_id),
+      ...order.map((name) => database.prepare("INSERT INTO free_queue (room_id,message_id,member_id) VALUES (?,?,?)").bind(room.id, current.message_id, names.get(name)))]);
+  } else if (current.kind === "turns") {
+    // Ids keep the relay order, so each turn's content moves to the id at its new place; submission ids are freed first as they are unique.
+    const rows = (await database.prepare("SELECT * FROM discussion_turns WHERE room_id=? AND status='queued' ORDER BY id").bind(room.id).all()).results;
+    const remaining = [...rows];
+    const moved = order.map((name) => remaining.splice(remaining.findIndex((row) => row.expert === name), 1)[0]);
+    await database.batch([database.prepare("UPDATE discussion_turns SET submission_id=submission_id||':moving:'||id WHERE room_id=? AND status='queued'").bind(room.id),
+      ...rows.map((slot, index) => database.prepare("UPDATE discussion_turns SET expert=?,question=?,submission_id=?,created_at=? WHERE id=?")
+        .bind(moved[index].expert, moved[index].question, moved[index].submission_id, moved[index].created_at, slot.id))]);
+  } else {
+    await database.prepare("INSERT OR REPLACE INTO speaking_orders (room_id,member_ids) VALUES (?,?)").bind(room.id, JSON.stringify(order.map((name) => names.get(name)))).run();
+  }
 }
 
 /** The chain an answer continues: the newest chain among the requests it completes. */
@@ -2318,8 +2421,10 @@ async function free_answer_guard(database, room_id, member, payload) {
 }
 
 /** Statements ending matching live executions; requests move first, while their execution is still live. */
-function free_finish_statements(database, where, values, status, result, request_status) {
+function free_finish_statements(database, where, values, status, result, request_status, cancel_reason = "") {
   return [
+    ...(request_status === "cancelled" && cancel_reason ? [database.prepare(`INSERT OR REPLACE INTO request_cancel_reasons (request_id,reason)
+      SELECT id,? FROM member_requests WHERE status='delivering' AND execution_id IN (SELECT id FROM member_executions WHERE ${where} AND ${FREE_LIVE})`).bind(cancel_reason, ...values)] : []),
     database.prepare(`UPDATE member_requests SET status=?,execution_id=CASE WHEN ?='pending' THEN NULL ELSE execution_id END
       WHERE status='delivering' AND execution_id IN (SELECT id FROM member_executions WHERE ${where} AND ${FREE_LIVE})`).bind(request_status, request_status, ...values),
     database.prepare(`UPDATE member_executions SET status=?,finished_at=unixepoch(),result=? WHERE ${where} AND ${FREE_LIVE}`).bind(status, result.slice(0, 500), ...values),
@@ -2335,9 +2440,32 @@ async function free_expire_statements(database, room_id) {
 }
 
 /** Void a member's live execution and every open request, so nothing restarts by itself. */
-function free_stop_statements(database, member_id, reason) {
-  return [...free_finish_statements(database, "member_id=?", [member_id], "cancelled", reason, "cancelled"),
+function free_stop_statements(database, member_id, reason, cancel_reason) {
+  return [...free_finish_statements(database, "member_id=?", [member_id], "cancelled", reason, "cancelled", cancel_reason),
+    database.prepare("INSERT OR REPLACE INTO request_cancel_reasons (request_id,reason) SELECT id,? FROM member_requests WHERE member_id=? AND status='pending'").bind(cancel_reason, member_id),
     database.prepare("UPDATE member_requests SET status='cancelled' WHERE member_id=? AND status='pending'").bind(member_id)];
+}
+
+/** Void every live execution and open request of a room, e.g. when it is archived. */
+function free_stop_room_statements(database, room_id, reason, cancel_reason) {
+  return [...free_finish_statements(database, "room_id=?", [room_id], "cancelled", reason, "cancelled", cancel_reason),
+    database.prepare("INSERT OR REPLACE INTO request_cancel_reasons (request_id,reason) SELECT id,? FROM member_requests WHERE room_id=? AND status='pending'").bind(cancel_reason, room_id),
+    database.prepare("UPDATE member_requests SET status='cancelled' WHERE room_id=? AND status='pending'").bind(room_id),
+    ...free_settle_statements(database, room_id)];
+}
+
+/** Messages whose host request is still open; they need a new host if this one leaves. */
+async function free_open_route_messages(database, member_id, pending_only = false) {
+  const states = pending_only ? "'pending'" : "'pending','delivering'";
+  return (await database.prepare(`SELECT message_id FROM member_requests WHERE member_id=? AND purpose='route' AND status IN (${states}) ORDER BY message_id`)
+    .bind(member_id).all()).results.map(row => row.message_id);
+}
+
+/** Ask the current host to route messages left behind by the previous host. */
+function free_hand_over_statements(database, room_id, message_ids, departed_id = 0) {
+  return message_ids.map(message_id => database.prepare(`INSERT OR IGNORE INTO member_requests (room_id,member_id,message_id,chain_id,purpose,created_by,created_at)
+    SELECT room_id,id,?,?,'route','user',unixepoch() FROM room_members WHERE room_id=? AND role='host' AND status='active' AND id<>?`)
+    .bind(message_id, message_id, room_id, departed_id));
 }
 
 /** Describe one execution with the requests it carries and the member's read cursor. */
@@ -2401,7 +2529,8 @@ async function free_route_wide(database, room_id, message_id, action) {
   if (!route || route.room_id !== room_id) throw new HttpError(404, "只能处理交给主持人的未点名消息");
   const pending = "AND status='pending'";
   const statements = action === "none"
-    ? [database.prepare(`UPDATE member_requests SET status='cancelled' WHERE id=? ${pending}`).bind(route.id)]
+    ? [database.prepare(`UPDATE member_requests SET status='cancelled' WHERE id=? ${pending}`).bind(route.id),
+      database.prepare("INSERT OR REPLACE INTO request_cancel_reasons (request_id,reason) SELECT id,'no_reply' FROM member_requests WHERE id=? AND status='cancelled' AND execution_id IS NULL AND answer_id IS NULL").bind(route.id)]
     // The host keeps its row (one request per message and member) and now answers its own share, without dispatching.
     : [database.prepare(`UPDATE member_requests SET purpose='all' WHERE id=? ${pending}`).bind(route.id),
       database.prepare(`INSERT OR IGNORE INTO member_requests (room_id,member_id,message_id,chain_id,purpose,created_by,created_at)
@@ -2430,9 +2559,10 @@ async function free_adopt(database, room_id, token, message_id, payload) {
   const statements = [];
   // The host's execution may carry other messages too; stopping it voids that whole execution.
   if (payload.mode === "interrupt" && route.status === "delivering") {
-    statements.push(...free_finish_statements(database, "id=?", [route.execution_id], "cancelled", "智能调度改派，改由其他成员回答", "cancelled"));
+    statements.push(...free_finish_statements(database, "id=?", [route.execution_id], "cancelled", "智能调度改派，改由其他成员回答", "cancelled", "rerouted"));
   } else if (payload.mode === "interrupt" && route.status === "pending") {
-    statements.push(database.prepare("UPDATE member_requests SET status='cancelled' WHERE id=?").bind(route.id));
+    statements.push(database.prepare("INSERT OR REPLACE INTO request_cancel_reasons (request_id,reason) VALUES (?,'rerouted')").bind(route.id),
+      database.prepare("UPDATE member_requests SET status='cancelled' WHERE id=?").bind(route.id));
   }
   statements.push(database.prepare("UPDATE member_recommendations SET status='waiting',mode=? WHERE message_id=? AND status='open'").bind(payload.mode, message_id),
     ...free_release_statements(database, room_id), ...free_settle_statements(database, room_id));
@@ -2557,16 +2687,19 @@ async function handle_free_api(database, request, parts) {
   }
   if (parts.length === 6 && parts[3] === "members" && parts[5] === "interrupt" && method === "POST") {
     const member = await free_owned_member(database, room_id, integer(parts[4]), token);
-    await database.batch([...free_stop_statements(database, member.id, "用户打断"), ...free_settle_statements(database, room_id)]);
+    await database.batch([...free_stop_statements(database, member.id, "用户打断", "user_stop"), ...free_settle_statements(database, room_id)]);
     return respond(await free_view(database, room_id));
   }
   if (parts.length === 5 && parts[3] === "members" && method === "POST") {
     const member = await free_owned_member(database, room_id, integer(parts[4]), token);
     const payload = await read_payload(request);
     if (["away", "remove"].includes(payload.action)) {
-      await database.batch([...free_stop_statements(database, member.id, payload.action === "away" ? "成员已离开" : "成员已移除"),
+      // Unnamed messages still waiting on a departing host move to its successor instead of being dropped.
+      const routed = await free_open_route_messages(database, member.id);
+      await database.batch([...free_stop_statements(database, member.id, payload.action === "away" ? "成员已离开" : "成员已移除", payload.action === "away" ? "member_away" : "member_removed"),
         database.prepare("UPDATE room_members SET status=? WHERE id=?").bind(payload.action === "away" ? "away" : "removed", member.id),
-        ...free_participant_statements(database, room_id), ...free_settle_statements(database, room_id)]);
+        ...free_participant_statements(database, room_id), ...free_settle_statements(database, room_id),
+        ...free_hand_over_statements(database, room_id, routed, member.id)]);
     } else if (payload.action === "active") {
       const hashed = await runtime_hash(payload.token);
       if (member.status === "active" && hashed && hashed === member.token_hash) return respond(await free_view(database, room_id));
@@ -2590,10 +2723,16 @@ async function handle_free_api(database, request, parts) {
         throw new HttpError(400, "role 须为 host 或 member；在线成员不能担任主持人");
       }
       if (payload.role === "member" && member.role === "host") throw new HttpError(400, "自由房间须由一位 AI 主持；请指定另一位成员担任主持人");
+      // Unnamed messages the old host has not started move to the new host, which carries the host rules.
+      const old_host = payload.role === "host" ? await database.prepare("SELECT id FROM room_members WHERE room_id=? AND role='host' AND id<>?").bind(room_id, member.id).first() : null;
+      const routed = old_host ? await free_open_route_messages(database, old_host.id, true) : [];
       await database.batch([
+        ...(old_host ? [database.prepare("INSERT OR REPLACE INTO request_cancel_reasons (request_id,reason) SELECT id,'rerouted' FROM member_requests WHERE member_id=? AND purpose='route' AND status='pending'").bind(old_host.id),
+          database.prepare("UPDATE member_requests SET status='cancelled' WHERE member_id=? AND purpose='route' AND status='pending'").bind(old_host.id)] : []),
         ...(payload.role === "host" ? [database.prepare("UPDATE room_members SET role='member' WHERE room_id=? AND role='host'").bind(room_id)] : []),
         database.prepare("UPDATE room_members SET role=? WHERE id=?").bind(payload.role, member.id),
-        ...free_participant_statements(database, room_id), ...free_settle_statements(database, room_id)]);
+        ...free_participant_statements(database, room_id), ...free_settle_statements(database, room_id),
+        ...free_hand_over_statements(database, room_id, routed)]);
     } else throw new HttpError(400, "action 须为 away、active、remove、role 或 adopt");
     return respond(await free_view(database, room_id));
   }
@@ -2797,6 +2936,12 @@ async function append_free_message(database, room, payload, actor) {
     }
     effects.push(database.prepare(`UPDATE member_requests SET status='completed',answer_id=${message_id}
       WHERE member_id=? AND status='pending' AND id IN (SELECT value FROM json_each(?))`).bind(...key, proxy.id, JSON.stringify([...new Set(ids)])));
+  } else if (actor === "用户" && payload.sequential === true && payload.to !== undefined) {
+    // Named members answer one after another in the room's speaking order; settling below asks the first.
+    const ids = (await free_recipients(database, room_id, payload)).map(recipient => recipient.id);
+    effects.push(database.prepare(`INSERT INTO free_queue (room_id,message_id,member_id)
+      SELECT ?,${message_id},id FROM room_members WHERE id IN (SELECT value FROM json_each(?)) ORDER BY ${SPEAKING_ORDER_BY}`)
+      .bind(room_id, ...key, JSON.stringify(ids)));
   } else if (actor === "用户") {
     for (const recipient of await free_recipients(database, room_id, payload)) {
       effects.push(database.prepare(`INSERT INTO member_requests (room_id,member_id,message_id,chain_id,purpose,created_by,created_at)
@@ -3049,6 +3194,14 @@ async function handle_api(database, request, parts, params, bucket, setup_key = 
     return respond(body.action === "start" ? await start_discussion(database, room_id, token, body) : await end_discussion(database, room_id, token));
   }
   if (parts[3] === "register" && parts.length === 4 && method === "POST") return respond(await register_member(database, room_id, request.headers.get("X-Discussion-Token") ?? ""));
+  if (parts[3] === "speaking-order" && parts.length === 4) {
+    if (method === "GET") return respond((await require_room(database, room_id)).speaking_order);
+    if (method === "POST") {
+      const payload = await read_payload(request);
+      await reorder_speakers(database, await require_room(database, room_id), request.headers.get("X-Discussion-Token") ?? "", payload);
+      return respond(await require_room(database, room_id));
+    }
+  }
   const free = await room_mode(database, room_id) === "free";
   // A discussion keeps the local service's inbox and per-member executions for the user's direct questions.
   if (["inbox", "executions"].includes(parts[3]) || (free && ["members", "suggestions", "recommendations"].includes(parts[3]))) return handle_free_api(database, request, parts);

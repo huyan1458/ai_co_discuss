@@ -3,6 +3,7 @@
 import { computed, inject, ref, watch } from "vue";
 import InviteDialog from "./InviteDialog.vue";
 import DiscussionLimits from "./DiscussionLimits.vue";
+import SpeakingOrder from "./SpeakingOrder.vue";
 
 const props = defineProps({ docked: { type: Boolean, default: false } });
 const { view, bridge, act, pending } = inject("discussion");
@@ -141,7 +142,8 @@ function member_status(name) {
     text = live && execution.role === "host" ? `${duty} · ${live}` : duty;
     tone = "primary";
   } else if (queue_index >= 0 && !inactive.value) {
-    text = `本轮排队 · 第 ${queue_index + 1} 位`;
+    // Its place is the row's number in the speaking order.
+    text = "本轮排队";
   } else if (speakers.includes(name)) {
     text = "本轮已发言";
     tone = "success";
@@ -261,33 +263,35 @@ async function finish(action) {
       <p class="pb-focus" :class="{ 'is-expanded': focus_expanded }">{{ focus }}</p>
       <button v-if="focus_long" type="button" class="pb-link" @click="focus_expanded = !focus_expanded">{{ focus_expanded ? '收起' : '展开' }}</button>
     </section>
-    <section class="pb-section" aria-label="参与者">
-      <div class="pb-heading"><h4>参与者</h4><button v-if="can_invite" type="button" class="pb-link" @click="open_invite"><UIcon name="i-lucide-plus" />邀请</button></div>
+    <section class="pb-section" aria-label="发言顺序">
+      <div class="pb-heading"><h4>发言顺序</h4><button v-if="can_invite" type="button" class="pb-link" @click="open_invite"><UIcon name="i-lucide-plus" />邀请</button></div>
       <p v-if="room.held_since && turn && !inactive" class="pb-status-detail pb-held">用户有新操作，{{ bridge.display_name(turn.expert) }} 说完后交给主持人</p>
-      <ul class="pb-members">
-        <li v-for="member in members" :key="member.name" class="pb-member">
-          <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
-          <div class="pb-member-body">
-            <div class="pb-member-name">{{ bridge.display_name(member.name) }}<UIcon v-if="member.is_host" name="i-lucide-crown" title="主持人" /><small>{{ member.is_host ? `主持 · ${member.mode}` : member.mode }}</small></div>
-            <div v-if="member.model" class="pb-member-model" title="本场启动配置；默认模型与默认强度由对应软件决定">{{ member.model }}</div>
-            <div v-if="record(member.name)?.session_mode === 'borrowed'" class="pb-member-model" title="续接你已有的会话；它工作时请不要在原窗口继续操作">借用已有会话</div>
-            <div v-if="!settled" class="pb-member-status" :class="`is-${member.tone}`"><span class="pb-dot"></span>{{ member.text }}<small v-if="member.failures"> · 失败 {{ member.failures }} 次</small></div>
-            <div v-if="member.manual && !settled" class="pb-member-manual">
-              <span v-if="!record(member.name)?.registered_at && !member.is_host">需在它的会话中注册，才算到场</span>
-              <button v-if="can_control" type="button" class="pb-link" @click="copy_launch(member.name)"><UIcon :name="launch_copied === member.name ? 'i-lucide-check' : 'i-lucide-rocket'" />{{ launch_copied === member.name ? '已复制' : '复制启动指令' }}</button>
+      <SpeakingOrder :away="away_members.map((member) => member.name)">
+        <template #default="{ item }">
+          <template v-if="item.state === 'away'">
+            <UAvatar :src="bridge.identities[item.name]?.icon" :text="bridge.identities[item.name]?.initials" :alt="item.name" size="xs" class="channel-avatar" :class="bridge.identities[item.name]?.style" />
+            <div class="pb-member-body">
+              <div class="pb-member-name">{{ bridge.display_name(item.name) }}<small>暂离</small></div>
+              <div class="pb-member-status is-neutral"><span class="pb-dot"></span>保留位置和会话，不参与安排</div>
             </div>
-          </div>
-          <UDropdownMenu v-if="member_menu(member).length" :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="`${member.name} 的更多操作`" /></UDropdownMenu>
-        </li>
-        <li v-for="member in away_members" :key="member.id" class="pb-member is-away">
-          <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
-          <div class="pb-member-body">
-            <div class="pb-member-name">{{ bridge.display_name(member.name) }}<small>暂离</small></div>
-            <div class="pb-member-status is-neutral"><span class="pb-dot"></span>保留位置和会话，不参与安排</div>
-          </div>
-          <UDropdownMenu v-if="member_menu({ name: member.name }).length" :items="member_menu({ name: member.name })" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="`${member.name} 的更多操作`" /></UDropdownMenu>
-        </li>
-      </ul>
+            <UDropdownMenu v-if="member_menu({ name: item.name }).length" :items="member_menu({ name: item.name })" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="`${item.name} 的更多操作`" /></UDropdownMenu>
+          </template>
+          <template v-else v-for="member in [member_status(item.name)]" :key="member.name">
+            <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
+            <div class="pb-member-body">
+              <div class="pb-member-name">{{ bridge.display_name(member.name) }}<UIcon v-if="member.is_host" name="i-lucide-crown" title="主持人" /><small>{{ member.is_host ? `主持 · ${member.mode}` : member.mode }}</small></div>
+              <div v-if="member.model" class="pb-member-model" title="本场启动配置；默认模型与默认强度由对应软件决定">{{ member.model }}</div>
+              <div v-if="record(member.name)?.session_mode === 'borrowed'" class="pb-member-model" title="续接你已有的会话；它工作时请不要在原窗口继续操作">借用已有会话</div>
+              <div v-if="!settled" class="pb-member-status" :class="`is-${member.tone}`"><span class="pb-dot"></span>{{ member.text }}<small v-if="member.failures"> · 失败 {{ member.failures }} 次</small></div>
+              <div v-if="member.manual && !settled" class="pb-member-manual">
+                <span v-if="!record(member.name)?.registered_at && !member.is_host">需在它的会话中注册，才算到场</span>
+                <button v-if="can_control" type="button" class="pb-link" @click="copy_launch(member.name)"><UIcon :name="launch_copied === member.name ? 'i-lucide-check' : 'i-lucide-rocket'" />{{ launch_copied === member.name ? '已复制' : '复制启动指令' }}</button>
+              </div>
+            </div>
+            <UDropdownMenu v-if="member_menu(member).length" :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="`${member.name} 的更多操作`" /></UDropdownMenu>
+          </template>
+        </template>
+      </SpeakingOrder>
       <p v-if="!inviting && view.free_error && room.phase !== 'paused'" role="alert" class="pb-free-note is-error">{{ view.free_error }}</p>
       <p v-else-if="view.free_notice" role="status" class="pb-free-note">{{ view.free_notice }}</p>
     </section>

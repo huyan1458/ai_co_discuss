@@ -467,6 +467,39 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(self.request(f"{self.path}/messages", {**late, "submission_id": uuid.uuid4().hex}, renewed)[0], 409)
         self.assertEqual(self.answer(claude["id"])[0], 201)
 
+    def test_removed_host_hands_unnamed_message_to_the_new_host(self):
+        """An unnamed message waiting on the host must still reach its successor, and the cancelled request says why."""
+        message = FreeRoomTests.say(self, "没点名的问题")[1]["message"]
+        codex_id = self.member_id("Codex")
+        self.assertEqual(self.request(f"{self.path}/members/{codex_id}", {"action": "remove"}, self.owner)[0], 200)
+        room = self.request(self.path)[1]
+        mine = [(item["member"], item["status"], item["purpose"], item["cancel_reason"]) for item in room["free"]["requests"]
+                if item["message_id"] == message["id"]]
+        self.assertEqual(room["host"], "Claude")
+        self.assertEqual(sorted(mine), [("Claude", "pending", "route", None), ("Codex", "cancelled", "route", "member_removed")])
+
+    def test_switching_host_moves_unstarted_routes_and_stop_records_its_reason(self):
+        """A host change moves pending unnamed messages; stopping a member records user_stop."""
+        message = FreeRoomTests.say(self, "没点名的问题")[1]["message"]
+        claude_id = self.member_id("Claude")
+        self.assertEqual(self.request(f"{self.path}/members/{claude_id}", {"action": "role", "role": "host"}, self.owner)[0], 200)
+        room = self.request(self.path)[1]
+        mine = sorted((item["member"], item["status"], item["cancel_reason"]) for item in room["free"]["requests"] if item["message_id"] == message["id"])
+        self.assertEqual(mine, [("Claude", "pending", None), ("Codex", "cancelled", "rerouted")])
+        self.assertEqual(self.request(f"{self.path}/members/{claude_id}/interrupt", {}, self.owner)[0], 200)
+        room = self.request(self.path)[1]
+        self.assertEqual([item["cancel_reason"] for item in room["free"]["requests"] if item["member"] == "Claude"], ["user_stop"])
+
+    def test_archive_voids_open_work(self):
+        """Archiving a free room cancels delivering and pending requests so nothing is answered or delivered later."""
+        self.say("给 Claude", to=["Claude"])
+        execution = self.reserve_for("Claude")[1]
+        self.say("再来一条", to=["Claude"])
+        self.assertEqual(self.request(f"{self.path}/archive", {"actor": "用户"}, self.owner)[0], 200)
+        room = self.request(self.path)[1]
+        self.assertEqual({(item["status"], item["cancel_reason"]) for item in room["free"]["requests"]}, {("cancelled", "archived")})
+        self.assertEqual(next(item for item in room["free"]["executions"] if item["id"] == execution["id"])["status"], "cancelled")
+
     def test_removed_member_leaves_history_and_participants(self):
         """Removal keeps past messages but drops the member from the participant list."""
         codex_id = self.member_id("Codex")
@@ -598,6 +631,54 @@ class HostTests(FreeRoomTests):
         self.assertNotIn(("Claude", "handoff", "pending"), self.requests())
         self.work("Gemini")
         self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 1)
+
+    def test_sequential_mention_asks_the_host_first_and_each_next_member_after_the_previous_ends(self):
+        """@全体依次 asks one member at a time: the host, then by joining order; a failed or departed member is passed over."""
+        FreeRoomTests.say(self, "依次说说", to=["Gemini", "Codex", "Claude"], sequential=True)
+        self.assertEqual(self.requests(), [("Claude", "ask", "pending")])
+        self.work("Claude")
+        self.assertEqual(self.requests()[1:], [("Codex", "ask", "pending")])
+        failing = self.reserve_for("Codex")[1]
+        self.request(f"{self.path}/executions/{failing['id']}", {"action": "fail", "reason": "CLI 退出"}, self.owner)
+        self.assertEqual(self.requests()[1:], [("Codex", "ask", "failed"), ("Gemini", "ask", "pending")])
+        self.work("Gemini")
+        FreeRoomTests.say(self, "再来一次", to=["Gemini", "Codex"], sequential=True)
+        self.assertEqual(self.requests()[3:], [("Codex", "ask", "pending")])
+        self.request(f"{self.path}/members/{self.member_id('Codex')}", {"action": "away"}, self.owner)
+        self.assertEqual(self.requests()[3:], [("Codex", "ask", "cancelled"), ("Gemini", "ask", "pending")])
+        order = self.request(self.path)[1]["speaking_order"]
+        self.assertEqual((order["kind"], [(item["name"], item["state"]) for item in order["items"]]),
+                         ("queue", [("Gemini", "speaking"), ("Claude", "idle")]))
+
+    def test_owner_reorders_who_has_not_spoken_against_the_latest_revision(self):
+        """Read the order, then send its revision: spoken and speaking members stay, the rest follow the new order at once."""
+        FreeRoomTests.say(self, "依次说说", to=["Claude", "Codex", "Gemini"], sequential=True)
+        order = self.request(f"{self.path}/speaking-order")[1]
+        self.assertEqual(([(item["name"], item["state"]) for item in order["items"]], order["movable"]),
+                         ([("Claude", "speaking"), ("Codex", "queued"), ("Gemini", "queued")], ["Codex", "Gemini"]))
+        url = f"{self.path}/speaking-order"
+        self.assertEqual(self.request(url, {"order": ["Gemini", "Codex"]}, self.owner)[0], 400)
+        self.assertEqual(self.request(url, {"revision": order["revision"], "order": ["Gemini", "Codex"]}, self.member)[0], 403)
+        status, refused = self.request(url, {"revision": order["revision"], "order": ["Gemini", "Claude"]}, self.owner)
+        self.assertEqual(status, 400)
+        self.assertIn("缺少：Codex", refused["error"])
+        self.assertIn("多出：Claude", refused["error"])
+        self.assertEqual(self.request(url, {"revision": "stale", "order": ["Gemini", "Codex"]}, self.owner)[0], 409)
+        status, room = self.request(url, {"revision": order["revision"], "order": ["Gemini", "Codex"]}, self.owner)
+        self.assertEqual(status, 200, room)
+        self.assertEqual([item["name"] for item in room["speaking_order"]["items"]], ["Claude", "Gemini", "Codex"])
+        self.work("Claude")
+        self.assertEqual(self.requests()[1:], [("Gemini", "ask", "pending")])
+
+    def test_idle_reorder_sets_the_default_order_for_later_queues(self):
+        """With nothing queued, dragging sets the room's default order, which the next one-after-another message follows."""
+        order = self.request(self.path)[1]["speaking_order"]
+        self.assertEqual((order["kind"], order["movable"]), ("default", ["Claude", "Codex", "Gemini"]))
+        status, room = self.request(f"{self.path}/speaking-order", {"revision": order["revision"], "order": ["Gemini", "Claude", "Codex"]}, self.owner)
+        self.assertEqual(status, 200, room)
+        self.assertEqual(room["speaking_order"]["movable"], ["Gemini", "Claude", "Codex"])
+        FreeRoomTests.say(self, "依次说说", to=["Claude", "Codex", "Gemini"], sequential=True)
+        self.assertEqual(self.requests(), [("Gemini", "ask", "pending")])
 
     def test_partial_failure_still_hands_back_but_all_failed_halts(self):
         """One completed member is enough to hand back; a batch where all fail halts the chain."""

@@ -11,7 +11,8 @@ export function use_discussion() {
   const field = (id) => computed({ get: () => view.value.fields[id] || "",
     set: (value) => bridge.write_field(id, value) });
   async function act(name, value) {
-    if (["manage_channel", "move_channel", "create_folder", "rename_folder", "delete_folder", "move_folder", "create"].includes(name)) return bridge.execute(name, value);
+    // Ordering runs beside other actions, like the directory's moves; the speaking order guards its own sends.
+    if (["manage_channel", "move_channel", "create_folder", "rename_folder", "delete_folder", "move_folder", "create", "reorder_speakers"].includes(name)) return bridge.execute(name, value);
     if (pending.value) return bridge.execute("busy", pending.value);
     pending.value = name;
     try { return await bridge.execute(name, value); }

@@ -47,7 +47,7 @@ const PLATFORM_IDENTITIES = {
   Grok: { initials: "GK", style: "grok", description: "AI 身份" },
 };
 const IDENTITIES = by_platform(PLATFORM_IDENTITIES, (identity, name) => ({ ...identity, label: name, description: "AI 实例" }));
-const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false, free_notice: "", free_error: "",
+const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false, free_notice: "", free_error: "", order_error: null,
   free_proxy: "", create_parent: null, named_followup: false, create_discussion: false,
   archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
   reply_to: null, turn_reply_to: null, tab: "topic", refresh_version: 0, context_dirty: false, topic_dirty: false,
@@ -939,9 +939,12 @@ function message_payload() {
       request_ids: state.room.free.requests.filter(item => item.member === online.name && item.status === "pending").map(item => item.id) };
     const payload = { author: "用户", text, reply_to: state.reply_to, kind: "chat", submitted_by: "用户" };
     const active = (state.room.free?.members || []).filter(member => member.status === "active" && (member.access !== "manual" || member.registered_at)).map(member => member.name);
-    // @mentions outside code name members (@全体成员 or @all names them all); without any, the server gives the message to the only member or the host.
-    const named = mentioned(text, "全体成员") || mentioned(text, "all") ? active : active.filter(name => mentioned(text, name));
+    // @mentions outside code name members (@全体成员 or @all names them all; @全体依次 or @all-seq has them answer one after another, the host first);
+    // without any, the server gives the message to the only member or the host.
+    const sequential = mentioned(text, "全体依次") || mentioned(text, "all-seq");
+    const named = sequential || mentioned(text, "全体成员") || mentioned(text, "all") ? active : active.filter(name => mentioned(text, name));
     if (named.length) payload.to = named;
+    if (sequential && named.length) payload.sequential = true;
     return payload;
   }
   const mode = element("message-kind").value;
@@ -1062,6 +1065,18 @@ async function change_member({ member_id, name, action, role, latest_id }) {
     }
     if (state.room?.id === room_id) await refresh_room();
   } catch (error) { if (state.room?.id === room_id) state.free_error = error.message; }
+}
+
+/** Reorder who has not spoken yet against the revision the board showed; a changed order is refused and the board reloads. */
+async function reorder_speakers({ revision, order }) {
+  const room_id = state.room.id;
+  state.order_error = null;
+  try { await request_json(`/api/rooms/${room_id}/speaking-order`, { revision, order }); }
+  catch (error) {
+    // A conflict means someone else's change landed first; the board reloads below, so ask for the move again (same text as the board's own notice).
+    state.order_error = { room_id, message: error.status === 409 ? "发言顺序刚有变化，已更新为最新顺序，请重新调整" : error.message };
+  }
+  if (state.room?.id === room_id) await refresh_room();
 }
 
 /** Invite an independent member, retaining its credential before either delivery path runs. */
@@ -3155,7 +3170,7 @@ function view_snapshot() {
     attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url })),
     composer_error: state.composer_error, upload_status: state.upload_status, sending_message: state.sending_message,
     mention_only: state.mention_only, reply_to: state.reply_to, turn_reply_to: state.turn_reply_to,
-    free_notice: state.free_notice, free_error: state.free_error, free_proxy: state.free_proxy,
+    free_notice: state.free_notice, free_error: state.free_error, free_proxy: state.free_proxy, order_error: state.order_error,
     create_parent: state.create_parent, access: access_snapshot(), admin: admin_snapshot(),
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
     theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion };
@@ -3328,7 +3343,7 @@ async function execute_view_action(name, value) {
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
     choose_runtime, export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, retry_execution, conclude_discussion, start_room_discussion, end_room_discussion, reopen_discussion,
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
-    load_room_configuration, save_room_configuration, interrupt_member, change_member, invite_member, set_proxy, copy_online_notice,
+    load_room_configuration, save_room_configuration, interrupt_member, change_member, reorder_speakers, invite_member, set_proxy, copy_online_notice,
     prepare_brainstorm, return_conclusion, convert_suggestion, adopt_recommendation, rate_decision,
     busy: () => { throw new Error("上一个操作仍在处理中，请稍候；长时间无响应请刷新页面"); },
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };

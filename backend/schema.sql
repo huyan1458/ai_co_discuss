@@ -602,6 +602,11 @@ CREATE TABLE IF NOT EXISTS scheduler_routing (
     created_at INTEGER NOT NULL,
     PRIMARY KEY (room_id, message_id)
 );
+-- Why a request was cancelled; a side table so older databases need no column change. Requests cancelled before it existed have no row.
+CREATE TABLE IF NOT EXISTS request_cancel_reasons (
+    request_id INTEGER PRIMARY KEY REFERENCES member_requests(id) ON DELETE CASCADE,
+    reason TEXT NOT NULL CHECK(reason IN ('user_stop','member_away','member_removed','rerouted','no_reply','archived'))
+);
 -- What produced a decision (model, threshold, prompt and package versions), so ratings stay comparable across versions.
 CREATE TABLE IF NOT EXISTS scheduler_decision_context (
     decision_id INTEGER PRIMARY KEY REFERENCES scheduler_decisions(id) ON DELETE CASCADE,
@@ -634,6 +639,19 @@ CREATE TABLE IF NOT EXISTS free_batches (
     host_id INTEGER NOT NULL,
     settled INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (room_id,batch_id)
+);
+-- Members the user named to answer one after another, in the room's speaking order: each gets its request once the one before
+-- it ends. Asked rows stay so the speaking order can show who already answered; the owner may reorder rows not yet asked.
+CREATE TABLE IF NOT EXISTS free_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    member_id INTEGER NOT NULL REFERENCES room_members(id) ON DELETE CASCADE
+);
+-- The owner's default speaking order (JSON list of member ids); members it lacks follow, the host first, then by joining order.
+CREATE TABLE IF NOT EXISTS speaking_orders (
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+    member_ids TEXT NOT NULL
 );
 -- Chains whose automatic progress stopped (budget reached or every dispatched member failed).
 CREATE TABLE IF NOT EXISTS free_chains (

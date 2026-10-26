@@ -263,6 +263,8 @@ def turn_commands(subcommands, registry):
     descriptions = {"list": "分页读取安排历史", "current": "读取阶段和最近安排；需核对状态及专家",
                     "view": "读取一个安排", "prompt": "生成简短通知；不发送、不标记送达",
                     "roster": "申请最新专家状态（在场专家、本轮待发言者与 revision）；整轮安排前必做",
+                    "order": "读取发言顺序（已发言、正在发言、待发言与 revision）；调整顺序前必做",
+                    "reorder": "房主调整尚未发言者的顺序（须带 turn order 的 --revision）；已发言与正在发言者不动",
                     "create": "安排一位专家，或用 --plan-file 一次安排整轮（须带 --roster）；不发送通知",
                     "continue": "处理用户操作或打断后，按原排队继续下一位",
                     "mark-notified": "实际送达后显式确认", "cancel": "取消指定未完成安排"}
@@ -271,7 +273,7 @@ def turn_commands(subcommands, registry):
         if action == "list":
             parser.add_argument("--page", type=positive_int, default=1)
             parser.add_argument("--submission-id", type=submission_id, help="按安排提交编号精确查询结果")
-        elif action not in ("create", "current", "continue", "roster"):
+        elif action not in ("create", "current", "continue", "roster", "order", "reorder"):
             parser.add_argument("id", type=positive_int, help="安排编号")
         if action == "create":
             parser.add_argument("--expert", type=ai_name, help="单个安排的专家；与 --plan-file 二选一")
@@ -280,6 +282,10 @@ def turn_commands(subcommands, registry):
             parser.add_argument("--roster", help="turn roster 返回的 revision；整轮安排（--plan-file）必填，专家状态变化后需重新获取")
             parser.add_argument("--submission-id", type=submission_id, required=True,
                                 help="新安排唯一编号；重试沿用同编号和内容")
+        if action == "reorder":
+            parser.add_argument("--revision", required=True, help="turn order 返回的 revision；顺序变化后需重新获取")
+            parser.add_argument("--member", action="append", type=ai_name, required=True,
+                                help="按新顺序重复指定，须恰好包含 turn order 中 movable 的全部成员")
 
 
 def state_commands(subcommands, registry):
@@ -540,6 +546,10 @@ def plan_turn(args):
         return RequestPlan(base + "/turns", params=params)
     if args.action == "roster":
         return RequestPlan(base + "/turns/roster")
+    if args.action == "order":
+        return RequestPlan(base + "/speaking-order")
+    if args.action == "reorder":
+        return RequestPlan(base + "/speaking-order", "POST", {"revision": args.revision, "order": args.member})
     if args.action == "create":
         return RequestPlan(base + "/turns", "POST", turn_payload(args))
     if args.action == "continue":

@@ -127,9 +127,10 @@ test("mention selection replaces the caret token without dropping surrounding dr
 test("mention arrows wrap, Enter selects, Escape dismisses and send modifiers remain available", async () => {
   const fixture = mention_fixture();
   fixture.type("@");
-  assert.deepEqual([...fixture.state.members.value], ["全体成员", "Codex", "Claude-评审"], "several free members offer @全体成员 first");
+  assert.deepEqual([...fixture.state.members.value], ["全体成员", "全体依次", "Codex", "Claude-评审"], "several free members offer @全体成员 and @全体依次 first");
   fixture.key("ArrowUp");
   assert.equal(fixture.state.active.value, "Claude-评审");
+  fixture.key("ArrowDown");
   fixture.key("ArrowDown");
   fixture.key("ArrowDown");
   assert.equal(fixture.state.active.value, "Codex");
@@ -394,6 +395,18 @@ test("attachment rendering separates images from files and keeps preview capabil
   assert.match(binary, /class="attachment-file-main" href=/);
   assert.doesNotMatch(binary, /data-preview-attachment|<img/);
   assert.match(binary, /title="设计&quot;&lt;图&gt;\.png"/);
+});
+
+test("a free-room draft names everyone at once with @全体成员 and one after another with @全体依次", () => {
+  const { context, state, element } = attachment_fixture();
+  state.room.mode = "free";
+  state.room.free = { members: [{ name: "Claude", status: "active" }, { name: "Codex", status: "active" }] };
+  element("message-input").value = "@全体成员 打个招呼";
+  assert.deepEqual([Array.from(context.message_payload().to), context.message_payload().sequential], [["Claude", "Codex"], undefined]);
+  element("message-input").value = "@全体依次 轮流说说";
+  assert.deepEqual([Array.from(context.message_payload().to), context.message_payload().sequential], [["Claude", "Codex"], true]);
+  element("message-input").value = "@all-seq go";
+  assert.equal(context.message_payload().sequential, true);
 });
 
 test("a discussion draft names active members it @mentions outside code as direct questions", () => {

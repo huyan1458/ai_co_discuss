@@ -285,12 +285,19 @@ class CliTests(unittest.TestCase):
                            "--submission-id", str(uuid.uuid4()), stdin=plan)
         current = self.cli("turn", "current", self.room)
         self.assertEqual((current["current_turn"]["expert"], [item["expert"] for item in current["queued_turns"]]), ("Codex", ["Gemini", "Claude", "DeepSeek", "Qwen", "Grok"]))
+        # The owner reads the speaking order, then moves Grok to the front of the queue against that revision.
+        order = self.cli("turn", "order", self.room)
+        self.assertEqual(order["movable"], ["Gemini", "Claude", "DeepSeek", "Qwen", "Grok"])
+        self.assertEqual(self.rejected(["turn", "reorder", self.room, "--revision", "stale", *[part for name in order["movable"] for part in ("--member", name)]], 1)["http_status"], 409)
+        moved = ["Grok", "Gemini", "Claude", "DeepSeek", "Qwen"]
+        self.cli("turn", "reorder", self.room, "--revision", order["revision"], *[part for name in moved for part in ("--member", name)])
+        self.assertEqual([item["expert"] for item in self.cli("turn", "current", self.room)["queued_turns"]], moved)
         self.assertEqual(self.rejected(["turn", "continue", self.room, "--as", "Codex"], 1)["http_status"], 409)
         self.cli("message", "post", self.room, "--body", "回答", "--as", "Codex", "--turn", created["turn"]["id"],
                  "--summary", "摘要", "--submission-id", str(uuid.uuid4()))
         current = self.cli("turn", "current", self.room)
         self.assertEqual((current["current_turn"]["expert"], [item["expert"] for item in current["queued_turns"]]),
-                         ("Gemini", ["Claude", "DeepSeek", "Qwen", "Grok"]))
+                         ("Grok", ["Gemini", "Claude", "DeepSeek", "Qwen"]))
         self.rejected(["turn", "create", self.room, "--plan-file", "-", "--expert", "Codex", "--as", "Codex",
                        "--submission-id", str(uuid.uuid4())])
 

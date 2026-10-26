@@ -587,6 +587,21 @@ test('Worker invitation joins at the tail of the plan, like Python', async t => 
     [['Gemini', '第 1 句'], ['Claude', '第 2 句'], ['Gemini', '第 3 句'], ['DeepSeek', '欢迎加入：请先读取议题，独立给出你的开场观点。']]);
 });
 
+test('Worker owner reorders queued turns; each keeps its question and submission id, like Python', async t => {
+  const f = await worker_fixture(t);
+  const id = (await f.request('', { title: '调整顺序', host: 'Codex', phase: 'initial', experts: { Codex: 'cli', Claude: 'cli', Gemini: 'cli' } })).body.id;
+  await f.request(`/${id}/runtime`, { action: 'start', revision: 0, deadline: 0 });
+  const names = ['Claude', 'Gemini', 'Claude'];
+  const plan = await f.request(`/${id}/turns`, { actor: '用户', submission_id: 'reorder-plan', roster: (await f.request(`/${id}/turns/roster`)).body.revision, turns: names.map((expert, index) => ({ expert, question: `第 ${index} 句` })) });
+  assert.equal(plan.status, 201, JSON.stringify(plan.body));
+  const order = (await f.request(`/${id}/speaking-order`)).body;
+  assert.deepEqual([order.kind, order.movable], ['turns', ['Gemini', 'Claude']]);
+  const moved = await f.request(`/${id}/speaking-order`, { revision: order.revision, order: ['Claude', 'Gemini'] });
+  assert.equal(moved.status, 200, JSON.stringify(moved.body));
+  assert.deepEqual(f.sql.prepare("SELECT submission_id,expert,question FROM discussion_turns WHERE status='queued' ORDER BY id").all().map(row => [row.submission_id, row.expert, row.question]),
+    [['reorder-plan-q3', 'Claude', '第 2 句'], ['reorder-plan-q2', 'Gemini', '第 1 句']]);
+});
+
 test('Worker running discussions admit and release experts without pausing, like Python', async t => {
   const f = await worker_fixture(t);
   const id = (await f.request('', { title: '成员进出', host: 'Codex', experts: { Codex: 'cli', Claude: 'cli' } })).body.id;
@@ -928,6 +943,45 @@ test('Worker free rooms need the owner credential and keep secrets out of views 
   assert.deepEqual([again.status, again.body.id], [200, r.room.id]);
 });
 
+test('Worker @全体依次 asks the host first and the next member only after the previous one ends', async t => {
+  const f = await worker_fixture(t);
+  const codex = 'codex-free'.repeat(4);
+  const r = await free_worker_room(f, [{ name: 'Codex', adapter: 'codex_cli', token: codex }]);
+  await f.request(`${r.path}/members/${await r.member_id('Codex')}`, { action: 'role', role: 'host' }, r.owner);
+  const requests = async () => (await f.request(r.path)).body.free.requests.map(item => [item.member, item.status]);
+  assert.equal((await r.say('依次说说', { to: ['Claude', 'Codex'], sequential: true })).status, 201);
+  assert.deepEqual(await requests(), [['Codex', 'pending']]);
+  const hosted = await r.reserve('Codex');
+  assert.equal((await r.answer(hosted.body.id, codex, 'Codex')).status, 201);
+  assert.deepEqual(await requests(), [['Codex', 'completed'], ['Claude', 'pending']]);
+  assert.deepEqual((await f.request(r.path)).body.speaking_order.items.map(item => [item.name, item.state]), [['Codex', 'done'], ['Claude', 'speaking']]);
+});
+
+test('Worker owner reorders who has not spoken against the latest revision, or sets the default order when idle', async t => {
+  const f = await worker_fixture(t);
+  const codex = 'codex-free'.repeat(4), gemini = 'gemini-free'.repeat(4);
+  const r = await free_worker_room(f, [{ name: 'Codex', adapter: 'codex_cli', token: codex }, { name: 'Gemini', adapter: 'claude', token: gemini }]);
+  const url = `${r.path}/speaking-order`;
+  const idle = (await f.request(url)).body;
+  assert.deepEqual([idle.kind, idle.movable], ['default', ['Claude', 'Codex', 'Gemini']]);
+  assert.equal((await f.request(url, { revision: idle.revision, order: ['Gemini', 'Claude', 'Codex'] }, r.claude)).status, 403);
+  assert.equal((await f.request(url, { revision: idle.revision, order: ['Gemini', 'Claude', 'Codex'] }, r.owner)).status, 200);
+  await r.say('依次说说', { to: ['Claude', 'Codex', 'Gemini'], sequential: true });
+  const queue = (await f.request(url)).body;
+  assert.deepEqual([queue.kind, queue.items.map(item => [item.name, item.state])], ['queue', [['Gemini', 'speaking'], ['Claude', 'queued'], ['Codex', 'queued']]]);
+  assert.equal((await f.request(url, { order: ['Codex', 'Claude'] }, r.owner)).status, 400);
+  const refused = await f.request(url, { revision: queue.revision, order: ['Codex', 'Gemini'] }, r.owner);
+  assert.equal(refused.status, 400);
+  assert.match(refused.body.error, /缺少：Claude.*多出：Gemini/);
+  assert.equal((await f.request(url, { revision: 'stale', order: ['Codex', 'Claude'] }, r.owner)).status, 409);
+  const moved = await f.request(url, { revision: queue.revision, order: ['Codex', 'Claude'] }, r.owner);
+  assert.equal(moved.status, 200, JSON.stringify(moved.body));
+  assert.deepEqual(moved.body.speaking_order.items.map(item => item.name), ['Gemini', 'Codex', 'Claude']);
+  const first = await r.reserve('Gemini');
+  assert.equal((await r.answer(first.body.id, gemini, 'Gemini')).status, 201);
+  assert.deepEqual((await f.request(r.path)).body.free.requests.map(item => [item.member, item.status]), [['Gemini', 'completed'], ['Codex', 'pending']]);
+});
+
 test('Worker free rooms record every scheduling decision with the owner credential and keep the rating of the owner', async t => {
   const f = await worker_fixture(t);
   const r = await free_worker_room(f);
@@ -1106,6 +1160,35 @@ test('Worker free rooms bundle requests into one execution and reject late or un
   await f.request(`${r.path}/inbox`, undefined, r.owner);
   assert.equal((await f.request(r.path)).body.free.members[0].execution.result, '已达到单次执行时限');
   assert.equal((await f.request(`${r.path}/inbox`, undefined, r.claude)).status, 403);
+});
+
+test('Worker free rooms hand unnamed messages to the new host, record cancel reasons and void work on archive', async t => {
+  const f = await worker_fixture(t);
+  const codex = 'codex-free'.repeat(4);
+  const r = await free_worker_room(f, [{ name: 'Codex', adapter: 'codex_cli', token: codex }]);
+  const for_message = async id => (await f.request(r.path)).body.free.requests.filter(item => item.message_id === id)
+    .map(item => [item.member, item.status, item.purpose, item.cancel_reason]).sort();
+  const first = (await r.say('没点名的问题')).body.message;
+  assert.equal((await f.request(`${r.path}/members/${await r.member_id('Claude')}`, { action: 'remove' }, r.owner)).status, 200);
+  assert.equal((await f.request(r.path)).body.host, 'Codex');
+  assert.deepEqual(await for_message(first.id), [['Claude', 'cancelled', 'route', 'member_removed'], ['Codex', 'pending', 'route', null]]);
+  // A host change moves unstarted routes, a user stop records its reason, and archiving voids what is still owed.
+  const g = await worker_fixture(t);
+  const room = await free_worker_room(g, [{ name: 'Codex', adapter: 'codex_cli', token: codex }]);
+  const route = async id => (await g.request(room.path)).body.free.requests.filter(item => item.message_id === id)
+    .map(item => [item.member, item.status, item.cancel_reason]).sort();
+  const second = (await room.say('另一个没点名的问题')).body.message;
+  assert.equal((await g.request(`${room.path}/members/${await room.member_id('Codex')}`, { action: 'role', role: 'host' }, room.owner)).status, 200);
+  assert.deepEqual(await route(second.id), [['Claude', 'cancelled', 'rerouted'], ['Codex', 'pending', null]]);
+  assert.equal((await g.request(`${room.path}/members/${await room.member_id('Codex')}/interrupt`, {}, room.owner)).status, 200);
+  assert.deepEqual(await route(second.id), [['Claude', 'cancelled', 'rerouted'], ['Codex', 'cancelled', 'user_stop']]);
+  await room.say('给 Claude', { to: ['Claude'] });
+  const execution = (await room.reserve('Claude')).body;
+  await room.say('再来一条', { to: ['Claude'] });
+  assert.equal((await g.request(`${room.path}/archive`, { actor: '用户' }, room.owner)).status, 200);
+  const view = (await g.request(room.path)).body.free;
+  assert.deepEqual([...new Set(view.requests.filter(item => item.cancel_reason === 'archived').map(item => item.status))], ['cancelled']);
+  assert.equal(view.executions.find(item => item.id === execution.id).status, 'cancelled');
 });
 
 test('Worker free rooms keep runner lifecycle, membership and manual members consistent with Python', async t => {
