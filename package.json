@@ -1,6 +1,6 @@
 {
   "name": "ai_co_discuss",
-  "version": "0.2.76",
+  "version": "0.2.77",
   "bin": {
     "codiscuss": "runner/codiscuss.mjs"
   },
