@@ -41837,16 +41837,16 @@ var _H = {
 		}
 		R(ee, we, { immediate: !0 }), R(() => o.value.tab, we);
 		let Te = /* @__PURE__ */ F(null);
-		R([() => [].concat(Te.value ?? []), le], ([e, t], n, r) => {
-			if (!e.length || t) return;
-			let i = bG / xG, a = SG / xG, o = 0, s = 0, c = performance.now(), l = 0;
+		R(() => [].concat(Te.value ?? []), (e, t, n) => {
+			if (!e.length) return;
+			let r = bG / xG, i = SG / xG, a = 0, o = 0, s = performance.now(), c = 0;
 			e.forEach((e) => e.classList.add("is-glowing"));
-			function u(t) {
-				let n = (t - c) / 1e3, r = Math.exp(-n / i);
-				o = (o + a * n + (s - a) * i * (1 - r)) % 1, s = a + (s - a) * r, c = t, e.forEach((e) => e.style.setProperty("--reply-glow-position", `${100 * (1 - o)}%`)), l = requestAnimationFrame(u);
+			function l(t) {
+				let n = (t - s) / 1e3, u = Math.exp(-n / r);
+				a = (a + i * n + (o - i) * r * (1 - u)) % 1, o = i + (o - i) * u, s = t, e.forEach((e) => e.style.setProperty("--reply-glow-position", `${100 * (1 - a)}%`)), c = requestAnimationFrame(l);
 			}
-			l = requestAnimationFrame(u), r(() => {
-				cancelAnimationFrame(l), e.forEach((e) => {
+			c = requestAnimationFrame(l), n(() => {
+				cancelAnimationFrame(c), e.forEach((e) => {
 					e.classList.remove("is-glowing"), e.style.removeProperty("--reply-glow-position");
 				});
 			});
@@ -43635,7 +43635,7 @@ var _H = {
 			], 2);
 		};
 	}
-}, [["__scopeId", "data-v-d8f5d4c5"]]), DG = {
+}, [["__scopeId", "data-v-3b9ad9c7"]]), DG = {
 	slots: {
 		root: "relative inline-flex items-center",
 		base: ["rounded-md", "transition-colors"],

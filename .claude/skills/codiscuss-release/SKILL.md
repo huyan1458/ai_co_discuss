@@ -5,7 +5,7 @@ description: "AI CoDiscuss 快速发版：一次提交全部变更、升 npm 补
 
 # 发版（codiscuss-release）
 
-只做两次命令调用，中间一句话提示。不跑测试，不查看或分析改动内容，不检查其他窗口，不拆分提交，不 push，不 publish。任一命令报错即停止并报告。
+只做两次命令调用，中间一句话提示，结尾一句本机更新提示。不跑测试，不查看或分析改动内容，不检查其他窗口，不拆分提交，不 push，不 publish。任一命令报错即停止并报告。
 
 **第 1 次调用**（构建、提交全部、升版本），在仓库根目录用 Bash 原样执行，署名行按会话要求替换：
 
@@ -21,4 +21,6 @@ npm run build >/dev/null && git add -A && (git diff --cached --quiet || git comm
 npx wrangler pages deploy --branch main --commit-dirty=true --cwd .wrangler/deploy 2>&1 | tail -2
 ```
 
-若报 `.wrangler/deploy/config.json` 相关错误，删除该文件重试一次。最后一句报告部署地址。
+若报 `.wrangler/deploy/config.json` 相关错误，删除该文件重试一次。
+
+**收尾提示**：报告部署地址后，附一句本机更新步骤（由用户在自己的终端执行，不替用户跑）：`npm publish` 完成后，先用 `npm view ai_co_discuss version` 确认线上版本已是 <V>（新版本通常要几分钟才生效，未到先不要安装），再执行 `npm install --global ai_co_discuss@latest` 和 `codiscuss setup`。

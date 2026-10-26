@@ -111,9 +111,9 @@ const reply_glow = ref(null);
 const REPLY_GLOW_MASS = 1;
 const REPLY_GLOW_DAMPING = 18.566573373612275;
 const REPLY_GLOW_FORCE = 78.16726685662772 / 8;
-/** Move only the text's highlight; removal and reduced motion cancel the loop. */
-watch([() => [].concat(reply_glow.value ?? []), reduced_motion], ([elements, reduce_motion], _previous, cleanup) => {
-  if (!elements.length || reduce_motion) return;
+/** Move only the text's highlight; removal cancels the loop. Plays regardless of reduced motion. */
+watch(() => [].concat(reply_glow.value ?? []), (elements, _previous, cleanup) => {
+  if (!elements.length) return;
   const relaxation = REPLY_GLOW_MASS / REPLY_GLOW_DAMPING;
   const terminal_speed = REPLY_GLOW_FORCE / REPLY_GLOW_DAMPING;
   let position = 0, velocity = 0, previous_time = performance.now(), frame = 0;
@@ -1208,20 +1208,19 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
 .channel-message-elapsed { align-self: center; margin-left: auto; white-space: nowrap; }
 .channel-reply-glow { display: inline-block; max-width: 100%; }
 .channel-dots i { font-style: normal; }
-@media (prefers-reduced-motion: no-preference) {
-  .channel-dots i { animation: channel-dot-blink 1.2s infinite both; }
-  .channel-dots i:nth-child(2) { animation-delay: .2s; }
-  .channel-dots i:nth-child(3) { animation-delay: .4s; }
-  @keyframes channel-dot-blink { 0%, 80%, 100% { opacity: .2; } 40% { opacity: 1; } }
-  .channel-reply-glow.is-glowing {
-    background-image: linear-gradient(90deg,
-      color-mix(in srgb, currentColor 76%, transparent) 40%,
-      currentColor 50%,
-      color-mix(in srgb, currentColor 76%, transparent) 60%);
-    background-size: 250% 100%;
-    background-position: var(--reply-glow-position, 100%) 0;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-  }
+/* Working-state motion always plays, regardless of the system reduced-motion setting. */
+html[data-theme^="channel"] .channel-dots i { animation: channel-dot-blink 1.2s infinite both !important; }
+html[data-theme^="channel"] .channel-dots i:nth-child(2) { animation-delay: .2s !important; }
+html[data-theme^="channel"] .channel-dots i:nth-child(3) { animation-delay: .4s !important; }
+@keyframes channel-dot-blink { 0%, 80%, 100% { opacity: .2; } 40% { opacity: 1; } }
+.channel-reply-glow.is-glowing {
+  background-image: linear-gradient(90deg,
+    color-mix(in srgb, currentColor 76%, transparent) 40%,
+    currentColor 50%,
+    color-mix(in srgb, currentColor 76%, transparent) 60%);
+  background-size: 250% 100%;
+  background-position: var(--reply-glow-position, 100%) 0;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 </style>
