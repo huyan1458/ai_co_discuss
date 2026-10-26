@@ -5,8 +5,9 @@
  */
 import { computed, inject, nextTick, ref, watch } from "vue";
 
-const props = defineProps({ away: { type: Array, default: () => [] } });
-const { view, act } = inject("discussion");
+// `round` numbers this round so later rounds of a plan can be labelled; the discussion board knows it.
+const props = defineProps({ away: { type: Array, default: () => [] }, round: { type: Number, default: 0 } });
+const { view, bridge, act } = inject("discussion");
 // One order change at a time; other board actions do not block it.
 const saving = ref(false);
 const room = computed(() => view.value.room);
@@ -154,6 +155,17 @@ function step(event, index, direction) {
           <slot :item="item" :place="item.place" />
         </li>
       </template>
+      <!-- Later rounds of a plan are read-only: only this round can be reordered, and the host usually re-plans after each round. -->
+      <li v-if="order.later?.length" class="speaking-order-later">
+        <details>
+          <summary>后续已排 {{ order.later.length }} 轮</summary>
+          <ol>
+            <li v-for="(names, index) in order.later" :key="index">
+              <span>{{ props.round ? `第 ${props.round + index + 1} 轮` : `后续第 ${index + 1} 轮` }}</span>{{ names.map((name) => bridge.display_name(name)).join(" → ") }}
+            </li>
+          </ol>
+        </details>
+      </li>
       <li v-if="props.away.length" class="speaking-order-divider" aria-hidden="true"><span>已离开</span></li>
       <li v-for="name in props.away" :key="`away-${name}`" class="pb-member speaking-order-row is-away">
         <span class="speaking-order-place"></span>
@@ -195,5 +207,10 @@ function step(event, index, direction) {
 .speaking-order-row.drop-after::after { bottom: -3px; }
 .speaking-order-divider { display: flex; align-items: center; gap: 8px; margin: 6px 8px 0; color: var(--ui-text-dimmed); font-size: 11px; }
 .speaking-order-divider::after { content: ""; flex: 1; height: 1px; background: var(--ui-border); }
+.speaking-order-later { margin: 6px 8px 0; color: var(--ui-text-muted); font-size: 12px; }
+.speaking-order-later summary { color: var(--ui-text-dimmed); font-size: 11px; cursor: pointer; }
+.speaking-order-later ol { display: grid; gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; }
+.speaking-order-later li { overflow-wrap: anywhere; line-height: 1.5; }
+.speaking-order-later li > span { margin-right: 6px; color: var(--ui-text-dimmed); }
 .speaking-order-live { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 </style>

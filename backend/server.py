@@ -113,10 +113,14 @@ FREE_BACKUP_QUERIES = {
 MESSAGE_QUERY = """SELECT messages.*, COALESCE(details.kind,'opinion') AS kind,
 COALESCE(details.submitted_by, CASE WHEN messages.source IN ('cli','api','url','user')
 THEN messages.author ELSE '用户' END) AS submitted_by, details.turn_id,
-COALESCE(summaries.text,'') AS summary, COALESCE(summaries.author,'') AS summary_by, timing.elapsed_seconds
+COALESCE(summaries.text,'') AS summary, COALESCE(summaries.author,'') AS summary_by, timing.elapsed_seconds,
+answered.execution_id, answered.request_message_id
 FROM messages LEFT JOIN message_details AS details ON details.message_id=messages.id
 LEFT JOIN message_summaries AS summaries ON summaries.message_id=messages.id
-LEFT JOIN message_timings AS timing ON timing.message_id=messages.id"""
+LEFT JOIN message_timings AS timing ON timing.message_id=messages.id
+LEFT JOIN (SELECT answer_id, MIN(execution_id) AS execution_id, MIN(message_id) AS request_message_id
+  FROM member_requests WHERE answer_id IS NOT NULL AND execution_id IS NOT NULL GROUP BY answer_id) AS answered
+  ON answered.answer_id=messages.id"""
 
 
 def room_backup(connection, room_id):

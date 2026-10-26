@@ -651,23 +651,29 @@ class RuntimeTests(unittest.TestCase):
         # The invitation is not a plan: only the host's opening plan is listed.
         self.assertEqual([len(item["turns"]) for item in room["host_arrangements"]], [4])
 
-    def test_owner_reorders_queued_turns_and_the_plan_retry_still_matches(self):
-        """Only queued turns move; each keeps its question, the relay follows the new order and the original plan retry stays a duplicate."""
+    def test_owner_reorders_this_rounds_queued_turns_and_the_plan_retry_still_matches(self):
+        """Only this round's queued turns move, each with its question; later rounds stay read-only and plan retries still match."""
         self.start()
         host_token = self.enter(self.events()[0])
         plan = {"actor": "Codex", "submission_id": "reorder-plan", "roster": self.roster_revision(),
-                "turns": [{"expert": name, "question": f"第 {index} 句"} for index, name in enumerate(["Claude", "Gemini", "Claude"])]}
+                "turns": [{"expert": name, "question": f"第 {index} 句"} for index, name in enumerate(["Claude", "Gemini", "Codex", "Gemini", "Claude"])]}
         self.assertEqual(self.request(self.path + "/turns", plan, host_token)[0], 201)
         order = self.request(self.path + "/speaking-order")[1]
-        self.assertEqual((order["kind"], order["movable"]), ("turns", ["Gemini", "Claude"]))
-        self.assertEqual([(item["name"], item["state"]) for item in order["items"][:3]], [("Claude", "speaking"), ("Gemini", "queued"), ("Claude", "queued")])
-        status, room = self.request(self.path + "/speaking-order", {"revision": order["revision"], "order": ["Claude", "Gemini"]}, self.owner)
+        # Gemini speaking twice opens the next round: it is listed apart and cannot be moved from here.
+        self.assertEqual((order["kind"], order["movable"], order["later"]), ("turns", ["Gemini", "Codex"], [["Gemini", "Claude"]]))
+        self.assertEqual([(item["name"], item["state"]) for item in order["items"][:3]], [("Claude", "speaking"), ("Gemini", "queued"), ("Codex", "queued")])
+        status, refused = self.request(self.path + "/speaking-order", {"revision": order["revision"], "order": ["Codex", "Gemini", "Claude"]}, self.owner)
+        self.assertEqual(status, 400)
+        self.assertIn("多出：Claude", refused["error"])
+        status, room = self.request(self.path + "/speaking-order", {"revision": order["revision"], "order": ["Codex", "Gemini"]}, self.owner)
         self.assertEqual(status, 200, room)
-        self.assertEqual([(turn["expert"], turn["question"]) for turn in room["queued_turns"]], [("Claude", "第 2 句"), ("Gemini", "第 1 句")])
+        self.assertEqual([(turn["expert"], turn["question"]) for turn in room["queued_turns"]],
+                         [("Codex", "第 2 句"), ("Gemini", "第 1 句"), ("Gemini", "第 3 句"), ("Claude", "第 4 句")])
         # Each submission id still names its own turn, so an exact retry of the plan is still recognised.
         with closing(sqlite3.connect(self.database)) as connection:
             rows = connection.execute("SELECT submission_id,expert,question FROM discussion_turns WHERE status='queued' ORDER BY id").fetchall()
-        self.assertEqual(rows, [("reorder-plan-q3", "Claude", "第 2 句"), ("reorder-plan-q2", "Gemini", "第 1 句")])
+        self.assertEqual(rows[:2], [("reorder-plan-q3", "Codex", "第 2 句"), ("reorder-plan-q2", "Gemini", "第 1 句")])
+        self.assertEqual(rows[2:], [("reorder-plan-q4", "Gemini", "第 3 句"), ("reorder-plan-q5", "Claude", "第 4 句")])
 
     def test_invitation_preserves_user_hold_and_does_not_schedule_while_paused(self):
         """An invitation cannot clear pending user input or resume a paused discussion."""

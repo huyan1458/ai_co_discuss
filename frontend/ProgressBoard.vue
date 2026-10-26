@@ -123,6 +123,12 @@ const meters = computed(() => {
   ].filter((meter) => meter.label !== "用时" || value.started_at);
 });
 
+/** The round being spoken in, as the round meter counts it. */
+const current_round = computed(() => {
+  const groups = bridge.round_groups(room.value) || [];
+  return groups.at(-1)?.completed === false ? groups.at(-1).number : groups.filter((item) => item.completed).length + 1;
+});
+
 /** Combine assignment, round and execution evidence into one participant line. */
 function member_status(name) {
   const execution = (runtime.value.participants || []).find((item) => item.participant === name);
@@ -133,9 +139,7 @@ function member_status(name) {
   const live = LIVE_EXECUTION_TEXT[execution?.status] || "";
   const queue_index = (room.value.queued_turns || []).findIndex((item) => item.expert === name);
   if (turn.value?.expert === name) {
-    const groups = bridge.round_groups(room.value) || [];
-    const round = groups.at(-1)?.completed === false ? groups.at(-1).number : groups.filter((item) => item.completed).length + 1;
-    text = `第 ${round} 轮 · ${live && execution.turn_id === turn.value.id ? live : inactive.value ? "原安排保留" : record(name)?.access === "manual" ? "轮到它了，请去它的 AI 会话触发" : "轮到发言"}`;
+    text = `第 ${current_round.value} 轮 · ${live && execution.turn_id === turn.value.id ? live : inactive.value ? "原安排保留" : record(name)?.access === "manual" ? "轮到它了，请去它的 AI 会话触发" : "轮到发言"}`;
     tone = inactive.value ? "neutral" : "primary";
   } else if (is_host && !turn.value && !inactive.value) {
     const duty = "安排下一步";
@@ -266,7 +270,7 @@ async function finish(action) {
     <section class="pb-section" aria-label="发言顺序">
       <div class="pb-heading"><h4>发言顺序</h4><button v-if="can_invite" type="button" class="pb-link" @click="open_invite"><UIcon name="i-lucide-plus" />邀请</button></div>
       <p v-if="room.held_since && turn && !inactive" class="pb-status-detail pb-held">用户有新操作，{{ bridge.display_name(turn.expert) }} 说完后交给主持人</p>
-      <SpeakingOrder :away="away_members.map((member) => member.name)">
+      <SpeakingOrder :away="away_members.map((member) => member.name)" :round="current_round">
         <template #default="{ item }">
           <template v-if="item.state === 'away'">
             <UAvatar :src="bridge.identities[item.name]?.icon" :text="bridge.identities[item.name]?.initials" :alt="item.name" size="xs" class="channel-avatar" :class="bridge.identities[item.name]?.style" />

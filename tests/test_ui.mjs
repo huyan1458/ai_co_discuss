@@ -127,10 +127,9 @@ test("mention selection replaces the caret token without dropping surrounding dr
 test("mention arrows wrap, Enter selects, Escape dismisses and send modifiers remain available", async () => {
   const fixture = mention_fixture();
   fixture.type("@");
-  assert.deepEqual([...fixture.state.members.value], ["全体成员", "全体依次", "Codex", "Claude-评审"], "several free members offer @全体成员 and @全体依次 first");
+  assert.deepEqual([...fixture.state.members.value], ["全体成员", "Codex", "Claude-评审"], "several free members offer one @全体成员 first");
   fixture.key("ArrowUp");
   assert.equal(fixture.state.active.value, "Claude-评审");
-  fixture.key("ArrowDown");
   fixture.key("ArrowDown");
   fixture.key("ArrowDown");
   assert.equal(fixture.state.active.value, "Codex");
@@ -221,6 +220,27 @@ test('message cache retains confirmed suggestions after recent requests age out 
   context.render_messages({ messages: [message], total: 1, pages: 1 });
   assert.equal(state.messages[0], saved);
   assert.equal(state.messages[0].suggestions[0].request_id, 9);
+});
+
+test('free-room answers replace their working card in place instead of jumping ahead of slower members', () => {
+  const view = ref({ messages: [
+    { id: 259, author: '用户', created_at: '2026-10-25T15:22:00Z' },
+    { id: 260, author: 'DeepSeek', created_at: '2026-10-25T15:23:00Z', execution_id: 3, request_message_id: 259 },
+    { id: 261, author: '用户', created_at: '2026-10-25T15:24:00Z' },
+  ] });
+  const free_working = ref([
+    { id: 'free-1', author: 'Codex', created_at: 1, execution_id: 1, request_message_id: 259 },
+    { id: 'free-2', author: 'Claude', created_at: 1, execution_id: 2, request_message_id: 259 },
+    { id: 'free-9', author: 'Gemini', created_at: 1, execution_id: 9, request_message_id: 999 },
+  ]);
+  const context = vm.createContext({ computed, view, free: ref(true), failed_messages: ref([]), free_working });
+  const start = discussion_source.indexOf('const transcript_messages = computed(');
+  const end = discussion_source.indexOf('/** Split continuous', start);
+  vm.runInContext(discussion_source.slice(start, end) + '\nglobalThis.transcript = transcript_messages;', context);
+  assert.deepEqual([...context.transcript.value].map(item => item.id), [259, 'free-1', 'free-2', 260, 261, 'free-9'],
+    'the first answer keeps the third slot; work for an unshown request stays at the end');
+  free_working.value = [];
+  assert.deepEqual([...context.transcript.value].map(item => item.id), [259, 260, 261], 'answers settle without moving');
 });
 
 test('execution reports bind answers and failed requests and distinguish unknown file changes', () => {
@@ -397,14 +417,14 @@ test("attachment rendering separates images from files and keeps preview capabil
   assert.match(binary, /title="设计&quot;&lt;图&gt;\.png"/);
 });
 
-test("a free-room draft names everyone at once with @全体成员 and one after another with @全体依次", () => {
+test("a free-room draft names everyone with @全体成员 for smart scheduling to order, and one after another with @全体依次", () => {
   const { context, state, element } = attachment_fixture();
   state.room.mode = "free";
   state.room.free = { members: [{ name: "Claude", status: "active" }, { name: "Codex", status: "active" }] };
   element("message-input").value = "@全体成员 打个招呼";
-  assert.deepEqual([Array.from(context.message_payload().to), context.message_payload().sequential], [["Claude", "Codex"], undefined]);
+  assert.deepEqual([Array.from(context.message_payload().to), context.message_payload().sequential, context.message_payload().order], [["Claude", "Codex"], undefined, "auto"]);
   element("message-input").value = "@全体依次 轮流说说";
-  assert.deepEqual([Array.from(context.message_payload().to), context.message_payload().sequential], [["Claude", "Codex"], true]);
+  assert.deepEqual([Array.from(context.message_payload().to), context.message_payload().sequential, context.message_payload().order], [["Claude", "Codex"], true, undefined]);
   element("message-input").value = "@all-seq go";
   assert.equal(context.message_payload().sequential, true);
 });

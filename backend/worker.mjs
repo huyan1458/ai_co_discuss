@@ -65,10 +65,14 @@ const ROOM_BACKUP_QUERIES = {
 const MESSAGE_QUERY = `SELECT messages.*, COALESCE(details.kind,'opinion') AS kind,
   COALESCE(details.submitted_by, CASE WHEN messages.source IN ('cli','api','url','user')
   THEN messages.author ELSE '用户' END) AS submitted_by, details.turn_id,
-  COALESCE(summaries.text,'') AS summary, COALESCE(summaries.author,'') AS summary_by, timing.elapsed_seconds
+  COALESCE(summaries.text,'') AS summary, COALESCE(summaries.author,'') AS summary_by, timing.elapsed_seconds,
+  answered.execution_id, answered.request_message_id
   FROM messages LEFT JOIN message_details AS details ON details.message_id=messages.id
   LEFT JOIN message_summaries AS summaries ON summaries.message_id=messages.id
-  LEFT JOIN message_timings AS timing ON timing.message_id=messages.id`;
+  LEFT JOIN message_timings AS timing ON timing.message_id=messages.id
+  LEFT JOIN (SELECT answer_id, MIN(execution_id) AS execution_id, MIN(message_id) AS request_message_id
+    FROM member_requests WHERE answer_id IS NOT NULL AND execution_id IS NOT NULL GROUP BY answer_id) AS answered
+    ON answered.answer_id=messages.id`;
 const ROOM_QUERY = `SELECT rooms.*, COALESCE(room_directory.archived,0) AS archived, COUNT(messages.id) AS message_count,
   COALESCE(MAX(messages.id),0) AS latest_id, room_folder_assignments.folder_id AS folder_id FROM rooms
   LEFT JOIN room_directory ON rooms.id=room_directory.room_id
@@ -2263,15 +2267,23 @@ function free_named(active, names, exclude) {
   return [...new Set(names)].map(name => active[name].id);
 }
 
-/** An owner message's recipients as {id, purpose}; unnamed messages go to the AI host when there is one. */
+/**
+ * An owner message's recipients as {id, purpose}; unnamed messages go to the AI host when there is one.
+ * Naming everyone with order auto leaves the host a group request: the runner has everyone answer at once
+ * or one after another; a host the runner does not wake has them all answer at once.
+ */
 async function free_recipients(database, room_id, payload) {
   // Rooms created while the user could host get their AI host on the next message.
   await database.batch(free_participant_statements(database, room_id));
   const active = await free_active_members(database, room_id);
-  if (payload.to !== undefined) return free_named(active, payload.to).map(id => ({ id, purpose: "ask" }));
   const rows = Object.values(active);
-  if (rows.length === 1) return [{ id: rows[0].id, purpose: "ask" }];
   const host = rows.find(row => row.role === "host");
+  if (payload.to !== undefined) {
+    const named = free_named(active, payload.to);
+    if (payload.order === "auto" && named.length > 1 && host?.access === "runner") return [{ id: host.id, purpose: "group" }];
+    return named.map(id => ({ id, purpose: "ask" }));
+  }
+  if (rows.length === 1) return [{ id: rows[0].id, purpose: "ask" }];
   return host ? [{ id: host.id, purpose: "route" }] : [];
 }
 
@@ -2320,13 +2332,14 @@ function free_advance_statements(database, room_id) {
 /**
  * Who spoke, who speaks now and who is next, shared by free rooms and discussions; only the not-yet-spoken part may be reordered.
  * A free room shows its latest unfinished one-after-another queue, else every member in the room's default order;
- * a discussion shows the open round: speakers so far, the current turn, then queued turns. The revision changes with any of it.
+ * a discussion shows the open round: speakers so far, the current turn, then this round's queued turns; a plan reaching into
+ * later rounds lists them apart in `later` (one name list per round), read-only. The revision changes with any of it.
  */
 async function speaking_order(database, room) {
   const active = (await database.prepare(`SELECT id,name FROM room_members WHERE room_id=? AND status='active' ORDER BY ${SPEAKING_ORDER_BY}`).bind(room.id).all()).results;
   const by_id = new Map(active.map((member) => [member.id, member.name]));
   let ordered = active.map((member) => member.name);
-  let items = [], kind = "default", target = 0;
+  let items = [], kind = "default", target = 0, later = [];
   if (room.mode === "free") {
     target = (await database.prepare(`SELECT MAX(q.message_id) AS target FROM free_queue q LEFT JOIN member_requests r ON r.message_id=q.message_id
       AND r.member_id=q.member_id WHERE q.room_id=? AND (r.id IS NULL OR r.status IN ('pending','delivering'))`).bind(room.id).first())?.target || 0;
@@ -2340,18 +2353,33 @@ async function speaking_order(database, room) {
   } else {
     kind = "turns";
     const last = room.rounds.at(-1);
-    items = (last && !last.completed ? last.speakers : []).map((name) => ({ name, state: "done" }));
-    if (["pending", "notified"].includes(room.current_turn?.status)) items.push({ name: room.current_turn.expert, state: "speaking" });
-    items.push(...room.queued_turns.map((item) => ({ name: item.expert, state: "queued" })));
+    const speaking = ["pending", "notified"].includes(room.current_turn?.status) ? room.current_turn.expert : null;
+    items = (last && !last.completed ? last.speakers : []).filter((name) => name !== speaking).map((name) => ({ name, state: "done" }));
+    if (speaking) items.push({ name: speaking, state: "speaking" });
+    const rounds = split_rounds(room.queued_turns.map((item) => item.expert), items.map((item) => item.name));
+    items.push(...rounds[0].map((name) => ({ name, state: "queued" })));
+    later = rounds.slice(1);
     // The user may still hold the host seat of an old discussion; only AI participants have a place.
     ordered = [room.host, ...ordered, ...Object.keys(room.experts)].filter((name) => (Object.hasOwn(room.experts, name) || name === room.host) && name !== "用户");
   }
   const listed = new Set(items.map((item) => item.name));
   items.push(...[...new Set(ordered)].filter((name) => !listed.has(name)).map((name) => ({ name, state: "idle" })));
   const movable = kind === "default" ? "idle" : "queued";
-  const state = JSON.stringify([kind, target, items.map((item) => [item.name, item.state])]);
-  return { kind, message_id: target, items, movable: items.filter((item) => item.state === movable).map((item) => item.name), default: active.map((member) => member.name),
+  const state = JSON.stringify([kind, target, items.map((item) => [item.name, item.state]), later]);
+  return { kind, message_id: target, items, later, movable: items.filter((item) => item.state === movable).map((item) => item.name), default: active.map((member) => member.name),
     revision: (await digest_hex(state)).slice(0, 12) };
+}
+
+/** Cut a turn queue into rounds: an expert who already spoke in the round being filled starts the next one. */
+function split_rounds(names, spoken) {
+  const rounds = [[]];
+  let seen = new Set(spoken);
+  for (const name of names) {
+    if (seen.has(name)) { rounds.push([]); seen = new Set(); }
+    rounds.at(-1).push(name);
+    seen.add(name);
+  }
+  return rounds;
 }
 
 /**
@@ -2378,10 +2406,11 @@ async function reorder_speakers(database, room, token, payload) {
       ...order.map((name) => database.prepare("INSERT INTO free_queue (room_id,message_id,member_id) VALUES (?,?,?)").bind(room.id, current.message_id, names.get(name)))]);
   } else if (current.kind === "turns") {
     // Ids keep the relay order, so each turn's content moves to the id at its new place; submission ids are freed first as they are unique.
-    const rows = (await database.prepare("SELECT * FROM discussion_turns WHERE room_id=? AND status='queued' ORDER BY id").bind(room.id).all()).results;
+    // This round's turns lead the queue, so they are its first rows; later rounds keep theirs.
+    const rows = (await database.prepare("SELECT * FROM discussion_turns WHERE room_id=? AND status='queued' ORDER BY id LIMIT ?").bind(room.id, order.length).all()).results;
     const remaining = [...rows];
     const moved = order.map((name) => remaining.splice(remaining.findIndex((row) => row.expert === name), 1)[0]);
-    await database.batch([database.prepare("UPDATE discussion_turns SET submission_id=submission_id||':moving:'||id WHERE room_id=? AND status='queued'").bind(room.id),
+    await database.batch([...rows.map((slot) => database.prepare("UPDATE discussion_turns SET submission_id=submission_id||':moving:'||id WHERE id=?").bind(slot.id)),
       ...rows.map((slot, index) => database.prepare("UPDATE discussion_turns SET expert=?,question=?,submission_id=?,created_at=? WHERE id=?")
         .bind(moved[index].expert, moved[index].question, moved[index].submission_id, moved[index].created_at, slot.id))]);
   } else {
@@ -2486,18 +2515,18 @@ function free_stop_room_statements(database, room_id, reason, cancel_reason) {
     ...free_settle_statements(database, room_id)];
 }
 
-/** Messages whose host request is still open; they need a new host if this one leaves. */
+/** {message_id, purpose} of host requests still open; they need a new host if this one leaves. */
 async function free_open_route_messages(database, member_id, pending_only = false) {
   const states = pending_only ? "'pending'" : "'pending','delivering'";
-  return (await database.prepare(`SELECT message_id FROM member_requests WHERE member_id=? AND purpose='route' AND status IN (${states}) ORDER BY message_id`)
-    .bind(member_id).all()).results.map(row => row.message_id);
+  return (await database.prepare(`SELECT message_id,purpose FROM member_requests WHERE member_id=? AND purpose IN ('route','group') AND status IN (${states}) ORDER BY message_id`)
+    .bind(member_id).all()).results;
 }
 
 /** Ask the current host to route messages left behind by the previous host. */
-function free_hand_over_statements(database, room_id, message_ids, departed_id = 0) {
-  return message_ids.map(message_id => database.prepare(`INSERT OR IGNORE INTO member_requests (room_id,member_id,message_id,chain_id,purpose,created_by,created_at)
-    SELECT room_id,id,?,?,'route','user',unixepoch() FROM room_members WHERE room_id=? AND role='host' AND status='active' AND id<>?`)
-    .bind(message_id, message_id, room_id, departed_id));
+function free_hand_over_statements(database, room_id, routes, departed_id = 0) {
+  return routes.map(({ message_id, purpose }) => database.prepare(`INSERT OR IGNORE INTO member_requests (room_id,member_id,message_id,chain_id,purpose,created_by,created_at)
+    SELECT room_id,id,?,?,?,'user',unixepoch() FROM room_members WHERE room_id=? AND role='host' AND status='active' AND id<>?`)
+    .bind(message_id, message_id, purpose, room_id, departed_id));
 }
 
 /** Describe one execution with the requests it carries and the member's read cursor. */
@@ -2554,10 +2583,16 @@ function free_release_statements(database, room_id) {
 
 /**
  * Smart scheduling answers an unnamed message with everyone (each member once, as if the user named them all) or no one.
+ * A message naming everyone (a group request) is answered by all at once or, with action sequential, one after another.
  * Only a host request that has not started changes; a started host already handles the message its own way.
  */
 async function free_route_wide(database, room_id, message_id, action) {
-  const route = await database.prepare("SELECT * FROM member_requests WHERE message_id=? AND purpose='route'").bind(message_id).first();
+  const group = await database.prepare("SELECT * FROM member_requests WHERE message_id=? AND purpose='group'").bind(message_id).first();
+  if (group?.room_id === room_id) {
+    if (!["all", "sequential"].includes(action)) throw new HttpError(400, "请全体成员回应的消息只能选 action=all 或 sequential");
+    if (action === "sequential") return free_route_in_turn(database, room_id, group);
+  } else if (action === "sequential") throw new HttpError(400, "只有请全体成员回应的消息可以依次回答");
+  const route = group?.room_id === room_id ? group : await database.prepare("SELECT * FROM member_requests WHERE message_id=? AND purpose='route'").bind(message_id).first();
   if (!route || route.room_id !== room_id) throw new HttpError(404, "只能处理交给主持人的未点名消息");
   const pending = "AND status='pending'";
   const statements = action === "none"
@@ -2574,14 +2609,26 @@ async function free_route_wide(database, room_id, message_id, action) {
   return { action, requests };
 }
 
+/** Line everyone up for a group message in the room's speaking order; the host's row is removed so it queues like the rest. */
+async function free_route_in_turn(database, room_id, group) {
+  const results = await database.batch([
+    database.prepare("DELETE FROM member_requests WHERE id=? AND status='pending'").bind(group.id),
+    database.prepare(`INSERT INTO free_queue (room_id,message_id,member_id) SELECT ?,?,id FROM room_members
+      WHERE room_id=? AND status='active' AND ${FREE_REGISTERED} AND changes()>0 ORDER BY ${SPEAKING_ORDER_BY}`).bind(room_id, group.message_id, room_id),
+    ...free_advance_statements(database, room_id)]);
+  if (!results[0].meta.changes) throw new HttpError(409, "这条消息已不再等待安排");
+  const requests = (await database.prepare("SELECT * FROM member_requests WHERE message_id=? ORDER BY id").bind(group.message_id).all()).results;
+  return { action: "sequential", requests };
+}
+
 /**
  * The user adopts a recommendation before it expires: interrupt the host now, or ask the member after the host.
  * Smart scheduling also sends action all or none here to have everyone or no one answer an unnamed message.
  */
 async function free_adopt(database, room_id, token, message_id, payload) {
   await require_free_owner(database, room_id, token);
-  if (["all", "none"].includes(payload.action)) return free_route_wide(database, room_id, message_id, payload.action);
-  if (payload.action !== "adopt" || !["interrupt", "after"].includes(payload.mode)) throw new HttpError(400, "采纳须为 action=adopt，mode 为 interrupt 或 after；全体或无需回应为 action=all 或 none");
+  if (["all", "none", "sequential"].includes(payload.action)) return free_route_wide(database, room_id, message_id, payload.action);
+  if (payload.action !== "adopt" || !["interrupt", "after"].includes(payload.mode)) throw new HttpError(400, "采纳须为 action=adopt，mode 为 interrupt 或 after；全体、依次或无需回应为 action=all、sequential 或 none");
   const row = await database.prepare("SELECT * FROM member_recommendations WHERE room_id=? AND message_id=?").bind(room_id, message_id).first();
   if (!row) throw new HttpError(404, "这条消息没有智能调度推荐");
   if (row.status !== "open") return { recommendation: row, duplicate: true };
@@ -2616,18 +2663,19 @@ async function free_reserve(database, room_id, token, payload) {
   if (!member) throw new HttpError(404, "成员不存在、已离开或为手动接入");
   if (await database.prepare(`SELECT 1 FROM member_executions WHERE member_id=? AND ${FREE_LIVE}`).bind(member.id).first()) throw new HttpError(409, "该成员已有进行中的执行；同一会话不并发续接");
   if (await database.prepare("SELECT 1 FROM discussion_events WHERE room_id=? AND participant=? AND status IN ('dispatched','started')").bind(room_id, member.name).first()) throw new HttpError(409, "该成员正在处理讨论安排；同一会话不并发续接");
-  if (!await database.prepare("SELECT 1 FROM member_requests WHERE member_id=? AND status='pending'").bind(member.id).first()) throw new HttpError(409, "该成员没有待投递的请求");
+  // A group request waits for the runner to choose how everyone answers; it is never delivered itself.
+  if (!await database.prepare("SELECT 1 FROM member_requests WHERE member_id=? AND status='pending' AND purpose<>'group'").bind(member.id).first()) throw new HttpError(409, "该成员没有待投递的请求");
   const cwd = String(payload.cwd || "").slice(0, FREE_MAX_PATH);
   try {
     // The partial unique index keeps one live execution per member even under concurrent reservations.
     await checked_batch(database, `EXISTS(SELECT 1 FROM room_members WHERE id=? AND status='active' AND access='runner')
-      AND EXISTS(SELECT 1 FROM member_requests WHERE member_id=? AND status='pending')
+      AND EXISTS(SELECT 1 FROM member_requests WHERE member_id=? AND status='pending' AND purpose<>'group')
       AND NOT EXISTS(SELECT 1 FROM room_directory WHERE room_id=? AND archived=1)
       AND NOT EXISTS(SELECT 1 FROM discussion_events WHERE room_id=? AND participant=? AND status IN ('dispatched','started'))`, [member.id, member.id, room_id, room_id, member.name], [
       database.prepare(`INSERT INTO member_executions (room_id,member_id,client_id,lease_until,created_at,cwd)
         VALUES (?,?,?,unixepoch()+?,unixepoch(),?)`).bind(room_id, member.id, client_id, FREE_LEASE_SECONDS, cwd),
       database.prepare(`UPDATE member_requests SET status='delivering',execution_id=(SELECT id FROM member_executions WHERE room_id=? AND client_id=?)
-        WHERE member_id=? AND status='pending'`).bind(room_id, client_id, member.id),
+        WHERE member_id=? AND status='pending' AND purpose<>'group'`).bind(room_id, client_id, member.id),
     ]);
   } catch (error) {
     const committed = await lookup();
@@ -2759,8 +2807,8 @@ async function handle_free_api(database, request, parts) {
       const old_host = payload.role === "host" ? await database.prepare("SELECT id FROM room_members WHERE room_id=? AND role='host' AND id<>?").bind(room_id, member.id).first() : null;
       const routed = old_host ? await free_open_route_messages(database, old_host.id, true) : [];
       await database.batch([
-        ...(old_host ? [database.prepare("INSERT OR REPLACE INTO request_cancel_reasons (request_id,reason) SELECT id,'rerouted' FROM member_requests WHERE member_id=? AND purpose='route' AND status='pending'").bind(old_host.id),
-          database.prepare("UPDATE member_requests SET status='cancelled' WHERE member_id=? AND purpose='route' AND status='pending'").bind(old_host.id)] : []),
+        ...(old_host ? [database.prepare("INSERT OR REPLACE INTO request_cancel_reasons (request_id,reason) SELECT id,'rerouted' FROM member_requests WHERE member_id=? AND purpose IN ('route','group') AND status='pending'").bind(old_host.id),
+          database.prepare("UPDATE member_requests SET status='cancelled' WHERE member_id=? AND purpose IN ('route','group') AND status='pending'").bind(old_host.id)] : []),
         ...(payload.role === "host" ? [database.prepare("UPDATE room_members SET role='member' WHERE room_id=? AND role='host'").bind(room_id)] : []),
         database.prepare("UPDATE room_members SET role=? WHERE id=?").bind(payload.role, member.id),
         ...free_participant_statements(database, room_id), ...free_settle_statements(database, room_id),

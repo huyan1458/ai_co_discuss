@@ -189,6 +189,9 @@ class FreeRoomTests(unittest.TestCase):
         report = self.request(self.path)[1]["free"]["executions"][0]
         self.assertEqual((report["changes"], report["changes_recorded"]), ([], True))
         self.assertEqual((report["answer_id"], report["request_message_id"]), (saved["id"], message["id"]))
+        # The answer itself names its execution, so the page can keep it in the working card's slot after reports age out.
+        listed = next(item for item in self.request(f"{self.path}/messages")[1]["messages"] if item["id"] == saved["id"])
+        self.assertEqual((listed["execution_id"], listed["request_message_id"]), (execution["id"], message["id"]))
         self.assertEqual(len(report["request_ids"]), 1)
         self.assertGreaterEqual(report["finished_at"], report["created_at"])
         with closing(sqlite3.connect(self.database)) as connection, connection:
@@ -742,6 +745,25 @@ class HostTests(FreeRoomTests):
         started = FreeRoomTests.say(self, "已经开始处理的消息")[1]["message"]["id"]
         self.reserve_for("Claude")
         self.assertEqual(self.request(f"{self.path}/recommendations/{started}", {"action": "all"}, self.owner)[0], 409)
+
+    def test_naming_everyone_waits_for_the_runner_to_choose_at_once_or_in_turn(self):
+        """@全体成员 leaves the host an undeliverable group request; all asks everyone at once, sequential queues them."""
+        everyone = ["Claude", "Codex", "Gemini"]
+        first = FreeRoomTests.say(self, "大家打个招呼", to=everyone, order="auto")[1]["message"]["id"]
+        self.assertEqual(self.requests(), [("Claude", "group", "pending")])
+        self.assertEqual(self.reserve_for("Claude")[0], 409)
+        self.assertEqual(self.request(f"{self.path}/recommendations/{first}", {"action": "none"}, self.owner)[0], 400)
+        self.assertEqual(self.request(f"{self.path}/recommendations/{first}", {"action": "all"}, self.owner)[0], 200)
+        self.assertEqual(self.requests(), [("Claude", "all", "pending"), ("Codex", "all", "pending"), ("Gemini", "all", "pending")])
+        self.assertEqual(self.request(f"{self.path}/recommendations/{first}", {"action": "sequential"}, self.owner)[0], 400)
+        for name in everyone:
+            self.work(name)
+        second = FreeRoomTests.say(self, "接龙，每人接上一句", to=everyone, order="auto")[1]["message"]["id"]
+        self.assertEqual(self.request(f"{self.path}/recommendations/{second}", {"action": "sequential"}, self.owner)[0], 200)
+        self.assertEqual(self.requests()[3:], [("Claude", "ask", "pending")])
+        self.work("Claude")
+        self.assertEqual(self.requests()[4:], [("Codex", "ask", "pending")])
+        self.assertEqual(self.request(f"{self.path}/recommendations/{second}", {"action": "all"}, self.owner)[0], 404)
 
     def test_only_the_host_dispatches_and_never_itself(self):
         """Members suggest without dispatching; the host cannot name itself."""

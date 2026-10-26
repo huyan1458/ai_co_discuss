@@ -17,7 +17,7 @@ import { assert_shared_home, DiscussionService, FreeRoomWithDiscussion, migrate_
 import { launch_discussion, room_models } from '../runner/discussion_launch.mjs';
 import { agy_rule, antigravity_project, claude_exit_error, claude_rule_path, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
-import { certainty, decide, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
+import { certainty, decide, decide_group_order, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
 
 /** The folded record of what the provider was asked is checked on its own. */
 const without_detail = ({ detail, input, ...plan }) => (assert.ok(Array.isArray(detail) && detail[0].choices.length && input.state && input.questions[0].instructions), plan);
@@ -54,6 +54,19 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.equal((await route_free_message(home, jev, input, reply('__all__', ROUTE_WIDE_CONFIDENCE - 0.01))).action, 'host');
   assert.equal((await route_free_message(home, jev, input, reply('__none__', 0.99))).action, 'none');
   assert.match(scheduler_state('房间', [], input.message), /#3 用户（回复 #2）：修一下登录/);
+  // The model sees who is in the room, and a name in the text outranks continuing the previous speaker's answer.
+  let sent_to_model;
+  await route_free_message(home, jev, input, async (url, init) => { sent_to_model = JSON.parse(init.body); return reply('__host__', 0.99)(); });
+  assert.match(sent_to_model.state, /房间成员（名字不区分大小写）：Claude（主持人）、Codex/);
+  const route_question = sent_to_model.questions.handler;
+  assert.match(route_question.instructions, /叫了某位成员的名字.*选该成员，即使上一条是别人的回答/);
+  assert.doesNotMatch(route_question.criteria.__host__, /延续主持人自己的回答/);
+  // @全体成员 answers in turn only on a confident sequential pick; anything else keeps everyone answering at once.
+  const order = (choice, confidence) => async () => ({ ok: true, json: async () => ({ answers: { order: { type: 'choice', choice, confidence, probabilities: {} } } }) });
+  const group = { title: '房间', context: [], message: { id: 4, author: '用户', text: '@全体成员 接龙' }, members: ['Claude', 'Codex'] };
+  assert.equal((await decide_group_order(home, jev, group, order('sequential', ROUTE_CONFIDENCE))).action, 'sequential');
+  assert.equal((await decide_group_order(home, jev, group, order('sequential', ROUTE_CONFIDENCE - 0.01))).action, 'all');
+  assert.equal((await decide_group_order(home, jev, group, order('parallel', 0.99))).action, 'all');
   // The configuration check asks one yes/no question and rejects an answer without a probability.
   const checked = [];
   assert.deepEqual(await scheduler_check(home, jev, async (url, init) => { checked.push([url, JSON.parse(init.body)]);
@@ -1673,6 +1686,17 @@ for (const outcome of ['accepted', 'cancelled', 'expired']) test(`free Sidecar d
   await runner.tick(); await runner.tick();
   assert.equal(state.executions.length, 1);
   assert.equal(store.binding('Claude').session_id || '', outcome === 'accepted' ? 'free-session' : '');
+});
+
+test('a free room without smart scheduling has everyone named by @全体成员 answer at once and never delivers the group request', async t => {
+  const { state, store, config } = await free_fixture(t);
+  state.pending = [{ id: 1, message_id: 11, purpose: 'group' }];
+  const delivered = [];
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => { delivered.push(task); return { status: 'accepted' }; });
+  await runner.tick();
+  await Promise.all(runner.decisions);
+  await runner.tick();
+  assert.deepEqual([state.calls.filter(call => call.startsWith('POST /recommendations/11')), delivered.length], [['POST /recommendations/11 all'], 0]);
 });
 
 test('a free room delivers all open requests as one execution with the member credential only', async t => {

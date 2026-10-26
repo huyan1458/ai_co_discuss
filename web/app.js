@@ -939,12 +939,14 @@ function message_payload() {
       request_ids: state.room.free.requests.filter(item => item.member === online.name && item.status === "pending").map(item => item.id) };
     const payload = { author: "用户", text, reply_to: state.reply_to, kind: "chat", submitted_by: "用户" };
     const active = (state.room.free?.members || []).filter(member => member.status === "active" && (member.access !== "manual" || member.registered_at)).map(member => member.name);
-    // @mentions outside code name members (@全体成员 or @all names them all; @全体依次 or @all-seq has them answer one after another, the host first);
-    // without any, the server gives the message to the only member or the host.
+    // @mentions outside code name members (@全体成员 or @all names them all, answering at once or in turn as smart scheduling decides;
+    // @全体依次 or @all-seq has them answer one after another, the host first); without any, the server gives the message to the only member or the host.
     const sequential = mentioned(text, "全体依次") || mentioned(text, "all-seq");
-    const named = sequential || mentioned(text, "全体成员") || mentioned(text, "all") ? active : active.filter(name => mentioned(text, name));
+    const everyone = !sequential && (mentioned(text, "全体成员") || mentioned(text, "all"));
+    const named = sequential || everyone ? active : active.filter(name => mentioned(text, name));
     if (named.length) payload.to = named;
     if (sequential && named.length) payload.sequential = true;
+    if (everyone && named.length) payload.order = "auto";
     return payload;
   }
   const mode = element("message-kind").value;

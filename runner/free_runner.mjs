@@ -5,7 +5,7 @@ import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { atomic_json, deliver_task, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
 import { api } from './discussion_runner.mjs';
-import { ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, route_free_message } from './scheduler.mjs';
+import { ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, decide_group_order, route_free_message } from './scheduler.mjs';
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const RENEW_MS = 30_000;
@@ -121,6 +121,8 @@ export class FreeRoomRunner {
     this.log = log;
     this.fetch = fetch_impl;
     this.routed = new Set();
+    // Group requests (@全体成员) being arranged; a failed arrangement leaves the set so the next tick retries.
+    this.grouped = new Set();
     this.decisions = new Set();
     // Routed requests whose decision is still pending: their host waits, so one pick replaces the host's start.
     this.routing = new Set();
@@ -166,6 +168,7 @@ export class FreeRoomRunner {
     const room = await api(this.config, '');
     // Smart scheduling runs beside delivery: the host waits for its answer (or failure) before starting, see `routing`.
     if (this.config.scheduler && !inbox.archived) this.recommend_unnamed(inbox, room);
+    if (!inbox.archived) this.arrange_groups(inbox, room);
     this.room_title = room.title;
     const active = new Map(inbox.executions.map(item => [item.id, item]));
     const present = new Set(inbox.members.map(member => member.name));
@@ -177,7 +180,7 @@ export class FreeRoomRunner {
     for (const member of inbox.members) {
       const row = this.row(member.name);
       if (row && LIVE.includes(row.status)) await this.reconcile(member, row, active, inbox.execution_minutes);
-      else if (!inbox.archived && member.pending.length && !this.members.get(member.name)?.size
+      else if (!inbox.archived && member.pending.some(request => request.purpose !== 'group') && !this.members.get(member.name)?.size
         && !member.pending.some(request => this.routing.has(request.id))) await this.start(member, row);
     }
   }
@@ -201,6 +204,39 @@ export class FreeRoomRunner {
       this.decisions.add(decision);
       decision.finally(() => this.decisions.delete(decision));
     }
+  }
+  /** For each message naming everyone, have them answer at once, or one after another when smart scheduling says so. */
+  arrange_groups(inbox, room) {
+    const everyone = [...inbox.members, ...(inbox.observers || [])];
+    for (const request of everyone.flatMap(member => member.pending).filter(item => item.purpose === 'group' && !this.grouped.has(item.id))) {
+      this.grouped.add(request.id);
+      const arranged = (this.config.scheduler ? this.mark_routing(request.message_id, true).then(() => this.order_group(request, room, everyone))
+        .finally(() => this.mark_routing(request.message_id, false)) : this.apply_group(request.message_id, { action: 'all' }))
+        .catch(error => { this.grouped.delete(request.id); this.log(`全体成员 #${request.message_id} 未能安排：${error.message}`); });
+      this.decisions.add(arranged);
+      arranged.finally(() => this.decisions.delete(arranged));
+    }
+  }
+  /** Ask the scheduler how everyone answers; a failed call still has them answer at once. */
+  async order_group(request, room, everyone) {
+    const page = await api(this.config, `/messages?after=${Math.max(0, request.message_id - ROUTE_CONTEXT_MESSAGES - 1)}`);
+    const message = page.messages.find(item => item.id === request.message_id);
+    const members = (room.speaking_order?.items || []).map(item => item.name).filter(name => everyone.some(member => member.name === name));
+    const decision = await decide_group_order(this.config.api_home, this.config.scheduler,
+      { title: room.title, goal: room.goal, context: page.messages, message, members: members.length ? members : everyone.map(member => member.name) }, this.fetch)
+      .catch(error => { this.log(`智能调度 #${request.message_id} 未判断全体回答方式：${error.message}`); return { action: 'all' }; });
+    await this.apply_group(request.message_id, decision);
+    if (decision.detail) {
+      const label = decision.action === 'sequential' ? '请全体按发言顺序依次回答' : '请全体同时回答';
+      await this.record_decision(request.message_id, decision, label, true);
+    }
+  }
+  /** Replace the host's group request with everyone's requests; a message already arranged elsewhere is left as is. */
+  async apply_group(message_id, decision) {
+    this.log(`全体成员 #${message_id}：${decision.action === 'sequential' ? '依次回答' : '同时回答'}`);
+    await api(this.config, `/recommendations/${message_id}`, { action: decision.action }).catch(error => {
+      if (!/HTTP (404|409)/.test(error.message)) throw error;
+    });
   }
   /** Tell the website a message is being analysed so it can show the card; a failed mark never blocks routing. */
   async mark_routing(message_id, active) {

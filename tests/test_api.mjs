@@ -381,7 +381,7 @@ test('smart scheduling holds the host until its decision, and a confident pick r
   assert.equal((await api(config, `/recommendations/${message_id}`, { action: 'adopt', mode: 'interrupt' })).duplicate, true);
   const decision = room.scheduler_decisions.at(-1);
   assert.deepEqual([decision.after_message_id, decision.label, decision.applied, decision.provider, decision.feedback], [message_id, '改由 DeepSeek 回答', 1, 'jev', null]);
-  assert.deepEqual(JSON.parse(decision.context), { model: 'jev-latest', threshold: 0.7, wide_threshold: 0.85, prompt: 3,
+  assert.deepEqual(JSON.parse(decision.context), { model: 'jev-latest', threshold: 0.7, wide_threshold: 0.85, prompt: 4,
     package: JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version });
   assert.deepEqual([decision.detail[0].choice, decision.detail[0].probabilities], ['DeepSeek', { DeepSeek: 0.95, __host__: 0.05 }]);
   await api(config, `/scheduler-decisions/${decision.id}`, { rating: 'bad', should_be: 'Grok', note: '应该先问主持人' });

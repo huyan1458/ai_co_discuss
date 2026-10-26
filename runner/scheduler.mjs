@@ -12,7 +12,7 @@ export const ROUTE_CONFIDENCE = 0.7;
 /** Waking everyone or no one costs more when wrong (N runs, or an ignored message), so it needs more certainty. */
 export const ROUTE_WIDE_CONFIDENCE = 0.85;
 /** Bump when the routing question or its option descriptions change, so ratings can be compared across wordings. */
-export const ROUTE_PROMPT_VERSION = 3;
+export const ROUTE_PROMPT_VERSION = 4;
 const HOST_CHOICE = '__host__';
 const NOTE_CHOICE = '__note__';
 const ALL_CHOICE = '__all__';
@@ -113,8 +113,8 @@ function excerpt(message) {
 }
 
 /** The room's purpose in the user's words, so a decision can tell drifting from progress. */
-function topic_lines(title, goal, user_request, { brief, focus, arrangement, progress } = {}) {
-  return [`房间：${title || ''}`, goal && `目标：${goal}`, user_request && `用户原文：${String(user_request).slice(0, MAX_MESSAGE_CHARS)}`,
+function topic_lines(title, goal, user_request, { roster, brief, focus, arrangement, progress } = {}) {
+  return [`房间：${title || ''}`, roster && `房间成员（名字不区分大小写）：${roster}`, goal && `目标：${goal}`, user_request && `用户原文：${String(user_request).slice(0, MAX_MESSAGE_CHARS)}`,
     focus && `当前焦点：${focus}`, brief && `主持简报（含分工与规则）：${String(brief).slice(0, MAX_BRIEF_CHARS)}`,
     arrangement && `主持人最近的安排：${arrangement}`, progress].filter(Boolean).join('\n');
 }
@@ -141,12 +141,13 @@ export function certainty(answer) {
  */
 export async function route_free_message(home, scheduler, { title, goal, context, message, host, members }, fetch_impl) {
   const choices = [...members.map(member => ({ value: member.name, description: member.description })),
-    { value: HOST_CHOICE, description: `主持人 ${host.description}：消息在延续主持人自己的回答，或对象不明确，或需要分工、排先后、互相回应` },
-    { value: ALL_CHOICE, description: '全体成员（含主持人）各自回应一次，彼此不需要配合，如打招呼、自我介绍、各说一句看法' },
+    { value: HOST_CHOICE, description: `主持人 ${host.description}：没有指向任何人（如单独一句“hi”“你好”这类问候、闲聊，由主持人代表房间回应），或需要分工、排先后、互相回应` },
+    { value: ALL_CHOICE, description: '全体成员（含主持人）各自回应一次，彼此不需要配合；须是用户明确要求大家各自回应，如“大家/都出来打个招呼”“各自介绍一下”“各说一句看法”' },
     { value: NONE_CHOICE, description: '无需回应：只是确认、致谢或旁注，不需要任何人回答' }];
   const questions = [{ type: 'choice', name: 'handler', choices,
-    instructions: '这条用户消息没有用 @ 点名成员。判断它的回应对象是否已经确定：正文叫了某位成员的名字或在向其提问；在延续某位成员的回答（追问、要求修改、引用，或“回复”指向其消息）；在补充或纠正一条正由某位成员处理的消息。以上情况选该成员，是主持人就选主持人。要求所有成员各自回应一次选全体；只是确认、致谢或旁注选无需回应；对象不明确，或需要分工、排先后、互相回应时选主持人。' }];
-  const state = scheduler_state(title, context, message, goal, '', {}, ROUTE_CONTEXT_MESSAGES);
+    instructions: '这条用户消息没有用 @ 点名成员。判断它的回应对象，按下面的顺序：1）正文叫了某位成员的名字，或在向其提问（包括“X在吗”“X还在吗”“X你怎么看”），选该成员，即使上一条是别人的回答；2）正文没有指向任何人时，看它是否在延续某位成员的回答（追问、要求修改、引用，或“回复”指向其消息），或在补充、纠正一条正由某位成员处理的消息，是则选该成员，是主持人就选主持人；3）明确要求所有成员各自回应一次（用了“大家”“都”“各自”等）选全体；4）单独的问候或闲聊（如“hi”）既没有指向某位成员，也没有要求大家一起回应，选主持人；5）只是确认、致谢或旁注选无需回应；6）对象不明确，或需要分工、排先后、互相回应时选主持人。' }];
+  const roster = [`${host.name}（主持人）`, ...members.map(member => member.name)].join('、');
+  const state = scheduler_state(title, context, message, goal, '', { roster }, ROUTE_CONTEXT_MESSAGES);
   const answers = await decide(home, scheduler, state, questions, fetch_impl);
   const judged = judged_of(state, questions, answers);
   const choice = answers.handler?.choice ?? null;
@@ -157,6 +158,22 @@ export async function route_free_message(home, scheduler, { title, goal, context
   if (sure && choice === NONE_CHOICE) return { action: 'none', choice, confidence, ...judged };
   if (sure && members.some(item => item.name === choice)) return { action: 'member', member: choice, choice, confidence, ...judged };
   return { action: 'host', choice, confidence, ...judged };
+}
+
+/**
+ * The user named everyone (@全体成员): decide whether they answer at once (parallel) or one after another (sequential).
+ * Anything but a confident sequential stays parallel, the cheaper and earlier behaviour of naming everyone.
+ */
+export async function decide_group_order(home, scheduler, { title, goal, context, message, members }, fetch_impl) {
+  const questions = [{ type: 'choice', name: 'order', choices: [
+    { value: 'parallel', description: '同时回答：各自独立回应即可，不需要看到别人的回答，如打招呼、各自介绍、各说一句看法、各自投票' },
+    { value: 'sequential', description: `依次回答：后发言的需要看到前面的回答，如接龙、轮流补充或反驳、逐个评审上一位的结果、按顺序分工接力；按房间发言顺序（${members.join('、')}）逐个回答` }],
+    instructions: '用户用 @全体成员 请房间里所有成员回应这条消息。判断大家应同时各自回答，还是需要按顺序依次回答（后一位看到前一位的回答再接着说）。' }];
+  const state = scheduler_state(title, context, message, goal, '', {}, ROUTE_CONTEXT_MESSAGES);
+  const answers = await decide(home, scheduler, state, questions, fetch_impl);
+  const confidence = certainty(answers.order);
+  const sequential = answers.order?.choice === 'sequential' && confidence !== null && confidence >= ROUTE_CONFIDENCE;
+  return { action: sequential ? 'sequential' : 'all', choice: answers.order?.choice ?? null, confidence, ...judged_of(state, questions, answers) };
 }
 
 /**

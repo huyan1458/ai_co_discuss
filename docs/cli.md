@@ -126,7 +126,7 @@ codiscuss state view $room
 | 主持发言 | `message post ROOM --as Codex --kind moderation --body-file FILE --submission-id UUID` |
 | 在线专家代发 | 被正式安排后，主持人 `message post ROOM --as Codex --author Claude --turn TURN --summary-file SUMMARY --summary-by Claude --body-file FILE --submission-id UUID` |
 | 整轮安排 | 主持人 `turn roster ROOM` 后 `turn create ROOM --as Codex --plan-file PLAN.json --roster REV --submission-id UUID`；PLAN 为 `[{"expert":"Claude","question":"…"}]`，按顺序接力；多项计划须先 `turn roster ROOM` 取得最新专家状态，把其 `revision` 用 `--roster` 带上，并包含 `waiting` 中的每位专家（主持人除外；尚未注册的手动专家列在 `unregistered`，不在 `waiting` 中，也不能被安排，否则返回 400 并列出名字）：未带 revision 返回 400，名单已变化返回 409，缺人返回 400 并列出名字 |
-| 发言顺序 | `turn order ROOM` 读取发言顺序（`items` 的已发言 / 正在发言 / 待发言、可调整的 `movable` 与 `revision`），自由协作与讨论通用；房主凭据 `turn reorder ROOM --revision REV --member A --member B …` 按新顺序列出 `movable` 中的全部成员，已发言与正在发言者不动：未带 revision 返回 400，顺序已变化返回 409，缺少或多出成员返回 400 并列出名字 |
+| 发言顺序 | `turn order ROOM` 读取发言顺序（`items` 的已发言 / 正在发言 / 待发言、可调整的 `movable`、讨论中后续轮次的只读 `later` 与 `revision`），自由协作与讨论通用；讨论中只能调整本轮；房主凭据 `turn reorder ROOM --revision REV --member A --member B …` 按新顺序列出 `movable` 中的全部成员，已发言与正在发言者不动：未带 revision 返回 400，顺序已变化返回 409，缺少或多出成员返回 400 并列出名字 |
 | 继续原计划 | 用户介入或打断后，主持人 `turn continue ROOM --as Codex`；改用新安排则排队自动作废 |
 | 取消安排 | 主持人 `turn cancel ROOM TURN --as Codex` |
 | 切换阶段 | `room update ROOM --as Codex --phase discussing` |

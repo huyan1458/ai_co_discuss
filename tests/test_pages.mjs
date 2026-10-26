@@ -587,19 +587,21 @@ test('Worker invitation joins at the tail of the plan, like Python', async t => 
     [['Gemini', '第 1 句'], ['Claude', '第 2 句'], ['Gemini', '第 3 句'], ['DeepSeek', '欢迎加入：请先读取议题，独立给出你的开场观点。']]);
 });
 
-test('Worker owner reorders queued turns; each keeps its question and submission id, like Python', async t => {
+test('Worker owner reorders only this round of queued turns; each keeps its question and submission id, like Python', async t => {
   const f = await worker_fixture(t);
   const id = (await f.request('', { title: '调整顺序', host: 'Codex', phase: 'initial', experts: { Codex: 'cli', Claude: 'cli', Gemini: 'cli' } })).body.id;
   await f.request(`/${id}/runtime`, { action: 'start', revision: 0, deadline: 0 });
-  const names = ['Claude', 'Gemini', 'Claude'];
+  const names = ['Claude', 'Gemini', 'Codex', 'Gemini', 'Claude'];
   const plan = await f.request(`/${id}/turns`, { actor: '用户', submission_id: 'reorder-plan', roster: (await f.request(`/${id}/turns/roster`)).body.revision, turns: names.map((expert, index) => ({ expert, question: `第 ${index} 句` })) });
   assert.equal(plan.status, 201, JSON.stringify(plan.body));
   const order = (await f.request(`/${id}/speaking-order`)).body;
-  assert.deepEqual([order.kind, order.movable], ['turns', ['Gemini', 'Claude']]);
-  const moved = await f.request(`/${id}/speaking-order`, { revision: order.revision, order: ['Claude', 'Gemini'] });
+  assert.deepEqual([order.kind, order.movable, order.later], ['turns', ['Gemini', 'Codex'], [['Gemini', 'Claude']]]);
+  const refused = await f.request(`/${id}/speaking-order`, { revision: order.revision, order: ['Codex', 'Gemini', 'Claude'] });
+  assert.deepEqual([refused.status, refused.body.error.includes('多出：Claude')], [400, true]);
+  const moved = await f.request(`/${id}/speaking-order`, { revision: order.revision, order: ['Codex', 'Gemini'] });
   assert.equal(moved.status, 200, JSON.stringify(moved.body));
   assert.deepEqual(f.sql.prepare("SELECT submission_id,expert,question FROM discussion_turns WHERE status='queued' ORDER BY id").all().map(row => [row.submission_id, row.expert, row.question]),
-    [['reorder-plan-q3', 'Claude', '第 2 句'], ['reorder-plan-q2', 'Gemini', '第 1 句']]);
+    [['reorder-plan-q3', 'Codex', '第 2 句'], ['reorder-plan-q2', 'Gemini', '第 1 句'], ['reorder-plan-q4', 'Gemini', '第 3 句'], ['reorder-plan-q5', 'Claude', '第 4 句']]);
 });
 
 test('Worker running discussions admit and release experts without pausing, like Python', async t => {
@@ -957,6 +959,26 @@ test('Worker @全体依次 asks the host first and the next member only after th
   assert.deepEqual((await f.request(r.path)).body.speaking_order.items.map(item => [item.name, item.state]), [['Codex', 'done'], ['Claude', 'speaking']]);
 });
 
+test('Worker @全体成员 waits for the runner to have everyone answer at once or in turn', async t => {
+  const f = await worker_fixture(t);
+  const codex = 'codex-free'.repeat(4);
+  const r = await free_worker_room(f, [{ name: 'Codex', adapter: 'codex_cli', token: codex }]);
+  const requests = async () => (await f.request(r.path)).body.free.requests.map(item => [item.member, item.purpose, item.status]);
+  const everyone = { to: ['Claude', 'Codex'], order: 'auto' };
+  const first = (await r.say('大家打个招呼', everyone)).body.message.id;
+  assert.deepEqual(await requests(), [['Claude', 'group', 'pending']]);
+  assert.equal((await r.reserve('Claude')).status, 409);
+  const arrange = (id, action) => f.request(`${r.path}/recommendations/${id}`, { action }, r.owner);
+  assert.equal((await arrange(first, 'none')).status, 400);
+  assert.equal((await arrange(first, 'all')).status, 200);
+  assert.deepEqual(await requests(), [['Claude', 'all', 'pending'], ['Codex', 'all', 'pending']]);
+  for (const [name, token] of [['Claude', r.claude], ['Codex', codex]]) assert.equal((await r.answer((await r.reserve(name)).body.id, token, name)).status, 201);
+  const second = (await r.say('接龙', everyone)).body.message.id;
+  assert.equal((await arrange(second, 'sequential')).status, 200);
+  assert.deepEqual((await requests()).slice(2), [['Claude', 'ask', 'pending']]);
+  assert.equal((await arrange(second, 'all')).status, 404);
+});
+
 test('Worker owner reorders who has not spoken against the latest revision, or sets the default order when idle', async t => {
   const f = await worker_fixture(t);
   const codex = 'codex-free'.repeat(4), gemini = 'gemini-free'.repeat(4);
@@ -1271,6 +1293,9 @@ test('Worker execution reports distinguish missing and empty detection and cap h
   assert.deepEqual([report.changes_recorded, report.changes], [true, []]);
   for (let index = 0; index < 101; index++) f.sql.prepare(`INSERT INTO member_executions (room_id,member_id,client_id,status,created_at) VALUES (?,?,?,'failed',1)`).run(r.room.id, execution.member_id, `history-${index}`);
   assert.equal((await f.request(r.path)).body.free.executions.length, 100);
+  // The answer keeps naming its execution after the report ages out, so its card keeps its slot.
+  const listed = (await f.request(`${r.path}/messages`)).body.messages.find(item => item.id === answer.id);
+  assert.deepEqual([listed.execution_id, listed.request_message_id], [execution.id, message.id]);
 });
 
 test('Worker free answers are rejected atomically when the execution is cancelled mid-request', async t => {

@@ -1,13 +1,12 @@
 <script setup>
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import ScheduleCard from "./ScheduleCard.vue";
+import TopicCard from "./TopicCard.vue";
+import DiscussionEndCard from "./DiscussionEndCard.vue";
 import { motion, useReducedMotion, useSpring, useTransform } from "motion-v";
 
 const emit = defineEmits(["detail", "edit"]);
-const topic_expanded = ref(false);
-const topic_body = ref(null);
-const topic_overflows = ref(false);
-const TOPIC_BODY_MAX_HEIGHT = 240;
+let topic_card = null;
 const { view, bridge, field, act, pending } = inject("discussion");
 const text = field("message-input");
 const text_length = computed(() => [...text.value].length);
@@ -33,18 +32,6 @@ const answer_previews = computed(() => new Map(view.value.messages.map((message)
   if (!answer_preview_cache.has(message)) answer_preview_cache.set(message, build_answer_preview(message));
   return [message.id, answer_preview_cache.get(message)];
 })));
-/** The channel's purpose shown above the transcript; old rooms without a user request fall back to background. */
-const topic = computed(() => {
-  const value = room.value || {};
-  const request = value.user_request?.trim() ? { label: "用户原文", text: value.user_request } : value.background?.trim() ? { label: "背景", text: value.background } : null;
-  const experts = Object.entries(value.experts || {}).map(([name]) => ({ name, mode: bridge.participant_access(name, value) }));
-  const limits = value.limits || {};
-  const bounds = value.mode === "free" ? `自由协作 · 单次执行最多 ${value.free?.execution_minutes || 20} 分钟`
-    : [limits.max_rounds ? `${limits.max_rounds} 轮` : "轮次不限", limits.max_minutes ? `${limits.max_minutes} 分钟` : "时长不限",
-      value.runtime?.mode === "automatic" ? "全自动" : "手动"].join(" · ");
-  return { request, goal: value.goal, boundaries: value.boundaries, host: value.host, experts, bounds };
-});
-const topic_key = computed(() => JSON.stringify(topic.value));
 const message_map = ref(null);
 const navigation_keyboard = ref(false);
 const active_message = ref(null);
@@ -96,14 +83,6 @@ const follow_tail = ref(true);
 const FOLLOW_TAIL_THRESHOLD = 70;
 const READING_OFFSET = 20;
 const room = computed(() => view.value.room);
-// Registered after `room` exists: the immediate watch evaluates the topic, which reads it.
-/** Show "展开全文" only when the whole topic body is taller than its folded height. */
-async function measure_topic() {
-  await nextTick();
-  topic_overflows.value = (topic_body.value?.scrollHeight || 0) > TOPIC_BODY_MAX_HEIGHT;
-}
-watch(topic_key, measure_topic, { immediate: true });
-watch(() => view.value.tab, measure_topic);
 const reply_glow = ref(null);
 // Feel.words("calm, smooth"): m 1, f 1.407 Hz, ζ 1.05 → k 78.167, c 18.567.
 // A constant force equal to a spring stretched by 1/8 of the sweep gives a calm,
@@ -156,20 +135,23 @@ const free = computed(() => room.value?.mode === "free");
 /** Members of a free room that are working on a live execution; queued requests are shown in the side panel only. */
 const free_busy = computed(() => {
   if (!free.value || room.value.archived) return [];
+  const request_messages = new Map((room.value.free?.executions || []).map((execution) => [execution.id, execution.request_message_id]));
   return (room.value.free?.members || []).flatMap((member) => {
     const execution = member.execution;
     if (execution && ["dispatched", "started"].includes(execution.status)) {
       return [{ id: `free-${execution.id}`, author: member.name, member_id: member.id,
         text: execution.stale ? "执行失联：网站已不再接受本次回答，软件停止未确认" : "正在处理",
-        working: !execution.stale, created_at: execution.created_at }];
+        working: !execution.stale, created_at: execution.created_at,
+        execution_id: execution.id, request_message_id: request_messages.get(execution.id) }];
     }
     // A manual member is never woken by the program, so its card waits for the user to trigger it.
     if (member.pending > 0 && member.access === "manual") {
-      const waiting_since = Math.min(...(room.value.free?.requests || [])
-        .filter((request) => request.member_id === member.id && request.status === "pending").map((request) => request.created_at));
+      const pending = (room.value.free?.requests || []).filter((request) => request.member_id === member.id && request.status === "pending");
+      const waiting_since = Math.min(...pending.map((request) => request.created_at));
       return [{ id: `free-wait-${member.id}`, author: member.name, member_id: member.id,
         text: `待投递 ${member.pending} 条：需在其 AI 会话中触发`, working: false, waiting: true,
-        created_at: Number.isFinite(waiting_since) ? waiting_since : null }];
+        created_at: Number.isFinite(waiting_since) ? waiting_since : null,
+        execution_id: Infinity, request_message_id: Math.min(...pending.map((request) => request.message_id)) }];
     }
     return [];
   }).sort((left, right) => (left.created_at ?? Infinity) - (right.created_at ?? Infinity));
@@ -188,8 +170,8 @@ const recipient_hint = computed(() => {
   if (view.value.free_proxy) return `本条作为 ${bridge.display_name(view.value.free_proxy)} 的回答原文保存，并关闭它的待处理请求`;
   const named_group = (aliases) => aliases.some((alias) => MENTION_PATTERN(alias).test(draft_prose.value));
   if (named_group(SEQUENTIAL_ALIASES)) return `依次发给 ${in_turn(free_members.value).map((member) => bridge.display_name(member.name)).join(" → ")}，前一位结束后下一位开始`;
-  const named = named_group(ALL_ALIASES) ? free_members.value
-    : free_members.value.filter((member) => MENTION_PATTERN(member.name).test(draft_prose.value));
+  if (named_group(ALL_ALIASES)) return `发给 ${free_members.value.map((member) => bridge.display_name(member.name)).join("、")}`;
+  const named = free_members.value.filter((member) => MENTION_PATTERN(member.name).test(draft_prose.value));
   if (named.length) return `${named.length > 1 ? "同时" : ""}发给 ${named.map((member) => bridge.display_name(member.name)).join("、")}`;
   if (free_members.value.length === 1) return `发给 ${bridge.display_name(free_members.value[0].name)}`;
   return free_host.value ? `发给主持人 ${bridge.display_name(free_host.value.name)}；@ 其他成员让它们发言` : "未 @ 任何成员：只作留言，不会唤醒 AI";
@@ -431,17 +413,17 @@ const mirror = ref(null);
 function sync_mirror() {
   if (mirror.value && prompt.value?.textareaRef) mirror.value.scrollTop = prompt.value.textareaRef.scrollTop;
 }
-watch(mention_mirror, () => nextTick(sync_mirror), { flush: "post" });
+// Creating the watch evaluates the mirror, which reads mention declarations further down; wait until setup has run them.
+onMounted(() => watch(mention_mirror, () => nextTick(sync_mirror), { flush: "post" }));
 
 const mention_context = ref(null);
-/** @全体成员 (or @all) names every member a free-room message can reach, offered once there is more than one. */
+/** @全体成员 (or @all) names every member a free-room message can reach, offered once there is more than one; smart scheduling decides whether they answer at once or in turn. */
 const ALL_MENTION = "全体成员";
 const ALL_ALIASES = [ALL_MENTION, "all"];
-/** @全体依次 (or @all-seq) names them all to answer one after another, in the room's speaking order. */
+/** @全体依次 (or @all-seq), typed by hand, still has them answer one after another in the room's speaking order. */
 const SEQUENTIAL_MENTION = "全体依次";
 const SEQUENTIAL_ALIASES = [SEQUENTIAL_MENTION, "all-seq"];
-const GROUP_MENTIONS = { [ALL_MENTION]: { search: "all 同时 并行", label: "同时回答", icon: "i-lucide-users" },
-  [SEQUENTIAL_MENTION]: { search: "all-seq 依次 串行", label: "按发言顺序依次回答", icon: "i-lucide-list-ordered" } };
+const GROUP_MENTIONS = { [ALL_MENTION]: { search: "all 同时 依次", icon: "i-lucide-users" } };
 /** The order the server asks members in: the room's default speaking order. */
 const in_turn = (members) => {
   const rank = room.value.speaking_order?.default || [];
@@ -593,13 +575,56 @@ const transcript_messages = computed(() => {
       || (!message.failure && failure.failure.turn_id && message.turn_id === failure.failure.turn_id));
     messages.splice(index < 0 ? messages.length : index, 0, failure);
   }
-  return messages;
+  return free.value ? free_layout.value : messages;
 });
-/** Split continuous chronological history at local calendar boundaries. */
+/** A discussion opened mid-room shows the topic where it began (or at the end before anyone answers); otherwise it stays on top. */
+const topic_anchor = computed(() => {
+  const started = Date.parse(room.value?.session?.created_at || "");
+  if (!started) return null;
+  const messages = transcript_messages.value;
+  let index = messages.findIndex((message) => !message.slot_card && Date.parse(message.created_at) >= started);
+  // Working cards trailing the history already belong to this discussion.
+  if (index < 0) index = messages.findLastIndex((message) => !message.slot_card) + 1;
+  if (index === 0) return null;
+  return index < messages.length ? messages[index].id : "end";
+});
+/** A concluded latest discussion leaves its end card right after its last message, once the room is back to free collaboration. */
+const end_anchor = computed(() => {
+  const session = room.value?.session;
+  if (!free.value || session?.status !== "concluded") return null;
+  const messages = transcript_messages.value;
+  const index = messages.findIndex((message) => !message.slot_card && Number(message.id) > session.ended_message_id);
+  return index < 0 ? "end" : messages[index].id;
+});
+/**
+ * A free-room card keeps the place it first appeared in: each execution takes a slot under the message that asked for it,
+ * in execution order, and its answer replaces the working card in that slot. Work whose request is not shown stays at the end.
+ */
+const free_layout = computed(() => {
+  const messages = view.value.messages;
+  const shown = new Set(messages.map((message) => message.id));
+  const slots = new Map();
+  const place = (item) => {
+    if (!item.execution_id || !shown.has(item.request_message_id)) return false;
+    slots.set(item.request_message_id, [...(slots.get(item.request_message_id) || []), item]);
+    return true;
+  };
+  const roots = messages.filter((message) => !place(message));
+  const tail = free_working.value.map((item) => ({ ...item, slot_card: true })).filter((item) => !place(item));
+  const ordered = [];
+  const visit = (item) => {
+    ordered.push(item);
+    for (const child of (slots.get(item.id) || []).sort((left, right) => (left.execution_id - right.execution_id) || 0)) visit(child);
+  };
+  roots.forEach(visit);
+  return [...ordered, ...tail];
+});
+/** Split continuous history at local calendar boundaries; a working card stays in the day of the card above it. */
 const message_groups = computed(() => {
   const groups = [];
   for (const message of transcript_messages.value) {
-    const date = new Date(message.created_at);
+    if (message.slot_card && groups.length) { groups.at(-1).messages.push(message); continue; }
+    const date = new Date(message.slot_card ? (message.created_at ?? 0) * 1000 : message.created_at);
     const key = date.toLocaleDateString();
     if (groups.at(-1)?.key !== key) groups.push({ key, label: date_formatter.format(date), messages: [] });
     groups.at(-1).messages.push(message);
@@ -610,7 +635,8 @@ const message_groups = computed(() => {
 /** Preserve room-wide round boundaries while navigating filtered history. */
 const navigation_groups = computed(() => {
   const groups = [];
-  for (const message of view.value.messages) {
+  // Free rooms list messages in the order shown, so the map matches the transcript.
+  for (const message of free.value ? transcript_messages.value.filter((item) => !item.slot_card) : view.value.messages) {
     const round = bridge.round_groups(room.value)?.findLast((item) => item.start_id <= message.id);
     const number = round?.number || 0;
     if (groups.at(-1)?.number !== number) {
@@ -866,7 +892,7 @@ function reset_preview() {
 /** Reflow changes message heights; keep tail following and the current tick in sync. */
 async function refresh_layout() {
   reset_preview();
-  measure_topic();
+  topic_card?.measure();
   await follow_messages();
   await reveal_reading_position();
 }
@@ -1012,21 +1038,8 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
         </div>
       </motion.div>
     </Teleport>
-    <div ref="transcript" v-memo="[message_groups, message_round_labels, active_message, expanded_answers.size, room.title, view.query, view.mention_only, topic_key, topic_expanded, topic_overflows, pending_message, pending_seconds, request_badges, execution_reports, response_suggestions, recommendations, adopting, scheduler_decisions, correcting, pending, view.free_error]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
-      <div v-if="!view.query && !view.mention_only" class="channel-message-group channel-topic-group"><section class="channel-message channel-topic-card" :class="{ 'is-expanded': topic_expanded }" aria-label="议题">
-        <header class="channel-topic-heading"><span class="channel-topic-eyebrow"><UIcon name="i-lucide-target" />议题</span><h2>{{ room.title }}</h2><UButton icon="i-lucide-pencil" label="编辑" color="neutral" variant="ghost" size="xs" @click="emit('edit')" /></header>
-        <div ref="topic_body" class="channel-topic-body" :class="{ 'is-clamped': topic_overflows && !topic_expanded }">
-        <div v-if="topic.request" class="channel-topic-section channel-topic-request"><h3>{{ topic.request.label }}</h3><p class="channel-topic-text">{{ topic.request.text }}</p></div>
-        <div v-if="topic.goal" class="channel-topic-section"><h3>目标</h3><p class="channel-topic-text">{{ topic.goal }}</p></div>
-        <div v-if="topic.boundaries" class="channel-topic-section"><h3>边界</h3><p class="channel-topic-text">{{ topic.boundaries }}</p></div>
-        </div>
-        <UButton v-if="topic_overflows || topic_expanded" :label="topic_expanded ? '收起' : '展开全文'" :trailing-icon="topic_expanded ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" variant="link" color="neutral" size="xs" class="channel-answer-toggle" @click="topic_expanded = !topic_expanded" />
-        <div v-if="room.parent_room" class="channel-topic-section"><h3>来源</h3><p class="channel-topic-text">从自由协作「<button type="button" class="channel-link-button" @click="act('room', room.parent_room.id)">{{ room.parent_room.title }}</button>」发起<template v-if="room.phase === 'concluded'"> · <button type="button" class="channel-link-button" @click="act('return_conclusion')">把结论发回</button></template></p></div>
-        <div class="channel-topic-section channel-topic-config"><h3>参与配置</h3><div class="channel-topic-people">
-          <span v-for="person in topic.experts" :key="person.name" class="channel-topic-person"><UAvatar :src="bridge.identities[person.name]?.icon" :text="bridge.identities[person.name]?.initials" :alt="person.name" size="2xs" class="channel-avatar" :class="bridge.identities[person.name]?.style" />{{ bridge.display_name(person.name) }}<small>{{ person.name === topic.host ? `主持 · ${person.mode}` : person.mode }}</small></span>
-          <span v-if="free || topic.host === '用户'" class="channel-topic-person">{{ bridge.display_name('用户') }}<small>{{ free ? '需求方' : '主持' }}</small></span>
-        </div><small class="channel-topic-bounds">{{ topic.bounds }}</small></div>
-      </section></div>
+    <div ref="transcript" v-memo="[message_groups, message_round_labels, active_message, expanded_answers.size, room.title, view.query, view.mention_only, topic_anchor, end_anchor, pending_message, pending_seconds, request_badges, execution_reports, response_suggestions, recommendations, adopting, scheduler_decisions, correcting, pending, view.free_error]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
+      <div v-if="!view.query && !view.mention_only && !topic_anchor" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <!-- The opening plan has no answer to follow, so it stands right under the topic. -->
       <div v-if="host_arrangements.get(0)?.length" class="channel-message-group">
         <ScheduleCard v-for="plan in host_arrangements.get(0)" :key="`arrangement-${plan.id}`" icon="i-lucide-list-ordered" plain :title="`${bridge.display_name(room.host)} 创建的发言安排`" label="主持人安排" toggle-label="展开或收起各专家的任务">
@@ -1037,7 +1050,23 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
         <template v-for="message in group.messages" :key="message.id">
-        <section v-if="message.failure" :id="message.id" class="channel-message channel-failed-execution" :data-author="bridge.identities[message.author]?.style" :aria-label="`${bridge.display_name(message.author)} 执行失败`">
+        <DiscussionEndCard v-if="message.id === end_anchor && !view.query && !view.mention_only" />
+        <TopicCard v-if="message.id === topic_anchor && !view.query && !view.mention_only" :ref="(card) => topic_card = card" @edit="emit('edit')" />
+        <!-- A free-room working card holds the slot its answer will take. -->
+        <UChatMessage v-if="message.slot_card" :id="`execution-${message.id}`" :data-author="bridge.identities[message.author]?.style" role="assistant" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
+          <template #body>
+            <div class="channel-message-byline">
+              <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
+              <div class="channel-message-meta"><div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong></div></div>
+              <span class="channel-message-provenance channel-message-elapsed">{{ message.waiting ? `手动启动${message.created_at ? ` · 已等 ${format_elapsed(Math.max(0, free_now - message.created_at))}` : ''}` : `已用 ${format_elapsed(Math.max(0, free_now - message.created_at))}` }}</span>
+            </div>
+            <div class="channel-message-text" role="status" :aria-label="`${bridge.display_name(message.author)} ${message.text}`">
+              <span v-if="message.waiting">{{ message.text }}</span>
+              <template v-else><span ref="reply_glow" class="channel-reply-glow">{{ message.text }}</span><span v-if="message.working" class="channel-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></template>
+            </div>
+          </template>
+        </UChatMessage>
+        <section v-else-if="message.failure" :id="message.id" class="channel-message channel-failed-execution" :data-author="bridge.identities[message.author]?.style" :aria-label="`${bridge.display_name(message.author)} 执行失败`">
           <div class="channel-message-byline">
             <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
             <div class="channel-message-meta">
@@ -1148,6 +1177,10 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
         </template>
         </template>
       </div>
+      <div v-if="(topic_anchor === 'end' || end_anchor === 'end') && !view.query && !view.mention_only" class="channel-message-group">
+        <TopicCard v-if="topic_anchor === 'end'" :ref="(card) => topic_card = card" @edit="emit('edit')" />
+        <DiscussionEndCard v-if="end_anchor === 'end'" />
+      </div>
       <div v-if="pending_message" class="channel-message-group">
         <ScheduleCard v-if="pending_message.is_host" :id="`execution-${pending_message.id}`" icon="i-lucide-list-ordered" plain :expandable="false" :label="`${bridge.display_name(pending_message.author)} 主持工作`">
           <template #text><span role="status" :aria-label="`${bridge.display_name(pending_message.author)} ${pending_message.text}`">{{ bridge.display_name(pending_message.author) }} 主持工作：<span ref="reply_glow" class="channel-reply-glow">{{ pending_message.text }}</span></span><small>已用 {{ pending_duration }}</small></template>
@@ -1163,21 +1196,6 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           </template>
         </UChatMessage>
       </div>
-      <div v-if="free_working.length" class="channel-message-group">
-        <UChatMessage v-for="item in free_working" :id="`execution-${item.id}`" :key="item.id" :data-author="bridge.identities[item.author]?.style" role="assistant" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
-          <template #body>
-            <div class="channel-message-byline">
-              <UAvatar :src="bridge.identities[item.author]?.icon" :text="bridge.identities[item.author]?.initials || '?'" :alt="bridge.display_name(item.author)" size="md" class="channel-avatar" :class="bridge.identities[item.author]?.style" />
-              <div class="channel-message-meta"><div class="channel-message-author"><strong>{{ bridge.display_name(item.author) }}</strong></div></div>
-              <span class="channel-message-provenance channel-message-elapsed">{{ item.waiting ? `手动启动${item.created_at ? ` · 已等 ${format_elapsed(Math.max(0, free_now - item.created_at))}` : ''}` : `已用 ${format_elapsed(Math.max(0, free_now - item.created_at))}` }}</span>
-            </div>
-            <div class="channel-message-text" role="status" :aria-label="`${bridge.display_name(item.author)} ${item.text}`">
-              <span v-if="item.waiting">{{ item.text }}</span>
-              <template v-else><span ref="reply_glow" class="channel-reply-glow">{{ item.text }}</span><span v-if="item.working" class="channel-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></template>
-            </div>
-          </template>
-        </UChatMessage>
-      </div>
       <div v-if="!transcript_messages.length && !pending_message && !free_working.length" class="channel-empty"><UIcon :name="view.query || view.mention_only ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.mention_only ? '没有找到消息' : room.title }}</h2><p>{{ view.query || view.mention_only ? '试试其他关键词，或清除筛选。' : bridge.empty_discussion_message(room) }}</p></div>
     </div>
     <div v-if="(transcript_messages.length || pending_message) && !follow_tail" class="channel-latest-dock"><UButton icon="i-lucide-arrow-down" color="neutral" variant="outline" aria-label="回到最新消息" class="channel-latest-button" @click="return_to_latest" /></div>
@@ -1189,7 +1207,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             <button v-for="(name, index) in mention_members" :id="`channel-mention-${index}`" :key="name" type="button" role="option" :aria-selected="name === mention_active" tabindex="-1" class="channel-mention-option" @pointerdown.prevent @click="select_mention(name)" @pointermove="mention_index = index">
               <UAvatar v-if="GROUP_MENTIONS[name]" :icon="GROUP_MENTIONS[name].icon" :alt="name" size="xs" class="channel-avatar" />
               <UAvatar v-else :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="bridge.display_name(name)" size="xs" :class="['channel-avatar', bridge.identities[name]?.style]" />
-              <span>{{ GROUP_MENTIONS[name] ? `全体成员 ${GROUP_MENTIONS[name].label}（${free_members.length} 位）` : bridge.display_name(name) }}</span><small>@{{ name }}</small>
+              <span>{{ GROUP_MENTIONS[name] ? `全体成员（${free_members.length} 位）` : bridge.display_name(name) }}</span><small>@{{ name }}</small>
             </button>
             <p v-if="!mention_members.length" class="channel-mention-empty">没有匹配的成员</p>
           </div>
