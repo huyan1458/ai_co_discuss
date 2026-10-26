@@ -1,9 +1,9 @@
 ---
-name: scheduler-feedback-review
+name: jev-review
 description: "AI CoDiscuss 智能调度负反馈审查：读取本机站点里房主评为 👎 的 Jev 判断快照，结合模型当时看到的完整输入与用户真实意图，反推题干、选项、上下文或阈值哪里设计不当，在对话中输出诊断报告。只读，不改提示词、不调用决策模型。"
 ---
 
-# 智能调度负反馈审查（scheduler-feedback-review）
+# 智能调度负反馈审查（jev-review）
 
 目标：把每条 👎 还原成“模型看到了什么、为什么这么选、用户本来想要什么”，找出可以改进的问题与选项设计。报告只在对话中输出，不写文件；是否改 `runner/scheduler.mjs` 由用户决定。
 
