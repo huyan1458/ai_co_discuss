@@ -13,6 +13,7 @@ import { DiscussionRunner, DiscussionStore, acquire_lock, api, load_config, paus
 import { FreeRoomRunner } from './free_runner.mjs';
 
 const POLL_MS = 2000;
+const REMOTE_SYNC_MS = 3000;
 const START_WAIT_MS = 5000;
 const STOP_WAIT_MS = 20_000;
 const REGISTRY_WAIT_MS = 5000;
@@ -400,8 +401,15 @@ export async function run_service(home, output = () => {}) {
     log_line(`讨论服务已启动 pid=${process.pid}`);
     atomic_json(join(home, 'status.json'), { pid: process.pid, ready: true,
       updated_at: Math.floor(Date.now() / 1000), rooms: [] });
+    // Loaded lazily: the relay runs launches, and the launch module itself depends on this one.
+    const { sync_remote_launches } = await import('./remote_launch.mjs');
+    let synced_at = 0;
     while (!stopped && !existsSync(stop_path)) {
       try { await service.tick(); } catch (error) { log_line(`服务检查失败：${error.message}`); }
+      if (Date.now() - synced_at >= REMOTE_SYNC_MS) {
+        synced_at = Date.now();
+        try { await sync_remote_launches(home, { log: log_line }); } catch (error) { log_line(`远程启动检查失败：${error.message}`); }
+      }
       await sleep(POLL_MS);
     }
   } finally {

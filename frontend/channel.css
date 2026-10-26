@@ -557,6 +557,11 @@ html[data-theme^="channel"] :is(.channel-menu, .channel-select-menu) [data-slot=
 html[data-theme^="channel"] :is(.channel-menu, .channel-select-menu) [data-slot="item"][data-highlighted]::before { background: var(--channel-ghost-hover); }
 html[data-theme^="channel"] :is(.channel-menu, .channel-select-menu) [data-slot="itemLeadingIcon"] { width: 14px; height: 14px; color: #a4aebe; }
 html[data-theme^="channel"] .channel-menu [data-slot="label"] { color: #8e97a9; padding: 7px 8px 5px; font-size: 10px; font-weight: 400; }
+/* Project paths are long: the menu stays readable width and paths end in an ellipsis (full path in the manager). */
+html[data-theme^="channel"] .channel-menu.project-menu { width: min(400px, calc(100vw - 32px)); }
+html[data-theme^="channel"] .project-menu :is([data-slot="itemWrapper"], [data-slot="itemLabel"], [data-slot="itemDescription"]) { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+html[data-theme^="channel"] .project-menu [data-slot="itemDescription"] { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10.5px; }
+html[data-theme^="channel"] .project-menu [data-slot="itemTrailingIcon"] { color: var(--channel-accent); }
 html[data-theme^="channel"] .channel-identity-menu [data-slot="item"] { padding: 8px; }
 html[data-theme^="channel"] .channel-identity-menu [data-slot="itemDescription"] { font-size: 10px; color: #969fae; margin-top: 2px; }
 html[data-theme^="channel"] .channel-identity-menu [data-slot="input"] { border-bottom: 1px solid #ffffff0c; margin: 0 3px 3px; }
@@ -582,6 +587,11 @@ html[data-theme^="channel"] .dialog-body { padding: 23px 25px; }
 html[data-theme^="channel"] .dialog-form { gap: 18px; }
 html[data-theme^="channel"] .dialog-actions { border-color: var(--ui-border-muted); }
 html[data-theme^="channel"] .dialog-form :is(input, textarea, button[role="combobox"]) { background-color: #1d1f25; border-radius: 7px; font-size: 12px; box-shadow: inset 0 1px 2px #0002, 0 0 0 1px #414651; }
+/* The project field is a box drawn as one input around a borderless input, a tag and its actions. */
+html[data-theme^="channel"] .dialog-form :is(.project-box, .project-select) { border: 0; background-color: #1d1f25; border-radius: 7px; box-shadow: inset 0 1px 2px #0002, 0 0 0 1px #414651; }
+html[data-theme^="channel"] .dialog-form :is(.project-box:focus-within, .project-select:focus-visible) { box-shadow: 0 0 0 1px var(--channel-accent); }
+html[data-theme^="channel"] .dialog-form .project-box input { background: transparent; box-shadow: none; }
+html[data-theme^="channel"] .dialog-form.project-manager { gap: 12px; }
 html[data-theme^="channel"] .dialog-form label[data-slot="label"] { color: #c1c9d6; font-size: 12px; }
 html[data-theme^="channel"] .channel-folder-modal { max-width: 420px; }
 html[data-theme^="channel"] .channel-folder-modal [data-slot="header"] { min-height: 0; padding: 20px 20px 14px; border-bottom: 0; }
@@ -944,6 +954,9 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .studio-modal [data-slot="header"] { border-bottom-color: var(--ui-border-muted); }
   .dialog-form :is(input, textarea, button[role="combobox"]), :is(.summary-editor, .summary-brief-editor) textarea { background: #ffffff; box-shadow: 0 0 0 1px #c9c9c9; }
   .dialog-form :is(input, textarea, button[role="combobox"]):focus, :is(.summary-editor, .summary-brief-editor) textarea:focus { box-shadow: 0 0 0 1px var(--ui-border-accented); }
+  .dialog-form :is(.project-box, .project-select) { background: #ffffff; box-shadow: 0 0 0 1px #c9c9c9; }
+  .dialog-form :is(.project-box:focus-within, .project-select:focus-visible) { box-shadow: 0 0 0 1px var(--ui-border-accented); }
+  .dialog-form .project-box input { background: transparent; box-shadow: none; }
   .theme-choices > button { background: #fff; border-color: var(--ui-border); }
   .theme-choices > button:hover { background: #f6f6f6; }
   .theme-choices > button.chosen { background: #f3f7fd; border-color: var(--ui-border); box-shadow: none; }

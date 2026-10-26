@@ -3280,6 +3280,146 @@ async function handle_admin_api(database, request, parts, setup_key) {
 }
 
 /** Route JSON operations alongside explicitly bounded binary attachment routes. */
+// Room launches relayed to a paired computer; same contract as backend/remote_launch.py.
+const MACHINE_ONLINE_SECONDS = 30;
+const MACHINE_NAME_MAX = 60;
+const REMOTE_PROJECT_NAME_MAX = 80;
+const REMOTE_PROJECTS_MAX = 100;
+const REMOTE_CLIENTS_MAX = 40;
+const REMOTE_CLIENT_FIELD_MAX = 40;
+const REMOTE_ERROR_MAX = 2000;
+const LAUNCH_STAGES = ["not_started", "unconfirmed", "created", "started"];
+
+/** Hash a machine token; malformed values hash to an empty string and never match. */
+async function machine_token_digest(token) {
+  return typeof token === "string" && /^[0-9a-f]{64}$/.test(token) ? digest_hex(token) : "";
+}
+
+/** Public machine fields: projects by name and id, and which platforms it can wake. */
+function machine_view(row, now) {
+  return { id: row.id, name: row.name, projects: JSON.parse(row.projects), clients: JSON.parse(row.clients),
+    seen_at: row.seen_at, online: now - row.seen_at <= MACHINE_ONLINE_SECONDS };
+}
+
+/** Report a relayed launch without its request, which carries the room's credentials. */
+function launch_view(row) {
+  return { id: row.id, machine_id: row.machine_id, status: row.status, result: JSON.parse(row.result), error: row.error };
+}
+
+/** Pair a computer or replace its token; called by the administrator's browser connected to that computer. */
+async function pair_machine(database, payload, now) {
+  const { id, token } = payload;
+  const name = typeof payload.name === "string" ? payload.name.trim() : "";
+  const hashed = await machine_token_digest(token);
+  if (typeof id !== "string" || !/^[0-9a-f]{32}$/.test(id) || !hashed) throw new HttpError(400, "电脑编号或凭据无效");
+  if (name.length < 1 || name.length > MACHINE_NAME_MAX) throw new HttpError(400, `电脑名称需为 1–${MACHINE_NAME_MAX} 个字符`);
+  await database.prepare("INSERT INTO local_machines (id,name,token_hash,created_at) VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, token_hash=excluded.token_hash")
+    .bind(id, name, hashed, now).run();
+  return machine_view(await database.prepare("SELECT * FROM local_machines WHERE id=?").bind(id).first(), now);
+}
+
+/** Authenticate the computer itself by its own token. */
+async function require_machine(database, machine_id, token) {
+  const row = await database.prepare("SELECT * FROM local_machines WHERE id=?").bind(machine_id).first();
+  const hashed = await machine_token_digest(token);
+  if (!row || !hashed || !constant_time_equal(row.token_hash, hashed)) throw new HttpError(401, "电脑凭据无效，请在这台电脑上重新连接网站");
+  return row;
+}
+
+/** Project names and ids only; directories never leave the computer. */
+function valid_projects(value) {
+  if (!Array.isArray(value) || value.length > REMOTE_PROJECTS_MAX) throw new HttpError(400, `项目列表须为不超过 ${REMOTE_PROJECTS_MAX} 项的列表`);
+  return value.map(item => {
+    const { id, name } = item && typeof item === "object" ? item : {};
+    if (typeof id !== "string" || !/^[0-9a-f]{8,32}$/.test(id) || typeof name !== "string" || name.length < 1 || name.length > REMOTE_PROJECT_NAME_MAX) throw new HttpError(400, "项目须包含有效编号与名称");
+    return { id, name };
+  });
+}
+
+/** Map each platform the computer can wake to its configured client type. */
+function valid_clients(value) {
+  const entries = value && typeof value === "object" && !Array.isArray(value) ? Object.entries(value) : null;
+  if (!entries || entries.length > REMOTE_CLIENTS_MAX || entries.some(([key, item]) => typeof item !== "string" || !key.length || key.length > REMOTE_CLIENT_FIELD_MAX
+    || !item.length || item.length > REMOTE_CLIENT_FIELD_MAX)) throw new HttpError(400, "软件配置须为平台到客户端类型的对象");
+  return value;
+}
+
+/** Record the computer's projects and clients, and hand it every launch it has not finished. */
+async function machine_sync(database, machine_id, token, payload, now) {
+  await require_machine(database, machine_id, token);
+  const projects = valid_projects(payload.projects), clients = valid_clients(payload.clients);
+  await database.prepare("UPDATE local_machines SET projects=?, clients=?, seen_at=? WHERE id=?").bind(JSON.stringify(projects), JSON.stringify(clients), now, machine_id).run();
+  const { results } = await database.prepare("SELECT id,request FROM remote_launches WHERE machine_id=? AND status IN ('pending','claimed') ORDER BY created_at").bind(machine_id).all();
+  return { launches: results.map(row => ({ id: row.id, request: JSON.parse(row.request) })) };
+}
+
+/** Claim, finish or fail one launch; a finished or failed launch drops its request. */
+async function machine_launch_action(database, machine_id, launch_id, token, payload, now) {
+  await require_machine(database, machine_id, token);
+  const row = await database.prepare("SELECT * FROM remote_launches WHERE id=? AND machine_id=?").bind(launch_id, machine_id).first();
+  if (!row) throw new HttpError(404, "启动请求不存在");
+  const { action } = payload;
+  if (!["claim", "finish", "fail"].includes(action)) throw new HttpError(400, "action 须为 claim、finish 或 fail");
+  let statement;
+  if (action === "claim") statement = database.prepare("UPDATE remote_launches SET status='claimed', updated_at=? WHERE id=? AND status IN ('pending','claimed')").bind(now, launch_id);
+  else if (action === "finish") {
+    if (typeof payload.room_id !== "string" || !payload.room_id) throw new HttpError(400, "完成启动须提供 room_id");
+    const result = { room_id: payload.room_id, status: String(payload.status || "") };
+    statement = database.prepare("UPDATE remote_launches SET status='done', request='{}', result=?, error='', updated_at=? WHERE id=? AND status IN ('pending','claimed')")
+      .bind(JSON.stringify(result), now, launch_id);
+  } else {
+    const result = { stage: LAUNCH_STAGES.includes(payload.stage) ? payload.stage : "unconfirmed", ...(typeof payload.room_id === "string" ? { room_id: payload.room_id } : {}) };
+    statement = database.prepare("UPDATE remote_launches SET status='failed', request='{}', result=?, error=?, updated_at=? WHERE id=? AND status IN ('pending','claimed')")
+      .bind(JSON.stringify(result), String(payload.error || "启动失败").slice(0, REMOTE_ERROR_MAX), now, launch_id);
+  }
+  if (!(await statement.run()).meta.changes) throw new HttpError(409, "启动请求已结束");
+  return launch_view(await database.prepare("SELECT * FROM remote_launches WHERE id=?").bind(launch_id).first());
+}
+
+/** Queue a room creation for the paired computer; resubmitting the same id replays only a failed launch. */
+async function submit_remote_launch(database, payload, now) {
+  const { id, machine_id, request } = payload;
+  if (typeof id !== "string" || !/^[A-Za-z0-9_-]{1,80}$/.test(id)) throw new HttpError(400, "启动编号无效");
+  if (!request || typeof request !== "object" || Array.isArray(request) || !request.room || typeof request.room !== "object" || request.room.submission_id !== id) {
+    throw new HttpError(400, "远程启动只用于新建房间，room.submission_id 须与启动编号一致");
+  }
+  if (request.cwd || request.access_file) throw new HttpError(400, "远程启动只能选择电脑上已配置的项目，不能指定路径");
+  const machine = await database.prepare("SELECT * FROM local_machines WHERE id=?").bind(machine_id ?? "").first();
+  if (!machine) throw new HttpError(404, "这台电脑尚未连接网站");
+  if (request.local_project && !JSON.parse(machine.projects).some(project => project.id === request.local_project)) throw new HttpError(409, "所选项目已在电脑上移除或更改，请重新选择");
+  const text = JSON.stringify(request);
+  await database.batch([
+    database.prepare("INSERT OR IGNORE INTO remote_launches (id,machine_id,request,created_at,updated_at) VALUES (?,?,?,?,?)").bind(id, machine_id, text, now, now),
+    database.prepare("UPDATE remote_launches SET status='pending', request=?, result='{}', error='', updated_at=? WHERE id=? AND machine_id=? AND status='failed'").bind(text, now, id, machine_id),
+  ]);
+  const row = await database.prepare("SELECT * FROM remote_launches WHERE id=?").bind(id).first();
+  if (row.machine_id !== machine_id) throw new HttpError(409, "启动编号已用于另一台电脑");
+  return launch_view(row);
+}
+
+/** Pair computers and relay room launches; a computer authenticates with its own token, everything else as the administrator. */
+async function handle_remote_launch_api(database, request, parts) {
+  const now = now_seconds(), method = request.method;
+  if (parts[1] === "machines" && method === "POST" && ((parts.length === 4 && parts[3] === "sync") || (parts.length === 5 && parts[3] === "launches"))) {
+    const token = request.headers.get("X-Machine-Token") ?? "", payload = await read_payload(request);
+    return respond(parts.length === 4 ? await machine_sync(database, parts[2], token, payload, now)
+      : await machine_launch_action(database, parts[2], parts[4], token, payload, now));
+  }
+  await require_admin_session(database, request);
+  if (parts.length === 2 && parts[1] === "machines" && method === "GET") {
+    const { results } = await database.prepare("SELECT * FROM local_machines ORDER BY seen_at DESC, created_at DESC").all();
+    return respond({ machines: results.map(row => machine_view(row, now)) });
+  }
+  if (parts.length === 2 && parts[1] === "machines" && method === "POST") return respond(await pair_machine(database, await read_payload(request), now));
+  if (parts.length === 2 && parts[1] === "remote-launches" && method === "POST") return respond(await submit_remote_launch(database, await read_payload(request), now));
+  if (parts.length === 3 && parts[1] === "remote-launches" && method === "GET") {
+    const row = await database.prepare("SELECT * FROM remote_launches WHERE id=?").bind(parts[2]).first();
+    if (!row) throw new HttpError(404, "启动请求不存在");
+    return respond(launch_view(row));
+  }
+  throw new HttpError(404, "地址不存在");
+}
+
 async function handle_api(database, request, parts, params, bucket, setup_key = "") {
   const route = parts.join("/");
   const method = request.method;
@@ -3289,6 +3429,7 @@ async function handle_api(database, request, parts, params, bucket, setup_key = 
     await require_admin_session(database, request);
     return respond(await list_feedback_cases(database, Number(params.after) || 0));
   }
+  if (parts[0] === "api" && ["machines", "remote-launches"].includes(parts[1])) return handle_remote_launch_api(database, request, parts);
   if (route === "api/rooms") {
     if (method === "GET") return respond(await query_rooms(database, params));
     const room = await create_room(database, await read_payload(request), request.headers.get("X-Discussion-Token") ?? "");

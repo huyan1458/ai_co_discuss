@@ -51,6 +51,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch room-member --file FILE
       codiscuss launch pick-directory
       codiscuss launch projects [--file FILE]
+      codiscuss launch machine-link --file FILE
 
 settings 读取本机软件默认配置；指定文件时保存，不启动 AI。
 start 使用启动 JSON 创建或接入房间并启动；--dry-run 只校验和预览。
@@ -62,6 +63,7 @@ api-check 用 API profile 向模型发送一次极短请求，核对地址、密
 scheduler-check 用智能调度配置（provider、model、api_key_ref）向决策模型发送一道是非题，核对供应商、模型与密钥是否可用。
 pick-directory 在本机弹出系统目录选择窗口，返回所选路径；取消时不返回路径。
 projects 读取本机已配置的项目（名称与绝对路径）；提供 JSON（projects 列表）时整体替换保存。
+machine-link 返回本机连接指定 site 的电脑编号、名称与凭据，供已登录管理员的网页完成配对；不存在时创建。
 room-member 为运行中的自由房间或讨论邀请、请回一位成员（讨论只接受本机唤醒的成员）；须提供 site、room_id、token、action（add/rejoin）、name。
 JSON 指定 site、entry（conversation/web）、room（建房内容，含 submission_id）
 或 room_id（已有房间）、participants（本次软件覆盖配置）。
@@ -206,6 +208,7 @@ export function save_launch_settings(home, input) {
 }
 
 const PROJECT_NAME_LIMIT = 80;
+const PROJECT_ID_PATTERN = /^[0-9a-f]{8,32}$/;
 
 /** Read the named project directories saved on this computer, offered as launch cwd choices. */
 export function launch_projects(home) {
@@ -214,9 +217,11 @@ export function launch_projects(home) {
 }
 
 /** Replace the project list; every path must be an existing folder on this computer. */
+// The id outlives renames and moves: other devices choose a project by id and never see its path.
 export function save_launch_projects(home, input) {
   if (!Array.isArray(input.projects)) throw new Error('projects 必须为列表');
-  const projects = input.projects.map(item => ({ name: String(item?.name || '').trim(), path: String(item?.path || '').trim() }));
+  const projects = input.projects.map(item => ({ id: PROJECT_ID_PATTERN.test(item?.id) ? item.id : randomUUID().replaceAll('-', '').slice(0, 16),
+    name: String(item?.name || '').trim(), path: String(item?.path || '').trim() }));
   const names = new Set();
   for (const { name, path } of projects) {
     if (!name || name.length > PROJECT_NAME_LIMIT) throw new Error(`项目名称不能为空，且不超过 ${PROJECT_NAME_LIMIT} 字`);
@@ -831,6 +836,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   }
   else if (positionals[0] === 'room-member' && input) result = await room_member(home, input);
   else if (positionals[0] === 'pick-directory') result = await pick_directory();
+  else if (positionals[0] === 'machine-link' && input) result = (await import('./remote_launch.mjs')).machine_link(home, input.site);
   else if (positionals[0] === 'start' && input) result = await launch_discussion(home, input, { dry_run: values['dry-run'], browser_request: values.browser });
   else if (positionals[0] === 'room-config' && input) result = await room_configuration(home, input, { local_guard: values['configuration-locked'] });
   else throw new Error(HELP);

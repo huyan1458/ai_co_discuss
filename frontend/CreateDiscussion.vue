@@ -40,15 +40,19 @@ const limit_picker = ref(null);
 const woken_names = computed(() => selected_names.value.filter((name) => selected.value[name] === "cli"));
 // Smart scheduling alone also registers a room with the local service, even when every member is manual or online.
 const automatic = computed(() => woken_names.value.length > 0 || scheduler_active.value || cwd_preset.value);
+// Without the local service in this browser, the paired computer wakes members through the website.
+const relay = computed(() => view.value.launch.available ? null : view.value.launch.relay);
+const launchable = computed(() => view.value.launch.available || Boolean(relay.value));
 // A project directory set before any member joins is remembered by the local service for members added later.
-const cwd_preset = computed(() => view.value.launch.available && Boolean(view.value.launch.workspace.cwd));
+const cwd_preset = computed(() => view.value.launch.available ? Boolean(view.value.launch.workspace.cwd) : Boolean(relay.value && view.value.launch.workspace.local_project));
 const launch_ready = (name) => {
+  if (relay.value) return Boolean(relay.value.clients[bridge.platform_of(name)]);
   const profile = view.value.launch.profiles[name] || {};
   if (profile.adapter === "api") return Boolean(profile.base_url && profile.api_protocol && profile.api_key_ref && profile.model);
   return Boolean(profile.adapter && (profile.adapter === "antigravity" ? profile.ipc_directory : profile.executable));
 };
-const launching = computed(() => automatic.value && view.value.launch.available);
-const room_ready = computed(() => woken_names.value.every(launch_ready) && (!woken_names.value.length || view.value.launch.available));
+const launching = computed(() => automatic.value && launchable.value);
+const room_ready = computed(() => woken_names.value.every(launch_ready) && (!woken_names.value.length || launchable.value));
 // Smart scheduling runs in the local service, so it is offered whenever the service is connected.
 const scheduling = computed(() => view.value.launch.available);
 const scheduler_active = computed(() => scheduling.value && Boolean(view.value.launch.scheduler?.enabled));
@@ -59,14 +63,15 @@ const scheduler_unready = computed(() => {
   return scheduling.value && scheduler.enabled && !(scheduler.provider && scheduler.model && scheduler.api_key_ref);
 });
 const CONNECTION_POLL_MS = 3000;
-const needs_connection = computed(() => automatic.value && !view.value.launch.available);
+const needs_connection = computed(() => automatic.value && !launchable.value);
 let connection_timer = 0;
 /** Why the create button is disabled, in the order the user can fix it. */
 const blocker = computed(() => {
   if (discussing.value && selected.value[host.value] !== "cli") return "开启讨论需要先添加一位由本机唤醒的主持人";
   if (needs_connection.value) return "先连接本机服务，或把成员改为手动启动";
-  if (discussing.value && !view.value.launch.available) return "先连接本机服务";
+  if (discussing.value && !launchable.value) return "先连接本机服务";
   const unready = woken_names.value.filter((name) => !launch_ready(name));
+  if (unready.length && relay.value) return `在电脑「${relay.value.name}」上配置 ${unready.join("、")}`;
   return unready.length ? `补齐 ${unready.join("、")} 的接入配置` : scheduler_unready.value ? "补齐决策模型配置，或移出决策模型" : "";
 });
 
@@ -104,6 +109,7 @@ function set_expert_mode(name, mode) {
 function expert_status(name) {
   if (selected.value[name] === "online") return { text: "网页代发，由你转发回答", tone: "muted" };
   if (selected.value[name] === "manual") return { text: "手动启动，自行提交", tone: "muted" };
+  if (relay.value) return launch_ready(name) ? { text: `由电脑「${relay.value.name}」唤醒`, tone: "ready" } : { text: "电脑上尚未配置此软件", tone: "warn" };
   const api = view.value.launch.profiles[name]?.adapter === "api";
   return launch_ready(name) ? { text: api ? "已配置 API" : "已配置本机软件", tone: "ready" } : { text: api ? "待补齐 API 配置" : "待补齐接入配置", tone: "warn" };
 }
@@ -161,8 +167,8 @@ const summary = computed(() => {
       <section class="create-section">
         <h3><span>1</span>这次做什么</h3>
         <UFormField label="话题名称" required><UInput :model-value="value('title')" :maxlength="80" required autofocus size="lg" placeholder="这次要一起做什么？" class="w-full" @update:model-value="write('title', $event)" /></UFormField>
-        <UFormField label="项目目录（可选）" :description="view.launch.available ? '本机唤醒的成员在此目录读写文件；不填则各用软件默认目录。' : '连接本机服务后可指定：本机唤醒的成员将在此目录读写文件。'">
-          <ProjectDirectoryField :disabled="!view.launch.available" />
+        <UFormField label="项目目录（可选）" :description="view.launch.available ? '本机唤醒的成员在此目录读写文件；不填则各用软件默认目录。' : relay ? `由电脑「${relay.name}」唤醒的成员在所选项目中读写文件；不选则各用软件默认目录。` : '连接本机服务后可指定：本机唤醒的成员将在此目录读写文件。'">
+          <ProjectDirectoryField :disabled="!launchable" />
         </UFormField>
       </section>
 

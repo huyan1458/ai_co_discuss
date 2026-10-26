@@ -1601,3 +1601,47 @@ test('Worker admin session bypasses room credentials for archive restore delete'
   assert.equal(wrong.status, 400);
   assert.equal((await admin_call(f, `/api/rooms${path}/delete`, { actor: '用户', confirm_title: '管理员清理' }, session)).status, 200);
 });
+
+test('Worker relays a remote launch only to the paired computer', async t => {
+  const f = await admin_fixture(t);
+  const machine_id = crypto.randomUUID().replaceAll('-', ''), machine_token = 'ab'.repeat(32);
+  const machine_call = async (path, payload, token = machine_token) => {
+    const response = await worker.fetch(new Request(`https://discussion.test${path}`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Machine-Token': token }, body: JSON.stringify(payload) }), f.env);
+    return { status: response.status, body: await response.json() };
+  };
+  const pairing = { id: machine_id, name: '工作站', token: machine_token };
+  assert.equal((await admin_call(f, '/api/machines')).status, 401);
+  assert.equal((await admin_call(f, '/api/machines', pairing)).status, 401);
+  const session = (await f.register()).body.token;
+  assert.equal((await admin_call(f, '/api/machines', pairing, session)).status, 200);
+  const sync = `/api/machines/${machine_id}/sync`, state = { projects: [{ id: 'abcdef12', name: '演示' }], clients: { Claude: 'claude' } };
+  assert.equal((await machine_call(sync, state, '0'.repeat(64))).status, 401);
+  assert.deepEqual((await machine_call(sync, state)).body, { launches: [] });
+  const [machine] = (await admin_call(f, '/api/machines', undefined, session)).body.machines;
+  assert.deepEqual([machine.projects, machine.clients, machine.online, machine.token_hash], [state.projects, state.clients, true, undefined]);
+
+  const request = { site: 'https://example.test', entry: 'web', token: 'room-credential', local_project: 'abcdef12',
+    room: { title: '远程建房', mode: 'free', members: [], submission_id: 'launch-1' } };
+  const submit = (body, id = 'launch-1') => admin_call(f, '/api/remote-launches', { id, machine_id, request: body }, session);
+  assert.equal((await admin_call(f, '/api/remote-launches', { id: 'launch-1', machine_id, request })).status, 401);
+  assert.equal((await submit({ ...request, cwd: 'D:\project' })).status, 400);
+  assert.equal((await submit({ ...request, local_project: 'deadbeef' })).status, 409);
+  assert.equal((await submit(request)).body.status, 'pending');
+  assert.deepEqual((await machine_call(sync, state)).body.launches, [{ id: 'launch-1', request }]);
+  const action = `/api/machines/${machine_id}/launches/launch-1`;
+  assert.equal((await machine_call(action, { action: 'claim' })).body.status, 'claimed');
+  assert.equal((await submit(request)).body.status, 'claimed');
+  const done = (await machine_call(action, { action: 'finish', room_id: 'room-1', status: 'free' })).body;
+  assert.deepEqual([done.status, done.result], ['done', { room_id: 'room-1', status: 'free' }]);
+  assert.equal((await machine_call(action, { action: 'fail', error: 'late' })).status, 409);
+  assert.equal((await admin_call(f, '/api/remote-launches/launch-1', undefined, session)).body.status, 'done');
+  assert.equal(f.sql.prepare("SELECT request FROM remote_launches WHERE id='launch-1'").get().request, '{}');
+
+  const failing = { ...request, room: { ...request.room, submission_id: 'launch-2' } };
+  await submit(failing, 'launch-2');
+  const failure = (await machine_call(`/api/machines/${machine_id}/launches/launch-2`, { action: 'fail', error: 'Claude 未配置', stage: 'not_started' })).body;
+  assert.deepEqual([failure.status, failure.error, failure.result], ['failed', 'Claude 未配置', { stage: 'not_started' }]);
+  const retried = (await submit(failing, 'launch-2')).body;
+  assert.deepEqual([retried.status, retried.error], ['pending', '']);
+});

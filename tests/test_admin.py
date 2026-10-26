@@ -37,9 +37,11 @@ class AdminTests(unittest.TestCase):
         self.thread.join()
         self.directory.cleanup()
 
-    def request(self, path, payload=None, admin="", token=""):
+    def request(self, path, payload=None, admin="", token="", machine=""):
         """Return status and JSON for successes and rejections alike."""
         headers = {"Content-Type": "application/json"}
+        if machine:
+            headers["X-Machine-Token"] = machine
         if admin:
             headers["X-Discussion-Admin"] = admin
         if token:
@@ -138,6 +140,47 @@ class AdminTests(unittest.TestCase):
         self.assertEqual(self.request(f"/api/rooms/{room}/archive", {"actor": "用户"})[0], 200)
         self.assertEqual(self.request(f"/api/rooms/{room}/delete", {"actor": "用户", "confirm_title": "管理员验证"})[0], 200)
 
+
+    def test_remote_launch_reaches_only_the_paired_computer(self):
+        machine_id, machine_token = uuid.uuid4().hex, uuid.uuid4().hex * 2
+        pairing = {"id": machine_id, "name": "工作站", "token": machine_token}
+        self.assertEqual(self.request("/api/machines")[0], 401)
+        self.assertEqual(self.request("/api/machines", pairing)[0], 401)
+        admin = self.register()
+        self.assertEqual(self.request("/api/machines", pairing, admin=admin)[0], 200)
+        sync = f"/api/machines/{machine_id}/sync"
+        state = {"projects": [{"id": "abcdef12", "name": "演示"}], "clients": {"Claude": "claude"}}
+        self.assertEqual(self.request(sync, state, machine="0" * 64)[0], 401)
+        self.assertEqual(self.request(sync, state, machine=machine_token), (200, {"launches": []}))
+        machines = self.request("/api/machines", admin=admin)[1]["machines"]
+        self.assertEqual((machines[0]["projects"], machines[0]["clients"], machines[0]["online"]), (state["projects"], state["clients"], True))
+        self.assertNotIn("token_hash", machines[0])
+
+        request = {"site": "https://example.test", "entry": "web", "token": "room-credential", "local_project": "abcdef12",
+                   "room": {"title": "远程建房", "mode": "free", "members": [], "submission_id": "launch-1"}}
+        submit = lambda body: self.request("/api/remote-launches", {"id": "launch-1", "machine_id": machine_id, "request": body}, admin=admin)
+        self.assertEqual(self.request("/api/remote-launches", {"id": "launch-1", "machine_id": machine_id, "request": request})[0], 401)
+        self.assertEqual(submit({**request, "cwd": "D:\project"})[0], 400)
+        self.assertEqual(submit({**request, "local_project": "deadbeef"})[0], 409)
+        self.assertEqual(submit(request)[1]["status"], "pending")
+        launches = self.request(sync, state, machine=machine_token)[1]["launches"]
+        self.assertEqual(launches, [{"id": "launch-1", "request": request}])
+        action = f"/api/machines/{machine_id}/launches/launch-1"
+        self.assertEqual(self.request(action, {"action": "claim"}, machine=machine_token)[1]["status"], "claimed")
+        self.assertEqual(submit(request)[1]["status"], "claimed")
+        done = self.request(action, {"action": "finish", "room_id": "room-1", "status": "free"}, machine=machine_token)[1]
+        self.assertEqual((done["status"], done["result"]), ("done", {"room_id": "room-1", "status": "free"}))
+        self.assertEqual(self.request(action, {"action": "fail", "error": "late"}, machine=machine_token)[0], 409)
+        self.assertEqual(self.request("/api/remote-launches/launch-1", admin=admin)[1]["status"], "done")
+        self.assertEqual(self.sql("SELECT request FROM remote_launches WHERE id='launch-1'"), [("{}",)])
+
+        failing = {**request, "room": {**request["room"], "submission_id": "launch-2"}}
+        self.request("/api/remote-launches", {"id": "launch-2", "machine_id": machine_id, "request": failing}, admin=admin)
+        failure = self.request(f"/api/machines/{machine_id}/launches/launch-2", {"action": "fail", "error": "Claude 未配置", "stage": "not_started"},
+                               machine=machine_token)[1]
+        self.assertEqual((failure["status"], failure["error"], failure["result"]), ("failed", "Claude 未配置", {"stage": "not_started"}))
+        retried = self.request("/api/remote-launches", {"id": "launch-2", "machine_id": machine_id, "request": failing}, admin=admin)[1]
+        self.assertEqual((retried["status"], retried["error"]), ("pending", ""))
 
 if __name__ == "__main__":
     unittest.main()

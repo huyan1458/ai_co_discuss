@@ -28,6 +28,9 @@ const MEMBER_ACCESS_PREFIX = "discuss-members:";
 const MEMBER_PENDING_PREFIX = "discuss-member-pending:";
 const LOCAL_CONNECTION_KEY = "discuss-local-connection";
 const LOCAL_CONNECTION_TIMEOUT_MS = 15000;
+// A relayed launch waits this long for the paired computer before the request is kept as a pending item.
+const RELAY_WAIT_MS = 45000;
+const RELAY_POLL_MS = 1500;
 const MODEL_CATALOG_TIMEOUT_MS = 35000;
 let local_connection = null;
 const DEFAULT_USER_LABEL = "User";
@@ -71,7 +74,7 @@ state.directory_pending = new Map();
 state.directory_version = 0;
 state.navigation_version = 0;
 state.admin = { loaded: false, local: false, registered: false, setup_available: false, logged_in: false, profile: null, identity_version: 0 };
-state.launch = { available: false, remote: false, connect_command: "", profiles: {}, projects: [], workspace: {}, scheduler: {}, create: true, error: "", notice: "", recoveries: [] };
+state.launch = { available: false, remote: false, relay: null, connect_command: "", profiles: {}, projects: [], workspace: {}, scheduler: {}, create: true, error: "", notice: "", recoveries: [] };
 const PLATFORM_CLIENTS = { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }],
   Claude: [{ value: "claude", label: "Claude Code CLI" }],
   Gemini: [{ value: "antigravity_cli", label: "Antigravity CLI" }, { value: "antigravity", label: "Antigravity App" }] };
@@ -221,6 +224,8 @@ function admin_error(error) {
 function accept_admin_session({ token, profile }) {
   store_admin_token(token);
   apply_admin_state({ registered: true, setup_available: false, logged_in: true, profile });
+  // Pairing and the paired computer both need the session, so read them again now.
+  load_launch_settings();
 }
 
 /** Create the single administrator account and sign in with it. */
@@ -244,6 +249,7 @@ async function logout_admin() {
   catch { /* The token is removed below either way. */ }
   store_admin_token("");
   state.admin.logged_in = false;
+  state.launch.relay = null;
   publish_view();
 }
 
@@ -1540,8 +1546,9 @@ async function submit_room(event, folder_id = null) {
   const free = payload.mode === "free";
   // A discussion can still be created without the local service and started later from the room;
   // a free room needs the service only for members it wakes or for smart scheduling.
-  const launching = free ? Object.values(payload.experts).includes("cli") || (state.launch.available && Boolean(creation_launch_options().scheduler || state.launch.workspace.cwd)) : state.launch.create && state.launch.available;
-  if (launching && !state.launch.available) throw new Error("本机唤醒的成员需要连接本机服务；也可改为手动接入或网页代发");
+  const launchable = state.launch.available || Boolean(state.launch.relay);
+  const launching = free ? Object.values(payload.experts).includes("cli") || (launchable && Boolean(creation_launch_options().scheduler || state.launch.workspace.cwd || state.launch.workspace.local_project)) : state.launch.create && state.launch.available;
+  if (launching && !launchable) throw new Error("本机唤醒的成员需要连接本机服务；也可改为手动接入或网页代发");
   const launch_draft = launching ? creation_launch_options() : null;
   // A discussion is only a way to push the room forward: the room is created as a free room, then opened with these limits.
   const discussion = free && state.create_discussion ? { goal: payload.goal.trim(), named_followup: state.named_followup,
@@ -1675,7 +1682,8 @@ async function submit_local_launch(input, title, direct = false, signature) {
   const id = input.room?.submission_id || `room-${input.room_id}`;
   const key = LAUNCH_PENDING_PREFIX + id;
   const previous = localStorage.getItem(key);
-  const record = previous ? JSON.parse(previous) : { id, title, input, room_id: input.room_id, direct, signature };
+  const relay = !direct && !state.launch.available ? state.launch.relay?.id : undefined;
+  const record = previous ? JSON.parse(previous) : { id, title, input, room_id: input.room_id, direct, signature, ...(relay ? { machine_id: relay } : {}) };
   if (previous && JSON.stringify(record.input) !== JSON.stringify(input)) throw new Error("此房间有未完成的原启动请求，请先继续该请求，不要替换配置");
   record.attempt_id = crypto.randomUUID();
   try { localStorage.setItem(key, JSON.stringify(record)); }
@@ -1683,7 +1691,7 @@ async function submit_local_launch(input, title, direct = false, signature) {
   refresh_launch_recoveries();
   try {
     const result = record.direct ? { room: await request_json("/api/rooms", record.input.room, record.input.token), status: "created" }
-      : await local_launch_request("launch", record.input);
+      : record.machine_id ? await relay_launch_request(record.input, record.machine_id) : await local_launch_request("launch", record.input);
     save_room_credentials(result.room, record.input.token, record.input.room?.members || []);
     localStorage.removeItem(key);
     refresh_launch_recoveries();
@@ -1752,7 +1760,7 @@ async function load_launch_settings() {
     local_connection = restore_local_connection();
     state.launch.remote = Boolean(local_connection);
     if (local_connection) state.launch.connect_command = `codiscuss local connect "${location.origin}"`;
-    if (!local_connection && !local) return;
+    if (!local_connection && !local) { state.launch.relay = await load_relay_machine(); return; }
     const settings = await local_launch_request("settings");
     // Keep the saved machine defaults so every new form can start from them again.
     state.launch.saved_profiles = JSON.parse(JSON.stringify(settings.participants || {}));
@@ -1760,11 +1768,44 @@ async function load_launch_settings() {
       scheduler_providers: settings.scheduler_providers || {}, error: "",
       notice: local_connection ? "已连接本机服务，讨论保存在当前网站" : "" });
     Object.values(state.launch.profiles).forEach(fill_api_key);
+    if (local_connection) pair_local_machine();
     // Settings arrive after the form was reset; only an untouched draft gets the default.
     if (!Object.keys(state.launch.scheduler).length) state.launch.scheduler = default_scheduler();
     load_room_models();
-  } catch (error) { state.launch.available = false; state.launch.room_models = null; state.launch.error = error.message; }
+  } catch (error) {
+    Object.assign(state.launch, { available: false, room_models: null, error: error.message });
+    // Without a reachable local service, launches can still go through the paired computer.
+    state.launch.relay = await load_relay_machine();
+    if (state.launch.relay) state.launch.error = "";
+  }
   finally { refresh_launch_recoveries(); render_launch_settings(); publish_view(); }
+}
+
+/** The computer paired with this site, most recently seen first; only the administrator can read or use it. */
+async function load_relay_machine() {
+  if (!admin_token()) return null;
+  try { return (await request_json("/api/machines")).machines[0] || null; } catch { return null; }
+}
+
+/** Pair the connected computer so devices without the local service can launch on it; needs the administrator session. */
+async function pair_local_machine() {
+  if (!admin_token()) return;
+  try { await request_json("/api/machines", await local_launch_request("machine-link", {})); }
+  catch (error) { console.warn("Pairing this computer failed:", error.message); }
+}
+
+/** Hand a room creation to the paired computer through the website and wait for it to finish. */
+async function relay_launch_request(input, machine_id) {
+  const id = input.room.submission_id;
+  let launch = await request_json("/api/remote-launches", { id, machine_id, request: input });
+  for (let waited = 0; ["pending", "claimed"].includes(launch.status) && waited < RELAY_WAIT_MS; waited += RELAY_POLL_MS) {
+    await new Promise(resolve => setTimeout(resolve, RELAY_POLL_MS));
+    launch = await request_json(`/api/remote-launches/${encodeURIComponent(id)}`);
+  }
+  if (launch.status === "failed") throw Object.assign(new Error(launch.error), { launch: { stage: launch.result.stage, room_id: launch.result.room_id } });
+  const name = state.launch.relay?.name || "电脑";
+  if (launch.status !== "done") throw Object.assign(new Error(`${name}${launch.status === "pending" ? "尚未接手" : "仍在启动"}，请保持它开机并运行 codiscuss，稍后在待办中继续`), { launch: { stage: "unconfirmed" } });
+  return { room: await request_json(`/api/rooms/${launch.result.room_id}`, undefined, input.token), status: launch.result.status };
 }
 
 /** Re-check the local connection and explain when nothing has been connected yet. */
@@ -1948,7 +1989,9 @@ function restore_launch_profile(name, profile) {
 
 /** Capture local overrides before asynchronous work or navigation can change the draft. */
 function launch_options() {
-  const draft = JSON.parse(JSON.stringify({ participants: state.launch.profiles, ...state.launch.workspace, entry: "web" }));
+  const { local_project, ...workspace } = state.launch.workspace;
+  // The paired computer resolves a project id to its own folder; a browser with the local service sends the folder itself.
+  const draft = JSON.parse(JSON.stringify({ participants: state.launch.profiles, ...workspace, ...(!state.launch.available && local_project ? { local_project } : {}), entry: "web" }));
   for (const profile of Object.values(draft.participants)) if (profile.adapter === "api") profile.project_access = "read";
   return draft;
 }
@@ -2077,18 +2120,23 @@ function clear_launch_overrides(draft) {
       if (state.launch.profiles[name]?.[field] === profile[field]) delete state.launch.profiles[name]?.[field];
     }
   }
-  for (const field of ["cwd", "discussion_project", "project_access"]) {
+  for (const field of ["cwd", "local_project", "discussion_project", "project_access"]) {
     if (state.launch.workspace[field] === draft[field]) delete state.launch.workspace[field];
   }
   render_launch_settings();
   publish_view();
 }
 
+/** Browse for a folder on the computer running the local service; resolves to "" when cancelled. */
+async function browse_local_directory() {
+  return (await local_launch_request("pick-directory", {})).path || "";
+}
+
 /** Let the user browse for the project folder on the computer running the local service. */
 async function pick_launch_directory() {
   try {
-    const result = await local_launch_request("pick-directory", {});
-    if (result.path) write_launch_field("workspace", "cwd", result.path);
+    const path = await browse_local_directory();
+    if (path) write_launch_field("workspace", "cwd", path);
     state.launch.error = "";
   } catch (error) { state.launch.error = error.message; }
   publish_view();
@@ -3374,7 +3422,7 @@ function change_view_theme(theme) {
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
   write_launch: write_launch_field, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
-  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, check_launch_api, launch_summary, launch_can_set_access, launch_can_bind_session, pick_launch_directory, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
+  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, check_launch_api, launch_summary, launch_can_set_access, launch_can_bind_session, pick_launch_directory, browse_local_directory, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, platform_of, execute: execute_view_action, theme: change_view_theme,

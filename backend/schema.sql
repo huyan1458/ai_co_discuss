@@ -740,3 +740,28 @@ END;
 -- The review phase behaved exactly like discussing and was retired; move rows left in it.
 UPDATE topic_settings SET phase='discussing' WHERE phase='reviewing';
 UPDATE discussion_runtime SET resume_phase='discussing' WHERE resume_phase='reviewing';
+
+-- A computer running the local service, paired by the site administrator. Only project names and ids and the
+-- configured client of each platform are published; directories and credentials stay on that computer.
+CREATE TABLE IF NOT EXISTS local_machines (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    token_hash TEXT NOT NULL,
+    projects TEXT NOT NULL DEFAULT '[]',
+    clients TEXT NOT NULL DEFAULT '{}',
+    seen_at INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+-- A room launch submitted from a device without the local service; the paired computer claims and runs it.
+-- The request (with the room's new credentials) is cleared once the launch finishes or fails.
+CREATE TABLE IF NOT EXISTS remote_launches (
+    id TEXT PRIMARY KEY,
+    machine_id TEXT NOT NULL,
+    request TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','claimed','done','failed')),
+    result TEXT NOT NULL DEFAULT '{}',
+    error TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS remote_launches_machine ON remote_launches(machine_id, status);

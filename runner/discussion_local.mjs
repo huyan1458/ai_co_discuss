@@ -11,6 +11,7 @@ import { atomic_json } from './discussion_adapters.mjs';
 import { acquire_lock } from './discussion_runner.mjs';
 import { assert_shared_home, main as service_main, service_home, service_pid, service_ready, start_service } from './discussion_service.mjs';
 import { detect_python, local_settings } from './discussion_setup.mjs';
+import { unlink_machine } from './remote_launch.mjs';
 import { tone } from './discussion_tui.mjs';
 
 const SCRIPT = fileURLToPath(import.meta.url);
@@ -25,7 +26,7 @@ const LOCAL_HELP = `用法：codiscuss local open|start|status|stop [--json]
       codiscuss local disconnect SITE
 
 connect 允许指定 HTTPS 站点通过此浏览器使用本机软件配置并启动 AI，打开连接链接完成接入。
-disconnect 撤销该站点的新启动权限；已运行的讨论须另行暂停。
+disconnect 撤销该站点的新启动权限（含其他设备经网站转来的启动）；已运行的讨论须另行暂停。
 数据保留在服务目录中；重新 connect 会替换该站点的旧连接。
 结果摘要写入终端；输出被重定向或加 --json 时 JSON 写入 stdout。
 `;
@@ -48,7 +49,7 @@ export function save_site_connection(home, site, token = null) {
     const path = join(home, 'site-connections.json');
     const settings = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { sites: {} };
     if (token) settings.sites[origin] = { token_hash: createHash('sha256').update(token).digest('hex') };
-    else delete settings.sites[origin];
+    else { delete settings.sites[origin]; unlink_machine(home, origin); }
     atomic_json(path, settings);
   } finally { release(); }
 }

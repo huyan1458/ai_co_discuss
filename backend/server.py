@@ -21,6 +21,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit
 
 from .admin import AdminError, admin_status, login_admin, logout_admin, register_admin, session_valid, update_profile
+from .remote_launch import (list_machines, machine_launch_action, machine_sync, pair_machine, remote_launch_status,
+                            submit_remote_launch)
 from .free_room import (add_member, after_free_message, authorize_free_write, check_answer, check_proxy, execution_action, free_view,
                         inbox, interrupt_member, member_action, member_values, migrate_free_tables, proxy_member, reserve_execution,
                         discussion_members, room_mode, save_room_access, sync_discussion_members, view_execution)
@@ -1835,7 +1837,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         site = self.local_request_site(method)
         route = parts[2:]
         if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-member"], ["models"], ["api-key"], ["api-check"],
-                                             ["scheduler-check"], ["pick-directory"], ["projects"]):
+                                             ["scheduler-check"], ["pick-directory"], ["projects"], ["machine-link"]):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
             command = "settings"
@@ -1859,6 +1861,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = "pick-directory"
         elif route == ["projects"] and method == "POST":
             command = "projects"
+        elif route == ["machine-link"] and method == "POST":
+            command = "machine-link"
         else:
             raise LookupError("本机入口不存在")
         payload = None
@@ -1869,6 +1873,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if command in ("start", "room-config", "room-models", "room-member"):
                 payload.pop("access_file", None)
                 payload.update(site=site, entry="web")
+            if command == "machine-link":
+                payload = {"site": site}
         if command == "room-config" and "participants" in payload:
             return self.save_local_room_configuration(command, payload)
         return self.run_local_command(command, payload)
@@ -1945,6 +1951,30 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         connection.commit()
         return self.respond(result, 201 if parts[2] == "register" else 200)
 
+    def handle_remote_launch_api(self, connection, parts, method):
+        """Pair computers and relay room launches; a computer authenticates with its own token, everything else as the administrator."""
+        now = int(time.time())
+        if len(parts) in (4, 5) and parts[1] == "machines" and method == "POST" and (len(parts) == 4 and parts[3] == "sync" or parts[3:4] == ["launches"]):
+            token = self.headers.get("X-Machine-Token", "")
+            result = (machine_sync(connection, parts[2], token, self.read_payload(), now) if len(parts) == 4
+                      else machine_launch_action(connection, parts[2], parts[4], token, self.read_payload(), now))
+            connection.commit()
+            return self.respond(result)
+        if not self.admin_session(connection):
+            raise AdminError("需要登录管理员账号", 401)
+        if parts == ["api", "machines"] and method == "GET":
+            return self.respond(list_machines(connection, now))
+        if parts == ["api", "machines"] and method == "POST":
+            result = pair_machine(connection, self.read_payload(), now)
+        elif parts == ["api", "remote-launches"] and method == "POST":
+            result = submit_remote_launch(connection, self.read_payload(), now)
+        elif len(parts) == 3 and parts[1] == "remote-launches" and method == "GET":
+            return self.respond(remote_launch_status(connection, parts[2]))
+        else:
+            raise LookupError("地址不存在")
+        connection.commit()
+        return self.respond(result)
+
     def handle_api(self, connection, parts, params, method):
         """Handle room, state, and message operations used by the web UI."""
         if parts == ["api", "health"] and method == "GET":
@@ -1955,6 +1985,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if not self.admin_session(connection):
                 raise AdminError("需要登录管理员账号", 401)
             return self.respond(list_feedback_cases(connection, int(params.get("after", 0))))
+        if parts[1:2] in (["machines"], ["remote-launches"]):
+            return self.handle_remote_launch_api(connection, parts, method)
         if parts == ["api", "rooms"]:
             if method == "GET":
                 return self.respond({**list_rooms(connection, params), "participants": PARTICIPANTS})

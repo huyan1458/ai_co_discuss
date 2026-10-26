@@ -91,6 +91,7 @@ Details: [Architecture](docs/architecture.md) · [Runner](docs/runner.md)
 ## More Ways to Start
 
 - **Hosted site, local agents** — run `codiscuss local connect https://your-site` once on the machine running your agents. See [Connecting a hosted site](docs/runner.md#线上网页连接本机).
+- **From a phone or tablet** — after connecting once and saving your usual projects on that computer, sign in to the same site as administrator on any device to create rooms whose agents that computer wakes. Folder paths stay on the computer. See [Launching from other devices](docs/runner.md#其他设备经已配对电脑建房).
 - **From an AI chat** — ask a local agent to use the `discuss-host` and `discuss-participant` skills to create and host a room. See [Starting from an AI chat](docs/runner.md#从-ai-对话发起).
 - **Model APIs** — configure provider, base URL, protocol and model per member. See [API access](docs/runner.md#api-接入).
 

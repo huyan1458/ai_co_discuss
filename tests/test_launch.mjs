@@ -93,7 +93,7 @@ test('project list keeps only named folders that exist on this computer', t => {
   t.after(() => rmSync(home, { recursive: true, force: true }));
   assert.deepEqual(launch_projects(home), { projects: [] });
   const saved = save_launch_projects(home, { projects: [{ name: ' 演示 ', path: home }] });
-  assert.deepEqual(saved, { projects: [{ name: '演示', path: home }] });
+  assert.deepEqual(saved.projects.map(({ name, path }) => ({ name, path })), [{ name: '演示', path: home }]);
   assert.deepEqual(launch_projects(home), saved);
   assert.throws(() => save_launch_projects(home, { projects: [{ name: '', path: home }] }), /名称不能为空/);
   assert.throws(() => save_launch_projects(home, { projects: [{ name: 'a', path: home }, { name: 'a', path: home }] }), /名称重复/);
@@ -1172,4 +1172,45 @@ test('an extra instance inherits its platform settings but not its bound session
   const again = await room_member(f.home, { site: f.site, room_id, token: owner, action: 'add', name: 'Claude', new_instance: true,
     participants: { Claude: f.input.participants.Claude } });
   assert.equal(again.member, 'Claude-3', 'a removed instance name keeps its local session, so it is skipped');
+});
+
+test('relayed launches resolve projects locally and report back to the paired site', async t => {
+  const { local_request, machine_link, sync_remote_launches, unlink_machine } = await import('../runner/remote_launch.mjs');
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-relay-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const link = machine_link(home, 'https://site.test/');
+  assert.match(link.id, /^[0-9a-f]{32}$/);
+  assert.match(link.token, /^[0-9a-f]{64}$/);
+  assert.deepEqual(machine_link(home, 'https://site.test'), link);
+  const [project] = save_launch_projects(home, { projects: [{ name: '演示', path: home }] }).projects;
+  assert.match(project.id, /^[0-9a-f]{16}$/);
+  assert.equal(save_launch_projects(home, { projects: [{ ...project, name: '改名' }] }).projects[0].id, project.id);
+
+  const room = { title: '远程', mode: 'free', members: [], submission_id: 'relay-1' };
+  assert.equal(local_request(home, 'https://site.test', { token: 't', room, local_project: project.id }).cwd, home);
+  assert.throws(() => local_request(home, 'https://site.test', { token: 't', room, cwd: home }), /已配置的项目/);
+  assert.throws(() => local_request(home, 'https://site.test', { token: 't', room, local_project: 'deadbeef' }), /已从这台电脑移除/);
+
+  const calls = [], original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  const launches = [{ id: 'relay-1', request: { token: 't', room, local_project: project.id } },
+    { id: 'relay-2', request: { token: 't', room: { ...room, submission_id: 'relay-2' }, local_project: 'deadbeef' } }];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, token: options.headers['X-Machine-Token'], body: JSON.parse(options.body) });
+    return new Response(JSON.stringify(url.endsWith('/sync') ? { launches } : { status: 'ok' }), { status: 200 });
+  };
+  const started = [];
+  await sync_remote_launches(home, { launch: async (_, input, options) => { started.push({ input, options }); return { room: { id: 'room-9' }, status: 'free' }; } });
+  assert.deepEqual(calls[0].body, { projects: [{ id: project.id, name: '改名' }], clients: {} });
+  assert.ok(calls.every(call => call.token === link.token && call.url.startsWith(`https://site.test/api/machines/${link.id}/`)));
+  assert.deepEqual(started.map(item => [item.input.cwd, item.input.site, item.input.entry, item.options.browser_request]), [[home, 'https://site.test', 'web', true]]);
+  assert.deepEqual(calls.slice(1).map(call => call.body.action), ['claim', 'finish', 'claim', 'fail']);
+  assert.equal(calls[2].body.room_id, 'room-9');
+  assert.match(calls[4].body.error, /已从这台电脑移除/);
+  assert.equal(calls[4].body.stage, 'not_started');
+
+  unlink_machine(home, 'https://site.test');
+  calls.length = 0;
+  await sync_remote_launches(home);
+  assert.equal(calls.length, 0);
 });

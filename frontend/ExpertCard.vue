@@ -46,7 +46,10 @@ async function check_api() {
   try { await bridge.check_launch_api(props.name); api_check.value = { state: "ok", message: "检查通过：模型已响应" }; }
   catch (failure) { api_check.value = { state: "error", message: failure.message }; }
 }
-const entry_label = computed(() => entry_items.value.find((item) => item.value === profile.value.adapter)?.label || "待选择 App / CLI");
+// Without the local service here, the paired computer wakes the member with the software configured there.
+const relay_client = computed(() => !view.value.launch.available && view.value.launch.relay?.clients[bridge.platform_of(props.name)]);
+const entry_label = computed(() => entry_items.value.find((item) => item.value === (relay_client.value || profile.value.adapter))?.label
+  || (view.value.launch.relay && !view.value.launch.available ? "电脑上未配置" : "待选择 App / CLI"));
 const manual = computed(() => props.mode === "manual");
 // A manual card has nothing to configure, so the front states what testing showed about taking over a window that is already open.
 const MANUAL_NOTES = {
@@ -57,7 +60,8 @@ const MANUAL_NOTES = {
 const manual_note = computed(() => MANUAL_NOTES[bridge.platform_of(props.name)] || "");
 const can_bind = computed(() => automatic.value && props.session !== null && bridge.launch_can_bind_session(props.name, view.value.launch));
 const resuming = computed(() => Boolean(profile.value.session_id || props.session?.trim()));
-const can_flip = computed(() => automatic.value && entry_items.value.length > 0);
+// Software paths and models typed here belong to this browser's computer, so a relayed member keeps the paired computer's settings.
+const can_flip = computed(() => automatic.value && entry_items.value.length > 0 && !(view.value.launch.relay && !view.value.launch.available));
 const card_label = computed(() => props.mode === "online" ? `设置 ${props.name} 的参与方式` : `配置 ${props.name} 的启动方式`);
 const models = computed(() => bridge.launch_model_state(props.name, view.value.launch));
 const configurable = computed(() => Boolean(automatic.value && models.value.supported));
