@@ -40,7 +40,7 @@
 ## CLI 操作
 
 - 使用方法由仓库技能 `.agents/skills/discuss-participant/SKILL.md` 提供，Codex 调用 `$discuss-participant`；其他本地 AI 明确读取此文件，不假定自动发现。首次参与指令同时提供实际身份和房间入口；技能安装本身不启动讨论。
-- 本地 AI 日常读写优先使用统一命令 `codiscuss`；任务显式指定 CLI 路径时沿用指定入口，未安装统一命令时可用本项目 `python runner/discuss.py`。命令概览见 `docs/cli.md`，字段与设计见 `.dev/docs/技术细节/CLI参考.md`。裸 `codiscuss` 启动本机服务，`--help` / `schema` 离线发现用法；具体参与规则仍以目标站点的 `room protocol` 为准。
+- 本地 AI 日常读写优先使用统一命令 `codiscuss`；任务显式指定 CLI 路径时沿用指定入口，未安装统一命令时可用本项目 `python runner/discuss.py`。命令概览见 `docs/runner.md`“命令行”，字段与设计见 `.dev/docs/技术细节/CLI参考.md`。裸 `codiscuss` 启动本机服务，`--help` / `schema` 离线发现用法；具体参与规则仍以目标站点的 `room protocol` 为准。
 - 站点用 `--site`、当前进程的 `DISCUSS_URL` 或 `--access-file` 凭据文件绑定的站点；房间始终显式指定，业务写入显式 `--as`。不新增全局当前房间或身份配置，不因网页当前选中某话题就自动接管。
 - 自由协作房间的成员回答使用 `--kind chat`，接入程序交付的执行带 `--execution`，手动成员用 `--request` 关联请求，主持人用 `--to` 派活；规则见参与技能与 `.dev/docs/技术细节/讨论工作流.md`。
 - 先 `room view` / `turn current`，再按需读取 brief / state / message；独立观点阶段继续遵循阅读边界。默认 JSON 用于脚本，正文优先 UTF-8 文件输入。

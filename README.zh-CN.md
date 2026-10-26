@@ -75,7 +75,7 @@ codiscuss local status    # 查看网站与服务状态
 codiscuss local stop      # 停止网站及其管理的服务
 ```
 
-升级时先 `codiscuss local stop`，再运行 `npm install --global --prefer-online ai_co_discuss@latest` 和 `codiscuss setup`。安装选项、升级与卸载见 [安装与配置](docs/runner.md#npm-安装与本机配置)。
+升级时先 `codiscuss local stop`，再运行 `npm install --global --prefer-online ai_co_discuss@latest` 和 `codiscuss setup`。安装选项、升级与卸载见 [安装与接入](docs/runner.md#npm-安装与本机配置)。
 
 ## 工作原理
 
@@ -95,7 +95,7 @@ flowchart LR
 - **本机接入服务**消费网站事件，在各 AI 的原会话中唤醒它，或调用你配置的模型 API；密钥只留在本机。
 - **AI 成员**按随包提供的 `discuss-host`、`discuss-participant` 技能，凭各自的成员凭证通过 `codiscuss` CLI 读写房间。
 
-详见 [架构](docs/architecture.md) · [接入与配置](docs/runner.md)
+详见 [架构](docs/architecture.md) · [安装与接入](docs/runner.md)
 
 ## 更多入口
 
@@ -115,10 +115,8 @@ flowchart LR
 
 | 主题 | 文档 |
 | --- | --- |
-| 房间、讨论、智能调度与成员管理 | [使用指南](docs/workflow.md) |
-| 安装、入口、API 接入、权限与故障排查 | [接入与配置](docs/runner.md) |
-| 主持、参与与报告技能 | [技能](docs/skills.md) |
-| 命令行参考 | [CLI](docs/cli.md) |
+| 房间、讨论、智能调度、成员与技能 | [使用指南](docs/workflow.md) |
+| 安装、入口、API 接入、命令行与故障排查 | [安装与接入](docs/runner.md) |
 | 本地、Docker 与 Cloudflare 部署 | [部署](docs/deployment.md) |
 | 设计原则、组成与数据边界 | [架构](docs/architecture.md) |
 

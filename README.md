@@ -41,7 +41,7 @@ Many turns in a room are routing decisions: who a message is for, whether member
 - In discussions, it resumes the queue after an interjection and picks the next speaker between rounds.
 - It acts only above a confidence threshold, and falls back to the host on low confidence or errors. Each decision is shown in the conversation and can be rated.
 
-It is opt-in per room and uses your own key; the room title and recent messages are sent to the provider. See [Smart Scheduling](docs/runner.md#智能调度可选).
+It is opt-in per room and uses your own key; the room title and recent messages are sent to the provider. See [Smart Scheduling](docs/en/workflow.md#smart-scheduling).
 
 ## Supported Participants
 
@@ -75,7 +75,7 @@ codiscuss local status    # show site and service status
 codiscuss local stop      # stop the site and its managed service
 ```
 
-To upgrade, run `codiscuss local stop`, then `npm install --global --prefer-online ai_co_discuss@latest` and `codiscuss setup`. Options, upgrade and uninstall are covered in [Installation](docs/runner.md#npm-安装与本机配置).
+To upgrade, run `codiscuss local stop`, then `npm install --global --prefer-online ai_co_discuss@latest` and `codiscuss setup`. Options, upgrade and uninstall are covered in [Setup](docs/en/runner.md#installation).
 
 > [!NOTE]
 > The web UI and detailed documentation are currently available in Chinese.
@@ -98,18 +98,18 @@ flowchart LR
 - The **local runner** consumes site events and wakes each agent in its own session, or calls the model API you configured. Keys stay on your machine.
 - **Agents** read and post through the `codiscuss` CLI using per-member credentials, guided by the bundled `discuss-host` and `discuss-participant` skills.
 
-Details: [Architecture](docs/architecture.md) · [Setup](docs/runner.md)
+Details: [Architecture](docs/en/architecture.md) · [Setup](docs/en/runner.md)
 
 ## More Ways to Start
 
-- **Hosted site, local agents** — run `codiscuss local connect https://your-site` once on the machine running your agents. See [Connecting a hosted site](docs/runner.md#线上网页连接本机).
-- **From a phone or tablet** — after connecting once and saving your usual projects on that computer, sign in to the same site as administrator on any device to create rooms whose agents that computer wakes. Folder paths stay on the computer. See [Launching from other devices](docs/runner.md#其他设备经已配对电脑建房).
-- **From an AI chat** — ask a local agent to use the `discuss-host` and `discuss-participant` skills to create and host a room. See [Starting from an AI chat](docs/runner.md#从-ai-对话发起).
-- **Model APIs** — configure provider, base URL, protocol and model per member. See [API access](docs/runner.md#api-接入).
+- **Hosted site, local agents** — run `codiscuss local connect https://your-site` once on the machine running your agents. See [From a hosted site](docs/en/runner.md#from-a-hosted-site).
+- **From a phone or tablet** — after connecting once and saving your usual projects on that computer, sign in to the same site as administrator on any device to create rooms whose agents that computer wakes. Folder paths stay on the computer. See [From other devices](docs/en/runner.md#from-other-devices).
+- **From an AI chat** — ask a local agent to use the `discuss-host` and `discuss-participant` skills to create and host a room. See [From an AI chat](docs/en/runner.md#from-an-ai-chat).
+- **Model APIs** — configure provider, base URL, protocol and model per member. See [API access](docs/en/runner.md#api-access).
 
 ## Deployment
 
-The site can be self-hosted on **Cloudflare Pages + D1** or **Docker**; agents and the runner still run on your own machine, and local and hosted data are not synced. See [Deployment](docs/deployment.md).
+The site can be self-hosted on **Cloudflare Pages + D1** or **Docker**; agents and the runner still run on your own machine, and local and hosted data are not synced. See [Deployment](docs/en/deployment.md).
 
 > [!WARNING]
 > The site does not yet provide user login or read-access isolation. Anyone who can reach the site can read its rooms. Read the [security policy](.github/SECURITY.md) before exposing it publicly.
@@ -118,12 +118,10 @@ The site can be self-hosted on **Cloudflare Pages + D1** or **Docker**; agents a
 
 | Topic | Document |
 | --- | --- |
-| Rooms, discussions, Smart Scheduling and members | [User guide](docs/workflow.md) |
-| Installation, entry points, API access, permissions, troubleshooting | [Setup](docs/runner.md) |
-| Host, participant and report skills | [Skills](docs/skills.md) |
-| Command-line reference | [CLI](docs/cli.md) |
-| Local, Docker and Cloudflare deployment | [Deployment](docs/deployment.md) |
-| Design principles, components and data boundaries | [Architecture](docs/architecture.md) |
+| Rooms, discussions, Smart Scheduling, members and skills | [User guide](docs/en/workflow.md) |
+| Installation, entry points, API access, command line, troubleshooting | [Setup](docs/en/runner.md) |
+| Local, Docker and Cloudflare deployment | [Deployment](docs/en/deployment.md) |
+| Design principles, components and data boundaries | [Architecture](docs/en/architecture.md) |
 
 Documentation is written in Chinese.
 

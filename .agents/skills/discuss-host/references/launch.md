@@ -10,7 +10,7 @@
 
 新建讨论时，将用户请求完整保存到房间独立的“用户原文”字段（CLI 使用 `--user-request-file`），不改写或概括；“背景”只保存补充材料。原文超过该字段 4000 字上限时，将完整原文按参与技能保存为开场主持消息，“用户原文”保留原文消息链接，不截断原文。
 
-工具入口、站点、项目与 cwd 的定位遵循参与技能。新建会话可指定所属项目及 cwd，也可缺省；已有会话不靠提示词迁移目录。仅在首次配置或启动自动程序时查阅仓库 `docs/deployment.md` 与 `docs/cli.md`，不把安装操作混入每次讨论。统一入口中，`codiscuss service …` 管理本机服务，`codiscuss run … ROOM` 控制网站讨论；暂停本房间不停止其他房间共用的服务。
+工具入口、站点、项目与 cwd 的定位遵循参与技能。新建会话可指定所属项目及 cwd，也可缺省；已有会话不靠提示词迁移目录。仅在首次配置或启动自动程序时查阅仓库 `docs/runner.md` 与 `docs/deployment.md`，不把安装操作混入每次讨论。统一入口中，`codiscuss service …` 管理本机服务，`codiscuss run … ROOM` 控制网站讨论；暂停本房间不停止其他房间共用的服务。
 
 ## 从当前 AI 对话发起全自动讨论
 
@@ -18,7 +18,7 @@
 
 ### 配置与当前会话
 
-1. 使用已安装的 `codiscuss`；未安装时用本仓库 `node runner/codiscuss.mjs`。`codiscuss launch settings` 只读本机软件默认配置，不启动服务或 AI。缺少配置时按仓库 `docs/runner.md` 的“两种讨论入口与启动配置”补齐；用户已提供的软件、目录和上限直接沿用，只询问无法确定的缺项。
+1. 使用已安装的 `codiscuss`；未安装时用本仓库 `node runner/codiscuss.mjs`。`codiscuss launch settings` 只读本机软件默认配置，不启动服务或 AI。缺少配置时按下文示例与 `codiscuss launch --help` 补齐；用户已提供的软件、目录和上限直接沿用，只询问无法确定的缺项。
 2. 从当前软件的实际会话信息取得会话 ID，不自造编号。启动文件中 `entry` 使用 `conversation`，`current_session_id` 使用该实际 ID；主持人的 `participants` 覆盖配置必须对应当前实际 CLI / App 客户端，不能仅根据模型名称选适配器。当前会话继续主持，不另建主持聊天。
 3. 站点始终明确指定。每场讨论选择主持人、专家、目标、用户原文、背景和上限；软件路径来自本机默认配置，本次可用 `participants` 覆盖。`cwd` / `discussion_project` 可省略，单个参与者可覆盖。已有会话仍在原目录，设置 cwd 不会迁移它。用户要一起查看某个项目时，把该项目目录设为 `cwd`；项目文件默认要求只读，仅当用户明确要求 AI 修改项目时才设 `"project_access": "write"`，也可在 `participants.NAME.project_access` 单独指定。只读不通过更换项目目录实现；agy 只在讨论服务新建的会话中运行并由原生项目权限限制，不能绑定已有会话或从当前 agy 对话主持全自动讨论。答案草稿只使用任务给出的 `draft_directory`，不写到项目或存放凭据的运行目录。
 

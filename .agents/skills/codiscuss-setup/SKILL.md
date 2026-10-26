@@ -69,7 +69,7 @@ description: "AI CoDiscuss 源码仓库的安装与运维技能：在已克隆�
 
 ## 诊断
 
-先运行 `codiscuss local status --json`，再按 `setup` 结果中的具体条目处理；细节以 [docs/runner.md](../../../docs/runner.md#npm-安装与本机配置) 为准。
+先运行 `codiscuss local status --json`，再按 `setup` 结果中的具体条目处理；细节以 `codiscuss setup --help` 与输出中的提示为准。
 
 - **配置差异未确认**：列出已保存与检测到的类型、路径，问用户保留还是更新；更新时用对应 `--codex/--claude/--antigravity PATH` 重跑 `setup`。
 - **技能冲突**：输出实际路径，比较已有副本与仓库版本的差异给用户看；用户同意后移走旧副本再重跑 `setup`，不直接覆盖。
