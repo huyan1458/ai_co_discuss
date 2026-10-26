@@ -48337,7 +48337,7 @@ var bq = /*#__PURE__*/ MH({
 			])])]);
 		};
 	}
-}, [["__scopeId", "data-v-e3d9b738"]]), iY = {
+}, [["__scopeId", "data-v-f9ef2402"]]), iY = {
 	class: "account-settings",
 	"aria-labelledby": "account-heading"
 }, aY = {

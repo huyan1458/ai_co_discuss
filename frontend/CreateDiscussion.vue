@@ -221,6 +221,8 @@ const summary = computed(() => {
 .create-discussion { display: flex; flex-direction: column; height: min(78dvh, 820px); }
 .create-scroll { flex: 1; min-height: 0; }
 .create-scroll { overflow-y: auto; scrollbar-gutter: stable; padding: 20px 26px 24px; gap: 26px !important; }
+/* The folder label is a caption for the form, so it hugs the header and the first section. */
+.create-scroll > .channel-create-location { margin: -8px 0 -14px; }
 .create-section { display: flex; flex-direction: column; gap: 14px; }
 .create-section + .create-section { padding-top: 22px; border-top: 1px solid var(--ui-border-muted); }
 .create-section h3 { display: flex; align-items: center; gap: 9px; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
