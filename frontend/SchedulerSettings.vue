@@ -1,29 +1,47 @@
 <script setup>
 /** Optional smart scheduling chosen while creating a room; the key goes only to the local private store. */
-import { computed, inject, ref, watch } from "vue";
+import { computed, inject, nextTick, ref, watch } from "vue";
+import RosterAdd from "./RosterAdd.vue";
 
 const props = defineProps({ free: { type: Boolean, default: false }, blocker: { type: String, default: "" } });
 const { view, bridge } = inject("discussion");
 const scheduler = computed(() => view.value.launch.scheduler || {});
 const providers = computed(() => Object.entries(view.value.launch.scheduler_providers || {}).map(([value, item]) => ({ value, label: item.label })));
 const models = computed(() => (view.value.launch.scheduler_providers?.[scheduler.value.provider]?.models || []).map((id) => ({ label: id, value: id })));
+// Brand marks for the add row and card; OpenAI's mark reuses the Codex avatar colors.
+const PROVIDER_ICONS = { jev: { icon: "/icons/typesafe.png" }, decisions: { icon: "/icons/openai.svg", style: "codex" } };
+// Only one decision model per room: once added, the add row waits until it is removed.
+const active = computed(() => Boolean(scheduler.value.enabled) && !props.blocker);
+const add_row = ref(null);
+const add_items = computed(() => providers.value.map(({ value, label }) => ({ value, name: label, initials: label.slice(0, 2), ...PROVIDER_ICONS[value],
+  disabled: Boolean(props.blocker) || active.value, title: active.value ? "只能添加一个决策模型，先移出当前的" : label, aria_label: `添加决策模型 ${label}` })));
 const api_key = ref(""), key_visible = ref(false), saving = ref(false), error = ref("");
 // The card shows a summary; its settings stay behind "设置" like the participant cards.
 const editing = ref(false);
 // Opening the back remembers the settings so Cancel can restore them.
 let opened_with = null;
 function open_settings() {
-  const { provider, model, api_key_ref } = scheduler.value;
-  opened_with = { provider, model, api_key_ref };
+  const { model, api_key_ref } = scheduler.value;
+  opened_with = { model, api_key_ref };
   editing.value = true;
 }
-/** Discard edits made since the back opened. Provider goes first because changing it resets model and key. */
+/** Discard edits made since the back opened. */
 function cancel_settings() {
-  if (opened_with) for (const field of ["provider", "model", "api_key_ref"]) bridge.write_scheduler(field, opened_with[field]);
+  if (opened_with) for (const field of ["model", "api_key_ref"]) bridge.write_scheduler(field, opened_with[field]);
   opened_with = null;
   api_key.value = "";
   error.value = "";
   editing.value = false;
+}
+/** Add one provider as the room's decision model; the provider goes first so it brings its preset model and saved key. */
+function add_provider(provider) {
+  bridge.write_scheduler("provider", provider);
+  bridge.write_scheduler("enabled", true);
+}
+/** Remove the decision model and return keyboard focus to the add row. */
+function remove_provider() {
+  bridge.write_scheduler("enabled", false);
+  nextTick(() => add_row.value?.focus_first());
 }
 const provider_label = computed(() => providers.value.find((item) => item.value === scheduler.value.provider)?.label || "未选择");
 const status = computed(() => !scheduler.value.model ? { tone: "warn", text: "未选模型" } : !scheduler.value.api_key_ref ? { tone: "warn", text: "缺少密钥" } : { tone: "ready", text: "已配置" });
@@ -60,30 +78,34 @@ async function save_key() {
 
 <template>
   <div class="scheduler-settings">
-    <UCheckbox :model-value="Boolean(scheduler.enabled) && !blocker" :disabled="Boolean(blocker)" :description="blocker ? `${description}（${blocker}）` : description" @update:model-value="bridge.write_scheduler('enabled', $event)">
-      <template #label><span class="scheduler-title">智能调度<UBadge size="xs" variant="soft" class="scheduler-badge">决策模型</UBadge><small>可选</small></span></template>
-    </UCheckbox>
-    <div v-if="scheduler.enabled && !blocker" class="scheduler-cards">
+    <div>
+      <p class="scheduler-title">智能调度<UBadge size="xs" variant="soft" class="scheduler-badge">决策模型</UBadge><small>可选</small></p>
+      <p class="scheduler-description">{{ blocker ? `${description}（${blocker}）` : description }}</p>
+    </div>
+    <RosterAdd ref="add_row" label="添加决策模型" :items="add_items" @add="add_provider" />
+    <div v-if="active" class="scheduler-cards">
     <div class="scheduler-card" :class="{ 'is-editing': editing }">
       <template v-if="!editing">
         <button type="button" class="scheduler-open" aria-label="设置智能调度的决策模型" title="点击设置" @click="open_settings">
-          <strong>决策模型</strong>
+          <span class="scheduler-identity">
+            <UAvatar :src="PROVIDER_ICONS[scheduler.provider]?.icon" :text="provider_label.slice(0, 2)" :alt="provider_label" size="sm" class="channel-avatar scheduler-avatar" :class="PROVIDER_ICONS[scheduler.provider]?.style" />
+            <strong>{{ provider_label }}</strong>
+          </span>
           <dl class="scheduler-facts">
             <div><dt>状态</dt><dd :class="`is-${status.tone}`"><i aria-hidden="true" />{{ status.text }}</dd></div>
-            <div><dt>供应商</dt><dd>{{ provider_label }}</dd></div>
             <div><dt>模型</dt><dd :title="scheduler.model">{{ scheduler.model || "未选择" }}</dd></div>
           </dl>
           <span class="scheduler-flip"><UIcon name="i-lucide-settings-2" />设置</span>
         </button>
+        <span class="scheduler-tools"><button type="button" :aria-label="`移出决策模型 ${provider_label}`" title="移出" @click="remove_provider"><UIcon name="i-lucide-x" /></button></span>
       </template>
       <template v-else>
         <div class="scheduler-back">
-          <div class="scheduler-heading"><strong>决策模型<span>设置</span></strong>
+          <div class="scheduler-heading"><strong>{{ provider_label }}<span>设置</span></strong>
             <UButton icon="i-lucide-zap" aria-label="检查智能调度配置" title="检查配置：向决策模型发送一道极短的是非题，核对供应商、模型与密钥" size="xs" variant="ghost"
               :color="check.state === 'ok' ? 'success' : check.state === 'error' ? 'error' : 'neutral'" :loading="check.state === 'loading'"
               :disabled="!scheduler.api_key_ref || !scheduler.model || !view.launch.available" @click="check_config" />
           </div>
-          <div class="scheduler-field"><span>供应商</span><USelect :model-value="scheduler.provider || ''" :items="providers" aria-label="智能调度供应商" size="xs" class="w-full" @update:model-value="bridge.write_scheduler('provider', $event)" /></div>
           <div class="scheduler-field"><span>模型</span><UInputMenu mode="autocomplete" ignore-filter :model-value="scheduler.model || ''" :items="models" value-key="value" aria-label="智能调度模型" placeholder="模型 ID" size="xs" class="w-full" @update:model-value="bridge.write_scheduler('model', $event)" /></div>
           <div class="scheduler-field"><span>密钥</span>
             <!-- A text field masked by CSS keeps browsers from offering to generate or save a password. -->
@@ -112,7 +134,13 @@ async function save_key() {
 .scheduler-card { position: relative; display: flex; flex-direction: column; min-width: 0; height: 240px; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); box-shadow: var(--channel-shadow-control); }
 .scheduler-card:hover { border-color: var(--ui-border-accented); }
 .scheduler-open { display: flex; flex: 1; flex-direction: column; gap: 10px; width: 100%; padding: 12px 12px 30px; text-align: left; border-radius: inherit; outline: none; }
-.scheduler-open > strong { display: flex; align-items: center; min-height: 26px; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
+.scheduler-identity { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 26px; padding-right: 30px; }
+.scheduler-identity strong { overflow: hidden; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
+.scheduler-avatar { flex-shrink: 0; width: 26px; height: 26px; font-size: 10px; }
+.scheduler-tools { position: absolute; top: 9px; right: 8px; display: flex; }
+.scheduler-tools > button { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; color: var(--ui-text-dimmed); }
+.scheduler-tools > button > span { width: 13px; height: 13px; }
+.scheduler-tools > button:hover { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
 .scheduler-facts { display: grid; gap: 4px; margin: 0; padding-top: 10px; border-top: 1px solid var(--ui-border-muted); font-size: 11px; }
 .scheduler-facts > div { display: grid; grid-template-columns: 3em minmax(0, 1fr); gap: 8px; }
 .scheduler-facts dt { color: var(--ui-text-dimmed); white-space: nowrap; }
@@ -134,10 +162,12 @@ async function save_key() {
 .scheduler-field { display: grid; grid-template-columns: 40px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--ui-text-dimmed); font-size: 11px; }
 .scheduler-note { margin: 0; color: var(--ui-text-muted); font-size: 10px; line-height: 1.5; }
 .scheduler-settings :deep(.scheduler-key-masked) { -webkit-text-security: disc; }
-.scheduler-title { display: inline-flex; align-items: center; gap: 6px; }
+.scheduler-title { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 500; }
+.scheduler-description { margin: 2px 0 0; color: var(--ui-text-muted); font-size: 13px; }
 .scheduler-title small { color: var(--ui-text-dimmed); font-size: 11px; font-weight: 400; }
 .scheduler-badge { color: var(--channel-accent); }
 .scheduler-error { margin: 0; color: #f0716b; font-size: 11px; }
 .scheduler-ok { margin: 0; color: var(--ui-success); font-size: 11px; }
+@media (pointer: coarse) { .scheduler-tools > button { min-width: 44px; min-height: 44px; } }
 @media (max-width: 600px) { .scheduler-cards { grid-template-columns: 1fr; } }
 </style>

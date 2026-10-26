@@ -31,9 +31,9 @@ export function participant_tools(context) {
     tool('read_messages', '按页读取原文；独立观点阶段专家不可调用', { page: NUMBER, after: { type: 'integer', minimum: 0 } }),
     tool('read_message', '读取指定原文；独立观点阶段专家不可调用', { id: NUMBER }, ['id'])];
   const answer = { text: { ...TEXT, maxLength: 32000 }, summary: { ...TEXT, maxLength: 1000 }, reply_to: NUMBER };
-  if (context.mode === 'free') return [...tools, tool('submit_chat', '保存本次执行的完整回答并结束；只有主持人可用 to 点名成员',
-    { ...answer, ...(context.role === 'host' ? { to: { type: 'array', items: TEXT } } : {}) }, ['text', 'summary'])];
-  if (context.role !== 'host') return [...tools, tool('submit_opinion', '保存本次安排的完整观点及摘要，然后结束', answer, ['text', 'summary'])];
+  if (context.mode === 'free') return [...tools, tool('submit_chat', '保存本次执行的完整回答并结束；summary 仅在回答较长时填写；只有主持人可用 to 点名成员',
+    { ...answer, ...(context.role === 'host' ? { to: { type: 'array', items: TEXT } } : {}) }, ['text'])];
+  if (context.role !== 'host') return [...tools, tool('submit_opinion', '保存本次安排的完整观点并结束；summary 仅在回答较长时填写', answer, ['text'])];
   return [...tools,
     tool('host_message', '保存主持说明，不能代替专家观点或伪造共识', { text: answer.text }, ['text']),
     tool('save_state', '根据实际原文更新详细状态和主持简报，标明分歧、依据与下一步', { text: { ...TEXT, maxLength: 4000 }, brief: { ...TEXT, maxLength: 1600 }, until: { type: 'integer', minimum: 0 } }, ['text', 'brief', 'until']),
@@ -153,10 +153,10 @@ export function system_prompt(context) {
 }
 
 /** Plain text of the model's latest reply, so a stop without a write can show its stated reason. */
-function last_reply_text(history) {
+function last_reply_text(history, limit = REPLY_EXCERPT_CHARS) {
   const item = history.at(-1) || {};
   const parts = item.parts || (Array.isArray(item.content) ? item.content : [{ text: item.content }]);
-  return parts.map(part => (typeof part === 'string' ? part : part.text || '')).join('').trim().slice(0, REPLY_EXCERPT_CHARS);
+  return parts.map(part => (typeof part === 'string' ? part : part.text || '')).join('').trim().slice(0, limit);
 }
 
 /** Retry a model request that failed before any room write; history is only extended on success. */
@@ -181,6 +181,7 @@ async function run_participant(profile, key, context) {
   let reminded = false;
   let used_tools = false;
   for (let index = 0; index < MAX_MODEL_TURNS; index++) {
+    context.on_activity?.('thinking');
     const calls = await generate_with_retry(profile, key, state, context.signal);
     if (!calls.length) {
       // Some models answer in plain text mid-run; one reminder avoids pausing on a recoverable slip.
@@ -194,9 +195,13 @@ async function run_participant(profile, key, context) {
       continue;
     }
     used_tools = true;
+    // Text written beside tool calls is a progress remark; the runner caps its length.
+    const remark = last_reply_text(state.history, Infinity);
+    if (remark) context.on_note?.(remark);
     const results = [];
     for (const call of calls) {
       context.signal.throwIfAborted();
+      context.on_activity?.('tool');
       const outcome = await execute_tool(context, call, definitions);
       if (outcome.terminal) return;
       results.push({ ...call, result: outcome.result });
@@ -214,7 +219,7 @@ export async function api_delivery(profile, binding, task) {
   const child = new EventEmitter();
   child.kill = () => { controller.abort(); return true; };
   const context = { ...task.api_context, participant: task.participant, directory: task.directory,
-    task_id: task.id, signal: controller.signal };
+    task_id: task.id, signal: controller.signal, on_activity: task.on_activity, on_note: task.on_note };
   task.on_binding?.(session_id);
   task.on_process?.(child);
   setImmediate(async () => {

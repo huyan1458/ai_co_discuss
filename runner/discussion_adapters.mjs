@@ -262,11 +262,74 @@ function tree_killable(child) {
   return child;
 }
 
+const EDIT_TOOLS = /^(Edit|MultiEdit|Write|NotebookEdit|write_file|write_to_file|replace_file_content|multi_replace_file_content)$/;
+
+/**
+ * What a streamed CLI event says the agent is doing: thinking, command, tool, editing or writing.
+ * Returns '' when the event says nothing about it; the page only shows the latest phase.
+ */
+export function activity_phase(adapter, event) {
+  if (adapter === 'claude') {
+    if (event.type === 'system' || event.type === 'user') return 'thinking';
+    const block = event.type === 'assistant' ? event.message?.content?.at(-1) : null;
+    if (block?.type === 'tool_use') return /^(Bash|PowerShell)$/.test(block.name) ? 'command' : EDIT_TOOLS.test(block.name) ? 'editing' : 'tool';
+    return block?.type === 'text' ? 'writing' : block?.type === 'thinking' ? 'thinking' : '';
+  }
+  if (adapter === 'codex_cli') {
+    if (event.type === 'turn.started') return 'thinking';
+    const kind = event.item?.type;
+    if (event.type === 'item.started') {
+      return { command_execution: 'command', file_change: 'editing', mcp_tool_call: 'tool', web_search: 'tool', reasoning: 'thinking' }[kind] || '';
+    }
+    if (event.type === 'item.completed') return kind === 'agent_message' ? 'writing' : 'thinking';
+    return '';
+  }
+  if (event.event === 'init') return 'thinking';
+  const step = event.step_update;
+  if (!step) return '';
+  if (step.step_type === 'agent_response' && step.state === 'ACTIVE') return 'writing';
+  if (step.step_type !== 'tool' || ['DONE', 'ERROR'].includes(step.state)) return 'thinking';
+  return step.tool_name === 'run_command' ? 'command' : EDIT_TOOLS.test(step.tool_name || '') ? 'editing' : 'tool';
+}
+
+/**
+ * Text the agent wrote to the user in one streamed event, such as a progress remark between tool calls.
+ * agy streams a response in deltas, so its text is collected per step in `responses` and returned when the step ends.
+ */
+export function progress_note(adapter, event, responses = new Map()) {
+  if (adapter === 'claude') {
+    if (event.type !== 'assistant') return '';
+    return (event.message?.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n').trim();
+  }
+  if (adapter === 'codex_cli') return event.type === 'item.completed' && event.item?.type === 'agent_message' ? String(event.item.text || '').trim() : '';
+  const step = event.step_update;
+  if (step?.step_type !== 'agent_response') return '';
+  responses.set(step.step_index, (responses.get(step.step_index) || '') + (step.text_delta || ''));
+  if (step.state === 'ACTIVE') return '';
+  const text = responses.get(step.step_index).trim();
+  responses.delete(step.step_index);
+  return text;
+}
+
+/** Report the phase and any progress note of each complete JSON line; malformed lines are left to the caller's own parsing. */
+function watch_activity(adapter, stream, task) {
+  if (!task.on_activity && !task.on_note) return;
+  createInterface({ input: stream, crlfDelay: Infinity }).on('line', line => {
+    let event;
+    try { event = JSON.parse(line); } catch { return; }
+    const phase = activity_phase(adapter, event);
+    if (phase) task.on_activity?.(phase);
+    const note = progress_note(adapter, event);
+    if (note) task.on_note?.(note);
+  });
+}
+
 async function claude_delivery(config, binding, task, spawn_process = spawn) {
   const session_id = binding.session_id || randomUUID();
   try { bind_access(task.access_path, session_id); }
   catch (error) { throw not_sent(error); }
-  const args = ['-p', '--output-format', 'json', binding.session_id ? '--resume' : '--session-id', session_id,
+  // Streamed events show the turn's progress; the final line is still the result that decides success.
+  const args = ['-p', '--output-format', 'stream-json', '--verbose', binding.session_id ? '--resume' : '--session-id', session_id,
     ...(config.model ? ['--model', config.model] : []), ...(config.effort ? ['--effort', config.effort] : []), ...claude_permissions(config, task)];
   let child;
   try {
@@ -281,6 +344,7 @@ async function claude_delivery(config, binding, task, spawn_process = spawn) {
   let output = '';
   child.stdout.on('data', chunk => { output += chunk; task.on_output(log_path, chunk); });
   child.stderr.on('data', chunk => task.on_output(log_path, chunk));
+  watch_activity('claude', child.stdout, task);
   child.once('close', code => {
     if (!spawned) return;
     const error = claude_exit_error(code, output);
@@ -445,7 +509,7 @@ function cli_exit_error(state, code, signal) {
 
 /** Parse complete UTF-8 JSON lines while keeping raw output in the private task log. */
 function monitor_cli(child, config, binding, task) {
-  const state = { child, session_id: binding.session_id || '', initialized: false, completed: false, error: '', diagnostic: '' };
+  const state = { child, session_id: binding.session_id || '', initialized: false, completed: false, error: '', diagnostic: '', responses: new Map() };
   const log_path = resolve(task.directory, `${config.adapter}-${task.id}.log`);
   const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
   const max_run_ms = Number(process.env.CODISCUSS_CLI_MAX_MS) || CLI_MAX_RUN_MS;
@@ -463,6 +527,10 @@ function monitor_cli(child, config, binding, task) {
     try { event = JSON.parse(line); }
     catch { state.diagnostic = 'CLI 输出中存在无效 JSON，详情见本机日志'; return; }
     trace_cli_event(event, task);
+    const phase = activity_phase(config.adapter, event);
+    if (phase) task.on_activity?.(phase);
+    const note = progress_note(config.adapter, event, state.responses);
+    if (note) task.on_note?.(note);
     try { cli_event(config.adapter, state, event, task); }
     catch (error) { state.error = error.message; child.kill(); }
   });

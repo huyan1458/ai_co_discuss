@@ -122,7 +122,7 @@ npm run deploy -- --cwd .wrangler/deploy
 
 管理员注册：Cloudflare 站点须先设置安装令牌机密，未设置则无法注册管理员：`npx wrangler pages secret put ADMIN_SETUP_KEY --project-name YOUR_PROJECT_NAME`。忘记密码时在 D1 执行 `DELETE FROM admin_sessions; DELETE FROM site_admin;` 后重新注册。
 
-第一次对新库执行 schema；升级已有站点前先备份并在本地副本核验迁移。当前 schema 以增量表、索引和触发器扩展数据结构，重复执行不应清空已有记录；仍需按实际升级版本测试。
+第一次对新库执行 schema；升级已有站点前先备份并在本地副本核验迁移。当前 schema 以增量表、索引和触发器扩展数据结构，重复执行不应清空已有记录；仍需按实际升级版本测试。`CREATE TABLE IF NOT EXISTS` 不会给已有表补列：Python 服务启动时自动补自由房间的新列，D1 需手动执行，例如执行进度两列：`ALTER TABLE member_executions ADD COLUMN activity TEXT NOT NULL DEFAULT ''` 与 `ALTER TABLE member_executions ADD COLUMN activity_at INTEGER NOT NULL DEFAULT 0`。新增的表（如过程说明 `execution_notes`）重新执行 `backend/schema.sql` 即可创建。
 
 `deploy` 会先构建，再将 `dist/pages/` 发布到 `main`。配置为真值前不要直接运行根目录默认部署。构建本身不发布、不改远端数据库。Git 集成部署需自行将实际 D1 配置提供给构建环境，不能直接用公开模板当作生产配置。
 

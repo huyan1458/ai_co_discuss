@@ -9,6 +9,12 @@ import { ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_W
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const RENEW_MS = 30_000;
+/** A changed phase is reported early, but no more often than this, since each report refreshes open pages. */
+const ACTIVITY_REPORT_MS = 10_000;
+/** Progress notes kept per execution, each cut to this length, and how many one renewal carries; the website enforces the same. */
+const MAX_EXECUTION_NOTES = 50;
+const MAX_NOTE_LENGTH = 500;
+const MAX_NOTES_PER_RENEW = 10;
 const MAX_DELIVERY_ATTEMPTS = 3;
 const LIVE = ['reserving', 'delivering', 'sidecar_pending', 'running'];
 const MAX_HASHED_BYTES = 5 * 1024 * 1024;
@@ -130,6 +136,9 @@ export class FreeRoomRunner {
     this.members = new Map();
     this.exited = new Set();
     this.snapshots = new Map();
+    // Execution id -> { phase, at, sent_phase, sent_at, notes, next_seq }: what the member's software last showed it doing,
+    // and the progress notes not yet on the website.
+    this.activity = new Map();
     this.context_errors = new Map();
     this.adopt(config);
     this.store.db.exec(`CREATE TABLE IF NOT EXISTS free_deliveries(member TEXT PRIMARY KEY, client_id TEXT NOT NULL,
@@ -329,7 +338,9 @@ export class FreeRoomRunner {
           requests: execution.requests, read_after: execution.read_until },
         on_binding: session => this.store.bind(member.name, session),
         on_process: child => this.track(member.name, child),
-        on_output: (path, chunk) => appendFileSync(path, chunk, { mode: 0o600 }),
+        on_output: (path, chunk) => { appendFileSync(path, chunk, { mode: 0o600 }); this.touch(execution.id); },
+        on_activity: phase => this.touch(execution.id, phase),
+        on_note: text => this.note(execution.id, text),
         // A stopped process may report after the next execution started; only its own execution takes the result.
         on_failure: error => { try { if (this.row(member.name)?.execution_id === execution.id) this.save(member.name, { error }); } catch { /* Store may already be closed at shutdown. */ } },
         on_exit: () => this.exited.add(execution.id),
@@ -357,6 +368,7 @@ export class FreeRoomRunner {
     }
     const execution = active.get(row.execution_id);
     if (!execution) {
+      this.activity.delete(row.execution_id);
       this.stop_member(member.name);
       return this.save(member.name, { status: 'idle', error: '' });
     }
@@ -369,10 +381,33 @@ export class FreeRoomRunner {
       return this.save(member.name, { status: 'idle' });
     }
     if (Date.now() >= execution.created_at * 1000 + minutes * 60_000) return this.fail(member.name, execution.id, `超过单次执行时限 ${minutes} 分钟；请核对原会话确认是否已有内容`);
-    if (Date.now() - row.last_renew >= RENEW_MS) {
-      await api(this.config, `/executions/${execution.id}`, { action: 'renew' });
+    const activity = this.activity.get(execution.id);
+    const changed = activity && (activity.phase !== activity.sent_phase || activity.at !== activity.sent_at || activity.notes.length);
+    const elapsed = Date.now() - row.last_renew;
+    if (elapsed >= RENEW_MS || (changed && elapsed >= ACTIVITY_REPORT_MS)) {
+      const notes = activity?.notes.slice(0, MAX_NOTES_PER_RENEW) || [];
+      await api(this.config, `/executions/${execution.id}`, { action: 'renew',
+        ...(activity ? { activity: activity.phase, activity_at: Math.floor(activity.at / 1000) } : {}), ...(notes.length ? { notes } : {}) });
+      if (activity) Object.assign(activity, { sent_phase: activity.phase, sent_at: activity.at, notes: activity.notes.slice(notes.length) });
       this.save(member.name, { last_renew: Date.now() });
     }
+  }
+  /** Note that the software produced output now, and its phase when the output names one. */
+  touch(execution_id, phase) {
+    // Updated in place: a renewal in flight marks what it sent on this same record.
+    if (!this.activity.has(execution_id)) this.activity.set(execution_id, { phase: '', notes: [], next_seq: 0 });
+    const current = this.activity.get(execution_id);
+    if (phase) current.phase = phase;
+    current.at = Date.now();
+  }
+  /** Queue one progress note for the next renewal; numbering makes a retried renewal harmless, and notes past the cap are dropped. */
+  note(execution_id, text) {
+    this.touch(execution_id);
+    const current = this.activity.get(execution_id);
+    if (current.next_seq >= MAX_EXECUTION_NOTES) return;
+    current.next_seq += 1;
+    // Cut by UTF-16 units like the website's check, without leaving half of a surrogate pair.
+    current.notes.push({ seq: current.next_seq, text: text.slice(0, MAX_NOTE_LENGTH).replace(/[\uD800-\uDBFF]$/, '') });
   }
   /** Report observed file changes once an execution has ended and its member's processes have exited. */
   async report_finished(active) {
@@ -388,6 +423,7 @@ export class FreeRoomRunner {
   }
   /** Record the cause on the website, then stop this member's own processes. */
   async fail(name, execution_id, reason) {
+    this.activity.delete(execution_id);
     try { await api(this.config, `/executions/${execution_id}`, { action: 'fail', reason }); }
     catch (error) { if (!/HTTP 409/.test(error.message)) throw error; }
     this.save(name, { status: 'idle', error: reason });

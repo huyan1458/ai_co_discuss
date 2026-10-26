@@ -697,7 +697,7 @@ class DiscussionTests(unittest.TestCase):
         assets = {"/": "text/html", "/app.js": "text/javascript",
                   "/modern.js": "text/javascript", "/modern.css": "text/css",
                   "/markdown.js": "text/javascript", "/markdown.css": "text/css",
-                  "/icons/LICENSE.txt": "text/plain"}
+                  "/icons/LICENSE.txt": "text/plain", "/icons/typesafe.png": "image/png"}
         assets.update({f"/icons/{name}.svg": "image/svg+xml"
                        for name in ("openai", "claude", "gemini", "deepseek", "qwen", "user")})
         for path, content_type in assets.items():

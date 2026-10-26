@@ -24,6 +24,12 @@ RECENT_REQUESTS = 100
 RECENT_EXECUTIONS = 100
 RECENT_CHANGES = 50
 MAX_CHANGED_FILES = 200
+# What a member's software last showed it doing, as reported by the runner with each renewal.
+ACTIVITY_PHASES = ("", "thinking", "command", "tool", "editing", "writing")
+# Progress notes per execution, their length, and how many one renewal may carry.
+MAX_EXECUTION_NOTES = 50
+MAX_NOTE_LENGTH = 500
+MAX_NOTES_PER_RENEW = 10
 MAX_PATH_LENGTH = 500
 ACTIVE = ("dispatched", "started")
 ACCESS_MODES = ("runner", "manual", "online")
@@ -44,10 +50,12 @@ QUEUE_ASKED = "EXISTS(SELECT 1 FROM member_requests r WHERE r.message_id={row}.m
 SESSION_MODES = ("new", "borrowed")
 FREE_OPERATIONS = ("messages", "attachments", "move", "folder", "archive", "restore", "delete")
 MEMBER_FIELDS = ("id", "name", "adapter", "role", "status", "access", "session_mode", "read_until")
-EXECUTION_FIELDS = ("id", "member_id", "status", "session_id", "lease_until", "created_at", "finished_at", "result")
+EXECUTION_FIELDS = ("id", "member_id", "status", "session_id", "lease_until", "created_at", "finished_at", "result",
+                    "activity", "activity_at")
 # Columns added after the first free-room tables; Python databases created by that build gain them here.
 LATER_COLUMNS = {"room_members": {"access": "TEXT NOT NULL DEFAULT 'runner'", "session_mode": "TEXT NOT NULL DEFAULT 'new'"},
-                 "member_executions": {"changes": "TEXT NOT NULL DEFAULT ''", "cwd": "TEXT NOT NULL DEFAULT ''"},
+                 "member_executions": {"changes": "TEXT NOT NULL DEFAULT ''", "cwd": "TEXT NOT NULL DEFAULT ''",
+                                       "activity": "TEXT NOT NULL DEFAULT ''", "activity_at": "INTEGER NOT NULL DEFAULT 0"},
                  "member_requests": {"chain_id": "INTEGER NOT NULL DEFAULT 0", "batch_id": "INTEGER NOT NULL DEFAULT 0",
                                      "purpose": "TEXT NOT NULL DEFAULT 'ask'", "created_by": "TEXT NOT NULL DEFAULT 'user'"}}
 
@@ -187,16 +195,30 @@ def public_execution(row):
     return {key: row[key] for key in EXECUTION_FIELDS} if row else None
 
 
+def note_count(connection, execution_id):
+    """How many progress notes an execution has; the texts are read separately so room views stay small."""
+    return connection.execute("SELECT COUNT(*) FROM execution_notes WHERE execution_id=?", (execution_id,)).fetchone()[0]
+
+
+def execution_notes(connection, room_id, execution_id):
+    """Read one execution's progress notes in order, with the same access as the room view."""
+    if not connection.execute("SELECT 1 FROM member_executions WHERE room_id=? AND id=?", (room_id, execution_id)).fetchone():
+        raise LookupError("执行不存在")
+    return {"notes": [dict(row) for row in connection.execute(
+        "SELECT seq,text,created_at FROM execution_notes WHERE execution_id=? ORDER BY seq", (execution_id,))]}
+
+
 def recent_executions(connection, room_id):
     """Return bounded public reports, including requests no longer in the recent request list."""
     rows = connection.execute("""SELECT e.*,
         (SELECT json_group_array(id) FROM member_requests WHERE execution_id=e.id) AS request_ids,
         (SELECT MAX(answer_id) FROM member_requests WHERE execution_id=e.id) AS answer_id,
-        (SELECT MIN(message_id) FROM member_requests WHERE execution_id=e.id) AS request_message_id
+        (SELECT MIN(message_id) FROM member_requests WHERE execution_id=e.id) AS request_message_id,
+        (SELECT COUNT(*) FROM execution_notes WHERE execution_id=e.id) AS note_count
         FROM member_executions e WHERE room_id=? ORDER BY id DESC LIMIT ?""", (room_id, RECENT_EXECUTIONS))
     return [{**public_execution(row), "cwd": row["cwd"], "changes": json.loads(row["changes"] or "[]"),
              "changes_recorded": bool(row["changes"]), "request_ids": json.loads(row["request_ids"]),
-             "answer_id": row["answer_id"], "request_message_id": row["request_message_id"]} for row in rows]
+             "answer_id": row["answer_id"], "request_message_id": row["request_message_id"], "notes": row["note_count"]} for row in rows]
 
 
 def possible_conflicts(connection, room_id, names):
@@ -245,6 +267,7 @@ def free_view(connection, room_id):
         member["execution"] = public_execution(latest)
         if latest and latest["status"] in ACTIVE:
             member["execution"]["stale"] = latest["lease_until"] <= now
+            member["execution"]["notes"] = note_count(connection, latest["id"])
         member["pending"] = connection.execute("SELECT COUNT(*) FROM member_requests WHERE member_id=? AND status='pending'",
                                                (row["id"],)).fetchone()[0]
         members.append(member)
@@ -1037,6 +1060,26 @@ def changed_files(payload):
     return sorted(set(files))
 
 
+def renewed_activity(payload, row, now):
+    """Validate the runner's reported phase; its output time is kept within the execution, since the runner's clock may differ."""
+    activity, activity_at = payload.get("activity"), payload.get("activity_at")
+    if activity not in ACTIVITY_PHASES:
+        raise ValueError(f"activity 须为 {'、'.join(item for item in ACTIVITY_PHASES if item)} 或空")
+    if type(activity_at) is not int:
+        raise ValueError("activity_at 须为秒级时间戳")
+    return activity, min(max(activity_at, row["created_at"]), now)
+
+
+def renewed_notes(payload):
+    """Validate progress notes carried by a renewal; a repeated sequence number is the same note resent."""
+    notes = payload.get("notes", [])
+    if (not isinstance(notes, list) or len(notes) > MAX_NOTES_PER_RENEW or any(
+            not isinstance(note, dict) or type(note.get("seq")) is not int or not 1 <= note["seq"] <= MAX_EXECUTION_NOTES
+            or not isinstance(note.get("text"), str) or not 0 < len(note["text"]) <= MAX_NOTE_LENGTH for note in notes)):
+        raise ValueError(f"notes 须为最多 {MAX_NOTES_PER_RENEW} 条 {{seq: 1–{MAX_EXECUTION_NOTES}, text: 1–{MAX_NOTE_LENGTH} 字}}")
+    return notes
+
+
 def execution_action(connection, room_id, execution_id, token, payload):
     """Runner-side lifecycle: renew, fail, release undelivered work, or report observed file changes."""
     require_owner(connection, room_id, token)
@@ -1057,7 +1100,13 @@ def execution_action(connection, room_id, execution_id, token, payload):
         limit = row["created_at"] + execution_minutes(connection, room_id) * 60
         if row["lease_until"] <= now or limit <= now:
             raise FileExistsError("执行租约或单次时限已到，不能续租")
-        connection.execute("UPDATE member_executions SET lease_until=? WHERE id=?", (min(now + LEASE_SECONDS, limit), execution_id))
+        # Older runners renew without activity; the last reported one is kept.
+        activity, activity_at = renewed_activity(payload, row, now) if "activity" in payload else (row["activity"], row["activity_at"])
+        notes = renewed_notes(payload)
+        connection.execute("UPDATE member_executions SET lease_until=?,activity=?,activity_at=? WHERE id=?",
+                           (min(now + LEASE_SECONDS, limit), activity, activity_at, execution_id))
+        connection.executemany("INSERT OR IGNORE INTO execution_notes (execution_id,seq,room_id,text,created_at) VALUES (?,?,?,?,?)",
+                               [(execution_id, note["seq"], room_id, note["text"], now) for note in notes])
     elif action == "fail":
         finish_execution(connection, execution_id, "failed", str(payload.get("reason") or "执行失败"), "failed")
         settle_batches(connection, room_id)

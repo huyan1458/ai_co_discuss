@@ -962,7 +962,6 @@ function message_payload() {
   if (payload.kind === "opinion" && payload.author !== "用户") {
     payload.summary = element("message-summary").value.trim();
     payload.summary_by = element("message-summary-source").value === "submitter" ? payload.submitted_by : payload.author;
-    if (!payload.summary) throw new Error("请补充本次回答的摘要，保留关键结论、条件与不确定性");
     if ([...payload.summary].length > MAX_SUMMARY_LENGTH) throw new Error(`回答摘要最多 ${MAX_SUMMARY_LENGTH} 字，草稿已保留`);
   }
   if ([...payload.text].length > MAX_MESSAGE_LENGTH) throw new Error(`留言最多 ${MAX_MESSAGE_LENGTH} 字，原文已保留，请调整后提交`);
@@ -2755,7 +2754,6 @@ function update_composer_role() {
   if (mode === "moderation") element("author-select").value = "用户";
   const needs_summary = ["opinion", "forward"].includes(mode) && element("author-select").value !== "用户";
   element("message-summary-fields").hidden = !needs_summary;
-  element("message-summary").required = needs_summary;
   element("author-note").textContent = mode === "moderation" ? "主持发言" :
     (mode === "forward" ? "由用户代发" : (element("author-select").value === "用户" ? "发言" : "的观点代发"));
 }

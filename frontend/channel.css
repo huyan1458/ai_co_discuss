@@ -587,6 +587,10 @@ html[data-theme^="channel"] .channel-folder-modal { max-width: 420px; }
 html[data-theme^="channel"] .channel-folder-modal [data-slot="header"] { min-height: 0; padding: 20px 20px 14px; border-bottom: 0; }
 html[data-theme^="channel"] .channel-folder-modal .dialog-body { padding: 0 20px 20px; }
 html[data-theme^="channel"] .channel-folder-modal .dialog-actions { border: 0; padding-top: 4px; margin: 0; gap: 8px; }
+html[data-theme^="channel"] .channel-manage-modal .dialog-form { gap: 10px; }
+html[data-theme^="channel"] .channel-settings-modal [data-slot="header"] { min-height: 0; padding: 20px 20px 14px; border-bottom: 0; }
+html[data-theme^="channel"] .channel-settings-modal .dialog-body { padding: 0 20px 20px; }
+html[data-theme^="channel"] .channel-manage-modal .fine-print { margin: 0; }
 html[data-theme^="channel"] .channel-folder-modal input { height: 40px; font-size: 13px; outline: none; }
 html[data-theme^="channel"] .studio-modal.channel-create-modal { width: calc(100vw - 32px); max-width: 860px; }
 html[data-theme^="channel"] .studio-modal.pb-invite-modal { width: calc(100vw - 32px); max-width: 860px; }
@@ -640,7 +644,7 @@ html[data-theme^="channel"] .theme-choices > button.chosen { border-color: var(-
 html[data-theme^="channel"] .theme-check { border-color: var(--ui-border-accented); color: var(--ui-text-inverted); }
 html[data-theme^="channel"] .chosen .theme-check { border-color: transparent; background: var(--channel-accent); }
 html[data-theme^="channel"] .theme-choices small { color: #a1aab9; }
-.channel-reading-setting { margin-top: 22px; padding-top: 20px; border-top: 1px solid #ffffff0d; }
+.channel-reading-setting { margin-top: 16px; padding-top: 14px; border-top: 1px solid #ffffff0d; }
 .channel-reading-setting h3 { margin-bottom: 10px; color: #cbd3df; font-size: 12px; font-weight: 500; }
 .channel-reading-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 4px; background: #1d1f25; border: 1px solid #ffffff0b; border-radius: 8px; }
 .channel-effect-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -898,14 +902,14 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-filter-summary { color: #0969da; background: #f3f7fd; border-color: #cddff5; }
   .channel-map-round + .channel-map-round::before { border-color: var(--ui-border-accented); }
   .channel-round-number { color: var(--ui-text-toned); }
-  /* Light ticks are solid speaker colors at a steady 2px; the script still animates length and opacity, so the thickness overrides its inline height. */
+  /* Light ticks share the dark speaker colors at a steady 2px; the script still animates length and opacity, so the thickness overrides its inline height. */
   .channel-jump-tick { height: 2px !important; border-radius: 1px; background: var(--navigation-tick-fill, #8c8c8c); }
-  .channel-message-jump[data-author="user"] { --navigation-tick-fill: #0f8f83; }
-  .channel-message-jump:is([data-author="codex"], [data-author="claude"], [data-author="deepseek"], [data-author="qwen"]) { --navigation-tick-fill: var(--tick-color); }
-  .channel-message-jump[data-author="codex"] { --tick-color: #111; }
-  .channel-message-jump[data-author="claude"] { --tick-color: #d98a1f; }
-  .channel-message-jump[data-author="deepseek"] { --tick-color: #4d6bfe; }
-  .channel-message-jump[data-author="qwen"] { --tick-color: #6336e7; }
+  /* The dark ticks' white half would vanish on the light background, so it turns gray here. */
+  .channel-message-jump[data-author="user"] { --navigation-tick-fill: linear-gradient(to right, #0f8f83 0 50%, #c8c8c8 50% 100%); }
+  .channel-message-jump[data-author="codex"] { --navigation-tick-fill: linear-gradient(to right, #111 0 50%, #c8c8c8 50% 100%); }
+  .channel-message-jump[data-author="claude"] { --navigation-tick-fill: linear-gradient(to right, #e5b84b 0 50%, #c8c8c8 50% 100%); }
+  .channel-message-jump[data-author="deepseek"] { --navigation-tick-fill: linear-gradient(to right, #4d6bfe 0 50%, #c8c8c8 50% 100%); }
+  .channel-message-jump[data-author="qwen"] { --navigation-tick-fill: linear-gradient(to right, #6336e7 0 50%, #c8c8c8 50% 100%); }
   .channel-date-divider [data-slot="border"] { border-color: var(--ui-border-muted); }
   .channel-date-divider [data-slot="label"] { color: var(--ui-text-muted); }
   .channel-message, .channel-message-jump { --speaker-accent: #555555; }
@@ -1134,8 +1138,10 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 .channel-connection.is-action { color: var(--ui-text-highlighted, inherit); }
 .account-settings { padding-bottom: 4px; }
 .account-settings h3, .account-appearance-heading { margin-bottom: 10px; color: var(--ui-text-muted); font-size: 12px; font-weight: 500; }
-.account-appearance-heading { margin: 22px 0 10px; padding-top: 20px; border-top: 1px solid var(--ui-border-muted); }
+.account-appearance-heading { margin: 16px 0 10px; padding-top: 14px; border-top: 1px solid var(--ui-border-muted); }
 .account-form { gap: 14px; }
+.account-name-row { display: flex; gap: 8px; }
+.account-name-row > button { flex-shrink: 0; }
 .account-intro { margin-top: 0; }
 .account-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .account-message { margin: 0; font-size: 12px; line-height: 1.6; color: var(--ui-text-muted); overflow-wrap: anywhere; }

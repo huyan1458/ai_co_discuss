@@ -1259,6 +1259,17 @@ test('Worker free rooms keep runner lifecycle, membership and manual members con
   assert.equal((await f.request(`${r.path}/executions/${failing.id}`, { action: 'release', reason: '未送达' }, r.owner)).body.status, 'cancelled');
   const retry = (await r.reserve('Claude')).body;
   assert.deepEqual(retry.requests.map(item => item.message_id), failing.requests.map(item => item.message_id));
+  const future = Math.floor(Date.now() / 1000) + 600;
+  assert.equal((await f.request(`${r.path}/executions/${retry.id}`, { action: 'renew', activity: 'command', activity_at: future }, r.owner)).status, 200);
+  const working = (await f.request(r.path)).body.free.members.find(item => item.name === 'Claude').execution;
+  assert.equal(working.activity, 'command');
+  assert.ok(working.activity_at <= Math.floor(Date.now() / 1000), 'a future output time is capped at the server clock');
+  assert.equal((await f.request(`${r.path}/executions/${retry.id}`, { action: 'renew', activity: 'sleeping', activity_at: future }, r.owner)).status, 400);
+  const notes = [{ seq: 1, text: '读完材料' }, { seq: 2, text: '开始验证' }];
+  for (let index = 0; index < 2; index++) assert.equal((await f.request(`${r.path}/executions/${retry.id}`, { action: 'renew', notes }, r.owner)).status, 200);
+  assert.equal((await f.request(r.path)).body.free.members.find(item => item.name === 'Claude').execution.notes, 2);
+  assert.deepEqual((await f.request(`${r.path}/executions/${retry.id}/notes`)).body.notes.map(note => note.text), ['读完材料', '开始验证']);
+  assert.equal((await f.request(`${r.path}/executions/${retry.id}`, { action: 'renew', notes: [{ seq: 51, text: 'x' }] }, r.owner)).status, 400);
   assert.equal((await f.request(`${r.path}/executions/${retry.id}`, { action: 'fail', reason: 'CLI 退出' }, r.owner)).body.status, 'failed');
   assert.equal((await f.request(r.path)).body.phase, 'discussing');
   const gemini = 'gemini-free'.repeat(4);

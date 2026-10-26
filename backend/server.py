@@ -26,7 +26,7 @@ from .free_room import (add_member, after_free_message, authorize_free_write, ch
                         discussion_members, room_mode, save_room_access, sync_discussion_members, view_execution)
 from .free_room import add_discussion_member, convert_suggestion, discussion_member_action, message_suggestions, save_suggestions, sync_participants
 from .free_room import active_members, adopt_recommendation, ask_members, asks_view, checked_asks, recommend_member, register_member, route_held_messages
-from .free_room import reorder_speakers, speaking_order, stop_room_work
+from .free_room import execution_notes, reorder_speakers, speaking_order, stop_room_work
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, is_ai, is_participant
 from .room_import import import_room, imported_attachment
 from .runtime import (authorize_write, begin_write, configure_runtime, event_action,
@@ -61,7 +61,8 @@ ASSETS = {"/": ("index.html", "text/html"),
           "/markdown.js": ("markdown.js", "text/javascript"),
           "/backup.js": ("backup.js", "text/javascript"),
           "/markdown.css": ("markdown.css", "text/css"),
-          "/icons/LICENSE.txt": ("icons/LICENSE.txt", "text/plain")}
+          "/icons/LICENSE.txt": ("icons/LICENSE.txt", "text/plain"),
+          "/icons/typesafe.png": ("icons/typesafe.png", "image/png")}
 ASSETS.update({f"/icons/{name}.svg": (f"icons/{name}.svg", "image/svg+xml")
                for name in ("openai", "claude", "gemini", "deepseek", "qwen", "user")})
 ASSETS.update({"/pdfjs/" + file.relative_to(WEB_ROOT / "pdfjs").as_posix():
@@ -223,12 +224,14 @@ def require_room(connection, room_id):
     room["round_budget"] = dict(budget) if budget else None
     if budget:
         room["opinion_count"] = opinion_count(connection, room_id, room["experts"])
-    room["round_groups"] = budget_round_groups(connection, room_id, room["experts"], budget["base"]) if budget else room["rounds"]
+    session = connection.execute("SELECT id,goal,status,started_message_id,ended_message_id,created_at FROM discussion_sessions WHERE room_id=? ORDER BY id DESC LIMIT 1", (room_id,)).fetchone()
+    room["session"] = dict(session) if session else None
+    room["round_groups"] = budget_round_groups(connection, room_id, room["experts"], budget["base"], room["session"]) if budget else room["rounds"]
     room["runtime"] = runtime_view(connection, room_id)
     room["limits"] = limits_view(connection.execute(LIMITS_SQL, (room_id,)).fetchone(), room)
     room["mode"] = room_mode(connection, room_id)
-    session = connection.execute("SELECT id,goal,status,started_message_id,ended_message_id,created_at FROM discussion_sessions WHERE room_id=? ORDER BY id DESC LIMIT 1", (room_id,)).fetchone()
-    room["session"] = dict(session) if session else None
+    if room["mode"] == "free" and not session:
+        room["round_groups"] = []
     room["members"] = [dict(row) for row in connection.execute(
         """SELECT m.id,m.name,m.adapter,m.role,m.status,m.access,m.session_mode,COALESCE(s.session_id,'') AS reported_session,COALESCE(s.client,'') AS reported_client,
         COALESCE(r.registered_at,'') AS registered_at
@@ -326,27 +329,33 @@ def discussion_rounds(connection, room_id, experts):
     return rounds
 
 
-def budget_round_groups(connection, room_id, experts, base):
+def budget_round_groups(connection, room_id, experts, base, session):
     """Group history by the round budget's rule: every len(experts) opinions form a round, and a new segment (base) starts a new one.
 
+    Only messages of the latest discussion are grouped, numbered from 1; free collaboration before or after it has no rounds.
     `rounds` stays speaker-based because scheduling needs who still owes a turn; this view only labels history.
     """
-    if not experts:
+    if not experts or not session:
         return []
+    first, last = session["started_message_id"], session["ended_message_id"] or float("inf")
     rows = connection.execute("""SELECT messages.id,messages.author,
         COALESCE(details.kind,'opinion') AS kind FROM messages
         LEFT JOIN message_details AS details ON details.message_id=messages.id
         WHERE room_id=? ORDER BY messages.id""", (room_id,))
     groups, next_start, seen = [], None, 0
     for message in rows:
+        opinion = message["kind"] == "opinion" and message["author"] in experts
+        # base counts every opinion in the room, so opinions outside the discussion still advance seen.
+        seen += opinion
+        if not first < message["id"] <= last:
+            continue
         if next_start is None:
             next_start = message["id"]
-        if message["kind"] != "opinion" or message["author"] not in experts:
+        if not opinion:
             continue
         if not groups or groups[-1]["completed"]:
             groups.append({"number": len(groups) + 1, "start_id": next_start, "opinions": 0, "completed": False})
         current = groups[-1]
-        seen += 1
         current["opinions"] += 1
         current["completed"] = current["opinions"] >= len(experts) or seen == base
         if current["completed"]:
@@ -645,7 +654,7 @@ def manage_room(connection, room_id, action, payload):
 
 def delete_room_records(connection, room_id):
     """Remove a room's dependent records in the caller's transaction."""
-    for table in ("member_recommendations", "free_queue", "speaking_orders", "member_requests", "member_executions", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "room_links",
+    for table in ("member_recommendations", "free_queue", "speaking_orders", "member_requests", "execution_notes", "member_executions", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "room_links",
                   "discussion_options", "round_budgets", "scheduler_decisions", "scheduler_routing", "discussion_sessions"):
         if table == "scheduler_decisions":
             for child in ("scheduler_feedback", "scheduler_decision_context", "scheduler_decision_inputs"):
@@ -766,7 +775,8 @@ def start_discussion(connection, room_id, token, payload):
         raise ValueError("named_followup 须为布尔值")
     # A fresh session first, so the phase mirror follows it and not a concluded earlier one.
     if not connection.execute("SELECT 1 FROM discussion_sessions WHERE room_id=? AND status IN ('active','paused')", (room_id,)).fetchone():
-        connection.execute("INSERT INTO discussion_sessions (room_id,goal,status,created_at) VALUES (?,?,'paused',?)", (room_id, settings["goal"], utc_now()))
+        connection.execute("INSERT INTO discussion_sessions (room_id,goal,status,started_message_id,created_at) VALUES (?,?,'paused',?,?)",
+                           (room_id, settings["goal"], room["latest_id"], utc_now()))
     connection.execute("UPDATE rooms SET goal=? WHERE id=?", (settings["goal"], room_id))
     save_topic_settings(connection, room_id, settings)
     connection.execute("UPDATE room_modes SET mode='brainstorm' WHERE room_id=?", (room_id,))
@@ -1556,7 +1566,7 @@ def participation_text(params, free=False):
             "先回答真正的问题，给出理由、证据、适用条件与不确定性；区分事实、推断和建议，引用原文编号，不编造他人的回答。"
             "讨论初始阶段先独立判断，暂不读他人观点；深入讨论先理解对方主张及其最有力的依据，再说明同意、分歧或需要补的证据。"
             "可以坚持有依据的少数意见，也可因新证据修改判断并说明变化。",
-            "输出：先 1–3 句摘要，再给完整正文。",
+            "输出：完整正文；回答较长时先给 1–3 句摘要。",
             "不要操作网页表单、调用写入接口或生成发布链接。读取失败时如实报告，由用户提供复制的材料。",
             *(["自由协作：只回应点名给你的消息（编号见阅读通知），按时间顺序处理，后面的消息可以修正前面的。"] if free else []), footer]
 
@@ -1604,7 +1614,7 @@ def protocol_text(room):
         f"维护话题：POST {base}/topic；actor 加需要修改的上述字段，另可更新 phase（preparing/initial/discussing/paused/concluded）、focus。收束前先完成或取消当前安排；主持人收束还须先 GET {base}/conclusion 取得 blockers 与 revision，并把 revision 作为 conclusion 一并提交（有阻碍项或状态已变会被拒绝）。暂停保留安排；恢复阶段后再继续。",
         f"安排发言：POST {base}/turns；字段 actor、expert、question、submission_id（新 UUID）。同一话题同时只有一个未完成安排；重试沿用同一编号和问题。整轮安排改传 turns=[{{expert,question}},…]（最多 {MAX_PLAN_TURNS} 项），并须先 GET {base}/turns/roster 取得最新专家状态，把返回的 revision 作为 roster 一并提交（名单变化后需重取；须包含 waiting 中的每位专家）：第一项立即生效，其余排队（queued）；每个回答保存后自动交给下一位，最后一位答完再交回主持人。用户留言或修改目标、背景、边界、焦点后（room.held_since 非 0），当前回答完成即交回主持人；主持人处理后用 POST {base}/turns/continue（actor）按原计划继续，或直接创建新安排替换剩余排队（原排队改为 skipped）。",
         f"通知：仅把对象、问题、话题入口交给对应专家，不附背景、摘要或历史。使用已有且获准的会话通道；没有通道时交由用户协助。实际送达后 POST {base}/turns/安排编号，字段 actor、status=notified；取消用 status=cancelled。复制不算送达。",
-        f"专家观点：POST {base}/messages；author、text、submission_id、source=cli，kind=opinion；turn_id（回答的安排编号）可省略，省略时回答你当前有效的安排；可选 reply_to（本话题原文编号）。每次回答同时提供 summary（最多 {MAX_SUMMARY_LENGTH} 字），通常 1–3 句结论先行，保留关键理由、条件和不确定性；summary_by 为原作者或提交者，默认提交者。text 保留完整正文，最多 {MAX_TEXT_LENGTH} 个 Unicode 字符，请求最多 {MAX_BODY_BYTES} 字节；不截断或用摘要完成安排。旧客户端缺少 summary 时不自动生成。",
+        f"专家观点：POST {base}/messages；author、text、submission_id、source=cli，kind=opinion；turn_id（回答的安排编号）可省略，省略时回答你当前有效的安排；可选 reply_to（本话题原文编号）。回答较长时可附 summary（最多 {MAX_SUMMARY_LENGTH} 字），1–3 句结论先行，保留关键理由、条件和不确定性，简短回答不写；summary_by 为原作者或提交者，默认提交者。text 保留完整正文，最多 {MAX_TEXT_LENGTH} 个 Unicode 字符，请求最多 {MAX_BODY_BYTES} 字节；不截断或用摘要完成安排。旧客户端缺少 summary 时不自动生成。",
         f"主持发言：同一消息接口，author={room['host']}、submitted_by={room['host']}、kind=moderation、source=cli；个人观点使用 kind=opinion，不能自动视为共识。",
         f"代发只读专家观点：author 保留原专家，submitted_by={room['host']}、kind=opinion、text 为原文；须关联 turn_id，可附 reply_to。服务保存代发来源；不要冒充专家直接提交。该专家须有当前有效的安排。",
         f"整理状态：POST {base}/state；actor、text（详细状态，最多 {MAX_STATE_LENGTH} 字）、until（依据的消息截止编号）；brief（最多 {MAX_BRIEF_LENGTH} 字）为面向人的主持简报，说明结论、共识、歧义和下一步意图。进度或安排变化后更新；省略 brief 保留旧简报，空字符串清除。所有参与专家各保存一次完整观点才完成一轮；同轮重复发言只计该专家一次，主持说明、用户留言及取消安排不推进轮次。房间 rounds 按当前配置专家和完整历史生成，completed_rounds 为完成轮数，answered_turns 仅为已回答安排数。状态不覆盖原文，也不代表全体一致同意。",
@@ -2170,6 +2180,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = recommend_member(connection, room_id, token, self.read_payload())
         elif len(parts) == 5 and parts[3] == "recommendations" and method == "POST":
             result = adopt_recommendation(connection, room_id, token, int(parts[4]), self.read_payload())
+        elif len(parts) == 6 and parts[3] == "executions" and parts[5] == "notes" and method == "GET":
+            result = execution_notes(connection, room_id, int(parts[4]))
         elif len(parts) == 5 and parts[3] == "executions":
             execution_id = int(parts[4])
             result = (view_execution(connection, room_id, execution_id, token) if method == "GET"

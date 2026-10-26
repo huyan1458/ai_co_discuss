@@ -111,8 +111,7 @@ async function sign_out() {
         </div>
       </div>
       <form class="dialog-form account-form" aria-label="显示名称" @submit.prevent="save_name">
-        <UFormField label="显示名称" description="即用户名，对所有访客可见"><UInput v-model="display_name" autocomplete="username" :maxlength="30" required class="w-full" aria-label="显示名称" /></UFormField>
-        <div class="account-actions"><UButton type="submit" label="保存名称" color="neutral" variant="soft" size="sm" :loading="busy === 'name'" :disabled="Boolean(busy) || !name_changed || !display_name.trim()" /></div>
+        <UFormField label="显示名称" description="即用户名，对所有访客可见"><div class="account-name-row"><UInput v-model="display_name" autocomplete="username" :maxlength="30" required class="w-full" aria-label="显示名称" /><UButton type="submit" label="保存名称" color="neutral" variant="soft" :loading="busy === 'name'" :disabled="Boolean(busy) || !name_changed || !display_name.trim()" /></div></UFormField>
       </form>
       <p v-if="messages.profile.error" class="account-message is-error" role="alert">{{ messages.profile.error }}</p>
       <p v-else-if="messages.profile.notice" class="account-message" role="status">{{ messages.profile.notice }}</p>

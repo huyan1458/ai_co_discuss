@@ -4,6 +4,7 @@ import json
 import sqlite3
 import tempfile
 import threading
+import time
 import unittest
 import uuid
 from contextlib import closing
@@ -267,6 +268,39 @@ class FreeRoomTests(unittest.TestCase):
         self.request(f"{self.path}/inbox", token=self.owner)
         self.assertEqual(self.request(self.path)[1]["free"]["members"][0]["execution"]["result"], "已达到单次执行时限")
 
+    def test_renewal_reports_what_the_software_is_doing(self):
+        """The runner's phase and output time reach the member card; older renewals keep the last report."""
+        self.say("一")
+        execution = self.reserve()[1]
+        path = f"{self.path}/executions/{execution['id']}"
+        future = int(time.time()) + 600
+        self.assertEqual(self.request(path, {"action": "renew", "activity": "command", "activity_at": future}, self.owner)[0], 200)
+        reported = self.request(self.path)[1]["free"]["members"][0]["execution"]
+        self.assertEqual(reported["activity"], "command")
+        self.assertLessEqual(reported["activity_at"], int(time.time()))
+        self.assertEqual(self.request(path, {"action": "renew"}, self.owner)[0], 200)
+        self.assertEqual(self.request(self.path)[1]["free"]["members"][0]["execution"]["activity"], "command")
+        for payload in ({"activity": "sleeping", "activity_at": future}, {"activity": "tool", "activity_at": "now"}, {"activity": "tool"}):
+            self.assertEqual(self.request(path, {"action": "renew", **payload}, self.owner)[0], 400, payload)
+
+    def test_progress_notes_are_kept_once_and_read_apart_from_the_room_view(self):
+        """Notes carried by renewals are stored once per number; the room view only counts them."""
+        self.say("一")
+        execution = self.reserve()[1]
+        path = f"{self.path}/executions/{execution['id']}"
+        notes = [{"seq": 1, "text": "读完材料"}, {"seq": 2, "text": "开始验证"}]
+        for _ in range(2):
+            self.assertEqual(self.request(path, {"action": "renew", "notes": notes}, self.owner)[0], 200)
+        self.assertEqual(self.request(self.path)[1]["free"]["members"][0]["execution"]["notes"], 2)
+        status, body = self.request(f"{path}/notes")
+        self.assertEqual(status, 200, body)
+        self.assertEqual([note["text"] for note in body["notes"]], ["读完材料", "开始验证"])
+        for bad in ([{"seq": 51, "text": "x"}], [{"seq": 3, "text": "x" * 501}], [{"seq": 3, "text": ""}], "x"):
+            self.assertEqual(self.request(path, {"action": "renew", "notes": bad}, self.owner)[0], 400, bad)
+        self.assertEqual(self.answer(execution["id"])[0], 201)
+        self.assertEqual(self.request(self.path)[1]["free"]["executions"][0]["notes"], 2)
+        self.assertEqual(self.request(f"{self.path}/executions/999/notes")[0], 404)
+
     def test_runner_endpoints_need_the_owner_credential(self):
         """Inbox, reservation and lifecycle actions refuse member and missing credentials."""
         self.say("一")
@@ -339,12 +373,15 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(self.request(discussion, {"action": "start"}, self.member)[0], 403)
         self.assertEqual(self.request(discussion, {"action": "pause"}, self.owner)[0], 400)
         self.assertEqual(self.request(discussion, {"action": "end"}, self.owner)[0], 409)
+        # Free collaboration has no rounds; they count only messages after the discussion starts.
+        self.assertEqual(self.request(self.path)[1]["round_groups"], [])
         status, started = self.request(discussion, {"action": "start", "goal": "选方案", "limits": {"max_rounds": 2, "max_minutes": 30}}, self.owner)
         self.assertEqual(status, 200, started)
         self.assertEqual((started["mode"], started["host"], started["goal"], started["limits"]["max_rounds"]), ("brainstorm", "Codex", "选方案", 2))
         self.assertEqual(started["experts"], {"Claude": "cli", "Codex": "cli", "Gemini": "cli"})
         self.assertEqual({member["name"]: member["access"] for member in started["members"]}, {"Claude": "runner", "Codex": "runner", "Gemini": "manual"})
         self.assertEqual((started["session"]["status"], started["runtime"]["mode"], started["round_budget"]["base"]), ("paused", "automatic", 0))
+        self.assertEqual(started["session"]["started_message_id"], first)
         self.assertEqual(self.request(discussion, {"action": "start"}, self.owner)[0], 409)
         self.assertEqual(self.request(f"{self.path}/messages/{first}")[1]["text"], "先聊几句")
         # A direct question still wakes a member inside the discussion.

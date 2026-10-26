@@ -4,6 +4,7 @@ import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } fr
 import { format_duration } from "./LimitPicker.vue";
 import DiscussionLimits from "./DiscussionLimits.vue";
 import ExpertCard from "./ExpertCard.vue";
+import RosterAdd from "./RosterAdd.vue";
 import SchedulerSettings from "./SchedulerSettings.vue";
 
 const props = defineProps({ targetFolder: { type: Object, default: null } });
@@ -65,7 +66,7 @@ const blocker = computed(() => {
   if (needs_connection.value) return "先连接本机服务，或把成员改为手动启动";
   if (discussing.value && !view.value.launch.available) return "先连接本机服务";
   const unready = woken_names.value.filter((name) => !launch_ready(name));
-  return unready.length ? `补齐 ${unready.join("、")} 的接入配置` : scheduler_unready.value ? "补齐智能调度配置，或取消勾选" : "";
+  return unready.length ? `补齐 ${unready.join("、")} 的接入配置` : scheduler_unready.value ? "补齐决策模型配置，或移出决策模型" : "";
 });
 
 /** Keep the host inside the selected members that answer by themselves. */
@@ -112,6 +113,9 @@ function library_description(name) {
   return has_local(name) ? "API / 本地 App / CLI / 手动启动" : "API / 手动启动";
 }
 
+const library_items = computed(() => experts.map((name) => ({ value: name, name, ...bridge.identities[name],
+  disabled: !bridge.launch_clients[name], title: library_description(name), aria_label: `添加 ${name} 实例` })));
+
 /** Admit one library role, woken by the local service until its card says otherwise. */
 function add_expert(name) {
   if (!bridge.launch_clients[name]) return;
@@ -125,7 +129,7 @@ function add_expert(name) {
 /** Remove a role, repair the host and return keyboard focus to the library entry. */
 function remove_expert(name) {
   set_expert_mode(name, "");
-  nextTick(() => library.value?.querySelector("button:not(:disabled)")?.focus({ preventScroll: true }));
+  nextTick(() => library.value?.focus_first());
 }
 
 const picking = ref(false);
@@ -174,12 +178,7 @@ const summary = computed(() => {
       <section class="create-section">
         <h3><span>2</span>谁来参与</h3>
         <p v-if="selected_names.length" class="fine-print create-hint">每位成员可选本机唤醒，或手动（你来启动或代发，网页 AI 选手动）。</p>
-        <div ref="library" class="create-roster-add" role="group" aria-label="添加 AI">
-          <span class="create-label">添加</span>
-          <button v-for="name in experts" :key="name" type="button" :disabled="!bridge.launch_clients[name]" :title="library_description(name)" :aria-label="`添加 ${name} 实例`" @click="add_expert(name)">
-            <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="3xs" class="channel-avatar" :class="bridge.identities[name]?.style" />{{ name }}<UIcon name="i-lucide-plus" />
-          </button>
-        </div>
+        <RosterAdd ref="library" label="添加 AI" :items="library_items" @add="add_expert" />
         <div v-if="selected_names.length" class="create-experts" role="group" aria-label="参与的 AI">
           <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :choices="access_choices(name)"
             :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)" hosting
@@ -240,16 +239,8 @@ const summary = computed(() => {
 .create-mode.is-selected::after { border-color: var(--channel-accent); background: radial-gradient(circle, var(--channel-accent) 3px, transparent 3.5px); }
 .create-experts { display: grid; grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); align-items: start; gap: 8px; }
 .create-experts-empty { margin: 0; padding: 18px 12px; border: 1px dashed var(--ui-border); border-radius: 8px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }
-.create-roster-add { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.create-roster-add .create-label { min-width: 0; margin-right: 2px; }
-.create-roster-add > button { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 2px 8px 2px 4px; border: 1px solid var(--ui-border-muted); border-radius: 999px; color: var(--ui-text-toned); font-size: 12px; }
-.create-roster-add > button:hover:not(:disabled) { border-color: var(--ui-border-accented); background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); }
-.create-roster-add > button:disabled { opacity: .45; }
-.create-roster-add .channel-avatar { flex-shrink: 0; width: 20px; height: 20px; font-size: 9px; }
-.create-roster-add > button > span:last-child { width: 12px; height: 12px; color: var(--ui-text-muted); }
 .create-host-hint { display: flex; align-items: center; gap: 5px; }
 .create-host-hint > [class*="icon"] { flex-shrink: 0; width: 12px; height: 12px; color: #e0b44a; }
-@media (pointer: coarse) { .create-roster-add > button { min-height: 44px; } }
 .create-host { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .create-label { min-width: 64px; color: var(--ui-text-toned); font-size: 12px; }
 .create-chips { display: flex; flex-wrap: wrap; gap: 6px; }

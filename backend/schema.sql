@@ -532,7 +532,18 @@ CREATE TABLE IF NOT EXISTS member_executions (
     result TEXT NOT NULL DEFAULT '',
     changes TEXT NOT NULL DEFAULT '',
     cwd TEXT NOT NULL DEFAULT '',
+    activity TEXT NOT NULL DEFAULT '',
+    activity_at INTEGER NOT NULL DEFAULT 0,
     UNIQUE(room_id,client_id)
+);
+-- Progress notes the runner saw a member's software write between tool calls; numbered per execution so a retried renewal adds nothing.
+CREATE TABLE IF NOT EXISTS execution_notes (
+    execution_id INTEGER NOT NULL REFERENCES member_executions(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY(execution_id,seq)
 );
 -- One live execution per member: different members may run in parallel, one session never twice.
 CREATE UNIQUE INDEX IF NOT EXISTS one_member_execution ON member_executions(member_id)

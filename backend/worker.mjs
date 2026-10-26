@@ -374,12 +374,13 @@ async function require_room(database, room_id) {
   result.completed_rounds = result.rounds.filter((item) => item.completed).length;
   result.round_budget = await database.prepare("SELECT base,cap,extra FROM round_budgets WHERE room_id=?").bind(room_id).first() ?? null;
   if (result.round_budget) result.opinion_count = await opinion_count(database, room_id, result.experts);
-  result.round_groups = result.round_budget ? await budget_round_groups(database, room_id, result.experts, result.round_budget.base) : result.rounds;
+  result.session = await database.prepare("SELECT id,goal,status,started_message_id,ended_message_id,created_at FROM discussion_sessions WHERE room_id=? ORDER BY id DESC LIMIT 1").bind(room_id).first() ?? null;
+  result.round_groups = result.round_budget ? await budget_round_groups(database, room_id, result.experts, result.round_budget.base, result.session) : result.rounds;
   result.runtime = await runtime_view(database, room_id);
   result.limits = limits_view(await database.prepare(LIMITS_SQL).bind(room_id).first(), result);
   result.mode = await room_mode(database, room_id);
+  if (result.mode === "free" && !result.session) result.round_groups = [];
   if (result.mode !== "free") result.asks = await asks_view(database, room_id);
-  result.session = await database.prepare("SELECT id,goal,status,started_message_id,ended_message_id,created_at FROM discussion_sessions WHERE room_id=? ORDER BY id DESC LIMIT 1").bind(room_id).first() ?? null;
   result.members = (await database.prepare(`SELECT m.id,m.name,m.adapter,m.role,m.status,m.access,m.session_mode,COALESCE(s.session_id,'') AS reported_session,COALESCE(s.client,'') AS reported_client,
     COALESCE(r.registered_at,'') AS registered_at
     FROM room_members AS m LEFT JOIN member_sessions AS s ON s.member_id=m.id
@@ -472,11 +473,14 @@ async function discussion_rounds(database, room_id, experts) {
 
 /**
  * Group history by the round budget's rule: every expert-count opinions form a round, and a new segment (base) starts a new one.
+ * Only messages of the latest discussion are grouped, numbered from 1; free collaboration before or after it has no rounds.
  * `rounds` stays speaker-based because scheduling needs who still owes a turn; this view only labels history.
  */
-async function budget_round_groups(database, room_id, experts, base) {
+async function budget_round_groups(database, room_id, experts, base, session) {
   const participants = Object.keys(experts);
-  if (!participants.length) return [];
+  if (!participants.length || !session) return [];
+  const first = session.started_message_id;
+  const last = session.ended_message_id || Infinity;
   const rows = await database.prepare(`SELECT messages.id,messages.author,
     COALESCE(details.kind,'opinion') AS kind FROM messages
     LEFT JOIN message_details AS details ON details.message_id=messages.id
@@ -485,11 +489,14 @@ async function budget_round_groups(database, room_id, experts, base) {
   let next_start = null;
   let seen = 0;
   for (const message of rows.results) {
+    const opinion = message.kind === "opinion" && participants.includes(message.author);
+    // base counts every opinion in the room, so opinions outside the discussion still advance seen.
+    if (opinion) seen += 1;
+    if (message.id <= first || message.id > last) continue;
     next_start ??= message.id;
-    if (message.kind !== "opinion" || !participants.includes(message.author)) continue;
+    if (!opinion) continue;
     if (!groups.length || groups.at(-1).completed) groups.push({ number: groups.length + 1, start_id: next_start, opinions: 0, completed: false });
     const current = groups.at(-1);
-    seen += 1;
     current.opinions += 1;
     current.completed = current.opinions >= participants.length || seen === base;
     if (current.completed) next_start = null;
@@ -646,7 +653,7 @@ async function start_discussion(database, room_id, token, payload) {
   const open = await database.prepare("SELECT 1 FROM discussion_sessions WHERE room_id=? AND status IN ('active','paused')").bind(room_id).first();
   // A fresh session first, so the phase mirror follows it and not a concluded earlier one.
   await database.batch([
-    ...(open ? [] : [database.prepare("INSERT INTO discussion_sessions (room_id,goal,status,created_at) VALUES (?,?,'paused',?)").bind(room_id, settings.goal, new Date().toISOString())]),
+    ...(open ? [] : [database.prepare("INSERT INTO discussion_sessions (room_id,goal,status,started_message_id,created_at) VALUES (?,?,'paused',?,?)").bind(room_id, settings.goal, room.latest_id, new Date().toISOString())]),
     database.prepare("UPDATE rooms SET goal=? WHERE id=?").bind(settings.goal, room_id),
     ...limit_statements(database, room_id, settings),
     ...topic_statements(database, room_id, settings),
@@ -889,7 +896,7 @@ async function manage_room(database, room_id, action, payload) {
   } else if (action === "delete") {
     if (payload.confirm_title !== room.title) throw new HttpError(400, "请输入完整房间名称确认删除");
     const queries = [
-      "DELETE FROM member_recommendations WHERE room_id=?", "DELETE FROM free_queue WHERE room_id=?", "DELETE FROM speaking_orders WHERE room_id=?", "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?", "DELETE FROM member_sessions WHERE room_id=?", "DELETE FROM member_registrations WHERE room_id=?",
+      "DELETE FROM member_recommendations WHERE room_id=?", "DELETE FROM free_queue WHERE room_id=?", "DELETE FROM speaking_orders WHERE room_id=?", "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM execution_notes WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?", "DELETE FROM member_sessions WHERE room_id=?", "DELETE FROM member_registrations WHERE room_id=?",
       "DELETE FROM room_members WHERE room_id=?", "DELETE FROM room_modes WHERE room_id=?",
       "DELETE FROM free_batches WHERE room_id=?", "DELETE FROM free_chains WHERE room_id=?", "DELETE FROM room_links WHERE room_id=?",
       "DELETE FROM discussion_options WHERE room_id=?",
@@ -1493,7 +1500,7 @@ function participation_text(params, free = false) {
     "先回答真正的问题，给出理由、证据、适用条件与不确定性；区分事实、推断和建议，引用原文编号，不编造他人的回答。"
       + "讨论初始阶段先独立判断，暂不读他人观点；深入讨论先理解对方主张及其最有力的依据，再说明同意、分歧或需要补的证据。"
       + "可以坚持有依据的少数意见，也可因新证据修改判断并说明变化。",
-    "输出：先 1–3 句摘要，再给完整正文。",
+    "输出：完整正文；回答较长时先给 1–3 句摘要。",
     "不要操作网页表单、调用写入接口或生成发布链接。读取失败时如实报告，由用户提供复制的材料。",
     ...(free ? ["自由协作：只回应点名给你的消息（编号见阅读通知），按时间顺序处理，后面的消息可以修正前面的。"] : []), footer];
 }
@@ -1539,7 +1546,7 @@ function protocol_text(room) {
     `安排发言：POST ${base}/turns；字段 actor、expert、question、submission_id（新 UUID）。同一话题同时只有一个未完成安排；重试沿用同一编号和问题。整轮安排改传 turns=[{expert,question},…]（最多 ${MAX_PLAN_TURNS} 项），并须先 GET ${base}/turns/roster 取得最新专家状态，把返回的 revision 作为 roster 一并提交（名单变化后需重取；须包含 waiting 中的每位专家）：第一项立即生效，其余排队（queued）；每个回答保存后自动交给下一位，最后一位答完再交回主持人。用户留言或修改目标、背景、边界、焦点后（room.held_since 非 0），当前回答完成即交回主持人；主持人处理后用 POST ${base}/turns/continue（actor）按原计划继续，或直接创建新安排替换剩余排队（原排队改为 skipped）。`,
     `通知：仅把对象、问题、话题入口交给对应专家，不附背景、摘要或历史。使用已有且获准的会话通道；没有通道时交由用户协助。实际送达后 POST ${base}/turns/安排编号，字段 actor、status=notified；取消用 status=cancelled。复制不算送达。`,
     `API 参与者由本机 runner 使用相同房间授权和执行约束提交，消息 source=api；CLI 仍使用 source=cli。兼容字段 experts 中的 cli 表示可自行提交，实际接入方式见成员 adapter。`,
-    `专家观点：POST ${base}/messages；author、text、submission_id、source=cli，kind=opinion；必须关联 turn_id（回答的安排编号），可选 reply_to（本话题原文编号）。每次回答同时提供 summary（最多 ${MAX_SUMMARY_LENGTH} 字），通常 1–3 句结论先行，保留关键理由、条件和不确定性；summary_by 为原作者或提交者，默认提交者。text 保留完整正文，最多 ${MAX_TEXT_LENGTH} 个 Unicode 字符，请求最多 ${MAX_BODY_BYTES} 字节；不截断或用摘要完成安排。旧客户端缺少 summary 时不自动生成。`,
+    `专家观点：POST ${base}/messages；author、text、submission_id、source=cli，kind=opinion；必须关联 turn_id（回答的安排编号），可选 reply_to（本话题原文编号）。回答较长时可附 summary（最多 ${MAX_SUMMARY_LENGTH} 字），1–3 句结论先行，保留关键理由、条件和不确定性，简短回答不写；summary_by 为原作者或提交者，默认提交者。text 保留完整正文，最多 ${MAX_TEXT_LENGTH} 个 Unicode 字符，请求最多 ${MAX_BODY_BYTES} 字节；不截断或用摘要完成安排。旧客户端缺少 summary 时不自动生成。`,
     `主持发言：同一消息接口，author=${room.host}、submitted_by=${room.host}、kind=moderation、source=cli；个人观点使用 kind=opinion，不能自动视为共识。`,
     `代发只读专家观点：author 保留原专家，submitted_by=${room.host}、kind=opinion、text 为原文；须关联 turn_id，可附 reply_to。服务保存代发来源；不要冒充专家直接提交。`,
     `整理状态：POST ${base}/state；actor、text（详细状态，最多 ${MAX_STATE_LENGTH} 字）、until（依据的消息截止编号）；brief（最多 ${MAX_BRIEF_LENGTH} 字）为面向人的主持简报，说明结论、共识、歧义和下一步意图。进度或安排变化后更新；省略 brief 保留旧简报，空字符串清除。所有参与专家各保存一次完整观点才完成一轮；同轮重复发言只计该专家一次，主持说明、用户留言及取消安排不推进轮次。房间 rounds 按当前配置专家和完整历史生成，completed_rounds 为完成轮数，answered_turns 仅为已回答安排数。状态不覆盖原文，也不代表全体一致同意。`,
@@ -2025,6 +2032,12 @@ const FREE_RECENT_REQUESTS = 100;
 const FREE_RECENT_CHANGES = 50;
 const FREE_MAX_CHANGED_FILES = 200;
 const FREE_MAX_PATH = 500;
+// What a member's software last showed it doing, as reported by the runner with each renewal.
+const FREE_ACTIVITY_PHASES = ["", "thinking", "command", "tool", "editing", "writing"];
+// Progress notes per execution, their length, and how many one renewal may carry.
+const FREE_MAX_EXECUTION_NOTES = 50;
+const FREE_MAX_NOTE_LENGTH = 500;
+const FREE_MAX_NOTES_PER_RENEW = 10;
 const FREE_LIVE = "status IN ('dispatched','started')";
 // AI-created requests (host dispatches and hand-offs) allowed per chain; each owner message starts a chain.
 const FREE_MAX_AUTO_HOPS = 8;
@@ -2038,7 +2051,8 @@ const FREE_BATCH_ANSWERED = "EXISTS(SELECT 1 FROM member_requests r WHERE r.room
 const DIRECTORY_OPERATIONS = ["move", "folder"];
 const FREE_OPERATIONS = ["messages", "attachments", "move", "folder", "archive", "restore", "delete"];
 const FREE_MEMBER_FIELDS = ["id", "name", "adapter", "role", "status", "access", "session_mode", "read_until"];
-const FREE_EXECUTION_FIELDS = ["id", "member_id", "status", "session_id", "lease_until", "created_at", "finished_at", "result"];
+const FREE_EXECUTION_FIELDS = ["id", "member_id", "status", "session_id", "lease_until", "created_at", "finished_at", "result",
+  "activity", "activity_at"];
 const FREE_RECENT_EXECUTIONS = 100;
 // Only free rooms carry these tables; credential hashes are never exported.
 const FREE_BACKUP_QUERIES = {
@@ -2179,11 +2193,12 @@ async function free_recent_executions(database, room_id) {
   const rows = (await database.prepare(`SELECT e.*,
     (SELECT json_group_array(id) FROM member_requests WHERE execution_id=e.id) AS request_ids,
     (SELECT MAX(answer_id) FROM member_requests WHERE execution_id=e.id) AS answer_id,
-    (SELECT MIN(message_id) FROM member_requests WHERE execution_id=e.id) AS request_message_id
+    (SELECT MIN(message_id) FROM member_requests WHERE execution_id=e.id) AS request_message_id,
+    (SELECT COUNT(*) FROM execution_notes WHERE execution_id=e.id) AS note_count
     FROM member_executions e WHERE room_id=? ORDER BY id DESC LIMIT ?`).bind(room_id, FREE_RECENT_EXECUTIONS).all()).results;
   return rows.map(row => ({ ...pick(row, FREE_EXECUTION_FIELDS), cwd: row.cwd, changes: JSON.parse(row.changes || '[]'),
     changes_recorded: Boolean(row.changes), request_ids: JSON.parse(row.request_ids),
-    answer_id: row.answer_id, request_message_id: row.request_message_id }));
+    answer_id: row.answer_id, request_message_id: row.request_message_id, notes: row.note_count }));
 }
 
 /** Summarize members, recent requests and execution reports without credentials. */
@@ -2203,7 +2218,10 @@ async function free_view(database, room_id) {
   const members = await Promise.all(rows.map(async row => {
     const latest = await database.prepare("SELECT * FROM member_executions WHERE member_id=? ORDER BY id DESC LIMIT 1").bind(row.id).first();
     const execution = pick(latest, FREE_EXECUTION_FIELDS);
-    if (latest && ["dispatched", "started"].includes(latest.status)) execution.stale = latest.lease_until <= now;
+    if (latest && ["dispatched", "started"].includes(latest.status)) {
+      execution.stale = latest.lease_until <= now;
+      execution.notes = (await database.prepare("SELECT COUNT(*) AS count FROM execution_notes WHERE execution_id=?").bind(latest.id).first()).count;
+    }
     const pending = (await database.prepare("SELECT COUNT(*) AS count FROM member_requests WHERE member_id=? AND status='pending'").bind(row.id).first()).count;
     const reported = await database.prepare("SELECT session_id,client FROM member_sessions WHERE member_id=?").bind(row.id).first();
     return { ...pick(row, FREE_MEMBER_FIELDS), registered_at: await registered_at(database, row),
@@ -2698,6 +2716,31 @@ async function free_view_execution(database, room_id, execution_id, token) {
   return free_execution_detail(database, row);
 }
 
+/** Validate progress notes carried by a renewal; a repeated sequence number is the same note resent. */
+function free_renewed_notes(payload) {
+  const notes = payload.notes ?? [];
+  if (!Array.isArray(notes) || notes.length > FREE_MAX_NOTES_PER_RENEW || notes.some(note => !note || typeof note !== "object"
+    || !Number.isInteger(note.seq) || note.seq < 1 || note.seq > FREE_MAX_EXECUTION_NOTES
+    || typeof note.text !== "string" || !note.text.length || note.text.length > FREE_MAX_NOTE_LENGTH)) {
+    throw new HttpError(400, `notes 须为最多 ${FREE_MAX_NOTES_PER_RENEW} 条 {seq: 1–${FREE_MAX_EXECUTION_NOTES}, text: 1–${FREE_MAX_NOTE_LENGTH} 字}`);
+  }
+  return notes;
+}
+
+/** Read one execution's progress notes in order, with the same access as the room view. */
+async function free_execution_notes(database, room_id, execution_id) {
+  if (!await database.prepare("SELECT 1 FROM member_executions WHERE room_id=? AND id=?").bind(room_id, execution_id).first()) throw new HttpError(404, "执行不存在");
+  return { notes: (await database.prepare("SELECT seq,text,created_at FROM execution_notes WHERE execution_id=? ORDER BY seq").bind(execution_id).all()).results };
+}
+
+/** Validate the runner's reported phase; its output time is kept within the execution, since the runner's clock may differ. */
+function free_renewed_activity(payload, row, now) {
+  const { activity, activity_at } = payload;
+  if (!FREE_ACTIVITY_PHASES.includes(activity)) throw new HttpError(400, `activity 须为 ${FREE_ACTIVITY_PHASES.filter(Boolean).join("、")} 或空`);
+  if (!Number.isInteger(activity_at)) throw new HttpError(400, "activity_at 须为秒级时间戳");
+  return [activity, Math.min(Math.max(activity_at, row.created_at), now)];
+}
+
 /** Runner-side lifecycle: renew, fail, release undelivered work, or report observed file changes. */
 async function free_execution_action(database, room_id, execution_id, token, payload) {
   await require_free_owner(database, room_id, token);
@@ -2717,8 +2760,14 @@ async function free_execution_action(database, room_id, execution_id, token, pay
     const limit = row.created_at + await free_execution_minutes(database, room_id) * 60;
     const now = Math.floor(Date.now() / 1000);
     if (row.lease_until <= now || limit <= now) throw new HttpError(409, "执行租约或单次时限已到，不能续租");
-    await database.prepare(`UPDATE member_executions SET lease_until=MIN(unixepoch()+?,?) WHERE id=? AND ${FREE_LIVE} AND lease_until>unixepoch()`)
-      .bind(FREE_LEASE_SECONDS, limit, execution_id).run();
+    // Older runners renew without activity; the last reported one is kept.
+    const [activity, activity_at] = "activity" in payload ? free_renewed_activity(payload, row, now) : [row.activity, row.activity_at];
+    const notes = free_renewed_notes(payload);
+    await database.batch([
+      database.prepare(`UPDATE member_executions SET lease_until=MIN(unixepoch()+?,?),activity=?,activity_at=? WHERE id=? AND ${FREE_LIVE} AND lease_until>unixepoch()`)
+        .bind(FREE_LEASE_SECONDS, limit, activity, activity_at, execution_id),
+      ...notes.map(note => database.prepare("INSERT OR IGNORE INTO execution_notes (execution_id,seq,room_id,text,created_at) VALUES (?,?,?,?,unixepoch())")
+        .bind(execution_id, note.seq, room_id, note.text))]);
   } else if (action === "fail") {
     await database.batch([...free_finish_statements(database, "id=?", [execution_id], "failed", String(payload.reason || "执行失败"), "failed"),
       ...free_settle_statements(database, room_id)]);
@@ -2747,6 +2796,7 @@ async function handle_free_api(database, request, parts) {
   if (parts.length === 4 && parts[3] === "executions" && method === "POST") return respond(await free_reserve(database, room_id, token, await read_payload(request)));
   if (parts.length === 4 && parts[3] === "recommendations" && method === "POST") return respond(await free_recommend(database, room_id, token, await read_payload(request)));
   if (parts.length === 5 && parts[3] === "recommendations" && method === "POST") return respond(await free_adopt(database, room_id, token, integer(parts[4]), await read_payload(request)));
+  if (parts.length === 6 && parts[3] === "executions" && parts[5] === "notes" && method === "GET") return respond(await free_execution_notes(database, room_id, integer(parts[4])));
   if (parts.length === 5 && parts[3] === "executions") {
     const execution_id = integer(parts[4]);
     return respond(method === "GET" ? await free_view_execution(database, room_id, execution_id, token)

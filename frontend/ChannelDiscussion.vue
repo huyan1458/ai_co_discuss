@@ -140,8 +140,9 @@ const free_busy = computed(() => {
     const execution = member.execution;
     if (execution && ["dispatched", "started"].includes(execution.status)) {
       return [{ id: `free-${execution.id}`, author: member.name, member_id: member.id,
-        text: execution.stale ? "执行失联：网站已不再接受本次回答，软件停止未确认" : "正在处理",
-        working: !execution.stale, created_at: execution.created_at,
+        text: execution.stale ? "执行失联：网站已不再接受本次回答，软件停止未确认" : ACTIVITY_LABELS[execution.activity] || "正在处理",
+        working: !execution.stale, created_at: execution.created_at, adapter: member.adapter,
+        activity: execution.activity, activity_at: execution.activity_at, notes: execution.notes || 0,
         execution_id: execution.id, request_message_id: request_messages.get(execution.id) }];
     }
     // A manual member is never woken by the program, so its card waits for the user to trigger it.
@@ -165,6 +166,38 @@ watch(() => free_busy.value.length > 0, (busy, _previous, cleanup) => {
   cleanup(() => clearInterval(timer));
 }, { immediate: true });
 const free_working = computed(() => view.value.query || view.value.mention_only ? [] : free_busy.value);
+/** Progress notes per execution id; only counts come with the room, so texts are read when a card shows more or a fold opens. */
+const execution_notes = ref(new Map());
+async function load_notes(execution_id) {
+  try {
+    const { notes } = await bridge.request(`/api/rooms/${room.value.id}/executions/${execution_id}/notes`);
+    execution_notes.value = new Map(execution_notes.value).set(execution_id, notes);
+  } catch { /* Notes only accompany the work; a failed read leaves the card as it was. */ }
+}
+watch(() => free_busy.value.map((item) => `${item.execution_id}:${item.notes}`).join(), () => {
+  for (const item of free_busy.value) {
+    if (item.working && item.notes > (execution_notes.value.get(item.execution_id)?.length || 0)) load_notes(item.execution_id);
+  }
+}, { immediate: true });
+/** The execution that delivered an answer, when the room still lists it. */
+function answer_execution(message) {
+  return ((free.value ? room.value.free : room.value.asks)?.executions || []).find((item) => item.answer_id === message.id);
+}
+/**
+ * Whether a working member's software is still producing output, from the runner's latest report.
+ * Silence while a command runs is expected, so it is named as such instead of a possible hang.
+ */
+function activity_note(message) {
+  if (!message.working) return null;
+  if (BLIND_ADAPTERS.includes(message.adapter)) return { text: "此接入方式看不到进度，可在原窗口查看", tone: "muted" };
+  const since = message.activity_at || message.created_at;
+  const silent = Math.max(0, free_now.value - since);
+  if (!message.activity_at && silent < STALL_SECONDS) return { text: "等待软件输出", tone: "muted" };
+  if (silent <= ACTIVE_SECONDS) return { text: "活动中", tone: "active" };
+  if (silent < STALL_SECONDS) return { text: `${format_elapsed(silent)}前有输出`, tone: "muted" };
+  if (message.activity === "command") return { text: `命令已运行 ${format_elapsed(silent)}`, tone: "muted" };
+  return { text: `已 ${format_elapsed(silent)}无输出，可能卡住`, tone: "warning" };
+}
 /** Says in the note line who the draft will reach: the @mentioned members, else the host. */
 const recipient_hint = computed(() => {
   if (view.value.free_proxy) return `本条作为 ${bridge.display_name(view.value.free_proxy)} 的回答原文保存，并关闭它的待处理请求`;
@@ -201,6 +234,14 @@ const response_suggestions = computed(() => {
 const MENTION_PATTERN = (name) => new RegExp(`(^|[\\s(（，,。；;：:])@${name}(?![\\w-])`, "u");
 const draft_prose = computed(() => text.value.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "").replace(/^>.*$/gm, ""));
 const SCHEDULER_LABELS = { jev: "TypeSafe Jev", decisions: "OpenAI Decisions" };
+/** What the runner last saw a member's software doing; unknown phases keep the generic text. */
+const ACTIVITY_LABELS = { thinking: "思考中", command: "正在运行命令", tool: "正在调用工具", editing: "正在修改文件", writing: "正在撰写回答" };
+/** App deliveries run in the user's own window, so the runner never sees their output. */
+const BLIND_ADAPTERS = ["codex", "antigravity"];
+/** Output within the runner's early-report interval plus margin counts as current. */
+const ACTIVE_SECONDS = 15;
+/** Long reasoning or a long reply can be silent for minutes; beyond this the card only warns, never stops. */
+const STALL_SECONDS = 180;
 const FREE_REQUEST_LABELS = { pending: ["待投递", "neutral"], delivering: ["处理中", "info"], completed: ["已回复", "success"],
   cancelled: ["已停止", "neutral"], failed: ["失败", "error"] };
 /** Each user message in a free room shows what happened to its request for every named member. */
@@ -652,7 +693,7 @@ const navigation_groups = computed(() => {
 
 const active_round = computed(() => navigation_groups.value.find((group) => group.messages.some((message) => message.id === active_message.value))?.number);
 // Free rooms have no rounds, so their messages carry no round label.
-const message_round_labels = computed(() => new Map(free.value ? [] : navigation_groups.value.flatMap((group) => group.messages.map((message) => [message.id, group.label]))));
+const message_round_labels = computed(() => new Map(free.value ? [] : navigation_groups.value.filter((group) => group.number).flatMap((group) => group.messages.map((message) => [message.id, group.label]))));
 
 /** Keep each round number beside its messages and preserve keyboard order. */
 const navigation_sections = computed(() => {
@@ -660,7 +701,7 @@ const navigation_sections = computed(() => {
   return navigation_groups.value.map((group) => ({
     number: group.number, count: group.messages.length,
     entries: [
-      { key: `round-${group.number}`, round: true, number: group.number, message: group.messages[0], label: group.description, index: index++ },
+      { key: `round-${group.messages[0].id}`, round: true, number: group.number, message: group.messages[0], label: group.description, index: index++ },
       ...group.messages.map((message) => ({ key: `message-${message.id}`, round: false, message,
         label: `${group.label} · ${bridge.display_name(message.author)} 的发言 #${message.id}`, index: index++ })),
     ],
@@ -1018,7 +1059,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
     <div v-if="view.query || view.mention_only" class="channel-filter-summary"><span>{{ view.query ? `“${view.query}”` : `@${bridge.display_name(author)}` }} · {{ view.total }} 条结果</span><UButton label="清除筛选" size="xs" variant="link" color="neutral" @click="search = ''; act('filter', { query: '', mention: false })" /></div>
     <nav v-if="view.messages.length" ref="message_map" class="channel-message-map" :style="{ '--nav-entry-height': `${NAV_ENTRY_HEIGHT}px` }" aria-label="发言快速导航" @wheel.stop.passive="browse_navigation" @pointerleave="close_preview" @focusout="close_preview" @keydown.esc.stop="close_preview" @contextmenu="navigation_context_menu">
       <div class="channel-map-track">
-        <div v-for="section in navigation_sections" :key="section.number" v-memo="[section, reduced_motion, preview_open, active_round === section.number ? active_message : null, section_preview_position(section)]" class="channel-map-round" :style="{ '--round-message-count': section.count }">
+        <div v-for="section in navigation_sections" :key="section.entries[0].key"v-memo="[section, reduced_motion, preview_open, active_round === section.number ? active_message : null, section_preview_position(section)]" class="channel-map-round" :style="{ '--round-message-count': section.count }">
           <button v-for="item in section.entries" :key="item.key" type="button" class="channel-navigation-entry" :class="item.round ? 'channel-round-range' : 'channel-message-jump'" :data-author="item.round ? undefined : bridge.identities[item.message.author]?.style" :data-jump-id="item.round ? undefined : item.message.id" :data-round-jump="item.round ? item.label : undefined" :aria-label="item.label" :tabindex="!item.round && item.message.id === (active_message || view.messages[0]?.id) ? 0 : -1" :aria-current="!item.round && active_message === item.message.id ? 'location' : undefined" :aria-describedby="preview_open && preview_entry === item.key ? 'channel-navigation-preview' : undefined" @pointerenter="hover_preview(item, $event)" @pointermove="hover_preview(item, $event)" @pointerdown="start_navigation_press(item, $event)" @pointerup="finish_navigation_press" @pointercancel="finish_navigation_press" @focus="focus_preview(item, $event)" @keydown="navigate_by_key($event, item.index)" @click="activate_navigation(item, $event)">
             <span v-if="item.round" class="channel-round-number" aria-hidden="true">{{ item.number || '–' }}</span>
             <motion.span v-else class="channel-jump-tick" aria-hidden="true" :initial="false" :animate="reduced_motion ? undefined : tick_state(item, item.index)" :style="reduced_motion ? tick_state(item, item.index) : undefined" :transition="NAV_SPRING" />
@@ -1039,7 +1080,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
         </div>
       </motion.div>
     </Teleport>
-    <div ref="transcript" v-memo="[message_groups, message_round_labels, active_message, expanded_answers.size, room.title, view.query, view.mention_only, topic_anchor, end_anchor, pending_message, pending_seconds, request_badges, execution_reports, response_suggestions, recommendations, adopting, scheduler_decisions, correcting, pending, view.free_error]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
+    <div ref="transcript" v-memo="[message_groups, message_round_labels, active_message, expanded_answers.size, room.title, view.query, view.mention_only, topic_anchor, end_anchor, pending_message, pending_seconds, request_badges, execution_reports, response_suggestions, recommendations, adopting, scheduler_decisions, correcting, pending, view.free_error, execution_notes]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
       <div v-if="!view.query && !view.mention_only && !topic_anchor" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <!-- The opening plan has no answer to follow, so it stands right under the topic. -->
       <div v-if="host_arrangements.get(0)?.length" class="channel-message-group">
@@ -1064,10 +1105,14 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
               </div>
               <span class="channel-message-provenance channel-message-elapsed">{{ message.waiting ? `手动启动${message.created_at ? ` · 已等 ${format_elapsed(Math.max(0, free_now - message.created_at))}` : ''}` : `已用 ${format_elapsed(Math.max(0, free_now - message.created_at))}` }}</span>
             </div>
-            <div class="channel-message-text" role="status" :aria-label="`${bridge.display_name(message.author)} ${message.text}`">
+            <div class="channel-message-text" :class="{ 'is-breathing': message.working }" role="status" :aria-label="`${bridge.display_name(message.author)} ${message.text}`">
               <span v-if="message.waiting">{{ message.text }}</span>
               <template v-else><span ref="reply_glow" class="channel-reply-glow">{{ message.text }}</span><span v-if="message.working" class="channel-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></template>
             </div>
+            <ol v-if="execution_notes.get(message.execution_id)?.length" class="channel-notes" aria-label="过程说明">
+              <li v-for="note in execution_notes.get(message.execution_id)" :key="note.seq">{{ note.text }}</li>
+            </ol>
+            <div v-if="activity_note(message)" class="channel-activity" :class="`is-${activity_note(message).tone}`">{{ activity_note(message).text }}</div>
           </template>
         </UChatMessage>
         <section v-else-if="message.failure" :id="message.id" class="channel-message channel-failed-execution" :data-author="bridge.identities[message.author]?.style" :aria-label="`${bridge.display_name(message.author)} 执行失败`">
@@ -1086,7 +1131,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           </div>
         </section>
         <template v-else>
-        <UChatMessage :id="String(message.id)" v-memo="[message, view.admin?.identity_version, message_round_labels.get(message.id), expanded_answers.has(message.id), active_message === message.id, waits_for_host(message), request_badges.get(message.id), execution_reports.get(message.id), message_elapsed(message), response_suggestions.get(message.id), recommendations.get(message.id), adopting === message.id]" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="{ 'channel-current-message': active_message === message.id }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
+        <UChatMessage :id="String(message.id)" v-memo="[message, view.admin?.identity_version, message_round_labels.get(message.id), expanded_answers.has(message.id), active_message === message.id, waits_for_host(message), request_badges.get(message.id), execution_reports.get(message.id), message_elapsed(message), response_suggestions.get(message.id), recommendations.get(message.id), adopting === message.id, answer_execution(message)?.notes, execution_notes.get(answer_execution(message)?.id)]" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="{ 'channel-current-message': active_message === message.id }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
@@ -1097,6 +1142,10 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
               <span v-if="message_elapsed(message) !== null" class="channel-message-provenance channel-message-elapsed">耗时 {{ format_elapsed(message_elapsed(message)) }}</span>
             </div>
             <UButton v-if="message.reply_to" :label="`回复 #${message.reply_to}`" icon="i-lucide-corner-up-left" variant="link" color="neutral" size="xs" class="channel-message-reference" :aria-label="`回复 #${message.reply_to} 查看原文`" @click="emit('detail', message.reply_to)" />
+            <details v-if="answer_execution(message)?.notes" class="channel-receipt" @toggle="$event.target.open && load_notes(answer_execution(message).id)">
+              <summary :aria-label="`查看 #${message.id} 的过程说明`">过程说明 · {{ answer_execution(message).notes }} 段</summary>
+              <ol class="channel-notes"><li v-for="note in execution_notes.get(answer_execution(message).id) || []" :key="note.seq">{{ note.text }}</li></ol>
+            </details>
             <details v-if="message.kind === 'receipt'" class="channel-receipt">
               <summary :aria-label="`查看运行回执 #${message.id}`">运行回执详情</summary>
               <div class="channel-message-text markdown-body" v-html="message.rendered_text"></div>
@@ -1233,7 +1282,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           <div v-if="unregistered_member" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-user-round-x" /><span>{{ bridge.display_name(unregistered_member.name) }} 待注册：在其会话中粘贴启动指令</span><UButton v-if="view.access?.can_manage" :icon="launch_copied === unregistered_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === unregistered_member.name ? '已复制' : '复制启动指令'" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(unregistered_member.name)" /></div>
           <div v-if="queue_hint" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>{{ queue_hint }}</span><UButton v-if="is_manual_member(speaking_member) && view.access?.can_manage" :icon="launch_copied === speaking_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === speaking_member.name ? '已复制' : '复制启动指令'" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(speaking_member.name)" /></div>
           <div v-if="view.reply_to || view.turn_reply_to" class="channel-reply-draft"><UIcon name="i-lucide-corner-up-left" /><span>{{ view.turn_reply_to ? `回答安排 #${view.turn_reply_to} · ${bridge.display_name(room.host)} 代发` : `回复 #${view.reply_to}` }}</span><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" :aria-label="view.turn_reply_to ? '取消关联安排' : '取消回复'" @click="act(view.turn_reply_to ? 'cancel_answer' : 'cancel_reply')" /></div>
-          <div v-if="needs_summary" class="channel-answer-editor"><UTextarea v-model="answer_summary" :rows="2" aria-label="回答摘要" class="w-full" placeholder="先说结论，保留关键理由、条件和不确定性。完整内容写在正文中。" /><USelect v-model="summary_source" :items="summary_sources" aria-label="摘要提供者" size="xs" /></div>
+          <div v-if="needs_summary" class="channel-answer-editor"><UTextarea v-model="answer_summary" :rows="2" aria-label="回答摘要" class="w-full" placeholder="可选：回答较长时先说结论，保留关键理由、条件和不确定性。完整内容写在正文中。" /><USelect v-model="summary_source" :items="summary_sources" aria-label="摘要提供者" size="xs" /></div>
         </template>
         <div v-if="mention_mirror" ref="mirror" class="channel-editor channel-editor-mirror" aria-hidden="true" v-html="mention_mirror"></div>
         <template #footer>
@@ -1246,7 +1295,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             <USelectMenu v-model="author" :items="identities" value-key="value" :avatar="selected_identity?.avatar" :disabled="kind === 'moderation'" :search-input="{ placeholder: '搜索身份…', icon: 'i-lucide-search' }" :content="{ side: 'top', align: 'start', sideOffset: 10 }" variant="none" size="sm" aria-label="发言身份" class="channel-author-select" :ui="{ content: 'channel-select-menu channel-identity-menu', itemLeadingAvatarSize: 'xs' }" />
             <USelect v-model="kind" :items="kinds" :icon="kinds.find((item) => item.value === kind)?.icon" :content="{ side: 'top', align: 'start', sideOffset: 10 }" variant="none" size="sm" aria-label="发言职责" class="channel-kind-select" :ui="{ content: 'channel-select-menu' }" />
           </div>
-          <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" aria-label="发送" title="发送 · Enter" :disabled="!has_draft || (needs_summary && !answer_summary.trim())" :loading="pending === 'send' || view.sending_message" @click="send" />
+          <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" aria-label="发送" title="发送 · Enter" :disabled="!has_draft" :loading="pending === 'send' || view.sending_message" @click="send" />
         </template>
       </UChatPrompt>
       <div class="channel-composer-note"><span v-if="free">{{ recipient_hint }}<span class="channel-note-divider">·</span>手动成员需在原会话触发</span><span v-else>{{ author_note }}<template v-if="asked_names.length"><span class="channel-note-divider">·</span>直接提问 {{ asked_names.join("、") }}，不计轮次</template><span class="channel-note-divider">·</span>在线 AI 的观点需代发</span><span class="channel-draft-length"><span v-if="text_length" :class="{ 'is-near-limit': near_length_limit }">{{ text_length }} / {{ bridge.max_message_length }}<span class="channel-note-divider">·</span></span><span class="channel-key-hint"><kbd>Enter</kbd> 发送<span class="channel-note-divider">·</span><kbd>Shift</kbd>+<kbd>Enter</kbd> 换行</span></span></div>
@@ -1262,12 +1311,20 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
 .channel-link-button { color: var(--channel-accent); text-decoration: underline; text-underline-offset: 2px; }
 .channel-message-elapsed { align-self: center; margin-left: auto; white-space: nowrap; }
 .channel-reply-glow { display: inline-block; max-width: 100%; }
-.channel-dots i { font-style: normal; }
+.channel-notes { margin: 6px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 13px; line-height: 1.6; color: var(--ui-text-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.channel-activity { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 12px; color: var(--ui-text-muted); }
+.channel-activity.is-active::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ui-success); }
+.channel-activity.is-warning { color: var(--ui-warning); }
+.channel-dots { margin-left: 2px; font-weight: 700; }
+.channel-dots i { font-style: normal; margin-right: .18em; }
 /* Working-state motion always plays, regardless of the system reduced-motion setting. */
-html[data-theme^="channel"] .channel-dots i { animation: channel-dot-blink 1.2s infinite both !important; }
-html[data-theme^="channel"] .channel-dots i:nth-child(2) { animation-delay: .2s !important; }
-html[data-theme^="channel"] .channel-dots i:nth-child(3) { animation-delay: .4s !important; }
-@keyframes channel-dot-blink { 0%, 80%, 100% { opacity: .2; } 40% { opacity: 1; } }
+/* Dots count up . → .. → ... ; hidden dots keep their width so the line never shifts. */
+html[data-theme^="channel"] .channel-dots i:nth-child(2) { animation: channel-dot-second 1.5s step-end infinite !important; }
+html[data-theme^="channel"] .channel-dots i:nth-child(3) { animation: channel-dot-third 1.5s step-end infinite !important; }
+@keyframes channel-dot-second { 0% { opacity: 0; } 33.333%, 100% { opacity: 1; } }
+@keyframes channel-dot-third { 0% { opacity: 0; } 66.667%, 100% { opacity: 1; } }
+html[data-theme^="channel"] .channel-message-text.is-breathing { animation: channel-breathe 2s ease-in-out infinite !important; }
+@keyframes channel-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
 .channel-reply-glow.is-glowing {
   background-image: linear-gradient(90deg,
     color-mix(in srgb, currentColor 76%, transparent) 40%,

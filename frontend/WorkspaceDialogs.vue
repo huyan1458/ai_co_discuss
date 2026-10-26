@@ -187,7 +187,7 @@ const keep_open = (event) => event.preventDefault();
 </script>
 
 <template>
-  <UModal v-model:open="open" :title="titles[rendered_mode] || '讨论'" :description="descriptions[rendered_mode]" :ui="{ content: ['glass-panel studio-modal', folder_dialog && 'channel-folder-modal', rendered_mode === 'archives' && 'channel-archive-modal', rendered_mode === 'create' && 'channel-create-modal'], body: 'dialog-body' }" :content="rendered_mode === 'create' ? { onPointerDownOutside: keep_open, onInteractOutside: keep_open } : undefined" @after:leave="after_dialog_leave">
+  <UModal v-model:open="open" :title="titles[rendered_mode] || '讨论'" :description="descriptions[rendered_mode]" :ui="{ content: ['glass-panel studio-modal', folder_dialog && 'channel-folder-modal', ['rename', 'archive', 'restore', 'delete'].includes(rendered_mode) && 'channel-folder-modal channel-manage-modal', rendered_mode === 'archives' && 'channel-archive-modal', rendered_mode === 'settings' && 'channel-settings-modal', rendered_mode === 'create' && 'channel-create-modal'], body: 'dialog-body' }" :content="rendered_mode === 'create' ? { onPointerDownOutside: keep_open, onInteractOutside: keep_open } : undefined" @after:leave="after_dialog_leave">
     <template #body>
       <section v-if="rendered_mode === 'archives'" class="channel-archive-manager">
         <div class="channel-archive-toolbar">

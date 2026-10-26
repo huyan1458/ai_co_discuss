@@ -15,7 +15,7 @@ import { DiscussionRunner, DiscussionStore, load_config, service_drafts, task_fi
 import { cwd_key, FreeRoomRunner, workspace_snapshot } from '../runner/free_runner.mjs';
 import { assert_shared_home, DiscussionService, FreeRoomWithDiscussion, migrate_service_home, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
 import { launch_discussion, room_models } from '../runner/discussion_launch.mjs';
-import { agy_rule, antigravity_project, claude_exit_error, claude_rule_path, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
+import { activity_phase, progress_note, agy_rule, antigravity_project, claude_exit_error, claude_rule_path, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
 import { certainty, decide, decide_group_order, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
 
@@ -1646,6 +1646,7 @@ async function free_fixture(t) {
       if (body?.action === 'fail') { execution.status = 'failed'; execution.result = body.reason; }
       if (body?.action === 'release') { execution.status = 'cancelled'; state.pending = execution.requests; }
       if (body?.action === 'report') state.reports[execution.id] = body.changes;
+      if (body?.action === 'renew') state.renewed = body;
       result = execution;
     } else result = { title: '自由单聊', mode: 'free' };
     response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(result));
@@ -1715,6 +1716,69 @@ test('a free room delivers all open requests as one execution with the member cr
   assert.equal(access.token, config.members.Claude.token);
   assert.doesNotMatch(readFileSync(delivered[0].access_path, 'utf8') + readFileSync(join(config.directory, 'free-1.task.json'), 'utf8'), /owner-credential/);
   assert.equal(store.binding('Claude').session_id, 'claude-session');
+});
+
+test('a changed activity is reported with an early renewal, at most once per report interval', async t => {
+  const { state, store, config } = await free_fixture(t);
+  let task;
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, delivered) => { task = delivered; return { status: 'accepted' }; });
+  await runner.tick();
+  task.on_activity('command');
+  await runner.tick();
+  assert.equal(state.renewed, undefined, 'a phase seen right after delivery waits for the report interval');
+  runner.save('Claude', { last_renew: Date.now() - 11_000 });
+  await runner.tick();
+  assert.equal(state.renewed.activity, 'command');
+  assert.ok(Math.abs(state.renewed.activity_at - Date.now() / 1000) < 5);
+  state.renewed = undefined;
+  runner.save('Claude', { last_renew: Date.now() - 11_000 });
+  await runner.tick();
+  assert.equal(state.renewed, undefined, 'unchanged activity waits for the regular renewal');
+});
+
+test('progress notes are numbered once, sent with a renewal and not resent', async t => {
+  const { state, store, config } = await free_fixture(t);
+  let task;
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, delivered) => { task = delivered; return { status: 'accepted' }; });
+  await runner.tick();
+  task.on_note('读完材料，改用方案 B');
+  task.on_note('x'.repeat(600));
+  runner.save('Claude', { last_renew: Date.now() - 11_000 });
+  await runner.tick();
+  assert.deepEqual(state.renewed.notes.map(note => [note.seq, note.text.length]), [[1, 11], [2, 500]]);
+  task.on_note('验证通过');
+  runner.save('Claude', { last_renew: Date.now() - 11_000 });
+  await runner.tick();
+  assert.deepEqual(state.renewed.notes, [{ seq: 3, text: '验证通过' }]);
+});
+
+test('agent text between tool calls becomes a note; agy deltas join when their step ends', () => {
+  assert.equal(progress_note('claude', { type: 'assistant', message: { content: [{ type: 'text', text: ' 先读文件 ' }] } }), '先读文件');
+  assert.equal(progress_note('claude', { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash' }] } }), '');
+  assert.equal(progress_note('codex_cli', { type: 'item.completed', item: { type: 'agent_message', text: '核对完成' } }), '核对完成');
+  assert.equal(progress_note('codex_cli', { type: 'item.completed', item: { type: 'reasoning', text: '内部推理' } }), '');
+  const responses = new Map();
+  const step = (state, text_delta) => ({ event: 'step_update', step_update: { step_type: 'agent_response', step_index: 4, state, text_delta } });
+  assert.equal(progress_note('antigravity_cli', step('ACTIVE', '正在'), responses), '');
+  assert.equal(progress_note('antigravity_cli', step('ACTIVE', '验证'), responses), '');
+  assert.equal(progress_note('antigravity_cli', step('DONE'), responses), '正在验证');
+  assert.equal(progress_note('antigravity_cli', step('DONE'), responses), '', 'an empty response step is no note');
+});
+
+test('streamed CLI events map to the phase the card shows', () => {
+  const cases = [
+    ['claude', { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'PowerShell' }] } }, 'command'],
+    ['claude', { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Edit' }] } }, 'editing'],
+    ['claude', { type: 'assistant', message: { content: [{ type: 'text', text: '好' }] } }, 'writing'],
+    ['claude', { type: 'user' }, 'thinking'],
+    ['claude', { type: 'result' }, ''],
+    ['codex_cli', { type: 'item.started', item: { type: 'command_execution' } }, 'command'],
+    ['codex_cli', { type: 'item.completed', item: { type: 'command_execution' } }, 'thinking'],
+    ['codex_cli', { type: 'item.completed', item: { type: 'agent_message' } }, 'writing'],
+    ['antigravity_cli', { event: 'step_update', step_update: { step_type: 'tool', state: 'RUNNING', tool_name: 'run_command' } }, 'command'],
+    ['antigravity_cli', { event: 'step_update', step_update: { step_type: 'tool', state: 'DONE', tool_name: 'run_command' } }, 'thinking'],
+  ];
+  for (const [adapter, event, phase] of cases) assert.equal(activity_phase(adapter, event), phase, JSON.stringify(event));
 });
 
 test('a free member that exits without answering fails only its own execution', async t => {
