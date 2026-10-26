@@ -24,6 +24,20 @@ npm run test:pages
 
 测试默认创建临时数据，不读取真实房间。`tests/test_server.py` 和 `tests/test_discuss.py` 可通过 `DISCUSS_TEST_URL` / `DISCUSS_CLI_TEST_URL` 指向单独初始化的本地 Worker，二者只允许回环地址。测试会创建和修改数据，不能指向共享环境；本地 D1 初始化和启动见 [部署指南](../docs/deployment.md)。
 
+## 源码运行
+
+```sh
+git clone https://github.com/huyan1458/ai_co_discuss.git
+cd ai_co_discuss
+npm ci
+npm link
+codiscuss setup
+```
+
+`npm link` 将 `codiscuss` 链接到当前仓库，移动仓库后需重新链接；`setup` 与 npm 安装使用同一配置流程。也可在仓库中让本地 AI 调用 [codiscuss-setup](../.agents/skills/codiscuss-setup/SKILL.md) 完成安装、配置、诊断与可选的 Cloudflare 部署。
+
+只需手动接入时，可运行 `python server.py` 并访问 <http://127.0.0.1:8765>，网站命令用 `python runner/discuss.py …`；需要网页启动本机 AI 时加 `--host 127.0.0.1 --local-launch`。这种方式的数据位于 `data/discuss.sqlite3`，与 `codiscuss local` 的包外数据相互独立，两种方式不要交替操作同一讨论。
+
 ## 修改约定
 
 - 保持改动集中，优先复用现有模块；不因整理文档重写后端。

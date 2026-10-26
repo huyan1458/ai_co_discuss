@@ -1,185 +1,70 @@
 # AI CoDiscuss
 
 [![CI](https://github.com/huyan1458/ai_co_discuss/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/huyan1458/ai_co_discuss/actions/workflows/ci.yml)
-[MIT License](LICENSE)
+[![npm](https://img.shields.io/npm/v/ai_co_discuss)](https://www.npmjs.com/package/ai_co_discuss)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-让 AI 软件和 API 专家在同一个房间里协作：在网页遥控本地 AI 干活，随时邀请其他 AI 加入或请离，也可以围绕议题发起多轮讨论。共享记录保存消息、观点、分歧和结论。软件参与者使用自己的会话、账号与工具；API 参与者使用你配置的模型服务和房间上下文。
+多 AI 协作房间。把 Claude Code、Codex、Antigravity 等 AI 软件和模型 API 拉进同一个房间，各自保留原有会话与工具，按点名分工或围绕目标多轮讨论。
 
-自由协作房间里，你点名哪个 AI，它就在自己的原会话中处理并回复，多位可以同时进行；也可以指定一位 AI 主持人替你分配任务。需要深入讨论时可在房间里开启讨论，由主持人安排发言、到上限或结束后房间继续自由协作。本地 AI 通过 CLI 读写，在线网页 AI 在原聊天回答，由你或主持人代发。项目处于早期可用阶段，自动接入提供 Codex App / CLI、Claude Code CLI 和 Antigravity App / CLI 适配；独立 CLI 的配置与验证范围见 [接入说明](docs/runner.md#独立-cli-接入)。
+![房间界面](docs/images/channel-preview.jpg)
 
-![讨论界面：房间目录、原文与进度看板](docs/images/channel-preview.jpg)
+## 特性
 
-[便捷安装](#快速开始) · [本机网页](#从本机网页新建讨论) · [线上网页](#从线上网页新建讨论) · [AI 对话新建讨论](#从-ai-对话新建讨论) · [在线部署](#在线部署) · [文档](#文档)
+- **点名协作**：`@` 哪位 AI，它就在自己的原会话中处理；未点名的消息由 AI 主持人分派。
+- **多轮讨论**：设定目标与轮次 / 时长上限，由主持人安排发言，结束后回到自由协作。
+- **混合接入**：本地 CLI / App、模型 API、手动接入与在线网页 AI 可同房协作。
+- **共享项目**：按成员设置项目目录的只读 / 可写权限。
+- **可迁移记录**：附件、ZIP 导出导入，并可生成带来源的讨论报告。
 
-## 快速开始
+## 支持
 
-先安装并配置本机软件，再选择从网页或 AI 对话发起讨论；两种入口共用已保存的软件配置。本机使用无需部署线上网站。
-
-### 安装包用户
-
-需要 **Node.js 24+、npm、Python 3.10+**。使用 CLI 时须预先安装并登录；仅使用 API 时无需安装 AI 软件，准备对应服务的 API Key 即可。安装器不会代装运行环境或 AI 软件。安装包已发布到 npm registry，在任意目录运行：
-
-```sh
-npx --yes --package ai_co_discuss codiscuss install
-```
-
-按安装提示选择已检测到的软件并核对配置。安装器会安装持久的 `codiscuss` 命令、复制三份完整讨论 Skill、保存本机软件配置，启动网站与讨论服务并打开浏览器。安装包已带运行代码和构建好的网页，无需另行克隆仓库或构建前端；安装本身不创建讨论。
-
-全自动 CLI 接入支持 **Claude Code、Codex、Antigravity（Gemini，命令为 `agy`）**，默认选择检测到且支持自动接入的软件。Cursor CLI 目前支持检测与技能安装，使用手动接入。**仅有桌面 App 时，按[启动配置](docs/runner.md#两种讨论入口与启动配置)单独连接 App；安装器不会把 App 当作已配置的 CLI。**
-
-安装摘要为“配置待处理”时，处理列出的路径、旧配置或技能冲突后重跑 `codiscuss setup`；就绪后直接进入[发起第一场讨论](#发起第一场讨论)。已有配置和自定义技能会保留，数据存放在包外，升级或卸载包不会删除。安装就绪不代表真实 AI 已执行过任务。详细选项见 [npm 安装与本机配置](docs/runner.md#npm-安装与本机配置)。
-
-#### 升级与卸载
-
-已安装过时不要再用 `npx` 升级：npx 会直接运行已安装的旧版本。先停止本机网站，再强制从线上取最新版并重新配置：
-
-```sh
-codiscuss local stop
-npm install --global --prefer-online ai_co_discuss@latest
-codiscuss setup
-```
-
-`--prefer-online` 避免 npm 用本地缓存把 `latest` 解析成旧版本；完成后可用 `npm ls -g ai_co_discuss` 核对版本。卸载时先 `codiscuss local stop`，开启过登录自启的再运行 `codiscuss service autostart off`，最后 `npm uninstall --global ai_co_discuss`。讨论数据、软件配置和已复制的技能不会被删除，位置见 [卸载说明](docs/runner.md#npm-安装与本机配置)。
-
-### 源码运行方式
-
-供开发者使用；已完成包安装可直接跳到下一节。需要 Git、Python 3.10+，使用自动接入还需 Node.js 24+ 和 npm。仓库包含构建好的网页。
-
-```sh
-git clone https://github.com/huyan1458/ai_co_discuss.git
-cd ai_co_discuss
-npm ci
-npm link
-codiscuss setup
-```
-
-也可以在仓库中打开本地 AI，调用 [codiscuss-setup](.agents/skills/codiscuss-setup/SKILL.md)（Codex 为 `$codiscuss-setup`，其他 AI 明确读取该文件），由 AI 完成安装、配置、升级、诊断，以及可选的 Cloudflare 在线部署。
-
-`setup` 使用同一安装配置流程并打开本机网站；命令链接到当前仓库，移动仓库后需重新安装。只需手动接入时，可用 `python server.py` 并保持终端打开，访问 <http://127.0.0.1:8765>，网站命令使用 `python runner/discuss.py …`。直接运行 Python 的数据位于 `data/discuss.sqlite3`，与 `codiscuss local` 的包外数据独立；两种启动方式不要交替操作同一讨论。
-
-### 发起第一场讨论
-
-完成安装配置后，选择下面一种入口。全自动讨论由本机服务按安排启动 AI、续接每位参与者的会话；无需每轮复制回答或手动打开 CLI 交互窗口。使用 App 适配时，App 需要保持运行。
-
-#### 从本机网页新建房间
-
-1. 安装完成后进入自动打开的网站；以后运行 `codiscuss local open` 打开或复用本机网站，默认地址为 `http://127.0.0.1:8765`。
-2. 点击“新建房间”，填写**话题名称**；任务在对话中随时补充。
-3. 从“添加”行加入一位或多位 AI，并在每张卡片正面的“程序启动 / 手动启动”里选接入方式：程序启动由本机服务唤醒（App / CLI / API），手动启动把凭据交给你自己的会话；网页 AI 也选手动，回答由你转发。点卡片上的皇冠指定 AI 主持人（默认第一位本机唤醒的成员，须由本机唤醒）。自动 CLI 卡片背面从真实软件目录选择模型和思考强度，项目文件只读 / 可写也在卡片上设置；App 的设置在原软件，API 不访问项目文件。
-4. 需要深入讨论时勾选“创建后开启讨论”：写下讨论目标，设置轮次与时长上限（默认 **3 轮 / 不限时长**），主持人据此安排成员轮流发言，到上限或主持人宣布目标完成后讨论结束，房间回到自由协作。不勾选也可以随时在房间右侧成员栏点“开启讨论”。
-5. 需要一起查看项目时填写项目目录（可输入完整路径，或点右侧文件夹图标选取）；点击“创建并连接”或“创建并开启讨论”。
-
-房间里 `@` 到的成员必须回应，任何阶段都可以直接向任何成员（含主持人）提问；没 `@` 的消息交给主持人分派，其他成员只在被你或主持人点名时发言。处理中可随时停止。运行中可在右侧成员栏邀请新成员（Codex、Claude 可填写已有会话 ID，请一个带着自己上下文的原会话加入，它工作时不要在原窗口继续操作）、请离或请回、指定主持人。讨论只是房间的一种推进手段：结束后房间继续自由协作，记录与结论保留，之后可再次开启。详见 [自由协作房间](docs/workflow.md#自由协作房间)。
-
-**通过 API 接入**：添加 Codex（OpenAI）、Claude、Gemini、DeepSeek、Qwen 或 Grok，翻开卡片选择 API，填写并保存 API Key，选择或输入模型 ID。默认提供官方 Base URL，也可填写 OpenRouter 等兼容服务的地址并选择对应请求协议。Grok 始终显示，无需安装 Cursor 或 Grok Bot。API 可以担任主持人，与 CLI / App 专家混用，也可进入自由协作房间。API 与网页专家不访问项目文件，只有 CLI 专家可选择只读或写入；API 仍可通过房间工具保存讨论发言和主持安排。调用由本机服务发出，费用按所选 API 账号计费；密钥仅保存于本机。模型与配置说明见 [API 接入](docs/runner.md#api-接入)。
-
-也可不勾选立即启动，先建房，再从“接入”页点击“启动讨论”。本机网页正常启动无需下载 JSON、手动登记房间或另执行首次启动命令。
-
-`codiscuss local open` 已启用本机启动能力；直接运行源码网站时使用 `python server.py --host 127.0.0.1 --local-launch`。使用已有线上网站时，先按下节连接本机。
-
-#### 从线上网页新建讨论
-
-线上网站与本机安装都需更新到支持此功能的版本。完成本机安装和 AI 登录后，在**运行 AI 的同一台电脑**上执行一次，替换为自己的 HTTPS 站点根地址：
-
-```sh
-codiscuss local connect https://你的站点
-```
-
-命令启动本机服务并打开带连接信息的线上网页；首次连接时，允许浏览器访问本机网络。随后按上节填写议题、选择专家和主持人，点击“创建并启动讨论”即可。**房间和发言保存在当前线上网站，AI 在这台电脑运行**，无需逐房下载、登记配置。
-
-该浏览器会保存连接。以后直接访问线上网站即可；本机服务停止时先运行 `codiscuss local open`，再在网页“重新检查连接”。清除浏览器数据或更换浏览器后需重新连接，连接链接不要转发。`codiscuss local disconnect https://你的站点` 可撤销该站点的启动与配置权限；正在运行的讨论仍需在进度看板暂停。连接范围、浏览器要求及传统配置接入见 [线上网页连接](docs/runner.md#线上网页连接本机)。
-
-#### 从 AI 对话新建讨论
-
-1. 确认本机网站可访问；未运行时先执行 `codiscuss local open`，使用命令返回的实际地址。
-2. 在要担任主持人的本地 AI 对话中调用 `discuss-host` 和 `discuss-participant`。安装器已为选定 CLI 复制技能；若会话未发现，按 [Skill 配置](docs/skills.md#自动安装完整技能) 明确读取安装结果中的两份 `SKILL.md`。
-3. 提供站点、议题、参与者、推进方式和讨论上限。例如，在已配置的 Codex 对话中发送：
-
-> 请使用 discuss-host 和 discuss-participant，在 http://127.0.0.1:8765 新建一场全自动讨论，议题是“议题与目标”，我的问题和背景是“用户原文”。由当前 Codex 会话主持，参与者为 Codex 和 Claude，最多 3 轮、60 分钟，到限暂停；沿用本机软件配置。
-
-将地址、议题和参与者替换为实际内容。AI 主持人使用已保存的软件配置完成建房与启动，**当前实际会话继续主持**；后续安排由本机服务交付，可在网页查看同一场讨论。无需用户手写启动 JSON。当前会话的 CLI / App 类型必须与配置对应；agy 不能从自己的对话主持全自动讨论（只在讨论服务新建的会话中运行），请改用其他软件主持或从网页发起。其他接入方式与配置细节见 [两个入口的启动配置](docs/runner.md#两种讨论入口与启动配置)。
-
-#### 项目与日常使用
-
-两个入口都可按场指定项目目录、项目文件只读 / 可写及参与者覆盖配置；不需要项目资料时可省略。CLI 保持指定工作目录，回答草稿与运行数据分开。项目默认要求只读，但限制强度取决于软件：Codex 使用原生沙箱，agy 只在讨论服务新建的会话中运行并由其独立项目权限限制、禁用 MCP（不绑定已有 agy 会话）；Claude 的已有用户授权仍生效。权限冲突处理与实测边界见 [单次执行权限](docs/runner.md#单次执行权限)。
-
-| 日常操作 | 命令 |
+| 接入 | 范围 |
 | --- | --- |
-| 打开或复用本机网站 | `codiscuss local open` |
-| 查看本机网站与服务状态 | `codiscuss local status` |
-| 停止本机网站及其管理的服务 | `codiscuss local stop` |
+| 自动唤醒 | Claude Code CLI · Codex App / CLI · Antigravity App / CLI |
+| 模型 API | OpenAI · Claude · Gemini · DeepSeek · Qwen · Grok · OpenAI 兼容服务 |
+| 手动接入 | 任何可运行 `codiscuss` 的本地 AI，如 Cursor CLI |
+| 网页代发 | 在线聊天产品（只读，回答由用户代发） |
 
-下次打开会保留原讨论，已暂停的房间需在进度看板明确重启。网页已连接或创建成功不代表 AI 已回答，应核对实际执行进展与讨论记录。独立服务管理、停止归属及故障排查见 [接入说明](docs/runner.md#常驻讨论服务)；私有配置需保留在原位置。
+## 安装
 
-软件失败时先查看暂停原因，登录和权限问题在对应软件中处理。仍保留当前发言安排时，可点“跳过”，取消这次发言并恢复讨论，由主持人安排后续；“重启”则重试原安排。本机网站的已登记房间，可从进度看板 Codex 旁的“…”菜单直接选择“切换 App / CLI”，在弹窗内暂停并保存；软件路径在“接入 → 修正本场软件连接”修改。原会话与讨论进度保留，待服务确认采用后重启；线上连接暂不提供此修正入口。切到 App 后模型和文件权限按 App 设置，切回 CLI 前须让 App 释放原聊天。本场修改不影响后续讨论的默认配置，详见 [配置修正](docs/runner.md#已启动后的配置修正)。
+要求 Node.js 24+、Python 3.10+；所用 AI 软件需预先安装并登录。
 
-**手动接入与网页 AI：** 手动接入可用于“自由协作”和“讨论”的专家（讨论的主持人必须由本机唤醒），在成员卡片正面的“自动 / 手动 / 网页”切换里选择。手动成员从成员菜单下载自己的凭据文件，或复制同样内容的凭证文本（设为环境变量 `DISCUSS_ACCESS`），连同参与说明私下交给对应 AI 会话，由人工或软件原生定时触发；讨论里的手动专家只在被安排发言时参与，没有及时回答时消息区显示等待发言卡片，可在进度看板点“跳过”本次发言，交给主持人继续安排；网页 AI 仍只用于自由协作，网页 AI 只能阅读房间，回答由你代发；它从自己的服务器读取阅读链接，只在本机运行的网站（`127.0.0.1`）它读不到，需由你粘贴材料。只有手动和网页成员时建房无需本机接入服务。详见 [自由协作房间](docs/workflow.md#自由协作房间)。
-
-## 在线部署
-
-支持 **Cloudflare Pages + D1**，需要 Node.js 24+、npm 和自己的 Cloudflare 账号：
-
-1. 按 [首次部署配置](docs/deployment.md#创建自己的部署配置) 安装依赖、登录并创建 Pages 项目与 D1 数据库。
-2. 在私有的 `.wrangler/deploy/wrangler.jsonc` 中填写自己的资源信息，并 [初始化数据库](docs/deployment.md#初始化与部署)。
-3. 在仓库根目录发布：
-
-   ```sh
-   npm run deploy -- --cwd .wrangler/deploy
-   ```
-
-发布后核对网页、健康接口和房间读取链接，后续接入使用返回的实际域名。本机 SQLite 与在线 D1 数据独立，不自动同步。Docker 部署及备份方法见 [部署指南](docs/deployment.md)。
-
-**网页可以部署在线，全自动接入服务与参与软件仍需在你的电脑运行。** 在线网页 AI 无法访问本机的 `127.0.0.1` 地址。
-
-## 使用方式
-
-| 方式 | 由谁推进 | 前提 |
-| --- | --- | --- |
-| 讨论 | 本机服务按网站事件唤醒主持人与专家 | 主持人与专家均由本机服务唤醒（CLI / App / API） |
-| 自由协作 · 本机唤醒 | 你或 AI 主持人点名后，本机服务唤醒该成员 | 成员接入为 CLI / App / API |
-| 自由协作 · 手动接入 | 成员自行读取请求，由软件原生定时或人工触发 | 成员持自己的凭据文件 |
-| 自由协作 · 网页代发 | 你把阅读通知交给网页 AI，再代发回答 | 无需本地软件，不能自行发言 |
-
-默认上限为 **3 轮、不限时长**，可设置单次执行上限；到限后讨论结束、回到自由协作，需要继续时再次开启讨论。计数和停止规则见 [讨论上限](docs/workflow.md#讨论上限)。
-
-消息支持选择文件、拖拽或粘贴截图，每条最多 10 个附件、单个最多 20 MiB。PNG、JPEG、GIF、WebP 可放大查看，PDF 可在站内翻页、缩放，其他文件提供下载（不在线解析 Office 文件）。本地 AI 可通过 CLI 按需下载原文件；实际能否理解图片或文档取决于参与软件，上传不代表 AI 已读取。
-
-讨论结束后，可在左上方房间条目的“更多操作 → 导出对话”下载原始数据、全文及已发送附件原文件，窄屏从房间导航进入。房间目录菜单可“导出全部房间”，文件夹菜单可“导出文件夹”。在另一个网站（如本机与线上之间）用房间目录菜单的“导入房间…”选择这些 ZIP，即建成可继续使用的副本：导入者成为房主，成员需“请回”换发凭证，已有同一房间时跳过。两边数据不自动同步，导入是一次性复制。也可用 `discuss-report` 整理带来源的综合报告。备份不下载外链内容。
-
-网站目前**没有用户登录和读取权限隔离**；公开部署前请按 [安全说明](.github/SECURITY.md) 配置访问边界。两种房间的用户写入均需要创建时保存的房间控制凭据，未持有凭据的浏览器只能阅读；本地 AI 使用自己的成员凭证或本次自动执行凭据。凭据不能代替软件登录、工具许可或本机启动能力。同一平台可以有多个实例（如 `Claude` 与 `Claude-评审`），各自有独立会话和凭据；自动 CLI 可在卡片背面配置模型与强度，App、网页和手动会话在原软件中设置。讨论安排串行，自由协作的不同成员可并行。在线读取、原生定时和浏览器操作能力取决于参与软件。
-
-## 仓库结构
-
-```text
-backend/        Python 服务、运行协议、Cloudflare 后端与共用 schema
-frontend/       Vue 界面、Markdown 与备份源码
-web/            可直接运行的网页、共享控制器、图标及构建产物
-runner/         统一 CLI、本机常驻服务与软件适配器
-pages/          Cloudflare Pages 路由和静态配置
-deploy/         Docker 构建文件与上下文排除规则
-scripts/        构建脚本
-tests/          Python 与 JavaScript 测试
-docs/           使用、部署和架构文档
-.agents/skills/ 主持、参与和报告技能
-.github/        CI、贡献指南与安全说明
-server.py       本地网站启动入口
+```sh
+npm install --global ai_co_discuss@latest
+codiscuss setup
 ```
 
-根目录保留项目说明、许可证、工具配置与日常启动入口。前端产物随源码提供，保证 Python 环境可直接运行。修改 `frontend/` 后执行 `npm run build`，开发和验证步骤见 [贡献指南](.github/CONTRIBUTING.md)。
+`setup` 检测本机 AI 软件、安装讨论技能并打开本机网站 `http://127.0.0.1:8765`。详见 [安装与配置](docs/runner.md#npm-安装与本机配置)。
+
+## 使用
+
+在网页中点击“新建房间”，添加 AI 成员并指定主持人，即可开始协作；勾选“创建后开启讨论”可直接进入多轮讨论。详见 [讨论工作流](docs/workflow.md)。
+
+```sh
+codiscuss local open      # 打开本机网站
+codiscuss local status    # 查看状态
+codiscuss local stop      # 停止
+```
+
+- 线上网页使用本机 AI：[`codiscuss local connect`](docs/runner.md#线上网页连接本机)
+- 从 AI 对话发起讨论：[discuss-host 技能](docs/runner.md#从-ai-对话发起)
+- 接入模型 API：[API 接入](docs/runner.md#api-接入)
+
+## 部署
+
+支持 Cloudflare Pages + D1 与 Docker，见 [部署指南](docs/deployment.md)。自动接入服务始终运行在本机。
+
+> [!WARNING]
+> 网站暂无用户登录与读取权限隔离，公开部署前请阅读 [安全说明](.github/SECURITY.md)。
 
 ## 文档
 
-| 任务 | 文档 |
-| --- | --- |
-| 理解主持、阶段、安排与收尾 | [讨论工作流](docs/workflow.md) |
-| 加载主持、参与和报告技能 | [Skill 配置](docs/skills.md) |
-| 配置软件、管理服务和排查自动接入 | [自动接入程序](docs/runner.md) |
-| 从终端创建、读取或操作讨论 | [CLI 使用](docs/cli.md) |
-| 本地、Docker 和 Cloudflare 部署 | [部署指南](docs/deployment.md) |
-| 了解模块与数据模型 | [架构与实现](docs/architecture.md) |
-| 开发、测试和提交变更 | [贡献指南](.github/CONTRIBUTING.md) |
-| 查看仍需验证的能力 | [维护清单](docs/maintainers/TODO.md) |
+[工作流](docs/workflow.md) · [接入程序](docs/runner.md) · [技能](docs/skills.md) · [CLI](docs/cli.md) · [部署](docs/deployment.md) · [架构](docs/architecture.md)
+
+## 贡献
+
+欢迎提交 Issue 与 PR，开发环境与源码运行见 [贡献指南](.github/CONTRIBUTING.md)。
 
 ## 许可证
 
-[MIT](LICENSE)。第三方组件、字体和图标的许可见 [第三方声明](docs/THIRD_PARTY_NOTICES.md)；品牌名称及标志不代表官方合作。
+[MIT](LICENSE) · [第三方声明](docs/THIRD_PARTY_NOTICES.md)
