@@ -1,6 +1,7 @@
 <script setup>
 import { computed, inject, watch } from "vue";
 import ApiSettings from "./ApiSettings.vue";
+import ProjectDirectoryField from "./ProjectDirectoryField.vue";
 
 // The create form shows directory, access and model choices beside their related controls.
 const props = defineProps({ participants: { type: Array, default: () => [] }, workspace: { type: Boolean, default: true },
@@ -54,7 +55,7 @@ watch(() => [props.modelSelection, view.value.launch.available, ...names.value.m
       </div>
     </details>
     <div class="form-two-columns">
-      <UFormField v-if="props.workspace" label="本次工作目录（可选）" help="要一起查看的项目目录；留空时 AI 只在讨论私有目录工作"><UInput :model-value="view.launch.workspace.cwd || ''" placeholder="已有目录的完整路径" class="w-full" @update:model-value="write('workspace', 'cwd', $event)" /></UFormField>
+      <UFormField v-if="props.workspace" label="本次工作目录（可选）" help="要一起查看的项目目录；留空时 AI 只在讨论私有目录工作"><ProjectDirectoryField placeholder="已有目录的完整路径" /></UFormField>
       <UFormField label="本次 AI 项目（可选）"><UInput :model-value="view.launch.workspace.discussion_project || ''" placeholder="软件中已有的项目名称" class="w-full" @update:model-value="write('workspace', 'discussion_project', $event)" /></UFormField>
       <UFormField v-if="props.workspace && names.some(name => bridge.launch_can_set_access(name, view.launch))" label="CLI 项目文件" help="默认只读；可写允许 CLI 专家按议题修改工作目录中的文件，仅本次有效">
         <USelect :model-value="view.launch.workspace.project_access || 'read'" :items="ACCESS" class="w-full" @update:model-value="write('workspace', 'project_access', $event)" />

@@ -4,6 +4,7 @@ import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } fr
 import { format_duration } from "./LimitPicker.vue";
 import DiscussionLimits from "./DiscussionLimits.vue";
 import ExpertCard from "./ExpertCard.vue";
+import ProjectDirectoryField from "./ProjectDirectoryField.vue";
 import RosterAdd from "./RosterAdd.vue";
 import SchedulerSettings from "./SchedulerSettings.vue";
 
@@ -132,14 +133,6 @@ function remove_expert(name) {
   nextTick(() => library.value?.focus_first());
 }
 
-const picking = ref(false);
-
-/** Open the computer's folder dialog through the local service; typing a path remains available. */
-async function pick_directory() {
-  picking.value = true;
-  try { await bridge.pick_launch_directory(); } finally { picking.value = false; }
-}
-
 /** Submit the currently visible wheel values, including during an unfinished gesture. */
 function submit() {
   limit_picker.value?.settle();
@@ -169,9 +162,7 @@ const summary = computed(() => {
         <h3><span>1</span>这次做什么</h3>
         <UFormField label="话题名称" required><UInput :model-value="value('title')" :maxlength="80" required autofocus size="lg" placeholder="这次要一起做什么？" class="w-full" @update:model-value="write('title', $event)" /></UFormField>
         <UFormField label="项目目录（可选）" :description="view.launch.available ? '本机唤醒的成员在此目录读写文件；不填则各用软件默认目录。' : '连接本机服务后可指定：本机唤醒的成员将在此目录读写文件。'">
-          <UInput :model-value="view.launch.workspace.cwd || ''" placeholder="输入完整路径，或点右侧图标选择" class="w-full" :ui="{ trailing: 'pe-1' }" :disabled="!view.launch.available" @update:model-value="bridge.write_launch('workspace', 'cwd', $event)">
-            <template #trailing><UButton icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" aria-label="在本机选择项目目录" :title="picking ? '目录选择窗口已打开，请在本机窗口中选择' : '在本机选择文件夹'" :disabled="picking || !view.launch.available" @click="pick_directory" /></template>
-          </UInput>
+          <ProjectDirectoryField :disabled="!view.launch.available" />
         </UFormField>
       </section>
 

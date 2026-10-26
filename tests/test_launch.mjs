@@ -10,7 +10,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { adopt_member_profile, borrowed_session, cached_software_models, launch_discussion, pick_directory, launch_settings, room_configuration, room_member, save_launch_settings } from '../runner/discussion_launch.mjs';
+import { adopt_member_profile, borrowed_session, cached_software_models, launch_discussion, launch_projects, pick_directory, launch_settings, room_configuration, room_member, save_launch_projects, save_launch_settings } from '../runner/discussion_launch.mjs';
 import { api, DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { DiscussionService, DiscussionWithQuestions, read_registry, register_room } from '../runner/discussion_service.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
@@ -86,6 +86,20 @@ test('directory picker returns only an absolute chosen path and never guesses on
   assert.deepEqual(await pick_directory({ platform: 'darwin', spawn_process: fake('', 1) }), { cancelled: true });
   assert.deepEqual(await pick_directory({ platform: 'linux', spawn_process: fake('relative/path\n') }), { cancelled: true });
   await assert.rejects(pick_directory({ platform: 'aix', spawn_process: fake('') }), /直接输入/);
+});
+
+test('project list keeps only named folders that exist on this computer', t => {
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-projects-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  assert.deepEqual(launch_projects(home), { projects: [] });
+  const saved = save_launch_projects(home, { projects: [{ name: ' 演示 ', path: home }] });
+  assert.deepEqual(saved, { projects: [{ name: '演示', path: home }] });
+  assert.deepEqual(launch_projects(home), saved);
+  assert.throws(() => save_launch_projects(home, { projects: [{ name: '', path: home }] }), /名称不能为空/);
+  assert.throws(() => save_launch_projects(home, { projects: [{ name: 'a', path: home }, { name: 'a', path: home }] }), /名称重复/);
+  assert.throws(() => save_launch_projects(home, { projects: [{ name: 'a', path: 'relative' }] }), /绝对路径/);
+  assert.throws(() => save_launch_projects(home, { projects: [{ name: 'a', path: join(home, 'missing') }] }), /不存在此文件夹/);
+  assert.deepEqual(launch_projects(home), saved);
 });
 
 test('slow model catalogs are reused until the executable changes or the user retries', async t => {

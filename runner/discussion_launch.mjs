@@ -50,6 +50,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch scheduler-check --file FILE
       codiscuss launch room-member --file FILE
       codiscuss launch pick-directory
+      codiscuss launch projects [--file FILE]
 
 settings 读取本机软件默认配置；指定文件时保存，不启动 AI。
 start 使用启动 JSON 创建或接入房间并启动；--dry-run 只校验和预览。
@@ -60,6 +61,7 @@ api-key 将 base_url、api_key 保存于本机私有目录，只返回 api_key_r
 api-check 用 API profile 向模型发送一次极短请求，核对地址、密钥、协议与模型是否可用。
 scheduler-check 用智能调度配置（provider、model、api_key_ref）向决策模型发送一道是非题，核对供应商、模型与密钥是否可用。
 pick-directory 在本机弹出系统目录选择窗口，返回所选路径；取消时不返回路径。
+projects 读取本机已配置的项目（名称与绝对路径）；提供 JSON（projects 列表）时整体替换保存。
 room-member 为运行中的自由房间或讨论邀请、请回一位成员（讨论只接受本机唤醒的成员）；须提供 site、room_id、token、action（add/rejoin）、name。
 JSON 指定 site、entry（conversation/web）、room（建房内容，含 submission_id）
 或 room_id（已有房间）、participants（本次软件覆盖配置）。
@@ -201,6 +203,31 @@ export function save_launch_settings(home, input) {
   mkdirSync(home, { recursive: true, mode: 0o700 });
   atomic_json(join(home, 'launch-settings.json'), settings);
   return settings;
+}
+
+const PROJECT_NAME_LIMIT = 80;
+
+/** Read the named project directories saved on this computer, offered as launch cwd choices. */
+export function launch_projects(home) {
+  const path = join(home, 'launch-projects.json');
+  return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { projects: [] };
+}
+
+/** Replace the project list; every path must be an existing folder on this computer. */
+export function save_launch_projects(home, input) {
+  if (!Array.isArray(input.projects)) throw new Error('projects 必须为列表');
+  const projects = input.projects.map(item => ({ name: String(item?.name || '').trim(), path: String(item?.path || '').trim() }));
+  const names = new Set();
+  for (const { name, path } of projects) {
+    if (!name || name.length > PROJECT_NAME_LIMIT) throw new Error(`项目名称不能为空，且不超过 ${PROJECT_NAME_LIMIT} 字`);
+    if (names.has(name)) throw new Error(`项目名称重复：${name}`);
+    names.add(name);
+    if (!isAbsolute(path)) throw new Error(`${name}：路径必须为完整绝对路径`);
+    if (!existsSync(path) || !statSync(path).isDirectory()) throw new Error(`${name}：这台电脑上不存在此文件夹：${path}`);
+  }
+  mkdirSync(home, { recursive: true, mode: 0o700 });
+  atomic_json(join(home, 'launch-projects.json'), { projects });
+  return { projects };
 }
 
 /** Reject malformed client fields before saving defaults or creating any discussion. */
@@ -790,7 +817,8 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   assert_shared_home(home);
   let result;
   if (positionals[0] === 'settings') result = { ...(input ? save_launch_settings(home, input) : launch_settings(home)), api_providers: API_PROVIDERS,
-    scheduler_providers: SCHEDULER_PROVIDERS, api_keys: saved_api_keys(home) };
+    scheduler_providers: SCHEDULER_PROVIDERS, api_keys: saved_api_keys(home), projects: launch_projects(home).projects };
+  else if (positionals[0] === 'projects') result = input ? save_launch_projects(home, input) : launch_projects(home);
   else if (positionals[0] === 'api-key' && input) result = save_api_key(home, input);
   else if (positionals[0] === 'api-check' && input) result = await api_check(home, input);
   else if (positionals[0] === 'scheduler-check' && input) result = await scheduler_check(home, input);

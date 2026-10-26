@@ -1835,7 +1835,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         site = self.local_request_site(method)
         route = parts[2:]
         if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-member"], ["models"], ["api-key"], ["api-check"],
-                                             ["scheduler-check"], ["pick-directory"]):
+                                             ["scheduler-check"], ["pick-directory"], ["projects"]):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
             command = "settings"
@@ -1857,6 +1857,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = "room-member"
         elif route == ["pick-directory"] and method == "POST":
             command = "pick-directory"
+        elif route == ["projects"] and method == "POST":
+            command = "projects"
         else:
             raise LookupError("本机入口不存在")
         payload = None

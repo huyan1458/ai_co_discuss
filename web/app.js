@@ -71,7 +71,7 @@ state.directory_pending = new Map();
 state.directory_version = 0;
 state.navigation_version = 0;
 state.admin = { loaded: false, local: false, registered: false, setup_available: false, logged_in: false, profile: null, identity_version: 0 };
-state.launch = { available: false, remote: false, connect_command: "", profiles: {}, workspace: {}, scheduler: {}, create: true, error: "", notice: "", recoveries: [] };
+state.launch = { available: false, remote: false, connect_command: "", profiles: {}, projects: [], workspace: {}, scheduler: {}, create: true, error: "", notice: "", recoveries: [] };
 const PLATFORM_CLIENTS = { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }],
   Claude: [{ value: "claude", label: "Claude Code CLI" }],
   Gemini: [{ value: "antigravity_cli", label: "Antigravity CLI" }, { value: "antigravity", label: "Antigravity App" }] };
@@ -1756,7 +1756,7 @@ async function load_launch_settings() {
     const settings = await local_launch_request("settings");
     // Keep the saved machine defaults so every new form can start from them again.
     state.launch.saved_profiles = JSON.parse(JSON.stringify(settings.participants || {}));
-    Object.assign(state.launch, { available: true, profiles: settings.participants, api_providers: settings.api_providers || {}, api_keys: settings.api_keys || {},
+    Object.assign(state.launch, { available: true, profiles: settings.participants, projects: settings.projects || [], api_providers: settings.api_providers || {}, api_keys: settings.api_keys || {},
       scheduler_providers: settings.scheduler_providers || {}, error: "",
       notice: local_connection ? "已连接本机服务，讨论保存在当前网站" : "" });
     Object.values(state.launch.profiles).forEach(fill_api_key);
@@ -2091,6 +2091,13 @@ async function pick_launch_directory() {
     if (result.path) write_launch_field("workspace", "cwd", result.path);
     state.launch.error = "";
   } catch (error) { state.launch.error = error.message; }
+  publish_view();
+}
+
+/** Replace the named project directories kept on the computer running the local service. */
+async function save_launch_projects(projects) {
+  const result = await local_launch_request("projects", { projects });
+  state.launch.projects = result.projects;
   publish_view();
 }
 
@@ -3367,7 +3374,7 @@ function change_view_theme(theme) {
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
   write_launch: write_launch_field, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
-  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, check_launch_api, launch_summary, launch_can_set_access, launch_can_bind_session, pick_launch_directory, restore_launch_profile, reset_create_form, empty_discussion_message,
+  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, check_launch_api, launch_summary, launch_can_set_access, launch_can_bind_session, pick_launch_directory, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
