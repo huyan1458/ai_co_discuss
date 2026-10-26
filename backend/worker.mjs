@@ -31,6 +31,8 @@ const MAX_DECISION_DETAIL = 4000;
 const MAX_DECISION_NOTE = 200;
 const MAX_DECISION_MEMBER = 60;
 const MAX_DECISION_CONTEXT = 500;
+const MAX_DECISION_INPUT = 60000;
+const FEEDBACK_CASES_PAGE = 50;
 const DECISION_SELECT = `SELECT d.*,f.rating AS feedback,COALESCE(f.should_be,'') AS should_be,COALESCE(f.note,'') AS note,c.context
   FROM scheduler_decisions d LEFT JOIN scheduler_feedback f ON f.decision_id=d.id LEFT JOIN scheduler_decision_context c ON c.decision_id=d.id`;
 const LIMIT_DEFAULTS = { max_rounds: 0, max_minutes: 0, execution_minutes: 0 };
@@ -890,6 +892,7 @@ async function manage_room(database, room_id, action, payload) {
       "DELETE FROM round_budgets WHERE room_id=?", "DELETE FROM discussion_sessions WHERE room_id=?",
       "DELETE FROM scheduler_feedback WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)",
       "DELETE FROM scheduler_decision_context WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)",
+      "DELETE FROM scheduler_decision_inputs WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)",
       "DELETE FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)", "DELETE FROM scheduler_decisions WHERE room_id=?", "DELETE FROM scheduler_routing WHERE room_id=?",
       "DELETE FROM message_timings WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
       "DELETE FROM message_summaries WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
@@ -1935,7 +1938,30 @@ async function rate_scheduler_decision(database, room_id, decision_id, token, pa
   else await database.prepare(`INSERT INTO scheduler_feedback (decision_id,rating,should_be,note,created_at) VALUES (?,?,?,?,?)
     ON CONFLICT(decision_id) DO UPDATE SET rating=excluded.rating,should_be=excluded.should_be,note=excluded.note,created_at=excluded.created_at`)
     .bind(decision_id, rating, should_be.trim(), note.trim(), new Date().toISOString()).run();
+  if (rating === "bad") await save_feedback_case(database, room_id, decision_id, should_be.trim(), note.trim());
+  else await database.prepare("DELETE FROM scheduler_feedback_cases WHERE decision_id=?").bind(decision_id).run();
   return { decision_id, feedback: rating, should_be: should_be.trim(), note: note.trim() };
+}
+
+/** Copy a bad-rated decision with everything the model saw, so it outlives its room for prompt review. */
+async function save_feedback_case(database, room_id, decision_id, should_be, note) {
+  const decision = await database.prepare(`${DECISION_SELECT} WHERE d.id=?`).bind(decision_id).first();
+  const detail = await database.prepare("SELECT detail FROM scheduler_decision_details WHERE decision_id=?").bind(decision_id).first();
+  const input = await database.prepare("SELECT input FROM scheduler_decision_inputs WHERE decision_id=?").bind(decision_id).first();
+  const room = await database.prepare("SELECT title FROM rooms WHERE id=?").bind(room_id).first();
+  const { kind, after_message_id, label, confidence, applied, provider, created_at } = decision;
+  const snapshot = { kind, after_message_id, label, confidence, applied, provider, created_at, context: decision.context ? JSON.parse(decision.context) : null,
+    detail: detail ? JSON.parse(detail.detail) : null, input: input ? JSON.parse(input.input) : null };
+  await database.prepare(`INSERT OR REPLACE INTO scheduler_feedback_cases (decision_id,room_id,room_title,snapshot,should_be,note,rated_at)
+    VALUES (?,?,?,?,?,?,?)`).bind(decision_id, room_id, room.title, JSON.stringify(snapshot), should_be, note, new Date().toISOString()).run();
+}
+
+/** Bad-rated decision snapshots after a decision id, oldest first, for the administrator's prompt review. */
+async function list_feedback_cases(database, after) {
+  const { results } = await database.prepare("SELECT * FROM scheduler_feedback_cases WHERE decision_id>? ORDER BY decision_id LIMIT ?")
+    .bind(after, FEEDBACK_CASES_PAGE).all();
+  const cases = results.map(row => ({ ...row, snapshot: JSON.parse(row.snapshot) }));
+  return { cases, next_after: cases.length === FEEDBACK_CASES_PAGE ? cases.at(-1).decision_id : null };
 }
 
 /** The local service marks a message while the decision model is analysing it, and clears the mark when done. */
@@ -1974,10 +2000,16 @@ async function record_scheduler_decision(database, room_id, token, payload, owne
   if (context_text !== null && (typeof context !== "object" || Array.isArray(context) || context_text.length > MAX_DECISION_CONTEXT)) {
     throw new HttpError(400, `context 须为不超过 ${MAX_DECISION_CONTEXT} 字的对象`);
   }
+  const { input } = payload;
+  const input_text = input === undefined || input === null ? null : JSON.stringify(input);
+  if (input_text !== null && (typeof input !== "object" || Array.isArray(input) || input_text.length > MAX_DECISION_INPUT)) {
+    throw new HttpError(400, `input 须为不超过 ${MAX_DECISION_INPUT} 字的对象`);
+  }
   const row = await database.prepare(`INSERT INTO scheduler_decisions (room_id,after_message_id,kind,label,confidence,applied,provider,created_at)
     VALUES (?,?,?,?,?,?,?,?) RETURNING *`).bind(room_id, after, kind, label.trim(), confidence, Number(applied), provider, new Date().toISOString()).first();
   if (detail_text !== null) await database.prepare("INSERT INTO scheduler_decision_details (decision_id,detail) VALUES (?,?)").bind(row.id, detail_text).run();
   if (context_text !== null) await database.prepare("INSERT INTO scheduler_decision_context (decision_id,context) VALUES (?,?)").bind(row.id, context_text).run();
+  if (input_text !== null) await database.prepare("INSERT INTO scheduler_decision_inputs (decision_id,input) VALUES (?,?)").bind(row.id, input_text).run();
   return row;
 }
 
@@ -3155,6 +3187,10 @@ async function handle_api(database, request, parts, params, bucket, setup_key = 
   const method = request.method;
   if (route === "api/health" && method === "GET") return respond({ ok: true });
   if (parts[0] === "api" && parts[1] === "admin") return handle_admin_api(database, request, parts, setup_key);
+  if (route === "api/scheduler-feedback" && method === "GET") {
+    await require_admin_session(database, request);
+    return respond(await list_feedback_cases(database, Number(params.after) || 0));
+  }
   if (route === "api/rooms") {
     if (method === "GET") return respond(await query_rooms(database, params));
     const room = await create_room(database, await read_payload(request), request.headers.get("X-Discussion-Token") ?? "");

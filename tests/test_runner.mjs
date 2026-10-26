@@ -20,7 +20,7 @@ import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
 import { certainty, decide, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
 
 /** The folded record of what the provider was asked is checked on its own. */
-const without_detail = ({ detail, ...plan }) => (assert.ok(Array.isArray(detail) && detail[0].choices.length), plan);
+const without_detail = ({ detail, input, ...plan }) => (assert.ok(Array.isArray(detail) && detail[0].choices.length && input.state && input.questions[0].instructions), plan);
 
 test('smart scheduling maps one neutral question set to both providers and reads their answers alike', async t => {
   const home = mkdtempSync(join(tmpdir(), 'scheduler-'));

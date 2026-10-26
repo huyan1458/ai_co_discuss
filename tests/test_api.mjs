@@ -388,10 +388,17 @@ test('smart scheduling holds the host until its decision, and a confident pick r
   const rated = (await api(config, '')).scheduler_decisions.at(-1);
   assert.deepEqual([rated.feedback, rated.should_be, rated.note], ['bad', 'Grok', '应该先问主持人']);
   assert.equal((await api(config, '/backup')).tables.scheduler_decisions[0].note, '应该先问主持人');
+  // The bad rating keeps exactly what the model saw, including option descriptions, for the loopback administrator.
+  const cases = async () => (await (await fetch(`${f.site}/api/scheduler-feedback`)).json()).cases;
+  const [feedback_case] = await cases();
+  assert.deepEqual([feedback_case.decision_id, feedback_case.should_be, feedback_case.snapshot.label], [decision.id, 'Grok', '改由 DeepSeek 回答']);
+  assert.match(feedback_case.snapshot.input.state, /待处理的用户消息/);
+  assert.deepEqual(feedback_case.snapshot.input.questions[0].choices.map(choice => choice.value), ['DeepSeek', '__host__', '__all__', '__none__']);
   await assert.rejects(api(config, `/scheduler-decisions/${decision.id}`, { rating: 'bad', note: 'x'.repeat(201) }), /HTTP 400/);
   await assert.rejects(api(config, `/scheduler-decisions/${decision.id}`, { rating: 'great' }), /HTTP 400/);
   await api(config, `/scheduler-decisions/${decision.id}`, { rating: null });
   assert.equal((await api(config, '')).scheduler_decisions.at(-1).feedback, null);
+  assert.deepEqual(await cases(), []);
   const backup = await api(config, '/backup');
   assert.deepEqual(backup.tables.member_recommendations.map(row => [row.message_id, row.status, row.mode]), [[message_id, 'adopted', 'interrupt']]);
   assert.ok(!readFileSync(started.config_path, 'utf8').includes(SECRET));

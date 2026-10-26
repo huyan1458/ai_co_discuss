@@ -983,10 +983,11 @@ test('Worker owner reorders who has not spoken against the latest revision, or s
 });
 
 test('Worker free rooms record every scheduling decision with the owner credential and keep the rating of the owner', async t => {
-  const f = await worker_fixture(t);
+  const f = await admin_fixture(t);
   const r = await free_worker_room(f);
   const message_id = (await r.say('claude在吗')).body.message.id;
-  const body = { kind: 'interjection', label: '交给主持人 Claude', confidence: 0.66, applied: false, provider: 'jev', after_message_id: message_id, context: { model: 'jev-latest', threshold: 0.7 } };
+  const input = { state: '待处理的用户消息：#1 用户：claude在吗', questions: [{ type: 'choice', name: 'handler', instructions: '判断回应对象', choices: [{ value: 'Claude', description: '叫了 Claude' }] }] };
+  const body = { kind: 'interjection', label: '交给主持人 Claude', confidence: 0.66, applied: false, provider: 'jev', after_message_id: message_id, context: { model: 'jev-latest', threshold: 0.7 }, input };
   assert.equal((await f.request(`${r.path}/scheduler-decisions`, body, r.claude)).status, 403);
   const saved = await f.request(`${r.path}/scheduler-decisions`, body, r.owner);
   assert.equal(saved.status, 200);
@@ -998,8 +999,18 @@ test('Worker free rooms record every scheduling decision with the owner credenti
   const feedback = async () => (await f.request(r.path)).body.scheduler_decisions.map(item => [item.after_message_id, item.applied, item.feedback]);
   assert.deepEqual(await feedback(), [[message_id, 0, 'bad']]);
   assert.deepEqual((await f.request(r.path)).body.scheduler_decisions.map(item => [item.should_be, item.note, item.context]), [['Codex', '该直接问它', '{"model":"jev-latest","threshold":0.7}']]);
+  // A bad rating keeps a self-contained copy for the administrator, dropped when withdrawn and kept when the room is deleted.
+  const session = (await f.register()).body.token;
+  const cases = async () => (await admin_call(f, '/api/scheduler-feedback', undefined, session)).body.cases;
+  assert.equal((await admin_call(f, '/api/scheduler-feedback')).status, 401);
+  assert.deepEqual((await cases()).map(item => [item.room_title, item.should_be, item.note, item.snapshot.label, item.snapshot.input, item.snapshot.context]),
+    [['自由协作', 'Codex', '该直接问它', '交给主持人 Claude', input, { model: 'jev-latest', threshold: 0.7 }]]);
   assert.equal((await rate(null)).status, 200);
   assert.deepEqual(await feedback(), [[message_id, 0, null]]);
+  assert.deepEqual(await cases(), []);
+  assert.equal((await rate('bad')).status, 200);
+  assert.equal((await f.request(`${r.path}/delete`, { actor: '用户', confirm_title: '自由协作' }, r.owner)).status, 200);
+  assert.deepEqual((await cases()).map(item => item.snapshot.input), [input]);
 });
 
 test('Worker smart scheduling recommendations wait for the user, then interrupt the host or follow it', async t => {

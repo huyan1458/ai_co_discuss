@@ -95,6 +95,11 @@ function detail_of(questions, answers) {
   });
 }
 
+/** The shown detail plus the exact input (state and full questions), kept so a rated-bad decision can be reviewed later. */
+function judged_of(state, questions, answers) {
+  return { detail: detail_of(questions, answers), input: { state, questions } };
+}
+
 /** Say which option the provider leaned to when it was not sure enough, so the transcript shows how close it was. */
 function unsure_label(lean) {
   return lean ? `倾向${lean}，把握不足，交给主持人` : '拿不准，交给主持人';
@@ -141,16 +146,17 @@ export async function route_free_message(home, scheduler, { title, goal, context
     { value: NONE_CHOICE, description: '无需回应：只是确认、致谢或旁注，不需要任何人回答' }];
   const questions = [{ type: 'choice', name: 'handler', choices,
     instructions: '这条用户消息没有用 @ 点名成员。判断它的回应对象是否已经确定：正文叫了某位成员的名字或在向其提问；在延续某位成员的回答（追问、要求修改、引用，或“回复”指向其消息）；在补充或纠正一条正由某位成员处理的消息。以上情况选该成员，是主持人就选主持人。要求所有成员各自回应一次选全体；只是确认、致谢或旁注选无需回应；对象不明确，或需要分工、排先后、互相回应时选主持人。' }];
-  const answers = await decide(home, scheduler, scheduler_state(title, context, message, goal, '', {}, ROUTE_CONTEXT_MESSAGES), questions, fetch_impl);
-  const detail = detail_of(questions, answers);
+  const state = scheduler_state(title, context, message, goal, '', {}, ROUTE_CONTEXT_MESSAGES);
+  const answers = await decide(home, scheduler, state, questions, fetch_impl);
+  const judged = judged_of(state, questions, answers);
   const choice = answers.handler?.choice ?? null;
   const confidence = certainty(answers.handler);
   const wide = choice === ALL_CHOICE || choice === NONE_CHOICE;
   const sure = confidence !== null && confidence >= (wide ? ROUTE_WIDE_CONFIDENCE : ROUTE_CONFIDENCE);
-  if (sure && choice === ALL_CHOICE) return { action: 'all', choice, confidence, detail };
-  if (sure && choice === NONE_CHOICE) return { action: 'none', choice, confidence, detail };
-  if (sure && members.some(item => item.name === choice)) return { action: 'member', member: choice, choice, confidence, detail };
-  return { action: 'host', choice, confidence, detail };
+  if (sure && choice === ALL_CHOICE) return { action: 'all', choice, confidence, ...judged };
+  if (sure && choice === NONE_CHOICE) return { action: 'none', choice, confidence, ...judged };
+  if (sure && members.some(item => item.name === choice)) return { action: 'member', member: choice, choice, confidence, ...judged };
+  return { action: 'host', choice, confidence, ...judged };
 }
 
 /**
@@ -162,15 +168,16 @@ export async function decide_interjection(home, scheduler, { title, goal, user_r
     { value: HOST_CHOICE, description: `由主持人 ${host} 处理：留言要改变讨论目标、规则、分工、安排或结束讨论，或同时涉及多位专家` },
     { value: NOTE_CHOICE, description: '仅补充信息：留言只是旁注、信息或鼓励，不要求任何人回应，按当前安排继续' }];
   const questions = [{ type: 'choice', name: 'handling', instructions: '讨论进行中用户发来这条留言。对照当前焦点、主持简报和安排，判断它最适合怎样处理。', choices }];
-  const answers = await decide(home, scheduler, scheduler_state(title, context, message, goal, user_request, extra), questions, fetch_impl);
-  const detail = detail_of(questions, answers);
+  const state = scheduler_state(title, context, message, goal, user_request, extra);
+  const answers = await decide(home, scheduler, state, questions, fetch_impl);
+  const judged = judged_of(state, questions, answers);
   const choice = answers.handling?.choice;
   const confidence = certainty(answers.handling);
   const sure = confidence !== null && confidence >= ROUTE_CONFIDENCE;
-  if (sure && choice === NOTE_CHOICE) return { action: 'note', confidence, detail, label: '仅补充信息，按原计划继续' };
-  if (sure && experts.includes(choice)) return { action: 'ask', expert: choice, confidence, detail, label: `先请 ${choice} 回应这条留言` };
+  if (sure && choice === NOTE_CHOICE) return { action: 'note', confidence, ...judged, label: '仅补充信息，按原计划继续' };
+  if (sure && experts.includes(choice)) return { action: 'ask', expert: choice, confidence, ...judged, label: `先请 ${choice} 回应这条留言` };
   const lean = choice === NOTE_CHOICE ? '按原计划继续' : experts.includes(choice) ? `请 ${choice} 回应` : choice === HOST_CHOICE ? '由主持人处理' : '';
-  return { action: 'host', confidence, detail, label: choice === HOST_CHOICE && sure ? '这条留言需要主持人处理' : unsure_label(lean) };
+  return { action: 'host', confidence, ...judged, label: choice === HOST_CHOICE && sure ? '这条留言需要主持人处理' : unsure_label(lean) };
 }
 
 /**
@@ -189,17 +196,17 @@ export async function decide_next_speaker(home, scheduler, { title, goal, user_r
     { type: 'predicate', name: 'obligation',
       instructions: `是否存在明确依据要求 ${candidates.join('、')} 之一接着发言：简报分工或流程规定轮到其人，或最近发言点名追问了其人？仅仅是“本轮还没发言”不算依据。` }];
   const answers = await decide(home, scheduler, state, questions, fetch_impl);
-  const detail = detail_of(questions, answers);
+  const judged = judged_of(state, questions, answers);
   const choice = answers.speaker?.choice;
   const confidence = certainty(answers.speaker);
   const obligation = answers.obligation?.probability;
   if (candidates.includes(choice) && confidence !== null && confidence >= ROUTE_CONFIDENCE && obligation >= ROUTE_CONFIDENCE) {
-    return { action: 'next', expert: choice, confidence, detail, label: `本轮继续，请 ${choice} 接着发言` };
+    return { action: 'next', expert: choice, confidence, ...judged, label: `本轮继续，请 ${choice} 接着发言` };
   }
   if (typeof obligation === 'number' && obligation < ROUTE_CONFIDENCE) {
-    return { action: 'host', confidence, detail, label: `有明确依据的概率 ${obligation.toFixed(2)}，未达 ${ROUTE_CONFIDENCE.toFixed(2)}，交给主持人安排` };
+    return { action: 'host', confidence, ...judged, label: `有明确依据的概率 ${obligation.toFixed(2)}，未达 ${ROUTE_CONFIDENCE.toFixed(2)}，交给主持人安排` };
   }
-  return { action: 'host', confidence, detail, label: choice === HOST_CHOICE && confidence >= ROUTE_CONFIDENCE ? '建议由主持人调整安排，交给主持人' : unsure_label(candidates.includes(choice) ? `请 ${choice} 发言` : choice === HOST_CHOICE ? '交给主持人' : '') };
+  return { action: 'host', confidence, ...judged, label: choice === HOST_CHOICE && confidence >= ROUTE_CONFIDENCE ? '建议由主持人调整安排，交给主持人' : unsure_label(candidates.includes(choice) ? `请 ${choice} 发言` : choice === HOST_CHOICE ? '交给主持人' : '') };
 }
 
 /**
@@ -216,13 +223,13 @@ export async function decide_round(home, scheduler, { title, goal, user_request,
   if (candidates.length > 1) questions.push({ type: 'choice', name: 'first', instructions: '下一轮应先请谁发言？按简报分工或接龙顺序判断；没有规定时选被其他专家点名追问、最需要回应的人。',
     choices: candidates.map(name => ({ value: name, description: `先请 ${name}` })) });
   const answers = await decide(home, scheduler, state, questions, fetch_impl);
-  const detail = detail_of(questions, answers);
+  const judged = judged_of(state, questions, answers);
   const choice = answers.next?.choice;
   const confidence = certainty(answers.next);
   if (choice !== 'continue' || confidence === null || confidence < ROUTE_CONFIDENCE || !candidates.length) {
     const sure = confidence !== null && confidence >= ROUTE_CONFIDENCE;
-    return { action: 'host', confidence, detail, label: choice === HOST_CHOICE && sure ? '建议收束或调整方向，交给主持人' : unsure_label(choice === 'continue' ? '继续下一轮' : choice === HOST_CHOICE ? '收束或调整方向' : '') };
+    return { action: 'host', confidence, ...judged, label: choice === HOST_CHOICE && sure ? '建议收束或调整方向，交给主持人' : unsure_label(choice === 'continue' ? '继续下一轮' : choice === HOST_CHOICE ? '收束或调整方向' : '') };
   }
   const first = candidates.includes(answers.first?.choice) ? answers.first.choice : candidates[0];
-  return { action: 'continue', first, confidence, detail, label: `继续下一轮，先请 ${first} 发言` };
+  return { action: 'continue', first, confidence, ...judged, label: `继续下一轮，先请 ${first} 发言` };
 }

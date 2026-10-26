@@ -612,6 +612,21 @@ CREATE TABLE IF NOT EXISTS scheduler_decision_context (
     decision_id INTEGER PRIMARY KEY REFERENCES scheduler_decisions(id) ON DELETE CASCADE,
     context TEXT NOT NULL
 );
+-- The exact input the decision model saw (state and full questions with option descriptions); not part of backups.
+CREATE TABLE IF NOT EXISTS scheduler_decision_inputs (
+    decision_id INTEGER PRIMARY KEY REFERENCES scheduler_decisions(id) ON DELETE CASCADE,
+    input TEXT NOT NULL
+);
+-- A self-contained copy of each decision the owner currently rates bad, kept when its room is deleted so prompts can be reviewed.
+CREATE TABLE IF NOT EXISTS scheduler_feedback_cases (
+    decision_id INTEGER PRIMARY KEY,
+    room_id TEXT NOT NULL,
+    room_title TEXT NOT NULL,
+    snapshot TEXT NOT NULL,
+    should_be TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    rated_at TEXT NOT NULL
+);
 -- Smart scheduling's suggestion that another member answer an unnamed message. The host keeps the message;
 -- the user may adopt before expires_at (waiting until the host's request ends for mode 'after'), otherwise it lapses.
 CREATE TABLE IF NOT EXISTS member_recommendations (

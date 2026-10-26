@@ -248,7 +248,7 @@ export class FreeRoomRunner {
   async record_decision(message_id, decision, label, applied) {
     try {
       await api(this.config, '/scheduler-decisions', { kind: 'interjection', label, confidence: decision.confidence ?? null,
-        applied, provider: this.config.scheduler.provider, after_message_id: message_id, detail: decision.detail,
+        applied, provider: this.config.scheduler.provider, after_message_id: message_id, detail: decision.detail, input: decision.input,
         context: { model: this.config.scheduler.model, threshold: ROUTE_CONFIDENCE, wide_threshold: ROUTE_WIDE_CONFIDENCE,
           prompt: ROUTE_PROMPT_VERSION, package: PACKAGE_VERSION } });
     } catch (error) { this.log(`智能调度 #${message_id} 决策记录未保存：${error.message}`); }

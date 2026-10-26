@@ -85,6 +85,8 @@ FROM scheduler_decisions d LEFT JOIN scheduler_feedback f ON f.decision_id=d.id 
 MAX_DECISION_LABEL = 200
 ROUTING_VISIBLE_SECONDS = 120
 MAX_DECISION_DETAIL = 4000
+MAX_DECISION_INPUT = 60000
+FEEDBACK_CASES_PAGE = 50
 SCHEDULER_PROVIDERS = ("jev", "decisions")
 ROOM_BACKUP_QUERIES = {
     "rooms": "SELECT * FROM rooms WHERE id=?",
@@ -642,7 +644,7 @@ def delete_room_records(connection, room_id):
     for table in ("member_recommendations", "free_queue", "speaking_orders", "member_requests", "member_executions", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "room_links",
                   "discussion_options", "round_budgets", "scheduler_decisions", "scheduler_routing", "discussion_sessions"):
         if table == "scheduler_decisions":
-            for child in ("scheduler_feedback", "scheduler_decision_context"):
+            for child in ("scheduler_feedback", "scheduler_decision_context", "scheduler_decision_inputs"):
                 connection.execute(f"DELETE FROM {child} WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)", (room_id,))
             connection.execute("DELETE FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)", (room_id,))
         connection.execute(f"DELETE FROM {table} WHERE room_id=?", (room_id,))
@@ -1234,7 +1236,32 @@ def rate_scheduler_decision(connection, room_id, decision_id, token, payload):
         connection.execute("""INSERT INTO scheduler_feedback (decision_id,rating,should_be,note,created_at) VALUES (?,?,?,?,?)
             ON CONFLICT(decision_id) DO UPDATE SET rating=excluded.rating,should_be=excluded.should_be,note=excluded.note,created_at=excluded.created_at""",
                            (decision_id, rating, should_be.strip(), note.strip(), utc_now()))
+    if rating == "bad":
+        save_feedback_case(connection, room_id, decision_id, should_be.strip(), note.strip())
+    else:
+        connection.execute("DELETE FROM scheduler_feedback_cases WHERE decision_id=?", (decision_id,))
     return {"decision_id": decision_id, "feedback": rating, "should_be": should_be.strip(), "note": note.strip()}
+
+
+def save_feedback_case(connection, room_id, decision_id, should_be, note):
+    """Copy a bad-rated decision with everything the model saw, so it outlives its room for prompt review."""
+    decision = dict(connection.execute(f"{DECISION_SELECT} WHERE d.id=?", (decision_id,)).fetchone())
+    stored = {name: connection.execute(f"SELECT {column} FROM {table} WHERE decision_id=?", (decision_id,)).fetchone()
+              for name, table, column in (("detail", "scheduler_decision_details", "detail"), ("input", "scheduler_decision_inputs", "input"))}
+    snapshot = {key: decision[key] for key in ("kind", "after_message_id", "label", "confidence", "applied", "provider", "created_at")}
+    snapshot["context"] = json.loads(decision["context"]) if decision["context"] else None
+    snapshot.update({name: json.loads(row[0]) if row else None for name, row in stored.items()})
+    title = connection.execute("SELECT title FROM rooms WHERE id=?", (room_id,)).fetchone()[0]
+    connection.execute("""INSERT OR REPLACE INTO scheduler_feedback_cases (decision_id,room_id,room_title,snapshot,should_be,note,rated_at)
+        VALUES (?,?,?,?,?,?,?)""", (decision_id, room_id, title, json.dumps(snapshot, ensure_ascii=False), should_be, note, utc_now()))
+
+
+def list_feedback_cases(connection, after):
+    """Bad-rated decision snapshots after a decision id, oldest first, for the administrator's prompt review."""
+    rows = connection.execute("SELECT * FROM scheduler_feedback_cases WHERE decision_id>? ORDER BY decision_id LIMIT ?",
+                              (after, FEEDBACK_CASES_PAGE)).fetchall()
+    cases = [{**dict(row), "snapshot": json.loads(row["snapshot"])} for row in rows]
+    return {"cases": cases, "next_after": cases[-1]["decision_id"] if len(cases) == FEEDBACK_CASES_PAGE else None}
 
 
 def mark_scheduler_routing(connection, room_id, token, payload):
@@ -1280,6 +1307,12 @@ def record_scheduler_decision(connection, room_id, token, payload, owner=False):
         if not isinstance(detail, list) or len(detail) > 4 or len(text) > MAX_DECISION_DETAIL:
             raise ValueError(f"detail 须为最多 4 项、不超过 {MAX_DECISION_DETAIL} 字的列表")
         connection.execute("INSERT INTO scheduler_decision_details (decision_id,detail) VALUES (?,?)", (cursor.lastrowid, text))
+    model_input = payload.get("input")
+    if model_input is not None:
+        text = json.dumps(model_input, ensure_ascii=False)
+        if not isinstance(model_input, dict) or len(text) > MAX_DECISION_INPUT:
+            raise ValueError(f"input 须为不超过 {MAX_DECISION_INPUT} 字的对象")
+        connection.execute("INSERT INTO scheduler_decision_inputs (decision_id,input) VALUES (?,?)", (cursor.lastrowid, text))
     return dict(connection.execute("SELECT * FROM scheduler_decisions WHERE id=?", (cursor.lastrowid,)).fetchone())
 
 
@@ -1902,6 +1935,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.respond({"ok": True})
         if parts[:2] == ["api", "admin"]:
             return self.handle_admin_api(connection, parts, method)
+        if parts == ["api", "scheduler-feedback"] and method == "GET":
+            if not self.admin_session(connection):
+                raise AdminError("需要登录管理员账号", 401)
+            return self.respond(list_feedback_cases(connection, int(params.get("after", 0))))
         if parts == ["api", "rooms"]:
             if method == "GET":
                 return self.respond({**list_rooms(connection, params), "participants": PARTICIPANTS})
