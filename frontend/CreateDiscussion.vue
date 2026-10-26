@@ -52,7 +52,7 @@ const launch_ready = (name) => {
   return Boolean(profile.adapter && (profile.adapter === "antigravity" ? profile.ipc_directory : profile.executable));
 };
 const launching = computed(() => automatic.value && launchable.value);
-const room_ready = computed(() => woken_names.value.every(launch_ready) && (!woken_names.value.length || launchable.value));
+const room_ready = computed(() => selected_names.value.length > 0 && woken_names.value.every(launch_ready) && (!woken_names.value.length || launchable.value));
 // Smart scheduling runs in the local service, so it is offered whenever the service is connected.
 const scheduling = computed(() => view.value.launch.available);
 const scheduler_active = computed(() => scheduling.value && Boolean(view.value.launch.scheduler?.enabled));
@@ -74,6 +74,7 @@ const blocker = computed(() => {
   if (unready.length && relay.value) return `在电脑「${relay.value.name}」上配置 ${unready.join("、")}`;
   return unready.length ? `补齐 ${unready.join("、")} 的接入配置` : scheduler_unready.value ? "补齐决策模型配置，或移出决策模型" : "";
 });
+const submit_disabled = computed(() => !room_ready.value || Boolean(blocker.value) || scheduler_unready.value || pending.value === "create");
 
 /** Keep the host inside the selected members that answer by themselves. */
 function ensure_host() {
@@ -139,8 +140,9 @@ function remove_expert(name) {
   nextTick(() => library.value?.focus_first());
 }
 
-/** Submit the currently visible wheel values, including during an unfinished gesture. */
+/** Apply the button's readiness checks to every submission, then settle any unfinished wheel gesture. */
 function submit() {
+  if (submit_disabled.value) return;
   limit_picker.value?.settle();
   emit("submit");
 }
@@ -174,14 +176,13 @@ const summary = computed(() => {
 
       <section class="create-section">
         <h3><span>2</span>谁来参与</h3>
-        <p v-if="selected_names.length" class="fine-print create-hint">每位成员可选本机唤醒，或手动（你来启动或代发，网页 AI 选手动）。</p>
         <RosterAdd ref="library" label="添加 AI" :items="library_items" @add="add_expert" />
         <div v-if="selected_names.length" class="create-experts" role="group" aria-label="参与的 AI">
           <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :choices="access_choices(name)"
             :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)" hosting
             @host="write('host', name)" @remove="remove_expert(name)" @mode="set_expert_mode(name, $event)" />
         </div>
-        <p v-else class="create-experts-empty">可以先不添加成员，建房后再邀请。同一平台可添加多位，各自独立会话。</p>
+        <p v-else class="create-experts-empty">请至少添加一位成员。同一平台可添加多位，各自独立会话。</p>
         <div v-if="selected_names.length" class="fine-print create-hint create-host-hint">
           <UIcon name="i-lucide-crown" />
           <span>{{ host_options.length ? '点卡片上的皇冠指定主持人：没 @ 任何人的消息由它分配；其他成员只在被你或主持人点名时发言。' : '需要一位本地 AI 做主持人，没 @ 的消息才有人接。' }}</span>
@@ -206,7 +207,7 @@ const summary = computed(() => {
       <div class="create-footer-row">
         <span class="create-summary" :class="{ 'is-blocked': blocker }" :title="blocker || summary" role="status"><UIcon v-if="blocker" name="i-lucide-circle-alert" />{{ blocker ? `还差：${blocker}` : selected_names.length || discussing ? summary : "" }}</span>
         <UButton label="取消" color="neutral" variant="ghost" @click="emit('cancel')" />
-        <UButton type="submit" form="create-discussion-form" class="channel-primary-button" :icon="launching ? 'i-lucide-play' : 'i-lucide-plus'" :label="discussing ? '创建并开启讨论' : automatic ? '创建并连接' : '创建协作房间'" :disabled="!room_ready || Boolean(blocker) || scheduler_unready" :loading="pending === 'create'" />
+        <UButton type="submit" form="create-discussion-form" class="channel-primary-button" :icon="launching ? 'i-lucide-play' : 'i-lucide-plus'" :label="discussing ? '创建并开启讨论' : automatic ? '创建并连接' : '创建协作房间'" :disabled="submit_disabled" :loading="pending === 'create'" />
       </div>
     </footer>
   </div>

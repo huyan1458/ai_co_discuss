@@ -708,8 +708,9 @@ test("cards read model catalogs only for automatic CLI and pure web participants
 /** Use actual create-form handlers with isolated drafts; no AI or website is started. */
 function create_form_fixture() {
   const view = ref({ fields: { "new-room-kind": "free", "new-room-host": "用户" },
-    experts: { "new-expert-modes": {} }, launch: { profiles: {}, available: false, create: false } });
-  const events = [], cleanups = [];
+    experts: { "new-expert-modes": {} }, launch: { profiles: {}, workspace: {}, available: false, create: false } });
+  const events = [], cleanups = [], submissions = [];
+  const pending = ref("");
   const bridge = { identities: { 用户: {}, Codex: {}, Claude: {}, DeepSeek: {} },
     launch_clients: { Codex: [{ value: "codex_cli" }, { value: "api" }], Claude: [{ value: "claude" }, { value: "api" }], DeepSeek: [{ value: "api" }] },
     platform_of: name => name.split("-")[0], display_name: name => name,
@@ -722,14 +723,46 @@ function create_form_fixture() {
       while (view.value.experts[id][`${name}-${number}`]) number++;
       view.value.experts[id][`${name}-${number}`] = mode;
     } };
-  const context = vm.createContext({ computed, ref, nextTick, defineProps: () => ({}), defineEmits: () => () => {},
-    inject: () => ({ view, bridge, pending: ref(""), act: () => {} }), onMounted: callback => callback(), onBeforeUnmount: () => {},
+  const context = vm.createContext({ computed, ref, nextTick, defineProps: () => ({}), defineEmits: () => event => submissions.push(event),
+    inject: () => ({ view, bridge, pending, act: () => {} }), onMounted: callback => callback(), onBeforeUnmount: () => {},
     window: { setInterval: () => 0, clearInterval: () => {} }, document: { hidden: false },
     watch: (...args) => { const stop = watch(...args); cleanups.push(stop); return stop; } });
   const component = readFileSync(new URL("../frontend/CreateDiscussion.vue", import.meta.url), "utf8");
   vm.runInContext(component.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .*;$/gm, ""), context);
-  return { context, view, events, cleanup: () => cleanups.forEach(stop => stop()) };
+  return { context, view, events, pending, submissions, cleanup: () => cleanups.forEach(stop => stop()) };
 }
+
+test("create form blocks empty rosters and applies button readiness to form submissions", async () => {
+  const f = create_form_fixture(), { context, view, pending, submissions } = f;
+  const submit = (expected) => {
+    assert.equal(vm.runInContext("submit_disabled.value", context), expected);
+    const count = submissions.length;
+    context.submit();
+    assert.equal(submissions.length, count + (expected ? 0 : 1));
+  };
+  view.value.fields["new-room-title"] = "闲聊";
+  submit(true);
+  view.value.launch.available = true;
+  view.value.launch.scheduler = { enabled: true, provider: "typesafe", model: "jev-latest", api_key_ref: "test-key" };
+  submit(true); // A configured decision model is not a participant.
+  context.add_expert("Codex");
+  submit(true); // The selected member still needs its software configuration.
+  view.value.launch.profiles.Codex = { adapter: "codex_cli", executable: "codex" };
+  submit(false);
+  pending.value = "create";
+  submit(true);
+  pending.value = "";
+  context.remove_expert("Codex");
+  submit(true);
+  view.value.launch.scheduler.enabled = false;
+  view.value.launch.available = false;
+  context.set_expert_mode("Codex", "manual");
+  submit(false); // A manual member still needs no local service.
+  context.toggle_discussion(true);
+  await nextTick();
+  submit(true); // Enter cannot bypass the discussion host requirement either.
+  f.cleanup();
+});
 
 test("create form shares a role library, keeps independent instances and makes the first AI host a free room", async () => {
   const f = create_form_fixture(), { context, view } = f;
