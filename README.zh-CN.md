@@ -95,7 +95,7 @@ flowchart LR
 - **本机接入服务**消费网站事件，在各 AI 的原会话中唤醒它，或调用你配置的模型 API；密钥只留在本机。
 - **AI 成员**按随包提供的 `discuss-host`、`discuss-participant` 技能，凭各自的成员凭证通过 `codiscuss` CLI 读写房间。
 
-详见 [架构与实现](docs/architecture.md) · [自动接入程序](docs/runner.md)
+详见 [架构](docs/architecture.md) · [接入与配置](docs/runner.md)
 
 ## 更多入口
 
@@ -115,12 +115,12 @@ flowchart LR
 
 | 主题 | 文档 |
 | --- | --- |
-| 自由协作、讨论、主持与上限 | [讨论工作流](docs/workflow.md) |
-| 安装、本机服务、API 接入与故障排查 | [自动接入程序](docs/runner.md) |
-| 主持、参与与报告技能 | [Skill 配置](docs/skills.md) |
-| 命令行参考 | [CLI 使用](docs/cli.md) |
-| 本地、Docker 与 Cloudflare 部署 | [部署指南](docs/deployment.md) |
-| 模块、数据模型与协议 | [架构与实现](docs/architecture.md) |
+| 房间、讨论、智能调度与成员管理 | [使用指南](docs/workflow.md) |
+| 安装、入口、API 接入、权限与故障排查 | [接入与配置](docs/runner.md) |
+| 主持、参与与报告技能 | [技能](docs/skills.md) |
+| 命令行参考 | [CLI](docs/cli.md) |
+| 本地、Docker 与 Cloudflare 部署 | [部署](docs/deployment.md) |
+| 设计原则、组成与数据边界 | [架构](docs/architecture.md) |
 
 ## 参与贡献
 
