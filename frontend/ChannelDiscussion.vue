@@ -3,6 +3,7 @@ import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } fr
 import ScheduleCard from "./ScheduleCard.vue";
 import TopicCard from "./TopicCard.vue";
 import DiscussionEndCard from "./DiscussionEndCard.vue";
+import ExecutionNotes from "./ExecutionNotes.vue";
 import { motion, useReducedMotion, useSpring, useTransform } from "motion-v";
 
 const emit = defineEmits(["detail", "edit"]);
@@ -1115,10 +1116,8 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
               <span v-if="message.waiting">{{ message.text }}</span>
               <template v-else><span ref="reply_glow" class="channel-reply-glow">{{ status.text }}</span><span v-if="status.live" class="channel-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></template>
             </div>
-            <!-- The same block the answer keeps folded: open while working, so the answer only collapses it. -->
-            <div v-if="execution_notes.get(message.execution_id)?.length" class="channel-receipt" aria-label="过程说明">
-              <ol class="channel-notes is-live"><li v-for="note in execution_notes.get(message.execution_id)" :key="note.seq">{{ note.text }}</li></ol>
-            </div>
+            <!-- The same row the answer keeps folded after its result: open while working. -->
+            <ExecutionNotes v-if="execution_notes.get(message.execution_id)?.length" live :notes="execution_notes.get(message.execution_id)" />
           </template>
         </UChatMessage>
         <section v-else-if="message.failure" :id="message.id" class="channel-message channel-failed-execution" :data-author="bridge.identities[message.author]?.style" :aria-label="`${bridge.display_name(message.author)} 执行失败`">
@@ -1131,10 +1130,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             <span v-if="message.failure.elapsed_seconds != null" class="channel-message-provenance channel-message-elapsed">耗时 {{ format_elapsed(message.failure.elapsed_seconds) }}</span>
           </div>
           <p class="channel-message-text channel-failure-reason">{{ message.failure.result || '执行失败，未提供原因' }}</p>
-          <details v-if="message.failure.notes" class="channel-receipt" @toggle="$event.target.open && load_notes(message.failure.id)">
-            <summary :aria-label="`查看执行 #${message.failure.id} 的过程说明`">过程说明 · {{ message.failure.notes }} 段</summary>
-            <ol class="channel-notes"><li v-for="note in execution_notes.get(message.failure.id) || []" :key="note.seq">{{ note.text }}</li></ol>
-          </details>
+          <ExecutionNotes v-if="message.failure.notes" :count="message.failure.notes" :notes="execution_notes.get(message.failure.id)" @load="load_notes(message.failure.id)" />
           <div v-if="free && failed_request_message(message.failure)" class="channel-failure-actions">
             <UButton label="重发" icon="i-lucide-rotate-ccw" size="sm" variant="soft" color="neutral" :aria-label="`把执行 #${message.failure.id} 的原消息填回输入框重发`" @click="resend_failed(message.failure)" />
           </div>
@@ -1155,10 +1151,6 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
               <span v-if="message_elapsed(message) !== null" class="channel-message-provenance channel-message-elapsed">耗时 {{ format_elapsed(message_elapsed(message)) }}</span>
             </div>
             <UButton v-if="message.reply_to" :label="`回复 #${message.reply_to}`" icon="i-lucide-corner-up-left" variant="link" color="neutral" size="xs" class="channel-message-reference" :aria-label="`回复 #${message.reply_to} 查看原文`" @click="emit('detail', message.reply_to)" />
-            <details v-if="answer_execution(message)?.notes" class="channel-receipt" @toggle="$event.target.open && load_notes(answer_execution(message).id)">
-              <summary :aria-label="`查看 #${message.id} 的过程说明`">过程说明 · {{ answer_execution(message).notes }} 段</summary>
-              <ol class="channel-notes"><li v-for="note in execution_notes.get(answer_execution(message).id) || []" :key="note.seq">{{ note.text }}</li></ol>
-            </details>
             <details v-if="message.kind === 'receipt'" class="channel-receipt">
               <summary :aria-label="`查看运行回执 #${message.id}`">运行回执详情</summary>
               <div class="channel-message-text markdown-body" v-html="message.rendered_text"></div>
@@ -1168,6 +1160,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
               <UButton v-if="answer_previews.get(message.id).truncated" :label="expanded_answers.has(message.id) ? '收起' : '展开全文'" :trailing-icon="expanded_answers.has(message.id) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" variant="link" color="neutral" size="xs" class="channel-answer-toggle" :aria-label="`${expanded_answers.has(message.id) ? '收起回答' : '展开完整回答'} #${message.id}`" :aria-expanded="expanded_answers.has(message.id)" :aria-controls="`channel-answer-${message.id}`" @click="toggle_answer(message, $event)" />
             </div>
             <div v-if="message.summary" class="channel-answer-summary"><small>回答摘要<span v-if="message.summary_by && message.summary_by !== message.author"> · {{ bridge.display_name(message.summary_by) }} 整理</span></small><div class="channel-message-text markdown-body" v-html="message.rendered_summary"></div></div>
+            <ExecutionNotes v-if="answer_execution(message)?.notes" :count="answer_execution(message).notes" :notes="execution_notes.get(answer_execution(message).id)" @load="load_notes(answer_execution(message).id)" />
             <div v-if="message.attachments?.length" v-html="bridge.attachment_markup(message.attachments)"></div>
             <div v-if="recommendations.get(message.id)" class="channel-recommendation" :class="`is-${recommendations.get(message.id).status}`" aria-label="智能调度推荐" aria-live="polite">
               <template v-for="item in [recommendations.get(message.id)]" :key="item.message_id">
@@ -1324,10 +1317,6 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
 .channel-link-button { color: var(--channel-accent); text-decoration: underline; text-underline-offset: 2px; }
 .channel-message-elapsed { align-self: center; margin-left: auto; white-space: nowrap; }
 .channel-reply-glow { display: inline-block; max-width: 100%; }
-.channel-notes { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 13px; line-height: 1.6; color: var(--ui-text-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
-/* While working, the latest remark is where the member is now; earlier ones step back. */
-.channel-notes.is-live li { opacity: .7; }
-.channel-notes.is-live li:last-child { opacity: 1; color: var(--ui-text); }
 .channel-working-warning { color: var(--ui-warning); }
 .channel-dots { margin-left: 2px; font-weight: 700; }
 .channel-dots i { font-style: normal; margin-right: .18em; }

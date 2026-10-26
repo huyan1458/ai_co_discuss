@@ -37,7 +37,7 @@ function member_status(member, state) {
   if (execution && LIVE.includes(execution.status)) return execution.stale ? "执行失联，停止未确认" : "正在处理";
   if (member.pending) return `待投递 ${member.pending} 条`;
   if (state === "queued") return "等待依次发言";
-  if (execution?.status === "failed") return `上次失败：${execution.result}`;
+  if (execution?.status === "failed") return "执行失败";
   return !execution && member.access === "manual" ? "已注册" : "空闲";
 }
 
@@ -153,7 +153,7 @@ watch(() => room.value.id, () => { starting.value = false; });
               <div class="pb-member-name">{{ bridge.display_name(member.name) }}<UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /><small>{{ member.role === 'host' ? `主持 · ${ACCESS_LABELS[member.access]}` : ACCESS_LABELS[member.access] }}</small></div>
               <div v-if="member_model(member)" class="pb-member-model">{{ member_model(member) }}</div>
               <div v-if="member.session_mode === 'borrowed'" class="pb-member-model" title="它工作时请不要在原窗口继续操作">借用已有会话</div>
-              <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span>{{ member_status(member, item.state) }}</div>
+              <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span><span class="pb-member-status-text" :title="member.execution?.status === 'failed' ? member.execution.result : undefined">{{ member_status(member, item.state) }}</span></div>
             </div>
             <UDropdownMenu :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="`${member.name} 的更多操作`" /></UDropdownMenu>
           </template>
