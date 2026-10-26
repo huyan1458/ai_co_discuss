@@ -87,7 +87,7 @@ export function free_task_files(config, member, execution, binding) {
     skills: [join(config.project, '.agents/skills/discuss-participant/SKILL.md')], cli, subcommands: TASK_SUBCOMMANDS,
     ...(bound_access ? { access_env: 'DISCUSS_ACCESS_FILE' } : { access_file: access_path }),
     instructions: `${discussion ? '讨论房间：用户直接向你提问（' + messages + '）。这不是你的发言安排，不要领取发言权、不要安排他人，也不改变讨论进度，只回答这个提问。' : '自由协作房间：用户点名了你（' + messages + '）。'}${access_rule}先用 ${cli} message list ${config.room} --after ${execution.read_until}${access_arg} 读取新消息，按时间顺序处理，后面的消息可能修正前面的，以最新指令为准。${host_rule}完成后用 ${cli} message post ${config.room} --as ${member.name} --kind chat --execution ${execution.id} --body-file 草稿 --submission-id 新UUID${access_arg} 提交一次回答。提交被拒绝说明本次执行已被打断或过期：保留草稿并结束，不要去掉 --execution 改作普通发言。草稿只写入 draft_directory；${project_rule}不读取或打印凭据内容，不建定时任务。` });
-  const prompt = `用户在${discussion ? '讨论' : '自由协作'}房间点名了你（${member.name}），对应消息 ${messages}。请先读取任务文件：${task_path}，按其中说明读取新消息、完成请求，并用 ${cli} message post 带 --execution ${execution.id} 提交一次回答后结束。命令只用任务内 subcommands 列出的 ${cli} 子命令；${project_rule}不读取凭据内容。`;
+  const prompt = `用户在${discussion ? '讨论' : '自由协作'}房间点名了你（${member.name}），对应消息 ${messages}。请先读取任务文件：${task_path}，按其中说明读取新消息、完成请求，并用 ${cli} message post 带 --execution ${execution.id} 提交一次回答后结束。命令只用任务内 subcommands 列出的 ${cli} 子命令，列目录、搜索或读取文件用软件自带的文件工具，不用 shell 命令；${project_rule}不读取凭据内容。`;
   return { id, participant: member.name, directory: config.directory, draft_directory,
     skills_directory: join(config.project, '.agents', 'skills'), access_path, prompt };
 }
@@ -134,7 +134,8 @@ export class FreeRoomRunner {
     this.routing = new Set();
     this.children = new Set();
     this.members = new Map();
-    this.exited = new Set();
+    // Execution id -> why its session ended on its own, such as a command refused in unattended mode ('' when unknown).
+    this.exited = new Map();
     this.snapshots = new Map();
     // Execution id -> { phase, at, sent_phase, sent_at, notes, next_seq }: what the member's software last showed it doing,
     // and the progress notes not yet on the website.
@@ -343,7 +344,7 @@ export class FreeRoomRunner {
         on_note: text => this.note(execution.id, text),
         // A stopped process may report after the next execution started; only its own execution takes the result.
         on_failure: error => { try { if (this.row(member.name)?.execution_id === execution.id) this.save(member.name, { error }); } catch { /* Store may already be closed at shutdown. */ } },
-        on_exit: () => this.exited.add(execution.id),
+        on_exit: denial => this.exited.set(execution.id, denial || ''),
       });
       if (result.session_id) this.store.bind(member.name, result.session_id);
       this.save(member.name, { status: result.status === 'sidecar_pending' ? 'sidecar_pending' : 'running', attempts: 0 });
@@ -377,7 +378,10 @@ export class FreeRoomRunner {
     if (row.error) return this.fail(member.name, execution.id, row.error);
     if (this.exited.has(execution.id)) {
       const latest = await api(this.config, `/executions/${execution.id}`);
-      if (['dispatched', 'started'].includes(latest.status)) return this.fail(member.name, execution.id, `${member.name} 会话已结束，但未提交本次回答；请核对原会话确认是否已有内容`);
+      const denial = this.exited.get(execution.id);
+      if (['dispatched', 'started'].includes(latest.status)) return this.fail(member.name, execution.id, denial
+        ? `${member.name} ${denial}，未提交本次回答`
+        : `${member.name} 会话已结束，但未提交本次回答；请核对原会话确认是否已有内容`);
       return this.save(member.name, { status: 'idle' });
     }
     if (Date.now() >= execution.created_at * 1000 + minutes * 60_000) return this.fail(member.name, execution.id, `超过单次执行时限 ${minutes} 分钟；请核对原会话确认是否已有内容`);

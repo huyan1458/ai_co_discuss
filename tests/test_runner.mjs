@@ -1791,6 +1791,15 @@ test('a free member that exits without answering fails only its own execution', 
   assert.match(state.executions[0].result, /会话已结束，但未提交本次回答.*请核对原会话/);
 });
 
+test('a free member whose command was refused names that command in its failure', async t => {
+  const { state, store, config } = await free_fixture(t);
+  const denial = '运行了未授权的命令「Get-ChildItem -Recurse」，无人值守模式下无法确认权限而被自动拒绝，随后会话结束';
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => { setImmediate(() => task.on_exit(denial)); return { status: 'accepted' }; });
+  await runner.tick();
+  await runner.tick();
+  assert.equal(state.executions[0].result, `Claude ${denial}，未提交本次回答`);
+});
+
 test('an interrupted free execution stops only that member and is not redelivered', async t => {
   const { state, store, config } = await free_fixture(t);
   const child = Object.assign(new EventEmitter(), { killed: false, kill() { this.killed = true; this.emit('close'); } });

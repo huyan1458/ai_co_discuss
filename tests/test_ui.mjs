@@ -233,7 +233,8 @@ test('free-room answers replace their working card in place instead of jumping a
     { id: 'free-2', author: 'Claude', created_at: 1, execution_id: 2, request_message_id: 259 },
     { id: 'free-9', author: 'Gemini', created_at: 1, execution_id: 9, request_message_id: 999 },
   ]);
-  const context = vm.createContext({ computed, view, free: ref(true), failed_messages: ref([]), free_working });
+  const room = ref({ free: { members: [{ id: 4, name: 'Gemini' }], executions: [] } });
+  const context = vm.createContext({ computed, view, room, free: ref(true), failed_messages: ref([]), free_working });
   const start = discussion_source.indexOf('const transcript_messages = computed(');
   const end = discussion_source.indexOf('/** Split continuous', start);
   vm.runInContext(discussion_source.slice(start, end) + '\nglobalThis.transcript = transcript_messages;', context);
@@ -241,6 +242,11 @@ test('free-room answers replace their working card in place instead of jumping a
     'the first answer keeps the third slot; work for an unshown request stays at the end');
   free_working.value = [];
   assert.deepEqual([...context.transcript.value].map(item => item.id), [259, 260, 261], 'answers settle without moving');
+  room.value = { free: { members: [{ id: 4, name: 'Gemini' }], executions: [
+    { id: 4, member_id: 4, status: 'failed', request_message_id: 259, created_at: 1, finished_at: 9, result: '会话已结束' },
+    { id: 5, member_id: 4, status: 'failed', request_message_id: 999, created_at: 1, finished_at: 9 }] } };
+  assert.deepEqual([...context.transcript.value].map(item => item.id), [259, 260, 'failed-4', 261],
+    'a failure keeps its slot under the request; one whose request is not shown is dropped');
 });
 
 test('execution reports bind answers and failed requests and distinguish unknown file changes', () => {

@@ -260,6 +260,8 @@ const execution_reports = computed(() => {
     if (!["completed", "failed", "cancelled"].includes(execution.status)) continue;
     // A clean completion adds nothing to the message header; only failures and observed file changes earn a card.
     if (execution.status === "completed" && !execution.changes?.length) continue;
+    // A failed free-room execution keeps its own card in the slot it worked in.
+    if (free.value && execution.status === "failed") continue;
     const message_id = execution.answer_id || execution.request_message_id;
     const report = { ...execution, label: { completed: "已完成", failed: "失败", cancelled: "已停止" }[execution.status] };
     reports.set(message_id, [...(reports.get(message_id) || []), report]);
@@ -631,6 +633,15 @@ const end_anchor = computed(() => {
   const index = messages.findIndex((message) => !message.slot_card && Number(message.id) > session.ended_message_id);
   return index < 0 ? "end" : messages[index].id;
 });
+/** Failed free-room executions, shaped like working cards so a failure stays where its work was shown. */
+const free_failures = computed(() => {
+  if (!free.value || view.value.query || view.value.mention_only) return [];
+  const names = new Map((room.value.free?.members || []).map((member) => [member.id, member.name]));
+  return (room.value.free?.executions || []).filter((execution) => execution.status === "failed" && names.has(execution.member_id))
+    .map((execution) => ({ id: `failed-${execution.id}`, author: names.get(execution.member_id), slot_card: true, created_at: execution.created_at,
+      execution_id: execution.id, request_message_id: execution.request_message_id,
+      failure: { ...execution, elapsed_seconds: execution.finished_at ? Math.max(0, execution.finished_at - execution.created_at) : null } }));
+});
 /**
  * A free-room card keeps the place it first appeared in: each execution takes a slot under the message that asked for it,
  * in execution order, and its answer replaces the working card in that slot. Work whose request is not shown stays at the end.
@@ -645,6 +656,8 @@ const free_layout = computed(() => {
     return true;
   };
   const roots = messages.filter((message) => !place(message));
+  // A failure whose request is no longer shown is dropped rather than piled at the end.
+  free_failures.value.forEach(place);
   const tail = free_working.value.map((item) => ({ ...item, slot_card: true })).filter((item) => !place(item));
   const ordered = [];
   const visit = (item) => {
@@ -1088,7 +1101,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
         <DiscussionEndCard v-if="message.id === end_anchor && !view.query && !view.mention_only" />
         <TopicCard v-if="message.id === topic_anchor && !view.query && !view.mention_only" :ref="(card) => topic_card = card" @edit="emit('edit')" />
         <!-- A free-room working card holds the slot its answer will take. -->
-        <UChatMessage v-if="message.slot_card" :id="`execution-${message.id}`" :data-author="bridge.identities[message.author]?.style" role="assistant" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
+        <UChatMessage v-if="message.slot_card && !message.failure" :id="`execution-${message.id}`" :data-author="bridge.identities[message.author]?.style" role="assistant" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
@@ -1113,11 +1126,18 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
             <div class="channel-message-meta">
               <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><span v-if="message.failure.role === 'host'" class="channel-message-round">主持工作</span><UBadge label="执行失败" color="error" variant="soft" size="xs" /></div>
-              <div class="channel-message-provenance"><time :title="new Date(message.created_at).toLocaleString('zh-CN')">{{ bridge.format_time(message.created_at) }}</time><span>执行 #{{ message.failure.id }}</span><span v-if="message.failure.turn_id">安排 #{{ message.failure.turn_id }}</span></div>
+              <div v-for="at in [message.slot_card ? message.created_at * 1000 : message.created_at]" :key="message.id" class="channel-message-provenance"><time :title="new Date(at).toLocaleString('zh-CN')">{{ bridge.format_time(at) }}</time><span>执行 #{{ message.failure.id }}</span><span v-if="message.failure.turn_id">安排 #{{ message.failure.turn_id }}</span></div>
             </div>
             <span v-if="message.failure.elapsed_seconds != null" class="channel-message-provenance channel-message-elapsed">耗时 {{ format_elapsed(message.failure.elapsed_seconds) }}</span>
           </div>
           <p class="channel-message-text channel-failure-reason">{{ message.failure.result || '执行失败，未提供原因' }}</p>
+          <details v-if="message.failure.notes" class="channel-receipt" @toggle="$event.target.open && load_notes(message.failure.id)">
+            <summary :aria-label="`查看执行 #${message.failure.id} 的过程说明`">过程说明 · {{ message.failure.notes }} 段</summary>
+            <ol class="channel-notes"><li v-for="note in execution_notes.get(message.failure.id) || []" :key="note.seq">{{ note.text }}</li></ol>
+          </details>
+          <div v-if="free && failed_request_message(message.failure)" class="channel-failure-actions">
+            <UButton label="重发" icon="i-lucide-rotate-ccw" size="sm" variant="soft" color="neutral" :aria-label="`把执行 #${message.failure.id} 的原消息填回输入框重发`" @click="resend_failed(message.failure)" />
+          </div>
           <div v-if="message.can_retry" class="channel-failure-actions">
             <UButton label="重试" icon="i-lucide-rotate-ccw" size="sm" variant="soft" color="primary" :aria-label="`重试 ${bridge.display_name(message.author)} 的失败执行`" :loading="pending === 'retry_execution'" :disabled="!!pending" @click="act('retry_execution', message.failure.id)" />
             <p v-if="view.free_error" class="channel-failure-error" role="alert">{{ view.free_error }}</p>
