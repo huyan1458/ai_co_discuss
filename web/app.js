@@ -2371,20 +2371,11 @@ async function skip_turn() {
   if (state.room?.id === room_id) show_toast("已跳过本次发言，按计划交给下一位");
 }
 
-/** Resume the automatic run after a user decision made while paused or just reopened. */
+/** Resume the automatic run after the user reopens a concluded discussion. */
 async function resume_after_limit_decision() {
   const path = `/api/rooms/${state.room.id}/runtime`;
   const runtime = await request_json(path);
   await request_json(path, { action: "start", mode: "automatic", revision: runtime.revision, deadline: 0 });
-}
-
-/** Append rounds after a limit pause: counting restarts from now and the board shows M+N. */
-async function extend_rounds(rounds) {
-  const room_id = state.room.id;
-  await request_json(`/api/rooms/${room_id}/limits`, { actor: "用户", action: "extend", rounds });
-  await resume_after_limit_decision();
-  await refresh_room();
-  show_toast(`已追加 ${rounds} 轮并重启讨论`);
 }
 
 /** Reopen a concluded discussion with a fresh round and time budget; history stays. */
@@ -3335,7 +3326,7 @@ async function execute_view_action(name, value) {
     cancel_reply, cancel_answer: cancel_turn_reply, prepare_answer: prepare_turn_answer,
     copy_turn, notify: () => change_turn_status("notified"), cancel_turn: () => change_turn_status("cancelled"), skip_turn,
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
-    choose_runtime, export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, retry_execution, conclude_discussion, start_room_discussion, end_room_discussion, extend_rounds, reopen_discussion,
+    choose_runtime, export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, retry_execution, conclude_discussion, start_room_discussion, end_room_discussion, reopen_discussion,
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
     load_room_configuration, save_room_configuration, interrupt_member, change_member, invite_member, set_proxy, copy_online_notice,
     prepare_brainstorm, return_conclusion, convert_suggestion, adopt_recommendation, rate_decision,

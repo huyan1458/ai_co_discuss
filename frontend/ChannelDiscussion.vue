@@ -324,6 +324,8 @@ const scheduler_decisions = computed(() => {
   }
   return rows;
 });
+/** Messages the local service is still analysing; the card gives way once the decision is recorded. */
+const routing_messages = computed(() => new Set(room.value.scheduler_routing || []));
 const DECISION_OPTIONS = { __host__: "交给主持人", __note__: "仅补充信息", continue: "继续下一轮", __all__: "全体各自回应", __none__: "无需回应" };
 const option_name = (name) => DECISION_OPTIONS[name] || bridge.display_name(name);
 /** The host's own plans stand beside the decisions, under the message they followed. */
@@ -1081,6 +1083,9 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           </div></div></template>
         </UChatMessage>
         <!-- A decision stands between the card that ended the round and the next speaker. -->
+        <ScheduleCard v-if="routing_messages.has(message.id) && !scheduler_decisions.get(message.id)?.length" icon="i-lucide-zap" skipped label="智能调度分析中" :expandable="false">
+          <template #text>智能调度：正在分析<span class="channel-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></template>
+        </ScheduleCard>
         <ScheduleCard v-for="decision in scheduler_decisions.get(message.id) || []" :key="`decision-${decision.id}`" icon="i-lucide-zap" :skipped="free ? true : !decision.applied" :title="decision.title" label="智能调度决策" toggle-label="展开或收起判断详情" :expandable="Boolean(decision.detail?.length)">
           <template #text>智能调度：{{ decision.label }}<small v-if="decision.confidence !== null">置信度 {{ Number(decision.confidence).toFixed(2) }}</small><small v-if="decision.detail?.[0]?.duration_ms != null">耗时 {{ format_ms(decision.detail[0].duration_ms) }}</small></template>
           <template #actions>
@@ -1140,7 +1145,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             </div>
             <div class="channel-message-text" role="status" :aria-label="`${bridge.display_name(item.author)} ${item.text}`">
               <span v-if="item.waiting">{{ item.text }}</span>
-              <span v-else ref="reply_glow" class="channel-reply-glow">{{ item.text }}<span v-if="item.working" class="channel-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></span>
+              <template v-else><span ref="reply_glow" class="channel-reply-glow">{{ item.text }}</span><span v-if="item.working" class="channel-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></template>
             </div>
           </template>
         </UChatMessage>

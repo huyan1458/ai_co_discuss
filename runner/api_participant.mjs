@@ -44,7 +44,7 @@ export function participant_tools(context) {
       items: { type: 'object', properties: { expert: TEXT, question: { ...TEXT, maxLength: 1000 } }, required: ['expert', 'question'], additionalProperties: false } } }, ['turns']),
     tool('continue_plan', '恢复已有排队安排并结束本次主持执行'),
     tool('finish_discussion', '已保存有原文依据的结论和状态后收束讨论并停止执行；到限方式为“暂停保留现场”的房间会被拒绝，改用 declare_done'),
-    tool('declare_done', '目标已完成但房间到限方式为“暂停保留现场”时使用：程序暂停房间，由用户决定追加轮次或请主持人总结；先保存结论和状态')];
+    tool('declare_done', '目标已完成时使用：程序结束讨论，房间回到自由协作；先保存结论和状态')];
 }
 
 /** Restrict site requests to this room and keep credentials outside model context. */

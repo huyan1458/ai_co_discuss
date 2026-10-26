@@ -25,6 +25,7 @@ const MAX_TOPIC_DETAIL = 4000;
 const MAX_QUESTION_LENGTH = 1000;
 const MAX_PLAN_TURNS = 10;
 const RECENT_DECISIONS = 100;
+const ROUTING_VISIBLE_SECONDS = 120;
 const MAX_DECISION_LABEL = 200;
 const MAX_DECISION_DETAIL = 4000;
 const MAX_DECISION_NOTE = 200;
@@ -385,6 +386,8 @@ async function require_room(database, room_id) {
   const details = new Map((await database.prepare("SELECT decision_id,detail FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)")
     .bind(room_id).all()).results.map((row) => [row.decision_id, JSON.parse(row.detail)]));
   for (const decision of result.scheduler_decisions) decision.detail = details.get(decision.id) ?? null;
+  result.scheduler_routing = (await database.prepare("SELECT message_id FROM scheduler_routing WHERE room_id=? AND created_at>? ORDER BY message_id")
+    .bind(room_id, Math.floor(Date.now() / 1000) - ROUTING_VISIBLE_SECONDS).all()).results.map((row) => row.message_id);
   result.host_arrangements = await host_arrangements(database, room_id, result.scheduler_decisions);
   result.cancelled_turns = await cancelled_turns(database, room_id);
   result.parent_room = await database.prepare("SELECT rooms.id,rooms.title FROM room_links JOIN rooms ON rooms.id=room_links.parent_id WHERE room_links.room_id=?")
@@ -592,6 +595,7 @@ async function update_topic(database, room_id, payload) {
   if (room.phase === "concluded" && settings.phase !== "concluded" && payload.actor !== "用户") throw new HttpError(400, "已收束的讨论只有用户能重新开启");
   const changed = Object.keys({ ...settings.experts, ...room.experts }).some(name => settings.experts[name] !== room.experts[name]);
   if (changed && room.runtime?.status === "running") throw new HttpError(400, "讨论运行中请在进度看板邀请、暂离或移除专家");
+  const plain = database;
   if (settings.save_limits) database = guarded_database(database,
     "EXISTS(SELECT 1 FROM topic_settings JOIN discussion_limits USING(room_id) WHERE room_id=? AND phase IN ('preparing','paused') AND revision=?)",
     [room_id, room.limits.revision]);
@@ -606,6 +610,11 @@ async function update_topic(database, room_id, payload) {
     if (String(error).includes("open_turn")) throw new HttpError(400, "请先完成或取消当前发言安排");
     if (String(error).includes("topic_archived")) throw new HttpError(400, "请先恢复已存档房间，再调整讨论阶段");
     throw error;
+  }
+  if (settings.phase === "concluded" && room.phase !== "concluded" && room.mode !== "free" && !room.archived) {
+    const held = await held_user_messages(plain, { ...room, host: settings.host });
+    await plain.batch(return_to_free_statements(plain, room_id));
+    await route_held_messages(plain, room_id, held);
   }
   return require_room(database, room_id);
 }
@@ -653,14 +662,42 @@ async function end_discussion(database, room_id, token) {
   await require_free_owner(database, room_id, token);
   const room = await require_room(database, room_id);
   if (room.mode === "free") throw new HttpError(409, "房间没有进行中的讨论");
-  if (["running", "ready", "paused"].includes(room.runtime.status)) await configure_runtime(database, room_id, token, { action: "stop", revision: room.runtime.revision });
-  await database.batch([
+  const held = await held_user_messages(database, room);
+  await database.batch(return_to_free_statements(database, room_id));
+  await route_held_messages(database, room_id, held);
+  return require_room(database, room_id);
+}
+
+/** End the discussion in place: stop its run and turns and switch back to free collaboration. */
+function return_to_free_statements(database, room_id) {
+  return [
+    database.prepare(`UPDATE discussion_runtime SET status='stopped',generation=generation+1,revision=revision+1
+      WHERE room_id=? AND status IN ('running','ready','paused')`).bind(room_id),
     database.prepare("UPDATE discussion_turns SET status='cancelled' WHERE room_id=? AND status IN ('pending','notified')").bind(room_id),
     database.prepare("UPDATE discussion_turns SET status='skipped' WHERE room_id=? AND status='queued'").bind(room_id),
     database.prepare("UPDATE topic_settings SET phase='concluded' WHERE room_id=?").bind(room_id),
     database.prepare("UPDATE room_modes SET mode='free' WHERE room_id=?").bind(room_id),
-  ]);
-  return require_room(database, room_id);
+    database.prepare("UPDATE turn_relay SET held_since=0 WHERE room_id=?").bind(room_id),
+  ];
+}
+
+/** The user's messages a discussion's host never answered: held, after the host's last message and not asked of anyone. */
+async function held_user_messages(database, room) {
+  const { results } = await database.prepare(`SELECT m.id FROM messages m JOIN turn_relay t ON t.room_id=m.room_id AND t.held_since>0
+    WHERE m.room_id=? AND m.author='用户' AND m.id>=t.held_since
+    AND m.id>COALESCE((SELECT MAX(id) FROM messages WHERE room_id=? AND author=?),0)
+    AND NOT EXISTS(SELECT 1 FROM member_requests r WHERE r.message_id=m.id) ORDER BY m.id`).bind(room.id, room.id, room.host).all();
+  return results.map(row => row.id);
+}
+
+/** Once the room is free again, hand the held messages to the free room's recipients, as if just sent. */
+async function route_held_messages(database, room_id, message_ids) {
+  if (!message_ids.length) return;
+  const recipients = await free_recipients(database, room_id, {});
+  const statements = message_ids.flatMap(message_id => recipients.map(recipient => database.prepare(`INSERT OR IGNORE INTO member_requests
+    (room_id,member_id,message_id,chain_id,purpose,created_by,created_at) VALUES (?,?,?,?,?,'user',unixepoch())`)
+    .bind(room_id, recipient.id, message_id, message_id, recipient.purpose)));
+  if (statements.length) await database.batch(statements);
 }
 
 /** Validate a replay identifier for writes or exact result lookup. */
@@ -850,7 +887,7 @@ async function manage_room(database, room_id, action, payload) {
       "DELETE FROM round_budgets WHERE room_id=?", "DELETE FROM discussion_sessions WHERE room_id=?",
       "DELETE FROM scheduler_feedback WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)",
       "DELETE FROM scheduler_decision_context WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)",
-      "DELETE FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)", "DELETE FROM scheduler_decisions WHERE room_id=?",
+      "DELETE FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)", "DELETE FROM scheduler_decisions WHERE room_id=?", "DELETE FROM scheduler_routing WHERE room_id=?",
       "DELETE FROM message_timings WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
       "DELETE FROM message_summaries WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
       "DELETE FROM message_details WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
@@ -1104,7 +1141,15 @@ function answers_direct_question(payload) {
 async function append_message(database, room_id, payload, token = "", free_actor = null) {
   const values = message_values(payload);
   const room = await require_room(database, room_id);
-  if (room.mode === "free" || free_actor !== null) return append_free_message(database, room, payload, free_actor);
+  if (room.mode === "free" || free_actor !== null) {
+    const previous = await database.prepare(`${MESSAGE_QUERY} WHERE room_id=? AND submission_id=?`).bind(room_id, values.submission_id).first();
+    // An exact retry of a discussion message saved before the discussion ended keeps its original result.
+    if (previous && previous.kind !== "chat" && previous.author === values.author && previous.text === values.text) {
+      await attach_message_files(database, [previous]);
+      return { message: previous, duplicate: true };
+    }
+    return append_free_message(database, room, payload, free_actor);
+  }
   const expected = { ...values, ...message_details(room, { ...payload, author: values.author }), attachment_ids: attachment_ids(payload) };
   // An expert's opinion answers the arrangement open for that expert; naming it with turn_id is optional.
   const implied_turn = expected.author !== "用户" && expected.kind === "opinion" && !expected.turn_id;
@@ -1399,7 +1444,7 @@ async function room_text(database, room_id, params) {
     `主持人：${room.host}；阶段：${PHASES[room.phase]}；当前焦点：${room.focus || "尚未填写"}`,
     `当前记录截止 #${room.latest_id}；共 ${room.message_count} 条；已完成 ${room.completed_rounds} 轮讨论（所有参与专家各发言一次）。`];
   const limits = room.limits;
-  content.push(`讨论上限：${limits.max_rounds || '不限'} 轮；总时长 ${limits.max_minutes || '不限'} 分钟；单次自动执行 ${limits.execution_minutes ? `${limits.execution_minutes} 分钟` : "不限时长"}；到限后暂停，由用户决定追加轮次或结束。到限：${limits.reached}。`);
+  content.push(`讨论上限：${limits.max_rounds || '不限'} 轮；总时长 ${limits.max_minutes || '不限'} 分钟；单次自动执行 ${limits.execution_minutes ? `${limits.execution_minutes} 分钟` : "不限时长"}；到限后讨论结束，房间回到自由协作。到限：${limits.reached}。`);
   if (room.mode === "free") {
     const members = room.free.members.map(item => `${item.name}（已读至 #${item.read_until}，待投递 ${item.pending}）`).join("；");
     content.push(`自由协作房间：无发言权、安排与轮次。成员：${members || "无"}。用户的消息点名成员后生成请求；成员回答须带本次执行编号，执行结束、被打断或过期后的回答会被拒绝，不能改作普通发言。`);
@@ -1470,7 +1515,7 @@ function protocol_text(room) {
   return ["# 本地 CLI 读写与主持协议", `当前主持人：${room.host}。以下为留言板接口，不是模型服务 API。`,
     "写入使用 POST，通常为 Content-Type: application/json；附件上传使用 application/octet-stream 原始字节。主持操作填写 actor 为当前主持人或用户；这些是声明身份，不是认证凭据。",
     `附件：POST ${base}/attachments?actor=身份&file_name=文件名&submission_id=新编号，原文件最多 20 MiB；GET 同路径默认列已发送附件，加 submission_id 精确核对上传。GET ${base}/attachments/ID 读元数据，/ID/content 下载原文件。消息可带 attachment_ids（最多 10 个有序编号）；只关联同房间、同提交者的未使用附件，可只有附件无正文。自动任务须在回答完成前上传；消息查询包含附件，按需下载后由当前软件读取，不自动解析。`,
-    "讨论上限：room.limits 返回轮次、总时长、单次执行和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长/单次执行时限。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理；到限后暂停并停止新专家安排与观点，由用户决定追加轮次或结束；暂停期间不计时也不消耗总时长。",
+    "讨论上限：room.limits 返回轮次、总时长、单次执行和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长/单次执行时限。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理；到限后讨论结束并停止新专家安排与观点，房间回到自由协作；暂停期间不计时也不消耗总时长。",
     "运行方式：room.runtime 显示 manual/automatic、状态及真实执行回执。所有房间写入须带 X-Discussion-Token，CLI 用 --access-file 读取私有文件。用户及运行控制使用房主凭据，手动本地成员使用自己的成员凭证，不能相互冒充；在线成员只读，由房主或讨论主持人代发。自动讨论先 execution enter，创建安排或保存关联回答即完成本步，不创建原生定时任务；本机唤醒成员的持久凭证不能替代自动执行，手动接入的专家用自己的成员凭证回答安排，暂停、停止、换代、租约到期后的旧执行失效。run view/start/pause/stop/configure 字段查 CLI schema。",
     "没有发言权：同一话题同时只有一个未完成的发言安排，被安排的专家直接回答它；专家观点自动回答该专家当前有效的安排，turn_id 可省略（填写则须与之相符），没有轮到你时被拒绝。主持发言（moderation）只能由当前主持人署名，任何时候都可发出；创建、取消安排由主持人或用户操作。用户的 @ 直接提问不占安排也不计轮次。失败的写入不会改变安排状态，同编号重试沿用原内容。",
     '创建话题：POST /api/rooms，携带房主控制凭据；字段 title、goal、user_request、background、boundaries、host、experts、members、submission_id（新 UUID）。members 与 experts 名单一致，各项含 name、独立 token、access（手动本地 manual、自动 runner、在线 online）。AI 主持人必须为本地可写成员。CLI room create --access-file 私有房主文件 在请求前保存凭据，确认后返回各本地成员文件路径；同编号重试沿用原资料和全部凭据。名单、主持职责变更仅房主可做。',
@@ -1537,34 +1582,27 @@ function limits_view(row, room) {
 
 /** Fence new expert work against concurrent answers, settings and the clock. */
 function guard_limits(database, room) {
-  if (room.limits.reached) throw new HttpError(409, "已达到讨论上限；请检查上限并暂停，由用户决定追加轮次或结束");
+  if (room.limits.reached) throw new HttpError(409, "已达到讨论上限；请检查上限，讨论随之结束并回到自由协作");
   return guarded_database(database, `EXISTS(SELECT 1 FROM discussion_limits WHERE room_id=? AND revision=?)
     AND COALESCE((SELECT MAX(id) FROM messages WHERE room_id=?),0)=? AND (?=0 OR unixepoch()<?)
     AND EXISTS(SELECT 1 FROM topic_settings WHERE room_id=? AND json(experts)=json(?))`,
     [room.id, room.limits.revision, room.id, room.latest_id, room.limits.deadline, room.limits.deadline, room.id, JSON.stringify(room.experts)]);
 }
 
-/** User-only follow-ups after a limit: append rounds, or reopen a concluded discussion. */
-async function adjust_limits(database, room_id, payload, action) {
+/** User-only: reopen a concluded discussion that has not returned to free collaboration. */
+async function reopen_limits(database, room_id, payload) {
   const room = await require_room(database, room_id);
-  if (payload.actor !== "用户") throw new HttpError(400, "仅用户可以追加轮次或重启已收束的讨论");
+  if (payload.actor !== "用户") throw new HttpError(400, "仅用户可以重启已收束的讨论");
   if (room.archived) throw new HttpError(400, "请先恢复已存档房间");
-  if (!room.round_budget) throw new HttpError(400, "该房间沿用旧轮次计数，不支持追加轮次或重启");
-  const required_phase = action === "reopen" ? "concluded" : "paused";
-  if (room.phase !== required_phase) throw new HttpError(400, action === "reopen" ? "仅已收束的讨论可以重启" : "仅已暂停的讨论可以追加轮次");
-  const fence = "EXISTS(SELECT 1 FROM discussion_limits WHERE room_id=? AND revision=?) AND EXISTS(SELECT 1 FROM topic_settings WHERE room_id=? AND phase=?)";
-  const fence_values = [room_id, room.limits.revision, room_id, required_phase];
-  const rounds = action === "extend" ? payload.rounds : payload.max_rounds ?? room.limits.max_rounds;
-  if (!Number.isInteger(rounds) || rounds < (action === "extend" ? 1 : 0) || rounds > 100) throw new HttpError(400, "轮次须为整数（追加 1–100，重启 0–100，0 表示不限）");
+  if (room.mode === "free") throw new HttpError(400, "房间已回到自由协作；需要讨论时请重新开启讨论");
+  if (!room.round_budget) throw new HttpError(400, "该房间沿用旧轮次计数，不支持重启");
+  if (room.phase !== "concluded") throw new HttpError(400, "仅已收束的讨论可以重启");
+  const fence = "EXISTS(SELECT 1 FROM discussion_limits WHERE room_id=? AND revision=?) AND EXISTS(SELECT 1 FROM topic_settings WHERE room_id=? AND phase='concluded')";
+  const rounds = payload.max_rounds ?? room.limits.max_rounds;
+  if (!Number.isInteger(rounds) || rounds < 0 || rounds > 100) throw new HttpError(400, "轮次须为 0–100 的整数，0 表示不限");
   const count = await opinion_count(database, room_id, room.experts);
-  if (action === "extend") {
-    await checked_batch(database, fence, fence_values, [
-      database.prepare("UPDATE round_budgets SET base=?,cap=?,extra=extra+? WHERE room_id=?").bind(count, rounds, rounds, room_id),
-      database.prepare("UPDATE discussion_limits SET stop_reason='',revision=revision+1 WHERE room_id=?").bind(room_id)]);
-    return require_room(database, room_id);
-  }
   const limits = limit_values({ max_rounds: rounds, max_minutes: payload.max_minutes ?? room.limits.max_minutes }, room.limits);
-  await checked_batch(database, fence, fence_values, [
+  await checked_batch(database, fence, [room_id, room.limits.revision, room_id], [
     database.prepare("UPDATE round_budgets SET base=?,cap=0,extra=0 WHERE room_id=?").bind(count, room_id),
     database.prepare("UPDATE discussion_limits SET max_rounds=?,max_minutes=?,started_at=0,stop_reason='',revision=revision+1 WHERE room_id=?")
       .bind(limits.max_rounds, limits.max_minutes, room_id),
@@ -1573,28 +1611,28 @@ async function adjust_limits(database, room_id, payload, action) {
   return require_room(database, room_id);
 }
 
-/** Pause at a reached boundary (or once the host declares the goal done); the user then extends or ends the discussion. */
+/** End the discussion at a reached boundary (or once the host declares the goal done); the room returns to free collaboration. */
 async function check_limits(database, room_id, payload) {
   const action = payload.action ?? "check";
-  if (!["check", "done", "extend", "reopen"].includes(action)) throw new HttpError(400, "action 须为 check/done/extend/reopen");
-  if (["extend", "reopen"].includes(action)) return adjust_limits(database, room_id, payload, action);
+  if (!["check", "done", "reopen"].includes(action)) throw new HttpError(400, "action 须为 check/done/reopen");
+  if (action === "reopen") return reopen_limits(database, room_id, payload);
   const room = await require_room(database, room_id);
   require_host(room, payload);
   const limits = room.limits;
   const done = action === "done";
-  const inactive = ["paused", "concluded"].includes(room.phase) || room.archived || (done && room.phase === "preparing");
+  const inactive = room.mode === "free" || ["paused", "concluded"].includes(room.phase) || room.archived || (done && room.phase === "preparing");
   if ((!limits.reached && !done) || inactive) return room;
   if (done) await require_conclusion_ready(database, room, payload, true);
   const reason = done ? "goal_done" : limits.reason || "user_stop";
-  const statements = [database.prepare("UPDATE discussion_limits SET stop_reason=?,revision=revision+1 WHERE room_id=?").bind(reason, room_id),
-    database.prepare("UPDATE discussion_turns SET status='cancelled' WHERE room_id=? AND status IN ('pending','notified')").bind(room_id),
-    database.prepare("UPDATE discussion_turns SET status='skipped' WHERE room_id=? AND status='queued'").bind(room_id),
-    database.prepare("UPDATE topic_settings SET phase='paused' WHERE room_id=?").bind(room_id),
-    database.prepare("UPDATE discussion_runtime SET status='paused',generation=generation+1,revision=revision+1 WHERE room_id=? AND status='running'").bind(room_id)];
+  const held = await held_user_messages(database, room);
+  // The run's generation moves on, so the old execution is superseded; unnamed messages now go to the host as usual.
   await checked_batch(database, `EXISTS(SELECT 1 FROM discussion_limits WHERE room_id=? AND revision=?)
     AND EXISTS(SELECT 1 FROM topic_settings WHERE room_id=? AND phase=? AND host=? AND json(experts)=json(?))
     AND COALESCE((SELECT MAX(id) FROM messages WHERE room_id=?),0)=?`,
-    [room_id, limits.revision, room_id, room.phase, room.host, JSON.stringify(room.experts), room_id, room.latest_id], statements);
+    [room_id, limits.revision, room_id, room.phase, room.host, JSON.stringify(room.experts), room_id, room.latest_id],
+    [database.prepare("UPDATE discussion_limits SET stop_reason=?,revision=revision+1 WHERE room_id=?").bind(reason, room_id),
+      ...return_to_free_statements(database, room_id)]);
+  await route_held_messages(database, room_id, held);
   return require_room(database, room_id);
 }
 
@@ -1868,6 +1906,9 @@ async function handle_runtime_api(database, request, parts, params) {
   if (parts.length === 4 && parts[3] === "scheduler-decisions" && request.method === "POST") {
     return respond(await record_scheduler_decision(database, room_id, token, await read_payload(request), await room_mode(database, room_id) === "free"));
   }
+  if (parts.length === 4 && parts[3] === "scheduler-routing" && request.method === "POST") {
+    return respond(await mark_scheduler_routing(database, room_id, token, await read_payload(request)));
+  }
   if (parts.length === 5 && parts[3] === "scheduler-decisions" && request.method === "POST") {
     return respond(await rate_scheduler_decision(database, room_id, integer(parts[4]), token, await read_payload(request)));
   }
@@ -1888,6 +1929,16 @@ async function rate_scheduler_decision(database, room_id, decision_id, token, pa
     ON CONFLICT(decision_id) DO UPDATE SET rating=excluded.rating,should_be=excluded.should_be,note=excluded.note,created_at=excluded.created_at`)
     .bind(decision_id, rating, should_be.trim(), note.trim(), new Date().toISOString()).run();
   return { decision_id, feedback: rating, should_be: should_be.trim(), note: note.trim() };
+}
+
+/** The local service marks a message while the decision model is analysing it, and clears the mark when done. */
+async function mark_scheduler_routing(database, room_id, token, payload) {
+  await require_free_owner(database, room_id, token);
+  const { message_id, active } = payload;
+  if (!Number.isInteger(message_id) || message_id <= 0 || typeof active !== "boolean") throw new HttpError(400, "须提供正整数 message_id 与布尔 active");
+  if (active) await database.prepare("INSERT OR REPLACE INTO scheduler_routing (room_id,message_id,created_at) VALUES (?,?,?)").bind(room_id, message_id, Math.floor(Date.now() / 1000)).run();
+  else await database.prepare("DELETE FROM scheduler_routing WHERE room_id=? AND message_id=?").bind(room_id, message_id).run();
+  return { message_id, active };
 }
 
 /** The dispatcher records one smart-scheduling decision so the transcript shows what it did and how sure it was.
@@ -3003,8 +3054,8 @@ async function handle_api(database, request, parts, params, bucket, setup_key = 
   if (["inbox", "executions"].includes(parts[3]) || (free && ["members", "suggestions", "recommendations"].includes(parts[3]))) return handle_free_api(database, request, parts);
   if (parts[3] === "members" && method === "POST" && [4, 5].includes(parts.length)) return handle_discussion_members(database, request, parts);
   if (parts[3] === "attachments") return handle_attachments(database, request, parts, params, bucket, free);
-  if (["runtime", "events", "scheduler-decisions"].includes(parts[3])) {
-    if (free && method === "POST" && parts[3] !== "scheduler-decisions") throw new HttpError(400, "自由房间不使用讨论运行控制");
+  if (["runtime", "events", "scheduler-decisions", "scheduler-routing"].includes(parts[3])) {
+    if (free && method === "POST" && !["scheduler-decisions", "scheduler-routing"].includes(parts[3])) throw new HttpError(400, "自由房间不使用讨论运行控制");
     return handle_runtime_api(database, request, parts, params);
   }
   let free_actor = null;

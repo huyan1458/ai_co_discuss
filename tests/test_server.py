@@ -1193,7 +1193,9 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.request(base + "/topic", {"actor": "Codex", "phase": "reviewing"})[0], 400, "the retired review phase is refused")
         self.assertEqual(self.request(base + "/topic", {"actor": "用户", "phase": "concluded"})[0], 200)
         self.assertTrue(self.request(base + "/messages", answer)[1]["duplicate"])
-        self.assertEqual(self.request(base + "/messages", {**answer, "turn_id": None, "submission_id": "late-opinion-001"})[0], 400)
+        # Concluding returns the room to free collaboration: a late message is an ordinary forwarded chat, not an opinion.
+        status, late = self.request(base + "/messages", {**answer, "turn_id": None, "submission_id": "late-opinion-001"})
+        self.assertEqual((status, late["message"]["kind"]), (201, "chat"))
         self.assertEqual(self.request(base + "/messages", {"author": "Codex", "kind": "moderation", "text": "结论及清理缺项", "submission_id": "final-summary-001"})[0], 201)
 
     def test_concurrent_scheduling_creates_only_one_open_turn(self):

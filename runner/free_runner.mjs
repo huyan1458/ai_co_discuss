@@ -194,11 +194,18 @@ export class FreeRoomRunner {
       this.routed.add(request.id);
       if (everyone.length < 2) continue;
       this.routing.add(request.id);
-      const decision = this.recommend(request, room, everyone).catch(error => this.log(`智能调度 #${request.message_id} 未给出推荐：${error.message}`))
-        .finally(() => this.routing.delete(request.id));
+      const decision = this.mark_routing(request.message_id, true)
+        .then(() => this.recommend(request, room, everyone))
+        .catch(error => this.log(`智能调度 #${request.message_id} 未给出推荐：${error.message}`))
+        .finally(() => { this.routing.delete(request.id); return this.mark_routing(request.message_id, false); });
       this.decisions.add(decision);
       decision.finally(() => this.decisions.delete(decision));
     }
+  }
+  /** Tell the website a message is being analysed so it can show the card; a failed mark never blocks routing. */
+  async mark_routing(message_id, active) {
+    try { await api(this.config, '/scheduler-routing', { message_id, active }); }
+    catch (error) { this.log(`智能调度 #${message_id} 分析状态未上报：${error.message}`); }
   }
   /** Describe each member as the scheduler sees it: software, project access and the other messages it is on. */
   route_members(everyone, room, message_id) {

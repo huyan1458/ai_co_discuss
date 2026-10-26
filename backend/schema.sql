@@ -595,6 +595,13 @@ CREATE TABLE IF NOT EXISTS scheduler_feedback (
     note TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
+-- Messages the local service is still asking the decision model about; a transient marker, not part of backups.
+CREATE TABLE IF NOT EXISTS scheduler_routing (
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    message_id INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (room_id, message_id)
+);
 -- What produced a decision (model, threshold, prompt and package versions), so ratings stay comparable across versions.
 CREATE TABLE IF NOT EXISTS scheduler_decision_context (
     decision_id INTEGER PRIMARY KEY REFERENCES scheduler_decisions(id) ON DELETE CASCADE,

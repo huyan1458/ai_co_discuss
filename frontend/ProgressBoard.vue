@@ -3,7 +3,6 @@
 import { computed, inject, ref, watch } from "vue";
 import InviteDialog from "./InviteDialog.vue";
 import DiscussionLimits from "./DiscussionLimits.vue";
-import LimitPicker from "./LimitPicker.vue";
 
 const props = defineProps({ docked: { type: Boolean, default: false } });
 const { view, bridge, act, pending } = inject("discussion");
@@ -40,14 +39,11 @@ const turn = computed(() => ACTIVE_TURN.includes(room.value.current_turn?.status
 const inactive = computed(() => ["paused", "concluded"].includes(room.value.phase));
 const concluded = computed(() => room.value.phase === "concluded");
 const settled = computed(() => concluded.value || room.value.archived);
-// A budgeted room paused by a round limit or a declared completion waits for the user's choice; a plain restart would hit the limit again.
-// Rooms without a round budget keep the old flow: edit the limits, then restart.
+// A room paused by a round limit or a declared completion before limits returned the room to free collaboration only offers ending;
+// a plain restart would hit the limit again. Rooms without a round budget keep the old flow: edit the limits, then restart.
 const limit_decision = computed(() => room.value.phase === "paused" && !room.value.archived && Boolean(room.value.round_budget) && ["round_limit", "goal_done"].includes(limits.value.stop_reason));
-const extend_count = ref(1);
-const deciding = ref(false);
 const reopening = ref(false);
 const reopen_limits = ref(null);
-const extend_picker = ref(null);
 const reopen_rounds = ref(0);
 const reopen_minutes = ref(0);
 const rounds_info = computed(() => bridge.limit_rounds(limits.value));
@@ -60,10 +56,9 @@ const can_skip = computed(() => Boolean(turn.value && (active.value || can_resta
 /** Writes need this browser's room control credential; without it the board is read-only. */
 const can_control = computed(() => Boolean(view.value.access?.can_manage));
 const can_end = computed(() => (active.value || room.value.phase === "paused") && !room.value.archived);
-const can_decide = computed(() => limit_decision.value && automatic.value && can_control.value);
 /** A concluded discussion in a room with a control credential hands the room back to free collaboration. */
 const can_return = computed(() => concluded.value && !room.value.archived && room.value.mode !== "free");
-const has_actions = computed(() => active.value || can_restart.value || can_end.value || can_reopen.value || can_decide.value || can_return.value);
+const has_actions = computed(() => active.value || can_restart.value || can_end.value || can_reopen.value || can_return.value);
 const members = computed(() => [room.value.host, ...Object.keys(room.value.experts || {}).filter((name) => name !== room.value.host)]
   .filter((name) => name && name !== "用户").map(member_status));
 const failed_member = computed(() => members.value.find((member) => member.result));
@@ -102,7 +97,7 @@ const status = computed(() => {
       const preview = summary.length > ERROR_PREVIEW_LENGTH ? `${summary.slice(0, ERROR_PREVIEW_LENGTH)}…` : summary;
       return { tone: "error", title: "已暂停", detail: preview, full_detail: detail !== preview ? detail : '' };
     }
-    if (limit_decision.value) return { tone: "warning", title: limits.value.stop_reason === "goal_done" ? "目标已完成，已暂停" : "已达轮次上限，已暂停", detail: "现场已保留，请选择后续" };
+    if (limit_decision.value) return { tone: "warning", title: limits.value.stop_reason === "goal_done" ? "目标已完成，已暂停" : "已达轮次上限，已暂停", detail: "点「结束」回到自由协作" };
     return { tone: "warning", title: runtime.value.expired ? "已到截止时间" : "已暂停", detail: turn.value ? `原安排 ${bridge.display_name(turn.value.expert)} 保留` : "" };
   }
   if (limits.value.reached) return { tone: "warning", title: "已达上限", detail: "停止新增安排" };
@@ -241,14 +236,8 @@ async function reopen() {
 }
 
 /** Apply one of the two early-ending choices and close the confirmation. */
-async function finish(action, dialog = "ending") {
-  if (await act(action)) (dialog === "deciding" ? deciding : ending).value = false;
-}
-
-/** Add the chosen number of rounds and resume. */
-async function extend() {
-  extend_picker.value?.settle();
-  if (await act("extend_rounds", extend_count.value)) deciding.value = false;
+async function finish(action) {
+  if (await act(action)) ending.value = false;
 }
 </script>
 
@@ -303,7 +292,6 @@ async function extend() {
       <p v-else-if="view.free_notice" role="status" class="pb-free-note">{{ view.free_notice }}</p>
     </section>
     <section v-if="has_actions" class="pb-actions" aria-label="操作">
-      <UButton v-if="can_decide" icon="i-lucide-list-checks" label="选择后续" size="sm" color="neutral" variant="outline" class="pb-action pb-restart" title="追加轮数继续" :disabled="Boolean(pending)" @click="deciding = true" />
       <UButton v-if="can_restart" icon="i-lucide-rotate-ccw" label="重启" size="sm" color="neutral" variant="outline" class="pb-action pb-restart" title="原安排重新交给对应 AI，需本机接入程序在运行" :loading="pending === 'restart_discussion'" :disabled="!can_control" @click="act('restart_discussion')" />
       <UButton v-if="active" icon="i-lucide-pause" label="暂停" size="sm" color="neutral" variant="outline" class="pb-action" title="暂停讨论，原安排保留" :loading="pending === 'pause_discussion'" :disabled="!can_control" @click="act('pause_discussion')" />
       <UButton v-if="can_skip" icon="i-lucide-skip-forward" label="跳过" size="sm" color="neutral" variant="outline" class="pb-action" :title="`跳过 ${bridge.display_name(turn.expert)} 本次发言，${can_restart ? '恢复讨论，' : ''}交给主持人继续安排`" :loading="pending === 'skip_turn'" :disabled="!can_control || Boolean(pending)" @click="act('skip_turn')" />
@@ -364,22 +352,6 @@ async function extend() {
         </form>
       </template>
     </UModal>
-    <UModal v-model:open="deciding" title="选择后续" description="现场已保留，追加轮数继续；也可以直接结束讨论。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
-      <template #body>
-        <form class="pb-reopen" @submit.prevent="extend">
-          <LimitPicker ref="extend_picker" v-model:rounds="extend_count" append />
-          <div class="pb-invite-footer">
-            <UButton label="取消" color="neutral" variant="ghost" @click="deciding = false" />
-            <UButton type="submit" icon="i-lucide-plus" label="追加并继续" class="channel-primary-button" :loading="pending === 'extend_rounds'" :disabled="Boolean(pending) || !(extend_count >= 1 && extend_count <= 100)" />
-          </div>
-        </form>
-        <div class="progress-ending pb-decision-summary">
-          <button type="button" class="progress-ending-option" :disabled="!!pending" @click="finish('end_room_discussion', 'deciding')">
-            <strong>结束讨论</strong><span>保留全部记录，房间回到自由协作；需要总结时可直接请主持人写一份。</span>
-          </button>
-        </div>
-      </template>
-    </UModal>
     <UModal v-model:open="ending" title="结束讨论" description="当前发言安排会被取消，已有消息全部保留。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
       <template #body>
         <div class="progress-ending">
@@ -395,7 +367,6 @@ async function extend() {
 <style scoped>
 .pb-member.is-away { opacity: .6; }
 .pb-member-model { margin: 2px 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
-.pb-decision-summary { margin-top: 14px; }
 .pb-reopen { display: grid; gap: 14px; }
 .pb-connection { display: grid; gap: 16px; }
 .pb-connection > p { margin: 0; }

@@ -57,7 +57,7 @@ codiscuss message post ROOM --as 用户 --body "请参考附件" --attachment AT
 
 ## 讨论上限参数
 
-`room create` / `room update` 支持 `--max-rounds`、`--max-minutes`、`--execution-minutes`（三者均以 0 表示不限；单次执行默认 0，可设 1–60 分钟）。到限一律暂停，不再有 `--on-limit` / `--summary-minutes`（旧客户端传 `on_limit=pause` 被忽略，传 `summarize` 被拒绝）。未传字段沿用旧值；活动阶段须先暂停才能改上限。`room view` 包含 `limits` 与 `completed_rounds`，`room limits ROOM` 单独读取，`room limits ROOM --check --as 身份 --access-file FILE` 检查并执行到限处理；`room limits ROOM --done --conclusion REV --as 主持人`（REV 来自 `room conclusion ROOM`，未带或过期被拒绝）通知程序目标已完成：暂停并保留现场，不直接收束。检查不会启动 AI，也不代写总结。用户侧追加轮次与重启已收束讨论走 `POST /api/rooms/ROOM/limits`，`action` 为 `extend`（`rounds`）、`reopen`（`max_rounds`、`max_minutes`），仅限用户。
+`room create` / `room update` 支持 `--max-rounds`、`--max-minutes`、`--execution-minutes`（三者均以 0 表示不限；单次执行默认 0，可设 1–60 分钟）。到限一律结束讨论、回到自由协作，不再有 `--on-limit` / `--summary-minutes`（旧客户端传 `on_limit=pause` 被忽略，传 `summarize` 被拒绝）。未传字段沿用旧值；活动阶段须先暂停才能改上限。`room view` 包含 `limits` 与 `completed_rounds`，`room limits ROOM` 单独读取，`room limits ROOM --check --as 身份 --access-file FILE` 检查并执行到限处理；`room limits ROOM --done --conclusion REV --as 主持人`（REV 来自 `room conclusion ROOM`，未带或过期被拒绝）通知程序目标已完成：与到限相同，讨论结束、房间回到自由协作。检查不会启动 AI，也不代写总结。讨论结束时，尚未被主持人回应的用户留言（`held_since` 起、主持人最后一条消息之后、未点名任何人的）按自由协作规则补交给主持人。旧版收束但未回到自由协作的讨论，用户可经 `POST /api/rooms/ROOM/limits`（`action: reopen`，`max_rounds`、`max_minutes`）重启；`extend` 已移除。
 
 `run start` 的 `--deadline` 可省略，此时采用房间总时长；房间总时长为 0 时不限总时长。显式传 0 也表示不另设运行期限，仍受话题上限约束；非零值与话题截止取更早值。不限总时长仍受轮次上限、主动设置的单次执行超时及手动停止约束。暂停或重新启动不会重置话题计时；继续前需调整已耗尽的上限。
 

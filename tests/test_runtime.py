@@ -213,16 +213,18 @@ class RuntimeTests(unittest.TestCase):
             "submission_id": "limit-user-note"})[0], 201)
         status, room = self.request(self.path + "/limits", {"actor": "用户"})
         self.assertEqual(status, 200, room)
-        self.assertEqual(room["phase"], "paused")
+        self.assertEqual((room["mode"], room["phase"]), ("free", "concluded"))
+        self.assertEqual(self.request(self.path + "/messages", answer, self.member_tokens["Codex"])[0], 200, "retries survive the return to free collaboration")
 
-    def test_reached_limit_pauses_and_a_host_conclusion_still_needs_the_conclusion_state(self):
-        """A reached limit pauses the discussion; concluding is still guarded by the conclusion revision."""
+    def test_reached_limit_ends_and_a_host_conclusion_still_needs_the_conclusion_state(self):
+        """A reached limit ends the discussion; concluding is still guarded by the conclusion revision."""
         self.limited_room(max_rounds=1)
         self.complete_round()
         token = self.member_tokens["Codex"]
         status, _ = self.request(self.path + "/topic", {"actor": "Codex", "phase": "concluded"}, token)
         self.assertEqual(status, 400)
-        self.assertEqual(self.request(self.path + "/limits", {"actor": "Codex"}, token)[1]["phase"], "paused")
+        room = self.request(self.path + "/limits", {"actor": "Codex"}, token)[1]
+        self.assertEqual((room["mode"], room["phase"]), ("free", "concluded"))
 
     def test_round_limit_counts_expert_opinions_not_roster_coverage(self):
         """A plan that never asks one expert still exhausts the budget; legacy rooms keep the roster count."""
@@ -242,8 +244,8 @@ class RuntimeTests(unittest.TestCase):
         legacy = self.request(f"/api/rooms/{room['id']}")[1]
         self.assertEqual((legacy["completed_rounds"], legacy["limits"]["reached"], legacy["limits"]["extra_rounds"]), (0, False, 0))
 
-    def test_host_done_pauses_and_only_the_user_extends(self):
-        """Goal completion pauses the room; only the user appends rounds, and there is no summary closing mode."""
+    def test_host_done_returns_to_free_collaboration(self):
+        """Goal completion ends the discussion like a limit; appending rounds and the summary closing mode are gone."""
         self.limited_room(max_rounds=2)
         self.start()
         token = self.enter(self.events()[0])
@@ -251,22 +253,22 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.request(self.path + "/limits", {"actor": "Codex", "action": "done"}, token)[0], 400, "done needs the conclusion revision too")
         revision = self.request(self.path + "/conclusion")[1]["revision"]
         status, room = self.request(self.path + "/limits", {"actor": "Codex", "action": "done", "conclusion": revision}, token)
-        self.assertEqual((status, room["phase"], room["limits"]["stop_reason"]), (200, "paused", "goal_done"))
-        self.assertEqual(self.request(self.path + "/limits", {"actor": "Codex", "action": "extend", "rounds": 1},
-                                      self.member_tokens["Codex"])[0], 403)
-        status, room = self.request(self.path + "/limits", {"actor": "用户", "action": "extend", "rounds": 3}, self.owner)
-        self.assertEqual(status, 200, room)
-        limits = room["limits"]
-        self.assertEqual((limits["max_rounds"], limits["extra_rounds"], limits["round_cap"], limits["segment_rounds"], limits["stop_reason"]),
-                         (2, 3, 3, 0, ""))
+        self.assertEqual((status, room["mode"], room["phase"], room["limits"]["stop_reason"]), (200, "free", "concluded", "goal_done"))
+        self.assertEqual(room["runtime"]["status"], "concluded")
+        self.assertEqual(self.request(self.path + "/limits", {"actor": "用户", "action": "extend", "rounds": 3}, self.owner)[0], 400)
         self.assertEqual(self.request(self.path + "/limits", {"actor": "用户", "action": "summarize"}, self.owner)[0], 400)
 
     def test_concluded_room_can_be_reopened_with_new_limits(self):
-        """Reopening resets the round and time budget but keeps the history and the old conclusion."""
+        """Concluding returns to free collaboration; a legacy concluded discussion still reopens with a reset budget and its history."""
         self.limited_room(max_rounds=1)
         self.complete_round()
         self.assertEqual(self.request(self.path + "/topic", {"actor": "用户", "phase": "concluded"}, self.owner)[0], 200)
-        self.assertEqual(self.request(self.path + "/limits", {"actor": "用户", "action": "extend", "rounds": 1}, self.owner)[0], 400)
+        self.assertEqual(self.request(self.path)[1]["mode"], "free")
+        self.assertEqual(self.request(self.path + "/limits", {"actor": "用户", "action": "reopen", "max_rounds": 2}, self.owner)[0], 400)
+        if not hasattr(self, "database"):
+            self.skipTest("seeding a legacy concluded discussion needs the local SQLite database")
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("UPDATE room_modes SET mode='brainstorm' WHERE room_id=?", (self.room,))
         status, room = self.request(self.path + "/limits", {"actor": "用户", "action": "reopen", "max_rounds": 2, "max_minutes": 30}, self.owner)
         self.assertEqual(status, 200, room)
         limits = room["limits"]
@@ -274,17 +276,17 @@ class RuntimeTests(unittest.TestCase):
                          ("paused", 2, 30, 0, False))
         self.assertEqual(room["message_count"], 1)
 
-    def test_round_limit_pauses_the_run_and_supersedes_the_old_execution(self):
-        """Round exhaustion pauses at once: the old execution is revoked and no closing or summary task is created."""
+    def test_round_limit_ends_the_run_and_supersedes_the_old_execution(self):
+        """Round exhaustion ends the discussion at once: the old execution is revoked and no closing or summary task is created."""
         self.limited_room(max_rounds=1, max_minutes=60)
         self.start()
         self.complete_round()
         old_token = self.enter(self.events()[-1])
         status, room = self.request(self.path + "/limits", {"actor": "用户"}, self.owner)
         self.assertEqual(status, 200, room)
-        self.assertEqual((room["phase"], room["runtime"]["status"], room["limits"]["reason"]), ("paused", "paused", "round_limit"))
+        self.assertEqual((room["mode"], room["phase"], room["runtime"]["status"], room["limits"]["reason"]), ("free", "concluded", "concluded", "round_limit"))
         self.assertNotIn("closing", room["limits"])
-        self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "旧执行"}, old_token)[0], 403)
+        self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "旧执行"}, old_token)[0], 400, "a free room has no discussion state to write")
         # A client that still asks for the removed closing flows is refused instead of silently pausing.
         self.assertEqual(self.request(self.path + "/limits", {"actor": "用户", "action": "summarize"}, self.owner)[0], 400)
         self.assertEqual(self.request("/api/rooms", {"title": "旧总结方式", "limits": {"on_limit": "summarize"}})[0], 400)
@@ -431,8 +433,8 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(status, 200, updated)
         self.assertEqual(updated["limits"]["started_at"], started)
 
-    def test_hard_deadline_cancels_the_open_assignment_and_pauses(self):
-        """The total duration is a hard boundary: at the deadline the open assignment is cancelled and the room pauses."""
+    def test_hard_deadline_cancels_the_open_assignment_and_ends(self):
+        """The total duration is a hard boundary: at the deadline the open assignment is cancelled and the discussion ends."""
         self.limited_room(max_minutes=10)
         self.request(self.path + "/turns", {"actor": "用户", "expert": "Codex", "question": "待回答",
             "submission_id": "reserve-timing"})
@@ -441,7 +443,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse(self.request(self.path)[1]["limits"]["reached"])
         time.sleep(3)
         room = self.request(self.path + "/limits", {"actor": "用户"}, self.owner)[1]
-        self.assertEqual(room["phase"], "paused")
+        self.assertEqual((room["mode"], room["phase"]), ("free", "concluded"))
         self.assertEqual(room["current_turn"]["status"], "cancelled")
         self.assertEqual(room["limits"]["stop_reason"], "time_limit")
         self.assertEqual(room["limits"]["deadline"], deadline)
@@ -1040,7 +1042,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.conclude_as_host(token), 200)
         self.assertEqual(self.events()[0]["status"], "completed")
         self.assertEqual(self.events()[0]["result"], "concluded")
-        self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "迟到"}, token)[0], 403)
+        self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "迟到"}, token)[0], 400, "the room is free again")
 
     def test_resume_preserves_phase_and_archive_revokes_execution(self):
         """A running phase is not reset to initial when resuming; archive stops the run."""
@@ -1109,8 +1111,8 @@ class RuntimeTests(unittest.TestCase):
         status, room = self.request(self.path + "/limits", {"actor": "用户"}, self.owner)
         self.assertEqual(status, 200, room)
         self.assertEqual(room["limits"]["reason"], "round_limit")
-        self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "旧执行"}, old_token)[0], 403)
-        self.assertEqual(room["runtime"]["status"], "paused")
+        self.assertEqual(self.request(self.path + "/state", {"actor": "Codex", "text": "旧执行"}, old_token)[0], 400)
+        self.assertEqual(room["runtime"]["status"], "concluded")
 
     def test_zero_deadline_cannot_bypass_configured_duration(self):
         """Zero inherits a configured topic cutoff; invalid deadlines still fail."""

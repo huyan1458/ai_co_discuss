@@ -344,6 +344,20 @@ def recipients(connection, room_id, payload):
     return [(host["id"], "route")] if host else []
 
 
+def route_held_messages(connection, room_id, host):
+    """When a discussion ends, hand the user's messages its host never answered to the free room's recipients, as if just sent."""
+    held = connection.execute("SELECT held_since FROM turn_relay WHERE room_id=?", (room_id,)).fetchone()
+    if held and held[0]:
+        rows = connection.execute("""SELECT id FROM messages m WHERE room_id=? AND author='用户' AND id>=?
+            AND id>COALESCE((SELECT MAX(id) FROM messages WHERE room_id=? AND author=?),0)
+            AND NOT EXISTS(SELECT 1 FROM member_requests r WHERE r.message_id=m.id) ORDER BY id""",
+                                  (room_id, held[0], room_id, host)).fetchall()
+        for row in rows:
+            for member_id, purpose in recipients(connection, room_id, {}):
+                insert_request(connection, room_id, member_id, row["id"], row["id"], purpose, "user")
+    connection.execute("UPDATE turn_relay SET held_since=0 WHERE room_id=?", (room_id,))
+
+
 def proxy_member(connection, room_id, author):
     """Return the active online member the owner may forward an answer for."""
     row = connection.execute("SELECT * FROM room_members WHERE room_id=? AND name=? AND status='active' AND access='online'",

@@ -198,7 +198,7 @@ def room_commands(subcommands, registry):
             parser.add_argument("--submission-id", type=submission_id, help="按建房提交编号精确查询")
     limits = add_leaf(subcommands, registry, "room limits", "查看上限；--check 检查并执行到限处理；--done 通知程序目标已完成", True)
     limits.add_argument("--check", action="store_true")
-    limits.add_argument("--done", action="store_true", help="主持人宣告目标已完成：暂停讨论，由用户决定追加轮次或结束；须带 --conclusion")
+    limits.add_argument("--done", action="store_true", help="主持人宣告目标已完成：结束讨论，房间回到自由协作；须带 --conclusion")
     limits.add_argument("--conclusion", help="room conclusion 返回的 revision；--done 必填")
     create = add_leaf(subcommands, registry, "room create", "创建话题；不自动启动讨论或监控")
     create.add_argument("--folder-id", help="直接在指定文件夹中创建；省略则未归类")

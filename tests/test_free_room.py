@@ -81,6 +81,16 @@ class FreeRoomTests(unittest.TestCase):
         member_id = self.request(self.path)[1]["free"]["members"][0]["id"]
         return self.request(f"{self.path}/executions", {"member_id": member_id, "client_id": client_id or uuid.uuid4().hex}, self.owner)
 
+    def test_scheduler_routing_marker_is_owner_only_and_clears(self):
+        """The local service marks a message while it is analysed; the room view lists it until cleared."""
+        path = f"{self.path}/scheduler-routing"
+        self.assertEqual(self.request(path, {"message_id": 1, "active": True}, self.member)[0], 403)
+        self.assertEqual(self.request(path, {"message_id": 0, "active": True}, self.owner)[0], 400)
+        self.assertEqual(self.request(path, {"message_id": 7, "active": True}, self.owner)[0], 200)
+        self.assertEqual(self.request(self.path)[1]["scheduler_routing"], [7])
+        self.assertEqual(self.request(path, {"message_id": 7, "active": False}, self.owner)[0], 200)
+        self.assertEqual(self.request(self.path)[1]["scheduler_routing"], [])
+
     def test_room_view_reports_free_mode_and_members_without_secrets(self):
         """The public view lists members and states but never any credential hash."""
         room = self.request(self.path)[1]
@@ -337,9 +347,14 @@ class MultiMemberTests(FreeRoomTests):
         # A direct question still wakes a member inside the discussion.
         self.assertEqual(self.request(f"{self.path}/messages", {"author": "用户", "text": "@Claude 现在怎么样", "to": ["Claude"], "submission_id": uuid.uuid4().hex}, self.owner)[0], 201)
         self.assertEqual([item["status"] for item in self.request(self.path)[1]["asks"]["requests"] if item["message_id"] > first], ["pending"])
+        note = self.request(f"{self.path}/messages", {"author": "用户", "text": "暂停时留的话", "submission_id": uuid.uuid4().hex}, self.owner)[1]["message"]["id"]
         status, ended = self.request(discussion, {"action": "end"}, self.owner)
         self.assertEqual(status, 200, ended)
         self.assertEqual((ended["mode"], ended["phase"], ended["session"]["status"], ended["runtime"]["status"]), ("free", "concluded", "concluded", "concluded"))
+        # The unnamed note the discussion's host never answered goes to the host now, as if just sent; the direct question is not repeated.
+        requests = self.request(self.path)[1]["free"]["requests"]
+        self.assertEqual([(item["member"], item["purpose"]) for item in requests if item["message_id"] > first], [("Claude", "ask"), ("Codex", "route")])
+        self.assertEqual([item["message_id"] for item in requests if item["purpose"] == "route"], [note])
         # The room goes on as a free room, and a later discussion starts a new session with a fresh budget.
         self.assertEqual(super().say("没有点名")[0], 201)
         status, again = self.request(discussion, {"action": "start", "goal": "第二轮"}, self.owner)

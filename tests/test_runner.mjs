@@ -13,7 +13,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DiscussionRunner, DiscussionStore, load_config, service_drafts, task_files, validate_config } from '../runner/discussion_runner.mjs';
 import { cwd_key, FreeRoomRunner, workspace_snapshot } from '../runner/free_runner.mjs';
-import { assert_shared_home, DiscussionService, migrate_service_home, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
+import { assert_shared_home, DiscussionService, FreeRoomWithDiscussion, migrate_service_home, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
 import { launch_discussion, room_models } from '../runner/discussion_launch.mjs';
 import { agy_rule, antigravity_project, claude_exit_error, claude_rule_path, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
@@ -1894,4 +1894,22 @@ test('the runner enters an auto-enter execution once even when the session is re
     }
     f.store.record(1, { status: 'pending', error: '' });
   }
+});
+
+test('a free room whose discussion ended stops the discussion CLI before delivering free requests', async t => {
+  const server = createServer((request, response) => {
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ mode: 'free' }));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => server.close());
+  const order = [];
+  const questions = { config: { site: `http://127.0.0.1:${server.address().port}`, room: 'room', token: '' }, children: new Set(),
+    tick: async () => { order.push('questions'); } };
+  const room = new FreeRoomWithDiscussion(questions);
+  room.discussion = { children: new Set([{}]), stop_children() { order.push('stop'); this.children.clear(); } };
+  await room.tick();
+  await room.tick();
+  assert.deepEqual(order, ['stop', 'questions', 'questions'], 'only a live discussion CLI is stopped, once');
 });

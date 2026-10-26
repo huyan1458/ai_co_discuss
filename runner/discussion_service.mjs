@@ -202,6 +202,9 @@ export class FreeRoomWithDiscussion {
       this.discussion ??= new DiscussionRunner(this.questions.config, this.questions.store, undefined, this.questions.log);
       this.discussion.config = this.questions.config;
       result = await this.discussion.tick();
+    } else if (this.discussion?.children.size) {
+      // The discussion ended (at its limit, by the host or by the user): its CLI must exit before the host takes free requests.
+      this.discussion.stop_children();
     }
     await this.questions.tick();
     return result;

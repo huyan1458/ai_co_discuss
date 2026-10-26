@@ -25,7 +25,7 @@ from .free_room import (add_member, after_free_message, authorize_free_write, ch
                         inbox, interrupt_member, member_action, member_values, migrate_free_tables, proxy_member, reserve_execution,
                         discussion_members, room_mode, save_room_access, sync_discussion_members, view_execution)
 from .free_room import add_discussion_member, convert_suggestion, discussion_member_action, message_suggestions, save_suggestions, sync_participants
-from .free_room import active_members, adopt_recommendation, ask_members, asks_view, checked_asks, recommend_member, register_member
+from .free_room import active_members, adopt_recommendation, ask_members, asks_view, checked_asks, recommend_member, register_member, route_held_messages
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, is_ai, is_participant
 from .room_import import import_room, imported_attachment
 from .runtime import (authorize_write, begin_write, configure_runtime, event_action,
@@ -82,6 +82,7 @@ MAX_DECISION_CONTEXT = 500
 DECISION_SELECT = """SELECT d.*,f.rating AS feedback,COALESCE(f.should_be,'') AS should_be,COALESCE(f.note,'') AS note,c.context
 FROM scheduler_decisions d LEFT JOIN scheduler_feedback f ON f.decision_id=d.id LEFT JOIN scheduler_decision_context c ON c.decision_id=d.id"""
 MAX_DECISION_LABEL = 200
+ROUTING_VISIBLE_SECONDS = 120
 MAX_DECISION_DETAIL = 4000
 SCHEDULER_PROVIDERS = ("jev", "decisions")
 ROOM_BACKUP_QUERIES = {
@@ -235,6 +236,8 @@ def require_room(connection, room_id):
         "SELECT decision_id,detail FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)", (room_id,))}
     for decision in room["scheduler_decisions"]:
         decision["detail"] = details.get(decision["id"])
+    room["scheduler_routing"] = [row[0] for row in connection.execute(
+        "SELECT message_id FROM scheduler_routing WHERE room_id=? AND created_at>? ORDER BY message_id", (room_id, int(time.time()) - ROUTING_VISIBLE_SECONDS))]
     room["host_arrangements"] = host_arrangements(connection, room_id, room["scheduler_decisions"])
     room["cancelled_turns"] = cancelled_turns(connection, room_id)
     parent = connection.execute("""SELECT rooms.id,rooms.title FROM room_links JOIN rooms ON rooms.id=room_links.parent_id
@@ -488,6 +491,8 @@ def update_topic(connection, room_id, payload):
     connection.execute("UPDATE rooms SET title=?,goal=? WHERE id=?", (settings["title"], settings["goal"], room_id))
     sync_discussion_members(connection, room_id, payload, settings)
     save_topic_settings(connection, room_id, settings)
+    if settings["phase"] == "concluded" and room["phase"] != "concluded" and room["mode"] != "free" and not room["archived"]:
+        return_to_free(connection, {**room, "host": settings["host"]})
     return require_room(connection, room_id)
 
 
@@ -630,7 +635,7 @@ def manage_room(connection, room_id, action, payload):
 def delete_room_records(connection, room_id):
     """Remove a room's dependent records in the caller's transaction."""
     for table in ("member_recommendations", "member_requests", "member_executions", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "room_links",
-                  "discussion_options", "round_budgets", "scheduler_decisions", "discussion_sessions"):
+                  "discussion_options", "round_budgets", "scheduler_decisions", "scheduler_routing", "discussion_sessions"):
         if table == "scheduler_decisions":
             for child in ("scheduler_feedback", "scheduler_decision_context"):
                 connection.execute(f"DELETE FROM {child} WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)", (room_id,))
@@ -773,13 +778,20 @@ def end_discussion(connection, room_id, token, payload):
     room = require_room(connection, room_id)
     if room["mode"] == "free":
         raise FileExistsError("房间没有进行中的讨论")
-    if room["runtime"]["status"] in ("running", "ready", "paused"):
-        configure_runtime(connection, room_id, token, {"action": "stop", "revision": room["runtime"]["revision"]})
+    return_to_free(connection, room)
+    return require_room(connection, room_id)
+
+
+def return_to_free(connection, room):
+    """End the discussion in place: stop its run and turns, switch back to free collaboration and route held user messages."""
+    room_id = room["id"]
+    connection.execute("""UPDATE discussion_runtime SET status='stopped',generation=generation+1,revision=revision+1
+        WHERE room_id=? AND status IN ('running','ready','paused')""", (room_id,))
     connection.execute("UPDATE discussion_turns SET status='cancelled' WHERE room_id=? AND status IN ('pending','notified')", (room_id,))
     connection.execute("UPDATE discussion_turns SET status='skipped' WHERE room_id=? AND status='queued'", (room_id,))
     connection.execute("UPDATE topic_settings SET phase='concluded' WHERE room_id=?", (room_id,))
     connection.execute("UPDATE room_modes SET mode='free' WHERE room_id=?", (room_id,))
-    return require_room(connection, room_id)
+    route_held_messages(connection, room_id, room["host"])
 
 
 def message_values(payload):
@@ -1040,6 +1052,10 @@ def append_message(connection, room_id, payload, token="", free_actor=None):
     begin_write(connection)
     room = require_room(connection, room_id)
     if room["mode"] == "free" or free_actor is not None:
+        previous = connection.execute(f"{MESSAGE_QUERY} WHERE room_id=? AND submission_id=?", (room_id, submission_id)).fetchone()
+        # An exact retry of a discussion message saved before the discussion ended keeps its original result.
+        if previous and previous["kind"] != "chat" and (previous["author"], previous["text"]) == (author, text):
+            return {"message": message_with_attachments(connection, previous), "duplicate": True}
         return append_free_message(connection, room, payload, free_actor)
     details = message_details(room, {**payload, "author": author})
     # An expert's opinion answers the arrangement open for that expert; naming it with turn_id is optional.
@@ -1214,6 +1230,20 @@ def rate_scheduler_decision(connection, room_id, decision_id, token, payload):
     return {"decision_id": decision_id, "feedback": rating, "should_be": should_be.strip(), "note": note.strip()}
 
 
+def mark_scheduler_routing(connection, room_id, token, payload):
+    """The local service marks a message while the decision model is analysing it, and clears the mark when done."""
+    begin_write(connection)
+    require_owner(connection, room_id, token)
+    message_id, active = payload.get("message_id"), payload.get("active")
+    if type(message_id) is not int or message_id <= 0 or type(active) is not bool:
+        raise ValueError("须提供正整数 message_id 与布尔 active")
+    if active:
+        connection.execute("INSERT OR REPLACE INTO scheduler_routing (room_id,message_id,created_at) VALUES (?,?,?)", (room_id, message_id, int(time.time())))
+    else:
+        connection.execute("DELETE FROM scheduler_routing WHERE room_id=? AND message_id=?", (room_id, message_id))
+    return {"message_id": message_id, "active": active}
+
+
 def record_scheduler_decision(connection, room_id, token, payload, owner=False):
     """The dispatcher records one smart-scheduling decision so the transcript shows what it did and how sure it was.
 
@@ -1263,27 +1293,24 @@ def continue_turns(connection, room_id, payload):
     connection.execute("UPDATE discussion_turns SET status='pending' WHERE id=? AND status='queued'", (turn_id,))
     return {"turn": get_turn(connection, room_id, turn_id), "queued": room["queued_turns"][1:]}
 
-def adjust_limits(connection, room_id, payload, action):
-    """User-only follow-ups after a limit: append rounds, or reopen a concluded discussion."""
+def reopen_limits(connection, room_id, payload):
+    """User-only: reopen a concluded discussion that has not returned to free collaboration."""
     begin_write(connection)
     room = require_room(connection, room_id)
     if payload.get("actor") != "用户":
-        raise ValueError("仅用户可以追加轮次或重启已收束的讨论")
+        raise ValueError("仅用户可以重启已收束的讨论")
     if room["archived"]:
         raise ValueError("请先恢复已存档房间")
+    if room["mode"] == "free":
+        raise ValueError("房间已回到自由协作；需要讨论时请重新开启讨论")
     if not room["round_budget"]:
-        raise ValueError("该房间沿用旧轮次计数，不支持追加轮次或重启")
-    required_phase = "concluded" if action == "reopen" else "paused"
-    if room["phase"] != required_phase:
-        raise ValueError("仅已收束的讨论可以重启" if action == "reopen" else "仅已暂停的讨论可以追加轮次")
-    rounds = payload.get("rounds") if action == "extend" else payload.get("max_rounds", room["limits"]["max_rounds"])
-    if type(rounds) is not int or not (1 if action == "extend" else 0) <= rounds <= 100:
-        raise ValueError("轮次须为整数（追加 1–100，重启 0–100，0 表示不限）")
+        raise ValueError("该房间沿用旧轮次计数，不支持重启")
+    if room["phase"] != "concluded":
+        raise ValueError("仅已收束的讨论可以重启")
+    rounds = payload.get("max_rounds", room["limits"]["max_rounds"])
+    if type(rounds) is not int or not 0 <= rounds <= 100:
+        raise ValueError("轮次须为 0–100 的整数，0 表示不限")
     count = opinion_count(connection, room_id, room["experts"])
-    if action == "extend":
-        connection.execute("UPDATE round_budgets SET base=?,cap=?,extra=extra+? WHERE room_id=?", (count, rounds, rounds, room_id))
-        connection.execute("UPDATE discussion_limits SET stop_reason='',revision=revision+1 WHERE room_id=?", (room_id,))
-        return require_room(connection, room_id)
     limits = limit_values({"max_rounds": rounds, "max_minutes": payload.get("max_minutes", room["limits"]["max_minutes"])}, room["limits"])
     connection.execute("UPDATE round_budgets SET base=?,cap=0,extra=0 WHERE room_id=?", (count, room_id))
     connection.execute("""UPDATE discussion_limits SET max_rounds=?,max_minutes=?,started_at=0,stop_reason='',revision=revision+1
@@ -1294,29 +1321,27 @@ def adjust_limits(connection, room_id, payload, action):
 
 
 def check_limits(connection, room_id, payload):
-    """Pause at a reached boundary (or once the host declares the goal done); the user then extends or ends the discussion."""
+    """End the discussion at a reached boundary (or once the host declares the goal done); the room returns to free collaboration."""
     action = payload.get("action", "check")
-    if action not in ("check", "done", "extend", "reopen"):
-        raise ValueError("action 须为 check/done/extend/reopen")
-    if action in ("extend", "reopen"):
-        return adjust_limits(connection, room_id, payload, action)
+    if action not in ("check", "done", "reopen"):
+        raise ValueError("action 须为 check/done/reopen")
+    if action == "reopen":
+        return reopen_limits(connection, room_id, payload)
     begin_write(connection)
     room = require_room(connection, room_id)
     require_host(room, payload)
     limits = room["limits"]
     done = action == "done"
-    inactive = room["phase"] in ("paused", "concluded") or room["archived"] or (done and room["phase"] == "preparing")
+    inactive = (room["mode"] == "free" or room["phase"] in ("paused", "concluded") or room["archived"]
+                or (done and room["phase"] == "preparing"))
     if (not limits["reached"] and not done) or inactive:
         return room
     if done:
         require_conclusion_ready(connection, room, payload, allow_queued=True)
     reason = "goal_done" if done else limits["reason"] or "user_stop"
     connection.execute("UPDATE discussion_limits SET stop_reason=?,revision=revision+1 WHERE room_id=?", (reason, room_id))
-    connection.execute("UPDATE discussion_turns SET status='cancelled' WHERE room_id=? AND status IN ('pending','notified')", (room_id,))
-    connection.execute("UPDATE discussion_turns SET status='skipped' WHERE room_id=? AND status='queued'", (room_id,))
-    connection.execute("UPDATE topic_settings SET phase='paused' WHERE room_id=?", (room_id,))
-    # Pausing at the limit also pauses the run, so the board offers restart and the old execution is superseded.
-    connection.execute("UPDATE discussion_runtime SET status='paused',generation=generation+1,revision=revision+1 WHERE room_id=? AND status='running'", (room_id,))
+    # The run's generation moves on, so the old execution is superseded; unnamed messages now go to the host as usual.
+    return_to_free(connection, room)
     return require_room(connection, room_id)
 
 
@@ -1443,7 +1468,7 @@ def room_text(connection, room_id, params):
                f"主持人：{room['host']}；阶段：{PHASES[room['phase']]}；当前焦点：{room['focus'] or '尚未填写'}",
                f"当前记录截止 #{room['latest_id']}；共 {room['message_count']} 条；已完成 {room['completed_rounds']} 轮讨论（所有参与专家各发言一次）。"]
     limits = room["limits"]
-    content.append(f"讨论上限：{limits['max_rounds'] or '不限'} 轮；总时长 {limits['max_minutes'] or '不限'} 分钟；单次自动执行 {str(limits['execution_minutes']) + ' 分钟' if limits['execution_minutes'] else '不限时长'}；到限后暂停，由用户决定追加轮次或结束。到限：{limits['reached']}。")
+    content.append(f"讨论上限：{limits['max_rounds'] or '不限'} 轮；总时长 {limits['max_minutes'] or '不限'} 分钟；单次自动执行 {str(limits['execution_minutes']) + ' 分钟' if limits['execution_minutes'] else '不限时长'}；到限后讨论结束，房间回到自由协作。到限：{limits['reached']}。")
     if room["mode"] == "free":
         members = "；".join(f"{item['name']}（已读至 #{item['read_until']}，待投递 {item['pending']}）" for item in room["free"]["members"])
         content.append(f"自由协作房间：无发言权、安排与轮次。成员：{members or '无'}。用户的消息点名成员后生成请求；成员回答须带本次执行编号，执行结束、被打断或过期后的回答会被拒绝，不能改作普通发言。")
@@ -1526,7 +1551,7 @@ def protocol_text(room):
         "API 参与者由本机 runner 使用相同房间授权和执行约束提交，消息 source=api；CLI 仍使用 source=cli。兼容字段 experts 中的 cli 表示可自行提交，实际接入方式见成员 adapter。",
         "写入使用 POST，通常为 Content-Type: application/json；附件上传使用 application/octet-stream 原始字节。主持操作填写 actor 为当前主持人或用户；这些是声明身份，不是认证凭据。",
         f"附件：POST {base}/attachments?actor=身份&file_name=文件名&submission_id=新编号，原文件最多 20 MiB；GET 同路径默认列已发送附件，加 submission_id 精确核对上传。GET {base}/attachments/ID 读元数据，/ID/content 下载原文件。消息可带 attachment_ids（最多 10 个有序编号）；只关联同房间、同提交者的未使用附件，可只有附件无正文。自动任务须在回答完成前上传；消息查询包含附件，按需下载后由当前软件读取，不自动解析。",
-        "讨论上限：room.limits 返回轮次、总时长、单次执行和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长/单次执行时限。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理；到限后暂停并停止新专家安排与观点，由用户决定追加轮次或结束；暂停期间不计时也不消耗总时长。",
+        "讨论上限：room.limits 返回轮次、总时长、单次执行和实际进度。准备/暂停时通过 topic 的 limits 对象修改；0 表示不预设轮次/总时长/单次执行时限。POST /api/rooms/ROOM/limits（actor）或 room limits ROOM --check 检查到限处理；到限后讨论结束并停止新专家安排与观点，房间回到自由协作；暂停期间不计时也不消耗总时长。",
         "运行方式：room.runtime 显示 manual/automatic、状态及真实执行回执。所有房间写入须带 X-Discussion-Token，CLI 用 --access-file 读取私有文件。用户及运行控制使用房主凭据，手动本地成员使用自己的成员凭证，不能相互冒充；在线成员只读，由房主或讨论主持人代发。自动讨论先 execution enter，创建安排或保存关联回答即完成本步，不创建原生定时任务；本机唤醒成员的持久凭证不能替代自动执行，手动接入的专家用自己的成员凭证回答安排，暂停、停止、换代、租约到期后的旧执行失效。run view/start/pause/stop/configure 字段查 CLI schema。",
         "没有发言权：同一话题同时只有一个未完成的发言安排，被安排的专家直接回答它；专家观点自动回答该专家当前有效的安排，turn_id 可省略（填写则须与之相符），没有轮到你时被拒绝。主持发言（moderation）只能由当前主持人署名，任何时候都可发出；创建、取消安排由主持人或用户操作。用户的 @ 直接提问不占安排也不计轮次。失败的写入不会改变安排状态，同编号重试沿用原内容。",
         '创建话题：POST /api/rooms，携带房主控制凭据；字段 title、goal、user_request、background、boundaries、host、experts、members、submission_id（新 UUID）。members 与 experts 名单一致，各项含 name、独立 token、access（手动本地 manual、自动 runner、在线 online）。AI 主持人必须为本地可写成员。CLI room create --access-file 私有房主文件 在请求前保存凭据，确认后返回各本地成员文件路径；同编号重试沿用原资料和全部凭据。名单、主持职责变更仅房主可做。',
@@ -1933,8 +1958,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.respond(result)
         if parts[3:4] == ["attachments"]:
             return self.handle_attachments(connection, parts, params, method)
-        if parts[3:4] in (["runtime"], ["events"], ["scheduler-decisions"]):
-            if free and method == "POST" and parts[3:4] != ["scheduler-decisions"]:
+        if parts[3:4] in (["runtime"], ["events"], ["scheduler-decisions"], ["scheduler-routing"]):
+            if free and method == "POST" and parts[3:4] not in (["scheduler-decisions"], ["scheduler-routing"]):
                 raise ValueError("自由房间不使用讨论运行控制")
             return self.handle_runtime_api(connection, parts, params, method)
         free_actor = None
@@ -2065,6 +2090,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = event_action(connection, room_id, int(parts[4]), token, self.read_payload())
         elif parts[3:] == ["scheduler-decisions"] and method == "POST":
             result = record_scheduler_decision(connection, room_id, token, self.read_payload(), owner=room_mode(connection, room_id) == "free")
+        elif parts[3:] == ["scheduler-routing"] and method == "POST":
+            result = mark_scheduler_routing(connection, room_id, token, self.read_payload())
         elif len(parts) == 5 and parts[3] == "scheduler-decisions" and method == "POST":
             result = rate_scheduler_decision(connection, room_id, int(parts[4]), token, self.read_payload())
         else:

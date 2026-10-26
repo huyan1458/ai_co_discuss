@@ -446,7 +446,9 @@ test('Worker accepts SQLite-formatted expert JSON after migration, including rea
   assert.equal(answer.status, 201, JSON.stringify(answer.body));
   const checked = await f.request(`/${id}/limits`, { actor: '用户' });
   assert.equal(checked.status, 200, JSON.stringify(checked.body));
-  assert.equal(checked.body.phase, 'paused');
+  assert.deepEqual([checked.body.mode, checked.body.phase], ['free', 'concluded']);
+  const retried = await f.request(`/${id}/messages`, { author: 'Codex', kind: 'opinion', source: 'cli', text: '迁移后的回答', turn_id: turn.body.turn.id, submission_id: 'migration-answer' });
+  assert.equal(retried.status, 200, 'an exact retry survives the return to free collaboration');
 });
 
 test('Worker excludes paused time from elapsed time and the total-duration deadline', async t => {
@@ -519,7 +521,7 @@ test('Worker unlimited runs keep bounded execution leases, authorization and pau
 });
 
 {
-  test('Worker unlimited runs pause at the round limit, and the removed summary mode is refused', async t => {
+  test('Worker unlimited runs end at the round limit, and the removed summary mode is refused', async t => {
     const f = await worker_fixture(t);
     assert.equal((await f.request('', { title: '旧总结方式', host: 'Codex', experts: { Codex: 'cli' }, limits: { on_limit: 'summarize' } })).status, 400);
     const id = (await f.request('', { title: '轮次到限', host: 'Codex', experts: { Codex: 'cli' },
@@ -534,7 +536,7 @@ test('Worker unlimited runs keep bounded execution leases, authorization and pau
       text: '原文', submission_id: 'unlimited-answer', turn_id: turn.id }, answer_token)).status, 201);
     const room = (await f.request(`/${id}/limits`, { actor: '用户' })).body;
     assert.equal(room.limits.reason, 'round_limit');
-    assert.equal(room.runtime.status, 'paused');
+    assert.deepEqual([room.mode, room.runtime.status], ['free', 'concluded']);
     assert.equal(room.limits.closing, undefined);
   });
 }
@@ -730,7 +732,7 @@ test('Worker reports per-participant executions and has no forced summary closin
   assert.deepEqual([unchanged.body.limits.stop_reason, unchanged.body.current_turn.status, unchanged.body.runtime.status], ['', 'pending', 'running']);
 });
 
-test('Worker pauses on declared completion, lets the user extend, and reopens a concluded room', async t => {
+test('Worker returns to free collaboration on declared completion; only a legacy concluded discussion reopens', async t => {
   const f = await worker_fixture(t);
   const id = (await f.request('', { title: '到限暂停', host: 'Codex', experts: { Codex: 'cli' }, limits: { max_rounds: 2 } })).body.id;
   assert.equal((await f.request(`/${id}/runtime`, { action: 'start', revision: 0, deadline: 0 })).status, 200);
@@ -742,14 +744,11 @@ test('Worker pauses on declared completion, lets the user extend, and reopens a 
   assert.equal((await f.request(`/${id}/limits`, { actor: 'Codex', action: 'done' }, token)).status, 400, 'done needs the conclusion revision');
   const conclusion = (await f.request(`/${id}/conclusion`)).body.revision;
   const done = await f.request(`/${id}/limits`, { actor: 'Codex', action: 'done', conclusion }, token);
-  assert.deepEqual([done.status, done.body.phase, done.body.limits.stop_reason], [200, 'paused', 'goal_done']);
-  const extended = await f.request(`/${id}/limits`, { actor: '用户', action: 'extend', rounds: 3 });
-  assert.equal(extended.status, 200, JSON.stringify(extended.body));
-  const { max_rounds, extra_rounds, round_cap, segment_rounds, stop_reason } = extended.body.limits;
-  assert.deepEqual([max_rounds, extra_rounds, round_cap, segment_rounds, stop_reason], [2, 3, 3, 0, '']);
+  assert.deepEqual([done.status, done.body.mode, done.body.phase, done.body.limits.stop_reason], [200, 'free', 'concluded', 'goal_done']);
+  assert.equal((await f.request(`/${id}/limits`, { actor: '用户', action: 'extend', rounds: 3 })).status, 400);
   assert.equal((await f.request(`/${id}/limits`, { actor: '用户', action: 'summarize' })).status, 400);
-  assert.equal((await f.request(`/${id}/limits`, { actor: '用户', action: 'reopen', max_rounds: 1 })).status, 400);
-  assert.equal((await f.request(`/${id}/topic`, { actor: '用户', phase: 'concluded' })).status, 200);
+  assert.equal((await f.request(`/${id}/limits`, { actor: '用户', action: 'reopen', max_rounds: 1 })).status, 400, 'a free room starts a new discussion instead');
+  f.sql.prepare("UPDATE room_modes SET mode='brainstorm' WHERE room_id=?").run(id);
   const reopened = await f.request(`/${id}/limits`, { actor: '用户', action: 'reopen', max_rounds: 2, max_minutes: 30 });
   assert.equal(reopened.status, 200, JSON.stringify(reopened.body));
   assert.deepEqual([reopened.body.phase, reopened.body.limits.max_rounds, reopened.body.limits.max_minutes, reopened.body.limits.extra_rounds, reopened.body.limits.reached],
@@ -1026,9 +1025,13 @@ test('Worker free room starts and ends a discussion and stays one room', async t
   assert.deepEqual([started.body.session.status, started.body.runtime.mode, started.body.round_budget.base], ['paused', 'automatic', 0]);
   assert.equal((await f.request(discussion, { action: 'start' }, r.owner)).status, 409);
   assert.equal((await f.request(`${r.path}/messages/${first}`)).body.text, '先聊几句');
+  const note = (await f.request(`${r.path}/messages`, { author: '用户', text: '暂停时留的话', submission_id: 'held-note-0001' }, r.owner)).body.message.id;
   const ended = await f.request(discussion, { action: 'end' }, r.owner);
   assert.equal(ended.status, 200, JSON.stringify(ended.body));
   assert.deepEqual([ended.body.mode, ended.body.phase, ended.body.session.status, ended.body.runtime.status], ['free', 'concluded', 'concluded', 'concluded']);
+  // The unnamed note the discussion's host never answered goes out now, as if just sent.
+  const requests = (await f.request(r.path)).body.free.requests.filter(item => item.message_id > first);
+  assert.deepEqual(requests.map(item => [item.message_id, item.member, item.purpose]), [[note, 'Claude', 'ask']]);
   const again = await f.request(discussion, { action: 'start', goal: '第二轮' }, r.owner);
   assert.equal(again.status, 200, JSON.stringify(again.body));
   assert.deepEqual([again.body.session.goal, again.body.session.id], ['第二轮', 2]);

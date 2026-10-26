@@ -84,7 +84,7 @@ def limits_view(row, room):
 def require_within_limits(room):
     """Stop new expert work at the configured boundary, preserving user notes."""
     if room["limits"]["reached"]:
-        raise FileExistsError("已达到讨论上限；请检查上限并暂停，由用户决定追加轮次或结束")
+        raise FileExistsError("已达到讨论上限；请检查上限，讨论随之结束并回到自由协作")
 
 
 def execution_seconds(connection, room_id):
