@@ -594,8 +594,10 @@ html[data-theme^="channel"] .dialog-form .project-box input { background: transp
 html[data-theme^="channel"] .dialog-form.project-manager { gap: 12px; }
 html[data-theme^="channel"] .dialog-form label[data-slot="label"] { color: #c1c9d6; font-size: 12px; }
 html[data-theme^="channel"] .channel-folder-modal { max-width: 420px; }
-html[data-theme^="channel"] .channel-folder-modal [data-slot="header"] { min-height: 0; padding: 20px 20px 14px; border-bottom: 0; }
-html[data-theme^="channel"] .channel-folder-modal .dialog-body { padding: 0 20px 20px; }
+html[data-theme^="channel"] .channel-folder-modal [data-slot="header"] { min-height: 0; padding: 20px 24px 12px; border-bottom: 0; }
+html[data-theme^="channel"] .channel-folder-modal [data-slot="close"] { position: static; margin-inline-start: auto; flex-shrink: 0; }
+/* Keep the input's outer stroke inside the scrollable body. */
+html[data-theme^="channel"] .channel-folder-modal .dialog-body { padding: 4px 24px 24px; }
 html[data-theme^="channel"] .channel-folder-modal .dialog-actions { border: 0; padding-top: 4px; margin: 0; gap: 8px; }
 html[data-theme^="channel"] .channel-manage-modal .dialog-form { gap: 10px; }
 html[data-theme^="channel"] .channel-settings-modal [data-slot="header"] { min-height: 0; padding: 20px 20px 14px; border-bottom: 0; }

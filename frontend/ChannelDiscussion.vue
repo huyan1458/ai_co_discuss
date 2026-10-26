@@ -184,19 +184,14 @@ function answer_execution(message) {
   return ((free.value ? room.value.free : room.value.asks)?.executions || []).find((item) => item.answer_id === message.id);
 }
 /**
- * Whether a working member's software is still producing output, from the runner's latest report.
+ * The working card's one status line: the phase while output keeps coming, a warning only after a long silence.
  * Silence while a command runs is expected, so it is named as such instead of a possible hang.
  */
-function activity_note(message) {
-  if (!message.working) return null;
-  if (BLIND_ADAPTERS.includes(message.adapter)) return { text: "此接入方式看不到进度，可在原窗口查看", tone: "muted" };
-  const since = message.activity_at || message.created_at;
-  const silent = Math.max(0, free_now.value - since);
-  if (!message.activity_at && silent < STALL_SECONDS) return { text: "等待软件输出", tone: "muted" };
-  if (silent <= ACTIVE_SECONDS) return { text: "活动中", tone: "active" };
-  if (silent < STALL_SECONDS) return { text: `${format_elapsed(silent)}前有输出`, tone: "muted" };
-  if (message.activity === "command") return { text: `命令已运行 ${format_elapsed(silent)}`, tone: "muted" };
-  return { text: `已 ${format_elapsed(silent)}无输出，可能卡住`, tone: "warning" };
+function working_status(message) {
+  const silent = Math.max(0, free_now.value - (message.activity_at || message.created_at));
+  if (!message.working || BLIND_ADAPTERS.includes(message.adapter) || silent < STALL_SECONDS) return { text: message.text, live: message.working };
+  if (message.activity === "command") return { text: `命令已运行 ${format_elapsed(silent)}`, live: true };
+  return { text: `已 ${format_elapsed(silent)}无输出，可能卡住`, live: false, warning: true };
 }
 /** Says in the note line who the draft will reach: the @mentioned members, else the host. */
 const recipient_hint = computed(() => {
@@ -238,8 +233,6 @@ const SCHEDULER_LABELS = { jev: "TypeSafe Jev", decisions: "OpenAI Decisions" };
 const ACTIVITY_LABELS = { thinking: "思考中", command: "正在运行命令", tool: "正在调用工具", editing: "正在修改文件", writing: "正在撰写回答" };
 /** App deliveries run in the user's own window, so the runner never sees their output. */
 const BLIND_ADAPTERS = ["codex", "antigravity"];
-/** Output within the runner's early-report interval plus margin counts as current. */
-const ACTIVE_SECONDS = 15;
 /** Long reasoning or a long reply can be silent for minutes; beyond this the card only warns, never stops. */
 const STALL_SECONDS = 180;
 const FREE_REQUEST_LABELS = { pending: ["待投递", "neutral"], delivering: ["处理中", "info"], completed: ["已回复", "success"],
@@ -1105,14 +1098,14 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
               </div>
               <span class="channel-message-provenance channel-message-elapsed">{{ message.waiting ? `手动启动${message.created_at ? ` · 已等 ${format_elapsed(Math.max(0, free_now - message.created_at))}` : ''}` : `已用 ${format_elapsed(Math.max(0, free_now - message.created_at))}` }}</span>
             </div>
-            <div class="channel-message-text" :class="{ 'is-breathing': message.working }" role="status" :aria-label="`${bridge.display_name(message.author)} ${message.text}`">
+            <div v-for="status in [working_status(message)]" :key="message.id" class="channel-message-text" :class="{ 'is-breathing': status.live, 'channel-working-warning': status.warning }" role="status" :aria-label="`${bridge.display_name(message.author)} ${status.text}`" :title="BLIND_ADAPTERS.includes(message.adapter) ? '此接入方式看不到进度，可在原窗口查看' : undefined">
               <span v-if="message.waiting">{{ message.text }}</span>
-              <template v-else><span ref="reply_glow" class="channel-reply-glow">{{ message.text }}</span><span v-if="message.working" class="channel-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></template>
+              <template v-else><span ref="reply_glow" class="channel-reply-glow">{{ status.text }}</span><span v-if="status.live" class="channel-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></template>
             </div>
-            <ol v-if="execution_notes.get(message.execution_id)?.length" class="channel-notes" aria-label="过程说明">
-              <li v-for="note in execution_notes.get(message.execution_id)" :key="note.seq">{{ note.text }}</li>
-            </ol>
-            <div v-if="activity_note(message)" class="channel-activity" :class="`is-${activity_note(message).tone}`">{{ activity_note(message).text }}</div>
+            <!-- The same block the answer keeps folded: open while working, so the answer only collapses it. -->
+            <div v-if="execution_notes.get(message.execution_id)?.length" class="channel-receipt" aria-label="过程说明">
+              <ol class="channel-notes is-live"><li v-for="note in execution_notes.get(message.execution_id)" :key="note.seq">{{ note.text }}</li></ol>
+            </div>
           </template>
         </UChatMessage>
         <section v-else-if="message.failure" :id="message.id" class="channel-message channel-failed-execution" :data-author="bridge.identities[message.author]?.style" :aria-label="`${bridge.display_name(message.author)} 执行失败`">
@@ -1311,10 +1304,11 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
 .channel-link-button { color: var(--channel-accent); text-decoration: underline; text-underline-offset: 2px; }
 .channel-message-elapsed { align-self: center; margin-left: auto; white-space: nowrap; }
 .channel-reply-glow { display: inline-block; max-width: 100%; }
-.channel-notes { margin: 6px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 13px; line-height: 1.6; color: var(--ui-text-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
-.channel-activity { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 12px; color: var(--ui-text-muted); }
-.channel-activity.is-active::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ui-success); }
-.channel-activity.is-warning { color: var(--ui-warning); }
+.channel-notes { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 13px; line-height: 1.6; color: var(--ui-text-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+/* While working, the latest remark is where the member is now; earlier ones step back. */
+.channel-notes.is-live li { opacity: .7; }
+.channel-notes.is-live li:last-child { opacity: 1; color: var(--ui-text); }
+.channel-working-warning { color: var(--ui-warning); }
 .channel-dots { margin-left: 2px; font-weight: 700; }
 .channel-dots i { font-style: normal; margin-right: .18em; }
 /* Working-state motion always plays, regardless of the system reduced-motion setting. */

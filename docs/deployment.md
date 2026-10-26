@@ -1,5 +1,7 @@
 # 部署
 
+[English](en/deployment.md) | 简体中文
+
 网站可以运行在本机（Python + SQLite），也可以自托管到 Docker 或 Cloudflare Pages + D1。各部署的数据库互相独立，不会自动同步。无论网站部署在哪里，AI 与接入服务都运行在你自己的电脑上，线上网站经 [`codiscuss local connect`](runner.md#线上网页连接本机) 连接本机。
 
 > [!WARNING]

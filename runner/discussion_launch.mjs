@@ -73,7 +73,8 @@ conversation 还须 current_session_id，当前会话接手首个主持任务。
 `;
 
 // Windows PowerShell 5.1 ships WinForms. A background process cannot take the foreground, so the owner must be
-// shown (off-screen) as a topmost window; the dialog it owns then stays above the browser that asked for it.
+// shown (transparent) as a topmost window; the dialog it owns then stays above the browser that asked for it.
+// Keep the owner on-screen because the Common Item Dialog positions itself relative to its owner.
 // windowsHide turns the process's first Show into a hide, so the owner is shown a second time to really appear.
 // Under the local service the whole process chain has no console and no foreground rights: Windows then silently ignores
 // SetWindowPos(HWND_TOPMOST) on the dialog (it returns success). So once the dialog exists, a timer in its message loop
@@ -104,16 +105,72 @@ const PICKER_RAISE_SOURCE = [
   '  }',
   '}',
 ].join(' ');
+// Use the Common Item Dialog: unlike Framework WinForms, it has an editable address bar.
+// COM declarations retain the native vtable order through the last method used.
+const FOLDER_PICKER_SOURCE = `
+public static class FolderPicker {
+  const uint FOS_PICKFOLDERS = 0x20, FOS_FORCEFILESYSTEM = 0x40, FOS_PATHMUSTEXIST = 0x800;
+  const uint SIGDN_FILESYSPATH = 0x80058000;
+  const int CANCELLED = unchecked((int)0x800704C7);
+  [ComImport, Guid("42F85136-DB7E-439C-85F1-E4075D135FC8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IFileDialog {
+    [PreserveSig] int Show(IntPtr owner);
+    void SetFileTypes(uint count, IntPtr filters);
+    void SetFileTypeIndex(uint index);
+    void GetFileTypeIndex(out uint index);
+    void Advise(IntPtr events, out uint cookie);
+    void Unadvise(uint cookie);
+    void SetOptions(uint options);
+    void GetOptions(out uint options);
+    void SetDefaultFolder(IShellItem folder);
+    void SetFolder(IShellItem folder);
+    void GetFolder(out IShellItem folder);
+    void GetCurrentSelection(out IShellItem item);
+    void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string name);
+    void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string name);
+    void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string title);
+    void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string label);
+    void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string label);
+    void GetResult(out IShellItem item);
+  }
+  [ComImport, Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IShellItem {
+    void BindToHandler(IntPtr context, ref Guid handler, ref Guid iid, out IntPtr result);
+    void GetParent(out IShellItem parent);
+    void GetDisplayName(uint format, [MarshalAs(UnmanagedType.LPWStr)] out string name);
+  }
+  /// <summary>Choose an existing filesystem folder, or return null when cancelled.</summary>
+  public static string Show(IntPtr owner) {
+    var dialog = (IFileDialog)Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("DC1C5A9C-E88A-4DDE-A5A1-60F82A20AEF7")));
+    IShellItem item = null;
+    try {
+      uint options;
+      dialog.GetOptions(out options);
+      dialog.SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+      dialog.SetTitle("选择项目目录");
+      int result = dialog.Show(owner);
+      if (result == CANCELLED) return null;
+      Marshal.ThrowExceptionForHR(result);
+      dialog.GetResult(out item);
+      string path;
+      item.GetDisplayName(SIGDN_FILESYSPATH, out path);
+      return path;
+    } finally {
+      if (item != null) Marshal.ReleaseComObject(item);
+      Marshal.ReleaseComObject(dialog);
+    }
+  }
+}
+`;
 const WINDOWS_PICKER = [
+  '$ErrorActionPreference = "Stop"',
   'Add-Type -AssemblyName System.Windows.Forms',
   '[Console]::OutputEncoding = [Text.Encoding]::UTF8',
-  '$owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; ShowInTaskbar = $false; FormBorderStyle = "None"; StartPosition = "Manual"; Location = New-Object System.Drawing.Point(-32000, -32000); Size = New-Object System.Drawing.Size(1, 1) }',
-  `Add-Type -TypeDefinition '${PICKER_RAISE_SOURCE}'`,
+  '$owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; Opacity = 0; ShowInTaskbar = $false; FormBorderStyle = "None"; StartPosition = "CenterScreen"; Size = New-Object System.Drawing.Size(1, 1) }',
+  `Add-Type -TypeDefinition '${PICKER_RAISE_SOURCE} ${FOLDER_PICKER_SOURCE}'`,
   '$owner.Show(); $owner.Hide(); $owner.Show(); $owner.Activate()',
   '$timer = New-Object System.Windows.Forms.Timer -Property @{ Interval = 150 }; $timer.Add_Tick({ if ([PickerRaise]::OwnedBy($owner.Handle)) { $timer.Stop() } }); $timer.Start()',
-  '$dialog = New-Object System.Windows.Forms.FolderBrowserDialog -Property @{ Description = "选择项目目录"; ShowNewFolderButton = $true }',
-  'if ($dialog.ShowDialog($owner) -eq "OK") { $dialog.SelectedPath }',
-  '$owner.Close()',
+  'try { [FolderPicker]::Show($owner.Handle) } finally { $timer.Stop(); $timer.Dispose(); $owner.Close(); $owner.Dispose() }',
 ].join('; ');
 const PICKERS = {
   win32: ['powershell.exe', ['-NoProfile', '-STA', '-Command', WINDOWS_PICKER]],
