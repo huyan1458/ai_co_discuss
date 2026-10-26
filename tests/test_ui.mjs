@@ -2430,6 +2430,20 @@ test("message duration formatting distinguishes zero from missing data and handl
   }
 });
 
+test("a free-room answer shows the duration of the execution that delivered it", () => {
+  const start = discussion_source.indexOf("function message_elapsed");
+  const end = discussion_source.indexOf("const identities =", start);
+  const room = ref({ free: { executions: [
+    { id: 1, answer_id: 8, created_at: 100, finished_at: 151 },
+    { id: 2, answer_id: 9, created_at: 100, finished_at: 0 }] } });
+  const context = vm.createContext({ free: ref(true), room });
+  vm.runInContext(discussion_source.slice(start, end), context);
+  assert.equal(context.message_elapsed({ id: 8 }), 51);
+  assert.equal(context.message_elapsed({ id: 9 }), null, "an unfinished execution has no duration yet");
+  assert.equal(context.message_elapsed({ id: 10 }), null);
+  assert.equal(context.message_elapsed({ id: 8, elapsed_seconds: 7 }), 7, "a recorded turn timing wins");
+});
+
 test("a reloaded browser explicitly resumes the original submitted launch and retains ownership", async () => {
   const first = theme_fixture();
   const input = { room: { submission_id: 'original-request', title: '原议题' }, token: 'owner-token',

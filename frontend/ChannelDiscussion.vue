@@ -376,7 +376,8 @@ function arrangement_seconds(plan, anchor) {
 function message_elapsed(message) {
   if (message.elapsed_seconds != null) return message.elapsed_seconds;
   // Read every execution, not the reports: a clean completion earns no report card but still has its time.
-  return ((free.value ? room.value.free : room.value.asks)?.executions || []).find((execution) => execution.answer_id === message.id)?.seconds ?? null;
+  const execution = ((free.value ? room.value.free : room.value.asks)?.executions || []).find((item) => item.answer_id === message.id);
+  return execution?.created_at && execution.finished_at ? Math.max(0, execution.finished_at - execution.created_at) : null;
 }
 const identities = computed(() => ["用户", ...Object.keys(room.value?.experts || {}).filter(name => room.value.experts[name] === "online")].map(name => {
   const identity = bridge.identities[name];
@@ -1057,7 +1058,10 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           <template #body>
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
-              <div class="channel-message-meta"><div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong></div></div>
+              <div class="channel-message-meta">
+                <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong></div>
+                <div v-if="message.created_at" class="channel-message-provenance"><time :title="new Date(message.created_at * 1000).toLocaleString('zh-CN')">{{ bridge.format_time(message.created_at * 1000) }}</time></div>
+              </div>
               <span class="channel-message-provenance channel-message-elapsed">{{ message.waiting ? `手动启动${message.created_at ? ` · 已等 ${format_elapsed(Math.max(0, free_now - message.created_at))}` : ''}` : `已用 ${format_elapsed(Math.max(0, free_now - message.created_at))}` }}</span>
             </div>
             <div class="channel-message-text" role="status" :aria-label="`${bridge.display_name(message.author)} ${message.text}`">
@@ -1082,7 +1086,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           </div>
         </section>
         <template v-else>
-        <UChatMessage :id="String(message.id)" v-memo="[message, view.admin?.identity_version, message_round_labels.get(message.id), expanded_answers.has(message.id), active_message === message.id, waits_for_host(message), request_badges.get(message.id), execution_reports.get(message.id), response_suggestions.get(message.id), recommendations.get(message.id), adopting === message.id]" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="{ 'channel-current-message': active_message === message.id }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
+        <UChatMessage :id="String(message.id)" v-memo="[message, view.admin?.identity_version, message_round_labels.get(message.id), expanded_answers.has(message.id), active_message === message.id, waits_for_host(message), request_badges.get(message.id), execution_reports.get(message.id), message_elapsed(message), response_suggestions.get(message.id), recommendations.get(message.id), adopting === message.id]" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="{ 'channel-current-message': active_message === message.id }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
