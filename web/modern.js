@@ -46346,7 +46346,7 @@ var hU = /*#__PURE__*/ XH({
 			}, 8, ["open"])], 64);
 		};
 	}
-}, [["__scopeId", "data-v-db76a0df"]]), IK = {
+}, [["__scopeId", "data-v-197d4c1e"]]), IK = {
 	class: "launch-settings",
 	"aria-label": "启动配置"
 }, LK = { class: "launch-connect-command" }, RK = {
@@ -47930,7 +47930,7 @@ var hU = /*#__PURE__*/ XH({
 			}, null, -1)
 		], 46, $q)]));
 	}
-}, [["__scopeId", "data-v-f27db748"]]), dJ = {
+}, [["__scopeId", "data-v-a98d65a2"]]), dJ = {
 	key: 0,
 	class: "member-text-source"
 }, fJ = { class: "member-text-meta" }, pJ = { class: "member-text-footer" }, mJ = /*#__PURE__*/ XH({
@@ -51835,7 +51835,7 @@ var hU = /*#__PURE__*/ XH({
 			}, 8, ["open", "description"]);
 		};
 	}
-}, [["__scopeId", "data-v-3ca69064"]]), WZ = { class: "speaking-order" }, GZ = {
+}, [["__scopeId", "data-v-d697d015"]]), WZ = { class: "speaking-order" }, GZ = {
 	key: 0,
 	class: "speaking-order-divider",
 	"aria-hidden": "true"

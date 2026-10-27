@@ -184,7 +184,6 @@ async function save_projects() {
 .project-box { display: flex; align-items: center; gap: 4px; width: 100%; min-height: 32px; padding: 0 4px 0 0; border: 1px solid var(--channel-edge-control, var(--ui-border));
   border-radius: 6px; background: var(--ui-bg); transition: border-color .15s, box-shadow .15s; }
 .project-box:hover:not(.is-disabled) { border-color: var(--ui-border-accented); }
-.project-box:focus-within { border-color: var(--channel-accent); box-shadow: 0 0 0 1px var(--channel-accent); }
 .project-box.is-disabled { cursor: not-allowed; opacity: .6; }
 .project-box.is-chosen { padding-left: 5px; }
 .project-path { flex: 1; min-width: 0; }

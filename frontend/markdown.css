@@ -38,7 +38,6 @@ html[data-theme="channel-light"] .markdown-body {
 .markdown-body blockquote > :last-child { margin-bottom: 0; }
 .markdown-body hr { border: 0; border-top: 1px solid var(--markdown-line); margin: 1.3em 0; }
 .markdown-body a { color: var(--markdown-link); text-decoration: underline; text-underline-offset: 3px; }
-.markdown-body :is(a, .markdown-table):focus-visible { outline: 2px solid var(--markdown-link); outline-offset: 3px; }
 .markdown-body code { font-family: ui-monospace, Consolas, monospace; font-size: .88em; background: var(--markdown-panel); border-radius: 4px; padding: .15em .35em; }
 .markdown-body pre { max-width: 100%; overflow-x: auto; margin: .8em 0 1em; padding: 14px 16px; border: 1px solid var(--markdown-line); border-radius: 6px; background: var(--markdown-panel); line-height: 1.6; white-space: pre; overflow-wrap: normal; }
 .markdown-body pre code { padding: 0; border: 0; border-radius: 0; background: none; white-space: inherit; }
@@ -96,7 +95,6 @@ html[data-theme="channel-light"] .markdown-body {
 .attachment-preview-heading a { flex-shrink: 0; font-size: 13px; text-decoration: underline; color: inherit; }
 .attachment-dialog button { background: none; border: 1px solid #b8c4d3; border-radius: 5px; padding: 5px 9px; color: inherit; cursor: pointer; font: inherit; font-size: 13px; }
 .attachment-dialog button:disabled { opacity: .4; cursor: default; }
-.attachment-dialog :is(button, a):focus-visible, .attachment-file :is(button, a):focus-visible, .attachment-image:focus-visible, .attachment-remove:focus-visible { outline: 2px solid #7c91d9; outline-offset: -2px; }
 .attachment-pdf-controls { display: flex; flex-shrink: 0; justify-content: center; align-items: center; flex-wrap: wrap; gap: 10px; padding: 10px; }
 .attachment-dialog .attachment-status { padding: 0 18px; }
 .attachment-viewer { flex: 1; min-height: 0; padding: 16px; overflow: auto; overscroll-behavior: contain; }

@@ -152,7 +152,6 @@ async function invite() {
 .pb-invite-options label { position: relative; display: grid; place-items: center; min-width: 56px; min-height: 28px; border-radius: 4px; cursor: pointer; }
 .pb-invite-options label.is-selected { color: var(--ui-text-highlighted); background: var(--ui-bg-elevated); box-shadow: var(--channel-shadow-control); }
 .pb-invite-options input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
-.pb-invite-options label:focus-within { outline: 1px solid var(--channel-accent); }
 .pb-invite .fine-print { margin: -6px 0 0; }
 .pb-invite-library { display: flex; flex-wrap: wrap; gap: 6px; }
 .pb-invite-library > button { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 2px 10px 2px 4px; border: 1px solid var(--ui-border-muted); border-radius: 999px; color: var(--ui-text-toned); font-size: 12px; }

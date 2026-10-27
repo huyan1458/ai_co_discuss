@@ -171,7 +171,6 @@ onBeforeUnmount(() => cancelAnimationFrame(frame));
 .effort-slider-stop.is-current { transform: translate(-50%, -50%) scale(0); }
 .effort-slider-thumb { position: absolute; top: 50%; left: calc(var(--inset) + var(--travel) * var(--progress)); width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px #0000004d, 0 0 0 0 transparent; transform: translate(-50%, -50%); transition: transform .15s ease, box-shadow .15s ease; }
 .effort-slider:hover .effort-slider-thumb { box-shadow: 0 1px 3px #0000004d, 0 0 0 4px color-mix(in srgb, var(--channel-accent) 20%, transparent); }
-.effort-slider:focus-visible .effort-slider-thumb { box-shadow: 0 1px 3px #0000004d, 0 0 0 3px color-mix(in srgb, var(--channel-accent) 55%, transparent); }
 .effort-slider.is-dragging { cursor: grabbing; }
 .effort-slider.is-dragging .effort-slider-thumb { transform: translate(-50%, -50%) scale(1.15); box-shadow: 0 2px 6px #0000004d, 0 0 0 6px color-mix(in srgb, var(--channel-accent) 22%, transparent); }
 @media (pointer: coarse) { .effort-slider { height: 44px; } }
