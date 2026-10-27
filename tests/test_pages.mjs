@@ -1265,6 +1265,11 @@ test('Worker free rooms keep runner lifecycle, membership and manual members con
   assert.equal(working.activity, 'command');
   assert.ok(working.activity_at <= Math.floor(Date.now() / 1000), 'a future output time is capped at the server clock');
   assert.equal((await f.request(`${r.path}/executions/${retry.id}`, { action: 'renew', activity: 'sleeping', activity_at: future }, r.owner)).status, 400);
+  assert.equal((await f.request(`${r.path}/descriptions`, { descriptions: { Claude: '审美好' } }, codex)).status, 403);
+  assert.deepEqual((await f.request(`${r.path}/descriptions`, { descriptions: { Claude: ' 审美好 ', Codex: '代码写得好' } }, r.owner)).body.descriptions, { Claude: '审美好', Codex: '代码写得好' });
+  assert.deepEqual((await f.request(r.path)).body.descriptions, { Claude: '审美好', Codex: '代码写得好' });
+  assert.equal((await f.request(`${r.path}/descriptions`, { descriptions: { Claude: 'x'.repeat(501) } }, r.owner)).status, 400);
+  assert.deepEqual((await f.request(`${r.path}/descriptions`, { descriptions: { Codex: '' } }, r.owner)).body.descriptions, { Claude: '审美好' });
   const notes = [{ seq: 1, text: '读完材料' }, { seq: 2, text: '开始验证' }];
   for (let index = 0; index < 2; index++) assert.equal((await f.request(`${r.path}/executions/${retry.id}`, { action: 'renew', notes }, r.owner)).status, 200);
   assert.equal((await f.request(r.path)).body.free.members.find(item => item.name === 'Claude').execution.notes, 2);

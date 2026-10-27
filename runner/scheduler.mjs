@@ -12,7 +12,7 @@ export const ROUTE_CONFIDENCE = 0.7;
 /** Waking everyone or no one costs more when wrong (N runs, or an ignored message), so it needs more certainty. */
 export const ROUTE_WIDE_CONFIDENCE = 0.85;
 /** Bump when the routing question or its option descriptions change, so ratings can be compared across wordings. */
-export const ROUTE_PROMPT_VERSION = 4;
+export const ROUTE_PROMPT_VERSION = 5;
 const HOST_CHOICE = '__host__';
 const NOTE_CHOICE = '__note__';
 const ALL_CHOICE = '__all__';
@@ -22,6 +22,7 @@ const CONTEXT_MESSAGES = 10;
 export const ROUTE_CONTEXT_MESSAGES = 20;
 const MAX_MESSAGE_CHARS = 600;
 const MAX_BRIEF_CHARS = 1200;
+const MAX_PROFILE_CHARS = 500;
 
 /** Normalize a launch's scheduler choice and prove its key exists for that provider's root. */
 export function validate_scheduler(home, scheduler) {
@@ -113,10 +114,16 @@ function excerpt(message) {
 }
 
 /** The room's purpose in the user's words, so a decision can tell drifting from progress. */
-function topic_lines(title, goal, user_request, { roster, brief, focus, arrangement, progress } = {}) {
-  return [`房间：${title || ''}`, roster && `房间成员（名字不区分大小写）：${roster}`, goal && `目标：${goal}`, user_request && `用户原文：${String(user_request).slice(0, MAX_MESSAGE_CHARS)}`,
+function topic_lines(title, goal, user_request, { roster, profiles, brief, focus, arrangement, progress } = {}) {
+  return [`房间：${title || ''}`, roster && `房间成员（名字不区分大小写）：${roster}`, profile_lines(profiles), goal && `目标：${goal}`, user_request && `用户原文：${String(user_request).slice(0, MAX_MESSAGE_CHARS)}`,
     focus && `当前焦点：${focus}`, brief && `主持简报（含分工与规则）：${String(brief).slice(0, MAX_BRIEF_CHARS)}`,
     arrangement && `主持人最近的安排：${arrangement}`, progress].filter(Boolean).join('\n');
+}
+
+/** The owner's descriptions of members, so a decision can weigh who is good at what. */
+export function profile_lines(profiles) {
+  const lines = Object.entries(profiles || {}).filter(([, text]) => text).map(([name, text]) => `- ${name}：${String(text).slice(0, MAX_PROFILE_CHARS)}`);
+  return lines.length ? `用户对成员的描述（擅长与分工，供参考）：\n${lines.join('\n')}` : '';
 }
 
 /** State shared by both uses: the room, a few earlier messages, and the message to place. */
@@ -164,12 +171,12 @@ export async function route_free_message(home, scheduler, { title, goal, context
  * The user named everyone (@全体成员): decide whether they answer at once (parallel) or one after another (sequential).
  * Anything but a confident sequential stays parallel, the cheaper and earlier behaviour of naming everyone.
  */
-export async function decide_group_order(home, scheduler, { title, goal, context, message, members }, fetch_impl) {
+export async function decide_group_order(home, scheduler, { title, goal, context, message, members, profiles }, fetch_impl) {
   const questions = [{ type: 'choice', name: 'order', choices: [
     { value: 'parallel', description: '同时回答：各自独立回应即可，不需要看到别人的回答，如打招呼、各自介绍、各说一句看法、各自投票' },
     { value: 'sequential', description: `依次回答：后发言的需要看到前面的回答，如接龙、轮流补充或反驳、逐个评审上一位的结果、按顺序分工接力；按房间发言顺序（${members.join('、')}）逐个回答` }],
     instructions: '用户用 @全体成员 请房间里所有成员回应这条消息。判断大家应同时各自回答，还是需要按顺序依次回答（后一位看到前一位的回答再接着说）。' }];
-  const state = scheduler_state(title, context, message, goal, '', {}, ROUTE_CONTEXT_MESSAGES);
+  const state = scheduler_state(title, context, message, goal, '', { profiles }, ROUTE_CONTEXT_MESSAGES);
   const answers = await decide(home, scheduler, state, questions, fetch_impl);
   const confidence = certainty(answers.order);
   const sequential = answers.order?.choice === 'sequential' && confidence !== null && confidence >= ROUTE_CONFIDENCE;

@@ -301,6 +301,17 @@ class FreeRoomTests(unittest.TestCase):
         self.assertEqual(self.request(self.path)[1]["free"]["executions"][0]["notes"], 2)
         self.assertEqual(self.request(f"{self.path}/executions/999/notes")[0], 404)
 
+    def test_owner_describes_members_for_everyone_to_read(self):
+        """Descriptions are set by name with the owner credential, read in the room view, and cleared by empty text."""
+        path = f"{self.path}/descriptions"
+        self.assertEqual(self.request(path, {"descriptions": {"Claude": "审美好"}}, self.member)[0], 403)
+        status, body = self.request(path, {"descriptions": {"Claude": "  审美好，UI 写得好  "}}, self.owner)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(self.request(self.path)[1]["descriptions"], {"Claude": "审美好，UI 写得好"})
+        for bad in ({}, {"Claude": "x" * 501}, {"": "x"}, {"Claude": 1}):
+            self.assertEqual(self.request(path, {"descriptions": bad}, self.owner)[0], 400, bad)
+        self.assertEqual(self.request(path, {"descriptions": {"Claude": ""}}, self.owner)[1]["descriptions"], {})
+
     def test_runner_endpoints_need_the_owner_credential(self):
         """Inbox, reservation and lifecycle actions refuse member and missing credentials."""
         self.say("一")

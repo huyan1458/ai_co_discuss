@@ -522,7 +522,8 @@ function expert_card_fixture() {
     launch_model_state: (name, launch) => ({ supported: launch.profiles[name]?.adapter === "codex_cli", efforts: ["low", "high"] }),
     load_launch_models: name => reads.push(name),
     write_launch: (name, field, value) => { view.value.launch.profiles[name][field] = value; },
-    restore_launch_profile: (name, profile) => { view.value.launch.profiles[name] = profile; } };
+    restore_launch_profile: (name, profile) => { view.value.launch.profiles[name] = profile; },
+    description_draft: () => "" };
   const context = vm.createContext({ computed, ref, nextTick, defineProps: () => props, defineEmits: () => () => {},
     inject: () => ({ view, bridge }), useSpring: () => angle, useReducedMotion: () => reduced, document,
     watch: (...args) => { const stop = watch(...args); cleanups.push(stop); return stop; },

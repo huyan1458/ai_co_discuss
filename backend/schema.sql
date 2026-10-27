@@ -536,6 +536,14 @@ CREATE TABLE IF NOT EXISTS member_executions (
     activity_at INTEGER NOT NULL DEFAULT 0,
     UNIQUE(room_id,client_id)
 );
+-- What the owner wrote about each member (strengths, division of work), by name so it survives leaving and rejoining.
+CREATE TABLE IF NOT EXISTS member_descriptions (
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(room_id,name)
+);
 -- Progress notes the runner saw a member's software write between tool calls; numbered per execution so a retried renewal adds nothing.
 CREATE TABLE IF NOT EXISTS execution_notes (
     execution_id INTEGER NOT NULL REFERENCES member_executions(id) ON DELETE CASCADE,

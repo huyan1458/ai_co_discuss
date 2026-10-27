@@ -12,6 +12,7 @@ import { atomic_json } from './discussion_adapters.mjs';
 import { software_effort, software_models } from './discussion_models.mjs';
 import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
+import { MAX_EXPERT_PROMPT } from './expert_prompts.mjs';
 import { acquire_lock, api, CODEX_ADAPTERS, DiscussionStore, service_drafts, task_files, validate_config } from './discussion_runner.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 
@@ -33,7 +34,7 @@ function clients_of(name) { return CLIENTS[platform_of(name)]; }
 // The UI discovers each model's supported subset; omitted values keep the CLI's own default.
 const EFFORT_LEVELS = { codex_cli: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], claude: ['low', 'medium', 'high', 'xhigh', 'max'],
   antigravity_cli: ['low', 'medium', 'high', 'xhigh', 'max'] };
-const PROFILE_FIELDS = ['adapter', 'executable', 'model', 'effort', 'source_thread_id', 'ipc_directory', 'allowed_tools', 'cwd', 'project_name', 'project_id', 'base_url', 'api_protocol', 'api_key_ref'];
+const PROFILE_FIELDS = ['adapter', 'executable', 'model', 'effort', 'source_thread_id', 'ipc_directory', 'allowed_tools', 'cwd', 'project_name', 'project_id', 'base_url', 'api_protocol', 'api_key_ref', 'system_prompt'];
 const MAX_MINUTES = 1440;
 const SESSION_ID_PATTERN = /^[0-9A-Za-z_-]{8,128}$/;
 // Reading events after this id proves the owner credential without transferring any.
@@ -306,6 +307,7 @@ function validate_profile(name, profile, binding = false) {
     if (['executable', 'cwd', 'ipc_directory'].includes(key) && value && !isAbsolute(value)) throw new Error(`${name}.${key} 必须为完整绝对路径`);
     // The model is passed as one CLI argument, so it must not look like a flag or contain spaces.
     if (key === 'model' && value && !/^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]*$/.test(value)) throw new Error(`${name}.model 只能是模型名称，例如 gpt-6-astra、opus 或 gemini-4-argon-high`);
+    if (key === 'system_prompt' && value.length > MAX_EXPERT_PROMPT) throw new Error(`${name} 的专属提示词最多 ${MAX_EXPERT_PROMPT} 字`);
   }
   if (profile.adapter === 'api') validate_api_profile(profile);
   if (profile.effort && profile.adapter !== 'api' && !EFFORT_LEVELS[profile.adapter]?.includes(profile.effort)) {

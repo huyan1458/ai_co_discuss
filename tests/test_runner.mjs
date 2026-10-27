@@ -13,6 +13,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DiscussionRunner, DiscussionStore, load_config, service_drafts, task_files, validate_config } from '../runner/discussion_runner.mjs';
 import { cwd_key, FreeRoomRunner, workspace_snapshot } from '../runner/free_runner.mjs';
+import { EXPERT_PROMPT_PRESETS, expert_prompt } from '../runner/expert_prompts.mjs';
+import { system_prompt } from '../runner/api_participant.mjs';
 import { assert_shared_home, DiscussionService, FreeRoomWithDiscussion, migrate_service_home, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
 import { launch_discussion, room_models } from '../runner/discussion_launch.mjs';
 import { activity_phase, progress_note, agy_rule, antigravity_project, claude_exit_error, claude_rule_path, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
@@ -1789,6 +1791,39 @@ test('a free member that exits without answering fails only its own execution', 
   assert.equal(state.executions[0].status, 'failed');
   assert.ok(state.calls.includes('POST /executions/1 fail'));
   assert.match(state.executions[0].result, /会话已结束，但未提交本次回答.*请核对原会话/);
+});
+
+test("the owner's member descriptions reach the scheduler's state and each member's option", async t => {
+  const message = { id: 3, author: '用户', text: '把首页改好看点' };
+  const state = scheduler_state('房间', [], message, '', '', { profiles: { Claude: '审美好，UI 写得好', Codex: '' } });
+  assert.match(state, /用户对成员的描述[^\n]*\n- Claude：审美好，UI 写得好/);
+  assert.doesNotMatch(state, /- Codex：/, 'an empty description adds no line');
+  assert.doesNotMatch(scheduler_state('房间', [], message, '', '', { profiles: null }), /用户对成员的描述/);
+  const { store, config } = await free_fixture(t);
+  const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }));
+  const [described, manual] = runner.route_members([{ id: 7, name: 'Claude', role: 'member' }, { id: 8, name: 'Gemini', role: 'member', access: 'manual' }],
+    { descriptions: { Claude: '审美好', Gemini: '文档整理得好' }, free: { requests: [] } }, 3);
+  assert.match(described.description, /^Claude（Claude Code.*；用户描述：审美好）$/);
+  assert.match(manual.description, /手动接入.*；用户描述：文档整理得好）$/);
+});
+
+test('an expert prompt replaces its software preset, and an empty one turns the preset off', () => {
+  assert.equal(expert_prompt({ adapter: 'antigravity_cli' }), EXPERT_PROMPT_PRESETS.antigravity_cli.trim());
+  assert.equal(expert_prompt({ adapter: 'antigravity_cli', system_prompt: '  只读不写  ' }), '只读不写');
+  assert.equal(expert_prompt({ adapter: 'antigravity_cli', system_prompt: '' }), '');
+  assert.equal(expert_prompt({ adapter: 'claude' }), '', 'software without a need has no preset');
+});
+
+test("the delivered task and the API system prompt carry only this member's own prompt", async t => {
+  const { store, config } = await free_fixture(t);
+  config.participants.Claude = { adapter: 'claude', system_prompt: '回答控制在三段内' };
+  let task;
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, delivered) => { task = delivered; return { status: 'accepted' }; });
+  await runner.tick();
+  assert.match(task.prompt, /用户为你单独设置的提示[^\n]*\n回答控制在三段内$/);
+  const context = { participant: 'DeepSeek', role: 'member', mode: 'free' };
+  assert.doesNotMatch(system_prompt(context), /单独设置的提示/);
+  assert.match(system_prompt({ ...context, expert_prompt: '先给结论' }), /单独设置的提示[^\n]*\n先给结论$/);
 });
 
 test('a free member whose command was refused names that command in its failure', async t => {

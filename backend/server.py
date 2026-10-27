@@ -28,7 +28,7 @@ from .free_room import (add_member, after_free_message, authorize_free_write, ch
                         discussion_members, room_mode, save_room_access, sync_discussion_members, view_execution)
 from .free_room import add_discussion_member, convert_suggestion, discussion_member_action, message_suggestions, save_suggestions, sync_participants
 from .free_room import active_members, adopt_recommendation, ask_members, asks_view, checked_asks, recommend_member, register_member, route_held_messages
-from .free_room import execution_notes, reorder_speakers, speaking_order, stop_room_work
+from .free_room import describe_members, execution_notes, member_descriptions, reorder_speakers, speaking_order, stop_room_work
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, is_ai, is_participant
 from .room_import import import_room, imported_attachment
 from .runtime import (authorize_write, begin_write, configure_runtime, event_action,
@@ -264,6 +264,7 @@ def require_room(connection, room_id):
         # Free rooms have no host hand-off: user messages go straight to the named members.
         room["held_since"] = 0
         room["free"] = free_view(connection, room_id)
+    room["descriptions"] = member_descriptions(connection, room_id)
     room["speaking_order"] = speaking_order(connection, room)
     return room
 
@@ -656,7 +657,7 @@ def manage_room(connection, room_id, action, payload):
 
 def delete_room_records(connection, room_id):
     """Remove a room's dependent records in the caller's transaction."""
-    for table in ("member_recommendations", "free_queue", "speaking_orders", "member_requests", "execution_notes", "member_executions", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "room_links",
+    for table in ("member_recommendations", "free_queue", "speaking_orders", "member_requests", "member_descriptions", "execution_notes", "member_executions", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "room_links",
                   "discussion_options", "round_budgets", "scheduler_decisions", "scheduler_routing", "discussion_sessions"):
         if table == "scheduler_decisions":
             for child in ("scheduler_feedback", "scheduler_decision_context", "scheduler_decision_inputs"):
@@ -2029,6 +2030,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if body.get("action") not in ("start", "end"):
                 raise ValueError("action 须为 start 或 end")
             result = (start_discussion if body["action"] == "start" else end_discussion)(connection, room_id, token, body)
+            connection.commit()
+            return self.respond(result)
+        if parts[3:] == ["descriptions"] and method == "POST":
+            result = describe_members(connection, room_id, token, self.read_payload())
             connection.commit()
             return self.respond(result)
         if parts[3:] == ["register"] and method == "POST":

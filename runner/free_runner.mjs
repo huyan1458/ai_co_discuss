@@ -5,6 +5,7 @@ import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { atomic_json, deliver_task, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
 import { api } from './discussion_runner.mjs';
+import { with_expert_prompt } from './expert_prompts.mjs';
 import { ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, decide_group_order, route_free_message } from './scheduler.mjs';
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -87,9 +88,9 @@ export function free_task_files(config, member, execution, binding) {
     skills: [join(config.project, '.agents/skills/discuss-participant/SKILL.md')], cli, subcommands: TASK_SUBCOMMANDS,
     ...(bound_access ? { access_env: 'DISCUSS_ACCESS_FILE' } : { access_file: access_path }),
     instructions: `${discussion ? '讨论房间：用户直接向你提问（' + messages + '）。这不是你的发言安排，不要领取发言权、不要安排他人，也不改变讨论进度，只回答这个提问。' : '自由协作房间：用户点名了你（' + messages + '）。'}${access_rule}先用 ${cli} message list ${config.room} --after ${execution.read_until}${access_arg} 读取新消息，按时间顺序处理，后面的消息可能修正前面的，以最新指令为准。${host_rule}完成后用 ${cli} message post ${config.room} --as ${member.name} --kind chat --execution ${execution.id} --body-file 草稿 --submission-id 新UUID${access_arg} 提交一次回答。提交被拒绝说明本次执行已被打断或过期：保留草稿并结束，不要去掉 --execution 改作普通发言。草稿只写入 draft_directory；${project_rule}不读取或打印凭据内容，不建定时任务。` });
-  const prompt = `用户在${discussion ? '讨论' : '自由协作'}房间点名了你（${member.name}），对应消息 ${messages}。请先读取任务文件：${task_path}，按其中说明读取新消息、完成请求，并用 ${cli} message post 带 --execution ${execution.id} 提交一次回答后结束。命令只用任务内 subcommands 列出的 ${cli} 子命令，列目录、搜索或读取文件用软件自带的文件工具，不用 shell 命令；${project_rule}不读取凭据内容。`;
+  const prompt = `用户在${discussion ? '讨论' : '自由协作'}房间点名了你（${member.name}），对应消息 ${messages}。请先读取任务文件：${task_path}，按其中说明读取新消息、完成请求，并用 ${cli} message post 带 --execution ${execution.id} 提交一次回答后结束。命令只用任务内 subcommands 列出的 ${cli} 子命令；${project_rule}不读取凭据内容。`;
   return { id, participant: member.name, directory: config.directory, draft_directory,
-    skills_directory: join(config.project, '.agents', 'skills'), access_path, prompt };
+    skills_directory: join(config.project, '.agents', 'skills'), access_path, prompt: with_expert_prompt(prompt, profile) };
 }
 
 const ADAPTER_LABELS = { codex: 'Codex App', codex_cli: 'Codex CLI', claude: 'Claude Code', antigravity: 'Antigravity App',
@@ -233,7 +234,7 @@ export class FreeRoomRunner {
     const message = page.messages.find(item => item.id === request.message_id);
     const members = (room.speaking_order?.items || []).map(item => item.name).filter(name => everyone.some(member => member.name === name));
     const decision = await decide_group_order(this.config.api_home, this.config.scheduler,
-      { title: room.title, goal: room.goal, context: page.messages, message, members: members.length ? members : everyone.map(member => member.name) }, this.fetch)
+      { title: room.title, goal: room.goal, context: page.messages, message, members: members.length ? members : everyone.map(member => member.name), profiles: room.descriptions }, this.fetch)
       .catch(error => { this.log(`智能调度 #${request.message_id} 未判断全体回答方式：${error.message}`); return { action: 'all' }; });
     await this.apply_group(request.message_id, decision);
     if (decision.detail) {
@@ -259,8 +260,9 @@ export class FreeRoomRunner {
     return everyone.map(member => {
       const work = member_work(requests, member.name, message_id);
       const profile = this.config.participants[member.name];
-      return { id: member.id, name: member.name, role: member.role, description: profile ? member_description(member.name, profile, work)
-        : `${member.name}（${member.access === 'online' ? '网页 AI' : '手动接入'}，由用户代为触发${work}）` };
+      const described = room.descriptions?.[member.name] ? `；用户描述：${room.descriptions[member.name]}` : '';
+      return { id: member.id, name: member.name, role: member.role, description: profile ? member_description(member.name, profile, `${work}${described}`)
+        : `${member.name}（${member.access === 'online' ? '网页 AI' : '手动接入'}，由用户代为触发${work}${described}）` };
     });
   }
   /** Decide one message and apply a confident pick: one member, everyone, or no one; otherwise the host keeps it. */

@@ -4,6 +4,9 @@ import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { motion, useReducedMotion, useSpring } from "motion-v";
 import EffortSlider from "./EffortSlider.vue";
 import ApiSettings from "./ApiSettings.vue";
+import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
+import MemberTextDialog from "./MemberTextDialog.vue";
+import { EXPERT_PROMPT_PRESETS, MAX_EXPERT_PROMPT } from "../runner/expert_prompts.mjs";
 
 const props = defineProps({
   name: { type: String, required: true },
@@ -152,6 +155,48 @@ function cancel() {
   flip(false);
 }
 
+// The description says what this member is good at, for the scheduler and the host; any delivery mode may have one.
+// Drafts live in the bridge, so reading the published view ties this to each update.
+const description = computed(() => view.value && bridge.description_draft(props.name).trim());
+const describing = ref(false);
+
+/** Keep the card's description for the room or invitation, and optionally as this platform's default. */
+function save_description({ text, as_template }) {
+  bridge.write_description_draft(props.name, text);
+  if (as_template) bridge.save_description_template(props.name, text);
+  describing.value = false;
+}
+
+// The expert prompt adds guidance for this member alone; its own text, even empty, replaces the software's preset.
+const prompt_preset = computed(() => EXPERT_PROMPT_PRESETS[profile.value.adapter] || "");
+const prompt_own = computed(() => Object.hasOwn(profile.value, "system_prompt"));
+const prompt_text = computed(() => (prompt_own.value ? profile.value.system_prompt : prompt_preset.value).trim());
+const prompt_state = computed(() => !prompt_text.value ? "" : prompt_own.value ? "自定义" : "预设");
+const prompt_open = ref(false), prompt_draft = ref("");
+const prompt_changed = computed(() => prompt_draft.value.trim() !== prompt_text.value);
+// The dialog says live whether the text being typed still follows the preset, replaces it, or leaves this expert without one.
+const prompt_note = computed(() => {
+  const text = prompt_draft.value.trim();
+  if (!text) return prompt_preset.value ? "留空：这位专家不使用预设，也没有专属提示词" : "留空表示不使用";
+  if (text === prompt_preset.value.trim()) return "与软件预设一致，预设更新时自动跟随";
+  return prompt_preset.value ? "已改写，不再跟随软件预设" : "只发给这位专家，Ctrl + Enter 保存";
+});
+const prompt_source = computed(() => prompt_preset.value && prompt_draft.value.trim() !== prompt_preset.value.trim()
+  ? { tag: "软件预设", text: prompt_preset.value, action: "恢复预设" } : null);
+
+/** Edit in a dialog: the back has no room for a long text. */
+function open_prompt() {
+  prompt_draft.value = prompt_text.value;
+  prompt_open.value = true;
+}
+
+/** Text equal to the preset is stored as following it, so later preset updates still reach this member. */
+function save_prompt() {
+  const text = prompt_draft.value.trim();
+  bridge.write_launch(props.name, "system_prompt", text === prompt_preset.value.trim() ? null : text);
+  prompt_open.value = false;
+}
+
 /** Restore the CLI defaults for this participant only. */
 function reset_model() {
   bridge.write_launch(props.name, "model", "");
@@ -182,7 +227,7 @@ const FLOATING_SELECTOR = "[role='listbox'], [role='menu'], [data-reka-popper-co
 
 /** Clicking anywhere outside the open back keeps its edits and returns to the front. */
 function close_on_outside(event) {
-  if (card.value?.contains(event.target) || event.target.closest?.(FLOATING_SELECTOR)) return;
+  if (prompt_open.value || describing.value || card.value?.contains(event.target) || event.target.closest?.(FLOATING_SELECTOR)) return;
   flip(false);
 }
 watch(back, (open) => {
@@ -210,7 +255,10 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
           :aria-label="can_flip ? card_label : undefined" :title="can_flip ? '点击翻面设置' : undefined" @click="flip(true)">
           <span class="expert-card-identity">
             <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="sm" class="channel-avatar expert-card-avatar" :class="bridge.identities[name]?.style" />
-            <strong>{{ name }}</strong><span v-if="host" class="expert-card-badge">主持</span>
+            <span class="expert-card-names">
+              <span><strong>{{ name }}</strong><span v-if="host" class="expert-card-badge">主持</span></span>
+              <small v-if="description" :title="description">{{ description }}</small>
+            </span>
           </span>
           <dl class="expert-card-facts">
             <div v-for="fact in facts" :key="fact.label"><dt>{{ fact.label }}</dt><dd :class="fact.tone ? ['expert-card-status', `is-${fact.tone}`] : ''" :title="fact.value"><i v-if="fact.tone" aria-hidden="true" />{{ fact.value }}</dd></div>
@@ -226,6 +274,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
             role="radio" :aria-checked="mode === option" :tabindex="mode === option ? 0 : -1" :data-mode="option" @click="emit('mode', option)">{{ ACCESS_LABELS[option] }}</button>
         </div>
         <span class="expert-card-tools">
+          <button type="button" :class="{ 'is-set': description }" :aria-label="`编辑 ${name} 的描述`" :title="description ? '编辑描述' : '添加描述：擅长什么、适合分到什么工作'" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
           <button v-if="hostable" type="button" class="expert-card-host" :aria-pressed="host" :aria-label="host ? `${name} 是主持人` : `设 ${name} 为主持人`" :title="host ? '主持人' : '设为主持人'" @click="emit('host')"><UIcon name="i-lucide-crown" /></button>
           <button type="button" :aria-label="`移出 ${name}`" title="移出" @click="emit('remove')"><UIcon name="i-lucide-x" /></button>
         </span>
@@ -252,6 +301,10 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
               :aria-checked="access === option.value" @click="bridge.write_launch(name, 'project_access', option.value)">{{ option.label }}</button>
           </div>
         </div>
+        <div v-if="profile.adapter" class="expert-card-field">
+          <span>提示</span><button type="button" class="expert-card-prompt" :title="prompt_text || '未设置专属提示词'" :aria-label="`编辑 ${name} 的专属提示词`" @click="open_prompt">
+            <b v-if="prompt_state" :class="{ 'is-own': prompt_own }">{{ prompt_state }}</b><em>{{ prompt_text.split("\n")[0] || "未设置，点击添加" }}</em><UIcon name="i-lucide-pen-line" /></button>
+        </div>
         <ApiSettings v-if="api_mode" :name="name" />
         <template v-else-if="configurable && !connection.length">
           <div class="expert-card-field">
@@ -272,6 +325,11 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         </span>
       </div>
     </motion.div>
+    <MemberDescriptionDialog v-model:open="describing" :name="name" :platform="bridge.platform_of(name)" :text="description" :template="bridge.description_template(name)" @save="save_description" />
+    <MemberTextDialog v-model:open="prompt_open" v-model:draft="prompt_draft" :title="`${name} 的专属提示词`"
+      description="只发给这位专家，补充它的做法与偏好；不改变权限和技能规则。" :label="`${name} 的专属提示词`"
+      placeholder="例如：回答先给结论，控制在三段以内。" :max="MAX_EXPERT_PROMPT" :rows="8"
+      :note="prompt_note" :source="prompt_source" :changed="prompt_changed" @save="save_prompt" />
   </div>
 </template>
 
@@ -293,8 +351,12 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card-open.has-modes { padding-bottom: 8px; }
 .expert-card-front-modes { flex-shrink: 0; width: fit-content; margin: 0 0 10px 12px; }
 .expert-card-front-modes button { flex: none; padding: 0 8px; white-space: nowrap; }
-.expert-card-identity { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 26px; padding-right: 50px; }
+.expert-card-identity { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 26px; padding-right: 76px; }
 .expert-card-avatar { flex-shrink: 0; width: 26px; height: 26px; font-size: 10px; }
+.expert-card-names { display: grid; min-width: 0; }
+.expert-card-names > span { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* The description reads as the member's subtitle: one line here, the full text on hover and in the dialog. */
+.expert-card-names > small { overflow: hidden; color: var(--ui-text-muted); font-size: 11px; line-height: 16px; white-space: nowrap; text-overflow: ellipsis; }
 .expert-card-identity strong { overflow: hidden; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
 .expert-card-badge { flex-shrink: 0; padding: 0 5px; border-radius: 4px; background: color-mix(in srgb, #e0b44a 16%, transparent); color: #e0b44a; font-size: 10px; font-weight: 500; line-height: 16px; }
 .expert-card-facts .expert-card-status > i { display: inline-block; margin: 0 5px 1px 0; vertical-align: middle; width: 5px; height: 5px; border-radius: 50%; background: var(--ui-text-dimmed); }
@@ -316,6 +378,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card-tools > button > span { width: 13px; height: 13px; }
 .expert-card-tools > button:hover { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
 .expert-card-tools > .expert-card-host[aria-pressed="true"] { color: #e0b44a; }
+.expert-card-tools > .is-set { color: var(--ui-text-muted); }
 .expert-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .expert-card-heading strong { display: flex; align-items: baseline; gap: 6px; min-width: 0; overflow: hidden; color: var(--ui-text-highlighted); font-size: 12px; font-weight: 600; white-space: nowrap; }
 .expert-card-heading strong > span { font-size: 10px; font-weight: 400; color: var(--ui-text-muted); }
@@ -330,6 +393,14 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card-defaults { position: absolute; left: 8px; bottom: 8px; min-height: 22px; padding: 2px 4px; border-radius: 4px; color: var(--ui-text-muted); font-size: 11px; }
 .expert-card-defaults:hover:not(:disabled) { color: var(--channel-accent); }
 .expert-card-defaults:disabled { opacity: .4; }
+/* Reads like the selects around it: the state, the first line, and a pen saying it opens an editor. */
+.expert-card-prompt { display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 24px; padding: 0 6px 0 8px; border: 1px solid var(--ui-border); border-radius: 5px; color: var(--ui-text-dimmed); font-size: 11px; text-align: left; }
+.expert-card-prompt > b { flex-shrink: 0; padding: 0 4px; border-radius: 3px; background: var(--ui-bg-accented); color: var(--ui-text-muted); font-size: 10px; font-weight: 500; line-height: 15px; }
+.expert-card-prompt > b.is-own { background: color-mix(in srgb, var(--channel-accent) 16%, transparent); color: var(--channel-accent); }
+.expert-card-prompt > em { flex: 1; overflow: hidden; font-style: normal; white-space: nowrap; text-overflow: ellipsis; }
+.expert-card-prompt > b + em { color: var(--ui-text-toned); }
+.expert-card-prompt > span { flex-shrink: 0; width: 12px; height: 12px; }
+.expert-card-prompt:hover { border-color: var(--ui-border-accented); color: var(--ui-text-highlighted); }
 .expert-card-note { display: flex; gap: 6px; margin: 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
 .expert-card-manual { display: grid; gap: 4px; width: 100%; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
 .expert-card-manual > p { margin: 0; }
@@ -338,7 +409,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
   .expert-card-flip, .expert-card-defaults, .expert-card-tools > button { min-width: 44px; min-height: 44px; }
   .expert-card-turn { height: 262px; }
   .expert-card-tools { top: 4px; right: 4px; }
-  .expert-card-identity { padding-right: 92px; }
+  .expert-card-identity { padding-right: 136px; }
   .expert-card-modes button { min-height: 44px; }
 }
 </style>

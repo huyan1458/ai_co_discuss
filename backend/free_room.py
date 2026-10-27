@@ -30,6 +30,9 @@ ACTIVITY_PHASES = ("", "thinking", "command", "tool", "editing", "writing")
 MAX_EXECUTION_NOTES = 50
 MAX_NOTE_LENGTH = 500
 MAX_NOTES_PER_RENEW = 10
+# A member description is a short note for the scheduler and the host, keyed by the member's name.
+MAX_MEMBER_DESCRIPTION = 500
+MAX_MEMBER_NAME = 80
 MAX_PATH_LENGTH = 500
 ACTIVE = ("dispatched", "started")
 ACCESS_MODES = ("runner", "manual", "online")
@@ -193,6 +196,32 @@ def execution_minutes(connection, room_id):
 def public_execution(row):
     """Return execution state without any credential material."""
     return {key: row[key] for key in EXECUTION_FIELDS} if row else None
+
+
+def member_descriptions(connection, room_id):
+    """The owner's descriptions of members by name; everyone who can read the room may read them."""
+    return {row["name"]: row["description"] for row in connection.execute(
+        "SELECT name,description FROM member_descriptions WHERE room_id=? ORDER BY name", (room_id,))}
+
+
+def describe_members(connection, room_id, token, payload):
+    """Owner sets members' descriptions by name; an empty text removes that member's description."""
+    require_owner(connection, room_id, token)
+    descriptions = payload.get("descriptions")
+    if (not isinstance(descriptions, dict) or not descriptions or len(descriptions) > MAX_ROOM_AGENTS
+            or any(not isinstance(name, str) or not 0 < len(name) <= MAX_MEMBER_NAME or not isinstance(text, str)
+                   or len(text) > MAX_MEMBER_DESCRIPTION for name, text in descriptions.items())):
+        raise ValueError(f"descriptions 须为 {{成员名: 描述}}，最多 {MAX_ROOM_AGENTS} 位，每段最多 {MAX_MEMBER_DESCRIPTION} 字")
+    begin_write(connection)
+    now = int(time.time())
+    for name, text in descriptions.items():
+        if text.strip():
+            connection.execute("""INSERT INTO member_descriptions (room_id,name,description,updated_at) VALUES (?,?,?,?)
+                ON CONFLICT(room_id,name) DO UPDATE SET description=excluded.description,updated_at=excluded.updated_at""",
+                               (room_id, name, text.strip(), now))
+        else:
+            connection.execute("DELETE FROM member_descriptions WHERE room_id=? AND name=?", (room_id, name))
+    return {"descriptions": member_descriptions(connection, room_id)}
 
 
 def note_count(connection, execution_id):

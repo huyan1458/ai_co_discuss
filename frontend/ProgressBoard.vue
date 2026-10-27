@@ -4,6 +4,7 @@ import { computed, inject, ref, watch } from "vue";
 import InviteDialog from "./InviteDialog.vue";
 import DiscussionLimits from "./DiscussionLimits.vue";
 import SpeakingOrder from "./SpeakingOrder.vue";
+import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 
 const props = defineProps({ docked: { type: Boolean, default: false } });
 const { view, bridge, act, pending } = inject("discussion");
@@ -169,6 +170,7 @@ function member_status(name) {
 /** Menu entries for one participant; the session ID stays out of the row until needed. */
 function member_menu(member) {
   const items = member.session ? [{ label: "复制会话 ID", icon: "i-lucide-copy", onSelect: () => act("copy", member.session) }] : [];
+  if (view.value.access?.can_manage) items.push({ label: "编辑描述", icon: "i-lucide-user-pen", onSelect: () => { describing.value = member.name; } });
   if (record(member.name)?.access === "manual") items.push({ label: "复制启动指令（含凭证）", icon: "i-lucide-rocket", onSelect: () => act("copy_member_launch", member.name) });
   // A borrowed conversation already has its ID before the first successful execution records one.
   if (codex_instance(member.name) && (member.session || record(member.name)?.session_mode === "borrowed") && automatic.value && !settled.value && view.value.launch.available
@@ -184,6 +186,20 @@ function member_menu(member) {
     ? change("请回", "i-lucide-log-in", "rejoin", { disabled: !view.value.launch.available })
     : change("暂离", "i-lucide-log-out", "away")],
   [change("移除", "i-lucide-trash-2", "remove", { color: "error" })]].filter((group) => group.length);
+}
+
+// The member whose description is open for editing; the scheduler and the host read it from the room.
+const describing = ref(""), describing_saving = ref(false);
+
+/** Save one member's description in this room, and optionally as its platform's default for later rooms. */
+async function save_description({ text, as_template }) {
+  describing_saving.value = true;
+  try {
+    await bridge.describe_member(describing.value, text);
+    if (as_template) bridge.save_description_template(describing.value, text);
+    describing.value = "";
+  } catch { /* The board shows the error with the other member notices. */ }
+  finally { describing_saving.value = false; }
 }
 
 /** Open the invite dialog with a clean choice. */
@@ -349,6 +365,9 @@ async function finish(action) {
       </template>
     </UModal>
     <InviteDialog v-model:open="inviting" description="新专家由程序按本机软件配置启动，或由你手动启动，加入本轮发言队列。" />
+    <MemberDescriptionDialog :open="Boolean(describing)" :name="describing || ' '" :platform="describing ? bridge.platform_of(describing) : ''"
+      :text="room.descriptions?.[describing] || ''" :template="describing ? bridge.description_template(describing) : ''" :saving="describing_saving"
+      @update:open="(open) => { if (!open) describing = ''; }" @save="save_description" />
     <UModal v-model:open="reopening" title="重新开始讨论" description="保留全部记录和原结论，按新的上限继续。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
       <template #body>
         <form class="pb-reopen" @submit.prevent="reopen">

@@ -4,6 +4,7 @@ import { computed, inject, ref, watch } from "vue";
 import InviteDialog from "./InviteDialog.vue";
 import StartDiscussionDialog from "./StartDiscussionDialog.vue";
 import SpeakingOrder from "./SpeakingOrder.vue";
+import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 
 const { view, bridge, act, pending } = inject("discussion");
 const LIVE = ["dispatched", "started"];
@@ -105,6 +106,7 @@ function member_menu(member) {
   const available = access?.members?.find((entry) => entry.name === member.name)?.available;
   return [[
     ...(member.access === "manual" ? [{ label: "复制启动指令（含凭证）", icon: "i-lucide-rocket", disabled: !access?.can_manage || !available, onSelect: () => act("copy_member_launch", member.name) }] : []),
+    { label: "编辑描述", icon: "i-lucide-user-pen", disabled: !access?.can_manage, onSelect: () => { describing.value = member.name; } },
     { label: "复制参与说明", icon: "i-lucide-copy", disabled: !access?.can_manage, onSelect: () => act("copy_member_join", member.name) },
     ...(member.access !== "online" ? [{ label: "下载私有配置", icon: "i-lucide-download", disabled: !access?.can_manage || !available, onSelect: () => act("download_member_access", member.name) }] : []),
     ...(member.access === "manual" ? [{ label: "复制凭证文本", icon: "i-lucide-key-round", disabled: !access?.can_manage || !available, onSelect: () => act("copy_member_access_text", member.name) }] : []),
@@ -117,7 +119,20 @@ function member_menu(member) {
 }
 
 const inviting = ref(false);
-watch(() => room.value.id, () => { inviting.value = false; });
+// The member whose description is open for editing; the scheduler and the host read it from the room.
+const describing = ref(""), describing_saving = ref(false);
+watch(() => room.value.id, () => { inviting.value = false; describing.value = ""; });
+
+/** Save one member's description in this room, and optionally as its platform's default for later rooms. */
+async function save_description({ text, as_template }) {
+  describing_saving.value = true;
+  try {
+    await bridge.describe_member(describing.value, text);
+    if (as_template) bridge.save_description_template(describing.value, text);
+    describing.value = "";
+  } catch { /* The board shows the error under the member list. */ }
+  finally { describing_saving.value = false; }
+}
 
 const starting = ref(false);
 /** A discussion needs an AI host the local service wakes. */
@@ -150,7 +165,7 @@ watch(() => room.value.id, () => { starting.value = false; });
           <template v-for="member in [member_named(item.name)].filter(Boolean)" :key="member.id">
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
             <div class="pb-member-body">
-              <div class="pb-member-name">{{ bridge.display_name(member.name) }}<UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /><small>{{ member.role === 'host' ? `主持 · ${ACCESS_LABELS[member.access]}` : ACCESS_LABELS[member.access] }}</small></div>
+              <div class="pb-member-name" :title="room.descriptions?.[member.name] || undefined">{{ bridge.display_name(member.name) }}<UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /><small>{{ member.role === 'host' ? `主持 · ${ACCESS_LABELS[member.access]}` : ACCESS_LABELS[member.access] }}</small></div>
               <div v-if="member_model(member)" class="pb-member-model">{{ member_model(member) }}</div>
               <div v-if="member.session_mode === 'borrowed'" class="pb-member-model" title="它工作时请不要在原窗口继续操作">借用已有会话</div>
               <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span><span class="pb-member-status-text" :title="member.execution?.status === 'failed' ? member.execution.result : undefined">{{ member_status(member, item.state) }}</span></div>
@@ -188,6 +203,9 @@ watch(() => room.value.id, () => { starting.value = false; });
     </section>
   <StartDiscussionDialog v-model:open="starting" />
   <InviteDialog v-model:open="inviting" description="新成员加入后不打断其他成员；点卡片翻面可设置软件、模型、项目权限和要续接的已有会话。" />
+  <MemberDescriptionDialog :open="Boolean(describing)" :name="describing || ' '" :platform="describing ? bridge.platform_of(describing) : ''"
+    :text="room.descriptions?.[describing] || ''" :template="describing ? bridge.description_template(describing) : ''" :saving="describing_saving"
+    @update:open="(open) => { if (!open) describing = ''; }" @save="save_description" />
   </div>
 </template>
 

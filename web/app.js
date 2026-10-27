@@ -1052,6 +1052,54 @@ function finish_member_request(room_id, token, record, result) {
   localStorage.removeItem(record.key);
 }
 
+// A member description tells the scheduler and the host what this member is good at. A template per platform lives in
+// this browser; a draft typed on a card overrides it for the room being created or the member being invited.
+const DESCRIPTION_TEMPLATE_PREFIX = "discuss-description-template:";
+const description_drafts = {};
+
+/** This platform's saved description template, or "" when none. */
+function description_template(name) {
+  try { return localStorage.getItem(DESCRIPTION_TEMPLATE_PREFIX + platform_of(name)) || ""; } catch { return ""; }
+}
+
+/** Keep a platform's template; an empty text removes it. */
+function save_description_template(name, text) {
+  const key = DESCRIPTION_TEMPLATE_PREFIX + platform_of(name);
+  if (text.trim()) localStorage.setItem(key, text.trim()); else localStorage.removeItem(key);
+  publish_view();
+}
+
+/** The description a card currently shows: its own draft, else its platform's template. */
+function description_draft(name) {
+  return description_drafts[name] ?? description_template(name);
+}
+
+/** Change one card's description before the room or invitation is submitted. */
+function write_description_draft(name, text) {
+  description_drafts[name] = text;
+  publish_view();
+}
+
+/** Save descriptions by member name with the room credential; a failure leaves the room as created. */
+async function send_descriptions(room_id, token, descriptions) {
+  const filled = Object.fromEntries(Object.entries(descriptions).filter(([, text]) => text?.trim()));
+  if (!room_id || !token || !Object.keys(filled).length) return;
+  try { await request_json(`/api/rooms/${room_id}/descriptions`, { descriptions: filled }, token); }
+  catch (error) { state.free_notice = `成员描述未保存：${error.message}，可在发言顺序的成员菜单里重新填写。`; }
+}
+
+/** Edit one member's description inside the room; the next decision by the scheduler or host uses it. */
+async function describe_member(name, text) {
+  const room_id = state.room.id;
+  state.free_error = "";
+  try {
+    const token = localStorage.getItem(`discuss-access:${room_id}`);
+    if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
+    await request_json(`/api/rooms/${room_id}/descriptions`, { descriptions: { [name]: text } }, token);
+    if (state.room?.id === room_id) await refresh_room();
+  } catch (error) { state.free_error = error.message; throw error; }
+}
+
 /** Owner changes use the website; only automatic members need the local service to reconnect. */
 async function change_member({ member_id, name, action, role, latest_id }) {
   const room_id = state.room.id;
@@ -1109,6 +1157,8 @@ async function invite_member({ name, access, project_access = "read", session_id
         member_token: record.member.token, participants, cwd: draft.cwd });
     } else result = await request_json(`/api/rooms/${room_id}/members`, record.member);
     finish_member_request(room_id, token, record, result);
+    await send_descriptions(room_id, token, { [record.member.name]: description_draft(name) });
+    delete description_drafts[name];
     if (state.room?.id === room_id) {
       state.free_notice = access === "online" ? `${record.member.name} 已加入，阅读通知与真实回答由你或授权主持人转交。`
         // A manual member's start step lives on the board row, the composer bar and the invite dialog; no extra notice.
@@ -1695,6 +1745,9 @@ async function submit_local_launch(input, title, direct = false, signature) {
     save_room_credentials(result.room, record.input.token, record.input.room?.members || []);
     localStorage.removeItem(key);
     refresh_launch_recoveries();
+    const names = [...(record.input.room?.members || []).map(member => member.name), ...Object.keys(result.room?.experts || {})];
+    await send_descriptions(result.room?.id, record.input.token, Object.fromEntries(names.map(name => [name, description_draft(name)])));
+    for (const name of names) delete description_drafts[name];
     return result;
   } catch (error) {
     const stage = error.launch?.stage || (record.direct && error.preflight ? "not_started" : undefined);
@@ -1964,7 +2017,9 @@ function write_launch_field(name, field, value) {
     state.launch.profiles[name] ||= {};
     if (field === "allowed_tools") value = value.split("\n").map(item => item.trim()).filter(Boolean);
     if (["model", "effort"].includes(field)) value = value.trim();
-    state.launch.profiles[name][field] = value;
+    // Null removes the field, so an expert prompt follows its software's preset again.
+    if (value === null) delete state.launch.profiles[name][field];
+    else state.launch.profiles[name][field] = value;
     if (field === "adapter" && value === "api") {
       const profile = state.launch.profiles[name], preset = state.launch.api_providers?.[platform_of(name)];
       if (preset && !profile.base_url) Object.assign(profile, { base_url: preset.base_url, api_protocol: preset.api_protocol, model: preset.models[0] });
@@ -3421,7 +3476,7 @@ function change_view_theme(theme) {
 }
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
-  write_launch: write_launch_field, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
+  write_launch: write_launch_field, description_template, save_description_template, description_draft, write_description_draft, describe_member, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
   launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, check_launch_api, launch_summary, launch_can_set_access, launch_can_bind_session, pick_launch_directory, browse_local_directory, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,

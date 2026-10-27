@@ -407,6 +407,7 @@ async function require_room(database, room_id) {
     result.held_since = 0;
     result.free = await free_view(database, room_id);
   }
+  result.descriptions = await member_descriptions(database, room_id);
   result.speaking_order = await speaking_order(database, result);
   return result;
 }
@@ -896,7 +897,7 @@ async function manage_room(database, room_id, action, payload) {
   } else if (action === "delete") {
     if (payload.confirm_title !== room.title) throw new HttpError(400, "请输入完整房间名称确认删除");
     const queries = [
-      "DELETE FROM member_recommendations WHERE room_id=?", "DELETE FROM free_queue WHERE room_id=?", "DELETE FROM speaking_orders WHERE room_id=?", "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM execution_notes WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?", "DELETE FROM member_sessions WHERE room_id=?", "DELETE FROM member_registrations WHERE room_id=?",
+      "DELETE FROM member_recommendations WHERE room_id=?", "DELETE FROM free_queue WHERE room_id=?", "DELETE FROM speaking_orders WHERE room_id=?", "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_descriptions WHERE room_id=?", "DELETE FROM execution_notes WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?", "DELETE FROM member_sessions WHERE room_id=?", "DELETE FROM member_registrations WHERE room_id=?",
       "DELETE FROM room_members WHERE room_id=?", "DELETE FROM room_modes WHERE room_id=?",
       "DELETE FROM free_batches WHERE room_id=?", "DELETE FROM free_chains WHERE room_id=?", "DELETE FROM room_links WHERE room_id=?",
       "DELETE FROM discussion_options WHERE room_id=?",
@@ -2038,6 +2039,9 @@ const FREE_ACTIVITY_PHASES = ["", "thinking", "command", "tool", "editing", "wri
 const FREE_MAX_EXECUTION_NOTES = 50;
 const FREE_MAX_NOTE_LENGTH = 500;
 const FREE_MAX_NOTES_PER_RENEW = 10;
+// A member description is a short note for the scheduler and the host, keyed by the member's name.
+const MAX_MEMBER_DESCRIPTION = 500;
+const MAX_MEMBER_NAME = 80;
 const FREE_LIVE = "status IN ('dispatched','started')";
 // AI-created requests (host dispatches and hand-offs) allowed per chain; each owner message starts a chain.
 const FREE_MAX_AUTO_HOPS = 8;
@@ -2725,6 +2729,28 @@ function free_renewed_notes(payload) {
     throw new HttpError(400, `notes 须为最多 ${FREE_MAX_NOTES_PER_RENEW} 条 {seq: 1–${FREE_MAX_EXECUTION_NOTES}, text: 1–${FREE_MAX_NOTE_LENGTH} 字}`);
   }
   return notes;
+}
+
+/** The owner's descriptions of members by name; everyone who can read the room may read them. */
+async function member_descriptions(database, room_id) {
+  const rows = (await database.prepare("SELECT name,description FROM member_descriptions WHERE room_id=? ORDER BY name").bind(room_id).all()).results;
+  return Object.fromEntries(rows.map(row => [row.name, row.description]));
+}
+
+/** Owner sets members' descriptions by name; an empty text removes that member's description. */
+async function describe_members(database, room_id, token, payload) {
+  await require_free_owner(database, room_id, token);
+  const descriptions = payload.descriptions;
+  const entries = descriptions && typeof descriptions === "object" && !Array.isArray(descriptions) ? Object.entries(descriptions) : [];
+  if (!entries.length || entries.length > MAX_ROOM_AGENTS || entries.some(([name, text]) => !name || name.length > MAX_MEMBER_NAME
+    || typeof text !== "string" || text.length > MAX_MEMBER_DESCRIPTION)) {
+    throw new HttpError(400, `descriptions 须为 {成员名: 描述}，最多 ${MAX_ROOM_AGENTS} 位，每段最多 ${MAX_MEMBER_DESCRIPTION} 字`);
+  }
+  await database.batch(entries.map(([name, text]) => text.trim()
+    ? database.prepare(`INSERT INTO member_descriptions (room_id,name,description,updated_at) VALUES (?,?,?,unixepoch())
+      ON CONFLICT(room_id,name) DO UPDATE SET description=excluded.description,updated_at=excluded.updated_at`).bind(room_id, name, text.trim())
+    : database.prepare("DELETE FROM member_descriptions WHERE room_id=? AND name=?").bind(room_id, name)));
+  return { descriptions: await member_descriptions(database, room_id) };
 }
 
 /** Read one execution's progress notes in order, with the same access as the room view. */
@@ -3468,6 +3494,7 @@ async function handle_api(database, request, parts, params, bucket, setup_key = 
     const token = request.headers.get("X-Discussion-Token") ?? "";
     return respond(body.action === "start" ? await start_discussion(database, room_id, token, body) : await end_discussion(database, room_id, token));
   }
+  if (parts[3] === "descriptions" && parts.length === 4 && method === "POST") return respond(await describe_members(database, room_id, request.headers.get("X-Discussion-Token") ?? "", await read_payload(request)));
   if (parts[3] === "register" && parts.length === 4 && method === "POST") return respond(await register_member(database, room_id, request.headers.get("X-Discussion-Token") ?? ""));
   if (parts[3] === "speaking-order" && parts.length === 4) {
     if (method === "GET") return respond((await require_room(database, room_id)).speaking_order);
