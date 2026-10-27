@@ -1664,7 +1664,7 @@ async function free_fixture(t) {
       if (body?.action === 'report') state.reports[execution.id] = body.changes;
       if (body?.action === 'renew') state.renewed = body;
       result = execution;
-    } else result = { title: '自由单聊', mode: 'free' };
+    } else result = { title: '自由单聊', mode: 'free', ...state.room };
     response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(result));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -1922,6 +1922,17 @@ test('two free members are delivered in parallel, each with its own credential',
   assert.deepEqual(tasks.map(task => task.participant), ['Claude', 'Codex']);
   assert.deepEqual(state.executions.map(item => [item.member, item.status]), [['Claude', 'dispatched'], ['Codex', 'dispatched']]);
   assert.equal(JSON.parse(readFileSync(tasks[1].access_path, 'utf8')).token, config.members.Codex.token);
+});
+
+test('free members answering at once start in the room speaking order, not by joining order', async t => {
+  const { state, store, config } = await free_fixture(t);
+  config.participants.Codex = { adapter: 'codex_cli' };
+  config.members.Codex = { token: 'codex-credential'.repeat(3) };
+  state.others.push({ id: 8, name: 'Codex', pending: [{ id: 3, message_id: 11 }] });
+  state.room = { speaking_order: { items: [{ name: 'Codex' }, { name: 'Claude' }] } };
+  const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }));
+  await runner.tick();
+  assert.deepEqual(state.executions.map(item => item.member), ['Codex', 'Claude']);
 });
 
 test('a free member that left is stopped while the other keeps working', async t => {

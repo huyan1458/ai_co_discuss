@@ -188,7 +188,10 @@ export class FreeRoomRunner {
       if (LIVE.includes(row.status) && !present.has(row.member)) { this.stop_member(row.member); this.save(row.member, { status: 'idle' }); }
     }
     await this.report_finished(active);
-    for (const member of inbox.members) {
+    // Start in the room's speaking order: execution ids follow it, and the website lays out working cards by them.
+    const rank = (room.speaking_order?.items || []).map(item => item.name);
+    const place = name => rank.includes(name) ? rank.indexOf(name) : rank.length;
+    for (const member of [...inbox.members].sort((left, right) => place(left.name) - place(right.name))) {
       const row = this.row(member.name);
       if (row && LIVE.includes(row.status)) await this.reconcile(member, row, active, inbox.execution_minutes);
       else if (!inbox.archived && member.pending.some(request => request.purpose !== 'group') && !this.members.get(member.name)?.size
