@@ -4,6 +4,7 @@ import ScheduleCard from "./ScheduleCard.vue";
 import TopicCard from "./TopicCard.vue";
 import DiscussionEndCard from "./DiscussionEndCard.vue";
 import ExecutionNotes from "./ExecutionNotes.vue";
+import WorkingText from "./WorkingText.vue";
 import { motion, useReducedMotion, useSpring, useTransform } from "motion-v";
 
 const emit = defineEmits(["detail", "edit"]);
@@ -84,40 +85,6 @@ const follow_tail = ref(true);
 const FOLLOW_TAIL_THRESHOLD = 70;
 const READING_OFFSET = 20;
 const room = computed(() => view.value.room);
-const reply_glow = ref(null);
-// Feel.words("calm, smooth"): m 1, f 1.407 Hz, ζ 1.05 → k 78.167, c 18.567.
-// A constant force equal to a spring stretched by 1/8 of the sweep gives a calm,
-// steady scan; mass sets acceleration, damping sets the terminal speed F/c.
-const REPLY_GLOW_MASS = 1;
-const REPLY_GLOW_DAMPING = 18.566573373612275;
-const REPLY_GLOW_FORCE = 78.16726685662772 / 8;
-/** Move only the text's highlight; removal cancels the loop. Plays regardless of reduced motion. */
-watch(() => [].concat(reply_glow.value ?? []), (elements, _previous, cleanup) => {
-  if (!elements.length) return;
-  const relaxation = REPLY_GLOW_MASS / REPLY_GLOW_DAMPING;
-  const terminal_speed = REPLY_GLOW_FORCE / REPLY_GLOW_DAMPING;
-  let position = 0, velocity = 0, previous_time = performance.now(), frame = 0;
-  elements.forEach((element) => element.classList.add("is-glowing"));
-  /** Integrate m·x″ = F − c·x′ exactly, independent of frame rate. */
-  function advance_glow(now) {
-    const seconds = (now - previous_time) / 1000;
-    const decay = Math.exp(-seconds / relaxation);
-    position = (position + terminal_speed * seconds
-      + (velocity - terminal_speed) * relaxation * (1 - decay)) % 1;
-    velocity = terminal_speed + (velocity - terminal_speed) * decay;
-    previous_time = now;
-    elements.forEach((element) => element.style.setProperty("--reply-glow-position", `${100 * (1 - position)}%`));
-    frame = requestAnimationFrame(advance_glow);
-  }
-  frame = requestAnimationFrame(advance_glow);
-  cleanup(() => {
-    cancelAnimationFrame(frame);
-    elements.forEach((element) => {
-      element.classList.remove("is-glowing");
-      element.style.removeProperty("--reply-glow-position");
-    });
-  });
-}, { flush: "post" });
 const speaking_turn = computed(() => ["pending", "notified"].includes(room.value?.current_turn?.status)
   && !["paused", "concluded"].includes(room.value.phase) ? room.value.current_turn : null);
 const is_manual_member = (member) => member?.access === "manual" && member.status === "active";
@@ -1100,9 +1067,10 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
               </div>
               <span class="channel-message-provenance channel-message-elapsed">{{ message.waiting ? `手动启动${message.created_at ? ` · 已等 ${format_elapsed(Math.max(0, free_now - message.created_at))}` : ''}` : `已用 ${format_elapsed(Math.max(0, free_now - message.created_at))}` }}</span>
             </div>
-            <div v-for="status in [working_status(message)]" :key="message.id" class="channel-message-text" :class="{ 'is-breathing': status.live, 'channel-working-warning': status.warning }" role="status" :aria-label="`${bridge.display_name(message.author)} ${status.text}`" :title="BLIND_ADAPTERS.includes(message.adapter) ? '此接入方式看不到进度，可在原窗口查看' : undefined">
+            <div v-for="status in [working_status(message)]" :key="message.id" class="channel-message-text" :class="{ 'channel-working-warning': status.warning }" role="status" :aria-label="`${bridge.display_name(message.author)} ${status.text}`" :title="BLIND_ADAPTERS.includes(message.adapter) ? '此接入方式看不到进度，可在原窗口查看' : undefined">
               <span v-if="message.waiting">{{ message.text }}</span>
-              <template v-else><span ref="reply_glow" class="channel-reply-glow">{{ status.text }}</span><span v-if="status.live" class="channel-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></template>
+              <WorkingText v-else-if="status.live" :text="status.text" :seed="message.author" :beat="message.activity_at" dots :muted="BLIND_ADAPTERS.includes(message.adapter)" />
+              <span v-else>{{ status.text }}</span>
             </div>
             <!-- The same row the answer keeps folded after its result: open while working. -->
             <ExecutionNotes v-if="execution_notes.get(message.execution_id)?.length" live :notes="execution_notes.get(message.execution_id)" />
@@ -1180,7 +1148,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
         </UChatMessage>
         <!-- A decision stands between the card that ended the round and the next speaker. -->
         <ScheduleCard v-if="routing_messages.has(message.id) && !scheduler_decisions.get(message.id)?.length" icon="i-lucide-zap" skipped label="智能调度分析中" :expandable="false">
-          <template #text>智能调度：正在分析<span class="channel-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></template>
+          <template #text><WorkingText text="智能调度：正在分析" seed="智能调度" dots /></template>
         </ScheduleCard>
         <ScheduleCard v-for="decision in scheduler_decisions.get(message.id) || []" :key="`decision-${decision.id}`" icon="i-lucide-zap" :skipped="free ? true : !decision.applied" :title="decision.title" label="智能调度决策" toggle-label="展开或收起判断详情" :expandable="Boolean(decision.detail?.length)">
           <template #text>智能调度：{{ decision.label }}<small v-if="decision.confidence !== null">置信度 {{ Number(decision.confidence).toFixed(2) }}</small><small v-if="decision.detail?.[0]?.duration_ms != null">耗时 {{ format_ms(decision.detail[0].duration_ms) }}</small></template>
@@ -1222,7 +1190,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
       </div>
       <div v-if="pending_message" class="channel-message-group">
         <ScheduleCard v-if="pending_message.is_host" :id="`execution-${pending_message.id}`" icon="i-lucide-list-ordered" plain :expandable="false" :label="`${bridge.display_name(pending_message.author)} 主持工作`">
-          <template #text><span role="status" :aria-label="`${bridge.display_name(pending_message.author)} ${pending_message.text}`">{{ bridge.display_name(pending_message.author) }} 主持工作：<span ref="reply_glow" class="channel-reply-glow">{{ pending_message.text }}</span></span><small>已用 {{ pending_duration }}</small></template>
+          <template #text><span role="status" :aria-label="`${bridge.display_name(pending_message.author)} ${pending_message.text}`">{{ bridge.display_name(pending_message.author) }} 主持工作：<WorkingText :text="pending_message.text" :seed="pending_message.author" /></span><small>已用 {{ pending_duration }}</small></template>
         </ScheduleCard>
         <UChatMessage v-else :id="`execution-${pending_message.id}`" :data-author="bridge.identities[pending_message.author]?.style" role="assistant" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
@@ -1231,7 +1199,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
               <div class="channel-message-meta"><div class="channel-message-author"><strong>{{ bridge.display_name(pending_message.author) }}</strong><span v-if="pending_message.round" class="channel-message-round">{{ pending_message.round }}</span></div></div>
               <span class="channel-message-provenance channel-message-elapsed">{{ pending_message.manual ? '手动启动' : `已用 ${pending_duration}` }}</span>
             </div>
-            <div class="channel-message-text" role="status" :aria-label="`${bridge.display_name(pending_message.author)} ${pending_message.text}`"><span v-if="pending_message.manual">{{ pending_message.text }}</span><span v-else ref="reply_glow" class="channel-reply-glow">{{ pending_message.text }}</span></div>
+            <div class="channel-message-text" role="status" :aria-label="`${bridge.display_name(pending_message.author)} ${pending_message.text}`"><span v-if="pending_message.manual">{{ pending_message.text }}</span><WorkingText v-else :text="pending_message.text" :seed="pending_message.author" /></div>
           </template>
         </UChatMessage>
       </div>
@@ -1296,26 +1264,5 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
 .channel-free-recipients button.is-on { border-color: color-mix(in srgb, var(--channel-accent) 40%, transparent); background: color-mix(in srgb, var(--channel-accent) 14%, transparent); color: var(--ui-text-highlighted); }
 .channel-link-button { color: var(--channel-accent); text-decoration: underline; text-underline-offset: 2px; }
 .channel-message-elapsed { align-self: center; margin-left: auto; white-space: nowrap; }
-.channel-reply-glow { display: inline-block; max-width: 100%; }
 .channel-working-warning { color: var(--ui-warning); }
-.channel-dots { margin-left: 2px; font-weight: 700; }
-.channel-dots i { font-style: normal; margin-right: .18em; }
-/* Working-state motion always plays, regardless of the system reduced-motion setting. */
-/* Dots count up . → .. → ... ; hidden dots keep their width so the line never shifts. */
-html[data-theme^="channel"] .channel-dots i:nth-child(2) { animation: channel-dot-second 1.5s step-end infinite !important; }
-html[data-theme^="channel"] .channel-dots i:nth-child(3) { animation: channel-dot-third 1.5s step-end infinite !important; }
-@keyframes channel-dot-second { 0% { opacity: 0; } 33.333%, 100% { opacity: 1; } }
-@keyframes channel-dot-third { 0% { opacity: 0; } 66.667%, 100% { opacity: 1; } }
-html[data-theme^="channel"] .channel-message-text.is-breathing { animation: channel-breathe 2s ease-in-out infinite !important; }
-@keyframes channel-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
-.channel-reply-glow.is-glowing {
-  background-image: linear-gradient(90deg,
-    color-mix(in srgb, currentColor 76%, transparent) 40%,
-    currentColor 50%,
-    color-mix(in srgb, currentColor 76%, transparent) 60%);
-  background-size: 250% 100%;
-  background-position: var(--reply-glow-position, 100%) 0;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
 </style>

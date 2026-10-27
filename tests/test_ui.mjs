@@ -2212,55 +2212,6 @@ test("empty automatic discussions describe their actual state instead of requiri
   assert.match(message({ phase: 'concluded' }), /已结束/);
 });
 
-/** Run the actual glow lifecycle with a controlled animation frame clock. */
-function reply_glow_fixture() {
-  const reduced_motion = ref(false), frames = new Map(), styles = new Map(), classes = new Set();
-  let now = 0, next_frame = 0, stop;
-  const context = vm.createContext({ ref, reduced_motion, performance: { now: () => now },
-    requestAnimationFrame: (callback) => { frames.set(++next_frame, callback); return next_frame; },
-    cancelAnimationFrame: (frame) => frames.delete(frame),
-    watch: (...args) => { stop = watch(...args); return stop; } });
-  const start = discussion_source.indexOf("const reply_glow =");
-  const end = discussion_source.indexOf("const speaking_turn =", start);
-  vm.runInContext(`${discussion_source.slice(start, end)}\nglobalThis.element = reply_glow;`, context);
-  const element = { classList: { add: (name) => classes.add(name), remove: (name) => classes.delete(name) },
-    style: { setProperty: (name, value) => styles.set(name, value), removeProperty: (name) => styles.delete(name) } };
-  return { reduced_motion, frames, styles, classes, element, target: context.element, stop: () => stop(),
-    advance(seconds) {
-      now += seconds * 1000;
-      for (const [id, callback] of [...frames]) { frames.delete(id); callback(now); }
-    } };
-}
-
-test("reply glow moves without duplicate loops and stops on reduced motion or card removal", async (t) => {
-  const glow = reply_glow_fixture();
-  t.after(glow.stop);
-  assert.equal(glow.frames.size, 0);
-  glow.target.value = glow.element;
-  await nextTick();
-  assert.equal(glow.frames.size, 1);
-  glow.advance(0.1);
-  const first = parseFloat(glow.styles.get("--reply-glow-position"));
-  glow.advance(0.1);
-  assert.ok(parseFloat(glow.styles.get("--reply-glow-position")) < first, "the highlight travels left to right");
-  assert.equal(glow.frames.size, 1);
-  glow.reduced_motion.value = true;
-  await nextTick();
-  assert.equal(glow.frames.size, 0);
-  assert.equal(glow.styles.size, 0);
-  assert.equal(glow.classes.size, 0, "ordinary text is restored");
-  glow.reduced_motion.value = false;
-  await nextTick();
-  assert.equal(glow.frames.size, 1);
-  glow.advance(3600);
-  const resumed = parseFloat(glow.styles.get("--reply-glow-position"));
-  assert.ok(resumed >= 0 && resumed <= 100, "a suspended tab resumes within the text sweep");
-  glow.target.value = null;
-  await nextTick();
-  assert.equal(glow.frames.size, 0);
-  assert.equal(glow.styles.size, 0);
-});
-
 /** Evaluate the actual pending-card state with reactive room snapshots. */
 function pending_message_fixture() {
   const execution = { id: 9, participant: "Codex", role: "expert", turn_id: 7, status: "dispatched", stale: false };
