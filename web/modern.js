@@ -51145,10 +51145,10 @@ var hU = /*#__PURE__*/ XH({
 	"aria-expanded",
 	"onKeydown",
 	"onClick"
-], hZ = { class: "channel-folder-name" }, gZ = { class: "channel-folder-actions" }, _Z = {
+], hZ = { class: "channel-folder-name" }, gZ = {
 	class: "channel-directory-count",
 	"aria-hidden": "true"
-}, vZ = ["data-drop-folder"], yZ = {
+}, _Z = { class: "channel-folder-actions" }, vZ = ["data-drop-folder"], yZ = {
 	key: 0,
 	class: "channel-directory-empty",
 	role: "status"
@@ -51389,7 +51389,7 @@ var hU = /*#__PURE__*/ XH({
 			];
 		}
 		return (e, t) => {
-			let u = MA, _ = sA, v = CH, x = $V, S = sZ;
+			let u = MA, _ = sA, v = $V, x = CH, S = sZ;
 			return U(), W("div", cZ, [
 				q(u, {
 					label: "新建对话",
@@ -51405,7 +51405,19 @@ var hU = /*#__PURE__*/ XH({
 					"aria-expanded": m.value,
 					onClick: t[1] ||= (e) => m.value = !m.value
 				}, [q(_, { name: m.value ? "i-lucide-chevron-down" : "i-lucide-chevron-right" }, null, 8, ["name"]), t[7] ||= J("协作房间", -1)], 8, uZ), K("div", dZ, [
-					q(v, {
+					q(v, { text: "新建文件夹" }, {
+						default: L(() => [q(u, {
+							icon: "i-lucide-plus",
+							color: "neutral",
+							variant: "ghost",
+							size: "xs",
+							"aria-label": "新建文件夹",
+							disabled: I(r).directory_pending.includes("create-folder"),
+							onClick: t[2] ||= (e) => n("create-folder")
+						}, null, 8, ["disabled"])]),
+						_: 1
+					}),
+					q(x, {
 						items: d.value,
 						content: {
 							align: "end",
@@ -51423,18 +51435,6 @@ var hU = /*#__PURE__*/ XH({
 						})]),
 						_: 1
 					}, 8, ["items"]),
-					q(x, { text: "新建文件夹" }, {
-						default: L(() => [q(u, {
-							icon: "i-lucide-plus",
-							color: "neutral",
-							variant: "ghost",
-							size: "xs",
-							"aria-label": "新建文件夹",
-							disabled: I(r).directory_pending.includes("create-folder"),
-							onClick: t[2] ||= (e) => n("create-folder")
-						}, null, 8, ["disabled"])]),
-						_: 1
-					}),
 					K("input", {
 						ref_key: "import_input",
 						ref: f,
@@ -51454,66 +51454,63 @@ var hU = /*#__PURE__*/ XH({
 				}, [e.id ? (U(), W("div", {
 					key: 0,
 					class: M(["channel-folder-row", { active: h.value.has(e.id) && I(r).room?.folder_id === e.id }])
+				}, [K("button", {
+					class: "channel-folder-heading",
+					"data-drop-folder": "",
+					"data-drag-handle": "",
+					type: "button",
+					disabled: e.pending,
+					"aria-label": `${e.name} ${e.rooms.length}`,
+					"aria-expanded": !h.value.has(e.id),
+					title: "拖动文件夹排序；上下方向键移动",
+					onPointerdown: t[3] ||= (e) => !I(o) && I(i).start_drag(e),
+					onKeydown: [fu(uu((t) => I(a)("move_folder", {
+						id: e.order_id,
+						direction: -1
+					}), ["prevent"]), ["up"]), fu(uu((t) => I(a)("move_folder", {
+						id: e.order_id,
+						direction: 1
+					}), ["prevent"]), ["down"])],
+					onClick: (t) => y(e.id)
 				}, [
-					K("button", {
-						class: "channel-folder-heading",
-						"data-drop-folder": "",
-						"data-drag-handle": "",
-						type: "button",
-						disabled: e.pending,
-						"aria-label": `${e.name} ${e.rooms.length}`,
-						"aria-expanded": !h.value.has(e.id),
-						title: "拖动文件夹排序；上下方向键移动",
-						onPointerdown: t[3] ||= (e) => !I(o) && I(i).start_drag(e),
-						onKeydown: [fu(uu((t) => I(a)("move_folder", {
-							id: e.order_id,
-							direction: -1
-						}), ["prevent"]), ["up"]), fu(uu((t) => I(a)("move_folder", {
-							id: e.order_id,
-							direction: 1
-						}), ["prevent"]), ["down"])],
-						onClick: (t) => y(e.id)
-					}, [
-						q(_, { name: h.value.has(e.id) ? "i-lucide-chevron-right" : "i-lucide-chevron-down" }, null, 8, ["name"]),
-						q(_, { name: "i-lucide-folder" }),
-						K("span", hZ, P(e.name), 1)
-					], 40, mZ),
-					K("div", gZ, [q(v, {
-						items: g(e, s),
-						content: {
-							align: "start",
-							side: "bottom",
-							sideOffset: 6
-						},
-						ui: { content: "channel-menu channel-topic-menu" }
-					}, {
-						default: L(() => [q(u, {
-							icon: "i-lucide-ellipsis",
-							"aria-label": `管理文件夹 ${e.name}`,
-							title: "文件夹选项",
-							size: "xs",
-							color: "neutral",
-							variant: "ghost"
-						}, null, 8, ["aria-label"])]),
-						_: 2
-					}, 1032, ["items"]), q(x, { text: `在${e.name}中新建对话` }, {
-						default: L(() => [q(u, {
-							icon: "i-lucide-square-pen",
-							"aria-label": `在${e.name}中新建对话`,
-							disabled: e.pending || I(r).directory_pending.includes("create-room"),
-							size: "xs",
-							color: "neutral",
-							variant: "ghost",
-							onClick: (t) => n("create", e.id ? e : null)
-						}, null, 8, [
-							"aria-label",
-							"disabled",
-							"onClick"
-						])]),
-						_: 2
-					}, 1032, ["text"])]),
-					K("small", _Z, P(e.pending ? "保存中" : e.rooms.length), 1)
-				], 2)) : Y("", !0), !e.id || !h.value.has(e.id) ? (U(), W("div", {
+					q(_, { name: h.value.has(e.id) ? "i-lucide-chevron-right" : "i-lucide-chevron-down" }, null, 8, ["name"]),
+					q(_, { name: "i-lucide-folder" }),
+					K("span", hZ, P(e.name), 1),
+					K("small", gZ, P(e.pending ? "保存中" : e.rooms.length), 1)
+				], 40, mZ), K("div", _Z, [q(v, { text: `在${e.name}中新建对话` }, {
+					default: L(() => [q(u, {
+						icon: "i-lucide-square-pen",
+						"aria-label": `在${e.name}中新建对话`,
+						disabled: e.pending || I(r).directory_pending.includes("create-room"),
+						size: "xs",
+						color: "neutral",
+						variant: "ghost",
+						onClick: (t) => n("create", e.id ? e : null)
+					}, null, 8, [
+						"aria-label",
+						"disabled",
+						"onClick"
+					])]),
+					_: 2
+				}, 1032, ["text"]), q(x, {
+					items: g(e, s),
+					content: {
+						align: "start",
+						side: "bottom",
+						sideOffset: 6
+					},
+					ui: { content: "channel-menu channel-topic-menu" }
+				}, {
+					default: L(() => [q(u, {
+						icon: "i-lucide-ellipsis",
+						"aria-label": `管理文件夹 ${e.name}`,
+						title: "文件夹选项",
+						size: "xs",
+						color: "neutral",
+						variant: "ghost"
+					}, null, 8, ["aria-label"])]),
+					_: 2
+				}, 1032, ["items"])])], 2)) : Y("", !0), !e.id || !h.value.has(e.id) ? (U(), W("div", {
 					key: 1,
 					class: M(e.id ? "channel-folder-rooms" : "channel-root-rooms"),
 					"data-drop-folder": e.id ? void 0 : ""
@@ -51552,7 +51549,7 @@ var hU = /*#__PURE__*/ XH({
 							onPointerdown: t[5] ||= (e) => !I(o) && I(i).start_drag(e),
 							onClick: (e) => n("select", s.id)
 						}, [K("span", null, P(s.title), 1)], 40, SZ),
-						K("div", CZ, [q(x, {
+						K("div", CZ, [q(v, {
 							text: s.archived ? "恢复房间" : "存档房间",
 							ui: { content: "channel-topic-tooltip" }
 						}, {
@@ -51574,7 +51571,7 @@ var hU = /*#__PURE__*/ XH({
 								"onClick"
 							])]),
 							_: 2
-						}, 1032, ["text"]), q(v, {
+						}, 1032, ["text"]), q(x, {
 							items: b(s, c, s.folder_id || null, e.rooms.length),
 							content: {
 								align: "start",

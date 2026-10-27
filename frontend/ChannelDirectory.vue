@@ -97,20 +97,19 @@ function actions(room, index, folder_id, folder_room_count) {
     <div class="channel-directory-heading">
       <button type="button" class="channel-section-toggle" :aria-expanded="rooms_open" @click="rooms_open = !rooms_open"><UIcon :name="rooms_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />协作房间</button>
       <div class="channel-directory-actions">
-        <UDropdownMenu :items="directory_actions" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu channel-directory-menu' }"><UButton icon="i-lucide-ellipsis" aria-label="房间目录选项" title="排列、导入与导出" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
         <UTooltip text="新建文件夹"><UButton icon="i-lucide-plus" color="neutral" variant="ghost" size="xs" aria-label="新建文件夹" :disabled="view.directory_pending.includes('create-folder')" @click="emit('create-folder')" /></UTooltip>
+        <UDropdownMenu :items="directory_actions" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu channel-directory-menu' }"><UButton icon="i-lucide-ellipsis" aria-label="房间目录选项" title="排列、导入与导出" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
         <input ref="import_input" type="file" accept=".zip,.json" multiple hidden aria-label="选择房间备份" @change="choose_imports">
       </div>
     </div>
     <nav v-show="rooms_open" aria-label="协作房间列表" class="channel-room-list" data-room-directory>
       <section v-for="(folder, folder_index) in folders" :key="folder.order_id" class="channel-folder-section" :data-room-folder="folder.id" :data-drag-folder="folder.order_id">
        <div v-if="folder.id" class="channel-folder-row" :class="{ active: collapsed.has(folder.id) && view.room?.folder_id === folder.id }">
-       <button class="channel-folder-heading" data-drop-folder data-drag-handle type="button" :disabled="folder.pending" :aria-label="`${folder.name} ${folder.rooms.length}`" :aria-expanded="!collapsed.has(folder.id)" title="拖动文件夹排序；上下方向键移动" @pointerdown="!pending && bridge.start_drag($event)" @keydown.up.prevent="act('move_folder', { id: folder.order_id, direction: -1 })" @keydown.down.prevent="act('move_folder', { id: folder.order_id, direction: 1 })" @click="toggle_folder(folder.id)"><UIcon :name="collapsed.has(folder.id) ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" /><UIcon name="i-lucide-folder" /><span class="channel-folder-name">{{ folder.name }}</span></button>
+       <button class="channel-folder-heading" data-drop-folder data-drag-handle type="button" :disabled="folder.pending" :aria-label="`${folder.name} ${folder.rooms.length}`" :aria-expanded="!collapsed.has(folder.id)" title="拖动文件夹排序；上下方向键移动" @pointerdown="!pending && bridge.start_drag($event)" @keydown.up.prevent="act('move_folder', { id: folder.order_id, direction: -1 })" @keydown.down.prevent="act('move_folder', { id: folder.order_id, direction: 1 })" @click="toggle_folder(folder.id)"><UIcon :name="collapsed.has(folder.id) ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" /><UIcon name="i-lucide-folder" /><span class="channel-folder-name">{{ folder.name }}</span><small class="channel-directory-count" aria-hidden="true">{{ folder.pending ? '保存中' : folder.rooms.length }}</small></button>
         <div class="channel-folder-actions">
-          <UDropdownMenu :items="folder_actions(folder, folder_index)" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :aria-label="`管理文件夹 ${folder.name}`" title="文件夹选项" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
           <UTooltip :text="`在${folder.name}中新建对话`"><UButton icon="i-lucide-square-pen" :aria-label="`在${folder.name}中新建对话`" :disabled="folder.pending || view.directory_pending.includes('create-room')" size="xs" color="neutral" variant="ghost" @click="emit('create', folder.id ? folder : null)" /></UTooltip>
+          <UDropdownMenu :items="folder_actions(folder, folder_index)" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :aria-label="`管理文件夹 ${folder.name}`" title="文件夹选项" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
         </div>
-        <small class="channel-directory-count" aria-hidden="true">{{ folder.pending ? '保存中' : folder.rooms.length }}</small>
        </div>
        <div v-if="!folder.id || !collapsed.has(folder.id)" :class="folder.id ? 'channel-folder-rooms' : 'channel-root-rooms'" :data-drop-folder="folder.id ? undefined : ''">
       <p v-if="view.creating_room && (view.creating_room.folder_id || '') === folder.id" class="channel-directory-empty" role="status">正在创建：{{ view.creating_room.title }}</p>
