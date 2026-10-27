@@ -214,18 +214,6 @@ const free_online = computed(() => free_members.value.filter((member) => member.
 const ask_members = computed(() => free.value ? [] : (room.value?.members || []).filter((member) => member.status === "active" && member.name !== "用户"));
 const asked_names = computed(() => ask_members.value.filter((member) => MENTION_PATTERN(member.name).test(draft_prose.value)).map((member) => bridge.display_name(member.name)));
 const mention_pool = computed(() => free.value ? [...(mention_all.value ? [...ALL_ALIASES, ...SEQUENTIAL_ALIASES].map((name) => ({ name })) : []), ...free_members.value] : ask_members.value);
-/** Combine immutable suggestions with live membership and conversion status. */
-const response_suggestions = computed(() => {
-  if (!free.value) return new Map();
-  const members = new Map((room.value.free?.members || []).map(member => [member.id, member]));
-  const requests = new Map((room.value.free?.requests || []).map(request => [`${request.message_id}:${request.member_id}`, request]));
-  return new Map(view.value.messages.map(message => [message.id, (message.suggestions || []).map(suggestion => {
-    const request_id = requests.get(`${message.id}:${suggestion.member_id}`)?.id || suggestion.request_id;
-    const status = members.get(suggestion.member_id)?.status || "removed";
-    return { ...suggestion, request_id, status,
-      can_convert: !request_id && status === "active" && view.value.access?.can_manage && !room.value.archived && !pending.value };
-  })]));
-});
 /** A draft @mentions a member only outside code and quotes. */
 const MENTION_PATTERN = (name) => new RegExp(`(^|[\\s(（，,。；;：:])@${name}(?![\\w-])`, "u");
 const draft_prose = computed(() => text.value.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "").replace(/^>.*$/gm, ""));
@@ -1087,7 +1075,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
         </div>
       </motion.div>
     </Teleport>
-    <div ref="transcript" v-memo="[message_groups, message_round_labels, active_message, expanded_answers.size, room.title, view.query, view.mention_only, topic_anchor, end_anchor, pending_message, pending_seconds, request_badges, execution_reports, response_suggestions, recommendations, adopting, scheduler_decisions, correcting, pending, view.free_error, execution_notes]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
+    <div ref="transcript" v-memo="[message_groups, message_round_labels, active_message, expanded_answers.size, room.title, view.query, view.mention_only, topic_anchor, end_anchor, pending_message, pending_seconds, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, correcting, pending, view.free_error, execution_notes]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
       <div v-if="!view.query && !view.mention_only && !topic_anchor" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <!-- The opening plan has no answer to follow, so it stands right under the topic. -->
       <div v-if="host_arrangements.get(0)?.length" class="channel-message-group">
@@ -1140,7 +1128,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           </div>
         </section>
         <template v-else>
-        <UChatMessage :id="String(message.id)" v-memo="[message, view.admin?.identity_version, message_round_labels.get(message.id), expanded_answers.has(message.id), active_message === message.id, waits_for_host(message), request_badges.get(message.id), execution_reports.get(message.id), message_elapsed(message), response_suggestions.get(message.id), recommendations.get(message.id), adopting === message.id, answer_execution(message)?.notes, execution_notes.get(answer_execution(message)?.id)]" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="{ 'channel-current-message': active_message === message.id }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
+        <UChatMessage :id="String(message.id)" v-memo="[message, view.admin?.identity_version, message_round_labels.get(message.id), expanded_answers.has(message.id), active_message === message.id, waits_for_host(message), request_badges.get(message.id), execution_reports.get(message.id), message_elapsed(message), recommendations.get(message.id), adopting === message.id, answer_execution(message)?.notes, execution_notes.get(answer_execution(message)?.id)]" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="{ 'channel-current-message': active_message === message.id }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
@@ -1177,14 +1165,6 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
                   </template>
                 </template>
               </template>
-            </div>
-            <div v-if="free && message.suggestions?.length" class="channel-response-suggestions" aria-label="回应建议">
-              <div v-for="suggestion in response_suggestions.get(message.id) || []" :key="suggestion.member_id">
-                <span>建议请 {{ bridge.display_name(suggestion.member) }} 回应</span>
-                <span v-if="suggestion.request_id">已转请求 #{{ suggestion.request_id }}</span>
-                <span v-else-if="suggestion.status !== 'active'">成员已离开</span>
-                <UButton v-else-if="view.access?.can_manage && !room.archived" label="转为请求" icon="i-lucide-send" size="xs" variant="soft" color="neutral" :disabled="!suggestion.can_convert" :aria-label="`请 ${suggestion.member} 回应 #${message.id}`" @click="act('convert_suggestion', { message_id: message.id, member_id: suggestion.member_id })" />
-              </div>
             </div>
             <section v-for="report in execution_reports.get(message.id) || []" :key="report.id" class="channel-execution-report" :aria-label="`执行报告 #${report.id}`">
               <div><strong>执行 #{{ report.id }} · {{ report.label }}</strong></div>

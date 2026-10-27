@@ -791,15 +791,10 @@ function message_markup(message) {
 /** Render continuous history while retaining expanded answers and reading position. */
 function render_messages(result) {
   const previous = new Map(state.messages.map((message) => [message.id, message]));
-  const requests = new Map((state.room?.free?.requests || []).map(request => [`${request.message_id}:${request.member_id}`, request]));
   state.messages = result.messages.map((message) => {
     const saved = previous.get(message.id);
-    const suggestions = (saved?.suggestions || message.suggestions || []).map(suggestion => {
-      const request = requests.get(`${message.id}:${suggestion.member_id}`);
-      return request && suggestion.request_id !== request.id ? { ...suggestion, request_id: request.id } : suggestion;
-    });
-    if (saved) return suggestions.some((item, index) => item !== saved.suggestions?.[index]) ? { ...saved, suggestions } : saved;
-    return { ...message, suggestions, rendered_text: window.discuss_markdown.render_markdown(message.text),
+    if (saved) return saved;
+    return { ...message, rendered_text: window.discuss_markdown.render_markdown(message.text),
       rendered_summary: window.discuss_markdown.render_markdown(message.summary || "") };
   });
   state.message_total = result.total;
@@ -1872,11 +1867,15 @@ async function retry_launch_connection() {
 /** Read saved choices for the active room without using drafts or delaying discussion refreshes. */
 async function load_room_models() {
   const room = state.room;
-  if (!state.launch.available || room?.runtime?.mode !== "automatic") return;
+  // A free room runs no discussion yet still has members this computer wakes, so either one makes the models worth reading.
+  const woken = (room?.members || []).filter(member => member.access === "runner").map(member => member.name);
+  if (!state.launch.available || (room?.runtime?.mode !== "automatic" && !woken.length)) return;
+  // Inviting or removing a member in a free room leaves the runtime revision alone, so the woken names are part of the key.
+  const revision = `${room.runtime?.revision ?? 0}:${woken.join(",")}`;
   const previous = state.launch.room_models;
-  if (previous?.room_id === room.id && previous.revision === room.runtime.revision
+  if (previous?.room_id === room.id && previous.revision === revision
     && (previous.loading || previous.participants)) return;
-  const current = { room_id: room.id, revision: room.runtime.revision, loading: true, participants: null };
+  const current = { room_id: room.id, revision, loading: true, participants: null };
   state.launch.room_models = current;
   try {
     const result = await local_launch_request("room-models", { room_id: room.id });
@@ -1892,7 +1891,8 @@ async function load_room_models() {
 /** Describe registered launch choices; an empty choice shows what the software's own settings select, or says the software decides. */
 function participant_model(name, room, saved) {
   // Nothing to say beats a placeholder: a manual member's settings live in its own session and unread ones are not guessed.
-  if (room?.runtime?.mode !== "automatic" || (room.members || []).find(member => member.name === name)?.access === "manual") return "";
+  const member = (room?.members || []).find(item => item.name === name);
+  if (member ? member.access !== "runner" : room?.runtime?.mode !== "automatic") return "";
   const profile = saved?.room_id === room.id ? saved.participants?.[name] : null;
   if (!profile) return "";
   if (["codex", "antigravity"].includes(profile.adapter)) return "模型与强度由 App 设置";
@@ -2673,17 +2673,6 @@ async function interrupt_member(member_id) {
   if (state.room?.id === room_id) await refresh_room();
 }
 
-/** Confirm one ordinary member's suggestion, keeping retries bound to its source and target. */
-async function convert_suggestion({ message_id, member_id }) {
-  const room_id = state.room.id;
-  const result = await request_json(`/api/rooms/${room_id}/suggestions`, { message_id, member_id });
-  if (state.room?.id !== room_id) return;
-  state.messages = state.messages.map(message => message.id === message_id ? { ...message,
-    suggestions: message.suggestions.map(suggestion => suggestion.member_id === member_id
-      ? { ...suggestion, request_id: result.request.id } : suggestion) } : message);
-  await refresh_room();
-}
-
 /** Adopt smart scheduling's recommendation: interrupt the host now, or ask the member once the host is done. */
 async function adopt_recommendation({ message_id, mode }) {
   const room_id = state.room.id;
@@ -3458,7 +3447,7 @@ async function execute_view_action(name, value) {
     choose_runtime, export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, retry_execution, conclude_discussion, start_room_discussion, end_room_discussion, reopen_discussion,
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
     load_room_configuration, save_room_configuration, interrupt_member, change_member, reorder_speakers, invite_member, set_proxy, copy_online_notice,
-    prepare_brainstorm, return_conclusion, convert_suggestion, adopt_recommendation, rate_decision,
+    prepare_brainstorm, return_conclusion, adopt_recommendation, rate_decision,
     busy: () => { throw new Error("上一个操作仍在处理中，请稍候；长时间无响应请刷新页面"); },
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };
   if (!["refresh", "busy"].includes(name)) state.free_error = "";

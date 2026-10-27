@@ -160,66 +160,16 @@ test("mention composition and room changes close stale suggestions", async () =>
   assert.equal(fixture.state.context.value, null);
 });
 
-test('response suggestions track live conversion membership ownership and pending state', () => {
-  const room = ref({ mode: 'free', free: { members: [{ id: 2, name: 'Codex', status: 'active' }], requests: [] } });
-  const view = ref({ access: { can_manage: false }, messages: [{ id: 7, suggestions: [{ member_id: 2, member: 'Codex', request_id: null }] }] });
-  const pending = ref('');
-  const context = vm.createContext({ computed, room, view, pending, free: ref(true) });
-  const start = discussion_source.indexOf('const response_suggestions = computed(');
-  const end = discussion_source.indexOf('/** A draft @mentions a member', start);
-  vm.runInContext(discussion_source.slice(start, end) + '\nglobalThis.suggestions = response_suggestions;', context);
-  const suggestion = () => context.suggestions.value.get(7)[0];
-  assert.equal(Boolean(suggestion().can_convert), false);
-  view.value.access.can_manage = true;
-  assert.equal(suggestion().can_convert, true);
-  pending.value = 'convert_suggestion';
-  assert.equal(suggestion().can_convert, false);
-  pending.value = '';
-  room.value.archived = true;
-  assert.equal(suggestion().can_convert, false);
-  room.value.archived = false;
-  room.value.free.members[0].status = 'away';
-  assert.equal(suggestion().status, 'away');
-  assert.equal(suggestion().can_convert, false);
-  room.value.free.members[0].status = 'active';
-  room.value.free.requests.push({ id: 9, message_id: 7, member_id: 2, status: 'completed' });
-  assert.equal(suggestion().request_id, 9);
-  assert.equal(suggestion().can_convert, false);
-  assert.match(discussion_source, /act\('convert_suggestion', \{ message_id: message.id, member_id: suggestion.member_id \}\)/);
-  assert.match(discussion_source, /已转请求 #/);
-});
-
-test('conversion controller preserves source and target across retries and ignores another room', async () => {
-  const calls = [], state = { room: { id: 'source-room' }, messages: [{ id: 7, suggestions: [{ member_id: 2, request_id: null }] }] };
-  let refreshes = 0;
-  const context = vm.createContext({ state, request_json: async (...args) => { calls.push(args); return { request: { id: 9 } }; }, refresh_room: async () => refreshes++ });
-  vm.runInContext(source.match(/async function convert_suggestion\([\s\S]*?\n\}/)[0], context);
-  await context.convert_suggestion({ message_id: 7, member_id: 2 });
-  await context.convert_suggestion({ message_id: 7, member_id: 2 });
-  assert.equal(JSON.stringify(calls[0]), JSON.stringify(calls[1]));
-  assert.equal(calls[0][0], '/api/rooms/source-room/suggestions');
-  assert.equal(refreshes, 2);
-  assert.equal(state.messages[0].suggestions[0].request_id, 9);
-  context.request_json = async () => { state.room = { id: 'another-room' }; };
-  await context.convert_suggestion({ message_id: 7, member_id: 2 });
-  assert.equal(refreshes, 2);
-});
-
-test('message cache retains confirmed suggestions after recent requests age out without rerendering prose', () => {
-  const message = { id: 7, text: '已保存正文', suggestions: [{ member_id: 2, request_id: null }], rendered_text: 'cached-markdown' };
-  const state = { messages: [message], room: { free: { requests: [{ id: 9, message_id: 7, member_id: 2 }] } } };
+test('message cache keeps rendered prose for messages it already has', () => {
+  const message = { id: 7, text: '已保存正文', rendered_text: 'cached-markdown' };
+  const state = { messages: [message], room: { free: { requests: [] } } };
   const container = { querySelectorAll: () => [], scrollTop: 0, scrollHeight: 100, clientHeight: 100 };
   const context = vm.createContext({ state, element: () => container, SCROLL_BOTTOM_THRESHOLD: 70, message_markup: () => '',
     window: { discuss_markdown: { render_markdown: () => { throw new Error('Unchanged prose must stay cached'); } } } });
   vm.runInContext(source.match(/function render_messages\(result\) \{[\s\S]*?\n\}/)[0], context);
   context.render_messages({ messages: [message], total: 1, pages: 1 });
-  assert.equal(state.messages[0].suggestions[0].request_id, 9);
+  assert.equal(state.messages[0], message);
   assert.equal(state.messages[0].rendered_text, 'cached-markdown');
-  const saved = state.messages[0];
-  state.room.free.requests = [];
-  context.render_messages({ messages: [message], total: 1, pages: 1 });
-  assert.equal(state.messages[0], saved);
-  assert.equal(state.messages[0].suggestions[0].request_id, 9);
 });
 
 test('free-room answers replace their working card in place instead of jumping ahead of slower members', () => {
@@ -2249,6 +2199,9 @@ test("participant model labels distinguish explicit choices, software defaults a
   assert.equal(label('Codex', room, saved), '模型与强度由 App 设置');
   assert.equal(label('Codex', { ...room, runtime: { mode: 'manual' } }, saved), '');
   assert.equal(label('Codex', { ...room, members: [{ name: 'Codex', access: 'manual' }] }, saved), '', 'a manual member sets its model in its own session');
+  saved.participants.Codex.adapter = 'codex_cli';
+  assert.equal(label('Codex', { ...room, runtime: { mode: 'manual' }, members: [{ name: 'Codex', access: 'runner' }] }, saved), 'gpt-6-astra · xhigh',
+    'a free room runs no discussion yet its woken members still show their model');
 });
 
 test("empty automatic discussions describe their actual state instead of requiring another message", () => {
