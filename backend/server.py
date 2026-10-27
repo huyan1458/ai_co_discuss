@@ -47,7 +47,7 @@ MAX_FILENAME_LENGTH = 255
 LOCAL_LAUNCH_TIMEOUT = 60
 # Ordering and filing a channel only rearrange the shared directory, like folder edits, so they need no room credential.
 DIRECTORY_OPERATIONS = ("move", "folder")
-ADMIN_OPERATIONS = ("archive", "restore", "delete")
+ADMIN_OPERATIONS = ("rename", "archive", "restore", "delete")
 DIRECTORY_PICKER_TIMEOUT = 600  # the folder dialog waits for the person at the computer
 MAX_TEXT_LENGTH = 32000
 SESSION_ID_PATTERN = re.compile(r"[0-9A-Za-z_-]{8,128}")
@@ -620,7 +620,7 @@ def move_folder(connection, folder_id, payload):
 
 
 def manage_room(connection, room_id, action, payload):
-    """Move, archive, restore or permanently delete one declared host's room."""
+    """Move, rename, archive, restore or permanently delete one declared host's room."""
     begin_write(connection)
     room = require_room(connection, room_id)
     require_host(room, payload)
@@ -638,6 +638,12 @@ def manage_room(connection, room_id, action, payload):
         if folder_id is not None and connection.execute("SELECT 1 FROM topic_folders WHERE id=?", (folder_id,)).fetchone() is None:
             raise ValueError("文件夹不存在")
         connection.execute("UPDATE room_folder_assignments SET folder_id=? WHERE room_id=?", (folder_id, room_id))
+    elif action == "rename":
+        # The title is display-only, so renaming never touches phase, turns or members.
+        title = str(payload.get("title", "")).strip()
+        if not title or len(title) > 80:
+            raise ValueError("title 内容为空或超过 80 字")
+        connection.execute("UPDATE rooms SET title=? WHERE id=?", (title, room_id))
     elif action in ("archive", "restore"):
         if action == "archive" and room["phase"] != "concluded":
             save_topic_settings(connection, room_id, {**room, "phase": "paused"})
@@ -2080,7 +2086,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             authorize_write(connection, room_id, token, parts[3] if len(parts) > 3 else "", self.read_payload())
         if parts[3:] == ["backup"] and method == "GET":
             return self.respond(room_backup(connection, room_id))
-        if len(parts) == 4 and parts[3] in ("move", "folder", "archive", "restore", "delete") and method == "POST":
+        if len(parts) == 4 and parts[3] in ("move", "folder", "rename", "archive", "restore", "delete") and method == "POST":
             files = connection.execute("SELECT id FROM attachments WHERE room_id=?", (room_id,)).fetchall() if parts[3] == "delete" else []
             result = manage_room(connection, room_id, parts[3], self.read_payload())
             connection.commit()

@@ -889,6 +889,11 @@ async function manage_room(database, room_id, action, payload) {
       throw new HttpError(400, "文件夹不存在");
     }
     statements.push(database.prepare("UPDATE room_folder_assignments SET folder_id=? WHERE room_id=?").bind(folder_id, room_id));
+  } else if (action === "rename") {
+    // The title is display-only, so renaming never touches phase, turns or members.
+    const title = String(payload.title ?? "").trim();
+    if (!title || text_length(title) > 80) throw new HttpError(400, "title 内容为空或超过 80 字");
+    statements.push(database.prepare("UPDATE rooms SET title=? WHERE id=?").bind(title, room_id));
   } else if (["archive", "restore"].includes(action)) {
     if (action === "archive" && room.phase !== "concluded") statements.push(...topic_statements(database, room_id, { ...room, phase: "paused" }));
     // An archived room is read-only: nothing it still owes may be delivered or answered later.
@@ -2053,7 +2058,7 @@ const FREE_BATCH_DONE = "NOT EXISTS(SELECT 1 FROM member_requests r WHERE r.room
 const FREE_BATCH_ANSWERED = "EXISTS(SELECT 1 FROM member_requests r WHERE r.room_id=b.room_id AND r.batch_id=b.batch_id AND r.status='completed')";
 // Ordering and filing a channel only rearrange the shared directory, like folder edits, so they need no room credential.
 const DIRECTORY_OPERATIONS = ["move", "folder"];
-const FREE_OPERATIONS = ["messages", "attachments", "move", "folder", "archive", "restore", "delete"];
+const FREE_OPERATIONS = ["messages", "attachments", "move", "folder", "rename", "archive", "restore", "delete"];
 const FREE_MEMBER_FIELDS = ["id", "name", "adapter", "role", "status", "access", "session_mode", "read_until"];
 const FREE_EXECUTION_FIELDS = ["id", "member_id", "status", "session_id", "lease_until", "created_at", "finished_at", "result",
   "activity", "activity_at"];
@@ -3146,7 +3151,7 @@ const ADMIN_LOCK_THRESHOLD = 5;
 const ADMIN_LOCK_SECONDS = 300;
 const ADMIN_AVATAR_LIMIT = 60000;
 // With a valid admin session these skip the room credential, like directory arrangement.
-const ADMIN_ROOM_OPERATIONS = ["archive", "restore", "delete"];
+const ADMIN_ROOM_OPERATIONS = ["rename", "archive", "restore", "delete"];
 
 /** Lowercase hex of raw bytes. */
 function to_hex(bytes) {
@@ -3526,7 +3531,7 @@ async function handle_api(database, request, parts, params, bucket, setup_key = 
   if (parts.slice(3).join("/") === "backup" && method === "GET") return respond(await room_backup(database, room_id));
   const tail = parts.slice(3).join("/");
   if (tail === "limits") return respond(method === "GET" ? (await require_room(database, room_id)).limits : await check_limits(database, room_id, await read_payload(request)));
-  if (["move", "folder", "archive", "restore", "delete"].includes(tail) && method === "POST") {
+  if (["move", "folder", "rename", "archive", "restore", "delete"].includes(tail) && method === "POST") {
     const files = tail === "delete" ? (await database.prepare("SELECT id FROM attachments WHERE room_id=?").bind(room_id).all()).results : [];
     const result = await manage_room(database, room_id, tail, await read_payload(request));
     if (bucket) {

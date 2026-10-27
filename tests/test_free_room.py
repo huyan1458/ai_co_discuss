@@ -170,6 +170,16 @@ class FreeRoomTests(unittest.TestCase):
         self.assertEqual(room["members"][0]["execution"]["status"], "completed")
         self.assertEqual(room["members"][0]["read_until"], saved["message"]["id"])
 
+    def test_rename_during_execution_changes_only_the_title(self):
+        """Renaming is display-only, so a running execution and its answer are unaffected."""
+        self.say("任务")
+        execution = self.reserve()[1]
+        self.assertEqual(self.request(self.path + "/rename", {"actor": "用户", "title": "新名称"}, self.member)[0], 403)
+        status, renamed = self.request(self.path + "/rename", {"actor": "用户", "title": "新名称"}, self.owner)
+        self.assertEqual(status, 200, renamed)
+        self.assertEqual(renamed["title"], "新名称")
+        self.assertEqual(self.answer(execution["id"])[0], 201)
+
     def test_retried_reservation_returns_the_same_execution(self):
         """A lost reserve response is recovered with the same local client id."""
         self.say("任务")

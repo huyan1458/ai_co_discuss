@@ -356,7 +356,8 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.request(path, {"actor": "用户", "before_id": "missing"})[0], 400)
         self.assertEqual(self.request(path, {"actor": "用户", "before_id": self.room["id"]})[0], 200)
         base = f"/api/rooms/{self.room['id']}"
-        self.assertEqual(self.request(base + "/topic", {"actor": "用户", "title": "重命名 <& 中文"})[0], 200)
+        self.assertEqual(self.request(base + "/rename", {"actor": "用户", "title": "  "})[0], 400)
+        self.assertEqual(self.request(base + "/rename", {"actor": "用户", "title": "重命名 <& 中文"})[0], 200)
         if not self.external:
             init_database(self.database)
         ids = [item["id"] for item in self.request("/api/rooms")[1]["rooms"]]

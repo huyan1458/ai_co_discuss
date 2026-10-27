@@ -51,7 +51,7 @@ TERMINAL = ("completed", "cancelled", "failed")
 # A queued member has been asked once its request for that message exists.
 QUEUE_ASKED = "EXISTS(SELECT 1 FROM member_requests r WHERE r.message_id={row}.message_id AND r.member_id={row}.member_id)"
 SESSION_MODES = ("new", "borrowed")
-FREE_OPERATIONS = ("messages", "attachments", "move", "folder", "archive", "restore", "delete")
+FREE_OPERATIONS = ("messages", "attachments", "move", "folder", "rename", "archive", "restore", "delete")
 MEMBER_FIELDS = ("id", "name", "adapter", "role", "status", "access", "session_mode", "read_until")
 EXECUTION_FIELDS = ("id", "member_id", "status", "session_id", "lease_until", "created_at", "finished_at", "result",
                     "activity", "activity_at")

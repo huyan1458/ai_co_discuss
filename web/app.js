@@ -470,7 +470,7 @@ async function rename_channel(id, title) {
   const patch = { title: title.trim() };
   return update_directory({ key: `rename:${id}`, patch, label: `「${room.title}」重命名`,
     apply: () => patch_directory_room(id, patch), rollback: () => patch_directory_room(id, { title: room.title }),
-    save: () => request_json(`/api/rooms/${id}/topic`, { actor: "用户", ...patch }),
+    save: () => request_json(`/api/rooms/${id}/rename`, { actor: "用户", ...patch }),
     commit: saved => patch_directory_room(id, { title: saved.title }) });
 }
 
