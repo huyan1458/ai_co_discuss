@@ -171,7 +171,9 @@ function save_description({ text, as_template }) {
 const prompt_preset = computed(() => EXPERT_PROMPT_PRESETS[profile.value.adapter] || "");
 const prompt_own = computed(() => Object.hasOwn(profile.value, "system_prompt"));
 const prompt_text = computed(() => (prompt_own.value ? profile.value.system_prompt : prompt_preset.value).trim());
-const prompt_state = computed(() => !prompt_text.value ? "" : prompt_own.value ? "自定义" : "预设");
+// The back has no room for a row, so the heading carries an icon whose tooltip states the prompt's source and first line.
+const prompt_title = computed(() => !prompt_text.value ? "专属提示词：未设置，点击添加"
+  : `专属提示词（${prompt_own.value ? "自定义" : "软件预设"}）：${prompt_text.value.split("\n")[0]}`);
 const prompt_open = ref(false), prompt_draft = ref("");
 const prompt_changed = computed(() => prompt_draft.value.trim() !== prompt_text.value);
 // The dialog says live whether the text being typed still follows the preset, replaces it, or leaves this expert without one.
@@ -282,7 +284,9 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
       <div v-if="can_flip" class="expert-card-face expert-card-back" :inert="!visible_back" :aria-hidden="!visible_back">
         <div class="expert-card-back-body">
         <div class="expert-card-heading"><strong>{{ name }}<span>设置{{ no_files ? ' · 不访问项目' : '' }}</span></strong>
-          <UButton v-if="api_mode" icon="i-lucide-zap" :aria-label="`检查 ${name} 的 API 配置`" title="检查配置：发送一次极短请求，核对地址、密钥、协议与模型" size="xs" :color="api_check.state === 'ok' ? 'success' : api_check.state === 'error' ? 'error' : 'neutral'" variant="ghost" :loading="api_check.state === 'loading'" :disabled="!profile.api_key_ref || !profile.model || !view.launch.available" @click="check_api" /></div>
+          <span class="expert-card-heading-tools">
+          <button v-if="profile.adapter" type="button" class="expert-card-prompt" :class="{ 'is-set': prompt_text, 'is-own': prompt_own && prompt_text }" :title="prompt_title" :aria-label="`编辑 ${name} 的专属提示词`" @click="open_prompt"><UIcon name="i-lucide-scroll-text" /></button>
+          <UButton v-if="api_mode" icon="i-lucide-zap" :aria-label="`检查 ${name} 的 API 配置`" title="检查配置：发送一次极短请求，核对地址、密钥、协议与模型" size="xs" :color="api_check.state === 'ok' ? 'success' : api_check.state === 'error' ? 'error' : 'neutral'" variant="ghost" :loading="api_check.state === 'loading'" :disabled="!profile.api_key_ref || !profile.model || !view.launch.available" @click="check_api" /></span></div>
         <p v-if="api_mode && api_check.message" :role="api_check.state === 'error' ? 'alert' : 'status'" class="expert-card-check">{{ api_check.message }}</p>
         <div v-if="automatic && entry_items.length > 1" class="expert-card-field">
           <span>接入</span><USelect :model-value="profile.adapter || ''" :items="entry_items" placeholder="选择 API / App / CLI" :aria-label="`${name} 软件入口`" size="xs" class="w-full" @update:model-value="bridge.write_launch(name, 'adapter', $event)" />
@@ -300,10 +304,6 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
             <button v-for="option in [{ value: 'read', label: '只读' }, { value: 'write', label: '可写' }]" :key="option.value" type="button" role="radio"
               :aria-checked="access === option.value" @click="bridge.write_launch(name, 'project_access', option.value)">{{ option.label }}</button>
           </div>
-        </div>
-        <div v-if="profile.adapter" class="expert-card-field">
-          <span>提示</span><button type="button" class="expert-card-prompt" :title="prompt_text || '未设置专属提示词'" :aria-label="`编辑 ${name} 的专属提示词`" @click="open_prompt">
-            <b v-if="prompt_state" :class="{ 'is-own': prompt_own }">{{ prompt_state }}</b><em>{{ prompt_text.split("\n")[0] || "未设置，点击添加" }}</em><UIcon name="i-lucide-pen-line" /></button>
         </div>
         <ApiSettings v-if="api_mode" :name="name" />
         <template v-else-if="configurable && !connection.length">
@@ -393,20 +393,19 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card-defaults { position: absolute; left: 8px; bottom: 8px; min-height: 22px; padding: 2px 4px; border-radius: 4px; color: var(--ui-text-muted); font-size: 11px; }
 .expert-card-defaults:hover:not(:disabled) { color: var(--channel-accent); }
 .expert-card-defaults:disabled { opacity: .4; }
-/* Reads like the selects around it: the state, the first line, and a pen saying it opens an editor. */
-.expert-card-prompt { display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 24px; padding: 0 6px 0 8px; border: 1px solid var(--ui-border); border-radius: 5px; color: var(--ui-text-dimmed); font-size: 11px; text-align: left; }
-.expert-card-prompt > b { flex-shrink: 0; padding: 0 4px; border-radius: 3px; background: var(--ui-bg-accented); color: var(--ui-text-muted); font-size: 10px; font-weight: 500; line-height: 15px; }
-.expert-card-prompt > b.is-own { background: color-mix(in srgb, var(--channel-accent) 16%, transparent); color: var(--channel-accent); }
-.expert-card-prompt > em { flex: 1; overflow: hidden; font-style: normal; white-space: nowrap; text-overflow: ellipsis; }
-.expert-card-prompt > b + em { color: var(--ui-text-toned); }
-.expert-card-prompt > span { flex-shrink: 0; width: 12px; height: 12px; }
-.expert-card-prompt:hover { border-color: var(--ui-border-accented); color: var(--ui-text-highlighted); }
+/* Same shape as the front's tools: dimmed when unset, brighter with a preset, accent once the user wrote their own. */
+.expert-card-heading-tools { display: flex; flex-shrink: 0; align-items: center; gap: 2px; margin: -2px -4px -2px 0; }
+.expert-card-prompt { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; color: var(--ui-text-dimmed); }
+.expert-card-prompt > span { width: 13px; height: 13px; }
+.expert-card-prompt.is-set { color: var(--ui-text-muted); }
+.expert-card-prompt.is-own { color: var(--channel-accent); }
+.expert-card-prompt:hover { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
 .expert-card-note { display: flex; gap: 6px; margin: 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
 .expert-card-manual { display: grid; gap: 4px; width: 100%; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
 .expert-card-manual > p { margin: 0; }
 .expert-card-note > span { flex-shrink: 0; width: 13px; height: 13px; margin-top: 3px; }
 @media (pointer: coarse) {
-  .expert-card-flip, .expert-card-defaults, .expert-card-tools > button { min-width: 44px; min-height: 44px; }
+  .expert-card-flip, .expert-card-defaults, .expert-card-tools > button, .expert-card-prompt { min-width: 44px; min-height: 44px; }
   .expert-card-turn { height: 262px; }
   .expert-card-tools { top: 4px; right: 4px; }
   .expert-card-identity { padding-right: 136px; }
