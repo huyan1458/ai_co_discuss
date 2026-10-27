@@ -17,7 +17,7 @@ import { EXPERT_PROMPT_PRESETS, expert_prompt } from '../runner/expert_prompts.m
 import { system_prompt } from '../runner/api_participant.mjs';
 import { assert_shared_home, DiscussionService, FreeRoomWithDiscussion, migrate_service_home, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
 import { launch_discussion, room_models } from '../runner/discussion_launch.mjs';
-import { activity_phase, progress_note, agy_rule, antigravity_project, claude_exit_error, claude_rule_path, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
+import { activity_phase, progress_note, agy_command_rule, agy_rule, antigravity_project, claude_exit_error, claude_rule_path, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
 import { certainty, decide, decide_group_order, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
 
@@ -1812,6 +1812,12 @@ test('an expert prompt replaces its software preset, and an empty one turns the 
   assert.equal(expert_prompt({ adapter: 'antigravity_cli', system_prompt: '  只读不写  ' }), '只读不写');
   assert.equal(expert_prompt({ adapter: 'antigravity_cli', system_prompt: '' }), '');
   assert.equal(expert_prompt({ adapter: 'claude' }), '', 'software without a need has no preset');
+});
+
+test('the agy command limit comes from the runner, so clearing the expert prompt cannot drop it', () => {
+  assert.match(agy_command_rule('antigravity_cli', 'codiscuss'), /run_command 只能运行 codiscuss/);
+  assert.equal(agy_command_rule('claude', 'codiscuss'), '');
+  assert.doesNotMatch(EXPERT_PROMPT_PRESETS.antigravity_cli, /run_command/);
 });
 
 test("the delivered task and the API system prompt carry only this member's own prompt", async t => {

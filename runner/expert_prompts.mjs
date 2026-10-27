@@ -7,9 +7,8 @@
 export const MAX_EXPERT_PROMPT = 4000;
 
 export const EXPERT_PROMPT_PRESETS = {
-  // Headless agy ends the turn when a command needs approval, and tends to work without a word between tools.
-  antigravity_cli: `无人值守下 run_command 只能运行 codiscuss 的子命令，其他命令会被自动拒绝并使会话直接结束；列目录、搜索或读取文件用 list_dir、find_by_name、grep_search、view_file。
-任务需要多步操作时，在读完材料、改定方案、验证结果这类关键转折处，用一两句中文写出进展再继续。`,
+  // agy streams no thinking text, so without a word between tools the page cannot show how far it got.
+  antigravity_cli: '多步任务中，在关键转折处用一句话写出进展再继续。',
 };
 
 /** The prompt this member receives: its own text when set, otherwise its software's preset. */

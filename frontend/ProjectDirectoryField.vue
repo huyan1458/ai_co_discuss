@@ -113,20 +113,19 @@ async function save_projects() {
     <p v-if="!relay.online" class="project-note"><UIcon name="i-lucide-moon" />电脑「{{ relay.name }}」当前离线，创建请求会等它上线后执行。</p>
   </div>
 
-  <!-- A flex box drawn as an input, so the chosen project's tag and the actions take their own width instead of covering the path. -->
+  <!-- One field in two parts: the saved-project picker leads, naming the chosen project, and the typed path follows,
+       with the computer's folder dialog at its end like any input's trailing action. -->
   <div v-else class="project-box" :class="{ 'is-disabled': props.disabled, 'is-chosen': chosen }">
-    <span v-if="chosen" class="project-chip" :title="chosen.path"><UIcon name="i-lucide-folder" />{{ chosen.name }}</span>
+    <UDropdownMenu v-if="projects.length" :items="menu_items" :content="{ align: 'start', sideOffset: 6 }" :ui="{ content: 'channel-menu project-menu' }" :disabled="props.disabled">
+      <button type="button" class="project-prefix" :class="{ 'is-chosen': chosen }" :title="chosen ? chosen.path : '从常用项目中选择'" aria-label="选择常用项目" :disabled="props.disabled">
+        <UIcon :name="chosen ? 'i-lucide-folder' : 'i-lucide-folders'" /><span>{{ chosen ? chosen.name : "常用项目" }}</span><UIcon name="i-lucide-chevron-down" class="project-prefix-chevron" />
+      </button>
+    </UDropdownMenu>
+    <button v-else type="button" class="project-prefix" aria-label="添加常用项目" title="保存常用项目，之后一键选择；其他设备也能用" :disabled="props.disabled" @click="open_manager">
+      <UIcon name="i-lucide-plus" /><span>常用项目</span>
+    </button>
     <UInput :model-value="cwd" :placeholder="props.placeholder" variant="none" class="project-path" aria-label="项目目录完整路径" :disabled="props.disabled" @update:model-value="write_cwd" />
-    <div class="project-box-actions">
-      <UDropdownMenu v-if="projects.length" :items="menu_items" :content="{ align: 'end', sideOffset: 6 }" :ui="{ content: 'channel-menu project-menu' }" :disabled="props.disabled">
-        <UButton label="项目" trailing-icon="i-lucide-chevron-down" color="neutral" variant="ghost" size="xs" class="project-trigger" aria-label="选择常用项目" :disabled="props.disabled" />
-      </UDropdownMenu>
-      <UButton v-else label="项目" icon="i-lucide-plus" color="neutral" variant="ghost" size="xs" class="project-trigger" aria-label="添加常用项目" title="保存常用项目，之后一键选择；其他设备也能用" :disabled="props.disabled" @click="open_manager" />
-      <template v-if="browsable">
-        <span class="project-divider" aria-hidden="true" />
-        <UButton icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" aria-label="在本机选择项目目录" :title="picking ? '目录选择窗口已打开，请在本机窗口中选择' : '在本机选择文件夹'" :loading="picking" :disabled="props.disabled" @click="pick_directory" />
-      </template>
-    </div>
+    <UButton v-if="browsable" icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" class="project-browse" aria-label="在本机选择项目目录" :title="picking ? '目录选择窗口已打开，请在本机窗口中选择' : '在本机选择文件夹'" :loading="picking" :disabled="props.disabled" @click="pick_directory" />
   </div>
 
   <UModal v-model:open="managing" title="常用项目" description="保存在运行 codiscuss 的这台电脑上。登录同一网站的手机、平板可直接选择，路径不会离开这台电脑。"
@@ -180,22 +179,23 @@ async function save_projects() {
 </template>
 
 <style scoped>
-/* Entry: a labelled trigger instead of a bare icon, and the chosen project named inside the field. */
-.project-box { display: flex; align-items: center; gap: 4px; width: 100%; min-height: 32px; padding: 0 4px 0 0; border: 1px solid var(--channel-edge-control, var(--ui-border));
+/* Entry: the picker is the field's leading segment, so the chosen project and the way to change it are one control. */
+.project-box { display: flex; align-items: stretch; width: 100%; min-height: 32px; padding-right: 3px; border: 1px solid var(--channel-edge-control, var(--ui-border));
   border-radius: 6px; background: var(--ui-bg); transition: border-color .15s, box-shadow .15s; }
 .project-box:hover:not(.is-disabled) { border-color: var(--ui-border-accented); }
 .project-box.is-disabled { cursor: not-allowed; opacity: .6; }
-.project-box.is-chosen { padding-left: 5px; }
-.project-path { flex: 1; min-width: 0; }
+.project-prefix { display: inline-flex; flex-shrink: 0; align-items: center; gap: 5px; max-width: 200px; padding: 0 8px 0 10px; border-right: 1px solid var(--ui-border-muted);
+  border-radius: 5px 0 0 5px; color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; transition: background-color .15s, color .15s; }
+.project-prefix:hover:not(:disabled) { background: var(--channel-ghost-hover, var(--ui-bg-elevated)); color: var(--ui-text-highlighted); }
+.project-prefix > span { overflow: hidden; text-overflow: ellipsis; }
+.project-prefix > [class*="icon"] { flex-shrink: 0; width: 13px; height: 13px; }
+.project-prefix > .project-prefix-chevron { width: 12px; height: 12px; color: var(--ui-text-dimmed); }
+.project-prefix.is-chosen { color: var(--ui-text-highlighted); font-weight: 500; }
+.project-prefix.is-chosen > [class*="icon"]:first-child { color: var(--channel-accent); }
+.project-path { flex: 1; min-width: 0; align-self: center; }
 .project-path :deep(input) { padding-inline: 10px; text-overflow: ellipsis; }
-.project-box.is-chosen .project-path :deep(input) { padding-left: 6px; color: var(--ui-text-muted); font-size: 12px; }
-.project-box-actions { display: flex; flex-shrink: 0; align-items: center; gap: 2px; }
-.project-chip { display: inline-flex; flex-shrink: 0; align-items: center; gap: 5px; max-width: 180px; padding: 2px 8px; border-radius: 6px; overflow: hidden;
-  background: color-mix(in srgb, var(--channel-accent) 14%, transparent); color: var(--ui-text-highlighted); font-size: 12px; font-weight: 500; white-space: nowrap; text-overflow: ellipsis; }
-.project-chip > [class*="icon"] { flex-shrink: 0; width: 12px; height: 12px; color: var(--channel-accent); }
-.project-trigger { gap: 3px; padding-inline: 7px; color: var(--ui-text-toned); font-size: 12px; }
-.project-trigger :deep([data-slot="trailingIcon"]), .project-trigger :deep([data-slot="leadingIcon"]) { width: 12px; height: 12px; }
-.project-divider { width: 1px; height: 14px; margin: 0 2px; background: var(--ui-border); }
+.project-box.is-chosen .project-path :deep(input) { color: var(--ui-text-muted); font-size: 12px; }
+.project-browse { flex-shrink: 0; align-self: center; }
 
 /* Relay: a read-only chooser shaped like the other inputs. */
 .project-field { display: flex; flex-direction: column; gap: 6px; }
@@ -237,6 +237,6 @@ async function save_projects() {
 .project-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 @media (hover: none), (max-width: 600px) {
   .project-actions { opacity: 1; }
-  .project-chip { max-width: 120px; }
+  .project-prefix { max-width: 120px; }
 }
 </style>

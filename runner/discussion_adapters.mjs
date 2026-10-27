@@ -18,6 +18,11 @@ const CODEX_PERMISSIONS_MIN_MINOR = 163;
 /** Website subcommands an automatic task may run; service, launch, run, api and setup stay unapproved. */
 export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'execution', 'health', 'schema'];
 
+/** The agy project allows only codiscuss commands and headless agy ends the turn on a denied one, so every agy task states it; no member prompt can drop it. */
+export function agy_command_rule(adapter, cli) {
+  return adapter === 'antigravity_cli' ? `无人值守下 run_command 只能运行 ${cli} 的 subcommands 子命令，其他命令会被自动拒绝并使会话直接结束；列目录、搜索或读取文件用 list_dir、find_by_name、grep_search、view_file。` : '';
+}
+
 /** Only failures before a software invocation are safe for automatic redelivery. */
 function not_sent(error) { return Object.assign(error, { delivery_status: 'not_sent' }); }
 

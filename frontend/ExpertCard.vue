@@ -159,6 +159,7 @@ function cancel() {
 // Drafts live in the bridge, so reading the published view ties this to each update.
 const description = computed(() => view.value && bridge.description_draft(props.name).trim());
 const describing = ref(false);
+const describe_title = computed(() => description.value ? `描述：${description.value}` : "添加描述：擅长什么、适合分到什么工作");
 
 /** Keep the card's description for the room or invitation, and optionally as this platform's default. */
 function save_description({ text, as_template }) {
@@ -276,7 +277,8 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
             role="radio" :aria-checked="mode === option" :tabindex="mode === option ? 0 : -1" :data-mode="option" @click="emit('mode', option)">{{ ACCESS_LABELS[option] }}</button>
         </div>
         <span class="expert-card-tools">
-          <button type="button" :class="{ 'is-set': description }" :aria-label="`编辑 ${name} 的描述`" :title="description ? '编辑描述' : '添加描述：擅长什么、适合分到什么工作'" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
+          <!-- A card with a back keeps the description beside the prompt there; one without a back has only the front. -->
+          <button v-if="!can_flip" type="button" :class="{ 'is-set': description }" :aria-label="`编辑 ${name} 的描述`" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
           <button v-if="hostable" type="button" class="expert-card-host" :aria-pressed="host" :aria-label="host ? `${name} 是主持人` : `设 ${name} 为主持人`" :title="host ? '主持人' : '设为主持人'" @click="emit('host')"><UIcon name="i-lucide-crown" /></button>
           <button type="button" :aria-label="`移出 ${name}`" title="移出" @click="emit('remove')"><UIcon name="i-lucide-x" /></button>
         </span>
@@ -285,7 +287,8 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         <div class="expert-card-back-body">
         <div class="expert-card-heading"><strong>{{ name }}<span>设置{{ no_files ? ' · 不访问项目' : '' }}</span></strong>
           <span class="expert-card-heading-tools">
-          <button v-if="profile.adapter" type="button" class="expert-card-prompt" :class="{ 'is-set': prompt_text, 'is-own': prompt_own && prompt_text }" :title="prompt_title" :aria-label="`编辑 ${name} 的专属提示词`" @click="open_prompt"><UIcon name="i-lucide-scroll-text" /></button>
+          <button type="button" class="expert-card-back-tool" :class="{ 'is-set': description }" :aria-label="`编辑 ${name} 的描述`" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
+          <button v-if="profile.adapter" type="button" class="expert-card-back-tool" :class="{ 'is-set': prompt_text, 'is-own': prompt_own && prompt_text }" :title="prompt_title" :aria-label="`编辑 ${name} 的专属提示词`" @click="open_prompt"><UIcon name="i-lucide-scroll-text" /></button>
           <UButton v-if="api_mode" icon="i-lucide-zap" :aria-label="`检查 ${name} 的 API 配置`" title="检查配置：发送一次极短请求，核对地址、密钥、协议与模型" size="xs" :color="api_check.state === 'ok' ? 'success' : api_check.state === 'error' ? 'error' : 'neutral'" variant="ghost" :loading="api_check.state === 'loading'" :disabled="!profile.api_key_ref || !profile.model || !view.launch.available" @click="check_api" /></span></div>
         <p v-if="api_mode && api_check.message" :role="api_check.state === 'error' ? 'alert' : 'status'" class="expert-card-check">{{ api_check.message }}</p>
         <div v-if="automatic && entry_items.length > 1" class="expert-card-field">
@@ -393,19 +396,19 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card-defaults { position: absolute; left: 8px; bottom: 8px; min-height: 22px; padding: 2px 4px; border-radius: 4px; color: var(--ui-text-muted); font-size: 11px; }
 .expert-card-defaults:hover:not(:disabled) { color: var(--channel-accent); }
 .expert-card-defaults:disabled { opacity: .4; }
-/* Same shape as the front's tools: dimmed when unset, brighter with a preset, accent once the user wrote their own. */
-.expert-card-heading-tools { display: flex; flex-shrink: 0; align-items: center; gap: 2px; margin: -2px -4px -2px 0; }
-.expert-card-prompt { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; color: var(--ui-text-dimmed); }
-.expert-card-prompt > span { width: 13px; height: 13px; }
-.expert-card-prompt.is-set { color: var(--ui-text-muted); }
-.expert-card-prompt.is-own { color: var(--channel-accent); }
-.expert-card-prompt:hover { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
+/* Same shape as the front's tools: dimmed when unset, brighter once set; a prompt the user wrote is accented. */
+.expert-card-heading-tools { display: flex; flex-shrink: 0; align-items: center; gap: 2px; margin: -2px 0; }
+.expert-card-back-tool { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; color: var(--ui-text-dimmed); }
+.expert-card-back-tool > span { width: 13px; height: 13px; }
+.expert-card-back-tool.is-set { color: var(--ui-text-muted); }
+.expert-card-back-tool.is-own { color: var(--channel-accent); }
+.expert-card-back-tool:hover { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
 .expert-card-note { display: flex; gap: 6px; margin: 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
 .expert-card-manual { display: grid; gap: 4px; width: 100%; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
 .expert-card-manual > p { margin: 0; }
 .expert-card-note > span { flex-shrink: 0; width: 13px; height: 13px; margin-top: 3px; }
 @media (pointer: coarse) {
-  .expert-card-flip, .expert-card-defaults, .expert-card-tools > button, .expert-card-prompt { min-width: 44px; min-height: 44px; }
+  .expert-card-flip, .expert-card-defaults, .expert-card-tools > button, .expert-card-back-tool { min-width: 44px; min-height: 44px; }
   .expert-card-turn { height: 262px; }
   .expert-card-tools { top: 4px; right: 4px; }
   .expert-card-identity { padding-right: 136px; }
