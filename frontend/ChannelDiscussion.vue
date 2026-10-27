@@ -1069,7 +1069,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             </div>
             <div v-for="status in [working_status(message)]" :key="message.id" class="channel-message-text" :class="{ 'channel-working-warning': status.warning }" role="status" :aria-label="`${bridge.display_name(message.author)} ${status.text}`" :title="BLIND_ADAPTERS.includes(message.adapter) ? '此接入方式看不到进度，可在原窗口查看' : undefined">
               <span v-if="message.waiting">{{ message.text }}</span>
-              <WorkingText v-else-if="status.live" :text="status.text" :seed="message.author" :beat="message.activity_at" dots :muted="BLIND_ADAPTERS.includes(message.adapter)" />
+              <WorkingText v-else-if="status.live" :text="status.text" :seed="message.author" :beat="message.activity_at" :silent="free_now - (message.activity_at || message.created_at)" dots :muted="BLIND_ADAPTERS.includes(message.adapter)" />
               <span v-else>{{ status.text }}</span>
             </div>
             <!-- The same row the answer keeps folded after its result: open while working. -->
