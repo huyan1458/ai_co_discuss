@@ -16,7 +16,7 @@ import { cwd_key, FreeRoomRunner, workspace_snapshot } from '../runner/free_runn
 import { EXPERT_PROMPT_PRESETS, expert_prompt } from '../runner/expert_prompts.mjs';
 import { system_prompt } from '../runner/api_participant.mjs';
 import { assert_shared_home, DiscussionService, FreeRoomWithDiscussion, migrate_service_home, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
-import { launch_discussion, room_models } from '../runner/discussion_launch.mjs';
+import { launch_discussion, restore_room, room_models, room_profiles } from '../runner/discussion_launch.mjs';
 import { activity_phase, progress_note, agy_command_rule, agy_rule, antigravity_project, claude_exit_error, claude_rule_path, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
 import { certainty, decide, decide_group_order, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
@@ -227,25 +227,90 @@ test('room model readback uses registered choices, adds the software settings fo
   mkdirSync(process.env.CODEX_HOME);
   writeFileSync(join(process.env.CODEX_HOME, 'config.toml'), 'model = "gpt-6-sol"\nmodel_reasoning_effort = "high"\n[profiles.deep]\nmodel = "ignored"\n');
   const input = { site: config.site, room_id: config.room };
-  const none = { default_model: '', default_effort: '' };
-  assert.deepEqual(await room_models(home, input), { room_id: 'models', participants: {
-    Codex: { adapter: 'codex_cli', model: 'gpt-6-astra', effort: 'xhigh', default_model: 'gpt-6-sol', default_effort: 'high' },
+  const none = { default_model: '', default_effort: '', project_access: 'read' };
+  assert.deepEqual(await room_models(home, input), { room_id: 'models', registered: true, participants: {
+    Codex: { adapter: 'codex_cli', model: 'gpt-6-astra', effort: 'xhigh', default_model: 'gpt-6-sol', default_effort: 'high', project_access: 'read' },
     Claude: { adapter: 'claude', model: '', effort: '', ...none },
     Gemini: { adapter: 'antigravity', model: '', effort: '', ...none },
-  } });
+  }, scheduler: null });
   mkdirSync(process.env.CLAUDE_CONFIG_DIR);
   writeFileSync(join(process.env.CLAUDE_CONFIG_DIR, 'settings.json'), JSON.stringify({ model: 'opus', effortLevel: 'high' }));
   assert.deepEqual((await room_models(home, input)).participants.Claude,
-    { adapter: 'claude', model: '', effort: '', default_model: 'opus', default_effort: 'high' });
+    { adapter: 'claude', model: '', effort: '', default_model: 'opus', default_effort: 'high', project_access: 'read' });
   config.participants.Gemini = { adapter: 'antigravity_cli', executable: process.execPath, model: 'gemini-4-argon-high' };
   writeFileSync(path, JSON.stringify(config));
   // agy keeps its default in the software and answers its native /model; stub that query here.
   const agy = { read_defaults: profile => profile.adapter === 'antigravity_cli' ? { model: 'gemini-4-argon-medium', effort: 'medium' } : { model: '', effort: '' } };
   assert.deepEqual((await room_models(home, input, agy)).participants.Gemini,
-    { adapter: 'antigravity_cli', model: 'gemini-4-argon-high', effort: '', default_model: 'gemini-4-argon-medium', default_effort: 'medium' });
-  assert.deepEqual((await room_models(home, { ...input, room_id: 'missing' })).participants, {});
+    { adapter: 'antigravity_cli', model: 'gemini-4-argon-high', effort: '', default_model: 'gemini-4-argon-medium', default_effort: 'medium', project_access: 'read' });
+  assert.deepEqual(await room_models(home, { ...input, room_id: 'missing' }), { room_id: 'missing', registered: false, participants: {}, scheduler: null });
   assert.deepEqual((await room_models(home, { ...input, site: 'https://other.example' })).participants, {});
   await assert.rejects(() => room_models(home, { ...input, room_id: '../models' }), /房间编号无效/);
+  config.scheduler = { provider: 'jev', model: 'jev-decide', api_key_ref: 'private-key-ref' };
+  writeFileSync(path, JSON.stringify(config));
+  assert.deepEqual((await room_models(home, input, agy)).scheduler, { provider: 'jev', model: 'jev-decide' });
+  config.participants.Codex.project_access = 'write';
+  writeFileSync(path, JSON.stringify(config));
+  assert.equal((await room_models(home, input, agy)).participants.Codex.project_access, 'write');
+});
+
+test('a backup carries local member sessions, and restoring it resumes them while Claude Code stays manual', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'discussion-restore-'));
+  const saved_env = { CODEX_HOME: process.env.CODEX_HOME, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
+  const token = 'owner-token'.repeat(4);
+  const server = createServer((request, response) => {
+    const ok = request.headers['x-discussion-token'] === token;
+    response.writeHead(ok ? 200 : 403, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify(!ok ? { error: '凭据无效' } : request.url.endsWith('/inbox') ? { requests: [] }
+      : { mode: 'free', free: { members: [{ name: 'Claude-评审', access: 'manual', status: 'away' }] } }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {
+    for (const [key, value] of Object.entries(saved_env)) value === undefined ? delete process.env[key] : process.env[key] = value;
+    await new Promise(resolve => server.close(resolve));
+    rmSync(home, { recursive: true, force: true });
+  });
+  process.env.CODEX_HOME = join(home, 'codex');
+  process.env.CLAUDE_CONFIG_DIR = join(home, 'claude');
+  mkdirSync(join(process.env.CODEX_HOME, 'sessions', '2026'), { recursive: true });
+  writeFileSync(join(process.env.CODEX_HOME, 'sessions', '2026', 'rollout-codex-session-1.jsonl'), '{}\n');
+  mkdirSync(join(process.env.CLAUDE_CONFIG_DIR, 'projects', 'work'), { recursive: true });
+  writeFileSync(join(process.env.CLAUDE_CONFIG_DIR, 'projects', 'work', 'claude-session-1.jsonl'), `${JSON.stringify({ cwd: home })}\n`);
+  const site = `http://127.0.0.1:${server.address().port}`;
+  const path = join(home, 'source.json');
+  writeFileSync(path, JSON.stringify({ site, room: 'source', token, mode: 'free', cwd: home, data_directory: join(home, 'runtime'),
+    members: { Codex: { token: 'codex-member'.repeat(3) }, Claude: { token: 'claude-member'.repeat(3) } }, participants: {
+      Codex: { adapter: 'codex_cli', executable: process.execPath, model: 'gpt-6-astra', effort: 'xhigh' },
+      Claude: { adapter: 'claude', executable: process.execPath, session_id: 'claude-session-1', system_prompt: '只看测试' } } }));
+  register_room(home, path);
+  const store = new DiscussionStore(join(home, 'runtime'));
+  store.bind('Codex', 'codex-session-1');
+  store.close();
+
+  await assert.rejects(() => room_profiles(home, { site, room_id: 'source', token: 'wrong-token'.repeat(4) }), /HTTP 403/);
+  const { local_members } = await room_profiles(home, { site, room_id: 'source', token });
+  assert.deepEqual(local_members.participants, {
+    Codex: { adapter: 'codex_cli', executable: process.execPath, model: 'gpt-6-astra', effort: 'xhigh', session_id: 'codex-session-1' },
+    Claude: { adapter: 'claude', executable: process.execPath, session_id: 'claude-session-1', system_prompt: '只看测试' } });
+  assert.doesNotMatch(JSON.stringify(local_members), /codex-member|claude-member|owner-token/);
+  assert.deepEqual(await room_profiles(home, { site, room_id: 'unregistered', token }), { room_id: 'unregistered', local_members: null });
+
+  const result = await restore_room(home, { site, room_id: 'restored', token, local_members });
+  assert.deepEqual(result, { room_id: 'restored', registered: true, members: [
+    { name: 'Codex', status: 'resumed', session_id: 'codex-session-1' },
+    { name: 'Claude', status: 'manual', session_id: 'claude-session-1', cwd: home }] });
+  const restored = JSON.parse(readFileSync(read_registry(home).find(item => item !== resolve(path)), 'utf8'));
+  assert.equal(restored.room, 'restored');
+  assert.deepEqual(Object.keys(restored.participants), ['Codex']);
+  assert.equal(restored.participants.Codex.session_id, 'codex-session-1');
+  assert.deepEqual(restored.keep_manual, ['Claude-评审', 'Claude']);
+  await assert.rejects(() => restore_room(home, { site, room_id: 'restored', token, local_members }), /已在本机登记/);
+
+  const lost = structuredClone(local_members);
+  lost.participants.Codex.session_id = 'missing-session';
+  const missing = await restore_room(home, { site, room_id: 'lost', token, local_members: lost });
+  assert.match(missing.members[0].error, /找不到 Codex 会话 missing-session/);
+  assert.equal(missing.members[0].status, 'failed');
 });
 
 test('agy project records survive a concluded room and are dropped only after the room is deleted', async t => {

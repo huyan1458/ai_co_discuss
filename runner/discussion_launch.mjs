@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -37,6 +38,7 @@ const EFFORT_LEVELS = { codex_cli: ['low', 'medium', 'high', 'xhigh', 'max', 'ul
 const PROFILE_FIELDS = ['adapter', 'executable', 'model', 'effort', 'source_thread_id', 'ipc_directory', 'allowed_tools', 'cwd', 'project_name', 'project_id', 'base_url', 'api_protocol', 'api_key_ref', 'system_prompt'];
 const MAX_MINUTES = 1440;
 const SESSION_ID_PATTERN = /^[0-9A-Za-z_-]{8,128}$/;
+const LOCAL_MEMBERS_FORMAT = 'ai-codiscuss-local-members';
 // Reading events after this id proves the owner credential without transferring any.
 const MAX_EVENT_ID = 2147483647;
 const CONFIG_APPLY_TIMEOUT_MS = 6000;
@@ -50,6 +52,9 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch api-check --file FILE
       codiscuss launch scheduler-check --file FILE
       codiscuss launch room-member --file FILE
+      codiscuss launch room-member-access --file FILE
+      codiscuss launch room-profiles --file FILE
+      codiscuss launch room-restore --file FILE
       codiscuss launch pick-directory
       codiscuss launch projects [--file FILE]
       codiscuss launch machine-link --file FILE
@@ -66,6 +71,9 @@ pick-directory 在本机弹出系统目录选择窗口，返回所选路径；�
 projects 读取本机已配置的项目（名称与绝对路径）；提供 JSON（projects 列表）时整体替换保存。
 machine-link 返回本机连接指定 site 的电脑编号、名称与凭据，供已登录管理员的网页完成配对；不存在时创建。
 room-member 为运行中的自由房间或讨论邀请、请回一位成员（讨论只接受本机唤醒的成员）；须提供 site、room_id、token、action（add/rejoin）、name。
+room-member-access 修改一位本机唤醒成员的项目文件权限（project_access 为 read/write），下次投递起生效、保留原会话；须提供 site、room_id、token、name、project_access。
+room-profiles 导出房间的本机成员软件配置与实际会话 ID（不含凭据），供备份附带；须提供 site、room_id、token。
+room-restore 把导入房间的本机成员配置登记到本机并核对原会话存在，Claude Code 成员保持手动；须提供 site、room_id、token、local_members。
 JSON 指定 site、entry（conversation/web）、room（建房内容，含 submission_id）
 或 room_id（已有房间）、participants（本次软件覆盖配置）。
 conversation 还须 current_session_id，当前会话接手首个主持任务。
@@ -234,7 +242,7 @@ export function launch_settings(home) {
   return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { participants: {} };
 }
 
-/** Read the registered room's model choices and what each software selects for empty ones, never connection secrets. */
+/** Read the registered room's model choices, what each software selects for empty ones, and its smart scheduler, never connection secrets. */
 export async function room_models(home, raw, { read_defaults = software_defaults } = {}) {
   const input = launch_input({ ...raw, entry: 'web' });
   if (!input.room_id) throw new Error('读取本场模型须提供 room_id');
@@ -243,14 +251,18 @@ export async function room_models(home, raw, { read_defaults = software_defaults
     return identity?.site === input.site && identity.room === input.room_id;
   });
   if (paths.length > 1) throw new Error('本场存在多份登记配置，无法确定模型设置');
-  const profiles = paths.length ? configuration_snapshot(paths[0]).config.participants : {};
+  const config = paths.length ? configuration_snapshot(paths[0]).config : {};
+  const profiles = config.participants || {};
   const participants = Object.fromEntries(await Promise.all(Object.entries(profiles).map(async ([name, profile]) => {
     const cli = ['codex_cli', 'claude', 'antigravity_cli', 'api'].includes(profile.adapter);
     const defaults = await read_defaults(profile);
     return [name, { adapter: profile.adapter, model: cli ? profile.model || '' : '',
-      effort: EFFORT_LEVELS[profile.adapter] ? profile.effort || '' : '', default_model: defaults.model, default_effort: defaults.effort }];
+      effort: EFFORT_LEVELS[profile.adapter] ? profile.effort || '' : '', default_model: defaults.model, default_effort: defaults.effort,
+      project_access: profile.adapter === 'api' ? 'read' : profile.project_access || config.project_access || 'read' }];
   })));
-  return { room_id: input.room_id, participants };
+  // Smart scheduling is a local choice; only which model decides is shown, never its key.
+  const scheduler = config.scheduler ? { provider: config.scheduler.provider, model: config.scheduler.model } : null;
+  return { room_id: input.room_id, registered: paths.length > 0, participants, scheduler };
 }
 
 /** Save only reusable client settings; room credentials and session bindings are never defaults. */
@@ -549,6 +561,31 @@ export async function room_member(home, raw, locked = false) {
   } finally { release(); }
 }
 
+// CLIs whose project file access this tool sets per run; App members follow the App's own settings, API members only read.
+const ACCESS_ADAPTERS = ['codex_cli', 'claude', 'antigravity_cli'];
+
+/**
+ * Switch one woken member's project files between read-only and writable after the room is created. Every run builds its
+ * permissions from the configuration, so the change applies from the member's next delivery and keeps its session.
+ */
+export async function room_member_access(home, raw) {
+  const { input, path } = await member_room_context(home, raw);
+  const { name, project_access } = input;
+  if (!['read', 'write'].includes(project_access)) throw new Error('project_access 只能为 read 或 write');
+  const release = acquire_lock(join(dirname(path), 'configuration-edit'));
+  try {
+    const config = configuration_snapshot(path).config;
+    const profile = config.participants?.[name];
+    if (!profile) throw new Error(`${name} 不由本机唤醒，项目权限由它自己的会话决定`);
+    if (!ACCESS_ADAPTERS.includes(profile.adapter)) throw new Error(profile.adapter === 'api' ? 'API 成员没有本机文件工具，项目固定只读' : `${name} 的项目权限在 App 内设置`);
+    if (project_access === 'write' && !(profile.cwd || config.cwd)) throw new Error('本房间没有指定项目目录，可写没有作用；请在新建房间时选择项目目录');
+    const next = { ...config, participants: { ...config.participants, [name]: { ...profile, project_access } } };
+    validate_config(next, dirname(path));
+    atomic_json(path, next);
+    return { room_id: input.room_id, member: name, project_access };
+  } finally { release(); }
+}
+
 /** A Codex desktop chat is resumed through the app, any other Codex session through the CLI. */
 function codex_session_adapter(session_id, env = process.env) {
   const sessions = join(env.CODEX_HOME || join(homedir(), '.codex'), 'sessions');
@@ -575,6 +612,94 @@ export function adopt_member_profile(home, path, name, session_id, client = 'cla
     atomic_json(path, next);
     return adapter;
   } finally { release(); }
+}
+
+/** The one registered configuration of a room on this machine, or null when it was never registered here. */
+function registered_room_path(home, site, room_id) {
+  const paths = read_registry(home).filter(path => {
+    const identity = registered_identity(path);
+    return identity?.site === site && identity.room === room_id;
+  });
+  if (paths.length > 1) throw new Error('本房间存在多份登记配置，无法确定成员会话');
+  return paths[0] || null;
+}
+
+/** The session each participant actually resumes, read without writing to a runtime the service may be using. */
+function bound_sessions(config, path) {
+  const file = join(resolve(config.data_directory || join(dirname(path), `discussion-${config.room}`)), 'runtime.sqlite3');
+  if (!existsSync(file)) return {};
+  const db = new DatabaseSync(file, { readOnly: true });
+  try { return Object.fromEntries(db.prepare('SELECT participant,session_id FROM bindings').all().map(row => [row.participant, row.session_id])); }
+  finally { db.close(); }
+}
+
+/**
+ * Export a room's local member software and the sessions they hold, so a backup imported on this machine resumes them.
+ * Requires the owner's credential; member credentials and API keys are never included (only the key reference).
+ * Returns `local_members: null` when the room is not registered here.
+ */
+export async function room_profiles(home, raw) {
+  const input = launch_input({ ...raw, entry: 'web' });
+  if (!input.room_id || typeof input.token !== 'string' || !input.token.trim()) throw new Error('导出本机成员配置须提供房间编号和房间控制凭据');
+  const path = registered_room_path(home, input.site, input.room_id);
+  if (!path) return { room_id: input.room_id, local_members: null };
+  const config = configuration_snapshot(path).config;
+  await site_request(input.site, `/api/rooms/${input.room_id}/${config.mode === 'free' ? 'inbox' : `events?after=${MAX_EVENT_ID}`}`, input.token);
+  const sessions = bound_sessions(config, path);
+  const participants = Object.fromEntries(Object.entries(config.participants).map(([name, profile]) => {
+    const kept = Object.fromEntries(Object.entries(profile).filter(([key]) => [...PROFILE_FIELDS, 'project_access'].includes(key)));
+    const session_id = sessions[name] || profile.session_id;
+    return [name, session_id ? { ...kept, session_id } : kept];
+  }));
+  return { room_id: input.room_id, local_members: { format: LOCAL_MEMBERS_FORMAT, version: 1, mode: config.mode || 'brainstorm',
+    cwd: config.cwd, discussion_project: config.discussion_project, project_access: config.project_access, scheduler: config.scheduler, participants } };
+}
+
+/**
+ * Register an imported free room on this machine with its exported member software, each member resuming its original session.
+ * A session or software missing here fails that member instead of starting a new conversation. Claude Code members stay manual,
+ * and are never taken over, because a background resume forks the session away from its original window.
+ * Returns `{room_id, registered, members: [{name, status: resumed|manual|failed, session_id?, cwd?, error?}]}`.
+ */
+export async function restore_room(home, raw) {
+  const input = launch_input({ ...raw, entry: 'web' });
+  const local = input.local_members;
+  if (!input.room_id || typeof input.token !== 'string' || !input.token.trim()) throw new Error('恢复本机成员须提供房间编号和房间控制凭据');
+  if (local?.format !== LOCAL_MEMBERS_FORMAT || local.version !== 1 || !local.participants || typeof local.participants !== 'object') throw new Error('本机成员配置格式无效');
+  if (local.mode !== 'free') throw new Error('只有自由协作房间可以恢复本机成员会话');
+  await site_request(input.site, `/api/rooms/${input.room_id}/inbox`, input.token);
+  const room = await site_request(input.site, `/api/rooms/${input.room_id}`, input.token);
+  if (registered_room_path(home, input.site, input.room_id)) throw new Error('本房间已在本机登记，不重复恢复');
+  if (local.cwd && (!isAbsolute(local.cwd) || !existsSync(local.cwd) || !statSync(local.cwd).isDirectory())) throw new Error(`房间项目目录 ${local.cwd} 在本机不存在`);
+  const keep_manual = room.free.members.filter(member => member.access === 'manual' && member.status !== 'removed' && platform_of(member.name) === 'Claude').map(member => member.name);
+  const participants = {}, members = [];
+  for (const [name, exported] of Object.entries(local.participants)) {
+    try {
+      const profile = participant_profile(name, {}, { cwd: local.cwd, adopt: true, participants: { [name]: exported } }, false);
+      const resumed = profile.session_id ? borrowed_session(name, profile, local.cwd) : profile;
+      if (profile.adapter === 'claude') {
+        keep_manual.push(name);
+        members.push({ name, status: 'manual', session_id: resumed.session_id || '', cwd: resumed.cwd || local.cwd || '' });
+      } else {
+        participants[name] = resumed;
+        members.push({ name, status: 'resumed', session_id: resumed.session_id || '' });
+      }
+    } catch (error) { members.push({ name, status: 'failed', error: error.message }); }
+  }
+  if (!Object.keys(participants).length && !local.cwd && !local.scheduler) return { room_id: input.room_id, registered: false, members };
+  const key = createHash('sha256').update(`${input.site}/${input.room_id}`).digest('hex');
+  // A leftover directory of a deleted room with the same ID would carry its old bindings, so a restore never reuses one.
+  const base = join(home, 'launches', key), directory = existsSync(base) ? `${base}-${Date.now()}` : base;
+  // Members arrive away; these placeholders are replaced by the credential issued when the owner brings each one back.
+  const config = { site: input.site, room: input.room_id, token: input.token, mode: 'free', participants, keep_manual, api_home: home,
+    members: Object.fromEntries(Object.keys(participants).map(name => [name, { token: `${randomUUID()}${randomUUID()}`, pending: '' }])),
+    scheduler: local.scheduler || undefined, cwd: local.cwd || undefined, discussion_project: local.discussion_project || undefined,
+    project_access: local.project_access || undefined, data_directory: join(directory, 'runtime'), draft_directory: service_drafts(home, join(directory, 'runtime')) };
+  validate_config(config, directory);
+  mkdirSync(directory, { recursive: true });
+  atomic_json(join(directory, 'config.json'), config);
+  register_room(home, join(directory, 'config.json'));
+  return { room_id: input.room_id, registered: true, members };
 }
 
 /** Stable signatures make changed retry requests explicit without putting credentials in receipts. */
@@ -896,6 +1021,9 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
       ...(input.model ? { model: input.model } : {}) }, { refresh: input.refresh === true });
   }
   else if (positionals[0] === 'room-member' && input) result = await room_member(home, input);
+  else if (positionals[0] === 'room-member-access' && input) result = await room_member_access(home, input);
+  else if (positionals[0] === 'room-profiles' && input) result = await room_profiles(home, input);
+  else if (positionals[0] === 'room-restore' && input) result = await restore_room(home, input);
   else if (positionals[0] === 'pick-directory') result = await pick_directory();
   else if (positionals[0] === 'machine-link' && input) result = (await import('./remote_launch.mjs')).machine_link(home, input.site);
   else if (positionals[0] === 'start' && input) result = await launch_discussion(home, input, { dry_run: values['dry-run'], browser_request: values.browser });

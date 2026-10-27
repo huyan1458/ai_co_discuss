@@ -274,7 +274,9 @@ class RoomWorker {
     const members = this.config.mode === 'free' ? (await api(this.config, '')).free?.members || [] : this.runner.members || [];
     for (const member of members) {
       const key = `${member.name}:${member.reported_session}`;
-      if (member.access !== 'manual' || member.status !== 'active' || !member.registered_at || !member.reported_session || this.adopt_failed.has(key)) continue;
+      // A restored room keeps its Claude Code members manual so their original window stays the only writer.
+      if (member.access !== 'manual' || member.status !== 'active' || !member.registered_at || !member.reported_session || this.adopt_failed.has(key)
+        || this.config.keep_manual?.includes(member.name)) continue;
       try {
         const { adopt_member_profile } = await import('./discussion_launch.mjs');
         const member_token = this.config.mode === 'free' ? `${randomUUID()}${randomUUID()}` : '';

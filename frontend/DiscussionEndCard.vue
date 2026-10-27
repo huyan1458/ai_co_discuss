@@ -4,15 +4,10 @@ import { computed, inject, ref } from "vue";
 import DiscussionLimits from "./DiscussionLimits.vue";
 import ScheduleCard from "./ScheduleCard.vue";
 
-const { view, act, pending } = inject("discussion");
-const STOP_REASONS = {
-  round_limit: (limits) => `达到轮次上限（${limits.max_rounds} 轮）`,
-  time_limit: (limits) => `达到时长上限（${limits.max_minutes} 分钟）`,
-  goal_done: () => "主持人确认目标已完成",
-};
+const { view, bridge, act, pending } = inject("discussion");
 const room = computed(() => view.value.room);
 const limits = computed(() => room.value.limits || {});
-const reason = computed(() => STOP_REASONS[limits.value.stop_reason]?.(limits.value) || "用户结束了讨论");
+const reason = computed(() => bridge.stop_reason_label(limits.value));
 const done = computed(() => limits.value.stop_reason === "goal_done");
 const continuing = ref(false);
 const limit_picker = ref(null);

@@ -7,6 +7,8 @@ import ChannelDirectory from "./ChannelDirectory.vue";
 import ProgressPanel from "./ProgressPanel.vue";
 import ProgressBoard from "./ProgressBoard.vue";
 import FreeBoard from "./FreeBoard.vue";
+import DiscussionHistory from "./DiscussionHistory.vue";
+import RoomOverview from "./RoomOverview.vue";
 
 const { view, bridge, field, act, pending } = inject("discussion");
 const room = computed(() => view.value.room);
@@ -87,14 +89,17 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", collapse_brief
 const selected_tab = computed({ get: () => view.value.tab, set: (value) => act("tab", value) });
 const ALL_TABS = [
   { value: "discussion", label: "消息", icon: "i-lucide-message-square" },
+  { value: "history", label: "讨论记录", icon: "i-lucide-history" },
+  { value: "overview", label: "房间概况", icon: "i-lucide-sliders-horizontal" },
   { value: "context", label: "共识", icon: "i-lucide-file-text" },
   { value: "topic", label: "主持", icon: "i-lucide-list-checks" },
   { value: "access", label: "接入", icon: "i-lucide-plug" },
 ];
-/** Free rooms keep coordination in the conversation and member rail. */
+/** Free rooms keep coordination in the conversation and member rail; the record and the overview fit every room. */
+const ROOM_TABS = ["discussion", "history", "overview"];
 const free_room = computed(() => room.value?.mode === "free");
-const tabs = computed(() => free_room.value ? ALL_TABS.slice(0, 1) : ALL_TABS);
-watch(() => free_room.value && view.value.tab !== "discussion", (leave) => { if (leave) act("tab", "discussion"); }, { immediate: true });
+const tabs = computed(() => free_room.value ? ALL_TABS.filter((item) => ROOM_TABS.includes(item.value)) : ALL_TABS);
+watch(() => free_room.value && !ROOM_TABS.includes(view.value.tab), (leave) => { if (leave) act("tab", "discussion"); }, { immediate: true });
 const view_links = computed(() => tabs.value.map((item) => ({
   ...item, active: !!room.value && view.value.tab === item.value, disabled: !room.value, onSelect: () => { nav_open.value = false; act("tab", item.value); },
 })));
@@ -325,6 +330,8 @@ function resize_nav_by_key(event) {
           </form>
         </section>
         <TopicPanel v-if="view.tab === 'topic' || view.tab === 'access'" :key="view.tab" @open="modal = $event" @detail="open_detail" />
+        <DiscussionHistory v-if="view.tab === 'history'" @detail="open_detail" />
+        <RoomOverview v-if="view.tab === 'overview'" />
         </div>
       </div>
       <div v-else class="channel-empty"><UIcon name="i-lucide-hash" /><h2>新建一个协作房间</h2><p>邀请 AI 一起协作，随时 @ 提问；需要时开启讨论，保留所有人的观点。</p><UButton icon="i-lucide-plus" label="新建房间" color="neutral" @click="create_channel()" /></div>

@@ -85,6 +85,13 @@ MAX_DECISION_MEMBER = 60
 MAX_DECISION_CONTEXT = 500
 DECISION_SELECT = """SELECT d.*,f.rating AS feedback,COALESCE(f.should_be,'') AS should_be,COALESCE(f.note,'') AS note,c.context
 FROM scheduler_decisions d LEFT JOIN scheduler_feedback f ON f.decision_id=d.id LEFT JOIN scheduler_decision_context c ON c.decision_id=d.id"""
+# Every discussion of a room with its conclusion snapshot (NULL columns until it ends) and the message counts that
+# place it on the room's timeline; message ids are site-wide, so counts come from the room's own messages.
+DISCUSSIONS_SELECT = """SELECT s.id,s.goal,s.status,s.started_message_id,s.ended_message_id,s.created_at,
+    (SELECT COUNT(*) FROM messages WHERE room_id=s.room_id AND id<=s.started_message_id) AS messages_before,
+    (SELECT COUNT(*) FROM messages WHERE room_id=s.room_id AND (s.ended_message_id=0 OR id<=s.ended_message_id)) AS messages_through,
+    c.stop_reason,c.max_rounds,c.max_minutes,c.brief,c.state,c.state_until,c.concluded_at
+    FROM discussion_sessions AS s LEFT JOIN discussion_conclusions AS c ON c.session_id=s.id WHERE s.room_id=? ORDER BY s.id"""
 MAX_DECISION_LABEL = 200
 ROUTING_VISIBLE_SECONDS = 120
 MAX_DECISION_DETAIL = 4000
@@ -228,6 +235,7 @@ def require_room(connection, room_id):
         room["opinion_count"] = opinion_count(connection, room_id, room["experts"])
     session = connection.execute("SELECT id,goal,status,started_message_id,ended_message_id,created_at FROM discussion_sessions WHERE room_id=? ORDER BY id DESC LIMIT 1", (room_id,)).fetchone()
     room["session"] = dict(session) if session else None
+    room["discussions"] = [dict(row) for row in connection.execute(DISCUSSIONS_SELECT, (room_id,))]
     room["round_groups"] = budget_round_groups(connection, room_id, room["experts"], budget["base"], room["session"]) if budget else room["rounds"]
     room["runtime"] = runtime_view(connection, room_id)
     room["limits"] = limits_view(connection.execute(LIMITS_SQL, (room_id,)).fetchone(), room)
@@ -664,7 +672,7 @@ def manage_room(connection, room_id, action, payload):
 def delete_room_records(connection, room_id):
     """Remove a room's dependent records in the caller's transaction."""
     for table in ("member_recommendations", "free_queue", "speaking_orders", "member_requests", "member_descriptions", "execution_notes", "member_executions", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "room_links",
-                  "discussion_options", "round_budgets", "scheduler_decisions", "scheduler_routing", "discussion_sessions"):
+                  "discussion_options", "round_budgets", "scheduler_decisions", "scheduler_routing", "discussion_conclusions", "discussion_sessions"):
         if table == "scheduler_decisions":
             for child in ("scheduler_feedback", "scheduler_decision_context", "scheduler_decision_inputs"):
                 connection.execute(f"DELETE FROM {child} WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)", (room_id,))
@@ -1843,7 +1851,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Forward authenticated browser requests to the shared Node entrypoint and pin their website."""
         site = self.local_request_site(method)
         route = parts[2:]
-        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-member"], ["models"], ["api-key"], ["api-check"],
+        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-member"], ["room-member-access"], ["room-profiles"], ["room-restore"], ["models"], ["api-key"], ["api-check"],
                                              ["scheduler-check"], ["pick-directory"], ["projects"], ["machine-link"]):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
@@ -1862,8 +1870,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = "api-check"
         elif route == ["scheduler-check"] and method == "POST":
             command = "scheduler-check"
-        elif route == ["room-member"] and method == "POST":
-            command = "room-member"
+        elif route in (["room-member"], ["room-member-access"]) and method == "POST":
+            command = route[0]
+        elif route in (["room-profiles"], ["room-restore"]) and method == "POST":
+            command = route[0]
         elif route == ["pick-directory"] and method == "POST":
             command = "pick-directory"
         elif route == ["projects"] and method == "POST":
@@ -1877,7 +1887,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if self.headers.get_content_type() != "application/json":
                 raise ValueError("本机操作须使用 application/json")
             payload = self.read_payload()
-            if command in ("start", "room-config", "room-models", "room-member"):
+            if command in ("start", "room-config", "room-models", "room-member", "room-member-access", "room-profiles", "room-restore"):
                 payload.pop("access_file", None)
                 payload.update(site=site, entry="web")
             if command == "machine-link":

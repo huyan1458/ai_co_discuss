@@ -409,6 +409,8 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(self.request(f"{self.path}/messages", {"author": "用户", "text": "@Claude 现在怎么样", "to": ["Claude"], "submission_id": uuid.uuid4().hex}, self.owner)[0], 201)
         self.assertEqual([item["status"] for item in self.request(self.path)[1]["asks"]["requests"] if item["message_id"] > first], ["pending"])
         note = self.request(f"{self.path}/messages", {"author": "用户", "text": "暂停时留的话", "submission_id": uuid.uuid4().hex}, self.owner)[1]["message"]["id"]
+        self.assertEqual(self.request(f"{self.path}/state", {"actor": "用户", "text": "选 A", "brief": "倾向 A", "until": note}, self.owner)[0], 200)
+        self.assertIsNone(self.request(self.path)[1]["discussions"][0]["state"])
         status, ended = self.request(discussion, {"action": "end"}, self.owner)
         self.assertEqual(status, 200, ended)
         self.assertEqual((ended["mode"], ended["phase"], ended["session"]["status"], ended["runtime"]["status"]), ("free", "concluded", "concluded", "concluded"))
@@ -423,6 +425,19 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(again["session"]["goal"], "第二轮")
         sessions = self.request(self.path)[1]["session"]
         self.assertEqual((sessions["status"], sessions["id"]), ("paused", 2))
+        # The first discussion keeps the conclusion it ended with even after the room's shared state is overwritten.
+        self.assertEqual(self.request(f"{self.path}/state", {"actor": "用户", "text": "新一轮", "brief": ""}, self.owner)[0], 200)
+        first_run, second_run = self.request(self.path)[1]["discussions"]
+        self.assertEqual((first_run["goal"], first_run["stop_reason"], first_run["max_rounds"], first_run["brief"], first_run["state"], first_run["state_until"]),
+                         ("选方案", "", 2, "倾向 A", "选 A", note))
+        self.assertEqual((first_run["messages_before"], second_run["goal"], second_run["state"]), (1, "第二轮", None))
+        # A discussion that never writes its own state does not inherit the previous one's.
+        self.assertEqual(self.request(discussion, {"action": "end"}, self.owner)[0], 200)
+        self.assertEqual(self.request(discussion, {"action": "start", "goal": "第三轮"}, self.owner)[0], 200)
+        self.assertEqual(self.request(discussion, {"action": "end"}, self.owner)[0], 200)
+        third_run = self.request(self.path)[1]["discussions"][2]
+        self.assertEqual((third_run["goal"], third_run["brief"], third_run["state"], third_run["state_until"]), ("第三轮", "", "", 0))
+        self.assertGreater(first_run["messages_through"], first_run["messages_before"])
 
     def test_unnamed_message_with_several_members_goes_only_to_the_host(self):
         """With two members an unnamed message is routed by the host; nothing is broadcast."""

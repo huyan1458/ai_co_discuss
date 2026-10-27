@@ -10,7 +10,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { adopt_member_profile, borrowed_session, cached_software_models, launch_discussion, launch_projects, pick_directory, launch_settings, room_configuration, room_member, save_launch_projects, save_launch_settings } from '../runner/discussion_launch.mjs';
+import { adopt_member_profile, borrowed_session, cached_software_models, launch_discussion, launch_projects, pick_directory, launch_settings, room_configuration, room_member, room_member_access, save_launch_projects, save_launch_settings } from '../runner/discussion_launch.mjs';
 import { api, DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { DiscussionService, DiscussionWithQuestions, read_registry, register_room } from '../runner/discussion_service.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
@@ -973,6 +973,28 @@ test('members join, leave and return while a free room keeps running', async t =
     assert.equal((await request(f.site, `${path}/messages`, { author: 'Gemini', text: '手动接入', source: 'cli', submission_id: randomUUID() },
       { 'X-Discussion-Token': access.token })).status, 201);
   } finally { await service.close(); }
+});
+
+test('a woken member switches project files between read-only and writable after the room is created', async t => {
+  const f = await fixture(t);
+  const owner = randomUUID() + randomUUID();
+  const project = mkdtempSync(join(tmpdir(), 'codiscuss-project-'));
+  t.after(() => rmSync(project, { recursive: true, force: true }));
+  const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token: owner,
+    room: { title: '改权限', goal: 'x', mode: 'free', members: ['Claude'], submission_id: randomUUID() } }, f.options);
+  const input = { site: f.site, room_id: launched.room.id, token: owner, name: 'Claude', project_access: 'write' };
+  await assert.rejects(room_member_access(f.home, { ...input, token: 'wrong'.repeat(8) }), /403/);
+  await assert.rejects(room_member_access(f.home, input), /没有指定项目目录/);
+  const config = load_config(launched.config_path);
+  writeFileSync(launched.config_path, JSON.stringify({ ...config, cwd: project }));
+  assert.deepEqual(await room_member_access(f.home, input), { room_id: launched.room.id, member: 'Claude', project_access: 'write' });
+  const saved = load_config(launched.config_path).participants.Claude;
+  assert.equal(saved.project_access, 'write');
+  assert.equal(saved.session_id, config.participants.Claude.session_id, 'the bound session stays');
+  await room_member_access(f.home, { ...input, project_access: 'read' });
+  assert.equal(load_config(launched.config_path).participants.Claude.project_access, 'read');
+  await assert.rejects(room_member_access(f.home, { ...input, project_access: 'all' }), /read 或 write/);
+  await assert.rejects(room_member_access(f.home, { ...input, name: 'Codex' }), /不由本机唤醒/);
 });
 
 test('a free room is created with woken, manual and online members chosen one by one', async t => {

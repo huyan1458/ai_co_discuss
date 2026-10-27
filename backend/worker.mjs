@@ -33,6 +33,13 @@ const MAX_DECISION_MEMBER = 60;
 const MAX_DECISION_CONTEXT = 500;
 const MAX_DECISION_INPUT = 60000;
 const FEEDBACK_CASES_PAGE = 50;
+// Every discussion of a room with its conclusion snapshot (null until it ends) and the message counts that place it on
+// the room's timeline; message ids are site-wide, so counts come from the room's own messages.
+const DISCUSSIONS_SELECT = `SELECT s.id,s.goal,s.status,s.started_message_id,s.ended_message_id,s.created_at,
+    (SELECT COUNT(*) FROM messages WHERE room_id=s.room_id AND id<=s.started_message_id) AS messages_before,
+    (SELECT COUNT(*) FROM messages WHERE room_id=s.room_id AND (s.ended_message_id=0 OR id<=s.ended_message_id)) AS messages_through,
+    c.stop_reason,c.max_rounds,c.max_minutes,c.brief,c.state,c.state_until,c.concluded_at
+    FROM discussion_sessions AS s LEFT JOIN discussion_conclusions AS c ON c.session_id=s.id WHERE s.room_id=? ORDER BY s.id`;
 const DECISION_SELECT = `SELECT d.*,f.rating AS feedback,COALESCE(f.should_be,'') AS should_be,COALESCE(f.note,'') AS note,c.context
   FROM scheduler_decisions d LEFT JOIN scheduler_feedback f ON f.decision_id=d.id LEFT JOIN scheduler_decision_context c ON c.decision_id=d.id`;
 const LIMIT_DEFAULTS = { max_rounds: 0, max_minutes: 0, execution_minutes: 0 };
@@ -375,6 +382,7 @@ async function require_room(database, room_id) {
   result.round_budget = await database.prepare("SELECT base,cap,extra FROM round_budgets WHERE room_id=?").bind(room_id).first() ?? null;
   if (result.round_budget) result.opinion_count = await opinion_count(database, room_id, result.experts);
   result.session = await database.prepare("SELECT id,goal,status,started_message_id,ended_message_id,created_at FROM discussion_sessions WHERE room_id=? ORDER BY id DESC LIMIT 1").bind(room_id).first() ?? null;
+  result.discussions = (await database.prepare(DISCUSSIONS_SELECT).bind(room_id).all()).results;
   result.round_groups = result.round_budget ? await budget_round_groups(database, room_id, result.experts, result.round_budget.base, result.session) : result.rounds;
   result.runtime = await runtime_view(database, room_id);
   result.limits = limits_view(await database.prepare(LIMITS_SQL).bind(room_id).first(), result);
@@ -906,7 +914,7 @@ async function manage_room(database, room_id, action, payload) {
       "DELETE FROM room_members WHERE room_id=?", "DELETE FROM room_modes WHERE room_id=?",
       "DELETE FROM free_batches WHERE room_id=?", "DELETE FROM free_chains WHERE room_id=?", "DELETE FROM room_links WHERE room_id=?",
       "DELETE FROM discussion_options WHERE room_id=?",
-      "DELETE FROM round_budgets WHERE room_id=?", "DELETE FROM discussion_sessions WHERE room_id=?",
+      "DELETE FROM round_budgets WHERE room_id=?", "DELETE FROM discussion_conclusions WHERE room_id=?", "DELETE FROM discussion_sessions WHERE room_id=?",
       "DELETE FROM scheduler_feedback WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)",
       "DELETE FROM scheduler_decision_context WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)",
       "DELETE FROM scheduler_decision_inputs WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)",

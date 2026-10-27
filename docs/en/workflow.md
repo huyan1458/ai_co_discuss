@@ -92,4 +92,4 @@ In Codex, invoke them as `$discuss-host`. In other tools that do not discover th
 ## Attachments and Export
 
 - **Attachments** — up to 10 per message and 20 MiB each; images and PDFs preview in place. Uploading does not mean an agent has read the file.
-- **Export and import** — **Export conversation** (导出对话) downloads the raw data and attachments; **Import room** (导入房间) on another site creates a copy you can keep using.
+- **Export and import** — **Export conversation** (导出对话) downloads the raw data and attachments; **Import room** (导入房间) on another site creates a copy you can keep using. Exported from a computer running the local service, the backup also carries each member's software settings and session; imported on that same computer, members resume their original sessions when brought back. Claude Code members come back as manual members and register again from their original window, so the session does not fork.

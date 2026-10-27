@@ -108,6 +108,20 @@ function duration(seconds) {
   return `${Math.floor(seconds / 3600)}小时${Math.floor((seconds % 3600) / 60)}分`;
 }
 
+/** CLIs this tool grants project access per run; App and API members are left to their own settings. */
+const ACCESS_CLIENTS = ["codex_cli", "claude", "antigravity_cli"];
+
+/** Toggle a woken CLI member's project files once its saved choice is known from this computer. */
+function access_item(member) {
+  const saved = view.value.launch.room_models;
+  const profile = saved?.room_id === room.value.id ? saved.participants?.[member.name] : null;
+  if (member.access !== "runner" || !ACCESS_CLIENTS.includes(profile?.adapter)) return [];
+  const writable = profile.project_access === "write";
+  return [{ label: writable ? "项目文件改为只读" : "项目文件改为可写", icon: writable ? "i-lucide-lock" : "i-lucide-file-pen",
+    disabled: !view.value.access?.can_manage || !view.value.launch.available,
+    onSelect: () => act("set_member_access", { name: member.name, project_access: writable ? "read" : "write" }) }];
+}
+
 /** Owner actions for one member, kept in its menu like the discussion board's member actions. */
 function member_menu(member) {
   const item = (label, icon, action, extra = {}) => ({ label, icon, onSelect: () => act("change_member", { member_id: member.id, name: member.name, action, ...extra }) });
@@ -123,6 +137,7 @@ function member_menu(member) {
     ...(busy(member) ? [item("停止", "i-lucide-square", "interrupt")] : []),
     ...(member.access === "online" && member.pending ? [{ label: "复制阅读通知", icon: "i-lucide-copy", onSelect: () => act("copy_online_notice", member.name) }] : []),
     ...(member.status === "active" && member.access !== "online" && member.role !== "host" ? [item("设为主持人", "i-lucide-crown", "role", { role: "host" })] : []),
+    ...access_item(member),
     member.status === "active" ? item("离开", "i-lucide-log-out", "away") : { ...item("请回", "i-lucide-log-in", "rejoin"), disabled: member.access === "runner" && !view.value.launch.available },
   ], [{ ...item("移除", "i-lucide-trash-2", "remove"), color: "error" }]];
 }

@@ -744,6 +744,39 @@ BEGIN
         ended_message_id=CASE WHEN NEW.phase='concluded' THEN COALESCE((SELECT MAX(id) FROM messages WHERE room_id=NEW.room_id),0) ELSE 0 END
     WHERE id=(SELECT MAX(id) FROM discussion_sessions WHERE room_id=NEW.room_id);
 END;
+-- What a discussion concluded with: the room keeps one shared state and brief that the next discussion overwrites, so
+-- ending a discussion copies them, with why it ended, onto its session; a state or brief last written before it started
+-- belongs to an earlier discussion and is left out. Reopening and ending again replaces the copy.
+CREATE TABLE IF NOT EXISTS discussion_conclusions (
+    session_id INTEGER PRIMARY KEY REFERENCES discussion_sessions(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    stop_reason TEXT NOT NULL DEFAULT '',
+    max_rounds INTEGER NOT NULL DEFAULT 0,
+    max_minutes INTEGER NOT NULL DEFAULT 0,
+    brief TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL DEFAULT '',
+    state_until INTEGER NOT NULL DEFAULT 0,
+    concluded_at TEXT NOT NULL
+);
+DROP TRIGGER IF EXISTS conclusion_snapshot;
+CREATE TRIGGER conclusion_snapshot AFTER UPDATE OF phase ON topic_settings
+WHEN NEW.phase='concluded' AND OLD.phase<>'concluded'
+BEGIN
+    INSERT OR REPLACE INTO discussion_conclusions (session_id,room_id,stop_reason,max_rounds,max_minutes,brief,state,state_until,concluded_at)
+    SELECT s.id,s.room_id,COALESCE(l.stop_reason,''),COALESCE(l.max_rounds,0),COALESCE(l.max_minutes,0),CASE WHEN b.until>s.started_message_id THEN b.text ELSE '' END,
+           CASE WHEN r.state_until>s.started_message_id THEN r.state_text ELSE '' END,CASE WHEN r.state_until>s.started_message_id THEN r.state_until ELSE 0 END,
+           strftime('%Y-%m-%dT%H:%M:%SZ','now')
+    FROM discussion_sessions AS s JOIN rooms AS r ON r.id=s.room_id
+    LEFT JOIN discussion_limits AS l ON l.room_id=s.room_id LEFT JOIN room_briefs AS b ON b.room_id=s.room_id
+    WHERE s.id=(SELECT MAX(id) FROM discussion_sessions WHERE room_id=NEW.room_id);
+END;
+-- Discussions that ended before snapshots: only the latest still matches the room's state, so only it gets one. Safe to repeat.
+INSERT OR IGNORE INTO discussion_conclusions (session_id,room_id,stop_reason,max_rounds,max_minutes,brief,state,state_until,concluded_at)
+SELECT s.id,s.room_id,COALESCE(l.stop_reason,''),COALESCE(l.max_rounds,0),COALESCE(l.max_minutes,0),CASE WHEN b.until>s.started_message_id THEN b.text ELSE '' END,
+           CASE WHEN r.state_until>s.started_message_id THEN r.state_text ELSE '' END,CASE WHEN r.state_until>s.started_message_id THEN r.state_until ELSE 0 END,''
+FROM discussion_sessions AS s JOIN rooms AS r ON r.id=s.room_id
+LEFT JOIN discussion_limits AS l ON l.room_id=s.room_id LEFT JOIN room_briefs AS b ON b.room_id=s.room_id
+WHERE s.status='concluded' AND s.id=(SELECT MAX(id) FROM discussion_sessions WHERE room_id=s.room_id);
 
 -- The review phase behaved exactly like discussing and was retired; move rows left in it.
 UPDATE topic_settings SET phase='discussing' WHERE phase='reviewing';
