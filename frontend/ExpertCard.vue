@@ -70,13 +70,17 @@ const models = computed(() => bridge.launch_model_state(props.name, view.value.l
 const configurable = computed(() => Boolean(automatic.value && models.value.supported));
 const configuration_note = computed(() => configurable.value && connection.value.length ? "补齐上方连接后，可在这里选择模型与思考强度。"
   : profile.value.adapter ? "模型与思考强度在 App 原聊天中选择，本页不覆盖 App 设置。" : "先选择软件入口。支持启动参数的 CLI 可在这里设置模型与强度。");
+const EFFORT_LABELS = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra High", max: "Max", ultra: "Ultra" };
 const effort_items = computed(() => {
   const levels = models.value.efforts;
-  const labels = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra High", max: "Max", ultra: "Ultra" };
-  return levels?.length ? [{ label: "默认强度", value: "" }, ...levels.map((level) => ({ label: labels[level] || level, value: level }))] : null;
+  return levels?.length ? [{ label: "默认强度", value: "" }, ...levels.map((level) => ({ label: EFFORT_LABELS[level] || level, value: level }))] : null;
 });
-const effort_label = computed(() => effort_items.value?.find((item) => item.value === (profile.value.effort || ""))?.label
-  || profile.value.effort || (profile.value.adapter === "antigravity_cli" ? "模型默认强度" : "默认强度"));
+// An empty choice shows what the software's own settings select; only when they say nothing does the software decide.
+// agy's default effort belongs to its default model, so a chosen model keeps its own default instead.
+const default_effort = computed(() => profile.value.adapter === "antigravity_cli" && profile.value.model ? "" : models.value.defaults?.effort);
+const effort_label = computed(() => profile.value.effort ? EFFORT_LABELS[profile.value.effort] || profile.value.effort
+  : default_effort.value ? EFFORT_LABELS[default_effort.value] || default_effort.value
+  : profile.value.adapter === "antigravity_cli" ? "模型默认强度" : "软件默认强度");
 // The front lists the read-only configuration; strength appears only where this page sets it.
 // Room speech and project files are separate: only woken CLIs get a project choice from this page,
 // Apps and manual sessions keep their own settings, and API or web members never see project files.
@@ -94,7 +98,7 @@ const facts = computed(() => [
   ...automatic.value ? [{ label: "状态", value: props.status.text, tone: props.status.tone }] : [],
   { label: "启动", value: launch_fact.value },
   ...automatic.value ? [{ label: "软件", value: entry_label.value }] : [],
-  ...configurable.value ? [{ label: "模型", value: profile.value.model || "默认模型" }] : [],
+  ...configurable.value ? [{ label: "模型", value: profile.value.model || models.value.defaults?.model || "软件默认模型" }] : [],
   ...configurable.value && profile.value.adapter !== "api" ? [{ label: "强度", value: effort_label.value }] : [],
   ...sets_access.value ? [{ label: "项目", value: access.value === "write" ? "可写" : "只读" }] : no_files.value ? [{ label: "项目", value: "不访问" }] : [],
   // The crown already offers hosting and the badge names the host, so only the refusal needs a row.

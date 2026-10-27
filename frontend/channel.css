@@ -266,12 +266,14 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 .pb-focus.is-expanded { display: block; }
 .pb-link { margin-top: 4px; padding: 0; color: var(--channel-accent); font-size: 12px; }
 .pb-members { display: grid; gap: 4px; margin: 0 -8px; padding: 0; list-style: none; }
-.pb-member { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 10px; min-height: 44px; padding: 6px 8px; border-radius: 6px; }
+.pb-member { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 44px; padding: 6px 8px; border-radius: 6px; }
 .pb-member:hover { background: color-mix(in srgb, var(--ui-bg-accented) 60%, transparent); }
 .pb-member-body { min-width: 0; }
 .pb-member-name { display: flex; align-items: center; gap: 5px; color: var(--ui-text-highlighted); font-weight: 500; }
 .pb-member-name [class*="icon"] { width: 12px; height: 12px; color: #e5a50a; }
-.pb-member-name small { color: var(--ui-text-dimmed); font-size: 11px; font-weight: 400; }
+/* The access, role, model and effort share the name's line; the name keeps its width and the rest truncates, in full on hover. */
+.pb-member-name { min-width: 0; white-space: nowrap; }
+.pb-member-name small { min-width: 0; overflow: hidden; color: var(--ui-text-dimmed); font-size: 11px; font-weight: 400; text-overflow: ellipsis; }
 .pb-member-status { display: flex; align-items: center; gap: 6px; color: var(--ui-text-muted); font-size: 12px; }
 .pb-member-status .pb-dot { width: 6px; height: 6px; }
 .pb-member-status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

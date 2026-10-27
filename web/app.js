@@ -1889,15 +1889,17 @@ async function load_room_models() {
   }
 }
 
-/** Describe registered launch choices without claiming the software's effective defaults are known. */
+/** Describe registered launch choices; an empty choice shows what the software's own settings select, or says the software decides. */
 function participant_model(name, room, saved) {
   // Nothing to say beats a placeholder: a manual member's settings live in its own session and unread ones are not guessed.
   if (room?.runtime?.mode !== "automatic" || (room.members || []).find(member => member.name === name)?.access === "manual") return "";
   const profile = saved?.room_id === room.id ? saved.participants?.[name] : null;
   if (!profile) return "";
   if (["codex", "antigravity"].includes(profile.adapter)) return "模型与强度由 App 设置";
-  const model = profile.model || "默认模型";
-  const effort = profile.effort || (profile.adapter === "antigravity_cli" ? "模型默认强度" : "默认强度");
+  const model = profile.model || profile.default_model || "软件默认模型";
+  // agy's default effort belongs to its default model, so a chosen model keeps its own default instead.
+  const default_effort = profile.adapter === "antigravity_cli" && profile.model ? "" : profile.default_effort;
+  const effort = profile.effort || default_effort || (profile.adapter === "antigravity_cli" ? "模型默认强度" : "软件默认强度");
   return `${model} · ${effort}`;
 }
 
@@ -1953,9 +1955,10 @@ function launch_model_state(name, launch = state.launch) {
   const catalog = launch.model_catalogs?.[model_catalog_key(profile)];
   const models = catalog?.models || [];
   const selected = models.find(model => model.id === profile.model);
-  const items = [{ label: "软件默认模型", value: "__default__" }, ...models.map(model => ({ label: model.label || model.id, value: model.id }))];
+  const defaults = catalog?.defaults || {};
+  const items = [{ label: defaults.model ? `软件默认（${defaults.model}）` : "软件默认模型", value: "__default__" }, ...models.map(model => ({ label: model.label || model.id, value: model.id }))];
   if (profile.model && !selected) items.push({ label: `${profile.model}（已保存，列表未确认）`, value: profile.model, disabled: true });
-  return { supported: MODEL_CLIENTS.includes(profile.adapter), items, loading: Boolean(catalog?.loading),
+  return { supported: MODEL_CLIENTS.includes(profile.adapter), items, defaults, loading: Boolean(catalog?.loading),
     efforts: profile.adapter === "antigravity_cli" ? catalog?.efforts : selected?.efforts, source: MODEL_SOURCE_LABELS[catalog?.source] || catalog?.source || "",
     effort_note: profile.adapter === "antigravity_cli" ? catalog?.effort_error || (catalog?.loading ? "正在读取原生思考档位…" : "默认强度由 CLI 决定。") : !selected
       ? "选择模型后显示可用思考强度；默认值由软件决定。" : "所选模型不提供单独思考强度。",
@@ -1982,6 +1985,7 @@ async function load_launch_models(name, force = false) {
     current.models = result.models || [];
     current.source = result.source || "";
     current.efforts = result.efforts;
+    current.defaults = result.defaults || {};
     current.effort_error = result.effort_error || "";
     current.error = result.error || (!current.models.length ? "软件未返回可用模型，可使用默认模型" : "");
   } catch (error) { current.error = error.message; }

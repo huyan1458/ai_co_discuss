@@ -17,7 +17,7 @@ import { FreeRoomRunner } from '../runner/free_runner.mjs';
 import { save_api_key } from '../runner/discussion_api.mjs';
 import { SCHEDULER_PROVIDERS } from '../runner/scheduler.mjs';
 import { save_site_connection } from '../runner/discussion_local.mjs';
-import { software_effort, software_models } from '../runner/discussion_models.mjs';
+import { software_defaults, software_effort, software_models } from '../runner/discussion_models.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -113,7 +113,9 @@ test('slow model catalogs are reused until the executable changes or the user re
     : { adapter: profile.adapter, models: [{ id: `model-${calls.length}`, label: 'Model' }], source: 'antigravity-cli' }; };
   const profile = { adapter: 'antigravity_cli', executable };
   const effort_calls = [], query_effort = async profile => { effort_calls.push(profile.model || ''); return { levels: ['low', 'medium', 'high'] }; };
-  const options = { query, query_effort };
+  const query_defaults = async () => ({ model: 'model-1', effort: 'medium' });
+  const options = { query, query_effort, query_defaults };
+  assert.deepEqual((await cached_software_models(home, profile, options)).defaults, { model: 'model-1', effort: 'medium' });
   assert.equal((await cached_software_models(home, profile, options)).models[0].id, 'model-1');
   assert.equal((await cached_software_models(home, profile, options)).models[0].id, 'model-1', 'a new page reads the saved list');
   assert.equal(calls.length, 1);
@@ -145,6 +147,19 @@ test('agy effort discovery uses a read-only native command and never guesses on 
   fixed.child.stdout.write(JSON.stringify({ status: 'SUCCESS', command: { name: 'effort', data: {
     adjustable: false, available: [] } } }) + '\n');
   assert.deepEqual(await immutable, { levels: [] });
+});
+
+test('agy defaults come from its native /model command, and an unreadable answer stays empty', async () => {
+  const f = catalog_process();
+  const pending = software_defaults({ adapter: 'antigravity_cli', executable: process.execPath, model: 'chosen-model' }, f);
+  f.child.stdout.write(JSON.stringify({ status: 'SUCCESS', command: { name: 'model', data: {
+    id: 'gemini-4-argon-medium', label: 'Gemini 4 Argon (Medium)', effort: 'medium', is_default: false } } }) + '\n');
+  assert.deepEqual(await pending, { model: 'gemini-4-argon-medium', effort: 'medium' });
+  assert.deepEqual(f.invocations[0][1], ['-p', '/model', '--output-format', 'json'], 'the default is asked without the chosen model');
+  const older = catalog_process();
+  const failed = software_defaults({ adapter: 'antigravity_cli', executable: process.execPath }, older);
+  older.child.emit('close', 1);
+  assert.deepEqual(await failed, { model: '', effort: '' });
 });
 
 test('agy explicit effort can be saved without changing its native default model', t => {
@@ -303,7 +318,9 @@ test('room-models bridge pins the connected site and reads without changing a ru
   const headers = { 'X-CoDiscuss-Local': '1', Origin: f.site };
   const read = await request(f.site, '/api/local/room-models', input, headers);
   assert.equal(read.status, 200);
-  assert.deepEqual(read.body.participants.Codex, { adapter: 'codex_cli', model: 'gpt-6-astra', effort: 'xhigh' });
+  // default_model / default_effort come from this machine's own Codex settings, so only the registered choice is fixed here.
+  const { adapter, model, effort } = read.body.participants.Codex;
+  assert.deepEqual({ adapter, model, effort }, { adapter: 'codex_cli', model: 'gpt-6-astra', effort: 'xhigh' });
   assert.equal(readFileSync(launched.config_path, 'utf8'), contents);
   assert.equal((await api(config, '/runtime')).revision, before.revision);
   assert.equal((await api(config, '/runtime')).status, 'running');

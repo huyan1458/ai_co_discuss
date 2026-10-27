@@ -48148,7 +48148,10 @@ var hU = /*#__PURE__*/ XH({
 			]);
 		};
 	}
-}, _J = 4e3, vJ = { antigravity_cli: "多步任务中，在关键转折处用一句话写出进展再继续。" }, yJ = ["data-identity", "data-face"], bJ = ["inert", "aria-hidden"], xJ = { class: "expert-card-identity" }, SJ = { class: "expert-card-names" }, CJ = {
+}, _J = 4e3, vJ = {
+	antigravity_cli: "多步任务中，在关键转折处用一句话写出进展再继续。",
+	api: "你读不到本地文件，相关内容以其他成员贴出的为准，不凭文件名猜测。缺信息时在回答里写明缺什么。"
+}, yJ = ["data-identity", "data-face"], bJ = ["inert", "aria-hidden"], xJ = { class: "expert-card-identity" }, SJ = { class: "expert-card-names" }, CJ = {
 	key: 0,
 	class: "expert-card-badge"
 }, wJ = ["title"], TJ = { class: "expert-card-facts" }, EJ = ["title"], DJ = {
@@ -48271,23 +48274,23 @@ var hU = /*#__PURE__*/ XH({
 			Codex: "已实测：消息实时显示在已开窗口。",
 			Gemini: "已实测：已开窗口需重启才显示后台发言。",
 			Claude: "已实测：后台接管会分叉，原窗口看不到。"
-		}, T = Z(() => w[a.platform_of(n.name)] || ""), E = Z(() => g.value && n.session !== null && a.launch_can_bind_session(n.name, i.value.launch)), D = Z(() => !!(p.value.session_id || n.session?.trim())), O = Z(() => g.value && m.value.length > 0 && !(i.value.launch.relay && !i.value.launch.available)), ee = Z(() => n.mode === "online" ? `设置 ${n.name} 的参与方式` : `配置 ${n.name} 的启动方式`), k = Z(() => a.launch_model_state(n.name, i.value.launch)), te = Z(() => !!(g.value && k.value.supported)), ne = Z(() => te.value && me.value.length ? "补齐上方连接后，可在这里选择模型与思考强度。" : p.value.adapter ? "模型与思考强度在 App 原聊天中选择，本页不覆盖 App 设置。" : "先选择软件入口。支持启动参数的 CLI 可在这里设置模型与强度。"), re = Z(() => {
-			let e = k.value.efforts, t = {
-				low: "Low",
-				medium: "Medium",
-				high: "High",
-				xhigh: "Extra High",
-				max: "Max",
-				ultra: "Ultra"
-			};
+		}, T = Z(() => w[a.platform_of(n.name)] || ""), E = Z(() => g.value && n.session !== null && a.launch_can_bind_session(n.name, i.value.launch)), D = Z(() => !!(p.value.session_id || n.session?.trim())), O = Z(() => g.value && m.value.length > 0 && !(i.value.launch.relay && !i.value.launch.available)), ee = Z(() => n.mode === "online" ? `设置 ${n.name} 的参与方式` : `配置 ${n.name} 的启动方式`), k = Z(() => a.launch_model_state(n.name, i.value.launch)), te = Z(() => !!(g.value && k.value.supported)), ne = Z(() => te.value && ge.value.length ? "补齐上方连接后，可在这里选择模型与思考强度。" : p.value.adapter ? "模型与思考强度在 App 原聊天中选择，本页不覆盖 App 设置。" : "先选择软件入口。支持启动参数的 CLI 可在这里设置模型与强度。"), re = {
+			low: "Low",
+			medium: "Medium",
+			high: "High",
+			xhigh: "Extra High",
+			max: "Max",
+			ultra: "Ultra"
+		}, ie = Z(() => {
+			let e = k.value.efforts;
 			return e?.length ? [{
 				label: "默认强度",
 				value: ""
 			}, ...e.map((e) => ({
-				label: t[e] || e,
+				label: re[e] || e,
 				value: e
 			}))] : null;
-		}), ie = Z(() => re.value?.find((e) => e.value === (p.value.effort || ""))?.label || p.value.effort || (p.value.adapter === "antigravity_cli" ? "模型默认强度" : "默认强度")), A = Z(() => g.value && a.launch_can_set_access(n.name, i.value.launch)), j = Z(() => n.mode === "online" || g.value && p.value.adapter === "api"), ae = Z(() => g.value && p.value.adapter !== "api"), oe = Z(() => p.value.project_access || i.value.launch.workspace?.project_access || "read"), se = Z(() => n.mode === "online" ? "你转发回答 · 网页聊天" : n.mode === "manual" ? "你来启动 · 自主发言" : `程序启动 · ${D.value ? "续接会话" : p.value.adapter === "api" ? "调用 API" : "新会话"}`), ce = Z(() => n.mode === "online" ? "不可（网页只读）" : "不可（须本机唤醒）"), le = Z(() => [
+		}), A = Z(() => p.value.adapter === "antigravity_cli" && p.value.model ? "" : k.value.defaults?.effort), j = Z(() => p.value.effort ? re[p.value.effort] || p.value.effort : A.value ? re[A.value] || A.value : p.value.adapter === "antigravity_cli" ? "模型默认强度" : "软件默认强度"), ae = Z(() => g.value && a.launch_can_set_access(n.name, i.value.launch)), oe = Z(() => n.mode === "online" || g.value && p.value.adapter === "api"), se = Z(() => g.value && p.value.adapter !== "api"), ce = Z(() => p.value.project_access || i.value.launch.workspace?.project_access || "read"), le = Z(() => n.mode === "online" ? "你转发回答 · 网页聊天" : n.mode === "manual" ? "你来启动 · 自主发言" : `程序启动 · ${D.value ? "续接会话" : p.value.adapter === "api" ? "调用 API" : "新会话"}`), ue = Z(() => n.mode === "online" ? "不可（网页只读）" : "不可（须本机唤醒）"), de = Z(() => [
 			...g.value ? [{
 				label: "状态",
 				value: n.status.text,
@@ -48295,7 +48298,7 @@ var hU = /*#__PURE__*/ XH({
 			}] : [],
 			{
 				label: "启动",
-				value: se.value
+				value: le.value
 			},
 			...g.value ? [{
 				label: "软件",
@@ -48303,24 +48306,24 @@ var hU = /*#__PURE__*/ XH({
 			}] : [],
 			...te.value ? [{
 				label: "模型",
-				value: p.value.model || "默认模型"
+				value: p.value.model || k.value.defaults?.model || "软件默认模型"
 			}] : [],
 			...te.value && p.value.adapter !== "api" ? [{
 				label: "强度",
-				value: ie.value
+				value: j.value
 			}] : [],
-			...A.value ? [{
+			...ae.value ? [{
 				label: "项目",
-				value: oe.value === "write" ? "可写" : "只读"
-			}] : j.value ? [{
+				value: ce.value === "write" ? "可写" : "只读"
+			}] : oe.value ? [{
 				label: "项目",
 				value: "不访问"
 			}] : [],
 			...n.hosting && !n.host && !n.hostable ? [{
 				label: "主持",
-				value: ce.value
+				value: ue.value
 			}] : []
-		]), ue = {
+		]), pe = {
 			executable: {
 				label: "路径",
 				placeholder: "可执行文件完整路径"
@@ -48333,55 +48336,55 @@ var hU = /*#__PURE__*/ XH({
 				label: "聊天",
 				placeholder: "Codex App 来源聊天 ID"
 			}
-		}, de = /* @__PURE__ */ F([]), pe = () => {
+		}, me = /* @__PURE__ */ F([]), he = () => {
 			let e = p.value.adapter;
-			return !ae.value || !e ? [] : (e === "antigravity" ? ["ipc_directory"] : e === "codex" ? ["executable", "source_thread_id"] : ["executable"]).filter((e) => !p.value[e]);
-		}, me = Z(() => ae.value ? [.../* @__PURE__ */ new Set([...de.value, ...pe()])].map((e) => ({
+			return !se.value || !e ? [] : (e === "antigravity" ? ["ipc_directory"] : e === "codex" ? ["executable", "source_thread_id"] : ["executable"]).filter((e) => !p.value[e]);
+		}, ge = Z(() => se.value ? [.../* @__PURE__ */ new Set([...me.value, ...he()])].map((e) => ({
 			field: e,
-			...ue[e]
+			...pe[e]
 		})) : []);
-		function he() {
+		function N() {
 			Qn(() => {
 				document.activeElement === c.value && (f.value ? u : l).value?.focus({ preventScroll: !0 });
 			});
 		}
-		function ge(e) {
+		function _e(e) {
 			let t = e >= aY / 2;
-			f.value !== t && (f.value = t, he());
+			f.value !== t && (f.value = t, N());
 		}
-		let N = o.on("change", ge), _e = o.on("animationComplete", he), ve = null, ye = "";
-		function be(e) {
-			(!e || O.value) && (c.value?.focus({ preventScroll: !0 }), de.value = e ? pe() : [], e && !d.value && (ve = {
+		let ve = o.on("change", _e), ye = o.on("animationComplete", N), be = null, xe = "";
+		function Se(e) {
+			(!e || O.value) && (c.value?.focus({ preventScroll: !0 }), me.value = e ? he() : [], e && !d.value && (be = {
 				profile: JSON.parse(JSON.stringify(p.value)),
 				mode: n.mode
-			}, ye = n.session ?? ""), d.value = e);
+			}, xe = n.session ?? ""), d.value = e);
 		}
-		function xe() {
-			ve &&= (a.restore_launch_profile(n.name, ve.profile), ve.mode !== n.mode && r("mode", ve.mode), n.session !== null && n.session !== ye && r("session", ye), null), be(!1);
+		function Ce() {
+			be &&= (a.restore_launch_profile(n.name, be.profile), be.mode !== n.mode && r("mode", be.mode), n.session !== null && n.session !== xe && r("session", xe), null), Se(!1);
 		}
-		let Se = Z(() => i.value && a.description_draft(n.name).trim()), Ce = /* @__PURE__ */ F(!1), we = Z(() => Se.value ? `描述：${Se.value}` : "添加描述：擅长什么、适合分到什么工作");
-		function Te({ text: e, as_template: t }) {
-			a.write_description_draft(n.name, e), t && a.save_description_template(n.name, e), Ce.value = !1;
+		let we = Z(() => i.value && a.description_draft(n.name).trim()), Te = /* @__PURE__ */ F(!1), Ee = Z(() => we.value ? `描述：${we.value}` : "添加描述：擅长什么、适合分到什么工作");
+		function De({ text: e, as_template: t }) {
+			a.write_description_draft(n.name, e), t && a.save_description_template(n.name, e), Te.value = !1;
 		}
-		let Ee = Z(() => vJ[p.value.adapter] || ""), De = Z(() => Object.hasOwn(p.value, "system_prompt")), Oe = Z(() => (De.value ? p.value.system_prompt : Ee.value).trim()), ke = Z(() => Oe.value ? `专属提示词（${De.value ? "自定义" : "软件预设"}）：${Oe.value.split("\n")[0]}` : "专属提示词：未设置，点击添加"), Ae = /* @__PURE__ */ F(!1), je = /* @__PURE__ */ F(""), Me = Z(() => je.value.trim() !== Oe.value), Ne = Z(() => {
-			let e = je.value.trim();
-			return e ? e === Ee.value.trim() ? "与软件预设一致，预设更新时自动跟随" : Ee.value ? "已改写，不再跟随软件预设" : "只发给这位专家，Ctrl + Enter 保存" : Ee.value ? "留空：这位专家不使用预设，也没有专属提示词" : "留空表示不使用";
-		}), Pe = Z(() => Ee.value && je.value.trim() !== Ee.value.trim() ? {
+		let Oe = Z(() => vJ[p.value.adapter] || ""), ke = Z(() => Object.hasOwn(p.value, "system_prompt")), Ae = Z(() => (ke.value ? p.value.system_prompt : Oe.value).trim()), je = Z(() => Ae.value ? `专属提示词（${ke.value ? "自定义" : "软件预设"}）：${Ae.value.split("\n")[0]}` : "专属提示词：未设置，点击添加"), Me = /* @__PURE__ */ F(!1), Ne = /* @__PURE__ */ F(""), Pe = Z(() => Ne.value.trim() !== Ae.value), Fe = Z(() => {
+			let e = Ne.value.trim();
+			return e ? e === Oe.value.trim() ? "与软件预设一致，预设更新时自动跟随" : Oe.value ? "已改写，不再跟随软件预设" : "只发给这位专家，Ctrl + Enter 保存" : Oe.value ? "留空：这位专家不使用预设，也没有专属提示词" : "留空表示不使用";
+		}), Ie = Z(() => Oe.value && Ne.value.trim() !== Oe.value.trim() ? {
 			tag: "软件预设",
-			text: Ee.value,
+			text: Oe.value,
 			action: "恢复预设"
 		} : null);
-		function Fe() {
-			je.value = Oe.value, Ae.value = !0;
-		}
-		function Ie() {
-			let e = je.value.trim();
-			a.write_launch(n.name, "system_prompt", e === Ee.value.trim() ? null : e), Ae.value = !1;
-		}
 		function Le() {
+			Ne.value = Ae.value, Me.value = !0;
+		}
+		function Re() {
+			let e = Ne.value.trim();
+			a.write_launch(n.name, "system_prompt", e === Oe.value.trim() ? null : e), Me.value = !1;
+		}
+		function ze() {
 			a.write_launch(n.name, "model", ""), a.write_launch(n.name, "effort", "");
 		}
-		function Re(e) {
+		function Be(e) {
 			let t = {
 				ArrowLeft: -1,
 				ArrowUp: -1,
@@ -48393,17 +48396,17 @@ var hU = /*#__PURE__*/ XH({
 			let i = h.value, a = i.indexOf(n.mode), o = e.key === "Home" ? i[0] : e.key === "End" ? i.at(-1) : i[(a + t[e.key] + i.length) % i.length];
 			r("mode", o), e.currentTarget.querySelector(`[data-mode="${o}"]`)?.focus();
 		}
-		function ze(e) {
-			d.value && (e.stopPropagation(), e.preventDefault(), xe());
+		function Ve(e) {
+			d.value && (e.stopPropagation(), e.preventDefault(), Ce());
 		}
-		function Be(e) {
-			Ae.value || Ce.value || c.value?.contains(e.target) || e.target.closest?.(oY) || be(!1);
+		function He(e) {
+			Me.value || Te.value || c.value?.contains(e.target) || e.target.closest?.(oY) || Se(!1);
 		}
 		return R(d, (e) => {
-			e ? document.addEventListener("pointerdown", Be, !0) : document.removeEventListener("pointerdown", Be, !0);
+			e ? document.addEventListener("pointerdown", He, !0) : document.removeEventListener("pointerdown", He, !0);
 		}), R([d, s], ([e, t]) => {
 			let n = e ? aY : 0;
-			t ? (o.jump(n), he()) : o.set(n);
+			t ? (o.jump(n), N()) : o.set(n);
 		}), R(() => [
 			te.value,
 			i.value.launch.available,
@@ -48411,7 +48414,7 @@ var hU = /*#__PURE__*/ XH({
 		], ([e, t]) => {
 			e && t && a.load_launch_models(n.name);
 		}, { immediate: !0 }), ta(() => {
-			document.removeEventListener("pointerdown", Be, !0), N(), _e(), o.stop();
+			document.removeEventListener("pointerdown", He, !0), ve(), ye(), o.stop();
 		}), (t, n) => {
 			let s = pA, d = sA, x = MA, S = bH, w = YV;
 			return U(), W("div", {
@@ -48425,7 +48428,7 @@ var hU = /*#__PURE__*/ XH({
 				"data-identity": I(a).identities[e.name]?.style,
 				"data-face": f.value ? "back" : "front",
 				tabindex: "-1",
-				onKeydown: fu(ze, ["esc"])
+				onKeydown: fu(Ve, ["esc"])
 			}, [
 				q(I(bV).div, {
 					class: "expert-card-turn",
@@ -48446,7 +48449,7 @@ var hU = /*#__PURE__*/ XH({
 							}]),
 							"aria-label": O.value ? ee.value : void 0,
 							title: O.value ? "点击翻面设置" : void 0,
-							onClick: n[0] ||= (e) => be(!0)
+							onClick: n[0] ||= (e) => Se(!0)
 						}, {
 							default: L(() => [
 								K("span", xJ, [q(s, {
@@ -48460,11 +48463,11 @@ var hU = /*#__PURE__*/ XH({
 									"text",
 									"alt",
 									"class"
-								]), K("span", SJ, [K("span", null, [K("strong", null, P(e.name), 1), e.host ? (U(), W("span", CJ, "主持")) : Y("", !0)]), Se.value ? (U(), W("small", {
+								]), K("span", SJ, [K("span", null, [K("strong", null, P(e.name), 1), e.host ? (U(), W("span", CJ, "主持")) : Y("", !0)]), we.value ? (U(), W("small", {
 									key: 0,
-									title: Se.value
-								}, P(Se.value), 9, wJ)) : Y("", !0)])]),
-								K("dl", TJ, [(U(!0), W(H, null, B(le.value, (e) => (U(), W("div", { key: e.label }, [K("dt", null, P(e.label), 1), K("dd", {
+									title: we.value
+								}, P(we.value), 9, wJ)) : Y("", !0)])]),
+								K("dl", TJ, [(U(!0), W(H, null, B(de.value, (e) => (U(), W("div", { key: e.label }, [K("dt", null, P(e.label), 1), K("dd", {
 									class: M(e.tone ? ["expert-card-status", `is-${e.tone}`] : ""),
 									title: e.value
 								}, [e.tone ? (U(), W("i", DJ)) : Y("", !0), J(P(e.value), 1)], 10, EJ)]))), 128))]),
@@ -48483,7 +48486,7 @@ var hU = /*#__PURE__*/ XH({
 							class: "expert-card-modes expert-card-front-modes",
 							role: "radiogroup",
 							"aria-label": `${e.name} 启动方式`,
-							onKeydown: Re
+							onKeydown: Be
 						}, [(U(!0), W(H, null, B(h.value, (t) => (U(), W("button", {
 							key: t,
 							type: "button",
@@ -48497,10 +48500,10 @@ var hU = /*#__PURE__*/ XH({
 							O.value ? Y("", !0) : (U(), W("button", {
 								key: 0,
 								type: "button",
-								class: M({ "is-set": Se.value }),
+								class: M({ "is-set": we.value }),
 								"aria-label": `编辑 ${e.name} 的描述`,
-								title: we.value,
-								onClick: n[1] ||= (e) => Ce.value = !0
+								title: Ee.value,
+								onClick: n[1] ||= (e) => Te.value = !0
 							}, [q(d, { name: "i-lucide-user-pen" })], 10, PJ)),
 							e.hostable ? (U(), W("button", {
 								key: 1,
@@ -48524,24 +48527,24 @@ var hU = /*#__PURE__*/ XH({
 						inert: !f.value,
 						"aria-hidden": !f.value
 					}, [K("div", RJ, [
-						K("div", zJ, [K("strong", null, [J(P(e.name), 1), K("span", null, "设置" + P(j.value ? " · 不访问项目" : ""), 1)]), K("span", BJ, [
+						K("div", zJ, [K("strong", null, [J(P(e.name), 1), K("span", null, "设置" + P(oe.value ? " · 不访问项目" : ""), 1)]), K("span", BJ, [
 							K("button", {
 								type: "button",
-								class: M(["expert-card-back-tool", { "is-set": Se.value }]),
+								class: M(["expert-card-back-tool", { "is-set": we.value }]),
 								"aria-label": `编辑 ${e.name} 的描述`,
-								title: we.value,
-								onClick: n[4] ||= (e) => Ce.value = !0
+								title: Ee.value,
+								onClick: n[4] ||= (e) => Te.value = !0
 							}, [q(d, { name: "i-lucide-user-pen" })], 10, VJ),
 							p.value.adapter ? (U(), W("button", {
 								key: 0,
 								type: "button",
 								class: M(["expert-card-back-tool", {
-									"is-set": Oe.value,
-									"is-own": De.value && Oe.value
+									"is-set": Ae.value,
+									"is-own": ke.value && Ae.value
 								}]),
-								title: ke.value,
+								title: je.value,
 								"aria-label": `编辑 ${e.name} 的专属提示词`,
-								onClick: Fe
+								onClick: Le
 							}, [q(d, { name: "i-lucide-scroll-text" })], 10, HJ)) : Y("", !0),
 							v.value ? (U(), G(x, {
 								key: 1,
@@ -48579,7 +48582,7 @@ var hU = /*#__PURE__*/ XH({
 							"items",
 							"aria-label"
 						])])) : Y("", !0),
-						(U(!0), W(H, null, B(me.value, (t) => (U(), W("div", {
+						(U(!0), W(H, null, B(ge.value, (t) => (U(), W("div", {
 							key: t.field,
 							class: "expert-card-field"
 						}, [K("span", null, P(t.label), 1), q(w, {
@@ -48604,7 +48607,7 @@ var hU = /*#__PURE__*/ XH({
 							"onUpdate:modelValue": n[6] ||= (e) => r("session", e)
 						}, null, 8, ["model-value", "aria-label"])])) : Y("", !0),
 						E.value && e.session.trim() && T.value ? (U(), W("p", KJ, P(T.value), 1)) : Y("", !0),
-						A.value ? (U(), W("div", qJ, [n[18] ||= K("span", null, "项目", -1), K("div", {
+						ae.value ? (U(), W("div", qJ, [n[18] ||= K("span", null, "项目", -1), K("div", {
 							class: "expert-card-modes",
 							role: "radiogroup",
 							"aria-label": `${e.name} 的项目文件权限`
@@ -48618,13 +48621,13 @@ var hU = /*#__PURE__*/ XH({
 							key: t.value,
 							type: "button",
 							role: "radio",
-							"aria-checked": oe.value === t.value,
+							"aria-checked": ce.value === t.value,
 							onClick: (n) => I(a).write_launch(e.name, "project_access", t.value)
 						}, P(t.label), 9, YJ)), 64))], 8, JJ)])) : Y("", !0),
 						v.value ? (U(), G(yK, {
 							key: 5,
 							name: e.name
-						}, null, 8, ["name"])) : te.value && !me.value.length ? (U(), W(H, { key: 6 }, [
+						}, null, 8, ["name"])) : te.value && !ge.value.length ? (U(), W(H, { key: 6 }, [
 							K("div", XJ, [n[19] ||= K("span", null, "模型", -1), q(S, {
 								"model-value": p.value.model || "__default__",
 								items: k.value.items,
@@ -48644,9 +48647,9 @@ var hU = /*#__PURE__*/ XH({
 								type: "button",
 								onClick: n[8] ||= (t) => I(a).load_launch_models(e.name, !0)
 							}, "重试")) : Y("", !0)])) : Y("", !0),
-							re.value ? (U(), W("div", QJ, [q(uJ, {
+							ie.value ? (U(), W("div", QJ, [q(uJ, {
 								caption: "强度",
-								items: re.value,
+								items: ie.value,
 								"model-value": p.value.effort || "",
 								label: `${e.name} 的思考强度`,
 								"onUpdate:modelValue": n[9] ||= (t) => I(a).write_launch(e.name, "effort", t)
@@ -48661,32 +48664,32 @@ var hU = /*#__PURE__*/ XH({
 								title: "留空使用 CLI 默认值",
 								"aria-label": `恢复 ${e.name} 的默认模型与强度`,
 								disabled: !p.value.model && !p.value.effort,
-								onClick: Le
+								onClick: ze
 							}, "恢复默认", 8, eY)
 						], 64)) : (U(), W("p", tY, [q(d, { name: e.mode === "online" ? "i-lucide-globe" : "i-lucide-monitor" }, null, 8, ["name"]), J(P(ne.value), 1)]))
 					]), K("span", nY, [K("button", {
 						type: "button",
 						class: "expert-card-flip is-cancel",
 						"aria-label": `放弃 ${e.name} 的修改`,
-						onClick: xe
+						onClick: Ce
 					}, "取消", 8, rY), K("button", {
 						ref_key: "back_button",
 						ref: u,
 						type: "button",
 						class: "expert-card-flip is-done",
 						"aria-label": `保存并返回 ${e.name} 角色卡片`,
-						onClick: n[10] ||= (e) => be(!1)
+						onClick: n[10] ||= (e) => Se(!1)
 					}, [q(d, { name: "i-lucide-check" }), n[20] ||= J("完成", -1)], 8, iY)])], 8, LJ)) : Y("", !0)]),
 					_: 1
 				}, 8, ["style"]),
 				q(gJ, {
-					open: Ce.value,
-					"onUpdate:open": n[11] ||= (e) => Ce.value = e,
+					open: Te.value,
+					"onUpdate:open": n[11] ||= (e) => Te.value = e,
 					name: e.name,
 					platform: I(a).platform_of(e.name),
-					text: Se.value,
+					text: we.value,
 					template: I(a).description_template(e.name),
-					onSave: Te
+					onSave: De
 				}, null, 8, [
 					"open",
 					"name",
@@ -48695,20 +48698,20 @@ var hU = /*#__PURE__*/ XH({
 					"template"
 				]),
 				q(mJ, {
-					open: Ae.value,
-					"onUpdate:open": n[12] ||= (e) => Ae.value = e,
-					draft: je.value,
-					"onUpdate:draft": n[13] ||= (e) => je.value = e,
+					open: Me.value,
+					"onUpdate:open": n[12] ||= (e) => Me.value = e,
+					draft: Ne.value,
+					"onUpdate:draft": n[13] ||= (e) => Ne.value = e,
 					title: `${e.name} 的专属提示词`,
 					description: "只发给这位专家，补充它的做法与偏好；不改变权限和技能规则。",
 					label: `${e.name} 的专属提示词`,
 					placeholder: "例如：回答先给结论，控制在三段以内。",
 					max: I(_J),
 					rows: 8,
-					note: Ne.value,
-					source: Pe.value,
-					changed: Me.value,
-					onSave: Ie
+					note: Fe.value,
+					source: Ie.value,
+					changed: Pe.value,
+					onSave: Re
 				}, null, 8, [
 					"open",
 					"draft",
@@ -48722,7 +48725,7 @@ var hU = /*#__PURE__*/ XH({
 			], 42, yJ);
 		};
 	}
-}, [["__scopeId", "data-v-18d3f253"]]), cY = ["aria-label"], lY = [
+}, [["__scopeId", "data-v-00e9d8df"]]), cY = ["aria-label"], lY = [
 	"disabled",
 	"title",
 	"aria-label",
@@ -52065,16 +52068,12 @@ var hU = /*#__PURE__*/ XH({
 }, vQ = { class: "pb-heading" }, yQ = {
 	key: 0,
 	class: "pb-status-detail pb-held"
-}, bQ = { class: "pb-member-body" }, xQ = { class: "pb-member-name" }, SQ = { class: "pb-member-body" }, CQ = { class: "pb-member-name" }, wQ = {
+}, bQ = { class: "pb-member-body" }, xQ = { class: "pb-member-name" }, SQ = { class: "pb-member-body" }, CQ = { class: "pb-member-name" }, wQ = ["title"], TQ = {
 	key: 0,
-	class: "pb-member-model",
-	title: "本场启动配置；默认模型与默认强度由对应软件决定"
-}, TQ = {
-	key: 1,
 	class: "pb-member-model",
 	title: "续接你已有的会话；它工作时请不要在原窗口继续操作"
 }, EQ = { key: 0 }, DQ = {
-	key: 3,
+	key: 2,
 	class: "pb-member-manual"
 }, OQ = { key: 0 }, kQ = ["onClick"], AQ = {
 	key: 1,
@@ -52441,12 +52440,11 @@ var hU = /*#__PURE__*/ XH({
 										name: "i-lucide-crown",
 										title: "主持人"
 									})) : Y("", !0),
-									K("small", null, P(e.is_host ? `主持 · ${e.mode}` : e.mode), 1)
+									K("small", { title: e.model ? `${e.model}：卡片指定的模型与强度；未指定时读取软件自己的设置，读不到则写“软件默认”` : void 0 }, P([e.is_host ? `主持 · ${e.mode}` : e.mode, e.model].filter(Boolean).join(" · ")), 9, wQ)
 								]),
-								e.model ? (U(), W("div", wQ, P(e.model), 1)) : Y("", !0),
 								pe(e.name)?.session_mode === "borrowed" ? (U(), W("div", TQ, "借用已有会话")) : Y("", !0),
 								w.value ? Y("", !0) : (U(), W("div", {
-									key: 2,
+									key: 1,
 									class: M(["pb-member-status", `is-${e.tone}`])
 								}, [
 									c[27] ||= K("span", { class: "pb-dot" }, null, -1),
@@ -52732,7 +52730,7 @@ var hU = /*#__PURE__*/ XH({
 			], 2);
 		};
 	}
-}, [["__scopeId", "data-v-a01e3534"]]), t$ = { class: "progress-panel-anchor" }, n$ = ["aria-expanded", "aria-label"], r$ = { class: "progress-chip-text" }, i$ = { class: "progress-chip-rounds" }, a$ = {
+}, [["__scopeId", "data-v-983f5b06"]]), t$ = { class: "progress-panel-anchor" }, n$ = ["aria-expanded", "aria-label"], r$ = { class: "progress-chip-text" }, i$ = { class: "progress-chip-rounds" }, a$ = {
 	__name: "ProgressPanel",
 	setup(e) {
 		let { view: t, bridge: n } = xr("discussion"), r = /* @__PURE__ */ F(!1), i = Z(() => t.value.room), a = Z(() => i.value.limits || {}), o = Z(() => {
@@ -52897,11 +52895,8 @@ var hU = /*#__PURE__*/ XH({
 }, y$ = {
 	class: "pb-section",
 	"aria-label": "发言顺序"
-}, b$ = { class: "pb-member-body" }, x$ = ["title"], S$ = {
+}, b$ = { class: "pb-member-body" }, x$ = ["title"], S$ = ["title"], C$ = {
 	key: 0,
-	class: "pb-member-model"
-}, C$ = {
-	key: 1,
 	class: "pb-member-model",
 	title: "它工作时请不要在原窗口继续操作"
 }, w$ = ["title"], T$ = {
@@ -53157,9 +53152,8 @@ var hU = /*#__PURE__*/ XH({
 										name: "i-lucide-crown",
 										title: "主持人"
 									})) : Y("", !0),
-									K("small", null, P(t.role === "host" ? `主持 · ${s[t.access]}` : s[t.access]), 1)
+									K("small", { title: v(t) || void 0 }, P([t.role === "host" ? `主持 · ${s[t.access]}` : s[t.access], v(t)].filter(Boolean).join(" · ")), 9, S$)
 								], 8, x$),
-								v(t) ? (U(), W("div", S$, P(v(t)), 1)) : Y("", !0),
 								t.session_mode === "borrowed" ? (U(), W("div", C$, "借用已有会话")) : Y("", !0),
 								K("div", { class: M(["pb-member-status", `is-${g(t)}`]) }, [i[9] ||= K("span", { class: "pb-dot" }, null, -1), K("span", {
 									class: "pb-member-status-text",
@@ -53250,7 +53244,7 @@ var hU = /*#__PURE__*/ XH({
 			]);
 		};
 	}
-}, [["__scopeId", "data-v-776a1930"]]), B$ = {
+}, [["__scopeId", "data-v-9ad0ee84"]]), B$ = {
 	id: "channel-sidebar",
 	class: "channel-sidebar",
 	"aria-label": "房间导航"

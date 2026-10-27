@@ -2233,9 +2233,15 @@ test("participant model labels distinguish explicit choices, software defaults a
     Codex: { adapter: 'codex_cli', model: 'gpt-6-astra', effort: 'xhigh' },
     Claude: { adapter: 'claude', model: '', effort: '' },
     Gemini: { adapter: 'antigravity_cli', model: 'gemini-4-argon-high', effort: '' },
+    Reviewer: { adapter: 'codex_cli', model: '', effort: '', default_model: 'gpt-6-astra', default_effort: 'xhigh' },
+    Agy: { adapter: 'antigravity_cli', model: '', effort: '', default_model: 'gemini-4-argon-medium', default_effort: 'medium' },
+    AgyPicked: { adapter: 'antigravity_cli', model: 'gemini-4-argon-high', effort: '', default_model: 'gemini-4-argon-medium', default_effort: 'medium' },
   } };
+  assert.equal(label('Agy', room, saved), 'gemini-4-argon-medium · medium');
+  assert.equal(label('AgyPicked', room, saved), 'gemini-4-argon-high · 模型默认强度', 'a chosen agy model does not borrow the default model effort');
   assert.equal(label('Codex', room, saved), 'gpt-6-astra · xhigh');
-  assert.equal(label('Claude', room, saved), '默认模型 · 默认强度');
+  assert.equal(label('Claude', room, saved), '软件默认模型 · 软件默认强度');
+  assert.equal(label('Reviewer', room, saved), 'gpt-6-astra · xhigh', 'an empty choice shows what the software settings select');
   assert.equal(label('Gemini', room, saved), 'gemini-4-argon-high · 模型默认强度');
   assert.equal(label('Codex', { ...room, id: 'two' }, saved), '', 'unread settings are not guessed or shown as a placeholder');
   assert.equal(label('Codex', room, null), '');

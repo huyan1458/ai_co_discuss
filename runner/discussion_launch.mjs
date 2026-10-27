@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { atomic_json } from './discussion_adapters.mjs';
-import { software_effort, software_models } from './discussion_models.mjs';
+import { software_defaults, software_effort, software_models } from './discussion_models.mjs';
 import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
 import { MAX_EXPERT_PROMPT } from './expert_prompts.mjs';
@@ -200,7 +200,7 @@ export function pick_directory({ platform = process.platform, spawn_process = sp
 const MODEL_CACHE_MS = 24 * 60 * 60 * 1000;
 
 /** Return the software catalog, served from the private service home when still valid. */
-export async function cached_software_models(home, profile, { refresh = false, query = software_models, query_effort = software_effort } = {}) {
+export async function cached_software_models(home, profile, { refresh = false, query = software_models, query_effort = software_effort, query_defaults = software_defaults } = {}) {
   const path = join(home, 'model-catalogs.json');
   let stamp = '';
   try { const file = statSync(profile.executable); stamp = `${file.size}:${file.mtimeMs}`; } catch {}
@@ -209,8 +209,9 @@ export async function cached_software_models(home, profile, { refresh = false, q
   let cache = {};
   try { cache = JSON.parse(readFileSync(path, 'utf8')); } catch {}
   const cached = entry => !refresh && entry && Date.now() - entry.at < MODEL_CACHE_MS ? entry.result : null;
-  const [result, effort] = await Promise.all([cached(cache[key]) || query(profile),
-    profile.adapter === 'antigravity_cli' ? cached(cache[effort_key]) || query_effort(profile) : null]);
+  // Defaults are read on every request, so a changed software setting shows without waiting out the cache.
+  const [result, effort, defaults] = await Promise.all([cached(cache[key]) || query(profile),
+    profile.adapter === 'antigravity_cli' ? cached(cache[effort_key]) || query_effort(profile) : null, query_defaults(profile)]);
   const updates = {};
   if (!cached(cache[key]) && !result.error && result.models.length) {
     updates[key] = { at: Date.now(), result };
@@ -224,7 +225,7 @@ export async function cached_software_models(home, profile, { refresh = false, q
     for (const old of Object.keys(cache)) if (old.startsWith(prefix) && !old.startsWith(key.slice(0, -1))) delete cache[old];
     atomic_json(path, { ...cache, ...updates });
   }
-  return effort ? { ...result, efforts: effort.levels, ...(effort.error ? { effort_error: effort.error } : {}) } : result;
+  return { ...result, defaults, ...(effort ? { efforts: effort.levels, ...(effort.error ? { effort_error: effort.error } : {}) } : {}) };
 }
 
 /** Read private defaults without selecting a global room or identity. */
@@ -233,8 +234,8 @@ export function launch_settings(home) {
   return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { participants: {} };
 }
 
-/** Read only the registered room's model choices, never machine defaults or connection secrets. */
-export function room_models(home, raw) {
+/** Read the registered room's model choices and what each software selects for empty ones, never connection secrets. */
+export async function room_models(home, raw, { read_defaults = software_defaults } = {}) {
   const input = launch_input({ ...raw, entry: 'web' });
   if (!input.room_id) throw new Error('读取本场模型须提供 room_id');
   const paths = read_registry(home).filter(path => {
@@ -243,11 +244,12 @@ export function room_models(home, raw) {
   });
   if (paths.length > 1) throw new Error('本场存在多份登记配置，无法确定模型设置');
   const profiles = paths.length ? configuration_snapshot(paths[0]).config.participants : {};
-  const participants = Object.fromEntries(Object.entries(profiles).map(([name, profile]) => {
+  const participants = Object.fromEntries(await Promise.all(Object.entries(profiles).map(async ([name, profile]) => {
     const cli = ['codex_cli', 'claude', 'antigravity_cli', 'api'].includes(profile.adapter);
+    const defaults = await read_defaults(profile);
     return [name, { adapter: profile.adapter, model: cli ? profile.model || '' : '',
-      effort: EFFORT_LEVELS[profile.adapter] ? profile.effort || '' : '' }];
-  }));
+      effort: EFFORT_LEVELS[profile.adapter] ? profile.effort || '' : '', default_model: defaults.model, default_effort: defaults.effort }];
+  })));
   return { room_id: input.room_id, participants };
 }
 
@@ -886,7 +888,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'api-key' && input) result = save_api_key(home, input);
   else if (positionals[0] === 'api-check' && input) result = await api_check(home, input);
   else if (positionals[0] === 'scheduler-check' && input) result = await scheduler_check(home, input);
-  else if (positionals[0] === 'room-models' && input) result = room_models(home, input);
+  else if (positionals[0] === 'room-models' && input) result = await room_models(home, input);
   else if (positionals[0] === 'models' && input?.adapter === 'api') result = await api_models(home, input);
   else if (positionals[0] === 'models' && input) {
     const saved = Object.values(launch_settings(home).participants).find(profile => profile.adapter === input.adapter);

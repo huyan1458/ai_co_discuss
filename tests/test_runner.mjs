@@ -206,7 +206,7 @@ async function fixture(t) {
   return { store, event, run, calls, config, limits, failures, reserve_tokens };
 }
 
-test('room model readback uses registered choices and excludes defaults, paths and credentials', t => {
+test('room model readback uses registered choices, adds the software settings for empty ones, and excludes paths and credentials', async t => {
   const home = mkdtempSync(join(tmpdir(), 'discussion-models-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const path = join(home, 'room.json');
@@ -219,19 +219,33 @@ test('room model readback uses registered choices and excludes defaults, paths a
   writeFileSync(path, JSON.stringify(config));
   register_room(home, path);
   writeFileSync(join(home, 'launch-settings.json'), JSON.stringify({ participants: { Claude: { model: 'wrong-default', effort: 'max' } } }));
+  // The software's own settings are read for empty choices; point both CLIs at private copies.
+  const saved_env = { CODEX_HOME: process.env.CODEX_HOME, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
+  t.after(() => { for (const [key, value] of Object.entries(saved_env)) value === undefined ? delete process.env[key] : process.env[key] = value; });
+  process.env.CODEX_HOME = join(home, 'codex');
+  process.env.CLAUDE_CONFIG_DIR = join(home, 'claude');
+  mkdirSync(process.env.CODEX_HOME);
+  writeFileSync(join(process.env.CODEX_HOME, 'config.toml'), 'model = "gpt-6-sol"\nmodel_reasoning_effort = "high"\n[profiles.deep]\nmodel = "ignored"\n');
   const input = { site: config.site, room_id: config.room };
-  assert.deepEqual(room_models(home, input), { room_id: 'models', participants: {
-    Codex: { adapter: 'codex_cli', model: 'gpt-6-astra', effort: 'xhigh' },
-    Claude: { adapter: 'claude', model: '', effort: '' },
-    Gemini: { adapter: 'antigravity', model: '', effort: '' },
+  const none = { default_model: '', default_effort: '' };
+  assert.deepEqual(await room_models(home, input), { room_id: 'models', participants: {
+    Codex: { adapter: 'codex_cli', model: 'gpt-6-astra', effort: 'xhigh', default_model: 'gpt-6-sol', default_effort: 'high' },
+    Claude: { adapter: 'claude', model: '', effort: '', ...none },
+    Gemini: { adapter: 'antigravity', model: '', effort: '', ...none },
   } });
+  mkdirSync(process.env.CLAUDE_CONFIG_DIR);
+  writeFileSync(join(process.env.CLAUDE_CONFIG_DIR, 'settings.json'), JSON.stringify({ model: 'opus', effortLevel: 'high' }));
+  assert.deepEqual((await room_models(home, input)).participants.Claude,
+    { adapter: 'claude', model: '', effort: '', default_model: 'opus', default_effort: 'high' });
   config.participants.Gemini = { adapter: 'antigravity_cli', executable: process.execPath, model: 'gemini-4-argon-high' };
   writeFileSync(path, JSON.stringify(config));
-  assert.deepEqual(room_models(home, input).participants.Gemini,
-    { adapter: 'antigravity_cli', model: 'gemini-4-argon-high', effort: '' });
-  assert.deepEqual(room_models(home, { ...input, room_id: 'missing' }).participants, {});
-  assert.deepEqual(room_models(home, { ...input, site: 'https://other.example' }).participants, {});
-  assert.throws(() => room_models(home, { ...input, room_id: '../models' }), /房间编号无效/);
+  // agy keeps its default in the software and answers its native /model; stub that query here.
+  const agy = { read_defaults: profile => profile.adapter === 'antigravity_cli' ? { model: 'gemini-4-argon-medium', effort: 'medium' } : { model: '', effort: '' } };
+  assert.deepEqual((await room_models(home, input, agy)).participants.Gemini,
+    { adapter: 'antigravity_cli', model: 'gemini-4-argon-high', effort: '', default_model: 'gemini-4-argon-medium', default_effort: 'medium' });
+  assert.deepEqual((await room_models(home, { ...input, room_id: 'missing' })).participants, {});
+  assert.deepEqual((await room_models(home, { ...input, site: 'https://other.example' })).participants, {});
+  await assert.rejects(() => room_models(home, { ...input, room_id: '../models' }), /房间编号无效/);
 });
 
 test('agy project records survive a concluded room and are dropped only after the room is deleted', async t => {
@@ -1812,6 +1826,7 @@ test('an expert prompt replaces its software preset, and an empty one turns the 
   assert.equal(expert_prompt({ adapter: 'antigravity_cli', system_prompt: '  只读不写  ' }), '只读不写');
   assert.equal(expert_prompt({ adapter: 'antigravity_cli', system_prompt: '' }), '');
   assert.equal(expert_prompt({ adapter: 'claude' }), '', 'software without a need has no preset');
+  assert.match(expert_prompt({ adapter: 'api' }), /读不到本地文件.*写明缺什么/);
 });
 
 test('the agy command limit comes from the runner, so clearing the expert prompt cannot drop it', () => {
