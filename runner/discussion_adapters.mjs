@@ -297,6 +297,97 @@ export function activity_phase(adapter, event) {
   return step.tool_name === 'run_command' ? 'command' : EDIT_TOOLS.test(step.tool_name || '') ? 'editing' : 'tool';
 }
 
+/** The tool an event starts, by name only: never its arguments or command text. Returns '' for any other event. */
+export function activity_tool(adapter, event) {
+  if (adapter === 'claude') {
+    const block = event.type === 'assistant' ? event.message?.content?.at(-1) : null;
+    return block?.type === 'tool_use' ? String(block.name || '') : '';
+  }
+  if (adapter === 'codex_cli') {
+    if (event.type !== 'item.started') return '';
+    return event.item?.type === 'mcp_tool_call' ? String(event.item.tool || '') : event.item?.type === 'web_search' ? 'web_search' : '';
+  }
+  const step = event.step_update;
+  return step?.step_type === 'tool' && !['DONE', 'ERROR'].includes(step.state) ? String(step.tool_name || '') : '';
+}
+
+/** Segments one execution may record, how many one report carries, and a tool name's length; the website enforces the same. */
+export const MAX_EXECUTION_SEGMENTS = 400;
+export const MAX_SEGMENTS_PER_REPORT = 40;
+export const MAX_SEGMENT_TOOL = 60;
+
+/**
+ * The phases each execution's software went through, as millisecond offsets from its delivery on this machine's clock.
+ * Consecutive events of the same phase and tool extend one segment. The open segment is reported as far as it has run
+ * and again later with a later end; numbering makes a resent report harmless.
+ */
+export class SegmentLog {
+  constructor(now = Date.now) {
+    this.now = now;
+    this.executions = new Map();
+  }
+  /** Begin timing one execution at its delivery; a repeated start keeps the first origin. */
+  start(id) {
+    if (!this.executions.has(id)) this.executions.set(id, { origin: this.now(), last: 0, open: null, closed: [], next_seq: 0, reported: 0 });
+  }
+  /** The software produced output now; a phase, when the output names one, starts a new segment unless it continues the open one. */
+  mark(id, phase = '', tool = '') {
+    const log = this.executions.get(id);
+    if (!log) return;
+    log.last = this.now() - log.origin;
+    if (log.open) log.open.end_ms = log.last;
+    if (!phase) return;
+    tool = tool.slice(0, MAX_SEGMENT_TOOL).replace(/[\uD800-\uDBFF]$/, '');
+    if (log.open?.phase === phase && log.open.tool === tool) return;
+    if (log.open) log.closed.push(log.open);
+    log.open = null;
+    if (log.next_seq >= MAX_EXECUTION_SEGMENTS) return;
+    log.next_seq += 1;
+    log.open = { seq: log.next_seq, phase, tool, start_ms: log.last, end_ms: log.last };
+  }
+  /** Whether unreported segments are waiting and the last report is at least `interval_ms` old. */
+  due(id, interval_ms) {
+    const log = this.executions.get(id);
+    return Boolean(log && (log.closed.length || log.open) && this.now() - log.reported >= interval_ms);
+  }
+  /** The next report: closed segments first, then the open one as it stands. `final` closes the open segment first. */
+  batch(id, final = false) {
+    const log = this.executions.get(id);
+    if (!log) return [];
+    if (final && log.open) { log.closed.push(log.open); log.open = null; }
+    const batch = log.closed.slice(0, MAX_SEGMENTS_PER_REPORT);
+    if (log.open && batch.length < MAX_SEGMENTS_PER_REPORT) batch.push({ ...log.open });
+    return batch;
+  }
+  /** Forget the closed segments a successful report carried in full; a segment that ran on since it was sent stays. */
+  sent(id, batch) {
+    const log = this.executions.get(id);
+    if (!log) return;
+    const ends = new Map(batch.map(segment => [segment.seq, segment.end_ms]));
+    log.closed = log.closed.filter(segment => !(ends.has(segment.seq) && segment.end_ms <= ends.get(segment.seq)));
+    log.reported = this.now();
+  }
+  /**
+   * Send the execution's segments with `send(segments)`. `final` closes the open one, sends everything left and forgets
+   * the execution. A refused report drops them and any other failure keeps them for the next try; it never throws,
+   * so a timeline report cannot fail the execution it describes.
+   */
+  async report(id, final, send) {
+    do {
+      const batch = this.batch(id, final);
+      if (!batch.length) break;
+      try { await send(batch); }
+      catch (error) {
+        if (/HTTP 4\d\d/.test(error.message)) this.drop(id);
+        return;
+      }
+      this.sent(id, batch);
+    } while (final && this.executions.get(id)?.closed.length);
+    if (final) this.drop(id);
+  }
+  drop(id) { this.executions.delete(id); }
+}
+
 /**
  * Text the agent wrote to the user in one streamed event, such as a progress remark between tool calls.
  * agy streams a response in deltas, so its text is collected per step in `responses` and returned when the step ends.
@@ -323,7 +414,7 @@ function watch_activity(adapter, stream, task) {
     let event;
     try { event = JSON.parse(line); } catch { return; }
     const phase = activity_phase(adapter, event);
-    if (phase) task.on_activity?.(phase);
+    if (phase) task.on_activity?.(phase, activity_tool(adapter, event));
     const note = progress_note(adapter, event);
     if (note) task.on_note?.(note);
   });
@@ -533,7 +624,7 @@ function monitor_cli(child, config, binding, task) {
     catch { state.diagnostic = 'CLI 输出中存在无效 JSON，详情见本机日志'; return; }
     trace_cli_event(event, task);
     const phase = activity_phase(config.adapter, event);
-    if (phase) task.on_activity?.(phase);
+    if (phase) task.on_activity?.(phase, activity_tool(config.adapter, event));
     const note = progress_note(config.adapter, event, state.responses);
     if (note) task.on_note?.(note);
     try { cli_event(config.adapter, state, event, task); }

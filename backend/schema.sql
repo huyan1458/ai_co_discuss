@@ -553,6 +553,20 @@ CREATE TABLE IF NOT EXISTS execution_notes (
     created_at INTEGER NOT NULL,
     PRIMARY KEY(execution_id,seq)
 );
+-- Phases the runner saw a member's software go through in one execution (a free execution or a discussion event), as
+-- millisecond offsets from its delivery; numbered per execution, and a resent segment keeps the later end. Not part of backups.
+CREATE TABLE IF NOT EXISTS execution_segments (
+    source TEXT NOT NULL CHECK(source IN ('free','discussion')),
+    execution_id INTEGER NOT NULL,
+    seq INTEGER NOT NULL,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    phase TEXT NOT NULL,
+    tool TEXT NOT NULL DEFAULT '',
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL,
+    PRIMARY KEY(source,execution_id,seq)
+);
+CREATE INDEX IF NOT EXISTS execution_segments_room ON execution_segments(room_id);
 -- One live execution per member: different members may run in parallel, one session never twice.
 CREATE UNIQUE INDEX IF NOT EXISTS one_member_execution ON member_executions(member_id)
     WHERE status IN ('dispatched','started');
@@ -693,6 +707,11 @@ CREATE TABLE IF NOT EXISTS free_chains (
     chain_id INTEGER NOT NULL,
     reason TEXT NOT NULL,
     PRIMARY KEY (room_id,chain_id)
+);
+-- The owner's per-room chain budget; rooms without a row use the default.
+CREATE TABLE IF NOT EXISTS free_settings (
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+    max_auto_hops INTEGER NOT NULL
 );
 -- A brainstorm room started from a free room keeps its origin for the way back.
 CREATE TABLE IF NOT EXISTS room_links (

@@ -121,11 +121,20 @@ function library_description(name) {
   return has_local(name) ? "API / 本地 App / CLI / 手动启动" : "API / 手动启动";
 }
 
-const library_items = computed(() => experts.map((name) => ({ value: name, name, ...bridge.identities[name],
-  disabled: !bridge.launch_clients[name], title: library_description(name), aria_label: `添加 ${name} 实例` })));
+// Presets follow the platforms, after a divider; each adds a named instance already set up for its job.
+const PRESET_PREFIX = "preset:";
+const library_items = computed(() => [...experts.map((name) => ({ value: name, name, ...bridge.identities[name],
+  disabled: !bridge.launch_clients[name], title: library_description(name), aria_label: `添加 ${name} 实例` })),
+  ...view.value && bridge.expert_presets().map((preset, index) => ({ value: PRESET_PREFIX + preset.name, name: preset.name, ...bridge.identities[bridge.platform_of(preset.name)],
+    separated: index === 0, title: preset.description || "专家预设", aria_label: `添加预设 ${preset.name}` }))]);
 
-/** Admit one library role, woken by the local service until its card says otherwise. */
+/** Admit one library role, woken by the local service until its card says otherwise; a preset adds its own named instance. */
 function add_expert(name) {
+  if (name.startsWith(PRESET_PREFIX)) {
+    const preset = bridge.expert_presets().find((item) => item.name === name.slice(PRESET_PREFIX.length));
+    if (preset) bridge.add_preset(EXPERT_CONTAINER, preset, "cli");
+    return ensure_host();
+  }
   if (!bridge.launch_clients[name]) return;
   if (!has_local(name) && !view.value.launch.profiles[name]?.adapter) bridge.write_launch(name, "adapter", "api");
   // A card already in use adds another instance with its own session, model and effort.

@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import { agy_command_rule, atomic_json, deliver_task, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
+import { agy_command_rule, atomic_json, deliver_task, SegmentLog, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
 import { api, CODEX_ADAPTERS } from './discussion_runner.mjs';
 import { with_expert_prompt } from './expert_prompts.mjs';
 import { ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, decide_group_order, route_free_message } from './scheduler.mjs';
@@ -79,7 +79,7 @@ export function free_task_files(config, member, execution, binding) {
   // The host routes unnamed messages and receives hand-backs; it may name members in its answer.
   const discussion = config.mode !== 'free';
   const host_rule = member.role === 'host' && !discussion
-    ? `你是本房间的主持人：purpose 为 route 的请求是用户未点名的消息，handoff 表示你派出的成员都已结束，all 表示用户请全体成员各自回应一次（其他成员已同时收到，你只回答自己的部分，不加 --to）。先用 ${cli} room view ${config.room} 查看成员与状态，再决定由谁处理；需要派活时在回答中加 --to 成员名（可重复，不能点名自己），只点名一位成员时，其回答直接面向用户，你不会再被唤醒；同时点名多位时，全部结束后你会再被唤醒一次汇总。不需要他人时不加 --to，本次即结束。只派分给各成员的文件或模块，避免多人改同一文件。`
+    ? `你是本房间的主持人：purpose 为 route 的请求是用户未点名的消息，handoff 表示你派出的成员都已结束，all 表示用户请全体成员各自回应一次（其他成员已同时收到，你只回答自己的部分，不加 --to）。先用 ${cli} room view ${config.room} 查看成员与状态，再决定由谁处理；需要派活时在回答中加 --to 成员名（可重复，不能点名自己），被点名的成员全部结束后你会再被唤醒一次（handoff），据结果决定下一步：交给其他成员（如请评审）、汇总给用户；成员的回答已完整时只用一两句说明完成，不复述。不需要他人时不加 --to，本次即结束。只派分给各成员的文件或模块，避免多人改同一文件。`
     : '';
   atomic_json(task_path, { site: config.site, room: config.room, mode: 'free', member: member.name,
     execution_id: execution.id, request_messages: execution.requests.map(item => item.message_id),
@@ -141,6 +141,7 @@ export class FreeRoomRunner {
     // Execution id -> { phase, at, sent_phase, sent_at, notes, next_seq }: what the member's software last showed it doing,
     // and the progress notes not yet on the website.
     this.activity = new Map();
+    this.segments = new SegmentLog();
     this.context_errors = new Map();
     this.adopt(config);
     this.store.db.exec(`CREATE TABLE IF NOT EXISTS free_deliveries(member TEXT PRIMARY KEY, client_id TEXT NOT NULL,
@@ -349,14 +350,15 @@ export class FreeRoomRunner {
     try {
       const task = free_task_files(this.config, member, execution, binding);
       invoked = true;
+      this.segments.start(execution.id);
       const result = await this.deliver(adapter, binding, { ...task, room_title: this.room_title,
         api_context: { site: this.config.site, room: this.config.room, token: this.config.members[member.name].token,
           home: this.config.api_home, mode: 'free', role: member.role || 'member', execution_id: execution.id,
           requests: execution.requests, read_after: execution.read_until },
         on_binding: session => this.store.bind(member.name, session),
         on_process: child => this.track(member.name, child),
-        on_output: (path, chunk) => { appendFileSync(path, chunk, { mode: 0o600 }); this.touch(execution.id); },
-        on_activity: phase => this.touch(execution.id, phase),
+        on_output: (path, chunk) => { appendFileSync(path, chunk, { mode: 0o600 }); this.touch(execution.id); this.segments.mark(execution.id); },
+        on_activity: (phase, tool) => { this.touch(execution.id, phase); this.segments.mark(execution.id, phase, tool); },
         on_note: text => this.note(execution.id, text),
         // A stopped process may report after the next execution started; only its own execution takes the result.
         on_failure: error => { try { if (this.row(member.name)?.execution_id === execution.id) this.save(member.name, { error }); } catch { /* Store may already be closed at shutdown. */ } },
@@ -386,6 +388,7 @@ export class FreeRoomRunner {
     const execution = active.get(row.execution_id);
     if (!execution) {
       this.activity.delete(row.execution_id);
+      await this.report_segments(row.execution_id, true);
       this.stop_member(member.name);
       return this.save(member.name, { status: 'idle', error: '' });
     }
@@ -411,6 +414,11 @@ export class FreeRoomRunner {
       if (activity) Object.assign(activity, { sent_phase: activity.phase, sent_at: activity.at, notes: activity.notes.slice(notes.length) });
       this.save(member.name, { last_renew: Date.now() });
     }
+    if (this.segments.due(execution.id, ACTIVITY_REPORT_MS)) await this.report_segments(execution.id);
+  }
+  /** Send the execution's recorded phase segments; `final` sends the rest once it has ended. */
+  report_segments(execution_id, final = false) {
+    return this.segments.report(execution_id, final, segments => api(this.config, `/executions/${execution_id}`, { action: 'segments', segments }));
   }
   /** Note that the software produced output now, and its phase when the output names one. */
   touch(execution_id, phase) {
@@ -444,6 +452,7 @@ export class FreeRoomRunner {
   /** Record the cause on the website, then stop this member's own processes. */
   async fail(name, execution_id, reason) {
     this.activity.delete(execution_id);
+    await this.report_segments(execution_id, true);
     try { await api(this.config, `/executions/${execution_id}`, { action: 'fail', reason }); }
     catch (error) { if (!/HTTP 409/.test(error.message)) throw error; }
     this.save(name, { status: 'idle', error: reason });

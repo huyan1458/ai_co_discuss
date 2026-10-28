@@ -28,7 +28,8 @@ from .free_room import (add_member, after_free_message, authorize_free_write, ch
                         discussion_members, room_mode, save_room_access, sync_discussion_members, view_execution)
 from .free_room import add_discussion_member, convert_suggestion, discussion_member_action, message_suggestions, save_suggestions, sync_participants
 from .free_room import active_members, adopt_recommendation, ask_members, asks_view, checked_asks, recommend_member, register_member, route_held_messages
-from .free_room import describe_members, execution_notes, member_descriptions, reorder_speakers, speaking_order, stop_room_work
+from .free_room import describe_members, execution_notes, member_descriptions, reorder_speakers, set_auto_hops, speaking_order, stop_room_work
+from .free_room import execution_timeline
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, is_ai, is_participant
 from .room_import import import_room, imported_attachment
 from .runtime import (authorize_write, begin_write, configure_runtime, event_action,
@@ -671,7 +672,7 @@ def manage_room(connection, room_id, action, payload):
 
 def delete_room_records(connection, room_id):
     """Remove a room's dependent records in the caller's transaction."""
-    for table in ("member_recommendations", "free_queue", "speaking_orders", "member_requests", "member_descriptions", "execution_notes", "member_executions", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "room_links",
+    for table in ("member_recommendations", "free_queue", "speaking_orders", "member_requests", "member_descriptions", "execution_notes", "execution_segments", "member_executions", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "free_settings", "room_links",
                   "discussion_options", "round_budgets", "scheduler_decisions", "scheduler_routing", "discussion_conclusions", "discussion_sessions"):
         if table == "scheduler_decisions":
             for child in ("scheduler_feedback", "scheduler_decision_context", "scheduler_decision_inputs"):
@@ -1693,7 +1694,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
     def respond(self, body, status=200, content_type="application/json"):
         """Send a UTF-8 response that browsers and proxies must not cache."""
         parts = urlsplit(self.path).path.strip("/").split("/")
-        quiet_renewal = parts[3:4] == ["events"] and (self.payload_cache or {}).get("action") == "renew"
+        action = (self.payload_cache or {}).get("action")
+        # Timeline segments are read by the timeline page on its own schedule, so they wake no other page.
+        quiet_renewal = (parts[3:4] == ["events"] and action == "renew") or (parts[3:4] in (["events"], ["executions"]) and action == "segments")
         if (self.command == "POST" and 200 <= status < 300 and parts[:2] in (["api", "rooms"], ["api", "folders"])
                 and not quiet_renewal):
             self.server.notify_update()
@@ -1852,7 +1855,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         site = self.local_request_site(method)
         route = parts[2:]
         if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-member"], ["room-member-access"], ["room-member-adapter"], ["room-profiles"], ["room-restore"], ["models"], ["api-key"], ["api-check"],
-                                             ["scheduler-check"], ["pick-directory"], ["projects"], ["machine-link"]):
+                                             ["scheduler-check"], ["pick-directory"], ["projects"], ["presets"], ["machine-link"]):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
             command = "settings"
@@ -1878,6 +1881,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = "pick-directory"
         elif route == ["projects"] and method == "POST":
             command = "projects"
+        elif route == ["presets"] and method == "POST":
+            command = "presets"
         elif route == ["machine-link"] and method == "POST":
             command = "machine-link"
         else:
@@ -2052,6 +2057,12 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = describe_members(connection, room_id, token, self.read_payload())
             connection.commit()
             return self.respond(result)
+        if parts[3:] == ["budget"] and method == "POST":
+            result = set_auto_hops(connection, room_id, token, self.read_payload())
+            connection.commit()
+            return self.respond(result)
+        if parts[3:] == ["timeline"] and method == "GET":
+            return self.respond(execution_timeline(connection, room_id))
         if parts[3:] == ["register"] and method == "POST":
             result = register_member(connection, room_id, token, utc_now())
             connection.commit()
@@ -2081,7 +2092,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if parts[3:4] == ["attachments"]:
             return self.handle_attachments(connection, parts, params, method)
         if parts[3:4] in (["runtime"], ["events"], ["scheduler-decisions"], ["scheduler-routing"]):
-            if free and method == "POST" and parts[3:4] not in (["scheduler-decisions"], ["scheduler-routing"]):
+            # A discussion execution's last timeline report may arrive after the room returned to free collaboration.
+            if (free and method == "POST" and parts[3:4] not in (["scheduler-decisions"], ["scheduler-routing"])
+                    and not (parts[3:4] == ["events"] and self.read_payload().get("action") == "segments")):
                 raise ValueError("自由房间不使用讨论运行控制")
             return self.handle_runtime_api(connection, parts, params, method)
         free_actor = None

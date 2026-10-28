@@ -17,7 +17,7 @@ import { EXPERT_PROMPT_PRESETS, expert_prompt } from '../runner/expert_prompts.m
 import { system_prompt } from '../runner/api_participant.mjs';
 import { assert_shared_home, DiscussionService, FreeRoomWithDiscussion, migrate_service_home, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
 import { launch_discussion, restore_room, room_models, room_profiles } from '../runner/discussion_launch.mjs';
-import { activity_phase, progress_note, agy_command_rule, agy_rule, antigravity_project, claude_exit_error, claude_rule_path, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
+import { activity_phase, activity_tool, MAX_EXECUTION_SEGMENTS, MAX_SEGMENTS_PER_REPORT, SegmentLog, progress_note, agy_command_rule, agy_rule, antigravity_project, claude_exit_error, claude_rule_path, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
 import { certainty, decide, decide_group_order, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
 
@@ -1734,6 +1734,7 @@ async function free_fixture(t) {
       if (body?.action === 'release') { execution.status = 'cancelled'; state.pending = execution.requests; }
       if (body?.action === 'report') state.reports[execution.id] = body.changes;
       if (body?.action === 'renew') state.renewed = body;
+      if (body?.action === 'segments') (state.segments ||= []).push(body.segments);
       result = execution;
     } else result = { title: '自由单聊', mode: 'free', ...state.room };
     response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(result));
@@ -1837,6 +1838,67 @@ test('progress notes are numbered once, sent with a renewal and not resent', asy
   runner.save('Claude', { last_renew: Date.now() - 11_000 });
   await runner.tick();
   assert.deepEqual(state.renewed.notes, [{ seq: 3, text: '验证通过' }]);
+});
+
+test('phase segments merge repeats, resend the open one with a later end and stop at the cap', async () => {
+  let now = 1000;
+  const log = new SegmentLog(() => now);
+  log.mark(1, 'thinking');
+  assert.deepEqual(log.batch(1), [], 'an execution that was not started records nothing');
+  log.start(1);
+  now = 1100; log.mark(1, 'thinking');
+  now = 1300; log.mark(1, 'thinking');
+  now = 1500; log.mark(1, 'command', 'Bash');
+  now = 1700; log.mark(1);
+  assert.deepEqual(log.batch(1), [{ seq: 1, phase: 'thinking', tool: '', start_ms: 100, end_ms: 500 },
+    { seq: 2, phase: 'command', tool: 'Bash', start_ms: 500, end_ms: 700 }]);
+  const sent = [];
+  await log.report(1, false, async batch => { sent.push(batch); });
+  now = 2000; log.mark(1);
+  await log.report(1, false, async batch => { sent.push(batch); });
+  assert.deepEqual(sent[1], [{ seq: 2, phase: 'command', tool: 'Bash', start_ms: 500, end_ms: 1000 }], 'only the open segment is sent again, further on');
+  now = 2100; log.mark(1, 'writing');
+  await log.report(1, false, async () => { throw new Error('fetch failed'); });
+  assert.deepEqual(log.batch(1).map(item => item.seq), [2, 3], 'a network failure keeps the segments');
+  await log.report(1, true, async batch => { sent.push(batch); });
+  assert.deepEqual(sent.at(-1).map(item => [item.seq, item.end_ms]), [[2, 1100], [3, 1100]]);
+  assert.deepEqual(log.batch(1), [], 'a final report forgets the execution');
+  log.start(2);
+  for (let index = 0; index < MAX_EXECUTION_SEGMENTS + 5; index++) { now += 10; log.mark(2, index % 2 ? 'tool' : 'thinking', 'x'.repeat(80)); }
+  const all = [];
+  await log.report(2, true, async batch => { assert.ok(batch.length <= MAX_SEGMENTS_PER_REPORT); all.push(...batch); });
+  assert.equal(all.length, MAX_EXECUTION_SEGMENTS);
+  assert.equal(all[1].tool.length, 60);
+  log.start(3); log.mark(3, 'tool', 'Read');
+  await log.report(3, false, async () => { throw new Error('HTTP 409: 执行已结束较久，不再接收阶段记录'); });
+  assert.deepEqual(log.batch(3), [], 'a refused report drops the segments');
+});
+
+test('the tool an event starts is named without its arguments', () => {
+  assert.equal(activity_tool('claude', { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'rm -rf x' } }] } }), 'Bash');
+  assert.equal(activity_tool('claude', { type: 'assistant', message: { content: [{ type: 'text', text: '好' }] } }), '');
+  assert.equal(activity_tool('codex_cli', { type: 'item.started', item: { type: 'mcp_tool_call', server: 'docs', tool: 'search' } }), 'search');
+  assert.equal(activity_tool('codex_cli', { type: 'item.started', item: { type: 'command_execution', command: 'ls' } }), '');
+  assert.equal(activity_tool('antigravity_cli', { step_update: { step_type: 'tool', state: 'ACTIVE', tool_name: 'view_file' } }), 'view_file');
+  assert.equal(activity_tool('antigravity_cli', { step_update: { step_type: 'tool', state: 'DONE', tool_name: 'view_file' } }), '');
+});
+
+test('a free execution reports its phase segments while it runs and the rest once it ends', async t => {
+  const { state, store, config } = await free_fixture(t);
+  let task;
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, delivered) => { task = delivered; return { status: 'accepted' }; });
+  await runner.tick();
+  task.on_activity('thinking', '');
+  task.on_activity('command', 'Bash');
+  await runner.tick();
+  assert.deepEqual(state.segments[0].map(item => [item.seq, item.phase, item.tool]), [[1, 'thinking', ''], [2, 'command', 'Bash']]);
+  task.on_activity('writing', '');
+  await runner.tick();
+  assert.equal(state.segments.length, 1, 'later segments wait for the report interval');
+  state.executions[0].status = 'completed';
+  await runner.tick();
+  assert.deepEqual([state.segments.at(-1).at(-1).seq, state.segments.at(-1).at(-1).phase], [3, 'writing'], 'the open segment closes with the final report');
+  assert.match(state.calls.filter(call => call.endsWith('segments')).at(-1), /^POST \/executions\/1 segments$/);
 });
 
 test('agent text between tool calls becomes a note; agy deltas join when their step ends', () => {

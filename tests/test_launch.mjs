@@ -10,7 +10,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { adopt_member_profile, borrowed_session, cached_software_models, launch_discussion, launch_projects, pick_directory, launch_settings, room_configuration, room_member, room_member_access, room_member_adapter, save_launch_projects, save_launch_settings } from '../runner/discussion_launch.mjs';
+import { adopt_member_profile, borrowed_session, cached_software_models, launch_discussion, launch_projects, pick_directory, launch_settings, room_configuration, room_member, room_member_access, room_member_adapter, save_launch_projects, save_launch_settings, expert_presets, save_expert_presets } from '../runner/discussion_launch.mjs';
 import { api, DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { DiscussionService, DiscussionWithQuestions, read_registry, register_room } from '../runner/discussion_service.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
@@ -100,6 +100,26 @@ test('project list keeps only named folders that exist on this computer', t => {
   assert.throws(() => save_launch_projects(home, { projects: [{ name: 'a', path: 'relative' }] }), /绝对路径/);
   assert.throws(() => save_launch_projects(home, { projects: [{ name: 'a', path: join(home, 'missing') }] }), /不存在此文件夹/);
   assert.deepEqual(launch_projects(home), saved);
+});
+
+test('expert presets and default descriptions are saved on this computer beside the built-in presets', t => {
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-presets-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const empty = expert_presets(home);
+  assert.deepEqual([empty.presets, empty.description_templates], [[], {}]);
+  assert.deepEqual(empty.builtin_presets.map(item => [item.name, item.project_access]), [['Codex-评审', 'read'], ['Gemini-文档', 'write']]);
+  const preset = { name: 'Claude-前端', description: '改 UI', system_prompt: '先给结论', project_access: 'write', model: 'opus' };
+  save_expert_presets(home, { presets: [preset] });
+  // Saving only the templates keeps the presets, and the other way round.
+  const saved = save_expert_presets(home, { description_templates: { Codex: '代码写得好' } });
+  assert.deepEqual([saved.presets, saved.description_templates], [[preset], { Codex: '代码写得好' }]);
+  assert.deepEqual(expert_presets(home).presets, [preset]);
+  assert.throws(() => save_expert_presets(home, { presets: [{ name: 'Codex-评审-2' }] }), /平台名-后缀/);
+  assert.throws(() => save_expert_presets(home, { presets: [preset, preset] }), /重复/);
+  assert.throws(() => save_expert_presets(home, { presets: [{ name: 'Codex', session_id: 'x' }] }), /只能包含/);
+  assert.throws(() => save_expert_presets(home, { presets: [{ name: 'Codex', project_access: 'all' }] }), /read 或 write/);
+  assert.throws(() => save_expert_presets(home, { description_templates: { 'Codex-评审': 'x' } }), /平台名/);
+  assert.deepEqual(expert_presets(home).presets, [preset]);
 });
 
 test('slow model catalogs are reused until the executable changes or the user retries', async t => {

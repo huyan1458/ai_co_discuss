@@ -5,6 +5,7 @@ import vm from "node:vm";
 import { computed, nextTick, reactive, ref, watch } from "vue";
 import { API_PROVIDERS } from "../runner/discussion_api.mjs";
 import { member_actions } from "../frontend/member-actions.js";
+import { format_duration, timeline_axis, timeline_rows, timeline_summary } from "../frontend/timeline-model.js";
 
 const source = readFileSync(new URL("../web/app.js", import.meta.url), "utf8").replace(/\nrestore_theme\(\);[\s\S]*$/, "");
 const discussion_source = readFileSync(new URL("../frontend/ChannelDiscussion.vue", import.meta.url), "utf8");
@@ -1904,7 +1905,8 @@ function participant_connection_fixture(status = "running") {
     + "\nglobalThis.connection_refs = { connection_open, connection_profile };", context);
   // The invite dialog is its own component; it shares the board's injected state.
   const dialog = vm.createContext({ computed, ref, watch, defineProps: () => ({}), defineModel: () => ref(false),
-    inject: () => ({ view, bridge: { launch_clients: {}, launch_can_bind_session: () => false, platform_of: (name) => name.split("-")[0] }, pending, act }) });
+    inject: () => ({ view, bridge: { launch_clients: {}, launch_can_bind_session: () => false, platform_of: (name) => name.split("-")[0],
+      unique_instance: (base, taken) => { let name = base; for (let number = 2; taken.has(name); number++) name = `${base}-${number}`; return name; } }, pending, act }) });
   const invite_dialog = readFileSync(new URL("../frontend/InviteDialog.vue", import.meta.url), "utf8");
   vm.runInContext(invite_dialog.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .*;$/gm, ""), dialog);
   return { context, dialog, view, calls, invites, controls, refs: context.connection_refs };
@@ -3581,4 +3583,33 @@ test("a local site applies the owner's profile without a login, session token or
   assert.equal(context.admin_snapshot().local, true);
   const denied = Object.assign(new Error("拒绝"), { status: 403 });
   assert.equal(context.management_error_message("one", denied), "拒绝");
+});
+
+test("the execution timeline nests dispatched work, places phases after delivery and folds long idle stretches", () => {
+  const second = 1_700_000_000;
+  const free = (id, parent_id, queued, dispatched, finished, segments = [], state = "done") => ({ source: "free", id, member: `M${id}`, role: parent_id ? "member" : "host",
+    status: state === "done" ? "completed" : state, state, queued_at: queued, dispatched_at: dispatched, started_at: 0, finished_at: finished, reason: "", parent_id, segments });
+  const timeline = { execution_limit: 100, segment_limit: 400, executions: [
+    free(2, 1, second + 10, second + 12, second + 40, [{ phase: "command", tool: "Bash", start_ms: 3000, end_ms: 9000 }]),
+    free(1, null, second, second + 1, second + 20, [{ phase: "thinking", tool: "", start_ms: 2000, end_ms: 5000 }]),
+    free(3, 99, second + 3600, second + 3601, 0, [], "running"),
+    { source: "discussion", id: 1, member: "Codex", role: "expert", status: "started", state: "running", queued_at: second + 3600, dispatched_at: second + 3602,
+      started_at: second + 3605, finished_at: 0, reason: "", parent_id: null, segments: [] },
+  ] };
+  const now = (second + 3610) * 1000;
+  const rows = timeline_rows(timeline, now);
+  assert.deepEqual(rows.map((row) => [row.key, row.depth]), [["free:1", 0], ["free:2", 1], ["discussion:1", 0], ["free:3", 0]]);
+  const first = rows[0];
+  assert.deepEqual(first.wake, [(second + 1) * 1000, (second + 3) * 1000], "without an enter, the first segment ends the wake, approximately");
+  assert.equal(first.wake_approx, true);
+  assert.deepEqual(rows[2].wake, [(second + 3602) * 1000, (second + 3605) * 1000]);
+  assert.equal(rows[3].end, now, "a running execution grows to now");
+  assert.equal(rows[3].wake, null, "no sign of work: the time after delivery is all work");
+  const axis = timeline_axis(rows);
+  assert.equal(axis.folds.length, 1, "the idle hour folds into one band");
+  assert.ok(axis.x((second + 40) * 1000) < axis.folds[0].from + 1e-9 && axis.x((second + 3600) * 1000) >= axis.folds[0].from + axis.folds[0].width - 1e-9);
+  assert.equal(axis.x(axis.end), 1);
+  const summary = timeline_summary(rows);
+  assert.deepEqual([summary.executions, summary.running, summary.tool_segments, summary.slowest.tool], [4, 2, 1, "Bash"]);
+  assert.deepEqual([format_duration(820), format_duration(6900), format_duration(185_000), format_duration(7_500_000)], ["820ms", "6.9s", "3m 05s", "2h 05m"]);
 });

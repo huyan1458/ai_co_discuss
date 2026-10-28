@@ -27,17 +27,18 @@ const invited_manual = ref([]);
 // Board errors from earlier actions stay out of the dialog until this invite is submitted.
 const invite_tried = ref(false);
 const invite_choices = computed(() => Object.keys(bridge.launch_clients));
+const invite_presets = computed(() => view.value && bridge.expert_presets());
 const taken_names = computed(() => (room.value.members || []).map((member) => member.name));
 const invite_count = (platform) => taken_names.value.filter((name) => bridge.platform_of(name) === platform).length;
 // Woken members join first so a manual member that has not registered yet never holds them up.
 const ordered_picks = computed(() => [...invite_picks.value.filter((pick) => pick.mode !== "manual"), ...invite_picks.value.filter((pick) => pick.mode === "manual")]);
 // Mirrors the instance names the invite assigns in join order, so each card says which seat it will take.
+// A preset pick already holds a free name of its own.
 const pick_instances = computed(() => {
-  const taken = [...taken_names.value];
+  const taken = new Set([...taken_names.value, ...invite_picks.value.filter((pick) => pick.preset).map((pick) => pick.name)]);
   return new Map(ordered_picks.value.map((pick) => {
-    let instance = pick.name;
-    for (let number = 2; taken.includes(instance); number++) instance = `${pick.name}-${number}`;
-    taken.push(instance);
+    const instance = pick.preset ? pick.name : bridge.unique_instance(pick.name, taken);
+    taken.add(instance);
     return [pick, instance];
   }));
 });
@@ -66,6 +67,13 @@ watch(() => room.value.id, () => { inviting.value = false; invite_picks.value = 
 function add_invite(name) {
   if (!bridge.launch_clients[name]?.some((item) => item.value !== "api") && !view.value.launch.profiles[name]?.adapter) bridge.write_launch(name, "adapter", "api");
   invite_picks.value = [...invite_picks.value, { id: ++invite_pick_seq, name, mode: "cli", session: "" }];
+}
+
+/** Add a preset's card under a name no member or other pick holds, set up from the preset. */
+function add_invite_preset(preset) {
+  const name = bridge.unique_instance(preset.name, new Set([...taken_names.value, ...invite_picks.value.map((pick) => pick_instances.value.get(pick) || pick.name)]));
+  bridge.apply_expert_preset(name, preset);
+  invite_picks.value = [...invite_picks.value, { id: ++invite_pick_seq, name, mode: "cli", session: "", preset: true }];
 }
 
 /** Invite one by one through the local service, which configures each expert from its card before the room admits it; stop at the first failure and keep the rest picked. */
@@ -113,6 +121,9 @@ async function invite() {
           <button v-for="name in invite_choices" :key="name" type="button" :aria-pressed="invite_picks.some((pick) => pick.name === name)" :title="invite_count(name) ? `已在场 ${invite_count(name)} 位 · 将添加新实例` : ''" @click="add_invite(name)">
             <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="3xs" class="channel-avatar" :class="bridge.identities[name]?.style" />{{ name }}
           </button>
+          <button v-for="(preset, index) in invite_presets" :key="`preset:${preset.name}`" type="button" :class="{ 'is-separated': index === 0 }" :title="preset.description || '专家预设'" :aria-label="`添加预设 ${preset.name}`" @click="add_invite_preset(preset)">
+            <UAvatar :src="bridge.identities[bridge.platform_of(preset.name)]?.icon" :text="bridge.identities[bridge.platform_of(preset.name)]?.initials" :alt="preset.name" size="3xs" class="channel-avatar" :class="bridge.identities[bridge.platform_of(preset.name)]?.style" />{{ preset.name }}
+          </button>
         </div>
         <div v-if="invite_picks.length" class="pb-invite-cards">
           <div v-for="pick in invite_picks" :key="pick.id" class="pb-invite-pick">
@@ -158,6 +169,9 @@ async function invite() {
 .pb-invite-library > button:hover { border-color: var(--ui-border-accented); background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); }
 .pb-invite-library > button[aria-pressed="true"] { border-color: color-mix(in srgb, var(--channel-accent) 55%, transparent); background: color-mix(in srgb, var(--channel-accent) 12%, transparent); color: var(--ui-text-highlighted); }
 .pb-invite-library .channel-avatar { flex-shrink: 0; width: 20px; height: 20px; font-size: 9px; }
+/* Presets follow the platforms after a divider, as in the create form's add row. */
+.pb-invite-library > button.is-separated { position: relative; margin-left: 13px; }
+.pb-invite-library > button.is-separated::before { position: absolute; left: -10px; top: 6px; bottom: 6px; width: 1px; background: var(--ui-border); content: ""; }
 .pb-invite-reserved { visibility: hidden; }
 .pb-invite-empty { margin: 0; padding: 18px 12px; border: 1px dashed var(--ui-border); border-radius: 8px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }
 .pb-invite-footer { display: flex; justify-content: flex-end; gap: 8px; }

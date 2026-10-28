@@ -74,7 +74,7 @@ state.directory_pending = new Map();
 state.directory_version = 0;
 state.navigation_version = 0;
 state.admin = { loaded: false, local: false, registered: false, setup_available: false, logged_in: false, profile: null, identity_version: 0 };
-state.launch = { available: false, remote: false, relay: null, connect_command: "", profiles: {}, projects: [], workspace: {}, scheduler: {}, create: true, error: "", notice: "", recoveries: [] };
+state.launch = { available: false, remote: false, relay: null, connect_command: "", profiles: {}, projects: [], presets: [], builtin_presets: [], description_templates: {}, workspace: {}, scheduler: {}, create: true, error: "", notice: "", recoveries: [] };
 const PLATFORM_CLIENTS = { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }],
   Claude: [{ value: "claude", label: "Claude Code CLI" }],
   Gemini: [{ value: "antigravity_cli", label: "Antigravity CLI" }, { value: "antigravity", label: "Antigravity App" }] };
@@ -1047,21 +1047,111 @@ function finish_member_request(room_id, token, record, result) {
   localStorage.removeItem(record.key);
 }
 
-// A member description tells the scheduler and the host what this member is good at. A template per platform lives in
-// this browser; a draft typed on a card overrides it for the room being created or the member being invited.
+// A member description tells the scheduler and the host what this member is good at. A template per platform lives on
+// the computer running the local service (this browser only without one); a draft typed on a card overrides it for the
+// room being created or the member being invited.
 const DESCRIPTION_TEMPLATE_PREFIX = "discuss-description-template:";
 const description_drafts = {};
 
+/** Templates this browser kept before they moved to the local service, by platform. */
+function browser_description_templates() {
+  const templates = {};
+  try {
+    for (let index = 0; index < localStorage.length; index++) {
+      const key = localStorage.key(index);
+      if (key?.startsWith(DESCRIPTION_TEMPLATE_PREFIX)) templates[key.slice(DESCRIPTION_TEMPLATE_PREFIX.length)] = localStorage.getItem(key);
+    }
+  } catch { /* Unreadable storage holds no templates. */ }
+  return templates;
+}
+
 /** This platform's saved description template, or "" when none. */
 function description_template(name) {
-  try { return localStorage.getItem(DESCRIPTION_TEMPLATE_PREFIX + platform_of(name)) || ""; } catch { return ""; }
+  if (state.launch.available) return state.launch.description_templates[platform_of(name)] || "";
+  return browser_description_templates()[platform_of(name)] || "";
 }
 
 /** Keep a platform's template; an empty text removes it. */
-function save_description_template(name, text) {
-  const key = DESCRIPTION_TEMPLATE_PREFIX + platform_of(name);
-  if (text.trim()) localStorage.setItem(key, text.trim()); else localStorage.removeItem(key);
+async function save_description_template(name, text) {
+  const platform = platform_of(name);
+  if (!state.launch.available) {
+    const key = DESCRIPTION_TEMPLATE_PREFIX + platform;
+    if (text.trim()) localStorage.setItem(key, text.trim()); else localStorage.removeItem(key);
+    return publish_view();
+  }
+  const { [platform]: _, ...rest } = state.launch.description_templates;
+  try { await save_presets({ description_templates: text.trim() ? { ...rest, [platform]: text.trim() } : rest }); }
+  catch (error) { show_toast(`默认描述未保存：${error.message}`, true); }
+}
+
+/** Move templates this browser kept into the local service once, so every browser on this computer sees them. */
+async function move_browser_description_templates() {
+  const kept = browser_description_templates();
+  if (!Object.keys(kept).length) return;
+  try {
+    await save_presets({ description_templates: { ...kept, ...state.launch.description_templates } });
+    for (const platform of Object.keys(kept)) localStorage.removeItem(DESCRIPTION_TEMPLATE_PREFIX + platform);
+  } catch (error) { console.warn("Moving description templates failed:", error.message); }
+}
+
+/** Save the user's presets and/or default descriptions in the local service and keep its answer. */
+async function save_presets(input) {
+  const result = await local_launch_request("presets", input);
+  Object.assign(state.launch, { presets: result.presets, description_templates: result.description_templates });
   publish_view();
+}
+
+// Expert presets: a named instance with its description, prompt and project access, added in one click.
+// The user's own preset replaces a built-in one of the same name.
+/** Every preset the add row offers: built-in ones first, then the user's. */
+function expert_presets() {
+  const own = new Set(state.launch.presets.map(preset => preset.name));
+  return [...state.launch.builtin_presets.filter(preset => !own.has(preset.name)), ...state.launch.presets];
+}
+
+/** A free instance name from a base: Claude → Claude-2, Codex-评审 → Codex-评审2. */
+function unique_instance(base, taken) {
+  if (!taken.has(base)) return base;
+  let number = 2;
+  while (taken.has(`${base}${base.includes("-") ? "" : "-"}${number}`)) number++;
+  return `${base}${base.includes("-") ? "" : "-"}${number}`;
+}
+
+/** Start an instance's card from its platform's software settings plus the preset's choices. */
+function apply_expert_preset(name, preset) {
+  const { session_id, system_prompt, ...base } = state.launch.profiles[platform_of(name)] || {};
+  const profile = { ...structuredClone(base), project_access: preset.project_access || "read" };
+  for (const field of ["model", "effort", "system_prompt"]) if (Object.hasOwn(preset, field)) profile[field] = preset[field];
+  state.launch.profiles[name] = profile;
+  description_drafts[name] = preset.description || "";
+  publish_view();
+}
+
+/** Add a preset to the new-room draft under a free name. */
+function add_preset_instance(container_id, preset, value) {
+  const name = unique_instance(preset.name, new Set(Object.keys(read_expert_inputs(container_id))));
+  apply_expert_preset(name, preset);
+  write_view_expert(container_id, name, value);
+  return name;
+}
+
+/** Save one card as the user's preset under its name, replacing an earlier preset of that name. */
+async function save_expert_preset(name) {
+  const profile = state.launch.profiles[name] || {};
+  const preset = { name, description: description_draft(name).trim(), project_access: profile.project_access || "read" };
+  for (const field of ["model", "effort", "system_prompt"]) if (Object.hasOwn(profile, field) && profile[field] !== "") preset[field] = profile[field];
+  try {
+    await save_presets({ presets: [...state.launch.presets.filter(item => item.name !== name), preset] });
+    show_toast(`已存为预设「${name}」`);
+  } catch (error) { show_toast(`预设未保存：${error.message}`, true); }
+}
+
+/** Remove the user's preset of this name; a built-in one of the same name shows again. */
+async function delete_expert_preset(name) {
+  try {
+    await save_presets({ presets: state.launch.presets.filter(item => item.name !== name) });
+    show_toast(`已删除预设「${name}」`);
+  } catch (error) { show_toast(`预设未删除：${error.message}`, true); }
 }
 
 /** The description a card currently shows: its own draft, else its platform's template. */
@@ -1091,6 +1181,18 @@ async function describe_member(name, text) {
     const token = localStorage.getItem(`discuss-access:${room_id}`);
     if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
     await request_json(`/api/rooms/${room_id}/descriptions`, { descriptions: { [name]: text } }, token);
+    if (state.room?.id === room_id) await refresh_room();
+  } catch (error) { state.free_error = error.message; throw error; }
+}
+
+/** Change how many requests AI may create from one owner message; chains still running follow the new value. */
+async function set_auto_hops(max_auto_hops) {
+  const room_id = state.room.id;
+  state.free_error = "";
+  try {
+    const token = localStorage.getItem(`discuss-access:${room_id}`);
+    if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
+    await request_json(`/api/rooms/${room_id}/budget`, { max_auto_hops }, token);
     if (state.room?.id === room_id) await refresh_room();
   } catch (error) { state.free_error = error.message; throw error; }
 }
@@ -1156,8 +1258,7 @@ async function invite_member({ name, access, project_access = "read", session_id
     const token = localStorage.getItem(`discuss-access:${room_id}`);
     if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
     const taken = new Set((state.room.free?.members || state.room.members || []).map(member => member.name));
-    let instance = name;
-    for (let number = 2; taken.has(instance); number++) instance = `${name}-${number}`;
+    const instance = unique_instance(name, taken);
     const record = prepare_member_request(room_id, `add:${name}:${access}`, { name: instance, access, adapter: "", session_mode: "new" }, { project_access, session_id: session_id.trim() });
     let result;
     if (access === "runner") {
@@ -1838,10 +1939,12 @@ async function load_launch_settings() {
     // Keep the saved machine defaults so every new form can start from them again.
     state.launch.saved_profiles = JSON.parse(JSON.stringify(settings.participants || {}));
     Object.assign(state.launch, { available: true, profiles: settings.participants, projects: settings.projects || [], api_providers: settings.api_providers || {}, api_keys: settings.api_keys || {},
+      presets: settings.presets || [], builtin_presets: settings.builtin_presets || [], description_templates: settings.description_templates || {},
       scheduler_providers: settings.scheduler_providers || {}, error: "",
       notice: local_connection ? "已连接本机服务，讨论保存在当前网站" : "" });
     Object.values(state.launch.profiles).forEach(fill_api_key);
     if (local_connection) pair_local_machine();
+    move_browser_description_templates();
     // Settings arrive after the form was reset; only an untouched draft gets the default.
     if (!Object.keys(state.launch.scheduler).length) state.launch.scheduler = default_scheduler();
     load_room_models();
@@ -3554,11 +3657,11 @@ function change_view_theme(theme) {
 }
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
-  write_launch: write_launch_field, description_template, save_description_template, description_draft, write_description_draft, describe_member, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
+  write_launch: write_launch_field, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_auto_hops, expert_presets, apply_expert_preset, unique_instance, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
   launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, check_launch_api, launch_summary, launch_can_set_access, launch_can_bind_session, pick_launch_directory, browse_local_directory, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
-  write_expert: write_view_expert, add_instance: add_view_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
+  write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form },
   request: request_json, identities: IDENTITIES, display_name, sources: SOURCE_LABELS, phases: PHASE_LABELS,

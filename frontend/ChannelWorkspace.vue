@@ -9,6 +9,7 @@ import ProgressBoard from "./ProgressBoard.vue";
 import FreeBoard from "./FreeBoard.vue";
 import DiscussionHistory from "./DiscussionHistory.vue";
 import RoomOverview from "./RoomOverview.vue";
+import ExecutionTimeline from "./ExecutionTimeline.vue";
 import StartDiscussionDialog from "./StartDiscussionDialog.vue";
 
 const { view, bridge, field, act, pending } = inject("discussion");
@@ -88,11 +89,12 @@ onMounted(() => {
 onBeforeUnmount(() => topbar_observer?.disconnect());
 onBeforeUnmount(() => document.removeEventListener("pointerdown", collapse_brief_outside));
 const selected_tab = computed({ get: () => view.value.tab, set: (value) => act("tab", value) });
-/** The same three tools in every room; each page shows only the parts that apply to the room's current mode. */
+/** The same four tools in every room; each page shows only the parts that apply to the room's current mode. */
 const tabs = [
   { value: "discussion", label: "消息", icon: "i-lucide-message-square" },
   { value: "history", label: "讨论", icon: "i-lucide-messages-square" },
-  { value: "overview", label: "房间概况", icon: "i-lucide-sliders-horizontal" },
+  { value: "overview", label: "房间", icon: "i-lucide-sliders-horizontal" },
+  { value: "timeline", label: "执行", icon: "i-lucide-chart-gantt" },
 ];
 // The consensus, host and access pages were merged in; links and actions that still open them land on the merged page.
 const MERGED_TABS = { context: "history", topic: "history", access: "overview" };
@@ -352,9 +354,12 @@ function resize_nav_by_key(event) {
           <DiscussionHistory @detail="open_detail" />
           <StartDiscussionDialog v-model:open="starting_discussion" />
         </div>
-        <div v-if="view.tab === 'overview'" class="content-page merged-page" role="tabpanel" aria-label="房间概况">
+        <div v-if="view.tab === 'overview'" class="content-page merged-page" role="tabpanel" aria-label="房间">
           <RoomOverview />
           <TopicPanel v-if="!free_room" section="access" @open="modal = $event" @detail="open_detail" />
+        </div>
+        <div v-if="view.tab === 'timeline'" class="content-page merged-page" role="tabpanel" aria-label="执行">
+          <ExecutionTimeline />
         </div>
         </div>
       </div>

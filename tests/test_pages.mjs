@@ -1275,6 +1275,13 @@ test('Worker free rooms keep runner lifecycle, membership and manual members con
   assert.equal((await f.request(r.path)).body.free.members.find(item => item.name === 'Claude').execution.notes, 2);
   assert.deepEqual((await f.request(`${r.path}/executions/${retry.id}/notes`)).body.notes.map(note => note.text), ['读完材料', '开始验证']);
   assert.equal((await f.request(`${r.path}/executions/${retry.id}`, { action: 'renew', notes: [{ seq: 51, text: 'x' }] }, r.owner)).status, 400);
+  const segments = [{ seq: 1, phase: 'thinking', start_ms: -50, end_ms: 400 }, { seq: 2, phase: 'command', tool: 'Bash', start_ms: 400, end_ms: 10 ** 9 }];
+  for (let index = 0; index < 2; index++) assert.equal((await f.request(`${r.path}/executions/${retry.id}`, { action: 'segments', segments }, r.owner)).status, 200);
+  assert.equal((await f.request(`${r.path}/executions/${retry.id}`, { action: 'segments', segments: [{ seq: 3, phase: 'sleeping', start_ms: 0, end_ms: 1 }] }, r.owner)).status, 400);
+  const timed = (await f.request(`${r.path}/timeline`)).body.executions.find(item => item.source === 'free' && item.id === retry.id);
+  assert.equal(timed.state, 'running');
+  assert.deepEqual(timed.segments.map(item => [item.phase, item.tool, item.start_ms]), [['thinking', '', 0], ['command', 'Bash', 400]]);
+  assert.ok(timed.segments[1].end_ms <= (Math.floor(Date.now() / 1000) - timed.dispatched_at + 1) * 1000, 'segments stay within the execution');
   assert.equal((await f.request(`${r.path}/executions/${retry.id}`, { action: 'fail', reason: 'CLI 退出' }, r.owner)).body.status, 'failed');
   assert.equal((await f.request(r.path)).body.phase, 'discussing');
   const gemini = 'gemini-free'.repeat(4);
@@ -1292,7 +1299,7 @@ test('Worker free rooms keep runner lifecycle, membership and manual members con
   assert.equal((await f.request(`${r.path}/members/${codex_id}`, { action: 'remove' }, r.owner)).status, 200);
   assert.deepEqual((await f.request(r.path)).body.experts, { Claude: 'cli', Gemini: 'cli' });
   assert.equal((await f.request(`${r.path}/delete`, { actor: '用户', confirm_title: '自由协作' }, r.owner)).status, 200);
-  for (const table of ['room_modes', 'room_members', 'member_requests', 'member_executions']) {
+  for (const table of ['room_modes', 'room_members', 'member_requests', 'member_executions', 'execution_segments']) {
     assert.equal(f.sql.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count, 0, table);
   }
 });
@@ -1371,6 +1378,29 @@ test('Worker free hosts route, dispatch, hand back once and stop at the chain bu
   assert.equal((await f.request(`${r.path}/members/${await r.member_id('Codex')}`, { action: 'role', role: 'member' }, r.owner)).status, 400);
   await f.request(`${r.path}/members/${await r.member_id('Codex')}`, { action: 'away' }, r.owner);
   assert.equal((await f.request(r.path)).body.host, 'Claude');
+});
+
+test('Worker hands a single dispatch back and follows the owner chain budget, like Python', async t => {
+  const f = await worker_fixture(t);
+  const codex = 'codex-hops'.repeat(4), gemini = 'gemini-hops'.repeat(4);
+  const r = await free_worker_room(f, [{ name: 'Codex', token: codex }, { name: 'Gemini', token: gemini }]);
+  const tokens = { Claude: r.claude, Codex: codex, Gemini: gemini };
+  await f.request(`${r.path}/members/${await r.member_id('Claude')}`, { action: 'role', role: 'host' }, r.owner);
+  const requests = async () => (await f.request(r.path)).body.free.requests.map(item => [item.member, item.purpose, item.status]);
+  const work = async (name, extra = {}) => assert.equal((await r.answer((await r.reserve(name)).body.id, tokens[name], name, extra)).status, 201);
+  const url = `${r.path}/budget`;
+  assert.equal((await f.request(r.path)).body.free.max_auto_hops, 8);
+  assert.equal((await f.request(url, { max_auto_hops: 3 }, r.claude)).status, 403);
+  for (const bad of [0, 51, '3', 2.5]) assert.equal((await f.request(url, { max_auto_hops: bad }, r.owner)).status, 400);
+  await r.say('单人派活');
+  await work('Claude', { to: ['Codex'] });
+  await work('Codex');
+  assert.deepEqual((await requests()).filter(item => item[1] === 'handoff'), [['Claude', 'handoff', 'pending']]);
+  assert.deepEqual((await f.request(url, { max_auto_hops: 3 }, r.owner)).body, { max_auto_hops: 3 });
+  // Dispatch and hand-off used 2 of 3; two more members would exceed the budget.
+  await work('Claude', { to: ['Codex', 'Gemini'] });
+  const free = (await f.request(r.path)).body.free;
+  assert.deepEqual([free.max_auto_hops, free.halted_chains.map(item => item.reason)], [3, ['budget']]);
 });
 
 test('Worker smart scheduling asks everyone without a hand-off, or no one, like Python', async t => {

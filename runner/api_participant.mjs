@@ -203,7 +203,7 @@ async function run_participant(profile, key, context) {
     const results = [];
     for (const call of calls) {
       context.signal.throwIfAborted();
-      context.on_activity?.('tool');
+      context.on_activity?.('tool', String(call.name || ''));
       const outcome = await execute_tool(context, call, definitions);
       if (outcome.terminal) return;
       results.push({ ...call, result: outcome.result });

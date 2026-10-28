@@ -168,6 +168,22 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.request(self.path + f"/events/{event['id']}", {"action": "renew"}, self.owner)[0], 200)
         self.assertEqual(self.server.update_version, previous)
 
+    def test_discussion_segments_come_from_the_runner_quietly_and_reach_the_timeline(self):
+        """Only the run controller reports a discussion execution's segments; they wake no page and join the timeline."""
+        self.start()
+        event = self.events()[0]
+        path = self.path + f"/events/{event['id']}"
+        segments = [{"seq": 1, "phase": "tool", "tool": "Read", "start_ms": 0, "end_ms": 300}]
+        self.assertEqual(self.request(path, {"action": "segments", "segments": segments}, self.owner)[0], 409, "an undelivered execution takes none")
+        token = self.enter(event)
+        self.assertEqual(self.request(path, {"action": "segments", "segments": segments}, token)[0], 403)
+        previous = getattr(self.server, "update_version", None) if hasattr(self, "server") else None
+        self.assertEqual(self.request(path, {"action": "segments", "segments": segments}, self.owner)[0], 200)
+        if previous is not None:
+            self.assertEqual(self.server.update_version, previous)
+        item = next(row for row in self.request(self.path + "/timeline")[1]["executions"] if row["source"] == "discussion" and row["id"] == event["id"])
+        self.assertEqual((item["state"], item["segments"][0]["tool"]), ("running", "Read"))
+
     def events(self):
         """Read the durable inbox using its room owner capability."""
         return self.request(self.path + "/events", token=self.owner)[1]["events"]

@@ -17,11 +17,29 @@ import time
 import uuid
 
 from .identity import MAX_ROOM_AGENTS, is_ai
-from .runtime import LEASE_SECONDS, begin_write, require_owner, token_hash
+from .runtime import LEASE_SECONDS, MAX_EXECUTION_SEGMENTS, begin_write, require_owner, save_segments, token_hash
 
 FREE_EXECUTION_MINUTES = 20
 RECENT_REQUESTS = 100
 RECENT_EXECUTIONS = 100
+# The timeline page reads this many recent executions of each kind.
+TIMELINE_EXECUTIONS = 100
+TIMELINE_STATES = {"completed": "done", "failed": "failed", "cancelled": "cancelled"}
+TIMELINE_SQL = """SELECT * FROM (SELECT 'free' AS source,e.id,m.name AS member,m.role,e.status,
+        COALESCE((SELECT MIN(r.created_at) FROM member_requests r WHERE r.execution_id=e.id),e.created_at) AS queued_at,
+        e.created_at AS dispatched_at,0 AS started_at,e.finished_at,
+        CASE WHEN e.status='failed' THEN e.result ELSE '' END AS reason,
+        (SELECT parent.execution_id FROM member_requests r JOIN member_requests parent ON parent.answer_id=r.message_id
+            WHERE r.execution_id=e.id AND parent.execution_id IS NOT NULL ORDER BY r.id LIMIT 1) AS parent_id
+    FROM member_executions e JOIN room_members m ON m.id=e.member_id WHERE e.room_id=? ORDER BY e.id DESC LIMIT ?)
+UNION ALL SELECT * FROM (SELECT 'discussion',e.id,e.participant,e.role,e.status,CAST(strftime('%s',e.created_at) AS INTEGER),
+        COALESCE(t.dispatched_at,0),e.started_at,COALESCE(t.finished_at,0),CASE WHEN e.status='failed' THEN e.result ELSE '' END,NULL
+    FROM discussion_events e LEFT JOIN event_timings t ON t.event_id=e.id
+    WHERE e.room_id=? AND (t.dispatched_at>0 OR e.status='pending') ORDER BY e.id DESC LIMIT ?)"""
+TIMELINE_SEGMENTS_SQL = """SELECT source,execution_id,phase,tool,start_ms,end_ms FROM execution_segments WHERE room_id=? AND (
+    (source='free' AND execution_id IN (SELECT id FROM member_executions WHERE room_id=? ORDER BY id DESC LIMIT ?))
+    OR (source='discussion' AND execution_id IN (SELECT id FROM discussion_events WHERE room_id=? ORDER BY id DESC LIMIT ?)))
+    ORDER BY source,execution_id,seq"""
 RECENT_CHANGES = 50
 MAX_CHANGED_FILES = 200
 # What a member's software last showed it doing, as reported by the runner with each renewal.
@@ -40,8 +58,10 @@ SCHEDULER_PROVIDERS = ("jev", "decisions")
 RECOMMEND_SECONDS = 60
 # A click sent just before the hint disappears still counts.
 RECOMMEND_GRACE_SECONDS = 5
-# AI-created requests (host dispatches and hand-offs) allowed per chain; each owner message starts a chain.
+# AI-created requests (host dispatches and hand-offs) allowed per chain by default; each owner message starts a chain.
 MAX_AUTO_HOPS = 8
+# The most an owner may allow per chain.
+MAX_AUTO_HOPS_LIMIT = 50
 # A host that left gives up the role; the first active runner member (else manual) then takes it.
 RELEASE_HOST = "UPDATE room_members SET role='member' WHERE room_id=? AND role='host' AND status<>'active'"
 ASSIGN_HOST = """UPDATE room_members SET role='host' WHERE id=(SELECT id FROM room_members WHERE room_id=? AND status='active'
@@ -237,6 +257,27 @@ def execution_notes(connection, room_id, execution_id):
         "SELECT seq,text,created_at FROM execution_notes WHERE execution_id=? ORDER BY seq", (execution_id,))]}
 
 
+def execution_timeline(connection, room_id):
+    """Read the room's recent executions of both kinds with their recorded phase segments, for the timeline page.
+
+    Times are epoch seconds and segments are millisecond offsets from `dispatched_at`. A free execution's parent is the
+    execution that wrote the message it answers; discussion executions have none. `state` is running, done, failed
+    or cancelled, so the page never interprets execution statuses itself.
+    """
+    if not connection.execute("SELECT 1 FROM rooms WHERE id=?", (room_id,)).fetchone():
+        raise LookupError("房间不存在")
+    rows = [dict(row) for row in connection.execute(TIMELINE_SQL, (room_id, TIMELINE_EXECUTIONS, room_id, TIMELINE_EXECUTIONS))]
+    segments = {}
+    for row in connection.execute(TIMELINE_SEGMENTS_SQL, (room_id, room_id, TIMELINE_EXECUTIONS, room_id, TIMELINE_EXECUTIONS)):
+        segments.setdefault((row["source"], row["execution_id"]), []).append(
+            {key: row[key] for key in ("phase", "tool", "start_ms", "end_ms")})
+    for row in rows:
+        row["state"] = TIMELINE_STATES.get(row["status"], "running")
+        row["segments"] = segments.get((row["source"], row["id"]), [])
+    return {"now": int(time.time()), "executions": rows, "execution_limit": TIMELINE_EXECUTIONS,
+            "segment_limit": MAX_EXECUTION_SEGMENTS}
+
+
 def recent_executions(connection, room_id):
     """Return bounded public reports, including requests no longer in the recent request list."""
     rows = connection.execute("""SELECT e.*,
@@ -308,7 +349,7 @@ def free_view(connection, room_id):
     chains = [dict(row) for row in connection.execute(
         "SELECT chain_id,reason FROM free_chains WHERE room_id=? ORDER BY chain_id DESC LIMIT 10", (room_id,))]
     return {"members": members, "requests": requests[::-1], "executions": recent_executions(connection, room_id), "execution_minutes": execution_minutes(connection, room_id),
-            "conflicts": possible_conflicts(connection, room_id, names), "halted_chains": chains, "max_auto_hops": MAX_AUTO_HOPS,
+            "conflicts": possible_conflicts(connection, room_id, names), "halted_chains": chains, "max_auto_hops": auto_hops(connection, room_id),
             "recommendations": recent_recommendations(connection, room_id, now)[::-1]}
 
 
@@ -573,7 +614,25 @@ def chain_budget(connection, room_id, chain_id):
         return 0
     used = connection.execute("SELECT COUNT(*) FROM member_requests WHERE room_id=? AND chain_id=? AND created_by='host'",
                               (room_id, chain_id)).fetchone()[0]
-    return MAX_AUTO_HOPS - used
+    return auto_hops(connection, room_id) - used
+
+
+def auto_hops(connection, room_id):
+    """AI-created requests allowed per chain in this room."""
+    row = connection.execute("SELECT max_auto_hops FROM free_settings WHERE room_id=?", (room_id,)).fetchone()
+    return row[0] if row else MAX_AUTO_HOPS
+
+
+def set_auto_hops(connection, room_id, token, payload):
+    """Owner sets the room's chain budget; it applies to chains still running and to later ones."""
+    require_owner(connection, room_id, token)
+    value = payload.get("max_auto_hops")
+    if type(value) is not int or not 1 <= value <= MAX_AUTO_HOPS_LIMIT:
+        raise ValueError(f"max_auto_hops 须为 1–{MAX_AUTO_HOPS_LIMIT} 的整数")
+    begin_write(connection)
+    connection.execute("""INSERT INTO free_settings (room_id,max_auto_hops) VALUES (?,?)
+        ON CONFLICT(room_id) DO UPDATE SET max_auto_hops=excluded.max_auto_hops""", (room_id, value))
+    return {"max_auto_hops": value}
 
 
 def dispatch(connection, room_id, host, message_id, names, chain_id):
@@ -601,8 +660,7 @@ def settle_batches(connection, room_id):
         host = connection.execute("SELECT * FROM room_members WHERE id=? AND status='active' AND role='host'", (batch["host_id"],)).fetchone()
         if "completed" not in statuses:
             halt_chain(connection, room_id, batch["chain_id"], "all_failed")
-        elif not host or len(statuses) < 2:
-            # One member's answer already reaches the user; only several answers need the host to put them together.
+        elif not host:
             continue
         elif chain_budget(connection, room_id, batch["chain_id"]) < 1:
             halt_chain(connection, room_id, batch["chain_id"], "budget")
@@ -1123,6 +1181,10 @@ def execution_action(connection, room_id, execution_id, token, payload):
         if row["changes"]:
             raise FileExistsError("本次执行的改动已记录")
         connection.execute("UPDATE member_executions SET changes=? WHERE id=?", (json.dumps(changed_files(payload), ensure_ascii=False), execution_id))
+    elif action == "segments":
+        # The last segments arrive after the member's answer ended the execution.
+        finished = 0 if row["status"] in ACTIVE else (row["finished_at"] or 1)
+        save_segments(connection, "free", room_id, execution_id, row["created_at"], finished, payload)
     elif row["status"] not in ACTIVE:
         raise FileExistsError("执行已结束")
     elif action == "renew":
@@ -1143,7 +1205,7 @@ def execution_action(connection, room_id, execution_id, token, payload):
         # Only for proven non-delivery: the requests return to the queue unchanged.
         finish_execution(connection, execution_id, "cancelled", str(payload.get("reason") or "未送达"), "pending")
     else:
-        raise ValueError("action 须为 renew、fail、release 或 report")
+        raise ValueError("action 须为 renew、fail、release、report 或 segments")
     return execution_detail(connection, connection.execute("SELECT * FROM member_executions WHERE id=?", (execution_id,)).fetchone())
 
 

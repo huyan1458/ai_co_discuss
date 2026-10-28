@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { agy_command_rule, atomic_json, deliver_task, remove_agy_projects, setup_sidecar, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
+import { agy_command_rule, atomic_json, deliver_task, remove_agy_projects, SegmentLog, setup_sidecar, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
 import { read_api_key } from './discussion_api.mjs';
 import { with_expert_prompt } from './expert_prompts.mjs';
 import { decide_interjection, decide_next_speaker, decide_round, validate_scheduler } from './scheduler.mjs';
@@ -25,6 +25,8 @@ function windows_rg() {
 const AUTO_ENTER_ADAPTERS = new Set(['codex_cli', 'claude', 'antigravity_cli']);
 const DELIVERY_RETRY_DELAYS_MS = [2000, 4000];
 const RENEW_MS = 30_000;
+/** Recorded phase segments are reported no more often than this while an execution runs. */
+const ACTIVITY_REPORT_MS = 10_000;
 const ADAPTER_NAMES = ['codex', 'claude', 'antigravity', 'codex_cli', 'antigravity_cli', 'api'];
 export const CODEX_ADAPTERS = ['codex', 'codex_cli'];
 const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -257,6 +259,7 @@ export class DiscussionRunner {
     this.seen = new Set();
     this.blocked = new Set();
     this.fetch = fetch_impl;
+    this.segments = new SegmentLog();
   }
   /** Append one timestamped stage to the event's trace file when CODISCUSS_TRACE=1; tracing must never affect delivery. */
   trace(id, stage, detail = {}) {
@@ -290,6 +293,7 @@ export class DiscussionRunner {
     try {
       const task = task_files(this.config, event, row.token, binding, { suggestions, entered: pre_entered, process_access: true });
       invoked = true;
+      this.segments.start(row.id);
       const result = await this.deliver(adapter, binding, { ...task, room_title: this.room_title,
         api_context: { site: this.config.site, room: this.config.room, token: row.token, home: this.config.api_home,
           event_id: row.id, role: event.role, turn_id: event.turn_id, scheduler_suggestions: suggestions, entered: pre_entered },
@@ -300,7 +304,8 @@ export class DiscussionRunner {
           if (AUTO_ENTER_ADAPTERS.has(adapter.adapter) && !entered) { entered = true; this.enter(row, session); }
         },
         on_process: child => this.track(event.participant, child),
-        on_output: (path, chunk) => appendFileSync(path, chunk, { mode: 0o600 }),
+        on_output: (path, chunk) => { appendFileSync(path, chunk, { mode: 0o600 }); this.segments.mark(row.id); },
+        on_activity: (phase, tool) => this.segments.mark(row.id, phase, tool),
         on_failure: error => { try { this.store.record(row.id, { error }); } catch { /* Store may already be closed at shutdown. */ } },
         on_exit: detail => this.exited.set(row.id, detail || ''),
       });
@@ -479,6 +484,7 @@ export class DiscussionRunner {
   async reconcile(row, event) {
     if (['completed', 'cancelled', 'failed'].includes(event.status)) {
       this.store.record(row.id, { status: event.status });
+      await this.report_segments(row.id, true);
       return;
     }
     // No app call occurs before dispatching is persisted. Reconcile a reserve response loss safely.
@@ -520,10 +526,16 @@ export class DiscussionRunner {
       }
       this.store.record(row.id, { status: 'started', last_renew: Date.now(), error: '' });
     }
+    if (this.segments.due(row.id, ACTIVITY_REPORT_MS)) await this.report_segments(row.id);
+  }
+  /** Send the execution's recorded phase segments; `final` sends the rest once it has ended. */
+  report_segments(id, final = false) {
+    return this.segments.report(id, final, segments => api(this.config, `/events/${id}`, { action: 'segments', segments }));
   }
   /** Preserve the cause on the website and revoke work before asking for intervention. */
   async fail(row, reason) {
     this.log(`执行 #${row.id} 失败：${reason}`);
+    await this.report_segments(row.id, true);
     try { await api(this.config, `/events/${row.id}`, { action: 'fail', reason }); }
     catch (error) {
       if (!/HTTP 409/.test(error.message)) throw error;

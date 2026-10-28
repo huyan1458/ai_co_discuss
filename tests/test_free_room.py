@@ -311,6 +311,31 @@ class FreeRoomTests(unittest.TestCase):
         self.assertEqual(self.request(self.path)[1]["free"]["executions"][0]["notes"], 2)
         self.assertEqual(self.request(f"{self.path}/executions/999/notes")[0], 404)
 
+    def test_phase_segments_reach_the_timeline_within_the_execution(self):
+        """Segments are kept once per number with the later end, bounded by the execution, also just after it ends."""
+        self.say("一")
+        execution = self.reserve()[1]
+        path = f"{self.path}/executions/{execution['id']}"
+        segments = [{"seq": 1, "phase": "thinking", "start_ms": -50, "end_ms": 400},
+                    {"seq": 2, "phase": "command", "tool": "Bash", "start_ms": 400, "end_ms": 900}]
+        self.assertEqual(self.request(path, {"action": "segments", "segments": segments}, self.owner)[0], 200)
+        self.assertEqual(self.request(path, {"action": "segments", "segments": segments}, self.member)[0], 403)
+        later = {"seq": 2, "phase": "command", "tool": "Bash", "start_ms": 400, "end_ms": 10 ** 9}
+        self.assertEqual(self.request(path, {"action": "segments", "segments": [later]}, self.owner)[0], 200)
+        for bad in ([], [{"seq": 401, "phase": "tool", "start_ms": 0, "end_ms": 1}], [{"seq": 3, "phase": "sleeping", "start_ms": 0, "end_ms": 1}],
+                    [{"seq": 3, "phase": "tool", "tool": "x" * 61, "start_ms": 0, "end_ms": 1}], [{"seq": 3, "phase": "tool", "start_ms": 0}], "x"):
+            self.assertEqual(self.request(path, {"action": "segments", "segments": bad}, self.owner)[0], 400, bad)
+        self.assertEqual(self.answer(execution["id"])[0], 201)
+        self.assertEqual(self.request(path, {"action": "segments", "segments": [{"seq": 3, "phase": "writing", "start_ms": 900, "end_ms": 950}]}, self.owner)[0], 200)
+        status, body = self.request(f"{self.path}/timeline")
+        self.assertEqual(status, 200, body)
+        item = body["executions"][0]
+        self.assertEqual((item["source"], item["member"], item["state"]), ("free", "Claude", "done"))
+        span = (item["finished_at"] - item["dispatched_at"] + 1) * 1000
+        self.assertEqual([(s["phase"], s["tool"], s["start_ms"]) for s in item["segments"]], [("thinking", "", 0), ("command", "Bash", 400), ("writing", "", 900)])
+        self.assertTrue(900 < item["segments"][1]["end_ms"] <= span, "a later end is kept but never past the execution")
+        self.assertEqual(self.request(f"{self.path.rsplit('/', 1)[0]}/missing-room/timeline")[0], 404)
+
     def test_owner_describes_members_for_everyone_to_read(self):
         """Descriptions are set by name with the owner credential, read in the room view, and cleared by empty text."""
         path = f"{self.path}/descriptions"
@@ -791,12 +816,28 @@ class HostTests(FreeRoomTests):
         finally:
             free_room.MAX_AUTO_HOPS = original
 
-    def test_single_member_dispatch_is_not_handed_back(self):
-        """One member's answer goes straight to the user; the host is woken again only when several answered."""
+    def test_single_member_dispatch_hands_back_to_the_host(self):
+        """One dispatched member's answer also returns to the host, so it can send the work on, e.g. to a reviewer."""
         FreeRoomTests.say(self, "单人派活")
         self.work("Claude", to=["Codex"])
         self.work("Codex")
-        self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 0)
+        self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 1)
+
+    def test_owner_sets_the_room_chain_budget(self):
+        """Only the owner changes the budget, within its range; running chains follow the new value."""
+        url = f"{self.path}/budget"
+        self.assertEqual(self.request(self.path)[1]["free"]["max_auto_hops"], 8)
+        self.assertEqual(self.request(url, {"max_auto_hops": 3}, self.member)[0], 403)
+        for bad in (0, 51, "3", 2.5):
+            self.assertEqual(self.request(url, {"max_auto_hops": bad}, self.owner)[0], 400)
+        FreeRoomTests.say(self, "预算")
+        self.work("Claude", to=["Codex", "Gemini"])
+        status, saved = self.request(url, {"max_auto_hops": 2}, self.owner)
+        self.assertEqual((status, saved), (200, {"max_auto_hops": 2}))
+        self.work("Codex")
+        self.work("Gemini")
+        free = self.request(self.path)[1]["free"]
+        self.assertEqual((free["max_auto_hops"], [item["reason"] for item in free["halted_chains"]]), (2, ["budget"]))
 
     def test_smart_scheduling_asks_everyone_or_no_one(self):
         """Everyone answers once without a hand-off and the host may not dispatch; no one cancels the host's request."""

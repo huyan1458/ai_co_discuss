@@ -16,6 +16,13 @@ LIMITS_SQL = """SELECT limits.*,COALESCE(pauses.paused_seconds,0)+CASE WHEN COAL
     THEN MAX(0,CAST(strftime('%s','now') AS INTEGER)-pauses.paused_at) ELSE 0 END AS idle_seconds
     FROM discussion_limits AS limits LEFT JOIN discussion_pauses AS pauses USING(room_id) WHERE limits.room_id=?"""
 TIMING_ITEMS = 20
+# Phase segments the runner reports for the execution timeline: the phases, how many one execution keeps and one report
+# carries, a tool name's length, and how long after its end an execution still takes its last report.
+SEGMENT_PHASES = ("thinking", "command", "tool", "editing", "writing")
+MAX_EXECUTION_SEGMENTS = 400
+MAX_SEGMENTS_PER_REPORT = 40
+MAX_SEGMENT_TOOL = 60
+SEGMENT_GRACE_SECONDS = 600
 # Queue: created -> dispatched; wake: dispatched -> entered; work: entered -> finished. Open stages run to now.
 TIMING_SQL = """SELECT e.id,e.participant,e.role,e.cause,e.status,
     MAX(0,CASE WHEN t.dispatched_at>0 THEN t.dispatched_at ELSE ? END-CAST(strftime('%s',e.created_at) AS INTEGER)) AS queue_seconds,
@@ -30,6 +37,33 @@ def token_hash(token):
     if not isinstance(token, str) or not 32 <= len(token) <= 256:
         return ""
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def save_segments(connection, source, room_id, execution_id, anchor, finished, payload):
+    """Record an execution's phase segments as millisecond offsets from its delivery at `anchor`.
+
+    The runner measures them on its own clock, so they are kept within the execution's own span; `finished` is 0 while
+    it runs. A resent segment keeps the later end, so the open segment can be reported again as it runs on.
+    """
+    now = int(time.time())
+    if finished and finished + SEGMENT_GRACE_SECONDS < now:
+        raise FileExistsError("执行已结束较久，不再接收阶段记录")
+    segments = payload.get("segments")
+    if (not isinstance(segments, list) or not 0 < len(segments) <= MAX_SEGMENTS_PER_REPORT or any(
+            not isinstance(item, dict) or type(item.get("seq")) is not int or not 1 <= item["seq"] <= MAX_EXECUTION_SEGMENTS
+            or item.get("phase") not in SEGMENT_PHASES or not isinstance(item.get("tool", ""), str)
+            or len(item.get("tool", "")) > MAX_SEGMENT_TOOL or type(item.get("start_ms")) is not int
+            or type(item.get("end_ms")) is not int for item in segments)):
+        raise ValueError(f"segments 须为 1–{MAX_SEGMENTS_PER_REPORT} 段 {{seq: 1–{MAX_EXECUTION_SEGMENTS}, "
+                         f"phase: {'、'.join(SEGMENT_PHASES)}, tool: 最多 {MAX_SEGMENT_TOOL} 字, start_ms, end_ms}}")
+    limit = max(0, (finished or now) - anchor + 1) * 1000
+    rows = []
+    for item in segments:
+        start = min(max(item["start_ms"], 0), limit)
+        rows.append((source, execution_id, item["seq"], room_id, item["phase"], item.get("tool", ""), start,
+                     min(max(item["end_ms"], start), limit)))
+    connection.executemany("""INSERT INTO execution_segments (source,execution_id,seq,room_id,phase,tool,start_ms,end_ms)
+        VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(source,execution_id,seq) DO UPDATE SET end_ms=MAX(end_ms,excluded.end_ms)""", rows)
 
 
 def begin_write(connection):
@@ -324,6 +358,16 @@ def event_action(connection, room_id, event_id, token, payload):
     if not controller and (not token_hash(token) or token_hash(token) != event["token_hash"]):
         raise PermissionError("执行凭据无效")
     if action == "view":
+        return {key: event[key] for key in PUBLIC_EVENT_FIELDS}
+    if action == "segments":
+        # A timeline report comes from the runner, also just after the execution ended or its run stopped.
+        if not controller:
+            raise PermissionError("需要本房间的运行控制凭据")
+        timing = connection.execute("SELECT dispatched_at,finished_at FROM event_timings WHERE event_id=?", (event_id,)).fetchone()
+        if not timing or not timing["dispatched_at"]:
+            raise FileExistsError("执行尚未交付")
+        finished = 0 if event["status"] in ("dispatched", "started") else (timing["finished_at"] or 1)
+        save_segments(connection, "discussion", room_id, event_id, timing["dispatched_at"], finished, payload)
         return {key: event[key] for key in PUBLIC_EVENT_FIELDS}
     if run["status"] != "running" or 0 < run["deadline"] <= now or event["generation"] != run["generation"]:
         raise FileExistsError("本次运行已停止或执行已过期")

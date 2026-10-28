@@ -13,7 +13,7 @@ import { atomic_json } from './discussion_adapters.mjs';
 import { software_defaults, software_effort, software_models } from './discussion_models.mjs';
 import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
-import { MAX_EXPERT_PROMPT } from './expert_prompts.mjs';
+import { BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT } from './expert_prompts.mjs';
 import { acquire_lock, api, CODEX_ADAPTERS, DiscussionStore, service_drafts, task_files, validate_config } from './discussion_runner.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 
@@ -58,6 +58,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch room-restore --file FILE
       codiscuss launch pick-directory
       codiscuss launch projects [--file FILE]
+      codiscuss launch presets [--file FILE]
       codiscuss launch machine-link --file FILE
 
 settings 读取本机软件默认配置；指定文件时保存，不启动 AI。
@@ -70,6 +71,7 @@ api-check 用 API profile 向模型发送一次极短请求，核对地址、密
 scheduler-check 用智能调度配置（provider、model、api_key_ref）向决策模型发送一道是非题，核对供应商、模型与密钥是否可用。
 pick-directory 在本机弹出系统目录选择窗口，返回所选路径；取消时不返回路径。
 projects 读取本机已配置的项目（名称与绝对路径）；提供 JSON（projects 列表）时整体替换保存。
+presets 读取本机的专家预设（含内置预设）与各平台默认描述；提供 JSON（presets 列表和/或 description_templates）时替换对应部分。
 machine-link 返回本机连接指定 site 的电脑编号、名称与凭据，供已登录管理员的网页完成配对；不存在时创建。
 room-member 为运行中的自由房间或讨论邀请、请回一位成员（讨论只接受本机唤醒的成员）；须提供 site、room_id、token、action（add/rejoin）、name。
 room-member-access 修改一位本机唤醒成员的项目文件权限（project_access 为 read/write），下次投递起生效、保留原会话；须提供 site、room_id、token、name、project_access。
@@ -314,6 +316,45 @@ export function save_launch_projects(home, input) {
   mkdirSync(home, { recursive: true, mode: 0o700 });
   atomic_json(join(home, 'launch-projects.json'), { projects });
   return { projects };
+}
+
+const MAX_EXPERT_PRESETS = 30;
+const MAX_PRESET_DESCRIPTION = 500;
+const MAX_PRESET_FIELD = 200;
+const PRESET_FIELDS = ['name', 'description', 'system_prompt', 'project_access', 'model', 'effort'];
+
+/** The user's expert presets and per-platform default descriptions saved on this computer, plus the built-in presets. */
+export function expert_presets(home) {
+  const path = join(home, 'expert-presets.json');
+  const saved = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
+  return { presets: saved.presets || [], description_templates: saved.description_templates || {}, builtin_presets: BUILTIN_EXPERT_PRESETS };
+}
+
+/** Replace the user's presets or default descriptions (whichever the input carries); every field is checked first. */
+export function save_expert_presets(home, input) {
+  const current = expert_presets(home);
+  const presets = input.presets === undefined ? current.presets : input.presets;
+  const templates = input.description_templates === undefined ? current.description_templates : input.description_templates;
+  if (!Array.isArray(presets) || presets.length > MAX_EXPERT_PRESETS) throw new Error(`presets 必须为列表，最多 ${MAX_EXPERT_PRESETS} 个`);
+  const names = new Set();
+  for (const preset of presets) {
+    if (!preset || typeof preset !== 'object' || Object.keys(preset).some(key => !PRESET_FIELDS.includes(key))) throw new Error('预设只能包含名称、描述、提示词、项目权限、模型与强度');
+    if (!platform_of(preset.name) || !clients_of(preset.name)) throw new Error(`预设名称须为“平台名”或“平台名-后缀”：${preset.name}`);
+    if (names.has(preset.name)) throw new Error(`预设名称重复：${preset.name}`);
+    names.add(preset.name);
+    if (Object.values(preset).some(value => typeof value !== 'string')) throw new Error(`${preset.name} 的字段必须为文本`);
+    if ((preset.description || '').length > MAX_PRESET_DESCRIPTION) throw new Error(`${preset.name} 的描述最多 ${MAX_PRESET_DESCRIPTION} 字`);
+    if ((preset.system_prompt || '').length > MAX_EXPERT_PROMPT) throw new Error(`${preset.name} 的提示词最多 ${MAX_EXPERT_PROMPT} 字`);
+    if (preset.project_access && !['read', 'write'].includes(preset.project_access)) throw new Error(`${preset.name} 的项目权限须为 read 或 write`);
+    if ([preset.model, preset.effort].some(value => (value || '').length > MAX_PRESET_FIELD)) throw new Error(`${preset.name} 的模型或强度过长`);
+  }
+  if (!templates || typeof templates !== 'object' || Array.isArray(templates) || Object.entries(templates).some(([platform, text]) =>
+    platform_of(platform) !== platform || typeof text !== 'string' || !text.trim() || text.length > MAX_PRESET_DESCRIPTION)) {
+    throw new Error(`description_templates 须为 {平台名: 描述}，每段 1–${MAX_PRESET_DESCRIPTION} 字`);
+  }
+  mkdirSync(home, { recursive: true, mode: 0o700 });
+  atomic_json(join(home, 'expert-presets.json'), { presets, description_templates: templates });
+  return expert_presets(home);
 }
 
 /** Reject malformed client fields before saving defaults or creating any discussion. */
@@ -1048,8 +1089,9 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   assert_shared_home(home);
   let result;
   if (positionals[0] === 'settings') result = { ...(input ? save_launch_settings(home, input) : launch_settings(home)), api_providers: API_PROVIDERS,
-    scheduler_providers: SCHEDULER_PROVIDERS, api_keys: saved_api_keys(home), projects: launch_projects(home).projects };
+    scheduler_providers: SCHEDULER_PROVIDERS, api_keys: saved_api_keys(home), projects: launch_projects(home).projects, ...expert_presets(home) };
   else if (positionals[0] === 'projects') result = input ? save_launch_projects(home, input) : launch_projects(home);
+  else if (positionals[0] === 'presets') result = input ? save_expert_presets(home, input) : expert_presets(home);
   else if (positionals[0] === 'api-key' && input) result = save_api_key(home, input);
   else if (positionals[0] === 'api-check' && input) result = await api_check(home, input);
   else if (positionals[0] === 'scheduler-check' && input) result = await scheduler_check(home, input);

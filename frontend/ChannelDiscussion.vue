@@ -100,6 +100,8 @@ const queue_hint = computed(() => {
   return text.value.trim() ? `新消息会在 ${name} 回复后交给主持人；可在进度看板点「跳过」本次发言` : "";
 });
 const free = computed(() => room.value?.mode === "free");
+/** What the runner last saw a member's software doing; unknown phases keep the generic text. Declared before `free_busy`, which an immediate watch reads during setup. */
+const ACTIVITY_LABELS = { thinking: "思考中", command: "正在运行命令", tool: "正在调用工具", editing: "正在修改文件", writing: "正在撰写回答" };
 /** Members of a free room that are working on a live execution; queued requests are shown in the side panel only. */
 const free_busy = computed(() => {
   if (!free.value || room.value.archived) return [];
@@ -185,8 +187,6 @@ const mention_pool = computed(() => free.value ? [...(mention_all.value ? [...AL
 const MENTION_PATTERN = (name) => new RegExp(`(^|[\\s(（，,。；;：:])@${name}(?![\\w-])`, "u");
 const draft_prose = computed(() => text.value.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "").replace(/^>.*$/gm, ""));
 const SCHEDULER_LABELS = { jev: "TypeSafe Jev", decisions: "OpenAI Decisions" };
-/** What the runner last saw a member's software doing; unknown phases keep the generic text. */
-const ACTIVITY_LABELS = { thinking: "思考中", command: "正在运行命令", tool: "正在调用工具", editing: "正在修改文件", writing: "正在撰写回答" };
 /** App deliveries run in the user's own window, so the runner never sees their output. */
 const BLIND_ADAPTERS = ["codex", "antigravity"];
 /** Long reasoning or a long reply can be silent for minutes; beyond this the card only warns, never stops. */
