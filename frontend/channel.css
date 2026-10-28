@@ -244,6 +244,8 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .pb-status-line { display: flex; align-items: center; gap: 8px; }
 .pb-status-line strong { color: var(--ui-text-highlighted); font-size: 15px; font-weight: 600; }
 .pb-status-detail { margin: 6px 0 0 16px; color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+/* A chain stopped at its round limit can run on from here, without a new message that would start over. */
+.pb-chain-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0 16px; }
 .pb-error-detail { white-space: pre-wrap; font: inherit; max-height: 240px; overflow: auto; margin-top: 8px; }
 .pb-held { margin: 0 0 8px; }
 .pb-meters { display: grid; gap: 10px; margin-top: 14px; }

@@ -714,10 +714,28 @@ CREATE TABLE IF NOT EXISTS free_handoffs (
     batch_id INTEGER NOT NULL,
     PRIMARY KEY (room_id,batch_id)
 );
--- The owner's per-room chain budget; rooms without a row use the default.
+-- Superseded by free_round_limits: it counted AI-created requests, which rose with the number of members. Kept, unread.
 CREATE TABLE IF NOT EXISTS free_settings (
     room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
     max_auto_hops INTEGER NOT NULL
+);
+-- The owner's per-room limit on rounds a host may run from one owner message (a round is one host dispatch, its members'
+-- answers and the hand-back); rooms without a row use the default.
+CREATE TABLE IF NOT EXISTS free_round_limits (
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+    max_rounds INTEGER NOT NULL
+);
+-- A chain the owner let run on past its limit: the rounds added, and the dispatch the limit held back, which is sent
+-- when the owner continues (message_id 0 when nothing is held).
+CREATE TABLE IF NOT EXISTS free_chain_holds (
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    chain_id INTEGER NOT NULL,
+    extra_rounds INTEGER NOT NULL DEFAULT 0,
+    message_id INTEGER NOT NULL DEFAULT 0,
+    host_id INTEGER NOT NULL DEFAULT 0,
+    names TEXT NOT NULL DEFAULT '[]',
+    handoff INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (room_id,chain_id)
 );
 -- A brainstorm room started from a free room keeps its origin for the way back.
 CREATE TABLE IF NOT EXISTS room_links (

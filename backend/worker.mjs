@@ -912,7 +912,7 @@ async function manage_room(database, room_id, action, payload) {
     const queries = [
       "DELETE FROM member_recommendations WHERE room_id=?", "DELETE FROM free_queue WHERE room_id=?", "DELETE FROM speaking_orders WHERE room_id=?", "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_descriptions WHERE room_id=?", "DELETE FROM execution_notes WHERE room_id=?", "DELETE FROM execution_segments WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?", "DELETE FROM member_sessions WHERE room_id=?", "DELETE FROM member_registrations WHERE room_id=?",
       "DELETE FROM room_members WHERE room_id=?", "DELETE FROM room_modes WHERE room_id=?",
-      "DELETE FROM free_batches WHERE room_id=?", "DELETE FROM free_chains WHERE room_id=?", "DELETE FROM free_handoffs WHERE room_id=?", "DELETE FROM free_settings WHERE room_id=?", "DELETE FROM room_links WHERE room_id=?",
+      "DELETE FROM free_batches WHERE room_id=?", "DELETE FROM free_chains WHERE room_id=?", "DELETE FROM free_handoffs WHERE room_id=?", "DELETE FROM free_settings WHERE room_id=?", "DELETE FROM free_round_limits WHERE room_id=?", "DELETE FROM free_chain_holds WHERE room_id=?", "DELETE FROM room_links WHERE room_id=?",
       "DELETE FROM discussion_options WHERE room_id=?",
       "DELETE FROM round_budgets WHERE room_id=?", "DELETE FROM discussion_conclusions WHERE room_id=?", "DELETE FROM discussion_sessions WHERE room_id=?",
       "DELETE FROM scheduler_feedback WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)",
@@ -2108,12 +2108,17 @@ const TIMELINE_NOTES_SQL = `SELECT execution_id,created_at FROM execution_notes
 const MAX_MEMBER_DESCRIPTION = 500;
 const MAX_MEMBER_NAME = 80;
 const FREE_LIVE = "status IN ('dispatched','started')";
-// AI-created requests (host dispatches and hand-offs) allowed per chain; each owner message starts a chain.
-const FREE_MAX_AUTO_HOPS = 8;
-// The most an owner may allow per chain.
-const FREE_MAX_AUTO_HOPS_LIMIT = 50;
-// A room's chain budget: the owner's setting, else the default.
-const FREE_AUTO_HOPS = (room) => `COALESCE((SELECT max_auto_hops FROM free_settings s WHERE s.room_id=${room}), ${FREE_MAX_AUTO_HOPS})`;
+// Rounds a host may run from one owner message by default (a round: one host dispatch, its members' answers and the
+// hand-back); each owner message starts a chain. Counted in rounds, so a room with more members gets no fewer of them.
+const FREE_CHAIN_ROUNDS = 3;
+// The most rounds an owner may allow per chain, or add at once when continuing a stopped chain.
+const FREE_MAX_CHAIN_ROUNDS = 20;
+// A room's round limit: the owner's setting, else the default.
+const FREE_ROUND_LIMIT = (room) => `COALESCE((SELECT max_rounds FROM free_round_limits l WHERE l.room_id=${room}), ${FREE_CHAIN_ROUNDS})`;
+// Rounds used and allowed in the room's recent chains, for "第 2/3 轮"; parameter: the room.
+const FREE_CHAIN_PROGRESS = `SELECT b.chain_id,COUNT(*) AS used,${FREE_ROUND_LIMIT("b.room_id")} + COALESCE((SELECT h.extra_rounds FROM free_chain_holds h
+    WHERE h.room_id=b.room_id AND h.chain_id=b.chain_id),0) AS allowed FROM free_batches b WHERE b.room_id=?
+    GROUP BY b.chain_id ORDER BY b.chain_id DESC LIMIT 10`;
 const FREE_SCHEDULER_PROVIDERS = ["jev", "decisions"];
 const FREE_RECOMMEND_SECONDS = 60;
 // A click sent just before the hint disappears still counts.
@@ -2313,7 +2318,8 @@ async function free_view(database, room_id) {
     WHERE rec.room_id=? ORDER BY rec.message_id DESC LIMIT ?`).bind(room_id, FREE_RECENT_REQUESTS).all()).results
     .map(row => ({ ...row, expires_in: Math.max(0, row.expires_at - now) })).reverse();
   return { members, requests, executions: await free_recent_executions(database, room_id), execution_minutes: await free_execution_minutes(database, room_id), conflicts: await free_conflicts(database, room_id, names),
-    halted_chains, max_auto_hops: await free_auto_hops(database, room_id), recommendations };
+    halted_chains, max_rounds: await free_chain_rounds(database, room_id),
+    chain_rounds: (await database.prepare(FREE_CHAIN_PROGRESS).bind(room_id).all()).results, recommendations };
 }
 
 /** Accept only the room control credential; declared names never grant ownership. */
@@ -2380,15 +2386,12 @@ async function free_recipients(database, room_id, payload) {
   return host ? [{ id: host.id, purpose: "route" }] : [];
 }
 
-/** Hand finished batches back to their host once; all-failed batches and exhausted budgets halt the chain. */
+/** Hand finished batches back to their host once; all-failed batches halt the chain. A hand-back closes the round it
+ *  belongs to, so the round limit never holds it back: the last round still gets its summary. */
 function free_settle_statements(database, room_id) {
-  const used = `(SELECT COUNT(*) FROM member_requests u WHERE u.room_id=b.room_id AND u.chain_id=b.chain_id AND u.created_by='host')`;
   return [
     database.prepare(`INSERT OR IGNORE INTO free_chains (room_id,chain_id,reason) SELECT b.room_id,b.chain_id,'all_failed'
       FROM free_batches b WHERE b.room_id=? AND b.settled=0 AND ${FREE_BATCH_DONE} AND NOT ${FREE_BATCH_ANSWERED}`).bind(room_id),
-    database.prepare(`INSERT OR IGNORE INTO free_chains (room_id,chain_id,reason) SELECT b.room_id,b.chain_id,'budget'
-      FROM free_batches b JOIN room_members m ON m.id=b.host_id AND m.status='active' AND m.role='host'
-      WHERE b.room_id=? AND b.settled=0 AND ${FREE_BATCH_DONE} AND ${FREE_BATCH_ANSWERED} AND ${FREE_BATCH_RETURNS} AND ${used}>=${FREE_AUTO_HOPS("b.room_id")}`).bind(room_id),
     // The hand-off is unique per (dispatch message, host), so repeating this statement never duplicates it.
     database.prepare(`INSERT OR IGNORE INTO member_requests (room_id,member_id,message_id,chain_id,batch_id,purpose,created_by,created_at)
       SELECT b.room_id,b.host_id,b.batch_id,b.chain_id,0,'handoff','host',unixepoch()
@@ -2518,32 +2521,69 @@ async function free_answered_chain(database, member, payload) {
   return row?.chain || 0;
 }
 
-/** AI-created requests allowed per chain in this room. */
-async function free_auto_hops(database, room_id) {
-  return (await database.prepare(`SELECT ${FREE_AUTO_HOPS("?")} AS hops`).bind(room_id).first()).hops;
+/** Rounds a host may run from one owner message in this room. */
+async function free_chain_rounds(database, room_id) {
+  return (await database.prepare(`SELECT ${FREE_ROUND_LIMIT("?")} AS rounds`).bind(room_id).first()).rounds;
 }
 
-/** Owner sets the room's chain budget; it applies to chains still running and to later ones. */
-async function set_auto_hops(database, room_id, token, payload) {
+/** Rounds a chain may still start: the room's limit plus what the owner added, less the dispatches made; none once halted. */
+async function free_rounds_left(database, room_id, chain_id) {
+  if (await database.prepare("SELECT 1 FROM free_chains WHERE room_id=? AND chain_id=?").bind(room_id, chain_id).first()) return 0;
+  const row = await database.prepare(`SELECT (SELECT COUNT(*) FROM free_batches WHERE room_id=?1 AND chain_id=?2) AS used,
+    COALESCE((SELECT extra_rounds FROM free_chain_holds WHERE room_id=?1 AND chain_id=?2),0) AS extra`).bind(room_id, chain_id).first();
+  return await free_chain_rounds(database, room_id) + row.extra - row.used;
+}
+
+/** Owner sets the room's round limit; it applies to chains still running and to later ones. */
+async function set_chain_rounds(database, room_id, token, payload) {
   await require_free_owner(database, room_id, token);
-  const value = payload.max_auto_hops;
-  if (!Number.isInteger(value) || value < 1 || value > FREE_MAX_AUTO_HOPS_LIMIT) {
-    throw new HttpError(400, `max_auto_hops 须为 1–${FREE_MAX_AUTO_HOPS_LIMIT} 的整数`);
+  const value = payload.max_rounds;
+  if (!Number.isInteger(value) || value < 1 || value > FREE_MAX_CHAIN_ROUNDS) {
+    throw new HttpError(400, `max_rounds 须为 1–${FREE_MAX_CHAIN_ROUNDS} 的整数`);
   }
-  await database.prepare(`INSERT INTO free_settings (room_id,max_auto_hops) VALUES (?,?)
-    ON CONFLICT(room_id) DO UPDATE SET max_auto_hops=excluded.max_auto_hops`).bind(room_id, value).run();
-  return { max_auto_hops: value };
+  await database.prepare(`INSERT INTO free_round_limits (room_id,max_rounds) VALUES (?,?)
+    ON CONFLICT(room_id) DO UPDATE SET max_rounds=excluded.max_rounds`).bind(room_id, value).run();
+  return { max_rounds: value };
 }
 
-/** Statements queuing a host's named members as one batch, or halting the chain when the budget is spent. */
+/**
+ * Owner lets a chain the round limit stopped run on: adds rounds and sends the dispatch the limit held back. Bound to
+ * one known chain, so it takes no revision; a chain that is not stopped by its limit is refused.
+ */
+async function free_continue_chain(database, room_id, token, chain_id, payload) {
+  await require_free_owner(database, room_id, token);
+  const rounds = payload.rounds;
+  if (!Number.isInteger(rounds) || rounds < 1 || rounds > FREE_MAX_CHAIN_ROUNDS) throw new HttpError(400, `rounds 须为 1–${FREE_MAX_CHAIN_ROUNDS} 的整数`);
+  const halted = await database.prepare("SELECT reason FROM free_chains WHERE room_id=? AND chain_id=?").bind(room_id, chain_id).first();
+  if (halted?.reason !== "budget") throw new HttpError(409, "这条任务链没有因轮数上限停下，无需继续");
+  const host = await database.prepare("SELECT * FROM room_members WHERE room_id=? AND role='host' AND status='active'").bind(room_id).first();
+  if (!host) throw new HttpError(400, "房间没有在场的主持人，无法继续");
+  const held = await database.prepare("SELECT message_id,names,handoff FROM free_chain_holds WHERE room_id=? AND chain_id=?").bind(room_id, chain_id).first();
+  await checked_batch(database, "EXISTS(SELECT 1 FROM free_chains WHERE room_id=? AND chain_id=? AND reason='budget')", [room_id, chain_id], [
+    database.prepare(`INSERT INTO free_chain_holds (room_id,chain_id,extra_rounds) VALUES (?,?,?)
+      ON CONFLICT(room_id,chain_id) DO UPDATE SET extra_rounds=extra_rounds+excluded.extra_rounds`).bind(room_id, chain_id, rounds),
+    database.prepare("DELETE FROM free_chains WHERE room_id=? AND chain_id=?").bind(room_id, chain_id),
+    database.prepare("UPDATE free_chain_holds SET message_id=0,host_id=0,names='[]',handoff=0 WHERE room_id=? AND chain_id=?").bind(room_id, chain_id)]);
+  if (held?.message_id) {
+    const statements = await free_dispatch_statements(database, room_id, host, JSON.parse(held.names), chain_id, "?", [held.message_id], held.handoff === 1);
+    if (statements.length) await database.batch(statements);
+  }
+  return free_view(database, room_id);
+}
+
+/** Statements stopping a chain at its round limit, keeping the dispatch it held back for the owner to send by continuing. */
+function free_hold_statements(database, room_id, host, names, chain_id, message_id, key, handoff) {
+  return [database.prepare("INSERT OR IGNORE INTO free_chains (room_id,chain_id,reason) VALUES (?,?,'budget')").bind(room_id, chain_id),
+    database.prepare(`INSERT INTO free_chain_holds (room_id,chain_id,message_id,host_id,names,handoff) SELECT ?,?,${message_id},?,?,?
+      WHERE 1 ON CONFLICT(room_id,chain_id) DO UPDATE SET message_id=excluded.message_id,host_id=excluded.host_id,names=excluded.names,handoff=excluded.handoff`)
+      .bind(room_id, chain_id, ...key, host.id, JSON.stringify(names), handoff ? 1 : 0)];
+}
+
+/** Statements queuing a host's named members as one batch, one round, or holding the dispatch back at the round limit. */
 async function free_dispatch_statements(database, room_id, host, names, chain_id, message_id, key, handoff = false) {
   const member_ids = free_named(await free_active_members(database, room_id), names, host.name);
   if (!member_ids.length || !chain_id) return [];
-  const halted = await database.prepare("SELECT 1 FROM free_chains WHERE room_id=? AND chain_id=?").bind(room_id, chain_id).first();
-  const used = (await database.prepare("SELECT COUNT(*) AS count FROM member_requests WHERE room_id=? AND chain_id=? AND created_by='host'").bind(room_id, chain_id).first()).count;
-  if (halted || used + member_ids.length > await free_auto_hops(database, room_id)) {
-    return [database.prepare("INSERT OR IGNORE INTO free_chains (room_id,chain_id,reason) VALUES (?,?,'budget')").bind(room_id, chain_id)];
-  }
+  if (await free_rounds_left(database, room_id, chain_id) < 1) return free_hold_statements(database, room_id, host, names, chain_id, message_id, key, handoff);
   return [...member_ids.map(member_id => database.prepare(`INSERT INTO member_requests (room_id,member_id,message_id,chain_id,batch_id,purpose,created_by,created_at)
       SELECT ?,?,${message_id},?,${message_id},'ask','host',unixepoch()`).bind(room_id, member_id, ...key, chain_id, ...key)),
     database.prepare(`INSERT INTO free_batches (room_id,batch_id,chain_id,host_id) SELECT ?,${message_id},?,?`).bind(room_id, ...key, chain_id, host.id),
@@ -3646,7 +3686,8 @@ async function handle_api(database, request, parts, params, bucket, setup_key = 
     return respond(body.action === "start" ? await start_discussion(database, room_id, token, body) : await end_discussion(database, room_id, token));
   }
   if (parts[3] === "descriptions" && parts.length === 4 && method === "POST") return respond(await describe_members(database, room_id, request.headers.get("X-Discussion-Token") ?? "", await read_payload(request)));
-  if (parts[3] === "budget" && parts.length === 4 && method === "POST") return respond(await set_auto_hops(database, room_id, request.headers.get("X-Discussion-Token") ?? "", await read_payload(request)));
+  if (parts[3] === "chains" && parts.length === 5 && method === "POST") return respond(await free_continue_chain(database, room_id, request.headers.get("X-Discussion-Token") ?? "", integer(parts[4]), await read_payload(request)));
+  if (parts[3] === "budget" && parts.length === 4 && method === "POST") return respond(await set_chain_rounds(database, room_id, request.headers.get("X-Discussion-Token") ?? "", await read_payload(request)));
   if (parts[3] === "timeline" && parts.length === 4 && method === "GET") return respond(await execution_timeline(database, room_id, params.after));
   if (parts[3] === "register" && parts.length === 4 && method === "POST") return respond(await register_member(database, room_id, request.headers.get("X-Discussion-Token") ?? ""));
   if (parts[3] === "speaking-order" && parts.length === 4) {

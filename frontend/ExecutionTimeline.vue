@@ -47,6 +47,10 @@ const collapsed = ref(new Set());
 const note_texts = ref(new Map());
 const hover = ref(null);
 const opened = ref("");
+const detail_anchor = ref(null);
+const wf_element = ref(null);
+// The opened execution's detail floats at most this wide.
+const DETAIL_WIDTH_PX = 560;
 let last_read = 0;
 let last_full = 0;
 let reading = false;
@@ -98,9 +102,12 @@ watch(() => view.value.room, (room, previous) => { if (room?.id && room.id === p
 /** A pinned card (opened by a tap) closes on a tap anywhere else. */
 function close_on_outside(event) {
   if (hover.value && !event.target.closest?.(".wf-card, .wf-bar, .wf-note")) hover.value = null;
+  if (opened.value && !event.target.closest?.(".wf-detail, .wf-names")) opened.value = "";
 }
+function close_on_escape(event) { if (event.key === "Escape") { opened.value = ""; hover.value = null; } }
 onMounted(() => {
   document.addEventListener("pointerdown", close_on_outside);
+  document.addEventListener("keydown", close_on_escape);
   axis_observer = new ResizeObserver(([entry]) => { axis_width.value = entry.contentRect.width; });
 });
 // The axis appears only once there are rows, so it is observed whenever it is (re)rendered.
@@ -111,6 +118,7 @@ watch(axis_element, (element, previous) => {
 onBeforeUnmount(() => {
   clearInterval(refresh_timer); cancelAnimationFrame(frame);
   document.removeEventListener("pointerdown", close_on_outside);
+  document.removeEventListener("keydown", close_on_escape);
   axis_observer?.disconnect();
 });
 
@@ -238,9 +246,16 @@ const shown_ticks = computed(() => {
 });
 
 /** Open one execution's detail under its row, or close it; its notes are read as it opens and again as more arrive. */
-function open_row(row) {
+function open_row(row, event) {
   opened.value = opened.value === row.key ? "" : row.key;
-  if (opened.value) note_texts_for(row);
+  if (!opened.value) return;
+  // Anchored under the name, within the card; the card scrolls with the page, so the anchor stays put.
+  const name = event.currentTarget.getBoundingClientRect();
+  const card = wf_element.value.getBoundingClientRect();
+  const width = Math.min(DETAIL_WIDTH_PX, card.width - 16);
+  detail_anchor.value = { top: name.bottom - card.top + 4, left: Math.max(8, Math.min(name.left - card.left, card.width - width - 8)) };
+  hover.value = null;
+  note_texts_for(row);
 }
 watch(() => opened_row.value?.notes.length, () => { if (opened_row.value) note_texts_for(opened_row.value); });
 
@@ -331,7 +346,7 @@ const hover_notes = computed(() => {
     <div class="page-heading"><div><h2>执行时间线</h2><p>本机接入程序唤醒的每次执行；点名字看详情，悬停条形看当时的过程说明。</p></div></div>
     <p v-if="error" role="alert" class="fine-print wf-error">{{ error }}</p>
     <p v-if="timeline && !all_rows.length" class="fine-print">还没有执行记录。</p>
-    <div v-if="all_rows.length" class="wf">
+    <div v-if="all_rows.length" ref="wf_element" class="wf">
       <header class="wf-head">
         <span class="wf-title">执行瀑布</span>
         <label class="wf-run">
@@ -343,7 +358,8 @@ const hover_notes = computed(() => {
           </select>
           <UIcon name="i-lucide-chevrons-up-down" class="wf-run-icon" aria-hidden="true" />
         </label>
-        <span class="wf-state" :class="{ 'is-live': summary.running }">{{ summary.running ? `${summary.running} 个进行中` : '均已结束' }}</span>
+        <span v-if="replaying" class="wf-state is-replay">回放中 · {{ clock(view_time) }}</span>
+        <span v-else class="wf-state" :class="{ 'is-live': summary.running }">{{ summary.running ? `${summary.running} 个进行中` : '均已结束' }}</span>
         <span v-if="summary.slowest" class="wf-headline">最慢一步 <b>{{ bridge.display_name(summary.slowest.member) }} · {{ PHASE_LABELS[summary.slowest.phase] }}<template v-if="summary.slowest.tool"> {{ summary.slowest.tool }}</template></b> · {{ format_duration(summary.slowest.end - summary.slowest.start) }}</span>
       </header>
       <dl class="wf-summary">
@@ -383,7 +399,9 @@ const hover_notes = computed(() => {
             </button>
             <span v-else class="wf-toggle-space"></span>
             <UAvatar :src="bridge.identities[row.item.member]?.icon" :text="bridge.identities[row.item.member]?.initials" :alt="row.item.member" size="2xs" class="channel-avatar wf-avatar" :class="bridge.identities[row.item.member]?.style" />
-            <button type="button" class="wf-names" :aria-expanded="opened === row.key" :title="status(row).text" @click="open_row(row)">
+            <button type="button" class="wf-names" :aria-expanded="opened === row.key" @click="open_row(row, $event)"
+              @mouseenter="enter($event, row, { label: STATE_LABELS[row.item.state], start: row.start, end: row.end, text: status(row).text, live: row.item.state === 'running' })"
+              @mouseleave="hide(row)">
               <span class="wf-name-line"><i v-if="row.item.state === 'running'" class="wf-spinner" aria-hidden="true"></i><strong>{{ bridge.display_name(row.item.member) }}</strong><em v-for="mark in role_marks(row)" :key="mark" class="wf-pill is-role">{{ mark }}</em><em v-if="summary.slowest?.row === row.key" class="wf-pill is-slowest">最慢</em></span>
               <span class="wf-status" :class="`is-${status(row).tone}`"><i v-if="status(row).tone === 'live'" class="wf-live-dot" aria-hidden="true"></i>{{ status(row).text }}</span>
             </button>
@@ -411,23 +429,26 @@ const hover_notes = computed(() => {
               @mouseenter="enter($event, row, { note, start: note.at, end: note.at })" @click="tap($event, row, { note, start: note.at, end: note.at })" @focus="enter($event, row, { note, start: note.at, end: note.at })" @blur="hide(row)"></button>
           </div></div>
           <span class="wf-end">{{ format_duration(row.end - row.start) }}{{ row.wake_approx && row.wake ? '~' : '' }}<small v-if="row.item.state !== 'done'" :class="`is-${row.item.state}`">{{ STATE_LABELS[row.item.state] }}</small><small v-if="row.truncated">明细已截断</small></span>
-          <div v-if="opened === row.key" class="wf-detail" :style="{ '--wf-indent': `${row.depth * DEPTH_PX + 44}px` }">
-            <dl>
-              <div v-if="row.item.task"><dt>任务</dt><dd>{{ row.item.task }}<button v-if="row.item.task_id" type="button" class="subtle-link" @click="emit('detail', row.item.task_id)">#{{ row.item.task_id }}</button></dd></div>
-              <div v-if="row.item.state === 'failed'"><dt>失败原因</dt><dd class="is-failed">{{ row.item.reason || '执行失败' }}</dd></div>
-              <div v-else-if="row.item.result || row.item.answer_id"><dt>结果</dt><dd>{{ row.item.result }}<button v-if="row.item.answer_id" type="button" class="subtle-link" @click="emit('detail', row.item.answer_id)">在消息中查看 #{{ row.item.answer_id }}</button></dd></div>
-              <div v-if="row.item.changes"><dt>改动</dt><dd>{{ row.item.changes }} 个文件</dd></div>
-            </dl>
-            <ol v-if="opened_log.length" class="wf-log" aria-label="过程">
-              <li v-for="entry in opened_log" :key="`${entry.kind}-${entry.at}-${entry.phase || ''}`" :class="`log-${entry.kind}`">
-                <time>{{ clock(entry.at) }}</time>
-                <template v-if="entry.kind === 'phase'"><i class="wf-swatch" :class="`is-${PHASE_KINDS[entry.phase]}`" :data-tone="member_tone.get(row.item.member)" aria-hidden="true"></i><span>{{ PHASE_LABELS[entry.phase] }}<template v-if="entry.tool"> · {{ entry.tool }}</template> · {{ entry.live ? '进行中' : format_duration(entry.duration) }}</span></template>
-                <span v-else class="wf-log-note">{{ entry.text }}</span>
-              </li>
-            </ol>
-            <p v-else class="fine-print">这次执行没有阶段明细或过程说明。</p>
-          </div>
         </div>
+      </div>
+      <div v-if="opened_row && detail_anchor" class="wf-detail" role="dialog" :aria-label="`${bridge.display_name(opened_row.item.member)} 的这次执行`"
+        :style="{ top: `${detail_anchor.top}px`, left: `${detail_anchor.left}px` }">
+        <header class="wf-detail-head"><strong>{{ bridge.display_name(opened_row.item.member) }}</strong><small>{{ role_label(opened_row) }} · {{ STATE_LABELS[opened_row.item.state] }} · {{ format_duration(opened_row.end - opened_row.start) }}</small>
+          <button type="button" class="wf-card-close" aria-label="关闭" @click="opened = ''"><UIcon name="i-lucide-x" /></button></header>
+        <dl>
+          <div v-if="opened_row.item.task"><dt>任务</dt><dd>{{ opened_row.item.task }}<button v-if="opened_row.item.task_id" type="button" class="subtle-link" @click="emit('detail', opened_row.item.task_id)">#{{ opened_row.item.task_id }}</button></dd></div>
+          <div v-if="opened_row.item.state === 'failed'"><dt>失败原因</dt><dd class="is-failed">{{ opened_row.item.reason || '执行失败' }}</dd></div>
+          <div v-else-if="opened_row.item.result || opened_row.item.answer_id"><dt>结果</dt><dd>{{ opened_row.item.result }}<button v-if="opened_row.item.answer_id" type="button" class="subtle-link" @click="emit('detail', opened_row.item.answer_id)">在消息中查看 #{{ opened_row.item.answer_id }}</button></dd></div>
+          <div v-if="opened_row.item.changes"><dt>改动</dt><dd>{{ opened_row.item.changes }} 个文件</dd></div>
+        </dl>
+        <ol v-if="opened_log.length" class="wf-log" aria-label="过程">
+          <li v-for="entry in opened_log" :key="`${entry.kind}-${entry.at}-${entry.phase || ''}`" :class="`log-${entry.kind}`">
+            <time>{{ clock(entry.at) }}</time>
+            <template v-if="entry.kind === 'phase'"><i class="wf-swatch" :class="`is-${PHASE_KINDS[entry.phase]}`" :data-tone="member_tone.get(opened_row.item.member)" aria-hidden="true"></i><span>{{ PHASE_LABELS[entry.phase] }}<template v-if="entry.tool"> · {{ entry.tool }}</template> · {{ entry.live ? '进行中' : format_duration(entry.duration) }}</span></template>
+            <span v-else class="wf-log-note">{{ entry.text }}</span>
+          </li>
+        </ol>
+        <p v-else class="fine-print">这次执行没有阶段明细或过程说明。</p>
       </div>
       <div v-if="run_shown !== ALL" class="wf-player">
         <template v-if="base_live">
@@ -456,7 +477,8 @@ const hover_notes = computed(() => {
       <strong>{{ bridge.display_name(hover.row.item.member) }} · {{ hover_title }}</strong>
       <button v-if="hover.pinned" type="button" class="wf-card-close" aria-label="关闭" @click="hover = null"><UIcon name="i-lucide-x" /></button>
       <small>{{ clock(hover.piece.start) }}<template v-if="hover.piece.end > hover.piece.start"> – {{ hover.piece.live ? '现在' : clock(hover.piece.end) }}</template></small>
-      <p v-if="hover.row.item.reason" class="wf-card-reason">{{ hover.row.item.reason }}</p>
+      <p v-if="hover.piece.text" class="wf-card-text">{{ hover.piece.text }}</p>
+      <p v-else-if="hover.row.item.reason" class="wf-card-reason">{{ hover.row.item.reason }}</p>
       <template v-if="hover_notes.length">
         <small class="wf-card-label">{{ hover.related.earlier ? '此前的过程说明' : '过程说明' }}</small>
         <ol><li v-for="note in hover_notes" :key="note.at + note.text"><time>{{ clock(note.at) }}</time>{{ note.text }}</li></ol>
@@ -499,6 +521,7 @@ const hover_notes = computed(() => {
   --wf-bar-h: 20px;
   --wf-row-h: 44px;
   --wf-label-col: minmax(200px, 340px);
+  position: relative;
   margin-top: 4px;
   border: 1px solid var(--wf-border);
   border-radius: 10px;
@@ -517,6 +540,8 @@ const hover_notes = computed(() => {
 .wf-state::before { width: 6px; height: 6px; border-radius: 50%; background: currentColor; content: ""; }
 .wf-state.is-live { background: color-mix(in oklab, var(--wf-accent) 14%, transparent); color: var(--wf-accent); }
 .wf-state.is-live::before { animation: wf-pulse 1.6s ease-in-out infinite; }
+/* A replay is not live work: it says so, and at what time of the run it stands, so its "running" rows are not mistaken. */
+.wf-state.is-replay { background: color-mix(in oklab, var(--wf-warn) 14%, transparent); color: var(--wf-warn); font-family: var(--wf-mono); font-variant-numeric: tabular-nums; }
 .wf-headline { min-width: 0; overflow: hidden; color: var(--wf-muted); text-overflow: ellipsis; white-space: nowrap; }
 .wf-headline b { color: var(--wf-text); font-weight: 600; }
 
@@ -559,6 +584,9 @@ const hover_notes = computed(() => {
 .wf-run-select { min-width: 0; max-width: 100%; height: 26px; padding: 0 26px 0 10px; overflow: hidden; border: 1px solid var(--wf-border); border-radius: 6px;
   background: var(--wf-well); color: var(--wf-text); font: inherit; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; appearance: none; cursor: pointer; }
 .wf-run-select:focus-visible { outline: 2px solid var(--wf-accent); outline-offset: 1px; }
+/* A styled select loses the native dark list on Windows, which falls back to white behind light text: the options are
+   given the theme's own colors. */
+.wf-run-select option, .wf-speed option { background: var(--ui-bg-elevated); color: var(--ui-text); }
 .wf-run-icon { position: absolute; right: 8px; width: 12px; height: 12px; color: var(--wf-muted); pointer-events: none; }
 /* Now, while work runs: a dot on the axis and a line down through every lane; bars grow up to it, free room lies past it. */
 .wf-cursor-head { position: absolute; bottom: -5px; width: 9px; height: 9px; border-radius: 50%; background: var(--wf-text); box-shadow: 0 0 0 2px var(--wf-surface); transform: translateX(-50%); z-index: 2; }
@@ -649,7 +677,13 @@ const hover_notes = computed(() => {
 .wf-end small.is-running { color: var(--wf-accent); }
 
 /* Detail: an inset well under the opened row, aligned with its name. */
-.wf-detail { grid-column: 1 / -1; margin: 0 16px 12px var(--wf-indent, 16px); padding: 12px 14px; border: 1px solid var(--wf-border); border-radius: 8px; background: var(--wf-well); }
+/* Detail: a panel floating under the opened name, as a trace's popover; the waterfall below stays whole. */
+.wf-detail { position: absolute; z-index: 20; width: min(560px, calc(100% - 16px)); max-height: min(60vh, 520px); padding: 12px 14px; overflow: auto;
+  border: 1px solid var(--channel-edge-float, var(--wf-border)); border-radius: 10px; background: var(--ui-bg-elevated); box-shadow: var(--channel-shadow-float, 0 12px 32px rgb(0 0 0 / .3)); font-size: 13px; }
+.wf-detail-head { position: relative; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: 0 0 10px; padding-right: 32px; }
+.wf-detail-head strong { color: var(--wf-text); font-size: 14px; }
+.wf-detail-head small { color: var(--wf-muted); font-size: 12px; }
+.wf-detail .wf-card-close { top: -6px; right: -6px; }
 .wf-detail dl { display: grid; gap: 6px; margin: 0 0 10px; }
 .wf-detail dl > div { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; }
 .wf-detail dt { color: var(--wf-muted); font-size: 12px; }
@@ -685,6 +719,8 @@ const hover_notes = computed(() => {
 .wf-card strong { color: var(--ui-text-highlighted); font-size: 13px; }
 .wf-card small { color: var(--ui-text-muted); font-variant-numeric: tabular-nums; }
 .wf-card-reason { margin: 2px 0 0; color: var(--ui-error); }
+/* Over a name the card carries the whole status line the row could only truncate. */
+.wf-card-text { margin: 2px 0 0; color: var(--ui-text-highlighted); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .wf-card-label { margin-top: 4px; }
 .wf-card ol { display: grid; gap: 6px; margin: 0; padding: 0; line-height: 1.6; list-style: none; white-space: pre-wrap; overflow-wrap: anywhere; }
 .wf-card time { margin-right: 6px; color: var(--ui-text-dimmed); font-variant-numeric: tabular-nums; }
@@ -721,7 +757,6 @@ const hover_notes = computed(() => {
   .wf-row > .wf-label { grid-column: 1 / -1; min-height: 0; padding: 6px 12px 0 calc(12px + var(--depth) * var(--wf-depth-px)); border-top: 1px solid var(--wf-border); border-right: 0; }
   .wf-row > .wf-lane, .wf-row > .wf-end { min-height: 32px; }
   .wf-end { padding-right: 12px; }
-  .wf-detail { margin: 0 12px 12px; }
 }
 /* Touch: controls keep their look but take a fingertip; a note's tick is easier to hit. */
 @media (pointer: coarse) {

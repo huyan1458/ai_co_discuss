@@ -2,7 +2,7 @@
 /** New-discussion form: the user states the topic in their own words; the AI host drafts goal, background and boundaries. */
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { format_duration } from "./LimitPicker.vue";
-import AutoHopsField from "./AutoHopsField.vue";
+import ChainRoundsField from "./ChainRoundsField.vue";
 import DiscussionLimits from "./DiscussionLimits.vue";
 import ExpertCard from "./ExpertCard.vue";
 import ProjectDirectoryField from "./ProjectDirectoryField.vue";
@@ -202,8 +202,8 @@ const summary = computed(() => {
 
       <section class="create-section">
         <h3><span>3</span>推进方式（可选）</h3>
-        <UFormField label="AI 之间派活上限" description="主持人派活与成员做完回交主持人都计一次；多人分工、评审返工时可调大。建房后可在房间页修改。">
-          <AutoHopsField :model-value="view.create_auto_hops" @update:model-value="bridge.write_create_auto_hops($event)" />
+        <UFormField label="主持人自动推进" description="你的一条消息最多让主持人派活几轮；多步分工、评审返工时可调大。建房后可在房间页修改。">
+          <ChainRoundsField :model-value="view.create_chain_rounds" @update:model-value="bridge.write_create_chain_rounds($event)" />
         </UFormField>
         <UCheckbox :model-value="discussing" label="创建后开启讨论" description="主持人安排成员轮流发言，到上限或结束后回到自由协作。也可以建房后再开启。" @update:model-value="toggle_discussion($event)" />
         <template v-if="discussing">

@@ -56,16 +56,29 @@ function member_model(member) {
   return member.access === "runner" ? bridge.participant_model(member.name, room.value, view.value.launch.room_models) : "";
 }
 
+/** Ways to let a stopped chain run on: one more round, or as many as the room's limit, when that is more. */
+const continue_choices = computed(() => [...new Set([1, free.value.max_rounds || 1])]);
+const continuing = ref(0);
+async function continue_chain(chain_id, rounds) {
+  continuing.value = rounds;
+  try { await bridge.continue_chain(chain_id, rounds); } catch { /* The error shows under the members. */ }
+  finally { continuing.value = 0; }
+}
+
 const status = computed(() => {
   if (room.value.archived) return { tone: "neutral", title: "已存档", detail: "" };
   const working = (free.value.members || []).filter(busy);
   if (working.some((member) => member.execution?.stale)) return { tone: "error", title: "执行失联", detail: "停止未确认，可在成员菜单中停止后重发" };
-  if (working.length) return { tone: "primary", title: "处理中",
-    detail: working.map((member) => `${bridge.display_name(member.name)} ${LIVE.includes(member.execution?.status) ? "正在处理" : `待投递 ${member.pending} 条`}`).join(" · ") };
   const latest_chain = Math.max(0, ...(free.value.requests || []).map((request) => request.chain_id));
+  const rounds = (free.value.chain_rounds || []).find((chain) => chain.chain_id === latest_chain);
+  // How far the latest chain got against its limit; shown while it runs, so the stop never comes as a surprise.
+  const progress = rounds ? `第 ${Math.min(rounds.used, rounds.allowed)}/${rounds.allowed} 轮` : "";
+  if (working.length) return { tone: "primary", title: "处理中", detail: [progress,
+    ...working.map((member) => `${bridge.display_name(member.name)} ${LIVE.includes(member.execution?.status) ? "正在处理" : `待投递 ${member.pending} 条`}`)].filter(Boolean).join(" · ") };
   const halted = (free.value.halted_chains || []).find((chain) => chain.chain_id === latest_chain);
-  if (halted) return { tone: "warning", title: "任务链已停",
-    detail: halted.reason === "budget" ? `AI 之间派活达到 ${free.value.max_auto_hops} 次上限；发新消息即重新开始` : "派出的成员都失败了；发新消息即重新开始" };
+  if (halted?.reason === "budget") return { tone: "warning", title: "任务链已停", continue_chain: latest_chain,
+    detail: `已推进 ${rounds?.used ?? free.value.max_rounds} 轮，达到上限；主持人的下一次派活已暂存，继续即发出。发新消息则重新开始` };
+  if (halted) return { tone: "warning", title: "任务链已停", detail: "派出的成员都失败了；发新消息即重新开始" };
   if (!(free.value.members || []).length) return { tone: "neutral", title: "暂无成员", detail: "在下方邀请 AI 加入" };
   return { tone: "success", title: "空闲", detail: host.value
     ? `消息默认交给 ${bridge.display_name(host.value.name)}；@ 其他成员让它们发言` : "只有网页 AI：消息只作留言，需要你代发回答" };
@@ -141,6 +154,10 @@ watch(() => room.value.id, () => { starting.value = false; });
     <section class="pb-status" :class="`is-${status.tone}`" aria-label="房间状态">
       <div class="pb-status-line"><span class="pb-dot"></span><strong role="status">{{ status.title }}</strong></div>
       <p v-if="status.detail" class="pb-status-detail">{{ status.detail }}</p>
+      <div v-if="status.continue_chain && view.access?.can_manage" class="pb-chain-actions">
+        <UButton v-for="rounds in continue_choices" :key="rounds" :label="`继续 ${rounds} 轮`" icon="i-lucide-play" size="xs" color="neutral" variant="outline"
+          :loading="continuing === rounds" :disabled="Boolean(continuing)" @click="continue_chain(status.continue_chain, rounds)" />
+      </div>
       <div class="pb-meters">
         <div v-for="meter in meters" :key="meter.label" class="pb-meter">
           <div class="pb-meter-label"><span>{{ meter.label }}</span><b>{{ meter.text }}</b></div>

@@ -1341,7 +1341,7 @@ test('Worker free answers are rejected atomically when the execution is cancelle
   assert.equal(f.sql.prepare('SELECT status FROM member_requests').get().status, 'delivering');
 });
 
-test('Worker free hosts route, dispatch, hand back once and stop at the chain budget', async t => {
+test('Worker free hosts route, dispatch, hand back once, hold a dispatch past the round limit and continue it', async t => {
   const f = await worker_fixture(t);
   const codex = 'codex-free'.repeat(4), gemini = 'gemini-free'.repeat(4);
   const r = await free_worker_room(f, [{ name: 'Codex', token: codex }, { name: 'Gemini', token: gemini }]);
@@ -1369,16 +1369,26 @@ test('Worker free hosts route, dispatch, hand back once and stop at the chain bu
   const codex_run = (await r.reserve('Codex')).body;
   assert.equal((await r.answer(codex_run.id, codex, 'Codex', { to: ['Gemini'] })).status, 201);
   assert.equal((await requests()).filter(item => item[0] === 'Gemini' && item[2] === 'pending').length, 0);
-  // Chain one already used 3 AI requests; two two-member dispatch/hand-off cycles reach 8, so the last hand-off is refused.
+  // Chain one ran one round; two more reach the limit of 3, and each still hands back for its summary.
   for (let cycle = 0; cycle < 2; cycle++) { await work('Claude', { to: ['Codex', 'Gemini'] }); await work('Codex'); await work('Gemini'); }
-  assert.deepEqual((await f.request(r.path)).body.free.halted_chains.map(item => item.reason), ['budget']);
-  assert.equal((await requests()).filter(item => item[0] === 'Claude' && item[2] === 'pending').length, 0);
+  assert.equal((await requests()).filter(item => item[0] === 'Claude' && item[2] === 'pending').length, 1, 'the last round still hands back');
+  await work('Claude', { to: ['Codex', 'Gemini'] });
+  const held = (await f.request(r.path)).body.free;
+  assert.deepEqual(held.halted_chains.map(item => item.reason), ['budget']);
+  assert.equal((await requests()).filter(item => item[2] === 'pending').length, 0, 'the dispatch past the limit is held');
+  const chain_url = `${r.path}/chains/${held.halted_chains[0].chain_id}`;
+  assert.equal((await f.request(chain_url, { action: 'continue', rounds: 1 }, r.claude)).status, 403);
+  const continued = await f.request(chain_url, { action: 'continue', rounds: 1 }, r.owner);
+  assert.equal(continued.status, 200, JSON.stringify(continued.body));
+  assert.deepEqual((await requests()).filter(item => item[2] === 'pending').map(item => item[0]).sort(), ['Codex', 'Gemini'], 'continuing sends the held dispatch');
+  assert.equal((await f.request(chain_url, { action: 'continue', rounds: 1 }, r.owner)).status, 409);
+  await work('Codex'); await work('Gemini'); await work('Claude');
   const failing = await r.say('全失败', { to: ['Claude'] });
   assert.equal(failing.status, 201);
   await work('Claude', { to: ['Gemini'] });
   const gemini_run = (await r.reserve('Gemini')).body;
   await f.request(`${r.path}/executions/${gemini_run.id}`, { action: 'fail', reason: '退出' }, r.owner);
-  assert.deepEqual((await f.request(r.path)).body.free.halted_chains.map(item => item.reason).sort(), ['all_failed', 'budget']);
+  assert.deepEqual((await f.request(r.path)).body.free.halted_chains.map(item => item.reason), ['all_failed']);
   const roles = Object.fromEntries((await f.request(`${r.path}/members/${await r.member_id('Codex')}`, { action: 'role', role: 'host' }, r.owner)).body.members
     .map(member => [member.name, member.role]));
   assert.deepEqual(roles, { Claude: 'member', Codex: 'host', Gemini: 'member' });
@@ -1388,7 +1398,7 @@ test('Worker free hosts route, dispatch, hand back once and stop at the chain bu
   assert.equal((await f.request(r.path)).body.host, 'Claude');
 });
 
-test('Worker hands a single dispatch back only when asked and follows the owner chain budget, like Python', async t => {
+test('Worker hands a single dispatch back only when asked and follows the owner round limit, like Python', async t => {
   const f = await worker_fixture(t);
   const codex = 'codex-hops'.repeat(4), gemini = 'gemini-hops'.repeat(4);
   const r = await free_worker_room(f, [{ name: 'Codex', token: codex }, { name: 'Gemini', token: gemini }]);
@@ -1397,9 +1407,9 @@ test('Worker hands a single dispatch back only when asked and follows the owner 
   const requests = async () => (await f.request(r.path)).body.free.requests.map(item => [item.member, item.purpose, item.status]);
   const work = async (name, extra = {}) => assert.equal((await r.answer((await r.reserve(name)).body.id, tokens[name], name, extra)).status, 201);
   const url = `${r.path}/budget`;
-  assert.equal((await f.request(r.path)).body.free.max_auto_hops, 8);
-  assert.equal((await f.request(url, { max_auto_hops: 3 }, r.claude)).status, 403);
-  for (const bad of [0, 51, '3', 2.5]) assert.equal((await f.request(url, { max_auto_hops: bad }, r.owner)).status, 400);
+  assert.equal((await f.request(r.path)).body.free.max_rounds, 3);
+  assert.equal((await f.request(url, { max_rounds: 2 }, r.claude)).status, 403);
+  for (const bad of [0, 21, '3', 2.5]) assert.equal((await f.request(url, { max_rounds: bad }, r.owner)).status, 400);
   await r.say('单人派活');
   await work('Claude', { to: ['Codex'] });
   await work('Codex');
@@ -1412,11 +1422,11 @@ test('Worker hands a single dispatch back only when asked and follows the owner 
   assert.equal((await r.answer(host_run.id, r.claude, 'Claude', { to: ['Codex'], handoff: true })).status, 201);
   await work('Codex');
   assert.deepEqual((await requests()).filter(item => item[1] === 'handoff'), [['Claude', 'handoff', 'pending']]);
-  assert.deepEqual((await f.request(url, { max_auto_hops: 3 }, r.owner)).body, { max_auto_hops: 3 });
-  // This chain's dispatch and hand-off used 2 of 3; two more members would exceed the budget.
+  assert.deepEqual((await f.request(url, { max_rounds: 1 }, r.owner)).body, { max_rounds: 1 });
+  // This chain ran its one round; the host's next dispatch is held whatever the number of members.
   await work('Claude', { to: ['Codex', 'Gemini'] });
   const free = (await f.request(r.path)).body.free;
-  assert.deepEqual([free.max_auto_hops, free.halted_chains.map(item => item.reason)], [3, ['budget']]);
+  assert.deepEqual([free.max_rounds, free.halted_chains.map(item => item.reason), free.chain_rounds[0].used, free.chain_rounds[0].allowed], [1, ['budget'], 1, 1]);
 });
 
 test('Worker smart scheduling asks everyone without a hand-off, or no one, like Python', async t => {

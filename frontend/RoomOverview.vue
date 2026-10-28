@@ -4,7 +4,7 @@
  * entry to the same actions, so nothing here hides behind a menu.
  */
 import { computed, inject, ref, watch } from "vue";
-import AutoHopsField from "./AutoHopsField.vue";
+import ChainRoundsField from "./ChainRoundsField.vue";
 import InviteDialog from "./InviteDialog.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 import { member_actions } from "./member-actions.js";
@@ -33,16 +33,22 @@ const local_state = computed(() => {
 /** An agy member waits for its default model to be read, so its switches stay greyed out until then. */
 const waiting = (name) => Boolean(saved.value?.participants?.[name]?.defaults_pending);
 const switching = ref("");
-// The budget the field shows: the saved one, or the value being saved until the room refreshes.
-const saving_hops = ref(false), hops_shown = ref(0);
-watch(() => room.value.free?.max_auto_hops, (value) => { hops_shown.value = value || 0; }, { immediate: true });
+// The round limit the field shows: the saved one, or the value being saved until the room refreshes.
+const SAVED_NOTICE_MS = 2000;
+const saving_rounds = ref(false), rounds_shown = ref(0), rounds_saved = ref(false);
+watch(() => room.value.free?.max_rounds, (value) => { rounds_shown.value = value || 0; }, { immediate: true });
 
-/** Save a new chain budget; on failure the field goes back to the saved value and the error shows under the members. */
-async function save_hops(value) {
-  hops_shown.value = value;
-  saving_hops.value = true;
-  try { await bridge.set_auto_hops(value); } catch { hops_shown.value = room.value.free?.max_auto_hops || 0; }
-  finally { saving_hops.value = false; }
+/** Save a new round limit and say so; on failure the field goes back to the saved value and the error shows under the members. */
+async function save_rounds(value) {
+  rounds_shown.value = value;
+  saving_rounds.value = true;
+  rounds_saved.value = false;
+  try {
+    await bridge.set_chain_rounds(value);
+    rounds_saved.value = true;
+    setTimeout(() => { rounds_saved.value = false; }, SAVED_NOTICE_MS);
+  } catch { rounds_shown.value = room.value.free?.max_rounds || 0; }
+  finally { saving_rounds.value = false; }
 }
 const result = ref({ tone: "", text: "" });
 // Rooms from before members were recorded only list their experts.
@@ -186,9 +192,10 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
       <dl class="overview-settings">
         <div><dt>主持人</dt><dd>{{ room.host ? bridge.display_name(room.host) : '未指定' }}</dd></div>
         <div><dt>智能调度</dt><dd>{{ scheduler }}</dd></div>
-        <div v-if="free && room.free?.max_auto_hops"><dt>AI 之间派活上限</dt><dd>
-          <AutoHopsField v-if="view.access?.can_manage" :model-value="hops_shown" :disabled="saving_hops" @update:model-value="save_hops" />
-          <span v-else>{{ room.free.max_auto_hops }} 次，你的一条消息引出的派活与回交达到此数即停下等你</span></dd></div>
+        <div v-if="free && room.free?.max_rounds"><dt>主持人自动推进</dt><dd>
+          <template v-if="view.access?.can_manage"><ChainRoundsField :model-value="rounds_shown" :disabled="saving_rounds" @update:model-value="save_rounds" />
+            <small v-if="rounds_saved" role="status" class="overview-saved">已保存，进行中的任务链也按新值</small></template>
+          <span v-else>你的一条消息最多推进 {{ room.free.max_rounds }} 轮（主持人派活、成员回答、交回汇总为一轮），到上限即停下等你</span></dd></div>
         <div v-if="!free"><dt>逐人追问</dt><dd>{{ room.named_followup ? '开启：主持人每轮给每位专家写针对性追问' : '关闭：首轮后请专家回应上一轮观点' }}</dd></div>
         <div><dt>阅读地址</dt><dd class="overview-address"><code>{{ reading }}</code><UButton icon="i-lucide-copy" color="neutral" variant="ghost" size="xs" aria-label="复制阅读地址" @click="act('copy', reading)" /></dd></div>
         <div v-if="created"><dt>创建时间</dt><dd>{{ created }}</dd></div>
@@ -202,6 +209,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 </template>
 
 <style scoped>
+.overview-saved { display: block; margin-top: 4px; color: var(--ui-success); font-size: 12px; }
 .overview-section { margin-bottom: 28px; }
 .overview-section h3 { margin: 0 0 10px; font-size: 14px; font-weight: 600; color: var(--ui-text-highlighted); }
 /* One card per member: who it is, three aligned facts, then its actions in a footer. */

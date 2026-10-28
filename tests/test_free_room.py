@@ -819,25 +819,37 @@ class HostTests(FreeRoomTests):
         self.assertEqual([item["reason"] for item in free["halted_chains"]], ["all_failed"])
         self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 0)
 
-    def test_chain_budget_stops_automatic_progress_until_the_user_speaks(self):
-        """AI-created requests beyond the budget halt the chain; a new owner message starts fresh."""
+    def test_round_limit_holds_the_next_dispatch_until_the_owner_continues(self):
+        """A round is a host dispatch: its hand-back always comes, the next dispatch past the limit is held, and continuing sends it."""
         from backend import free_room
-        original = free_room.MAX_AUTO_HOPS
-        free_room.MAX_AUTO_HOPS = 3
+        original = free_room.CHAIN_ROUNDS
+        free_room.CHAIN_ROUNDS = 1
         try:
-            FreeRoomTests.say(self, "预算")
+            FreeRoomTests.say(self, "轮数")
             self.work("Claude", to=["Codex", "Gemini"])
             self.work("Codex")
             self.work("Gemini")
+            self.assertEqual(self.requests()[-1], ("Claude", "handoff", "pending"), "the last round still gets its summary")
             self.work("Claude", to=["Gemini"])
             free = self.request(self.path)[1]["free"]
             self.assertEqual([item["reason"] for item in free["halted_chains"]], ["budget"])
-            self.assertEqual(self.requests()[-1], ("Claude", "handoff", "completed"))
+            self.assertEqual(self.requests()[-1], ("Claude", "handoff", "completed"), "the dispatch past the limit is held")
+            chain = free["halted_chains"][0]["chain_id"]
+            self.assertEqual(free["chain_rounds"][0], {"chain_id": chain, "used": 1, "allowed": 1})
+            url = f"{self.path}/chains/{chain}"
+            self.assertEqual(self.request(url, {"action": "continue", "rounds": 1}, self.tokens["Codex"])[0], 403)
+            for bad in (0, 21, "1"):
+                self.assertEqual(self.request(url, {"action": "continue", "rounds": bad}, self.owner)[0], 400, bad)
+            status, view = self.request(url, {"action": "continue", "rounds": 1}, self.owner)
+            self.assertEqual(status, 200, view)
+            self.assertEqual(self.requests()[-1], ("Gemini", "ask", "pending"), "continuing sends the held dispatch")
+            self.assertEqual((view["halted_chains"], view["chain_rounds"][0]["allowed"]), ([], 2))
+            self.assertEqual(self.request(url, {"action": "continue", "rounds": 1}, self.owner)[0], 409, "a running chain needs no continuing")
             FreeRoomTests.say(self, "新的一链", to=["Claude"])
-            self.work("Claude", to=["Gemini"])
-            self.assertEqual(self.requests()[-1], ("Gemini", "ask", "pending"))
+            self.work("Claude", to=["Codex"])
+            self.assertEqual(self.requests()[-1], ("Codex", "ask", "pending"), "a new owner message starts with a fresh limit")
         finally:
-            free_room.MAX_AUTO_HOPS = original
+            free_room.CHAIN_ROUNDS = original
 
     def test_single_member_dispatch_hands_back_only_when_the_host_asks(self):
         """One member's answer goes straight to the user unless the host dispatched it with handoff, e.g. to pass it to a reviewer."""
@@ -860,21 +872,22 @@ class HostTests(FreeRoomTests):
             self.assertEqual(status, 400, refused)
             self.assertIn("handoff", refused["error"])
 
-    def test_owner_sets_the_room_chain_budget(self):
-        """Only the owner changes the budget, within its range; running chains follow the new value."""
+    def test_owner_sets_the_room_round_limit(self):
+        """Only the owner changes the limit, within its range; running chains follow the new value."""
         url = f"{self.path}/budget"
-        self.assertEqual(self.request(self.path)[1]["free"]["max_auto_hops"], 8)
-        self.assertEqual(self.request(url, {"max_auto_hops": 3}, self.member)[0], 403)
-        for bad in (0, 51, "3", 2.5):
-            self.assertEqual(self.request(url, {"max_auto_hops": bad}, self.owner)[0], 400)
-        FreeRoomTests.say(self, "预算")
+        self.assertEqual(self.request(self.path)[1]["free"]["max_rounds"], 3)
+        self.assertEqual(self.request(url, {"max_rounds": 2}, self.member)[0], 403)
+        for bad in (0, 21, "3", 2.5):
+            self.assertEqual(self.request(url, {"max_rounds": bad}, self.owner)[0], 400)
+        FreeRoomTests.say(self, "轮数")
         self.work("Claude", to=["Codex", "Gemini"])
-        status, saved = self.request(url, {"max_auto_hops": 2}, self.owner)
-        self.assertEqual((status, saved), (200, {"max_auto_hops": 2}))
+        status, saved = self.request(url, {"max_rounds": 1}, self.owner)
+        self.assertEqual((status, saved), (200, {"max_rounds": 1}))
         self.work("Codex")
         self.work("Gemini")
+        self.work("Claude", to=["Codex"])
         free = self.request(self.path)[1]["free"]
-        self.assertEqual((free["max_auto_hops"], [item["reason"] for item in free["halted_chains"]]), (2, ["budget"]))
+        self.assertEqual((free["max_rounds"], [item["reason"] for item in free["halted_chains"]]), (1, ["budget"]))
 
     def test_smart_scheduling_asks_everyone_or_no_one(self):
         """Everyone answers once without a hand-off and the host may not dispatch; no one cancels the host's request."""

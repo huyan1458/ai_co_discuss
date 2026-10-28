@@ -997,7 +997,7 @@ function reset_create_form() {
   state.launch.scheduler = default_scheduler();
   state.named_followup = false;
   state.create_discussion = false;
-  state.create_auto_hops = DEFAULT_AUTO_HOPS;
+  state.create_chain_rounds = DEFAULT_CHAIN_ROUNDS;
   state.launch.profiles = JSON.parse(JSON.stringify(state.launch.saved_profiles || {}));
   Object.values(state.launch.profiles).forEach(fill_api_key);
   state.launch.notice = "";
@@ -1174,11 +1174,11 @@ async function send_descriptions(room_id, token, descriptions) {
   catch (error) { state.free_notice = `成员描述未保存：${error.message}，可在发言顺序的成员菜单里重新填写。`; }
 }
 
-/** Save the new room's chain budget with the room credential; a failure leaves the room on the default. */
-async function send_auto_hops(room_id, token, max_auto_hops) {
-  if (!room_id || !token || max_auto_hops === DEFAULT_AUTO_HOPS) return;
-  try { await request_json(`/api/rooms/${room_id}/budget`, { max_auto_hops }, token); }
-  catch (error) { state.free_notice = `派活上限未保存：${error.message}，房间沿用默认 ${DEFAULT_AUTO_HOPS} 次，可在房间页修改。`; }
+/** Save the new room's round limit with the room credential; a failure leaves the room on the default. */
+async function send_chain_rounds(room_id, token, max_rounds) {
+  if (!room_id || !token || max_rounds === DEFAULT_CHAIN_ROUNDS) return;
+  try { await request_json(`/api/rooms/${room_id}/budget`, { max_rounds }, token); }
+  catch (error) { state.free_notice = `推进轮数未保存：${error.message}，房间沿用默认 ${DEFAULT_CHAIN_ROUNDS} 轮，可在房间页修改。`; }
 }
 
 /** Edit one member's description inside the room; the next decision by the scheduler or host uses it. */
@@ -1193,14 +1193,26 @@ async function describe_member(name, text) {
   } catch (error) { state.free_error = error.message; throw error; }
 }
 
-/** Change how many requests AI may create from one owner message; chains still running follow the new value. */
-async function set_auto_hops(max_auto_hops) {
+/** Change how many rounds the host may run from one owner message; chains still running follow the new value. */
+async function set_chain_rounds(max_rounds) {
   const room_id = state.room.id;
   state.free_error = "";
   try {
     const token = localStorage.getItem(`discuss-access:${room_id}`);
     if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
-    await request_json(`/api/rooms/${room_id}/budget`, { max_auto_hops }, token);
+    await request_json(`/api/rooms/${room_id}/budget`, { max_rounds }, token);
+    if (state.room?.id === room_id) await refresh_room();
+  } catch (error) { state.free_error = error.message; throw error; }
+}
+
+/** Let a chain that stopped at its round limit run on for more rounds; the dispatch it held back goes out at once. */
+async function continue_chain(chain_id, rounds) {
+  const room_id = state.room.id;
+  state.free_error = "";
+  try {
+    const token = localStorage.getItem(`discuss-access:${room_id}`);
+    if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
+    await request_json(`/api/rooms/${room_id}/chains/${chain_id}`, { action: "continue", rounds }, token);
     if (state.room?.id === room_id) await refresh_room();
   } catch (error) { state.free_error = error.message; throw error; }
 }
@@ -1877,7 +1889,7 @@ async function submit_local_launch(input, title, direct = false, signature) {
     const names = [...(record.input.room?.members || []).map(member => member.name), ...Object.keys(result.room?.experts || {})];
     await send_descriptions(result.room?.id, record.input.token, Object.fromEntries(names.map(name => [name, description_draft(name)])));
     for (const name of names) delete description_drafts[name];
-    await send_auto_hops(result.room?.id, record.input.token, state.create_auto_hops);
+    await send_chain_rounds(result.room?.id, record.input.token, state.create_chain_rounds);
     return result;
   } catch (error) {
     const stage = error.launch?.stage || (record.direct && error.preflight ? "not_started" : undefined);
@@ -2225,13 +2237,13 @@ function write_named_followup(value) {
   publish_view();
 }
 
-// The server's default chain budget; a new room sends its own only when the form changed it.
-const DEFAULT_AUTO_HOPS = 8;
-state.create_auto_hops = DEFAULT_AUTO_HOPS;
+// The server's default round limit; a new room sends its own only when the form changed it.
+const DEFAULT_CHAIN_ROUNDS = 3;
+state.create_chain_rounds = DEFAULT_CHAIN_ROUNDS;
 
-/** Change the new room's chain budget; it is saved right after the room is created. */
-function write_create_auto_hops(value) {
-  state.create_auto_hops = value;
+/** Change the new room's round limit; it is saved right after the room is created. */
+function write_create_chain_rounds(value) {
+  state.create_chain_rounds = value;
   publish_view();
 }
 
@@ -3444,7 +3456,7 @@ function view_snapshot() {
     free_notice: state.free_notice, free_error: state.free_error, free_proxy: state.free_proxy, order_error: state.order_error,
     create_parent: state.create_parent, access: access_snapshot(), admin: admin_snapshot(),
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
-    theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_auto_hops: state.create_auto_hops };
+    theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_chain_rounds: state.create_chain_rounds };
 }
 
 /** Update a shared draft using the same input events as the original controls. */
@@ -3676,8 +3688,8 @@ function change_view_theme(theme) {
 }
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
-  write_launch: write_launch_field, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_auto_hops, expert_presets, apply_expert_preset, unique_instance, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
-  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_auto_hops, check_launch_api, launch_summary, launch_can_set_access, launch_can_bind_session, pick_launch_directory, browse_local_directory, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
+  write_launch: write_launch_field, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
+  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, launch_can_bind_session, pick_launch_directory, browse_local_directory, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
