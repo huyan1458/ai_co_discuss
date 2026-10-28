@@ -235,6 +235,8 @@ def message_commands(subcommands, registry):
     post.add_argument("--execution", type=positive_int, help="自由房间：本次执行编号，仅 chat 可用；执行失效后不能改作普通发言")
     post.add_argument("--to", type=ai_name, action="append", default=[],
                       help="自由房间：主持人点名派活，普通成员提出回应建议（须房主确认）；可重复")
+    post.add_argument("--handoff", action="store_true",
+                      help="自由房间主持人：与 --to 同用，只点名一位成员时，它做完也回到你这里（如再交评审）；点名多位时总会回到你")
     post.add_argument("--request", type=positive_int, action="append", default=[],
                       help="自由房间手动接入成员：本次回答完成的请求编号，可重复；不能与 --execution 同用")
     post.add_argument("--reply-to", type=positive_int, help="被引用的原文编号")
@@ -499,6 +501,8 @@ def plan_message(args):
         payload["request_ids"] = list(dict.fromkeys(args.request))
     if args.to:
         payload["to"] = list(dict.fromkeys(args.to))
+    if args.handoff:
+        payload["handoff"] = True
     if args.reply_to:
         payload["reply_to"] = args.reply_to
     # A hosting Claude Code or Codex session exposes its own ID; the room records it so the local service can take the member over.

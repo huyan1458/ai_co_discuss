@@ -39,17 +39,18 @@ def token_hash(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def save_segments(connection, source, room_id, execution_id, anchor, finished, payload):
+def save_segments(connection, source, room_id, execution_id, anchor, finished, payload, optional=False):
     """Record an execution's phase segments as millisecond offsets from its delivery at `anchor`.
 
     The runner measures them on its own clock, so they are kept within the execution's own span; `finished` is 0 while
-    it runs. A resent segment keeps the later end, so the open segment can be reported again as it runs on.
+    it runs. A resent segment keeps the later end, so the open segment can be reported again as it runs on. `optional`
+    allows a report with no segments, when it carries progress notes instead.
     """
     now = int(time.time())
     if finished and finished + SEGMENT_GRACE_SECONDS < now:
         raise FileExistsError("执行已结束较久，不再接收阶段记录")
-    segments = payload.get("segments")
-    if (not isinstance(segments, list) or not 0 < len(segments) <= MAX_SEGMENTS_PER_REPORT or any(
+    segments = payload.get("segments", [])
+    if (not isinstance(segments, list) or len(segments) > MAX_SEGMENTS_PER_REPORT or (not segments and not optional) or any(
             not isinstance(item, dict) or type(item.get("seq")) is not int or not 1 <= item["seq"] <= MAX_EXECUTION_SEGMENTS
             or item.get("phase") not in SEGMENT_PHASES or not isinstance(item.get("tool", ""), str)
             or len(item.get("tool", "")) > MAX_SEGMENT_TOOL or type(item.get("start_ms")) is not int

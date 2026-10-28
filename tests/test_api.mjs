@@ -500,8 +500,14 @@ test('API participants load the shared skills and map CLI commands onto their ro
   assert.doesNotMatch(expert, /# 讨论主持/);
   assert.doesNotMatch(expert, /arrange_turns/, 'experts are not told about host tools');
   for (const prompt of [host, expert, free]) assert.match(prompt, /读不到内容[\s\S]*不得根据文件名猜测/);
-  assert.match(free, /submit_chat（派活用 to）/);
-  assert.doesNotMatch(free, /# 讨论主持/, 'free-room hosts route work without the discussion host skill');
+  assert.match(free, /submit_chat（派活用 to；单人派活要回到你时加 handoff）/);
+  assert.match(free, /# 开发协作/, 'an API free-room host cannot open references, so it gets the development reference inline');
+  assert.doesNotMatch(expert, /# 开发协作/);
+  assert.match(free, /# 自由协作主持/);
+  assert.doesNotMatch(free, /## 自动主持流程|# 讨论房间/, 'a free-room host gets the host core and free-room pages, not the discussion pages');
+  assert.match(host, /## 自动主持流程/);
+  assert.match(expert, /# 讨论房间/);
+  assert.doesNotMatch(expert, /# 自由协作房间/, 'discussion experts do not load the free-room page');
   assert.match(free, /handoff/, 'free-room API participants get the free-room rules, which live in a reference');
   assert.doesNotMatch(expert, /handoff/, 'discussion rooms do not carry the free-room rules');
 });

@@ -912,7 +912,7 @@ async function manage_room(database, room_id, action, payload) {
     const queries = [
       "DELETE FROM member_recommendations WHERE room_id=?", "DELETE FROM free_queue WHERE room_id=?", "DELETE FROM speaking_orders WHERE room_id=?", "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_descriptions WHERE room_id=?", "DELETE FROM execution_notes WHERE room_id=?", "DELETE FROM execution_segments WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?", "DELETE FROM member_sessions WHERE room_id=?", "DELETE FROM member_registrations WHERE room_id=?",
       "DELETE FROM room_members WHERE room_id=?", "DELETE FROM room_modes WHERE room_id=?",
-      "DELETE FROM free_batches WHERE room_id=?", "DELETE FROM free_chains WHERE room_id=?", "DELETE FROM free_settings WHERE room_id=?", "DELETE FROM room_links WHERE room_id=?",
+      "DELETE FROM free_batches WHERE room_id=?", "DELETE FROM free_chains WHERE room_id=?", "DELETE FROM free_handoffs WHERE room_id=?", "DELETE FROM free_settings WHERE room_id=?", "DELETE FROM room_links WHERE room_id=?",
       "DELETE FROM discussion_options WHERE room_id=?",
       "DELETE FROM round_budgets WHERE room_id=?", "DELETE FROM discussion_conclusions WHERE room_id=?", "DELETE FROM discussion_sessions WHERE room_id=?",
       "DELETE FROM scheduler_feedback WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)",
@@ -1902,7 +1902,7 @@ async function runtime_event_action(database, room_id, event_id, token, payload)
     const timing = await database.prepare("SELECT dispatched_at,finished_at FROM event_timings WHERE event_id=?").bind(event.id).first();
     if (!timing?.dispatched_at) throw new HttpError(409, "执行尚未交付");
     const finished = ["dispatched", "started"].includes(event.status) ? 0 : timing.finished_at || 1;
-    await save_segments(database, "discussion", room_id, event.id, timing.dispatched_at, finished, payload);
+    await database.batch(segment_statements(database, "discussion", room_id, event.id, timing.dispatched_at, finished, payload));
     return public_event(event);
   }
   let statements;
@@ -2068,24 +2068,42 @@ const MAX_EXECUTION_SEGMENTS = 400;
 const MAX_SEGMENTS_PER_REPORT = 40;
 const MAX_SEGMENT_TOOL = 60;
 const SEGMENT_GRACE_SECONDS = 600;
-// The timeline page reads this many recent executions of each kind.
+// The timeline page reads this many recent executions of each kind; with `after` (?3) only those running or ended since.
+// Parameters: ?1 room, ?2 limit, ?3 after (0 reads all). Shared verbatim with the Python service.
 const TIMELINE_EXECUTIONS = 100;
 const TIMELINE_STATES = { completed: "done", failed: "failed", cancelled: "cancelled" };
-const TIMELINE_SQL = `SELECT * FROM (SELECT 'free' AS source,e.id,m.name AS member,m.role,e.status,
+const TIMELINE_FREE_IDS = "SELECT id FROM member_executions WHERE room_id=?1 AND (?3=0 OR finished_at=0 OR finished_at>=?3) ORDER BY id DESC LIMIT ?2";
+const TIMELINE_DISCUSSION_IDS = `SELECT e.id FROM discussion_events e LEFT JOIN event_timings t ON t.event_id=e.id
+    WHERE e.room_id=?1 AND (t.dispatched_at>0 OR e.status='pending') AND (?3=0 OR COALESCE(t.finished_at,0)=0 OR t.finished_at>=?3)
+    ORDER BY e.id DESC LIMIT ?2`;
+// Besides times: the task an execution took on (its request message, or the discussion turn's question), its result
+// (the answer's summary, else the answer's opening), its latest progress note, how many files it changed (NULL when
+// unobserved) and its last output time (free executions only).
+const TIMELINE_SQL = `SELECT x.*,(SELECT COALESCE(NULLIF(s.text,''),substr(a.text,1,200)) FROM messages a
+        LEFT JOIN message_summaries s ON s.message_id=a.id WHERE a.id=x.answer_id) AS result FROM (
+    SELECT 'free' AS source,e.id,m.name AS member,m.role,e.status,
         COALESCE((SELECT MIN(r.created_at) FROM member_requests r WHERE r.execution_id=e.id),e.created_at) AS queued_at,
         e.created_at AS dispatched_at,0 AS started_at,e.finished_at,
         CASE WHEN e.status='failed' THEN e.result ELSE '' END AS reason,
         (SELECT parent.execution_id FROM member_requests r JOIN member_requests parent ON parent.answer_id=r.message_id
-            WHERE r.execution_id=e.id AND parent.execution_id IS NOT NULL ORDER BY r.id LIMIT 1) AS parent_id
-    FROM member_executions e JOIN room_members m ON m.id=e.member_id WHERE e.room_id=? ORDER BY e.id DESC LIMIT ?)
-UNION ALL SELECT * FROM (SELECT 'discussion',e.id,e.participant,e.role,e.status,CAST(strftime('%s',e.created_at) AS INTEGER),
-        COALESCE(t.dispatched_at,0),e.started_at,COALESCE(t.finished_at,0),CASE WHEN e.status='failed' THEN e.result ELSE '' END,NULL
-    FROM discussion_events e LEFT JOIN event_timings t ON t.event_id=e.id
-    WHERE e.room_id=? AND (t.dispatched_at>0 OR e.status='pending') ORDER BY e.id DESC LIMIT ?)`;
-const TIMELINE_SEGMENTS_SQL = `SELECT source,execution_id,phase,tool,start_ms,end_ms FROM execution_segments WHERE room_id=? AND (
-    (source='free' AND execution_id IN (SELECT id FROM member_executions WHERE room_id=? ORDER BY id DESC LIMIT ?))
-    OR (source='discussion' AND execution_id IN (SELECT id FROM discussion_events WHERE room_id=? ORDER BY id DESC LIMIT ?)))
+            WHERE r.execution_id=e.id AND parent.execution_id IS NOT NULL ORDER BY r.id LIMIT 1) AS parent_id,
+        e.activity_at,(SELECT MIN(r.message_id) FROM member_requests r WHERE r.execution_id=e.id) AS task_id,
+        (SELECT substr(q.text,1,160) FROM messages q WHERE q.id=(SELECT MIN(r.message_id) FROM member_requests r WHERE r.execution_id=e.id)) AS task,
+        (SELECT MAX(r.answer_id) FROM member_requests r WHERE r.execution_id=e.id) AS answer_id,
+        (SELECT n.text FROM execution_notes n WHERE n.execution_id=e.id ORDER BY n.seq DESC LIMIT 1) AS last_note,
+        CASE WHEN e.changes='' THEN NULL ELSE json_array_length(e.changes) END AS changes
+    FROM member_executions e JOIN room_members m ON m.id=e.member_id WHERE e.id IN (${TIMELINE_FREE_IDS})
+    UNION ALL SELECT 'discussion',e.id,e.participant,e.role,e.status,CAST(strftime('%s',e.created_at) AS INTEGER),
+        COALESCE(t.dispatched_at,0),e.started_at,COALESCE(t.finished_at,0),CASE WHEN e.status='failed' THEN e.result ELSE '' END,NULL,
+        0,NULL,(SELECT substr(q.question,1,160) FROM discussion_turns q WHERE q.id=e.turn_id),
+        CASE WHEN e.result LIKE 'message:%' THEN CAST(substr(e.result,9) AS INTEGER) END,NULL,NULL
+    FROM discussion_events e LEFT JOIN event_timings t ON t.event_id=e.id WHERE e.id IN (${TIMELINE_DISCUSSION_IDS})) x`;
+const TIMELINE_SEGMENTS_SQL = `SELECT source,execution_id,phase,tool,start_ms,end_ms FROM execution_segments WHERE room_id=?1 AND (
+    (source='free' AND execution_id IN (${TIMELINE_FREE_IDS})) OR (source='discussion' AND execution_id IN (${TIMELINE_DISCUSSION_IDS})))
     ORDER BY source,execution_id,seq`;
+// Only the times of progress notes: the texts are read when the reader hovers one.
+const TIMELINE_NOTES_SQL = `SELECT execution_id,created_at FROM execution_notes
+    WHERE room_id=?1 AND execution_id IN (${TIMELINE_FREE_IDS}) ORDER BY execution_id,seq`;
 // A member description is a short note for the scheduler and the host, keyed by the member's name.
 const MAX_MEMBER_DESCRIPTION = 500;
 const MAX_MEMBER_NAME = 80;
@@ -2101,6 +2119,8 @@ const FREE_RECOMMEND_SECONDS = 60;
 // A click sent just before the hint disappears still counts.
 const FREE_RECOMMEND_GRACE_SECONDS = 5;
 const FREE_BATCH_DONE = "NOT EXISTS(SELECT 1 FROM member_requests r WHERE r.room_id=b.room_id AND r.batch_id=b.batch_id AND r.status NOT IN ('completed','cancelled','failed'))";
+// A finished batch goes back to its host when it had several members or the host asked for its one member back.
+const FREE_BATCH_RETURNS = "((SELECT COUNT(*) FROM member_requests q WHERE q.room_id=b.room_id AND q.batch_id=b.batch_id)>=2 OR EXISTS(SELECT 1 FROM free_handoffs h WHERE h.room_id=b.room_id AND h.batch_id=b.batch_id))";
 const FREE_BATCH_ANSWERED = "EXISTS(SELECT 1 FROM member_requests r WHERE r.room_id=b.room_id AND r.batch_id=b.batch_id AND r.status='completed')";
 // Ordering and filing a channel only rearrange the shared directory, like folder edits, so they need no room credential.
 const DIRECTORY_OPERATIONS = ["move", "folder"];
@@ -2368,12 +2388,12 @@ function free_settle_statements(database, room_id) {
       FROM free_batches b WHERE b.room_id=? AND b.settled=0 AND ${FREE_BATCH_DONE} AND NOT ${FREE_BATCH_ANSWERED}`).bind(room_id),
     database.prepare(`INSERT OR IGNORE INTO free_chains (room_id,chain_id,reason) SELECT b.room_id,b.chain_id,'budget'
       FROM free_batches b JOIN room_members m ON m.id=b.host_id AND m.status='active' AND m.role='host'
-      WHERE b.room_id=? AND b.settled=0 AND ${FREE_BATCH_DONE} AND ${FREE_BATCH_ANSWERED} AND ${used}>=${FREE_AUTO_HOPS("b.room_id")}`).bind(room_id),
+      WHERE b.room_id=? AND b.settled=0 AND ${FREE_BATCH_DONE} AND ${FREE_BATCH_ANSWERED} AND ${FREE_BATCH_RETURNS} AND ${used}>=${FREE_AUTO_HOPS("b.room_id")}`).bind(room_id),
     // The hand-off is unique per (dispatch message, host), so repeating this statement never duplicates it.
     database.prepare(`INSERT OR IGNORE INTO member_requests (room_id,member_id,message_id,chain_id,batch_id,purpose,created_by,created_at)
       SELECT b.room_id,b.host_id,b.batch_id,b.chain_id,0,'handoff','host',unixepoch()
       FROM free_batches b JOIN room_members m ON m.id=b.host_id AND m.status='active' AND m.role='host'
-      WHERE b.room_id=? AND b.settled=0 AND ${FREE_BATCH_DONE} AND ${FREE_BATCH_ANSWERED}
+      WHERE b.room_id=? AND b.settled=0 AND ${FREE_BATCH_DONE} AND ${FREE_BATCH_ANSWERED} AND ${FREE_BATCH_RETURNS}
       AND NOT EXISTS(SELECT 1 FROM free_chains c WHERE c.room_id=b.room_id AND c.chain_id=b.chain_id)`).bind(room_id),
     database.prepare(`UPDATE free_batches AS b SET settled=1 WHERE b.room_id=? AND b.settled=0 AND ${FREE_BATCH_DONE}`).bind(room_id),
     ...free_advance_statements(database, room_id),
@@ -2516,7 +2536,7 @@ async function set_auto_hops(database, room_id, token, payload) {
 }
 
 /** Statements queuing a host's named members as one batch, or halting the chain when the budget is spent. */
-async function free_dispatch_statements(database, room_id, host, names, chain_id, message_id, key) {
+async function free_dispatch_statements(database, room_id, host, names, chain_id, message_id, key, handoff = false) {
   const member_ids = free_named(await free_active_members(database, room_id), names, host.name);
   if (!member_ids.length || !chain_id) return [];
   const halted = await database.prepare("SELECT 1 FROM free_chains WHERE room_id=? AND chain_id=?").bind(room_id, chain_id).first();
@@ -2526,7 +2546,8 @@ async function free_dispatch_statements(database, room_id, host, names, chain_id
   }
   return [...member_ids.map(member_id => database.prepare(`INSERT INTO member_requests (room_id,member_id,message_id,chain_id,batch_id,purpose,created_by,created_at)
       SELECT ?,?,${message_id},?,${message_id},'ask','host',unixepoch()`).bind(room_id, member_id, ...key, chain_id, ...key)),
-    database.prepare(`INSERT INTO free_batches (room_id,batch_id,chain_id,host_id) SELECT ?,${message_id},?,?`).bind(room_id, ...key, chain_id, host.id)];
+    database.prepare(`INSERT INTO free_batches (room_id,batch_id,chain_id,host_id) SELECT ?,${message_id},?,?`).bind(room_id, ...key, chain_id, host.id),
+    ...handoff ? [database.prepare(`INSERT INTO free_handoffs (room_id,batch_id) SELECT ?,${message_id}`).bind(room_id, ...key)] : []];
 }
 
 /** A host answering only its share of an everyone request answers as a member, so it may not dispatch others. */
@@ -2541,6 +2562,9 @@ async function free_answer_guard(database, room_id, member, payload) {
   const token_check = "EXISTS(SELECT 1 FROM room_members WHERE id=? AND token_hash=? AND status='active')";
   if (payload.to !== undefined) {
     free_named(await free_active_members(database, room_id), payload.to, member.name);
+  }
+  if (payload.handoff !== undefined && payload.handoff !== false && (payload.handoff !== true || member.role !== "host" || !payload.to?.length)) {
+    throw new HttpError(400, "handoff 只能由主持人与 to 一起使用，值为 true");
   }
   if (member.access === "online") throw new HttpError(403, "在线成员只读，回答由用户代发");
   if (member.access === "manual") {
@@ -2827,45 +2851,55 @@ async function free_execution_notes(database, room_id, execution_id) {
 }
 
 /**
- * Record an execution's phase segments as millisecond offsets from its delivery at `anchor`. The runner measures them on
- * its own clock, so they are kept within the execution's own span; `finished` is 0 while it runs. A resent segment keeps
- * the later end, so the open segment can be reported again as it runs on.
+ * Statements recording an execution's phase segments as millisecond offsets from its delivery at `anchor`. The runner
+ * measures them on its own clock, so they are kept within the execution's own span; `finished` is 0 while it runs. A
+ * resent segment keeps the later end, so the open segment can be reported again as it runs on. `optional` allows a
+ * report with no segments, when it carries progress notes instead.
  */
-async function save_segments(database, source, room_id, execution_id, anchor, finished, payload) {
+function segment_statements(database, source, room_id, execution_id, anchor, finished, payload, optional = false) {
   const now = Math.floor(Date.now() / 1000);
   if (finished && finished + SEGMENT_GRACE_SECONDS < now) throw new HttpError(409, "执行已结束较久，不再接收阶段记录");
-  const segments = payload.segments;
-  if (!Array.isArray(segments) || !segments.length || segments.length > MAX_SEGMENTS_PER_REPORT || segments.some(item => !item || typeof item !== "object"
+  const segments = payload.segments ?? [];
+  if (!Array.isArray(segments) || (!segments.length && !optional) || segments.length > MAX_SEGMENTS_PER_REPORT || segments.some(item => !item || typeof item !== "object"
     || !Number.isInteger(item.seq) || item.seq < 1 || item.seq > MAX_EXECUTION_SEGMENTS || !SEGMENT_PHASES.includes(item.phase)
     || typeof (item.tool ?? "") !== "string" || (item.tool ?? "").length > MAX_SEGMENT_TOOL
     || !Number.isInteger(item.start_ms) || !Number.isInteger(item.end_ms))) {
     throw new HttpError(400, `segments 须为 1–${MAX_SEGMENTS_PER_REPORT} 段 {seq: 1–${MAX_EXECUTION_SEGMENTS}, phase: ${SEGMENT_PHASES.join("、")}, tool: 最多 ${MAX_SEGMENT_TOOL} 字, start_ms, end_ms}`);
   }
   const limit = Math.max(0, (finished || now) - anchor + 1) * 1000;
-  await database.batch(segments.map(item => {
+  return segments.map(item => {
     const start = Math.min(Math.max(item.start_ms, 0), limit);
     return database.prepare(`INSERT INTO execution_segments (source,execution_id,seq,room_id,phase,tool,start_ms,end_ms)
       VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(source,execution_id,seq) DO UPDATE SET end_ms=MAX(end_ms,excluded.end_ms)`)
       .bind(source, execution_id, item.seq, room_id, item.phase, item.tool ?? "", start, Math.min(Math.max(item.end_ms, start), limit));
-  }));
+  });
 }
 
 /**
- * The room's recent executions of both kinds with their recorded phase segments, for the timeline page. Times are epoch
- * seconds and segments are millisecond offsets from `dispatched_at`. A free execution's parent is the execution that wrote
- * the message it answers; discussion executions have none. `state` is running, done, failed or cancelled.
+ * The room's recent executions of both kinds with their phase segments and note times, for the timeline page. Times are
+ * epoch seconds and segments are millisecond offsets from `dispatched_at`. A free execution's parent is the execution that
+ * wrote the message it answers; discussion executions have none. `state` is running, done, failed or cancelled. A positive
+ * `after` reads only executions still running or ended since then, so a page following live work rereads little.
  */
-async function execution_timeline(database, room_id) {
+async function execution_timeline(database, room_id, after = 0) {
   await require_room_id(database, room_id);
-  const rows = (await database.prepare(TIMELINE_SQL).bind(room_id, TIMELINE_EXECUTIONS, room_id, TIMELINE_EXECUTIONS).all()).results;
+  const params = [room_id, TIMELINE_EXECUTIONS, Math.max(0, Number.parseInt(after, 10) || 0)];
+  const [rows, segment_rows, note_rows] = (await database.batch([TIMELINE_SQL, TIMELINE_SEGMENTS_SQL, TIMELINE_NOTES_SQL]
+    .map(sql => database.prepare(sql).bind(...params)))).map(result => result.results);
   const segments = new Map();
-  for (const row of (await database.prepare(TIMELINE_SEGMENTS_SQL).bind(room_id, room_id, TIMELINE_EXECUTIONS, room_id, TIMELINE_EXECUTIONS).all()).results) {
+  for (const row of segment_rows) {
     const key = `${row.source}:${row.execution_id}`;
     if (!segments.has(key)) segments.set(key, []);
     segments.get(key).push({ phase: row.phase, tool: row.tool, start_ms: row.start_ms, end_ms: row.end_ms });
   }
-  return { now: Math.floor(Date.now() / 1000), execution_limit: TIMELINE_EXECUTIONS, segment_limit: MAX_EXECUTION_SEGMENTS,
-    executions: rows.map(row => ({ ...row, state: TIMELINE_STATES[row.status] || "running", segments: segments.get(`${row.source}:${row.id}`) || [] })) };
+  const notes = new Map();
+  for (const row of note_rows) {
+    if (!notes.has(row.execution_id)) notes.set(row.execution_id, []);
+    notes.get(row.execution_id).push(row.created_at);
+  }
+  return { now: Math.floor(Date.now() / 1000), after: params[2], execution_limit: TIMELINE_EXECUTIONS, segment_limit: MAX_EXECUTION_SEGMENTS,
+    executions: rows.map(row => ({ ...row, state: TIMELINE_STATES[row.status] || "running", segments: segments.get(`${row.source}:${row.id}`) || [],
+      notes: row.source === "free" ? notes.get(row.id) || [] : [] })) };
 }
 
 /** Validate the runner's reported phase; its output time is kept within the execution, since the runner's clock may differ. */
@@ -2891,8 +2925,13 @@ async function free_execution_action(database, room_id, execution_id, token, pay
     const result = await database.prepare("UPDATE member_executions SET changes=? WHERE id=? AND changes=''").bind(JSON.stringify([...new Set(files)].sort()), execution_id).run();
     if (!result.meta.changes) throw new HttpError(409, "本次执行的改动已记录");
   } else if (action === "segments") {
-    // The last segments arrive after the member's answer ended the execution.
-    await save_segments(database, "free", room_id, execution_id, row.created_at, live ? 0 : row.finished_at || 1, payload);
+    // The last segments and notes arrive after the member's answer ended the execution; such notes are dated at its end.
+    const finished = live ? 0 : row.finished_at || 1;
+    const notes = free_renewed_notes(payload);
+    const dated = finished ? Math.min(Math.floor(Date.now() / 1000), finished) : Math.floor(Date.now() / 1000);
+    await database.batch([...segment_statements(database, "free", room_id, execution_id, row.created_at, finished, payload, notes.length > 0),
+      ...notes.map(note => database.prepare("INSERT OR IGNORE INTO execution_notes (execution_id,seq,room_id,text,created_at) VALUES (?,?,?,?,?)")
+        .bind(execution_id, note.seq, room_id, note.text, dated))]);
   } else if (!live) throw new HttpError(409, "执行已结束");
   else if (action === "renew") {
     const limit = row.created_at + await free_execution_minutes(database, room_id) * 60;
@@ -3229,7 +3268,7 @@ async function append_free_message(database, room, payload, actor) {
           .bind(...key, guard.execution_id));
     }
     effects.push(database.prepare(`UPDATE room_members SET read_until=MAX(read_until,${message_id}) WHERE id=?`).bind(...key, actor.id));
-    if (actor.role === "host" && payload.to?.length) effects.push(...await free_dispatch_statements(database, room_id, actor, payload.to, chain_id, message_id, key));
+    if (actor.role === "host" && payload.to?.length) effects.push(...await free_dispatch_statements(database, room_id, actor, payload.to, chain_id, message_id, key, payload.handoff === true));
   }
   effects.push(...free_settle_statements(database, room_id));
   const statements = [
@@ -3608,7 +3647,7 @@ async function handle_api(database, request, parts, params, bucket, setup_key = 
   }
   if (parts[3] === "descriptions" && parts.length === 4 && method === "POST") return respond(await describe_members(database, room_id, request.headers.get("X-Discussion-Token") ?? "", await read_payload(request)));
   if (parts[3] === "budget" && parts.length === 4 && method === "POST") return respond(await set_auto_hops(database, room_id, request.headers.get("X-Discussion-Token") ?? "", await read_payload(request)));
-  if (parts[3] === "timeline" && parts.length === 4 && method === "GET") return respond(await execution_timeline(database, room_id));
+  if (parts[3] === "timeline" && parts.length === 4 && method === "GET") return respond(await execution_timeline(database, room_id, params.after));
   if (parts[3] === "register" && parts.length === 4 && method === "POST") return respond(await register_member(database, room_id, request.headers.get("X-Discussion-Token") ?? ""));
   if (parts[3] === "speaking-order" && parts.length === 4) {
     if (method === "GET") return respond((await require_room(database, room_id)).speaking_order);

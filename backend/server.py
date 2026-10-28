@@ -672,7 +672,7 @@ def manage_room(connection, room_id, action, payload):
 
 def delete_room_records(connection, room_id):
     """Remove a room's dependent records in the caller's transaction."""
-    for table in ("member_recommendations", "free_queue", "speaking_orders", "member_requests", "member_descriptions", "execution_notes", "execution_segments", "member_executions", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "free_settings", "room_links",
+    for table in ("member_recommendations", "free_queue", "speaking_orders", "member_requests", "member_descriptions", "execution_notes", "execution_segments", "member_executions", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "free_handoffs", "free_settings", "room_links",
                   "discussion_options", "round_budgets", "scheduler_decisions", "scheduler_routing", "discussion_conclusions", "discussion_sessions"):
         if table == "scheduler_decisions":
             for child in ("scheduler_feedback", "scheduler_decision_context", "scheduler_decision_inputs"):
@@ -2062,7 +2062,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             connection.commit()
             return self.respond(result)
         if parts[3:] == ["timeline"] and method == "GET":
-            return self.respond(execution_timeline(connection, room_id))
+            return self.respond(execution_timeline(connection, room_id, int(params.get("after", 0))))
         if parts[3:] == ["register"] and method == "POST":
             result = register_member(connection, room_id, token, utc_now())
             connection.commit()

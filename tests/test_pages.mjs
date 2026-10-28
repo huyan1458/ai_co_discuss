@@ -1282,6 +1282,14 @@ test('Worker free rooms keep runner lifecycle, membership and manual members con
   assert.equal(timed.state, 'running');
   assert.deepEqual(timed.segments.map(item => [item.phase, item.tool, item.start_ms]), [['thinking', '', 0], ['command', 'Bash', 400]]);
   assert.ok(timed.segments[1].end_ms <= (Math.floor(Date.now() / 1000) - timed.dispatched_at + 1) * 1000, 'segments stay within the execution');
+  assert.equal((await f.request(`${r.path}/executions/${retry.id}`, { action: 'segments', segments: [], notes: [{ seq: 3, text: '随阶段上报' }] }, r.owner)).status, 200);
+  assert.equal((await f.request(`${r.path}/executions/${retry.id}`, { action: 'segments', segments: [] }, r.owner)).status, 400);
+  const noted = (await f.request(`${r.path}/timeline`)).body;
+  const noted_item = noted.executions.find(item => item.source === 'free' && item.id === retry.id);
+  assert.equal(noted_item.notes.length, 3);
+  assert.deepEqual([noted_item.last_note, noted_item.result, typeof noted_item.task], ['随阶段上报', null, 'string']);
+  const later = (await f.request(`${r.path}/timeline?after=${noted.now + 60}`)).body.executions;
+  assert.deepEqual(later.map(item => item.id), [retry.id], 'only the running execution is read again');
   assert.equal((await f.request(`${r.path}/executions/${retry.id}`, { action: 'fail', reason: 'CLI 退出' }, r.owner)).body.status, 'failed');
   assert.equal((await f.request(r.path)).body.phase, 'discussing');
   const gemini = 'gemini-free'.repeat(4);
@@ -1380,7 +1388,7 @@ test('Worker free hosts route, dispatch, hand back once and stop at the chain bu
   assert.equal((await f.request(r.path)).body.host, 'Claude');
 });
 
-test('Worker hands a single dispatch back and follows the owner chain budget, like Python', async t => {
+test('Worker hands a single dispatch back only when asked and follows the owner chain budget, like Python', async t => {
   const f = await worker_fixture(t);
   const codex = 'codex-hops'.repeat(4), gemini = 'gemini-hops'.repeat(4);
   const r = await free_worker_room(f, [{ name: 'Codex', token: codex }, { name: 'Gemini', token: gemini }]);
@@ -1395,9 +1403,17 @@ test('Worker hands a single dispatch back and follows the owner chain budget, li
   await r.say('单人派活');
   await work('Claude', { to: ['Codex'] });
   await work('Codex');
+  assert.equal((await requests()).filter(item => item[1] === 'handoff').length, 0, 'one member answers the user directly');
+  const member_run = (await r.reserve('Codex')).status;
+  assert.equal(member_run, 409);
+  await r.say('做完交回我', { to: ['Claude'] });
+  const host_run = (await r.reserve('Claude')).body;
+  assert.equal((await r.answer(host_run.id, r.claude, 'Claude', { handoff: true })).status, 400, 'handoff needs to');
+  assert.equal((await r.answer(host_run.id, r.claude, 'Claude', { to: ['Codex'], handoff: true })).status, 201);
+  await work('Codex');
   assert.deepEqual((await requests()).filter(item => item[1] === 'handoff'), [['Claude', 'handoff', 'pending']]);
   assert.deepEqual((await f.request(url, { max_auto_hops: 3 }, r.owner)).body, { max_auto_hops: 3 });
-  // Dispatch and hand-off used 2 of 3; two more members would exceed the budget.
+  // This chain's dispatch and hand-off used 2 of 3; two more members would exceed the budget.
   await work('Claude', { to: ['Codex', 'Gemini'] });
   const free = (await f.request(r.path)).body.free;
   assert.deepEqual([free.max_auto_hops, free.halted_chains.map(item => item.reason)], [3, ['budget']]);

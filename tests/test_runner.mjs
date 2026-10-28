@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, readFileSync, readdirSync, realpathSync, statSync, utimesSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
@@ -15,9 +15,9 @@ import { DiscussionRunner, DiscussionStore, load_config, service_drafts, task_fi
 import { cwd_key, FreeRoomRunner, workspace_snapshot } from '../runner/free_runner.mjs';
 import { EXPERT_PROMPT_PRESETS, expert_prompt } from '../runner/expert_prompts.mjs';
 import { system_prompt } from '../runner/api_participant.mjs';
-import { assert_shared_home, DiscussionService, FreeRoomWithDiscussion, migrate_service_home, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
+import { assert_shared_home, DiscussionService, FreeRoomWithDiscussion, migrate_service_home, read_registry, register_room, service_pid, service_ready, start_service, sweep_service_home, unregister_room } from '../runner/discussion_service.mjs';
 import { launch_discussion, restore_room, room_models, room_profiles } from '../runner/discussion_launch.mjs';
-import { activity_phase, activity_tool, MAX_EXECUTION_SEGMENTS, MAX_SEGMENTS_PER_REPORT, SegmentLog, progress_note, agy_command_rule, agy_rule, antigravity_project, claude_exit_error, claude_rule_path, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
+import { activity_phase, activity_tool, MAX_EXECUTION_NOTES, MAX_EXECUTION_SEGMENTS, MAX_NOTES_PER_REPORT, MAX_SEGMENTS_PER_REPORT, SegmentLog, progress_note, agy_command_rule, agy_rule, antigravity_project, claude_exit_error, claude_rule_path, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
 import { certainty, decide, decide_group_order, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
 
@@ -1261,6 +1261,36 @@ test('the service ticks every registered room and pauses a room once it is unreg
   assert.ok(!existsSync(join(home, 'data-room2', 'runner.lock')), 'removed room releases its data-directory lock');
 });
 
+test('the sweep removes stale unused launch folders, orphaned drafts and the old part of oversized logs only', t => {
+  const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const folder = name => { const path = join(home, 'launches', name); mkdirSync(join(path, 'runtime'), { recursive: true }); return path; };
+  const registered = folder('registered'), stale = folder('stale'), recent = folder('recent'), held = folder('held');
+  writeFileSync(join(registered, 'config.json'), readFileSync(room_config(home, 'http://127.0.0.1:1', 'kept'), 'utf8'));
+  register_room(home, join(registered, 'config.json'));
+  writeFileSync(join(held, 'runtime', 'runner.lock'), String(process.pid));
+  const week_ago = (Date.now() - 8 * 24 * 60 * 60 * 1000) / 1000;
+  for (const path of [stale, held]) utimesSync(path, week_ago, week_ago);
+  const drafts = Object.fromEntries(['registered', 'stale', 'recent'].map(name => [name, service_drafts(home, join(home, 'launches', name, 'runtime'))]));
+  drafts.orphan = join(home, 'drafts', 'f'.repeat(64));
+  for (const path of Object.values(drafts)) mkdirSync(path, { recursive: true });
+  const log = join(home, 'local', 'website.log');
+  mkdirSync(join(home, 'local'), { recursive: true });
+  writeFileSync(log, `${'旧'.repeat(20)}\n`.repeat(200_000) + 'newest line\n');
+  writeFileSync(join(home, 'service.log'), 'short\n');
+  const removed = sweep_service_home(home);
+  assert.deepEqual(removed.launches, ['stale']);
+  // The stale folder's drafts go with it; only the draft folder no room uses is reported separately.
+  assert.deepEqual(removed.drafts, [basename(drafts.orphan)]);
+  assert.ok(!existsSync(drafts.stale));
+  assert.deepEqual(readdirSync(join(home, 'launches')).sort(), ['held', 'recent', 'registered']);
+  assert.ok(existsSync(drafts.registered) && existsSync(drafts.recent));
+  assert.deepEqual(removed.logs, [join('local', 'website.log')]);
+  assert.ok(statSync(log).size <= 1024 * 1024 && readFileSync(log, 'utf8').endsWith('newest line\n'));
+  assert.ok(readFileSync(log, 'utf8').startsWith('旧'), 'the kept part starts at a whole line');
+  assert.equal(readFileSync(join(home, 'service.log'), 'utf8'), 'short\n');
+});
+
 test('a room failure is reported without stopping the other rooms', async t => {
   const f = await fixture(t);
   const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
@@ -1285,11 +1315,15 @@ test('a room deleted on the website is unregistered, while a missing route alone
   const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
   const gone = room_config(home, site, 'gone'), kept = room_config(home, site, 'kept');
   register_room(home, gone); register_room(home, kept);
+  const drafts = service_drafts(home, join(home, 'data-gone'));
+  mkdirSync(drafts, { recursive: true });
   const service = new DiscussionService(home, () => ({ stop_children() {}, tick: async () => { throw new Error('HTTP 404: 地址不存在'); } }));
   t.after(async () => { await service.close(); await new Promise(done => server.close(done)); rmSync(home, { recursive: true, force: true }); });
   await service.tick();
   assert.deepEqual(read_registry(home), [kept]);
   assert.ok(!existsSync(join(home, 'data-gone', 'runner.lock')), 'the deleted room releases its data-directory lock');
+  assert.ok(!existsSync(drafts), 'the deleted room leaves no answer drafts behind');
+  assert.ok(existsSync(gone), 'a configuration outside launches/ belongs to the user and stays');
   const rooms = JSON.parse(readFileSync(join(home, 'status.json'), 'utf8')).rooms;
   assert.deepEqual(rooms.map(room => [room.room, room.status]), [['kept', 'error']]);
 });
@@ -1734,7 +1768,7 @@ async function free_fixture(t) {
       if (body?.action === 'release') { execution.status = 'cancelled'; state.pending = execution.requests; }
       if (body?.action === 'report') state.reports[execution.id] = body.changes;
       if (body?.action === 'renew') state.renewed = body;
-      if (body?.action === 'segments') (state.segments ||= []).push(body.segments);
+      if (body?.action === 'segments') { (state.segments ||= []).push(body.segments); if (body.notes) (state.notes ||= []).push(body.notes); }
       result = execution;
     } else result = { title: '自由单聊', mode: 'free', ...state.room };
     response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(result));
@@ -1824,54 +1858,70 @@ test('a changed activity is reported with an early renewal, at most once per rep
   assert.equal(state.renewed, undefined, 'unchanged activity waits for the regular renewal');
 });
 
-test('progress notes are numbered once, sent with a renewal and not resent', async t => {
+test('a free execution sends its progress notes with its segments, not with a renewal', async t => {
   const { state, store, config } = await free_fixture(t);
   let task;
   const runner = new FreeRoomRunner(config, store, async (adapter, binding, delivered) => { task = delivered; return { status: 'accepted' }; });
   await runner.tick();
   task.on_note('读完材料，改用方案 B');
-  task.on_note('x'.repeat(600));
-  runner.save('Claude', { last_renew: Date.now() - 11_000 });
+  runner.save('Claude', { last_renew: Date.now() - 31_000 });
   await runner.tick();
-  assert.deepEqual(state.renewed.notes.map(note => [note.seq, note.text.length]), [[1, 11], [2, 500]]);
-  task.on_note('验证通过');
-  runner.save('Claude', { last_renew: Date.now() - 11_000 });
-  await runner.tick();
-  assert.deepEqual(state.renewed.notes, [{ seq: 3, text: '验证通过' }]);
+  assert.deepEqual(state.notes[0], [{ seq: 1, text: '读完材料，改用方案 B' }]);
+  assert.equal(state.renewed.notes, undefined);
 });
 
-test('phase segments merge repeats, resend the open one with a later end and stop at the cap', async () => {
+test('phase segments merge repeats, resend the open one only once it ran further, and stop at the cap', async () => {
   let now = 1000;
   const log = new SegmentLog(() => now);
   log.mark(1, 'thinking');
-  assert.deepEqual(log.batch(1), [], 'an execution that was not started records nothing');
+  assert.deepEqual(log.batch(1).segments, [], 'an execution that was not started records nothing');
   log.start(1);
   now = 1100; log.mark(1, 'thinking');
   now = 1300; log.mark(1, 'thinking');
   now = 1500; log.mark(1, 'command', 'Bash');
   now = 1700; log.mark(1);
-  assert.deepEqual(log.batch(1), [{ seq: 1, phase: 'thinking', tool: '', start_ms: 100, end_ms: 500 },
+  assert.deepEqual(log.batch(1).segments, [{ seq: 1, phase: 'thinking', tool: '', start_ms: 100, end_ms: 500 },
     { seq: 2, phase: 'command', tool: 'Bash', start_ms: 500, end_ms: 700 }]);
   const sent = [];
-  await log.report(1, false, async batch => { sent.push(batch); });
+  await log.report(1, false, async batch => { sent.push(batch.segments); });
+  assert.equal(log.due(1, 0), false, 'an open segment that has not run further is not resent');
   now = 2000; log.mark(1);
-  await log.report(1, false, async batch => { sent.push(batch); });
+  assert.equal(log.due(1, 0), true);
+  await log.report(1, false, async batch => { sent.push(batch.segments); });
   assert.deepEqual(sent[1], [{ seq: 2, phase: 'command', tool: 'Bash', start_ms: 500, end_ms: 1000 }], 'only the open segment is sent again, further on');
   now = 2100; log.mark(1, 'writing');
   await log.report(1, false, async () => { throw new Error('fetch failed'); });
-  assert.deepEqual(log.batch(1).map(item => item.seq), [2, 3], 'a network failure keeps the segments');
-  await log.report(1, true, async batch => { sent.push(batch); });
+  assert.deepEqual(log.batch(1).segments.map(item => item.seq), [2, 3], 'a network failure keeps the segments');
+  await log.report(1, true, async batch => { sent.push(batch.segments); });
   assert.deepEqual(sent.at(-1).map(item => [item.seq, item.end_ms]), [[2, 1100], [3, 1100]]);
-  assert.deepEqual(log.batch(1), [], 'a final report forgets the execution');
+  assert.deepEqual(log.batch(1).segments, [], 'a final report forgets the execution');
   log.start(2);
   for (let index = 0; index < MAX_EXECUTION_SEGMENTS + 5; index++) { now += 10; log.mark(2, index % 2 ? 'tool' : 'thinking', 'x'.repeat(80)); }
   const all = [];
-  await log.report(2, true, async batch => { assert.ok(batch.length <= MAX_SEGMENTS_PER_REPORT); all.push(...batch); });
+  await log.report(2, true, async batch => { assert.ok(batch.segments.length <= MAX_SEGMENTS_PER_REPORT); all.push(...batch.segments); });
   assert.equal(all.length, MAX_EXECUTION_SEGMENTS);
   assert.equal(all[1].tool.length, 60);
   log.start(3); log.mark(3, 'tool', 'Read');
   await log.report(3, false, async () => { throw new Error('HTTP 409: 执行已结束较久，不再接收阶段记录'); });
-  assert.deepEqual(log.batch(3), [], 'a refused report drops the segments');
+  assert.deepEqual(log.batch(3).segments, [], 'a refused report drops the segments');
+});
+
+test('progress notes ride with the segments: numbered once, cut, capped and not resent', async () => {
+  const log = new SegmentLog(() => 0);
+  log.start(1);
+  log.note(1, '读完材料，改用方案 B');
+  log.note(1, 'x'.repeat(600));
+  const sent = [];
+  await log.report(1, false, async batch => { sent.push(batch); });
+  assert.deepEqual(sent[0].segments, [], 'notes alone make a report');
+  assert.deepEqual(sent[0].notes.map(note => [note.seq, note.text.length]), [[1, 11], [2, 500]]);
+  log.note(1, '验证通过');
+  await log.report(1, false, async batch => { sent.push(batch); });
+  assert.deepEqual(sent[1].notes, [{ seq: 3, text: '验证通过' }]);
+  for (let index = 0; index < MAX_EXECUTION_NOTES; index++) log.note(1, `第 ${index} 段`);
+  const rest = [];
+  await log.report(1, true, async batch => { assert.ok(batch.notes.length <= MAX_NOTES_PER_REPORT); rest.push(...batch.notes); });
+  assert.equal(rest.at(-1).seq, MAX_EXECUTION_NOTES, 'notes past the cap are dropped');
 });
 
 test('the tool an event starts is named without its arguments', () => {

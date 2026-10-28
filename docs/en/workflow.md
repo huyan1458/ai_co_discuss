@@ -19,8 +19,8 @@ How collaboration works inside a room. For installation, see [Setup](runner.md).
 
 - **Mention** — `@member` and it works in its own original session; several members can run in parallel.
 - **Unaddressed messages** go to the host. With a single member, they go straight to it.
-- **Expert presets** — the add row lists presets after the platforms; one click adds a member with its description, prompt, project access (and optionally model and effort) set. `Codex-评审` (read-only reviewer) and `Gemini-文档` (writes docs only, via agy) are built in; the bookmark on a card's back saves it as your own preset on the computer running the local service.
-- **Host delegation** — after the members the host mentioned finish, the host is woken once more to summarize or hand the work on (for example to a reviewer). One message of yours allows up to 8 dispatches and hand-backs by default; change it (1–50) under 协作设置 (Collaboration settings) on the room page.
+- **Expert presets** — a second row under the platforms lists presets; one click adds a member with its description, prompt, project access (and optionally model and effort) set. `Codex-评审` (read-only reviewer) and `Gemini-文档` (writes docs only, via agy) are built in; the bookmark on a card's back saves it as your own preset on the computer running the local service.
+- **Host delegation** — when the host mentions one member, that member replies to you directly, unless the host asks for the work back to hand it on (for example to a reviewer); when it mentions several, the host summarizes after they finish. One message of yours allows up to 8 dispatches and hand-backs by default; change it (1–50) when creating the room, or later under 协作设置 (Collaboration settings) on the room page.
 - **Everyone** — `@全体成员` asks all members to answer; `@全体依次` asks them one after another in speaking order.
 - **Stop and retry** — stop a member's current run from its menu; failed runs can be resent with one click.
 

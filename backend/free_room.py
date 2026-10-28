@@ -22,24 +22,42 @@ from .runtime import LEASE_SECONDS, MAX_EXECUTION_SEGMENTS, begin_write, require
 FREE_EXECUTION_MINUTES = 20
 RECENT_REQUESTS = 100
 RECENT_EXECUTIONS = 100
-# The timeline page reads this many recent executions of each kind.
+# The timeline page reads this many recent executions of each kind; with `after` (?3) only those running or ended since.
+# Parameters: ?1 room, ?2 limit, ?3 after (0 reads all). Shared verbatim with the Worker.
 TIMELINE_EXECUTIONS = 100
 TIMELINE_STATES = {"completed": "done", "failed": "failed", "cancelled": "cancelled"}
-TIMELINE_SQL = """SELECT * FROM (SELECT 'free' AS source,e.id,m.name AS member,m.role,e.status,
+TIMELINE_FREE_IDS = "SELECT id FROM member_executions WHERE room_id=?1 AND (?3=0 OR finished_at=0 OR finished_at>=?3) ORDER BY id DESC LIMIT ?2"
+TIMELINE_DISCUSSION_IDS = """SELECT e.id FROM discussion_events e LEFT JOIN event_timings t ON t.event_id=e.id
+    WHERE e.room_id=?1 AND (t.dispatched_at>0 OR e.status='pending') AND (?3=0 OR COALESCE(t.finished_at,0)=0 OR t.finished_at>=?3)
+    ORDER BY e.id DESC LIMIT ?2"""
+# Besides times: the task an execution took on (its request message, or the discussion turn's question), its result
+# (the answer's summary, else the answer's opening), its latest progress note, how many files it changed (NULL when
+# unobserved) and its last output time (free executions only).
+TIMELINE_SQL = f"""SELECT x.*,(SELECT COALESCE(NULLIF(s.text,''),substr(a.text,1,200)) FROM messages a
+        LEFT JOIN message_summaries s ON s.message_id=a.id WHERE a.id=x.answer_id) AS result FROM (
+    SELECT 'free' AS source,e.id,m.name AS member,m.role,e.status,
         COALESCE((SELECT MIN(r.created_at) FROM member_requests r WHERE r.execution_id=e.id),e.created_at) AS queued_at,
         e.created_at AS dispatched_at,0 AS started_at,e.finished_at,
         CASE WHEN e.status='failed' THEN e.result ELSE '' END AS reason,
         (SELECT parent.execution_id FROM member_requests r JOIN member_requests parent ON parent.answer_id=r.message_id
-            WHERE r.execution_id=e.id AND parent.execution_id IS NOT NULL ORDER BY r.id LIMIT 1) AS parent_id
-    FROM member_executions e JOIN room_members m ON m.id=e.member_id WHERE e.room_id=? ORDER BY e.id DESC LIMIT ?)
-UNION ALL SELECT * FROM (SELECT 'discussion',e.id,e.participant,e.role,e.status,CAST(strftime('%s',e.created_at) AS INTEGER),
-        COALESCE(t.dispatched_at,0),e.started_at,COALESCE(t.finished_at,0),CASE WHEN e.status='failed' THEN e.result ELSE '' END,NULL
-    FROM discussion_events e LEFT JOIN event_timings t ON t.event_id=e.id
-    WHERE e.room_id=? AND (t.dispatched_at>0 OR e.status='pending') ORDER BY e.id DESC LIMIT ?)"""
-TIMELINE_SEGMENTS_SQL = """SELECT source,execution_id,phase,tool,start_ms,end_ms FROM execution_segments WHERE room_id=? AND (
-    (source='free' AND execution_id IN (SELECT id FROM member_executions WHERE room_id=? ORDER BY id DESC LIMIT ?))
-    OR (source='discussion' AND execution_id IN (SELECT id FROM discussion_events WHERE room_id=? ORDER BY id DESC LIMIT ?)))
+            WHERE r.execution_id=e.id AND parent.execution_id IS NOT NULL ORDER BY r.id LIMIT 1) AS parent_id,
+        e.activity_at,(SELECT MIN(r.message_id) FROM member_requests r WHERE r.execution_id=e.id) AS task_id,
+        (SELECT substr(q.text,1,160) FROM messages q WHERE q.id=(SELECT MIN(r.message_id) FROM member_requests r WHERE r.execution_id=e.id)) AS task,
+        (SELECT MAX(r.answer_id) FROM member_requests r WHERE r.execution_id=e.id) AS answer_id,
+        (SELECT n.text FROM execution_notes n WHERE n.execution_id=e.id ORDER BY n.seq DESC LIMIT 1) AS last_note,
+        CASE WHEN e.changes='' THEN NULL ELSE json_array_length(e.changes) END AS changes
+    FROM member_executions e JOIN room_members m ON m.id=e.member_id WHERE e.id IN ({TIMELINE_FREE_IDS})
+    UNION ALL SELECT 'discussion',e.id,e.participant,e.role,e.status,CAST(strftime('%s',e.created_at) AS INTEGER),
+        COALESCE(t.dispatched_at,0),e.started_at,COALESCE(t.finished_at,0),CASE WHEN e.status='failed' THEN e.result ELSE '' END,NULL,
+        0,NULL,(SELECT substr(q.question,1,160) FROM discussion_turns q WHERE q.id=e.turn_id),
+        CASE WHEN e.result LIKE 'message:%' THEN CAST(substr(e.result,9) AS INTEGER) END,NULL,NULL
+    FROM discussion_events e LEFT JOIN event_timings t ON t.event_id=e.id WHERE e.id IN ({TIMELINE_DISCUSSION_IDS})) x"""
+TIMELINE_SEGMENTS_SQL = f"""SELECT source,execution_id,phase,tool,start_ms,end_ms FROM execution_segments WHERE room_id=?1 AND (
+    (source='free' AND execution_id IN ({TIMELINE_FREE_IDS})) OR (source='discussion' AND execution_id IN ({TIMELINE_DISCUSSION_IDS})))
     ORDER BY source,execution_id,seq"""
+# Only the times of progress notes: the texts are read when the reader hovers one.
+TIMELINE_NOTES_SQL = f"""SELECT execution_id,created_at FROM execution_notes
+    WHERE room_id=?1 AND execution_id IN ({TIMELINE_FREE_IDS}) ORDER BY execution_id,seq"""
 RECENT_CHANGES = 50
 MAX_CHANGED_FILES = 200
 # What a member's software last showed it doing, as reported by the runner with each renewal.
@@ -257,24 +275,29 @@ def execution_notes(connection, room_id, execution_id):
         "SELECT seq,text,created_at FROM execution_notes WHERE execution_id=? ORDER BY seq", (execution_id,))]}
 
 
-def execution_timeline(connection, room_id):
-    """Read the room's recent executions of both kinds with their recorded phase segments, for the timeline page.
+def execution_timeline(connection, room_id, after=0):
+    """Read the room's recent executions of both kinds with their phase segments and note times, for the timeline page.
 
     Times are epoch seconds and segments are millisecond offsets from `dispatched_at`. A free execution's parent is the
     execution that wrote the message it answers; discussion executions have none. `state` is running, done, failed
-    or cancelled, so the page never interprets execution statuses itself.
+    or cancelled, so the page never interprets execution statuses itself. A positive `after` reads only executions
+    still running or ended since then, so a page following live work rereads little.
     """
     if not connection.execute("SELECT 1 FROM rooms WHERE id=?", (room_id,)).fetchone():
         raise LookupError("房间不存在")
-    rows = [dict(row) for row in connection.execute(TIMELINE_SQL, (room_id, TIMELINE_EXECUTIONS, room_id, TIMELINE_EXECUTIONS))]
-    segments = {}
-    for row in connection.execute(TIMELINE_SEGMENTS_SQL, (room_id, room_id, TIMELINE_EXECUTIONS, room_id, TIMELINE_EXECUTIONS)):
+    params = (room_id, TIMELINE_EXECUTIONS, max(0, int(after)))
+    rows = [dict(row) for row in connection.execute(TIMELINE_SQL, params)]
+    segments, notes = {}, {}
+    for row in connection.execute(TIMELINE_SEGMENTS_SQL, params):
         segments.setdefault((row["source"], row["execution_id"]), []).append(
             {key: row[key] for key in ("phase", "tool", "start_ms", "end_ms")})
+    for row in connection.execute(TIMELINE_NOTES_SQL, params):
+        notes.setdefault(row["execution_id"], []).append(row["created_at"])
     for row in rows:
         row["state"] = TIMELINE_STATES.get(row["status"], "running")
         row["segments"] = segments.get((row["source"], row["id"]), [])
-    return {"now": int(time.time()), "executions": rows, "execution_limit": TIMELINE_EXECUTIONS,
+        row["notes"] = notes.get(row["id"], []) if row["source"] == "free" else []
+    return {"now": int(time.time()), "after": params[2], "executions": rows, "execution_limit": TIMELINE_EXECUTIONS,
             "segment_limit": MAX_EXECUTION_SEGMENTS}
 
 
@@ -477,6 +500,8 @@ def check_answer(connection, room_id, member, payload):
     """
     if payload.get("to") is not None:
         named_members(active_members(connection, room_id), payload["to"], exclude=member["name"])
+    if payload.get("handoff") not in (None, False) and (payload["handoff"] is not True or member["role"] != "host" or not payload.get("to")):
+        raise ValueError("handoff 只能由主持人与 to 一起使用，值为 true")
     if member["access"] == "online":
         raise PermissionError("在线成员只读，回答由用户代发")
     if member["access"] == "manual":
@@ -635,8 +660,8 @@ def set_auto_hops(connection, room_id, token, payload):
     return {"max_auto_hops": value}
 
 
-def dispatch(connection, room_id, host, message_id, names, chain_id):
-    """Queue the host's named members as one batch that hands back to the host when it ends."""
+def dispatch(connection, room_id, host, message_id, names, chain_id, handoff=False):
+    """Queue the host's named members as one batch; several members, or one the host asked back, hand back when it ends."""
     member_ids = named_members(active_members(connection, room_id), names, exclude=host["name"])
     if not member_ids or not chain_id:
         return
@@ -647,6 +672,8 @@ def dispatch(connection, room_id, host, message_id, names, chain_id):
         insert_request(connection, room_id, member_id, message_id, chain_id, "ask", "host", batch_id=message_id)
     connection.execute("INSERT INTO free_batches (room_id,batch_id,chain_id,host_id) VALUES (?,?,?,?)",
                        (room_id, message_id, chain_id, host["id"]))
+    if handoff:
+        connection.execute("INSERT INTO free_handoffs (room_id,batch_id) VALUES (?,?)", (room_id, message_id))
 
 
 def settle_batches(connection, room_id):
@@ -660,7 +687,9 @@ def settle_batches(connection, room_id):
         host = connection.execute("SELECT * FROM room_members WHERE id=? AND status='active' AND role='host'", (batch["host_id"],)).fetchone()
         if "completed" not in statuses:
             halt_chain(connection, room_id, batch["chain_id"], "all_failed")
-        elif not host:
+        elif not host or len(statuses) < 2 and not connection.execute(
+                "SELECT 1 FROM free_handoffs WHERE room_id=? AND batch_id=?", (room_id, batch["batch_id"])).fetchone():
+            # One member's answer reaches the user directly unless the host asked for it back, e.g. to send it to a reviewer.
             continue
         elif chain_budget(connection, room_id, batch["chain_id"]) < 1:
             halt_chain(connection, room_id, batch["chain_id"], "budget")
@@ -842,7 +871,7 @@ def after_free_message(connection, room_id, message_id, actor, payload):
                            (message_id, execution_id))
     connection.execute("UPDATE room_members SET read_until=MAX(read_until,?) WHERE id=?", (message_id, actor["id"]))
     if actor["role"] == "host" and payload.get("to"):
-        dispatch(connection, room_id, actor, message_id, payload["to"], chain_id)
+        dispatch(connection, room_id, actor, message_id, payload["to"], chain_id, payload.get("handoff") is True)
     settle_batches(connection, room_id)
 
 
@@ -1182,9 +1211,12 @@ def execution_action(connection, room_id, execution_id, token, payload):
             raise FileExistsError("本次执行的改动已记录")
         connection.execute("UPDATE member_executions SET changes=? WHERE id=?", (json.dumps(changed_files(payload), ensure_ascii=False), execution_id))
     elif action == "segments":
-        # The last segments arrive after the member's answer ended the execution.
+        # The last segments and notes arrive after the member's answer ended the execution; such notes are dated at its end.
         finished = 0 if row["status"] in ACTIVE else (row["finished_at"] or 1)
-        save_segments(connection, "free", room_id, execution_id, row["created_at"], finished, payload)
+        notes = renewed_notes(payload)
+        save_segments(connection, "free", room_id, execution_id, row["created_at"], finished, payload, optional=bool(notes))
+        connection.executemany("INSERT OR IGNORE INTO execution_notes (execution_id,seq,room_id,text,created_at) VALUES (?,?,?,?,?)",
+                               [(execution_id, note["seq"], room_id, note["text"], min(now, finished) if finished else now) for note in notes])
     elif row["status"] not in ACTIVE:
         raise FileExistsError("执行已结束")
     elif action == "renew":

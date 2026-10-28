@@ -12,10 +12,8 @@ const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', impor
 const RENEW_MS = 30_000;
 /** A changed phase is reported early, but no more often than this, since each report refreshes open pages. */
 const ACTIVITY_REPORT_MS = 10_000;
-/** Progress notes kept per execution, each cut to this length, and how many one renewal carries; the website enforces the same. */
-const MAX_EXECUTION_NOTES = 50;
-const MAX_NOTE_LENGTH = 500;
-const MAX_NOTES_PER_RENEW = 10;
+/** Segments and progress notes are reported quietly, waking no page, so they may go every tick. */
+const PROGRESS_REPORT_MS = 2_000;
 const MAX_DELIVERY_ATTEMPTS = 3;
 const LIVE = ['reserving', 'delivering', 'sidecar_pending', 'running'];
 const MAX_HASHED_BYTES = 5 * 1024 * 1024;
@@ -79,13 +77,16 @@ export function free_task_files(config, member, execution, binding) {
   // The host routes unnamed messages and receives hand-backs; it may name members in its answer.
   const discussion = config.mode !== 'free';
   const host_rule = member.role === 'host' && !discussion
-    ? `你是本房间的主持人：purpose 为 route 的请求是用户未点名的消息，handoff 表示你派出的成员都已结束，all 表示用户请全体成员各自回应一次（其他成员已同时收到，你只回答自己的部分，不加 --to）。先用 ${cli} room view ${config.room} 查看成员与状态，再决定由谁处理；需要派活时在回答中加 --to 成员名（可重复，不能点名自己），被点名的成员全部结束后你会再被唤醒一次（handoff），据结果决定下一步：交给其他成员（如请评审）、汇总给用户；成员的回答已完整时只用一两句说明完成，不复述。不需要他人时不加 --to，本次即结束。只派分给各成员的文件或模块，避免多人改同一文件。`
+    ? `你是本房间的主持人：按任务 skills 中 discuss-host 的自由协作主持说明处理 route、handoff 与 all 请求。先用 ${cli} room view ${config.room} 查看成员与状态；派活在回答中加 --to 成员名（不能点名自己），只点名一位且还要它交回时加 --handoff。`
     : '';
   atomic_json(task_path, { site: config.site, room: config.room, mode: 'free', member: member.name,
     execution_id: execution.id, request_messages: execution.requests.map(item => item.message_id),
     request_purposes: execution.requests.map(item => item.purpose || 'ask'), role: member.role || 'member',
     read_after: execution.read_until, cwd: profile.cwd || null, project_access: profile.project_access, draft_directory,
-    skills: [join(config.project, '.agents/skills/discuss-participant/SKILL.md')], cli, subcommands: TASK_SUBCOMMANDS,
+    // Each skill's core plus its free-room page; the host also gets the host skill (its development page is read on demand).
+    skills: [...['discuss-participant/SKILL.md', 'discuss-participant/references/free.md'],
+      ...member.role === 'host' ? ['discuss-host/SKILL.md', 'discuss-host/references/free.md'] : []].map(file => join(config.project, '.agents/skills', file)),
+    cli, subcommands: TASK_SUBCOMMANDS,
     ...(bound_access ? { access_env: 'DISCUSS_ACCESS_FILE' } : { access_file: access_path }),
     instructions: `${agy_command_rule(profile.adapter, cli)}${discussion ? '讨论房间：用户直接向你提问（' + messages + '）。这不是你的发言安排，不要领取发言权、不要安排他人，也不改变讨论进度，只回答这个提问。' : '自由协作房间：用户点名了你（' + messages + '）。'}${access_rule}先用 ${cli} message list ${config.room} --after ${execution.read_until}${access_arg} 读取新消息，按时间顺序处理，后面的消息可能修正前面的，以最新指令为准。${host_rule}完成后用 ${cli} message post ${config.room} --as ${member.name} --kind chat --execution ${execution.id} --body-file 草稿 --submission-id 新UUID${access_arg} 提交一次回答。提交被拒绝说明本次执行已被打断或过期：保留草稿并结束，不要去掉 --execution 改作普通发言。草稿只写入 draft_directory；${project_rule}不读取或打印凭据内容，不建定时任务。` });
   const prompt = `用户在${discussion ? '讨论' : '自由协作'}房间点名了你（${member.name}），对应消息 ${messages}。请先读取任务文件：${task_path}，按其中说明读取新消息、完成请求，并用 ${cli} message post 带 --execution ${execution.id} 提交一次回答后结束。命令只用任务内 subcommands 列出的 ${cli} 子命令；${project_rule}不读取凭据内容。`;
@@ -138,8 +139,7 @@ export class FreeRoomRunner {
     // Execution id -> why its session ended on its own, such as a command refused in unattended mode ('' when unknown).
     this.exited = new Map();
     this.snapshots = new Map();
-    // Execution id -> { phase, at, sent_phase, sent_at, notes, next_seq }: what the member's software last showed it doing,
-    // and the progress notes not yet on the website.
+    // Execution id -> { phase, at, sent_phase, sent_at }: what the member's software last showed it doing.
     this.activity = new Map();
     this.segments = new SegmentLog();
     this.context_errors = new Map();
@@ -404,38 +404,35 @@ export class FreeRoomRunner {
       return this.save(member.name, { status: 'idle' });
     }
     if (Date.now() >= execution.created_at * 1000 + minutes * 60_000) return this.fail(member.name, execution.id, `超过单次执行时限 ${minutes} 分钟；请核对原会话确认是否已有内容`);
+    // Segments and notes go first, quietly and often, so a renewal in the same tick already shows the notes it announces.
+    if (this.segments.due(execution.id, PROGRESS_REPORT_MS)) await this.report_segments(execution.id);
     const activity = this.activity.get(execution.id);
-    const changed = activity && (activity.phase !== activity.sent_phase || activity.at !== activity.sent_at || activity.notes.length);
+    const changed = activity && (activity.phase !== activity.sent_phase || activity.at !== activity.sent_at);
     const elapsed = Date.now() - row.last_renew;
     if (elapsed >= RENEW_MS || (changed && elapsed >= ACTIVITY_REPORT_MS)) {
-      const notes = activity?.notes.slice(0, MAX_NOTES_PER_RENEW) || [];
       await api(this.config, `/executions/${execution.id}`, { action: 'renew',
-        ...(activity ? { activity: activity.phase, activity_at: Math.floor(activity.at / 1000) } : {}), ...(notes.length ? { notes } : {}) });
-      if (activity) Object.assign(activity, { sent_phase: activity.phase, sent_at: activity.at, notes: activity.notes.slice(notes.length) });
+        ...(activity ? { activity: activity.phase, activity_at: Math.floor(activity.at / 1000) } : {}) });
+      if (activity) Object.assign(activity, { sent_phase: activity.phase, sent_at: activity.at });
       this.save(member.name, { last_renew: Date.now() });
     }
-    if (this.segments.due(execution.id, ACTIVITY_REPORT_MS)) await this.report_segments(execution.id);
   }
-  /** Send the execution's recorded phase segments; `final` sends the rest once it has ended. */
+  /** Send the execution's recorded segments and progress notes; `final` sends the rest once it has ended. */
   report_segments(execution_id, final = false) {
-    return this.segments.report(execution_id, final, segments => api(this.config, `/executions/${execution_id}`, { action: 'segments', segments }));
+    return this.segments.report(execution_id, final, ({ segments, notes }) =>
+      api(this.config, `/executions/${execution_id}`, { action: 'segments', segments, ...(notes.length ? { notes } : {}) }));
   }
   /** Note that the software produced output now, and its phase when the output names one. */
   touch(execution_id, phase) {
     // Updated in place: a renewal in flight marks what it sent on this same record.
-    if (!this.activity.has(execution_id)) this.activity.set(execution_id, { phase: '', notes: [], next_seq: 0 });
+    if (!this.activity.has(execution_id)) this.activity.set(execution_id, { phase: '' });
     const current = this.activity.get(execution_id);
     if (phase) current.phase = phase;
     current.at = Date.now();
   }
-  /** Queue one progress note for the next renewal; numbering makes a retried renewal harmless, and notes past the cap are dropped. */
+  /** Queue one progress note for the next progress report; numbering makes a retried report harmless. */
   note(execution_id, text) {
     this.touch(execution_id);
-    const current = this.activity.get(execution_id);
-    if (current.next_seq >= MAX_EXECUTION_NOTES) return;
-    current.next_seq += 1;
-    // Cut by UTF-16 units like the website's check, without leaving half of a surrogate pair.
-    current.notes.push({ seq: current.next_seq, text: text.slice(0, MAX_NOTE_LENGTH).replace(/[\uD800-\uDBFF]$/, '') });
+    this.segments.note(execution_id, text);
   }
   /** Report observed file changes once an execution has ended and its member's processes have exited. */
   async report_finished(active) {

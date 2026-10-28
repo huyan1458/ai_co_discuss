@@ -25,8 +25,8 @@ function windows_rg() {
 const AUTO_ENTER_ADAPTERS = new Set(['codex_cli', 'claude', 'antigravity_cli']);
 const DELIVERY_RETRY_DELAYS_MS = [2000, 4000];
 const RENEW_MS = 30_000;
-/** Recorded phase segments are reported no more often than this while an execution runs. */
-const ACTIVITY_REPORT_MS = 10_000;
+/** Recorded phase segments are reported quietly, waking no page, so they may go every tick. */
+const PROGRESS_REPORT_MS = 2_000;
 const ADAPTER_NAMES = ['codex', 'claude', 'antigravity', 'codex_cli', 'antigravity_cli', 'api'];
 export const CODEX_ADAPTERS = ['codex', 'codex_cli'];
 const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -215,8 +215,9 @@ export function task_files(config, event, token, binding, { suggestions = [], en
   const access_path = join(config.directory, `${id}.access.json`);
   const task_path = join(config.directory, `${id}.task.json`);
   atomic_json(access_path, { site: config.site, room: config.room, token, session_id: binding.session_id || '' });
-  const skills = [join(config.project, '.agents/skills/discuss-participant/SKILL.md')];
-  if (event.role === 'host') skills.push(join(config.project, '.agents/skills/discuss-host/SKILL.md'));
+  // Each skill's core plus its discussion-room page, so the task needs no detour through the skills' scenario tables.
+  const skills = [...['discuss-participant/SKILL.md', 'discuss-participant/references/discussion.md'],
+    ...event.role === 'host' ? ['discuss-host/SKILL.md', 'discuss-host/references/discussion.md'] : []].map(file => join(config.project, '.agents/skills', file));
   const adapter = config.participants[event.participant];
   const auto_enter = entered || AUTO_ENTER_ADAPTERS.has(adapter.adapter);
   const bound_access = process_access && AUTO_ENTER_ADAPTERS.has(adapter.adapter);
@@ -526,11 +527,12 @@ export class DiscussionRunner {
       }
       this.store.record(row.id, { status: 'started', last_renew: Date.now(), error: '' });
     }
-    if (this.segments.due(row.id, ACTIVITY_REPORT_MS)) await this.report_segments(row.id);
+    if (this.segments.due(row.id, PROGRESS_REPORT_MS)) await this.report_segments(row.id);
   }
   /** Send the execution's recorded phase segments; `final` sends the rest once it has ended. */
   report_segments(id, final = false) {
-    return this.segments.report(id, final, segments => api(this.config, `/events/${id}`, { action: 'segments', segments }));
+    // Discussion executions keep no progress notes, so a report always carries segments.
+    return this.segments.report(id, final, ({ segments }) => api(this.config, `/events/${id}`, { action: 'segments', segments }));
   }
   /** Preserve the cause on the website and revoke work before asking for intervention. */
   async fail(row, reason) {

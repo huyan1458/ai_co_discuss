@@ -708,6 +708,12 @@ CREATE TABLE IF NOT EXISTS free_chains (
     reason TEXT NOT NULL,
     PRIMARY KEY (room_id,chain_id)
 );
+-- A host's one-member dispatch that should come back to the host when it ends (several members always do).
+CREATE TABLE IF NOT EXISTS free_handoffs (
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    batch_id INTEGER NOT NULL,
+    PRIMARY KEY (room_id,batch_id)
+);
 -- The owner's per-room chain budget; rooms without a row use the default.
 CREATE TABLE IF NOT EXISTS free_settings (
     room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,

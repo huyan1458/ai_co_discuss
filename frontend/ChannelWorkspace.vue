@@ -359,7 +359,7 @@ function resize_nav_by_key(event) {
           <TopicPanel v-if="!free_room" section="access" @open="modal = $event" @detail="open_detail" />
         </div>
         <div v-if="view.tab === 'timeline'" class="content-page merged-page" role="tabpanel" aria-label="执行">
-          <ExecutionTimeline />
+          <ExecutionTimeline @detail="open_detail" />
         </div>
         </div>
       </div>

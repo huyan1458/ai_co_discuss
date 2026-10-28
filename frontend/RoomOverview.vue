@@ -4,6 +4,7 @@
  * entry to the same actions, so nothing here hides behind a menu.
  */
 import { computed, inject, ref, watch } from "vue";
+import AutoHopsField from "./AutoHopsField.vue";
 import InviteDialog from "./InviteDialog.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 import { member_actions } from "./member-actions.js";
@@ -32,19 +33,15 @@ const local_state = computed(() => {
 /** An agy member waits for its default model to be read, so its switches stay greyed out until then. */
 const waiting = (name) => Boolean(saved.value?.participants?.[name]?.defaults_pending);
 const switching = ref("");
-// Matches the server's range for the chain budget.
-const MAX_AUTO_HOPS = 50;
-const saving_hops = ref(false), hops_draft = ref("");
-watch(() => room.value.free?.max_auto_hops, (value) => { hops_draft.value = String(value ?? ""); }, { immediate: true });
+// The budget the field shows: the saved one, or the value being saved until the room refreshes.
+const saving_hops = ref(false), hops_shown = ref(0);
+watch(() => room.value.free?.max_auto_hops, (value) => { hops_shown.value = value || 0; }, { immediate: true });
 
-/** Save a new chain budget; an out-of-range value goes back to the saved one. */
-async function save_hops() {
-  const value = Number(hops_draft.value);
-  if (value === room.value.free?.max_auto_hops) return;
-  if (!Number.isInteger(value) || value < 1 || value > MAX_AUTO_HOPS) { hops_draft.value = String(room.value.free?.max_auto_hops ?? ""); return; }
+/** Save a new chain budget; on failure the field goes back to the saved value and the error shows under the members. */
+async function save_hops(value) {
+  hops_shown.value = value;
   saving_hops.value = true;
-  // The error shows under the member list; the field goes back to the saved value.
-  try { await bridge.set_auto_hops(value); } catch { hops_draft.value = String(room.value.free?.max_auto_hops ?? ""); }
+  try { await bridge.set_auto_hops(value); } catch { hops_shown.value = room.value.free?.max_auto_hops || 0; }
   finally { saving_hops.value = false; }
 }
 const result = ref({ tone: "", text: "" });
@@ -190,9 +187,8 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
         <div><dt>主持人</dt><dd>{{ room.host ? bridge.display_name(room.host) : '未指定' }}</dd></div>
         <div><dt>智能调度</dt><dd>{{ scheduler }}</dd></div>
         <div v-if="free && room.free?.max_auto_hops"><dt>AI 之间派活上限</dt><dd>
-          <UInput v-if="view.access?.can_manage" v-model="hops_draft" type="number" :min="1" :max="MAX_AUTO_HOPS" size="xs" class="overview-hops"
-            aria-label="AI 之间派活上限" :disabled="saving_hops" @change="save_hops" />
-          <span v-else>{{ room.free.max_auto_hops }}</span> 次，你的一条消息引出的派活与回交达到此数即停下等你</dd></div>
+          <AutoHopsField v-if="view.access?.can_manage" :model-value="hops_shown" :disabled="saving_hops" @update:model-value="save_hops" />
+          <span v-else>{{ room.free.max_auto_hops }} 次，你的一条消息引出的派活与回交达到此数即停下等你</span></dd></div>
         <div v-if="!free"><dt>逐人追问</dt><dd>{{ room.named_followup ? '开启：主持人每轮给每位专家写针对性追问' : '关闭：首轮后请专家回应上一轮观点' }}</dd></div>
         <div><dt>阅读地址</dt><dd class="overview-address"><code>{{ reading }}</code><UButton icon="i-lucide-copy" color="neutral" variant="ghost" size="xs" aria-label="复制阅读地址" @click="act('copy', reading)" /></dd></div>
         <div v-if="created"><dt>创建时间</dt><dd>{{ created }}</dd></div>
@@ -236,7 +232,6 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 .overview-result.is-error { color: var(--ui-error); }
 .overview-settings { display: grid; gap: 10px; margin: 0; font-size: 13px; }
 .overview-settings div { display: flex; gap: 8px; }
-.overview-hops { width: 64px; }
 .overview-settings dt { flex: none; width: 112px; color: var(--ui-text-muted); }
 .overview-settings dd { margin: 0; color: var(--ui-text); }
 @media (max-width: 720px) {

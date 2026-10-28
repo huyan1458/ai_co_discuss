@@ -121,7 +121,8 @@ async function invite() {
           <button v-for="name in invite_choices" :key="name" type="button" :aria-pressed="invite_picks.some((pick) => pick.name === name)" :title="invite_count(name) ? `已在场 ${invite_count(name)} 位 · 将添加新实例` : ''" @click="add_invite(name)">
             <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="3xs" class="channel-avatar" :class="bridge.identities[name]?.style" />{{ name }}
           </button>
-          <button v-for="(preset, index) in invite_presets" :key="`preset:${preset.name}`" type="button" :class="{ 'is-separated': index === 0 }" :title="preset.description || '专家预设'" :aria-label="`添加预设 ${preset.name}`" @click="add_invite_preset(preset)">
+          <span v-if="invite_presets.length" class="pb-invite-break" aria-hidden="true" /><span v-if="invite_presets.length" class="pb-invite-label">预设</span>
+          <button v-for="preset in invite_presets" :key="`preset:${preset.name}`" type="button" :title="preset.description || '专家预设'" :aria-label="`添加预设 ${preset.name}`" @click="add_invite_preset(preset)">
             <UAvatar :src="bridge.identities[bridge.platform_of(preset.name)]?.icon" :text="bridge.identities[bridge.platform_of(preset.name)]?.initials" :alt="preset.name" size="3xs" class="channel-avatar" :class="bridge.identities[bridge.platform_of(preset.name)]?.style" />{{ preset.name }}
           </button>
         </div>
@@ -169,9 +170,9 @@ async function invite() {
 .pb-invite-library > button:hover { border-color: var(--ui-border-accented); background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); }
 .pb-invite-library > button[aria-pressed="true"] { border-color: color-mix(in srgb, var(--channel-accent) 55%, transparent); background: color-mix(in srgb, var(--channel-accent) 12%, transparent); color: var(--ui-text-highlighted); }
 .pb-invite-library .channel-avatar { flex-shrink: 0; width: 20px; height: 20px; font-size: 9px; }
-/* Presets follow the platforms after a divider, as in the create form's add row. */
-.pb-invite-library > button.is-separated { position: relative; margin-left: 13px; }
-.pb-invite-library > button.is-separated::before { position: absolute; left: -10px; top: 6px; bottom: 6px; width: 1px; background: var(--ui-border); content: ""; }
+/* Presets start their own row under the platforms, as in the create form's add row. */
+.pb-invite-break { flex-basis: 100%; height: 0; }
+.pb-invite-label { align-self: center; margin-right: 2px; color: var(--ui-text-toned); font-size: 12px; }
 .pb-invite-reserved { visibility: hidden; }
 .pb-invite-empty { margin: 0; padding: 18px 12px; border: 1px dashed var(--ui-border); border-radius: 8px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }
 .pb-invite-footer { display: flex; justify-content: flex-end; gap: 8px; }

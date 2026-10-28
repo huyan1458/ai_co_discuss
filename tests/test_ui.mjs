@@ -5,7 +5,7 @@ import vm from "node:vm";
 import { computed, nextTick, reactive, ref, watch } from "vue";
 import { API_PROVIDERS } from "../runner/discussion_api.mjs";
 import { member_actions } from "../frontend/member-actions.js";
-import { format_duration, timeline_axis, timeline_rows, timeline_summary } from "../frontend/timeline-model.js";
+import { axis_ticks, execution_log, execution_stages, format_duration, notes_between, row_status, timeline_axis, timeline_rows, timeline_summary } from "../frontend/timeline-model.js";
 
 const source = readFileSync(new URL("../web/app.js", import.meta.url), "utf8").replace(/\nrestore_theme\(\);[\s\S]*$/, "");
 const discussion_source = readFileSync(new URL("../frontend/ChannelDiscussion.vue", import.meta.url), "utf8");
@@ -3612,4 +3612,61 @@ test("the execution timeline nests dispatched work, places phases after delivery
   const summary = timeline_summary(rows);
   assert.deepEqual([summary.executions, summary.running, summary.tool_segments, summary.slowest.tool], [4, 2, 1, "Bash"]);
   assert.deepEqual([format_duration(820), format_duration(6900), format_duration(185_000), format_duration(7_500_000)], ["820ms", "6.9s", "3m 05s", "2h 05m"]);
+});
+
+test("a host continuing its own round sits beside it, so a long chain stays two levels deep", () => {
+  const run = (id, member, parent_id, start) => ({ source: "free", id, member, role: member === "Claude" ? "host" : "member", status: "completed", state: "done",
+    queued_at: start, dispatched_at: start, started_at: 0, finished_at: start + 30, reason: "", parent_id, segments: [] });
+  const timeline = { execution_limit: 100, segment_limit: 400, executions: [
+    run(1, "Claude", null, 0), run(2, "Codex", 1, 40), run(3, "Claude", 1, 80), run(4, "Codex", 3, 120), run(5, "Claude", 3, 160), run(6, "Claude", 6, 200),
+  ] };
+  assert.deepEqual(timeline_rows(timeline, 1e6).map((row) => [row.key, row.depth]),
+    [["free:1", 0], ["free:2", 1], ["free:3", 0], ["free:4", 1], ["free:5", 0], ["free:6", 0]]);
+});
+
+test("a running execution's last phase grows to now, and hovering a moment finds the notes written around it", () => {
+  const item = { source: "free", id: 1, member: "Codex", role: "member", status: "dispatched", state: "running", queued_at: 100, dispatched_at: 100,
+    started_at: 0, finished_at: 0, reason: "", parent_id: null, notes: [104, 112, 99999],
+    segments: [{ phase: "thinking", tool: "", start_ms: 1000, end_ms: 5000 }, { phase: "command", tool: "", start_ms: 5000, end_ms: 6000 }] };
+  const stages = execution_stages(item, 120_000);
+  assert.deepEqual(stages.segments.map((segment) => [segment.end, segment.live]), [[105_000, false], [120_000, true]]);
+  assert.deepEqual(stages.notes.map((note) => note.at), [104_000, 112_000, 120_000], "a note is kept within the execution");
+  assert.deepEqual(notes_between(stages.notes, 101_000, 105_000), { notes: [stages.notes[0]], earlier: false });
+  assert.deepEqual(notes_between(stages.notes, 113_000, 115_000), { notes: [stages.notes[1]], earlier: true });
+  assert.deepEqual(notes_between(stages.notes, 50_000, 60_000), { notes: [], earlier: false });
+  assert.equal(execution_stages({ ...item, state: "done", finished_at: 110 }, 120_000).segments[1].end, 106_000, "a finished execution keeps its recorded ends");
+});
+
+test("each row says what it is doing, that it may be stuck, why it failed or what it answered", () => {
+  const base = { source: "free", id: 1, member: "Codex", role: "member", queued_at: 100, dispatched_at: 100, started_at: 0, finished_at: 0,
+    reason: "", parent_id: null, notes: [], segments: [], activity_at: 0, last_note: null, result: null, changes: null };
+  const status = (item, now_s) => row_status({ item, ...execution_stages(item, now_s * 1000) }, now_s * 1000);
+  const running = { ...base, status: "dispatched", state: "running" };
+  assert.deepEqual(status(running, 110), { tone: "live", text: "处理中" });
+  assert.deepEqual(status({ ...running, activity_at: 105, last_note: "先跑测试" }, 110), { tone: "live", text: "先跑测试" });
+  assert.deepEqual(status({ ...running, activity_at: 105, segments: [{ phase: "tool", tool: "Read", start_ms: 1000, end_ms: 5000 }] }, 110), { tone: "live", text: "工具 · Read中" });
+  assert.deepEqual(status({ ...running, activity_at: 105 }, 105 + 181), { tone: "warn", text: "已 3m 01s 无输出，可能卡住" });
+  assert.deepEqual(status({ ...running, segments: [{ phase: "command", tool: "", start_ms: 0, end_ms: 5000 }] }, 105 + 200).text, "命令已运行 3m 20s", "a long command is not called stuck");
+  assert.equal(status(running, 100 + 3600).tone, "live", "with no output ever seen, silence says nothing");
+  assert.deepEqual(status({ ...base, status: "failed", state: "failed", finished_at: 120, reason: "额度用完" }, 130), { tone: "failed", text: "额度用完" });
+  assert.deepEqual(status({ ...base, status: "completed", state: "done", finished_at: 120, result: "已改完", changes: 2 }, 130), { tone: "done", text: "已改完 · 改动 2 个文件" });
+  const stuck = { ...running, activity_at: 105, segments: [{ phase: "editing", tool: "Edit", start_ms: 1000, end_ms: 5000 }] };
+  const rows = timeline_rows({ execution_limit: 100, segment_limit: 400, executions: [stuck] }, 2_000_000);
+  assert.equal(timeline_summary(rows, 2_000_000).slowest.end - timeline_summary(rows, 2_000_000).slowest.start, 4000, "an assumed tail is not a slow step");
+  assert.equal(timeline_summary(rows, 2_000_000).stalled, 1);
+  const log = execution_log({ segments: rows[0].segments, notes: [{ index: 0, at: 103_000 }] }, ["开始改"]);
+  assert.deepEqual(log.map((entry) => entry.kind === "note" ? entry.text : entry.phase), ["editing", "开始改"], "phases and notes interleave by time");
+});
+
+test("axis ticks fall on round clock times inside shown stretches and never crowd", () => {
+  const minute = 60_000;
+  const rows = [{ start: 0, end: 10 * minute }, { start: 3 * 3600_000, end: 3 * 3600_000 + 2 * minute }];
+  const axis = timeline_axis(rows);
+  const ticks = axis_ticks(axis);
+  assert.ok(ticks.length >= 3 && ticks.length <= 8, `${ticks.length} ticks`);
+  assert.ok(ticks.every((tick) => tick.at % minute === 0), "a busy stretch of minutes ticks on whole minutes");
+  assert.ok(ticks.every((tick) => axis.spans.some((span) => tick.at >= span.start && tick.at <= span.end)), "no tick inside a folded band");
+  assert.ok(ticks.every((tick, index) => !index || tick.x - ticks[index - 1].x >= 0.12), "labels keep their distance");
+  assert.equal(axis_ticks(timeline_axis([])).length, 0);
+  assert.equal(axis_ticks(timeline_axis([{ start: 0, end: 20_000 }]))[0].seconds, true, "a short run labels seconds");
 });

@@ -336,6 +336,28 @@ class FreeRoomTests(unittest.TestCase):
         self.assertTrue(900 < item["segments"][1]["end_ms"] <= span, "a later end is kept but never past the execution")
         self.assertEqual(self.request(f"{self.path.rsplit('/', 1)[0]}/missing-room/timeline")[0], 404)
 
+    def test_notes_ride_with_segments_and_the_timeline_reads_what_changed(self):
+        """A report may carry only notes; the timeline gives their times, and `after` leaves out executions ended before it."""
+        self.say("一")
+        first = self.reserve()[1]
+        self.assertEqual(self.answer(first["id"])[0], 201)
+        self.say("二")
+        execution = self.reserve()[1]
+        path = f"{self.path}/executions/{execution['id']}"
+        notes = [{"seq": 1, "text": "读完材料"}, {"seq": 2, "text": "开始验证"}]
+        self.assertEqual(self.request(path, {"action": "segments", "segments": [], "notes": notes}, self.owner)[0], 200)
+        self.assertEqual(self.request(path, {"action": "segments", "segments": []}, self.owner)[0], 400, "a report needs segments or notes")
+        self.assertEqual([note["text"] for note in self.request(f"{path}/notes")[1]["notes"]], ["读完材料", "开始验证"])
+        body = self.request(f"{self.path}/timeline")[1]
+        live = next(item for item in body["executions"] if item["id"] == execution["id"])
+        self.assertEqual(len(live["notes"]), 2)
+        self.assertEqual((live["task"], live["last_note"], live["result"], live["changes"]), ("二", "开始验证", None, None))
+        done = next(item for item in body["executions"] if item["id"] == first["id"])
+        self.assertEqual((done["task"], done["result"], done["state"]), ("一", "已处理", "done"), "the result is the answer's opening without a summary")
+        self.assertEqual(len(body["executions"]), 2)
+        later = self.request(f"{self.path}/timeline?after={body['now'] + 60}")[1]
+        self.assertEqual([item["id"] for item in later["executions"]], [execution["id"]], "only the running execution is read again")
+
     def test_owner_describes_members_for_everyone_to_read(self):
         """Descriptions are set by name with the owner credential, read in the room view, and cleared by empty text."""
         path = f"{self.path}/descriptions"
@@ -816,12 +838,26 @@ class HostTests(FreeRoomTests):
         finally:
             free_room.MAX_AUTO_HOPS = original
 
-    def test_single_member_dispatch_hands_back_to_the_host(self):
-        """One dispatched member's answer also returns to the host, so it can send the work on, e.g. to a reviewer."""
+    def test_single_member_dispatch_hands_back_only_when_the_host_asks(self):
+        """One member's answer goes straight to the user unless the host dispatched it with handoff, e.g. to pass it to a reviewer."""
         FreeRoomTests.say(self, "单人派活")
         self.work("Claude", to=["Codex"])
         self.work("Codex")
+        self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 0)
+        FreeRoomTests.say(self, "做完交回我", to=["Claude"])
+        self.work("Claude", to=["Codex"], handoff=True)
+        self.work("Codex")
         self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 1)
+
+    def test_handoff_needs_a_host_dispatch(self):
+        """handoff is true only beside the host's to; a member or a host naming no one is refused."""
+        FreeRoomTests.say(self, "检查")
+        host = self.reserve_for("Claude")[1]
+        base = {"author": "Claude", "text": "x", "source": "cli", "execution_id": host["id"]}
+        for extra in ({"handoff": True}, {"to": ["Codex"], "handoff": "yes"}):
+            status, refused = self.request(f"{self.path}/messages", {**base, **extra, "submission_id": uuid.uuid4().hex}, self.tokens["Claude"])
+            self.assertEqual(status, 400, refused)
+            self.assertIn("handoff", refused["error"])
 
     def test_owner_sets_the_room_chain_budget(self):
         """Only the owner changes the budget, within its range; running chains follow the new value."""

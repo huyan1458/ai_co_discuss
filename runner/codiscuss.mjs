@@ -47,6 +47,7 @@ const SERVICE_HELP = `AI CoDiscuss 讨论服务
   add --config FILE     登记房间的私有接入配置
   remove --config FILE  移除已登记配置
   list                  列出已登记配置
+  clean                 立即清理无房间使用的启动目录、草稿与超长日志（服务每 6 小时自动清理一次）
   open                  后台启动并打开讨论网站
   shortcut              创建 Windows 桌面快捷方式
   autostart on|off      开启或关闭 Windows 登录自启

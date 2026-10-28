@@ -1,7 +1,7 @@
 /** Resident local service that dispatches registered rooms to software or configured API participants. */
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, unlinkSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -17,12 +17,18 @@ const REMOTE_SYNC_MS = 3000;
 const START_WAIT_MS = 5000;
 const STOP_WAIT_MS = 20_000;
 const REGISTRY_WAIT_MS = 5000;
+// Housekeeping: logs above the limit keep only their newest part; a launch folder no room uses is removed once it is this old.
+const SWEEP_MS = 6 * 60 * 60 * 1000;
+const LOG_LIMIT_BYTES = 5 * 1024 * 1024;
+const LOG_KEEP_BYTES = 1024 * 1024;
+const STALE_LAUNCH_MS = 7 * 24 * 60 * 60 * 1000;
+const SERVICE_LOGS = ['service.log', join('local', 'website.log'), join('local', 'supervisor.log')];
 const SCRIPT = fileURLToPath(import.meta.url);
 const REPO_ROOT = dirname(dirname(SCRIPT));
 const SHORTCUT_NAME = 'AI CoDiscuss 讨论服务.lnk';
 const TICK_STATES = { undefined: 'running', waiting: 'paused', false: 'idle' };
 const STATUS_LABELS = { running: '运行中', paused: '已暂停', idle: '等待启动', error: '异常' };
-const USAGE = '用法: discussion_service.mjs start|stop|status|open|run|list|add|remove|shortcut|autostart [--config 私有配置.json] [on|off]';
+const USAGE = '用法: discussion_service.mjs start|stop|status|open|run|list|add|remove|clean|shortcut|autostart [--config 私有配置.json] [on|off]';
 export const CONNECTION_FIELDS = ['executable', 'ipc_directory'];
 
 /** Read one atomic configuration version for editing and worker acknowledgement. */
@@ -351,10 +357,13 @@ export class DiscussionService {
       await worker.tick();
       if (!worker.removed) continue;
       // The room no longer exists on its website, so there is nothing to pause; drop the registration once.
+      const directory = worker.config?.directory;
       await worker.close(false);
       this.workers.delete(path);
       try { unregister_room(this.home, path); } catch { /* Already removed by another command. */ }
-      this.log(`${worker.state.site || ''}/${worker.state.room || path}: 房间已在网站删除，已撤销登记`);
+      // Its runtime, task files and answer drafts serve no one now; a file still held is left to the periodic sweep.
+      try { remove_room_files(this.home, path, directory); } catch (error) { this.log(`${worker.state.room || path}: 本机文件未能删除，稍后清理：${error.message}`); }
+      this.log(`${worker.state.site || ''}/${worker.state.room || path}: 房间已在网站删除，已撤销登记并删除本机文件`);
     }
     atomic_json(join(this.home, 'status.json'), { pid: process.pid, updated_at: Math.floor(Date.now() / 1000),
       rooms: [...this.workers.values()].map(worker => worker.state) });
@@ -364,6 +373,64 @@ export class DiscussionService {
     for (const worker of this.workers.values()) await worker.close(true);
     this.workers.clear();
   }
+}
+
+/** Delete one room's local files: its answer drafts, and its launch folder when the service created it under launches/. */
+export function remove_room_files(home, config_path, data_directory) {
+  const folder = dirname(resolve(config_path));
+  for (const directory of [data_directory, folder, join(folder, 'runtime')].filter(Boolean)) {
+    rmSync(service_drafts(home, directory), { recursive: true, force: true });
+  }
+  if (dirname(folder) === resolve(home, 'launches')) rmSync(folder, { recursive: true, force: true });
+}
+
+/** Keep only the newest part of a log that grew past the limit; writers append, so they continue at its new end. */
+function trim_log(path) {
+  if (!existsSync(path) || statSync(path).size <= LOG_LIMIT_BYTES) return false;
+  const size = statSync(path).size, tail = Buffer.alloc(LOG_KEEP_BYTES);
+  const handle = openSync(path, 'r');
+  try { readSync(handle, tail, 0, LOG_KEEP_BYTES, size - LOG_KEEP_BYTES); } finally { closeSync(handle); }
+  // Start at a whole line so the kept part does not open mid-entry.
+  writeFileSync(path, tail.subarray(tail.indexOf(10) + 1));
+  return true;
+}
+
+/** The newest change time of a launch folder's own records, which a pending launch still updates. */
+function launch_touched(folder) {
+  return Math.max(...[folder, join(folder, 'launch.json'), join(folder, 'config.json')].filter(existsSync).map(path => statSync(path).mtimeMs));
+}
+
+/**
+ * Remove what no registered room uses: launch folders left by rooms deleted while the service was off, or launches
+ * never confirmed, once they are a week old and no process holds them; answer drafts whose folder is gone; and the
+ * oversized part of the service's logs. Registered rooms, settings and the local website's database are never touched.
+ */
+export function sweep_service_home(home, now = Date.now()) {
+  const registered = read_registry(home).map(path => dirname(resolve(path)));
+  const launches = join(home, 'launches'), removed = { launches: [], drafts: [], logs: [] };
+  for (const name of existsSync(launches) ? readdirSync(launches) : []) {
+    const folder = join(launches, name);
+    if (registered.includes(folder) || service_pid(folder) || service_pid(join(folder, 'runtime')) || now - launch_touched(folder) < STALE_LAUNCH_MS) continue;
+    try { remove_room_files(home, join(folder, 'config.json')); removed.launches.push(name); } catch { /* Still held; the next sweep retries. */ }
+  }
+  // A draft folder is keyed by its room's data directory; one matching no remaining folder or registered room is orphaned.
+  const live = new Set();
+  for (const path of read_registry(home)) {
+    const folder = dirname(resolve(path));
+    for (const directory of [folder, join(folder, 'runtime')]) live.add(service_drafts(home, directory));
+    try { live.add(service_drafts(home, validate_config(JSON.parse(readFileSync(path, 'utf8')), folder).directory)); } catch { /* Covered by the folder keys. */ }
+  }
+  for (const name of existsSync(launches) ? readdirSync(launches) : []) {
+    for (const directory of [join(launches, name), join(launches, name, 'runtime')]) live.add(service_drafts(home, directory));
+  }
+  const drafts = join(home, 'drafts');
+  for (const name of existsSync(drafts) ? readdirSync(drafts) : []) {
+    if (live.has(join(drafts, name))) continue;
+    rmSync(join(drafts, name), { recursive: true, force: true });
+    removed.drafts.push(name);
+  }
+  for (const log of SERVICE_LOGS) if (trim_log(join(home, log))) removed.logs.push(log);
+  return removed;
 }
 
 /** Return the live service PID, or 0 when no service owns the home lock. */
@@ -405,9 +472,18 @@ export async function run_service(home, output = () => {}) {
       updated_at: Math.floor(Date.now() / 1000), rooms: [] });
     // Loaded lazily: the relay runs launches, and the launch module itself depends on this one.
     const { sync_remote_launches } = await import('./remote_launch.mjs');
-    let synced_at = 0;
+    let synced_at = 0, swept_at = 0;
     while (!stopped && !existsSync(stop_path)) {
       try { await service.tick(); } catch (error) { log_line(`服务检查失败：${error.message}`); }
+      if (Date.now() - swept_at >= SWEEP_MS) {
+        swept_at = Date.now();
+        try {
+          const removed = sweep_service_home(home);
+          if (removed.launches.length || removed.drafts.length || removed.logs.length) {
+            log_line(`清理本机文件：启动目录 ${removed.launches.length} 个，草稿 ${removed.drafts.length} 个，日志 ${removed.logs.join('、') || '无'}`);
+          }
+        } catch (error) { log_line(`清理本机文件失败：${error.message}`); }
+      }
       if (Date.now() - synced_at >= REMOTE_SYNC_MS) {
         synced_at = Date.now();
         try { await sync_remote_launches(home, { log: log_line }); } catch (error) { log_line(`远程启动检查失败：${error.message}`); }
@@ -531,6 +607,7 @@ export async function main(args = process.argv.slice(2), print = value => proces
     case 'list': return print({ home, configs: read_registry(home) });
     case 'add': { const config = register_room(home, require_config()); return print({ added: config.room, site: config.site }); }
     case 'remove': unregister_room(home, require_config()); return print({ removed: resolve(values.config) });
+    case 'clean': return print(sweep_service_home(home));
     case 'shortcut': return print({ shortcut: write_shortcut('Desktop', 'open') });
     case 'autostart':
       if (option === 'on') return print({ autostart: write_shortcut('Startup', 'start') });
