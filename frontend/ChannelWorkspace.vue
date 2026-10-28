@@ -92,9 +92,9 @@ const selected_tab = computed({ get: () => view.value.tab, set: (value) => act("
 /** The same four tools in every room; each page shows only the parts that apply to the room's current mode. */
 const tabs = [
   { value: "discussion", label: "消息", icon: "i-lucide-message-square" },
+  { value: "timeline", label: "执行", icon: "i-lucide-chart-gantt" },
   { value: "history", label: "讨论", icon: "i-lucide-messages-square" },
   { value: "overview", label: "房间", icon: "i-lucide-sliders-horizontal" },
-  { value: "timeline", label: "执行", icon: "i-lucide-chart-gantt" },
 ];
 // The consensus, host and access pages were merged in; links and actions that still open them land on the merged page.
 const MERGED_TABS = { context: "history", topic: "history", access: "overview" };

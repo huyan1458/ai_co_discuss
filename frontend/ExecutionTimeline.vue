@@ -6,7 +6,7 @@
  * every two seconds while anything runs and whenever the room changes. Running bars grow ten times a second.
  * The look follows FlowWaterfall (tangle-network/charts): one card, a KPI row, a ticked axis with gridlines, bars on wells.
  */
-import { computed, inject, onBeforeUnmount, ref, watch } from "vue";
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { FOLD_GAP_MS, PHASE_LABELS, STALL_MS, STATE_LABELS, axis_ticks, execution_log, format_duration, notes_between, row_status, timeline_axis, timeline_rows, timeline_summary } from "./timeline-model.js";
 
 const emit = defineEmits(["detail"]);
@@ -19,6 +19,15 @@ const CLOCK_MS = 100;
 const OVERLAP_SECONDS = 5;
 // Each depth level indents a row's label by this much; the guides are drawn at the same pitch.
 const DEPTH_PX = 16;
+// About one axis tick per this many pixels of axis, and never fewer or more than these.
+const TICK_SPACING_PX = 90;
+const MIN_TICKS = 2;
+const MAX_TICKS = 8;
+// Touch screens have no hover: a tap opens the card and a tap elsewhere closes it.
+const can_hover = typeof window !== "undefined" && window.matchMedia?.("(hover: hover)").matches !== false;
+const axis_element = ref(null);
+const axis_width = ref(0);
+let axis_observer = null;
 const room_id = computed(() => view.value.room?.id);
 const executions = ref(new Map());
 const limits = ref(null);
@@ -74,17 +83,63 @@ watch(room_id, () => {
 }, { immediate: true });
 // A new execution, an answer or a failure changes the room; read at once instead of waiting for the next tick.
 watch(() => view.value.room, (room, previous) => { if (room?.id && room.id === previous?.id) load(); });
-onBeforeUnmount(() => { clearInterval(refresh_timer); clearInterval(clock_timer); });
+/** A pinned card (opened by a tap) closes on a tap anywhere else. */
+function close_on_outside(event) {
+  if (hover.value && !event.target.closest?.(".wf-card, .wf-bar, .wf-note")) hover.value = null;
+}
+onMounted(() => {
+  document.addEventListener("pointerdown", close_on_outside);
+  axis_observer = new ResizeObserver(([entry]) => { axis_width.value = entry.contentRect.width; });
+});
+// The axis appears only once there are rows, so it is observed whenever it is (re)rendered.
+watch(axis_element, (element, previous) => {
+  if (previous) axis_observer?.unobserve(previous);
+  if (element) axis_observer?.observe(element);
+});
+onBeforeUnmount(() => {
+  clearInterval(refresh_timer); clearInterval(clock_timer);
+  document.removeEventListener("pointerdown", close_on_outside);
+  axis_observer?.disconnect();
+});
 
 const all_rows = computed(() => timeline.value ? timeline_rows(timeline.value, now.value) : []);
 const rows = computed(() => all_rows.value.filter((row) => !row.ancestors.some((key) => collapsed.value.has(key))));
 const axis = computed(() => timeline_axis(all_rows.value));
-const ticks = computed(() => axis_ticks(axis.value));
+const ticks = computed(() => axis_ticks(axis.value,
+  Math.min(MAX_TICKS, Math.max(MIN_TICKS, Math.round((axis_width.value || TICK_SPACING_PX * 6) / TICK_SPACING_PX)))));
 const summary = computed(() => timeline_summary(all_rows.value, now.value));
 const parents = computed(() => all_rows.value.filter((row) => row.has_children).map((row) => row.key));
 const opened_row = computed(() => all_rows.value.find((row) => row.key === opened.value));
 const opened_log = computed(() => opened_row.value ? execution_log(opened_row.value, note_texts.value.get(opened_row.value.item.id)) : []);
-const LEGEND = [["queue", "排队"], ["wake", "唤醒"], ["work", "执行（无阶段明细）"], ...Object.entries(PHASE_LABELS)];
+/** The legend lists only what the bars actually show, so it never explains marks that are not there. */
+const legend = computed(() => {
+  const rows = all_rows.value;
+  const phases = new Set(rows.flatMap((row) => row.segments.map((segment) => segment.phase)));
+  return [
+    ...(rows.some((row) => row.queue[1] > row.queue[0]) ? [["queue", "排队"]] : []),
+    ...(rows.some((row) => row.wake) ? [["wake", "唤醒"]] : []),
+    ...(rows.some((row) => row.work && !row.segments.length) ? [["work", "执行（无阶段明细，按成员着色）"]] : []),
+    ...Object.entries(PHASE_LABELS).filter(([phase]) => phases.has(phase)),
+    ...(rows.some((row) => row.notes.length) ? [["note-mark", "过程说明"]] : []),
+    ...(rows.some((row) => row.item.state === "failed") ? [["failed-mark", "失败"]] : []),
+  ];
+});
+const no_phases = computed(() => all_rows.value.length > 0 && all_rows.value.every((row) => !row.segments.length));
+/** Each member keeps one hue, so bars without phases still say who worked when. Hues go by first appearance. */
+const MEMBER_TONES = 5;
+const member_tone = computed(() => {
+  const tones = new Map();
+  for (const row of [...all_rows.value].sort((a, b) => a.start - b.start)) {
+    if (!tones.has(row.item.member)) tones.set(row.item.member, tones.size % MEMBER_TONES + 1);
+  }
+  return tones;
+});
+// A tick this many pixels from a folded band's middle would collide with the band's label.
+const FOLD_LABEL_CLEARANCE_PX = 52;
+const shown_ticks = computed(() => {
+  const clearance = FOLD_LABEL_CLEARANCE_PX / (axis_width.value || 800);
+  return ticks.value.filter((tick) => !axis.value.folds.some((fold) => Math.abs(tick.x - (fold.from + fold.width / 2)) < clearance));
+});
 
 /** Open one execution's detail under its row, or close it; its notes are read as it opens and again as more arrive. */
 function open_row(row) {
@@ -110,6 +165,10 @@ function role_label(row) {
   const host = row.item.role === "host";
   return row.item.source === "discussion" ? (host ? "讨论 · 主持" : "讨论 · 专家") : (host ? "协作 · 主持" : "协作");
 }
+/** The marks after a name: only what tells rows apart. Every free row would say "协作", so it says nothing. */
+function role_marks(row) {
+  return [...(row.item.source === "discussion" ? ["讨论"] : []), ...(row.item.role === "host" ? ["主持"] : [])];
+}
 const status = (row) => row_status(row, now.value);
 
 function row_label(row) {
@@ -134,14 +193,28 @@ const clock = (ms) => new Date(ms).toLocaleTimeString("zh-CN", { hour: "2-digit"
 const tick_label = (tick) => new Date(tick.at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", ...(tick.seconds ? { second: "2-digit" } : {}), hour12: false });
 
 /** Show the card for one piece of a bar: what it was, when, and the progress notes written around then. */
-function show(event, row, piece) {
+function show(event, row, piece, pinned = false) {
   const target = event.currentTarget.getBoundingClientRect();
   const related = piece.note ? { notes: [piece.note], earlier: false } : notes_between(row.notes, piece.start, piece.end);
-  hover.value = { key: row.key, row, piece, related, left: Math.max(8, Math.min(target.left, window.innerWidth - 380)), top: target.bottom + 6 };
+  const width = Math.min(360, window.innerWidth - 16);
+  // Below the piece, unless that runs off the screen; then above it.
+  const below = target.bottom + 6;
+  const top = below + 160 > window.innerHeight && target.top > 200 ? Math.max(8, target.top - 6 - 200) : below;
+  hover.value = { key: row.key, id: piece_id(row, piece), row, piece, related, pinned,
+    left: Math.max(8, Math.min(target.left, window.innerWidth - width - 8)), top };
   note_texts_for(row);
 }
+const piece_id = (row, piece) => `${row.key}:${piece.kind || piece.label || "note"}:${piece.start}`;
 
-function hide(row) { if (hover.value?.key === row.key) hover.value = null; }
+/** With a mouse, a piece shows its card while pointed at. */
+function enter(event, row, piece) { if (can_hover) show(event, row, piece); }
+/** On a touch screen a tap opens the card and pins it; tapping the same piece again closes it. */
+function tap(event, row, piece) {
+  if (can_hover) return;
+  if (hover.value?.id === piece_id(row, piece)) hover.value = null;
+  else show(event, row, piece, true);
+}
+function hide(row) { if (hover.value?.key === row.key && !hover.value.pinned) hover.value = null; }
 
 const hover_title = computed(() => {
   const piece = hover.value?.piece;
@@ -159,7 +232,7 @@ const hover_notes = computed(() => {
 
 <template>
   <section class="merged-section execution-timeline" aria-label="执行时间线">
-    <div class="page-heading"><div><h2>执行时间线</h2><p>本机接入程序唤醒的每次执行，按时间排在同一条轴上；由主持人派出的执行缩进在主持人之下。阶段由接入程序从软件输出中识别，手动接入、在线 AI 与 Codex App 没有阶段明细；点名字展开详情，悬停条形或刻度看当时的过程说明（目前只有协作执行记录过程说明）。</p></div></div>
+    <div class="page-heading"><div><h2>执行时间线</h2><p>本机接入程序唤醒的每次执行；点名字看详情，悬停条形看当时的过程说明。</p></div></div>
     <p v-if="error" role="alert" class="fine-print wf-error">{{ error }}</p>
     <p v-if="timeline && !all_rows.length" class="fine-print">还没有执行记录。</p>
     <div v-if="all_rows.length" class="wf">
@@ -170,16 +243,15 @@ const hover_notes = computed(() => {
       </header>
       <dl class="wf-summary">
         <div><dt>执行</dt><dd>{{ summary.executions }}</dd></div>
-        <div><dt>进行中</dt><dd :class="{ 'is-live': summary.running }">{{ summary.running }}</dd></div>
-        <div><dt>失败</dt><dd :class="{ 'is-failed': summary.failed }">{{ summary.failed }}</dd></div>
-        <div :title="`超过 ${STALL_MINUTES} 分钟没有输出`"><dt>可能卡住</dt><dd :class="{ 'is-warn': summary.stalled }">{{ summary.stalled }}</dd></div>
+        <div><dt>进行中</dt><dd :class="summary.running ? 'is-live' : 'is-zero'">{{ summary.running }}</dd></div>
+        <div><dt>失败</dt><dd :class="summary.failed ? 'is-failed' : 'is-zero'">{{ summary.failed }}</dd></div>
+        <div :title="`超过 ${STALL_MINUTES} 分钟没有输出`"><dt>可能卡住</dt><dd :class="summary.stalled ? 'is-warn' : 'is-zero'">{{ summary.stalled }}</dd></div>
         <div :title="axis.folds.length ? `已折叠 ${axis.folds.length} 段超过 ${FOLD_GAP_MS / 60000} 分钟的空闲` : undefined"><dt>有效时长</dt><dd>{{ format_duration(axis.busy_ms) }}</dd></div>
-        <div title="连续调用同一工具合并为一段"><dt>工具与命令</dt><dd>{{ summary.tool_segments }} 段</dd></div>
+        <div title="连续调用同一工具合并为一段"><dt>工具与命令</dt><dd :class="{ 'is-zero': !summary.tool_segments }">{{ summary.tool_segments }} 段</dd></div>
       </dl>
       <ul class="wf-legend" aria-label="图例">
-        <li v-for="[key, label] in LEGEND" :key="key"><i class="wf-swatch" :class="`is-${key}`"></i>{{ label }}</li>
-        <li><i class="wf-swatch is-note-mark"></i>过程说明</li>
-        <li><i class="wf-swatch is-failed-mark"></i>失败</li>
+        <li v-for="[key, label] in legend" :key="key"><i class="wf-swatch" :class="`is-${key}`"></i>{{ label }}</li>
+        <li v-if="no_phases" class="wf-legend-note">这些执行都没有阶段明细：发生在接入程序上报阶段之前，或来自手动接入、在线 AI、Codex App</li>
       </ul>
       <div class="wf-grid" role="list" :style="{ '--wf-depth-px': `${DEPTH_PX}px` }">
         <div class="wf-axis-label">
@@ -189,8 +261,10 @@ const hover_notes = computed(() => {
             <button type="button" class="wf-text-button" @click="collapsed = new Set(parents)">收起全部</button>
           </span>
         </div>
-        <div class="wf-axis" aria-hidden="true">
-          <span v-for="tick in ticks" :key="tick.at" class="wf-tick" :style="{ left: `${tick.x * 100}%` }">{{ tick_label(tick) }}</span>
+        <div ref="axis_element" class="wf-axis" aria-hidden="true">
+          <span v-for="tick in shown_ticks" :key="tick.at" class="wf-tick" :style="{ left: `${tick.x * 100}%` }">{{ tick_label(tick) }}</span>
+          <span v-for="fold in axis.folds" :key="`fold-${fold.start}`" class="wf-fold-label" :style="{ left: `${(fold.from + fold.width / 2) * 100}%` }"
+            :title="`${clock(fold.start)} – ${clock(fold.end)} 没有执行，已折叠`">⋯ {{ format_duration(fold.end - fold.start) }}</span>
           <span v-if="running" class="wf-now">现在</span>
         </div>
         <span class="wf-axis-end">用时</span>
@@ -204,31 +278,31 @@ const hover_notes = computed(() => {
             <span v-else class="wf-toggle-space"></span>
             <UAvatar :src="bridge.identities[row.item.member]?.icon" :text="bridge.identities[row.item.member]?.initials" :alt="row.item.member" size="2xs" class="channel-avatar wf-avatar" :class="bridge.identities[row.item.member]?.style" />
             <button type="button" class="wf-names" :aria-expanded="opened === row.key" :title="status(row).text" @click="open_row(row)">
-              <span class="wf-name-line"><strong>{{ bridge.display_name(row.item.member) }}</strong><small>{{ role_label(row) }}</small><em v-if="summary.slowest?.row === row.key" class="wf-pill is-slowest">最慢</em></span>
+              <span class="wf-name-line"><strong>{{ bridge.display_name(row.item.member) }}</strong><em v-for="mark in role_marks(row)" :key="mark" class="wf-pill is-role">{{ mark }}</em><em v-if="summary.slowest?.row === row.key" class="wf-pill is-slowest">最慢</em></span>
               <span class="wf-status" :class="`is-${status(row).tone}`"><i v-if="status(row).tone === 'live'" class="wf-live-dot" aria-hidden="true"></i>{{ status(row).text }}</span>
             </button>
           </div>
           <div class="wf-lane" role="img" :aria-label="row_label(row)" @mouseleave="hide(row)"><div class="wf-track">
-            <i v-for="tick in ticks" :key="tick.at" class="wf-gridline" :style="{ left: `${tick.x * 100}%` }"></i>
+            <i v-for="tick in shown_ticks" :key="tick.at" class="wf-gridline" :style="{ left: `${tick.x * 100}%` }"></i>
             <i v-for="fold in axis.folds" :key="fold.start" class="wf-fold" :style="{ left: `${fold.from * 100}%`, width: `${fold.width * 100}%` }"></i>
             <i class="wf-well"></i>
-            <i class="wf-bar is-queue" :style="place(...row.queue)" @mouseenter="show($event, row, { label: '排队', start: row.queue[0], end: row.queue[1] })"></i>
+            <i class="wf-bar is-queue" :style="place(...row.queue)" @mouseenter="enter($event, row, { label: '排队', start: row.queue[0], end: row.queue[1] })" @click="tap($event, row, { label: '排队', start: row.queue[0], end: row.queue[1] })"></i>
             <i v-if="row.wake" class="wf-bar is-wake" :style="place(...row.wake)"
-              @mouseenter="show($event, row, { label: row.wake_approx ? '唤醒（约）' : '唤醒', start: row.wake[0], end: row.wake[1] })"></i>
-            <i v-if="row.work" class="wf-bar is-work" :class="{ 'has-detail': row.segments.length }" :style="place(...row.work)"
-              @mouseenter="show($event, row, { label: row.segments.length ? '执行' : '执行 · 无阶段明细', start: row.work[0], end: row.work[1], live: row.item.state === 'running' })"></i>
+              @mouseenter="enter($event, row, { label: row.wake_approx ? '唤醒（约）' : '唤醒', start: row.wake[0], end: row.wake[1] })" @click="tap($event, row, { label: row.wake_approx ? '唤醒（约）' : '唤醒', start: row.wake[0], end: row.wake[1] })"></i>
+            <i v-if="row.work" class="wf-bar is-work" :class="{ 'has-detail': row.segments.length }" :data-tone="row.segments.length ? undefined : member_tone.get(row.item.member)" :style="place(...row.work)"
+              @mouseenter="enter($event, row, { label: row.segments.length ? '执行' : '执行 · 无阶段明细', start: row.work[0], end: row.work[1], live: row.item.state === 'running' })" @click="tap($event, row, { label: row.segments.length ? '执行' : '执行 · 无阶段明细', start: row.work[0], end: row.work[1], live: row.item.state === 'running' })"></i>
             <template v-for="segment in row.segments" :key="segment.start + segment.phase">
               <i class="wf-bar wf-seg" :class="[`is-${segment.phase}`, { 'is-live': segment.live }]"
-                :style="place(segment.start, segment.seen, true)" @mouseenter="show($event, row, { kind: 'segment', ...segment })"></i>
+                :style="place(segment.start, segment.seen, true)" @mouseenter="enter($event, row, { kind: 'segment', ...segment })" @click="tap($event, row, { kind: 'segment', ...segment })"></i>
               <i v-if="segment.end > segment.seen" class="wf-bar wf-seg is-tail" :class="`is-${segment.phase}`"
-                :style="place(segment.seen, segment.end)" @mouseenter="show($event, row, { kind: 'segment', ...segment })"></i>
+                :style="place(segment.seen, segment.end)" @mouseenter="enter($event, row, { kind: 'segment', ...segment })" @click="tap($event, row, { kind: 'segment', ...segment })"></i>
             </template>
             <button v-for="note in row.notes" :key="`note-${note.index}`" type="button" class="wf-note" :style="{ left: `${axis.x(note.at) * 100}%` }"
               :aria-label="`${bridge.display_name(row.item.member)} 的第 ${note.index + 1} 段过程说明，${clock(note.at)}`"
-              @mouseenter="show($event, row, { note, start: note.at, end: note.at })" @focus="show($event, row, { note, start: note.at, end: note.at })" @blur="hide(row)"></button>
+              @mouseenter="enter($event, row, { note, start: note.at, end: note.at })" @click="tap($event, row, { note, start: note.at, end: note.at })" @focus="enter($event, row, { note, start: note.at, end: note.at })" @blur="hide(row)"></button>
           </div></div>
           <span class="wf-end">{{ format_duration(row.end - row.start) }}{{ row.wake_approx && row.wake ? '~' : '' }}<small v-if="row.item.state !== 'done'" :class="`is-${row.item.state}`">{{ STATE_LABELS[row.item.state] }}</small><small v-if="row.truncated">明细已截断</small></span>
-          <div v-if="opened === row.key" class="wf-detail" :style="{ marginLeft: `${row.depth * DEPTH_PX + 44}px` }">
+          <div v-if="opened === row.key" class="wf-detail" :style="{ '--wf-indent': `${row.depth * DEPTH_PX + 44}px` }">
             <dl>
               <div v-if="row.item.task"><dt>任务</dt><dd>{{ row.item.task }}<button v-if="row.item.task_id" type="button" class="subtle-link" @click="emit('detail', row.item.task_id)">#{{ row.item.task_id }}</button></dd></div>
               <div v-if="row.item.state === 'failed'"><dt>失败原因</dt><dd class="is-failed">{{ row.item.reason || '执行失败' }}</dd></div>
@@ -251,8 +325,9 @@ const hover_notes = computed(() => {
         <span v-if="timeline.executions.length >= timeline.execution_limit">只列出最近 {{ timeline.execution_limit }} 次讨论执行与 {{ timeline.execution_limit }} 次协作执行</span>
       </footer>
     </div>
-    <div v-if="hover" class="wf-card" role="tooltip" :style="{ left: `${hover.left}px`, top: `${hover.top}px` }">
+    <div v-if="hover" class="wf-card" :class="{ 'is-pinned': hover.pinned }" :role="hover.pinned ? 'dialog' : 'tooltip'" :style="{ left: `${hover.left}px`, top: `${hover.top}px` }">
       <strong>{{ bridge.display_name(hover.row.item.member) }} · {{ hover_title }}</strong>
+      <button v-if="hover.pinned" type="button" class="wf-card-close" aria-label="关闭" @click="hover = null"><UIcon name="i-lucide-x" /></button>
       <small>{{ clock(hover.piece.start) }}<template v-if="hover.piece.end > hover.piece.start"> – {{ hover.piece.live ? '现在' : clock(hover.piece.end) }}</template></small>
       <p v-if="hover.row.item.reason" class="wf-card-reason">{{ hover.row.item.reason }}</p>
       <template v-if="hover_notes.length">
@@ -291,6 +366,13 @@ const hover_notes = computed(() => {
   --wf-writing: light-dark(oklch(0.55 0.08 185), oklch(0.76 0.08 185));
   --wf-wake: light-dark(oklch(0.70 0.12 75), oklch(0.78 0.11 75));
   --wf-work: color-mix(in oklab, var(--ui-text) 26%, var(--wf-surface));
+  /* Member identity, as FlowWaterfall's lane hues: one lightness and a moderate chroma, no green, amber or red. An execution
+     without phases is drawn as a tint of its member's hue with an outline in it, so it never reads as a solid phase bar. */
+  --wf-h1: light-dark(oklch(0.55 0.11 255), oklch(0.70 0.11 255));
+  --wf-h2: light-dark(oklch(0.55 0.11 300), oklch(0.70 0.11 300));
+  --wf-h3: light-dark(oklch(0.55 0.11 335), oklch(0.70 0.11 335));
+  --wf-h4: light-dark(oklch(0.55 0.11 215), oklch(0.70 0.11 215));
+  --wf-h5: light-dark(oklch(0.55 0.03 255), oklch(0.70 0.03 255));
   --wf-bar-h: 20px;
   --wf-row-h: 44px;
   --wf-label-col: minmax(200px, 340px);
@@ -324,10 +406,13 @@ const hover_notes = computed(() => {
 .wf-summary dd.is-live { color: var(--wf-accent); }
 .wf-summary dd.is-failed { color: var(--wf-failed); }
 .wf-summary dd.is-warn { color: var(--wf-warn); }
+/* A zero is an answer, not news: it stays legible but steps back so the counts that matter stand out. */
+.wf-summary dd.is-zero { color: var(--wf-muted); font-weight: 400; }
 
 /* Legend: one row of swatches, as the bars draw them. */
 .wf-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0; padding: 8px 16px; border-bottom: 1px solid var(--wf-border); color: var(--wf-muted); font-size: 12px; list-style: none; }
 .wf-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.wf-legend li.wf-legend-note { color: var(--wf-muted); opacity: .8; }
 .wf-swatch { display: inline-block; flex: none; width: 12px; height: 8px; border-radius: 2px; }
 .wf-swatch.is-note-mark { width: 2px; height: 12px; border-radius: 1px; background: var(--wf-text); }
 .wf-swatch.is-failed-mark { box-shadow: inset 0 0 0 1.5px var(--wf-failed); background: color-mix(in oklab, var(--wf-failed) 20%, transparent); }
@@ -341,6 +426,8 @@ const hover_notes = computed(() => {
 .wf-text-button:hover { background: var(--wf-hover); color: var(--wf-text); }
 .wf-axis { position: relative; height: 32px; margin: 0 12px; border-bottom: 1px solid var(--wf-border); color: var(--wf-muted); font-family: var(--wf-mono); font-size: 11px; }
 .wf-tick { position: absolute; top: 50%; padding-left: 4px; border-left: 1px solid var(--wf-guide); line-height: 14px; white-space: nowrap; transform: translateY(-50%); font-variant-numeric: tabular-nums; }
+/* A folded idle stretch says how long it was right on the axis, so evenly spaced ticks are never read as even time. */
+.wf-fold-label { position: absolute; top: 50%; padding: 0 4px; border-radius: 4px; background: var(--wf-surface); color: var(--wf-muted); font-size: 10px; line-height: 14px; white-space: nowrap; transform: translate(-50%, -50%); cursor: help; z-index: 1; }
 .wf-now { position: absolute; top: 50%; right: 0; color: var(--wf-accent); font-family: inherit; transform: translateY(-50%); }
 .wf-axis-end { display: flex; align-items: center; justify-content: flex-end; height: 32px; padding-right: 16px; border-bottom: 1px solid var(--wf-border); color: var(--wf-muted); font-size: 12px; }
 
@@ -359,8 +446,8 @@ const hover_notes = computed(() => {
 .wf-names:focus-visible, .wf-toggle:focus-visible, .wf-text-button:focus-visible, .wf-note:focus-visible { outline: 2px solid var(--wf-accent); outline-offset: 1px; border-radius: 4px; }
 .wf-name-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; line-height: 18px; }
 .wf-name-line strong { overflow: hidden; color: var(--wf-text); font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.wf-name-line small { flex: none; color: var(--wf-muted); font-size: 11px; }
 .wf-pill { flex: none; height: 16px; padding: 0 6px; border-radius: 999px; font-size: 11px; font-style: normal; font-weight: 600; line-height: 16px; }
+.wf-pill.is-role { background: var(--wf-well); color: var(--wf-muted); font-weight: 500; }
 .wf-pill.is-slowest { background: color-mix(in oklab, var(--wf-warn) 16%, transparent); color: var(--wf-warn); }
 .wf-status { overflow: hidden; color: var(--wf-muted); font-size: 12px; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
 .wf-status.is-live { color: var(--ui-text); }
@@ -374,13 +461,20 @@ const hover_notes = computed(() => {
 .wf-track { position: relative; flex: 1; min-width: 0; margin: 0 12px; }
 .wf-track > i, .wf-track > .wf-note { position: absolute; display: block; }
 .wf-gridline { top: 0; bottom: 0; width: 1px; background: var(--wf-grid); }
-.wf-fold { top: 0; bottom: 0; border-inline: 1px dashed var(--wf-guide); background: color-mix(in oklab, var(--ui-text) 4%, transparent); }
+/* Folded idle time is a faint band only: its edges would read as more gridlines. */
+.wf-fold { top: 0; bottom: 0; background: color-mix(in oklab, var(--ui-text) 4%, transparent); }
 .wf-well { top: calc(50% - var(--wf-bar-h) / 2); right: 0; left: 0; height: var(--wf-bar-h); border-radius: 4px; background: var(--wf-well); }
 .wf-bar { top: calc(50% - var(--wf-bar-h) / 2); height: var(--wf-bar-h); min-width: 2px; border-radius: 4px; transition: width 120ms linear, filter 120ms ease; }
 .wf-bar:hover { z-index: 1; filter: brightness(1.15); box-shadow: 0 0 0 2px color-mix(in oklab, var(--wf-text) 30%, transparent); }
 .wf-bar.is-queue { background: repeating-linear-gradient(-45deg, var(--wf-hatch) 0 1px, transparent 1px 5px); box-shadow: inset 0 0 0 1px var(--wf-hatch); }
 .wf-bar.is-wake { background: color-mix(in oklab, var(--wf-wake) 55%, var(--wf-surface)); box-shadow: inset 0 0 0 1px var(--wf-wake); }
 .wf-bar.is-work { background: var(--wf-work); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ui-text) 16%, transparent); }
+.wf-bar.is-work[data-tone="1"] { --tone: var(--wf-h1); }
+.wf-bar.is-work[data-tone="2"] { --tone: var(--wf-h2); }
+.wf-bar.is-work[data-tone="3"] { --tone: var(--wf-h3); }
+.wf-bar.is-work[data-tone="4"] { --tone: var(--wf-h4); }
+.wf-bar.is-work[data-tone="5"] { --tone: var(--wf-h5); }
+.wf-bar.is-work[data-tone] { background: color-mix(in oklab, var(--tone) 32%, var(--wf-surface)); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--tone) 70%, transparent); }
 /* With phases recorded, the execution's own extent is only a faint frame under them. */
 .wf-bar.is-work.has-detail { background: color-mix(in oklab, var(--ui-text) 5%, transparent); }
 .is-failed .wf-bar.is-work { background: color-mix(in oklab, var(--wf-failed) 22%, var(--wf-surface)); box-shadow: inset 0 0 0 1px var(--wf-failed); }
@@ -395,10 +489,12 @@ const hover_notes = computed(() => {
 .is-writing { background: var(--wf-writing); }
 .wf-swatch.is-queue { background: repeating-linear-gradient(-45deg, var(--wf-hatch) 0 1px, transparent 1px 4px); box-shadow: inset 0 0 0 1px var(--wf-hatch); }
 .wf-swatch.is-wake { background: color-mix(in oklab, var(--wf-wake) 55%, var(--wf-surface)); box-shadow: inset 0 0 0 1px var(--wf-wake); }
-.wf-swatch.is-work { background: var(--wf-work); }
-/* A note is a tick through the bar; its hit area is wider than it looks. */
-.wf-note { top: calc(50% - var(--wf-bar-h) / 2 - 5px); width: 9px; height: calc(var(--wf-bar-h) + 10px); margin-left: -4px; padding: 0; border: 0; background: linear-gradient(var(--wf-text), var(--wf-text)) center / 2px 100% no-repeat; opacity: .6; cursor: help; z-index: 2; }
+.wf-swatch.is-work { background: linear-gradient(90deg, var(--wf-h1) 0 33%, var(--wf-h2) 33% 66%, var(--wf-h3) 66%); opacity: .7; }
+/* A note is a hairline inside the bar's height: it marks a moment, and must never outshout the work it annotates.
+   Its hit area is wider than it looks. */
+.wf-note { top: calc(50% - var(--wf-bar-h) / 2); width: 9px; height: var(--wf-bar-h); margin-left: -4px; padding: 0; border: 0; background: linear-gradient(var(--wf-text), var(--wf-text)) center / 1.5px 100% no-repeat; opacity: .35; cursor: help; z-index: 2; }
 .wf-note:hover, .wf-note:focus-visible { opacity: 1; }
+.wf-row:hover .wf-note { opacity: .6; }
 
 /* Duration column: tabular figures, the state under it when it is not a plain finish. */
 .wf-end { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; padding-right: 16px; font-family: var(--wf-mono); font-size: 12px; line-height: 16px; font-variant-numeric: tabular-nums; }
@@ -407,7 +503,7 @@ const hover_notes = computed(() => {
 .wf-end small.is-running { color: var(--wf-accent); }
 
 /* Detail: an inset well under the opened row, aligned with its name. */
-.wf-detail { grid-column: 1 / -1; margin: 0 16px 12px; padding: 12px 14px; border: 1px solid var(--wf-border); border-radius: 8px; background: var(--wf-well); }
+.wf-detail { grid-column: 1 / -1; margin: 0 16px 12px var(--wf-indent, 16px); padding: 12px 14px; border: 1px solid var(--wf-border); border-radius: 8px; background: var(--wf-well); }
 .wf-detail dl { display: grid; gap: 6px; margin: 0 0 10px; }
 .wf-detail dl > div { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; }
 .wf-detail dt { color: var(--wf-muted); font-size: 12px; }
@@ -426,6 +522,9 @@ const hover_notes = computed(() => {
 
 /* Hover card: what the piece was, when, and the notes written around then. */
 .wf-card { position: fixed; z-index: 50; display: grid; gap: 4px; width: min(360px, calc(100vw - 16px)); max-height: 50vh; padding: 10px 12px; overflow: auto; border: 1px solid var(--channel-edge-float, var(--ui-border)); border-radius: 8px; background: var(--ui-bg-elevated); box-shadow: var(--channel-shadow-float, 0 8px 24px rgb(0 0 0 / .25)); color: var(--ui-text); font-size: 12px; pointer-events: none; }
+/* A card pinned by a tap takes touches, so its notes scroll and it can be closed. */
+.wf-card.is-pinned { padding-right: 36px; pointer-events: auto; }
+.wf-card-close { position: absolute; top: 4px; right: 4px; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--ui-text-muted); cursor: pointer; }
 .wf-card strong { color: var(--ui-text-highlighted); font-size: 13px; }
 .wf-card small { color: var(--ui-text-muted); font-variant-numeric: tabular-nums; }
 .wf-card-reason { margin: 2px 0 0; color: var(--ui-error); }
@@ -435,17 +534,34 @@ const hover_notes = computed(() => {
 
 @keyframes wf-pulse { 50% { opacity: .55; } }
 @media (prefers-reduced-motion: reduce) { .wf * { animation: none !important; transition: none !important; } }
-/* Narrow screens: a shorter label column, the KPI row in three columns, and no axis labels that would collide. */
-@media (max-width: 720px) {
-  .wf { --wf-label-col: 132px; }
-  .wf-grid { grid-template-columns: var(--wf-label-col) minmax(0, 1fr) 60px; }
+/* Sizes follow the page's own width, not the screen's: on a tablet the channel rails take part of it.
+   Tablets: a shorter label column and the KPI row in two lines of three. */
+.execution-timeline { container: wf / inline-size; }
+@container wf (max-width: 900px) {
+  .wf { --wf-label-col: minmax(160px, 220px); }
   .wf-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .wf-summary > div:nth-child(4) { border-left: 0; }
   .wf-summary > div:nth-child(n + 4) { border-top: 1px solid var(--wf-border); }
-  .wf-tick:nth-child(even) { display: none; }
-  .wf-branch, .wf-name-line small { display: none; }
-  .wf-label { padding-right: 8px; }
-  .wf-track, .wf-axis { margin: 0 6px; }
-  .wf-end { padding-right: 10px; }
+  .wf-grid { grid-template-columns: var(--wf-label-col) minmax(0, 1fr) 72px; }
+  .wf-end { padding-right: 12px; }
+}
+/* Phones: three columns leave a bar no room, so each execution takes two lines: who and how it is going across the
+   full width, then its bar across the full width with the duration beside it. */
+@container wf (max-width: 640px) {
+  .wf-head, .wf-legend, .wf-foot { padding-inline: 12px; }
+  .wf-summary > div { padding: 8px 12px; }
+  .wf-summary dd { font-size: 15px; }
+  .wf-grid { grid-template-columns: minmax(0, 1fr) 64px; }
+  .wf-axis-label, .wf-fold-label { display: none; }
+  .wf-row > .wf-label { grid-column: 1 / -1; min-height: 0; padding: 6px 12px 0 calc(12px + var(--depth) * var(--wf-depth-px)); border-top: 1px solid var(--wf-border); border-right: 0; }
+  .wf-row > .wf-lane, .wf-row > .wf-end { min-height: 32px; }
+  .wf-end { padding-right: 12px; }
+  .wf-detail { margin: 0 12px 12px; }
+}
+/* Touch: controls keep their look but take a fingertip; a note's tick is easier to hit. */
+@media (pointer: coarse) {
+  .wf-toggle { flex: 0 0 32px; width: 32px; height: 32px; margin: -8px; }
+  .wf-text-button { height: 32px; }
+  .wf-note { width: 24px; margin-left: -12px; }
 }
 </style>
