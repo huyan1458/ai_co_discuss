@@ -314,9 +314,13 @@ test('a backup carries local member sessions, and restoring it resumes them whil
 
   const lost = structuredClone(local_members);
   lost.participants.Codex.session_id = 'missing-session';
+  const base_url = 'https://api.deepseek.com/v1';
+  lost.participants.DeepSeek = { adapter: 'api', api_protocol: 'chat', base_url, model: 'deepseek-flash',
+    ...save_api_key(home, { base_url, api_key: 'test-only-key' }), session_id: 'api-binding-1' };
   const missing = await restore_room(home, { site, room_id: 'lost', token, local_members: lost });
   assert.match(missing.members[0].error, /找不到 Codex 会话 missing-session/);
   assert.equal(missing.members[0].status, 'failed');
+  assert.deepEqual(missing.members[2], { name: 'DeepSeek', status: 'resumed', session_id: '' });
 });
 
 test('agy project records survive a concluded room and are dropped only after the room is deleted', async t => {

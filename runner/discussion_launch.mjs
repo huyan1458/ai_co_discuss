@@ -757,6 +757,8 @@ export async function restore_room(home, raw) {
   for (const [name, exported] of Object.entries(local.participants)) {
     try {
       const profile = participant_profile(name, {}, { cwd: local.cwd, adopt: true, participants: { [name]: exported } }, false);
+      // An API member's binding lives in the old runtime directory, not in any software's session store, so it starts fresh.
+      if (profile.adapter === 'api') delete profile.session_id;
       const resumed = profile.session_id ? borrowed_session(name, profile, local.cwd) : profile;
       if (profile.adapter === 'claude') {
         keep_manual.push(name);
