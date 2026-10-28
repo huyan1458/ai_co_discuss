@@ -5,6 +5,8 @@
  */
 
 export const PHASE_LABELS = { thinking: "思考", command: "命令", tool: "工具", editing: "编辑", writing: "撰写" };
+/** Bars are colored by member and shaded by kind, as in a trace: the model's own turns dark, its tool work light. */
+export const PHASE_KINDS = { thinking: "model", writing: "model", command: "tool", tool: "tool", editing: "tool" };
 export const STATE_LABELS = { running: "进行中", done: "完成", failed: "失败", cancelled: "已撤销" };
 /** Idle stretches longer than this fold into a band; each band takes this share of the axis. */
 export const FOLD_GAP_MS = 5 * 60_000;
@@ -95,6 +97,31 @@ export function execution_log(row, texts) {
 }
 
 /**
+ * The timeline as it stood at `at_ms`, for replay: what had not been requested yet is gone, what had not finished is
+ * running, and every phase, note and output is cut at that moment. A replay is then drawn exactly as live work is, with
+ * `at_ms` as now. `texts` (execution id → note texts) names what each was last saying; results stay hidden until the end.
+ */
+export function snapshot_at(timeline, at_ms, texts = new Map()) {
+  const at = at_ms / 1000;
+  const executions = [];
+  for (const item of timeline.executions) {
+    if ((item.queued_at || item.dispatched_at || Infinity) > at) continue;
+    if (item.finished_at && item.finished_at <= at) { executions.push(item); continue; }
+    const dispatched = item.dispatched_at && item.dispatched_at <= at ? item.dispatched_at : 0;
+    const elapsed_ms = dispatched ? (at - dispatched) * 1000 : 0;
+    const notes = (item.notes || []).filter((time) => time <= at);
+    executions.push({ ...item, state: "running", status: "started", finished_at: 0, dispatched_at: dispatched,
+      started_at: item.started_at && item.started_at <= at ? item.started_at : 0,
+      segments: dispatched ? item.segments.filter((segment) => segment.start_ms <= elapsed_ms)
+        .map((segment) => ({ ...segment, end_ms: Math.min(segment.end_ms, elapsed_ms) })) : [],
+      notes, last_note: notes.length ? texts.get(item.id)?.[notes.length - 1] ?? null : null,
+      activity_at: item.activity_at && item.activity_at <= at ? item.activity_at : 0,
+      reason: "", result: null, answer_id: null, changes: null });
+  }
+  return { ...timeline, executions };
+}
+
+/**
  * The progress notes that belong to a moment between `start` and `end`: those received within it, else the latest one
  * received before it, marked `earlier`, since a note usually explains what the agent goes on to do.
  */
@@ -135,32 +162,107 @@ export function timeline_rows(timeline, now_ms) {
     for (const row of (children.get(parent) || []).sort((a, b) => a.start - b.start || a.key.localeCompare(b.key))) {
       if (seen.has(row.key)) continue;
       seen.add(row.key);
-      ordered.push({ ...row, depth, ancestors, has_children: Boolean(children.get(row.key)?.length) });
+      ordered.push({ ...row, depth, ancestors, placed_parent: parent, has_children: Boolean(children.get(row.key)?.length) });
       visit(row.key, depth + 1, [...ancestors, row.key]);
     }
   };
   visit("", 0, []);
   // A cycle leaves its members unvisited; they still show, at the top level.
-  for (const row of rows) if (!seen.has(row.key)) ordered.push({ ...row, depth: 0, ancestors: [], has_children: false });
+  for (const row of rows) if (!seen.has(row.key)) ordered.push({ ...row, depth: 0, ancestors: [], placed_parent: "", has_children: false });
   return ordered;
 }
 
 /**
- * The axis: busy stretches keep their length and idle stretches longer than FOLD_GAP_MS fold into bands, so a room
- * used over several days still reads. `x(t)` maps a time to a fraction of the width; `folds` are the bands.
+ * The run an execution belongs to, as a trace is one agent run: a free execution's run is the request that started its
+ * chain (the task of the execution at the top of its dispatch tree), so every hand-off and summary of one user message
+ * reads as one trace; a discussion execution's run is its discussion run.
  */
-export function timeline_axis(rows) {
+export function run_key(item, by_id) {
+  if (item.source === "discussion") return `run:${item.run_id || item.id}`;
+  let root = item;
+  for (const seen = new Set([item.id]); root.parent_id && by_id.has(root.parent_id) && !seen.has(root.parent_id); root = by_id.get(root.parent_id)) {
+    seen.add(root.parent_id);
+  }
+  return root.task_id ? `task:${root.task_id}` : `exec:${root.id}`;
+}
+
+/**
+ * The runs on the timeline, newest first: what started each (its opening request or discussion question), when it ran,
+ * how many executions it took and whether any is still running or failed. `key` of each execution is in `runs.of`.
+ */
+export function timeline_runs(timeline, now_ms) {
+  const free = new Map(timeline.executions.filter((item) => item.source === "free").map((item) => [item.id, item]));
+  const runs = new Map();
+  const of = new Map();
+  for (const item of timeline.executions) {
+    const key = run_key(item, free);
+    of.set(`${item.source}:${item.id}`, key);
+    const stages = execution_stages(item, now_ms);
+    const run = runs.get(key) || { key, source: item.source, start: stages.start, end: stages.end, count: 0, running: false, failed: false, task: "", first: Infinity };
+    run.start = Math.min(run.start, stages.start);
+    run.end = Math.max(run.end, stages.end);
+    run.count += 1;
+    run.running ||= item.state === "running";
+    run.failed ||= item.state === "failed";
+    // The opening request names the run: the task of its earliest execution that has one.
+    if (item.task && stages.start < run.first) { run.task = item.task; run.first = stages.start; }
+    runs.set(key, run);
+  }
+  return { list: [...runs.values()].sort((a, b) => b.start - a.start), of };
+}
+
+/**
+ * Hand-off lines, one per dispatched execution whose dispatcher is shown above it: from the dispatcher's bar at the
+ * moment of dispatch (the request's time) straight down to the dispatched row. Returns, per row key, the pieces that
+ * row draws: `start` (a dot on the dispatcher's bar and the line leaving it), `through` (rows in between) and `end`
+ * (the elbow into the dispatched bar), each at fraction `x` and named by the dispatched member.
+ */
+export function handoff_lines(rows, axis) {
+  const index = new Map(rows.map((row, position) => [row.key, position]));
+  const pieces = new Map();
+  const add = (key, piece) => { if (!pieces.has(key)) pieces.set(key, []); pieces.get(key).push(piece); };
+  rows.forEach((row, position) => {
+    const from = index.get(row.placed_parent);
+    if (from === undefined || from >= position) return;
+    const x = axis.x(row.queue[0]);
+    const member = row.item.member;
+    add(rows[from].key, { x, part: "start", member });
+    for (let between = from + 1; between < position; between += 1) add(rows[between].key, { x, part: "through", member });
+    add(row.key, { x, part: "end", member, to: axis.x(row.queue[1] > row.queue[0] ? row.queue[0] : row.start) });
+  });
+  return pieces;
+}
+
+/** Totals a live axis may show, so it rescales in a few round steps rather than every frame. */
+const LIVE_TOTALS_MS = [5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 300, 600, 900, 1200, 1800, 2700, 3600, 5400, 7200, 10800, 21600, 43200, 86400]
+  .map((seconds) => seconds * 1000);
+/** While work runs, it fills at most this share of the axis; the rest is room for it to grow into. */
+const LIVE_FILL = 0.75;
+
+/**
+ * The axis: busy stretches keep their length and idle stretches longer than FOLD_GAP_MS fold into bands, so a room
+ * used over several days still reads. `x(t)` maps a time to a fraction of the width; `folds` are the bands. While work
+ * runs (`live`), the last stretch runs on past now to the next round total, so bars grow into free room and the axis
+ * rescales only now and then.
+ */
+export function timeline_axis(rows, live = false) {
   const spans = rows.map((row) => [row.start, row.end]).sort((a, b) => a[0] - b[0]);
-  if (!spans.length) return { start: 0, end: 0, busy_ms: 0, folds: [], x: () => 0 };
+  if (!spans.length) return { start: 0, end: 0, busy_ms: 0, folds: [], spans: [], x: () => 0 };
   const busy = [];
   for (const [start, end] of spans) {
     const last = busy.at(-1);
     if (last && start <= last[1] + FOLD_GAP_MS) last[1] = Math.max(last[1], end);
     else busy.push([start, end]);
   }
+  // `busy_ms` is the time work actually took; `total_ms` is what the axis shows, the room ahead of live work included.
   const busy_ms = busy.reduce((sum, [start, end]) => sum + (end - start), 0);
+  let total_ms = busy_ms;
+  if (live && busy_ms) {
+    total_ms = LIVE_TOTALS_MS.find((ms) => ms >= busy_ms / LIVE_FILL) ?? Math.ceil(busy_ms / LIVE_FILL);
+    busy.at(-1)[1] += total_ms - busy_ms;
+  }
   const fold_share = Math.min(FOLD_SHARE, 0.5 / Math.max(1, busy.length - 1));
-  const scale = busy_ms ? (1 - fold_share * (busy.length - 1)) / busy_ms : 0;
+  const scale = total_ms ? (1 - fold_share * (busy.length - 1)) / total_ms : 0;
   const pieces = [];
   let offset = 0;
   busy.forEach(([start, end], index) => {
@@ -169,7 +271,7 @@ export function timeline_axis(rows) {
       pieces.push({ start: gap_start, end: start, from: offset, width: fold_share, fold: true });
       offset += fold_share;
     }
-    const width = busy_ms ? (end - start) * scale : 1 / busy.length;
+    const width = total_ms ? (end - start) * scale : 1 / busy.length;
     pieces.push({ start, end, from: offset, width, fold: false });
     offset += width;
   });
@@ -178,7 +280,7 @@ export function timeline_axis(rows) {
     if (time <= piece.start) return piece.from;
     return piece.from + (piece.end > piece.start ? Math.min(1, (time - piece.start) / (piece.end - piece.start)) * piece.width : 0);
   };
-  return { start: busy[0][0], end: busy.at(-1)[1], busy_ms, x,
+  return { start: busy[0][0], end: busy.at(-1)[1], busy_ms, total_ms, x,
     spans: pieces.filter((piece) => !piece.fold).map(({ start, end, from, width }) => ({ start, end, from, width })),
     folds: pieces.filter((piece) => piece.fold).map(({ start, end, from, width }) => ({ start, end, from, width })) };
 }
@@ -194,8 +296,9 @@ const MIN_TICK_GAP = 0.12;
  * `seconds` says whether the labels need seconds.
  */
 export function axis_ticks(axis, count = 6) {
-  if (!axis.busy_ms) return [];
-  const step = TICK_STEPS_MS.find((ms) => axis.busy_ms / ms <= count) ?? TICK_STEPS_MS.at(-1);
+  const shown_ms = axis.total_ms ?? axis.busy_ms;
+  if (!shown_ms) return [];
+  const step = TICK_STEPS_MS.find((ms) => shown_ms / ms <= count) ?? TICK_STEPS_MS.at(-1);
   const ticks = [];
   for (const span of axis.spans) {
     for (let at = Math.ceil(span.start / step) * step; at <= span.end; at += step) {

@@ -5,7 +5,7 @@ import vm from "node:vm";
 import { computed, nextTick, reactive, ref, watch } from "vue";
 import { API_PROVIDERS } from "../runner/discussion_api.mjs";
 import { member_actions } from "../frontend/member-actions.js";
-import { axis_ticks, execution_log, execution_stages, format_duration, notes_between, row_status, timeline_axis, timeline_rows, timeline_summary } from "../frontend/timeline-model.js";
+import { axis_ticks, execution_log, execution_stages, format_duration, handoff_lines, notes_between, row_status, snapshot_at, timeline_axis, timeline_rows, timeline_runs, timeline_summary } from "../frontend/timeline-model.js";
 
 const source = readFileSync(new URL("../web/app.js", import.meta.url), "utf8").replace(/\nrestore_theme\(\);[\s\S]*$/, "");
 const discussion_source = readFileSync(new URL("../frontend/ChannelDiscussion.vue", import.meta.url), "utf8");
@@ -3669,4 +3669,55 @@ test("axis ticks fall on round clock times inside shown stretches and never crow
   assert.ok(ticks.every((tick, index) => !index || tick.x - ticks[index - 1].x >= 0.12), "labels keep their distance");
   assert.equal(axis_ticks(timeline_axis([])).length, 0);
   assert.equal(axis_ticks(timeline_axis([{ start: 0, end: 20_000 }]))[0].seconds, true, "a short run labels seconds");
+});
+
+test("a trace shows one run: a user's message with every hand-off it led to, or one discussion", () => {
+  const run = (id, member, parent_id, task_id, start, extra = {}) => ({ source: "free", id, member, role: member === "Claude" ? "host" : "member", status: "completed",
+    state: "done", queued_at: start, dispatched_at: start, started_at: 0, finished_at: start + 20, reason: "", parent_id, task_id, task: `任务 ${task_id}`, segments: [], notes: [], ...extra });
+  const timeline = { execution_limit: 100, segment_limit: 400, executions: [
+    run(1, "Claude", null, 10, 0), run(2, "Codex", 1, 11, 30), run(3, "Claude", 1, 11, 60),
+    run(4, "Codex", null, 20, 1000), run(5, "Gemini", null, 20, 1001, { state: "failed", status: "failed" }),
+    { ...run(9, "Codex", null, null, 2000), source: "discussion", run_id: "r1", task: "第一个问题" },
+    { ...run(10, "Gemini", null, null, 2030), source: "discussion", run_id: "r1", task: null },
+  ] };
+  const runs = timeline_runs(timeline, 5_000_000);
+  assert.deepEqual(runs.list.map((item) => [item.key, item.count, item.failed]), [["run:r1", 2, false], ["task:20", 2, true], ["task:10", 3, false]]);
+  assert.equal(runs.list.find((item) => item.key === "task:10").task, "任务 10", "a run is named by its opening request");
+  assert.equal(runs.of.get("free:3"), "task:10", "the host's summary belongs to the run it sums up");
+});
+
+test("hand-off lines run from the dispatch moment on the dispatcher's bar down to the dispatched row", () => {
+  const item = (id, member, parent_id, start) => ({ source: "free", id, member, role: "member", status: "completed", state: "done", queued_at: start, dispatched_at: start + 1,
+    started_at: 0, finished_at: start + 20, reason: "", parent_id, segments: [], notes: [] });
+  const rows = timeline_rows({ execution_limit: 100, segment_limit: 400, executions: [item(1, "Claude", null, 0), item(2, "Codex", 1, 10), item(3, "Gemini", 1, 12)] }, 1e6);
+  const axis = timeline_axis(rows);
+  const lines = handoff_lines(rows, axis);
+  assert.deepEqual(lines.get("free:1").map((line) => line.part), ["start", "start"]);
+  assert.deepEqual(lines.get("free:2").map((line) => line.part), ["end", "through"], "Gemini's line passes Codex's row");
+  assert.deepEqual(lines.get("free:3").map((line) => line.part), ["end"]);
+  assert.equal(lines.get("free:2")[0].x, axis.x(10_000), "the line drops at the moment the request was made");
+});
+
+test("a live axis leaves room ahead of now and rescales in round steps", () => {
+  const rows = [{ start: 0, end: 7_000 }];
+  const live = timeline_axis(rows, true);
+  assert.equal(live.total_ms, 10_000, "7 s of work shows on a 10 s axis");
+  assert.equal(live.busy_ms, 7_000, "the time worked is still 7 s");
+  assert.ok(Math.abs(live.x(7_000) - 0.7) < 1e-9);
+  assert.equal(timeline_axis([{ start: 0, end: 8_000 }], true).total_ms, 15_000);
+  assert.equal(timeline_axis(rows).total_ms, 7_000, "a finished run fills the axis");
+});
+
+test("a replay snapshot shows the run as it stood: later work gone, unfinished work running and cut at that moment", () => {
+  const item = { source: "free", id: 1, member: "Codex", role: "member", status: "completed", state: "done", queued_at: 100, dispatched_at: 101, started_at: 0,
+    finished_at: 130, reason: "", parent_id: null, task: "改登录页", result: "已改完", answer_id: 9, changes: 2, activity_at: 129, last_note: "改完了",
+    notes: [105, 120], segments: [{ phase: "thinking", tool: "", start_ms: 1000, end_ms: 6000 }, { phase: "editing", tool: "Edit", start_ms: 6000, end_ms: 25000 }] };
+  const later = { ...item, id: 2, queued_at: 200, dispatched_at: 201, finished_at: 220 };
+  const snapshot = snapshot_at({ execution_limit: 100, segment_limit: 400, executions: [item, later] }, 110_000, new Map([[1, ["先读代码", "改完了"]]]));
+  assert.deepEqual(snapshot.executions.map((entry) => entry.id), [1], "work not yet requested is not there");
+  const [cut] = snapshot.executions;
+  assert.deepEqual([cut.state, cut.finished_at, cut.result, cut.answer_id, cut.changes], ["running", 0, null, null, null], "the outcome is not known yet");
+  assert.deepEqual(cut.segments.map((segment) => [segment.phase, segment.end_ms]), [["thinking", 6000], ["editing", 9000]]);
+  assert.deepEqual([cut.notes, cut.last_note, cut.activity_at], [[105], "先读代码", 0], "it says what it had said by then");
+  assert.equal(snapshot_at({ execution_limit: 100, segment_limit: 400, executions: [item] }, 140_000).executions[0], item, "finished work is shown as it was");
 });

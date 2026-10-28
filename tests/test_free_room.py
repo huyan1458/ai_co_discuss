@@ -331,6 +331,7 @@ class FreeRoomTests(unittest.TestCase):
         self.assertEqual(status, 200, body)
         item = body["executions"][0]
         self.assertEqual((item["source"], item["member"], item["state"]), ("free", "Claude", "done"))
+        self.assertIsNone(item["run_id"])
         span = (item["finished_at"] - item["dispatched_at"] + 1) * 1000
         self.assertEqual([(s["phase"], s["tool"], s["start_ms"]) for s in item["segments"]], [("thinking", "", 0), ("command", "Bash", 400), ("writing", "", 900)])
         self.assertTrue(900 < item["segments"][1]["end_ms"] <= span, "a later end is kept but never past the execution")

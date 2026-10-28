@@ -32,7 +32,7 @@ TIMELINE_DISCUSSION_IDS = """SELECT e.id FROM discussion_events e LEFT JOIN even
     ORDER BY e.id DESC LIMIT ?2"""
 # Besides times: the task an execution took on (its request message, or the discussion turn's question), its result
 # (the answer's summary, else the answer's opening), its latest progress note, how many files it changed (NULL when
-# unobserved) and its last output time (free executions only).
+# unobserved), its last output time (free executions only) and the discussion run it belongs to (discussion only).
 TIMELINE_SQL = f"""SELECT x.*,(SELECT COALESCE(NULLIF(s.text,''),substr(a.text,1,200)) FROM messages a
         LEFT JOIN message_summaries s ON s.message_id=a.id WHERE a.id=x.answer_id) AS result FROM (
     SELECT 'free' AS source,e.id,m.name AS member,m.role,e.status,
@@ -45,12 +45,12 @@ TIMELINE_SQL = f"""SELECT x.*,(SELECT COALESCE(NULLIF(s.text,''),substr(a.text,1
         (SELECT substr(q.text,1,160) FROM messages q WHERE q.id=(SELECT MIN(r.message_id) FROM member_requests r WHERE r.execution_id=e.id)) AS task,
         (SELECT MAX(r.answer_id) FROM member_requests r WHERE r.execution_id=e.id) AS answer_id,
         (SELECT n.text FROM execution_notes n WHERE n.execution_id=e.id ORDER BY n.seq DESC LIMIT 1) AS last_note,
-        CASE WHEN e.changes='' THEN NULL ELSE json_array_length(e.changes) END AS changes
+        CASE WHEN e.changes='' THEN NULL ELSE json_array_length(e.changes) END AS changes,NULL AS run_id
     FROM member_executions e JOIN room_members m ON m.id=e.member_id WHERE e.id IN ({TIMELINE_FREE_IDS})
     UNION ALL SELECT 'discussion',e.id,e.participant,e.role,e.status,CAST(strftime('%s',e.created_at) AS INTEGER),
         COALESCE(t.dispatched_at,0),e.started_at,COALESCE(t.finished_at,0),CASE WHEN e.status='failed' THEN e.result ELSE '' END,NULL,
         0,NULL,(SELECT substr(q.question,1,160) FROM discussion_turns q WHERE q.id=e.turn_id),
-        CASE WHEN e.result LIKE 'message:%' THEN CAST(substr(e.result,9) AS INTEGER) END,NULL,NULL
+        CASE WHEN e.result LIKE 'message:%' THEN CAST(substr(e.result,9) AS INTEGER) END,NULL,NULL,e.run_id
     FROM discussion_events e LEFT JOIN event_timings t ON t.event_id=e.id WHERE e.id IN ({TIMELINE_DISCUSSION_IDS})) x"""
 TIMELINE_SEGMENTS_SQL = f"""SELECT source,execution_id,phase,tool,start_ms,end_ms FROM execution_segments WHERE room_id=?1 AND (
     (source='free' AND execution_id IN ({TIMELINE_FREE_IDS})) OR (source='discussion' AND execution_id IN ({TIMELINE_DISCUSSION_IDS})))

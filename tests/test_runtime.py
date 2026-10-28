@@ -183,6 +183,7 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(self.server.update_version, previous)
         item = next(row for row in self.request(self.path + "/timeline")[1]["executions"] if row["source"] == "discussion" and row["id"] == event["id"])
         self.assertEqual((item["state"], item["segments"][0]["tool"]), ("running", "Read"))
+        self.assertEqual(item["run_id"], event["run_id"], "a discussion execution says which discussion run it belongs to")
 
     def events(self):
         """Read the durable inbox using its room owner capability."""
