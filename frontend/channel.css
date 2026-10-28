@@ -809,6 +809,21 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-room-actions { opacity: 1; pointer-events: auto; }
   .channel-room-actions button { width: 44px; height: 44px; }
   .channel-room-select { min-height: 44px; }
+  @media (max-width: 700px) {
+    /* Phone: the title row and the brief bar give their height back to the transcript; 36px still taps cleanly. */
+    .channel-header { grid-template-columns: 36px minmax(0, 1fr) 36px; padding-block: 0 4px; }
+    html[data-theme^="channel"] .channel-panel-toggle { width: 36px; height: 36px; }
+    .channel-host-brief { padding-block: 0; }
+    /* Without a search box (every tab but messages) the status chip joins the title row instead of taking its own. */
+    .channel-header:not(:has(.channel-search)) { grid-template-columns: 36px minmax(0, 1fr) auto 36px; }
+    .channel-header:not(:has(.channel-search)) .channel-header-actions { grid-column: 3; grid-row: 1; }
+    .channel-header:not(:has(.channel-search)) .channel-info-button { grid-column: 4; }
+    html[data-theme^="channel"] .content-page { padding: 14px 12px 24px; }
+    html[data-theme^="channel"] .page-heading { margin-bottom: 14px; }
+    html[data-theme^="channel"] .page-heading h2 { margin-bottom: 4px; font-size: 17px; }
+    .channel-brief-heading, .channel-brief-toggle, .channel-brief-update,
+    .channel-host-brief.is-collapsed .channel-brief-toggle { min-height: 36px; }
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   html[data-theme^="channel"] *, html[data-theme^="channel"] *::before, html[data-theme^="channel"] *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }

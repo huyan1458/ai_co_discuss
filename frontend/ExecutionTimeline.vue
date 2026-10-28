@@ -172,6 +172,8 @@ function run_label(run) {
   const task = run.task ? `${run.task.replace(/\s+/g, " ").slice(0, RUN_TASK_CHARS)}${run.task.length > RUN_TASK_CHARS ? "…" : ""}` : run.source === "discussion" ? "讨论" : "执行";
   return `${when(run.start)} · ${task} · ${run.count} 次${run.running ? " · 进行中" : run.failed ? " · 有失败" : ""}`;
 }
+const run_items = computed(() => [{ label: "最近一轮（自动跟随）", value: LATEST },
+  ...runs.value.list.map((run) => ({ label: run_label(run), value: run.key })), { label: "全部执行", value: ALL }]);
 
 // The run as it really is; its bounds are what a replay plays through.
 const base_rows = computed(() => shown.value ? timeline_rows(shown.value, now.value) : []);
@@ -201,6 +203,7 @@ const now_x = computed(() => {
   return x === null || x < 0 || x > 1 ? null : x;
 });
 const auto_speed = computed(() => Math.max(1, bounds.value.duration / REPLAY_TARGET_MS));
+const speed_items = computed(() => [{ label: `自动 · ${Math.round(auto_speed.value)}×`, value: 0 }, ...REPLAY_SPEEDS.map((speed) => ({ label: `${speed}×`, value: speed }))]);
 const replay_speed = computed(() => replay.speed || auto_speed.value);
 
 /** One clock for live growth and replay: every frame while either is on, at most ten times a second with many rows. */
@@ -405,15 +408,8 @@ const hover_notes = computed(() => {
     <div v-if="all_rows.length" ref="wf_element" class="wf">
       <header class="wf-head">
         <span class="wf-title">执行瀑布</span>
-        <label class="wf-run">
-          <span class="sr-only">查看哪一轮</span>
-          <select v-model="chosen_run" class="wf-run-select">
-            <option :value="LATEST">最近一轮（自动跟随）</option>
-            <option v-for="run in runs.list" :key="run.key" :value="run.key">{{ run_label(run) }}</option>
-            <option :value="ALL">全部执行</option>
-          </select>
-          <UIcon name="i-lucide-chevrons-up-down" class="wf-run-icon" aria-hidden="true" />
-        </label>
+        <USelect v-model="chosen_run" :items="run_items" trailing-icon="i-lucide-chevrons-up-down" variant="none" aria-label="查看哪一轮" class="wf-run-select"
+          :content="{ align: 'start', sideOffset: 4 }" :ui="{ content: 'channel-select-menu wf-run-menu', trailingIcon: 'wf-select-icon' }" />
         <span v-if="replaying" class="wf-state is-replay">回放中 · {{ clock(view_time) }}</span>
         <span v-else class="wf-state" :class="{ 'is-live': summary.running }">{{ summary.running ? `${summary.running} 个进行中` : '均已结束' }}</span>
         <span v-if="summary.slowest" class="wf-headline">最慢一步 <b>{{ bridge.display_name(summary.slowest.member) }} · {{ PHASE_LABELS[summary.slowest.phase] }}<template v-if="summary.slowest.tool"> {{ summary.slowest.tool }}</template></b> · {{ format_duration(summary.slowest.end - summary.slowest.start) }}</span>
@@ -519,10 +515,8 @@ const hover_notes = computed(() => {
             <UIcon :name="replay.playing ? 'i-lucide-pause' : 'i-lucide-play'" />
           </button>
           <button type="button" class="wf-player-button" aria-label="从头回放" :disabled="!replaying" @click="restart"><UIcon name="i-lucide-rotate-ccw" /></button>
-          <select v-model.number="replay.speed" class="wf-speed" aria-label="回放速度">
-            <option :value="0">自动 · {{ Math.round(auto_speed) }}×</option>
-            <option v-for="speed in REPLAY_SPEEDS" :key="speed" :value="speed">{{ speed }}×</option>
-          </select>
+          <USelect v-model="replay.speed" :items="speed_items" variant="none" aria-label="回放速度" class="wf-speed"
+            :content="{ side: 'top', align: 'start', sideOffset: 4 }" :ui="{ content: 'channel-select-menu wf-speed-menu', trailingIcon: 'wf-select-icon' }" />
           <input type="range" class="wf-scrub" min="0" :max="bounds.duration" step="100" :value="replaying ? replay.position : bounds.duration"
             aria-label="回放位置" @input="scrub" />
           <span class="wf-player-time">{{ format_duration(replaying ? replay.position : bounds.duration) }} / {{ format_duration(bounds.duration) }}</span>
@@ -633,7 +627,7 @@ const hover_notes = computed(() => {
 /* The page scrolls inside .content-page, whose top padding (channel.css: 34px, 24px at 700px and below) a sticky box
    would otherwise stop under, letting rows show above it. */
 .execution-timeline { --wf-sticky-top: -34px; }
-@media (max-width: 700px) { .execution-timeline { --wf-sticky-top: -24px; } }
+@media (max-width: 700px) { .execution-timeline { --wf-sticky-top: -14px; } }
 /* The axis keeps side margins to line up with the tracks; its shadow fills them, so rows never show through. */
 .wf-axis { box-shadow: -12px 0 0 var(--wf-surface), 12px 0 0 var(--wf-surface); }
 .wf-axis-label { display: flex; align-items: center; gap: 8px; min-width: 0; height: 32px; padding: 0 12px 0 16px; border-right: 1px solid var(--wf-border); border-bottom: 1px solid var(--wf-border); color: var(--wf-muted); font-size: 12px; }
@@ -644,14 +638,14 @@ const hover_notes = computed(() => {
 .wf-tick { position: absolute; top: 50%; padding-left: 4px; border-left: 1px solid var(--wf-guide); line-height: 14px; white-space: nowrap; transform: translateY(-50%); font-variant-numeric: tabular-nums; }
 /* A folded idle stretch says how long it was right on the axis, so evenly spaced ticks are never read as even time. */
 .wf-fold-label { position: absolute; top: 50%; padding: 0 4px; border-radius: 4px; background: var(--wf-surface); color: var(--wf-muted); font-size: 10px; line-height: 14px; white-space: nowrap; transform: translate(-50%, -50%); cursor: help; z-index: 1; }
-.wf-run { position: relative; display: inline-flex; align-items: center; min-width: 0; max-width: min(420px, 100%); }
-.wf-run-select { min-width: 0; max-width: 100%; height: 26px; padding: 0 26px 0 10px; overflow: hidden; border: 1px solid var(--wf-border); border-radius: 6px;
-  background: var(--wf-well); color: var(--wf-text); font: inherit; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; appearance: none; cursor: pointer; }
-.wf-run-select:focus-visible { outline: 2px solid var(--wf-accent); outline-offset: 1px; }
-/* A styled select loses the native dark list on Windows, which falls back to white behind light text: the options are
-   given the theme's own colors. */
-.wf-run-select option, .wf-speed option { background: var(--ui-bg-elevated); color: var(--ui-text); }
-.wf-run-icon { position: absolute; right: 8px; width: 12px; height: 12px; color: var(--wf-muted); pointer-events: none; }
+/* Run and speed pickers open the site's own menu (channel-select-menu), not the OS list, which ignores the theme. */
+.wf-run-select { min-width: 0; max-width: min(420px, 100%); height: 26px; padding: 0 8px 0 10px; border: 1px solid var(--wf-border); border-radius: 6px;
+  background: var(--wf-well); color: var(--wf-text); font-size: 12px; cursor: pointer; }
+.wf-run-select:hover, .wf-speed:hover { border-color: var(--wf-guide); }
+.wf-run-select:focus-visible, .wf-speed:focus-visible { outline: 2px solid var(--wf-accent); outline-offset: 1px; }
+:deep(.wf-select-icon) { width: 12px; height: 12px; color: var(--wf-muted); }
+:global(.wf-run-menu) { max-width: min(520px, calc(100vw - 32px)); max-height: min(420px, 60vh); }
+:global(.wf-speed-menu) { min-width: 120px !important; }
 /* Now, while work runs: a dot on the axis and a line down through every lane; bars grow up to it, free room lies past it. */
 .wf-cursor-head { position: absolute; bottom: -5px; width: 9px; height: 9px; border-radius: 50%; background: var(--wf-text); box-shadow: 0 0 0 2px var(--wf-surface); transform: translateX(-50%); z-index: 2; }
 .wf-axis-end { display: flex; align-items: center; justify-content: flex-end; height: 32px; padding-right: 16px; border-bottom: 1px solid var(--wf-border); color: var(--wf-muted); font-size: 12px; }
@@ -774,7 +768,7 @@ const hover_notes = computed(() => {
 .wf-player-button:disabled { opacity: .4; cursor: default; }
 .wf-player-button:not(:disabled):hover { background: var(--wf-hover); }
 .wf-player-button :deep(svg) { width: 13px; height: 13px; }
-.wf-speed { height: 28px; padding: 0 8px; border: 1px solid var(--wf-border); border-radius: 6px; background: var(--wf-well); color: var(--wf-text); font: inherit; font-size: 12px; cursor: pointer; }
+.wf-speed { height: 28px; padding: 0 6px 0 8px; gap: 4px; border: 1px solid var(--wf-border); border-radius: 6px; background: var(--wf-well); color: var(--wf-text); font: inherit; font-size: 12px; cursor: pointer; }
 .wf-scrub { flex: 1; min-width: 120px; accent-color: var(--wf-accent); cursor: pointer; }
 .wf-player-time { font-family: var(--wf-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .wf-player :is(button, select, input):focus-visible { outline: 2px solid var(--wf-accent); outline-offset: 1px; }
@@ -818,14 +812,20 @@ const hover_notes = computed(() => {
    full width, then its bar across the full width with the duration beside it. */
 @container wf (max-width: 640px) {
   .wf-head, .wf-legend, .wf-foot { padding-inline: 12px; }
-  .wf-summary > div { padding: 8px 12px; }
-  .wf-summary dd { font-size: 15px; }
+  .wf-summary > div { padding: 6px 12px; }
+  .wf-summary dt { font-size: 11px; }
+  .wf-summary dd { margin-top: 0; font-size: 14px; line-height: 20px; }
+  .wf-legend { gap: 2px 10px; padding-block: 6px; font-size: 11px; }
   .wf-grid { grid-template-columns: minmax(0, 1fr) 64px; }
   /* Stacked rows put a label line between lanes, which would break a hand-off line; the rows' indents show it instead. */
   .wf-axis-label, .wf-fold-label, .wf-link { display: none; }
   .wf-run { max-width: 100%; flex-basis: 100%; }
   .wf-row > .wf-label { grid-column: 1 / -1; min-height: 0; padding: 6px 12px 0 calc(12px + var(--depth) * var(--wf-depth-px)); border-top: 1px solid var(--wf-border); border-right: 0; }
-  .wf-row > .wf-lane, .wf-row > .wf-end { min-height: 32px; }
+  .wf-row > .wf-lane, .wf-row > .wf-end { min-height: 26px; }
+  /* Name and status share one line, so a phone screen shows twice as many executions. */
+  .wf-names { flex-direction: row; align-items: baseline; gap: 8px; padding: 2px 0; }
+  .wf-name-line { flex: none; max-width: 60%; }
+  .wf-status { flex: 1; min-width: 0; }
   .wf-end { padding-right: 12px; }
 }
 /* Touch: controls keep their look but take a fingertip; a note's tick is easier to hit. */

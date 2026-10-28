@@ -238,10 +238,10 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 .overview-local { display: flex; gap: 10px; margin: 0 0 8px; color: var(--ui-text-muted); font-size: 12px; }
 .overview-result { margin: 8px 0 0; color: var(--ui-text-muted); font-size: 12px; }
 .overview-result.is-error { color: var(--ui-error); }
-.overview-settings { display: grid; gap: 10px; margin: 0; font-size: 13px; }
+.overview-settings { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin: 0; font-size: 13px; }
 .overview-settings div { display: flex; gap: 8px; }
 .overview-settings dt { flex: none; width: 112px; color: var(--ui-text-muted); }
-.overview-settings dd { margin: 0; color: var(--ui-text); }
+.overview-settings dd { flex: 1; min-width: 0; margin: 0; color: var(--ui-text); overflow-wrap: anywhere; }
 @media (max-width: 720px) {
   .member-card-facts { grid-template-columns: 1fr 1fr; padding-left: 16px; }
 }
