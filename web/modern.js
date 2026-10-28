@@ -48909,7 +48909,7 @@ var hU = /*#__PURE__*/ XH({
 						role: C.value.state === "error" ? "alert" : "status",
 						class: M(C.value.state === "error" ? "scheduler-error" : "scheduler-ok")
 					}, P(C.value.message), 11, hY)) : Y("", !0),
-					a[14] ||= K("p", { class: "scheduler-note" }, "决策模型只做选择、不生成文本，只按输入计费。判断时会把房间标题和最近 10 条消息发给所选供应商；密钥只存本机。", -1)
+					a[14] ||= K("p", { class: "scheduler-note" }, "决策模型只做选择、不生成文本，只按输入计费。判断时会把房间标题和最近 10～20 条消息发给所选供应商；密钥只存本机。", -1)
 				]), K("span", gY, [K("button", {
 					type: "button",
 					class: "scheduler-flip is-cancel",
@@ -48950,7 +48950,7 @@ var hU = /*#__PURE__*/ XH({
 			]);
 		};
 	}
-}, [["__scopeId", "data-v-3e1049d5"]]), yY = { class: "create-discussion" }, bY = {
+}, [["__scopeId", "data-v-5a7b8cc6"]]), yY = { class: "create-discussion" }, bY = {
 	key: 0,
 	class: "create-connect",
 	role: "status"

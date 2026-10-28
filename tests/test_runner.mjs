@@ -1774,7 +1774,12 @@ async function free_fixture(t) {
       if (body?.action === 'renew') state.renewed = body;
       if (body?.action === 'segments') { (state.segments ||= []).push(body.segments); if (body.notes) (state.notes ||= []).push(body.notes); }
       result = execution;
-    } else result = { title: '自由单聊', mode: 'free', ...state.room };
+    } else if (url.startsWith('/messages?after=')) {
+      // Like the website: one page of at most 20 messages after the cursor.
+      const after = Number(url.split('=')[1]);
+      result = { messages: (state.messages || []).filter(item => item.id > after).slice(0, 20) };
+    } else if (url === '/scheduler-routing' || url === '/scheduler-decisions') result = {};
+    else result = { title: '自由单聊', mode: 'free', ...state.room };
     response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(result));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -1824,6 +1829,28 @@ test('a free room without smart scheduling has everyone named by @全体成员 a
   await Promise.all(runner.decisions);
   await runner.tick();
   assert.deepEqual([state.calls.filter(call => call.startsWith('POST /recommendations/11')), delivered.length], [['POST /recommendations/11 all'], 0]);
+});
+
+test('smart scheduling still reads an unnamed message that follows more than a page of messages', async t => {
+  const { state, store, config } = await free_fixture(t);
+  config.api_home = mkdtempSync(join(tmpdir(), 'scheduler-'));
+  t.after(() => rmSync(config.api_home, { recursive: true, force: true }));
+  config.scheduler = { provider: 'jev', model: 'jev-1.13', ...save_api_key(config.api_home, { base_url: SCHEDULER_PROVIDERS.jev.base_url, api_key: 'jev-key' }) };
+  config.scheduler.base_url = SCHEDULER_PROVIDERS.jev.base_url;
+  state.claude_role = 'host';
+  state.others = [{ id: 8, name: 'Codex', role: 'member', pending: [] }];
+  state.messages = Array.from({ length: 40 }, (_, index) => ({ id: index + 1, author: index === 39 ? '用户' : 'Claude', text: `第 ${index + 1} 条` }));
+  state.pending = [{ id: 1, message_id: 40, purpose: 'route' }];
+  const asked = [];
+  const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }), () => {}, async (url, init) => {
+    asked.push(JSON.parse(init.body).state);
+    return { ok: true, json: async () => ({ answers: { handler: { type: 'choice', choice: '__host__', confidence: 0.9, probabilities: { __host__: 0.9 } } } }) };
+  });
+  await runner.tick();
+  await Promise.all(runner.decisions);
+  assert.equal(asked.length, 1);
+  assert.match(asked[0], /第 40 条/);
+  assert.ok(state.calls.includes('POST /scheduler-decisions'));
 });
 
 test('a free room delivers all open requests as one execution with the member credential only', async t => {

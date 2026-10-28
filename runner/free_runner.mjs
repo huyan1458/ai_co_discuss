@@ -245,7 +245,8 @@ export class FreeRoomRunner {
   }
   /** Ask the scheduler how everyone answers; a failed call still has them answer at once. */
   async order_group(request, room, everyone) {
-    const page = await api(this.config, `/messages?after=${Math.max(0, request.message_id - ROUTE_CONTEXT_MESSAGES - 1)}`);
+    // A page holds at most 20 messages, so the window must end at the message itself or the message falls off the page.
+    const page = await api(this.config, `/messages?after=${Math.max(0, request.message_id - ROUTE_CONTEXT_MESSAGES)}`);
     const message = page.messages.find(item => item.id === request.message_id);
     const members = (room.speaking_order?.items || []).map(item => item.name).filter(name => everyone.some(member => member.name === name));
     const decision = await decide_group_order(this.config.api_home, this.config.scheduler,
@@ -282,9 +283,9 @@ export class FreeRoomRunner {
   }
   /** Decide one message and apply a confident pick: one member, everyone, or no one; otherwise the host keeps it. */
   async recommend(request, room, everyone) {
-    const page = await api(this.config, `/messages?after=${Math.max(0, request.message_id - ROUTE_CONTEXT_MESSAGES - 1)}`);
+    const page = await api(this.config, `/messages?after=${Math.max(0, request.message_id - ROUTE_CONTEXT_MESSAGES)}`);
     const message = page.messages.find(item => item.id === request.message_id);
-    if (!message) return;
+    if (!message) throw new Error('读取不到这条消息');
     const described = this.route_members(everyone, room, message.id);
     const host = described.find(member => member.role === 'host');
     const members = described.filter(member => member !== host);

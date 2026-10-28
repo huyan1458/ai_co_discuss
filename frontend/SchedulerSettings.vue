@@ -115,7 +115,7 @@ async function save_key() {
           </div>
           <p v-if="error" role="alert" class="scheduler-error">{{ error }}</p>
           <p v-if="check.message" :role="check.state === 'error' ? 'alert' : 'status'" :class="check.state === 'error' ? 'scheduler-error' : 'scheduler-ok'">{{ check.message }}</p>
-          <p class="scheduler-note">决策模型只做选择、不生成文本，只按输入计费。判断时会把房间标题和最近 10 条消息发给所选供应商；密钥只存本机。</p>
+          <p class="scheduler-note">决策模型只做选择、不生成文本，只按输入计费。判断时会把房间标题和最近 10～20 条消息发给所选供应商；密钥只存本机。</p>
         </div>
         <span class="scheduler-flip-actions">
           <button type="button" class="scheduler-flip is-cancel" aria-label="放弃决策模型的修改" @click="cancel_settings">取消</button>
