@@ -5,7 +5,7 @@ import vm from "node:vm";
 import { computed, nextTick, reactive, ref, watch } from "vue";
 import { API_PROVIDERS } from "../runner/discussion_api.mjs";
 import { member_actions } from "../frontend/member-actions.js";
-import { axis_ticks, execution_log, execution_stages, format_duration, handoff_lines, notes_between, row_status, snapshot_at, timeline_axis, timeline_rows, timeline_runs, timeline_summary } from "../frontend/timeline-model.js";
+import { axis_ticks, execution_log, execution_stages, format_duration, handoff_lines, notes_between, pan_window, row_status, snapshot_at, timeline_axis, timeline_rows, timeline_runs, timeline_summary, view_axis, zoom_window } from "../frontend/timeline-model.js";
 
 const source = readFileSync(new URL("../web/app.js", import.meta.url), "utf8").replace(/\nrestore_theme\(\);[\s\S]*$/, "");
 const discussion_source = readFileSync(new URL("../frontend/ChannelDiscussion.vue", import.meta.url), "utf8");
@@ -3720,4 +3720,20 @@ test("a replay snapshot shows the run as it stood: later work gone, unfinished w
   assert.deepEqual(cut.segments.map((segment) => [segment.phase, segment.end_ms]), [["thinking", 6000], ["editing", 9000]]);
   assert.deepEqual([cut.notes, cut.last_note, cut.activity_at], [[105], "先读代码", 0], "it says what it had said by then");
   assert.equal(snapshot_at({ execution_limit: 100, segment_limit: 400, executions: [item] }, 140_000).executions[0], item, "finished work is shown as it was");
+});
+
+test("the timeline zooms around the pointer, pans within its ends and ticks finer when zoomed in", () => {
+  const axis = timeline_axis([{ start: 0, end: 100_000 }]);
+  const zoomed = zoom_window({ from: 0, span: 1 }, 0.5, 0.25, axis.total_ms);
+  assert.deepEqual(zoomed, { from: 0.375, span: 0.25 }, "the time under the pointer stays under it");
+  assert.equal(zoom_window(zoomed, 0, 10, axis.total_ms).span, 1, "zooming out stops at the whole axis");
+  assert.equal(zoom_window({ from: 0, span: 1 }, 0.5, 1e-6, axis.total_ms).span, 0.02, "never less than two seconds");
+  assert.deepEqual(pan_window(zoomed, 10), { from: 0.75, span: 0.25 }, "panning stops at the end");
+  assert.deepEqual(pan_window(zoomed, -10), { from: 0, span: 0.25 });
+  const view = view_axis(axis, zoomed);
+  assert.ok(Math.abs(view.x(37_500) - 0) < 1e-9 && Math.abs(view.x(62_500) - 1) < 1e-9, "the window fills the width");
+  assert.ok(view.x(90_000) > 1, "what lies past the view falls outside it, for the track to clip");
+  const whole = axis_ticks(axis, 5), close = axis_ticks(axis, 5, zoomed);
+  assert.ok(close.every((tick) => tick.x >= 0.375 && tick.x <= 0.625), "only ticks in view are made");
+  assert.ok(close[1].at - close[0].at < whole[1].at - whole[0].at, "zoomed in, ticks fall at finer steps");
 });

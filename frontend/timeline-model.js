@@ -295,18 +295,53 @@ const MIN_TICK_GAP = 0.12;
  * time and none inside a folded idle band. Times of day rather than offsets, since a room's work spans days.
  * `seconds` says whether the labels need seconds.
  */
-export function axis_ticks(axis, count = 6) {
-  const shown_ms = axis.total_ms ?? axis.busy_ms;
+export function axis_ticks(axis, count = 6, window = { from: 0, span: 1 }) {
+  const shown_ms = (axis.total_ms ?? axis.busy_ms) * window.span;
   if (!shown_ms) return [];
+  // Zoomed in, the same number of ticks covers less time, so they fall at finer steps; only those in view are made.
   const step = TICK_STEPS_MS.find((ms) => shown_ms / ms <= count) ?? TICK_STEPS_MS.at(-1);
+  const gap = MIN_TICK_GAP * window.span;
   const ticks = [];
   for (const span of axis.spans) {
+    if (span.from + span.width < window.from || span.from > window.from + window.span) continue;
     for (let at = Math.ceil(span.start / step) * step; at <= span.end; at += step) {
       const x = axis.x(at);
-      if (!ticks.length || x - ticks.at(-1).x >= MIN_TICK_GAP) ticks.push({ at, x });
+      if (x < window.from || x > window.from + window.span) continue;
+      if (!ticks.length || x - ticks.at(-1).x >= gap) ticks.push({ at, x });
     }
   }
   return ticks.map((tick) => ({ ...tick, seconds: step < 60_000 }));
+}
+
+/** Zooming never shows less than this share of the axis, nor less time than this. */
+export const MIN_VIEW_SPAN = 0.01;
+export const MIN_VIEW_MS = 2000;
+
+/**
+ * The axis as seen through a zoom window (`from` and `span` are shares of the whole axis): positions are mapped so the
+ * window fills the width, and what lies outside falls below 0 or past 1, for the track to clip.
+ */
+export function view_axis(axis, window) {
+  const map = (fraction) => (fraction - window.from) / window.span;
+  return { ...axis, x: (time) => map(axis.x(time)),
+    spans: axis.spans.map((span) => ({ ...span, from: map(span.from), width: span.width / window.span })),
+    folds: axis.folds.map((fold) => ({ ...fold, from: map(fold.from), width: fold.width / window.span })) };
+}
+
+/**
+ * The window after zooming by `factor` (below 1 zooms in) around `anchor`, a point of the current view (0 left, 1 right),
+ * which stays under the pointer; kept within the axis and no narrower than the limits above.
+ */
+export function zoom_window(window, anchor, factor, total_ms = 0) {
+  const narrowest = Math.max(MIN_VIEW_SPAN, total_ms ? MIN_VIEW_MS / total_ms : 0);
+  const span = Math.min(1, Math.max(narrowest, window.span * factor));
+  const at = window.from + anchor * window.span;
+  return { from: Math.min(1 - span, Math.max(0, at - anchor * span)), span };
+}
+
+/** The window moved by `delta` shares of the view (positive moves later in time), kept within the axis. */
+export function pan_window(window, delta) {
+  return { from: Math.min(1 - window.span, Math.max(0, window.from + delta * window.span)), span: window.span };
 }
 
 /** Counts for the summary and the step a reader should look at first: the longest recorded phase segment. */

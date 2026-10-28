@@ -10,7 +10,7 @@
  */
 import { computed, inject, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { FOLD_GAP_MS, PHASE_KINDS, PHASE_LABELS, STALL_MS, STATE_LABELS, axis_ticks, execution_log, format_duration, handoff_lines, notes_between, row_status,
-  snapshot_at, timeline_axis, timeline_rows, timeline_runs, timeline_summary } from "./timeline-model.js";
+  pan_window, snapshot_at, timeline_axis, timeline_rows, timeline_runs, timeline_summary, view_axis, zoom_window } from "./timeline-model.js";
 
 const emit = defineEmits(["detail"]);
 const { view, bridge } = inject("discussion");
@@ -99,6 +99,39 @@ watch(room_id, () => {
 }, { immediate: true });
 // A new execution, an answer or a failure changes the room; read at once instead of waiting for the next tick.
 watch(() => view.value.room, (room, previous) => { if (room?.id && room.id === previous?.id) load(); });
+// One wheel notch (about 100 px of delta) zooms by roughly 16%.
+const WHEEL_ZOOM_RATE = 0.0015;
+let pan = null;
+/** Where on the axis the pointer is, as a share of the view (0 left, 1 right). */
+function pointer_share(event) {
+  const rect = axis_element.value.getBoundingClientRect();
+  return { share: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)), width: rect.width };
+}
+function on_wheel(event) {
+  if (!axis_element.value || !event.target.closest?.(".wf-track, .wf-axis")) return;
+  if (event.ctrlKey || event.metaKey) {
+    event.preventDefault();
+    zoom.value = zoom_window(zoom.value, pointer_share(event).share, Math.exp(event.deltaY * WHEEL_ZOOM_RATE), axis.value.total_ms);
+  } else if (zoomed.value && (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY))) {
+    event.preventDefault();
+    zoom.value = pan_window(zoom.value, (event.shiftKey ? event.deltaY : event.deltaX) / pointer_share(event).width);
+  }
+}
+/** Middle-button drag anywhere on the lanes, or a left-button drag on the axis, pans a zoomed view. */
+function on_pan_start(event) {
+  const on_axis = event.target.closest?.(".wf-axis");
+  if (!zoomed.value || !(event.button === 1 || (event.button === 0 && on_axis)) || !event.target.closest?.(".wf-track, .wf-axis")) return;
+  event.preventDefault();
+  pan = { x: event.clientX, from: zoom.value.from, width: pointer_share(event).width };
+  event.currentTarget.setPointerCapture(event.pointerId);
+}
+function on_pan_move(event) {
+  if (pan) zoom.value = pan_window({ from: pan.from, span: zoom.value.span }, -(event.clientX - pan.x) / pan.width);
+}
+function on_pan_end() { pan = null; }
+// A middle press would start the browser's autoscroll over the lanes; the drag pans instead.
+function stop_autoscroll(event) { if (event.button === 1 && event.target.closest?.(".wf-track, .wf-axis")) event.preventDefault(); }
+
 /** A pinned card (opened by a tap) closes on a tap anywhere else. */
 function close_on_outside(event) {
   if (hover.value && !event.target.closest?.(".wf-card, .wf-bar, .wf-note")) hover.value = null;
@@ -156,7 +189,17 @@ const all_rows = computed(() => replaying.value
 const rows = computed(() => all_rows.value.filter((row) => !row.ancestors.some((key) => collapsed.value.has(key))));
 const live_in_view = computed(() => all_rows.value.some((row) => row.item.state === "running"));
 const axis = computed(() => timeline_axis(all_rows.value, live_in_view.value));
-const now_x = computed(() => live_in_view.value ? axis.value.x(view_time.value) : null);
+/** Zoom: the share of the axis in view, from Ctrl/⌘ + wheel around the pointer; middle-button drag, Shift + wheel, a
+ *  sideways swipe or dragging the axis pans it; a double click on the axis or 重置 shows it whole again. */
+const WHOLE = { from: 0, span: 1 };
+const zoom = ref(WHOLE);
+const zoomed = computed(() => zoom.value.span < 1);
+watch([run_shown, room_id], () => { zoom.value = WHOLE; });
+const shown_axis = computed(() => view_axis(axis.value, zoom.value));
+const now_x = computed(() => {
+  const x = live_in_view.value ? shown_axis.value.x(view_time.value) : null;
+  return x === null || x < 0 || x > 1 ? null : x;
+});
 const auto_speed = computed(() => Math.max(1, bounds.value.duration / REPLAY_TARGET_MS));
 const replay_speed = computed(() => replay.speed || auto_speed.value);
 
@@ -206,9 +249,10 @@ watch(() => rows.value.map((row) => row.key).join(), () => {
   setTimeout(() => { entering.value = new Set([...entering.value].filter((key) => !added.includes(key))); }, ENTER_MS);
 });
 watch([run_shown, room_id], () => { known_rows = null; });
-const lines = computed(() => handoff_lines(rows.value, axis.value));
+const lines = computed(() => handoff_lines(rows.value, shown_axis.value));
 const ticks = computed(() => axis_ticks(axis.value,
-  Math.min(MAX_TICKS, Math.max(MIN_TICKS, Math.round((axis_width.value || TICK_SPACING_PX * 6) / TICK_SPACING_PX)))));
+  Math.min(MAX_TICKS, Math.max(MIN_TICKS, Math.round((axis_width.value || TICK_SPACING_PX * 6) / TICK_SPACING_PX))), zoom.value)
+  .map((tick) => ({ ...tick, x: (tick.x - zoom.value.from) / zoom.value.span })));
 const summary = computed(() => timeline_summary(all_rows.value, view_time.value));
 const parents = computed(() => all_rows.value.filter((row) => row.has_children).map((row) => row.key));
 const opened_row = computed(() => all_rows.value.find((row) => row.key === opened.value));
@@ -240,9 +284,21 @@ const member_tone = computed(() => {
 });
 // A tick this many pixels from a folded band's middle would collide with the band's label.
 const FOLD_LABEL_CLEARANCE_PX = 52;
+// Fold labels are kept only where they fit, left to right, so a run with many idle stretches never piles them up;
+// a folded band without a label still shows, and its length is in the hover card of the label that is kept.
+const shown_folds = computed(() => {
+  const clearance = FOLD_LABEL_CLEARANCE_PX / (axis_width.value || 800);
+  const kept = [];
+  for (const fold of shown_axis.value.folds) {
+    const middle = fold.from + fold.width / 2;
+    if (middle < 0 || middle > 1) continue;
+    if (!kept.length || middle - kept.at(-1).middle >= clearance) kept.push({ ...fold, middle });
+  }
+  return kept;
+});
 const shown_ticks = computed(() => {
   const clearance = FOLD_LABEL_CLEARANCE_PX / (axis_width.value || 800);
-  return ticks.value.filter((tick) => !axis.value.folds.some((fold) => Math.abs(tick.x - (fold.from + fold.width / 2)) < clearance));
+  return ticks.value.filter((tick) => !shown_folds.value.some((fold) => Math.abs(tick.x - fold.middle) < clearance));
 });
 
 /** Open one execution's detail under its row, or close it; its notes are read as it opens and again as more arrive. */
@@ -267,8 +323,8 @@ function toggle(key) {
 
 /** A bar piece's position on the axis. Segments leave a 1 px gap after them, so neighbouring phases read apart. */
 function place(start, end, gap = false) {
-  const from = axis.value.x(start);
-  const width = Math.max(0, axis.value.x(end) - from) * 100;
+  const from = shown_axis.value.x(start);
+  const width = Math.max(0, shown_axis.value.x(end) - from) * 100;
   return { left: `${from * 100}%`, width: gap ? `max(2px, calc(${width}% - 1px))` : `${width}%` };
 }
 
@@ -375,17 +431,20 @@ const hover_notes = computed(() => {
         <li v-if="member_tone.size > 1" class="wf-legend-note">颜色区分成员，深浅区分模型与工具</li>
         <li v-if="no_phases" class="wf-legend-note">这些执行都没有阶段明细：发生在接入程序上报阶段之前，或来自手动接入、在线 AI、Codex App</li>
       </ul>
-      <div class="wf-grid" role="list" :style="{ '--wf-depth-px': `${DEPTH_PX}px` }">
+      <div class="wf-grid" :class="{ 'is-zoomed': zoomed, 'is-panning': pan }" role="list" :style="{ '--wf-depth-px': `${DEPTH_PX}px` }"
+        @wheel="on_wheel" @mousedown="stop_autoscroll" @pointerdown="on_pan_start" @pointermove="on_pan_move" @pointerup="on_pan_end" @pointercancel="on_pan_end">
         <div class="wf-axis-label">
           <span>执行 · {{ rows.length }}/{{ all_rows.length }}</span>
+          <span v-if="zoomed" class="wf-zoom">放大 {{ (1 / zoom.span).toFixed(1) }}×<button type="button" class="wf-text-button" @click="zoom = WHOLE">重置</button></span>
+          <span v-else class="wf-zoom-hint" title="Ctrl + 滚轮缩放；放大后按住中键或拖动时间轴平移，双击时间轴还原">Ctrl + 滚轮缩放</span>
           <span v-if="parents.length" class="wf-branch">
             <button type="button" class="wf-text-button" @click="collapsed = new Set()">展开全部</button>
             <button type="button" class="wf-text-button" @click="collapsed = new Set(parents)">收起全部</button>
           </span>
         </div>
-        <div ref="axis_element" class="wf-axis" aria-hidden="true">
+        <div ref="axis_element" class="wf-axis" aria-hidden="true" @dblclick="zoom = WHOLE">
           <span v-for="tick in shown_ticks" :key="tick.at" class="wf-tick" :style="{ left: `${tick.x * 100}%` }">{{ tick_label(tick) }}</span>
-          <span v-for="fold in axis.folds" :key="`fold-${fold.start}`" class="wf-fold-label" :style="{ left: `${(fold.from + fold.width / 2) * 100}%` }"
+          <span v-for="fold in shown_folds" :key="`fold-${fold.start}`" class="wf-fold-label" :style="{ left: `${fold.middle * 100}%` }"
             :title="`${clock(fold.start)} – ${clock(fold.end)} 没有执行，已折叠`">⋯ {{ format_duration(fold.end - fold.start) }}</span>
           <span v-if="now_x !== null" class="wf-cursor-head" :style="{ left: `${now_x * 100}%` }"></span>
         </div>
@@ -408,7 +467,7 @@ const hover_notes = computed(() => {
           </div>
           <div class="wf-lane" role="img" :aria-label="row_label(row)" @mouseleave="hide(row)"><div class="wf-track">
             <i v-for="tick in shown_ticks" :key="tick.at" class="wf-gridline" :style="{ left: `${tick.x * 100}%` }"></i>
-            <i v-for="fold in axis.folds" :key="fold.start" class="wf-fold" :style="{ left: `${fold.from * 100}%`, width: `${fold.width * 100}%` }"></i>
+            <i v-for="fold in shown_axis.folds" :key="fold.start" class="wf-fold" :style="{ left: `${fold.from * 100}%`, width: `${fold.width * 100}%` }"></i>
             <i class="wf-well"></i>
             <i v-for="(line, index) in lines.get(row.key) || []" :key="`link-${index}`" class="wf-link" :class="`is-${line.part}`"
               :data-tone="member_tone.get(line.member)" :style="{ left: `${line.x * 100}%` }"></i>
@@ -424,7 +483,7 @@ const hover_notes = computed(() => {
               <i v-if="segment.end > segment.seen" class="wf-bar wf-seg is-tail" :class="`is-${PHASE_KINDS[segment.phase]}`" :data-tone="member_tone.get(row.item.member)"
                 :style="place(segment.seen, segment.end)" @mouseenter="enter($event, row, { kind: 'segment', ...segment })" @click="tap($event, row, { kind: 'segment', ...segment })"></i>
             </template>
-            <button v-for="note in row.notes" :key="`note-${note.index}`" type="button" class="wf-note" :style="{ left: `${axis.x(note.at) * 100}%` }"
+            <button v-for="note in row.notes" :key="`note-${note.index}`" type="button" class="wf-note" :style="{ left: `${shown_axis.x(note.at) * 100}%` }"
               :aria-label="`${bridge.display_name(row.item.member)} 的第 ${note.index + 1} 段过程说明，${clock(note.at)}`"
               @mouseenter="enter($event, row, { note, start: note.at, end: note.at })" @click="tap($event, row, { note, start: note.at, end: note.at })" @focus="enter($event, row, { note, start: note.at, end: note.at })" @blur="hide(row)"></button>
           </div></div>
@@ -450,7 +509,8 @@ const hover_notes = computed(() => {
         </ol>
         <p v-else class="fine-print">这次执行没有阶段明细或过程说明。</p>
       </div>
-      <div v-if="run_shown !== ALL" class="wf-player">
+      <div v-if="run_shown === ALL" class="wf-player"><span class="wf-player-note">回放按轮进行：在上方选一轮即可回放</span></div>
+      <div v-else class="wf-player">
         <template v-if="base_live">
           <span class="wf-state is-live">实时</span><span class="wf-player-note">这一轮结束后可以回放</span>
         </template>
@@ -569,14 +629,18 @@ const hover_notes = computed(() => {
 /* Grid: the label column, the lanes and the duration column share one template, the axis included. */
 .wf-grid { display: grid; grid-template-columns: var(--wf-label-col) minmax(0, 1fr) 84px; }
 /* The axis row stays in view while the rows scroll under it. */
-.wf-axis-label, .wf-axis, .wf-axis-end { position: sticky; top: 0; z-index: 3; background: var(--wf-surface); }
+.wf-axis-label, .wf-axis, .wf-axis-end { position: sticky; top: var(--wf-sticky-top, 0px); z-index: 3; background: var(--wf-surface); }
+/* The page scrolls inside .content-page, whose top padding (channel.css: 34px, 24px at 700px and below) a sticky box
+   would otherwise stop under, letting rows show above it. */
+.execution-timeline { --wf-sticky-top: -34px; }
+@media (max-width: 700px) { .execution-timeline { --wf-sticky-top: -24px; } }
 /* The axis keeps side margins to line up with the tracks; its shadow fills them, so rows never show through. */
 .wf-axis { box-shadow: -12px 0 0 var(--wf-surface), 12px 0 0 var(--wf-surface); }
 .wf-axis-label { display: flex; align-items: center; gap: 8px; min-width: 0; height: 32px; padding: 0 12px 0 16px; border-right: 1px solid var(--wf-border); border-bottom: 1px solid var(--wf-border); color: var(--wf-muted); font-size: 12px; }
 .wf-branch { display: flex; gap: 2px; margin-left: auto; }
 .wf-text-button { height: 22px; padding: 0 6px; border: 0; border-radius: 4px; background: transparent; color: var(--wf-muted); font: inherit; cursor: pointer; white-space: nowrap; }
 .wf-text-button:hover { background: var(--wf-hover); color: var(--wf-text); }
-.wf-axis { position: relative; height: 32px; margin: 0 12px; border-bottom: 1px solid var(--wf-border); color: var(--wf-muted); font-family: var(--wf-mono); font-size: 11px; }
+.wf-axis { height: 32px; margin: 0 12px; border-bottom: 1px solid var(--wf-border); color: var(--wf-muted); font-family: var(--wf-mono); font-size: 11px; }
 .wf-tick { position: absolute; top: 50%; padding-left: 4px; border-left: 1px solid var(--wf-guide); line-height: 14px; white-space: nowrap; transform: translateY(-50%); font-variant-numeric: tabular-nums; }
 /* A folded idle stretch says how long it was right on the axis, so evenly spaced ticks are never read as even time. */
 .wf-fold-label { position: absolute; top: 50%; padding: 0 4px; border-radius: 4px; background: var(--wf-surface); color: var(--wf-muted); font-size: 10px; line-height: 14px; white-space: nowrap; transform: translate(-50%, -50%); cursor: help; z-index: 1; }
@@ -622,6 +686,12 @@ const hover_notes = computed(() => {
 /* The lane cell takes the row tint edge to edge; the track inside it keeps the axis's side margins. */
 .wf-lane { display: flex; min-width: 0; }
 .wf-track { position: relative; flex: 1; min-width: 0; margin: 0 12px; }
+/* Zoomed in, bars and lines past the edges of the view are cut off at the track. */
+.wf-grid.is-zoomed .wf-track { overflow: hidden; }
+.wf-grid.is-zoomed .wf-axis { cursor: grab; }
+.wf-grid.is-panning, .wf-grid.is-panning * { cursor: grabbing !important; user-select: none; }
+.wf-zoom { display: inline-flex; align-items: center; gap: 2px; color: var(--wf-accent); font-family: var(--wf-mono); font-size: 11px; white-space: nowrap; }
+.wf-zoom-hint { overflow: hidden; color: var(--wf-muted); opacity: .7; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .wf-track > i, .wf-track > .wf-note { position: absolute; display: block; }
 .wf-gridline { top: 0; bottom: 0; width: 1px; background: var(--wf-grid); }
 .wf-cursor { top: 0; bottom: 0; width: 1px; background: color-mix(in oklab, var(--wf-text) 70%, transparent); z-index: 2; pointer-events: none; }
