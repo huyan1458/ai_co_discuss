@@ -879,7 +879,10 @@ async function move_folder(database, folder_id, payload) {
 
 /** Persist channel management atomically without touching other rooms. */
 async function manage_room(database, room_id, action, payload) {
-  const room = await require_room(database, room_id);
+  // Deleting checks only the title and host; the full room view alone can use up the Worker's CPU limit.
+  const room = action === "delete" ? await database.prepare(`SELECT rooms.title, COALESCE(topic_settings.host,'用户') AS host FROM rooms
+    LEFT JOIN topic_settings ON topic_settings.room_id=rooms.id WHERE rooms.id=?`).bind(room_id).first() : await require_room(database, room_id);
+  if (!room) throw new HttpError(404, "房间不存在");
   require_host(room, payload);
   const statements = [];
   if (action === "move") {
