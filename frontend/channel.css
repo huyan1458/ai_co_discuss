@@ -1171,5 +1171,18 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 
 /* Merged tool pages stack their sections; a rule separates one from the next. */
 .merged-section + .merged-section { margin-top: 36px; padding-top: 30px; border-top: 1px solid var(--ui-border-muted); }
-.consensus-block + .consensus-block { margin-top: 18px; }
-.consensus-block > small { display: flex; gap: 10px; margin-bottom: 6px; color: var(--ui-text-muted); font-size: 12px; }
+/* Consensus reads like a document: the brief in a card at reading size, the long detail one click away. */
+.consensus-card { padding: 16px 20px; border: 1px solid var(--ui-border-muted); border-radius: 10px; background: var(--ui-bg-muted); }
+.consensus-card + .consensus-card { margin-top: 12px; }
+.consensus-card h3 { display: flex; align-items: center; gap: 10px; margin: 0; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
+.consensus-card h3 .subtle-link { font-weight: 400; font-size: 12px; }
+.consensus-card.is-brief h3 { margin-bottom: 10px; }
+.consensus-card summary { display: flex; align-items: center; gap: 10px; cursor: pointer; list-style: none; }
+.consensus-card summary::-webkit-details-marker { display: none; }
+.consensus-card summary > span { flex: 1; color: var(--ui-text-muted); font-size: 12px; }
+.consensus-card[open] .disclosure-icon { transform: rotate(180deg); }
+.consensus-card[open] summary { margin-bottom: 12px; }
+.merged-page .consensus-card .markdown-body, .merged-page .history-conclusion .markdown-body { font-size: 14px; line-height: 1.85; color: var(--ui-text); }
+.merged-page .consensus-card .markdown-body :is(ul, ol) { margin: .4em 0 .9em; }
+/* Hosts write the detail as one line per point; give each line room to be scanned. */
+.consensus-state p { margin-bottom: .9em; }

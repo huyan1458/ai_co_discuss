@@ -51,7 +51,7 @@ function toggle(id) {
         <p v-if="item.kind === 'free'" class="history-free">自由协作 · {{ item.count }} 条消息</p>
         <article v-else class="history-discussion">
           <header>
-            <h3>讨论 {{ item.number }} · {{ item.goal || '未填写目标' }}</h3>
+            <h3><small>讨论 {{ item.number }}</small>{{ item.goal || '未填写目标' }}</h3>
             <UBadge :color="STATUS[item.status]?.color || 'neutral'" variant="subtle" size="sm">{{ STATUS[item.status]?.label || item.status }}</UBadge>
           </header>
           <p class="history-meta">{{ when(item.created_at) }} 开始 · {{ item.count }} 条消息<template v-if="item.status === 'concluded' && item.state !== null"> · {{ bridge.stop_reason_label(item) }}</template><template v-if="item.concluded_at"> · {{ when(item.concluded_at) }} 结束</template></p>
@@ -81,7 +81,10 @@ function toggle(id) {
 .history-free { margin: 0; padding: 2px 0; color: var(--ui-text-muted); font-size: 12px; }
 .history-discussion { padding: 12px 16px; border: 1px solid var(--ui-border); border-radius: 8px; }
 .history-discussion header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.history-discussion h3 { margin: 0; font-size: 14px; font-weight: 600; color: var(--ui-text-highlighted); }
+.history-discussion header { align-items: flex-start; }
+/* A goal is often the user's whole request, so it keeps to two lines under the number label (three lines with the label). */
+.history-discussion h3 { display: -webkit-box; overflow: hidden; margin: 0; color: var(--ui-text-highlighted); font-size: 14px; font-weight: 600; line-height: 1.6; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.history-discussion h3 small { display: block; color: var(--ui-text-muted); font-size: 12px; font-weight: 400; }
 .history-meta { margin: 4px 0 0; color: var(--ui-text-muted); font-size: 12px; }
 .history-conclusion { margin-top: 12px; font-size: 13px; }
 .history-conclusion small { display: flex; gap: 10px; margin-bottom: 4px; color: var(--ui-text-muted); }

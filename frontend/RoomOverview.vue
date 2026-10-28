@@ -105,8 +105,8 @@ const scheduler = computed(() => {
  * taking-part actions (instructions, credentials, description) apply.
  */
 function actions(member) {
-  const groups = member_actions(live(member), { view: view.value, act, describe: (name) => { describing.value = name; } });
-  return (free.value ? groups : groups.slice(0, 1)).flat();
+  const [taking_part, place, removal] = member_actions(live(member), { view: view.value, act, describe: (name) => { describing.value = name; } });
+  return { taking_part, place: free.value ? [...place, ...removal] : [] };
 }
 
 const inviting = ref(false);
@@ -134,34 +134,36 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
     <section class="overview-section">
       <h3>成员</h3>
       <p v-if="local_state" class="overview-local" role="status">{{ local_state.text }}<button v-if="local_state.retry" type="button" class="subtle-link" @click="bridge.reload_room_models()">重试</button></p>
-      <div class="overview-table" role="table" aria-label="成员">
-        <div class="overview-row overview-head" role="row"><span role="columnheader">成员</span><span role="columnheader">接入</span><span role="columnheader">模型</span><span role="columnheader">项目文件</span><span role="columnheader">状态</span></div>
-        <div v-for="member in members" :key="member.name" class="overview-row" role="row">
-          <div class="overview-member" role="cell">
-            <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="sm" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
-            <div class="overview-member-copy"><strong>{{ bridge.display_name(member.name) }}<UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /></strong><small v-if="room.descriptions?.[member.name]" :title="room.descriptions[member.name]">{{ room.descriptions[member.name] }}</small></div>
-          </div>
-          <div role="cell" data-label="接入">
-            <div v-if="access(live(member)).value" class="expert-card-modes overview-switch" :class="{ 'is-locked': !access(live(member)).editable }" role="radiogroup" :aria-label="`${member.name} 的接入方式`" :title="access(live(member)).hint">
-              <button v-for="option in CODEX_OPTIONS" :key="option.value" type="button" role="radio" :aria-checked="access(live(member)).value === option.value"
-                :disabled="!access(live(member)).editable || Boolean(switching)" @click="switch_adapter(member, option.value)">{{ option.label }}</button>
-            </div>
-            <span v-else>{{ access(member).text }}</span>
-          </div>
-          <span role="cell" data-label="模型" class="overview-model" :class="{ 'overview-muted': waiting(member.name) }" :title="bridge.participant_model(member.name, room, saved) || undefined">{{ member.access === 'runner' ? bridge.participant_model(member.name, room, saved) || '—' : '—' }}</span>
-          <div role="cell" data-label="项目文件">
-            <div v-if="files(member).value" class="expert-card-modes overview-switch" :class="{ 'is-locked': !files(member).editable }" role="radiogroup" :aria-label="`${member.name} 的项目文件权限`" :aria-busy="switching === member.name" :title="files(member).hint || undefined">
-              <button v-for="option in ACCESS_OPTIONS" :key="option.value" type="button" role="radio" :aria-checked="files(member).value === option.value"
-                :disabled="!files(member).editable || Boolean(switching)" @click="switch_access(member, option.value)">{{ option.label }}</button>
-            </div>
-            <span v-else class="overview-muted" :title="files(member).hint">{{ files(member).text }}</span>
-          </div>
-          <span role="cell" data-label="状态">{{ member.access === 'manual' && !member.registered_at ? '待注册' : STATUS_LABELS[member.status] || member.status }}</span>
-          <div class="overview-actions" role="cell" :aria-label="`${member.name} 的操作`">
-            <UButton v-for="item in actions(member)" :key="item.label" :icon="item.icon" :label="item.label" size="xs" variant="ghost" :color="item.color || 'neutral'" :disabled="item.disabled" @click="item.onSelect()" />
-          </div>
-        </div>
-      </div>
+      <ul class="member-cards" aria-label="成员">
+        <li v-for="member in members" :key="member.name" class="member-card">
+          <header class="member-card-head">
+            <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="md" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
+            <div class="member-card-name"><strong>{{ bridge.display_name(member.name) }}<UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /></strong><small v-if="room.descriptions?.[member.name]" :title="room.descriptions[member.name]">{{ room.descriptions[member.name] }}</small></div>
+            <UBadge :color="member.access === 'manual' && !member.registered_at ? 'warning' : member.status === 'active' ? 'success' : 'neutral'" variant="subtle" size="sm">{{ member.access === 'manual' && !member.registered_at ? '待注册' : STATUS_LABELS[member.status] || member.status }}</UBadge>
+          </header>
+          <dl class="member-card-facts">
+            <div><dt>接入</dt><dd>
+              <div v-if="access(live(member)).value" class="expert-card-modes overview-switch" :class="{ 'is-locked': !access(live(member)).editable }" role="radiogroup" :aria-label="`${member.name} 的接入方式`" :title="access(live(member)).hint">
+                <button v-for="option in CODEX_OPTIONS" :key="option.value" type="button" role="radio" :aria-checked="access(live(member)).value === option.value"
+                  :disabled="!access(live(member)).editable || Boolean(switching)" @click="switch_adapter(member, option.value)">{{ option.label }}</button>
+              </div>
+              <span v-else>{{ access(member).text }}</span>
+            </dd></div>
+            <div><dt>模型</dt><dd class="overview-model" :class="{ 'overview-muted': waiting(member.name) }" :title="bridge.participant_model(member.name, room, saved) || undefined">{{ member.access === 'runner' ? bridge.participant_model(member.name, room, saved) || '—' : '在它自己的会话里设置' }}</dd></div>
+            <div><dt>项目文件</dt><dd>
+              <div v-if="files(member).value" class="expert-card-modes overview-switch" :class="{ 'is-locked': !files(member).editable }" role="radiogroup" :aria-label="`${member.name} 的项目文件权限`" :aria-busy="switching === member.name" :title="files(member).hint || undefined">
+                <button v-for="option in ACCESS_OPTIONS" :key="option.value" type="button" role="radio" :aria-checked="files(member).value === option.value"
+                  :disabled="!files(member).editable || Boolean(switching)" @click="switch_access(member, option.value)">{{ option.label }}</button>
+              </div>
+              <span v-else class="overview-muted" :title="files(member).hint">{{ files(member).text }}</span>
+            </dd></div>
+          </dl>
+          <footer class="member-card-actions" :aria-label="`${member.name} 的操作`">
+            <div><UButton v-for="item in actions(member).taking_part" :key="item.label" :icon="item.icon" :label="item.label" size="xs" variant="ghost" color="neutral" :disabled="item.disabled" @click="item.onSelect()" /></div>
+            <div v-if="actions(member).place.length"><UButton v-for="item in actions(member).place" :key="item.label" :icon="item.icon" :label="item.label" size="xs" variant="ghost" :color="item.color || 'neutral'" :disabled="item.disabled" @click="item.onSelect()" /></div>
+          </footer>
+        </li>
+      </ul>
       <p v-if="view.access?.error || view.free_error" class="overview-result is-error" role="alert">{{ view.access?.error || view.free_error }}</p>
       <p v-else-if="view.access?.notice || view.free_notice" class="overview-result" role="status">{{ view.access?.notice || view.free_notice }}</p>
       <p class="overview-result">复制说明或下载配置不代表 AI 已接入，以实际回答和运行记录为准。</p>
@@ -188,27 +190,27 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 <style scoped>
 .overview-section { margin-bottom: 28px; }
 .overview-section h3 { margin: 0 0 10px; font-size: 14px; font-weight: 600; color: var(--ui-text-highlighted); }
-.overview-table { border: 1px solid var(--ui-border); border-radius: 8px; font-size: 13px; }
-.overview-row { display: grid; grid-template-columns: minmax(150px, 1.3fr) 104px minmax(120px, 1.4fr) 112px 56px; gap: 12px; align-items: center; padding: 10px 14px; color: var(--ui-text); }
-/* Every column but the member reads as a value under its heading, so headings and values are centered together. */
-.overview-row > :not(:first-child) { min-width: 0; text-align: center; }
-.overview-row > :not(:first-child) > .expert-card-modes { margin-inline: auto; }
-.overview-row + .overview-row { border-top: 1px solid var(--ui-border); }
-.overview-head { padding-block: 8px; color: var(--ui-text-muted); font-size: 12px; }
-.overview-member { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.overview-member-copy { display: grid; min-width: 0; }
-.overview-member-copy strong { display: flex; align-items: center; gap: 5px; font-weight: 600; color: var(--ui-text-highlighted); }
-.overview-member-copy strong .iconify { color: var(--ui-warning, #e5b54a); }
-.overview-member-copy small, .overview-model { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.overview-member-copy small { color: var(--ui-text-muted); font-size: 12px; }
+/* One card per member: who it is, three aligned facts, then its actions in a footer. */
+.member-cards { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.member-card { border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-bg-elevated); }
+.member-card-head { display: flex; align-items: center; gap: 12px; padding: 14px 16px 0; }
+.member-card-name { display: grid; flex: 1; min-width: 0; }
+.member-card-name strong { display: flex; align-items: center; gap: 5px; color: var(--ui-text-highlighted); font-size: 14px; font-weight: 600; }
+.member-card-name strong .iconify { color: var(--ui-warning, #e5b54a); }
+.member-card-name small { overflow: hidden; color: var(--ui-text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.member-card-facts { display: grid; grid-template-columns: 120px minmax(0, 1fr) 120px; gap: 16px; margin: 0; padding: 12px 16px 14px 60px; font-size: 13px; }
+.member-card-facts dt { margin-bottom: 4px; color: var(--ui-text-muted); font-size: 12px; }
+.member-card-facts dd { display: flex; align-items: center; min-height: 28px; margin: 0; color: var(--ui-text); }
+.overview-model { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .overview-muted { color: var(--ui-text-muted); }
 .overview-switch { width: 100px; }
 .overview-switch button:disabled { cursor: default; }
 .overview-switch button:disabled:not([aria-checked="true"]) { opacity: 0.55; }
 /* A switch that cannot change here (API, web members, a discussion in progress) stays visible but greyed out. */
 .overview-switch.is-locked { opacity: 0.5; }
-/* The member's actions run along the bottom of its row, flat rather than behind a menu. */
-.overview-row > .overview-actions { display: flex; flex-wrap: wrap; grid-column: 1 / -1; gap: 2px 4px; margin: -2px 0 0 38px; text-align: left; }
+/* Taking-part actions on the left, the member's place in the room (ending with removal) on the right. */
+.member-card-actions { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; padding: 6px 10px; border-top: 1px solid var(--ui-border-muted); }
+.member-card-actions > div { display: flex; flex-wrap: wrap; gap: 2px; }
 .overview-address { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .overview-address code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .overview-local { display: flex; gap: 10px; margin: 0 0 8px; color: var(--ui-text-muted); font-size: 12px; }
@@ -219,10 +221,6 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 .overview-settings dt { flex: none; width: 112px; color: var(--ui-text-muted); }
 .overview-settings dd { margin: 0; color: var(--ui-text); }
 @media (max-width: 720px) {
-  .overview-head { display: none; }
-  .overview-row { grid-template-columns: 1fr 1fr; }
-  .overview-member { grid-column: 1 / -1; }
-  .overview-row > .overview-actions { margin-left: 0; }
-  .overview-row [data-label]::before { display: block; color: var(--ui-text-muted); font-size: 11px; content: attr(data-label); }
+  .member-card-facts { grid-template-columns: 1fr 1fr; padding-left: 16px; }
 }
 </style>

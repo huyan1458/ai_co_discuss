@@ -344,8 +344,8 @@ function resize_nav_by_key(event) {
               <div class="form-footer"><span>依据消息截止 #{{ view.snapshot_id }}</span><div class="button-row"><UButton label="取消" color="neutral" variant="ghost" @click="editing_context = false" /><UButton type="submit" color="neutral" icon="i-lucide-check" label="保存共识" class="channel-primary-button" :loading="pending === 'save_context'" /></div></div>
             </form>
             <template v-else-if="room.host_brief?.text || room.state_text">
-              <div class="consensus-block"><small>主持简报<button v-if="room.state_until" type="button" class="subtle-link" @click="open_detail(room.state_until)">整理至 #{{ room.state_until }}</button></small><div class="markdown-body" v-html="room.rendered_brief"></div></div>
-              <div v-if="rendered_state" class="consensus-block"><small>详细共识与进度</small><div class="markdown-body" v-html="rendered_state"></div></div>
+              <div class="consensus-card is-brief"><h3>主持简报<button v-if="room.state_until" type="button" class="subtle-link" @click="open_detail(room.state_until)">整理至 #{{ room.state_until }}</button></h3><div class="markdown-body" v-html="room.rendered_brief"></div></div>
+              <details v-if="rendered_state" class="consensus-card"><summary><h3>详细共识与进度</h3><span>依据、已处理内容、未决问题与下一步</span><UIcon name="i-lucide-chevron-down" class="disclosure-icon" /></summary><div class="markdown-body consensus-state" v-html="rendered_state"></div></details>
             </template>
             <p v-else class="fine-print">还没有共识。主持人会在讨论中整理，也可以点“编辑”自己写。</p>
           </section>

@@ -32,29 +32,25 @@ const woken_participants = computed(() => {
     <template v-if="props.section === 'host'">
       <div class="page-heading"><div><span class="eyebrow">讨论进程</span><h2>当前讨论</h2><p>当前由 {{ bridge.display_name(room.host) }} 主持，围绕具体问题组织下一轮发言。</p></div><UButton icon="i-lucide-pencil" label="编辑议题" variant="outline" color="neutral" class="channel-surface-button" @click="$emit('open', 'edit')" /></div>
       <div class="topic-brief"><div><h3>讨论目标</h3><p>{{ room.goal || '待主持人根据用户原文补全' }}</p></div><div><h3>当前焦点</h3><p>{{ room.focus || '尚未设置当前焦点' }}</p></div></div>
-      <div class="host-status">
-        <section v-if="room.limits" class="turn-panel"><div class="turn-header"><h3>讨论上限与进度</h3><UBadge :color="room.limits.reached && room.phase !== 'concluded' ? 'warning' : 'neutral'" variant="subtle">{{ room.phase === 'concluded' ? '已收束' : room.limits.reached ? '已达上限' : room.limits.started_at ? '已开始计时' : '尚未计时' }}</UBadge></div><p>{{ bridge.limits_label(room.limits) }}</p><UButton v-if="room.limits.reached && !inactive" label="检查并执行到限处理" variant="outline" color="neutral" :loading="pending === 'check_limits'" @click="act('check_limits')" /><p class="fine-print">在“编辑议题”中调整参数。自动模式由接入程序检查；手动模式由主持人或此按钮执行到限处理。</p></section>
-      </div>
-      <section class="turn-panel host-turn"><div class="turn-header"><h3>当前发言安排</h3><UBadge :color="active_turn ? 'primary' : 'neutral'" variant="subtle">{{ bridge.turn_label(turn, room) }}</UBadge></div>
-        <template v-if="turn"><div class="turn-expert"><UAvatar :src="bridge.identities[turn.expert]?.icon" :text="bridge.identities[turn.expert]?.initials" :alt="turn.expert" class="message-mark channel-avatar" :class="bridge.identities[turn.expert]?.style" /><div><strong>{{ turn.expert }}</strong><small>发言安排 #{{ turn.id }}</small></div></div><p class="turn-question">{{ turn.question }}</p>
-          <div v-if="active_turn" class="button-row turn-actions"><UButton icon="i-lucide-copy" label="复制通知" :disabled="inactive" color="neutral" variant="outline" class="channel-surface-button" @click="act('copy_turn')" /><UButton icon="i-lucide-check-check" label="确认已通知" color="neutral" variant="outline" class="channel-surface-button" :disabled="inactive || turn.status !== 'pending'" :loading="pending === 'notify'" @click="act('notify')" /><UButton v-if="room.experts[turn.expert] === 'online'" icon="i-lucide-message-square-plus" label="录入在线回答" :disabled="inactive" class="channel-primary-button" @click="act('prepare_answer')" /><UButton label="取消安排" color="neutral" variant="ghost" @click="act('cancel_turn')" /></div>
-          <UButton v-if="turn.answer_id" icon="i-lucide-arrow-up-right" label="查看回答原文" variant="outline" color="neutral" class="channel-surface-button" @click="$emit('detail', turn.answer_id)" />
-        </template><p v-else class="turn-empty">把下一轮需要回答的问题，交给一位参与者。</p>
-        <p v-if="active_turn" class="fine-print">{{ bridge.turn_guidance(turn, room) }}</p>
+      <div v-if="room.limits" class="host-progress"><span>进度</span><p>{{ bridge.limits_label(room.limits) }}</p><UBadge :color="room.limits.reached && room.phase !== 'concluded' ? 'warning' : 'neutral'" variant="subtle">{{ room.phase === 'concluded' ? '已收束' : room.limits.reached ? '已达上限' : room.limits.started_at ? '已开始计时' : '尚未计时' }}</UBadge><UButton v-if="room.limits.reached && !inactive" label="检查并执行到限处理" size="xs" variant="outline" color="neutral" :loading="pending === 'check_limits'" @click="act('check_limits')" /></div>
+      <section v-if="active_turn" class="turn-panel host-turn"><div class="turn-header"><h3>当前发言安排</h3><UBadge color="primary" variant="subtle">{{ bridge.turn_label(turn, room) }}</UBadge></div>
+        <div class="turn-expert"><UAvatar :src="bridge.identities[turn.expert]?.icon" :text="bridge.identities[turn.expert]?.initials" :alt="turn.expert" class="message-mark channel-avatar" :class="bridge.identities[turn.expert]?.style" /><div><strong>{{ turn.expert }}</strong><small>发言安排 #{{ turn.id }}</small></div></div><p class="turn-question">{{ turn.question }}</p>
+        <div v-if="!automatic" class="button-row turn-actions"><UButton icon="i-lucide-copy" label="复制通知" :disabled="inactive" color="neutral" variant="outline" class="channel-surface-button" @click="act('copy_turn')" /><UButton icon="i-lucide-check-check" label="确认已通知" color="neutral" variant="outline" class="channel-surface-button" :disabled="inactive || turn.status !== 'pending'" :loading="pending === 'notify'" @click="act('notify')" /><UButton v-if="room.experts[turn.expert] === 'online'" icon="i-lucide-message-square-plus" label="录入在线回答" :disabled="inactive" class="channel-primary-button" @click="act('prepare_answer')" /><UButton label="取消安排" color="neutral" variant="ghost" @click="act('cancel_turn')" /></div>
+        <p class="fine-print">{{ bridge.turn_guidance(turn, room) }}</p>
       </section>
-      
-      <div class="form-footer"><a :href="`${base}/turns`" target="_blank" rel="noopener" class="subtle-link">发言安排历史 <UIcon name="i-lucide-arrow-up-right" /></a><UButton icon="i-lucide-plus" label="安排下一位专家" class="channel-primary-button" :disabled="!can_schedule" @click="$emit('open', 'schedule')" /></div>
-      <p v-if="!can_schedule" class="fine-print host-schedule-hint">{{ inactive ? '话题已暂停或收束，修改阶段后可以继续安排。' : active_turn ? '先完成或取消当前安排，再安排下一位。' : room.limits?.reached ? '已达到讨论上限，请检查到限处理；需要继续时先暂停并调整参数。' : '请先在议题资料中配置参与专家。' }}</p>
+      <p v-else-if="turn" class="host-last-turn">最近一次安排：{{ bridge.display_name(turn.expert) }} · #{{ turn.id }} · {{ bridge.turn_label(turn, room) }}<button v-if="turn.answer_id" type="button" class="subtle-link" @click="$emit('detail', turn.answer_id)">查看回答原文</button></p>
+      <div class="form-footer"><a :href="`${base}/turns`" target="_blank" rel="noopener" class="subtle-link">发言安排历史 <UIcon name="i-lucide-arrow-up-right" /></a><UButton v-if="!automatic" icon="i-lucide-plus" label="安排下一位专家" class="channel-primary-button" :disabled="!can_schedule" @click="$emit('open', 'schedule')" /></div>
+      <p v-if="!automatic && !can_schedule" class="fine-print host-schedule-hint">{{ inactive ? '话题已暂停或收束，修改阶段后可以继续安排。' : active_turn ? '先完成或取消当前安排，再安排下一位。' : room.limits?.reached ? '已达到讨论上限，请检查到限处理；需要继续时先暂停并调整参数。' : '请先在议题资料中配置参与专家。' }}</p>
     </template>
     <template v-else>
       <div class="page-heading access-heading">
         <div><h2>本机启动</h2><p>讨论由本机服务唤醒 AI：在这里启动或修正软件连接；成员的接入操作在上方成员表。</p></div>
         <UBadge v-if="automatic" :color="room.runtime?.status === 'running' ? 'primary' : 'neutral'" variant="subtle">{{ runtime_status }}</UBadge>
       </div>
-      <section v-if="automatic" class="access-evidence" aria-label="实际执行进展" role="status"><strong>实际执行进展</strong><p>{{ bridge.execution_label(execution) }}</p><p v-if="room.runtime?.status === 'running' && (!execution || ['pending', 'dispatched'].includes(execution.status))" class="fine-print">尚无 AI 进入记录。请核对本机服务及对应软件的登录和工具权限。</p></section>
+      <section v-if="automatic" class="host-progress access-evidence" aria-label="实际执行进展" role="status"><span>最近执行</span><p>{{ bridge.execution_label(execution) }}</p><p v-if="room.runtime?.status === 'running' && (!execution || ['pending', 'dispatched'].includes(execution.status))" class="fine-print">尚无 AI 进入记录。请核对本机服务及对应软件的登录和工具权限。</p></section>
       <section v-if="automatic && view.launch.available" class="access-setup" aria-label="网页启动入口">
-        <div class="access-section-title"><h3>从网页启动</h3><span class="fine-print">本机执行</span></div>
         <template v-if="room.runtime?.status === 'ready'">
+          <div class="access-section-title"><h3>从网页启动</h3></div>
           <LaunchSettings :participants="woken_participants" />
           <UButton label="启动讨论" icon="i-lucide-play" class="channel-primary-button" :loading="pending === 'launch_current_room'" @click="act('launch_current_room')" />
         </template>
@@ -105,9 +101,8 @@ const woken_participants = computed(() => {
 .access-page { color: var(--ui-text); }
 .access-heading { align-items: flex-start; }
 .access-heading > span { margin-top: 2px; white-space: nowrap; }
-.access-evidence { margin-bottom: 18px; padding: 12px 0; overflow-wrap: anywhere; }
-.access-evidence strong { font-size: 13px; }
-.access-evidence p { margin: 6px 0 0; }
+.access-evidence { margin-bottom: 18px; overflow-wrap: anywhere; }
+.access-evidence > .fine-print { flex-basis: 100%; margin: 0; }
 .access-section-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
 .access-section-title h3 { font-size: 13px; font-weight: 600; color: var(--ui-text-highlighted); }
 .access-repair { display: grid; gap: 14px; margin: 16px 0; padding: 18px; border: 1px solid var(--ui-border); border-radius: 8px; }
@@ -154,6 +149,11 @@ const woken_participants = computed(() => {
 .access-failure > div { min-width: 0; }
 .access-failure strong { color: var(--ui-text-highlighted); font-size: 12px; font-weight: 500; }
 .access-failure summary { cursor: pointer; margin-top: 6px; color: var(--ui-text-muted); font-size: 11px; }
+/* The progress of a discussion reads as one line; the rail's board carries the live detail. */
+.host-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 12px 16px; border: 1px solid var(--ui-border-muted); border-radius: 10px; font-size: 13px; }
+.host-progress > span { color: var(--ui-text-muted); }
+.host-progress > p { flex: 1; min-width: 200px; margin: 0; color: var(--ui-text); line-height: 1.7; }
+.host-last-turn { display: flex; flex-wrap: wrap; gap: 10px; color: var(--ui-text-muted); font-size: 12px; }
 .access-failure p { margin-top: 8px; color: var(--ui-text-muted); font-size: 12px; overflow-wrap: anywhere; line-height: 1.7; }
 @media (max-width: 640px) {
   .access-page .access-repair button { min-height: 44px; }
