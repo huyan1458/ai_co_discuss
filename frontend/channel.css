@@ -379,7 +379,8 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 .channel-conversation { position: relative; min-height: 0; flex: 1; display: grid; grid-template-columns: 0 minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
 .channel-has-messages { grid-template-columns: 84px minmax(0, 1fr); }
 .channel-filter-summary { grid-column: 1 / -1; grid-row: 1; display: flex; align-items: center; justify-content: space-between; padding: 7px 24px; background: #5865f214; border-bottom: 1px solid #5865f224; font-size: 12px; color: #bfc7f4; }
-.channel-message-map { grid-column: 1; grid-row: 2; align-self: center; height: 320px; max-height: calc(100% - 32px); min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; display: flex; flex-direction: column; align-items: center; justify-content: safe center; padding: 12px 0; mask-image: linear-gradient(transparent, #000 12px, #000 calc(100% - 12px), transparent); }
+/* The map spans the composer row too, so a growing draft never shifts its center. */
+.channel-message-map { grid-column: 1; grid-row: 2 / 4; align-self: center; height: 320px; max-height: calc(100% - 32px); min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; display: flex; flex-direction: column; align-items: center; justify-content: safe center; padding: 12px 0; mask-image: linear-gradient(transparent, #000 12px, #000 calc(100% - 12px), transparent); }
 .channel-message-map::-webkit-scrollbar { display: none; }
 .channel-message-map { touch-action: pan-y; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 .channel-map-track { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 100%; flex: none; }
