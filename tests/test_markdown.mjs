@@ -10,6 +10,10 @@ test("renders headings, emphasis, nested lists, quotes, tables, and line breaks"
   assert.match(html, /class="markdown-table"[^>]+tabindex="0"/);
 });
 
+test("emphasis closes after Chinese punctuation followed by Chinese text", () => {
+  assert.ok(render_markdown("**零解释成本。**末日片").includes("<strong>零解释成本。</strong>末日片"));
+});
+
 test("code preserves literal Markdown, mentions, math, and HTML", () => {
   const html = render_markdown('`@Codex **原文** $x$`\n\n```html\n<script>alert("test")</script>\n@Gemini **不是强调**\n```');
   assert.match(html, /<code>@Codex \*\*原文\*\* \$x\$<\/code>/);

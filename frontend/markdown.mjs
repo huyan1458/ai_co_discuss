@@ -1,7 +1,10 @@
 import MarkdownIt from "markdown-it";
 import { katex } from "@mdit/plugin-katex";
+import markdown_it_cjk_friendly from "markdown-it-cjk-friendly";
 
+// CJK-friendly emphasis lets `**结论。**后文` close after Chinese punctuation.
 const markdown = new MarkdownIt({ html: false, breaks: true, linkify: true })
+  .use(markdown_it_cjk_friendly)
   .use(katex, { delimiters: "all", throwOnError: false, trust: false, logger: () => "ignore" });
 const MENTION_PATTERN = /(@(?:Codex|Claude|Gemini|DeepSeek|Qwen|Grok|用户)(?!\w))/g;
 
