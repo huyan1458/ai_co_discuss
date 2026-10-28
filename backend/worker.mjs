@@ -222,16 +222,13 @@ function update_rows(table, key, columns, rows) {
   return statements;
 }
 
-/** Room, directory, folder, a temporary free mode (history needs no turns) and away members. */
+/** Room, directory, a temporary free mode (history needs no turns) and away members; the room arrives unfiled. */
 function import_room_rows(tables, room, maps, control_hash) {
   const messages = maps.messages, experts = JSON.parse(tables.topic_settings?.[0]?.experts || "{}");
   const statements = [["INSERT INTO rooms (id,title,goal,state_text,state_until,created_at) VALUES (?,?,?,?,?,?)",
     [room.id, room.title, remap_text(room.goal, messages), remap_text(room.state_text, messages), remap_until(room.state_until, messages), room.created_at]],
   ["UPDATE room_directory SET archived=? WHERE room_id=?", [tables.room_directory?.[0]?.archived ? 1 : 0, room.id]],
   ["INSERT INTO room_modes (room_id,mode,control_hash) VALUES (?,'free',?)", [room.id, control_hash]]];
-  for (const folder of (tables.topic_folders || []).slice(0, 1)) statements.push(
-    ["INSERT INTO topic_folders (id,name,position) SELECT ?,?,COALESCE(MAX(position),0)+1 FROM topic_folders WHERE NOT EXISTS (SELECT 1 FROM topic_folders WHERE id=?)", [folder.id, folder.name, folder.id]],
-    ["UPDATE room_folder_assignments SET folder_id=? WHERE room_id=?", [folder.id, room.id]]);
   statements.push(...insert_rows("room_members", ["id", "room_id", "name", "adapter", "role", "status", "token_hash", "read_until", "created_at", "access", "session_mode"],
     (tables.room_members || []).map(member => [maps.room_members.get(member.id), room.id, member.name, member.adapter || "", member.role || "member",
       member.status === "removed" ? "removed" : "away", crypto.randomUUID().replaceAll("-", "").repeat(2), remap_until(member.read_until, messages), member.created_at,

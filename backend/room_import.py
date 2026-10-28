@@ -63,7 +63,7 @@ def remap_until(value, messages):
 
 
 def room_statements(tables, room, maps, control_hash):
-    """Room, directory, folder and a temporary free mode so history needs no speaking floor."""
+    """Room, directory and a temporary free mode so history needs no speaking floor; the room arrives unfiled."""
     messages, room_id = maps["messages"], room["id"]
     directory = (tables.get("room_directory") or [{}])[0]
     statements = [("INSERT INTO rooms (id,title,goal,state_text,state_until,created_at) VALUES (?,?,?,?,?,?)",
@@ -71,10 +71,6 @@ def room_statements(tables, room, maps, control_hash):
                     remap_until(room.get("state_until"), messages), room["created_at"])),
                   ("UPDATE room_directory SET archived=? WHERE room_id=?", (int(bool(directory.get("archived"))), room_id)),
                   ("INSERT INTO room_modes (room_id,mode,control_hash) VALUES (?,'free',?)", (room_id, control_hash))]
-    for folder in tables.get("topic_folders", [])[:1]:
-        statements += [("""INSERT INTO topic_folders (id,name,position) SELECT ?,?,COALESCE(MAX(position),0)+1 FROM topic_folders
-                           WHERE NOT EXISTS (SELECT 1 FROM topic_folders WHERE id=?)""", (folder["id"], folder["name"], folder["id"])),
-                       ("UPDATE room_folder_assignments SET folder_id=? WHERE room_id=?", (folder["id"], room_id))]
     return statements
 
 

@@ -3611,13 +3611,13 @@ async function upload_imported_files(room_id, token, mapping, files) {
   return missing;
 }
 
-/** Import every room in the chosen backup files; each imported room is owned by this browser, existing rooms are skipped. */
-async function import_rooms(files) {
+/** Import every room in the chosen backup files into one folder (unfiled when null); each imported room is owned by this browser, existing rooms are skipped. */
+async function import_rooms({ files, folder_id = null }) {
   if (!files?.length || state.backup_pending) return;
   state.backup_pending = true;
   state.directory_notice = state.directory_error = "";
   publish_view();
-  const imported = [], skipped = [], failed = [], restored = [], unrestored = [];
+  const imported = [], skipped = [], failed = [], restored = [], unrestored = [], unfiled = [];
   let missing = 0;
   try {
     for (const file of files) {
@@ -3632,6 +3632,8 @@ async function import_rooms(files) {
           save_room_credentials({ id: result.id }, token);
           missing += await upload_imported_files(result.id, token, result.attachments, originals);
           imported.push(result.title);
+          if (folder_id) await request_json(`/api/rooms/${result.id}/folder`, { actor: "用户", folder_id })
+            .catch(error => unfiled.push(`${result.title}：未放入文件夹：${error.message}`));
           if (snapshot.local_members) {
             const { notices, problems } = await restore_local_members(result, token, snapshot.local_members);
             restored.push(...notices); unrestored.push(...problems);
@@ -3646,7 +3648,7 @@ async function import_rooms(files) {
   }
   state.directory_notice = [`已导入 ${imported.length} 个频道`, skipped.length && `跳过已存在的 ${skipped.length} 个（${skipped.join("、")}）`, ...restored]
     .filter(Boolean).join("；");
-  state.directory_error = [missing && `${missing} 个附件原文件缺失，消息中的这些附件无法打开`, failed.length && `未导入 ${failed.length} 项：${failed.join("；")}`, ...unrestored]
+  state.directory_error = [missing && `${missing} 个附件原文件缺失，消息中的这些附件无法打开`, failed.length && `未导入 ${failed.length} 项：${failed.join("；")}`, ...unfiled, ...unrestored]
     .filter(Boolean).join("；");
 }
 

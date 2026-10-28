@@ -1,7 +1,7 @@
 <script setup>
 import { computed, inject, ref, watch } from "vue";
 
-const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archives"]);
+const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives"]);
 const { view, bridge, act, pending } = inject("discussion");
 const rooms = computed(() => view.value.rooms.filter((room) => !room.archived));
 const archived_count = computed(() => view.value.rooms.filter((room) => room.archived).length);
@@ -15,17 +15,24 @@ const directory_actions = computed(() => [
     onSelect: () => act("sort_directory", item.value),
   })),
   { type: "separator" },
-  { label: "导入房间…", icon: "i-lucide-upload", disabled: view.value.backup_pending, onSelect: () => import_input.value?.click() },
-  { label: "导出全部房间", icon: "i-lucide-download", disabled: view.value.backup_pending || !view.value.rooms.length,
+  { label: "导入房间…", icon: "i-lucide-download", disabled: view.value.backup_pending, onSelect: () => choose_import_target(null) },
+  { label: "导出全部房间", icon: "i-lucide-upload", disabled: view.value.backup_pending || !view.value.rooms.length,
     onSelect: () => act("backup_rooms", { ids: view.value.rooms.map((room) => room.id), name: "全部房间" }) },
 ]);
 const import_input = ref(null);
+let import_folder = null;
+
+/** Open the backup picker for rooms that should land in one folder, or unfiled when null. */
+function choose_import_target(folder_id) {
+  import_folder = folder_id;
+  import_input.value?.click();
+}
 
 /** Hand the chosen backup files to the controller, then clear the input so the same file can be chosen again. */
 function choose_imports(event) {
   const files = [...event.target.files];
   event.target.value = "";
-  if (files.length) act("import_rooms", files);
+  if (files.length) act("import_rooms", { files, folder_id: import_folder });
 }
 const rooms_open = ref(true);
 const collapsed = ref(read_collapsed());
@@ -40,7 +47,10 @@ function folder_actions(folder, index) {
   return [...(folder.id ? [[{ label: "重命名", icon: "i-lucide-pencil", disabled: folder.pending || view.value.directory_pending.includes(`folder-name:${folder.id}`), onSelect: () => emit("manage-folder", folder) }]] : []), [
     { label: "上移", icon: "i-lucide-arrow-up", disabled: ordering || index === 0 || Boolean(pending.value), onSelect: () => act("move_folder", { id: folder.order_id, direction: -1 }) },
     { label: "下移", icon: "i-lucide-arrow-down", disabled: ordering || index === folders.value.length - 1 || Boolean(pending.value), onSelect: () => act("move_folder", { id: folder.order_id, direction: 1 }) },
-  ], [folder_export(folder)], ...(folder.id ? [[{ label: "移除文件夹", icon: "i-lucide-folder-minus",
+  ], [{ label: "导入房间…", icon: "i-lucide-download", disabled: folder.pending || view.value.backup_pending, onSelect: () => choose_import_target(folder.id || null) },
+    folder_export(folder)], ...(folder.id ? [[{ label: "存档文件夹", icon: "i-lucide-archive",
+    disabled: folder.pending || !folder.rooms.length || folder.rooms.some(room => view.value.archive_pending.includes(room.id)),
+    onSelect: () => emit("archive-folder", folder) }, { label: "移除文件夹", icon: "i-lucide-folder-minus",
     disabled: folder.pending || ordering || view.value.directory_pending.includes(`folder-name:${folder.id}`)
       || view.value.creating_room?.folder_id === folder.id
       || view.value.rooms.some(room => room.folder_id === folder.id && view.value.folder_pending.includes(room.id)),
@@ -50,7 +60,7 @@ function folder_actions(folder, index) {
 /** Export every channel filed in a folder, archived ones included. */
 function folder_export(folder) {
   const ids = view.value.rooms.filter((room) => (room.folder_id || "") === folder.id).map((room) => room.id);
-  return { label: "导出文件夹", icon: "i-lucide-download", disabled: view.value.backup_pending || !ids.length,
+  return { label: "导出文件夹", icon: "i-lucide-upload", disabled: view.value.backup_pending || !ids.length,
     onSelect: () => act("backup_rooms", { ids, name: folder.name || "未分组" }) };
 }
 
@@ -76,7 +86,7 @@ function actions(room, index, folder_id, folder_room_count) {
     { label: "重命名", icon: "i-lucide-pencil", disabled: view.value.directory_pending.includes(`rename:${room.id}`), onSelect: () => emit("manage", { room, action: "rename" }) },
     ...(current ? [{ label: "编辑议题", icon: "i-lucide-pencil", onSelect: () => emit("manage", { room, action: "edit" }) }] : []),
     { label: "复制阅读入口", icon: "i-lucide-link", onSelect: () => act("copy", `${location.origin}/r/${encodeURIComponent(room.id)}`) },
-    { label: "导出对话", icon: "i-lucide-download", disabled: view.value.backup_pending || Boolean(pending.value), onSelect: () => act("backup", room.id) },
+    { label: "导出对话", icon: "i-lucide-upload", disabled: view.value.backup_pending || Boolean(pending.value), onSelect: () => act("backup", room.id) },
   ], ...(current ? [[{ label: "刷新消息", icon: "i-lucide-refresh-cw", onSelect: () => act("refresh") }]] : []), [
     { label: "移出文件夹", icon: "i-lucide-folder-minus", disabled: !room.folder_id || Boolean(pending.value), onSelect: () => act("manage_channel", { id: room.id, action: "folder", folder_id: null }) },
     ...(view.value.folders || []).map((folder) => ({ label: `移至「${folder.name}」`, icon: "i-lucide-folder-input", disabled: folder.pending || room.folder_id === folder.id || Boolean(pending.value), onSelect: () => act("manage_channel", { id: room.id, action: "folder", folder_id: folder.id }) })),

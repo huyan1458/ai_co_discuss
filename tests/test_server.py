@@ -313,6 +313,7 @@ class DiscussionTests(unittest.TestCase):
         backup["tables"]["scheduler_decisions"] = [{"id": 1, "after_message_id": first["id"], "kind": "interjection", "label": "交给主持人 Codex", "confidence": 0.66,
                                                     "applied": 0, "provider": "jev", "created_at": "2026-10-25T00:00:00Z", "feedback": "bad", "should_be": "Gemini",
                                                     "note": "该问 Gemini", "context": "{\"prompt\": 2}"}]
+        backup["tables"]["topic_folders"] = [{"id": "sourcefolder", "name": "来源文件夹", "position": 1}]
         self.post("占用新编号", "import-later")
         status, result = self.request("/api/rooms/import", backup)
         self.assertEqual(status, 201, result)
@@ -320,6 +321,8 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.request("/api/rooms/import", backup)[1]["skipped"], True)
         room = self.request("/api/rooms/importedroom")[1]
         self.assertEqual((room["host"], room["phase"], room["title"]), ("Codex", "paused", self.room["title"]))
+        self.assertIsNone(room["folder_id"])
+        self.assertEqual(self.request("/api/rooms")[1]["folders"], [])
         self.assertEqual([(item["feedback"], item["should_be"], item["note"], item["context"]) for item in room["scheduler_decisions"]],
                          [("bad", "Gemini", "该问 Gemini", "{\"prompt\": 2}")])
         messages = self.request("/api/rooms/importedroom/messages")[1]["messages"]
