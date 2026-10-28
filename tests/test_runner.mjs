@@ -227,22 +227,22 @@ test('room model readback uses registered choices, adds the software settings fo
   mkdirSync(process.env.CODEX_HOME);
   writeFileSync(join(process.env.CODEX_HOME, 'config.toml'), 'model = "gpt-6-sol"\nmodel_reasoning_effort = "high"\n[profiles.deep]\nmodel = "ignored"\n');
   const input = { site: config.site, room_id: config.room };
-  const none = { default_model: '', default_effort: '', project_access: 'read' };
+  const none = { default_model: '', default_effort: '', project_access: 'read', own_project: false };
   assert.deepEqual(await room_models(home, input), { room_id: 'models', registered: true, participants: {
-    Codex: { adapter: 'codex_cli', model: 'gpt-6-astra', effort: 'xhigh', default_model: 'gpt-6-sol', default_effort: 'high', project_access: 'read' },
+    Codex: { adapter: 'codex_cli', model: 'gpt-6-astra', effort: 'xhigh', default_model: 'gpt-6-sol', default_effort: 'high', project_access: 'read', own_project: false },
     Claude: { adapter: 'claude', model: '', effort: '', ...none },
     Gemini: { adapter: 'antigravity', model: '', effort: '', ...none },
   }, scheduler: null });
   mkdirSync(process.env.CLAUDE_CONFIG_DIR);
   writeFileSync(join(process.env.CLAUDE_CONFIG_DIR, 'settings.json'), JSON.stringify({ model: 'opus', effortLevel: 'high' }));
   assert.deepEqual((await room_models(home, input)).participants.Claude,
-    { adapter: 'claude', model: '', effort: '', default_model: 'opus', default_effort: 'high', project_access: 'read' });
+    { adapter: 'claude', model: '', effort: '', default_model: 'opus', default_effort: 'high', project_access: 'read', own_project: false });
   config.participants.Gemini = { adapter: 'antigravity_cli', executable: process.execPath, model: 'gemini-4-argon-high' };
   writeFileSync(path, JSON.stringify(config));
   // agy keeps its default in the software and answers its native /model; stub that query here.
   const agy = { read_defaults: profile => profile.adapter === 'antigravity_cli' ? { model: 'gemini-4-argon-medium', effort: 'medium' } : { model: '', effort: '' } };
   assert.deepEqual((await room_models(home, input, agy)).participants.Gemini,
-    { adapter: 'antigravity_cli', model: 'gemini-4-argon-high', effort: '', default_model: 'gemini-4-argon-medium', default_effort: 'medium', project_access: 'read' });
+    { adapter: 'antigravity_cli', model: 'gemini-4-argon-high', effort: '', default_model: 'gemini-4-argon-medium', default_effort: 'medium', project_access: 'read', own_project: false });
   assert.deepEqual(await room_models(home, { ...input, room_id: 'missing' }), { room_id: 'missing', registered: false, participants: {}, scheduler: null });
   assert.deepEqual((await room_models(home, { ...input, site: 'https://other.example' })).participants, {});
   await assert.rejects(() => room_models(home, { ...input, room_id: '../models' }), /房间编号无效/);
@@ -252,6 +252,9 @@ test('room model readback uses registered choices, adds the software settings fo
   config.participants.Codex.project_access = 'write';
   writeFileSync(path, JSON.stringify(config));
   assert.equal((await room_models(home, input, agy)).participants.Codex.project_access, 'write');
+  config.participants.Gemini.session_id = 'own-agy-conversation';
+  writeFileSync(path, JSON.stringify(config));
+  assert.equal((await room_models(home, input, agy)).participants.Gemini.own_project, true);
 });
 
 test('a backup carries local member sessions, and restoring it resumes them while Claude Code stays manual', async t => {

@@ -1098,15 +1098,11 @@ async function describe_member(name, text) {
 /** Switch a woken member's project files between read-only and writable; the local service applies it from its next run. */
 async function set_member_access({ name, project_access }) {
   const room_id = state.room.id;
-  state.free_error = ""; state.free_notice = "";
-  try {
-    await local_launch_request("room-member-access", { room_id, token: localStorage.getItem(`discuss-access:${room_id}`), name, project_access });
-    if (state.room?.id !== room_id) return;
-    state.free_notice = `${name} 的项目文件已改为${project_access === "write" ? "可写" : "只读"}，下次处理请求起生效，原会话保留。`;
-    // The saved choices are cached per runtime revision, which this change leaves alone.
-    state.launch.room_models = null;
-    load_room_models();
-  } catch (error) { state.free_error = error.message; throw error; }
+  await local_launch_request("room-member-access", { room_id, token: localStorage.getItem(`discuss-access:${room_id}`), name, project_access });
+  if (state.room?.id !== room_id) return;
+  // The saved choices are cached per runtime revision, which this change leaves alone.
+  state.launch.room_models = null;
+  await load_room_models();
 }
 
 /** Owner changes use the website; only automatic members need the local service to reconnect. */
@@ -3505,7 +3501,7 @@ async function execute_view_action(name, value) {
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
     choose_runtime, export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, retry_execution, conclude_discussion, start_room_discussion, end_room_discussion, reopen_discussion,
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
-    load_room_configuration, save_room_configuration, interrupt_member, change_member, set_member_access, reorder_speakers, invite_member, set_proxy, copy_online_notice,
+    load_room_configuration, save_room_configuration, interrupt_member, change_member, reorder_speakers, invite_member, set_proxy, copy_online_notice,
     prepare_brainstorm, return_conclusion, adopt_recommendation, rate_decision,
     busy: () => { throw new Error("上一个操作仍在处理中，请稍候；长时间无响应请刷新页面"); },
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };
@@ -3536,7 +3532,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form },
   request: request_json, identities: IDENTITIES, display_name, sources: SOURCE_LABELS, phases: PHASE_LABELS,
-  runtime_label, execution_label, limits_label, stop_reason_label, participant_model, participant_access, can_retry_execution,
+  set_member_access, runtime_label, execution_label, limits_label, stop_reason_label, participant_model, participant_access, can_retry_execution,
   turns: TURN_LABELS, turn_label, turn_guidance, progress_round, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();

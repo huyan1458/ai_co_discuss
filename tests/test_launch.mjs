@@ -995,6 +995,11 @@ test('a woken member switches project files between read-only and writable after
   assert.equal(load_config(launched.config_path).participants.Claude.project_access, 'read');
   await assert.rejects(room_member_access(f.home, { ...input, project_access: 'all' }), /read 或 write/);
   await assert.rejects(room_member_access(f.home, { ...input, name: 'Codex' }), /不由本机唤醒/);
+  // An agy member resuming its own conversation keeps that conversation's project, so its access cannot be set here.
+  const current = load_config(launched.config_path);
+  writeFileSync(launched.config_path, JSON.stringify({ ...current, participants: { ...current.participants,
+    Gemini: { adapter: 'antigravity_cli', executable: process.execPath, session_id: 'own-agy-conversation' } } }));
+  await assert.rejects(room_member_access(f.home, { ...input, name: 'Gemini' }), /自己的 agy 对话/);
 });
 
 test('a free room is created with woken, manual and online members chosen one by one', async t => {

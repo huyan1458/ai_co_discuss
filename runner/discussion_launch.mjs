@@ -258,7 +258,9 @@ export async function room_models(home, raw, { read_defaults = software_defaults
     const defaults = await read_defaults(profile);
     return [name, { adapter: profile.adapter, model: cli ? profile.model || '' : '',
       effort: EFFORT_LEVELS[profile.adapter] ? profile.effort || '' : '', default_model: defaults.model, default_effort: defaults.effort,
-      project_access: profile.adapter === 'api' ? 'read' : profile.project_access || config.project_access || 'read' }];
+      project_access: profile.adapter === 'api' ? 'read' : profile.project_access || config.project_access || 'read',
+      // An agy member resuming its own conversation keeps that conversation's project, so this tool cannot set its access.
+      own_project: profile.adapter === 'antigravity_cli' && Boolean(profile.session_id) }];
   })));
   // Smart scheduling is a local choice; only which model decides is shown, never its key.
   const scheduler = config.scheduler ? { provider: config.scheduler.provider, model: config.scheduler.model } : null;
@@ -578,6 +580,7 @@ export async function room_member_access(home, raw) {
     const profile = config.participants?.[name];
     if (!profile) throw new Error(`${name} 不由本机唤醒，项目权限由它自己的会话决定`);
     if (!ACCESS_ADAPTERS.includes(profile.adapter)) throw new Error(profile.adapter === 'api' ? 'API 成员没有本机文件工具，项目固定只读' : `${name} 的项目权限在 App 内设置`);
+    if (profile.adapter === 'antigravity_cli' && profile.session_id) throw new Error(`${name} 续接的是它自己的 agy 对话，项目权限沿用该对话所在项目，请在 agy 中设置`);
     if (project_access === 'write' && !(profile.cwd || config.cwd)) throw new Error('本房间没有指定项目目录，可写没有作用；请在新建房间时选择项目目录');
     const next = { ...config, participants: { ...config.participants, [name]: { ...profile, project_access } } };
     validate_config(next, dirname(path));
