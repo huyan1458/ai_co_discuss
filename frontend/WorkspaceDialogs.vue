@@ -12,7 +12,7 @@ const rendered_mode = ref(mode.value);
 watch(mode, (value) => { if (value) rendered_mode.value = value; });
 const { view, bridge, field, act, pending } = inject("discussion");
 const open = computed({ get: () => Boolean(mode.value), set: (value) => { if (!value) mode.value = ""; } });
-const titles = { settings: "设置", create: "新建房间", folder: "新建文件夹", "rename-folder": "重命名文件夹", "delete-folder": "移除文件夹", edit: "编辑议题", schedule: "安排专家发言", message: "消息原文" };
+const titles = { settings: "设置", create: "新建房间", folder: "新建文件夹", "rename-folder": "重命名文件夹", "delete-folder": "移除文件夹", "archive-folder": "存档文件夹", edit: "编辑议题", schedule: "安排专家发言", message: "消息原文" };
 Object.assign(titles, { rename: "重命名房间", archive: "存档房间", restore: "恢复房间", delete: "删除房间" });
 const descriptions = { settings: "管理员账号与界面外观。", create: "邀请 AI 一起协作；需要深入讨论时，可在创建时或之后随时开启。", edit: "维护目标、参与身份与当前进度。", schedule: "只填写本轮问题，专家按需阅读讨论资料。", message: "保留作者、来源、提交人和引用关系。" };
 Object.assign(descriptions, { rename: "名称变化不会影响讨论记录和阅读地址。", archive: "保留所有记录，并暂停尚未收束的讨论。", restore: "移回讨论列表，保持当前讨论阶段。", delete: "永久删除房间及其所有记录，无法撤销。" });
@@ -73,7 +73,7 @@ async function delete_all_archives() {
 const management_title = ref("");
 const folder_name = ref("");
 watch(() => [mode.value, props.targetFolder?.id], () => { folder_name.value = mode.value === "rename-folder" ? props.targetFolder?.name || "" : ""; });
-const folder_dialog = computed(() => ["folder", "rename-folder", "delete-folder"].includes(rendered_mode.value));
+const folder_dialog = computed(() => ["folder", "rename-folder", "delete-folder", "archive-folder"].includes(rendered_mode.value));
 watch(() => [mode.value, props.targetRoom?.id], () => { management_title.value = mode.value === "rename" ? props.targetRoom?.title || "" : ""; });
 
 /** Close directory confirmations immediately; background completion never closes a later dialog. */
@@ -93,11 +93,24 @@ async function save_folder() {
   await act(renaming ? "rename_folder" : "create_folder", request);
 }
 
-/** Release the confirmation immediately while only the group is removed. */
-async function remove_folder() {
+/** Every room filed in the target folder, archived ones included. */
+const folder_rooms = computed(() => view.value.rooms.filter(room => props.targetFolder?.id && room.folder_id === props.targetFolder.id));
+
+/** Release the confirmation immediately; optionally delete the folder's rooms first, keeping the folder if any deletion fails. */
+async function remove_folder(with_rooms) {
   const id = props.targetFolder.id;
+  const rooms = with_rooms ? folder_rooms.value : [];
   mode.value = "";
-  await act("delete_folder", id);
+  let deleted = true;
+  for (const room of rooms) deleted = await act("manage_channel", { id: room.id, action: "delete" }) && deleted;
+  if (deleted) await act("delete_folder", id);
+}
+
+/** Archive the folder's active rooms one request at a time; the folder itself stays. */
+async function archive_folder() {
+  const rooms = folder_rooms.value.filter(room => !room.archived);
+  mode.value = "";
+  for (const room of rooms) await act("manage_channel", { id: room.id, action: "archive" });
 }
 const expert_container = "topic-expert-modes";
 const experts = Object.keys(bridge.identities).filter((name) => name !== "用户");
@@ -213,9 +226,14 @@ const keep_open = (event) => event.preventDefault();
         <p v-else class="channel-archive-empty">{{ archived_rooms.length ? '没有匹配的存档房间' : '暂无已存档房间' }}</p>
         </div>
       </section>
-      <form v-else-if="rendered_mode === 'delete-folder'" class="dialog-form" @submit.prevent="remove_folder">
-        <p class="fine-print">移除「{{ targetFolder?.name }}」后，房间不再归属文件夹，所有消息和存档状态都会保留。</p>
-        <div class="dialog-actions"><UButton label="取消" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" label="移除文件夹" color="neutral" variant="solid" /></div>
+      <form v-else-if="rendered_mode === 'delete-folder'" class="dialog-form" @submit.prevent="remove_folder(false)">
+        <p class="fine-print">仅移除「{{ targetFolder?.name }}」时，房间变为未分组，所有消息和存档状态都会保留。</p>
+        <p v-if="folder_rooms.length" class="fine-print">也可以连同其中的 {{ folder_rooms.length }} 个房间（含已存档）一起永久删除，无法撤销。</p>
+        <div class="dialog-actions"><UButton label="取消" color="neutral" variant="ghost" @click="mode = ''" /><UButton v-if="folder_rooms.length" :label="`连同 ${folder_rooms.length} 个房间删除`" color="error" variant="soft" @click="remove_folder(true)" /><UButton type="submit" label="仅移除文件夹" color="neutral" variant="solid" /></div>
+      </form>
+      <form v-else-if="rendered_mode === 'archive-folder'" class="dialog-form" @submit.prevent="archive_folder">
+        <p class="fine-print">存档「{{ targetFolder?.name }}」中的 {{ folder_rooms.filter(room => !room.archived).length }} 个房间，文件夹保留。存档后可在侧栏「已存档」中查阅与恢复；尚未收束的讨论会暂停。</p>
+        <div class="dialog-actions"><UButton label="取消" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" label="存档全部房间" color="primary" /></div>
       </form>
       <form v-else-if="folder_dialog" class="dialog-form" @submit.prevent="save_folder">
         <UInput v-model="folder_name" icon="i-lucide-folder" :aria-label="rendered_mode === 'folder' ? '新文件夹名称' : '文件夹名称'" placeholder="文件夹名称" autofocus required :maxlength="40" class="w-full" autocomplete="off" :readonly="Boolean(pending)" @keydown.enter.prevent="!$event.isComposing && save_folder()" />

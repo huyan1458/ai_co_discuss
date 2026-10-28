@@ -151,6 +151,9 @@ function edit_folder(folder) { target_folder.value = folder; nav_open.value = fa
 /** Confirm removal of a grouping without selecting or deleting a conversation. */
 function remove_folder(folder) { target_folder.value = folder; nav_open.value = false; modal.value = "delete-folder"; }
 
+/** Confirm archiving every active room filed in one folder. */
+function archive_folder(folder) { target_folder.value = folder; nav_open.value = false; modal.value = "archive-folder"; }
+
 /** Restore only supported conversation and sidebar dimensions. */
 function read_layout() {
   try {
@@ -272,7 +275,7 @@ function resize_nav_by_key(event) {
         <span class="channel-brand-text"><strong>共议</strong><span>AI CoDiscuss</span></span>
       </header>
       <div class="channel-sidebar-content">
-        <ChannelDirectory @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archives="open_archives" />
+        <ChannelDirectory @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" />
         <div class="channel-directory-heading channel-tools-heading"><button type="button" class="channel-section-toggle" :aria-expanded="tools_open" @click="tools_open = !tools_open"><UIcon :name="tools_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />频道工具</button></div>
         <UNavigationMenu v-if="tools_open" :items="view_links" orientation="vertical" color="neutral" variant="pill" class="channel-directory channel-view-links" aria-label="房间视图" :ui="{ link: 'channel-link', linkLabel: 'channel-link-label', linkLeadingIcon: 'channel-link-icon' }" />
       </div>
@@ -373,7 +376,7 @@ function resize_nav_by_key(event) {
 
     <USlideover v-model:open="nav_open" side="left" title="协作房间" description="共议 · AI CoDiscuss" :ui="{ content: 'channel-navigation-drawer', body: 'channel-drawer-body' }">
       <template #body>
-        <ChannelDirectory @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archives="open_archives" />
+        <ChannelDirectory @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" />
         <UButton block icon="i-lucide-settings-2" color="neutral" variant="ghost" label="设置" @click="nav_open = false; modal = 'settings'" />
       </template>
     </USlideover>
