@@ -3,6 +3,8 @@ import { computed, inject } from "vue";
 import { motion, useReducedMotion } from "motion-v";
 import LaunchSettings from "./LaunchSettings.vue";
 
+// "host" is the running discussion's arrangement, "access" how members take part; each is one section of a merged page.
+const props = defineProps({ section: { type: String, required: true } });
 defineEmits(["open", "detail"]);
 const { view, bridge, act, pending } = inject("discussion");
 const reduced_motion = useReducedMotion();
@@ -23,27 +25,12 @@ const woken_participants = computed(() => {
   const manual = new Set((access.value.members || []).filter((member) => member.access === "manual").map((member) => member.name));
   return [room.value?.host, ...Object.keys(room.value?.experts || {})].filter((name) => !manual.has(name));
 });
-const has_manual = computed(() => (access.value.members || []).some((member) => member.access === "manual"));
-const has_online = computed(() => (access.value.members || []).some((member) => member.access === "online"));
-/** A manual member's one-click launch comes first; the separate credential pieces sit in its menu. */
-function manual_menu(member) {
-  const unavailable = !access.value.can_manage || !member.available;
-  return [[
-    { label: "复制凭证文本", icon: "i-lucide-key-round", disabled: unavailable, onSelect: () => act("copy_member_access_text", member.name) },
-    { label: "下载私有配置", icon: "i-lucide-download", disabled: unavailable, onSelect: () => act("download_member_access", member.name) },
-  ]];
-}
-const progress_summary = computed(() => {
-  const limits = room.value?.limits || {};
-  const rounds = bridge.limit_rounds(limits).text;
-  return `${rounds} · 已用 ${Math.floor((limits.elapsed_seconds || 0) / 60)} 分钟`;
-});
 </script>
 
 <template>
-  <motion.section class="content-page" :class="{ 'access-page': view.tab === 'access', 'host-page': view.tab === 'topic' }" role="tabpanel" :aria-label="view.tab === 'topic' ? '主持' : '参与方式'" :initial="{ opacity: 0, y: reduced_motion ? 0 : 5 }" :animate="{ opacity: 1, y: 0 }" :transition="{ duration: 0.16 }">
-    <template v-if="view.tab === 'topic'">
-      <div class="page-heading"><div><span class="eyebrow">讨论进程</span><h2>主持与安排</h2><p>当前由 {{ bridge.display_name(room.host) }} 主持，围绕具体问题组织下一轮发言。</p></div><UButton icon="i-lucide-pencil" label="编辑议题" variant="outline" color="neutral" class="channel-surface-button" @click="$emit('open', 'edit')" /></div>
+  <motion.section class="merged-section" :class="{ 'access-page': props.section === 'access', 'host-page': props.section === 'host' }" :aria-label="props.section === 'host' ? '当前讨论' : '接入'" :initial="{ opacity: 0, y: reduced_motion ? 0 : 5 }" :animate="{ opacity: 1, y: 0 }" :transition="{ duration: 0.16 }">
+    <template v-if="props.section === 'host'">
+      <div class="page-heading"><div><span class="eyebrow">讨论进程</span><h2>当前讨论</h2><p>当前由 {{ bridge.display_name(room.host) }} 主持，围绕具体问题组织下一轮发言。</p></div><UButton icon="i-lucide-pencil" label="编辑议题" variant="outline" color="neutral" class="channel-surface-button" @click="$emit('open', 'edit')" /></div>
       <div class="topic-brief"><div><h3>讨论目标</h3><p>{{ room.goal || '待主持人根据用户原文补全' }}</p></div><div><h3>当前焦点</h3><p>{{ room.focus || '尚未设置当前焦点' }}</p></div></div>
       <div class="host-status">
         <section v-if="room.limits" class="turn-panel"><div class="turn-header"><h3>讨论上限与进度</h3><UBadge :color="room.limits.reached && room.phase !== 'concluded' ? 'warning' : 'neutral'" variant="subtle">{{ room.phase === 'concluded' ? '已收束' : room.limits.reached ? '已达上限' : room.limits.started_at ? '已开始计时' : '尚未计时' }}</UBadge></div><p>{{ bridge.limits_label(room.limits) }}</p><UButton v-if="room.limits.reached && !inactive" label="检查并执行到限处理" variant="outline" color="neutral" :loading="pending === 'check_limits'" @click="act('check_limits')" /><p class="fine-print">在“编辑议题”中调整参数。自动模式由接入程序检查；手动模式由主持人或此按钮执行到限处理。</p></section>
@@ -61,7 +48,7 @@ const progress_summary = computed(() => {
     </template>
     <template v-else>
       <div class="page-heading access-heading">
-        <div><h2>接入 AI</h2><p>讨论由本机服务唤醒 AI：在这里启动、修正软件连接或查看参与说明；成员进出在进度看板操作。</p></div>
+        <div><h2>本机启动</h2><p>讨论由本机服务唤醒 AI：在这里启动或修正软件连接；成员的接入操作在上方成员表。</p></div>
         <UBadge v-if="automatic" :color="room.runtime?.status === 'running' ? 'primary' : 'neutral'" variant="subtle">{{ runtime_status }}</UBadge>
       </div>
       <section v-if="automatic" class="access-evidence" aria-label="实际执行进展" role="status"><strong>实际执行进展</strong><p>{{ bridge.execution_label(execution) }}</p><p v-if="room.runtime?.status === 'running' && (!execution || ['pending', 'dispatched'].includes(execution.status))" class="fine-print">尚无 AI 进入记录。请核对本机服务及对应软件的登录和工具权限。</p></section>
@@ -110,53 +97,11 @@ const progress_summary = computed(() => {
         <summary><span>项目与工作目录 <small>可选</small></span><UIcon name="i-lucide-chevron-down" class="disclosure-icon" /></summary>
         <div class="access-disclosure-body"><p>指定 AI 使用的本机项目和目录，留空使用默认位置。仅保存在本机配置中。</p><div class="form-two-columns"><UFormField label="AI 软件中的项目"><UInput :model-value="view.fields['runtime-project']" placeholder="项目名称" class="w-full" @update:model-value="bridge.write_field('runtime-project', $event)" /></UFormField><UFormField label="工作目录"><UInput :model-value="view.fields['runtime-cwd']" placeholder="已有本机目录的完整路径" class="w-full" @update:model-value="bridge.write_field('runtime-cwd', $event)" /></UFormField></div></div>
       </details>
-      <details class="access-disclosure access-instructions" :open="!automatic || has_manual">
-        <summary><span>{{ automatic ? '成员参与说明与阅读地址' : '复制指令，交给对应的 AI' }}</span><UIcon name="i-lucide-chevron-down" class="disclosure-icon" /></summary>
-        <div class="access-disclosure-body">
-          <p v-if="has_manual || has_online" class="fine-print">{{ [has_manual && '手动成员：复制启动指令，交给你自己的 AI 会话。', has_online && '网页成员只读，回答由你或授权主持人代发。'].filter(Boolean).join('') }}</p>
-          <ul class="access-member-list" aria-label="成员接入">
-            <li v-for="member in access.members || []" :key="member.name">
-              <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="sm" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
-              <div class="access-member-copy"><strong>{{ member.name }}</strong><span>{{ member.access === 'online' ? '网页代发' : member.access === 'runner' ? '本机唤醒 · 自行发言' : '手动接入 · 自行发言' }}</span><small v-if="member.access === 'manual'" :class="{ 'is-registered': (room.members || []).find((item) => item.name === member.name)?.registered_at }">{{ (room.members || []).find((item) => item.name === member.name)?.registered_at ? '已注册' : '待注册' }}</small><small v-if="member.access !== 'online' && !member.available">当前浏览器没有此成员的私有配置</small></div>
-              <div class="button-row">
-                <template v-if="member.access === 'manual'">
-                  <UButton icon="i-lucide-rocket" label="复制启动指令" :aria-label="`复制 ${member.name} 含凭证的启动指令`" :disabled="!access.can_manage || !member.available" color="neutral" size="sm" @click="act('copy_member_launch', member.name)" />
-                  <UDropdownMenu :items="manual_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" :aria-label="`${member.name} 的更多接入方式`" /></UDropdownMenu>
-                </template>
-                <template v-else>
-                  <UButton v-if="member.access !== 'online'" icon="i-lucide-download" label="私有配置" :aria-label="`下载 ${member.name} 私有配置`" :disabled="!access.can_manage || !member.available" variant="outline" color="neutral" size="sm" @click="act('download_member_access', member.name)" />
-                  <UButton icon="i-lucide-copy" label="参与说明" :aria-label="`复制 ${member.name} 参与说明`" variant="outline" color="neutral" size="sm" :disabled="!access.can_manage" @click="act('copy_member_join', member.name)" />
-                </template>
-              </div>
-            </li>
-          </ul>
-          <p v-if="access.error" role="alert" class="access-member-error">{{ access.error }}</p>
-          <p v-else-if="access.notice" role="status" class="fine-print">{{ access.notice }}</p>
-          <p class="fine-print">复制说明或下载配置不代表 AI 已接入，请以实际回答和运行记录为准。</p>
-          <details class="access-reading"><summary>查看房间阅读地址</summary><div class="access-address"><code>{{ base }}</code><UButton icon="i-lucide-copy" color="neutral" variant="ghost" aria-label="复制阅读地址" @click="act('copy', base)" /></div></details>
-          <p v-if="base.includes('127.0.0.1') || base.includes('localhost')" class="fine-print">本机地址仅本机可访问。在线 AI 需要公网阅读地址，或由用户提供材料。</p>
-        </div>
-      </details>
-      <details v-if="room.limits" class="access-disclosure access-limits">
-        <summary><span>讨论上限与进度</span><span class="access-limit-summary">{{ progress_summary }}</span><UIcon name="i-lucide-chevron-down" class="disclosure-icon" /></summary>
-        <div class="access-disclosure-body"><p>{{ bridge.limits_label(room.limits) }}</p><div class="button-row"><UButton icon="i-lucide-pencil" label="编辑讨论上限" variant="outline" color="neutral" class="channel-surface-button" @click="$emit('open', 'edit')" /><UButton v-if="room.limits.reached && !inactive" label="检查并执行到限处理" variant="outline" color="neutral" class="channel-surface-button" :loading="pending === 'check_limits'" @click="act('check_limits')" /></div></div>
-      </details>
     </template>
   </motion.section>
 </template>
 
 <style scoped>
-.access-member-list { display: grid; margin: 16px 0; padding: 0; list-style: none; }
-.access-member-list > li { display: flex; align-items: center; gap: 12px; padding: 15px 0; border-bottom: 1px solid var(--ui-border-muted); }
-.access-member-list > li > .channel-avatar { flex-shrink: 0; }
-.access-member-copy { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; }
-.access-member-copy > strong { color: var(--ui-text-highlighted); font-size: 13px; }
-.access-member-copy > span { color: var(--ui-text-muted); font-size: 11px; }
-.access-member-copy > small { color: var(--ui-text-dimmed); font-size: 11px; }
-.access-member-copy > small:not(.is-registered):first-of-type { color: var(--ui-warning, #e0a33a); }
-.access-member-copy > small.is-registered { color: var(--ui-success, #3fb27f); }
-.access-member-list .button-row { flex-shrink: 0; }
-.access-member-error { color: var(--ui-error); font-size: 12px; }
 .access-page { color: var(--ui-text); }
 .access-heading { align-items: flex-start; }
 .access-heading > span { margin-top: 2px; white-space: nowrap; }
@@ -211,9 +156,6 @@ const progress_summary = computed(() => {
 .access-failure summary { cursor: pointer; margin-top: 6px; color: var(--ui-text-muted); font-size: 11px; }
 .access-failure p { margin-top: 8px; color: var(--ui-text-muted); font-size: 12px; overflow-wrap: anywhere; line-height: 1.7; }
 @media (max-width: 640px) {
-  .access-member-list > li { flex-wrap: wrap; }
-  .access-member-list .button-row { width: 100%; margin-left: 44px; }
-
   .access-page .access-repair button { min-height: 44px; }
   .access-workspace .form-two-columns { grid-template-columns: 1fr; }
   .access-steps > li { flex-wrap: wrap; gap: 10px; padding: 17px 0; }

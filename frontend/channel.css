@@ -1168,3 +1168,8 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 .expert-card-modes { display: flex; gap: 3px; padding: 3px; border-radius: 5px; background: var(--ui-bg-muted); }
 .expert-card-modes button { flex: 1; min-height: 22px; border-radius: 4px; color: var(--ui-text-muted); font-size: 11px; }
 .expert-card-modes button[aria-checked="true"] { background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); box-shadow: var(--channel-shadow-control); }
+
+/* Merged tool pages stack their sections; a rule separates one from the next. */
+.merged-section + .merged-section { margin-top: 36px; padding-top: 30px; border-top: 1px solid var(--ui-border-muted); }
+.consensus-block + .consensus-block { margin-top: 18px; }
+.consensus-block > small { display: flex; gap: 10px; margin-bottom: 6px; color: var(--ui-text-muted); font-size: 12px; }

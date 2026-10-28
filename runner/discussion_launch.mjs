@@ -53,6 +53,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch scheduler-check --file FILE
       codiscuss launch room-member --file FILE
       codiscuss launch room-member-access --file FILE
+      codiscuss launch room-member-adapter --file FILE
       codiscuss launch room-profiles --file FILE
       codiscuss launch room-restore --file FILE
       codiscuss launch pick-directory
@@ -62,7 +63,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
 settings 读取本机软件默认配置；指定文件时保存，不启动 AI。
 start 使用启动 JSON 创建或接入房间并启动；--dry-run 只校验和预览。
 room-config 修正已暂停房间的软件路径或切换 Codex App / CLI，不启动讨论；须提供 site、room_id、token。
-room-models 只读指定 site、room_id 的本机登记模型与思考强度，不启动讨论。
+room-models 只读指定 site、room_id 的本机登记模型与思考强度，不启动讨论；quick 为 true 时不查询 agy 的默认模型（较慢），该成员标 defaults_pending。
 models 按 adapter、executable 或 API profile 读取模型目录，不启动讨论或生成回答。
 api-key 将 base_url、api_key 保存于本机私有目录，只返回 api_key_ref。
 api-check 用 API profile 向模型发送一次极短请求，核对地址、密钥、协议与模型是否可用。
@@ -72,6 +73,7 @@ projects 读取本机已配置的项目（名称与绝对路径）；提供 JSON
 machine-link 返回本机连接指定 site 的电脑编号、名称与凭据，供已登录管理员的网页完成配对；不存在时创建。
 room-member 为运行中的自由房间或讨论邀请、请回一位成员（讨论只接受本机唤醒的成员）；须提供 site、room_id、token、action（add/rejoin）、name。
 room-member-access 修改一位本机唤醒成员的项目文件权限（project_access 为 read/write），下次投递起生效、保留原会话；须提供 site、room_id、token、name、project_access。
+room-member-adapter 把自由房间里空闲的 Codex 成员在 App（codex）与 CLI（codex_cli）间切换，保留原会话；须提供 site、room_id、token、name、adapter。
 room-profiles 导出房间的本机成员软件配置与实际会话 ID（不含凭据），供备份附带；须提供 site、room_id、token。
 room-restore 把导入房间的本机成员配置登记到本机并核对原会话存在，Claude Code 成员保持手动；须提供 site、room_id、token、local_members。
 JSON 指定 site、entry（conversation/web）、room（建房内容，含 submission_id）
@@ -242,7 +244,10 @@ export function launch_settings(home) {
   return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { participants: {} };
 }
 
-/** Read the registered room's model choices, what each software selects for empty ones, and its smart scheduler, never connection secrets. */
+/**
+ * Read the registered room's model choices, what each software selects for empty ones, and its smart scheduler, never connection secrets.
+ * With `quick`, agy's default model is not queried and its entry is marked `defaults_pending`.
+ */
 export async function room_models(home, raw, { read_defaults = software_defaults } = {}) {
   const input = launch_input({ ...raw, entry: 'web' });
   if (!input.room_id) throw new Error('读取本场模型须提供 room_id');
@@ -255,8 +260,10 @@ export async function room_models(home, raw, { read_defaults = software_defaults
   const profiles = config.participants || {};
   const participants = Object.fromEntries(await Promise.all(Object.entries(profiles).map(async ([name, profile]) => {
     const cli = ['codex_cli', 'claude', 'antigravity_cli', 'api'].includes(profile.adapter);
-    const defaults = await read_defaults(profile);
-    return [name, { adapter: profile.adapter, model: cli ? profile.model || '' : '',
+    // agy has no settings file and is run to name its default model, which takes seconds; a quick read leaves that to a later full read.
+    const pending = input.quick === true && profile.adapter === 'antigravity_cli';
+    const defaults = pending ? { model: '', effort: '' } : await read_defaults(profile);
+    return [name, { ...(pending ? { defaults_pending: true } : {}), adapter: profile.adapter, model: cli ? profile.model || '' : '',
       effort: EFFORT_LEVELS[profile.adapter] ? profile.effort || '' : '', default_model: defaults.model, default_effort: defaults.effort,
       project_access: profile.adapter === 'api' ? 'read' : profile.project_access || config.project_access || 'read',
       // An agy member resuming its own conversation keeps that conversation's project, so this tool cannot set its access.
@@ -586,6 +593,36 @@ export async function room_member_access(home, raw) {
     validate_config(next, dirname(path));
     atomic_json(path, next);
     return { room_id: input.room_id, member: name, project_access };
+  } finally { release(); }
+}
+
+/**
+ * Switch an idle free-room Codex member between the App and the CLI, keeping its conversation: the App resumes the
+ * bound chat by its session, and the CLI resumes it only after the App has released it. Model and effort are chosen
+ * in the App, so switching to it drops them.
+ */
+export async function room_member_adapter(home, raw) {
+  const { input, path, config: registered } = await member_room_context(home, raw);
+  const { name, adapter } = input;
+  if (registered.mode !== 'free') throw new Error('讨论进行中不能切换；结束讨论后再切换，或暂停后在“接入”页修正');
+  if (!CODEX_ADAPTERS.includes(adapter)) throw new Error('adapter 只能为 codex（App）或 codex_cli（CLI）');
+  const room = await site_request(input.site, `/api/rooms/${input.room_id}`, input.token);
+  const member = room.free.members.find(item => item.name === name);
+  if (member?.pending > 0 || ['dispatched', 'started'].includes(member?.execution?.status)) throw new Error(`${name} 正在处理请求，请等它完成或先停止`);
+  const release = acquire_lock(join(dirname(path), 'configuration-edit'));
+  try {
+    const config = configuration_snapshot(path).config;
+    const profile = config.participants?.[name];
+    if (!CODEX_ADAPTERS.includes(profile?.adapter)) throw new Error(`${name} 不是本机唤醒的 Codex 成员`);
+    if (profile.adapter === adapter) return { room_id: input.room_id, member: name, adapter };
+    const context = { config, path };
+    const next = { ...profile };
+    switch_codex_adapter(context, name, next, adapter);
+    if (adapter === 'codex') { delete next.model; delete next.effort; }
+    const updated = { ...config, participants: { ...config.participants, [name]: next } };
+    validate_config(updated, dirname(path));
+    atomic_json(path, updated);
+    return { room_id: input.room_id, member: name, adapter };
   } finally { release(); }
 }
 
@@ -1025,6 +1062,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   }
   else if (positionals[0] === 'room-member' && input) result = await room_member(home, input);
   else if (positionals[0] === 'room-member-access' && input) result = await room_member_access(home, input);
+  else if (positionals[0] === 'room-member-adapter' && input) result = await room_member_adapter(home, input);
   else if (positionals[0] === 'room-profiles' && input) result = await room_profiles(home, input);
   else if (positionals[0] === 'room-restore' && input) result = await restore_room(home, input);
   else if (positionals[0] === 'pick-directory') result = await pick_directory();

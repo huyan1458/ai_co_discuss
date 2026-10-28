@@ -4,6 +4,7 @@ import test from "node:test";
 import vm from "node:vm";
 import { computed, nextTick, reactive, ref, watch } from "vue";
 import { API_PROVIDERS } from "../runner/discussion_api.mjs";
+import { member_actions } from "../frontend/member-actions.js";
 
 const source = readFileSync(new URL("../web/app.js", import.meta.url), "utf8").replace(/\nrestore_theme\(\);[\s\S]*$/, "");
 const discussion_source = readFileSync(new URL("../frontend/ChannelDiscussion.vue", import.meta.url), "utf8");
@@ -757,23 +758,21 @@ test("create form shares a role library, keeps independent instances and makes t
 });
 
 test("free member delivery never offers writable credentials to online or unavailable identities", async () => {
-  const view = ref({ access: { can_manage: true, members: [{ name: "Codex", access: "manual", available: false }] }, launch: { available: false } });
+  const view = { access: { can_manage: true, members: [{ name: "Codex", access: "manual", available: false }] }, launch: { available: false } };
   const calls = [];
-  const context = vm.createContext({ view, busy: () => false, act: (...args) => calls.push(args) });
-  const component = readFileSync(new URL("../frontend/FreeBoard.vue", import.meta.url), "utf8");
-  vm.runInContext(component.match(/function member_menu\(member\) \{[\s\S]*?\n\}/)[0], context);
+  const menu_for = member => member_actions(member, { view, act: (...args) => calls.push(args), describe: () => {} });
   const manual = { name: "Codex", access: "manual", status: "away" };
-  let menu = context.member_menu(manual).flat();
+  let menu = menu_for(manual).flat();
   assert.equal(menu.find(item => item.label === "下载私有配置").disabled, true);
   assert.equal(menu.find(item => item.label === "请回").disabled, false, "manual rejoin needs no launcher");
-  view.value.access.members[0].available = true;
-  menu = context.member_menu(manual).flat();
+  view.access.members[0].available = true;
+  menu = menu_for(manual).flat();
   await menu.find(item => item.label === "下载私有配置").onSelect();
   assert.deepEqual(calls, [["download_member_access", "Codex"]]);
-  const online = context.member_menu({ ...manual, access: "online" }).flat();
+  const online = menu_for({ ...manual, access: "online" }).flat();
   assert.equal(online.some(item => item.label === "下载私有配置"), false);
-  view.value.access.can_manage = false;
-  assert.equal(context.member_menu(manual)[0][0].disabled, true);
+  view.access.can_manage = false;
+  assert.equal(menu_for(manual)[0][0].disabled, true);
 });
 
 /** Drive the real slider with a deterministic clock and no live client. */
@@ -2152,7 +2151,7 @@ test("room model readback stays separate from drafts, reloads on revision and di
   await f.context.load_room_models();
   assert.equal(state.launch.room_models.participants.Codex.model, 'saved-model');
   assert.equal(state.launch.profiles.Codex.model, 'new-discussion-draft');
-  assert.deepEqual(Object.keys(requests[0].input), ['room_id']);
+  assert.equal(JSON.stringify(requests[0].input), JSON.stringify({ room_id: 'one', quick: true }));
   await f.context.load_room_models();
   assert.equal(requests.length, 1);
   state.room.runtime.revision++;
@@ -2174,6 +2173,17 @@ test("room model readback stays separate from drafts, reloads on revision and di
   await f.context.load_room_models();
   assert.equal(state.launch.room_models.loading, false);
   assert.equal(state.launch.room_models.participants, null);
+  // agy's slow default model follows in a second, full read; the rest is shown first.
+  state.room = { id: 'three', runtime: { mode: 'automatic', revision: 1 } };
+  const quick_reads = [];
+  f.context.local_launch_request = async (action, input) => {
+    quick_reads.push(input.quick === true);
+    return { room_id: 'three', participants: { Gemini: input.quick
+      ? { adapter: 'antigravity_cli', model: '', defaults_pending: true } : { adapter: 'antigravity_cli', model: '', default_model: 'gemini-x' } } };
+  };
+  await f.context.load_room_models();
+  assert.equal(quick_reads.join(), 'true,false');
+  assert.equal(state.launch.room_models.participants.Gemini.default_model, 'gemini-x');
 });
 
 test("participant model labels distinguish explicit choices, software defaults and unavailable room data", () => {

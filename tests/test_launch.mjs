@@ -10,7 +10,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { adopt_member_profile, borrowed_session, cached_software_models, launch_discussion, launch_projects, pick_directory, launch_settings, room_configuration, room_member, room_member_access, save_launch_projects, save_launch_settings } from '../runner/discussion_launch.mjs';
+import { adopt_member_profile, borrowed_session, cached_software_models, launch_discussion, launch_projects, pick_directory, launch_settings, room_configuration, room_member, room_member_access, room_member_adapter, save_launch_projects, save_launch_settings } from '../runner/discussion_launch.mjs';
 import { api, DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { DiscussionService, DiscussionWithQuestions, read_registry, register_room } from '../runner/discussion_service.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
@@ -1000,6 +1000,34 @@ test('a woken member switches project files between read-only and writable after
   writeFileSync(launched.config_path, JSON.stringify({ ...current, participants: { ...current.participants,
     Gemini: { adapter: 'antigravity_cli', executable: process.execPath, session_id: 'own-agy-conversation' } } }));
   await assert.rejects(room_member_access(f.home, { ...input, name: 'Gemini' }), /自己的 agy 对话/);
+});
+
+test('an idle Codex member switches between App and CLI in a free room and keeps its conversation', async t => {
+  const f = await fixture(t);
+  const owner = randomUUID() + randomUUID();
+  const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token: owner,
+    room: { title: '切换接入', goal: 'x', mode: 'free', members: ['Codex'], submission_id: randomUUID() } }, f.options);
+  const input = { site: f.site, room_id: launched.room.id, token: owner, name: 'Codex', adapter: 'codex' };
+  await assert.rejects(room_member_adapter(f.home, { ...input, token: 'wrong'.repeat(8) }), /403/);
+  await assert.rejects(room_member_adapter(f.home, { ...input, adapter: 'claude' }), /codex_cli/);
+  await assert.rejects(room_member_adapter(f.home, input), /尚无实际 Codex 会话/);
+  const config = load_config(launched.config_path);
+  const store = new DiscussionStore(config.directory);
+  try { store.bind('Codex', 'codex-thread-1'); } finally { store.close(); }
+  writeFileSync(launched.config_path, JSON.stringify({ ...JSON.parse(readFileSync(launched.config_path, 'utf8')),
+    participants: { Codex: { ...JSON.parse(readFileSync(launched.config_path, 'utf8')).participants.Codex, model: 'gpt-6-astra', effort: 'high' } } }));
+  assert.deepEqual(await room_member_adapter(f.home, input), { room_id: launched.room.id, member: 'Codex', adapter: 'codex' });
+  const app = JSON.parse(readFileSync(launched.config_path, 'utf8')).participants.Codex;
+  assert.deepEqual([app.adapter, app.session_id, app.model, app.effort], ['codex', 'codex-thread-1', undefined, undefined]);
+  await room_member_adapter(f.home, { ...input, adapter: 'codex_cli' });
+  assert.equal(JSON.parse(readFileSync(launched.config_path, 'utf8')).participants.Codex.adapter, 'codex_cli');
+  // The running service treats the switch as the same conversation, but still blocks a real change of session or project.
+  const runner = { store: { binding: () => ({ session_id: 'codex-thread-1' }) } };
+  const same = (before, after) => FreeRoomRunner.prototype.same_context.call(runner, 'Codex', JSON.stringify(before), JSON.stringify(after));
+  assert.ok(same(['codex_cli', '', '', '', '', ''], ['codex', '', '', '', '', 'codex-thread-1']));
+  assert.ok(!same(['codex_cli', '', '', '', '', ''], ['codex', '', '', '', '', 'other-thread']));
+  assert.ok(!same(['codex_cli', '', '', 'a', '', ''], ['codex', '', '', 'b', '', '']));
+  assert.ok(!same(['claude', '', '', '', '', ''], ['codex', '', '', '', '', '']));
 });
 
 test('a free room is created with woken, manual and online members chosen one by one', async t => {

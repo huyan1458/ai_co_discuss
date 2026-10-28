@@ -241,6 +241,9 @@ test('room model readback uses registered choices, adds the software settings fo
   writeFileSync(path, JSON.stringify(config));
   // agy keeps its default in the software and answers its native /model; stub that query here.
   const agy = { read_defaults: profile => profile.adapter === 'antigravity_cli' ? { model: 'gemini-4-argon-medium', effort: 'medium' } : { model: '', effort: '' } };
+  // A quick read leaves agy's slow default query for later and says so.
+  assert.deepEqual((await room_models(home, { ...input, quick: true }, { read_defaults: profile => profile.adapter === 'antigravity_cli' ? assert.fail('agy must not be queried') : { model: '', effort: '' } })).participants.Gemini,
+    { defaults_pending: true, adapter: 'antigravity_cli', model: 'gemini-4-argon-high', effort: '', default_model: '', default_effort: '', project_access: 'read', own_project: false });
   assert.deepEqual((await room_models(home, input, agy)).participants.Gemini,
     { adapter: 'antigravity_cli', model: 'gemini-4-argon-high', effort: '', default_model: 'gemini-4-argon-medium', default_effort: 'medium', project_access: 'read', own_project: false });
   assert.deepEqual(await room_models(home, { ...input, room_id: 'missing' }), { room_id: 'missing', registered: false, participants: {}, scheduler: null });

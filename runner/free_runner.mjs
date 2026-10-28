@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { agy_command_rule, atomic_json, deliver_task, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
-import { api } from './discussion_runner.mjs';
+import { api, CODEX_ADAPTERS } from './discussion_runner.mjs';
 import { with_expert_prompt } from './expert_prompts.mjs';
 import { ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, decide_group_order, route_free_message } from './scheduler.mjs';
 
@@ -168,10 +168,21 @@ export class FreeRoomRunner {
       const context = JSON.stringify([item.adapter, item.project_id || '', item.project_name || '', cwd_key(item.cwd), cwd_key(item.workdir), item.session_id || '']);
       const key = `member-context:${name}`;
       const previous = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(key)?.value;
-      if (previous && previous !== context) this.context_errors.set(name, `${name} 已绑定会话的项目、cwd 或接入方式发生变化；请移除后重新邀请`);
+      if (previous && !this.same_context(name, previous, context)) this.context_errors.set(name, `${name} 已绑定会话的项目、cwd 或接入方式发生变化；请移除后重新邀请`);
       else this.store.db.prepare('INSERT INTO metadata VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, context);
     }
     this.config = { ...this.config, ...config, participants: config.participants, members: config.members };
+  }
+  /**
+   * A Codex member switched between App and CLI keeps its conversation: the two entries count as one, and the App's
+   * session may be filled in from the conversation this member is already bound to.
+   */
+  same_context(name, previous, current) {
+    const [before, after] = [JSON.parse(previous), JSON.parse(current)];
+    for (const context of [before, after]) if (CODEX_ADAPTERS.includes(context[0])) context[0] = 'codex';
+    const bound = this.store.binding(name).session_id;
+    if (before[5] !== after[5] && [before[5], after[5]].includes('') && [before[5], after[5]].includes(bound)) after[5] = before[5];
+    return JSON.stringify(before) === JSON.stringify(after);
   }
   /** One bounded iteration: reconcile live executions, then deliver idle members with open requests. */
   async tick() {

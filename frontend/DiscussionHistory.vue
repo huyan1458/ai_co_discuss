@@ -10,7 +10,7 @@ const opened = ref(new Set());
 const render = (text) => window.discuss_markdown.render_markdown(text);
 const when = (value) => value ? new Date(value).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }) : "";
 
-/** Discussions in order with the free stretches around them; counts come from the room's own messages. */
+/** Discussions with the free stretches around them, newest first; counts come from the room's own messages. */
 const segments = computed(() => {
   const items = [];
   let through = 0;
@@ -20,17 +20,17 @@ const segments = computed(() => {
     through = discussion.messages_through;
   });
   if ((room.value.message_count || 0) > through) items.push({ key: "free-tail", kind: "free", count: room.value.message_count - through });
-  return items;
+  return items.reverse();
 });
 
 /**
- * A running discussion shows the live brief once its host has written one (an older brief belongs to the previous
- * discussion); an ended one its snapshot, which discussions before snapshots lack.
+ * An ended discussion shows its snapshot, which discussions before snapshots lack. The room's current consensus sits
+ * above the record, so a running discussion and one whose snapshot is still that consensus point to it instead.
  */
 function conclusion(discussion) {
-  const brief = room.value.host_brief;
-  if (discussion.status !== "concluded") return brief?.text && brief.until > discussion.started_message_id ? { label: "当前简报", brief: brief.text } : null;
+  if (discussion.status !== "concluded") return null;
   if (discussion.state === null) return { missing: true };
+  if (discussion.state === room.value.state_text && discussion.brief === (room.value.host_brief?.text || "") && (discussion.state || discussion.brief)) return { current: true };
   return { label: "结论", brief: discussion.brief, state: discussion.state, until: discussion.state_until };
 }
 
@@ -42,9 +42,9 @@ function toggle(id) {
 </script>
 
 <template>
-  <section class="content-page discussion-history" role="tabpanel" aria-label="讨论记录">
-    <div class="page-heading"><div><h2>讨论记录</h2><p>房间里开启过的每场讨论及其结束时的结论，自由协作的消息按段汇总。</p></div></div>
-    <p v-if="!room.discussions?.length" class="fine-print">还没有开启过讨论。需要时在右栏点“开启讨论”。</p>
+  <section class="merged-section discussion-history" aria-label="讨论记录">
+    <div class="page-heading"><div><h2>讨论记录</h2><p>每场讨论及其结束时的结论，最新的在上；自由协作的消息按段汇总。</p></div></div>
+    <p v-if="!room.discussions?.length" class="fine-print">还没有开启过讨论。</p>
     <ol class="history-timeline">
       <li v-for="item in segments" :key="item.key" :class="`is-${item.kind}`">
         <span class="history-dot" aria-hidden="true"></span>
@@ -55,7 +55,8 @@ function toggle(id) {
             <UBadge :color="STATUS[item.status]?.color || 'neutral'" variant="subtle" size="sm">{{ STATUS[item.status]?.label || item.status }}</UBadge>
           </header>
           <p class="history-meta">{{ when(item.created_at) }} 开始 · {{ item.count }} 条消息<template v-if="item.status === 'concluded' && item.state !== null"> · {{ bridge.stop_reason_label(item) }}</template><template v-if="item.concluded_at"> · {{ when(item.concluded_at) }} 结束</template></p>
-          <p v-if="item.result?.missing" class="fine-print">这场讨论结束于结论快照功能之前，没有保存当时的结论。</p>
+          <p v-if="item.result?.current" class="fine-print">结论即上方的当前共识。</p>
+          <p v-else-if="item.result?.missing" class="fine-print">这场讨论结束于结论快照功能之前，没有保存当时的结论。</p>
           <div v-else-if="item.result" class="history-conclusion">
             <small>{{ item.result.label }}<button v-if="item.result.until" type="button" class="subtle-link" @click="$emit('detail', item.result.until)">整理至 #{{ item.result.until }}</button></small>
             <div v-if="item.result.brief" class="markdown-body" v-html="render(item.result.brief)"></div>

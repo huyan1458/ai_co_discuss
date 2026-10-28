@@ -1105,6 +1105,15 @@ async function set_member_access({ name, project_access }) {
   await load_room_models();
 }
 
+/** Switch an idle Codex member between the App and the CLI; its conversation stays. */
+async function set_member_adapter({ name, adapter }) {
+  const room_id = state.room.id;
+  await local_launch_request("room-member-adapter", { room_id, token: localStorage.getItem(`discuss-access:${room_id}`), name, adapter });
+  if (state.room?.id !== room_id) return;
+  state.launch.room_models = null;
+  await load_room_models();
+}
+
 /** Owner changes use the website; only automatic members need the local service to reconnect. */
 async function change_member({ member_id, name, action, role, latest_id }) {
   const room_id = state.room.id;
@@ -1698,7 +1707,7 @@ async function local_launch_request(action, payload) {
       method: payload === undefined ? "GET" : "POST", headers, credentials: "omit", redirect: "error",
       body: payload === undefined ? undefined : JSON.stringify(payload),
       ...(payload === undefined || ["room-models", "models", "api-check", "scheduler-check"].includes(action)
-        ? { signal: AbortSignal.timeout(["models", "api-check", "scheduler-check"].includes(action) ? MODEL_CATALOG_TIMEOUT_MS : LOCAL_CONNECTION_TIMEOUT_MS) } : {}) });
+        ? { signal: AbortSignal.timeout(["room-models", "models", "api-check", "scheduler-check"].includes(action) ? MODEL_CATALOG_TIMEOUT_MS : LOCAL_CONNECTION_TIMEOUT_MS) } : {}) });
   } catch (error) {
     if (!local_connection) throw error;
     throw new Error("无法连接本机服务：请在这台电脑运行 codiscuss local open，并允许浏览器访问本机网络，再重试原请求");
@@ -1893,15 +1902,33 @@ async function load_room_models() {
     && (previous.loading || previous.participants)) return;
   const current = { room_id: room.id, revision, loading: true, participants: null };
   state.launch.room_models = current;
+  const live = () => state.launch.room_models === current && state.room?.id === room.id;
+  // agy is run to name its default model, which takes seconds; everything else is shown first and agy follows.
+  try {
+    const result = await local_launch_request("room-models", { room_id: room.id, quick: true });
+    if (live() && result.room_id === room.id) Object.assign(current, { participants: result.participants, registered: result.registered, scheduler: result.scheduler || null });
+  } catch (error) {
+    // Unavailable or older bridges leave the model unknown; the failure is kept so the page can say so, and the next refresh retries.
+    current.error = error.message || "读取失败";
+  } finally {
+    current.loading = false;
+    if (live()) publish_view();
+  }
+  const pending = Object.entries(current.participants || {}).filter(([, profile]) => profile.defaults_pending).map(([name]) => name);
+  if (!pending.length || !live()) return;
   try {
     const result = await local_launch_request("room-models", { room_id: room.id });
-    if (state.launch.room_models !== current || state.room?.id !== room.id) return;
-    if (result.room_id === room.id) Object.assign(current, { participants: result.participants, registered: result.registered, scheduler: result.scheduler || null });
-  } catch { /* Unavailable or older bridges leave the model explicitly unknown. */ }
-  finally {
-    current.loading = false;
-    if (state.launch.room_models === current && state.room?.id === room.id) publish_view();
-  }
+    if (live() && result.room_id === room.id) current.participants = result.participants;
+  } catch {
+    // A slow agy that fails to answer keeps its model unknown rather than guessed.
+    for (const name of pending) current.participants[name] = { ...current.participants[name], defaults_pending: false, defaults_failed: true };
+  } finally { if (live()) publish_view(); }
+}
+
+/** Read this computer's saved choices again, as after a failed read. */
+function reload_room_models() {
+  state.launch.room_models = null;
+  return load_room_models();
 }
 
 /** Describe registered launch choices; an empty choice shows what the software's own settings select, or says the software decides. */
@@ -1912,6 +1939,9 @@ function participant_model(name, room, saved) {
   const profile = saved?.room_id === room.id ? saved.participants?.[name] : null;
   if (!profile) return "";
   if (["codex", "antigravity"].includes(profile.adapter)) return "模型与强度由 App 设置";
+  // Only an agy member without a chosen model depends on the default that is read later.
+  if (!profile.model && profile.defaults_pending) return "读取中…";
+  if (!profile.model && profile.defaults_failed) return "";
   const model = profile.model || profile.default_model || "软件默认模型";
   // agy's default effort belongs to its default model, so a chosen model keeps its own default instead.
   const default_effort = profile.adapter === "antigravity_cli" && profile.model ? "" : profile.default_effort;
@@ -3532,7 +3562,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form },
   request: request_json, identities: IDENTITIES, display_name, sources: SOURCE_LABELS, phases: PHASE_LABELS,
-  set_member_access, runtime_label, execution_label, limits_label, stop_reason_label, participant_model, participant_access, can_retry_execution,
+  set_member_access, set_member_adapter, reload_room_models, runtime_label, execution_label, limits_label, stop_reason_label, participant_model, participant_access, can_retry_execution,
   turns: TURN_LABELS, turn_label, turn_guidance, progress_round, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();

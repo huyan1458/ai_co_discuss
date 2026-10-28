@@ -5,6 +5,7 @@ import InviteDialog from "./InviteDialog.vue";
 import StartDiscussionDialog from "./StartDiscussionDialog.vue";
 import SpeakingOrder from "./SpeakingOrder.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
+import { busy, member_actions } from "./member-actions.js";
 
 const { view, bridge, act, pending } = inject("discussion");
 const LIVE = ["dispatched", "started"];
@@ -17,7 +18,6 @@ const host = computed(() => (free.value.members || []).find((member) => member.r
 // Rows follow the room's speaking order; members who left are listed after it.
 const member_named = (name) => (free.value.members || []).find((member) => member.name === name);
 const away_names = computed(() => (free.value.members || []).filter((member) => member.status === "away").map((member) => member.name));
-const busy = (member) => member.pending > 0 || LIVE.includes(member.execution?.status);
 const name_of = (member_id) => bridge.display_name((free.value.members || []).find((member) => member.id === member_id)?.name || "成员");
 
 /** Status dot colour, matching the discussion progress board. */
@@ -108,23 +108,9 @@ function duration(seconds) {
   return `${Math.floor(seconds / 3600)}小时${Math.floor((seconds % 3600) / 60)}分`;
 }
 
-/** Owner actions for one member, kept in its menu like the discussion board's member actions. */
+/** The rail's quick entry to a member's actions; the room overview lays the same list out in full. */
 function member_menu(member) {
-  const item = (label, icon, action, extra = {}) => ({ label, icon, onSelect: () => act("change_member", { member_id: member.id, name: member.name, action, ...extra }) });
-  const access = view.value.access;
-  const available = access?.members?.find((entry) => entry.name === member.name)?.available;
-  return [[
-    ...(member.access === "manual" ? [{ label: "复制启动指令（含凭证）", icon: "i-lucide-rocket", disabled: !access?.can_manage || !available, onSelect: () => act("copy_member_launch", member.name) }] : []),
-    { label: "编辑描述", icon: "i-lucide-user-pen", disabled: !access?.can_manage, onSelect: () => { describing.value = member.name; } },
-    { label: "复制参与说明", icon: "i-lucide-copy", disabled: !access?.can_manage, onSelect: () => act("copy_member_join", member.name) },
-    ...(member.access !== "online" ? [{ label: "下载私有配置", icon: "i-lucide-download", disabled: !access?.can_manage || !available, onSelect: () => act("download_member_access", member.name) }] : []),
-    ...(member.access === "manual" ? [{ label: "复制凭证文本", icon: "i-lucide-key-round", disabled: !access?.can_manage || !available, onSelect: () => act("copy_member_access_text", member.name) }] : []),
-  ], [
-    ...(busy(member) ? [item("停止", "i-lucide-square", "interrupt")] : []),
-    ...(member.access === "online" && member.pending ? [{ label: "复制阅读通知", icon: "i-lucide-copy", onSelect: () => act("copy_online_notice", member.name) }] : []),
-    ...(member.status === "active" && member.access !== "online" && member.role !== "host" ? [item("设为主持人", "i-lucide-crown", "role", { role: "host" })] : []),
-    member.status === "active" ? item("离开", "i-lucide-log-out", "away") : { ...item("请回", "i-lucide-log-in", "rejoin"), disabled: member.access === "runner" && !view.value.launch.available },
-  ], [{ ...item("移除", "i-lucide-trash-2", "remove"), color: "error" }]];
+  return member_actions(member, { view: view.value, act, describe: (name) => { describing.value = name; } });
 }
 
 const inviting = ref(false);
