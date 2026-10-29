@@ -13,6 +13,8 @@ import { createInterface } from 'node:readline';
 import { DatabaseSync } from 'node:sqlite';
 
 const FORK_TIMEOUT_MS = 60_000;
+// Software whose session this machine can branch; the website lists taken-back executions only for these members.
+export const BRANCHABLE_ADAPTERS = ['claude', 'codex_cli', 'antigravity_cli'];
 
 /** The task file name an execution's prompt carries. */
 export const execution_marker = id => `free-${id}.task.json`;

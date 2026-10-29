@@ -17,7 +17,7 @@ import { EXPERT_PROMPT_PRESETS, expert_prompt } from '../runner/expert_prompts.m
 import { system_prompt } from '../runner/api_participant.mjs';
 import { assert_shared_home, DiscussionService, FreeRoomWithDiscussion, migrate_service_home, read_registry, register_room, service_pid, service_ready, start_service, sweep_service_home, unregister_room } from '../runner/discussion_service.mjs';
 import { launch_discussion, restore_room, room_models, room_profiles } from '../runner/discussion_launch.mjs';
-import { activity_phase, activity_tool, MAX_EXECUTION_NOTES, MAX_EXECUTION_SEGMENTS, MAX_NOTES_PER_REPORT, MAX_SEGMENTS_PER_REPORT, SegmentLog, progress_note, agy_command_rule, agy_rule, antigravity_project, claude_exit_error, claude_rule_path, codex_permissions, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
+import { adopted_fork, activity_phase, activity_tool, MAX_EXECUTION_NOTES, MAX_EXECUTION_SEGMENTS, MAX_NOTES_PER_REPORT, MAX_SEGMENTS_PER_REPORT, SegmentLog, progress_note, agy_command_rule, agy_rule, antigravity_project, claude_exit_error, claude_rule_path, codex_permissions, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
 import { certainty, decide, decide_group_order, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
 
@@ -1049,6 +1049,28 @@ test('claude edits a project and runs any command only when the launch grants wr
   assert.equal(args[args.indexOf('--permission-mode') + 1], 'auto');
   assert.ok(!args.includes('Bash') && !args.includes(`Edit(${claude_rule_path(project)}/**)`));
   assert.ok(args.includes('Bash(codiscuss room *)'), 'website commands never wait for the classifier');
+});
+
+test('a taken-over Claude member forks its own session on the first hosted turn and resumes the fork afterward', async t => {
+  const original = 'original-session-1';
+  const own = { project_access: 'own', session_id: original };
+  const first = adopted_fork(own, { session_id: original }, () => true);
+  assert.equal(first.fork.from, original);
+  assert.notEqual(first.session_id, original);
+  assert.deepEqual(adopted_fork(own, { session_id: first.session_id }, () => true), { session_id: first.session_id }, 'a written fork is resumed');
+  assert.deepEqual(adopted_fork(own, { session_id: first.session_id }, () => false), { session_id: first.session_id, fork: { from: original, at: '' } },
+    'a fork that was never written is retried under the same ID');
+  assert.deepEqual(adopted_fork(own, { session_id: '' }, () => false), { session_id: '' }, 'a rewind back to the start opens a new session');
+  assert.deepEqual(adopted_fork({ project_access: 'write', session_id: original }, { session_id: original }), { session_id: original },
+    'a session the owner lent at invitation is resumed as before');
+  const result = [{ type: 'result', is_error: false, result: '完成' }];
+  const f = await cli_delivery_fixture(t, 'claude', { events: result, config: { ...own }, binding: { session_id: original } });
+  const args = f.calls[0].args;
+  assert.equal(args[args.indexOf('--resume') + 1], original);
+  assert.ok(args.includes('--fork-session'));
+  const forked = args[args.indexOf('--session-id') + 1];
+  assert.notEqual(forked, original);
+  assert.deepEqual(f.bindings, [forked]);
 });
 
 test('tasks state whether the discussion project is read-only or writable', async t => {

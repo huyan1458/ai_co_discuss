@@ -8,6 +8,7 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CodexAppClient } from './codex_app_client.mjs';
 import { agy_command_rule, runs_commands } from './expert_prompts.mjs';
+import { session_exists } from './session_cut.mjs';
 
 const CALL_TIMEOUT_MS = 30_000;
 const CLI_DIAGNOSTIC_CHARS = 1000;
@@ -445,7 +446,20 @@ function watch_activity(adapter, stream, task) {
   });
 }
 
+/**
+ * A taken-over manual Claude member's own window may still be open, and resuming its session from here would split that
+ * file into two branches neither side sees in full. Its first hosted turn therefore forks the session, and later turns
+ * resume the fork; a fork whose session was never written is retried under the same ID.
+ */
+export function adopted_fork(config, binding, exists = id => session_exists('claude', id)) {
+  if (config.project_access !== 'own' || !config.session_id || binding.fork || !binding.session_id) return binding;
+  if (binding.session_id !== config.session_id && exists(binding.session_id)) return binding;
+  const session_id = binding.session_id === config.session_id ? randomUUID() : binding.session_id;
+  return { ...binding, session_id, fork: { from: config.session_id, at: '' } };
+}
+
 async function claude_delivery(config, binding, task, spawn_process = spawn) {
+  binding = adopted_fork(config, binding);
   const session_id = binding.session_id || randomUUID();
   try { bind_access(task.access_path, session_id); }
   catch (error) { throw not_sent(error); }

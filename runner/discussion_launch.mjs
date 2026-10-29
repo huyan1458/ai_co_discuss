@@ -14,7 +14,7 @@ import { session_settings, software_defaults, software_effort, software_models }
 import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
 import { BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT } from './expert_prompts.mjs';
-import { branch_session } from './session_cut.mjs';
+import { BRANCHABLE_ADAPTERS, branch_session } from './session_cut.mjs';
 import { acquire_lock, api, CODEX_ADAPTERS, DiscussionStore, service_drafts, task_files, validate_config } from './discussion_runner.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 
@@ -690,7 +690,7 @@ function codex_session_adapter(session_id, env = process.env) {
 }
 
 /**
- * Register a manual Claude or Codex expert's own session as a hosted participant, so the service resumes it for later turns.
+ * Register a manual Claude, Codex or agy expert's own session as a hosted participant, so the service resumes it for later turns.
  * Returns the adapter used. Throws when the local software is not configured or the session is not found on this machine; the member then stays manual.
  */
 export function adopt_member_profile(home, path, name, session_id, client = 'claude', member_token = '') {
@@ -811,7 +811,6 @@ function register_copied_room(home, input, local, participants, keep_manual, see
 }
 
 // Software whose session a fork branches; other local members start a new conversation in the forked room.
-const BRANCHED_ADAPTERS = ['claude', 'codex_cli', 'antigravity_cli'];
 
 /**
  * Register a room forked from another on this machine: each local member continues from its own session as it stood
@@ -837,7 +836,7 @@ export async function fork_room(home, raw) {
     if (!runners.has(name)) continue;
     try {
       const profile = participant_profile(name, {}, { cwd: local.cwd, adopt: true, participants: { [name]: exported } }, false);
-      if (!profile.session_id || !BRANCHED_ADAPTERS.includes(profile.adapter)) {
+      if (!profile.session_id || !BRANCHABLE_ADAPTERS.includes(profile.adapter)) {
         delete profile.session_id;
         participants[name] = profile;
         members.push({ name, status: 'fresh' });

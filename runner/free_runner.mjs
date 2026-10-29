@@ -6,7 +6,7 @@ import { basename, join, resolve } from 'node:path';
 import { atomic_json, deliver_task, SegmentLog, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
 import { api, CODEX_ADAPTERS, read_rule } from './discussion_runner.mjs';
 import { free_task_text, with_expert_prompt } from './expert_prompts.mjs';
-import { branch_session, session_exists } from './session_cut.mjs';
+import { BRANCHABLE_ADAPTERS, branch_session, session_exists } from './session_cut.mjs';
 import { ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, decide_group_order, route_free_message } from './scheduler.mjs';
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -17,8 +17,6 @@ const ACTIVITY_REPORT_MS = 10_000;
 const PROGRESS_REPORT_MS = 2_000;
 const MAX_DELIVERY_ATTEMPTS = 3;
 const LIVE = ['reserving', 'delivering', 'sidecar_pending', 'running'];
-// Software whose session a rewind can cut; the website lists only these members' taken-back executions.
-const CUTTABLE_ADAPTERS = ['claude', 'codex_cli', 'antigravity_cli'];
 const MAX_HASHED_BYTES = 5 * 1024 * 1024;
 const GIT_TIMEOUT_MS = 15_000;
 
@@ -383,7 +381,7 @@ export class FreeRoomRunner {
     const pending = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(key)?.value;
     if (pending && !session_exists(adapter.adapter, binding.session_id)) { binding.fork = JSON.parse(pending); return ''; }
     if (pending) this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(key);
-    if (!binding.session_id || !execution.rewound_executions?.length || !CUTTABLE_ADAPTERS.includes(adapter.adapter)) return '';
+    if (!binding.session_id || !execution.rewound_executions?.length || !BRANCHABLE_ADAPTERS.includes(adapter.adapter)) return '';
     try {
       const cut = await branch_session(adapter, binding.session_id, execution.rewound_executions);
       if (!cut) return '';

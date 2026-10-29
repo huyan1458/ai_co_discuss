@@ -58,7 +58,7 @@ const manual = computed(() => props.mode === "manual");
 const MANUAL_NOTES = {
   Codex: "已实测：消息实时显示在已开窗口。",
   Gemini: "已实测：已开窗口需重启才显示后台发言。",
-  Claude: "已实测：后台接管会分叉，原窗口看不到。",
+  Claude: "托管时另起分叉副本：原窗口会话不变，但看不到托管发言。",
 };
 const manual_note = computed(() => MANUAL_NOTES[bridge.platform_of(props.name)] || "");
 const can_bind = computed(() => automatic.value && props.session !== null && bridge.launch_can_bind_session(props.name, view.value.launch));
