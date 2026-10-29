@@ -63,6 +63,14 @@ async function codex_delivery(config, binding, task) {
   if (binding.session_id) {
     try { bind_access(task.access_path, binding.session_id); }
     catch (error) { throw not_sent(error); }
+    // `codex queue` reaches only a chat the App has loaded; a fork made after a rewind, or a chat after the App restarted,
+    // is not loaded until a message is sent through the App itself (tested on App tools, 2026-10).
+    if (await codex_unloaded(config, binding.session_id)) {
+      const app = new CodexAppClient(config.pipe_path);
+      try { await app.open(); await app.send_message(binding.session_id, task.prompt); }
+      finally { app.close(); }
+      return { session_id: binding.session_id, status: 'accepted' };
+    }
     const receipt = await run_program(config.executable, ['queue', '--thread', binding.session_id, '--message', task.prompt], { timeout: CALL_TIMEOUT_MS });
     return { session_id: binding.session_id, status: 'accepted', receipt };
   }
@@ -76,6 +84,14 @@ async function codex_delivery(config, binding, task) {
     bind_access(task.access_path, result.thread_id);
     return { session_id: result.thread_id, status: 'accepted' };
   } finally { app.close(); }
+}
+
+/** Whether the running App has not loaded a chat; when the App cannot tell, the queue is used as before. */
+async function codex_unloaded(config, thread_id) {
+  const app = new CodexAppClient(config.pipe_path);
+  try { await app.open(); return await app.thread_status(thread_id) === 'notLoaded'; }
+  catch { return false; }
+  finally { app.close(); }
 }
 
 /** Match the real saved project and its directory; a prompt cannot grant file access. */
@@ -733,7 +749,8 @@ async function antigravity_delivery(config, binding, task) {
   try {
     mkdirSync(directory, { recursive: true });
     const ready = JSON.parse(readFileSync(join(directory, 'ready.json'), 'utf8'));
-    if (config.project_id || config.project_name || config.cwd) {
+    // Only a new conversation is created in the Sidecar's project; an existing one is reached from any project.
+    if (!binding.session_id && (config.project_id || config.project_name || config.cwd)) {
       const project = antigravity_project(config);
       if (ready.project_id !== project.id) throw new Error('Sidecar 所属项目与配置不符，请先运行 setup-sidecar');
     }

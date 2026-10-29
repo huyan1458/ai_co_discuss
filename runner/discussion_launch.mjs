@@ -9,7 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
-import { atomic_json } from './discussion_adapters.mjs';
+import { atomic_json, setup_sidecar } from './discussion_adapters.mjs';
 import { session_settings, software_defaults, software_effort, software_models } from './discussion_models.mjs';
 import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
@@ -529,8 +529,8 @@ export function borrowed_session(name, profile, room_cwd, env = process.env) {
     if (!session_files(sessions).some(path => path.endsWith(`-${id}.jsonl`))) throw new Error(`${name}：本机找不到 Codex 会话 ${id}，请核对会话 ID`);
     return profile;
   }
-  if (profile.adapter === 'antigravity_cli') {
-    if (!existsSync(join(homedir(), '.gemini', 'antigravity-cli', 'conversations', `${id}.db`))) throw new Error(`${name}：本机找不到 agy 会话 ${id}，请核对会话 ID`);
+  if (['antigravity', 'antigravity_cli'].includes(profile.adapter)) {
+    if (!existsSync(agy_conversation(profile.adapter, id))) throw new Error(`${name}：本机找不到 agy 会话 ${id}，请核对会话 ID`);
     return profile;
   }
   if (profile.adapter !== 'claude') throw new Error(`${name}：只有 Codex、Claude 与 agy 可以接入已有会话`);
@@ -689,6 +689,11 @@ function codex_session_adapter(session_id, env = process.env) {
   return /"originator":"Codex Desktop"/.test(meta) ? 'codex' : 'codex_cli';
 }
 
+/** Where the Antigravity App or agy CLI keeps one conversation; the two keep separate stores. */
+function agy_conversation(adapter, session_id) {
+  return join(homedir(), '.gemini', adapter === 'antigravity' ? 'antigravity' : 'antigravity-cli', 'conversations', `${session_id}.db`);
+}
+
 /**
  * Register a manual Claude, Codex or agy expert's own session as a hosted participant, so the service resumes it for later turns.
  * Returns the adapter used. Throws when the local software is not configured or the session is not found on this machine; the member then stays manual.
@@ -697,10 +702,14 @@ export function adopt_member_profile(home, path, name, session_id, client = 'cla
   const release = acquire_lock(join(dirname(path), 'configuration-edit'));
   try {
     const config = configuration_snapshot(path).config;
-    const adapter = client === 'codex' ? codex_session_adapter(session_id) : client === 'antigravity' ? 'antigravity_cli' : 'claude';
+    const adapter = client === 'codex' ? codex_session_adapter(session_id)
+      : client === 'antigravity' ? (existsSync(agy_conversation('antigravity', session_id)) ? 'antigravity' : 'antigravity_cli') : 'claude';
+    // An App conversation is reached through this room's own Sidecar, which the App starts as soon as it is configured.
+    const sidecar = adapter === 'antigravity' ? { ipc_directory: join(dirname(path), 'agy-app-sidecar') } : {};
     // A manually started member keeps its own session's permissions; the room's 只读 / 可写 does not apply to it.
-    const input = { cwd: config.cwd, adopt: true, participants: { [name]: { adapter, session_id, project_access: 'own' } } };
+    const input = { cwd: config.cwd, adopt: true, participants: { [name]: { adapter, session_id, project_access: 'own', ...sidecar } } };
     const profile = borrowed_session(name, participant_profile(name, launch_settings(home).participants, input, false), config.cwd);
+    if (sidecar.ipc_directory) setup_sidecar(sidecar);
     // A free room delivers with each member's own credential; the browser-made one is not kept locally, so the owner issues a new one.
     const next = { ...config, participants: { ...config.participants, [name]: profile },
       ...(member_token ? { members: { ...config.members, [name]: { token: member_token, pending: '' } } } : {}) };

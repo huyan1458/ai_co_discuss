@@ -67,6 +67,19 @@ export class CodexAppClient {
     return { thread_id: data.threadId, title: data.title || title };
   }
 
+  /** The App's status of one chat, e.g. `idle`, `active` or `notLoaded`. */
+  async thread_status(thread_id) {
+    const data = await this.call_tool('read_thread', thread_id, { threadId: thread_id, turnLimit: 1 });
+    if (!data?.thread?.status?.type) throw new Error('桌面尚未返回会话状态');
+    return data.thread.status.type;
+  }
+
+  /** Send a message through the App itself, which loads a chat it has not opened yet. */
+  async send_message(thread_id, prompt) {
+    const data = await this.call_tool('send_message_to_thread', thread_id, { threadId: thread_id, prompt });
+    if (data?.threadId !== thread_id) throw new Error('桌面尚未确认消息送达的会话');
+  }
+
   /** Send the same length-prefixed JSON-RPC frames as the bundled app-tools MCP. */
   request(method, params) {
     return new Promise((resolve_result, reject) => {

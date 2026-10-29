@@ -14,7 +14,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 const FORK_TIMEOUT_MS = 60_000;
 // Software whose session this machine can branch; the website lists taken-back executions only for these members.
-export const BRANCHABLE_ADAPTERS = ['claude', 'codex_cli', 'antigravity_cli'];
+export const BRANCHABLE_ADAPTERS = ['claude', 'codex', 'codex_cli', 'antigravity_cli'];
 
 /** The task file name an execution's prompt carries. */
 export const execution_marker = id => `free-${id}.task.json`;
@@ -160,7 +160,8 @@ function agy_branch(session_id, markers, always, home) {
 export async function branch_session(profile, session_id, executions, { always = false, env = process.env, home = homedir(), spawn_process = spawn } = {}) {
   const markers = executions.map(execution_marker);
   if (profile.adapter === 'claude') return claude_branch(session_id, markers, always, env, home);
-  if (profile.adapter === 'codex_cli') return codex_branch(profile, session_id, markers, always, env, home, spawn_process);
+  // A Codex App chat is stored like a CLI one; the App loads the fork when the first message is sent to it.
+  if (['codex', 'codex_cli'].includes(profile.adapter)) return codex_branch(profile, session_id, markers, always, env, home, spawn_process);
   if (profile.adapter === 'antigravity_cli') return agy_branch(session_id, markers, always, home);
   throw new Error(`${profile.adapter} 的会话不能由本机截断`);
 }

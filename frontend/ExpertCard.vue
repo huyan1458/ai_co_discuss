@@ -57,7 +57,7 @@ const manual = computed(() => props.mode === "manual");
 // A manual card has nothing to configure, so the front states what testing showed about taking over a window that is already open.
 const MANUAL_NOTES = {
   Codex: "已实测：消息实时显示在已开窗口。",
-  Gemini: "已实测：已开窗口需重启才显示后台发言。",
+  Gemini: "已实测：App 会话实时显示；agy CLI 窗口需重启才显示后台发言。",
   Claude: "托管时另起分叉副本：原窗口会话不变，但看不到托管发言。",
 };
 const manual_note = computed(() => MANUAL_NOTES[bridge.platform_of(props.name)] || "");

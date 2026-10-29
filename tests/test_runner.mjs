@@ -6,6 +6,7 @@ import { EventEmitter, once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { basename, join, relative, resolve } from 'node:path';
 import { createServer } from 'node:http';
+import { createServer as createNetServer } from 'node:net';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import vm from 'node:vm';
@@ -1049,6 +1050,47 @@ test('claude edits a project and runs any command only when the launch grants wr
   assert.equal(args[args.indexOf('--permission-mode') + 1], 'auto');
   assert.ok(!args.includes('Bash') && !args.includes(`Edit(${claude_rule_path(project)}/**)`));
   assert.ok(args.includes('Bash(codiscuss room *)'), 'website commands never wait for the classifier');
+});
+
+/** A Codex desktop app-tools pipe that reports one chat status and records the messages sent through it. */
+async function fake_codex_app(t, status) {
+  const sent = [];
+  const server = createNetServer(socket => {
+    let buffer = Buffer.alloc(0);
+    const reply = (id, result) => {
+      const payload = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id, result }));
+      const frame = Buffer.alloc(4 + payload.length); frame.writeUInt32LE(payload.length); payload.copy(frame, 4); socket.write(frame);
+    };
+    const tool = data => ({ success: true, contentItems: [{ type: 'inputText', text: JSON.stringify(data) }] });
+    socket.on('data', chunk => {
+      buffer = Buffer.concat([buffer, chunk]);
+      while (buffer.length >= 4 && buffer.length >= buffer.readUInt32LE() + 4) {
+        const request = JSON.parse(buffer.subarray(4, buffer.readUInt32LE() + 4).toString('utf8'));
+        buffer = buffer.subarray(buffer.readUInt32LE() + 4);
+        if (request.method === 'tools/list') reply(request.id, { tools: ['create_thread', 'read_thread', 'send_message_to_thread'].map(name => ({ name, namespace: 'codex_app' })) });
+        else if (request.params.tool === 'read_thread') reply(request.id, tool({ thread: { id: request.params.arguments.threadId, status: { type: status } } }));
+        else if (request.params.tool === 'send_message_to_thread') { sent.push(request.params.arguments); reply(request.id, tool({ threadId: request.params.arguments.threadId })); }
+      }
+    });
+  });
+  const pipe_path = process.platform === 'win32' ? String.raw`\\.\pipe\codiscuss-test-${randomUUID()}` : join(mkdtempSync(join(tmpdir(), 'codex-pipe-')), 'app.sock');
+  await new Promise(resolve_listen => server.listen(pipe_path, resolve_listen));
+  t.after(() => server.close());
+  return { pipe_path, sent };
+}
+
+test('a Codex App chat the App has not loaded gets its message through the App, a loaded one through the queue', async t => {
+  const access_path = join(mkdtempSync(join(tmpdir(), 'codex-app-access-')), 'access.json');
+  writeFileSync(access_path, JSON.stringify({ token: 'test-only', session_id: '' }));
+  const task = { id: 'free-1', participant: 'Codex', access_path, prompt: '请处理 #12' };
+  const unloaded = await fake_codex_app(t, 'notLoaded');
+  const result = await deliver_task({ adapter: 'codex', executable: process.execPath, pipe_path: unloaded.pipe_path }, { session_id: 'forked-thread' }, task);
+  assert.deepEqual(result, { session_id: 'forked-thread', status: 'accepted' });
+  assert.deepEqual(unloaded.sent, [{ threadId: 'forked-thread', prompt: '请处理 #12' }]);
+  const loaded = await fake_codex_app(t, 'idle');
+  // The queue runs the configured executable; node cannot load a module named `queue`, which shows the queue was used.
+  await assert.rejects(deliver_task({ adapter: 'codex', executable: process.execPath, pipe_path: loaded.pipe_path }, { session_id: 'open-thread' }, task), /软件退出码/);
+  assert.deepEqual(loaded.sent, []);
 });
 
 test('a taken-over Claude member forks its own session on the first hosted turn and resumes the fork afterward', async t => {

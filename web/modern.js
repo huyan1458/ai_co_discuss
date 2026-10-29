@@ -48372,7 +48372,7 @@ var xJ = ["data-identity", "data-face"], SJ = ["inert", "aria-hidden"], CJ = { c
 		}
 		let x = Z(() => !i.value.launch.available && i.value.launch.relay?.clients[a.platform_of(n.name)]), S = Z(() => m.value.find((e) => e.value === (x.value || p.value.adapter))?.label || (i.value.launch.relay && !i.value.launch.available ? "电脑上未配置" : "待选择 App / CLI")), C = Z(() => n.mode === "manual"), w = {
 			Codex: "已实测：消息实时显示在已开窗口。",
-			Gemini: "已实测：已开窗口需重启才显示后台发言。",
+			Gemini: "已实测：App 会话实时显示；agy CLI 窗口需重启才显示后台发言。",
 			Claude: "托管时另起分叉副本：原窗口会话不变，但看不到托管发言。"
 		}, T = Z(() => w[a.platform_of(n.name)] || ""), E = Z(() => g.value && n.session !== null && a.launch_can_bind_session(n.name, i.value.launch)), D = Z(() => !!(p.value.session_id || n.session?.trim())), O = Z(() => g.value && m.value.length > 0 && !(i.value.launch.relay && !i.value.launch.available)), k = Z(() => n.mode === "online" ? `设置 ${n.name} 的参与方式` : `配置 ${n.name} 的启动方式`), A = Z(() => a.launch_model_state(n.name, i.value.launch)), ee = Z(() => !!(g.value && A.value.supported)), te = Z(() => ee.value && ge.value.length ? "补齐上方连接后，可在这里选择模型与思考强度。" : p.value.adapter ? "模型与思考强度在 App 原聊天中选择，本页不覆盖 App 设置。" : "先选择软件入口。支持启动参数的 CLI 可在这里设置模型与强度。"), ne = {
 			low: "Low",
@@ -48934,7 +48934,7 @@ var xJ = ["data-identity", "data-face"], SJ = ["inert", "aria-hidden"], CJ = { c
 			], 42, xJ);
 		};
 	}
-}, [["__scopeId", "data-v-6ae3b29a"]]), vY = ["aria-label"], yY = [
+}, [["__scopeId", "data-v-8bfb420b"]]), vY = ["aria-label"], yY = [
 	"disabled",
 	"title",
 	"aria-label",

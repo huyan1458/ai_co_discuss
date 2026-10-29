@@ -1375,7 +1375,7 @@ def retract_message(connection, room_id, message_id, token):
 
 
 # Software whose session the runner can cut before a taken-back execution; an API member rebuilds its context each time.
-CUTTABLE_ADAPTERS = ("claude", "codex_cli", "antigravity_cli")
+CUTTABLE_ADAPTERS = ("claude", "codex", "codex_cli", "antigravity_cli")
 # Executions a rewind takes back: any touching a message from the rewind point on, and any still running.
 REWOUND_EXECUTIONS = """SELECT e.id,e.member_id FROM member_executions e WHERE e.room_id=? AND (e.status IN ('dispatched','started')
     OR EXISTS(SELECT 1 FROM member_requests r WHERE r.execution_id=e.id AND (r.message_id>=? OR r.answer_id>=?))) ORDER BY e.id"""
@@ -1569,7 +1569,7 @@ def discussion_member_action(connection, room_id, member_id, token, payload):
     save_discussion_experts(connection, room_id, experts)
 
 
-ADOPTABLE_ADAPTERS = ("claude", "codex", "codex_cli", "antigravity_cli")
+ADOPTABLE_ADAPTERS = ("claude", "codex", "codex_cli", "antigravity", "antigravity_cli")
 
 
 def adopt_manual_member(connection, room_id, member, payload):

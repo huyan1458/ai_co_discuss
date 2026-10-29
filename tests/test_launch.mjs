@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { request as http_request } from 'node:http';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
@@ -1261,7 +1261,7 @@ test('a manual Codex expert is hosted through the app for a desktop chat and the
   }
 });
 
-test('a manual agy expert\'s reported conversation is hosted under its own project, and a missing conversation is refused', async t => {
+test('a manual agy expert\'s reported conversation is hosted under its own project, an App one through a Sidecar, and a missing conversation is refused', async t => {
   const f = await fixture(t);
   const home = join(f.directory, 'agy-user-home'), conversation_id = randomUUID();
   const launched = await launch_discussion(f.home, { ...f.input, token: randomUUID() + randomUUID() }, f.options);
@@ -1275,6 +1275,18 @@ test('a manual agy expert\'s reported conversation is hosted under its own proje
     assert.equal(adopt_member_profile(f.home, launched.config_path, 'Gemini-2', conversation_id, 'antigravity'), 'antigravity_cli');
     const profile = load_config(launched.config_path).participants['Gemini-2'];
     assert.deepEqual([profile.adapter, profile.session_id], ['antigravity_cli', conversation_id]);
+    // An App conversation lives in the App's own store and is reached through a Sidecar the App starts for this room.
+    const app_id = randomUUID();
+    mkdirSync(join(home, '.gemini', 'antigravity', 'conversations'), { recursive: true });
+    writeFileSync(join(home, '.gemini', 'antigravity', 'conversations', `${app_id}.db`), '');
+    assert.equal(adopt_member_profile(f.home, launched.config_path, 'Gemini-3', app_id, 'antigravity'), 'antigravity');
+    const app = load_config(launched.config_path).participants['Gemini-3'];
+    assert.deepEqual([app.adapter, app.session_id, app.project_access], ['antigravity', app_id, 'own']);
+    const sidecars = JSON.parse(readFileSync(join(home, '.gemini', 'config', 'config.json'), 'utf8')).sidecars;
+    assert.deepEqual(Object.values(sidecars).map(item => [item.enabled, item.projectId]), [[true, 'outside-of-project']]);
+    const [sidecar_id] = Object.keys(sidecars);
+    const sidecar = JSON.parse(readFileSync(join(home, '.gemini', 'config', 'sidecars', sidecar_id, 'sidecar.json'), 'utf8'));
+    assert.equal(resolve(sidecar.env.CODISCUSS_IPC_DIRECTORY), resolve(app.ipc_directory));
   } finally {
     for (const [key, value] of Object.entries(previous)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
   }

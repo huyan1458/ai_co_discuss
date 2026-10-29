@@ -2761,7 +2761,7 @@ async function retract_message(database, room_id, message_id, token) {
 }
 
 // Software whose session the runner can cut before a taken-back execution; an API member rebuilds its context each time.
-const CUTTABLE_ADAPTERS = ["claude", "codex_cli", "antigravity_cli"];
+const CUTTABLE_ADAPTERS = ["claude", "codex", "codex_cli", "antigravity_cli"];
 // Executions a rewind takes back: any touching a message from the rewind point on, and any still running.
 const REWOUND_EXECUTIONS = `SELECT e.id,e.member_id FROM member_executions e WHERE e.room_id=? AND (e.status IN ('dispatched','started')
   OR EXISTS(SELECT 1 FROM member_requests r WHERE r.execution_id=e.id AND (r.message_id>=? OR r.answer_id>=?))) ORDER BY e.id`;
@@ -3233,7 +3233,7 @@ async function handle_free_api(database, request, parts) {
     } else if (payload.action === "adopt") {
       const reported = await database.prepare("SELECT session_id FROM member_sessions WHERE member_id=?").bind(member.id).first();
       if (!await registered_at(database, member)) throw new HttpError(400, "成员尚未注册，不能转为托管");
-      if (!reported || reported.session_id !== payload.session_id || !["claude", "codex", "codex_cli", "antigravity_cli"].includes(payload.adapter)) throw new HttpError(400, "成员尚未上报与之相符的会话，不能转为托管");
+      if (!reported || reported.session_id !== payload.session_id || !["claude", "codex", "codex_cli", "antigravity", "antigravity_cli"].includes(payload.adapter)) throw new HttpError(400, "成员尚未上报与之相符的会话，不能转为托管");
       if (member.access !== "manual" || member.status !== "active") throw new HttpError(400, "只有在场的手动成员可以转为托管");
       const hashed = payload.token === undefined ? null : await runtime_hash(payload.token);
       if (hashed !== null) await require_fresh_member_hash(database, room_id, hashed);
@@ -3322,7 +3322,7 @@ async function handle_discussion_members(database, request, parts) {
     } else if (payload.action === "adopt") {
       const reported = await database.prepare("SELECT session_id FROM member_sessions WHERE member_id=?").bind(member.id).first();
       if (!await registered_at(database, member)) throw new HttpError(400, "成员尚未注册，不能转为托管");
-      if (!reported || reported.session_id !== payload.session_id || !["claude", "codex", "codex_cli", "antigravity_cli"].includes(payload.adapter)) throw new HttpError(400, "成员尚未上报与之相符的会话，不能转为托管");
+      if (!reported || reported.session_id !== payload.session_id || !["claude", "codex", "codex_cli", "antigravity", "antigravity_cli"].includes(payload.adapter)) throw new HttpError(400, "成员尚未上报与之相符的会话，不能转为托管");
       if (member.access !== "manual" || member.status !== "active" || room.runtime?.mode !== "automatic") throw new HttpError(400, "只有全自动讨论中在场的手动专家可以转为托管");
       await database.batch([
         database.prepare("UPDATE room_members SET access='runner',adapter=?,session_mode='borrowed' WHERE id=?").bind(payload.adapter, member.id),
