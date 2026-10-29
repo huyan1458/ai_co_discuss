@@ -113,13 +113,14 @@ export const READ_RULE = '读含中文的文件用 rg --encoding utf-8 . 文件�
  * (messages, read point, execution, role, credentials), the skills it lists say how to use them, and `instructions`
  * holds only the limits no skill can know. `access_file` is set where the credential is not bound to the process.
  */
-export function free_task_text({ name, discussion, profile, cli, room, messages, read_after, execution_id, task_path, draft_directory, access_file = '', read_rule = '' }) {
+export function free_task_text({ name, discussion, profile, cli, room, messages, read_after, execution_id, task_path, access_file = '', read_rule = '' }) {
   const scope = discussion ? `讨论进行中，用户直接向你提问（${messages}）：这不是你的发言安排，不领取发言权、不安排他人、不改变讨论进度，只回答这个提问。` : '';
   const commands = runs_commands(profile) ? '' : `命令只用 subcommands 列出的 ${cli} 子命令。`;
   const instructions = `${agy_command_rule(profile.adapter, cli, profile)}${agy_progress_rule(profile.adapter)}${scope}${project_rule(profile, '按请求')}${commands}草稿写在 draft_directory。`;
   // A greeting deserves a quick answer, and reading the skills first costs it one or two model rounds.
   const access = access_file ? ` --access-file ${access_file}` : '';
-  const quick = `只是问候、确认、致谢这类不用查资料也不改文件的简单消息时，不必读技能：用 ${cli} message list ${room} --after ${read_after}${access} 看原文，再用一条命令把回答写进 ${draft_directory} 下的新文件并执行 ${cli} message post ${room} --as ${name} --kind chat --execution ${execution_id} --body-file 该文件 --submission-id 新UUID${access}。`;
+  // A one-line answer goes inline: a draft file guards long or quoted text and retries, which a greeting does not need.
+  const quick = `简单消息（问候、确认、致谢，不用查资料也不改文件）不必读技能：用 ${cli} message list ${room} --after ${read_after}${access} 看原文，再用 ${cli} message post ${room} --as ${name} --kind chat --execution ${execution_id} --body "回答" --submission-id 新UUID${access} 提交。`;
   const prompt = `用户在${discussion ? '讨论' : '自由协作'}房间点名了你（${name}），对应消息 ${messages}。${quick}其他情况先读任务文件 ${task_path}，按其中列出的技能处理并提交一次回答。${read_rule}`;
   return { instructions, prompt };
 }

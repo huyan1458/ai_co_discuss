@@ -2296,11 +2296,12 @@ test('the agy command limit comes from the runner, so clearing the expert prompt
 
 test('the fixed free-room text loads in steps and leaves values to the task fields and rules to the skills', () => {
   const base = { name: 'Codex', profile: { adapter: 'codex_cli', project_access: 'read' }, cli: 'codiscuss', room: 'r1', messages: '#3',
-    read_after: 2, execution_id: 7, task_path: 'free-7.task.json', draft_directory: 'D:/drafts' };
+    read_after: 2, execution_id: 7, task_path: 'free-7.task.json' };
   const text = free_task_text({ ...base, role: 'host' });
   // The wake-up names who was asked; a simple message is answered at once, anything else starts from the task file.
-  assert.match(text.prompt, /点名了你（Codex），对应消息 #3。只是问候、确认、致谢这类.*不必读技能：用 codiscuss message list r1 --after 2 看原文/);
-  assert.match(text.prompt, /写进 D:\/drafts 下的新文件并执行 codiscuss message post r1 --as Codex --kind chat --execution 7 --body-file 该文件 --submission-id 新UUID。其他情况先读任务文件 free-7\.task\.json，按其中列出的技能处理/);
+  assert.match(text.prompt, /点名了你（Codex），对应消息 #3。简单消息（问候、确认、致谢.*不必读技能：用 codiscuss message list r1 --after 2 看原文/);
+  // A one-line answer is passed inline, so the quick path needs no draft file.
+  assert.match(text.prompt, /再用 codiscuss message post r1 --as Codex --kind chat --execution 7 --body "回答" --submission-id 新UUID 提交。其他情况先读任务文件 free-7\.task\.json，按其中列出的技能处理/);
   assert.doesNotMatch(text.prompt + text.instructions, /--handoff|不建定时任务|提交被拒绝|DISCUSS_ACCESS_FILE|--access-file/);
   // A credential not bound to the process is named on both quick commands.
   assert.equal(free_task_text({ ...base, access_file: 'a.json' }).prompt.match(/--access-file a\.json/g).length, 2);
