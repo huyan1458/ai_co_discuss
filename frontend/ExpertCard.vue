@@ -174,10 +174,6 @@ function save_description({ text, as_template }) {
 
 // A preset keeps this card's description, prompt, project access, model and effort under its name for later rooms.
 const own_preset = computed(() => view.value.launch.presets.some((preset) => preset.name === props.name));
-const preset_items = computed(() => [[
-  { label: own_preset.value ? `更新预设「${props.name}」` : `存为预设「${props.name}」`, icon: "i-lucide-bookmark-plus", onSelect: () => bridge.save_expert_preset(props.name) },
-  ...own_preset.value ? [{ label: `删除预设「${props.name}」`, icon: "i-lucide-trash-2", color: "error", onSelect: () => bridge.delete_expert_preset(props.name) }] : [],
-]]);
 
 // The expert prompt adds guidance for this member alone; its own text, even empty, replaces the software's preset.
 const prompt_preset = computed(() => EXPERT_PROMPT_PRESETS[profile.value.adapter] || "");
@@ -300,9 +296,6 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
           <span class="expert-card-heading-tools">
           <button type="button" class="expert-card-back-tool" :class="{ 'is-set': description }" :aria-label="`编辑 ${name} 的描述`" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
           <button v-if="profile.adapter" type="button" class="expert-card-back-tool" :class="{ 'is-set': prompt_text, 'is-own': prompt_own && prompt_text }" :title="prompt_title" :aria-label="`编辑 ${name} 的专属提示词`" @click="open_prompt"><UIcon name="i-lucide-scroll-text" /></button>
-          <UDropdownMenu v-if="view.launch.available" :items="preset_items" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
-            <button type="button" class="expert-card-back-tool" :class="{ 'is-set': own_preset }" :aria-label="`把 ${name} 存为专家预设`" title="专家预设：存下描述、提示词、项目权限、模型与强度，之后在“添加”行一键加入"><UIcon name="i-lucide-bookmark" /></button>
-          </UDropdownMenu>
           <UButton v-if="api_mode" icon="i-lucide-zap" :aria-label="`检查 ${name} 的 API 配置`" title="检查配置：发送一次极短请求，核对地址、密钥、协议与模型" size="xs" :color="api_check.state === 'ok' ? 'success' : api_check.state === 'error' ? 'error' : 'neutral'" variant="ghost" :loading="api_check.state === 'loading'" :disabled="!profile.api_key_ref || !profile.model || !view.launch.available" @click="check_api" /></span></div>
         <p v-if="api_mode && api_check.message" :role="api_check.state === 'error' ? 'alert' : 'status'" class="expert-card-check">{{ api_check.message }}</p>
         <div v-if="automatic && entry_items.length > 1" class="expert-card-field">
@@ -337,6 +330,10 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         <p v-else class="expert-card-note"><UIcon :name="mode === 'online' ? 'i-lucide-globe' : 'i-lucide-monitor'" />{{ configuration_note }}</p>
         </div>
         <span class="expert-card-flip-actions">
+          <template v-if="view.launch.available">
+            <button v-if="own_preset" type="button" class="expert-card-flip is-cancel" :aria-label="`删除预设「${name}」`" title="删除预设" @click="bridge.delete_expert_preset(name)"><UIcon name="i-lucide-trash-2" /></button>
+            <button type="button" class="expert-card-flip is-cancel" :aria-label="`${own_preset ? '更新' : '存为'}预设「${name}」`" title="存下描述、提示词、项目权限、模型与强度，之后在“预设”行一键加入" @click="bridge.save_expert_preset(name)">{{ own_preset ? '更新预设' : '存为预设' }}</button>
+          </template>
           <button type="button" class="expert-card-flip is-cancel" :aria-label="`放弃 ${name} 的修改`" @click="cancel">取消</button>
           <button ref="back_button" type="button" class="expert-card-flip is-done" :aria-label="`保存并返回 ${name} 角色卡片`" @click="flip(false)"><UIcon name="i-lucide-check" />完成</button>
         </span>
