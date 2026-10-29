@@ -452,7 +452,7 @@ function launch_config(home, input, room, directory, options) {
   if (manual.has(room.host)) throw new Error('AI 主持人由本机服务续接，不能选择手动接入');
   const participants = {};
   for (const name of new Set([room.host, ...Object.keys(room.experts)])) {
-    if (!manual.has(name)) participants[name] = participant_profile(name, defaults, input, name === room.host);
+    if (!manual.has(name)) participants[name] = window_permissions(participant_profile(name, defaults, input, name === room.host));
   }
   const members = launch_members(input, Object.keys(participants), options);
   return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, participants, members, api_home: home,
@@ -468,7 +468,7 @@ function woken_member(member) { return typeof member === 'string' || !member.acc
 function free_launch_config(home, input, room, directory, options) {
   const defaults = options.defaults || launch_settings(home).participants;
   const names = room.members.filter(woken_member).map(member => typeof member === 'string' ? member : member.name);
-  const participants = Object.fromEntries(names.map(name => [name, participant_profile(name, defaults, input, false)]));
+  const participants = Object.fromEntries(names.map(name => [name, window_permissions(participant_profile(name, defaults, input, false))]));
   const members = launch_members(input, names, options);
   return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, mode: 'free', participants, members, api_home: home,
     scheduler: input.scheduler || undefined, cwd: input.cwd, project_access: input.project_access || undefined,
@@ -481,6 +481,14 @@ function launch_members(input, names, options) {
     const supplied = input.room?.members?.find(member => member?.name === name);
     return [name, { token: supplied?.token || options.members?.[name]?.token || `${randomUUID()}${randomUUID()}` }];
   }));
+}
+
+/**
+ * A Claude member continuing a session the user already has gets each task in that session's open window when it can,
+ * so the window's own permissions apply, as for a taken-over manual member; the room's 只读 / 可写 is not offered.
+ */
+function window_permissions(profile) {
+  return profile.adapter === 'claude' && profile.session_id ? { ...profile, project_access: 'own' } : profile;
 }
 
 /** Merge one participant's machine defaults with this launch's overrides and check its software. */
@@ -608,7 +616,7 @@ export async function room_member(home, raw, locked = false) {
     if (!manual) {
       if (action === 'add') {
         profile = participant_profile(name, launch_settings(home).participants, { ...input, cwd: input.cwd || config.cwd }, false);
-        if (profile.session_id) profile = borrowed_session(name, profile, input.cwd || config.cwd);
+        if (profile.session_id) profile = window_permissions(borrowed_session(name, profile, input.cwd || config.cwd));
       }
       if (!profile) throw new Error(`${name} 没有本机接入配置；请移除后重新邀请`);
       const next = { ...config, participants: { ...config.participants, [name]: profile },

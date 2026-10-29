@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { agy_command_rule, atomic_json, deliver_task, remove_agy_projects, runs_commands, SegmentLog, setup_sidecar, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
+import { agy_command_rule, atomic_json, claude_inbox_ready, deliver_task, remove_agy_projects, runs_commands, SegmentLog, setup_sidecar, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
 import { read_api_key } from './discussion_api.mjs';
 import { access_levels, PROJECT_ACCESS, project_rule, READ_RULE, with_expert_prompt } from './expert_prompts.mjs';
 import { decide_interjection, decide_next_speaker, decide_round, validate_scheduler } from './scheduler.mjs';
@@ -213,7 +213,7 @@ export function acquire_lock(directory) {
 }
 
 /** Write a non-secret task separately from its CLI-only credential file; suggestions are smart-scheduling hints for the host. */
-export function task_files(config, event, token, binding, { suggestions = [], entered = false, process_access = false } = {}) {
+export function task_files(config, event, token, binding, { suggestions = [], entered = false, process_access = false, inbox = false } = {}) {
   const id = `event-${event.id}`;
   const draft_directory = config.draft_directory || `${config.directory}-drafts`;
   mkdirSync(draft_directory, { recursive: true });
@@ -225,7 +225,8 @@ export function task_files(config, event, token, binding, { suggestions = [], en
     ...event.role === 'host' ? ['discuss-host/SKILL.md', 'discuss-host/references/discussion.md'] : []].map(file => join(config.project, '.agents/skills', file));
   const adapter = config.participants[event.participant];
   const auto_enter = entered || AUTO_ENTER_ADAPTERS.has(adapter.adapter);
-  const bound_access = process_access && AUTO_ENTER_ADAPTERS.has(adapter.adapter);
+  // A task posted into the member's own open window has no process environment of ours, so it names the credential file.
+  const bound_access = process_access && !inbox && AUTO_ENTER_ADAPTERS.has(adapter.adapter);
   const access_rule = bound_access ? '本次凭据文件已通过进程环境 DISCUSS_ACCESS_FILE 绑定，codiscuss 自动读取，命令无需 --access-file。'
     : '每次业务写入都带 --access-file。';
   const skills_directory = join(config.project, '.agents', 'skills');
@@ -247,7 +248,7 @@ export function task_files(config, event, token, binding, { suggestions = [], en
 ${readFileSync(task_path, 'utf8')}
 请直接读取指定版本的技能和网站现状。${scope}实际会话 ID 已由接入程序写入凭据文件。`
     : `${intro}先读取任务文件：${task_path}，立即用 ${cli} execution enter 进入，再读取指定版本的技能和网站现状。${scope}实际会话 ID 由接入程序写入凭据文件，尚未就绪只短暂重查，不编造。`;
-  return { id, participant: event.participant, directory: config.directory, draft_directory, skills_directory, access_path, prompt: with_expert_prompt(prompt, adapter) };
+  return { id, participant: event.participant, directory: config.directory, draft_directory, skills_directory, access_path, prompt: with_expert_prompt(prompt, adapter), inbox };
 }
 
 /** A running dispatcher retains only the processes it created itself. */
@@ -295,7 +296,8 @@ export class DiscussionRunner {
     let invoked = false;
     let entered = pre_entered;
     try {
-      const task = task_files(this.config, event, row.token, binding, { suggestions, entered: pre_entered, process_access: true });
+      const task = task_files(this.config, event, row.token, binding, { suggestions, entered: pre_entered, process_access: true,
+        inbox: claude_inbox_ready(adapter, binding) });
       invoked = true;
       this.segments.start(row.id);
       const result = await this.deliver(adapter, binding, { ...task, room_title: this.room_title,

@@ -1311,6 +1311,8 @@ test('an extra instance inherits its platform settings but not its bound session
   const launched = await launch_discussion(f.home, input, f.options);
   const config = load_config(launched.config_path);
   assert.equal(config.participants.Claude.session_id, 'my-open-chat');
+  assert.equal(config.participants.Claude.project_access, 'own', 'a Claude member in a session the user already has keeps that window permissions');
+  assert.notEqual(config.participants['Claude-评审'].project_access, 'own');
   assert.equal(config.participants['Claude-评审'].session_id, undefined);
   assert.deepEqual([config.participants['Claude-评审'].adapter, config.participants['Claude-评审'].model, config.participants['Claude-评审'].effort], ['claude', 'opus', 'high']);
   assert.notEqual(config.members.Claude.token, config.members['Claude-评审'].token);

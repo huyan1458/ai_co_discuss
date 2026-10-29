@@ -1166,11 +1166,12 @@ test('a taken-over Claude member whose own window is open gets its task through 
   assert.equal(claude_inbox_ready(profile, { session_id: 'a-fork' }), false, 'a member already moved to a fork stays there');
   assert.equal(claude_inbox_ready({ ...profile, project_access: 'write' }, { session_id: original }), false, 'a lent session is not a manual window');
   const access_path = join(home, 'access.json'); writeFileSync(access_path, JSON.stringify({ token: 'member', session_id: '' }));
-  const spawned = [];
+  const spawned = [], bound = [];
   const result = await deliver_task({ ...profile, executable: process.execPath }, { session_id: original },
-    { id: 'free-7', inbox: true, access_path, prompt: '请先读取任务文件 free-7.task.json', on_note: () => {} }, (...args) => { spawned.push(args); throw new Error('no process'); });
+    { id: 'free-7', inbox: true, access_path, prompt: '请先读取任务文件 free-7.task.json', on_note: () => {}, on_binding: session => bound.push(session) }, (...args) => { spawned.push(args); throw new Error('no process'); });
   assert.deepEqual(result, { session_id: original, status: 'accepted' });
   assert.deepEqual(spawned, []);
+  assert.deepEqual(bound, [original], 'the discussion runner enters the execution once the session is reported');
   for (let waited = 0; received.length < 2 && waited < 2000; waited += 20) await delay(20);
   assert.deepEqual(received[0], { type: 'auth', token: 'peer-token' });
   assert.equal(received[1].type, 'user');
@@ -1206,6 +1207,10 @@ test('tasks state whether the discussion project is read-only or writable', asyn
   const own = task_files(load_config_from(f, project, 'own'), f.event, 'token-for-test', {}).prompt;
   assert.match(own, /网站读写只用.*权限沿用你自己会话的软件设置/);
   assert.doesNotMatch(own, /只读，不修改/);
+  // A task posted into the member's own open window names its credential file, since that window has no environment of ours.
+  task_files(config, f.event, 'token-for-test', {}, { process_access: true, inbox: true });
+  const posted = JSON.parse(readFileSync(join(f.config.directory, 'event-1.task.json'), 'utf8'));
+  assert.ok(posted.access_file && !posted.access_env);
   assert.match(task_files(f.config, f.event, 'token-for-test', {}).prompt, /未指定项目目录/);
   assert.match(task_files(load_config_from(f, project, 'auto'), f.event, 'token-for-test', {}).prompt, /由软件自动审批.*申请放行/);
   assert.match(task_files(load_config_from(f, project, 'full'), f.event, 'token-for-test', {}).prompt, /已跳过软件审批与沙箱/);

@@ -542,7 +542,7 @@ export function claude_window(session_id, env = process.env) {
   return null;
 }
 
-/** Whether this execution goes into a taken-over member's own open window rather than a background process. */
+/** Whether this execution goes into the member's own open window (its own session, `own` permissions) rather than a background process. */
 export function claude_inbox_ready(profile, binding) {
   return profile.adapter === 'claude' && profile.project_access === 'own' && Boolean(profile.session_id)
     && binding.session_id === profile.session_id && Boolean(claude_window(profile.session_id)?.inbox);
@@ -573,6 +573,8 @@ async function claude_inbox_delivery(config, inbox, task) {
     });
     socket.on('error', error => written ? undefined : reject(not_sent(error)));
   });
+  // The discussion runner enters the execution once the session is known, as it does when a process reports it.
+  task.on_binding?.(config.session_id);
   const marker = `${task.id}.task.json`;
   setTimeout(() => {
     if (!claude_session_mentions(config.session_id, marker)) {

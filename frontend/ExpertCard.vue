@@ -85,6 +85,8 @@ const effort_label = computed(() => profile.value.effort ? EFFORT_LABELS[profile
 // Room speech and project files are separate: only woken CLIs get a project choice from this page,
 // Apps and manual sessions keep their own settings, and API or web members never see project files.
 const sets_access = computed(() => automatic.value && bridge.launch_can_set_access(props.name, view.value.launch));
+// Claude continuing a session the user has gets each task in that window when it is open, so the window's own permissions apply.
+const own_window = computed(() => sets_access.value && profile.value.adapter === "claude" && resuming.value);
 const no_files = computed(() => props.mode === "online" || automatic.value && profile.value.adapter === "api");
 const local_connection = computed(() => automatic.value && profile.value.adapter !== "api");
 const access = computed(() => profile.value.project_access || view.value.launch.workspace?.project_access || "read");
@@ -100,7 +102,7 @@ const facts = computed(() => [
   ...automatic.value ? [{ label: "软件", value: entry_label.value }] : [],
   ...configurable.value ? [{ label: "模型", value: profile.value.model || models.value.defaults?.model || "软件默认模型" }] : [],
   ...configurable.value && profile.value.adapter !== "api" ? [{ label: "强度", value: effort_label.value }] : [],
-  ...sets_access.value ? [{ label: "项目", value: access_label(access.value) }] : no_files.value ? [{ label: "项目", value: "不访问" }] : [],
+  ...sets_access.value ? [{ label: "项目", value: own_window.value ? access_label("own") : access_label(access.value) }] : no_files.value ? [{ label: "项目", value: "不访问" }] : [],
   // The crown already offers hosting and the badge names the host, so only the refusal needs a row.
   ...props.hosting && !props.host && !props.hostable ? [{ label: "主持", value: host_fact.value }] : [],
 ]);
@@ -360,7 +362,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
           <span>会话</span><UInput :model-value="session" placeholder="续接已有会话 ID，留空则新建" :aria-label="`${name} 要续接的已有会话 ID`" size="xs" class="w-full" @update:model-value="emit('session', $event)" />
         </div>
         <p v-if="can_bind && session.trim() && manual_note" class="expert-card-check">{{ manual_note }}</p>
-        <div v-if="sets_access" class="expert-card-field">
+        <div v-if="sets_access && !own_window" class="expert-card-field">
           <span>项目</span>
           <div class="expert-card-modes" role="radiogroup" :aria-label="`${name} 的项目文件权限`">
             <button v-for="option in access_options(profile.adapter)" :key="option.value" type="button" role="radio" :title="option.hint"
