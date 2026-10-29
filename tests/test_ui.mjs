@@ -3737,3 +3737,28 @@ test("the timeline zooms around the pointer, pans within its ends and ticks fine
   assert.ok(close.every((tick) => tick.x >= 0.375 && tick.x <= 0.625), "only ticks in view are made");
   assert.ok(close[1].at - close[0].at < whole[1].at - whole[0].at, "zoomed in, ticks fall at finer steps");
 });
+
+test('importing rooms reports each room as it goes and one short line per restored member', async () => {
+  const f = theme_fixture(), state = f.context.test_state, seen = [];
+  state.launch.available = true;
+  const snapshot = (title, local) => ({ snapshot: { tables: { rooms: [{ title }] }, ...(local ? { local_members: { mode: 'free', participants: {} } } : {}) }, files: new Map() });
+  Object.assign(f.context, {
+    publish_view: () => seen.push(structuredClone(state.import_progress)),
+    refresh_room: async () => {}, save_room_credentials() {},
+    request_json: async (path, body) => path === '/api/rooms/import'
+      ? body.tables.rooms[0].title === '旧房间' ? { skipped: true, title: '旧房间' } : { id: 'new', title: body.tables.rooms[0].title, attachments: {} } : {},
+    local_launch_request: async () => ({ members: [{ name: 'Codex', status: 'resumed' }, { name: 'Claude', status: 'manual', session_id: 'abc', cwd: 'D:/p' },
+      { name: 'Gemini', status: 'failed', error: '找不到会话' }] }),
+  });
+  f.context.window.discuss_backup = { read_room_archives: async file => file.name === 'bad.zip' ? Promise.reject(new Error('格式无效')) : [snapshot('剧本', true), snapshot('旧房间')] };
+  await f.context.import_rooms({ files: [{ name: 'a.zip' }, { name: 'bad.zip' }] });
+  assert.equal(seen[0].done, false);
+  assert.ok(seen.some(item => item.rooms[0]?.status === 'importing'));
+  const result = JSON.parse(JSON.stringify(state.import_progress));
+  assert.equal(result.done, true);
+  assert.deepEqual(result.rooms.map(room => [room.title, room.status]), [['剧本', 'imported'], ['旧房间', 'skipped']]);
+  assert.deepEqual(result.rooms[0].members.map(member => [member.name, member.text, member.resume?.command || '']), [
+    ['Codex', '请回后接续原会话', ''], ['Claude', '已改为手动接入，请回后在原窗口重新注册', 'claude --resume abc'], ['Gemini', '未恢复：找不到会话', '']]);
+  assert.deepEqual(result.errors, ['bad.zip：格式无效']);
+  assert.equal(state.directory_notice, '');
+});

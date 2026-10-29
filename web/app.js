@@ -70,6 +70,8 @@ state.archive_changes = new Map();
 state.archive_version = 0;
 state.directory_error = "";
 state.directory_notice = "";
+// The open import's progress for the import dialog: { done, rooms: [{ title, status, members, error }], errors }.
+state.import_progress = null;
 state.directory_pending = new Map();
 state.directory_version = 0;
 state.navigation_version = 0;
@@ -3447,7 +3449,7 @@ function view_snapshot() {
   const experts = Object.fromEntries(["new-expert-modes", "topic-expert-modes"].map((id) =>
     [id, element(id) ? read_expert_inputs(id) : {}]));
   return { rooms: ordered_rooms(), folders: state.folders, folder_groups: ordered_folders(), room: state.room, archive_view: state.archive_view, directory_sort: state.directory_sort, messages: state.messages, total: state.message_total,
-    archive_pending: [...state.archive_changes.keys()], directory_error: state.directory_error, directory_notice: state.directory_notice,
+    archive_pending: [...state.archive_changes.keys()], directory_error: state.directory_error, directory_notice: state.directory_notice, import_progress: structuredClone(state.import_progress),
     directory_pending: [...state.directory_pending.keys()], folder_pending: [...state.folder_moves.keys()], creating_room: state.creating_room,
     connected: state.connected, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
     attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url })),
@@ -3586,17 +3588,15 @@ function import_body(snapshot) {
   return { ...body, tables: { ...body.tables, room_members } };
 }
 
-/** Register an imported room's exported members on this machine; returns notices and problems, one per member. */
+/** Register an imported room's exported members on this machine; returns one short line per member and any room-wide problem. */
 async function restore_local_members(room, token, local_members) {
-  if (!state.launch.available) return { notices: [], problems: [`${room.title}：未连接本机服务，成员会话未恢复`] };
+  if (!state.launch.available) return { members: [], problem: "未连接本机服务，成员会话未恢复" };
   try {
     const result = await local_launch_request("room-restore", { room_id: room.id, token, local_members });
-    const notices = result.members.filter(member => member.status !== "failed").map(member => member.status === "resumed"
-      ? `${member.name} 请回后续接原会话`
-      : `${member.name} 已改为手动接入，请回后在原窗口重新注册${member.session_id ? `（会话 ${member.session_id}，目录 ${member.cwd}；没有开着的窗口时在该目录运行 claude --resume ${member.session_id}）` : ""}`);
-    const problems = result.members.filter(member => member.status === "failed").map(member => `${member.name} 未恢复：${member.error}`);
-    return { notices: notices.map(text => `${room.title}：${text}`), problems: problems.map(text => `${room.title}：${text}`) };
-  } catch (error) { return { notices: [], problems: [`${room.title}：成员会话未恢复：${error.message}`] }; }
+    return { members: result.members.map(member => ({ name: member.name, failed: member.status === "failed",
+      text: member.status === "failed" ? `未恢复：${member.error}` : member.status === "resumed" ? "请回后接续原会话" : "已改为手动接入，请回后在原窗口重新注册",
+      resume: member.status === "manual" && member.session_id ? { command: `claude --resume ${member.session_id}`, cwd: member.cwd } : null })) };
+  } catch (error) { return { members: [], problem: `成员会话未恢复：${error.message}` }; }
 }
 
 /** Upload one imported room's original files to the new attachment IDs; returns how many were missing. */
@@ -3615,41 +3615,43 @@ async function upload_imported_files(room_id, token, mapping, files) {
 async function import_rooms({ files, folder_id = null }) {
   if (!files?.length || state.backup_pending) return;
   state.backup_pending = true;
-  state.directory_notice = state.directory_error = "";
+  const progress = state.import_progress = { done: false, rooms: [], errors: [] };
   publish_view();
-  const imported = [], skipped = [], failed = [], restored = [], unrestored = [], unfiled = [];
-  let missing = 0;
   try {
     for (const file of files) {
       let rooms;
       try { rooms = await window.discuss_backup.read_room_archives(file); }
-      catch (error) { failed.push(error.message.includes(file.name) ? error.message : `${file.name}：${error.message}`); continue; }
+      catch (error) { progress.errors.push(error.message.includes(file.name) ? error.message : `${file.name}：${error.message}`); publish_view(); continue; }
       for (const { snapshot, files: originals } of rooms) {
-        const title = snapshot.tables?.rooms?.[0]?.title || file.name, token = crypto.randomUUID() + crypto.randomUUID();
+        const item = { title: snapshot.tables?.rooms?.[0]?.title || file.name, status: "importing", members: [], problems: [] };
+        progress.rooms.push(item);
+        publish_view();
+        const token = crypto.randomUUID() + crypto.randomUUID();
         try {
           const result = await request_json("/api/rooms/import", import_body(snapshot), token);
-          if (result.skipped) { skipped.push(result.title); continue; }
+          item.title = result.title;
+          if (result.skipped) { item.status = "skipped"; continue; }
           save_room_credentials({ id: result.id }, token);
-          missing += await upload_imported_files(result.id, token, result.attachments, originals);
-          imported.push(result.title);
+          const missing = await upload_imported_files(result.id, token, result.attachments, originals);
+          if (missing) item.problems.push(`${missing} 个附件原文件缺失，消息中的这些附件无法打开`);
           if (folder_id) await request_json(`/api/rooms/${result.id}/folder`, { actor: "用户", folder_id })
-            .catch(error => unfiled.push(`${result.title}：未放入文件夹：${error.message}`));
+            .catch(error => item.problems.push(`未放入文件夹：${error.message}`));
           if (snapshot.local_members) {
-            const { notices, problems } = await restore_local_members(result, token, snapshot.local_members);
-            restored.push(...notices); unrestored.push(...problems);
+            const { members, problem } = await restore_local_members(result, token, snapshot.local_members);
+            item.members = members;
+            if (problem) item.problems.push(problem);
           }
-        } catch (error) { failed.push(`${title}：${error.message}`); }
+          item.status = "imported";
+        } catch (error) { Object.assign(item, { status: "failed", error: error.message }); }
+        finally { publish_view(); }
       }
     }
     await refresh_room();
   } finally {
+    progress.done = true;
     state.backup_pending = false;
     publish_view();
   }
-  state.directory_notice = [`已导入 ${imported.length} 个频道`, skipped.length && `跳过已存在的 ${skipped.length} 个（${skipped.join("、")}）`, ...restored]
-    .filter(Boolean).join("；");
-  state.directory_error = [missing && `${missing} 个附件原文件缺失，消息中的这些附件无法打开`, failed.length && `未导入 ${failed.length} 项：${failed.join("；")}`, ...unfiled, ...unrestored]
-    .filter(Boolean).join("；");
 }
 
 /** Execute a named view command, retaining existing retry and provenance rules. */

@@ -1,5 +1,6 @@
 <script setup>
 import { computed, inject, ref, watch } from "vue";
+import ImportDialog from "./ImportDialog.vue";
 
 const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives"]);
 const { view, bridge, act, pending } = inject("discussion");
@@ -20,6 +21,7 @@ const directory_actions = computed(() => [
     onSelect: () => act("backup_rooms", { ids: view.value.rooms.map((room) => room.id), name: "全部房间" }) },
 ]);
 const import_input = ref(null);
+const import_open = ref(false);
 let import_folder = null;
 
 /** Open the backup picker for rooms that should land in one folder, or unfiled when null. */
@@ -32,7 +34,9 @@ function choose_import_target(folder_id) {
 function choose_imports(event) {
   const files = [...event.target.files];
   event.target.value = "";
-  if (files.length) act("import_rooms", { files, folder_id: import_folder });
+  if (!files.length) return;
+  import_open.value = true;
+  act("import_rooms", { files, folder_id: import_folder });
 }
 const rooms_open = ref(true);
 const collapsed = ref(read_collapsed());
@@ -142,5 +146,6 @@ function actions(room, index, folder_id, folder_room_count) {
     <UButton v-show="rooms_open" icon="i-lucide-archive" color="neutral" variant="ghost" class="channel-archive-toggle" aria-haspopup="dialog" @click="emit('archives')"><span class="channel-archive-label">已存档</span><small v-if="archived_count" class="channel-archive-count">{{ archived_count }}</small></UButton>
     <p v-if="view.directory_notice" role="status" class="channel-directory-notice">{{ view.directory_notice }}</p>
     <p v-if="view.directory_error" role="alert" class="channel-directory-error">{{ view.directory_error }}</p>
+    <ImportDialog v-model:open="import_open" />
   </div>
 </template>
