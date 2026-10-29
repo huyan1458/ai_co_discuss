@@ -19,9 +19,8 @@ const props = defineProps({
   // True where the form picks a host, so the card states whether this one may host.
   hosting: Boolean,
   // An existing conversation to resume; null where the form offers no such choice (the invite dialog does).
-  session: { type: String, default: null },
 });
-const emit = defineEmits(["remove", "mode", "host", "session"]);
+const emit = defineEmits(["remove", "mode", "host"]);
 const { view, bridge } = inject("discussion");
 // Feel.words("smooth, crisp"): 2.615 Hz reads as a deliberate turn; ζ .96 avoids bounce.
 // Unit mass: this is a button-controlled angular spring, with no drag-weight effect.
@@ -61,8 +60,7 @@ const MANUAL_NOTES = {
   Claude: "已实测：原窗口开着时消息实时送入；关闭后在后台续接同一会话。",
 };
 const manual_note = computed(() => MANUAL_NOTES[bridge.platform_of(props.name)] || "");
-const can_bind = computed(() => automatic.value && props.session !== null && bridge.launch_can_bind_session(props.name, view.value.launch));
-const resuming = computed(() => Boolean(profile.value.session_id || props.session?.trim()));
+const resuming = computed(() => Boolean(profile.value.session_id));
 // Software paths and models typed here belong to this browser's computer, so a relayed member keeps the paired computer's settings.
 const can_flip = computed(() => automatic.value && entry_items.value.length > 0 && !(view.value.launch.relay && !view.value.launch.available));
 const card_label = computed(() => props.mode === "online" ? `设置 ${props.name} 的参与方式` : `配置 ${props.name} 的启动方式`);
@@ -85,8 +83,6 @@ const effort_label = computed(() => profile.value.effort ? EFFORT_LABELS[profile
 // Room speech and project files are separate: only woken CLIs get a project choice from this page,
 // Apps and manual sessions keep their own settings, and API or web members never see project files.
 const sets_access = computed(() => automatic.value && bridge.launch_can_set_access(props.name, view.value.launch));
-// Claude continuing a session the user has gets each task in that window when it is open, so the window's own permissions apply.
-const own_window = computed(() => sets_access.value && profile.value.adapter === "claude" && resuming.value);
 const no_files = computed(() => props.mode === "online" || automatic.value && profile.value.adapter === "api");
 const local_connection = computed(() => automatic.value && profile.value.adapter !== "api");
 const access = computed(() => profile.value.project_access || view.value.launch.workspace?.project_access || "read");
@@ -102,7 +98,7 @@ const facts = computed(() => [
   ...automatic.value ? [{ label: "软件", value: entry_label.value }] : [],
   ...configurable.value ? [{ label: "模型", value: profile.value.model || models.value.defaults?.model || "软件默认模型" }] : [],
   ...configurable.value && profile.value.adapter !== "api" ? [{ label: "强度", value: effort_label.value }] : [],
-  ...sets_access.value ? [{ label: "项目", value: own_window.value ? access_label("own") : access_label(access.value) }] : no_files.value ? [{ label: "项目", value: "不访问" }] : [],
+  ...sets_access.value ? [{ label: "项目", value: access_label(access.value) }] : no_files.value ? [{ label: "项目", value: "不访问" }] : [],
   // The crown already offers hosting and the badge names the host, so only the refusal needs a row.
   ...props.hosting && !props.host && !props.hostable ? [{ label: "主持", value: host_fact.value }] : [],
 ]);
@@ -140,13 +136,12 @@ const stop_settling = angle.on("animationComplete", focus_face);
 /** Retarget the same spring so a reversal carries its current angle and velocity. */
 // Opening the back remembers this instance's settings so Cancel can restore them exactly.
 let opened_with = null;
-let opened_session = "";
 
 function flip(next) {
   if (next && !can_flip.value) return;
   card.value?.focus({ preventScroll: true });
   asked.value = next ? required_connection() : [];
-  if (next && !back.value) { opened_with = { profile: JSON.parse(JSON.stringify(profile.value)), mode: props.mode }; opened_session = props.session ?? ""; }
+  if (next && !back.value) { opened_with = { profile: JSON.parse(JSON.stringify(profile.value)), mode: props.mode }; }
   back.value = next;
 }
 
@@ -155,7 +150,6 @@ function cancel() {
   if (opened_with) {
     bridge.restore_launch_profile(props.name, opened_with.profile);
     if (opened_with.mode !== props.mode) emit("mode", opened_with.mode);
-    if (props.session !== null && props.session !== opened_session) emit("session", opened_session);
     opened_with = null;
   }
   flip(false);
@@ -319,8 +313,8 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
           <span class="expert-card-identity">
             <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="sm" class="channel-avatar expert-card-avatar" :class="bridge.identities[name]?.style" />
             <span class="expert-card-names">
-              <span v-if="manual"><strong :title="name">{{ bridge.display_name(name) }}（手动）</strong><span v-if="host" class="expert-card-badge">主持</span></span>
-              <span v-else><strong :title="bridge.member_label(name) === name ? undefined : name">{{ bridge.member_label(name) }}</strong><span v-if="host" class="expert-card-badge">主持</span></span>
+              <span v-if="manual"><strong :title="name">{{ bridge.display_name(name) }}（手动）</strong><span v-if="host && !hostable" class="expert-card-badge">主持</span></span>
+              <span v-else><strong :title="bridge.member_label(name) === name ? undefined : name">{{ bridge.member_label(name) }}</strong><span v-if="host && !hostable" class="expert-card-badge">主持</span></span>
               <small v-if="description" :title="description">{{ description }}</small>
             </span>
           </span>
@@ -358,11 +352,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         <div v-for="item in connection" :key="item.field" class="expert-card-field">
           <span>{{ item.label }}</span><UInput :model-value="profile[item.field] || ''" :placeholder="item.placeholder" :aria-label="`${name} ${item.placeholder}`" size="xs" class="w-full" @update:model-value="bridge.write_launch(name, item.field, $event)" />
         </div>
-        <div v-if="can_bind" class="expert-card-field">
-          <span>会话</span><UInput :model-value="session" placeholder="续接已有会话 ID，留空则新建" :aria-label="`${name} 要续接的已有会话 ID`" size="xs" class="w-full" @update:model-value="emit('session', $event)" />
-        </div>
-        <p v-if="can_bind && session.trim() && manual_note" class="expert-card-check">{{ manual_note }}</p>
-        <div v-if="sets_access && !own_window" class="expert-card-field">
+        <div v-if="sets_access" class="expert-card-field">
           <span>项目</span>
           <div class="expert-card-modes" role="radiogroup" :aria-label="`${name} 的项目文件权限`">
             <button v-for="option in access_options(profile.adapter)" :key="option.value" type="button" role="radio" :title="option.hint"
