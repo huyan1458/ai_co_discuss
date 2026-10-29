@@ -29,7 +29,7 @@ from .free_room import (add_member, after_free_message, authorize_free_write, ch
 from .free_room import add_discussion_member, convert_suggestion, discussion_member_action, message_suggestions, save_suggestions, sync_participants
 from .free_room import active_members, adopt_recommendation, ask_members, asks_view, checked_asks, recommend_member, register_member, route_held_messages
 from .free_room import describe_members, execution_notes, member_descriptions, reorder_speakers, set_chain_rounds, speaking_order, stop_room_work
-from .free_room import continue_chain, execution_timeline
+from .free_room import continue_chain, execution_timeline, retract_message, rewind_plan, rewind_room, withdrawals
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, is_ai, is_participant
 from .room_import import import_room, imported_attachment
 from .runtime import (authorize_write, begin_write, configure_runtime, event_action,
@@ -107,6 +107,7 @@ ROOM_BACKUP_QUERIES = {
     "scheduler_decisions": f"{DECISION_SELECT} WHERE d.room_id=? ORDER BY d.id",
     "topic_folders": "SELECT * FROM topic_folders WHERE id IN (SELECT folder_id FROM room_folder_assignments WHERE room_id=?)",
     "messages": "SELECT * FROM messages WHERE room_id=? ORDER BY id",
+    "message_withdrawals": "SELECT w.* FROM message_withdrawals w JOIN messages m ON m.id=w.message_id WHERE m.room_id=? ORDER BY w.message_id",
     "attachments": "SELECT * FROM attachments WHERE room_id=? AND message_id IS NOT NULL ORDER BY message_id,position",
     "discussion_turns": "SELECT * FROM discussion_turns WHERE room_id=? ORDER BY id",
     **{table: f"SELECT * FROM {table} WHERE message_id IN (SELECT id FROM messages WHERE room_id=?) ORDER BY message_id"
@@ -125,13 +126,16 @@ MESSAGE_QUERY = """SELECT messages.*, COALESCE(details.kind,'opinion') AS kind,
 COALESCE(details.submitted_by, CASE WHEN messages.source IN ('cli','api','url','user')
 THEN messages.author ELSE '用户' END) AS submitted_by, details.turn_id,
 COALESCE(summaries.text,'') AS summary, COALESCE(summaries.author,'') AS summary_by, timing.elapsed_seconds,
-answered.execution_id, answered.request_message_id
+answered.execution_id, answered.request_message_id, COALESCE(withdrawn.kind,'') AS withdrawn
 FROM messages LEFT JOIN message_details AS details ON details.message_id=messages.id
+LEFT JOIN message_withdrawals AS withdrawn ON withdrawn.message_id=messages.id
 LEFT JOIN message_summaries AS summaries ON summaries.message_id=messages.id
 LEFT JOIN message_timings AS timing ON timing.message_id=messages.id
 LEFT JOIN (SELECT answer_id, MIN(execution_id) AS execution_id, MIN(message_id) AS request_message_id
   FROM member_requests WHERE answer_id IS NOT NULL AND execution_id IS NOT NULL GROUP BY answer_id) AS answered
   ON answered.answer_id=messages.id"""
+# Messages the owner took back leave AI reads; the page asks for them with withdrawn=include to keep them in place.
+INCLUDE_WITHDRAWN = "include"
 
 
 def room_backup(connection, room_id):
@@ -274,6 +278,7 @@ def require_room(connection, room_id):
         room["held_since"] = 0
         room["free"] = free_view(connection, room_id)
     room["descriptions"] = member_descriptions(connection, room_id)
+    room["withdrawals"] = withdrawals(connection, room_id)
     room["speaking_order"] = speaking_order(connection, room)
     return room
 
@@ -679,6 +684,8 @@ def delete_room_records(connection, room_id):
                 connection.execute(f"DELETE FROM {child} WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)", (room_id,))
             connection.execute("DELETE FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)", (room_id,))
         connection.execute(f"DELETE FROM {table} WHERE room_id=?", (room_id,))
+    connection.execute("DELETE FROM message_withdrawals WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)", (room_id,))
+    connection.execute("DELETE FROM room_rewinds WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM message_timings WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)", (room_id,))
     connection.execute("DELETE FROM message_summaries WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)", (room_id,))
     connection.execute("DELETE FROM message_details WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)", (room_id,))
@@ -891,6 +898,9 @@ def attachment_view(row):
 def message_with_attachments(connection, row):
     """Attach the published file list to an original message."""
     message = dict(row)
+    if message["withdrawn"] == "retracted":
+        # The owner retracted it before anyone handled it: only the page that retracted it keeps the text.
+        return {**message, "text": "", "summary": "", "suggestions": [], "attachments": []}
     message["suggestions"] = message_suggestions(connection, message["id"])
     message["attachments"] = [attachment_view(item) for item in connection.execute(
         "SELECT * FROM attachments WHERE message_id=? ORDER BY position,id", (message["id"],))]
@@ -1467,6 +1477,8 @@ def message_filters(room_id, params):
             raise ValueError("after 需为非负消息编号，不能与翻页同时使用")
         clauses.append("messages.id>?")
         values.append(after)
+    if params.get("withdrawn") != INCLUDE_WITHDRAWN:
+        clauses.append("withdrawn.message_id IS NULL")
     return " AND ".join(clauses), values
 
 
@@ -2091,6 +2103,17 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             begin_write(connection)
             reorder_speakers(connection, require_room(connection, room_id), token, payload)
             result = require_room(connection, room_id)
+            connection.commit()
+            return self.respond(result)
+        if len(parts) == 6 and parts[3] == "messages" and parts[5] == "retract" and method == "POST":
+            result = retract_message(connection, room_id, int(parts[4]), token)
+            connection.commit()
+            return self.respond(result)
+        if parts[3:] == ["rewind"]:
+            if method == "GET":
+                require_owner(connection, room_id, token)
+                return self.respond(rewind_plan(connection, room_id, int(params.get("message_id", 0))))
+            result = rewind_room(connection, room_id, token, self.read_payload())
             connection.commit()
             return self.respond(result)
         free = room_mode(connection, room_id) == "free"

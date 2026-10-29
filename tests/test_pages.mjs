@@ -946,6 +946,40 @@ test('Worker free rooms need the owner credential and keep secrets out of views 
   assert.deepEqual([again.status, again.body.id], [200, r.room.id]);
 });
 
+test('Worker retract takes back a message only until a member starts it, and rewind hides the rest for the runner to cut', async t => {
+  const f = await worker_fixture(t);
+  const r = await free_worker_room(f);
+  const messages = async (include = false) => (await f.request(`${r.path}/messages?after=0${include ? '&withdrawn=include' : ''}`)).body.messages
+    .map(item => [item.id, item.text, item.withdrawn]);
+  const retracted = (await r.say('先别做这个')).body.message.id;
+  const retract = id => f.request(`${r.path}/messages/${id}/retract`, {}, r.owner);
+  assert.equal((await f.request(`${r.path}/messages/${retracted}/retract`, {}, r.claude)).status, 403);
+  assert.deepEqual([(await retract(retracted)).body.text, (await retract(retracted)).body.duplicate], ['先别做这个', true]);
+  assert.deepEqual(await messages(true), [[retracted, '', 'retracted']]);
+  assert.deepEqual((await f.request(r.path)).body.withdrawals, [{ message_id: retracted, kind: 'retracted' }]);
+  const first = (await r.say('一')).body.message.id;
+  const kept = await r.reserve();
+  assert.equal((await retract(first)).status, 409);
+  const first_answer = (await r.answer(kept.body.id)).body.message.id;
+  const second = (await r.say('二')).body.message.id;
+  const taken = await r.reserve();
+  await r.answer(taken.body.id);
+  await r.say('三');
+  const plan = (await f.request(`${r.path}/rewind?message_id=${second}`, undefined, r.owner)).body;
+  assert.deepEqual([plan.messages, plan.members.map(item => [item.name, item.executions, item.session])], [3, [['Claude', [taken.body.id], 'cut']]]);
+  assert.equal((await f.request(`${r.path}/rewind`, { message_id: second }, r.owner)).status, 400);
+  assert.equal((await f.request(`${r.path}/rewind`, { message_id: second, revision: 'stale' }, r.owner)).status, 409);
+  const rewound = await f.request(`${r.path}/rewind`, { message_id: second, revision: plan.revision }, r.owner);
+  assert.equal(rewound.status, 200, JSON.stringify(rewound.body));
+  assert.deepEqual(await messages(), [[first, '一', ''], [first_answer, '已处理', '']]);
+  const room = (await f.request(r.path)).body;
+  assert.equal(room.free.members[0].read_until, second - 1);
+  assert.equal(room.free.requests.at(-1).status, 'cancelled');
+  await r.say('改过的二');
+  assert.deepEqual((await r.reserve()).body.rewound_executions, [taken.body.id]);
+  assert.equal((await f.request(`${r.path}/rewind?message_id=${first_answer}`, undefined, r.owner)).status, 400);
+});
+
 test('Worker @全体依次 asks the host first and the next member only after the previous one ends', async t => {
   const f = await worker_fixture(t);
   const codex = 'codex-free'.repeat(4);

@@ -166,6 +166,8 @@ def record_statements(tables, room_id, maps):
                    for row in tables.get("member_requests", [])]
     statements += [("INSERT INTO member_suggestions (message_id,member_id) VALUES (?,?)", (messages[row["message_id"]], members[row["member_id"]]))
                    for row in tables.get("member_suggestions", [])]
+    statements += [("INSERT INTO message_withdrawals (message_id,kind,created_at) VALUES (?,?,?)", (messages[row["message_id"]], row["kind"], row["created_at"]))
+                   for row in tables.get("message_withdrawals", [])]
     # Imported recommendations are history only: an open or waiting one no longer acts.
     statements += [("""INSERT INTO member_recommendations (message_id,room_id,member_id,provider,confidence,created_at,expires_at,status,mode)
                        VALUES (?,?,?,?,?,?,?,?,?)""", (messages[row["message_id"]], room_id, members[row["member_id"]], row["provider"], row["confidence"],

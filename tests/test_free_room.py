@@ -228,6 +228,59 @@ class FreeRoomTests(unittest.TestCase):
         self.assertEqual([item["status"] for item in view["requests"]], ["cancelled"])
         self.assertEqual(self.request(self.path)[1]["message_count"], 1)
 
+    def messages(self, include=False):
+        """Ids and texts of the room's messages as AI readers see them, or as the page sees them with withdrawn ones."""
+        query = "?after=0" + ("&withdrawn=include" if include else "")
+        return [(item["id"], item["text"], item["withdrawn"]) for item in self.request(f"{self.path}/messages{query}")[1]["messages"]]
+
+    def test_retract_takes_back_a_message_only_until_a_member_starts_it(self):
+        """A queued message leaves AI reads and its request ends; once a member starts one, retracting is refused."""
+        first = self.say("先别做这个")[1]["message"]["id"]
+        retract = f"{self.path}/messages/{first}/retract"
+        self.assertEqual(self.request(retract, {}, self.member)[0], 403)
+        status, result = self.request(retract, {}, self.owner)
+        self.assertEqual((status, result["text"], result["duplicate"]), (200, "先别做这个", False))
+        self.assertTrue(self.request(retract, {}, self.owner)[1]["duplicate"])
+        self.assertEqual(self.messages(), [])
+        self.assertEqual(self.messages(include=True), [(first, "", "retracted")])
+        room = self.request(self.path)[1]
+        self.assertEqual(room["withdrawals"], [{"message_id": first, "kind": "retracted"}])
+        self.assertEqual([item["status"] for item in room["free"]["requests"]], ["cancelled"])
+        second = self.say("做这个")[1]["message"]["id"]
+        execution = self.reserve()[1]
+        self.assertEqual(self.request(f"{self.path}/messages/{second}/retract", {}, self.owner)[0], 409)
+        answer = self.answer(execution["id"])[1]["message"]["id"]
+        self.assertEqual(self.request(f"{self.path}/messages/{answer}/retract", {}, self.owner)[0], 400)
+
+    def test_rewind_takes_back_history_and_tells_the_runner_what_to_cut(self):
+        """Editing a message hides it and everything after, ends open work and lists the member's taken-back executions."""
+        first = self.say("一")[1]["message"]["id"]
+        kept = self.reserve()[1]
+        first_answer = self.answer(kept["id"], "一好了")[1]["message"]["id"]
+        second = self.say("二")[1]["message"]["id"]
+        taken = self.reserve()[1]
+        self.answer(taken["id"], "二好了")
+        self.say("三")
+        status, plan = self.request(f"{self.path}/rewind?message_id={second}", None, self.owner)
+        self.assertEqual(status, 200, plan)
+        self.assertEqual(plan["messages"], 3)
+        claude = next(item for item in plan["members"] if item["name"] == "Claude")
+        self.assertEqual((claude["executions"], claude["session"]), ([taken["id"]], "cut"))
+        self.assertEqual(self.request(f"{self.path}/rewind?message_id={second}", None, None)[0], 403)
+        self.assertEqual(self.request(f"{self.path}/rewind", {"message_id": second}, self.owner)[0], 400)
+        self.assertEqual(self.request(f"{self.path}/rewind", {"message_id": second, "revision": "stale"}, self.owner)[0], 409)
+        status, result = self.request(f"{self.path}/rewind", {"message_id": second, "revision": plan["revision"]}, self.owner)
+        self.assertEqual(status, 200, result)
+        self.assertEqual(self.messages(), [(first, "一", ""), (first_answer, "一好了", "")])
+        self.assertEqual([kind for _, _, kind in self.messages(include=True)], ["", "", "rewound", "rewound", "rewound"])
+        room = self.request(self.path)[1]
+        self.assertEqual(room["free"]["members"][0]["read_until"], second - 1)
+        self.assertEqual(room["free"]["requests"][-1]["status"], "cancelled")
+        self.assertEqual(self.request(f"{self.path}/rewind?message_id={second}", None, self.owner)[0], 409)
+        self.say("改过的二")
+        self.assertEqual(self.reserve()[1]["rewound_executions"], [taken["id"]])
+        self.assertEqual(self.request(f"{self.path}/rewind?message_id={first_answer}", None, self.owner)[0], 400)
+
     def test_interrupt_also_cancels_queued_requests_so_nothing_restarts(self):
         """Stopping a member voids work queued behind it; a new message starts fresh."""
         self.say("一")

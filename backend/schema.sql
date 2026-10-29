@@ -646,6 +646,22 @@ CREATE TABLE IF NOT EXISTS request_cancel_reasons (
     request_id INTEGER PRIMARY KEY REFERENCES member_requests(id) ON DELETE CASCADE,
     reason TEXT NOT NULL CHECK(reason IN ('user_stop','member_away','member_removed','rerouted','no_reply','archived'))
 );
+-- Messages the owner took back: a retracted one no member began to handle, or the history a rewind returned to before.
+-- AI readers no longer see them; the page keeps each in place. No room column, so it never clashes with messages.room_id in joins.
+CREATE TABLE IF NOT EXISTS message_withdrawals (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN ('retracted','rewound')),
+    created_at INTEGER NOT NULL
+);
+-- Each rewind and, per member id, the executions it took back (JSON {member id: [execution ids]}): before the member's next
+-- execution the runner cuts its session before the earliest of them it finds. Not part of backups, since executions are not.
+CREATE TABLE IF NOT EXISTS room_rewinds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    message_id INTEGER NOT NULL,
+    cuts TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
 -- What produced a decision (model, threshold, prompt and package versions), so ratings stay comparable across versions.
 CREATE TABLE IF NOT EXISTS scheduler_decision_context (
     decision_id INTEGER PRIMARY KEY REFERENCES scheduler_decisions(id) ON DELETE CASCADE,

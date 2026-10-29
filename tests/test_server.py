@@ -259,7 +259,7 @@ class DiscussionTests(unittest.TestCase):
         self.assertTrue(snapshot["exported_at"])
         tables = snapshot["tables"]
         self.assertEqual(set(tables), {"rooms", "room_directory", "room_folder_assignments", "topic_folders", "room_creations",
-                                      "room_briefs", "room_user_requests", "topic_settings", "discussion_limits", "messages", "message_details", "message_summaries", "message_timings", "discussion_turns", "attachments", "room_modes", "room_members", "member_requests", "member_suggestions", "member_recommendations",
+                                      "room_briefs", "room_user_requests", "topic_settings", "discussion_limits", "messages", "message_withdrawals", "message_details", "message_summaries", "message_timings", "discussion_turns", "attachments", "room_modes", "room_members", "member_requests", "member_suggestions", "member_recommendations",
                                       "discussion_options", "round_budgets", "scheduler_decisions"})
         self.assertEqual([row["id"] for row in tables["messages"]], [row["id"] for row in originals] + [answer["id"]])
         for original, row in zip(originals + [answer], tables["messages"]):

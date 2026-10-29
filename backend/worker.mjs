@@ -64,6 +64,7 @@ const ROOM_BACKUP_QUERIES = {
   scheduler_decisions: `${DECISION_SELECT} WHERE d.room_id=? ORDER BY d.id`,
   topic_folders: "SELECT * FROM topic_folders WHERE id IN (SELECT folder_id FROM room_folder_assignments WHERE room_id=?)",
   messages: "SELECT * FROM messages WHERE room_id=? ORDER BY id",
+  message_withdrawals: "SELECT w.* FROM message_withdrawals w JOIN messages m ON m.id=w.message_id WHERE m.room_id=? ORDER BY w.message_id",
   attachments: "SELECT * FROM attachments WHERE room_id=? AND message_id IS NOT NULL ORDER BY message_id,position",
   discussion_turns: "SELECT * FROM discussion_turns WHERE room_id=? ORDER BY id",
   ...Object.fromEntries(["message_details", "message_summaries", "message_timings"]
@@ -73,13 +74,16 @@ const MESSAGE_QUERY = `SELECT messages.*, COALESCE(details.kind,'opinion') AS ki
   COALESCE(details.submitted_by, CASE WHEN messages.source IN ('cli','api','url','user')
   THEN messages.author ELSE '用户' END) AS submitted_by, details.turn_id,
   COALESCE(summaries.text,'') AS summary, COALESCE(summaries.author,'') AS summary_by, timing.elapsed_seconds,
-  answered.execution_id, answered.request_message_id
+  answered.execution_id, answered.request_message_id, COALESCE(withdrawn.kind,'') AS withdrawn
   FROM messages LEFT JOIN message_details AS details ON details.message_id=messages.id
+  LEFT JOIN message_withdrawals AS withdrawn ON withdrawn.message_id=messages.id
   LEFT JOIN message_summaries AS summaries ON summaries.message_id=messages.id
   LEFT JOIN message_timings AS timing ON timing.message_id=messages.id
   LEFT JOIN (SELECT answer_id, MIN(execution_id) AS execution_id, MIN(message_id) AS request_message_id
     FROM member_requests WHERE answer_id IS NOT NULL AND execution_id IS NOT NULL GROUP BY answer_id) AS answered
     ON answered.answer_id=messages.id`;
+// Messages the owner took back leave AI reads; the page asks for them with withdrawn=include to keep them in place.
+const INCLUDE_WITHDRAWN = "include";
 const ROOM_QUERY = `SELECT rooms.*, COALESCE(room_directory.archived,0) AS archived, COUNT(messages.id) AS message_count,
   COALESCE(MAX(messages.id),0) AS latest_id, room_folder_assignments.folder_id AS folder_id FROM rooms
   LEFT JOIN room_directory ON rooms.id=room_directory.room_id
@@ -295,6 +299,7 @@ function import_record_rows(tables, room_id, maps) {
         ["pending", "delivering"].includes(row.status) ? "cancelled" : row.status, messages.get(row.answer_id) ?? null, row.created_at,
         row.chain_id ?? 0, row.batch_id ?? 0, row.purpose ?? "ask", row.created_by ?? "user"])),
     ...insert_rows("member_suggestions", ["message_id", "member_id"], (tables.member_suggestions || []).map(row => [messages.get(row.message_id), members.get(row.member_id)])),
+    ...insert_rows("message_withdrawals", ["message_id", "kind", "created_at"], (tables.message_withdrawals || []).map(row => [messages.get(row.message_id), row.kind, row.created_at])),
     // Imported recommendations are history only: an open or waiting one no longer acts.
     ...insert_rows("member_recommendations", ["message_id", "room_id", "member_id", "provider", "confidence", "created_at", "expires_at", "status", "mode"],
       (tables.member_recommendations || []).map(row => [messages.get(row.message_id), room_id, members.get(row.member_id), row.provider, row.confidence,
@@ -413,6 +418,7 @@ async function require_room(database, room_id) {
     result.free = await free_view(database, room_id);
   }
   result.descriptions = await member_descriptions(database, room_id);
+  result.withdrawals = await message_withdrawals(database, room_id);
   result.speaking_order = await speaking_order(database, result);
   return result;
 }
@@ -919,6 +925,7 @@ async function manage_room(database, room_id, action, payload) {
       "DELETE FROM scheduler_decision_context WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)",
       "DELETE FROM scheduler_decision_inputs WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)",
       "DELETE FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)", "DELETE FROM scheduler_decisions WHERE room_id=?", "DELETE FROM scheduler_routing WHERE room_id=?",
+      "DELETE FROM message_withdrawals WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)", "DELETE FROM room_rewinds WHERE room_id=?",
       "DELETE FROM message_timings WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
       "DELETE FROM message_summaries WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
       "DELETE FROM message_details WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
@@ -994,8 +1001,11 @@ async function get_attachment(database, room_id, id) {
 }
 
 /** Add published files to a page of original messages in one query. */
-async function attach_message_files(database, messages) {
-  if (!messages.length) return messages;
+async function attach_message_files(database, all_messages) {
+  // The owner retracted these before anyone handled them: only the page that retracted one keeps its text.
+  for (const message of all_messages.filter(item => item.withdrawn === "retracted")) Object.assign(message, { text: "", summary: "", attachments: [], suggestions: [] });
+  const messages = all_messages.filter(item => item.withdrawn !== "retracted");
+  if (!messages.length) return all_messages;
   const rows = await database.prepare(`SELECT * FROM attachments WHERE message_id IN (${messages.map(() => "?").join(",")}) ORDER BY position,id`)
     .bind(...messages.map(message => message.id)).all();
   for (const message of messages) message.attachments = rows.results.filter(file => file.message_id === message.id).map(attachment_view);
@@ -1006,7 +1016,7 @@ async function attach_message_files(database, messages) {
     .bind(...messages.map(message => message.id)).all()).results;
   for (const message of messages) message.suggestions = suggestions.filter(item => item.message_id === message.id)
     .map(({ message_id, ...item }) => item);
-  return messages;
+  return all_messages;
 }
 
 /** List published attachments or recover one exact upload receipt. */
@@ -1404,6 +1414,7 @@ function message_filters(room_id, params) {
     if (after < 0 || integer(params.page ?? 1) !== 1) throw new HttpError(400, "after 需为非负消息编号，不能与翻页同时使用");
     clauses.push("messages.id>?"); values.push(after);
   }
+  if (params.withdrawn !== INCLUDE_WITHDRAWN) clauses.push("withdrawn.message_id IS NULL");
   return { where: clauses.join(" AND "), values };
 }
 
@@ -2696,7 +2707,137 @@ function free_hand_over_statements(database, room_id, routes, departed_id = 0) {
 async function free_execution_detail(database, row) {
   const member = await database.prepare("SELECT * FROM room_members WHERE id=?").bind(row.member_id).first();
   const requests = (await database.prepare("SELECT id,message_id,status,purpose FROM member_requests WHERE execution_id=? ORDER BY id").bind(row.id).all()).results;
-  return { ...pick(row, FREE_EXECUTION_FIELDS), member: member.name, read_until: member.read_until, requests };
+  return { ...pick(row, FREE_EXECUTION_FIELDS), member: member.name, read_until: member.read_until, requests,
+    rewound_executions: await member_rewinds(database, member) };
+}
+
+/** The room's taken-back messages by id, so the page keeps them in place while AI readers skip them. */
+async function message_withdrawals(database, room_id) {
+  return (await database.prepare(`SELECT w.message_id,w.kind FROM message_withdrawals w JOIN messages m ON m.id=w.message_id
+    WHERE m.room_id=? ORDER BY w.message_id`).bind(room_id).all()).results;
+}
+
+/** One visible message of the user in a free room without an open discussion, which a retract or rewind may take back. */
+async function owner_message(database, room_id, message_id) {
+  const row = await database.prepare("SELECT * FROM messages WHERE room_id=? AND id=?").bind(room_id, message_id).first();
+  if (!row) throw new HttpError(404, "消息不存在");
+  if (row.author !== "用户") throw new HttpError(400, "只能撤回或编辑用户自己的消息");
+  if (await room_mode(database, room_id) !== "free") throw new HttpError(400, "只有协作房间的消息可以撤回或编辑");
+  if (await database.prepare("SELECT 1 FROM room_directory WHERE room_id=? AND archived=1").bind(room_id).first()) throw new HttpError(400, "房间已存档；恢复后才能撤回或编辑");
+  // A discussion's host reads the user's messages itself, with no request that shows whether it began.
+  if (await database.prepare("SELECT 1 FROM discussion_sessions WHERE room_id=? AND (status IN ('active','paused') OR started_message_id>=?)").bind(room_id, message_id).first()) {
+    throw new HttpError(409, "讨论进行中，或这条消息之后开启过讨论，不能撤回或编辑");
+  }
+  return row;
+}
+
+/**
+ * Owner takes back a message no member began to handle: its queued requests end and AI readers no longer see it.
+ * Bound to one known message, so it takes no revision; the text comes back so the page can put it in the input again.
+ */
+async function retract_message(database, room_id, message_id, token) {
+  await require_free_owner(database, room_id, token);
+  const message = await owner_message(database, room_id, message_id);
+  const withdrawn = () => database.prepare("SELECT 1 FROM message_withdrawals WHERE message_id=?").bind(message_id).first();
+  if (await withdrawn()) return { message_id, text: message.text, duplicate: true };
+  const started = "EXISTS(SELECT 1 FROM member_requests WHERE message_id=? AND status IN ('delivering','completed','failed'))";
+  const refused = "已有成员开始处理这条消息，不能撤回；可以编辑这条消息回退到它之前";
+  if (await database.prepare(`SELECT ${started} AS started`).bind(message_id).first("started")) throw new HttpError(409, refused);
+  try {
+    await checked_batch(database, `NOT ${started} AND NOT EXISTS(SELECT 1 FROM message_withdrawals WHERE message_id=?)`, [message_id, message_id], [
+      database.prepare("UPDATE member_requests SET status='cancelled' WHERE message_id=? AND status='pending'").bind(message_id),
+      database.prepare("DELETE FROM free_queue WHERE message_id=?").bind(message_id),
+      database.prepare("INSERT INTO message_withdrawals (message_id,kind,created_at) VALUES (?,'retracted',unixepoch())").bind(message_id),
+      ...free_settle_statements(database, room_id)]);
+  } catch (error) {
+    if (await withdrawn()) return { message_id, text: message.text, duplicate: true };
+    if (error instanceof HttpError) throw new HttpError(409, refused);
+    throw error;
+  }
+  return { message_id, text: message.text, duplicate: false };
+}
+
+// Software whose session the runner can cut before a taken-back execution; an API member rebuilds its context each time.
+const CUTTABLE_ADAPTERS = ["claude", "codex_cli", "antigravity_cli"];
+// Executions a rewind takes back: any touching a message from the rewind point on, and any still running.
+const REWOUND_EXECUTIONS = `SELECT e.id,e.member_id FROM member_executions e WHERE e.room_id=? AND (e.status IN ('dispatched','started')
+  OR EXISTS(SELECT 1 FROM member_requests r WHERE r.execution_id=e.id AND (r.message_id>=? OR r.answer_id>=?))) ORDER BY e.id`;
+
+/**
+ * What rewinding to just before a message takes back, and a revision of the state it was read from; mirrors
+ * backend/free_room.py. Each member's session is `cut`, `fresh` (API), `unchanged` or `kept` (its own window keeps it).
+ */
+async function rewind_plan(database, room_id, message_id) {
+  await owner_message(database, room_id, message_id);
+  if (await database.prepare("SELECT 1 FROM message_withdrawals WHERE message_id=?").bind(message_id).first()) throw new HttpError(409, "这条消息已被撤回或回退");
+  const executions = new Map();
+  for (const row of (await database.prepare(REWOUND_EXECUTIONS).bind(room_id, message_id, message_id).all()).results) {
+    executions.set(row.member_id, [...executions.get(row.member_id) || [], row.id]);
+  }
+  const members = (await database.prepare("SELECT id,name,access,adapter FROM room_members WHERE room_id=? AND status<>'removed' ORDER BY id").bind(room_id).all()).results
+    .map(row => {
+      const taken = executions.get(row.id) || [];
+      const session = row.access !== "runner" || ![...CUTTABLE_ADAPTERS, "api"].includes(row.adapter) ? "kept"
+        : !taken.length ? "unchanged" : row.adapter === "api" ? "fresh" : "cut";
+      return { id: row.id, name: row.name, executions: taken, session };
+    });
+  const counts = await database.prepare(`SELECT (SELECT COUNT(*) FROM messages m WHERE m.room_id=? AND m.id>=?
+    AND NOT EXISTS(SELECT 1 FROM message_withdrawals w WHERE w.message_id=m.id)) AS count,
+    (SELECT COALESCE(MAX(id),0) FROM messages WHERE room_id=?) AS latest`).bind(room_id, message_id, room_id).first();
+  const state = JSON.stringify([message_id, counts.latest, counts.count, members]);
+  return { message_id, messages: counts.count, members, revision: (await digest_hex(state)).slice(0, 12) };
+}
+
+/**
+ * Owner returns the room to just before one of its messages, as editing that message does; mirrors backend/free_room.py.
+ * Read the plan first and send its revision: missing is refused, changed conflicts. Files the members changed are not restored.
+ */
+async function rewind_room(database, room_id, token, payload) {
+  await require_free_owner(database, room_id, token);
+  const message_id = payload.message_id;
+  if (!Number.isInteger(message_id)) throw new HttpError(400, "须提供要回退到其之前的消息编号 message_id");
+  if (payload.revision === undefined || payload.revision === null) throw new HttpError(400, "回退前须先读取回退计划（GET rewind?message_id=），并带上其 revision");
+  const plan = await rewind_plan(database, room_id, message_id);
+  const changed = "房间已有新的消息或执行，请重新读取回退计划后再确认";
+  if (payload.revision !== plan.revision) throw new HttpError(409, changed);
+  const cuts = Object.fromEntries(plan.members.filter(member => member.session === "cut").map(member => [String(member.id), member.executions]));
+  const seen = await database.prepare(`SELECT (SELECT COALESCE(MAX(id),0) FROM messages WHERE room_id=?) AS latest,
+    (SELECT COALESCE(MAX(id),0) FROM member_executions WHERE room_id=?) AS execution,
+    (SELECT COUNT(*) FROM member_executions WHERE room_id=? AND ${FREE_LIVE}) AS live`).bind(room_id, room_id, room_id).first();
+  try {
+    await checked_batch(database, `(SELECT COALESCE(MAX(id),0) FROM messages WHERE room_id=?)=? AND (SELECT COALESCE(MAX(id),0) FROM member_executions WHERE room_id=?)=?
+      AND (SELECT COUNT(*) FROM member_executions WHERE room_id=? AND ${FREE_LIVE})=? AND NOT EXISTS(SELECT 1 FROM message_withdrawals WHERE message_id=?)`,
+    [room_id, seen.latest, room_id, seen.execution, room_id, seen.live, message_id], [
+      ...free_finish_statements(database, "room_id=?", [room_id], "cancelled", "用户回退了对话", "cancelled", "user_stop"),
+      database.prepare("INSERT OR REPLACE INTO request_cancel_reasons (request_id,reason) SELECT id,'user_stop' FROM member_requests WHERE room_id=? AND message_id>=? AND status='pending'").bind(room_id, message_id),
+      database.prepare("UPDATE member_requests SET status='cancelled' WHERE room_id=? AND message_id>=? AND status='pending'").bind(room_id, message_id),
+      database.prepare("DELETE FROM free_queue WHERE room_id=? AND message_id>=?").bind(room_id, message_id),
+      // Batches of taken-back dispatches never hand back, and a dispatch the round limit held from them is never sent.
+      database.prepare("UPDATE free_batches SET settled=1 WHERE room_id=? AND batch_id>=?").bind(room_id, message_id),
+      database.prepare("UPDATE free_chain_holds SET message_id=0,host_id=0,names='[]',handoff=0 WHERE room_id=? AND message_id>=?").bind(room_id, message_id),
+      database.prepare(`INSERT INTO message_withdrawals (message_id,kind,created_at) SELECT id,'rewound',unixepoch() FROM messages m
+        WHERE m.room_id=? AND m.id>=? AND NOT EXISTS(SELECT 1 FROM message_withdrawals w WHERE w.message_id=m.id)`).bind(room_id, message_id),
+      database.prepare("UPDATE room_members SET read_until=MIN(read_until,?) WHERE room_id=?").bind(message_id - 1, room_id),
+      database.prepare("INSERT INTO room_rewinds (room_id,message_id,cuts,created_at) VALUES (?,?,?,unixepoch())").bind(room_id, message_id, JSON.stringify(cuts)),
+      ...free_settle_statements(database, room_id)]);
+  } catch (error) {
+    if (error instanceof HttpError) throw new HttpError(409, changed);
+    throw error;
+  }
+  const rewind = await database.prepare("SELECT id FROM room_rewinds WHERE room_id=? AND message_id=? ORDER BY id DESC LIMIT 1").bind(room_id, message_id).first();
+  return { rewind_id: rewind.id, ...plan };
+}
+
+// The runner checks this many of a member's latest rewinds before each execution.
+const RECENT_REWINDS = 50;
+
+/** Executions taken back from one member by recent rewinds, oldest first; the runner cuts before the earliest it finds. */
+async function member_rewinds(database, member) {
+  const taken = new Set();
+  for (const row of (await database.prepare("SELECT cuts FROM room_rewinds WHERE room_id=? ORDER BY id DESC LIMIT ?").bind(member.room_id, RECENT_REWINDS).all()).results) {
+    for (const id of JSON.parse(row.cuts)[String(member.id)] || []) taken.add(id);
+  }
+  return [...taken].sort((first, second) => first - second);
 }
 
 /** List what the runner should deliver or reconcile; owner credential only. */
@@ -3716,6 +3857,14 @@ async function handle_api(database, request, parts, params, bucket, setup_key = 
   if (parts[3] === "budget" && parts.length === 4 && method === "POST") return respond(await set_chain_rounds(database, room_id, request.headers.get("X-Discussion-Token") ?? "", await read_payload(request)));
   if (parts[3] === "timeline" && parts.length === 4 && method === "GET") return respond(await execution_timeline(database, room_id, params.after));
   if (parts[3] === "register" && parts.length === 4 && method === "POST") return respond(await register_member(database, room_id, request.headers.get("X-Discussion-Token") ?? ""));
+  if (parts[3] === "messages" && parts.length === 6 && parts[5] === "retract" && method === "POST") {
+    return respond(await retract_message(database, room_id, integer(parts[4]), request.headers.get("X-Discussion-Token") ?? ""));
+  }
+  if (parts[3] === "rewind" && parts.length === 4) {
+    const token = request.headers.get("X-Discussion-Token") ?? "";
+    if (method === "GET") { await require_free_owner(database, room_id, token); return respond(await rewind_plan(database, room_id, integer(params.message_id ?? 0))); }
+    if (method === "POST") return respond(await rewind_room(database, room_id, token, await read_payload(request)));
+  }
   if (parts[3] === "speaking-order" && parts.length === 4) {
     if (method === "GET") return respond((await require_room(database, room_id)).speaking_order);
     if (method === "POST") {

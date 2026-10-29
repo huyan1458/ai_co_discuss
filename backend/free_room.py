@@ -1190,7 +1190,8 @@ def execution_detail(connection, row):
     member = connection.execute("SELECT * FROM room_members WHERE id=?", (row["member_id"],)).fetchone()
     requests = [dict(item) for item in connection.execute(
         "SELECT id,message_id,status,purpose FROM member_requests WHERE execution_id=? ORDER BY id", (row["id"],))]
-    return {**public_execution(row), "member": member["name"], "read_until": member["read_until"], "requests": requests}
+    return {**public_execution(row), "member": member["name"], "read_until": member["read_until"], "requests": requests,
+            "rewound_executions": member_rewinds(connection, member["id"])}
 
 
 def view_execution(connection, room_id, execution_id, token):
@@ -1297,6 +1298,137 @@ def interrupt_member(connection, room_id, member_id, token):
     stop_member_work(connection, member_id, "用户打断", "user_stop")
     settle_batches(connection, room_id)
     return free_view(connection, room_id)
+
+
+def withdrawals(connection, room_id):
+    """The room's taken-back messages by id, so the page keeps them in place while AI readers skip them."""
+    return [dict(row) for row in connection.execute("""SELECT w.message_id,w.kind FROM message_withdrawals w
+        JOIN messages m ON m.id=w.message_id WHERE m.room_id=? ORDER BY w.message_id""", (room_id,))]
+
+
+def owner_message(connection, room_id, message_id):
+    """One visible message of the user in a free room without an open discussion, which a retract or rewind may take back."""
+    row = connection.execute("SELECT * FROM messages WHERE room_id=? AND id=?", (room_id, message_id)).fetchone()
+    if not row:
+        raise LookupError("消息不存在")
+    if row["author"] != "用户":
+        raise ValueError("只能撤回或编辑用户自己的消息")
+    if room_mode(connection, room_id) != "free":
+        raise ValueError("只有协作房间的消息可以撤回或编辑")
+    if connection.execute("SELECT 1 FROM room_directory WHERE room_id=? AND archived=1", (room_id,)).fetchone():
+        raise ValueError("房间已存档；恢复后才能撤回或编辑")
+    # A discussion's host reads the user's messages itself, with no request that shows whether it began.
+    if connection.execute("SELECT 1 FROM discussion_sessions WHERE room_id=? AND (status IN ('active','paused') OR started_message_id>=?)",
+                          (room_id, message_id)).fetchone():
+        raise FileExistsError("讨论进行中，或这条消息之后开启过讨论，不能撤回或编辑")
+    return row
+
+
+def retract_message(connection, room_id, message_id, token):
+    """Owner takes back a message no member began to handle: its queued requests end and AI readers no longer see it.
+
+    Bound to one known message, so it takes no revision; a message any member started, answered or failed is refused.
+    A member working on an earlier message may still have read it, which the room cannot know.
+
+    Returns:
+        `{"message_id", "text", "duplicate"}`; the text lets the page put it back in the input for editing.
+    """
+    require_owner(connection, room_id, token)
+    begin_write(connection)
+    message = owner_message(connection, room_id, message_id)
+    if connection.execute("SELECT 1 FROM message_withdrawals WHERE message_id=?", (message_id,)).fetchone():
+        return {"message_id": message_id, "text": message["text"], "duplicate": True}
+    if connection.execute("SELECT 1 FROM member_requests WHERE message_id=? AND status IN ('delivering','completed','failed')", (message_id,)).fetchone():
+        raise FileExistsError("已有成员开始处理这条消息，不能撤回；可以编辑这条消息回退到它之前")
+    connection.execute("UPDATE member_requests SET status='cancelled' WHERE message_id=? AND status='pending'", (message_id,))
+    connection.execute("DELETE FROM free_queue WHERE message_id=?", (message_id,))
+    connection.execute("INSERT INTO message_withdrawals (message_id,kind,created_at) VALUES (?,'retracted',?)", (message_id, int(time.time())))
+    settle_batches(connection, room_id)
+    return {"message_id": message_id, "text": message["text"], "duplicate": False}
+
+
+# Software whose session the runner can cut before a taken-back execution; an API member rebuilds its context each time.
+CUTTABLE_ADAPTERS = ("claude", "codex_cli", "antigravity_cli")
+# Executions a rewind takes back: any touching a message from the rewind point on, and any still running.
+REWOUND_EXECUTIONS = """SELECT e.id,e.member_id FROM member_executions e WHERE e.room_id=? AND (e.status IN ('dispatched','started')
+    OR EXISTS(SELECT 1 FROM member_requests r WHERE r.execution_id=e.id AND (r.message_id>=? OR r.answer_id>=?))) ORDER BY e.id"""
+
+
+def rewind_plan(connection, room_id, message_id):
+    """What rewinding to just before a message takes back, and a revision of the state it was read from.
+
+    Each member reports what happens to its session: `cut` (the runner cuts it before the first taken-back execution),
+    `fresh` (an API member, which rebuilds its context), `unchanged` (no taken-back execution) or `kept` (manual, online or
+    App software whose own window keeps what it saw).
+    """
+    owner_message(connection, room_id, message_id)
+    if connection.execute("SELECT 1 FROM message_withdrawals WHERE message_id=?", (message_id,)).fetchone():
+        raise FileExistsError("这条消息已被撤回或回退")
+    executions = {}
+    for row in connection.execute(REWOUND_EXECUTIONS, (room_id, message_id, message_id)):
+        executions.setdefault(row["member_id"], []).append(row["id"])
+    members = []
+    for row in connection.execute("SELECT id,name,access,adapter FROM room_members WHERE room_id=? AND status<>'removed' ORDER BY id", (room_id,)):
+        taken = executions.get(row["id"], [])
+        session = ("kept" if row["access"] != "runner" or row["adapter"] not in (*CUTTABLE_ADAPTERS, "api")
+                   else "unchanged" if not taken else "fresh" if row["adapter"] == "api" else "cut")
+        members.append({"id": row["id"], "name": row["name"], "executions": taken, "session": session})
+    count = connection.execute("""SELECT COUNT(*) FROM messages m WHERE m.room_id=? AND m.id>=?
+        AND NOT EXISTS(SELECT 1 FROM message_withdrawals w WHERE w.message_id=m.id)""", (room_id, message_id)).fetchone()[0]
+    latest = connection.execute("SELECT COALESCE(MAX(id),0) FROM messages WHERE room_id=?", (room_id,)).fetchone()[0]
+    state = json.dumps([message_id, latest, count, members])
+    return {"message_id": message_id, "messages": count, "members": members,
+            "revision": hashlib.sha256(state.encode("utf-8")).hexdigest()[:12]}
+
+
+def rewind_room(connection, room_id, token, payload):
+    """Owner returns the room to just before one of its messages, as editing that message does.
+
+    Read the plan first (`GET rewind?message_id=`) and send its revision: a missing revision is refused and a changed
+    one conflicts. The message and everything after it stay on the page but leave AI reads; running work stops, open
+    requests on them end, members read again from before the message, and each runner member's session is cut before
+    its first taken-back execution when it next works. Files the members changed are not restored.
+    """
+    require_owner(connection, room_id, token)
+    begin_write(connection)
+    message_id = payload.get("message_id")
+    if type(message_id) is not int:
+        raise ValueError("须提供要回退到其之前的消息编号 message_id")
+    if payload.get("revision") is None:
+        raise ValueError("回退前须先读取回退计划（GET rewind?message_id=），并带上其 revision")
+    plan = rewind_plan(connection, room_id, message_id)
+    if payload["revision"] != plan["revision"]:
+        raise FileExistsError("房间已有新的消息或执行，请重新读取回退计划后再确认")
+    now = int(time.time())
+    for row in connection.execute("SELECT id FROM member_executions WHERE room_id=? AND status IN ('dispatched','started')", (room_id,)).fetchall():
+        finish_execution(connection, row["id"], "cancelled", "用户回退了对话", "cancelled", "user_stop")
+    record_cancel_reasons(connection, "room_id=? AND message_id>=? AND status='pending'", (room_id, message_id), "user_stop")
+    connection.execute("UPDATE member_requests SET status='cancelled' WHERE room_id=? AND message_id>=? AND status='pending'", (room_id, message_id))
+    connection.execute("DELETE FROM free_queue WHERE room_id=? AND message_id>=?", (room_id, message_id))
+    # Batches of taken-back dispatches never hand back, and a dispatch the round limit held from them is never sent.
+    connection.execute("UPDATE free_batches SET settled=1 WHERE room_id=? AND batch_id>=?", (room_id, message_id))
+    connection.execute("UPDATE free_chain_holds SET message_id=0,host_id=0,names='[]',handoff=0 WHERE room_id=? AND message_id>=?", (room_id, message_id))
+    connection.execute("""INSERT INTO message_withdrawals (message_id,kind,created_at) SELECT id,'rewound',? FROM messages m
+        WHERE m.room_id=? AND m.id>=? AND NOT EXISTS(SELECT 1 FROM message_withdrawals w WHERE w.message_id=m.id)""", (now, room_id, message_id))
+    connection.execute("UPDATE room_members SET read_until=MIN(read_until,?) WHERE room_id=?", (message_id - 1, room_id))
+    cuts = {str(member["id"]): member["executions"] for member in plan["members"] if member["session"] == "cut"}
+    cursor = connection.execute("INSERT INTO room_rewinds (room_id,message_id,cuts,created_at) VALUES (?,?,?,?)",
+                                (room_id, message_id, json.dumps(cuts), now))
+    settle_batches(connection, room_id)
+    return {"rewind_id": cursor.lastrowid, **plan}
+
+
+# The runner checks this many of a member's latest rewinds before each execution.
+RECENT_REWINDS = 50
+
+
+def member_rewinds(connection, member_id):
+    """Executions taken back from one member by recent rewinds, oldest first; the runner cuts before the earliest it finds."""
+    taken = set()
+    for row in connection.execute("SELECT cuts FROM room_rewinds WHERE room_id=(SELECT room_id FROM room_members WHERE id=?) ORDER BY id DESC LIMIT ?",
+                                  (member_id, RECENT_REWINDS)):
+        taken.update(json.loads(row["cuts"]).get(str(member_id), []))
+    return sorted(taken)
 
 
 def add_member(connection, room_id, token, payload, now):
