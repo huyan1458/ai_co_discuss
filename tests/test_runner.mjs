@@ -2102,7 +2102,8 @@ test('a free room delivers all open requests as one execution with the member cr
   const task = JSON.parse(readFileSync(join(config.directory, 'free-1.task.json'), 'utf8'));
   assert.deepEqual(task.request_messages, [11, 12]);
   assert.equal(task.read_after, 10);
-  assert.match(delivered[0].prompt, /--execution 1/);
+  assert.match(task.instructions, /--execution 1/);
+  assert.match(delivered[0].prompt, /free-1\.task\.json/);
   // Free rooms get the same Windows read rule as discussions; it sits in the prompt, since reading the task file may garble it.
   const has_rg = process.platform === 'win32' && spawnSync('rg', ['--version'], { stdio: 'ignore' }).status === 0;
   assert.equal(/rg --encoding utf-8/.test(delivered[0].prompt), has_rg);
@@ -2277,18 +2278,35 @@ test("the owner's member descriptions reach the scheduler's state and each membe
 });
 
 test('an expert prompt replaces its software preset, and an empty one turns the preset off', () => {
-  assert.equal(expert_prompt({ adapter: 'antigravity_cli' }), EXPERT_PROMPT_PRESETS.antigravity_cli.trim());
-  assert.equal(expert_prompt({ adapter: 'antigravity_cli', system_prompt: '  只读不写  ' }), '只读不写');
-  assert.equal(expert_prompt({ adapter: 'antigravity_cli', system_prompt: '' }), '');
+  assert.equal(expert_prompt({ adapter: 'api' }), EXPERT_PROMPT_PRESETS.api.trim());
+  assert.equal(expert_prompt({ adapter: 'api', system_prompt: '  只读不写  ' }), '只读不写');
+  assert.equal(expert_prompt({ adapter: 'api', system_prompt: '' }), '');
   assert.equal(expert_prompt({ adapter: 'claude' }), '', 'software without a need has no preset');
+  assert.equal(expert_prompt({ adapter: 'antigravity_cli' }), '', 'agy needs only fixed rules, which come from the runner');
   assert.match(expert_prompt({ adapter: 'api' }), /读不到本地文件.*写明缺什么/);
 });
 
-test('the agy command limit comes from the runner, so clearing the expert prompt cannot drop it', () => {
-  assert.match(agy_command_rule('antigravity_cli', 'codiscuss'), /run_command 只能运行 codiscuss/);
+test('agy rules come from the runner, so clearing the expert prompt cannot drop them', () => {
+  assert.match(agy_command_rule('antigravity_cli', 'codiscuss'), /run_command 只能运行 codiscuss.*写出进展/);
   assert.equal(agy_command_rule('claude', 'codiscuss'), '');
-  assert.equal(agy_command_rule('antigravity_cli', 'codiscuss', { cwd: 'D:/project', project_access: 'write' }), '', 'a writable agy runs any command');
-  assert.doesNotMatch(EXPERT_PROMPT_PRESETS.antigravity_cli, /run_command/);
+  // A writable agy runs any command, but still writes its progress so the page can show how far it got.
+  const writable = agy_command_rule('antigravity_cli', 'codiscuss', { cwd: 'D:/project', project_access: 'write' });
+  assert.doesNotMatch(writable, /run_command/);
+  assert.match(writable, /写出进展/);
+  assert.equal(EXPERT_PROMPT_PRESETS.antigravity_cli, undefined);
+});
+
+test('the fixed free-room text states only facts and leaves the rules to the skills', () => {
+  const base = { name: 'Codex', profile: { adapter: 'codex_cli', project_access: 'read' }, cli: 'codiscuss', room: 'room', messages: '#3', read_after: 2, execution_id: 7, task_path: 't' };
+  const host = free_task_text({ ...base, role: 'host' });
+  assert.match(host.instructions, /先读 skills 列出的技能/);
+  assert.match(host.instructions, /message post room --as Codex --kind chat --execution 7/);
+  assert.match(host.instructions, /主持人.*discuss-host/);
+  // Rules already in the skills are not repeated, and the prompt does not restate the task file's commands.
+  assert.doesNotMatch(host.instructions, /不建定时任务|提交被拒绝|后面的消息可能修正|--handoff/);
+  assert.doesNotMatch(host.prompt, /message post/);
+  assert.equal(host.prompt.match(/不读取凭据/g).length, 1);
+  assert.doesNotMatch(host.instructions, /凭据内容/);
 });
 
 test("the delivered task and the API system prompt carry only this member's own prompt", async t => {
@@ -2454,7 +2472,7 @@ test('changed files in a Git working tree are reported after the member exits', 
   assert.equal(state.reports[3], undefined, 'non-Git or unavailable detection is not an empty report');
 });
 
-test('the host task explains routing and hand-backs; other members get no dispatch rule', async t => {
+test('only the host task points to the host skill; other members get no dispatch rule', async t => {
   const { state, store, config } = await free_fixture(t);
   state.claude_role = 'host';
   const tasks = [];
@@ -2462,13 +2480,14 @@ test('the host task explains routing and hand-backs; other members get no dispat
   await runner.tick();
   const task = JSON.parse(readFileSync(join(config.directory, 'free-1.task.json'), 'utf8'));
   assert.equal(task.role, 'host');
-  assert.match(task.instructions, /--to 成员名/);
+  // How to route and hand back lives in discuss-host; the task only says this member hosts.
+  assert.match(task.instructions, /主持人.*discuss-host/);
   state.claude_role = 'member';
   state.executions[0].status = 'completed';
   await runner.tick();
   state.pending = [{ id: 9, message_id: 19 }];
   await runner.tick();
-  assert.doesNotMatch(JSON.parse(readFileSync(join(config.directory, 'free-2.task.json'), 'utf8')).instructions, /--to 成员名/);
+  assert.doesNotMatch(JSON.parse(readFileSync(join(config.directory, 'free-2.task.json'), 'utf8')).instructions, /主持人|discuss-host/);
 });
 
 test('two instances of one platform keep separate sessions and credentials', async t => {
