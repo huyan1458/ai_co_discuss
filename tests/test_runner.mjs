@@ -1285,6 +1285,7 @@ test('a slow room never holds up the other rooms between service polls', async t
   const slow_gate = new Promise(done => { release_slow = done; });
   const service = new DiscussionService(home, config => ({ stop_children() {},
     tick: async () => { ticks.push(config.room); if (config.room === 'slow') await slow_gate; return 'waiting'; } }));
+  service.intervals = { local: 0, remote: 0 };
   t.after(async () => { release_slow(); await service.close(); rmSync(home, { recursive: true, force: true }); });
   await service.tick({ wait: false });
   await delay(5);
@@ -1296,6 +1297,44 @@ test('a slow room never holds up the other rooms between service polls', async t
   await delay(5);
   await service.tick();
   assert.deepEqual(ticks.filter(room => room === 'slow').length, 2);
+});
+
+test('a hosted site is polled less often than a local one, and a site update checks its rooms at once', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
+  // The test site serves the update stream; each `change` written to it should wake that site's rooms.
+  let stream;
+  const updates = createServer((request, response) => {
+    if (request.url !== '/api/updates') { response.writeHead(404).end(); return; }
+    response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    response.write('event: ready\ndata: {}\n\n');
+    stream = response;
+  });
+  await new Promise(done => updates.listen(0, '127.0.0.1', done));
+  const local_site = `http://127.0.0.1:${updates.address().port}`;
+  register_room(home, room_config(home, local_site, 'local'));
+  register_room(home, room_config(home, 'http://remote.invalid', 'remote'));
+  const ticks = [];
+  const service = new DiscussionService(home, config => ({ stop_children() {}, tick: async () => { ticks.push(config.room); return 'waiting'; } }));
+  service.intervals = { local: 50, remote: 60_000 };
+  t.after(async () => { await service.close(); stream?.destroy(); updates.close(); rmSync(home, { recursive: true, force: true }); });
+  const count = room => ticks.filter(item => item === room).length;
+  await service.tick({ wait: false });
+  await delay(80);
+  await service.tick({ wait: false });
+  await delay(10);
+  assert.equal(count('local'), 2, 'a local room is polled again once its interval passes');
+  assert.equal(count('remote'), 1, 'a hosted room waits for its longer interval');
+  service.push = true;
+  service.intervals.local = 60_000;
+  await service.tick({ wait: false });
+  for (let waited = 0; !stream && waited < 2000; waited += 10) await delay(10);
+  await delay(20);
+  const after_ready = count('local');
+  assert.ok(after_ready >= 3, 'connecting to the stream checks the site once for changes missed meanwhile');
+  stream.write('event: change\ndata: {}\n\n');
+  await delay(50);
+  assert.equal(count('local'), after_ready + 1, 'a change checks the local room at once, without waiting for a poll');
+  assert.equal(count('remote'), 1, 'another site is not woken by this site\'s change');
 });
 
 test('the sweep removes stale unused launch folders, orphaned drafts and the old part of oversized logs only', t => {

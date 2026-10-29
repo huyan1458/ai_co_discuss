@@ -13,6 +13,10 @@ import { DiscussionRunner, DiscussionStore, acquire_lock, api, load_config, paus
 import { FreeRoomRunner } from './free_runner.mjs';
 
 const POLL_MS = 2000;
+// A hosted site is polled less often than a local one: every request spends its database quota.
+const REMOTE_POLL_MS = 10_000;
+const UPDATE_RETRY_MS = 5000;
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]']);
 const REMOTE_SYNC_MS = 3000;
 const START_WAIT_MS = 5000;
 const STOP_WAIT_MS = 20_000;
@@ -344,10 +348,16 @@ export class DiscussionService {
     this.create_runner = create_runner;
     this.log = log;
     this.workers = new Map();
+    // How often each room is checked without a push: a local site costs nothing, a hosted one spends its database quota.
+    this.intervals = { local: POLL_MS, remote: REMOTE_POLL_MS };
+    // The resident service turns this on so a site's update stream checks its rooms at once; tests leave it off.
+    this.push = false;
+    this.streams = new Map();
+    this.closed = false;
   }
   /**
-   * Reload the registry, close removed rooms, then tick every registered room at once. A room still busy from an
-   * earlier call is skipped. `wait: false` returns without waiting, so a slow remote site never delays the other rooms.
+   * Reload the registry, close removed rooms, then tick the rooms that are due. `wait: true` ticks every idle room and
+   * waits for them; `wait: false` returns at once, so a slow remote site never delays the other rooms.
    */
   async tick({ wait = true } = {}) {
     const configs = read_registry(this.home);
@@ -357,12 +367,58 @@ export class DiscussionService {
     for (const path of configs) {
       if (!this.workers.has(path)) this.workers.set(path, new RoomWorker(path, this.create_runner, this.log, this.home));
       const worker = this.workers.get(path);
-      // Nothing awaits a tick started with `wait: false`, so its failure is logged here instead of crashing the service.
-      worker.busy ??= this.tick_worker(path, worker).catch(error => this.log(`${worker.state.room || path}: 检查失败：${error.message}`))
-        .finally(() => { worker.busy = null; });
+      if (!worker.busy && (wait || Date.now() >= (worker.next_at ?? 0))) this.start(path, worker);
     }
+    if (this.push) for (const site of new Set([...this.workers.values()].map(worker => worker.state.site).filter(Boolean))) this.watch(site);
     if (wait) await Promise.all([...this.workers.values()].map(worker => worker.busy));
     this.write_status();
+  }
+  /** Start one room's tick; a room asked again while busy ticks once more right after. */
+  start(path, worker) {
+    if (this.closed) return;
+    if (worker.busy) { worker.woken = true; return; }
+    // Nothing awaits this tick, so its failure is logged here instead of crashing the service.
+    worker.busy = this.tick_worker(path, worker).catch(error => this.log(`${worker.state.room || path}: 检查失败：${error.message}`))
+      .finally(() => {
+        // Counted from the end of the tick, once the room's site is known; a slow site does not poll back to back.
+        const local = !worker.state.site || LOOPBACK.has(new URL(worker.state.site).hostname);
+        worker.next_at = Date.now() + (local ? this.intervals.local : this.intervals.remote);
+        worker.busy = null;
+        if (worker.woken && this.workers.get(path) === worker) { worker.woken = false; this.start(path, worker); }
+      });
+  }
+  /** Check every room of a site now, as its website reported a change. */
+  wake(site) {
+    for (const [path, worker] of this.workers) if (worker.state.site === site) this.start(path, worker);
+  }
+  /**
+   * Follow a site's `/api/updates` stream and wake its rooms on each change, so a message reaches the AI within
+   * milliseconds instead of the next poll. A site without push (204) is left to polling; a dropped stream reconnects.
+   */
+  watch(site) {
+    if (this.streams.has(site) || this.closed) return;
+    const controller = new AbortController();
+    const done = (async () => {
+      while (!controller.signal.aborted) {
+        try {
+          const response = await fetch(`${site}/api/updates`, { signal: controller.signal, headers: { accept: 'text/event-stream' } });
+          if (response.status === 204) return;
+          if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+          const decoder = new TextDecoder();
+          let buffer = '';
+          for await (const chunk of response.body) {
+            buffer += decoder.decode(chunk, { stream: true }).replaceAll('\r\n', '\n');
+            for (let end = buffer.indexOf('\n\n'); end >= 0; end = buffer.indexOf('\n\n')) {
+              // `ready` comes on every (re)connection, so changes missed while disconnected are picked up too.
+              if (/^event: (change|ready)$/m.test(buffer.slice(0, end))) this.wake(site);
+              buffer = buffer.slice(end + 2);
+            }
+          }
+        } catch { /* Reconnect below; polling covers the gap. */ }
+        await sleep(UPDATE_RETRY_MS, undefined, { signal: controller.signal }).catch(() => {});
+      }
+    })();
+    this.streams.set(site, { controller, done });
   }
   /** Publish every room's latest state for `codiscuss status` and the website's service check. */
   write_status() {
@@ -384,6 +440,10 @@ export class DiscussionService {
   }
   /** Pause running rooms and release every lock and child process, once their current ticks finish. */
   async close() {
+    this.closed = true;
+    for (const stream of this.streams.values()) stream.controller.abort();
+    await Promise.all([...this.streams.values()].map(stream => stream.done));
+    this.streams.clear();
     await Promise.all([...this.workers.values()].map(worker => worker.busy));
     for (const worker of this.workers.values()) await worker.close(true);
     this.workers.clear();
@@ -475,6 +535,7 @@ export async function run_service(home, output = () => {}) {
     output(line);
   };
   const service = new DiscussionService(home, undefined, log_line);
+  service.push = true;
   const stop_path = join(home, 'stop.request');
   if (existsSync(stop_path)) unlinkSync(stop_path);
   let stopped = false, syncing = null;
