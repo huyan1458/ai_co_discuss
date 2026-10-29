@@ -51,6 +51,8 @@ MAX_IMPORT_BYTES = 32 * 1024 * 1024
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 MAX_MESSAGE_ATTACHMENTS = 10
 MAX_FILENAME_LENGTH = 255
+# A revision check names at most this many rooms; a runner or page asks only for the rooms it follows.
+MAX_REVISION_ROOMS = 100
 LOCAL_LAUNCH_TIMEOUT = 60
 # Ordering and filing a channel only rearrange the shared directory, like folder edits, so they need no room credential.
 DIRECTORY_OPERATIONS = ("move", "folder")
@@ -802,6 +804,24 @@ def submission_value(value):
     if not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", identifier):
         raise ValueError("submission_id 必须是 8–100 位字母、数字、下划线或连字符")
     return identifier
+
+
+def room_revisions(connection, params):
+    """Return the site revision and each named room's revision, so an idle room is read in full only after it changed.
+
+    Args:
+        connection: Database connection.
+        params: Query parameters; ``rooms`` is a comma-separated list of room ids.
+
+    Returns:
+        ``{"site": int, "rooms": {room_id: int}}``; a room that does not exist is left out.
+    """
+    ids = [item for item in str(params.get("rooms", "")).split(",") if item][:MAX_REVISION_ROOMS]
+    site = connection.execute("SELECT COALESCE(MAX(revision),0) AS revision FROM room_revisions").fetchone()["revision"]
+    marks = ",".join("?" * len(ids))
+    rows = connection.execute(f"""SELECT rooms.id,COALESCE(room_revisions.revision,0) AS revision FROM rooms
+        LEFT JOIN room_revisions ON room_revisions.room_id=rooms.id WHERE rooms.id IN ({marks})""", ids).fetchall() if ids else []
+    return {"site": site, "rooms": {row["id"]: row["revision"] for row in rows}}
 
 
 def list_rooms(connection, params=None):
@@ -2342,6 +2362,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.respond(list_feedback_cases(connection, int(params.get("after", 0))))
         if parts[1:2] in (["machines"], ["remote-launches"]):
             return self.handle_remote_launch_api(connection, parts, method)
+        if parts == ["api", "revisions"] and method == "GET":
+            return self.respond(room_revisions(connection, params))
         if parts == ["api", "rooms"]:
             if method == "GET":
                 return self.respond({**list_rooms(connection, params), "participants": PARTICIPANTS})

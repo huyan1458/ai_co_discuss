@@ -2,6 +2,9 @@
 
 const REFRESH_INTERVAL_MS = 60000;
 const FALLBACK_REFRESH_INTERVAL_MS = 12000;
+// A poll reads the room in full only when it changed or an AI is working in it; this full read still comes at least this often.
+const SAFETY_REFRESH_MS = 5 * 60 * 1000;
+const WORKING_STATUSES = ["dispatched", "started"];
 const UPDATE_BATCH_MS = 100;
 const UPDATE_DRAG_RETRY_MS = 500;
 const TOAST_DURATION_MS = 3500;
@@ -57,7 +60,7 @@ const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: ""
   snapshot_id: 0, pending_submission: null, pending_turn: null, pending_room: null, toast_timer: null,
   creation_mode: "brainstorm", creation_drafts: {}, access_notice: "", access_error: "" };
 const live_updates = { source: null, connected: false, enabled: false, timer: null, poll_timer: null,
-  running: false, dirty: false };
+  running: false, dirty: false, full: false, revisions: "", refreshed_at: 0 };
 state.messages = [];
 state.message_history = null;
 state.connected = false;
@@ -847,7 +850,7 @@ async function load_message_history(room_id, version) {
 }
 
 /** Refresh a room with version guards so slower requests cannot change the active view. */
-async function refresh_room() {
+async function refresh_room({ room: read_room = true } = {}) {
   if (state.dragged_room) return;
   const version = ++state.refresh_version;
   const folder_version = state.folder_version;
@@ -861,12 +864,13 @@ async function refresh_room() {
     set_folder_directory(directory);
   }
   if (state.room && !state.rooms.some((item) => item.id === state.room.id)) return select_room(visible_rooms()[0]?.id);
-  if (!state.room) {
-    if (visible_rooms().length) return select_room(visible_rooms()[0].id);
+  if (!state.room || !read_room) {
+    if (!state.room && visible_rooms().length) return select_room(visible_rooms()[0].id);
     render_rooms();
     set_connection(true);
     return;
   }
+  live_updates.refreshed_at = Date.now();
   const [room, result] = await Promise.all([
     request_json(`/api/rooms/${room_id}`),
     state.tab === "discussion" ? load_message_history(room_id, version) : null,
@@ -3592,8 +3596,9 @@ function bind_controls() {
 }
 
 /** Coalesce bursts and retain changes that arrive during a previous refresh. */
-function queue_live_refresh() {
+function queue_live_refresh(full = true) {
   live_updates.dirty = true;
+  live_updates.full ||= full;
   if (!live_updates.enabled || document.hidden || live_updates.running || live_updates.timer !== null) return;
   live_updates.timer = setTimeout(flush_live_refresh, UPDATE_BATCH_MS);
 }
@@ -3607,8 +3612,10 @@ async function flush_live_refresh() {
     return;
   }
   live_updates.dirty = false;
+  const full = live_updates.full;
+  live_updates.full = false;
   live_updates.running = true;
-  try { await refresh_room(); } catch { set_connection(false); }
+  try { await refresh_room({ room: full }); } catch { set_connection(false); }
   finally {
     live_updates.running = false;
     if (live_updates.dirty) queue_live_refresh();
@@ -3620,9 +3627,28 @@ function arm_update_poll() {
   clearTimeout(live_updates.poll_timer);
   if (!live_updates.enabled || document.hidden) return;
   live_updates.poll_timer = setTimeout(() => {
-    queue_live_refresh();
+    poll_live_updates();
     arm_update_poll();
   }, live_updates.connected ? REFRESH_INTERVAL_MS : FALLBACK_REFRESH_INTERVAL_MS);
+}
+
+/**
+ * A timed poll first reads the site and room revisions: the room is read in full only when it changed, an AI is working
+ * in it (its progress is not a revision), or the safety interval passed; a change elsewhere refreshes just the room list.
+ * A site without revisions is read in full as before.
+ */
+async function poll_live_updates() {
+  const room_id = state.room?.id || "";
+  const working = (state.room?.free?.members || []).some((member) => WORKING_STATUSES.includes(member.execution?.status));
+  if (working || Date.now() - live_updates.refreshed_at >= SAFETY_REFRESH_MS) return queue_live_refresh();
+  let revisions;
+  try { revisions = await request_json(`/api/revisions?rooms=${encodeURIComponent(room_id)}`); }
+  catch { return queue_live_refresh(); }
+  const [site, room] = live_updates.revisions.split(":");
+  const next_room = `${room_id}=${revisions.rooms?.[room_id] ?? ""}`;
+  if (`${revisions.site}` === site && next_room === room) return;
+  live_updates.revisions = `${revisions.site}:${next_room}`;
+  queue_live_refresh(next_room !== room);
 }
 
 /** Subscribe once per visible page; every connection fetches changes missed while disconnected. */

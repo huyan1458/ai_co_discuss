@@ -221,6 +221,7 @@ export class FreeRoomRunner {
     if (!inbox.archived) this.arrange_groups(inbox, room);
     this.room_title = room.title;
     this.room = room;
+    this.inbox = inbox;
     const active = new Map(inbox.executions.map(item => [item.id, item]));
     const present = new Set(inbox.members.map(member => member.name));
     // A member sent away or removed no longer appears; its live work was already voided on the website.
@@ -237,6 +238,17 @@ export class FreeRoomRunner {
       else if (!inbox.archived && member.pending.some(request => request.purpose !== 'group') && !this.members.get(member.name)?.size
         && !member.pending.some(request => this.routing.has(request.id))) await this.start(member, row);
     }
+  }
+  /**
+   * Whether the last tick left nothing in progress: no live delivery or process, no open request for a member this
+   * runner delivers to, no pending scheduling judgement and no running discussion. An idle room changes only through its
+   * website, so the service may wait for the website to report a change before ticking it again.
+   */
+  idle() {
+    const inbox = this.inbox;
+    if (!inbox || this.routing.size || [...this.members.values()].some(children => children.size)) return false;
+    if (this.room?.session?.status === 'active' || inbox.executions.length || inbox.members.some(member => member.pending.length)) return false;
+    return !this.store.db.prepare('SELECT status FROM free_deliveries').all().some(row => LIVE.includes(row.status));
   }
   /**
    * Smart scheduling: for each new unnamed message routed to the host, ask the provider whether another woken

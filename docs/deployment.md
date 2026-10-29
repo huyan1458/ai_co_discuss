@@ -109,7 +109,7 @@ codiscuss health --site https://YOUR_PROJECT_NAME.pages.dev
 
 ### 实时推送（可选）
 
-未配置时网页每 12 秒轮询。需要跨实例实时推送时，先部署通知 Worker，再在私有配置中绑定：
+未配置时网页每 12 秒检查一次房间是否有变化，有变化才重新读取。需要跨实例实时推送时，先部署通知 Worker，再在私有配置中绑定：
 
 ```sh
 npx wrangler deploy --config deploy/updates.wrangler.jsonc

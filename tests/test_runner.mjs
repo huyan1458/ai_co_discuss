@@ -1629,6 +1629,43 @@ test('a hosted site is polled less often than a local one, and a site update che
   assert.equal(count('remote'), 1, 'another site is not woken by this site\'s change');
 });
 
+test('an idle hosted room is read in full only after its site reports a new revision, a busy one keeps its interval', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
+  register_room(home, room_config(home, 'https://hosted.example', 'idle'));
+  register_room(home, room_config(home, 'https://hosted.example', 'busy'));
+  const ticks = [], asked = [];
+  let revision = 1, supported = true;
+  const real_fetch = globalThis.fetch;
+  globalThis.fetch = async url => {
+    asked.push(String(url));
+    if (!supported) return new Response('{}', { status: 404, headers: { 'Content-Type': 'application/json' } });
+    return Response.json({ site: revision, rooms: { idle: revision, busy: 1 } });
+  };
+  // Like the real runner, the fake keeps the room it read, so adopting manual members reads nothing more.
+  const service = new DiscussionService(home, config => ({ stop_children() {}, idle: () => config.room === 'idle',
+    room: { free: { members: [] } }, tick: async () => { ticks.push(config.room); } }));
+  service.intervals = { local: 50, remote: 40, revisions: 10, idle: 60_000 };
+  t.after(async () => { await service.close(); globalThis.fetch = real_fetch; rmSync(home, { recursive: true, force: true }); });
+  const count = room => ticks.filter(item => item === room).length;
+  const run = async ms => { for (const end = Date.now() + ms; Date.now() < end;) { await service.tick({ wait: false }); await delay(5); } };
+  await run(80);
+  const idle_before = count('idle'), busy_before = count('busy');
+  await run(200);
+  assert.equal(count('idle'), idle_before, 'an unchanged idle room is not read again');
+  assert.ok(count('busy') >= busy_before + 2, 'a busy room keeps its regular interval');
+  assert.ok(asked.every(url => url.startsWith('https://hosted.example/api/revisions?rooms=')) && asked.length > 5, 'one small check per site');
+  revision++;
+  await run(60);
+  assert.equal(count('idle'), idle_before + 1, 'a new revision reads the idle room at once, once');
+  // A site without revisions keeps every room on the regular interval.
+  supported = false;
+  revision++;
+  await run(60);
+  const fallback = count('idle');
+  await run(200);
+  assert.ok(count('idle') >= fallback + 2, 'without revisions an idle room is polled as before');
+});
+
 test('the sweep removes stale unused launch folders, orphaned drafts and the old part of oversized logs only', t => {
   const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));

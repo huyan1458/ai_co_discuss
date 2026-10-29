@@ -3,6 +3,8 @@ const MAX_BODY_BYTES = 512 * 1024;
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const MAX_MESSAGE_ATTACHMENTS = 10;
 const MAX_FILENAME_LENGTH = 255;
+// A revision check names at most this many rooms; a runner or page asks only for the rooms it follows; mirrors backend/server.py.
+const MAX_REVISION_ROOMS = 100;
 const MAX_TEXT_LENGTH = 32000;
 const MAX_STATE_LENGTH = 4000;
 const MAX_BRIEF_LENGTH = 1600;
@@ -1721,6 +1723,18 @@ async function create_room(database, payload, control_token = "") {
 }
 
 /** Locate a saved creation without searching room titles or histories. */
+/**
+ * The site revision and each named room's revision, so an idle room is read in full only after it changed; mirrors
+ * backend/server.py. A room that does not exist is left out.
+ */
+async function room_revisions(database, params) {
+  const ids = String(params.rooms ?? "").split(",").filter(Boolean).slice(0, MAX_REVISION_ROOMS);
+  const site = (await database.prepare("SELECT COALESCE(MAX(revision),0) AS revision FROM room_revisions").first()).revision;
+  const rows = ids.length ? (await database.prepare(`SELECT rooms.id,COALESCE(room_revisions.revision,0) AS revision FROM rooms
+    LEFT JOIN room_revisions ON room_revisions.room_id=rooms.id WHERE rooms.id IN (${ids.map(() => "?").join(",")})`).bind(...ids).all()).results : [];
+  return { site, rooms: Object.fromEntries(rows.map(row => [row.id, row.revision])) };
+}
+
 async function query_rooms(database, params) {
   const identifier = Object.hasOwn(params, "submission_id") ? submission_value(params.submission_id) : null;
   const where = identifier ? "WHERE EXISTS (SELECT 1 FROM room_creations WHERE room_id=rooms.id AND submission_id=?)" : "";
@@ -5162,6 +5176,7 @@ async function handle_api(database, request, parts, params, bucket, setup_key = 
     return respond(await list_feedback_cases(database, Number(params.after) || 0));
   }
   if (parts[0] === "api" && ["machines", "remote-launches"].includes(parts[1])) return handle_remote_launch_api(database, request, parts);
+  if (route === "api/revisions" && method === "GET") return respond(await room_revisions(database, params));
   if (route === "api/rooms") {
     if (method === "GET") return respond(await query_rooms(database, params));
     const room = await create_room(database, await read_payload(request), request.headers.get("X-Discussion-Token") ?? "");

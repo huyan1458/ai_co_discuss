@@ -778,3 +778,342 @@ INSERT OR IGNORE INTO member_manual_sources(member_id,source)
 SELECT id,'web' FROM room_members WHERE access='online';
 UPDATE room_members SET access='manual' WHERE access='online';
 UPDATE room_modes SET mode='free' WHERE mode='brainstorm';
+
+-- Change revisions, so idle rooms are not read on every poll. Every write a reader could show or act on gives its room the next
+-- value of one site-wide sequence: a room's revision tells a runner or page that this room changed, and the largest revision
+-- (read through the index) tells a page that anything on the site changed. The '' row stands for directory-only changes.
+-- Triggers update or insert without conflicts, so an outer INSERT OR IGNORE cannot override them into skipping the bump.
+CREATE TABLE IF NOT EXISTS room_revisions (
+    room_id TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS room_revisions_order ON room_revisions(revision);
+DROP TRIGGER IF EXISTS revision_message_insert;
+CREATE TRIGGER revision_message_insert AFTER INSERT ON messages
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_message_update;
+CREATE TRIGGER revision_message_update AFTER UPDATE ON messages
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_message_withdrawal;
+CREATE TRIGGER revision_message_withdrawal AFTER INSERT ON message_withdrawals
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=(SELECT room_id FROM messages WHERE id=NEW.message_id);
+    INSERT INTO room_revisions (room_id,revision) SELECT (SELECT room_id FROM messages WHERE id=NEW.message_id),(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=(SELECT room_id FROM messages WHERE id=NEW.message_id));
+END;
+DROP TRIGGER IF EXISTS revision_member_insert;
+CREATE TRIGGER revision_member_insert AFTER INSERT ON room_members
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_member_update;
+CREATE TRIGGER revision_member_update AFTER UPDATE ON room_members
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_registration_insert;
+CREATE TRIGGER revision_registration_insert AFTER INSERT ON member_registrations
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_registration_update;
+CREATE TRIGGER revision_registration_update AFTER UPDATE ON member_registrations
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_session_report_insert;
+CREATE TRIGGER revision_session_report_insert AFTER INSERT ON member_sessions
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_session_report_update;
+CREATE TRIGGER revision_session_report_update AFTER UPDATE ON member_sessions
+WHEN OLD.session_id IS NOT NEW.session_id OR OLD.client IS NOT NEW.client
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_request_insert;
+CREATE TRIGGER revision_request_insert AFTER INSERT ON member_requests
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_request_status;
+CREATE TRIGGER revision_request_status AFTER UPDATE OF status ON member_requests
+WHEN OLD.status IS NOT NEW.status
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_execution_insert;
+CREATE TRIGGER revision_execution_insert AFTER INSERT ON member_executions
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_execution_status;
+CREATE TRIGGER revision_execution_status AFTER UPDATE OF status ON member_executions
+WHEN OLD.status IS NOT NEW.status
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_retry_insert;
+CREATE TRIGGER revision_retry_insert AFTER INSERT ON execution_retries
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_retry_update;
+CREATE TRIGGER revision_retry_update AFTER UPDATE ON execution_retries
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_discussion_insert;
+CREATE TRIGGER revision_discussion_insert AFTER INSERT ON discussion_sessions
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_discussion_status;
+CREATE TRIGGER revision_discussion_status AFTER UPDATE OF status ON discussion_sessions
+WHEN OLD.status IS NOT NEW.status
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_plan_insert;
+CREATE TRIGGER revision_plan_insert AFTER INSERT ON session_requests
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=(SELECT room_id FROM discussion_sessions WHERE id=NEW.session_id);
+    INSERT INTO room_revisions (room_id,revision) SELECT (SELECT room_id FROM discussion_sessions WHERE id=NEW.session_id),(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=(SELECT room_id FROM discussion_sessions WHERE id=NEW.session_id));
+END;
+DROP TRIGGER IF EXISTS revision_plan_status;
+CREATE TRIGGER revision_plan_status AFTER UPDATE OF status ON session_requests
+WHEN OLD.status IS NOT NEW.status
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=(SELECT room_id FROM discussion_sessions WHERE id=NEW.session_id);
+    INSERT INTO room_revisions (room_id,revision) SELECT (SELECT room_id FROM discussion_sessions WHERE id=NEW.session_id),(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=(SELECT room_id FROM discussion_sessions WHERE id=NEW.session_id));
+END;
+DROP TRIGGER IF EXISTS revision_session_phase;
+CREATE TRIGGER revision_session_phase AFTER UPDATE OF phase ON session_state
+WHEN OLD.phase IS NOT NEW.phase
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=(SELECT room_id FROM discussion_sessions WHERE id=NEW.session_id);
+    INSERT INTO room_revisions (room_id,revision) SELECT (SELECT room_id FROM discussion_sessions WHERE id=NEW.session_id),(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=(SELECT room_id FROM discussion_sessions WHERE id=NEW.session_id));
+END;
+DROP TRIGGER IF EXISTS revision_session_limits;
+CREATE TRIGGER revision_session_limits AFTER UPDATE ON session_limits
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=(SELECT room_id FROM discussion_sessions WHERE id=NEW.session_id);
+    INSERT INTO room_revisions (room_id,revision) SELECT (SELECT room_id FROM discussion_sessions WHERE id=NEW.session_id),(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=(SELECT room_id FROM discussion_sessions WHERE id=NEW.session_id));
+END;
+DROP TRIGGER IF EXISTS revision_topic_update;
+CREATE TRIGGER revision_topic_update AFTER UPDATE ON topic_settings
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_brief_insert;
+CREATE TRIGGER revision_brief_insert AFTER INSERT ON room_briefs
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_brief_update;
+CREATE TRIGGER revision_brief_update AFTER UPDATE ON room_briefs
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_user_request_insert;
+CREATE TRIGGER revision_user_request_insert AFTER INSERT ON room_user_requests
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_user_request_update;
+CREATE TRIGGER revision_user_request_update AFTER UPDATE ON room_user_requests
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_decision_insert;
+CREATE TRIGGER revision_decision_insert AFTER INSERT ON scheduler_decisions
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_recommendation_insert;
+CREATE TRIGGER revision_recommendation_insert AFTER INSERT ON member_recommendations
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_recommendation_status;
+CREATE TRIGGER revision_recommendation_status AFTER UPDATE OF status ON member_recommendations
+WHEN OLD.status IS NOT NEW.status
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_description_insert;
+CREATE TRIGGER revision_description_insert AFTER INSERT ON member_descriptions
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_description_update;
+CREATE TRIGGER revision_description_update AFTER UPDATE ON member_descriptions
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_label_insert;
+CREATE TRIGGER revision_label_insert AFTER INSERT ON member_labels
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_label_update;
+CREATE TRIGGER revision_label_update AFTER UPDATE ON member_labels
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_order_insert;
+CREATE TRIGGER revision_order_insert AFTER INSERT ON speaking_orders
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_order_update;
+CREATE TRIGGER revision_order_update AFTER UPDATE ON speaking_orders
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_free_settings_insert;
+CREATE TRIGGER revision_free_settings_insert AFTER INSERT ON free_settings
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_free_settings_update;
+CREATE TRIGGER revision_free_settings_update AFTER UPDATE ON free_settings
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_room_insert;
+CREATE TRIGGER revision_room_insert AFTER INSERT ON rooms
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.id);
+END;
+DROP TRIGGER IF EXISTS revision_room_update;
+CREATE TRIGGER revision_room_update AFTER UPDATE ON rooms
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.id);
+END;
+DROP TRIGGER IF EXISTS revision_room_delete;
+CREATE TRIGGER revision_room_delete AFTER DELETE ON rooms
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id='';
+    INSERT INTO room_revisions (room_id,revision) SELECT '',(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id='');
+END;
+DROP TRIGGER IF EXISTS revision_directory_update;
+CREATE TRIGGER revision_directory_update AFTER UPDATE ON room_directory
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id='';
+    INSERT INTO room_revisions (room_id,revision) SELECT '',(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id='');
+END;
+DROP TRIGGER IF EXISTS revision_assignment_update;
+CREATE TRIGGER revision_assignment_update AFTER UPDATE ON room_folder_assignments
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id='';
+    INSERT INTO room_revisions (room_id,revision) SELECT '',(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id='');
+END;
+DROP TRIGGER IF EXISTS revision_folder_insert;
+CREATE TRIGGER revision_folder_insert AFTER INSERT ON topic_folders
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id='';
+    INSERT INTO room_revisions (room_id,revision) SELECT '',(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id='');
+END;
+DROP TRIGGER IF EXISTS revision_folder_update;
+CREATE TRIGGER revision_folder_update AFTER UPDATE ON topic_folders
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id='';
+    INSERT INTO room_revisions (room_id,revision) SELECT '',(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id='');
+END;
+DROP TRIGGER IF EXISTS revision_folder_delete;
+CREATE TRIGGER revision_folder_delete AFTER DELETE ON topic_folders
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id='';
+    INSERT INTO room_revisions (room_id,revision) SELECT '',(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id='');
+END;
+DROP TRIGGER IF EXISTS revision_directory_settings;
+CREATE TRIGGER revision_directory_settings AFTER UPDATE ON directory_settings
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id='';
+    INSERT INTO room_revisions (room_id,revision) SELECT '',(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id='');
+END;

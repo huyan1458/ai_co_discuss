@@ -614,6 +614,35 @@ class DiscussionTests(unittest.TestCase):
         self.assertIsNone(created["folder_id"])
         self.assertEqual(self.request("/api/rooms", {**ungrouped, "folder_id": None})[1]["id"], created["id"])
 
+    def test_revisions_change_only_with_the_room_or_the_directory(self):
+        """A room's revision moves with its own writes; the site revision moves with any room or directory change."""
+        other = self.request("/api/rooms", {"title": "另一议题", "goal": "保持完整记录"})[1]
+        ids = f"{self.room['id']},{other['id']},missing"
+
+        def revisions():
+            status, result = self.request(f"/api/revisions?rooms={ids}")
+            self.assertEqual(status, 200)
+            return result
+
+        before = revisions()
+        self.assertEqual(set(before["rooms"]), {self.room["id"], other["id"]}, "a missing room is left out")
+        self.assertEqual(revisions(), before, "reading changes nothing")
+        self.post("新消息", uuid.uuid4().hex)
+        after = revisions()
+        self.assertGreater(after["rooms"][self.room["id"]], before["rooms"][self.room["id"]])
+        self.assertEqual(after["rooms"][other["id"]], before["rooms"][other["id"]])
+        self.assertGreater(after["site"], before["site"])
+        self.request("/api/folders", {"name": "甲组"})
+        moved = revisions()
+        self.assertGreater(moved["site"], after["site"], "a directory change raises only the site revision")
+        self.assertEqual(moved["rooms"], after["rooms"])
+        if not self.external:
+            # An outer INSERT OR IGNORE must not turn the trigger's own write into a skipped one.
+            with closing(sqlite3.connect(self.database)) as connection, connection:
+                connection.execute("INSERT OR IGNORE INTO room_briefs (room_id,text,until,updated_at) VALUES (?,?,?,?)",
+                                   (other["id"], "简报", 0, "2026-10-29T00:00:00Z"))
+            self.assertGreater(revisions()["rooms"][other["id"]], moved["rooms"][other["id"]])
+
     def test_folder_order_persists_without_changing_room_membership(self):
         """Moves preserve contents, survive reload and reject invalid destinations."""
         folders = [self.request("/api/folders", {"name": name})[1]["id"] for name in ("甲组", "乙组", "丙组")]

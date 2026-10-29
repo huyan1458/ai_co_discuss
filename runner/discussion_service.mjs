@@ -15,6 +15,10 @@ import { FreeRoomRunner } from './free_runner.mjs';
 const POLL_MS = 2000;
 // A hosted site is polled less often than a local one: every request spends its database quota.
 const REMOTE_POLL_MS = 10_000;
+// A hosted site is asked this often which rooms changed; an idle room is read in full only then, or at the safety interval.
+const REVISION_POLL_MS = 3000;
+const IDLE_REMOTE_POLL_MS = 5 * 60_000;
+const REVISION_TIMEOUT_MS = 10_000;
 const UPDATE_RETRY_MS = 5000;
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]']);
 const REMOTE_SYNC_MS = 3000;
@@ -229,7 +233,8 @@ class RoomWorker {
   }
   /** A manual Claude, Codex or agy expert that has registered and whose CLI reported its session is handed to the service, which resumes that session from the next turn on. */
   async adopt_manual_members() {
-    const members = (await api(this.config, '')).free?.members || [];
+    // The runner has just read the room; reading it again here would double every poll.
+    const members = (this.runner.room ?? await api(this.config, '')).free?.members || [];
     for (const member of members) {
       const key = `${member.name}:${member.reported_session}`;
       // A restored room keeps its Claude Code members manual so their original window stays the only writer.
@@ -256,7 +261,9 @@ class RoomWorker {
       const result = await this.runner.tick();
       await this.adopt_manual_members();
       Object.assign(this.state, { status: TICK_STATES[result], error: '' });
+      this.idle = this.runner.idle?.() === true;
     } catch (error) {
+      this.idle = false;
       if (await this.deleted(error)) { this.removed = true; return; }
       if (error.message !== this.state.error) this.log(`${this.state.room || this.path}: ${error.message}`);
       Object.assign(this.state, { status: 'error', error: error.message });
@@ -296,7 +303,9 @@ export class DiscussionService {
     this.log = log;
     this.workers = new Map();
     // How often each room is checked without a push: a local site costs nothing, a hosted one spends its database quota.
-    this.intervals = { local: POLL_MS, remote: REMOTE_POLL_MS };
+    this.intervals = { local: POLL_MS, remote: REMOTE_POLL_MS, revisions: REVISION_POLL_MS, idle: IDLE_REMOTE_POLL_MS };
+    // Per hosted site: when its revisions were last asked, whether a check is in flight, and whether the site offers them.
+    this.revisions = new Map();
     // The resident service turns this on so a site's update stream checks its rooms at once; tests leave it off.
     this.push = false;
     this.streams = new Map();
@@ -317,6 +326,8 @@ export class DiscussionService {
       if (!worker.busy && (wait || Date.now() >= (worker.next_at ?? 0))) this.start(path, worker);
     }
     if (this.push) for (const site of new Set([...this.workers.values()].map(worker => worker.state.site).filter(Boolean))) this.watch(site);
+    const checks = this.check_revisions();
+    if (wait) await checks;
     if (wait) await Promise.all([...this.workers.values()].map(worker => worker.busy));
     this.write_status();
   }
@@ -329,10 +340,53 @@ export class DiscussionService {
       .finally(() => {
         // Counted from the end of the tick, once the room's site is known; a slow site does not poll back to back.
         const local = !worker.state.site || LOOPBACK.has(new URL(worker.state.site).hostname);
-        worker.next_at = Date.now() + (local ? this.intervals.local : this.intervals.remote);
+        // An idle hosted room waits for its revision to change; a site without revisions keeps the regular interval.
+        const watched = worker.idle && this.revisions.get(worker.state.site)?.supported !== false;
+        worker.next_at = Date.now() + (local ? this.intervals.local : watched ? this.intervals.idle : this.intervals.remote);
         worker.busy = null;
         if (worker.woken && this.workers.get(path) === worker) { worker.woken = false; this.start(path, worker); }
       });
+  }
+  /**
+   * Ask each hosted site which of its rooms changed since the last check and tick those at once; one small read per site
+   * replaces a full read of every idle room. A room missing from the answer was deleted, and its next tick removes it.
+   * A site that does not answer (404 without revisions, or an error) leaves its rooms on the regular interval and is asked
+   * again after the safety interval.
+   */
+  async check_revisions() {
+    const sites = new Map();
+    for (const [path, worker] of this.workers) {
+      const site = worker.state.site;
+      if (site && worker.state.room && !LOOPBACK.has(new URL(site).hostname)) sites.set(site, [...(sites.get(site) || []), [path, worker]]);
+    }
+    const checks = [];
+    for (const [site, entries] of sites) {
+      const watch = this.revisions.get(site) ?? { at: 0, busy: false, supported: true };
+      this.revisions.set(site, watch);
+      if (this.closed || watch.busy || Date.now() - watch.at < (watch.supported ? this.intervals.revisions : this.intervals.idle)) continue;
+      Object.assign(watch, { at: Date.now(), busy: true });
+      const rooms = entries.map(([, worker]) => encodeURIComponent(worker.state.room)).join(',');
+      checks.push(fetch(`${site}/api/revisions?rooms=${rooms}`, { redirect: 'error', signal: AbortSignal.timeout(REVISION_TIMEOUT_MS) })
+        .then(async response => {
+          // Without an answer (no such route, or the site failing) the rooms fall back to the regular interval at once,
+          // instead of waiting out the safety interval for a revision that may not come.
+          if (!response.ok) {
+            if (watch.supported) for (const [, worker] of entries) worker.next_at = 0;
+            watch.supported = false;
+            return;
+          }
+          watch.supported = true;
+          const revisions = (await response.json()).rooms || {};
+          for (const [path, worker] of entries) {
+            const revision = revisions[worker.state.room] ?? null;
+            if (worker.revision !== revision) { worker.revision = revision; this.start(path, worker); }
+          }
+        })
+        // A failed check is retried at the next interval; idle rooms still get their safety tick.
+        .catch(() => {})
+        .finally(() => { watch.busy = false; }));
+    }
+    await Promise.all(checks);
   }
   /** Check every room of a site now, as its website reported a change. */
   wake(site) {

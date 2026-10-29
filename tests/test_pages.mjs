@@ -107,6 +107,32 @@ function bind_updates(fixture) {
   return { hub, notifications };
 }
 
+test('Worker revisions move with the writes of each room and with directory changes, like Python', async t => {
+  const f = await worker_fixture(t);
+  const first = await free_worker_room(f, []);
+  const second = await f.request('', { title: '另一议题', goal: 'x', mode: 'free', submission_id: 'free-worker-revisions',
+    members: [{ name: 'Claude', adapter: 'claude', token: 'claude-second'.repeat(4) }] }, 'owner-second'.repeat(4));
+  assert.equal(second.status, 201, JSON.stringify(second.body));
+  const site = async (path, init) => worker.fetch(new Request(`https://discussion.test${path}`, init), f.env);
+  const revisions = async () => {
+    const response = await site(`/api/revisions?rooms=${first.room.id},${second.body.id},missing`);
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  const before = await revisions();
+  assert.deepEqual(Object.keys(before.rooms).sort(), [first.room.id, second.body.id].sort(), 'a missing room is left out');
+  assert.deepEqual(await revisions(), before, 'reading changes nothing');
+  await first.say('新消息');
+  const after = await revisions();
+  assert.ok(after.rooms[first.room.id] > before.rooms[first.room.id]);
+  assert.equal(after.rooms[second.body.id], before.rooms[second.body.id]);
+  assert.ok(after.site > before.site);
+  await site('/api/folders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: '甲组' }) });
+  const moved = await revisions();
+  assert.ok(moved.site > after.site, 'a directory change raises only the site revision');
+  assert.deepEqual(moved.rooms, after.rooms);
+});
+
 test('Worker manual member credentials are scoped and revocation is checked in the write transaction', async t => {
   const f = await worker_fixture(t);
   const member = 'manual-credential'.repeat(3), r = await free_worker_room(f, [{ name: 'Qwen', access: 'manual', token: member }]);
