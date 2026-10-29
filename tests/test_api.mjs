@@ -500,7 +500,7 @@ test('API participants load the shared skills and map CLI commands onto their ro
   assert.match(host, /turn create --plan-file → arrange_turns/);
   assert.doesNotMatch(expert, /# 讨论主持/);
   assert.doesNotMatch(expert, /arrange_turns/, 'experts are not told about host tools');
-  for (const prompt of [host, expert, free]) assert.match(prompt, /读不到内容[\s\S]*不得根据文件名猜测/);
+  for (const prompt of [host, expert, free]) assert.match(prompt, /内容你都读不到：以其他成员贴出的为准，不凭文件名猜测/);
   assert.match(free, /submit_chat（派活用 to；单人派活要回到你时加 handoff）/);
   assert.match(free, /# 开发协作/, 'an API free-room host cannot open references, so it gets the development reference inline');
   assert.doesNotMatch(expert, /# 开发协作/);

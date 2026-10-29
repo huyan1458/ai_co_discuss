@@ -2281,7 +2281,7 @@ test("an expert prompt is only the member's own text, and the API file rule is f
   assert.equal(expert_prompt({ adapter: 'api', system_prompt: '  只读不写  ' }), '只读不写');
   // An API expert's own prompt cannot drop the rule about local files.
   const api = system_prompt({ participant: 'DeepSeek', role: 'member', mode: 'free', expert_prompt: '只读不写' });
-  assert.match(api, /本地文件的内容以其他成员贴出的为准，不凭文件名猜测；缺信息时在回答里写明缺什么/);
+  assert.match(api, /本地文件和消息附件.*内容你都读不到：以其他成员贴出的为准，不凭文件名猜测.*缺信息就写明缺什么/);
 });
 
 test('the agy command limit comes from the runner, so clearing the expert prompt cannot drop it', () => {
