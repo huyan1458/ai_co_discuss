@@ -2,6 +2,7 @@
 /** Invite dialog shared by the discussion board and the free-room board: pick AIs, set up each card, then invite them one by one. */
 import { computed, inject, ref, watch } from "vue";
 import ExpertCard from "./ExpertCard.vue";
+import RosterAdd from "./RosterAdd.vue";
 
 const props = defineProps({ description: { type: String, default: "新成员由程序按本机软件配置启动，或由你手动启动。" } });
 const inviting = defineModel("open", { type: Boolean, default: false });
@@ -50,7 +51,6 @@ function invite_status(name) {
     : Boolean(profile.adapter && (profile.adapter === "antigravity" ? profile.ipc_directory : profile.executable));
   return ready ? { text: api ? "已配置 API" : "已配置本机软件", tone: "ready" } : { text: api ? "待补齐 API 配置" : "待补齐接入配置", tone: "warn" };
 }
-const invite_card_status = (pick) => pick.mode === "manual" ? { text: "手动启动，自行提交", tone: "muted" } : invite_status(pick.name);
 // Woken picks need the local service and a runnable entry; manual ones need neither.
 const invite_blocked = computed(() => !invite_picks.value.length
   || invite_picks.value.some((pick) => pick.mode === "cli" && (!view.value.launch.available || invite_status(pick.name).tone === "warn")));
@@ -65,8 +65,22 @@ watch(() => room.value.id, () => { inviting.value = false; invite_picks.value = 
 
 /** Add a card for a platform, again for a second instance; one without local software starts on its API, as in the create form. */
 function add_invite(name) {
-  if (!bridge.launch_clients[name]?.some((item) => item.value !== "api") && !view.value.launch.profiles[name]?.adapter) bridge.write_launch(name, "adapter", "api");
+  bridge.default_launch_entry(name);
   invite_picks.value = [...invite_picks.value, { id: ++invite_pick_seq, name, mode: "cli", session: "" }];
+}
+
+// The same add row as the create form: platforms first, presets on their own row.
+const PRESET_PREFIX = "preset:";
+const library_items = computed(() => [...invite_choices.value.map((name) => ({ value: name, name, ...bridge.identities[name],
+  title: invite_count(name) ? `已在场 ${invite_count(name)} 位 · 将添加新实例` : "", aria_label: `添加 ${name} 实例` })),
+  ...invite_presets.value.map((preset, index) => ({ value: PRESET_PREFIX + preset.name, name: preset.label || preset.name, ...bridge.identities[bridge.platform_of(preset.name)],
+    separated: index === 0, title: preset.description || "专家预设", aria_label: `添加预设 ${preset.label || preset.name}` }))]);
+
+/** Add the platform or preset a chip names. */
+function add_library_item(value) {
+  if (!value.startsWith(PRESET_PREFIX)) return add_invite(value);
+  const preset = invite_presets.value.find((item) => item.name === value.slice(PRESET_PREFIX.length));
+  if (preset) add_invite_preset(preset);
 }
 
 /** Add a preset's card under a name no member or other pick holds, set up from the preset. */
@@ -117,18 +131,10 @@ async function invite() {
         <div class="pb-invite-footer"><UButton label="完成" class="channel-primary-button" @click="inviting = false" /></div>
       </div>
       <form v-else class="pb-invite" aria-label="邀请专家" @submit.prevent="invite">
-        <div class="pb-invite-library" role="group" aria-label="选择 AI（可多选）">
-          <button v-for="name in invite_choices" :key="name" type="button" :aria-pressed="invite_picks.some((pick) => pick.name === name)" :title="invite_count(name) ? `已在场 ${invite_count(name)} 位 · 将添加新实例` : ''" @click="add_invite(name)">
-            <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="3xs" class="channel-avatar" :class="bridge.identities[name]?.style" />{{ name }}
-          </button>
-          <span v-if="invite_presets.length" class="pb-invite-break" aria-hidden="true" /><span v-if="invite_presets.length" class="pb-invite-label">预设</span>
-          <button v-for="preset in invite_presets" :key="`preset:${preset.name}`" type="button" :title="preset.description || '专家预设'" :aria-label="`添加预设 ${preset.label || preset.name}`" @click="add_invite_preset(preset)">
-            <UAvatar :src="bridge.identities[bridge.platform_of(preset.name)]?.icon" :text="bridge.identities[bridge.platform_of(preset.name)]?.initials" :alt="preset.name" size="3xs" class="channel-avatar" :class="bridge.identities[bridge.platform_of(preset.name)]?.style" />{{ preset.label || preset.name }}
-          </button>
-        </div>
+        <RosterAdd label="选择 AI（可多选）" :items="library_items" @add="add_library_item" />
         <div v-if="invite_picks.length" class="pb-invite-cards">
           <div v-for="pick in invite_picks" :key="pick.id" class="pb-invite-pick">
-            <ExpertCard :name="pick.name" :mode="pick.mode" :choices="['cli', 'manual']" :status="invite_card_status(pick)" :session="pick.session" @mode="pick.mode = $event" @session="pick.session = $event" @remove="invite_picks = invite_picks.filter((item) => item !== pick)" />
+            <ExpertCard :name="pick.name" :mode="pick.mode" :choices="['cli', 'manual']" :status="invite_status(pick.name)" :session="pick.session" @mode="pick.mode = $event" @session="pick.session = $event" @remove="invite_picks = invite_picks.filter((item) => item !== pick)" />
             <p v-if="pick_instances.get(pick) !== pick.name" class="fine-print">同一 AI 已有实例，将以 {{ pick_instances.get(pick) }} 加入，使用独立会话。</p>
           </div>
         </div>
@@ -165,16 +171,8 @@ async function invite() {
 .pb-invite-options label.is-selected { color: var(--ui-text-highlighted); background: var(--ui-bg-elevated); box-shadow: var(--channel-shadow-control); }
 .pb-invite-options input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
 .pb-invite .fine-print { margin: -6px 0 0; }
-.pb-invite-library { display: flex; flex-wrap: wrap; gap: 6px; }
-.pb-invite-library > button { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 2px 10px 2px 4px; border: 1px solid var(--ui-border-muted); border-radius: 999px; color: var(--ui-text-toned); font-size: 12px; }
-.pb-invite-library > button:hover { border-color: var(--ui-border-accented); background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); }
-.pb-invite-library > button[aria-pressed="true"] { border-color: color-mix(in srgb, var(--channel-accent) 55%, transparent); background: color-mix(in srgb, var(--channel-accent) 12%, transparent); color: var(--ui-text-highlighted); }
-.pb-invite-library .channel-avatar { flex-shrink: 0; width: 20px; height: 20px; font-size: 9px; }
-/* Presets start their own row under the platforms, as in the create form's add row. */
-.pb-invite-break { flex-basis: 100%; height: 0; }
-.pb-invite-label { align-self: center; margin-right: 2px; color: var(--ui-text-toned); font-size: 12px; }
 .pb-invite-reserved { visibility: hidden; }
 .pb-invite-empty { margin: 0; padding: 18px 12px; border: 1px dashed var(--ui-border); border-radius: 8px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }
 .pb-invite-footer { display: flex; justify-content: flex-end; gap: 8px; }
-@media (pointer: coarse) { .pb-invite-library > button, .pb-invite-options label { min-height: 44px; } }
+@media (pointer: coarse) { .pb-invite-options label { min-height: 44px; } }
 </style>

@@ -640,6 +640,7 @@ export async function room_member_access(home, raw) {
     const config = configuration_snapshot(path).config;
     const profile = config.participants?.[name];
     if (!profile) throw new Error(`${name} 不由本机唤醒，项目权限由它自己的会话决定`);
+    if (profile.project_access === 'own') throw new Error(`${name} 是手动接入的成员，权限沿用它自己会话的软件设置`);
     if (!ACCESS_ADAPTERS.includes(profile.adapter)) throw new Error(profile.adapter === 'api' ? 'API 成员没有本机文件工具，项目固定只读' : `${name} 的项目权限在 App 内设置`);
     if (profile.adapter === 'antigravity_cli' && profile.session_id) throw new Error(`${name} 续接的是它自己的 agy 对话，项目权限沿用该对话所在项目，请在 agy 中设置`);
     if (project_access === 'write' && !(profile.cwd || config.cwd)) throw new Error('本房间没有指定项目目录，可写没有作用；请在新建房间时选择项目目录');
@@ -697,7 +698,8 @@ export function adopt_member_profile(home, path, name, session_id, client = 'cla
   try {
     const config = configuration_snapshot(path).config;
     const adapter = client === 'codex' ? codex_session_adapter(session_id) : client === 'antigravity' ? 'antigravity_cli' : 'claude';
-    const input = { cwd: config.cwd, adopt: true, participants: { [name]: { adapter, session_id } } };
+    // A manually started member keeps its own session's permissions; the room's 只读 / 可写 does not apply to it.
+    const input = { cwd: config.cwd, adopt: true, participants: { [name]: { adapter, session_id, project_access: 'own' } } };
     const profile = borrowed_session(name, participant_profile(name, launch_settings(home).participants, input, false), config.cwd);
     // A free room delivers with each member's own credential; the browser-made one is not kept locally, so the owner issues a new one.
     const next = { ...config, participants: { ...config.participants, [name]: profile },

@@ -16,6 +16,8 @@ const props = defineProps({
   note: { type: String, default: "" },
   /** A saved text the draft may start from, such as a platform default or a software preset: { tag, text, action }. */
   source: { type: Object, default: null },
+  /** Read-only text sent ahead of the draft, folded by default: { summary, sections: [{ label, text }] }. */
+  fixed: { type: Object, default: null },
   changed: Boolean,
   saving: Boolean,
 });
@@ -35,6 +37,13 @@ function save() {
   <UModal v-model:open="open" :title="title" :description="description" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
     <template #body>
       <form class="member-text" @submit.prevent="save">
+        <details v-if="fixed" class="member-text-fixed">
+          <summary><UIcon name="i-lucide-lock" />{{ fixed.summary }}<UIcon name="i-lucide-chevron-down" class="member-text-fixed-chevron" /></summary>
+          <section v-for="section in fixed.sections" :key="section.label">
+            <h4>{{ section.label }}</h4>
+            <p>{{ section.text }}</p>
+          </section>
+        </details>
         <div v-if="source" class="member-text-source">
           <UIcon name="i-lucide-bookmark" />
           <p><b>{{ source.tag }}</b>{{ source.text }}</p>
@@ -58,6 +67,15 @@ function save() {
 
 <style scoped>
 .member-text { display: grid; gap: 8px; }
+.member-text-fixed { border: 1px solid var(--ui-border); border-radius: 6px; color: var(--ui-text-dimmed); font-size: 12px; }
+.member-text-fixed > summary { display: flex; align-items: center; gap: 6px; padding: 6px 10px; cursor: pointer; list-style: none; user-select: none; }
+.member-text-fixed > summary::-webkit-details-marker { display: none; }
+.member-text-fixed > summary > span { width: 13px; height: 13px; flex-shrink: 0; }
+.member-text-fixed-chevron { margin-left: auto; transition: transform .15s; }
+.member-text-fixed[open] .member-text-fixed-chevron { transform: rotate(180deg); }
+.member-text-fixed > section { padding: 0 10px 8px; }
+.member-text-fixed h4 { margin: 0 0 2px; color: var(--ui-text-muted); font-size: 11px; font-weight: 500; }
+.member-text-fixed p { margin: 0; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .member-text-source { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 8px; padding: 8px 10px; border: 1px dashed var(--ui-border-accented); border-radius: 6px; color: var(--ui-text-muted); font-size: 12px; }
 .member-text-source > span { width: 13px; height: 13px; margin-top: 2px; color: var(--channel-accent); }
 .member-text-source > p { display: -webkit-box; overflow: hidden; margin: 0; line-height: 1.6; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: pre-line; }

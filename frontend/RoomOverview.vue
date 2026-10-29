@@ -93,6 +93,7 @@ function files(member) {
   const profile = saved.value?.participants?.[member.name];
   if (!profile) return { text: "—" };
   if (profile.adapter === "api") return { value: "read", hint: "API 成员没有本机文件工具，固定只读" };
+  if (profile.project_access === "own") return { text: "自行决定", hint: "手动接入的成员，由本机服务代发时仍沿用它自己会话的软件权限" };
   if (!ACCESS_CLIENTS.includes(profile.adapter)) return { text: "App 内设置", hint: "App 成员的权限在 App 里设置" };
   if (profile.own_project) return { text: "agy 内设置", hint: "续接它自己的 agy 对话，权限沿用该对话所在项目" };
   if (waiting(member.name)) return { value: profile.project_access || "read", hint: "正在读取 agy 的配置" };

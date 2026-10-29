@@ -17,7 +17,7 @@ import { EXPERT_PROMPT_PRESETS, expert_prompt } from '../runner/expert_prompts.m
 import { system_prompt } from '../runner/api_participant.mjs';
 import { assert_shared_home, DiscussionService, FreeRoomWithDiscussion, migrate_service_home, read_registry, register_room, service_pid, service_ready, start_service, sweep_service_home, unregister_room } from '../runner/discussion_service.mjs';
 import { launch_discussion, restore_room, room_models, room_profiles } from '../runner/discussion_launch.mjs';
-import { activity_phase, activity_tool, MAX_EXECUTION_NOTES, MAX_EXECUTION_SEGMENTS, MAX_NOTES_PER_REPORT, MAX_SEGMENTS_PER_REPORT, SegmentLog, progress_note, agy_command_rule, agy_rule, antigravity_project, claude_exit_error, claude_rule_path, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
+import { activity_phase, activity_tool, MAX_EXECUTION_NOTES, MAX_EXECUTION_SEGMENTS, MAX_NOTES_PER_REPORT, MAX_SEGMENTS_PER_REPORT, SegmentLog, progress_note, agy_command_rule, agy_rule, antigravity_project, claude_exit_error, claude_rule_path, codex_permissions, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
 import { certainty, decide, decide_group_order, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
 
@@ -747,6 +747,9 @@ test(`${adapter} resumes only the bound conversation and honors its configured c
     assert.ok(call.args.findIndex(arg => arg.startsWith('default_permissions=')) > call.args.indexOf('resume'));
     assert.match(call.args.find(arg => arg.startsWith('permissions.')), /extends=":workspace"/);
     assert.equal(call.args[call.args.indexOf('--cd') + 1], project);
+    // A taken-over manual Codex CLI writes like 可写, so its own read-only config cannot block the answer draft.
+    const own = codex_permissions({ cwd: project, project_access: 'own' }, { directory: project, draft_directory: project });
+    assert.match(own.args.find(arg => arg.startsWith('permissions.')), /extends=":workspace"/);
   }
 });
 
@@ -892,6 +895,7 @@ test('agy separates native project permissions from the selected project and pre
   assert.ok(write.allow.includes(rule(join(f.config.directory, 'source'))));
   assert.ok(!write.deny.includes(rule(join(f.config.directory, 'source'))));
   assert.ok(write.deny.includes(rule(task.directory)));
+  assert.ok(write.allow.includes('command(*)') && !read.permissionGrants.permissionGrants.allow.includes('command(*)'));
   assert.equal(readFileSync(original_path, 'utf8'), original_text);
   assert.throws(() => prepare_agy_project(config, { session_id: 'other-session' }, task, user_home), /会话绑定不符/);
   // Deleting the room removes only the projects it created.
@@ -1028,7 +1032,7 @@ test('stopping a Claude run on Windows also ends the tool process its non-Node p
   assert.equal(alive(grandchild), false, 'stopping the Claude run leaves no tool process behind');
 });
 
-test('claude edits a project only when the launch grants write access', async t => {
+test('claude edits a project and runs any command only when the launch grants write access', async t => {
   const project = mkdtempSync(join(tmpdir(), 'discussion-cwd-')); t.after(() => rmSync(project, { recursive: true, force: true }));
   const result = [{ type: 'result', is_error: false, result: '完成' }];
   for (const project_access of ['read', 'write']) {
@@ -1036,20 +1040,32 @@ test('claude edits a project only when the launch grants write access', async t 
     const call = f.calls[0];
     assert.equal(call.settings.cwd, project);
     assert.equal(call.args.includes(`Edit(${claude_rule_path(project)}/**)`), project_access === 'write');
+    assert.equal(call.args.includes('Bash') && call.args.includes('PowerShell'), project_access === 'write');
+    assert.equal(call.args.includes('Bash(codiscuss room *)'), project_access === 'read');
   }
+  // A taken-over manual member runs in auto mode as its own window does, without the room's file or command limits.
+  const own = await cli_delivery_fixture(t, 'claude', { events: result, config: { cwd: project, project_access: 'own' } });
+  const args = own.calls[0].args;
+  assert.equal(args[args.indexOf('--permission-mode') + 1], 'auto');
+  assert.ok(!args.includes('Bash') && !args.includes(`Edit(${claude_rule_path(project)}/**)`));
+  assert.ok(args.includes('Bash(codiscuss room *)'), 'website commands never wait for the classifier');
 });
 
 test('tasks state whether the discussion project is read-only or writable', async t => {
   const f = await fixture(t);
   const project = mkdtempSync(join(tmpdir(), 'discussion-cwd-')); t.after(() => rmSync(project, { recursive: true, force: true }));
   const config = load_config_from(f, project, 'write');
-  assert.match(task_files(config, f.event, 'token-for-test', {}).prompt, /允许按议题需要修改/);
+  assert.match(task_files(config, f.event, 'token-for-test', {}).prompt, /允许按议题需要修改.*并运行所需命令/);
+  assert.match(task_files(config, f.event, 'token-for-test', {}).prompt, /网站读写只用任务内 subcommands/);
   const saved = JSON.parse(readFileSync(join(f.config.directory, 'event-1.task.json'), 'utf8'));
   assert.equal(saved.project_access, 'write'); assert.equal(saved.cwd, project);
   assert.equal(saved.draft_directory, `${f.config.directory}-drafts`);
   assert.ok(existsSync(saved.draft_directory));
   assert.match(saved.instructions, /不修改任务、凭据、日志或调度数据库/);
-  assert.match(task_files(load_config_from(f, project), f.event, 'token-for-test', {}).prompt, /只读，不修改/);
+  assert.match(task_files(load_config_from(f, project), f.event, 'token-for-test', {}).prompt, /本次只放行任务内 subcommands.*只读，不修改/);
+  const own = task_files(load_config_from(f, project, 'own'), f.event, 'token-for-test', {}).prompt;
+  assert.match(own, /网站读写只用.*权限沿用你自己会话的软件设置/);
+  assert.doesNotMatch(own, /只读，不修改/);
   assert.match(task_files(f.config, f.event, 'token-for-test', {}).prompt, /未指定讨论项目目录/);
   assert.throws(() => load_config_from(f, project, 'admin'), /read 或 write/);
 });
@@ -1073,6 +1089,9 @@ test('tasks direct website work to the approved codiscuss subcommands', async t 
   assert(!claude.prompt.includes('立即用'));
   const has_rg = process.platform === 'win32' && spawnSync('rg', ['--version'], { stdio: 'ignore' }).status === 0;
   assert.equal(/rg --encoding utf-8/.test(claude.prompt), has_rg);
+  // Codex CLI brings its own rg, so it gets the read rule on Windows even without rg on this machine's PATH.
+  const codex_cli = task_files({ ...f.config, participants: { Codex: { adapter: 'codex_cli' } } }, f.event, 'token-for-test', {});
+  assert.equal(/rg --encoding utf-8/.test(codex_cli.prompt), process.platform === 'win32');
   const agy = task_files({ ...f.config, participants: { Codex: { adapter: 'antigravity_cli' } } }, f.event, 'token-for-test', {});
   assert.match(agy.prompt, /接入程序已为本次执行完成 execution enter/);
   assert.match(agy.prompt, /turn create --plan-file/);
@@ -2121,6 +2140,7 @@ test('an expert prompt replaces its software preset, and an empty one turns the 
 test('the agy command limit comes from the runner, so clearing the expert prompt cannot drop it', () => {
   assert.match(agy_command_rule('antigravity_cli', 'codiscuss'), /run_command 只能运行 codiscuss/);
   assert.equal(agy_command_rule('claude', 'codiscuss'), '');
+  assert.equal(agy_command_rule('antigravity_cli', 'codiscuss', { cwd: 'D:/project', project_access: 'write' }), '', 'a writable agy runs any command');
   assert.doesNotMatch(EXPERT_PROMPT_PRESETS.antigravity_cli, /run_command/);
 });
 

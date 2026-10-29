@@ -3,9 +3,9 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import { agy_command_rule, atomic_json, deliver_task, SegmentLog, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
+import { atomic_json, deliver_task, SegmentLog, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
 import { api, CODEX_ADAPTERS, read_rule } from './discussion_runner.mjs';
-import { with_expert_prompt } from './expert_prompts.mjs';
+import { free_task_text, with_expert_prompt } from './expert_prompts.mjs';
 import { branch_session, session_exists } from './session_cut.mjs';
 import { ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, decide_group_order, route_free_message } from './scheduler.mjs';
 
@@ -72,16 +72,9 @@ export function free_task_files(config, member, execution, binding) {
     session_id: binding.session_id || '' });
   const cli = process.platform === 'win32' && profile.adapter !== 'claude' ? 'codiscuss.cmd' : 'codiscuss';
   const bound_access = ['claude', 'codex_cli', 'antigravity_cli'].includes(profile.adapter);
-  const access_arg = bound_access ? '' : ' --access-file 凭据路径';
-  const access_rule = bound_access ? '本次凭据文件已通过进程环境 DISCUSS_ACCESS_FILE 绑定，codiscuss 自动读取，命令无需 --access-file。' : '';
-  const project_rule = !profile.cwd ? '未指定项目目录。'
-    : profile.project_access === 'write' ? '用户允许按请求修改 cwd 中的项目文件。' : 'cwd 中的项目文件只读，不修改。';
   const messages = execution.requests.map(item => `#${item.message_id}`).join('、');
-  // The host routes unnamed messages and receives hand-backs; it may name members in its answer.
-  const discussion = config.mode !== 'free';
-  const host_rule = member.role === 'host' && !discussion
-    ? `你是本房间的主持人：按任务 skills 中 discuss-host 的自由协作主持说明处理 route、handoff 与 all 请求。先用 ${cli} room view ${config.room} 查看成员与状态；派活在回答中加 --to 成员名（不能点名自己），只点名一位且还要它交回时加 --handoff。`
-    : '';
+  const { instructions, prompt } = free_task_text({ name: member.name, role: member.role, discussion: config.mode !== 'free', profile, cli,
+    room: config.room, messages, read_after: execution.read_until, execution_id: execution.id, task_path, read_rule: read_rule(profile.adapter) });
   atomic_json(task_path, { site: config.site, room: config.room, mode: 'free', member: member.name,
     execution_id: execution.id, request_messages: execution.requests.map(item => item.message_id),
     request_purposes: execution.requests.map(item => item.purpose || 'ask'), role: member.role || 'member',
@@ -90,9 +83,7 @@ export function free_task_files(config, member, execution, binding) {
     skills: [...['discuss-participant/SKILL.md', 'discuss-participant/references/free.md'],
       ...member.role === 'host' ? ['discuss-host/SKILL.md', 'discuss-host/references/free.md'] : []].map(file => join(config.project, '.agents/skills', file)),
     cli, subcommands: TASK_SUBCOMMANDS,
-    ...(bound_access ? { access_env: 'DISCUSS_ACCESS_FILE' } : { access_file: access_path }),
-    instructions: `${agy_command_rule(profile.adapter, cli)}${discussion ? '讨论房间：用户直接向你提问（' + messages + '）。这不是你的发言安排，不要领取发言权、不要安排他人，也不改变讨论进度，只回答这个提问。' : '自由协作房间：用户点名了你（' + messages + '）。'}${access_rule}先用 ${cli} message list ${config.room} --after ${execution.read_until}${access_arg} 读取新消息，按时间顺序处理，后面的消息可能修正前面的，以最新指令为准。${host_rule}完成后用 ${cli} message post ${config.room} --as ${member.name} --kind chat --execution ${execution.id} --body-file 草稿 --submission-id 新UUID${access_arg} 提交一次回答。提交被拒绝说明本次执行已被打断或过期：保留草稿并结束，不要去掉 --execution 改作普通发言。草稿只写入 draft_directory；${project_rule}不读取或打印凭据内容，不建定时任务。` });
-  const prompt = `用户在${discussion ? '讨论' : '自由协作'}房间点名了你（${member.name}），对应消息 ${messages}。请先读取任务文件：${task_path}，按其中说明读取新消息、完成请求，并用 ${cli} message post 带 --execution ${execution.id} 提交一次回答后结束。命令只用任务内 subcommands 列出的 ${cli} 子命令；${project_rule}不读取凭据内容。${read_rule()}`;
+    ...(bound_access ? { access_env: 'DISCUSS_ACCESS_FILE' } : { access_file: access_path }), instructions });
   return { id, participant: member.name, directory: config.directory, draft_directory,
     skills_directory: join(config.project, '.agents', 'skills'), access_path, prompt: with_expert_prompt(prompt, profile) };
 }
@@ -103,8 +94,8 @@ const ADAPTER_LABELS = { codex: 'Codex App', codex_cli: 'Codex CLI', claude: 'Cl
 /** What a scheduler can know about a member without a role field: its software, project access and the messages it is on. */
 function member_description(name, profile, work) {
   const project = profile.project_name || (profile.cwd ? basename(profile.cwd) : '');
-  const access = profile.adapter === 'api' ? '' : !profile.cwd ? '，未指定项目目录'
-    : profile.project_access === 'write' ? `，可修改项目 ${project} 的文件` : `，项目 ${project} 只读`;
+  const access = profile.adapter === 'api' ? '' : profile.project_access === 'own' ? '，权限沿用其会话设置' : !profile.cwd ? '，未指定项目目录'
+    : profile.project_access === 'write' ? `，可修改项目 ${project} 的文件并运行命令` : `，项目 ${project} 只读`;
   return `${name}（${ADAPTER_LABELS[profile.adapter] || profile.adapter}${access}${work}）`;
 }
 

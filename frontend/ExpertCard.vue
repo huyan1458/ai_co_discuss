@@ -6,7 +6,7 @@ import EffortSlider from "./EffortSlider.vue";
 import ApiSettings from "./ApiSettings.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 import MemberTextDialog from "./MemberTextDialog.vue";
-import { EXPERT_PROMPT_PRESETS, MAX_EXPERT_PROMPT } from "../runner/expert_prompts.mjs";
+import { EXPERT_PROMPT_HEADING, EXPERT_PROMPT_PRESETS, MAX_EXPERT_PROMPT, READ_RULE, free_task_text } from "../runner/expert_prompts.mjs";
 
 const props = defineProps({
   name: { type: String, required: true },
@@ -218,6 +218,24 @@ const prompt_note = computed(() => {
 });
 const prompt_source = computed(() => prompt_preset.value && prompt_draft.value.trim() !== prompt_preset.value.trim()
   ? { tag: "软件预设", text: prompt_preset.value, action: "恢复预设" } : null);
+// What the runner adds for this member, built by the runner's own function so the dialog never drifts from what is sent;
+// values known only at delivery are placeholders. An API expert gets the skills as its system prompt instead.
+const prompt_fixed = computed(() => {
+  const adapter = profile.value.adapter;
+  if (!adapter || adapter === "api") return null;
+  // The local service runs on this computer, so its command name and the Windows read rule follow this browser's system.
+  const windows = /Windows/.test(navigator.userAgent);
+  const cli = windows && adapter !== "claude" ? "codiscuss.cmd" : "codiscuss";
+  const read_rule = !windows ? "" : adapter === "codex_cli" ? READ_RULE : `（本机装有 rg 时附加）${READ_RULE}`;
+  const { prompt, instructions } = free_task_text({ name: props.name, role: props.host ? "host" : "member", discussion: false,
+    profile: { ...profile.value, cwd: view.value.launch.workspace?.cwd || profile.value.cwd }, cli, room: "{房间}",
+    messages: "#{消息编号}", read_after: "{已读编号}", execution_id: "{执行编号}", task_path: "{任务文件}", read_rule });
+  return { summary: "程序固定附加的说明（只读）", sections: [
+    { label: "每次唤醒随消息发送，你的专属提示词接在其后", text: `${prompt}\n\n${EXPERT_PROMPT_HEADING}` },
+    { label: "任务文件中的说明（由 AI 读取）", text: instructions },
+    { label: "说明", text: "以上是自由协作时的版本；房间开启讨论后改用讨论版说明。{…} 为每次执行时才确定的值。" },
+  ] };
+});
 
 /** Edit in a dialog: the back has no room for a long text. */
 function open_prompt() {
@@ -238,6 +256,14 @@ function reset_model() {
   bridge.write_launch(props.name, "effort", "");
 }
 
+/** Switch this card's delivery; every dialog showing the card shares this one rule. */
+function choose_mode(option) {
+  if (option === "cli") bridge.default_launch_entry(props.name);
+  // A manual card carries no description, not even a preset's; the room's member menu can add one later.
+  if (option === "manual") bridge.write_description_draft(props.name, "");
+  emit("mode", option);
+}
+
 /** Keep the delivery choices usable as one keyboard radio group. */
 function choose_capability(event) {
   const keys = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 };
@@ -245,7 +271,7 @@ function choose_capability(event) {
   event.preventDefault();
   const options = offered.value, index = options.indexOf(props.mode);
   const next = event.key === "Home" ? options[0] : event.key === "End" ? options.at(-1) : options[(index + keys[event.key] + options.length) % options.length];
-  emit("mode", next);
+  choose_mode(next);
   event.currentTarget.querySelector(`[data-mode="${next}"]`)?.focus();
 }
 
@@ -282,7 +308,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 </script>
 
 <template>
-  <div ref="card" class="expert-card" :class="{ 'is-configurable': configurable, 'is-host': host, 'is-static': !automatic }"
+  <div ref="card" class="expert-card" :class="{ 'is-configurable': configurable, 'is-host': host, 'is-static': !automatic, 'is-manual': manual }"
     :data-identity="bridge.identities[name]?.style" :data-face="visible_back ? 'back' : 'front'" tabindex="-1" @keydown.esc="escape">
     <motion.div class="expert-card-turn" :style="{ rotateY: angle }">
       <div class="expert-card-face expert-card-front" :inert="visible_back" :aria-hidden="visible_back">
@@ -291,7 +317,8 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
           <span class="expert-card-identity">
             <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="sm" class="channel-avatar expert-card-avatar" :class="bridge.identities[name]?.style" />
             <span class="expert-card-names">
-              <span><strong :title="bridge.member_label(name) === name ? undefined : name">{{ bridge.member_label(name) }}</strong><span v-if="host" class="expert-card-badge">主持</span></span>
+              <span v-if="manual"><strong :title="name">{{ bridge.display_name(name) }}（手动）</strong><span v-if="host" class="expert-card-badge">主持</span></span>
+              <span v-else><strong :title="bridge.member_label(name) === name ? undefined : name">{{ bridge.member_label(name) }}</strong><span v-if="host" class="expert-card-badge">主持</span></span>
               <small v-if="description" :title="description">{{ description }}</small>
             </span>
           </span>
@@ -306,11 +333,11 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         </component>
         <div v-if="offered.length > 1" class="expert-card-modes expert-card-front-modes" role="radiogroup" :aria-label="`${name} 启动方式`" @keydown="choose_capability">
           <button v-for="option in offered" :key="option" type="button"
-            role="radio" :aria-checked="mode === option" :tabindex="mode === option ? 0 : -1" :data-mode="option" @click="emit('mode', option)">{{ ACCESS_LABELS[option] }}</button>
+            role="radio" :aria-checked="mode === option" :tabindex="mode === option ? 0 : -1" :data-mode="option" @click="choose_mode(option)">{{ ACCESS_LABELS[option] }}</button>
         </div>
         <span class="expert-card-tools">
-          <!-- A card with a back keeps the description beside the prompt there; one without a back has only the front. -->
-          <button v-if="!can_flip" type="button" :class="{ 'is-set': description }" :aria-label="`编辑 ${name} 的描述`" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
+          <!-- A card with a back keeps the description beside the prompt there; one without a back has only the front. A manual card has none, as its settings live in the user's own session. -->
+          <button v-if="!can_flip && !manual" type="button" :class="{ 'is-set': description }" :aria-label="`编辑 ${name} 的描述`" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
           <button v-if="hostable" type="button" class="expert-card-host" :aria-pressed="host" :aria-label="host ? `${name} 是主持人` : `设 ${name} 为主持人`" :title="host ? '主持人' : '设为主持人'" @click="emit('host')"><UIcon name="i-lucide-crown" /></button>
           <button type="button" :aria-label="`移出 ${name}`" title="移出" @click="emit('remove')"><UIcon name="i-lucide-x" /></button>
         </span>
@@ -368,7 +395,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
     <MemberTextDialog v-model:open="prompt_open" v-model:draft="prompt_draft" :title="`${name} 的专属提示词`"
       description="只发给这位专家，补充它的做法与偏好；不改变权限和技能规则。" :label="`${name} 的专属提示词`"
       placeholder="例如：回答先给结论，控制在三段以内。" :max="MAX_EXPERT_PROMPT" :rows="8"
-      :note="prompt_note" :source="prompt_source" :changed="prompt_changed" @save="save_prompt" />
+      :note="prompt_note" :source="prompt_source" :fixed="prompt_fixed" :changed="prompt_changed" @save="save_prompt" />
     <UModal v-model:open="naming" title="存为专家预设" description="存下描述、提示词、项目权限、模型与强度，之后在“预设”行一键加入。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
       <template #body>
         <form class="expert-card-naming" @submit.prevent="save_named_preset">
@@ -452,6 +479,8 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card-naming > p { margin: -2px 0 0; color: var(--ui-text-dimmed); font-size: 11px; }
 .expert-card-naming-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
 .expert-card-note { display: flex; gap: 6px; margin: 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
+/* A manual card is set by the user's own AI session, not this page: a dashed frame and a system-given name. */
+.expert-card.is-manual .expert-card-face { border-style: dashed; }
 .expert-card-manual { display: grid; gap: 4px; width: 100%; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
 .expert-card-manual > p { margin: 0; }
 .expert-card-note > span { flex-shrink: 0; width: 13px; height: 13px; margin-top: 3px; }

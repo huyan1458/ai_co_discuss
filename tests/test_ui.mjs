@@ -248,6 +248,25 @@ test('rewound messages fold into their first line until expanded, and work on th
   assert.deepEqual([...context.state.transcript.value].map(item => item.id), [1, 2, 3, 4, 5], 'expanding lists every rewound line in place');
 });
 
+test('the rail shows the newest unanswered user request as the current task and hides it once all are answered', () => {
+  const board_source = readFileSync(new URL("../frontend/FreeBoard.vue", import.meta.url), "utf8");
+  const requests = [
+    { message_id: 1, created_by: 'user', status: 'completed' },
+    { message_id: 2, created_by: 'user', status: 'pending' },
+    { message_id: 3, created_by: 'host', status: 'delivering' },
+  ];
+  const free = ref({ requests });
+  const view = ref({ messages: [{ id: 1, text: '有人在吗' }, { id: 2, text: '改一下按钮' }] });
+  const context = vm.createContext({ computed, ref, free, view, room: ref({ withdrawals: [] }) });
+  const start = board_source.indexOf('const live_requests = computed(');
+  const end = board_source.indexOf('const task_expanded =', start);
+  vm.runInContext(board_source.slice(start, end).replace(/const meters = computed\([\s\S]*?\n\}\);\n/, '') + '\nglobalThis.task = task;', context);
+  assert.equal(context.task.value, '改一下按钮', 'a request the host passed on is not the user\'s task');
+  requests[1].status = 'completed';
+  free.value = { requests: [...requests] };
+  assert.equal(context.task.value, '', 'nothing is shown once every user request is answered');
+});
+
 test('execution reports bind answers and failed requests and distinguish unknown file changes', () => {
   const room = ref({ free: { executions: [
     { id: 1, status: 'completed', answer_id: 8, request_message_id: 4, request_ids: [1, 2], created_at: 10, finished_at: 22, changes_recorded: true, changes: ['index.html'] },
@@ -260,13 +279,15 @@ test('execution reports bind answers and failed requests and distinguish unknown
   const end = discussion_source.indexOf('const pending_message =', start);
   vm.runInContext(discussion_source.slice(start, end) + '\nglobalThis.reports = execution_reports;', context);
   const reports = context.reports.value;
-  assert.equal(reports.get(8)[0].files_text, 'index.html');
-  assert.equal(reports.get(8)[0].seconds, 12);
-  assert.match(reports.get(9)[0].files_text, /未提供自动改动检测/);
-  assert.equal(reports.get(11)[0].files_text, '未观察到文件变化');
+  // Only observed file changes earn a report under the answer; a clean completion adds nothing.
+  assert.deepEqual([...reports.get(8)[0].changes], ['index.html']);
+  assert.equal(reports.get(8)[0].label, '已完成');
+  assert.equal(reports.has(11), false);
+  // A failed free-room execution keeps its own failure card in place, so it is not repeated as a report.
+  assert.equal(reports.has(9), false);
   assert.equal(reports.has(12), false);
   assert.match(discussion_source, /v-for="report in execution_reports.get\(message.id\)/);
-  assert.match(discussion_source, /report.request_ids.map/);
+  assert.match(discussion_source, /文件变化：\{\{ report.changes.join/);
 });
 
 /** Drive page subscriptions and timers without polling a live discussion. */
@@ -721,6 +742,7 @@ function create_form_fixture() {
     launch_clients: { Codex: [{ value: "codex_cli" }, { value: "api" }], Claude: [{ value: "claude" }, { value: "api" }], DeepSeek: [{ value: "api" }] },
     platform_of: name => name.split("-")[0], display_name: name => name,
     write_launch: (name, field, value) => { (view.value.launch.profiles[name] ||= {})[field] = value; },
+    default_launch_entry: name => { if (!bridge.launch_clients[name]?.some(item => item.value !== "api") && !view.value.launch.profiles[name]?.adapter) bridge.write_launch(name, "adapter", "api"); },
     write_field: (id, value) => { events.push([id, value]); view.value.fields[id] = value; },
     write_create_discussion: value => { view.value.create_discussion = Boolean(value); },
     write_expert: (id, name, mode) => { if (mode) view.value.experts[id][name] = mode; else delete view.value.experts[id][name]; },
@@ -3562,6 +3584,8 @@ function admin_fixture(routes) {
     const result = typeof answer === "function" ? answer(requests.at(-1)) : answer;
     return { ok: !result.error, status: result.status || (result.error ? 400 : 200), json: async () => result };
   };
+  // Signing in rereads the launch settings in the background; that needs a page location and is covered elsewhere.
+  fixture.context.load_launch_settings = async () => {};
   return { ...fixture, requests, admin: fixture.context.test_state.admin };
 }
 

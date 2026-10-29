@@ -7,6 +7,7 @@ import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CodexAppClient } from './codex_app_client.mjs';
+import { agy_command_rule, runs_commands } from './expert_prompts.mjs';
 
 const CALL_TIMEOUT_MS = 30_000;
 const CLI_DIAGNOSTIC_CHARS = 1000;
@@ -18,10 +19,8 @@ const CODEX_PERMISSIONS_MIN_MINOR = 163;
 /** Website subcommands an automatic task may run; service, launch, run, api and setup stay unapproved. */
 export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'execution', 'health', 'schema'];
 
-/** The agy project allows only codiscuss commands and headless agy ends the turn on a denied one, so every agy task states it; no member prompt can drop it. */
-export function agy_command_rule(adapter, cli) {
-  return adapter === 'antigravity_cli' ? `无人值守下 run_command 只能运行 ${cli} 的 subcommands 子命令，其他命令会被自动拒绝并使会话直接结束；列目录、搜索或读取文件用 list_dir、find_by_name、grep_search、view_file。` : '';
-}
+// Defined with the fixed task text so the expert prompt dialog shows the same rules; re-exported for existing callers.
+export { agy_command_rule, runs_commands };
 
 /** Only failures before a software invocation are safe for automatic redelivery. */
 function not_sent(error) { return Object.assign(error, { delivery_status: 'not_sent' }); }
@@ -187,7 +186,7 @@ function agy_project_grants(config, task, resources, user_home) {
   }
   const write_rule = directory => `write_file(${resolve(directory).replaceAll('\\', '/')})`;
   return { allow: [agy_rule(), write_rule(task.draft_directory),
-    ...(config.project_access === 'write' ? projects.map(write_rule) : [])],
+    ...(config.project_access === 'write' ? [...projects.map(write_rule), 'command(*)'] : [])],
   deny: [...new Set(protected_paths.map(write_rule)), 'mcp(*)'] };
 }
 
@@ -235,12 +234,20 @@ export function remove_agy_projects(directory, user_home = homedir()) {
 }
 
 /**
- * Allow only listed codiscuss website subcommands and draft writes for this run; user rules are added after.
- * Claude Code on Windows may run commands through its PowerShell tool instead of Bash, so both are listed.
+ * Allow the listed codiscuss website subcommands and draft writes for this run; a writable member also edits its project
+ * and runs any command. User rules are added after. Claude Code on Windows may run commands through its PowerShell tool
+ * instead of Bash, so both are listed.
  */
 export function claude_permissions(config, task) {
-  const commands = TASK_SUBCOMMANDS.flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]);
-  const writable = [task.draft_directory, ...(config.project_access === 'write' && project_directory(config) ? [project_directory(config)] : [])];
+  // A headless resume cannot ask for approval, so a taken-over manual member runs in auto mode, as its own window does.
+  if (config.project_access === 'own') {
+    const commands = TASK_SUBCOMMANDS.flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]);
+    return ['--permission-mode', 'auto', '--add-dir', task.directory, task.draft_directory, task.skills_directory, '--allowedTools',
+      ...commands, `Edit(${claude_rule_path(task.draft_directory)}/**)`, ...(config.allowed_tools || [])];
+  }
+  const commands = runs_commands(config) ? ['Bash', 'PowerShell']
+    : TASK_SUBCOMMANDS.flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]);
+  const writable = [task.draft_directory, ...(runs_commands(config) ? [project_directory(config)] : [])];
   return ['--add-dir', task.directory, task.draft_directory, task.skills_directory, '--allowedTools',
     ...commands, ...writable.map(directory => `Edit(${claude_rule_path(directory)}/**)`), ...(config.allowed_tools || [])];
 }
@@ -481,7 +488,8 @@ async function claude_delivery(config, binding, task, spawn_process = spawn) {
 /** Build a per-invocation profile without inheriting a user's custom profile of the same name. */
 export function codex_permissions(config, task, platform = process.platform) {
   const name = `codiscuss-${randomUUID()}`;
-  const base = project_directory(config) && config.project_access === 'write' ? ':workspace' : ':read-only';
+  // A taken-over manual member writes like 可写: its own config may sandbox read-only and then could not save its answer draft.
+  const base = project_directory(config) && ['write', 'own'].includes(config.project_access) ? ':workspace' : ':read-only';
   const drafts = resolve(task.draft_directory).replaceAll('\\', '/');
   const filesystem = { ':root': 'read', [resolve(task.directory).replaceAll('\\', '/')]: 'read', [drafts]: 'write' };
   const rules = Object.entries(filesystem).map(([path, access]) => `${JSON.stringify(path)}=${JSON.stringify(access)}`).join(',');

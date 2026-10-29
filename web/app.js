@@ -2128,7 +2128,7 @@ function participant_model(name, room, saved) {
   return model === "默认" && effort === "默认" ? "默认" : `${model} · ${effort}`;
 }
 
-/** A woken member's project files as 只读 / 可写; empty when the site does not decide them (App, its own agy project, unread settings). */
+/** A woken member's project files as 只读 / 可写; empty when the site does not decide them (App, its own agy project, a taken-over manual member, unread settings). */
 function participant_files(name, room, saved) {
   const member = (room?.members || []).find(item => item.name === name);
   if (member?.access === "online") return "只读";
@@ -2136,7 +2136,7 @@ function participant_files(name, room, saved) {
   const profile = saved?.room_id === room.id ? saved.participants?.[name] : null;
   if (!profile) return "";
   if (profile.adapter === "api") return "只读";
-  if (!MODEL_CLIENTS.includes(profile.adapter) || profile.own_project) return "";
+  if (!MODEL_CLIENTS.includes(profile.adapter) || profile.own_project || profile.project_access === "own") return "";
   return profile.project_access === "write" ? "可写" : "只读";
 }
 
@@ -2248,6 +2248,11 @@ function fill_api_key(profile) {
   try { root = new URL(profile.base_url).href.replace(/\/+$/, ""); } catch { return; }
   const ref = state.launch.api_keys?.[root];
   if (ref) profile.api_key_ref = ref;
+}
+
+/** A card woken by the local service on a platform without local software starts on its API, unless it already names an entry. */
+function default_launch_entry(name) {
+  if (!LAUNCH_CLIENTS[name]?.some(item => item.value !== "api") && !state.launch.profiles[name]?.adapter) write_launch_field(name, "adapter", "api");
 }
 
 /** Keep software drafts separate from shared room records and from discussion advancement mode. */
@@ -3873,7 +3878,7 @@ function change_view_theme(theme) {
 }
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
-  write_launch: write_launch_field, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
+  write_launch: write_launch_field, default_launch_entry, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
   launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, launch_can_bind_session, pick_launch_directory, browse_local_directory, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,

@@ -100,17 +100,14 @@ const has_local = (name) => bridge.launch_clients[name]?.some((item) => item.val
 // Manual needs no local software, so any platform can be pasted into whichever AI the user runs by hand.
 const access_choices = (name) => discussing.value && name === host.value ? [] : ["cli", "manual"];
 
-/** Change one selected expert's delivery, defaulting a woken API-only platform to its API, and keep the host valid. */
+/** Store one selected expert's delivery, already prepared by its card, and keep the host valid. */
 function set_expert_mode(name, mode) {
-  if (mode === "cli" && !has_local(name) && !view.value.launch.profiles[name]?.adapter) bridge.write_launch(name, "adapter", "api");
   bridge.write_expert(EXPERT_CONTAINER, name, mode);
   ensure_host();
 }
 
 /** Explain delivery separately from whether the launcher has software configured. */
 function expert_status(name) {
-  if (selected.value[name] === "online") return { text: "网页代发，由你转发回答", tone: "muted" };
-  if (selected.value[name] === "manual") return { text: "手动启动，自行提交", tone: "muted" };
   if (relay.value) return launch_ready(name) ? { text: `由电脑「${relay.value.name}」唤醒`, tone: "ready" } : { text: "电脑上尚未配置此软件", tone: "warn" };
   const api = view.value.launch.profiles[name]?.adapter === "api";
   return launch_ready(name) ? { text: api ? "已配置 API" : "已配置本机软件", tone: "ready" } : { text: api ? "待补齐 API 配置" : "待补齐接入配置", tone: "warn" };
@@ -137,7 +134,7 @@ function add_expert(name) {
     return ensure_host();
   }
   if (!bridge.launch_clients[name]) return;
-  if (!has_local(name) && !view.value.launch.profiles[name]?.adapter) bridge.write_launch(name, "adapter", "api");
+  bridge.default_launch_entry(name);
   // A card already in use adds another instance with its own session, model and effort.
   if (instance_count(name)) bridge.add_instance(EXPERT_CONTAINER, name, "cli");
   else set_expert_mode(name, "cli");

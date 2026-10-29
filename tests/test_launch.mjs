@@ -1054,6 +1054,10 @@ test('a woken member switches project files between read-only and writable after
   writeFileSync(launched.config_path, JSON.stringify({ ...current, participants: { ...current.participants,
     Gemini: { adapter: 'antigravity_cli', executable: process.execPath, session_id: 'own-agy-conversation' } } }));
   await assert.rejects(room_member_access(f.home, { ...input, name: 'Gemini' }), /自己的 agy 对话/);
+  const latest = JSON.parse(readFileSync(launched.config_path, 'utf8'));
+  writeFileSync(launched.config_path, JSON.stringify({ ...latest, participants: { ...latest.participants,
+    Claude: { ...latest.participants.Claude, project_access: 'own' } } }));
+  await assert.rejects(room_member_access(f.home, input), /手动接入的成员/);
 });
 
 test('an idle Codex member switches between App and CLI in a free room and keeps its conversation', async t => {
@@ -1205,6 +1209,7 @@ test('a manual Claude expert\'s reported session is registered as a hosted parti
     adopt_member_profile(f.home, launched.config_path, 'Claude-2', claude_id);
     const profile = load_config(launched.config_path).participants['Claude-2'];
     assert.deepEqual([profile.adapter, profile.session_id], ['claude', claude_id]);
+    assert.equal(profile.project_access, 'own', 'a manually started member keeps its own session permissions');
   } finally {
     if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previous;
   }

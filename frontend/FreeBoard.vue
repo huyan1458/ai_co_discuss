@@ -107,9 +107,9 @@ const meters = computed(() => {
   ];
 });
 
-/** The user message behind the newest request, so the rail says what the room is working on. */
+/** The user message behind the newest unfinished request, so the rail says what the room is working on; none once all are answered. */
 const task = computed(() => {
-  const request = live_requests.value.filter((item) => item.created_by === "user").at(-1);
+  const request = live_requests.value.filter((item) => item.created_by === "user" && ["pending", "delivering"].includes(item.status)).at(-1);
   if (!request) return "";
   const message = (view.value.messages || []).find((item) => item.id === request.message_id);
   return message ? message.text : `#${request.message_id}`;

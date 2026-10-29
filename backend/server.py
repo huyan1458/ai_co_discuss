@@ -1707,7 +1707,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
     def respond(self, body, status=200, content_type="application/json"):
         """Send a UTF-8 response that browsers and proxies must not cache."""
         parts = urlsplit(self.path).path.strip("/").split("/")
-        action = (self.payload_cache or {}).get("action")
+        action = (getattr(self, "payload_cache", None) or {}).get("action")
         # Timeline segments are read by the timeline page on its own schedule, so they wake no other page.
         quiet_renewal = (parts[3:4] == ["events"] and action == "renew") or (parts[3:4] in (["events"], ["executions"]) and action == "segments")
         if (self.command == "POST" and 200 <= status < 300 and parts[:2] in (["api", "rooms"], ["api", "folders"])
