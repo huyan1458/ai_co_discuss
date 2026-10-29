@@ -80,7 +80,7 @@ const effort_items = computed(() => {
 const default_effort = computed(() => profile.value.adapter === "antigravity_cli" && profile.value.model ? "" : models.value.defaults?.effort);
 const effort_label = computed(() => profile.value.effort ? EFFORT_LABELS[profile.value.effort] || profile.value.effort
   : default_effort.value ? EFFORT_LABELS[default_effort.value] || default_effort.value
-  : profile.value.adapter === "antigravity_cli" ? "模型默认强度" : "软件默认强度");
+  : "默认");
 // The front lists the read-only configuration; strength appears only where this page sets it.
 // Room speech and project files are separate: only woken CLIs get a project choice from this page,
 // Apps and manual sessions keep their own settings, and API or web members never see project files.

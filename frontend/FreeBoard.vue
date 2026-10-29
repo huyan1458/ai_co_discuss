@@ -56,6 +56,12 @@ function member_model(member) {
   return member.access === "runner" ? bridge.participant_model(member.name, room.value, view.value.launch.room_models) : "";
 }
 
+/** Session and project files of a woken member, e.g. "借用会话 · 可写"; web members only read. */
+function member_setup(member) {
+  const session = member.access === "runner" ? (member.session_mode === "borrowed" ? "借用会话" : "独立会话") : "";
+  return [session, bridge.participant_files(member.name, room.value, view.value.launch.room_models)].filter(Boolean).join(" · ");
+}
+
 /** Ways to let a stopped chain run on: one more round, or as many as the room's limit, when that is more. */
 const continue_choices = computed(() => [...new Set([1, free.value.max_rounds || 1])]);
 const continuing = ref(0);
@@ -178,7 +184,7 @@ watch(() => room.value.id, () => { starting.value = false; });
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
             <div class="pb-member-body">
               <div class="pb-member-name" :title="room.descriptions?.[member.name] || undefined">{{ bridge.display_name(member.name) }}<UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /><small :title="member_model(member) || undefined">{{ member_tag(member) }}</small></div>
-              <div v-if="member.session_mode === 'borrowed'" class="pb-member-model" title="它工作时请不要在原窗口继续操作">借用已有会话</div>
+              <div v-if="member_setup(member)" class="pb-member-model" :title="member.session_mode === 'borrowed' ? '续接你已有的会话；它工作时请不要在原窗口继续操作' : undefined">{{ member_setup(member) }}</div>
               <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span><span class="pb-member-status-text" :title="member.execution?.status === 'failed' ? member.execution.result : undefined">{{ member_status(member, item.state) }}</span></div>
             </div>
             <UDropdownMenu :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="`${member.name} 的更多操作`" /></UDropdownMenu>

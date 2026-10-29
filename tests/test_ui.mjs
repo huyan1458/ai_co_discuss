@@ -2200,20 +2200,30 @@ test("participant model labels distinguish explicit choices, software defaults a
     AgyPicked: { adapter: 'antigravity_cli', model: 'gemini-4-argon-high', effort: '', default_model: 'gemini-4-argon-medium', default_effort: 'medium' },
   } };
   assert.equal(label('Agy', room, saved), 'gemini-4-argon-medium · medium');
-  assert.equal(label('AgyPicked', room, saved), 'gemini-4-argon-high · 模型默认强度', 'a chosen agy model does not borrow the default model effort');
+  assert.equal(label('AgyPicked', room, saved), 'gemini-4-argon-high · 默认', 'a chosen agy model does not borrow the default model effort');
   assert.equal(label('Codex', room, saved), 'gpt-6-astra · xhigh');
-  assert.equal(label('Claude', room, saved), '软件默认模型 · 软件默认强度');
+  assert.equal(label('Claude', room, saved), '默认');
   assert.equal(label('Reviewer', room, saved), 'gpt-6-astra · xhigh', 'an empty choice shows what the software settings select');
-  assert.equal(label('Gemini', room, saved), 'gemini-4-argon-high · 模型默认强度');
+  assert.equal(label('Gemini', room, saved), 'gemini-4-argon-high · 默认');
   assert.equal(label('Codex', { ...room, id: 'two' }, saved), '', 'unread settings are not guessed or shown as a placeholder');
   assert.equal(label('Codex', room, null), '');
   saved.participants.Codex.adapter = 'codex';
-  assert.equal(label('Codex', room, saved), '模型与强度由 App 设置');
+  assert.equal(label('Codex', room, saved), '默认');
   assert.equal(label('Codex', { ...room, runtime: { mode: 'manual' } }, saved), '');
   assert.equal(label('Codex', { ...room, members: [{ name: 'Codex', access: 'manual' }] }, saved), '', 'a manual member sets its model in its own session');
   saved.participants.Codex.adapter = 'codex_cli';
   assert.equal(label('Codex', { ...room, runtime: { mode: 'manual' }, members: [{ name: 'Codex', access: 'runner' }] }, saved), 'gpt-6-astra · xhigh',
     'a free room runs no discussion yet its woken members still show their model');
+});
+
+test("participant files show 只读 / 可写 only where the site decides them", () => {
+  const files = theme_fixture().context.participant_files;
+  const room = { id: 'one', members: [{ name: 'Codex', access: 'runner' }, { name: 'Claude', access: 'runner' }, { name: 'App', access: 'runner' },
+    { name: 'Api', access: 'runner' }, { name: 'Web', access: 'online' }, { name: 'Manual', access: 'manual' }] };
+  const saved = { room_id: 'one', participants: { Codex: { adapter: 'codex_cli', project_access: 'write' }, Claude: { adapter: 'claude' },
+    App: { adapter: 'codex' }, Api: { adapter: 'api', project_access: 'write' } } };
+  assert.deepEqual(['Codex', 'Claude', 'App', 'Api', 'Web', 'Manual'].map((name) => files(name, room, saved)), ['可写', '只读', '', '只读', '只读', '']);
+  assert.equal(files('Codex', room, null), '', 'unread settings are not guessed');
 });
 
 test("empty automatic discussions describe their actual state instead of requiring another message", () => {

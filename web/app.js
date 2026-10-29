@@ -2067,22 +2067,33 @@ function reload_room_models() {
   return load_room_models();
 }
 
-/** Describe registered launch choices; an empty choice shows what the software's own settings select, or says the software decides. */
+/** Describe registered launch choices; an empty choice shows what the software's own settings select, and anything unknown is "默认". */
 function participant_model(name, room, saved) {
   // Nothing to say beats a placeholder: a manual member's settings live in its own session and unread ones are not guessed.
   const member = (room?.members || []).find(item => item.name === name);
   if (member ? member.access !== "runner" : room?.runtime?.mode !== "automatic") return "";
   const profile = saved?.room_id === room.id ? saved.participants?.[name] : null;
   if (!profile) return "";
-  if (["codex", "antigravity"].includes(profile.adapter)) return "模型与强度由 App 设置";
   // Only an agy member without a chosen model depends on the default that is read later.
   if (!profile.model && profile.defaults_pending) return "读取中…";
-  if (!profile.model && profile.defaults_failed) return "";
-  const model = profile.model || profile.default_model || "软件默认模型";
+  const app = ["codex", "antigravity"].includes(profile.adapter);
+  const model = !app && (profile.model || profile.default_model) || "默认";
   // agy's default effort belongs to its default model, so a chosen model keeps its own default instead.
   const default_effort = profile.adapter === "antigravity_cli" && profile.model ? "" : profile.default_effort;
-  const effort = profile.effort || default_effort || (profile.adapter === "antigravity_cli" ? "模型默认强度" : "软件默认强度");
-  return `${model} · ${effort}`;
+  const effort = !app && (profile.effort || default_effort) || "默认";
+  return model === "默认" && effort === "默认" ? "默认" : `${model} · ${effort}`;
+}
+
+/** A woken member's project files as 只读 / 可写; empty when the site does not decide them (App, its own agy project, unread settings). */
+function participant_files(name, room, saved) {
+  const member = (room?.members || []).find(item => item.name === name);
+  if (member?.access === "online") return "只读";
+  if (member?.access !== "runner") return "";
+  const profile = saved?.room_id === room.id ? saved.participants?.[name] : null;
+  if (!profile) return "";
+  if (profile.adapter === "api") return "只读";
+  if (!MODEL_CLIENTS.includes(profile.adapter) || profile.own_project) return "";
+  return profile.project_access === "write" ? "可写" : "只读";
 }
 
 /** Label how a member answers: the registered adapter says API / App; other locally woken members are CLI. */
@@ -3710,7 +3721,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form },
   request: request_json, identities: IDENTITIES, display_name, sources: SOURCE_LABELS, phases: PHASE_LABELS,
-  set_member_access, set_member_adapter, reload_room_models, runtime_label, execution_label, limits_label, stop_reason_label, participant_model, participant_access, can_retry_execution,
+  set_member_access, set_member_adapter, reload_room_models, runtime_label, execution_label, limits_label, stop_reason_label, participant_model, participant_files, participant_access, can_retry_execution,
   turns: TURN_LABELS, turn_label, turn_guidance, progress_round, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();

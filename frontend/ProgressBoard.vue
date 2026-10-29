@@ -164,7 +164,14 @@ function member_status(name) {
   if (execution?.stale) { text = "疑似卡住（租约已过期）"; tone = "warning"; }
   return { name, is_host, text, tone, manual: record(name)?.access === "manual", failures: execution?.failures || 0, result: execution?.status === "failed" ? execution.result : "",
     model: bridge.participant_model(name, room.value, view.value.launch.room_models),
-    session: execution?.session_id || "", mode: bridge.participant_access(name, room.value) };
+    session: execution?.session_id || "", mode: bridge.participant_access(name, room.value), setup: member_setup(name) };
+}
+
+/** Session and project files of a woken member, e.g. "借用会话 · 可写"; web members only read. */
+function member_setup(name) {
+  const seat = record(name);
+  const session = seat?.access === "runner" ? (seat.session_mode === "borrowed" ? "借用会话" : "独立会话") : "";
+  return [session, bridge.participant_files(name, room.value, view.value.launch.room_models)].filter(Boolean).join(" · ");
 }
 
 /** Menu entries for one participant; the session ID stays out of the row until needed. */
@@ -299,8 +306,8 @@ async function finish(action) {
           <template v-else v-for="member in [member_status(item.name)]" :key="member.name">
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
             <div class="pb-member-body">
-              <div class="pb-member-name">{{ bridge.display_name(member.name) }}<UIcon v-if="member.is_host" name="i-lucide-crown" title="主持人" /><small :title="member.model ? `${member.model}：卡片指定的模型与强度；未指定时读取软件自己的设置，读不到则写“软件默认”` : undefined">{{ [member.mode === 'CLI' && member.model ? '' : member.mode, member.model].filter(Boolean).join(' · ') }}</small></div>
-              <div v-if="record(member.name)?.session_mode === 'borrowed'" class="pb-member-model" title="续接你已有的会话；它工作时请不要在原窗口继续操作">借用已有会话</div>
+              <div class="pb-member-name">{{ bridge.display_name(member.name) }}<UIcon v-if="member.is_host" name="i-lucide-crown" title="主持人" /><small :title="member.model ? `${member.model}：卡片指定的模型与强度；未指定时读取软件自己的设置，读不到则写“默认”` : undefined">{{ [member.mode === 'CLI' && member.model ? '' : member.mode, member.model].filter(Boolean).join(' · ') }}</small></div>
+              <div v-if="member.setup" class="pb-member-model" :title="record(member.name)?.session_mode === 'borrowed' ? '续接你已有的会话；它工作时请不要在原窗口继续操作' : undefined">{{ member.setup }}</div>
               <div v-if="!settled" class="pb-member-status" :class="`is-${member.tone}`"><span class="pb-dot"></span>{{ member.text }}<small v-if="member.failures"> · 失败 {{ member.failures }} 次</small></div>
               <div v-if="member.manual && !settled" class="pb-member-manual">
                 <span v-if="!record(member.name)?.registered_at && !member.is_host">需在它的会话中注册，才算到场</span>
