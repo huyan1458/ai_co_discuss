@@ -110,9 +110,11 @@ const free_busy = computed(() => {
   return (room.value.free?.members || []).flatMap((member) => {
     const execution = member.execution;
     if (execution && ["dispatched", "started"].includes(execution.status)) {
-      return [{ id: `free-${execution.id}`, author: member.name, member_id: member.id,
-        text: execution.stale ? "执行失联：网站已不再接受本次回答，软件停止未确认" : ACTIVITY_LABELS[execution.activity] || "正在处理",
-        working: !execution.stale, created_at: execution.created_at, adapter: member.adapter,
+      // A manual member's session refused the delivery and the runner waits to deliver again.
+      const retry = execution.retry?.retry_at && !execution.retry.stopped ? execution.retry : null;
+      return [{ id: `free-${execution.id}`, author: member.name, member_id: member.id, retry,
+        text: execution.stale ? "执行失联：网站已不再接受本次回答，软件停止未确认" : retry ? "会话异常，等待自动重试" : ACTIVITY_LABELS[execution.activity] || "正在处理",
+        working: !execution.stale && !retry, created_at: execution.created_at, adapter: member.adapter,
         activity: execution.activity, activity_at: execution.activity_at, notes: execution.notes || 0,
         execution_id: execution.id, request_message_id: request_messages.get(execution.id) }];
     }
@@ -190,6 +192,8 @@ const draft_prose = computed(() => text.value.replace(/```[\s\S]*?```/g, "").rep
 const SCHEDULER_LABELS = { jev: "TypeSafe Jev", decisions: "OpenAI Decisions" };
 /** App deliveries run in the user's own window, so the runner never sees their output. */
 const BLIND_ADAPTERS = ["codex", "antigravity"];
+// The runner retries a manual member's refused delivery this many times (runner/free_runner.mjs MAX_DELIVERY_RETRIES).
+const MAX_DELIVERY_RETRIES = 3;
 /** Long reasoning or a long reply can be silent for minutes; beyond this the card only warns, never stops. */
 const STALL_SECONDS = 180;
 const FREE_REQUEST_LABELS = { pending: ["待投递", "neutral"], delivering: ["处理中", "info"], completed: ["已回复", "success"],
@@ -1157,6 +1161,18 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
               <WorkingText v-else-if="status.live" :text="status.text" :seed="message.author" :beat="message.activity_at" :silent="free_now - (message.activity_at || message.created_at)" dots :muted="BLIND_ADAPTERS.includes(message.adapter)" />
               <span v-else>{{ status.text }}</span>
             </div>
+            <template v-if="message.retry">
+              <p class="channel-message-text channel-failure-reason">{{ message.retry.reason }}</p>
+              <div class="channel-failure-actions">
+                <span class="channel-message-provenance">{{ message.retry.retry_at > free_now ? `${message.retry.retry_at - free_now} 秒后自动重试` : '正在重试' }}（第 {{ message.retry.attempt }}/{{ MAX_DELIVERY_RETRIES }} 次）</span>
+                <template v-if="view.access?.can_manage">
+                  <UButton label="立即重试" icon="i-lucide-rotate-ccw" size="sm" variant="soft" color="primary" :aria-label="`立即重新投递给 ${bridge.display_name(message.author)}`" :disabled="!!pending"
+                    @click="act('retry_delivery', { execution_id: message.execution_id, action: 'retry_now' })" />
+                  <UButton label="停止" icon="i-lucide-square" size="sm" variant="soft" color="neutral" :aria-label="`停止自动重试 ${bridge.display_name(message.author)} 的投递`" :disabled="!!pending"
+                    @click="act('retry_delivery', { execution_id: message.execution_id, action: 'retry_stop' })" />
+                </template>
+              </div>
+            </template>
             <!-- The same row the answer keeps folded after its result: open while working. -->
             <ExecutionNotes v-if="execution_notes.get(message.execution_id)?.length" live :notes="execution_notes.get(message.execution_id)" />
           </template>

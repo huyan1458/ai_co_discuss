@@ -16,7 +16,11 @@ const ACTIVITY_REPORT_MS = 10_000;
 /** Segments and progress notes are reported quietly, waking no page, so they may go every tick. */
 const PROGRESS_REPORT_MS = 2_000;
 const MAX_DELIVERY_ATTEMPTS = 3;
-const LIVE = ['reserving', 'delivering', 'sidecar_pending', 'running'];
+// A manual member's session that refuses a delivery is retried in the same execution, after a wait the owner can cut short.
+const MAX_DELIVERY_RETRIES = 3;
+const RETRY_DELAY_SECONDS = 60;
+const MAX_RETRY_REASON = 500;
+const LIVE = ['reserving', 'delivering', 'sidecar_pending', 'running', 'retry_wait'];
 const MAX_HASHED_BYTES = 5 * 1024 * 1024;
 const GIT_TIMEOUT_MS = 15_000;
 
@@ -366,6 +370,7 @@ export class FreeRoomRunner {
       if (result.session_id) this.store.bind(member.name, result.session_id);
       this.save(member.name, { status: result.status === 'sidecar_pending' ? 'sidecar_pending' : 'running', attempts: 0 });
     } catch (error) {
+      if (adapter.project_access === 'own') return this.retry_or_fail(member.name, execution, `投递失败：${error.message}`);
       const attempts = (this.row(member.name)?.attempts || 0) + 1;
       if ((invoked && error.delivery_status !== 'not_sent') || attempts >= MAX_DELIVERY_ATTEMPTS) {
         return this.fail(member.name, execution.id, `投递失败：${error.message}`);
@@ -402,7 +407,7 @@ export class FreeRoomRunner {
       if (receipt?.status === 'accepted' && receipt.session_id) {
         this.store.bind(member.name, receipt.session_id);
         this.save(member.name, { status: 'running' });
-      } else if (receipt && active.has(row.execution_id)) return this.fail(member.name, row.execution_id, receipt.error || 'Sidecar 投递结果不明，请核对原会话');
+      } else if (receipt && active.has(row.execution_id)) return this.retry_or_fail(member.name, active.get(row.execution_id), receipt.error || 'Sidecar 投递结果不明，请核对原会话');
     }
     const execution = active.get(row.execution_id);
     if (!execution) {
@@ -411,9 +416,18 @@ export class FreeRoomRunner {
       this.stop_member(member.name);
       return this.save(member.name, { status: 'idle', error: '' });
     }
+    if (row.status === 'retry_wait') {
+      const retry = execution.retry;
+      if (retry?.stopped) return this.fail(member.name, execution.id, `${retry.reason}（已停止自动重试）`);
+      if (retry?.retry_at && Date.now() >= retry.retry_at * 1000) {
+        await api(this.config, `/executions/${execution.id}`, { action: 'retry_start' });
+        this.save(member.name, { status: 'delivering' });
+        return this.invoke(member, await api(this.config, `/executions/${execution.id}`));
+      }
+    }
     // A restart between persisting and invoking cannot prove non-delivery, so it never resends.
     if (row.status === 'delivering') return this.fail(member.name, execution.id, '上次投递结果不明，未自动重发；请核对原会话后重新发送');
-    if (row.error) return this.fail(member.name, execution.id, row.error);
+    if (row.error) return this.retry_or_fail(member.name, execution, row.error);
     if (this.exited.has(execution.id)) {
       const latest = await api(this.config, `/executions/${execution.id}`);
       const denial = this.exited.get(execution.id);
@@ -464,6 +478,20 @@ export class FreeRoomRunner {
       try { await api(this.config, `/executions/${execution_id}`, { action: 'report', changes: changes.slice(0, 200) }); }
       catch (error) { if (!/HTTP (404|409)/.test(error.message)) throw error; }
     }
+  }
+  /**
+   * A manual member's session refused the delivery: keep the execution and deliver again after a wait shown on the
+   * website, up to MAX_DELIVERY_RETRIES times; any other member, or the last attempt, fails as before.
+   */
+  async retry_or_fail(name, execution, reason) {
+    const attempt = (execution.retry?.attempt || 0) + 1;
+    if (this.config.participants[name]?.project_access !== 'own') return this.fail(name, execution.id, reason);
+    if (attempt > MAX_DELIVERY_RETRIES) return this.fail(name, execution.id, `${reason}（已自动重试 ${MAX_DELIVERY_RETRIES} 次）`);
+    this.stop_member(name);
+    this.exited.delete(execution.id);
+    await api(this.config, `/executions/${execution.id}`, { action: 'retry_wait', attempt,
+      retry_at: Math.floor(Date.now() / 1000) + RETRY_DELAY_SECONDS, reason: reason.slice(0, MAX_RETRY_REASON) });
+    this.save(name, { status: 'retry_wait', error: '' });
   }
   /** Record the cause on the website, then stop this member's own processes. */
   async fail(name, execution_id, reason) {

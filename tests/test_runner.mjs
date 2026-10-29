@@ -2010,6 +2010,8 @@ async function free_fixture(t) {
       if (body?.action === 'release') { execution.status = 'cancelled'; state.pending = execution.requests; }
       if (body?.action === 'report') state.reports[execution.id] = body.changes;
       if (body?.action === 'renew') state.renewed = body;
+      if (body?.action === 'retry_wait') execution.retry = { attempt: body.attempt, retry_at: body.retry_at, reason: body.reason, stopped: 0 };
+      if (body?.action === 'retry_start') execution.retry.retry_at = 0;
       if (body?.action === 'segments') { (state.segments ||= []).push(body.segments); if (body.notes) (state.notes ||= []).push(body.notes); }
       result = execution;
     } else if (url.startsWith('/messages?after=')) {
@@ -2346,6 +2348,38 @@ test('proven non-delivery is released and retried, then fails after three attemp
   const runner = new FreeRoomRunner(config, store, async () => { throw Object.assign(new Error('未启动'), { delivery_status: 'not_sent' }); });
   for (let index = 0; index < 3; index++) await runner.tick();
   assert.deepEqual(state.executions.map(item => item.status), ['cancelled', 'cancelled', 'failed']);
+});
+
+test('a manual member whose session refuses a delivery is retried in the same execution after a wait, and fails when stopped', async t => {
+  const { state, store, config } = await free_fixture(t);
+  config.participants.Claude.project_access = 'own';
+  let sent = 0;
+  const runner = new FreeRoomRunner(config, store, async () => { sent++; throw Object.assign(new Error('原窗口拒绝'), { delivery_status: 'not_sent' }); });
+  await runner.tick();
+  const [execution] = state.executions;
+  assert.equal(execution.status, 'dispatched', 'the execution stays live while it waits');
+  assert.deepEqual([execution.retry.attempt, execution.retry.reason], [1, '投递失败：原窗口拒绝']);
+  assert.ok(execution.retry.retry_at >= Math.floor(Date.now() / 1000) + 59);
+  await runner.tick();
+  assert.equal(sent, 1, 'nothing is sent before retry_at');
+  execution.retry.retry_at = Math.floor(Date.now() / 1000) - 1;
+  await runner.tick();
+  assert.deepEqual([sent, execution.retry.attempt, state.executions.length], [2, 2, 1]);
+  execution.retry.stopped = 1;
+  await runner.tick();
+  assert.equal(execution.status, 'failed');
+  assert.match(execution.result, /原窗口拒绝（已停止自动重试）/);
+});
+
+test('a manual member is retried at most three times before the execution fails', async t => {
+  const { state, store, config } = await free_fixture(t);
+  config.participants.Claude.project_access = 'own';
+  const runner = new FreeRoomRunner(config, store, async () => { throw Object.assign(new Error('原窗口拒绝'), { delivery_status: 'not_sent' }); });
+  await runner.tick();
+  const [execution] = state.executions;
+  for (let index = 0; index < 3; index++) { execution.retry.retry_at = 1; await runner.tick(); }
+  assert.equal(execution.status, 'failed');
+  assert.match(execution.result, /已自动重试 3 次/);
 });
 
 test('a restart between persisting and invoking never resends the free task', async t => {

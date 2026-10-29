@@ -574,6 +574,16 @@ CREATE TABLE IF NOT EXISTS execution_denials (
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     denials TEXT NOT NULL
 );
+-- A manual member's session refused a delivery: the runner keeps the execution and delivers again at retry_at
+-- (0 while delivering). The owner may ask for it now or stop it, and the runner then fails it. Not part of backups.
+CREATE TABLE IF NOT EXISTS execution_retries (
+    execution_id INTEGER PRIMARY KEY REFERENCES member_executions(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    attempt INTEGER NOT NULL,
+    retry_at INTEGER NOT NULL DEFAULT 0,
+    reason TEXT NOT NULL DEFAULT '',
+    stopped INTEGER NOT NULL DEFAULT 0
+);
 -- Phases the runner saw a member's software go through in one execution (a free execution or a discussion event), as
 -- millisecond offsets from its delivery; numbered per execution, and a resent segment keeps the later end. Not part of backups.
 CREATE TABLE IF NOT EXISTS execution_segments (

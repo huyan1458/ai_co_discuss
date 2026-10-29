@@ -2080,6 +2080,11 @@ const FREE_MAX_PATH = 500;
 // Refused operations one execution may report, and the length of each field.
 const FREE_MAX_DENIALS = 20;
 const FREE_MAX_DENIAL_FIELD = 300;
+// A manual member's delivery is retried at most this often before the execution fails.
+const FREE_MAX_RETRIES = 3;
+const FREE_MAX_RETRY_REASON = 500;
+// What the runner reported about a waiting retry of one execution, or null.
+const FREE_RETRY_SQL = (alias) => `(SELECT json_object('attempt',attempt,'retry_at',retry_at,'reason',reason,'stopped',stopped) FROM execution_retries WHERE execution_id=${alias}.id) AS retry`;
 // What a member's software last showed it doing, as reported by the runner with each renewal.
 const FREE_ACTIVITY_PHASES = ["", "thinking", "command", "tool", "editing", "writing"];
 // Progress notes per execution, their length, and how many one renewal may carry.
@@ -2302,11 +2307,12 @@ async function free_recent_executions(database, room_id) {
     (SELECT MAX(answer_id) FROM member_requests WHERE execution_id=e.id) AS answer_id,
     (SELECT MIN(message_id) FROM member_requests WHERE execution_id=e.id) AS request_message_id,
     (SELECT COUNT(*) FROM execution_notes WHERE execution_id=e.id) AS note_count,
-    (SELECT denials FROM execution_denials WHERE execution_id=e.id) AS denials
+    (SELECT denials FROM execution_denials WHERE execution_id=e.id) AS denials,${FREE_RETRY_SQL("e")}
     FROM member_executions e WHERE room_id=? ORDER BY id DESC LIMIT ?`).bind(room_id, FREE_RECENT_EXECUTIONS).all()).results;
   return rows.map(row => ({ ...pick(row, FREE_EXECUTION_FIELDS), cwd: row.cwd, changes: JSON.parse(row.changes || '[]'),
     changes_recorded: Boolean(row.changes), request_ids: JSON.parse(row.request_ids),
-    answer_id: row.answer_id, request_message_id: row.request_message_id, notes: row.note_count, denials: JSON.parse(row.denials || "[]") }));
+    answer_id: row.answer_id, request_message_id: row.request_message_id, notes: row.note_count, denials: JSON.parse(row.denials || "[]"),
+    retry: JSON.parse(row.retry || "null") }));
 }
 
 /** Validate the operations a member's software refused: the tool, what it tried, and the rule that would allow it. */
@@ -2340,6 +2346,7 @@ async function free_view(database, room_id) {
     if (latest && ["dispatched", "started"].includes(latest.status)) {
       execution.stale = latest.lease_until <= now;
       execution.notes = (await database.prepare("SELECT COUNT(*) AS count FROM execution_notes WHERE execution_id=?").bind(latest.id).first()).count;
+      execution.retry = await database.prepare("SELECT attempt,retry_at,reason,stopped FROM execution_retries WHERE execution_id=?").bind(latest.id).first() || null;
     }
     const pending = (await database.prepare("SELECT COUNT(*) AS count FROM member_requests WHERE member_id=? AND status='pending'").bind(row.id).first()).count;
     const reported = await database.prepare("SELECT session_id,client FROM member_sessions WHERE member_id=?").bind(row.id).first();
@@ -2725,8 +2732,9 @@ function free_hand_over_statements(database, room_id, routes, departed_id = 0) {
 async function free_execution_detail(database, row) {
   const member = await database.prepare("SELECT * FROM room_members WHERE id=?").bind(row.member_id).first();
   const requests = (await database.prepare("SELECT id,message_id,status,purpose FROM member_requests WHERE execution_id=? ORDER BY id").bind(row.id).all()).results;
+  const retry = await database.prepare("SELECT attempt,retry_at,reason,stopped FROM execution_retries WHERE execution_id=?").bind(row.id).first();
   return { ...pick(row, FREE_EXECUTION_FIELDS), member: member.name, read_until: member.read_until, requests,
-    rewound_executions: await member_rewinds(database, member) };
+    rewound_executions: await member_rewinds(database, member), retry: retry || null };
 }
 
 /** The room's taken-back messages by id, so the page keeps them in place while AI readers skip them. */
@@ -2868,9 +2876,9 @@ async function free_inbox(database, room_id, token) {
   const listed = await Promise.all(rows.map(async row => ({ ...pick(row, FREE_MEMBER_FIELDS),
     pending: (await database.prepare("SELECT id,message_id,purpose FROM member_requests WHERE member_id=? AND status='pending' ORDER BY id").bind(row.id).all()).results })));
   const members = listed.filter(member => member.access === "runner"), observers = listed.filter(member => member.access !== "runner");
-  const executions = (await database.prepare(`SELECT member_executions.*,room_members.name FROM member_executions JOIN room_members ON room_members.id=member_id
+  const executions = (await database.prepare(`SELECT member_executions.*,room_members.name,${FREE_RETRY_SQL("member_executions")} FROM member_executions JOIN room_members ON room_members.id=member_id
     WHERE member_executions.room_id=? AND member_executions.${FREE_LIVE} ORDER BY member_executions.id`).bind(room_id).all()).results
-    .map(row => ({ ...pick(row, FREE_EXECUTION_FIELDS), member: row.name }));
+    .map(row => ({ ...pick(row, FREE_EXECUTION_FIELDS), member: row.name, retry: JSON.parse(row.retry || "null") }));
   return { room_id, archived, members, observers, executions, execution_minutes: await free_execution_minutes(database, room_id) };
 }
 
@@ -3181,13 +3189,30 @@ async function free_execution_action(database, room_id, execution_id, token, pay
         .bind(FREE_LEASE_SECONDS, limit, activity, activity_at, execution_id),
       ...notes.map(note => database.prepare("INSERT OR IGNORE INTO execution_notes (execution_id,seq,room_id,text,created_at) VALUES (?,?,?,?,unixepoch())")
         .bind(execution_id, note.seq, room_id, note.text))]);
+  } else if (action === "retry_wait") {
+    // A manual member's session refused the delivery: the runner keeps the execution and delivers again at retry_at.
+    const { attempt, retry_at } = payload, reason = typeof payload.reason === "string" ? payload.reason : "";
+    if (!Number.isInteger(attempt) || attempt < 1 || attempt > FREE_MAX_RETRIES || !Number.isInteger(retry_at) || retry_at <= 0
+      || !reason || reason.length > FREE_MAX_RETRY_REASON) {
+      throw new HttpError(400, `retry_wait 须带 attempt（1–${FREE_MAX_RETRIES}）、秒级 retry_at 与 reason（最多 ${FREE_MAX_RETRY_REASON} 字）`);
+    }
+    await database.prepare(`INSERT INTO execution_retries (execution_id,room_id,attempt,retry_at,reason,stopped) VALUES (?,?,?,?,?,0)
+      ON CONFLICT(execution_id) DO UPDATE SET attempt=excluded.attempt,retry_at=excluded.retry_at,reason=excluded.reason,stopped=0`)
+      .bind(execution_id, room_id, attempt, retry_at, reason).run();
+  } else if (action === "retry_start") {
+    await database.prepare("UPDATE execution_retries SET retry_at=0 WHERE execution_id=?").bind(execution_id).run();
+  } else if (action === "retry_now" || action === "retry_stop") {
+    // The owner's answer to a waiting retry: deliver now, or stop so the runner fails the execution.
+    const result = await database.prepare(`UPDATE execution_retries SET ${action === "retry_now" ? "retry_at=unixepoch()" : "stopped=1"}
+      WHERE execution_id=? AND retry_at>0 AND stopped=0`).bind(execution_id).run();
+    if (!result.meta.changes) throw new HttpError(409, "本次执行没有在等待自动重试");
   } else if (action === "fail") {
     await database.batch([...free_finish_statements(database, "id=?", [execution_id], "failed", String(payload.reason || "执行失败"), "failed"),
       ...free_settle_statements(database, room_id)]);
   } else if (action === "release") {
     // Only for proven non-delivery: the requests return to the queue unchanged.
     await database.batch(free_finish_statements(database, "id=?", [execution_id], "cancelled", String(payload.reason || "未送达"), "pending"));
-  } else throw new HttpError(400, "action 须为 renew、fail、release、report 或 segments");
+  } else throw new HttpError(400, "action 须为 renew、fail、release、report、segments、retry_wait、retry_start、retry_now 或 retry_stop");
   return free_execution_detail(database, await database.prepare("SELECT * FROM member_executions WHERE id=?").bind(execution_id).first());
 }
 

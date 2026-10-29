@@ -79,6 +79,9 @@ MAX_PATH_LENGTH = 500
 # Refused operations one execution may report, and the length of each field.
 MAX_DENIALS = 20
 MAX_DENIAL_FIELD = 300
+# A manual member's delivery is retried at most this often before the execution fails.
+MAX_RETRIES = 3
+MAX_RETRY_REASON = 500
 ACTIVE = ("dispatched", "started")
 ACCESS_MODES = ("runner", "manual", "online")
 SCHEDULER_PROVIDERS = ("jev", "decisions")
@@ -246,6 +249,12 @@ def public_execution(row):
     return {key: row[key] for key in EXECUTION_FIELDS} if row else None
 
 
+def execution_retry(connection, execution_id):
+    """What the runner reported about a waiting retry of one execution, or None."""
+    row = connection.execute("SELECT attempt,retry_at,reason,stopped FROM execution_retries WHERE execution_id=?", (execution_id,)).fetchone()
+    return dict(row) if row else None
+
+
 def member_descriptions(connection, room_id):
     """The owner's descriptions of members by name; everyone who can read the room may read them."""
     return {row["name"]: row["description"] for row in connection.execute(
@@ -348,7 +357,7 @@ def recent_executions(connection, room_id):
     return [{**public_execution(row), "cwd": row["cwd"], "changes": json.loads(row["changes"] or "[]"),
              "changes_recorded": bool(row["changes"]), "request_ids": json.loads(row["request_ids"]),
              "answer_id": row["answer_id"], "request_message_id": row["request_message_id"], "notes": row["note_count"],
-             "denials": json.loads(row["denials"] or "[]")} for row in rows]
+             "denials": json.loads(row["denials"] or "[]"), "retry": execution_retry(connection, row["id"])} for row in rows]
 
 
 def possible_conflicts(connection, room_id, names):
@@ -398,6 +407,7 @@ def free_view(connection, room_id):
         if latest and latest["status"] in ACTIVE:
             member["execution"]["stale"] = latest["lease_until"] <= now
             member["execution"]["notes"] = note_count(connection, latest["id"])
+            member["execution"]["retry"] = execution_retry(connection, latest["id"])
         member["pending"] = connection.execute("SELECT COUNT(*) FROM member_requests WHERE member_id=? AND status='pending'",
                                                (row["id"],)).fetchone()[0]
         members.append(member)
@@ -1058,7 +1068,7 @@ def inbox(connection, room_id, token):
         pending = [dict(item) for item in connection.execute(
             "SELECT id,message_id,purpose FROM member_requests WHERE member_id=? AND status='pending' ORDER BY id", (row["id"],))]
         (members if row["access"] == "runner" else observers).append({**{key: row[key] for key in MEMBER_FIELDS}, "pending": pending})
-    executions = [{**public_execution(row), "member": row["name"]} for row in connection.execute(
+    executions = [{**public_execution(row), "member": row["name"], "retry": execution_retry(connection, row["id"])} for row in connection.execute(
         """SELECT member_executions.*,room_members.name FROM member_executions JOIN room_members ON room_members.id=member_id
         WHERE member_executions.room_id=? AND member_executions.status IN ('dispatched','started') ORDER BY member_executions.id""", (room_id,))]
     return {"room_id": room_id, "archived": bool(archived), "members": members, "observers": observers, "executions": executions,
@@ -1223,7 +1233,7 @@ def execution_detail(connection, row):
     requests = [dict(item) for item in connection.execute(
         "SELECT id,message_id,status,purpose FROM member_requests WHERE execution_id=? ORDER BY id", (row["id"],))]
     return {**public_execution(row), "member": member["name"], "read_until": member["read_until"], "requests": requests,
-            "rewound_executions": member_rewinds(connection, member["id"])}
+            "rewound_executions": member_rewinds(connection, member["id"]), "retry": execution_retry(connection, row["id"])}
 
 
 def view_execution(connection, room_id, execution_id, token):
@@ -1320,6 +1330,24 @@ def execution_action(connection, room_id, execution_id, token, payload):
                            (min(now + LEASE_SECONDS, limit), activity, activity_at, execution_id))
         connection.executemany("INSERT OR IGNORE INTO execution_notes (execution_id,seq,room_id,text,created_at) VALUES (?,?,?,?,?)",
                                [(execution_id, note["seq"], room_id, note["text"], now) for note in notes])
+    elif action == "retry_wait":
+        # A manual member's session refused the delivery: the runner keeps the execution and delivers again at retry_at.
+        attempt, retry_at, reason = payload.get("attempt"), payload.get("retry_at"), payload.get("reason")
+        if (type(attempt) is not int or not 1 <= attempt <= MAX_RETRIES or type(retry_at) is not int or retry_at <= 0
+                or not isinstance(reason, str) or not 0 < len(reason) <= MAX_RETRY_REASON):
+            raise ValueError(f"retry_wait 须带 attempt（1–{MAX_RETRIES}）、秒级 retry_at 与 reason（最多 {MAX_RETRY_REASON} 字）")
+        connection.execute("""INSERT INTO execution_retries (execution_id,room_id,attempt,retry_at,reason,stopped) VALUES (?,?,?,?,?,0)
+            ON CONFLICT(execution_id) DO UPDATE SET attempt=excluded.attempt,retry_at=excluded.retry_at,reason=excluded.reason,stopped=0""",
+                           (execution_id, room_id, attempt, retry_at, reason))
+    elif action == "retry_start":
+        connection.execute("UPDATE execution_retries SET retry_at=0 WHERE execution_id=?", (execution_id,))
+    elif action in ("retry_now", "retry_stop"):
+        # The owner's answer to a waiting retry: deliver now, or stop so the runner fails the execution.
+        change = "retry_at=?" if action == "retry_now" else "stopped=1"
+        updated = connection.execute(f"UPDATE execution_retries SET {change} WHERE execution_id=? AND retry_at>0 AND stopped=0",
+                                     ((now, execution_id) if action == "retry_now" else (execution_id,)))
+        if not updated.rowcount:
+            raise FileExistsError("本次执行没有在等待自动重试")
     elif action == "fail":
         finish_execution(connection, execution_id, "failed", str(payload.get("reason") or "执行失败"), "failed")
         settle_batches(connection, room_id)
@@ -1327,7 +1355,7 @@ def execution_action(connection, room_id, execution_id, token, payload):
         # Only for proven non-delivery: the requests return to the queue unchanged.
         finish_execution(connection, execution_id, "cancelled", str(payload.get("reason") or "未送达"), "pending")
     else:
-        raise ValueError("action 须为 renew、fail、release、report 或 segments")
+        raise ValueError("action 须为 renew、fail、release、report、segments、retry_wait、retry_start、retry_now 或 retry_stop")
     return execution_detail(connection, connection.execute("SELECT * FROM member_executions WHERE id=?", (execution_id,)).fetchone())
 
 

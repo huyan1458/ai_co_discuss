@@ -1278,6 +1278,19 @@ test('Worker free rooms keep runner lifecycle, membership and manual members con
   assert.equal((await deny([{ detail: 'no tool' }])).status, 400);
   assert.equal((await deny([denial])).status, 200);
   assert.equal((await deny([denial])).status, 409);
+  // A manual member's refused delivery waits for a retry the owner can ask for now or stop.
+  const answer_retry = body => f.request(`${r.path}/executions/${claude.id}`, body, r.owner);
+  const wait = { action: 'retry_wait', attempt: 1, retry_at: Math.floor(Date.now() / 1000) + 60, reason: '投递失败：原窗口拒绝' };
+  assert.equal((await answer_retry({ ...wait, attempt: 4 })).status, 400);
+  assert.equal((await answer_retry({ action: 'retry_now' })).status, 409);
+  assert.equal((await answer_retry(wait)).status, 200);
+  assert.deepEqual((await f.request(r.path)).body.free.members.find(item => item.name === 'Claude').execution.retry,
+    { attempt: 1, retry_at: wait.retry_at, reason: wait.reason, stopped: 0 });
+  assert.equal((await answer_retry({ action: 'retry_now' })).status, 200);
+  assert.ok((await f.request(`${r.path}/executions/${claude.id}`, undefined, r.owner)).body.retry.retry_at <= Math.floor(Date.now() / 1000));
+  assert.equal((await answer_retry({ action: 'retry_stop' })).status, 200);
+  assert.equal((await answer_retry({ action: 'retry_stop' })).status, 409);
+  assert.equal((await f.request(`${r.path}/inbox`, undefined, r.owner)).body.executions.find(item => item.id === claude.id).retry.stopped, 1);
   const reports = (await f.request(r.path)).body.free.executions;
   assert.deepEqual(reports.find(item => item.id === claude.id).changes, ['index.html']);
   assert.deepEqual([reports.find(item => item.id === claude.id).denials, reports.find(item => item.id === other.id).denials], [[denial], []]);

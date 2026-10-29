@@ -2946,6 +2946,13 @@ async function interrupt_member(member_id) {
   if (state.room?.id === room_id) await refresh_room();
 }
 
+/** Answer a manual member's waiting retry: deliver now, or stop so the runner fails the execution. */
+async function retry_delivery({ execution_id, action }) {
+  const room_id = state.room.id;
+  await request_json(`/api/rooms/${room_id}/executions/${execution_id}`, { action });
+  if (state.room?.id === room_id) await refresh_room();
+}
+
 /** Take back the user's message before any member handled it; its text returns to an empty input for editing. */
 async function retract_message(message_id) {
   const room_id = state.room.id;
@@ -3876,7 +3883,7 @@ async function execute_view_action(name, value) {
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
     choose_runtime, export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, retry_execution, conclude_discussion, start_room_discussion, end_room_discussion, reopen_discussion,
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
-    load_room_configuration, save_room_configuration, interrupt_member, retract_message, rewind_and_send, fork_room, change_member, reorder_speakers, invite_member, set_proxy, copy_online_notice,
+    load_room_configuration, save_room_configuration, interrupt_member, retry_delivery, retract_message, rewind_and_send, fork_room, change_member, reorder_speakers, invite_member, set_proxy, copy_online_notice,
     prepare_brainstorm, return_conclusion, adopt_recommendation, rate_decision,
     busy: () => { throw new Error("上一个操作仍在处理中，请稍候；长时间无响应请刷新页面"); },
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };

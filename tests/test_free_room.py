@@ -188,6 +188,24 @@ class FreeRoomTests(unittest.TestCase):
         again = self.reserve(client_id)[1]
         self.assertEqual(first["id"], again["id"])
 
+    def test_a_waiting_delivery_retry_is_shown_and_the_owner_can_retry_now_or_stop_it(self):
+        """The runner records a manual member's refused delivery; the owner answers it while the execution stays live."""
+        self.say("任务")
+        execution = self.reserve()[1]
+        path = f"{self.path}/executions/{execution['id']}"
+        wait = {"action": "retry_wait", "attempt": 1, "retry_at": int(time.time()) + 60, "reason": "投递失败：原窗口拒绝"}
+        self.assertEqual(self.request(path, {**wait, "attempt": 4}, self.owner)[0], 400)
+        self.assertEqual(self.request(path, {"action": "retry_now"}, self.owner)[0], 409)
+        self.assertEqual(self.request(path, wait, self.owner)[0], 200)
+        member = self.request(self.path)[1]["free"]["members"][0]
+        self.assertEqual(member["execution"]["retry"], {"attempt": 1, "retry_at": wait["retry_at"], "reason": wait["reason"], "stopped": 0})
+        self.assertEqual(self.request(path, {"action": "retry_now"}, self.owner)[0], 200)
+        self.assertLessEqual(self.request(path, None, self.owner)[1]["retry"]["retry_at"], int(time.time()))
+        self.assertEqual(self.request(path, {"action": "retry_stop"}, self.owner)[0], 200)
+        self.assertEqual(self.request(path, {"action": "retry_stop"}, self.owner)[0], 409)
+        self.assertEqual(self.request(f"{self.path}/inbox", None, self.owner)[1]["executions"][0]["retry"]["stopped"], 1)
+        self.assertEqual(self.request(path, {"action": "retry_stop"}, "not-the-owner")[0], 403)
+
     def test_recent_execution_reports_include_associations_and_detection_state(self):
         """Reports distinguish an empty Git observation from missing detection and cap history."""
         message = self.say("只读检查")[1]["message"]
