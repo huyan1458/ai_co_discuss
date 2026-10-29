@@ -443,7 +443,10 @@ async function claude_delivery(config, binding, task, spawn_process = spawn) {
   try { bind_access(task.access_path, session_id); }
   catch (error) { throw not_sent(error); }
   // Streamed events show the turn's progress; the final line is still the result that decides success.
-  const args = ['-p', '--output-format', 'stream-json', '--verbose', binding.session_id ? '--resume' : '--session-id', session_id,
+  // A rewound or forked member first forks its earlier session into the ID it is now bound to, cut at `at` when given.
+  const fork = binding.fork ? ['--resume', binding.fork.from, '--fork-session', ...(binding.fork.at ? ['--resume-session-at', binding.fork.at] : []), '--session-id', session_id]
+    : [binding.session_id ? '--resume' : '--session-id', session_id];
+  const args = ['-p', '--output-format', 'stream-json', '--verbose', ...fork,
     ...(config.model ? ['--model', config.model] : []), ...(config.effort ? ['--effort', config.effort] : []), ...claude_permissions(config, task)];
   let child;
   try {

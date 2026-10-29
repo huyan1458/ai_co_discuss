@@ -6,6 +6,7 @@ import { basename, join, resolve } from 'node:path';
 import { agy_command_rule, atomic_json, deliver_task, SegmentLog, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
 import { api, CODEX_ADAPTERS, read_rule } from './discussion_runner.mjs';
 import { with_expert_prompt } from './expert_prompts.mjs';
+import { branch_session, session_exists } from './session_cut.mjs';
 import { ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, decide_group_order, route_free_message } from './scheduler.mjs';
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -16,6 +17,8 @@ const ACTIVITY_REPORT_MS = 10_000;
 const PROGRESS_REPORT_MS = 2_000;
 const MAX_DELIVERY_ATTEMPTS = 3;
 const LIVE = ['reserving', 'delivering', 'sidecar_pending', 'running'];
+// Software whose session a rewind can cut; the website lists only these members' taken-back executions.
+const CUTTABLE_ADAPTERS = ['claude', 'codex_cli', 'antigravity_cli'];
 const MAX_HASHED_BYTES = 5 * 1024 * 1024;
 const GIT_TIMEOUT_MS = 15_000;
 
@@ -346,12 +349,15 @@ export class FreeRoomRunner {
     const before = workspace_snapshot(directory);
     if (before) this.snapshots.set(execution.id, { member: member.name, directory, before });
     const binding = this.store.binding(member.name);
-    if (!binding.session_id && adapter.session_id) binding.session_id = adapter.session_id;
+    // A member whose session a rewind restarted is bound to '' and must not fall back to the session it was invited with.
+    if (binding.session_id === undefined && adapter.session_id) binding.session_id = adapter.session_id;
     let invoked = false;
     try {
+      const warning = await this.cut_rewound(member.name, adapter, binding, execution);
       const task = free_task_files(this.config, member, execution, binding);
       invoked = true;
       this.segments.start(execution.id);
+      if (warning) this.note(execution.id, warning);
       const result = await this.deliver(adapter, binding, { ...task, room_title: this.room_title,
         api_context: { site: this.config.site, room: this.config.room, token: this.config.members[member.name].token,
           home: this.config.api_home, mode: 'free', role: member.role || 'member', execution_id: execution.id,
@@ -375,6 +381,26 @@ export class FreeRoomRunner {
       await api(this.config, `/executions/${execution.id}`, { action: 'release', reason: `确认未送达：${error.message}` });
       this.save(member.name, { status: 'idle', attempts, error: error.message });
     }
+  }
+  /**
+   * Before a member works again after a rewind, branch its session before the executions the rewind took back.
+   * A Claude fork happens on its next turn, so it stays pending until that session exists. Returns a warning when the
+   * session could not be cut and the member continues in the old one.
+   */
+  async cut_rewound(name, adapter, binding, execution) {
+    const key = `session-fork:${name}`;
+    const pending = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(key)?.value;
+    if (pending && !session_exists(adapter.adapter, binding.session_id)) { binding.fork = JSON.parse(pending); return ''; }
+    if (pending) this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(key);
+    if (!binding.session_id || !execution.rewound_executions?.length || !CUTTABLE_ADAPTERS.includes(adapter.adapter)) return '';
+    try {
+      const cut = await branch_session(adapter, binding.session_id, execution.rewound_executions);
+      if (!cut) return '';
+      if (cut.fork) this.store.db.prepare('INSERT INTO metadata VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, JSON.stringify(cut.fork));
+      this.store.bind(name, cut.session_id);
+      Object.assign(binding, cut);
+      return '';
+    } catch (error) { return `会话未能回退（${error.message}），本次沿用原会话，它可能仍记得已回退的内容`; }
   }
   /** Follow the website's verdict; stop only this member's processes when its execution ends. */
   async reconcile(member, row, active, minutes) {
