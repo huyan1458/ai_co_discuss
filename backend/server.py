@@ -1855,7 +1855,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         site = self.local_request_site(method)
         route = parts[2:]
         if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-member"], ["room-member-access"], ["room-member-adapter"], ["room-profiles"], ["room-restore"], ["models"], ["api-key"], ["api-check"],
-                                             ["scheduler-check"], ["pick-directory"], ["projects"], ["presets"], ["machine-link"]):
+                                             ["scheduler-check"], ["pick-directory"], ["projects"], ["presets"], ["machine-link"], ["admin-account"]):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
             command = "settings"
@@ -1885,6 +1885,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = "presets"
         elif route == ["machine-link"] and method == "POST":
             command = "machine-link"
+        elif route == ["admin-account"] and method == "POST":
+            command = "admin-account"
         else:
             raise LookupError("本机入口不存在")
         payload = None
@@ -1897,6 +1899,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 payload.update(site=site, entry="web")
             if command == "machine-link":
                 payload = {"site": site}
+            if command == "admin-account":
+                payload = {"site": site, "username": payload.get("username"), "password": payload.get("password")}
         if command == "room-config" and "participants" in payload:
             return self.save_local_room_configuration(command, payload)
         return self.run_local_command(command, payload)

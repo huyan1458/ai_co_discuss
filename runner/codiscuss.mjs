@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
+import { admin_main } from './admin_account.mjs';
 import { main as service_main, read_registry, run_service, service_home, service_pid } from './discussion_service.mjs';
 import { launch_main } from './discussion_launch.mjs';
 import { local_settings, setup_main } from './discussion_setup.mjs';
@@ -16,6 +17,7 @@ const HELP = `AI CoDiscuss CLI
   （无命令）            在当前终端启动服务，Ctrl+C 停止
   install / setup       安装持久命令并配置 / 配置已有安装
   local COMMAND         管理本机网站，或 connect 连接线上站点
+  admin token           生成线上网站的一次性管理员注册令牌
   service COMMAND       启动、停止、查询服务，或登记房间
   launch COMMAND        保存启动配置，或从 AI 对话启动讨论
   room COMMAND          创建、读取或更新讨论房间
@@ -118,6 +120,7 @@ async function main(args = process.argv.slice(2)) {
   if (command === 'launch') return launch_main(args.slice(1));
   if (['install', 'setup'].includes(command)) return setup_main(command, args.slice(1));
   if (command === 'local') return local_main(args.slice(1));
+  if (command === 'admin') return admin_main(args.slice(1));
   if (!command || (command === 'run' && args.length === 1)) return service_cli([]);
   if (SERVICE_COMMANDS.has(command) || command === '--json') return service_cli(args);
   return website_cli(args);

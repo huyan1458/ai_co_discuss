@@ -1,5 +1,6 @@
 """Verify the site administrator account: registration, sessions, lockout and room takeover."""
 
+import hashlib
 import json
 import sqlite3
 import tempfile
@@ -81,6 +82,14 @@ class AdminTests(unittest.TestCase):
         self.assertFalse(self.request("/api/admin")[1]["setup_available"])
         self.assertEqual(self.request("/api/admin/register", {"username": "b", "password": PASSWORD, "setup_key": SETUP_KEY})[0], 409)
         self.assertEqual(self.sql("SELECT COUNT(*) FROM site_admin WHERE password_hash LIKE ?", ("%" + PASSWORD + "%",))[0][0], 0)
+
+    def test_cli_token_registers_once(self):
+        token = uuid.uuid4().hex * 2
+        self.sql("INSERT INTO admin_setup (id,token_hash,created_at) VALUES (1,?,0)", (hashlib.sha256(token.encode()).hexdigest(),))
+        self.assertEqual(self.request("/api/admin/register", {"username": "a", "password": PASSWORD, "setup_key": "wrong"})[0], 403)
+        status, result = self.request("/api/admin/register", {"username": "Admin", "password": PASSWORD, "setup_key": f" {token} "})
+        self.assertEqual(status, 201, result)
+        self.assertEqual(self.sql("SELECT COUNT(*) FROM admin_setup")[0][0], 0)
 
     def test_login_failures_lock_the_account_and_success_resets_them(self):
         self.register()

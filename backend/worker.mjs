@@ -3449,16 +3449,20 @@ async function check_admin_password(database, admin, password) {
 
 async function admin_state(database, request, setup_key) {
   const admin = await database.prepare("SELECT * FROM site_admin WHERE id=1").first();
-  return { registered: Boolean(admin), setup_available: !admin && Boolean(setup_key),
+  const setup = !admin && !setup_key && await database.prepare("SELECT 1 FROM admin_setup WHERE id=1").first();
+  return { registered: Boolean(admin), setup_available: !admin && Boolean(setup_key || setup),
     logged_in: Boolean(await admin_session(database, request)), profile: admin_profile(admin) };
 }
 
 async function register_admin(database, request, payload, setup_key) {
   if (await database.prepare("SELECT 1 FROM site_admin WHERE id=1").first()) throw new HttpError(409, "管理员账号已存在");
-  if (!setup_key) throw new HttpError(503, "未配置安装令牌");
+  const setup = await database.prepare("SELECT token_hash FROM admin_setup WHERE id=1").first();
+  if (!setup_key && !setup) throw new HttpError(503, "未配置安装令牌；请在部署网站的电脑运行 codiscuss admin token");
   const username = admin_username(payload.username), password = admin_password(payload.password);
-  const supplied = typeof payload.setup_key === "string" ? payload.setup_key : "";
-  if (!constant_time_equal(await digest_hex(supplied), await digest_hex(String(setup_key)))) throw new HttpError(403, "安装令牌错误");
+  const supplied = await digest_hex(typeof payload.setup_key === "string" ? payload.setup_key.trim() : "");
+  // Either the deployment secret or the one-time token written by `codiscuss admin token` registers.
+  const matches = (setup_key && constant_time_equal(supplied, await digest_hex(String(setup_key)))) || (setup && constant_time_equal(supplied, setup.token_hash));
+  if (!matches) throw new HttpError(403, "安装令牌错误");
   const hashed = await hash_password(password);
   try {
     await database.prepare("INSERT INTO site_admin (id,username,password_hash,avatar,created_at) VALUES (1,?,?,'',?)").bind(username, hashed, now_seconds()).run();
@@ -3466,6 +3470,7 @@ async function register_admin(database, request, payload, setup_key) {
     if (String(error).includes("UNIQUE") || String(error).includes("PRIMARY")) throw new HttpError(409, "管理员账号已存在");
     throw error;
   }
+  await database.prepare("DELETE FROM admin_setup").run();
   return { token: await create_admin_session(database), profile: { username, avatar: "" } };
 }
 

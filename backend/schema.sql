@@ -161,6 +161,12 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
     token_hash TEXT PRIMARY KEY,
     created_at INTEGER NOT NULL
 );
+-- One-time registration token from `codiscuss admin token` on the deploying computer; cleared once the administrator registers.
+CREATE TABLE IF NOT EXISTS admin_setup (
+    id INTEGER PRIMARY KEY CHECK(id=1),
+    token_hash TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
 
 -- Free collaboration rooms. Rooms without a row are brainstorm rooms and keep every rule below.
 CREATE TABLE IF NOT EXISTS room_modes (

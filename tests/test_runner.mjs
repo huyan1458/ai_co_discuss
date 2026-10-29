@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, readFileSync, readdirSync, realpathSync, statSync, utimesSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { basename, join, relative, resolve } from 'node:path';
@@ -2290,4 +2290,27 @@ test('a free room whose discussion ended stops the discussion CLI before deliver
   await room.tick();
   await room.tick();
   assert.deepEqual(order, ['stop', 'questions', 'questions'], 'only a live discussion CLI is stopped, once');
+});
+
+test('admin token writes only its hash through wrangler and the account is saved per site', async () => {
+  const { create_admin_token, save_admin_account } = await import('../runner/admin_account.mjs');
+  const root = mkdtempSync(join(tmpdir(), 'codiscuss-admin-test-'));
+  try {
+    assert.throws(() => create_admin_token(join(root, 'missing.jsonc'), () => {}), /找不到部署配置/);
+    const config = join(root, 'wrangler.jsonc');
+    writeFileSync(config, '{}');
+    let sql = '', args = [];
+    const { token } = create_admin_token(config, wrangler_args => { args = wrangler_args; sql = readFileSync(wrangler_args.at(-1), 'utf8'); });
+    assert.match(token, /^[0-9a-f]{64}$/);
+    assert.deepEqual(args.slice(0, 6), ['d1', 'execute', 'DB', '--remote', '--config', config]);
+    assert.ok(!sql.includes(token) && sql.includes(createHash('sha256').update(token).digest('hex')));
+    const home = join(root, 'home');
+    const { saved } = save_admin_account(home, { site: 'https://example.pages.dev/', username: ' Admin ', password: 'Admin123456.' });
+    save_admin_account(home, { site: 'https://other.example', username: 'B', password: 'secret-pass' });
+    const accounts = JSON.parse(readFileSync(saved, 'utf8')).sites;
+    assert.equal(accounts['https://example.pages.dev'].username, 'Admin');
+    assert.equal(accounts['https://example.pages.dev'].password, 'Admin123456.');
+    assert.equal(Object.keys(accounts).length, 2);
+    assert.throws(() => save_admin_account(home, { site: 'https://example.pages.dev', username: 'Admin', password: '' }), /缺少/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

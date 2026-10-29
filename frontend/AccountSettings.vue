@@ -89,11 +89,11 @@ async function sign_out() {
         <UFormField label="确认密码" required>
           <UInput v-model="auth_form.confirm" type="password" autocomplete="new-password" :maxlength="128" required class="w-full" aria-label="确认密码" />
         </UFormField>
-        <UFormField label="安装令牌" required>
-          <UInput v-model="auth_form.setup_key" type="password" autocomplete="off" required :disabled="register_blocked" class="w-full" aria-label="安装令牌" />
+        <UFormField label="注册令牌" required>
+          <UInput v-model="auth_form.setup_key" type="password" autocomplete="off" required :disabled="register_blocked" class="w-full" aria-label="注册令牌" />
         </UFormField>
-        <p v-if="register_blocked" class="account-message is-error" role="status">服务端未配置安装令牌，暂时无法注册。本地版请设置环境变量 DISCUSS_ADMIN_SETUP_KEY 后重启；Cloudflare 版请配置部署机密 ADMIN_SETUP_KEY。</p>
-        <p v-else class="fine-print">首个注册者需要安装令牌，防止他人抢注。本地版见服务端启动日志；Cloudflare 版为部署机密 ADMIN_SETUP_KEY。忘记密码：本地版运行 <code>python server.py --reset-admin</code> 后重新注册；Cloudflare 版需清空管理员表（见部署文档）。</p>
+        <p v-if="register_blocked" class="account-message is-error" role="status">尚无可用的注册令牌。请在部署网站的电脑上运行 <code>codiscuss admin token</code>，再刷新本页；本地版也可设置环境变量 DISCUSS_ADMIN_SETUP_KEY 后重启。</p>
+        <p v-else class="fine-print">首个注册者需要令牌，防止他人抢注：在部署网站的电脑上运行 <code>codiscuss admin token</code> 获取（一次性）；本地版也可用服务端启动日志里的安装令牌。在已连接本机服务的电脑上注册时，账号与密码会保存到 ~/.codiscuss。忘记密码：本地版运行 <code>python server.py --reset-admin</code> 后重新注册；Cloudflare 版需清空管理员表（见部署文档）。</p>
       </template>
       <p v-else class="fine-print">忘记密码：本地版运行 <code>python server.py --reset-admin</code> 后重新注册；Cloudflare 版需清空管理员表（见部署文档）。</p>
       <p v-if="messages.auth.error" class="account-message is-error" role="alert">{{ messages.auth.error }}</p>

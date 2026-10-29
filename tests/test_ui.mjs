@@ -3549,7 +3549,7 @@ test("admin forms follow the server limits and show the lock delay", async () =>
   assert.match(check({ username: "Ada", password: "1234567" }), /密码/);
   assert.match(check({ username: "Ada", password: "12345678", confirm: "other" }), /不一致/);
   assert.equal(check({ username: "Ada", password: "12345678", confirm: "12345678" }), "");
-  await assert.rejects(context.register_admin({ username: "Ada", password: "12345678", confirm: "12345678", setup_key: " " }), /安装令牌/);
+  await assert.rejects(context.register_admin({ username: "Ada", password: "12345678", confirm: "12345678", setup_key: " " }), /注册令牌/);
   await assert.rejects(context.login_admin({ username: "Ada", password: "12345678" }), /登录已锁定，请稍后再试/);
 });
 

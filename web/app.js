@@ -232,10 +232,15 @@ function accept_admin_session({ token, profile }) {
 
 /** Create the single administrator account and sign in with it. */
 async function register_admin({ username, password, confirm, setup_key }) {
-  const problem = validate_admin_form({ username, password, confirm }) || (String(setup_key ?? "").trim() ? "" : "请填写安装令牌");
+  const problem = validate_admin_form({ username, password, confirm }) || (String(setup_key ?? "").trim() ? "" : "请填写注册令牌");
   if (problem) throw new Error(problem);
   try { accept_admin_session(await request_json("/api/admin/register", { username: username.trim(), password, setup_key: setup_key.trim() })); }
   catch (error) { throw admin_error(error); }
+  // Registered from the computer running the local service: keep the account in its private directory.
+  if (local_connection) {
+    try { show_toast(`账号与密码已保存到本机 ${(await local_launch_request("admin-account", { username: username.trim(), password })).saved}`); }
+    catch (error) { show_toast(`注册成功，但账号未能保存到本机：${error.message}`, true); }
+  }
 }
 
 /** Sign in and keep the session in this browser. */

@@ -126,10 +126,15 @@ def register_admin(connection, payload, setup_key, now):
     username = valid_username(payload.get("username"))
     password = valid_password(payload.get("password"))
     supplied = payload.get("setup_key")
-    if not isinstance(supplied, str) or not same_secret(supplied.strip(), setup_key):
+    setup = connection.execute("SELECT token_hash FROM admin_setup WHERE id=1").fetchone()
+    # Either the install token or the one-time token written by `codiscuss admin token` registers.
+    if not isinstance(supplied, str) or not (
+            same_secret(supplied.strip(), setup_key)
+            or setup and hmac.compare_digest(hashlib.sha256(supplied.strip().encode()).hexdigest(), setup["token_hash"])):
         raise AdminError("安装令牌不正确", 403)
     connection.execute("INSERT INTO site_admin (id,username,password_hash,created_at) VALUES (1,?,?,?)",
                        (username, hash_password(password), now))
+    connection.execute("DELETE FROM admin_setup")
     return {"token": open_session(connection, now), "profile": {"username": username, "avatar": ""}}
 
 

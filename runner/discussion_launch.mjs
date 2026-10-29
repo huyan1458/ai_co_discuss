@@ -60,6 +60,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch projects [--file FILE]
       codiscuss launch presets [--file FILE]
       codiscuss launch machine-link --file FILE
+      codiscuss launch admin-account --file FILE
 
 settings 读取本机软件默认配置；指定文件时保存，不启动 AI。
 start 使用启动 JSON 创建或接入房间并启动；--dry-run 只校验和预览。
@@ -73,6 +74,7 @@ pick-directory 在本机弹出系统目录选择窗口，返回所选路径；�
 projects 读取本机已配置的项目（名称与绝对路径）；提供 JSON（projects 列表）时整体替换保存。
 presets 读取本机的专家预设（含内置预设）与各平台默认描述；提供 JSON（presets 列表和/或 description_templates）时替换对应部分。
 machine-link 返回本机连接指定 site 的电脑编号、名称与凭据，供已登录管理员的网页完成配对；不存在时创建。
+admin-account 把在指定 site 注册的管理员用户名与密码保存到服务目录的 admin-accounts.json；须提供 site、username、password。
 room-member 为运行中的自由房间或讨论邀请、请回一位成员（讨论只接受本机唤醒的成员）；须提供 site、room_id、token、action（add/rejoin）、name。
 room-member-access 修改一位本机唤醒成员的项目文件权限（project_access 为 read/write），下次投递起生效、保留原会话；须提供 site、room_id、token、name、project_access。
 room-member-adapter 把自由房间里空闲的 Codex 成员在 App（codex）与 CLI（codex_cli）间切换，保留原会话；须提供 site、room_id、token、name、adapter。
@@ -1111,6 +1113,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'room-restore' && input) result = await restore_room(home, input);
   else if (positionals[0] === 'pick-directory') result = await pick_directory();
   else if (positionals[0] === 'machine-link' && input) result = (await import('./remote_launch.mjs')).machine_link(home, input.site);
+  else if (positionals[0] === 'admin-account' && input) result = (await import('./admin_account.mjs')).save_admin_account(home, input);
   else if (positionals[0] === 'start' && input) result = await launch_discussion(home, input, { dry_run: values['dry-run'], browser_request: values.browser });
   else if (positionals[0] === 'room-config' && input) result = await room_configuration(home, input, { local_guard: values['configuration-locked'] });
   else throw new Error(HELP);

@@ -1,5 +1,6 @@
 /** Verify release isolation, static routing, and the direct D1 deployment contract. */
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { cp, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -1606,6 +1607,19 @@ test('Worker admin registration needs the setup key and only succeeds once', asy
   const state = (await admin_call(f, '/api/admin', undefined, created.body.token)).body;
   assert.deepEqual(state, { registered: true, setup_available: false, logged_in: true, profile: { username: '房主', avatar: '' } });
   assert.match(f.sql.prepare('SELECT password_hash FROM site_admin').get().password_hash, /^pbkdf2_sha256\$100000\$[0-9a-f]{32}\$[0-9a-f]{64}$/);
+});
+
+test('Worker registers the administrator with the one-time CLI token', async t => {
+  const f = await worker_fixture(t);
+  const token = 'ab'.repeat(32), hashed = createHash('sha256').update(token).digest('hex');
+  assert.equal((await admin_call(f, '/api/admin')).body.setup_available, false);
+  f.sql.prepare('INSERT INTO admin_setup (id,token_hash,created_at) VALUES (1,?,0)').run(hashed);
+  assert.equal((await admin_call(f, '/api/admin')).body.setup_available, true);
+  const account = { username: 'Admin', password: 'Admin123456.' };
+  assert.equal((await admin_call(f, '/api/admin/register', { ...account, setup_key: 'cd'.repeat(32) })).status, 403);
+  assert.equal((await admin_call(f, '/api/admin/register', { ...account, setup_key: ` ${token} ` })).status, 201);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM admin_setup').get().count, 0);
+  assert.equal((await admin_call(f, '/api/admin/login', account)).status, 200);
 });
 
 test('Worker admin login locks for a fixed time after five failures and clears on success', async t => {
