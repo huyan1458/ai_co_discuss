@@ -1152,7 +1152,7 @@ test('claude edits a project and runs any command only when the launch grants wr
   assert.equal(args[args.indexOf('--permission-mode') + 1], 'auto');
   assert.ok(!args.includes('Bash') && !args.includes(`Edit(${claude_rule_path(project)}/**)`));
   assert.ok(args.includes('Bash(codiscuss room *)'), 'website commands never wait for the classifier');
-  // 自动 uses the same auto mode; 完全放开 skips every check.
+  // 自动 uses the same auto mode; 全放开 skips every check.
   for (const [project_access, mode] of [['auto', 'auto'], ['full', 'bypassPermissions']]) {
     const level = (await cli_delivery_fixture(t, 'claude', { events: result, config: { cwd: project, project_access } })).calls[0].args;
     assert.equal(level[level.indexOf('--permission-mode') + 1], mode);
@@ -1249,7 +1249,7 @@ test('a taken-over Claude member whose own window is open gets its task through 
   assert.equal(JSON.parse(readFileSync(access_path, 'utf8')).session_id, original);
 });
 
-test('codex 自动 lets its automatic review approve escalations and 完全放开 drops the sandbox', () => {
+test('codex 自动 lets its automatic review approve escalations and 全放开 drops the sandbox', () => {
   const task = { directory: tmpdir(), draft_directory: tmpdir() };
   const auto = codex_permissions({ cwd: tmpdir(), project_access: 'auto' }, task).args;
   assert.ok(auto.includes('approval_policy="on-request"') && auto.includes('approvals_reviewer="auto_review"'));

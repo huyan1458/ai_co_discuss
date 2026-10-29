@@ -66,7 +66,7 @@ export function validate_config(input, base_directory) {
     participant.project_access = participant.project_access || config.project_access || 'read';
     // `own` is set only when the service takes over a manual member: it keeps its own session's permissions.
     if (![...PROJECT_ACCESS, 'own'].includes(participant.project_access)) throw new Error('project_access 只能为 read、write、auto 或 full');
-    if (participant.project_access !== 'own' && !access_levels(participant.adapter).includes(participant.project_access)) throw new Error('agy 无人值守不支持自动档，请选只读、可写或完全放开');
+    if (participant.project_access !== 'own' && !access_levels(participant.adapter).includes(participant.project_access)) throw new Error('agy 无人值守不支持自动档，请选只读、可写或全放开');
     if (participant.cwd && !statSync(participant.cwd).isDirectory()) throw new Error('cwd 必须是已有本机目录');
     if (!ADAPTER_NAMES.includes(participant.adapter)) throw new Error(`适配器只能为 ${ADAPTER_NAMES.join('/')}`);
     if (participant.adapter === 'antigravity' && !participant.ipc_directory) throw new Error('缺少 Antigravity Sidecar IPC 目录');

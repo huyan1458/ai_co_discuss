@@ -120,13 +120,15 @@ const scheduler = computed(() => {
   const provider = view.value.launch.scheduler_providers?.[saved.value.scheduler.provider]?.label || saved.value.scheduler.provider;
   return `${provider} · ${saved.value.scheduler.model}`;
 });
+const HOST_LABEL = "设为主持人";
 /**
- * Every action of a member as a button. A discussion arranges its members from the progress board, so there only the
- * taking-part actions (instructions, credentials, description) apply.
+ * Every action of a member as a button; 设为主持人 sits apart at the card's top right. A discussion arranges its members
+ * from the progress board, so there only the taking-part actions (instructions, credentials, description) apply.
  */
 function actions(member) {
   const [taking_part, place, removal] = member_actions(live(member), { view: view.value, act, describe: (name) => { describing.value = name; } });
-  return { taking_part, place: free.value ? [...place, ...removal] : [] };
+  if (!free.value) return { taking_part, host: null, place: [] };
+  return { taking_part, host: place.find((item) => item.label === HOST_LABEL) || null, place: [...place.filter((item) => item.label !== HOST_LABEL), ...removal] };
 }
 
 const inviting = ref(false);
@@ -159,6 +161,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
           <header class="member-card-head">
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="md" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
             <div class="member-card-name"><strong>{{ bridge.display_name(member.name) }}<UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /></strong><small v-if="room.descriptions?.[member.name]" :title="room.descriptions[member.name]">{{ room.descriptions[member.name] }}</small></div>
+            <UButton v-if="actions(member).host" :icon="actions(member).host.icon" :label="actions(member).host.label" size="xs" variant="ghost" color="neutral" :disabled="actions(member).host.disabled" @click="actions(member).host.onSelect()" />
             <UBadge :color="unregistered(member) ? 'warning' : member.status === 'active' ? 'success' : 'neutral'" variant="subtle" size="sm">{{ unregistered(member) ? '待注册' : STATUS_LABELS[member.status] || member.status }}</UBadge>
           </header>
           <dl class="member-card-facts">
@@ -222,7 +225,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 .member-card-name strong { display: flex; align-items: center; gap: 5px; color: var(--ui-text-highlighted); font-size: 14px; font-weight: 600; }
 .member-card-name strong .iconify { color: var(--ui-warning, #e5b54a); }
 .member-card-name small { overflow: hidden; color: var(--ui-text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.member-card-facts { display: grid; grid-template-columns: 120px minmax(0, 1fr) auto; gap: 16px; margin: 0; padding: 12px 16px 14px 60px; font-size: 13px; }
+.member-card-facts { display: grid; grid-template-columns: 120px minmax(0, 1fr) 210px; gap: 16px; margin: 0; padding: 12px 16px 14px 60px; font-size: 13px; }
 .member-card-facts dt { margin-bottom: 4px; color: var(--ui-text-muted); font-size: 12px; }
 .member-card-facts dd { display: flex; align-items: center; min-height: 28px; margin: 0; color: var(--ui-text); }
 .overview-model { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

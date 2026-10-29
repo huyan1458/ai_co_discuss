@@ -45,11 +45,11 @@ export function with_expert_prompt(prompt, profile) {
 
 /**
  * Project access of a member woken on this computer: 只读, 可写 (project files and any command), 自动 (the software's own
- * automatic approval) and 完全放开 (no approval or sandbox). A manual member the service took over is `own`.
+ * automatic approval) and 全放开 (no approval or sandbox). A manual member the service took over is `own`.
  */
 export const PROJECT_ACCESS = ['read', 'write', 'auto', 'full'];
 
-const ACCESS_LABELS = { read: '只读', write: '可写', auto: '自动', full: '完全放开' };
+const ACCESS_LABELS = { read: '只读', write: '可写', auto: '自动', full: '全放开' };
 
 /** What each level does in each software, measured headless (Claude Code 2.1.312, Codex CLI 0.163, agy 1.4.10). */
 const ACCESS_HINTS = {

@@ -256,7 +256,7 @@ function agy_project_grants(config, task, resources, user_home) {
     throw new Error('agy 草稿目录不能位于只读项目、运行目录、技能或 .gemini 配置目录中，未交付讨论任务');
   }
   const write_rule = directory => `write_file(${resolve(directory).replaceAll('\\', '/')})`;
-  // 完全放开 also runs commands outside agy's sandbox and allows MCP tools; run data stays protected at every level.
+  // 全放开 also runs commands outside agy's sandbox and allows MCP tools; run data stays protected at every level.
   const full = config.project_access === 'full';
   return { allow: [agy_rule(), write_rule(task.draft_directory),
     ...(config.project_access === 'read' ? [] : [...projects.map(write_rule), 'command(*)']), ...(full ? ['unsandboxed_command(*)'] : []),
@@ -315,7 +315,7 @@ export function remove_agy_projects(directory, user_home = homedir()) {
  */
 export function claude_permissions(config, task) {
   // A headless run cannot ask for approval: 自动 and a taken-over manual member use auto mode, as the original window
-  // does, and 完全放开 skips every check; the website commands and drafts stay pre-approved either way.
+  // does, and 全放开 skips every check; the website commands and drafts stay pre-approved either way.
   if (['own', 'auto', 'full'].includes(config.project_access)) {
     const commands = TASK_SUBCOMMANDS.flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]);
     return ['--permission-mode', config.project_access === 'full' ? 'bypassPermissions' : 'auto', '--add-dir', task.directory, task.draft_directory, task.skills_directory, '--allowedTools',
@@ -640,7 +640,7 @@ async function claude_delivery(config, binding, task, spawn_process = spawn) {
 
 /** Build a per-invocation profile without inheriting a user's custom profile of the same name. */
 export function codex_permissions(config, task, platform = process.platform) {
-  // 完全放开 runs without approval or sandbox, so there is no profile to build or check.
+  // 全放开 runs without approval or sandbox, so there is no profile to build or check.
   if (config.project_access === 'full') return { name: '', args: ['--dangerously-bypass-approvals-and-sandbox'] };
   const name = `codiscuss-${randomUUID()}`;
   // A taken-over manual member writes like 可写: its own config may sandbox read-only and then could not save its answer draft.

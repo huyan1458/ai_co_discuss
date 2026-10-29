@@ -643,7 +643,7 @@ export async function room_member_access(home, raw) {
     const profile = config.participants?.[name];
     if (!profile) throw new Error(`${name} 不由本机唤醒，项目权限由它自己的会话决定`);
     if (profile.project_access === 'own') throw new Error(`${name} 是手动接入的成员，权限沿用它自己会话的软件设置`);
-    if (!access_levels(profile.adapter).includes(project_access)) throw new Error('agy 无人值守不支持自动档，请选只读、可写或完全放开');
+    if (!access_levels(profile.adapter).includes(project_access)) throw new Error('agy 无人值守不支持自动档，请选只读、可写或全放开');
     if (!ACCESS_ADAPTERS.includes(profile.adapter)) throw new Error(profile.adapter === 'api' ? 'API 成员没有本机文件工具，项目固定只读' : `${name} 的项目权限在 App 内设置`);
     if (profile.adapter === 'antigravity_cli' && profile.session_id) throw new Error(`${name} 续接的是它自己的 agy 对话，项目权限沿用该对话所在项目，请在 agy 中设置`);
     if (project_access === 'write' && !(profile.cwd || config.cwd)) throw new Error('本房间没有指定项目目录，可写没有作用；请在新建房间时选择项目目录');
