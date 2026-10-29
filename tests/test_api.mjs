@@ -13,6 +13,7 @@ import { participant_tools, peer_reading_granted, system_prompt } from '../runne
 import { launch_discussion } from '../runner/discussion_launch.mjs';
 import { api, DiscussionRunner, DiscussionStore, load_config, peer_round_question } from '../runner/discussion_runner.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
+import { ROUTE_PROMPT_VERSION } from '../runner/scheduler.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SECRET = 'mock-api-key-never-in-room-or-prompt';
@@ -381,7 +382,7 @@ test('smart scheduling holds the host until its decision, and a confident pick r
   assert.equal((await api(config, `/recommendations/${message_id}`, { action: 'adopt', mode: 'interrupt' })).duplicate, true);
   const decision = room.scheduler_decisions.at(-1);
   assert.deepEqual([decision.after_message_id, decision.label, decision.applied, decision.provider, decision.feedback], [message_id, '改由 DeepSeek 回答', 1, 'jev', null]);
-  assert.deepEqual(JSON.parse(decision.context), { model: 'jev-latest', threshold: 0.7, wide_threshold: 0.85, prompt: 4,
+  assert.deepEqual(JSON.parse(decision.context), { model: 'jev-latest', threshold: 0.7, wide_threshold: 0.85, prompt: ROUTE_PROMPT_VERSION,
     package: JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version });
   assert.deepEqual([decision.detail[0].choice, decision.detail[0].probabilities], ['DeepSeek', { DeepSeek: 0.95, __host__: 0.05 }]);
   await api(config, `/scheduler-decisions/${decision.id}`, { rating: 'bad', should_be: 'Grok', note: '应该先问主持人' });

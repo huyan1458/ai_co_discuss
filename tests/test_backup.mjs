@@ -90,7 +90,7 @@ function controller_fixture(request) {
   const downloaded = [];
   const notifications = [];
   const context = vm.createContext({ state: { room: { id: "one" }, query: "filter", page: 3 },
-    element: () => button, publish_view() {}, location: { origin: "https://example.test" },
+    element: () => button, publish_view() {}, location: { origin: "https://example.test" }, localStorage: { getItem: () => null },
     request_json: request, window: { discuss_backup: { async download_room_backup(snapshot) { downloaded.push(snapshot); } } },
     show_toast: (text) => notifications.push(text) });
   vm.runInContext(source.slice(start, end), context);
