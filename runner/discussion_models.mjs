@@ -1,14 +1,22 @@
 /** Discover model selectors from the installed software without starting an AI turn. */
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { createInterface } from 'node:readline';
+import { DatabaseSync } from 'node:sqlite';
 
 const QUERY_TIMEOUT_MS = 30000;
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 const SOURCES = { codex_cli: 'codex-app-server', claude: 'claude-cli', antigravity_cli: 'antigravity-cli' };
 const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]*$/;
+const SESSION_PATTERN = /^[0-9A-Za-z_-]{8,128}$/;
+// Only the end of a session log is read; the latest request is there and long sessions stay cheap.
+const SESSION_TAIL_BYTES = 4 * 1024 * 1024;
+// Claude Code logs side queries (titles, compaction, subagents) too; only these sources are the member's own turns.
+const CLAUDE_MAIN_SOURCES = ['sdk', 'repl_main_thread'];
+// agy stores its generation settings as protobuf; field 28 (tag bytes 0xe2 0x01) holds the model actually used.
+const AGY_MODEL_TAG = [0xe2, 0x01];
 
 /** Read the string keys of a TOML file by table; Codex settings need nothing richer. */
 function toml_strings(text) {
@@ -40,6 +48,86 @@ export function cli_defaults(adapter, { env = process.env, home = homedir() } = 
     }
   } catch { /* Missing or unreadable settings mean the software's built-in default. */ }
   return { model: '', effort: '' };
+}
+
+/** The lines at the end of a file, newest first; a line cut at the start of the tail fails to parse and is skipped. */
+function tail_lines(file) {
+  const fd = openSync(file, 'r');
+  try {
+    const size = fstatSync(fd).size, length = Math.min(size, SESSION_TAIL_BYTES), buffer = Buffer.alloc(length);
+    readSync(fd, buffer, 0, length, size - length);
+    return buffer.toString('utf8').split('\n').reverse();
+  } finally { closeSync(fd); }
+}
+
+/** Parse the newest log record that `pick` turns into settings. */
+function newest_record(file, marker, pick) {
+  for (const line of tail_lines(file)) {
+    if (!line.includes(marker)) continue;
+    try { const found = pick(JSON.parse(line)); if (found) return found; } catch { /* A cut or foreign line says nothing. */ }
+  }
+  return null;
+}
+
+/** The model string after agy's model tag in one protobuf blob. */
+function agy_model(blob) {
+  const bytes = Buffer.from(blob);
+  for (let at = bytes.indexOf(Buffer.from(AGY_MODEL_TAG)); at >= 0; at = bytes.indexOf(Buffer.from(AGY_MODEL_TAG), at + 1)) {
+    const length = bytes[at + 2], text = bytes.subarray(at + 3, at + 3 + length).toString('latin1');
+    if (length && text.length === length && MODEL_PATTERN.test(text)) return text;
+  }
+  return '';
+}
+
+/** Find a session's log file, or '' when this machine never stored it. */
+function session_file(adapter, session_id, env, home) {
+  if (['codex', 'codex_cli'].includes(adapter)) {
+    const sessions = join(env.CODEX_HOME || join(home, '.codex'), 'sessions');
+    if (!existsSync(sessions)) return '';
+    const found = readdirSync(sessions, { recursive: true }).map(String).find(path => path.endsWith(`-${session_id}.jsonl`));
+    return found ? join(sessions, found) : '';
+  }
+  if (adapter === 'claude') {
+    const projects = join(env.CLAUDE_CONFIG_DIR || join(home, '.claude'), 'projects');
+    if (!existsSync(projects)) return '';
+    const found = readdirSync(projects).map(dir => join(projects, dir, `${session_id}.jsonl`)).find(existsSync);
+    return found || '';
+  }
+  if (['antigravity', 'antigravity_cli'].includes(adapter)) {
+    const file = join(home, '.gemini', 'antigravity-cli', 'conversations', `${session_id}.db`);
+    return existsSync(file) ? file : '';
+  }
+  return '';
+}
+
+/**
+ * The model and effort a session last ran with, read from the software's own session log; no AI turn is started.
+ * These are each software's internal formats, so anything unreadable yields empty strings rather than an error.
+ */
+export function session_settings(adapter, session_id, { env = process.env, home = homedir() } = {}) {
+  const none = { model: '', effort: '' };
+  if (typeof session_id !== 'string' || !SESSION_PATTERN.test(session_id)) return none;
+  try {
+    const file = session_file(adapter, session_id, env, home);
+    if (!file) return none;
+    if (adapter === 'claude') {
+      return newest_record(file, '"type":"api-request"', record => record.type === 'api-request' && CLAUDE_MAIN_SOURCES.includes(record.querySource)
+        && typeof record.params?.model === 'string' ? { model: record.params.model, effort: String(record.params.output_config?.effort || '') } : null) || none;
+    }
+    if (file.endsWith('.jsonl')) {
+      return newest_record(file, '"turn_context"', record => record.type === 'turn_context' && typeof record.payload?.model === 'string'
+        ? { model: record.payload.model, effort: String(record.payload.effort || record.payload.collaboration_mode?.settings?.reasoning_effort || '') } : null) || none;
+    }
+    const db = new DatabaseSync(file, { readOnly: true });
+    try {
+      for (const { data } of db.prepare('SELECT data FROM gen_metadata ORDER BY idx DESC LIMIT 5').all()) {
+        const model = data ? agy_model(data) : '';
+        // agy names the effort inside the model ID (gemini-…-medium).
+        if (model) return { model, effort: '' };
+      }
+    } finally { db.close(); }
+  } catch { /* Missing, locked or changed formats mean nothing is known. */ }
+  return none;
 }
 
 /** Return only model identifiers, display names and supported effort values. */

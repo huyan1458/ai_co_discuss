@@ -258,6 +258,12 @@ test('room model readback uses registered choices, adds the software settings fo
   config.participants.Gemini.session_id = 'own-agy-conversation';
   writeFileSync(path, JSON.stringify(config));
   assert.equal((await room_models(home, input, agy)).participants.Gemini.own_project, true);
+  // What a session last ran with comes from its log; only known values are added.
+  const read_session = (adapter, session_id) => session_id === 'private-session' ? { model: 'gpt-6-astra', effort: 'medium' } : { model: '', effort: '' };
+  const sessions = (await room_models(home, input, { ...agy, read_session })).participants;
+  assert.equal(sessions.Codex.actual_model, 'gpt-6-astra');
+  assert.equal(sessions.Codex.actual_effort, 'medium');
+  assert.equal('actual_model' in sessions.Claude, false);
 });
 
 test('a backup carries local member sessions, and restoring it resumes them while Claude Code stays manual', async t => {

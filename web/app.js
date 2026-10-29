@@ -2031,12 +2031,15 @@ async function load_room_models() {
   // A free room runs no discussion yet still has members this computer wakes, so either one makes the models worth reading.
   const woken = (room?.members || []).filter(member => member.access === "runner").map(member => member.name);
   if (!state.launch.available || (room?.runtime?.mode !== "automatic" && !woken.length)) return;
-  // Inviting or removing a member in a free room leaves the runtime revision alone, so the woken names are part of the key.
-  const revision = `${room.runtime?.revision ?? 0}:${woken.join(",")}`;
+  // Inviting or removing a member in a free room leaves the runtime revision alone, so the woken names are part of the key;
+  // each new execution may run another model, which only its session log tells, so the latest executions are too.
+  const executions = (room.free?.members || []).map(member => member.execution?.id || 0).join(",");
+  const revision = `${room.runtime?.revision ?? 0}:${woken.join(",")}:${executions}`;
   const previous = state.launch.room_models;
   if (previous?.room_id === room.id && previous.revision === revision
     && (previous.loading || previous.participants)) return;
-  const current = { room_id: room.id, revision, loading: true, participants: null };
+  // The last answer stays on screen while the new one is read.
+  const current = { room_id: room.id, revision, loading: true, participants: previous?.room_id === room.id ? previous.participants : null };
   state.launch.room_models = current;
   const live = () => state.launch.room_models === current && state.room?.id === room.id;
   // agy is run to name its default model, which takes seconds; everything else is shown first and agy follows.
@@ -2045,7 +2048,7 @@ async function load_room_models() {
     if (live() && result.room_id === room.id) Object.assign(current, { participants: result.participants, registered: result.registered, scheduler: result.scheduler || null });
   } catch (error) {
     // Unavailable or older bridges leave the model unknown; the failure is kept so the page can say so, and the next refresh retries.
-    current.error = error.message || "读取失败";
+    Object.assign(current, { participants: null, error: error.message || "读取失败" });
   } finally {
     current.loading = false;
     if (live()) publish_view();
@@ -2067,7 +2070,10 @@ function reload_room_models() {
   return load_room_models();
 }
 
-/** Describe registered launch choices; an empty choice shows what the software's own settings select, and anything unknown is "默认". */
+/**
+ * Describe registered launch choices: the card's choice, else what the member's session last ran with, else what the software's settings select;
+ * anything unknown is "默认".
+ */
 function participant_model(name, room, saved) {
   // Nothing to say beats a placeholder: a manual member's settings live in its own session and unread ones are not guessed.
   const member = (room?.members || []).find(item => item.name === name);
@@ -2075,12 +2081,13 @@ function participant_model(name, room, saved) {
   const profile = saved?.room_id === room.id ? saved.participants?.[name] : null;
   if (!profile) return "";
   // Only an agy member without a chosen model depends on the default that is read later.
-  if (!profile.model && profile.defaults_pending) return "读取中…";
+  if (!profile.model && !profile.actual_model && profile.defaults_pending) return "读取中…";
+  // App members choose in their own chat, so only their session log knows.
   const app = ["codex", "antigravity"].includes(profile.adapter);
-  const model = !app && (profile.model || profile.default_model) || "默认";
-  // agy's default effort belongs to its default model, so a chosen model keeps its own default instead.
-  const default_effort = profile.adapter === "antigravity_cli" && profile.model ? "" : profile.default_effort;
-  const effort = !app && (profile.effort || default_effort) || "默认";
+  const model = (app ? profile.actual_model : profile.model || profile.actual_model || profile.default_model) || "默认";
+  // agy's default effort belongs to its default model, so any other model keeps its own default instead.
+  const default_effort = profile.adapter === "antigravity_cli" && model !== profile.default_model ? "" : profile.default_effort;
+  const effort = (app ? profile.actual_effort : profile.effort || profile.actual_effort || default_effort) || "默认";
   return model === "默认" && effort === "默认" ? "默认" : `${model} · ${effort}`;
 }
 

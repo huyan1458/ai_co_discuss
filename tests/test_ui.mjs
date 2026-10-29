@@ -2209,6 +2209,13 @@ test("participant model labels distinguish explicit choices, software defaults a
   assert.equal(label('Codex', room, null), '');
   saved.participants.Codex.adapter = 'codex';
   assert.equal(label('Codex', room, saved), '默认');
+  saved.participants.Codex.actual_model = 'gpt-6-sol';
+  saved.participants.Codex.actual_effort = 'low';
+  assert.equal(label('Codex', room, saved), 'gpt-6-sol · low', 'an App member shows what its session last ran with');
+  saved.participants.Claude = { adapter: 'claude', model: 'opus', effort: '', actual_model: 'claude-opus-5-5', actual_effort: 'high', default_effort: 'low' };
+  assert.equal(label('Claude', room, saved), 'opus · high', 'the card choice wins; an empty one shows the session before the settings file');
+  saved.participants.Agy = { adapter: 'antigravity_cli', model: '', effort: '', defaults_pending: true, actual_model: 'gemini-4-argon-low' };
+  assert.equal(label('Agy', room, saved), 'gemini-4-argon-low · 默认', 'a known session model needs no slow default read');
   assert.equal(label('Codex', { ...room, runtime: { mode: 'manual' } }, saved), '');
   assert.equal(label('Codex', { ...room, members: [{ name: 'Codex', access: 'manual' }] }, saved), '', 'a manual member sets its model in its own session');
   saved.participants.Codex.adapter = 'codex_cli';

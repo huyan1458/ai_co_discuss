@@ -17,7 +17,8 @@ import { FreeRoomRunner } from '../runner/free_runner.mjs';
 import { save_api_key } from '../runner/discussion_api.mjs';
 import { SCHEDULER_PROVIDERS } from '../runner/scheduler.mjs';
 import { save_site_connection } from '../runner/discussion_local.mjs';
-import { software_defaults, software_effort, software_models } from '../runner/discussion_models.mjs';
+import { session_settings, software_defaults, software_effort, software_models } from '../runner/discussion_models.mjs';
+import { DatabaseSync } from 'node:sqlite';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -180,6 +181,38 @@ test('agy defaults come from its native /model command, and an unreadable answer
   const failed = software_defaults({ adapter: 'antigravity_cli', executable: process.execPath }, older);
   older.child.emit('close', 1);
   assert.deepEqual(await failed, { model: '', effort: '' });
+});
+
+test('session logs tell the model and effort a member last ran with, and anything unreadable stays empty', t => {
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-session-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const env = {}, id = '01a185a2-e580-7ef1-8b2e-90221ee4ade0', lines = items => items.map(item => typeof item === 'string' ? item : JSON.stringify(item)).join('\n') + '\n';
+  // Claude Code: the newest main-thread request wins over side queries such as titles.
+  mkdirSync(join(home, '.claude', 'projects', 'D--project'), { recursive: true });
+  writeFileSync(join(home, '.claude', 'projects', 'D--project', `${id}.jsonl`), lines([
+    { type: 'api-request', querySource: 'sdk', params: { model: 'claude-old', output_config: { effort: 'low' } } },
+    { type: 'api-request', querySource: 'sdk', params: { model: 'claude-opus-5-5', output_config: { effort: 'high' } } },
+    { type: 'api-request', querySource: 'generate_session_title', params: { model: 'claude-haiku-5-5' } }, '{"type":"api-request" cut']));
+  assert.deepEqual(session_settings('claude', id, { env, home }), { model: 'claude-opus-5-5', effort: 'high' });
+  // Codex CLI and App share rollout files; the latest turn context wins.
+  mkdirSync(join(home, '.codex', 'sessions', '2026', '10', '28'), { recursive: true });
+  writeFileSync(join(home, '.codex', 'sessions', '2026', '10', '28', `rollout-2026-10-28T20-10-07-${id}.jsonl`), lines([
+    { type: 'turn_context', payload: { model: 'gpt-6-sol', effort: 'low' } },
+    { type: 'turn_context', payload: { model: 'gpt-6-astra', collaboration_mode: { settings: { reasoning_effort: 'xhigh' } } } }]));
+  for (const adapter of ['codex_cli', 'codex']) assert.deepEqual(session_settings(adapter, id, { env, home }), { model: 'gpt-6-astra', effort: 'xhigh' });
+  // agy: the model sits in a protobuf field of the newest generation; its effort is part of the model ID.
+  mkdirSync(join(home, '.gemini', 'antigravity-cli', 'conversations'), { recursive: true });
+  const db = new DatabaseSync(join(home, '.gemini', 'antigravity-cli', 'conversations', `${id}.db`));
+  db.exec('CREATE TABLE gen_metadata (idx integer PRIMARY KEY, data blob, size integer)');
+  const blob = model => Buffer.concat([Buffer.from([0x0a, 0x02, 0x41, 0x42, 0xe2, 0x01, model.length]), Buffer.from(model), Buffer.from([0xf2, 0x01, 0x00])]);
+  db.prepare('INSERT INTO gen_metadata (idx, data, size) VALUES (?, ?, 0)').run(1, blob('gemini-4-argon-low'));
+  db.prepare('INSERT INTO gen_metadata (idx, data, size) VALUES (?, ?, 0)').run(2, blob('gemini-4-argon-medium'));
+  db.close();
+  assert.deepEqual(session_settings('antigravity_cli', id, { env, home }), { model: 'gemini-4-argon-medium', effort: '' });
+  const none = { model: '', effort: '' };
+  assert.deepEqual(session_settings('claude', 'missing-session', { env, home }), none);
+  assert.deepEqual(session_settings('claude', '../escape', { env, home }), none, 'a session ID never becomes a path');
+  assert.deepEqual(session_settings('api', id, { env, home }), none);
 });
 
 test('agy explicit effort can be saved without changing its native default model', t => {

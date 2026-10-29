@@ -10,7 +10,7 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { atomic_json } from './discussion_adapters.mjs';
-import { software_defaults, software_effort, software_models } from './discussion_models.mjs';
+import { session_settings, software_defaults, software_effort, software_models } from './discussion_models.mjs';
 import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
 import { BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT } from './expert_prompts.mjs';
@@ -250,9 +250,10 @@ export function launch_settings(home) {
 
 /**
  * Read the registered room's model choices, what each software selects for empty ones, and its smart scheduler, never connection secrets.
+ * `actual_model` / `actual_effort` (present only when known) are what each member's session last ran with, read from the software's own session log.
  * With `quick`, agy's default model is not queried and its entry is marked `defaults_pending`.
  */
-export async function room_models(home, raw, { read_defaults = software_defaults } = {}) {
+export async function room_models(home, raw, { read_defaults = software_defaults, read_session = session_settings } = {}) {
   const input = launch_input({ ...raw, entry: 'web' });
   if (!input.room_id) throw new Error('读取本场模型须提供 room_id');
   const paths = read_registry(home).filter(path => {
@@ -262,13 +263,17 @@ export async function room_models(home, raw, { read_defaults = software_defaults
   if (paths.length > 1) throw new Error('本场存在多份登记配置，无法确定模型设置');
   const config = paths.length ? configuration_snapshot(paths[0]).config : {};
   const profiles = config.participants || {};
+  let sessions = {};
+  try { if (paths.length) sessions = bound_sessions(config, paths[0]); } catch { /* No readable runtime yet: fall back to borrowed sessions. */ }
   const participants = Object.fromEntries(await Promise.all(Object.entries(profiles).map(async ([name, profile]) => {
     const cli = ['codex_cli', 'claude', 'antigravity_cli', 'api'].includes(profile.adapter);
     // agy has no settings file and is run to name its default model, which takes seconds; a quick read leaves that to a later full read.
     const pending = input.quick === true && profile.adapter === 'antigravity_cli';
     const defaults = pending ? { model: '', effort: '' } : await read_defaults(profile);
+    const actual = profile.adapter === 'api' ? { model: '', effort: '' } : read_session(profile.adapter, sessions[name] || profile.session_id);
     return [name, { ...(pending ? { defaults_pending: true } : {}), adapter: profile.adapter, model: cli ? profile.model || '' : '',
       effort: EFFORT_LEVELS[profile.adapter] ? profile.effort || '' : '', default_model: defaults.model, default_effort: defaults.effort,
+      ...(actual.model ? { actual_model: actual.model } : {}), ...(actual.effort ? { actual_effort: actual.effort } : {}),
       project_access: profile.adapter === 'api' ? 'read' : profile.project_access || config.project_access || 'read',
       // An agy member resuming its own conversation keeps that conversation's project, so this tool cannot set its access.
       own_project: profile.adapter === 'antigravity_cli' && Boolean(profile.session_id) }];
