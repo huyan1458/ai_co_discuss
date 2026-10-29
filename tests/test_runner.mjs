@@ -1177,10 +1177,6 @@ test('a taken-over Claude member whose own window is open gets its task through 
   assert.equal(received[1].type, 'user');
   assert.match(received[1].message.content, /free-7\.task\.json/);
   assert.equal(JSON.parse(readFileSync(access_path, 'utf8')).session_id, original);
-  // The window has no process environment of ours, so its task names the credential file.
-  const text = free_task_text({ name: 'Claude', profile, cli: 'codiscuss', room: 'room', messages: '#3', read_after: 2, execution_id: 7, task_path: 't', inbox: true });
-  assert.match(text.instructions, /--access-file 凭据路径/);
-  assert.doesNotMatch(free_task_text({ name: 'Claude', profile, cli: 'codiscuss', room: 'room', messages: '#3', read_after: 2, execution_id: 7, task_path: 't' }).instructions, /--access-file 凭据路径/);
 });
 
 test('codex 自动 lets its automatic review approve escalations and 完全放开 drops the sandbox', () => {
@@ -2104,7 +2100,7 @@ test('a free room delivers all open requests as one execution with the member cr
   const task = JSON.parse(readFileSync(join(config.directory, 'free-1.task.json'), 'utf8'));
   assert.deepEqual(task.request_messages, [11, 12]);
   assert.equal(task.read_after, 10);
-  assert.match(task.instructions, /--execution 1/);
+  assert.equal(task.execution_id, 1);
   assert.match(delivered[0].prompt, /free-1\.task\.json/);
   // Free rooms get the same Windows read rule as discussions; it sits in the prompt, since reading the task file may garble it.
   const has_rg = process.platform === 'win32' && spawnSync('rg', ['--version'], { stdio: 'ignore' }).status === 0;
@@ -2288,27 +2284,26 @@ test('an expert prompt replaces its software preset, and an empty one turns the 
   assert.match(expert_prompt({ adapter: 'api' }), /读不到本地文件.*写明缺什么/);
 });
 
-test('agy rules come from the runner, so clearing the expert prompt cannot drop them', () => {
-  assert.match(agy_command_rule('antigravity_cli', 'codiscuss'), /run_command 只能运行 codiscuss.*写出进展/);
+test('the agy command limit comes from the runner, so clearing the expert prompt cannot drop it', () => {
+  assert.match(agy_command_rule('antigravity_cli', 'codiscuss'), /run_command 只能运行 codiscuss/);
   assert.equal(agy_command_rule('claude', 'codiscuss'), '');
-  // A writable agy runs any command, but still writes its progress so the page can show how far it got.
-  const writable = agy_command_rule('antigravity_cli', 'codiscuss', { cwd: 'D:/project', project_access: 'write' });
-  assert.doesNotMatch(writable, /run_command/);
-  assert.match(writable, /写出进展/);
+  assert.equal(agy_command_rule('antigravity_cli', 'codiscuss', { cwd: 'D:/project', project_access: 'write' }), '', 'a writable agy runs any command');
+  // Writing progress at turning points is in the free-room skill for everyone, so agy needs no copy of it.
   assert.equal(EXPERT_PROMPT_PRESETS.antigravity_cli, undefined);
+  assert.match(readFileSync(new URL('../.agents/skills/discuss-participant/references/free.md', import.meta.url), 'utf8'), /关键转折处.*写出进展/);
 });
 
-test('the fixed free-room text states only facts and leaves the rules to the skills', () => {
-  const base = { name: 'Codex', profile: { adapter: 'codex_cli', project_access: 'read' }, cli: 'codiscuss', room: 'room', messages: '#3', read_after: 2, execution_id: 7, task_path: 't' };
-  const host = free_task_text({ ...base, role: 'host' });
-  assert.match(host.instructions, /先读 skills 列出的技能/);
-  assert.match(host.instructions, /message post room --as Codex --kind chat --execution 7/);
-  assert.match(host.instructions, /主持人.*discuss-host/);
-  // Rules already in the skills are not repeated, and the prompt does not restate the task file's commands.
-  assert.doesNotMatch(host.instructions, /不建定时任务|提交被拒绝|后面的消息可能修正|--handoff/);
-  assert.doesNotMatch(host.prompt, /message post/);
-  assert.equal(host.prompt.match(/不读取凭据/g).length, 1);
-  assert.doesNotMatch(host.instructions, /凭据内容/);
+test('the fixed free-room text loads in steps and leaves values to the task fields and rules to the skills', () => {
+  const base = { name: 'Codex', profile: { adapter: 'codex_cli', project_access: 'read' }, cli: 'codiscuss', messages: '#3', task_path: 'free-7.task.json' };
+  const text = free_task_text({ ...base, role: 'host' });
+  // The wake-up names who was asked and where to start; the task file's fields and skills carry the rest.
+  assert.match(text.prompt, /点名了你（Codex），对应消息 #3。先读任务文件 free-7\.task\.json，按其中列出的技能处理/);
+  assert.doesNotMatch(text.prompt + text.instructions, /message (list|post)|--execution|--handoff|不建定时任务|提交被拒绝|DISCUSS_ACCESS_FILE/);
+  // What is left are the limits no skill can know: project access, the command scope and where drafts go.
+  assert.equal(text.instructions, '未指定项目目录。命令只用 subcommands 列出的 codiscuss 子命令。草稿写在 draft_directory。');
+  const writable = free_task_text({ ...base, profile: { adapter: 'codex_cli', project_access: 'write', cwd: 'D:/project' } });
+  assert.doesNotMatch(writable.instructions, /subcommands/);
+  assert.match(free_task_text({ ...base, discussion: true }).instructions, /不领取发言权/);
 });
 
 test("the delivered task and the API system prompt carry only this member's own prompt", async t => {
@@ -2514,14 +2509,14 @@ test('only the host task points to the host skill; other members get no dispatch
   await runner.tick();
   const task = JSON.parse(readFileSync(join(config.directory, 'free-1.task.json'), 'utf8'));
   assert.equal(task.role, 'host');
-  // How to route and hand back lives in discuss-host; the task only says this member hosts.
-  assert.match(task.instructions, /主持人.*discuss-host/);
+  // How to route and hand back lives in discuss-host, which only the host's task lists.
+  assert.ok(task.skills.some(path => /discuss-host/.test(path)));
   state.claude_role = 'member';
   state.executions[0].status = 'completed';
   await runner.tick();
   state.pending = [{ id: 9, message_id: 19 }];
   await runner.tick();
-  assert.doesNotMatch(JSON.parse(readFileSync(join(config.directory, 'free-2.task.json'), 'utf8')).instructions, /主持人|discuss-host/);
+  assert.ok(!JSON.parse(readFileSync(join(config.directory, 'free-2.task.json'), 'utf8')).skills.some(path => /discuss-host/.test(path)));
 });
 
 test('two instances of one platform keep separate sessions and credentials', async t => {

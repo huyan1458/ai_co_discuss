@@ -94,15 +94,9 @@ export function project_rule(profile, purpose) {
   return profile.project_access === 'write' ? `用户允许${purpose}修改 cwd 中的项目文件并运行所需命令。` : 'cwd 中的项目文件只读，不修改。';
 }
 
-/**
- * agy's fixed rules, which no member prompt can drop. A read-only agy project allows only codiscuss commands and
- * headless agy ends the turn on a denied one. agy streams no thinking text, so without a word between tools the page
- * cannot show how far it got.
- */
+/** A read-only agy project allows only codiscuss commands and headless agy ends the turn on a denied one, so every such agy task states it; no member prompt can drop it. */
 export function agy_command_rule(adapter, cli, config = {}) {
-  if (adapter !== 'antigravity_cli') return '';
-  const commands = runs_commands(config) ? '' : `无人值守下 run_command 只能运行 ${cli} 的 subcommands 子命令，其他命令会被自动拒绝并使会话直接结束；列目录、搜索或读取文件用 list_dir、find_by_name、grep_search、view_file。`;
-  return `${commands}多步任务中，在关键转折处用一句话写出进展再继续。`;
+  return adapter === 'antigravity_cli' && !runs_commands(config) ? `无人值守下 run_command 只能运行 ${cli} 的 subcommands 子命令，其他命令会被自动拒绝并使会话直接结束；列目录、搜索或读取文件用 list_dir、find_by_name、grep_search、view_file。` : '';
 }
 
 /** Windows PowerShell mis-decodes UTF-8 files; the runner adds this where the member's commands can run rg. */
@@ -111,16 +105,14 @@ export const READ_RULE = '读含中文的文件用 rg --encoding utf-8 . 文件�
 /**
  * A free-room task's fixed text: `instructions` saved in the task file and `prompt` sent with each wake-up, followed by
  * the member's own prompt. `discussion` is a direct question asked while a discussion runs in the room.
- * Both carry only this execution's facts and the limits no skill can know; how to answer, retry and route is in the
- * skills the task lists, so neither repeats it and the prompt does not repeat the task file.
+ * Loaded in steps: the prompt only says who was named and where the task file is, plus how to read files at all; the
+ * task file's fields carry this execution's values (messages, read point, execution, role, credentials), the skills
+ * it lists say how to use them, and `instructions` holds only the limits no skill can know.
  */
-export function free_task_text({ name, role, discussion, profile, cli, room, messages, read_after, execution_id, task_path, read_rule = '', inbox = false }) {
-  // A task posted into a member's own open window has no process environment of ours, so it names the credential file.
-  const bound_access = !inbox && ['claude', 'codex_cli', 'antigravity_cli'].includes(profile.adapter);
-  const access_arg = bound_access ? '' : ' --access-file 凭据路径';
-  const access_rule = bound_access ? '凭据已由进程环境 DISCUSS_ACCESS_FILE 绑定，命令无需 --access-file。' : '';
-  const host_rule = role === 'host' && !discussion ? '你是本房间的主持人，另按 discuss-host 的自由协作一节处理 route、handoff 与 all 请求。' : '';
-  const instructions = `${agy_command_rule(profile.adapter, cli, profile)}${discussion ? '讨论房间：用户直接向你提问（' + messages + '）。这不是你的发言安排，不要领取发言权、不要安排他人，也不改变讨论进度，只回答这个提问。' : '自由协作房间：用户点名了你（' + messages + '）。'}${access_rule}先读 skills 列出的技能，再用 ${cli} message list ${room} --after ${read_after}${access_arg} 读取新消息。${host_rule}完成后用 ${cli} message post ${room} --as ${name} --kind chat --execution ${execution_id} --body-file 草稿 --submission-id 新UUID${access_arg} 提交一次回答，草稿写在 draft_directory。`;
-  const prompt = `用户在${discussion ? '讨论' : '自由协作'}房间点名了你（${name}），对应消息 ${messages}。请先读取任务文件 ${task_path}，按其中说明完成并提交一次回答后结束。${runs_commands(profile) ? '网站读写' : '命令'}只用任务内 subcommands 列出的 ${cli} 子命令；${project_rule(profile, '按请求')}不读取凭据内容。${read_rule}`;
+export function free_task_text({ name, discussion, profile, cli, messages, task_path, read_rule = '' }) {
+  const scope = discussion ? `讨论进行中，用户直接向你提问（${messages}）：这不是你的发言安排，不领取发言权、不安排他人、不改变讨论进度，只回答这个提问。` : '';
+  const commands = runs_commands(profile) ? '' : `命令只用 subcommands 列出的 ${cli} 子命令。`;
+  const instructions = `${agy_command_rule(profile.adapter, cli, profile)}${scope}${project_rule(profile, '按请求')}${commands}草稿写在 draft_directory。`;
+  const prompt = `用户在${discussion ? '讨论' : '自由协作'}房间点名了你（${name}），对应消息 ${messages}。先读任务文件 ${task_path}，按其中列出的技能处理并提交一次回答。${read_rule}`;
   return { instructions, prompt };
 }
