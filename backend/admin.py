@@ -127,7 +127,7 @@ def register_admin(connection, payload, setup_key, now):
     password = valid_password(payload.get("password"))
     supplied = payload.get("setup_key")
     setup = connection.execute("SELECT token_hash FROM admin_setup WHERE id=1").fetchone()
-    # Either the install token or the one-time token written by `codiscuss admin token` registers.
+    # Either the install token or the one-time token written by `codiscuss token` registers.
     if not isinstance(supplied, str) or not (
             same_secret(supplied.strip(), setup_key)
             or setup and hmac.compare_digest(hashlib.sha256(supplied.strip().encode()).hexdigest(), setup["token_hash"])):

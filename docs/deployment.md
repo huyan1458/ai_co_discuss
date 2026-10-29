@@ -96,10 +96,10 @@ Windows PowerShell 使用 `New-Item -ItemType Directory -Force -Path .wrangler/d
 ```sh
 npx wrangler d1 execute DB --remote --config .wrangler/deploy/wrangler.jsonc --file backend/schema.sql
 npm run deploy -- --cwd .wrangler/deploy
-codiscuss admin token
+codiscuss token
 ```
 
-`codiscuss admin token` 生成注册管理员用的一次性令牌（需已 `wrangler login`），在网站左下角注册时填入；在已用 `codiscuss local connect` 连上本机的网页注册时，账号密码会保存到 `~/.codiscuss/admin-accounts.json`。注册后其他设备直接用账号密码登录。`schema.sql` 可重复执行；升级已有站点前请先备份 D1（`npx wrangler d1 export`）。
+`codiscuss token` 生成注册管理员用的一次性令牌（需已 `wrangler login`），在网站左下角注册时填入；在已用 `codiscuss local connect` 连上本机的网页注册时，账号密码会保存到 `~/.codiscuss/admin-accounts.json`。注册后其他设备直接用账号密码登录。`schema.sql` 可重复执行；升级已有站点前请先备份 D1（`npx wrangler d1 export`）。
 
 发布后检查网页、`/api/health`，以及：
 

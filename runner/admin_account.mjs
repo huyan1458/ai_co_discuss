@@ -11,11 +11,11 @@ import { service_home } from './discussion_service.mjs';
 const DEFAULT_CONFIG = join('.wrangler', 'deploy', 'wrangler.jsonc');
 const ACCOUNTS_FILE = 'admin-accounts.json';
 const TOKEN_BYTES = 32;
-const HELP = `用法：codiscuss admin token [--config WRANGLER_CONFIG]
+const HELP = `用法：codiscuss token [--config WRANGLER_CONFIG]
 
-token  生成一次性管理员注册令牌，经 wrangler 把它的哈希写入线上 D1，立即生效。
-       在线上网页左下角注册管理员时填入；注册成功即作废，重新运行会替换旧令牌。
-       需要这台电脑已 wrangler login；--config 默认为当前目录的 ${DEFAULT_CONFIG}。
+生成一次性管理员注册令牌，经 wrangler 把它的哈希写入线上 D1，立即生效。
+在线上网页左下角注册管理员时填入；注册成功即作废，重新运行会替换旧令牌。
+需要这台电脑已 wrangler login；--config 默认为当前目录的 ${DEFAULT_CONFIG}。
 
 在已用 codiscuss local connect 连上本机服务的网页注册后，账号与密码保存在 ~/.codiscuss/${ACCOUNTS_FILE}。
 `;
@@ -51,12 +51,12 @@ export function save_admin_account(home, { site, username, password }) {
   return { saved: path };
 }
 
-/** `codiscuss admin ...` */
+/** `codiscuss token [--config FILE]` */
 export function admin_main(args) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     config: { type: 'string' }, help: { type: 'boolean', short: 'h' },
   } });
-  if (values.help || positionals[0] !== 'token') return process.stdout.write(HELP);
+  if (values.help || positionals.length) return process.stdout.write(HELP);
   const { token } = create_admin_token(values.config);
   process.stdout.write(`管理员注册令牌（一次性）：\n${token}\n\n在线上网页左下角注册管理员时填入。注册成功后作废；账号密码在已连接本机服务的网页注册时保存到 ${join(service_home(), ACCOUNTS_FILE)}。\n`);
 }

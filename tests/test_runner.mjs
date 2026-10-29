@@ -2292,7 +2292,7 @@ test('a free room whose discussion ended stops the discussion CLI before deliver
   assert.deepEqual(order, ['stop', 'questions', 'questions'], 'only a live discussion CLI is stopped, once');
 });
 
-test('admin token writes only its hash through wrangler and the account is saved per site', async () => {
+test('codiscuss token writes only its hash through wrangler and the account is saved per site', async () => {
   const { create_admin_token, save_admin_account } = await import('../runner/admin_account.mjs');
   const root = mkdtempSync(join(tmpdir(), 'codiscuss-admin-test-'));
   try {

@@ -3457,10 +3457,10 @@ async function admin_state(database, request, setup_key) {
 async function register_admin(database, request, payload, setup_key) {
   if (await database.prepare("SELECT 1 FROM site_admin WHERE id=1").first()) throw new HttpError(409, "管理员账号已存在");
   const setup = await database.prepare("SELECT token_hash FROM admin_setup WHERE id=1").first();
-  if (!setup_key && !setup) throw new HttpError(503, "未配置安装令牌；请在部署网站的电脑运行 codiscuss admin token");
+  if (!setup_key && !setup) throw new HttpError(503, "未配置安装令牌；请在部署网站的电脑运行 codiscuss token");
   const username = admin_username(payload.username), password = admin_password(payload.password);
   const supplied = await digest_hex(typeof payload.setup_key === "string" ? payload.setup_key.trim() : "");
-  // Either the deployment secret or the one-time token written by `codiscuss admin token` registers.
+  // Either the deployment secret or the one-time token written by `codiscuss token` registers.
   const matches = (setup_key && constant_time_equal(supplied, await digest_hex(String(setup_key)))) || (setup && constant_time_equal(supplied, setup.token_hash));
   if (!matches) throw new HttpError(403, "安装令牌错误");
   const hashed = await hash_password(password);

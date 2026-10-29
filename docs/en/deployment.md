@@ -96,10 +96,10 @@ Keep the binding names `DB` and `ATTACHMENTS`. Without the R2 binding, text disc
 ```sh
 npx wrangler d1 execute DB --remote --config .wrangler/deploy/wrangler.jsonc --file backend/schema.sql
 npm run deploy -- --cwd .wrangler/deploy
-codiscuss admin token
+codiscuss token
 ```
 
-`codiscuss admin token` prints a one-time token for registering the administrator (requires `wrangler login`); enter it when registering from the bottom-left corner. Registering from a page connected with `codiscuss local connect` also saves the account to `~/.codiscuss/admin-accounts.json`. Other devices then simply log in with the username and password. `schema.sql` is safe to re-run; back up D1 (`npx wrangler d1 export`) before upgrading an existing site.
+`codiscuss token` prints a one-time token for registering the administrator (requires `wrangler login`); enter it when registering from the bottom-left corner. Registering from a page connected with `codiscuss local connect` also saves the account to `~/.codiscuss/admin-accounts.json`. Other devices then simply log in with the username and password. `schema.sql` is safe to re-run; back up D1 (`npx wrangler d1 export`) before upgrading an existing site.
 
 After publishing, check the page, `/api/health`, and:
 

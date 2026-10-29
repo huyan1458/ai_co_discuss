@@ -161,7 +161,7 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
     token_hash TEXT PRIMARY KEY,
     created_at INTEGER NOT NULL
 );
--- One-time registration token from `codiscuss admin token` on the deploying computer; cleared once the administrator registers.
+-- One-time registration token from `codiscuss token` on the deploying computer; cleared once the administrator registers.
 CREATE TABLE IF NOT EXISTS admin_setup (
     id INTEGER PRIMARY KEY CHECK(id=1),
     token_hash TEXT NOT NULL,
