@@ -94,7 +94,7 @@ const ADAPTER_LABELS = { codex: 'Codex App', codex_cli: 'Codex CLI', claude: 'Cl
 function member_description(name, profile, work) {
   const project = profile.project_name || (profile.cwd ? basename(profile.cwd) : '');
   const access = profile.adapter === 'api' ? '' : profile.project_access === 'own' ? '，权限沿用其会话设置' : !profile.cwd ? '，未指定项目目录'
-    : profile.project_access === 'write' ? `，可修改项目 ${project} 的文件并运行命令` : `，项目 ${project} 只读`;
+    : profile.project_access === 'read' ? `，项目 ${project} 只读` : `，可修改项目 ${project} 的文件并运行命令`;
   return `${name}（${ADAPTER_LABELS[profile.adapter] || profile.adapter}${access}${work}）`;
 }
 
@@ -360,6 +360,8 @@ export class FreeRoomRunner {
         // A stopped process may report after the next execution started; only its own execution takes the result.
         on_failure: error => { try { if (this.row(member.name)?.execution_id === execution.id) this.save(member.name, { error }); } catch { /* Store may already be closed at shutdown. */ } },
         on_exit: denial => this.exited.set(execution.id, denial || ''),
+        // Shown beside the answer or failure so the owner can allow them; a lost report only hides the list.
+        on_denials: denials => api(this.config, `/executions/${execution.id}`, { action: 'denials', denials }).catch(() => {}),
       });
       if (result.session_id) this.store.bind(member.name, result.session_id);
       this.save(member.name, { status: result.status === 'sidecar_pending' ? 'sidecar_pending' : 'running', attempts: 0 });

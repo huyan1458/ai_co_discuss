@@ -1263,6 +1263,12 @@ async function continue_chain(chain_id, rounds) {
   } catch (error) { state.free_error = error.message; throw error; }
 }
 
+/** Allow operations a woken member's software refused; the local service passes the rules from its next run. */
+async function allow_denials({ name, rules }) {
+  const room_id = state.room.id;
+  await local_launch_request("room-member-allow", { room_id, token: localStorage.getItem(`discuss-access:${room_id}`), name, rules });
+}
+
 /** Switch a woken member's project files between read-only and writable; the local service applies it from its next run. */
 async function set_member_access({ name, project_access }) {
   const room_id = state.room.id;
@@ -2137,7 +2143,7 @@ function participant_files(name, room, saved) {
   if (!profile) return "";
   if (profile.adapter === "api") return "只读";
   if (!MODEL_CLIENTS.includes(profile.adapter) || profile.own_project || profile.project_access === "own") return "";
-  return profile.project_access === "write" ? "可写" : "只读";
+  return ACCESS_LABELS[profile.project_access] || "只读";
 }
 
 /**
@@ -2397,7 +2403,7 @@ function launch_summary(name) {
       : project_id || project_name || "软件默认项目";
   const directory = profile.cwd || state.launch.workspace.cwd;
   const access = !cli_directory ? "按 App 权限" : !directory ? "无项目目录"
-    : launch_access(name) === "write" ? "项目可写" : "项目只读";
+    : `项目${ACCESS_LABELS[launch_access(name)] || "只读"}`;
   const label = LAUNCH_CLIENTS[name]?.find(item => item.value === profile.adapter)?.label || "尚未选择客户端";
   const choice = [profile.model, profile.effort && `${profile.effort} 档`].filter(Boolean).join(" · ");
   return { client: cli_directory && choice ? `${label} · ${choice}` : label,
@@ -2424,8 +2430,13 @@ function launch_access(name) {
 }
 
 /** Classic select options; an empty value inherits the launch-wide setting. */
-function access_options(value = "", inherit = "") {
-  const options = [...(inherit ? [["", inherit]] : []), ["read", "只读"], ["write", "可写"]];
+const ACCESS_LABELS = { read: "只读", write: "可写", auto: "自动", full: "完全放开" };
+
+// Mirrors access_options in runner/expert_prompts.mjs; agy has no headless 自动, and the shared setting stays 只读 / 可写.
+function access_options(value = "", inherit = "", adapter = "") {
+  const levels = !inherit ? [["read", "只读"], ["write", "可写"]]
+    : [["read", "只读"], ["write", "可写"], ...(adapter === "antigravity_cli" ? [] : [["auto", "自动"]]), ["full", "完全放开"]];
+  const options = [...(inherit ? [["", inherit]] : []), ...levels];
   return options.map(([key, label]) => `<option value="${key}" ${(value || (inherit ? "" : "read")) === key ? "selected" : ""}>${label}</option>`).join("");
 }
 
@@ -2618,7 +2629,7 @@ function render_launch_settings() {
       fields.push(["session_id", "复用会话 ID（仅本次，可选）"], ["cwd", "此 AI 的工作目录（可选）"], ["project_name", "此 AI 的项目（可选）"]);
       if (["codex", "antigravity", "antigravity_cli"].includes(profile.adapter)) fields.push(["project_id", "软件中的项目 ID（可选）"]);
       const summary = launch_summary(name);
-      const permission = launch_can_set_access(name) ? `<label>此 AI 的项目文件<select data-launch-name="${name}" data-launch-field="project_access">${access_options(profile.project_access, "沿用本次设置")}</select></label>`
+      const permission = launch_can_set_access(name) ? `<label>此 AI 的项目文件<select data-launch-name="${name}" data-launch-field="project_access">${access_options(profile.project_access, "沿用本次设置", profile.adapter)}</select></label>`
         : profile.adapter === "api" ? `<p class="local-note">项目文件只读</p>` : "";
       return `<fieldset><legend>${name}</legend><p class="local-note" data-launch-summary="${name}">${summary.session} · 工作目录：${escape_html(summary.cwd)}（${summary.access}） · 项目：${escape_html(summary.project)}</p><label>执行客户端<select data-launch-name="${name}" data-launch-field="adapter"><option value="">选择 CLI / App</option>${clients.map(client => `<option value="${client.value}" ${profile.adapter === client.value ? "selected" : ""}>${client.label}</option>`).join("")}</select></label>${render_launch_model_fields(name)}${fields.map(([field, label]) => `<label>${label}<textarea rows="${field === "allowed_tools" ? 2 : 1}" data-launch-name="${name}" data-launch-field="${field}">${escape_html(Array.isArray(profile[field]) ? profile[field].join("\n") : profile[field] || "")}</textarea></label>`).join("")}${permission}</fieldset>`;
     }).join("") + (Object.keys(state.launch.profiles).some(name => launch_can_set_access(name)) ? `<label>本次 CLI 项目文件<select data-launch-name="workspace" data-launch-field="project_access">${access_options(state.launch.workspace.project_access)}</select></label>` : "")
@@ -3901,7 +3912,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form },
   request: request_json, rewind_plan, identities: IDENTITIES, display_name, sources: SOURCE_LABELS, phases: PHASE_LABELS,
-  set_member_access, set_member_adapter, reload_room_models, runtime_label, execution_label, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access, can_retry_execution,
+  set_member_access, allow_denials, set_member_adapter, reload_room_models, runtime_label, execution_label, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access, can_retry_execution,
   turns: TURN_LABELS, turn_label, turn_guidance, progress_round, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();

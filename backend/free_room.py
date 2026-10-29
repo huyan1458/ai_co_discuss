@@ -76,6 +76,9 @@ MAX_MEMBER_DESCRIPTION = 500
 MAX_MEMBER_LABEL = 32
 MAX_MEMBER_NAME = 80
 MAX_PATH_LENGTH = 500
+# Refused operations one execution may report, and the length of each field.
+MAX_DENIALS = 20
+MAX_DENIAL_FIELD = 300
 ACTIVE = ("dispatched", "started")
 ACCESS_MODES = ("runner", "manual", "online")
 SCHEDULER_PROVIDERS = ("jev", "decisions")
@@ -339,11 +342,13 @@ def recent_executions(connection, room_id):
         (SELECT json_group_array(id) FROM member_requests WHERE execution_id=e.id) AS request_ids,
         (SELECT MAX(answer_id) FROM member_requests WHERE execution_id=e.id) AS answer_id,
         (SELECT MIN(message_id) FROM member_requests WHERE execution_id=e.id) AS request_message_id,
-        (SELECT COUNT(*) FROM execution_notes WHERE execution_id=e.id) AS note_count
+        (SELECT COUNT(*) FROM execution_notes WHERE execution_id=e.id) AS note_count,
+        (SELECT denials FROM execution_denials WHERE execution_id=e.id) AS denials
         FROM member_executions e WHERE room_id=? ORDER BY id DESC LIMIT ?""", (room_id, RECENT_EXECUTIONS))
     return [{**public_execution(row), "cwd": row["cwd"], "changes": json.loads(row["changes"] or "[]"),
              "changes_recorded": bool(row["changes"]), "request_ids": json.loads(row["request_ids"]),
-             "answer_id": row["answer_id"], "request_message_id": row["request_message_id"], "notes": row["note_count"]} for row in rows]
+             "answer_id": row["answer_id"], "request_message_id": row["request_message_id"], "notes": row["note_count"],
+             "denials": json.loads(row["denials"] or "[]")} for row in rows]
 
 
 def possible_conflicts(connection, room_id, names):
@@ -1244,6 +1249,17 @@ def changed_files(payload):
     return sorted(set(files))
 
 
+def denied_actions(payload):
+    """Validate the operations a member's software refused: the tool, what it tried, and the rule that would allow it."""
+    denials = payload.get("denials")
+    def valid(item):
+        return (isinstance(item, dict) and isinstance(item.get("tool"), str) and 0 < len(item["tool"]) <= 40
+                and all(isinstance(item.get(key, ""), str) and len(item.get(key, "")) <= MAX_DENIAL_FIELD for key in ("detail", "rule")))
+    if not isinstance(denials, list) or not 0 < len(denials) <= MAX_DENIALS or not all(map(valid, denials)):
+        raise ValueError(f"denials 须为 1–{MAX_DENIALS} 条 {{tool, detail, rule}}")
+    return [{key: item.get(key, "") for key in ("tool", "detail", "rule")} for item in denials]
+
+
 def renewed_activity(payload, row, now):
     """Validate the runner's reported phase; its output time is kept within the execution, since the runner's clock may differ."""
     activity, activity_at = payload.get("activity"), payload.get("activity_at")
@@ -1278,6 +1294,12 @@ def execution_action(connection, room_id, execution_id, token, payload):
         if row["changes"]:
             raise FileExistsError("本次执行的改动已记录")
         connection.execute("UPDATE member_executions SET changes=? WHERE id=?", (json.dumps(changed_files(payload), ensure_ascii=False), execution_id))
+    elif action == "denials":
+        # Like file changes, read from the software's output once its process ends; recorded once.
+        saved = connection.execute("INSERT OR IGNORE INTO execution_denials (execution_id,room_id,denials) VALUES (?,?,?)",
+                                   (execution_id, room_id, json.dumps(denied_actions(payload), ensure_ascii=False)))
+        if not saved.rowcount:
+            raise FileExistsError("本次执行的拒绝记录已记录")
     elif action == "segments":
         # The last segments and notes arrive after the member's answer ended the execution; such notes are dated at its end.
         finished = 0 if row["status"] in ACTIVE else (row["finished_at"] or 1)

@@ -6,7 +6,7 @@ import EffortSlider from "./EffortSlider.vue";
 import ApiSettings from "./ApiSettings.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 import MemberTextDialog from "./MemberTextDialog.vue";
-import { EXPERT_PROMPT_HEADING, EXPERT_PROMPT_PRESETS, MAX_EXPERT_PROMPT, READ_RULE, free_task_text } from "../runner/expert_prompts.mjs";
+import { EXPERT_PROMPT_HEADING, EXPERT_PROMPT_PRESETS, MAX_EXPERT_PROMPT, READ_RULE, access_label, access_options, free_task_text } from "../runner/expert_prompts.mjs";
 
 const props = defineProps({
   name: { type: String, required: true },
@@ -100,7 +100,7 @@ const facts = computed(() => [
   ...automatic.value ? [{ label: "软件", value: entry_label.value }] : [],
   ...configurable.value ? [{ label: "模型", value: profile.value.model || models.value.defaults?.model || "软件默认模型" }] : [],
   ...configurable.value && profile.value.adapter !== "api" ? [{ label: "强度", value: effort_label.value }] : [],
-  ...sets_access.value ? [{ label: "项目", value: access.value === "write" ? "可写" : "只读" }] : no_files.value ? [{ label: "项目", value: "不访问" }] : [],
+  ...sets_access.value ? [{ label: "项目", value: access_label(access.value) }] : no_files.value ? [{ label: "项目", value: "不访问" }] : [],
   // The crown already offers hosting and the badge names the host, so only the refusal needs a row.
   ...props.hosting && !props.host && !props.hostable ? [{ label: "主持", value: host_fact.value }] : [],
 ]);
@@ -363,7 +363,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         <div v-if="sets_access" class="expert-card-field">
           <span>项目</span>
           <div class="expert-card-modes" role="radiogroup" :aria-label="`${name} 的项目文件权限`">
-            <button v-for="option in [{ value: 'read', label: '只读' }, { value: 'write', label: '可写' }]" :key="option.value" type="button" role="radio"
+            <button v-for="option in access_options(profile.adapter)" :key="option.value" type="button" role="radio" :title="option.hint"
               :aria-checked="access === option.value" @click="bridge.write_launch(name, 'project_access', option.value)">{{ option.label }}</button>
           </div>
         </div>

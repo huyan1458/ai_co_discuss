@@ -200,6 +200,13 @@ class FreeRoomTests(unittest.TestCase):
         report = self.request(self.path)[1]["free"]["executions"][0]
         self.assertEqual((report["changes"], report["changes_recorded"]), ([], True))
         self.assertEqual((report["answer_id"], report["request_message_id"]), (saved["id"], message["id"]))
+        # Refused operations arrive once after the process ends, even though the answer already completed the execution.
+        self.assertEqual(report["denials"], [])
+        denial = {"tool": "PowerShell", "detail": "lark-cli docs get x", "rule": "PowerShell(lark-cli *)"}
+        self.assertEqual(self.request(report_path, {"action": "denials", "denials": [denial]}, self.owner)[0], 200)
+        self.assertEqual(self.request(report_path, {"action": "denials", "denials": [denial]}, self.owner)[0], 409)
+        self.assertEqual(self.request(report_path, {"action": "denials", "denials": [{"detail": "no tool"}]}, self.owner)[0], 400)
+        self.assertEqual(self.request(self.path)[1]["free"]["executions"][0]["denials"], [denial])
         # The answer itself names its execution, so the page can keep it in the working card's slot after reports age out.
         listed = next(item for item in self.request(f"{self.path}/messages")[1]["messages"] if item["id"] == saved["id"])
         self.assertEqual((listed["execution_id"], listed["request_message_id"]), (execution["id"], message["id"]))

@@ -8,13 +8,13 @@ import ChainRoundsField from "./ChainRoundsField.vue";
 import InviteDialog from "./InviteDialog.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 import { member_actions } from "./member-actions.js";
+import { access_label, access_options } from "../runner/expert_prompts.mjs";
 
 const { view, bridge, act } = inject("discussion");
 const ACCESS_LABELS = { manual: "手动接入", online: "网页代发" };
 const STATUS_LABELS = { active: "在场", away: "暂离" };
 // CLIs this tool grants project access per run; App and API members are left to their own settings.
 const ACCESS_CLIENTS = ["codex_cli", "claude", "antigravity_cli"];
-const ACCESS_OPTIONS = [{ value: "read", label: "只读" }, { value: "write", label: "可写" }];
 const CODEX_OPTIONS = [{ value: "codex_cli", label: "CLI" }, { value: "codex", label: "App" }];
 const ADAPTER_LABELS = { api: "API", codex: "App", antigravity: "App" };
 const room = computed(() => view.value.room);
@@ -107,7 +107,7 @@ async function switch_access(member, project_access) {
   result.value = { tone: "", text: "" };
   try {
     await bridge.set_member_access({ name: member.name, project_access });
-    result.value = { tone: "", text: `${bridge.display_name(member.name)} 已改为${project_access === "write" ? "可写" : "只读"}，下次处理请求起生效。` };
+    result.value = { tone: "", text: `${bridge.display_name(member.name)} 已改为${access_label(project_access)}，下次处理请求起生效。` };
   } catch (error) { result.value = { tone: "error", text: error.message }; }
   finally { switching.value = ""; }
 }
@@ -171,7 +171,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
             <div><dt>模型</dt><dd class="overview-model" :class="{ 'overview-muted': waiting(member.name) }" :title="bridge.participant_model(member.name, room, saved) || undefined">{{ member.access === 'runner' ? bridge.participant_model(member.name, room, saved) || '—' : '在它自己的会话里设置' }}</dd></div>
             <div><dt>项目文件</dt><dd>
               <div v-if="files(member).value" class="expert-card-modes overview-switch" :class="{ 'is-locked': !files(member).editable }" role="radiogroup" :aria-label="`${member.name} 的项目文件权限`" :aria-busy="switching === member.name" :title="files(member).hint || undefined">
-                <button v-for="option in ACCESS_OPTIONS" :key="option.value" type="button" role="radio" :aria-checked="files(member).value === option.value"
+                <button v-for="option in access_options(saved?.participants?.[member.name]?.adapter)" :key="option.value" type="button" role="radio" :aria-checked="files(member).value === option.value" :title="option.hint"
                   :disabled="!files(member).editable || Boolean(switching)" @click="switch_access(member, option.value)">{{ option.label }}</button>
               </div>
               <span v-else class="overview-muted" :title="files(member).hint">{{ files(member).text }}</span>

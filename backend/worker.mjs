@@ -917,7 +917,7 @@ async function manage_room(database, room_id, action, payload) {
   } else if (action === "delete") {
     if (payload.confirm_title !== room.title) throw new HttpError(400, "请输入完整房间名称确认删除");
     const queries = [
-      "DELETE FROM member_recommendations WHERE room_id=?", "DELETE FROM free_queue WHERE room_id=?", "DELETE FROM speaking_orders WHERE room_id=?", "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_descriptions WHERE room_id=?", "DELETE FROM member_labels WHERE room_id=?", "DELETE FROM execution_notes WHERE room_id=?", "DELETE FROM execution_segments WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?", "DELETE FROM member_sessions WHERE room_id=?", "DELETE FROM member_registrations WHERE room_id=?",
+      "DELETE FROM member_recommendations WHERE room_id=?", "DELETE FROM free_queue WHERE room_id=?", "DELETE FROM speaking_orders WHERE room_id=?", "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_descriptions WHERE room_id=?", "DELETE FROM member_labels WHERE room_id=?", "DELETE FROM execution_notes WHERE room_id=?", "DELETE FROM execution_denials WHERE room_id=?", "DELETE FROM execution_segments WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?", "DELETE FROM member_sessions WHERE room_id=?", "DELETE FROM member_registrations WHERE room_id=?",
       "DELETE FROM room_members WHERE room_id=?", "DELETE FROM room_modes WHERE room_id=?",
       "DELETE FROM free_batches WHERE room_id=?", "DELETE FROM free_chains WHERE room_id=?", "DELETE FROM free_handoffs WHERE room_id=?", "DELETE FROM free_settings WHERE room_id=?", "DELETE FROM free_round_limits WHERE room_id=?", "DELETE FROM free_chain_holds WHERE room_id=?", "DELETE FROM room_links WHERE room_id=?",
       "DELETE FROM discussion_options WHERE room_id=?",
@@ -2077,6 +2077,9 @@ const FREE_RECENT_REQUESTS = 100;
 const FREE_RECENT_CHANGES = 50;
 const FREE_MAX_CHANGED_FILES = 200;
 const FREE_MAX_PATH = 500;
+// Refused operations one execution may report, and the length of each field.
+const FREE_MAX_DENIALS = 20;
+const FREE_MAX_DENIAL_FIELD = 300;
 // What a member's software last showed it doing, as reported by the runner with each renewal.
 const FREE_ACTIVITY_PHASES = ["", "thinking", "command", "tool", "editing", "writing"];
 // Progress notes per execution, their length, and how many one renewal may carry.
@@ -2298,11 +2301,23 @@ async function free_recent_executions(database, room_id) {
     (SELECT json_group_array(id) FROM member_requests WHERE execution_id=e.id) AS request_ids,
     (SELECT MAX(answer_id) FROM member_requests WHERE execution_id=e.id) AS answer_id,
     (SELECT MIN(message_id) FROM member_requests WHERE execution_id=e.id) AS request_message_id,
-    (SELECT COUNT(*) FROM execution_notes WHERE execution_id=e.id) AS note_count
+    (SELECT COUNT(*) FROM execution_notes WHERE execution_id=e.id) AS note_count,
+    (SELECT denials FROM execution_denials WHERE execution_id=e.id) AS denials
     FROM member_executions e WHERE room_id=? ORDER BY id DESC LIMIT ?`).bind(room_id, FREE_RECENT_EXECUTIONS).all()).results;
   return rows.map(row => ({ ...pick(row, FREE_EXECUTION_FIELDS), cwd: row.cwd, changes: JSON.parse(row.changes || '[]'),
     changes_recorded: Boolean(row.changes), request_ids: JSON.parse(row.request_ids),
-    answer_id: row.answer_id, request_message_id: row.request_message_id, notes: row.note_count }));
+    answer_id: row.answer_id, request_message_id: row.request_message_id, notes: row.note_count, denials: JSON.parse(row.denials || "[]") }));
+}
+
+/** Validate the operations a member's software refused: the tool, what it tried, and the rule that would allow it. */
+function free_denied_actions(payload) {
+  const denials = payload.denials;
+  const valid = item => item && typeof item === "object" && typeof item.tool === "string" && item.tool.length > 0 && item.tool.length <= 40
+    && ["detail", "rule"].every(key => typeof (item[key] ?? "") === "string" && (item[key] ?? "").length <= FREE_MAX_DENIAL_FIELD);
+  if (!Array.isArray(denials) || !denials.length || denials.length > FREE_MAX_DENIALS || !denials.every(valid)) {
+    throw new HttpError(400, `denials 须为 1–${FREE_MAX_DENIALS} 条 {tool, detail, rule}`);
+  }
+  return denials.map(item => ({ tool: item.tool, detail: item.detail ?? "", rule: item.rule ?? "" }));
 }
 
 /** Summarize members, recent requests and execution reports without credentials. */
@@ -3140,6 +3155,11 @@ async function free_execution_action(database, room_id, execution_id, token, pay
     }
     const result = await database.prepare("UPDATE member_executions SET changes=? WHERE id=? AND changes=''").bind(JSON.stringify([...new Set(files)].sort()), execution_id).run();
     if (!result.meta.changes) throw new HttpError(409, "本次执行的改动已记录");
+  } else if (action === "denials") {
+    // Like file changes, read from the software's output once its process ends; recorded once.
+    const result = await database.prepare("INSERT OR IGNORE INTO execution_denials (execution_id,room_id,denials) VALUES (?,?,?)")
+      .bind(execution_id, room_id, JSON.stringify(free_denied_actions(payload))).run();
+    if (!result.meta.changes) throw new HttpError(409, "本次执行的拒绝记录已记录");
   } else if (action === "segments") {
     // The last segments and notes arrive after the member's answer ended the execution; such notes are dated at its end.
     const finished = live ? 0 : row.finished_at || 1;

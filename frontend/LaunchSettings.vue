@@ -2,6 +2,7 @@
 import { computed, inject, watch } from "vue";
 import ApiSettings from "./ApiSettings.vue";
 import ProjectDirectoryField from "./ProjectDirectoryField.vue";
+import { access_options } from "../runner/expert_prompts.mjs";
 
 // The create form shows directory, access and model choices beside their related controls.
 const props = defineProps({ participants: { type: Array, default: () => [] }, workspace: { type: Boolean, default: true },
@@ -12,7 +13,8 @@ const profile = name => view.value.launch.profiles[name] || {};
 const write = (name, field, value) => bridge.write_launch(name, field, value);
 const ACCESS = [{ label: "只读", value: "read" }, { label: "可写", value: "write" }];
 // Select items cannot use an empty value, so "inherit" stands for following the launch-wide setting.
-const PARTICIPANT_ACCESS = [{ label: "沿用本次设置", value: "inherit" }, ...ACCESS];
+// The shared setting stays 只读 / 可写, which every CLI supports; each AI can pick any level its software offers.
+const participant_access = name => [{ label: "沿用本次设置", value: "inherit" }, ...access_options(profile(name).adapter)];
 const write_access = (name, value) => write(name, "project_access", value === "inherit" ? "" : value);
 const models = name => bridge.launch_model_state(name, view.value.launch);
 // Select items cannot hold an empty value, so "default" stands for the CLI's own effort.
@@ -48,7 +50,7 @@ watch(() => [props.modelSelection, view.value.launch.available, ...names.value.m
         <details v-if="profile(name).adapter !== 'api'"><summary>会话与目录覆盖（可选）</summary><div class="launch-client-fields">
           <UFormField label="复用会话 ID（仅本次）"><UInput :model-value="profile(name).session_id || ''" placeholder="留空创建新会话" class="w-full" @update:model-value="write(name, 'session_id', $event)" /></UFormField>
           <UFormField label="此 AI 的工作目录"><UInput :model-value="profile(name).cwd || ''" placeholder="留空使用本次讨论目录" class="w-full" @update:model-value="write(name, 'cwd', $event)" /></UFormField>
-          <UFormField v-if="bridge.launch_can_set_access(name, view.launch)" label="此 AI 的项目文件"><USelect :model-value="profile(name).project_access || 'inherit'" :items="PARTICIPANT_ACCESS" class="w-full" @update:model-value="write_access(name, $event)" /></UFormField>
+          <UFormField v-if="bridge.launch_can_set_access(name, view.launch)" label="此 AI 的项目文件"><USelect :model-value="profile(name).project_access || 'inherit'" :items="participant_access(name)" class="w-full" @update:model-value="write_access(name, $event)" /></UFormField>
           <UFormField label="此 AI 的项目"><UInput :model-value="profile(name).project_name || ''" placeholder="留空使用本次讨论项目" class="w-full" @update:model-value="write(name, 'project_name', $event)" /></UFormField>
           <UFormField v-if="['codex', 'antigravity', 'antigravity_cli'].includes(profile(name).adapter)" label="软件中的项目 ID"><UInput :model-value="profile(name).project_id || ''" placeholder="可选；须与所选软件项目一致" class="w-full" @update:model-value="write(name, 'project_id', $event)" /></UFormField>
         </div></details>

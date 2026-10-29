@@ -13,7 +13,7 @@ import { atomic_json, setup_sidecar } from './discussion_adapters.mjs';
 import { session_settings, software_defaults, software_effort, software_models } from './discussion_models.mjs';
 import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
-import { BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT } from './expert_prompts.mjs';
+import { access_levels, BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT, PROJECT_ACCESS } from './expert_prompts.mjs';
 import { BRANCHABLE_ADAPTERS, branch_session } from './session_cut.mjs';
 import { acquire_lock, api, CODEX_ADAPTERS, DiscussionStore, service_drafts, task_files, validate_config } from './discussion_runner.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
@@ -54,6 +54,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch scheduler-check --file FILE
       codiscuss launch room-member --file FILE
       codiscuss launch room-member-access --file FILE
+      codiscuss launch room-member-allow --file FILE
       codiscuss launch room-member-adapter --file FILE
       codiscuss launch room-profiles --file FILE
       codiscuss launch room-restore --file FILE
@@ -78,7 +79,8 @@ presets 读取本机的专家预设（含内置预设）与各平台默认描述
 machine-link 返回本机连接指定 site 的电脑编号、名称与凭据，供已登录管理员的网页完成配对；不存在时创建。
 admin-account 把在指定 site 注册的管理员用户名与密码保存到服务目录的 admin-accounts.json；须提供 site、username、password。
 room-member 为运行中的自由房间或讨论邀请、请回一位成员（讨论只接受本机唤醒的成员）；须提供 site、room_id、token、action（add/rejoin）、name。
-room-member-access 修改一位本机唤醒成员的项目文件权限（project_access 为 read/write），下次投递起生效、保留原会话；须提供 site、room_id、token、name、project_access。
+room-member-access 修改一位本机唤醒成员的项目权限（project_access 为 read/write/auto/full），下次投递起生效、保留原会话；须提供 site、room_id、token、name、project_access。
+room-member-allow 把被拒绝的操作加入一位本机唤醒的 Claude Code 或 agy 成员的 allowed_tools，下次投递起生效；须提供 site、room_id、token、name、rules。
 room-member-adapter 把自由房间里空闲的 Codex 成员在 App（codex）与 CLI（codex_cli）间切换，保留原会话；须提供 site、room_id、token、name、adapter。
 room-profiles 导出房间的本机成员软件配置与实际会话 ID（不含凭据），供备份附带；须提供 site、room_id、token。
 room-restore 把导入房间的本机成员配置登记到本机并核对原会话存在，Claude Code 成员保持手动；须提供 site、room_id、token、local_members。
@@ -358,7 +360,7 @@ export function save_expert_presets(home, input) {
     if ((preset.label || '').trim().length > MAX_PRESET_LABEL) throw new Error(`${preset.name} 的显示名最多 ${MAX_PRESET_LABEL} 字`);
     if ((preset.description || '').length > MAX_PRESET_DESCRIPTION) throw new Error(`${preset.name} 的描述最多 ${MAX_PRESET_DESCRIPTION} 字`);
     if ((preset.system_prompt || '').length > MAX_EXPERT_PROMPT) throw new Error(`${preset.name} 的提示词最多 ${MAX_EXPERT_PROMPT} 字`);
-    if (preset.project_access && !['read', 'write'].includes(preset.project_access)) throw new Error(`${preset.name} 的项目权限须为 read 或 write`);
+    if (preset.project_access && !PROJECT_ACCESS.includes(preset.project_access)) throw new Error(`${preset.name} 的项目权限须为 read、write、auto 或 full`);
     if ([preset.model, preset.effort].some(value => (value || '').length > MAX_PRESET_FIELD)) throw new Error(`${preset.name} 的模型或强度过长`);
   }
   if (!templates || typeof templates !== 'object' || Array.isArray(templates) || Object.entries(templates).some(([platform, text]) =>
@@ -412,7 +414,7 @@ function launch_input(input) {
   if (!['conversation', 'web'].includes(value.entry)) throw new Error('entry 必须为 conversation 或 web');
   if (value.entry === 'conversation' && (typeof value.current_session_id !== 'string' || !value.current_session_id.trim())) throw new Error('对话入口须提供当前实际会话的 current_session_id');
   if (value.cwd && (typeof value.cwd !== 'string' || !isAbsolute(value.cwd))) throw new Error('cwd 必须为完整绝对路径');
-  if (value.project_access && !['read', 'write'].includes(value.project_access)) throw new Error('project_access 只能为 read 或 write');
+  if (value.project_access && !PROJECT_ACCESS.includes(value.project_access)) throw new Error('project_access 只能为 read、write、auto 或 full');
   if (value.room_id && !/^[A-Za-z0-9_-]+$/.test(value.room_id)) throw new Error('房间编号无效');
   if (!value.room_id && !value.room?.submission_id) throw new Error('新房间须提供 room.submission_id；重试沿用原编号');
   if (value.room?.mode === 'free') {
@@ -634,13 +636,14 @@ const ACCESS_ADAPTERS = ['codex_cli', 'claude', 'antigravity_cli'];
 export async function room_member_access(home, raw) {
   const { input, path } = await member_room_context(home, raw);
   const { name, project_access } = input;
-  if (!['read', 'write'].includes(project_access)) throw new Error('project_access 只能为 read 或 write');
+  if (!PROJECT_ACCESS.includes(project_access)) throw new Error('project_access 只能为 read、write、auto 或 full');
   const release = acquire_lock(join(dirname(path), 'configuration-edit'));
   try {
     const config = configuration_snapshot(path).config;
     const profile = config.participants?.[name];
     if (!profile) throw new Error(`${name} 不由本机唤醒，项目权限由它自己的会话决定`);
     if (profile.project_access === 'own') throw new Error(`${name} 是手动接入的成员，权限沿用它自己会话的软件设置`);
+    if (!access_levels(profile.adapter).includes(project_access)) throw new Error('agy 无人值守不支持自动档，请选只读、可写或完全放开');
     if (!ACCESS_ADAPTERS.includes(profile.adapter)) throw new Error(profile.adapter === 'api' ? 'API 成员没有本机文件工具，项目固定只读' : `${name} 的项目权限在 App 内设置`);
     if (profile.adapter === 'antigravity_cli' && profile.session_id) throw new Error(`${name} 续接的是它自己的 agy 对话，项目权限沿用该对话所在项目，请在 agy 中设置`);
     if (project_access === 'write' && !(profile.cwd || config.cwd)) throw new Error('本房间没有指定项目目录，可写没有作用；请在新建房间时选择项目目录');
@@ -648,6 +651,35 @@ export async function room_member_access(home, raw) {
     validate_config(next, dirname(path));
     atomic_json(path, next);
     return { room_id: input.room_id, member: name, project_access };
+  } finally { release(); }
+}
+
+const MAX_ALLOWED_TOOLS = 50;
+
+/**
+ * Allow operations a woken member's software refused, by adding the rules the runner reported with them to its
+ * `allowed_tools`: Claude passes them to `--allowedTools`, agy adds them to its discussion project's grants. Like the
+ * project access, they apply from the member's next delivery and keep its session.
+ */
+export async function room_member_allow(home, raw) {
+  const { input, path } = await member_room_context(home, raw);
+  const { name, rules } = input;
+  if (!Array.isArray(rules) || !rules.length || rules.some(rule => typeof rule !== 'string' || !rule.trim() || rule.length > 300)) {
+    throw new Error('rules 须为要放行的规则列表');
+  }
+  const release = acquire_lock(join(dirname(path), 'configuration-edit'));
+  try {
+    const config = configuration_snapshot(path).config;
+    const profile = config.participants?.[name];
+    if (!profile) throw new Error(`${name} 不由本机唤醒，权限由它自己的会话决定`);
+    if (!['claude', 'antigravity_cli'].includes(profile.adapter)) throw new Error(`${name} 的软件不支持逐条放行，请改用更高的权限档位`);
+    if (profile.adapter === 'antigravity_cli' && profile.session_id) throw new Error(`${name} 续接的是它自己的 agy 对话，权限沿用该对话所在项目，请在 agy 中设置`);
+    const allowed_tools = [...new Set([...(profile.allowed_tools || []), ...rules.map(rule => rule.trim())])];
+    if (allowed_tools.length > MAX_ALLOWED_TOOLS) throw new Error(`每位成员最多放行 ${MAX_ALLOWED_TOOLS} 条规则`);
+    const next = { ...config, participants: { ...config.participants, [name]: { ...profile, allowed_tools } } };
+    validate_config(next, dirname(path));
+    atomic_json(path, next);
+    return { room_id: input.room_id, member: name, allowed_tools };
   } finally { release(); }
 }
 
@@ -1195,6 +1227,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   }
   else if (positionals[0] === 'room-member' && input) result = await room_member(home, input);
   else if (positionals[0] === 'room-member-access' && input) result = await room_member_access(home, input);
+  else if (positionals[0] === 'room-member-allow' && input) result = await room_member_allow(home, input);
   else if (positionals[0] === 'room-member-adapter' && input) result = await room_member_adapter(home, input);
   else if (positionals[0] === 'room-profiles' && input) result = await room_profiles(home, input);
   else if (positionals[0] === 'room-restore' && input) result = await restore_room(home, input);

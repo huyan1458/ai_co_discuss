@@ -2,7 +2,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
@@ -124,6 +124,57 @@ export function claude_exit_error(code, output) {
   return code === 0 ? '' : `Claude 退出码 ${code}`;
 }
 
+const DENIAL_FIELD = 300;
+const MAX_DENIALS = 20;
+const EDIT_TOOL_NAMES = /^(Edit|MultiEdit|Write|NotebookEdit)$/;
+
+/** The first program a shell command runs, skipping `cd` and `Set-Location` steps, for a prefix rule that also allows a retry. */
+function command_program(command) {
+  const steps = String(command).split(/&&|\|\||;|\|/).map(step => step.trim().split(/\s+/)[0]).filter(Boolean);
+  return steps.find(step => !/^(cd|Set-Location|sl|pushd)$/i.test(step)) || steps[0] || '';
+}
+
+/**
+ * The operations a headless Claude run refused, from the `permission_denials` of its final result line, each with the
+ * `--allowedTools` rule that would let the next run do it: a command prefix, an edit of that folder, or the tool itself.
+ */
+export function claude_denials(output) {
+  let result = null;
+  try { result = JSON.parse(output.trim().split(/\r?\n/).at(-1)); } catch { return []; }
+  const seen = new Set();
+  return (Array.isArray(result?.permission_denials) ? result.permission_denials : []).map(denial => {
+    const tool = String(denial.tool_name || '').slice(0, 40), input = denial.tool_input || {};
+    if (['Bash', 'PowerShell'].includes(tool) && input.command) {
+      const program = command_program(input.command);
+      return { tool, detail: String(input.command), rule: program ? `${tool}(${program} *)` : '' };
+    }
+    const path = input.file_path || input.notebook_path;
+    if (EDIT_TOOL_NAMES.test(tool) && path) return { tool, detail: String(path), rule: `Edit(${claude_rule_path(dirname(path))}/**)` };
+    return { tool, detail: JSON.stringify(input), rule: tool };
+  }).filter(item => item.tool && !seen.has(item.detail) && seen.add(item.detail))
+    .slice(0, MAX_DENIALS).map(item => ({ ...item, detail: item.detail.slice(0, DENIAL_FIELD), rule: item.rule.length <= DENIAL_FIELD ? item.rule : '' }));
+}
+
+/**
+ * One operation a headless agy run refused, from the failed tool step, with the project grant that would allow it.
+ * agy names the check that failed: a sandboxed or unsandboxed command, or a file write.
+ */
+export function agy_denial(step) {
+  const message = step.tool_info?.error?.message || '';
+  if (!/permission check failed/.test(message)) return null;
+  const parameters = step.tool_info.parameters || {};
+  // Older agy did not name the check; a refused step with a command line was a command.
+  const kind = message.match(/permission check failed for (\w+)/)?.[1] || (parameters.CommandLine ? 'command' : '');
+  if (!kind) return null;
+  if (kind === 'write_file') {
+    const path = String(parameters.Path || parameters.TargetFile || message.match(/write_file\(([^)]+)\)/)?.[1] || '');
+    return { tool: 'write_file', detail: path.slice(0, DENIAL_FIELD), rule: path ? `write_file(${resolve(dirname(path)).replaceAll('\\', '/')})` : '' };
+  }
+  const command = String(parameters.CommandLine || '');
+  const rule = `${kind === 'unsandboxed' ? 'unsandboxed_command' : 'command'}(${command})`;
+  return { tool: step.tool_name || 'run_command', detail: command.slice(0, DENIAL_FIELD), rule: command && rule.length <= DENIAL_FIELD ? rule : '' };
+}
+
 /**
  * Drop variables a hosting Claude session injects, so the spawned CLI uses its own login.
  * The host also hides the user's persisted login variables, which are read back on Windows.
@@ -200,14 +251,18 @@ function agy_project_grants(config, task, resources, user_home) {
     .filter(uri => uri?.startsWith('file:')).map(uri => fileURLToPath(uri));
   const projects = [...new Set([project_directory(config), ...folders].filter(directory => directory && !same_path(directory, task.draft_directory)))];
   const protected_paths = [task.directory, task.skills_directory, join(user_home, '.gemini'),
-    ...(config.project_access === 'write' ? [] : projects)];
+    ...(config.project_access === 'read' ? projects : [])];
   if (protected_paths.some(directory => within_directory(directory, task.draft_directory))) {
     throw new Error('agy 草稿目录不能位于只读项目、运行目录、技能或 .gemini 配置目录中，未交付讨论任务');
   }
   const write_rule = directory => `write_file(${resolve(directory).replaceAll('\\', '/')})`;
+  // 完全放开 also runs commands outside agy's sandbox and allows MCP tools; run data stays protected at every level.
+  const full = config.project_access === 'full';
   return { allow: [agy_rule(), write_rule(task.draft_directory),
-    ...(config.project_access === 'write' ? [...projects.map(write_rule), 'command(*)'] : [])],
-  deny: [...new Set(protected_paths.map(write_rule)), 'mcp(*)'] };
+    ...(config.project_access === 'read' ? [] : [...projects.map(write_rule), 'command(*)']), ...(full ? ['unsandboxed_command(*)'] : []),
+    // Grants the owner allowed from a refused operation on the page.
+    ...(config.allowed_tools || [])],
+  deny: [...new Set(protected_paths.map(write_rule)), ...(full ? [] : ['mcp(*)'])] };
 }
 
 /** Run agy only inside a private native project this tool created; external conversations keep their own project, so they are refused. */
@@ -259,10 +314,11 @@ export function remove_agy_projects(directory, user_home = homedir()) {
  * instead of Bash, so both are listed.
  */
 export function claude_permissions(config, task) {
-  // A headless resume cannot ask for approval, so a taken-over manual member runs in auto mode, as its own window does.
-  if (config.project_access === 'own') {
+  // A headless run cannot ask for approval: 自动 and a taken-over manual member use auto mode, as the original window
+  // does, and 完全放开 skips every check; the website commands and drafts stay pre-approved either way.
+  if (['own', 'auto', 'full'].includes(config.project_access)) {
     const commands = TASK_SUBCOMMANDS.flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]);
-    return ['--permission-mode', 'auto', '--add-dir', task.directory, task.draft_directory, task.skills_directory, '--allowedTools',
+    return ['--permission-mode', config.project_access === 'full' ? 'bypassPermissions' : 'auto', '--add-dir', task.directory, task.draft_directory, task.skills_directory, '--allowedTools',
       ...commands, `Edit(${claude_rule_path(task.draft_directory)}/**)`, ...(config.allowed_tools || [])];
   }
   const commands = runs_commands(config) ? ['Bash', 'PowerShell']
@@ -564,6 +620,8 @@ async function claude_delivery(config, binding, task, spawn_process = spawn) {
   watch_activity('claude', child.stdout, task);
   child.once('close', code => {
     if (!spawned) return;
+    const denials = claude_denials(output);
+    if (denials.length) task.on_denials?.(denials);
     const error = claude_exit_error(code, output);
     if (error) task.on_failure(error);
     else task.on_exit?.();
@@ -580,9 +638,12 @@ async function claude_delivery(config, binding, task, spawn_process = spawn) {
 
 /** Build a per-invocation profile without inheriting a user's custom profile of the same name. */
 export function codex_permissions(config, task, platform = process.platform) {
+  // 完全放开 runs without approval or sandbox, so there is no profile to build or check.
+  if (config.project_access === 'full') return { name: '', args: ['--dangerously-bypass-approvals-and-sandbox'] };
   const name = `codiscuss-${randomUUID()}`;
   // A taken-over manual member writes like 可写: its own config may sandbox read-only and then could not save its answer draft.
-  const base = project_directory(config) && ['write', 'own'].includes(config.project_access) ? ':workspace' : ':read-only';
+  const base = ['auto', 'own'].includes(config.project_access) || (project_directory(config) && config.project_access === 'write')
+    ? ':workspace' : ':read-only';
   const drafts = resolve(task.draft_directory).replaceAll('\\', '/');
   const filesystem = { ':root': 'read', [resolve(task.directory).replaceAll('\\', '/')]: 'read', [drafts]: 'write' };
   const rules = Object.entries(filesystem).map(([path, access]) => `${JSON.stringify(path)}=${JSON.stringify(access)}`).join(',');
@@ -591,8 +652,11 @@ export function codex_permissions(config, task, platform = process.platform) {
   // UTF-8 output setup fails silently, garbling Chinese; a TEMP inside the writable drafts keeps FullLanguage.
   const temp = platform === 'win32' ? ['-c', `shell_environment_policy.set.TEMP=${JSON.stringify(drafts)}`,
     '-c', `shell_environment_policy.set.TMP=${JSON.stringify(drafts)}`] : [];
-  return { name, args: ['-c', `default_permissions=${JSON.stringify(name)}`, '-c', `permissions.${name}=${profile}`,
-    '-c', 'approval_policy="never"', ...temp] };
+  // 自动 is what `codex exec --approve-for-me` sets (that flag is missing on `exec resume`): the model asks to escalate
+  // and Codex's automatic review answers instead of a person (tested 0.163).
+  const approval = config.project_access === 'auto' ? ['-c', 'approval_policy="on-request"', '-c', 'approvals_reviewer="auto_review"']
+    : ['-c', 'approval_policy="never"'];
+  return { name, args: ['-c', `default_permissions=${JSON.stringify(name)}`, '-c', `permissions.${name}=${profile}`, ...approval, ...temp] };
 }
 
 /** Read effective Codex config through its local CLI; no thread or model is started. */
@@ -691,15 +755,20 @@ function cli_event(adapter, state, event, task) {
   }
   if (event.event === 'init') bind_cli_session(state, event.conversation_id, task);
   const step = event.step_update;
-  // Headless agy ends its turn when a command needs approval; remember which one so the pause can name it.
-  if (step?.state === 'ERROR' && /permission/.test(step.tool_info?.error?.message || '')) {
-    const command = step.tool_info.parameters?.CommandLine || step.tool_name || '';
-    state.denial = `运行了未授权的命令「${String(command).slice(0, 120)}」，无人值守模式下无法确认权限而被自动拒绝，随后会话结束`;
+  // Headless agy ends its turn when an operation needs approval; remember which ones so the page can name and allow them.
+  const denied = step?.state === 'ERROR' ? agy_denial(step) : null;
+  if (denied) {
+    if (!state.denials.some(item => item.detail === denied.detail) && state.denials.length < MAX_DENIALS) state.denials.push(denied);
+    state.denial = `${denied.tool === 'write_file' ? '写入' : '运行'}了未授权的${denied.tool === 'write_file' ? '文件' : '命令'}「${denied.detail.slice(0, 120)}」，无人值守模式下无法确认权限而被自动拒绝，随后会话结束`;
   }
   if (event.event === 'result') {
     const result = event.result || {};
     if (result.conversation_id) bind_cli_session(state, result.conversation_id, task);
     state.completed = result.status === 'SUCCESS';
+    // A refused operation still ends with SUCCESS and an empty response; name it even when no failed step was seen.
+    if (!state.denial && Array.isArray(result.denied_actions) && result.denied_actions.length) {
+      state.denial = `的${result.denied_actions.map(item => item.display_name || item.action).join('、')}操作未获授权，无人值守模式下被自动拒绝，随后会话结束`;
+    }
     if (!state.completed) state.error = `Antigravity CLI ${result.status || '缺少结果状态'}：${result.error?.message || result.response || '执行未成功'}`;
   }
 }
@@ -731,7 +800,7 @@ function cli_exit_error(state, code, signal) {
 
 /** Parse complete UTF-8 JSON lines while keeping raw output in the private task log. */
 function monitor_cli(child, config, binding, task) {
-  const state = { child, session_id: binding.session_id || '', initialized: false, completed: false, error: '', diagnostic: '', responses: new Map() };
+  const state = { child, session_id: binding.session_id || '', initialized: false, completed: false, error: '', diagnostic: '', responses: new Map(), denials: [] };
   const log_path = resolve(task.directory, `${config.adapter}-${task.id}.log`);
   const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
   const max_run_ms = Number(process.env.CODISCUSS_CLI_MAX_MS) || CLI_MAX_RUN_MS;
@@ -761,6 +830,7 @@ function monitor_cli(child, config, binding, task) {
     clearTimeout(state.limit_timer);
     task.on_trace?.('cli_closed', { code, signal, killed_after_completed: Boolean(state.finished) });
     if (!state.spawned) return;
+    if (state.denials.length) task.on_denials?.(state.denials);
     const error = cli_exit_error(state, code, signal);
     if (error) task.on_failure(error);
     else task.on_exit?.(state.denial);
@@ -777,7 +847,7 @@ async function cli_delivery(config, binding, task, spawn_process, user_home) {
   let invocation;
   try { invocation = cli_invocation(config, binding, task, user_home); }
   catch (error) { throw not_sent(error); }
-  if (invocation.permissions) {
+  if (invocation.permissions?.name) {
     task.on_trace?.('permission_check_start');
     await check_codex_permissions(config, task, invocation.permissions, spawn_process);
     task.on_trace?.('permission_check_done');

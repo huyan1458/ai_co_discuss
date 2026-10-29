@@ -567,6 +567,13 @@ CREATE TABLE IF NOT EXISTS execution_notes (
     created_at INTEGER NOT NULL,
     PRIMARY KEY(execution_id,seq)
 );
+-- Operations a member's software refused without asking, since a headless run cannot ask for approval; reported once by the
+-- runner after the process ends, as a JSON list of {tool, detail, rule}, so the owner can see and allow them.
+CREATE TABLE IF NOT EXISTS execution_denials (
+    execution_id INTEGER PRIMARY KEY REFERENCES member_executions(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    denials TEXT NOT NULL
+);
 -- Phases the runner saw a member's software go through in one execution (a free execution or a discussion event), as
 -- millisecond offsets from its delivery; numbered per execution, and a resent segment keeps the later end. Not part of backups.
 CREATE TABLE IF NOT EXISTS execution_segments (

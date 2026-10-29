@@ -5,6 +5,7 @@ import vm from "node:vm";
 import { computed, nextTick, reactive, ref, watch } from "vue";
 import { API_PROVIDERS } from "../runner/discussion_api.mjs";
 import { member_actions } from "../frontend/member-actions.js";
+import { access_label, access_options } from "../runner/expert_prompts.mjs";
 import { axis_ticks, execution_log, execution_stages, format_duration, handoff_lines, notes_between, pan_window, row_status, snapshot_at, timeline_axis, timeline_rows, timeline_runs, timeline_summary, view_axis, zoom_window } from "../frontend/timeline-model.js";
 
 const source = readFileSync(new URL("../web/app.js", import.meta.url), "utf8").replace(/\nrestore_theme\(\);[\s\S]*$/, "");
@@ -544,7 +545,7 @@ function expert_card_fixture() {
     write_launch: (name, field, value) => { view.value.launch.profiles[name][field] = value; },
     restore_launch_profile: (name, profile) => { view.value.launch.profiles[name] = profile; },
     description_draft: () => "" };
-  const context = vm.createContext({ computed, ref, nextTick, defineProps: () => props, defineEmits: () => () => {},
+  const context = vm.createContext({ computed, ref, nextTick, defineProps: () => props, defineEmits: () => () => {}, access_label, access_options,
     inject: () => ({ view, bridge }), useSpring: () => angle, useReducedMotion: () => reduced, document,
     watch: (...args) => { const stop = watch(...args); cleanups.push(stop); return stop; },
     onBeforeUnmount: (callback) => cleanups.push(callback) });

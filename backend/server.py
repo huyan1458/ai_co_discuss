@@ -1867,7 +1867,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Forward authenticated browser requests to the shared Node entrypoint and pin their website."""
         site = self.local_request_site(method)
         route = parts[2:]
-        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-member"], ["room-member-access"], ["room-member-adapter"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["api-key"], ["api-check"],
+        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["api-key"], ["api-check"],
                                              ["scheduler-check"], ["pick-directory"], ["projects"], ["presets"], ["machine-link"], ["admin-account"]):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
@@ -1886,7 +1886,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = "api-check"
         elif route == ["scheduler-check"] and method == "POST":
             command = "scheduler-check"
-        elif route in (["room-member"], ["room-member-access"], ["room-member-adapter"]) and method == "POST":
+        elif route in (["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"]) and method == "POST":
             command = route[0]
         elif route in (["room-profiles"], ["room-restore"], ["room-fork"]) and method == "POST":
             command = route[0]
@@ -1907,7 +1907,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if self.headers.get_content_type() != "application/json":
                 raise ValueError("本机操作须使用 application/json")
             payload = self.read_payload()
-            if command in ("start", "room-config", "room-models", "room-member", "room-member-access", "room-member-adapter", "room-profiles", "room-restore", "room-fork"):
+            if command in ("start", "room-config", "room-models", "room-member", "room-member-access", "room-member-allow", "room-member-adapter", "room-profiles", "room-restore", "room-fork"):
                 payload.pop("access_file", None)
                 payload.update(site=site, entry="web")
             if command == "machine-link":

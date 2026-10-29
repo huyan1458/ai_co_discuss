@@ -636,6 +636,33 @@ test('an agy turn ended by a denied command names the command in the pause reaso
   assert.match(f.event.result, /会话已结束，但未保存本次结果：运行了未授权的命令「Get-ChildItem -Recurse」/);
 });
 
+test('refused operations are reported with the rule that would allow them', async t => {
+  // Claude names them in its final result line, even when the turn itself succeeded.
+  const result = { type: 'result', is_error: false, result: '完成', permission_denials: [
+    { tool_name: 'PowerShell', tool_input: { command: 'cd D:/notes && lark-cli docs get abc' } },
+    { tool_name: 'Write', tool_input: { file_path: join(tmpdir(), 'outside', 'b.txt') } },
+    { tool_name: 'WebFetch', tool_input: { url: 'https://example.com' } }] };
+  const claude = await cli_delivery_fixture(t, 'claude', { events: [result] });
+  assert.deepEqual(claude.errors, []);
+  assert.deepEqual(claude.denials.map(item => item.rule), ['PowerShell(lark-cli *)', `Edit(${claude_rule_path(join(tmpdir(), 'outside'))}/**)`, 'WebFetch']);
+  assert.equal(claude.denials[0].detail, 'cd D:/notes && lark-cli docs get abc');
+  // agy names the check that failed in each refused step; a refused turn still ends with SUCCESS.
+  const step = (tool_name, parameters, message) => ({ event: 'step_update', step_update: { state: 'ERROR', step_type: 'tool', tool_name,
+    tool_info: { parameters, error: { type: 'TOOL_ERROR', message } } } });
+  const agy = await cli_delivery_fixture(t, 'antigravity_cli', { events: [{ event: 'init', conversation_id: 'agy-session' },
+    step('run_command', { CommandLine: 'git --version' }, 'permission check failed for unsandboxed "git --version": user denied permission'),
+    step('write_file', { Path: join(tmpdir(), 'outside', 'b.txt') }, 'permission check failed for write_file "b.txt": user denied permission'),
+    { event: 'result', result: { conversation_id: 'agy-session', status: 'SUCCESS', response: '', denied_actions: [{ action: 'command' }] } }] });
+  assert.deepEqual(agy.denials.map(item => item.rule), ['unsandboxed_command(git --version)', `write_file(${resolve(tmpdir(), 'outside').replaceAll('\\', '/')})`]);
+});
+
+test('a refused turn without a failed step still names what agy refused', async t => {
+  const agy = await cli_delivery_fixture(t, 'antigravity_cli', { events: [{ event: 'init', conversation_id: 'agy-session' },
+    { event: 'result', result: { conversation_id: 'agy-session', status: 'SUCCESS', response: '', denied_actions: [{ action: 'command', display_name: 'RunCommand' }] } }] });
+  assert.equal(agy.exits, 1);
+  assert.deepEqual(agy.denials, []);
+});
+
 function cli_events(adapter, session_id = 'actual-cli-session') {
   return adapter === 'codex_cli'
     ? [{ type: 'thread.started', thread_id: session_id }, { type: 'item.completed', item: { text: '中文' } }, { type: 'turn.completed' }]
@@ -652,7 +679,7 @@ async function cli_delivery_fixture(t, adapter, options = {}) {
   mkdirSync(draft_directory);
   const access_path = join(directory, 'access.json');
   writeFileSync(access_path, JSON.stringify({ token: 'test-only', session_id: '' }));
-  const bindings = []; const errors = []; let exits = 0;
+  const bindings = []; const errors = []; const denials = []; let exits = 0;
   const process_fixture = fake_cli(options.events || cli_events(adapter), options);
   t.after(async () => {
     for (const call of [...process_fixture.calls, ...process_fixture.config_calls]) {
@@ -664,11 +691,11 @@ async function cli_delivery_fixture(t, adapter, options = {}) {
   const task = { id: 'event-1', participant: 'Gemini', directory, draft_directory, access_path, prompt: '讨论中文 "quotes"\n$(literal); `literal`',
     skills_directory: join(directory, 'skills'),
     on_binding: session => bindings.push(session), on_process: () => {},
-    on_output: (path, chunk) => appendFileSync(path, chunk), on_failure: error => errors.push(error), on_exit: () => { exits++; } };
+    on_output: (path, chunk) => appendFileSync(path, chunk), on_failure: error => errors.push(error), on_exit: () => { exits++; }, on_denials: list => denials.push(...list) };
   const config = { adapter, executable: process.execPath, ...options.config };
   const result = await deliver_task(config, options.binding || {}, task, process_fixture.spawn_process, user_home);
   await process_fixture.calls[0].closed;
-  return { directory, user_home, config, access_path, task, result, bindings, errors, exits, ...process_fixture };
+  return { directory, user_home, config, access_path, task, result, bindings, errors, denials, exits, ...process_fixture };
 }
 
 for (const source of ['stderr', 'event']) {
@@ -897,6 +924,11 @@ test('agy separates native project permissions from the selected project and pre
   assert.ok(!write.deny.includes(rule(join(f.config.directory, 'source'))));
   assert.ok(write.deny.includes(rule(task.directory)));
   assert.ok(write.allow.includes('command(*)') && !read.permissionGrants.permissionGrants.allow.includes('command(*)'));
+  assert.ok(!write.allow.includes('unsandboxed_command(*)') && write.deny.includes('mcp(*)'));
+  prepare_agy_project({ ...config, project_access: 'full' }, { session_id: 'real-session' }, task, user_home);
+  const full = JSON.parse(readFileSync(join(projects, `${first.project_id}.json`), 'utf8')).permissionGrants.permissionGrants;
+  assert.ok(full.allow.includes('unsandboxed_command(*)') && !full.deny.includes('mcp(*)'));
+  assert.ok(full.deny.includes(rule(task.directory)), 'run data stays protected at every level');
   assert.equal(readFileSync(original_path, 'utf8'), original_text);
   assert.throws(() => prepare_agy_project(config, { session_id: 'other-session' }, task, user_home), /会话绑定不符/);
   // Deleting the room removes only the projects it created.
@@ -1050,6 +1082,11 @@ test('claude edits a project and runs any command only when the launch grants wr
   assert.equal(args[args.indexOf('--permission-mode') + 1], 'auto');
   assert.ok(!args.includes('Bash') && !args.includes(`Edit(${claude_rule_path(project)}/**)`));
   assert.ok(args.includes('Bash(codiscuss room *)'), 'website commands never wait for the classifier');
+  // 自动 uses the same auto mode; 完全放开 skips every check.
+  for (const [project_access, mode] of [['auto', 'auto'], ['full', 'bypassPermissions']]) {
+    const level = (await cli_delivery_fixture(t, 'claude', { events: result, config: { cwd: project, project_access } })).calls[0].args;
+    assert.equal(level[level.indexOf('--permission-mode') + 1], mode);
+  }
 });
 
 /** A Codex desktop app-tools pipe that reports one chat status and records the messages sent through it. */
@@ -1145,6 +1182,15 @@ test('a taken-over Claude member whose own window is open gets its task through 
   assert.doesNotMatch(free_task_text({ name: 'Claude', profile, cli: 'codiscuss', room: 'room', messages: '#3', read_after: 2, execution_id: 7, task_path: 't' }).instructions, /--access-file 凭据路径/);
 });
 
+test('codex 自动 lets its automatic review approve escalations and 完全放开 drops the sandbox', () => {
+  const task = { directory: tmpdir(), draft_directory: tmpdir() };
+  const auto = codex_permissions({ cwd: tmpdir(), project_access: 'auto' }, task).args;
+  assert.ok(auto.includes('approval_policy="on-request"') && auto.includes('approvals_reviewer="auto_review"'));
+  assert.match(auto.find(arg => arg.startsWith('permissions.')), /extends=":workspace"/);
+  assert.ok(codex_permissions({ cwd: tmpdir(), project_access: 'write' }, task).args.includes('approval_policy="never"'));
+  assert.deepEqual(codex_permissions({ project_access: 'full' }, task), { name: '', args: ['--dangerously-bypass-approvals-and-sandbox'] });
+});
+
 test('tasks state whether the discussion project is read-only or writable', async t => {
   const f = await fixture(t);
   const project = mkdtempSync(join(tmpdir(), 'discussion-cwd-')); t.after(() => rmSync(project, { recursive: true, force: true }));
@@ -1160,8 +1206,10 @@ test('tasks state whether the discussion project is read-only or writable', asyn
   const own = task_files(load_config_from(f, project, 'own'), f.event, 'token-for-test', {}).prompt;
   assert.match(own, /网站读写只用.*权限沿用你自己会话的软件设置/);
   assert.doesNotMatch(own, /只读，不修改/);
-  assert.match(task_files(f.config, f.event, 'token-for-test', {}).prompt, /未指定讨论项目目录/);
-  assert.throws(() => load_config_from(f, project, 'admin'), /read 或 write/);
+  assert.match(task_files(f.config, f.event, 'token-for-test', {}).prompt, /未指定项目目录/);
+  assert.match(task_files(load_config_from(f, project, 'auto'), f.event, 'token-for-test', {}).prompt, /由软件自动审批.*申请放行/);
+  assert.match(task_files(load_config_from(f, project, 'full'), f.event, 'token-for-test', {}).prompt, /已跳过软件审批与沙箱/);
+  assert.throws(() => load_config_from(f, project, 'admin'), /read、write、auto 或 full/);
 });
 
 /** Validate the fixture room with a project directory and optional access level. */

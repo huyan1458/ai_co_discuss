@@ -1273,8 +1273,14 @@ test('Worker free rooms keep runner lifecycle, membership and manual members con
   assert.equal((await report(claude, ['index.html'])).status, 200);
   assert.equal((await report(claude, ['b.css'])).status, 409);
   assert.equal((await report(other, ['index.html', 'x.js'])).status, 200);
+  const denial = { tool: 'PowerShell', detail: 'lark-cli docs get x', rule: 'PowerShell(lark-cli *)' };
+  const deny = denials => f.request(`${r.path}/executions/${claude.id}`, { action: 'denials', denials }, r.owner);
+  assert.equal((await deny([{ detail: 'no tool' }])).status, 400);
+  assert.equal((await deny([denial])).status, 200);
+  assert.equal((await deny([denial])).status, 409);
   const reports = (await f.request(r.path)).body.free.executions;
   assert.deepEqual(reports.find(item => item.id === claude.id).changes, ['index.html']);
+  assert.deepEqual([reports.find(item => item.id === claude.id).denials, reports.find(item => item.id === other.id).denials], [[denial], []]);
   assert.equal(reports[0].changes_recorded, true);
   assert.doesNotMatch(JSON.stringify(reports), /token_hash|control_hash|client_id/);
   assert.deepEqual((await f.request(r.path)).body.free.conflicts, [{ members: ['Claude', 'Codex'], executions: [claude.id, other.id], files: ['index.html'] }]);

@@ -3,6 +3,7 @@ import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } fr
 import ScheduleCard from "./ScheduleCard.vue";
 import TopicCard from "./TopicCard.vue";
 import DiscussionEndCard from "./DiscussionEndCard.vue";
+import ExecutionDenials from "./ExecutionDenials.vue";
 import ExecutionNotes from "./ExecutionNotes.vue";
 import WorkingText from "./WorkingText.vue";
 import { motion, useReducedMotion, useSpring, useTransform } from "motion-v";
@@ -214,8 +215,8 @@ const execution_reports = computed(() => {
   if (!source) return reports;
   for (const execution of source.executions || []) {
     if (!["completed", "failed", "cancelled"].includes(execution.status)) continue;
-    // A clean completion adds nothing to the message header; only failures and observed file changes earn a card.
-    if (execution.status === "completed" && !execution.changes?.length) continue;
+    // A clean completion adds nothing to the message header; only failures, observed file changes and refused operations earn a card.
+    if (execution.status === "completed" && !execution.changes?.length && !execution.denials?.length) continue;
     // A failed free-room execution keeps its own card in the slot it worked in.
     if (free.value && execution.status === "failed") continue;
     const message_id = execution.answer_id || execution.request_message_id;
@@ -988,18 +989,44 @@ async function copy_launch(name) {
 watch([() => room.value?.id, () => speaking_turn.value?.id], reset_launch_copy);
 onBeforeUnmount(reset_launch_copy);
 
-/** The user message a failed free-room execution was working on, when it is still in the loaded history. */
+/** The user message a free-room execution was working on, when the owner can see it in the loaded history. */
+function request_message(report) {
+  return free.value && view.value.access?.can_manage ? view.value.messages.find((message) => message.id === report.request_message_id) : null;
+}
 function failed_request_message(report) {
-  return free.value && report.status === "failed" && view.value.access?.can_manage
-    ? view.value.messages.find((message) => message.id === report.request_message_id) : null;
+  return report.status === "failed" ? request_message(report) : null;
 }
 /** Put the original text back in the input for the user to send again; a named request keeps its @member. */
 function resend_failed(report) {
-  const original = failed_request_message(report);
+  const original = request_message(report);
   if (!original) return;
   const request = (room.value.free?.requests || []).find((item) => report.request_ids?.includes(item.id));
   text.value = request?.purpose === "ask" && request.member ? `@${request.member} ${original.text}` : original.text;
   prompt.value?.textareaRef?.focus();
+}
+
+/**
+ * The member and the rules to allow its refused operations. Only Claude Code and agy report rules, and allowing goes
+ * through the local service; the original message must be loaded so it can be sent again.
+ */
+function denial_allowance(report) {
+  const name = (room.value.free?.members || []).find((member) => member.id === report.member_id)?.name;
+  const rules = [...new Set((report.denials || []).map((item) => item.rule).filter(Boolean))];
+  return name && rules.length && view.value.launch?.available && request_message(report) ? { name, rules } : null;
+}
+const allowing = ref(0);
+const allow_errors = ref({});
+/** Add the rules to the member, then put the original message back for the user to send, as 重发 does. */
+async function allow_and_resend(report) {
+  const allowance = denial_allowance(report);
+  if (!allowance || allowing.value) return;
+  allowing.value = report.id;
+  allow_errors.value = { ...allow_errors.value, [report.id]: "" };
+  try {
+    await bridge.allow_denials(allowance);
+    resend_failed(report);
+  } catch (error) { allow_errors.value = { ...allow_errors.value, [report.id]: error.message }; }
+  finally { allowing.value = 0; }
 }
 
 /** Reuse the existing original-record actions in the message overflow menu; the owner's own queued message can be retracted. */
@@ -1145,6 +1172,8 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           </div>
           <p class="channel-message-text channel-failure-reason">{{ message.failure.result || '执行失败，未提供原因' }}</p>
           <ExecutionNotes v-if="message.failure.notes" :count="message.failure.notes" :notes="execution_notes.get(message.failure.id)" @load="load_notes(message.failure.id)" />
+          <ExecutionDenials v-if="message.failure.denials?.length" :denials="message.failure.denials" :allowable="Boolean(denial_allowance(message.failure))"
+            :busy="allowing === message.failure.id" :error="allow_errors[message.failure.id]" @allow="allow_and_resend(message.failure)" />
           <div v-if="free && failed_request_message(message.failure)" class="channel-failure-actions">
             <UButton label="重发" icon="i-lucide-rotate-ccw" size="sm" variant="soft" color="neutral" :aria-label="`把执行 #${message.failure.id} 的原消息填回输入框重发`" @click="resend_failed(message.failure)" />
           </div>
@@ -1217,6 +1246,8 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
               <div><strong>执行 #{{ report.id }} · {{ report.label }}</strong></div>
               <p v-if="report.changes?.length">文件变化：{{ report.changes.join('、') }}</p>
               <p v-if="report.status !== 'completed' && report.result">{{ report.result }}</p>
+              <ExecutionDenials v-if="report.denials?.length" :denials="report.denials" :allowable="Boolean(denial_allowance(report))"
+                :busy="allowing === report.id" :error="allow_errors[report.id]" @allow="allow_and_resend(report)" />
               <UButton v-if="failed_request_message(report)" label="重发" icon="i-lucide-rotate-ccw" size="xs" variant="soft" color="neutral" :aria-label="`把执行 #${report.id} 的原消息填回输入框重发`" @click="resend_failed(report)" />
             </section>
           </template>

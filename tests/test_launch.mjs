@@ -10,7 +10,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { adopt_member_profile, borrowed_session, cached_software_models, launch_discussion, launch_projects, pick_directory, launch_settings, room_configuration, room_member, room_member_access, room_member_adapter, save_launch_projects, save_launch_settings, expert_presets, save_expert_presets } from '../runner/discussion_launch.mjs';
+import { adopt_member_profile, room_member_allow, borrowed_session, cached_software_models, launch_discussion, launch_projects, pick_directory, launch_settings, room_configuration, room_member, room_member_access, room_member_adapter, save_launch_projects, save_launch_settings, expert_presets, save_expert_presets } from '../runner/discussion_launch.mjs';
 import { api, DiscussionRunner, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { DiscussionService, DiscussionWithQuestions, read_registry, register_room } from '../runner/discussion_service.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
@@ -118,7 +118,7 @@ test('expert presets and default descriptions are saved on this computer beside 
   assert.throws(() => save_expert_presets(home, { presets: [{ name: 'Codex-评审-2' }] }), /平台名-后缀/);
   assert.throws(() => save_expert_presets(home, { presets: [preset, preset] }), /重复/);
   assert.throws(() => save_expert_presets(home, { presets: [{ name: 'Codex', session_id: 'x' }] }), /只能包含/);
-  assert.throws(() => save_expert_presets(home, { presets: [{ name: 'Codex', project_access: 'all' }] }), /read 或 write/);
+  assert.throws(() => save_expert_presets(home, { presets: [{ name: 'Codex', project_access: 'all' }] }), /read、write、auto 或 full/);
   assert.throws(() => save_expert_presets(home, { presets: [{ name: 'Codex-评审', label: 'x'.repeat(33) }] }), /显示名/);
   assert.throws(() => save_expert_presets(home, { description_templates: { 'Codex-评审': 'x' } }), /平台名/);
   assert.deepEqual(expert_presets(home).presets, [preset]);
@@ -576,7 +576,7 @@ test('project write access is per launch, defaults to read and can differ per pa
   assert.equal(mixed.participants.Codex.project_access, 'write'); assert.equal(mixed.participants.Claude.project_access, 'read');
   const inherited = await preview({ project_access: 'write', participants: { ...f.input.participants, Claude: { ...f.input.participants.Claude, project_access: '' } } });
   assert.equal(inherited.participants.Claude.project_access, 'write');
-  await assert.rejects(preview({ project_access: 'admin' }), /read 或 write/);
+  await assert.rejects(preview({ project_access: 'admin' }), /read、write、auto 或 full/);
 });
 
 test('explicit empty participant settings fall back to this discussion without changing saved defaults', async t => {
@@ -1047,7 +1047,7 @@ test('a woken member switches project files between read-only and writable after
   assert.equal(saved.session_id, config.participants.Claude.session_id, 'the bound session stays');
   await room_member_access(f.home, { ...input, project_access: 'read' });
   assert.equal(load_config(launched.config_path).participants.Claude.project_access, 'read');
-  await assert.rejects(room_member_access(f.home, { ...input, project_access: 'all' }), /read 或 write/);
+  await assert.rejects(room_member_access(f.home, { ...input, project_access: 'all' }), /read、write、auto 或 full/);
   await assert.rejects(room_member_access(f.home, { ...input, name: 'Codex' }), /不由本机唤醒/);
   // An agy member resuming its own conversation keeps that conversation's project, so its access cannot be set here.
   const current = load_config(launched.config_path);
@@ -1058,6 +1058,15 @@ test('a woken member switches project files between read-only and writable after
   writeFileSync(launched.config_path, JSON.stringify({ ...latest, participants: { ...latest.participants,
     Claude: { ...latest.participants.Claude, project_access: 'own' } } }));
   await assert.rejects(room_member_access(f.home, input), /手动接入的成员/);
+  // A refused operation is allowed by adding its rule to the member, kept once and without touching its session.
+  const allow = { site: f.site, room_id: launched.room.id, token: owner, name: 'Claude', rules: ['PowerShell(lark-cli *)'] };
+  await assert.rejects(room_member_allow(f.home, { ...allow, name: 'Gemini' }), /自己的 agy 对话/);
+  const { Gemini, ...participants } = JSON.parse(readFileSync(launched.config_path, 'utf8')).participants;
+  writeFileSync(launched.config_path, JSON.stringify({ ...JSON.parse(readFileSync(launched.config_path, 'utf8')), participants }));
+  await room_member_allow(f.home, allow);
+  assert.deepEqual((await room_member_allow(f.home, allow)).allowed_tools, ['PowerShell(lark-cli *)']);
+  assert.equal(JSON.parse(readFileSync(launched.config_path, 'utf8')).participants.Claude.project_access, 'own');
+  await assert.rejects(room_member_allow(f.home, { ...allow, rules: [] }), /rules/);
 });
 
 test('an idle Codex member switches between App and CLI in a free room and keeps its conversation', async t => {
