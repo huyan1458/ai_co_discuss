@@ -201,10 +201,7 @@ const summary = computed(() => {
       </section>
 
       <section class="create-section">
-        <h3><span>3</span>推进方式（可选）</h3>
-        <UFormField label="主持人自动推进" description="你的一条消息最多让主持人派活几轮；多步分工、评审返工时可调大。建房后可在房间页修改。">
-          <ChainRoundsField :model-value="view.create_chain_rounds" @update:model-value="bridge.write_create_chain_rounds($event)" />
-        </UFormField>
+        <h3><span>3</span>讨论（可选）</h3>
         <UCheckbox :model-value="discussing" label="创建后开启讨论" description="主持人安排成员轮流发言，到上限或结束后回到自由协作。也可以建房后再开启。" @update:model-value="toggle_discussion($event)" />
         <template v-if="discussing">
           <UFormField label="讨论目标" description="写下问题、背景和顾虑，主持人据此推进。"><UTextarea :model-value="value('goal')" :maxlength="1000" :rows="4" autoresize :maxrows="10" placeholder="例如：我们在 A、B 两个方案之间犹豫，主要顾虑是成本和上线时间……" class="w-full" @update:model-value="write('goal', $event)" /></UFormField>
@@ -214,6 +211,12 @@ const summary = computed(() => {
           </DiscussionLimits>
         </template>
       </section>
+
+      <details class="create-advanced">
+        <summary><UIcon name="i-lucide-chevron-right" class="create-advanced-icon" />高级设置<small>连续派活 {{ view.create_chain_rounds }} 轮</small></summary>
+        <ChainRoundsField :model-value="view.create_chain_rounds" @update:model-value="bridge.write_create_chain_rounds($event)" />
+        <p class="fine-print">建房后可在房间页修改。</p>
+      </details>
     </form>
     <footer class="create-footer">
       <p v-if="launching && view.launch.error" role="alert" class="create-error">{{ view.launch.error }}</p>
@@ -237,6 +240,16 @@ const summary = computed(() => {
 .create-section + .create-section { padding-top: 22px; border-top: 1px solid var(--ui-border-muted); }
 .create-section h3 { display: flex; align-items: center; gap: 9px; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
 .create-section h3 > span { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: color-mix(in srgb, var(--channel-accent) 18%, transparent); color: var(--channel-accent); font-size: 11px; }
+/* Rarely changed settings fold away; the summary still shows the current value. */
+.create-advanced { padding-top: 16px; border-top: 1px solid var(--ui-border-muted); }
+.create-advanced > summary { display: flex; align-items: center; gap: 6px; min-height: 28px; list-style: none; color: var(--ui-text-muted); font-size: 12px; cursor: pointer; }
+.create-advanced > summary::-webkit-details-marker { display: none; }
+.create-advanced > summary:hover { color: var(--ui-text-highlighted); }
+.create-advanced > summary small { color: var(--ui-text-dimmed); font-size: 11px; }
+.create-advanced-icon { width: 14px; height: 14px; transition: transform .15s; }
+.create-advanced[open] > summary { margin-bottom: 10px; }
+.create-advanced[open] .create-advanced-icon { transform: rotate(90deg); }
+.create-advanced > .fine-print { margin: 6px 0 0; }
 .create-modes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
 .create-mode { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; text-align: left; background: color-mix(in srgb, var(--ui-bg-elevated) 35%, transparent); color: var(--ui-text-muted); }
 .create-mode:hover { border-color: var(--ui-border-accented); }

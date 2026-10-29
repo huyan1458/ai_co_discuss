@@ -192,10 +192,10 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
       <dl class="overview-settings">
         <div><dt>主持人</dt><dd>{{ room.host ? bridge.display_name(room.host) : '未指定' }}</dd></div>
         <div><dt>智能调度</dt><dd>{{ scheduler }}</dd></div>
-        <div v-if="free && room.free?.max_rounds"><dt>主持人自动推进</dt><dd>
+        <div v-if="free && room.free?.max_rounds"><dt>连续派活上限</dt><dd>
           <template v-if="view.access?.can_manage"><ChainRoundsField :model-value="rounds_shown" :disabled="saving_rounds" @update:model-value="save_rounds" />
             <small v-if="rounds_saved" role="status" class="overview-saved">已保存，进行中的任务链也按新值</small></template>
-          <span v-else>你的一条消息最多推进 {{ room.free.max_rounds }} 轮（主持人派活、成员回答、交回汇总为一轮），到上限即停下等你</span></dd></div>
+          <span v-else>主持人收到你的一条消息后，最多连续派活 {{ room.free.max_rounds }} 轮（派活 → 成员回答 → 交回汇总为一轮），然后停下等你</span></dd></div>
         <div v-if="!free"><dt>逐人追问</dt><dd>{{ room.named_followup ? '开启：主持人每轮给每位专家写针对性追问' : '关闭：首轮后请专家回应上一轮观点' }}</dd></div>
         <div><dt>阅读地址</dt><dd class="overview-address"><code>{{ reading }}</code><UButton icon="i-lucide-copy" color="neutral" variant="ghost" size="xs" aria-label="复制阅读地址" @click="act('copy', reading)" /></dd></div>
         <div v-if="created"><dt>创建时间</dt><dd>{{ created }}</dd></div>

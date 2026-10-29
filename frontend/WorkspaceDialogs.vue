@@ -93,8 +93,8 @@ async function save_folder() {
   await act(renaming ? "rename_folder" : "create_folder", request);
 }
 
-/** Every room filed in the target folder, archived ones included. */
-const folder_rooms = computed(() => view.value.rooms.filter(room => props.targetFolder?.id && room.folder_id === props.targetFolder.id));
+/** Active rooms in the target folder; archived ones keep their folder only for restoring and are left out of folder actions. */
+const folder_rooms = computed(() => view.value.rooms.filter(room => !room.archived && props.targetFolder?.id && room.folder_id === props.targetFolder.id));
 
 /** Release the confirmation immediately; optionally delete the folder's rooms first, keeping the folder if any deletion fails. */
 async function remove_folder(with_rooms) {
@@ -108,7 +108,7 @@ async function remove_folder(with_rooms) {
 
 /** Archive the folder's active rooms one request at a time; the folder itself stays. */
 async function archive_folder() {
-  const rooms = folder_rooms.value.filter(room => !room.archived);
+  const rooms = folder_rooms.value;
   mode.value = "";
   for (const room of rooms) await act("manage_channel", { id: room.id, action: "archive" });
 }
@@ -228,11 +228,11 @@ const keep_open = (event) => event.preventDefault();
       </section>
       <form v-else-if="rendered_mode === 'delete-folder'" class="dialog-form" @submit.prevent="remove_folder(false)">
         <p class="fine-print">仅移除「{{ targetFolder?.name }}」时，房间变为未分组，所有消息和存档状态都会保留。</p>
-        <p v-if="folder_rooms.length" class="fine-print">也可以连同其中的 {{ folder_rooms.length }} 个房间（含已存档）一起永久删除，无法撤销。</p>
+        <p v-if="folder_rooms.length" class="fine-print">也可以连同其中的 {{ folder_rooms.length }} 个房间一起永久删除，无法撤销。</p>
         <div class="dialog-actions"><UButton label="取消" color="neutral" variant="ghost" @click="mode = ''" /><UButton v-if="folder_rooms.length" :label="`连同 ${folder_rooms.length} 个房间删除`" color="error" variant="soft" @click="remove_folder(true)" /><UButton type="submit" label="仅移除文件夹" color="neutral" variant="solid" /></div>
       </form>
       <form v-else-if="rendered_mode === 'archive-folder'" class="dialog-form" @submit.prevent="archive_folder">
-        <p class="fine-print">存档「{{ targetFolder?.name }}」中的 {{ folder_rooms.filter(room => !room.archived).length }} 个房间，文件夹保留。存档后可在侧栏「已存档」中查阅与恢复；尚未收束的讨论会暂停。</p>
+        <p class="fine-print">存档「{{ targetFolder?.name }}」中的 {{ folder_rooms.length }} 个房间，文件夹保留。存档后可在侧栏「已存档」中查阅与恢复；尚未收束的讨论会暂停。</p>
         <div class="dialog-actions"><UButton label="取消" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" label="存档全部房间" color="primary" /></div>
       </form>
       <form v-else-if="folder_dialog" class="dialog-form" @submit.prevent="save_folder">
