@@ -2300,9 +2300,9 @@ test('admin token writes only its hash through wrangler and the account is saved
     const config = join(root, 'wrangler.jsonc');
     writeFileSync(config, '{}');
     let sql = '', args = [];
-    const { token } = create_admin_token(config, wrangler_args => { args = wrangler_args; sql = readFileSync(wrangler_args.at(-1), 'utf8'); });
+    const { token } = create_admin_token(config, wrangler_args => { args = wrangler_args; sql = wrangler_args.at(-1); });
     assert.match(token, /^[0-9a-f]{64}$/);
-    assert.deepEqual(args.slice(0, 6), ['d1', 'execute', 'DB', '--remote', '--config', config]);
+    assert.deepEqual(args.slice(0, 7), ['d1', 'execute', 'DB', '--remote', '--config', config, '--command']);
     assert.ok(!sql.includes(token) && sql.includes(createHash('sha256').update(token).digest('hex')));
     const home = join(root, 'home');
     const { saved } = save_admin_account(home, { site: 'https://example.pages.dev/', username: ' Admin ', password: 'Admin123456.' });

@@ -1,8 +1,7 @@
 /** Site administrator setup from the deploying computer: a one-time registration token and the saved account. */
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
@@ -27,12 +26,9 @@ export function create_admin_token(config, run = run_wrangler) {
   if (!existsSync(path)) throw new Error(`找不到部署配置 ${path}；请在项目目录运行，或用 --config 指定 wrangler.jsonc`);
   const token = randomBytes(TOKEN_BYTES).toString('hex');
   const hashed = createHash('sha256').update(token).digest('hex');
-  const directory = mkdtempSync(join(tmpdir(), 'codiscuss-admin-'));
-  const sql = join(directory, 'admin-setup.sql');
-  try {
-    writeFileSync(sql, `INSERT OR REPLACE INTO admin_setup (id,token_hash,created_at) VALUES (1,'${hashed}',${Math.floor(Date.now() / 1000)});\n`);
-    run(['d1', 'execute', 'DB', '--remote', '--config', path, '--file', sql]);
-  } finally { rmSync(directory, { recursive: true, force: true }); }
+  // --command uses the ordinary query API; --file goes through D1's upload-based import, which fails behind some networks.
+  run(['d1', 'execute', 'DB', '--remote', '--config', path, '--command',
+    `INSERT OR REPLACE INTO admin_setup (id,token_hash,created_at) VALUES (1,'${hashed}',${Math.floor(Date.now() / 1000)})`]);
   return { token, config: path };
 }
 
