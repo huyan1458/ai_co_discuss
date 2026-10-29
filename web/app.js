@@ -803,10 +803,13 @@ function message_markup(message) {
 /** Render continuous history while retaining expanded answers and reading position. */
 function render_messages(result) {
   const previous = new Map(state.messages.map((message) => [message.id, message]));
+  // Cached history is read once; a later retract or rewind reaches it through the room's withdrawal list.
+  const withdrawn = new Map((state.room?.withdrawals || []).map((item) => [item.message_id, item.kind]));
   state.messages = result.messages.map((message) => {
     const saved = previous.get(message.id);
-    if (saved) return saved;
-    return { ...message, rendered_text: window.discuss_markdown.render_markdown(message.text),
+    const kind = withdrawn.get(message.id) || message.withdrawn || "";
+    if (saved) return (saved.withdrawn || "") === kind ? saved : { ...saved, withdrawn: kind };
+    return { ...message, withdrawn: kind, rendered_text: window.discuss_markdown.render_markdown(message.text),
       rendered_summary: window.discuss_markdown.render_markdown(message.summary || "") };
   });
   state.message_total = result.total;
@@ -826,7 +829,7 @@ function render_messages(result) {
 
 /** Join bounded cursor batches for the interactive transcript; refresh only new records. */
 async function load_message_history(room_id, version) {
-  const params = new URLSearchParams({ q: state.query });
+  const params = new URLSearchParams({ q: state.query, withdrawn: "include" });
   if (state.mention_only) params.set("mention", element("author-select").value);
   const key = `${room_id}?${params}`;
   const saved = state.message_history?.key === key ? state.message_history.messages : [];
@@ -2883,6 +2886,31 @@ async function interrupt_member(member_id) {
   if (state.room?.id === room_id) await refresh_room();
 }
 
+/** Take back the user's message before any member handled it; its text returns to an empty input for editing. */
+async function retract_message(message_id) {
+  const room_id = state.room.id;
+  const result = await request_json(`/api/rooms/${room_id}/messages/${message_id}/retract`, {});
+  if (state.room?.id !== room_id) return;
+  if (!element("message-input").value.trim()) element("message-input").value = result.text;
+  await refresh_room();
+}
+
+/** What editing a message would take back, with the revision the rewind must carry. */
+function rewind_plan(message_id) {
+  return request_json(`/api/rooms/${state.room.id}/rewind?message_id=${message_id}`);
+}
+
+/** Return the room to just before a message, then send its edited text in its place through the normal composer. */
+async function rewind_and_send({ message_id, revision, text }) {
+  if (element("message-input").value.trim() || state.attachment_drafts.length) throw new Error("输入框里还有草稿，请先发送或清空后再编辑这条消息");
+  const room_id = state.room.id;
+  await request_json(`/api/rooms/${room_id}/rewind`, { message_id, revision });
+  if (state.room?.id !== room_id) return;
+  cancel_reply();
+  element("message-input").value = text;
+  await send_message({ preventDefault() {} });
+}
+
 /** Adopt smart scheduling's recommendation: interrupt the host now, or ask the member once the host is done. */
 async function adopt_recommendation({ message_id, mode }) {
   const room_id = state.room.id;
@@ -3697,7 +3725,7 @@ async function execute_view_action(name, value) {
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
     choose_runtime, export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, retry_execution, conclude_discussion, start_room_discussion, end_room_discussion, reopen_discussion,
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
-    load_room_configuration, save_room_configuration, interrupt_member, change_member, reorder_speakers, invite_member, set_proxy, copy_online_notice,
+    load_room_configuration, save_room_configuration, interrupt_member, retract_message, rewind_and_send, change_member, reorder_speakers, invite_member, set_proxy, copy_online_notice,
     prepare_brainstorm, return_conclusion, adopt_recommendation, rate_decision,
     busy: () => { throw new Error("上一个操作仍在处理中，请稍候；长时间无响应请刷新页面"); },
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };
@@ -3727,7 +3755,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form },
-  request: request_json, identities: IDENTITIES, display_name, sources: SOURCE_LABELS, phases: PHASE_LABELS,
+  request: request_json, rewind_plan, identities: IDENTITIES, display_name, sources: SOURCE_LABELS, phases: PHASE_LABELS,
   set_member_access, set_member_adapter, reload_room_models, runtime_label, execution_label, limits_label, stop_reason_label, participant_model, participant_files, participant_access, can_retry_execution,
   turns: TURN_LABELS, turn_label, turn_guidance, progress_round, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 

@@ -186,7 +186,7 @@ test('free-room answers replace their working card in place instead of jumping a
     { id: 'free-9', author: 'Gemini', created_at: 1, execution_id: 9, request_message_id: 999 },
   ]);
   const room = ref({ free: { members: [{ id: 4, name: 'Gemini' }], executions: [] } });
-  const context = vm.createContext({ computed, view, room, free: ref(true), failed_messages: ref([]), free_working });
+  const context = vm.createContext({ computed, ref, view, room, free: ref(true), failed_messages: ref([]), free_working });
   const start = discussion_source.indexOf('const transcript_messages = computed(');
   const end = discussion_source.indexOf('/** Split continuous', start);
   vm.runInContext(discussion_source.slice(start, end) + '\nglobalThis.transcript = transcript_messages;', context);
@@ -201,6 +201,26 @@ test('free-room answers replace their working card in place instead of jumping a
     'a failure keeps its slot under the request; one whose request is not shown is dropped');
 });
 
+test('rewound messages fold into their first line until expanded, and work on them leaves the transcript', () => {
+  const view = ref({ messages: [
+    { id: 1, author: '用户', created_at: '2026-10-28T10:00:00Z' },
+    { id: 2, author: '用户', created_at: '2026-10-28T10:01:00Z', withdrawn: 'rewound' },
+    { id: 3, author: 'Claude', created_at: '2026-10-28T10:02:00Z', withdrawn: 'rewound', execution_id: 5, request_message_id: 2 },
+    { id: 4, author: '用户', created_at: '2026-10-28T10:03:00Z', withdrawn: 'retracted' },
+    { id: 5, author: '用户', created_at: '2026-10-28T10:04:00Z' },
+  ] });
+  const room = ref({ free: { members: [{ id: 1, name: 'Claude' }], executions: [
+    { id: 6, member_id: 1, status: 'failed', request_message_id: 2, created_at: 1, finished_at: 2 }] } });
+  const context = vm.createContext({ computed, ref, view, room, free: ref(true), failed_messages: ref([]), free_working: ref([]) });
+  const start = discussion_source.indexOf('const transcript_messages = computed(');
+  const end = discussion_source.indexOf('/** Split continuous', start);
+  vm.runInContext(discussion_source.slice(start, end) + '\nglobalThis.state = { transcript: transcript_messages, runs: rewound_runs, toggle: toggle_rewound };', context);
+  assert.deepEqual([...context.state.transcript.value].map(item => item.id), [1, 2, 4, 5], 'the run folds into #2 and its failed work is not shown');
+  assert.equal(context.state.runs.value.runs.get(2), 2);
+  context.state.toggle(2);
+  assert.deepEqual([...context.state.transcript.value].map(item => item.id), [1, 2, 3, 4, 5], 'expanding lists every rewound line in place');
+});
+
 test('execution reports bind answers and failed requests and distinguish unknown file changes', () => {
   const room = ref({ free: { executions: [
     { id: 1, status: 'completed', answer_id: 8, request_message_id: 4, request_ids: [1, 2], created_at: 10, finished_at: 22, changes_recorded: true, changes: ['index.html'] },
@@ -208,7 +228,7 @@ test('execution reports bind answers and failed requests and distinguish unknown
     { id: 3, status: 'completed', answer_id: 11, request_message_id: 10, request_ids: [4], created_at: 10, finished_at: 30, changes_recorded: true, changes: [] },
     { id: 4, status: 'started', request_message_id: 12 },
   ] } });
-  const context = vm.createContext({ computed, room, free: ref(true) });
+  const context = vm.createContext({ computed, ref, room, free: ref(true) });
   const start = discussion_source.indexOf('const execution_reports = computed(');
   const end = discussion_source.indexOf('const pending_message =', start);
   vm.runInContext(discussion_source.slice(start, end) + '\nglobalThis.reports = execution_reports;', context);
@@ -1449,7 +1469,7 @@ test("failed cards survive fresh snapshots and retry beside messages without bec
   const view = ref({ messages: [{ id: 1, author: 'Codex', created_at: '2026-10-23T09:00:00Z' }], access: { can_manage: true },
     room: { phase: 'paused', current_turn: { id: 7, expert: 'Claude', status: 'notified' }, runtime: {
       mode: 'automatic', status: 'paused', latest_execution: { id: 9, status: 'failed' }, failures: [failure] } } });
-  const context = vm.createContext({ computed, view, free: ref(false), room: computed(() => view.value.room),
+  const context = vm.createContext({ computed, ref, view, free: ref(false), room: computed(() => view.value.room),
     bridge: { can_retry_execution: fixture.context.can_retry_execution }, date_formatter: new Intl.DateTimeFormat('zh-CN') });
   const start = discussion_source.indexOf('const failed_messages =');
   const end = discussion_source.indexOf('/** Preserve room-wide round', start);

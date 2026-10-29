@@ -598,13 +598,33 @@ const free_failures = computed(() => {
       execution_id: execution.id, request_message_id: execution.request_message_id,
       failure: { ...execution, elapsed_seconds: execution.finished_at ? Math.max(0, execution.finished_at - execution.created_at) : null } }));
 });
+const expanded_rewinds = ref(new Set());
+/** Consecutive rewound messages fold into one line at the first of them until expanded; a retracted one is a line of its own. */
+const rewound_runs = computed(() => {
+  const runs = new Map(), hidden = new Set();
+  let start = null;
+  for (const message of view.value.messages) {
+    if (message.withdrawn !== "rewound") { start = null; continue; }
+    if (start === null) { start = message.id; runs.set(start, 0); }
+    runs.set(start, runs.get(start) + 1);
+    if (start !== message.id && !expanded_rewinds.value.has(start)) hidden.add(message.id);
+  }
+  return { runs, hidden };
+});
+function toggle_rewound(id) {
+  const next = new Set(expanded_rewinds.value);
+  if (!next.delete(id)) next.add(id);
+  expanded_rewinds.value = next;
+}
+
 /**
  * A free-room card keeps the place it first appeared in: each execution takes a slot under the message that asked for it,
  * in execution order, and its answer replaces the working card in that slot. Work whose request is not shown stays at the end.
  */
 const free_layout = computed(() => {
-  const messages = view.value.messages;
-  const shown = new Set(messages.map((message) => message.id));
+  const messages = view.value.messages.filter((message) => !rewound_runs.value.hidden.has(message.id));
+  // Work on a taken-back message is no longer shown under it; a failure there is dropped like any other unshown one.
+  const shown = new Set(messages.filter((message) => !message.withdrawn).map((message) => message.id));
   const slots = new Map();
   const place = (item) => {
     if (!item.execution_id || !shown.has(item.request_message_id)) return false;
@@ -982,12 +1002,47 @@ function resend_failed(report) {
   prompt.value?.textareaRef?.focus();
 }
 
-/** Reuse the existing original-record actions in the message overflow menu. */
+/** Reuse the existing original-record actions in the message overflow menu; the owner's own queued message can be retracted. */
 function message_actions(message) {
   return [[
     { label: "复制原文链接", icon: "i-lucide-link", onSelect: () => copy_message(message) },
     { label: "查看原文", icon: "i-lucide-expand", onSelect: () => emit("detail", message.id) },
+    ...(can_retract(message) ? [{ label: "撤回", icon: "i-lucide-undo-2", onSelect: () => act("retract_message", message.id) }] : []),
   ]];
+}
+
+/** The owner may take back their own message in a free room, unless a discussion is open or began at or after it (its host reads messages itself). */
+const can_take_back = (message) => free.value && view.value.access?.can_manage && message.author === "用户" && !message.withdrawn && !room.value.archived
+  && !(room.value.discussions || []).some((item) => ["active", "paused"].includes(item.status) || item.started_message_id >= message.id);
+/** Retracting needs every request on the message still waiting; once a member started one, only editing takes it back. */
+const can_retract = (message) => can_take_back(message)
+  && !(room.value.free?.requests || []).some((request) => request.message_id === message.id && ["delivering", "completed", "failed"].includes(request.status));
+
+const NO_EDIT = { id: 0, text: "", plan: null, error: "" };
+const editing = ref(NO_EDIT);
+/** Open the message for editing and read what sending the edit would take back. */
+async function start_edit(message) {
+  editing.value = { ...NO_EDIT, id: message.id, text: message.text };
+  try {
+    const plan = await bridge.rewind_plan(message.id);
+    if (editing.value.id === message.id) editing.value = { ...editing.value, plan };
+  } catch (error) { if (editing.value.id === message.id) editing.value = { ...editing.value, error: error.message }; }
+}
+function cancel_edit() { editing.value = NO_EDIT; }
+/** Rewind to just before the message with the plan read on opening, then send the edited text in its place. */
+async function submit_edit() {
+  const { id, text: edited, plan } = editing.value;
+  if (!plan || !edited.trim() || pending.value) return;
+  follow_tail.value = true;
+  if (await act("rewind_and_send", { message_id: id, revision: plan.revision, text: edited.trim() })) cancel_edit();
+}
+/** What the rewind does, in one line: how much it takes back and whose session goes back; members left as they were need no mention. */
+function rewind_summary(plan) {
+  const names = (session) => plan.members.filter((member) => member.session === session).map((member) => bridge.display_name(member.name)).join("、");
+  return [`将回退 ${plan.messages} 条记录（含这条），进行中的工作会停止`,
+    names("cut") && `${names("cut")} 的会话退回到这条消息之前`,
+    names("kept") && `${names("kept")} 的会话在其自己的窗口中，无法由本机回退`,
+    "成员已改动的文件不会撤销"].filter(Boolean).join("；") + "。";
 }
 
 /** Select the shared reply target and focus the library's chat editor. */
@@ -1042,7 +1097,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
         </div>
       </motion.div>
     </Teleport>
-    <div ref="transcript" v-memo="[message_groups, message_round_labels, active_message, expanded_answers.size, room.title, view.query, view.mention_only, topic_anchor, end_anchor, pending_message, pending_seconds, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, correcting, pending, view.free_error, execution_notes]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
+    <div ref="transcript" v-memo="[message_groups, message_round_labels, active_message, expanded_answers.size, room.title, view.query, view.mention_only, topic_anchor, end_anchor, pending_message, pending_seconds, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, correcting, pending, view.free_error, execution_notes, editing, rewound_runs]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
       <div v-if="!view.query && !view.mention_only && !topic_anchor" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <!-- The opening plan has no answer to follow, so it stands right under the topic. -->
       <div v-if="host_arrangements.get(0)?.length" class="channel-message-group">
@@ -1095,8 +1150,21 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             <p v-if="view.free_error" class="channel-failure-error" role="alert">{{ view.free_error }}</p>
           </div>
         </section>
+        <div v-else-if="message.withdrawn" :id="String(message.id)" :data-message-id="message.id" class="channel-withdrawn" :data-author="bridge.identities[message.author]?.style">
+          <UIcon :name="message.withdrawn === 'retracted' ? 'i-lucide-undo-2' : 'i-lucide-history'" class="channel-withdrawn-icon" />
+          <span v-if="message.withdrawn === 'retracted'">{{ bridge.display_name(message.author) }} 撤回了一条消息</span>
+          <template v-else-if="rewound_runs.runs.has(message.id) && !expanded_rewinds.has(message.id)">
+            <span>已回退 {{ rewound_runs.runs.get(message.id) }} 条记录</span>
+            <UButton label="展开" size="xs" variant="link" color="neutral" :aria-label="`展开从 #${message.id} 起已回退的记录`" @click="toggle_rewound(message.id)" />
+          </template>
+          <template v-else>
+            <strong>{{ bridge.display_name(message.author) }}</strong><span class="channel-withdrawn-text">{{ message.text }}</span>
+            <UButton :label="`#${message.id}`" size="xs" variant="link" color="neutral" :aria-label="`查看已回退的原文 #${message.id}`" @click="emit('detail', message.id)" />
+            <UButton v-if="rewound_runs.runs.has(message.id)" label="收起" size="xs" variant="link" color="neutral" :aria-label="`收起从 #${message.id} 起已回退的记录`" @click="toggle_rewound(message.id)" />
+          </template>
+        </div>
         <template v-else>
-        <UChatMessage :id="String(message.id)" v-memo="[message, view.admin?.identity_version, message_round_labels.get(message.id), expanded_answers.has(message.id), active_message === message.id, waits_for_host(message), request_badges.get(message.id), execution_reports.get(message.id), message_elapsed(message), recommendations.get(message.id), adopting === message.id, answer_execution(message)?.notes, execution_notes.get(answer_execution(message)?.id)]" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="{ 'channel-current-message': active_message === message.id }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
+        <UChatMessage :id="String(message.id)" v-memo="[message, view.admin?.identity_version, editing.id === message.id && editing.plan, editing.id === message.id && editing.error, editing.id === message.id, pending === 'rewind_and_send', message_round_labels.get(message.id), expanded_answers.has(message.id), active_message === message.id, waits_for_host(message), request_badges.get(message.id), execution_reports.get(message.id), message_elapsed(message), recommendations.get(message.id), adopting === message.id, answer_execution(message)?.notes, execution_notes.get(answer_execution(message)?.id)]" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="{ 'channel-current-message': active_message === message.id }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
@@ -1111,6 +1179,14 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
               <summary :aria-label="`查看运行回执 #${message.id}`">运行回执详情</summary>
               <div class="channel-message-text markdown-body" v-html="message.rendered_text"></div>
             </details>
+            <form v-else-if="editing.id === message.id" class="channel-edit" :aria-label="`编辑消息 #${message.id}`" @submit.prevent="submit_edit">
+              <textarea v-model="editing.text" rows="3" :maxlength="bridge.max_message_length" aria-label="编辑后的消息" @keydown.esc.prevent="cancel_edit" @keydown.enter.ctrl.prevent="submit_edit" @keydown.enter.meta.prevent="submit_edit"></textarea>
+              <p class="channel-edit-note" :class="{ 'is-error': editing.error }" role="status">{{ editing.error || (editing.plan ? rewind_summary(editing.plan) : '正在读取回退范围…') }}</p>
+              <div class="channel-edit-actions">
+                <UButton label="取消" size="xs" variant="ghost" color="neutral" @click="cancel_edit" />
+                <UButton type="submit" label="回退并发送" size="xs" color="primary" :disabled="!editing.plan || (!!pending && pending !== 'rewind_and_send')" :loading="pending === 'rewind_and_send'" />
+              </div>
+            </form>
             <div v-else class="channel-answer">
               <div :id="`channel-answer-${message.id}`" class="channel-message-text markdown-body" v-html="expanded_answers.has(message.id) ? message.rendered_text : answer_previews.get(message.id).html"></div>
               <UButton v-if="answer_previews.get(message.id).truncated" :label="expanded_answers.has(message.id) ? '收起' : '展开全文'" :trailing-icon="expanded_answers.has(message.id) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" variant="link" color="neutral" size="xs" class="channel-answer-toggle" :aria-label="`${expanded_answers.has(message.id) ? '收起回答' : '展开完整回答'} #${message.id}`" :aria-expanded="expanded_answers.has(message.id)" :aria-controls="`channel-answer-${message.id}`" @click="toggle_answer(message, $event)" />
@@ -1143,6 +1219,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           </template>
           <template #header><div class="channel-message-actions"><div class="channel-message-toolbar">
             <UTooltip text="回复"><UButton icon="i-lucide-corner-up-left" size="xs" color="neutral" variant="ghost" :aria-label="`回复 #${message.id}`" @click="reply_to(message)" /></UTooltip>
+            <UTooltip v-if="can_take_back(message) && editing.id !== message.id" text="编辑"><UButton icon="i-lucide-pencil" size="xs" color="neutral" variant="ghost" :aria-label="`编辑 #${message.id}，回退到它之前重新发送`" @click="start_edit(message)" /></UTooltip>
             <UDropdownMenu :items="message_actions(message)" :content="{ align: 'end', sideOffset: 5 }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" :aria-label="`消息 #${message.id} 的更多操作`" /></UDropdownMenu>
           </div></div></template>
         </UChatMessage>

@@ -90,9 +90,15 @@ const status = computed(() => {
     ? `消息默认交给 ${bridge.display_name(host.value.name)}；@ 其他成员让它们发言` : "只有网页 AI：消息只作留言，需要你代发回答" };
 });
 
+/** Requests on messages the user has not retracted or rewound; the rest no longer count as work. */
+const live_requests = computed(() => {
+  const withdrawn = new Set((room.value.withdrawals || []).map((item) => item.message_id));
+  return (free.value.requests || []).filter((request) => !withdrawn.has(request.message_id));
+});
+
 /** Recent requests and executions; the server keeps the latest hundred of each. */
 const meters = computed(() => {
-  const requests = free.value.requests || [];
+  const requests = live_requests.value;
   const answered = requests.filter((request) => request.status === "completed").length;
   const executions = free.value.executions || [];
   return [
@@ -103,7 +109,7 @@ const meters = computed(() => {
 
 /** The user message behind the newest request, so the rail says what the room is working on. */
 const task = computed(() => {
-  const request = (free.value.requests || []).filter((item) => item.created_by === "user").at(-1);
+  const request = live_requests.value.filter((item) => item.created_by === "user").at(-1);
   if (!request) return "";
   const message = (view.value.messages || []).find((item) => item.id === request.message_id);
   return message ? message.text : `#${request.message_id}`;

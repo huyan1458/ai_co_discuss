@@ -1131,6 +1131,22 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 .channel-schedule-correction select, .channel-schedule-correction input { padding: 3px 6px; border: 1px solid var(--ui-border); border-radius: 4px; background: transparent; color: inherit; font: inherit; }
 .channel-schedule-correction input { flex: 1; min-width: 160px; }
 @media (min-width: 701px) { .channel-schedule-correction { margin-right: var(--message-inset-end); } }
+/* A retracted or rewound message keeps its place as one quiet line; a rewound run folds into its first line. */
+.channel-withdrawn { display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0 16px 16px; padding: 6px 14px; border: 1px dashed var(--ui-border); border-radius: 8px; color: var(--ui-text-muted); font-size: 12px; }
+.channel-withdrawn-icon { flex: none; width: 14px; height: 14px; color: var(--ui-text-dimmed); }
+.channel-withdrawn strong { flex: none; font-weight: 500; color: var(--ui-text-toned); }
+.channel-withdrawn-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.channel-withdrawn button { flex: none; font-size: 12px !important; font-weight: 400; padding: 0 !important; }
+@media (min-width: 701px) { .channel-withdrawn { margin-right: var(--message-inset-end); } }
+@media (max-width: 767px) { .channel-withdrawn { margin: 0 8px 12px; } }
+/* Editing replaces the message text in place; the note says what sending it takes back. */
+.channel-edit { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.channel-edit textarea { width: 100%; min-height: 72px; padding: 8px 10px; border: 1px solid var(--ui-border-accented); border-radius: 6px; background: transparent; color: inherit; font: inherit; font-size: 15px; line-height: 1.6; resize: vertical; }
+.channel-edit textarea:focus { outline: 2px solid var(--channel-accent); outline-offset: -1px; }
+.channel-edit-note { margin: 0; color: var(--ui-text-muted); font-size: 12px; line-height: 1.7; }
+.channel-edit-note.is-error { color: var(--ui-error); }
+.channel-edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.channel-message-actions:has(> .channel-message-toolbar > :nth-child(3)) { width: 96px; }
 .channel-schedule-actions { display: inline-flex; gap: 2px; }
 .channel-schedule-rate { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--ui-text-dimmed); cursor: pointer; }
 .channel-schedule-rate [class*="icon"] { width: 13px; height: 13px; }
