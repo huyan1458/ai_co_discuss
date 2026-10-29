@@ -8,7 +8,6 @@ const topic_expanded = ref(false);
 const topic_body = ref(null);
 const topic_overflows = ref(false);
 const room = computed(() => view.value.room);
-const free = computed(() => room.value?.mode === "free");
 /** The channel's purpose; old rooms without a user request fall back to background. */
 const topic = computed(() => {
   const value = room.value || {};
@@ -42,8 +41,6 @@ defineExpose({ measure });
     <UButton v-if="topic_overflows || topic_expanded" :label="topic_expanded ? '收起' : '展开全文'" :trailing-icon="topic_expanded ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" variant="link" color="neutral" size="xs" class="channel-answer-toggle" @click="topic_expanded = !topic_expanded" />
     <div v-if="room.parent_room" class="channel-topic-section"><h3>来源</h3><p class="channel-topic-text">从自由协作「<button type="button" class="channel-link-button" @click="act('room', room.parent_room.id)">{{ room.parent_room.title }}</button>」发起<template v-if="room.phase === 'concluded'"> · <button type="button" class="channel-link-button" @click="act('return_conclusion')">把结论发回</button></template></p></div>
     <div class="channel-topic-section channel-topic-config"><h3>参与配置</h3><div class="channel-topic-people">
-      <span v-for="person in topic.experts" :key="person.name" class="channel-topic-person"><UAvatar :src="bridge.identities[person.name]?.icon" :text="bridge.identities[person.name]?.initials" :alt="person.name" size="2xs" class="channel-avatar" :class="bridge.identities[person.name]?.style" />{{ bridge.display_name(person.name) }}<small>{{ person.name === topic.host ? `主持 · ${person.mode}` : person.mode }}</small></span>
-      <span v-if="free || topic.host === '用户'" class="channel-topic-person">{{ bridge.display_name('用户') }}<small>{{ free ? '需求方' : '主持' }}</small></span>
-    </div><small class="channel-topic-bounds">{{ topic.bounds }}</small></div>
+      <span v-for="person in topic.experts" :key="person.name" class="channel-topic-person"><UAvatar :src="bridge.identities[person.name]?.icon" :text="bridge.identities[person.name]?.initials" :alt="person.name" size="2xs" class="channel-avatar" :class="bridge.identities[person.name]?.style" />{{ bridge.display_name(person.name) }}<small>{{ person.name === topic.host ? `主持 · ${person.mode}` : person.mode }}</small></span>    </div><small class="channel-topic-bounds">{{ topic.bounds }}</small></div>
   </section>
 </template>
