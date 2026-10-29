@@ -476,15 +476,19 @@ async function claude_delivery(config, binding, task, spawn_process = spawn) {
 }
 
 /** Build a per-invocation profile without inheriting a user's custom profile of the same name. */
-export function codex_permissions(config, task) {
+export function codex_permissions(config, task, platform = process.platform) {
   const name = `codiscuss-${randomUUID()}`;
   const base = project_directory(config) && config.project_access === 'write' ? ':workspace' : ':read-only';
-  const filesystem = { ':root': 'read', [resolve(task.directory).replaceAll('\\', '/')]: 'read',
-    [resolve(task.draft_directory).replaceAll('\\', '/')]: 'write' };
+  const drafts = resolve(task.draft_directory).replaceAll('\\', '/');
+  const filesystem = { ':root': 'read', [resolve(task.directory).replaceAll('\\', '/')]: 'read', [drafts]: 'write' };
   const rules = Object.entries(filesystem).map(([path, access]) => `${JSON.stringify(path)}=${JSON.stringify(access)}`).join(',');
   const profile = `{extends=${JSON.stringify(base)},filesystem={${rules}},network={enabled=true}}`;
+  // The Windows sandbox account cannot write the user's TEMP, so PowerShell starts in ConstrainedLanguage and Codex's
+  // UTF-8 output setup fails silently, garbling Chinese; a TEMP inside the writable drafts keeps FullLanguage.
+  const temp = platform === 'win32' ? ['-c', `shell_environment_policy.set.TEMP=${JSON.stringify(drafts)}`,
+    '-c', `shell_environment_policy.set.TMP=${JSON.stringify(drafts)}`] : [];
   return { name, args: ['-c', `default_permissions=${JSON.stringify(name)}`, '-c', `permissions.${name}=${profile}`,
-    '-c', 'approval_policy="never"'] };
+    '-c', 'approval_policy="never"', ...temp] };
 }
 
 /** Read effective Codex config through its local CLI; no thread or model is started. */

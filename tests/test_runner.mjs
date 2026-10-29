@@ -695,7 +695,11 @@ test(`${adapter} starts headlessly, binds emitted identity and preserves UTF-8 p
     assert.ok(call.args.includes('--skip-git-repo-check')); assert.equal(call.args.at(-1), '-');
     assert.equal(readFileSync(join(f.task.draft_directory, 'stdin.txt'), 'utf8'), f.task.prompt);
     const overrides = call.args.filter((arg, index) => call.args[index - 1] === '-c');
-    assert.equal(overrides.length, 3); assert.equal(overrides[2], 'approval_policy="never"');
+    assert.equal(overrides[2], 'approval_policy="never"');
+    // On Windows the sandbox's TEMP moves into the writable drafts, so PowerShell keeps FullLanguage and UTF-8 output.
+    const drafts = JSON.stringify(resolve(f.task.draft_directory).replaceAll('\\', '/'));
+    assert.deepEqual(overrides.slice(3), process.platform === 'win32'
+      ? [`shell_environment_policy.set.TEMP=${drafts}`, `shell_environment_policy.set.TMP=${drafts}`] : []);
     assert.match(overrides[1], /extends=":read-only"/); assert.match(overrides[1], /network=\{enabled=true\}/);
     assert.ok(overrides[1].includes(`${JSON.stringify(f.directory.replaceAll('\\', '/'))}="read"`));
     assert.ok(overrides[1].includes(`${JSON.stringify(f.task.draft_directory.replaceAll('\\', '/'))}="write"`));
@@ -1888,6 +1892,9 @@ test('a free room delivers all open requests as one execution with the member cr
   assert.deepEqual(task.request_messages, [11, 12]);
   assert.equal(task.read_after, 10);
   assert.match(delivered[0].prompt, /--execution 1/);
+  // Free rooms get the same Windows read rule as discussions; it sits in the prompt, since reading the task file may garble it.
+  const has_rg = process.platform === 'win32' && spawnSync('rg', ['--version'], { stdio: 'ignore' }).status === 0;
+  assert.equal(/rg --encoding utf-8/.test(delivered[0].prompt), has_rg);
   const access = JSON.parse(readFileSync(delivered[0].access_path, 'utf8'));
   assert.equal(access.token, config.members.Claude.token);
   assert.doesNotMatch(readFileSync(delivered[0].access_path, 'utf8') + readFileSync(join(config.directory, 'free-1.task.json'), 'utf8'), /owner-credential/);

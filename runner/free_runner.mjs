@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { agy_command_rule, atomic_json, deliver_task, SegmentLog, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
-import { api, CODEX_ADAPTERS } from './discussion_runner.mjs';
+import { api, CODEX_ADAPTERS, read_rule } from './discussion_runner.mjs';
 import { with_expert_prompt } from './expert_prompts.mjs';
 import { ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, decide_group_order, route_free_message } from './scheduler.mjs';
 
@@ -89,7 +89,7 @@ export function free_task_files(config, member, execution, binding) {
     cli, subcommands: TASK_SUBCOMMANDS,
     ...(bound_access ? { access_env: 'DISCUSS_ACCESS_FILE' } : { access_file: access_path }),
     instructions: `${agy_command_rule(profile.adapter, cli)}${discussion ? '讨论房间：用户直接向你提问（' + messages + '）。这不是你的发言安排，不要领取发言权、不要安排他人，也不改变讨论进度，只回答这个提问。' : '自由协作房间：用户点名了你（' + messages + '）。'}${access_rule}先用 ${cli} message list ${config.room} --after ${execution.read_until}${access_arg} 读取新消息，按时间顺序处理，后面的消息可能修正前面的，以最新指令为准。${host_rule}完成后用 ${cli} message post ${config.room} --as ${member.name} --kind chat --execution ${execution.id} --body-file 草稿 --submission-id 新UUID${access_arg} 提交一次回答。提交被拒绝说明本次执行已被打断或过期：保留草稿并结束，不要去掉 --execution 改作普通发言。草稿只写入 draft_directory；${project_rule}不读取或打印凭据内容，不建定时任务。` });
-  const prompt = `用户在${discussion ? '讨论' : '自由协作'}房间点名了你（${member.name}），对应消息 ${messages}。请先读取任务文件：${task_path}，按其中说明读取新消息、完成请求，并用 ${cli} message post 带 --execution ${execution.id} 提交一次回答后结束。命令只用任务内 subcommands 列出的 ${cli} 子命令；${project_rule}不读取凭据内容。`;
+  const prompt = `用户在${discussion ? '讨论' : '自由协作'}房间点名了你（${member.name}），对应消息 ${messages}。请先读取任务文件：${task_path}，按其中说明读取新消息、完成请求，并用 ${cli} message post 带 --execution ${execution.id} 提交一次回答后结束。命令只用任务内 subcommands 列出的 ${cli} 子命令；${project_rule}不读取凭据内容。${read_rule()}`;
   return { id, participant: member.name, directory: config.directory, draft_directory,
     skills_directory: join(config.project, '.agents', 'skills'), access_path, prompt: with_expert_prompt(prompt, profile) };
 }
