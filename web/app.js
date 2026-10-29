@@ -2140,6 +2140,21 @@ function participant_files(name, room, saved) {
   return profile.project_access === "write" ? "可写" : "只读";
 }
 
+/**
+ * What a borrowed session means for its original window, shown when hovering "借用会话". The Apps take each task in
+ * their own chat, and a taken-over Claude member gets it in its open window, so only a background resume shares nothing.
+ */
+function participant_session_hint(name, room, saved) {
+  const member = (room?.members || []).find(item => item.name === name);
+  if (member?.access !== "runner" || member.session_mode !== "borrowed") return undefined;
+  if (["codex", "antigravity"].includes(member.adapter)) return "续接你已有的 App 会话：任务直接送进 App 里的这个会话，可在其中查看";
+  const profile = saved?.room_id === room.id ? saved.participants?.[name] : null;
+  if (member.adapter === "claude" && profile?.project_access === "own") {
+    return "续接你自己的会话：原窗口开着时任务直接送进该窗口；窗口关闭时改在后台续接，期间不要重新打开该会话";
+  }
+  return "续接你已有的会话；它工作时请不要在原窗口继续操作";
+}
+
 /** Label how a member answers: the registered adapter says API / App; other locally woken members are CLI. */
 function participant_access(name, room) {
   const member = (room?.members || []).find(item => item.name === name);
@@ -3886,7 +3901,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form },
   request: request_json, rewind_plan, identities: IDENTITIES, display_name, sources: SOURCE_LABELS, phases: PHASE_LABELS,
-  set_member_access, set_member_adapter, reload_room_models, runtime_label, execution_label, limits_label, stop_reason_label, participant_model, participant_files, participant_access, can_retry_execution,
+  set_member_access, set_member_adapter, reload_room_models, runtime_label, execution_label, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access, can_retry_execution,
   turns: TURN_LABELS, turn_label, turn_guidance, progress_round, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();

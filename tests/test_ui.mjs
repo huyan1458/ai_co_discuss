@@ -2302,6 +2302,18 @@ test("participant files show 只读 / 可写 only where the site decides them", 
   assert.equal(files('Codex', room, null), '', 'unread settings are not guessed');
 });
 
+test("a borrowed session's hover says whether its original window shows the room's tasks", () => {
+  const hint = theme_fixture().context.participant_session_hint;
+  const room = { id: 'one', members: [{ name: 'Claude', access: 'runner', session_mode: 'borrowed', adapter: 'claude' },
+    { name: 'Claude-2', access: 'runner', session_mode: 'borrowed', adapter: 'claude' }, { name: 'Codex', access: 'runner', session_mode: 'borrowed', adapter: 'codex' },
+    { name: 'Gemini', access: 'runner', session_mode: 'borrowed', adapter: 'antigravity_cli' }, { name: 'New', access: 'runner', session_mode: 'new', adapter: 'claude' }] };
+  const saved = { room_id: 'one', participants: { Claude: { adapter: 'claude', project_access: 'own' }, 'Claude-2': { adapter: 'claude', project_access: 'read' } } };
+  assert.match(hint('Claude', room, saved), /原窗口开着时任务直接送进该窗口/, 'a taken-over Claude member works in its open window');
+  assert.match(hint('Codex', room, saved), /App 里的这个会话/);
+  for (const name of ['Claude-2', 'Gemini']) assert.match(hint(name, room, saved), /不要在原窗口继续操作/, `${name} resumes in the background`);
+  assert.equal(hint('New', room, saved), undefined);
+});
+
 test("empty automatic discussions describe their actual state instead of requiring another message", () => {
   const message = theme_fixture().context.empty_discussion_message;
   for (const [status, pattern] of [['ready', /尚未启动/], ['running', /等待 AI 执行/], ['paused', /已暂停/], ['stopped', /已停止/]]) {
