@@ -339,8 +339,8 @@ function new_submission_id() {
   return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
 }
 
-/** Resolve a UI label without changing stored identity values. */
-function display_name(name) { return IDENTITIES[name]?.label || name; }
+/** Resolve a UI label without changing stored identity values; the open room's member labels come first. */
+function display_name(name) { return state.room?.labels?.[name] || IDENTITIES[name]?.label || name; }
 
 /** Render an identity avatar from a local SVG. */
 function identity_avatar(identity) {
@@ -1068,6 +1068,8 @@ function finish_member_request(room_id, token, record, result) {
 // room being created or the member being invited.
 const DESCRIPTION_TEMPLATE_PREFIX = "discuss-description-template:";
 const description_drafts = {};
+// A display label a card brings from a named preset; the room keeps it so screens show it instead of the instance name.
+const label_drafts = {};
 
 /** Templates this browser kept before they moved to the local service, by platform. */
 function browser_description_templates() {
@@ -1140,7 +1142,26 @@ function apply_expert_preset(name, preset) {
   for (const field of ["model", "effort", "system_prompt"]) if (Object.hasOwn(preset, field)) profile[field] = preset[field];
   state.launch.profiles[name] = profile;
   description_drafts[name] = preset.description || "";
+  // A second copy of a preset keeps the number its instance name got: 评审官 → 评审官2.
+  if (preset.label) label_drafts[name] = preset.label + name.slice(preset.name.length);
   publish_view();
+}
+
+/** The name a card shows: its preset label, else the room's or platform's display name. */
+function member_label(name) {
+  return label_drafts[name] || display_name(name);
+}
+
+/** The instance a preset of this platform is saved under for a free name: the name itself when it is already one, else platform-name. */
+function preset_identity(name, label) {
+  const platform = platform_of(name), text = label.trim();
+  if (platform_of(text) === platform) return text;
+  const suffix = Array.from(text.replace(/[^0-9A-Za-z_一-鿿]/g, "")).slice(0, 16).join("");
+  if (suffix) return `${platform}-${suffix}`;
+  const taken = new Set(expert_presets().map(preset => preset.name));
+  let number = 1;
+  while (taken.has(`${platform}-预设${number}`)) number++;
+  return `${platform}-预设${number}`;
 }
 
 /** Add a preset to the new-room draft under a free name. */
@@ -1151,14 +1172,16 @@ function add_preset_instance(container_id, preset, value) {
   return name;
 }
 
-/** Save one card as the user's preset under its name, replacing an earlier preset of that name. */
-async function save_expert_preset(name) {
+/** Save one card as the user's preset, under a new display label or, without one, updating the preset of its own name. */
+async function save_expert_preset(name, label) {
   const profile = state.launch.profiles[name] || {};
-  const preset = { name, description: description_draft(name).trim(), project_access: profile.project_access || "read" };
+  const id = label === undefined ? name : preset_identity(name, label);
+  const shown = label === undefined ? expert_presets().find(item => item.name === name)?.label || "" : label.trim();
+  const preset = { name: id, ...shown && shown !== id ? { label: shown } : {}, description: description_draft(name).trim(), project_access: profile.project_access || "read" };
   for (const field of ["model", "effort", "system_prompt"]) if (Object.hasOwn(profile, field) && profile[field] !== "") preset[field] = profile[field];
   try {
-    await save_presets({ presets: [...state.launch.presets.filter(item => item.name !== name), preset] });
-    show_toast(`已存为预设「${name}」`);
+    await save_presets({ presets: [...state.launch.presets.filter(item => item.name !== id), preset] });
+    show_toast(`已存为预设「${preset.label || id}」`);
   } catch (error) { show_toast(`预设未保存：${error.message}`, true); }
 }
 
@@ -1187,6 +1210,14 @@ async function send_descriptions(room_id, token, descriptions) {
   if (!room_id || !token || !Object.keys(filled).length) return;
   try { await request_json(`/api/rooms/${room_id}/descriptions`, { descriptions: filled }, token); }
   catch (error) { state.free_notice = `成员描述未保存：${error.message}，可在发言顺序的成员菜单里重新填写。`; }
+}
+
+/** Save display labels by member name with the room credential; a failure leaves the members under their names. */
+async function send_labels(room_id, token, labels) {
+  const filled = Object.fromEntries(Object.entries(labels).filter(([, text]) => text?.trim()));
+  if (!room_id || !token || !Object.keys(filled).length) return;
+  try { await request_json(`/api/rooms/${room_id}/labels`, { labels: filled }, token); }
+  catch (error) { state.free_notice = `成员显示名未保存：${error.message}，房间里按成员名显示。`; }
 }
 
 /** Save the new room's round limit with the room credential; a failure leaves the room on the default. */
@@ -1308,7 +1339,9 @@ async function invite_member({ name, access, project_access = "read", session_id
     } else result = await request_json(`/api/rooms/${room_id}/members`, record.member);
     finish_member_request(room_id, token, record, result);
     await send_descriptions(room_id, token, { [record.member.name]: description_draft(name) });
+    await send_labels(room_id, token, { [record.member.name]: label_drafts[name] });
     delete description_drafts[name];
+    delete label_drafts[name];
     if (state.room?.id === room_id) {
       state.free_notice = access === "online" ? `${record.member.name} 已加入，阅读通知与真实回答由你或授权主持人转交。`
         // A manual member's start step lives on the board row, the composer bar and the invite dialog; no extra notice.
@@ -1903,7 +1936,8 @@ async function submit_local_launch(input, title, direct = false, signature) {
     refresh_launch_recoveries();
     const names = [...(record.input.room?.members || []).map(member => member.name), ...Object.keys(result.room?.experts || {})];
     await send_descriptions(result.room?.id, record.input.token, Object.fromEntries(names.map(name => [name, description_draft(name)])));
-    for (const name of names) delete description_drafts[name];
+    await send_labels(result.room?.id, record.input.token, Object.fromEntries(names.map(name => [name, label_drafts[name]])));
+    for (const name of names) { delete description_drafts[name]; delete label_drafts[name]; }
     await send_chain_rounds(result.room?.id, record.input.token, state.create_chain_rounds);
     return result;
   } catch (error) {
@@ -3839,7 +3873,7 @@ function change_view_theme(theme) {
 }
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
-  write_launch: write_launch_field, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
+  write_launch: write_launch_field, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
   launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, launch_can_bind_session, pick_launch_directory, browse_local_directory, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,

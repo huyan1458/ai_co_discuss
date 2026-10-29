@@ -418,6 +418,7 @@ async function require_room(database, room_id) {
     result.free = await free_view(database, room_id);
   }
   result.descriptions = await member_descriptions(database, room_id);
+  result.labels = await member_labels(database, room_id);
   result.withdrawals = await message_withdrawals(database, room_id);
   result.speaking_order = await speaking_order(database, result);
   return result;
@@ -916,7 +917,7 @@ async function manage_room(database, room_id, action, payload) {
   } else if (action === "delete") {
     if (payload.confirm_title !== room.title) throw new HttpError(400, "请输入完整房间名称确认删除");
     const queries = [
-      "DELETE FROM member_recommendations WHERE room_id=?", "DELETE FROM free_queue WHERE room_id=?", "DELETE FROM speaking_orders WHERE room_id=?", "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_descriptions WHERE room_id=?", "DELETE FROM execution_notes WHERE room_id=?", "DELETE FROM execution_segments WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?", "DELETE FROM member_sessions WHERE room_id=?", "DELETE FROM member_registrations WHERE room_id=?",
+      "DELETE FROM member_recommendations WHERE room_id=?", "DELETE FROM free_queue WHERE room_id=?", "DELETE FROM speaking_orders WHERE room_id=?", "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_descriptions WHERE room_id=?", "DELETE FROM member_labels WHERE room_id=?", "DELETE FROM execution_notes WHERE room_id=?", "DELETE FROM execution_segments WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?", "DELETE FROM member_sessions WHERE room_id=?", "DELETE FROM member_registrations WHERE room_id=?",
       "DELETE FROM room_members WHERE room_id=?", "DELETE FROM room_modes WHERE room_id=?",
       "DELETE FROM free_batches WHERE room_id=?", "DELETE FROM free_chains WHERE room_id=?", "DELETE FROM free_handoffs WHERE room_id=?", "DELETE FROM free_settings WHERE room_id=?", "DELETE FROM free_round_limits WHERE room_id=?", "DELETE FROM free_chain_holds WHERE room_id=?", "DELETE FROM room_links WHERE room_id=?",
       "DELETE FROM discussion_options WHERE room_id=?",
@@ -2127,6 +2128,8 @@ const TIMELINE_NOTES_SQL = `SELECT execution_id,created_at FROM execution_notes
     WHERE room_id=?1 AND execution_id IN (${TIMELINE_FREE_IDS}) ORDER BY execution_id,seq`;
 // A member description is a short note for the scheduler and the host, keyed by the member's name.
 const MAX_MEMBER_DESCRIPTION = 500;
+// A display label replaces the member's name on screen only; the name stays the member's identity everywhere else.
+const MAX_MEMBER_LABEL = 32;
 const MAX_MEMBER_NAME = 80;
 const FREE_LIVE = "status IN ('dispatched','started')";
 // Rounds a host may run from one owner message by default (a round: one host dispatch, its members' answers and the
@@ -3035,6 +3038,28 @@ async function describe_members(database, room_id, token, payload) {
   return { descriptions: await member_descriptions(database, room_id) };
 }
 
+/** The owner's display labels of members by name; only screens use them, never addressing or credentials. */
+async function member_labels(database, room_id) {
+  const rows = (await database.prepare("SELECT name,label FROM member_labels WHERE room_id=? ORDER BY name").bind(room_id).all()).results;
+  return Object.fromEntries(rows.map(row => [row.name, row.label]));
+}
+
+/** Owner sets members' display labels by name; an empty text removes that member's label. */
+async function label_members(database, room_id, token, payload) {
+  await require_free_owner(database, room_id, token);
+  const labels = payload.labels;
+  const entries = labels && typeof labels === "object" && !Array.isArray(labels) ? Object.entries(labels) : [];
+  if (!entries.length || entries.length > MAX_ROOM_AGENTS || entries.some(([name, text]) => !name || name.length > MAX_MEMBER_NAME
+    || typeof text !== "string" || text.trim().length > MAX_MEMBER_LABEL)) {
+    throw new HttpError(400, `labels 须为 {成员名: 显示名}，最多 ${MAX_ROOM_AGENTS} 位，每个最多 ${MAX_MEMBER_LABEL} 字`);
+  }
+  await database.batch(entries.map(([name, text]) => text.trim()
+    ? database.prepare(`INSERT INTO member_labels (room_id,name,label,updated_at) VALUES (?,?,?,unixepoch())
+      ON CONFLICT(room_id,name) DO UPDATE SET label=excluded.label,updated_at=excluded.updated_at`).bind(room_id, name, text.trim())
+    : database.prepare("DELETE FROM member_labels WHERE room_id=? AND name=?").bind(room_id, name)));
+  return { labels: await member_labels(database, room_id) };
+}
+
 /** Read one execution's progress notes in order, with the same access as the room view. */
 async function free_execution_notes(database, room_id, execution_id) {
   if (!await database.prepare("SELECT 1 FROM member_executions WHERE room_id=? AND id=?").bind(room_id, execution_id).first()) throw new HttpError(404, "执行不存在");
@@ -3853,6 +3878,7 @@ async function handle_api(database, request, parts, params, bucket, setup_key = 
     return respond(body.action === "start" ? await start_discussion(database, room_id, token, body) : await end_discussion(database, room_id, token));
   }
   if (parts[3] === "descriptions" && parts.length === 4 && method === "POST") return respond(await describe_members(database, room_id, request.headers.get("X-Discussion-Token") ?? "", await read_payload(request)));
+  if (parts[3] === "labels" && parts.length === 4 && method === "POST") return respond(await label_members(database, room_id, request.headers.get("X-Discussion-Token") ?? "", await read_payload(request)));
   if (parts[3] === "chains" && parts.length === 5 && method === "POST") return respond(await free_continue_chain(database, room_id, request.headers.get("X-Discussion-Token") ?? "", integer(parts[4]), await read_payload(request)));
   if (parts[3] === "budget" && parts.length === 4 && method === "POST") return respond(await set_chain_rounds(database, room_id, request.headers.get("X-Discussion-Token") ?? "", await read_payload(request)));
   if (parts[3] === "timeline" && parts.length === 4 && method === "GET") return respond(await execution_timeline(database, room_id, params.after));

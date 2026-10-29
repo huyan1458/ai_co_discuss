@@ -331,7 +331,9 @@ export function save_launch_projects(home, input) {
 const MAX_EXPERT_PRESETS = 30;
 const MAX_PRESET_DESCRIPTION = 500;
 const MAX_PRESET_FIELD = 200;
-const PRESET_FIELDS = ['name', 'description', 'system_prompt', 'project_access', 'model', 'effort'];
+// name is the instance a preset adds (platform-suffix); label is the free name shown for it, on the add row and in the room.
+const PRESET_FIELDS = ['name', 'label', 'description', 'system_prompt', 'project_access', 'model', 'effort'];
+const MAX_PRESET_LABEL = 32;
 
 /** The user's expert presets and per-platform default descriptions saved on this computer, plus the built-in presets. */
 export function expert_presets(home) {
@@ -348,11 +350,12 @@ export function save_expert_presets(home, input) {
   if (!Array.isArray(presets) || presets.length > MAX_EXPERT_PRESETS) throw new Error(`presets 必须为列表，最多 ${MAX_EXPERT_PRESETS} 个`);
   const names = new Set();
   for (const preset of presets) {
-    if (!preset || typeof preset !== 'object' || Object.keys(preset).some(key => !PRESET_FIELDS.includes(key))) throw new Error('预设只能包含名称、描述、提示词、项目权限、模型与强度');
+    if (!preset || typeof preset !== 'object' || Object.keys(preset).some(key => !PRESET_FIELDS.includes(key))) throw new Error('预设只能包含名称、显示名、描述、提示词、项目权限、模型与强度');
     if (!platform_of(preset.name) || !clients_of(preset.name)) throw new Error(`预设名称须为“平台名”或“平台名-后缀”：${preset.name}`);
     if (names.has(preset.name)) throw new Error(`预设名称重复：${preset.name}`);
     names.add(preset.name);
     if (Object.values(preset).some(value => typeof value !== 'string')) throw new Error(`${preset.name} 的字段必须为文本`);
+    if ((preset.label || '').trim().length > MAX_PRESET_LABEL) throw new Error(`${preset.name} 的显示名最多 ${MAX_PRESET_LABEL} 字`);
     if ((preset.description || '').length > MAX_PRESET_DESCRIPTION) throw new Error(`${preset.name} 的描述最多 ${MAX_PRESET_DESCRIPTION} 字`);
     if ((preset.system_prompt || '').length > MAX_EXPERT_PROMPT) throw new Error(`${preset.name} 的提示词最多 ${MAX_EXPERT_PROMPT} 字`);
     if (preset.project_access && !['read', 'write'].includes(preset.project_access)) throw new Error(`${preset.name} 的项目权限须为 read 或 write`);

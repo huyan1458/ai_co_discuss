@@ -122,8 +122,8 @@ async function invite() {
             <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="3xs" class="channel-avatar" :class="bridge.identities[name]?.style" />{{ name }}
           </button>
           <span v-if="invite_presets.length" class="pb-invite-break" aria-hidden="true" /><span v-if="invite_presets.length" class="pb-invite-label">预设</span>
-          <button v-for="preset in invite_presets" :key="`preset:${preset.name}`" type="button" :title="preset.description || '专家预设'" :aria-label="`添加预设 ${preset.name}`" @click="add_invite_preset(preset)">
-            <UAvatar :src="bridge.identities[bridge.platform_of(preset.name)]?.icon" :text="bridge.identities[bridge.platform_of(preset.name)]?.initials" :alt="preset.name" size="3xs" class="channel-avatar" :class="bridge.identities[bridge.platform_of(preset.name)]?.style" />{{ preset.name }}
+          <button v-for="preset in invite_presets" :key="`preset:${preset.name}`" type="button" :title="preset.description || '专家预设'" :aria-label="`添加预设 ${preset.label || preset.name}`" @click="add_invite_preset(preset)">
+            <UAvatar :src="bridge.identities[bridge.platform_of(preset.name)]?.icon" :text="bridge.identities[bridge.platform_of(preset.name)]?.initials" :alt="preset.name" size="3xs" class="channel-avatar" :class="bridge.identities[bridge.platform_of(preset.name)]?.style" />{{ preset.label || preset.name }}
           </button>
         </div>
         <div v-if="invite_picks.length" class="pb-invite-cards">

@@ -550,6 +550,14 @@ CREATE TABLE IF NOT EXISTS member_descriptions (
     updated_at INTEGER NOT NULL,
     PRIMARY KEY(room_id,name)
 );
+-- Display labels the owner gave members (e.g. from a named preset); screens show them, the name stays the identity.
+CREATE TABLE IF NOT EXISTS member_labels (
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    label TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(room_id,name)
+);
 -- Progress notes the runner saw a member's software write between tool calls; numbered per execution so a retried renewal adds nothing.
 CREATE TABLE IF NOT EXISTS execution_notes (
     execution_id INTEGER NOT NULL REFERENCES member_executions(id) ON DELETE CASCADE,

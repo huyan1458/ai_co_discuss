@@ -1305,6 +1305,12 @@ test('Worker free rooms keep runner lifecycle, membership and manual members con
   assert.deepEqual((await f.request(r.path)).body.descriptions, { Claude: '审美好', Codex: '代码写得好' });
   assert.equal((await f.request(`${r.path}/descriptions`, { descriptions: { Claude: 'x'.repeat(501) } }, r.owner)).status, 400);
   assert.deepEqual((await f.request(`${r.path}/descriptions`, { descriptions: { Codex: '' } }, r.owner)).body.descriptions, { Claude: '审美好' });
+  // Display labels follow the same owner-only, empty-removes rule; the member's name stays its identity.
+  assert.equal((await f.request(`${r.path}/labels`, { labels: { Claude: '评审官' } }, codex)).status, 403);
+  assert.deepEqual((await f.request(`${r.path}/labels`, { labels: { Claude: ' 评审官 ' } }, r.owner)).body.labels, { Claude: '评审官' });
+  assert.deepEqual((await f.request(r.path)).body.labels, { Claude: '评审官' });
+  assert.equal((await f.request(`${r.path}/labels`, { labels: { Claude: 'x'.repeat(33) } }, r.owner)).status, 400);
+  assert.deepEqual((await f.request(`${r.path}/labels`, { labels: { Claude: '' } }, r.owner)).body.labels, {});
   const notes = [{ seq: 1, text: '读完材料' }, { seq: 2, text: '开始验证' }];
   for (let index = 0; index < 2; index++) assert.equal((await f.request(`${r.path}/executions/${retry.id}`, { action: 'renew', notes }, r.owner)).status, 200);
   assert.equal((await f.request(r.path)).body.free.members.find(item => item.name === 'Claude').execution.notes, 2);

@@ -28,7 +28,7 @@ from .free_room import (add_member, after_free_message, authorize_free_write, ch
                         discussion_members, room_mode, save_room_access, sync_discussion_members, view_execution)
 from .free_room import add_discussion_member, convert_suggestion, discussion_member_action, message_suggestions, save_suggestions, sync_participants
 from .free_room import active_members, adopt_recommendation, ask_members, asks_view, checked_asks, recommend_member, register_member, route_held_messages
-from .free_room import describe_members, execution_notes, member_descriptions, reorder_speakers, set_chain_rounds, speaking_order, stop_room_work
+from .free_room import describe_members, execution_notes, label_members, member_descriptions, member_labels, reorder_speakers, set_chain_rounds, speaking_order, stop_room_work
 from .free_room import continue_chain, execution_timeline, retract_message, rewind_plan, rewind_room, withdrawals
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, is_ai, is_participant
 from .room_import import import_room, imported_attachment
@@ -278,6 +278,7 @@ def require_room(connection, room_id):
         room["held_since"] = 0
         room["free"] = free_view(connection, room_id)
     room["descriptions"] = member_descriptions(connection, room_id)
+    room["labels"] = member_labels(connection, room_id)
     room["withdrawals"] = withdrawals(connection, room_id)
     room["speaking_order"] = speaking_order(connection, room)
     return room
@@ -677,7 +678,7 @@ def manage_room(connection, room_id, action, payload):
 
 def delete_room_records(connection, room_id):
     """Remove a room's dependent records in the caller's transaction."""
-    for table in ("member_recommendations", "free_queue", "speaking_orders", "member_requests", "member_descriptions", "execution_notes", "execution_segments", "member_executions", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "free_handoffs", "free_settings", "free_round_limits", "free_chain_holds", "room_links",
+    for table in ("member_recommendations", "free_queue", "speaking_orders", "member_requests", "member_descriptions", "member_labels", "execution_notes", "execution_segments", "member_executions", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "free_handoffs", "free_settings", "free_round_limits", "free_chain_holds", "room_links",
                   "discussion_options", "round_budgets", "scheduler_decisions", "scheduler_routing", "discussion_conclusions", "discussion_sessions"):
         if table == "scheduler_decisions":
             for child in ("scheduler_feedback", "scheduler_decision_context", "scheduler_decision_inputs"):
@@ -2080,6 +2081,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.respond(result)
         if parts[3:] == ["descriptions"] and method == "POST":
             result = describe_members(connection, room_id, token, self.read_payload())
+            connection.commit()
+            return self.respond(result)
+        if parts[3:] == ["labels"] and method == "POST":
+            result = label_members(connection, room_id, token, self.read_payload())
             connection.commit()
             return self.respond(result)
         if parts[3:] == ["budget"] and method == "POST":

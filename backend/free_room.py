@@ -72,6 +72,8 @@ MAX_NOTE_LENGTH = 500
 MAX_NOTES_PER_RENEW = 10
 # A member description is a short note for the scheduler and the host, keyed by the member's name.
 MAX_MEMBER_DESCRIPTION = 500
+# A display label replaces the member's name on screen only; the name stays the member's identity everywhere else.
+MAX_MEMBER_LABEL = 32
 MAX_MEMBER_NAME = 80
 MAX_PATH_LENGTH = 500
 ACTIVE = ("dispatched", "started")
@@ -266,6 +268,31 @@ def describe_members(connection, room_id, token, payload):
             connection.execute("DELETE FROM member_descriptions WHERE room_id=? AND name=?", (room_id, name))
     return {"descriptions": member_descriptions(connection, room_id)}
 
+
+def member_labels(connection, room_id):
+    """The owner's display labels of members by name; only screens use them, never addressing or credentials."""
+    return {row["name"]: row["label"] for row in connection.execute(
+        "SELECT name,label FROM member_labels WHERE room_id=? ORDER BY name", (room_id,))}
+
+
+def label_members(connection, room_id, token, payload):
+    """Owner sets members' display labels by name; an empty text removes that member's label."""
+    require_owner(connection, room_id, token)
+    labels = payload.get("labels")
+    if (not isinstance(labels, dict) or not labels or len(labels) > MAX_ROOM_AGENTS
+            or any(not isinstance(name, str) or not 0 < len(name) <= MAX_MEMBER_NAME or not isinstance(text, str)
+                   or len(text.strip()) > MAX_MEMBER_LABEL for name, text in labels.items())):
+        raise ValueError(f"labels 须为 {{成员名: 显示名}}，最多 {MAX_ROOM_AGENTS} 位，每个最多 {MAX_MEMBER_LABEL} 字")
+    begin_write(connection)
+    now = int(time.time())
+    for name, text in labels.items():
+        if text.strip():
+            connection.execute("""INSERT INTO member_labels (room_id,name,label,updated_at) VALUES (?,?,?,?)
+                ON CONFLICT(room_id,name) DO UPDATE SET label=excluded.label,updated_at=excluded.updated_at""",
+                               (room_id, name, text.strip(), now))
+        else:
+            connection.execute("DELETE FROM member_labels WHERE room_id=? AND name=?", (room_id, name))
+    return {"labels": member_labels(connection, room_id)}
 
 def note_count(connection, execution_id):
     """How many progress notes an execution has; the texts are read separately so room views stay small."""

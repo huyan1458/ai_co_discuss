@@ -109,7 +109,7 @@ test('expert presets and default descriptions are saved on this computer beside 
   const empty = expert_presets(home);
   assert.deepEqual([empty.presets, empty.description_templates], [[], {}]);
   assert.deepEqual(empty.builtin_presets.map(item => [item.name, item.project_access]), [['Codex-评审', 'read'], ['Gemini-文档', 'write']]);
-  const preset = { name: 'Claude-前端', description: '改 UI', system_prompt: '先给结论', project_access: 'write', model: 'opus' };
+  const preset = { name: 'Claude-前端', label: '前端改版', description: '改 UI', system_prompt: '先给结论', project_access: 'write', model: 'opus' };
   save_expert_presets(home, { presets: [preset] });
   // Saving only the templates keeps the presets, and the other way round.
   const saved = save_expert_presets(home, { description_templates: { Codex: '代码写得好' } });
@@ -119,6 +119,7 @@ test('expert presets and default descriptions are saved on this computer beside 
   assert.throws(() => save_expert_presets(home, { presets: [preset, preset] }), /重复/);
   assert.throws(() => save_expert_presets(home, { presets: [{ name: 'Codex', session_id: 'x' }] }), /只能包含/);
   assert.throws(() => save_expert_presets(home, { presets: [{ name: 'Codex', project_access: 'all' }] }), /read 或 write/);
+  assert.throws(() => save_expert_presets(home, { presets: [{ name: 'Codex-评审', label: 'x'.repeat(33) }] }), /显示名/);
   assert.throws(() => save_expert_presets(home, { description_templates: { 'Codex-评审': 'x' } }), /平台名/);
   assert.deepEqual(expert_presets(home).presets, [preset]);
 });

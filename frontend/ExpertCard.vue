@@ -174,6 +174,31 @@ function save_description({ text, as_template }) {
 
 // A preset keeps this card's description, prompt, project access, model and effort under its name for later rooms.
 const own_preset = computed(() => view.value.launch.presets.some((preset) => preset.name === props.name));
+// A card not added from its own preset is saved under a name the user gives; the platform prefix is only a suggestion.
+const naming = ref(false), naming_draft = ref("");
+const naming_text = computed(() => naming_draft.value.trim());
+const naming_blank = computed(() => !naming_text.value || naming_text.value === `${bridge.platform_of(props.name)}-`);
+const naming_id = computed(() => view.value && !naming_blank.value ? bridge.preset_identity(props.name, naming_text.value) : "");
+const naming_note = computed(() => {
+  if (!naming_id.value) return "预设名称会显示在“预设”行和房间里，可以不带平台前缀。";
+  const existing = bridge.expert_presets().find((preset) => preset.name === naming_id.value);
+  const id_note = naming_id.value === naming_text.value ? "" : `成员 ID：${naming_id.value}`;
+  return [id_note, existing ? `将覆盖已有预设「${existing.label || existing.name}」` : ""].filter(Boolean).join(" · ") || "预设名称即成员 ID";
+});
+
+/** Update the card's own preset in place; any other card asks for a name first. */
+function save_preset() {
+  if (own_preset.value) return bridge.save_expert_preset(props.name);
+  naming_draft.value = `${bridge.platform_of(props.name)}-`;
+  naming.value = true;
+}
+
+/** Save under the typed name and close. */
+async function save_named_preset() {
+  if (naming_blank.value) return;
+  await bridge.save_expert_preset(props.name, naming_text.value);
+  naming.value = false;
+}
 
 // The expert prompt adds guidance for this member alone; its own text, even empty, replaces the software's preset.
 const prompt_preset = computed(() => EXPERT_PROMPT_PRESETS[profile.value.adapter] || "");
@@ -237,7 +262,7 @@ const FLOATING_SELECTOR = "[role='listbox'], [role='menu'], [data-reka-popper-co
 
 /** Clicking anywhere outside the open back keeps its edits and returns to the front. */
 function close_on_outside(event) {
-  if (prompt_open.value || describing.value || card.value?.contains(event.target) || event.target.closest?.(FLOATING_SELECTOR)) return;
+  if (prompt_open.value || describing.value || naming.value || card.value?.contains(event.target) || event.target.closest?.(FLOATING_SELECTOR)) return;
   flip(false);
 }
 watch(back, (open) => {
@@ -266,7 +291,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
           <span class="expert-card-identity">
             <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="sm" class="channel-avatar expert-card-avatar" :class="bridge.identities[name]?.style" />
             <span class="expert-card-names">
-              <span><strong>{{ name }}</strong><span v-if="host" class="expert-card-badge">主持</span></span>
+              <span><strong :title="bridge.member_label(name) === name ? undefined : name">{{ bridge.member_label(name) }}</strong><span v-if="host" class="expert-card-badge">主持</span></span>
               <small v-if="description" :title="description">{{ description }}</small>
             </span>
           </span>
@@ -292,7 +317,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
       </div>
       <div v-if="can_flip" class="expert-card-face expert-card-back" :inert="!visible_back" :aria-hidden="!visible_back">
         <div class="expert-card-back-body">
-        <div class="expert-card-heading"><strong>{{ name }}<span>设置{{ no_files ? ' · 不访问项目' : '' }}</span></strong>
+        <div class="expert-card-heading"><strong>{{ bridge.member_label(name) }}<span>设置{{ no_files ? ' · 不访问项目' : '' }}</span></strong>
           <span class="expert-card-heading-tools">
           <button type="button" class="expert-card-back-tool" :class="{ 'is-set': description }" :aria-label="`编辑 ${name} 的描述`" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
           <button v-if="profile.adapter" type="button" class="expert-card-back-tool" :class="{ 'is-set': prompt_text, 'is-own': prompt_own && prompt_text }" :title="prompt_title" :aria-label="`编辑 ${name} 的专属提示词`" @click="open_prompt"><UIcon name="i-lucide-scroll-text" /></button>
@@ -332,7 +357,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         <span class="expert-card-flip-actions">
           <template v-if="view.launch.available">
             <button v-if="own_preset" type="button" class="expert-card-flip is-cancel" :aria-label="`删除预设「${name}」`" title="删除预设" @click="bridge.delete_expert_preset(name)"><UIcon name="i-lucide-trash-2" /></button>
-            <button type="button" class="expert-card-flip is-cancel" :aria-label="`${own_preset ? '更新' : '存为'}预设「${name}」`" title="存下描述、提示词、项目权限、模型与强度，之后在“预设”行一键加入" @click="bridge.save_expert_preset(name)">{{ own_preset ? '更新预设' : '存为预设' }}</button>
+            <button type="button" class="expert-card-flip is-cancel" :aria-label="`${own_preset ? '更新' : '存为'}预设「${name}」`" title="存下描述、提示词、项目权限、模型与强度，之后在“预设”行一键加入" @click="save_preset">{{ own_preset ? '更新预设' : '存为预设' }}</button>
           </template>
           <button type="button" class="expert-card-flip is-cancel" :aria-label="`放弃 ${name} 的修改`" @click="cancel">取消</button>
           <button ref="back_button" type="button" class="expert-card-flip is-done" :aria-label="`保存并返回 ${name} 角色卡片`" @click="flip(false)"><UIcon name="i-lucide-check" />完成</button>
@@ -344,6 +369,18 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
       description="只发给这位专家，补充它的做法与偏好；不改变权限和技能规则。" :label="`${name} 的专属提示词`"
       placeholder="例如：回答先给结论，控制在三段以内。" :max="MAX_EXPERT_PROMPT" :rows="8"
       :note="prompt_note" :source="prompt_source" :changed="prompt_changed" @save="save_prompt" />
+    <UModal v-model:open="naming" title="存为专家预设" description="存下描述、提示词、项目权限、模型与强度，之后在“预设”行一键加入。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
+      <template #body>
+        <form class="expert-card-naming" @submit.prevent="save_named_preset">
+          <UInput v-model="naming_draft" :maxlength="32" autofocus class="w-full" aria-label="预设名称" placeholder="预设名称，如 评审官" />
+          <p>{{ naming_note }}</p>
+          <div class="expert-card-naming-actions">
+            <UButton label="取消" color="neutral" variant="ghost" @click="naming = false" />
+            <UButton type="submit" label="保存" class="channel-primary-button" :disabled="naming_blank" />
+          </div>
+        </form>
+      </template>
+    </UModal>
   </div>
 </template>
 
@@ -411,6 +448,9 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card-back-tool.is-set { color: var(--ui-text-muted); }
 .expert-card-back-tool.is-own { color: var(--channel-accent); }
 .expert-card-back-tool:hover { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
+.expert-card-naming { display: grid; gap: 8px; }
+.expert-card-naming > p { margin: -2px 0 0; color: var(--ui-text-dimmed); font-size: 11px; }
+.expert-card-naming-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
 .expert-card-note { display: flex; gap: 6px; margin: 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
 .expert-card-manual { display: grid; gap: 4px; width: 100%; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
 .expert-card-manual > p { margin: 0; }
