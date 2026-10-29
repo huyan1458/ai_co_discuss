@@ -14,11 +14,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DiscussionRunner, DiscussionStore, load_config, service_drafts, task_files, validate_config } from '../runner/discussion_runner.mjs';
 import { cwd_key, FreeRoomRunner, workspace_snapshot } from '../runner/free_runner.mjs';
-import { EXPERT_PROMPT_PRESETS, expert_prompt } from '../runner/expert_prompts.mjs';
+import { EXPERT_PROMPT_PRESETS, expert_prompt, free_task_text } from '../runner/expert_prompts.mjs';
 import { system_prompt } from '../runner/api_participant.mjs';
 import { assert_shared_home, DiscussionService, FreeRoomWithDiscussion, migrate_service_home, read_registry, register_room, service_pid, service_ready, start_service, sweep_service_home, unregister_room } from '../runner/discussion_service.mjs';
 import { launch_discussion, restore_room, room_models, room_profiles } from '../runner/discussion_launch.mjs';
-import { adopted_fork, activity_phase, activity_tool, MAX_EXECUTION_NOTES, MAX_EXECUTION_SEGMENTS, MAX_NOTES_PER_REPORT, MAX_SEGMENTS_PER_REPORT, SegmentLog, progress_note, agy_command_rule, agy_rule, antigravity_project, claude_exit_error, claude_rule_path, codex_permissions, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
+import { adopted_fork, claude_inbox_ready, activity_phase, activity_tool, MAX_EXECUTION_NOTES, MAX_EXECUTION_SEGMENTS, MAX_NOTES_PER_REPORT, MAX_SEGMENTS_PER_REPORT, SegmentLog, progress_note, agy_command_rule, agy_rule, antigravity_project, claude_exit_error, claude_rule_path, codex_permissions, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
 import { certainty, decide, decide_group_order, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
 
@@ -1093,26 +1093,56 @@ test('a Codex App chat the App has not loaded gets its message through the App, 
   assert.deepEqual(loaded.sent, []);
 });
 
-test('a taken-over Claude member forks its own session on the first hosted turn and resumes the fork afterward', async t => {
+test('a taken-over Claude member resumes its session once no window holds it, and forks it while a window without an inbox does', async t => {
   const original = 'original-session-1';
   const own = { project_access: 'own', session_id: original };
-  const first = adopted_fork(own, { session_id: original }, () => true);
+  assert.deepEqual(adopted_fork(own, { session_id: original }, false), { session_id: original }, 'no window holds it, so nothing splits');
+  const first = adopted_fork(own, { session_id: original }, true, () => true);
   assert.equal(first.fork.from, original);
   assert.notEqual(first.session_id, original);
-  assert.deepEqual(adopted_fork(own, { session_id: first.session_id }, () => true), { session_id: first.session_id }, 'a written fork is resumed');
-  assert.deepEqual(adopted_fork(own, { session_id: first.session_id }, () => false), { session_id: first.session_id, fork: { from: original, at: '' } },
+  assert.deepEqual(adopted_fork(own, { session_id: first.session_id }, true, () => true), { session_id: first.session_id }, 'a written fork is resumed');
+  assert.deepEqual(adopted_fork(own, { session_id: first.session_id }, false, () => false), { session_id: first.session_id, fork: { from: original, at: '' } },
     'a fork that was never written is retried under the same ID');
-  assert.deepEqual(adopted_fork(own, { session_id: '' }, () => false), { session_id: '' }, 'a rewind back to the start opens a new session');
-  assert.deepEqual(adopted_fork({ project_access: 'write', session_id: original }, { session_id: original }), { session_id: original },
+  assert.deepEqual(adopted_fork(own, { session_id: '' }, true, () => false), { session_id: '' }, 'a rewind back to the start opens a new session');
+  assert.deepEqual(adopted_fork({ project_access: 'write', session_id: original }, { session_id: original }, true), { session_id: original },
     'a session the owner lent at invitation is resumed as before');
   const result = [{ type: 'result', is_error: false, result: '完成' }];
   const f = await cli_delivery_fixture(t, 'claude', { events: result, config: { ...own }, binding: { session_id: original } });
   const args = f.calls[0].args;
   assert.equal(args[args.indexOf('--resume') + 1], original);
-  assert.ok(args.includes('--fork-session'));
-  const forked = args[args.indexOf('--session-id') + 1];
-  assert.notEqual(forked, original);
-  assert.deepEqual(f.bindings, [forked]);
+  assert.ok(!args.includes('--fork-session'));
+});
+
+test('a taken-over Claude member whose own window is open gets its task through the window inbox, not a new process', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'claude-home-')); t.after(() => rmSync(home, { recursive: true, force: true }));
+  const sessions = join(home, 'sessions'); mkdirSync(sessions);
+  const original = randomUUID(), received = [];
+  const socket_path = process.platform === 'win32' ? String.raw`\\.\pipe\codiscuss-inbox-${randomUUID()}` : join(home, 'inbox.sock');
+  const server = createNetServer(socket => { let text = ''; socket.on('data', chunk => { text += chunk; }); socket.on('end', () => received.push(...text.trim().split(/\r?\n/).map(line => JSON.parse(line)))); });
+  await new Promise(resolve_listen => server.listen(socket_path, resolve_listen)); t.after(() => server.close());
+  writeFileSync(join(sessions, `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId: original, messagingSocketPath: socket_path, status: 'idle' }));
+  writeFileSync(join(sessions, `${process.pid}.${'a'.repeat(64)}.key`), JSON.stringify({ peerToken: 'peer-token' }));
+  const previous = process.env.CLAUDE_CONFIG_DIR; process.env.CLAUDE_CONFIG_DIR = home;
+  t.after(() => { if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previous; });
+  const profile = { adapter: 'claude', project_access: 'own', session_id: original };
+  assert.equal(claude_inbox_ready(profile, { session_id: original }), true);
+  assert.equal(claude_inbox_ready(profile, { session_id: 'a-fork' }), false, 'a member already moved to a fork stays there');
+  assert.equal(claude_inbox_ready({ ...profile, project_access: 'write' }, { session_id: original }), false, 'a lent session is not a manual window');
+  const access_path = join(home, 'access.json'); writeFileSync(access_path, JSON.stringify({ token: 'member', session_id: '' }));
+  const spawned = [];
+  const result = await deliver_task({ ...profile, executable: process.execPath }, { session_id: original },
+    { id: 'free-7', inbox: true, access_path, prompt: '请先读取任务文件 free-7.task.json', on_note: () => {} }, (...args) => { spawned.push(args); throw new Error('no process'); });
+  assert.deepEqual(result, { session_id: original, status: 'accepted' });
+  assert.deepEqual(spawned, []);
+  for (let waited = 0; received.length < 2 && waited < 2000; waited += 20) await delay(20);
+  assert.deepEqual(received[0], { type: 'auth', token: 'peer-token' });
+  assert.equal(received[1].type, 'user');
+  assert.match(received[1].message.content, /free-7\.task\.json/);
+  assert.equal(JSON.parse(readFileSync(access_path, 'utf8')).session_id, original);
+  // The window has no process environment of ours, so its task names the credential file.
+  const text = free_task_text({ name: 'Claude', profile, cli: 'codiscuss', room: 'room', messages: '#3', read_after: 2, execution_id: 7, task_path: 't', inbox: true });
+  assert.match(text.instructions, /--access-file 凭据路径/);
+  assert.doesNotMatch(free_task_text({ name: 'Claude', profile, cli: 'codiscuss', room: 'room', messages: '#3', read_after: 2, execution_id: 7, task_path: 't' }).instructions, /--access-file 凭据路径/);
 });
 
 test('tasks state whether the discussion project is read-only or writable', async t => {

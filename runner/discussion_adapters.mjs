@@ -3,6 +3,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
+import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -16,6 +17,8 @@ const CLI_DIAGNOSTIC_CHARS = 1000;
 const CLI_EXIT_GRACE_MS = 1500;
 // A hung CLI keeps its lease renewed forever when the room sets no execution limit, so cap every process.
 const CLI_MAX_RUN_MS = 2 * 60 * 60_000;
+// A message posted to an open Claude window that has not started by then is reported, not failed.
+const INBOX_CHECK_MS = 90_000;
 const CODEX_PERMISSIONS_MIN_MINOR = 163;
 /** Website subcommands an automatic task may run; service, launch, run, api and setup stay unapproved. */
 export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'execution', 'health', 'schema'];
@@ -463,19 +466,79 @@ function watch_activity(adapter, stream, task) {
 }
 
 /**
- * A taken-over manual Claude member's own window may still be open, and resuming its session from here would split that
- * file into two branches neither side sees in full. Its first hosted turn therefore forks the session, and later turns
- * resume the fork; a fork whose session was never written is retried under the same ID.
+ * The open Claude Code window holding one session, with its cross-session inbox, or null when no live session holds it.
+ * Read from the registry each running session writes; `inbox` is null on a version without one. Not a public interface:
+ * the peer token and message line are what Claude's own sessions use (tested on 2.1.312).
  */
-export function adopted_fork(config, binding, exists = id => session_exists('claude', id)) {
+export function claude_window(session_id, env = process.env) {
+  const directory = join(env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'sessions');
+  if (!session_id || !existsSync(directory)) return null;
+  for (const name of readdirSync(directory).filter(item => /^\d+\.json$/.test(item))) {
+    let record;
+    try { record = JSON.parse(readFileSync(join(directory, name), 'utf8')); } catch { continue; }
+    if (record.sessionId !== session_id) continue;
+    try { process.kill(Number(record.pid), 0); } catch { continue; }
+    const key = readdirSync(directory).find(item => item.startsWith(`${record.pid}.`) && item.endsWith('.key'));
+    let token = '';
+    try { token = key ? JSON.parse(readFileSync(join(directory, key), 'utf8')).peerToken || '' : ''; } catch { /* no inbox credential */ }
+    return { pid: Number(record.pid), inbox: record.messagingSocketPath && token ? { socket: record.messagingSocketPath, token } : null };
+  }
+  return null;
+}
+
+/** Whether this execution goes into a taken-over member's own open window rather than a background process. */
+export function claude_inbox_ready(profile, binding) {
+  return profile.adapter === 'claude' && profile.project_access === 'own' && Boolean(profile.session_id)
+    && binding.session_id === profile.session_id && Boolean(claude_window(profile.session_id)?.inbox);
+}
+
+/**
+ * A taken-over manual Claude member whose session a window without an inbox still holds: resuming that session from
+ * here would split its file into two branches neither side sees in full, so its first hosted turn forks it and later
+ * turns resume the fork; a fork whose session was never written is retried under the same ID. Once no window holds
+ * the session, it is resumed as it is.
+ */
+export function adopted_fork(config, binding, held, exists = id => session_exists('claude', id)) {
   if (config.project_access !== 'own' || !config.session_id || binding.fork || !binding.session_id) return binding;
-  if (binding.session_id !== config.session_id && exists(binding.session_id)) return binding;
-  const session_id = binding.session_id === config.session_id ? randomUUID() : binding.session_id;
-  return { ...binding, session_id, fork: { from: config.session_id, at: '' } };
+  if (binding.session_id !== config.session_id) return exists(binding.session_id) ? binding : { ...binding, fork: { from: config.session_id, at: '' } };
+  return held ? { ...binding, session_id: randomUUID(), fork: { from: config.session_id, at: '' } } : binding;
+}
+
+/** Post one task into an open Claude window; it starts a turn there, or between tool calls of the turn it is in. */
+async function claude_inbox_delivery(config, inbox, task) {
+  try { bind_access(task.access_path, config.session_id); }
+  catch (error) { throw not_sent(error); }
+  const text = `CoDiscuss 本机服务代房间转达（你已注册为该房间成员，这是房间分派给你的任务）：\n${task.prompt}`;
+  const lines = [{ type: 'auth', token: inbox.token }, { type: 'user', message: { role: 'user', content: text } }];
+  await new Promise((resolve_sent, reject) => {
+    let written = false;
+    const socket = connect(inbox.socket, () => {
+      socket.end(lines.map(line => `${JSON.stringify(line)}\n`).join(''), () => { written = true; resolve_sent(); });
+    });
+    socket.on('error', error => written ? undefined : reject(not_sent(error)));
+  });
+  const marker = `${task.id}.task.json`;
+  setTimeout(() => {
+    if (!claude_session_mentions(config.session_id, marker)) {
+      task.on_note?.('已投递到原窗口，但它还没开始处理：原窗口可能处于跳过审批模式（需在窗口中批准这条消息）或仍在忙。');
+    }
+  }, INBOX_CHECK_MS).unref();
+  return { session_id: config.session_id, status: 'accepted' };
+}
+
+/** Whether a Claude session's log contains some text, e.g. the task file a delivered prompt names. */
+function claude_session_mentions(session_id, text, env = process.env) {
+  const projects = join(env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'projects');
+  if (!existsSync(projects)) return false;
+  const file = readdirSync(projects).map(directory => join(projects, directory, `${session_id}.jsonl`)).find(existsSync);
+  try { return Boolean(file) && readFileSync(file, 'utf8').includes(text); } catch { return false; }
 }
 
 async function claude_delivery(config, binding, task, spawn_process = spawn) {
-  binding = adopted_fork(config, binding);
+  const window = config.project_access === 'own' && binding.session_id && binding.session_id === config.session_id ? claude_window(config.session_id) : null;
+  // Only a task written for the window names its credential file; a background process gets it through its environment.
+  if (window?.inbox && task.inbox) return claude_inbox_delivery(config, window.inbox, task);
+  binding = adopted_fork(config, binding, Boolean(window));
   const session_id = binding.session_id || randomUUID();
   try { bind_access(task.access_path, session_id); }
   catch (error) { throw not_sent(error); }

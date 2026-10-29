@@ -48235,15 +48235,15 @@ function vJ(e, t, n = {}) {
 	return e === "antigravity_cli" && !_J(n) ? `无人值守下 run_command 只能运行 ${t} 的 subcommands 子命令，其他命令会被自动拒绝并使会话直接结束；列目录、搜索或读取文件用 list_dir、find_by_name、grep_search、view_file。` : "";
 }
 var yJ = "读取含中文的技能或文本文件时用 rg --encoding utf-8 . 文件路径，不用 Get-Content（Windows PowerShell 会按系统编码读出乱码，需要反复重试）。";
-function bJ({ name: e, role: t, discussion: n, profile: r, cli: i, room: a, messages: o, read_after: s, execution_id: c, task_path: l, read_rule: u = "" }) {
-	let d = [
+function bJ({ name: e, role: t, discussion: n, profile: r, cli: i, room: a, messages: o, read_after: s, execution_id: c, task_path: l, read_rule: u = "", inbox: d = !1 }) {
+	let f = !d && [
 		"claude",
 		"codex_cli",
 		"antigravity_cli"
-	].includes(r.adapter), f = d ? "" : " --access-file 凭据路径", p = d ? "本次凭据文件已通过进程环境 DISCUSS_ACCESS_FILE 绑定，codiscuss 自动读取，命令无需 --access-file。" : "", m = r.project_access === "own" ? "项目文件与命令权限沿用你自己会话的软件设置。" : r.cwd ? r.project_access === "write" ? "用户允许按请求修改 cwd 中的项目文件并运行所需命令。" : "cwd 中的项目文件只读，不修改。" : "未指定项目目录。", h = t === "host" && !n ? `你是本房间的主持人：按任务 skills 中 discuss-host 的自由协作主持说明处理 route、handoff 与 all 请求。先用 ${i} room view ${a} 查看成员与状态；派活在回答中加 --to 成员名（不能点名自己），只点名一位且还要它交回时加 --handoff。` : "";
+	].includes(r.adapter), p = f ? "" : " --access-file 凭据路径", m = f ? "本次凭据文件已通过进程环境 DISCUSS_ACCESS_FILE 绑定，codiscuss 自动读取，命令无需 --access-file。" : "", h = r.project_access === "own" ? "项目文件与命令权限沿用你自己会话的软件设置。" : r.cwd ? r.project_access === "write" ? "用户允许按请求修改 cwd 中的项目文件并运行所需命令。" : "cwd 中的项目文件只读，不修改。" : "未指定项目目录。", g = t === "host" && !n ? `你是本房间的主持人：按任务 skills 中 discuss-host 的自由协作主持说明处理 route、handoff 与 all 请求。先用 ${i} room view ${a} 查看成员与状态；派活在回答中加 --to 成员名（不能点名自己），只点名一位且还要它交回时加 --handoff。` : "";
 	return {
-		instructions: `${vJ(r.adapter, i, r)}${n ? "讨论房间：用户直接向你提问（" + o + "）。这不是你的发言安排，不要领取发言权、不要安排他人，也不改变讨论进度，只回答这个提问。" : "自由协作房间：用户点名了你（" + o + "）。"}${p}先用 ${i} message list ${a} --after ${s}${f} 读取新消息，按时间顺序处理，后面的消息可能修正前面的，以最新指令为准。${h}完成后用 ${i} message post ${a} --as ${e} --kind chat --execution ${c} --body-file 草稿 --submission-id 新UUID${f} 提交一次回答。提交被拒绝说明本次执行已被打断或过期：保留草稿并结束，不要去掉 --execution 改作普通发言。草稿只写入 draft_directory；${m}不读取或打印凭据内容，不建定时任务。`,
-		prompt: `用户在${n ? "讨论" : "自由协作"}房间点名了你（${e}），对应消息 ${o}。请先读取任务文件：${l}，按其中说明读取新消息、完成请求，并用 ${i} message post 带 --execution ${c} 提交一次回答后结束。${_J(r) ? "网站读写" : "命令"}只用任务内 subcommands 列出的 ${i} 子命令；${m}不读取凭据内容。${u}`
+		instructions: `${vJ(r.adapter, i, r)}${n ? "讨论房间：用户直接向你提问（" + o + "）。这不是你的发言安排，不要领取发言权、不要安排他人，也不改变讨论进度，只回答这个提问。" : "自由协作房间：用户点名了你（" + o + "）。"}${m}先用 ${i} message list ${a} --after ${s}${p} 读取新消息，按时间顺序处理，后面的消息可能修正前面的，以最新指令为准。${g}完成后用 ${i} message post ${a} --as ${e} --kind chat --execution ${c} --body-file 草稿 --submission-id 新UUID${p} 提交一次回答。提交被拒绝说明本次执行已被打断或过期：保留草稿并结束，不要去掉 --execution 改作普通发言。草稿只写入 draft_directory；${h}不读取或打印凭据内容，不建定时任务。`,
+		prompt: `用户在${n ? "讨论" : "自由协作"}房间点名了你（${e}），对应消息 ${o}。请先读取任务文件：${l}，按其中说明读取新消息、完成请求，并用 ${i} message post 带 --execution ${c} 提交一次回答后结束。${_J(r) ? "网站读写" : "命令"}只用任务内 subcommands 列出的 ${i} 子命令；${h}不读取凭据内容。${u}`
 	};
 }
 //#endregion
@@ -48373,7 +48373,7 @@ var xJ = ["data-identity", "data-face"], SJ = ["inert", "aria-hidden"], CJ = { c
 		let x = Z(() => !i.value.launch.available && i.value.launch.relay?.clients[a.platform_of(n.name)]), S = Z(() => m.value.find((e) => e.value === (x.value || p.value.adapter))?.label || (i.value.launch.relay && !i.value.launch.available ? "电脑上未配置" : "待选择 App / CLI")), C = Z(() => n.mode === "manual"), w = {
 			Codex: "已实测：消息实时显示在已开窗口。",
 			Gemini: "已实测：App 会话实时显示；agy CLI 窗口需重启才显示后台发言。",
-			Claude: "托管时另起分叉副本：原窗口会话不变，但看不到托管发言。"
+			Claude: "已实测：原窗口开着时消息实时送入；关闭后在后台续接同一会话。"
 		}, T = Z(() => w[a.platform_of(n.name)] || ""), E = Z(() => g.value && n.session !== null && a.launch_can_bind_session(n.name, i.value.launch)), D = Z(() => !!(p.value.session_id || n.session?.trim())), O = Z(() => g.value && m.value.length > 0 && !(i.value.launch.relay && !i.value.launch.available)), k = Z(() => n.mode === "online" ? `设置 ${n.name} 的参与方式` : `配置 ${n.name} 的启动方式`), A = Z(() => a.launch_model_state(n.name, i.value.launch)), ee = Z(() => !!(g.value && A.value.supported)), te = Z(() => ee.value && ge.value.length ? "补齐上方连接后，可在这里选择模型与思考强度。" : p.value.adapter ? "模型与思考强度在 App 原聊天中选择，本页不覆盖 App 设置。" : "先选择软件入口。支持启动参数的 CLI 可在这里设置模型与强度。"), ne = {
 			low: "Low",
 			medium: "Medium",
@@ -48934,7 +48934,7 @@ var xJ = ["data-identity", "data-face"], SJ = ["inert", "aria-hidden"], CJ = { c
 			], 42, xJ);
 		};
 	}
-}, [["__scopeId", "data-v-8bfb420b"]]), vY = ["aria-label"], yY = [
+}, [["__scopeId", "data-v-45168e26"]]), vY = ["aria-label"], yY = [
 	"disabled",
 	"title",
 	"aria-label",

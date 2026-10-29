@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import { atomic_json, deliver_task, SegmentLog, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
+import { atomic_json, claude_inbox_ready, deliver_task, SegmentLog, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
 import { api, CODEX_ADAPTERS, read_rule } from './discussion_runner.mjs';
 import { free_task_text, with_expert_prompt } from './expert_prompts.mjs';
 import { BRANCHABLE_ADAPTERS, branch_session, session_exists } from './session_cut.mjs';
@@ -69,10 +69,11 @@ export function free_task_files(config, member, execution, binding) {
   atomic_json(access_path, { site: config.site, room: config.room, token: config.members[member.name].token,
     session_id: binding.session_id || '' });
   const cli = process.platform === 'win32' && profile.adapter !== 'claude' ? 'codiscuss.cmd' : 'codiscuss';
-  const bound_access = ['claude', 'codex_cli', 'antigravity_cli'].includes(profile.adapter);
+  const inbox = claude_inbox_ready(profile, binding);
+  const bound_access = !inbox && ['claude', 'codex_cli', 'antigravity_cli'].includes(profile.adapter);
   const messages = execution.requests.map(item => `#${item.message_id}`).join('、');
   const { instructions, prompt } = free_task_text({ name: member.name, role: member.role, discussion: config.mode !== 'free', profile, cli,
-    room: config.room, messages, read_after: execution.read_until, execution_id: execution.id, task_path, read_rule: read_rule(profile.adapter) });
+    room: config.room, messages, read_after: execution.read_until, execution_id: execution.id, task_path, read_rule: read_rule(profile.adapter), inbox });
   atomic_json(task_path, { site: config.site, room: config.room, mode: 'free', member: member.name,
     execution_id: execution.id, request_messages: execution.requests.map(item => item.message_id),
     request_purposes: execution.requests.map(item => item.purpose || 'ask'), role: member.role || 'member',
@@ -83,7 +84,7 @@ export function free_task_files(config, member, execution, binding) {
     cli, subcommands: TASK_SUBCOMMANDS,
     ...(bound_access ? { access_env: 'DISCUSS_ACCESS_FILE' } : { access_file: access_path }), instructions });
   return { id, participant: member.name, directory: config.directory, draft_directory,
-    skills_directory: join(config.project, '.agents', 'skills'), access_path, prompt: with_expert_prompt(prompt, profile) };
+    skills_directory: join(config.project, '.agents', 'skills'), access_path, prompt: with_expert_prompt(prompt, profile), inbox };
 }
 
 const ADAPTER_LABELS = { codex: 'Codex App', codex_cli: 'Codex CLI', claude: 'Claude Code', antigravity: 'Antigravity App',

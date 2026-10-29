@@ -67,8 +67,9 @@ export const READ_RULE = '读取含中文的技能或文本文件时用 rg --enc
  * A free-room task's fixed text: `instructions` saved in the task file and `prompt` sent with each wake-up, followed by
  * the member's own prompt. `discussion` is a direct question asked while a discussion runs in the room.
  */
-export function free_task_text({ name, role, discussion, profile, cli, room, messages, read_after, execution_id, task_path, read_rule = '' }) {
-  const bound_access = ['claude', 'codex_cli', 'antigravity_cli'].includes(profile.adapter);
+export function free_task_text({ name, role, discussion, profile, cli, room, messages, read_after, execution_id, task_path, read_rule = '', inbox = false }) {
+  // A task posted into a member's own open window has no process environment of ours, so it names the credential file.
+  const bound_access = !inbox && ['claude', 'codex_cli', 'antigravity_cli'].includes(profile.adapter);
   const access_arg = bound_access ? '' : ' --access-file 凭据路径';
   const access_rule = bound_access ? '本次凭据文件已通过进程环境 DISCUSS_ACCESS_FILE 绑定，codiscuss 自动读取，命令无需 --access-file。' : '';
   const project_rule = profile.project_access === 'own' ? '项目文件与命令权限沿用你自己会话的软件设置。'
