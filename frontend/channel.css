@@ -575,7 +575,6 @@ html[data-theme^="channel"] .channel-topic-menu [data-slot="item"] { min-height:
 html[data-theme^="channel"] .channel-topic-menu [data-slot="itemLeadingIcon"] { width: 15px; height: 15px; color: #b1b7c2; }
 html[data-theme^="channel"] .channel-topic-menu [data-slot="separator"] { height: 1px; margin: 5px -6px; background: #ffffff12; }
 html[data-theme^="channel"] .channel-topic-tooltip { padding: 7px 10px; border: 1px solid #ffffff0d; border-radius: 8px; background: #17181b; color: #f0f1f4; font-size: 12px; box-shadow: 0 3px 10px #0004; }
-.channel-mobile-nav { display: none; }
 .channel-detail-title { display: flex; align-items: flex-start; gap: 10px; color: #e4e9f2; }
 .channel-detail-title > [class*="icon"] { font-size: 22px; color: #939eb2; flex-shrink: 0; }
 .channel-detail-title h2 { font-size: 16px; font-weight: 600; }
@@ -747,8 +746,6 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-sidebar { display: none; }
   .channel-main { width: 100%; }
   .channel-header { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; height: auto; padding: 2px 10px; gap: 2px 8px; }
-  .channel-mobile-nav { display: inline-flex; }
-  .channel-desktop-nav { display: none; }
   .channel-mobile-nav { grid-column: 1; grid-row: 1; }
   .channel-title { grid-column: 2; grid-row: 1; }
   .channel-info-button { grid-column: 3; grid-row: 1; }

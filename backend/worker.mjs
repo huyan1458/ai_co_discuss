@@ -1572,8 +1572,18 @@ function protocol_text(room) {
 }
 
 /** Route the existing JSON API without changing frontend callers. */
+// Generated on first use (Workers forbid randomness at global scope) and never leaves this isolate.
+let owner_proxy_prefix = "";
+
+/** An in-isolate stand-in for a room's control credential, so an administrator session writes as its owner. */
+function owner_proxy_token(control_hash) {
+  owner_proxy_prefix ||= `${crypto.randomUUID()}:`;
+  return owner_proxy_prefix + control_hash;
+}
+
 /** Hash bounded bearer capabilities; raw values are never persisted. */
 async function runtime_hash(token) {
+  if (owner_proxy_prefix && typeof token === "string" && token.startsWith(owner_proxy_prefix)) return token.slice(owner_proxy_prefix.length);
   if (typeof token !== "string" || token.length < 32 || token.length > 256) return "";
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
@@ -3483,6 +3493,16 @@ async function logout_admin(database, request) {
   return { ok: true };
 }
 
+/** Let a logged-in administrator without this room's credential write as its owner. */
+async function admin_as_owner(database, request, room_id) {
+  if (request.headers.get("X-Discussion-Token") || !request.headers.get("X-Discussion-Admin") || !await admin_session(database, request)) return request;
+  const row = await database.prepare("SELECT control_hash FROM room_modes WHERE room_id=?").bind(room_id).first();
+  if (!row?.control_hash) return request;
+  const headers = new Headers(request.headers);
+  headers.set("X-Discussion-Token", owner_proxy_token(row.control_hash));
+  return new Request(request, { headers });
+}
+
 /** Route /api/admin*; GET is public, every POST is JSON. */
 async function handle_admin_api(database, request, parts, setup_key) {
   const action = parts[2] ?? "";
@@ -3676,6 +3696,7 @@ async function handle_api(database, request, parts, params, bucket, setup_key = 
     throw new HttpError(404, "地址不存在");
   }
   const room_id = parts[2];
+  request = await admin_as_owner(database, request, room_id);
   const reported = request.headers.get("X-Discussion-Session");
   if (reported) await record_reported_session(database, room_id, request.headers.get("X-Discussion-Token") ?? "",
     { session_id: reported, session_client: request.headers.get("X-Discussion-Session-Client") });

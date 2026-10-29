@@ -34,7 +34,7 @@ from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, is_ai, is_participant
 from .room_import import import_room, imported_attachment
 from .runtime import (authorize_write, begin_write, configure_runtime, event_action,
                      LIMIT_DEFAULTS, LIMITS_SQL, limit_values, limits_view, require_within_limits,
-                     list_events, require_control, require_owner, runtime_view, token_hash)
+                     list_events, owner_proxy_token, require_control, require_owner, runtime_view, token_hash)
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB_ROOT = ROOT / "web"
@@ -1950,6 +1950,14 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Whether the request is from the administrator: any visitor of a loopback-only site, else a valid session."""
         return self.server.local_site or session_valid(connection, self.admin_token())
 
+    def admin_as_owner(self, connection, room_id):
+        """Let a logged-in administrator without this room's credential write as its owner; local visitors still need it."""
+        if self.headers.get("X-Discussion-Token") or not session_valid(connection, self.admin_token()):
+            return
+        row = connection.execute("SELECT control_hash FROM room_modes WHERE room_id=?", (room_id,)).fetchone()
+        if row and row[0]:
+            self.headers["X-Discussion-Token"] = owner_proxy_token(row[0])
+
     def handle_admin_api(self, connection, parts, method):
         """Serve administrator registration, login sessions and profile."""
         token = self.admin_token()
@@ -2041,6 +2049,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if len(parts) < 3 or parts[:2] != ["api", "rooms"]:
             raise LookupError("地址不存在")
         room_id = parts[2]
+        self.admin_as_owner(connection, room_id)
         token = self.headers.get("X-Discussion-Token", "")
         if self.headers.get("X-Discussion-Session"):
             record_reported_session(connection, room_id, token, {"session_id": self.headers.get("X-Discussion-Session"),

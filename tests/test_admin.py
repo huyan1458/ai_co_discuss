@@ -128,6 +128,18 @@ class AdminTests(unittest.TestCase):
         self.assertEqual(self.request(path + "/delete", {"actor": "用户", "confirm_title": "管理员验证"}, admin=admin)[0], 200)
         self.assertEqual(self.request(path)[0], 404)
 
+    def test_session_writes_as_room_owner_without_credential(self):
+        admin = self.register()
+        room = self.new_room(uuid.uuid4().hex)
+        message = {"author": "用户", "text": "平板上的发言", "submission_id": uuid.uuid4().hex}
+        path = f"/api/rooms/{room}/messages"
+        self.assertEqual(self.request(path, message)[0], 403)
+        self.assertEqual(self.request(path, message, admin="0" * 64)[0], 403)
+        status, result = self.request(path, message, admin=admin)
+        self.assertEqual(status, 201, result)
+        # A supplied credential is never replaced, so a member cannot borrow the session to speak as the owner.
+        self.assertEqual(self.request(path, {**message, "submission_id": uuid.uuid4().hex}, admin=admin, token=uuid.uuid4().hex)[0], 403)
+
     def test_local_site_needs_no_account_and_keeps_a_profile(self):
         self.server.local_site = True
         self.assertEqual(self.request("/api/admin")[1], {"local": True, "registered": True, "setup_available": False,

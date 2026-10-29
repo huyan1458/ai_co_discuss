@@ -291,6 +291,11 @@ async function admin_avatar_from_file(file) {
   } finally { URL.revokeObjectURL(url); }
 }
 
+/** Whether this browser may write as the room owner: its own control credential, or a logged-in administrator session. */
+function has_room_control(room_id) {
+  return Boolean(localStorage.getItem(`discuss-access:${room_id}`) || (state.admin.logged_in && admin_token()));
+}
+
 /** Explain why a management write failed when this browser has neither credential. */
 function management_error_message(room_id, error) {
   if (error.status === 403 && !state.admin.logged_in && !localStorage.getItem(`discuss-access:${room_id}`)) return MANAGEMENT_LOGIN_HINT;
@@ -1693,7 +1698,7 @@ function access_snapshot() {
   const room = state.room;
   if (!room) return { can_manage: false, members: [], notice: "", error: "" };
   const saved = member_credentials(room.id);
-  return { can_manage: Boolean(localStorage.getItem(`discuss-access:${room.id}`)),
+  return { can_manage: has_room_control(room.id),
     members: (room.members || room.free?.members || []).filter(member => member.status !== "removed").map(member => ({
       name: member.name, access: member.access, available: member.status === "active" && member.access !== "online"
         && Boolean(saved[member.name]?.token) && (saved[member.name].access === "online") === (member.access === "online")
@@ -2608,7 +2613,7 @@ async function choose_runtime(mode) {
   const path = `/api/rooms/${room_id}/runtime`;
   const runtime = await request_json(path);
   if (runtime.mode !== mode) {
-    if (!localStorage.getItem(`discuss-access:${room_id}`)) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
+    if (!has_room_control(room_id)) throw new Error(MANAGEMENT_LOGIN_HINT);
     await request_json(path, { action: "configure", mode, revision: runtime.revision });
   }
   if (state.room?.id !== room_id) return;
@@ -2712,7 +2717,7 @@ async function conclude_discussion() {
 /** Turn this free room into a discussion within the given limits and start the run; the local service takes it over at its next check. */
 async function start_room_discussion({ goal, max_rounds, max_minutes, execution_minutes = 0, named_followup = false }) {
   const room_id = state.room.id, path = `/api/rooms/${room_id}`;
-  if (!localStorage.getItem(`discuss-access:${room_id}`)) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
+  if (!has_room_control(room_id)) throw new Error(MANAGEMENT_LOGIN_HINT);
   await request_json(`${path}/discussion`, { action: "start", ...(goal ? { goal } : {}), limits: { max_rounds, max_minutes, execution_minutes }, named_followup });
   const runtime = await request_json(`${path}/runtime`);
   await request_json(`${path}/runtime`, { action: "start", mode: "automatic", revision: runtime.revision, deadline: 0 });

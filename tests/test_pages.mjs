@@ -1663,6 +1663,20 @@ test('Worker admin session bypasses room credentials for archive restore delete'
   assert.equal((await admin_call(f, `/api/rooms${path}/delete`, { actor: '用户', confirm_title: '管理员清理' }, session)).status, 200);
 });
 
+test('Worker admin session writes as the room owner without its credential', async t => {
+  const f = await admin_fixture(t);
+  const session = (await f.register()).body.token;
+  const room = (await f.request('', { title: '平板发言', host: 'Codex', phase: 'initial', experts: { Codex: 'cli' } })).body;
+  const path = `/api/rooms/${room.id}/messages`, message = () => ({ author: '用户', text: '平板上的发言', submission_id: crypto.randomUUID() });
+  assert.equal((await admin_call(f, path, message())).status, 403);
+  assert.equal((await admin_call(f, path, message(), '0'.repeat(64))).status, 403);
+  assert.equal((await admin_call(f, path, message(), session)).status, 201);
+  // A supplied credential is never replaced, so a member cannot borrow the session to speak as the owner.
+  const response = await worker.fetch(new Request(`https://discussion.test${path}`, { method: 'POST', body: JSON.stringify(message()),
+    headers: { 'Content-Type': 'application/json', 'X-Discussion-Admin': session, 'X-Discussion-Token': 'stranger-credential'.repeat(3) } }), f.env);
+  assert.equal(response.status, 403);
+});
+
 test('Worker relays a remote launch only to the paired computer', async t => {
   const f = await admin_fixture(t);
   const machine_id = crypto.randomUUID().replaceAll('-', ''), machine_token = 'ab'.repeat(32);

@@ -2,10 +2,13 @@
 
 import hashlib
 import json
+import secrets
 import time
 import uuid
 
 LEASE_SECONDS = 120
+# Never leaves this process; a client cannot guess it to pose as a stored hash.
+OWNER_PROXY_PREFIX = secrets.token_hex(16) + ":"
 MAX_RUN_SECONDS = 86400
 LIMIT_DEFAULTS = {"max_rounds": 0, "max_minutes": 0, "execution_minutes": 0}
 # Older clients may still send these; reaching a limit always pauses, so only the pause value is accepted and the reserve is ignored.
@@ -32,8 +35,15 @@ TIMING_SQL = """SELECT e.id,e.participant,e.role,e.cause,e.status,
     WHERE e.room_id=? AND e.run_id=? AND (t.dispatched_at>0 OR e.status='pending') ORDER BY e.id DESC"""
 
 
+def owner_proxy_token(control_hash):
+    """An in-process stand-in for a room's control credential, so an administrator session writes as its owner."""
+    return OWNER_PROXY_PREFIX + control_hash
+
+
 def token_hash(token):
     """Hash a bounded opaque capability without storing its original value."""
+    if isinstance(token, str) and token.startswith(OWNER_PROXY_PREFIX):
+        return token[len(OWNER_PROXY_PREFIX):]
     if not isinstance(token, str) or not 32 <= len(token) <= 256:
         return ""
     return hashlib.sha256(token.encode()).hexdigest()

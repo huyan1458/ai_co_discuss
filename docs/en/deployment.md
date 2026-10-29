@@ -25,7 +25,7 @@ python server.py --host 127.0.0.1 --port 8765 --no-demo
 
 Python 3.10+ with no third-party dependencies. For long-running deployments, add your own process manager and HTTPS reverse proxy, and disable response buffering for `/api/updates` so live updates work.
 
-**Administrator** — when bound to `127.0.0.1`, every visitor is the administrator. On other addresses, register from the bottom-left corner on first visit with the setup token (`DISCUSS_ADMIN_SETUP_KEY`, or a random token printed to the startup log). If you forget the password, run `python server.py --reset-admin` and register again.
+**Administrator** — when bound to `127.0.0.1`, every visitor is the administrator. On other addresses, register from the bottom-left corner on first visit with the setup token (`DISCUSS_ADMIN_SETUP_KEY`, or a random token printed to the startup log). Once logged in as the administrator, you can speak and manage any room as the user from other devices such as a tablet or phone. If you forget the password, run `python server.py --reset-admin` and register again.
 
 **Backup** — attachments are stored next to the database in `<database file>.attachments/`. Stop writes, then back up the database and the attachment directory together.
 
