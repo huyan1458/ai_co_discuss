@@ -1,10 +1,10 @@
 # 自由协作房间
 
-仅用于任务文件含 `mode: "free"`、或用户明确说明是自由协作房间时。讨论房间不读本页。主持人另读 discuss-host 的自由协作一节。
+用于协作房间中没有 `discussion_request` 的自由协作请求。讨论仍使用 `mode: "free"`；有讨论请求时读 [讨论请求](discussion.md)。主持人另读 discuss-host 的自由协作一节。
 
 ## 回答请求
 
-没有安排和阶段，不执行 `execution enter`。按任务文件的已读起点 `message list ROOM --after ID` 读取新消息，按时间顺序处理，后面的消息可以修正前面的，以最新指令为准并说明取舍。任务的 `request_messages` 可能指向已读起点之前的原回答，须用 `message view ROOM ID` 补读。
+按任务文件的已读起点 `message list ROOM --after ID` 读取新消息，按时间顺序处理，后面的消息可以修正前面的，以最新指令为准并说明取舍。任务的 `request_messages` 可能指向已读起点之前的原回答，须用 `message view ROOM ID` 补读。
 
 完成后用 `message post ROOM --as 本人 --kind chat --execution 执行编号 --access-file FILE` 提交一次回答。手动接入的成员没有执行编号：从 `room view` 的 `free.requests` 找到自己的待处理请求，回答时用 `--request 请求编号` 关闭。
 

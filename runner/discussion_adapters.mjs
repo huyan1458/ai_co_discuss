@@ -880,6 +880,7 @@ async function cli_delivery(config, binding, task, spawn_process, user_home) {
 
 /** Queue one immutable request for the official App-managed Sidecar. */
 async function antigravity_delivery(config, binding, task) {
+  if (!task.id.startsWith('free-')) throw new Error('Sidecar 只支持自由协作执行请求，旧讨论事件已停用');
   const directory = resolve(config.ipc_directory);
   try {
     mkdirSync(directory, { recursive: true });
@@ -894,8 +895,8 @@ async function antigravity_delivery(config, binding, task) {
   } catch (error) { throw not_sent(error); }
   const path = join(directory, `${task.id}.request.json`);
   if (existsSync(path)) throw new Error('Sidecar 请求已存在；必须核对回执，不自动重复发送');
-  atomic_json(path, { id: task.id, mode: task.id.startsWith('free-') ? 'free' : 'brainstorm',
-    event_id: Number(task.id.replace(/^(event|free)-/, '')), prompt: task.prompt,
+  atomic_json(path, { id: task.id, mode: 'free',
+    event_id: Number(task.id.replace(/^free-/, '')), prompt: task.prompt,
     session_id: binding.session_id || '', access_path: task.access_path });
   return { session_id: binding.session_id || '', status: 'sidecar_pending' };
 }

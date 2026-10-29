@@ -211,8 +211,7 @@ const summary = computed(() => {
 
       <details class="create-advanced">
         <summary><UIcon name="i-lucide-chevron-right" class="create-advanced-icon" />高级设置<small>连续派活 {{ view.create_chain_rounds }} 轮</small></summary>
-        <ChainRoundsField :model-value="view.create_chain_rounds" @update:model-value="bridge.write_create_chain_rounds($event)" />
-        <p class="fine-print">建房后可在房间页修改。</p>
+        <ChainRoundsField :model-value="view.create_chain_rounds" @update:model-value="bridge.write_create_chain_rounds($event)">建房后可在房间页修改。</ChainRoundsField>
       </details>
     </form>
     <footer class="create-footer">
@@ -246,7 +245,6 @@ const summary = computed(() => {
 .create-advanced-icon { width: 14px; height: 14px; transition: transform .15s; }
 .create-advanced[open] > summary { margin-bottom: 10px; }
 .create-advanced[open] .create-advanced-icon { transform: rotate(90deg); }
-.create-advanced > .fine-print { margin: 6px 0 0; }
 .create-modes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
 .create-mode { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; text-align: left; background: color-mix(in srgb, var(--ui-bg-elevated) 35%, transparent); color: var(--ui-text-muted); }
 .create-mode:hover { border-color: var(--ui-border-accented); }

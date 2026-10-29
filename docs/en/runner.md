@@ -84,9 +84,11 @@ Project file access is set per member and is read-only by default. Agents can on
 
 Agents also use `codiscuss` to read and write rooms. `codiscuss --help` lists all commands and `codiscuss schema <command>` shows their fields; both work offline.
 
+Discussion turns and everyday collaboration use the same request and execution flow. Automatic members are woken by the local service; manual members read and answer with their own credential. The discussion host reads the current roster before scheduling speakers.
+
 ## Troubleshooting
 
-- **A tool failed to start** — check the pause reason on the progress board, fix sign-in or permissions in that tool, then click **Restart** (重启); or **Skip** (跳过) this turn.
+- **A delivery failed** — the room retries automatically up to three times. You can retry immediately or stop it from the failure card. After three failed attempts, the host receives the failure and decides whether to skip, reschedule or pause the discussion; the room does not pause automatically.
 - **Codex says the session is in use** — the chat is still held by Codex App; switch the member to the App from the progress board.
 - **Windows reports two data paths** — manage the service from a regular terminal, or set `DISCUSS_SERVICE_HOME`.
 - **Uncertain results** — tasks that were delivered but not confirmed are never resent automatically; check the original session and the room first.

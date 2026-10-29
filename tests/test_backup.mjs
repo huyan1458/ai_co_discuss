@@ -64,6 +64,35 @@ test("readable backups separate stored and explicitly marked legacy user request
   assert.match(room_markdown(snapshot), /## 用户原文\n\n```text\n原始要求\n第二行\n```\n\n## 背景\n\n```text\n项目背景与入口：\n补充背景/);
 });
 
+test("version 2 Markdown exports session arrangements but excludes system task messages", () => {
+  const snapshot = backup_fixture();
+  snapshot.version = 2;
+  snapshot.tables.messages = [
+    { id: 1, author: "用户", text: "普通问题", source: "user", created_at: "2026-10-16T10:00:00Z" },
+    { id: 2, author: "用户", text: "内部主持任务", source: "system", created_at: "2026-10-16T10:01:00Z" },
+    { id: 3, author: "Codex", text: "专家回答", source: "cli", created_at: "2026-10-16T10:02:00Z" },
+    { id: 4, author: "用户", text: "内部专家任务", source: "system", created_at: "2026-10-16T10:03:00Z" },
+  ];
+  snapshot.tables.room_members = [{ id: 7, name: "Codex" }];
+  snapshot.tables.member_requests = [{ id: 8, member_id: 7, message_id: 4, answer_id: 3, status: "completed" }];
+  snapshot.tables.session_requests = [
+    { id: 41, session_id: 5, purpose: "discuss_host", member_id: 7, round: 1, position: 0, status: "answered", question: "内部主持问题", created_at: "now" },
+    { id: 42, session_id: 5, purpose: "discuss", member_id: 7, round: 1, position: 1, status: "answered", question: "邀请成员补充", member_request_id: 8, created_at: "now" },
+  ];
+  snapshot.tables.task_message_sources = [
+    { message_id: 2, session_id: 5, session_request_id: 41 },
+    { message_id: 4, session_id: 5, session_request_id: 42 },
+  ];
+  const markdown = room_markdown(snapshot);
+  assert.match(markdown, /消息：2 条；发言安排：2 项/);
+  assert.match(markdown, /session-5-request-42/);
+  assert.match(markdown, /邀请成员补充/);
+  assert.match(markdown, /回答：\[#3\]\(#message-3\)/);
+  assert.match(markdown, /安排 #7 · Gemini/);
+  assert.doesNotMatch(markdown, /内部主持任务|内部专家任务|内部主持问题/);
+  assert.doesNotMatch(markdown, /session-5-request-41/);
+});
+
 test("standard ZIP reader recovers complete Unicode JSON, transcript and references", async () => {
   const snapshot = backup_fixture();
   const archive = await create_room_archive(snapshot);
@@ -91,7 +120,7 @@ function controller_fixture(request) {
   const notifications = [];
   const context = vm.createContext({ state: { room: { id: "one" }, query: "filter", page: 3 },
     element: () => button, publish_view() {}, location: { origin: "https://example.test" }, localStorage: { getItem: () => null },
-    request_json: request, window: { discuss_backup: { async download_room_backup(snapshot) { downloaded.push(snapshot); } } },
+    request_json: request, attach_local_members: async () => {}, window: { discuss_backup: { async download_room_backup(snapshot) { downloaded.push(snapshot); } } },
     show_toast: (text) => notifications.push(text) });
   vm.runInContext(source.slice(start, end), context);
   return { context, button, downloaded, notifications };
@@ -123,6 +152,15 @@ test("sidebar export targets the selected menu room without switching the curren
   assert.equal(fixture.context.state.draft, "保留草稿");
   assert.equal(fixture.context.state.query, "filter");
   assert.equal(fixture.downloaded[0].source_url, "https://example.test/r/archived-room");
+});
+
+test("backup confirmation counts only ordinary messages", async () => {
+  const snapshot = backup_fixture();
+  snapshot.tables.messages = [{ id: 1, text: "普通发言" }, { id: 2, text: "系统任务" }];
+  snapshot.tables.task_message_sources = [{ message_id: 2, session_id: 3, session_request_id: 4 }];
+  const fixture = controller_fixture(async () => snapshot);
+  await fixture.context.backup_room();
+  assert.deepEqual(fixture.notifications, ["已生成备份（1 条消息），请查看浏览器下载。"]);
 });
 
 test("a failed backup permits retry without claiming a completed download", async () => {

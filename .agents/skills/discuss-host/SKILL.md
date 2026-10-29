@@ -15,10 +15,10 @@ description: "AI CoDiscuss 的主持技能，仅主持人调用，且须同时�
 
 | 场景 | 读 |
 |---|---|
-| 自由协作房间的主持人（任务含 `mode: "free"`、`role: "host"`） | [自由协作主持](references/free.md) |
-| 讨论房间：收到自动主持任务（含网页启动交付的任务）、到限、收束 | [讨论主持](references/discussion.md) |
+| 自由协作请求（任务含 `mode: "free"`、`role: "host"`，且没有 `discussion_request`） | [自由协作主持](references/free.md) |
+| 协作房间中的讨论主持任务（`mode` 仍为 `free`，`discussion_request.purpose` 为 `discuss_host`） | [讨论主持](references/discussion.md) |
 | 用户要开始新讨论，当前会话还没有自动任务 | [新建讨论与从 AI 对话发起](references/launch.md) |
-| 用户选择手动模式、需要在线专家转交、处理已有原生任务 | [手动接入与持续主持](references/manual.md)，自动讨论不加载 |
+| 本地手动成员注册说明，或网页来源成员在自由协作 / 讨论中的代发 | [手动接入与网页成员代发](references/manual.md) |
 
 ## 硬约束
 

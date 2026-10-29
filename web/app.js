@@ -943,18 +943,37 @@ function cancel_reply() {
   element("reply-preview").hidden = true;
 }
 
+/** Treat the historical `online` value as read-only web access while new rooms store it as manual + source=web. */
+function is_web_member(member) {
+  return member?.manual_source === "web" || member?.access === "online";
+}
+
 /** Read and validate the current composer before any upload starts. */
 function message_payload() {
   const text = element("message-input").value.trim();
   if ([...text].length > MAX_MESSAGE_LENGTH) throw new Error(`留言最多 ${MAX_MESSAGE_LENGTH} 字，原文已保留，请调整后提交`);
   // Free rooms: the owner always speaks as the user; naming members is the server's job.
   if (state.room.mode === "free") {
-    const online = (state.room.free?.members || []).find(member => member.name === state.free_proxy && member.access === "online" && member.status === "active");
-    // Forwarding an online member's answer closes every request still waiting for it.
-    if (online) return { author: online.name, text, reply_to: state.reply_to, kind: "chat", submitted_by: "用户",
-      request_ids: state.room.free.requests.filter(item => item.member === online.name && item.status === "pending").map(item => item.id) };
+    const members = state.room.free?.members || [];
+    const web_member = members.find(member => member.name === state.free_proxy && is_web_member(member) && member.status === "active");
+    if (state.free_proxy) {
+      if (!web_member) throw new Error("只能代发仍在场的网页成员；本地成员须自行提交回答");
+      const pending = (state.room.free?.requests || []).filter(item => item.member === web_member.name && item.status === "pending");
+      const discussion = pending.find(item => item.purpose === "discuss");
+      const requests = discussion ? [discussion] : pending.filter(item => ["ask", "all"].includes(item.purpose));
+      if (!requests.length) throw new Error(`${web_member.name} 没有可代发的待处理请求`);
+      return with_answer_summary({ author: web_member.name, text, reply_to: state.reply_to, kind: "chat", submitted_by: "用户",
+        request_ids: requests.map(item => item.id) });
+    }
     const payload = { author: "用户", text, reply_to: state.reply_to, kind: "chat", submitted_by: "用户" };
-    const active = (state.room.free?.members || []).filter(member => member.status === "active" && (member.access !== "manual" || member.registered_at)).map(member => member.name);
+    const active = members.filter(member => member.status === "active" && (member.access !== "manual" || member.registered_at || is_web_member(member))).map(member => member.name);
+    const session = state.room.session;
+    const session_live = session && ["active", "paused"].includes(session.status);
+    if (session_live) {
+      const direct = active.filter(name => mentioned(text, name));
+      if (direct.length) payload.to = direct;
+      return payload;
+    }
     // @mentions outside code name members (@全体成员 or @all names them all, answering at once or in turn as smart scheduling decides;
     // @全体依次 or @all-seq has them answer one after another, the host first); without any, the server gives the message to the only member or the host.
     const sequential = mentioned(text, "全体依次") || mentioned(text, "all-seq");
@@ -967,7 +986,8 @@ function message_payload() {
   }
   const mode = element("message-kind").value;
   const author = mode === "moderation" ? "用户" : element("author-select").value;
-  if (author !== "用户" && state.room.experts?.[author] !== "online") throw new Error("本地 AI 须自行提交回答；网页仅代发在线成员的真实原文");
+  const author_member = (state.room.free?.members || state.room.members || []).find(member => member.name === author);
+  if (author !== "用户" && !is_web_member(author_member) && state.room.experts?.[author] !== "online") throw new Error("本地 AI 须自行提交回答；网页仅代发在线成员的真实原文");
   const payload = { author, text, reply_to: state.reply_to, turn_id: state.turn_reply_to,
     kind: mode === "moderation" ? mode : "opinion", submitted_by: "用户" };
   // @mentions of active members outside code are direct questions; the website queues them beside the discussion.
@@ -975,12 +995,16 @@ function message_payload() {
     const named = (state.room.members || []).filter(member => member.status === "active" && member.name !== "用户" && mentioned(text, member.name)).map(member => member.name);
     if (named.length) payload.to = named;
   }
-  if (payload.kind === "opinion" && payload.author !== "用户") {
-    payload.summary = element("message-summary").value.trim();
-    payload.summary_by = element("message-summary-source").value === "submitter" ? payload.submitted_by : payload.author;
-    if ([...payload.summary].length > MAX_SUMMARY_LENGTH) throw new Error(`回答摘要最多 ${MAX_SUMMARY_LENGTH} 字，草稿已保留`);
-  }
+  if (payload.kind === "opinion" && payload.author !== "用户") with_answer_summary(payload);
   if ([...payload.text].length > MAX_MESSAGE_LENGTH) throw new Error(`留言最多 ${MAX_MESSAGE_LENGTH} 字，原文已保留，请调整后提交`);
+  return payload;
+}
+
+/** Keep the summary and its author with the forwarded original in either room format. */
+function with_answer_summary(payload) {
+  payload.summary = element("message-summary").value.trim();
+  payload.summary_by = element("message-summary-source").value === "submitter" ? payload.submitted_by : payload.author;
+  if ([...payload.summary].length > MAX_SUMMARY_LENGTH) throw new Error(`回答摘要最多 ${MAX_SUMMARY_LENGTH} 字，草稿已保留`);
   return payload;
 }
 
@@ -1331,7 +1355,9 @@ async function invite_member({ name, access, project_access = "read", session_id
     if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
     const taken = new Set((state.room.free?.members || state.room.members || []).map(member => member.name));
     const instance = unique_instance(name, taken);
-    const record = prepare_member_request(room_id, `add:${name}:${access}`, { name: instance, access, adapter: "", session_mode: "new" }, { project_access, session_id: session_id.trim() });
+    const web_member = access === "online";
+    const record = prepare_member_request(room_id, `add:${name}:${access}`, { name: instance, access: web_member ? "manual" : access,
+      ...(web_member ? { manual_source: "web" } : {}), adapter: "", session_mode: "new" }, { project_access, session_id: session_id.trim() });
     let result;
     if (access === "runner") {
       const draft = launch_options();
@@ -1349,7 +1375,7 @@ async function invite_member({ name, access, project_access = "read", session_id
     delete description_drafts[name];
     delete label_drafts[name];
     if (state.room?.id === room_id) {
-      state.free_notice = access === "online" ? `${record.member.name} 已加入，阅读通知与真实回答由你或授权主持人转交。`
+      state.free_notice = web_member ? `${record.member.name} 已加入，阅读通知与真实回答由你或授权主持人转交。`
         // A manual member's start step lives on the board row, the composer bar and the invite dialog; no extra notice.
         : access === "manual" ? ""
           : record.options?.session_id ? `${record.member.name} 已接入原会话；它工作时请不要在原窗口继续操作。`
@@ -1729,7 +1755,7 @@ function save_room_credentials(room, token, members = []) {
   const saved = member_credentials(room.id);
   for (const member of members) {
     const public_member = (room.members || room.free?.members || []).find(item => item.name === member.name);
-    saved[member.name] = { token: member.token, access: member.access, id: public_member?.id };
+    saved[member.name] = { token: member.token, access: member.access, manual_source: member.manual_source || "", id: public_member?.id };
   }
   localStorage.setItem(MEMBER_ACCESS_PREFIX + room.id, JSON.stringify(saved));
 }
@@ -1747,8 +1773,8 @@ function access_snapshot() {
   const saved = member_credentials(room.id);
   return { can_manage: has_room_control(room.id),
     members: (room.members || room.free?.members || []).filter(member => member.status !== "removed").map(member => ({
-      name: member.name, access: member.access, available: member.status === "active" && member.access !== "online"
-        && Boolean(saved[member.name]?.token) && (saved[member.name].access === "online") === (member.access === "online")
+      name: member.name, access: is_web_member(member) ? "online" : member.access, available: member.status === "active" && !is_web_member(member)
+        && Boolean(saved[member.name]?.token) && is_web_member(saved[member.name]) === is_web_member(member)
         && (!saved[member.name].id || saved[member.name].id === member.id),
     })), notice: state.access_notice, error: state.access_error };
 }
@@ -1756,7 +1782,8 @@ function access_snapshot() {
 /** Generate a separate random credential for each declared participant instance; `cli` members are woken locally. */
 function creation_members(experts) {
   return Object.entries(experts || {}).map(([name, capability]) => ({ name, token: crypto.randomUUID() + crypto.randomUUID(),
-    adapter: "", access: capability === "cli" ? "runner" : capability, session_mode: "new" }));
+    adapter: "", access: capability === "cli" ? "runner" : capability === "online" ? "manual" : capability,
+    ...(capability === "online" ? { manual_source: "web" } : {}), session_mode: "new" }));
 }
 
 /** Capture public form choices separately from the private credentials added at submission. */
@@ -1843,9 +1870,9 @@ async function submit_room(event, folder_id = null) {
 async function open_discussion_after_creation(room_id, { goal, named_followup, limits }) {
   const path = `/api/rooms/${room_id}`;
   try {
-    await request_json(`${path}/discussion`, { action: "start", ...(goal ? { goal } : {}), limits, named_followup });
-    const runtime = await request_json(`${path}/runtime`);
-    await request_json(`${path}/runtime`, { action: "start", mode: "automatic", revision: runtime.revision, deadline: 0 });
+    const current = await request_json(`${path}/discussion`);
+    await request_json(`${path}/discussion`, { action: "start", revision: current.revision,
+      ...(goal ? { goal } : {}), limits, named_followup });
   } catch (error) {
     show_toast(`房间已创建，但开启讨论失败：${error.message}；可在右侧成员栏重试`);
   }
@@ -2137,7 +2164,7 @@ function participant_model(name, room, saved) {
 /** A woken member's project files as 只读 / 可写; empty when the site does not decide them (App, its own agy project, a taken-over manual member, unread settings). */
 function participant_files(name, room, saved) {
   const member = (room?.members || []).find(item => item.name === name);
-  if (member?.access === "online") return "只读";
+  if (is_web_member(member)) return "只读";
   if (member?.access !== "runner") return "";
   const profile = saved?.room_id === room.id ? saved.participants?.[name] : null;
   if (!profile) return "";
@@ -2693,109 +2720,71 @@ function execution_label(event) {
   return `${event.participant} · ${status}${event.result ? ` · ${event.result}` : ""}`;
 }
 
-/** Save an explicit mode selection; never start software from a preference change. */
-async function choose_runtime(mode) {
-  const room_id = state.room.id;
-  const path = `/api/rooms/${room_id}/runtime`;
-  const runtime = await request_json(path);
-  if (runtime.mode !== mode) {
-    if (!has_room_control(room_id)) throw new Error(MANAGEMENT_LOGIN_HINT);
-    await request_json(path, { action: "configure", mode, revision: runtime.revision });
+/** Read the session revision and bind the write to that session and room. */
+async function discussion_control(room_id, action, expected_session_id = null, payload = {}) {
+  if (!has_room_control(room_id)) throw new Error(MANAGEMENT_LOGIN_HINT);
+  const path = `/api/rooms/${room_id}/discussion`;
+  const current = await request_json(path);
+  if (expected_session_id !== null && current.session?.id !== expected_session_id) {
+    throw new Error("讨论会话已变化，请刷新后重试");
   }
-  if (state.room?.id !== room_id) return;
-  await refresh_room();
-  show_toast(mode === "automatic" ? "已选择全自动；请完成本机接入配置后启动" : "已选择手动复制冷启动");
+  return request_json(path, { ...payload, action, revision: current.revision });
 }
 
-/** Pause automatic execution, or the topic phase when no run is active. */
+/** Pause the current discussion session. */
 async function pause_discussion() {
-  if (state.room.runtime?.status === "running") return pause_runtime();
-  await request_json(`/api/rooms/${state.room.id}/topic`, { actor: "用户", phase: "paused" });
-  await refresh_room();
-  show_toast("讨论已暂停，原安排保留");
-}
-
-/** Resume with the topic's current limits; the server also preserves an active summary deadline. */
-async function restart_discussion() {
-  const path = `/api/rooms/${state.room.id}/runtime`;
-  const runtime = await request_json(path);
-  await request_json(path, { action: "start", mode: "automatic", revision: runtime.revision, deadline: 0 });
-  await refresh_room();
-  show_toast("已重启，原安排会重新交给对应 AI；需本机接入程序保持运行");
-}
-
-/** Only the failed attempt for the still-retained task can restart this discussion. */
-function can_retry_execution(execution, room) {
-  const runtime = room.runtime;
-  if (!execution || room.archived || room.phase !== "paused" || runtime?.mode !== "automatic"
-    || runtime.status !== "paused" || runtime.latest_execution?.id !== execution.id
-    || runtime.latest_execution.status !== "failed") return false;
-  const turn = room.current_turn;
-  const active_turn = turn && ["pending", "notified"].includes(turn.status);
-  return execution.role === "host" ? !active_turn && execution.participant === room.host
-    : active_turn && turn.id === execution.turn_id && turn.expert === execution.participant;
-}
-
-/** Recheck the selected failed attempt before resuming its retained task with a new execution. */
-async function retry_execution(event_id) {
-  const room_id = state.room.id;
-  const room = await request_json(`/api/rooms/${room_id}`);
-  const execution = room.runtime?.failures?.find(item => item.id === event_id);
-  if (!can_retry_execution(execution, room)) throw new Error("执行或安排已变化，请刷新后重试");
-  await request_json(`/api/rooms/${room_id}/runtime`, {
-    action: "start", mode: "automatic", revision: room.runtime.revision, deadline: 0,
-  });
+  const room_id = state.room.id, session_id = state.room.session?.id;
+  if (!session_id || state.room.session.status !== "active") throw new Error("当前没有可暂停的讨论");
+  await discussion_control(room_id, "pause", session_id);
   if (state.room?.id !== room_id) return;
   await refresh_room();
-  show_toast(`已重新安排 ${execution.participant} 执行，原失败记录保留`);
+  show_toast("讨论已暂停");
+}
+
+/** Resume the paused session after reading its current revision. */
+async function restart_discussion() {
+  const room_id = state.room.id, session_id = state.room.session?.id;
+  if (!session_id || state.room.session.status !== "paused") throw new Error("讨论会话已变化，请刷新后重试");
+  await discussion_control(room_id, "resume", session_id);
+  if (state.room?.id !== room_id) return;
+  await refresh_room();
+  show_toast("讨论已继续，由主持人检查队列并推进");
 }
 
 /** Skip the selected assignment: the user posts a "skipped" answer for the expert, so the plan moves on to the next one like after any answer. */
 async function skip_turn() {
   const room = state.room;
   const turn = room.current_turn;
-  if (!turn || !["pending", "notified"].includes(turn.status)) throw new Error("当前没有可跳过的发言安排，请刷新后核对");
-  const room_id = room.id, path = `/api/rooms/${room_id}`;
-  const runtime = room.runtime || {};
-  const resume = runtime.mode === "automatic" && (runtime.status === "paused" || runtime.expired);
-  const revision = runtime.revision;
-  let saved = false;
-  try {
-    await request_json(`${path}/messages`, { author: turn.expert, submitted_by: "用户", kind: "opinion", turn_id: turn.id,
-      text: "（本次发言已被用户跳过）", submission_id: new_submission_id() });
-    saved = true;
-    if (resume) await request_json(`${path}/runtime`, { action: "start", mode: "automatic", revision, deadline: 0 });
-  } catch (error) {
-    if (saved && resume) throw new Error(`本次发言已跳过，但未能继续讨论：${error.message}。核对后可点“重启”继续`);
-    throw error;
-  } finally {
-    if (state.room?.id === room_id) await refresh_room();
-  }
-  if (state.room?.id === room_id) show_toast("已跳过本次发言，按计划交给下一位");
-}
-
-/** Resume the automatic run after the user reopens a concluded discussion. */
-async function resume_after_limit_decision() {
-  const path = `/api/rooms/${state.room.id}/runtime`;
-  const runtime = await request_json(path);
-  await request_json(path, { action: "start", mode: "automatic", revision: runtime.revision, deadline: 0 });
+  const room_id = room.id, session_id = room.session?.id;
+  if (!session_id || !turn?.id || !["open", "pending"].includes(turn.status)) throw new Error("当前没有可跳过的发言安排，请刷新后核对");
+  if (!has_room_control(room_id)) throw new Error(MANAGEMENT_LOGIN_HINT);
+  await request_json(`/api/rooms/${room_id}/turns/${turn.id}`, { actor: "用户", status: "cancelled" });
+  if (state.room?.id !== room_id || state.room.session?.id !== session_id) return;
+  await refresh_room();
+  show_toast("已跳过本次发言");
 }
 
 /** Reopen a concluded discussion with a fresh round and time budget; history stays. */
 async function reopen_discussion({ max_rounds, max_minutes }) {
-  await request_json(`/api/rooms/${state.room.id}/limits`, { actor: "用户", action: "reopen", max_rounds, max_minutes });
-  await resume_after_limit_decision();
+  const room = state.room, room_id = room.id;
+  const view = await request_json(`/api/rooms/${room_id}/discussion`);
+  if (state.room?.id !== room_id) return;
+  if (view.session) throw new Error("讨论会话已变化，请刷新后重试");
+  if (!has_room_control(room_id)) throw new Error(MANAGEMENT_LOGIN_HINT);
+  await request_json(`/api/rooms/${room_id}/discussion`, { action: "start", revision: view.revision,
+    goal: room.session?.goal || room.goal, named_followup: room.named_followup ?? true,
+    limits: { max_rounds, max_minutes, execution_minutes: room.limits?.execution_minutes ?? 0 } });
+  if (state.room?.id !== room_id) return;
   await refresh_room();
-  show_toast("讨论已重启，按新的轮次与时长上限继续");
+  show_toast("已开启新的讨论会话，按新的轮次与时长上限继续");
 }
 
 /** End early without a summary, keeping every original message. */
 async function conclude_discussion() {
-  const turn = state.room.current_turn;
-  if (turn && ["pending", "notified"].includes(turn.status)) {
-    await request_json(`/api/rooms/${state.room.id}/turns/${turn.id}`, { actor: "用户", status: "cancelled" });
-  }
-  await request_json(`/api/rooms/${state.room.id}/topic`, { actor: "用户", phase: "concluded" });
+  const room_id = state.room.id, session_id = state.room.session?.id;
+  if (!session_id) throw new Error("当前没有进行中的讨论");
+  await discussion_control(room_id, "end", session_id);
+  if (state.room?.id !== room_id) return;
   await refresh_room();
   show_toast("讨论已直接收束，历史记录保留");
 }
@@ -2804,25 +2793,28 @@ async function conclude_discussion() {
 async function start_room_discussion({ goal, max_rounds, max_minutes, execution_minutes = 0, named_followup = false }) {
   const room_id = state.room.id, path = `/api/rooms/${room_id}`;
   if (!has_room_control(room_id)) throw new Error(MANAGEMENT_LOGIN_HINT);
-  await request_json(`${path}/discussion`, { action: "start", ...(goal ? { goal } : {}), limits: { max_rounds, max_minutes, execution_minutes }, named_followup });
-  const runtime = await request_json(`${path}/runtime`);
-  await request_json(`${path}/runtime`, { action: "start", mode: "automatic", revision: runtime.revision, deadline: 0 });
+  const current = await request_json(`${path}/discussion`);
+  if (state.room?.id !== room_id) return;
+  await request_json(`${path}/discussion`, { action: "start", revision: current.revision,
+    ...(goal ? { goal } : {}), limits: { max_rounds, max_minutes, execution_minutes }, named_followup });
+  if (state.room?.id !== room_id) return;
   await refresh_room();
   show_toast("讨论已开启，由主持人推进；需本机接入程序保持运行");
 }
 
 /** Conclude the discussion and go on as a free room; every message and the conclusion stay. */
 async function end_room_discussion() {
-  await request_json(`/api/rooms/${state.room.id}/discussion`, { action: "end" });
+  const room_id = state.room.id, session_id = state.room.session?.id;
+  if (!session_id) throw new Error("当前没有进行中的讨论");
+  await discussion_control(room_id, "end", session_id);
+  if (state.room?.id !== room_id) return;
   await refresh_room();
   show_toast("讨论已结束，房间回到自由协作，历史记录保留");
 }
 
 /** Revoke active execution before the local adapters are stopped. */
 async function pause_runtime() {
-  await request_json(`/api/rooms/${state.room.id}/runtime`, { action: "pause", revision: state.room.runtime.revision });
-  await refresh_room();
-  show_toast("已暂停；旧执行不能继续写入");
+  return pause_discussion();
 }
 
 /** Download JSON through a temporary object URL without exposing its contents in the page. */
@@ -2985,6 +2977,8 @@ async function rewind_and_send({ message_id, revision, text }) {
  */
 function fork_snapshot(snapshot, message_id, room_id, now = new Date().toISOString()) {
   const tables = snapshot.tables;
+  const cutoff_message = tables.messages.find(row => row.id === message_id);
+  const cutoff_time = cutoff_message ? Date.parse(cutoff_message.created_at) : Infinity;
   const withdrawn = new Set((tables.message_withdrawals || []).map(row => row.message_id));
   const kept = new Set(tables.messages.filter(row => row.id <= message_id && !withdrawn.has(row.id)).map(row => row.id));
   const on_kept = rows => (rows || []).filter(row => kept.has(row.message_id));
@@ -2996,6 +2990,68 @@ function fork_snapshot(snapshot, message_id, room_id, now = new Date().toISOStri
   }
   const [room] = tables.rooms;
   const covered = until => (until || 0) <= message_id;
+  const before_cutoff = timestamp => !timestamp || Number.isNaN(Date.parse(timestamp)) || Date.parse(timestamp) <= cutoff_time;
+  const sessions = (tables.discussion_sessions || []).filter(row => (row.started_message_id || 0) <= message_id);
+  const session_ids = new Set(sessions.map(row => row.id));
+  const source_by_plan = new Map((tables.task_message_sources || []).map(row => [row.session_request_id, row]));
+  const candidate_requests = (tables.session_requests || []).filter(row => {
+    if (!session_ids.has(row.session_id)) return false;
+    const source = source_by_plan.get(row.id);
+    if (source) return kept.has(source.message_id);
+    return Date.parse(row.created_at) <= cutoff_time;
+  });
+  const candidate_request_ids = new Set(candidate_requests.map(row => row.id));
+  const candidate_sources = (tables.task_message_sources || []).filter(row => session_ids.has(row.session_id)
+    && candidate_request_ids.has(row.session_request_id));
+  const retained_source_messages = new Set(candidate_sources.map(row => row.message_id));
+  for (const source of tables.task_message_sources || []) {
+    if (kept.has(source.message_id) && !retained_source_messages.has(source.message_id)) kept.delete(source.message_id);
+  }
+  const original_member_requests = new Map((tables.member_requests || []).map(row => [row.id, row]));
+  const stopped_session_requests = new Set(candidate_requests.filter(row => ["open", "queued"].includes(row.status))
+    .map(row => row.member_request_id).filter(Boolean));
+  const member_requests = on_kept(tables.member_requests).map(row => row.answer_id && !kept.has(row.answer_id)
+    ? { ...row, status: "cancelled", answer_id: null }
+    : stopped_session_requests.has(row.id) ? { ...row, status: "cancelled" } : row);
+  const kept_member_requests = new Set(member_requests.map(row => row.id));
+  const session_requests = candidate_requests.map(row => {
+    const original_request = original_member_requests.get(row.member_request_id);
+    const answer_after_cutoff = original_request?.answer_id && !kept.has(original_request.answer_id);
+    return { ...row, member_request_id: kept_member_requests.has(row.member_request_id) ? row.member_request_id : null,
+      status: ["open", "queued"].includes(row.status) || answer_after_cutoff ? "cancelled" : row.status };
+  });
+  const session_request_ids = new Set(session_requests.map(row => row.id));
+  const task_message_sources = candidate_sources.filter(row => kept.has(row.message_id)
+    && session_request_ids.has(row.session_request_id)).map(row => ({ ...row,
+    cause_message_id: kept.has(row.cause_message_id) ? row.cause_message_id : null,
+    cause_request_id: kept_member_requests.has(row.cause_request_id) ? row.cause_request_id : null }));
+  const session_tables = Object.fromEntries(["session_state", "session_limits", "session_round_budgets", "session_options", "session_pauses"]
+    .map(name => [name, (tables[name] || []).filter(row => session_ids.has(row.session_id))]));
+  session_tables.session_state = session_tables.session_state.map(row => ({ ...row,
+    read_until: Math.min(row.read_until || 0, message_id), held_since: 0 }));
+  session_tables.session_pauses = session_tables.session_pauses.map(row => ({ ...row, paused_at: 0 }));
+  const conclusions = (tables.discussion_conclusions || []).filter(row => session_ids.has(row.session_id)
+    && before_cutoff(row.concluded_at)).map(row => covered(row.state_until)
+    ? row : { ...row, state: "", state_until: 0, brief: "" });
+  const truncated_sessions = sessions.map(row => {
+    const ended_after_cutoff = !row.ended_message_id || row.ended_message_id > message_id;
+    return { ...row, status: "concluded", ended_message_id: ended_after_cutoff ? message_id : row.ended_message_id };
+  });
+  for (const session of truncated_sessions) {
+    if (conclusions.some(row => row.session_id === session.id)) continue;
+    const original_session = sessions.find(row => row.id === session.id);
+    if (!original_session || !(["active", "paused"].includes(original_session.status) || !original_session.ended_message_id
+      || original_session.ended_message_id > message_id)) continue;
+    const limit = session_tables.session_limits.find(row => row.session_id === session.id) || {};
+    const session_end = session.ended_message_id || message_id;
+    const state_until = covered(room.state_until) && room.state_until > session.started_message_id
+      && room.state_until <= session_end ? room.state_until : 0;
+    const brief = (tables.room_briefs || []).find(row => covered(row.until) && before_cutoff(row.updated_at)
+      && row.until > session.started_message_id && row.until <= session_end);
+    conclusions.push({ session_id: session.id, room_id: room_id, stop_reason: "forked", max_rounds: limit.max_rounds || 0,
+      max_minutes: limit.max_minutes || 0, brief: brief?.text || "", state: state_until ? room.state_text : "",
+      state_until, concluded_at: now });
+  }
   return { executions, body: { format: snapshot.format, version: snapshot.version, tables: { ...tables,
     rooms: [{ ...room, id: room_id, title: `${room.title}（分支）`, created_at: now,
       ...(covered(room.state_until) ? {} : { state_text: "", state_until: 0 }) }],
@@ -3006,11 +3062,15 @@ function fork_snapshot(snapshot, message_id, room_id, now = new Date().toISOStri
     message_timings: on_kept(tables.message_timings), attachments: on_kept(tables.attachments),
     member_suggestions: on_kept(tables.member_suggestions), member_recommendations: on_kept(tables.member_recommendations),
     // A request answered after the fork point is unanswered in the fork.
-    member_requests: on_kept(tables.member_requests).map(row => row.answer_id && !kept.has(row.answer_id)
-      ? { ...row, status: "cancelled", answer_id: null } : row),
+    member_requests,
     discussion_turns: (tables.discussion_turns || []).filter(row => !row.answer_id || kept.has(row.answer_id)),
+    discussion_sessions: truncated_sessions,
+    discussion_conclusions: conclusions,
+    session_requests,
+    task_message_sources,
+    ...session_tables,
     scheduler_decisions: (tables.scheduler_decisions || []).filter(row => !row.after_message_id || kept.has(row.after_message_id)),
-    room_briefs: (tables.room_briefs || []).filter(row => covered(row.until)),
+    room_briefs: (tables.room_briefs || []).filter(row => covered(row.until) && before_cutoff(row.updated_at)),
     room_members: (tables.room_members || []).map(row => ({ ...row, read_until: Math.min(row.read_until || 0, message_id) })) } } };
 }
 
@@ -3122,7 +3182,7 @@ function render_topic() {
     for (const key of ["max_rounds", "max_minutes", "execution_minutes"]) {
       const input = element(`topic-limit-${key}-input`);
       input.value = room.limits?.[key] || "";
-      input.disabled = !["preparing", "paused"].includes(room.phase);
+      input.disabled = ["active", "paused"].includes(room.session?.status);
     }
     render_expert_inputs("topic-expert-modes", room.experts);
   }
@@ -3171,12 +3231,13 @@ function turn_guidance(turn, room) {
 function topic_member_requests(room, experts) {
   const current = room.members || [];
   return Object.entries(experts).map(([name, capability]) => {
-    const access = capability === "online" ? "online" : room.runtime?.mode === "automatic" ? "runner" : "manual";
+    const web_member = capability === "online";
+    const access = web_member ? "manual" : room.runtime?.mode === "automatic" ? "runner" : "manual";
     const operation = `topic:${name}:${access}`;
     const member = current.find(item => item.name === name && item.status === "active");
     const pending = localStorage.getItem(MEMBER_PENDING_PREFIX + room.id + ":" + operation);
-    if (!pending && member && (member.access === "online") === (capability === "online")) return null;
-    return prepare_member_request(room.id, operation, { name, access, adapter: "", session_mode: "new" });
+    if (!pending && member && is_web_member(member) === web_member) return null;
+    return prepare_member_request(room.id, operation, { name, access, ...(web_member ? { manual_source: "web" } : {}), adapter: "", session_mode: "new" });
   }).filter(Boolean);
 }
 
@@ -3185,7 +3246,8 @@ async function save_topic(event) {
   event.preventDefault();
   const room = state.room;
   const payload = { actor: "用户", host: element("topic-host-select").value,
-    phase: element("topic-phase-select").value, experts: read_expert_inputs("topic-expert-modes"), limits: read_limits("topic") };
+    experts: read_expert_inputs("topic-expert-modes") };
+  if (!["active", "paused"].includes(room.session?.status)) payload.limits = read_limits("topic");
   for (const field of ["title", "goal", "focus", "user_request", "background", "boundaries"]) payload[field] = element(`topic-${field}-input`).value;
   const records = topic_member_requests(room, payload.experts);
   payload.members = records.map(record => record.member);
@@ -3193,7 +3255,7 @@ async function save_topic(event) {
   save_room_credentials({ ...result, id: room.id }, localStorage.getItem(`discuss-access:${room.id}`), payload.members);
   records.forEach(record => localStorage.removeItem(record.key));
   if (state.room?.id === room.id) { state.topic_dirty = false; await refresh_room(); }
-  show_toast("话题资料与进度已保存");
+  show_toast("话题资料已保存");
 }
 
 /** Schedule an expert with an identifier retained across uncertain retries. */
@@ -3260,14 +3322,13 @@ function update_composer_role() {
 /** Bind the topic workflow separately from existing chat controls. */
 function bind_host_controls() {
   const actions = { "topic-context": () => select_tab("context"), "edit-host-brief": () => select_tab("context"), "topic-history": () => select_tab("discussion"),
-    "runtime-auto": () => choose_runtime("automatic"), "runtime-manual": () => choose_runtime("manual"),
     "runtime-export": export_runtime,
     "local-launch-save": save_launch_defaults, "new-local-launch-save": save_launch_defaults,
     "local-launch-start": launch_current_room,
     "local-room-configuration-load": load_room_configuration, "local-room-configuration-save": save_room_configuration,
     "local-room-configuration-restart": restart_discussion,
     "runtime-pause": pause_runtime, "check-discussion-limits": check_limits,
-    "copy-turn": copy_turn, "confirm-notified": () => change_turn_status("notified"), "cancel-turn": () => change_turn_status("cancelled"),
+    "copy-turn": copy_turn, "cancel-turn": () => change_turn_status("cancelled"),
     "forward-turn": prepare_turn_answer, "cancel-turn-answer": cancel_turn_reply,
     "view-turn-answer": () => show_message(state.room.current_turn.answer_id),
     "copy-host": () => copy_member_join(state.room.host) };
@@ -3750,7 +3811,9 @@ async function backup_room(room_id = state.room?.id) {
     snapshot.source_url = `${location.origin}/r/${encodeURIComponent(room_id)}`;
     await attach_local_members(snapshot, room_id);
     await window.discuss_backup.download_room_backup(snapshot);
-    show_toast(`已生成备份（${snapshot.tables.messages.length} 条消息），请查看浏览器下载。`);
+    const task_messages = new Set((snapshot.tables.task_message_sources || []).map(row => row.message_id));
+    const message_count = snapshot.tables.messages.filter(message => !task_messages.has(message.id)).length;
+    show_toast(`已生成备份（${message_count} 条消息），请查看浏览器下载。`);
   } finally {
     state.backup_pending = false;
     element("backup-room").disabled = !state.room;
@@ -3879,9 +3942,9 @@ async function execute_view_action(name, value) {
     save_context: () => save_context(event), save_topic: () => save_topic(event),
     schedule: () => schedule_turn(event), filter: filter_view, reply: set_view_reply,
     cancel_reply, cancel_answer: cancel_turn_reply, prepare_answer: prepare_turn_answer,
-    copy_turn, notify: () => change_turn_status("notified"), cancel_turn: () => change_turn_status("cancelled"), skip_turn,
+    copy_turn, cancel_turn: () => change_turn_status("cancelled"), skip_turn,
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
-    choose_runtime, export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, retry_execution, conclude_discussion, start_room_discussion, end_room_discussion, reopen_discussion,
+    export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, conclude_discussion, start_room_discussion, end_room_discussion, reopen_discussion,
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
     load_room_configuration, save_room_configuration, interrupt_member, retry_delivery, retract_message, rewind_and_send, fork_room, change_member, reorder_speakers, invite_member, set_proxy, copy_online_notice,
     prepare_brainstorm, return_conclusion, adopt_recommendation, rate_decision,
@@ -3914,7 +3977,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form },
   request: request_json, rewind_plan, identities: IDENTITIES, display_name, sources: SOURCE_LABELS, phases: PHASE_LABELS,
-  set_member_access, allow_denials, set_member_adapter, reload_room_models, runtime_label, execution_label, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access, can_retry_execution,
+  set_member_access, allow_denials, set_member_adapter, reload_room_models, runtime_label, execution_label, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
   turns: TURN_LABELS, turn_label, turn_guidance, progress_round, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();

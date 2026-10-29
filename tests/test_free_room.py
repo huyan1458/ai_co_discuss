@@ -10,6 +10,7 @@ import uuid
 from contextlib import closing
 from pathlib import Path
 from urllib.error import HTTPError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from backend.server import DiscussionServer, init_database
@@ -64,6 +65,11 @@ class FreeRoomTests(unittest.TestCase):
             response = error
         with response:
             return response.status, json.loads(response.read())
+
+    def read_text(self, path):
+        """Read one plain-text room view from the public reader endpoint."""
+        with urlopen(Request(self.base + path), timeout=10) as response:
+            return response.read().decode("utf-8")
 
     def say(self, text, token=None, **extra):
         """Post one owner message with a fresh submission id."""
@@ -519,62 +525,564 @@ class MultiMemberTests(FreeRoomTests):
         return self.request(f"{self.path}/executions", {"member_id": self.member_id(name), "client_id": uuid.uuid4().hex,
                                                         "cwd": "d:/project"}, self.owner)
 
+    def start_session(self, goal="讨论目标", named_followup=False):
+        """Start a revision-bound discussion session and return its view."""
+        discussion = f"{self.path}/discussion"
+        current = self.request(discussion)[1]
+        status, result = self.request(discussion, {"action": "start", "goal": goal, "revision": current["revision"],
+                                                   "named_followup": named_followup}, self.owner)
+        self.assertEqual(status, 200, result)
+        return result
+
+    def session_roster(self):
+        """Read the latest session roster using the current host's member credential."""
+        return self.request(f"{self.path}/turns/roster", token=self.codex)[1]
+
+    def arrange_session(self, turns, roster=None, submission_id=None):
+        """Submit a host plan against the roster revision it was read from."""
+        roster = roster or self.session_roster()
+        payload = {"actor": "Codex", "turns": turns, "roster": roster["revision"],
+                   "submission_id": submission_id or uuid.uuid4().hex}
+        return self.request(f"{self.path}/turns", payload, self.codex)
+
     def say(self, text, token=None, **extra):
         """Single-member defaults do not apply here: name Claude unless told otherwise."""
         return super().say(text, token, **({"to": ["Claude"]} | extra))
 
+    def test_discussion_start_submission_recovers_only_its_original_session(self):
+        """A lost response replays the original start, even after a later session has started."""
+        path = f"{self.path}/discussion"
+        payload = {"action": "start", "goal": "原始目标", "submission_id": "launch-original",
+                   "revision": self.request(path)[1]["revision"]}
+        status, first = self.request(path, payload, self.owner)
+        self.assertEqual(status, 200, first)
+        self.assertFalse(first["duplicate"])
+        self.assertEqual(first["session"]["start_submission_id"], payload["submission_id"])
+        status, retry = self.request(path, payload, self.owner)
+        self.assertEqual(status, 200, retry)
+        self.assertTrue(retry["duplicate"])
+        self.assertEqual(retry["session"]["id"], first["session"]["id"])
+        self.assertEqual(self.request(path, payload, self.codex)[0], 403)
+        self.assertEqual(self.request(path, {**payload, "goal": "改写目标"}, self.owner)[0], 409)
+        self.assertEqual(self.request(path, {"action": "end", "revision": retry["revision"]}, self.owner)[0], 200)
+        second = self.start_session("用户后来开启的新目标")
+        status, old = self.request(path, payload, self.owner)
+        self.assertEqual(status, 200, old)
+        self.assertEqual((old["session"]["id"], old["session"]["status"]), (first["session"]["id"], "concluded"))
+        self.assertEqual(self.request(path)[1]["session"]["id"], second["session"]["id"])
+        with closing(sqlite3.connect(self.database)) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM discussion_sessions WHERE room_id=?", (self.room["id"],)).fetchone()[0], 2)
+
+    def test_concurrent_discussion_starts_keep_separate_submission_identities(self):
+        """Only one competing start succeeds; replaying the loser cannot adopt the winning session."""
+        path = f"{self.path}/discussion"
+        revision = self.request(path)[1]["revision"]
+        barrier = threading.Barrier(2)
+        results = {}
+
+        def start(submission_id):
+            barrier.wait()
+            results[submission_id] = self.request(path, {"action": "start", "goal": "并发启动",
+                                                         "revision": revision, "submission_id": submission_id}, self.owner)
+
+        threads = [threading.Thread(target=start, args=(name,)) for name in ("launch-first", "launch-second")]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(sorted(result[0] for result in results.values()), [200, 409])
+        winner = next(name for name, result in results.items() if result[0] == 200)
+        current = self.request(path)[1]["session"]
+        self.assertEqual(current["start_submission_id"], winner)
+        loser = next(name for name in results if name != winner)
+        self.assertEqual(self.request(path, {"action": "start", "goal": "并发启动", "revision": revision,
+                                             "submission_id": loser}, self.owner)[0], 409)
+
     def test_a_free_room_starts_and_ends_a_discussion_and_stays_one_room(self):
-        """Starting turns the free room into a discussion with its members and history; ending returns it to free collaboration."""
+        """A discussion session uses revisioned controls and leaves the room in free collaboration."""
         discussion = f"{self.path}/discussion"
         self.request(f"{self.path}/members", {"name": "Gemini", "token": uuid.uuid4().hex, "access": "manual"}, self.owner)
         first = self.say("先聊几句")[1]["message"]["id"]
         self.assertEqual(self.request(discussion, {"action": "start"}, self.member)[0], 403)
-        self.assertEqual(self.request(discussion, {"action": "pause"}, self.owner)[0], 400)
-        self.assertEqual(self.request(discussion, {"action": "end"}, self.owner)[0], 409)
-        # Free collaboration has no rounds; they count only messages after the discussion starts.
-        self.assertEqual(self.request(self.path)[1]["round_groups"], [])
-        status, started = self.request(discussion, {"action": "start", "goal": "选方案", "limits": {"max_rounds": 2, "max_minutes": 30}}, self.owner)
+        initial = self.request(discussion)[1]
+        self.assertIsNone(initial["session"])
+        self.assertEqual(self.request(discussion, {"action": "start"}, self.owner)[0], 400)
+        self.assertEqual(self.request(discussion, {"action": "end"}, self.owner)[0], 400)
+        status, started = self.request(discussion, {"action": "start", "revision": initial["revision"],
+                                                    "goal": "选方案", "limits": {"max_rounds": 2, "max_minutes": 30}}, self.owner)
         self.assertEqual(status, 200, started)
-        self.assertEqual((started["mode"], started["host"], started["goal"], started["limits"]["max_rounds"]), ("brainstorm", "Codex", "选方案", 2))
-        self.assertEqual(started["experts"], {"Claude": "cli", "Codex": "cli", "Gemini": "cli"})
-        self.assertEqual({member["name"]: member["access"] for member in started["members"]}, {"Claude": "runner", "Codex": "runner", "Gemini": "manual"})
-        self.assertEqual((started["session"]["status"], started["runtime"]["mode"], started["round_budget"]["base"]), ("paused", "automatic", 0))
+        self.assertEqual((started["session"]["status"], started["session"]["goal"], started["session"]["limits"]["max_rounds"]),
+                         ("active", "选方案", 2))
         self.assertEqual(started["session"]["started_message_id"], first)
-        self.assertEqual(self.request(discussion, {"action": "start"}, self.owner)[0], 409)
+        self.assertEqual(self.request(discussion, {"action": "start", "revision": started["revision"]}, self.owner)[0], 409)
         self.assertEqual(self.request(f"{self.path}/messages/{first}")[1]["text"], "先聊几句")
-        # A direct question still wakes a member inside the discussion.
-        self.assertEqual(self.request(f"{self.path}/messages", {"author": "用户", "text": "@Claude 现在怎么样", "to": ["Claude"], "submission_id": uuid.uuid4().hex}, self.owner)[0], 201)
-        self.assertEqual([item["status"] for item in self.request(self.path)[1]["asks"]["requests"] if item["message_id"] > first], ["pending"])
-        note = self.request(f"{self.path}/messages", {"author": "用户", "text": "暂停时留的话", "submission_id": uuid.uuid4().hex}, self.owner)[1]["message"]["id"]
-        self.assertEqual(self.request(f"{self.path}/state", {"actor": "用户", "text": "选 A", "brief": "倾向 A", "until": note}, self.owner)[0], 200)
-        self.assertIsNone(self.request(self.path)[1]["discussions"][0]["state"])
-        status, ended = self.request(discussion, {"action": "end"}, self.owner)
+        self.assertEqual(self.request(f"{self.path}/messages")[1]["total"], 1)
+        self.assertEqual(self.request(f"{self.path}/messages?withdrawn=include")[1]["total"], 1)
+        # A direct question remains a free-room request and does not alter the discussion session.
+        direct_message = self.request(f"{self.path}/messages", {"author": "用户", "text": "@Claude 现在怎么样", "to": ["Claude"], "submission_id": uuid.uuid4().hex}, self.owner)[1]["message"]
+        direct = self.request(self.path, token=self.owner)[1]["free"]["requests"]
+        self.assertEqual([(item["purpose"], item["status"]) for item in direct if item["message_id"] == direct_message["id"]],
+                         [("ask", "pending")])
+        self.assertEqual(self.request(discussion, {"action": "end", "revision": "stale"}, self.owner)[0], 409)
+        current = self.request(discussion)[1]
+        status, ended = self.request(discussion, {"action": "end", "revision": current["revision"]}, self.owner)
         self.assertEqual(status, 200, ended)
-        self.assertEqual((ended["mode"], ended["phase"], ended["session"]["status"], ended["runtime"]["status"]), ("free", "concluded", "concluded", "concluded"))
-        # The unnamed note the discussion's host never answered goes to the host now, as if just sent; the direct question is not repeated.
+        self.assertEqual(ended["session"], None)
+        # The room remains free; its ordinary direct question stays pending and can be handled normally.
         requests = self.request(self.path)[1]["free"]["requests"]
-        self.assertEqual([(item["member"], item["purpose"]) for item in requests if item["message_id"] > first], [("Claude", "ask"), ("Codex", "route")])
-        self.assertEqual([item["message_id"] for item in requests if item["purpose"] == "route"], [note])
-        # The room goes on as a free room, and a later discussion starts a new session with a fresh budget.
+        self.assertEqual([(item["member"], item["purpose"], item["status"]) for item in requests if item["message_id"] == direct_message["id"]],
+                         [("Claude", "ask", "pending")])
+        # The room can open a new session after the previous one concludes.
         self.assertEqual(super().say("没有点名")[0], 201)
-        status, again = self.request(discussion, {"action": "start", "goal": "第二轮"}, self.owner)
+        latest = self.request(discussion)[1]
+        status, again = self.request(discussion, {"action": "start", "revision": latest["revision"], "goal": "第二轮"}, self.owner)
         self.assertEqual(status, 200, again)
-        self.assertEqual(again["session"]["goal"], "第二轮")
-        sessions = self.request(self.path)[1]["session"]
-        self.assertEqual((sessions["status"], sessions["id"]), ("paused", 2))
-        # The first discussion keeps the conclusion it ended with even after the room's shared state is overwritten.
-        self.assertEqual(self.request(f"{self.path}/state", {"actor": "用户", "text": "新一轮", "brief": ""}, self.owner)[0], 200)
-        first_run, second_run = self.request(self.path)[1]["discussions"]
-        self.assertEqual((first_run["goal"], first_run["stop_reason"], first_run["max_rounds"], first_run["brief"], first_run["state"], first_run["state_until"]),
-                         ("选方案", "", 2, "倾向 A", "选 A", note))
-        self.assertEqual((first_run["messages_before"], second_run["goal"], second_run["state"]), (1, "第二轮", None))
-        # A discussion that never writes its own state does not inherit the previous one's.
-        self.assertEqual(self.request(discussion, {"action": "end"}, self.owner)[0], 200)
-        self.assertEqual(self.request(discussion, {"action": "start", "goal": "第三轮"}, self.owner)[0], 200)
-        self.assertEqual(self.request(discussion, {"action": "end"}, self.owner)[0], 200)
-        third_run = self.request(self.path)[1]["discussions"][2]
-        self.assertEqual((third_run["goal"], third_run["brief"], third_run["state"], third_run["state_until"]), ("第三轮", "", "", 0))
-        self.assertGreater(first_run["messages_through"], first_run["messages_before"])
+        self.assertEqual((again["session"]["goal"], again["session"]["status"]), ("第二轮", "active"))
+
+    def test_paused_discussion_routes_unnamed_owner_message_through_free_collaboration(self):
+        """An unnamed message during a paused session uses ordinary host routing without setting held_since."""
+        started = self.start_session()
+        self.assertEqual(self.request(f"{self.path}/discussion", {
+            "action": "pause", "revision": started["revision"],
+        }, self.owner)[0], 200)
+        status, posted = self.request(f"{self.path}/messages", {
+            "author": "用户", "text": "暂停期间的普通路由", "submission_id": uuid.uuid4().hex,
+        }, self.owner)
+        self.assertEqual(status, 201, posted)
+        message_id = posted["message"]["id"]
+        requests = [item for item in self.request(self.path, token=self.owner)[1]["free"]["requests"]
+                    if item["after_message_id"] == message_id]
+        self.assertEqual([(item["member"], item["purpose"]) for item in requests], [("Codex", "route")])
+        self.assertEqual(self.request(f"{self.path}/discussion")[1]["session"]["held_since"], 0)
+
+    def test_session_plans_require_fresh_roster_and_cover_all_waiting_experts(self):
+        """Single and multi-speaker plans require a current roster, and a whole round must cover its waiting members."""
+        gemini_token = uuid.uuid4().hex
+        self.request(f"{self.path}/members", {"name": "Gemini", "token": gemini_token}, self.owner)
+        self.request(f"{self.path}/members", {"name": "Claude-评审", "token": uuid.uuid4().hex}, self.owner)
+        self.start_session(named_followup=True)
+        self.assertTrue(self.request(self.path)[1]["named_followup"])
+        self.assertTrue(self.request(f"{self.path}/discussion")[1]["session"]["named_followup"])
+        roster = self.session_roster()
+        self.assertEqual(set(roster["waiting"]), {"Claude", "Gemini", "Claude-评审"})
+        turns = self.request(f"{self.path}/turns")[1]
+        self.assertEqual(turns["total"], 0, "host system tasks are not public discussion turns")
+        with closing(sqlite3.connect(self.database)) as connection:
+            host_task_id = connection.execute("SELECT id FROM session_requests WHERE purpose='discuss_host' ORDER BY id DESC LIMIT 1").fetchone()[0]
+        self.assertEqual(self.request(f"{self.path}/turns/{host_task_id}")[0], 404)
+        single = {"actor": "Codex", "expert": "Claude", "question": "单人安排", "submission_id": uuid.uuid4().hex}
+        self.assertEqual(self.request(f"{self.path}/turns", single, self.codex)[0], 400)
+        self.assertEqual(self.request(f"{self.path}/turns", {**single, "roster": "stale"}, self.codex)[0], 409)
+        full_round = [{"expert": name, "question": f"请回答 {name}"} for name in ("Claude", "Gemini", "Claude-评审")]
+        multi = {"actor": "Codex", "turns": full_round[:2], "submission_id": uuid.uuid4().hex}
+        self.assertEqual(self.request(f"{self.path}/turns", multi, self.codex)[0], 400)
+        self.assertEqual(self.request(f"{self.path}/turns", {**multi, "roster": "stale"}, self.codex)[0], 409)
+        status, missing = self.arrange_session(full_round[:2], roster)
+        self.assertEqual(status, 400, missing)
+        self.assertIn("Claude-评审", missing["error"])
+        status, plan = self.arrange_session(full_round, roster)
+        self.assertEqual(status, 201, plan)
+        self.assertEqual((plan["turn"]["status"], plan["queued"][0]["status"]), ("open", "queued"))
+
+    def test_session_relay_opens_one_request_and_does_not_merge_a_direct_question(self):
+        """A direct ask and the next discussion request never share a live execution."""
+        gemini_token = uuid.uuid4().hex
+        self.request(f"{self.path}/members", {"name": "Gemini", "token": gemini_token}, self.owner)
+        self.start_session()
+        status, plan = self.arrange_session([{"expert": "Claude", "question": "先发言"},
+                                             {"expert": "Gemini", "question": "再发言"}])
+        self.assertEqual(status, 201, plan)
+        inbox = self.request(f"{self.path}/inbox", token=self.owner)[1]
+        pending = next(item for member in inbox["members"] if member["name"] == "Claude" for item in member["pending"]
+                       if item["purpose"] == "discuss")
+        self.assertEqual((pending["session_request_id"], pending["session_id"], pending["round"], pending["position"],
+                          pending["source_question"], pending["cause_kind"]),
+                         (plan["turn"]["id"], plan["turn"]["session_id"], plan["turn"]["round"], plan["turn"]["position"],
+                          "先发言", "scheduled_speaker"))
+        self.assertEqual(self.say("请 Gemini 另答一个问题", to=["Gemini"])[0], 201)
+        ask_execution = self.reserve_for("Gemini")[1]
+        self.assertEqual([request["purpose"] for request in ask_execution["requests"]], ["ask"])
+        execution = self.reserve_for("Claude")[1]
+        self.assertEqual([request["purpose"] for request in execution["requests"]], ["discuss"])
+        discuss_request = execution["requests"][0]
+        self.assertEqual((discuss_request["session_request_id"], discuss_request["session_id"], discuss_request["round"],
+                          discuss_request["position"], discuss_request["read_until"], discuss_request["source_question"],
+                          discuss_request["cause_kind"], discuss_request["source_message_id"], discuss_request["cause_request_id"]),
+                         (plan["turn"]["id"], plan["turn"]["session_id"], plan["turn"]["round"], plan["turn"]["position"],
+                          plan["turn"]["read_until"], "先发言", "scheduled_speaker", None, None))
+        open_plans = [item for item in self.request(f"{self.path}/turns")[1]["turns"] if item["purpose"] == "discuss" and item["status"] == "open"]
+        self.assertEqual([item["expert"] for item in open_plans], ["Claude"])
+        self.assertEqual(self.answer(execution["id"], token=self.member)[0], 201)
+        turns = self.request(f"{self.path}/turns")[1]["turns"]
+        self.assertEqual([(item["expert"], item["status"]) for item in turns if item["purpose"] == "discuss"],
+                         [("Claude", "answered"), ("Gemini", "open")])
+        self.assertEqual(self.reserve_for("Gemini")[0], 409, "the ask execution still owns Gemini's session")
+        ask_answer = {"author": "Gemini", "text": "普通提问答复", "source": "cli", "execution_id": ask_execution["id"],
+                      "submission_id": uuid.uuid4().hex}
+        self.assertEqual(self.request(f"{self.path}/messages", ask_answer, gemini_token)[0], 201)
+        asks = [item for item in self.request(self.path)[1]["free"]["requests"] if item["purpose"] == "ask"]
+        self.assertEqual([(item["member"], item["status"]) for item in asks], [("Gemini", "completed")])
+        next_execution = self.reserve_for("Gemini")[1]
+        self.assertEqual([request["purpose"] for request in next_execution["requests"]], ["discuss"])
+
+    def test_failed_session_request_returns_to_host_without_ending_session(self):
+        """A failed speaker request is handed to the host while the session remains active."""
+        self.start_session()
+        status, plan = self.arrange_session([{"expert": "Claude", "question": "失败测试"}])
+        self.assertEqual(status, 201, plan)
+        execution = self.reserve_for("Claude")[1]
+        self.assertEqual(self.request(f"{self.path}/executions/{execution['id']}",
+                                      {"action": "fail", "reason": "测试投递失败"}, self.owner)[0], 200)
+        session = self.request(f"{self.path}/discussion")[1]["session"]
+        self.assertEqual(session["status"], "active")
+        turns = self.request(f"{self.path}/turns")[1]["turns"]
+        self.assertEqual([item["status"] for item in turns if item["purpose"] == "discuss"], ["failed"])
+        with closing(sqlite3.connect(self.database)) as connection:
+            host_questions = [row[0] for row in connection.execute("""SELECT m.text FROM member_requests r
+                JOIN messages m ON m.id=r.message_id WHERE r.room_id=? AND r.purpose='discuss_host'""", (self.room["id"],))]
+        self.assertTrue(any("测试投递失败" in text for text in host_questions))
+
+    def test_interrupting_open_discussion_speaker_cancels_plan_and_advances_queue(self):
+        """Stopping a speaker ends its session row before the next queued speaker is opened."""
+        gemini_token = uuid.uuid4().hex
+        self.request(f"{self.path}/members", {"name": "Gemini", "token": gemini_token}, self.owner)
+        self.start_session()
+        status, plan = self.arrange_session([
+            {"expert": "Claude", "question": "先发言"},
+            {"expert": "Gemini", "question": "接着发言"},
+        ])
+        self.assertEqual(status, 201, plan)
+        execution = self.reserve_for("Claude")[1]
+
+        interrupted = self.request(f"{self.path}/members/{self.member_id('Claude')}/interrupt", {}, self.owner)
+
+        self.assertEqual(interrupted[0], 200, interrupted[1])
+        turns = [item for item in self.request(f"{self.path}/turns")[1]["turns"] if item["purpose"] == "discuss"]
+        self.assertEqual([(item["expert"], item["status"]) for item in turns],
+                         [("Claude", "cancelled"), ("Gemini", "open")])
+        self.assertEqual(self.request(f"{self.path}/executions/{execution['id']}", token=self.owner)[1]["status"], "cancelled")
+        self.assertEqual(self.reserve_for("Gemini")[0], 200)
+
+    def test_interrupting_last_open_discussion_speaker_hands_control_to_host_once(self):
+        """With no queued speaker left, interruption cancels its plan and creates one host follow-up."""
+        self.start_session()
+        status, plan = self.arrange_session([{"expert": "Claude", "question": "单人安排"}])
+        self.assertEqual(status, 201, plan)
+        execution = self.reserve_for("Claude")[1]
+        path = f"{self.path}/members/{self.member_id('Claude')}/interrupt"
+        self.assertEqual(self.request(path, {}, self.owner)[0], 200)
+        self.assertEqual(self.request(f"{self.path}/executions/{execution['id']}", token=self.owner)[1]["status"], "cancelled")
+        with closing(sqlite3.connect(self.database)) as connection:
+            host_requests = connection.execute("SELECT COUNT(*) FROM session_requests WHERE purpose='discuss_host'").fetchone()[0]
+            plan_status = connection.execute("SELECT status FROM session_requests WHERE id=?", (plan["turn"]["id"],)).fetchone()[0]
+        self.assertEqual(plan_status, "cancelled")
+        self.assertGreater(host_requests, 1)
+        self.assertEqual(self.request(path, {}, self.owner)[0], 200)
+        with closing(sqlite3.connect(self.database)) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM session_requests WHERE purpose='discuss_host'").fetchone()[0],
+                             host_requests)
+
+    def test_failed_session_speaker_does_not_freeze_round_progress(self):
+        """A failed speaker can be retried, after which the next complete plan advances to round two."""
+        gemini_token = uuid.uuid4().hex
+        self.request(f"{self.path}/members", {"name": "Gemini", "token": gemini_token}, self.owner)
+        self.start_session()
+        status, plan = self.arrange_session([
+            {"expert": "Claude", "question": "第一轮 Claude"},
+            {"expert": "Gemini", "question": "第一轮 Gemini"},
+        ])
+        self.assertEqual(status, 201, plan)
+        failed = self.reserve_for("Claude")[1]
+        self.assertEqual(self.request(f"{self.path}/executions/{failed['id']}",
+                                      {"action": "fail", "reason": "CLI 退出"}, self.owner)[0], 200)
+        roster = self.session_roster()
+        self.assertEqual(roster["round"], 1)
+        self.assertEqual(self.request(f"{self.path}/turns/continue", {
+            "actor": "Codex", "revision": roster["revision"],
+        }, self.codex)[0], 200)
+        gemini = self.reserve_for("Gemini")[1]
+        self.assertEqual(self.answer(gemini["id"], token=gemini_token, author="Gemini")[0], 201)
+        roster = self.session_roster()
+        self.assertEqual(roster["waiting"], ["Claude"])
+        status, retry = self.arrange_session([{"expert": "Claude", "question": "重试第一轮 Claude"}], roster)
+        self.assertEqual(status, 201, retry)
+        claude = self.reserve_for("Claude")[1]
+        self.assertEqual(self.answer(claude["id"], token=self.member)[0], 201)
+
+        roster = self.session_roster()
+        self.assertEqual(roster["round"], 1)
+        status, second_round = self.arrange_session([
+            {"expert": "Claude", "question": "第二轮 Claude"},
+            {"expert": "Gemini", "question": "第二轮 Gemini"},
+        ], roster)
+        self.assertEqual(status, 201, second_round)
+        self.assertEqual([second_round["turn"]["round"], second_round["queued"][0]["round"]], [2, 2])
+
+    def test_initial_session_execution_reads_no_messages_when_cutoff_is_zero(self):
+        """An initial independent opinion has a real empty read boundary and cannot read later user text."""
+        self.request(f"{self.path}/members", {"name": "Gemini", "token": uuid.uuid4().hex}, self.owner)
+        self.start_session()
+        status, plan = self.arrange_session([{"expert": "Claude", "question": "独立观点"}])
+        self.assertEqual(status, 201, plan)
+        execution = self.reserve_for("Claude")[1]
+        later = self.say("后续私有用户消息")[1]["message"]["id"]
+        query = f"?execution_id={execution['id']}"
+        result = self.request(f"{self.path}/messages{query}", token=self.member)
+        self.assertEqual(result[0], 200, result)
+        self.assertEqual(result[1]["total"], 0)
+        self.assertEqual(self.request(f"{self.path}/messages/{later}{query}", token=self.member)[0], 404)
+        self.say("Gemini 也请回答", to=["Gemini"])
+        other = self.reserve_for("Gemini")[1]
+        self.assertEqual(self.request(f"{self.path}/messages?execution_id={other['id']}", token=self.member)[0], 403)
+
+    def test_initial_session_anonymous_message_reads_keep_the_server_cutoff(self):
+        """Omitting a member credential cannot bypass initial-stage message restrictions through API or /r."""
+        self.start_session()
+        status, posted = self.request(f"{self.path}/messages", {
+            "author": "用户", "text": "匿名不可见的后续原文", "to": ["Claude"],
+            "submission_id": uuid.uuid4().hex,
+        }, self.owner)
+        self.assertEqual(status, 201, posted)
+        later = posted["message"]["id"]
+
+        self.assertEqual(self.request(f"{self.path}/messages")[1]["total"], 0)
+        self.assertEqual(self.request(f"{self.path}/messages/{later}")[0], 404)
+        self.assertEqual(self.request(f"{self.path}/messages", token=self.member)[1]["total"], 0)
+        self.assertNotIn("匿名不可见的后续原文", self.read_text(f"/r/{self.room['id']}/messages"))
+        self.assertNotIn("匿名不可见的后续原文", self.read_text(
+            f"/r/{self.room['id']}/search?q={quote('匿名不可见')}"))
+
+    def test_explicit_direct_ask_execution_can_read_its_own_message_during_initial_phase(self):
+        """A valid ask binding keeps access to its own post-start source while bare member reads remain bounded."""
+        gemini_token = uuid.uuid4().hex
+        self.request(f"{self.path}/members", {"name": "Gemini", "token": gemini_token}, self.owner)
+        self.start_session()
+        status, posted = self.say("直接提问的私有原文", to=["Gemini"])
+        self.assertEqual(status, 201, posted)
+        message_id = posted["message"]["id"]
+        execution = self.reserve_for("Gemini")[1]
+        ask_request_id = next(item["id"] for item in self.request(self.path, token=self.owner)[1]["free"]["requests"]
+                              if item["message_id"] == message_id)
+
+        bare_read = self.request(f"{self.path}/messages", token=gemini_token)[1]
+        bound_read = self.request(f"{self.path}/messages?execution_id={execution['id']}", token=gemini_token)[1]
+        request_read = self.request(f"{self.path}/messages?request_id={ask_request_id}", token=gemini_token)[1]
+        self.assertEqual(bare_read["total"], 0)
+        self.assertEqual([item["id"] for item in bound_read["messages"]], [message_id])
+        self.assertEqual([item["id"] for item in request_read["messages"]], [message_id])
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("UPDATE member_executions SET lease_until=0 WHERE id=?", (execution["id"],))
+        self.assertEqual(self.request(f"{self.path}/messages?request_id={ask_request_id}", token=gemini_token)[0], 409)
+        self.assertEqual(self.request(f"{self.path}/messages?execution_id={execution['id']}", token=gemini_token)[0], 409)
+
+    def test_initial_session_hides_room_state_execution_details_timeline_and_backup(self):
+        """Anonymous initial readers cannot reach later answers through summary and activity endpoints."""
+        gemini_token = uuid.uuid4().hex
+        self.request(f"{self.path}/members", {"name": "Gemini", "token": gemini_token}, self.owner)
+        self.assertEqual(self.say("边界前普通任务")[0], 201)
+        prior_execution = self.reserve_for("Claude")[1]
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("UPDATE member_executions SET status='failed',result=? WHERE id=?",
+                               ("普通执行失败原因", prior_execution["id"]))
+        self.start_session()
+        self.assertEqual(self.say("边界后私有失败任务", to=["Gemini"])[0], 201)
+        private_execution = self.reserve_for("Gemini")[1]
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("UPDATE member_executions SET status='failed',result=? WHERE id=?",
+                               ("边界后私有失败原因", private_execution["id"]))
+        status, plan = self.arrange_session([{"expert": "Claude", "question": "不可公开的安排问题"}])
+        self.assertEqual(status, 201, plan)
+        execution = self.reserve_for("Claude")[1]
+        execution_path = f"{self.path}/executions/{execution['id']}"
+        self.assertEqual(self.request(execution_path, {"action": "renew", "notes": [
+            {"seq": 1, "text": "不可公开的执行过程"},
+        ]}, self.owner)[0], 200)
+        status, answer = self.answer(execution["id"], "不可公开的独立观点答复")
+        self.assertEqual(status, 201, answer)
+        self.assertEqual(self.request(f"{self.path}/state", {
+            "actor": "Codex", "text": "不可公开的状态摘要", "brief": "不可公开的主持简报",
+            "until": answer["message"]["id"],
+        }, self.codex)[0], 200)
+
+        anonymous_room = self.request(self.path)[1]
+        hidden_free_failure = next(item for item in anonymous_room["free"]["executions"]
+                                   if item["id"] == private_execution["id"])
+        hidden_member_failure = next(item for item in anonymous_room["free"]["members"]
+                                     if item["name"] == "Gemini")["execution"]
+        self.assertEqual((hidden_free_failure["result"], hidden_member_failure["result"]), ("", ""))
+        member_room = self.request(self.path, token=gemini_token)[1]
+        self.assertEqual(next(item for item in member_room["free"]["executions"]
+                              if item["id"] == private_execution["id"])["result"], "")
+        owner_room = self.request(self.path, token=self.owner)[1]
+        owner_free_failure = next(item for item in owner_room["free"]["executions"]
+                                  if item["id"] == private_execution["id"])
+        owner_member_failure = next(item for item in owner_room["free"]["members"]
+                                    if item["name"] == "Gemini")["execution"]
+        self.assertEqual((owner_free_failure["result"], owner_member_failure["result"]),
+                         ("边界后私有失败原因", "边界后私有失败原因"))
+        self.assertIsNone(next(item for item in anonymous_room["free"]["executions"]
+                               if item["id"] == execution["id"])["answer_id"])
+        self.assertNotIn("不可公开的独立观点答复", json.dumps(anonymous_room, ensure_ascii=False))
+        self.assertEqual(anonymous_room["state_text"], "")
+        self.assertIsNone(anonymous_room["host_brief"])
+        self.assertNotIn("不可公开的状态摘要", self.read_text(f"/r/{self.room['id']}/state"))
+        self.assertIn("不可公开的状态摘要", self.request(self.path, token=self.codex)[1]["state_text"])
+        self.assertEqual(self.request(f"{execution_path}/notes")[1]["notes"], [])
+        self.assertEqual(self.request(execution_path)[0], 403)
+        timeline = self.request(f"{self.path}/timeline")[1]["executions"]
+        hidden = next(item for item in timeline if item["id"] == execution["id"])
+        self.assertEqual((hidden["task"], hidden["result"], hidden["last_note"], hidden["reason"]), ("", "", "", ""))
+        self.assertIsNone(hidden["answer_id"])
+        prior = next(item for item in timeline if item["id"] == prior_execution["id"])
+        self.assertEqual((prior["task"], prior["reason"]), ("边界前普通任务", "普通执行失败原因"))
+        backup_status, backup = self.request(f"{self.path}/backup")
+        self.assertEqual(backup_status, 403)
+        self.assertIn("独立观点阶段需房主凭据导出", backup["error"])
+        self.assertEqual(self.request(f"{self.path}/backup", token=self.owner)[0], 200)
+        self.assertEqual(self.request(f"{self.path}/backup", token=self.codex)[0], 200)
+        host_timeline = self.request(f"{self.path}/timeline", token=self.codex)[1]["executions"]
+        visible = next(item for item in host_timeline if item["id"] == execution["id"])
+        self.assertEqual(visible["result"], "不可公开的独立观点答复")
+        self.assertEqual(visible["last_note"], "不可公开的执行过程")
+
+    def test_invited_initial_expert_keeps_the_session_read_cutoff(self):
+        """A newly invited first-round speaker cannot read opinions posted after the session opened."""
+        self.start_session()
+        status, plan = self.arrange_session([{"expert": "Claude", "question": "先给开场观点"}])
+        self.assertEqual(status, 201, plan)
+        gemini_token = uuid.uuid4().hex
+        status, member = self.request(f"{self.path}/members", {"name": "Gemini", "token": gemini_token}, self.owner)
+        self.assertEqual(status, 200, member)
+        first = self.reserve_for("Claude")[1]
+        self.assertEqual(self.answer(first["id"], "前位专家观点")[0], 201)
+        next_execution = self.reserve_for("Gemini")[1]
+        self.assertEqual([item["purpose"] for item in next_execution["requests"]], ["discuss"])
+        result = self.request(f"{self.path}/messages?execution_id={next_execution['id']}", token=gemini_token)
+        self.assertEqual(result[0], 200, result[1])
+        self.assertEqual(result[1]["total"], 0)
+
+    def test_text_turn_history_survives_end_and_legacy_view_is_explicit(self):
+        """The read-only turns page stays on the latest session after end unless legacy=1 is requested."""
+        self.start_session()
+        status, plan = self.arrange_session([{"expert": "Claude", "question": "新会话安排"}])
+        self.assertEqual(status, 201, plan)
+        turn_id = plan["turn"]["id"]
+        with closing(sqlite3.connect(self.database)) as connection:
+            connection.execute("""INSERT INTO discussion_turns(id,room_id,expert,question,status,submission_id,created_at)
+                VALUES(?,?,?,'旧历史安排','pending',?,?)""",
+                (turn_id, self.room["id"], "Claude", f"legacy-{turn_id}", "2026-10-29T00:00:00Z"))
+            connection.commit()
+        view = self.request(f"{self.path}/discussion")[1]
+        self.assertEqual(self.request(f"{self.path}/discussion", {"action": "end", "revision": view["revision"]}, self.owner)[0], 200)
+        current = self.read_text(f"/r/{self.room['id']}/turns/{turn_id}")
+        self.assertIn("新会话安排", current)
+        self.assertNotIn("旧历史安排", current)
+        legacy = self.read_text(f"/r/{self.room['id']}/turns/{turn_id}?legacy=1")
+        self.assertIn("旧历史安排", legacy)
+
+    def test_discussion_task_messages_are_hidden_from_ordinary_reads_and_counts(self):
+        """Internal task anchors stay out of room messages, search, incremental reads and public message counts."""
+        before = self.request(self.path)[1]
+        self.start_session("隐藏任务锚点唯一词")
+        after = self.request(self.path)[1]
+        self.assertEqual((after["message_count"], after["latest_id"]), (before["message_count"], before["latest_id"]))
+        with closing(sqlite3.connect(self.database)) as connection:
+            task_ids = [row[0] for row in connection.execute("SELECT message_id FROM task_message_sources WHERE session_id=(SELECT MAX(id) FROM discussion_sessions WHERE room_id=?)", (self.room["id"],))]
+            self.assertTrue(task_ids)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM scheduler_decisions WHERE room_id=?", (self.room["id"],)).fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM member_requests WHERE room_id=? AND purpose='route'", (self.room["id"],)).fetchone()[0], 0)
+        search_term = quote("隐藏任务锚点唯一词")
+        for query in ("", "?after=0", "?withdrawn=include", f"?q={search_term}"):
+            status, result = self.request(f"{self.path}/messages{query}")
+            self.assertEqual(status, 200, result)
+            self.assertTrue(set(task_ids).isdisjoint(item["id"] for item in result["messages"]))
+        self.assertEqual(self.request(f"{self.path}/messages/{task_ids[0]}")[0], 404)
+        self.assertNotIn("隐藏任务锚点唯一词", self.read_text(f"/r/{self.room['id']}/search?q={search_term}"))
+        self.assertNotEqual(self.request(f"{self.path}/messages/{task_ids[0]}/retract", {}, self.owner)[0], 200)
+
+    def test_rewind_invalidates_task_sources_and_never_reactivates_their_requests(self):
+        """Rewinding a user trigger invalidates its hidden task anchor and linked request without relaying work."""
+        self.start_session()
+        status, saved = super().say("回退后不应继续主持任务")
+        self.assertEqual(status, 201, saved)
+        trigger = saved["message"]["id"]
+        view = self.request(f"{self.path}/discussion")[1]
+        self.assertEqual(self.request(f"{self.path}/discussion", {"action": "end", "revision": view["revision"]}, self.owner)[0], 200)
+        status, plan = self.request(f"{self.path}/rewind?message_id={trigger}", token=self.owner)
+        self.assertEqual(status, 200, plan)
+        result = self.request(f"{self.path}/rewind", {"message_id": trigger, "revision": plan["revision"]}, self.owner)
+        self.assertEqual(result[0], 200, result[1])
+        with closing(sqlite3.connect(self.database)) as connection:
+            rows = connection.execute("""SELECT q.status,r.status FROM task_message_sources t
+                JOIN session_requests q ON q.id=t.session_request_id
+                JOIN member_requests r ON r.id=q.member_request_id
+                WHERE t.cause_message_id=?""", (trigger,)).fetchall()
+            self.assertTrue(rows)
+            self.assertTrue(all(plan_status == "cancelled" and request_status == "cancelled" for plan_status, request_status in rows))
+            self.assertEqual(connection.execute("""SELECT COUNT(*) FROM session_requests
+                WHERE session_id=(SELECT MAX(id) FROM discussion_sessions WHERE room_id=?) AND status IN ('open','queued')""",
+                (self.room["id"],)).fetchone()[0], 0)
+
+    def test_session_pause_cancel_and_end_revoke_executions_and_reject_late_answers(self):
+        """Pausing, cancelling a plan and ending a session invalidate its execution before a late answer arrives."""
+        self.start_session()
+        status, plan = self.arrange_session([{"expert": "Claude", "question": "暂停测试"}])
+        self.assertEqual(status, 201, plan)
+        first = self.reserve_for("Claude")[1]
+        view = self.request(f"{self.path}/discussion")[1]
+        paused = self.request(f"{self.path}/discussion", {"action": "pause", "revision": view["revision"]}, self.owner)
+        self.assertEqual(paused[0], 200, paused[1])
+        self.assertEqual(self.answer(first["id"], token=self.member)[0], 409)
+        view = self.request(f"{self.path}/discussion")[1]
+        self.assertEqual(self.request(f"{self.path}/discussion", {"action": "resume", "revision": view["revision"]}, self.owner)[0], 200)
+        status, plan = self.arrange_session([{"expert": "Claude", "question": "取消测试"}])
+        self.assertEqual(status, 201, plan)
+        second = self.reserve_for("Claude")[1]
+        cancelled = self.request(f"{self.path}/turns/{plan['turn']['id']}", {"status": "cancelled", "actor": "Codex"}, self.codex)
+        self.assertEqual(cancelled[0], 200, cancelled[1])
+        self.assertEqual(self.answer(second["id"], token=self.member)[0], 409)
+        with closing(sqlite3.connect(self.database)) as connection:
+            host_requests = connection.execute("SELECT COUNT(*) FROM session_requests WHERE purpose='discuss_host'").fetchone()[0]
+        self.assertEqual(self.request(f"{self.path}/turns/{plan['turn']['id']}",
+                                      {"status": "cancelled", "actor": "Codex"}, self.codex)[0], 409)
+        with closing(sqlite3.connect(self.database)) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM session_requests WHERE purpose='discuss_host'").fetchone()[0],
+                             host_requests)
+        status, plan = self.arrange_session([{"expert": "Claude", "question": "结束测试"}])
+        self.assertEqual(status, 201, plan)
+        third = self.reserve_for("Claude")[1]
+        view = self.request(f"{self.path}/discussion")[1]
+        ended = self.request(f"{self.path}/discussion", {"action": "end", "revision": view["revision"]}, self.owner)
+        self.assertEqual(ended[0], 200, ended[1])
+        self.assertEqual(self.answer(third["id"], token=self.member)[0], 409)
+
+    def test_cancelling_terminal_session_plans_conflicts_without_duplicate_host_tasks(self):
+        """Answered, failed and already-cancelled plans all reject cancellation without waking the host again."""
+        self.start_session()
+        status, answered = self.arrange_session([{"expert": "Claude", "question": "已回答"}])
+        self.assertEqual(status, 201, answered)
+        first = self.reserve_for("Claude")[1]
+        self.assertEqual(self.answer(first["id"], token=self.member)[0], 201)
+        with closing(sqlite3.connect(self.database)) as connection:
+            before_answered_cancel = connection.execute("SELECT COUNT(*) FROM session_requests WHERE purpose='discuss_host'").fetchone()[0]
+        self.assertEqual(self.request(f"{self.path}/turns/{answered['turn']['id']}",
+                                      {"status": "cancelled", "actor": "Codex"}, self.codex)[0], 409)
+        with closing(sqlite3.connect(self.database)) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM session_requests WHERE purpose='discuss_host'").fetchone()[0],
+                             before_answered_cancel)
+
+        status, failed = self.arrange_session([{"expert": "Claude", "question": "已失败"}])
+        self.assertEqual(status, 201, failed)
+        second = self.reserve_for("Claude")[1]
+        self.assertEqual(self.request(f"{self.path}/executions/{second['id']}",
+                                      {"action": "fail", "reason": "投递失败"}, self.owner)[0], 200)
+        with closing(sqlite3.connect(self.database)) as connection:
+            before_failed_cancel = connection.execute("SELECT COUNT(*) FROM session_requests WHERE purpose='discuss_host'").fetchone()[0]
+        self.assertEqual(self.request(f"{self.path}/turns/{failed['turn']['id']}",
+                                      {"status": "cancelled", "actor": "Codex"}, self.codex)[0], 409)
+        with closing(sqlite3.connect(self.database)) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM session_requests WHERE purpose='discuss_host'").fetchone()[0],
+                             before_failed_cancel)
 
     def test_unnamed_message_with_several_members_goes_only_to_the_host(self):
         """With two members an unnamed message is routed by the host; nothing is broadcast."""
@@ -1054,18 +1562,19 @@ class HostTests(FreeRoomTests):
 class OnlineAndLinkTests(FreeRoomTests):
     """Online members are forwarded by the owner; brainstorm rooms remember the free room they came from."""
 
-    def test_owner_forwards_an_online_members_answer(self):
-        """The online member never posts itself; the owner's forward keeps it as author and closes its request."""
+    def test_web_member_is_read_only_and_the_owner_forwards_its_answer(self):
+        """Legacy online input becomes a web-sourced manual member; only the owner can forward its answer."""
         deepseek = uuid.uuid4().hex
         self.request(f"{self.path}/members", {"name": "DeepSeek", "token": deepseek, "access": "online"}, self.owner)
-        self.assertEqual(self.request(self.path)[1]["experts"]["DeepSeek"], "online")
-        self.assertEqual(self.request(f"{self.path}/members/{self.request(self.path)[1]['free']['members'][1]['id']}",
-                                      {"action": "role", "role": "host"}, self.owner)[0], 400)
+        member = next(item for item in self.request(self.path)[1]["free"]["members"] if item["name"] == "DeepSeek")
+        self.assertEqual((member["access"], member["manual_source"]), ("manual", "web"))
+        self.assertEqual(self.request(f"{self.path}/members/{member['id']}", {"action": "role", "role": "host"}, self.owner)[0], 400)
         self.say("请 DeepSeek 看看", to=["DeepSeek"])
         request_id = self.request(self.path)[1]["free"]["requests"][0]["id"]
         self.assertEqual(self.reserve()[0], 409)
         own = {"author": "DeepSeek", "text": "自己发", "source": "cli", "submission_id": uuid.uuid4().hex}
         self.assertEqual(self.request(f"{self.path}/messages", own, deepseek)[0], 403)
+        self.assertEqual(self.request(f"{self.path}/members/{member['id']}", {"action": "adopt", "adapter": "claude", "session_id": "web-session"}, deepseek)[0], 403)
         forward = {"author": "DeepSeek", "text": "在线回答原文", "submission_id": uuid.uuid4().hex, "request_ids": [request_id]}
         self.assertEqual(self.request(f"{self.path}/messages", {**forward, "author": "Qwen"}, self.owner)[0], 403)
         status, saved = self.request(f"{self.path}/messages", forward, self.owner)
@@ -1073,15 +1582,82 @@ class OnlineAndLinkTests(FreeRoomTests):
         self.assertEqual((saved["message"]["author"], saved["message"]["submitted_by"], saved["message"]["source"]), ("DeepSeek", "用户", "proxy"))
         self.assertEqual(self.request(self.path)[1]["free"]["requests"][0]["status"], "completed")
 
-    def test_brainstorm_room_links_back_to_its_free_room(self):
-        """A discussion started from a free room records its origin; free rooms cannot be linked children."""
-        status, child = self.request("/api/rooms", {"title": "方案头脑风暴", "goal": "x", "experts": {}, "parent_room_id": self.room["id"]}, uuid.uuid4().hex)
-        self.assertEqual(status, 201, child)
-        self.assertEqual(child["parent_room"], {"id": self.room["id"], "title": "自由单聊"})
-        self.assertEqual(self.request(self.path)[1]["linked_rooms"], [{"id": child["id"], "title": "方案头脑风暴", "phase": "preparing"}])
-        self.assertEqual(self.request("/api/rooms", {"title": "无效", "goal": "x", "parent_room_id": child["id"]})[0], 400)
-        self.assertEqual(self.request("/api/rooms", {"title": "无效", "goal": "x", "mode": "free", "parent_room_id": self.room["id"],
-                                                     "members": [{"name": "Claude", "token": uuid.uuid4().hex}]}, uuid.uuid4().hex)[0], 400)
+    def test_web_proxy_completes_pending_asks_and_all_requests_with_summary(self):
+        """One relayed answer covers all ordinary asks, including a smart-scheduled all request, with its summary."""
+        deepseek = uuid.uuid4().hex
+        self.request(f"{self.path}/members", {"name": "DeepSeek", "token": deepseek, "access": "online"}, self.owner)
+        self.request(f"{self.path}/members", {"name": "Codex", "token": uuid.uuid4().hex}, self.owner)
+
+        ask_message = self.say("请 DeepSeek 单独回答", to=["DeepSeek"])[1]["message"]["id"]
+        all_message = self.say("请 DeepSeek 和 Codex 一起回答", to=["DeepSeek", "Codex"], order="auto")[1]["message"]["id"]
+        status, routed = self.request(f"{self.path}/recommendations/{all_message}", {"action": "all"}, self.owner)
+        self.assertEqual(status, 200, routed)
+
+        requests = self.request(self.path)[1]["free"]["requests"]
+        pending = [item for item in requests if item["member"] == "DeepSeek" and item["status"] == "pending"]
+        self.assertEqual({(item["message_id"], item["purpose"]) for item in pending},
+                         {(ask_message, "ask"), (all_message, "all")})
+        ids = [item["id"] for item in pending]
+        payload = {"author": "DeepSeek", "text": "在线回答原文", "submission_id": uuid.uuid4().hex,
+                   "request_ids": ids, "summary": "结论与关键依据", "summary_by": "DeepSeek"}
+        status, saved = self.request(f"{self.path}/messages", payload, self.owner)
+        self.assertEqual(status, 201, saved)
+        self.assertEqual((saved["message"]["author"], saved["message"]["submitted_by"], saved["message"]["source"]),
+                         ("DeepSeek", "用户", "proxy"))
+        self.assertEqual((saved["message"]["summary"], saved["message"]["summary_by"]), ("结论与关键依据", "DeepSeek"))
+        completed = [item for item in self.request(self.path)[1]["free"]["requests"] if item["id"] in ids]
+        self.assertEqual({(item["status"], item["answer_id"]) for item in completed},
+                         {("completed", saved["message"]["id"])})
+
+    def test_web_member_can_be_scheduled_without_local_registration(self):
+        """A web-source expert joins the discussion roster without registering a local session."""
+        self.request(f"{self.path}/members", {"name": "DeepSeek", "token": uuid.uuid4().hex, "access": "online"}, self.owner)
+        discussion = f"{self.path}/discussion"
+        current = self.request(discussion)[1]
+        self.assertEqual(self.request(discussion, {"action": "start", "revision": current["revision"]}, self.owner)[0], 200)
+        roster = self.request(f"{self.path}/turns/roster", token=self.member)[1]
+        self.assertIn("DeepSeek", roster["waiting"])
+        self.assertNotIn("DeepSeek", roster["unregistered"])
+        status, plan = self.request(f"{self.path}/turns", {"actor": "Claude", "turns": [{"expert": "DeepSeek", "question": "请给出独立意见"}],
+            "roster": roster["revision"], "submission_id": uuid.uuid4().hex}, self.member)
+        self.assertEqual(status, 201, plan)
+        self.assertEqual(plan["turn"]["status"], "open")
+
+        ask_status, ask_post = self.say("请 DeepSeek 直接回答", to=["DeepSeek"])
+        self.assertEqual(ask_status, 201, ask_post)
+        current = self.request(self.path)[1]["free"]["requests"]
+        discuss_request = next(item for item in current if item["member"] == "DeepSeek" and item["purpose"] == "discuss")
+        ask_request = next((item for item in current if item["member"] == "DeepSeek" and item["purpose"] == "ask"), None)
+        self.assertIsNotNone(ask_request, current)
+        message_count = self.request(f"{self.path}/messages?after=0")[1]["total"]
+        mixed = {"author": "DeepSeek", "text": "错误合并", "submission_id": uuid.uuid4().hex,
+                 "request_ids": [discuss_request["id"], ask_request["id"]]}
+        self.assertEqual(self.request(f"{self.path}/messages", mixed, self.owner)[0], 400)
+        unchanged = self.request(self.path)[1]["free"]["requests"]
+        self.assertEqual({item["id"]: item["status"] for item in unchanged if item["id"] in mixed["request_ids"]},
+                         {discuss_request["id"]: "pending", ask_request["id"]: "pending"})
+        self.assertEqual(self.request(f"{self.path}/messages?after=0")[1]["total"], message_count)
+
+        forward = {"author": "DeepSeek", "text": "讨论安排回答", "submission_id": uuid.uuid4().hex,
+                   "request_ids": [discuss_request["id"]], "summary": "仅完成这一条安排", "summary_by": "用户"}
+        status, saved = self.request(f"{self.path}/messages", forward, self.owner)
+        self.assertEqual(status, 201, saved)
+        self.assertEqual((saved["message"]["summary"], saved["message"]["summary_by"]), ("仅完成这一条安排", "用户"))
+        completed = {item["id"]: item["status"] for item in self.request(self.path)[1]["free"]["requests"]
+                     if item["id"] in mixed["request_ids"]}
+        self.assertEqual(completed, {discuss_request["id"]: "completed", ask_request["id"]: "pending"})
+        self.assertEqual(self.request(f"{self.path}/turns/{plan['turn']['id']}")[1]["status"], "answered")
+
+    def test_room_creation_rejects_linked_brainstorm_children(self):
+        """A discussion stays in its room; creating a linked child room is no longer supported."""
+        with closing(sqlite3.connect(self.database)) as connection:
+            room_count = connection.execute("SELECT COUNT(*) FROM rooms").fetchone()[0]
+        status, result = self.request("/api/rooms", {"title": "方案头脑风暴", "goal": "x",
+            "experts": {}, "parent_room_id": self.room["id"]}, uuid.uuid4().hex)
+        self.assertEqual(status, 400, result)
+        with closing(sqlite3.connect(self.database)) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM rooms").fetchone()[0], room_count)
+        self.assertEqual(self.request(self.path)[1]["linked_rooms"], [])
 
 
 class InstanceTests(FreeRoomTests):
@@ -1112,6 +1688,8 @@ class InstanceTests(FreeRoomTests):
                         for name in ("Claude-主持", "Claude", "Codex")]}, uuid.uuid4().hex)
         self.assertEqual(status, 201, room)
         self.assertEqual(room["host"], "Claude-主持")
+        web_member = next(item for item in room["members"] if item["name"] == "Codex")
+        self.assertEqual((web_member["access"], web_member["manual_source"]), ("manual", "web"))
         self.assertEqual(self.request("/api/rooms", {"title": "无效", "goal": "x", "experts": {"Claudex": "cli"}})[0], 400)
         many = {f"Claude-{number}": "cli" for number in range(13)}
         self.assertEqual(self.request("/api/rooms", {"title": "过多", "goal": "x", "experts": many})[0], 400)

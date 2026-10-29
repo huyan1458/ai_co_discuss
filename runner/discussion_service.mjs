@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { atomic_json } from './discussion_adapters.mjs';
-import { DiscussionRunner, DiscussionStore, acquire_lock, api, load_config, pause_if_running, service_drafts, validate_config } from './discussion_runner.mjs';
+import { DiscussionStore, acquire_lock, api, load_config, pause_if_running, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner } from './free_runner.mjs';
 
 const POLL_MS = 2000;
@@ -176,53 +176,6 @@ export function unregister_room(home, config_path) {
   });
 }
 
-/**
- * A discussion room's dispatcher plus delivery of the user's direct questions. The questions are free-room requests that sit
- * beside the discussion's turns: they wake a named member at any phase, and the website refuses to run one member's question
- * and discussion turn at the same time, so one session never has two writers.
- */
-export class DiscussionWithQuestions {
-  constructor(discussion, questions) { this.discussion = discussion; this.questions = questions; }
-  get members() { return this.discussion.members; }
-  get children() { return new Set([...this.discussion.children, ...this.questions.children]); }
-  get config() { return this.discussion.config; }
-  async tick() {
-    const result = await this.discussion.tick();
-    this.questions.adopt({ ...this.discussion.config, draft_directory: this.discussion.config.draft_directory });
-    try { await this.questions.tick(); }
-    catch (error) { this.questions.log(`直接提问投递出错：${error.message}`); }
-    return result;
-  }
-  stop_children() { this.discussion.stop_children(); this.questions.stop_children(); }
-}
-
-/**
- * A free room's dispatcher. Its requests are always delivered; once the website says the room is in a discussion
- * (the owner opened one), the discussion engine runs beside them, and when it ends the room simply goes on freely.
- */
-export class FreeRoomWithDiscussion {
-  constructor(questions) { this.questions = questions; this.discussion = null; }
-  get config() { return this.questions.config; }
-  get members() { return this.discussion?.members; }
-  get children() { return new Set([...(this.discussion?.children || []), ...this.questions.children]); }
-  adopt(config) { this.questions.adopt(config); }
-  async tick() {
-    const room = await api(this.questions.config, '');
-    let result;
-    if (room.mode !== 'free') {
-      this.discussion ??= new DiscussionRunner(this.questions.config, this.questions.store, undefined, this.questions.log);
-      this.discussion.config = this.questions.config;
-      result = await this.discussion.tick();
-    } else if (this.discussion?.children.size) {
-      // The discussion ended (at its limit, by the host or by the user): its CLI must exit before the host takes free requests.
-      this.discussion.stop_children();
-    }
-    await this.questions.tick();
-    return result;
-  }
-  stop_children() { this.discussion?.stop_children(); this.questions.stop_children(); }
-}
-
 /** One registered room: its own data-directory lock, store and dispatcher. */
 class RoomWorker {
   constructor(path, create_runner, log, home) {
@@ -241,6 +194,8 @@ class RoomWorker {
     const release = acquire_lock(config.directory);
     try { this.store = new DiscussionStore(config.directory); }
     catch (error) { release(); throw error; }
+    if (config.mode !== 'free') this.store.context(config);
+    this.store.scope(config);
     this.config = config;
     this.release = release;
     this.runner = this.create_runner(config, this.store, message => this.log(`${config.room}: ${message}`));
@@ -253,35 +208,28 @@ class RoomWorker {
     if (updated.site !== this.config.site || updated.room !== this.config.room || updated.directory !== this.config.directory) {
       throw new Error('已登记配置的房间或数据目录发生变化，请移除原登记后重新接入');
     }
-    if (updated.mode === 'free') {
-      // Members join and leave while a free room runs; the runner checks each member's context itself.
-      this.runner.adopt({ ...updated, draft_directory: this.config.draft_directory });
-      this.config = this.runner.config;
-      this.state.config_version = snapshot.version;
-      return;
+    const codex_switches = Object.entries(this.config.participants).filter(([name, previous]) => {
+      const next = updated.participants[name];
+      return next && previous.adapter !== next.adapter
+        && ['codex', 'codex_cli'].includes(previous.adapter) && ['codex', 'codex_cli'].includes(next.adapter);
+    });
+    const codex_switch = codex_switches.length > 0;
+    const discussion = codex_switch ? await api(this.config, '/discussion') : null;
+    if (codex_switch && discussion?.session?.status === 'active') {
+      throw new Error('讨论运行中不能切换 Codex 接入方式');
     }
-    try { this.store.context(updated); }
-    catch (error) {
-      const room = await api(this.config, '');
-      if (room.runtime.status !== 'paused' || room.runtime.mode !== 'automatic' || room.archived || room.phase === 'concluded') throw error;
-      this.runner.stop_children();
-      if (this.runner.children?.size) throw new Error('正在等待原 CLI 进程退出；退出后采用新的接入方式');
-      this.store.context(updated, true);
+    if (codex_switch && this.config.mode !== 'free' && this.runner.children?.size) {
+      throw new Error('等待原 CLI 进程退出后再切换 Codex 接入方式');
     }
-    this.config.token = updated.token;
-    for (const [name, profile] of Object.entries(updated.participants)) this.config.participants[name] ??= profile;
-    for (const [name, profile] of Object.entries(this.config.participants)) {
-      for (const field of [...CONNECTION_FIELDS, 'adapter', 'session_id']) {
-        if (updated.participants[name][field] === undefined) delete profile[field];
-        else profile[field] = updated.participants[name][field];
-      }
-    }
+    if (this.config.mode !== 'free') this.store.context(updated, codex_switch);
+    // The runner owns all free-room and discussion requests; only connection context is adopted here.
+    this.runner.adopt?.({ ...updated, draft_directory: this.config.draft_directory });
+    this.config = this.runner.config || { ...updated, draft_directory: this.config.draft_directory };
     this.state.config_version = snapshot.version;
   }
   /** A manual Claude, Codex or agy expert that has registered and whose CLI reported its session is handed to the service, which resumes that session from the next turn on. */
   async adopt_manual_members() {
-    // A discussion runner lists members itself; a free room's registered manual members come from the room view.
-    const members = this.config.mode === 'free' ? (await api(this.config, '')).free?.members || [] : this.runner.members || [];
+    const members = (await api(this.config, '')).free?.members || [];
     for (const member of members) {
       const key = `${member.name}:${member.reported_session}`;
       // A restored room keeps its Claude Code members manual so their original window stays the only writer.
@@ -289,7 +237,7 @@ class RoomWorker {
         || this.config.keep_manual?.includes(member.name)) continue;
       try {
         const { adopt_member_profile } = await import('./discussion_launch.mjs');
-        const member_token = this.config.mode === 'free' ? `${randomUUID()}${randomUUID()}` : '';
+        const member_token = `${randomUUID()}${randomUUID()}`;
         const adapter = adopt_member_profile(this.home, this.path, member.name, member.reported_session, member.reported_client, member_token);
         await api(this.config, `/members/${member.id}`, { action: 'adopt', adapter, session_id: member.reported_session, ...(member_token ? { token: member_token } : {}) });
         this.log(`${this.config.room}: ${member.name} 已转为本机托管`);
@@ -342,8 +290,7 @@ class RoomWorker {
 
 /** Keep workers aligned with the registry and tick each one per poll. */
 export class DiscussionService {
-  constructor(home, create_runner = (config, store, log) => config.mode === 'free' ? new FreeRoomWithDiscussion(new FreeRoomRunner(config, store, undefined, log))
-      : new DiscussionWithQuestions(new DiscussionRunner(config, store, undefined, log), new FreeRoomRunner(config, store, undefined, log)), log = () => {}) {
+  constructor(home, create_runner = (config, store, log) => new FreeRoomRunner(config, store, undefined, log), log = () => {}) {
     this.home = home;
     this.create_runner = create_runner;
     this.log = log;

@@ -3,6 +3,7 @@
 import { computed, inject, ref, watch } from "vue";
 import InviteDialog from "./InviteDialog.vue";
 import StartDiscussionDialog from "./StartDiscussionDialog.vue";
+import ProgressBoard from "./ProgressBoard.vue";
 import SpeakingOrder from "./SpeakingOrder.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 import { busy, member_actions } from "./member-actions.js";
@@ -14,6 +15,8 @@ const ACCESS_LABELS = { runner: "本机唤醒", manual: "手动接入", online: 
 const TASK_PREVIEW_LENGTH = 90;
 const room = computed(() => view.value.room);
 const free = computed(() => room.value.free || {});
+const discussion = computed(() => ["active", "paused"].includes(room.value.session?.status));
+const current_round = computed(() => discussion.value ? room.value.current_turn?.round || (room.value.completed_rounds || 0) + 1 : 0);
 const host = computed(() => (free.value.members || []).find((member) => member.role === "host" && member.status === "active"));
 // Rows follow the room's speaking order; members who left are listed after it.
 const member_named = (name) => (free.value.members || []).find((member) => member.name === name);
@@ -21,7 +24,7 @@ const away_names = computed(() => (free.value.members || []).filter((member) => 
 const name_of = (member_id) => bridge.display_name((free.value.members || []).find((member) => member.id === member_id)?.name || "成员");
 
 /** Status dot colour, matching the discussion progress board. */
-const unregistered = (member) => member.access === "manual" && member.status === "active" && !member.registered_at;
+const unregistered = (member) => member.access === "manual" && member.manual_source !== "web" && member.status === "active" && !member.registered_at;
 function member_tone(member) {
   if (member.status === "away") return "neutral";
   if (unregistered(member)) return "warning";
@@ -37,9 +40,9 @@ function member_status(member, state) {
   const execution = member.execution;
   if (execution && LIVE.includes(execution.status)) return execution.stale ? "执行失联，停止未确认" : "正在处理";
   if (member.pending) return `待投递 ${member.pending} 条`;
-  if (state === "queued") return "等待依次发言";
+  if (state === "queued") return discussion.value ? "本轮排队" : "等待依次发言";
   if (execution?.status === "failed") return "执行失败";
-  return !execution && member.access === "manual" ? "已注册" : "空闲";
+  return !execution && member.access === "manual" && member.manual_source !== "web" ? "已注册" : "空闲";
 }
 
 /**
@@ -47,7 +50,7 @@ function member_status(member, state) {
  * API, manual and web members also say how they take part. The crown already marks the host.
  */
 function member_tag(member) {
-  if (member.access !== "runner") return ACCESS_LABELS[member.access];
+  if (member.access !== "runner") return member.manual_source === "web" ? "网页代发" : ACCESS_LABELS[member.access];
   return [member.adapter === "api" ? "API" : "", member_model(member)].filter(Boolean).join(" · ");
 }
 
@@ -162,8 +165,9 @@ watch(() => room.value.id, () => { starting.value = false; });
 
 <template>
   <div class="progress-board is-docked">
-    <header class="pb-header"><strong>自由协作</strong><span class="pb-mode">{{ host ? `${bridge.display_name(host.name)} 主持` : '无主持人' }}</span></header>
-    <section class="pb-status" :class="`is-${status.tone}`" aria-label="房间状态">
+    <header class="pb-header"><strong>{{ discussion ? '讨论进度' : '自由协作' }}</strong><span class="pb-mode">{{ host ? `${bridge.display_name(host.name)} 主持` : '无主持人' }}</span></header>
+    <ProgressBoard v-if="discussion" />
+    <section v-else class="pb-status" :class="`is-${status.tone}`" aria-label="房间状态">
       <div class="pb-status-line"><span class="pb-dot"></span><strong role="status">{{ status.title }}</strong></div>
       <p v-if="status.detail" class="pb-status-detail">{{ status.detail }}</p>
       <div v-if="status.continue_chain && view.access?.can_manage" class="pb-chain-actions">
@@ -177,14 +181,14 @@ watch(() => room.value.id, () => { starting.value = false; });
         </div>
       </div>
     </section>
-    <section v-if="task" class="pb-section" aria-label="当前任务">
+    <section v-if="task && !discussion" class="pb-section" aria-label="当前任务">
       <h4>当前任务</h4>
       <p class="pb-focus" :class="{ 'is-expanded': task_expanded }">{{ task }}</p>
       <button v-if="task.length > TASK_PREVIEW_LENGTH" type="button" class="pb-link" @click="task_expanded = !task_expanded">{{ task_expanded ? '收起' : '展开' }}</button>
     </section>
     <section class="pb-section" aria-label="发言顺序">
       <h4>发言顺序</h4>
-      <SpeakingOrder :away="away_names">
+      <SpeakingOrder :away="away_names" :round="current_round">
         <template #default="{ item }">
           <template v-for="member in [member_named(item.name)].filter(Boolean)" :key="member.id">
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
@@ -208,7 +212,7 @@ watch(() => room.value.id, () => { starting.value = false; });
       <h4>头脑风暴</h4>
       <button v-for="item in room.linked_rooms" :key="item.id" type="button" class="pb-link pb-free-linked" @click="act('room', item.id)">{{ item.title }}<small>{{ bridge.phases[item.phase] || item.phase }}</small></button>
     </section>
-    <section v-if="!room.archived" class="pb-actions" aria-label="操作">
+    <section v-if="!room.archived && !discussion" class="pb-actions" aria-label="操作">
       <UButton icon="i-lucide-messages-square" label="开启讨论" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block pb-restart" title="由主持人推进成员轮流发言，到上限或结束后房间回到自由协作" :disabled="!can_start" @click="starting = true" />
       <p v-if="!can_start" class="pb-free-note">开启讨论需要一位由本机唤醒的 AI 主持人。</p>
     </section>

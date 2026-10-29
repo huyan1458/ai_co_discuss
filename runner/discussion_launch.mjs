@@ -15,7 +15,8 @@ import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, val
 import { SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
 import { access_levels, BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT, PROJECT_ACCESS } from './expert_prompts.mjs';
 import { BRANCHABLE_ADAPTERS, branch_session } from './session_cut.mjs';
-import { acquire_lock, api, CODEX_ADAPTERS, DiscussionStore, service_drafts, task_files, validate_config } from './discussion_runner.mjs';
+import { acquire_lock, api, CODEX_ADAPTERS, DiscussionStore, service_drafts, validate_config } from './discussion_runner.mjs';
+import { FreeRoomRunner, free_task_files } from './free_runner.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 
 const CLIENTS = { Codex: ['codex_cli', 'codex', 'api'], Claude: ['claude', 'api'], Gemini: ['antigravity_cli', 'antigravity', 'api'], DeepSeek: ['api'], Qwen: ['api'], Grok: ['api'] };
@@ -40,8 +41,7 @@ const PROFILE_FIELDS = ['adapter', 'executable', 'model', 'effort', 'source_thre
 const MAX_MINUTES = 1440;
 const SESSION_ID_PATTERN = /^[0-9A-Za-z_-]{8,128}$/;
 const LOCAL_MEMBERS_FORMAT = 'ai-codiscuss-local-members';
-// Reading events after this id proves the owner credential without transferring any.
-const MAX_EVENT_ID = 2147483647;
+// Reading the inbox proves the owner credential without transferring any messages.
 const CONFIG_APPLY_TIMEOUT_MS = 6000;
 const CONFIG_APPLY_POLL_MS = 100;
 const HELP = `用法：codiscuss launch settings [--file FILE]
@@ -556,8 +556,8 @@ async function member_room_context(home, raw) {
   });
   if (paths.length !== 1) throw new Error('未找到本房间唯一的已登记配置，请核对本机接入服务');
   const config = configuration_snapshot(paths[0]).config;
-  // Both reads need the owner credential; a discussion reads past its last event so nothing is transferred.
-  await site_request(input.site, `/api/rooms/${input.room_id}/${config.mode === 'free' ? 'inbox' : `events?after=${MAX_EVENT_ID}`}`, input.token);
+  // Both reads need the owner credential; the inbox transfers no messages.
+  await site_request(input.site, `/api/rooms/${input.room_id}/inbox`, input.token);
   return { input, path: paths[0], config };
 }
 
@@ -577,7 +577,8 @@ export async function room_member(home, raw, locked = false) {
   const { input, path, config: registered } = await member_room_context(home, raw);
   const { action, name } = input;
   const access = input.access || 'runner';
-  const free = registered.mode === 'free';
+  const room = await site_request(input.site, `/api/rooms/${input.room_id}`, input.token);
+  const free = room.mode === 'free';
   if (!['add', 'rejoin'].includes(action) || !platform_of(name) || (access !== 'manual' && !clients_of(name)) || !['runner', 'manual'].includes(access)) {
     throw new Error('action 须为 add/rejoin，成员须为支持的 AI，接入方式须为 runner/manual');
   }
@@ -585,7 +586,6 @@ export async function room_member(home, raw, locked = false) {
   try {
     const config = configuration_snapshot(path).config;
     config.api_home = home;
-    const room = await site_request(input.site, `/api/rooms/${input.room_id}`, input.token);
     const roster = free ? room.free.members : room.members;
     if (action === 'add' && input.new_instance) {
       // A name once bound keeps its session locally, so a new instance never reuses a removed member's name.
@@ -783,7 +783,7 @@ export async function room_profiles(home, raw) {
   const path = registered_room_path(home, input.site, input.room_id);
   if (!path) return { room_id: input.room_id, local_members: null };
   const config = configuration_snapshot(path).config;
-  await site_request(input.site, `/api/rooms/${input.room_id}/${config.mode === 'free' ? 'inbox' : `events?after=${MAX_EVENT_ID}`}`, input.token);
+  await site_request(input.site, `/api/rooms/${input.room_id}/inbox`, input.token);
   const sessions = bound_sessions(config, path);
   const participants = Object.fromEntries(Object.entries(config.participants).map(([name, profile]) => {
     const kept = Object.fromEntries(Object.entries(profile).filter(([key]) => [...PROFILE_FIELDS, 'project_access'].includes(key)));
@@ -931,65 +931,84 @@ function check_registration(home, config, path) {
   }
 }
 
-/** Start once; a lost start response is reconciled from the persisted expected generation. */
-async function enable_run(config, record, persist, minutes) {
-  let runtime = await api(config, '/runtime');
-  if (!record.generation && record.expected_generation === runtime.generation && runtime.revision === record.start_revision && runtime.status === 'running') {
-    record.generation = runtime.generation;
+/** Start a session once, reconciling a lost response from the durable start intent. */
+async function start_session(config, record, persist, room, minutes) {
+  const state = await api(config, '/discussion');
+  if (record.session_id && state.session?.id === record.session_id && !record.start_pending) {
+    if (record.start_submission_id && state.session.start_submission_id !== record.start_submission_id) {
+      throw new Error('房间当前讨论的启动编号与本次记录不同');
+    }
+    if (state.session.status !== 'active') throw new Error('讨论已暂停或结束；请在房间核对状态后再操作');
+    return state.session;
+  }
+  if (record.session_id && state.session?.id !== record.session_id) throw new Error('房间当前讨论与本次启动记录不同');
+  if (state.session && !record.start_pending) {
+    if (state.session.status !== 'active') throw new Error('讨论已暂停或结束；请在房间核对状态后再操作');
+    throw new Error('房间已有进行中的讨论；请沿用原启动记录');
+  }
+  if (room.session?.status === 'concluded' && !record.start_pending) throw new Error('房间中的讨论已结束；请从房间明确开启新讨论');
+  if (!record.start_submission_id) record.start_submission_id = randomUUID();
+  if (!record.start_request) {
+    if (record.start_revision && record.start_revision !== state.revision) throw new Error('开启期间讨论状态已变化，请重新读取房间状态');
+    const topic_minutes = Number(room.limits?.max_minutes || 0);
+    const session_minutes = topic_minutes > 0 ? (minutes > 0 ? Math.min(topic_minutes, minutes) : topic_minutes) : minutes;
+    record.start_revision = state.revision;
+    record.start_request = { action: 'start', revision: state.revision, submission_id: record.start_submission_id,
+      goal: room.goal || room.title, named_followup: Boolean(room.named_followup),
+      limits: { max_rounds: room.limits?.max_rounds ?? 0, max_minutes: session_minutes,
+        execution_minutes: room.limits?.execution_minutes ?? 0 } };
+    record.start_pending = true;
     persist();
   }
-  if (record.generation) {
-    if (runtime.generation !== record.generation || runtime.status !== 'running' || runtime.expired) throw new Error('这次启动已暂停、停止或过期；请在原房间核对并明确继续');
-    return runtime;
-  }
-  if (runtime.status !== 'ready' || runtime.expired) throw new Error('房间已运行、暂停、停止或过期；请在原房间核对，不会重新启动');
-  if (!record.start_revision) { record.start_revision = runtime.revision + 1; persist(); }
-  if (runtime.revision + 1 !== record.start_revision) throw new Error('启动期间房间状态已变化，请核对原房间');
-  record.expected_generation = runtime.generation + 1;
+  const result = await api(config, '/discussion', record.start_request);
+  if (!result.session || result.session.start_submission_id !== record.start_submission_id) throw new Error('网站返回的讨论会话与本次启动编号不符');
+  record.session_id = result.session.id;
+  record.start_pending = false;
   persist();
-  try {
-    runtime = await api(config, '/runtime', { action: 'start', mode: 'automatic', revision: runtime.revision,
-      deadline: minutes ? Math.floor(Date.now() / 1000 + minutes * 60) : 0 });
-  } catch (error) {
-    const latest = await api(config, '/runtime');
-    if (latest.generation !== record.expected_generation || latest.status !== 'running') throw error;
-    runtime = latest;
-  }
-  record.generation = runtime.generation;
-  persist();
-  return runtime;
+  if (result.session.status !== 'active') throw new Error('本次讨论已暂停或结束；请在房间核对状态后再操作');
+  return result.session;
 }
 
 /** Reserve the first host task for the calling conversation without sending it a duplicate prompt. */
 async function current_host_task(config, record, persist, room) {
-  const page = await api(config, '/events?after=0');
-  const event = record.event_id ? page.events.find(item => item.id === record.event_id)
-    : page.events.filter(item => item.generation === record.generation && item.role === 'host' && item.participant === room.host && item.status === 'pending').at(-1);
-  if (!event) throw new Error('没有可由当前会话接手的主持任务；请核对原房间');
-  record.event_id = event.id;
-  record.execution_token ||= randomUUID();
+  if (record.current_task) return record.current_task;
+  const discussion = await api(config, '/discussion');
+  if (discussion.session?.status !== 'active' || discussion.session.id !== record.session_id) throw new Error('本次讨论会话已暂停、结束或变化；请核对原房间');
+  const page = await api(config, '/inbox');
+  const member = page.members.find(item => item.name === room.host && item.role === 'host');
+  const request = member?.pending.find(item => item.purpose === 'discuss_host' && item.session_id === record.session_id);
+  if (!member || (!request && !record.execution_client_id && !record.execution_id)) throw new Error('没有可由当前会话接手的主持请求；请核对原房间');
+  record.execution_client_id ||= randomUUID();
   persist();
-  if (event.status === 'pending') await api(config, `/events/${event.id}`, { action: 'reserve', execution_token: record.execution_token });
-  else await api(config, `/events/${event.id}`, { action: 'view' }, record.execution_token);
+  const execution = record.execution_id ? await api(config, `/executions/${record.execution_id}`)
+    : await api(config, '/executions', { member_id: member.id, client_id: record.execution_client_id, cwd: '' });
+  if (!['dispatched', 'started'].includes(execution.status)) throw new Error('主持请求已不再等待执行；请核对原房间');
+  if (!execution.requests?.some(item => item.purpose === 'discuss_host' && item.session_id === record.session_id)) {
+    throw new Error('预约到的执行不属于本次讨论主持请求');
+  }
+  record.execution_id = execution.id;
+  persist();
   const store = new DiscussionStore(config.directory);
   try {
     store.context(config);
-    const runtime = await api(config, '/runtime');
-    store.scope(config, runtime.run_id);
-    store.receive(page);
+    store.scope(config);
     const session_id = config.participants[room.host].session_id;
     store.bind(room.host, session_id);
-    const task = task_files(config, event, record.execution_token, { session_id });
-    store.record(event.id, { status: 'accepted', token: record.execution_token, sent_at: Date.now() });
-    return { event_id: event.id, access_file: task.access_path, task_file: join(config.directory, `${task.id}.task.json`) };
+    const task = free_task_files(config, member, execution, { session_id }, { session: discussion.session, process_access: false });
+    new FreeRoomRunner(config, store).save(room.host, { client_id: record.execution_client_id, execution_id: execution.id,
+      status: 'running', attempts: 0, started: Date.now(), last_renew: Date.now() });
+    record.current_task = { execution_id: execution.id, access_file: task.access_path, task_file: join(config.directory, `${task.id}.task.json`) };
+    persist();
+    return record.current_task;
   } finally { store.close(); }
 }
 
 /** Return launch evidence and paths, never raw control or execution tokens. */
 async function launch_receipt(config, record, config_path) {
   const room = await api(config, '');
+  const discussion = record.session_id ? await api(config, '/discussion') : null;
   return { entry: record.entry, room, url: `${config.site}/?room=${config.room}`, config_path,
-    status: room.mode === 'free' ? 'free' : room.runtime.status, current_task: record.current_task || null };
+    status: discussion?.session?.status || (record.session_id ? 'concluded' : 'free'), current_task: record.current_task || null };
 }
 
 /** Read a saved launch without creating state during validation or preview. */
@@ -999,13 +1018,17 @@ function read_launch(directory) {
 }
 
 /** Find the registered room only after proving the caller's original control credential. */
-async function room_config_context(home, raw) {
+async function room_config_context(home, raw, options = {}) {
   const input = launch_input({ ...raw, entry: 'web' });
   if (!input.room_id || typeof input.token !== 'string' || !input.token.trim()) throw new Error('读取本场配置须提供房间编号和原控制凭据');
-  const room = await site_request(input.site, `/api/rooms/${input.room_id}`, input.token);
-  if (!room.runtime?.protected) throw new Error('本场配置修正仅支持具有原控制凭据的受保护房间');
-  await verify_control({ site: input.site, room: input.room_id, token: input.token }, room);
-  if (room.archived || room.runtime.mode !== 'automatic' || room.runtime.status !== 'paused' || room.phase === 'concluded') throw new Error('请先暂停本场讨论，再修正软件路径');
+  const room = options.local_guard ? { id: input.room_id, archived: false }
+    : await site_request(input.site, `/api/rooms/${input.room_id}`, input.token);
+  const config = { site: input.site, room: input.room_id, token: input.token };
+  if (!options.local_guard) await verify_control(config, room);
+  const discussion = options.local_guard
+    ? { session: { status: 'paused' }, revision: raw.session_revision ?? raw.runtime_revision }
+    : await api(config, '/discussion');
+  if (room.archived || discussion.session?.status !== 'paused') throw new Error('请先暂停本场讨论，再修正软件路径');
   const paths = read_registry(home).filter(path => {
     const identity = registered_identity(path);
     return identity?.site === input.site && identity.room === input.room_id;
@@ -1014,12 +1037,12 @@ async function room_config_context(home, raw) {
   const path = paths[0];
   const journal = read_launch(dirname(path));
   if (journal && !journal.finished) throw new Error('本次启动尚未完成，请先核对原启动待办');
-  return { input, room, path, ...configuration_snapshot(path) };
+  return { input, room, discussion, path, ...configuration_snapshot(path) };
 }
 
 /** Expose only editable connection paths, never credentials or unrelated room settings. */
 function connection_view(context) {
-  return { room_id: context.room.id, runtime_revision: context.room.runtime.revision, version: context.version,
+  return { room_id: context.room.id, session_revision: context.discussion.revision, runtime_revision: context.discussion.revision, version: context.version,
     participants: Object.fromEntries(Object.entries(context.config.participants).map(([name, profile]) =>
       [name, Object.fromEntries(['adapter', ...CONNECTION_FIELDS].filter(field => profile[field] !== undefined).map(field => [field, profile[field]]))])) };
 }
@@ -1069,7 +1092,7 @@ async function configuration_applied(home, path, version) {
     const status_path = join(home, 'status.json');
     const status = existsSync(status_path) ? JSON.parse(readFileSync(status_path, 'utf8')) : {};
     const worker = status.rooms?.find(item => resolve(item.config) === resolve(path));
-    if (status.pid === pid && worker?.config_version === version && worker.status === 'paused') return true;
+    if (status.pid === pid && worker?.config_version === version && worker.status !== 'error') return true;
     await sleep(CONFIG_APPLY_POLL_MS);
   }
   return false;
@@ -1077,18 +1100,22 @@ async function configuration_applied(home, path, version) {
 
 /** Read or save a paused room's connection paths without changing its runtime or global defaults. */
 export async function room_configuration(home, raw, options = {}) {
-  if (raw.participants !== undefined && !options.local_guard) return save_room_connection(raw);
-  let context = await room_config_context(home, raw);
+  let context = await room_config_context(home, raw, options);
+  if (raw.participants !== undefined && !options.local_guard) {
+    const saved = await save_room_connection(raw);
+    return { ...saved, applied: await configuration_applied(home, context.path, saved.version) };
+  }
   if (raw.participants === undefined) return connection_view(context);
   if (!raw.participants || typeof raw.participants !== 'object' || Array.isArray(raw.participants)) throw new Error('participants 须为本场软件路径对象');
   const release = acquire_lock(join(dirname(context.path), 'configuration-edit'));
   try {
-    context = await room_config_context(home, raw);
+    context = await room_config_context(home, raw, options);
     const config = corrected_configuration(context);
-    if (raw.version !== context.version || raw.runtime_revision !== context.room.runtime.revision) throw new Error('房间状态或配置已变化，请重新读取本场配置后核对');
+    if (raw.version !== context.version || (raw.session_revision ?? raw.runtime_revision) !== context.discussion.revision) throw new Error('房间状态或配置已变化，请重新读取本场配置后核对');
     atomic_json(context.path, config);
     const saved = { ...context, ...configuration_snapshot(context.path) };
-    return { ...connection_view(saved), applied: await configuration_applied(home, context.path, saved.version) };
+    // The local website holds its database write lock here; the worker can acknowledge only after that lock is released.
+    return { ...connection_view(saved), applied: false };
   } finally { release(); }
 }
 
@@ -1107,7 +1134,7 @@ async function save_room_connection(raw) {
 
 /** Prove dispatcher access before a protected room is started or a corrected credential is saved. */
 async function verify_control(config, room) {
-  if (room.runtime?.protected) await api({ ...config, room: room.id }, '/events?after=0');
+  await api({ ...config, room: room.id }, '/inbox');
 }
 
 /** Pin resolved defaults, while comparing retries against only the caller's explicit request. */
@@ -1133,7 +1160,7 @@ async function prepare_launch(home, input, directory, options = {}) {
   const minutes = previous?.minutes ?? legacy?.minutes ?? launch_minutes(input, room);
   const draft = signature({ entry: input.entry, room_id: input.room_id, room: input.room, participants: config.participants, cwd: input.cwd, discussion_project: input.discussion_project, minutes });
   if (legacy && previous.signature !== draft) throw new Error('启动配置与原请求不同；同一次重试须沿用原配置，新讨论请使用新提交编号');
-  await verify_control(config, room);
+  if (room.id) await verify_control(config, room);
   return { input, config, room, minutes, draft, request_signature, directory, previous };
 }
 
@@ -1160,26 +1187,26 @@ export async function launch_discussion(home, raw, options = {}) {
 /** Persist preparation before writes, hand off the current host when needed, then register once. */
 async function perform_launch(home, context, options) {
   const { input, config, minutes, draft, request_signature, directory, previous } = context;
-  const record = previous || { token: config.token, signature: draft, request_signature, config, minutes, entry: input.entry };
+  const discussion = previous?.discussion ?? (input.room ? input.room.mode !== 'free' : Boolean(context.room.session && context.room.session.status !== 'concluded'));
+  const record = previous || { token: config.token, signature: draft, request_signature, config, minutes, entry: input.entry, discussion };
+  record.discussion = discussion;
   const persist = () => atomic_json(join(directory, 'launch.json'), record);
   if (!previous) persist();
   const progress = { stage: 'unconfirmed' };
   try {
     let room = context.room;
-    const free = config.mode === 'free';
     if (!input.room_id) room = await site_request(input.site, '/api/rooms', config.token, {
-      ...input.room, ...(free ? {} : { runtime_mode: 'automatic' }),
+      ...input.room,
       members: [...Object.keys(config.participants).map(name => ({ name, adapter: config.participants[name].adapter,
         token: config.members[name].token, access: 'runner', session_mode: config.participants[name].session_id ? 'borrowed' : 'new' })),
       // Manual and online members keep the credentials the browser generated; nothing local is configured for them.
-      ...(input.room.members || []).filter(member => free ? !woken_member(member) : member?.access === 'manual')
+      ...(input.room.members || []).filter(member => record.discussion ? member?.access === 'manual' : !woken_member(member))
         .map(({ name, token, access }) => ({ name, token, access, adapter: '', session_mode: 'new' }))],
     });
     config.room = room.id;
     await verify_control(config, room);
     Object.assign(progress, { stage: 'created', room_id: room.id });
     Object.assign(record, { token: config.token, request_signature, config, minutes, room_id: room.id });
-    if (!record.start_revision && room.runtime.status === 'ready') record.start_revision = room.runtime.revision + 1;
     persist();
     const config_path = join(directory, 'config.json');
     check_registration(home, config, config_path);
@@ -1191,10 +1218,9 @@ async function perform_launch(home, context, options) {
     atomic_json(config_path, config);
     const service = await (options.start_service || start_service)(home);
     if (!service?.running) throw new Error('讨论服务未就绪，未开始本次讨论');
-    // Free rooms have no discussion run: registering the room is what lets the service deliver requests.
-    if (!free) await enable_run(config, record, persist, minutes);
+    if (record.discussion) await start_session(config, record, persist, room, minutes);
     progress.stage = 'started';
-    if (input.entry === 'conversation') record.current_task = await current_host_task(config, record, persist, room);
+    if (record.discussion && input.entry === 'conversation') record.current_task = await current_host_task(config, record, persist, room);
     register_room(home, config_path);
     record.finished = true;
     persist();

@@ -107,16 +107,22 @@ export const READ_RULE = '读含中文的文件用 rg --encoding utf-8 . 文件�
 
 /**
  * A free-room task's fixed text: `instructions` saved in the task file and `prompt` sent with each wake-up, followed by
- * the member's own prompt. `discussion` is a direct question asked while a discussion runs in the room.
+ * the member's own prompt. `discussion` is a direct question asked while a discussion runs in the room;
+ * `discussion_request` is the session request for a scheduled speaker or the host.
  * Loaded in steps: the prompt says who was named, how to answer a simple message without loading the skills, and
  * otherwise where the task file is, plus how to read files at all; the task file's fields carry this execution's values
  * (messages, read point, execution, role, credentials), the skills it lists say how to use them, and `instructions`
  * holds only the limits no skill can know. `access_file` is set where the credential is not bound to the process.
  */
-export function free_task_text({ name, discussion, profile, cli, room, messages, read_after, execution_id, task_path, access_file = '', read_rule = '' }) {
-  const scope = discussion ? `讨论进行中，用户直接向你提问（${messages}）：这不是你的发言安排，不领取发言权、不安排他人、不改变讨论进度，只回答这个提问。` : '';
+export function free_task_text({ name, discussion, discussion_request, profile, cli, room, messages, read_after, execution_id, task_path, access_file = '', read_rule = '' }) {
+  const scope = discussion ? `讨论进行中，用户直接向你提问（${messages}）：只回答这个提问，不改变讨论安排和进度。` : '';
   const commands = runs_commands(profile) ? '' : `命令只用 subcommands 列出的 ${cli} 子命令。`;
   const instructions = `${agy_command_rule(profile.adapter, cli, profile)}${agy_progress_rule(profile.adapter)}${scope}${project_rule(profile, '按请求')}${commands}草稿写在 draft_directory。`;
+  if (discussion_request) {
+    const role = discussion_request.purpose === 'discuss_host' ? '主持任务' : '发言请求';
+    const prompt = `你（${name}）收到了讨论中的${role}。先读任务文件 ${task_path}，按其中列出的技能处理本次请求并保存结果。${read_rule}`;
+    return { instructions, prompt };
+  }
   // A greeting deserves a quick answer, and reading the skills first costs it one or two model rounds.
   const access = access_file ? ` --access-file ${access_file}` : '';
   // A one-line answer goes inline: a draft file guards long or quoted text and retries, which a greeting does not need.

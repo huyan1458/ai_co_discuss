@@ -3,9 +3,10 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import { atomic_json, claude_inbox_ready, deliver_task, SegmentLog, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
+import { atomic_json, claude_inbox_ready, deliver_task, remove_agy_projects, SegmentLog, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
 import { api, CODEX_ADAPTERS, read_rule } from './discussion_runner.mjs';
 import { free_task_text, with_expert_prompt } from './expert_prompts.mjs';
+import { SessionDriver } from './session_driver.mjs';
 import { BRANCHABLE_ADAPTERS, branch_session, session_exists } from './session_cut.mjs';
 import { ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, decide_group_order, route_free_message } from './scheduler.mjs';
 
@@ -63,7 +64,7 @@ export function changed_between(before, after) {
 }
 
 /** Write a non-secret task and a member-only credential file for one execution. */
-export function free_task_files(config, member, execution, binding) {
+export function free_task_files(config, member, execution, binding, { session = null, suggestions = [], process_access = true } = {}) {
   const id = `free-${execution.id}`;
   const draft_directory = config.draft_directory || `${config.directory}-drafts`;
   mkdirSync(draft_directory, { recursive: true });
@@ -71,21 +72,34 @@ export function free_task_files(config, member, execution, binding) {
   const task_path = join(config.directory, `${id}.task.json`);
   const profile = config.participants[member.name];
   atomic_json(access_path, { site: config.site, room: config.room, token: config.members[member.name].token,
-    session_id: binding.session_id || '' });
+    session_id: binding.session_id || '', execution_id: execution.id });
   const cli = process.platform === 'win32' && profile.adapter !== 'claude' ? 'codiscuss.cmd' : 'codiscuss';
   const inbox = claude_inbox_ready(profile, binding);
-  const bound_access = !inbox && ['claude', 'codex_cli', 'antigravity_cli'].includes(profile.adapter);
+  const bound_access = process_access && !inbox && ['claude', 'codex_cli', 'antigravity_cli'].includes(profile.adapter);
   const messages = execution.requests.map(item => `#${item.message_id}`).join('、');
-  const { instructions, prompt } = free_task_text({ name: member.name, role: member.role, discussion: config.mode !== 'free', profile, cli,
+  const requests = execution.requests || [];
+  const discussion_request = requests.find(item => item.session_request_id && ['discuss', 'discuss_host'].includes(item.purpose)) || null;
+  const direct_question = Boolean(session?.status === 'active' && requests.some(item => item.purpose === 'ask'));
+  const { instructions, prompt } = free_task_text({ name: member.name, role: member.role, discussion: direct_question,
+    discussion_request, profile, cli,
     room: config.room, messages, read_after: execution.read_until, execution_id: execution.id, task_path,
     access_file: bound_access ? '' : access_path, read_rule: read_rule(profile.adapter), inbox });
+  const skills = discussion_request || direct_question
+    ? ['discuss-participant/SKILL.md', 'discuss-participant/references/discussion.md',
+      ...member.role === 'host' ? ['discuss-host/SKILL.md', 'discuss-host/references/discussion.md'] : [],
+      ...direct_question ? ['discuss-participant/references/free.md'] : []]
+    : ['discuss-participant/SKILL.md', 'discuss-participant/references/free.md',
+      ...member.role === 'host' ? ['discuss-host/SKILL.md', 'discuss-host/references/free.md'] : []];
   atomic_json(task_path, { site: config.site, room: config.room, mode: 'free', member: member.name,
-    execution_id: execution.id, request_messages: execution.requests.map(item => item.message_id),
-    request_purposes: execution.requests.map(item => item.purpose || 'ask'), role: member.role || 'member',
+    execution_id: execution.id, requests, request_messages: execution.requests.map(item => item.message_id),
+    request_purposes: execution.requests.map(item => item.purpose || 'ask'),
+    ...(discussion_request ? { discussion_request } : {}),
+    ...(session ? { session: { id: session.id, status: session.status, phase: session.phase,
+      goal: session.goal, named_followup: session.named_followup } } : {}),
+    ...(suggestions.length ? { scheduler_suggestions: suggestions } : {}),
+    role: member.role || 'member',
     read_after: execution.read_until, cwd: profile.cwd || null, project_access: profile.project_access, draft_directory,
-    // Each skill's core plus its free-room page; the host also gets the host skill (its development page is read on demand).
-    skills: [...['discuss-participant/SKILL.md', 'discuss-participant/references/free.md'],
-      ...member.role === 'host' ? ['discuss-host/SKILL.md', 'discuss-host/references/free.md'] : []].map(file => join(config.project, '.agents/skills', file)),
+    skills: skills.map(file => join(config.project, '.agents/skills', file)),
     cli, subcommands: TASK_SUBCOMMANDS,
     ...(bound_access ? { access_env: 'DISCUSS_ACCESS_FILE' } : { access_file: access_path }), instructions });
   return { id, participant: member.name, directory: config.directory, draft_directory,
@@ -120,12 +134,13 @@ function route_host_label(decision, host, members) {
 
 /** Delivers free-room requests through the same software adapters as discussions. */
 export class FreeRoomRunner {
-  constructor(config, store, deliver = deliver_task, log = () => {}, fetch_impl = fetch) {
+  constructor(config, store, deliver = deliver_task, log = () => {}, fetch_impl = fetch, session_driver = null) {
     this.config = config;
     this.store = store;
     this.deliver = deliver;
     this.log = log;
     this.fetch = fetch_impl;
+    this.session_driver = session_driver || new SessionDriver(config, log, fetch_impl);
     this.routed = new Set();
     // Group requests (@全体成员) being arranged; a failed arrangement leaves the set so the next tick retries.
     this.grouped = new Set();
@@ -171,6 +186,7 @@ export class FreeRoomRunner {
       else this.store.db.prepare('INSERT INTO metadata VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, context);
     }
     this.config = { ...this.config, ...config, participants: config.participants, members: config.members };
+    this.session_driver.config = this.config;
   }
   /**
    * A Codex member switched between App and CLI keeps its conversation: the two entries count as one, and the App's
@@ -185,12 +201,26 @@ export class FreeRoomRunner {
   }
   /** One bounded iteration: reconcile live executions, then deliver idle members with open requests. */
   async tick() {
-    const inbox = await api(this.config, '/inbox');
-    const room = await api(this.config, '');
+    let inbox; let room;
+    try {
+      inbox = await api(this.config, '/inbox');
+      room = await api(this.config, '');
+    }
+    catch (error) {
+      if (error.message === 'HTTP 404: 房间不存在') remove_agy_projects(this.config.directory);
+      throw error;
+    }
+    if (!inbox.archived && room.mode === 'free' && room.session?.status === 'active'
+      && await this.session_driver.tick(room, inbox)) {
+      // A scheduled plan completes the pending host request and creates a speaker request.
+      inbox = await api(this.config, '/inbox');
+      room = await api(this.config, '');
+    }
     // Smart scheduling runs beside delivery: the host waits for its answer (or failure) before starting, see `routing`.
     if (this.config.scheduler && !inbox.archived) this.recommend_unnamed(inbox, room);
     if (!inbox.archived) this.arrange_groups(inbox, room);
     this.room_title = room.title;
+    this.room = room;
     const active = new Map(inbox.executions.map(item => [item.id, item]));
     const present = new Set(inbox.members.map(member => member.name));
     // A member sent away or removed no longer appears; its live work was already voided on the website.
@@ -349,14 +379,20 @@ export class FreeRoomRunner {
     let invoked = false;
     try {
       const warning = await this.cut_rewound(member.name, adapter, binding, execution);
-      const task = free_task_files(this.config, member, execution, binding);
+      const session_request = execution.requests?.find(item => item.session_request_id && ['discuss', 'discuss_host'].includes(item.purpose));
+      const session = this.room?.session ? { ...this.room.session } : null;
+      const scheduler_suggestions = session_request?.purpose === 'discuss_host' ? this.session_driver.take_suggestions(session_request.id) : [];
+      const task = free_task_files(this.config, member, execution, binding, {
+        session, suggestions: scheduler_suggestions,
+      });
       invoked = true;
       this.segments.start(execution.id);
       if (warning) this.note(execution.id, warning);
       const result = await this.deliver(adapter, binding, { ...task, room_title: this.room_title,
         api_context: { site: this.config.site, room: this.config.room, token: this.config.members[member.name].token,
           home: this.config.api_home, mode: 'free', role: member.role || 'member', execution_id: execution.id,
-          requests: execution.requests, read_after: execution.read_until },
+          requests: execution.requests, read_after: execution.read_until, session, discussion_request: session_request,
+          scheduler_suggestions },
         on_binding: session => this.store.bind(member.name, session),
         on_process: child => this.track(member.name, child),
         on_output: (path, chunk) => { appendFileSync(path, chunk, { mode: 0o600 }); this.touch(execution.id); this.segments.mark(execution.id); },

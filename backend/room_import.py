@@ -1,10 +1,9 @@
 """Import one room backup as a new, owner-controlled room on this site.
 
-The room keeps its ID, so importing the same backup twice is skipped. Message, turn, member and
-request IDs are renumbered after this database's current maximum, and `#ID` references in texts
-follow the messages. Rows are written in an order that keeps the floor, turn and runtime triggers
-from treating history as new activity; the room arrives without a run, its brainstorm phase paused
-and its members away, so the owner invites them back with new credentials.
+The room keeps its ID, so importing the same backup twice is skipped. Message, turn, member,
+request, session and session-request IDs are renumbered after this database's current maximum.
+Imported discussions are historical, concluded sessions; active work and credentials are never
+restored.
 """
 
 import hashlib
@@ -23,18 +22,24 @@ ACTIVE_PHASES = ("initial", "discussing", "reviewing")
 OPEN_REQUESTS = ("pending", "delivering")
 LIMIT_FIELDS = ("max_rounds", "max_minutes", "execution_minutes", "on_limit", "summary_minutes",
                 "started_at", "closing_at", "stop_reason", "revision")
+VERSION_2_TABLES = ("discussion_sessions", "discussion_conclusions", "session_requests", "task_message_sources",
+                    "session_state", "session_limits", "session_round_budgets", "session_options", "session_pauses")
 # Tables whose integer IDs are renumbered, with the backup table that holds their rows.
 RENUMBERED = {"messages": "messages", "discussion_turns": "discussion_turns",
-              "room_members": "room_members", "member_requests": "member_requests"}
+              "room_members": "room_members", "member_requests": "member_requests",
+              "discussion_sessions": "discussion_sessions", "session_requests": "session_requests"}
 
 
 def backup_tables(backup):
     """Validate the backup envelope and return its tables and the single room row."""
-    if not isinstance(backup, dict) or backup.get("format") != BACKUP_FORMAT or backup.get("version") != 1:
-        raise ValueError("不是可导入的房间备份（需要 ai-codiscuss-room-backup 第 1 版）")
+    if (not isinstance(backup, dict) or backup.get("format") != BACKUP_FORMAT
+            or backup.get("version") not in (1, 2)):
+        raise ValueError("不是可导入的房间备份（需要 ai-codiscuss-room-backup 第 1 或第 2 版）")
     tables = backup.get("tables")
     if not isinstance(tables, dict) or not isinstance(tables.get("rooms"), list) or len(tables["rooms"]) != 1:
         raise ValueError("备份须恰好包含一个房间")
+    if backup["version"] == 2 and any(name not in tables for name in VERSION_2_TABLES):
+        raise ValueError("第 2 版备份缺少讨论会话历史表，拒绝静默丢弃新字段")
     for name, rows in tables.items():
         if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
             raise ValueError(f"备份表 {name} 格式无效")
@@ -102,8 +107,7 @@ def history_statements(tables, room_id, maps):
     for old, row in details.items():
         statements += [("INSERT INTO message_details (message_id,kind,submitted_by) VALUES (?,'import',?)", (messages[old], row["submitted_by"])),
                        ("UPDATE message_details SET kind=?,turn_id=? WHERE message_id=?", (row["kind"], turns.get(row.get("turn_id")), messages[old]))]
-    # A held relay stops an answered turn from promoting the next queued one; open turns are restored last.
-    statements.append(("INSERT INTO turn_relay (room_id,held_since) VALUES (?,1) ON CONFLICT(room_id) DO UPDATE SET held_since=1", (room_id,)))
+    # Keep active rows queued until the other active row is restored, preserving the legacy unique index.
     order = {"notified": 1, "pending": 2}
     for row in sorted(tables.get("discussion_turns", []), key=lambda turn: order.get(turn["status"], 0)):
         if row["status"] != "queued":
@@ -161,8 +165,9 @@ def record_statements(tables, room_id, maps):
     statements += [("""INSERT INTO member_requests (id,room_id,member_id,message_id,status,answer_id,created_at,chain_id,batch_id,purpose,created_by)
                        VALUES (?,?,?,?,?,?,?,?,?,?,?)""", (requests[row["id"]], room_id, members[row["member_id"]], messages[row["message_id"]],
                                                            "cancelled" if row["status"] in OPEN_REQUESTS else row["status"],
-                                                           messages.get(row.get("answer_id")), row["created_at"], row.get("chain_id", 0),
-                                                           row.get("batch_id", 0), row.get("purpose", "ask"), row.get("created_by", "user")))
+                                                           messages.get(row.get("answer_id")), row["created_at"],
+                                                           messages.get(row.get("chain_id"), 0), messages.get(row.get("batch_id"), 0),
+                                                           row.get("purpose", "ask"), row.get("created_by", "user")))
                    for row in tables.get("member_requests", [])]
     statements += [("INSERT INTO member_suggestions (message_id,member_id) VALUES (?,?)", (messages[row["message_id"]], members[row["member_id"]]))
                    for row in tables.get("member_suggestions", [])]
@@ -176,14 +181,69 @@ def record_statements(tables, room_id, maps):
     return statements
 
 
+def session_statements(tables, room_id, maps):
+    """Restore session history and its provenance without restoring active work."""
+    messages = maps["messages"]
+    sessions = maps["discussion_sessions"]
+    requests = maps["session_requests"]
+    members = maps["room_members"]
+    member_requests = maps["member_requests"]
+    task_messages = {row["message_id"] for row in tables.get("task_message_sources", [])}
+    latest_visible_message = max((new for old, new in messages.items() if old not in task_messages), default=0)
+    statements = []
+    for row in tables.get("discussion_sessions", []):
+        active = row["status"] in ("active", "paused")
+        statements.append(("""INSERT INTO discussion_sessions
+            (id,room_id,goal,status,started_message_id,ended_message_id,created_at)
+            VALUES (?,?,?,?,?,?,?)""", (sessions[row["id"]], room_id, remap_text(row["goal"], messages),
+                                          "concluded" if active else row["status"],
+                                          remap_until(row.get("started_message_id"), messages),
+                                          latest_visible_message if active else remap_until(row.get("ended_message_id"), messages),
+                                          row["created_at"])))
+    statements += [("""INSERT INTO discussion_conclusions
+        (session_id,room_id,stop_reason,max_rounds,max_minutes,brief,state,state_until,concluded_at)
+        VALUES (?,?,?,?,?,?,?,?,?)""", (sessions[row["session_id"]], room_id, row["stop_reason"],
+                                           row["max_rounds"], row["max_minutes"], remap_text(row["brief"], messages),
+                                           remap_text(row["state"], messages), remap_until(row["state_until"], messages),
+                                           row["concluded_at"])) for row in tables.get("discussion_conclusions", [])]
+    for name, fields in (("session_state", ("phase", "revision")),
+                         ("session_limits", ("max_rounds", "max_minutes", "execution_minutes", "started_at", "stop_reason", "revision")),
+                         ("session_round_budgets", ("base", "cap", "extra")),
+                         ("session_pauses", ("paused_at", "paused_seconds")),
+                         ("session_options", ("named_followup",))):
+        columns = ("session_id", *fields)
+        statements += [(f"INSERT INTO {name} ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})",
+                        (sessions[row["session_id"]], *(row[field] for field in fields)))
+                       for row in tables.get(name, [])]
+    for row in tables.get("session_state", []):
+        statements.append(("UPDATE session_state SET read_until=?,held_since=? WHERE session_id=?",
+                           (remap_until(row["read_until"], messages), remap_until(row["held_since"], messages),
+                            sessions[row["session_id"]])))
+    statements += [("""INSERT INTO session_requests
+        (id,session_id,round,position,member_id,purpose,question,status,member_request_id,submission_id,read_until,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""", (requests[row["id"]], sessions[row["session_id"]], row["round"], row["position"],
+                                                members[row["member_id"]], row["purpose"], remap_text(row["question"], messages),
+                                                "cancelled" if row["status"] in ("queued", "open") else row["status"],
+                                                member_requests.get(row.get("member_request_id")), row["submission_id"],
+                                                None if row.get("read_until") is None else remap_until(row["read_until"], messages),
+                                                row["created_at"])) for row in tables.get("session_requests", [])]
+    statements += [("""INSERT INTO task_message_sources
+        (message_id,session_id,session_request_id,cause_kind,cause_message_id,cause_request_id)
+        VALUES (?,?,?,?,?,?)""", (messages[row["message_id"]], sessions[row["session_id"]],
+                                   requests[row["session_request_id"]], row["cause_kind"],
+                                   messages.get(row.get("cause_message_id")),
+                                   member_requests.get(row.get("cause_request_id"))))
+                   for row in tables.get("task_message_sources", [])]
+    return statements
+
+
 def import_statements(tables, room, maps, control_hash, now):
     """Build the ordered writes that recreate one backup; the D1 adapter builds the same sequence."""
-    mode = next((row["mode"] for row in tables.get("room_modes", [])), "brainstorm")
     return [*room_statements(tables, room, maps, control_hash), *member_statements(tables, room["id"], maps),
             *history_statements(tables, room["id"], maps), *settings_statements(tables, room, maps, now),
             *record_statements(tables, room["id"], maps),
-            ("UPDATE room_modes SET mode=? WHERE room_id=?", (mode, room["id"])),
-            ("DELETE FROM turn_relay WHERE room_id=?", (room["id"],))]
+            *session_statements(tables, room["id"], maps),
+            ]
 
 
 def import_room(connection, backup, control_token, now):

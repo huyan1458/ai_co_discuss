@@ -72,7 +72,7 @@ function write_cli_stub(home) {
     const { join } = require('node:path');
     (async () => {
       const prompt = fs.readFileSync(0, 'utf8');
-      const task_path = prompt.match(/(?:任务文件：|同一份保存在 )(.*?)(?:，立即|，无需再读)/)[1];
+      const task_path = prompt.match(/先读任务文件 (.*?)，按其中/)[1];
       const task = JSON.parse(fs.readFileSync(task_path, 'utf8'));
       const session = 'package-test-' + task.room;
       process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: session }) + '\\n');
@@ -82,21 +82,9 @@ function write_cli_stub(home) {
       }
       // Run the package's codiscuss entry the way an approved task command would.
       const codiscuss = join(task.skills[0], '..', '..', '..', '..', 'runner', 'codiscuss.mjs');
-      // Headless delivery now enters in the runner; wait for that acknowledgement instead of entering twice.
-      if (prompt.includes('接入程序已为本次执行完成 execution enter')) {
-        for (let attempt = 0; attempt < 250; attempt++) {
-          const access = JSON.parse(fs.readFileSync((task.access_file || process.env.DISCUSS_ACCESS_FILE), 'utf8'));
-          const response = await fetch(task.site + '/api/rooms/' + task.room + '/events/' + task.event_id, {
-            method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Discussion-Token': access.token },
-            body: JSON.stringify({ action: 'view' }) });
-          if ((await response.json()).status === 'started') break;
-          await delay(20);
-        }
-      }
-      const actions = prompt.includes('接入程序已为本次执行完成 execution enter') ? [] : [['enter']];
-      for (const [action, ...args] of [...actions, ['fail', '--reason', 'package-integration-complete']]) {
+      for (const [action, ...args] of [['view'], ['fail', '--reason', 'package-integration-complete']]) {
         const result = spawnSync(process.execPath, [codiscuss, '--site', task.site, 'execution', action,
-          task.room, String(task.event_id), '--access-file', (task.access_file || process.env.DISCUSS_ACCESS_FILE), ...args], { encoding: 'utf8', windowsHide: true });
+          task.room, String(task.execution_id), '--access-file', (task.access_file || process.env.DISCUSS_ACCESS_FILE), ...args], { encoding: 'utf8', windowsHide: true });
         if (result.status !== 0) throw new Error(result.stderr);
       }
       process.stdout.write(JSON.stringify({ type: 'turn.completed' }) + '\\n');
@@ -121,9 +109,10 @@ async function verify_installed_launches(package_path, execute, env, site) {
   assert.equal(task.cli, process.platform === 'win32' ? 'codiscuss.cmd' : 'codiscuss');
   assert(task.skills.every(path => path.startsWith(package_path) && existsSync(path)));
   assert(conversation.config_path.startsWith(home));
-  const entered = installed_command(execute, cli, ['--site', site, 'execution', 'enter', task.room, String(task.event_id), '--access-file', task.access_file]);
-  assert.equal(entered.data.status, 'started');
-  installed_command(execute, cli, ['--site', site, 'execution', 'fail', task.room, String(task.event_id), '--access-file', task.access_file, '--reason', 'conversation-integration-complete']);
+  const claimed = installed_command(execute, cli, ['--site', site, 'execution', 'view', task.room, String(task.execution_id), '--access-file', task.access_file]);
+  assert.equal(claimed.data.status, 'dispatched');
+  assert.equal(claimed.data.requests[0].purpose, 'discuss_host');
+  installed_command(execute, cli, ['--site', site, 'execution', 'fail', task.room, String(task.execution_id), '--access-file', task.access_file, '--reason', 'conversation-integration-complete']);
   const web_token = randomUUID();
   // The stand-in runs ./app-server and ./exec from the preserved project directory.
   const response = await fetch(`${site}/api/local/launch`, { method: 'POST',
@@ -134,19 +123,20 @@ async function verify_installed_launches(package_path, execute, env, site) {
   let room;
   for (let attempt = 0; attempt < 40; attempt++) {
     room = await fetch(`${site}/api/rooms/${web.room.id}`).then(result => result.json());
-    if (room.runtime.status === 'paused') break;
+    if (room.free.executions.some(execution => execution.status === 'failed')) break;
     await delay(250);
   }
-  assert.equal(room.runtime.status, 'paused', 'the stub must enter and finish its delivered task');
+  assert.equal(room.session.status, 'active', 'a failed execution must not pause the discussion');
+  assert(room.free.executions.some(execution => execution.status === 'failed'), 'the stub must report its delivered task failed');
   const config = JSON.parse(readFileSync(web.config_path, 'utf8'));
   assert.equal(config.token, web_token);
   const tasks = readdirSync(config.directory).filter(name => name.endsWith('.task.json'));
   assert.equal(tasks.length, 1);
   const delivered = JSON.parse(readFileSync(join(config.directory, tasks[0]), 'utf8'));
   assert.equal(delivered.cli, process.platform === 'win32' ? 'codiscuss.cmd' : 'codiscuss');
-  assert.equal(JSON.parse(readFileSync(join(config.directory, `event-${delivered.event_id}.access.json`), 'utf8')).session_id, `package-test-${web.room.id}`);
-  const receipt = installed_command(execute, cli, ['--site', site, 'execution', 'view', delivered.room, String(delivered.event_id), '--access-file', web.config_path]);
+  const receipt = installed_command(execute, cli, ['--site', site, 'execution', 'view', delivered.room, String(delivered.execution_id), '--access-file', web.config_path]);
   assert.equal(receipt.data.result, 'package-integration-complete');
+  assert.equal(JSON.parse(readFileSync(join(config.directory, `free-${delivered.execution_id}.access.json`), 'utf8')).session_id, `package-test-${web.room.id}`);
   assert.equal(JSON.parse(readFileSync(join(home, 'rooms.json'), 'utf8')).configs.length, 2);
 }
 

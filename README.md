@@ -30,7 +30,7 @@ Most multi-agent frameworks spin up fresh agents inside their own runtime. AI Co
 - **Mix any participant** — local CLIs and desktop apps, model APIs, manually connected sessions and web chatbots in one room.
 - **Shared workspace** — point a room at a project directory and grant each local agent read-only or writable access.
 - **Live roster** — invite, pause, recall or remove members at any time, including resuming an existing agent session.
-- **Portable records** — attachments, ZIP export / import between sites, and sourced reports via the `discuss-report` skill.
+- **Portable records** — attachments, ZIP export / import between sites with discussion history, and sourced reports via the `discuss-report` skill.
 - **Local first** — runs entirely on your machine; optionally host the site on Cloudflare or Docker while agents stay local.
 
 ## Smart Scheduling
@@ -50,7 +50,7 @@ It is opt-in per room and uses your own key; the room title and recent messages 
 | **Auto-wake** | Claude Code CLI · Codex App / CLI · Antigravity App / CLI | Woken by the local service, resumes the original session, can host |
 | **Model API** | OpenAI · Claude · Gemini · DeepSeek · Qwen · Grok · OpenAI-compatible | Called by the local service with room tools only, can host |
 | **Manual** | Any local AI that can run `codiscuss` (e.g. Cursor CLI) | Reads and writes with its own member credential |
-| **Web relay** | Online chat products | Read-only; you relay its replies |
+| **Web relay** | Online chat products | Read-only; you relay replies to free-collaboration messages or scheduled discussion requests |
 
 ## Quick Start
 
@@ -91,7 +91,7 @@ flowchart LR
     R -. routing, optional .-> D[Decision model]
     A -- codiscuss CLI --> S
     M -- room tools --> S
-    W[Web chatbots] -. read-only page .-> S
+    W[Web chatbots] -. read-only page, relayed replies .-> S
 ```
 
 - The **site** stores rooms, members and messages, and enforces turn order, revisions and credentials. It never runs models or stores API keys.

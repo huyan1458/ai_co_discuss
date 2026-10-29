@@ -13,12 +13,13 @@ import { access_label, access_options } from "../runner/expert_prompts.mjs";
 const { view, bridge, act } = inject("discussion");
 const ACCESS_LABELS = { manual: "手动接入", online: "网页代发" };
 const STATUS_LABELS = { active: "在场", away: "暂离" };
+const unregistered = (member) => member.access === "manual" && member.manual_source !== "web" && !member.registered_at;
 // CLIs this tool grants project access per run; App and API members are left to their own settings.
 const ACCESS_CLIENTS = ["codex_cli", "claude", "antigravity_cli"];
 const CODEX_OPTIONS = [{ value: "codex_cli", label: "CLI" }, { value: "codex", label: "App" }];
 const ADAPTER_LABELS = { api: "API", codex: "App", antigravity: "App" };
 const room = computed(() => view.value.room);
-const free = computed(() => room.value.mode === "free");
+const free = computed(() => !["active", "paused"].includes(room.value.session?.status));
 const saved = computed(() => view.value.launch.room_models?.room_id === room.value.id ? view.value.launch.room_models : null);
 /**
  * One line, above the members, for why this computer's saved choices are not shown; cells then stay empty instead of
@@ -61,7 +62,7 @@ const members = computed(() => room.value.members?.length ? room.value.members
  * collaboration can switch between its App and CLI here.
  */
 function access(member) {
-  if (ACCESS_LABELS[member.access]) return { text: ACCESS_LABELS[member.access] };
+  if (ACCESS_LABELS[member.access]) return { text: member.manual_source === "web" ? "网页代发" : ACCESS_LABELS[member.access] };
   const adapter = saved.value?.participants?.[member.name]?.adapter;
   if (!["codex", "codex_cli"].includes(adapter)) return { text: adapter ? ADAPTER_LABELS[adapter] || "CLI" : bridge.participant_access(member.name, room.value) };
   const idle = !(member.pending > 0 || ["dispatched", "started"].includes(member.execution?.status));
@@ -88,7 +89,7 @@ async function switch_adapter(member, adapter) {
 
 /** Project file access, and whether it can be switched here; anything that cannot says why on hover. */
 function files(member) {
-  if (member.access === "online") return { value: "read", hint: "网页成员只能阅读" };
+  if (member.access === "online" || member.manual_source === "web") return { value: "read", hint: "网页成员只能阅读" };
   if (member.access === "manual") return { text: "自行决定", hint: "手动成员的权限由它自己的会话决定" };
   const profile = saved.value?.participants?.[member.name];
   if (!profile) return { text: "—" };
@@ -158,7 +159,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
           <header class="member-card-head">
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="md" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
             <div class="member-card-name"><strong>{{ bridge.display_name(member.name) }}<UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /></strong><small v-if="room.descriptions?.[member.name]" :title="room.descriptions[member.name]">{{ room.descriptions[member.name] }}</small></div>
-            <UBadge :color="member.access === 'manual' && !member.registered_at ? 'warning' : member.status === 'active' ? 'success' : 'neutral'" variant="subtle" size="sm">{{ member.access === 'manual' && !member.registered_at ? '待注册' : STATUS_LABELS[member.status] || member.status }}</UBadge>
+            <UBadge :color="unregistered(member) ? 'warning' : member.status === 'active' ? 'success' : 'neutral'" variant="subtle" size="sm">{{ unregistered(member) ? '待注册' : STATUS_LABELS[member.status] || member.status }}</UBadge>
           </header>
           <dl class="member-card-facts">
             <div><dt>接入</dt><dd>
@@ -193,7 +194,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
       <dl class="overview-settings">
         <div><dt>主持人</dt><dd>{{ room.host ? bridge.display_name(room.host) : '未指定' }}</dd></div>
         <div><dt>智能调度</dt><dd>{{ scheduler }}</dd></div>
-        <div v-if="free && room.free?.max_rounds"><dt>连续派活上限</dt><dd>
+        <div v-if="room.free?.max_rounds"><dt>连续派活上限</dt><dd>
           <template v-if="view.access?.can_manage"><ChainRoundsField :model-value="rounds_shown" :disabled="saving_rounds" @update:model-value="save_rounds" />
             <small v-if="rounds_saved" role="status" class="overview-saved">已保存，进行中的任务链也按新值</small></template>
           <span v-else>主持人收到你的一条消息后，最多连续派活 {{ room.free.max_rounds }} 轮（派活 → 成员回答 → 交回汇总为一轮），然后停下等你</span></dd></div>
@@ -221,12 +222,13 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 .member-card-name strong { display: flex; align-items: center; gap: 5px; color: var(--ui-text-highlighted); font-size: 14px; font-weight: 600; }
 .member-card-name strong .iconify { color: var(--ui-warning, #e5b54a); }
 .member-card-name small { overflow: hidden; color: var(--ui-text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.member-card-facts { display: grid; grid-template-columns: 120px minmax(0, 1fr) 120px; gap: 16px; margin: 0; padding: 12px 16px 14px 60px; font-size: 13px; }
+.member-card-facts { display: grid; grid-template-columns: 120px minmax(0, 1fr) auto; gap: 16px; margin: 0; padding: 12px 16px 14px 60px; font-size: 13px; }
 .member-card-facts dt { margin-bottom: 4px; color: var(--ui-text-muted); font-size: 12px; }
 .member-card-facts dd { display: flex; align-items: center; min-height: 28px; margin: 0; color: var(--ui-text); }
 .overview-model { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .overview-muted { color: var(--ui-text-muted); }
-.overview-switch { width: 100px; }
+.overview-switch { width: max-content; max-width: 100%; }
+.overview-switch button { padding: 0 10px; white-space: nowrap; }
 .overview-switch button:disabled { cursor: default; }
 .overview-switch button:disabled:not([aria-checked="true"]) { opacity: 0.55; }
 /* A switch that cannot change here (API, web members, a discussion in progress) stays visible but greyed out. */
@@ -239,11 +241,14 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 .overview-local { display: flex; gap: 10px; margin: 0 0 8px; color: var(--ui-text-muted); font-size: 12px; }
 .overview-result { margin: 8px 0 0; color: var(--ui-text-muted); font-size: 12px; }
 .overview-result.is-error { color: var(--ui-error); }
-.overview-settings { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin: 0; font-size: 13px; }
-.overview-settings div { display: flex; gap: 8px; }
-.overview-settings dt { flex: none; width: 112px; color: var(--ui-text-muted); }
+/* Same card as the members above, one setting per row. */
+.overview-settings { margin: 0; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-bg-elevated); font-size: 13px; }
+.overview-settings > div { display: flex; align-items: baseline; gap: 16px; padding: 12px 16px; }
+.overview-settings > div + div { border-top: 1px solid var(--ui-border-muted); }
+.overview-settings dt { flex: none; width: 112px; color: var(--ui-text-muted); font-size: 12px; }
 .overview-settings dd { flex: 1; min-width: 0; margin: 0; color: var(--ui-text); overflow-wrap: anywhere; }
 @media (max-width: 720px) {
   .member-card-facts { grid-template-columns: 1fr 1fr; padding-left: 16px; }
+  .member-card-facts > div:last-child { grid-column: 1 / -1; }
 }
 </style>

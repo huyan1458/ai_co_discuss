@@ -36,7 +36,9 @@ Click **Start discussion** (开启讨论) in the member panel, or check **Start 
 2. The host breaks down the question and schedules speakers. Experts first give independent views, then respond to each other.
 3. When a limit is reached, the host declares the goal done, or you click **End**, the room returns to free collaboration with history and conclusions kept. You can start another discussion later.
 
-You can `@` any member during a discussion without using a round. Your messages go to the host without interrupting the current speaker; to act immediately, click **Skip** (跳过) on the progress board.
+You can `@` any member during a discussion without using a round. If that member is already handling a discussion request, the new request waits for the same session. Unaddressed messages go to the host; to stop the current speaker, click **Skip** (跳过) on the progress board. Group mentions, retracting, editing and branching are unavailable during a discussion.
+
+Discussions and free collaboration share the same execution and failure cards. A failed delivery retries up to three times; you can retry immediately or stop it. When retries run out, only that request fails and the host decides whether to skip, reschedule or pause the discussion. The room is not paused automatically. Scheduled online members can reply through the host's relay; the discussion host itself must be woken locally.
 
 ### Named Follow-ups
 
@@ -46,11 +48,11 @@ With **Named follow-ups** (点名追问) enabled, the host writes a targeted fol
 
 | Limit | Description |
 | --- | --- |
-| Rounds | One round is one viewpoint from every expert |
+| Rounds | Counts completed expert discussion replies; host notes and direct questions do not count |
 | Total time | Counts only active time; paused time is excluded |
-| Single run | A run that exceeds it pauses the discussion |
+| Single run | A run that exceeds it ends that execution; the request is handled as a delivery failure |
 
-The discussion ends when a limit is reached. Reaching a limit does not mean consensus was reached.
+The discussion ends as soon as a limit is reached and returns to free collaboration without an extra host summary request. Reaching a limit does not mean consensus was reached. Pausing stops current discussion executions; when resumed, the host schedules the next request.
 
 ## Smart Scheduling
 
@@ -75,10 +77,10 @@ Project file access is set per member and is read-only by default.
 
 ## Manual Members and Web Chatbots
 
-- **Manual** — the member is not woken automatically; it reads and writes with its own credential file, triggered by you or by its tool's scheduler. It must run `codiscuss member register` in its own session before it counts as present.
+- **Manual** — a local member is not woken automatically; it reads and writes with its own credential after you or the host triggers it, and must run `codiscuss member register` before it can be scheduled. Web members do not register or write directly; the host or user relays their original replies, including replies to discussion requests.
 - **Web chatbots** can only read the room. Copy the reading notice from the member panel, then choose **Relay** (代发) in the composer to paste their reply. Web chatbots cannot reach a local address.
 
-The host of a discussion must be woken locally; web chatbots take part in free collaboration only.
+The host of a discussion must be woken locally. Manual and web members can answer requests scheduled for them; web chatbots read the room and their replies are relayed by the host or user.
 
 ## Skills
 
@@ -96,3 +98,4 @@ In Codex, invoke them as `$discuss-host`. In other tools that do not discover th
 
 - **Attachments** — up to 10 per message and 20 MiB each; images and PDFs preview in place. Uploading does not mean an agent has read the file.
 - **Export and import** — **Export conversation** (导出对话) downloads the raw data and attachments; **Import room** (导入房间) on another site creates a copy you can keep using. Exported from a computer running the local service, the backup also carries each member's software settings and session; imported on that same computer, members resume their original sessions when brought back. Claude Code members come back as manual members and register again from their original window, so the session does not fork.
+- **Discussion history** — backups include past sessions, conclusions and speaker plans, and version 1 backups remain importable. Import restores them as history; it does not resume active work or wake members. Markdown exports retain the links between plans and answers.

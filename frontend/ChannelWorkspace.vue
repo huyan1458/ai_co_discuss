@@ -5,7 +5,6 @@ import TopicPanel from "./TopicPanel.vue";
 import WorkspaceDialogs from "./WorkspaceDialogs.vue";
 import ChannelDirectory from "./ChannelDirectory.vue";
 import ProgressPanel from "./ProgressPanel.vue";
-import ProgressBoard from "./ProgressBoard.vue";
 import FreeBoard from "./FreeBoard.vue";
 import DiscussionHistory from "./DiscussionHistory.vue";
 import RoomOverview from "./RoomOverview.vue";
@@ -100,7 +99,7 @@ const tabs = [
 ];
 // The consensus, host and access pages were merged in; links and actions that still open them land on the merged page.
 const MERGED_TABS = { context: "history", topic: "history", access: "overview" };
-const free_room = computed(() => room.value?.mode === "free");
+const free_room = computed(() => !["active", "paused"].includes(room.value?.session?.status));
 watch(() => MERGED_TABS[view.value.tab], (merged) => { if (merged) act("tab", merged); }, { immediate: true });
 // The discussion page: a free room can start one here as from the rail; the consensus reads first and edits on demand.
 const starting_discussion = ref(false);
@@ -372,8 +371,8 @@ function resize_nav_by_key(event) {
     </main>
     <div v-if="show_rail" class="channel-rail-resizer" role="separator" tabindex="0" aria-label="调整右侧栏宽度" aria-orientation="vertical" aria-controls="channel-member-rail" :aria-valuemin="RAIL_MIN" :aria-valuemax="RAIL_MAX" :aria-valuenow="rail_width" :aria-valuetext="`${rail_width} 像素`" title="拖动调整右侧栏宽度，也可使用左右方向键" @pointerdown="start_rail_resize" @pointermove="resize_rail" @pointerup="finish_rail_resize" @pointercancel="finish_rail_resize" @lostpointercapture="finish_rail_resize" @keydown="resize_rail_by_key"></div>
     <aside v-if="show_rail" id="channel-member-rail" class="channel-member-rail" aria-label="当前焦点与讨论进度">
-      <section class="channel-rail-board"><FreeBoard v-if="room && free_room" />
-        <ProgressBoard v-else-if="room" docked /><div v-else class="progress-board is-docked"><header class="pb-header"><strong>讨论进度</strong></header><p class="channel-rail-empty">暂无房间，新建讨论后在这里查看进度与参与者。</p></div></section>
+      <section class="channel-rail-board"><FreeBoard v-if="room" />
+        <div v-else class="progress-board is-docked"><header class="pb-header"><strong>讨论进度</strong></header><p class="channel-rail-empty">暂无房间，新建讨论后在这里查看进度与参与者。</p></div></section>
     </aside>
 
     <USlideover v-model:open="nav_open" side="left" title="协作房间" description="共议 · AI CoDiscuss" :ui="{ content: 'channel-navigation-drawer', body: 'channel-drawer-body' }">

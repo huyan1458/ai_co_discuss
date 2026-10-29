@@ -52,10 +52,51 @@ class CliTests(unittest.TestCase):
     def setUp(self):
         """Create a fresh room through the CLI for each case."""
         self.room_access = {}
+        self.session_room = None
         result = self.cli("room", "create", "--title", "CLI 测试", "--goal", "验证真实行为",
                           "--background", "按需背景正文", "--boundaries", "按需边界正文", "--as", "Codex",
                           "--submission-id", str(uuid.uuid4()))
         self.room = result["id"]
+
+    def create_discussion_room(self, online=()):
+        """Create a free room with a runner host and member credentials, then open a real session."""
+        names = ("Codex", "Claude", "Gemini", "DeepSeek", "Qwen", "Grok")
+        owner = uuid.uuid4().hex
+        tokens = {name: uuid.uuid4().hex for name in names}
+        adapters = {"Codex": "codex_cli", "Claude": "claude", "Gemini": "antigravity_cli",
+                    "DeepSeek": "api", "Qwen": "api", "Grok": "api"}
+        members = [{"name": name, "token": tokens[name], "adapter": adapters[name],
+                    "access": "manual" if name in online else "runner",
+                    **({"manual_source": "web"} if name in online else {})} for name in names]
+        payload = {"title": "CLI 讨论会话", "goal": "验证讨论回答绑定", "mode": "free", "host": "Codex",
+                   "members": members, "submission_id": uuid.uuid4().hex}
+        request = Request(self.base + "/api/rooms", data=json.dumps(payload).encode(),
+                          headers={"Content-Type": "application/json", "X-Discussion-Token": owner})
+        with urlopen(request, timeout=10) as response:
+            room = json.loads(response.read())
+        self.room = room["id"]
+        owner_file = Path(self.directory.name) / f"{self.room}.owner.json"
+        owner_file.write_text(json.dumps({"site": self.base, "room": self.room, "token": owner}), encoding="utf-8")
+        access_files = {"用户": owner_file}
+        for name, token in tokens.items():
+            access = Path(self.directory.name) / f"{self.room}.{name}.json"
+            access.write_text(json.dumps({"site": self.base, "room": self.room, "token": token}), encoding="utf-8")
+            access_files[name] = access
+        self.room_access[self.room] = access_files
+        state = self.api_call(f"/api/rooms/{self.room}/discussion", token=owner)
+        self.cli("run", "start", self.room, "--revision", state["revision"], "--goal", "CLI 讨论会话目标")
+        self.session_room = self.room
+        return self.room
+
+    def api_call(self, path, payload=None, token=None):
+        """Call one test-only endpoint with the selected room credential."""
+        headers = {"Content-Type": "application/json"}
+        if token:
+            headers["X-Discussion-Token"] = token
+        request = Request(self.base + path, data=json.dumps(payload).encode() if payload is not None else None,
+                          headers=headers)
+        with urlopen(request, timeout=10) as response:
+            return json.loads(response.read())
 
     def test_limit_configuration_and_check_are_discoverable(self):
         """Typed options survive create/read/update and a non-triggered check."""
@@ -64,8 +105,6 @@ class CliTests(unittest.TestCase):
                         "--execution-minutes", "10")
         self.assertEqual(room["limits"]["max_rounds"], 3)
         self.assertEqual(self.cli("room", "limits", room["id"])["max_minutes"], 60)
-        self.assertEqual(self.cli("room", "limits", room["id"], "--check", "--as", "Codex")["phase"], "preparing")
-        self.assertEqual(self.cli("room", "update", room["id"], "--as", "Codex", "--max-rounds", "0")["limits"]["max_rounds"], 0)
 
     def test_attachment_upload_recovery_files_only_message_and_verified_download(self):
         """Round-trip binary files with receipt recovery and no local overwrite."""
@@ -167,8 +206,8 @@ class CliTests(unittest.TestCase):
         access.write_text(json.dumps({"site": self.base, "room": room["id"], "token": member}), encoding="utf-8")
         args = ["message", "post", room["id"], "--as", "Claude", "--kind", "chat", "--body", "已完成",
                 "--access-file", access]
-        self.assertIn("--execution", str(self.rejected(["message", "post", room["id"], "--as", "Claude", "--body", "x",
-                                                        "--execution", 1, "--submission-id", str(uuid.uuid4())])))
+        missing_execution = self.rejected(args + ["--submission-id", str(uuid.uuid4())], code=1)
+        self.assertIn("execution_id", str(missing_execution))
         saved = self.cli(*args, "--execution", execution["id"], "--submission-id", str(uuid.uuid4()))
         self.assertEqual(saved["message"]["kind"], "chat")
         self.rejected(args + ["--submission-id", str(uuid.uuid4())], code=1)
@@ -223,9 +262,8 @@ class CliTests(unittest.TestCase):
         path = Path(self.directory.name) / "runtime-access.json"
         secret = json.loads(Path(self.room_access[self.room]["用户"]).read_text(encoding="utf-8"))["token"]
         path.write_text(json.dumps({"site": self.base, "room": self.room, "token": secret}), encoding="utf-8")
-        configured = self.cli("run", "configure", self.room, "--mode", "automatic", "--revision", 0, "--access-file", path)
-        self.assertEqual(configured["mode"], "automatic")
-        preview = self.invoke(["--site", self.base, "run", "pause", self.room, "--revision", configured["revision"],
+        current = self.cli("run", "view", self.room, "--access-file", path)
+        preview = self.invoke(["--site", self.base, "run", "pause", self.room, "--revision", current["revision"],
                                "--access-file", path, "--dry-run"])
         self.assertEqual(preview.returncode, 0, preview.stderr)
         self.assertNotIn(secret, preview.stdout + preview.stderr)
@@ -243,7 +281,7 @@ class CliTests(unittest.TestCase):
                               "--submission-id", str(uuid.uuid4())], environment=env)
         self.assertEqual(posted.returncode, 0, posted.stderr)
         self.assertEqual(json.loads(posted.stdout)["data"]["message"]["text"], "环境绑定")
-        preview = self.invoke(["run", "pause", self.room, "--revision", 0, "--dry-run"], environment=env)
+        preview = self.invoke(["run", "pause", self.room, "--revision", "idle", "--dry-run"], environment=env)
         self.assertNotIn(json.loads(text)["token"], preview.stdout + preview.stderr)
         wrong_room = self.invoke(["run", "view", "other-room"], environment=env)
         self.assertNotEqual(wrong_room.returncode, 0)
@@ -261,7 +299,7 @@ class CliTests(unittest.TestCase):
         text = json.dumps({"site": self.base, "room": self.room, "token": secret})
         view = self.invoke(["run", "view", self.room], environment={"DISCUSS_ACCESS": text})
         self.assertEqual(view.returncode, 0, view.stderr)
-        preview = self.invoke(["run", "pause", self.room, "--revision", 0, "--dry-run"], environment={"DISCUSS_ACCESS": text})
+        preview = self.invoke(["run", "pause", self.room, "--revision", "idle", "--dry-run"], environment={"DISCUSS_ACCESS": text})
         self.assertEqual(preview.returncode, 0, preview.stderr)
         self.assertNotIn(secret, preview.stdout + preview.stderr)
         other = self.invoke(["run", "view", "other-room"], environment={"DISCUSS_ACCESS": text})
@@ -269,14 +307,28 @@ class CliTests(unittest.TestCase):
         broken = self.invoke(["run", "view", self.room], environment={"DISCUSS_ACCESS": "{bad"})
         self.assertIn("DISCUSS_ACCESS", broken.stderr)
 
-    def plan_speech(self, speaker="Codex", actor=None):
-        """Create a valid assignment for a content-focused CLI regression."""
-        turn = self.cli("turn", "create", self.room, "--expert", speaker,
-                        "--question", "测试安排", "--as", "Codex", "--submission-id", str(uuid.uuid4()))["turn"]
-        return turn["id"]
+    def plan_speech(self, speaker="Codex", online=()):
+        """Read the current roster and create a real session request for one member."""
+        if self.session_room is None or set(online):
+            self.create_discussion_room(online)
+        roster = self.cli("turn", "roster", self.room)
+        return self.cli("turn", "create", self.room, "--expert", speaker,
+                        "--question", "测试安排", "--as", "Codex", "--roster", roster["revision"],
+                        "--submission-id", str(uuid.uuid4()))["turn"]
+
+    def reserve_execution(self, turn):
+        """Reserve the scheduled member's live request with the room control credential."""
+        room = self.api_call(f"/api/rooms/{self.room}", token=json.loads(
+            Path(self.room_access[self.room]["用户"]).read_text(encoding="utf-8"))["token"])
+        member = next(item for item in room["free"]["members"] if item["id"] == turn["member_id"])
+        owner = json.loads(Path(self.room_access[self.room]["用户"]).read_text(encoding="utf-8"))["token"]
+        execution = self.api_call(f"/api/rooms/{self.room}/executions", {
+            "member_id": member["id"], "client_id": uuid.uuid4().hex}, owner)
+        return execution["id"]
 
     def test_round_plan_from_stdin_relays_and_continue_needs_host_turn(self):
         """A plan file queues later experts; an answer relays without returning to the host."""
+        self.create_discussion_room()
         plan = json.dumps([{"expert": name, "question": "先答" if name == "Codex" else "再答"}
                            for name in ("Codex", "Gemini", "Claude", "DeepSeek", "Qwen", "Grok")], ensure_ascii=False)
         roster = self.cli("turn", "roster", self.room)
@@ -292,14 +344,15 @@ class CliTests(unittest.TestCase):
         moved = ["Grok", "Gemini", "Claude", "DeepSeek", "Qwen"]
         self.cli("turn", "reorder", self.room, "--revision", order["revision"], *[part for name in moved for part in ("--member", name)])
         self.assertEqual([item["expert"] for item in self.cli("turn", "current", self.room)["queued_turns"]], moved)
-        self.assertEqual(self.rejected(["turn", "continue", self.room, "--as", "Codex"], 1)["http_status"], 409)
-        self.cli("message", "post", self.room, "--body", "回答", "--as", "Codex", "--turn", created["turn"]["id"],
+        self.assertEqual(self.rejected(["turn", "continue", self.room, "--as", "Codex", "--roster", "stale"], 1)["http_status"], 409)
+        execution = self.reserve_execution(created["turn"])
+        self.cli("message", "post", self.room, "--body", "回答", "--as", "Codex", "--execution", execution,
                  "--summary", "摘要", "--submission-id", str(uuid.uuid4()))
         current = self.cli("turn", "current", self.room)
         self.assertEqual((current["current_turn"]["expert"], [item["expert"] for item in current["queued_turns"]]),
                          ("Grok", ["Gemini", "Claude", "DeepSeek", "Qwen"]))
         self.rejected(["turn", "create", self.room, "--plan-file", "-", "--expert", "Codex", "--as", "Codex",
-                       "--submission-id", str(uuid.uuid4())])
+                       "--roster", "stale", "--submission-id", str(uuid.uuid4())])
 
     def test_user_request_file_round_trip_is_separate_from_background(self):
         """Expose original requests through explicit brief reads and UTF-8 file inputs."""
@@ -328,42 +381,46 @@ class CliTests(unittest.TestCase):
         self.assertIn("POST", self.cli("room", "protocol", self.room))
 
     def test_complete_speaking_and_conclusion_workflow(self):
-        """A scheduled, notified answer completes once and permits a real conclusion."""
+        """A roster-bound plan opens one member request, answered with its execution."""
+        self.create_discussion_room()
+        roster = self.cli("turn", "roster", self.room)
         turn = self.cli("turn", "create", self.room, "--expert", "Codex", "--question", "如何验证？",
-                        "--submission-id", "workflow-turn", "--as", "Codex")["turn"]
-        prompt = self.cli("turn", "prompt", self.room, turn["id"])
-        self.assertIn("如何验证？", prompt["prompt"])
-        self.assertNotIn("按需背景正文", prompt["prompt"])
-        self.assertNotIn("mode=cli", prompt["prompt"])
-        self.assertEqual(self.cli("turn", "view", self.room, turn["id"])["status"], "pending")
-        self.cli("turn", "mark-notified", self.room, turn["id"], "--as", "Codex")
-        message = self.cli("message", "post", self.room, "--body", "原文依据", "--turn", turn["id"],
+                        "--submission-id", "workflow-turn", "--as", "Codex", "--roster", roster["revision"])["turn"]
+        self.assertEqual(self.cli("turn", "view", self.room, turn["id"])["status"], "open")
+        execution = self.reserve_execution(turn)
+        message = self.cli("message", "post", self.room, "--body", "原文依据", "--execution", execution,
                            "--submission-id", "workflow-answer", "--as", "Codex")["message"]
-        current = self.cli("turn", "current", self.room)["current_turn"]
-        self.assertEqual((current["status"], current["answer_id"]), ("answered", message["id"]))
+        current = self.cli("turn", "view", self.room, turn["id"])
+        self.assertEqual(current["status"], "answered")
         self.cli("state", "set", self.room, "--body", f"结论依据 #{message['id']}",
                  "--until", message["id"], "--as", "Codex")
-        self.cli("room", "update", self.room, "--phase", "concluded", "--as", "用户")
+        current = self.cli("run", "view", self.room)
+        self.cli("run", "stop", self.room, "--revision", current["revision"])
+        self.assertIsNone(self.cli("run", "view", self.room)["session"])
         self.assertEqual(self.cli("room", "view", self.room)["phase"], "concluded")
 
     def test_resume_recovers_completed_action_and_preserves_citations(self):
         """Separate CLI processes recover a stale plan without duplicating its created turn."""
         pending = "下一步：创建 Codex 复核安排，未执行；争点：试用条件与上线标准，待当事人确认。"
+        self.create_discussion_room()
         self.cli("state", "set", self.room, "--body", pending, "--until", 0, "--as", "Codex")
+        roster = self.cli("turn", "roster", self.room)
         args = ["turn", "create", self.room, "--expert", "Codex", "--question", "请澄清原意及条件",
-                "--submission-id", "recover-turn", "--as", "Codex"]
+                "--submission-id", "recover-turn", "--as", "Codex", "--roster", roster["revision"]]
         turn = self.cli(*args)["turn"]
         self.assertEqual(self.cli("state", "view", self.room)["state_text"], pending)
         self.assertEqual(self.cli("turn", "current", self.room)["current_turn"]["id"], turn["id"])
         self.assertTrue(self.cli(*args)["duplicate"])
         self.assertEqual(len(self.cli("turn", "list", self.room)["turns"]), 1)
         original = "只建议试用，不代表上线验收。\n条件：小范围验证；反例：已有合规问答工具。[6]\n\n主持人从原回答提取的引用：\n[6] https://example.org/source#conditions\n未核验的 43% 仅为候选条件。"
-        answer = self.cli("message", "post", self.room, "--body", original, "--as", "Codex", "--turn", turn["id"],
+        execution = self.reserve_execution(turn)
+        answer = self.cli("message", "post", self.room, "--body", original, "--as", "Codex", "--execution", execution,
                           "--submission-id", "recover-answer")["message"]
         self.assertEqual(self.cli("message", "view", self.room, answer["id"])["text"], original)
         final_state = f"已处理 #{answer['id']}；试用与上线有别。43% 未核验；下一步待验证。任务清理待确认。"
         self.cli("state", "set", self.room, "--body", final_state, "--until", answer["id"], "--as", "Codex")
-        self.cli("room", "update", self.room, "--phase", "concluded", "--as", "用户")
+        current = self.cli("run", "view", self.room)
+        self.cli("run", "stop", self.room, "--revision", current["revision"])
         self.rejected(["message", "post", self.room, "--kind", "receipt", "--body", "run=recover；task-1 已停止",
                        "--as", "Codex", "--submission-id", "recover-stop"])
         for view in (self.cli("room", "view", self.room), self.cli("state", "view", self.room)):
@@ -373,8 +430,10 @@ class CliTests(unittest.TestCase):
 
     def test_message_retry_conflict_and_exact_original(self):
         """Same identifier replays, changed content conflicts, and reads remain exact."""
+        turn = self.plan_speech()
+        execution = self.reserve_execution(turn)
         args = ["message", "post", self.room, "--body", "@Gemini 成本 &= #1\n原文", "--as", "Codex",
-                "--submission-id", "retry-original", "--turn", self.plan_speech()]
+                "--submission-id", "retry-original", "--execution", str(execution)]
         first = self.cli(*args)
         repeated = self.cli(*args)
         self.assertTrue(repeated["duplicate"])
@@ -393,10 +452,11 @@ class CliTests(unittest.TestCase):
         brief_file = Path(self.directory.name) / "host-brief.txt"
         summary_file.write_text("建议先验证；权限缺口仍未解决。", encoding="utf-8")
         brief_file.write_text("已有候选方案；共识是先验证，歧义是成本；下一步追问权限。", encoding="utf-8")
-        turn_id = self.plan_speech("Gemini", "Codex")
+        turn = self.plan_speech("Gemini")
+        execution = self.reserve_execution(turn)
         answer = self.cli("message", "post", self.room, "--body", "完整正文\n必须保留条件与反例。",
                           "--summary-file", summary_file, "--summary-by", "Gemini", "--author", "Gemini",
-                          "--submission-id", "summary-file", "--as", "Codex", "--turn", turn_id)["message"]
+                          "--submission-id", "summary-file", "--as", "Gemini", "--execution", execution)["message"]
         self.assertEqual((answer["summary"], answer["summary_by"]), (summary_file.read_text(encoding="utf-8"), "Gemini"))
         self.assertEqual(self.cli("message", "view", self.room, answer["id"])["text"], "完整正文\n必须保留条件与反例。")
         saved = self.cli("state", "set", self.room, "--body", "详细进度", "--brief-file", brief_file,
@@ -409,37 +469,46 @@ class CliTests(unittest.TestCase):
         self.assertIn("1000", rejected["message"])
 
     def test_turn_replay_cancel_and_conclude_guard(self):
-        """Creating a turn is idempotent and uncompleted work cannot be concluded."""
+        """Creating a plan is idempotent, cancellation is explicit, and the old phase write is rejected."""
+        self.create_discussion_room()
+        roster = self.cli("turn", "roster", self.room)
         args = ["turn", "create", self.room, "--expert", "Codex", "--question", "一次任务",
-                "--submission-id", "retry-turn-001", "--as", "Codex"]
+                "--submission-id", "retry-turn-001", "--as", "Codex", "--roster", roster["revision"]]
         turn = self.cli(*args)["turn"]
         self.assertTrue(self.cli(*args)["duplicate"])
-        self.assertEqual(self.cli("turn", "list", self.room, "--submission-id", "retry-turn-001")["turns"], [turn])
+        saved = self.cli("turn", "list", self.room, "--submission-id", "retry-turn-001")["turns"][0]
+        self.assertEqual({key: saved[key] for key in turn}, turn)
         self.rejected(["room", "update", self.room, "--phase", "concluded", "--as", "Codex"], 1)
         self.cli("turn", "cancel", self.room, turn["id"], "--as", "用户")
         self.assertEqual(self.cli("turn", "list", self.room)["turns"][0]["status"], "cancelled")
-        self.cli("room", "update", self.room, "--phase", "concluded", "--as", "用户")
+        state = self.cli("run", "view", self.room)
+        self.cli("run", "stop", self.room, "--revision", state["revision"])
 
     def test_forwarded_author_and_online_write_boundary(self):
         """Forwarding preserves the expert; online experts cannot submit as CLI selves."""
+        self.create_discussion_room(online=("Claude",))
         self.rejected(["message", "post", self.room, "--body", "在线自行写入", "--as", "Claude",
                        "--submission-id", "online-reject"], 1)
-        turn_id = self.plan_speech("Claude", "Codex")
+        turn = self.plan_speech("Claude")
         forwarded = self.cli("message", "post", self.room, "--body", "真实取得的在线原文",
-                             "--as", "Codex", "--author", "Claude", "--submission-id", "online-forward", "--turn", turn_id)["message"]
+                             "--as", "用户", "--author", "Claude", "--request", turn["member_request_id"],
+                             "--submission-id", "online-forward")["message"]
         self.assertEqual((forwarded["author"], forwarded["submitted_by"], forwarded["source"]),
-                         ("Claude", "Codex", "host_proxy"))
+                         ("Claude", "用户", "proxy"))
         note = self.cli("message", "post", self.room, "--body", "主持说明", "--kind", "moderation",
-                        "--as", "Codex", "--submission-id", "moderator-note")["message"]
-        self.assertEqual(note["kind"], "moderation")
+                        "--execution", 1, "--as", "Codex", "--submission-id", "moderator-note", "--dry-run")
+        self.assertEqual((note["body"]["kind"], note["body"]["execution_id"]), ("moderation", 1))
 
     def test_pause_blocks_opinions_and_run_receipts_are_gone(self):
-        """Paused state guards stay on the server, and the retired receipt kind is refused before any request."""
-        self.cli("room", "update", self.room, "--phase", "paused", "--as", "Codex")
-        self.rejected(["message", "post", self.room, "--body", "迟到观点", "--as", "Codex",
+        """Paused sessions reject late answers; retired opinion and receipt writes are unavailable."""
+        self.create_discussion_room()
+        roster = self.cli("turn", "roster", self.room)
+        state = self.cli("run", "view", self.room)
+        self.cli("run", "pause", self.room, "--revision", state["revision"])
+        self.rejected(["message", "post", self.room, "--body", "迟到回答", "--as", "Codex",
                        "--submission-id", "late-opinion"], 1)
         self.rejected(["turn", "create", self.room, "--expert", "Codex", "--question", "迟到安排",
-                       "--as", "Codex", "--submission-id", "late-turn-01"], 1)
+                       "--as", "Codex", "--roster", roster["revision"], "--submission-id", "late-turn-01"], 1)
         self.rejected(["message", "post", self.room, "--body", "已核对退出结果", "--kind", "receipt",
                        "--as", "Codex", "--submission-id", "exit-receipt"])
 
@@ -457,6 +526,7 @@ class CliTests(unittest.TestCase):
 
     def test_search_and_pagination_are_bounded(self):
         """One page stays at twenty and encoded filters retain exact semantics."""
+        pagination_room = self.room
         for index in range(21):
             self.cli("message", "post", self.room, "--body", f"@Gemini 成本 &= {index}", "--as", "用户",
                      "--submission-id", f"pagination-{index:03}")
@@ -464,20 +534,28 @@ class CliTests(unittest.TestCase):
                          "--author", "用户")
         self.assertEqual((len(first["messages"]), first["total"], first["pages"]), (20, 21, 2))
         self.assertEqual(len(self.cli("message", "list", self.room, "--page", "2")["messages"]), 1)
-        incremental = self.cli("message", "list", self.room, "--after", "0", "--kind", "opinion")
+        incremental = self.cli("message", "list", self.room, "--after", "0", "--kind", "chat")
         self.assertEqual(incremental["messages"], first["messages"])
         self.assertTrue(incremental["has_more"])
+        self.create_discussion_room()
+        owner_token = json.loads(Path(self.room_access[self.room]["用户"]).read_text(encoding="utf-8"))["token"]
+        room = self.api_call(f"/api/rooms/{self.room}", token=owner_token)
+        host = next(item for item in room["free"]["members"] if item["name"] == "Codex")
+        execution = self.api_call(f"/api/rooms/{self.room}/executions", {
+            "member_id": host["id"], "client_id": uuid.uuid4().hex}, owner_token)
         note = self.cli("message", "post", self.room, "--body", "主持记录", "--kind", "moderation",
-                        "--as", "Codex", "--submission-id", "paging-moderation")["message"]
+                        "--execution", execution["id"], "--as", "Codex", "--submission-id", "paging-moderation")["message"]
+        discussion_room = self.room
+        self.assertEqual(self.cli("message", "list", discussion_room, "--kind", "moderation")["messages"], [note])
+        self.room = pagination_room
         latest = self.cli("message", "post", self.room, "--body", "新到观点", "--as", "用户",
                           "--submission-id", "paging-new-opinion")["message"]
-        following = self.cli("message", "list", self.room, "--after", incremental["next_after"], "--kind", "opinion")
+        following = self.cli("message", "list", self.room, "--after", incremental["next_after"], "--kind", "chat")
         self.assertEqual([row["text"] for row in following["messages"]], ["@Gemini 成本 &= 20", "新到观点"])
         self.assertEqual(following["next_after"], latest["id"])
         self.assertFalse(following["has_more"])
         empty = self.cli("message", "list", self.room, "--after", latest["id"])
         self.assertEqual((empty["messages"], empty["next_after"], empty["has_more"]), ([], latest["id"], False))
-        self.assertEqual(self.cli("message", "list", self.room, "--kind", "moderation")["messages"], [note])
         self.rejected(["message", "list", self.room, "--after", "0", "--page", "2"])
 
     def test_explicit_site_overrides_environment_and_room_is_required(self):
@@ -515,20 +593,10 @@ class CliTests(unittest.TestCase):
         """Changing one topic field preserves others; experts use an explicit full map."""
         experts = Path(self.directory.name) / "experts.json"
         experts.write_text('{"Codex":"cli","Gemini":"cli"}', encoding="utf-8")
-        self.assertEqual(self.rejected(["room", "update", self.room, "--experts-file", experts, "--focus", "新焦点", "--as", "Codex"], 1)["http_status"], 403)
-        token = uuid.uuid4().hex
-        self.cli("api", f"/api/rooms/{self.room}/topic", "--method", "POST", "--input", "-", stdin=json.dumps({
-            "actor": "用户", "experts": {"Codex": "cli", "Gemini": "cli"}, "focus": "新焦点",
-            "members": [{"name": "Gemini", "token": token, "access": "manual"}]}))
-        access = Path(self.directory.name) / f"{self.room}.Gemini.json"
-        access.write_text(json.dumps({"site": self.base, "room": self.room, "token": token}), encoding="utf-8")
-        self.room_access[self.room]["Gemini"] = access
-        self.assertEqual(self.cli("room", "brief", self.room)["experts"], {"Codex": "cli", "Gemini": "cli"})
+        self.assertEqual(self.rejected(["room", "update", self.room, "--experts-file", experts, "--focus", "新焦点", "--as", "Codex"], 1)["http_status"], 400)
+        self.cli("room", "update", self.room, "--focus", "新焦点", "--as", "用户")
+        self.assertEqual(self.cli("room", "view", self.room)["focus"], "新焦点")
         self.assertEqual(self.cli("room", "brief", self.room)["background"], "按需背景正文")
-        turn_id = self.plan_speech("Gemini")
-        message = self.cli("message", "post", self.room, "--body", "本地专家", "--as", "Gemini",
-                           "--submission-id", "gemini-cli-01", "--turn", turn_id)["message"]
-        self.assertEqual(message["source"], "cli")
 
     def test_raw_api_file_and_text_output(self):
         """Raw requests use the same transport, and readable output is opt-in."""
@@ -566,28 +634,31 @@ class CliTests(unittest.TestCase):
         room = found[0]["id"]
         # Retry confirms the room and materializes member files before normal member operations.
         self.cli(*arguments)
-        self.cli("room", "update", room, "--title", "后来修改", "--phase", "paused", "--as", "Codex")
+        self.cli("room", "update", room, "--title", "后来修改", "--as", "Codex")
         replay = self.cli(*arguments)
-        self.assertEqual((replay["id"], replay["title"], replay["phase"], replay["duplicate"]),
-                         (room, "后来修改", "paused", True))
+        self.assertEqual((replay["id"], replay["title"], replay["duplicate"]),
+                         (room, "后来修改", True))
         self.assertEqual(self.rejected([*arguments, "--goal", "不同建房请求"], 1)["http_status"], 409)
         self.assertEqual(self.cli("room", "list", "--submission-id", "unknown-room-request")["rooms"], [])
 
     def test_complete_long_answer_is_preserved_and_finishes_only_once(self):
         """Unicode length, not UTF-16 units, bounds one complete forwarded answer."""
+        self.create_discussion_room()
+        roster = self.cli("turn", "roster", self.room)
         turn = self.cli("turn", "create", self.room, "--expert", "Gemini", "--question", "完整论证",
-                        "--submission-id", "long-answer-turn", "--as", "Codex")["turn"]
-        arguments = ["message", "post", self.room, "--body-file", "-", "--author", "Gemini", "--as", "Codex",
-                     "--turn", turn["id"], "--submission-id", "long-answer-message"]
+                        "--submission-id", "long-answer-turn", "--as", "Codex", "--roster", roster["revision"])["turn"]
+        execution = self.reserve_execution(turn)
+        arguments = ["message", "post", self.room, "--body-file", "-", "--author", "Gemini", "--as", "Gemini",
+                     "--execution", str(execution), "--submission-id", "long-answer-message"]
         oversized = self.invoke(["--site", self.base, *arguments], stdin="🙂" * 32001)
         self.assertEqual(oversized.returncode, 2)
-        self.assertEqual(self.cli("turn", "current", self.room)["current_turn"]["status"], "pending")
+        self.assertEqual(self.cli("turn", "view", self.room, turn["id"])["status"], "open")
         original = "🙂" * 32000
         message = self.cli(*arguments, stdin=original)["message"]
         self.assertEqual(self.cli("message", "view", self.room, message["id"])["text"], original)
         self.assertTrue(self.cli(*arguments, stdin=original)["duplicate"])
         self.assertEqual(self.cli("room", "view", self.room)["message_count"], 1)
-        self.assertEqual(self.cli("turn", "current", self.room)["current_turn"]["answer_id"], message["id"])
+        self.assertEqual(self.cli("turn", "view", self.room, turn["id"])["status"], "answered")
 
 
 class CliContractTests(unittest.TestCase):
@@ -617,14 +688,14 @@ class CliContractTests(unittest.TestCase):
         self.assertTrue(result["meta"]["dry_run"])
         self.assertEqual(result["data"]["body"]["submission_id"], "preview-001")
 
-    def test_unlimited_runtime_preview_preserves_zero_without_network(self):
-        """The CLI passes an explicit unlimited deadline without issuing a start."""
-        args, registry = self.parse(["run", "start", "unknown", "--revision", "0", "--deadline", "0",
-                                     "--site", "https://example.org", "--dry-run"])
+    def test_unlimited_session_preview_preserves_zero_without_network(self):
+        """The CLI passes an unlimited duration in a revision-bound session start."""
+        args, registry = self.parse(["run", "start", "unknown", "--revision", "r0", "--goal", "不限时",
+                                     "--max-minutes", "0", "--site", "https://example.org", "--dry-run"])
         with patch.object(discuss, "build_opener") as opener:
             result = discuss.run(args, registry)
         opener.assert_not_called()
-        self.assertEqual(result["data"]["body"]["deadline"], 0)
+        self.assertEqual(result["data"]["body"]["limits"]["max_minutes"], 0)
 
     def test_write_network_failure_does_not_retry_and_keeps_replay_id(self):
         """Ambiguous failures report the original request ID and exactly one attempt."""

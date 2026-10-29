@@ -110,7 +110,7 @@ test("mention autocomplete excludes email, selected text, code and quotes, and f
   assert.equal(fixture.state.members.value.length, 0, "departed members disappear from an open menu");
   fixture.free.value = false;
   fixture.type("@");
-  assert.deepEqual([...fixture.state.members.value], ["Codex", "Claude"]);
+  assert.deepEqual([...fixture.state.members.value], ["Codex"], "discussion suggestions still come from the current room roster");
 });
 
 test("mention selection replaces the caret token without dropping surrounding draft and supports multiple mentions", async () => {
@@ -175,30 +175,27 @@ test('message cache keeps rendered prose for messages it already has', () => {
   assert.equal(state.messages[0].rendered_text, 'cached-markdown');
 });
 
-test('free-room answers replace their working card in place instead of jumping ahead of slower members', () => {
-  const view = ref({ messages: [
+test('free-room answers replace their working card in place instead of jumping ahead of slower members', async () => {
+  const messages = [
     { id: 259, author: '用户', created_at: '2026-10-25T15:22:00Z' },
     { id: 260, author: 'DeepSeek', created_at: '2026-10-25T15:23:00Z', execution_id: 3, request_message_id: 259 },
     { id: 261, author: '用户', created_at: '2026-10-25T15:24:00Z' },
-  ] });
-  const free_working = ref([
-    { id: 'free-1', author: 'Codex', created_at: 1, execution_id: 1, request_message_id: 259 },
-    { id: 'free-2', author: 'Claude', created_at: 1, execution_id: 2, request_message_id: 259 },
-    { id: 'free-9', author: 'Gemini', created_at: 1, execution_id: 9, request_message_id: 999 },
-  ]);
-  const room = ref({ free: { members: [{ id: 4, name: 'Gemini' }], executions: [] } });
-  const context = vm.createContext({ computed, ref, view, room, free: ref(true), failed_messages: ref([]), free_working });
-  const start = discussion_source.indexOf('const transcript_messages = computed(');
-  const end = discussion_source.indexOf('/** Split continuous', start);
-  vm.runInContext(discussion_source.slice(start, end) + '\nglobalThis.transcript = transcript_messages;', context);
-  assert.deepEqual([...context.transcript.value].map(item => item.id), [259, 'free-1', 'free-2', 260, 261, 'free-9'],
+  ];
+  const members = [execution_member(1), execution_member(2, 'Claude'), execution_member(9, 'Gemini')];
+  for (const member of members) member.execution.created_at = 1;
+  const executions = [1, 2, 3, 9].map(id => ({ id, member_id: id, status: id === 3 ? 'completed' : 'started',
+    request_message_id: id === 9 ? 999 : 259, answer_id: id === 3 ? 260 : null, created_at: 1 }));
+  const f = free_card_fixture({ messages, members, executions });
+  assert.deepEqual([...f.state.layout.value].map(item => item.id), [259, 'free-1', 'free-2', 260, 261, 'free-9'],
     'the first answer keeps the third slot; work for an unshown request stays at the end');
-  free_working.value = [];
-  assert.deepEqual([...context.transcript.value].map(item => item.id), [259, 260, 261], 'answers settle without moving');
-  room.value = { free: { members: [{ id: 4, name: 'Gemini' }], executions: [
-    { id: 4, member_id: 4, status: 'failed', request_message_id: 259, created_at: 1, finished_at: 9, result: '会话已结束' },
-    { id: 5, member_id: 4, status: 'failed', request_message_id: 999, created_at: 1, finished_at: 9 }] } };
-  assert.deepEqual([...context.transcript.value].map(item => item.id), [259, 260, 'failed-4', 261],
+  for (const member of f.room.free.members) member.execution.status = 'completed';
+  await nextTick();
+  assert.deepEqual([...f.state.layout.value].map(item => item.id), [259, 260, 261], 'answers settle without moving');
+  f.room.free.executions.push(
+    { id: 4, member_id: 4, member: 'Gemini', status: 'failed', request_message_id: 259, created_at: 1, finished_at: 9, result: '会话已结束' },
+    { id: 5, member_id: 4, member: 'Gemini', status: 'failed', request_message_id: 999, created_at: 1, finished_at: 9 });
+  await nextTick();
+  assert.deepEqual([...f.state.layout.value].map(item => item.id), [259, 260, 'failed-4', 261],
     'a failure keeps its slot under the request; one whose request is not shown is dropped');
 });
 
@@ -229,24 +226,80 @@ test('a fork keeps history up to its message and lists the executions each membe
   assert.deepEqual(JSON.parse(JSON.stringify(executions)), { Claude: [11], Codex: [12, 13] });
 });
 
+test("a session fork keeps system provenance but truncates future plans, answers and state", () => {
+  const context = vm.createContext({});
+  vm.runInContext(source.match(/function fork_snapshot\([\s\S]*?\n\}/)[0], context);
+  const snapshot = { format: "ai-codiscuss-room-backup", version: 2, tables: {
+    rooms: [{ id: "old", title: "原房间", goal: "目标", state_text: "未来状态", state_until: 4, created_at: "then" }],
+    room_directory: [{ room_id: "old", archived: 0 }], room_members: [{ id: 1, name: "Codex", read_until: 8 }],
+    messages: [
+      { id: 1, author: "用户", text: "问题", created_at: "2026-10-16T10:00:00Z" },
+      { id: 2, author: "用户", text: "系统任务", created_at: "2026-10-16T10:01:00Z" },
+      { id: 3, author: "用户", text: "另一系统任务", created_at: "2026-10-16T10:02:00Z" },
+      { id: 4, author: "Codex", text: "未来回答", created_at: "2026-10-16T10:03:00Z" },
+      { id: 5, author: "用户", text: "后续消息", created_at: "2026-10-16T10:04:00Z" },
+    ],
+    message_withdrawals: [], message_details: [], message_summaries: [], message_timings: [], attachments: [],
+    room_briefs: [{ until: 3, text: "未来简报", updated_at: "2026-10-16T10:03:00Z" }],
+    member_requests: [
+      { id: 201, member_id: 1, message_id: 2, answer_id: null, execution_id: 901, status: "delivering" },
+      { id: 202, member_id: 1, message_id: 3, answer_id: 4, execution_id: 902, status: "completed" },
+      { id: 203, member_id: 1, message_id: 5, answer_id: null, execution_id: 903, status: "pending" },
+    ],
+    discussion_turns: [], discussion_sessions: [
+      { id: 10, room_id: "old", goal: "本次目标", status: "active", started_message_id: 1, ended_message_id: 0, created_at: "2026-10-16T10:00:00Z" },
+      { id: 11, room_id: "old", goal: "未来目标", status: "concluded", started_message_id: 4, ended_message_id: 4, created_at: "2026-10-16T10:03:00Z" },
+    ],
+    discussion_conclusions: [{ session_id: 10, room_id: "old", state: "未来状态", state_until: 3, brief: "未来简报", concluded_at: "2026-10-16T10:03:00Z" }],
+    session_requests: [
+      { id: 100, session_id: 10, member_id: 1, member_request_id: 201, purpose: "discuss", round: 1, position: 1,
+        status: "open", submission_id: "open", question: "已发出的安排", created_at: "2026-10-16T10:01:00Z" },
+      { id: 101, session_id: 10, member_id: 1, member_request_id: 202, purpose: "discuss", round: 1, position: 2,
+        status: "answered", submission_id: "answered-later", question: "未来回答安排", created_at: "2026-10-16T10:02:00Z" },
+      { id: 102, session_id: 10, member_id: 1, member_request_id: null, purpose: "discuss", round: 2, position: 1,
+        status: "queued", submission_id: "future-queued", question: "未来排队安排", created_at: "2026-10-16T10:03:00Z" },
+    ],
+    task_message_sources: [{ message_id: 2, session_id: 10, session_request_id: 100, cause_kind: "user_message",
+      cause_message_id: 5, cause_request_id: 203 },
+    { message_id: 3, session_id: 10, session_request_id: 101, cause_kind: "speaker_answered", cause_message_id: 1, cause_request_id: 201 }],
+    session_state: [{ session_id: 10, phase: "initial", revision: 5, read_until: 8, held_since: 99 }],
+    session_limits: [{ session_id: 10, max_rounds: 4, max_minutes: 60, execution_minutes: 0, started_at: 1 }],
+    session_round_budgets: [{ session_id: 10, base: 2, cap: 4, extra: 1 }],
+    session_options: [{ session_id: 10, named_followup: 1 }],
+    session_pauses: [{ session_id: 10, paused_at: 99, paused_seconds: 10 }],
+  } };
+  const { body, executions } = context.fork_snapshot(snapshot, 3, "new", "2026-10-16T11:00:00Z");
+  const tables = body.tables;
+  assert.deepEqual(tables.messages.map(row => row.id), [1, 2, 3], "system messages remain in history with their source rows");
+  assert.deepEqual(tables.task_message_sources.map(row => [row.message_id, row.session_request_id, row.cause_message_id, row.cause_request_id]),
+    [[2, 100, null, null], [3, 101, 1, 201]], "out-of-range cause references are cleared and in-range references survive");
+  assert.deepEqual(tables.discussion_sessions.map(row => [row.id, row.status, row.ended_message_id]), [[10, "concluded", 3]]);
+  assert.deepEqual(tables.session_requests.map(row => [row.id, row.status, row.member_request_id]),
+    [[100, "cancelled", 201], [101, "cancelled", 202]], "open/queued work stops, and an answer after the fork is not carried over");
+  assert.deepEqual(tables.member_requests.map(row => [row.id, row.status, row.answer_id]),
+    [[201, "cancelled", null], [202, "cancelled", null]], "active requests stop and future answers are removed");
+  assert.deepEqual(tables.discussion_conclusions.map(row => [row.session_id, row.state, row.state_until, row.brief]), [[10, "", 0, ""]],
+    "future conclusion state is not copied into the fork");
+  assert.deepEqual(tables.session_state.map(row => [row.read_until, row.held_since]), [[3, 0]]);
+  assert.deepEqual(tables.session_pauses.map(row => [row.paused_at, row.paused_seconds]), [[0, 10]]);
+  assert.deepEqual(tables.room_briefs, []);
+  assert.deepEqual(JSON.parse(JSON.stringify(executions)), { Codex: [901, 902, 903] });
+});
+
 test('rewound messages fold into their first line until expanded, and work on them leaves the transcript', () => {
-  const view = ref({ messages: [
+  const messages = [
     { id: 1, author: '用户', created_at: '2026-10-28T10:00:00Z' },
     { id: 2, author: '用户', created_at: '2026-10-28T10:01:00Z', withdrawn: 'rewound' },
     { id: 3, author: 'Claude', created_at: '2026-10-28T10:02:00Z', withdrawn: 'rewound', execution_id: 5, request_message_id: 2 },
     { id: 4, author: '用户', created_at: '2026-10-28T10:03:00Z', withdrawn: 'retracted' },
     { id: 5, author: '用户', created_at: '2026-10-28T10:04:00Z' },
-  ] });
-  const room = ref({ free: { members: [{ id: 1, name: 'Claude' }], executions: [
-    { id: 6, member_id: 1, status: 'failed', request_message_id: 2, created_at: 1, finished_at: 2 }] } });
-  const context = vm.createContext({ computed, ref, view, room, free: ref(true), failed_messages: ref([]), free_working: ref([]) });
-  const start = discussion_source.indexOf('const transcript_messages = computed(');
-  const end = discussion_source.indexOf('/** Split continuous', start);
-  vm.runInContext(discussion_source.slice(start, end) + '\nglobalThis.state = { transcript: transcript_messages, runs: rewound_runs, toggle: toggle_rewound };', context);
-  assert.deepEqual([...context.state.transcript.value].map(item => item.id), [1, 2, 4, 5], 'the run folds into #2 and its failed work is not shown');
-  assert.equal(context.state.runs.value.runs.get(2), 2);
-  context.state.toggle(2);
-  assert.deepEqual([...context.state.transcript.value].map(item => item.id), [1, 2, 3, 4, 5], 'expanding lists every rewound line in place');
+  ];
+  const f = free_card_fixture({ messages, executions: [
+    { id: 6, member_id: 1, member: 'Claude', status: 'failed', request_message_id: 2, created_at: 1, finished_at: 2 }] });
+  assert.deepEqual([...f.state.layout.value].map(item => item.id), [1, 2, 4, 5], 'the run folds into #2 and its failed work is not shown');
+  assert.equal(f.state.rewinds.value.runs.get(2), 2);
+  f.state.toggle(2);
+  assert.deepEqual([...f.state.layout.value].map(item => item.id), [1, 2, 3, 4, 5], 'expanding lists every rewound line in place');
 });
 
 test('the rail shows the newest unanswered user request as the current task and hides it once all are answered', () => {
@@ -277,7 +330,7 @@ test('execution reports bind answers and failed requests and distinguish unknown
   ] } });
   const context = vm.createContext({ computed, ref, room, free: ref(true) });
   const start = discussion_source.indexOf('const execution_reports = computed(');
-  const end = discussion_source.indexOf('const pending_message =', start);
+  const end = discussion_source.indexOf("/** A user's message is waiting for the host", start);
   vm.runInContext(discussion_source.slice(start, end) + '\nglobalThis.reports = execution_reports;', context);
   const reports = context.reports.value;
   // Only observed file changes earn a report under the answer; a clean completion adds nothing.
@@ -412,6 +465,7 @@ function attachment_fixture() {
   let identifier = 0, fail = true;
   const context = vm.createContext({ state, element, MAX_MESSAGE_LENGTH: 30000, MAX_SUMMARY_LENGTH: 1000,
     MAX_MESSAGE_ATTACHMENTS: 10, MAX_ATTACHMENT_BYTES: 20 * 1024 * 1024, URLSearchParams,
+    is_web_member: member => member?.manual_source === "web" || member?.access === "online",
     new_submission_id: () => String(++identifier), escape_html: text => text,
     URL: { createObjectURL: () => "blob:test", revokeObjectURL: url => revoked.push(url) },
     localStorage: { getItem: () => null }, admin_headers: () => ({}), publish_view() {}, show_toast() {}, cancel_reply() {}, cancel_turn_reply() {},
@@ -463,6 +517,87 @@ test("a discussion draft names active members it @mentions outside code as direc
   assert.deepEqual(Array.from(context.message_payload().to), ["Claude"]);
   element("message-input").value = "没有点名，`@Codex` 只是引用";
   assert.equal(context.message_payload().to, undefined);
+});
+
+test("a live free-room discussion disables group @ routing but keeps personal questions", () => {
+  const { context, state, element } = attachment_fixture();
+  state.room.mode = "free";
+  state.room.session = { id: 8, status: "active" };
+  state.room.free = { members: [{ name: "Claude", status: "active", access: "manual", manual_source: "web" },
+    { name: "Codex", status: "active", access: "runner" }] };
+  element("message-input").value = "@全体成员 请依次回答";
+  assert.equal(context.message_payload().to, undefined);
+  element("message-input").value = "@Claude 请补充一下";
+  assert.deepEqual(Array.from(context.message_payload().to), ["Claude"]);
+});
+
+test("web-member answers bind one pending discussion request before an ordinary ask", () => {
+  const { context, state, element } = attachment_fixture();
+  state.room.mode = "free";
+  state.room.free = { members: [{ name: "Claude", status: "active", access: "manual", manual_source: "web" }], requests: [
+    { id: 12, member: "Claude", purpose: "discuss_host", status: "pending" },
+    { id: 13, member: "Claude", purpose: "ask", status: "pending" },
+    { id: 14, member: "Claude", purpose: "discuss", status: "pending" },
+    { id: 15, member: "Claude", purpose: "all", status: "pending" },
+    { id: 16, member: "Claude", purpose: "ask", status: "completed" },
+    { id: 17, member: "Gemini", purpose: "all", status: "pending" },
+  ] };
+  context.state.free_proxy = "Claude";
+  element("message-input").value = "真实回答";
+  assert.deepEqual(Array.from(context.message_payload().request_ids), [14]);
+  state.room.free.requests = state.room.free.requests.filter(request => request.id !== 14);
+  assert.deepEqual(Array.from(context.message_payload().request_ids), [13, 15]);
+  state.room.free.requests = [{ id: 15, member: "Claude", purpose: "all", status: "pending" }];
+  assert.deepEqual(Array.from(context.message_payload().request_ids), [15]);
+  state.room.free.requests = [{ id: 15, member: "Claude", purpose: "discuss_host", status: "pending" }];
+  assert.throws(() => context.message_payload(), /没有可代发的待处理请求/);
+});
+
+test("the relay identity menu excludes registered local manual members", () => {
+  const room = ref({ free: { members: [
+    { name: "Claude", status: "active", access: "manual", registered_at: 123 },
+    { name: "Gemini", status: "active", access: "manual", manual_source: "web" },
+    { name: "DeepSeek", status: "active", access: "online" },
+    { name: "Qwen", status: "away", access: "manual", manual_source: "web" },
+    { name: "Codex", status: "active", access: "runner" },
+  ] } });
+  const context = vm.createContext({ room, computed });
+  const start = discussion_source.indexOf("const free_members = computed(");
+  const end = discussion_source.indexOf("/** In a discussion, an @mention", start);
+  vm.runInContext(`${discussion_source.slice(start, end)}\nglobalThis.proxy_members = proxy_members;`, context);
+  assert.deepEqual(Array.from(context.proxy_members.value, member => member.name), ["Gemini", "DeepSeek"]);
+});
+
+test("web relay preserves the answer summary and its actual author", () => {
+  const { context, state, element } = attachment_fixture();
+  state.room.mode = "free";
+  state.room.free = { members: [{ name: "Gemini", status: "active", access: "manual", manual_source: "web" }],
+    requests: [{ id: 18, member: "Gemini", purpose: "ask", status: "pending" }] };
+  state.free_proxy = "Gemini";
+  element("message-input").value = "完整回答和依据";
+  element("message-summary").value = "  原回答的摘要  ";
+  element("message-summary-source").value = "author";
+  let payload = context.message_payload();
+  assert.deepEqual([payload.author, payload.submitted_by, payload.text, payload.summary, payload.summary_by],
+    ["Gemini", "用户", "完整回答和依据", "原回答的摘要", "Gemini"]);
+  element("message-summary-source").value = "submitter";
+  payload = context.message_payload();
+  assert.equal(payload.summary_by, "用户");
+  element("message-summary").value = "长".repeat(1001);
+  assert.throws(() => context.message_payload(), /回答摘要最多 1000 字/);
+});
+
+test("an invalid relay selection cannot silently publish the answer as the user", async () => {
+  const fixture = attachment_fixture(), { context, state, element } = fixture;
+  state.room.mode = "free";
+  state.room.free = { members: [{ name: "Claude", status: "active", access: "manual", registered_at: 123 }], requests: [] };
+  state.free_proxy = "Claude";
+  element("message-input").value = "本地成员的回答草稿";
+  await assert.rejects(context.send_message({ preventDefault() {} }), /网页成员/);
+  assert.equal(fixture.posts.length, 0);
+  assert.equal(element("message-input").value, "本地成员的回答草稿");
+  state.room.free.members = [{ name: "Claude", status: "away", access: "manual", manual_source: "web" }];
+  assert.throws(() => context.message_payload(), /网页成员/);
 });
 
 test("attachment retries retain files and reuse both upload and message receipts", async () => {
@@ -829,21 +964,27 @@ test("create form shares a role library, keeps independent instances and makes t
 });
 
 test("free member delivery never offers writable credentials to online or unavailable identities", async () => {
-  const view = { access: { can_manage: true, members: [{ name: "Codex", access: "manual", available: false }] }, launch: { available: false } };
+  const view = { access: { can_manage: true, members: [{ name: "Codex", access: "manual", available: false }] }, launch: { available: false }, room: {} };
   const calls = [];
   const menu_for = member => member_actions(member, { view, act: (...args) => calls.push(args), describe: () => {} });
   const manual = { name: "Codex", access: "manual", status: "away" };
   let menu = menu_for(manual).flat();
+  assert.ok(menu.some(item => item.label === "复制启动指令（含凭证）"));
+  assert.ok(menu.some(item => item.label === "复制凭证文本"));
   assert.equal(menu.find(item => item.label === "下载私有配置").disabled, true);
   assert.equal(menu.find(item => item.label === "请回").disabled, false, "manual rejoin needs no launcher");
   view.access.members[0].available = true;
   menu = menu_for(manual).flat();
   await menu.find(item => item.label === "下载私有配置").onSelect();
   assert.deepEqual(calls, [["download_member_access", "Codex"]]);
-  const online = menu_for({ ...manual, access: "online" }).flat();
-  assert.equal(online.some(item => item.label === "下载私有配置"), false);
+  const web = menu_for({ ...manual, access: "manual", manual_source: "web", pending: 1, status: "active" }).flat();
+  assert.ok(web.some(item => item.label === "复制阅读通知"), "web manual members receive the reading notice");
+  assert.ok(!web.some(item => ["复制启动指令（含凭证）", "复制凭证文本", "下载私有配置", "设为主持人"].includes(item.label)));
+  assert.ok(!menu_for({ ...manual, access: "online", pending: 1 }).flat().some(item => item.label === "下载私有配置"), "legacy online members keep web permissions");
   view.access.can_manage = false;
   assert.equal(menu_for(manual)[0][0].disabled, true);
+  assert.equal(web.find(item => item.label === "复制阅读通知").disabled, false, "menu snapshots should be rebuilt after permission changes");
+  assert.equal(menu_for({ ...manual, access: "manual", manual_source: "web", pending: 1 })[1][0].disabled, true);
 });
 
 /** Drive the real slider with a deterministic clock and no live client. */
@@ -1280,6 +1421,34 @@ test('empty execution limits submit as unlimited and remain clear in the progres
   assert.match(context.limits_label(context.read_limits('new-room')), /单次自动执行 10 分钟/);
 });
 
+test('topic editing saves details without changing the discussion phase or a live session limit', async () => {
+  const { context, nodes } = theme_fixture(), calls = [];
+  const experts = { Codex: 'cli', Claude: 'online' };
+  nodes.set('topic-host-select', { value: 'Codex' });
+  nodes.set('topic-phase-select', { value: 'paused' });
+  for (const key of ['title', 'goal', 'focus', 'user_request', 'background', 'boundaries']) {
+    nodes.set(`topic-${key}-input`, { value: `${key} edited` });
+  }
+  for (const [key, value] of Object.entries({ max_rounds: '7', max_minutes: '30', execution_minutes: '0' })) {
+    nodes.set(`topic-limit-${key}-input`, { value });
+  }
+  Object.assign(context, { read_expert_inputs: () => experts, topic_member_requests: () => [],
+    save_room_credentials() {}, refresh_room: async () => {}, show_toast() {},
+    request_json: async (path, payload) => { calls.push({ path, payload }); return {}; } });
+  for (const status of [null, 'active', 'paused', 'concluded']) {
+    context.test_state.room = { id: 'topic-room', mode: 'free', host: 'Codex', experts,
+      session: status ? { id: 1, status } : null };
+    await context.save_topic({ preventDefault() {} });
+    const { path, payload } = calls.at(-1);
+    assert.equal(path, '/api/rooms/topic-room/topic');
+    assert.equal(payload.title, 'title edited');
+    assert.equal(payload.background, 'background edited');
+    assert.equal('phase' in payload, false);
+    assert.equal('limits' in payload, !['active', 'paused'].includes(status));
+    if (payload.limits) assert.equal(payload.limits.max_rounds, 7);
+  }
+});
+
 /** Model a public page and its private browser storage without using a real local credential. */
 function connection_fixture(connection, shared_storage) {
   const fixture = theme_fixture(null, shared_storage);
@@ -1373,177 +1542,87 @@ test("recent conversation order is local, reversible and preserves manual placem
   assert.deepEqual(Array.from(fixture.context.visible_rooms(), room => room.id), ['a', 'b', 'c']);
 });
 
-test("retrying a lost mode response preserves the owner credential and reconciles runtime", async () => {
-  const fixture = theme_fixture();
-  const key = 'discuss-access:room-a';
-  fixture.storage.set(key, 'existing-owner');
-  fixture.context.test_state.room = { id: 'room-a', runtime: { revision: 0, protected: false } };
-  let runtime = { revision: 0, protected: false, mode: 'manual', status: 'ready' };
-  let accepted_token;
-  let sequence = 0;
-  let writes = 0;
-  Object.assign(fixture.context, {
-    crypto: { randomUUID: () => `credential-${++sequence}` }, refresh_room: async () => {}, show_toast() {},
-    request_json: async (path, payload) => {
-      assert.equal(path, '/api/rooms/room-a/runtime');
-      if (!payload) return runtime;
-      writes++;
-      if (runtime.protected) assert.equal(fixture.storage.get(key), accepted_token);
-      assert.equal(payload.revision, runtime.revision);
-      accepted_token = fixture.storage.get(key);
-      runtime = { revision: 1, protected: true, mode: 'automatic', status: 'ready' };
-      throw new Error('response lost');
-    },
-  });
-  await assert.rejects(fixture.context.choose_runtime('automatic'), /response lost/);
-  await fixture.context.choose_runtime('automatic');
-  assert.equal(fixture.storage.get(key), accepted_token);
-  assert.equal(writes, 1);
-});
-
-test("mode selection retains its target when the user changes rooms during refresh", async () => {
+test("discussion control reads and writes the original room revision despite navigation", async () => {
   const fixture = theme_fixture();
   fixture.storage.set('discuss-access:room-a', 'credential-a');
-  fixture.context.test_state.room = { id: 'room-a' };
-  const paths = [];
+  fixture.context.test_state.room = { id: 'room-a', session: { id: 4, status: 'paused' } };
+  const calls = [];
   Object.assign(fixture.context, {
-    crypto: { randomUUID: () => 'credential-a' }, refresh_room: async () => {}, show_toast() {},
+    refresh_room: async () => {}, show_toast() {},
     request_json: async (path, payload) => {
-      paths.push(path);
-      fixture.context.test_state.room = { id: 'room-b' };
-      return { revision: 0, protected: false, mode: 'manual', status: 'ready' };
+      calls.push({ path, payload });
+      if (!payload) { fixture.context.test_state.room = { id: 'room-b' }; return { revision: 'rev-a', session: { id: 4, status: 'paused' } }; }
+      return {};
     },
   });
-  await fixture.context.choose_runtime('automatic');
-  assert.deepEqual(paths, ['/api/rooms/room-a/runtime', '/api/rooms/room-a/runtime']);
+  await fixture.context.restart_discussion();
+  assert.deepEqual(calls.map(call => call.path), ['/api/rooms/room-a/discussion', '/api/rooms/room-a/discussion']);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[1].payload)), { action: 'resume', revision: 'rev-a' });
   assert.equal(fixture.storage.get('discuss-access:room-a'), 'credential-a');
   assert.equal(fixture.storage.get('discuss-access:room-b'), undefined);
 });
 
-test("web restart delegates duration to the topic without adding a hidden time limit", async () => {
+test("discussion resume refuses a replaced session after reading the current revision", async () => {
   const fixture = theme_fixture();
-  const posts = [];
-  let deadline = 0;
-  fixture.context.test_state.room = { id: 'unlimited', limits: { max_minutes: 0 } };
+  fixture.storage.set('discuss-access:room-a', 'credential-a');
+  fixture.context.test_state.room = { id: 'room-a', session: { id: 4, status: 'paused' } };
+  const calls = [];
   Object.assign(fixture.context, {
-    request_json: async (path, payload) => payload ? posts.push(payload) : { revision: 4, deadline },
-    refresh_room: async () => {}, show_toast() {},
+    request_json: async (path, payload) => { calls.push({ path, payload }); return { revision: 'rev-b', session: { id: 5, status: 'paused' } }; },
   });
-  await fixture.context.restart_discussion();
-  assert.equal(posts[0].deadline, 0);
-  deadline = Math.floor(Date.now() / 1000) - 60;
-  await fixture.context.restart_discussion();
-  assert.equal(posts[1].deadline, 0, 'an old run deadline must not override the current unlimited choice');
-  deadline = 0;
-  fixture.context.test_state.room.limits.max_minutes = 60;
-  await fixture.context.restart_discussion();
-  assert.equal(posts[2].deadline, 0, 'the backend applies the configured topic deadline, including summary time');
+  await assert.rejects(fixture.context.restart_discussion(), /讨论会话已变化/);
+  assert.equal(calls.length, 1, 'a revision for a different session is never used');
 });
 
-const skip_room = (id, status = "paused") => ({ id, current_turn: { id: 7, expert: "Gemini", status: "pending" },
-  runtime: { mode: "automatic", status, revision: 4 } });
+const skip_room = id => ({ id, session: { id: 3, status: 'active' }, current_turn: { id: 7, expert: 'Gemini', status: 'pending' } });
 
-test("skip posts a skipped answer for the expert so the plan relays on, and resumes a paused run using its observed revision", async () => {
-  for (const status of ["running", "paused"]) {
-    const { context } = theme_fixture(), requests = [], notices = [];
-    let refreshed = 0;
-    context.test_state.room = skip_room("skip-room", status);
-    Object.assign(context, { request_json: async (path, payload) => requests.push({ path, ...payload }),
-      refresh_room: async () => { refreshed++; }, show_toast: text => notices.push(text) });
-    await context.skip_turn();
-    assert.equal(requests[0].path, "/api/rooms/skip-room/messages");
-    assert.deepEqual([requests[0].author, requests[0].submitted_by, requests[0].kind, requests[0].turn_id], ["Gemini", "用户", "opinion", 7]);
-    assert.equal(requests.length, status === "paused" ? 2 : 1);
-    if (status === "paused") assert.deepEqual(requests[1], { path: "/api/rooms/skip-room/runtime",
-      action: "start", mode: "automatic", revision: 4, deadline: 0 });
-    assert.equal(refreshed, 1);
-    assert.match(notices[0], /已跳过本次发言/);
-  }
+test("skip cancels the selected session plan by its plan id", async () => {
+  const { context, storage } = theme_fixture(), requests = [];
+  storage.set('discuss-access:skip-room', 'owner-token');
+  context.test_state.room = skip_room("skip-room");
+  Object.assign(context, { request_json: async (path, payload) => requests.push({ path, payload }), refresh_room: async () => {}, show_toast() {} });
+  await context.skip_turn();
+  assert.deepEqual(JSON.parse(JSON.stringify(requests)), [{ path: '/api/rooms/skip-room/turns/7', payload: { actor: '用户', status: 'cancelled' } }]);
 });
 
-test("skip stops after write errors and explains a successful skip when resuming fails", async () => {
-  for (const fail_at of [1, 2]) {
-    const { context } = theme_fixture();
-    let calls = 0, refreshed = 0;
-    context.test_state.room = skip_room("skip-room");
-    Object.assign(context, { request_json: async () => { if (++calls === fail_at) throw new Error("状态已变化"); },
-      refresh_room: async () => { refreshed++; }, show_toast() {} });
-    await assert.rejects(context.skip_turn(), fail_at < 2 ? /^Error: 状态已变化$/ : /本次发言已跳过，但未能继续讨论.*重启/);
-    assert.equal(calls, fail_at);
-    assert.equal(refreshed, 1);
-  }
-});
-
-test("skip keeps the original room and revision when navigation changes during the writes", async () => {
-  const { context } = theme_fixture(), paths = [];
+test("skip stays bound to its original room and session during navigation", async () => {
+  const { context, storage } = theme_fixture(), paths = [];
+  storage.set('discuss-access:one', 'owner-token');
   context.test_state.room = skip_room("one");
   Object.assign(context, { request_json: async path => { paths.push(path); context.test_state.room = { id: "two" }; },
     refresh_room: async () => assert.fail("must not refresh the next room"), show_toast: () => assert.fail("must not toast on the next room") });
   await context.skip_turn();
-  assert.deepEqual(paths, ["/api/rooms/one/messages", "/api/rooms/one/runtime"]);
+  assert.deepEqual(paths, ["/api/rooms/one/turns/7"]);
 });
 
-test("failure-card retry rechecks the retained task and never restarts an obsolete attempt", async () => {
-  const fixture = theme_fixture(), posts = [];
-  const failure = { id: 9, participant: 'Claude', role: 'expert', turn_id: 7 };
-  const room = { id: 'retry-room', phase: 'paused', host: 'Codex', current_turn: { id: 7, expert: 'Claude', status: 'notified' },
-    runtime: { mode: 'automatic', status: 'paused', revision: 5, latest_execution: { id: 9, status: 'failed' }, failures: [failure] } };
-  fixture.context.test_state.room = room;
-  Object.assign(fixture.context, { refresh_room: async () => {}, show_toast() {}, request_json: async (path, payload) => {
-    if (payload) posts.push({ path, payload });
-    return room;
-  } });
-  assert.equal(fixture.context.can_retry_execution(failure, room), true);
-  await fixture.context.retry_execution(9);
-  assert.equal(posts[0].path, '/api/rooms/retry-room/runtime');
-  assert.equal(posts[0].payload.revision, 5);
-  assert.equal(posts[0].payload.deadline, 0);
-  for (const [object, key, value] of [[room.runtime.latest_execution, 'id', 10], [room.runtime, 'status', 'running'],
-    [room.current_turn, 'id', 8], [room.current_turn, 'status', 'cancelled'], [room, 'phase', 'concluded'], [room, 'archived', true]]) {
-    const previous = object[key];
-    object[key] = value;
-    assert.equal(Boolean(fixture.context.can_retry_execution(failure, room)), false);
-    await assert.rejects(fixture.context.retry_execution(9), /安排已变化/);
-    object[key] = previous;
-  }
-  assert.equal(posts.length, 1);
-  failure.role = 'host'; failure.participant = 'Codex'; failure.turn_id = null;
-  assert.equal(fixture.context.can_retry_execution(failure, room), false, 'host retry cannot replace an expert task');
-  room.current_turn = null;
-  assert.equal(fixture.context.can_retry_execution(failure, room), true);
-});
-
-test("failed cards survive fresh snapshots and retry beside messages without becoming answers", () => {
-  const fixture = theme_fixture();
-  const failure = { id: 9, participant: 'Claude', role: 'expert', turn_id: 7, created_at: '2026-10-23T09:00:02Z', result: '工具调用失败', elapsed_seconds: 10 };
-  const view = ref({ messages: [{ id: 1, author: 'Codex', created_at: '2026-10-23T09:00:00Z' }], access: { can_manage: true },
-    room: { phase: 'paused', current_turn: { id: 7, expert: 'Claude', status: 'notified' }, runtime: {
-      mode: 'automatic', status: 'paused', latest_execution: { id: 9, status: 'failed' }, failures: [failure] } } });
-  const context = vm.createContext({ computed, ref, view, free: ref(false), room: computed(() => view.value.room),
-    bridge: { can_retry_execution: fixture.context.can_retry_execution }, date_formatter: new Intl.DateTimeFormat('zh-CN') });
-  const start = discussion_source.indexOf('const failed_messages =');
-  const end = discussion_source.indexOf('/** Preserve room-wide round', start);
-  vm.runInContext(`${discussion_source.slice(start, end)}\nglobalThis.cards = failed_messages; globalThis.transcript = transcript_messages;`, context);
-  assert.equal(context.cards.value[0].can_retry, true);
-  assert.deepEqual(Array.from(context.transcript.value, item => item.id), [1, 'execution-9']);
-  view.value = JSON.parse(JSON.stringify(view.value));
-  assert.equal(context.cards.value[0].failure.result, '工具调用失败', 'server history survives a browser reload');
-  view.value.room.runtime.status = 'running';
-  view.value.room.runtime.latest_execution = { id: 10, status: 'started' };
-  assert.equal(context.cards.value[0].can_retry, false);
-  view.value.messages.push({ id: 2, author: 'Claude', turn_id: 7, created_at: failure.created_at });
-  assert.deepEqual(Array.from(context.transcript.value, item => item.id), [1, 'execution-9', 2]);
-  assert.equal(view.value.messages.length, 2, 'failure cards never enter the real message list');
-  view.value.room.phase = 'concluded'; view.value.room.archived = true;
-  assert.equal(context.cards.value.length, 1);
-  view.value.query = '筛选';
-  assert.equal(context.cards.value.length, 0);
-  view.value.query = ''; view.value.mention_only = true;
-  assert.equal(context.cards.value.length, 0);
-  view.value.mention_only = false; view.value.access.can_manage = false;
-  assert.equal(context.cards.value[0].can_retry, false);
-  view.value.room = {};
-  assert.equal(context.cards.value.length, 0, 'changing rooms cannot carry the old failure across');
+test("failed cards survive fresh snapshots and stay beside their request without becoming answers", async () => {
+  const request = { discussion_session_id: 4, after_message_id: 1, source_message_id: 1 };
+  const f = free_card_fixture({ messages: [
+    { id: 1, author: "用户", text: "请独立分析", created_at: 1000 },
+    { id: 2, author: "用户", text: "后续消息", created_at: 1001 },
+  ], executions: [{ id: 9, member_id: 8, member: "Claude", role: "member", status: "failed", request_message_id: 900,
+    created_at: 1002, finished_at: 1012, result: "工具调用失败", requests: [request] }] });
+  const start = discussion_source.indexOf("function request_message(report)");
+  const end = discussion_source.indexOf("/** Put the original text back", start);
+  vm.runInContext(`${discussion_source.slice(start, end)}\nglobalThis.original_message = request_message; globalThis.failed_message = failed_request_message;`, f.context);
+  assert.equal(f.state.failures.value[0].author, "Claude", "the execution keeps its author even after the member leaves");
+  assert.deepEqual([...f.state.layout.value].map(item => item.id), [1, "failed-9", 2]);
+  assert.equal(f.context.failed_message(f.state.failures.value[0].failure).id, 1, "only a visible source message can be offered for resend");
+  assert.equal(f.view.messages.some(message => message.id === 900), false, "internal task messages never enter history");
+  f.view.room = JSON.parse(JSON.stringify(f.view.room));
+  await nextTick();
+  assert.equal(f.state.failures.value[0].failure.result, "工具调用失败", "the service snapshot keeps the failure reason");
+  assert.deepEqual([...f.state.layout.value].map(item => item.id), [1, "failed-9", 2]);
+  f.view.query = "筛选";
+  await nextTick();
+  assert.equal(f.state.failures.value.length, 0);
+  f.view.query = "";
+  f.view.mention_only = true;
+  await nextTick();
+  assert.equal(f.state.failures.value.length, 0);
+  f.view.mention_only = false;
+  f.view.access.can_manage = false;
+  assert.equal(f.context.failed_message(f.state.failures.value[0].failure), null, "resend requires owner access");
 });
 
 test("finished discussions show their conclusion instead of a live timer or a later deadline warning", () => {
@@ -1613,7 +1692,8 @@ test("manual creation retains distinct member credentials across reload and a lo
   const record = f.context.stored_launches()[0];
   assert.equal(record.direct, true);
   assert.equal(record.input.room.runtime_mode, undefined, "free room creation cannot send automatic discussion runtime");
-  assert.deepEqual(Array.from(record.input.room.members, member => member.access), ['manual', 'manual', 'online']);
+  assert.deepEqual(Array.from(record.input.room.members, member => member.access), ['manual', 'manual', 'manual']);
+  assert.equal(record.input.room.members[2].manual_source, 'web');
   const tokens = record.input.room.members.map(member => member.token);
   assert.equal(new Set([record.input.token, ...tokens]).size, 4);
   assert.equal(JSON.stringify(f.context.test_state.launch).includes(tokens[0]), false);
@@ -1843,13 +1923,12 @@ test("a new room that asks for a discussion is created as a collaboration room, 
     render_launch_settings() {}, render_expert_inputs() {}, default_experts: () => ({}), select_room: async () => {}, show_toast() {},
     update_directory: async ({ save, commit }) => { const result = await save(); commit(result); return result; },
     local_launch_request: async () => ({ room: { id: 'created' } }),
-    request_json: async (path, body) => { calls.push([path, body]); return path.endsWith('/runtime') && !body ? { revision: 3 } : {}; },
+    request_json: async (path, body) => { calls.push([path, body]); return path.endsWith('/discussion') && !body ? { revision: 'created-revision', session: null } : {}; },
   });
   await fixture.context.submit_room({ preventDefault() {} });
-  assert.deepEqual(calls.map(call => call[0]), ['/api/rooms/created/discussion', '/api/rooms/created/runtime', '/api/rooms/created/runtime']);
-  assert.deepEqual(JSON.parse(JSON.stringify(calls[0][1])), { action: 'start', goal: '选方案', named_followup: true,
+  assert.deepEqual(calls.map(call => call[0]), ['/api/rooms/created/discussion', '/api/rooms/created/discussion']);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[1][1])), { action: 'start', revision: 'created-revision', goal: '选方案', named_followup: true,
     limits: { max_rounds: 2, max_minutes: 30, execution_minutes: 0 } });
-  assert.deepEqual(JSON.parse(JSON.stringify(calls[2][1])), { action: 'start', mode: 'automatic', revision: 3, deadline: 0 });
 });
 
 test("an existing-room launch keeps its target and preserves newer configuration edits", async () => {
@@ -1943,66 +2022,35 @@ test("discussions keep only woken members while free rooms keep each member's de
   assert.equal(host.value, 'Codex');
 });
 
-/** Exercise the participant menu's pause boundary with the shared controller actions. */
-function participant_connection_fixture(status = "running") {
-  const view = ref({ room: { id: "one", phase: "discussing", runtime: { mode: "automatic", status } },
-    launch: { available: true, remote: false, repair: null, repair_error: "", profiles: {}, workspace: {} } });
+/** Invite dialog fixture for the shared member board. */
+function participant_connection_fixture() {
+  const view = ref({ room: { id: "one", members: [] }, launch: { available: true, profiles: {}, workspace: {} } });
   const pending = ref(""), calls = [];
-  const controls = { pause_allowed: true, changed_room: false, copy_allowed: true, fail_invite_at: 0 };
+  const controls = { fail_invite_at: 0 };
   const invites = [];
   const act = async (name, payload) => {
     calls.push(name);
     if (name === "invite_member") invites.push(payload.name);
-    if (name === "copy_member_launch") return controls.copy_allowed;
     if (name === "invite_member" && calls.filter((item) => item === "invite_member").length === controls.fail_invite_at) {
       view.value.free_error = "邀请失败";
       return false;
     }
-    if (name === "pause_runtime") {
-      if (!controls.pause_allowed) return false;
-      view.value.room.runtime.status = "paused";
-    }
-    if (name === "load_room_configuration") {
-      view.value.launch.repair = { room_id: "one", participants: { Codex: { adapter: "codex_cli" } } };
-      if (controls.changed_room) view.value.room.id = "two";
-    }
     return true;
   };
-  const context = vm.createContext({ computed, ref, watch, defineProps: () => ({}),
-    inject: () => ({ view, bridge: { launch_clients: {} }, pending, act }) });
-  const component = readFileSync(new URL("../frontend/ProgressBoard.vue", import.meta.url), "utf8");
-  vm.runInContext(component.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .*;$/gm, "")
-    + "\nglobalThis.connection_refs = { connection_open, connection_profile };", context);
-  // The invite dialog is its own component; it shares the board's injected state.
   const dialog = vm.createContext({ computed, ref, watch, defineProps: () => ({}), defineModel: () => ref(false),
     inject: () => ({ view, bridge: { launch_clients: {}, platform_of: (name) => name.split("-")[0],
       unique_instance: (base, taken) => { let name = base; for (let number = 2; taken.has(name); number++) name = `${base}-${number}`; return name; } }, pending, act }) });
   const invite_dialog = readFileSync(new URL("../frontend/InviteDialog.vue", import.meta.url), "utf8");
   vm.runInContext(invite_dialog.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .*;$/gm, ""), dialog);
-  return { context, dialog, view, calls, invites, controls, refs: context.connection_refs };
+  return { dialog, view, calls, invites, controls };
 }
 
-test("the skip control stays available for retained assignments after execution failure pauses the room", () => {
-  const { context, view } = participant_connection_fixture("paused");
-  Object.assign(view.value.room, { phase: "paused", current_turn: { id: 7, expert: "DeepSeek", status: "pending" } });
-  assert.equal(vm.runInContext("can_skip.value && can_restart.value", context), true);
-  view.value.room.runtime.status = "running";
-  view.value.room.phase = "discussing";
-  assert.equal(vm.runInContext("can_skip.value && !can_restart.value", context), true);
-  for (const phase of ["paused", "discussing"]) {
-    view.value.room.phase = phase;
-    view.value.room.runtime.status = phase === "paused" ? "paused" : "running";
-    for (const status of ["answered", "cancelled"]) {
-      view.value.room.current_turn.status = status;
-      assert.equal(vm.runInContext("can_skip.value", context), false);
-    }
-  }
-  view.value.room.current_turn.status = "pending";
-  view.value.room.archived = true;
-  assert.equal(vm.runInContext("can_skip.value", context), false);
-  view.value.room.archived = false;
-  view.value.room.phase = "concluded";
-  assert.equal(vm.runInContext("can_skip.value", context), false);
+test("session progress board keeps skip available only for the current turn and preserves owner controls", () => {
+  const source = readFileSync(new URL("../frontend/ProgressBoard.vue", import.meta.url), "utf8");
+  assert.match(source, /const can_control = computed\(\(\) => Boolean\(view\.value\.access\?\.can_manage\) && !room\.value\.archived\)/);
+  assert.match(source, /v-if="turn && !paused"[^\n]*:disabled="!can_control \|\| !!pending"/);
+  assert.match(source, /v-if="paused"[^\n]*label="继续"[^\n]*:disabled="!can_control \|\| !!pending"/);
+  assert.match(source, /v-else[^\n]*label="暂停"[^\n]*:disabled="!can_control \|\| !!pending"/);
 });
 
 test("batch invitation admits woken members before manual ones and lists the manual members for copying", async () => {
@@ -2030,65 +2078,100 @@ test("batch invitation stops at the first failure and keeps the remaining picks 
   assert.equal(view.value.free_error, "邀请失败");
 });
 
-test("discussion experts can leave, return or be removed from the board, but the host stays", async () => {
-  const { context, view, calls } = participant_connection_fixture();
-  Object.assign(view.value.room, { host: "Claude", experts: { Claude: "cli", Codex: "cli" },
-    members: [{ id: 1, name: "Claude", status: "active" }, { id: 2, name: "Codex", status: "active" }, { id: 3, name: "Gemini", status: "away" }] });
-  assert.equal(context.member_menu({ name: "Claude", is_host: true }).length, 0, "the host cannot leave");
-  const labels = menu => Array.from(menu.flat(), item => item.label);
-  assert.deepEqual(labels(context.member_menu({ name: "Codex" })), ["暂离", "移除"]);
-  const away = context.member_menu({ name: "Gemini" });
-  assert.deepEqual(labels(away), ["请回", "移除"]);
-  await away[0][0].onSelect();
-  assert.deepEqual(calls, ["change_member"]);
-  view.value.room.rounds = [{ number: 1, speakers: ["Codex"], completed: false }];
-  view.value.room.phase = "paused";
-  assert.ok(!labels(context.member_menu({ name: "Codex" })).includes("作废本轮发言"), "an opinion is never voided");
-  view.value.room.phase = "concluded";
-  assert.equal(context.member_menu({ name: "Codex" }).length, 0, "a concluded discussion keeps its roster");
+test("shared member menu retains away and rejoin, but protects the current discussion host", async () => {
+  const calls = [];
+  const view = { access: { can_manage: true, members: [] }, launch: { available: true }, room: { session: { status: "active" } } };
+  const menu_for = member => member_actions(member, { view, act: (...args) => calls.push(args), describe: () => {} });
+  const labels = member => menu_for(member).flat().map(item => item.label);
+  const host = { id: 1, name: "Claude", role: "host", access: "runner", status: "active" };
+  assert.ok(!labels(host).includes("离开") && !labels(host).includes("移除"));
+  const expert = { id: 2, name: "Codex", access: "manual", status: "active" };
+  assert.deepEqual(labels(expert), ["复制启动指令（含凭证）", "编辑描述", "复制参与说明", "下载私有配置", "复制凭证文本", "设为主持人", "离开", "移除"]);
+  const away = { id: 3, name: "Gemini", access: "manual", status: "away" };
+  assert.ok(labels(away).includes("请回") && labels(away).includes("移除"));
+  await menu_for(away).flat().find(item => item.label === "请回").onSelect();
+  assert.deepEqual(calls[0], ["change_member", { member_id: 3, name: "Gemini", action: "rejoin" }]);
+  view.room.session.status = "paused";
+  assert.ok(!labels(host).includes("离开") && !labels(host).includes("移除"), "paused sessions protect the current host too");
+  view.room.session.status = "ended";
+  assert.ok(labels(host).includes("离开") && labels(host).includes("移除"), "host protection ends with the session");
+  view.access.can_manage = false;
+  assert.ok(menu_for(expert).flat().every(item => item.disabled), "every shared action stays disabled without manage permission");
 });
 
-test("participant menu opens an inline switch and waits for explicit pause before reading configuration", async () => {
-  const { context, view, calls, refs } = participant_connection_fixture();
-  const menu = context.member_menu({ name: "Codex", session: "original" })[0];
-  assert.deepEqual(Array.from(menu, item => item.label), ["复制会话 ID", "切换 App / CLI"]);
-  await menu[1].onSelect();
-  assert.equal(refs.connection_open.value, true);
-  assert.deepEqual(calls, [], "opening a menu must not pause a live discussion");
-  await context.read_connection();
-  assert.deepEqual(calls, ["pause_runtime", "load_room_configuration"]);
-  assert.equal(refs.connection_profile.value.adapter, "codex_cli");
-  assert.equal(context.member_menu({ name: "Claude", session: "other" })[0].length, 1);
-  view.value.launch.remote = true;
-  assert.equal(context.member_menu({ name: "Codex", session: "original" })[0].length, 1);
+test("shared member menus are owned by FreeBoard while ProgressBoard only owns session controls", () => {
+  const free_board = readFileSync(new URL("../frontend/FreeBoard.vue", import.meta.url), "utf8");
+  const progress_board = readFileSync(new URL("../frontend/ProgressBoard.vue", import.meta.url), "utf8");
+  assert.match(free_board, /import \{ busy, member_actions \} from "\.\/member-actions\.js"/);
+  assert.match(free_board, /member_actions\(member, \{ view: view\.value, act, describe:/);
+  assert.doesNotMatch(progress_board, /member_menu|member_actions|member_status/);
+  assert.match(progress_board, /aria-label="讨论状态"/);
 });
 
-test("every Codex instance can switch, a borrowed one before its first execution, and an App writer conflict offers the App directly", async () => {
-  const { context, view, calls, refs } = participant_connection_fixture();
-  vm.runInContext("bridge", context).write_room_adapter = (name, adapter) => { view.value.launch.repair.participants[name].adapter = adapter; };
-  view.value.room.members = [{ id: 4, name: "Codex-2", status: "active", session_mode: "borrowed" }];
-  const labels = menu => Array.from(menu.flat(), item => item.label);
-  assert.ok(labels(context.member_menu({ name: "Codex-2" })).includes("切换 App / CLI"), "the borrowed ID is already known");
-  view.value.room.members[0].session_mode = "new";
-  assert.ok(!labels(context.member_menu({ name: "Codex-2" })).includes("切换 App / CLI"), "a new session has nothing to switch yet");
-  await context.open_connection({ name: "Codex" }, "codex");
-  await context.read_connection();
-  assert.deepEqual(calls, ["pause_runtime", "load_room_configuration"]);
-  assert.equal(refs.connection_profile.value.adapter, "codex", "the conflict path preselects the App without saving");
+test("room overview does not mark web manual members as waiting for registration", () => {
+  const component = readFileSync(new URL("../frontend/RoomOverview.vue", import.meta.url), "utf8");
+  const declaration = component.match(/const unregistered = \(member\) => [^;]+;/)?.[0];
+  assert.ok(declaration, "the member registration rule is explicit");
+  const context = vm.createContext({});
+  vm.runInContext(`${declaration}\nglobalThis.is_unregistered = unregistered;`, context);
+  assert.equal(context.is_unregistered({ access: "manual", manual_source: "web" }), false);
+  assert.equal(context.is_unregistered({ access: "manual" }), true, "local manual members still require registration");
+  assert.equal(context.is_unregistered({ access: "manual", registered_at: "now" }), false);
+  assert.match(component, /unregistered\(member\) \? '待注册'/);
 });
 
-test("participant switch stops on pause failure and discards a configuration after navigating rooms", async () => {
-  const { context, view, calls, controls, refs } = participant_connection_fixture();
-  await context.open_connection({ name: "Codex" });
-  controls.pause_allowed = false;
-  await context.read_connection();
-  assert.deepEqual(calls, ["pause_runtime"]);
-  assert.equal(refs.connection_profile.value, null);
-  view.value.room.runtime.status = "paused";
-  controls.changed_room = true;
-  await context.read_connection();
-  assert.equal(refs.connection_open.value, false);
-  assert.equal(refs.connection_profile.value, null);
+test("room overview keeps the original-session adapter switch, while connection repair waits for a paused session", () => {
+  const overview = readFileSync(new URL("../frontend/RoomOverview.vue", import.meta.url), "utf8");
+  const topic_panel = readFileSync(new URL("../frontend/TopicPanel.vue", import.meta.url), "utf8");
+  assert.match(overview, /editable: free\.value && idle && view\.value\.access\?\.can_manage && view\.value\.launch\.available/);
+  assert.match(overview, /切换后沿用原会话/);
+  assert.match(overview, /await bridge\.set_member_adapter\(\{ name: member\.name, adapter \}\)/);
+  assert.match(topic_panel, /const paused = computed\(\(\) => room\.value\?\.session\?\.status === "paused"\)/);
+  assert.match(topic_panel, /v-if="paused && view\.launch\.available && !room\.archived && !view\.launch\.remote"[\s\S]*?@click="act\('load_room_configuration'\)"/);
+  assert.match(topic_panel, /保存本场接入设置[\s\S]*?@click="act\('save_room_configuration'\)"/);
+});
+
+test("host arrangements remain in history after the session concludes", () => {
+  const start = discussion_source.indexOf("const host_arrangements = computed(");
+  const end = discussion_source.indexOf("/** Clicking the current verdict", start);
+  const view = ref({ query: "", mention_only: false, room: { session: { status: "concluded" }, host_arrangements: [
+    { key: "session-2", id: 2, after_message_id: 0, turns: [{ expert: "Codex" }] },
+  ] } });
+  const room = computed(() => view.value.room);
+  const context = vm.createContext({ computed, view, room, bridge: { display_name: name => name } });
+  vm.runInContext(`${discussion_source.slice(start, end)}\nglobalThis.arrangements = host_arrangements;`, context);
+  assert.deepEqual([...context.arrangements.value.get(0)].map(item => item.key), ["session-2"]);
+  assert.equal(context.arrangements.value.get(0)[0].label, "Codex");
+});
+
+test("round navigation separates sessions with the same round number and leaves post-session messages ungrouped", () => {
+  const start = discussion_source.indexOf("const navigation_groups = computed(");
+  const end = discussion_source.indexOf("const active_round = computed", start);
+  const view = ref({ messages: [1, 2, 3, 4, 5].map(id => ({ id, author: "Codex" })) });
+  const room = computed(() => ({ experts: { Codex: "cli" }, round_groups: [
+    { key: "legacy-round-1", number: 1, start_id: 1, participants: 1, opinions: 1, completed: true, speakers: ["Codex"] },
+    { key: "session-1-round-1", number: 1, start_id: 2, end_id: 2, participants: 1, opinions: 1, completed: true, speakers: ["Codex"] },
+    { key: "session-2-round-1", number: 1, start_id: 3, end_id: 4, participants: 1, opinions: 1, completed: true, speakers: ["Codex"] },
+  ] }));
+  const transcript_messages = computed(() => view.value.messages);
+  const bridge = { round_groups: value => value.round_groups, display_name: name => name };
+  const context = vm.createContext({ computed, view, room, transcript_messages, bridge });
+  vm.runInContext(`${discussion_source.slice(start, end)}\nglobalThis.groups = navigation_groups;`, context);
+  assert.deepEqual(JSON.parse(JSON.stringify([...context.groups.value].map(group => [group.key, group.number, group.messages.map(message => message.id)]))), [
+    ["legacy-round-1", 1, [1]], ["session-1-round-1", 1, [2]], ["session-2-round-1", 1, [3, 4]], ["ungrouped", 0, [5]],
+  ]);
+});
+
+test("a concluded session still protects messages at or before its start from ordinary message actions", () => {
+  const start = discussion_source.indexOf("const can_branch =");
+  const end = discussion_source.indexOf("const can_retract =", start);
+  const free = ref(true), view = ref({ access: { can_manage: true } });
+  const room = ref({ archived: false, session: { status: "concluded", started_message_id: 10 }, discussions: [] });
+  const context = vm.createContext({ free, view, room });
+  vm.runInContext(`${discussion_source.slice(start, end)}\nglobalThis.actions = { can_branch, can_take_back };`, context);
+  assert.equal(context.actions.can_branch({ id: 10, author: "Codex" }), false);
+  assert.equal(context.actions.can_take_back({ id: 10, author: "用户" }), false);
+  assert.equal(context.actions.can_branch({ id: 11, author: "Codex" }), true, "later free-room history remains branchable");
 });
 
 test("room path correction keeps defaults separate, reports acknowledgement and ignores another room's late result", async () => {
@@ -2323,166 +2406,218 @@ test("empty automatic discussions describe their actual state instead of requiri
   assert.match(message({ phase: 'concluded' }), /已结束/);
 });
 
-/** Evaluate the actual pending-card state with reactive room snapshots. */
-function pending_message_fixture() {
-  const execution = { id: 9, participant: "Codex", role: "expert", turn_id: 7, status: "dispatched", stale: false };
-  const view = reactive({ value: { query: "", mention_only: false, room: {
-    host: "Claude", phase: "discussing", current_turn: { id: 7, expert: "Codex", status: "notified" },
-    rounds: [{ number: 2, completed: false }], completed_rounds: 1,
-    runtime: { mode: "automatic", status: "running", expired: false, participants: [execution] },
+/** Evaluate the unified execution card and transcript slot calculations with reactive room snapshots. */
+function free_card_fixture({ messages = [], members = [], executions = [], query = "", mention_only = false, now = 1000 } = {}) {
+  const timers = new Map();
+  let timer_id = 0, current_time = now;
+  class TestDate extends Date { static now() { return current_time * 1000; } }
+  const view = reactive({ value: { query, mention_only, messages, access: { can_manage: true }, room: {
+    id: "room", mode: "free", archived: false, members: [], free: { members, executions, requests: [] }, session: null,
   } } });
-  const context = vm.createContext({ computed, ref, watch, view, room: computed(() => view.value.room) });
-  const start = discussion_source.indexOf("const speaking_turn =");
-  const end = discussion_source.indexOf("/** A user's message", start);
-  vm.runInContext(`${discussion_source.slice(start, end)}\nglobalThis.card = pending_message;`, context);
-  return { view: view.value, room: view.value.room, execution: view.value.room.runtime.participants[0], card: context.card };
+  const context = vm.createContext({ computed, ref, watch, view, room: computed(() => view.value.room), Date: TestDate,
+    setInterval: callback => { timers.set(++timer_id, callback); return timer_id; }, clearInterval: id => timers.delete(id),
+    bridge: { request: async () => ({ notes: [] }) } });
+  const busy_start = discussion_source.indexOf("const free = computed(");
+  const busy_end = discussion_source.indexOf("/** Progress notes per execution id", busy_start);
+  vm.runInContext(`${discussion_source.slice(busy_start, busy_end)}\nglobalThis.cards = { busy: free_busy, working: free_working, now: free_now };`, context);
+  const layout_start = discussion_source.indexOf("const free_failures = computed(");
+  const layout_end = discussion_source.indexOf("/** Split continuous history", layout_start);
+  vm.runInContext(`${discussion_source.slice(layout_start, layout_end)}\nglobalThis.layout_state = { failures: free_failures, layout: free_layout, rewinds: rewound_runs, toggle: toggle_rewound };`, context);
+  return { context, view: view.value, room: view.value.room, cards: context.cards, state: context.layout_state, timers,
+    advance(seconds) { current_time += seconds; for (const callback of timers.values()) callback(); } };
 }
 
-test("pending reply cards follow real expert and host execution without counting queued assignments as typing", () => {
-  const { room, execution, card } = pending_message_fixture();
-  assert.equal(card.value.author, "Codex");
-  assert.equal(card.value.text, "正在唤醒…");
-  assert.equal(card.value.round, "第 2 轮");
-  execution.status = "started";
-  assert.equal(card.value.text, "正在准备回复…");
-  for (const status of ["pending", "completed", "failed", "cancelled"]) {
-    execution.status = status;
-    assert.equal(card.value, null, status);
+function execution_member(id, name = "Codex", status = "dispatched", extra = {}) {
+  return { id, name, access: "runner", status: "active", adapter: "claude_code", pending: 0,
+    execution: { id, status, stale: false, created_at: 1000, activity_at: 1000, ...extra } };
+}
+
+test("free execution cards show live member work and hide inactive executions", async () => {
+  const member = execution_member(9), execution = { id: 9, member_id: 9, member: "Codex", status: "dispatched", request_message_id: 1, created_at: 1000 };
+  const f = free_card_fixture({ messages: [{ id: 1, author: "用户", created_at: 1000 }], members: [member], executions: [execution] });
+  assert.deepEqual(f.cards.working.value.map(item => [item.id, item.author, item.text, item.working]), [["free-9", "Codex", "正在处理", true]]);
+  assert.deepEqual([...f.state.layout.value].map(item => item.id), [1, "free-9"]);
+  for (const status of ["pending", "completed", "cancelled"]) {
+    f.room.free.members[0].execution.status = status;
+    await nextTick();
+    assert.equal(f.cards.busy.value.length, 0, status);
   }
-  execution.status = "started";
-  execution.turn_id = 6;
-  assert.equal(card.value, null, "an old assignment cannot appear to be replying");
-  execution.turn_id = 7;
-  room.current_turn.status = "answered";
-  assert.equal(card.value, null);
-  room.current_turn = null;
-  execution.role = "host";
-  execution.participant = "Claude";
-  execution.turn_id = null;
-  assert.equal(card.value.author, "Claude");
-  assert.equal(card.value.is_host, true);
-  assert.equal(card.value.text, "正在安排下一步…");
-  execution.status = "dispatched";
-  assert.equal(card.value.text, "正在唤醒主持人…");
-  execution.status = "started";
-  room.rounds = [];
-  room.phase = "preparing";
-  assert.equal(card.value.round, "", "a host can start before the first round exists");
-  assert.equal(card.value.text, "正在安排下一步…");
-  execution.status = "completed";
-  assert.equal(card.value, null, "completing an arrangement removes the host work card");
-  execution.role = "expert";
-  execution.status = "pending";
-  execution.turn_id = 8;
-  room.current_turn = { id: 8, expert: "Claude", status: "pending" };
-  assert.equal(card.value, null, "an arrangement alone does not show the next expert as working");
-  execution.status = "started";
-  assert.equal(card.value.is_host, false, "the host acting as an expert uses a reply card");
-  assert.equal(card.value.text, "正在准备回复…");
+  f.room.free.members[0].execution.status = "failed";
+  f.room.free.executions[0].status = "failed";
+  await nextTick();
+  assert.equal(f.cards.busy.value.length, 0, "a failed attempt leaves the working-card state");
+  assert.equal(f.state.failures.value.length, 1, "a failed execution remains as its own failure card");
 });
 
-test("pending reply cards disappear when execution is invalid or the transcript is filtered", () => {
-  const { view, room, execution, card } = pending_message_fixture();
-  for (const [object, key, next] of [[execution, "stale", true], [room, "archived", true],
-    [room, "phase", "paused"], [room, "phase", "concluded"],
-    [room.runtime, "mode", "manual"], [room.runtime, "status", "paused"],
-    [room.runtime, "status", "stopped"], [room.runtime, "expired", true],
-    [view, "query", "历史"], [view, "mention_only", true]]) {
-    const previous = object[key];
-    object[key] = next;
-    assert.equal(card.value, null, `${key}=${next}`);
-    object[key] = previous;
-    assert.ok(card.value);
-  }
-  view.room = { phase: "preparing" };
-  assert.equal(card.value, null, "switching to an unstarted room clears the previous card");
+test("execution cards obey transcript filters and disappear when the room is archived", async () => {
+  const member = execution_member(9), f = free_card_fixture({ members: [member] });
+  assert.equal(f.cards.working.value.length, 1);
+  f.view.query = "历史";
+  await nextTick();
+  assert.equal(f.cards.working.value.length, 0);
+  assert.equal(f.cards.busy.value.length, 1, "filtering hides the card without changing execution state");
+  f.view.query = "";
+  f.view.mention_only = true;
+  await nextTick();
+  assert.equal(f.cards.working.value.length, 0);
+  f.view.mention_only = false;
+  f.room.archived = true;
+  await nextTick();
+  assert.equal(f.cards.busy.value.length, 0);
+  assert.equal(f.cards.working.value.length, 0);
 });
 
-test("manual experts show an assignment wait without execution timing, then switch to their managed execution", () => {
-  const { room, execution, card } = pending_message_fixture();
-  room.members = [{ name: "Codex", access: "manual", status: "active" }];
-  room.runtime.participants = [];
-  for (const status of ["pending", "notified"]) {
-    room.current_turn.status = status;
-    assert.equal(card.value.id, "turn-7");
-    assert.equal(card.value.author, "Codex");
-    assert.equal(card.value.round, "第 2 轮");
-    assert.equal(card.value.manual, true);
-    assert.equal(card.value.is_host, false);
-    assert.equal(card.value.seconds, null, "manual waits do not invent execution time");
-    assert.match(card.value.text, /等待发言.*启动指令/);
-  }
-  room.rounds = [{ number: 1, completed: true }, { number: 2, completed: true }];
-  room.completed_rounds = 2;
-  assert.equal(card.value.round, "第 3 轮");
-  room.members[0].access = "runner";
-  assert.equal(card.value, null, "a managed expert needs a live execution before showing as working");
-  room.runtime.participants = [execution];
-  assert.equal(card.value.id, 9);
-  assert.equal(card.value.manual, undefined);
-  assert.equal(card.value.text, "正在唤醒…");
+test("a manual request with no execution stays out of the middle transcript", () => {
+  const message = { id: 1, author: "用户", created_at: 1000 };
+  const f = free_card_fixture({ messages: [message], members: [{ id: 2, name: "Claude", access: "manual", status: "active", pending: 1 }],
+    executions: [], query: "" });
+  f.room.free.requests.push({ id: 3, member_id: 2, message_id: 1, status: "pending" });
+  assert.equal(f.cards.busy.value.length, 0);
+  assert.equal(f.cards.working.value.length, 0);
+  assert.deepEqual([...f.state.layout.value].map(item => item.id), [1]);
+  assert.equal(f.room.free.requests[0].status, "pending", "the request remains available to the right-side progress board");
 });
 
-test("manual wait cards clear on skip, answer, pause, departure and filtering", () => {
-  const { view, room, card } = pending_message_fixture();
-  room.members = [{ name: "Codex", access: "manual", status: "active" }];
-  room.runtime.participants = [];
-  for (const [object, key, next] of [[room.current_turn, "status", "cancelled"], [room.current_turn, "status", "answered"],
-    [room.members[0], "status", "away"], [room.members[0], "status", "removed"], [room, "archived", true],
-    [room, "phase", "paused"], [room, "phase", "concluded"], [room.runtime, "status", "paused"],
-    [room.runtime, "status", "stopped"], [room.runtime, "expired", true],
-    [view, "query", "历史"], [view, "mention_only", true]]) {
-    const previous = object[key];
-    object[key] = next;
-    assert.equal(card.value, null, `${key}=${next}`);
-    object[key] = previous;
-    assert.equal(card.value.author, "Codex");
-  }
-  room.current_turn = { id: 8, expert: "Gemini", status: "pending" };
-  assert.equal(card.value, null, "the previous manual expert must not linger after the next assignment");
+test("cancelled session work replaces its slot, supports anchor zero and stays out of filtered views", async () => {
+  const member = execution_member(7, "Codex", "started");
+  const execution = { id: 7, member_id: 7, member: "Codex", status: "started", request_message_id: 900, created_at: 1002,
+    requests: [{ discussion_session_id: 3, after_message_id: 10 }] };
+  const f = free_card_fixture({ messages: [{ id: 10, author: "用户", created_at: 1000 }, { id: 11, author: "用户", created_at: 1001 }], members: [member], executions: [execution] });
+  f.room.cancelled_turns = [{ key: "session-2-before-history", id: 8, expert: "Claude", execution_id: 8, after_message_id: 0, created_at: "2026-10-29T10:00:00Z" }];
+  const ids = () => [...f.state.layout.value].map(item => item.id);
+  assert.deepEqual(ids(), ["cancelled-session-2-before-history", 10, "free-7", 11]);
+  f.room.free.members[0].execution.status = "cancelled";
+  f.room.free.executions[0].status = "cancelled";
+  f.room.cancelled_turns.push({ key: "session-3-work-7", id: 7, expert: "Codex", execution_id: 7, after_message_id: 10, created_at: "2026-10-29T10:00:02Z" });
+  await nextTick();
+  assert.deepEqual(ids(), ["cancelled-session-2-before-history", 10, "cancelled-session-3-work-7", 11], "cancelled work stays at the execution's original anchor");
+  f.view.query = "历史";
+  await nextTick();
+  assert.deepEqual(ids(), [10, 11], "search filtering suppresses cancelled cards");
+  f.view.query = "";
+  f.view.mention_only = true;
+  await nextTick();
+  assert.deepEqual(ids(), [10, 11], "mention filtering suppresses cancelled cards");
 });
 
-test("pending reply elapsed time includes wake and work, ticks locally, resyncs and stops with the execution", async () => {
-  const { room, execution, card } = pending_message_fixture();
-  const timers = new Map();
-  let now = 0, next_timer = 0, stop;
-  const context = vm.createContext({ computed, ref, pending_message: card, performance: { now: () => now },
-    setInterval: (callback) => { timers.set(++next_timer, callback); return next_timer; },
-    clearInterval: (timer) => timers.delete(timer),
-    watch: (...args) => { stop = watch(...args); return stop; } });
-  const start = discussion_source.indexOf("const ELAPSED_TICK_MS");
-  const end = discussion_source.indexOf("const identities =", start);
-  vm.runInContext(`${discussion_source.slice(start, end)}\nglobalThis.duration = pending_duration;`, context);
-  assert.equal(context.duration.value, "—");
-  assert.equal(timers.size, 0, "legacy executions without timings do not invent a duration");
-  room.runtime.timings = { items: [{ id: 9, queue_seconds: 200, wake_seconds: 59, work_seconds: null }] };
+test("stopped host executions replace their work at the same anchor and avoid missed-card duplicates", async () => {
+  const host = execution_member(1, "Claude", "started");
+  host.role = "host";
+  const expert = execution_member(2, "Codex", "started");
+  const missed = execution_member(3, "Gemini", "cancelled");
+  const executions = [
+    { id: 1, member_id: 1, member: "Claude", role: "host", status: "started", request_message_id: 901, created_at: 1001,
+      requests: [{ discussion_session_id: 9, purpose: "discuss_host", after_message_id: 0 }] },
+    { id: 2, member_id: 2, member: "Codex", role: "member", status: "started", request_message_id: 902, created_at: 1002,
+      requests: [{ discussion_session_id: 9, purpose: "discuss", after_message_id: 10 }] },
+    { id: 3, member_id: 3, member: "Gemini", role: "member", status: "cancelled", request_message_id: 903, created_at: 1003,
+      requests: [{ discussion_session_id: 9, purpose: "discuss", after_message_id: 10 }] },
+  ];
+  const f = free_card_fixture({ messages: [{ id: 10, author: "用户", created_at: 1000 }, { id: 11, author: "用户", created_at: 1004 }],
+    members: [host, expert, missed], executions });
+  f.room.cancelled_turns = [{ key: "session-9-request-3", id: 3, expert: "Gemini", execution_id: 3,
+    after_message_id: 10, created_at: "2026-10-29T10:00:03Z" }];
+  const ids = () => [...f.state.layout.value].map(item => item.id);
+  assert.deepEqual(ids(), ["free-1", 10, "free-2", "cancelled-session-9-request-3", 11]);
+  f.room.free.members[0].execution.status = "cancelled";
+  f.room.free.members[1].execution.status = "cancelled";
+  f.room.free.executions[0].status = "cancelled";
+  f.room.free.executions[1].status = "cancelled";
   await nextTick();
-  assert.equal(context.duration.value, "59秒");
-  now = 1000;
-  timers.forEach((callback) => callback());
-  assert.equal(context.duration.value, "1分00秒");
-  room.runtime = { ...room.runtime };
+  assert.deepEqual(ids(), ["stopped-1", 10, "stopped-2", "cancelled-session-9-request-3", 11],
+    "the host stop stays at anchor zero, the expert stop stays after its source, and a missed execution is not duplicated");
+  assert.equal(f.state.layout.value.filter(item => item.execution_id === 3).length, 1);
+  assert.equal(f.state.layout.value[0].cancelled_execution.status, "cancelled");
+  f.view.query = "历史";
   await nextTick();
-  assert.equal(context.duration.value, "1分00秒", "unrelated snapshots cannot rewind the elapsed clock");
-  assert.equal(next_timer, 1);
-  execution.status = "started";
-  room.runtime.timings.items[0].work_seconds = 24;
+  assert.deepEqual(ids(), [10, 11], "search hides stopped and missed cards");
+  f.view.query = "";
+  f.view.mention_only = true;
   await nextTick();
-  assert.equal(context.duration.value, "1分23秒", "entering does not reset the wake duration");
-  assert.equal(timers.size, 1, "server refreshes replace the previous clock");
-  room.runtime.timings.items[0].work_seconds = 3542;
+  assert.deepEqual(ids(), [10, 11], "mention filtering hides stopped and missed cards");
+  assert.match(discussion_source, /v-else-if="message\.cancelled_turn \|\| message\.cancelled_execution"/);
+  assert.match(discussion_source, /已停止 · 执行 #\{\{ message\.execution_id \}\}/);
+});
+
+test("host arrangements share anchor-zero ordering with working and stopped cards", async () => {
+  const host = execution_member(1, "Claude", "started");
+  host.role = "host";
+  const stopped_host = execution_member(2, "Claude", "cancelled");
+  stopped_host.role = "host";
+  const f = free_card_fixture({ messages: [{ id: 10, author: "用户", created_at: 1000 }], members: [host, stopped_host], executions: [
+    { id: 1, member_id: 1, member: "Claude", role: "host", status: "started", request_message_id: 901, created_at: 1001,
+      requests: [{ discussion_session_id: 9, purpose: "discuss_host", after_message_id: 0 }] },
+    { id: 2, member_id: 2, member: "Claude", role: "host", status: "cancelled", request_message_id: 902, created_at: 1003,
+      requests: [{ discussion_session_id: 9, purpose: "discuss_host", after_message_id: 0 }] },
+  ] });
+  f.room.host_arrangements = [
+    { id: 1, key: "plan-1", after_message_id: 0, created_at: new Date(1000 * 1000).toISOString(), turns: [{ expert: "Codex" }] },
+    { id: 2, key: "plan-2", after_message_id: 0, created_at: new Date(1002 * 1000).toISOString(), turns: [{ expert: "Gemini" }] },
+  ];
+  const ids = () => [...f.state.layout.value].map(item => item.id);
+  assert.deepEqual(ids(), ["plan-1", "free-1", "plan-2", "stopped-2", 10],
+    "arrangements and host executions at anchor zero follow their original creation times");
+  f.view.query = "历史";
   await nextTick();
-  assert.equal(context.duration.value, "1小时0分01秒");
-  execution.status = "completed";
+  assert.deepEqual(ids(), [10], "search hides anchor-zero arrangements and execution cards");
+  f.view.query = "";
+  f.view.mention_only = true;
   await nextTick();
-  assert.equal(context.duration.value, "—");
-  assert.equal(timers.size, 0);
-  stop();
+  assert.deepEqual(ids(), [10], "mention filtering hides anchor-zero arrangements and execution cards");
+});
+
+test("execution clocks tick locally and manual delivery retries keep their countdown and controls", async () => {
+  const member = execution_member(9, "Claude", "started", { retry: { retry_at: 1010, stopped: false, reason: "会话未响应", attempt: 2 } });
+  const f = free_card_fixture({ members: [member] });
+  const status_start = discussion_source.indexOf("function working_status(");
+  const status_end = discussion_source.indexOf("/** Says in the note line", status_start);
+  vm.runInContext(`${discussion_source.slice(status_start, status_end)}\nglobalThis.get_status = working_status;`, f.context);
+  const card = f.cards.working.value[0];
+  assert.equal(card.working, false);
+  assert.equal(card.retry.reason, "会话未响应");
+  assert.equal(f.context.get_status(card).text, "会话异常，等待自动重试");
+  assert.equal(card.retry.retry_at - f.cards.now.value, 10);
+  f.advance(7);
+  await nextTick();
+  assert.equal(card.retry.retry_at - f.cards.now.value, 3);
+  f.advance(3);
+  await nextTick();
+  assert.equal(card.retry.retry_at - f.cards.now.value, 0);
+  assert.match(discussion_source, /message\.retry\.retry_at > free_now \? `\$\{message\.retry\.retry_at - free_now\} 秒后自动重试` : '正在重试'/);
+  assert.match(discussion_source, /label="立即重试"/);
+  assert.match(discussion_source, /label="停止"/);
+});
+
+test("discussion execution cards keep one visible-message anchor through work, failure and answer", async () => {
+  const source = { discussion_session_id: 4, after_message_id: 10, source_message_id: 10 };
+  const member = execution_member(12, "DeepSeek");
+  const execution = { id: 12, member_id: 12, member: "DeepSeek", status: "started", request_message_id: 900,
+    created_at: 1002, requests: [source] };
+  member.execution.created_at = 1002;
+  const messages = [{ id: 10, author: "用户", created_at: 1000 }, { id: 11, author: "用户", created_at: 1001 }];
+  const f = free_card_fixture({ messages, members: [member], executions: [execution] });
+  const working_ids = () => [...f.state.layout.value].map(item => item.id);
+  assert.deepEqual(working_ids(), [10, "free-12", 11]);
+  assert.equal(f.view.messages.some(message => message.id === 900), false, "the internal discussion request is not a visible message");
+  f.room.free.executions[0].status = "failed";
+  f.room.free.members[0].execution.status = "failed";
+  f.room.free.executions[0].finished_at = 1010;
+  f.room.free.executions[0].result = "模型暂时不可用";
+  await nextTick();
+  assert.deepEqual(working_ids(), [10, "failed-12", 11]);
+  assert.equal(f.state.failures.value[0].failure.result, "模型暂时不可用");
+  f.room.free.executions[0].status = "completed";
+  f.room.free.executions[0].answer_id = 13;
+  f.room.free.members[0].execution.status = "completed";
+  f.view.messages.push({ id: 13, author: "DeepSeek", created_at: 1011, execution_id: 12, request_message_id: 900 });
+  await nextTick();
+  assert.deepEqual(working_ids(), [10, 13, 11]);
+  assert.equal(f.state.failures.value.length, 0);
 });
 
 test("message duration formatting distinguishes zero from missing data and handles hours", () => {
   const start = discussion_source.indexOf("function format_elapsed");
-  const end = discussion_source.indexOf("const pending_duration", start);
+  const end = discussion_source.indexOf("/** A scheduler call's milliseconds", start);
   const context = vm.createContext({});
   vm.runInContext(discussion_source.slice(start, end), context);
   for (const [seconds, label] of [[null, "—"], [undefined, "—"], [0, "0秒"], [59, "59秒"],

@@ -1,6 +1,6 @@
 <script setup>
 import { computed, inject, ref } from "vue";
-import ProgressBoard from "./ProgressBoard.vue";
+import FreeBoard from "./FreeBoard.vue";
 
 /** Open the shared progress board in a drawer without changing the sidebar layout. */
 const { view, bridge } = inject("discussion");
@@ -30,7 +30,7 @@ const label = computed(() => `${state.value.title} · ${rounds.value}`);
       </button>
     </UTooltip>
     <USlideover v-model:open="open" side="right" title="讨论进度" :description="room.title" :ui="{ content: 'progress-drawer', body: 'progress-drawer-body' }">
-      <template #body><ProgressBoard /></template>
+      <template #body><FreeBoard /></template>
     </USlideover>
   </div>
 </template>
