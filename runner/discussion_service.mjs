@@ -345,31 +345,46 @@ export class DiscussionService {
     this.log = log;
     this.workers = new Map();
   }
-  /** Reload the registry, close removed rooms, then tick every registered room. */
-  async tick() {
+  /**
+   * Reload the registry, close removed rooms, then tick every registered room at once. A room still busy from an
+   * earlier call is skipped. `wait: false` returns without waiting, so a slow remote site never delays the other rooms.
+   */
+  async tick({ wait = true } = {}) {
     const configs = read_registry(this.home);
     for (const [path, worker] of this.workers) {
-      if (!configs.includes(path)) { await worker.close(true); this.workers.delete(path); }
+      if (!configs.includes(path)) { await worker.busy; await worker.close(true); this.workers.delete(path); }
     }
     for (const path of configs) {
       if (!this.workers.has(path)) this.workers.set(path, new RoomWorker(path, this.create_runner, this.log, this.home));
       const worker = this.workers.get(path);
-      await worker.tick();
-      if (!worker.removed) continue;
-      // The room no longer exists on its website, so there is nothing to pause; drop the registration once.
-      const directory = worker.config?.directory;
-      await worker.close(false);
-      this.workers.delete(path);
-      try { unregister_room(this.home, path); } catch { /* Already removed by another command. */ }
-      // Its runtime, task files and answer drafts serve no one now; a file still held is left to the periodic sweep.
-      try { remove_room_files(this.home, path, directory); } catch (error) { this.log(`${worker.state.room || path}: 本机文件未能删除，稍后清理：${error.message}`); }
-      this.log(`${worker.state.site || ''}/${worker.state.room || path}: 房间已在网站删除，已撤销登记并删除本机文件`);
+      // Nothing awaits a tick started with `wait: false`, so its failure is logged here instead of crashing the service.
+      worker.busy ??= this.tick_worker(path, worker).catch(error => this.log(`${worker.state.room || path}: 检查失败：${error.message}`))
+        .finally(() => { worker.busy = null; });
     }
+    if (wait) await Promise.all([...this.workers.values()].map(worker => worker.busy));
+    this.write_status();
+  }
+  /** Publish every room's latest state for `codiscuss status` and the website's service check. */
+  write_status() {
     atomic_json(join(this.home, 'status.json'), { pid: process.pid, updated_at: Math.floor(Date.now() / 1000),
       rooms: [...this.workers.values()].map(worker => worker.state) });
   }
-  /** Pause running rooms and release every lock and child process. */
+  /** Tick one room; a room deleted on its website is unregistered here. */
+  async tick_worker(path, worker) {
+    await worker.tick();
+    if (!worker.removed) return this.write_status();
+    // The room no longer exists on its website, so there is nothing to pause; drop the registration once.
+    const directory = worker.config?.directory;
+    await worker.close(false);
+    this.workers.delete(path);
+    try { unregister_room(this.home, path); } catch { /* Already removed by another command. */ }
+    // Its runtime, task files and answer drafts serve no one now; a file still held is left to the periodic sweep.
+    try { remove_room_files(this.home, path, directory); } catch (error) { this.log(`${worker.state.room || path}: 本机文件未能删除，稍后清理：${error.message}`); }
+    this.log(`${worker.state.site || ''}/${worker.state.room || path}: 房间已在网站删除，已撤销登记并删除本机文件`);
+  }
+  /** Pause running rooms and release every lock and child process, once their current ticks finish. */
   async close() {
+    await Promise.all([...this.workers.values()].map(worker => worker.busy));
     for (const worker of this.workers.values()) await worker.close(true);
     this.workers.clear();
   }
@@ -462,7 +477,7 @@ export async function run_service(home, output = () => {}) {
   const service = new DiscussionService(home, undefined, log_line);
   const stop_path = join(home, 'stop.request');
   if (existsSync(stop_path)) unlinkSync(stop_path);
-  let stopped = false;
+  let stopped = false, syncing = null;
   const stop = () => { stopped = true; };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
@@ -474,7 +489,7 @@ export async function run_service(home, output = () => {}) {
     const { sync_remote_launches } = await import('./remote_launch.mjs');
     let synced_at = 0, swept_at = 0;
     while (!stopped && !existsSync(stop_path)) {
-      try { await service.tick(); } catch (error) { log_line(`服务检查失败：${error.message}`); }
+      try { await service.tick({ wait: false }); } catch (error) { log_line(`服务检查失败：${error.message}`); }
       if (Date.now() - swept_at >= SWEEP_MS) {
         swept_at = Date.now();
         try {
@@ -484,13 +499,16 @@ export async function run_service(home, output = () => {}) {
           }
         } catch (error) { log_line(`清理本机文件失败：${error.message}`); }
       }
-      if (Date.now() - synced_at >= REMOTE_SYNC_MS) {
+      // Runs beside the room ticks: a slow remote site must not hold up local rooms.
+      if (!syncing && Date.now() - synced_at >= REMOTE_SYNC_MS) {
         synced_at = Date.now();
-        try { await sync_remote_launches(home, { log: log_line }); } catch (error) { log_line(`远程启动检查失败：${error.message}`); }
+        syncing = sync_remote_launches(home, { log: log_line }).catch(error => log_line(`远程启动检查失败：${error.message}`))
+          .finally(() => { syncing = null; });
       }
       await sleep(POLL_MS);
     }
   } finally {
+    await syncing;
     await service.close();
     if (existsSync(stop_path)) unlinkSync(stop_path);
     log_line('讨论服务已停止');

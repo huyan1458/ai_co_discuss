@@ -1265,6 +1265,29 @@ test('the service ticks every registered room and pauses a room once it is unreg
   assert.ok(!existsSync(join(home, 'data-room2', 'runner.lock')), 'removed room releases its data-directory lock');
 });
 
+test('a slow room never holds up the other rooms between service polls', async t => {
+  const f = await fixture(t);
+  const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
+  register_room(home, room_config(home, f.config.site, 'slow'));
+  register_room(home, room_config(home, f.config.site, 'fast'));
+  const ticks = [];
+  let release_slow;
+  const slow_gate = new Promise(done => { release_slow = done; });
+  const service = new DiscussionService(home, config => ({ stop_children() {},
+    tick: async () => { ticks.push(config.room); if (config.room === 'slow') await slow_gate; return 'waiting'; } }));
+  t.after(async () => { release_slow(); await service.close(); rmSync(home, { recursive: true, force: true }); });
+  await service.tick({ wait: false });
+  await delay(5);
+  await service.tick({ wait: false });
+  await delay(5);
+  assert.deepEqual(ticks.filter(room => room === 'fast').length, 2, 'the fast room ticks again while the slow one is still running');
+  assert.deepEqual(ticks.filter(room => room === 'slow').length, 1, 'a busy room is not ticked twice at once');
+  release_slow();
+  await delay(5);
+  await service.tick();
+  assert.deepEqual(ticks.filter(room => room === 'slow').length, 2);
+});
+
 test('the sweep removes stale unused launch folders, orphaned drafts and the old part of oversized logs only', t => {
   const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
