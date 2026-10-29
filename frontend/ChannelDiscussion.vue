@@ -1156,6 +1156,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             <button v-if="view.access?.can_manage" type="button" class="channel-schedule-rate" :class="{ 'is-on': decision.feedback === 'good' }" :aria-pressed="decision.feedback === 'good'" aria-label="这次调度判断得好" title="判断得好" @click="rate_decision(decision, 'good')"><UIcon name="i-lucide-thumbs-up" /></button>
             <button v-if="view.access?.can_manage" type="button" class="channel-schedule-rate" :class="{ 'is-on': decision.feedback === 'bad' }" :aria-pressed="decision.feedback === 'bad'" aria-label="这次调度判断得不好" title="判断得不好" @click="rate_decision(decision, 'bad')"><UIcon name="i-lucide-thumbs-down" /></button>
           </template>
+          <p v-if="decision.provider"><span>决策服务：<strong>{{ SCHEDULER_LABELS[decision.provider] || decision.provider }}</strong></span></p>
           <p v-for="(item, index) in decision.detail" :key="index"><span>问：{{ item.question }}（{{ item.choices.map(option_name).join(" / ") }}）</span><span>答：{{ item.choice ? option_name(item.choice) : "无" }}<small v-if="item.probabilities[item.choice] !== undefined">概率 {{ Number(item.probabilities[item.choice]).toFixed(2) }}</small></span></p>
         </ScheduleCard>
         <template v-for="decision in scheduler_decisions.get(message.id) || []" :key="`correction-${decision.id}`">
