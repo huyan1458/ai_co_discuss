@@ -509,7 +509,7 @@ html[data-theme^="channel"] .channel-composer:is(:focus, :focus-within, :has(:fo
 .channel-editor::placeholder { color: #9ba3b1; }
 /* The textarea stays on top for typing and selection; the mirror behind it repeats the text with mentions colored. */
 .channel-editor-mirror { position: absolute; inset: 0; overflow: hidden; white-space: pre-wrap; overflow-wrap: break-word; pointer-events: none; scrollbar-gutter: stable; }
-.channel-editor-mirror .channel-mention { padding: 0; border-radius: 2px; box-shadow: 0 0 0 1px #5865f22b; }
+.channel-composer .channel-editor-mirror .channel-mention { padding: 0; background: none; }
 .channel-composer.has-mentions textarea.channel-editor { position: relative; z-index: 1; color: transparent !important; caret-color: var(--ui-text-highlighted); scrollbar-gutter: stable; }
 .channel-composer-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start !important; padding: 4px 10px 10px !important; gap: 4px !important; }
 .channel-composer-identity { display: flex; flex: 0 1 auto; align-items: center; gap: 2px; min-width: 0; }
