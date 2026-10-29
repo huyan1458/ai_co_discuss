@@ -12,7 +12,7 @@ export const ROUTE_CONFIDENCE = 0.7;
 /** Waking everyone or no one costs more when wrong (N runs, or an ignored message), so it needs more certainty. */
 export const ROUTE_WIDE_CONFIDENCE = 0.85;
 /** Bump when the routing question or its option descriptions change, so ratings can be compared across wordings. */
-export const ROUTE_PROMPT_VERSION = 5;
+export const ROUTE_PROMPT_VERSION = 6;
 const HOST_CHOICE = '__host__';
 const NOTE_CHOICE = '__note__';
 const ALL_CHOICE = '__all__';
@@ -148,11 +148,11 @@ export function certainty(answer) {
  */
 export async function route_free_message(home, scheduler, { title, goal, context, message, host, members }, fetch_impl) {
   const choices = [...members.map(member => ({ value: member.name, description: member.description })),
-    { value: HOST_CHOICE, description: `主持人 ${host.description}：没有指向任何人（如单独一句“hi”“你好”这类问候、闲聊，由主持人代表房间回应），或需要分工、排先后、互相回应` },
-    { value: ALL_CHOICE, description: '全体成员（含主持人）各自回应一次，彼此不需要配合；须是用户明确要求大家各自回应，如“大家/都出来打个招呼”“各自介绍一下”“各说一句看法”' },
+    { value: HOST_CHOICE, description: `主持人 ${host.description}：没有指向任何人（如单独一句“hi”“你好”这类问候、闲聊，由主持人代表房间回应），或诉求模糊、复杂，需要主持人判断怎么安排` },
+    { value: ALL_CHOICE, description: '全体成员（含主持人）各自回应一次，彼此不需要看到别人的回答；只在要求简单明确、每人独立回应一次就算完成时选，如“大家打个招呼”“各自报一下在用的模型”' },
     { value: NONE_CHOICE, description: '无需回应：只是确认、致谢或旁注，不需要任何人回答' }];
   const questions = [{ type: 'choice', name: 'handler', choices,
-    instructions: '这条用户消息没有用 @ 点名成员。判断它的回应对象，按下面的顺序：1）正文叫了某位成员的名字，或在向其提问（包括“X在吗”“X还在吗”“X你怎么看”），选该成员，即使上一条是别人的回答；2）正文没有指向任何人时，看它是否在延续某位成员的回答（追问、要求修改、引用，或“回复”指向其消息），或在补充、纠正一条正由某位成员处理的消息，是则选该成员，是主持人就选主持人；3）明确要求所有成员各自回应一次（用了“大家”“都”“各自”等）选全体；4）单独的问候或闲聊（如“hi”）既没有指向某位成员，也没有要求大家一起回应，选主持人；5）只是确认、致谢或旁注选无需回应；6）对象不明确，或需要分工、排先后、互相回应时选主持人。' }];
+    instructions: '这条用户消息没有用 @ 点名成员。判断它的回应对象，按下面的顺序：1）正文叫了某位成员的名字，或在向其提问（包括“X在吗”“X还在吗”“X你怎么看”），选该成员，即使上一条是别人的回答；2）正文没有指向任何人时，看它是否在延续某位成员的回答（追问、要求修改、引用，或“回复”指向其消息），或在补充、纠正一条正由某位成员处理的消息，是则选该成员，是主持人就选主持人；3）要求简单明确，每位成员独立回应一次就算完成时选全体；只出现“大家”“都”“各自”“一起”等字眼不够；4）单独的问候或闲聊（如“hi”）既没有指向某位成员，也没有要求大家一起回应，选主持人；5）只是确认、致谢或旁注选无需回应；6）诉求模糊或复杂时选主持人，由主持人安排：对象不明确，要讨论、互相回应、分工、排先后，或一条消息里提了多个要求。拿不准时选主持人。' }];
   const roster = [`${host.name}（主持人）`, ...members.map(member => member.name)].join('、');
   const state = scheduler_state(title, context, message, goal, '', { roster }, ROUTE_CONTEXT_MESSAGES);
   const answers = await decide(home, scheduler, state, questions, fetch_impl);
