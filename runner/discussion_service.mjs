@@ -278,7 +278,7 @@ class RoomWorker {
     }
     this.state.config_version = snapshot.version;
   }
-  /** A manual Claude or Codex expert that has registered and whose CLI reported its session is handed to the service, which resumes that session from the next turn on. */
+  /** A manual Claude, Codex or agy expert that has registered and whose CLI reported its session is handed to the service, which resumes that session from the next turn on. */
   async adopt_manual_members() {
     // A discussion runner lists members itself; a free room's registered manual members come from the room view.
     const members = this.config.mode === 'free' ? (await api(this.config, '')).free?.members || [] : this.runner.members || [];
