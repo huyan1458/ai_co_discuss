@@ -3950,9 +3950,10 @@ async function handle_api(database, request, parts, params, bucket, setup_key = 
   if (parts[3] === "members" && method === "POST" && [4, 5].includes(parts.length)) return handle_discussion_members(database, request, parts);
   if (parts[3] === "attachments") return handle_attachments(database, request, parts, params, bucket, free);
   if (["runtime", "events", "scheduler-decisions", "scheduler-routing"].includes(parts[3])) {
-    // A discussion execution's last timeline report may arrive after the room returned to free collaboration.
+    // A discussion execution's last timeline report, or the runner checking its last events, may arrive after the
+    // room returned to free collaboration.
     if (free && method === "POST" && !["scheduler-decisions", "scheduler-routing"].includes(parts[3])
-      && !(parts[3] === "events" && (await request.clone().json().catch(() => ({}))).action === "segments")) throw new HttpError(400, "自由房间不使用讨论运行控制");
+      && !(parts[3] === "events" && ["segments", "view"].includes((await request.clone().json().catch(() => ({}))).action))) throw new HttpError(400, "自由房间不使用讨论运行控制");
     return handle_runtime_api(database, request, parts, params);
   }
   let free_actor = null;

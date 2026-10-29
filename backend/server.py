@@ -2137,9 +2137,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if parts[3:4] == ["attachments"]:
             return self.handle_attachments(connection, parts, params, method)
         if parts[3:4] in (["runtime"], ["events"], ["scheduler-decisions"], ["scheduler-routing"]):
-            # A discussion execution's last timeline report may arrive after the room returned to free collaboration.
+            # A discussion execution's last timeline report, or the runner checking its last events, may arrive after
+            # the room returned to free collaboration.
             if (free and method == "POST" and parts[3:4] not in (["scheduler-decisions"], ["scheduler-routing"])
-                    and not (parts[3:4] == ["events"] and self.read_payload().get("action") == "segments")):
+                    and not (parts[3:4] == ["events"] and self.read_payload().get("action") in ("segments", "view"))):
                 raise ValueError("自由房间不使用讨论运行控制")
             return self.handle_runtime_api(connection, parts, params, method)
         free_actor = None
