@@ -542,7 +542,7 @@ export function claude_window(session_id, env = process.env) {
   return null;
 }
 
-/** Whether this execution goes into the member's own open window (its own session, `own` permissions) rather than a background process. */
+/** Whether this execution goes into a manual member's own open window (taken over with `own` permissions) rather than a background process. */
 export function claude_inbox_ready(profile, binding) {
   return profile.adapter === 'claude' && profile.project_access === 'own' && Boolean(profile.session_id)
     && binding.session_id === profile.session_id && Boolean(claude_window(profile.session_id)?.inbox);

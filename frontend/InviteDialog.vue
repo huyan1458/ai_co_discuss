@@ -20,7 +20,7 @@ async function copy_launch(name) {
   launch_copied.value = name;
   launch_copy_timer = setTimeout(() => { launch_copied.value = ""; }, COPY_FEEDBACK_MS);
 }
-// Everyone picked for one invitation, one card per platform: [{ name, mode, session }].
+// Everyone picked for one invitation, one card per platform: [{ name, mode }].
 const invite_picks = ref([]);
 let invite_pick_seq = 0;
 // Instance names of just-invited manual members; the dialog then shows their start step.
@@ -66,7 +66,7 @@ watch(() => room.value.id, () => { inviting.value = false; invite_picks.value = 
 /** Add a card for a platform, again for a second instance; one without local software starts on its API, as in the create form. */
 function add_invite(name) {
   bridge.default_launch_entry(name);
-  invite_picks.value = [...invite_picks.value, { id: ++invite_pick_seq, name, mode: "cli", session: "" }];
+  invite_picks.value = [...invite_picks.value, { id: ++invite_pick_seq, name, mode: "cli" }];
 }
 
 // The same add row as the create form: platforms first, presets on their own row.
@@ -87,7 +87,7 @@ function add_library_item(value) {
 function add_invite_preset(preset) {
   const name = bridge.unique_instance(preset.name, new Set([...taken_names.value, ...invite_picks.value.map((pick) => pick_instances.value.get(pick) || pick.name)]));
   bridge.apply_expert_preset(name, preset);
-  invite_picks.value = [...invite_picks.value, { id: ++invite_pick_seq, name, mode: "cli", session: "", preset: true }];
+  invite_picks.value = [...invite_picks.value, { id: ++invite_pick_seq, name, mode: "cli", preset: true }];
 }
 
 /** Invite one by one through the local service, which configures each expert from its card before the room admits it; stop at the first failure and keep the rest picked. */
@@ -101,8 +101,7 @@ async function invite() {
     const manual = pick.mode === "manual";
     const instance = instances.get(pick);
     await act("invite_member", { name: pick.name, access: manual ? "manual" : "runner",
-      project_access: profile.project_access || view.value.launch.workspace?.project_access || "read",
-      session_id: bridge.launch_can_bind_session(pick.name, view.value.launch) ? pick.session : "" });
+      project_access: profile.project_access || view.value.launch.workspace?.project_access || "read" });
     if (view.value.free_error) break;
     // A manual member only starts when its launch instruction reaches the user's own AI session, so the dialog stays for that step.
     if (manual) manual_names.push(instance);
@@ -134,7 +133,7 @@ async function invite() {
         <RosterAdd label="选择 AI（可多选）" :items="library_items" @add="add_library_item" />
         <div v-if="invite_picks.length" class="pb-invite-cards">
           <div v-for="pick in invite_picks" :key="pick.id" class="pb-invite-pick">
-            <ExpertCard :name="pick.name" :mode="pick.mode" :choices="['cli', 'manual']" :status="invite_status(pick.name)" :session="pick.session" @mode="pick.mode = $event" @session="pick.session = $event" @remove="invite_picks = invite_picks.filter((item) => item !== pick)" />
+            <ExpertCard :name="pick.name" :mode="pick.mode" :choices="['cli', 'manual']" :status="invite_status(pick.name)" @mode="pick.mode = $event" @remove="invite_picks = invite_picks.filter((item) => item !== pick)" />
             <p v-if="pick_instances.get(pick) !== pick.name" class="fine-print">同一 AI 已有实例，将以 {{ pick_instances.get(pick) }} 加入，使用独立会话。</p>
           </div>
         </div>

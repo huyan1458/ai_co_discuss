@@ -1209,7 +1209,7 @@ test('a manual Claude expert\'s reported session is registered as a hosted parti
   mkdirSync(cwd, { recursive: true });
   mkdirSync(join(claude_home, 'projects', 'encoded'), { recursive: true });
   writeFileSync(join(claude_home, 'projects', 'encoded', `${claude_id}.jsonl`), `${JSON.stringify({ type: 'user', cwd })}\n`);
-  save_launch_settings(f.home, { participants: { Claude: { adapter: 'claude', executable: process.execPath } } });
+  save_launch_settings(f.home, { participants: { Claude: { adapter: 'claude', executable: process.execPath, model: 'opus', effort: 'high' } } });
   const previous = process.env.CLAUDE_CONFIG_DIR;
   process.env.CLAUDE_CONFIG_DIR = claude_home;
   try {
@@ -1219,6 +1219,7 @@ test('a manual Claude expert\'s reported session is registered as a hosted parti
     const profile = load_config(launched.config_path).participants['Claude-2'];
     assert.deepEqual([profile.adapter, profile.session_id], ['claude', claude_id]);
     assert.equal(profile.project_access, 'own', 'a manually started member keeps its own session permissions');
+    assert.deepEqual([profile.model, profile.effort], [undefined, undefined], 'the machine default never overrides the model chosen in that session');
   } finally {
     if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previous;
   }
@@ -1311,8 +1312,6 @@ test('an extra instance inherits its platform settings but not its bound session
   const launched = await launch_discussion(f.home, input, f.options);
   const config = load_config(launched.config_path);
   assert.equal(config.participants.Claude.session_id, 'my-open-chat');
-  assert.equal(config.participants.Claude.project_access, 'own', 'a Claude member in a session the user already has keeps that window permissions');
-  assert.notEqual(config.participants['Claude-评审'].project_access, 'own');
   assert.equal(config.participants['Claude-评审'].session_id, undefined);
   assert.deepEqual([config.participants['Claude-评审'].adapter, config.participants['Claude-评审'].model, config.participants['Claude-评审'].effort], ['claude', 'opus', 'high']);
   assert.notEqual(config.members.Claude.token, config.members['Claude-评审'].token);
