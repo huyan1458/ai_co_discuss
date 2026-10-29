@@ -2911,6 +2911,97 @@ async function rewind_and_send({ message_id, revision, text }) {
   await send_message({ preventDefault() {} });
 }
 
+/**
+ * Cut a room backup down to a fork at one message: history up to it (without retracted or rewound messages), the records
+ * on that history, and a new room identity. Also returns, per member name, the executions the fork leaves out: any that
+ * touched a later or withdrawn message, or was still running, so each local session branches before them.
+ */
+function fork_snapshot(snapshot, message_id, room_id, now = new Date().toISOString()) {
+  const tables = snapshot.tables;
+  const withdrawn = new Set((tables.message_withdrawals || []).map(row => row.message_id));
+  const kept = new Set(tables.messages.filter(row => row.id <= message_id && !withdrawn.has(row.id)).map(row => row.id));
+  const on_kept = rows => (rows || []).filter(row => kept.has(row.message_id));
+  const names = new Map((tables.room_members || []).map(member => [member.id, member.name]));
+  const executions = {};
+  for (const request of tables.member_requests || []) {
+    const left_out = !kept.has(request.message_id) || (request.answer_id && !kept.has(request.answer_id)) || request.status === "delivering";
+    if (request.execution_id && left_out) (executions[names.get(request.member_id)] ||= []).push(request.execution_id);
+  }
+  const [room] = tables.rooms;
+  const covered = until => (until || 0) <= message_id;
+  return { executions, body: { format: snapshot.format, version: snapshot.version, tables: { ...tables,
+    rooms: [{ ...room, id: room_id, title: `${room.title}（分支）`, created_at: now,
+      ...(covered(room.state_until) ? {} : { state_text: "", state_until: 0 }) }],
+    room_directory: (tables.room_directory || []).map(row => ({ ...row, archived: 0 })),
+    room_creations: [], room_folder_assignments: [], topic_folders: [], message_withdrawals: [],
+    messages: tables.messages.filter(row => kept.has(row.id)),
+    message_details: on_kept(tables.message_details), message_summaries: on_kept(tables.message_summaries),
+    message_timings: on_kept(tables.message_timings), attachments: on_kept(tables.attachments),
+    member_suggestions: on_kept(tables.member_suggestions), member_recommendations: on_kept(tables.member_recommendations),
+    // A request answered after the fork point is unanswered in the fork.
+    member_requests: on_kept(tables.member_requests).map(row => row.answer_id && !kept.has(row.answer_id)
+      ? { ...row, status: "cancelled", answer_id: null } : row),
+    discussion_turns: (tables.discussion_turns || []).filter(row => !row.answer_id || kept.has(row.answer_id)),
+    scheduler_decisions: (tables.scheduler_decisions || []).filter(row => !row.after_message_id || kept.has(row.after_message_id)),
+    room_briefs: (tables.room_briefs || []).filter(row => covered(row.until)),
+    room_members: (tables.room_members || []).map(row => ({ ...row, read_until: Math.min(row.read_until || 0, message_id) })) } } };
+}
+
+/** Copy the fork's attachment files from the source room to their new IDs; returns how many could not be copied. */
+async function copy_fork_files(source_id, room_id, token, mapping) {
+  let missing = 0;
+  for (const [old_id, new_id] of Object.entries(mapping)) {
+    const original = await fetch(`/api/rooms/${encodeURIComponent(source_id)}/attachments/${encodeURIComponent(old_id)}/content`, { cache: "no-store" });
+    const response = original.ok && await fetch(`/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(new_id)}/import`,
+      { method: "POST", headers: { "X-Discussion-Token": token, ...admin_headers() }, body: await original.arrayBuffer() });
+    if (!response?.ok) missing++;
+  }
+  return missing;
+}
+
+/**
+ * Branch the room into a new one at a message, as Codex branches a chat: the new room keeps the history up to it, each
+ * local member continues its own session from there, and the members come back with new credentials. The source room
+ * and its sessions do not change; files are shared, since both rooms work in the same project directories.
+ */
+async function fork_room(message_id) {
+  const source = state.room;
+  const source_token = localStorage.getItem(`discuss-access:${source.id}`);
+  if (!source_token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
+  const snapshot = await request_json(`/api/rooms/${encodeURIComponent(source.id)}/backup`);
+  const room_id = crypto.randomUUID().replaceAll("-", "").slice(0, 12);
+  const { body, executions } = fork_snapshot(snapshot, message_id, room_id);
+  const token = crypto.randomUUID() + crypto.randomUUID();
+  const result = await request_json("/api/rooms/import", body, token);
+  save_room_credentials({ id: result.id }, token);
+  const problems = [];
+  const missing = await copy_fork_files(source.id, result.id, token, result.attachments);
+  if (missing) problems.push(`${missing} 个附件未能复制`);
+  if (source.folder_id) await request_json(`/api/rooms/${result.id}/folder`, { actor: "用户", folder_id: source.folder_id })
+    .catch(error => problems.push(`未放入原文件夹：${error.message}`));
+  const local = state.launch.available
+    ? await local_launch_request("room-fork", { room_id: result.id, token, source_room_id: source.id, source_token, executions })
+      .catch(error => { problems.push(`成员会话未分叉：${error.message}`); return null; })
+    : (problems.push("未连接本机服务，本机成员会话未分叉"), null);
+  // The directory learns of the new room before it can be opened.
+  await refresh_room();
+  await select_room(result.id);
+  const registered = new Set((local?.members || []).filter(member => member.status !== "failed").map(member => member.name));
+  for (const member of (state.room.free?.members || []).filter(item => item.status === "away")) {
+    if (member.access === "runner" && !registered.has(member.name)) continue;
+    await change_member({ member_id: member.id, name: member.name, action: "rejoin" });
+    if (state.free_error) problems.push(`${member.name} 未能请回：${state.free_error}`);
+  }
+  const fresh = (local?.members || []).filter(member => member.status === "fresh").map(member => member.name);
+  const failed = (local?.members || []).filter(member => member.status === "failed").map(member => `${member.name}（${member.error}）`);
+  if (failed.length) problems.push(`未分叉、保持离开：${failed.join("、")}`);
+  const done = `已从 #${message_id} 分支出新房间，原房间不变`;
+  // The rail shows an error in place of a notice, so a partial fork says both in one line.
+  state.free_error = problems.length ? `${done}，但${problems.join("；")}` : "";
+  state.free_notice = `${done}${fresh.length ? `；${fresh.join("、")} 将以新会话开始` : ""}。`;
+  publish_view();
+}
+
 /** Adopt smart scheduling's recommendation: interrupt the host now, or ask the member once the host is done. */
 async function adopt_recommendation({ message_id, mode }) {
   const room_id = state.room.id;
@@ -3725,7 +3816,7 @@ async function execute_view_action(name, value) {
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
     choose_runtime, export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, retry_execution, conclude_discussion, start_room_discussion, end_room_discussion, reopen_discussion,
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
-    load_room_configuration, save_room_configuration, interrupt_member, retract_message, rewind_and_send, change_member, reorder_speakers, invite_member, set_proxy, copy_online_notice,
+    load_room_configuration, save_room_configuration, interrupt_member, retract_message, rewind_and_send, fork_room, change_member, reorder_speakers, invite_member, set_proxy, copy_online_notice,
     prepare_brainstorm, return_conclusion, adopt_recommendation, rate_decision,
     busy: () => { throw new Error("上一个操作仍在处理中，请稍候；长时间无响应请刷新页面"); },
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };

@@ -24,6 +24,7 @@ How collaboration works inside a room. For installation, see [Setup](runner.md).
 - **Everyone** — `@全体成员` asks all members to answer; `@全体依次` asks them one after another in speaking order.
 - **Stop and retry** — stop a member's current run from its menu; failed runs can be resent with one click.
 - **Retract and edit** — a message no member has started can be retracted from its “…” menu, and its text returns to the input. To change a message that was already handled, click “Edit” and resend: it and everything after it fold into a “rewound” line that AI members no longer read, and the sessions of Claude Code, Codex and agy members this machine wakes go back to before it. Manual, web and app members keep their own windows, so their sessions cannot go back. Files members changed are not restored. Neither works while a discussion is open.
+- **Branch** — “Branch from here” in an AI message's “…” menu creates a new room with the history up to that message; the Claude Code, Codex and agy members this machine wakes fork their own sessions and continue from there, while the original room and sessions stay as they were. Other members start new sessions. Both rooms share the same project directory, so files are not branched. Needs the local service.
 
 Mentions between ordinary members are references only and do not wake anyone. Members sharing a project directory are not locked; you decide who edits which files, and the member panel warns when two members changed the same file at the same time.
 

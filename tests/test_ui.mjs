@@ -201,6 +201,33 @@ test('free-room answers replace their working card in place instead of jumping a
     'a failure keeps its slot under the request; one whose request is not shown is dropped');
 });
 
+test('a fork keeps history up to its message and lists the executions each member branches before', () => {
+  const context = vm.createContext({});
+  vm.runInContext(source.match(/function fork_snapshot\([\s\S]*?\n\}/)[0], context);
+  const snapshot = { format: 'ai-codiscuss-room-backup', version: 1, tables: {
+    rooms: [{ id: 'old', title: '原房间', goal: 'g', created_at: 'then', state_text: '覆盖到 #6', state_until: 6 }],
+    room_directory: [{ room_id: 'old', archived: 1 }],
+    room_members: [{ id: 1, name: 'Claude', read_until: 6 }, { id: 2, name: 'Codex', read_until: 2 }],
+    messages: [1, 2, 3, 4, 5, 6].map(id => ({ id, author: id % 2 ? '用户' : 'Claude', text: `#${id}` })),
+    message_withdrawals: [{ message_id: 3, kind: 'retracted' }],
+    message_details: [{ message_id: 2 }, { message_id: 6 }],
+    room_briefs: [{ until: 2 }],
+    member_requests: [
+      { id: 1, member_id: 1, message_id: 1, execution_id: 10, answer_id: 2, status: 'completed' },
+      { id: 2, member_id: 1, message_id: 4, execution_id: 11, answer_id: 6, status: 'completed' },
+      { id: 3, member_id: 2, message_id: 4, execution_id: 12, answer_id: null, status: 'delivering' },
+      { id: 4, member_id: 2, message_id: 5, execution_id: 13, answer_id: null, status: 'failed' }] } };
+  const { body, executions } = context.fork_snapshot(snapshot, 4, 'new', 'now');
+  const tables = body.tables;
+  assert.deepEqual([...tables.messages].map(row => row.id), [1, 2, 4]);
+  assert.deepEqual([tables.rooms[0].id, tables.rooms[0].title, tables.rooms[0].state_text, tables.room_directory[0].archived], ['new', '原房间（分支）', '', 0]);
+  assert.deepEqual([...tables.member_requests].map(row => [row.id, row.status, row.answer_id]), [[1, 'completed', 2], [2, 'cancelled', null], [3, 'delivering', null]]);
+  assert.deepEqual([...tables.message_details].map(row => row.message_id), [2]);
+  assert.equal(tables.room_briefs.length, 1);
+  assert.deepEqual([...tables.room_members].map(row => row.read_until), [4, 2]);
+  assert.deepEqual(JSON.parse(JSON.stringify(executions)), { Claude: [11], Codex: [12, 13] });
+});
+
 test('rewound messages fold into their first line until expanded, and work on them leaves the transcript', () => {
   const view = ref({ messages: [
     { id: 1, author: '用户', created_at: '2026-10-28T10:00:00Z' },

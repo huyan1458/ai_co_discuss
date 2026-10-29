@@ -14,6 +14,7 @@ import { session_settings, software_defaults, software_effort, software_models }
 import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
 import { BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT } from './expert_prompts.mjs';
+import { branch_session } from './session_cut.mjs';
 import { acquire_lock, api, CODEX_ADAPTERS, DiscussionStore, service_drafts, task_files, validate_config } from './discussion_runner.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 
@@ -56,6 +57,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch room-member-adapter --file FILE
       codiscuss launch room-profiles --file FILE
       codiscuss launch room-restore --file FILE
+      codiscuss launch room-fork --file FILE
       codiscuss launch pick-directory
       codiscuss launch projects [--file FILE]
       codiscuss launch presets [--file FILE]
@@ -80,6 +82,7 @@ room-member-access 修改一位本机唤醒成员的项目文件权限（project
 room-member-adapter 把自由房间里空闲的 Codex 成员在 App（codex）与 CLI（codex_cli）间切换，保留原会话；须提供 site、room_id、token、name、adapter。
 room-profiles 导出房间的本机成员软件配置与实际会话 ID（不含凭据），供备份附带；须提供 site、room_id、token。
 room-restore 把导入房间的本机成员配置登记到本机并核对原会话存在，Claude Code 成员保持手动；须提供 site、room_id、token、local_members。
+room-fork 把从原房间分支出的新房间登记到本机，各本机成员从原会话分叉、不含分支点之后的执行，原会话不变；须提供 site、room_id、token、source_room_id、source_token、executions（{成员名: [排除的执行编号]}）。
 JSON 指定 site、entry（conversation/web）、room（建房内容，含 submission_id）
 或 room_id（已有房间）、participants（本次软件覆盖配置）。
 conversation 还须 current_session_id，当前会话接手首个主持任务。
@@ -777,6 +780,15 @@ export async function restore_room(home, raw) {
     } catch (error) { members.push({ name, status: 'failed', error: error.message }); }
   }
   if (!Object.keys(participants).length && !local.cwd && !local.scheduler) return { room_id: input.room_id, registered: false, members };
+  register_copied_room(home, input, local, participants, keep_manual);
+  return { room_id: input.room_id, registered: true, members };
+}
+
+/**
+ * Register an imported or forked free room's local members under a fresh launch directory; `seed` writes the new
+ * runtime's bindings before the service can see the room. Returns the runtime directory.
+ */
+function register_copied_room(home, input, local, participants, keep_manual, seed = () => {}) {
   const key = createHash('sha256').update(`${input.site}/${input.room_id}`).digest('hex');
   // A leftover directory of a deleted room with the same ID would carry its old bindings, so a restore never reuses one.
   const base = join(home, 'launches', key), directory = existsSync(base) ? `${base}-${Date.now()}` : base;
@@ -788,7 +800,64 @@ export async function restore_room(home, raw) {
   validate_config(config, directory);
   mkdirSync(directory, { recursive: true });
   atomic_json(join(directory, 'config.json'), config);
+  seed(config.data_directory);
   register_room(home, join(directory, 'config.json'));
+  return config.data_directory;
+}
+
+// Software whose session a fork branches; other local members start a new conversation in the forked room.
+const BRANCHED_ADAPTERS = ['claude', 'codex_cli', 'antigravity_cli'];
+
+/**
+ * Register a room forked from another on this machine: each local member continues from its own session as it stood
+ * at the fork point, without the executions the fork leaves out. The source room's sessions are never changed.
+ * Requires both rooms' owner credentials; members the new room keeps manual or online are not registered here.
+ * Returns `{room_id, registered, members: [{name, status: forked|fresh|failed, error?}]}`.
+ */
+export async function fork_room(home, raw) {
+  const input = launch_input({ ...raw, entry: 'web' });
+  if (!input.room_id || typeof input.token !== 'string' || !input.token.trim() || typeof raw.source_room_id !== 'string' || typeof raw.source_token !== 'string') {
+    throw new Error('分支须提供新房间与原房间的编号和控制凭据');
+  }
+  const local = (await room_profiles(home, { site: input.site, room_id: raw.source_room_id, token: raw.source_token })).local_members;
+  if (!local) return { room_id: input.room_id, registered: false, members: [] };
+  if (local.mode !== 'free') throw new Error('只有协作房间可以分支');
+  await site_request(input.site, `/api/rooms/${input.room_id}/inbox`, input.token);
+  const room = await site_request(input.site, `/api/rooms/${input.room_id}`, input.token);
+  if (registered_room_path(home, input.site, input.room_id)) throw new Error('分支房间已在本机登记');
+  const runners = new Set(room.free.members.filter(member => member.access === 'runner' && member.status !== 'removed').map(member => member.name));
+  const left_out = raw.executions && typeof raw.executions === 'object' ? raw.executions : {};
+  const participants = {}, members = [], bindings = {}, forks = {};
+  for (const [name, exported] of Object.entries(local.participants)) {
+    if (!runners.has(name)) continue;
+    try {
+      const profile = participant_profile(name, {}, { cwd: local.cwd, adopt: true, participants: { [name]: exported } }, false);
+      if (!profile.session_id || !BRANCHED_ADAPTERS.includes(profile.adapter)) {
+        delete profile.session_id;
+        participants[name] = profile;
+        members.push({ name, status: 'fresh' });
+        continue;
+      }
+      // Claude resumes a session only in its original directory, so the forked member works there too.
+      const located = profile.adapter === 'claude' ? borrowed_session(name, profile, local.cwd) : profile;
+      const branch = await branch_session(located, profile.session_id, (left_out[name] || []).filter(Number.isInteger), { always: true });
+      const { session_id, ...forked } = located;
+      participants[name] = forked;
+      bindings[name] = branch.session_id;
+      if (branch.fork) forks[name] = branch.fork;
+      members.push({ name, status: branch.session_id ? 'forked' : 'fresh' });
+    } catch (error) { members.push({ name, status: 'failed', error: error.message }); }
+  }
+  if (!Object.keys(participants).length && !local.cwd && !local.scheduler) return { room_id: input.room_id, registered: false, members };
+  register_copied_room(home, input, local, participants, [], data_directory => {
+    const store = new DiscussionStore(data_directory);
+    try {
+      for (const [name, session_id] of Object.entries(bindings)) store.bind(name, session_id);
+      // A Claude fork happens on the member's next turn; the runner keeps it pending until that session exists.
+      for (const [name, fork] of Object.entries(forks)) store.db.prepare('INSERT INTO metadata VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+        .run(`session-fork:${name}`, JSON.stringify(fork));
+    } finally { store.close(); }
+  });
   return { room_id: input.room_id, registered: true, members };
 }
 
@@ -1116,6 +1185,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'room-member-adapter' && input) result = await room_member_adapter(home, input);
   else if (positionals[0] === 'room-profiles' && input) result = await room_profiles(home, input);
   else if (positionals[0] === 'room-restore' && input) result = await restore_room(home, input);
+  else if (positionals[0] === 'room-fork' && input) result = await fork_room(home, input);
   else if (positionals[0] === 'pick-directory') result = await pick_directory();
   else if (positionals[0] === 'machine-link' && input) result = (await import('./remote_launch.mjs')).machine_link(home, input.site);
   else if (positionals[0] === 'admin-account' && input) result = (await import('./admin_account.mjs')).save_admin_account(home, input);

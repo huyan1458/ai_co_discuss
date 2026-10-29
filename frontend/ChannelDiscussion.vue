@@ -1008,12 +1008,15 @@ function message_actions(message) {
     { label: "复制原文链接", icon: "i-lucide-link", onSelect: () => copy_message(message) },
     { label: "查看原文", icon: "i-lucide-expand", onSelect: () => emit("detail", message.id) },
     ...(can_retract(message) ? [{ label: "撤回", icon: "i-lucide-undo-2", onSelect: () => act("retract_message", message.id) }] : []),
+    ...(can_branch(message) && message.author !== "用户" ? [{ label: "从这里分支", icon: "i-lucide-git-branch", onSelect: () => act("fork_room", message.id) }] : []),
   ]];
 }
 
-/** The owner may take back their own message in a free room, unless a discussion is open or began at or after it (its host reads messages itself). */
-const can_take_back = (message) => free.value && view.value.access?.can_manage && message.author === "用户" && !message.withdrawn && !room.value.archived
+/** Retract, edit and branch work only on visible free-room history no discussion reaches: a discussion's host reads messages itself. */
+const can_branch = (message) => free.value && view.value.access?.can_manage && !message.withdrawn
   && !(room.value.discussions || []).some((item) => ["active", "paused"].includes(item.status) || item.started_message_id >= message.id);
+/** The owner may take back their own message unless the room is archived. */
+const can_take_back = (message) => can_branch(message) && message.author === "用户" && !room.value.archived;
 /** Retracting needs every request on the message still waiting; once a member started one, only editing takes it back. */
 const can_retract = (message) => can_take_back(message)
   && !(room.value.free?.requests || []).some((request) => request.message_id === message.id && ["delivering", "completed", "failed"].includes(request.status));
