@@ -225,7 +225,9 @@ const prompt_fixed = computed(() => {
   const read_rule = !windows ? "" : adapter === "codex_cli" ? READ_RULE : `（本机装有 rg 时附加）${READ_RULE}`;
   const { prompt, instructions } = free_task_text({ name: props.name, role: props.host ? "host" : "member", discussion: false,
     profile: { ...profile.value, cwd: view.value.launch.workspace?.cwd || profile.value.cwd }, cli, room: "{房间}",
-    messages: "#{消息编号}", read_after: "{已读编号}", execution_id: "{执行编号}", task_path: "{任务文件}", read_rule });
+    messages: "#{消息编号}", read_after: "{已读编号}", execution_id: "{执行编号}", task_path: "{任务文件}", draft_directory: "{草稿目录}",
+    // Only the CLIs get the credential bound to their process; the others name the file on each command.
+    access_file: ["claude", "codex_cli", "antigravity_cli"].includes(adapter) ? "" : "{凭据文件}", read_rule });
   return { summary: "程序固定附加的说明（只读）", sections: [
     // The heading goes out only when there is an expert prompt to follow it, so it is described, not shown as sent text.
     { label: `每次唤醒随消息发送；填了专属提示词时，后面另起一段“${EXPERT_PROMPT_HEADING}”再接它`, text: prompt },

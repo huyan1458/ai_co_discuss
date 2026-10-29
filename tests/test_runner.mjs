@@ -2275,30 +2275,35 @@ test("the owner's member descriptions reach the scheduler's state and each membe
   assert.match(manual.description, /手动接入.*；用户描述：文档整理得好）$/);
 });
 
-test('an expert prompt replaces its software preset, and an empty one turns the preset off', () => {
-  assert.equal(expert_prompt({ adapter: 'api' }), EXPERT_PROMPT_PRESETS.api.trim());
+test("an expert prompt is only the member's own text, and the API file rule is fixed in its system prompt", () => {
+  assert.deepEqual(EXPERT_PROMPT_PRESETS, {}, 'must-know software rules are fixed by the runner, not replaceable presets');
+  assert.equal(expert_prompt({ adapter: 'api' }), '');
   assert.equal(expert_prompt({ adapter: 'api', system_prompt: '  只读不写  ' }), '只读不写');
-  assert.equal(expert_prompt({ adapter: 'api', system_prompt: '' }), '');
-  assert.equal(expert_prompt({ adapter: 'claude' }), '', 'software without a need has no preset');
-  assert.equal(expert_prompt({ adapter: 'antigravity_cli' }), '', 'agy needs only fixed rules, which come from the runner');
-  assert.match(expert_prompt({ adapter: 'api' }), /读不到本地文件.*写明缺什么/);
+  // An API expert's own prompt cannot drop the rule about local files.
+  const api = system_prompt({ participant: 'DeepSeek', role: 'member', mode: 'free', expert_prompt: '只读不写' });
+  assert.match(api, /本地文件的内容以其他成员贴出的为准，不凭文件名猜测；缺信息时在回答里写明缺什么/);
 });
 
 test('the agy command limit comes from the runner, so clearing the expert prompt cannot drop it', () => {
   assert.match(agy_command_rule('antigravity_cli', 'codiscuss'), /run_command 只能运行 codiscuss/);
   assert.equal(agy_command_rule('claude', 'codiscuss'), '');
   assert.equal(agy_command_rule('antigravity_cli', 'codiscuss', { cwd: 'D:/project', project_access: 'write' }), '', 'a writable agy runs any command');
-  // Writing progress at turning points is in the free-room skill for everyone, so agy needs no copy of it.
-  assert.equal(EXPERT_PROMPT_PRESETS.antigravity_cli, undefined);
-  assert.match(readFileSync(new URL('../.agents/skills/discuss-participant/references/free.md', import.meta.url), 'utf8'), /关键转折处.*写出进展/);
+  // agy shows no thinking, so writing progress is a fixed rule for it in every task, beside the skill's general note.
+  const agy = { cli: 'codiscuss', messages: '#3', task_path: 'free-7.task.json', name: 'Gemini', profile: { adapter: 'antigravity_cli', project_access: 'write', cwd: 'D:/project' } };
+  assert.match(free_task_text(agy).instructions, /关键转折处用一句话写出进展再继续/);
+  assert.doesNotMatch(free_task_text({ ...agy, profile: { adapter: 'claude', project_access: 'read' } }).instructions, /写出进展/);
 });
 
 test('the fixed free-room text loads in steps and leaves values to the task fields and rules to the skills', () => {
-  const base = { name: 'Codex', profile: { adapter: 'codex_cli', project_access: 'read' }, cli: 'codiscuss', messages: '#3', task_path: 'free-7.task.json' };
+  const base = { name: 'Codex', profile: { adapter: 'codex_cli', project_access: 'read' }, cli: 'codiscuss', room: 'r1', messages: '#3',
+    read_after: 2, execution_id: 7, task_path: 'free-7.task.json', draft_directory: 'D:/drafts' };
   const text = free_task_text({ ...base, role: 'host' });
-  // The wake-up names who was asked and where to start; the task file's fields and skills carry the rest.
-  assert.match(text.prompt, /点名了你（Codex），对应消息 #3。先读任务文件 free-7\.task\.json，按其中列出的技能处理/);
-  assert.doesNotMatch(text.prompt + text.instructions, /message (list|post)|--execution|--handoff|不建定时任务|提交被拒绝|DISCUSS_ACCESS_FILE/);
+  // The wake-up names who was asked; a simple message is answered at once, anything else starts from the task file.
+  assert.match(text.prompt, /点名了你（Codex），对应消息 #3。只是问候、确认、致谢这类.*不必读技能：用 codiscuss message list r1 --after 2 看原文/);
+  assert.match(text.prompt, /写进 D:\/drafts 下的新文件并执行 codiscuss message post r1 --as Codex --kind chat --execution 7 --body-file 该文件 --submission-id 新UUID。其他情况先读任务文件 free-7\.task\.json，按其中列出的技能处理/);
+  assert.doesNotMatch(text.prompt + text.instructions, /--handoff|不建定时任务|提交被拒绝|DISCUSS_ACCESS_FILE|--access-file/);
+  // A credential not bound to the process is named on both quick commands.
+  assert.equal(free_task_text({ ...base, access_file: 'a.json' }).prompt.match(/--access-file a\.json/g).length, 2);
   // What is left are the limits no skill can know: project access, the command scope and where drafts go.
   assert.equal(text.instructions, '未指定项目目录。命令只用 subcommands 列出的 codiscuss 子命令。草稿写在 draft_directory。');
   const writable = free_task_text({ ...base, profile: { adapter: 'codex_cli', project_access: 'write', cwd: 'D:/project' } });

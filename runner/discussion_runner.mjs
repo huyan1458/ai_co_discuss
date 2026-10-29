@@ -9,7 +9,7 @@ import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { agy_command_rule, atomic_json, claude_inbox_ready, deliver_task, remove_agy_projects, runs_commands, SegmentLog, setup_sidecar, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
 import { read_api_key } from './discussion_api.mjs';
-import { access_levels, PROJECT_ACCESS, project_rule, READ_RULE, with_expert_prompt } from './expert_prompts.mjs';
+import { access_levels, agy_progress_rule, PROJECT_ACCESS, project_rule, READ_RULE, with_expert_prompt } from './expert_prompts.mjs';
 import { decide_interjection, decide_next_speaker, decide_round, validate_scheduler } from './scheduler.mjs';
 
 const POLL_MS = 2000;
@@ -239,7 +239,7 @@ export function task_files(config, event, token, binding, { suggestions = [], en
     draft_directory, ...(suggestions.length ? { scheduler_suggestions: suggestions } : {}),
     role: event.role, turn_id: event.turn_id, skills, cli, subcommands: TASK_SUBCOMMANDS,
     ...(bound_access ? { access_env: 'DISCUSS_ACCESS_FILE' } : { access_file: access_path }),
-    instructions: `${agy_command_rule(adapter.adapter, cli, adapter)}读取指定技能；网站命令只用 ${cli} 的 subcommands 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口；${auto_enter ? '接入程序已进入本次执行，不要再执行 execution enter。' : `使用 ${cli} execution enter 房间 执行编号 --access-file 凭据路径 进入。进入成功后才处理本次安排；`}凭据文件由 CLI 内部读取，不要打印或读取其 token。${access_rule}答案草稿只保存到 draft_directory，不修改任务、凭据、日志或调度数据库；${files_rule}只处理本次工作，不建定时任务。主持创建下一安排或收束即结束，专家提交原文后结束。无效或已进入的任务不要重复执行。${suggestion_rule}` });
+    instructions: `${agy_command_rule(adapter.adapter, cli, adapter)}${agy_progress_rule(adapter.adapter)}读取指定技能；网站命令只用 ${cli} 的 subcommands 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口；${auto_enter ? '接入程序已进入本次执行，不要再执行 execution enter。' : `使用 ${cli} execution enter 房间 执行编号 --access-file 凭据路径 进入。进入成功后才处理本次安排；`}凭据文件由 CLI 内部读取，不要打印或读取其 token。${access_rule}答案草稿只保存到 draft_directory，不修改任务、凭据、日志或调度数据库；${files_rule}只处理本次工作，不建定时任务。主持创建下一安排或收束即结束，专家提交原文后结束。无效或已进入的任务不要重复执行。${suggestion_rule}` });
   const scope = `${runs_commands(adapter) ? '网站读写只用' : '本次只放行'}任务内 subcommands 列出的 ${cli} 子命令，命令以 ${cli} 开头，不用 python discuss.py、cd、管道或其他入口。任务内 cwd 是讨论项目目录；${files_rule}项目读写仍受软件实际权限和议题授权约束。不读取凭据内容。${read_rule(adapter.adapter)}`;
   const plan_rule = event.role === 'host' ? '安排专家回应时先写发言计划，先用 turn roster 取得最新专家状态，再用 turn create --plan-file 加 --roster 一次排满 waiting 中的每位专家，不要每次只排一位。' : '';
   const intro = `用户已启动此房间的全自动讨论。请以 ${event.participant} 的${event.role === 'host' ? '主持' : '专家'}职责处理本次工作。${plan_rule}`;

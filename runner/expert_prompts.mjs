@@ -6,10 +6,8 @@
 
 export const MAX_EXPERT_PROMPT = 4000;
 
-export const EXPERT_PROMPT_PRESETS = {
-  // An API expert sees only the room, so what it knows of local files comes from other members and it must ask for the rest.
-  api: '你读不到本地文件，相关内容以其他成员贴出的为准，不凭文件名猜测。缺信息时在回答里写明缺什么。',
-};
+// A software's must-know rules are fixed by the runner (agy below, API in its system prompt), so no preset is needed now.
+export const EXPERT_PROMPT_PRESETS = {};
 
 /**
  * Expert presets: a named instance with its description, prompt, project access and optionally model and effort,
@@ -99,20 +97,29 @@ export function agy_command_rule(adapter, cli, config = {}) {
   return adapter === 'antigravity_cli' && !runs_commands(config) ? `无人值守下 run_command 只能运行 ${cli} 的 subcommands 子命令，其他命令会被自动拒绝并使会话直接结束；列目录、搜索或读取文件用 list_dir、find_by_name、grep_search、view_file。` : '';
 }
 
+/** agy streams no thinking text, so without a word at each turning point the page cannot show how far it got; fixed, so no member prompt drops it. */
+export function agy_progress_rule(adapter) {
+  return adapter === 'antigravity_cli' ? '多步任务中，在关键转折处用一句话写出进展再继续：agy 不输出思考过程，网页只能靠这些话显示你做到哪一步。' : '';
+}
+
 /** Windows PowerShell mis-decodes UTF-8 files; the runner adds this where the member's commands can run rg. */
 export const READ_RULE = '读含中文的文件用 rg --encoding utf-8 . 文件路径，不用 Get-Content（Windows PowerShell 会读成乱码）。';
 
 /**
  * A free-room task's fixed text: `instructions` saved in the task file and `prompt` sent with each wake-up, followed by
  * the member's own prompt. `discussion` is a direct question asked while a discussion runs in the room.
- * Loaded in steps: the prompt only says who was named and where the task file is, plus how to read files at all; the
- * task file's fields carry this execution's values (messages, read point, execution, role, credentials), the skills
- * it lists say how to use them, and `instructions` holds only the limits no skill can know.
+ * Loaded in steps: the prompt says who was named, how to answer a simple message without loading the skills, and
+ * otherwise where the task file is, plus how to read files at all; the task file's fields carry this execution's values
+ * (messages, read point, execution, role, credentials), the skills it lists say how to use them, and `instructions`
+ * holds only the limits no skill can know. `access_file` is set where the credential is not bound to the process.
  */
-export function free_task_text({ name, discussion, profile, cli, messages, task_path, read_rule = '' }) {
+export function free_task_text({ name, discussion, profile, cli, room, messages, read_after, execution_id, task_path, draft_directory, access_file = '', read_rule = '' }) {
   const scope = discussion ? `讨论进行中，用户直接向你提问（${messages}）：这不是你的发言安排，不领取发言权、不安排他人、不改变讨论进度，只回答这个提问。` : '';
   const commands = runs_commands(profile) ? '' : `命令只用 subcommands 列出的 ${cli} 子命令。`;
-  const instructions = `${agy_command_rule(profile.adapter, cli, profile)}${scope}${project_rule(profile, '按请求')}${commands}草稿写在 draft_directory。`;
-  const prompt = `用户在${discussion ? '讨论' : '自由协作'}房间点名了你（${name}），对应消息 ${messages}。先读任务文件 ${task_path}，按其中列出的技能处理并提交一次回答。${read_rule}`;
+  const instructions = `${agy_command_rule(profile.adapter, cli, profile)}${agy_progress_rule(profile.adapter)}${scope}${project_rule(profile, '按请求')}${commands}草稿写在 draft_directory。`;
+  // A greeting deserves a quick answer, and reading the skills first costs it one or two model rounds.
+  const access = access_file ? ` --access-file ${access_file}` : '';
+  const quick = `只是问候、确认、致谢这类不用查资料也不改文件的简单消息时，不必读技能：用 ${cli} message list ${room} --after ${read_after}${access} 看原文，再用一条命令把回答写进 ${draft_directory} 下的新文件并执行 ${cli} message post ${room} --as ${name} --kind chat --execution ${execution_id} --body-file 该文件 --submission-id 新UUID${access}。`;
+  const prompt = `用户在${discussion ? '讨论' : '自由协作'}房间点名了你（${name}），对应消息 ${messages}。${quick}其他情况先读任务文件 ${task_path}，按其中列出的技能处理并提交一次回答。${read_rule}`;
   return { instructions, prompt };
 }

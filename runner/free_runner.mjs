@@ -77,7 +77,8 @@ export function free_task_files(config, member, execution, binding) {
   const bound_access = !inbox && ['claude', 'codex_cli', 'antigravity_cli'].includes(profile.adapter);
   const messages = execution.requests.map(item => `#${item.message_id}`).join('、');
   const { instructions, prompt } = free_task_text({ name: member.name, role: member.role, discussion: config.mode !== 'free', profile, cli,
-    room: config.room, messages, read_after: execution.read_until, execution_id: execution.id, task_path, read_rule: read_rule(profile.adapter), inbox });
+    room: config.room, messages, read_after: execution.read_until, execution_id: execution.id, task_path, draft_directory,
+    access_file: bound_access ? '' : access_path, read_rule: read_rule(profile.adapter), inbox });
   atomic_json(task_path, { site: config.site, room: config.room, mode: 'free', member: member.name,
     execution_id: execution.id, request_messages: execution.requests.map(item => item.message_id),
     request_purposes: execution.requests.map(item => item.purpose || 'ask'), role: member.role || 'member',
