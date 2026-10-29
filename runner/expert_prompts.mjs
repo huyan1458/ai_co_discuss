@@ -120,7 +120,7 @@ export function free_task_text({ name, discussion, profile, cli, room, messages,
   // A greeting deserves a quick answer, and reading the skills first costs it one or two model rounds.
   const access = access_file ? ` --access-file ${access_file}` : '';
   // A one-line answer goes inline: a draft file guards long or quoted text and retries, which a greeting does not need.
-  const quick = `简单消息（问候、确认、致谢，不用查资料也不改文件）不必读技能：用 ${cli} message list ${room} --after ${read_after}${access} 看原文，再用 ${cli} message post ${room} --as ${name} --kind chat --execution ${execution_id} --body "回答" --submission-id 新UUID${access} 提交。`;
-  const prompt = `用户在${discussion ? '讨论' : '自由协作'}房间点名了你（${name}），对应消息 ${messages}。${quick}其他情况先读任务文件 ${task_path}，按其中列出的技能处理并提交一次回答。${read_rule}`;
+  const quick = `问候、致谢等简单消息可跳过技能：${cli} message list ${room} --after ${read_after}${access} 看原文，${cli} message post ${room} --as ${name} --kind chat --execution ${execution_id} --body "回答" --submission-id 新UUID${access} 回复。`;
+  const prompt = `用户在${discussion ? '讨论' : '自由协作'}房间点名了你（${name}），对应消息 ${messages}。${quick}其他请求先读任务文件 ${task_path}，按其中列出的技能处理并提交一次回答。${read_rule}`;
   return { instructions, prompt };
 }
