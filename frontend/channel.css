@@ -376,8 +376,7 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 .channel-person-label small { display: block; color: #828c9b; font-size: 10px; line-height: 16px; }
 
 /* Center the transcript and composer in one shared, user-selected reading column. */
-.channel-conversation { position: relative; min-height: 0; flex: 1; display: grid; grid-template-columns: 0 minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
-.channel-has-messages { grid-template-columns: 84px minmax(0, 1fr); }
+.channel-conversation { position: relative; min-height: 0; flex: 1; display: grid; grid-template-columns: 84px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
 .channel-filter-summary { grid-column: 1 / -1; grid-row: 1; display: flex; align-items: center; justify-content: space-between; padding: 7px 24px; background: #5865f214; border-bottom: 1px solid #5865f224; font-size: 12px; color: #bfc7f4; }
 /* The map spans the composer row too, so a growing draft never shifts its center. */
 .channel-message-map { grid-column: 1; grid-row: 2 / 4; align-self: center; height: 320px; max-height: calc(100% - 32px); min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; display: flex; flex-direction: column; align-items: center; justify-content: safe center; padding: 12px 0; mask-image: linear-gradient(transparent, #000 12px, #000 calc(100% - 12px), transparent); }
@@ -766,7 +765,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-brief-footer { flex-direction: column; gap: 2px; }
   .channel-brief-footer small { margin-left: 0; }
   .channel-brief-text { font-size: 13px; }
-  .channel-has-messages { grid-template-columns: 0 minmax(0, 1fr); }
+  .channel-conversation { grid-template-columns: 0 minmax(0, 1fr); }
   .channel-message-map { display: none; }
   .channel-composer-dock { grid-column: 1 / -1; }
   .channel-filter-summary { padding: 6px 16px; font-size: 11px; }

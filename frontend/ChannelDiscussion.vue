@@ -1017,7 +1017,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
 </script>
 
 <template>
-  <section class="channel-conversation" :class="{ 'channel-has-messages': view.messages.length }" role="tabpanel" aria-label="消息">
+  <section class="channel-conversation" role="tabpanel" aria-label="消息">
     <div v-if="view.query || view.mention_only" class="channel-filter-summary"><span>{{ view.query ? `“${view.query}”` : `@${bridge.display_name(author)}` }} · {{ view.total }} 条结果</span><UButton label="清除筛选" size="xs" variant="link" color="neutral" @click="search = ''; act('filter', { query: '', mention: false })" /></div>
     <nav v-if="view.messages.length" ref="message_map" class="channel-message-map" :style="{ '--nav-entry-height': `${NAV_ENTRY_HEIGHT}px` }" aria-label="发言快速导航" @wheel.stop.passive="browse_navigation" @pointerleave="close_preview" @focusout="close_preview" @keydown.esc.stop="close_preview" @contextmenu="navigation_context_menu">
       <div class="channel-map-track">
