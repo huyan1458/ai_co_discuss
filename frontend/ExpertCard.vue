@@ -1,7 +1,7 @@
 <script setup>
 /** Show one participant instance and its actual software configuration boundary. */
 import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { motion, useReducedMotion, useSpring } from "motion-v";
+import { motion, useSpring } from "motion-v";
 import EffortSlider from "./EffortSlider.vue";
 import ApiSettings from "./ApiSettings.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
@@ -27,7 +27,6 @@ const { view, bridge } = inject("discussion");
 const FLIP_SPRING = { mass: 1, stiffness: 270.0323764138049, damping: 31.550710806760762 };
 const BACK_ANGLE = 180;
 const angle = useSpring(0, FLIP_SPRING);
-const reduced_motion = useReducedMotion();
 const card = ref(null), front_button = ref(null), back_button = ref(null);
 const back = ref(false), visible_back = ref(false);
 const profile = computed(() => view.value.launch.profiles[props.name] || {});
@@ -300,11 +299,8 @@ watch(back, (open) => {
   else document.removeEventListener("pointerdown", close_on_outside, true);
 });
 
-watch([back, reduced_motion], ([next, reduced]) => {
-  const target = next ? BACK_ANGLE : 0;
-  if (reduced) { angle.jump(target); focus_face(); }
-  else angle.set(target);
-});
+// The flip always plays, even under prefers-reduced-motion: the user asked to keep it.
+watch(back, (next) => angle.set(next ? BACK_ANGLE : 0));
 // Prefetch as soon as the card can use a catalog, so flipping does not wait on a slow CLI query.
 watch(() => [configurable.value, view.value.launch.available, profile.value.adapter],
   ([enabled, available]) => { if (enabled && available) bridge.load_launch_models(props.name); }, { immediate: true });
