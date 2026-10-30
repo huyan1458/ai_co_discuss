@@ -19,9 +19,6 @@ const OUTSIDE_LABELS = { queue: "不在本次依次回答中", turns: "本轮未
 const grip_title = computed(() => order.value.kind === "default"
   ? "拖动设置默认发言顺序，@全体依次 按此顺序；聚焦后可用上下方向键" : "拖动调整还没发言的顺序，立即生效；聚焦后可用上下方向键");
 const STALE_ORDER = "发言顺序刚有变化，已更新为最新顺序，请重新调整";
-// A drag the board had to drop is reported here; a refused send comes back from the controller.
-const dropped = ref(false);
-const error = computed(() => dropped.value ? STALE_ORDER : view.value.order_error?.room_id === room.value.id ? view.value.order_error.message : "");
 
 const list = ref(null);
 const drag = ref(null);
@@ -29,7 +26,7 @@ const drag = ref(null);
 const sent = ref(null);
 const announcement = ref("");
 watch(() => order.value.revision, () => { sent.value = null; });
-watch(() => room.value.id, () => { drag.value = null; sent.value = null; announcement.value = ""; dropped.value = false; document.removeEventListener("keydown", cancel, true); });
+watch(() => room.value.id, () => { drag.value = null; sent.value = null; announcement.value = ""; document.removeEventListener("keydown", cancel, true); });
 
 /** Move one entry of a name list to another index. */
 function moved(names, from, to) {
@@ -79,7 +76,6 @@ async function commit(names, name, focus) {
 function start(event, index) {
   if (!can_reorder.value || saving.value || event.button !== 0) return;
   event.preventDefault();
-  dropped.value = false;
   event.currentTarget.setPointerCapture(event.pointerId);
   drag.value = { pointer: event.pointerId, from: index, gap: index, order: order.value, grip: event.currentTarget };
   // The grip takes no focus from a pointer press, so Escape is heard on the document while dragging.
@@ -102,8 +98,8 @@ function finish(event, cancelled = false) {
   document.removeEventListener("keydown", cancel, true);
   const to = gap > from ? gap - 1 : gap;
   if (cancelled || from === to) return;
-  // The order refreshed during the drag: the dragged place no longer means the same member, so drop it and say so.
-  if (started.revision !== order.value.revision) dropped.value = true;
+  // The order refreshed during the drag: the dragged place no longer means the same member, so drop it and say so; a refused send is reported by the controller.
+  if (started.revision !== order.value.revision) bridge.notify("warning", STALE_ORDER);
   else commit(moved(order.value.movable, from, to), order.value.movable[from], false);
 }
 
@@ -132,7 +128,6 @@ function step(event, index, direction) {
   if (!can_reorder.value || to < 0 || to >= order.value.movable.length) return;
   event.preventDefault();
   if (saving.value) return;
-  dropped.value = false;
   commit(moved(order.value.movable, index, to), order.value.movable[index], true);
 }
 </script>
@@ -172,9 +167,6 @@ function step(event, index, direction) {
         <slot :item="{ name, state: 'away' }" :place="0" />
       </li>
     </ul>
-    <!-- Someone else's change landing first is a notice, not a failure. -->
-    <p v-if="error === STALE_ORDER" role="status" class="pb-free-note">{{ error }}</p>
-    <p v-else-if="error" role="alert" class="pb-free-note is-error">{{ error }}</p>
     <p class="speaking-order-live" aria-live="polite">{{ announcement }}</p>
   </div>
 </template>

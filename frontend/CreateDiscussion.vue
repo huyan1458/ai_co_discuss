@@ -215,7 +215,6 @@ const summary = computed(() => {
       </details>
     </form>
     <footer class="create-footer">
-      <p v-if="launching && view.launch.error" role="alert" class="create-error">{{ view.launch.error }}</p>
       <div class="create-footer-row">
         <span class="create-summary" :class="{ 'is-blocked': blocker }" :title="blocker || summary" role="status"><UIcon v-if="blocker" name="i-lucide-circle-alert" />{{ blocker ? `还差：${blocker}` : selected_names.length || discussing ? summary : "" }}</span>
         <UButton label="取消" color="neutral" variant="ghost" @click="emit('cancel')" />
@@ -280,7 +279,6 @@ const summary = computed(() => {
 .create-summary.is-blocked { display: flex; align-items: center; gap: 6px; color: #e0b44a; font-weight: 600; }
 .create-summary.is-blocked > [class*="icon"] { flex-shrink: 0; width: 14px; height: 14px; }
 
-.create-error { margin-bottom: 10px; color: #f0716b; font-size: 12px; }
 @media (max-width: 600px) {
   .create-discussion { height: calc(100dvh - 130px); }
   .create-scroll { padding: 18px 18px 20px; }

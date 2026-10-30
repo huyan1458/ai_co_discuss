@@ -35,23 +35,19 @@ const local_state = computed(() => {
 const waiting = (name) => Boolean(saved.value?.participants?.[name]?.defaults_pending);
 const switching = ref("");
 // The round limit the field shows: the saved one, or the value being saved until the room refreshes.
-const SAVED_NOTICE_MS = 2000;
-const saving_rounds = ref(false), rounds_shown = ref(0), rounds_saved = ref(false);
+const saving_rounds = ref(false), rounds_shown = ref(0);
 watch(() => room.value.free?.max_rounds, (value) => { rounds_shown.value = value || 0; }, { immediate: true });
 
 /** Save a new round limit and say so; on failure the field goes back to the saved value and the error shows under the members. */
 async function save_rounds(value) {
   rounds_shown.value = value;
   saving_rounds.value = true;
-  rounds_saved.value = false;
   try {
     await bridge.set_chain_rounds(value);
-    rounds_saved.value = true;
-    setTimeout(() => { rounds_saved.value = false; }, SAVED_NOTICE_MS);
+    bridge.notify("info", "推进轮数已保存，进行中的任务链也按新值");
   } catch { rounds_shown.value = room.value.free?.max_rounds || 0; }
   finally { saving_rounds.value = false; }
 }
-const result = ref({ tone: "", text: "" });
 // Rooms from before members were recorded only list their experts.
 const members = computed(() => room.value.members?.length ? room.value.members
   : Object.entries(room.value.experts || {}).map(([name, mode]) => ({ name, access: mode === "online" ? "online" : "runner", status: "active", role: name === room.value.host ? "host" : "member" })));
@@ -79,11 +75,10 @@ function live(member) {
 async function switch_adapter(member, adapter) {
   if (switching.value || access(live(member)).value === adapter) return;
   switching.value = member.name;
-  result.value = { tone: "", text: "" };
   try {
     await bridge.set_member_adapter({ name: member.name, adapter });
-    result.value = { tone: "", text: `${bridge.display_name(member.name)} 已改为 ${adapter === "codex" ? "App" : "CLI"} 接入，下次处理请求起生效。` };
-  } catch (error) { result.value = { tone: "error", text: error.message }; }
+    bridge.notify("info", `${bridge.display_name(member.name)} 已改为 ${adapter === "codex" ? "App" : "CLI"} 接入，下次处理请求起生效。`);
+  } catch (error) { bridge.notify("error", error.message); }
   finally { switching.value = ""; }
 }
 
@@ -105,11 +100,10 @@ function files(member) {
 async function switch_access(member, project_access) {
   if (switching.value || files(member).value === project_access) return;
   switching.value = member.name;
-  result.value = { tone: "", text: "" };
   try {
     await bridge.set_member_access({ name: member.name, project_access });
-    result.value = { tone: "", text: `${bridge.display_name(member.name)} 已改为${access_label(project_access)}，下次处理请求起生效。` };
-  } catch (error) { result.value = { tone: "error", text: error.message }; }
+    bridge.notify("info", `${bridge.display_name(member.name)} 已改为${access_label(project_access)}，下次处理请求起生效。`);
+  } catch (error) { bridge.notify("error", error.message); }
   finally { switching.value = ""; }
 }
 
@@ -142,7 +136,7 @@ async function save_description({ text, as_template }) {
     await bridge.describe_member(describing.value, text);
     if (as_template) bridge.save_description_template(describing.value, text);
     describing.value = "";
-  } catch (error) { result.value = { tone: "error", text: error.message }; }
+  } catch { /* The controller shows the error as a toast. */ }
   finally { describing_saving.value = false; }
 }
 
@@ -187,10 +181,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
           </footer>
         </li>
       </ul>
-      <p v-if="view.access?.error || view.free_error" class="overview-result is-error" role="alert">{{ view.access?.error || view.free_error }}</p>
-      <p v-else-if="view.access?.notice || view.free_notice" class="overview-result" role="status">{{ view.access?.notice || view.free_notice }}</p>
       <p class="overview-result">复制说明或下载配置不代表 AI 已接入，以实际回答和运行记录为准。</p>
-      <p v-if="result.text" class="overview-result" :class="{ 'is-error': result.tone === 'error' }" :role="result.tone === 'error' ? 'alert' : 'status'">{{ result.text }}</p>
     </section>
     <section class="overview-section">
       <h3>协作设置</h3>
@@ -199,7 +190,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
         <div><dt>智能调度</dt><dd>{{ scheduler }}</dd></div>
         <div v-if="room.free?.max_rounds"><dt>连续派活上限</dt><dd>
           <template v-if="view.access?.can_manage"><ChainRoundsField :model-value="rounds_shown" :disabled="saving_rounds" @update:model-value="save_rounds" />
-            <small v-if="rounds_saved" role="status" class="overview-saved">已保存，进行中的任务链也按新值</small></template>
+</template>
           <span v-else>主持人收到你的一条消息后，最多连续派活 {{ room.free.max_rounds }} 轮（派活 → 成员回答 → 交回汇总为一轮），然后停下等你</span></dd></div>
         <div v-if="!free"><dt>逐人追问</dt><dd>{{ room.named_followup ? '开启：主持人每轮给每位专家写针对性追问' : '关闭：首轮后请专家回应上一轮观点' }}</dd></div>
         <div><dt>阅读地址</dt><dd class="overview-address"><code>{{ reading }}</code><UButton icon="i-lucide-copy" color="neutral" variant="ghost" size="xs" aria-label="复制阅读地址" @click="act('copy', reading)" /></dd></div>
@@ -214,7 +205,6 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 </template>
 
 <style scoped>
-.overview-saved { display: block; margin-top: 4px; color: var(--ui-success); font-size: 12px; }
 .overview-section { margin-bottom: 28px; }
 .overview-section h3 { margin: 0 0 10px; font-size: 14px; font-weight: 600; color: var(--ui-text-highlighted); }
 /* One card per member: who it is, three aligned facts, then its actions in a footer. */
@@ -243,7 +233,6 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 .overview-address code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .overview-local { display: flex; gap: 10px; margin: 0 0 8px; color: var(--ui-text-muted); font-size: 12px; }
 .overview-result { margin: 8px 0 0; color: var(--ui-text-muted); font-size: 12px; }
-.overview-result.is-error { color: var(--ui-error); }
 /* Same card as the members above, one setting per row. */
 .overview-settings { margin: 0; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-bg-elevated); font-size: 13px; }
 .overview-settings > div { display: flex; align-items: baseline; gap: 16px; padding: 12px 16px; }

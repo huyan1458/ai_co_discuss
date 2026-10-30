@@ -462,6 +462,18 @@ REGISTERED_MEMBER = """(room_members.access<>'manual' OR EXISTS(SELECT 1 FROM me
     WHERE source.member_id=room_members.id AND source.source='web') OR EXISTS(SELECT 1 FROM member_registrations r
     WHERE r.member_id=room_members.id AND r.token_hash=room_members.token_hash))"""
 
+# One snapshot for group routing; the Worker uses the same SQL inside its atomic write assertion.
+GROUP_STATE_SQL = f"""SELECT json_object(
+    'latest_id',(SELECT COALESCE(MAX(id),0) FROM messages WHERE room_id=rooms.id),
+    'title',rooms.title,'goal',(SELECT goal FROM topic_settings WHERE room_id=rooms.id),
+    'archived',(SELECT archived FROM room_directory WHERE room_id=rooms.id),
+    'order',COALESCE((SELECT member_ids FROM speaking_orders WHERE room_id=rooms.id),'[]'),
+    'members',(SELECT json_group_array(json_object('id',id,'name',name,'role',role,'status',status,'access',access,
+        'registered',{REGISTERED_MEMBER},'description',COALESCE((SELECT description FROM member_descriptions d
+            WHERE d.room_id=room_members.room_id AND d.name=room_members.name),'')))
+        FROM (SELECT * FROM room_members WHERE room_id=rooms.id ORDER BY id) AS room_members)) AS state
+    FROM rooms WHERE id=?"""
+
 
 def free_view(connection, room_id):
     """Summarize members, their live execution, recent requests and possible file conflicts."""
@@ -1258,7 +1270,8 @@ def inbox(connection, room_id, token):
     for row in connection.execute(f"SELECT * FROM room_members WHERE room_id=? AND status='active' AND {REGISTERED_MEMBER} ORDER BY id", (room_id,)):
         pending = [dict(item) for item in connection.execute("""SELECT r.id,r.message_id,r.purpose,
             sr.id AS session_request_id,sr.session_id,sr.round,sr.position,sr.read_until,sr.question AS source_question,
-            t.cause_kind,t.cause_message_id AS source_message_id,t.cause_request_id
+            t.cause_kind,t.cause_message_id AS source_message_id,t.cause_request_id,
+            (SELECT action FROM group_routes WHERE message_id=r.message_id) AS group_action
             FROM member_requests r LEFT JOIN session_requests sr ON sr.member_request_id=r.id
             LEFT JOIN task_message_sources t ON t.session_request_id=sr.id
             WHERE r.member_id=? AND r.status='pending' ORDER BY r.id""", (row["id"],))]
@@ -1309,29 +1322,74 @@ def release_recommendations(connection, room_id):
                 VALUES (?,?,?,?,'ask','user',?)""", (room_id, row["member_id"], row["message_id"], row["message_id"], int(time.time())))
 
 
-def route_wide(connection, room_id, message_id, action):
+def group_route_plan(connection, room_id, token, message_id):
+    """Read the current group, eligible members, order and revision before arranging everyone's requests."""
+    require_owner(connection, room_id, token)
+    group = connection.execute("""SELECT id,message_id,status FROM member_requests
+        WHERE room_id=? AND message_id=? AND purpose='group' ORDER BY id DESC LIMIT 1""", (room_id, message_id)).fetchone()
+    previous = connection.execute("SELECT action,request_id,message_id FROM group_routes WHERE room_id=? AND message_id=?",
+                                  (room_id, message_id)).fetchone()
+    if not group and not previous:
+        raise LookupError("这条消息没有全体待安排请求")
+    state = connection.execute(GROUP_STATE_SQL, (room_id,)).fetchone()["state"]
+    snapshot = json.loads(state)
+    members = [member for member in snapshot["members"] if member["status"] == "active" and member["registered"]]
+    rank = {member_id: index for index, member_id in enumerate(json.loads(snapshot["order"]))}
+    members.sort(key=lambda member: (member["id"] not in rank, rank.get(member["id"], 0), member["role"] != "host", member["id"]))
+    return {"message_id": message_id, "request": dict(group) if group else None, "members": members,
+            "latest_id": snapshot["latest_id"], "revision": hashlib.sha256(state.encode("utf-8")).hexdigest(),
+            "result": dict(previous) if previous else None}
+
+
+def route_group(connection, room_id, group, payload):
+    """Arrange a pending group atomically; only the single-object handback to its host needs no roster revision."""
+    action = payload["action"]
+    if action not in ("all", "sequential", "host"):
+        raise ValueError("请全体成员回应的消息只能选 action=all、sequential 或 host")
+    if group["status"] != "pending":
+        raise FileExistsError("这条消息已不再等待安排")
+    if action != "host":
+        if not payload.get("revision"):
+            raise ValueError("安排全体前须先读取 message group-plan，并带上其 revision")
+        state = connection.execute(GROUP_STATE_SQL, (room_id,)).fetchone()["state"]
+        if payload["revision"] != hashlib.sha256(state.encode("utf-8")).hexdigest():
+            raise FileExistsError("成员、顺序或消息已变化，请重新读取全体安排状态")
+    if action == "host":
+        connection.execute("UPDATE member_requests SET purpose='route' WHERE id=?", (group["id"],))
+    elif action == "sequential":
+        connection.execute("DELETE FROM member_requests WHERE id=?", (group["id"],))
+        members = connection.execute(f"SELECT id FROM room_members WHERE room_id=? AND status='active' AND {REGISTERED_MEMBER}", (room_id,))
+        queue_in_turn(connection, room_id, group["message_id"], [row["id"] for row in members])
+    else:
+        connection.execute("UPDATE member_requests SET purpose='all' WHERE id=?", (group["id"],))
+        connection.execute(f"""INSERT OR IGNORE INTO member_requests (room_id,member_id,message_id,chain_id,purpose,created_by,created_at)
+            SELECT room_id,id,?,?,'all','user',? FROM room_members WHERE room_id=? AND status='active' AND {REGISTERED_MEMBER} ORDER BY id""",
+                           (group["message_id"], group["chain_id"], int(time.time()), room_id))
+    connection.execute("INSERT INTO group_routes (message_id,room_id,request_id,action) VALUES (?,?,?,?)",
+                       (group["message_id"], room_id, group["id"], action))
+    return {"action": action, "request_id": group["id"], "message_id": group["message_id"]}
+
+
+def route_wide(connection, room_id, message_id, payload):
     """Smart scheduling answers an unnamed message with everyone (each member once, as if the user named them all) or no one.
 
     A message naming everyone (a group request) is answered by all at once or, with action sequential, one after another.
     Only a host request that has not started changes; a started host already handles the message its own way.
     """
+    action = payload["action"]
+    previous = connection.execute("SELECT action,request_id,message_id FROM group_routes WHERE room_id=? AND message_id=?",
+                                  (room_id, message_id)).fetchone()
+    if previous:
+        if previous["action"] != action:
+            raise FileExistsError("这条全体消息已经安排，不能改用其他动作")
+        return dict(previous)
+    group = connection.execute("""SELECT * FROM member_requests WHERE room_id=? AND message_id=? AND purpose='group'
+        ORDER BY id DESC LIMIT 1""", (room_id, message_id)).fetchone()
+    if group:
+        return route_group(connection, room_id, group, payload)
+    if action in ("sequential", "host"):
+        raise ValueError("只有请全体成员回应的消息可以依次回答或交回主持人")
     route = host_route_request(connection, message_id)
-    group = connection.execute("SELECT * FROM member_requests WHERE message_id=? AND purpose='group'", (message_id,)).fetchone()
-    if group and group["room_id"] == room_id:
-        if action not in ("all", "sequential"):
-            raise ValueError("请全体成员回应的消息只能选 action=all 或 sequential")
-        if group["status"] != "pending":
-            raise FileExistsError("这条消息已不再等待安排")
-        if action == "sequential":
-            # The row is removed rather than ended so the host takes its place in the queue like everyone else.
-            connection.execute("DELETE FROM member_requests WHERE id=?", (group["id"],))
-            members = connection.execute(f"SELECT id FROM room_members WHERE room_id=? AND status='active' AND {REGISTERED_MEMBER}", (room_id,))
-            queue_in_turn(connection, room_id, message_id, [row["id"] for row in members])
-            requests = connection.execute("SELECT * FROM member_requests WHERE message_id=? ORDER BY id", (message_id,)).fetchall()
-            return {"action": action, "requests": [dict(row) for row in requests]}
-        route = group
-    elif action == "sequential":
-        raise ValueError("只有请全体成员回应的消息可以依次回答")
     if not route or route["room_id"] != room_id:
         raise LookupError("只能处理交给主持人的未点名消息")
     if route["status"] != "pending":
@@ -1356,8 +1414,8 @@ def adopt_recommendation(connection, room_id, token, message_id, payload):
     """
     require_owner(connection, room_id, token)
     begin_write(connection)
-    if payload.get("action") in ("all", "none", "sequential"):
-        return route_wide(connection, room_id, message_id, payload["action"])
+    if payload.get("action") in ("all", "none", "sequential", "host"):
+        return route_wide(connection, room_id, message_id, payload)
     if payload.get("action") != "adopt" or payload.get("mode") not in ("interrupt", "after"):
         raise ValueError("采纳须为 action=adopt，mode 为 interrupt 或 after；全体、依次或无需回应为 action=all、sequential 或 none")
     row = connection.execute("SELECT * FROM member_recommendations WHERE room_id=? AND message_id=?", (room_id, message_id)).fetchone()

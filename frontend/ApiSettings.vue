@@ -6,7 +6,7 @@ const props = defineProps({ name: { type: String, required: true } });
 const { view, bridge } = inject("discussion");
 const profile = computed(() => view.value.launch.profiles[props.name] || {});
 const models = computed(() => bridge.launch_model_state(props.name, view.value.launch));
-const api_key = ref(""), key_visible = ref(false), saving = ref(false), error = ref("");
+const api_key = ref(""), key_visible = ref(false), saving = ref(false);
 const saved_key = ref("");
 // A key saved earlier is never sent back to the page, so only a masked mark stands in for it.
 const SAVED_MARK = "••••••••••••";
@@ -20,9 +20,8 @@ const write = (field, value) => bridge.write_launch(props.name, field, value);
 async function save_key() {
   if (!api_key.value.trim() || api_key.value === saved_key.value || !view.value.launch.available || saving.value) return;
   saving.value = true;
-  error.value = "";
   try { await bridge.save_launch_api_key(props.name, api_key.value); saved_key.value = api_key.value; }
-  catch (failure) { error.value = failure.message; }
+  catch (failure) { bridge.notify("error", failure.message); }
   finally { saving.value = false; }
 }
 </script>
@@ -42,7 +41,7 @@ async function save_key() {
       <div class="api-inline"><UInputMenu mode="autocomplete" ignore-filter :model-value="profile.model || ''" :items="models.items" value-key="value" :aria-label="`${name} API 模型 ID`" placeholder="推荐模型或完整 ID" class="w-full min-w-0" size="xs" @update:model-value="write('model', $event)" />
         <UButton icon="i-lucide-refresh-cw" :aria-label="`读取 ${name} 的模型列表`" title="读取模型列表" size="xs" color="neutral" variant="ghost" :loading="models.loading" :disabled="!profile.api_key_ref" @click="bridge.load_launch_models(name, true)" /></div>
     </div>
-    <p v-if="error || models.error" role="alert">{{ error || models.error }}</p>
+    <p v-if="models.error" role="alert">{{ models.error }}</p>
   </div>
 </template>
 

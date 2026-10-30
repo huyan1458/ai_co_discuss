@@ -12,7 +12,9 @@ export class DiscussionUpdates {
   /** Open a read-only stream or publish a committed-write notification from Pages. */
   fetch(request) {
     if (request.method === "POST") {
-      this.broadcast("event: change\ndata: {}\n\n");
+      // Name the changed room so a runner wakes only that room; without one every room may have changed.
+      const room = new URL(request.url).searchParams.get("room");
+      this.broadcast(`event: change\ndata: ${JSON.stringify(room ? { rooms: [room] } : {})}\n\n`);
       return new Response(null, { status: 204 });
     }
     if (request.method !== "GET") return new Response(null, { status: 405 });

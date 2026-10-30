@@ -383,7 +383,8 @@ export class FreeRoomRunner {
     if (!adapter) return this.fail(member.name, execution.id, `未配置 ${member.name} 的本机接入`);
     if (this.context_errors.has(member.name)) return this.fail(member.name, execution.id, this.context_errors.get(member.name));
     const directory = adapter.adapter === 'api' ? undefined : adapter.cwd || this.config.cwd;
-    const before = workspace_snapshot(directory);
+    // A read-only member's software cannot write the project, so files changing meanwhile were written by someone else.
+    const before = adapter.project_access === 'read' ? null : workspace_snapshot(directory);
     if (before) this.snapshots.set(execution.id, { member: member.name, directory, before });
     const binding = this.store.binding(member.name);
     // A member whose session a rewind restarted is bound to '' and must not fall back to the session it was invited with.

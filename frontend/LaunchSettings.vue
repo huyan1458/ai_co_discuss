@@ -64,8 +64,6 @@ watch(() => [props.modelSelection, view.value.launch.available, ...names.value.m
       </UFormField>
     </div>
     <UButton label="保存为本机软件默认配置" variant="outline" color="neutral" :loading="pending === 'save_launch_defaults'" @click="act('save_launch_defaults')" />
-    <p v-if="view.launch.error" role="alert" class="fine-print">{{ view.launch.error }}</p>
-    <p v-else-if="view.launch.notice" role="status" class="fine-print">{{ view.launch.notice }}</p>
     </template>
   </section>
 </template>

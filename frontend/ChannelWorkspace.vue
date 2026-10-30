@@ -9,7 +9,6 @@ import FreeBoard from "./FreeBoard.vue";
 import DiscussionHistory from "./DiscussionHistory.vue";
 import RoomOverview from "./RoomOverview.vue";
 import ExecutionTimeline from "./ExecutionTimeline.vue";
-import StartDiscussionDialog from "./StartDiscussionDialog.vue";
 
 const { view, bridge, field, act, pending } = inject("discussion");
 const room = computed(() => view.value.room);
@@ -90,24 +89,31 @@ onMounted(() => {
 onBeforeUnmount(() => topbar_observer?.disconnect());
 onBeforeUnmount(() => document.removeEventListener("pointerdown", collapse_brief_outside));
 const selected_tab = computed({ get: () => view.value.tab, set: (value) => act("tab", value) });
-/** The same four tools in every room; each page shows only the parts that apply to the room's current mode. */
+/** The same three tools in every room; each page shows only the parts that apply to the room's current mode. */
 const tabs = [
   { value: "discussion", label: "消息", icon: "i-lucide-message-square" },
   { value: "timeline", label: "执行", icon: "i-lucide-chart-gantt" },
-  { value: "history", label: "讨论", icon: "i-lucide-messages-square" },
   { value: "overview", label: "房间", icon: "i-lucide-sliders-horizontal" },
 ];
-// The consensus, host and access pages were merged in; links and actions that still open them land on the merged page.
-const MERGED_TABS = { context: "history", topic: "history", access: "overview" };
+// Retired pages: consensus and discussion history open from the host brief, access moved into the room page.
+const MERGED_TABS = { context: "discussion", topic: "discussion", history: "discussion", access: "overview" };
 const free_room = computed(() => !["active", "paused"].includes(room.value?.session?.status));
 watch(() => MERGED_TABS[view.value.tab], (merged) => { if (merged) act("tab", merged); }, { immediate: true });
-// The discussion page: a free room can start one here as from the rail; the consensus reads first and edits on demand.
-const starting_discussion = ref(false);
+// A free room shows the brief bar only once it has something to read; starting a discussion stays on the rail.
+const show_brief = computed(() => !!room.value && (!free_room.value || !!room.value.host_brief?.text || !!room.value.state_text || !!room.value.discussions?.length));
+const consensus_open = ref(false);
 const editing_context = ref(false);
-const free_host = computed(() => (room.value?.free?.members || []).find((member) => member.role === "host" && member.status === "active"));
-const can_start_discussion = computed(() => free_host.value?.access === "runner" && view.value.launch.available && !room.value?.archived);
 const rendered_state = computed(() => room.value?.state_text ? window.discuss_markdown.render_markdown(room.value.state_text) : "");
-watch(() => room.value?.id, () => { starting_discussion.value = false; editing_context.value = false; });
+watch(() => room.value?.id, () => { consensus_open.value = false; editing_context.value = false; });
+
+/** Open consensus and discussion history from the brief, optionally straight into editing. */
+function open_consensus(edit = false) { brief_collapsed.value = true; editing_context.value = edit; consensus_open.value = true; }
+
+/** Leave the consensus dialog for another workspace dialog. */
+function open_from_consensus(name) { consensus_open.value = false; modal.value = name; }
+
+/** Show an original message above the consensus dialog's evidence links. */
+function detail_from_consensus(id) { consensus_open.value = false; open_detail(id); }
 
 /** Save the edited consensus and go back to reading it. */
 async function save_consensus() {
@@ -321,15 +327,15 @@ function resize_nav_by_key(event) {
         <div v-if="room" class="channel-tabbar">
           <UTabs v-model="selected_tab" :items="tabs" :content="false" variant="pill" color="neutral" size="sm" class="channel-tabs" aria-label="房间视图" />
         </div>
-        <section v-if="room && !free_room" class="channel-host-brief" :class="{ 'is-collapsed': brief_collapsed }" aria-label="主持简报">
+        <section v-if="show_brief" class="channel-host-brief" :class="{ 'is-collapsed': brief_collapsed }" aria-label="主持简报">
           <div class="channel-brief-inner">
             <div class="channel-brief-heading">
               <button type="button" class="channel-brief-toggle" :aria-label="brief_collapsed ? '展开主持简报' : '收起主持简报'" :aria-expanded="!brief_collapsed" aria-controls="channel-brief-content" @click="toggle_brief"><UIcon :name="brief_collapsed ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" /><strong>主持简报{{ brief_collapsed ? '：' : '' }}</strong><span v-if="brief_collapsed" class="channel-brief-preview">{{ brief_preview }}</span></button>
-              <template v-if="!brief_collapsed"><UButton label="更新简报" color="neutral" variant="link" size="xs" class="channel-brief-update" @click="act('tab', 'context')" /></template>
+              <template v-if="!brief_collapsed"><UButton label="详细共识与讨论记录" color="neutral" variant="link" size="xs" class="channel-brief-update" @click="open_consensus()" /><UButton label="编辑" color="neutral" variant="link" size="xs" class="channel-brief-update" @click="open_consensus(true)" /></template>
             </div>
             <div v-show="!brief_collapsed" id="channel-brief-content" class="channel-brief-content">
               <div class="channel-brief-text markdown-body" v-html="room.rendered_brief"></div>
-              <div class="channel-brief-footer"><span class="channel-brief-status">{{ bridge.progress_speaker(room) }}</span><small>{{ bridge.brief_meta(room) }}</small></div>
+              <div class="channel-brief-footer"><span v-if="!free_room" class="channel-brief-status">{{ bridge.progress_speaker(room) }}</span><small>{{ bridge.brief_meta(room) }}</small></div>
             </div>
           </div>
         </section>
@@ -337,28 +343,6 @@ function resize_nav_by_key(event) {
       <div v-if="room" class="channel-body" :class="{ 'channel-body-discussion': view.tab === 'discussion' }">
         <div class="channel-content">
         <ChannelDiscussion v-show="view.tab === 'discussion'" @detail="open_detail" @edit="modal = 'edit'" />
-        <div v-if="view.tab === 'history'" class="content-page merged-page" role="tabpanel" aria-label="讨论">
-          <TopicPanel v-if="!free_room" section="host" @open="modal = $event" @detail="open_detail" />
-          <section v-else class="merged-section" aria-label="当前讨论">
-            <div class="page-heading"><div><h2>当前讨论</h2><p>没有进行中的讨论。开启后由主持人推进成员轮流发言，到上限或结束后房间回到自由协作，记录与结论保留。</p></div><UButton icon="i-lucide-messages-square" label="开启讨论" variant="outline" color="neutral" class="channel-surface-button" :disabled="!can_start_discussion" @click="starting_discussion = true" /></div>
-            <p v-if="!can_start_discussion && !room.archived" class="fine-print">开启讨论需要一位由本机唤醒的 AI 主持人，且本机服务在线。</p>
-          </section>
-          <section class="merged-section channel-summary" aria-label="当前共识">
-            <div class="page-heading"><div><h2>当前共识</h2><p>主持人整理的结论、共识与分歧，用 #消息编号 保留依据；讨论结束时保存进下方记录。</p></div><UButton v-if="!editing_context" icon="i-lucide-pencil" label="编辑" variant="outline" color="neutral" class="channel-surface-button" @click="editing_context = true" /></div>
-            <form v-if="editing_context" class="summary-form" @submit.prevent="save_consensus">
-              <UFormField label="主持简报" description="简述结论、共识、歧义，以及接下来要追问或调整什么、为什么。" class="channel-brief-editor"><UTextarea v-model="brief" aria-label="主持简报正文" :rows="4" class="w-full summary-brief-editor" placeholder="让返回房间的人快速理解讨论进展和主持意图。" /></UFormField>
-              <UFormField label="详细共识与进度" description="已达成的共识、尚未解决的问题与下一步，用 #消息编号 标注依据。" class="channel-state-field"><UTextarea v-model="summary" aria-label="共识与分歧正文" :rows="12" :maxlength="4000" class="summary-editor" placeholder="已达成的共识、尚未解决的问题与下一步…" /></UFormField>
-              <div class="form-footer"><span>依据消息截止 #{{ view.snapshot_id }}</span><div class="button-row"><UButton label="取消" color="neutral" variant="ghost" @click="editing_context = false" /><UButton type="submit" color="neutral" icon="i-lucide-check" label="保存共识" class="channel-primary-button" :loading="pending === 'save_context'" /></div></div>
-            </form>
-            <template v-else-if="room.host_brief?.text || room.state_text">
-              <div class="consensus-card is-brief"><h3>主持简报<button v-if="room.state_until" type="button" class="subtle-link" @click="open_detail(room.state_until)">整理至 #{{ room.state_until }}</button></h3><div class="markdown-body" v-html="room.rendered_brief"></div></div>
-              <details v-if="rendered_state" class="consensus-card"><summary><h3>详细共识与进度</h3><span>依据、已处理内容、未决问题与下一步</span><UIcon name="i-lucide-chevron-down" class="disclosure-icon" /></summary><div class="markdown-body consensus-state" v-html="rendered_state"></div></details>
-            </template>
-            <p v-else class="fine-print">还没有共识。主持人会在讨论中整理，也可以点“编辑”自己写。</p>
-          </section>
-          <DiscussionHistory @detail="open_detail" />
-          <StartDiscussionDialog v-model:open="starting_discussion" />
-        </div>
         <div v-if="view.tab === 'overview'" class="content-page merged-page" role="tabpanel" aria-label="房间">
           <RoomOverview />
           <TopicPanel v-if="!free_room" section="access" @open="modal = $event" @detail="open_detail" />
@@ -370,6 +354,27 @@ function resize_nav_by_key(event) {
       </div>
       <div v-else class="channel-empty"><UIcon name="i-lucide-hash" /><h2>新建一个协作房间</h2><p>邀请 AI 一起协作，随时 @ 提问；需要时开启讨论，保留所有人的观点。</p><UButton icon="i-lucide-plus" label="新建房间" color="neutral" @click="create_channel()" /></div>
     </main>
+    <UModal v-if="room" v-model:open="consensus_open" title="共识与讨论记录" description="主持人整理的结论、共识与分歧，以及每场讨论结束时的结论。" :ui="{ content: 'glass-panel studio-modal channel-consensus-modal', body: 'dialog-body' }">
+      <template #body>
+        <div class="merged-page channel-consensus-body">
+          <TopicPanel v-if="!free_room" section="host" @open="open_from_consensus" @detail="detail_from_consensus" />
+          <section class="merged-section channel-summary" aria-label="当前共识">
+            <div class="page-heading"><div><h2>当前共识</h2><p>主持人整理的结论、共识与分歧，用 #消息编号 保留依据；讨论结束时保存进下方记录。</p></div><UButton v-if="!editing_context" icon="i-lucide-pencil" label="编辑" variant="outline" color="neutral" class="channel-surface-button" @click="editing_context = true" /></div>
+            <form v-if="editing_context" class="summary-form" @submit.prevent="save_consensus">
+              <UFormField label="主持简报" description="简述结论、共识、歧义，以及接下来要追问或调整什么、为什么。" class="channel-brief-editor"><UTextarea v-model="brief" aria-label="主持简报正文" :rows="4" class="w-full summary-brief-editor" placeholder="让返回房间的人快速理解讨论进展和主持意图。" /></UFormField>
+              <UFormField label="详细共识与进度" description="已达成的共识、尚未解决的问题与下一步，用 #消息编号 标注依据。" class="channel-state-field"><UTextarea v-model="summary" aria-label="共识与分歧正文" :rows="12" :maxlength="4000" class="summary-editor" placeholder="已达成的共识、尚未解决的问题与下一步…" /></UFormField>
+              <div class="form-footer"><span>依据消息截止 #{{ view.snapshot_id }}</span><div class="button-row"><UButton label="取消" color="neutral" variant="ghost" @click="editing_context = false" /><UButton type="submit" color="neutral" icon="i-lucide-check" label="保存共识" class="channel-primary-button" :loading="pending === 'save_context'" /></div></div>
+            </form>
+            <template v-else-if="room.host_brief?.text || room.state_text">
+              <div class="consensus-card is-brief"><h3>主持简报<button v-if="room.state_until" type="button" class="subtle-link" @click="detail_from_consensus(room.state_until)">整理至 #{{ room.state_until }}</button></h3><div class="markdown-body" v-html="room.rendered_brief"></div></div>
+              <details v-if="rendered_state" class="consensus-card"><summary><h3>详细共识与进度</h3><span>依据、已处理内容、未决问题与下一步</span><UIcon name="i-lucide-chevron-down" class="disclosure-icon" /></summary><div class="markdown-body consensus-state" v-html="rendered_state"></div></details>
+            </template>
+            <p v-else class="fine-print">还没有共识。主持人会在讨论中整理，也可以点“编辑”自己写。</p>
+          </section>
+          <DiscussionHistory @detail="detail_from_consensus" />
+        </div>
+      </template>
+    </UModal>
     <div v-if="show_rail" class="channel-rail-resizer" role="separator" tabindex="0" aria-label="调整右侧栏宽度" aria-orientation="vertical" aria-controls="channel-member-rail" :aria-valuemin="RAIL_MIN" :aria-valuemax="RAIL_MAX" :aria-valuenow="rail_width" :aria-valuetext="`${rail_width} 像素`" title="拖动调整右侧栏宽度，也可使用左右方向键" @pointerdown="start_rail_resize" @pointermove="resize_rail" @pointerup="finish_rail_resize" @pointercancel="finish_rail_resize" @lostpointercapture="finish_rail_resize" @keydown="resize_rail_by_key"></div>
     <aside v-if="show_rail" id="channel-member-rail" class="channel-member-rail" aria-label="当前焦点与讨论进度">
       <section class="channel-rail-board"><FreeBoard v-if="room" />

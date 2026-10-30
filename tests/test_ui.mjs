@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
 import { computed, nextTick, reactive, ref, watch } from "vue";
@@ -472,7 +472,7 @@ test("a disconnected page reads in full on every poll and reopens a stream the b
 
 /** Exercise shared attachment submission and draft lifetime without a live service. */
 function attachment_fixture() {
-  const nodes = new Map(), posts = [], uploads = [], revoked = [];
+  const nodes = new Map(), posts = [], uploads = [], revoked = [], notified = [];
   const element = id => {
     if (!nodes.has(id)) nodes.set(id, { value: "", setAttribute() {} });
     return nodes.get(id);
@@ -487,6 +487,8 @@ function attachment_fixture() {
     new_submission_id: () => String(++identifier), escape_html: text => text,
     URL: { createObjectURL: () => "blob:test", revokeObjectURL: url => revoked.push(url) },
     localStorage: { getItem: () => null }, admin_headers: () => ({}), publish_view() {}, show_toast() {}, cancel_reply() {}, cancel_turn_reply() {},
+    notify: (level, message) => notified.push([level, message]),
+    notify_failure: (error, message) => { notified.push(["error", message]); error.notified = true; },
     refresh_room: async () => {},
     fetch: async (url, options) => { uploads.push([url, options]); return { ok: true, json: async () => ({ attachment: { id: "a".repeat(32) } }) }; },
     request_json: async (url, payload) => {
@@ -495,7 +497,7 @@ function attachment_fixture() {
       return { message: { id: 1 } };
     } });
   vm.runInContext(source.slice(source.indexOf("function message_payload("), source.indexOf("/** Render immutable file cards")), context);
-  return { context, state, element, posts, uploads, revoked, succeed() { fail = false; } };
+  return { context, state, element, posts, uploads, revoked, notified, succeed() { fail = false; } };
 }
 
 test("attachment rendering separates images from files and keeps preview capability tied to content type", () => {
@@ -623,7 +625,7 @@ test("attachment retries retain files and reuse both upload and message receipts
   context.add_attachments([{ name: "截图.png", size: 10, type: "image/png" }]);
   await assert.rejects(context.send_message({ preventDefault() {} }), /连接中断/);
   assert.equal(state.attachment_drafts.length, 1);
-  assert.match(state.composer_error, /草稿已保留/);
+  assert.match(fixture.notified.at(-1)[1], /草稿已保留/);
   const first_id = posts[0][1].submission_id;
   fixture.succeed();
   await context.send_message({ preventDefault() {} });
@@ -651,10 +653,10 @@ test("saved old drafts cannot clear a new composer after navigating away and bac
 });
 
 test("attachment selection enforces count and size without consuming ordinary clipboard text", () => {
-  const { context, state } = attachment_fixture();
+  const { context, state, notified } = attachment_fixture();
   context.add_attachments([{ name: "大文件", size: 20 * 1024 * 1024 + 1 }]);
   assert.equal(state.attachment_drafts.length, 0);
-  assert.match(state.composer_error, /20 MiB/);
+  assert.deepEqual(notified.at(-1), ["warning", "单个附件最多 20 MiB"]);
   context.add_attachments(Array.from({ length: 11 }, () => ({ name: "文件", size: 1 })));
   assert.equal(state.attachment_drafts.length, 0);
   let prevented = 0;
@@ -1015,7 +1017,7 @@ test("free member delivery never offers writable credentials to online or unavai
 });
 
 /** Drive the real slider with a deterministic clock and no live client. */
-function effort_fixture(reduced = false) {
+function effort_fixture() {
   const props = reactive({ modelValue: "", items: [
     { value: "", label: "默认强度" }, { value: "low", label: "Low" }, { value: "high", label: "High" },
   ] });
@@ -1023,7 +1025,7 @@ function effort_fixture(reduced = false) {
   let now = 0, frame_id = 0;
   const context = vm.createContext({ computed, ref, reactive, defineProps: () => props,
     defineEmits: () => (_name, value) => { events.push(value); props.modelValue = value; },
-    useReducedMotion: () => ref(reduced), onBeforeUnmount: callback => cleanups.push(callback),
+    onBeforeUnmount: callback => cleanups.push(callback),
     watch: (...args) => cleanups.push(watch(...args)), performance: { now: () => now },
     requestAnimationFrame: callback => { frames.set(++frame_id, callback); return frame_id; },
     cancelAnimationFrame: id => frames.delete(id) });
@@ -1098,15 +1100,27 @@ test("effort drag keeps velocity on release and mid-flight grab; cancellation re
   fixture.cleanup();
 });
 
-test("effort slider handles touch cancellation, boundaries and reduced motion without leftover frames", async () => {
-  const fixture = effort_fixture(true), { context, body, pointer } = fixture;
+test("motion ignores the reduced-motion preference: one App.vue switch, no per-component checks", () => {
+  const folder = new URL("../frontend/", import.meta.url);
+  const offenders = readdirSync(folder, { recursive: true }).filter((name) => /\.(vue|css|js|mjs)$/.test(name))
+    .filter((name) => /@media[^{]*prefers-reduced-motion|useReducedMotion\(|matchMedia\([^)]*reduced-motion/.test(readFileSync(new URL(name.replaceAll("\\", "/"), folder), "utf8")));
+  assert.deepEqual(offenders, [], "motion plays whatever the system says (Design_UI设计说明.md, principle 11)");
+  const app = readFileSync(new URL("App.vue", folder), "utf8");
+  assert.match(app, /const MOTION_ENABLED = true;/);
+  assert.match(app, /<MotionConfig :reduced-motion="MOTION_ENABLED \? 'never' : 'always'">/);
+  assert.match(readFileSync(new URL("channel.css", folder), "utf8"), /html\[data-motion="off"\] \*/);
+});
+
+test("effort slider handles touch cancellation and boundaries without leftover frames", async () => {
+  const fixture = effort_fixture(), { context, body, pointer } = fixture;
   context.grab(pointer(210));
   context.cancel(pointer(210));
+  await fixture.finish();
   assert.equal(body.x, 0);
   assert.equal(fixture.events.length, 0);
   context.grab(pointer(500));
   context.release(pointer(500));
-  await nextTick();
+  await fixture.finish();
   assert.equal(body.x, 2);
   assert.equal(body.v, 0);
   assert.equal(fixture.frames.size, 0);
@@ -1432,7 +1446,9 @@ function theme_fixture(saved_theme = null, shared_storage = null) {
   } });
   vm.runInContext(`${source}\nglobalThis.test_state = state;`, context);
   context.publish_view = () => {};
-  return { context, nodes, classes, storage, loaded, buttons, root: document.documentElement };
+  const notified = [];
+  context.notify = (level, message) => notified.push([level, message]);
+  return { context, nodes, classes, storage, loaded, buttons, notified, root: document.documentElement };
 }
 
 test('empty execution limits submit as unlimited and remain clear in the progress label', () => {
@@ -1831,14 +1847,14 @@ test("manual invitations and rejoin reuse the original token after ambiguous res
       if (lose) throw new Error('receipt lost');
       return { members };
     } });
-  await f.context.invite_member({ name: 'Codex', access: 'manual' });
+  await assert.rejects(f.context.invite_member({ name: 'Codex', access: 'manual' }), /receipt lost/);
   lose = false;
   await f.context.invite_member({ name: 'Codex', access: 'manual' });
   assert.equal(inputs[0].payload.name, 'Codex-2');
   assert.deepEqual(inputs[1], inputs[0]);
   assert.equal(f.context.member_credentials('one')['Codex-2'].token, inputs[0].payload.token);
   lose = true;
-  await f.context.change_member({ member_id: 2, name: 'Codex-2', action: 'rejoin' });
+  await assert.rejects(f.context.change_member({ member_id: 2, name: 'Codex-2', action: 'rejoin' }), /receipt lost/);
   lose = false;
   await f.context.change_member({ member_id: 2, name: 'Codex-2', action: 'rejoin' });
   assert.deepEqual(inputs[3], inputs[2]);
@@ -1858,7 +1874,7 @@ test("automatic invitations keep explicit project permissions across an uncertai
       if (lose) throw new Error('receipt lost');
       return { free: { members: [{ name: payload.name, status: 'active', access: 'runner' }] } };
     } });
-  await f.context.invite_member({ name: 'Claude', access: 'runner', project_access: 'write' });
+  await assert.rejects(f.context.invite_member({ name: 'Claude', access: 'runner', project_access: 'write' }), /receipt lost/);
   lose = false;
   await f.context.invite_member({ name: 'Claude', access: 'runner', project_access: 'read' });
   assert.deepEqual(inputs[1], inputs[0]);
@@ -1870,7 +1886,7 @@ test("automatic invitations keep explicit project permissions across an uncertai
   f.context.test_state.room.mode = 'brainstorm';
   await f.context.invite_member({ name: 'Codex', access: 'runner', session_id: ' thread-from-history ' });
   assert.equal(inputs[3].payload.participants[inputs[3].payload.name].session_id, 'thread-from-history', 'the runner resumes the existing conversation');
-  assert.match(f.context.test_state.free_notice, /原会话/);
+  assert.match(f.notified.at(-1)[1], /原会话/);
 });
 
 test("topic retry retains a pending credential after live refresh has already revealed the new member", () => {
@@ -1916,9 +1932,8 @@ for (const recovery of [false, true]) test(`local defaults exclude session bindi
   await fixture.context.save_launch_defaults();
   assert.equal(requests[0].payload.participants.Codex.session_id, undefined);
   assert.equal(state.launch.profiles.Codex.session_id, 'one-room-session');
-  await assert.rejects(fixture.context.submit_room({ preventDefault() {} }), /lost receipt/);
+  await assert.rejects(fixture.context.submit_room({ preventDefault() {} }), /结果尚未确认.*lost receipt/);
   assert.equal(dialog_closes, 0, 'failed startup must leave configuration open for correction or retry');
-  assert.match(state.launch.error, /结果尚未确认.*lost receipt/);
   assert.equal(state.launch.profiles.Codex.session_id, 'one-room-session');
   fail = false;
   if (recovery) await fixture.context.resume_launch(state.pending_room.id);
@@ -2058,10 +2073,7 @@ function participant_connection_fixture() {
   const act = async (name, payload) => {
     calls.push(name);
     if (name === "invite_member") invites.push(payload.name);
-    if (name === "invite_member" && calls.filter((item) => item === "invite_member").length === controls.fail_invite_at) {
-      view.value.free_error = "邀请失败";
-      return false;
-    }
+    if (name === "invite_member" && calls.filter((item) => item === "invite_member").length === controls.fail_invite_at) return false;
     return true;
   };
   const dialog = vm.createContext({ computed, ref, watch, defineProps: () => ({}), defineModel: () => ref(false),
@@ -2093,7 +2105,7 @@ test("batch invitation admits woken members before manual ones and lists the man
 });
 
 test("batch invitation stops at the first failure and keeps the remaining picks for a retry", async () => {
-  const { dialog: context, calls, controls, view } = participant_connection_fixture();
+  const { dialog: context, calls, controls } = participant_connection_fixture();
   controls.fail_invite_at = 2;
   vm.runInContext("inviting.value = true", context);
   await Promise.resolve();
@@ -2102,7 +2114,6 @@ test("batch invitation stops at the first failure and keeps the remaining picks 
   assert.deepEqual(calls, ["invite_member", "invite_member"]);
   assert.equal(vm.runInContext("invite_picks.value.map((pick) => pick.name).join()", context), "Claude,Gemini");
   assert.equal(vm.runInContext("invited_manual.value.join()", context), "Codex");
-  assert.equal(view.value.free_error, "邀请失败");
 });
 
 test("shared member menu retains away and rejoin, but protects the current discussion host", async () => {
@@ -2220,7 +2231,7 @@ test("room path correction keeps defaults separate, reports acknowledgement and 
     return { ...input, applied: false };
   };
   await f.context.save_room_configuration();
-  assert.match(state.launch.repair.notice, /尚未确认采用/);
+  assert.match(f.notified.at(-1)[1], /尚未确认采用/);
   f.context.local_launch_request = async () => { state.room = { id: 'two' }; return { room_id: 'one' }; };
   await f.context.load_room_configuration();
   assert.equal(state.launch.repair.participants.Codex.executable, 'fixed-path');
@@ -2786,7 +2797,7 @@ test("missing existing-room credentials remain visible in the default theme with
   let sends = 0;
   Object.assign(fixture.context, { render_launch_settings() {}, local_launch_request: async () => { sends++; } });
   await fixture.context.launch_current_room();
-  assert.match(fixture.context.test_state.launch.error, /缺少房间凭据/);
+  assert.match(fixture.notified.at(-1)[1], /缺少房间凭据/);
   assert.equal(sends, 0);
 });
 
@@ -2988,7 +2999,9 @@ function folder_fixture() {
   context.set_connection = () => {};
   context.publish_view = () => frames.push(state.rooms.map((room) => ({ ...room })));
   context.show_toast = (message) => notices.push(message);
-  return { context, state, requests, notices, frames, draft,
+  const errors = [];
+  context.notify = (_level, message) => errors.push(message);
+  return { context, state, requests, notices, errors, frames, draft,
     move: (id = "a", folder_id = "two") => context.manage_channel({ id, action: "folder", folder_id }) };
 }
 
@@ -3106,7 +3119,7 @@ test("failed archives restore only the target while preserving later navigation 
   assert.equal(fixture.state.room.id, "b");
   assert.equal(fixture.state.archive_view, true);
   assert.equal(fixture.draft.value, "新页面的草稿");
-  assert.match(fixture.state.directory_error, /话题 A.*存档失败.*网络断开/);
+  assert.match(fixture.errors.at(-1), /话题 A.*存档失败.*网络断开/);
   assert.equal(fixture.state.archive_changes.size, 0);
 });
 
@@ -3967,7 +3980,8 @@ test("a live axis leaves room ahead of now and rescales in round steps", () => {
   assert.equal(live.total_ms, 10_000, "7 s of work shows on a 10 s axis");
   assert.equal(live.busy_ms, 7_000, "the time worked is still 7 s");
   assert.ok(Math.abs(live.x(7_000) - 0.7) < 1e-9);
-  assert.equal(timeline_axis([{ start: 0, end: 8_000 }], true).total_ms, 15_000);
+  assert.equal(timeline_axis([{ start: 0, end: 8_000 }], true).total_ms, 12_000);
+  assert.equal(timeline_axis([{ start: 0, end: 236_000 }], true).total_ms, 360_000, "just under 4 min fills 66% of a 6 min axis, not 39% of a 10 min one");
   assert.equal(timeline_axis(rows).total_ms, 7_000, "a finished run fills the axis");
 });
 
@@ -4023,5 +4037,4 @@ test('importing rooms reports each room as it goes and one short line per restor
   assert.deepEqual(result.rooms[0].members.map(member => [member.name, member.text, member.resume?.command || '']), [
     ['Codex', '请回后接续原会话', ''], ['Claude', '已改为手动接入，请回后在原窗口重新注册', 'claude --resume abc'], ['Gemini', '未恢复：找不到会话', '']]);
   assert.deepEqual(result.errors, ['bad.zip：格式无效']);
-  assert.equal(state.directory_notice, '');
 });

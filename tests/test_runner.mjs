@@ -1646,6 +1646,12 @@ test('a hosted site is polled less often than a local one, and a site update che
   await delay(50);
   assert.equal(count('local'), after_ready + 1, 'a change checks the local room at once, without waiting for a poll');
   assert.equal(count('remote'), 1, 'another site is not woken by this site\'s change');
+  stream.write('event: change\ndata: {"rooms":["other"]}\n\n');
+  await delay(50);
+  assert.equal(count('local'), after_ready + 1, 'a change naming another room leaves this room to its poll');
+  stream.write('event: change\ndata: {"rooms":["local"]}\n\n');
+  await delay(50);
+  assert.equal(count('local'), after_ready + 2, 'a change naming this room checks it at once');
 });
 
 test('an idle hosted room is read in full only after its site reports a new revision, a busy one keeps its interval', async t => {
@@ -3054,6 +3060,15 @@ test('changed files in a Git working tree are reported after the member exits', 
   runner.snapshots.set(3, { member: 'Claude', directory: join(config.directory, 'missing-directory'), before: new Map() });
   await runner.report_finished(new Set());
   assert.equal(state.reports[3], undefined, 'non-Git or unavailable detection is not an empty report');
+  config.participants.Claude.project_access = 'read';
+  state.pending = [{ id: 3, message_id: 13 }];
+  await runner.tick();
+  const read_only = state.executions.at(-1);
+  writeFileSync(join(project, 'index.html'), 'written by someone else');
+  read_only.status = 'completed';
+  child.emit('close');
+  await runner.tick();
+  assert.equal(state.reports[read_only.id], undefined, 'a read-only member cannot have written the changes it would observe');
 });
 
 test('only the host task points to the host skill; other members get no dispatch rule', async t => {

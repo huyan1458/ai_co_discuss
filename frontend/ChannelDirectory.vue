@@ -144,8 +144,6 @@ function actions(room, index, folder_id, folder_room_count) {
       <p v-if="!rooms.length" class="channel-directory-empty">暂无协作房间</p>
     </nav>
     <UButton v-show="rooms_open" icon="i-lucide-archive" color="neutral" variant="ghost" class="channel-archive-toggle" aria-haspopup="dialog" @click="emit('archives')"><span class="channel-archive-label">已存档</span><small v-if="archived_count" class="channel-archive-count">{{ archived_count }}</small></UButton>
-    <p v-if="view.directory_notice" role="status" class="channel-directory-notice">{{ view.directory_notice }}</p>
-    <p v-if="view.directory_error" role="alert" class="channel-directory-error">{{ view.directory_error }}</p>
     <ImportDialog v-model:open="import_open" />
   </div>
 </template>

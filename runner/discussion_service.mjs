@@ -388,12 +388,14 @@ export class DiscussionService {
     }
     await Promise.all(checks);
   }
-  /** Check every room of a site now, as its website reported a change. */
-  wake(site) {
-    for (const [path, worker] of this.workers) if (worker.state.site === site) this.start(path, worker);
+  /** Check a site's rooms now, as its website reported a change; `rooms` limits it to the rooms that changed. */
+  wake(site, rooms = null) {
+    for (const [path, worker] of this.workers) {
+      if (worker.state.site === site && (!rooms || rooms.includes(worker.state.room))) this.start(path, worker);
+    }
   }
   /**
-   * Follow a site's `/api/updates` stream and wake its rooms on each change, so a message reaches the AI within
+   * Follow a site's `/api/updates` stream and wake the rooms each change names, so a message reaches the AI within
    * milliseconds instead of the next poll. A site without push (204) is left to polling; a dropped stream reconnects.
    */
   watch(site) {
@@ -411,7 +413,8 @@ export class DiscussionService {
             buffer += decoder.decode(chunk, { stream: true }).replaceAll('\r\n', '\n');
             for (let end = buffer.indexOf('\n\n'); end >= 0; end = buffer.indexOf('\n\n')) {
               // `ready` comes on every (re)connection, so changes missed while disconnected are picked up too.
-              if (/^event: (change|ready)$/m.test(buffer.slice(0, end))) this.wake(site);
+              const frame = buffer.slice(0, end);
+              if (/^event: (change|ready)$/m.test(frame)) this.wake(site, changed_rooms(frame));
               buffer = buffer.slice(end + 2);
             }
           }
@@ -449,6 +452,13 @@ export class DiscussionService {
     for (const worker of this.workers.values()) await worker.close(true);
     this.workers.clear();
   }
+}
+
+/** The rooms an update event names, or null when it names none and any room may have changed. */
+function changed_rooms(frame) {
+  const data = frame.match(/^data: (.*)$/m)?.[1];
+  try { const rooms = JSON.parse(data).rooms; return Array.isArray(rooms) && rooms.length ? rooms : null; }
+  catch { return null; }
 }
 
 /** Delete one room's local files: its answer drafts, and its launch folder when the service created it under launches/. */

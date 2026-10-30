@@ -5471,11 +5471,12 @@ function updates_hub(env) {
   return env.UPDATES?.get(env.UPDATES.idFromName(env.UPDATES_CHANNEL || "default"));
 }
 
-/** Deliver an invalidation without making a committed write fail on push outages. */
-async function notify_update(env) {
+/** Deliver an invalidation of one room (or the whole site) without making a committed write fail on push outages. */
+async function notify_update(env, room_id) {
   try {
     const hub = updates_hub(env);
-    const response = await hub.fetch("https://updates.internal/", { method: "POST" });
+    const target = room_id ? `https://updates.internal/?room=${encodeURIComponent(room_id)}` : "https://updates.internal/";
+    const response = await hub.fetch(target, { method: "POST" });
     if (!response.ok) console.error("Update notification failed:", response.status);
   } catch (error) { console.error("Update notification failed:", error.message); }
 }
@@ -5502,7 +5503,7 @@ async function fetch_request(request, env, context) {
     const quiet_renewal = (parts[3] === "events" && action === "renew") || (parts[3] === "executions" && action === "renew") || action === "segments";
     const response = await handle_api(env.DB, request, parts, params, env.ATTACHMENTS, env.ADMIN_SETUP_KEY);
     if (request.method === "POST" && response.ok && ["rooms", "folders"].includes(parts[1]) && !quiet_renewal && env.UPDATES) {
-      const notification = notify_update(env);
+      const notification = notify_update(env, parts[1] === "rooms" && parts.length > 3 ? parts[2] : null);
       if (context) context.waitUntil(notification);
       else await notification;
     }

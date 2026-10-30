@@ -1,6 +1,7 @@
 """AI CoDiscuss 的零依赖 HTTP / SQLite 概念验证服务。"""
 
 import argparse
+import collections
 import copy
 import hashlib
 import hmac
@@ -30,7 +31,7 @@ from .free_room import (add_member, after_free_message, authorize_free_write, ch
 from .free_room import add_discussion_member, convert_suggestion, discussion_member_action, message_suggestions, save_suggestions, sync_participants
 from .free_room import active_members, adopt_recommendation, ask_members, asks_view, checked_asks, recommend_member, register_member, route_held_messages, require_member
 from .free_room import describe_members, execution_notes, label_members, member_descriptions, member_labels, reorder_speakers, set_chain_rounds, speaking_order, stop_room_work
-from .free_room import continue_chain, execution_timeline, retract_message, rewind_plan, rewind_room, withdrawals
+from .free_room import continue_chain, execution_timeline, group_route_plan, retract_message, rewind_plan, rewind_room, withdrawals
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, is_ai, is_participant
 from .room_import import import_room, imported_attachment
 from .runtime import (authorize_write, begin_write, event_view,
@@ -46,6 +47,8 @@ ROOT = Path(__file__).resolve().parent.parent
 WEB_ROOT = ROOT / "web"
 DEFAULT_PORT = 8765
 UPDATE_HEARTBEAT_SECONDS = 15
+# Changes remembered for streams that fall behind; one further back is reported as a change to the whole site.
+UPDATE_LOG_SIZE = 256
 MAX_BODY_BYTES = 512 * 1024
 MAX_IMPORT_BYTES = 32 * 1024 * 1024
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
@@ -1985,10 +1988,17 @@ def protocol_text(room):
     return "\n\n".join(paragraphs).replace("HOST", room["host"]).replace("BASE", base)
 
 
+def update_frame(rooms):
+    """Encode a change event; `rooms` lists the changed rooms, and without it every room may have changed."""
+    return f"event: change\ndata: {json.dumps({'rooms': rooms} if rooms else {})}\n\n".encode("utf-8")
+
+
 class DiscussionServer(ThreadingHTTPServer):
     """HTTP server carrying the configured SQLite path."""
 
     daemon_threads = True
+    # Every open page refreshes at once and the runner reads in bursts; Windows refuses connections beyond the backlog.
+    request_queue_size = 128
     allow_reuse_address = os.name != "nt"
     allow_reuse_port = False
 
@@ -1996,6 +2006,8 @@ class DiscussionServer(ThreadingHTTPServer):
         self.database = Path(database)
         self.updates = threading.Condition()
         self.update_version = 0
+        # Recent (version, room id or None) pairs, so a stream names the rooms that changed; None means the whole site.
+        self.update_log = collections.deque(maxlen=UPDATE_LOG_SIZE)
         self.updates_closed = False
         if local_launch and address[0] != "127.0.0.1":
             raise ValueError("本机启动入口须绑定 127.0.0.1")
@@ -2012,11 +2024,19 @@ class DiscussionServer(ThreadingHTTPServer):
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         super().server_bind()
 
-    def notify_update(self):
-        """Wake browser subscribers after a committed business write."""
+    def notify_update(self, room_id=None):
+        """Wake subscribers after a committed business write to one room, or to the site when no room is given."""
         with self.updates:
             self.update_version += 1
+            self.update_log.append((self.update_version, room_id))
             self.updates.notify_all()
+
+    def changed_rooms(self, version):
+        """Return the rooms changed after a version, or None when the site changed or the log no longer reaches it."""
+        entries = [room for number, room in self.update_log if number > version]
+        if len(entries) < self.update_version - version or None in entries:
+            return None
+        return sorted(set(entries))
 
     def server_close(self):
         """Release streaming clients when the HTTP server stops."""
@@ -2041,7 +2061,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         quiet_renewal = (parts[3:4] == ["events"] and action == "renew") or (parts[3:4] in (["events"], ["executions"]) and action == "segments")
         if (self.command == "POST" and 200 <= status < 300 and parts[:2] in (["api", "rooms"], ["api", "folders"])
                 and not quiet_renewal):
-            self.server.notify_update()
+            self.server.notify_update(parts[2] if parts[:2] == ["api", "rooms"] and len(parts) > 3 else None)
         if content_type == "application/json":
             body = json.dumps(body, ensure_ascii=False)
         data = body.encode("utf-8") if isinstance(body, str) else body
@@ -2143,8 +2163,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                     if self.server.updates_closed:
                         return
                     changed = self.server.update_version != version
+                    rooms = self.server.changed_rooms(version) if changed else None
                     version = self.server.update_version
-                self.wfile.write(b"event: change\ndata: {}\n\n" if changed else b": keepalive\n\n")
+                self.wfile.write(update_frame(rooms) if changed else b": keepalive\n\n")
                 self.wfile.flush()
         except OSError:
             pass
@@ -2689,6 +2710,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = reserve_execution(connection, room_id, token, self.read_payload())
         elif parts[3:] == ["recommendations"] and method == "POST":
             result = recommend_member(connection, room_id, token, self.read_payload())
+        elif len(parts) == 5 and parts[3] == "recommendations" and method == "GET":
+            result = group_route_plan(connection, room_id, token, int(parts[4]))
         elif len(parts) == 5 and parts[3] == "recommendations" and method == "POST":
             result = adopt_recommendation(connection, room_id, token, int(parts[4]), self.read_payload())
         elif len(parts) == 6 and parts[3] == "executions" and parts[5] == "notes" and method == "GET":

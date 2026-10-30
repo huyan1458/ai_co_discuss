@@ -53,12 +53,12 @@ const PLATFORM_IDENTITIES = {
   Grok: { initials: "GK", style: "grok", description: "AI 身份" },
 };
 const IDENTITIES = by_platform(PLATFORM_IDENTITIES, (identity, name) => ({ ...identity, label: name, description: "AI 实例" }));
-const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false, free_notice: "", free_error: "", order_error: null,
+const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false,
   free_proxy: "", create_parent: null, named_followup: false, create_discussion: false,
   archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
   reply_to: null, turn_reply_to: null, tab: "topic", refresh_version: 0, context_dirty: false, topic_dirty: false,
   snapshot_id: 0, pending_submission: null, pending_turn: null, pending_room: null, toast_timer: null,
-  creation_mode: "brainstorm", creation_drafts: {}, access_notice: "", access_error: "" };
+  creation_mode: "brainstorm", creation_drafts: {} };
 const live_updates = { source: null, connected: false, enabled: false, timer: null, poll_timer: null,
   running: false, dirty: false, full: false, revisions: "", refreshed_at: 0 };
 state.messages = [];
@@ -66,21 +66,18 @@ state.message_history = null;
 state.connected = false;
 state.reconnecting = false;
 state.attachment_drafts = [];
-state.composer_error = "";
 state.upload_status = "";
 state.sending_message = false;
 state.attachment_preview = null;
 state.archive_changes = new Map();
 state.archive_version = 0;
-state.directory_error = "";
-state.directory_notice = "";
 // The open import's progress for the import dialog: { done, rooms: [{ title, status, members, error }], errors }.
 state.import_progress = null;
 state.directory_pending = new Map();
 state.directory_version = 0;
 state.navigation_version = 0;
 state.admin = { loaded: false, local: false, registered: false, setup_available: false, logged_in: false, profile: null, identity_version: 0 };
-state.launch = { available: false, remote: false, relay: null, connect_command: "", profiles: {}, projects: [], presets: [], builtin_presets: [], description_templates: {}, workspace: {}, scheduler: {}, create: true, error: "", notice: "", recoveries: [] };
+state.launch = { available: false, remote: false, relay: null, connect_command: "", profiles: {}, projects: [], presets: [], builtin_presets: [], description_templates: {}, workspace: {}, scheduler: {}, create: true, error: "", recoveries: [] };
 const PLATFORM_CLIENTS = { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }],
   Claude: [{ value: "claude", label: "Claude Code CLI" }],
   Gemini: [{ value: "antigravity_cli", label: "Antigravity CLI" }, { value: "antigravity", label: "Antigravity App" }] };
@@ -137,12 +134,24 @@ function format_time(value) {
 
 /** Display operation feedback only in the classic renderer. */
 function show_toast(message, is_error = false) {
-  if (document.documentElement.dataset.theme.startsWith("channel")) return;
+  // The channel themes stay quiet on success; failures go to the shared toaster.
+  if (document.documentElement.dataset.theme.startsWith("channel")) { if (is_error) notify("error", message); return; }
   clearTimeout(state.toast_timer);
   element("toast").textContent = message;
   element("toast").classList.toggle("error", is_error);
   element("toast").hidden = false;
   state.toast_timer = setTimeout(() => { element("toast").hidden = true; }, TOAST_DURATION_MS);
+}
+
+/** Show a transient notice in the channel's toaster; level is "error", "warning", or "info". */
+function notify(level, message) {
+  document.dispatchEvent(new CustomEvent("discuss:notice", { detail: { level, message } }));
+}
+
+/** Show a rethrown error in its own wording, so the action dispatcher does not show it again. */
+function notify_failure(error, message) {
+  notify("error", message);
+  error.notified = true;
 }
 
 /** The administrator session token kept by this browser, or an empty string. */
@@ -437,7 +446,6 @@ async function update_directory(change) {
   if (state.directory_pending.has(change.key)) return;
   state.directory_pending.set(change.key, change);
   state.directory_version++;
-  state.directory_error = "";
   change.apply();
   render_rooms();
   publish_view();
@@ -447,7 +455,7 @@ async function update_directory(change) {
     return saved;
   } catch (error) {
     change.rollback();
-    state.directory_error = change.error_message?.(error) || `${change.label}失败，已恢复原状态：${error.message}`;
+    notify_failure(error, change.error_message?.(error) || `${change.label}失败，已恢复原状态：${error.message}`);
     throw error;
   } finally {
     state.directory_pending.delete(change.key);
@@ -540,13 +548,12 @@ async function archive_channel(id, archived) {
   const change = { archived, phase: archived && room.phase && room.phase !== "concluded" ? "paused" : room.phase };
   state.archive_changes.set(id, change);
   state.archive_version++;
-  state.directory_error = "";
   display_channel_archive(id, change);
   try {
     const saved = await request_json(`/api/rooms/${id}/${archived ? "archive" : "restore"}`, { actor: "用户" });
     display_channel_archive(id, { archived: Boolean(saved.archived), phase: saved.phase }, change);
   } catch (error) {
-    state.directory_error = `「${room.title}」${archived ? "存档" : "恢复"}失败，已恢复原状态：${management_error_message(id, error)}`;
+    notify_failure(error, `「${room.title}」${archived ? "存档" : "恢复"}失败，已恢复原状态：${management_error_message(id, error)}`);
     display_channel_archive(id, previous, change);
     throw error;
   } finally {
@@ -582,7 +589,6 @@ async function assign_channel_folder(id, folder_id) {
   const previous_folder = room.folder_id ?? null;
   if (state.folders.some(folder => folder.id === folder_id && folder.pending)) return;
   if (folder_id && state.directory_pending.get("folder-order")?.removed_folder === folder_id) return;
-  state.directory_error = "";
   state.folder_moves.set(id, folder_id);
   state.folder_version++;
   display_channel_folder(id, folder_id);
@@ -591,7 +597,7 @@ async function assign_channel_folder(id, folder_id) {
     display_channel_folder(id, saved.folder_id ?? null);
     show_toast("话题归类已更新");
   } catch (error) {
-    state.directory_error = `「${room.title}」归类失败，已恢复原状态：${error.message}`;
+    notify_failure(error, `「${room.title}」归类失败，已恢复原状态：${error.message}`);
     display_channel_folder(id, previous_folder);
     throw error;
   } finally {
@@ -888,7 +894,6 @@ async function refresh_room({ room: read_room = true } = {}) {
 
 /** Select a room and reset room-specific draft and filter state. */
 async function select_room(room_id) {
-  state.access_error = ""; state.access_notice = "";
   state.navigation_version++;
   state.refresh_version++;
   state.room = state.rooms.find((room) => room.id === room_id);
@@ -900,9 +905,7 @@ async function select_room(room_id) {
   state.pending_turn = null;
   state.pending_submission = null;
   clear_attachment_drafts();
-  state.composer_error = "";
   state.launch.repair = null;
-  state.launch.repair_error = '';
   state.launch.room_models = null;
   state.messages = [];
   state.message_history = null;
@@ -1027,7 +1030,7 @@ function set_proxy(name) { state.free_proxy = state.free_proxy === name ? "" : n
 async function copy_online_notice(name) {
   const ids = (state.room.free?.requests || []).filter(item => item.member === name && item.status === "pending").map(item => `#${item.message_id}`);
   await copy_text(`请阅读 ${location.origin}/r/${state.room.id}?participant=${name} ，回应 ${ids.join("、") || "最新消息"}。单条原文：${location.origin}/r/${state.room.id}/messages/编号。请在你自己的窗口回答，不要操作网页或调用写入接口。`);
-  state.free_notice = `已复制给 ${name} 的阅读通知；复制不代表已送达。拿到回答后，在输入框选择“代发 ${name}”粘贴原文。`;
+  notify("info", `已复制给 ${name} 的阅读通知；复制不代表已送达。拿到回答后，在输入框选择“代发 ${name}”粘贴原文。`);
 }
 
 /** Start every new form from defaults: room use, delivery, text, roster, host, limits and software overrides. */
@@ -1045,7 +1048,6 @@ function reset_create_form() {
   state.create_chain_rounds = DEFAULT_CHAIN_ROUNDS;
   state.launch.profiles = JSON.parse(JSON.stringify(state.launch.saved_profiles || {}));
   Object.values(state.launch.profiles).forEach(fill_api_key);
-  state.launch.notice = "";
   render_launch_settings();
   publish_view();
 }
@@ -1073,7 +1075,7 @@ async function return_conclusion() {
   const summary = room.host_brief?.text || room.state_text || "（主持人尚未整理结论，请查看原文）";
   await request_json(`/api/rooms/${parent.id}/messages`, { author: "用户", text: `头脑风暴「${room.title}」已收束。\n\n${summary}\n\n原文：${location.origin}/r/${room.id}`,
     kind: "chat", submitted_by: "用户", submission_id: new_submission_id(), to: [] });
-  state.free_notice = `结论已发回「${parent.title}」`;
+  notify("info", `结论已发回「${parent.title}」`);
   await select_room(parent.id);
 }
 
@@ -1239,7 +1241,7 @@ async function send_descriptions(room_id, token, descriptions) {
   const filled = Object.fromEntries(Object.entries(descriptions).filter(([, text]) => text?.trim()));
   if (!room_id || !token || !Object.keys(filled).length) return;
   try { await request_json(`/api/rooms/${room_id}/descriptions`, { descriptions: filled }, token); }
-  catch (error) { state.free_notice = `成员描述未保存：${error.message}，可在发言顺序的成员菜单里重新填写。`; }
+  catch (error) { notify("warning", `成员描述未保存：${error.message}，可在发言顺序的成员菜单里重新填写。`); }
 }
 
 /** Save display labels by member name with the room credential; a failure leaves the members under their names. */
@@ -1247,50 +1249,47 @@ async function send_labels(room_id, token, labels) {
   const filled = Object.fromEntries(Object.entries(labels).filter(([, text]) => text?.trim()));
   if (!room_id || !token || !Object.keys(filled).length) return;
   try { await request_json(`/api/rooms/${room_id}/labels`, { labels: filled }, token); }
-  catch (error) { state.free_notice = `成员显示名未保存：${error.message}，房间里按成员名显示。`; }
+  catch (error) { notify("warning", `成员显示名未保存：${error.message}，房间里按成员名显示。`); }
 }
 
 /** Save the new room's round limit with the room credential; a failure leaves the room on the default. */
 async function send_chain_rounds(room_id, token, max_rounds) {
   if (!room_id || !token || max_rounds === DEFAULT_CHAIN_ROUNDS) return;
   try { await request_json(`/api/rooms/${room_id}/budget`, { max_rounds }, token); }
-  catch (error) { state.free_notice = `推进轮数未保存：${error.message}，房间沿用默认 ${DEFAULT_CHAIN_ROUNDS} 轮，可在房间页修改。`; }
+  catch (error) { notify("warning", `推进轮数未保存：${error.message}，房间沿用默认 ${DEFAULT_CHAIN_ROUNDS} 轮，可在房间页修改。`); }
 }
 
 /** Edit one member's description inside the room; the next decision by the scheduler or host uses it. */
 async function describe_member(name, text) {
   const room_id = state.room.id;
-  state.free_error = "";
   try {
     const token = localStorage.getItem(`discuss-access:${room_id}`);
     if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
     await request_json(`/api/rooms/${room_id}/descriptions`, { descriptions: { [name]: text } }, token);
     if (state.room?.id === room_id) await refresh_room();
-  } catch (error) { state.free_error = error.message; throw error; }
+  } catch (error) { notify("error", error.message); throw error; }
 }
 
 /** Change how many rounds the host may run from one owner message; chains still running follow the new value. */
 async function set_chain_rounds(max_rounds) {
   const room_id = state.room.id;
-  state.free_error = "";
   try {
     const token = localStorage.getItem(`discuss-access:${room_id}`);
     if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
     await request_json(`/api/rooms/${room_id}/budget`, { max_rounds }, token);
     if (state.room?.id === room_id) await refresh_room();
-  } catch (error) { state.free_error = error.message; throw error; }
+  } catch (error) { notify("error", error.message); throw error; }
 }
 
 /** Let a chain that stopped at its round limit run on for more rounds; the dispatch it held back goes out at once. */
 async function continue_chain(chain_id, rounds) {
   const room_id = state.room.id;
-  state.free_error = "";
   try {
     const token = localStorage.getItem(`discuss-access:${room_id}`);
     if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
     await request_json(`/api/rooms/${room_id}/chains/${chain_id}`, { action: "continue", rounds }, token);
     if (state.room?.id === room_id) await refresh_room();
-  } catch (error) { state.free_error = error.message; throw error; }
+  } catch (error) { notify("error", error.message); throw error; }
 }
 
 /** Allow operations a woken member's software refused; the local service passes the rules from its next run. */
@@ -1321,33 +1320,30 @@ async function set_member_adapter({ name, adapter }) {
 /** Owner changes use the website; only automatic members need the local service to reconnect. */
 async function change_member({ member_id, name, action, role, latest_id }) {
   const room_id = state.room.id;
-  state.free_error = ""; state.free_notice = "";
-  try {
-    if (action === "rejoin") {
-      const member = (state.room.free?.members || state.room.members).find(item => item.id === member_id);
-      const token = localStorage.getItem(`discuss-access:${room_id}`);
-      const record = prepare_member_request(room_id, `rejoin:${member_id}`, { name, access: member.access });
-      const result = member.access === "runner"
-        ? await local_launch_request("room-member", { room_id, token, action: "rejoin", name, member_token: record.member.token })
-        : await request_json(`/api/rooms/${room_id}/members/${member_id}`, { action: "active", token: record.member.token });
-      finish_member_request(room_id, token, record, result);
-      if (state.room?.id === room_id) state.free_notice = member.access === "manual" ? `${name} 已请回，凭证已更新；请用新的启动指令让它重新注册。` : `${name} 已请回，续接原会话。`;
-    } else {
-      await request_json(`/api/rooms/${room_id}/members/${member_id}${action === "interrupt" ? "/interrupt" : ""}`,
-        action === "interrupt" ? {} : { action, ...(role ? { role } : {}), ...(latest_id !== undefined ? { latest_id } : {}) });
-    }
-    if (state.room?.id === room_id) await refresh_room();
-  } catch (error) { if (state.room?.id === room_id) state.free_error = error.message; }
+  if (action === "rejoin") {
+    const member = (state.room.free?.members || state.room.members).find(item => item.id === member_id);
+    const token = localStorage.getItem(`discuss-access:${room_id}`);
+    const record = prepare_member_request(room_id, `rejoin:${member_id}`, { name, access: member.access });
+    const result = member.access === "runner"
+      ? await local_launch_request("room-member", { room_id, token, action: "rejoin", name, member_token: record.member.token })
+      : await request_json(`/api/rooms/${room_id}/members/${member_id}`, { action: "active", token: record.member.token });
+    finish_member_request(room_id, token, record, result);
+    if (state.room?.id === room_id) notify("info", member.access === "manual" ? `${name} 已请回，凭证已更新；请用新的启动指令让它重新注册。` : `${name} 已请回，续接原会话。`);
+  } else {
+    await request_json(`/api/rooms/${room_id}/members/${member_id}${action === "interrupt" ? "/interrupt" : ""}`,
+      action === "interrupt" ? {} : { action, ...(role ? { role } : {}), ...(latest_id !== undefined ? { latest_id } : {}) });
+  }
+  if (state.room?.id === room_id) await refresh_room();
 }
 
 /** Reorder who has not spoken yet against the revision the board showed; a changed order is refused and the board reloads. */
 async function reorder_speakers({ revision, order }) {
   const room_id = state.room.id;
-  state.order_error = null;
   try { await request_json(`/api/rooms/${room_id}/speaking-order`, { revision, order }); }
   catch (error) {
     // A conflict means someone else's change landed first; the board reloads below, so ask for the move again (same text as the board's own notice).
-    state.order_error = { room_id, message: error.status === 409 ? "发言顺序刚有变化，已更新为最新顺序，请重新调整" : error.message };
+    if (error.status === 409) notify("warning", "发言顺序刚有变化，已更新为最新顺序，请重新调整");
+    else notify("error", error.message);
   }
   if (state.room?.id === room_id) await refresh_room();
 }
@@ -1355,41 +1351,39 @@ async function reorder_speakers({ revision, order }) {
 /** Invite an independent member, retaining its credential before either delivery path runs. */
 async function invite_member({ name, access, project_access = "read", session_id = "" }) {
   const room_id = state.room.id;
-  state.free_error = ""; state.free_notice = "";
-  try {
-    const token = localStorage.getItem(`discuss-access:${room_id}`);
-    if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
-    const taken = new Set((state.room.free?.members || state.room.members || []).map(member => member.name));
-    const instance = unique_instance(name, taken);
-    const web_member = access === "online";
-    const record = prepare_member_request(room_id, `add:${name}:${access}`, { name: instance, access: web_member ? "manual" : access,
-      ...(web_member ? { manual_source: "web" } : {}), adapter: "", session_mode: "new" }, { project_access, session_id: session_id.trim() });
-    let result;
-    if (access === "runner") {
-      const draft = launch_options();
-      const participants = { ...draft.participants, [record.member.name]: { ...draft.participants?.[name],
-        ...draft.participants?.[record.member.name], project_access: record.options?.project_access || "read",
-        // An existing conversation joins with its own context; the runner resumes it instead of starting a new one.
-        ...(record.options?.session_id ? { session_id: record.options.session_id } : {}) } };
-      if (participants[record.member.name].adapter === "api") participants[record.member.name].project_access = "read";
-      result = await local_launch_request("room-member", { room_id, token, action: "add", name: record.member.name, access,
-        member_token: record.member.token, participants, cwd: draft.cwd });
-    } else result = await request_json(`/api/rooms/${room_id}/members`, record.member);
-    finish_member_request(room_id, token, record, result);
-    await send_descriptions(room_id, token, { [record.member.name]: description_draft(name) });
-    await send_labels(room_id, token, { [record.member.name]: label_drafts[name] });
-    delete description_drafts[name];
-    delete label_drafts[name];
-    if (state.room?.id === room_id) {
-      state.free_notice = web_member ? `${record.member.name} 已加入，阅读通知与真实回答由你或授权主持人转交。`
-        // A manual member's start step lives on the board row, the composer bar and the invite dialog; no extra notice.
-        : access === "manual" ? ""
-          : record.options?.session_id ? `${record.member.name} 已接入原会话；它工作时请不要在原窗口继续操作。`
-          : state.room.mode === "free" ? `${record.member.name} 已加入，之后点名它即会由本机服务唤醒。`
-            : `${record.member.name} 已加入讨论，主持人会重新安排发言。`;
-      await refresh_room();
-    }
-  } catch (error) { if (state.room?.id === room_id) state.free_error = error.message; }
+  const token = localStorage.getItem(`discuss-access:${room_id}`);
+  if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
+  const taken = new Set((state.room.free?.members || state.room.members || []).map(member => member.name));
+  const instance = unique_instance(name, taken);
+  const web_member = access === "online";
+  const record = prepare_member_request(room_id, `add:${name}:${access}`, { name: instance, access: web_member ? "manual" : access,
+    ...(web_member ? { manual_source: "web" } : {}), adapter: "", session_mode: "new" }, { project_access, session_id: session_id.trim() });
+  let result;
+  if (access === "runner") {
+    const draft = launch_options();
+    const participants = { ...draft.participants, [record.member.name]: { ...draft.participants?.[name],
+      ...draft.participants?.[record.member.name], project_access: record.options?.project_access || "read",
+      // An existing conversation joins with its own context; the runner resumes it instead of starting a new one.
+      ...(record.options?.session_id ? { session_id: record.options.session_id } : {}) } };
+    if (participants[record.member.name].adapter === "api") participants[record.member.name].project_access = "read";
+    result = await local_launch_request("room-member", { room_id, token, action: "add", name: record.member.name, access,
+      member_token: record.member.token, participants, cwd: draft.cwd });
+  } else result = await request_json(`/api/rooms/${room_id}/members`, record.member);
+  finish_member_request(room_id, token, record, result);
+  await send_descriptions(room_id, token, { [record.member.name]: description_draft(name) });
+  await send_labels(room_id, token, { [record.member.name]: label_drafts[name] });
+  delete description_drafts[name];
+  delete label_drafts[name];
+  if (state.room?.id === room_id) {
+    const notice = web_member ? `${record.member.name} 已加入，阅读通知与真实回答由你或授权主持人转交。`
+      // A manual member's start step lives on the board row, the composer bar and the invite dialog; no extra notice.
+      : access === "manual" ? ""
+        : record.options?.session_id ? `${record.member.name} 已接入原会话；它工作时请不要在原窗口继续操作。`
+        : state.room.mode === "free" ? `${record.member.name} 已加入，之后点名它即会由本机服务唤醒。`
+          : `${record.member.name} 已加入讨论，主持人会重新安排发言。`;
+    if (notice) notify("info", notice);
+    await refresh_room();
+  }
 }
 
 /** Clear only the composer that produced the saved message. */
@@ -1417,10 +1411,8 @@ async function send_message(event) {
   event.preventDefault();
   if (!state.room || state.sending_message) return;
   const room_id = state.room.id, drafts = state.attachment_drafts;
-  state.composer_error = "";
-  let payload, saved = false;
-  try { payload = message_payload(); }
-  catch (error) { state.composer_error = error.message; render_attachment_drafts(); publish_view(); throw error; }
+  const payload = message_payload();
+  let saved = false;
   if (!payload.text && !drafts.length) return;
   const signature = JSON.stringify({ room: room_id, ...payload, files: drafts.map(file => file.id) });
   if (state.pending_submission?.signature !== signature) state.pending_submission = { signature, id: new_submission_id() };
@@ -1435,9 +1427,9 @@ async function send_message(event) {
     saved = true;
     await finish_message(result, room_id, drafts);
   } catch (error) {
-    if (state.room?.id === room_id) state.composer_error = saved
+    if (state.room?.id === room_id) notify_failure(error, saved
       ? `留言已保存，但页面刷新失败：${error.message}`
-      : `${error.message}；草稿已保留，可重试发送`;
+      : `${error.message}；草稿已保留，可重试发送`);
     throw error;
   } finally {
     state.sending_message = false;
@@ -1468,9 +1460,8 @@ function attachment_file_icon(file_name) {
 function add_attachments(files) {
   if (!state.room || state.sending_message) return;
   const selected = Array.from(files);
-  state.composer_error = "";
-  if (state.attachment_drafts.length + selected.length > MAX_MESSAGE_ATTACHMENTS) state.composer_error = "每条消息最多 10 个附件";
-  else if (selected.some(file => file.size > MAX_ATTACHMENT_BYTES)) state.composer_error = "单个附件最多 20 MiB";
+  if (state.attachment_drafts.length + selected.length > MAX_MESSAGE_ATTACHMENTS) notify("warning", "每条消息最多 10 个附件");
+  else if (selected.some(file => file.size > MAX_ATTACHMENT_BYTES)) notify("warning", "单个附件最多 20 MiB");
   else state.attachment_drafts.push(...selected.map(file => ({ id: new_submission_id(), file,
     preview_url: /^image\/(png|jpeg|gif|webp)$/.test(file.type) ? URL.createObjectURL(file) : "", uploaded: null, actor: null })));
   render_attachment_drafts();
@@ -1490,19 +1481,18 @@ function remove_attachment(id) {
   const file = state.attachment_drafts.find(item => item.id === id);
   if (file?.preview_url) URL.revokeObjectURL(file.preview_url);
   state.attachment_drafts = state.attachment_drafts.filter(item => item.id !== id);
-  state.composer_error = "";
   render_attachment_drafts();
   publish_view();
 }
 
-/** Display shared file drafts and errors in the classic theme. */
+/** Display shared file drafts and upload progress in the classic theme. */
 function render_attachment_drafts() {
   const container = element("attachment-drafts");
   if (!container) return;
   container.innerHTML = state.attachment_drafts.map(item => `<div class="attachment-draft">${item.preview_url ? `<img src="${item.preview_url}" alt="">` : ""}
     <span>${escape_html(item.file.name)}<small>${attachment_size(item.file.size)}</small></span>
     <button type="button" data-remove-attachment="${item.id}" aria-label="移除 ${escape_html(item.file.name)}" ${state.sending_message ? "disabled" : ""}>×</button></div>`).join("");
-  element("attachment-status").textContent = state.composer_error || state.upload_status;
+  element("attachment-status").textContent = state.upload_status;
   element("choose-attachments").disabled = state.sending_message;
 }
 
@@ -1782,7 +1772,7 @@ function access_snapshot() {
       name: member.name, access: is_web_member(member) ? "online" : member.access, available: member.status === "active" && !is_web_member(member)
         && Boolean(saved[member.name]?.token) && is_web_member(saved[member.name]) === is_web_member(member)
         && (!saved[member.name].id || saved[member.name].id === member.id),
-    })), notice: state.access_notice, error: state.access_error };
+    })) };
 }
 
 /** Generate a separate random credential for each declared participant instance; `cli` members are woken locally. */
@@ -1837,27 +1827,20 @@ async function submit_room(event, folder_id = null) {
   const signature = signed(payload, launch_draft);
   const navigation = state.navigation_version;
   if (!launching) element("room-dialog").close();
-  state.launch.error = "";
-  let room;
-  try {
-    const pending = prepare_room_request(signature);
-    const token = pending.token;
-    pending.members ||= creation_members(payload.experts);
-    // The website tracks capabilities (cli/online); a manual expert is a local reader and writer whose delivery lives in its member record.
-    const experts = Object.fromEntries(Object.entries(payload.experts || {}).map(([name, mode]) => [name, mode === "manual" ? "cli" : mode]));
-    const input = { ...(launch_draft || {}), room: { ...payload, ...(payload.experts ? { experts } : {}), members: pending.members, submission_id: pending.id }, token };
-    room = await update_directory({ key: "create-room", label: `「${payload.title}」创建`,
+  const pending = prepare_room_request(signature);
+  const token = pending.token;
+  pending.members ||= creation_members(payload.experts);
+  // The website tracks capabilities (cli/online); a manual expert is a local reader and writer whose delivery lives in its member record.
+  const experts = Object.fromEntries(Object.entries(payload.experts || {}).map(([name, mode]) => [name, mode === "manual" ? "cli" : mode]));
+  const input = { ...(launch_draft || {}), room: { ...payload, ...(payload.experts ? { experts } : {}), members: pending.members, submission_id: pending.id }, token };
+  const room = await update_directory({ key: "create-room", label: `「${payload.title}」创建`,
     error_message: launching ? error => `「${payload.title}」${error.message}` : null,
     apply: () => { state.creating_room = payload; }, rollback: () => { state.creating_room = null; },
     save: async () => (await submit_local_launch(input, payload.title, !launching, signature)).room,
     commit: saved => {
       state.creating_room = null;
       if (!state.rooms.some(existing => existing.id === saved.id)) state.rooms.push(saved);
-    } }); }
-  catch (error) {
-    if (launching) { state.launch.error = error.message; render_launch_settings(); publish_view(); }
-    throw error;
-  }
+    } });
   state.pending_room = null;
   state.create_parent = null;
   if (discussion) await open_discussion_after_creation(room.id, discussion);
@@ -1880,7 +1863,7 @@ async function open_discussion_after_creation(room_id, { goal, named_followup, l
     await request_json(`${path}/discussion`, { action: "start", revision: current.revision,
       ...(goal ? { goal } : {}), limits, named_followup });
   } catch (error) {
-    show_toast(`房间已创建，但开启讨论失败：${error.message}；可在右侧成员栏重试`);
+    notify("warning", `房间已创建，但开启讨论失败：${error.message}；可在右侧成员栏重试`);
   }
 }
 
@@ -2003,7 +1986,6 @@ async function resume_launch(id) {
   const record = stored_launches().find(item => item.id === id);
   if (!record || state.directory_pending.has(`launch-${id}`)) return;
   state.directory_pending.set(`launch-${id}`, true);
-  state.launch.error = "";
   publish_view();
   try {
     const result = await submit_local_launch(record.input, record.title, record.direct, record.signature);
@@ -2016,11 +1998,10 @@ async function resume_launch(id) {
       element("room-dialog").close();
     }
     if (!record.direct) clear_launch_overrides(record.input);
-    state.launch.notice = result.status === "running" ? "已核对原启动，实际执行请查看进度回执" : "已核对原房间状态；不会自动恢复已暂停或结束的讨论";
-    state.directory_error = "";
+    notify("info", result.status === "running" ? "已核对原启动，实际执行请查看进度回执" : "已核对原房间状态；不会自动恢复已暂停或结束的讨论");
     if (state.pending_room?.id === id) state.pending_room = null;
     await select_room(result.room.id);
-  } catch (error) { state.launch.error = error.message; }
+  } catch (error) { notify("error", error.message); }
   finally { state.directory_pending.delete(`launch-${id}`); render_launch_settings(); publish_view(); }
 }
 
@@ -2028,7 +2009,6 @@ async function resume_launch(id) {
 function discard_launch(id) {
   localStorage.removeItem(LAUNCH_PENDING_PREFIX + id);
   if (state.pending_room?.id === id) state.pending_room = null;
-  state.launch.error = "";
   refresh_launch_recoveries();
 }
 
@@ -2329,7 +2309,6 @@ function write_launch_field(name, field, value) {
     if (field === "base_url") delete state.launch.profiles[name].api_key_ref;
     fill_api_key(state.launch.profiles[name]);
   }
-  state.launch.notice = "";
   if (field === "adapter") render_launch_settings();
   else render_launch_summaries();
   publish_view();
@@ -2501,8 +2480,7 @@ async function pick_launch_directory() {
   try {
     const path = await browse_local_directory();
     if (path) write_launch_field("workspace", "cwd", path);
-    state.launch.error = "";
-  } catch (error) { state.launch.error = error.message; }
+  } catch (error) { notify("error", error.message); }
   publish_view();
 }
 
@@ -2523,9 +2501,8 @@ async function save_launch_defaults() {
   try {
     await local_launch_request("settings", { participants });
     state.launch.saved_profiles = { ...state.launch.saved_profiles, ...JSON.parse(JSON.stringify(participants)) };
-    state.launch.notice = "已保存本机软件配置，后续讨论可复用";
-    state.launch.error = "";
-  } catch (error) { state.launch.error = error.message; }
+    notify("info", "已保存本机软件配置，后续讨论可复用");
+  } catch (error) { notify("error", error.message); }
   render_launch_settings();
   publish_view();
 }
@@ -2540,10 +2517,9 @@ async function launch_current_room() {
     const draft = launch_options();
     const result = await submit_local_launch({ ...draft, room_id, token }, state.room.title || "已有讨论");
     clear_launch_overrides(draft);
-    state.launch.notice = result.status === "running" ? "启动已提交，实际执行请查看进度回执" : "本次启动已有记录，请查看房间状态";
-    state.launch.error = "";
+    notify("info", result.status === "running" ? "启动已提交，实际执行请查看进度回执" : "本次启动已有记录，请查看房间状态");
     if (state.room?.id === room_id) await refresh_room();
-  } catch (error) { state.launch.error = error.message; }
+  } catch (error) { notify("error", error.message); }
   render_launch_settings();
   publish_view();
 }
@@ -2551,13 +2527,12 @@ async function launch_current_room() {
 /** Load the selected paused room's original connection paths after proving browser ownership. */
 async function load_room_configuration() {
   const room_id = state.room.id;
-  state.launch.repair_error = '';
   try {
     const token = localStorage.getItem(`discuss-access:${room_id}`);
     if (!token) throw new Error('此浏览器缺少房间凭据，请使用原浏览器或原接入配置');
     const result = await local_launch_request('room-config', { room_id, token });
-    if (state.room?.id === room_id) state.launch.repair = { ...result, notice: '' };
-  } catch (error) { if (state.room?.id === room_id) state.launch.repair_error = error.message; }
+    if (state.room?.id === room_id) state.launch.repair = result;
+  } catch (error) { if (state.room?.id === room_id) notify("error", error.message); }
   render_room_configuration();
   publish_view();
 }
@@ -2568,7 +2543,6 @@ function write_room_connection(name, value) {
   if (repair?.room_id !== state.room?.id || !repair.participants[name]) return;
   const profile = repair.participants[name];
   profile[profile.adapter === 'antigravity' ? 'ipc_directory' : 'executable'] = value;
-  repair.notice = '';
   publish_view();
 }
 
@@ -2579,7 +2553,6 @@ function write_room_adapter(name, value) {
   if (repair?.room_id !== state.room?.id || !['codex', 'codex_cli'].includes(profile?.adapter)
     || !['codex', 'codex_cli'].includes(value)) return;
   profile.adapter = value;
-  repair.notice = '';
   publish_view();
 }
 
@@ -2591,18 +2564,18 @@ async function save_room_configuration() {
     const field = profile.adapter === 'antigravity' ? 'ipc_directory' : 'executable';
     return [name, { [field]: profile[field], ...(['codex', 'codex_cli'].includes(profile.adapter) ? { adapter: profile.adapter } : {}) }];
   }));
-  state.launch.repair_error = '';
   try {
     const token = localStorage.getItem(`discuss-access:${repair.room_id}`);
     if (!token) throw new Error('此浏览器缺少房间凭据，请重新核对');
     const result = await local_launch_request('room-config', { room_id: repair.room_id, token,
       version: repair.version, runtime_revision: repair.runtime_revision, participants });
     if (state.room?.id === repair.room_id) {
-      state.launch.repair = { ...result, notice: result.applied ? '本场接入设置已保存，服务已采用；可在进度看板重启并核对实际发言。'
-        : '本场接入设置已保存；服务尚未确认采用，请先核对本机服务再重启。' };
+      state.launch.repair = result;
+      notify('info', result.applied ? '本场接入设置已保存，服务已采用；可在进度看板重启并核对实际发言。'
+        : '本场接入设置已保存；服务尚未确认采用，请先核对本机服务再重启。');
       await refresh_room();
     }
-  } catch (error) { if (state.room?.id === repair.room_id) state.launch.repair_error = error.message; }
+  } catch (error) { if (state.room?.id === repair.room_id) notify("error", error.message); }
   render_room_configuration();
   publish_view();
 }
@@ -2625,7 +2598,6 @@ function render_room_configuration() {
     fields.dataset.roomId = state.room?.id || '';
   }
   element('local-room-configuration-save').hidden = !repair;
-  element('local-room-configuration-notice').textContent = state.launch.repair_error || repair?.notice || '';
 }
 
 /** Render the same local setup controls in the classic theme. */
@@ -2663,7 +2635,7 @@ function render_launch_settings() {
       + `<label>本次工作目录（可选）<input data-launch-name="workspace" data-launch-field="cwd" value="${escape_html(state.launch.workspace.cwd || "")}"></label><label>本次 AI 项目（可选）<input data-launch-name="workspace" data-launch-field="discussion_project" value="${escape_html(state.launch.workspace.discussion_project || "")}"></label>`;
   }
   for (const id of ["local-launch-notice", "new-local-launch-notice"]) {
-    if (element(id)) element(id).textContent = [state.launch.error || state.launch.notice,
+    if (element(id)) element(id).textContent = [state.launch.error,
       !state.launch.available && state.launch.connect_command ? `在这台电脑运行 ${state.launch.connect_command}，使用命令打开的网页完成连接。` : ""].filter(Boolean).join(" ");
   }
   for (const id of ["local-launch-save", "new-local-launch-save"]) if (element(id)) element(id).disabled = !state.launch.available;
@@ -2836,8 +2808,7 @@ function download_member_access(name) {
   const member = access.members.find(item => item.name === name);
   if (!access.can_manage || !member?.available || member.access === "online") throw new Error("当前浏览器没有此成员可下载的私有配置");
   download_private_json({ site: location.origin, room: room.id, token: member_credentials(room.id)[name].token }, `member-${room.id}-${name}.json`);
-  state.access_error = "";
-  flash_access_notice(`已下载 ${name} 的私有配置`);
+  notify("info", `已下载 ${name} 的私有配置`);
 }
 
 /** Copy the same room-scoped credential as one line of text for an agent that cannot take a file. */
@@ -2846,19 +2817,7 @@ async function copy_member_access_text(name) {
   const member = access.members.find(item => item.name === name);
   if (!access.can_manage || !member?.available || member.access === "online") throw new Error("当前浏览器没有此成员可复制的凭证");
   await copy_text(JSON.stringify({ site: location.origin, room: room.id, token: member_credentials(room.id)[name].token }));
-  flash_access_notice(`已复制 ${name} 的凭证文本（含 token）`);
-}
-
-/** Confirm a copy or download briefly in the member rail; the note clears itself. */
-function flash_access_notice(message) {
-  state.access_error = "";
-  state.access_notice = message;
-  clearTimeout(state.access_notice_timer);
-  state.access_notice_timer = setTimeout(() => {
-    if (state.access_notice !== message) return;
-    state.access_notice = "";
-    publish_view();
-  }, TOAST_DURATION_MS);
+  notify("info", `已复制 ${name} 的凭证文本（含 token）`);
 }
 
 /** Copy a member-specific entry instruction; only the launch variant carries the credential, never conversation context. */
@@ -2881,7 +2840,7 @@ async function copy_member_join(name, with_credential = false) {
 ${instruction}
 房间入口：${address}
 先核对最新阶段、任务和原文编号，再按房间协议参与。${credential}`);
-  if (state.room?.id === room.id) flash_access_notice(with_credential ? `已复制 ${name} 的启动指令（含 token）` : `已复制 ${name} 的参与说明`);
+  if (state.room?.id === room.id) notify("info", with_credential ? `已复制 ${name} 的启动指令（含 token）` : `已复制 ${name} 的参与说明`);
 }
 
 /** How a manual member learns it is its turn: free rooms are pulled by the member, discussions only on the host's assignment. */
@@ -3121,16 +3080,16 @@ async function fork_room(message_id) {
   const registered = new Set((local?.members || []).filter(member => member.status !== "failed").map(member => member.name));
   for (const member of (state.room.free?.members || []).filter(item => item.status === "away")) {
     if (member.access === "runner" && !registered.has(member.name)) continue;
-    await change_member({ member_id: member.id, name: member.name, action: "rejoin" });
-    if (state.free_error) problems.push(`${member.name} 未能请回：${state.free_error}`);
+    try { await change_member({ member_id: member.id, name: member.name, action: "rejoin" }); }
+    catch (error) { problems.push(`${member.name} 未能请回：${error.message}`); }
   }
   const fresh = (local?.members || []).filter(member => member.status === "fresh").map(member => member.name);
   const failed = (local?.members || []).filter(member => member.status === "failed").map(member => `${member.name}（${member.error}）`);
   if (failed.length) problems.push(`未分叉、保持离开：${failed.join("、")}`);
   const done = `已从 #${message_id} 分支出新房间，原房间不变`;
-  // The rail shows an error in place of a notice, so a partial fork says both in one line.
-  state.free_error = problems.length ? `${done}，但${problems.join("；")}` : "";
-  state.free_notice = `${done}${fresh.length ? `；${fresh.join("、")} 将以新会话开始` : ""}。`;
+  // A partial fork says both the result and the problems in one warning instead of a separate notice.
+  if (problems.length) notify("warning", `${done}，但${problems.join("；")}`);
+  else notify("info", `${done}${fresh.length ? `；${fresh.join("、")} 将以新会话开始` : ""}。`);
   publish_view();
 }
 
@@ -3769,13 +3728,13 @@ function view_snapshot() {
   const experts = Object.fromEntries(["new-expert-modes", "topic-expert-modes"].map((id) =>
     [id, element(id) ? read_expert_inputs(id) : {}]));
   return { rooms: ordered_rooms(), folders: state.folders, folder_groups: ordered_folders(), room: state.room, archive_view: state.archive_view, directory_sort: state.directory_sort, messages: state.messages, total: state.message_total,
-    archive_pending: [...state.archive_changes.keys()], directory_error: state.directory_error, directory_notice: state.directory_notice, import_progress: structuredClone(state.import_progress),
+    archive_pending: [...state.archive_changes.keys()], import_progress: structuredClone(state.import_progress),
     directory_pending: [...state.directory_pending.keys()], folder_pending: [...state.folder_moves.keys()], creating_room: state.creating_room,
     connected: state.connected, reconnecting: state.reconnecting, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
     attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url })),
-    composer_error: state.composer_error, upload_status: state.upload_status, sending_message: state.sending_message,
+    upload_status: state.upload_status, sending_message: state.sending_message,
     mention_only: state.mention_only, reply_to: state.reply_to, turn_reply_to: state.turn_reply_to,
-    free_notice: state.free_notice, free_error: state.free_error, free_proxy: state.free_proxy, order_error: state.order_error,
+    free_proxy: state.free_proxy,
     create_parent: state.create_parent, access: access_snapshot(), admin: admin_snapshot(),
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
     theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_chain_rounds: state.create_chain_rounds };
@@ -3871,7 +3830,6 @@ async function backup_room(room_id = state.room?.id) {
 async function backup_rooms({ ids, name }) {
   if (!ids.length || state.backup_pending) return;
   state.backup_pending = true;
-  state.directory_notice = state.directory_error = "";
   publish_view();
   try {
     const snapshots = [];
@@ -3881,9 +3839,9 @@ async function backup_rooms({ ids, name }) {
       snapshots.push({ ...snapshot, source_url: `${location.origin}/r/${encodeURIComponent(id)}` });
     }
     await window.discuss_backup.download_rooms_backup(snapshots, name);
-    state.directory_notice = `已生成 ${snapshots.length} 个频道的备份，请查看浏览器下载。`;
+    notify("info", `已生成 ${snapshots.length} 个频道的备份，请查看浏览器下载。`);
   } catch (error) {
-    state.directory_error = `导出失败，未生成备份：${error.message}`;
+    notify("error", `导出失败，未生成备份：${error.message}`);
   } finally {
     state.backup_pending = false;
     publish_view();
@@ -3995,14 +3953,11 @@ async function execute_view_action(name, value) {
     prepare_brainstorm, return_conclusion, adopt_recommendation, rate_decision,
     busy: () => { throw new Error("上一个操作仍在处理中，请稍候；长时间无响应请刷新页面"); },
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };
-  if (!["refresh", "busy"].includes(name)) state.free_error = "";
   try {
     await actions[name](value);
     return true;
   } catch (error) {
-    if (["download_member_access", "copy_member_access_text", "copy_member_join", "copy_member_launch"].includes(name)) state.access_error = error.message;
-    else if (!state.free_error) state.free_error = error.message;
-    show_toast(error.message, true);
+    if (!error.notified) notify("error", error.message);
     return false;
   } finally { publish_view(); }
 }
@@ -4013,7 +3968,7 @@ function change_view_theme(theme) {
   try { localStorage.setItem(THEME_STORAGE_KEY, document.documentElement.dataset.theme); } catch { /* Keep the session preference. */ }
 }
 
-window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
+window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, notify,
   write_launch: write_launch_field, default_launch_entry, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
   launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, pick_launch_directory, browse_local_directory, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag, reconnect: reconnect_live_updates,

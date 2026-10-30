@@ -129,6 +129,8 @@ function on_pan_move(event) {
   if (pan) zoom.value = pan_window({ from: pan.from, span: zoom.value.span }, -(event.clientX - pan.x) / pan.width);
 }
 function on_pan_end() { pan = null; }
+/** A double click on the axis or the lanes shows the whole run again, following live work. */
+function reset_on_dblclick(event) { if (event.target.closest?.(".wf-track, .wf-axis")) zoom.value = WHOLE; }
 // A middle press would start the browser's autoscroll over the lanes; the drag pans instead.
 function stop_autoscroll(event) { if (event.button === 1 && event.target.closest?.(".wf-track, .wf-axis")) event.preventDefault(); }
 
@@ -192,7 +194,7 @@ const rows = computed(() => all_rows.value.filter((row) => !row.ancestors.some((
 const live_in_view = computed(() => all_rows.value.some((row) => row.item.state === "running"));
 const axis = computed(() => timeline_axis(all_rows.value, live_in_view.value));
 /** Zoom: the share of the axis in view, from Ctrl/⌘ + wheel around the pointer; middle-button drag, Shift + wheel, a
- *  sideways swipe or dragging the axis pans it; a double click on the axis or 重置 shows it whole again. */
+ *  sideways swipe or dragging the axis pans it; a double click on the axis or lanes, or 重置, shows it whole again. */
 const WHOLE = { from: 0, span: 1 };
 const zoom = ref(WHOLE);
 const zoomed = computed(() => zoom.value.span < 1);
@@ -409,7 +411,7 @@ const hover_notes = computed(() => {
       <header class="wf-head">
         <span class="wf-title">执行瀑布</span>
         <USelect v-model="chosen_run" :items="run_items" trailing-icon="i-lucide-chevrons-up-down" variant="none" aria-label="查看哪一轮" class="wf-run-select"
-          :content="{ align: 'start', sideOffset: 4 }" :ui="{ content: 'channel-select-menu wf-run-menu', trailingIcon: 'wf-select-icon' }" />
+          :content="{ align: 'start', sideOffset: 4 }" :ui="{ content: 'channel-select-menu wf-run-menu', trailing: 'static shrink-0 p-0 ms-1.5', trailingIcon: 'wf-select-icon' }" />
         <span v-if="replaying" class="wf-state is-replay">回放中 · {{ clock(view_time) }}</span>
         <span v-else class="wf-state" :class="{ 'is-live': summary.running }">{{ summary.running ? `${summary.running} 个进行中` : '均已结束' }}</span>
         <span v-if="summary.slowest" class="wf-headline">最慢一步 <b>{{ bridge.display_name(summary.slowest.member) }} · {{ PHASE_LABELS[summary.slowest.phase] }}<template v-if="summary.slowest.tool"> {{ summary.slowest.tool }}</template></b> · {{ format_duration(summary.slowest.end - summary.slowest.start) }}</span>
@@ -428,17 +430,18 @@ const hover_notes = computed(() => {
         <li v-if="no_phases" class="wf-legend-note">这些执行都没有阶段明细：发生在接入程序上报阶段之前，或来自手动接入、在线 AI、Codex App</li>
       </ul>
       <div class="wf-grid" :class="{ 'is-zoomed': zoomed, 'is-panning': pan }" role="list" :style="{ '--wf-depth-px': `${DEPTH_PX}px` }"
-        @wheel="on_wheel" @mousedown="stop_autoscroll" @pointerdown="on_pan_start" @pointermove="on_pan_move" @pointerup="on_pan_end" @pointercancel="on_pan_end">
+        @wheel="on_wheel" @mousedown="stop_autoscroll" @pointerdown="on_pan_start" @pointermove="on_pan_move" @pointerup="on_pan_end" @pointercancel="on_pan_end" @dblclick="reset_on_dblclick">
         <div class="wf-axis-label">
           <span>执行 · {{ rows.length }}/{{ all_rows.length }}</span>
-          <span v-if="zoomed" class="wf-zoom">放大 {{ (1 / zoom.span).toFixed(1) }}×<button type="button" class="wf-text-button" @click="zoom = WHOLE">重置</button></span>
-          <span v-else class="wf-zoom-hint" title="Ctrl + 滚轮缩放；放大后按住中键或拖动时间轴平移，双击时间轴还原">Ctrl + 滚轮缩放</span>
+          <span v-if="zoomed" class="wf-zoom">放大 {{ (1 / zoom.span).toFixed(1) }}×<button type="button" class="wf-zoom-reset" title="双击时间线也可还原" @click="zoom = WHOLE">
+            <UIcon name="i-lucide-locate-fixed" />{{ base_live ? '重置跟随' : '重置' }}</button></span>
+          <span v-else class="wf-zoom-hint" title="Ctrl + 滚轮缩放；放大后按住中键或拖动时间轴平移，双击时间线还原">Ctrl + 滚轮缩放</span>
           <span v-if="parents.length" class="wf-branch">
             <button type="button" class="wf-text-button" @click="collapsed = new Set()">展开全部</button>
             <button type="button" class="wf-text-button" @click="collapsed = new Set(parents)">收起全部</button>
           </span>
         </div>
-        <div ref="axis_element" class="wf-axis" aria-hidden="true" @dblclick="zoom = WHOLE">
+        <div ref="axis_element" class="wf-axis" aria-hidden="true">
           <span v-for="tick in shown_ticks" :key="tick.at" class="wf-tick" :style="{ left: `${tick.x * 100}%` }">{{ tick_label(tick) }}</span>
           <span v-for="fold in shown_folds" :key="`fold-${fold.start}`" class="wf-fold-label" :style="{ left: `${fold.middle * 100}%` }"
             :title="`${clock(fold.start)} – ${clock(fold.end)} 没有执行，已折叠`">⋯ {{ format_duration(fold.end - fold.start) }}</span>
@@ -516,7 +519,7 @@ const hover_notes = computed(() => {
           </button>
           <button type="button" class="wf-player-button" aria-label="从头回放" :disabled="!replaying" @click="restart"><UIcon name="i-lucide-rotate-ccw" /></button>
           <USelect v-model="replay.speed" :items="speed_items" variant="none" aria-label="回放速度" class="wf-speed"
-            :content="{ side: 'top', align: 'start', sideOffset: 4 }" :ui="{ content: 'channel-select-menu wf-speed-menu', trailingIcon: 'wf-select-icon' }" />
+            :content="{ side: 'top', align: 'start', sideOffset: 4 }" :ui="{ content: 'channel-select-menu wf-speed-menu', trailing: 'static shrink-0 p-0', trailingIcon: 'wf-select-icon' }" />
           <input type="range" class="wf-scrub" min="0" :max="bounds.duration" step="100" :value="replaying ? replay.position : bounds.duration"
             aria-label="回放位置" @input="scrub" />
           <span class="wf-player-time">{{ format_duration(replaying ? replay.position : bounds.duration) }} / {{ format_duration(bounds.duration) }}</span>
@@ -593,7 +596,11 @@ const hover_notes = computed(() => {
 .wf-state { display: inline-flex; align-items: center; gap: 6px; height: 20px; padding: 0 8px; border-radius: 999px; background: var(--wf-well); color: var(--wf-muted); font-size: 12px; font-weight: 600; }
 .wf-state::before { width: 6px; height: 6px; border-radius: 50%; background: currentColor; content: ""; }
 .wf-state.is-live { background: color-mix(in oklab, var(--wf-accent) 14%, transparent); color: var(--wf-accent); }
-.wf-state.is-live::before { animation: wf-pulse 1.6s ease-in-out infinite; }
+/* Live: a steady dot sends out a fading ring. Only transform and opacity move, so the compositor runs it smoothly
+   while the lanes redraw every frame on the main thread. */
+.wf-state.is-live { position: relative; }
+.wf-state.is-live::after { position: absolute; top: 50%; left: 8px; width: 6px; height: 6px; margin-top: -3px; border-radius: 50%; background: currentColor; content: "";
+  animation: wf-ping 2s cubic-bezier(0, 0, .2, 1) infinite; will-change: transform, opacity; pointer-events: none; }
 /* A replay is not live work: it says so, and at what time of the run it stands, so its "running" rows are not mistaken. */
 .wf-state.is-replay { background: color-mix(in oklab, var(--wf-warn) 14%, transparent); color: var(--wf-warn); font-family: var(--wf-mono); font-variant-numeric: tabular-nums; }
 .wf-headline { min-width: 0; overflow: hidden; color: var(--wf-muted); text-overflow: ellipsis; white-space: nowrap; }
@@ -638,11 +645,12 @@ const hover_notes = computed(() => {
 .wf-tick { position: absolute; top: 50%; padding-left: 4px; border-left: 1px solid var(--wf-guide); line-height: 14px; white-space: nowrap; transform: translateY(-50%); font-variant-numeric: tabular-nums; }
 /* A folded idle stretch says how long it was right on the axis, so evenly spaced ticks are never read as even time. */
 .wf-fold-label { position: absolute; top: 50%; padding: 0 4px; border-radius: 4px; background: var(--wf-surface); color: var(--wf-muted); font-size: 10px; line-height: 14px; white-space: nowrap; transform: translate(-50%, -50%); cursor: help; z-index: 1; }
-/* Run and speed pickers open the site's own menu (channel-select-menu), not the OS list, which ignores the theme. */
-.wf-run-select { min-width: 0; max-width: min(420px, 100%); height: 26px; padding: 0 8px 0 10px; border: 1px solid var(--wf-border); border-radius: 6px;
+/* Run and speed pickers open the site's own menu (channel-select-menu), not the OS list, which ignores the theme.
+   USelect puts the class on an inner trigger that carries no scope id, so these rules reach it through :deep. */
+.wf-head :deep(.wf-run-select) { min-width: 0; max-width: min(420px, 100%); height: 26px; padding: 0 8px 0 10px; border: 1px solid var(--wf-border); border-radius: 6px;
   background: var(--wf-well); color: var(--wf-text); font-size: 12px; cursor: pointer; }
-.wf-run-select:hover, .wf-speed:hover { border-color: var(--wf-guide); }
-.wf-run-select:focus-visible, .wf-speed:focus-visible { outline: 2px solid var(--wf-accent); outline-offset: 1px; }
+.wf-head :deep(.wf-run-select:hover), .wf-player :deep(.wf-speed:hover) { border-color: var(--wf-guide); }
+.wf-head :deep(.wf-run-select:focus-visible), .wf-player :deep(.wf-speed:focus-visible) { outline: 2px solid var(--wf-accent); outline-offset: 1px; }
 :deep(.wf-select-icon) { width: 12px; height: 12px; color: var(--wf-muted); }
 :global(.wf-run-menu) { max-width: min(520px, calc(100vw - 32px)); max-height: min(420px, 60vh); }
 :global(.wf-speed-menu) { min-width: 120px !important; }
@@ -685,6 +693,11 @@ const hover_notes = computed(() => {
 .wf-grid.is-zoomed .wf-axis { cursor: grab; }
 .wf-grid.is-panning, .wf-grid.is-panning * { cursor: grabbing !important; user-select: none; }
 .wf-zoom { display: inline-flex; align-items: center; gap: 2px; color: var(--wf-accent); font-family: var(--wf-mono); font-size: 11px; white-space: nowrap; }
+.wf-zoom-reset { display: inline-flex; align-items: center; gap: 4px; height: 22px; margin-left: 6px; padding: 0 8px; border: 1px solid color-mix(in oklab, var(--wf-accent) 45%, transparent); border-radius: 999px;
+  background: color-mix(in oklab, var(--wf-accent) 12%, transparent); color: var(--wf-accent); font: inherit; font-family: var(--ui-font-sans, inherit); font-size: 11px; font-weight: 600; cursor: pointer; }
+.wf-zoom-reset:hover { background: color-mix(in oklab, var(--wf-accent) 22%, transparent); }
+.wf-zoom-reset:focus-visible { outline: 2px solid var(--wf-accent); outline-offset: 1px; }
+.wf-zoom-reset :deep(svg) { width: 12px; height: 12px; }
 .wf-zoom-hint { overflow: hidden; color: var(--wf-muted); opacity: .7; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .wf-track > i, .wf-track > .wf-note { position: absolute; display: block; }
 .wf-gridline { top: 0; bottom: 0; width: 1px; background: var(--wf-grid); }
@@ -768,7 +781,7 @@ const hover_notes = computed(() => {
 .wf-player-button:disabled { opacity: .4; cursor: default; }
 .wf-player-button:not(:disabled):hover { background: var(--wf-hover); }
 .wf-player-button :deep(svg) { width: 13px; height: 13px; }
-.wf-speed { height: 28px; padding: 0 6px 0 8px; gap: 4px; border: 1px solid var(--wf-border); border-radius: 6px; background: var(--wf-well); color: var(--wf-text); font: inherit; font-size: 12px; cursor: pointer; }
+.wf-player :deep(.wf-speed) { height: 28px; padding: 0 6px 0 8px; gap: 4px; border: 1px solid var(--wf-border); border-radius: 6px; background: var(--wf-well); color: var(--wf-text); font: inherit; font-size: 12px; cursor: pointer; }
 .wf-scrub { flex: 1; min-width: 120px; accent-color: var(--wf-accent); cursor: pointer; }
 .wf-player-time { font-family: var(--wf-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .wf-player :is(button, select, input):focus-visible { outline: 2px solid var(--wf-accent); outline-offset: 1px; }
@@ -790,13 +803,13 @@ const hover_notes = computed(() => {
 .wf-card time { margin-right: 6px; color: var(--ui-text-dimmed); font-variant-numeric: tabular-nums; }
 
 @keyframes wf-pulse { 50% { opacity: .55; } }
+@keyframes wf-ping { from { opacity: .7; transform: scale(1); } 70%, to { opacity: 0; transform: scale(2.8); } }
 /* A row that appears while watching unfolds into place; a changed count rolls in from below. */
 .wf-row.is-entering > :not(.wf-detail) { animation: wf-enter 420ms cubic-bezier(.2, .8, .2, 1) both; }
 .wf-roll { display: inline-block; animation: wf-roll 320ms cubic-bezier(.2, .8, .2, 1); }
 @keyframes wf-enter { from { opacity: 0; transform: translateY(6px); } }
 @keyframes wf-roll { from { opacity: 0; transform: translateY(45%); } }
 @keyframes wf-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .wf * { animation: none !important; transition: none !important; } }
 /* Sizes follow the page's own width, not the screen's: on a tablet the channel rails take part of it.
    Tablets: a shorter label column and the KPI row in two lines of three. */
 .execution-timeline { container: wf / inline-size; }

@@ -71,7 +71,12 @@ class DiscussionTests(unittest.TestCase):
                                  {"author": "用户", "text": "立即出现", "submission_id": "stream-write"})[1]
             for stream in (first, second):
                 self.assertEqual(stream.readline(), b"event: change\n")
-                self.assertEqual(stream.readline(), b"data: {}\n")
+                self.assertEqual(stream.readline(), f'data: {{"rooms": ["{self.room["id"]}"]}}\n'.encode())
+                self.assertEqual(stream.readline(), b"\n")
+            self.assertEqual(self.request("/api/rooms", {"title": "另一议题"})[0], 201)
+            for stream in (first, second):
+                self.assertEqual(stream.readline(), b"event: change\n")
+                self.assertEqual(stream.readline(), b"data: {}\n", "a write outside one room names no room")
                 self.assertEqual(stream.readline(), b"\n")
             self.assertEqual(self.request(f"/api/rooms/{self.room['id']}/messages/{saved['message']['id']}")[1]["text"],
                              "立即出现")

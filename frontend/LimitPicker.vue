@@ -382,11 +382,6 @@ defineExpose({ settle });
 .is-editing .limit-exact-value input { color: var(--ui-text-highlighted); caret-color: auto; pointer-events: auto; user-select: text; }
 .is-editing .limit-wheel-row.is-current { opacity: 0 !important; }
 .limit-exact-value > span { color: var(--ui-text-muted); font-size: 11px; pointer-events: none; }
-/* Keep the requested direct-manipulation inertia; reduce only decorative 3D tilt. */
-@media (prefers-reduced-motion: reduce) {
-  .limit-wheel-rows { perspective: none; }
-  .limit-wheel-row { transform: translateY(var(--wheel-y)); }
-}
 @media (max-width: 480px) {
   .limit-picker { gap: 12px; }
   .limit-trigger { padding-inline: 10px; }

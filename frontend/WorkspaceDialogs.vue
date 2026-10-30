@@ -208,7 +208,6 @@ const keep_open = (event) => event.preventDefault();
           <UButton :label="`全部删除（${archive_results.length}）`" icon="i-lucide-trash-2" color="error" variant="soft" size="sm" class="channel-archive-delete-all" :disabled="!archive_results.length" @click="archive_delete_all = true; archive_delete_id = null" />
         </div>
         <div v-if="archive_delete_all && archive_results.length" class="channel-archive-confirm channel-archive-bulk" role="alert"><span>将永久删除当前列表中的 {{ archive_results.length }} 个房间及其全部记录，无法撤销。</span><UButton label="取消" color="neutral" variant="ghost" size="xs" @click="archive_delete_all = false" /><UButton label="全部删除" color="error" size="xs" @click="delete_all_archives" /></div>
-        <p v-if="view.directory_error" role="alert" class="channel-directory-error">{{ view.directory_error }}</p>
         <div class="channel-archive-results">
           <ul v-if="archive_results.length" class="channel-archive-list" aria-label="已存档房间列表">
           <li v-for="room in archive_results" :key="room.id" class="channel-archive-item">

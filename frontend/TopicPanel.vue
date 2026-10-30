@@ -1,11 +1,10 @@
 <script setup>
 import { computed, inject } from "vue";
-import { motion, useReducedMotion } from "motion-v";
+import { motion } from "motion-v";
 
 const props = defineProps({ section: { type: String, required: true } });
 defineEmits(["open", "detail"]);
 const { view, bridge, act, pending } = inject("discussion");
-const reduced_motion = useReducedMotion();
 const room = computed(() => view.value.room);
 const turn = computed(() => room.value?.current_turn);
 const active_turn = computed(() => turn.value && ["open", "pending", "notified"].includes(turn.value.status));
@@ -17,7 +16,7 @@ const EXECUTION_LABELS = { dispatched: "唤醒中", started: "执行中", comple
 </script>
 
 <template>
-  <motion.section class="merged-section" :class="{ 'access-page': props.section === 'access', 'host-page': props.section === 'host' }" :aria-label="props.section === 'host' ? '当前讨论' : '接入'" :initial="{ opacity: 0, y: reduced_motion ? 0 : 5 }" :animate="{ opacity: 1, y: 0 }" :transition="{ duration: 0.16 }">
+  <motion.section class="merged-section" :class="{ 'access-page': props.section === 'access', 'host-page': props.section === 'host' }" :aria-label="props.section === 'host' ? '当前讨论' : '接入'" :initial="{ opacity: 0, y: 5 }" :animate="{ opacity: 1, y: 0 }" :transition="{ duration: 0.16 }">
     <template v-if="props.section === 'host'">
       <div class="page-heading"><div><span class="eyebrow">讨论进程</span><h2>当前讨论</h2><p>当前由 {{ bridge.display_name(room.host) }} 主持，围绕具体问题组织下一轮发言。</p></div><UButton icon="i-lucide-pencil" label="编辑议题" variant="outline" color="neutral" class="channel-surface-button" @click="$emit('open', 'edit')" /></div>
       <div class="topic-brief"><div><h3>讨论目标</h3><p>{{ room.session?.goal || room.goal || '待主持人根据用户原文补全' }}</p></div><div><h3>当前焦点</h3><p>{{ room.focus || '尚未设置当前焦点' }}</p></div></div>
@@ -40,9 +39,8 @@ const EXECUTION_LABELS = { dispatched: "唤醒中", started: "执行中", comple
             <UFormField v-if="['codex', 'codex_cli'].includes(profile.adapter)" :label="`${name} · 接入方式`"><USelect :model-value="profile.adapter" :items="[{ label: 'Codex App', value: 'codex' }, { label: 'Codex CLI', value: 'codex_cli' }]" class="w-full" @update:model-value="bridge.write_room_adapter(name, $event)" /></UFormField>
             <UFormField :label="`${name} · ${profile.adapter === 'antigravity' ? 'Sidecar 目录' : '软件路径'}`"><UInput :model-value="profile[profile.adapter === 'antigravity' ? 'ipc_directory' : 'executable'] || ''" class="w-full" @update:model-value="bridge.write_room_connection(name, $event)" /></UFormField>
           </div>
-          <UButton label="保存本场接入设置" class="channel-primary-button" :loading="pending === 'save_room_configuration'" @click="act('save_room_configuration')" /><p v-if="repair.notice" role="status" class="fine-print">{{ repair.notice }}</p>
+          <UButton label="保存本场接入设置" class="channel-primary-button" :loading="pending === 'save_room_configuration'" @click="act('save_room_configuration')" />
         </div>
-        <p v-if="view.launch.repair_error" role="alert" class="fine-print">{{ view.launch.repair_error }}</p>
       </section>
       <p v-else-if="paused && view.launch.remote" class="fine-print">线上连接暂不提供已登记房间的软件路径修正。</p>
       <p v-else-if="!paused" class="fine-print">讨论正在运行；需要修正连接时，先在进度看板暂停。</p>

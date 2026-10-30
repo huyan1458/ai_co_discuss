@@ -37,15 +37,15 @@ const automatic = computed(() => props.mode === "cli");
 // Short labels for the front control; the 启动 row spells out what each one means.
 const ACCESS_LABELS = { cli: "程序启动", manual: "手动启动", online: "网页" };
 const api_mode = computed(() => automatic.value && profile.value.adapter === "api");
-const api_check = ref({ state: "", message: "" });
+const api_check = ref({ state: "" });
 // A previous check result no longer applies once any checked field changes.
-watch(() => [profile.value.base_url, profile.value.api_protocol, profile.value.model, profile.value.api_key_ref], () => { api_check.value = { state: "", message: "" }; });
+watch(() => [profile.value.base_url, profile.value.api_protocol, profile.value.model, profile.value.api_key_ref], () => { api_check.value = { state: "" }; });
 
 /** Send one tiny request through the local service with the current address, key, protocol and model. */
 async function check_api() {
-  api_check.value = { state: "loading", message: "" };
-  try { await bridge.check_launch_api(props.name); api_check.value = { state: "ok", message: "检查通过：模型已响应" }; }
-  catch (failure) { api_check.value = { state: "error", message: failure.message }; }
+  api_check.value = { state: "loading" };
+  try { await bridge.check_launch_api(props.name); api_check.value = { state: "ok" }; bridge.notify("info", "检查通过：模型已响应"); }
+  catch (failure) { api_check.value = { state: "error" }; bridge.notify("error", failure.message); }
 }
 // Without the local service here, the paired computer wakes the member with the software configured there.
 const relay_client = computed(() => !view.value.launch.available && view.value.launch.relay?.clients[bridge.platform_of(props.name)]);
@@ -349,7 +349,6 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
           <button type="button" class="expert-card-back-tool" :class="{ 'is-set': description }" :aria-label="`编辑 ${name} 的描述`" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
           <button v-if="profile.adapter" type="button" class="expert-card-back-tool" :class="{ 'is-set': prompt_text, 'is-own': prompt_own && prompt_text }" :title="prompt_title" :aria-label="`编辑 ${name} 的专属提示词`" @click="open_prompt"><UIcon name="i-lucide-scroll-text" /></button>
           <UButton v-if="api_mode" icon="i-lucide-zap" :aria-label="`检查 ${name} 的 API 配置`" title="检查配置：发送一次极短请求，核对地址、密钥、协议与模型" size="xs" :color="api_check.state === 'ok' ? 'success' : api_check.state === 'error' ? 'error' : 'neutral'" variant="ghost" :loading="api_check.state === 'loading'" :disabled="!profile.api_key_ref || !profile.model || !view.launch.available" @click="check_api" /></span></div>
-        <p v-if="api_mode && api_check.message" :role="api_check.state === 'error' ? 'alert' : 'status'" class="expert-card-check">{{ api_check.message }}</p>
         <div v-if="automatic && entry_items.length > 1" class="expert-card-field">
           <span>接入</span><USelect :model-value="profile.adapter || ''" :items="entry_items" placeholder="选择 API / App / CLI" :aria-label="`${name} 软件入口`" size="xs" class="w-full" @update:model-value="bridge.write_launch(name, 'adapter', $event)" />
         </div>
@@ -459,7 +458,6 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card-field { display: grid; grid-template-columns: 26px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--ui-text-dimmed); font-size: 11px; }
 .expert-card-catalog { display: flex; align-items: baseline; gap: 8px; margin: -5px 0 0 34px; color: var(--ui-text-dimmed); font-size: 10px; overflow-wrap: anywhere; }
 .expert-card-catalog > span { flex: 1; }
-.expert-card-check { margin: -4px 0 0; color: var(--ui-text-muted); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
 .expert-card-catalog > button { flex-shrink: 0; color: var(--channel-accent); }
 .expert-card-defaults { position: absolute; left: 8px; bottom: 8px; min-height: 22px; padding: 2px 4px; border-radius: 4px; color: var(--ui-text-muted); font-size: 11px; }
 .expert-card-defaults:hover:not(:disabled) { color: var(--channel-accent); }

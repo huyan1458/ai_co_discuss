@@ -18,7 +18,7 @@ const add_items = computed(() => providers.value.map(({ value, label }) => {
   return { value, name: label, initials: label.slice(0, 2), ...PROVIDER_ICONS[value], disabled: Boolean(props.blocker), selected,
     title: selected ? "当前决策模型" : active.value ? `替换为 ${label}` : label, aria_label: active.value && !selected ? `替换决策模型为 ${label}` : `添加决策模型 ${label}` };
 }));
-const api_key = ref(""), key_visible = ref(false), saving = ref(false), error = ref("");
+const api_key = ref(""), key_visible = ref(false), saving = ref(false);
 // The card shows a summary; its settings stay behind "设置" like the participant cards.
 const editing = ref(false);
 // Opening the back remembers the settings so Cancel can restore them.
@@ -33,7 +33,6 @@ function cancel_settings() {
   if (opened_with) for (const field of ["model", "api_key_ref"]) bridge.write_scheduler(field, opened_with[field]);
   opened_with = null;
   api_key.value = "";
-  error.value = "";
   editing.value = false;
 }
 /** Add one provider as the room's decision model; the provider goes first so it brings its preset model and saved key. */
@@ -55,18 +54,18 @@ const status = computed(() => !scheduler.value.model ? { tone: "warn", text: "�
 // A key saved earlier is never sent back to the page, so only a masked mark stands in for it.
 const SAVED_MARK = "••••••••••••";
 // A key entered for one provider does not belong to another.
-watch(() => scheduler.value.provider, () => { api_key.value = ""; error.value = ""; });
-const check = ref({ state: "", message: "" });
+watch(() => scheduler.value.provider, () => { api_key.value = ""; });
+const check = ref({ state: "" });
 // A changed provider, model or key needs a fresh check.
-watch(() => [scheduler.value.provider, scheduler.value.model, scheduler.value.api_key_ref], () => { check.value = { state: "", message: "" }; });
+watch(() => [scheduler.value.provider, scheduler.value.model, scheduler.value.api_key_ref], () => { check.value = { state: "" }; });
 // Turning scheduling off closes the card so it reopens as a summary.
 watch(() => scheduler.value.enabled, (enabled) => { if (!enabled) editing.value = false; });
 
 /** Send one tiny question through the local service so the configuration is proven before the room relies on it. */
 async function check_config() {
-  check.value = { state: "loading", message: "" };
-  try { await bridge.check_scheduler(); check.value = { state: "ok", message: "检查通过：决策模型已响应" }; }
-  catch (failure) { check.value = { state: "error", message: failure.message }; }
+  check.value = { state: "loading" };
+  try { await bridge.check_scheduler(); check.value = { state: "ok" }; bridge.notify("info", "检查通过：决策模型已响应"); }
+  catch (failure) { check.value = { state: "error" }; bridge.notify("error", failure.message); }
 }
 const description = computed(() => props.free
   ? "接入决策模型，推荐更适合回答的成员，由你一键采纳。"
@@ -76,9 +75,8 @@ const description = computed(() => props.free
 async function save_key() {
   if (!api_key.value.trim() || saving.value) return;
   saving.value = true;
-  error.value = "";
   try { await bridge.save_scheduler_api_key(api_key.value); }
-  catch (failure) { error.value = failure.message; }
+  catch (failure) { bridge.notify("error", failure.message); }
   finally { saving.value = false; }
 }
 </script>
@@ -122,8 +120,6 @@ async function save_key() {
               <template #trailing><UButton :icon="key_visible ? 'i-lucide-eye' : 'i-lucide-eye-off'" :disabled="!api_key" :aria-label="key_visible ? '隐藏密钥' : '显示密钥'" :aria-pressed="key_visible" size="xs" color="neutral" variant="link" @click="key_visible = !key_visible" /></template>
             </UInput>
           </div>
-          <p v-if="error" role="alert" class="scheduler-error">{{ error }}</p>
-          <p v-if="check.message" :role="check.state === 'error' ? 'alert' : 'status'" :class="check.state === 'error' ? 'scheduler-error' : 'scheduler-ok'">{{ check.message }}</p>
           <p class="scheduler-note">决策模型只做选择、不生成文本，只按输入计费。判断时会把房间标题和最近 10～20 条消息发给所选供应商；密钥只存本机。</p>
         </div>
         <span class="scheduler-flip-actions">
@@ -180,8 +176,6 @@ async function save_key() {
 .scheduler-description { margin: 2px 0 0; color: var(--ui-text-muted); font-size: 13px; }
 .scheduler-title small { color: var(--ui-text-dimmed); font-size: 11px; font-weight: 400; }
 .scheduler-badge { color: var(--channel-accent); }
-.scheduler-error { margin: 0; color: #f0716b; font-size: 11px; }
-.scheduler-ok { margin: 0; color: var(--ui-success); font-size: 11px; }
 @media (pointer: coarse) { .scheduler-tools > button { min-width: 44px; min-height: 44px; } }
 @media (max-width: 600px) { .scheduler-cards { grid-template-columns: 1fr; } }
 </style>

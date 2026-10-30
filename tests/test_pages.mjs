@@ -190,6 +190,8 @@ test('Pages streams committed changes across aliases and rejects public notifica
   assert.deepEqual(notifications, ['default']);
   assert.equal((await f.request(`/${room.id}/messages`, { author: '用户', text: '' })).status, 400);
   assert.equal(notifications.length, 1, 'rejected writes do not trigger refresh');
+  assert.equal((await f.request(`/${room.id}/messages`, { author: '用户', text: '指名房间', submission_id: 'push-room' })).status, 201);
+  assert.equal(decode((await reader.read()).value), `event: change\ndata: {"rooms":["${room.id}"]}\n\n`);
   assert.equal((await worker.fetch(new Request('https://alias.test/api/updates', { method: 'POST' }), f.env)).status, 404);
   assert.equal(updates_worker.fetch().status, 404);
   await reader.cancel();

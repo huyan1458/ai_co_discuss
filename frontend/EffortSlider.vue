@@ -1,7 +1,6 @@
 <script setup>
 /** Select a supported effort with a spring-driven, keyboard-accessible thumb. */
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
-import { useReducedMotion } from "motion-v";
 
 const props = defineProps({
   items: { type: Array, required: true },
@@ -16,7 +15,6 @@ const SNAP_FREQUENCY = 4.5;
 const HAND_FREQUENCY = 6, WALL_FREQUENCY = 8;
 const STEP = 1 / 240, REST_DISTANCE = 0.001, REST_SPEED = 0.01;
 const FRAME_LIMIT = 0.05, THUMB_RADIUS = 10, TAP_DISTANCE = 4;
-const reduced_motion = useReducedMotion();
 const track = ref(null);
 const maximum = computed(() => props.items.length - 1);
 const selected = computed(() => Math.max(0, props.items.findIndex((item) => item.value === props.modelValue)));
@@ -55,14 +53,9 @@ function animate(now) {
   } else frame = requestAnimationFrame(animate);
 }
 
-/** Reduced motion reaches the same state immediately; other changes retarget in flight. */
+/** Start the spring if it is resting; a change while it moves retargets in flight. */
 function wake() {
-  if (reduced_motion.value) {
-    cancelAnimationFrame(frame);
-    frame = 0;
-    body.x = body.hand ?? body.target;
-    body.v = 0;
-  } else if (!frame) {
+  if (!frame) {
     previous_time = performance.now();
     frame = requestAnimationFrame(animate);
   }
@@ -130,7 +123,7 @@ function keydown(event) {
   choose(destinations[event.key]);
 }
 
-watch([selected, maximum, reduced_motion], () => { body.target = selected.value; wake(); });
+watch([selected, maximum], () => { body.target = selected.value; wake(); });
 onBeforeUnmount(() => cancelAnimationFrame(frame));
 </script>
 
@@ -138,7 +131,7 @@ onBeforeUnmount(() => cancelAnimationFrame(frame));
   <div class="effort-field">
     <div v-if="caption" class="effort-caption" aria-hidden="true">
       <span>{{ caption }}</span>
-      <Transition :name="reduced_motion ? '' : 'effort-value'" mode="out-in"><strong :key="live">{{ items[live].label }}</strong></Transition>
+      <Transition name="effort-value" mode="out-in"><strong :key="live">{{ items[live].label }}</strong></Transition>
     </div>
     <div ref="track" class="effort-slider" :class="{ 'is-dragging': body.pointer !== null }" :style="{ '--progress': ratio }"
       role="slider" tabindex="0" :aria-label="label"
@@ -174,5 +167,4 @@ onBeforeUnmount(() => cancelAnimationFrame(frame));
 .effort-slider.is-dragging { cursor: grabbing; }
 .effort-slider.is-dragging .effort-slider-thumb { transform: translate(-50%, -50%) scale(1.15); box-shadow: 0 2px 6px #0000004d, 0 0 0 6px color-mix(in srgb, var(--channel-accent) 22%, transparent); }
 @media (pointer: coarse) { .effort-slider { height: 44px; } }
-@media (prefers-reduced-motion: reduce) { .effort-slider-stop, .effort-slider-thumb { transition: none; } }
 </style>

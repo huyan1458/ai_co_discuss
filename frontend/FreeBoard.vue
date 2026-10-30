@@ -23,6 +23,22 @@ const member_named = (name) => (free.value.members || []).find((member) => membe
 const away_names = computed(() => (free.value.members || []).filter((member) => member.status === "away").map((member) => member.name));
 const name_of = (member_id) => bridge.display_name((free.value.members || []).find((member) => member.id === member_id)?.name || "成员");
 
+// Each overlapping pair of executions is announced once per browser; the room resends its conflicts on every refresh.
+const CONFLICT_SEEN_PREFIX = "discuss-conflicts-notified:";
+const CONFLICT_FILE_PREVIEW = 2;
+const conflict_key = (item) => item.executions.join("-");
+/** Warn about conflicts this browser has not shown yet, keeping only keys the room still reports. */
+function announce_conflicts(room_id, conflicts = []) {
+  let seen = [];
+  try { seen = JSON.parse(localStorage.getItem(CONFLICT_SEEN_PREFIX + room_id) || "[]"); } catch { /* Treat as none shown. */ }
+  for (const item of conflicts.filter((conflict) => !seen.includes(conflict_key(conflict)))) {
+    const files = item.files.slice(0, CONFLICT_FILE_PREVIEW).join("、") + (item.files.length > CONFLICT_FILE_PREVIEW ? " 等" : "");
+    bridge.notify("warning", `可能冲突：${item.members.map((name) => bridge.display_name(name)).join(" 与 ")} 的重叠执行都改了 ${item.files.length} 个文件（${files}），修改者未确认`);
+  }
+  try { localStorage.setItem(CONFLICT_SEEN_PREFIX + room_id, JSON.stringify(conflicts.map(conflict_key))); } catch { /* Shown again next visit. */ }
+}
+watch(() => [room.value.id, free.value.conflicts], ([room_id, conflicts]) => announce_conflicts(room_id, conflicts), { immediate: true });
+
 /** Status dot colour, matching the discussion progress board. */
 const unregistered = (member) => member.access === "manual" && member.manual_source !== "web" && member.status === "active" && !member.registered_at;
 function member_tone(member) {
@@ -70,7 +86,7 @@ const continue_choices = computed(() => [...new Set([1, free.value.max_rounds ||
 const continuing = ref(0);
 async function continue_chain(chain_id, rounds) {
   continuing.value = rounds;
-  try { await bridge.continue_chain(chain_id, rounds); } catch { /* The error shows under the members. */ }
+  try { await bridge.continue_chain(chain_id, rounds); } catch { /* The controller shows the error as a toast. */ }
   finally { continuing.value = 0; }
 }
 
@@ -153,7 +169,7 @@ async function save_description({ text, as_template }) {
     await bridge.describe_member(describing.value, text);
     if (as_template) bridge.save_description_template(describing.value, text);
     describing.value = "";
-  } catch { /* The board shows the error under the member list. */ }
+  } catch { /* The controller shows the error as a toast. */ }
   finally { describing_saving.value = false; }
 }
 
@@ -201,11 +217,6 @@ watch(() => room.value.id, () => { starting.value = false; });
           </template>
         </template>
       </SpeakingOrder>
-      <p v-for="item in free.conflicts || []" :key="item.executions.join('-')" class="pb-free-note is-warning">可能冲突：{{ item.members.map((name) => bridge.display_name(name)).join(' 与 ') }} 的重叠执行观察到 {{ item.files.join('、') }} 变化；修改者未确认。</p>
-      <p v-if="view.free_error" role="alert" class="pb-free-note is-error">{{ view.free_error }}</p>
-      <p v-else-if="view.free_notice" role="status" class="pb-free-note">{{ view.free_notice }}</p>
-      <p v-if="view.access?.error" role="alert" class="pb-free-note is-error">{{ view.access.error }}</p>
-      <p v-else-if="view.access?.notice" role="status" class="pb-free-note">{{ view.access.notice }}</p>
       <UButton v-if="!room.archived" icon="i-lucide-plus" label="邀请 AI 加入" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block pb-action-add" @click="inviting = true" />
     </section>
     <section v-if="room.linked_rooms?.length" class="pb-section" aria-label="头脑风暴">

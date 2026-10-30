@@ -100,9 +100,9 @@ async function invite() {
     const profile = view.value.launch.profiles[pick.name] || {};
     const manual = pick.mode === "manual";
     const instance = instances.get(pick);
-    await act("invite_member", { name: pick.name, access: manual ? "manual" : "runner",
+    const invited = await act("invite_member", { name: pick.name, access: manual ? "manual" : "runner",
       project_access: profile.project_access || view.value.launch.workspace?.project_access || "read" });
-    if (view.value.free_error) break;
+    if (!invited) break;
     // A manual member only starts when its launch instruction reaches the user's own AI session, so the dialog stays for that step.
     if (manual) manual_names.push(instance);
     invite_picks.value = invite_picks.value.filter((item) => item !== pick);
@@ -117,7 +117,6 @@ async function invite() {
     <template #body>
       <div v-if="invited_manual.length && !invite_picks.length" class="pb-invite" aria-label="启动手动成员">
         <p class="pb-invite-lead">{{ invited_manual.length > 1 ? `${invited_manual.length} 位手动成员已加入` : '手动成员已加入' }}，把启动指令交给各自的 AI 会话，注册后才算到场。</p>
-        <p v-if="view.access?.error" role="alert" class="pb-free-note is-error">{{ view.access.error }}</p>
         <ul class="pb-invite-launches">
           <li v-for="name in invited_manual" :key="name">
             <UAvatar :src="bridge.identities[bridge.platform_of(name)]?.icon" :text="bridge.identities[bridge.platform_of(name)]?.initials" :alt="name" size="xs" class="channel-avatar" :class="bridge.identities[bridge.platform_of(name)]?.style" />
@@ -141,7 +140,6 @@ async function invite() {
         <p v-if="invite_picks.length" class="fine-print" :class="{ 'pb-invite-reserved': !(invite_picks.some((pick) => pick.mode === 'manual') && invite_picks.some((pick) => pick.mode !== 'manual')) }" :aria-hidden="!(invite_picks.some((pick) => pick.mode === 'manual') && invite_picks.some((pick) => pick.mode !== 'manual'))">手动启动的成员排在程序启动的成员之后加入队列。</p>
         <p v-else class="pb-invite-empty">选择一位或多位 AI（同一 AI 可重复添加），点卡片翻面设置软件、模型与项目权限。</p>
         <p v-if="invite_picks.some((pick) => pick.mode === 'cli') && !view.launch.available" role="alert" class="fine-print">邀请需要本机服务，请在运行 AI 的电脑打开本机网站。</p>
-        <p v-if="invite_tried && view.free_error" role="alert" class="pb-free-note is-error">{{ view.free_error }}</p>
         <div class="pb-invite-footer">
           <UButton label="取消" color="neutral" variant="ghost" @click="inviting = false" />
           <UButton type="submit" icon="i-lucide-user-plus" :label="invite_picks.length > 1 ? `邀请 ${invite_picks.length} 位` : '邀请'" class="channel-primary-button" :disabled="invite_blocked" :loading="pending === 'invite_member'" />

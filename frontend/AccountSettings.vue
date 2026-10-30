@@ -1,12 +1,11 @@
 <script setup>
-import { computed, inject, nextTick, reactive, ref, watch } from "vue";
+import { computed, inject, reactive, ref, watch } from "vue";
 
 const { view, bridge } = inject("discussion");
 const account = computed(() => view.value.admin);
 const profile = computed(() => account.value.profile);
 const state_key = computed(() => !account.value.loaded ? "loading" : !account.value.registered ? "register" : !account.value.logged_in ? "login" : "profile");
 const busy = ref("");
-const messages = reactive({ auth: { error: "", notice: "" }, profile: { error: "", notice: "" } });
 const auth_form = reactive({ username: "", password: "", confirm: "", setup_key: "" });
 const display_name = ref("");
 const avatar_input = ref(null);
@@ -14,22 +13,18 @@ const name_changed = computed(() => display_name.value.trim() !== (profile.value
 const register_blocked = computed(() => state_key.value === "register" && !account.value.setup_available);
 
 watch(() => profile.value?.username, (value) => { display_name.value = value || ""; }, { immediate: true });
-watch(state_key, () => {
-  Object.assign(auth_form, { password: "", confirm: "", setup_key: "" });
-  Object.assign(messages.auth, { error: "", notice: "" });
-});
+watch(state_key, () => { Object.assign(auth_form, { password: "", confirm: "", setup_key: "" }); });
 
-/** Run one account request with a single in-flight guard, an inline error and a success note. */
-async function run(section, name, task, success = "") {
+/** Run one account request with a single in-flight guard; the result shows as a toast. */
+async function run(name, task, success = "") {
   if (busy.value) return false;
   busy.value = name;
-  Object.assign(messages[section], { error: "", notice: "" });
   try {
     await task();
-    messages[section].notice = success;
+    if (success) bridge.notify("info", success);
     return true;
   } catch (error) {
-    messages[section].error = error.message;
+    bridge.notify("error", error.message);
     return false;
   } finally { busy.value = ""; }
 }
@@ -38,14 +33,14 @@ async function run(section, name, task, success = "") {
 function submit_auth() {
   const registering = state_key.value === "register";
   if (registering && register_blocked.value) return;
-  return run("auth", registering ? "register" : "login", () => registering ? bridge.admin.register({ ...auth_form }) : bridge.admin.login({ ...auth_form }))
-    .then((done) => { if (done) Object.assign(messages.profile, { error: "", notice: registering ? "管理员账号已创建，并已登录。" : "已登录。" }); });
+  return run(registering ? "register" : "login", () => registering ? bridge.admin.register({ ...auth_form }) : bridge.admin.login({ ...auth_form }),
+    registering ? "管理员账号已创建，并已登录。" : "已登录。");
 }
 
 /** Save only the name when it changed. */
 function save_name() {
   if (!name_changed.value) return;
-  return run("profile", "name", () => bridge.admin.update_profile({ username: display_name.value }), "名称已更新。");
+  return run("name", () => bridge.admin.update_profile({ username: display_name.value }), "名称已更新。");
 }
 
 /** Upload a picked image after it is resized to a small square. */
@@ -53,19 +48,17 @@ async function choose_avatar(event) {
   const file = event.target.files?.[0];
   event.target.value = "";
   if (!file) return;
-  await run("profile", "avatar", async () => bridge.admin.update_profile({ avatar: await bridge.admin.avatar_from_file(file) }), "头像已更新。");
+  await run("avatar", async () => bridge.admin.update_profile({ avatar: await bridge.admin.avatar_from_file(file) }), "头像已更新。");
 }
 
 /** Return to the default fingerprint avatar. */
 function reset_avatar() {
-  return run("profile", "avatar", () => bridge.admin.update_profile({ avatar: "" }), "已恢复默认头像。");
+  return run("avatar", () => bridge.admin.update_profile({ avatar: "" }), "已恢复默认头像。");
 }
 
 /** Leave this browser. */
 async function sign_out() {
-  if (!await run("profile", "logout", () => bridge.admin.logout())) return;
-  await nextTick();
-  messages.auth.notice = "已退出登录。";
+  await run("logout", () => bridge.admin.logout(), "已退出登录。");
 }
 </script>
 
@@ -96,8 +89,6 @@ async function sign_out() {
         <p v-else class="fine-print">首个注册者需要令牌，防止他人抢注：在部署网站的电脑上运行 <code>codiscuss token</code> 获取（一次性）；本地版也可用服务端启动日志里的安装令牌。在已连接本机服务的电脑上注册时，账号与密码会保存到 ~/.codiscuss。忘记密码：本地版运行 <code>python server.py --reset-admin</code> 后重新注册；Cloudflare 版需清空管理员表（见部署文档）。</p>
       </template>
       <p v-else class="fine-print">忘记密码：本地版运行 <code>python server.py --reset-admin</code> 后重新注册；Cloudflare 版需清空管理员表（见部署文档）。</p>
-      <p v-if="messages.auth.error" class="account-message is-error" role="alert">{{ messages.auth.error }}</p>
-      <p v-else-if="messages.auth.notice" class="account-message" role="status">{{ messages.auth.notice }}</p>
       <div class="account-actions"><UButton type="submit" class="channel-primary-button" :label="state_key === 'register' ? '创建并登录' : '登录'" :loading="busy === 'register' || busy === 'login'" :disabled="Boolean(busy) || register_blocked" /></div>
     </form>
 
@@ -113,8 +104,6 @@ async function sign_out() {
       <form class="dialog-form account-form" aria-label="显示名称" @submit.prevent="save_name">
         <UFormField label="显示名称" description="即用户名，对所有访客可见"><div class="account-name-row"><UInput v-model="display_name" autocomplete="username" :maxlength="30" required class="w-full" aria-label="显示名称" /><UButton type="submit" label="保存名称" color="neutral" variant="soft" :loading="busy === 'name'" :disabled="Boolean(busy) || !name_changed || !display_name.trim()" /></div></UFormField>
       </form>
-      <p v-if="messages.profile.error" class="account-message is-error" role="alert">{{ messages.profile.error }}</p>
-      <p v-else-if="messages.profile.notice" class="account-message" role="status">{{ messages.profile.notice }}</p>
 
       <div v-if="!account.local" class="account-signout account-actions"><UButton label="退出登录" icon="i-lucide-log-out" color="neutral" variant="outline" size="sm" :loading="busy === 'logout'" :disabled="Boolean(busy)" @click="sign_out" /></div>
     </div>

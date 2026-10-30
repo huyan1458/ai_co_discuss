@@ -28,6 +28,9 @@
     { "id": "S2b", "scene": "route", "note": "回复指向较早的发言者",
       "context": [{ "id": 10, "author": "用户", "text": "@全体成员 记账数据存本地还是云端？" }, { "id": 11, "author": "Claude", "text": "建议存本地 SQLite，离线可用、零成本。" }, { "id": 12, "author": "DeepSeek", "text": "建议用云端，方便多设备同步。" }],
       "message": "这个结论有依据吗？", "reply_to": 11, "expect": "Claude" },
+    { "id": "S2c", "scene": "route", "note": "追问主持人本人的回答",
+      "context": [{ "id": 10, "author": "用户", "text": "如何确保数据导入不会重复？" }, { "id": 11, "author": "Codex", "text": "我建议用来源编号去重，导入前检查是否已有对应记录。" }],
+      "message": "你说的来源编号具体怎么生成？", "expect": "__host__" },
     { "id": "S3", "scene": "route", "note": "纠正正在处理的消息",
       "context": [{ "id": 20, "author": "用户", "text": "@Claude 把 README 的安装步骤改成用 npm" }],
       "members": [{ "name": "Claude", "description": "Claude（Claude Code，可修改项目 ledger 的文件并运行命令；正在处理 #20）" }, { "name": "DeepSeek", "description": "DeepSeek（模型 API，只能读写房间消息）" }],
@@ -40,6 +43,12 @@
       "context": [{ "id": 40, "author": "用户", "text": "@Claude 修一下登录按钮的颜色" }, { "id": 41, "author": "Claude", "text": "已改为主题蓝，提交在 a1b2c3。" }],
       "message": "好的，谢谢", "expect": "__none__" },
     { "id": "S6b", "scene": "route", "note": "确认", "message": "收到", "expect": "__none__" },
+    { "id": "S7", "scene": "route", "note": "用户描述指定唯一负责成员",
+      "members": [{ "name": "Claude", "description": "Claude（Claude Code，可修改项目 ledger 的文件并运行命令；用户描述：登录页由我独立负责，涉及登录页的样式修改都交给我）" }, { "name": "DeepSeek", "description": "DeepSeek（模型 API，只能读写房间消息；用户描述：负责数据库选型建议）" }],
+      "message": "把登录页的提交按钮改成主题蓝", "expect": "Claude" },
+    { "id": "S7b", "scene": "route", "note": "专长重叠但没有指定分工，交主持人",
+      "members": [{ "name": "Claude", "description": "Claude（Claude Code，可修改项目 ledger 的文件并运行命令；用户描述：擅长界面设计与样式实现）" }, { "name": "DeepSeek", "description": "DeepSeek（DeepSeek CLI，可修改项目 ledger 的文件并运行命令；用户描述：擅长界面设计与样式实现）" }],
+      "message": "优化一下登录页的视觉效果", "expect": "__host__" },
     { "id": "S8", "scene": "route", "note": "对象不明确", "message": "这个报错怎么回事：TypeError: Cannot read properties of undefined", "expect": "__host__" },
     { "id": "S9a", "scene": "route", "note": "单独问候", "message": "hi", "expect": "__host__" },
     { "id": "S9b", "scene": "route", "note": "单独问候", "message": "在吗", "expect": "__host__" },
@@ -52,6 +61,10 @@
     { "id": "G2", "scene": "group", "note": "接龙", "message": "@全体成员 我们来接龙写一首诗，每人一句，接着上一位写", "expect": "sequential" },
     { "id": "G3", "scene": "group", "note": "逐个评审上一位", "message": "@全体成员 按顺序评审上一位的方案，指出问题再给出改进", "expect": "sequential" },
     { "id": "G4", "scene": "group", "note": "各自投票", "message": "@全体成员 各自投票：用 A 方案还是 B 方案", "expect": "parallel" },
+    { "id": "G5", "scene": "group", "note": "明确不重叠的修改可以并行",
+      "message": "@全体成员 Codex 只修改 tests/login.test.js，Claude 只修改 frontend/Login.vue，DeepSeek 只评估数据库方案并给建议。三项各自独立完成，不必等其他人。", "expect": "parallel" },
+    { "id": "G6", "scene": "group", "note": "同一文件但分工不明，顺序本身不能解决冲突",
+      "message": "@全体成员 都把 frontend/Login.vue 改一下，把登录页做好，具体怎么分工你们定。", "expect": "__host__" },
 
     { "id": "I1", "scene": "interjection", "note": "旁注补充约束", "waiting": ["Gemini", "DeepSeek"], "spoken": ["Codex"],
       "context": [{ "id": 50, "author": "Codex", "text": "SQLite：单文件、离线可用、零成本；缺点是多设备同步要自己做。" }],
@@ -81,12 +94,16 @@
 
     { "id": "R1", "scene": "round", "note": "有未回应的分歧与追问",
       "context": [{ "id": 70, "author": "Codex", "text": "SQLite 最合适：离线、零成本。" }, { "id": 71, "author": "Gemini", "text": "不同意，PostgreSQL 更可靠，SQLite 的同步问题 Codex 没回答。" }, { "id": 72, "author": "DeepSeek", "text": "云数据库能解决同步，但 Codex 说的离线要求怎么满足？" }],
-      "expect": "continue" },
+      "expect": "continue", "expect_first": "Codex" },
     { "id": "R2", "scene": "round", "note": "已达成一致",
       "context": [{ "id": 70, "author": "Codex", "text": "综合下来选 SQLite，同步用导出文件解决。" }, { "id": 71, "author": "Gemini", "text": "同意 SQLite，PostgreSQL 对个人应用太重。" }, { "id": 72, "author": "DeepSeek", "text": "同意 SQLite，云数据库成本不符合预算。没有其他意见。" }],
       "expect": "__host__" },
     { "id": "R3", "scene": "round", "note": "在重复",
       "context": [{ "id": 70, "author": "Codex", "text": "SQLite 离线零成本。" }, { "id": 71, "author": "Gemini", "text": "PostgreSQL 更可靠。" }, { "id": 72, "author": "DeepSeek", "text": "云数据库方便同步。" }, { "id": 73, "author": "Codex", "text": "我还是认为 SQLite 离线零成本。" }, { "id": 74, "author": "Gemini", "text": "我仍然认为 PostgreSQL 更可靠。" }, { "id": 75, "author": "DeepSeek", "text": "重复一遍，云数据库方便同步。" }],
-      "expect": "__host__" }
+      "expect": "__host__" },
+    { "id": "R4", "scene": "round", "note": "有未决分歧但没有明确首位，不自动补位",
+      "brief": "比较不同存储方案，没有规定下一轮的发言顺序。",
+      "context": [{ "id": 70, "author": "Codex", "text": "离线与同步的取舍还没有明确，需要继续评估。" }, { "id": 71, "author": "Gemini", "text": "同意还有待解决的取舍，具体先验证哪个问题尚未决定。" }, { "id": 72, "author": "DeepSeek", "text": "成本和离线需求的优先级仍不清楚，没有约定下一位。" }],
+      "expect": "continue", "expect_first": "__host__" }
   ]
 }

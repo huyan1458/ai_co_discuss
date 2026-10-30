@@ -434,6 +434,14 @@ CREATE TABLE IF NOT EXISTS member_requests (
     UNIQUE(message_id,member_id)
 );
 CREATE INDEX IF NOT EXISTS member_requests_open ON member_requests(member_id,status);
+-- One durable disposition per @everyone message; also prevents a host fallback from being routed again after restart.
+-- The original group request may be deleted for a sequential queue, so request_id is a receipt, not a foreign key.
+CREATE TABLE IF NOT EXISTS group_routes (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    request_id INTEGER NOT NULL,
+    action TEXT NOT NULL CHECK(action IN ('all','sequential','host'))
+);
 -- Discussion options chosen at creation. A room without a row predates the option and keeps named follow-ups.
 CREATE TABLE IF NOT EXISTS discussion_options (
     room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,

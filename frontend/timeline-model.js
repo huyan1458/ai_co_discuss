@@ -233,9 +233,13 @@ export function handoff_lines(rows, axis) {
   return pieces;
 }
 
-/** Totals a live axis may show, so it rescales in a few round steps rather than every frame. */
-const LIVE_TOTALS_MS = [5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 300, 600, 900, 1200, 1800, 2700, 3600, 5400, 7200, 10800, 21600, 43200, 86400]
-  .map((seconds) => seconds * 1000);
+/**
+ * Totals a live axis may show, so it rescales in round steps rather than every frame. Neighbours differ by at most
+ * 1.25×, so crossing a step never drops work below LIVE_FILL / 1.25 (60%) of the width.
+ */
+const LIVE_TOTALS_MS = [5, 6, 7, 8, 10, 12, 15, 18, 20, 24, 30, 36, 45, 50, 60, 75, 90, 105, 120, 150, 180, 210, 240, 300, 360,
+  420, 480, 600, 720, 900, 1080, 1200, 1500, 1800, 2100, 2400, 3000, 3600, 4500, 5400, 6300, 7200, 9000, 10800, 12600, 14400,
+  18000, 21600, 25200, 28800, 36000, 43200, 54000, 64800, 72000, 86400].map((seconds) => seconds * 1000);
 /** While work runs, it fills at most this share of the axis; the rest is room for it to grow into. */
 const LIVE_FILL = 0.75;
 
