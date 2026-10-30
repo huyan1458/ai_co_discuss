@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { atomic_json } from './discussion_adapters.mjs';
 
 const SOURCE = fileURLToPath(new URL('../.agents/skills/', import.meta.url));
-const SKILLS = ['discuss-host', 'discuss-participant', 'discuss-report'];
+export const SKILLS = ['discuss-host', 'discuss-participant', 'discuss-report'];
 const LEGACY_MANIFEST = '.codiscuss-skills.json';
 
 /** Hash names and contents, rejecting links instead of following them outside a skill. */

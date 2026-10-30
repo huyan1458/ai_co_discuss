@@ -9,7 +9,7 @@ import { parseArgs } from 'node:util';
 import { atomic_json } from './discussion_adapters.mjs';
 import { launch_settings, save_launch_settings } from './discussion_launch.mjs';
 import { assert_shared_home, service_home } from './discussion_service.mjs';
-import { install_skills, remove_legacy_skills } from './discussion_skills.mjs';
+import { SKILLS, install_skills, remove_legacy_skills } from './discussion_skills.mjs';
 import { ask, checkbox_prompt, intro, outro, pad, short_path, spinner, step, styled, text_width, tone } from './discussion_tui.mjs';
 export { checkbox_prompt } from './discussion_tui.mjs';
 
@@ -23,6 +23,7 @@ const AGY_SETTINGS = ['.gemini', 'antigravity-cli', 'settings.json'];
 const AGY_RULE_RECORD = 'agy-permission.json';
 const AGY_SETTINGS_BACKUP = 'agy-settings.backup.json';
 const SKILL_RECORD = 'skills-manifest.json';
+const AGY_SKILL_CONFIG = ['.gemini', 'config', 'skills.json'];
 const CLIENTS = {
   codex: { name: 'Codex', commands: ['codex'], adapter: 'codex_cli', skills: ['.agents', 'skills'] },
   claude: { name: 'Claude', commands: ['claude'], adapter: 'claude', skills: ['.claude', 'skills'] },
@@ -224,19 +225,58 @@ export function remove_legacy_agy_rules(home, user_home) {
   return { client: 'Gemini', status: next.length !== allow.length ? 'removed' : 'unchanged', path };
 }
 
+/** Follow a linked skill directory so clients sharing one folder install a single copy. */
+function real_directory(path) {
+  try { return realpathSync.native(path); } catch { return resolve(path); }
+}
+
+/** True when an entry's include_only/exclude patterns let agy load every discussion skill; invalid patterns count as filtering. */
+function entry_loads_skills(entry) {
+  const matches = (patterns, name) => patterns.some(pattern => {
+    try { return new RegExp(`^(?:${pattern})$`).test(name); } catch { return true; }
+  });
+  const include = Array.isArray(entry.include_only) ? entry.include_only : null;
+  const exclude = Array.isArray(entry.exclude) ? entry.exclude : [];
+  return SKILLS.every(name => (!include || matches(include, name)) && !matches(exclude, name));
+}
+
+/** Absolute directories agy loads the discussion skills from through its global skills.json; agy leaves ~/ unexpanded on Windows. */
+function agy_skill_entries(user_home) {
+  const path = join(user_home, ...AGY_SKILL_CONFIG);
+  let config;
+  try { config = JSON.parse(readFileSync(path, 'utf8')); } catch { return []; }
+  return (Array.isArray(config?.entries) ? config.entries : [])
+    .filter(entry => typeof entry?.path === 'string' && entry_loads_skills(entry)).map(entry => entry.path)
+    .map(value => process.platform !== 'win32' && value.startsWith('~/') ? join(user_home, value.slice(2)) : value)
+    .filter(value => isAbsolute(value)).map(real_directory);
+}
+
+/** Pick the directory each client really reads; agy reuses a skills.json entry instead of its own folder. */
+function skill_targets(selected, user_home) {
+  const own = new Map(selected.map(client => [client.key, real_directory(join(user_home, ...client.skills))]));
+  const entries = agy_skill_entries(user_home);
+  return selected.map(client => {
+    const directory = own.get(client.key);
+    if (client.key !== 'antigravity' || !entries.length) return { client, directory, own: directory };
+    const others = selected.filter(item => item.key !== client.key).map(item => own.get(item.key));
+    return { client, directory: entries.find(entry => others.includes(entry)) || entries[0], own: directory };
+  });
+}
+
 /** Save the selected effective profiles and copy complete skills without overwriting edits. */
 async function configure_clients(home, selected, options, existing) {
   const participants = { ...existing };
   const skills = [], profiles = [];
   const user_home = resolve(options['skills-home'] || homedir());
-  for (const client of selected) {
+  const record = join(home, SKILL_RECORD), installed = new Map();
+  for (const { client, directory, own } of skill_targets(selected, user_home)) {
     const profile = await choose_profile(client, participants[client.name], options);
     profiles.push(profile);
     if (profile.status === 'configured') participants[client.name] = { ...participants[client.name], ...profile.effective };
-    const record = join(home, SKILL_RECORD);
-    const results = install_skills(join(user_home, ...client.skills), record);
-    const legacy = client.legacy_skills ? remove_legacy_skills(join(user_home, ...client.legacy_skills), record) : [];
-    skills.push({ client: client.name, results, legacy });
+    if (!installed.has(directory)) installed.set(directory, install_skills(directory, record));
+    const retired = [client.legacy_skills && real_directory(join(user_home, ...client.legacy_skills)), own]
+      .filter(path => path && path !== directory);
+    skills.push({ client: client.name, results: installed.get(directory), legacy: retired.flatMap(path => remove_legacy_skills(path, record)) });
   }
   save_launch_settings(home, { participants });
   const legacy = remove_legacy_agy_rules(home, user_home);

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -300,6 +300,38 @@ for (const [answer, status] of [['', 'retained'], ['更新', 'configured']]) {
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 }
+
+test('setup installs once into a skill folder shared through a linked directory or agy skills.json', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'codiscuss-shared-skills-'));
+  const home = join(directory, 'service');
+  const env = { ...process.env, DISCUSS_SERVICE_HOME: home, PYTHONDONTWRITEBYTECODE: '1' };
+  try {
+    const shared = join(directory, '.agents', 'skills');
+    mkdirSync(shared, { recursive: true });
+    mkdirSync(join(directory, '.claude'), { recursive: true });
+    symlinkSync(shared, join(directory, '.claude', 'skills'), 'junction');
+    mkdirSync(join(directory, '.gemini', 'config'), { recursive: true });
+    writeFileSync(join(directory, '.gemini', 'config', 'skills.json'), JSON.stringify({ entries: [{ path: shared.replaceAll('\\', '/') }] }));
+    install_skills(join(directory, '.gemini', 'antigravity-cli', 'skills'), join(home, 'skills-manifest.json'));
+    const options = ['--clients', 'codex,claude,antigravity', '--codex', fixture_cli(directory, 'codex'),
+      '--claude', fixture_cli(directory, 'claude'), '--antigravity', fixture_cli(directory, 'agy'),
+      '--skills-home', directory, '--python', detect_python(), '--no-start', '--json'];
+    const setup = spawnSync(process.execPath, [CLI, 'setup', ...options], { env, encoding: 'utf8' });
+    assert([0, 2].includes(setup.status), setup.stderr);
+    const result = JSON.parse(setup.stdout);
+    assert(result.skills.every(group => group.results.every(skill => skill.path.startsWith(realpathSync.native(shared)))));
+    assert.equal(existsSync(join(directory, '.gemini', 'config', 'skills')), false);
+    assert.equal(existsSync(join(directory, '.gemini', 'antigravity-cli', 'skills')), false);
+    assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(home, 'skills-manifest.json'), 'utf8'))), [realpathSync.native(shared)]);
+    const legacy = join(directory, '.gemini', 'antigravity-cli', 'skills');
+    writeFileSync(join(directory, '.gemini', 'config', 'skills.json'), JSON.stringify({ entries: [
+      { path: shared.replaceAll('\\', '/'), exclude: ['discuss-.*'] }, { path: legacy.replaceAll('\\', '/') }] }));
+    const again = spawnSync(process.execPath, [CLI, 'setup', ...options.with(1, 'antigravity')], { env, encoding: 'utf8' });
+    assert([0, 2].includes(again.status), again.stderr);
+    assert(JSON.parse(again.stdout).skills[0].results.every(skill => skill.path.startsWith(realpathSync.native(legacy))));
+    assert(existsSync(join(legacy, 'discuss-host', 'SKILL.md')));
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
 
 test('Cursor setup installs complete skills without writing an unsupported launch profile', () => {
   const directory = mkdtempSync(join(tmpdir(), 'codiscuss-cursor-'));
