@@ -350,7 +350,9 @@ function update_fixture() {
   const timers = new Map(), sources = [], reads = [], connections = [];
   let timer_id = 0;
   context.document.hidden = false;
+  context.test_state.connected = true;
   context.EventSource = class {
+    static CLOSED = 2;
     constructor(url) { this.url = url; this.listeners = new Map(); sources.push(this); }
     addEventListener(name, callback) { this.listeners.set(name, callback); }
     emit(name) { this.listeners.get(name)?.(); }
@@ -359,7 +361,7 @@ function update_fixture() {
   context.setTimeout = (callback, delay) => { timers.set(++timer_id, { callback, delay }); return timer_id; };
   context.clearTimeout = id => timers.delete(id);
   context.refresh_room = async () => { reads.push(context.test_state.room?.id); };
-  context.set_connection = value => connections.push(value);
+  context.set_connection = value => { connections.push(value); context.test_state.connected = value; };
   return { ...fixture, timers, sources, reads, connections, async run(delay) {
     const timer = [...timers].find(([, item]) => item.delay === delay);
     assert.ok(timer, `missing ${delay}ms timer`);
@@ -450,6 +452,22 @@ test("push defers during a directory drag and failed refreshes can recover", asy
   f.sources[0].emit("change");
   await f.run(100);
   assert.deepEqual(f.reads, ["recovered"]);
+});
+
+test("a disconnected page reads in full on every poll and reopens a stream the browser closed", async () => {
+  const f = update_fixture();
+  f.context.start_live_updates();
+  f.sources[0].emit("open");
+  await f.run(100);
+  f.context.test_state.connected = false;
+  f.context.request_json = async () => { throw new Error("unexpected revisions read"); };
+  await f.run(60000);
+  await f.run(100);
+  assert.equal(f.reads.length, 2, "an unchanged revision cannot keep the page marked disconnected");
+  f.sources[0].readyState = 2;
+  f.sources[0].emit("error");
+  await f.run(12000);
+  assert.equal(f.sources.length, 2);
 });
 
 /** Exercise shared attachment submission and draft lifetime without a live service. */

@@ -283,8 +283,9 @@ function resize_nav_by_key(event) {
       <footer class="channel-sidebar-footer">
         <button type="button" class="channel-self-button" :aria-label="`账号与设置：${bridge.display_name(author)}${account_status ? '，' + account_status : ''}`" @click="modal = 'settings'">
           <UAvatar :src="bridge.identities[author]?.icon" :text="bridge.identities[author]?.initials" :alt="bridge.display_name(author)" size="sm" class="channel-avatar" :class="bridge.identities[author]?.style" />
-          <span class="channel-self"><strong>{{ bridge.display_name(author) }}</strong><span class="channel-connection" :class="{ 'is-action': account_status }"><span :class="{ connected: view.connected }" :title="view.connected ? '网站已连接' : '网站未连接'"></span>{{ account_status || (view.connected ? '网站已连接' : '网站未连接') }}</span></span>
+          <span class="channel-self"><strong>{{ bridge.display_name(author) }}</strong><span class="channel-connection" :class="{ 'is-action': account_status }"><span :class="{ connected: view.connected }" :title="view.connected ? '网站已连接' : '网站未连接'"></span>{{ account_status || (view.connected ? '网站已连接' : view.reconnecting ? '正在重新连接…' : '网站未连接') }}</span></span>
         </button>
+        <UTooltip v-if="!view.connected" text="重新连接"><UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" size="sm" class="channel-icon-button" aria-label="重新连接网站" :loading="view.reconnecting" @click="bridge.reconnect()" /></UTooltip>
         <UTooltip text="设置"><UButton icon="i-lucide-settings-2" color="neutral" variant="ghost" size="sm" class="channel-icon-button" aria-label="设置" @click="modal = 'settings'" /></UTooltip>
       </footer>
     </aside>

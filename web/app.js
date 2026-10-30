@@ -64,6 +64,7 @@ const live_updates = { source: null, connected: false, enabled: false, timer: nu
 state.messages = [];
 state.message_history = null;
 state.connected = false;
+state.reconnecting = false;
 state.attachment_drafts = [];
 state.composer_error = "";
 state.upload_status = "";
@@ -313,6 +314,7 @@ function management_error_message(room_id, error) {
 /** Show connection state without claiming that any AI is online. */
 function set_connection(connected) {
   state.connected = connected;
+  state.reconnecting = false;
   element("connection-dot").className = `status-dot ${connected ? "connected" : "failed"}`;
   element("connection-status").textContent = connected ? "讨论网站已连接" : "网站连接中断，可手动刷新";
   publish_view();
@@ -3614,7 +3616,11 @@ async function flush_live_refresh() {
   const full = live_updates.full;
   live_updates.full = false;
   live_updates.running = true;
-  try { await refresh_room({ room: full }); } catch { set_connection(false); }
+  try { await refresh_room({ room: full }); } catch (error) {
+    console.warn("refresh failed", error);
+    if (state.reconnecting) show_toast(`仍未连接：${error.message}`, true);
+    set_connection(false);
+  }
   finally {
     live_updates.running = false;
     if (live_updates.dirty) queue_live_refresh();
@@ -3628,7 +3634,7 @@ function arm_update_poll() {
   live_updates.poll_timer = setTimeout(() => {
     poll_live_updates();
     arm_update_poll();
-  }, live_updates.connected ? REFRESH_INTERVAL_MS : FALLBACK_REFRESH_INTERVAL_MS);
+  }, live_updates.connected && state.connected ? REFRESH_INTERVAL_MS : FALLBACK_REFRESH_INTERVAL_MS);
 }
 
 /**
@@ -3637,9 +3643,10 @@ function arm_update_poll() {
  * A site without revisions is read in full as before.
  */
 async function poll_live_updates() {
+  if (!live_updates.source && typeof EventSource !== "undefined") return reconnect_live_updates();
   const room_id = state.room?.id || "";
   const working = (state.room?.free?.members || []).some((member) => WORKING_STATUSES.includes(member.execution?.status));
-  if (working || Date.now() - live_updates.refreshed_at >= SAFETY_REFRESH_MS) return queue_live_refresh();
+  if (!state.connected || working || Date.now() - live_updates.refreshed_at >= SAFETY_REFRESH_MS) return queue_live_refresh();
   let revisions;
   try { revisions = await request_json(`/api/revisions?rooms=${encodeURIComponent(room_id)}`); }
   catch { return queue_live_refresh(); }
@@ -3669,11 +3676,24 @@ function start_live_updates() {
       if (live_updates.source !== source) return;
       const was_connected = live_updates.connected;
       live_updates.connected = false;
+      // A closed stream is never retried by the browser; the next poll opens a new one.
+      if (source.readyState === EventSource.CLOSED) live_updates.source = null;
       if (was_connected) arm_update_poll();
     });
   }
   arm_update_poll();
   queue_live_refresh();
+}
+
+/** Reopen the update stream and read the site now; used by the footer retry and when the stream was closed. */
+async function reconnect_live_updates() {
+  if (document.hidden) return;
+  state.reconnecting = true;
+  publish_view();
+  live_updates.source?.close();
+  live_updates.source = null;
+  live_updates.connected = false;
+  start_live_updates();
 }
 
 /** Release streams and scheduled reads while hidden or leaving the page. */
@@ -3751,7 +3771,7 @@ function view_snapshot() {
   return { rooms: ordered_rooms(), folders: state.folders, folder_groups: ordered_folders(), room: state.room, archive_view: state.archive_view, directory_sort: state.directory_sort, messages: state.messages, total: state.message_total,
     archive_pending: [...state.archive_changes.keys()], directory_error: state.directory_error, directory_notice: state.directory_notice, import_progress: structuredClone(state.import_progress),
     directory_pending: [...state.directory_pending.keys()], folder_pending: [...state.folder_moves.keys()], creating_room: state.creating_room,
-    connected: state.connected, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
+    connected: state.connected, reconnecting: state.reconnecting, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
     attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url })),
     composer_error: state.composer_error, upload_status: state.upload_status, sending_message: state.sending_message,
     mention_only: state.mention_only, reply_to: state.reply_to, turn_reply_to: state.turn_reply_to,
@@ -3996,7 +4016,7 @@ function change_view_theme(theme) {
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field,
   write_launch: write_launch_field, default_launch_entry, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
   launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, pick_launch_directory, browse_local_directory, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
-  start_drag: start_directory_drag,
+  start_drag: start_directory_drag, reconnect: reconnect_live_updates,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
