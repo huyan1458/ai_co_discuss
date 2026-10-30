@@ -10,11 +10,14 @@ const providers = computed(() => Object.entries(view.value.launch.scheduler_prov
 const models = computed(() => (view.value.launch.scheduler_providers?.[scheduler.value.provider]?.models || []).map((id) => ({ label: id, value: id })));
 // Brand marks for the add row and card; OpenAI's mark reuses the Codex avatar colors.
 const PROVIDER_ICONS = { jev: { icon: "/icons/typesafe.png" }, decisions: { icon: "/icons/openai.svg", style: "codex" } };
-// Only one decision model per room: once added, the add row waits until it is removed.
+// Only one decision model per room fills a single slot: choosing another provider replaces the current one.
 const active = computed(() => Boolean(scheduler.value.enabled) && !props.blocker);
 const add_row = ref(null);
-const add_items = computed(() => providers.value.map(({ value, label }) => ({ value, name: label, initials: label.slice(0, 2), ...PROVIDER_ICONS[value],
-  disabled: Boolean(props.blocker) || active.value, title: active.value ? "只能添加一个决策模型，先移出当前的" : label, aria_label: `添加决策模型 ${label}` })));
+const add_items = computed(() => providers.value.map(({ value, label }) => {
+  const selected = active.value && scheduler.value.provider === value;
+  return { value, name: label, initials: label.slice(0, 2), ...PROVIDER_ICONS[value], disabled: Boolean(props.blocker), selected,
+    title: selected ? "当前决策模型" : active.value ? `替换为 ${label}` : label, aria_label: active.value && !selected ? `替换决策模型为 ${label}` : `添加决策模型 ${label}` };
+}));
 const api_key = ref(""), key_visible = ref(false), saving = ref(false), error = ref("");
 // The card shows a summary; its settings stay behind "设置" like the participant cards.
 const editing = ref(false);
@@ -35,6 +38,10 @@ function cancel_settings() {
 }
 /** Add one provider as the room's decision model; the provider goes first so it brings its preset model and saved key. */
 function add_provider(provider) {
+  if (active.value && scheduler.value.provider === provider) return;
+  // Replacing closes the back of the previous provider's card.
+  editing.value = false;
+  opened_with = null;
   bridge.write_scheduler("provider", provider);
   bridge.write_scheduler("enabled", true);
 }
@@ -83,8 +90,13 @@ async function save_key() {
       <p class="scheduler-description">{{ blocker ? `${description}（${blocker}）` : description }}</p>
     </div>
     <RosterAdd ref="add_row" label="添加决策模型" :items="add_items" @add="add_provider" />
-    <div v-if="active" class="scheduler-cards">
-    <div class="scheduler-card" :class="{ 'is-editing': editing }">
+    <div class="scheduler-cards">
+    <div v-if="!active" class="scheduler-slot">
+      <UIcon name="i-lucide-zap" />
+      <strong>决策模型槽位</strong>
+      <span>只能放一个；从上方添加，再点其他会替换</span>
+    </div>
+    <div v-else class="scheduler-card" :class="{ 'is-editing': editing }">
       <template v-if="!editing">
         <button type="button" class="scheduler-open" aria-label="设置智能调度的决策模型" title="点击设置" @click="open_settings">
           <span class="scheduler-identity">
@@ -133,6 +145,10 @@ async function save_key() {
 .scheduler-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); gap: 8px; }
 .scheduler-card { position: relative; display: flex; flex-direction: column; min-width: 0; height: 240px; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); box-shadow: var(--channel-shadow-control); }
 .scheduler-card:hover { border-color: var(--ui-border-accented); }
+/* The empty slot keeps the card's footprint, so one slot reads as "only one fits here". */
+.scheduler-slot { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; height: 240px; padding: 12px; border: 1px dashed var(--ui-border-accented); border-radius: 8px; color: var(--ui-text-dimmed); font-size: 11px; text-align: center; }
+.scheduler-slot > span:first-child { width: 18px; height: 18px; }
+.scheduler-slot strong { color: var(--ui-text-toned); font-size: 12px; font-weight: 500; }
 .scheduler-open { display: flex; flex: 1; flex-direction: column; gap: 10px; width: 100%; padding: 12px 12px 30px; text-align: left; border-radius: inherit; outline: none; }
 .scheduler-identity { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 26px; padding-right: 30px; }
 .scheduler-identity strong { overflow: hidden; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
