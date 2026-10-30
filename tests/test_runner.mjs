@@ -1570,8 +1570,9 @@ test('the service ticks every registered room and pauses a room once it is unreg
 test('a slow room never holds up the other rooms between service polls', async t => {
   const f = await fixture(t);
   const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
-  register_room(home, room_config(home, f.config.site, 'slow'));
-  register_room(home, room_config(home, f.config.site, 'fast'));
+  const slow = room_config(home, f.config.site, 'slow');
+  const fast = room_config(home, f.config.site, 'fast');
+  register_room(home, slow); register_room(home, fast);
   const ticks = [];
   let release_slow;
   const slow_gate = new Promise(done => { release_slow = done; });
@@ -1580,13 +1581,14 @@ test('a slow room never holds up the other rooms between service polls', async t
   service.intervals = { local: 0, remote: 0 };
   t.after(async () => { release_slow(); await service.close(); rmSync(home, { recursive: true, force: true }); });
   await service.tick({ wait: false });
-  await delay(5);
+  // Wait only for the fast room's complete check, including its member lookup.
+  await service.workers.get(fast).busy;
   await service.tick({ wait: false });
-  await delay(5);
+  await service.workers.get(fast).busy;
   assert.deepEqual(ticks.filter(room => room === 'fast').length, 2, 'the fast room ticks again while the slow one is still running');
   assert.deepEqual(ticks.filter(room => room === 'slow').length, 1, 'a busy room is not ticked twice at once');
   release_slow();
-  await delay(5);
+  await service.workers.get(slow).busy;
   await service.tick();
   assert.deepEqual(ticks.filter(room => room === 'slow').length, 2);
 });
