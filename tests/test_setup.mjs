@@ -120,22 +120,29 @@ test('npm Codex binary search skips dot-prefixed upgrade leftovers', { skip: pro
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-test('complete skills install idempotently and preserve user edits', () => {
+test('complete skills install idempotently, preserve user edits and keep hashes outside the skill directory', () => {
   const directory = mkdtempSync(join(tmpdir(), 'codiscuss-skills-'));
   try {
-    assert(install_skills(directory).every(item => item.status === 'installed'));
-    assert(existsSync(join(directory, 'discuss-host/references/manual.md')));
-    assert(existsSync(join(directory, 'discuss-report/assets/Discussion_Report_Template.md')));
-    assert(install_skills(directory).every(item => item.status === 'unchanged'));
-    const manifest = JSON.parse(readFileSync(join(directory, '.codiscuss-skills.json'), 'utf8'));
-    writeFileSync(join(directory, 'discuss-host/extra.txt'), 'local addition');
-    assert.equal(install_skills(directory)[0].status, 'conflict');
-    rmSync(join(directory, 'discuss-host/extra.txt'));
-    assert.equal(install_skills(directory)[0].status, 'unchanged');
-    assert.deepEqual(JSON.parse(readFileSync(join(directory, '.codiscuss-skills.json'), 'utf8')), manifest);
-    const path = join(directory, 'discuss-host/SKILL.md');
+    const skills = join(directory, 'skills'), record = join(directory, 'service', 'skills-manifest.json');
+    assert(install_skills(skills, record).every(item => item.status === 'installed'));
+    assert(existsSync(join(skills, 'discuss-host/references/manual.md')));
+    assert(existsSync(join(skills, 'discuss-report/assets/Discussion_Report_Template.md')));
+    assert.equal(existsSync(join(skills, '.codiscuss-skills.json')), false);
+    assert(install_skills(skills, record).every(item => item.status === 'unchanged'));
+    const manifest = JSON.parse(readFileSync(record, 'utf8'));
+    writeFileSync(join(skills, 'discuss-host/extra.txt'), 'local addition');
+    assert.equal(install_skills(skills, record)[0].status, 'conflict');
+    rmSync(join(skills, 'discuss-host/extra.txt'));
+    assert.equal(install_skills(skills, record)[0].status, 'unchanged');
+    assert.deepEqual(JSON.parse(readFileSync(record, 'utf8')), manifest);
+    writeFileSync(join(skills, '.codiscuss-skills.json'), JSON.stringify(manifest[skills]));
+    rmSync(record);
+    assert(install_skills(skills, record).every(item => item.status === 'unchanged'));
+    assert.deepEqual(JSON.parse(readFileSync(record, 'utf8')), manifest);
+    assert.equal(existsSync(join(skills, '.codiscuss-skills.json')), false);
+    const path = join(skills, 'discuss-host/SKILL.md');
     writeFileSync(path, 'custom skill');
-    assert.equal(install_skills(directory)[0].status, 'conflict');
+    assert.equal(install_skills(skills, record)[0].status, 'conflict');
     assert.equal(readFileSync(path, 'utf8'), 'custom skill');
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
@@ -143,16 +150,17 @@ test('complete skills install idempotently and preserve user edits', () => {
 test('retired skill directory loses unmodified managed copies but keeps edited ones', () => {
   const directory = mkdtempSync(join(tmpdir(), 'codiscuss-legacy-skills-'));
   try {
-    const legacy = join(directory, 'legacy');
-    assert.deepEqual(remove_legacy_skills(legacy), []);
-    install_skills(legacy);
+    const legacy = join(directory, 'legacy'), record = join(directory, 'skills-manifest.json');
+    assert.deepEqual(remove_legacy_skills(legacy, record), []);
+    install_skills(legacy, record);
     writeFileSync(join(legacy, 'discuss-host/SKILL.md'), 'custom skill');
-    assert.deepEqual(remove_legacy_skills(legacy).map(item => item.status), ['kept', 'removed', 'removed']);
+    assert.deepEqual(remove_legacy_skills(legacy, record).map(item => item.status), ['kept', 'removed', 'removed']);
     assert.equal(readFileSync(join(legacy, 'discuss-host/SKILL.md'), 'utf8'), 'custom skill');
-    assert(existsSync(join(legacy, '.codiscuss-skills.json')));
+    assert.deepEqual(Object.keys(JSON.parse(readFileSync(record, 'utf8'))[legacy]), ['discuss-host']);
     rmSync(join(legacy, 'discuss-host'), { recursive: true });
-    assert.deepEqual(remove_legacy_skills(legacy), []);
+    assert.deepEqual(remove_legacy_skills(legacy, record), []);
     assert.equal(existsSync(legacy), false);
+    assert.deepEqual(JSON.parse(readFileSync(record, 'utf8')), {});
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 

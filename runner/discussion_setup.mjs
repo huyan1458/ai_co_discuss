@@ -22,6 +22,7 @@ const ATTENTION_EXIT_CODE = 2;
 const AGY_SETTINGS = ['.gemini', 'antigravity-cli', 'settings.json'];
 const AGY_RULE_RECORD = 'agy-permission.json';
 const AGY_SETTINGS_BACKUP = 'agy-settings.backup.json';
+const SKILL_RECORD = 'skills-manifest.json';
 const CLIENTS = {
   codex: { name: 'Codex', commands: ['codex'], adapter: 'codex_cli', skills: ['.agents', 'skills'] },
   claude: { name: 'Claude', commands: ['claude'], adapter: 'claude', skills: ['.claude', 'skills'] },
@@ -232,8 +233,9 @@ async function configure_clients(home, selected, options, existing) {
     const profile = await choose_profile(client, participants[client.name], options);
     profiles.push(profile);
     if (profile.status === 'configured') participants[client.name] = { ...participants[client.name], ...profile.effective };
-    const results = install_skills(join(user_home, ...client.skills));
-    const legacy = client.legacy_skills ? remove_legacy_skills(join(user_home, ...client.legacy_skills)) : [];
+    const record = join(home, SKILL_RECORD);
+    const results = install_skills(join(user_home, ...client.skills), record);
+    const legacy = client.legacy_skills ? remove_legacy_skills(join(user_home, ...client.legacy_skills), record) : [];
     skills.push({ client: client.name, results, legacy });
   }
   save_launch_settings(home, { participants });
