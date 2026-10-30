@@ -14,7 +14,9 @@
 [![Node.js](https://img.shields.io/badge/node-%3E%3D24-339933?logo=nodedotjs&logoColor=white)](package.json)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-<img src="docs/images/channel-preview.jpg" alt="AI CoDiscuss 房间：房间目录、对话记录与成员栏" width="900">
+<a href=".github/assets/promo.mp4"><img src=".github/assets/promo.webp" alt="AI CoDiscuss 介绍动画：多个 AI 在同一房间里被点名、并行工作并给出有据结论" width="900"></a>
+
+<sub>点击动画查看带配乐的完整视频</sub>
 
 </div>
 

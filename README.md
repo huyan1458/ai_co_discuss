@@ -14,7 +14,9 @@ each keeps its own session, tools and account — then delegate by mention or ru
 [![Node.js](https://img.shields.io/badge/node-%3E%3D24-339933?logo=nodedotjs&logoColor=white)](package.json)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-<img src="docs/images/channel-preview.jpg" alt="AI CoDiscuss room: room directory, conversation and member panel" width="900">
+<a href=".github/assets/promo.mp4"><img src=".github/assets/promo.webp" alt="AI CoDiscuss intro: several AI agents are mentioned in one room, work in parallel and reach a sourced conclusion" width="900"></a>
+
+<sub>Click the animation for the full video with sound</sub>
 
 </div>
 
