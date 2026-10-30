@@ -9,7 +9,7 @@ import threading
 import time
 import unittest
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from contextlib import closing
 from pathlib import Path
 from urllib.error import HTTPError
@@ -105,7 +105,7 @@ class DiscussionTests(unittest.TestCase):
             resuming = pool.submit(resume)
             try:
                 self.assertTrue(restarting.wait(3))
-                with self.assertRaises(TimeoutError):
+                with self.assertRaises(FutureTimeoutError):
                     resuming.result(0.2)
             finally:
                 proceed.set()
@@ -665,7 +665,12 @@ class DiscussionTests(unittest.TestCase):
         if not self.external:
             init_database(self.database)
         self.assertEqual(self.request("/api/rooms")[1]["folders"], result["folders"])
-        self.assertEqual(self.request(room_path)[1], before_room)
+        # Paused time grows with the clock, so a read across a second boundary must not count as a change.
+        def without_clock(room):
+            limits = {key: value for key, value in (room.get("limits") or {}).items()
+                      if key not in ("idle_seconds", "deadline", "remaining_seconds", "elapsed_seconds")}
+            return {**room, "limits": limits}
+        self.assertEqual(without_clock(self.request(room_path)[1]), without_clock(before_room))
 
     def test_uncategorized_order_with_one_folder_and_legacy_migration(self):
         """The virtual group moves both ways, persists and never becomes an assignment."""
