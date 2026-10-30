@@ -47655,7 +47655,9 @@ var Rq = ["data-identity", "data-face"], zq = ["inert", "aria-hidden"], Bq = { c
 		});
 		function Ne() {
 			if (Ee.value) return a.save_expert_preset(n.name);
-			Oe.value = `${a.platform_of(n.name)}-`, De.value = !0;
+			let e = new Set(a.expert_presets().map((e) => e.name)), t = a.platform_of(n.name), r = 1;
+			for (; e.has(a.preset_identity(n.name, `${t}-${r}`));) r += 1;
+			Oe.value = `${t}-${r}`, De.value = !0;
 		}
 		async function Pe() {
 			Ae.value || (await a.save_expert_preset(n.name, ke.value), De.value = !1);
@@ -47866,7 +47868,7 @@ var Rq = ["data-identity", "data-face"], zq = ["inert", "aria-hidden"], Bq = { c
 						inert: !f.value,
 						"aria-hidden": !f.value
 					}, [K("div", cJ, [
-						K("div", lJ, [K("strong", null, [J(P(I(a).member_label(e.name)), 1), K("span", null, "设置" + P(se.value ? " · 不访问项目" : ""), 1)]), K("span", uJ, [
+						K("div", lJ, [K("strong", null, [J(P(I(a).member_label(e.name)), 1), n[19] ||= K("span", null, "设置", -1)]), K("span", uJ, [
 							K("button", {
 								type: "button",
 								class: j(["expert-card-back-tool", { "is-set": Se.value }]),
@@ -47908,7 +47910,7 @@ var Rq = ["data-identity", "data-face"], zq = ["inert", "aria-hidden"], Bq = { c
 							role: y.value.state === "error" ? "alert" : "status",
 							class: "expert-card-check"
 						}, P(y.value.message), 9, pJ)) : Y("", !0),
-						g.value && m.value.length > 1 ? (U(), W("div", mJ, [n[19] ||= K("span", null, "接入", -1), q(S, {
+						g.value && m.value.length > 1 ? (U(), W("div", mJ, [n[20] ||= K("span", null, "接入", -1), q(S, {
 							"model-value": p.value.adapter || "",
 							items: m.value,
 							placeholder: "选择 API / App / CLI",
@@ -47937,7 +47939,7 @@ var Rq = ["data-identity", "data-face"], zq = ["inert", "aria-hidden"], Bq = { c
 							"aria-label",
 							"onUpdate:modelValue"
 						])]))), 128)),
-						k.value ? (U(), W("div", hJ, [n[20] ||= K("span", null, "项目", -1), K("div", {
+						k.value ? (U(), W("div", hJ, [n[21] ||= K("span", null, "项目", -1), K("div", {
 							class: "expert-card-modes",
 							role: "radiogroup",
 							"aria-label": `${e.name} 的项目文件权限`
@@ -47953,7 +47955,7 @@ var Rq = ["data-identity", "data-face"], zq = ["inert", "aria-hidden"], Bq = { c
 							key: 3,
 							name: e.name
 						}, null, 8, ["name"])) : te.value && !ge.value.length ? (U(), W(H, { key: 4 }, [
-							K("div", vJ, [n[21] ||= K("span", null, "模型", -1), q(S, {
+							K("div", vJ, [n[22] ||= K("span", null, "模型", -1), q(S, {
 								"model-value": p.value.model || "__default__",
 								items: O.value.items,
 								title: O.value.source,
@@ -48020,7 +48022,7 @@ var Rq = ["data-identity", "data-face"], zq = ["inert", "aria-hidden"], Bq = { c
 							class: "expert-card-flip is-done",
 							"aria-label": `保存并返回 ${e.name} 角色卡片`,
 							onClick: n[10] ||= (e) => be(!1)
-						}, [q(d, { name: "i-lucide-check" }), n[22] ||= J("完成", -1)], 8, OJ)
+						}, [q(d, { name: "i-lucide-check" }), n[23] ||= J("完成", -1)], 8, OJ)
 					])], 8, sJ)) : Y("", !0)]),
 					_: 1
 				}, 8, ["style"]),
@@ -48107,7 +48109,7 @@ var Rq = ["data-identity", "data-face"], zq = ["inert", "aria-hidden"], Bq = { c
 			], 42, Rq);
 		};
 	}
-}, [["__scopeId", "data-v-ba27f504"]]), NJ = {
+}, [["__scopeId", "data-v-765548c6"]]), NJ = {
 	key: 0,
 	class: "project-field"
 }, PJ = ["disabled"], FJ = {

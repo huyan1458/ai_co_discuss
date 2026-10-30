@@ -185,7 +185,12 @@ const naming_note = computed(() => {
 /** Update the card's own preset in place; any other card asks for a name first. */
 function save_preset() {
   if (own_preset.value) return bridge.save_expert_preset(props.name);
-  naming_draft.value = `${bridge.platform_of(props.name)}-`;
+  // Suggest the first numbered name that no saved preset holds yet.
+  const taken = new Set(bridge.expert_presets().map((preset) => preset.name));
+  const platform = bridge.platform_of(props.name);
+  let number = 1;
+  while (taken.has(bridge.preset_identity(props.name, `${platform}-${number}`))) number += 1;
+  naming_draft.value = `${platform}-${number}`;
   naming.value = true;
 }
 
@@ -343,7 +348,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
       </div>
       <div v-if="can_flip" class="expert-card-face expert-card-back" :inert="!visible_back" :aria-hidden="!visible_back">
         <div class="expert-card-back-body">
-        <div class="expert-card-heading"><strong>{{ bridge.member_label(name) }}<span>设置{{ no_files ? ' · 不访问项目' : '' }}</span></strong>
+        <div class="expert-card-heading"><strong>{{ bridge.member_label(name) }}<span>设置</span></strong>
           <span class="expert-card-heading-tools">
           <button type="button" class="expert-card-back-tool" :class="{ 'is-set': description }" :aria-label="`编辑 ${name} 的描述`" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
           <button v-if="profile.adapter" type="button" class="expert-card-back-tool" :class="{ 'is-set': prompt_text, 'is-own': prompt_own && prompt_text }" :title="prompt_title" :aria-label="`编辑 ${name} 的专属提示词`" @click="open_prompt"><UIcon name="i-lucide-scroll-text" /></button>
@@ -407,10 +412,10 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 </template>
 
 <style scoped>
-.expert-card { min-width: 0; outline: none; }
+.expert-card { min-width: 0; perspective: 900px; outline: none; }
 /* Both faces keep one size; long settings scroll inside the back while its actions stay in place.
-   Without perspective the turn's rotateY only narrows the card, so the flip needs no 3D compositing;
-   the hidden face is switched by data-face at 90°, where the card has no width. */
+   Perspective makes the turn read as a flip rather than a squeeze; the faces stay flat, and
+   the hidden one is switched by data-face at 90°, where the card is edge-on. */
 .expert-card-turn { display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); height: 240px; }
 .expert-card-face { grid-area: 1 / 1; min-width: 0; min-height: 0; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); box-shadow: var(--channel-shadow-control); }
 .expert-card[data-face="front"] .expert-card-back, .expert-card[data-face="back"] .expert-card-front { visibility: hidden; }
