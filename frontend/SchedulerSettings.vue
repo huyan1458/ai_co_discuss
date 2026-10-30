@@ -90,13 +90,9 @@ async function save_key() {
       <p class="scheduler-description">{{ blocker ? `${description}（${blocker}）` : description }}</p>
     </div>
     <RosterAdd ref="add_row" label="添加决策模型" :items="add_items" @add="add_provider" />
-    <div class="scheduler-cards">
-    <div v-if="!active" class="scheduler-slot">
-      <UIcon name="i-lucide-zap" />
-      <strong>决策模型槽位</strong>
-      <span>只能放一个；从上方添加，再点其他会替换</span>
-    </div>
-    <div v-else class="scheduler-slot is-filled">
+    <p v-if="!active" class="scheduler-empty">未添加决策模型。只能放一个，点其他供应商会替换。</p>
+    <div v-else class="scheduler-cards">
+    <div class="scheduler-slot">
     <div class="scheduler-card" :class="{ 'is-editing': editing }">
       <template v-if="!editing">
         <button type="button" class="scheduler-open" aria-label="设置智能调度的决策模型" title="点击设置" @click="open_settings">
@@ -147,12 +143,10 @@ async function save_key() {
 .scheduler-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); gap: 8px; }
 .scheduler-card { position: relative; display: flex; flex-direction: column; min-width: 0; height: 240px; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); box-shadow: var(--channel-shadow-control); }
 .scheduler-card:hover { border-color: var(--ui-border-accented); }
-/* The empty slot keeps the card's footprint, so one slot reads as "only one fits here". */
-.scheduler-slot { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; height: 240px; padding: 12px; border: 1px dashed var(--ui-border-accented); border-radius: 8px; color: var(--ui-text-dimmed); font-size: 11px; text-align: center; }
-.scheduler-slot > span:first-child { width: 18px; height: 18px; }
-.scheduler-slot strong { color: var(--ui-text-toned); font-size: 12px; font-weight: 500; }
-/* A filled slot keeps its dashed frame around the card, so the card still reads as sitting in the one slot. */
-.scheduler-slot.is-filled { display: block; height: auto; padding: 4px; }
+/* The empty state matches the member list's placeholder (.create-experts-empty). */
+.scheduler-empty { margin: 0; padding: 18px 12px; border: 1px dashed var(--ui-border); border-radius: 8px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }
+/* A filled slot keeps a dashed frame around the card, so the card reads as sitting in the one slot. */
+.scheduler-slot { padding: 4px; border: 1px dashed var(--ui-border-accented); border-radius: 8px; }
 .scheduler-open { display: flex; flex: 1; flex-direction: column; gap: 10px; width: 100%; padding: 12px 12px 30px; text-align: left; border-radius: inherit; outline: none; }
 .scheduler-identity { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 26px; padding-right: 30px; }
 .scheduler-identity strong { overflow: hidden; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }

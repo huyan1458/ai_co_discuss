@@ -48523,13 +48523,13 @@ var Rq = ["data-identity", "data-face"], zq = ["inert", "aria-hidden"], Bq = { c
 			], 10, XJ)], 64))), 128))], 8, YJ);
 		};
 	}
-}, [["__scopeId", "data-v-b682fa87"]]), QJ = { class: "scheduler-settings" }, $J = { class: "scheduler-title" }, eY = { class: "scheduler-description" }, tY = { class: "scheduler-cards" }, nY = {
+}, [["__scopeId", "data-v-b682fa87"]]), QJ = { class: "scheduler-settings" }, $J = { class: "scheduler-title" }, eY = { class: "scheduler-description" }, tY = {
 	key: 0,
-	class: "scheduler-slot"
-}, rY = {
+	class: "scheduler-empty"
+}, nY = {
 	key: 1,
-	class: "scheduler-slot is-filled"
-}, iY = { class: "scheduler-identity" }, aY = { class: "scheduler-facts" }, oY = ["title"], sY = { class: "scheduler-flip" }, cY = { class: "scheduler-tools" }, lY = ["aria-label"], uY = { class: "scheduler-back" }, dY = { class: "scheduler-heading" }, fY = { class: "scheduler-field" }, pY = { class: "scheduler-field" }, mY = {
+	class: "scheduler-cards"
+}, rY = { class: "scheduler-slot" }, iY = { class: "scheduler-identity" }, aY = { class: "scheduler-facts" }, oY = ["title"], sY = { class: "scheduler-flip" }, cY = { class: "scheduler-tools" }, lY = ["aria-label"], uY = { class: "scheduler-back" }, dY = { class: "scheduler-heading" }, fY = { class: "scheduler-field" }, pY = { class: "scheduler-field" }, mY = {
 	key: 0,
 	role: "alert",
 	class: "scheduler-error"
@@ -48648,7 +48648,7 @@ var Rq = ["data-identity", "data-face"], zq = ["inert", "aria-hidden"], Bq = { c
 			}
 		}
 		return (t, a) => {
-			let g = WV, ee = sA, D = pA, O = MA, te = oq, ne = YV;
+			let g = WV, ee = pA, D = sA, O = MA, te = oq, ne = YV;
 			return U(), W("div", QJ, [
 				K("div", null, [K("p", $J, [
 					a[5] ||= J("智能调度", -1),
@@ -48669,8 +48669,8 @@ var Rq = ["data-identity", "data-face"], zq = ["inert", "aria-hidden"], Bq = { c
 					items: u.value,
 					onAdd: y
 				}, null, 8, ["items"]),
-				K("div", tY, [c.value ? (U(), W("div", rY, [K("div", { class: j(["scheduler-card", { "is-editing": h.value }]) }, [h.value ? (U(), W(H, { key: 1 }, [K("div", uY, [
-					K("div", dY, [K("strong", null, [J(P(x.value), 1), a[13] ||= K("span", null, "设置", -1)]), q(O, {
+				c.value ? (U(), W("div", nY, [K("div", rY, [K("div", { class: j(["scheduler-card", { "is-editing": h.value }]) }, [h.value ? (U(), W(H, { key: 1 }, [K("div", uY, [
+					K("div", dY, [K("strong", null, [J(P(x.value), 1), a[11] ||= K("span", null, "设置", -1)]), q(O, {
 						icon: "i-lucide-zap",
 						"aria-label": "检查智能调度配置",
 						title: "检查配置：向决策模型发送一道极短的是非题，核对供应商、模型与密钥",
@@ -48685,7 +48685,7 @@ var Rq = ["data-identity", "data-face"], zq = ["inert", "aria-hidden"], Bq = { c
 						"loading",
 						"disabled"
 					])]),
-					K("div", fY, [a[14] ||= K("span", null, "模型", -1), q(te, {
+					K("div", fY, [a[12] ||= K("span", null, "模型", -1), q(te, {
 						mode: "autocomplete",
 						"ignore-filter": "",
 						"model-value": i.value.model || "",
@@ -48697,7 +48697,7 @@ var Rq = ["data-identity", "data-face"], zq = ["inert", "aria-hidden"], Bq = { c
 						class: "w-full",
 						"onUpdate:modelValue": a[0] ||= (e) => I(r).write_scheduler("model", e)
 					}, null, 8, ["model-value", "items"])]),
-					K("div", pY, [a[15] ||= K("span", null, "密钥", -1), q(ne, {
+					K("div", pY, [a[13] ||= K("span", null, "密钥", -1), q(ne, {
 						modelValue: d.value,
 						"onUpdate:modelValue": a[2] ||= (e) => d.value = e,
 						type: "text",
@@ -48746,7 +48746,7 @@ var Rq = ["data-identity", "data-face"], zq = ["inert", "aria-hidden"], Bq = { c
 						role: C.value.state === "error" ? "alert" : "status",
 						class: j(C.value.state === "error" ? "scheduler-error" : "scheduler-ok")
 					}, P(C.value.message), 11, hY)) : Y("", !0),
-					a[16] ||= K("p", { class: "scheduler-note" }, "决策模型只做选择、不生成文本，只按输入计费。判断时会把房间标题和最近 10～20 条消息发给所选供应商；密钥只存本机。", -1)
+					a[14] ||= K("p", { class: "scheduler-note" }, "决策模型只做选择、不生成文本，只按输入计费。判断时会把房间标题和最近 10～20 条消息发给所选供应商；密钥只存本机。", -1)
 				]), K("span", gY, [K("button", {
 					type: "button",
 					class: "scheduler-flip is-cancel",
@@ -48757,14 +48757,14 @@ var Rq = ["data-identity", "data-face"], zq = ["inert", "aria-hidden"], Bq = { c
 					class: "scheduler-flip is-done",
 					"aria-label": "完成并返回决策模型卡片",
 					onClick: a[3] ||= (e) => h.value = !1
-				}, [q(ee, { name: "i-lucide-check" }), a[17] ||= J("完成", -1)])])], 64)) : (U(), W(H, { key: 0 }, [K("button", {
+				}, [q(D, { name: "i-lucide-check" }), a[15] ||= J("完成", -1)])])], 64)) : (U(), W(H, { key: 0 }, [K("button", {
 					type: "button",
 					class: "scheduler-open",
 					"aria-label": "设置智能调度的决策模型",
 					title: "点击设置",
 					onClick: _
 				}, [
-					K("span", iY, [q(D, {
+					K("span", iY, [q(ee, {
 						src: s[i.value.provider]?.icon,
 						text: x.value.slice(0, 2),
 						alt: x.value,
@@ -48776,22 +48776,18 @@ var Rq = ["data-identity", "data-face"], zq = ["inert", "aria-hidden"], Bq = { c
 						"alt",
 						"class"
 					]), K("strong", null, P(x.value), 1)]),
-					K("dl", aY, [K("div", null, [a[10] ||= K("dt", null, "状态", -1), K("dd", { class: j(`is-${S.value.tone}`) }, [a[9] ||= K("i", { "aria-hidden": "true" }, null, -1), J(P(S.value.text), 1)], 2)]), K("div", null, [a[11] ||= K("dt", null, "模型", -1), K("dd", { title: i.value.model }, P(i.value.model || "未选择"), 9, oY)])]),
-					K("span", sY, [q(ee, { name: "i-lucide-settings-2" }), a[12] ||= J("设置", -1)])
+					K("dl", aY, [K("div", null, [a[8] ||= K("dt", null, "状态", -1), K("dd", { class: j(`is-${S.value.tone}`) }, [a[7] ||= K("i", { "aria-hidden": "true" }, null, -1), J(P(S.value.text), 1)], 2)]), K("div", null, [a[9] ||= K("dt", null, "模型", -1), K("dd", { title: i.value.model }, P(i.value.model || "未选择"), 9, oY)])]),
+					K("span", sY, [q(D, { name: "i-lucide-settings-2" }), a[10] ||= J("设置", -1)])
 				]), K("span", cY, [K("button", {
 					type: "button",
 					"aria-label": `移出决策模型 ${x.value}`,
 					title: "移出",
 					onClick: b
-				}, [q(ee, { name: "i-lucide-x" })], 8, lY)])], 64))], 2)])) : (U(), W("div", nY, [
-					q(ee, { name: "i-lucide-zap" }),
-					a[7] ||= K("strong", null, "决策模型槽位", -1),
-					a[8] ||= K("span", null, "只能放一个；从上方添加，再点其他会替换", -1)
-				]))])
+				}, [q(D, { name: "i-lucide-x" })], 8, lY)])], 64))], 2)])])) : (U(), W("p", tY, "未添加决策模型。只能放一个，点其他供应商会替换。"))
 			]);
 		};
 	}
-}, [["__scopeId", "data-v-87daa49c"]]), yY = { class: "create-discussion" }, bY = {
+}, [["__scopeId", "data-v-8ca5866a"]]), yY = { class: "create-discussion" }, bY = {
 	key: 0,
 	class: "create-connect",
 	role: "status"
