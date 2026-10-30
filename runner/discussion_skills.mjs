@@ -53,3 +53,23 @@ export function install_skills(directory) {
   atomic_json(manifest, managed);
   return results.map(({ hash, ...result }) => result);
 }
+
+/** Remove unmodified copies a previous install left in a retired directory; edited copies stay. */
+export function remove_legacy_skills(directory) {
+  const root = resolve(directory);
+  const manifest = join(root, MANIFEST);
+  if (!existsSync(manifest)) return [];
+  const previous = JSON.parse(readFileSync(manifest, 'utf8'));
+  const results = SKILLS.filter(name => previous[name] && existsSync(join(root, name))).map(name => {
+    const path = join(root, name);
+    let current;
+    try { current = tree_hash(path); } catch { return { name, status: 'kept', path }; }
+    if (current !== previous[name]) return { name, status: 'kept', path };
+    rmSync(path, { recursive: true });
+    return { name, status: 'removed', path };
+  });
+  if (results.some(result => result.status === 'kept')) return results;
+  rmSync(manifest);
+  if (!readdirSync(root).length) rmSync(root, { recursive: true });
+  return results;
+}

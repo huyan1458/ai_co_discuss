@@ -7,7 +7,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-import { install_skills } from '../runner/discussion_skills.mjs';
+import { install_skills, remove_legacy_skills } from '../runner/discussion_skills.mjs';
 import { agy_rule } from '../runner/discussion_adapters.mjs';
 import { check_command, checkbox_prompt, detect_clients, detect_python, remove_legacy_agy_rules } from '../runner/discussion_setup.mjs';
 
@@ -137,6 +137,22 @@ test('complete skills install idempotently and preserve user edits', () => {
     writeFileSync(path, 'custom skill');
     assert.equal(install_skills(directory)[0].status, 'conflict');
     assert.equal(readFileSync(path, 'utf8'), 'custom skill');
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('retired skill directory loses unmodified managed copies but keeps edited ones', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'codiscuss-legacy-skills-'));
+  try {
+    const legacy = join(directory, 'legacy');
+    assert.deepEqual(remove_legacy_skills(legacy), []);
+    install_skills(legacy);
+    writeFileSync(join(legacy, 'discuss-host/SKILL.md'), 'custom skill');
+    assert.deepEqual(remove_legacy_skills(legacy).map(item => item.status), ['kept', 'removed', 'removed']);
+    assert.equal(readFileSync(join(legacy, 'discuss-host/SKILL.md'), 'utf8'), 'custom skill');
+    assert(existsSync(join(legacy, '.codiscuss-skills.json')));
+    rmSync(join(legacy, 'discuss-host'), { recursive: true });
+    assert.deepEqual(remove_legacy_skills(legacy), []);
+    assert.equal(existsSync(legacy), false);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 

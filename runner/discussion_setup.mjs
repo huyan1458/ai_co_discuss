@@ -9,7 +9,7 @@ import { parseArgs } from 'node:util';
 import { atomic_json } from './discussion_adapters.mjs';
 import { launch_settings, save_launch_settings } from './discussion_launch.mjs';
 import { assert_shared_home, service_home } from './discussion_service.mjs';
-import { install_skills } from './discussion_skills.mjs';
+import { install_skills, remove_legacy_skills } from './discussion_skills.mjs';
 import { ask, checkbox_prompt, intro, outro, pad, short_path, spinner, step, styled, text_width, tone } from './discussion_tui.mjs';
 export { checkbox_prompt } from './discussion_tui.mjs';
 
@@ -25,7 +25,8 @@ const AGY_SETTINGS_BACKUP = 'agy-settings.backup.json';
 const CLIENTS = {
   codex: { name: 'Codex', commands: ['codex'], adapter: 'codex_cli', skills: ['.agents', 'skills'] },
   claude: { name: 'Claude', commands: ['claude'], adapter: 'claude', skills: ['.claude', 'skills'] },
-  antigravity: { name: 'Gemini', commands: ['agy'], adapter: 'antigravity_cli', skills: ['.gemini', 'antigravity-cli', 'skills'] },
+  antigravity: { name: 'Gemini', commands: ['agy'], adapter: 'antigravity_cli', skills: ['.gemini', 'config', 'skills'],
+    legacy_skills: ['.gemini', 'antigravity-cli', 'skills'] },
   cursor: { name: 'Grok（Cursor CLI）', commands: ['agent', 'cursor-agent'], skills: ['.cursor', 'skills'] },
 };
 const OPTIONS = { yes: { type: 'boolean' }, clients: { type: 'string' }, python: { type: 'string' },
@@ -231,7 +232,9 @@ async function configure_clients(home, selected, options, existing) {
     const profile = await choose_profile(client, participants[client.name], options);
     profiles.push(profile);
     if (profile.status === 'configured') participants[client.name] = { ...participants[client.name], ...profile.effective };
-    skills.push({ client: client.name, results: install_skills(join(user_home, ...client.skills)) });
+    const results = install_skills(join(user_home, ...client.skills));
+    const legacy = client.legacy_skills ? remove_legacy_skills(join(user_home, ...client.legacy_skills)) : [];
+    skills.push({ client: client.name, results, legacy });
   }
   save_launch_settings(home, { participants });
   const legacy = remove_legacy_agy_rules(home, user_home);
@@ -272,6 +275,9 @@ function setup_issues(result) {
     .map(profile => `${profile.client} 保留了与检测结果不同的配置。${profile.action}`);
   for (const group of result.skills) for (const skill of group.results) {
     if (skill.status === 'conflict') issues.push(`${group.client} 技能冲突，已保留 ${skill.path}；请核对并移走需替换的旧副本，再运行 setup。`);
+  }
+  for (const group of result.skills) for (const skill of group.legacy) {
+    if (skill.status === 'kept') issues.push(`${group.client} 旧技能目录中的副本有改动，已保留 ${skill.path}；软件会同时加载新旧两份，请核对后删除。`);
   }
   for (const permission of result.permissions) {
     if (permission.status === 'invalid') issues.push(`${permission.client} 设置文件无法解析，未能移除旧版全局放行规则：${permission.path}；修复后重新运行 setup，否则全自动讨论会拒绝交付给 agy。`);
