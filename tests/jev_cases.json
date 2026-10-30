@@ -56,6 +56,10 @@
       "context": [{ "id": 30, "author": "用户", "text": "hi" }, { "id": 31, "author": "Codex", "text": "嗨，我是 Codex。想聊点什么？" }],
       "message": "claude还在吗", "expect": "Claude" },
     { "id": "S11", "scene": "route", "note": "提到名字但不是对其说话", "message": "Codex 你让 Claude 去改一下登录页", "expect": "__host__" },
+    { "id": "S4c", "scene": "route", "note": "含“都”字的简单全员报到", "message": "全部都有，报到！", "expect": "__all__" },
+    { "id": "S12", "scene": "route", "note": "按能力征询人选，前文有成员自述能力",
+      "context": [{ "id": 80, "author": "DeepSeek", "text": "我通过 API 接入，只能读写房间消息，不能读取本地文件。" }, { "id": 81, "author": "Claude", "text": "我有命令行和本地文件读取能力，需要看本地文件可以交给我。" }],
+      "message": "谁能看本地文件，出列报到！", "expect": "__host__" },
 
     { "id": "G1", "scene": "group", "note": "打招呼", "message": "@全体成员 大家打个招呼", "expect": "parallel" },
     { "id": "G2", "scene": "group", "note": "接龙", "message": "@全体成员 我们来接龙写一首诗，每人一句，接着上一位写", "expect": "sequential" },

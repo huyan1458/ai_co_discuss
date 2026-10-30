@@ -5441,16 +5441,21 @@ const REMOTE_CLIENTS_MAX = 40;
 const REMOTE_CLIENT_FIELD_MAX = 40;
 const REMOTE_ERROR_MAX = 2000;
 const LAUNCH_STAGES = ["not_started", "unconfirmed", "created", "started"];
+const COMMAND_TTL_SECONDS = 180;
+const COMMAND_WAIT_MAX = 20;
+const COMMAND_POLL_MS = 1000;
+const ENVELOPE_DATA_MAX = 512 * 1024;
+const MACHINE_SELECT = "SELECT m.*, k.public_key FROM local_machines m LEFT JOIN machine_keys k ON k.machine_id=m.id";
 
 /** Hash a machine token; malformed values hash to an empty string and never match. */
 async function machine_token_digest(token) {
   return typeof token === "string" && /^[0-9a-f]{64}$/.test(token) ? digest_hex(token) : "";
 }
 
-/** Public machine fields: projects by name and id, and which platforms it can wake. */
+/** Public machine fields: projects by name and id, which platforms it can wake, and its command key if any. */
 function machine_view(row, now) {
   return { id: row.id, name: row.name, projects: JSON.parse(row.projects), clients: JSON.parse(row.clients),
-    seen_at: row.seen_at, online: now - row.seen_at <= MACHINE_ONLINE_SECONDS };
+    public_key: row.public_key ? JSON.parse(row.public_key) : null, seen_at: row.seen_at, online: now - row.seen_at <= MACHINE_ONLINE_SECONDS };
 }
 
 /** Report a relayed launch without its request, which carries the room's credentials. */
@@ -5467,7 +5472,7 @@ async function pair_machine(database, payload, now) {
   if (name.length < 1 || name.length > MACHINE_NAME_MAX) throw new HttpError(400, `电脑名称需为 1–${MACHINE_NAME_MAX} 个字符`);
   await database.prepare("INSERT INTO local_machines (id,name,token_hash,created_at) VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, token_hash=excluded.token_hash")
     .bind(id, name, hashed, now).run();
-  return machine_view(await database.prepare("SELECT * FROM local_machines WHERE id=?").bind(id).first(), now);
+  return machine_view(await database.prepare(`${MACHINE_SELECT} WHERE m.id=?`).bind(id).first(), now);
 }
 
 /** Authenticate the computer itself by its own token. */
@@ -5496,11 +5501,32 @@ function valid_clients(value) {
   return value;
 }
 
-/** Record the computer's projects and clients, and hand it every launch it has not finished. */
+/** An ECDH P-256 public key as JWK coordinates; anything else is rejected. */
+function valid_public_key(value) {
+  if (!value || typeof value !== "object" || value.kty !== "EC" || value.crv !== "P-256"
+    || !["x", "y"].every(axis => typeof value[axis] === "string" && /^[A-Za-z0-9_-]{43}$/.test(value[axis]))) throw new HttpError(400, "电脑公钥须为 P-256 JWK");
+  return { kty: "EC", crv: "P-256", x: value.x, y: value.y };
+}
+
+/** Ciphertext and IV, plus the sender's ephemeral key on requests; the site never reads the content. */
+function valid_envelope(value, with_key) {
+  if (!value || typeof value !== "object" || typeof value.iv !== "string" || !/^[A-Za-z0-9+/]{16}$/.test(value.iv)
+    || typeof value.data !== "string" || !value.data.length || value.data.length > ENVELOPE_DATA_MAX || !/^[A-Za-z0-9+/]*={0,2}$/.test(value.data)) {
+    throw new HttpError(400, "加密命令格式无效");
+  }
+  return { iv: value.iv, data: value.data, ...(with_key ? { key: valid_public_key(value.key) } : {}) };
+}
+
+/** Record the computer's projects, clients and command key, and hand it every launch it has not finished. */
 async function machine_sync(database, machine_id, token, payload, now) {
   await require_machine(database, machine_id, token);
   const projects = valid_projects(payload.projects), clients = valid_clients(payload.clients);
+  const public_key = "public_key" in payload ? valid_public_key(payload.public_key) : null;
   await database.prepare("UPDATE local_machines SET projects=?, clients=?, seen_at=? WHERE id=?").bind(JSON.stringify(projects), JSON.stringify(clients), now, machine_id).run();
+  if (public_key) {
+    await database.prepare("INSERT INTO machine_keys (machine_id,public_key) VALUES (?,?) ON CONFLICT(machine_id) DO UPDATE SET public_key=excluded.public_key")
+      .bind(machine_id, JSON.stringify(public_key)).run();
+  }
   const { results } = await database.prepare("SELECT id,request FROM remote_launches WHERE machine_id=? AND status IN ('pending','claimed') ORDER BY created_at").bind(machine_id).all();
   return { launches: results.map(row => ({ id: row.id, request: JSON.parse(row.request) })) };
 }
@@ -5549,6 +5575,68 @@ async function submit_remote_launch(database, payload, now) {
   return launch_view(row);
 }
 
+/** Queue one encrypted local-service operation for the paired computer. */
+async function submit_machine_command(database, machine_id, payload, now) {
+  const { id } = payload;
+  if (typeof id !== "string" || !/^[A-Za-z0-9_-]{16,80}$/.test(id)) throw new HttpError(400, "命令编号无效");
+  const envelope = valid_envelope(payload.envelope, true);
+  if (!await database.prepare("SELECT 1 AS found FROM local_machines WHERE id=?").bind(machine_id).first()) throw new HttpError(404, "这台电脑尚未连接网站");
+  if (!await database.prepare("SELECT 1 AS found FROM machine_keys WHERE machine_id=?").bind(machine_id).first()) throw new HttpError(409, "这台电脑的 codiscuss 版本过旧，请更新后重试");
+  const inserted = await database.prepare("INSERT OR IGNORE INTO machine_commands (id,machine_id,request,created_at,updated_at) VALUES (?,?,?,?,?)")
+    .bind(id, machine_id, JSON.stringify(envelope), now, now).run();
+  if (!inserted.meta.changes) throw new HttpError(409, "命令编号已使用");
+  return { id, status: "pending" };
+}
+
+/** Report a command's progress; a finished command hands over its response once and is deleted. */
+async function machine_command_status(database, machine_id, command_id) {
+  const row = await database.prepare("SELECT * FROM machine_commands WHERE id=? AND machine_id=?").bind(command_id, machine_id).first();
+  if (!row) throw new HttpError(404, "命令不存在或已过期");
+  if (row.status !== "done") return { id: command_id, status: row.status };
+  await database.prepare("DELETE FROM machine_commands WHERE id=?").bind(command_id).run();
+  return { id: command_id, status: "done", response: JSON.parse(row.response) };
+}
+
+/** Drop expired commands and hand the computer every pending one, clearing the queued ciphertext. */
+async function claim_machine_commands(database, machine_id, token, now) {
+  await require_machine(database, machine_id, token);
+  await database.batch([
+    database.prepare("DELETE FROM machine_commands WHERE machine_id=? AND created_at<?").bind(machine_id, now - COMMAND_TTL_SECONDS),
+    database.prepare("UPDATE local_machines SET seen_at=? WHERE id=?").bind(now, machine_id),
+  ]);
+  const { results } = await database.prepare("SELECT id,request FROM machine_commands WHERE machine_id=? AND status='pending' ORDER BY created_at").bind(machine_id).all();
+  const commands = [];
+  for (const row of results) {
+    // Only the claim that moves the row hands it out, so two overlapping polls never run one command twice.
+    const claimed = await database.prepare("UPDATE machine_commands SET status='claimed', request='{}', updated_at=? WHERE id=? AND status='pending'").bind(now, row.id).run();
+    if (claimed.meta.changes) commands.push({ id: row.id, envelope: JSON.parse(row.request) });
+  }
+  return { commands };
+}
+
+/** Long-poll for relayed commands so a waiting device gets its answer without the computer's sync delay. */
+async function wait_machine_commands(database, machine_id, token, payload) {
+  const wait = typeof payload.wait === "number" ? Math.min(Math.max(payload.wait, 0), COMMAND_WAIT_MAX) : 0;
+  const deadline = Date.now() + wait * 1000;
+  for (;;) {
+    const result = await claim_machine_commands(database, machine_id, token, now_seconds());
+    if (result.commands.length || Date.now() >= deadline) return result;
+    await new Promise(resolve => setTimeout(resolve, COMMAND_POLL_MS));
+  }
+}
+
+/** Store the computer's encrypted response for the device that is waiting on it. */
+async function finish_machine_command(database, machine_id, command_id, token, payload, now) {
+  await require_machine(database, machine_id, token);
+  const envelope = valid_envelope(payload.envelope, false);
+  const row = await database.prepare("SELECT status FROM machine_commands WHERE id=? AND machine_id=?").bind(command_id, machine_id).first();
+  if (!row) throw new HttpError(404, "命令不存在或已过期");
+  const updated = await database.prepare("UPDATE machine_commands SET status='done', response=?, updated_at=? WHERE id=? AND status='claimed'")
+    .bind(JSON.stringify(envelope), now, command_id).run();
+  if (!updated.meta.changes) throw new HttpError(409, "命令已结束");
+  return { id: command_id, status: "done" };
+}
+
 /** Pair computers and relay room launches; a computer authenticates with its own token, everything else as the administrator. */
 async function handle_remote_launch_api(database, request, parts) {
   const now = now_seconds(), method = request.method;
@@ -5557,9 +5645,19 @@ async function handle_remote_launch_api(database, request, parts) {
     return respond(parts.length === 4 ? await machine_sync(database, parts[2], token, payload, now)
       : await machine_launch_action(database, parts[2], parts[4], token, payload, now));
   }
+  if (parts.length === 5 && parts[1] === "machines" && parts[3] === "commands" && method === "POST") {
+    const token = request.headers.get("X-Machine-Token") ?? "", payload = await read_payload(request);
+    return respond(parts[4] === "claim" ? await wait_machine_commands(database, parts[2], token, payload)
+      : await finish_machine_command(database, parts[2], parts[4], token, payload, now));
+  }
   await require_admin_session(database, request);
+  if (parts[1] === "machines" && parts[3] === "commands") {
+    if (parts.length === 4 && method === "POST") return respond(await submit_machine_command(database, parts[2], await read_payload(request), now));
+    if (parts.length === 5 && method === "GET") return respond(await machine_command_status(database, parts[2], parts[4]));
+    throw new HttpError(404, "地址不存在");
+  }
   if (parts.length === 2 && parts[1] === "machines" && method === "GET") {
-    const { results } = await database.prepare("SELECT * FROM local_machines ORDER BY seen_at DESC, created_at DESC").all();
+    const { results } = await database.prepare(`${MACHINE_SELECT} ORDER BY m.seen_at DESC, m.created_at DESC`).all();
     return respond({ machines: results.map(row => machine_view(row, now)) });
   }
   if (parts.length === 2 && parts[1] === "machines" && method === "POST") return respond(await pair_machine(database, await read_payload(request), now));

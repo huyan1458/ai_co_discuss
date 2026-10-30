@@ -57,7 +57,7 @@ codiscuss api "/api/scheduler-feedback?after=0" --site http://127.0.0.1:8765
 
 - **概况**：审查范围（`after` 区间、条数）、按提示词版本与归因的计数。
 - **逐条**：房间标题、待处理消息原文、模型选择与概率、用户期望、归因、引用的输入片段、入集结论（建议入集时附用例草稿）。
-- **共性问题与修改建议**：同一归因出现多次时合并；给出具体要改的题干或选项措辞（新旧对照），并说明改后须升提示版本（自由房 `ROUTE_PROMPT_VERSION`，讨论 `DISCUSSION_PROMPT_VERSION`），把确认了期望答案的案例补进 `tests/jev_cases.json`，再运行 `node tests/jev_eval.mjs --baseline tests/jev_baseline.json` 确认没有其他场景翻转后上线（评测会把文本发给模型服务商并计费，须用户同意）。
+- **共性问题与修改建议**：同一归因出现多次时合并；修改建议遵循提示词设计原则（经验文档“定位与要求”第 5 条）：改判据与理由，不靠追加关键词或例子修单个案例，一次只动一个因素；给出具体要改的题干或选项措辞（新旧对照），并说明改后须升提示版本（自由房 `ROUTE_PROMPT_VERSION`，讨论 `DISCUSSION_PROMPT_VERSION`），把确认了期望答案的案例补进 `tests/jev_cases.json`，再运行 `node tests/jev_eval.mjs --baseline tests/jev_baseline.json` 确认没有其他场景翻转后上线（评测会把文本发给模型服务商并计费，须用户同意）。
 - **下次续读位置**：本次最后一条的 `decision_id`。
 
 不做：修改代码或提示词、调用决策模型、删除或改动反馈数据、把单条样本直接写成定论、自行写入 `tests/jev_cases.json`（入集由用户确认后另行修改）。

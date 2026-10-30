@@ -982,12 +982,12 @@ async function allow_and_resend(report) {
   finally { allowing.value = 0; }
 }
 
-/** Reuse the existing original-record actions in the message overflow menu; the owner's own queued message can be retracted. */
+/** Reuse the existing original-record actions in the message overflow menu; where retract and edit take the toolbar, reply moves here. */
 function message_actions(message) {
   return [[
+    ...(can_take_back(message) ? [{ label: "回复", icon: "i-lucide-corner-up-left", onSelect: () => reply_to(message) }] : []),
     { label: "复制原文链接", icon: "i-lucide-link", onSelect: () => copy_message(message) },
     { label: "查看原文", icon: "i-lucide-expand", onSelect: () => emit("detail", message.id) },
-    ...(can_retract(message) ? [{ label: "撤回", icon: "i-lucide-undo-2", onSelect: () => act("retract_message", message.id) }] : []),
     ...(can_branch(message) && message.author !== "用户" ? [{ label: "从这里分支", icon: "i-lucide-git-branch", onSelect: () => act("fork_room", message.id) }] : []),
   ]];
 }
@@ -1131,6 +1131,14 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
                 </template>
               </div>
             </template>
+            <div v-else-if="view.access?.can_manage" class="channel-failure-actions">
+              <template v-if="speaking_turn?.expert === message.author && message.discussion_request">
+                <UButton label="暂停" icon="i-lucide-pause" size="sm" variant="soft" color="neutral" :aria-label="`暂停讨论，停止 ${bridge.display_name(message.author)} 本次发言`" :disabled="!!pending" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" />
+                <UButton label="跳过" icon="i-lucide-skip-forward" size="sm" variant="soft" color="neutral" :aria-label="`跳过 ${bridge.display_name(message.author)} 本次发言`" :disabled="!!pending" :loading="pending === 'skip_turn'" @click="act('skip_turn')" />
+              </template>
+              <UButton v-else label="停止" icon="i-lucide-square" size="sm" variant="soft" color="neutral" :aria-label="`停止 ${bridge.display_name(message.author)} 本次执行`" :disabled="!!pending"
+                @click="act('change_member', { member_id: message.member_id, name: message.author, action: 'interrupt' })" />
+            </div>
             <!-- The same row the answer keeps folded after its result: open while working. -->
             <ExecutionNotes v-if="execution_notes.get(message.execution_id)?.length" live :notes="execution_notes.get(message.execution_id)" />
           </template>
@@ -1222,7 +1230,8 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             </section>
           </template>
           <template #header><div class="channel-message-actions"><div class="channel-message-toolbar">
-            <UTooltip text="回复"><UButton icon="i-lucide-corner-up-left" size="xs" color="neutral" variant="ghost" :aria-label="`回复 #${message.id}`" @click="reply_to(message)" /></UTooltip>
+            <UTooltip v-if="!can_take_back(message)" text="回复"><UButton icon="i-lucide-corner-up-left" size="xs" color="neutral" variant="ghost" :aria-label="`回复 #${message.id}`" @click="reply_to(message)" /></UTooltip>
+            <UTooltip v-if="can_retract(message) && editing.id !== message.id" text="撤回"><UButton icon="i-lucide-undo-2" size="xs" color="neutral" variant="ghost" :aria-label="`撤回 #${message.id}`" @click="act('retract_message', message.id)" /></UTooltip>
             <UTooltip v-if="can_take_back(message) && editing.id !== message.id" text="编辑"><UButton icon="i-lucide-pencil" size="xs" color="neutral" variant="ghost" :aria-label="`编辑 #${message.id}，回退到它之前重新发送`" @click="start_edit(message)" /></UTooltip>
             <UDropdownMenu :items="message_actions(message)" :content="{ align: 'end', sideOffset: 5 }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" :aria-label="`消息 #${message.id} 的更多操作`" /></UDropdownMenu>
           </div></div></template>

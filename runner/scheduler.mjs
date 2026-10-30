@@ -12,7 +12,7 @@ export const ROUTE_CONFIDENCE = 0.7;
 /** Waking everyone or no one costs more when wrong (N runs, or an ignored message), so it needs more certainty. */
 export const ROUTE_WIDE_CONFIDENCE = 0.85;
 /** Bump when the routing question or its option descriptions change, so ratings can be compared across wordings. */
-export const ROUTE_PROMPT_VERSION = 9;
+export const ROUTE_PROMPT_VERSION = 10;
 /** The same for the three discussion questions (interjection, next speaker, next round). */
 export const DISCUSSION_PROMPT_VERSION = 4;
 /** Completion of a preauthorized implementation batch is separate from routing and discussion. */
@@ -163,7 +163,7 @@ export async function route_free_message(home, scheduler, { title, goal, context
     { value: ALL_CHOICE, description: '全体成员（含主持人）各自回应一次，彼此不需要看到别人的回答；只在要求简单明确、每人独立回应一次就算完成时选，如“大家打个招呼”“各自报一下在用的模型”' },
     { value: NONE_CHOICE, description: '无需回应：只是确认、致谢或旁注，不需要任何人回答' }];
   const questions = [{ type: 'choice', name: 'handler', choices,
-    instructions: '这条用户消息没有用 @ 点名成员。判断它的回应对象，按下面的顺序：1）正文叫了某位成员的名字，或在向其提问（包括“X在吗”“X还在吗”“X你怎么看”），选该成员，即使上一条是别人的回答；同时提到几位成员时，选被直接称呼、要求其回应或做事的那位（如“A 你让 B 去改”是在对 A 说）；2）正文没有指向任何人时，看它是否在延续某位成员的回答（追问、要求修改、引用，或“回复”指向其消息），或在补充、纠正一条正由某位成员处理的消息，是则选该成员，是主持人就选主持人；3）查看各成员的用户描述：已经明确由唯一一位成员负责这类任务时，直接选该成员，不需要再次点名；仅有擅长、多人分工重叠或任务还需要拆分时交主持人；4）符合“全体”选项的条件时选全体；只出现“大家”“都”“各自”“一起”等字眼不够；5）单独的问候或闲聊（如“hi”）既没有指向某位成员，也没有要求大家一起回应，选主持人；6）只是确认、致谢或旁注选无需回应；7）对象不明确，或要讨论、互相回应、分工、排先后时选主持人，由主持人安排。' }];
+    instructions: '这条用户消息没有用 @ 点名成员。判断它的回应对象，按下面的顺序：1）正文叫了某位成员的名字，或在向其提问（包括“X在吗”“X还在吗”“X你怎么看”），选该成员，即使上一条是别人的回答；同时提到几位成员时，选被直接称呼、要求其回应或做事的那位（如“A 你让 B 去改”是在对 A 说）；2）正文没有指向任何人时，看它是否在延续某位成员的回答（追问、要求修改、引用，或“回复”指向其消息），或在补充、纠正一条正由某位成员处理的消息，是则选该成员，是主持人就选主持人；3）查看各成员的用户描述：已经明确由唯一一位成员负责这类任务时，直接选该成员，不需要再次点名；仅有擅长、多人分工重叠或任务还需要拆分时交主持人；4）符合“全体”选项的条件时选全体；要求成员之间讨论或互相回应的不算，按第 7 条处理；5）单独的问候或闲聊（如“hi”）既没有指向某位成员，也没有要求大家一起回应，选主持人；6）只是确认、致谢或旁注选无需回应；7）对象不明确，或要讨论、互相回应、分工、排先后时选主持人，由主持人安排。' }];
   const roster = [`${host.name}（主持人）`, ...members.map(member => member.name)].join('、');
   const state = scheduler_state(title, context, message, goal, '', { roster }, ROUTE_CONTEXT_MESSAGES);
   const answers = await decide(home, scheduler, state, questions, fetch_impl);

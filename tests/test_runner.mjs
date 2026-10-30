@@ -1718,6 +1718,51 @@ test('a hosted site is polled less often than a local one, and a site update che
   assert.equal(count('local'), after_ready + 2, 'a change naming this room checks it at once');
 });
 
+test('a settled scheduling decision checks its room at once instead of waiting for the next poll', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
+  register_room(home, room_config(home, 'http://remote.invalid', 'room'));
+  let ticks = 0, runner;
+  const service = new DiscussionService(home, () => (runner = { stop_children() {}, on_decided() {}, room: { free: { members: [] } }, tick: async () => { ticks += 1; } }));
+  service.intervals = { local: 60_000, remote: 60_000, revisions: 60_000, idle: 60_000 };
+  t.after(async () => { await service.close(); rmSync(home, { recursive: true, force: true }); });
+  await service.tick({ wait: false });
+  await delay(10);
+  assert.equal(ticks, 1);
+  runner.on_decided();
+  await delay(10);
+  assert.equal(ticks, 2, 'the decision wakes the room without its poll interval passing');
+});
+
+test('a hosted site with a live update stream is not asked for revisions until the stream drops', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
+  register_room(home, room_config(home, 'https://hosted.example', 'room'));
+  let revisions = 0, stream;
+  const real_fetch = globalThis.fetch;
+  globalThis.fetch = async url => {
+    if (String(url).endsWith('/api/updates')) {
+      return new Response(new ReadableStream({ start: controller => {
+        stream = controller;
+        controller.enqueue(new TextEncoder().encode('event: ready\ndata: {}\n\n'));
+      } }), { headers: { 'Content-Type': 'text/event-stream' } });
+    }
+    revisions += 1;
+    return Response.json({ site: 1, rooms: { room: 1 } });
+  };
+  const service = new DiscussionService(home, () => ({ stop_children() {}, idle: () => true,
+    room: { free: { members: [] } }, tick: async () => {} }));
+  service.intervals = { local: 50, remote: 40, revisions: 10, idle: 60_000 };
+  service.push = true;
+  t.after(async () => { await service.close(); globalThis.fetch = real_fetch; rmSync(home, { recursive: true, force: true }); });
+  const run = async ms => { for (const end = Date.now() + ms; Date.now() < end;) { await service.tick({ wait: false }); await delay(5); } };
+  await run(30);
+  const before = revisions;
+  await run(80);
+  assert.equal(revisions, before, 'a live stream replaces revision polling');
+  stream.close();
+  await run(80);
+  assert.ok(revisions > before, 'a dropped stream falls back to revision polling');
+});
+
 test('an idle hosted room is read in full only after its site reports a new revision, a busy one keeps its interval', async t => {
   const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
   register_room(home, room_config(home, 'https://hosted.example', 'idle'));

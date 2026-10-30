@@ -35,7 +35,14 @@ const LOCAL_CONNECTION_TIMEOUT_MS = 15000;
 const RELAY_WAIT_MS = 45000;
 const RELAY_POLL_MS = 1500;
 const MODEL_CATALOG_TIMEOUT_MS = 35000;
+// Without the local service, local operations go through the paired computer, encrypted so the website only sees ciphertext.
+const RELAY_COMMAND_POLL_MS = 700;
+const RELAY_SETTINGS_WAIT_MS = 20000;
+// The computer allows each operation 60 seconds, as the local website does.
+const RELAY_COMMAND_WAIT_MS = 75000;
+const RELAY_CIPHER_INFO = "codiscuss-relay-v1";
 let local_connection = null;
+let relay_machine = null;
 const DEFAULT_USER_LABEL = "User";
 const DEFAULT_USER_ICON = "/icons/user.svg";
 const MANAGEMENT_LOGIN_HINT = "需要登录管理员账号或使用创建该房间的浏览器";
@@ -270,6 +277,8 @@ async function logout_admin() {
   store_admin_token("");
   state.admin.logged_in = false;
   state.launch.relay = null;
+  // Operations through the paired computer need the session, so they stop with it.
+  if (relay_machine) load_launch_settings();
   publish_view();
 }
 
@@ -1887,8 +1896,9 @@ function restore_local_connection() {
   }
 }
 
-/** Use the local bridge directly; machine configuration and connection credentials never go to the public server. */
+/** Use the local bridge directly, or the paired computer when this device has none; plaintext never goes to the public server. */
 async function local_launch_request(action, payload) {
+  if (!local_connection && relay_machine) return relay_command(action, payload);
   const headers = { "Content-Type": "application/json", "X-CoDiscuss-Local": "1" };
   if (local_connection) headers["X-CoDiscuss-Connection"] = local_connection.token;
   let response;
@@ -1905,6 +1915,52 @@ async function local_launch_request(action, payload) {
   const result = await response.json();
   if (!response.ok) throw Object.assign(new Error(result.error || "本机启动请求失败"), { launch: result.launch });
   return result;
+}
+
+function bytes_to_base64(bytes) {
+  let text = "";
+  for (const byte of new Uint8Array(bytes)) text += String.fromCharCode(byte);
+  return btoa(text);
+}
+
+function base64_to_bytes(text) {
+  return Uint8Array.from(atob(text), character => character.charCodeAt(0));
+}
+
+/** The AES-GCM key shared with the paired computer for one command; mirrors relay_cipher in runner/remote_launch.mjs. */
+async function relay_cipher(private_key, public_jwk) {
+  const peer = await crypto.subtle.importKey("jwk", public_jwk, { name: "ECDH", namedCurve: "P-256" }, false, []);
+  const bits = await crypto.subtle.deriveBits({ name: "ECDH", public: peer }, private_key, 256);
+  const material = await crypto.subtle.importKey("raw", bits, "HKDF", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey({ name: "HKDF", hash: "SHA-256", salt: new Uint8Array(), info: new TextEncoder().encode(RELAY_CIPHER_INFO) },
+    material, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+}
+
+/** Run one local-service operation on the paired computer and answer as the local bridge would. */
+async function relay_command(action, payload) {
+  // The folder dialog would open on the computer where nobody sees it.
+  if (action === "pick-directory") throw new Error("请直接输入电脑上的完整路径");
+  const machine = relay_machine, id = crypto.randomUUID(), encoder = new TextEncoder();
+  const ephemeral = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
+  const key = await relay_cipher(ephemeral.privateKey, machine.public_key);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const data = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: encoder.encode(id) }, key, encoder.encode(JSON.stringify({ action, payload })));
+  const { kty, crv, x, y } = await crypto.subtle.exportKey("jwk", ephemeral.publicKey);
+  const path = `/api/machines/${encodeURIComponent(machine.id)}/commands`;
+  await request_json(path, { id, envelope: { key: { kty, crv, x, y }, iv: bytes_to_base64(iv), data: bytes_to_base64(data) } });
+  const limit = payload === undefined ? RELAY_SETTINGS_WAIT_MS : ["room-models", "models", "api-check", "scheduler-check"].includes(action)
+    ? MODEL_CATALOG_TIMEOUT_MS + RELAY_SETTINGS_WAIT_MS : RELAY_COMMAND_WAIT_MS;
+  for (const started = Date.now(); Date.now() - started < limit;) {
+    await new Promise(resolve => setTimeout(resolve, RELAY_COMMAND_POLL_MS));
+    const command = await request_json(`${path}/${id}`);
+    if (command.status !== "done") continue;
+    const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: base64_to_bytes(command.response.iv), additionalData: encoder.encode(`${id}:response`) },
+      key, base64_to_bytes(command.response.data));
+    const { status, body } = JSON.parse(new TextDecoder().decode(plain));
+    if (status >= 400) throw Object.assign(new Error(body.error || "本机操作失败"), { launch: body.launch });
+    return body;
+  }
+  throw Object.assign(new Error(`电脑「${machine.name}」未在限时内答复，请确认它开机并运行 codiscuss 后重试`), { launch: { stage: "unconfirmed" } });
 }
 
 /** Read this browser's submitted requests; credentials never enter the presentation snapshot. */
@@ -2019,17 +2075,24 @@ async function load_launch_settings() {
   state.launch.connect_command = local ? "codiscuss local open" : `codiscuss local connect "${location.origin}"`;
   try {
     local_connection = null;
+    relay_machine = null;
     local_connection = restore_local_connection();
     state.launch.remote = Boolean(local_connection);
     if (local_connection) state.launch.connect_command = `codiscuss local connect "${location.origin}"`;
-    if (!local_connection && !local) { state.launch.relay = await load_relay_machine(); return; }
+    if (!local_connection && !local) {
+      state.launch.relay = await load_relay_machine();
+      // An online computer that publishes a command key does everything the local service would; an older one only creates rooms.
+      if (!state.launch.relay?.online || !state.launch.relay.public_key) return;
+      relay_machine = state.launch.relay;
+      state.launch.remote = true;
+    }
     const settings = await local_launch_request("settings");
     // Keep the saved machine defaults so every new form can start from them again.
     state.launch.saved_profiles = JSON.parse(JSON.stringify(settings.participants || {}));
     Object.assign(state.launch, { available: true, profiles: settings.participants, projects: settings.projects || [], api_providers: settings.api_providers || {}, api_keys: settings.api_keys || {},
       presets: settings.presets || [], builtin_presets: settings.builtin_presets || [], description_templates: settings.description_templates || {},
       scheduler_providers: settings.scheduler_providers || {}, error: "",
-      notice: local_connection ? "已连接本机服务，讨论保存在当前网站" : "" });
+      notice: relay_machine ? `经电脑「${relay_machine.name}」执行本机操作` : local_connection ? "已连接本机服务，讨论保存在当前网站" : "" });
     Object.values(state.launch.profiles).forEach(fill_api_key);
     if (local_connection) pair_local_machine();
     move_browser_description_templates();
@@ -2037,6 +2100,8 @@ async function load_launch_settings() {
     if (!Object.keys(state.launch.scheduler).length) state.launch.scheduler = default_scheduler();
     load_room_models();
   } catch (error) {
+    relay_machine = null;
+    state.launch.remote = Boolean(local_connection);
     Object.assign(state.launch, { available: false, room_models: null, error: error.message });
     // Without a reachable local service, launches can still go through the paired computer.
     state.launch.relay = await load_relay_machine();

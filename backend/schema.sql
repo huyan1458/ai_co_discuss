@@ -831,6 +831,24 @@ CREATE TABLE IF NOT EXISTS remote_launches (
     updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS remote_launches_machine ON remote_launches(machine_id, status);
+-- The P-256 public key a paired computer publishes so other devices can encrypt commands only it can read.
+CREATE TABLE IF NOT EXISTS machine_keys (
+    machine_id TEXT PRIMARY KEY,
+    public_key TEXT NOT NULL
+);
+-- A local-service operation relayed from a device without the local service. Request and response are end-to-end
+-- encrypted between that device and the computer, so the site never holds keys, paths or results in plaintext;
+-- the request is cleared once claimed and the row is deleted once read or expired.
+CREATE TABLE IF NOT EXISTS machine_commands (
+    id TEXT PRIMARY KEY,
+    machine_id TEXT NOT NULL,
+    request TEXT NOT NULL DEFAULT '{}',
+    response TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','claimed','done')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS machine_commands_machine ON machine_commands(machine_id, status);
 
 -- Normalize legacy online relay members and retired brainstorm rooms for the shared free-room model.
 INSERT OR IGNORE INTO member_manual_sources(member_id,source)

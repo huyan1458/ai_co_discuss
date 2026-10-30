@@ -13,6 +13,8 @@ import { DiscussionStore, acquire_lock, api, load_config, pause_if_running, serv
 import { FreeRoomRunner } from './free_runner.mjs';
 
 const POLL_MS = 2000;
+// The service loop only checks which rooms are due; each room keeps its own interval, so a short loop costs no site requests.
+const LOOP_MS = 500;
 // A hosted site is polled less often than a local one: every request spends its database quota.
 const REMOTE_POLL_MS = 10_000;
 // A hosted site is asked this often which rooms changed; an idle room is read in full only then, or at the safety interval.
@@ -20,6 +22,8 @@ const REVISION_POLL_MS = 3000;
 const IDLE_REMOTE_POLL_MS = 5 * 60_000;
 const REVISION_TIMEOUT_MS = 10_000;
 const UPDATE_RETRY_MS = 5000;
+// The update stream sends a heartbeat every 15 seconds; silence longer than this means it may have dropped unnoticed.
+const STREAM_STALE_MS = 45_000;
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]']);
 const REMOTE_SYNC_MS = 3000;
 const START_WAIT_MS = 5000;
@@ -189,6 +193,8 @@ class RoomWorker {
     this.log = log;
     this.state = { config: path, status: 'starting', error: '' };
     this.adopt_failed = new Set();
+    // Set by the service: check this room again now.
+    this.wake = () => {};
   }
   /** Open lazily so a busy lock or broken file is retried instead of stopping the service. */
   open() {
@@ -203,6 +209,8 @@ class RoomWorker {
     this.config = config;
     this.release = release;
     this.runner = this.create_runner(config, this.store, message => this.log(`${config.room}: ${message}`));
+    // A settled scheduling decision changed the room; its next step should not wait for the next poll.
+    if (this.runner.on_decided) this.runner.on_decided = () => this.wake();
     Object.assign(this.state, { site: config.site, room: config.room, config_version: snapshot.version });
   }
   /** Reload connection paths and credentials while retaining the exact conversation context. */
@@ -321,7 +329,11 @@ export class DiscussionService {
       if (!configs.includes(path)) { await worker.busy; await worker.close(true); this.workers.delete(path); }
     }
     for (const path of configs) {
-      if (!this.workers.has(path)) this.workers.set(path, new RoomWorker(path, this.create_runner, this.log, this.home));
+      if (!this.workers.has(path)) {
+        const worker = new RoomWorker(path, this.create_runner, this.log, this.home);
+        worker.wake = () => { if (this.workers.get(path) === worker) this.start(path, worker); };
+        this.workers.set(path, worker);
+      }
       const worker = this.workers.get(path);
       if (!worker.busy && (wait || Date.now() >= (worker.next_at ?? 0))) this.start(path, worker);
     }
@@ -363,6 +375,8 @@ export class DiscussionService {
     for (const [site, entries] of sites) {
       const watch = this.revisions.get(site) ?? { at: 0, busy: false, supported: true };
       this.revisions.set(site, watch);
+      // A live update stream reports every change, so the site is not asked for revisions meanwhile.
+      if (Date.now() - (this.streams.get(site)?.heard_at ?? 0) < STREAM_STALE_MS) continue;
       if (this.closed || watch.busy || Date.now() - watch.at < (watch.supported ? this.intervals.revisions : this.intervals.idle)) continue;
       Object.assign(watch, { at: Date.now(), busy: true });
       const rooms = entries.map(([, worker]) => encodeURIComponent(worker.state.room)).join(',');
@@ -401,15 +415,18 @@ export class DiscussionService {
   watch(site) {
     if (this.streams.has(site) || this.closed) return;
     const controller = new AbortController();
-    const done = (async () => {
+    const stream = { controller, heard_at: 0 };
+    stream.done = (async () => {
       while (!controller.signal.aborted) {
         try {
           const response = await fetch(`${site}/api/updates`, { signal: controller.signal, headers: { accept: 'text/event-stream' } });
           if (response.status === 204) return;
           if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+          stream.heard_at = Date.now();
           const decoder = new TextDecoder();
           let buffer = '';
           for await (const chunk of response.body) {
+            stream.heard_at = Date.now();
             buffer += decoder.decode(chunk, { stream: true }).replaceAll('\r\n', '\n');
             for (let end = buffer.indexOf('\n\n'); end >= 0; end = buffer.indexOf('\n\n')) {
               // `ready` comes on every (re)connection, so changes missed while disconnected are picked up too.
@@ -419,10 +436,11 @@ export class DiscussionService {
             }
           }
         } catch { /* Reconnect below; polling covers the gap. */ }
+        stream.heard_at = 0;
         await sleep(UPDATE_RETRY_MS, undefined, { signal: controller.signal }).catch(() => {});
       }
     })();
-    this.streams.set(site, { controller, done });
+    this.streams.set(site, stream);
   }
   /** Publish every room's latest state for `codiscuss status` and the website's service check. */
   write_status() {
@@ -549,8 +567,9 @@ export async function run_service(home, output = () => {}) {
   service.push = true;
   const stop_path = join(home, 'stop.request');
   if (existsSync(stop_path)) unlinkSync(stop_path);
-  let stopped = false, syncing = null;
-  const stop = () => { stopped = true; };
+  let stopped = false, syncing = null, relaying = null;
+  const relay_stop = new AbortController();
+  const stop = () => { stopped = true; relay_stop.abort(); };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
   try {
@@ -558,8 +577,8 @@ export async function run_service(home, output = () => {}) {
     atomic_json(join(home, 'status.json'), { pid: process.pid, ready: true,
       updated_at: Math.floor(Date.now() / 1000), rooms: [] });
     // Loaded lazily: the relay runs launches, and the launch module itself depends on this one.
-    const { sync_remote_launches } = await import('./remote_launch.mjs');
-    let synced_at = 0, swept_at = 0;
+    const { relay_commands, sync_remote_launches } = await import('./remote_launch.mjs');
+    let synced_at = 0, swept_at = 0, relayed_at = 0;
     while (!stopped && !existsSync(stop_path)) {
       try { await service.tick({ wait: false }); } catch (error) { log_line(`服务检查失败：${error.message}`); }
       if (Date.now() - swept_at >= SWEEP_MS) {
@@ -577,10 +596,17 @@ export async function run_service(home, output = () => {}) {
         syncing = sync_remote_launches(home, { log: log_line }).catch(error => log_line(`远程启动检查失败：${error.message}`))
           .finally(() => { syncing = null; });
       }
-      await sleep(POLL_MS);
+      // A long-poll of its own: the site answers as soon as another device relays a command, and a failure retries after the sync interval.
+      if (!relaying && Date.now() - relayed_at >= REMOTE_SYNC_MS) {
+        relayed_at = Date.now();
+        relaying = relay_commands(home, { log: log_line, signal: relay_stop.signal }).catch(error => log_line(`远程命令检查失败：${error.message}`))
+          .finally(() => { relaying = null; });
+      }
+      await sleep(LOOP_MS);
     }
   } finally {
-    await syncing;
+    relay_stop.abort();
+    await Promise.all([syncing, relaying]);
     await service.close();
     if (existsSync(stop_path)) unlinkSync(stop_path);
     log_line('讨论服务已停止');

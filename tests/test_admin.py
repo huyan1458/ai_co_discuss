@@ -203,5 +203,39 @@ class AdminTests(unittest.TestCase):
         retried = self.request("/api/remote-launches", {"id": "launch-2", "machine_id": machine_id, "request": failing}, admin=admin)[1]
         self.assertEqual((retried["status"], retried["error"]), ("pending", ""))
 
+    def test_machine_commands_carry_only_ciphertext_to_the_paired_computer(self):
+        machine_id, machine_token = uuid.uuid4().hex, uuid.uuid4().hex * 2
+        admin = self.register()
+        self.request("/api/machines", {"id": machine_id, "name": "工作站", "token": machine_token}, admin=admin)
+        commands = f"/api/machines/{machine_id}/commands"
+        key = {"kty": "EC", "crv": "P-256", "x": "A" * 43, "y": "B" * 43}
+        envelope = {"key": key, "iv": "C" * 16, "data": "ZGF0YQ=="}
+        command = {"id": "command-0000000001", "envelope": envelope}
+        self.assertEqual(self.request(commands, command)[0], 401)
+        self.assertEqual(self.request(commands, command, admin=admin)[0], 409, "a computer without a published key cannot take commands")
+        state = {"projects": [], "clients": {}}
+        self.assertEqual(self.request(f"/api/machines/{machine_id}/sync", {**state, "public_key": {**key, "x": "short"}}, machine=machine_token)[0], 400)
+        self.request(f"/api/machines/{machine_id}/sync", {**state, "public_key": key}, machine=machine_token)
+        self.assertEqual(self.request("/api/machines", admin=admin)[1]["machines"][0]["public_key"], key)
+        self.assertEqual(self.request(commands, {**command, "envelope": {**envelope, "data": "not base64!"}}, admin=admin)[0], 400)
+        self.assertEqual(self.request(commands, command, admin=admin), (200, {"id": "command-0000000001", "status": "pending"}))
+        self.assertEqual(self.request(commands, command, admin=admin)[0], 409)
+
+        claim = f"{commands}/claim"
+        self.assertEqual(self.request(claim, {"wait": 0}, machine="0" * 64)[0], 401)
+        self.assertEqual(self.request(claim, {"wait": 0}, machine=machine_token)[1], {"commands": [{"id": "command-0000000001", "envelope": envelope}]})
+        self.assertEqual(self.sql("SELECT request FROM machine_commands"), [("{}",)])
+        self.assertEqual(self.request(claim, {"wait": 0}, machine=machine_token)[1], {"commands": []})
+        self.assertEqual(self.request(f"{commands}/command-0000000001", admin=admin)[1]["status"], "claimed")
+        answer = {"envelope": {"iv": "D" * 16, "data": "YW5zd2Vy"}}
+        self.assertEqual(self.request(f"{commands}/command-0000000001", answer, machine=machine_token)[1]["status"], "done")
+        self.assertEqual(self.request(f"{commands}/command-0000000001", answer, machine=machine_token)[0], 409)
+        self.assertEqual(self.request(f"{commands}/command-0000000001", admin=admin)[1], {"id": "command-0000000001", "status": "done", "response": answer["envelope"]})
+        self.assertEqual(self.request(f"{commands}/command-0000000001", admin=admin)[0], 404, "a response is handed over once")
+
+        self.request(commands, {**command, "id": "command-0000000002"}, admin=admin)
+        self.sql("UPDATE machine_commands SET created_at=0")
+        self.assertEqual(self.request(claim, {"wait": 0}, machine=machine_token)[1], {"commands": []}, "an expired command is never run")
+
 if __name__ == "__main__":
     unittest.main()

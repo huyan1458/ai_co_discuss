@@ -3345,3 +3345,95 @@ test('Worker relays a remote launch only to the paired computer', async t => {
   const retried = (await submit(failing, 'launch-2')).body;
   assert.deepEqual([retried.status, retried.error], ['pending', '']);
 });
+
+test('a page without the local service runs operations on the paired computer end to end', async t => {
+  const { machine_link, relay_commands, sync_remote_launches } = await import('../runner/remote_launch.mjs');
+  const f = await admin_fixture(t);
+  const session = (await f.register()).body.token;
+  const home = await mkdtemp(join(tmpdir(), 'codiscuss-relay-page-'));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  // The computer reaches the same Worker the page uses.
+  globalThis.fetch = (url, options) => worker.fetch(new Request(url, options), f.env);
+  await admin_call(f, '/api/machines', machine_link(home, 'https://discussion.test'), session);
+  await sync_remote_launches(home);
+  const [machine] = (await admin_call(f, '/api/machines', undefined, session)).body.machines;
+
+  // The page's own relay code, with request_json going to the Worker under the administrator session.
+  const source = await readFile(join(PROJECT_ROOT, 'web', 'app.js'), 'utf8');
+  const constants = source.slice(source.indexOf('const RELAY_COMMAND_POLL_MS'), source.indexOf('let local_connection'));
+  const start = source.indexOf('function bytes_to_base64(');
+  const end = source.indexOf("\n/** Read this browser's submitted requests");
+  assert.ok(start >= 0 && end > start, 'relay functions are present');
+  const request_json = async (path, payload) => {
+    const { status, body } = await admin_call(f, path, payload, session);
+    if (status >= 400) throw new Error(body.error);
+    return body;
+  };
+  const relay_command = vm.runInNewContext([`const MODEL_CATALOG_TIMEOUT_MS = 35000;`, constants, source.slice(start, end), 'relay_command'].join('\n'),
+    { crypto, TextEncoder, TextDecoder, btoa, atob, setTimeout, Uint8Array, JSON, Date, Object, Error, Promise, request_json, relay_machine: machine });
+
+  const ran = [];
+  const run = async request => {
+    ran.push(request);
+    return request.command === 'api-key' ? { status: 400, body: { error: 'Base URL 无效' } } : { status: 200, body: { member: 'Gemini' } };
+  };
+  const page = relay_command('room-member', { room_id: 'room-1', action: 'add', name: 'Gemini', access_file: 'C:/elsewhere' });
+  await Promise.all(await relay_commands(home, { wait: 5, run }));
+  assert.deepEqual(await page, { member: 'Gemini' });
+  assert.deepEqual(ran[0].input, { room_id: 'room-1', action: 'add', name: 'Gemini', site: 'https://discussion.test', entry: 'web' });
+
+  const secret = 'sk-never-on-the-site';
+  const failing = relay_command('api-key', { base_url: 'nope', api_key: secret });
+  const stored = [];
+  for (let tries = 0; !stored.length && tries < 50; tries++) {
+    await new Promise(resolve => setTimeout(resolve, 20));
+    stored.push(...f.sql.prepare('SELECT request FROM machine_commands').all().map(row => row.request));
+  }
+  assert.ok(stored.length && !stored.some(text => text.includes(secret)), 'the site holds only ciphertext');
+  await Promise.all(await relay_commands(home, { wait: 5, run }));
+  await assert.rejects(failing, /Base URL 无效/);
+  assert.equal(ran[1].input.api_key, secret);
+  await assert.rejects(relay_command('pick-directory', {}), /完整路径/);
+});
+
+test('Worker relays encrypted commands only between the administrator and the paired computer', async t => {
+  const f = await admin_fixture(t);
+  const machine_id = crypto.randomUUID().replaceAll('-', ''), machine_token = 'cd'.repeat(32);
+  const machine_call = async (path, payload, token = machine_token) => {
+    const response = await worker.fetch(new Request(`https://discussion.test${path}`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Machine-Token': token }, body: JSON.stringify(payload) }), f.env);
+    return { status: response.status, body: await response.json() };
+  };
+  const session = (await f.register()).body.token;
+  await admin_call(f, '/api/machines', { id: machine_id, name: '工作站', token: machine_token }, session);
+  const commands = `/api/machines/${machine_id}/commands`;
+  const key = { kty: 'EC', crv: 'P-256', x: 'A'.repeat(43), y: 'B'.repeat(43) };
+  const envelope = { key, iv: 'C'.repeat(16), data: 'ZGF0YQ==' }, command = { id: 'command-0000000001', envelope };
+  assert.equal((await admin_call(f, commands, command)).status, 401);
+  assert.equal((await admin_call(f, commands, command, session)).status, 409, 'a computer without a published key cannot take commands');
+  const state = { projects: [], clients: {} };
+  assert.equal((await machine_call(`/api/machines/${machine_id}/sync`, { ...state, public_key: { ...key, x: 'short' } })).status, 400);
+  await machine_call(`/api/machines/${machine_id}/sync`, { ...state, public_key: key });
+  assert.deepEqual((await admin_call(f, '/api/machines', undefined, session)).body.machines[0].public_key, key);
+  assert.equal((await admin_call(f, commands, { ...command, envelope: { ...envelope, data: 'not base64!' } }, session)).status, 400);
+  assert.deepEqual((await admin_call(f, commands, command, session)).body, { id: 'command-0000000001', status: 'pending' });
+  assert.equal((await admin_call(f, commands, command, session)).status, 409);
+
+  const claim = `${commands}/claim`;
+  assert.equal((await machine_call(claim, { wait: 0 }, '0'.repeat(64))).status, 401);
+  assert.deepEqual((await machine_call(claim, { wait: 0 })).body, { commands: [{ id: 'command-0000000001', envelope }] });
+  assert.equal(f.sql.prepare('SELECT request FROM machine_commands').get().request, '{}');
+  assert.deepEqual((await machine_call(claim, { wait: 0 })).body, { commands: [] });
+  assert.equal((await admin_call(f, `${commands}/command-0000000001`, undefined, session)).body.status, 'claimed');
+  const answer = { envelope: { iv: 'D'.repeat(16), data: 'YW5zd2Vy' } };
+  assert.equal((await machine_call(`${commands}/command-0000000001`, answer)).body.status, 'done');
+  assert.equal((await machine_call(`${commands}/command-0000000001`, answer)).status, 409);
+  assert.deepEqual((await admin_call(f, `${commands}/command-0000000001`, undefined, session)).body, { id: 'command-0000000001', status: 'done', response: answer.envelope });
+  assert.equal((await admin_call(f, `${commands}/command-0000000001`, undefined, session)).status, 404, 'a response is handed over once');
+
+  await admin_call(f, commands, { ...command, id: 'command-0000000002' }, session);
+  f.sql.prepare('UPDATE machine_commands SET created_at=0').run();
+  assert.deepEqual((await machine_call(claim, { wait: 0 })).body, { commands: [] }, 'an expired command is never run');
+});

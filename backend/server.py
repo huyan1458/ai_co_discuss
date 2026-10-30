@@ -23,7 +23,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit
 
 from .admin import AdminError, admin_status, login_admin, logout_admin, register_admin, session_valid, update_profile
-from .remote_launch import (list_machines, machine_launch_action, machine_sync, pair_machine, remote_launch_status,
+from .remote_launch import (COMMAND_WAIT_MAX, claim_machine_commands, finish_machine_command, list_machines, machine_command_status,
+                            machine_launch_action, machine_sync, pair_machine, remote_launch_status, submit_machine_command,
                             submit_remote_launch)
 from .free_room import (add_member, after_free_message, authorize_free_write, check_answer, check_proxy, execution_action, free_view,
                         inbox, interrupt_member, member_action, member_values, migrate_free_tables, proxy_member, reserve_execution,
@@ -59,6 +60,7 @@ MAX_FILENAME_LENGTH = 255
 # A revision check names at most this many rooms; a runner or page asks only for the rooms it follows.
 MAX_REVISION_ROOMS = 100
 LOCAL_LAUNCH_TIMEOUT = 60
+MACHINE_COMMAND_POLL_SECONDS = 0.5
 # Ordering and filing a channel only rearrange the shared directory, like folder edits, so they need no room credential.
 DIRECTORY_OPERATIONS = ("move", "folder")
 ADMIN_OPERATIONS = ("rename", "archive", "restore", "delete")
@@ -2381,8 +2383,24 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                       else machine_launch_action(connection, parts[2], parts[4], token, self.read_payload(), now))
             connection.commit()
             return self.respond(result)
+        if len(parts) == 5 and parts[1] == "machines" and parts[3] == "commands" and method == "POST":
+            token = self.headers.get("X-Machine-Token", "")
+            if parts[4] == "claim":
+                return self.respond(self.wait_machine_commands(connection, parts[2], token, self.read_payload()))
+            result = finish_machine_command(connection, parts[2], parts[4], token, self.read_payload(), now)
+            connection.commit()
+            return self.respond(result)
         if not self.admin_session(connection):
             raise AdminError("需要登录管理员账号", 401)
+        if parts[1] == "machines" and parts[3:4] == ["commands"]:
+            if len(parts) == 4 and method == "POST":
+                result = submit_machine_command(connection, parts[2], self.read_payload(), now)
+            elif len(parts) == 5 and method == "GET":
+                result = machine_command_status(connection, parts[2], parts[4])
+            else:
+                raise LookupError("地址不存在")
+            connection.commit()
+            return self.respond(result)
         if parts == ["api", "machines"] and method == "GET":
             return self.respond(list_machines(connection, now))
         if parts == ["api", "machines"] and method == "POST":
@@ -2395,6 +2413,17 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             raise LookupError("地址不存在")
         connection.commit()
         return self.respond(result)
+
+    def wait_machine_commands(self, connection, machine_id, token, payload):
+        """Long-poll for relayed commands so a waiting device gets its answer without the computer's sync delay."""
+        wait = payload.get("wait", 0)
+        deadline = time.monotonic() + (min(max(wait, 0), COMMAND_WAIT_MAX) if isinstance(wait, (int, float)) else 0)
+        while True:
+            result = claim_machine_commands(connection, machine_id, token, int(time.time()))
+            connection.commit()
+            if result["commands"] or time.monotonic() >= deadline:
+                return result
+            time.sleep(MACHINE_COMMAND_POLL_SECONDS)
 
     def handle_api(self, connection, parts, params, method):
         """Handle room, state, and message operations used by the web UI."""

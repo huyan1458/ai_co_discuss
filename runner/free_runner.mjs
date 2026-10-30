@@ -159,6 +159,8 @@ export class FreeRoomRunner {
     // Group requests (@全体成员) being arranged; a failed arrangement leaves the set so the next tick retries.
     this.grouped = new Set();
     this.decisions = new Set();
+    // Called when a scheduling decision settles; the service checks the room at once instead of waiting for the next poll.
+    this.on_decided = () => {};
     // Routed requests whose decision is still pending: their host waits, so one pick replaces the host's start.
     this.routing = new Set();
     this.children = new Set();
@@ -216,6 +218,8 @@ export class FreeRoomRunner {
   /** One bounded iteration: reconcile live executions, then deliver idle members with open requests. */
   async tick() {
     let inbox; let room;
+    // Read one after another: Node's fetch keeps one warm connection per site, and a second parallel request would pay a new
+    // TLS handshake (measured 2 s against 0.4 s through a proxy to a hosted site).
     try {
       inbox = await api(this.config, '/inbox');
       room = await api(this.config, '');
@@ -288,7 +292,7 @@ export class FreeRoomRunner {
           this.log(`评审交接 #${request.message_id} 交给主持人：${error.message}`);
         }).finally(() => { this.routing.delete(request.id); return this.mark_routing(request.message_id, false); });
       this.decisions.add(pending);
-      pending.finally(() => this.decisions.delete(pending));
+      pending.finally(() => { this.decisions.delete(pending); this.on_decided(); });
     }
   }
   /** Persist the complete judgment and submission before any write, so restart recovery cannot double-dispatch. */
@@ -364,7 +368,7 @@ export class FreeRoomRunner {
         })
         .finally(() => { this.routing.delete(request.id); return this.mark_routing(request.message_id, false); });
       this.decisions.add(decision);
-      decision.finally(() => this.decisions.delete(decision));
+      decision.finally(() => { this.decisions.delete(decision); this.on_decided(); });
     }
   }
   /** For each message naming everyone, have them answer at once, or one after another when smart scheduling says so. */
@@ -376,7 +380,7 @@ export class FreeRoomRunner {
         .finally(() => this.mark_routing(request.message_id, false)) : this.order_group(request, room))
         .catch(error => { this.grouped.delete(request.id); this.log(`全体成员 #${request.message_id} 未能安排：${error.message}`); });
       this.decisions.add(arranged);
-      arranged.finally(() => this.decisions.delete(arranged));
+      arranged.finally(() => { this.decisions.delete(arranged); this.on_decided(); });
     }
   }
   /** Read and judge together; either kind of failure hands this one numbered group request back to its host. */

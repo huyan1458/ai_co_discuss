@@ -1428,7 +1428,10 @@ test('relayed launches resolve projects locally and report back to the paired si
   };
   const started = [];
   await sync_remote_launches(home, { launch: async (_, input, options) => { started.push({ input, options }); return { room: { id: 'room-9' }, status: 'free' }; } });
-  assert.deepEqual(calls[0].body, { projects: [{ id: project.id, name: '改名' }], clients: {} });
+  const { public_key, ...published } = calls[0].body;
+  assert.deepEqual(published, { projects: [{ id: project.id, name: '改名' }], clients: {} });
+  assert.deepEqual(Object.keys(public_key).sort(), ['crv', 'kty', 'x', 'y']);
+  assert.equal(link.private_key, undefined, 'the browser forwards the pairing, so it never carries the private key');
   assert.ok(calls.every(call => call.token === link.token && call.url.startsWith(`https://site.test/api/machines/${link.id}/`)));
   assert.deepEqual(started.map(item => [item.input.cwd, item.input.site, item.input.entry, item.options.browser_request]), [[home, 'https://site.test', 'web', true]]);
   assert.deepEqual(calls.slice(1).map(call => call.body.action), ['claim', 'finish', 'claim', 'fail']);
@@ -1440,4 +1443,43 @@ test('relayed launches resolve projects locally and report back to the paired si
   calls.length = 0;
   await sync_remote_launches(home);
   assert.equal(calls.length, 0);
+});
+
+test('relayed commands are decrypted, pinned to the site and answered encrypted', async t => {
+  const { machine_link, relay_cipher, relay_commands, relayed_command, seal, sync_remote_launches, unseal } = await import('../runner/remote_launch.mjs');
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-relay-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  machine_link(home, 'https://site.test');
+  assert.deepEqual(relayed_command('https://site.test', 'room-member', { room_id: 'r', access_file: 'x', site: 'https://evil.test' }),
+    { command: 'room-member', input: { room_id: 'r', site: 'https://site.test', entry: 'web' }, browser: false });
+  assert.deepEqual(relayed_command('https://site.test', 'settings', undefined), { command: 'settings', input: undefined, browser: false });
+  assert.equal(relayed_command('https://site.test', 'launch', { room: {} }).command, 'start');
+  for (const action of ['pick-directory', 'machine-link', 'room-config']) assert.throws(() => relayed_command('https://site.test', action, {}), /不能经其他设备执行/);
+
+  const calls = [], original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  let commands = [];
+  globalThis.fetch = async (url, options) => {
+    const body = JSON.parse(options.body);
+    calls.push({ url, body });
+    return new Response(JSON.stringify(url.endsWith('/sync') ? { launches: [] } : url.endsWith('/claim') ? { commands } : { status: 'done' }), { status: 200 });
+  };
+  await sync_remote_launches(home);
+  const machine_key = calls[0].body.public_key;
+  // The sending device: an ephemeral key pair, a shared key, and the command sealed under its id.
+  const ephemeral = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+  const key = await relay_cipher(await crypto.subtle.exportKey('jwk', ephemeral.privateKey), machine_key);
+  const { kty, crv, x, y } = await crypto.subtle.exportKey('jwk', ephemeral.publicKey);
+  const sealed = await seal(key, { action: 'room-member', payload: { room_id: 'r', action: 'add', name: 'Gemini' } }, 'command-0000000001');
+  commands = [{ id: 'command-0000000001', envelope: { ...sealed, key: { kty, crv, x, y } } },
+    { id: 'command-0000000002', envelope: { ...sealed, key: { kty, crv, x, y } } }];
+  const ran = [];
+  const running = await relay_commands(home, { wait: 0, run: async request => { ran.push(request); return { status: 200, body: { member: 'Gemini' } }; } });
+  await Promise.all(running);
+  assert.equal(calls[1].body.wait, 0);
+  assert.deepEqual(ran, [{ command: 'room-member', input: { room_id: 'r', action: 'add', name: 'Gemini', site: 'https://site.test', entry: 'web' }, browser: false }],
+    'a command sealed under another id is not run');
+  const answer = calls.find(call => call.url.endsWith('/commands/command-0000000001'));
+  assert.deepEqual(await unseal(key, answer.body.envelope, 'command-0000000001:response'), { status: 200, body: { member: 'Gemini' } });
+  assert.ok(!calls.some(call => call.url.endsWith('/commands/command-0000000002')));
 });
