@@ -146,7 +146,7 @@ async function save_key() {
 /* The empty state matches the member list's placeholder (.create-experts-empty). */
 .scheduler-empty { margin: 0; padding: 18px 12px; border: 1px dashed var(--ui-border); border-radius: 8px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }
 /* A filled slot keeps a dashed frame around the card, so the card reads as sitting in the one slot. */
-.scheduler-slot { padding: 4px; border: 1px dashed var(--ui-border-accented); border-radius: 8px; }
+.scheduler-slot { padding: 4px; border: 1px dashed var(--ui-border); border-radius: 8px; }
 .scheduler-open { display: flex; flex: 1; flex-direction: column; gap: 10px; width: 100%; padding: 12px 12px 30px; text-align: left; border-radius: inherit; outline: none; }
 .scheduler-identity { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 26px; padding-right: 30px; }
 .scheduler-identity strong { overflow: hidden; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }

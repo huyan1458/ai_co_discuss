@@ -48787,7 +48787,7 @@ var Rq = ["data-identity", "data-face"], zq = ["inert", "aria-hidden"], Bq = { c
 			]);
 		};
 	}
-}, [["__scopeId", "data-v-8ca5866a"]]), yY = { class: "create-discussion" }, bY = {
+}, [["__scopeId", "data-v-d4d373f5"]]), yY = { class: "create-discussion" }, bY = {
 	key: 0,
 	class: "create-connect",
 	role: "status"
