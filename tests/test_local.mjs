@@ -12,6 +12,15 @@ import { connection_site } from '../runner/discussion_local.mjs';
 
 const CLI = fileURLToPath(new URL('../runner/codiscuss.mjs', import.meta.url));
 
+/** Include background process diagnostics before the fixture removes its temporary home. */
+function startup_diagnostics(home, result) {
+  const logs = ['local/supervisor.log', 'local/website.log', 'service.log', 'local/status.json', 'status.json'];
+  return [`exit=${result.status}, signal=${result.signal}, error=${result.error?.message || ''}`, result.stderr, result.stdout, ...logs.map(file => {
+    const path = join(home, file);
+    return `${file}:\n${existsSync(path) ? readFileSync(path, 'utf8') : '(missing)'}`;
+  })].join('\n');
+}
+
 async function reserve_port() {
   const server = createServer();
   await new Promise(done => server.listen(0, '127.0.0.1', done));
@@ -26,7 +35,7 @@ function fixture(port) {
   const execute = args => spawnSync(process.execPath, [CLI, ...args], { cwd: home, env, encoding: 'utf8', timeout: 40000 });
   const command = args => {
     const result = execute(args);
-    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.status, 0, result.status === 0 ? result.stderr : startup_diagnostics(home, result));
     return JSON.parse(result.stdout);
   };
   return { home, python, env, execute, command };
@@ -137,7 +146,7 @@ test('setup restarts a stale or moved website only after interactive confirmatio
     }
     const restart = spawnSync(process.execPath, ['--import', 'data:text/javascript,Object.defineProperty(process.stdin,"isTTY",{value:true})',
       CLI, 'setup', '--clients', 'none', '--no-open', '--port', String(port)], { cwd: state.home, env: state.env, input: '\n', encoding: 'utf8', timeout: 60000 });
-    assert.notEqual(restart.status, 1, restart.stderr);
+    assert.ok([0, 2].includes(restart.status), startup_diagnostics(state.home, restart));
     const restarted = state.command(['local', 'status']);
     assert.equal(restarted.running, true);
     assert.notEqual(restarted.pid, first.pid);

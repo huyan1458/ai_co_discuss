@@ -267,10 +267,12 @@ test('paused room path correction is authenticated, versioned and adopted before
   await assert.rejects(room_configuration(f.home, { ...corrected, version: 'stale' }), /已变化/);
   await assert.rejects(room_configuration(f.home, { ...corrected, participants: { Codex: { session_id: 'other-chat' } } }), /本场修正仅支持/);
   writeFileSync(join(f.home, 'runner.lock'), String(process.pid));
-  const interval = setInterval(() => service.tick(), 100);
+  let checking;
+  const interval = setInterval(() => { checking = service.tick(); }, 100);
   let saved;
   try { saved = await room_configuration(f.home, corrected); }
-  finally { clearInterval(interval); }
+  // Clearing the timer does not finish its in-flight paused-room check.
+  finally { clearInterval(interval); await checking; }
   assert.equal(saved.applied, true, 'the resident service confirms the corrected config');
   assert.equal((await api(config, '/discussion')).session.status, 'paused');
   assert.equal(calls.length, 1, 'saving a path must not dispatch AI');
@@ -305,11 +307,13 @@ test('paused Codex switches App and CLI with the same room and session, without 
   for (const adapter of ['codex', 'codex_cli']) {
     const current = await room_configuration(f.home, input);
     const count = calls.length;
-    const interval = setInterval(() => service.tick(), 100);
+    let checking;
+    const interval = setInterval(() => { checking = service.tick(); }, 100);
     let saved;
     try { saved = await room_configuration(f.home, { ...input, version: current.version,
       session_revision: current.session_revision, participants: { Codex: { adapter } } }); }
-    finally { clearInterval(interval); }
+    // A concurrent tick only joins the old check; drain it before resuming the room.
+    finally { clearInterval(interval); await checking; }
     assert.equal(saved.applied, true, 'the resident service confirms the corrected config');
     assert.equal(calls.length, count, 'saving an entrypoint must not start AI');
     assert.equal(saved.participants.Codex.adapter, adapter);
@@ -322,6 +326,7 @@ test('paused Codex switches App and CLI with the same room and session, without 
     discussion = await api(config, '/discussion');
     await api(config, '/discussion', { action: 'resume', revision: discussion.revision });
     await service.tick();
+    assert.equal(calls.length, count + 1, 'resuming dispatches exactly one new request');
     assert.deepEqual(calls.at(-1), [adapter, 'original-host']);
     discussion = await api(config, '/discussion');
     await api(config, '/discussion', { action: 'pause', revision: discussion.revision });
