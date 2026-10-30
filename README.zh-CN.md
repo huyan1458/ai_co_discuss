@@ -10,8 +10,8 @@
 [快速开始](#快速开始) · [工作原理](#工作原理) · [文档](#文档) · [English](README.md)
 
 [![CI](https://github.com/huyan1458/ai_co_discuss/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/huyan1458/ai_co_discuss/actions/workflows/ci.yml)
-[![npm version](https://img.shields.io/npm/v/ai_co_discuss)](https://www.npmjs.com/package/ai_co_discuss)
-[![Node.js](https://img.shields.io/node/v/ai_co_discuss)](package.json)
+[![npm](https://img.shields.io/badge/npm-ai__co__discuss-CB3837?logo=npm)](https://www.npmjs.com/package/ai_co_discuss)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D24-339933?logo=nodedotjs&logoColor=white)](package.json)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 <img src="docs/images/channel-preview.jpg" alt="AI CoDiscuss 房间：房间目录、对话记录与成员栏" width="900">
