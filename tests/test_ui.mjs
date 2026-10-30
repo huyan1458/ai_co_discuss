@@ -695,6 +695,13 @@ function expert_card_fixture() {
     cleanup: () => cleanups.forEach((callback) => callback()) };
 }
 
+test('every CLI lines up the same four access levels, with agy 自动 shown but disabled', () => {
+  const shown = adapter => access_options(adapter).map(option => `${option.label}${option.disabled ? '×' : ''}`);
+  assert.deepEqual(shown('claude'), ['只读', '可写', '自动', '全放开']);
+  assert.deepEqual(shown('antigravity_cli'), ['只读', '可写', '自动×', '全放开']);
+  assert.match(access_options('antigravity_cli')[2].hint, /后台运行（-p）不支持/);
+});
+
 test('expert card offers project permissions only for CLI and shows that API and web experts never see project files', () => {
   const f = expert_card_fixture();
   const project = () => vm.runInContext('facts.value.find(fact => fact.label === "项目")?.value', f.context);

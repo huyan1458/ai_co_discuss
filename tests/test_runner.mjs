@@ -1249,6 +1249,16 @@ test('a taken-over Claude member whose own window is open gets its task through 
   assert.equal(JSON.parse(readFileSync(access_path, 'utf8')).session_id, original);
 });
 
+test('agy 全放开 skips its permission prompts, which no other level does', async t => {
+  for (const project_access of ['read', 'write', 'full', 'own']) {
+    const session = project_access === 'own' ? { session_id: 'actual-cli-session' } : {};
+    const f = await cli_delivery_fixture(t, 'antigravity_cli', { config: { project_access, ...session }, binding: session });
+    assert.deepEqual(f.errors, []);
+    assert.equal(f.calls[0].args.includes('--dangerously-skip-permissions'), project_access === 'full');
+    assert.equal(f.calls[0].args.includes('--project'), project_access !== 'own');
+  }
+});
+
 test('codex 自动 lets its automatic review approve escalations and 全放开 drops the sandbox', () => {
   const task = { directory: tmpdir(), draft_directory: tmpdir() };
   const auto = codex_permissions({ cwd: tmpdir(), project_access: 'auto' }, task).args;

@@ -67,7 +67,7 @@ Choose a provider and enter a key under **Smart Scheduling** (智能调度) when
 
 ## Permissions
 
-Project file access is set per member and is read-only by default. Agents can only run the `codiscuss` commands that read and write rooms. How strictly this is enforced depends on the tool: Codex uses its native sandbox, `agy` uses dedicated project permission rules, and permissions you have already granted in Claude Code still apply.
+Permissions are set per automatically started CLI member and default to read-only. The four levels are read-only, writable, automatic approval, and unrestricted; unsupported levels are disabled (`agy` does not support automatic approval in the background). Read-only pre-approves room-related `codiscuss` commands and answer drafts; writable allows project edits and commands. Automatic approval delegates decisions to the tool, while unrestricted skips permission prompts. Hover over a level for its exact scope. Codex uses its native sandbox, `agy` uses dedicated project rules, and existing Claude Code grants still apply. Manually started members keep their session's own permissions.
 
 ## Local Service
 

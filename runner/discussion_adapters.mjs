@@ -256,7 +256,7 @@ function agy_project_grants(config, task, resources, user_home) {
     throw new Error('agy 草稿目录不能位于只读项目、运行目录、技能或 .gemini 配置目录中，未交付讨论任务');
   }
   const write_rule = directory => `write_file(${resolve(directory).replaceAll('\\', '/')})`;
-  // 全放开 also runs commands outside agy's sandbox and allows MCP tools; run data stays protected at every level.
+  // 全放开 also allows commands outside agy's sandbox and MCP tools; deny rules are still written, but bypass may override them.
   const full = config.project_access === 'full';
   return { allow: [agy_rule(), write_rule(task.draft_directory),
     ...(config.project_access === 'read' ? [] : [...projects.map(write_rule), 'command(*)']), ...(full ? ['unsandboxed_command(*)'] : []),
@@ -727,7 +727,10 @@ function cli_invocation(config, binding, task, user_home) {
   const project = config.session_id ? null : prepare_agy_project(config, binding, task, user_home);
   const args = ['--output-format', 'stream-json', '--print-timeout', '0', '--add-dir', task.directory,
     '--add-dir', task.draft_directory, '--add-dir', task.skills_directory];
-  args.push('--mode', 'accept-edits', ...(project ? ['--project', project.project_id] : []));
+  // Headless agy refuses `--mode auto` ("not available for this account", 1.4.10–1.4.11) though its interactive window
+  // offers it; 全放开 uses the flag its own denial message suggests on top of the open project grants.
+  args.push('--mode', 'accept-edits', ...(config.project_access === 'full' ? ['--dangerously-skip-permissions'] : []),
+    ...(project ? ['--project', project.project_id] : []));
   if (binding.session_id) args.push('--conversation', binding.session_id);
   if (config.model) args.push('--model', config.model);
   if (config.effort) args.push('--effort', config.effort);

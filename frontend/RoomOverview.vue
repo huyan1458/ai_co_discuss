@@ -176,7 +176,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
             <div><dt>项目文件</dt><dd>
               <div v-if="files(member).value" class="expert-card-modes overview-switch" :class="{ 'is-locked': !files(member).editable }" role="radiogroup" :aria-label="`${member.name} 的项目文件权限`" :aria-busy="switching === member.name" :title="files(member).hint || undefined">
                 <button v-for="option in access_options(saved?.participants?.[member.name]?.adapter)" :key="option.value" type="button" role="radio" :aria-checked="files(member).value === option.value" :title="option.hint"
-                  :disabled="!files(member).editable || Boolean(switching)" @click="switch_access(member, option.value)">{{ option.label }}</button>
+                  :disabled="option.disabled || !files(member).editable || Boolean(switching)" @click="switch_access(member, option.value)">{{ option.label }}</button>
               </div>
               <span v-else class="overview-muted" :title="files(member).hint">{{ files(member).text }}</span>
             </dd></div>

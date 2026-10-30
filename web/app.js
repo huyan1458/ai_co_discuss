@@ -2458,12 +2458,11 @@ function launch_access(name) {
 /** Classic select options; an empty value inherits the launch-wide setting. */
 const ACCESS_LABELS = { read: "只读", write: "可写", auto: "自动", full: "完全放开" };
 
-// Mirrors access_options in runner/expert_prompts.mjs; agy has no headless 自动, and the shared setting stays 只读 / 可写.
+// Mirrors access_options in runner/expert_prompts.mjs; agy shows 自动 disabled (no headless auto), and the shared setting stays 只读 / 可写.
 function access_options(value = "", inherit = "", adapter = "") {
-  const levels = !inherit ? [["read", "只读"], ["write", "可写"]]
-    : [["read", "只读"], ["write", "可写"], ...(adapter === "antigravity_cli" ? [] : [["auto", "自动"]]), ["full", "完全放开"]];
+  const levels = !inherit ? [["read", "只读"], ["write", "可写"]] : [["read", "只读"], ["write", "可写"], ["auto", "自动"], ["full", "全放开"]];
   const options = [...(inherit ? [["", inherit]] : []), ...levels];
-  return options.map(([key, label]) => `<option value="${key}" ${(value || (inherit ? "" : "read")) === key ? "selected" : ""}>${label}</option>`).join("");
+  return options.map(([key, label]) => `<option value="${key}" ${(value || (inherit ? "" : "read")) === key ? "selected" : ""}${key === "auto" && adapter === "antigravity_cli" ? " disabled" : ""}>${label}</option>`).join("");
 }
 
 /** Refresh classic readbacks without replacing the input currently being edited. */

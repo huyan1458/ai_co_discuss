@@ -360,7 +360,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
           <span>项目</span>
           <div class="expert-card-modes" role="radiogroup" :aria-label="`${name} 的项目文件权限`">
             <button v-for="option in access_options(profile.adapter)" :key="option.value" type="button" role="radio" :title="option.hint"
-              :aria-checked="access === option.value" @click="bridge.write_launch(name, 'project_access', option.value)">{{ option.label }}</button>
+              :disabled="option.disabled" :aria-checked="access === option.value" @click="bridge.write_launch(name, 'project_access', option.value)">{{ option.label }}</button>
           </div>
         </div>
         <ApiSettings v-if="api_mode" :name="name" />

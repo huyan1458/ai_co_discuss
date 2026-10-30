@@ -1199,6 +1199,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 /* Segmented choice shared by the expert card and the room overview (one control, one look). */
 .expert-card-modes { display: flex; gap: 3px; padding: 3px; border-radius: 5px; background: var(--ui-bg-muted); }
 .expert-card-modes button { flex: 1; min-height: 22px; border-radius: 4px; color: var(--ui-text-muted); font-size: 11px; }
+.expert-card-modes button:disabled { cursor: not-allowed; opacity: 0.4; }
 .expert-card-modes button[aria-checked="true"] { background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); box-shadow: var(--channel-shadow-control); }
 
 /* Merged tool pages stack their sections; a rule separates one from the next. */

@@ -58,17 +58,23 @@ const ACCESS_HINTS = {
   codex_cli: { read: '只读沙箱', write: '项目可写的沙箱，命令在沙箱内运行、可联网',
     auto: '沙箱外的操作由模型申请提权，Codex 自动审核代替人工批准', full: '无沙箱、无审批（--dangerously-bypass-approvals-and-sandbox）' },
   antigravity_cli: { read: '只放行网站命令；碰到未放行的命令会直接结束本轮', write: '可写项目，命令全部放行（在 agy 沙箱内）',
-    full: '再放开沙箱外命令与 MCP 工具' },
+    full: '跳过全部权限确认（--dangerously-skip-permissions），并放开沙箱外命令与 MCP 工具' },
 };
 
-/** agy has no automatic mode headless ("not available for this account", tested 1.4.10), so it offers no 自动. */
+/** agy offers 自动 only in its interactive window; headless `--mode auto` is "not available for this account" (1.4.10–1.4.11). */
 export function access_levels(adapter) {
   return adapter === 'antigravity_cli' ? PROJECT_ACCESS.filter(level => level !== 'auto') : PROJECT_ACCESS;
 }
 
-/** The levels a software supports, labelled for the page, with what each does there on hover. */
+// Why a level a software lacks is shown but disabled, so every CLI card lines up the same four levels.
+const UNSUPPORTED_HINTS = { antigravity_cli: { auto: 'agy 只在交互窗口提供自动模式，后台运行（-p）不支持' } };
+
+/** All four levels labelled for the page, with what each does in this software on hover; ones it lacks are disabled. */
 export function access_options(adapter) {
-  return access_levels(adapter).map(value => ({ value, label: ACCESS_LABELS[value], hint: ACCESS_HINTS[adapter]?.[value] || '' }));
+  const levels = access_levels(adapter);
+  return PROJECT_ACCESS.map(value => levels.includes(value)
+    ? { value, label: ACCESS_LABELS[value], hint: ACCESS_HINTS[adapter]?.[value] || '' }
+    : { value, label: ACCESS_LABELS[value], hint: UNSUPPORTED_HINTS[adapter]?.[value] || '该软件不支持此档位', disabled: true });
 }
 
 /** The page's name for a level; `own` reads as decided by the member's own session. */
