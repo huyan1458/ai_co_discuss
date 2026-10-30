@@ -648,13 +648,13 @@ test('Worker defaults to unlimited session duration while keeping execution leas
   assert.equal((await f.request(path, { action: 'renew' }, r.owner)).status, 409);
 });
 
-test('Worker session executions keep bounded leases, authorization and pause/resume', async t => {
+test('Worker session executions keep leases, authorization and pause/resume without a time limit', async t => {
   const f = await worker_fixture(t);
   const codex = 'bounded-session-execution-token'.repeat(3);
   const r = await free_worker_room(f, [{ name: 'Codex', adapter: 'codex_cli', token: codex }]);
   const discussion = `${r.path}/discussion`;
   const initial = (await f.request(discussion)).body;
-  const started = await f.request(discussion, { action: 'start', revision: initial.revision, goal: '单次执行到限', limits: { execution_minutes: 1 } }, r.owner);
+  const started = await f.request(discussion, { action: 'start', revision: initial.revision, goal: '单次执行不限时', limits: { execution_minutes: 1 } }, r.owner);
   assert.equal(started.status, 200, JSON.stringify(started.body));
   assert.equal(started.body.session.limits.execution_minutes, 1);
   const roster = (await f.request(`${r.path}/turns/roster`)).body;
@@ -667,10 +667,10 @@ test('Worker session executions keep bounded leases, authorization and pause/res
   const renewed = await f.request(path, { action: 'renew' }, r.owner);
   assert.equal(renewed.status, 200, JSON.stringify(renewed.body));
   assert.ok(renewed.body.lease_until > Date.now() / 1000);
-  assert.ok(renewed.body.lease_until <= Math.floor(Date.now() / 1000) + 60);
+  assert.ok(renewed.body.lease_until <= Math.floor(Date.now() / 1000) + 120);
   assert.equal((await f.request(path, { action: 'renew' }, codex)).status, 403);
   f.sql.prepare('UPDATE member_executions SET created_at=unixepoch()-61 WHERE id=?').run(execution.body.id);
-  assert.equal((await f.request(path, { action: 'renew' }, r.owner)).status, 409, 'the single-execution duration blocks a late renewal');
+  assert.equal((await f.request(path, { action: 'renew' }, r.owner)).status, 200, 'a stored execution_minutes no longer ends a running execution');
   const latest = (await f.request(discussion)).body;
   const paused = await f.request(discussion, { action: 'pause', revision: latest.revision }, r.owner);
   assert.equal(paused.status, 200, JSON.stringify(paused.body));
@@ -1027,6 +1027,76 @@ test('Worker session plans require the current roster and continue after a skip'
   const continued = await f.request(`${r.path}/turns/continue`, { actor: 'Claude', revision: fresh.revision }, r.claude);
   assert.equal(continued.status, 200, JSON.stringify(continued.body));
   assert.deepEqual([continued.body.turn.expert, continued.body.turn.status], ['Gemini', 'open']);
+});
+
+test('Worker interjection ask keeps queue and other host work, retries once and supports the host', async t => {
+  const { f, r } = await session_control_fixture(t, {}, ['Codex', 'Gemini'].map(name => ({ name, token: name.repeat(8) })));
+  let roster = (await f.request(`${r.path}/turns/roster`)).body;
+  await f.request(`${r.path}/turns`, { actor: 'Claude', roster: roster.revision, submission_id: 'ask-queue-plan',
+    turns: ['Codex', 'Gemini'].map(expert => ({ expert, question: '请分析' })) }, r.claude);
+  const first = (await r.say('请解释第一处风险')).body.message.id;
+  const stale = (await f.request(`${r.path}/turns/roster`)).body;
+  const second = (await r.say('请解释第二处风险')).body.message.id;
+  const execution = await r.reserve();
+  assert.equal(execution.status, 200, JSON.stringify(execution.body));
+  roster = (await f.request(`${r.path}/turns/roster`)).body;
+  const source = roster.host_requests.find(item => item.message_id === first);
+  const payload = { actor: 'Claude', request_id: source.id, expert: 'Codex', submission_id: 'ask-convert-one' };
+  const ask = value => f.request(`${r.path}/turns/ask`, value, r.claude);
+  assert.equal((await ask(payload)).status, 400);
+  assert.equal((await ask({ ...payload, revision: stale.revision })).status, 409);
+  payload.revision = roster.revision;
+  const converted = await ask(payload);
+  assert.equal(converted.status, 201, JSON.stringify(converted.body));
+  assert.equal(converted.body.execution_completed, false);
+  assert.deepEqual([converted.body.request.purpose, converted.body.request.message_id], ['ask', first]);
+  const after = (await f.request(`${r.path}/turns/roster`)).body;
+  assert.deepEqual([after.queue, after.waiting], [roster.queue, roster.waiting]);
+  assert.deepEqual(after.host_requests.map(item => item.message_id), [second]);
+  assert.equal(after.held_since, second);
+  assert.equal((await ask(payload)).body.duplicate, true);
+  assert.equal((await ask({ ...payload, expert: 'Gemini' })).status, 409);
+  const last = await ask({ ...payload, request_id: after.host_requests[0].id, expert: 'Claude', revision: after.revision, submission_id: 'ask-convert-two' });
+  assert.equal(last.status, 201, JSON.stringify(last.body));
+  assert.equal(last.body.execution_completed, true);
+  const retry = await ask({ ...payload, request_id: after.host_requests[0].id, expert: 'Claude', revision: after.revision, submission_id: 'ask-convert-two' });
+  assert.equal(retry.body.execution_completed, true);
+  assert.equal((await f.request(`${r.path}/turns/roster`)).body.held_since, 0);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM session_requests WHERE member_request_id=?').get(last.body.request.id).n, 0);
+});
+
+test('Worker interjection ask supports spoken members and concurrent identical retries', async t => {
+  const token = 'codex'.repeat(8);
+  const { f, r } = await session_control_fixture(t, {}, [{ name: 'Codex', token }]);
+  const before = (await f.request(`${r.path}/turns/roster`)).body;
+  await f.request(`${r.path}/turns`, { actor: 'Claude', roster: before.revision, expert: 'Codex',
+    question: '请分析', submission_id: 'ask-spoken-plan' }, r.claude);
+  const execution = await r.reserve('Codex');
+  assert.equal((await r.answer(execution.body.id, token, 'Codex')).status, 201);
+  await r.say('你说的数字有什么来源？');
+  const roster = (await f.request(`${r.path}/turns/roster`)).body;
+  assert.deepEqual(roster.waiting, []);
+  const payload = { actor: 'Claude', request_id: roster.host_requests[0].id, expert: 'Codex',
+    revision: roster.revision, submission_id: 'ask-spoken-convert' };
+  const results = await Promise.all([1, 2].map(() => f.request(`${r.path}/turns/ask`, payload, r.claude)));
+  assert.deepEqual(results.map(item => item.status).sort(), [200, 201]);
+  assert.equal(results[0].body.request.id, results[1].body.request.id);
+  const after = (await f.request(`${r.path}/turns/roster`)).body;
+  assert.deepEqual([after.round, after.queue, after.waiting], [roster.round, roster.queue, []]);
+});
+
+test('Worker interjection ask rejects in-batch roster changes without partial conversion', async t => {
+  const { f, r } = await session_control_fixture(t, {}, [{ name: 'Codex', token: 'codex'.repeat(8) }]);
+  await r.say('请补充依据');
+  const roster = (await f.request(`${r.path}/turns/roster`)).body;
+  const source = roster.host_requests[0];
+  f.before_batch = () => f.sql.prepare("UPDATE room_members SET status='away' WHERE room_id=? AND name='Codex'").run(r.room.id);
+  const result = await f.request(`${r.path}/turns/ask`, { actor: 'Claude', request_id: source.id, expert: 'Codex',
+    revision: roster.revision, submission_id: 'ask-race-convert' }, r.claude);
+  assert.equal(result.status, 409, JSON.stringify(result.body));
+  assert.equal(f.sql.prepare('SELECT status FROM member_requests WHERE id=?').get(source.id).status, 'pending');
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM session_ask_submissions').get().n, 0);
+  assert.equal(f.sql.prepare("SELECT COUNT(*) AS n FROM member_requests WHERE message_id=? AND purpose='ask'").get(source.message_id).n, 0);
 });
 
 test('Worker roster revisions expire after direct questions and their answers', async t => {
@@ -1572,6 +1642,153 @@ async function free_worker_room(f, extra = []) {
   return { owner, claude, path, room: created.body, say, member_id, reserve, answer };
 }
 
+test('Worker review capability binds owner facts to membership and rolls back a concurrent change', async t => {
+  const f = await worker_fixture(t), r = await free_worker_room(f, [{ name: 'Codex-评审', adapter: 'codex_cli', token: 'review-token'.repeat(4) }]);
+  const id = await r.member_id('Codex-评审'), path = `${r.path}/members/${id}/review-capability`;
+  const state = (await f.request(path, undefined, r.owner)).body;
+  const payload = { revision: state.revision, read_only: true, config_version: 'a'.repeat(64) };
+  assert.equal((await f.request(path, payload, r.claude)).status, 403);
+  assert.equal((await f.request(path, { read_only: true }, r.owner)).status, 400);
+  assert.equal((await f.request(path, { ...payload, revision: 'stale' }, r.owner)).status, 409);
+  assert.equal((await f.request(path, payload, r.owner)).status, 200);
+  const roster = (await f.request(`${r.path}/reviews/roster`, undefined, r.claude)).body;
+  assert.equal(roster.members[0].name, 'Codex-评审');
+  assert.doesNotMatch(JSON.stringify(roster), /token_hash|control_hash/);
+  assert.equal((await f.request(`${r.path}/backup`)).body.tables.member_review_capabilities, undefined);
+  f.before_batch = () => f.sql.prepare("UPDATE room_members SET status='away' WHERE id=?").run(id);
+  assert.equal((await f.request(path, payload, r.owner)).status, 409);
+  f.sql.prepare("UPDATE room_members SET status='active' WHERE id=?").run(id);
+  assert.deepEqual((await f.request(`${r.path}/reviews/roster`, undefined, r.owner)).body.members, []);
+  assert.equal((await f.request(path, payload, r.owner)).status, 409, 'returning to the same state cannot revive a stale proof');
+  payload.revision = (await f.request(path, undefined, r.owner)).body.revision;
+  assert.equal((await f.request(path, payload, r.owner)).status, 200);
+  assert.equal((await f.request(path, { revision: payload.revision, read_only: false }, r.owner)).status, 200);
+  assert.deepEqual((await f.request(`${r.path}/reviews/roster`, undefined, r.owner)).body.members, []);
+});
+
+test('Worker review preauthorization is atomic, excludes implementers, and rejects stale retries', async t => {
+  const f = await worker_fixture(t), r = await free_worker_room(f, [
+    { name: 'Codex-评审', adapter: 'codex_cli', token: 'review-token'.repeat(4) },
+    { name: 'Gemini', adapter: 'gemini', token: 'gemini-token'.repeat(4) },
+  ]);
+  const id = await r.member_id('Codex-评审'), path = `${r.path}/members/${id}/review-capability`;
+  const capability = (await f.request(path, undefined, r.owner)).body;
+  await f.request(path, { revision: capability.revision, read_only: true, config_version: 'a'.repeat(64) }, r.owner);
+  await r.say('实现功能后交评审', { to: ['Claude'] });
+  const execution = (await r.reserve()).body;
+  const roster = (await f.request(`${r.path}/reviews/roster`, undefined, r.claude)).body;
+  const base = { to: ['Gemini'], next_review: 'Codex-评审', review_scope: '核对功能', submission_id: 'review-implementation-1' };
+  const post = payload => r.answer(execution.id, r.claude, 'Claude', payload);
+  assert.equal((await post(base)).status, 400);
+  assert.equal((await post({ ...base, review_roster: 'stale' })).status, 409);
+  assert.equal((await post({ ...base, to: ['Codex-评审'], review_roster: roster.revision })).status, 400);
+  f.before_batch = () => f.sql.prepare("UPDATE member_review_capabilities SET config_version=? WHERE member_id=?").run('b'.repeat(64), id);
+  assert.equal((await post({ ...base, review_roster: roster.revision })).status, 409);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM review_plans').get().n, 0);
+  const revision = (await f.request(`${r.path}/reviews/roster`, undefined, r.claude)).body.revision;
+  const saved = await post({ ...base, review_roster: revision });
+  assert.equal(saved.status, 201, JSON.stringify(saved.body));
+  assert.equal((await post({ ...base, review_roster: revision })).body.duplicate, true);
+  assert.equal((await post({ ...base, review_scope: '改范围', review_roster: revision })).status, 409);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM free_handoffs WHERE batch_id=?').get(saved.body.message.id).n, 1);
+  assert.equal((await f.request(`${r.path}/backup`)).body.tables.review_plans[0].scope, '核对功能');
+  const copied = JSON.parse(JSON.stringify((await f.request(`${r.path}/backup`)).body).replaceAll(r.room.id, 'reviewcopy'));
+  const imported = await f.request('/import', copied, 'importer-token'.repeat(4));
+  assert.equal(imported.status, 201, JSON.stringify(imported.body));
+  const history = f.sql.prepare('SELECT status,config_version,member_revision FROM review_plans WHERE room_id=?').get(imported.body.id);
+  assert.deepEqual({ ...history }, { status: 'imported', config_version: '', member_revision: '' });
+});
+
+/** Prepare an implementation answer with a still-pending authorized review handoff. */
+async function completed_worker_review(t) {
+  const f = await worker_fixture(t), reviewer_token = 'review-token'.repeat(4), implementer_token = 'gemini-token'.repeat(4);
+  const r = await free_worker_room(f, [{ name: 'Codex-评审', adapter: 'codex_cli', token: reviewer_token },
+    { name: 'Gemini', adapter: 'gemini', token: implementer_token }]);
+  const reviewer = await r.member_id('Codex-评审'), path = `${r.path}/members/${reviewer}/review-capability`;
+  const capability = (await f.request(path, undefined, r.owner)).body;
+  await f.request(path, { revision: capability.revision, read_only: true, config_version: 'a'.repeat(64) }, r.owner);
+  await r.say('实现功能', { to: ['Claude'] });
+  const host = (await r.reserve()).body;
+  const roster = (await f.request(`${r.path}/reviews/roster`, undefined, r.claude)).body;
+  const saved = await r.answer(host.id, r.claude, 'Claude', { to: ['Gemini'], next_review: 'Codex-评审', review_scope: '核对功能', review_roster: roster.revision });
+  assert.equal(saved.status, 201, JSON.stringify(saved.body));
+  const work = (await r.reserve('Gemini')).body;
+  assert.equal((await r.answer(work.id, implementer_token, 'Gemini')).status, 201);
+  return { f, r, reviewer, reviewer_token, batch_id: saved.body.message.id };
+}
+
+test('Worker review advance consumes one handoff, rolls back races and preserves other host work', async t => {
+  const { f, r, reviewer, batch_id } = await completed_worker_review(t);
+  await r.say('另一个问题', { to: ['Claude'] });
+  const host = (await r.reserve()).body;
+  const read = async () => (await f.request(`${r.path}/reviews/${batch_id}/ready`, undefined, r.claude)).body;
+  let ready = await read();
+  assert.equal(ready.ready, true, JSON.stringify(ready));
+  const base = { actor: 'Claude', batch_id, submission_id: 'review-advance-test' };
+  const advance = payload => f.request(`${r.path}/reviews/advance`, payload, r.claude);
+  assert.equal((await advance(base)).status, 400);
+  assert.equal((await advance({ ...base, revision: 'stale' })).status, 409);
+  f.before_batch = () => f.sql.prepare("UPDATE member_review_capabilities SET config_version=? WHERE member_id=?").run('b'.repeat(64), reviewer);
+  assert.equal((await advance({ ...base, revision: ready.revision })).status, 409);
+  assert.equal(f.sql.prepare('SELECT review_batch_id FROM review_plans WHERE batch_id=?').get(batch_id).review_batch_id, null);
+  assert.match((await read()).reason, /能力配置已变化/);
+  f.sql.prepare('UPDATE member_review_capabilities SET config_version=? WHERE member_id=?').run('a'.repeat(64), reviewer);
+  ready = await read();
+  const payload = { ...base, revision: ready.revision };
+  const [first, second] = await Promise.all([advance(payload), advance(payload)]);
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  assert.equal(second.status, 200, JSON.stringify(second.body));
+  assert.equal(first.body.review_batch_id, second.body.review_batch_id);
+  assert.equal(second.body.execution_completed, false);
+  assert.equal((await advance({ ...payload, submission_id: 'different-review-submission' })).status, 409);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM free_batches WHERE room_id=?').get(r.room.id).n, 2);
+  assert.equal((await f.request(`${r.path}/messages/${first.body.review_batch_id}`)).status, 404);
+  const execution = (await r.reserve('Codex-评审')).body;
+  assert.equal(execution.requests[0].review.batch_id, batch_id);
+  const other = (await f.request(`${r.path}/executions/${host.id}`, undefined, r.owner)).body;
+  assert.deepEqual(other.requests.map(item => item.status), ['completed', 'delivering']);
+});
+
+test('Worker review replay reports a completed host and hard preconditions reject stale evidence', async t => {
+  const { f, r, batch_id } = await completed_worker_review(t);
+  await r.reserve();
+  const read = async () => (await f.request(`${r.path}/reviews/${batch_id}/ready`, undefined, r.claude)).body;
+  let ready = await read();
+  f.sql.prepare('INSERT INTO free_round_limits(room_id,max_rounds) VALUES(?,1) ON CONFLICT(room_id) DO UPDATE SET max_rounds=1').run(r.room.id);
+  assert.match((await read()).reason, /额度不足/);
+  f.sql.prepare('UPDATE free_round_limits SET max_rounds=3 WHERE room_id=?').run(r.room.id);
+  const answer = f.sql.prepare('SELECT answer_id FROM member_requests WHERE room_id=? AND batch_id=?').get(r.room.id, batch_id);
+  const original = f.sql.prepare('SELECT text FROM messages WHERE id=?').get(answer.answer_id).text;
+  f.sql.prepare('UPDATE messages SET text=? WHERE id=?').run('长'.repeat(60001), answer.answer_id);
+  assert.match((await read()).reason, /60000/);
+  f.sql.prepare('UPDATE messages SET text=? WHERE id=?').run(original, answer.answer_id);
+  ready = await read();
+  const payload = { actor: 'Claude', batch_id, revision: ready.revision, submission_id: 'review-terminal-test' };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await f.request(`${r.path}/reviews/advance`, payload, r.claude);
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    assert.equal(result.body.execution_completed, true);
+    assert.equal(result.body.duplicate, Boolean(attempt));
+  }
+});
+
+test('Worker review delivery rejection preserves other requests and tells the host why', async t => {
+  const { f, r, reviewer, reviewer_token, batch_id } = await completed_worker_review(t);
+  const ready = (await f.request(`${r.path}/reviews/${batch_id}/ready`, undefined, r.claude)).body;
+  await f.request(`${r.path}/reviews/advance`, { actor: 'Claude', batch_id, revision: ready.revision, submission_id: 'review-reject-test' }, r.claude);
+  await r.say('另一个问题', { to: ['Codex-评审'] });
+  const execution = (await r.reserve('Codex-评审')).body;
+  assert.equal(execution.requests.length, 1);
+  const payload = { action: 'reject_review', reason: '只读权限已改变' };
+  assert.equal((await f.request(`${r.path}/executions/${execution.id}`, payload, reviewer_token)).status, 403);
+  const rejected = await f.request(`${r.path}/executions/${execution.id}`, payload, r.owner);
+  assert.equal(rejected.status, 200, JSON.stringify(rejected.body));
+  assert.equal(rejected.body.status, 'cancelled');
+  const inbox = (await f.request(`${r.path}/inbox`, undefined, r.owner)).body;
+  assert.match(inbox.members.find(item => item.name === 'Claude').pending[0].review.reason, /只读权限已改变/);
+  assert.equal(inbox.members.find(item => item.id === reviewer).pending.length, 1);
+});
+
 test('Worker free rooms need the owner credential and keep secrets out of views and backups', async t => {
   const f = await worker_fixture(t);
   assert.equal((await f.request('', { title: '自由', goal: 'x', mode: 'free', members: [{ name: 'Claude', token: 'm'.repeat(40) }] }, '')).status, 400);
@@ -1650,7 +1867,10 @@ test('Worker @全体成员 waits for the runner to have everyone answer at once 
   const first = (await r.say('大家打个招呼', everyone)).body.message.id;
   assert.deepEqual(await requests(), [['Claude', 'group', 'pending']]);
   assert.equal((await r.reserve('Claude')).status, 409);
-  const arrange = (id, action) => f.request(`${r.path}/recommendations/${id}`, { action }, r.owner);
+  const arrange = async (id, action) => {
+    const plan = (await f.request(`${r.path}/recommendations/${id}`, undefined, r.owner)).body;
+    return f.request(`${r.path}/recommendations/${id}`, { action, revision: plan.revision }, r.owner);
+  };
   assert.equal((await arrange(first, 'none')).status, 400);
   assert.equal((await arrange(first, 'all')).status, 200);
   assert.deepEqual(await requests(), [['Claude', 'all', 'pending'], ['Codex', 'all', 'pending']]);
@@ -1658,7 +1878,53 @@ test('Worker @全体成员 waits for the runner to have everyone answer at once 
   const second = (await r.say('接龙', everyone)).body.message.id;
   assert.equal((await arrange(second, 'sequential')).status, 200);
   assert.deepEqual((await requests()).slice(2), [['Claude', 'ask', 'pending']]);
-  assert.equal((await arrange(second, 'all')).status, 404);
+  assert.equal((await arrange(second, 'all')).status, 409);
+});
+
+test('Worker group handback keeps the original request and its durable receipt after delivery', async t => {
+  const f = await worker_fixture(t);
+  const r = await free_worker_room(f, [{ name: 'Codex', adapter: 'codex_cli', token: 'codex-free'.repeat(4) }]);
+  const message = (await r.say('大家处理', { to: ['Claude', 'Codex'], order: 'auto' })).body.message.id;
+  const url = `${r.path}/recommendations/${message}`;
+  const before = (await f.request(r.path)).body.free.requests[0];
+  assert.equal((await f.request(url, undefined, r.claude)).status, 403);
+  assert.equal((await f.request(url, { action: 'host' }, r.claude)).status, 403);
+  const result = await f.request(url, { action: 'host' }, r.owner);
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  const after = (await f.request(r.path)).body.free.requests[0];
+  for (const key of ['id', 'message_id', 'chain_id', 'created_by']) assert.equal(after[key], before[key]);
+  assert.equal(after.purpose, 'route');
+  assert.equal((await f.request(`${r.path}/inbox`, undefined, r.owner)).body.members[0].pending[0].group_action, 'host');
+  assert.equal((await r.reserve()).status, 200);
+  assert.deepEqual(await f.request(url, { action: 'host' }, r.owner), result);
+  assert.deepEqual((await f.request(url, undefined, r.owner)).body.result, result.body);
+  assert.equal((await f.request(url, { action: 'all' }, r.owner)).status, 409);
+});
+
+test('Worker group revisions reject changed state and changes inside the atomic batch', async t => {
+  for (const change of ['members', 'order', 'message', 'atomic', 'cancelled']) {
+    const f = await worker_fixture(t);
+    const r = await free_worker_room(f, [{ name: 'Codex', adapter: 'codex_cli', token: 'codex-free'.repeat(4) }]);
+    const message = (await r.say('大家处理', { to: ['Claude', 'Codex'], order: 'auto' })).body.message.id;
+    const url = `${r.path}/recommendations/${message}`;
+    const plan = (await f.request(url, undefined, r.owner)).body;
+    assert.equal((await f.request(url, { action: 'all' }, r.owner)).status, 400);
+    assert.equal((await f.request(url, { action: 'sequential' }, r.owner)).status, 400);
+    const remove = () => f.sql.prepare("UPDATE room_members SET status='away' WHERE room_id=? AND name='Codex'").run(r.room.id);
+    if (change === 'members') remove();
+    if (change === 'order') {
+      const order = (await f.request(`${r.path}/speaking-order`)).body;
+      assert.equal((await f.request(`${r.path}/speaking-order`, { revision: order.revision, order: ['Codex', 'Claude'] }, r.owner)).status, 200);
+    }
+    if (change === 'message') await r.say('先等等，需求变化');
+    if (change === 'atomic') f.before_batch = remove;
+    if (change === 'cancelled') f.sql.prepare("UPDATE member_requests SET status='cancelled' WHERE id=?").run(plan.request.id);
+    const result = await f.request(url, { action: 'all', revision: plan.revision }, r.owner);
+    assert.equal(result.status, 409, `${change}: ${JSON.stringify(result.body)}`);
+    assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM group_routes').get().count, 0);
+    assert.equal(f.sql.prepare("SELECT purpose FROM member_requests WHERE id=?").get(plan.request.id).purpose, 'group');
+    assert.equal((await f.request(url, { action: 'host' }, r.owner)).status, change === 'cancelled' ? 409 : 200);
+  }
 });
 
 test('Worker owner reorders who has not spoken against the latest revision, or sets the default order when idle', async t => {
@@ -1715,6 +1981,28 @@ test('Worker free rooms record every scheduling decision with the owner credenti
   assert.equal((await rate('bad')).status, 200);
   assert.equal((await f.request(`${r.path}/delete`, { actor: '用户', confirm_title: '自由协作' }, r.owner)).status, 200);
   assert.deepEqual((await cases()).map(item => item.snapshot.input), [input]);
+});
+
+test('Worker exact decision reads keep old evidence room-bound and protect independent opinions', async t => {
+  const f = await worker_fixture(t);
+  const codex = 'decision-codex'.repeat(4);
+  const r = await free_worker_room(f, [{ name: 'Codex', adapter: 'codex_cli', token: codex }]);
+  const message = (await r.say('原问题')).body.message.id;
+  const payload = { kind: 'interjection', label: '未自动生效', confidence: 0.4, applied: false, provider: 'jev',
+    after_message_id: message, detail: [{ choice: '__host__' }], context: { prompt: 9 }, input: { state: '原文', questions: [] } };
+  const saved = (await f.request(`${r.path}/scheduler-decisions`, payload, r.owner)).body;
+  for (let index = 0; index < 100; index++) await f.request(`${r.path}/scheduler-decisions`, payload, r.owner);
+  assert.equal((await f.request(r.path)).body.scheduler_decisions.some(item => item.id === saved.id), false);
+  const read = await f.request(`${r.path}/scheduler-decisions/${saved.id}`, undefined, r.claude);
+  assert.equal(read.status, 200, JSON.stringify(read.body));
+  for (const key of ['detail', 'context', 'input']) assert.deepEqual(read.body[key], payload[key]);
+  assert.equal((await f.request(`${r.path}/scheduler-decisions/999999`)).status, 404);
+  const state = (await f.request(`${r.path}/discussion`)).body;
+  assert.equal((await f.request(`${r.path}/discussion`, { action: 'start', revision: state.revision, goal: '独立观点' }, r.owner)).status, 200);
+  const roster = (await f.request(`${r.path}/turns/roster`)).body;
+  assert.equal((await f.request(`${r.path}/turns`, { actor: 'Claude', expert: 'Codex', question: '独立回答',
+    roster: roster.revision, submission_id: crypto.randomUUID() }, r.claude)).status, 201);
+  assert.equal((await f.request(`${r.path}/scheduler-decisions/${saved.id}`, undefined, codex)).status, 403);
 });
 
 test('Worker smart scheduling recommendations wait for the user, then interrupt the host or follow it', async t => {
@@ -2270,12 +2558,14 @@ test('Worker free rooms bundle requests into one execution and reject late or un
   assert.equal((await r.answer(third.id)).status, 409);
   assert.deepEqual((await f.request(`${r.path}/inbox`, undefined, r.owner)).body.executions, []);
   assert.equal((await f.request(r.path)).body.free.members[0].execution.result, '执行租约到期，接入程序未续租');
-  await r.say('等待超时');
-  const timed = (await r.reserve()).body;
+  await r.say('长任务');
+  const long = (await r.reserve()).body;
   f.sql.prepare('UPDATE discussion_limits SET execution_minutes=1 WHERE room_id=?').run(r.room.id);
-  f.sql.prepare('UPDATE member_executions SET created_at=unixepoch()-60,lease_until=unixepoch() WHERE id=?').run(timed.id);
-  await f.request(`${r.path}/inbox`, undefined, r.owner);
-  assert.equal((await f.request(r.path)).body.free.members[0].execution.result, '已达到单次执行时限');
+  f.sql.prepare('UPDATE member_executions SET created_at=unixepoch()-3600 WHERE id=?').run(long.id);
+  const kept = await f.request(`${r.path}/executions/${long.id}`, { action: 'renew' }, r.owner);
+  assert.equal(kept.status, 200, 'one execution has no time limit, even with a legacy stored value');
+  assert.ok(kept.body.lease_until > Math.floor(Date.now() / 1000) + 60);
+  assert.equal('execution_minutes' in (await f.request(`${r.path}/inbox`, undefined, r.owner)).body, false);
   assert.equal((await f.request(`${r.path}/inbox`, undefined, r.claude)).status, 403);
 });
 
@@ -2578,7 +2868,8 @@ test('Worker free rooms forward online answers and create discussions in place',
   assert.equal((await r.answer(null, online, 'DeepSeek')).status, 403);
   assert.equal((await r.say('请 DeepSeek 和 Codex 一起回答', { to: ['DeepSeek', 'Codex'], order: 'auto' })).status, 201);
   const all_message = (await f.request(`${r.path}/messages?after=0`)).body.messages.at(-1).id;
-  const recommend = await f.request(`${r.path}/recommendations/${all_message}`, { action: 'all' }, r.owner);
+  const group_plan = (await f.request(`${r.path}/recommendations/${all_message}`, undefined, r.owner)).body;
+  const recommend = await f.request(`${r.path}/recommendations/${all_message}`, { action: 'all', revision: group_plan.revision }, r.owner);
   assert.equal(recommend.status, 200, JSON.stringify(recommend.body));
   const all_request = (await f.request(r.path)).body.free.requests.find(item => item.member === 'DeepSeek' && item.message_id === all_message);
   assert.equal(all_request.purpose, 'all');

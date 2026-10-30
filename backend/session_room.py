@@ -57,7 +57,7 @@ def _idle_session_revision(connection, room_id):
         LEFT JOIN member_manual_sources source ON source.member_id=m.id
         WHERE m.room_id=? ORDER BY m.id""", (room_id,))]
     latest_message = connection.execute("""SELECT COALESCE(MAX(id),0) FROM messages WHERE room_id=?
-        AND NOT EXISTS(SELECT 1 FROM task_message_sources WHERE message_id=messages.id)""", (room_id,)).fetchone()[0]
+        AND NOT EXISTS(SELECT 1 FROM internal_task_messages WHERE message_id=messages.id)""", (room_id,)).fetchone()[0]
     mode = connection.execute("SELECT mode FROM room_modes WHERE room_id=?", (room_id,)).fetchone()
     options = connection.execute("SELECT named_followup FROM session_options WHERE session_id=?",
                                  (latest_session["id"],)).fetchone() if latest_session else None
@@ -84,7 +84,7 @@ def _session_revision(connection, session):
         FROM session_requests WHERE session_id=? ORDER BY round,position,id""", (session_id,))]
     options = list(connection.execute("SELECT named_followup FROM session_options WHERE session_id=?", (session_id,)).fetchone())
     latest = connection.execute("""SELECT COALESCE(MAX(m.id),0) FROM messages m WHERE m.room_id=?
-        AND NOT EXISTS (SELECT 1 FROM task_message_sources t WHERE t.message_id=m.id)""", (session["room_id"],)).fetchone()[0]
+        AND NOT EXISTS (SELECT 1 FROM internal_task_messages t WHERE t.message_id=m.id)""", (session["room_id"],)).fetchone()[0]
     return _hash_revision([session_id, session["status"], list(state), list(limits), options, members, queue, latest])
 
 
@@ -215,7 +215,7 @@ def start_session(connection, room_id, token, payload, room):
     named_followup = payload.get("named_followup", False)
     if type(named_followup) is not bool:
         raise ValueError("named_followup 须为布尔值")
-    latest = connection.execute("SELECT COALESCE(MAX(m.id),0) FROM messages m WHERE m.room_id=? AND NOT EXISTS (SELECT 1 FROM task_message_sources t WHERE t.message_id=m.id)", (room_id,)).fetchone()[0]
+    latest = connection.execute("SELECT COALESCE(MAX(m.id),0) FROM messages m WHERE m.room_id=? AND NOT EXISTS (SELECT 1 FROM internal_task_messages t WHERE t.message_id=m.id)", (room_id,)).fetchone()[0]
     created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     cursor = connection.execute("INSERT INTO discussion_sessions(room_id,goal,status,started_message_id,created_at) VALUES(?,?,'active',?,?)", (room_id, goal, latest, created_at))
     session_id = cursor.lastrowid
@@ -312,7 +312,7 @@ def _conclude_session(connection, session, reason):
     session_id = session["id"]
     cancel_session_work(connection, session_id, "讨论已结束")
     now = int(time.time())
-    latest = connection.execute("SELECT COALESCE(MAX(m.id),0) FROM messages m WHERE m.room_id=? AND NOT EXISTS (SELECT 1 FROM task_message_sources t WHERE t.message_id=m.id)", (room_id,)).fetchone()[0]
+    latest = connection.execute("SELECT COALESCE(MAX(m.id),0) FROM messages m WHERE m.room_id=? AND NOT EXISTS (SELECT 1 FROM internal_task_messages t WHERE t.message_id=m.id)", (room_id,)).fetchone()[0]
     connection.execute("UPDATE discussion_sessions SET status='concluded',ended_message_id=? WHERE id=?", (latest, session_id))
     connection.execute("UPDATE session_limits SET stop_reason=?,revision=revision+1 WHERE session_id=?", (reason, session_id))
     state = connection.execute("SELECT state_text,state_until FROM rooms WHERE id=?", (room_id,)).fetchone()
@@ -402,7 +402,7 @@ def session_conclusion_view(connection, room_id):
     queued = [list(row) for row in connection.execute("""SELECT id,round,position,member_id,status FROM session_requests
         WHERE session_id=? AND purpose='discuss' AND status='queued' ORDER BY round,position,id""", (session["id"],))]
     latest = connection.execute("""SELECT COALESCE(MAX(id),0) FROM messages WHERE room_id=?
-        AND NOT EXISTS(SELECT 1 FROM task_message_sources WHERE message_id=messages.id)""", (room_id,)).fetchone()[0]
+        AND NOT EXISTS(SELECT 1 FROM internal_task_messages WHERE message_id=messages.id)""", (room_id,)).fetchone()[0]
     blockers = []
     if held_since:
         blockers.append("有未处理的用户留言或设置变更")
@@ -436,6 +436,19 @@ def conclude_session_by_host(connection, room_id, payload):
     return _conclude_session(connection, session, "goal_done")
 
 
+def _host_interjections(connection, session_id):
+    """Read pending user interjections with their original source and execution."""
+    return [dict(row) for row in connection.execute("""SELECT r.id,r.status,r.execution_id,
+        q.id AS session_request_id,t.cause_message_id AS message_id
+        FROM session_requests q JOIN member_requests r ON r.id=q.member_request_id
+        JOIN task_message_sources t ON t.session_request_id=q.id
+        JOIN messages m ON m.id=t.cause_message_id
+        WHERE q.session_id=? AND q.purpose='discuss_host' AND q.status='open'
+        AND r.status IN ('pending','delivering') AND t.cause_kind='user_message' AND m.author='用户'
+        AND NOT EXISTS(SELECT 1 FROM message_withdrawals w WHERE w.message_id=m.id)
+        ORDER BY r.id""", (session_id,))]
+
+
 def _session_roster(connection, session_id):
     """Build active experts and their answered state for this session's current round."""
     session = connection.execute("SELECT room_id,status FROM discussion_sessions WHERE id=?", (session_id,)).fetchone()
@@ -463,11 +476,13 @@ def _session_roster(connection, session_id):
         FROM session_requests WHERE session_id=? AND purpose='discuss' ORDER BY id""", (session_id,))]
     limits = list(connection.execute("SELECT max_rounds,max_minutes,execution_minutes FROM session_limits WHERE session_id=?", (session_id,)).fetchone())
     latest_visible = connection.execute("""SELECT COALESCE(MAX(m.id),0) FROM messages m WHERE m.room_id=?
-        AND NOT EXISTS (SELECT 1 FROM task_message_sources t WHERE t.message_id=m.id)""", (session["room_id"],)).fetchone()[0]
-    state = [session_id, session["status"], list(session_state), latest_visible, max_round,
+        AND NOT EXISTS (SELECT 1 FROM internal_task_messages t WHERE t.message_id=m.id)""", (session["room_id"],)).fetchone()[0]
+    host_requests = _host_interjections(connection, session_id)
+    state = [session_id, session["status"], list(session_state), latest_visible, max_round, host_requests,
              [[item['id'], item['name'], item['host'], item['spoken'], item['registered']] for item in experts], queue, limits]
     return {"experts":experts,"waiting":waiting,"unregistered":unregistered,"round":max_round,
-            "revision":_hash_revision(state)}
+            "revision":_hash_revision(state), "host_requests":host_requests,
+            "status":session["status"], "held_since":session_state["held_since"], "queue":queue}
 
 
 def roster_view(connection, room_id):
@@ -863,6 +878,70 @@ def _optional_identifier(params, field):
     if identifier <= 0:
         raise ValueError(f"{field} 须为正整数")
     return identifier
+
+
+def _ask_receipt(connection, room_id, payload):
+    """Return a durable matching conversion, rejecting reuse for another request or member."""
+    receipt = connection.execute("""SELECT s.source_request_id,r.*,m.name AS expert,e.status AS source_execution_status
+        FROM session_ask_submissions s JOIN member_requests r ON r.id=s.request_id
+        JOIN room_members m ON m.id=r.member_id JOIN member_requests original ON original.id=s.source_request_id
+        LEFT JOIN member_executions e ON e.id=original.execution_id WHERE s.room_id=? AND s.submission_id=?""",
+        (room_id, payload["submission_id"])).fetchone()
+    if not receipt:
+        return None
+    if receipt["source_request_id"] != payload.get("request_id") or receipt["expert"] != payload.get("expert"):
+        raise FileExistsError("提交编号已用于其他追问")
+    request = dict(receipt)
+    completed = request.pop("source_execution_status") == "completed"
+    return {"request": request, "duplicate": True, "execution_completed": completed}
+
+
+def _finish_interjection(connection, session_id, source):
+    """Close only this source request and finish its execution only when no work remains."""
+    connection.execute("UPDATE member_requests SET status='completed' WHERE id=?", (source["id"],))
+    connection.execute("UPDATE session_requests SET status='answered' WHERE id=?", (source["session_request_id"],))
+    execution_id = source["execution_id"]
+    completed = bool(execution_id) and not connection.execute(
+        "SELECT 1 FROM member_requests WHERE execution_id=? AND status='delivering'", (execution_id,)).fetchone()
+    if completed:
+        connection.execute("""UPDATE member_executions SET status='completed',finished_at=?,result='interjection_asked'
+            WHERE id=? AND status IN ('dispatched','started')""", (int(time.time()), execution_id))
+    remaining = _host_interjections(connection, session_id)
+    held_since = min((item["message_id"] for item in remaining), default=0)
+    connection.execute("UPDATE session_state SET held_since=?,revision=revision+1 WHERE session_id=?", (held_since, session_id))
+    return completed
+
+
+def ask_interjection(connection, room_id, payload, room):
+    """Convert one versioned host interjection into a normal ask without changing discussion turns."""
+    begin_write(connection)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", str(payload.get("submission_id", ""))):
+        raise ValueError("submission_id 须为 8–100 位字母、数字、下划线或短横线")
+    if payload.get("revision") is None:
+        raise ValueError("转交追问前须先读取 turn roster 并提交 revision")
+    duplicate = _ask_receipt(connection, room_id, payload)
+    if duplicate:
+        return duplicate
+    session = current_session(connection, room_id, active_only=True)
+    if not session or session["status"] != "active" or room["archived"]:
+        raise FileExistsError("讨论未处于进行状态")
+    roster = _session_roster(connection, session["id"])
+    require_revision(roster, payload, "转交追问")
+    source = next((item for item in roster["host_requests"] if item["id"] == payload.get("request_id")), None)
+    if not source:
+        raise FileExistsError("原用户留言请求已不可转交")
+    member = next((item for item in roster["experts"] if item["name"] == payload.get("expert") and item["registered"]), None)
+    if not member:
+        raise ValueError("请选择在场且已注册的成员")
+    connection.execute("""INSERT OR IGNORE INTO member_requests
+        (room_id,member_id,message_id,chain_id,purpose,created_by,created_at) VALUES(?,?,?,?,'ask','user',?)""",
+        (room_id, member["id"], source["message_id"], source["message_id"], int(time.time())))
+    request = dict(connection.execute("SELECT * FROM member_requests WHERE member_id=? AND message_id=?",
+                                     (member["id"], source["message_id"])).fetchone())
+    connection.execute("INSERT INTO session_ask_submissions VALUES(?,?,?,?)",
+                       (room_id, payload["submission_id"], source["id"], request["id"]))
+    completed = _finish_interjection(connection, session["id"], source)
+    return {"request": request, "duplicate": False, "execution_completed": completed}
 
 
 def continue_plan(connection, room_id, payload, room):

@@ -321,6 +321,25 @@ CREATE TABLE IF NOT EXISTS room_members (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS member_name ON room_members(room_id,name) WHERE status<>'removed';
 CREATE UNIQUE INDEX IF NOT EXISTS member_credential ON room_members(room_id,token_hash);
+
+-- Local service attestation, never a permission grant. Re-imported rooms require a fresh attestation.
+CREATE TABLE IF NOT EXISTS member_review_capabilities (
+    member_id INTEGER PRIMARY KEY REFERENCES room_members(id) ON DELETE CASCADE,
+    member_revision TEXT NOT NULL,
+    config_version TEXT NOT NULL,
+    adapter TEXT NOT NULL,
+    recorded_at INTEGER NOT NULL,
+    generation INTEGER NOT NULL DEFAULT 0
+);
+CREATE TRIGGER IF NOT EXISTS invalidate_member_review_capability
+AFTER UPDATE OF token_hash,status,adapter,access,session_mode ON room_members
+WHEN NEW.token_hash<>OLD.token_hash OR NEW.status<>OLD.status OR NEW.adapter<>OLD.adapter
+    OR NEW.access<>OLD.access OR NEW.session_mode<>OLD.session_mode
+BEGIN
+    INSERT INTO member_review_capabilities(member_id,member_revision,config_version,adapter,recorded_at,generation)
+        VALUES(NEW.id,'','',NEW.adapter,0,1)
+        ON CONFLICT(member_id) DO UPDATE SET member_revision='',config_version='',generation=generation+1;
+END;
 -- A manual member's own software session, reported by its CLI on posting; the local service uses it to take the member over.
 CREATE TABLE IF NOT EXISTS member_sessions (
     member_id INTEGER PRIMARY KEY REFERENCES room_members(id) ON DELETE CASCADE,
@@ -730,6 +749,38 @@ CREATE TABLE IF NOT EXISTS task_message_sources (
     cause_request_id INTEGER REFERENCES member_requests(id)
 );
 CREATE INDEX IF NOT EXISTS task_message_sources_session ON task_message_sources(session_id,message_id);
+
+-- One host-authorized review step for one implementation batch. Imported plans remain history only.
+CREATE TABLE IF NOT EXISTS review_plans (
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    batch_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    chain_id INTEGER NOT NULL,
+    host_id INTEGER NOT NULL,
+    reviewer_id INTEGER NOT NULL,
+    reviewer_name TEXT NOT NULL,
+    config_version TEXT NOT NULL,
+    member_revision TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    implementers TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','advanced','imported')),
+    review_batch_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+    advance_submission TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(room_id,batch_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS review_advance_submission ON review_plans(room_id,advance_submission)
+    WHERE advance_submission<>'';
+CREATE VIEW IF NOT EXISTS internal_task_messages AS
+    SELECT message_id FROM task_message_sources
+    UNION SELECT review_batch_id AS message_id FROM review_plans WHERE review_batch_id IS NOT NULL;
+
+-- Runtime idempotency receipts for converting one host interjection to an ordinary request.
+CREATE TABLE IF NOT EXISTS session_ask_submissions (
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    submission_id TEXT NOT NULL,
+    source_request_id INTEGER NOT NULL UNIQUE REFERENCES member_requests(id) ON DELETE CASCADE,
+    request_id INTEGER NOT NULL REFERENCES member_requests(id) ON DELETE CASCADE,
+    PRIMARY KEY (room_id,submission_id)
+);
 
 -- Stop old engine sessions once during upgrade. Their original phase and rows remain readable, while new sessions can open.
 CREATE TABLE IF NOT EXISTS schema_migrations (

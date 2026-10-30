@@ -42,7 +42,7 @@ Discussions and free collaboration share the same execution and failure cards. A
 
 ### Named Follow-ups
 
-With **Named follow-ups** (点名追问) enabled, the host writes a targeted follow-up for each expert after every round. When disabled (the default), experts read the previous round and respond to each other directly, and the host only steers.
+With **Named follow-ups** (点名追问) enabled, the host writes a targeted follow-up for each expert after every round. When disabled (the default), experts respond to each other using a shared question. The host connects rounds; Smart Scheduling can handle that step when enabled.
 
 ### Limits
 
@@ -50,7 +50,6 @@ With **Named follow-ups** (点名追问) enabled, the host writes a targeted fol
 | --- | --- |
 | Rounds | Counts completed expert discussion replies; host notes and direct questions do not count |
 | Total time | Counts only active time; paused time is excluded |
-| Single run | A run that exceeds it ends that execution; the request is handled as a delivery failure |
 
 The discussion ends as soon as a limit is reached and returns to free collaboration without an extra host summary request. Reaching a limit does not mean consensus was reached. Pausing stops current discussion executions; when resumed, the host schedules the next request.
 
@@ -59,10 +58,11 @@ The discussion ends as soon as a limit is reached and returns to free collaborat
 When creating a room, you can add a decision model under **Smart Scheduling** (智能调度) — TypeSafe Jev, with OpenAI Decisions as an experimental option — using your own key, billed per call. Routine routing is then decided by the decision model instead of waking the host every time:
 
 - Unaddressed messages go to the member they are clearly meant for, to everyone, or to no one; otherwise to the host.
-- For `@全体成员`, it decides whether members answer together or in order.
-- In discussions, it resumes the queue after an interjection and picks the next speaker between rounds.
+- Without Smart Scheduling, `@全体成员` runs everyone together. With it, uncertain or failed decisions go to the host. `@全体依次` always uses the established speaking order.
+- In discussions, a local follow-up becomes an ordinary question without consuming a turn or changing the queue, including questions for members who already spoke or the host. It also picks the next speaker between rounds. Without Smart Scheduling, the host can make the same handoff.
+- When the host has preauthorized a specific read-only reviewer, a completed implementation batch can move to that reviewer. The model checks delivery completeness, not code correctness, and cannot choose another reviewer. Review results still return to the host.
 
-It acts only when confident, and otherwise hands over to the host. Every decision is shown in the conversation and can be rated. The room title and recent messages are sent to the chosen provider.
+It acts only when confident, and otherwise hands over to the host. Every decision is shown in the conversation and can be rated. The room title and recent messages are sent to the chosen provider. Preauthorized review judgments also send the full assignment, delivery text and execution reports; inputs above the supported limit go to the host.
 
 ## Managing Members
 

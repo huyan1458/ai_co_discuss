@@ -1700,7 +1700,7 @@ function render_access() {
 
 /** Read numeric limits from the shared classic/modern form controls. */
 function read_limits(prefix) {
-  return Object.fromEntries(["max_rounds", "max_minutes", "execution_minutes"].map(key => {
+  return Object.fromEntries(["max_rounds", "max_minutes"].map(key => {
     const value = element(`${prefix}-limit-${key}${prefix === "topic" ? "-input" : ""}`).value;
     return [key, Number(value)];
   }));
@@ -1722,8 +1722,7 @@ function limits_label(limits = {}) {
   const progress = finished ? "讨论已收束" : !limits.started_at ? "尚未计时" : `已用 ${Math.floor((limits.elapsed_seconds || 0) / 60)} 分钟${limits.remaining_seconds == null ? "" : ` · 剩余 ${Math.ceil(limits.remaining_seconds / 60)} 分钟`}`;
   const status = finished ? "" : limits.reached ? "已达上限，停止新增安排" : "";
   const action = "到限暂停";
-  const execution = limits.execution_minutes ? `${limits.execution_minutes} 分钟` : "不限时长";
-  return `${rounds}；${duration}；${progress}。单次自动执行 ${execution}。${action}${status ? `；${status}` : ""}。`;
+  return `${rounds}；${duration}；${progress}。${action}${status ? `；${status}` : ""}。`;
 }
 
 /** Why a discussion ended, from the stop reason and the limits it ran under; anything else is the user ending it. */
@@ -2750,7 +2749,7 @@ async function reopen_discussion({ max_rounds, max_minutes }) {
   if (!has_room_control(room_id)) throw new Error(MANAGEMENT_LOGIN_HINT);
   await request_json(`/api/rooms/${room_id}/discussion`, { action: "start", revision: view.revision,
     goal: room.session?.goal || room.goal, named_followup: room.named_followup ?? true,
-    limits: { max_rounds, max_minutes, execution_minutes: room.limits?.execution_minutes ?? 0 } });
+    limits: { max_rounds, max_minutes } });
   if (state.room?.id !== room_id) return;
   await refresh_room();
   show_toast("已开启新的讨论会话，按新的轮次与时长上限继续");
@@ -2767,13 +2766,13 @@ async function conclude_discussion() {
 }
 
 /** Turn this free room into a discussion within the given limits and start the run; the local service takes it over at its next check. */
-async function start_room_discussion({ goal, max_rounds, max_minutes, execution_minutes = 0, named_followup = false }) {
+async function start_room_discussion({ goal, max_rounds, max_minutes, named_followup = false }) {
   const room_id = state.room.id, path = `/api/rooms/${room_id}`;
   if (!has_room_control(room_id)) throw new Error(MANAGEMENT_LOGIN_HINT);
   const current = await request_json(`${path}/discussion`);
   if (state.room?.id !== room_id) return;
   await request_json(`${path}/discussion`, { action: "start", revision: current.revision,
-    ...(goal ? { goal } : {}), limits: { max_rounds, max_minutes, execution_minutes }, named_followup });
+    ...(goal ? { goal } : {}), limits: { max_rounds, max_minutes }, named_followup });
   if (state.room?.id !== room_id) return;
   await refresh_room();
   show_toast("讨论已开启，由主持人推进；需本机接入程序保持运行");
@@ -3143,7 +3142,7 @@ function render_topic() {
     for (const field of ["title", "goal", "focus", "user_request", "background", "boundaries"]) element(`topic-${field}-input`).value = room[field] || "";
     render_host_options("topic-host-select", Object.keys(room.experts).filter(name => room.experts[name] === "cli"), room.host);
     element("topic-phase-select").value = room.phase;
-    for (const key of ["max_rounds", "max_minutes", "execution_minutes"]) {
+    for (const key of ["max_rounds", "max_minutes"]) {
       const input = element(`topic-limit-${key}-input`);
       input.value = room.limits?.[key] || "";
       input.disabled = ["active", "paused"].includes(room.session?.status);

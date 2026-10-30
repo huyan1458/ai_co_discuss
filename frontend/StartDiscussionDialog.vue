@@ -9,7 +9,6 @@ const { view, act, pending } = inject("discussion");
 const goal = ref("");
 const rounds = ref(DEFAULT_ROUNDS);
 const minutes = ref(0);
-const execution_minutes = ref("");
 const named_followup = ref(false);
 const limits = ref(null);
 // Every opening starts from the defaults rather than the previous discussion.
@@ -18,7 +17,6 @@ watch(open, (opened) => {
   goal.value = "";
   rounds.value = DEFAULT_ROUNDS;
   minutes.value = 0;
-  execution_minutes.value = "";
   named_followup.value = false;
 });
 
@@ -27,7 +25,7 @@ async function submit() {
   limits.value?.settle();
   const whole = (value) => Number.isInteger(Number(value)) && Number(value) > 0 ? Number(value) : 0;
   const started = await act("start_room_discussion", { goal: goal.value.trim(), max_rounds: whole(rounds.value), max_minutes: whole(minutes.value),
-    execution_minutes: whole(execution_minutes.value), named_followup: named_followup.value });
+    named_followup: named_followup.value });
   if (started) open.value = false;
 }
 </script>
@@ -37,9 +35,7 @@ async function submit() {
     <template #body>
       <form class="start-discussion" aria-label="开启讨论" @submit.prevent="submit">
         <UFormField label="讨论目标" description="写下问题、背景和顾虑，主持人据此推进；可留空，沿用房间目标。"><UTextarea v-model="goal" :maxlength="1000" :rows="4" autoresize :maxrows="10" placeholder="例如：我们在 A、B 两个方案之间犹豫，主要顾虑是成本和上线时间……" class="w-full" /></UFormField>
-        <DiscussionLimits ref="limits" v-model:rounds="rounds" v-model:minutes="minutes" v-model:execution_minutes="execution_minutes">
-            <UCheckbox v-model="named_followup" label="点名追问" description="开启后，主持人每轮读完回答再逐位点名追问；关闭时专家之间互相回应、互相提问，主持人只开场和收尾。" />
-          </DiscussionLimits>
+        <DiscussionLimits ref="limits" v-model:rounds="rounds" v-model:minutes="minutes" v-model:named_followup="named_followup" />
         <div class="start-discussion-footer">
           <UButton label="取消" color="neutral" variant="ghost" @click="open = false" />
           <UButton type="submit" icon="i-lucide-play" label="开始讨论" class="channel-primary-button" :loading="pending === 'start_room_discussion'" :disabled="Boolean(pending) || !view.access?.can_manage" />

@@ -171,8 +171,10 @@ def add_topic(parser, create=False):
     parser.add_argument("--phase", choices=PHASES, default=argparse.SUPPRESS)
     parser.add_argument("--experts-file", default=argparse.SUPPRESS,
                         help='完整参与者映射 JSON，如 {"Codex":"cli","Gemini":"cli"}；替换整个映射')
-    for name in ("max-rounds", "max-minutes", "execution-minutes"):
+    for name in ("max-rounds", "max-minutes"):
         parser.add_argument(f"--{name}", type=non_negative_int, default=argparse.SUPPRESS)
+    # Accepted so older scripts keep working; one execution has no time limit any more.
+    parser.add_argument("--execution-minutes", type=non_negative_int, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
 
 
 def add_leaf(subcommands, registry, name, description, needs_room=False):
@@ -227,6 +229,8 @@ def message_commands(subcommands, registry):
     view = add_leaf(subcommands, registry, "message view", "读取一条精确原文与来源", True)
     view.add_argument("id", type=positive_int, help="消息编号")
     view.add_argument("--request", type=positive_int, help="手动成员：按自己的有效请求限制可读原文")
+    group = add_leaf(subcommands, registry, "message group-plan", "房主读取全体请求、成员、顺序与 revision；安排全体前先读，提交时携带该 revision", True)
+    group.add_argument("id", type=positive_int, help="全体请求的原消息编号")
     post = add_leaf(subcommands, registry, "message post", "提交观点、主持说明、协作回答或代发", True)
     add_text(post, "body")
     post.add_argument("--attachment", action="append", type=attachment_id, default=[],
@@ -240,6 +244,9 @@ def message_commands(subcommands, registry):
                       help="自由房间：主持人点名派活，普通成员提出回应建议（须房主确认）；可重复")
     post.add_argument("--handoff", action="store_true",
                       help="自由房间主持人：与 --to 同用，只点名一位成员时，它做完也回到你这里（如再交评审）；点名多位时总会回到你")
+    post.add_argument("--next-review", type=ai_name, help="主持派实现时声明下一位只读评审；先读 review roster，不可指定本批实现者")
+    post.add_argument("--review-scope", help="本批预授权评审范围，1–2000 字")
+    post.add_argument("--review-roster", help="先读取 review roster 取得的 revision；状态变化须重读")
     post.add_argument("--request", type=positive_int, action="append", default=[],
                       help="自由房间手动接入成员：本次回答完成的请求编号，可重复；不能与 --execution 同用")
     post.add_argument("--reply-to", type=positive_int, help="被引用的原文编号")
@@ -272,13 +279,14 @@ def turn_commands(subcommands, registry):
                     "reorder": "房主调整尚未发言者的顺序（须带 turn order 的 --revision）；已发言与正在发言者不动",
                     "create": "安排一位专家，或用 --plan-file 一次安排整轮（须带最新 --roster）",
                     "continue": "处理用户操作或打断后，按原排队继续下一位",
+                    "ask": "先读 turn roster，再将其中一条主持追问转为普通提问；不改变讨论队列",
                     "cancel": "取消指定未完成安排"}
     for action, description in descriptions.items():
         parser = add_leaf(subcommands, registry, f"turn {action}", description, True)
         if action == "list":
             parser.add_argument("--page", type=positive_int, default=1)
             parser.add_argument("--submission-id", type=submission_id, help="按安排提交编号精确查询结果")
-        elif action not in ("create", "current", "continue", "roster", "order", "reorder"):
+        elif action not in ("create", "current", "continue", "ask", "roster", "order", "reorder"):
             parser.add_argument("id", type=positive_int, help="安排编号")
         if action == "create":
             parser.add_argument("--expert", type=ai_name, help="单个安排的专家；与 --plan-file 二选一")
@@ -291,7 +299,11 @@ def turn_commands(subcommands, registry):
             parser.add_argument("--revision", required=True, help="turn order 返回的 revision；顺序变化后需重新获取")
             parser.add_argument("--member", action="append", type=ai_name, required=True,
                                 help="按新顺序重复指定，须恰好包含 turn order 中 movable 的全部成员")
-        if action == "continue":
+        if action == "ask":
+            parser.add_argument("--request", type=positive_int, required=True, help="turn roster 中 host_requests 的请求编号")
+            parser.add_argument("--expert", type=ai_name, required=True, help="在场且已注册的目标成员，含已发言者和主持人")
+            parser.add_argument("--submission-id", type=submission_id, required=True, help="转交唯一编号；重试沿用原编号与内容")
+        if action in ("continue", "ask"):
             parser.add_argument("--roster", required=True, help="turn roster 返回的 revision；状态变化后须重新读取")
 
 
@@ -303,6 +315,8 @@ def state_commands(subcommands, registry):
     add_text(parser, "body", required=True)
     add_text(parser, "brief")
     parser.add_argument("--until", type=int, required=True, help="实际已读的材料截止编号，可为 0")
+    decision = add_leaf(subcommands, registry, "state decision", "按编号读取本房间一条智能调度判断、完整输入及选项；先读问题原文，再自行判断", True)
+    decision.add_argument("id", type=positive_int, help="任务 scheduler_suggestions 给出的决策记录编号")
 
 
 def run_commands(subcommands, registry):
@@ -313,8 +327,10 @@ def run_commands(subcommands, registry):
             parser.add_argument("--revision", required=True, help="run view 返回的 revision；状态变化后须重新读取")
         if action == "start":
             add_text(parser, "goal")
-            for name in ("max-rounds", "max-minutes", "execution-minutes"):
+            for name in ("max-rounds", "max-minutes"):
                 parser.add_argument(f"--{name}", type=non_negative_int, default=argparse.SUPPRESS)
+            # Accepted so older scripts keep working; one execution has no time limit any more.
+            parser.add_argument("--execution-minutes", type=non_negative_int, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
             parser.add_argument("--submission-id", type=submission_id,
                                 help="可选启动提交编号；重试须沿用编号和原请求")
 
@@ -331,6 +347,19 @@ def execution_commands(subcommands, registry):
 def member_commands(subcommands, registry):
     """Let a manual member announce itself; the CLI attaches the hosting session on its own."""
     add_leaf(subcommands, registry, "member register", "手动接入成员用自己的凭据向房间注册；会话 ID 由本程序自动附带，无需填写", True)
+    capability = add_leaf(subcommands, registry, "member review-capability", "房主读取一个成员的能力事实和 revision；本机服务提交前先读", True)
+    capability.add_argument("id", type=positive_int)
+
+
+def review_commands(subcommands, registry):
+    """Inspect the local service's read-only reviewer facts."""
+    add_leaf(subcommands, registry, "review roster", "房主或主持人读取可核验的只读评审候选；此读取不派发任务", True)
+    ready = add_leaf(subcommands, registry, "review ready", "先读取本批完整交付、评审资格、额度与 revision", True)
+    ready.add_argument("--batch", type=positive_int, required=True)
+    advance = add_leaf(subcommands, registry, "review advance", "先读 review ready，再带 revision 只推进既定评审并处理对应交接", True)
+    advance.add_argument("--batch", type=positive_int, required=True)
+    advance.add_argument("--revision", required=True)
+    advance.add_argument("--submission-id", type=submission_id, required=True)
 
 
 def build_parser(prog="discuss"):
@@ -344,7 +373,7 @@ def build_parser(prog="discuss"):
     for name, register in (("room", room_commands), ("message", message_commands),
                            ("attachment", attachment_commands),
                            ("turn", turn_commands), ("state", state_commands),
-                           ("run", run_commands), ("execution", execution_commands), ("member", member_commands)):
+                           ("run", run_commands), ("execution", execution_commands), ("member", member_commands), ("review", review_commands)):
         group = subcommands.add_parser(name, help=f"{name} 操作", allow_abbrev=False)
         add_common(group)
         register(group.add_subparsers(dest="action", required=True), registry)
@@ -488,6 +517,8 @@ def plan_room(args):
 def plan_message(args):
     """Preserve operator, original author, message role, and replay identifier."""
     base = f"/api/rooms/{args.room}/messages"
+    if args.action == "group-plan":
+        return RequestPlan(f"/api/rooms/{args.room}/recommendations/{args.id}")
     if args.action == "view":
         return RequestPlan(f"{base}/{args.id}", params=read_context_params(args))
     if args.action == "list":
@@ -525,6 +556,9 @@ def plan_message(args):
         payload["to"] = list(dict.fromkeys(args.to))
     if args.handoff:
         payload["handoff"] = True
+    for field in ("next_review", "review_scope", "review_roster"):
+        if getattr(args, field, None) is not None:
+            payload[field] = getattr(args, field)
     if args.reply_to:
         payload["reply_to"] = args.reply_to
     # A hosting Claude Code or Codex session exposes its own ID; the room records it so the local service can take the member over.
@@ -580,6 +614,9 @@ def plan_turn(args):
         return RequestPlan(base + "/turns", "POST", turn_payload(args))
     if args.action == "continue":
         return RequestPlan(base + "/turns/continue", "POST", {"actor": require_actor(args), "revision": args.roster})
+    if args.action == "ask":
+        return RequestPlan(base + "/turns/ask", "POST", {"actor": require_actor(args), "revision": args.roster,
+                           "request_id": args.request, "expert": args.expert, "submission_id": args.submission_id})
     path = f"{base}/turns/{args.id}"
     if args.action == "cancel":
         status = "cancelled"
@@ -609,6 +646,8 @@ def turn_payload(args):
 def plan_state(args):
     """Keep a host summary's cutoff explicit instead of assuming latest means read."""
     base = f"/api/rooms/{args.room}"
+    if args.action == "decision":
+        return RequestPlan(f"{base}/scheduler-decisions/{args.id}")
     if args.action == "view":
         return RequestPlan(base, view="state", params=read_context_params(args))
     if args.until < 0:
@@ -665,9 +704,21 @@ def plan_execution(args):
 
 def plan_member(args):
     """Register with the credential file; the token itself decides which member this is."""
+    if args.action == "review-capability":
+        return RequestPlan(f"/api/rooms/{args.room}/members/{args.id}/review-capability")
     if not load_access(args):
         raise CliError("注册须使用成员自己的凭据文件（--access-file 或 DISCUSS_ACCESS_FILE）")
     return RequestPlan(f"/api/rooms/{args.room}/register", "POST", {})
+
+
+def plan_review(args):
+    """Read eligible reviewers without creating a request or changing permissions."""
+    if args.action == "roster":
+        return RequestPlan(f"/api/rooms/{args.room}/reviews/roster")
+    if args.action == "ready":
+        return RequestPlan(f"/api/rooms/{args.room}/reviews/{args.batch}/ready")
+    return RequestPlan(f"/api/rooms/{args.room}/reviews/advance", "POST", {
+        "actor": require_actor(args), "batch_id": args.batch, "revision": args.revision, "submission_id": args.submission_id})
 
 
 def build_plan(args):
@@ -679,7 +730,7 @@ def build_plan(args):
     handlers = {"room": plan_room, "message": plan_message, "turn": plan_turn,
                 "attachment": plan_attachment,
                 "state": plan_state, "api": plan_api,
-                "run": plan_run, "execution": plan_execution, "member": plan_member}
+                "run": plan_run, "execution": plan_execution, "member": plan_member, "review": plan_review}
     plan = RequestPlan("/api/health") if args.resource == "health" else handlers[args.resource](args)
     if getattr(args, "dry_run", False) and plan.method != "POST" and plan.download_file is None:
         raise CliError("--dry-run 仅用于写入命令；读取命令本身不会修改数据")
@@ -829,7 +880,7 @@ def command_schema(args, registry):
         item = {"name": action.dest, "flags": action.option_strings,
                 "required": action.required, "help": action.help}
         if action.dest == "actor" and name in ("room create", "room update", "message post",
-                                               "turn create", "turn cancel", "state set", "attachment upload"):
+                                               "turn create", "turn cancel", "state set", "attachment upload", "review advance"):
             item["required"] = True
         if action.choices is not None:
             item["choices"] = list(action.choices)

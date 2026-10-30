@@ -130,19 +130,19 @@ test("mention selection replaces the caret token without dropping surrounding dr
 test("mention arrows wrap, Enter selects, Escape dismisses and send modifiers remain available", async () => {
   const fixture = mention_fixture();
   fixture.type("@");
-  assert.deepEqual([...fixture.state.members.value], ["全体成员", "Codex", "Claude-评审"], "several free members offer one @全体成员 first");
+  assert.deepEqual([...fixture.state.members.value], ["全体成员", "全体依次", "Codex", "Claude-评审"], "both group choices precede individual members");
   fixture.key("ArrowUp");
   assert.equal(fixture.state.active.value, "Claude-评审");
   fixture.key("ArrowDown");
   fixture.key("ArrowDown");
-  assert.equal(fixture.state.active.value, "Codex");
+  assert.equal(fixture.state.active.value, "全体依次");
   for (const options of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { isComposing: true }, { keyCode: 229 }]) {
     assert.equal(fixture.key("Enter", options).prevented, false);
     assert.equal(fixture.text.value, "@");
   }
   assert.equal(fixture.key("Enter").stopped, true);
   await nextTick();
-  assert.equal(fixture.text.value, "@Codex ");
+  assert.equal(fixture.text.value, "@全体依次 ");
   fixture.type("@");
   assert.equal(fixture.key("Escape").prevented, true);
   fixture.context.update_mention({ type: "keyup", key: "Escape", target: fixture.editor });
@@ -1451,17 +1451,14 @@ function theme_fixture(saved_theme = null, shared_storage = null) {
   return { context, nodes, classes, storage, loaded, buttons, notified, root: document.documentElement };
 }
 
-test('empty execution limits submit as unlimited and remain clear in the progress label', () => {
+test('discussion limits carry rounds and total time only, with no per-execution limit', () => {
   const { context, nodes } = theme_fixture();
-  for (const [key, value] of Object.entries({ max_rounds: '3', max_minutes: '0', execution_minutes: '' })) {
+  for (const [key, value] of Object.entries({ max_rounds: '3', max_minutes: '0' })) {
     nodes.set(`new-room-limit-${key}`, { value });
   }
   const limits = context.read_limits('new-room');
-  assert.equal(limits.execution_minutes, 0);
-  assert.match(context.limits_label(limits), /单次自动执行 不限时长/);
-  nodes.get('new-room-limit-execution_minutes').value = '10';
-  assert.equal(context.read_limits('new-room').execution_minutes, 10);
-  assert.match(context.limits_label(context.read_limits('new-room')), /单次自动执行 10 分钟/);
+  assert.deepEqual(JSON.parse(JSON.stringify(limits)), { max_rounds: 3, max_minutes: 0 });
+  assert.doesNotMatch(context.limits_label({ ...limits, execution_minutes: 10 }), /单次/);
 });
 
 test('topic editing saves details without changing the discussion phase or a live session limit', async () => {
@@ -1472,7 +1469,7 @@ test('topic editing saves details without changing the discussion phase or a liv
   for (const key of ['title', 'goal', 'focus', 'user_request', 'background', 'boundaries']) {
     nodes.set(`topic-${key}-input`, { value: `${key} edited` });
   }
-  for (const [key, value] of Object.entries({ max_rounds: '7', max_minutes: '30', execution_minutes: '0' })) {
+  for (const [key, value] of Object.entries({ max_rounds: '7', max_minutes: '30' })) {
     nodes.set(`topic-limit-${key}-input`, { value });
   }
   Object.assign(context, { read_expert_inputs: () => experts, topic_member_requests: () => [],

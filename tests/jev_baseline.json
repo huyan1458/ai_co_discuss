@@ -1,9 +1,10 @@
 {
   "provider": "jev",
   "model": "jev-latest",
-  "route_prompt": 7,
-  "discussion_prompt": 2,
-  "ran_at": "2026-10-30T07:35:25.878Z",
+  "route_prompt": 9,
+  "discussion_prompt": 4,
+  "review_prompt": 1,
+  "ran_at": "2026-10-30T16:01:45.740Z",
   "results": [
     {
       "id": "S1a",
@@ -21,7 +22,7 @@
         "__all__": 0,
         "__none__": 0
       },
-      "duration_ms": 3132,
+      "duration_ms": 2136,
       "status": "PASS"
     },
     {
@@ -40,7 +41,7 @@
         "__all__": 0,
         "__none__": 0
       },
-      "duration_ms": 372,
+      "duration_ms": 384,
       "status": "PASS"
     },
     {
@@ -59,7 +60,7 @@
         "__all__": 0,
         "__none__": 0
       },
-      "duration_ms": 363,
+      "duration_ms": 353,
       "status": "PASS"
     },
     {
@@ -78,7 +79,26 @@
         "__all__": 0,
         "__none__": 0
       },
-      "duration_ms": 357,
+      "duration_ms": 770,
+      "status": "PASS"
+    },
+    {
+      "id": "S2c",
+      "scene": "route",
+      "note": "追问主持人本人的回答",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "confidence": 0.98,
+      "expected_probability": 0.98,
+      "probabilities": {
+        "Claude": 0.02,
+        "DeepSeek": 0,
+        "__host__": 0.98,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 424,
       "status": "PASS"
     },
     {
@@ -88,16 +108,16 @@
       "expect": "Claude",
       "choice": "Claude",
       "acted": "Claude",
-      "confidence": 0.94,
-      "expected_probability": 0.94,
+      "confidence": 0.95,
+      "expected_probability": 0.95,
       "probabilities": {
-        "Claude": 0.94,
+        "Claude": 0.95,
         "DeepSeek": 0,
-        "__host__": 0.05,
+        "__host__": 0.04,
         "__all__": 0,
         "__none__": 0.01
       },
-      "duration_ms": 407,
+      "duration_ms": 361,
       "status": "PASS"
     },
     {
@@ -107,16 +127,16 @@
       "expect": "__all__",
       "choice": "__all__",
       "acted": "__all__",
-      "confidence": 0.97,
-      "expected_probability": 0.97,
+      "confidence": 0.95,
+      "expected_probability": 0.95,
       "probabilities": {
         "Claude": 0,
         "DeepSeek": 0,
-        "__host__": 0.03,
-        "__all__": 0.97,
+        "__host__": 0.05,
+        "__all__": 0.95,
         "__none__": 0
       },
-      "duration_ms": 378,
+      "duration_ms": 413,
       "status": "PASS"
     },
     {
@@ -135,7 +155,7 @@
         "__all__": 0.99,
         "__none__": 0
       },
-      "duration_ms": 380,
+      "duration_ms": 384,
       "status": "PASS"
     },
     {
@@ -145,16 +165,16 @@
       "expect": "__host__",
       "choice": "__host__",
       "acted": "__host__",
-      "confidence": 0.89,
-      "expected_probability": 0.89,
+      "confidence": 0.83,
+      "expected_probability": 0.83,
       "probabilities": {
         "Claude": 0,
         "DeepSeek": 0,
-        "__host__": 0.89,
-        "__all__": 0.11,
+        "__host__": 0.83,
+        "__all__": 0.17,
         "__none__": 0
       },
-      "duration_ms": 380,
+      "duration_ms": 359,
       "status": "PASS"
     },
     {
@@ -164,16 +184,16 @@
       "expect": "__host__",
       "choice": "__all__",
       "acted": "__host__",
-      "confidence": 0.61,
-      "expected_probability": 0.39,
+      "confidence": 0.59,
+      "expected_probability": 0.41,
       "probabilities": {
         "Claude": 0,
         "DeepSeek": 0,
-        "__host__": 0.39,
-        "__all__": 0.61,
+        "__host__": 0.41,
+        "__all__": 0.59,
         "__none__": 0
       },
-      "duration_ms": 782,
+      "duration_ms": 392,
       "status": "WEAK"
     },
     {
@@ -192,7 +212,7 @@
         "__all__": 0,
         "__none__": 0.99
       },
-      "duration_ms": 491,
+      "duration_ms": 360,
       "status": "PASS"
     },
     {
@@ -211,7 +231,45 @@
         "__all__": 0,
         "__none__": 0.97
       },
-      "duration_ms": 392,
+      "duration_ms": 366,
+      "status": "PASS"
+    },
+    {
+      "id": "S7",
+      "scene": "route",
+      "note": "用户描述指定唯一负责成员",
+      "expect": "Claude",
+      "choice": "Claude",
+      "acted": "Claude",
+      "confidence": 0.96,
+      "expected_probability": 0.96,
+      "probabilities": {
+        "Claude": 0.96,
+        "DeepSeek": 0,
+        "__host__": 0.04,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 380,
+      "status": "PASS"
+    },
+    {
+      "id": "S7b",
+      "scene": "route",
+      "note": "专长重叠但没有指定分工，交主持人",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "confidence": 0.7,
+      "expected_probability": 0.7,
+      "probabilities": {
+        "Claude": 0.24,
+        "DeepSeek": 0.04,
+        "__host__": 0.7,
+        "__all__": 0.02,
+        "__none__": 0
+      },
+      "duration_ms": 357,
       "status": "PASS"
     },
     {
@@ -221,16 +279,16 @@
       "expect": "__host__",
       "choice": "__host__",
       "acted": "__host__",
-      "confidence": 0.94,
-      "expected_probability": 0.94,
+      "confidence": 0.85,
+      "expected_probability": 0.85,
       "probabilities": {
-        "Claude": 0.04,
-        "DeepSeek": 0,
-        "__host__": 0.94,
-        "__all__": 0.02,
+        "Claude": 0.13,
+        "DeepSeek": 0.01,
+        "__host__": 0.85,
+        "__all__": 0.01,
         "__none__": 0
       },
-      "duration_ms": 476,
+      "duration_ms": 353,
       "status": "PASS"
     },
     {
@@ -249,7 +307,7 @@
         "__all__": 0,
         "__none__": 0
       },
-      "duration_ms": 370,
+      "duration_ms": 362,
       "status": "PASS"
     },
     {
@@ -259,16 +317,16 @@
       "expect": "__host__",
       "choice": "__host__",
       "acted": "__host__",
-      "confidence": 1,
-      "expected_probability": 1,
+      "confidence": 0.99,
+      "expected_probability": 0.99,
       "probabilities": {
         "Claude": 0,
         "DeepSeek": 0,
-        "__host__": 1,
-        "__all__": 0,
+        "__host__": 0.99,
+        "__all__": 0.01,
         "__none__": 0
       },
-      "duration_ms": 366,
+      "duration_ms": 348,
       "status": "PASS"
     },
     {
@@ -287,7 +345,7 @@
         "__all__": 0,
         "__none__": 0
       },
-      "duration_ms": 393,
+      "duration_ms": 365,
       "status": "PASS"
     },
     {
@@ -306,7 +364,7 @@
         "__all__": 0,
         "__none__": 0
       },
-      "duration_ms": 360,
+      "duration_ms": 349,
       "status": "PASS"
     },
     {
@@ -316,13 +374,14 @@
       "expect": "parallel",
       "choice": "parallel",
       "acted": "parallel",
-      "confidence": 1,
-      "expected_probability": 1,
+      "confidence": 0.98,
+      "expected_probability": 0.98,
       "probabilities": {
-        "parallel": 1,
-        "sequential": 0
+        "parallel": 0.98,
+        "sequential": 0.01,
+        "__host__": 0.01
       },
-      "duration_ms": 444,
+      "duration_ms": 356,
       "status": "PASS"
     },
     {
@@ -336,9 +395,10 @@
       "expected_probability": 1,
       "probabilities": {
         "parallel": 0,
-        "sequential": 1
+        "sequential": 1,
+        "__host__": 0
       },
-      "duration_ms": 389,
+      "duration_ms": 367,
       "status": "PASS"
     },
     {
@@ -348,13 +408,14 @@
       "expect": "sequential",
       "choice": "sequential",
       "acted": "sequential",
-      "confidence": 1,
-      "expected_probability": 1,
+      "confidence": 0.98,
+      "expected_probability": 0.98,
       "probabilities": {
         "parallel": 0,
-        "sequential": 1
+        "sequential": 0.98,
+        "__host__": 0.02
       },
-      "duration_ms": 396,
+      "duration_ms": 358,
       "status": "PASS"
     },
     {
@@ -364,13 +425,48 @@
       "expect": "parallel",
       "choice": "parallel",
       "acted": "parallel",
+      "confidence": 0.99,
+      "expected_probability": 0.99,
+      "probabilities": {
+        "parallel": 0.99,
+        "sequential": 0,
+        "__host__": 0.01
+      },
+      "duration_ms": 368,
+      "status": "PASS"
+    },
+    {
+      "id": "G5",
+      "scene": "group",
+      "note": "明确不重叠的修改可以并行",
+      "expect": "parallel",
+      "choice": "parallel",
+      "acted": "parallel",
       "confidence": 1,
       "expected_probability": 1,
       "probabilities": {
         "parallel": 1,
-        "sequential": 0
+        "sequential": 0,
+        "__host__": 0
       },
-      "duration_ms": 376,
+      "duration_ms": 349,
+      "status": "PASS"
+    },
+    {
+      "id": "G6",
+      "scene": "group",
+      "note": "同一文件但分工不明，顺序本身不能解决冲突",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "confidence": 0.83,
+      "expected_probability": 0.83,
+      "probabilities": {
+        "parallel": 0.03,
+        "sequential": 0.14,
+        "__host__": 0.83
+      },
+      "duration_ms": 355,
       "status": "PASS"
     },
     {
@@ -380,15 +476,17 @@
       "expect": "__note__",
       "choice": "__note__",
       "acted": "__note__",
-      "confidence": 0.95,
-      "expected_probability": 0.95,
+      "confidence": 0.97,
+      "expected_probability": 0.97,
       "probabilities": {
-        "Gemini": 0.02,
-        "DeepSeek": 0.02,
+        "Gemini": 0.01,
+        "DeepSeek": 0.01,
+        "Codex": 0,
+        "Claude": 0,
         "__host__": 0.01,
-        "__note__": 0.95
+        "__note__": 0.97
       },
-      "duration_ms": 354,
+      "duration_ms": 351,
       "status": "PASS"
     },
     {
@@ -403,28 +501,32 @@
       "probabilities": {
         "Gemini": 1,
         "DeepSeek": 0,
+        "Codex": 0,
+        "Claude": 0,
         "__host__": 0,
         "__note__": 0
       },
-      "duration_ms": 807,
+      "duration_ms": 397,
       "status": "PASS"
     },
     {
       "id": "I3",
       "scene": "interjection",
-      "note": "追问已发言专家，应交主持人",
-      "expect": "__host__",
-      "choice": "__host__",
-      "acted": "__host__",
-      "confidence": 0.94,
-      "expected_probability": 0.94,
+      "note": "追问已发言专家，转普通提问",
+      "expect": "Codex",
+      "choice": "Codex",
+      "acted": "Codex",
+      "confidence": 1,
+      "expected_probability": 1,
       "probabilities": {
-        "Gemini": 0.02,
+        "Gemini": 0,
         "DeepSeek": 0,
-        "__host__": 0.94,
-        "__note__": 0.04
+        "Codex": 1,
+        "Claude": 0,
+        "__host__": 0,
+        "__note__": 0
       },
-      "duration_ms": 447,
+      "duration_ms": 350,
       "status": "PASS"
     },
     {
@@ -434,15 +536,17 @@
       "expect": "__host__",
       "choice": "__host__",
       "acted": "__host__",
-      "confidence": 0.99,
-      "expected_probability": 0.99,
+      "confidence": 0.98,
+      "expected_probability": 0.98,
       "probabilities": {
         "Gemini": 0,
         "DeepSeek": 0,
-        "__host__": 0.99,
-        "__note__": 0.01
+        "Codex": 0,
+        "Claude": 0,
+        "__host__": 0.98,
+        "__note__": 0.02
       },
-      "duration_ms": 370,
+      "duration_ms": 357,
       "status": "PASS"
     },
     {
@@ -457,10 +561,52 @@
       "probabilities": {
         "Gemini": 0,
         "DeepSeek": 0,
+        "Codex": 0,
+        "Claude": 0,
         "__host__": 0,
         "__note__": 1
       },
-      "duration_ms": 402,
+      "duration_ms": 362,
+      "status": "PASS"
+    },
+    {
+      "id": "I6",
+      "scene": "interjection",
+      "note": "所有人已发言，直接追问主持人观点",
+      "expect": "Claude",
+      "choice": "Claude",
+      "acted": "Claude",
+      "confidence": 0.98,
+      "expected_probability": 0.98,
+      "probabilities": {
+        "Codex": 0.02,
+        "Gemini": 0,
+        "DeepSeek": 0,
+        "Claude": 0.98,
+        "__host__": 0,
+        "__note__": 0
+      },
+      "duration_ms": 352,
+      "status": "PASS"
+    },
+    {
+      "id": "I7",
+      "scene": "interjection",
+      "note": "追问同时要求改目标，交主持协调",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "confidence": 0.92,
+      "expected_probability": 0.92,
+      "probabilities": {
+        "Gemini": 0,
+        "DeepSeek": 0,
+        "Codex": 0.08,
+        "Claude": 0,
+        "__host__": 0.92,
+        "__note__": 0
+      },
+      "duration_ms": 360,
       "status": "PASS"
     },
     {
@@ -470,14 +616,14 @@
       "expect": "Gemini",
       "choice": "Gemini",
       "acted": "Gemini",
-      "confidence": 0.97,
-      "expected_probability": 0.97,
+      "confidence": 0.95,
+      "expected_probability": 0.95,
       "probabilities": {
-        "Gemini": 0.97,
+        "Gemini": 0.95,
         "DeepSeek": 0,
-        "__host__": 0.03
+        "__host__": 0.05
       },
-      "duration_ms": 369,
+      "duration_ms": 361,
       "status": "PASS"
     },
     {
@@ -487,13 +633,13 @@
       "expect": "DeepSeek",
       "choice": "DeepSeek",
       "acted": "DeepSeek",
-      "confidence": 0.96,
-      "expected_probability": 0.96,
+      "confidence": 0.97,
+      "expected_probability": 0.97,
       "probabilities": {
-        "DeepSeek": 0.96,
-        "__host__": 0.04
+        "DeepSeek": 0.97,
+        "__host__": 0.03
       },
-      "duration_ms": 399,
+      "duration_ms": 386,
       "status": "PASS"
     },
     {
@@ -503,13 +649,13 @@
       "expect": "__host__",
       "choice": "__host__",
       "acted": "__host__",
-      "confidence": 0.75,
-      "expected_probability": 0.75,
+      "confidence": 0.66,
+      "expected_probability": 0.66,
       "probabilities": {
-        "DeepSeek": 0.25,
-        "__host__": 0.75
+        "DeepSeek": 0.34,
+        "__host__": 0.66
       },
-      "duration_ms": 756,
+      "duration_ms": 347,
       "status": "PASS"
     },
     {
@@ -525,8 +671,16 @@
         "continue": 0.99,
         "__host__": 0.01
       },
-      "duration_ms": 376,
-      "status": "PASS"
+      "duration_ms": 344,
+      "status": "PASS",
+      "expect_first": "Codex",
+      "first_choice": "Codex",
+      "first": "Codex",
+      "first_probabilities": {
+        "Codex": 0.98,
+        "Gemini": 0.01,
+        "__host__": 0.01
+      }
     },
     {
       "id": "R2",
@@ -535,13 +689,13 @@
       "expect": "__host__",
       "choice": "__host__",
       "acted": "__host__",
-      "confidence": 0.86,
-      "expected_probability": 0.86,
+      "confidence": 0.88,
+      "expected_probability": 0.88,
       "probabilities": {
-        "continue": 0.14,
-        "__host__": 0.86
+        "continue": 0.12,
+        "__host__": 0.88
       },
-      "duration_ms": 365,
+      "duration_ms": 352,
       "status": "PASS"
     },
     {
@@ -557,8 +711,144 @@
         "continue": 0.14,
         "__host__": 0.86
       },
-      "duration_ms": 366,
+      "duration_ms": 359,
       "status": "PASS"
+    },
+    {
+      "id": "V1",
+      "scene": "review",
+      "note": "实现及明确要求的测试均已完成",
+      "expect": "review",
+      "choice": "review",
+      "acted": "review",
+      "confidence": 0.98,
+      "expected_probability": 0.98,
+      "probabilities": {
+        "review": 0.98,
+        "__host__": 0.02
+      },
+      "duration_ms": 357,
+      "status": "PASS"
+    },
+    {
+      "id": "V2",
+      "scene": "review",
+      "note": "多人各自完成分工后交既定评审",
+      "expect": "review",
+      "choice": "review",
+      "acted": "review",
+      "confidence": 0.98,
+      "expected_probability": 0.98,
+      "probabilities": {
+        "review": 0.98,
+        "__host__": 0.02
+      },
+      "duration_ms": 353,
+      "status": "PASS"
+    },
+    {
+      "id": "V3",
+      "scene": "review",
+      "note": "部分交付不能转评审",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "confidence": 1,
+      "expected_probability": 1,
+      "probabilities": {
+        "review": 0,
+        "__host__": 1
+      },
+      "duration_ms": 367,
+      "status": "PASS"
+    },
+    {
+      "id": "V4",
+      "scene": "review",
+      "note": "明确要求的验证尚未做",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "confidence": 1,
+      "expected_probability": 1,
+      "probabilities": {
+        "review": 0,
+        "__host__": 1
+      },
+      "duration_ms": 359,
+      "status": "PASS"
+    },
+    {
+      "id": "V5",
+      "scene": "review",
+      "note": "交付仍待用户澄清",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "confidence": 1,
+      "expected_probability": 1,
+      "probabilities": {
+        "review": 0,
+        "__host__": 1
+      },
+      "duration_ms": 355,
+      "status": "PASS"
+    },
+    {
+      "id": "V6",
+      "scene": "review",
+      "note": "代码正确性留给评审者判断",
+      "expect": "review",
+      "choice": "review",
+      "acted": "review",
+      "confidence": 0.97,
+      "expected_probability": 0.97,
+      "probabilities": {
+        "review": 0.97,
+        "__host__": 0.03
+      },
+      "duration_ms": 376,
+      "status": "PASS"
+    },
+    {
+      "id": "V7",
+      "scene": "review",
+      "note": "笼统完成声明与具体未完成事项冲突",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "confidence": 1,
+      "expected_probability": 1,
+      "probabilities": {
+        "review": 0,
+        "__host__": 1
+      },
+      "duration_ms": 389,
+      "status": "PASS"
+    },
+    {
+      "id": "R4",
+      "scene": "round",
+      "note": "有未决分歧但没有明确首位，不自动补位",
+      "expect": "continue",
+      "choice": "__host__",
+      "acted": "__host__",
+      "confidence": 0.62,
+      "expected_probability": 0.38,
+      "probabilities": {
+        "continue": 0.38,
+        "__host__": 0.62
+      },
+      "duration_ms": 341,
+      "status": "WEAK",
+      "expect_first": "__host__",
+      "first_choice": "__host__",
+      "first": null,
+      "first_probabilities": {
+        "Codex": 0,
+        "Gemini": 0,
+        "__host__": 1
+      }
     }
   ]
 }

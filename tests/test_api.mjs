@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { API_PROVIDERS, api_base_url, api_check, api_generate, api_status_message, api_history, api_models, api_request, api_response, api_tool_results, read_api_key, save_api_key } from '../runner/discussion_api.mjs';
-import { participant_tools, system_prompt } from '../runner/api_participant.mjs';
+import { api_delivery, participant_tools, system_prompt } from '../runner/api_participant.mjs';
 import { launch_discussion } from '../runner/discussion_launch.mjs';
 import { api, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
@@ -175,6 +175,81 @@ async function start_free_session(t, { participants, host, title, scheduler, fix
   return { f, started, config, store, runner, log, session: session.session };
 }
 
+test('API host reads original review evidence and advances its preauthorized batch without another answer', async t => {
+  const f = await site_fixture(t);
+  let step = 0, batch_id;
+  const mock = await model_fixture(t, call => {
+    assert.equal(room_prompt(call).task.review_handoffs[0].batch_id, batch_id);
+    if (step++ === 0) return tool_reply(call, 'read_review_ready', { batch_id });
+    const evidence = JSON.parse(call.body.input.findLast(item => item.type === 'function_call_output').output);
+    assert.equal(evidence.deliveries[0].answer, '实现和测试已完成');
+    return tool_reply(call, 'advance_review', { batch_id });
+  });
+  const { Grok } = profiles(f.home, mock.base_url);
+  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: { Grok },
+    room: { title: 'API 评审交接', mode: 'free', host: 'Grok', members: ['Grok'], submission_id: randomUUID() } },
+  { start_service: async () => ({ running: true }) });
+  const config = load_config(started.config_path), host_config = { ...config, token: config.members.Grok.token };
+  mkdirSync(config.directory, { recursive: true });
+  const implementer_token = randomUUID(), reviewer_token = randomUUID();
+  await api(config, '/members', { name: 'Gemini', adapter: 'api', token: implementer_token });
+  await api(config, '/members', { name: 'Codex-评审', adapter: 'codex_cli', token: reviewer_token });
+  const members = (await api(config, '/inbox')).members;
+  const id = name => members.find(item => item.name === name).id;
+  const capability_path = `/members/${id('Codex-评审')}/review-capability`;
+  await api(config, capability_path, { revision: (await api(config, capability_path)).revision, read_only: true, config_version: 'a'.repeat(64) });
+  await api(config, '/messages', { author: '用户', text: '实现导入', submission_id: randomUUID() });
+  const initial = await api(config, '/executions', { member_id: id('Grok'), client_id: randomUUID() });
+  const dispatched = await api(host_config, '/messages', { author: 'Grok', source: 'cli', text: '实现导入并测试', execution_id: initial.id,
+    to: ['Gemini'], next_review: 'Codex-评审', review_scope: '核对导入', review_roster: (await api(host_config, '/reviews/roster')).revision, submission_id: randomUUID() });
+  batch_id = dispatched.message.id;
+  const work = await api(config, '/executions', { member_id: id('Gemini'), client_id: randomUUID() });
+  await api({ ...config, token: implementer_token }, '/messages', { author: 'Gemini', source: 'cli', text: '实现和测试已完成', execution_id: work.id, submission_id: randomUUID() });
+  const handoff = await api(config, '/executions', { member_id: id('Grok'), client_id: randomUUID() });
+  let ended = false, failure = '';
+  await api_delivery(Grok, {}, { participant: 'Grok', directory: config.directory, id: 'review-api-test',
+    api_context: { site: config.site, room: config.room, token: host_config.token, home: f.home, mode: 'free', role: 'host',
+      execution_id: handoff.id, requests: handoff.requests, review_handoffs: [{ batch_id, ready: true }] },
+    on_exit: () => { ended = true; }, on_failure: error => { failure = error; } });
+  await until(() => ended);
+  assert.equal(failure, '');
+  assert.equal(step, 2);
+  assert.equal((await api(config, `/executions/${handoff.id}`)).status, 'completed');
+  const ready = await api(host_config, `/reviews/${batch_id}/ready`);
+  assert.equal(ready.plan.status, 'advanced');
+  assert.equal((await api(config, '/messages')).messages.filter(item => item.author === 'Grok').length, 1);
+});
+
+test('API host reads roster and converts one interjection while completing its other host work', async t => {
+  const f = await site_fixture(t);
+  let step = 0;
+  const mock = await model_fixture(t, call => {
+    const { task } = room_prompt(call);
+    if (task.role !== 'host') return tool_reply(call, 'submit_chat', { text: '普通追问的回答。' });
+    if (step++ === 0) return tool_reply(call, 'read_roster');
+    if (step === 2) {
+      const output = call.body.input.findLast(message => message.type === 'function_call_output');
+      const roster = JSON.parse(output.output);
+      assert.equal(roster.host_requests.length, 1);
+      return tool_reply(call, 'ask_interjection', { request_id: roster.host_requests[0].id, expert: 'DeepSeek' });
+    }
+    const output = call.body.input.findLast(message => message.type === 'function_call_output');
+    const converted = JSON.parse(output.output);
+    assert.equal(converted.request.purpose, 'ask');
+    assert.equal(converted.execution_completed, false, 'the initial host request still belongs to this execution');
+    return tool_reply(call, 'submit_chat', { text: '已处理本次其余主持请求。' });
+  });
+  const { Grok, DeepSeek } = profiles(f.home, mock.base_url);
+  const r = await start_free_session(t, { fixture: f, participants: { Grok, DeepSeek }, host: 'Grok', title: '普通追问 API' });
+  const user = await api(r.config, '/messages', { author: '用户', text: 'DeepSeek，请解释你的观点', submission_id: randomUUID() });
+  await until(async () => (await api(r.config, '/messages')).messages.some(message => message.author === 'DeepSeek'), () => r.runner.tick());
+  const discussion = await api(r.config, '/discussion');
+  const answer = (await api(r.config, '/messages')).messages.find(message => message.author === 'DeepSeek');
+  assert.equal(answer.request_message_id, user.message.id);
+  assert.equal(discussion.session.answered, 0);
+  assert.equal(step, 3);
+});
+
 test('API host schedules a real session round and providers answer through execution-bound chat writes', async t => {
   const f = await site_fixture(t);
   const host_steps = new Map();
@@ -326,7 +401,20 @@ test('smart scheduling holds the host until its decision, and a confident pick r
 
 test('smart scheduling below the confidence threshold leaves no recommendation', async t => {
   const f = await site_fixture(t);
-  const mock = await model_fixture(t, call => tool_reply(call, 'submit_chat', { text: '主持人处理。', summary: '已处理。' }));
+  let host_reads = 0;
+  const mock = await model_fixture(t, call => {
+    const suggestion = room_prompt(call).task.scheduler_suggestions[0];
+    assert.equal(suggestion.applied, false);
+    assert.ok(suggestion.request_id && suggestion.message_id && suggestion.decision_id);
+    assert.equal('confidence' in suggestion || 'probabilities' in suggestion, false);
+    if (host_reads++ === 0) return tool_reply(call, 'read_decision', { id: suggestion.decision_id });
+    const result = call.body.input.findLast(message => message.type === 'function_call_output');
+    const decision = JSON.parse(result.output);
+    assert.equal(decision.id, suggestion.decision_id);
+    assert.equal(decision.detail[0].choice, 'DeepSeek');
+    assert.ok(decision.input.state.includes('大家看看下一步做什么'));
+    return tool_reply(call, 'submit_chat', { text: '主持人处理。', summary: '已处理。' });
+  });
   const { Grok, DeepSeek } = profiles(f.home, mock.base_url);
   const scheduler = { provider: 'decisions', model: 'gpt-6-luna', ...save_api_key(f.home, { base_url: 'https://api.openai.com/v1', api_key: SECRET }) };
   const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: { Grok, DeepSeek }, scheduler,
@@ -413,7 +501,9 @@ test('API participants load the shared skills and map CLI commands onto their ro
   assert.doesNotMatch(expert, /# 讨论主持/);
   assert.doesNotMatch(expert, /arrange_turns/, 'experts are not told about host tools');
   for (const prompt of [host, expert, free]) assert.match(prompt, /内容你都读不到：以其他成员贴出的为准，不凭文件名猜测/);
-  assert.match(free, /submit_chat。 派活用 to；只点名一位且要它做完后回到你时加 handoff/);
+  assert.match(free, /message post --kind chat → submit_chat/);
+  assert.match(free, /派活用 to；只点名一位且要它做完后回到你时加 handoff/);
+  assert.match(host, /turn roster → read_roster，读后 turn ask → ask_interjection/);
   assert.match(free, /# 开发协作/, 'an API free-room host cannot open references, so it gets the development reference inline');
   assert.doesNotMatch(expert, /# 开发协作/);
   assert.match(free, /# 自由协作主持/);

@@ -51,6 +51,106 @@ class DiscussionTests(unittest.TestCase):
         self.thread.join()
         self.directory.cleanup()
 
+    def create_group_room(self):
+        """Create an isolated group request without starting a runner or model, also usable against a test Worker."""
+        names = ["Claude", "Codex", "Gemini"]
+        status, room = self.request("/api/rooms", {"title": "全体安排校验", "mode": "free", "host": "Claude",
+            "members": [{"name": name, "access": "runner", "token": self.member_tokens[name]} for name in names]})
+        self.assertEqual(status, 201, room)
+        path = f"/api/rooms/{room['id']}"
+        message = self.request(path + "/messages", {"author": "用户", "text": "全体处理原问题", "to": names,
+            "order": "auto", "submission_id": uuid.uuid4().hex})[1]["message"]["id"]
+        return path, message
+
+    def test_group_host_fallback_is_durable_idempotent_and_keeps_original_request(self):
+        """A single pending group becomes a deliverable route, with the original source and a durable routing marker."""
+        path, message = self.create_group_room()
+        url = f"{path}/recommendations/{message}"
+        plan = self.request(url)[1]
+        before = self.request(path)[1]["free"]["requests"][0]
+        self.assertEqual(self.request(url, {"action": "host"}, token=self.member_tokens["Claude"])[0], 403)
+        status, result = self.request(url, {"action": "host"})
+        self.assertEqual(status, 200, result)
+        after = self.request(path)[1]["free"]["requests"][0]
+        self.assertEqual([after[key] for key in ("id", "message_id", "chain_id", "created_by")],
+                         [before[key] for key in ("id", "message_id", "chain_id", "created_by")])
+        self.assertEqual(after["purpose"], "route")
+        inbox = self.request(path + "/inbox")[1]
+        host = next(member for member in inbox["members"] if member["role"] == "host")
+        self.assertEqual(host["pending"][0]["group_action"], "host")
+        status, execution = self.request(path + "/executions", {"member_id": host["id"], "client_id": uuid.uuid4().hex})
+        self.assertEqual(status, 200, execution)
+        self.assertEqual(execution["requests"][0]["id"], plan["request"]["id"])
+        self.assertEqual(self.request(url, {"action": "host"}), (200, result))
+        self.assertEqual(self.request(url)[1]["result"], result)
+        self.assertEqual(self.request(url, {"action": "all", "revision": plan["revision"]})[0], 409)
+
+    def test_group_writes_require_the_judged_members_order_and_messages(self):
+        """No revision is 400; changed members, order or messages are 409 and never create everyone's requests."""
+        for change in ("members", "order", "message"):
+            with self.subTest(change=change):
+                path, message = self.create_group_room()
+                url = f"{path}/recommendations/{message}"
+                plan = self.request(url)[1]
+                self.assertEqual(self.request(url, {"action": "all"})[0], 400)
+                self.assertEqual(self.request(url, {"action": "sequential"})[0], 400)
+                if change == "members":
+                    target = next(member for member in plan["members"] if member["name"] == "Gemini")
+                    self.assertEqual(self.request(f"{path}/members/{target['id']}", {"action": "away"})[0], 200)
+                elif change == "order":
+                    order = self.request(path + "/speaking-order")[1]
+                    self.assertEqual(self.request(path + "/speaking-order", {"revision": order["revision"], "order": list(reversed(order["movable"]))})[0], 200)
+                else:
+                    self.assertEqual(self.request(path + "/messages", {"author": "用户", "text": "先等一下，要求有变", "submission_id": uuid.uuid4().hex})[0], 201)
+                for action in ("all", "sequential"):
+                    self.assertEqual(self.request(url, {"action": action, "revision": plan["revision"]})[0], 409)
+                current = self.request(path)[1]["free"]["requests"]
+                self.assertEqual([(item["purpose"], item["status"]) for item in current if item["message_id"] == message], [("group", "pending")])
+                self.assertEqual(self.request(url, {"action": "host"})[0], 200)
+
+    def test_group_parallel_and_sequential_retries_return_the_same_result(self):
+        """Concurrent duplicate writes arrange a group once; cancelled groups never become host requests."""
+        for action in ("all", "sequential"):
+            with self.subTest(action=action):
+                path, message = self.create_group_room()
+                url = f"{path}/recommendations/{message}"
+                plan = self.request(url)[1]
+                payload = {"action": action, "revision": plan["revision"]}
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    results = list(pool.map(lambda _: self.request(url, payload), range(2)))
+                self.assertEqual(results[0][0], 200, results)
+                self.assertEqual(results[0], results[1])
+                requests = self.request(path)[1]["free"]["requests"]
+                self.assertEqual(len(requests), 3 if action == "all" else 1)
+                self.assertTrue(all(item["purpose"] == ("all" if action == "all" else "ask") for item in requests))
+        path, message = self.create_group_room()
+        host = self.request(path + "/inbox")[1]["members"][0]
+        self.assertEqual(self.request(f"{path}/members/{host['id']}/interrupt", {"reason": "停止"})[0], 200)
+        self.assertEqual(self.request(f"{path}/recommendations/{message}", {"action": "host"})[0], 409)
+
+    def test_scheduler_decision_read_is_exact_room_bound_and_not_recent_only(self):
+        """A host can retrieve old model evidence without accidentally reading another room's record."""
+        path, message = self.create_group_room()
+        payload = {"kind": "interjection", "label": "未自动生效", "confidence": 0.4, "applied": False,
+                   "provider": "jev", "after_message_id": message, "detail": [{"choice": "__host__"}],
+                   "context": {"prompt": 9}, "input": {"state": "原问题与成员事实", "questions": []}}
+        first = self.request(path + "/scheduler-decisions", payload)[1]
+        for _ in range(100):
+            self.assertEqual(self.request(path + "/scheduler-decisions", payload)[0], 200)
+        self.assertNotIn(first["id"], [item["id"] for item in self.request(path)[1]["scheduler_decisions"]])
+        status, result = self.request(f"{path}/scheduler-decisions/{first['id']}", token=self.member_tokens["Claude"])
+        self.assertEqual(status, 200, result)
+        for key in ("input", "detail", "context"):
+            self.assertEqual(result[key], payload[key])
+        other, _ = self.create_group_room()
+        self.assertEqual(self.request(f"{other}/scheduler-decisions/{first['id']}")[0], 404)
+        state = self.request(path + "/discussion")[1]
+        self.assertEqual(self.request(path + "/discussion", {"action": "start", "revision": state["revision"], "goal": "独立观点"})[0], 200)
+        roster = self.request(path + "/turns/roster")[1]
+        self.assertEqual(self.request(path + "/turns", {"actor": "Claude", "expert": "Codex", "question": "独立回答",
+            "roster": roster["revision"], "submission_id": uuid.uuid4().hex}, token=self.member_tokens["Claude"])[0], 201)
+        self.assertEqual(self.request(f"{path}/scheduler-decisions/{first['id']}", token=self.member_tokens["Codex"])[0], 403)
+
     def test_browser_update_stream_reports_only_successful_committed_writes(self):
         """Independent subscribers see committed changes and can reconnect without a cursor."""
         if self.external:
@@ -255,7 +355,7 @@ class DiscussionTests(unittest.TestCase):
         tables = snapshot["tables"]
         self.assertEqual(set(tables), {"rooms", "room_directory", "room_folder_assignments", "topic_folders", "room_creations",
                                       "room_briefs", "room_user_requests", "topic_settings", "discussion_limits", "messages", "message_withdrawals", "message_details", "message_summaries", "message_timings", "discussion_turns", "attachments", "room_modes", "room_members", "member_requests", "member_suggestions", "member_recommendations",
-                                      "discussion_options", "round_budgets", "scheduler_decisions",
+                                      "discussion_options", "round_budgets", "scheduler_decisions", "review_plans",
                                       "discussion_sessions", "discussion_conclusions", "session_requests",
                                       "task_message_sources", "session_state", "session_limits",
                                       "session_round_budgets", "session_options", "session_pauses"})
@@ -1146,6 +1246,57 @@ class DiscussionTests(unittest.TestCase):
         roster = self.request(base + "/turns/roster")[1]
         payload = {"actor": "Codex", "expert": "Gemini", "question": "请检查尚未解决的分歧", "submission_id": submission_id}
         return self.request(base + "/turns", {**payload, "roster": roster.get("revision"), **changes})
+
+    def test_interjection_ask_keeps_queue_and_other_host_requests(self):
+        """Versioned conversion closes only one source, even when a host execution contains two."""
+        self.configure_host(experts={"Codex": "cli", "Gemini": "online", "Claude": "online"})
+        base = f"/api/rooms/{self.room['id']}"
+        self.schedule("ask-queue-plan", turns=[{"expert": name, "question": "请分析"} for name in ("Gemini", "Claude")])
+        first = self.post("请解释第一处风险", "ask-source-one")[1]["message"]["id"]
+        stale = self.request(base + "/turns/roster")[1]
+        second = self.post("请解释第二处风险", "ask-source-two")[1]["message"]["id"]
+        binding = self.reserve_member("Codex")
+        roster = self.request(base + "/turns/roster")[1]
+        source = next(item for item in roster["host_requests"] if item["message_id"] == first)
+        payload = {"actor": "Codex", "request_id": source["id"], "expert": "Gemini", "submission_id": "ask-convert-one"}
+        self.assertEqual(self.request(base + "/turns/ask", payload)[0], 400)
+        self.assertEqual(self.request(base + "/turns/ask", {**payload, "revision": stale["revision"]})[0], 409)
+        payload["revision"] = roster["revision"]
+        self.assertEqual(self.request(base + "/turns/ask", {**payload, "actor": "Claude"})[0], 403)
+        status, result = self.request(base + "/turns/ask", payload)
+        self.assertEqual(status, 201, result)
+        self.assertEqual((result["request"]["purpose"], result["request"]["message_id"]), ("ask", first))
+        self.assertFalse(result["execution_completed"])
+        latest = self.request(base + "/turns/roster")[1]
+        self.assertEqual((latest["queue"], latest["waiting"]), (roster["queue"], roster["waiting"]))
+        self.assertEqual([item["message_id"] for item in latest["host_requests"]], [second])
+        self.assertEqual(latest["held_since"], second)
+        self.assertTrue(self.request(base + "/turns/ask", payload)[1]["duplicate"])
+        self.assertEqual(self.request(base + "/turns/ask", {**payload, "expert": "Codex"})[0], 409)
+        second_payload = {**payload, "request_id": latest["host_requests"][0]["id"], "expert": "Codex",
+                          "revision": latest["revision"], "submission_id": "ask-convert-two"}
+        status, result = self.request(base + "/turns/ask", second_payload)
+        self.assertEqual(status, 201, result)
+        self.assertTrue(result["execution_completed"])
+        self.assertTrue(self.request(base + "/turns/ask", second_payload)[1]["execution_completed"])
+        self.assertEqual(self.request(base + "/turns/roster")[1]["held_since"], 0)
+        self.assertEqual(self.request(base + f"/executions/{binding['execution_id']}")[1]["status"], "completed")
+
+    def test_interjection_ask_can_target_an_already_spoken_member(self):
+        """An answered expert gets an ordinary request without opening a new round."""
+        self.configure_host()
+        base = f"/api/rooms/{self.room['id']}"
+        plan = self.schedule("ask-spoken-plan")[1]["turn"]
+        self.assertEqual(self.request(base + "/messages", {"author": "Gemini", "submitted_by": "用户", "kind": "chat",
+            "request_ids": [plan["member_request_id"]], "text": "观点", "submission_id": "ask-spoken-answer"})[0], 201)
+        self.post("你说的数字有什么来源？", "ask-spoken-user")
+        roster = self.request(base + "/turns/roster")[1]
+        self.assertEqual(roster["waiting"], [])
+        status, result = self.request(base + "/turns/ask", {"actor": "Codex", "expert": "Gemini",
+            "request_id": roster["host_requests"][0]["id"], "revision": roster["revision"], "submission_id": "ask-spoken-convert"})
+        self.assertEqual(status, 201, result)
+        after = self.request(base + "/turns/roster")[1]
+        self.assertEqual((after["round"], after["queue"], after["waiting"]), (roster["round"], roster["queue"], []))
 
     def test_user_request_is_preserved_separately_through_writes_and_backup(self):
         """Keep original whitespace, enforce bounds, and include it in replay checks."""

@@ -86,6 +86,12 @@ Agents also use `codiscuss` to read and write rooms. `codiscuss --help` lists al
 
 Discussion turns and everyday collaboration use the same request and execution flow. Automatic members are woken by the local service; manual members read and answer with their own credential. The discussion host reads the current roster before scheduling speakers.
 
+When a host task includes scheduling suggestions, `state decision ROOM DECISION_ID` retrieves the original judgment. A suggestion marked as unapplied still requires the host's own decision.
+
+Hosts can inspect local read-only reviewer configuration with `codiscuss review roster ROOM`. Currently this includes program-started Codex CLI members only. The command does not dispatch reviews or replace permission checks at delivery.
+
+After reading the roster, an implementation dispatch may include `--next-review NAME --review-scope SCOPE --review-roster REVISION` to bind one reviewer to that batch. The reviewer must not be an implementer in the same batch. After completion, the host reads `review ready ROOM --batch ID`, then uses `review advance ROOM --batch ID --revision REV --submission-id UUID --as HOST` to advance the authorized review. Blocked reviews include a reason. Smart Scheduling can perform this step; without it, or on failed or uncertain judgments, the host handles the handoff.
+
 ## Troubleshooting
 
 - **A delivery failed** — the room retries automatically up to three times. You can retry immediately or stop it from the failure card. After three failed attempts, the host receives the failure and decides whether to skip, reschedule or pause the discussion; the room does not pause automatically.

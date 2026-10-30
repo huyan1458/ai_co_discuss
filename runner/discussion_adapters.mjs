@@ -21,7 +21,7 @@ const CLI_MAX_RUN_MS = 2 * 60 * 60_000;
 const INBOX_CHECK_MS = 90_000;
 const CODEX_PERMISSIONS_MIN_MINOR = 163;
 /** Website subcommands an automatic task may run; service, launch, run, api and setup stay unapproved. */
-export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'execution', 'health', 'schema'];
+export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'review', 'execution', 'health', 'schema'];
 
 // Defined with the fixed task text so the expert prompt dialog shows the same rules; re-exported for existing callers.
 export { agy_command_rule, runs_commands };
@@ -856,6 +856,10 @@ async function cli_delivery(config, binding, task, spawn_process, user_home) {
     task.on_trace?.('permission_check_start');
     await check_codex_permissions(config, task, invocation.permissions, spawn_process);
     task.on_trace?.('permission_check_done');
+  }
+  if (task.before_model_start) {
+    try { await task.before_model_start(); }
+    catch (error) { throw not_sent(error); }
   }
   if (invocation.project) {
     const on_binding = task.on_binding;

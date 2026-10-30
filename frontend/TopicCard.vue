@@ -14,7 +14,7 @@ const topic = computed(() => {
   const request = value.user_request?.trim() ? { label: "用户原文", text: value.user_request } : value.background?.trim() ? { label: "背景", text: value.background } : null;
   const experts = Object.entries(value.experts || {}).map(([name]) => ({ name, mode: bridge.participant_access(name, value) }));
   const limits = value.limits || {};
-  const bounds = !value.session ? `自由协作 · 单次执行最多 ${value.free?.execution_minutes || 20} 分钟`
+  const bounds = !value.session ? "自由协作"
     : [limits.max_rounds ? `${limits.max_rounds} 轮` : "轮次不限", limits.max_minutes ? `${limits.max_minutes} 分钟` : "时长不限",
       value.session.status === "concluded" ? "讨论已结束" : "全自动"].join(" · ");
   return { request, goal: value.session?.goal || value.goal, boundaries: value.boundaries, host: value.host, experts, bounds };

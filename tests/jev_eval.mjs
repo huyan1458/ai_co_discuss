@@ -9,7 +9,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { saved_api_keys } from '../runner/discussion_api.mjs';
 import { service_home } from '../runner/discussion_service.mjs';
-import { DISCUSSION_PROMPT_VERSION, ROUTE_PROMPT_VERSION, SCHEDULER_PROVIDERS, decide_group_order, decide_interjection,
+import { DISCUSSION_PROMPT_VERSION, REVIEW_PROMPT_VERSION, ROUTE_PROMPT_VERSION, SCHEDULER_PROVIDERS, decide_group_order, decide_interjection, decide_review_completion,
   decide_next_speaker, decide_round, route_free_message } from '../runner/scheduler.mjs';
 
 const { values: options } = parseArgs({ options: { provider: { type: 'string', default: 'jev' }, model: { type: 'string' },
@@ -27,6 +27,13 @@ async function run_case(item) {
   const context = item.context || [];
   const message = { id: Math.max(0, ...context.map(entry => entry.id)) + 1, author: '用户', text: item.message, reply_to: item.reply_to };
   const free = fixtures.free;
+  if (item.scene === 'review') {
+    const result = await decide_review_completion(home, scheduler, { ready: true, original: { id: 1, author: '主持人', text: item.original },
+      plan: { reviewer_name: 'Codex-评审', scope: '核对本批实现和验证' },
+      deliveries: item.answers.map((answer, index) => ({ member: String.fromCharCode(65 + index), status: 'completed', answer,
+        execution_status: item.reports[index], result: item.reports[index] })) });
+    return { result, acted: result.action === 'review' ? 'review' : '__host__' };
+  }
   const talk = { ...fixtures.discussion, brief: item.brief ?? fixtures.discussion.brief, arrangement: item.arrangement, context };
   if (item.scene === 'route') {
     const result = await route_free_message(home, scheduler, { title: free.title, goal: free.goal, context, message, host: free.host, members: item.members || free.members });
@@ -39,7 +46,8 @@ async function run_case(item) {
     return { result, acted: { all: 'parallel', sequential: 'sequential' }[result.action] || '__host__' };
   }
   if (item.scene === 'interjection') {
-    const result = await decide_interjection(home, scheduler, { ...talk, message, experts: item.waiting, spoken: item.spoken });
+    const experts = [...new Set([...(item.waiting || []), ...(item.spoken || []), talk.host])];
+    const result = await decide_interjection(home, scheduler, { ...talk, message, experts, spoken: item.spoken });
     return { result, acted: { ask: result.expert, note: '__note__' }[result.action] || '__host__' };
   }
   if (item.scene === 'next_speaker') {
@@ -91,8 +99,8 @@ for (const item of selected) {
   }
 }
 const count = status => results.filter(item => item.status === status).length;
-console.log(`\n${scheduler.provider}/${scheduler.model} · 路由提示版本 ${ROUTE_PROMPT_VERSION} · 讨论提示版本 ${DISCUSSION_PROMPT_VERSION} · `
+console.log(`\n${scheduler.provider}/${scheduler.model} · 路由提示版本 ${ROUTE_PROMPT_VERSION} · 讨论提示版本 ${DISCUSSION_PROMPT_VERSION} · 评审提示版本 ${REVIEW_PROMPT_VERSION} · `
   + `PASS ${count('PASS')} / WEAK ${count('WEAK')} / FAIL ${count('FAIL')} / ERROR ${count('ERROR')}，共 ${results.length} 条`);
 if (options.out) writeFileSync(options.out, JSON.stringify({ provider: scheduler.provider, model: scheduler.model, route_prompt: ROUTE_PROMPT_VERSION,
-  discussion_prompt: DISCUSSION_PROMPT_VERSION, ran_at: new Date().toISOString(), results }, null, 2));
+  discussion_prompt: DISCUSSION_PROMPT_VERSION, review_prompt: REVIEW_PROMPT_VERSION, ran_at: new Date().toISOString(), results }, null, 2));
 if (count('FAIL') || count('ERROR')) process.exitCode = 1;

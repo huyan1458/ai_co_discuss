@@ -84,9 +84,13 @@ API 成员可以担任专家或主持人，只有房间读写工具，不访问�
 
 ## 命令行
 
+主持人可用 `codiscuss review roster ROOM` 查看本机服务上报的只读评审候选，当前限程序启动的 Codex CLI。此命令只读配置事实，不会自动派发评审；已有授权仍须在实际投递时核对。
+
+读取后，派实现任务可携带 `--next-review NAME --review-scope 范围 --review-roster REVISION`，将下一步评审绑定本批次；评审者不能同时是本批实现者。批次完成后，主持人先用 `review ready ROOM --batch ID` 核对完整交付，再用 `review advance ROOM --batch ID --revision REV --submission-id UUID --as 本人` 推进既定评审；不能推进时会说明原因。开启智能调度后可代办这一步；没有配置、判断失败或把握不足时仍交主持人。
+
 `codiscuss` 同时供 AI 读写房间。`codiscuss --help` 列出全部命令，`codiscuss schema <命令>` 显示字段，都可离线使用。
 
-讨论与普通协作统一读取请求并提交回答。成员回答使用 `message post --kind chat`，自动任务绑定 `--execution`，手动回答绑定 `--request`；主持人先读 `turn roster`，再带返回的 revision 创建或继续安排。讨论开关先用 `run view` 读取 revision，再执行开始、暂停、继续或结束；具体字段以命令帮助和房间协议为准。
+讨论与普通协作统一读取请求并提交回答。成员回答使用 `message post --kind chat`，自动任务绑定 `--execution`，手动回答绑定 `--request`；主持人先读 `turn roster`，再带返回的 revision 创建或继续安排。讨论开关先用 `run view` 读取 revision，再执行开始、暂停、继续或结束；具体字段以命令帮助和房间协议为准。主持任务附有调度建议时，可用 `state decision ROOM DECISION_ID` 读取对应原判断；建议注明未生效时仍由主持人自行决定。
 
 ## 常见问题
 

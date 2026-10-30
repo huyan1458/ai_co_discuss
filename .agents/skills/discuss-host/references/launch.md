@@ -38,7 +38,7 @@
     "boundaries": "讨论边界",
     "host": "Codex",
     "experts": { "Codex": "cli", "Claude": "cli" },
-    "limits": { "max_rounds": 3, "max_minutes": 60, "execution_minutes": 0 }
+    "limits": { "max_rounds": 3, "max_minutes": 60 }
   },
   "participants": {
     "Codex": { "adapter": "codex" }

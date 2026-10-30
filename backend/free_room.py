@@ -20,7 +20,23 @@ from .identity import MAX_ROOM_AGENTS, is_ai
 from .runtime import (LEASE_SECONDS, MAX_EXECUTION_SEGMENTS, begin_write, enforce_session_limits,
                       require_owner, save_segments, token_hash)
 
-FREE_EXECUTION_MINUTES = 20
+REVIEW_ADAPTERS = ("codex_cli",)
+MAX_REVIEW_SCOPE = 2000
+MAX_REVIEW_INPUT = 60000
+REVIEW_STATE_SQL = """SELECT json_object(
+ 'room',json_array(id,title,goal,(SELECT archived FROM room_directory WHERE room_id=rooms.id)),
+ 'latest',(SELECT COALESCE(MAX(id),0) FROM messages WHERE room_id=rooms.id),
+ 'members',(SELECT json_group_array(json_array(id,name,role,status,access,session_mode,adapter,token_hash)) FROM (SELECT * FROM room_members WHERE room_id=rooms.id ORDER BY id)),
+ 'caps',(SELECT json_group_array(json_array(c.member_id,c.member_revision,c.config_version,c.generation)) FROM member_review_capabilities c JOIN room_members m ON m.id=c.member_id WHERE m.room_id=rooms.id),
+ 'requests',(SELECT json_group_array(json_array(id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose)) FROM (SELECT * FROM member_requests WHERE room_id=rooms.id ORDER BY id)),
+ 'executions',(SELECT json_group_array(json_array(id,status,result,changes)) FROM (SELECT * FROM member_executions WHERE room_id=rooms.id ORDER BY id)),
+ 'batches',(SELECT json_group_array(json_array(batch_id,settled,host_id,chain_id)) FROM free_batches WHERE room_id=rooms.id),
+ 'plans',(SELECT json_group_array(json_array(batch_id,status,reviewer_id,config_version,member_revision,scope,review_batch_id)) FROM review_plans WHERE room_id=rooms.id),
+ 'limit',COALESCE((SELECT max_rounds FROM free_round_limits WHERE room_id=rooms.id),3),
+ 'holds',(SELECT json_group_array(json_array(chain_id,extra_rounds,message_id)) FROM free_chain_holds WHERE room_id=rooms.id),
+ 'stopped',(SELECT json_group_array(json_array(chain_id,reason)) FROM free_chains WHERE room_id=rooms.id),
+ 'withdrawn',(SELECT json_group_array(message_id) FROM message_withdrawals WHERE message_id IN (SELECT id FROM messages WHERE room_id=rooms.id))
+) AS state FROM rooms WHERE id=?"""
 RECENT_REQUESTS = 100
 RECENT_EXECUTIONS = 100
 # The timeline page reads this many recent executions of each kind; with `after` (?3) only those running or ended since.
@@ -139,6 +155,219 @@ def room_mode(connection, room_id):
     return row[0] if row else "brainstorm"
 
 
+def review_member_revision(member, generation=0):
+    """Bind an attestation to the exact member identity and access configuration without exposing credentials."""
+    state = ":".join(str(member[key]) for key in ("id", "status", "adapter", "access", "session_mode", "token_hash")) + f":{generation}"
+    return hashlib.sha256(state.encode("utf-8")).hexdigest()
+
+
+def review_capability(connection, room_id, member_id, token, payload=None):
+    """Read or replace one owner's local read-only attestation, guarded by the member revision."""
+    require_owner(connection, room_id, token)
+    if payload is not None:
+        begin_write(connection)
+    member = connection.execute("SELECT * FROM room_members WHERE room_id=? AND id=?", (room_id, member_id)).fetchone()
+    if not member:
+        raise LookupError("成员不存在")
+    previous = connection.execute("SELECT generation FROM member_review_capabilities WHERE member_id=?", (member_id,)).fetchone()
+    revision = review_member_revision(member, previous[0] if previous else 0)
+    if payload is not None:
+        if not payload.get("revision"):
+            raise ValueError("请先读取成员 review-capability，再带 revision 提交能力事实")
+        if payload["revision"] != revision:
+            raise FileExistsError("成员状态已变化，请重新读取能力状态")
+        if type(payload.get("read_only")) is not bool:
+            raise ValueError("read_only 须为布尔值")
+        if payload["read_only"]:
+            version = payload.get("config_version", "")
+            if not isinstance(version, str) or not re.fullmatch(r"[a-f0-9]{64}", version):
+                raise ValueError("config_version 须为本机配置的 SHA-256 摘要")
+            if member["status"] != "active" or member["access"] != "runner" or member["session_mode"] != "new" or member["adapter"] not in REVIEW_ADAPTERS:
+                raise FileExistsError("仅支持程序启动、可核验只读权限的本地 CLI 成员")
+            connection.execute("""INSERT INTO member_review_capabilities(member_id,member_revision,config_version,adapter,recorded_at) VALUES (?,?,?,?,?)
+                ON CONFLICT(member_id) DO UPDATE SET member_revision=excluded.member_revision,
+                config_version=excluded.config_version,adapter=excluded.adapter,recorded_at=excluded.recorded_at""",
+                               (member_id, revision, version, member["adapter"], int(time.time())))
+        else:
+            connection.execute("UPDATE member_review_capabilities SET config_version='',member_revision='' WHERE member_id=?", (member_id,))
+    capability = connection.execute("SELECT config_version,adapter FROM member_review_capabilities WHERE member_id=? AND member_revision=?",
+                                    (member_id, revision)).fetchone()
+    return {"member_id": member_id, "member": member["name"], "revision": revision,
+            "capability": dict(capability) if capability else None}
+
+
+def review_roster(connection, room_id, token):
+    """Return eligible local reviewers to the owner or current host; never publish member credentials."""
+    try:
+        require_owner(connection, room_id, token)
+    except PermissionError:
+        member = require_member(connection, room_id, token)
+        if member["role"] != "host":
+            raise PermissionError("只有房主或当前主持人可读取评审候选")
+    rows = connection.execute("""SELECT m.*,c.config_version,c.member_revision,c.generation FROM room_members m
+        JOIN member_review_capabilities c ON c.member_id=m.id WHERE m.room_id=? AND m.status='active'
+        AND m.access='runner' AND m.session_mode='new' ORDER BY m.id""", (room_id,)).fetchall()
+    members = [{"id": row["id"], "name": row["name"], "adapter": row["adapter"], "config_version": row["config_version"]}
+               for row in rows if row["adapter"] in REVIEW_ADAPTERS and row["member_revision"] == review_member_revision(row, row["generation"])]
+    state = connection.execute(REVIEW_STATE_SQL, (room_id,)).fetchone()["state"]
+    return {"members": members, "revision": hashlib.sha256(state.encode("utf-8")).hexdigest(),
+            "reason": "" if members else "没有可核验只读的评审成员"}
+
+
+def checked_review_plan(connection, room_id, actor, payload):
+    """Validate one preauthorized review before the host message and implementation dispatch commit."""
+    if not payload.get("next_review"):
+        if payload.get("review_scope") or payload.get("review_roster"):
+            raise ValueError("review_scope / review_roster 须与 next_review 一起提交")
+        return None
+    if not isinstance(actor, dict) or actor["role"] != "host" or not payload.get("to") or payload.get("kind") == "moderation":
+        raise PermissionError("只有主持人派实现任务时可以声明下一步评审")
+    if not isinstance(payload["next_review"], str):
+        raise ValueError("next_review 须为成员名称")
+    if not payload.get("review_roster"):
+        raise ValueError("请先读取 review roster，再带 review_roster 声明评审")
+    state = connection.execute(REVIEW_STATE_SQL, (room_id,)).fetchone()["state"]
+    if payload["review_roster"] != hashlib.sha256(state.encode("utf-8")).hexdigest():
+        raise FileExistsError("评审候选或任务状态已变化，请重新读取 review roster")
+    scope = payload.get("review_scope", "")
+    if not isinstance(scope, str) or not 1 <= len(scope.strip()) <= MAX_REVIEW_SCOPE:
+        raise ValueError(f"评审范围须为 1–{MAX_REVIEW_SCOPE} 字")
+    if payload["next_review"] in payload["to"]:
+        raise ValueError("评审者不能是该批次的实现者")
+    reviewer = connection.execute("""SELECT m.*,c.config_version,c.member_revision,c.generation FROM room_members m
+        JOIN member_review_capabilities c ON c.member_id=m.id WHERE m.room_id=? AND m.name=?""", (room_id, payload["next_review"])).fetchone()
+    if not reviewer or reviewer["status"] != "active" or reviewer["member_revision"] != review_member_revision(reviewer, reviewer["generation"]) or not reviewer["config_version"]:
+        raise FileExistsError("没有可核验只读的评审成员：指定成员未上报有效能力或已失效")
+    chain_id = answered_chain(connection, payload, actor)
+    if not chain_id or rounds_left(connection, room_id, chain_id) < 1:
+        raise FileExistsError("任务链剩余额度不足，不能保存实现批次及评审授权")
+    return {"chain_id": chain_id, "host_id": actor["id"], "reviewer_id": reviewer["id"], "reviewer_name": reviewer["name"],
+            "config_version": reviewer["config_version"], "member_revision": reviewer["member_revision"], "scope": scope.strip(),
+            "implementers": json.dumps(sorted(set(payload["to"])), ensure_ascii=False)}
+
+
+def save_review_plan(connection, room_id, batch_id, plan):
+    """Persist the next step only inside the implementation message transaction."""
+    if plan:
+        fields = ("chain_id", "host_id", "reviewer_id", "reviewer_name", "config_version", "member_revision", "scope", "implementers")
+        connection.execute(f"INSERT INTO review_plans(room_id,batch_id,{','.join(fields)}) VALUES ({','.join('?' for _ in range(10))})",
+                           (room_id, batch_id, *(plan[key] for key in fields)))
+
+
+def check_review_retry(connection, room_id, message_id, payload):
+    """A repeated host message cannot silently change or remove its preauthorized review."""
+    plan = connection.execute("SELECT * FROM review_plans WHERE room_id=? AND batch_id=?", (room_id, message_id)).fetchone()
+    if not plan and not payload.get("next_review"):
+        return
+    if not plan or (plan["reviewer_name"], plan["scope"], json.loads(plan["implementers"])) != (
+            payload.get("next_review"), str(payload.get("review_scope", "")).strip(), sorted(set(payload.get("to", [])))):
+        raise FileExistsError("这个提交编号已绑定不同的评审授权，请为新内容使用新编号")
+
+
+def review_ready(connection, room_id, batch_id, token):
+    """Read original delivery evidence and the exact reasons a preauthorized step cannot advance."""
+    roster = review_roster(connection, room_id, token)
+    plan = connection.execute("SELECT * FROM review_plans WHERE room_id=? AND batch_id=?", (room_id, batch_id)).fetchone()
+    if not plan:
+        raise LookupError("该批次没有预授权评审")
+    plan = dict(plan)
+    batch = connection.execute("SELECT * FROM free_batches WHERE room_id=? AND batch_id=?", (room_id, batch_id)).fetchone()
+    requests = [dict(row) for row in connection.execute("""SELECT r.id,r.member_id,m.name AS member,r.status,r.answer_id,
+        a.text AS answer,e.id AS execution_id,e.status AS execution_status,e.result,e.changes
+        FROM member_requests r JOIN room_members m ON m.id=r.member_id LEFT JOIN messages a ON a.id=r.answer_id
+        LEFT JOIN member_executions e ON e.id=r.execution_id WHERE r.room_id=? AND r.batch_id=? ORDER BY r.id""", (room_id, batch_id))]
+    handoff = connection.execute("SELECT * FROM member_requests WHERE room_id=? AND message_id=? AND member_id=? AND purpose='handoff'",
+                                 (room_id, batch_id, plan["host_id"])).fetchone()
+    host = connection.execute("SELECT id FROM room_members WHERE room_id=? AND role='host' AND status='active'", (room_id,)).fetchone()
+    candidate = next((member for member in roster["members"] if member["id"] == plan["reviewer_id"]), None)
+    capability = connection.execute("SELECT member_revision FROM member_review_capabilities WHERE member_id=?", (plan["reviewer_id"],)).fetchone()
+    remaining = rounds_left(connection, room_id, plan["chain_id"])
+    reason = review_block_reason(plan, requests, {
+        "batch": bool(batch and batch["settled"]), "handoff": bool(handoff and handoff["status"] in ("pending", "delivering")),
+        "host": bool(host and host[0] == plan["host_id"]), "remaining": remaining,
+        "capability": bool(candidate and candidate["config_version"] == plan["config_version"] and capability[0] == plan["member_revision"]),
+        "archived": connection.execute("SELECT archived FROM room_directory WHERE room_id=?", (room_id,)).fetchone()[0]})
+    original = connection.execute("SELECT id,author,text FROM messages WHERE room_id=? AND id=?", (room_id, batch_id)).fetchone()
+    if not original:
+        reason = reason or "缺少原委派，不能自动交评审"
+    elif len(json.dumps([dict(original), requests], ensure_ascii=False, separators=(",", ":"))) > MAX_REVIEW_INPUT:
+        reason = reason or "交付原文与执行报告超过 60000 字符，请主持人处理"
+    return {"plan": plan, "original": dict(original) if original else None, "deliveries": requests, "handoff": dict(handoff) if handoff else None,
+            "remaining_rounds": remaining, "revision": roster["revision"], "ready": not reason, "reason": reason}
+
+
+def review_block_reason(plan, requests, facts):
+    """Choose a concrete host-facing explanation without interpreting delivery prose."""
+    if plan["status"] != "pending":
+        return "评审授权已经消费或仅为导入历史"
+    if facts["archived"] or not facts["host"]:
+        return "房间已存档或主持人已改变，原评审授权不再有效"
+    if not facts["batch"] or not requests or any(item["status"] != "completed" or not item["answer_id"] or item["answer"] is None for item in requests):
+        return "实现批次尚未全部成功交付，或缺少交付原文"
+    if any(item["member_id"] == plan["reviewer_id"] for item in requests):
+        return "评审者不能是该批次的实现者"
+    if not facts["handoff"]:
+        return "该批次交回主持人的请求已处理或取消"
+    if not facts["capability"]:
+        return "没有可核验只读的评审成员：既定评审者离开或能力配置已变化"
+    if facts["remaining"] < 1:
+        return "任务链剩余额度不足，需用户续额或主持人另行处理"
+    return ""
+
+
+def advance_review(connection, room_id, token, payload):
+    """Consume one exact review authorization and close only its handoff in one transaction."""
+    begin_write(connection)
+    host = require_member(connection, room_id, token, payload.get("actor"))
+    if host["role"] != "host":
+        raise PermissionError("只有当前主持人可以推进预授权评审")
+    batch_id, submission = payload.get("batch_id"), payload.get("submission_id", "")
+    if type(batch_id) is not int or not isinstance(submission, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", submission):
+        raise ValueError("须提供 batch_id 和有效 submission_id")
+    saved = connection.execute("SELECT batch_id,review_batch_id FROM review_plans WHERE room_id=? AND advance_submission=?", (room_id, submission)).fetchone()
+    if saved:
+        if saved["batch_id"] != batch_id:
+            raise FileExistsError("提交编号已用于其他评审批次")
+        execution = connection.execute("""SELECT e.status FROM member_requests r JOIN member_executions e ON e.id=r.execution_id
+            JOIN review_plans p ON p.room_id=r.room_id AND p.batch_id=r.message_id AND p.host_id=r.member_id
+            WHERE r.room_id=? AND p.batch_id=? AND r.purpose='handoff'""", (room_id, batch_id)).fetchone()
+        return {"batch_id": batch_id, "review_batch_id": saved["review_batch_id"], "duplicate": True,
+                "execution_completed": bool(execution and execution[0] == "completed")}
+    if not payload.get("revision"):
+        raise ValueError("请先读取 review ready，再携带 revision 推进")
+    state = review_ready(connection, room_id, batch_id, token)
+    if payload["revision"] != state["revision"]:
+        raise FileExistsError("评审状态已变化，请重新读取 review ready")
+    if not state["ready"]:
+        raise FileExistsError(state["reason"])
+    plan, handoff = state["plan"], state["handoff"]
+    if plan["host_id"] != host["id"]:
+        raise PermissionError("本主持人没有该批次的评审授权")
+    answer_ids = sorted({item["answer_id"] for item in state["deliveries"]})
+    question = f"请只读评审实现批次 #{batch_id}。范围：{plan['scope']}。先读原委派 #{batch_id}，再读交付原文 " + "、".join(f"#{number}" for number in answer_ids) + "。不得修改项目；评审结束交回主持人。"
+    cursor = connection.execute("INSERT INTO messages(room_id,author,text,source,submission_id,created_at) VALUES(?, '系统任务',?,'system',?,?)",
+                                (room_id, question, f"review-task-{batch_id}", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())))
+    review_batch_id = cursor.lastrowid
+    connection.execute("UPDATE review_plans SET status='advanced',review_batch_id=?,advance_submission=? WHERE room_id=? AND batch_id=?",
+                       (review_batch_id, submission, room_id, batch_id))
+    connection.execute("INSERT INTO free_batches(room_id,batch_id,chain_id,host_id) VALUES(?,?,?,?)", (room_id, review_batch_id, plan["chain_id"], host["id"]))
+    connection.execute("INSERT INTO free_handoffs(room_id,batch_id) VALUES(?,?)", (room_id, review_batch_id))
+    insert_request(connection, room_id, plan["reviewer_id"], review_batch_id, plan["chain_id"], "ask", "host", batch_id=review_batch_id)
+    connection.execute("UPDATE member_requests SET status='completed' WHERE id=?", (handoff["id"],))
+    completed = finish_review_handoff(connection, handoff)
+    return {"batch_id": batch_id, "review_batch_id": review_batch_id, "execution_completed": completed, "duplicate": False}
+
+
+def finish_review_handoff(connection, handoff):
+    """Finish the host execution only when its other requests have all been handled."""
+    execution_id = handoff["execution_id"]
+    if not execution_id or connection.execute("SELECT 1 FROM member_requests WHERE execution_id=? AND status='delivering'", (execution_id,)).fetchone():
+        return False
+    connection.execute("UPDATE member_executions SET status='completed',finished_at=?,result='review_advanced' WHERE id=?",
+                       (int(time.time()), execution_id))
+    return True
+
+
 def member_value(member):
     """Validate one member and its client-generated credential."""
     if not isinstance(member, dict) or not is_ai(member.get("name")):
@@ -158,6 +387,28 @@ def member_value(member):
         raise ValueError("manual_source 只能为 manual 成员配置 web")
     return {"name": member["name"], "adapter": adapter, "token": member["token"],
             "access": access, "session_mode": session_mode, "manual_source": manual_source}
+
+
+def review_request_context(connection, request):
+    """Expose only the request's review provenance and local capability binding."""
+    plan = connection.execute("SELECT * FROM review_plans WHERE batch_id=? OR review_batch_id=?",
+                              (request["message_id"], request["message_id"])).fetchone()
+    if not plan:
+        return {}
+    phase = "handoff" if request["message_id"] == plan["batch_id"] else "review" if request["purpose"] == "ask" else "result"
+    if phase == "handoff" and request["purpose"] != "handoff":
+        return {}
+    review = {key: plan[key] for key in ("batch_id", "reviewer_id", "reviewer_name", "config_version", "member_revision", "scope")}
+    review["phase"] = phase
+    result = {"review": review}
+    if phase != "handoff":
+        result.update(source_question=connection.execute("SELECT text FROM messages WHERE id=?", (request["message_id"],)).fetchone()[0],
+                      source_message_id=plan["batch_id"], after_message_id=plan["batch_id"], cause_kind="review")
+    if phase == "result":
+        failed = connection.execute("""SELECT e.result FROM member_requests r JOIN member_executions e ON e.id=r.execution_id
+            WHERE r.batch_id=? AND r.status IN ('cancelled','failed') ORDER BY r.id""", (plan["review_batch_id"],)).fetchall()
+        review["reason"] = "；".join(row[0] for row in failed)
+    return result
 
 
 def member_values(members):
@@ -264,18 +515,6 @@ def sync_participants(connection, room_id):
     host = next((row["name"] for row in members if row["role"] == "host" and row["status"] == "active"), "用户")
     connection.execute("UPDATE topic_settings SET experts=?,host=? WHERE room_id=?",
                        (json.dumps(experts, ensure_ascii=False), host, room_id))
-
-
-def execution_minutes(connection, room_id):
-    """Free rooms always bound one execution; zero in the shared limits means the default."""
-    session = connection.execute("""SELECT l.execution_minutes FROM session_limits l
-        JOIN discussion_sessions s ON s.id=l.session_id
-        WHERE s.room_id=? AND s.status='active' AND EXISTS(SELECT 1 FROM session_state st WHERE st.session_id=s.id)
-        ORDER BY s.id DESC LIMIT 1""", (room_id,)).fetchone()
-    if session:
-        return session[0] or FREE_EXECUTION_MINUTES
-    row = connection.execute("SELECT execution_minutes FROM discussion_limits WHERE room_id=?", (room_id,)).fetchone()
-    return (row[0] if row and row[0] else FREE_EXECUTION_MINUTES)
 
 
 def public_execution(row):
@@ -418,7 +657,7 @@ def session_request_source(connection, member_request_id, message_id):
         q.question AS source_question,t.cause_kind,t.cause_message_id AS source_message_id,t.cause_request_id,
         CASE WHEN q.id IS NULL THEN r.message_id ELSE COALESCE((SELECT MAX(m.id) FROM messages m
             WHERE m.room_id=r.room_id AND m.id<r.message_id
-            AND NOT EXISTS(SELECT 1 FROM task_message_sources hidden WHERE hidden.message_id=m.id)),0) END AS session_anchor
+            AND NOT EXISTS(SELECT 1 FROM internal_task_messages hidden WHERE hidden.message_id=m.id)),0) END AS session_anchor
         FROM member_requests r LEFT JOIN session_requests q ON q.member_request_id=r.id
         LEFT JOIN task_message_sources t ON t.session_request_id=q.id WHERE r.id=?""", (member_request_id,)).fetchone()
     if row and row["session_request_id"] is not None:
@@ -426,8 +665,10 @@ def session_request_source(connection, member_request_id, message_id):
                 "round": row["round"], "source_question": row["source_question"],
                 "source_message_id": row["source_message_id"], "cause_kind": row["cause_kind"],
                 "cause_request_id": row["cause_request_id"], "after_message_id": row["session_anchor"]}
+    request = connection.execute("SELECT message_id,purpose FROM member_requests WHERE id=?", (member_request_id,)).fetchone()
     return {"session_request_id": None, "discussion_session_id": None, "round": None, "source_question": "",
-            "source_message_id": None, "cause_kind": None, "cause_request_id": None, "after_message_id": message_id}
+            "source_message_id": None, "cause_kind": None, "cause_request_id": None, "after_message_id": message_id,
+            **review_request_context(connection, request)}
 
 
 def possible_conflicts(connection, room_id, names):
@@ -465,7 +706,7 @@ REGISTERED_MEMBER = """(room_members.access<>'manual' OR EXISTS(SELECT 1 FROM me
 # One snapshot for group routing; the Worker uses the same SQL inside its atomic write assertion.
 GROUP_STATE_SQL = f"""SELECT json_object(
     'latest_id',(SELECT COALESCE(MAX(id),0) FROM messages WHERE room_id=rooms.id),
-    'title',rooms.title,'goal',(SELECT goal FROM topic_settings WHERE room_id=rooms.id),
+    'title',rooms.title,'goal',rooms.goal,
     'archived',(SELECT archived FROM room_directory WHERE room_id=rooms.id),
     'order',COALESCE((SELECT member_ids FROM speaking_orders WHERE room_id=rooms.id),'[]'),
     'members',(SELECT json_group_array(json_object('id',id,'name',name,'role',role,'status',status,'access',access,
@@ -506,7 +747,7 @@ def free_view(connection, room_id):
         "SELECT chain_id,reason FROM free_chains WHERE room_id=? ORDER BY chain_id DESC LIMIT 10", (room_id,))]
     max_rounds = chain_rounds(connection, room_id)
     progress = [dict(row) for row in connection.execute(CHAIN_PROGRESS_SQL, (max_rounds, room_id))]
-    return {"members": members, "requests": requests[::-1], "executions": recent_executions(connection, room_id), "execution_minutes": execution_minutes(connection, room_id),
+    return {"members": members, "requests": requests[::-1], "executions": recent_executions(connection, room_id),
             "conflicts": possible_conflicts(connection, room_id, names), "halted_chains": chains, "max_rounds": max_rounds,
             "chain_rounds": progress, "recommendations": recent_recommendations(connection, room_id, now)[::-1]}
 
@@ -886,8 +1127,11 @@ def settle_batches(connection, room_id):
             continue
         connection.execute("UPDATE free_batches SET settled=1 WHERE room_id=? AND batch_id=?", (room_id, batch["batch_id"]))
         host = connection.execute("SELECT * FROM room_members WHERE id=? AND status='active' AND role='host'", (batch["host_id"],)).fetchone()
+        review = connection.execute("SELECT 1 FROM review_plans WHERE room_id=? AND (batch_id=? OR review_batch_id=?)", (room_id, batch["batch_id"], batch["batch_id"])).fetchone()
         if "completed" not in statuses:
             halt_chain(connection, room_id, batch["chain_id"], "all_failed")
+            if review and host:
+                insert_request(connection, room_id, host["id"], batch["batch_id"], batch["chain_id"], "handoff", "host")
         elif not host or len(statuses) < 2 and not connection.execute(
                 "SELECT 1 FROM free_handoffs WHERE room_id=? AND batch_id=?", (room_id, batch["batch_id"])).fetchone():
             # One member's answer reaches the user directly unless the host asked for it back, e.g. to send it to a reviewer.
@@ -1128,7 +1372,7 @@ def after_free_message(connection, room_id, message_id, actor, payload):
                            (message_id, execution_id))
     connection.execute("UPDATE room_members SET read_until=MAX(read_until,?) WHERE id=?", (message_id, actor["id"]))
     if actor["role"] == "host" and payload.get("to"):
-        dispatch(connection, room_id, actor, message_id, payload["to"], chain_id, payload.get("handoff") is True)
+        dispatch(connection, room_id, actor, message_id, payload["to"], chain_id, payload.get("handoff") is True or bool(payload.get("next_review")))
     settle_batches(connection, room_id)
 
 
@@ -1163,18 +1407,16 @@ def asks_view(connection, room_id):
         """SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by,created_at,
         (SELECT reason FROM request_cancel_reasons c WHERE c.request_id=member_requests.id) AS cancel_reason FROM member_requests
         WHERE room_id=? ORDER BY id DESC LIMIT ?""", (room_id, RECENT_REQUESTS))]
-    return {"requests": requests[::-1], "executions": recent_executions(connection, room_id), "execution_minutes": execution_minutes(connection, room_id)}
+    return {"requests": requests[::-1], "executions": recent_executions(connection, room_id)}
 
 
 def expire_executions(connection, room_id):
     """Fail executions whose lease lapsed; their requests stay visible as failed, never silently retried."""
     now = int(time.time())
-    limit_seconds = execution_minutes(connection, room_id) * 60
     stale = connection.execute(
-        "SELECT id,created_at,lease_until FROM member_executions WHERE room_id=? AND status IN ('dispatched','started') AND lease_until<=?", (room_id, now)).fetchall()
+        "SELECT id FROM member_executions WHERE room_id=? AND status IN ('dispatched','started') AND lease_until<=?", (room_id, now)).fetchall()
     for row in stale:
-        reason = "已达到单次执行时限" if row["lease_until"] >= row["created_at"] + limit_seconds else "执行租约到期，接入程序未续租"
-        finish_execution(connection, row["id"], "failed", reason, "failed")
+        finish_execution(connection, row["id"], "failed", "执行租约到期，接入程序未续租", "failed")
     if stale:
         settle_batches(connection, room_id)
 
@@ -1278,12 +1520,13 @@ def inbox(connection, room_id, token):
         manual_source = connection.execute("SELECT source FROM member_manual_sources WHERE member_id=?", (row["id"],)).fetchone()
         member_view = {key: row[key] for key in MEMBER_FIELDS}
         member_view["manual_source"] = manual_source[0] if manual_source else ""
+        member_view["review_capability"] = review_capability(connection, room_id, row["id"], token)
+        pending = [{**request, **review_request_context(connection, request)} for request in pending]
         (members if row["access"] == "runner" else observers).append({**member_view, "pending": pending})
     executions = [{**public_execution(row), "member": row["name"], "retry": execution_retry(connection, row["id"])} for row in connection.execute(
         """SELECT member_executions.*,room_members.name FROM member_executions JOIN room_members ON room_members.id=member_id
         WHERE member_executions.room_id=? AND member_executions.status IN ('dispatched','started') ORDER BY member_executions.id""", (room_id,))]
-    return {"room_id": room_id, "archived": bool(archived), "members": members, "observers": observers, "executions": executions,
-            "execution_minutes": execution_minutes(connection, room_id)}
+    return {"room_id": room_id, "archived": bool(archived), "members": members, "observers": observers, "executions": executions}
 
 
 def host_route_request(connection, message_id):
@@ -1337,6 +1580,7 @@ def group_route_plan(connection, room_id, token, message_id):
     rank = {member_id: index for index, member_id in enumerate(json.loads(snapshot["order"]))}
     members.sort(key=lambda member: (member["id"] not in rank, rank.get(member["id"], 0), member["role"] != "host", member["id"]))
     return {"message_id": message_id, "request": dict(group) if group else None, "members": members,
+            "title": snapshot["title"], "goal": snapshot["goal"],
             "latest_id": snapshot["latest_id"], "revision": hashlib.sha256(state.encode("utf-8")).hexdigest(),
             "result": dict(previous) if previous else None}
 
@@ -1472,7 +1716,7 @@ def reserve_execution(connection, room_id, token, payload):
                           (member["id"],)).fetchone():
         raise FileExistsError("该成员已有进行中的执行；同一会话不并发续接")
     # A group request waits for the runner to choose how everyone answers; it is never delivered itself.
-    pending = connection.execute("""SELECT purpose FROM member_requests
+    pending = connection.execute("""SELECT id,purpose,EXISTS(SELECT 1 FROM review_plans WHERE review_batch_id=member_requests.message_id AND reviewer_id=member_requests.member_id) AS review FROM member_requests
         WHERE member_id=? AND status='pending' AND purpose<>'group' ORDER BY id""", (member["id"],)).fetchall()
     session_purpose = next((row["purpose"] for row in pending if row["purpose"] == "discuss"), None)
     if not pending:
@@ -1480,8 +1724,10 @@ def reserve_execution(connection, room_id, token, payload):
     if session_purpose:
         request_filter = "purpose=?"
         request_values = (session_purpose,)
+    elif pending[0]["review"]:
+        request_filter, request_values = "id=?", (pending[0]["id"],)
     else:
-        request_filter = "purpose<>'group'"
+        request_filter = "purpose<>'group' AND NOT EXISTS(SELECT 1 FROM review_plans WHERE review_batch_id=member_requests.message_id AND reviewer_id=member_requests.member_id)"
         request_values = ()
     now = int(time.time())
     cursor = connection.execute("""INSERT INTO member_executions (room_id,member_id,client_id,lease_until,created_at,cwd)
@@ -1500,6 +1746,7 @@ def execution_detail(connection, row):
         FROM member_requests r LEFT JOIN session_requests sr ON sr.member_request_id=r.id
         LEFT JOIN task_message_sources t ON t.session_request_id=sr.id
         WHERE r.execution_id=? ORDER BY r.id""", (row["id"],))]
+    requests = [{**request, **review_request_context(connection, request)} for request in requests]
     return {**public_execution(row), "member": member["name"], "read_until": member["read_until"], "requests": requests,
             "rewound_executions": member_rewinds(connection, member["id"]), "retry": execution_retry(connection, row["id"])}
 
@@ -1599,14 +1846,14 @@ def execution_action(connection, room_id, execution_id, token, payload):
     elif row["status"] not in ACTIVE:
         raise FileExistsError("执行已结束")
     elif action == "renew":
-        limit = row["created_at"] + execution_minutes(connection, room_id) * 60
-        if row["lease_until"] <= now or limit <= now:
-            raise FileExistsError("执行租约或单次时限已到，不能续租")
+        # No time limit on one execution: it runs while the runner keeps renewing.
+        if row["lease_until"] <= now:
+            raise FileExistsError("执行租约已到期，不能续租")
         # Older runners renew without activity; the last reported one is kept.
         activity, activity_at = renewed_activity(payload, row, now) if "activity" in payload else (row["activity"], row["activity_at"])
         notes = renewed_notes(payload)
         connection.execute("UPDATE member_executions SET lease_until=?,activity=?,activity_at=? WHERE id=?",
-                           (min(now + LEASE_SECONDS, limit), activity, activity_at, execution_id))
+                           (now + LEASE_SECONDS, activity, activity_at, execution_id))
         connection.executemany("INSERT OR IGNORE INTO execution_notes (execution_id,seq,room_id,text,created_at) VALUES (?,?,?,?,?)",
                                [(execution_id, note["seq"], room_id, note["text"], now) for note in notes])
     elif action == "retry_wait":
@@ -1627,6 +1874,14 @@ def execution_action(connection, room_id, execution_id, token, payload):
                                      ((now, execution_id) if action == "retry_now" else (execution_id,)))
         if not updated.rowcount:
             raise FileExistsError("本次执行没有在等待自动重试")
+    elif action == "reject_review":
+        request = connection.execute("""SELECT r.id FROM member_requests r JOIN review_plans p ON p.review_batch_id=r.message_id AND p.reviewer_id=r.member_id
+            WHERE r.execution_id=? AND r.status='delivering' AND r.purpose='ask'""", (execution_id,)).fetchall()
+        count = connection.execute("SELECT COUNT(*) FROM member_requests WHERE execution_id=? AND status='delivering'", (execution_id,)).fetchone()[0]
+        if len(request) != 1 or count != 1 or not isinstance(payload.get("reason"), str) or not payload["reason"].strip():
+            raise ValueError("reject_review 只用于单个评审执行，须说明拒绝原因")
+        finish_execution(connection, execution_id, "cancelled", "评审未投递：" + payload["reason"][:400], "cancelled")
+        settle_batches(connection, room_id)
     elif action == "fail":
         finish_execution(connection, execution_id, "failed", str(payload.get("reason") or "执行失败"), "failed")
         settle_batches(connection, room_id)

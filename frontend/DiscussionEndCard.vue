@@ -26,7 +26,7 @@ async function submit() {
   limit_picker.value?.settle();
   const whole = (value) => Number.isInteger(value) && value >= 0 ? value : 0;
   if (await act("start_room_discussion", { max_rounds: whole(rounds.value), max_minutes: whole(minutes.value),
-    execution_minutes: limits.value.execution_minutes || 0, named_followup: room.value.named_followup === true })) continuing.value = false;
+    named_followup: room.value.named_followup === true })) continuing.value = false;
 }
 </script>
 

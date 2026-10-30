@@ -534,8 +534,8 @@ class RuntimeTests(unittest.TestCase):
             ("Claude", "当前发言"), ("Qwen", "Qwen 的问题"), ("Gemini", "Gemini 的问题"),
         ])
 
-    def test_execution_timeout_expires_member_request_without_ending_unlimited_session(self):
-        """An execution timeout is independent of the session's unlimited total duration."""
+    def test_stored_execution_minutes_no_longer_end_a_running_execution(self):
+        """execution_minutes is still accepted from older clients, but one execution has no time limit."""
         if not hasattr(self, "database"):
             self.skipTest("execution 时钟边界需要隔离 SQLite")
         session = self.start_session({"execution_minutes": 1})["session"]
@@ -544,7 +544,7 @@ class RuntimeTests(unittest.TestCase):
             connection.execute("UPDATE member_executions SET created_at=?,lease_until=? WHERE id=?",
                                (int(time.time()) - 61, int(time.time()) + 60, execution["id"]))
         result = self.execution_action(execution, {"action": "renew"})
-        self.assertIn(result[0], (403, 404, 409))
+        self.assertEqual(result[0], 200, result)
         self.assertEqual(self.request(self.path + "/discussion")[1]["session"]["id"], session["id"])
 
     def test_session_deadline_concludes_and_records_its_reason(self):

@@ -202,10 +202,8 @@ const summary = computed(() => {
         <UCheckbox :model-value="discussing" label="创建后开启讨论" description="主持人安排成员轮流发言，到上限或结束后回到自由协作。也可以建房后再开启。" @update:model-value="toggle_discussion($event)" />
         <template v-if="discussing">
           <UFormField label="讨论目标" description="写下问题、背景和顾虑，主持人据此推进。"><UTextarea :model-value="value('goal')" :maxlength="1000" :rows="4" autoresize :maxrows="10" placeholder="例如：我们在 A、B 两个方案之间犹豫，主要顾虑是成本和上线时间……" class="w-full" @update:model-value="write('goal', $event)" /></UFormField>
-          <DiscussionLimits ref="limit_picker" :rounds="Number(value('limit-max_rounds'))" :minutes="Number(value('limit-max_minutes'))" :execution_minutes="value('limit-execution_minutes')"
-            @update:rounds="write('limit-max_rounds', String($event))" @update:minutes="write('limit-max_minutes', String($event))" @update:execution_minutes="write('limit-execution_minutes', $event)">
-            <UCheckbox :model-value="Boolean(view.named_followup)" label="点名追问" description="开启后，主持人每轮读完回答再逐位点名追问；关闭时专家之间互相回应、互相提问，主持人只开场和收尾。" @update:model-value="bridge.write_named_followup($event)" />
-          </DiscussionLimits>
+          <DiscussionLimits ref="limit_picker" :rounds="Number(value('limit-max_rounds'))" :minutes="Number(value('limit-max_minutes'))" :named_followup="Boolean(view.named_followup)"
+            @update:rounds="write('limit-max_rounds', String($event))" @update:minutes="write('limit-max_minutes', String($event))" @update:named_followup="bridge.write_named_followup($event)" />
         </template>
       </section>
 

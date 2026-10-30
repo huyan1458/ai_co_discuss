@@ -178,6 +178,11 @@ def record_statements(tables, room_id, maps):
                        VALUES (?,?,?,?,?,?,?,?,?)""", (messages[row["message_id"]], room_id, members[row["member_id"]], row["provider"], row["confidence"],
                                                        row["created_at"], row["expires_at"], "adopted" if row["status"] == "adopted" else "open", row.get("mode", "")))
                    for row in tables.get("member_recommendations", [])]
+    statements += [("""INSERT INTO review_plans(room_id,batch_id,chain_id,host_id,reviewer_id,reviewer_name,
+        config_version,member_revision,scope,implementers,status,review_batch_id) VALUES(?,?,?,?,?,?,'','',?,?,'imported',?)""",
+        (room_id, messages[row["batch_id"]], messages.get(row["chain_id"], 0), members[row["host_id"]],
+         members[row["reviewer_id"]], row["reviewer_name"], row["scope"], row["implementers"], messages.get(row.get("review_batch_id"))))
+        for row in tables.get("review_plans", [])]
     return statements
 
 
@@ -189,6 +194,7 @@ def session_statements(tables, room_id, maps):
     members = maps["room_members"]
     member_requests = maps["member_requests"]
     task_messages = {row["message_id"] for row in tables.get("task_message_sources", [])}
+    task_messages.update(row["review_batch_id"] for row in tables.get("review_plans", []) if row.get("review_batch_id"))
     latest_visible_message = max((new for old, new in messages.items() if old not in task_messages), default=0)
     statements = []
     for row in tables.get("discussion_sessions", []):

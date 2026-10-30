@@ -357,10 +357,13 @@ const mention_context = ref(null);
 /** @全体成员 (or @all) names every member a free-room message can reach, offered once there is more than one; smart scheduling decides whether they answer at once or in turn. */
 const ALL_MENTION = "全体成员";
 const ALL_ALIASES = [ALL_MENTION, "all"];
-/** @全体依次 (or @all-seq), typed by hand, still has them answer one after another in the room's speaking order. */
+/** @全体依次 (or @all-seq) answers one after another in the room's speaking order without smart scheduling. */
 const SEQUENTIAL_MENTION = "全体依次";
 const SEQUENTIAL_ALIASES = [SEQUENTIAL_MENTION, "all-seq"];
-const GROUP_MENTIONS = { [ALL_MENTION]: { search: "all 同时 依次", icon: "i-lucide-users" } };
+const GROUP_MENTIONS = {
+  [ALL_MENTION]: { search: "all 同时", icon: "i-lucide-users", label: "全体成员 · 默认同时" },
+  [SEQUENTIAL_MENTION]: { search: "all-seq 顺序 依次", icon: "i-lucide-list-ordered", label: "全体成员 · 按顺序回答" },
+};
 /** The order the server asks members in: the room's default speaking order. */
 const in_turn = (members) => {
   const rank = room.value.speaking_order?.default || [];
@@ -1263,7 +1266,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             <button v-for="(name, index) in mention_members" :id="`channel-mention-${index}`" :key="name" type="button" role="option" :aria-selected="name === mention_active" tabindex="-1" class="channel-mention-option" @pointerdown.prevent @click="select_mention(name)" @pointermove="mention_index = index">
               <UAvatar v-if="GROUP_MENTIONS[name]" :icon="GROUP_MENTIONS[name].icon" :alt="name" size="xs" class="channel-avatar" />
               <UAvatar v-else :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="bridge.display_name(name)" size="xs" :class="['channel-avatar', bridge.identities[name]?.style]" />
-              <span>{{ GROUP_MENTIONS[name] ? `全体成员（${free_members.length} 位）` : bridge.display_name(name) }}</span><small>@{{ name }}</small>
+              <span>{{ GROUP_MENTIONS[name] ? `${GROUP_MENTIONS[name].label}（${free_members.length} 位）` : bridge.display_name(name) }}</span><small>@{{ name }}</small>
             </button>
             <p v-if="!mention_members.length" class="channel-mention-empty">没有匹配的成员</p>
           </div>

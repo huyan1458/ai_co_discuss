@@ -45,6 +45,186 @@ class FreeRoomTests(unittest.TestCase):
         self.assertEqual(status, 201, room)
         self.assertEqual(room["experts"], {})
 
+    def test_review_capability_owner_revision_and_invalidation(self):
+        """Only owner attestations expose candidates; leaving and returning cannot resurrect old authority."""
+        member_id = self.review_member_id()
+        path = f"{self.path}/members/{member_id}/review-capability"
+        status, state = self.request(path, token=self.owner)
+        self.assertEqual(status, 200, state)
+        payload = {"revision": state["revision"], "read_only": True, "config_version": "a" * 64}
+        self.assertEqual(self.request(path, payload, self.member)[0], 403)
+        self.assertEqual(self.request(path, {"read_only": True}, self.owner)[0], 400)
+        self.assertEqual(self.request(path, {**payload, "revision": "stale"}, self.owner)[0], 409)
+        self.assertEqual(self.request(path, payload, self.owner)[0], 200)
+        status, roster = self.request(f"{self.path}/reviews/roster", token=self.owner)
+        self.assertEqual(status, 200, roster)
+        self.assertEqual(roster["members"][0]["name"], "Codex-评审")
+        self.assertNotIn("token_hash", json.dumps(roster))
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("UPDATE room_members SET status='away' WHERE id=?", (member_id,))
+            connection.execute("UPDATE room_members SET status='active' WHERE id=?", (member_id,))
+        self.assertEqual(self.request(f"{self.path}/reviews/roster", token=self.owner)[1]["members"], [])
+        self.assertEqual(self.request(path, payload, self.owner)[0], 409)
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("UPDATE room_members SET session_mode='borrowed' WHERE id=?", (member_id,))
+        latest = self.request(path, token=self.owner)[1]
+        self.assertEqual(self.request(path, {**payload, "revision": latest["revision"]}, self.owner)[0], 409)
+
+    def test_review_capability_is_runtime_only_and_revocable(self):
+        """Revoking local facts removes a candidate, and backup never restores an attestation."""
+        member_id = self.review_member_id()
+        path = f"{self.path}/members/{member_id}/review-capability"
+        state = self.request(path, token=self.owner)[1]
+        payload = {"revision": state["revision"], "read_only": True, "config_version": "b" * 64}
+        self.assertEqual(self.request(path, payload, self.owner)[0], 200)
+        backup = self.request(f"{self.path}/backup", token=self.owner)[1]
+        self.assertNotIn("member_review_capabilities", backup["tables"])
+        inbox = self.request(f"{self.path}/inbox", token=self.owner)[1]
+        reviewer = next(member for member in inbox["members"] if member["id"] == member_id)
+        self.assertEqual(reviewer["review_capability"]["capability"]["config_version"], "b" * 64)
+        self.assertEqual(self.request(path, {"revision": state["revision"], "read_only": False}, self.owner)[0], 200)
+        self.assertEqual(self.request(f"{self.path}/reviews/roster", token=self.owner)[1]["members"], [])
+
+    def review_member_id(self):
+        """Invite one test reviewer using the adapter with enforced filesystem permissions."""
+        self.review_token = uuid.uuid4().hex
+        status, view = self.request(f"{self.path}/members", {"name": "Codex-评审", "adapter": "codex_cli",
+                                                            "token": self.review_token}, self.owner)
+        self.assertEqual(status, 200, view)
+        return next(member["id"] for member in view["members"] if member["name"] == "Codex-评审")
+
+    def completed_review_batch(self):
+        """Create a real implementation handoff for review endpoint integration tests."""
+        reviewer = self.review_member_id()
+        host_id = next(member["id"] for member in self.request(self.path)[1]["free"]["members"] if member["name"] == "Claude")
+        self.request(f"{self.path}/members/{host_id}", {"action": "role", "role": "host"}, self.owner)
+        path = f"{self.path}/members/{reviewer}/review-capability"
+        state = self.request(path, token=self.owner)[1]
+        self.request(path, {"revision": state["revision"], "read_only": True, "config_version": "a" * 64}, self.owner)
+        implementer_token = uuid.uuid4().hex
+        status, members = self.request(f"{self.path}/members", {"name": "Codex-实现", "adapter": "codex_cli", "token": implementer_token}, self.owner)
+        implementer = next(item["id"] for item in members["members"] if item["name"] == "Codex-实现")
+        self.say("实现", to=["Claude"])
+        execution = self.reserve()[1]
+        roster = self.request(f"{self.path}/reviews/roster", token=self.member)[1]
+        status, result = self.answer(execution["id"], to=["Codex-实现"], next_review="Codex-评审", review_scope="验证实现",
+                                    review_roster=roster["revision"])
+        self.assertEqual(status, 201, result)
+        work = self.request(f"{self.path}/executions", {"member_id": implementer, "client_id": uuid.uuid4().hex}, self.owner)[1]
+        self.assertEqual(self.answer(work["id"], token=implementer_token, author="Codex-实现", text="已完成实现与验证")[0], 201)
+        return result["message"]["id"], reviewer
+
+    def test_review_advance_preserves_other_host_work_and_is_idempotent(self):
+        """Only the matching handoff closes; task provenance stays hidden from the transcript."""
+        batch_id, reviewer = self.completed_review_batch()
+        self.say("还有另一个问题", to=["Claude"])
+        host_execution = self.reserve()[1]
+        path = f"{self.path}/reviews/{batch_id}/ready"
+        status, ready = self.request(path, token=self.member)
+        self.assertEqual(status, 200, ready)
+        self.assertTrue(ready["ready"], ready)
+        base = {"actor": "Claude", "batch_id": batch_id, "submission_id": "review-advance-test"}
+        advance = f"{self.path}/reviews/advance"
+        self.assertEqual(self.request(advance, base, self.member)[0], 400)
+        self.assertEqual(self.request(advance, {**base, "revision": "stale"}, self.member)[0], 409)
+        payload = {**base, "revision": ready["revision"]}
+        status, result = self.request(advance, payload, self.member)
+        self.assertEqual(status, 200, result)
+        self.assertFalse(result["execution_completed"])
+        repeated = self.request(advance, payload, self.member)[1]
+        self.assertTrue(repeated["duplicate"])
+        self.assertFalse(repeated["execution_completed"])
+        self.assertEqual(self.request(advance, {**payload, "submission_id": "different-review-submit"}, self.member)[0], 409)
+        self.assertEqual(self.request(f"{self.path}/messages/{result['review_batch_id']}")[0], 404)
+        execution = self.request(f"{self.path}/executions", {"member_id": reviewer, "client_id": uuid.uuid4().hex}, self.owner)[1]
+        self.assertEqual(execution["requests"][0]["review"]["batch_id"], batch_id)
+        self.assertIn("只读评审", execution["requests"][0]["source_question"])
+        state = self.request(f"{self.path}/executions/{host_execution['id']}", token=self.owner)[1]
+        self.assertEqual([item["status"] for item in state["requests"]], ["completed", "delivering"])
+
+    def test_review_advance_retry_reports_completed_host_execution(self):
+        """An API host may stop after the same successful advance response is replayed."""
+        batch_id, reviewer = self.completed_review_batch()
+        self.reserve()
+        ready = self.request(f"{self.path}/reviews/{batch_id}/ready", token=self.member)[1]
+        payload = {"actor": "Claude", "batch_id": batch_id, "revision": ready["revision"], "submission_id": "review-terminal-test"}
+        for attempt in range(2):
+            status, result = self.request(f"{self.path}/reviews/advance", payload, self.member)
+            self.assertEqual(status, 200, result)
+            self.assertTrue(result["execution_completed"])
+            self.assertEqual(result["duplicate"], bool(attempt))
+
+    def test_review_ready_rejects_missing_delivery_budget_and_stale_new_message(self):
+        """Hard preconditions hold without asking any decision model to interpret them."""
+        batch_id, reviewer = self.completed_review_batch()
+        path = f"{self.path}/reviews/{batch_id}/ready"
+        ready = self.request(path, token=self.member)[1]
+        self.say("补充约束", to=["Claude"])
+        payload = {"actor": "Claude", "batch_id": batch_id, "revision": ready["revision"], "submission_id": "review-stale-new-message"}
+        self.assertEqual(self.request(f"{self.path}/reviews/advance", payload, self.member)[0], 409)
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("INSERT INTO free_round_limits(room_id,max_rounds) VALUES(?,1) ON CONFLICT(room_id) DO UPDATE SET max_rounds=1", (self.room["id"],))
+        self.assertIn("额度不足", self.request(path, token=self.member)[1]["reason"])
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("UPDATE free_round_limits SET max_rounds=3 WHERE room_id=?", (self.room["id"],))
+            connection.execute("UPDATE member_requests SET status='failed' WHERE room_id=? AND batch_id=?", (self.room["id"], batch_id))
+        self.assertIn("尚未全部成功", self.request(path, token=self.member)[1]["reason"])
+
+    def test_review_rejection_returns_reason_without_cancelling_other_requests(self):
+        """A local permission mismatch cancels only the isolated review and reaches its host."""
+        batch_id, reviewer = self.completed_review_batch()
+        ready = self.request(f"{self.path}/reviews/{batch_id}/ready", token=self.member)[1]
+        self.request(f"{self.path}/reviews/advance", {"actor": "Claude", "batch_id": batch_id,
+                     "revision": ready["revision"], "submission_id": "review-rejection-test"}, self.member)
+        self.say("另一个问题", to=["Codex-评审"])
+        execution = self.request(f"{self.path}/executions", {"member_id": reviewer, "client_id": uuid.uuid4().hex}, self.owner)[1]
+        self.assertEqual(len(execution["requests"]), 1)
+        path = f"{self.path}/executions/{execution['id']}"
+        payload = {"action": "reject_review", "reason": "只读权限已改变"}
+        self.assertEqual(self.request(path, payload, self.review_token)[0], 403)
+        status, result = self.request(path, payload, self.owner)
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result["status"], "cancelled")
+        inbox = self.request(f"{self.path}/inbox", token=self.owner)[1]
+        host = next(item for item in inbox["members"] if item["name"] == "Claude")
+        self.assertIn("只读权限已改变", host["pending"][0]["review"]["reason"])
+        member = next(item for item in inbox["members"] if item["id"] == reviewer)
+        self.assertEqual(len(member["pending"]), 1)
+
+    def test_review_preauthorization_is_atomic_and_history_only_on_import(self):
+        """Bind a distinct reviewer to a real dispatch; stale or replayed changes cannot alter it."""
+        member_id = self.review_member_id()
+        host_id = next(member["id"] for member in self.request(self.path)[1]["free"]["members"] if member["name"] == "Claude")
+        self.request(f"{self.path}/members/{host_id}", {"action": "role", "role": "host"}, self.owner)
+        path = f"{self.path}/members/{member_id}/review-capability"
+        capability = self.request(path, token=self.owner)[1]
+        self.request(path, {"revision": capability["revision"], "read_only": True, "config_version": "a" * 64}, self.owner)
+        self.request(f"{self.path}/members", {"name": "Gemini", "adapter": "gemini", "token": uuid.uuid4().hex}, self.owner)
+        self.say("实现功能后交评审", to=["Claude"])
+        execution = self.reserve()[1]
+        roster = self.request(f"{self.path}/reviews/roster", token=self.member)[1]
+        base = {"to": ["Gemini"], "next_review": "Codex-评审", "review_scope": "核对功能", "submission_id": "review-implementation-1"}
+        self.assertEqual(self.answer(execution["id"], **base)[0], 400)
+        self.assertEqual(self.answer(execution["id"], **base, review_roster="stale")[0], 409)
+        status, refused = self.answer(execution["id"], **{**base, "to": ["Codex-评审"]}, review_roster=roster["revision"])
+        self.assertEqual(status, 400, refused)
+        self.assertIn("实现者", refused["error"])
+        status, saved = self.answer(execution["id"], **base, review_roster=roster["revision"])
+        self.assertEqual(status, 201, saved)
+        self.assertEqual(self.answer(execution["id"], **base, review_roster=roster["revision"])[1]["duplicate"], True)
+        self.assertEqual(self.answer(execution["id"], **{**base, "review_scope": "改范围"}, review_roster=roster["revision"])[0], 409)
+        batch_id = saved["message"]["id"]
+        with closing(sqlite3.connect(self.database)) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM review_plans WHERE batch_id=?", (batch_id,)).fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM free_handoffs WHERE batch_id=?", (batch_id,)).fetchone()[0], 1)
+        backup = self.request(f"{self.path}/backup", token=self.owner)[1]
+        self.assertEqual(backup["tables"]["review_plans"][0]["scope"], "核对功能")
+        copied = json.loads(json.dumps(backup).replace(self.room["id"], "reviewcopy"))
+        status, imported = self.request("/api/rooms/import", copied, uuid.uuid4().hex)
+        self.assertEqual(status, 201, imported)
+        with closing(sqlite3.connect(self.database)) as connection:
+            self.assertEqual(connection.execute("SELECT status,config_version,member_revision FROM review_plans WHERE room_id=?", (imported["id"],)).fetchone(), ("imported", "", ""))
+
     def tearDown(self):
         """Release the server and temporary files."""
         self.server.shutdown()
@@ -352,15 +532,17 @@ class FreeRoomTests(unittest.TestCase):
         self.assertEqual(self.request(self.path)[1]["free"]["requests"][0]["status"], "failed")
         self.assertEqual(self.request(self.path)[1]["free"]["members"][0]["execution"]["result"], "执行租约到期，接入程序未续租")
 
-    def test_execution_limit_has_a_distinct_failure_reason(self):
-        """A lease clamped to the execution deadline is reported as a timeout."""
-        self.say("等待超时")
+    def test_long_execution_keeps_renewing_without_a_time_limit(self):
+        """One execution has no time limit, even with a legacy stored value: renewing keeps it alive."""
+        self.say("长任务")
         execution = self.reserve()[1]
         with closing(sqlite3.connect(self.database)) as connection, connection:
             connection.execute("UPDATE discussion_limits SET execution_minutes=1 WHERE room_id=?", (self.room["id"],))
-            connection.execute("UPDATE member_executions SET created_at=unixepoch()-60,lease_until=unixepoch() WHERE id=?", (execution["id"],))
-        self.request(f"{self.path}/inbox", token=self.owner)
-        self.assertEqual(self.request(self.path)[1]["free"]["members"][0]["execution"]["result"], "已达到单次执行时限")
+            connection.execute("UPDATE member_executions SET created_at=unixepoch()-3600 WHERE id=?", (execution["id"],))
+        renewed = self.request(f"{self.path}/executions/{execution['id']}", {"action": "renew"}, self.owner)
+        self.assertEqual(renewed[0], 200, renewed)
+        self.assertGreater(renewed[1]["lease_until"], int(time.time()) + 60)
+        self.assertNotIn("execution_minutes", self.request(f"{self.path}/inbox", token=self.owner)[1])
 
     def test_renewal_reports_what_the_software_is_doing(self):
         """The runner's phase and output time reach the member card; older renewals keep the last report."""
@@ -1514,17 +1696,19 @@ class HostTests(FreeRoomTests):
         self.assertEqual(self.requests(), [("Claude", "group", "pending")])
         self.assertEqual(self.reserve_for("Claude")[0], 409)
         self.assertEqual(self.request(f"{self.path}/recommendations/{first}", {"action": "none"}, self.owner)[0], 400)
-        self.assertEqual(self.request(f"{self.path}/recommendations/{first}", {"action": "all"}, self.owner)[0], 200)
+        revision = self.request(f"{self.path}/recommendations/{first}", token=self.owner)[1]["revision"]
+        self.assertEqual(self.request(f"{self.path}/recommendations/{first}", {"action": "all", "revision": revision}, self.owner)[0], 200)
         self.assertEqual(self.requests(), [("Claude", "all", "pending"), ("Codex", "all", "pending"), ("Gemini", "all", "pending")])
-        self.assertEqual(self.request(f"{self.path}/recommendations/{first}", {"action": "sequential"}, self.owner)[0], 400)
+        self.assertEqual(self.request(f"{self.path}/recommendations/{first}", {"action": "sequential"}, self.owner)[0], 409)
         for name in everyone:
             self.work(name)
         second = FreeRoomTests.say(self, "接龙，每人接上一句", to=everyone, order="auto")[1]["message"]["id"]
-        self.assertEqual(self.request(f"{self.path}/recommendations/{second}", {"action": "sequential"}, self.owner)[0], 200)
+        revision = self.request(f"{self.path}/recommendations/{second}", token=self.owner)[1]["revision"]
+        self.assertEqual(self.request(f"{self.path}/recommendations/{second}", {"action": "sequential", "revision": revision}, self.owner)[0], 200)
         self.assertEqual(self.requests()[3:], [("Claude", "ask", "pending")])
         self.work("Claude")
         self.assertEqual(self.requests()[4:], [("Codex", "ask", "pending")])
-        self.assertEqual(self.request(f"{self.path}/recommendations/{second}", {"action": "all"}, self.owner)[0], 404)
+        self.assertEqual(self.request(f"{self.path}/recommendations/{second}", {"action": "all"}, self.owner)[0], 409)
 
     def test_only_the_host_dispatches_and_never_itself(self):
         """Members suggest without dispatching; the host cannot name itself."""
@@ -1590,7 +1774,9 @@ class OnlineAndLinkTests(FreeRoomTests):
 
         ask_message = self.say("请 DeepSeek 单独回答", to=["DeepSeek"])[1]["message"]["id"]
         all_message = self.say("请 DeepSeek 和 Codex 一起回答", to=["DeepSeek", "Codex"], order="auto")[1]["message"]["id"]
-        status, routed = self.request(f"{self.path}/recommendations/{all_message}", {"action": "all"}, self.owner)
+        group_plan = self.request(f"{self.path}/recommendations/{all_message}", token=self.owner)[1]
+        status, routed = self.request(f"{self.path}/recommendations/{all_message}",
+                                      {"action": "all", "revision": group_plan["revision"]}, self.owner)
         self.assertEqual(status, 200, routed)
 
         requests = self.request(self.path)[1]["free"]["requests"]

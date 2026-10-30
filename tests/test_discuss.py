@@ -326,6 +326,18 @@ class CliTests(unittest.TestCase):
             "member_id": member["id"], "client_id": uuid.uuid4().hex}, owner)
         return execution["id"]
 
+    def test_interjection_ask_cli_reads_roster_and_binds_original_request(self):
+        """The host can convert one local follow-up without a scheduler or fabricated source ID."""
+        self.create_discussion_room()
+        self.cli("message", "post", self.room, "--as", "用户", "--body", "请补充依据", "--submission-id", str(uuid.uuid4()))
+        roster = self.cli("turn", "roster", self.room)
+        source = roster["host_requests"][0]
+        args = ["turn", "ask", self.room, "--as", "Codex", "--request", source["id"], "--expert", "Gemini",
+                "--roster", roster["revision"], "--submission-id", str(uuid.uuid4())]
+        result = self.cli(*args)
+        self.assertEqual((result["request"]["purpose"], result["request"]["message_id"]), ("ask", source["message_id"]))
+        self.assertTrue(self.cli(*args)["duplicate"])
+
     def test_round_plan_from_stdin_relays_and_continue_needs_host_turn(self):
         """A plan file queues later experts; an answer relays without returning to the host."""
         self.create_discussion_room()
@@ -677,6 +689,19 @@ class CliContractTests(unittest.TestCase):
         opener.assert_not_called()
         self.assertTrue(next(item for item in schema["arguments"] if item["name"] == "actor")["required"])
         self.assertEqual(schema["exclusive_groups"][0]["one_of"], ["body", "body_file"])
+        args, _ = self.parse(["message", "group-plan", "room", "12"])
+        plan = discuss.plan_message(args)
+        self.assertEqual(plan.path, "/api/rooms/room/recommendations/12")
+        args, _ = self.parse(["state", "decision", "room", "15"])
+        self.assertEqual(discuss.plan_state(args).path, "/api/rooms/room/scheduler-decisions/15")
+        args, _ = self.parse(["review", "roster", "room"])
+        self.assertEqual(discuss.plan_review(args).path, "/api/rooms/room/reviews/roster")
+        args, _ = self.parse(["message", "post", "room", "--as", "Claude", "--body", "实现", "--submission-id", "review-test-123",
+                              "--to", "Gemini", "--next-review", "Codex", "--review-scope", "功能", "--review-roster", "revision"])
+        plan = discuss.plan_message(args)
+        self.assertEqual((plan.body["next_review"], plan.body["review_scope"], plan.body["review_roster"]), ("Codex", "功能", "revision"))
+        args, _ = self.parse(["member", "review-capability", "room", "7"])
+        self.assertEqual(discuss.plan_member(args).path, "/api/rooms/room/members/7/review-capability")
 
     def test_dry_run_never_requests_even_for_unknown_rooms(self):
         """Previews are entirely offline and make no claim of server validation."""

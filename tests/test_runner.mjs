@@ -13,18 +13,69 @@ import vm from 'node:vm';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DiscussionStore, load_config, service_drafts, validate_config } from '../runner/discussion_runner.mjs';
-import { cwd_key, free_task_files, FreeRoomRunner, workspace_snapshot } from '../runner/free_runner.mjs';
+import { cwd_key, free_task_files, FreeRoomRunner, review_capability_version, workspace_snapshot } from '../runner/free_runner.mjs';
 import { SessionDriver } from '../runner/session_driver.mjs';
+
 import { EXPERT_PROMPT_PRESETS, expert_prompt, free_task_text } from '../runner/expert_prompts.mjs';
 import { system_prompt } from '../runner/api_participant.mjs';
 import { assert_shared_home, DiscussionService, migrate_service_home, read_registry, register_room, service_pid, service_ready, start_service, sweep_service_home, unregister_room } from '../runner/discussion_service.mjs';
 import { launch_discussion, restore_room, room_models, room_profiles } from '../runner/discussion_launch.mjs';
 import { adopted_fork, claude_inbox_ready, activity_phase, activity_tool, MAX_EXECUTION_NOTES, MAX_EXECUTION_SEGMENTS, MAX_NOTES_PER_REPORT, MAX_SEGMENTS_PER_REPORT, SegmentLog, progress_note, agy_command_rule, agy_rule, antigravity_project, claude_exit_error, claude_rule_path, codex_permissions, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
-import { certainty, decide, decide_group_order, DISCUSSION_PROMPT_VERSION, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
+import { certainty, decide, decide_group_order, decide_review_completion, DISCUSSION_PROMPT_VERSION, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
 
 /** The folded record of what the provider was asked is checked on its own. */
 const without_detail = ({ detail, input, ...plan }) => (assert.ok(Array.isArray(detail) && detail[0].choices.length && input.state && input.questions[0].instructions), plan);
+
+test('review capability excludes borrowed access, additional grants and writable project drafts', () => {
+  const member = { access: 'runner', session_mode: 'new', adapter: 'codex_cli' };
+  const profile = { adapter: 'codex_cli', project_access: 'read', cwd: resolve('review-project') };
+  const config = { directory: resolve('review-runtime'), draft_directory: resolve('review-drafts') };
+  const version = review_capability_version(profile, member, config);
+  assert.match(version, /^[a-f0-9]{64}$/);
+  for (const extra of [{ project_access: 'write' }, { project_access: 'own' }, { adapter: 'api' }, { adapter: 'claude' },
+    { adapter: 'antigravity_cli' }, { allowed_tools: ['Bash(*)'] }]) {
+    assert.equal(review_capability_version({ ...profile, ...extra }, { ...member, adapter: extra.adapter || member.adapter }, config), '');
+  }
+  assert.equal(review_capability_version(profile, { ...member, session_mode: 'borrowed' }, config), '');
+  assert.equal(review_capability_version(profile, member, { ...config, draft_directory: join(profile.cwd, 'drafts') }), '');
+  assert.notEqual(review_capability_version({ ...profile, cwd: resolve('another-project') }, member, config), version);
+});
+
+test('review capability synchronization publishes once and revokes changed permissions without leaking paths', async t => {
+  const writes = [];
+  const server = createServer(async (request, response) => {
+    let body = ''; for await (const chunk of request) body += chunk;
+    const payload = JSON.parse(body); writes.push(payload);
+    response.setHeader('Content-Type', 'application/json');
+    response.end(JSON.stringify({ revision: 'member-r1', capability: payload.read_only ? { config_version: payload.config_version } : null }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const member = { id: 1, name: 'Codex', adapter: 'codex_cli', access: 'runner', session_mode: 'new', review_capability: { revision: 'member-r1', capability: null } };
+  const config = { site: `http://127.0.0.1:${server.address().port}`, room: 'review-room', token: 'owner-token'.repeat(4),
+    directory: resolve('review-runtime'), draft_directory: resolve('review-drafts'),
+    participants: { Codex: { adapter: 'codex_cli', project_access: 'read', cwd: resolve('review-project') } } };
+  const runner = { config, context_errors: new Map(), log: assert.fail };
+  await FreeRoomRunner.prototype.sync_review_capabilities.call(runner, { members: [member] });
+  await FreeRoomRunner.prototype.sync_review_capabilities.call(runner, { members: [member] });
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].revision, 'member-r1');
+  assert.doesNotMatch(JSON.stringify(writes), /review-project|review-runtime|owner-token/);
+  config.participants.Codex.project_access = 'write';
+  await FreeRoomRunner.prototype.sync_review_capabilities.call(runner, { members: [member] });
+  assert.deepEqual(writes[1], { revision: 'member-r1', read_only: false });
+  assert.equal(member.review_capability.capability, null);
+});
+
+test('review delivery refuses a changed local permission before contacting the site', async () => {
+  const member = { id: 1, name: 'Codex', adapter: 'codex_cli', access: 'runner', session_mode: 'new' };
+  const config = { site: 'http://127.0.0.1:1', room: 'review-room', directory: resolve('review-runtime'),
+    draft_directory: resolve('review-drafts'), participants: { Codex: { adapter: 'codex_cli', project_access: 'read', cwd: resolve('review-project') } } };
+  const proof = { config_version: review_capability_version(config.participants.Codex, member, config) };
+  config.participants.Codex.project_access = 'write';
+  await assert.rejects(FreeRoomRunner.prototype.check_review_delivery.call({ config, context_errors: new Map() }, member, { review: proof }), /本机配置与预授权能力版本不符/);
+});
 
 test('smart scheduling maps one neutral question set to both providers and reads their answers alike', async t => {
   const home = mkdtempSync(join(tmpdir(), 'scheduler-'));
@@ -65,12 +116,16 @@ test('smart scheduling maps one neutral question set to both providers and reads
   const route_question = sent_to_model.questions.handler;
   assert.match(route_question.instructions, /叫了某位成员的名字.*选该成员，即使上一条是别人的回答/);
   assert.doesNotMatch(route_question.criteria.__host__, /延续主持人自己的回答/);
-  // @全体成员 answers in turn only on a confident sequential pick; anything else keeps everyone answering at once.
+  // Both @全体成员 directions require confidence; weak and invalid answers keep the task with the host.
   const order = (choice, confidence) => async () => ({ ok: true, json: async () => ({ answers: { order: { type: 'choice', choice, confidence, probabilities: {} } } }) });
   const group = { title: '房间', context: [], message: { id: 4, author: '用户', text: '@全体成员 接龙' }, members: ['Claude', 'Codex'] };
   assert.equal((await decide_group_order(home, jev, group, order('sequential', ROUTE_CONFIDENCE))).action, 'sequential');
-  assert.equal((await decide_group_order(home, jev, group, order('sequential', ROUTE_CONFIDENCE - 0.01))).action, 'all');
-  assert.equal((await decide_group_order(home, jev, group, order('parallel', 0.99))).action, 'all');
+  assert.equal((await decide_group_order(home, jev, group, order('sequential', ROUTE_CONFIDENCE - 0.01))).action, 'host');
+  assert.equal((await decide_group_order(home, jev, group, order('parallel', ROUTE_CONFIDENCE))).action, 'all');
+  assert.equal((await decide_group_order(home, jev, group, order('parallel', ROUTE_CONFIDENCE - 0.01))).action, 'host');
+  assert.equal((await decide_group_order(home, jev, group, order('__host__', 0.99))).action, 'host');
+  assert.equal((await decide_group_order(home, jev, group, order('invalid', 0.99))).action, 'host');
+  assert.equal((await decide_group_order(home, jev, group, scheduler_fetch({}))).action, 'host');
   // The configuration check asks one yes/no question and rejects an answer without a probability.
   const checked = [];
   assert.deepEqual(await scheduler_check(home, jev, async (url, init) => { checked.push([url, JSON.parse(init.body)]);
@@ -88,23 +143,32 @@ test('smart scheduling maps one neutral question set to both providers and reads
   let interjected;
   await decide_interjection(home, jev, { ...interjection, spoken: ['Gemini'] }, async (url, init) => { interjected = JSON.parse(init.body); return handling('__host__', 0.9)(); });
   assert.match(interjected.state, /本轮已发言：Gemini；本轮尚未发言：Codex/);
-  assert.match(interjected.questions.handling.criteria.__host__, /本轮已发言的专家/);
+  assert.doesNotMatch(interjected.questions.handling.criteria.__host__, /本轮已发言的专家/);
   // A round continues only on a confident "continue", and never opens with the last speaker.
   let sent;
-  const round = (next, confidence, first) => async (url, init) => { sent = JSON.parse(init.body);
-    return { ok: true, json: async () => ({ answers: { next: { type: 'choice', choice: next, confidence, probabilities: {} }, first: { type: 'choice', choice: first, confidence: 0.6, probabilities: {} } } }) }; };
+  const round = (next, confidence, first, first_confidence = 0.9) => async (url, init) => { sent = JSON.parse(init.body);
+    return { ok: true, json: async () => ({ answers: { next: { type: 'choice', choice: next, confidence, probabilities: {} }, first: { type: 'choice', choice: first, confidence: first_confidence, probabilities: {} } } }) }; };
   const discussion = { title: '讨论', context: [], host: 'Claude', experts: ['Codex', 'Gemini', 'Grok'], last_speaker: 'Grok' };
   assert.deepEqual(without_detail(await decide_round(home, jev, discussion, round('continue', 0.9, 'Gemini'))), { action: 'continue', first: 'Gemini', confidence: 0.9, label: '继续下一轮，先请 Gemini 发言' });
-  assert.deepEqual(Object.keys(sent.questions.first.criteria), ['Codex', 'Gemini']);
-  assert.equal((await decide_round(home, jev, discussion, round('continue', 0.9, 'Grok'))).first, 'Codex');
+  assert.deepEqual(Object.keys(sent.questions.first.criteria), ['Codex', 'Gemini', '__host__']);
+  assert.equal((await decide_round(home, jev, discussion, round('continue', 0.9, 'Grok'))).action, 'host');
+  assert.equal((await decide_round(home, jev, discussion, round('continue', 0.9, 'Codex', ROUTE_CONFIDENCE - 0.01))).action, 'host');
+  assert.equal((await decide_round(home, jev, discussion, round('continue', 0.9, 'Codex', ROUTE_CONFIDENCE))).action, 'continue');
+  assert.equal((await decide_round(home, jev, discussion, round('continue', 0.9, '__host__'))).action, 'host');
+  const single = { ...discussion, experts: ['Codex', 'Grok'] };
+  assert.equal((await decide_round(home, jev, single, round('continue', 0.9, 'Codex', 0.6))).action, 'host');
+  assert.deepEqual(Object.keys(sent.questions.first.criteria), ['Codex', '__host__']);
+  assert.equal((await decide_round(home, jev, single, round('continue', 0.9, 'Codex'))).first, 'Codex');
+  assert.equal((await decide_round(home, jev, { ...discussion, experts: ['Grok'] }, async () => assert.fail('no candidate must not call a model'))).action, 'host');
   // A wrong "continue" costs a whole round, so it needs the wide threshold.
   assert.equal((await decide_round(home, jev, discussion, round('continue', ROUTE_WIDE_CONFIDENCE - 0.01, 'Codex'))).action, 'host');
   assert.equal((await decide_round(home, jev, discussion, round('continue', ROUTE_WIDE_CONFIDENCE, 'Codex'))).action, 'continue');
   assert.equal((await decide_round(home, jev, discussion, round('__host__', 0.99, 'Codex'))).action, 'host');
   // The chosen option's probability decides; Jev's lower two-way `confidence` is only a fallback.
   const probable = async () => ({ ok: true, json: async () => ({ answers: { next: { type: 'choice', choice: 'continue', confidence: 0.64,
-    probabilities: { continue: 0.88, __host__: 0.12 } } } }) });
+    probabilities: { continue: 0.88, __host__: 0.12 } }, first: { type: 'choice', choice: 'Codex', confidence: 0.3, probabilities: { Codex: 0.7 } } } }) });
   assert.deepEqual([(await decide_round(home, jev, discussion, probable)).action, (await decide_round(home, jev, discussion, probable)).confidence], ['continue', 0.88]);
+  assert.equal((await decide_round(home, jev, single, scheduler_fetch({ next: { type: 'choice', choice: 'continue', confidence: 0.99 } }))).action, 'host');
   assert.equal(certainty({ choice: 'a', confidence: 0.5, probabilities: {} }), 0.5);
   assert.equal((await decide_round(home, jev, discussion, round('continue', 0.6, 'Codex'))).label, '倾向继续下一轮，把握不足，交给主持人');
   // Mid-round, the next speaker comes from the unspoken candidates; unsure or host goes back to the host.
@@ -1083,7 +1147,7 @@ test('claude allows only codiscuss website subcommands and draft writes, then us
   const directories = args.indexOf('--add-dir');
   assert.deepEqual(args.slice(directories + 1, directories + 4), [f.directory, f.task.draft_directory, f.task.skills_directory]);
   assert.deepEqual(args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--')),
-    [...['room', 'message', 'turn', 'state', 'execution', 'health', 'schema']
+    [...['room', 'message', 'turn', 'state', 'review', 'execution', 'health', 'schema']
       .flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]),
     `Edit(${claude_rule_path(f.task.draft_directory)}/**)`, 'Read(//d/materials/**)']);
   assert.ok(!args.includes(`Edit(${claude_rule_path(f.directory)}/**)`));
@@ -2278,6 +2342,7 @@ async function free_fixture(t) {
       if (body?.action === 'segments') { (state.segments ||= []).push(body.segments); if (body.notes) (state.notes ||= []).push(body.notes); }
       result = execution;
     } else if (url.startsWith('/messages?after=')) {
+      if (state.fail_messages) { response.writeHead(503, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ error: 'context unavailable' })); return; }
       // Like the website: one page of at most 20 messages after the cursor.
       const after = Number(url.split('=')[1]);
       result = { messages: (state.messages || []).filter(item => item.id > after).slice(0, 20) };
@@ -2290,7 +2355,33 @@ async function free_fixture(t) {
     else if (url === '/turns' && request.method === 'POST') { state.plans = [...(state.plans || []), body]; result = { ok: true }; }
     else if (url.startsWith('/messages?after=')) {
       const after = Number(url.split('=')[1]); result = { messages: state.messages.filter(item => item.id > after).slice(0, 20) };
-    } else if (url === '/scheduler-routing' || url === '/scheduler-decisions') result = {};
+    } else if (url.startsWith('/recommendations/') && request.method === 'GET') {
+      const members = [{ id: 7, name: 'Claude', role: 'host' }, ...state.others];
+      result = { request: state.pending.find(item => item.purpose === 'group'), revision: 'group-r1',
+        members: members.map(member => ({ ...member, description: state.room.descriptions?.[member.name] || '' })),
+        title: state.room.title, goal: state.room.goal, latest_id: state.room.latest_id };
+    } else if (url.startsWith('/recommendations/') && state.pending.some(item => item.purpose === 'group')) {
+      if (state.fail_apply || state.change_apply) {
+        const status = state.fail_apply ? 503 : 409;
+        if (state.fail_apply) state.fail_apply--; else state.change_apply--;
+        response.writeHead(status, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ error: 'group apply unavailable' })); return;
+      }
+      (state.group_posts ||= []).push(body);
+      state.pending = state.pending.map(item => item.purpose === 'group' ? { ...item,
+        purpose: body.action === 'host' ? 'route' : body.action === 'all' ? 'all' : 'ask', group_action: body.action } : item);
+      result = { action: body.action };
+    } else if (url.startsWith('/reviews/') && url.endsWith('/ready')) {
+      if (state.fail_review_read) { response.writeHead(503); response.end('{}'); return; }
+      result = state.review_ready;
+    } else if (url === '/reviews/advance') {
+      if (state.stale_review) { response.writeHead(409); response.end('{}'); return; }
+      (state.review_posts ||= []).push(body);
+      state.review_ready.plan.advance_submission = body.submission_id;
+      state.pending = state.pending.filter(item => item.review?.phase !== 'handoff');
+      result = { review_batch_id: 40 };
+      if (state.drop_review_reply) { request.socket.destroy(); return; }
+    } else if (url === '/scheduler-decisions') { (state.decisions ||= []).push(body); result = { id: state.decisions.length }; }
+    else if (url === '/scheduler-routing') { (state.routing ||= []).push(body); result = {}; }
     else result = { ...state.room, session: state.session };
     response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(result));
   });
@@ -2313,6 +2404,80 @@ function with_scheduler(config) {
     base_url,
     ...save_api_key(config.directory, { base_url, api_key: 'runner-test-key' }) } };
 }
+
+/** A preauthorized review fixture exposes original text without shortening it. */
+async function review_runner_fixture(t) {
+  const f = await free_fixture(t);
+  f.config = with_scheduler(f.config);
+  f.state.claude_role = 'host';
+  f.state.pending = [{ id: 1, message_id: 11, purpose: 'handoff', review: { batch_id: 11, phase: 'handoff' } }];
+  f.state.review_ready = { ready: true, reason: '', revision: 'review-r1', original: { text: '实现导入并运行测试' },
+    plan: { reviewer_name: 'Codex-评审', scope: '核对实现' },
+    deliveries: [{ status: 'completed', answer: '导入已完成，测试通过。', execution_status: 'completed', result: '完成' }] };
+  return f;
+}
+
+for (const probability of [0.85, 0.849]) test(`review completion applies its exact 0.85 threshold (${probability})`, async t => {
+  const { state, config, store } = await review_runner_fixture(t);
+  let seen;
+  const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }), () => {}, async (url, init) => {
+    seen = JSON.parse(init.body);
+    return scheduler_fetch({ completion: { type: 'choice', choice: 'review', probabilities: { review: probability } } })();
+  });
+  await runner.tick();
+  assert.equal(state.executions.length, 0, 'host waits until the decision finishes');
+  await Promise.all(runner.decisions);
+  assert.equal(state.review_posts?.length || 0, probability === 0.85 ? 1 : 0);
+  assert.equal(JSON.parse(seen.state).deliveries[0].answer, state.review_ready.deliveries[0].answer);
+  assert.equal(state.decisions[0].context.scene, 'review');
+  assert.equal(state.decisions[0].context.threshold, 0.85);
+  if (probability < 0.85) {
+    const restarted = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }), () => {}, assert.fail);
+    await restarted.tick(); await Promise.all(restarted.decisions);
+    assert.equal(state.executions.length, 1);
+    assert.equal(restarted.saved_suggestion(1).applied, false);
+  }
+});
+
+for (const cause of ['too_long', 'missing', 'hard_block', 'read_failure', 'model_failure', 'changed', 'lost_reply', 'no_scheduler']) {
+  test(`review completion safely handles ${cause}`, async t => {
+    const { state, config, store } = await review_runner_fixture(t);
+    if (cause === 'too_long') state.review_ready.deliveries[0].answer = '长'.repeat(60000);
+    if (cause === 'missing') state.review_ready.original = null;
+    if (cause === 'hard_block') Object.assign(state.review_ready, { ready: false, reason: '额度不足' });
+    if (cause === 'read_failure') state.fail_review_read = true;
+    if (cause === 'changed') state.stale_review = true;
+    if (cause === 'lost_reply') state.drop_review_reply = true;
+    if (cause === 'no_scheduler') delete config.scheduler;
+    let calls = 0;
+    const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }), () => {}, async () => {
+      calls++; if (cause === 'model_failure') throw new Error('offline');
+      return scheduler_fetch({ completion: { type: 'choice', choice: 'review', confidence: 0.99 } })();
+    });
+    await runner.tick(); await Promise.all(runner.decisions);
+    assert.equal(calls, ['model_failure', 'changed', 'lost_reply'].includes(cause) ? 1 : 0);
+    assert.equal(state.review_posts?.length || 0, cause === 'lost_reply' ? 1 : 0);
+    if (cause === 'no_scheduler') assert.equal(runner.saved_suggestion(1), null);
+    else assert.equal(runner.saved_suggestion(1).applied, cause === 'lost_reply');
+    if (cause !== 'lost_reply') {
+      await runner.tick(); await Promise.all(runner.decisions);
+      assert.equal(state.executions.length, 1, 'the original host request is delivered');
+    }
+  });
+}
+
+test('review completion resumes a persisted advance without repeating the model or changing its submission', async t => {
+  const { state, config, store } = await review_runner_fixture(t);
+  const request = state.pending[0];
+  store.db.prepare('INSERT INTO metadata VALUES (?,?)').run('review-decision:1', JSON.stringify({
+    decision: { action: 'review', confidence: 0.99, label: '交评审' }, revision: 'review-r1',
+    submission_id: 'persisted-review-submit', profiles: JSON.stringify(config.participants),
+  }));
+  const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }), () => {}, assert.fail);
+  await runner.tick(); await Promise.all(runner.decisions);
+  assert.equal(state.review_posts[0].submission_id, 'persisted-review-submit');
+  assert.equal(runner.saved_suggestion(request.id).applied, true);
+});
 
 test('the session driver schedules an opening, relays a mid-round answer, then starts and continues round two', async t => {
   const f = await free_fixture(t);
@@ -2374,15 +2539,16 @@ test('user interjection planning stays separate from discussion turns, including
     roster, [],
     { cause_kind: 'user_message', source_message_id: 21 }, { latest_id: 21, title: '房间', host: 'Claude' });
   assert.equal(plan.kind, 'interjection');
-  assert.equal(plan.turn.expert, 'Gemini');
-  assert.match(plan.turn.question, /#21 留言/);
+  assert.equal(plan.expert, 'Gemini');
+  assert.equal(plan.action, 'ask');
+  assert.equal(plan.after_message_id, 21);
   const manual_driver = new SessionDriver(driver_config, () => {}, scheduler_fetch({
     handling: { type: 'choice', choice: 'Codex', confidence: 0.9, probabilities: {} },
   }));
   const manual_plan = await manual_driver.plan({ id: 7, status: 'active', goal: '评估风险', phase: 'discussion', named_followup: false },
     roster, [], { cause_kind: 'user_message', source_message_id: 21 },
     { latest_id: 21, title: '房间', host: 'Claude' });
-  assert.equal(manual_plan.turn.expert, 'Codex');
+  assert.equal(manual_plan.expert, 'Codex');
 
   const { state, store, config } = await free_fixture(t);
   state.session = { id: 7, status: 'active', goal: '讨论', phase: 'discussion' };
@@ -2393,6 +2559,30 @@ test('user interjection planning stays separate from discussion turns, including
   assert.equal(delivered[0].mode, 'free');
   assert.equal(delivered[0].session.phase, 'discussion');
   assert.equal(delivered[0].discussion_request, undefined, 'a direct question is a free request outside the session plan');
+});
+
+test('interjection scheduler uses ordinary asks after all members have spoken, including the host', async t => {
+  const { state, config: original_config } = await free_fixture(t);
+  const config = with_scheduler(original_config);
+  state.session = { id: 7, status: 'active', goal: '讨论', phase: 'discussion' };
+  state.room = { ...state.room, session: state.session, latest_id: 30 };
+  state.messages = [{ id: 30, author: '用户', text: 'Claude，你说的数字有什么来源？' }];
+  state.pending = [{ id: 9, purpose: 'discuss_host', session_id: 7, cause_kind: 'user_message', source_message_id: 30 }];
+  state.turns = [{ id: 1, round: 1, expert: 'Gemini', status: 'answered', answer_id: 29 }];
+  state.roster = { revision: 'r1', round: 1, waiting: [], experts: [
+    { name: 'Claude', host: true, registered: true }, { name: 'Gemini', spoken: true, registered: true }] };
+  const writes = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    if (String(input).endsWith('/turns/ask')) { writes.push(JSON.parse(init.body)); return new Response(JSON.stringify({ request: { id: 10 } })); }
+    return original(input, init);
+  };
+  t.after(() => { globalThis.fetch = original; });
+  const driver = new SessionDriver(config, () => {}, scheduler_fetch({ handling: { type: 'choice', choice: 'Claude', confidence: 0.9 } }));
+  assert.equal(await driver.tick(state.room, { archived: false, members: [{ name: 'Claude', role: 'host', pending: state.pending }], executions: [] }), true);
+  assert.deepEqual(writes[0], { actor: 'Claude', revision: 'r1', request_id: 9, expert: 'Claude', submission_id: 'session-ask-7-9' });
+  assert.ok(!state.calls.includes('POST /turns'));
+  assert.equal(driver.take_suggestions(9)[0].actual_action, 'ask');
 });
 
 test('session scheduler failures and reached limits leave progression with the host without ordinary routing', async t => {
@@ -2411,6 +2601,12 @@ test('session scheduler failures and reached limits leave progression with the h
   assert.equal(state.calls.some(call => call.startsWith('POST /scheduler-routing')), false, 'a system host request is not a free message route');
   assert.equal(await runner.session_driver.tick(state.room, inbox), false);
   assert.match(logs[0], /交回主持人/);
+  const saved = runner.session_driver.take_suggestions(9);
+  assert.deepEqual([saved[0].request_id, saved[0].applied, saved[0].model_judgment], [9, false, false]);
+  assert.equal(saved[0].decision_id, undefined);
+  const restored = new SessionDriver(config, () => {}, async () => assert.fail('failed judgment must stay handed back'), store);
+  assert.deepEqual(restored.take_suggestions(9), saved);
+  assert.equal(await restored.tick(state.room, inbox), false);
 
   state.room.limits.reached = true;
   const before = state.calls.length;
@@ -2568,7 +2764,111 @@ test('a free room without smart scheduling has everyone named by @全体成员 a
   await runner.tick();
   await Promise.all(runner.decisions);
   await runner.tick();
-  assert.deepEqual([state.calls.filter(call => call.startsWith('POST /recommendations/11')), delivered.length], [['POST /recommendations/11 all'], 0]);
+  assert.deepEqual([state.calls.filter(call => call.startsWith('POST /recommendations/11')), delivered.length], [['POST /recommendations/11 all'], 1]);
+  assert.equal(state.executions[0].requests[0].purpose, 'all');
+  assert.equal(state.calls.some(call => call === 'POST /scheduler-routing'), false);
+});
+
+/** A group request with real local member facts; provider calls stay test doubles. */
+async function group_fixture(t) {
+  const fixture = await free_fixture(t);
+  const { state, config } = fixture;
+  Object.assign(config, with_scheduler(config));
+  config.participants.Codex = { adapter: 'codex_cli', cwd: join(config.directory, 'private-project'), project_name: 'Ledger', project_access: 'read' };
+  state.claude_role = 'host';
+  state.pending = [{ id: 1, message_id: 11, purpose: 'group' }];
+  state.others = [{ id: 8, name: 'Codex', role: 'member', access: 'runner', pending: [] }];
+  state.messages = [{ id: 11, author: '用户', text: '@全体成员 处理这个问题' }];
+  state.room.descriptions = { Codex: '只负责评审' };
+  state.room.free = { requests: [{ member: 'Codex', message_id: 9, status: 'delivering' }] };
+  return fixture;
+}
+
+test('group context, timeout and unusable-answer failures hand back once, clear analysing and survive a runner restart', async t => {
+  for (const failure of ['context', 'missing_message', 'timeout', 'answer']) await t.test(failure, async t => {
+    const { state, config, store } = await group_fixture(t);
+    state.fail_messages = failure === 'context';
+    if (failure === 'missing_message') state.messages = [];
+    let asked = 0, delivered = 0;
+    const model = async () => { asked++; if (failure === 'timeout') throw new Error('timeout'); return scheduler_fetch({})(); };
+    const deliver = async () => { delivered++; return { status: 'accepted' }; };
+    const runner = new FreeRoomRunner(config, store, deliver, () => {}, model);
+    await runner.tick();
+    await Promise.all(runner.decisions);
+    assert.deepEqual(state.group_posts.map(item => item.action), ['host']);
+    assert.equal(state.routing.at(-1).active, false);
+    assert.equal(asked, ['context', 'missing_message'].includes(failure) ? 0 : 1);
+    const restarted = new FreeRoomRunner(config, store, deliver, () => {}, async () => assert.fail('fallback must not re-enter unnamed routing'));
+    await restarted.tick();
+    await Promise.all(restarted.decisions);
+    assert.equal(delivered, 1);
+    assert.equal(state.executions[0].requests[0].id, 1);
+    assert.equal(state.executions[0].requests[0].message_id, 11);
+    const suggestion = JSON.parse(readFileSync(join(config.directory, `free-${state.executions[0].id}.task.json`), 'utf8')).scheduler_suggestions[0];
+    assert.deepEqual([suggestion.request_id, suggestion.message_id, suggestion.actual_action, suggestion.applied], [1, 11, 'host', false]);
+    assert.equal('confidence' in suggestion || 'probabilities' in suggestion, false);
+    if (failure !== 'answer') {
+      assert.equal(suggestion.model_judgment, false);
+      assert.equal(suggestion.decision_id, undefined);
+      assert.match(suggestion.reason, /没有模型判断/);
+    }
+  });
+});
+
+test('group decisions see member facts and do not report a stale decision as applied', async t => {
+  const { state, config, store } = await group_fixture(t);
+  state.change_apply = 1;
+  let input;
+  const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }), () => {}, async (url, init) => {
+    input = JSON.parse(init.body);
+    return scheduler_fetch({ order: { type: 'choice', choice: 'parallel', confidence: 0.9 } })();
+  });
+  await runner.tick();
+  await Promise.all(runner.decisions);
+  assert.match(input.state, /Codex CLI，项目 Ledger 只读；正在处理 #9；用户描述：只负责评审/);
+  assert.doesNotMatch(input.state, /runner-test-key|private-project/);
+  assert.equal(input.state.includes(config.directory), false);
+  assert.deepEqual(state.calls.filter(call => call.startsWith('POST /recommendations/11')), ['POST /recommendations/11 all', 'POST /recommendations/11 host']);
+  assert.equal(state.decisions.at(-1).applied, false);
+  assert.match(state.decisions.at(-1).label, /未生效/);
+  const suggestion = runner.saved_suggestion(1);
+  assert.deepEqual([suggestion.decision_id, suggestion.actual_action, suggestion.applied], [state.decisions.length, 'host', false]);
+});
+
+test('unnamed host handoffs survive restart without repeating a judgment and stay bound to their request', async t => {
+  const { state, config, store } = await group_fixture(t);
+  state.pending = [{ id: 1, message_id: 11, purpose: 'route' }];
+  const model = scheduler_fetch({ handler: { type: 'choice', choice: '__host__', confidence: 0.8 } });
+  const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }), () => {}, model);
+  await runner.tick(); await Promise.all(runner.decisions);
+  const suggestion = runner.saved_suggestion(1);
+  assert.equal(suggestion.decision_id, 1);
+  assert.equal(suggestion.applied, false);
+  const restarted = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }), () => {},
+    async () => assert.fail('persisted handoff must not ask again'));
+  await restarted.tick(); await Promise.all(restarted.decisions);
+  const task = JSON.parse(readFileSync(join(config.directory, `free-${state.executions[0].id}.task.json`), 'utf8'));
+  assert.deepEqual(task.scheduler_suggestions, [suggestion]);
+  assert.equal(restarted.saved_suggestion(999), null);
+});
+
+test('group website failure persists the judgment and retries the same action after restart without another model call', async t => {
+  const { state, config, store } = await group_fixture(t);
+  state.fail_apply = 1;
+  let asked = 0;
+  const model = async () => { asked++; return scheduler_fetch({ order: { type: 'choice', choice: 'sequential', confidence: 0.9 } })(); };
+  const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }), () => {}, model);
+  await runner.tick();
+  await Promise.all(runner.decisions);
+  assert.equal(state.pending[0].purpose, 'group');
+  assert.equal(state.decisions[0].applied, false);
+  assert.equal(state.routing.at(-1).active, false);
+  const restarted = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }), () => {}, model);
+  await restarted.tick();
+  await Promise.all(restarted.decisions);
+  assert.equal(asked, 1);
+  assert.deepEqual(state.calls.filter(call => call.startsWith('POST /recommendations/11')), ['POST /recommendations/11 sequential', 'POST /recommendations/11 sequential']);
+  assert.equal(state.decisions.at(-1).applied, true);
 });
 
 test('smart scheduling still reads an unnamed message that follows more than a page of messages', async t => {
