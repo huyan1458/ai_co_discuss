@@ -96,7 +96,8 @@ async function save_key() {
       <strong>决策模型槽位</strong>
       <span>只能放一个；从上方添加，再点其他会替换</span>
     </div>
-    <div v-else class="scheduler-card" :class="{ 'is-editing': editing }">
+    <div v-else class="scheduler-slot is-filled">
+    <div class="scheduler-card" :class="{ 'is-editing': editing }">
       <template v-if="!editing">
         <button type="button" class="scheduler-open" aria-label="设置智能调度的决策模型" title="点击设置" @click="open_settings">
           <span class="scheduler-identity">
@@ -136,6 +137,7 @@ async function save_key() {
       </template>
     </div>
     </div>
+    </div>
   </div>
 </template>
 
@@ -149,6 +151,8 @@ async function save_key() {
 .scheduler-slot { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; height: 240px; padding: 12px; border: 1px dashed var(--ui-border-accented); border-radius: 8px; color: var(--ui-text-dimmed); font-size: 11px; text-align: center; }
 .scheduler-slot > span:first-child { width: 18px; height: 18px; }
 .scheduler-slot strong { color: var(--ui-text-toned); font-size: 12px; font-weight: 500; }
+/* A filled slot keeps its dashed frame around the card, so the card still reads as sitting in the one slot. */
+.scheduler-slot.is-filled { display: block; height: auto; padding: 4px; }
 .scheduler-open { display: flex; flex: 1; flex-direction: column; gap: 10px; width: 100%; padding: 12px 12px 30px; text-align: left; border-radius: inherit; outline: none; }
 .scheduler-identity { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 26px; padding-right: 30px; }
 .scheduler-identity strong { overflow: hidden; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
