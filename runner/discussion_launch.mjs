@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, posix, resolve, win32 } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
@@ -210,7 +210,9 @@ export function pick_directory({ platform = process.platform, spawn_process = sp
     child.once('error', () => reject(new Error('无法打开目录选择窗口，请直接输入完整路径')));
     child.once('close', code => {
       const path = output.trim();
-      resolve_result(code === 0 && isAbsolute(path) ? { path } : { cancelled: true });
+      // Judge the path by the picker's platform, not the host's: a Windows path is not absolute on POSIX.
+      const absolute = platform === 'win32' ? win32.isAbsolute(path) : posix.isAbsolute(path);
+      resolve_result(code === 0 && absolute ? { path } : { cancelled: true });
     });
   });
 }

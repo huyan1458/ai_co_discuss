@@ -747,12 +747,14 @@ test("expert card exposes one face and hands focus over only after crossing the 
   assert.equal(fixture.listeners.size, 0);
 });
 
-test("expert card reduced motion keeps manual and online faces accessible without exposing launch overrides", async () => {
+test("expert card still flips under reduced motion and keeps manual and online faces accessible without exposing launch overrides", async () => {
   const fixture = expert_card_fixture();
   fixture.reduced.value = true;
   fixture.context.flip(true);
   await nextTick();
-  assert.deepEqual(fixture.calls.at(-1), ["jump", 180]);
+  assert.deepEqual(fixture.calls.at(-1), ["set", 180], "the flip plays even when the system asks for reduced motion");
+  fixture.angle.advance(180);
+  await nextTick();
   assert.equal(fixture.refs.visible_back.value, true);
   fixture.props.mode = "manual";
   await nextTick();
