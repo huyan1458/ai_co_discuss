@@ -1,9 +1,14 @@
 /** Smart scheduling and limit checks for a discussion hosted inside a free room. */
+import { readFileSync } from 'node:fs';
 import { api, peer_round_question } from './discussion_runner.mjs';
-import { decide_interjection, decide_next_speaker, decide_round } from './scheduler.mjs';
+import { DISCUSSION_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_WIDE_CONFIDENCE, decide_interjection, decide_next_speaker, decide_round } from './scheduler.mjs';
 
-const CONTEXT_MESSAGES = 12;
+const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const MAX_QUOTE_CHARS = 300;
+/** How many of the latest plans describe "the host's recent arrangement" to the scheduler. */
+const ARRANGEMENT_TURNS = 3;
+const MAX_ARRANGEMENT_CHARS = 200;
+const TURN_STATUS_LABELS = { answered: '已发言', open: '发言中', queued: '排队中', cancelled: '已取消', skipped: '已跳过' };
 
 /** Read every page of current-session discussion plans; the list endpoint is capped at 20 rows per page. */
 async function read_all_turns(config) {
@@ -49,8 +54,9 @@ export class SessionDriver {
     try {
       const [roster, turns] = await Promise.all([api(this.config, '/turns/roster'), read_all_turns(this.config)]);
       const open_turn = turns.some(turn => ['open', 'queued'].includes(turn.status));
+      // An interjection is judged when someone can still be asked or a plan is running that a side note can leave alone.
       const should_decide = request.cause_kind === 'user_message'
-        ? roster.waiting.length > 0
+        ? roster.waiting.length > 0 || open_turn
         : !open_turn && (roster.waiting.length > 0 || !session.named_followup);
       if (!should_decide) return false;
       this.handled_requests.add(request.id);
@@ -60,7 +66,7 @@ export class SessionDriver {
       const suggestion = { message_id: request.source_message_id || latest_id, suggestion: plan.label,
         confidence: plan.confidence ?? null };
 
-      if (plan.action !== 'schedule') {
+      if (plan.action !== 'schedule' && plan.action !== 'continue') {
         await this.record_decision(plan, false, suggestion.message_id);
         this.suggestions.set(request.id, [suggestion]);
         return false;
@@ -76,7 +82,9 @@ export class SessionDriver {
         if (latest_roster.revision !== roster.revision) throw new Error('讨论名单或安排已变化，交回主持人');
         const host_token = this.config.members?.[room.host]?.token;
         if (!host_token) throw new Error('缺少主持人成员凭据，交回主持人');
-        await api(this.config, '/turns', { actor: room.host, turns: [plan.turn], roster: latest_roster.revision,
+        // A side note keeps the running plan: closing the host request is all that is needed.
+        if (plan.action === 'continue') await api(this.config, '/turns/continue', { actor: room.host, revision: latest_roster.revision }, host_token);
+        else await api(this.config, '/turns', { actor: room.host, turns: [plan.turn], roster: latest_roster.revision,
           submission_id: `session-driver-${session.id}-${request.id}` }, host_token);
         await this.record_decision(plan, true, suggestion.message_id);
         this.log(`智能调度 #${request.id}：${plan.label}`);
@@ -108,14 +116,15 @@ export class SessionDriver {
   /** Choose an eligible next task; manual and web members remain valid candidates from the roster. */
   async plan(session, roster, turns, request, room) {
     const latest_id = room.latest_id || 0;
-    const page = await api(this.config, `/messages?after=${Math.max(0, latest_id - CONTEXT_MESSAGES)}`);
+    const page = await api(this.config, `/messages?after=${Math.max(0, latest_id - ROUTE_CONTEXT_MESSAGES)}`);
     const base = { title: room.title, goal: session.goal || room.goal, user_request: room.user_request,
-      context: page.messages, host: room.host, brief: room.host_brief?.text, focus: room.focus, profiles: room.descriptions };
+      context: page.messages, host: room.host, brief: room.host_brief?.text, focus: room.focus, profiles: room.descriptions,
+      arrangement: arrangement_of(turns) };
     const last_answer = [...turns].filter(turn => turn.status === 'answered')
       .sort((left, right) => Number(left.answer_id || 0) - Number(right.answer_id || 0)).at(-1);
     const anchor = last_answer?.answer_id || request.source_message_id || latest_id;
 
-    if (request.cause_kind === 'user_message') return this.plan_interjection(base, page.messages, session, roster, request);
+    if (request.cause_kind === 'user_message') return this.plan_interjection(base, page.messages, session, roster, request, turns);
     const open = turns.some(turn => ['open', 'queued'].includes(turn.status));
     if (open) return null;
     if (roster.waiting.length) return this.plan_speaker(base, session, roster, turns, anchor);
@@ -130,12 +139,18 @@ export class SessionDriver {
   }
 
   /** Decide whether an unnamed user message should be answered by an expert or returned to the host. */
-  async plan_interjection(base, messages, session, roster, request) {
+  async plan_interjection(base, messages, session, roster, request, turns) {
     const message = messages.find(item => item.id === request.source_message_id)
       || messages.find(item => item.author === '用户' && item.id >= (session.held_since || 0));
-    if (!message || !roster.waiting.length) return null;
+    if (!message) return null;
+    const spoken = turns.filter(turn => turn.round === roster.round && turn.status === 'answered').map(turn => turn.expert);
     const result = await decide_interjection(this.config.api_home, this.config.scheduler,
-      { ...base, message, experts: roster.waiting }, this.fetch);
+      { ...base, message, experts: roster.waiting, spoken }, this.fetch);
+    if (result.action === 'note') {
+      // Continuing needs a plan to continue; with nothing open or queued the discussion would stall without the host.
+      if (turns.some(turn => ['open', 'queued'].includes(turn.status))) return { ...result, action: 'continue', kind: 'interjection', after_message_id: message.id };
+      return { ...result, action: 'host', kind: 'interjection', after_message_id: message.id, label: '仅补充信息，但当前没有进行中的安排，交给主持人' };
+    }
     if (result.action !== 'ask' || !roster.waiting.includes(result.expert)) {
       return { ...result, action: 'host', kind: 'interjection', after_message_id: message.id };
     }
@@ -165,9 +180,19 @@ export class SessionDriver {
     try {
       await api(this.config, '/scheduler-decisions', { kind: plan.kind, label: plan.label,
         confidence: plan.confidence ?? null, applied, provider: this.config.scheduler.provider,
-        after_message_id, detail: plan.detail, input: plan.input });
+        after_message_id, detail: plan.detail, input: plan.input,
+        context: { model: this.config.scheduler.model, threshold: ROUTE_CONFIDENCE, wide_threshold: ROUTE_WIDE_CONFIDENCE,
+          prompt: DISCUSSION_PROMPT_VERSION, package: PACKAGE_VERSION } });
     } catch (error) { this.log(`智能调度决策记录未保存：${error.message}`); }
   }
+}
+
+/** The latest plans with their state, as the host's recent arrangement the questions refer to. */
+function arrangement_of(turns) {
+  return [...turns].sort((left, right) => Number(left.id || 0) - Number(right.id || 0)).slice(-ARRANGEMENT_TURNS).map(turn => {
+    const question = String(turn.question || '').replace(/\s+/g, ' ').trim();
+    return `${turn.expert}（第 ${turn.round} 轮，${TURN_STATUS_LABELS[turn.status] || turn.status}）：${question.length > MAX_ARRANGEMENT_CHARS ? `${question.slice(0, MAX_ARRANGEMENT_CHARS)}…` : question}`;
+  }).join('；');
 }
 
 function opening_question(phase) {

@@ -21,7 +21,7 @@ import { assert_shared_home, DiscussionService, migrate_service_home, read_regis
 import { launch_discussion, restore_room, room_models, room_profiles } from '../runner/discussion_launch.mjs';
 import { adopted_fork, claude_inbox_ready, activity_phase, activity_tool, MAX_EXECUTION_NOTES, MAX_EXECUTION_SEGMENTS, MAX_NOTES_PER_REPORT, MAX_SEGMENTS_PER_REPORT, SegmentLog, progress_note, agy_command_rule, agy_rule, antigravity_project, claude_exit_error, claude_rule_path, codex_permissions, kill_process_tree, standalone_claude_env, codex_target, deliver_task, prepare_agy_project, remove_agy_projects, run_program, TASK_SUBCOMMANDS } from '../runner/discussion_adapters.mjs';
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
-import { certainty, decide, decide_group_order, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
+import { certainty, decide, decide_group_order, DISCUSSION_PROMPT_VERSION, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
 
 /** The folded record of what the provider was asked is checked on its own. */
 const without_detail = ({ detail, input, ...plan }) => (assert.ok(Array.isArray(detail) && detail[0].choices.length && input.state && input.questions[0].instructions), plan);
@@ -84,6 +84,11 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.equal((await decide_interjection(home, jev, interjection, handling('__note__', 0.9))).action, 'note');
   assert.deepEqual(without_detail(await decide_interjection(home, jev, interjection, handling('Codex', 0.85))), { action: 'ask', expert: 'Codex', confidence: 0.85, label: '先请 Codex 回应这条留言' });
   assert.equal((await decide_interjection(home, jev, interjection, handling('__note__', 0.6))).action, 'host');
+  // Experts who already spoke are not options, so the model is told who has spoken and that such a message goes to the host.
+  let interjected;
+  await decide_interjection(home, jev, { ...interjection, spoken: ['Gemini'] }, async (url, init) => { interjected = JSON.parse(init.body); return handling('__host__', 0.9)(); });
+  assert.match(interjected.state, /本轮已发言：Gemini；本轮尚未发言：Codex/);
+  assert.match(interjected.questions.handling.criteria.__host__, /本轮已发言的专家/);
   // A round continues only on a confident "continue", and never opens with the last speaker.
   let sent;
   const round = (next, confidence, first) => async (url, init) => { sent = JSON.parse(init.body);
@@ -92,16 +97,18 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.deepEqual(without_detail(await decide_round(home, jev, discussion, round('continue', 0.9, 'Gemini'))), { action: 'continue', first: 'Gemini', confidence: 0.9, label: '继续下一轮，先请 Gemini 发言' });
   assert.deepEqual(Object.keys(sent.questions.first.criteria), ['Codex', 'Gemini']);
   assert.equal((await decide_round(home, jev, discussion, round('continue', 0.9, 'Grok'))).first, 'Codex');
-  assert.equal((await decide_round(home, jev, discussion, round('continue', 0.69, 'Codex'))).action, 'host');
+  // A wrong "continue" costs a whole round, so it needs the wide threshold.
+  assert.equal((await decide_round(home, jev, discussion, round('continue', ROUTE_WIDE_CONFIDENCE - 0.01, 'Codex'))).action, 'host');
+  assert.equal((await decide_round(home, jev, discussion, round('continue', ROUTE_WIDE_CONFIDENCE, 'Codex'))).action, 'continue');
   assert.equal((await decide_round(home, jev, discussion, round('__host__', 0.99, 'Codex'))).action, 'host');
   // The chosen option's probability decides; Jev's lower two-way `confidence` is only a fallback.
   const probable = async () => ({ ok: true, json: async () => ({ answers: { next: { type: 'choice', choice: 'continue', confidence: 0.64,
-    probabilities: { continue: 0.82, __host__: 0.18 } } } }) });
-  assert.deepEqual([(await decide_round(home, jev, discussion, probable)).action, (await decide_round(home, jev, discussion, probable)).confidence], ['continue', 0.82]);
+    probabilities: { continue: 0.88, __host__: 0.12 } } } }) });
+  assert.deepEqual([(await decide_round(home, jev, discussion, probable)).action, (await decide_round(home, jev, discussion, probable)).confidence], ['continue', 0.88]);
   assert.equal(certainty({ choice: 'a', confidence: 0.5, probabilities: {} }), 0.5);
   assert.equal((await decide_round(home, jev, discussion, round('continue', 0.6, 'Codex'))).label, '倾向继续下一轮，把握不足，交给主持人');
   // Mid-round, the next speaker comes from the unspoken candidates; unsure or host goes back to the host.
-  const speaker = (choice, confidence, obligation = 0.9) => async () => ({ ok: true, json: async () => ({ answers: { speaker: { type: 'choice', choice, confidence, probabilities: {} }, obligation: { type: 'noul', noul: obligation } } }) });
+  const speaker = (choice, confidence) => async () => ({ ok: true, json: async () => ({ answers: { speaker: { type: 'choice', choice, confidence, probabilities: {} } } }) });
   const midround = { title: '讨论', context: [], host: 'Claude', candidates: ['Codex', 'Gemini'] };
   const asked = [];
   await decide_next_speaker(home, jev, { ...midround, brief: '甲出上句', focus: '接龙', arrangement: 'Codex：出句', spoken: ['Claude'] }, async (url, init) => { asked.push(JSON.parse(init.body)); return speaker('Gemini', 0.9)(); });
@@ -112,9 +119,9 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.deepEqual(without_detail(await decide_next_speaker(home, jev, midround, speaker('Gemini', 0.9))), { action: 'next', expert: 'Gemini', confidence: 0.9, label: '本轮继续，请 Gemini 接着发言' });
   assert.equal((await decide_next_speaker(home, jev, midround, speaker('Gemini', 0.6))).action, 'host');
   assert.equal((await decide_next_speaker(home, jev, midround, speaker('__host__', 0.95))).action, 'host');
-  // Without an explicit obligation to speak, even a confident pick goes back to the host.
-  const idle = await decide_next_speaker(home, jev, midround, speaker('Gemini', 0.95, 0.3));
-  assert.deepEqual([idle.action, idle.label, idle.detail[1].choice], ['host', '有明确依据的概率 0.30，未达 0.70，交给主持人安排', '否']);
+  // One question carries the "explicit basis" rule in its options: not having spoken yet is named as no basis.
+  assert.deepEqual(Object.keys(asked[0].questions), ['speaker']);
+  assert.match(asked[0].questions.speaker.criteria.__host__, /仅仅是本轮还没发言不算依据/);
 });
 
 /** Make task files without a website or a real model. */
@@ -2306,7 +2313,7 @@ test('the session driver schedules an opening, relays a mid-round answer, then s
   const config = with_scheduler(f.config);
   f.state.messages = [{ id: 20, author: 'Codex', text: '开场观点' }];
   const driver = new SessionDriver(config, () => {}, scheduler_fetch({
-    speaker: { type: 'choice', choice: 'Codex', confidence: 0.9, probabilities: {} }, obligation: { type: 'noul', noul: 0.9 },
+    speaker: { type: 'choice', choice: 'Codex', confidence: 0.9, probabilities: {} },
   }));
   const session = { id: 7, status: 'active', goal: '比较方案', phase: 'initial', named_followup: false };
   const roster = { round: 1, waiting: ['Codex', 'Gemini'], experts: [
@@ -2321,7 +2328,7 @@ test('the session driver schedules an opening, relays a mid-round answer, then s
     { round: 1, expert: 'Gemini', status: 'answered', answer_id: 21 },
   ];
   const second_driver = new SessionDriver(config, () => {}, scheduler_fetch({
-    speaker: { type: 'choice', choice: 'Gemini', confidence: 0.9, probabilities: {} }, obligation: { type: 'noul', noul: 0.9 },
+    speaker: { type: 'choice', choice: 'Gemini', confidence: 0.9, probabilities: {} },
   }));
   const active_session = { ...session, phase: 'discussion' };
   const midround = await second_driver.plan(active_session, { ...roster, waiting: ['Gemini'] }, [first_round_turns[0]],
@@ -2338,7 +2345,7 @@ test('the session driver schedules an opening, relays a mid-round answer, then s
   assert.match(new_round.turn.question, /第 2 轮/);
 
   const round_two_driver = new SessionDriver(config, () => {}, scheduler_fetch({
-    speaker: { type: 'choice', choice: 'Gemini', confidence: 0.9, probabilities: {} }, obligation: { type: 'noul', noul: 0.9 },
+    speaker: { type: 'choice', choice: 'Gemini', confidence: 0.9, probabilities: {} },
   }));
   const round_two_next = await round_two_driver.plan(active_session, { ...roster, round: 2, waiting: ['Gemini'] },
     [...first_round_turns, { round: 2, expert: 'Codex', status: 'answered', answer_id: 22 }],
@@ -2422,7 +2429,7 @@ test('session scheduler evaluates a host request at most once across overlapping
     mark_model_started();
     await model_response;
     return { ok: true, json: async () => ({ answers: {
-      speaker: { type: 'choice', choice: '__host__', confidence: 0.99, probabilities: {} }, obligation: { type: 'noul', noul: 0.1 },
+      speaker: { type: 'choice', choice: '__host__', confidence: 0.99, probabilities: {} },
     } }) };
   });
   const inbox = { archived: false, members: [{ name: 'Claude', role: 'host', pending: state.pending }], executions: [] };
@@ -2458,7 +2465,7 @@ test('session auto-scheduling refuses to apply an old roster revision after the 
   };
   t.after(() => { globalThis.fetch = originalFetch; });
   const driver = new SessionDriver(config, () => {}, async () => ({ ok: true, json: async () => ({ answers: {
-    speaker: { type: 'choice', choice: 'Gemini', confidence: 0.9, probabilities: {} }, obligation: { type: 'noul', noul: 0.9 },
+    speaker: { type: 'choice', choice: 'Gemini', confidence: 0.9, probabilities: {} },
   } }) }));
   await driver.tick(state.room, { archived: false, members: [{ name: 'Claude', role: 'host', pending: state.pending }], executions: [] });
   assert.equal(state.plans?.length || 0, 0);
@@ -2475,11 +2482,47 @@ test('session driver reads every turns page before choosing an opening or peer q
   state.turns.push({ id: 21, round: 1, expert: 'Gemini', status: 'answered', answer_id: 21 });
   state.roster = { revision: 'r1', round: 2, waiting: ['Gemini'], experts: [{ name: 'Gemini', host: false, spoken: false, registered: true }] };
   const driver = new SessionDriver(config, () => {}, scheduler_fetch({
-    speaker: { type: 'choice', choice: 'Gemini', confidence: 0.9, probabilities: {} }, obligation: { type: 'noul', noul: 0.9 },
+    speaker: { type: 'choice', choice: 'Gemini', confidence: 0.9, probabilities: {} },
   }));
   await driver.tick(state.room, { archived: false, members: [{ name: 'Claude', role: 'host', pending: state.pending }], executions: [] });
   assert.ok(state.calls.includes('GET /turns?page=2'));
   assert.match(state.plans[0].turns[0].question, /第 2 轮/);
+});
+
+test('a side-note interjection keeps a running plan without waking the host, and records its prompt version', async t => {
+  const { state, config } = await free_fixture(t);
+  Object.assign(config, with_scheduler(config));
+  state.session = { id: 7, status: 'active', goal: '目标', phase: 'discussion', named_followup: false };
+  state.room.phase = 'discussion'; state.room.session = state.session; state.room.latest_id = 30;
+  state.messages = [{ id: 30, author: '用户', text: '补充一下，预算是十万' }];
+  state.pending = [{ id: 9, purpose: 'discuss_host', session_id: 7, cause_kind: 'user_message', source_message_id: 30 }];
+  // Everyone has spoken this round, but Gemini's queued turn is still running, so a side note can leave it alone.
+  state.turns = [{ id: 1, round: 1, expert: 'Gemini', status: 'answered', answer_id: 29, question: '请给出开场观点' },
+    { id: 2, round: 2, expert: 'Gemini', status: 'queued', question: '请回应第 1 轮的分歧' }];
+  state.roster = { revision: 'r1', round: 1, waiting: [], experts: [{ name: 'Gemini', host: false, spoken: true, registered: true }] };
+  const sent = [];
+  const decisions = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    if (String(input).endsWith('/scheduler-decisions')) decisions.push(JSON.parse(init.body));
+    return original(input, init);
+  };
+  t.after(() => { globalThis.fetch = original; });
+  const driver = new SessionDriver(config, () => {}, async (url, init) => { sent.push(JSON.parse(init.body));
+    return { ok: true, json: async () => ({ answers: { handling: { type: 'choice', choice: '__note__', confidence: 0.9, probabilities: {} } } }) }; });
+  await driver.tick(state.room, { archived: false, members: [{ name: 'Claude', role: 'host', pending: state.pending }], executions: [] });
+  assert.ok(state.calls.includes('POST /turns/continue'), 'a confident side note closes the host request by continuing the plan');
+  assert.match(sent[0].state, /主持人最近的安排：Gemini（第 1 轮，已发言）：请给出开场观点；Gemini（第 2 轮，排队中）：请回应第 1 轮的分歧/);
+  assert.deepEqual([decisions[0].applied, decisions[0].context.prompt], [true, DISCUSSION_PROMPT_VERSION]);
+
+  // With nothing open or queued, continuing would stall the discussion, so the note goes to the host.
+  state.turns = [state.turns[0]];
+  state.roster = { ...state.roster, waiting: ['Codex'] };
+  state.pending = [{ id: 10, purpose: 'discuss_host', session_id: 7, cause_kind: 'user_message', source_message_id: 30 }];
+  const calls = state.calls.length;
+  assert.equal(await driver.tick(state.room, { archived: false, members: [{ name: 'Claude', role: 'host', pending: state.pending }], executions: [] }), false);
+  assert.equal(state.calls.slice(calls).includes('POST /turns/continue'), false);
+  assert.equal(decisions.at(-1).label, '仅补充信息，但当前没有进行中的安排，交给主持人');
 });
 
 for (const outcome of ['accepted', 'cancelled', 'expired']) test(`free Sidecar delivery checks executions and reconciles ${outcome} without resending`, async t => {

@@ -12,7 +12,9 @@ export const ROUTE_CONFIDENCE = 0.7;
 /** Waking everyone or no one costs more when wrong (N runs, or an ignored message), so it needs more certainty. */
 export const ROUTE_WIDE_CONFIDENCE = 0.85;
 /** Bump when the routing question or its option descriptions change, so ratings can be compared across wordings. */
-export const ROUTE_PROMPT_VERSION = 6;
+export const ROUTE_PROMPT_VERSION = 7;
+/** The same for the three discussion questions (interjection, next speaker, next round). */
+export const DISCUSSION_PROMPT_VERSION = 2;
 const HOST_CHOICE = '__host__';
 const NOTE_CHOICE = '__note__';
 const ALL_CHOICE = '__all__';
@@ -101,6 +103,11 @@ function judged_of(state, questions, answers) {
   return { detail: detail_of(questions, answers), input: { state, questions } };
 }
 
+/** Who has and has not spoken this round, so a decision knows who the plan still owes a turn. */
+function round_progress(spoken, waiting) {
+  return `本轮已发言：${spoken.join('、') || '无'}；本轮尚未发言：${waiting.join('、') || '无'}。`;
+}
+
 /** Say which option the provider leaned to when it was not sure enough, so the transcript shows how close it was. */
 function unsure_label(lean) {
   return lean ? `倾向${lean}，把握不足，交给主持人` : '拿不准，交给主持人';
@@ -152,7 +159,7 @@ export async function route_free_message(home, scheduler, { title, goal, context
     { value: ALL_CHOICE, description: '全体成员（含主持人）各自回应一次，彼此不需要看到别人的回答；只在要求简单明确、每人独立回应一次就算完成时选，如“大家打个招呼”“各自报一下在用的模型”' },
     { value: NONE_CHOICE, description: '无需回应：只是确认、致谢或旁注，不需要任何人回答' }];
   const questions = [{ type: 'choice', name: 'handler', choices,
-    instructions: '这条用户消息没有用 @ 点名成员。判断它的回应对象，按下面的顺序：1）正文叫了某位成员的名字，或在向其提问（包括“X在吗”“X还在吗”“X你怎么看”），选该成员，即使上一条是别人的回答；2）正文没有指向任何人时，看它是否在延续某位成员的回答（追问、要求修改、引用，或“回复”指向其消息），或在补充、纠正一条正由某位成员处理的消息，是则选该成员，是主持人就选主持人；3）符合“全体”选项的条件时选全体；只出现“大家”“都”“各自”“一起”等字眼不够；4）单独的问候或闲聊（如“hi”）既没有指向某位成员，也没有要求大家一起回应，选主持人；5）只是确认、致谢或旁注选无需回应；6）对象不明确，或要讨论、互相回应、分工、排先后时选主持人，由主持人安排。' }];
+    instructions: '这条用户消息没有用 @ 点名成员。判断它的回应对象，按下面的顺序：1）正文叫了某位成员的名字，或在向其提问（包括“X在吗”“X还在吗”“X你怎么看”），选该成员，即使上一条是别人的回答；同时提到几位成员时，选被直接称呼、要求其回应或做事的那位（如“A 你让 B 去改”是在对 A 说）；2）正文没有指向任何人时，看它是否在延续某位成员的回答（追问、要求修改、引用，或“回复”指向其消息），或在补充、纠正一条正由某位成员处理的消息，是则选该成员，是主持人就选主持人；3）符合“全体”选项的条件时选全体；只出现“大家”“都”“各自”“一起”等字眼不够；4）单独的问候或闲聊（如“hi”）既没有指向某位成员，也没有要求大家一起回应，选主持人；5）只是确认、致谢或旁注选无需回应；6）对象不明确，或要讨论、互相回应、分工、排先后时选主持人，由主持人安排。' }];
   const roster = [`${host.name}（主持人）`, ...members.map(member => member.name)].join('、');
   const state = scheduler_state(title, context, message, goal, '', { roster }, ROUTE_CONTEXT_MESSAGES);
   const answers = await decide(home, scheduler, state, questions, fetch_impl);
@@ -187,12 +194,13 @@ export async function decide_group_order(home, scheduler, { title, goal, context
  * Decide one interjection in a discussion: continue the plan (note), ask one expert (ask) or wake the host (host).
  * Anything but a confident note or ask is returned as host.
  */
-export async function decide_interjection(home, scheduler, { title, goal, user_request, context, message, host, experts, ...extra }, fetch_impl) {
+export async function decide_interjection(home, scheduler, { title, goal, user_request, context, message, host, experts, spoken = [], ...extra }, fetch_impl) {
+  // Only experts still owed a turn this round can be asked: asking one who has spoken would open a new round.
   const choices = [...experts.map(name => ({ value: name, description: `请 ${name} 回应这条留言：留言是向该专家（或其负责的内容）提问、质疑或补充要求` })),
-    { value: HOST_CHOICE, description: `由主持人 ${host} 处理：留言要改变讨论目标、规则、分工、安排或结束讨论，或同时涉及多位专家` },
-    { value: NOTE_CHOICE, description: '仅补充信息：留言只是旁注、信息或鼓励，不要求任何人回应，按当前安排继续' }];
+    { value: HOST_CHOICE, description: `由主持人 ${host} 处理：留言要改变讨论目标、规则、分工、安排或结束讨论，同时涉及多位专家，或针对的是不在选项里的人（如本轮已发言的专家、主持人自己）` },
+    { value: NOTE_CHOICE, description: '仅补充信息：留言补充背景、约束或偏好，或只是旁注、鼓励，没有要求某人立即回应；后续发言的专家都能看到它，按当前安排继续' }];
   const questions = [{ type: 'choice', name: 'handling', instructions: '讨论进行中用户发来这条留言。对照当前焦点、主持简报和安排，判断它最适合怎样处理。', choices }];
-  const state = scheduler_state(title, context, message, goal, user_request, extra);
+  const state = scheduler_state(title, context, message, goal, user_request, { ...extra, progress: round_progress(spoken, experts) });
   const answers = await decide(home, scheduler, state, questions, fetch_impl);
   const judged = judged_of(state, questions, answers);
   const choice = answers.handling?.choice;
@@ -210,27 +218,19 @@ export async function decide_interjection(home, scheduler, { title, goal, user_r
  */
 export async function decide_next_speaker(home, scheduler, { title, goal, user_request, context, host, candidates, spoken = [], ...extra }, fetch_impl) {
   const recent = context.slice(-CONTEXT_MESSAGES).map(excerpt);
-  const progress = `本轮已发言：${spoken.join('、') || '无'}；本轮尚未发言：${candidates.join('、')}。`;
-  const state = [topic_lines(title, goal, user_request, { ...extra, progress }), recent.length ? `本轮及最近发言（旧→新）：\n${recent.join('\n')}` : '还没有发言。'].join('\n\n');
-  const choices = [...candidates.map(name => ({ value: name, description: `请 ${name} 接着发言：简报的分工或接龙顺序轮到 ${name}，或刚才的发言点名追问了 ${name}` })),
-    { value: HOST_CHOICE, description: `交给主持人 ${host}：没有明确该谁发言，或需要主持人重新安排` }];
-  // Having not spoken yet is no reason to speak: the host's plan may have ended on purpose, so the scheduler acts only on an explicit obligation.
+  const state = [topic_lines(title, goal, user_request, { ...extra, progress: round_progress(spoken, candidates) }), recent.length ? `本轮及最近发言（旧→新）：\n${recent.join('\n')}` : '还没有发言。'].join('\n\n');
+  // Having not spoken yet is no reason to speak: the host's plan may have ended on purpose, so a candidate needs an explicit basis.
+  const choices = [...candidates.map(name => ({ value: name, description: `请 ${name} 接着发言：简报的分工或流程规定轮到 ${name}，或最近的发言点名追问了 ${name}` })),
+    { value: HOST_CHOICE, description: `交给主持人 ${host}：简报和最近发言都没有明确规定下一位（仅仅是本轮还没发言不算依据），或需要主持人重新安排` }];
   const questions = [{ type: 'choice', name: 'speaker',
-    instructions: '主持人预排的安排已用完或被取消。对照主持简报的分工、当前焦点和主持人最近的安排，判断下一位应请谁发言。', choices },
-    { type: 'predicate', name: 'obligation',
-      instructions: `是否存在明确依据要求 ${candidates.join('、')} 之一接着发言：简报分工或流程规定轮到其人，或最近发言点名追问了其人？仅仅是“本轮还没发言”不算依据。` }];
+    instructions: '主持人预排的安排已用完或被取消，主持人可能有意只安排到这里。对照主持简报、当前焦点和主持人最近的安排，判断下一位应请谁发言。', choices }];
   const answers = await decide(home, scheduler, state, questions, fetch_impl);
   const judged = judged_of(state, questions, answers);
   const choice = answers.speaker?.choice;
   const confidence = certainty(answers.speaker);
-  const obligation = answers.obligation?.probability;
-  if (candidates.includes(choice) && confidence !== null && confidence >= ROUTE_CONFIDENCE && obligation >= ROUTE_CONFIDENCE) {
-    return { action: 'next', expert: choice, confidence, ...judged, label: `本轮继续，请 ${choice} 接着发言` };
-  }
-  if (typeof obligation === 'number' && obligation < ROUTE_CONFIDENCE) {
-    return { action: 'host', confidence, ...judged, label: `有明确依据的概率 ${obligation.toFixed(2)}，未达 ${ROUTE_CONFIDENCE.toFixed(2)}，交给主持人安排` };
-  }
-  return { action: 'host', confidence, ...judged, label: choice === HOST_CHOICE && confidence >= ROUTE_CONFIDENCE ? '建议由主持人调整安排，交给主持人' : unsure_label(candidates.includes(choice) ? `请 ${choice} 发言` : choice === HOST_CHOICE ? '交给主持人' : '') };
+  const sure = confidence !== null && confidence >= ROUTE_CONFIDENCE;
+  if (sure && candidates.includes(choice)) return { action: 'next', expert: choice, confidence, ...judged, label: `本轮继续，请 ${choice} 接着发言` };
+  return { action: 'host', confidence, ...judged, label: choice === HOST_CHOICE && sure ? '没有明确该谁发言，交给主持人安排' : unsure_label(candidates.includes(choice) ? `请 ${choice} 发言` : choice === HOST_CHOICE ? '交给主持人' : '') };
 }
 
 /**
@@ -239,7 +239,8 @@ export async function decide_next_speaker(home, scheduler, { title, goal, user_r
  */
 export async function decide_round(home, scheduler, { title, goal, user_request, context, host, experts, last_speaker, ...extra }, fetch_impl) {
   const candidates = experts.filter(name => name !== last_speaker);
-  const recent = context.slice(-CONTEXT_MESSAGES).map(excerpt);
+  // Telling repetition or drift needs at least the last two rounds side by side.
+  const recent = context.slice(-ROUTE_CONTEXT_MESSAGES).map(excerpt);
   const state = [topic_lines(title, goal, user_request, extra), recent.length ? `本轮及最近发言（旧→新）：\n${recent.join('\n')}` : '还没有发言。'].join('\n\n');
   const questions = [{ type: 'choice', name: 'next', instructions: '一轮发言刚结束。对照讨论目标、主持简报与当前焦点判断：下一轮是否还有明确的内容可以让大家互相回应、追问或补充？', choices: [
     { value: 'continue', description: '继续下一轮：最近发言里有未回应的分歧、追问或可展开的点，或简报规定的流程还没走完' },
@@ -250,8 +251,9 @@ export async function decide_round(home, scheduler, { title, goal, user_request,
   const judged = judged_of(state, questions, answers);
   const choice = answers.next?.choice;
   const confidence = certainty(answers.next);
-  if (choice !== 'continue' || confidence === null || confidence < ROUTE_CONFIDENCE || !candidates.length) {
-    const sure = confidence !== null && confidence >= ROUTE_CONFIDENCE;
+  // A wrong "continue" costs a whole round of runs, so it needs the same certainty as waking everyone.
+  if (choice !== 'continue' || confidence === null || confidence < ROUTE_WIDE_CONFIDENCE || !candidates.length) {
+    const sure = confidence !== null && confidence >= (choice === 'continue' ? ROUTE_WIDE_CONFIDENCE : ROUTE_CONFIDENCE);
     return { action: 'host', confidence, ...judged, label: choice === HOST_CHOICE && sure ? '建议收束或调整方向，交给主持人' : unsure_label(choice === 'continue' ? '继续下一轮' : choice === HOST_CHOICE ? '收束或调整方向' : '') };
   }
   const first = candidates.includes(answers.first?.choice) ? answers.first.choice : candidates[0];

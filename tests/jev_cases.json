@@ -1,0 +1,92 @@
+{
+  "fixtures": {
+    "free": {
+      "title": "记账应用开发",
+      "goal": "",
+      "host": { "name": "Codex", "description": "Codex（Codex CLI，可修改项目 ledger 的文件并运行命令）" },
+      "members": [
+        { "name": "Claude", "description": "Claude（Claude Code，可修改项目 ledger 的文件并运行命令）" },
+        { "name": "DeepSeek", "description": "DeepSeek（模型 API，只能读写房间消息）" }
+      ]
+    },
+    "discussion": {
+      "title": "数据库选型讨论",
+      "goal": "为个人记账应用选定数据库",
+      "user_request": "帮我们选一个适合个人记账应用的数据库，要能离线用，成本低。",
+      "host": "Claude",
+      "experts": ["Codex", "Gemini", "DeepSeek"],
+      "brief": "分工：Codex 评估 SQLite，Gemini 评估 PostgreSQL，DeepSeek 评估云数据库。每轮按 Codex→Gemini→DeepSeek 的顺序发言。",
+      "focus": "第 1 轮：各自评估负责的方案"
+    }
+  },
+  "cases": [
+    { "id": "S1a", "scene": "route", "note": "正文点名", "message": "Claude 在吗", "expect": "Claude" },
+    { "id": "S1b", "scene": "route", "note": "正文向某成员提问", "message": "DeepSeek 你怎么看这个方案？", "expect": "DeepSeek" },
+    { "id": "S2a", "scene": "route", "note": "追问上一位的回答",
+      "context": [{ "id": 10, "author": "用户", "text": "@Claude 介绍一下这个项目的目录结构" }, { "id": 11, "author": "Claude", "text": "目录分三部分：1. src 放业务代码；2. tests 放测试；3. scripts 放构建脚本。" }],
+      "message": "第二点展开说说", "expect": "Claude" },
+    { "id": "S2b", "scene": "route", "note": "回复指向较早的发言者",
+      "context": [{ "id": 10, "author": "用户", "text": "@全体成员 记账数据存本地还是云端？" }, { "id": 11, "author": "Claude", "text": "建议存本地 SQLite，离线可用、零成本。" }, { "id": 12, "author": "DeepSeek", "text": "建议用云端，方便多设备同步。" }],
+      "message": "这个结论有依据吗？", "reply_to": 11, "expect": "Claude" },
+    { "id": "S3", "scene": "route", "note": "纠正正在处理的消息",
+      "context": [{ "id": 20, "author": "用户", "text": "@Claude 把 README 的安装步骤改成用 npm" }],
+      "members": [{ "name": "Claude", "description": "Claude（Claude Code，可修改项目 ledger 的文件并运行命令；正在处理 #20）" }, { "name": "DeepSeek", "description": "DeepSeek（模型 API，只能读写房间消息）" }],
+      "message": "刚才说错了，是 pnpm", "expect": "Claude" },
+    { "id": "S4a", "scene": "route", "note": "简单的全体各答", "message": "大家打个招呼", "expect": "__all__" },
+    { "id": "S4b", "scene": "route", "note": "简单的全体各答", "message": "各自报一下在用的模型", "expect": "__all__" },
+    { "id": "S5a", "scene": "route", "note": "要讨论，交主持人", "message": "你们讨论一下用哪个数据库", "expect": "__host__" },
+    { "id": "S5b", "scene": "route", "note": "含“都”“各自”“一起”但实为讨论", "message": "当前各自的结论是什么？一起发下言讨论一下", "expect": "__host__" },
+    { "id": "S6a", "scene": "route", "note": "致谢",
+      "context": [{ "id": 40, "author": "用户", "text": "@Claude 修一下登录按钮的颜色" }, { "id": 41, "author": "Claude", "text": "已改为主题蓝，提交在 a1b2c3。" }],
+      "message": "好的，谢谢", "expect": "__none__" },
+    { "id": "S6b", "scene": "route", "note": "确认", "message": "收到", "expect": "__none__" },
+    { "id": "S8", "scene": "route", "note": "对象不明确", "message": "这个报错怎么回事：TypeError: Cannot read properties of undefined", "expect": "__host__" },
+    { "id": "S9a", "scene": "route", "note": "单独问候", "message": "hi", "expect": "__host__" },
+    { "id": "S9b", "scene": "route", "note": "单独问候", "message": "在吗", "expect": "__host__" },
+    { "id": "S10", "scene": "route", "note": "主持人刚答完，正文点名另一位",
+      "context": [{ "id": 30, "author": "用户", "text": "hi" }, { "id": 31, "author": "Codex", "text": "嗨，我是 Codex。想聊点什么？" }],
+      "message": "claude还在吗", "expect": "Claude" },
+    { "id": "S11", "scene": "route", "note": "提到名字但不是对其说话", "message": "Codex 你让 Claude 去改一下登录页", "expect": "__host__" },
+
+    { "id": "G1", "scene": "group", "note": "打招呼", "message": "@全体成员 大家打个招呼", "expect": "parallel" },
+    { "id": "G2", "scene": "group", "note": "接龙", "message": "@全体成员 我们来接龙写一首诗，每人一句，接着上一位写", "expect": "sequential" },
+    { "id": "G3", "scene": "group", "note": "逐个评审上一位", "message": "@全体成员 按顺序评审上一位的方案，指出问题再给出改进", "expect": "sequential" },
+    { "id": "G4", "scene": "group", "note": "各自投票", "message": "@全体成员 各自投票：用 A 方案还是 B 方案", "expect": "parallel" },
+
+    { "id": "I1", "scene": "interjection", "note": "旁注补充约束", "waiting": ["Gemini", "DeepSeek"], "spoken": ["Codex"],
+      "context": [{ "id": 50, "author": "Codex", "text": "SQLite：单文件、离线可用、零成本；缺点是多设备同步要自己做。" }],
+      "message": "补充一下，预算每月不超过 50 元", "expect": "__note__" },
+    { "id": "I2", "scene": "interjection", "note": "向未发言专家提问", "waiting": ["Gemini", "DeepSeek"], "spoken": ["Codex"],
+      "context": [{ "id": 50, "author": "Codex", "text": "SQLite：单文件、离线可用、零成本；缺点是多设备同步要自己做。" }],
+      "message": "Gemini，PostgreSQL 在手机上离线怎么办？", "expect": "Gemini" },
+    { "id": "I3", "scene": "interjection", "note": "追问已发言专家，应交主持人", "waiting": ["Gemini", "DeepSeek"], "spoken": ["Codex"],
+      "context": [{ "id": 50, "author": "Codex", "text": "SQLite：单文件、离线可用、零成本；缺点是并发写入能力弱。" }],
+      "message": "Codex，你说 SQLite 并发写入弱，有数据吗？", "expect": "__host__" },
+    { "id": "I4", "scene": "interjection", "note": "改目标与上限", "waiting": ["Gemini", "DeepSeek"], "spoken": ["Codex"],
+      "message": "改一下目标：只考虑免费方案，讨论两轮就结束", "expect": "__host__" },
+    { "id": "I5", "scene": "interjection", "note": "鼓励", "waiting": ["Gemini", "DeepSeek"], "spoken": ["Codex"],
+      "message": "加油，你们说得很好", "expect": "__note__" },
+
+    { "id": "N1", "scene": "next_speaker", "note": "简报规定了顺序", "candidates": ["Gemini", "DeepSeek"], "spoken": ["Codex"],
+      "arrangement": "Codex（第 1 轮，已发言）：请评估 SQLite",
+      "context": [{ "id": 60, "author": "Codex", "text": "SQLite：单文件、离线可用、零成本。" }], "expect": "Gemini" },
+    { "id": "N2", "scene": "next_speaker", "note": "最近发言点名追问", "candidates": ["DeepSeek"], "spoken": ["Codex", "Gemini"],
+      "brief": "各自评估一个方案，发言没有固定顺序。",
+      "arrangement": "Codex（第 1 轮，已发言）：请评估 SQLite；Gemini（第 1 轮，已发言）：请评估 PostgreSQL",
+      "context": [{ "id": 60, "author": "Codex", "text": "SQLite 适合单机。" }, { "id": 61, "author": "Gemini", "text": "PostgreSQL 功能强但要服务器。DeepSeek，云数据库每月费用你怎么看？" }], "expect": "DeepSeek" },
+    { "id": "N3", "scene": "next_speaker", "note": "主持人有意只安排到这里", "candidates": ["DeepSeek"], "spoken": ["Codex", "Gemini"],
+      "brief": "本轮只请 Codex 与 Gemini 对比两种本地方案，DeepSeek 下一轮再参与。",
+      "arrangement": "Codex（第 1 轮，已发言）：请评估 SQLite；Gemini（第 1 轮，已发言）：请评估 PostgreSQL",
+      "context": [{ "id": 60, "author": "Codex", "text": "SQLite 适合单机。" }, { "id": 61, "author": "Gemini", "text": "PostgreSQL 功能强但要服务器。" }], "expect": "__host__" },
+
+    { "id": "R1", "scene": "round", "note": "有未回应的分歧与追问",
+      "context": [{ "id": 70, "author": "Codex", "text": "SQLite 最合适：离线、零成本。" }, { "id": 71, "author": "Gemini", "text": "不同意，PostgreSQL 更可靠，SQLite 的同步问题 Codex 没回答。" }, { "id": 72, "author": "DeepSeek", "text": "云数据库能解决同步，但 Codex 说的离线要求怎么满足？" }],
+      "expect": "continue" },
+    { "id": "R2", "scene": "round", "note": "已达成一致",
+      "context": [{ "id": 70, "author": "Codex", "text": "综合下来选 SQLite，同步用导出文件解决。" }, { "id": 71, "author": "Gemini", "text": "同意 SQLite，PostgreSQL 对个人应用太重。" }, { "id": 72, "author": "DeepSeek", "text": "同意 SQLite，云数据库成本不符合预算。没有其他意见。" }],
+      "expect": "__host__" },
+    { "id": "R3", "scene": "round", "note": "在重复",
+      "context": [{ "id": 70, "author": "Codex", "text": "SQLite 离线零成本。" }, { "id": 71, "author": "Gemini", "text": "PostgreSQL 更可靠。" }, { "id": 72, "author": "DeepSeek", "text": "云数据库方便同步。" }, { "id": 73, "author": "Codex", "text": "我还是认为 SQLite 离线零成本。" }, { "id": 74, "author": "Gemini", "text": "我仍然认为 PostgreSQL 更可靠。" }, { "id": 75, "author": "DeepSeek", "text": "重复一遍，云数据库方便同步。" }],
+      "expect": "__host__" }
+  ]
+}
