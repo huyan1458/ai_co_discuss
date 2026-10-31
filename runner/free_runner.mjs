@@ -9,7 +9,7 @@ import { SegmentLog } from './execution_progress.mjs';
 import { free_task_text, TASK_SUBCOMMANDS, with_expert_prompt } from './expert_prompts.mjs';
 import { atomic_json } from './files.mjs';
 import { SessionDriver } from './session_driver.mjs';
-import { DEFAULT_SCHEDULER_MODE, REVIEW_CONFIDENCE, REVIEW_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, decide_group_order, decide_review_completion, route_free_message, route_prompt_version } from './scheduler.mjs';
+import { DEFAULT_SCHEDULER_MODE, REVIEW_CONFIDENCE, REVIEW_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, decide_group_order, decide_review_completion, route_free_message, route_prompt_version, scheduler_thresholds, some_members } from './scheduler.mjs';
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const RENEW_MS = 30_000;
@@ -142,7 +142,8 @@ function member_work(requests, name, message_id) {
 /** Why a message stayed with the host: the scheduler chose the host, or leaned elsewhere without enough certainty. */
 function route_host_label(decision, host, members) {
   if (decision.choice === '__host__' || decision.confidence === null) return `交给主持人 ${host}`;
-  const lean = decision.choice === '__all__' ? '全体各自回应' : decision.choice === '__none__' ? '无需回应'
+  const group = some_members(decision.choice);
+  const lean = decision.choice === '__all__' ? '全体各自回应' : decision.choice === '__none__' ? '无需回应' : group ? `请 ${group.join('、')} 各自回应`
     : members.some(member => member.name === decision.choice) ? `请 ${decision.choice} 回答` : '';
   return lean ? `倾向${lean}，把握不足，交给主持人 ${host}` : `交给主持人 ${host}`;
 }
@@ -452,7 +453,7 @@ export class FreeRoomRunner {
     if (decision.detail) {
       if (result.status === 'failed') label += '（未生效，网站写入失败）';
       // The @全体成员 question has one wording in every mode.
-      record = await this.record_decision(request.message_id, decision, label, result.applied && decision.action !== 'host', { prompt: ROUTE_PROMPT_VERSION });
+      record = await this.record_decision(request.message_id, decision, label, result.applied && decision.action !== 'host', { prompt: ROUTE_PROMPT_VERSION, threshold: ROUTE_CONFIDENCE, wide_threshold: ROUTE_WIDE_CONFIDENCE });
     }
     this.save_suggestion(request, { action: decision.action, actual_action,
       applied: result.applied && decision.action !== 'host', model_judgment: Boolean(decision.detail),
@@ -521,11 +522,11 @@ export class FreeRoomRunner {
     this.log(`智能调度 #${message.id}：${decision.action}${decision.member ? ` ${decision.member}` : ''}（选择 ${decision.choice ?? '-'}，置信度 ${decision.confidence ?? '-'}）`);
     if (decision.action === 'host') return this.record_route(request, decision, route_host_label(decision, host.name, members), false);
     if (decision.action !== 'member') {
-      // Everyone or no one replaces the host's request in one step; a host that already started keeps the message.
-      const applied = await api(this.config, `/recommendations/${message.id}`, { action: decision.action })
+      // Everyone, the named few or no one replaces the host's request in one step; a host that already started keeps the message.
+      const applied = await api(this.config, `/recommendations/${message.id}`, { action: decision.action, ...(decision.members ? { members: decision.members } : {}) })
         .then(() => true, error => { this.log(`智能调度 #${message.id} 未能改派：${error.message}`); return false; });
       const names = described.map(member => member.name).join('、');
-      const label = decision.action === 'all' ? `请全体各自回应（${names}）` : '无需回应，未唤醒任何成员';
+      const label = decision.action === 'all' ? `请全体各自回应（${names}）` : decision.action === 'some' ? `请 ${decision.members.join('、')} 各自回应` : '无需回应，未唤醒任何成员';
       return this.record_route(request, decision, applied ? label : `${label}（未生效，仍由主持人处理）`, applied);
     }
     try {
@@ -542,10 +543,11 @@ export class FreeRoomRunner {
   }
   /** Show each judgment under its message so the user can rate it; a failed record never affects delivery. */
   async record_decision(message_id, decision, label, applied, context = {}) {
+    const limits = scheduler_thresholds(this.config.scheduler.mode || DEFAULT_SCHEDULER_MODE);
     try {
       return await api(this.config, '/scheduler-decisions', { kind: 'interjection', label, confidence: decision.confidence ?? null,
         applied, provider: this.config.scheduler.provider, after_message_id: message_id, detail: decision.detail, input: decision.input,
-        context: { model: this.config.scheduler.model, threshold: ROUTE_CONFIDENCE, wide_threshold: ROUTE_WIDE_CONFIDENCE,
+        context: { model: this.config.scheduler.model, threshold: limits.member, wide_threshold: limits.wide,
           mode: this.config.scheduler.mode || DEFAULT_SCHEDULER_MODE, prompt: route_prompt_version(this.config.scheduler.mode || DEFAULT_SCHEDULER_MODE), package: PACKAGE_VERSION, ...context } });
     } catch (error) { this.log(`智能调度 #${message_id} 决策记录未保存：${error.message}`); }
   }

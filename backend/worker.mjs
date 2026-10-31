@@ -4344,8 +4344,9 @@ async function free_route_wide(database, room_id, message_id, payload) {
   if (["sequential", "host"].includes(action)) throw new HttpError(400, "只有请全体成员回应的消息可以依次回答或交回主持人");
   const route = await database.prepare("SELECT * FROM member_requests WHERE message_id=? AND purpose='route'").bind(message_id).first();
   if (!route || route.room_id !== room_id) throw new HttpError(404, "只能处理交给主持人的未点名消息");
+  if (!["all", "none", "some"].includes(action)) throw new HttpError(400, "未点名消息只能选 action=all、some 或 none");
   const pending = "AND status='pending'";
-  const statements = action === "none"
+  const statements = action === "some" ? await free_route_some(database, room_id, route, payload.members) : action === "none"
     ? [database.prepare(`UPDATE member_requests SET status='cancelled' WHERE id=? ${pending}`).bind(route.id),
       database.prepare("INSERT OR REPLACE INTO request_cancel_reasons (request_id,reason) SELECT id,'no_reply' FROM member_requests WHERE id=? AND status='cancelled' AND execution_id IS NULL AND answer_id IS NULL").bind(route.id)]
     // The host keeps its row (one request per message and member) and now answers its own share, without dispatching.
@@ -4357,6 +4358,25 @@ async function free_route_wide(database, room_id, message_id, payload) {
   if (!results[0].meta.changes) throw new HttpError(409, "主持人已开始处理这条消息，不再改派");
   const requests = (await database.prepare("SELECT * FROM member_requests WHERE message_id=? ORDER BY id").bind(message_id).all()).results;
   return { action, requests };
+}
+
+/** Smart scheduling answers an unnamed message with the few members it names, each once, as if the user named them. */
+async function free_route_some(database, room_id, route, names) {
+  if (!Array.isArray(names) || names.some(name => typeof name !== "string") || new Set(names).size < 2) throw new HttpError(400, "action=some 须带 members：至少两位不同的成员名");
+  const rows = (await database.prepare(`SELECT id,name FROM room_members WHERE room_id=? AND status='active' AND ${FREE_REGISTERED}`).bind(room_id).all()).results;
+  const found = new Map(rows.map(row => [row.name, row.id]));
+  const missing = [...new Set(names)].filter(name => !found.has(name));
+  if (missing.length) throw new HttpError(409, `这些成员不在场或未注册：${missing.join("、")}`);
+  const ids = [...new Set(names)].map(name => found.get(name));
+  const pending = "AND status='pending'";
+  // The host either keeps its row and answers its own share, or gives the message up to the named members.
+  const first = ids.includes(route.member_id)
+    ? [database.prepare(`UPDATE member_requests SET purpose='all' WHERE id=? ${pending}`).bind(route.id)]
+    : [database.prepare(`UPDATE member_requests SET status='cancelled' WHERE id=? ${pending}`).bind(route.id),
+      database.prepare("INSERT OR REPLACE INTO request_cancel_reasons (request_id,reason) SELECT id,'rerouted' FROM member_requests WHERE id=? AND status='cancelled' AND execution_id IS NULL AND answer_id IS NULL").bind(route.id)];
+  const guard = ids.includes(route.member_id) ? "purpose='all' AND status='pending'" : "status='cancelled' AND execution_id IS NULL";
+  return [...first, ...ids.filter(id => id !== route.member_id).map(id => database.prepare(`INSERT OR IGNORE INTO member_requests (room_id,member_id,message_id,chain_id,purpose,created_by,created_at)
+    SELECT ?,?,?,?,'all','user',unixepoch() WHERE EXISTS(SELECT 1 FROM member_requests WHERE id=? AND ${guard})`).bind(room_id, id, route.message_id, route.message_id, route.id))];
 }
 
 /** The original disposition is the receipt for every retry, including after the host has begun answering. */
@@ -4429,8 +4449,8 @@ async function free_route_group(database, room_id, group, payload) {
  */
 async function free_adopt(database, room_id, token, message_id, payload) {
   await require_free_owner(database, room_id, token);
-  if (["all", "none", "sequential", "host"].includes(payload.action)) return free_route_wide(database, room_id, message_id, payload);
-  if (payload.action !== "adopt" || !["interrupt", "after"].includes(payload.mode)) throw new HttpError(400, "采纳须为 action=adopt，mode 为 interrupt 或 after；全体、依次或无需回应为 action=all、sequential 或 none");
+  if (["all", "none", "sequential", "host", "some"].includes(payload.action)) return free_route_wide(database, room_id, message_id, payload);
+  if (payload.action !== "adopt" || !["interrupt", "after"].includes(payload.mode)) throw new HttpError(400, "采纳须为 action=adopt，mode 为 interrupt 或 after；全体、依次、指定几位或无需回应为 action=all、sequential、some 或 none");
   const row = await database.prepare("SELECT * FROM member_recommendations WHERE room_id=? AND message_id=?").bind(room_id, message_id).first();
   if (!row) throw new HttpError(404, "这条消息没有智能调度推荐");
   if (row.status !== "open") return { recommendation: row, duplicate: true };

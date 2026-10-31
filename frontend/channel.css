@@ -1093,8 +1093,8 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-schedule-toggle { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--ui-text-dimmed); cursor: pointer; }
 .channel-schedule-correction { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: -14px 16px 20px; padding: 8px 14px; border: 1px dashed var(--ui-border); border-radius: 8px; font-size: 12px; color: var(--ui-text-muted); }
 .channel-schedule-correction label { display: inline-flex; align-items: center; gap: 6px; }
-.channel-schedule-correction select, .channel-schedule-correction input { padding: 3px 6px; border: 1px solid var(--ui-border); border-radius: 4px; background: transparent; color: inherit; font: inherit; }
-.channel-schedule-correction input { flex: 1; min-width: 160px; }
+.channel-schedule-correction-select { min-width: 132px; }
+.channel-schedule-correction-note { flex: 1; min-width: 160px; }
 @media (min-width: 701px) { .channel-schedule-correction { margin-right: var(--message-inset-end); } }
 /* A retracted or rewound message keeps its place as one quiet line; a rewound run folds into its first line. */
 .channel-withdrawn { display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0 16px 16px; padding: 6px 14px; border: 1px dashed var(--ui-border); border-radius: 8px; color: var(--ui-text-muted); font-size: 12px; }
@@ -1122,6 +1122,23 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-schedule-card.is-open .channel-schedule-toggle [class*="icon"] { transform: rotate(180deg); }
 .channel-schedule-detail { flex-basis: 100%; display: flex; flex-direction: column; gap: 4px; margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--ui-border); color: var(--ui-text-muted); overflow-wrap: anywhere; }
 .channel-schedule-detail p { display: flex; flex-direction: column; gap: 1px; margin: 0; }
+.channel-schedule-meta { color: var(--ui-text-dimmed); }
+/* The options of one question side by side, most likely first; the chosen one stands out. */
+.channel-schedule-detail p.channel-schedule-odds { flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.channel-schedule-odds b { color: var(--ui-text-toned); font-weight: 600; }
+.channel-schedule-odds span { color: var(--ui-text-dimmed); }
+.channel-schedule-odds span.is-chosen { color: var(--ui-text-highlighted); font-weight: 600; }
+.channel-schedule-odds small { margin-left: 4px; }
+.channel-schedule-input-open { align-self: flex-start; padding: 2px 6px; border-radius: 4px; color: var(--channel-accent); font-size: 12px; }
+.channel-schedule-input-open:hover:not(:disabled) { background: var(--ui-bg-accented); }
+.channel-schedule-input-error { color: var(--ui-error); }
+/* One line per part, cut with an ellipsis; hovering shows the full text. */
+.channel-schedule-input { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+.channel-schedule-input p { display: grid; grid-template-columns: 6.5em minmax(0, 1fr); gap: 8px; }
+.channel-schedule-input b { color: var(--ui-text-toned); font-weight: 600; white-space: nowrap; }
+.channel-schedule-input span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.channel-schedule-input p.is-choice b { padding-left: 1em; font-weight: 400; overflow: hidden; text-overflow: ellipsis; }
+.channel-schedule-input p.is-choice small { margin-left: 6px; }
 .channel-schedule-card.is-skipped { border-color: var(--ui-border); background: transparent; color: var(--ui-text-muted); }
 .channel-schedule-card.is-skipped .channel-schedule-icon { color: var(--ui-text-dimmed); }
 /* Same right inset as the message cards, which leave room for their action column. */

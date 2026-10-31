@@ -1727,6 +1727,8 @@ def route_wide(connection, room_id, message_id, payload):
         return route_group(connection, room_id, group, payload)
     if action in ("sequential", "host"):
         raise ValueError("只有请全体成员回应的消息可以依次回答或交回主持人")
+    if action not in ("all", "none", "some"):
+        raise ValueError("未点名消息只能选 action=all、some 或 none")
     route = host_route_request(connection, message_id)
     if not route or route["room_id"] != room_id:
         raise LookupError("只能处理交给主持人的未点名消息")
@@ -1735,6 +1737,8 @@ def route_wide(connection, room_id, message_id, payload):
     if action == "none":
         record_cancel_reasons(connection, "id=?", (route["id"],), "no_reply")
         connection.execute("UPDATE member_requests SET status='cancelled' WHERE id=?", (route["id"],))
+    elif action == "some":
+        route_some(connection, room_id, route, payload.get("members"))
     else:
         # The host keeps its row (one request per message and member) and now answers its own share, without dispatching.
         connection.execute("UPDATE member_requests SET purpose='all' WHERE id=?", (route["id"],))
@@ -1745,6 +1749,28 @@ def route_wide(connection, room_id, message_id, payload):
     return {"action": action, "requests": [dict(row) for row in requests]}
 
 
+def route_some(connection, room_id, route, names):
+    """Smart scheduling answers an unnamed message with the few members it names, each once, as if the user named them."""
+    if not isinstance(names, list) or not all(isinstance(name, str) for name in names) or len(set(names)) < 2:
+        raise ValueError("action=some 须带 members：至少两位不同的成员名")
+    found = {row["name"]: row["id"] for row in connection.execute(
+        f"SELECT id,name FROM room_members WHERE room_id=? AND status='active' AND {REGISTERED_MEMBER}", (room_id,))}
+    missing = [name for name in dict.fromkeys(names) if name not in found]
+    if missing:
+        raise FileExistsError(f"这些成员不在场或未注册：{'、'.join(missing)}")
+    ids = [found[name] for name in dict.fromkeys(names)]
+    if route["member_id"] in ids:
+        # The host is one of them: it keeps its row and answers its own share, without dispatching.
+        connection.execute("UPDATE member_requests SET purpose='all' WHERE id=?", (route["id"],))
+    else:
+        record_cancel_reasons(connection, "id=?", (route["id"],), "rerouted")
+        connection.execute("UPDATE member_requests SET status='cancelled' WHERE id=?", (route["id"],))
+    for member_id in ids:
+        if member_id != route["member_id"]:
+            connection.execute("""INSERT OR IGNORE INTO member_requests (room_id,member_id,message_id,chain_id,purpose,created_by,created_at)
+                VALUES (?,?,?,?,'all','user',?)""", (room_id, member_id, route["message_id"], route["message_id"], int(time.time())))
+
+
 def adopt_recommendation(connection, room_id, token, message_id, payload):
     """The user adopts a recommendation before it expires: interrupt the host now, or ask the member after the host.
 
@@ -1752,10 +1778,10 @@ def adopt_recommendation(connection, room_id, token, message_id, payload):
     """
     require_owner(connection, room_id, token)
     begin_write(connection)
-    if payload.get("action") in ("all", "none", "sequential", "host"):
+    if payload.get("action") in ("all", "none", "sequential", "host", "some"):
         return route_wide(connection, room_id, message_id, payload)
     if payload.get("action") != "adopt" or payload.get("mode") not in ("interrupt", "after"):
-        raise ValueError("采纳须为 action=adopt，mode 为 interrupt 或 after；全体、依次或无需回应为 action=all、sequential 或 none")
+        raise ValueError("采纳须为 action=adopt，mode 为 interrupt 或 after；全体、依次、指定几位或无需回应为 action=all、sequential、some 或 none")
     row = connection.execute("SELECT * FROM member_recommendations WHERE room_id=? AND message_id=?", (room_id, message_id)).fetchone()
     if not row:
         raise LookupError("这条消息没有智能调度推荐")

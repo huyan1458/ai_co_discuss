@@ -2976,6 +2976,14 @@ test('Worker smart scheduling asks everyone without a hand-off, or no one, like 
   const started = (await r.say('已经开始处理')).body.message.id;
   await r.reserve('Claude');
   assert.equal((await f.request(`${r.path}/recommendations/${started}`, { action: 'all' }, r.owner)).status, 409);
+  await r.answer((await r.reserve('Claude')).body.id, r.claude, 'Claude');
+  // some asks only the listed members; an absent name or a single name is refused.
+  const pair = (await r.say('Codex 和 Gemini 分别看一下')).body.message.id;
+  const some = members => f.request(`${r.path}/recommendations/${pair}`, { action: 'some', members }, r.owner);
+  assert.equal((await some(['Codex'])).status, 400);
+  assert.equal((await some(['Codex', 'Grok'])).status, 409);
+  assert.equal((await some(['Codex', 'Gemini'])).status, 200);
+  assert.deepEqual((await requests()).slice(-3), [['Claude', 'route', 'cancelled'], ['Codex', 'all', 'pending'], ['Gemini', 'all', 'pending']]);
 });
 
 test('Worker free rooms forward online answers and create discussions in place', async t => {

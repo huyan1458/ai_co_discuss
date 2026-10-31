@@ -181,7 +181,8 @@ async function save_key() {
 .scheduler-heading strong { color: var(--ui-text-highlighted); font-size: 12px; font-weight: 600; }
 .scheduler-heading strong > span { margin-left: 6px; color: var(--ui-text-muted); font-size: 10px; font-weight: 400; }
 .scheduler-field { display: grid; grid-template-columns: 40px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--ui-text-dimmed); font-size: 11px; }
-.scheduler-mode { display: grid; grid-template-columns: auto minmax(0, 220px); align-items: center; gap: 10px; color: var(--ui-text-dimmed); font-size: 12px; }
+.scheduler-mode { display: flex; align-items: center; gap: 10px; color: var(--ui-text-dimmed); font-size: 12px; }
+.scheduler-mode > .expert-card-modes { width: 220px; max-width: 100%; }
 .scheduler-note { margin: 0; color: var(--ui-text-muted); font-size: 10px; line-height: 1.5; }
 .scheduler-settings :deep(.scheduler-key-masked) { -webkit-text-security: disc; }
 .scheduler-title { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 500; }

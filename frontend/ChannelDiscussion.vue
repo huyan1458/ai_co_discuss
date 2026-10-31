@@ -295,7 +295,66 @@ const scheduler_decisions = computed(() => {
 /** Messages the local service is still analysing; the card gives way once the decision is recorded. */
 const routing_messages = computed(() => new Set(room.value.scheduler_routing || []));
 const DECISION_OPTIONS = { __host__: "交给主持人", __note__: "仅补充信息", continue: "继续下一轮", __all__: "全体各自回应", __none__: "无需回应" };
-const option_name = (name) => DECISION_OPTIONS[name] || bridge.display_name(name);
+// "Only these few" choices carry the names after a prefix, as the scheduler writes them.
+const SOME_PREFIX = "__some__:";
+const option_name = (name) => DECISION_OPTIONS[name]
+  || (String(name).startsWith(SOME_PREFIX) ? `${String(name).slice(SOME_PREFIX.length).split("、").map(bridge.display_name).join("、")} 各自回应` : bridge.display_name(name));
+// The model's input is fetched only when asked for; it is several KB per decision and not part of the room view.
+const decision_inputs = ref({});
+/** Load one decision's input once and keep it for the card. */
+async function show_decision_input(decision) {
+  if (decision_inputs.value[decision.id]?.data) return;
+  decision_inputs.value = { ...decision_inputs.value, [decision.id]: { loading: true } };
+  try { decision_inputs.value = { ...decision_inputs.value, [decision.id]: { data: summarize_input(await bridge.load_decision_input(decision.id)) } }; }
+  catch (failure) { decision_inputs.value = { ...decision_inputs.value, [decision.id]: { error: failure.message } }; }
+}
+/** Message numbers as a short list: consecutive numbers collapse into a range. */
+function message_span(ids) {
+  if (!ids.length) return "";
+  const runs = [];
+  for (const id of ids) {
+    const last = runs.at(-1);
+    if (last && id === last[1] + 1) last[1] = id; else runs.push([id, id]);
+  }
+  return runs.map(([from, to]) => from === to ? `#${from}` : `#${from}–#${to}`).join("、");
+}
+/**
+ * Split the saved state into the fixed background, the room facts and which messages were passed (numbers only);
+ * options keep only their descriptions, since the card already shows their probabilities.
+ */
+function summarize_input(view) {
+  const input = view?.input;
+  if (!input?.state) return null;
+  const blocks = String(input.state).split("\n\n");
+  const lines = blocks[0].split("\n");
+  const start = lines.findIndex((line) => line.startsWith("房间："));
+  const message_block = blocks.find((block) => /^(近期消息|本轮及最近发言)/.test(block)) || "";
+  const pending_block = blocks.find((block) => block.startsWith("待处理的用户消息")) || "";
+  const ids = (block) => [...block.matchAll(/^#(\d+)/gm)].map((match) => Number(match[1]));
+  const recent = ids(message_block);
+  return {
+    background: (start > 0 ? lines.slice(0, start) : []).join("\n"),
+    facts: (start >= 0 ? lines.slice(start) : lines).join("\n"),
+    messages: recent.length ? `${recent.length} 条：${message_span(recent)}` : "无",
+    pending: message_span(ids(pending_block)),
+    questions: (input.questions || []).map((question) => ({ instructions: question.instructions,
+      choices: (question.choices || []).map((choice) => ({ name: option_name(choice.value), description: choice.description })) })),
+  };
+}
+// Records made before the two wordings existed used the checklist that became the stable one.
+const DECISION_MODES = { guided: "引导（试验）", stable: "稳定" };
+/** Provider, model, wording and prompt version of one decision, read from the record itself. */
+function decision_meta(decision) {
+  let context = {};
+  try { context = JSON.parse(decision.context || "{}") || {}; } catch { context = {}; }
+  return [SCHEDULER_LABELS[decision.provider] || decision.provider, context.model, DECISION_MODES[context.mode] || DECISION_MODES.stable,
+    context.prompt ? `提示版本 ${context.prompt}` : ""].filter(Boolean).join(" · ");
+}
+/** Every option of one question with its probability, most likely first, so a close call is visible at a glance. */
+function decision_odds(item) {
+  return (item.choices || []).map((value) => ({ value, name: option_name(value), probability: item.probabilities?.[value] }))
+    .sort((left, right) => (right.probability ?? -1) - (left.probability ?? -1));
+}
 /** The host's own plans stand beside the decisions, under the message they followed. */
 const host_arrangements = computed(() => {
   const rows = new Map();
@@ -320,7 +379,9 @@ function save_correction(decision) {
   act("rate_decision", { decision_id: decision.id, rating: "bad", should_be, note });
 }
 /** Who could have answered: every member present, plus the host; a free room's routing can also pick everyone or no one. */
-const correction_options = computed(() => [{ label: "未指定", value: "" }, ...(room.value.members || []).filter((member) => member.status === "active")
+// The select needs a non-empty value for "not specified"; it is saved as an empty answer.
+const UNSET_CORRECTION = "__unset__";
+const correction_options = computed(() => [{ label: "未指定", value: UNSET_CORRECTION }, ...(room.value.members || []).filter((member) => member.status === "active")
   .map((member) => ({ label: bridge.display_name(member.name), value: member.name })),
   ...(free.value ? ["__all__", "__none__"].map((value) => ({ label: DECISION_OPTIONS[value], value })) : [])]);
 function adopt(message_id, mode) {
@@ -1312,13 +1373,29 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             <button v-if="view.access?.can_manage" type="button" class="channel-schedule-rate" :class="{ 'is-on': decision.feedback === 'good' }" :aria-pressed="decision.feedback === 'good'" aria-label="这次调度判断得好" title="判断得好" @click="rate_decision(decision, 'good')"><UIcon name="i-lucide-thumbs-up" /></button>
             <button v-if="view.access?.can_manage" type="button" class="channel-schedule-rate" :class="{ 'is-on': decision.feedback === 'bad' }" :aria-pressed="decision.feedback === 'bad'" aria-label="这次调度判断得不好" title="判断得不好" @click="rate_decision(decision, 'bad')"><UIcon name="i-lucide-thumbs-down" /></button>
           </template>
-          <p v-if="decision.provider"><span>决策服务：<strong>{{ SCHEDULER_LABELS[decision.provider] || decision.provider }}</strong></span></p>
-          <p v-for="(item, index) in decision.detail" :key="index"><span>问：{{ item.question }}（{{ item.choices.map(option_name).join(" / ") }}）</span><span>答：{{ item.choice ? option_name(item.choice) : "无" }}<small v-if="item.probabilities[item.choice] !== undefined">概率 {{ Number(item.probabilities[item.choice]).toFixed(2) }}</small></span></p>
+          <p class="channel-schedule-meta">{{ decision_meta(decision) }}</p>
+          <p v-for="(item, index) in decision.detail" :key="index" class="channel-schedule-odds">
+            <b v-if="decision.detail.length > 1">第 {{ index + 1 }} 题</b>
+            <span v-for="option in decision_odds(item)" :key="option.value" :class="{ 'is-chosen': option.value === item.choice }">{{ option.name }}<small v-if="option.probability !== undefined">{{ Number(option.probability).toFixed(2) }}</small></span>
+          </p>
+          <button v-if="!decision_inputs[decision.id]?.data" type="button" class="channel-schedule-input-open" :disabled="decision_inputs[decision.id]?.loading" @click="show_decision_input(decision)">{{ decision_inputs[decision.id]?.loading ? "正在读取…" : "查看完整输入" }}</button>
+          <p v-if="decision_inputs[decision.id]?.error" class="channel-schedule-input-error">{{ decision_inputs[decision.id].error }}</p>
+          <p v-else-if="decision_inputs[decision.id]?.data === null">这条判断没有保存输入。</p>
+          <div v-else-if="decision_inputs[decision.id]?.data" v-for="input in [decision_inputs[decision.id].data]" :key="decision.id" class="channel-schedule-input">
+            <p v-if="input.background"><b>固定背景</b><span :title="input.background">{{ input.background }}</span></p>
+            <p><b>房间与成员</b><span :title="input.facts">{{ input.facts }}</span></p>
+            <p><b>对话上下文</b><span>近期消息 {{ input.messages }}<template v-if="input.pending">；待处理 {{ input.pending }}</template></span></p>
+            <template v-for="(question, index) in input.questions" :key="index">
+              <p><b>问题{{ input.questions.length > 1 ? ` ${index + 1}` : "" }}</b><span :title="question.instructions">{{ question.instructions }}</span></p>
+              <p v-for="choice in question.choices" :key="choice.name" class="is-choice"><b>{{ choice.name }}</b><span :title="choice.description">{{ choice.description }}</span></p>
+            </template>
+          </div>
         </ScheduleCard>
         <template v-for="decision in scheduler_decisions.get(message.id) || []" :key="`correction-${decision.id}`">
           <form v-if="correcting.id === decision.id && decision.feedback === 'bad'" class="channel-schedule-correction" @submit.prevent="save_correction(decision)">
-            <label>应该由谁回答<select v-model="correcting.should_be"><option v-for="option in correction_options" :key="option.value" :value="option.value">{{ option.label }}</option></select></label>
-            <input v-model="correcting.note" type="text" maxlength="200" placeholder="想说的话（可选）" aria-label="对这次调度判断想说的话">
+            <label>应该由谁回答<USelect :model-value="correcting.should_be || UNSET_CORRECTION" :items="correction_options" aria-label="应该由谁回答" size="xs" class="channel-schedule-correction-select"
+              @update:model-value="correcting.should_be = $event === UNSET_CORRECTION ? '' : $event" /></label>
+            <UInput v-model="correcting.note" maxlength="200" placeholder="想说的话（可选）" aria-label="对这次调度判断想说的话" size="xs" class="channel-schedule-correction-note" />
             <UButton type="submit" label="保存" size="xs" variant="soft" color="primary" />
             <UButton label="关闭" size="xs" variant="ghost" color="neutral" @click="correcting = { id: 0, should_be: '', note: '' }" />
           </form>

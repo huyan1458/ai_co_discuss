@@ -32,7 +32,7 @@ const activity_phase = (adapter, event) => adapter_of(adapter).events.phase(even
 const activity_tool = (adapter, event) => adapter_of(adapter).events.tool(event);
 const progress_note = (adapter, event, responses) => adapter_of(adapter).events.note(event, responses);
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
-import { certainty, decide, decide_group_order, decide_review_completion, DISCUSSION_GUIDED_PROMPT_VERSION, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
+import { certainty, decide, decide_group_order, decide_review_completion, DISCUSSION_GUIDED_PROMPT_VERSION, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_thresholds, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
 
 /** The folded record of what the provider was asked is checked on its own. */
 const without_detail = ({ detail, input, ...plan }) => (assert.ok(Array.isArray(detail) && detail[0].choices.length && input.state && input.questions[0].instructions), plan);
@@ -111,13 +111,27 @@ test('smart scheduling maps one neutral question set to both providers and reads
   const reply = (choice, confidence) => async () => ({ ok: true, json: async () => ({ answers: { handler: { type: 'choice', choice, confidence, probabilities: {} } } }) });
   const input = { title: '房间', context: [], message: { id: 3, author: '用户', text: '修一下登录', reply_to: 2 }, host: { name: 'Claude', description: 'Claude（Claude Code）' },
     members: [{ name: 'Codex', description: 'Codex CLI' }] };
+  // The guided wording (default) has its own lower thresholds; the stable one keeps 0.7 / 0.85.
+  const limits = scheduler_thresholds('guided');
   const routed = await route_free_message(home, jev, input, reply('Codex', 0.95));
   assert.deepEqual([routed.action, routed.member, routed.detail[0].choices], ['member', 'Codex', ['Codex', '__host__', '__all__', '__none__']]);
-  assert.equal((await route_free_message(home, jev, input, reply('Codex', ROUTE_CONFIDENCE - 0.01))).action, 'host');
+  assert.equal((await route_free_message(home, jev, input, reply('Codex', limits.member - 0.01))).action, 'host');
+  assert.equal((await route_free_message(home, { ...jev, mode: 'stable' }, input, reply('Codex', ROUTE_CONFIDENCE - 0.01))).action, 'host');
+  assert.equal((await route_free_message(home, jev, input, reply('Codex', limits.member))).action, 'member');
   assert.equal((await route_free_message(home, jev, input, reply('__host__', 0.99))).action, 'host');
-  assert.equal((await route_free_message(home, jev, input, reply('__all__', ROUTE_WIDE_CONFIDENCE))).action, 'all');
-  assert.equal((await route_free_message(home, jev, input, reply('__all__', ROUTE_WIDE_CONFIDENCE - 0.01))).action, 'host');
+  assert.equal((await route_free_message(home, jev, input, reply('__all__', limits.wide))).action, 'all');
+  assert.equal((await route_free_message(home, jev, input, reply('__all__', limits.wide - 0.01))).action, 'host');
+  assert.equal((await route_free_message(home, { ...jev, mode: 'stable' }, input, reply('__all__', ROUTE_WIDE_CONFIDENCE - 0.01))).action, 'host');
   assert.equal((await route_free_message(home, jev, input, reply('__none__', 0.99))).action, 'none');
+  // When the text names two or more members, each group of them is one choice; it needs the wide threshold.
+  let named_sent;
+  const pair = { ...input, members: [...input.members, { name: 'Gemini', description: 'Gemini CLI' }], message: { id: 4, author: '用户', text: 'codex 和 Gemini 分别看一下' } };
+  const picked = await route_free_message(home, jev, pair, async (url, init) => { named_sent = JSON.parse(init.body); return reply('__some__:Codex、Gemini', limits.wide)(); });
+  assert.ok(Object.keys(named_sent.questions.handler.criteria).includes('__some__:Codex、Gemini'));
+  assert.deepEqual([picked.action, picked.members], ['some', ['Codex', 'Gemini']]);
+  assert.equal((await route_free_message(home, jev, pair, reply('__some__:Codex、Gemini', limits.wide - 0.01))).action, 'host');
+  await route_free_message(home, jev, input, async (url, init) => { named_sent = JSON.parse(init.body); return reply('__host__', 0.9)(); });
+  assert.ok(!Object.keys(named_sent.questions.handler.criteria).some(key => key.startsWith('__some__')));
   assert.match(scheduler_state('房间', [], input.message), /#3 用户（回复 #2）：修一下登录/);
   // The guided mode (default) describes the room and each member in the state; options say what each choice leads to.
   let sent_to_model;
@@ -153,7 +167,7 @@ test('smart scheduling maps one neutral question set to both providers and reads
   const interjection = { ...input, experts: ['Codex'] };
   assert.equal((await decide_interjection(home, jev, interjection, handling('__note__', 0.9))).action, 'note');
   assert.deepEqual(without_detail(await decide_interjection(home, jev, interjection, handling('Codex', 0.85))), { action: 'ask', expert: 'Codex', confidence: 0.85, label: '先请 Codex 回应这条留言' });
-  assert.equal((await decide_interjection(home, jev, interjection, handling('__note__', 0.6))).action, 'host');
+  assert.equal((await decide_interjection(home, jev, interjection, handling('__note__', limits.member - 0.01))).action, 'host');
   // Experts who already spoke are not options, so the model is told who has spoken and that such a message goes to the host.
   let interjected;
   await decide_interjection(home, jev, { ...interjection, spoken: ['Gemini'] }, async (url, init) => { interjected = JSON.parse(init.body); return handling('__host__', 0.9)(); });
@@ -167,17 +181,17 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.deepEqual(without_detail(await decide_round(home, jev, discussion, round('continue', 0.9, 'Gemini'))), { action: 'continue', first: 'Gemini', confidence: 0.9, label: '继续下一轮，先请 Gemini 发言' });
   assert.deepEqual(Object.keys(sent.questions.first.criteria), ['Codex', 'Gemini', '__host__']);
   assert.equal((await decide_round(home, jev, discussion, round('continue', 0.9, 'Grok'))).action, 'host');
-  assert.equal((await decide_round(home, jev, discussion, round('continue', 0.9, 'Codex', ROUTE_CONFIDENCE - 0.01))).action, 'host');
-  assert.equal((await decide_round(home, jev, discussion, round('continue', 0.9, 'Codex', ROUTE_CONFIDENCE))).action, 'continue');
+  assert.equal((await decide_round(home, jev, discussion, round('continue', 0.9, 'Codex', limits.member - 0.01))).action, 'host');
+  assert.equal((await decide_round(home, jev, discussion, round('continue', 0.9, 'Codex', limits.member))).action, 'continue');
   assert.equal((await decide_round(home, jev, discussion, round('continue', 0.9, '__host__'))).action, 'host');
   const single = { ...discussion, experts: ['Codex', 'Grok'] };
-  assert.equal((await decide_round(home, jev, single, round('continue', 0.9, 'Codex', 0.6))).action, 'host');
+  assert.equal((await decide_round(home, jev, single, round('continue', 0.9, 'Codex', limits.member - 0.01))).action, 'host');
   assert.deepEqual(Object.keys(sent.questions.first.criteria), ['Codex', '__host__']);
   assert.equal((await decide_round(home, jev, single, round('continue', 0.9, 'Codex'))).first, 'Codex');
   assert.equal((await decide_round(home, jev, { ...discussion, experts: ['Grok'] }, async () => assert.fail('no candidate must not call a model'))).action, 'host');
   // A wrong "continue" costs a whole round, so it needs the wide threshold.
-  assert.equal((await decide_round(home, jev, discussion, round('continue', ROUTE_WIDE_CONFIDENCE - 0.01, 'Codex'))).action, 'host');
-  assert.equal((await decide_round(home, jev, discussion, round('continue', ROUTE_WIDE_CONFIDENCE, 'Codex'))).action, 'continue');
+  assert.equal((await decide_round(home, jev, discussion, round('continue', limits.wide - 0.01, 'Codex'))).action, 'host');
+  assert.equal((await decide_round(home, jev, discussion, round('continue', limits.wide, 'Codex'))).action, 'continue');
   assert.equal((await decide_round(home, jev, discussion, round('__host__', 0.99, 'Codex'))).action, 'host');
   // The chosen option's probability decides; Jev's lower two-way `confidence` is only a fallback.
   const probable = async () => ({ ok: true, json: async () => ({ answers: { next: { type: 'choice', choice: 'continue', confidence: 0.64,
@@ -196,7 +210,7 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.match(asked[0].state, /主持人最近的安排：Codex：出句/);
   assert.equal(typeof (await decide_next_speaker(home, jev, midround, speaker('Gemini', 0.9))).detail[0].duration_ms, 'number');
   assert.deepEqual(without_detail(await decide_next_speaker(home, jev, midround, speaker('Gemini', 0.9))), { action: 'next', expert: 'Gemini', confidence: 0.9, label: '本轮继续，请 Gemini 接着发言' });
-  assert.equal((await decide_next_speaker(home, jev, midround, speaker('Gemini', 0.6))).action, 'host');
+  assert.equal((await decide_next_speaker(home, jev, midround, speaker('Gemini', limits.member - 0.01))).action, 'host');
   assert.equal((await decide_next_speaker(home, jev, midround, speaker('__host__', 0.95))).action, 'host');
   // One question; the guided wording explains that the host may have stopped on purpose, the stable one names it as no basis.
   assert.deepEqual(Object.keys(asked[0].questions), ['speaker']);

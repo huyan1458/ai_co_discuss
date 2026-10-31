@@ -43,7 +43,7 @@ async function run_case(item) {
   const talk = { ...fixtures.discussion, brief: item.brief ?? fixtures.discussion.brief, arrangement: item.arrangement, context };
   if (item.scene === 'route') {
     const result = await route_free_message(home, scheduler, { title: free.title, goal: free.goal, context, message, host: free.host, members: item.members || free.members });
-    return { result, acted: { member: result.member, all: '__all__', none: '__none__' }[result.action] || '__host__' };
+    return { result, acted: { member: result.member, all: '__all__', none: '__none__', some: result.choice }[result.action] || '__host__' };
   }
   if (item.scene === 'group') {
     const members = [free.host.name, ...free.members.map(member => member.name)];
@@ -64,10 +64,14 @@ async function run_case(item) {
   return { result, acted: result.action === 'continue' ? 'continue' : '__host__' };
 }
 
-/** PASS: the model chose the expected option and the system acted on it. WEAK: only one of the two. FAIL: neither. */
-function status_of(expect, choice, acted) {
-  if (choice === expect && acted === expect) return 'PASS';
-  return choice === expect || acted === expect ? 'WEAK' : 'FAIL';
+/**
+ * PASS: the model chose the expected option (or an acceptable alternative) and the system acted on it.
+ * WEAK: only one of the two. FAIL: neither.
+ */
+function status_of(expect, choice, acted, accept = []) {
+  const fine = [expect, ...accept];
+  if (fine.includes(choice) && fine.includes(acted)) return 'PASS';
+  return fine.includes(choice) || fine.includes(acted) ? 'WEAK' : 'FAIL';
 }
 
 /** Check both the intended first speaker and the actual continuation, including a deliberate handback. */
@@ -105,7 +109,7 @@ for (const item of selected) {
     const last = runs.at(-1).result;
     const entry = { id: item.id, scene: item.scene, note: item.note, expect: item.expect, choice, acted, runs: REPEAT,
       confidence: last.confidence ?? null, expected_probability: probability, probabilities, duration_ms: asked_runs.at(-1).duration_ms,
-      status: item.expect_first ? most_common(runs.map(run => first_status(item, run.result, run.acted))) : status_of(item.expect, choice, acted),
+      status: item.expect_first ? most_common(runs.map(run => first_status(item, run.result, run.acted))) : status_of(item.expect, choice, acted, item.accept),
       ...(spread.length ? { expected_range: [Math.min(...spread), Math.max(...spread)] } : {}),
       ...(item.expect_first ? { expect_first: item.expect_first, first_choice: last.detail[1]?.choice ?? null,
         first: last.first ?? null, first_probabilities: last.detail[1]?.probabilities ?? {} } : {}) };

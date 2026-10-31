@@ -3264,6 +3264,11 @@ async function rate_decision({ decision_id, rating, should_be = "", note = "" })
   if (state.room?.id === room_id) await refresh_room();
 }
 
+/** Read what the decision model was given for one decision (state and questions), for the card's input view. */
+async function load_decision_input(decision_id) {
+  return request_json(`/api/rooms/${state.room.id}/scheduler-decisions/${decision_id}`);
+}
+
 /** A completed creation starts the next form with fresh mode defaults. */
 function reset_creation_mode() {
   state.creation_mode = "free";
@@ -4107,7 +4112,7 @@ async function execute_view_action(name, value) {
     export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, conclude_discussion, start_room_discussion, end_room_discussion, reopen_discussion,
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
     load_room_configuration, save_room_configuration, interrupt_member, retry_delivery, retract_message, retract_latest, stop_room, rewind_and_send, fork_room, change_member, reorder_speakers, invite_member, set_proxy, copy_online_notice,
-    prepare_brainstorm, return_conclusion, adopt_recommendation, rate_decision,
+    prepare_brainstorm, return_conclusion, adopt_recommendation, rate_decision, load_decision_input,
     busy: () => { throw new Error("上一个操作仍在处理中，请稍候；长时间无响应请刷新页面"); },
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };
   try {

@@ -377,7 +377,7 @@ test('smart scheduling holds the host until its decision, and a confident pick r
   assert.equal((await api(config, `/recommendations/${message_id}`, { action: 'adopt', mode: 'interrupt' })).duplicate, true);
   const decision = room.scheduler_decisions.at(-1);
   assert.deepEqual([decision.after_message_id, decision.label, decision.applied, decision.provider, decision.feedback], [message_id, '改由 DeepSeek 回答', 1, 'jev', null]);
-  assert.deepEqual(JSON.parse(decision.context), { model: 'jev-latest', threshold: 0.7, wide_threshold: 0.85, mode: 'guided', prompt: ROUTE_GUIDED_PROMPT_VERSION,
+  assert.deepEqual(JSON.parse(decision.context), { model: 'jev-latest', threshold: 0.6, wide_threshold: 0.8, mode: 'guided', prompt: ROUTE_GUIDED_PROMPT_VERSION,
     package: JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version });
   assert.deepEqual([decision.detail[0].choice, decision.detail[0].probabilities], ['DeepSeek', { DeepSeek: 0.95, __host__: 0.05 }]);
   await api(config, `/scheduler-decisions/${decision.id}`, { rating: 'bad', should_be: 'Grok', note: '应该先问主持人' });
@@ -421,7 +421,7 @@ test('smart scheduling below the confidence threshold leaves no recommendation',
   const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: { Grok, DeepSeek }, scheduler,
     room: { title: '低置信度', mode: 'free', host: '用户', members: ['Grok', 'DeepSeek'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
   const fake_fetch = async () => ({ ok: true, json: async () => ({ answers: [{ type: 'choice', name: 'handler', choice: 'DeepSeek', confidence: 0.5,
-    probabilities: [{ value: 'DeepSeek', probability: 0.6 }, { value: '__host__', probability: 0.4 }] }] }) });
+    probabilities: [{ value: 'DeepSeek', probability: 0.55 }, { value: '__host__', probability: 0.45 }] }] }) });
   const config = load_config(started.config_path), store = new DiscussionStore(config.directory);
   const runner = new FreeRoomRunner(config, store, undefined, () => {}, fake_fetch);
   f.cleanup.push(() => { runner.stop_children(); store.close(); });

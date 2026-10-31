@@ -11,8 +11,18 @@ const REQUEST_TIMEOUT_MS = 30_000;
 export const ROUTE_CONFIDENCE = 0.7;
 /** Waking everyone or no one costs more when wrong (N runs, or an ignored message), so it needs more certainty. */
 export const ROUTE_WIDE_CONFIDENCE = 0.85;
+/**
+ * The guided wording gives lower probabilities for the same correct pick, so it has its own thresholds, set where the
+ * regression set gains correct picks without any new wrong one (2026-10-31). @全体成员 and review keep their own.
+ */
+export const GUIDED_CONFIDENCE = 0.6;
+export const GUIDED_WIDE_CONFIDENCE = 0.8;
+/** The single-member and the everyone-or-no-one thresholds of one wording. */
+export function scheduler_thresholds(mode) {
+  return mode === 'stable' ? { member: ROUTE_CONFIDENCE, wide: ROUTE_WIDE_CONFIDENCE } : { member: GUIDED_CONFIDENCE, wide: GUIDED_WIDE_CONFIDENCE };
+}
 /** Bump when the routing question or its option descriptions change, so ratings can be compared across wordings. */
-export const ROUTE_PROMPT_VERSION = 12;
+export const ROUTE_PROMPT_VERSION = 13;
 /**
  * How the free-room routing question is worded. guided (experimental, the default while it is being refined) states the
  * purpose and the evidence in prose; stable keeps the ordered checklist that passed the regression set.
@@ -20,7 +30,7 @@ export const ROUTE_PROMPT_VERSION = 12;
 export const SCHEDULER_MODES = { guided: '引导（试验）', stable: '稳定' };
 export const DEFAULT_SCHEDULER_MODE = 'guided';
 /** The guided wording has its own version, so its ratings are never mixed with the stable checklist's. */
-export const ROUTE_GUIDED_PROMPT_VERSION = 4;
+export const ROUTE_GUIDED_PROMPT_VERSION = 7;
 /** The routing prompt version that a decision in this mode was made with. */
 export function route_prompt_version(mode) {
   return mode === 'stable' ? ROUTE_PROMPT_VERSION : ROUTE_GUIDED_PROMPT_VERSION;
@@ -28,7 +38,7 @@ export function route_prompt_version(mode) {
 /** The same for the three discussion questions (interjection, next speaker, next round). */
 export const DISCUSSION_PROMPT_VERSION = 5;
 /** The guided wording of the discussion questions, versioned apart from the stable one. */
-export const DISCUSSION_GUIDED_PROMPT_VERSION = 1;
+export const DISCUSSION_GUIDED_PROMPT_VERSION = 2;
 /** The discussion prompt version that a decision in this mode was made with. */
 export function discussion_prompt_version(mode) {
   return mode === 'stable' ? DISCUSSION_PROMPT_VERSION : DISCUSSION_GUIDED_PROMPT_VERSION;
@@ -41,6 +51,11 @@ const HOST_CHOICE = '__host__';
 const NOTE_CHOICE = '__note__';
 const ALL_CHOICE = '__all__';
 const NONE_CHOICE = '__none__';
+/** Prefix of the "only these few" options; the value lists the names after it, joined by SOME_JOINER. */
+export const SOME_PREFIX = '__some__:';
+const SOME_JOINER = '、';
+/** At most this many named members are combined, so the options stay few (4 names give 11 groups). */
+const MAX_SOME_NAMES = 4;
 const CONTEXT_MESSAGES = 10;
 /** A free-room route sees a longer stretch, enough to tell who has not spoken for a while. */
 export const ROUTE_CONTEXT_MESSAGES = 20;
@@ -205,21 +220,41 @@ const ROUTE_GUIDED_GUIDE = ['这是 AI CoDiscuss 的协作房间。用户是房�
   '唤醒一位成员要花一次执行，通常几十秒；交给了不对的人，就得打断后重来。'].join('\n');
 const ROUTE_GUIDED_STEM = '用户发来上面这条消息，没有 @ 任何人。请你像熟悉这个房间的成员一样读懂它：用户想让谁来回应？'
   + '用户心里已经有明确的对象时，直接交给对方，省掉主持人转一手的时间；需要有人先理解、拆分或协调时交给主持人。'
-  + '用户想听每个人各自说一句时，交给全体能让大家同时开始，比主持人逐个点名快得多；但大家看不到彼此的回答，需要互相接话、讨论的事仍要主持人安排。用户只是表示收到或感谢时，不必唤醒任何人。';
+  + '用户想听每个人各自说一句时，交给全体能让大家同时开始，比主持人逐个点名快得多；但大家看不到彼此的回答，需要互相接话、讨论的事仍要主持人安排。用户只是表示收到或感谢时，不必唤醒任何人。'
+  + '两种容易看错的情况：向在场的各位问好，是在等每个人回一声，和只对房间说一句“hi”不同；用户问“谁是……”“谁能……”时是在找符合条件的人，只需要符合的人出来回应（哪怕说“自己说一下”），成员信息里（含主持人）只有一位符合就交给他。';
 
 /** The routing question in one mode: option texts, the stem, and what the state adds about the members. */
-function route_question(mode, host, members) {
+/** Every group of two or more among the members the text names, so "these few each answer" is one choice. */
+function named_groups(text, host, members) {
+  const lower = String(text || '').toLowerCase();
+  const named = [host, ...members].map(member => member.name).filter(name => lower.includes(name.toLowerCase()));
+  if (named.length < 2 || named.length > MAX_SOME_NAMES) return [];
+  const groups = [];
+  for (let mask = 1; mask < 1 << named.length; mask += 1) {
+    const group = named.filter((_, index) => mask & (1 << index));
+    if (group.length >= 2) groups.push(group);
+  }
+  return groups;
+}
+/** The members of a "these few" choice, or null for any other value. */
+export function some_members(choice) {
+  return typeof choice === 'string' && choice.startsWith(SOME_PREFIX) ? choice.slice(SOME_PREFIX.length).split(SOME_JOINER) : null;
+}
+
+function route_question(mode, host, members, text) {
   if (mode === 'stable') return { extra: { roster: [`${host.name}（主持人）`, ...members.map(member => `${member.name}（专家）`)].join('、') },
     instructions: ROUTE_STABLE_STEM, choices: [...members.map(member => ({ value: member.name, description: member.description })),
       { value: HOST_CHOICE, description: `主持人 ${host.description}：没有指向任何人且用户没有确定负责人（如单独一句“hi”“你好”这类问候、闲聊，由主持人代表房间回应），或诉求模糊、复杂，需要主持人判断怎么安排` },
       { value: ALL_CHOICE, description: '全体成员（含主持人）各自回应一次，彼此不需要看到别人的回答；只在要求简单明确、每人独立回应一次就算完成时选，如“大家打个招呼”“各自报一下在用的模型”' },
-      { value: NONE_CHOICE, description: '无需回应：只是确认、致谢或旁注，不需要任何人回答' }] };
+      { value: NONE_CHOICE, description: '无需回应：只是确认、致谢或旁注，不需要任何人回答；选它则用户这句话不会得到回应' }] };
   const people = ['成员（名字不区分大小写）：', guided_member_line('主持人', host), ...members.map(member => guided_member_line('专家', member))].join('\n');
   return { extra: { guide: ROUTE_GUIDED_GUIDE, people }, instructions: ROUTE_GUIDED_STEM,
     choices: [...members.map(member => ({ value: member.name, description: `交给 ${member.name} 回应` })),
       { value: HOST_CHOICE, description: `交给主持人 ${host.name}：由他回应，或由他安排别人` },
+      ...named_groups(text, host, members).map(group => ({ value: `${SOME_PREFIX}${group.join(SOME_JOINER)}`,
+        description: `只请 ${group.join('、')} 各自回应一次：同时开始，每人都收到这句原话，彼此看不到对方的回答，其他成员不被唤醒` })),
       { value: ALL_CHOICE, description: '全体成员（含主持人）同时收到这句原话，各自回应一次，彼此看不到对方的回答，也不会被分到不同的任务' },
-      { value: NONE_CHOICE, description: '不唤醒任何人' }] };
+      { value: NONE_CHOICE, description: '不唤醒任何人，用户这句话不会得到回应' }] };
 }
 
 /**
@@ -228,17 +263,21 @@ function route_question(mode, host, members) {
  * all, none, or host for anything unsettled or not confident enough.
  */
 export async function route_free_message(home, scheduler, { title, goal, context, message, host, members }, fetch_impl) {
-  const { choices, instructions, extra } = route_question(scheduler.mode || DEFAULT_SCHEDULER_MODE, host, members);
+  const { choices, instructions, extra } = route_question(scheduler.mode || DEFAULT_SCHEDULER_MODE, host, members, message.text);
   const questions = [{ type: 'choice', name: 'handler', choices, instructions }];
   const state = scheduler_state(title, context, message, goal, '', extra, ROUTE_CONTEXT_MESSAGES);
   const answers = await decide(home, scheduler, state, questions, fetch_impl);
   const judged = judged_of(state, questions, answers);
   const choice = answers.handler?.choice ?? null;
   const confidence = certainty(answers.handler);
-  const wide = choice === ALL_CHOICE || choice === NONE_CHOICE;
-  const sure = confidence !== null && confidence >= (wide ? ROUTE_WIDE_CONFIDENCE : ROUTE_CONFIDENCE);
+  // Waking several members, everyone or no one costs more when wrong than moving the message to one member.
+  const group = some_members(choice);
+  const wide = choice === ALL_CHOICE || choice === NONE_CHOICE || Boolean(group);
+  const limits = scheduler_thresholds(scheduler.mode || DEFAULT_SCHEDULER_MODE);
+  const sure = confidence !== null && confidence >= (wide ? limits.wide : limits.member);
   if (sure && choice === ALL_CHOICE) return { action: 'all', choice, confidence, ...judged };
   if (sure && choice === NONE_CHOICE) return { action: 'none', choice, confidence, ...judged };
+  if (sure && group) return { action: 'some', members: group, choice, confidence, ...judged };
   if (sure && members.some(item => item.name === choice)) return { action: 'member', member: choice, choice, confidence, ...judged };
   return { action: 'host', choice, confidence, ...judged };
 }
@@ -272,14 +311,14 @@ export async function decide_interjection(home, scheduler, { title, goal, user_r
   const choices = guided
     ? [...experts.map(name => ({ value: name, description: `现在单独请 ${name} 回应这条留言：不占讨论轮次，多花一次执行` })),
       { value: HOST_CHOICE, description: `交给主持人 ${host} 处理` },
-      { value: NOTE_CHOICE, description: '按原安排继续：留言留在房间里，后面发言的专家都会看到并可在发言中回应' }]
+      { value: NOTE_CHOICE, description: '按原安排继续：讨论照常推进、不会暂停，留言留在房间里，后面发言的专家都会看到并可在发言中回应' }]
     : [...experts.map(name => ({ value: name, description: `请 ${name} 回应这条留言：留言是向该专家（或其负责的内容）提问、质疑或补充要求` })),
       { value: HOST_CHOICE, description: `由主持人 ${host} 处理：留言要改变讨论目标、规则、分工、安排或结束讨论，同时涉及多位专家，或针对的是不在选项里的人` },
       { value: NOTE_CHOICE, description: '仅补充信息：留言补充背景、约束或偏好，或只是旁注、鼓励，没有要求某人立即回应；后续发言的专家都能看到它，按当前安排继续' }];
   const instructions = guided
     ? '讨论进行中，用户发来上面这条留言。请你像熟悉这场讨论的人一样读懂它，选出最合适的处理方式。'
       + '用户向某位专家要回应时，现在单独请他回答能马上得到答复，但要多花一次执行；如果他就在接下来要发言的人里，留到他发言时一并回应更省，也不打乱讨论。'
-      + '补充的约束、偏好和鼓励，后面发言的人都看得到。要改目标、规则、分工或安排，或需要几位专家协调的，由主持人处理。'
+      + '补充的约束、偏好和鼓励，后面发言的人都看得到。要暂停或结束讨论、改目标、规则、分工或安排，或需要几位专家协调的，由主持人处理。'
     : '讨论进行中用户发来这条留言。对照当前焦点、主持简报和安排，判断它最适合怎样处理。';
   const questions = [{ type: 'choice', name: 'handling', instructions, choices }];
   const state = scheduler_state(title, context, message, goal, user_request, { ...extra, progress: round_progress(spoken, experts.filter(name => !spoken.includes(name))),
@@ -288,7 +327,7 @@ export async function decide_interjection(home, scheduler, { title, goal, user_r
   const judged = judged_of(state, questions, answers);
   const choice = answers.handling?.choice;
   const confidence = certainty(answers.handling);
-  const sure = confidence !== null && confidence >= ROUTE_CONFIDENCE;
+  const sure = confidence !== null && confidence >= scheduler_thresholds(scheduler.mode || DEFAULT_SCHEDULER_MODE).member;
   if (sure && choice === NOTE_CHOICE) return { action: 'note', confidence, ...judged, label: '仅补充信息，按原计划继续' };
   if (sure && experts.includes(choice)) return { action: 'ask', expert: choice, confidence, ...judged, label: `先请 ${choice} 回应这条留言` };
   const lean = choice === NOTE_CHOICE ? '按原计划继续' : experts.includes(choice) ? `请 ${choice} 回应` : choice === HOST_CHOICE ? '由主持人处理' : '';
@@ -338,7 +377,7 @@ export async function decide_next_speaker(home, scheduler, { title, goal, user_r
   const judged = judged_of(state, questions, answers);
   const choice = answers.speaker?.choice;
   const confidence = certainty(answers.speaker);
-  const sure = confidence !== null && confidence >= ROUTE_CONFIDENCE;
+  const sure = confidence !== null && confidence >= scheduler_thresholds(scheduler.mode || DEFAULT_SCHEDULER_MODE).member;
   if (sure && candidates.includes(choice)) return { action: 'next', expert: choice, confidence, ...judged, label: `本轮继续，请 ${choice} 接着发言` };
   return { action: 'host', confidence, ...judged, label: choice === HOST_CHOICE && sure ? '没有明确该谁发言，交给主持人安排' : unsure_label(candidates.includes(choice) ? `请 ${choice} 发言` : choice === HOST_CHOICE ? '交给主持人' : '') };
 }
@@ -373,13 +412,14 @@ export async function decide_round(home, scheduler, { title, goal, user_request,
   const choice = answers.next?.choice;
   const confidence = certainty(answers.next);
   // A wrong "continue" costs a whole round of runs, so it needs the same certainty as waking everyone.
-  if (choice !== 'continue' || confidence === null || confidence < ROUTE_WIDE_CONFIDENCE) {
-    const sure = confidence !== null && confidence >= (choice === 'continue' ? ROUTE_WIDE_CONFIDENCE : ROUTE_CONFIDENCE);
+  const limits = scheduler_thresholds(scheduler.mode || DEFAULT_SCHEDULER_MODE);
+  if (choice !== 'continue' || confidence === null || confidence < limits.wide) {
+    const sure = confidence !== null && confidence >= (choice === 'continue' ? limits.wide : limits.member);
     return { action: 'host', confidence, ...judged, label: choice === HOST_CHOICE && sure ? '建议收束或调整方向，交给主持人' : unsure_label(choice === 'continue' ? '继续下一轮' : choice === HOST_CHOICE ? '收束或调整方向' : '') };
   }
   const first = answers.first?.choice;
   const first_confidence = certainty(answers.first);
-  if (!candidates.includes(first) || first_confidence === null || first_confidence < ROUTE_CONFIDENCE) {
+  if (!candidates.includes(first) || first_confidence === null || first_confidence < limits.member) {
     return { action: 'host', confidence: first_confidence, ...judged, label: '下一轮首位没有明确依据或把握不足，交给主持人安排' };
   }
   return { action: 'continue', first, confidence, ...judged, label: `继续下一轮，先请 ${first} 发言` };

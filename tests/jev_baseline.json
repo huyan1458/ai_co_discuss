@@ -1,10 +1,12 @@
 {
   "provider": "jev",
   "model": "jev-latest",
-  "route_prompt": 12,
+  "mode": "stable",
+  "repeat": 3,
+  "route_prompt": 13,
   "discussion_prompt": 5,
   "review_prompt": 1,
-  "ran_at": "2026-10-31T08:23:49.019Z",
+  "ran_at": "2026-10-31T11:39:15.843Z",
   "results": [
     {
       "id": "S1a",
@@ -13,6 +15,7 @@
       "expect": "Claude",
       "choice": "Claude",
       "acted": "Claude",
+      "runs": 3,
       "confidence": 1,
       "expected_probability": 1,
       "probabilities": {
@@ -22,8 +25,12 @@
         "__all__": 0,
         "__none__": 0
       },
-      "duration_ms": 2140,
-      "status": "PASS"
+      "duration_ms": 367,
+      "status": "PASS",
+      "expected_range": [
+        0.99,
+        1
+      ]
     },
     {
       "id": "S1b",
@@ -32,7 +39,8 @@
       "expect": "DeepSeek",
       "choice": "DeepSeek",
       "acted": "DeepSeek",
-      "confidence": 0.99,
+      "runs": 3,
+      "confidence": 1,
       "expected_probability": 0.99,
       "probabilities": {
         "Claude": 0,
@@ -41,8 +49,12 @@
         "__all__": 0,
         "__none__": 0
       },
-      "duration_ms": 375,
-      "status": "PASS"
+      "duration_ms": 370,
+      "status": "PASS",
+      "expected_range": [
+        0.99,
+        1
+      ]
     },
     {
       "id": "S2a",
@@ -51,6 +63,7 @@
       "expect": "Claude",
       "choice": "Claude",
       "acted": "Claude",
+      "runs": 3,
       "confidence": 0.99,
       "expected_probability": 0.99,
       "probabilities": {
@@ -60,8 +73,12 @@
         "__all__": 0,
         "__none__": 0
       },
-      "duration_ms": 388,
-      "status": "PASS"
+      "duration_ms": 373,
+      "status": "PASS",
+      "expected_range": [
+        0.99,
+        0.99
+      ]
     },
     {
       "id": "S2b",
@@ -70,6 +87,7 @@
       "expect": "Claude",
       "choice": "Claude",
       "acted": "Claude",
+      "runs": 3,
       "confidence": 0.99,
       "expected_probability": 0.99,
       "probabilities": {
@@ -79,8 +97,12 @@
         "__all__": 0,
         "__none__": 0
       },
-      "duration_ms": 389,
-      "status": "PASS"
+      "duration_ms": 394,
+      "status": "PASS",
+      "expected_range": [
+        0.99,
+        1
+      ]
     },
     {
       "id": "S2c",
@@ -89,6 +111,7 @@
       "expect": "__host__",
       "choice": "__host__",
       "acted": "__host__",
+      "runs": 3,
       "confidence": 0.99,
       "expected_probability": 0.99,
       "probabilities": {
@@ -98,8 +121,12 @@
         "__all__": 0,
         "__none__": 0
       },
-      "duration_ms": 402,
-      "status": "PASS"
+      "duration_ms": 363,
+      "status": "PASS",
+      "expected_range": [
+        0.99,
+        1
+      ]
     },
     {
       "id": "S3",
@@ -108,17 +135,22 @@
       "expect": "Claude",
       "choice": "Claude",
       "acted": "Claude",
-      "confidence": 0.94,
-      "expected_probability": 0.94,
+      "runs": 3,
+      "confidence": 0.91,
+      "expected_probability": 0.93,
       "probabilities": {
-        "Claude": 0.94,
+        "Claude": 0.93,
         "DeepSeek": 0,
-        "__host__": 0.06,
+        "__host__": 0.07,
         "__all__": 0,
         "__none__": 0
       },
-      "duration_ms": 362,
-      "status": "PASS"
+      "duration_ms": 413,
+      "status": "PASS",
+      "expected_range": [
+        0.91,
+        0.94
+      ]
     },
     {
       "id": "S4a",
@@ -127,6 +159,7 @@
       "expect": "__all__",
       "choice": "__all__",
       "acted": "__all__",
+      "runs": 3,
       "confidence": 0.98,
       "expected_probability": 0.98,
       "probabilities": {
@@ -136,8 +169,12 @@
         "__all__": 0.98,
         "__none__": 0
       },
-      "duration_ms": 380,
-      "status": "PASS"
+      "duration_ms": 369,
+      "status": "PASS",
+      "expected_range": [
+        0.98,
+        0.98
+      ]
     },
     {
       "id": "S4b",
@@ -146,6 +183,7 @@
       "expect": "__all__",
       "choice": "__all__",
       "acted": "__all__",
+      "runs": 3,
       "confidence": 1,
       "expected_probability": 1,
       "probabilities": {
@@ -155,8 +193,12 @@
         "__all__": 1,
         "__none__": 0
       },
-      "duration_ms": 635,
-      "status": "PASS"
+      "duration_ms": 393,
+      "status": "PASS",
+      "expected_range": [
+        0.99,
+        1
+      ]
     },
     {
       "id": "S5a",
@@ -165,6 +207,7 @@
       "expect": "__host__",
       "choice": "__host__",
       "acted": "__host__",
+      "runs": 3,
       "confidence": 0.96,
       "expected_probability": 0.96,
       "probabilities": {
@@ -174,27 +217,36 @@
         "__all__": 0.04,
         "__none__": 0
       },
-      "duration_ms": 373,
-      "status": "PASS"
+      "duration_ms": 365,
+      "status": "PASS",
+      "expected_range": [
+        0.96,
+        0.96
+      ]
     },
     {
       "id": "S5b",
       "scene": "route",
       "note": "含“都”“各自”“一起”但实为讨论",
       "expect": "__host__",
-      "choice": "__host__",
+      "choice": "__all__",
       "acted": "__host__",
-      "confidence": 0.51,
-      "expected_probability": 0.51,
+      "runs": 3,
+      "confidence": 0.55,
+      "expected_probability": 0.43,
       "probabilities": {
         "Claude": 0,
         "DeepSeek": 0,
-        "__host__": 0.51,
-        "__all__": 0.49,
+        "__host__": 0.43,
+        "__all__": 0.57,
         "__none__": 0
       },
-      "duration_ms": 371,
-      "status": "PASS"
+      "duration_ms": 362,
+      "status": "WEAK",
+      "expected_range": [
+        0.38,
+        0.46
+      ]
     },
     {
       "id": "S6a",
@@ -203,6 +255,7 @@
       "expect": "__none__",
       "choice": "__none__",
       "acted": "__none__",
+      "runs": 3,
       "confidence": 0.99,
       "expected_probability": 0.99,
       "probabilities": {
@@ -212,8 +265,12 @@
         "__all__": 0,
         "__none__": 0.99
       },
-      "duration_ms": 379,
-      "status": "PASS"
+      "duration_ms": 406,
+      "status": "PASS",
+      "expected_range": [
+        0.99,
+        0.99
+      ]
     },
     {
       "id": "S6b",
@@ -222,17 +279,22 @@
       "expect": "__none__",
       "choice": "__none__",
       "acted": "__none__",
+      "runs": 3,
       "confidence": 0.98,
       "expected_probability": 0.98,
       "probabilities": {
-        "Claude": 0.01,
+        "Claude": 0.02,
         "DeepSeek": 0,
         "__host__": 0.01,
         "__all__": 0,
         "__none__": 0.98
       },
-      "duration_ms": 2168,
-      "status": "PASS"
+      "duration_ms": 360,
+      "status": "PASS",
+      "expected_range": [
+        0.97,
+        0.98
+      ]
     },
     {
       "id": "S7",
@@ -240,18 +302,23 @@
       "note": "用户描述指定唯一负责成员",
       "expect": "Claude",
       "choice": "Claude",
-      "acted": "__host__",
-      "confidence": 0.68,
-      "expected_probability": 0.68,
+      "acted": "Claude",
+      "runs": 3,
+      "confidence": 0.82,
+      "expected_probability": 0.76,
       "probabilities": {
-        "Claude": 0.68,
+        "Claude": 0.76,
         "DeepSeek": 0,
-        "__host__": 0.32,
+        "__host__": 0.24,
         "__all__": 0,
         "__none__": 0
       },
-      "duration_ms": 356,
-      "status": "WEAK"
+      "duration_ms": 379,
+      "status": "PASS",
+      "expected_range": [
+        0.71,
+        0.82
+      ]
     },
     {
       "id": "S7b",
@@ -260,17 +327,22 @@
       "expect": "__host__",
       "choice": "__host__",
       "acted": "__host__",
-      "confidence": 0.71,
-      "expected_probability": 0.71,
+      "runs": 3,
+      "confidence": 0.65,
+      "expected_probability": 0.67,
       "probabilities": {
-        "Claude": 0.24,
-        "DeepSeek": 0.04,
-        "__host__": 0.71,
+        "Claude": 0.27,
+        "DeepSeek": 0.05,
+        "__host__": 0.67,
         "__all__": 0.01,
         "__none__": 0
       },
-      "duration_ms": 369,
-      "status": "PASS"
+      "duration_ms": 383,
+      "status": "PASS",
+      "expected_range": [
+        0.65,
+        0.71
+      ]
     },
     {
       "id": "S8",
@@ -279,6 +351,7 @@
       "expect": "__host__",
       "choice": "__host__",
       "acted": "__host__",
+      "runs": 3,
       "confidence": 0.97,
       "expected_probability": 0.97,
       "probabilities": {
@@ -288,8 +361,12 @@
         "__all__": 0,
         "__none__": 0
       },
-      "duration_ms": 368,
-      "status": "PASS"
+      "duration_ms": 354,
+      "status": "PASS",
+      "expected_range": [
+        0.96,
+        0.97
+      ]
     },
     {
       "id": "S9a",
@@ -298,6 +375,7 @@
       "expect": "__host__",
       "choice": "__host__",
       "acted": "__host__",
+      "runs": 3,
       "confidence": 1,
       "expected_probability": 1,
       "probabilities": {
@@ -307,8 +385,12 @@
         "__all__": 0,
         "__none__": 0
       },
-      "duration_ms": 367,
-      "status": "PASS"
+      "duration_ms": 378,
+      "status": "PASS",
+      "expected_range": [
+        1,
+        1
+      ]
     },
     {
       "id": "S9b",
@@ -317,6 +399,7 @@
       "expect": "__host__",
       "choice": "__host__",
       "acted": "__host__",
+      "runs": 3,
       "confidence": 1,
       "expected_probability": 1,
       "probabilities": {
@@ -326,8 +409,12 @@
         "__all__": 0,
         "__none__": 0
       },
-      "duration_ms": 355,
-      "status": "PASS"
+      "duration_ms": 388,
+      "status": "PASS",
+      "expected_range": [
+        1,
+        1
+      ]
     },
     {
       "id": "S10",
@@ -336,6 +423,7 @@
       "expect": "Claude",
       "choice": "Claude",
       "acted": "Claude",
+      "runs": 3,
       "confidence": 0.99,
       "expected_probability": 0.99,
       "probabilities": {
@@ -345,8 +433,12 @@
         "__all__": 0,
         "__none__": 0
       },
-      "duration_ms": 350,
-      "status": "PASS"
+      "duration_ms": 359,
+      "status": "PASS",
+      "expected_range": [
+        0.99,
+        0.99
+      ]
     },
     {
       "id": "S11",
@@ -355,17 +447,22 @@
       "expect": "Claude",
       "choice": "__host__",
       "acted": "__host__",
-      "confidence": 0.8,
-      "expected_probability": 0.2,
+      "runs": 3,
+      "confidence": 0.83,
+      "expected_probability": 0.17,
       "probabilities": {
-        "Claude": 0.2,
+        "Claude": 0.17,
         "DeepSeek": 0,
-        "__host__": 0.8,
+        "__host__": 0.83,
         "__all__": 0,
         "__none__": 0
       },
-      "duration_ms": 386,
-      "status": "FAIL"
+      "duration_ms": 374,
+      "status": "FAIL",
+      "expected_range": [
+        0.14,
+        0.2
+      ]
     },
     {
       "id": "S4c",
@@ -374,17 +471,22 @@
       "expect": "__all__",
       "choice": "__all__",
       "acted": "__all__",
-      "confidence": 0.97,
-      "expected_probability": 0.97,
+      "runs": 3,
+      "confidence": 0.96,
+      "expected_probability": 0.96,
       "probabilities": {
         "Claude": 0,
         "DeepSeek": 0,
-        "__host__": 0.03,
-        "__all__": 0.97,
+        "__host__": 0.04,
+        "__all__": 0.96,
         "__none__": 0
       },
-      "duration_ms": 403,
-      "status": "PASS"
+      "duration_ms": 373,
+      "status": "PASS",
+      "expected_range": [
+        0.96,
+        0.97
+      ]
     },
     {
       "id": "S12",
@@ -393,17 +495,22 @@
       "expect": "__host__",
       "choice": "Claude",
       "acted": "Claude",
-      "confidence": 0.77,
-      "expected_probability": 0.04,
+      "runs": 3,
+      "confidence": 0.79,
+      "expected_probability": 0.05,
       "probabilities": {
         "Claude": 0.77,
         "DeepSeek": 0,
-        "__host__": 0.04,
-        "__all__": 0.19,
+        "__host__": 0.05,
+        "__all__": 0.18,
         "__none__": 0
       },
-      "duration_ms": 351,
-      "status": "FAIL"
+      "duration_ms": 373,
+      "status": "FAIL",
+      "expected_range": [
+        0.04,
+        0.05
+      ]
     },
     {
       "id": "S13",
@@ -412,16 +519,21 @@
       "expect": "Claude",
       "choice": "Claude",
       "acted": "Claude",
-      "confidence": 0.83,
-      "expected_probability": 0.83,
+      "runs": 3,
+      "confidence": 0.85,
+      "expected_probability": 0.84,
       "probabilities": {
-        "Claude": 0.83,
-        "__host__": 0.15,
+        "Claude": 0.84,
+        "__host__": 0.14,
         "__all__": 0.02,
         "__none__": 0
       },
-      "duration_ms": 424,
-      "status": "PASS"
+      "duration_ms": 376,
+      "status": "PASS",
+      "expected_range": [
+        0.81,
+        0.85
+      ]
     },
     {
       "id": "S13b",
@@ -430,17 +542,1368 @@
       "expect": "__host__",
       "choice": "__host__",
       "acted": "__host__",
-      "confidence": 0.65,
-      "expected_probability": 0.65,
+      "runs": 3,
+      "confidence": 0.62,
+      "expected_probability": 0.66,
       "probabilities": {
         "Claude": 0.03,
         "DeepSeek": 0.17,
-        "__host__": 0.65,
-        "__all__": 0.15,
+        "__host__": 0.66,
+        "__all__": 0.14,
+        "__none__": 0
+      },
+      "duration_ms": 362,
+      "status": "PASS",
+      "expected_range": [
+        0.62,
+        0.73
+      ]
+    },
+    {
+      "id": "P01",
+      "scene": "route",
+      "note": "名字小写、口语追问另一位",
+      "expect": "DeepSeek",
+      "choice": "DeepSeek",
+      "acted": "DeepSeek",
+      "runs": 3,
+      "confidence": 0.99,
+      "expected_probability": 0.99,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0.99,
+        "__host__": 0.01,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 373,
+      "status": "PASS",
+      "expected_range": [
+        0.98,
+        0.99
+      ]
+    },
+    {
+      "id": "P02",
+      "scene": "route",
+      "note": "英文直接叫名字",
+      "expect": "Claude",
+      "choice": "Claude",
+      "acted": "Claude",
+      "runs": 3,
+      "confidence": 0.98,
+      "expected_probability": 0.98,
+      "probabilities": {
+        "Claude": 0.98,
+        "DeepSeek": 0,
+        "__host__": 0.02,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 359,
+      "status": "PASS",
+      "expected_range": [
+        0.98,
+        0.98
+      ]
+    },
+    {
+      "id": "P03",
+      "scene": "route",
+      "note": "询问正在处理的任务进度",
+      "expect": "Claude",
+      "choice": "Claude",
+      "acted": "Claude",
+      "runs": 3,
+      "confidence": 0.95,
+      "expected_probability": 0.95,
+      "probabilities": {
+        "Claude": 0.95,
+        "DeepSeek": 0,
+        "__host__": 0.05,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 379,
+      "status": "PASS",
+      "expected_range": [
+        0.93,
+        0.97
+      ]
+    },
+    {
+      "id": "P04",
+      "scene": "route",
+      "note": "同意成员的提议并让其动手，不是单纯确认",
+      "expect": "Claude",
+      "choice": "Claude",
+      "acted": "Claude",
+      "runs": 3,
+      "confidence": 0.96,
+      "expected_probability": 0.96,
+      "probabilities": {
+        "Claude": 0.96,
+        "DeepSeek": 0,
+        "__host__": 0.03,
+        "__all__": 0,
+        "__none__": 0.01
+      },
+      "duration_ms": 381,
+      "status": "PASS",
+      "expected_range": [
+        0.96,
+        0.96
+      ]
+    },
+    {
+      "id": "P05",
+      "scene": "route",
+      "note": "让成员继续未完成的工作",
+      "expect": "Claude",
+      "choice": "Claude",
+      "acted": "Claude",
+      "runs": 3,
+      "confidence": 0.97,
+      "expected_probability": 0.98,
+      "probabilities": {
+        "Claude": 0.98,
+        "DeepSeek": 0,
+        "__host__": 0.02,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 379,
+      "status": "PASS",
+      "expected_range": [
+        0.97,
+        0.98
+      ]
+    },
+    {
+      "id": "P06",
+      "scene": "route",
+      "note": "对完成结果的简短认可",
+      "expect": "__none__",
+      "choice": "__none__",
+      "acted": "__none__",
+      "runs": 3,
+      "confidence": 0.96,
+      "expected_probability": 0.95,
+      "probabilities": {
+        "Claude": 0.05,
+        "DeepSeek": 0,
+        "__host__": 0.01,
+        "__all__": 0,
+        "__none__": 0.95
+      },
+      "duration_ms": 364,
+      "status": "PASS",
+      "expected_range": [
+        0.93,
+        0.96
+      ]
+    },
+    {
+      "id": "P07",
+      "scene": "route",
+      "note": "全体答完后致谢",
+      "expect": "__none__",
+      "choice": "__none__",
+      "acted": "__none__",
+      "runs": 3,
+      "confidence": 1,
+      "expected_probability": 1,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0,
+        "__host__": 0,
+        "__all__": 0,
+        "__none__": 1
+      },
+      "duration_ms": 396,
+      "status": "PASS",
+      "expected_range": [
+        1,
+        1
+      ]
+    },
+    {
+      "id": "P08",
+      "scene": "route",
+      "note": "点名一位、话题涉及另一位",
+      "expect": "Claude",
+      "choice": "Claude",
+      "acted": "Claude",
+      "runs": 3,
+      "confidence": 0.99,
+      "expected_probability": 0.99,
+      "probabilities": {
+        "Claude": 0.99,
+        "DeepSeek": 0,
+        "__host__": 0.01,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 376,
+      "status": "PASS",
+      "expected_range": [
+        0.98,
+        0.99
+      ]
+    },
+    {
+      "id": "P09",
+      "scene": "route",
+      "note": "全体各说一句",
+      "expect": "__all__",
+      "choice": "__all__",
+      "acted": "__all__",
+      "runs": 3,
+      "confidence": 0.94,
+      "expected_probability": 0.94,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0,
+        "__host__": 0.06,
+        "__all__": 0.94,
+        "__none__": 0
+      },
+      "duration_ms": 390,
+      "status": "PASS",
+      "expected_range": [
+        0.94,
+        0.95
+      ]
+    },
+    {
+      "id": "P10",
+      "scene": "route",
+      "note": "各自推荐，互不依赖",
+      "expect": "__all__",
+      "choice": "__all__",
+      "acted": "__all__",
+      "runs": 3,
+      "confidence": 0.98,
+      "expected_probability": 0.98,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0,
+        "__host__": 0.02,
+        "__all__": 0.98,
         "__none__": 0
       },
       "duration_ms": 369,
-      "status": "PASS"
+      "status": "PASS",
+      "expected_range": [
+        0.97,
+        0.98
+      ]
+    },
+    {
+      "id": "P11",
+      "scene": "route",
+      "note": "各自投票",
+      "expect": "__all__",
+      "choice": "__all__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.66,
+      "expected_probability": 0.68,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0,
+        "__host__": 0.32,
+        "__all__": 0.68,
+        "__none__": 0
+      },
+      "duration_ms": 373,
+      "status": "WEAK",
+      "expected_range": [
+        0.66,
+        0.72
+      ]
+    },
+    {
+      "id": "P12",
+      "scene": "route",
+      "note": "要求先商量出统一结论",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.99,
+      "expected_probability": 0.98,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0,
+        "__host__": 0.98,
+        "__all__": 0.02,
+        "__none__": 0
+      },
+      "duration_ms": 372,
+      "status": "PASS",
+      "expected_range": [
+        0.98,
+        0.99
+      ]
+    },
+    {
+      "id": "P13",
+      "scene": "route",
+      "note": "一条消息含实现加交叉评审",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.99,
+      "expected_probability": 0.99,
+      "probabilities": {
+        "Claude": 0.01,
+        "DeepSeek": 0,
+        "__host__": 0.99,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 398,
+      "status": "PASS",
+      "expected_range": [
+        0.98,
+        0.99
+      ]
+    },
+    {
+      "id": "P14",
+      "scene": "route",
+      "note": "按唯一能力指代成员",
+      "expect": "DeepSeek",
+      "choice": "DeepSeek",
+      "acted": "DeepSeek",
+      "runs": 3,
+      "confidence": 0.74,
+      "expected_probability": 0.74,
+      "probabilities": {
+        "Claude": 0.05,
+        "DeepSeek": 0.74,
+        "__host__": 0.21,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 415,
+      "status": "PASS",
+      "expected_range": [
+        0.73,
+        0.74
+      ]
+    },
+    {
+      "id": "P15",
+      "scene": "route",
+      "note": "直接叫主持人",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 1,
+      "expected_probability": 1,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0,
+        "__host__": 1,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 393,
+      "status": "PASS",
+      "expected_range": [
+        1,
+        1
+      ]
+    },
+    {
+      "id": "P16",
+      "scene": "route",
+      "note": "点名两位非主持成员分别评审，只请这两位",
+      "expect": "__some__:Claude、DeepSeek",
+      "choice": "__host__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.5,
+      "expected_probability": null,
+      "probabilities": {
+        "Claude": 0.14,
+        "DeepSeek": 0.02,
+        "__host__": 0.48,
+        "__all__": 0.36,
+        "__none__": 0
+      },
+      "duration_ms": 389,
+      "status": "PASS",
+      "expected_range": [
+        0,
+        0
+      ]
+    },
+    {
+      "id": "P17",
+      "scene": "route",
+      "note": "撤回正在处理的任务",
+      "expect": "Claude",
+      "choice": "Claude",
+      "acted": "Claude",
+      "runs": 3,
+      "confidence": 0.79,
+      "expected_probability": 0.79,
+      "probabilities": {
+        "Claude": 0.79,
+        "DeepSeek": 0,
+        "__host__": 0.18,
+        "__all__": 0,
+        "__none__": 0.03
+      },
+      "duration_ms": 369,
+      "status": "PASS",
+      "expected_range": [
+        0.77,
+        0.82
+      ]
+    },
+    {
+      "id": "P18",
+      "scene": "route",
+      "note": "没有上下文的模糊提问",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.98,
+      "expected_probability": 0.98,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0,
+        "__host__": 0.98,
+        "__all__": 0.01,
+        "__none__": 0.01
+      },
+      "duration_ms": 372,
+      "status": "PASS",
+      "expected_range": [
+        0.98,
+        0.99
+      ]
+    },
+    {
+      "id": "P19",
+      "scene": "route",
+      "note": "单字附和",
+      "expect": "__none__",
+      "choice": "__none__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.48,
+      "expected_probability": 0.48,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0.27,
+        "__host__": 0.25,
+        "__all__": 0,
+        "__none__": 0.48
+      },
+      "duration_ms": 385,
+      "status": "WEAK",
+      "expected_range": [
+        0.42,
+        0.54
+      ]
+    },
+    {
+      "id": "P20",
+      "scene": "route",
+      "note": "成员描述指定文案负责人",
+      "expect": "DeepSeek",
+      "choice": "DeepSeek",
+      "acted": "DeepSeek",
+      "runs": 3,
+      "confidence": 0.95,
+      "expected_probability": 0.95,
+      "probabilities": {
+        "Claude": 0.01,
+        "DeepSeek": 0.95,
+        "__host__": 0.04,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 365,
+      "status": "PASS",
+      "expected_range": [
+        0.95,
+        0.96
+      ]
+    },
+    {
+      "id": "P21",
+      "scene": "route",
+      "note": "单独的早安问候",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 1,
+      "expected_probability": 1,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0,
+        "__host__": 1,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 386,
+      "status": "PASS",
+      "expected_range": [
+        1,
+        1
+      ]
+    },
+    {
+      "id": "P22",
+      "scene": "route",
+      "note": "同意主持人的安排提议",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.64,
+      "expected_probability": 0.64,
+      "probabilities": {
+        "Claude": 0.33,
+        "DeepSeek": 0,
+        "__host__": 0.64,
+        "__all__": 0,
+        "__none__": 0.03
+      },
+      "duration_ms": 361,
+      "status": "PASS",
+      "expected_range": [
+        0.63,
+        0.66
+      ]
+    },
+    {
+      "id": "P23",
+      "scene": "route",
+      "note": "纠正某成员回答中的一点",
+      "expect": "Claude",
+      "choice": "Claude",
+      "acted": "Claude",
+      "runs": 3,
+      "confidence": 0.98,
+      "expected_probability": 0.98,
+      "probabilities": {
+        "Claude": 0.98,
+        "DeepSeek": 0,
+        "__host__": 0.02,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 396,
+      "status": "PASS",
+      "expected_range": [
+        0.98,
+        0.99
+      ]
+    },
+    {
+      "id": "P24",
+      "scene": "route",
+      "note": "引用某成员原话追问",
+      "expect": "DeepSeek",
+      "choice": "DeepSeek",
+      "acted": "DeepSeek",
+      "runs": 3,
+      "confidence": 0.99,
+      "expected_probability": 0.99,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0.99,
+        "__host__": 0.01,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 371,
+      "status": "PASS",
+      "expected_range": [
+        0.99,
+        0.99
+      ]
+    },
+    {
+      "id": "P25",
+      "scene": "route",
+      "note": "认可一位、让另一位动手",
+      "expect": "Claude",
+      "choice": "Claude",
+      "acted": "Claude",
+      "runs": 3,
+      "confidence": 1,
+      "expected_probability": 1,
+      "probabilities": {
+        "Claude": 1,
+        "DeepSeek": 0,
+        "__host__": 0,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 351,
+      "status": "PASS",
+      "expected_range": [
+        1,
+        1
+      ]
+    },
+    {
+      "id": "P26",
+      "scene": "route",
+      "note": "问谁在线，未指向任何人",
+      "expect": "__all__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.63,
+      "expected_probability": 0.38,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0,
+        "__host__": 0.62,
+        "__all__": 0.38,
+        "__none__": 0
+      },
+      "duration_ms": 414,
+      "status": "FAIL",
+      "expected_range": [
+        0.37,
+        0.4
+      ]
+    },
+    {
+      "id": "Q01",
+      "scene": "route",
+      "note": "三位专家，点名第三位补充",
+      "expect": "Gemini",
+      "choice": "Gemini",
+      "acted": "Gemini",
+      "runs": 3,
+      "confidence": 1,
+      "expected_probability": 1,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0,
+        "Gemini": 1,
+        "__host__": 0,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 373,
+      "status": "PASS",
+      "expected_range": [
+        1,
+        1
+      ]
+    },
+    {
+      "id": "Q02",
+      "scene": "route",
+      "note": "按排除法指代唯一没发言的人",
+      "expect": "Gemini",
+      "choice": "Gemini",
+      "acted": "Gemini",
+      "runs": 3,
+      "confidence": 0.91,
+      "expected_probability": 0.9,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0,
+        "Gemini": 0.9,
+        "__host__": 0.09,
+        "__all__": 0.01,
+        "__none__": 0
+      },
+      "duration_ms": 381,
+      "status": "PASS",
+      "expected_range": [
+        0.89,
+        0.91
+      ]
+    },
+    {
+      "id": "Q03",
+      "scene": "route",
+      "note": "请网页 AI 成员发表看法",
+      "expect": "ChatGPT",
+      "choice": "ChatGPT",
+      "acted": "ChatGPT",
+      "runs": 3,
+      "confidence": 0.97,
+      "expected_probability": 0.96,
+      "probabilities": {
+        "Claude": 0,
+        "ChatGPT": 0.96,
+        "__host__": 0.04,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 362,
+      "status": "PASS",
+      "expected_range": [
+        0.96,
+        0.97
+      ]
+    },
+    {
+      "id": "Q04",
+      "scene": "route",
+      "note": "贴代码求助，没有对象",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.95,
+      "expected_probability": 0.95,
+      "probabilities": {
+        "Claude": 0.03,
+        "DeepSeek": 0.01,
+        "__host__": 0.95,
+        "__all__": 0.01,
+        "__none__": 0
+      },
+      "duration_ms": 382,
+      "status": "PASS",
+      "expected_range": [
+        0.95,
+        0.95
+      ]
+    },
+    {
+      "id": "Q05",
+      "scene": "route",
+      "note": "表情认可",
+      "expect": "__none__",
+      "choice": "__none__",
+      "acted": "__none__",
+      "runs": 3,
+      "confidence": 0.98,
+      "expected_probability": 0.98,
+      "probabilities": {
+        "Claude": 0.02,
+        "DeepSeek": 0,
+        "__host__": 0,
+        "__all__": 0,
+        "__none__": 0.98
+      },
+      "duration_ms": 357,
+      "status": "PASS",
+      "expected_range": [
+        0.97,
+        0.98
+      ]
+    },
+    {
+      "id": "Q06",
+      "scene": "route",
+      "note": "英文简短确认",
+      "expect": "__none__",
+      "choice": "__none__",
+      "acted": "__none__",
+      "runs": 3,
+      "confidence": 0.98,
+      "expected_probability": 0.98,
+      "probabilities": {
+        "Claude": 0.02,
+        "DeepSeek": 0,
+        "__host__": 0,
+        "__all__": 0,
+        "__none__": 0.98
+      },
+      "duration_ms": 371,
+      "status": "PASS",
+      "expected_range": [
+        0.97,
+        0.99
+      ]
+    },
+    {
+      "id": "Q07",
+      "scene": "route",
+      "note": "叫名字但只是致谢",
+      "expect": "__none__",
+      "choice": "__none__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.78,
+      "expected_probability": 0.76,
+      "probabilities": {
+        "Claude": 0.21,
+        "DeepSeek": 0,
+        "__host__": 0.02,
+        "__all__": 0,
+        "__none__": 0.76
+      },
+      "duration_ms": 425,
+      "status": "WEAK",
+      "expected_range": [
+        0.74,
+        0.78
+      ]
+    },
+    {
+      "id": "Q08",
+      "scene": "route",
+      "note": "英文致谢带名字",
+      "expect": "__none__",
+      "choice": "__none__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.84,
+      "expected_probability": 0.85,
+      "probabilities": {
+        "Claude": 0.15,
+        "DeepSeek": 0,
+        "__host__": 0,
+        "__all__": 0,
+        "__none__": 0.85
+      },
+      "duration_ms": 381,
+      "status": "WEAK",
+      "expected_range": [
+        0.84,
+        0.86
+      ]
+    },
+    {
+      "id": "Q09",
+      "scene": "route",
+      "note": "换人接手",
+      "expect": "DeepSeek",
+      "choice": "DeepSeek",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.59,
+      "expected_probability": 0.6,
+      "probabilities": {
+        "Claude": 0.15,
+        "DeepSeek": 0.6,
+        "__host__": 0.25,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 365,
+      "status": "WEAK",
+      "expected_range": [
+        0.59,
+        0.61
+      ]
+    },
+    {
+      "id": "Q10",
+      "scene": "route",
+      "note": "回复主持人较早的消息",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 1,
+      "expected_probability": 1,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0,
+        "__host__": 1,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 379,
+      "status": "PASS",
+      "expected_range": [
+        1,
+        1
+      ]
+    },
+    {
+      "id": "Q11",
+      "scene": "route",
+      "note": "回复某人的消息但正文点名另一位",
+      "expect": "DeepSeek",
+      "choice": "DeepSeek",
+      "acted": "DeepSeek",
+      "runs": 3,
+      "confidence": 1,
+      "expected_probability": 0.99,
+      "probabilities": {
+        "Claude": 0.01,
+        "DeepSeek": 0.99,
+        "__host__": 0,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 381,
+      "status": "PASS",
+      "expected_range": [
+        0.98,
+        1
+      ]
+    },
+    {
+      "id": "Q12",
+      "scene": "route",
+      "note": "一条消息给两位成员派不同任务，各自看原话做自己那份",
+      "expect": "__some__:Claude、DeepSeek",
+      "choice": "Claude",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.34,
+      "expected_probability": null,
+      "probabilities": {
+        "Claude": 0.33,
+        "DeepSeek": 0.04,
+        "__host__": 0.31,
+        "__all__": 0.32,
+        "__none__": 0
+      },
+      "duration_ms": 383,
+      "status": "WEAK",
+      "expected_range": [
+        0,
+        0
+      ]
+    },
+    {
+      "id": "Q13",
+      "scene": "route",
+      "note": "回到较早话题，延续那位成员",
+      "expect": "Claude",
+      "choice": "Claude",
+      "acted": "Claude",
+      "runs": 3,
+      "confidence": 0.99,
+      "expected_probability": 0.99,
+      "probabilities": {
+        "Claude": 0.99,
+        "DeepSeek": 0,
+        "__host__": 0.01,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 371,
+      "status": "PASS",
+      "expected_range": [
+        0.99,
+        0.99
+      ]
+    },
+    {
+      "id": "Q14",
+      "scene": "route",
+      "note": "问主持人是否在",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 1,
+      "expected_probability": 1,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0,
+        "__host__": 1,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 377,
+      "status": "PASS",
+      "expected_range": [
+        1,
+        1
+      ]
+    },
+    {
+      "id": "Q15",
+      "scene": "route",
+      "note": "用角色叫主持人",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 1,
+      "expected_probability": 1,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0,
+        "__host__": 1,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 400,
+      "status": "PASS",
+      "expected_range": [
+        1,
+        1
+      ]
+    },
+    {
+      "id": "Q16",
+      "scene": "route",
+      "note": "两人都在处理时问进度，各自报进度即可",
+      "expect": "__all__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.7,
+      "expected_probability": 0.26,
+      "probabilities": {
+        "Claude": 0.02,
+        "DeepSeek": 0.01,
+        "__host__": 0.71,
+        "__all__": 0.26,
+        "__none__": 0
+      },
+      "duration_ms": 381,
+      "status": "FAIL",
+      "expected_range": [
+        0.24,
+        0.27
+      ]
+    },
+    {
+      "id": "Q17",
+      "scene": "route",
+      "note": "给正在处理的成员追加要求",
+      "expect": "Claude",
+      "choice": "Claude",
+      "acted": "Claude",
+      "runs": 3,
+      "confidence": 0.96,
+      "expected_probability": 0.96,
+      "probabilities": {
+        "Claude": 0.96,
+        "DeepSeek": 0,
+        "__host__": 0.04,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 383,
+      "status": "PASS",
+      "expected_range": [
+        0.95,
+        0.97
+      ]
+    },
+    {
+      "id": "Q18",
+      "scene": "route",
+      "note": "要求互相评价",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.97,
+      "expected_probability": 0.98,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0,
+        "__host__": 0.98,
+        "__all__": 0.02,
+        "__none__": 0
+      },
+      "duration_ms": 358,
+      "status": "PASS",
+      "expected_range": [
+        0.97,
+        0.98
+      ]
+    },
+    {
+      "id": "Q19",
+      "scene": "route",
+      "note": "各自检查自己的部分，互不依赖",
+      "expect": "__all__",
+      "choice": "__all__",
+      "acted": "__all__",
+      "runs": 3,
+      "confidence": 0.95,
+      "expected_probability": 0.94,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0,
+        "__host__": 0.06,
+        "__all__": 0.94,
+        "__none__": 0
+      },
+      "duration_ms": 373,
+      "status": "PASS",
+      "expected_range": [
+        0.93,
+        0.95
+      ]
+    },
+    {
+      "id": "Q20",
+      "scene": "route",
+      "note": "英文全体自我介绍",
+      "expect": "__all__",
+      "choice": "__all__",
+      "acted": "__all__",
+      "runs": 3,
+      "confidence": 0.99,
+      "expected_probability": 0.99,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0,
+        "__host__": 0.01,
+        "__all__": 0.99,
+        "__none__": 0
+      },
+      "duration_ms": 397,
+      "status": "PASS",
+      "expected_range": [
+        0.99,
+        0.99
+      ]
+    },
+    {
+      "id": "Q21",
+      "scene": "route",
+      "note": "英文问谁是主持人",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.99,
+      "expected_probability": 0.99,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0,
+        "__host__": 0.99,
+        "__all__": 0.01,
+        "__none__": 0
+      },
+      "duration_ms": 375,
+      "status": "PASS",
+      "expected_range": [
+        0.99,
+        0.99
+      ]
+    },
+    {
+      "id": "Q22",
+      "scene": "route",
+      "note": "告知自己的安排，不需要回应",
+      "expect": "__none__",
+      "choice": "__none__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.82,
+      "expected_probability": 0.81,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0,
+        "__host__": 0.19,
+        "__all__": 0,
+        "__none__": 0.81
+      },
+      "duration_ms": 368,
+      "status": "WEAK",
+      "expected_range": [
+        0.79,
+        0.82
+      ]
+    },
+    {
+      "id": "Q23",
+      "scene": "route",
+      "note": "信息备注",
+      "expect": "__none__",
+      "choice": "__none__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.62,
+      "expected_probability": 0.6,
+      "probabilities": {
+        "Claude": 0.04,
+        "DeepSeek": 0.01,
+        "__host__": 0.36,
+        "__all__": 0,
+        "__none__": 0.6
+      },
+      "duration_ms": 376,
+      "status": "PASS",
+      "expected_range": [
+        0.54,
+        0.64
+      ]
+    },
+    {
+      "id": "Q24",
+      "scene": "route",
+      "note": "不点名延续较早成员的话题",
+      "expect": "DeepSeek",
+      "choice": "DeepSeek",
+      "acted": "DeepSeek",
+      "runs": 3,
+      "confidence": 0.97,
+      "expected_probability": 0.97,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0.97,
+        "__host__": 0.03,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 371,
+      "status": "PASS",
+      "expected_range": [
+        0.97,
+        0.98
+      ]
+    },
+    {
+      "id": "Q25",
+      "scene": "route",
+      "note": "用户自己接手，不需要成员",
+      "expect": "__none__",
+      "choice": "Claude",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.39,
+      "expected_probability": 0.38,
+      "probabilities": {
+        "Claude": 0.38,
+        "DeepSeek": 0,
+        "__host__": 0.17,
+        "__all__": 0.07,
+        "__none__": 0.38
+      },
+      "duration_ms": 375,
+      "status": "FAIL",
+      "expected_range": [
+        0.34,
+        0.4
+      ]
+    },
+    {
+      "id": "Q26",
+      "scene": "route",
+      "note": "问的是关于某成员能力的问题",
+      "expect": "Claude",
+      "choice": "Claude",
+      "acted": "Claude",
+      "runs": 3,
+      "confidence": 0.98,
+      "expected_probability": 0.98,
+      "probabilities": {
+        "Claude": 0.98,
+        "DeepSeek": 0,
+        "__host__": 0.02,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 646,
+      "status": "PASS",
+      "expected_range": [
+        0.97,
+        0.98
+      ]
+    },
+    {
+      "id": "Q27",
+      "scene": "route",
+      "note": "按所用模型指代成员",
+      "expect": "Claude",
+      "choice": "Claude",
+      "acted": "Claude",
+      "runs": 3,
+      "confidence": 0.93,
+      "expected_probability": 0.92,
+      "probabilities": {
+        "Claude": 0.92,
+        "DeepSeek": 0.03,
+        "__host__": 0.05,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 376,
+      "status": "PASS",
+      "expected_range": [
+        0.88,
+        0.94
+      ]
+    },
+    {
+      "id": "Q28",
+      "scene": "route",
+      "note": "问刚完成任务的成员结果",
+      "expect": "Claude",
+      "choice": "Claude",
+      "acted": "Claude",
+      "runs": 3,
+      "confidence": 0.87,
+      "expected_probability": 0.85,
+      "probabilities": {
+        "Claude": 0.85,
+        "DeepSeek": 0.01,
+        "__host__": 0.15,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 373,
+      "status": "PASS",
+      "expected_range": [
+        0.83,
+        0.87
+      ]
+    },
+    {
+      "id": "Q29",
+      "scene": "route",
+      "note": "对所有人打招呼，带复数称呼",
+      "expect": "__all__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 1,
+      "expected_probability": 0,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0,
+        "__host__": 1,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 365,
+      "status": "FAIL",
+      "expected_range": [
+        0,
+        0
+      ]
+    },
+    {
+      "id": "Q30",
+      "scene": "route",
+      "note": "按条件找人且只有一人符合，问法像让大家各自说",
+      "expect": "DeepSeek",
+      "choice": "__all__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.62,
+      "expected_probability": 0,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0,
+        "__host__": 0.4,
+        "__all__": 0.6,
+        "__none__": 0
+      },
+      "duration_ms": 357,
+      "status": "FAIL",
+      "expected_range": [
+        0,
+        0
+      ]
     },
     {
       "id": "G1",
@@ -449,6 +1912,7 @@
       "expect": "parallel",
       "choice": "parallel",
       "acted": "parallel",
+      "runs": 3,
       "confidence": 1,
       "expected_probability": 1,
       "probabilities": {
@@ -456,8 +1920,12 @@
         "sequential": 0,
         "__host__": 0
       },
-      "duration_ms": 334,
-      "status": "PASS"
+      "duration_ms": 348,
+      "status": "PASS",
+      "expected_range": [
+        1,
+        1
+      ]
     },
     {
       "id": "G2",
@@ -466,6 +1934,7 @@
       "expect": "sequential",
       "choice": "sequential",
       "acted": "sequential",
+      "runs": 3,
       "confidence": 0.98,
       "expected_probability": 0.98,
       "probabilities": {
@@ -473,8 +1942,12 @@
         "sequential": 0.98,
         "__host__": 0.02
       },
-      "duration_ms": 356,
-      "status": "PASS"
+      "duration_ms": 397,
+      "status": "PASS",
+      "expected_range": [
+        0.98,
+        0.98
+      ]
     },
     {
       "id": "G3",
@@ -483,15 +1956,20 @@
       "expect": "sequential",
       "choice": "sequential",
       "acted": "sequential",
+      "runs": 3,
       "confidence": 0.92,
-      "expected_probability": 0.92,
+      "expected_probability": 0.91,
       "probabilities": {
         "parallel": 0,
-        "sequential": 0.92,
-        "__host__": 0.08
+        "sequential": 0.91,
+        "__host__": 0.09
       },
-      "duration_ms": 356,
-      "status": "PASS"
+      "duration_ms": 379,
+      "status": "PASS",
+      "expected_range": [
+        0.89,
+        0.92
+      ]
     },
     {
       "id": "G4",
@@ -500,15 +1978,20 @@
       "expect": "parallel",
       "choice": "parallel",
       "acted": "parallel",
-      "confidence": 0.98,
+      "runs": 3,
+      "confidence": 0.97,
       "expected_probability": 0.98,
       "probabilities": {
         "parallel": 0.98,
         "sequential": 0,
         "__host__": 0.02
       },
-      "duration_ms": 404,
-      "status": "PASS"
+      "duration_ms": 376,
+      "status": "PASS",
+      "expected_range": [
+        0.97,
+        0.98
+      ]
     },
     {
       "id": "G5",
@@ -517,6 +2000,7 @@
       "expect": "parallel",
       "choice": "parallel",
       "acted": "parallel",
+      "runs": 3,
       "confidence": 1,
       "expected_probability": 1,
       "probabilities": {
@@ -524,8 +2008,12 @@
         "sequential": 0,
         "__host__": 0
       },
-      "duration_ms": 371,
-      "status": "PASS"
+      "duration_ms": 361,
+      "status": "PASS",
+      "expected_range": [
+        1,
+        1
+      ]
     },
     {
       "id": "G6",
@@ -534,15 +2022,130 @@
       "expect": "__host__",
       "choice": "__host__",
       "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.93,
+      "expected_probability": 0.94,
+      "probabilities": {
+        "parallel": 0.01,
+        "sequential": 0.05,
+        "__host__": 0.94
+      },
+      "duration_ms": 383,
+      "status": "PASS",
+      "expected_range": [
+        0.93,
+        0.95
+      ]
+    },
+    {
+      "id": "G7",
+      "scene": "group",
+      "note": "各说一个风险",
+      "expect": "parallel",
+      "choice": "parallel",
+      "acted": "parallel",
+      "runs": 3,
+      "confidence": 0.98,
+      "expected_probability": 0.98,
+      "probabilities": {
+        "parallel": 0.98,
+        "sequential": 0.01,
+        "__host__": 0.01
+      },
+      "duration_ms": 382,
+      "status": "PASS",
+      "expected_range": [
+        0.98,
+        0.98
+      ]
+    },
+    {
+      "id": "G8",
+      "scene": "group",
+      "note": "第一位提方案，后面逐一挑刺",
+      "expect": "sequential",
+      "choice": "sequential",
+      "acted": "sequential",
+      "runs": 3,
       "confidence": 0.93,
       "expected_probability": 0.93,
       "probabilities": {
-        "parallel": 0.01,
-        "sequential": 0.06,
-        "__host__": 0.93
+        "parallel": 0,
+        "sequential": 0.93,
+        "__host__": 0.07
       },
-      "duration_ms": 368,
-      "status": "PASS"
+      "duration_ms": 351,
+      "status": "PASS",
+      "expected_range": [
+        0.93,
+        0.93
+      ]
+    },
+    {
+      "id": "G9",
+      "scene": "group",
+      "note": "收到请回复",
+      "expect": "parallel",
+      "choice": "parallel",
+      "acted": "parallel",
+      "runs": 3,
+      "confidence": 0.98,
+      "expected_probability": 0.97,
+      "probabilities": {
+        "parallel": 0.97,
+        "sequential": 0,
+        "__host__": 0.03
+      },
+      "duration_ms": 381,
+      "status": "PASS",
+      "expected_range": [
+        0.96,
+        0.98
+      ]
+    },
+    {
+      "id": "G10",
+      "scene": "group",
+      "note": "一起把功能做完，分工不明",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.9,
+      "expected_probability": 0.92,
+      "probabilities": {
+        "parallel": 0.01,
+        "sequential": 0.07,
+        "__host__": 0.92
+      },
+      "duration_ms": 362,
+      "status": "PASS",
+      "expected_range": [
+        0.9,
+        0.93
+      ]
+    },
+    {
+      "id": "G11",
+      "scene": "group",
+      "note": "每人接着上一位的数字往下说",
+      "expect": "sequential",
+      "choice": "sequential",
+      "acted": "sequential",
+      "runs": 3,
+      "confidence": 0.97,
+      "expected_probability": 0.97,
+      "probabilities": {
+        "parallel": 0.01,
+        "sequential": 0.97,
+        "__host__": 0.02
+      },
+      "duration_ms": 371,
+      "status": "PASS",
+      "expected_range": [
+        0.97,
+        0.98
+      ]
     },
     {
       "id": "I1",
@@ -552,7 +2155,7 @@
       "choice": "__note__",
       "acted": "__note__",
       "runs": 3,
-      "confidence": 0.95,
+      "confidence": 0.93,
       "expected_probability": 0.95,
       "probabilities": {
         "Gemini": 0,
@@ -562,11 +2165,11 @@
         "__host__": 0.03,
         "__note__": 0.95
       },
-      "duration_ms": 361,
+      "duration_ms": 386,
       "status": "PASS",
       "expected_range": [
-        0.94,
-        0.95
+        0.93,
+        0.96
       ]
     },
     {
@@ -587,7 +2190,7 @@
         "__host__": 0,
         "__note__": 0
       },
-      "duration_ms": 417,
+      "duration_ms": 401,
       "status": "FAIL",
       "expected_range": [
         0,
@@ -612,7 +2215,7 @@
         "__host__": 0,
         "__note__": 0
       },
-      "duration_ms": 391,
+      "duration_ms": 380,
       "status": "PASS",
       "expected_range": [
         1,
@@ -637,7 +2240,7 @@
         "__host__": 0.99,
         "__note__": 0.01
       },
-      "duration_ms": 382,
+      "duration_ms": 392,
       "status": "PASS",
       "expected_range": [
         0.99,
@@ -665,7 +2268,7 @@
       "duration_ms": 365,
       "status": "PASS",
       "expected_range": [
-        0.99,
+        1,
         1
       ]
     },
@@ -687,7 +2290,7 @@
         "__host__": 0.01,
         "__note__": 0
       },
-      "duration_ms": 360,
+      "duration_ms": 361,
       "status": "PASS",
       "expected_range": [
         0.97,
@@ -702,21 +2305,121 @@
       "choice": "__host__",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.92,
-      "expected_probability": 0.92,
+      "confidence": 0.9,
+      "expected_probability": 0.91,
       "probabilities": {
         "Gemini": 0,
         "DeepSeek": 0,
-        "Codex": 0.08,
+        "Codex": 0.09,
         "Claude": 0,
-        "__host__": 0.92,
+        "__host__": 0.91,
         "__note__": 0
       },
-      "duration_ms": 376,
+      "duration_ms": 369,
       "status": "PASS",
       "expected_range": [
-        0.92,
-        0.92
+        0.9,
+        0.93
+      ]
+    },
+    {
+      "id": "I8",
+      "scene": "interjection",
+      "note": "问的专家排在后面、本轮还会发言",
+      "expect": "__note__",
+      "choice": "DeepSeek",
+      "acted": "DeepSeek",
+      "runs": 3,
+      "confidence": 0.99,
+      "expected_probability": 0,
+      "probabilities": {
+        "Gemini": 0,
+        "DeepSeek": 0.99,
+        "Codex": 0,
+        "Claude": 0,
+        "__host__": 0.01,
+        "__note__": 0
+      },
+      "duration_ms": 388,
+      "status": "FAIL",
+      "expected_range": [
+        0,
+        0
+      ]
+    },
+    {
+      "id": "I9",
+      "scene": "interjection",
+      "note": "要求暂停讨论",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.89,
+      "expected_probability": 0.86,
+      "probabilities": {
+        "Gemini": 0,
+        "DeepSeek": 0,
+        "Codex": 0,
+        "Claude": 0.01,
+        "__host__": 0.86,
+        "__note__": 0.13
+      },
+      "duration_ms": 367,
+      "status": "PASS",
+      "expected_range": [
+        0.81,
+        0.89
+      ]
+    },
+    {
+      "id": "I10",
+      "scene": "interjection",
+      "note": "要求调整发言顺序",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.91,
+      "expected_probability": 0.9,
+      "probabilities": {
+        "Gemini": 0,
+        "DeepSeek": 0.08,
+        "Codex": 0,
+        "Claude": 0.01,
+        "__host__": 0.9,
+        "__note__": 0.01
+      },
+      "duration_ms": 367,
+      "status": "PASS",
+      "expected_range": [
+        0.89,
+        0.91
+      ]
+    },
+    {
+      "id": "I11",
+      "scene": "interjection",
+      "note": "对所有人的约束提醒",
+      "expect": "__note__",
+      "choice": "__note__",
+      "acted": "__note__",
+      "runs": 3,
+      "confidence": 0.72,
+      "expected_probability": 0.72,
+      "probabilities": {
+        "Gemini": 0.01,
+        "DeepSeek": 0.01,
+        "Codex": 0,
+        "Claude": 0.01,
+        "__host__": 0.26,
+        "__note__": 0.72
+      },
+      "duration_ms": 363,
+      "status": "PASS",
+      "expected_range": [
+        0.67,
+        0.76
       ]
     },
     {
@@ -727,18 +2430,18 @@
       "choice": "Gemini",
       "acted": "Gemini",
       "runs": 3,
-      "confidence": 0.95,
+      "confidence": 0.96,
       "expected_probability": 0.96,
       "probabilities": {
         "Gemini": 0.96,
         "DeepSeek": 0,
         "__host__": 0.04
       },
-      "duration_ms": 345,
+      "duration_ms": 380,
       "status": "PASS",
       "expected_range": [
         0.95,
-        0.97
+        0.96
       ]
     },
     {
@@ -749,13 +2452,13 @@
       "choice": "DeepSeek",
       "acted": "DeepSeek",
       "runs": 3,
-      "confidence": 0.95,
+      "confidence": 0.96,
       "expected_probability": 0.96,
       "probabilities": {
         "DeepSeek": 0.96,
         "__host__": 0.04
       },
-      "duration_ms": 362,
+      "duration_ms": 363,
       "status": "PASS",
       "expected_range": [
         0.95,
@@ -770,17 +2473,60 @@
       "choice": "__host__",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.57,
-      "expected_probability": 0.57,
+      "confidence": 0.63,
+      "expected_probability": 0.6,
       "probabilities": {
-        "DeepSeek": 0.43,
-        "__host__": 0.57
+        "DeepSeek": 0.4,
+        "__host__": 0.6
       },
-      "duration_ms": 344,
+      "duration_ms": 382,
       "status": "PASS",
       "expected_range": [
-        0.54,
-        0.59
+        0.56,
+        0.63
+      ]
+    },
+    {
+      "id": "N4",
+      "scene": "next_speaker",
+      "note": "安排只排了第一位，简报规定了顺序",
+      "expect": "Gemini",
+      "choice": "Gemini",
+      "acted": "Gemini",
+      "runs": 3,
+      "confidence": 0.95,
+      "expected_probability": 0.96,
+      "probabilities": {
+        "Gemini": 0.96,
+        "DeepSeek": 0,
+        "__host__": 0.04
+      },
+      "duration_ms": 341,
+      "status": "PASS",
+      "expected_range": [
+        0.95,
+        0.96
+      ]
+    },
+    {
+      "id": "N5",
+      "scene": "next_speaker",
+      "note": "简报写明剩下的人本轮不发言",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.87,
+      "expected_probability": 0.86,
+      "probabilities": {
+        "DeepSeek": 0.14,
+        "__host__": 0.86
+      },
+      "duration_ms": 393,
+      "status": "PASS",
+      "expected_range": [
+        0.84,
+        0.87
       ]
     },
     {
@@ -791,13 +2537,13 @@
       "choice": "continue",
       "acted": "continue",
       "runs": 3,
-      "confidence": 0.97,
-      "expected_probability": 0.97,
+      "confidence": 0.96,
+      "expected_probability": 0.96,
       "probabilities": {
-        "continue": 0.97,
-        "__host__": 0.03
+        "continue": 0.96,
+        "__host__": 0.04
       },
-      "duration_ms": 365,
+      "duration_ms": 372,
       "status": "PASS",
       "expected_range": [
         0.96,
@@ -807,9 +2553,9 @@
       "first_choice": "Codex",
       "first": "Codex",
       "first_probabilities": {
-        "Codex": 0.97,
+        "Codex": 0.98,
         "Gemini": 0.01,
-        "__host__": 0.02
+        "__host__": 0.01
       }
     },
     {
@@ -821,12 +2567,12 @@
       "acted": "__host__",
       "runs": 3,
       "confidence": 0.91,
-      "expected_probability": 0.9,
+      "expected_probability": 0.91,
       "probabilities": {
-        "continue": 0.1,
-        "__host__": 0.9
+        "continue": 0.09,
+        "__host__": 0.91
       },
-      "duration_ms": 394,
+      "duration_ms": 351,
       "status": "PASS",
       "expected_range": [
         0.9,
@@ -842,12 +2588,12 @@
       "acted": "__host__",
       "runs": 3,
       "confidence": 0.88,
-      "expected_probability": 0.88,
+      "expected_probability": 0.89,
       "probabilities": {
-        "continue": 0.12,
-        "__host__": 0.88
+        "continue": 0.11,
+        "__host__": 0.89
       },
-      "duration_ms": 361,
+      "duration_ms": 364,
       "status": "PASS",
       "expected_range": [
         0.88,
@@ -861,14 +2607,19 @@
       "expect": "review",
       "choice": "review",
       "acted": "review",
+      "runs": 3,
       "confidence": 0.98,
       "expected_probability": 0.98,
       "probabilities": {
         "review": 0.98,
         "__host__": 0.02
       },
-      "duration_ms": 368,
-      "status": "PASS"
+      "duration_ms": 376,
+      "status": "PASS",
+      "expected_range": [
+        0.98,
+        0.98
+      ]
     },
     {
       "id": "V2",
@@ -877,14 +2628,19 @@
       "expect": "review",
       "choice": "review",
       "acted": "review",
-      "confidence": 0.98,
+      "runs": 3,
+      "confidence": 0.99,
       "expected_probability": 0.98,
       "probabilities": {
         "review": 0.98,
         "__host__": 0.02
       },
-      "duration_ms": 373,
-      "status": "PASS"
+      "duration_ms": 355,
+      "status": "PASS",
+      "expected_range": [
+        0.98,
+        0.99
+      ]
     },
     {
       "id": "V3",
@@ -893,14 +2649,19 @@
       "expect": "__host__",
       "choice": "__host__",
       "acted": "__host__",
+      "runs": 3,
       "confidence": 1,
       "expected_probability": 1,
       "probabilities": {
         "review": 0,
         "__host__": 1
       },
-      "duration_ms": 360,
-      "status": "PASS"
+      "duration_ms": 359,
+      "status": "PASS",
+      "expected_range": [
+        1,
+        1
+      ]
     },
     {
       "id": "V4",
@@ -909,14 +2670,19 @@
       "expect": "__host__",
       "choice": "__host__",
       "acted": "__host__",
+      "runs": 3,
       "confidence": 1,
       "expected_probability": 1,
       "probabilities": {
         "review": 0,
         "__host__": 1
       },
-      "duration_ms": 387,
-      "status": "PASS"
+      "duration_ms": 400,
+      "status": "PASS",
+      "expected_range": [
+        1,
+        1
+      ]
     },
     {
       "id": "V5",
@@ -925,14 +2691,19 @@
       "expect": "__host__",
       "choice": "__host__",
       "acted": "__host__",
+      "runs": 3,
       "confidence": 1,
       "expected_probability": 1,
       "probabilities": {
         "review": 0,
         "__host__": 1
       },
-      "duration_ms": 382,
-      "status": "PASS"
+      "duration_ms": 354,
+      "status": "PASS",
+      "expected_range": [
+        1,
+        1
+      ]
     },
     {
       "id": "V6",
@@ -941,14 +2712,19 @@
       "expect": "review",
       "choice": "review",
       "acted": "review",
+      "runs": 3,
       "confidence": 0.96,
       "expected_probability": 0.96,
       "probabilities": {
         "review": 0.96,
         "__host__": 0.04
       },
-      "duration_ms": 373,
-      "status": "PASS"
+      "duration_ms": 353,
+      "status": "PASS",
+      "expected_range": [
+        0.95,
+        0.96
+      ]
     },
     {
       "id": "V7",
@@ -957,14 +2733,19 @@
       "expect": "__host__",
       "choice": "__host__",
       "acted": "__host__",
+      "runs": 3,
       "confidence": 1,
       "expected_probability": 1,
       "probabilities": {
         "review": 0,
         "__host__": 1
       },
-      "duration_ms": 365,
-      "status": "PASS"
+      "duration_ms": 357,
+      "status": "PASS",
+      "expected_range": [
+        1,
+        1
+      ]
     },
     {
       "id": "R4",
@@ -980,7 +2761,7 @@
         "continue": 0.98,
         "__host__": 0.02
       },
-      "duration_ms": 367,
+      "duration_ms": 373,
       "status": "PASS",
       "expected_range": [
         0.98,
@@ -994,7 +2775,60 @@
         "Gemini": 0.02,
         "__host__": 0.96
       }
+    },
+    {
+      "id": "R5",
+      "scene": "round",
+      "note": "有人点名追问另一位，首位是被追问者",
+      "expect": "continue",
+      "choice": "continue",
+      "acted": "continue",
+      "runs": 3,
+      "confidence": 0.93,
+      "expected_probability": 0.94,
+      "probabilities": {
+        "continue": 0.94,
+        "__host__": 0.06
+      },
+      "duration_ms": 364,
+      "status": "PASS",
+      "expected_range": [
+        0.93,
+        0.95
+      ],
+      "expect_first": "Gemini",
+      "first_choice": "Gemini",
+      "first": "Gemini",
+      "first_probabilities": {
+        "Codex": 0.02,
+        "Gemini": 0.74,
+        "__host__": 0.24
+      }
+    },
+    {
+      "id": "R6",
+      "scene": "round",
+      "note": "偏离目标，聊起了界面配色",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.94,
+      "expected_probability": 0.95,
+      "probabilities": {
+        "continue": 0.05,
+        "__host__": 0.95
+      },
+      "duration_ms": 434,
+      "status": "PASS",
+      "expected_range": [
+        0.94,
+        0.96
+      ]
     }
   ],
-  "mode": "stable"
+  "thresholds": {
+    "member": 0.7,
+    "wide": 0.85
+  }
 }
