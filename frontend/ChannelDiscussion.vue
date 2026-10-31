@@ -301,12 +301,18 @@ const option_name = (name) => DECISION_OPTIONS[name]
   || (String(name).startsWith(SOME_PREFIX) ? `${String(name).slice(SOME_PREFIX.length).split("、").map(bridge.display_name).join("、")} 各自回应` : bridge.display_name(name));
 // The model's input is fetched only when asked for; it is several KB per decision and not part of the room view.
 const decision_inputs = ref({});
-/** Load one decision's input once and keep it for the card. */
-async function show_decision_input(decision) {
-  if (decision_inputs.value[decision.id]?.data) return;
+/** Open or close one decision's input; the first opening loads it, a failure is reported and leaves it closed. */
+async function toggle_decision_input(decision) {
+  const current = decision_inputs.value[decision.id] || {};
+  if (current.loading) return;
+  if (current.open) { decision_inputs.value = { ...decision_inputs.value, [decision.id]: { ...current, open: false } }; return; }
+  if ("data" in current) { decision_inputs.value = { ...decision_inputs.value, [decision.id]: { ...current, open: true } }; return; }
   decision_inputs.value = { ...decision_inputs.value, [decision.id]: { loading: true } };
-  try { decision_inputs.value = { ...decision_inputs.value, [decision.id]: { data: summarize_input(await bridge.load_decision_input(decision.id)) } }; }
-  catch (failure) { decision_inputs.value = { ...decision_inputs.value, [decision.id]: { error: failure.message } }; }
+  try { decision_inputs.value = { ...decision_inputs.value, [decision.id]: { open: true, data: summarize_input(await bridge.load_decision_input(decision.id)) } }; }
+  catch (failure) {
+    decision_inputs.value = { ...decision_inputs.value, [decision.id]: {} };
+    bridge.notify("error", `读取完整输入失败：${failure.message}`);
+  }
 }
 /** Message numbers as a short list: consecutive numbers collapse into a range. */
 function message_span(ids) {
@@ -348,7 +354,9 @@ function decision_meta(decision) {
   let context = {};
   try { context = JSON.parse(decision.context || "{}") || {}; } catch { context = {}; }
   return [SCHEDULER_LABELS[decision.provider] || decision.provider, context.model, DECISION_MODES[context.mode] || DECISION_MODES.stable,
-    context.prompt ? `提示版本 ${context.prompt}` : ""].filter(Boolean).join(" · ");
+    context.prompt ? `提示版本 ${context.prompt}` : ""].filter(Boolean)
+    // A full-width bracket already carries its own spacing, so the separator after it drops the leading space.
+    .reduce((line, part) => line ? `${line}${line.endsWith("）") ? "· " : " · "}${part}` : part, "");
 }
 /** Every option of one question with its probability, most likely first, so a close call is visible at a glance. */
 function decision_odds(item) {
@@ -1373,15 +1381,20 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             <button v-if="view.access?.can_manage" type="button" class="channel-schedule-rate" :class="{ 'is-on': decision.feedback === 'good' }" :aria-pressed="decision.feedback === 'good'" aria-label="这次调度判断得好" title="判断得好" @click="rate_decision(decision, 'good')"><UIcon name="i-lucide-thumbs-up" /></button>
             <button v-if="view.access?.can_manage" type="button" class="channel-schedule-rate" :class="{ 'is-on': decision.feedback === 'bad' }" :aria-pressed="decision.feedback === 'bad'" aria-label="这次调度判断得不好" title="判断得不好" @click="rate_decision(decision, 'bad')"><UIcon name="i-lucide-thumbs-down" /></button>
           </template>
-          <p class="channel-schedule-meta">{{ decision_meta(decision) }}</p>
+          <div class="channel-schedule-meta">
+            <span>{{ decision_meta(decision) }}</span>
+            <button type="button" class="channel-schedule-input-toggle" :class="{ 'is-open': decision_inputs[decision.id]?.open }" :aria-expanded="Boolean(decision_inputs[decision.id]?.open)"
+              :aria-busy="Boolean(decision_inputs[decision.id]?.loading)" :aria-label="decision_inputs[decision.id]?.open ? '收起模型看到的完整输入' : '查看模型看到的完整输入'"
+              :title="decision_inputs[decision.id]?.open ? '收起完整输入' : '完整输入：背景、成员、上下文、问题与选项'" @click="toggle_decision_input(decision)">
+              <UIcon :name="decision_inputs[decision.id]?.loading ? 'i-lucide-loader-circle' : 'i-lucide-scan-text'" :class="{ 'animate-spin': decision_inputs[decision.id]?.loading }" />
+            </button>
+          </div>
           <p v-for="(item, index) in decision.detail" :key="index" class="channel-schedule-odds">
             <b v-if="decision.detail.length > 1">第 {{ index + 1 }} 题</b>
             <span v-for="option in decision_odds(item)" :key="option.value" :class="{ 'is-chosen': option.value === item.choice }">{{ option.name }}<small v-if="option.probability !== undefined">{{ Number(option.probability).toFixed(2) }}</small></span>
           </p>
-          <button v-if="!decision_inputs[decision.id]?.data" type="button" class="channel-schedule-input-open" :disabled="decision_inputs[decision.id]?.loading" @click="show_decision_input(decision)">{{ decision_inputs[decision.id]?.loading ? "正在读取…" : "查看完整输入" }}</button>
-          <p v-if="decision_inputs[decision.id]?.error" class="channel-schedule-input-error">{{ decision_inputs[decision.id].error }}</p>
-          <p v-else-if="decision_inputs[decision.id]?.data === null">这条判断没有保存输入。</p>
-          <div v-else-if="decision_inputs[decision.id]?.data" v-for="input in [decision_inputs[decision.id].data]" :key="decision.id" class="channel-schedule-input">
+          <p v-if="decision_inputs[decision.id]?.open && decision_inputs[decision.id].data === null" class="channel-schedule-input is-empty">这条判断没有保存输入。</p>
+          <div v-else-if="decision_inputs[decision.id]?.open" v-for="input in [decision_inputs[decision.id].data]" :key="decision.id" class="channel-schedule-input">
             <p v-if="input.background"><b>固定背景</b><span :title="input.background">{{ input.background }}</span></p>
             <p><b>房间与成员</b><span :title="input.facts">{{ input.facts }}</span></p>
             <p><b>对话上下文</b><span>近期消息 {{ input.messages }}<template v-if="input.pending">；待处理 {{ input.pending }}</template></span></p>
