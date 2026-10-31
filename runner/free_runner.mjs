@@ -9,7 +9,7 @@ import { SegmentLog } from './execution_progress.mjs';
 import { free_task_text, TASK_SUBCOMMANDS, with_expert_prompt } from './expert_prompts.mjs';
 import { atomic_json } from './files.mjs';
 import { SessionDriver } from './session_driver.mjs';
-import { REVIEW_CONFIDENCE, REVIEW_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, decide_group_order, decide_review_completion, route_free_message } from './scheduler.mjs';
+import { DEFAULT_SCHEDULER_MODE, REVIEW_CONFIDENCE, REVIEW_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, decide_group_order, decide_review_completion, route_free_message, route_prompt_version } from './scheduler.mjs';
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const RENEW_MS = 30_000;
@@ -451,7 +451,8 @@ export class FreeRoomRunner {
     let record;
     if (decision.detail) {
       if (result.status === 'failed') label += '（未生效，网站写入失败）';
-      record = await this.record_decision(request.message_id, decision, label, result.applied && decision.action !== 'host');
+      // The @全体成员 question has one wording in every mode.
+      record = await this.record_decision(request.message_id, decision, label, result.applied && decision.action !== 'host', { prompt: ROUTE_PROMPT_VERSION });
     }
     this.save_suggestion(request, { action: decision.action, actual_action,
       applied: result.applied && decision.action !== 'host', model_judgment: Boolean(decision.detail),
@@ -481,7 +482,10 @@ export class FreeRoomRunner {
       const work = member_work(requests, member.name, message_id);
       const profile = this.config.participants[member.name];
       const described = room.descriptions?.[member.name] ? `；用户描述：${room.descriptions[member.name]}` : '';
-      return { id: member.id, name: member.name, role: member.role, description: profile ? member_description(member.name, profile, `${work}${described}`)
+      // The model and the last finished message are only read by the guided wording.
+      const finished = (room.free?.requests || []).filter(item => item.member === member.name && item.status === 'completed' && item.message_id !== message_id).at(-1);
+      return { id: member.id, name: member.name, role: member.role, model: profile?.model || '', finished: finished ? `#${finished.message_id}` : '',
+        description: profile ? member_description(member.name, profile, `${work}${described}`)
         : `${member.name}（${member.access === 'online' ? '网页 AI' : '手动接入'}，由用户代为触发${work}${described}）` };
     });
   }
@@ -542,7 +546,7 @@ export class FreeRoomRunner {
       return await api(this.config, '/scheduler-decisions', { kind: 'interjection', label, confidence: decision.confidence ?? null,
         applied, provider: this.config.scheduler.provider, after_message_id: message_id, detail: decision.detail, input: decision.input,
         context: { model: this.config.scheduler.model, threshold: ROUTE_CONFIDENCE, wide_threshold: ROUTE_WIDE_CONFIDENCE,
-          prompt: ROUTE_PROMPT_VERSION, package: PACKAGE_VERSION, ...context } });
+          mode: this.config.scheduler.mode || DEFAULT_SCHEDULER_MODE, prompt: route_prompt_version(this.config.scheduler.mode || DEFAULT_SCHEDULER_MODE), package: PACKAGE_VERSION, ...context } });
     } catch (error) { this.log(`智能调度 #${message_id} 决策记录未保存：${error.message}`); }
   }
   /** Reserve with a persisted client id before invoking any software. */

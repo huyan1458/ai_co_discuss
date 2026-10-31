@@ -29,11 +29,16 @@ codiscuss api "/api/scheduler-feedback?after=0" --site http://127.0.0.1:8765
 - `snapshot.input.questions`：题干 `instructions` 与每个选项的 `description`
 - `snapshot.detail`：模型选中项与各选项概率
 - `snapshot.label` / `confidence` / `applied`：最终显示与是否执行
-- `snapshot.context`：模型、阈值、提示词版本 `prompt`、包版本
+- `snapshot.context`：模型、阈值、判断方式 `mode`（`guided` 引导 / `stable` 稳定；缺省的旧记录按稳定写法处理）、提示词版本 `prompt`（按模式各自编号）、包版本
 
 `snapshot.input` 为 `null` 的是本功能上线前的判断，只能依据题干记录和概率做有限诊断，须注明。
 
 ## 3. 逐条诊断
+
+先按 `context.mode` 分组，两种模式的诊断标准不同：
+
+- **稳定模式**：按回归集逐条要求，下列 1–7 全部适用。
+- **引导模式**：只求服务好大多数场景（见经验文档“两种写法”）。先看这条是否派错了人：退回主持人只是多绕一步，派错人才是实际损失。单条失败只在代表一类常见说法时才建议处理，并且优先找“背景与现状缺了什么”（第 2 步），不建议给题干加判据、关键词或反例；第 3、4 步改为检查背景、选项后果或理由是否只写了一面、把概率推向某一方。
 
 对每条 case 依次回答，结论必须引用快照原文：
 
@@ -55,9 +60,9 @@ codiscuss api "/api/scheduler-feedback?after=0" --site http://127.0.0.1:8765
 
 ## 4. 输出报告（对话中）
 
-- **概况**：审查范围（`after` 区间、条数）、按提示词版本与归因的计数。
+- **概况**：审查范围（`after` 区间、条数）、按模式与提示词版本、归因的计数；引导模式另列派错人与退回主持人的条数。
 - **逐条**：房间标题、待处理消息原文、模型选择与概率、用户期望、归因、引用的输入片段、入集结论（建议入集时附用例草稿）。
-- **共性问题与修改建议**：同一归因出现多次时合并；修改建议遵循提示词设计原则（经验文档“定位与要求”第 5 条）：改判据与理由，不靠追加关键词或例子修单个案例，一次只动一个因素；给出具体要改的题干或选项措辞（新旧对照），并说明改后须升提示版本（自由房 `ROUTE_PROMPT_VERSION`，讨论 `DISCUSSION_PROMPT_VERSION`），把确认了期望答案的案例补进 `tests/jev_cases.json`，再运行 `node tests/jev_eval.mjs --baseline tests/jev_baseline.json` 确认没有其他场景翻转后上线（评测会把文本发给模型服务商并计费，须用户同意）。
+- **共性问题与修改建议**：同一归因出现多次时合并；修改建议遵循提示词设计原则（经验文档“定位与要求”第 5 条）：改判据与理由，不靠追加关键词或例子修单个案例，一次只动一个因素；给出具体要改的题干或选项措辞（新旧对照），并说明改后须升对应模式的提示版本（稳定：自由房 `ROUTE_PROMPT_VERSION`、讨论 `DISCUSSION_PROMPT_VERSION`；引导：`ROUTE_GUIDED_PROMPT_VERSION`、`DISCUSSION_GUIDED_PROMPT_VERSION`），把确认了期望答案的案例补进 `tests/jev_cases.json`，再按模式运行 `node tests/jev_eval.mjs --mode stable --baseline tests/jev_baseline.json` 或 `--mode guided --baseline tests/jev_baseline_guided.json`（概率在阈值附近时加 `--repeat 3` 取均值）确认没有其他场景翻转后上线（评测会把文本发给模型服务商并计费，须用户同意）。
 - **下次续读位置**：本次最后一条的 `decision_id`。
 
 不做：修改代码或提示词、调用决策模型、删除或改动反馈数据、把单条样本直接写成定论、自行写入 `tests/jev_cases.json`（入集由用户确认后另行修改）。

@@ -14,7 +14,7 @@ import { setup_sidecar } from './adapters/antigravity_app.mjs';
 import { adapter_of, adoption_adapter, BRANCHABLE_ADAPTERS, branch_session, session_settings, software_defaults, software_effort, software_models } from './adapters/index.mjs';
 import { ADAPTER_IDS, ADAPTER_PROFILES, adapter_profile, platform_adapters, same_session_family } from './adapters/profiles.mjs';
 import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
-import { SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
+import { DEFAULT_SCHEDULER_MODE, SCHEDULER_MODES, SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
 import { access_levels, BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT, PROJECT_ACCESS } from './expert_prompts.mjs';
 import { acquire_lock, api, DiscussionStore, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner, free_task_files } from './free_runner.mjs';
@@ -285,7 +285,7 @@ export async function room_models(home, raw, { read_defaults = software_defaults
       own_project: Boolean(facts?.own_project_when_bound && profile.session_id) }];
   })));
   // Smart scheduling is a local choice; only which model decides is shown, never its key.
-  const scheduler = config.scheduler ? { provider: config.scheduler.provider, model: config.scheduler.model } : null;
+  const scheduler = config.scheduler ? { provider: config.scheduler.provider, model: config.scheduler.model, mode: config.scheduler.mode || DEFAULT_SCHEDULER_MODE } : null;
   return { room_id: input.room_id, registered: paths.length > 0, participants, scheduler };
 }
 
@@ -1232,7 +1232,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   assert_shared_home(home);
   let result;
   if (positionals[0] === 'settings') result = { ...(input ? save_launch_settings(home, input) : launch_settings(home)), api_providers: API_PROVIDERS,
-    scheduler_providers: SCHEDULER_PROVIDERS, api_keys: saved_api_keys(home), projects: launch_projects(home).projects, ...expert_presets(home) };
+    scheduler_providers: SCHEDULER_PROVIDERS, scheduler_modes: SCHEDULER_MODES, scheduler_default_mode: DEFAULT_SCHEDULER_MODE, api_keys: saved_api_keys(home), projects: launch_projects(home).projects, ...expert_presets(home) };
   else if (positionals[0] === 'projects') result = input ? save_launch_projects(home, input) : launch_projects(home);
   else if (positionals[0] === 'presets') result = input ? save_expert_presets(home, input) : expert_presets(home);
   else if (positionals[0] === 'api-key' && input) result = save_api_key(home, input);

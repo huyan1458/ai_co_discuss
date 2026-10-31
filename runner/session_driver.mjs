@@ -1,7 +1,7 @@
 /** Smart scheduling and limit checks for a discussion hosted inside a free room. */
 import { readFileSync } from 'node:fs';
 import { api, peer_round_question } from './discussion_runner.mjs';
-import { DISCUSSION_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_WIDE_CONFIDENCE, decide_interjection, decide_next_speaker, decide_round } from './scheduler.mjs';
+import { DEFAULT_SCHEDULER_MODE, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_WIDE_CONFIDENCE, decide_interjection, decide_next_speaker, decide_round, discussion_prompt_version } from './scheduler.mjs';
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 /** How many of the latest plans describe "the host's recent arrangement" to the scheduler. */
@@ -164,8 +164,10 @@ export class SessionDriver {
     if (!message) return null;
     const spoken = turns.filter(turn => turn.round === roster.round && turn.status === 'answered').map(turn => turn.expert);
     const experts = roster.experts.filter(item => item.registered).map(item => item.name);
+    // Who the plan will ask next, in order, so a question to one of them can wait for that turn.
+    const upcoming = turns.filter(turn => ['open', 'queued'].includes(turn.status)).sort((left, right) => Number(left.id || 0) - Number(right.id || 0)).map(turn => turn.expert);
     const result = await decide_interjection(this.config.api_home, this.config.scheduler,
-      { ...base, message, experts, spoken }, this.fetch);
+      { ...base, message, experts, spoken, upcoming }, this.fetch);
     if (result.action === 'note') {
       // Continuing needs a plan to continue; with nothing open or queued the discussion would stall without the host.
       if (turns.some(turn => ['open', 'queued'].includes(turn.status))) return { ...result, action: 'continue', kind: 'interjection', after_message_id: message.id };
@@ -199,7 +201,7 @@ export class SessionDriver {
         confidence: plan.confidence ?? null, applied, provider: this.config.scheduler.provider,
         after_message_id, detail: plan.detail, input: plan.input,
         context: { model: this.config.scheduler.model, threshold: ROUTE_CONFIDENCE, wide_threshold: ROUTE_WIDE_CONFIDENCE,
-          prompt: DISCUSSION_PROMPT_VERSION, package: PACKAGE_VERSION } });
+          mode: this.config.scheduler.mode || DEFAULT_SCHEDULER_MODE, prompt: discussion_prompt_version(this.config.scheduler.mode || DEFAULT_SCHEDULER_MODE), package: PACKAGE_VERSION } });
     } catch (error) { this.log(`智能调度决策记录未保存：${error.message}`); }
   }
 }

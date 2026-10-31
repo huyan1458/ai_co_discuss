@@ -112,7 +112,8 @@ const scheduler = computed(() => {
   if (local_state.value) return "—";
   if (!saved.value.scheduler) return "未开启";
   const provider = view.value.launch.scheduler_providers?.[saved.value.scheduler.provider]?.label || saved.value.scheduler.provider;
-  return `${provider} · ${saved.value.scheduler.model}`;
+  const mode = view.value.launch.scheduler_modes?.[saved.value.scheduler.mode];
+  return [provider, saved.value.scheduler.model, mode].filter(Boolean).join(" · ");
 });
 const HOST_LABEL = "设为主持人";
 /**

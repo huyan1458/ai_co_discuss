@@ -2115,7 +2115,7 @@ async function load_launch_settings() {
     state.launch.saved_profiles = JSON.parse(JSON.stringify(settings.participants || {}));
     Object.assign(state.launch, { available: true, profiles: settings.participants, projects: settings.projects || [], api_providers: settings.api_providers || {}, api_keys: settings.api_keys || {},
       presets: settings.presets || [], builtin_presets: settings.builtin_presets || [], description_templates: settings.description_templates || {},
-      scheduler_providers: settings.scheduler_providers || {}, error: "",
+      scheduler_providers: settings.scheduler_providers || {}, scheduler_modes: settings.scheduler_modes || {}, scheduler_default_mode: settings.scheduler_default_mode || "", error: "",
       notice: relay_machine ? `经电脑「${relay_machine.name}」执行本机操作` : local_connection ? "已连接本机服务，讨论保存在当前网站" : "" });
     Object.values(state.launch.profiles).forEach(fill_api_key);
     if (local_connection) pair_local_machine();
@@ -2420,8 +2420,8 @@ function launch_options() {
 
 /** A new room also carries the optional smart scheduling choice; only a complete, enabled choice is sent. */
 function creation_launch_options() {
-  const { enabled, provider, model, api_key_ref } = state.launch.scheduler;
-  return { ...launch_options(), ...(enabled && provider && model && api_key_ref ? { scheduler: { provider, model, api_key_ref } } : {}) };
+  const { enabled, provider, model, api_key_ref, mode } = state.launch.scheduler;
+  return { ...launch_options(), ...(enabled && provider && model && api_key_ref ? { scheduler: { provider, model, api_key_ref, ...(mode ? { mode } : {}) } } : {}) };
 }
 
 /** Choose whether the new discussion's host writes named follow-ups for each expert between rounds. */
@@ -2452,7 +2452,7 @@ function default_scheduler() {
   const provider = Object.keys(providers).find((name) => state.launch.api_keys?.[providers[name].base_url]);
   if (!provider) return {};
   const { base_url, models } = providers[provider];
-  return { enabled: true, provider, model: models[0] || "", api_key_ref: state.launch.api_keys[base_url] };
+  return { enabled: true, provider, model: models[0] || "", api_key_ref: state.launch.api_keys[base_url], mode: state.launch.scheduler_default_mode || "" };
 }
 
 /** Change the smart scheduling draft; a new provider starts from its preset model and any key saved for its root. */

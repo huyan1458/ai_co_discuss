@@ -3,24 +3,30 @@
  * compare each choice and its probability with the expected answer (and optionally with an earlier run).
  * Not part of `npm test`: it sends the case texts to the provider and is billed per call.
  *
- *   node tests/jev_eval.mjs [--provider jev] [--model jev-latest] [--only S1a,G,round] [--out FILE] [--baseline FILE]
+ *   node tests/jev_eval.mjs [--provider jev] [--model jev-latest] [--mode guided|stable] [--repeat N] [--only S1a,G,round] [--out FILE] [--baseline FILE]
+ *
+ * --repeat runs every case N times and judges the averaged probabilities, since one call varies by about ±0.1.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { saved_api_keys } from '../runner/discussion_api.mjs';
 import { service_home } from '../runner/discussion_service.mjs';
-import { DISCUSSION_PROMPT_VERSION, REVIEW_PROMPT_VERSION, ROUTE_PROMPT_VERSION, SCHEDULER_PROVIDERS, decide_group_order, decide_interjection, decide_review_completion,
+import { DEFAULT_SCHEDULER_MODE, REVIEW_PROMPT_VERSION, discussion_prompt_version, SCHEDULER_MODES, SCHEDULER_PROVIDERS, route_prompt_version, decide_group_order, decide_interjection, decide_review_completion,
   decide_next_speaker, decide_round, route_free_message } from '../runner/scheduler.mjs';
 
-const { values: options } = parseArgs({ options: { provider: { type: 'string', default: 'jev' }, model: { type: 'string' },
-  only: { type: 'string' }, out: { type: 'string' }, baseline: { type: 'string' } } });
+const { values: options } = parseArgs({ options: { provider: { type: 'string', default: 'jev' }, model: { type: 'string' }, mode: { type: 'string', default: DEFAULT_SCHEDULER_MODE },
+  repeat: { type: 'string', default: '1' }, only: { type: 'string' }, out: { type: 'string' }, baseline: { type: 'string' } } });
 const { fixtures, cases } = JSON.parse(readFileSync(new URL('./jev_cases.json', import.meta.url), 'utf8'));
 const home = service_home();
 const provider = SCHEDULER_PROVIDERS[options.provider];
 if (!provider) throw new Error(`供应商只能为 ${Object.keys(SCHEDULER_PROVIDERS).join(' / ')}`);
 const api_key_ref = saved_api_keys(home)[provider.base_url];
 if (!api_key_ref) throw new Error(`本机服务目录 ${home} 没有 ${provider.base_url} 的密钥，请先在新建房间面板保存`);
-const scheduler = { provider: options.provider, model: options.model || provider.models[0], base_url: provider.base_url, api_key_ref };
+if (!SCHEDULER_MODES[options.mode]) throw new Error(`模式只能为 ${Object.keys(SCHEDULER_MODES).join(' / ')}`);
+const scheduler = { provider: options.provider, model: options.model || provider.models[0], base_url: provider.base_url, api_key_ref, mode: options.mode };
+const ROUTE_PROMPT_VERSION = route_prompt_version(options.mode);
+const DISCUSSION_PROMPT_VERSION = discussion_prompt_version(options.mode);
+const REPEAT = Math.max(1, Number.parseInt(options.repeat, 10) || 1);
 
 /** Run one case through the same function the runner uses; returns what the system did and what the model chose. */
 async function run_case(item) {
@@ -47,7 +53,7 @@ async function run_case(item) {
   }
   if (item.scene === 'interjection') {
     const experts = [...new Set([...(item.waiting || []), ...(item.spoken || []), talk.host])];
-    const result = await decide_interjection(home, scheduler, { ...talk, message, experts, spoken: item.spoken });
+    const result = await decide_interjection(home, scheduler, { ...talk, message, experts, spoken: item.spoken, upcoming: item.upcoming ?? item.waiting ?? [] });
     return { result, acted: { ask: result.expert, note: '__note__' }[result.action] || '__host__' };
   }
   if (item.scene === 'next_speaker') {
@@ -76,31 +82,49 @@ const filters = options.only ? options.only.split(',') : null;
 const selected = cases.filter(item => !filters || filters.some(filter => item.id === filter || item.id.startsWith(filter) || item.scene === filter));
 const baseline = options.baseline ? Object.fromEntries(JSON.parse(readFileSync(options.baseline, 'utf8')).results.map(item => [item.id, item])) : {};
 const results = [];
+/** The most frequent value, so a repeated case reports what the system usually did. */
+function most_common(values) {
+  const counts = new Map(values.map(value => [value, values.filter(other => other === value).length]));
+  return [...counts.entries()].sort((left, right) => right[1] - left[1])[0][0];
+}
+/** Average each option's probability over the runs of one case. */
+function mean_probabilities(runs) {
+  const options = [...new Set(runs.flatMap(run => Object.keys(run.probabilities || {})))];
+  return Object.fromEntries(options.map(option => [option, Number((runs.reduce((sum, run) => sum + (run.probabilities?.[option] || 0), 0) / runs.length).toFixed(2))]));
+}
 for (const item of selected) {
   try {
-    const { result, acted } = await run_case(item);
-    const asked = result.detail[0];
-    const probability = asked.probabilities?.[item.expect] ?? null;
-    const entry = { id: item.id, scene: item.scene, note: item.note, expect: item.expect, choice: asked.choice, acted,
-      confidence: result.confidence ?? null, expected_probability: probability, probabilities: asked.probabilities, duration_ms: asked.duration_ms,
-      status: item.expect_first ? first_status(item, result, acted) : status_of(item.expect, asked.choice, acted),
-      ...(item.expect_first ? { expect_first: item.expect_first, first_choice: result.detail[1]?.choice ?? null,
-        first: result.first ?? null, first_probabilities: result.detail[1]?.probabilities ?? {} } : {}) };
+    const runs = [];
+    for (let index = 0; index < REPEAT; index += 1) runs.push(await run_case(item));
+    const asked_runs = runs.map(run => run.result.detail[0]);
+    const probabilities = mean_probabilities(asked_runs);
+    const choice = Object.entries(probabilities).sort((left, right) => right[1] - left[1])[0]?.[0] ?? null;
+    const acted = most_common(runs.map(run => run.acted));
+    const probability = probabilities[item.expect] ?? null;
+    const spread = REPEAT > 1 ? asked_runs.map(run => run.probabilities?.[item.expect] ?? 0) : [];
+    const last = runs.at(-1).result;
+    const entry = { id: item.id, scene: item.scene, note: item.note, expect: item.expect, choice, acted, runs: REPEAT,
+      confidence: last.confidence ?? null, expected_probability: probability, probabilities, duration_ms: asked_runs.at(-1).duration_ms,
+      status: item.expect_first ? most_common(runs.map(run => first_status(item, run.result, run.acted))) : status_of(item.expect, choice, acted),
+      ...(spread.length ? { expected_range: [Math.min(...spread), Math.max(...spread)] } : {}),
+      ...(item.expect_first ? { expect_first: item.expect_first, first_choice: last.detail[1]?.choice ?? null,
+        first: last.first ?? null, first_probabilities: last.detail[1]?.probabilities ?? {} } : {}) };
     results.push(entry);
     const before = baseline[item.id]?.expected_probability;
     const delta = typeof before === 'number' && typeof probability === 'number' ? `  Δ${(probability - before >= 0 ? '+' : '')}${(probability - before).toFixed(2)}` : '';
-    const top = Object.entries(asked.probabilities || {}).sort((left, right) => right[1] - left[1]).slice(0, 3)
+    const range = spread.length ? `（${Math.min(...spread).toFixed(2)}–${Math.max(...spread).toFixed(2)}）` : '';
+    const top = Object.entries(probabilities).sort((left, right) => right[1] - left[1]).slice(0, 3)
       .map(([value, share]) => `${value} ${Number(share).toFixed(2)}`).join(' / ');
     const first = item.expect_first ? ` · 首位 ${entry.first_choice} → ${entry.first ?? '未安排'}（期望 ${item.expect_first}）` : '';
-    console.log(`${entry.status.padEnd(4)} ${item.id.padEnd(4)} ${item.scene.padEnd(12)} 期望 ${item.expect} · 选 ${asked.choice} · 执行 ${acted} · 期望项概率 ${probability?.toFixed?.(2) ?? '-'}${delta} · ${asked.duration_ms}ms  [${top}]${first}  ${item.note}`);
+    console.log(`${entry.status.padEnd(4)} ${item.id.padEnd(4)} ${item.scene.padEnd(12)} 期望 ${item.expect} · 选 ${choice} · 执行 ${acted} · 期望项概率 ${probability?.toFixed?.(2) ?? '-'}${range}${delta} · ${entry.duration_ms}ms  [${top}]${first}  ${item.note}`);
   } catch (error) {
     results.push({ id: item.id, scene: item.scene, expect: item.expect, status: 'ERROR', error: error.message });
     console.log(`ERROR ${item.id} ${error.message}`);
   }
 }
 const count = status => results.filter(item => item.status === status).length;
-console.log(`\n${scheduler.provider}/${scheduler.model} · 路由提示版本 ${ROUTE_PROMPT_VERSION} · 讨论提示版本 ${DISCUSSION_PROMPT_VERSION} · 评审提示版本 ${REVIEW_PROMPT_VERSION} · `
+console.log(`\n${scheduler.provider}/${scheduler.model} · 模式 ${options.mode} · 每条 ${REPEAT} 次 · 路由提示版本 ${ROUTE_PROMPT_VERSION} · 讨论提示版本 ${DISCUSSION_PROMPT_VERSION} · 评审提示版本 ${REVIEW_PROMPT_VERSION} · `
   + `PASS ${count('PASS')} / WEAK ${count('WEAK')} / FAIL ${count('FAIL')} / ERROR ${count('ERROR')}，共 ${results.length} 条`);
-if (options.out) writeFileSync(options.out, JSON.stringify({ provider: scheduler.provider, model: scheduler.model, route_prompt: ROUTE_PROMPT_VERSION,
+if (options.out) writeFileSync(options.out, JSON.stringify({ provider: scheduler.provider, model: scheduler.model, mode: options.mode, repeat: REPEAT, route_prompt: ROUTE_PROMPT_VERSION,
   discussion_prompt: DISCUSSION_PROMPT_VERSION, review_prompt: REVIEW_PROMPT_VERSION, ran_at: new Date().toISOString(), results }, null, 2));
 if (count('FAIL') || count('ERROR')) process.exitCode = 1;

@@ -67,6 +67,10 @@ async function check_config() {
   try { await bridge.check_scheduler(); check.value = { state: "ok" }; bridge.notify("info", "检查通过：决策模型已响应"); }
   catch (failure) { check.value = { state: "error" }; bridge.notify("error", failure.message); }
 }
+// How the routing question is worded: the experimental guided wording is the default while it is being refined.
+const modes = computed(() => Object.entries(view.value.launch.scheduler_modes || {}).map(([value, label]) => ({ value, label })));
+const mode = computed(() => scheduler.value.mode || view.value.launch.scheduler_default_mode || "");
+const MODE_HINTS = { guided: "试验：说明目的与依据，由模型权衡；正在打磨，可能判错", stable: "稳定：按固定顺序逐条核对，已通过回归评测" };
 const description = computed(() => props.free
   ? "接入决策模型，推荐更适合回答的成员，由你一键采纳。"
   : "接入决策模型，自动安排插话回应与下一轮发言。");
@@ -130,6 +134,13 @@ async function save_key() {
     </div>
     </div>
     </div>
+    <div v-if="active && free && modes.length > 1" class="scheduler-mode">
+      <span>判断方式</span>
+      <div class="expert-card-modes" role="radiogroup" aria-label="智能调度判断方式">
+        <button v-for="option in modes" :key="option.value" type="button" role="radio" :title="MODE_HINTS[option.value]"
+          :aria-checked="mode === option.value" @click="bridge.write_scheduler('mode', option.value)">{{ option.label }}</button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -170,6 +181,7 @@ async function save_key() {
 .scheduler-heading strong { color: var(--ui-text-highlighted); font-size: 12px; font-weight: 600; }
 .scheduler-heading strong > span { margin-left: 6px; color: var(--ui-text-muted); font-size: 10px; font-weight: 400; }
 .scheduler-field { display: grid; grid-template-columns: 40px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--ui-text-dimmed); font-size: 11px; }
+.scheduler-mode { display: grid; grid-template-columns: auto minmax(0, 220px); align-items: center; gap: 10px; color: var(--ui-text-dimmed); font-size: 12px; }
 .scheduler-note { margin: 0; color: var(--ui-text-muted); font-size: 10px; line-height: 1.5; }
 .scheduler-settings :deep(.scheduler-key-masked) { -webkit-text-security: disc; }
 .scheduler-title { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 500; }

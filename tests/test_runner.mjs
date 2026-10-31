@@ -32,7 +32,7 @@ const activity_phase = (adapter, event) => adapter_of(adapter).events.phase(even
 const activity_tool = (adapter, event) => adapter_of(adapter).events.tool(event);
 const progress_note = (adapter, event, responses) => adapter_of(adapter).events.note(event, responses);
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
-import { certainty, decide, decide_group_order, decide_review_completion, DISCUSSION_PROMPT_VERSION, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
+import { certainty, decide, decide_group_order, decide_review_completion, DISCUSSION_GUIDED_PROMPT_VERSION, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
 
 /** The folded record of what the provider was asked is checked on its own. */
 const without_detail = ({ detail, input, ...plan }) => (assert.ok(Array.isArray(detail) && detail[0].choices.length && input.state && input.questions[0].instructions), plan);
@@ -119,13 +119,18 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.equal((await route_free_message(home, jev, input, reply('__all__', ROUTE_WIDE_CONFIDENCE - 0.01))).action, 'host');
   assert.equal((await route_free_message(home, jev, input, reply('__none__', 0.99))).action, 'none');
   assert.match(scheduler_state('房间', [], input.message), /#3 用户（回复 #2）：修一下登录/);
-  // The model sees who is in the room, and a name in the text outranks continuing the previous speaker's answer.
+  // The guided mode (default) describes the room and each member in the state; options say what each choice leads to.
   let sent_to_model;
   await route_free_message(home, jev, input, async (url, init) => { sent_to_model = JSON.parse(init.body); return reply('__host__', 0.99)(); });
-  assert.match(sent_to_model.state, /房间成员（名字不区分大小写）：Claude（主持人）、Codex/);
+  assert.match(sent_to_model.state, /成员（名字不区分大小写）：\n- 主持人 Claude/);
   const route_question = sent_to_model.questions.handler;
-  assert.match(route_question.instructions, /叫了某位成员的名字.*选该成员，即使上一条是别人的回答/);
-  assert.doesNotMatch(route_question.criteria.__host__, /延续主持人自己的回答/);
+  assert.match(route_question.instructions, /用户想让谁来回应/);
+  assert.match(route_question.criteria.__all__, /彼此看不到对方的回答/);
+  // The stable mode keeps the roster line and the ordered checklist, where a name outranks continuing the previous answer.
+  await route_free_message(home, { ...jev, mode: 'stable' }, input, async (url, init) => { sent_to_model = JSON.parse(init.body); return reply('__host__', 0.99)(); });
+  assert.match(sent_to_model.state, /房间成员（名字不区分大小写）：Claude（主持人）、Codex/);
+  assert.match(sent_to_model.questions.handler.instructions, /按下面的顺序：1）正文叫了某位成员的名字.*选该成员，即使上一条是别人的回答/);
+  assert.doesNotMatch(sent_to_model.questions.handler.criteria.__host__, /延续主持人自己的回答/);
   // Both @全体成员 directions require confidence; weak and invalid answers keep the task with the host.
   const order = (choice, confidence) => async () => ({ ok: true, json: async () => ({ answers: { order: { type: 'choice', choice, confidence, probabilities: {} } } }) });
   const group = { title: '房间', context: [], message: { id: 4, author: '用户', text: '@全体成员 接龙' }, members: ['Claude', 'Codex'] };
@@ -193,9 +198,15 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.deepEqual(without_detail(await decide_next_speaker(home, jev, midround, speaker('Gemini', 0.9))), { action: 'next', expert: 'Gemini', confidence: 0.9, label: '本轮继续，请 Gemini 接着发言' });
   assert.equal((await decide_next_speaker(home, jev, midround, speaker('Gemini', 0.6))).action, 'host');
   assert.equal((await decide_next_speaker(home, jev, midround, speaker('__host__', 0.95))).action, 'host');
-  // One question carries the "explicit basis" rule in its options: not having spoken yet is named as no basis.
+  // One question; the guided wording explains that the host may have stopped on purpose, the stable one names it as no basis.
   assert.deepEqual(Object.keys(asked[0].questions), ['speaker']);
-  assert.match(asked[0].questions.speaker.criteria.__host__, /仅仅是本轮还没发言不算依据/);
+  assert.match(asked[0].questions.speaker.instructions, /有意只安排到这里/);
+  await decide_next_speaker(home, { ...jev, mode: 'stable' }, midround, async (url, init) => { asked.push(JSON.parse(init.body)); return speaker('Gemini', 0.9)(); });
+  assert.match(asked.at(-1).questions.speaker.criteria.__host__, /仅仅是本轮还没发言不算依据/);
+  // The guided interjection sees who speaks next, so a question to that expert can wait for the turn.
+  let upcoming_sent;
+  await decide_interjection(home, jev, { ...interjection, upcoming: ['Gemini', 'Codex'] }, async (url, init) => { upcoming_sent = JSON.parse(init.body); return handling('__note__', 0.9)(); });
+  assert.match(upcoming_sent.state, /接下来按安排发言：Gemini → Codex/);
 });
 
 /** Make task files without a website or a real model. */
@@ -402,7 +413,7 @@ test('room model readback uses registered choices, adds the software settings fo
   await assert.rejects(() => room_models(home, { ...input, room_id: '../models' }), /房间编号无效/);
   config.scheduler = { provider: 'jev', model: 'jev-decide', api_key_ref: 'private-key-ref' };
   writeFileSync(path, JSON.stringify(config));
-  assert.deepEqual((await room_models(home, input, agy)).scheduler, { provider: 'jev', model: 'jev-decide' });
+  assert.deepEqual((await room_models(home, input, agy)).scheduler, { provider: 'jev', model: 'jev-decide', mode: 'guided' });
   config.participants.Codex.project_access = 'write';
   writeFileSync(path, JSON.stringify(config));
   assert.equal((await room_models(home, input, agy)).participants.Codex.project_access, 'write');
@@ -2785,7 +2796,7 @@ test('a side-note interjection keeps a running plan without waking the host, and
   await driver.tick(state.room, { archived: false, members: [{ name: 'Claude', role: 'host', pending: state.pending }], executions: [] });
   assert.ok(state.calls.includes('POST /turns/continue'), 'a confident side note closes the host request by continuing the plan');
   assert.match(sent[0].state, /主持人最近的安排：Gemini（第 1 轮，已发言）：请给出开场观点；Gemini（第 2 轮，排队中）：请回应第 1 轮的分歧/);
-  assert.deepEqual([decisions[0].applied, decisions[0].context.prompt], [true, DISCUSSION_PROMPT_VERSION]);
+  assert.deepEqual([decisions[0].applied, decisions[0].context.prompt], [true, DISCUSSION_GUIDED_PROMPT_VERSION]);
 
   // With nothing open or queued, continuing would stall the discussion, so the note goes to the host.
   state.turns = [state.turns[0]];
