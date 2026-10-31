@@ -294,7 +294,7 @@ const scheduler_decisions = computed(() => {
 });
 /** Messages the local service is still analysing; the card gives way once the decision is recorded. */
 const routing_messages = computed(() => new Set(room.value.scheduler_routing || []));
-const DECISION_OPTIONS = { __host__: "交给主持人", __note__: "仅补充信息", continue: "继续下一轮", __all__: "全体各自回应", __none__: "无需回应" };
+const DECISION_OPTIONS = { __host__: "交给主持人", __note__: "仅补充信息", continue: "继续下一轮", __all__: "全体各自回应", __all_seq__: "全体依次回应", __none__: "无需回应" };
 // "Only these few" choices carry the names after a prefix, as the scheduler writes them.
 const SOME_PREFIX = "__some__:";
 const option_name = (name) => DECISION_OPTIONS[name]
@@ -347,16 +347,11 @@ function summarize_input(view) {
       choices: (question.choices || []).map((choice) => ({ name: option_name(choice.value), description: choice.description })) })),
   };
 }
-// Records made before the two wordings existed used the checklist that became the stable one.
-const DECISION_MODES = { guided: "引导（试验）", stable: "稳定" };
-/** Provider, model, wording and prompt version of one decision, read from the record itself. */
+/** Provider and model of one decision, read from the record itself. */
 function decision_meta(decision) {
   let context = {};
   try { context = JSON.parse(decision.context || "{}") || {}; } catch { context = {}; }
-  return [SCHEDULER_LABELS[decision.provider] || decision.provider, context.model, DECISION_MODES[context.mode] || DECISION_MODES.stable,
-    context.prompt ? `提示版本 ${context.prompt}` : ""].filter(Boolean)
-    // A full-width bracket already carries its own spacing, so the separator after it drops the leading space.
-    .reduce((line, part) => line ? `${line}${line.endsWith("）") ? "· " : " · "}${part}` : part, "");
+  return [SCHEDULER_LABELS[decision.provider] || decision.provider, context.model].filter(Boolean).join(" · ");
 }
 /** Every option of one question with its probability, most likely first, so a close call is visible at a glance. */
 function decision_odds(item) {
@@ -391,7 +386,7 @@ function save_correction(decision) {
 const UNSET_CORRECTION = "__unset__";
 const correction_options = computed(() => [{ label: "未指定", value: UNSET_CORRECTION }, ...(room.value.members || []).filter((member) => member.status === "active")
   .map((member) => ({ label: bridge.display_name(member.name), value: member.name })),
-  ...(free.value ? ["__all__", "__none__"].map((value) => ({ label: DECISION_OPTIONS[value], value })) : [])]);
+  ...(free.value ? ["__all__", "__all_seq__", "__none__"].map((value) => ({ label: DECISION_OPTIONS[value], value })) : [])]);
 function adopt(message_id, mode) {
   adopting.value = 0;
   act("adopt_recommendation", { message_id, mode });
@@ -1382,17 +1377,18 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
             <button v-if="view.access?.can_manage" type="button" class="channel-schedule-rate" :class="{ 'is-on': decision.feedback === 'bad' }" :aria-pressed="decision.feedback === 'bad'" aria-label="这次调度判断得不好" title="判断得不好" @click="rate_decision(decision, 'bad')"><UIcon name="i-lucide-thumbs-down" /></button>
           </template>
           <div class="channel-schedule-meta">
-            <span>{{ decision_meta(decision) }}</span>
-            <button type="button" class="channel-schedule-input-toggle" :class="{ 'is-open': decision_inputs[decision.id]?.open }" :aria-expanded="Boolean(decision_inputs[decision.id]?.open)"
-              :aria-busy="Boolean(decision_inputs[decision.id]?.loading)" :aria-label="decision_inputs[decision.id]?.open ? '收起模型看到的完整输入' : '查看模型看到的完整输入'"
-              :title="decision_inputs[decision.id]?.open ? '收起完整输入' : '完整输入：背景、成员、上下文、问题与选项'" @click="toggle_decision_input(decision)">
-              <UIcon :name="decision_inputs[decision.id]?.loading ? 'i-lucide-loader-circle' : 'i-lucide-scan-text'" :class="{ 'animate-spin': decision_inputs[decision.id]?.loading }" />
-            </button>
+            <div class="channel-schedule-odds-list">
+              <p v-for="(item, index) in decision.detail" :key="index" class="channel-schedule-odds">
+                <b v-if="decision.detail.length > 1">第 {{ index + 1 }} 题</b>
+                <span v-for="option in decision_odds(item)" :key="option.value" :class="{ 'is-chosen': option.value === item.choice }">{{ option.name }}<small v-if="option.probability !== undefined">{{ Number(option.probability).toFixed(2) }}</small></span>
+              </p>
+            </div>
+            <span class="channel-schedule-model">{{ decision_meta(decision) }}</span>
+            <UButton :label="decision_inputs[decision.id]?.open ? '收起输入' : '模型输入'" :trailing-icon="decision_inputs[decision.id]?.open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'"
+              :loading="Boolean(decision_inputs[decision.id]?.loading)" variant="link" color="neutral" size="xs" class="channel-schedule-input-toggle"
+              :aria-expanded="Boolean(decision_inputs[decision.id]?.open)" :aria-label="decision_inputs[decision.id]?.open ? '收起模型看到的完整输入' : '查看模型看到的完整输入'"
+              @click="toggle_decision_input(decision)" />
           </div>
-          <p v-for="(item, index) in decision.detail" :key="index" class="channel-schedule-odds">
-            <b v-if="decision.detail.length > 1">第 {{ index + 1 }} 题</b>
-            <span v-for="option in decision_odds(item)" :key="option.value" :class="{ 'is-chosen': option.value === item.choice }">{{ option.name }}<small v-if="option.probability !== undefined">{{ Number(option.probability).toFixed(2) }}</small></span>
-          </p>
           <p v-if="decision_inputs[decision.id]?.open && decision_inputs[decision.id].data === null" class="channel-schedule-input is-empty">这条判断没有保存输入。</p>
           <div v-else-if="decision_inputs[decision.id]?.open" v-for="input in [decision_inputs[decision.id].data]" :key="decision.id" class="channel-schedule-input">
             <p v-if="input.background"><b>固定背景</b><span :title="input.background">{{ input.background }}</span></p>

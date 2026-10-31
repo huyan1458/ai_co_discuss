@@ -4341,10 +4341,25 @@ async function free_route_wide(database, room_id, message_id, payload) {
   const group = await database.prepare(`SELECT * FROM member_requests WHERE room_id=? AND message_id=? AND purpose='group'
     ORDER BY id DESC LIMIT 1`).bind(room_id, message_id).first();
   if (group) return free_route_group(database, room_id, group, payload);
-  if (["sequential", "host"].includes(action)) throw new HttpError(400, "只有请全体成员回应的消息可以依次回答或交回主持人");
+  if (action === "host") throw new HttpError(400, "只有请全体成员回应的消息可以交回主持人");
   const route = await database.prepare("SELECT * FROM member_requests WHERE message_id=? AND purpose='route'").bind(message_id).first();
   if (!route || route.room_id !== room_id) throw new HttpError(404, "只能处理交给主持人的未点名消息");
-  if (!["all", "none", "some"].includes(action)) throw new HttpError(400, "未点名消息只能选 action=all、some 或 none");
+  if (!["all", "sequential", "none", "some"].includes(action)) throw new HttpError(400, "未点名消息只能选 action=all、sequential、some 或 none");
+  if (action === "sequential") {
+    // Same as a group answered one after another: the host's request gives way to the queue, which includes the host.
+    try {
+      await checked_batch(database, "EXISTS(SELECT 1 FROM member_requests WHERE id=? AND purpose='route' AND status='pending')", [route.id], [
+        database.prepare("INSERT INTO group_routes (message_id,room_id,request_id,action) VALUES (?,?,?,?)").bind(message_id, room_id, route.id, action),
+        ...free_group_statements(database, room_id, route, action)]);
+    } catch (error) {
+      const previous = await free_group_result(database, room_id, message_id, action);
+      if (previous) return previous;
+      if (error instanceof HttpError) throw new HttpError(409, "主持人已开始处理这条消息，不再改派");
+      throw error;
+    }
+    const requests = (await database.prepare("SELECT * FROM member_requests WHERE message_id=? ORDER BY id").bind(message_id).all()).results;
+    return { action, requests };
+  }
   const pending = "AND status='pending'";
   const statements = action === "some" ? await free_route_some(database, room_id, route, payload.members) : action === "none"
     ? [database.prepare(`UPDATE member_requests SET status='cancelled' WHERE id=? ${pending}`).bind(route.id),

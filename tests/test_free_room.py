@@ -1754,6 +1754,19 @@ class HostTests(FreeRoomTests):
         self.assertEqual(self.request(f"{self.path}/recommendations/{with_host}", {"action": "some", "members": ["Claude", "Codex"]}, self.owner)[0], 200)
         self.assertEqual(self.requests()[3:], [("Claude", "all", "pending"), ("Codex", "all", "pending")])
 
+    def test_smart_scheduling_asks_everyone_in_turn(self):
+        """sequential replaces the host's request with the speaking-order queue, host included; a retry returns the first result."""
+        count = FreeRoomTests.say(self, "依次出来报个数")[1]["message"]["id"]
+        url = f"{self.path}/recommendations/{count}"
+        status, result = self.request(url, {"action": "sequential"}, self.owner)
+        self.assertEqual(status, 200, result)
+        self.assertEqual(self.requests(), [("Claude", "ask", "pending")])
+        self.assertEqual(self.request(url, {"action": "sequential"}, self.owner)[0], 200)
+        self.assertEqual(self.request(url, {"action": "all"}, self.owner)[0], 409)
+        self.work("Claude")
+        self.assertEqual(self.requests(), [("Claude", "ask", "completed"), ("Codex", "ask", "pending")])
+        self.assertEqual(self.request(f"{self.path}/recommendations/{FreeRoomTests.say(self, 'x')[1]['message']['id']}", {"action": "host"}, self.owner)[0], 400)
+
     def test_naming_everyone_waits_for_the_runner_to_choose_at_once_or_in_turn(self):
         """@全体成员 leaves the host an undeliverable group request; all asks everyone at once, sequential queues them."""
         everyone = ["Claude", "Codex", "Gemini"]

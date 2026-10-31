@@ -57,7 +57,7 @@ The discussion ends as soon as a limit is reached and returns to free collaborat
 
 When creating a room, you can add a decision model under **Smart Scheduling** (智能调度) — TypeSafe Jev, with OpenAI Decisions as an experimental option — using your own key, billed per call. Routine routing is then decided by the decision model instead of waking the host every time:
 
-- Unaddressed messages go to the member they are clearly meant for, to everyone, or to no one; otherwise to the host.
+- Unaddressed messages go to the member they are clearly meant for, to everyone at once, to everyone one after another in speaking order (a relay or a count-off), or to no one; otherwise to the host.
 - Without Smart Scheduling, `@全体成员` runs everyone together. With it, uncertain or failed decisions go to the host. `@全体依次` always uses the established speaking order.
 - In discussions, a local follow-up becomes an ordinary question without consuming a turn or changing the queue, including questions for members who already spoke or the host. It also picks the next speaker between rounds. Without Smart Scheduling, the host can make the same handoff.
 - When the host has preauthorized a specific read-only reviewer, a completed implementation batch can move to that reviewer. The model checks delivery completeness, not code correctness, and cannot choose another reviewer. Review results still return to the host.

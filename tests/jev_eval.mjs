@@ -43,7 +43,7 @@ async function run_case(item) {
   const talk = { ...fixtures.discussion, brief: item.brief ?? fixtures.discussion.brief, arrangement: item.arrangement, context };
   if (item.scene === 'route') {
     const result = await route_free_message(home, scheduler, { title: free.title, goal: free.goal, context, message, host: free.host, members: item.members || free.members });
-    return { result, acted: { member: result.member, all: '__all__', none: '__none__', some: result.choice }[result.action] || '__host__' };
+    return { result, acted: { member: result.member, all: '__all__', sequential: '__all_seq__', none: '__none__', some: result.choice }[result.action] || '__host__' };
   }
   if (item.scene === 'group') {
     const members = [free.host.name, ...free.members.map(member => member.name)];

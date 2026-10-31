@@ -1709,7 +1709,8 @@ def route_group(connection, room_id, group, payload):
 
 
 def route_wide(connection, room_id, message_id, payload):
-    """Smart scheduling answers an unnamed message with everyone (each member once, as if the user named them all) or no one.
+    """Smart scheduling answers an unnamed message with everyone (each member once, as if the user named them all, at once
+    or one after another), the few members it names, or no one.
 
     A message naming everyone (a group request) is answered by all at once or, with action sequential, one after another.
     Only a host request that has not started changes; a started host already handles the message its own way.
@@ -1725,16 +1726,23 @@ def route_wide(connection, room_id, message_id, payload):
         ORDER BY id DESC LIMIT 1""", (room_id, message_id)).fetchone()
     if group:
         return route_group(connection, room_id, group, payload)
-    if action in ("sequential", "host"):
-        raise ValueError("只有请全体成员回应的消息可以依次回答或交回主持人")
-    if action not in ("all", "none", "some"):
-        raise ValueError("未点名消息只能选 action=all、some 或 none")
+    if action == "host":
+        raise ValueError("只有请全体成员回应的消息可以交回主持人")
+    if action not in ("all", "sequential", "none", "some"):
+        raise ValueError("未点名消息只能选 action=all、sequential、some 或 none")
     route = host_route_request(connection, message_id)
     if not route or route["room_id"] != room_id:
         raise LookupError("只能处理交给主持人的未点名消息")
     if route["status"] != "pending":
         raise FileExistsError("主持人已开始处理这条消息，不再改派")
-    if action == "none":
+    if action == "sequential":
+        # Same as a group answered one after another: the host's request gives way to the queue, which includes the host.
+        connection.execute("DELETE FROM member_requests WHERE id=?", (route["id"],))
+        members = connection.execute(f"SELECT id FROM room_members WHERE room_id=? AND status='active' AND {REGISTERED_MEMBER}", (room_id,))
+        queue_in_turn(connection, room_id, message_id, [row["id"] for row in members])
+        connection.execute("INSERT INTO group_routes (message_id,room_id,request_id,action) VALUES (?,?,?,?)",
+                           (message_id, room_id, route["id"], action))
+    elif action == "none":
         record_cancel_reasons(connection, "id=?", (route["id"],), "no_reply")
         connection.execute("UPDATE member_requests SET status='cancelled' WHERE id=?", (route["id"],))
     elif action == "some":

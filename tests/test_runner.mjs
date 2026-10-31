@@ -114,7 +114,7 @@ test('smart scheduling maps one neutral question set to both providers and reads
   // The guided wording (default) has its own lower thresholds; the stable one keeps 0.7 / 0.85.
   const limits = scheduler_thresholds('guided');
   const routed = await route_free_message(home, jev, input, reply('Codex', 0.95));
-  assert.deepEqual([routed.action, routed.member, routed.detail[0].choices], ['member', 'Codex', ['Codex', '__host__', '__all__', '__none__']]);
+  assert.deepEqual([routed.action, routed.member, routed.detail[0].choices], ['member', 'Codex', ['Codex', '__host__', '__all__', '__all_seq__', '__none__']]);
   assert.equal((await route_free_message(home, jev, input, reply('Codex', limits.member - 0.01))).action, 'host');
   assert.equal((await route_free_message(home, { ...jev, mode: 'stable' }, input, reply('Codex', ROUTE_CONFIDENCE - 0.01))).action, 'host');
   assert.equal((await route_free_message(home, jev, input, reply('Codex', limits.member))).action, 'member');
@@ -123,6 +123,9 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.equal((await route_free_message(home, jev, input, reply('__all__', limits.wide - 0.01))).action, 'host');
   assert.equal((await route_free_message(home, { ...jev, mode: 'stable' }, input, reply('__all__', ROUTE_WIDE_CONFIDENCE - 0.01))).action, 'host');
   assert.equal((await route_free_message(home, jev, input, reply('__none__', 0.99))).action, 'none');
+  // Everyone in turn is a guided-only choice with the wide threshold.
+  assert.equal((await route_free_message(home, jev, input, reply('__all_seq__', limits.wide))).action, 'sequential');
+  assert.equal((await route_free_message(home, jev, input, reply('__all_seq__', limits.wide - 0.01))).action, 'host');
   // When the text names two or more members, each group of them is one choice; it needs the wide threshold.
   let named_sent;
   const pair = { ...input, members: [...input.members, { name: 'Gemini', description: 'Gemini CLI' }], message: { id: 4, author: '用户', text: 'codex 和 Gemini 分别看一下' } };

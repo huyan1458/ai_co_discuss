@@ -125,6 +125,10 @@
     { "id": "Q28", "scene": "route", "note": "问刚完成任务的成员结果", "members": [{"name": "Claude", "description": "Claude（Claude Code，可修改项目 ledger 的文件并运行命令）", "finished": "#20"},{"name": "DeepSeek", "description": "DeepSeek（模型 API，只能读写房间消息）"}], "context": [{"id": 20, "author": "用户", "text": "@Claude 把导出改成支持 CSV"},{"id": 21, "author": "用户", "text": "@DeepSeek 起一个导出按钮的文案"},{"id": 22, "author": "DeepSeek", "text": "建议用“导出表格”。"}], "message": "导出那个改好了吗？", "expect": "Claude" },
     { "id": "Q29", "scene": "route", "note": "对所有人打招呼，带复数称呼", "message": "你们好", "expect": "__all__" },
     { "id": "Q30", "scene": "route", "note": "按条件找人且只有一人符合，问法像让大家各自说", "message": "我们项目里谁是 API 接入的，自己说一下", "expect": "DeepSeek" },
+    { "id": "Q31", "scene": "route", "note": "全体刚各自打过招呼，要求依次报数（后一位要看到前一位的数），来自真实 👎",
+      "context": [{ "id": 10, "author": "用户", "text": "都在吗？出来打个招呼" }, { "id": 11, "author": "DeepSeek", "text": "在。DeepSeek 报到，有问题直接说就行。" }, { "id": 12, "author": "Claude", "text": "在。Claude 报到，有问题直接点名就行。" }, { "id": 13, "author": "Codex", "text": "在，我是 Codex。大家好。" }],
+      "message": "依次出来报个数", "expect": "__all_seq__", "accept": ["__host__"] },
+    { "id": "Q32", "scene": "route", "note": "接龙：每人接着上一位说，没有分工", "message": "大家接龙，每人接着上一位的最后一个字说一个成语", "expect": "__all_seq__", "accept": ["__host__"] },
 
     { "id": "G1", "scene": "group", "note": "打招呼", "message": "@全体成员 大家打个招呼", "expect": "parallel" },
     { "id": "G2", "scene": "group", "note": "接龙", "message": "@全体成员 我们来接龙写一首诗，每人一句，接着上一位写", "expect": "sequential" },

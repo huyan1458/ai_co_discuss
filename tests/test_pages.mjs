@@ -2974,9 +2974,9 @@ test('Worker smart scheduling asks everyone without a hand-off, or no one, like 
   assert.equal((await route('好的，谢谢', 'none')).status, 200);
   assert.deepEqual((await requests()).at(-1), ['Claude', 'route', 'cancelled']);
   const started = (await r.say('已经开始处理')).body.message.id;
-  await r.reserve('Claude');
+  const started_run = (await r.reserve('Claude')).body;
   assert.equal((await f.request(`${r.path}/recommendations/${started}`, { action: 'all' }, r.owner)).status, 409);
-  await r.answer((await r.reserve('Claude')).body.id, r.claude, 'Claude');
+  assert.equal((await r.answer(started_run.id, r.claude, 'Claude')).status, 201);
   // some asks only the listed members; an absent name or a single name is refused.
   const pair = (await r.say('Codex 和 Gemini 分别看一下')).body.message.id;
   const some = members => f.request(`${r.path}/recommendations/${pair}`, { action: 'some', members }, r.owner);
@@ -2984,6 +2984,16 @@ test('Worker smart scheduling asks everyone without a hand-off, or no one, like 
   assert.equal((await some(['Codex', 'Grok'])).status, 409);
   assert.equal((await some(['Codex', 'Gemini'])).status, 200);
   assert.deepEqual((await requests()).slice(-3), [['Claude', 'route', 'cancelled'], ['Codex', 'all', 'pending'], ['Gemini', 'all', 'pending']]);
+  for (const name of ['Codex', 'Gemini']) assert.equal((await r.answer((await r.reserve(name)).body.id, tokens[name], name)).status, 201);
+  // sequential replaces the host's request with the speaking-order queue, host first; a retry returns the first result.
+  const count = (await r.say('依次出来报个数')).body.message.id;
+  const in_turn = action => f.request(`${r.path}/recommendations/${count}`, { action }, r.owner);
+  assert.equal((await in_turn('sequential')).status, 200);
+  assert.deepEqual((await requests()).filter(item => item[2] === 'pending'), [['Claude', 'ask', 'pending']]);
+  assert.equal((await in_turn('sequential')).status, 200);
+  assert.equal((await in_turn('all')).status, 409);
+  assert.equal((await r.answer((await r.reserve('Claude')).body.id, r.claude, 'Claude')).status, 201);
+  assert.deepEqual((await requests()).filter(item => item[2] === 'pending'), [['Codex', 'ask', 'pending']]);
 });
 
 test('Worker free rooms forward online answers and create discussions in place', async t => {

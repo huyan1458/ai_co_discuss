@@ -365,7 +365,7 @@ test('smart scheduling holds the host until its decision, and a confident pick r
   assert.deepEqual((await api(config, '')).free.requests.map(item => item.status), ['pending']);
   assert.equal(decisions[0].url, 'https://api.typesafe.ai/v1/systemone');
   assert.equal(decisions[0].authorization, `Bearer ${SECRET}`);
-  assert.deepEqual(Object.keys(decisions[0].body.questions.handler.criteria), ['DeepSeek', '__host__', '__all__', '__none__']);
+  assert.deepEqual(Object.keys(decisions[0].body.questions.handler.criteria), ['DeepSeek', '__host__', '__all__', '__all_seq__', '__none__']);
   release_decision();
   await until(async () => (await api(config, '')).free.recommendations.some(item => item.status === 'adopted'), () => runner.tick());
   const recommendation = (await api(config, '')).free.recommendations[0];
@@ -389,7 +389,7 @@ test('smart scheduling holds the host until its decision, and a confident pick r
   const [feedback_case] = await cases();
   assert.deepEqual([feedback_case.decision_id, feedback_case.should_be, feedback_case.snapshot.label], [decision.id, 'Grok', '改由 DeepSeek 回答']);
   assert.match(feedback_case.snapshot.input.state, /待处理的用户消息/);
-  assert.deepEqual(feedback_case.snapshot.input.questions[0].choices.map(choice => choice.value), ['DeepSeek', '__host__', '__all__', '__none__']);
+  assert.deepEqual(feedback_case.snapshot.input.questions[0].choices.map(choice => choice.value), ['DeepSeek', '__host__', '__all__', '__all_seq__', '__none__']);
   await assert.rejects(api(config, `/scheduler-decisions/${decision.id}`, { rating: 'bad', note: 'x'.repeat(201) }), /HTTP 400/);
   await assert.rejects(api(config, `/scheduler-decisions/${decision.id}`, { rating: 'great' }), /HTTP 400/);
   await api(config, `/scheduler-decisions/${decision.id}`, { rating: null });

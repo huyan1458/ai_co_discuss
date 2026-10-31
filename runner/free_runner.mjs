@@ -143,7 +143,7 @@ function member_work(requests, name, message_id) {
 function route_host_label(decision, host, members) {
   if (decision.choice === '__host__' || decision.confidence === null) return `交给主持人 ${host}`;
   const group = some_members(decision.choice);
-  const lean = decision.choice === '__all__' ? '全体各自回应' : decision.choice === '__none__' ? '无需回应' : group ? `请 ${group.join('、')} 各自回应`
+  const lean = decision.choice === '__all__' ? '全体各自回应' : decision.choice === '__all_seq__' ? '全体依次回应' : decision.choice === '__none__' ? '无需回应' : group ? `请 ${group.join('、')} 各自回应`
     : members.some(member => member.name === decision.choice) ? `请 ${decision.choice} 回答` : '';
   return lean ? `倾向${lean}，把握不足，交给主持人 ${host}` : `交给主持人 ${host}`;
 }
@@ -526,7 +526,7 @@ export class FreeRoomRunner {
       const applied = await api(this.config, `/recommendations/${message.id}`, { action: decision.action, ...(decision.members ? { members: decision.members } : {}) })
         .then(() => true, error => { this.log(`智能调度 #${message.id} 未能改派：${error.message}`); return false; });
       const names = described.map(member => member.name).join('、');
-      const label = decision.action === 'all' ? `请全体各自回应（${names}）` : decision.action === 'some' ? `请 ${decision.members.join('、')} 各自回应` : '无需回应，未唤醒任何成员';
+      const label = decision.action === 'all' ? `请全体各自回应（${names}）` : decision.action === 'sequential' ? '请全体按发言顺序依次回应' : decision.action === 'some' ? `请 ${decision.members.join('、')} 各自回应` : '无需回应，未唤醒任何成员';
       return this.record_route(request, decision, applied ? label : `${label}（未生效，仍由主持人处理）`, applied);
     }
     try {

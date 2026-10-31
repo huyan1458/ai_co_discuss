@@ -30,7 +30,7 @@ export const ROUTE_PROMPT_VERSION = 13;
 export const SCHEDULER_MODES = { guided: '引导（试验）', stable: '稳定' };
 export const DEFAULT_SCHEDULER_MODE = 'guided';
 /** The guided wording has its own version, so its ratings are never mixed with the stable checklist's. */
-export const ROUTE_GUIDED_PROMPT_VERSION = 7;
+export const ROUTE_GUIDED_PROMPT_VERSION = 8;
 /** The routing prompt version that a decision in this mode was made with. */
 export function route_prompt_version(mode) {
   return mode === 'stable' ? ROUTE_PROMPT_VERSION : ROUTE_GUIDED_PROMPT_VERSION;
@@ -50,6 +50,7 @@ export const MAX_REVIEW_INPUT = 60000;
 const HOST_CHOICE = '__host__';
 const NOTE_CHOICE = '__note__';
 const ALL_CHOICE = '__all__';
+const ALL_SEQUENTIAL_CHOICE = '__all_seq__';
 const NONE_CHOICE = '__none__';
 /** Prefix of the "only these few" options; the value lists the names after it, joined by SOME_JOINER. */
 export const SOME_PREFIX = '__some__:';
@@ -220,7 +221,7 @@ const ROUTE_GUIDED_GUIDE = ['这是 AI CoDiscuss 的协作房间。用户是房�
   '唤醒一位成员要花一次执行，通常几十秒；交给了不对的人，就得打断后重来。'].join('\n');
 const ROUTE_GUIDED_STEM = '用户发来上面这条消息，没有 @ 任何人。请你像熟悉这个房间的成员一样读懂它：用户想让谁来回应？'
   + '用户心里已经有明确的对象时，直接交给对方，省掉主持人转一手的时间；需要有人先理解、拆分或协调时交给主持人。'
-  + '用户想听每个人各自说一句时，交给全体能让大家同时开始，比主持人逐个点名快得多；但大家看不到彼此的回答，需要互相接话、讨论的事仍要主持人安排。用户只是表示收到或感谢时，不必唤醒任何人。'
+  + '用户想听每个人各自说一句时，交给全体能让大家同时开始，比主持人逐个点名快得多；但大家看不到彼此的回答。每人只需按顺序接着前一位说一次时，交给全体依次回应；需要互相接话、讨论的事仍要主持人安排。用户只是表示收到或感谢时，不必唤醒任何人。'
   + '两种容易看错的情况：向在场的各位问好，是在等每个人回一声，和只对房间说一句“hi”不同；用户问“谁是……”“谁能……”时是在找符合条件的人，只需要符合的人出来回应（哪怕说“自己说一下”），成员信息里（含主持人）只有一位符合就交给他。';
 
 /** The routing question in one mode: option texts, the stem, and what the state adds about the members. */
@@ -254,13 +255,14 @@ function route_question(mode, host, members, text) {
       ...named_groups(text, host, members).map(group => ({ value: `${SOME_PREFIX}${group.join(SOME_JOINER)}`,
         description: `只请 ${group.join('、')} 各自回应一次：同时开始，每人都收到这句原话，彼此看不到对方的回答，其他成员不被唤醒` })),
       { value: ALL_CHOICE, description: '全体成员（含主持人）同时收到这句原话，各自回应一次，彼此看不到对方的回答，也不会被分到不同的任务' },
+      { value: ALL_SEQUENTIAL_CHOICE, description: '全体成员（含主持人）按房间发言顺序逐个回应这句原话，每人一次：前一位答完下一位才开始，后一位能看到前面所有人的回答；比同时回应慢，也不会被分到不同的任务' },
       { value: NONE_CHOICE, description: '不唤醒任何人，用户这句话不会得到回应' }] };
 }
 
 /**
  * Decide who answers one unnamed free-room message: whether its addressee is already settled by the text or the thread.
  * Members are [{name, description}] without the host; host is {name, description}. Returns action member (with member),
- * all, none, or host for anything unsettled or not confident enough.
+ * all, sequential (guided only), some, none, or host for anything unsettled or not confident enough.
  */
 export async function route_free_message(home, scheduler, { title, goal, context, message, host, members }, fetch_impl) {
   const { choices, instructions, extra } = route_question(scheduler.mode || DEFAULT_SCHEDULER_MODE, host, members, message.text);
@@ -272,10 +274,11 @@ export async function route_free_message(home, scheduler, { title, goal, context
   const confidence = certainty(answers.handler);
   // Waking several members, everyone or no one costs more when wrong than moving the message to one member.
   const group = some_members(choice);
-  const wide = choice === ALL_CHOICE || choice === NONE_CHOICE || Boolean(group);
+  const wide = [ALL_CHOICE, ALL_SEQUENTIAL_CHOICE, NONE_CHOICE].includes(choice) || Boolean(group);
   const limits = scheduler_thresholds(scheduler.mode || DEFAULT_SCHEDULER_MODE);
   const sure = confidence !== null && confidence >= (wide ? limits.wide : limits.member);
   if (sure && choice === ALL_CHOICE) return { action: 'all', choice, confidence, ...judged };
+  if (sure && choice === ALL_SEQUENTIAL_CHOICE) return { action: 'sequential', choice, confidence, ...judged };
   if (sure && choice === NONE_CHOICE) return { action: 'none', choice, confidence, ...judged };
   if (sure && group) return { action: 'some', members: group, choice, confidence, ...judged };
   if (sure && members.some(item => item.name === choice)) return { action: 'member', member: choice, choice, confidence, ...judged };

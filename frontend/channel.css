@@ -1123,12 +1123,12 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 /* Indented by the icon and its gap, so the details line up with the card title text. */
 .channel-schedule-detail { flex-basis: 100%; display: flex; flex-direction: column; gap: 4px; margin-top: 6px; padding-top: 6px; padding-left: 21px; border-top: 1px dashed var(--ui-border); color: var(--ui-text-muted); overflow-wrap: anywhere; }
 .channel-schedule-detail p { display: flex; flex-direction: column; gap: 1px; margin: 0; }
-.channel-schedule-detail .channel-schedule-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--ui-text-dimmed); }
-/* A quiet icon on the meta line opens the model's input (rarely needed); while open it sits on a pressed background. */
-.channel-schedule-input-toggle { display: grid; flex-shrink: 0; place-items: center; width: 22px; height: 22px; border-radius: 5px; color: var(--ui-text-dimmed); }
-.channel-schedule-input-toggle:hover { background: var(--ui-bg-accented); color: var(--ui-text-toned); }
-.channel-schedule-input-toggle.is-open { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
-.channel-schedule-input-toggle > span { width: 13px; height: 13px; }
+/* The odds lead the row; the model that judged and the input toggle sit quietly at its right end. */
+.channel-schedule-detail .channel-schedule-meta { display: flex; align-items: flex-start; gap: 12px; color: var(--ui-text-dimmed); }
+.channel-schedule-odds-list { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; padding-top: 2px; }
+.channel-schedule-model { flex-shrink: 0; padding-top: 2px; font-size: 11px; white-space: nowrap; }
+/* A text link with a chevron opens the model's input, like the fold toggle of process notes. */
+.channel-schedule-input-toggle { flex-shrink: 0; padding: 0 !important; color: var(--ui-text-dimmed); font-size: 11px; }
 /* The options of one question side by side, most likely first; the chosen one stands out. */
 .channel-schedule-detail p.channel-schedule-odds { flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
 .channel-schedule-odds b { color: var(--ui-text-toned); font-weight: 600; }
@@ -1137,12 +1137,14 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-schedule-odds small { margin-left: 4px; }
 /* One line per part, cut with an ellipsis; hovering shows the full text. */
 /* The model's input is reference material: a faint panel in the card's own muted tones, quieter than the title and odds. */
-.channel-schedule-input { display: flex; flex-direction: column; gap: 3px; margin-top: 2px; padding: 6px 10px; border-radius: 6px; background: color-mix(in srgb, var(--ui-bg-muted) 55%, transparent); }
+.channel-schedule-input { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; padding: 8px 12px; border-radius: 6px; background: color-mix(in srgb, var(--ui-bg-muted) 55%, transparent); line-height: 1.6; }
 .channel-schedule-detail p.channel-schedule-input.is-empty { display: block; color: var(--ui-text-dimmed); }
-.channel-schedule-input p { display: grid; grid-template-columns: 7.5em minmax(0, 1fr); gap: 10px; }
+.channel-schedule-input p { display: grid; grid-template-columns: 6.5em minmax(0, 1fr); gap: 12px; }
 .channel-schedule-input b { color: var(--ui-text-dimmed); font-weight: 400; white-space: nowrap; }
 .channel-schedule-input span { overflow: hidden; color: var(--ui-text-muted); white-space: nowrap; text-overflow: ellipsis; }
-.channel-schedule-input p.is-choice b { padding-left: 1em; overflow: hidden; text-overflow: ellipsis; }
+/* The options hang under their question: a thin rule on the left groups them, names in the label column. */
+.channel-schedule-input p.is-choice { padding-left: 10px; border-left: 1px solid var(--ui-border); grid-template-columns: 6em minmax(0, 1fr); gap: 10px; margin-left: calc(6.5em + 12px); }
+.channel-schedule-input p.is-choice b { overflow: hidden; color: var(--ui-text-toned); text-overflow: ellipsis; }
 .channel-schedule-input p.is-choice small { margin-left: 6px; }
 .channel-schedule-card.is-skipped { border-color: var(--ui-border); background: transparent; color: var(--ui-text-muted); }
 .channel-schedule-card.is-skipped .channel-schedule-icon { color: var(--ui-text-dimmed); }
