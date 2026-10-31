@@ -14,7 +14,7 @@ PDF 站内预览使用 [Mozilla PDF.js](https://github.com/mozilla/pdf.js) 的 `
 
 `package.json` 声明直接依赖，`package-lock.json` 记录实际版本、来源及包许可元数据。Vue、Nuxt UI、Markdown-it、KaTeX、Motion、Iconify / Lucide、fflate 等第三方代码用于前端渲染与本地备份；Vite、Tailwind CSS 与 Wrangler 用于构建和部署。
 
-发布带依赖的程序或重新打包前端时，应保留所使用包中的 LICENSE / NOTICE 文件和生成产物中的许可注释。KaTeX 的公式字体随前端 CSS 打包，其包内许可同样适用；Lucide 图标遵循该图标集自身许可。依赖安装后的原始许可位于各 `node_modules/<package>/`，下方附录保存直接依赖及当前前端实际打包模块的许可文本，便于源码与静态产物一同分发。
+发布带依赖的程序或重新打包前端时，应保留所使用包中的 LICENSE / NOTICE 文件和生成产物中的许可注释。KaTeX 的样式表与公式字体随前端复制到 `web/katex/`（附其 LICENSE），其包内许可同样适用；Lucide 图标遵循该图标集自身许可。依赖安装后的原始许可位于各 `node_modules/<package>/`，下方附录保存直接依赖及当前前端实际打包模块的许可文本，便于源码与静态产物一同分发。
 
 ## @iconify-json/lucide 1.2.144
 

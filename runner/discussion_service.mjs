@@ -27,6 +27,8 @@ const UPDATE_RETRY_MS = 5000;
 const STREAM_STALE_MS = 45_000;
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]']);
 const REMOTE_SYNC_MS = 3000;
+// A relayed-command claim that waited at least this long is followed by the next one at once.
+const RELAY_RESTART_MIN_MS = 1000;
 const START_WAIT_MS = 5000;
 const STOP_WAIT_MS = 20_000;
 const REGISTRY_WAIT_MS = 5000;
@@ -578,7 +580,20 @@ export async function run_service(home, output = () => {}) {
       updated_at: Math.floor(Date.now() / 1000), rooms: [] });
     // Loaded lazily: the relay runs launches, and the launch module itself depends on this one.
     const { relay_commands, sync_remote_launches } = await import('./remote_launch.mjs');
-    let synced_at = 0, swept_at = 0, relayed_at = 0;
+    let synced_at = 0, swept_at = 0, relay_failed_at = 0;
+    // A long-poll of its own: the site answers as soon as another device relays a command, and the next claim starts
+    // the moment one returns, so a device sending several commands never waits on the loop; a failure retries after the sync interval.
+    // A claim that returned at once (no paired site, or a command already queued) goes back to the loop instead, so nothing spins.
+    const start_relay = () => {
+      let failed = false;
+      const started = Date.now();
+      relaying = relay_commands(home, { log: log_line, signal: relay_stop.signal, on_failure: () => { failed = true; relay_failed_at = Date.now(); } })
+        .catch(error => { failed = true; relay_failed_at = Date.now(); log_line(`远程命令检查失败：${error.message}`); })
+        .finally(() => {
+          relaying = null;
+          if (!failed && !relay_stop.signal.aborted && !stopped && Date.now() - started >= RELAY_RESTART_MIN_MS) start_relay();
+        });
+    };
     while (!stopped && !existsSync(stop_path)) {
       try { await service.tick({ wait: false }); } catch (error) { log_line(`服务检查失败：${error.message}`); }
       if (Date.now() - swept_at >= SWEEP_MS) {
@@ -596,12 +611,7 @@ export async function run_service(home, output = () => {}) {
         syncing = sync_remote_launches(home, { log: log_line }).catch(error => log_line(`远程启动检查失败：${error.message}`))
           .finally(() => { syncing = null; });
       }
-      // A long-poll of its own: the site answers as soon as another device relays a command, and a failure retries after the sync interval.
-      if (!relaying && Date.now() - relayed_at >= REMOTE_SYNC_MS) {
-        relayed_at = Date.now();
-        relaying = relay_commands(home, { log: log_line, signal: relay_stop.signal }).catch(error => log_line(`远程命令检查失败：${error.message}`))
-          .finally(() => { relaying = null; });
-      }
+      if (!relaying && Date.now() - relay_failed_at >= REMOTE_SYNC_MS) start_relay();
       await sleep(LOOP_MS);
     }
   } finally {

@@ -38,7 +38,7 @@ const RELAY_WAIT_MS = 45000;
 const RELAY_POLL_MS = 1500;
 const MODEL_CATALOG_TIMEOUT_MS = 35000;
 // Without the local service, local operations go through the paired computer, encrypted so the website only sees ciphertext.
-const RELAY_COMMAND_POLL_MS = 700;
+const RELAY_COMMAND_POLL_MS = 250;
 const RELAY_SETTINGS_WAIT_MS = 20000;
 // The computer allows each operation 60 seconds, as the local website does.
 const RELAY_COMMAND_WAIT_MS = 75000;
@@ -72,6 +72,18 @@ const live_updates = { source: null, connected: false, enabled: false, timer: nu
   running: false, dirty: false, full: false, revisions: "", refreshed_at: 0 };
 state.messages = [];
 state.message_history = null;
+// The last full view and transcript of recently opened rooms: reopening one shows it at once while the site is read again,
+// and only messages after the cached ones are fetched. A later retract or rewind reaches them through the room's withdrawal list.
+const ROOM_CACHE_LIMIT = 12;
+const room_views = new Map();
+const message_histories = new Map();
+
+/** Keep one entry per room, dropping the least recently used beyond the limit. */
+function cache_room_entry(cache, key, value) {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > ROOM_CACHE_LIMIT) cache.delete(cache.keys().next().value);
+}
 state.connected = false;
 state.reconnecting = false;
 state.attachment_drafts = [];
@@ -779,6 +791,8 @@ function progress_speaker(room) {
 
 /** Explain an empty transcript using the room's actual progression state. */
 function empty_discussion_message(room) {
+  // A room opened for the first time has no transcript until the site answers; it is not an empty discussion.
+  if (state.messages_loading) return '正在读取消息…';
   if (room.archived || room.phase === 'concluded') return '讨论已结束，尚未产生发言记录。';
   if (room.mode === 'free') return '写下任务并点名成员。程序唤醒由本机服务交付；手动成员需在原会话触发，在线回答由人代发。';
   if (room.phase === 'paused' || room.runtime?.status === 'paused') return '讨论已暂停。核对暂停原因后，可在进度看板重启或结束。';
@@ -839,6 +853,7 @@ function render_messages(result) {
       rendered_summary: window.discuss_markdown.render_markdown(message.summary || "") };
   });
   state.message_total = result.total;
+  state.messages_loading = false;
   const container = element("messages");
   const open_receipts = [...container.querySelectorAll(".message-receipt[open]")].map((receipt) => receipt.dataset.receiptId);
   const open_answers = [...container.querySelectorAll(".message-answer[open]")].map((answer) => answer.dataset.answerId);
@@ -860,8 +875,7 @@ async function load_message_history(room_id, version) {
   const key = `${room_id}?${params}`;
   // Large batches: a long transcript loads in one round-trip, and the site counts the room's messages once, not per batch.
   params.set("limit", MESSAGE_HISTORY_BATCH);
-  const saved = state.message_history?.key === key ? state.message_history.messages : [];
-  const messages = [...saved];
+  const messages = [...message_histories.get(key) || []];
   let has_more = true;
   while (has_more) {
     params.set("after", messages.at(-1)?.id || 0);
@@ -870,8 +884,15 @@ async function load_message_history(room_id, version) {
     messages.push(...result.messages);
     has_more = result.has_more;
   }
+  cache_room_entry(message_histories, key, messages);
   state.message_history = { key, messages };
   return { messages, total: messages.length, page: 1, pages: 1 };
+}
+
+/** The unfiltered transcript cached for a room, shaped like a loaded history, or null. */
+function cached_message_history(room_id) {
+  const messages = message_histories.get(`${room_id}?${new URLSearchParams({ q: "", withdrawn: "include" })}`);
+  return messages ? { messages, total: messages.length, page: 1, pages: 1 } : null;
 }
 
 /** Refresh a room with version guards so slower requests cannot change the active view. */
@@ -882,7 +903,16 @@ async function refresh_room({ room: read_room = true } = {}) {
   const archive_version = state.archive_version;
   const directory_version = state.directory_version;
   const room_id = state.room?.id;
-  const directory = await request_json("/api/rooms");
+  // The room and its transcript are read beside the directory rather than after it, saving a round trip on every open.
+  const directory_read = request_json("/api/rooms");
+  const reading = state.room && read_room ? room_id : null;
+  const room_read = reading ? request_json(`/api/rooms/${room_id}`) : null;
+  const history_read = reading && state.tab === "discussion" ? load_message_history(room_id, version) : null;
+  // A room removed meanwhile answers 404; the directory decides what is shown, so such answers may go unread.
+  room_read?.catch(() => {});
+  history_read?.catch(() => {});
+  if (reading) live_updates.refreshed_at = Date.now();
+  const directory = await directory_read;
   if (version !== state.refresh_version) return;
   if (!state.directory_pending.size && directory_version === state.directory_version) {
     state.rooms = directory.rooms.map((room) => merge_room_folder(room, folder_version, archive_version, directory_version));
@@ -895,12 +925,9 @@ async function refresh_room({ room: read_room = true } = {}) {
     set_connection(true);
     return;
   }
-  live_updates.refreshed_at = Date.now();
-  const [room, result] = await Promise.all([
-    request_json(`/api/rooms/${room_id}`),
-    state.tab === "discussion" ? load_message_history(room_id, version) : null,
-  ]);
+  const [room, result] = await Promise.all([room_read, history_read]);
   if (version !== state.refresh_version || state.room?.id !== room_id) return;
+  cache_room_entry(room_views, room_id, room);
   state.room = merge_room_folder(room, folder_version, archive_version, directory_version);
   render_rooms();
   render_room();
@@ -913,7 +940,10 @@ async function refresh_room({ room: read_room = true } = {}) {
 async function select_room(room_id) {
   state.navigation_version++;
   state.refresh_version++;
-  state.room = state.rooms.find((room) => room.id === room_id);
+  const listed = state.rooms.find((room) => room.id === room_id);
+  // A room opened before is shown as last read, with the directory's newer title, folder and archive state, until the site answers.
+  const cached = listed && room_views.get(room_id);
+  state.room = cached ? { ...cached, ...listed } : listed;
   state.sending_preview = null;
   state.page = 1;
   state.query = "";
@@ -947,8 +977,13 @@ async function select_room(room_id) {
     element("message-count").textContent = "0";
     element("latest-id").textContent = "#0";
   }
+  const history = cached && cached_message_history(room_id);
+  state.messages_loading = Boolean(state.room) && !history;
   render_rooms();
-  await refresh_room();
+  if (cached) render_room();
+  if (history) render_messages(history);
+  try { await refresh_room(); }
+  finally { if (state.messages_loading && state.room?.id === room_id) { state.messages_loading = false; publish_view(); } }
 }
 
 /** Switch between history, manually maintained state, and participation guidance; `refresh: false` when the caller reads the room itself. */

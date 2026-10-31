@@ -214,14 +214,15 @@ async function answer_command(site, link, { id, envelope }, run, log) {
 
 /**
  * Wait on every paired site for relayed commands and start each one; resolves once the claims return, with the commands
- * still running in `running` so a slow model list never holds up the next claim.
+ * still running in `running` so a slow model list never holds up the next claim. `on_failure` hears a claim that failed,
+ * so the caller can wait before retrying while a successful claim is followed at once.
  */
-export async function relay_commands(home, { run = run_launch_command, log = () => {}, wait = COMMAND_WAIT_SECONDS, signal, running = new Set() } = {}) {
+export async function relay_commands(home, { run = run_launch_command, log = () => {}, wait = COMMAND_WAIT_SECONDS, signal, running = new Set(), on_failure = () => {} } = {}) {
   // Keys are created by the sync, which publishes them; a site without one yet has nothing to claim.
   await Promise.all(Object.entries(machine_links(home).sites).filter(([, link]) => link.private_key).map(async ([site, link]) => {
     let commands;
     try { ({ commands } = await machine_request(site, link, '/commands/claim', { wait }, { timeout: wait * 1000 + COMMAND_REQUEST_MARGIN_MS, signal })); }
-    catch (error) { if (!signal?.aborted) log(`${site}: 领取远程命令失败：${error.message}`); return; }
+    catch (error) { if (!signal?.aborted) { log(`${site}: 领取远程命令失败：${error.message}`); on_failure(); } return; }
     for (const command of commands) {
       const task = answer_command(site, link, command, run, log).finally(() => running.delete(task));
       running.add(task);

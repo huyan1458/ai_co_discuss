@@ -1,4 +1,4 @@
-@import "katex/dist/katex.min.css";
+/* KaTeX's own stylesheet and fonts are copied to web/katex/ and linked by the page, so its fonts load only when used. */
 
 .markdown-body {
   --markdown-line: #c3ced8;

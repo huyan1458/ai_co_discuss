@@ -89,6 +89,11 @@ ASSETS.update({"/pdfjs/" + file.relative_to(WEB_ROOT / "pdfjs").as_posix():
                (file.relative_to(WEB_ROOT).as_posix(),
                 {".mjs": "text/javascript", ".js": "text/javascript", ".wasm": "application/wasm"}.get(file.suffix, "application/octet-stream"))
                for file in (WEB_ROOT / "pdfjs").rglob("*") if file.is_file()})
+# KaTeX's stylesheet and the fonts it loads only when a formula is shown.
+ASSETS.update({"/katex/" + file.relative_to(WEB_ROOT / "katex").as_posix():
+               (file.relative_to(WEB_ROOT).as_posix(),
+                {".css": "text/css", ".woff2": "font/woff2"}.get(file.suffix, "text/plain"))
+               for file in (WEB_ROOT / "katex").rglob("*") if file.is_file()})
 SCHEMA = (Path(__file__).resolve().parent / "schema.sql").read_text(encoding="utf-8")
 PHASES = {"preparing": "准备中", "initial": "独立观点", "discussing": "深入讨论",
           "paused": "已暂停", "concluded": "已收束"}

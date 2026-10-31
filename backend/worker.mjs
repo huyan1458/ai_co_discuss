@@ -431,76 +431,111 @@ async function opinion_count(database, room_id, experts) {
 
 /** Read a room with its actual history count and latest message ID. */
 async function require_room(database, room_id, token = "") {
-  const room = await database.prepare(`${ROOM_QUERY} WHERE rooms.id=? GROUP BY rooms.id`)
-    .bind(room_id).first();
+  // Every read starts at once and waits only on the reads it needs, so a remote visitor pays a few
+  // database round trips instead of one per query (all of these helpers only read).
+  const first = (sql, ...binds) => database.prepare(sql).bind(...binds).first();
+  const all = async (sql, ...binds) => (await database.prepare(sql).bind(...binds).all()).results;
+  const settings_read = first("SELECT * FROM topic_settings WHERE room_id=?", room_id);
+  const experts_read = settings_read.then(settings => settings ? JSON.parse(settings.experts) : topic_defaults().experts);
+  const budget_read = first("SELECT base,cap,extra FROM round_budgets WHERE room_id=?", room_id);
+  const session_read = Promise.all([
+    first("SELECT id,goal,status,started_message_id,ended_message_id,created_at FROM discussion_sessions WHERE room_id=? ORDER BY id DESC LIMIT 1", room_id),
+    latest_session(database, room_id),
+  ]).then(([latest, live]) => live ? { id: live.id, goal: live.goal, status: live.status,
+    started_message_id: live.started_message_id, ended_message_id: live.ended_message_id, created_at: live.created_at,
+    phase: live.phase, read_until: live.read_until, held_since: live.held_since } : latest ?? null);
+  const decisions_read = all(`${DECISION_SELECT} WHERE d.room_id=? ORDER BY d.id DESC LIMIT ?`, room_id, RECENT_DECISIONS);
+  const mode_read = room_mode(database, room_id);
+  const [room, settings, current_turn, original, queued_turns, relay, host_brief, rounds, round_budget, opinions, session, session_limits,
+    discussions, budget_groups, runtime, limits_row, mode, session_groups, by_mode, members, option, decisions, details, routing, arrangements,
+    cancelled, parent_room, descriptions, labels, withdrawals, read_limit] = await Promise.all([
+    first(`${ROOM_QUERY} WHERE rooms.id=? GROUP BY rooms.id`, room_id),
+    settings_read,
+    first(`SELECT *, (SELECT COUNT(*) FROM discussion_turns WHERE room_id=? AND status='answered') AS answered_turns
+      FROM discussion_turns WHERE room_id=? AND status NOT IN ('queued','skipped')
+      ORDER BY status IN ('pending','notified') DESC, id DESC LIMIT 1`, room_id, room_id),
+    first("SELECT text FROM room_user_requests WHERE room_id=?", room_id),
+    all("SELECT id,expert,question FROM discussion_turns WHERE room_id=? AND status='queued' ORDER BY id", room_id),
+    first("SELECT held_since FROM turn_relay WHERE room_id=?", room_id),
+    first("SELECT text,until,updated_at FROM room_briefs WHERE room_id=?", room_id),
+    experts_read.then(experts => discussion_rounds(database, room_id, experts)),
+    budget_read,
+    Promise.all([budget_read, experts_read]).then(([budget, experts]) => budget ? opinion_count(database, room_id, experts) : undefined),
+    session_read,
+    session_limits_view(database, room_id),
+    all(DISCUSSIONS_SELECT, room_id),
+    Promise.all([budget_read, experts_read, session_read]).then(([budget, experts, current]) => budget ? budget_round_groups(database, room_id, experts, budget.base, current) : null),
+    runtime_view(database, room_id),
+    first(LIMITS_SQL, room_id),
+    mode_read,
+    merge_round_groups(database, room_id, []),
+    mode_read.then(mode => mode === "free" ? Promise.all([
+      all(`SELECT rooms.id,rooms.title,COALESCE(topic_settings.phase,'preparing') AS phase
+        FROM room_links JOIN rooms ON rooms.id=room_links.room_id LEFT JOIN topic_settings ON topic_settings.room_id=rooms.id
+        WHERE room_links.parent_id=? ORDER BY room_links.created_at`, room_id),
+      free_view(database, room_id, token)]) : asks_view(database, room_id)),
+    all(`SELECT m.id,m.name,m.adapter,m.role,m.status,m.access,m.session_mode,COALESCE(src.source,'') AS manual_source,COALESCE(s.session_id,'') AS reported_session,COALESCE(s.client,'') AS reported_client,
+      COALESCE(r.registered_at,'') AS registered_at
+      FROM room_members AS m LEFT JOIN member_manual_sources AS src ON src.member_id=m.id LEFT JOIN member_sessions AS s ON s.member_id=m.id
+      LEFT JOIN member_registrations AS r ON r.member_id=m.id AND r.token_hash=m.token_hash WHERE m.room_id=? AND m.status<>'removed' ORDER BY m.id`, room_id),
+    first("SELECT named_followup FROM discussion_options WHERE room_id=?", room_id),
+    decisions_read,
+    all("SELECT decision_id,detail FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)", room_id),
+    all("SELECT message_id FROM scheduler_routing WHERE room_id=? AND created_at>? ORDER BY message_id", room_id, Math.floor(Date.now() / 1000) - ROUTING_VISIBLE_SECONDS),
+    decisions_read.then(rows => host_arrangements(database, room_id, [...rows].reverse())),
+    cancelled_turns(database, room_id),
+    first("SELECT rooms.id,rooms.title FROM room_links JOIN rooms ON rooms.id=room_links.parent_id WHERE room_links.room_id=?", room_id),
+    member_descriptions(database, room_id),
+    member_labels(database, room_id),
+    message_withdrawals(database, room_id),
+    initial_session_read_limit(database, room_id, token),
+  ]);
   if (!room) throw new HttpError(404, "房间不存在");
-  const settings = await database.prepare("SELECT * FROM topic_settings WHERE room_id=?").bind(room_id).first();
-  const current_turn = await database.prepare(`SELECT *, (SELECT COUNT(*) FROM discussion_turns WHERE room_id=? AND status='answered') AS answered_turns
-    FROM discussion_turns WHERE room_id=? AND status NOT IN ('queued','skipped')
-    ORDER BY status IN ('pending','notified') DESC, id DESC LIMIT 1`).bind(room_id, room_id).first();
   const result = { ...room, ...(settings ? { ...settings, experts: JSON.parse(settings.experts) } : topic_defaults()), current_turn, answered_turns: current_turn?.answered_turns || 0 };
-  const original = await database.prepare("SELECT text FROM room_user_requests WHERE room_id=?").bind(room_id).first();
   Object.assign(result, topic_context(result.background, original?.text));
   if (current_turn) delete current_turn.answered_turns;
   if (current_turn) current_turn.status_label = turn_status_label(current_turn, result);
-  result.queued_turns = (await database.prepare("SELECT id,expert,question FROM discussion_turns WHERE room_id=? AND status='queued' ORDER BY id").bind(room_id).all()).results;
-  result.held_since = (await database.prepare("SELECT held_since FROM turn_relay WHERE room_id=?").bind(room_id).first())?.held_since || 0;
-  result.host_brief = await database.prepare("SELECT text,until,updated_at FROM room_briefs WHERE room_id=?").bind(room_id).first();
-  result.rounds = await discussion_rounds(database, room_id, result.experts);
+  result.queued_turns = queued_turns;
+  result.held_since = relay?.held_since || 0;
+  result.host_brief = host_brief;
+  result.rounds = rounds;
   result.completed_rounds = result.rounds.filter((item) => item.completed).length;
-  result.round_budget = await database.prepare("SELECT base,cap,extra FROM round_budgets WHERE room_id=?").bind(room_id).first() ?? null;
-  if (result.round_budget) result.opinion_count = await opinion_count(database, room_id, result.experts);
-  result.session = await database.prepare("SELECT id,goal,status,started_message_id,ended_message_id,created_at FROM discussion_sessions WHERE room_id=? ORDER BY id DESC LIMIT 1").bind(room_id).first() ?? null;
-  const live_session = await latest_session(database, room_id);
-  if (live_session) result.session = { id: live_session.id, goal: live_session.goal, status: live_session.status,
-    started_message_id: live_session.started_message_id, ended_message_id: live_session.ended_message_id, created_at: live_session.created_at,
-    phase: live_session.phase, read_until: live_session.read_until, held_since: live_session.held_since };
-  const session_limits = await session_limits_view(database, room_id);
+  result.round_budget = round_budget ?? null;
+  if (result.round_budget) result.opinion_count = opinions;
+  result.session = session;
   if (session_limits) result.limits = session_limits;
-  result.discussions = (await database.prepare(DISCUSSIONS_SELECT).bind(room_id).all()).results;
-  const legacy_round_groups = result.round_budget
-    ? await budget_round_groups(database, room_id, result.experts, result.round_budget.base, result.session)
-    : result.rounds;
+  result.discussions = discussions;
+  const legacy_round_groups = result.round_budget ? budget_groups : result.rounds;
   result.round_groups = legacy_round_groups.map(group => ({ ...group, key: `legacy-round-${group.number}`,
     speakers: group.speakers ?? [], participants: Object.keys(result.experts).length }));
-  result.runtime = await runtime_view(database, room_id);
-  result.limits = limits_view(await database.prepare(LIMITS_SQL).bind(room_id).first(), result);
+  result.runtime = runtime;
+  result.limits = limits_view(limits_row, result);
   if (session_limits) result.limits = session_limits;
-  result.mode = await room_mode(database, room_id);
+  result.mode = mode;
+  // Same as merge_round_groups with these legacy groups: it only adds the session groups and sorts.
   if (result.mode === "free" && !result.session) result.round_groups = [];
-  else result.round_groups = await merge_round_groups(database, room_id, result.round_groups);
-  if (result.mode !== "free") result.asks = await asks_view(database, room_id);
-  result.members = (await database.prepare(`SELECT m.id,m.name,m.adapter,m.role,m.status,m.access,m.session_mode,COALESCE(src.source,'') AS manual_source,COALESCE(s.session_id,'') AS reported_session,COALESCE(s.client,'') AS reported_client,
-    COALESCE(r.registered_at,'') AS registered_at
-    FROM room_members AS m LEFT JOIN member_manual_sources AS src ON src.member_id=m.id LEFT JOIN member_sessions AS s ON s.member_id=m.id
-    LEFT JOIN member_registrations AS r ON r.member_id=m.id AND r.token_hash=m.token_hash WHERE m.room_id=? AND m.status<>'removed' ORDER BY m.id`).bind(room_id).all()).results;
-  const option = await database.prepare("SELECT named_followup FROM discussion_options WHERE room_id=?").bind(room_id).first();
+  else result.round_groups = [...result.round_groups, ...session_groups].sort((left, right) => left.start_id - right.start_id || left.key.localeCompare(right.key));
+  if (result.mode !== "free") result.asks = by_mode;
+  result.members = members;
   // Rooms created before the option keep the host's named follow-ups.
   result.named_followup = option ? Boolean(option.named_followup) : true;
-  result.scheduler_decisions = (await database.prepare(`${DECISION_SELECT} WHERE d.room_id=? ORDER BY d.id DESC LIMIT ?`)
-    .bind(room_id, RECENT_DECISIONS).all()).results.reverse();
-  const details = new Map((await database.prepare("SELECT decision_id,detail FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)")
-    .bind(room_id).all()).results.map((row) => [row.decision_id, JSON.parse(row.detail)]));
-  for (const decision of result.scheduler_decisions) decision.detail = details.get(decision.id) ?? null;
-  result.scheduler_routing = (await database.prepare("SELECT message_id FROM scheduler_routing WHERE room_id=? AND created_at>? ORDER BY message_id")
-    .bind(room_id, Math.floor(Date.now() / 1000) - ROUTING_VISIBLE_SECONDS).all()).results.map((row) => row.message_id);
-  result.host_arrangements = await host_arrangements(database, room_id, result.scheduler_decisions);
-  result.cancelled_turns = await cancelled_turns(database, room_id);
-  result.parent_room = await database.prepare("SELECT rooms.id,rooms.title FROM room_links JOIN rooms ON rooms.id=room_links.parent_id WHERE room_links.room_id=?")
-    .bind(room_id).first();
+  result.scheduler_decisions = decisions.reverse();
+  const detail_map = new Map(details.map((row) => [row.decision_id, JSON.parse(row.detail)]));
+  for (const decision of result.scheduler_decisions) decision.detail = detail_map.get(decision.id) ?? null;
+  result.scheduler_routing = routing.map((row) => row.message_id);
+  result.host_arrangements = arrangements;
+  result.cancelled_turns = cancelled;
+  result.parent_room = parent_room;
   if (result.mode === "free") {
-    result.linked_rooms = (await database.prepare(`SELECT rooms.id,rooms.title,COALESCE(topic_settings.phase,'preparing') AS phase
-      FROM room_links JOIN rooms ON rooms.id=room_links.room_id LEFT JOIN topic_settings ON topic_settings.room_id=rooms.id
-      WHERE room_links.parent_id=? ORDER BY room_links.created_at`).bind(room_id).all()).results;
+    result.linked_rooms = by_mode[0];
     // Free rooms have no host hand-off: user messages go straight to the named members.
     result.held_since = 0;
-    result.free = await free_view(database, room_id, token);
+    result.free = by_mode[1];
   }
-  result.descriptions = await member_descriptions(database, room_id);
-  result.labels = await member_labels(database, room_id);
-  result.withdrawals = await message_withdrawals(database, room_id);
+  result.descriptions = descriptions;
+  result.labels = labels;
+  result.withdrawals = withdrawals;
   result.speaking_order = await speaking_order(database, result);
-  const read_limit = await initial_session_read_limit(database, room_id, token);
   if (read_limit !== null) {
     if (result.state_until > read_limit) result.state_text = "";
     if (result.host_brief?.until > read_limit) result.host_brief = null;
@@ -2492,10 +2527,9 @@ async function initial_session_read_limit(database, room_id, token = "") {
 }
 
 async function query_messages(database, room_id, params, token = "") {
-  await require_room_id(database, room_id);
   const page = Math.max(1, integer(params.page ?? 1));
   const size = Math.min(MAX_PAGE_SIZE, Math.max(1, integer(params.limit ?? PAGE_SIZE)));
-  const max_id = await discussion_read_boundary(database, room_id, params, token);
+  const [, max_id] = await Promise.all([require_room_id(database, room_id), discussion_read_boundary(database, room_id, params, token)]);
   const filtered = max_id === null ? params : { ...params, _max_id: max_id };
   const { where, values } = message_filters(room_id, filtered);
   const results = await database.batch([
@@ -3315,15 +3349,16 @@ async function free_recent_executions(database, room_id) {
     (SELECT denials FROM execution_denials WHERE execution_id=e.id) AS denials,${FREE_RETRY_SQL("e")},${FREE_CAPABILITY_SQL},
     (SELECT json_object('created_at',created_at) FROM late_answers WHERE execution_id=e.id) AS late_answer
     FROM member_executions e JOIN room_members m ON m.id=e.member_id WHERE e.room_id=? ORDER BY e.id DESC LIMIT ?`).bind(room_id, FREE_RECENT_EXECUTIONS).all()).results;
-  return Promise.all(rows.map(async row => {
-    const requests = (await database.prepare("SELECT id,message_id,status,purpose,answer_id FROM member_requests WHERE execution_id=? ORDER BY id")
-      .bind(row.id).all()).results;
-    const sourced = await Promise.all(requests.map(async request => ({ ...request, ...await free_request_source(database, request.id, request.message_id) })));
+  const carried = rows.length ? (await database.prepare(`SELECT id,message_id,status,purpose,answer_id,execution_id FROM member_requests
+    WHERE execution_id IN (SELECT value FROM json_each(?)) ORDER BY id`).bind(JSON.stringify(rows.map(row => row.id))).all()).results : [];
+  const sourced_requests = await free_request_sources(database, room_id, carried);
+  return rows.map(row => {
+    const sourced = sourced_requests.filter(request => request.execution_id === row.id).map(({ execution_id, ...request }) => request);
     return { ...pick(row, FREE_EXECUTION_FIELDS), member: row.member, cwd: row.cwd, changes: JSON.parse(row.changes || '[]'),
       changes_recorded: Boolean(row.changes), request_ids: JSON.parse(row.request_ids),
       answer_id: row.answer_id, request_message_id: row.request_message_id, requests: sourced, notes: row.note_count,
       denials: JSON.parse(row.denials || "[]"), capabilities: free_reported_capabilities(row), stop_result: row.stop_result || "", late_answer: JSON.parse(row.late_answer || "null"), retry: JSON.parse(row.retry || "null") };
-  }));
+  });
 }
 
 /** Remove request and answer anchors that follow the initial-session reading boundary. */
@@ -3352,25 +3387,42 @@ function limit_free_execution(execution, read_limit) {
     }) };
 }
 
-/** Expose request provenance without exposing its hidden system-task message as a transcript anchor. */
-async function free_request_source(database, request_id, message_id) {
-  const row = await database.prepare(`SELECT q.id AS session_request_id,q.session_id AS discussion_session_id,q.round,
-    q.question AS source_question,t.cause_kind,t.cause_message_id AS source_message_id,t.cause_request_id,
-    CASE WHEN q.id IS NULL THEN r.message_id ELSE COALESCE((SELECT MAX(m.id) FROM messages m
-      WHERE m.room_id=r.room_id AND m.id<r.message_id
-        AND NOT EXISTS(SELECT 1 FROM internal_task_messages hidden WHERE hidden.message_id=m.id)),0) END AS after_message_id
-    FROM member_requests r LEFT JOIN session_requests q ON q.member_request_id=r.id
-    LEFT JOIN task_message_sources t ON t.session_request_id=q.id WHERE r.id=?`).bind(request_id).first();
-  const request = await database.prepare('SELECT message_id,purpose FROM member_requests WHERE id=?').bind(request_id).first();
-  return row ? { session_request_id: row.session_request_id, discussion_session_id: row.discussion_session_id, round: row.round,
-    source_question: row.source_question ?? "", source_message_id: row.source_message_id, cause_kind: row.cause_kind,
-    cause_request_id: row.cause_request_id, after_message_id: row.after_message_id ?? message_id,
-    ...await review_request_context(database, request) } : {};
+/**
+ * Add each request's provenance without exposing its hidden system-task message as a transcript anchor.
+ * Two concurrent reads cover every request, so a long room costs no extra round trips to the database.
+ */
+async function free_request_sources(database, room_id, requests) {
+  if (!requests.length) return [];
+  const [sourced, plans] = await Promise.all([
+    database.prepare(`SELECT r.id AS request_id,r.message_id,r.purpose,q.id AS session_request_id,q.session_id AS discussion_session_id,q.round,
+      q.question AS source_question,t.cause_kind,t.cause_message_id AS source_message_id,t.cause_request_id,
+      CASE WHEN q.id IS NULL THEN r.message_id ELSE COALESCE((SELECT MAX(m.id) FROM messages m
+        WHERE m.room_id=r.room_id AND m.id<r.message_id
+          AND NOT EXISTS(SELECT 1 FROM internal_task_messages hidden WHERE hidden.message_id=m.id)),0) END AS after_message_id
+      FROM member_requests r LEFT JOIN session_requests q ON q.member_request_id=r.id
+      LEFT JOIN task_message_sources t ON t.session_request_id=q.id WHERE r.id IN (SELECT value FROM json_each(?))`)
+      .bind(JSON.stringify([...new Set(requests.map(request => request.id))])).all(),
+    room_review_plans(database, room_id),
+  ]);
+  const rows = new Map();
+  for (const row of sourced.results) if (!rows.has(row.request_id)) rows.set(row.request_id, row);
+  return Promise.all(requests.map(async request => {
+    const row = rows.get(request.id);
+    return row ? { ...request, session_request_id: row.session_request_id, discussion_session_id: row.discussion_session_id, round: row.round,
+      source_question: row.source_question ?? "", source_message_id: row.source_message_id, cause_kind: row.cause_kind,
+      cause_request_id: row.cause_request_id, after_message_id: row.after_message_id ?? request.message_id,
+      ...await review_request_context(database, row, plans) } : request;
+  }));
 }
 
-/** Attach one review's provenance without exposing local paths or credentials. */
-async function review_request_context(database, request) {
-  const plan = await database.prepare('SELECT * FROM review_plans WHERE batch_id=? OR review_batch_id=?').bind(request.message_id, request.message_id).first();
+/** Every review plan of a room, read once for the requests that may belong to one. */
+async function room_review_plans(database, room_id) {
+  return (await database.prepare("SELECT * FROM review_plans WHERE room_id=?").bind(room_id).all()).results;
+}
+
+/** Attach one review's provenance without exposing local paths or credentials; `plans` are the room's review plans. */
+async function review_request_context(database, request, plans) {
+  const plan = plans.find(item => item.batch_id === request.message_id || item.review_batch_id === request.message_id);
   if (!plan) return {};
   const phase = request.message_id === plan.batch_id ? 'handoff' : request.purpose === 'ask' ? 'review' : 'result';
   if (phase === 'handoff' && request.purpose !== 'handoff') return {};
@@ -3393,58 +3445,69 @@ function free_denied_actions(payload) {
   return denials.map(item => ({ tool: item.tool, detail: item.detail ?? "", rule: item.rule ?? "" }));
 }
 
-/** Summarize members, recent requests and execution reports without credentials. */
 /** Direct questions of a discussion room: recent requests with their member, for status badges beside messages. */
 async function asks_view(database, room_id) {
   const names = Object.fromEntries((await database.prepare("SELECT id,name FROM room_members WHERE room_id=?").bind(room_id).all()).results.map(row => [row.id, row.name]));
   const requests = (await database.prepare(`SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by,created_at,
     (SELECT reason FROM request_cancel_reasons c WHERE c.request_id=member_requests.id) AS cancel_reason FROM member_requests
     WHERE room_id=? ORDER BY id DESC LIMIT ?`).bind(room_id, FREE_RECENT_REQUESTS).all()).results
-    .map(async row => ({ ...row, member: names[row.member_id] ?? "", ...await free_request_source(database, row.id, row.message_id) }));
-  const ordered_requests = (await Promise.all(requests)).reverse();
-  return { requests, executions: await free_recent_executions(database, room_id) };
+    .map(row => ({ ...row, member: names[row.member_id] ?? "" }));
+  return { requests: requests.reverse(), executions: await free_recent_executions(database, room_id) };
 }
 
+/** One member of a free room with its latest execution; its reads run together. */
+async function free_member_view(database, row, read_limit, now) {
+  const [latest, pending, reported, registered, held_until] = await Promise.all([
+    database.prepare(`SELECT e.*,(SELECT MIN(message_id) FROM member_requests WHERE execution_id=e.id) AS request_message_id,
+      (SELECT COUNT(*) FROM execution_notes WHERE execution_id=e.id) AS note_count,${FREE_RETRY_SQL("e")},
+      ${FREE_CAPABILITY_SQL} FROM member_executions e WHERE member_id=? ORDER BY id DESC LIMIT 1`).bind(row.id).first(),
+    database.prepare("SELECT COUNT(*) AS count FROM member_requests WHERE member_id=? AND status='pending'").bind(row.id).first(),
+    database.prepare("SELECT session_id,client FROM member_sessions WHERE member_id=?").bind(row.id).first(),
+    registered_at(database, row),
+    free_held_until(database, row.id),
+  ]);
+  let execution = pick(latest, FREE_EXECUTION_FIELDS);
+  if (latest) Object.assign(execution, { capabilities: free_reported_capabilities(latest), stop_result: latest.stop_result || "" });
+  if (latest && ["dispatched", "started"].includes(latest.status)) {
+    execution.stale = latest.lease_until <= now;
+    execution.notes = latest.note_count;
+    execution.retry = JSON.parse(latest.retry || "null");
+  }
+  if (read_limit !== null && latest) {
+    execution = limit_free_execution({ ...execution, request_message_id: latest.request_message_id,
+      answer_id: latest?.result?.startsWith("message:") ? Number(latest.result.slice(8)) : null }, read_limit);
+    delete execution.request_message_id;
+  }
+  return { ...pick(row, FREE_MEMBER_FIELDS), registered_at: registered,
+    reported_session: reported?.session_id ?? "", reported_client: reported?.client ?? "", execution, pending: pending.count, held_until };
+}
+
+/** Summarize members, recent requests and execution reports without credentials; independent reads run together. */
 async function free_view(database, room_id, token = "") {
   const now = Math.floor(Date.now() / 1000);
-  const read_limit = await initial_session_read_limit(database, room_id, token);
-  const rows = (await database.prepare("SELECT * FROM room_members WHERE room_id=? AND status<>'removed' ORDER BY id").bind(room_id).all()).results;
-  const members = await Promise.all(rows.map(async row => {
-    const latest = await database.prepare(`SELECT e.*,(SELECT MIN(message_id) FROM member_requests WHERE execution_id=e.id) AS request_message_id,
-      ${FREE_CAPABILITY_SQL} FROM member_executions e WHERE member_id=? ORDER BY id DESC LIMIT 1`).bind(row.id).first();
-    let execution = pick(latest, FREE_EXECUTION_FIELDS);
-    if (latest) Object.assign(execution, { capabilities: free_reported_capabilities(latest), stop_result: latest.stop_result || "" });
-    if (latest && ["dispatched", "started"].includes(latest.status)) {
-      execution.stale = latest.lease_until <= now;
-      execution.notes = (await database.prepare("SELECT COUNT(*) AS count FROM execution_notes WHERE execution_id=?").bind(latest.id).first()).count;
-      execution.retry = await database.prepare("SELECT attempt,retry_at,reason,stopped FROM execution_retries WHERE execution_id=?").bind(latest.id).first() || null;
-    }
-    if (read_limit !== null && latest) {
-      execution = limit_free_execution({ ...execution, request_message_id: latest.request_message_id,
-        answer_id: latest?.result?.startsWith("message:") ? Number(latest.result.slice(8)) : null }, read_limit);
-      delete execution.request_message_id;
-    }
-    const pending = (await database.prepare("SELECT COUNT(*) AS count FROM member_requests WHERE member_id=? AND status='pending'").bind(row.id).first()).count;
-    const reported = await database.prepare("SELECT session_id,client FROM member_sessions WHERE member_id=?").bind(row.id).first();
-    return { ...pick(row, FREE_MEMBER_FIELDS), registered_at: await registered_at(database, row),
-      reported_session: reported?.session_id ?? "", reported_client: reported?.client ?? "", execution, pending,
-      held_until: await free_held_until(database, row.id) };
-  }));
-  const names = Object.fromEntries((await database.prepare("SELECT id,name FROM room_members WHERE room_id=?").bind(room_id).all()).results.map(row => [row.id, row.name]));
-  const requests = (await database.prepare(`SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by,created_at,
-    (SELECT reason FROM request_cancel_reasons c WHERE c.request_id=member_requests.id) AS cancel_reason FROM member_requests
-    WHERE room_id=? ORDER BY id DESC LIMIT ?`).bind(room_id, FREE_RECENT_REQUESTS).all()).results
-    .map(async row => ({ ...row, member: names[row.member_id] ?? "", ...await free_request_source(database, row.id, row.message_id) }));
-  const ordered_requests = (await Promise.all(requests)).reverse().map(request => read_limit === null ? request : limit_free_execution(request, read_limit));
-  const halted_chains = (await database.prepare("SELECT chain_id,reason FROM free_chains WHERE room_id=? ORDER BY chain_id DESC LIMIT 10").bind(room_id).all()).results;
-  // Recommendations shown beside their messages, with seconds left to adopt an open one.
-  const recommendations = (await database.prepare(`SELECT rec.*,m.name AS member FROM member_recommendations rec JOIN room_members m ON m.id=rec.member_id
-    WHERE rec.room_id=? ORDER BY rec.message_id DESC LIMIT ?`).bind(room_id, FREE_RECENT_REQUESTS).all()).results
-    .map(row => ({ ...row, expires_in: Math.max(0, row.expires_at - now) })).reverse();
-  const executions = await free_recent_executions(database, room_id);
-  return { members, requests: ordered_requests, executions: read_limit === null ? executions : executions.map(row => limit_free_execution(row, read_limit)), conflicts: await free_conflicts(database, room_id, names),
-    halted_chains, max_rounds: await free_chain_rounds(database, room_id),
-    chain_rounds: (await database.prepare(FREE_CHAIN_PROGRESS).bind(room_id).all()).results, recommendations };
+  const all = async (sql, ...binds) => (await database.prepare(sql).bind(...binds).all()).results;
+  const read_limit_read = initial_session_read_limit(database, room_id, token);
+  const names_read = all("SELECT id,name FROM room_members WHERE room_id=?", room_id).then(rows => Object.fromEntries(rows.map(row => [row.id, row.name])));
+  const [read_limit, members, requests, halted_chains, recommendations, executions, conflicts, max_rounds, chain_rounds] = await Promise.all([
+    read_limit_read,
+    Promise.all([read_limit_read, all("SELECT * FROM room_members WHERE room_id=? AND status<>'removed' ORDER BY id", room_id)])
+      .then(([read_limit, rows]) => Promise.all(rows.map(row => free_member_view(database, row, read_limit, now)))),
+    Promise.all([names_read, all(`SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by,created_at,
+      (SELECT reason FROM request_cancel_reasons c WHERE c.request_id=member_requests.id) AS cancel_reason FROM member_requests
+      WHERE room_id=? ORDER BY id DESC LIMIT ?`, room_id, FREE_RECENT_REQUESTS)])
+      .then(([names, rows]) => free_request_sources(database, room_id, rows.map(row => ({ ...row, member: names[row.member_id] ?? "" })))),
+    all("SELECT chain_id,reason FROM free_chains WHERE room_id=? ORDER BY chain_id DESC LIMIT 10", room_id),
+    // Recommendations shown beside their messages, with seconds left to adopt an open one.
+    all(`SELECT rec.*,m.name AS member FROM member_recommendations rec JOIN room_members m ON m.id=rec.member_id
+      WHERE rec.room_id=? ORDER BY rec.message_id DESC LIMIT ?`, room_id, FREE_RECENT_REQUESTS),
+    free_recent_executions(database, room_id),
+    names_read.then(names => free_conflicts(database, room_id, names)),
+    free_chain_rounds(database, room_id),
+    all(FREE_CHAIN_PROGRESS, room_id),
+  ]);
+  const limit = row => read_limit === null ? row : limit_free_execution(row, read_limit);
+  return { members, requests: requests.reverse().map(limit), executions: executions.map(limit), conflicts,
+    halted_chains, max_rounds, chain_rounds, recommendations: recommendations.map(row => ({ ...row, expires_in: Math.max(0, row.expires_at - now) })).reverse() };
 }
 
 /** Accept only the room control credential; declared names never grant ownership. */
@@ -3787,11 +3850,15 @@ function free_advance_statements(database, room_id) {
  * later rounds lists them apart in `later` (one name list per round), read-only. The revision changes with any of it.
  */
 async function speaking_order(database, room) {
-  const active = (await database.prepare(`SELECT id,name FROM room_members WHERE room_id=? AND status='active' ORDER BY ${SPEAKING_ORDER_BY}`).bind(room.id).all()).results;
+  const [{ results: active }, session, queued] = await Promise.all([
+    database.prepare(`SELECT id,name FROM room_members WHERE room_id=? AND status='active' ORDER BY ${SPEAKING_ORDER_BY}`).bind(room.id).all(),
+    latest_session(database, room.id),
+    room.mode === "free" ? database.prepare(`SELECT MAX(q.message_id) AS target FROM free_queue q LEFT JOIN member_requests r ON r.message_id=q.message_id
+      AND r.member_id=q.member_id WHERE q.room_id=? AND (r.id IS NULL OR r.status IN ('pending','delivering'))`).bind(room.id).first() : null,
+  ]);
   const by_id = new Map(active.map((member) => [member.id, member.name]));
   let ordered = active.map((member) => member.name);
   let items = [], kind = "default", target = 0, later = [];
-  const session = await latest_session(database, room.id);
   if (session) {
     kind = 'turns';
     const requests = (await database.prepare(`SELECT q.*,m.name FROM session_requests q JOIN room_members m ON m.id=q.member_id
@@ -3807,8 +3874,7 @@ async function speaking_order(database, room) {
       .map(later_round => requests.filter(row => row.round === later_round && row.status === 'queued').map(row => row.name));
     ordered = [...active.map(member => member.name), ...Object.keys(room.experts)].filter(name => name !== '用户');
   } else if (room.mode === "free") {
-    target = (await database.prepare(`SELECT MAX(q.message_id) AS target FROM free_queue q LEFT JOIN member_requests r ON r.message_id=q.message_id
-      AND r.member_id=q.member_id WHERE q.room_id=? AND (r.id IS NULL OR r.status IN ('pending','delivering'))`).bind(room.id).first())?.target || 0;
+    target = queued?.target || 0;
     if (target) {
       kind = "queue";
       const rows = (await database.prepare(`SELECT q.member_id,r.status FROM free_queue q LEFT JOIN member_requests r
@@ -4122,7 +4188,8 @@ async function free_execution_detail(database, row) {
     FROM member_requests r LEFT JOIN session_requests q ON q.member_request_id=r.id
     LEFT JOIN task_message_sources t ON t.session_request_id=q.id WHERE r.execution_id=? ORDER BY r.id`).bind(row.id).all()).results;
   const retry = await database.prepare("SELECT attempt,retry_at,reason,stopped FROM execution_retries WHERE execution_id=?").bind(row.id).first();
-  for (const request of requests) Object.assign(request, await review_request_context(database, request));
+  const plans = await room_review_plans(database, row.room_id);
+  for (const request of requests) Object.assign(request, await review_request_context(database, request, plans));
   return { ...pick(row, FREE_EXECUTION_FIELDS), member: member.name, read_until: member.read_until, requests,
     rewound_executions: await member_rewinds(database, member), retry: retry || null };
 }
@@ -4292,7 +4359,8 @@ async function free_inbox(database, room_id, token) {
       FROM member_requests r LEFT JOIN session_requests q ON q.member_request_id=r.id
       LEFT JOIN task_message_sources t ON t.session_request_id=q.id
       WHERE r.member_id=? AND r.status='pending' ORDER BY r.id`).bind(row.id).all()).results })));
-  for (const member of listed) for (const request of member.pending) Object.assign(request, await review_request_context(database, request));
+  const plans = await room_review_plans(database, room_id);
+  for (const member of listed) for (const request of member.pending) Object.assign(request, await review_request_context(database, request, plans));
   const members = listed.filter(member => member.access === "runner"), observers = listed.filter(member => member.access !== "runner");
   const executions = (await database.prepare(`SELECT member_executions.*,room_members.name,${FREE_RETRY_SQL("member_executions")} FROM member_executions JOIN room_members ON room_members.id=member_id
     WHERE member_executions.room_id=? AND member_executions.${FREE_LIVE} ORDER BY member_executions.id`).bind(room_id).all()).results
@@ -5548,9 +5616,10 @@ async function logout_admin(database, request) {
 
 /** Let a logged-in administrator without this room's credential write as its owner. */
 async function admin_as_owner(database, request, room_id) {
-  if (request.headers.get("X-Discussion-Token") || !request.headers.get("X-Discussion-Admin") || !await admin_session(database, request)) return request;
-  const row = await database.prepare("SELECT control_hash FROM room_modes WHERE room_id=?").bind(room_id).first();
-  if (!row?.control_hash) return request;
+  if (request.headers.get("X-Discussion-Token") || !request.headers.get("X-Discussion-Admin")) return request;
+  const [session, row] = await Promise.all([admin_session(database, request),
+    database.prepare("SELECT control_hash FROM room_modes WHERE room_id=?").bind(room_id).first()]);
+  if (!session || !row?.control_hash) return request;
   const headers = new Headers(request.headers);
   headers.set("X-Discussion-Token", owner_proxy_token(row.control_hash));
   return new Request(request, { headers });
@@ -5581,7 +5650,7 @@ const REMOTE_ERROR_MAX = 2000;
 const LAUNCH_STAGES = ["not_started", "unconfirmed", "created", "started"];
 const COMMAND_TTL_SECONDS = 180;
 const COMMAND_WAIT_MAX = 20;
-const COMMAND_POLL_MS = 1000;
+const COMMAND_POLL_MS = 250;
 const ENVELOPE_DATA_MAX = 512 * 1024;
 const MACHINE_SELECT = "SELECT m.*, k.public_key FROM local_machines m LEFT JOIN machine_keys k ON k.machine_id=m.id";
 
@@ -5756,11 +5825,15 @@ async function claim_machine_commands(database, machine_id, token, now) {
 async function wait_machine_commands(database, machine_id, token, payload) {
   const wait = typeof payload.wait === "number" ? Math.min(Math.max(payload.wait, 0), COMMAND_WAIT_MAX) : 0;
   const deadline = Date.now() + wait * 1000;
-  for (;;) {
-    const result = await claim_machine_commands(database, machine_id, token, now_seconds());
-    if (result.commands.length || Date.now() >= deadline) return result;
+  let result = await claim_machine_commands(database, machine_id, token, now_seconds());
+  // Between full claims only one cheap read looks for a new command, so waiting writes nothing and can poll often.
+  while (!result.commands.length && Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, COMMAND_POLL_MS));
+    if (await database.prepare("SELECT 1 AS found FROM machine_commands WHERE machine_id=? AND status='pending' LIMIT 1").bind(machine_id).first()) {
+      result = await claim_machine_commands(database, machine_id, token, now_seconds());
+    }
   }
+  return result;
 }
 
 /** Store the computer's encrypted response for the device that is waiting on it. */
@@ -5896,8 +5969,8 @@ async function handle_api(database, request, parts, params, bucket, setup_key = 
   if (method === "POST" && parts[3] === "turns" && !await latest_session(database, room_id)) {
     await reject_legacy_session_write(database, room_id);
   }
-  const free = await room_mode(database, room_id) === "free";
-  const session_model = await has_session_request_model(database, room_id);
+  const [mode, session_model] = await Promise.all([room_mode(database, room_id), has_session_request_model(database, room_id)]);
+  const free = mode === "free";
   // A discussion keeps the local service's inbox and per-member executions for the user's direct questions.
   if (["inbox", "executions"].includes(parts[3]) || (free && ["members", "suggestions", "recommendations", "stop"].includes(parts[3]))) return handle_free_api(database, request, parts);
   if (parts[3] === "members" && method === "POST" && [4, 5].includes(parts.length)) return handle_discussion_members(database, request, parts);

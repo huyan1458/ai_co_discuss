@@ -3,6 +3,7 @@
   "name": "ai-co-discuss",
   "pages_build_output_dir": "./dist/pages",
   "compatibility_date": "2026-10-14",
+  "placement": { "mode": "smart" },
   "d1_databases": [
     {
       "binding": "DB",
