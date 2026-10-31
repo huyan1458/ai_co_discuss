@@ -448,6 +448,8 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 .channel-message-id { font-size: 11px !important; font-weight: 400; color: #929aa7; padding: 0 !important; }
 .channel-message-text { margin-top: 2px; color: #d7dbe3; font-size: 16px; line-height: 1.6; overflow-wrap: anywhere; }
 .channel-failure-reason { white-space: pre-wrap; }
+.channel-stop-note { font-size: 14px; color: #b3bdcc; }
+.channel-late-answer { white-space: pre-wrap; font-size: 14px; color: #b3bdcc; }
 .channel-failure-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 16px; }
 .channel-failure-error { margin: 0; color: var(--ui-error); font-size: 13px; overflow-wrap: anywhere; }
 .channel-mention { background: #5865f22b; color: #c6ceff; border-radius: 3px; padding: 0 2px; }
@@ -480,6 +482,8 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 .channel-receipt[open] > summary { list-style-type: disclosure-open; margin-bottom: 7px; }
 .channel-receipt > summary:hover { color: #d7dbe3; }
 .channel-receipt .channel-message-text { font-size: 14px; color: #b3bdcc; }
+.channel-sending-message .channel-message-text { white-space: pre-wrap; opacity: .7; }
+.channel-sending-message.is-failed .channel-message-text { opacity: 1; }
 .channel-empty { flex: 1; min-height: 230px; width: 100%; max-width: var(--channel-reading-width); margin-inline: auto; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; padding: 32px; }
 .channel-empty > [class*="icon"] { font-size: 32px; color: #9aa4bc; margin-bottom: 14px; }
 .channel-empty h2 { color: #f1f3f7; font-size: 23px; font-weight: 650; }

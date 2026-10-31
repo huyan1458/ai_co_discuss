@@ -10,6 +10,8 @@ const MAX_STATE_LENGTH = 4000;
 const MAX_BRIEF_LENGTH = 1600;
 const MAX_SUMMARY_LENGTH = 1000;
 const PAGE_SIZE = 20;
+// A reader may ask for larger pages (`limit`) so a long transcript loads in one request instead of many.
+const MAX_PAGE_SIZE = 200;
 const UNCATEGORIZED_FOLDER_ID = "__uncategorized__";
 const PARTICIPANTS = ["用户", "Codex", "Claude", "Gemini", "DeepSeek", "Qwen", "Grok"];
 // A platform is a type; `Claude` and `Claude-评审` are two instances of it with their own sessions.
@@ -1925,7 +1927,7 @@ async function manage_room(database, room_id, action, payload) {
       "DELETE FROM task_message_sources WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
       "DELETE FROM session_requests WHERE session_id IN (SELECT id FROM discussion_sessions WHERE room_id=?)",
       "DELETE FROM discussion_sessions WHERE room_id=?",
-      "DELETE FROM member_recommendations WHERE room_id=?", "DELETE FROM free_queue WHERE room_id=?", "DELETE FROM speaking_orders WHERE room_id=?", "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_descriptions WHERE room_id=?", "DELETE FROM member_labels WHERE room_id=?", "DELETE FROM execution_notes WHERE room_id=?", "DELETE FROM execution_denials WHERE room_id=?", "DELETE FROM execution_segments WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?", "DELETE FROM member_sessions WHERE room_id=?", "DELETE FROM member_registrations WHERE room_id=?",
+      "DELETE FROM member_recommendations WHERE room_id=?", "DELETE FROM free_queue WHERE room_id=?", "DELETE FROM speaking_orders WHERE room_id=?", "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_descriptions WHERE room_id=?", "DELETE FROM member_labels WHERE room_id=?", "DELETE FROM execution_notes WHERE room_id=?", "DELETE FROM execution_denials WHERE room_id=?", "DELETE FROM execution_segments WHERE room_id=?", "DELETE FROM execution_deliveries WHERE room_id=?", "DELETE FROM late_answers WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?", "DELETE FROM member_sessions WHERE room_id=?", "DELETE FROM member_registrations WHERE room_id=?",
       "DELETE FROM room_members WHERE room_id=?", "DELETE FROM room_modes WHERE room_id=?",
       "DELETE FROM free_batches WHERE room_id=?", "DELETE FROM free_chains WHERE room_id=?", "DELETE FROM free_handoffs WHERE room_id=?", "DELETE FROM free_settings WHERE room_id=?", "DELETE FROM free_round_limits WHERE room_id=?", "DELETE FROM free_chain_holds WHERE room_id=?", "DELETE FROM room_links WHERE room_id=?",
       "DELETE FROM discussion_options WHERE room_id=?",
@@ -2492,21 +2494,22 @@ async function initial_session_read_limit(database, room_id, token = "") {
 async function query_messages(database, room_id, params, token = "") {
   await require_room_id(database, room_id);
   const page = Math.max(1, integer(params.page ?? 1));
+  const size = Math.min(MAX_PAGE_SIZE, Math.max(1, integer(params.limit ?? PAGE_SIZE)));
   const max_id = await discussion_read_boundary(database, room_id, params, token);
   const filtered = max_id === null ? params : { ...params, _max_id: max_id };
   const { where, values } = message_filters(room_id, filtered);
   const results = await database.batch([
     database.prepare(`SELECT COUNT(*) AS total FROM (${MESSAGE_QUERY} WHERE ${where})`).bind(...values),
     database.prepare(`${MESSAGE_QUERY} WHERE ${where} ORDER BY messages.id LIMIT ? OFFSET ?`)
-      .bind(...values, PAGE_SIZE + 1, (page - 1) * PAGE_SIZE),
+      .bind(...values, size + 1, (page - 1) * size),
   ]);
   const total = results[0].results[0].total;
   const rows = results[1].results;
-  const messages = rows.slice(0, PAGE_SIZE);
+  const messages = rows.slice(0, size);
   await attach_message_files(database, messages);
-  const result = { messages, page, total, pages: Math.max(1, Math.ceil(total / PAGE_SIZE)) };
+  const result = { messages, page, total, pages: Math.max(1, Math.ceil(total / size)) };
   if (Object.hasOwn(params, "after")) Object.assign(result, {
-    next_after: messages.at(-1)?.id ?? integer(params.after), has_more: rows.length > PAGE_SIZE,
+    next_after: messages.at(-1)?.id ?? integer(params.after), has_more: rows.length > size,
   });
   return result;
 }
@@ -3135,6 +3138,26 @@ const FREE_MEMBER_FIELDS = ["id", "name", "adapter", "role", "status", "access",
 const FREE_EXECUTION_FIELDS = ["id", "member_id", "status", "session_id", "lease_until", "created_at", "finished_at", "result",
   "activity", "activity_at"];
 const FREE_RECENT_EXECUTIONS = 100;
+// How the runner reached the member's software, and what it found when a voided execution was to stop; see backend/free_room.py.
+const FREE_DELIVERIES = ["process", "api", "window", "app", "sidecar"];
+const FREE_STOP_RESULTS = ["stopped", "unstoppable"];
+// Deliveries the runner cannot stop, and how long a member voided there gets no new delivery unless its late answer
+// shows the turn ended; mirrors HOLD_SECONDS in backend/free_room.py.
+const FREE_UNSTOPPABLE_DELIVERIES = ["window", "app", "sidecar"];
+const FREE_HOLD_SECONDS = 600;
+
+/** Until when a member's next delivery waits, or 0: its latest execution was voided in a window or App the runner cannot stop. */
+async function free_held_until(database, member_id) {
+  const row = await database.prepare(`SELECT e.finished_at FROM member_executions e JOIN execution_deliveries d ON d.execution_id=e.id
+    WHERE e.id=(SELECT MAX(id) FROM member_executions WHERE member_id=?) AND e.status='cancelled'
+      AND d.delivery IN (${FREE_UNSTOPPABLE_DELIVERIES.map(() => "?").join(",")})
+      AND NOT EXISTS(SELECT 1 FROM late_answers l WHERE l.execution_id=e.id)`).bind(member_id, ...FREE_UNSTOPPABLE_DELIVERIES).first();
+  const until = row ? row.finished_at + FREE_HOLD_SECONDS : 0;
+  return until > Math.floor(Date.now() / 1000) ? until : 0;
+}
+// The delivery and stop result read alongside an execution aliased `e`.
+const FREE_DELIVERY_SQL = `(SELECT delivery FROM execution_deliveries d WHERE d.execution_id=e.id) AS delivery,
+    (SELECT stop_result FROM execution_deliveries d WHERE d.execution_id=e.id) AS stop_result`;
 // Only free rooms carry these tables; credential hashes are never exported.
 const FREE_BACKUP_QUERIES = {
   room_modes: "SELECT room_id,mode FROM room_modes WHERE room_id=?",
@@ -3283,7 +3306,8 @@ async function free_recent_executions(database, room_id) {
     (SELECT MAX(answer_id) FROM member_requests WHERE execution_id=e.id) AS answer_id,
     (SELECT MIN(message_id) FROM member_requests WHERE execution_id=e.id) AS request_message_id,
     (SELECT COUNT(*) FROM execution_notes WHERE execution_id=e.id) AS note_count,
-    (SELECT denials FROM execution_denials WHERE execution_id=e.id) AS denials,${FREE_RETRY_SQL("e")}
+    (SELECT denials FROM execution_denials WHERE execution_id=e.id) AS denials,${FREE_RETRY_SQL("e")},${FREE_DELIVERY_SQL},
+    (SELECT json_object('text',text,'created_at',created_at) FROM late_answers WHERE execution_id=e.id) AS late_answer
     FROM member_executions e JOIN room_members m ON m.id=e.member_id WHERE e.room_id=? ORDER BY e.id DESC LIMIT ?`).bind(room_id, FREE_RECENT_EXECUTIONS).all()).results;
   return Promise.all(rows.map(async row => {
     const requests = (await database.prepare("SELECT id,message_id,status,purpose,answer_id FROM member_requests WHERE execution_id=? ORDER BY id")
@@ -3292,7 +3316,7 @@ async function free_recent_executions(database, room_id) {
     return { ...pick(row, FREE_EXECUTION_FIELDS), member: row.member, cwd: row.cwd, changes: JSON.parse(row.changes || '[]'),
       changes_recorded: Boolean(row.changes), request_ids: JSON.parse(row.request_ids),
       answer_id: row.answer_id, request_message_id: row.request_message_id, requests: sourced, notes: row.note_count,
-      denials: JSON.parse(row.denials || "[]"), retry: JSON.parse(row.retry || "null") };
+      denials: JSON.parse(row.denials || "[]"), delivery: row.delivery || "", stop_result: row.stop_result || "", late_answer: JSON.parse(row.late_answer || "null"), retry: JSON.parse(row.retry || "null") };
   }));
 }
 
@@ -3380,9 +3404,10 @@ async function free_view(database, room_id, token = "") {
   const read_limit = await initial_session_read_limit(database, room_id, token);
   const rows = (await database.prepare("SELECT * FROM room_members WHERE room_id=? AND status<>'removed' ORDER BY id").bind(room_id).all()).results;
   const members = await Promise.all(rows.map(async row => {
-    const latest = await database.prepare(`SELECT e.*,(SELECT MIN(message_id) FROM member_requests WHERE execution_id=e.id) AS request_message_id
-      FROM member_executions e WHERE member_id=? ORDER BY id DESC LIMIT 1`).bind(row.id).first();
+    const latest = await database.prepare(`SELECT e.*,(SELECT MIN(message_id) FROM member_requests WHERE execution_id=e.id) AS request_message_id,
+      ${FREE_DELIVERY_SQL} FROM member_executions e WHERE member_id=? ORDER BY id DESC LIMIT 1`).bind(row.id).first();
     let execution = pick(latest, FREE_EXECUTION_FIELDS);
+    if (latest) Object.assign(execution, { delivery: latest.delivery || "", stop_result: latest.stop_result || "" });
     if (latest && ["dispatched", "started"].includes(latest.status)) {
       execution.stale = latest.lease_until <= now;
       execution.notes = (await database.prepare("SELECT COUNT(*) AS count FROM execution_notes WHERE execution_id=?").bind(latest.id).first()).count;
@@ -3396,7 +3421,8 @@ async function free_view(database, room_id, token = "") {
     const pending = (await database.prepare("SELECT COUNT(*) AS count FROM member_requests WHERE member_id=? AND status='pending'").bind(row.id).first()).count;
     const reported = await database.prepare("SELECT session_id,client FROM member_sessions WHERE member_id=?").bind(row.id).first();
     return { ...pick(row, FREE_MEMBER_FIELDS), registered_at: await registered_at(database, row),
-      reported_session: reported?.session_id ?? "", reported_client: reported?.client ?? "", execution, pending };
+      reported_session: reported?.session_id ?? "", reported_client: reported?.client ?? "", execution, pending,
+      held_until: await free_held_until(database, row.id) };
   }));
   const names = Object.fromEntries((await database.prepare("SELECT id,name FROM room_members WHERE room_id=?").bind(room_id).all()).results.map(row => [row.id, row.name]));
   const requests = (await database.prepare(`SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by,created_at,
@@ -3982,6 +4008,9 @@ async function free_answer_guard(database, room_id, member, payload) {
   const row = await database.prepare("SELECT * FROM member_executions WHERE room_id=? AND id=?").bind(room_id, execution_id).first();
   if (!row || row.member_id !== member.id) throw new HttpError(403, "执行编号不属于本成员");
   if (!["dispatched", "started"].includes(row.status) || row.lease_until <= Math.floor(Date.now() / 1000)) {
+    // Kept apart from the transcript: the page shows it folded, and it marks the end of a turn the runner could not stop.
+    if (row.status === "cancelled") await database.prepare("INSERT OR IGNORE INTO late_answers (execution_id,room_id,text,created_at) VALUES (?,?,?,unixepoch())")
+      .bind(execution_id, room_id, String(payload.text ?? "")).run();
     throw new HttpError(409, "本次执行已结束、被打断或已过期；回答不能改作普通发言，请保留草稿");
   }
   free_check_dispatch(member, payload, (await database.prepare("SELECT purpose FROM member_requests WHERE execution_id=? AND status='delivering'")
@@ -4013,11 +4042,15 @@ async function free_expire_statements(database, room_id) {
     ...free_settle_statements(database, room_id)];
 }
 
-/** Void a member's live execution and every open request, so nothing restarts by itself. */
-function free_stop_statements(database, member_id, reason, cancel_reason) {
+/**
+ * Void a member's live execution and, unless `keep_pending`, every open request. The owner's stop keeps the requests that
+ * arrived while the member worked, so it goes on to them next; a member that leaves drops them all.
+ */
+function free_stop_statements(database, member_id, reason, cancel_reason, keep_pending = false) {
   return [...free_finish_statements(database, "member_id=?", [member_id], "cancelled", reason, "cancelled", cancel_reason),
-    database.prepare("INSERT OR REPLACE INTO request_cancel_reasons (request_id,reason) SELECT id,? FROM member_requests WHERE member_id=? AND status='pending'").bind(cancel_reason, member_id),
-    database.prepare("UPDATE member_requests SET status='cancelled' WHERE member_id=? AND status='pending'").bind(member_id),
+    ...(keep_pending ? [] : [
+      database.prepare("INSERT OR REPLACE INTO request_cancel_reasons (request_id,reason) SELECT id,? FROM member_requests WHERE member_id=? AND status='pending'").bind(cancel_reason, member_id),
+      database.prepare("UPDATE member_requests SET status='cancelled' WHERE member_id=? AND status='pending'").bind(member_id)]),
     database.prepare(`UPDATE session_requests SET status='cancelled' WHERE status='open' AND member_request_id IN
       (SELECT id FROM member_requests WHERE member_id=? AND status='cancelled' AND purpose='discuss')`).bind(member_id),
     database.prepare(`UPDATE session_state SET revision=revision+1 WHERE session_id IN
@@ -4236,6 +4269,7 @@ async function free_inbox(database, room_id, token) {
   // Manual and online members are never delivered to; the runner only reads them so smart scheduling can route to them too.
   const listed = await Promise.all(rows.map(async row => ({ ...pick(row, FREE_MEMBER_FIELDS),
     review_capability: await review_capability(database, room_id, row.id, token),
+    held_until: await free_held_until(database, row.id),
     pending: (await database.prepare(`SELECT r.id,r.message_id,r.purpose,q.id AS session_request_id,q.session_id,q.round,q.position,q.read_until,
       q.question AS source_question,t.cause_kind,t.cause_message_id AS source_message_id,t.cause_request_id,
       (SELECT action FROM group_routes WHERE message_id=r.message_id) AS group_action
@@ -4414,6 +4448,7 @@ async function free_reserve(database, room_id, token, payload) {
   const member = await database.prepare("SELECT * FROM room_members WHERE room_id=? AND id=? AND status='active' AND access='runner'").bind(room_id, payload.member_id ?? 0).first();
   if (!member) throw new HttpError(404, "成员不存在、已离开或为手动接入");
   if (await database.prepare(`SELECT 1 FROM member_executions WHERE member_id=? AND ${FREE_LIVE}`).bind(member.id).first()) throw new HttpError(409, "该成员已有进行中的执行；同一会话不并发续接");
+  if (await free_held_until(database, member.id)) throw new HttpError(409, "该成员上一轮已作废但本机无法停止，可能仍在处理；等它结束或等待时限到后再投递");
   // A group request waits for the runner to choose how everyone answers; it is never delivered itself.
   if (!await database.prepare("SELECT 1 FROM member_requests WHERE member_id=? AND status='pending' AND purpose<>'group'").bind(member.id).first()) throw new HttpError(409, "该成员没有待投递的请求");
   const cwd = String(payload.cwd || "").slice(0, FREE_MAX_PATH);
@@ -4629,8 +4664,20 @@ async function free_execution_action(database, room_id, execution_id, token, pay
     await database.batch([...segment_statements(database, "free", room_id, execution_id, row.created_at, finished, payload, notes.length > 0),
       ...notes.map(note => database.prepare("INSERT OR IGNORE INTO execution_notes (execution_id,seq,room_id,text,created_at) VALUES (?,?,?,?,?)")
         .bind(execution_id, note.seq, room_id, note.text, dated))]);
+  } else if (action === "stopped") {
+    // After a voided execution: whether the runner ended its software, or could not because it works in a window or App.
+    if (row.status !== "cancelled") throw new HttpError(409, "只有已作废的执行才报告停止结果");
+    if (!FREE_STOP_RESULTS.includes(payload.result)) throw new HttpError(400, `result 须为 ${FREE_STOP_RESULTS.join("、")}`);
+    const result = await database.prepare(`INSERT INTO execution_deliveries (execution_id,room_id,stop_result) VALUES (?,?,?)
+      ON CONFLICT(execution_id) DO UPDATE SET stop_result=excluded.stop_result WHERE stop_result=''`).bind(execution_id, room_id, payload.result).run();
+    if (!result.meta.changes) throw new HttpError(409, "本次执行的停止结果已记录");
   } else if (!live) throw new HttpError(409, "执行已结束");
-  else if (action === "renew") {
+  else if (action === "delivery") {
+    // How the software was reached; a retried delivery may reach it another way, so the latest report counts.
+    if (!FREE_DELIVERIES.includes(payload.delivery)) throw new HttpError(400, `delivery 须为 ${FREE_DELIVERIES.join("、")}`);
+    await database.prepare(`INSERT INTO execution_deliveries (execution_id,room_id,delivery) VALUES (?,?,?)
+      ON CONFLICT(execution_id) DO UPDATE SET delivery=excluded.delivery`).bind(execution_id, room_id, payload.delivery).run();
+  } else if (action === "renew") {
     // No time limit on one execution: it runs while the runner keeps renewing.
     const now = Math.floor(Date.now() / 1000);
     if (row.lease_until <= now) throw new HttpError(409, "执行租约已到期，不能续租");
@@ -4719,9 +4766,17 @@ async function handle_free_api(database, request, parts) {
     await queue_invited_expert(database, room_id, member.name);
     return respond(await free_view(database, room_id));
   }
+  // The owner stops the whole room; a running discussion stops by pausing it instead. Mirrors stop_room in backend/free_room.py.
+  if (parts.length === 4 && parts[3] === "stop" && method === "POST") {
+    await require_free_owner(database, room_id, token);
+    if (await latest_session(database, room_id)) throw new HttpError(409, "讨论进行中，请用暂停或结束讨论");
+    await database.batch([database.prepare("DELETE FROM free_queue WHERE room_id=?").bind(room_id),
+      ...free_stop_room_statements(database, room_id, "用户停止全部", "user_stop")]);
+    return respond(await free_view(database, room_id));
+  }
   if (parts.length === 6 && parts[3] === "members" && parts[5] === "interrupt" && method === "POST") {
     const member = await free_owned_member(database, room_id, integer(parts[4]), token);
-    await database.batch([...free_stop_statements(database, member.id, "用户打断", "user_stop"), ...free_settle_statements(database, room_id)]);
+    await database.batch([...free_stop_statements(database, member.id, "用户打断", "user_stop", true), ...free_settle_statements(database, room_id)]);
     await reconcile_cancelled_session_requests(database, room_id, member.id);
     return respond(await free_view(database, room_id));
   }
@@ -5761,7 +5816,7 @@ async function handle_api(database, request, parts, params, bucket, setup_key = 
   const free = await room_mode(database, room_id) === "free";
   const session_model = await has_session_request_model(database, room_id);
   // A discussion keeps the local service's inbox and per-member executions for the user's direct questions.
-  if (["inbox", "executions"].includes(parts[3]) || (free && ["members", "suggestions", "recommendations"].includes(parts[3]))) return handle_free_api(database, request, parts);
+  if (["inbox", "executions"].includes(parts[3]) || (free && ["members", "suggestions", "recommendations", "stop"].includes(parts[3]))) return handle_free_api(database, request, parts);
   if (parts[3] === "members" && method === "POST" && [4, 5].includes(parts.length)) return handle_discussion_members(database, request, parts);
   if (parts[3] === "attachments") return handle_attachments(database, request, parts, params, bucket, free);
   if (["runtime", "events", "scheduler-decisions", "scheduler-routing"].includes(parts[3])) {

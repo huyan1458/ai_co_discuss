@@ -10,7 +10,7 @@ import { busy, member_actions } from "./member-actions.js";
 
 const { view, bridge, act, pending } = inject("discussion");
 const LIVE = ["dispatched", "started"];
-const EXECUTION_STATUS_TEXT = { dispatched: "唤醒中", started: "执行中", completed: "完成", cancelled: "已停止", failed: "失败" };
+const EXECUTION_STATUS_TEXT = { dispatched: "唤醒中", started: "执行中", completed: "完成", failed: "失败" };
 const ACCESS_LABELS = { runner: "本机唤醒", manual: "手动接入", online: "网页代发" };
 const TASK_PREVIEW_LENGTH = 90;
 const room = computed(() => view.value.room);
@@ -45,6 +45,7 @@ function member_tone(member) {
   if (member.status === "away") return "neutral";
   if (unregistered(member)) return "warning";
   if (member.execution?.stale) return "error";
+  if (member.held_until) return "warning";
   if (busy(member)) return member.pending && !LIVE.includes(member.execution?.status) ? "warning" : "primary";
   return member.execution?.status === "failed" ? "error" : "success";
 }
@@ -55,6 +56,8 @@ function member_status(member, state) {
   if (unregistered(member)) return "待注册";
   const execution = member.execution;
   if (execution && LIVE.includes(execution.status)) return execution.stale ? "执行失联，停止未确认" : "正在处理";
+  // Voided in a window or App the runner cannot stop: that turn may still run, so new messages wait for it.
+  if (member.held_until) return `上一轮已作废，可能仍在生成；${member.pending ? `${member.pending} 条新消息` : "新消息"}最晚 ${bridge.format_time(member.held_until * 1000)} 送达`;
   if (member.pending) return `待投递 ${member.pending} 条`;
   if (state === "queued") return discussion.value ? "本轮排队" : "等待依次发言";
   if (execution?.status === "failed") return "执行失败";
@@ -99,7 +102,7 @@ const status = computed(() => {
   // How far the latest chain got against its limit; shown while it runs, so the stop never comes as a surprise.
   const progress = rounds ? `第 ${Math.min(rounds.used, rounds.allowed)}/${rounds.allowed} 轮` : "";
   if (working.length) return { tone: "primary", title: "处理中", detail: [progress,
-    ...working.map((member) => `${bridge.display_name(member.name)} ${LIVE.includes(member.execution?.status) ? "正在处理" : `待投递 ${member.pending} 条`}`)].filter(Boolean).join(" · ") };
+    ...working.map((member) => `${bridge.display_name(member.name)} ${LIVE.includes(member.execution?.status) ? "正在处理" : member.held_until ? "等上一轮结束" : `待投递 ${member.pending} 条`}`)].filter(Boolean).join(" · ") };
   const halted = (free.value.halted_chains || []).find((chain) => chain.chain_id === latest_chain);
   if (halted?.reason === "budget") return { tone: "warning", title: "任务链已停", continue_chain: latest_chain,
     detail: `已推进 ${rounds?.used ?? free.value.max_rounds} 轮，达到上限；主持人的下一次派活已暂存，继续即发出。发新消息则重新开始` };
@@ -186,6 +189,10 @@ watch(() => room.value.id, () => { starting.value = false; });
     <section v-else class="pb-status" :class="`is-${status.tone}`" aria-label="房间状态">
       <div class="pb-status-line"><span class="pb-dot"></span><strong role="status">{{ status.title }}</strong></div>
       <p v-if="status.detail" class="pb-status-detail">{{ status.detail }}</p>
+      <div v-if="status.title === '处理中' && view.access?.can_manage" class="pb-chain-actions">
+        <UButton label="全部停止" icon="i-lucide-square" size="xs" color="neutral" variant="outline" title="停止所有成员正在做的工作，并取消还没投递的请求；发新消息即重新开始"
+          :loading="pending === 'stop_room'" :disabled="!!pending" @click="act('stop_room')" />
+      </div>
       <div v-if="status.continue_chain && view.access?.can_manage" class="pb-chain-actions">
         <UButton v-for="rounds in continue_choices" :key="rounds" :label="`继续 ${rounds} 轮`" icon="i-lucide-play" size="xs" color="neutral" variant="outline"
           :loading="continuing === rounds" :disabled="Boolean(continuing)" @click="continue_chain(status.continue_chain, rounds)" />
@@ -211,7 +218,7 @@ watch(() => room.value.id, () => { starting.value = false; });
             <div class="pb-member-body">
               <div class="pb-member-name" :title="room.descriptions?.[member.name] || undefined">{{ bridge.display_name(member.name) }}<UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /><small :title="member_model(member) || undefined">{{ member_tag(member) }}</small></div>
               <div v-if="member_setup(member)" class="pb-member-model" :title="bridge.participant_session_hint(member.name, room, view.launch.room_models)">{{ member_setup(member) }}</div>
-              <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span><span class="pb-member-status-text" :title="member.execution?.status === 'failed' ? member.execution.result : undefined">{{ member_status(member, item.state) }}</span></div>
+              <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span><span class="pb-member-status-text" :title="member.execution?.status === 'failed' ? member.execution.result : member.held_until ? member_status(member, item.state) : undefined">{{ member_status(member, item.state) }}</span></div>
             </div>
             <UDropdownMenu :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="`${member.name} 的更多操作`" /></UDropdownMenu>
           </template>
@@ -233,7 +240,7 @@ watch(() => room.value.id, () => { starting.value = false; });
         <summary>查看每次执行</summary>
         <ol>
           <li v-for="item in timings.items" :key="item.id">
-            <span class="pb-timing-who">#{{ item.id }} {{ name_of(item.member_id) }}<small>{{ EXECUTION_STATUS_TEXT[item.status] || item.status }}</small></span>
+            <span class="pb-timing-who">#{{ item.id }} {{ name_of(item.member_id) }}<small>{{ item.status === 'cancelled' ? bridge.stop_label(item) : EXECUTION_STATUS_TEXT[item.status] || item.status }}</small></span>
             <span class="pb-timing-stages"><span>用时 {{ duration(item.seconds) }}</span></span>
           </li>
         </ol>

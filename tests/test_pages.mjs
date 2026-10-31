@@ -133,6 +133,22 @@ test('Worker revisions move with the writes of each room and with directory chan
   assert.deepEqual(moved.rooms, after.rooms);
 });
 
+test('Worker message pages honor a bounded limit, like Python', async t => {
+  const f = await worker_fixture(t);
+  const room = (await f.request('', { title: '分页' })).body;
+  for (let index = 0; index < 25; index++) {
+    const posted = await f.request(`/${room.id}/messages`, { author: '用户', text: `第 ${index} 条`, submission_id: `paging-${index}` });
+    assert.equal(posted.status, 201, JSON.stringify(posted.body));
+  }
+  const plain = (await f.request(`/${room.id}/messages?after=0`)).body;
+  assert.deepEqual([plain.messages.length, plain.has_more], [20, true]);
+  const wide = (await f.request(`/${room.id}/messages?after=0&limit=200`)).body;
+  assert.deepEqual([wide.messages.length, wide.has_more, wide.pages], [25, false, 1]);
+  const capped = (await f.request(`/${room.id}/messages?page=1&limit=5000`)).body;
+  assert.equal(capped.messages.length, 25, 'a limit above the cap is clamped, not rejected');
+  assert.equal((await f.request(`/${room.id}/messages?limit=abc`)).status, 400);
+});
+
 test('Worker manual member credentials are scoped and revocation is checked in the write transaction', async t => {
   const f = await worker_fixture(t);
   const member = 'manual-credential'.repeat(3), r = await free_worker_room(f, [{ name: 'Qwen', access: 'manual', token: member }]);
@@ -2569,6 +2585,49 @@ test('Worker free rooms bundle requests into one execution and reject late or un
   assert.equal((await f.request(`${r.path}/inbox`, undefined, r.claude)).status, 403);
 });
 
+test('Worker records how each execution was delivered and how a voided one stopped', async t => {
+  const f = await worker_fixture(t);
+  const r = await free_worker_room(f, [{ name: 'Codex', adapter: 'codex_cli', token: 'delivery-codex'.repeat(3) }]);
+  await r.say('先做这个', { to: ['Codex'] });
+  const working = (await r.reserve('Codex')).body;
+  const url = `${r.path}/executions/${working.id}`;
+  assert.equal((await f.request(url, { action: 'delivery', delivery: 'desktop' }, r.owner)).status, 400);
+  assert.equal((await f.request(url, { action: 'stopped', result: 'stopped' }, r.owner)).status, 409, 'a live execution has no stop result');
+  assert.equal((await f.request(url, { action: 'delivery', delivery: 'window' }, r.owner)).status, 200);
+  const member = (await f.request(r.path)).body.free.members.find(item => item.name === 'Codex');
+  assert.deepEqual([member.execution.delivery, member.execution.stop_result], ['window', '']);
+  assert.equal((await f.request(`${r.path}/members/${await r.member_id('Codex')}/interrupt`, {}, r.owner)).status, 200);
+  assert.equal((await f.request(url, { action: 'delivery', delivery: 'process' }, r.owner)).status, 409);
+  assert.equal((await f.request(url, { action: 'stopped', result: 'unstoppable' }, r.owner)).status, 200);
+  assert.equal((await f.request(url, { action: 'stopped', result: 'stopped' }, r.owner)).status, 409, 'recorded once');
+  const report = (await f.request(r.path)).body.free.executions.find(item => item.id === working.id);
+  assert.deepEqual([report.status, report.delivery, report.stop_result], ['cancelled', 'window', 'unstoppable']);
+  // The window may still be on the voided turn: the member's next message waits instead of arriving mid-turn.
+  await r.say('补充一句', { to: ['Codex'] });
+  assert.equal((await r.reserve('Codex')).status, 409);
+  assert.ok((await f.request(`${r.path}/inbox`, undefined, r.owner)).body.members.find(item => item.name === 'Codex').held_until > 0);
+  // Its late answer is refused as an answer, kept apart for the page, and ends the wait.
+  const late = { author: 'Codex', text: '迟到的回答', source: 'cli', kind: 'chat', execution_id: working.id, submission_id: crypto.randomUUID().replaceAll('-', '') };
+  assert.equal((await f.request(`${r.path}/messages`, late, 'delivery-codex'.repeat(3))).status, 409);
+  const after = (await f.request(r.path)).body.free.executions.find(item => item.id === working.id);
+  assert.equal(after.late_answer.text, '迟到的回答');
+  assert.ok(!(await f.request(`${r.path}/messages`)).body.messages.some(item => item.text === '迟到的回答'));
+  assert.equal((await r.reserve('Codex')).status, 200);
+});
+
+test('Worker owner stop ends every live and queued request of a free room', async t => {
+  const f = await worker_fixture(t);
+  const r = await free_worker_room(f, [{ name: 'Codex', adapter: 'codex_cli', token: 'stop-all-codex'.repeat(3) }]);
+  await r.say('先做这个', { to: ['Codex'] });
+  const working = (await r.reserve('Codex')).body;
+  await r.say('再补充一句', { to: ['Codex'] });
+  assert.equal((await f.request(`${r.path}/stop`, {})).status, 403);
+  assert.equal((await f.request(`${r.path}/stop`, {}, r.owner)).status, 200);
+  const view = (await f.request(r.path)).body.free;
+  assert.deepEqual([...new Set(view.requests.map(item => `${item.status}:${item.cancel_reason}`))], ['cancelled:user_stop']);
+  assert.equal(view.executions.find(item => item.id === working.id).status, 'cancelled');
+});
+
 test('Worker free rooms hand unnamed messages to the new host, record cancel reasons and void work on archive', async t => {
   const f = await worker_fixture(t);
   const codex = 'codex-free'.repeat(4);
@@ -2579,7 +2638,7 @@ test('Worker free rooms hand unnamed messages to the new host, record cancel rea
   assert.equal((await f.request(`${r.path}/members/${await r.member_id('Claude')}`, { action: 'remove' }, r.owner)).status, 200);
   assert.equal((await f.request(r.path)).body.host, 'Codex');
   assert.deepEqual(await for_message(first.id), [['Claude', 'cancelled', 'route', 'member_removed'], ['Codex', 'pending', 'route', null]]);
-  // A host change moves unstarted routes, a user stop records its reason, and archiving voids what is still owed.
+  // A host change moves unstarted routes, a user stop records its reason and keeps what arrived meanwhile, and archiving voids what is still owed.
   const g = await worker_fixture(t);
   const room = await free_worker_room(g, [{ name: 'Codex', adapter: 'codex_cli', token: codex }]);
   const route = async id => (await g.request(room.path)).body.free.requests.filter(item => item.message_id === id)
@@ -2587,8 +2646,12 @@ test('Worker free rooms hand unnamed messages to the new host, record cancel rea
   const second = (await room.say('另一个没点名的问题')).body.message;
   assert.equal((await g.request(`${room.path}/members/${await room.member_id('Codex')}`, { action: 'role', role: 'host' }, room.owner)).status, 200);
   assert.deepEqual(await route(second.id), [['Claude', 'cancelled', 'rerouted'], ['Codex', 'pending', null]]);
+  const working = (await room.reserve('Codex')).body;
+  const follow_up = (await room.say('补充一句', { to: ['Codex'] })).body.message;
   assert.equal((await g.request(`${room.path}/members/${await room.member_id('Codex')}/interrupt`, {}, room.owner)).status, 200);
   assert.deepEqual(await route(second.id), [['Claude', 'cancelled', 'rerouted'], ['Codex', 'cancelled', 'user_stop']]);
+  assert.deepEqual(await route(follow_up.id), [['Codex', 'pending', null]], 'a message sent while the member worked waits for its next turn');
+  assert.equal((await g.request(room.path)).body.free.executions.find(item => item.id === working.id).status, 'cancelled');
   await room.say('给 Claude', { to: ['Claude'] });
   const execution = (await room.reserve('Claude')).body;
   await room.say('再来一条', { to: ['Claude'] });

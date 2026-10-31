@@ -31,7 +31,7 @@ from .free_room import (add_member, after_free_message, authorize_free_write, ch
                         discussion_members, room_mode, save_room_access, sync_discussion_members, view_execution)
 from .free_room import add_discussion_member, convert_suggestion, discussion_member_action, message_suggestions, save_suggestions, sync_participants
 from .free_room import active_members, adopt_recommendation, ask_members, asks_view, checked_asks, recommend_member, register_member, route_held_messages, require_member
-from .free_room import describe_members, execution_notes, label_members, member_descriptions, member_labels, reorder_speakers, set_chain_rounds, speaking_order, stop_room_work
+from .free_room import describe_members, execution_notes, label_members, member_descriptions, member_labels, reorder_speakers, set_chain_rounds, speaking_order, stop_room, stop_room_work
 from .free_room import continue_chain, execution_timeline, group_route_plan, retract_message, rewind_plan, rewind_room, withdrawals
 from .free_room import review_capability, review_roster, checked_review_plan, save_review_plan, check_review_retry
 from .free_room import review_ready, advance_review
@@ -71,6 +71,8 @@ MAX_STATE_LENGTH = 4000
 MAX_BRIEF_LENGTH = 1600
 MAX_SUMMARY_LENGTH = 1000
 PAGE_SIZE = 20
+# A reader may ask for larger pages (`limit`) so a long transcript loads in one request instead of many.
+MAX_PAGE_SIZE = 200
 UNCATEGORIZED_FOLDER_ID = "__uncategorized__"
 ASSETS = {"/": ("index.html", "text/html"),
           "/app.js": ("app.js", "text/javascript"),
@@ -985,7 +987,7 @@ def delete_room_records(connection, room_id):
     """Remove a room's dependent records in the caller's transaction."""
     connection.execute("DELETE FROM task_message_sources WHERE session_id IN (SELECT id FROM discussion_sessions WHERE room_id=?)", (room_id,))
     connection.execute("DELETE FROM discussion_sessions WHERE room_id=?", (room_id,))
-    for table in ("member_recommendations", "free_queue", "speaking_orders", "member_requests", "member_descriptions", "member_labels", "execution_notes", "execution_segments", "member_executions", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "free_handoffs", "free_settings", "free_round_limits", "free_chain_holds", "room_links",
+    for table in ("member_recommendations", "free_queue", "speaking_orders", "member_requests", "member_descriptions", "member_labels", "execution_notes", "execution_segments", "execution_deliveries", "late_answers", "member_executions", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "free_handoffs", "free_settings", "free_round_limits", "free_chain_holds", "room_links",
                   "discussion_options", "round_budgets", "scheduler_decisions", "scheduler_routing", "discussion_conclusions", "discussion_sessions"):
         if table == "scheduler_decisions":
             for child in ("scheduler_feedback", "scheduler_decision_context", "scheduler_decision_inputs"):
@@ -1825,18 +1827,19 @@ def query_messages(connection, room_id, params, token=""):
     """Read one bounded page; incremental cursors advance only through returned rows."""
     require_room(connection, room_id)
     page = max(1, int(params.get("page", 1)))
+    size = min(MAX_PAGE_SIZE, max(1, int(params.get("limit", PAGE_SIZE))))
     cutoff = session_message_access(connection, room_id, params, token)
     where, values = message_filters(room_id, params)
     if cutoff is not None:
         where += " AND messages.id<=?"
         values.append(cutoff)
     total = connection.execute(f"SELECT COUNT(*) FROM ({MESSAGE_QUERY} WHERE {where})", values).fetchone()[0]
-    rows = connection.execute(f"{MESSAGE_QUERY} WHERE {where} ORDER BY messages.id LIMIT ? OFFSET ?", [*values, PAGE_SIZE + 1, (page - 1) * PAGE_SIZE]).fetchall()
-    messages = [message_with_attachments(connection, row) for row in rows[:PAGE_SIZE]]
+    rows = connection.execute(f"{MESSAGE_QUERY} WHERE {where} ORDER BY messages.id LIMIT ? OFFSET ?", [*values, size + 1, (page - 1) * size]).fetchall()
+    messages = [message_with_attachments(connection, row) for row in rows[:size]]
     result = {"messages": messages, "page": page, "total": total,
-              "pages": max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)}
+              "pages": max(1, (total + size - 1) // size)}
     if "after" in params:
-        result.update(next_after=messages[-1]["id"] if messages else int(params["after"]), has_more=len(rows) > PAGE_SIZE)
+        result.update(next_after=messages[-1]["id"] if messages else int(params["after"]), has_more=len(rows) > size)
     return result
 
 
@@ -2561,7 +2564,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             connection.commit()
             return self.respond(result)
         # A discussion keeps the local service's inbox and per-member executions for the user's direct questions.
-        if parts[3:4] in (["inbox"], ["executions"]) or (free and parts[3:4] in (["members"], ["suggestions"], ["recommendations"])):
+        if parts[3:4] in (["inbox"], ["executions"]) or (free and parts[3:4] in (["members"], ["suggestions"], ["recommendations"], ["stop"])):
             return self.handle_free_api(connection, parts, method)
         if parts[3:4] == ["members"] and method == "POST" and len(parts) in (4, 5):
             if len(parts) == 4:
@@ -2795,6 +2798,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = member_action(connection, room_id, int(parts[4]), token, self.read_payload())
         elif len(parts) == 6 and parts[3] == "members" and parts[5] == "interrupt" and method == "POST":
             result = interrupt_member(connection, room_id, int(parts[4]), token)
+        elif parts[3:] == ["stop"] and method == "POST":
+            result = stop_room(connection, room_id, token)
         else:
             raise LookupError("地址不存在")
         connection.commit()

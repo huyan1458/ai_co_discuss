@@ -479,7 +479,7 @@ function attachment_fixture() {
   };
   element("message-kind").value = "opinion";
   element("author-select").value = "用户";
-  const state = { room: { id: "one", host: "Codex" }, attachment_drafts: [] };
+  const state = { room: { id: "one", host: "Codex" }, attachment_drafts: [], messages: [], message_total: 0 };
   let identifier = 0, fail = true;
   const context = vm.createContext({ state, element, MAX_MESSAGE_LENGTH: 30000, MAX_SUMMARY_LENGTH: 1000,
     MAX_MESSAGE_ATTACHMENTS: 10, MAX_ATTACHMENT_BYTES: 20 * 1024 * 1024, URLSearchParams,
@@ -489,7 +489,8 @@ function attachment_fixture() {
     localStorage: { getItem: () => null }, admin_headers: () => ({}), publish_view() {}, show_toast() {}, cancel_reply() {}, cancel_turn_reply() {},
     notify: (level, message) => notified.push([level, message]),
     notify_failure: (error, message) => { notified.push(["error", message]); error.notified = true; },
-    refresh_room: async () => {},
+    refresh_room: async () => {}, run_action: action => action(),
+    render_messages: result => { state.messages = result.messages; },
     fetch: async (url, options) => { uploads.push([url, options]); return { ok: true, json: async () => ({ attachment: { id: "a".repeat(32) } }) }; },
     request_json: async (url, payload) => {
       posts.push([url, payload]);
@@ -625,15 +626,93 @@ test("attachment retries retain files and reuse both upload and message receipts
   context.add_attachments([{ name: "截图.png", size: 10, type: "image/png" }]);
   await assert.rejects(context.send_message({ preventDefault() {} }), /连接中断/);
   assert.equal(state.attachment_drafts.length, 1);
-  assert.match(fixture.notified.at(-1)[1], /草稿已保留/);
+  assert.equal(state.sending_preview.failed, "连接中断", "a failed send stays in the transcript as a failed card");
+  assert.equal(fixture.notified.length, 0, "the failed card is the only signal of the failure");
   const first_id = posts[0][1].submission_id;
   fixture.succeed();
   await context.send_message({ preventDefault() {} });
   assert.equal(uploads.length, 1);
   assert.equal(posts[1][1].submission_id, first_id);
   assert.equal(posts[1][1].text, "", "files-only messages are submitted");
+  assert.deepEqual(Array.from(state.messages, message => message.id), [1], "the saved message shows before the room is read again");
+  assert.equal(state.sending_preview, null, "the retry replaces the failed card with the saved message");
   assert.equal(state.attachment_drafts.length, 0);
   assert.deepEqual(fixture.revoked, ["blob:test"]);
+});
+
+/** The delivery capability table and the helpers reading it, as the page defines them. */
+function delivery_source() {
+  const table = source.indexOf("const DELIVERY_CAPABILITIES");
+  const fallback = source.indexOf(";", source.indexOf("const ADAPTER_DELIVERIES")) + 1;
+  return source.slice(table, fallback) + source.slice(source.indexOf("function delivery_capabilities("), source.indexOf("/** Stop the whole free room"));
+}
+
+test("stops are described by how each execution was delivered, with older runners judged by their adapter", () => {
+  const context = vm.createContext({ display_name: name => name });
+  vm.runInContext(delivery_source(), context);
+  assert.equal(context.delivery_capabilities("process", "claude").stoppable, true);
+  assert.equal(context.delivery_capabilities("window", "claude").stoppable, false, "the same adapter may reach a window it cannot stop");
+  assert.equal(context.delivery_capabilities("window", "claude").progress, false);
+  assert.equal(context.delivery_capabilities("", "codex").stoppable, false, "an App adapter is known without a report");
+  assert.equal(context.delivery_capabilities("", "codex_cli").stoppable, true);
+  const members = [{ name: "Codex", adapter: "codex" }];
+  assert.equal(context.stop_summary([{ member: "Codex", delivery: "" }], members), "Codex 在自己的窗口或 App 里本机无法停止，可能仍在生成，之后的回答会被拒收");
+});
+
+test("retracting the latest message members started on stops that work and rewinds, but nothing wider", async () => {
+  const posts = [], notified = [];
+  const input = { value: "" };
+  const refusal = Object.assign(new Error("已有成员开始处理这条消息，不能撤回；可以编辑这条消息回退到它之前"), { status: 409 });
+  let plan, room;
+  const state = { room: { id: "one" }, messages: [{ id: 5, text: "原问题" }] };
+  const context = vm.createContext({ state, element: () => input, notify: (level, text) => notified.push([level, text]),
+    display_name: name => name, refresh_room: async () => {}, rewind_plan: async () => plan,
+    request_json: async (url, payload) => {
+      if (url.endsWith("/retract")) throw refusal;
+      if (payload === undefined) return room;
+      posts.push([url, payload]);
+      return {};
+    } });
+  vm.runInContext(delivery_source(), context);
+  vm.runInContext(source.slice(source.indexOf("async function retract_message("), source.indexOf("/** What editing a message would take back")), context);
+  plan = { messages: 1, revision: "r1", members: [{ name: "Codex", session: "cut", executions: [9] }, { name: "Claude", session: "kept", executions: [10] }] };
+  room = { free: { members: [{ name: "Codex", adapter: "codex_cli" }, { name: "Claude", adapter: "claude" }],
+    requests: [{ message_id: 5, execution_id: 9 }, { message_id: 5, execution_id: 10 }],
+    executions: [{ id: 9, member: "Codex", status: "started", delivery: "process" }, { id: 10, member: "Claude", status: "started", delivery: "window" }] } };
+  await context.retract_message(5);
+  assert.equal(JSON.stringify(posts), JSON.stringify([["/api/rooms/one/rewind", { message_id: 5, revision: "r1" }]]), "the rewind carries the plan's revision");
+  assert.equal(input.value, "原问题");
+  assert.match(notified[0][1], /^已撤回；正在停止 Codex；Claude 在自己的窗口或 App 里本机无法停止.*Claude 的会话未回退.*文件改动不会恢复$/,
+    "a window the runner cannot stop is not called stopped");
+  posts.length = 0;
+  plan = { ...plan, members: [{ name: "Codex", session: "cut", executions: [9, 3] }] };
+  await assert.rejects(context.retract_message(5), /不能撤回/, "work on other messages is left to editing");
+  plan = { ...plan, messages: 2, members: [{ name: "Codex", session: "cut", executions: [9] }] };
+  await assert.rejects(context.retract_message(5), /不能撤回/, "a message with later records is left to editing");
+  assert.deepEqual(posts, []);
+});
+
+test("two Esc presses take back the latest own message once a send in flight is saved, and nothing after a failed send", async () => {
+  const retracted = [];
+  let saved;
+  const state = { sending_message: true, sending_done: new Promise(resolve => { saved = resolve; }), sending_preview: { text: "新" },
+    messages: [{ id: 1, author: "用户" }, { id: 2, author: "Claude" }] };
+  const context = vm.createContext({ state, retract_message: async id => retracted.push(id) });
+  vm.runInContext(source.slice(source.indexOf("async function retract_latest("), source.indexOf("/** What editing a message would take back")), context);
+  const pending = context.retract_latest();
+  await Promise.resolve();
+  assert.deepEqual(retracted, [], "the message is not taken back before it is saved");
+  state.messages.push({ id: 3, author: "用户" });
+  state.sending_message = false;
+  state.sending_preview = null;
+  saved();
+  await pending;
+  assert.deepEqual(retracted, [3]);
+  state.sending_message = true;
+  state.sending_done = Promise.resolve();
+  state.sending_preview = { text: "失败", failed: "连接中断" };
+  await context.retract_latest();
+  assert.deepEqual(retracted, [3], "a failed send leaves earlier messages alone");
 });
 
 test("saved old drafts cannot clear a new composer after navigating away and back", async () => {
@@ -643,11 +722,13 @@ test("saved old drafts cannot clear a new composer after navigating away and bac
   context.request_json = () => new Promise(resolve => { finish = resolve; });
   const pending = context.send_message({ preventDefault() {} });
   while (!finish) await Promise.resolve();
+  assert.deepEqual(Array.from(state.sending_preview.files), ["旧.txt"], "the message shows as sending before the site answers");
   context.clear_attachment_drafts();
   state.attachment_drafts.push({ id: "new", file: { name: "新.txt", size: 1 } });
   element("message-input").value = "新的正文";
   finish({ message: { id: 1 } });
   await pending;
+  assert.equal(state.sending_preview, null);
   assert.equal(element("message-input").value, "新的正文");
   assert.equal(state.attachment_drafts[0].id, "new");
 });
@@ -2570,8 +2651,14 @@ test("stopped host executions replace their work at the same anchor and avoid mi
   f.view.mention_only = true;
   await nextTick();
   assert.deepEqual(ids(), [10, 11], "mention filtering hides stopped and missed cards");
+  f.view.mention_only = false;
+  // Free collaboration: delivered work keeps its card once voided; a delivery never made leaves none.
+  f.room.free.executions.push({ id: 4, member_id: 2, member: "Codex", status: "cancelled", delivery: "process", request_message_id: 11, created_at: 1005, requests: [] },
+    { id: 5, member_id: 2, member: "Codex", status: "cancelled", delivery: "", request_message_id: 11, created_at: 1006, requests: [] });
+  await nextTick();
+  assert.deepEqual(ids(), ["stopped-1", 10, "stopped-2", "cancelled-session-9-request-3", 11, "stopped-4"]);
   assert.match(discussion_source, /v-else-if="message\.cancelled_turn \|\| message\.cancelled_execution"/);
-  assert.match(discussion_source, /已停止 · 执行 #\{\{ message\.execution_id \}\}/);
+  assert.match(discussion_source, /\{\{ stop_state\(message\.cancelled_execution\)\.label \}\} · 执行 #\{\{ message\.execution_id \}\}/);
 });
 
 test("host arrangements share anchor-zero ordering with working and stopped cards", async () => {

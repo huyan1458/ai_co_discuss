@@ -124,9 +124,82 @@ class DiscussionTests(unittest.TestCase):
                 self.assertEqual(len(requests), 3 if action == "all" else 1)
                 self.assertTrue(all(item["purpose"] == ("all" if action == "all" else "ask") for item in requests))
         path, message = self.create_group_room()
-        host = self.request(path + "/inbox")[1]["members"][0]
-        self.assertEqual(self.request(f"{path}/members/{host['id']}/interrupt", {"reason": "停止"})[0], 200)
+        self.assertEqual(self.request(f"{path}/messages/{message}/retract", {})[0], 200)
         self.assertEqual(self.request(f"{path}/recommendations/{message}", {"action": "host"})[0], 409)
+
+    def test_user_stop_keeps_messages_sent_while_the_member_worked(self):
+        """Stopping a member voids its live execution only; a message sent meanwhile waits for its next turn."""
+        names = ["Claude", "Codex"]
+        status, room = self.request("/api/rooms", {"title": "停止保留追问", "mode": "free", "host": "Claude",
+            "members": [{"name": name, "access": "runner", "token": self.member_tokens[name]} for name in names]})
+        self.assertEqual(status, 201, room)
+        path = f"/api/rooms/{room['id']}"
+        def say(text):
+            return self.request(path + "/messages", {"author": "用户", "text": text, "to": ["Codex"],
+                                                     "submission_id": uuid.uuid4().hex})[1]["message"]["id"]
+        first = say("先做这个")
+        codex = next(item for item in self.request(path + "/inbox")[1]["members"] if item["name"] == "Codex")
+        execution = self.request(path + "/executions", {"member_id": codex["id"], "client_id": uuid.uuid4().hex})[1]
+        follow_up = say("再补充一句")
+        self.assertEqual(self.request(f"{path}/members/{codex['id']}/interrupt", {})[0], 200)
+        view = self.request(path)[1]["free"]
+        requests = {item["message_id"]: item for item in view["requests"]}
+        self.assertEqual([requests[first]["status"], requests[first]["cancel_reason"]], ["cancelled", "user_stop"])
+        self.assertEqual(requests[follow_up]["status"], "pending")
+        self.assertEqual(next(item for item in view["executions"] if item["id"] == execution["id"])["status"], "cancelled")
+
+    def test_runner_reports_delivery_and_how_a_voided_execution_stopped(self):
+        """The page learns how each execution reached its software and whether a stop really ended it."""
+        names = ["Claude", "Codex"]
+        status, room = self.request("/api/rooms", {"title": "投递方式", "mode": "free", "host": "Claude",
+            "members": [{"name": name, "access": "runner", "token": self.member_tokens[name]} for name in names]})
+        self.assertEqual(status, 201, room)
+        path = f"/api/rooms/{room['id']}"
+        self.request(path + "/messages", {"author": "用户", "text": "先做这个", "to": ["Codex"], "submission_id": uuid.uuid4().hex})
+        codex = next(item for item in self.request(path + "/inbox")[1]["members"] if item["name"] == "Codex")
+        execution = self.request(path + "/executions", {"member_id": codex["id"], "client_id": uuid.uuid4().hex})[1]
+        url = f"{path}/executions/{execution['id']}"
+        self.assertEqual(self.request(url, {"action": "delivery", "delivery": "desktop"})[0], 400)
+        self.assertEqual(self.request(url, {"action": "stopped", "result": "stopped"})[0], 409, "a live execution has no stop result")
+        self.assertEqual(self.request(url, {"action": "delivery", "delivery": "window"})[0], 200)
+        member = next(item for item in self.request(path)[1]["free"]["members"] if item["name"] == "Codex")
+        self.assertEqual([member["execution"]["delivery"], member["execution"]["stop_result"]], ["window", ""])
+        self.assertEqual(self.request(f"{path}/members/{codex['id']}/interrupt", {})[0], 200)
+        self.assertEqual(self.request(url, {"action": "delivery", "delivery": "process"})[0], 409)
+        self.assertEqual(self.request(url, {"action": "stopped", "result": "unstoppable"})[0], 200)
+        self.assertEqual(self.request(url, {"action": "stopped", "result": "stopped"})[0], 409, "recorded once")
+        report = next(item for item in self.request(path)[1]["free"]["executions"] if item["id"] == execution["id"])
+        self.assertEqual([report["status"], report["delivery"], report["stop_result"]], ["cancelled", "window", "unstoppable"])
+        # The window may still be on the voided turn: the member's next message waits instead of arriving mid-turn.
+        self.request(path + "/messages", {"author": "用户", "text": "补充一句", "to": ["Codex"], "submission_id": uuid.uuid4().hex})
+        self.assertEqual(self.request(path + "/executions", {"member_id": codex["id"], "client_id": uuid.uuid4().hex})[0], 409)
+        self.assertGreater(next(item for item in self.request(path + "/inbox")[1]["members"] if item["name"] == "Codex")["held_until"], 0)
+        # Its late answer is refused as an answer, kept apart for the page, and ends the wait.
+        status, refused = self.request(path + "/messages", {"author": "Codex", "text": "迟到的回答", "kind": "chat",
+            "execution_id": execution["id"], "submission_id": uuid.uuid4().hex}, token=self.member_tokens["Codex"])
+        self.assertEqual(status, 409, refused)
+        report = next(item for item in self.request(path)[1]["free"]["executions"] if item["id"] == execution["id"])
+        self.assertEqual(report["late_answer"]["text"], "迟到的回答")
+        self.assertNotIn("迟到的回答", [item["text"] for item in self.request(path + "/messages")[1]["messages"]])
+        self.assertEqual(self.request(path + "/executions", {"member_id": codex["id"], "client_id": uuid.uuid4().hex})[0], 200)
+
+    def test_owner_stop_all_ends_live_and_queued_work(self):
+        """Stopping the room voids running work and everything still owed; members are not woken again by it."""
+        names = ["Claude", "Codex"]
+        status, room = self.request("/api/rooms", {"title": "全部停止", "mode": "free", "host": "Claude",
+            "members": [{"name": name, "access": "runner", "token": self.member_tokens[name]} for name in names]})
+        self.assertEqual(status, 201, room)
+        path = f"/api/rooms/{room['id']}"
+        for text in ("先做这个", "再补充一句"):
+            self.request(path + "/messages", {"author": "用户", "text": text, "to": ["Codex"], "submission_id": uuid.uuid4().hex})
+            if text == "先做这个":
+                codex = next(item for item in self.request(path + "/inbox")[1]["members"] if item["name"] == "Codex")
+                execution = self.request(path + "/executions", {"member_id": codex["id"], "client_id": uuid.uuid4().hex})[1]
+        self.assertEqual(self.request(path + "/stop", {}, token=self.member_tokens["Codex"])[0], 403)
+        self.assertEqual(self.request(path + "/stop", {})[0], 200)
+        view = self.request(path)[1]["free"]
+        self.assertEqual({(item["status"], item["cancel_reason"]) for item in view["requests"]}, {("cancelled", "user_stop")})
+        self.assertEqual(next(item for item in view["executions"] if item["id"] == execution["id"])["status"], "cancelled")
 
     def test_scheduler_decision_read_is_exact_room_bound_and_not_recent_only(self):
         """A host can retrieve old model evidence without accidentally reading another room's record."""

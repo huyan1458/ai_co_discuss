@@ -581,7 +581,7 @@ async function claude_inbox_delivery(config, inbox, task) {
       task.on_note?.('已投递到原窗口，但它还没开始处理：原窗口可能处于跳过审批模式（需在窗口中批准这条消息）或仍在忙。');
     }
   }, INBOX_CHECK_MS).unref();
-  return { session_id: config.session_id, status: 'accepted' };
+  return { session_id: config.session_id, status: 'accepted', delivery: 'window' };
 }
 
 /** Whether a Claude session's log contains some text, e.g. the task file a delivered prompt names. */

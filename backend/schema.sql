@@ -509,6 +509,24 @@ CREATE TABLE IF NOT EXISTS scheduler_routing (
     created_at INTEGER NOT NULL,
     PRIMARY KEY (room_id, message_id)
 );
+-- How the runner delivered each execution, and whether its software stopped once the execution was voided: the page
+-- describes a stop as it really went (a window or App the runner cannot stop keeps generating). A side table so older
+-- databases need no column change; executions are not backed up, so neither is this.
+CREATE TABLE IF NOT EXISTS execution_deliveries (
+    execution_id INTEGER PRIMARY KEY REFERENCES member_executions(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL,
+    delivery TEXT NOT NULL DEFAULT '' CHECK(delivery IN ('','process','api','window','app','sidecar')),
+    stop_result TEXT NOT NULL DEFAULT '' CHECK(stop_result IN ('','stopped','unstoppable'))
+);
+-- What a member submitted for an execution the user had already voided. Refused as an answer, so it never joins the
+-- transcript or AI reads; kept so the page can show the late work folded, and so a member the runner could not stop
+-- is known to have finished that turn. One per execution; not backed up, like executions.
+CREATE TABLE IF NOT EXISTS late_answers (
+    execution_id INTEGER PRIMARY KEY REFERENCES member_executions(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
 -- Why a request was cancelled; a side table so older databases need no column change. Requests cancelled before it existed have no row.
 CREATE TABLE IF NOT EXISTS request_cancel_reasons (
     request_id INTEGER PRIMARY KEY REFERENCES member_requests(id) ON DELETE CASCADE,

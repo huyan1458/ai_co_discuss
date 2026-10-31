@@ -2,6 +2,16 @@
 
 const REFRESH_INTERVAL_MS = 60000;
 const FALLBACK_REFRESH_INTERVAL_MS = 12000;
+// The site caps one message batch at 200.
+const MESSAGE_HISTORY_BATCH = 200;
+// What the runner can do with each way it reaches a member's software (an execution's `delivery`): stop it, and see its
+// progress. A window or App works on its own; untested abilities count as unsupported (`.dev/docs/Design_适配能力.md`).
+const DELIVERY_CAPABILITIES = {
+  process: { stoppable: true, progress: true }, api: { stoppable: true, progress: true },
+  window: { stoppable: false, progress: false }, app: { stoppable: false, progress: false }, sidecar: { stoppable: false, progress: false },
+};
+// Runners that predate delivery reports: an App adapter is known to be one; anything else ran as a process.
+const ADAPTER_DELIVERIES = { codex: "app", antigravity: "sidecar", api: "api" };
 // A poll reads the room in full only when it changed or an AI is working in it; this full read still comes at least this often.
 const SAFETY_REFRESH_MS = 5 * 60 * 1000;
 const WORKING_STATUSES = ["dispatched", "started"];
@@ -75,6 +85,9 @@ state.reconnecting = false;
 state.attachment_drafts = [];
 state.upload_status = "";
 state.sending_message = false;
+// The message being sent, shown in the transcript as soon as Send is pressed until the site answers;
+// a failed send keeps it in place, marked with its reason, until it is retried or discarded.
+state.sending_preview = null;
 state.attachment_preview = null;
 state.archive_changes = new Map();
 state.archive_version = 0;
@@ -828,7 +841,8 @@ function render_messages(result) {
   state.messages = result.messages.map((message) => {
     const saved = previous.get(message.id);
     const kind = withdrawn.get(message.id) || message.withdrawn || "";
-    if (saved) return (saved.withdrawn || "") === kind ? saved : { ...saved, withdrawn: kind };
+    // A message shown straight from its send response is replaced by the copy the transcript reads.
+    if (saved && !saved.just_sent) return (saved.withdrawn || "") === kind ? saved : { ...saved, withdrawn: kind };
     return { ...message, withdrawn: kind, rendered_text: window.discuss_markdown.render_markdown(message.text),
       rendered_summary: window.discuss_markdown.render_markdown(message.summary || "") };
   });
@@ -852,6 +866,8 @@ async function load_message_history(room_id, version) {
   const params = new URLSearchParams({ q: state.query, withdrawn: "include" });
   if (state.mention_only) params.set("mention", element("author-select").value);
   const key = `${room_id}?${params}`;
+  // Large batches: a long transcript loads in one round-trip, and the site counts the room's messages once, not per batch.
+  params.set("limit", MESSAGE_HISTORY_BATCH);
   const saved = state.message_history?.key === key ? state.message_history.messages : [];
   const messages = [...saved];
   let has_more = true;
@@ -906,6 +922,7 @@ async function select_room(room_id) {
   state.navigation_version++;
   state.refresh_version++;
   state.room = state.rooms.find((room) => room.id === room_id);
+  state.sending_preview = null;
   state.page = 1;
   state.query = "";
   state.mention_only = false;
@@ -927,7 +944,7 @@ async function select_room(room_id) {
   cancel_turn_reply();
   element("turn-form").reset();
   element("message-kind").value = "opinion";
-  select_tab("discussion");
+  select_tab("discussion", { refresh: false });
   history.replaceState(null, "", state.room ? `/?room=${encodeURIComponent(room_id)}` : "/");
   if (state.room) state.archive_view = Boolean(state.room.archived);
   else {
@@ -942,8 +959,8 @@ async function select_room(room_id) {
   await refresh_room();
 }
 
-/** Switch between history, manually maintained state, and participation guidance. */
-function select_tab(tab_name) {
+/** Switch between history, manually maintained state, and participation guidance; `refresh: false` when the caller reads the room itself. */
+function select_tab(tab_name, { refresh = true } = {}) {
   state.navigation_version++;
   state.tab = tab_name;
   document.querySelectorAll("[data-tab]").forEach((tab) => {
@@ -951,7 +968,7 @@ function select_tab(tab_name) {
     tab.setAttribute("aria-selected", String(tab.dataset.tab === tab_name));
   });
   document.querySelectorAll("[data-panel]").forEach((panel) => { panel.hidden = panel.dataset.panel !== tab_name; });
-  if (tab_name === "discussion") run_action(refresh_room);
+  if (tab_name === "discussion" && refresh) run_action(refresh_room);
   publish_view();
 }
 
@@ -1411,8 +1428,14 @@ async function finish_message(result, room_id, drafts) {
   element("search-input").value = "";
   element("mention-filter").setAttribute("aria-pressed", "false");
   state.page = 1;
-  await refresh_room();
+  state.sending_preview = null;
+  // Show the saved message at once; the room, its requests and other new messages follow from a background refresh,
+  // so the composer does not wait for further round-trips on a slow connection.
+  if (!state.messages.some(message => message.id === result.message.id)) {
+    render_messages({ messages: [...state.messages, { ...result.message, just_sent: true }], total: state.message_total + 1, page: 1, pages: 1 });
+  }
   element("messages").scrollTop = element("messages").scrollHeight;
+  run_action(refresh_room);
 }
 
 /** Submit one message; reuse its identifier if a network failure requires a retry. */
@@ -1429,6 +1452,9 @@ async function send_message(event) {
   element("send-message").disabled = true;
   state.sending_message = true;
   element("message-input").disabled = true;
+  state.sending_preview = { author: payload.author, text: payload.text, files: drafts.map(file => file.file.name) };
+  let sent;
+  state.sending_done = new Promise(resolve => { sent = resolve; });
   publish_view();
   try {
     payload.attachment_ids = await upload_message_attachments(room_id, payload.submitted_by, drafts);
@@ -1436,12 +1462,18 @@ async function send_message(event) {
     saved = true;
     await finish_message(result, room_id, drafts);
   } catch (error) {
-    if (state.room?.id === room_id) notify_failure(error, saved
-      ? `留言已保存，但页面刷新失败：${error.message}`
-      : `${error.message}；草稿已保留，可重试发送`);
+    if (state.room?.id !== room_id) throw error;
+    // An unsaved message stays as a failed card in place, the one signal of this failure; the draft is kept for the retry.
+    if (saved) notify_failure(error, `留言已保存，但页面刷新失败：${error.message}`);
+    else {
+      state.sending_preview = { ...state.sending_preview, failed: error.message };
+      error.notified = true;
+    }
     throw error;
   } finally {
     state.sending_message = false;
+    sent();
+    if (!state.sending_preview?.failed) state.sending_preview = null;
     state.upload_status = "";
     element("send-message").disabled = false;
     element("message-input").disabled = false;
@@ -2966,6 +2998,43 @@ async function interrupt_member(member_id) {
   if (state.room?.id === room_id) await refresh_room();
 }
 
+/** The abilities behind one execution's delivery; `adapter` stands in while a runner has not reported it. */
+function delivery_capabilities(delivery, adapter) {
+  return DELIVERY_CAPABILITIES[delivery || ADAPTER_DELIVERIES[adapter] || "process"];
+}
+
+/**
+ * How a voided execution's stop really went: stopped once the runner ended its software, stopping until it reports,
+ * and only voided where the runner cannot reach (a window or App) or never said how it delivered.
+ */
+function stop_label(execution) {
+  const adapter = (state.room?.free?.members || []).find(member => member.name === execution.member)?.adapter;
+  if (!execution.delivery || !delivery_capabilities(execution.delivery, adapter).stoppable) return "已作废";
+  return execution.stop_result === "stopped" ? "已停止" : "正在停止";
+}
+
+/** What stopping some executions really did: who stopped, and who may keep generating where the runner cannot reach. */
+function stop_summary(executions, members) {
+  const unstoppable = executions.filter(item => !delivery_capabilities(item.delivery, members.find(member => member.name === item.member)?.adapter).stoppable);
+  const names = items => [...new Set(items.map(item => display_name(item.member)))].join("、");
+  const stopped = executions.filter(item => !unstoppable.includes(item));
+  return [stopped.length ? `正在停止 ${names(stopped)}` : "",
+    unstoppable.length ? `${names(unstoppable)} 在自己的窗口或 App 里本机无法停止，可能仍在生成，之后的回答会被拒收` : ""].filter(Boolean).join("；");
+}
+
+/** Stop the whole free room: running work and everything still owed end; a new message starts again. */
+async function stop_room() {
+  const room_id = state.room.id;
+  const live = (state.room.free?.executions || []).filter(item => ["dispatched", "started"].includes(item.status));
+  const members = state.room.free?.members || [];
+  await request_json(`/api/rooms/${room_id}/stop`, {});
+  // Quiet when everything stopped; a window or App that keeps generating is said at once.
+  if (live.some(item => !delivery_capabilities(item.delivery, members.find(member => member.name === item.member)?.adapter).stoppable)) {
+    notify("warning", stop_summary(live, members));
+  }
+  if (state.room?.id === room_id) await refresh_room();
+}
+
 /** Answer a manual member's waiting retry: deliver now, or stop so the runner fails the execution. */
 async function retry_delivery({ execution_id, action }) {
   const room_id = state.room.id;
@@ -2973,13 +3042,48 @@ async function retry_delivery({ execution_id, action }) {
   if (state.room?.id === room_id) await refresh_room();
 }
 
-/** Take back the user's message before any member handled it; its text returns to an empty input for editing. */
+/** Take back the user's message, its text returning to an empty input for editing; once members started on it, see `stop_and_rewind`. */
 async function retract_message(message_id) {
   const room_id = state.room.id;
-  const result = await request_json(`/api/rooms/${room_id}/messages/${message_id}/retract`, {});
+  let result;
+  try { result = await request_json(`/api/rooms/${room_id}/messages/${message_id}/retract`, {}); }
+  catch (error) {
+    if (error.status !== 409) throw error;
+    result = await stop_and_rewind(room_id, message_id, error);
+  }
   if (state.room?.id !== room_id) return;
   if (!element("message-input").value.trim()) element("message-input").value = result.text;
   await refresh_room();
+}
+
+/**
+ * Take back the latest message members already started on, like interrupting a turn: stop that work and rewind to just
+ * before the message, cutting their sessions. Reads the rewind plan itself and sends its revision; anything wider (a later
+ * message, or running work on other messages) is refused with the site's reason, which points to editing.
+ */
+async function stop_and_rewind(room_id, message_id, refusal) {
+  const [plan, room] = await Promise.all([rewind_plan(message_id), request_json(`/api/rooms/${room_id}`)]);
+  const own = new Set(room.free.requests.filter(item => item.message_id === message_id && item.execution_id).map(item => item.execution_id));
+  const touched = plan.members.filter(member => member.executions.length);
+  if (plan.messages !== 1 || touched.some(member => member.executions.some(id => !own.has(id)))) throw refusal;
+  const taken = new Set(touched.flatMap(member => member.executions));
+  const live = room.free.executions.filter(item => taken.has(item.id) && ["dispatched", "started"].includes(item.status));
+  const text = state.messages.find(message => message.id === message_id)?.text ?? "";
+  await request_json(`/api/rooms/${room_id}/rewind`, { message_id, revision: plan.revision });
+  const kept = touched.filter(member => member.session === "kept").map(member => display_name(member.name));
+  if (live.length) notify("info", `已撤回；${stop_summary(live, room.free.members)}`
+    + `${kept.length ? `；${kept.join("、")} 的会话未回退，仍记得这条消息` : ""}；文件改动不会恢复`);
+  return { text };
+}
+
+/** Take back the owner's latest message, after a send still in flight is saved; the site refuses once a member started on it. */
+async function retract_latest() {
+  if (state.sending_message) {
+    await state.sending_done;
+    if (state.sending_preview?.failed) return;
+  }
+  const message = state.messages.findLast(item => item.author === "用户" && !item.withdrawn);
+  if (message) await retract_message(message.id);
 }
 
 /** What editing a message would take back, with the revision the rewind must carry. */
@@ -3796,7 +3900,7 @@ function view_snapshot() {
     directory_pending: [...state.directory_pending.keys()], folder_pending: [...state.folder_moves.keys()], creating_room: state.creating_room,
     connected: state.connected, reconnecting: state.reconnecting, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
     attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url })),
-    upload_status: state.upload_status, sending_message: state.sending_message,
+    upload_status: state.upload_status, sending_message: state.sending_message, sending_preview: state.sending_preview,
     mention_only: state.mention_only, reply_to: state.reply_to, turn_reply_to: state.turn_reply_to,
     free_proxy: state.free_proxy,
     create_parent: state.create_parent, access: access_snapshot(), admin: admin_snapshot(),
@@ -4004,7 +4108,7 @@ async function execute_view_action(name, value) {
   const event = { preventDefault() {} };
   const actions = { refresh: refresh_room, room: select_room, tab: select_tab,
     archives: toggle_archives, backup: backup_room, backup_rooms, import_rooms, manage_channel, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
-    send: () => send_message(event), choose_attachments: () => element("attachment-input").click(), remove_attachment, preview_attachment,
+    send: () => send_message(event), discard_sending: () => { state.sending_preview = null; }, choose_attachments: () => element("attachment-input").click(), remove_attachment, preview_attachment,
     create: (folder_id) => submit_room(event, folder_id),
     save_context: () => save_context(event), save_topic: () => save_topic(event),
     schedule: () => schedule_turn(event), filter: filter_view, reply: set_view_reply,
@@ -4013,7 +4117,7 @@ async function execute_view_action(name, value) {
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
     export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, conclude_discussion, start_room_discussion, end_room_discussion, reopen_discussion,
     save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
-    load_room_configuration, save_room_configuration, interrupt_member, retry_delivery, retract_message, rewind_and_send, fork_room, change_member, reorder_speakers, invite_member, set_proxy, copy_online_notice,
+    load_room_configuration, save_room_configuration, interrupt_member, retry_delivery, retract_message, retract_latest, stop_room, rewind_and_send, fork_room, change_member, reorder_speakers, invite_member, set_proxy, copy_online_notice,
     prepare_brainstorm, return_conclusion, adopt_recommendation, rate_decision,
     busy: () => { throw new Error("上一个操作仍在处理中，请稍候；长时间无响应请刷新页面"); },
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };
@@ -4035,7 +4139,7 @@ function change_view_theme(theme) {
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, notify,
   write_launch: write_launch_field, default_launch_entry, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
   launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, pick_launch_directory, browse_local_directory, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
-  start_drag: start_directory_drag, reconnect: reconnect_live_updates,
+  start_drag: start_directory_drag, reconnect: reconnect_live_updates, delivery_capabilities, stop_label,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,

@@ -549,6 +549,10 @@ class CliTests(unittest.TestCase):
         incremental = self.cli("message", "list", self.room, "--after", "0", "--kind", "chat")
         self.assertEqual(incremental["messages"], first["messages"])
         self.assertTrue(incremental["has_more"])
+        wide = self.api_call(f"/api/rooms/{self.room}/messages?after=0&limit=200")
+        self.assertEqual((len(wide["messages"]), wide["has_more"], wide["pages"]), (wide["total"], False, 1))
+        capped = self.api_call(f"/api/rooms/{self.room}/messages?limit=5000")
+        self.assertEqual(len(capped["messages"]), capped["total"])
         self.create_discussion_room()
         owner_token = json.loads(Path(self.room_access[self.room]["用户"]).read_text(encoding="utf-8"))["token"]
         room = self.api_call(f"/api/rooms/{self.room}", token=owner_token)

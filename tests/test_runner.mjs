@@ -1310,7 +1310,7 @@ test('a taken-over Claude member whose own window is open gets its task through 
   const spawned = [], bound = [];
   const result = await deliver_task({ ...profile, executable: process.execPath }, { session_id: original },
     { id: 'free-7', inbox: true, access_path, prompt: '请先读取任务文件 free-7.task.json', on_note: () => {}, on_binding: session => bound.push(session) }, (...args) => { spawned.push(args); throw new Error('no process'); });
-  assert.deepEqual(result, { session_id: original, status: 'accepted' });
+  assert.deepEqual(result, { session_id: original, status: 'accepted', delivery: 'window' }, 'the runner reports it cannot stop a window');
   assert.deepEqual(spawned, []);
   assert.deepEqual(bound, [original], 'the discussion runner enters the execution once the session is reported');
   for (let waited = 0; received.length < 2 && waited < 2000; waited += 20) await delay(20);
@@ -2357,7 +2357,7 @@ async function free_fixture(t) {
     state.calls.push(`${request.method} ${url}${body?.action ? ` ${body.action}` : ''}`);
     if (url === '/inbox') {
       result = { archived: state.archived, execution_minutes: 20,
-        members: [{ id: 7, name: 'Claude', role: state.claude_role || 'member', pending: state.pending }, ...state.others],
+        members: [{ id: 7, name: 'Claude', role: state.claude_role || 'member', pending: state.pending, held_until: state.held_until || 0 }, ...state.others],
         executions: state.executions.filter(item => ['dispatched', 'started'].includes(item.status)) };
     } else if (url === '/executions') {
       let execution = state.executions.find(item => item.client_id === body.client_id);
@@ -2381,6 +2381,12 @@ async function free_fixture(t) {
       }
       if (body?.action === 'release') { execution.status = 'cancelled'; state.pending = execution.requests; }
       if (body?.action === 'report') state.reports[execution.id] = body.changes;
+      if (body?.action === 'delivery') execution.delivery = body.delivery;
+      // Like the site, only a voided execution takes a stop result.
+      if (body?.action === 'stopped' && execution.status !== 'cancelled') {
+        response.writeHead(409, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ error: '只有已作废的执行才报告停止结果' })); return;
+      }
+      if (body?.action === 'stopped') execution.stop_result = body.result;
       if (body?.action === 'renew') state.renewed = body;
       if (body?.action === 'retry_wait') execution.retry = { attempt: body.attempt, retry_at: body.retry_at, reason: body.reason, stopped: 0 };
       if (body?.action === 'retry_start') execution.retry.retry_at = 0;
@@ -3191,12 +3197,43 @@ test('a free member whose command was refused names that command in its failure'
 test('an interrupted free execution stops only that member and is not redelivered', async t => {
   const { state, store, config } = await free_fixture(t);
   const child = Object.assign(new EventEmitter(), { killed: false, kill() { this.killed = true; this.emit('close'); } });
-  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => { task.on_process(child); return { status: 'accepted' }; });
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => { task.on_process(child); return { status: 'accepted', session_id: 'session-1' }; });
   await runner.tick();
+  assert.equal(state.executions[0].delivery, 'process');
   state.executions[0].status = 'cancelled';
   await runner.tick();
   assert.equal(child.killed, true);
+  assert.equal(state.executions[0].stop_result, 'stopped', 'the site learns the process really ended');
   assert.equal(state.executions.length, 1);
+  // The member's next task names the stopped execution once, so its session does not carry on with that work.
+  const task = id => JSON.parse(readFileSync(join(config.directory, `free-${id}.task.json`), 'utf8'));
+  state.pending = [{ id: 3, message_id: 13 }];
+  await runner.tick();
+  assert.deepEqual(task(2).stopped_executions, [1]);
+  state.executions[1].status = 'completed';
+  await runner.tick();
+  state.pending = [{ id: 4, message_id: 14 }];
+  await runner.tick();
+  assert.equal(task(3).stopped_executions, undefined);
+});
+
+test('a voided execution the runner cannot stop, in a window or App, is reported as such after a restart too', async t => {
+  const { state, store, config } = await free_fixture(t);
+  await new FreeRoomRunner(config, store, async () => ({ status: 'accepted', delivery: 'window' })).tick();
+  assert.equal(state.executions[0].delivery, 'window');
+  state.executions[0].status = 'cancelled';
+  // A new runner instance stands for a restarted service: the delivery is read from the local store.
+  const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }));
+  await runner.tick();
+  assert.equal(state.executions[0].stop_result, 'unstoppable');
+  // While the site holds the member, its next message is not delivered into the turn that may still run.
+  state.pending = [{ id: 3, message_id: 13 }];
+  state.held_until = Math.floor(Date.now() / 1000) + 600;
+  await runner.tick();
+  assert.equal(state.executions.length, 1);
+  state.held_until = 0;
+  await runner.tick();
+  assert.equal(state.executions.length, 2);
 });
 
 test('proven non-delivery is released and retried, then fails after three attempts', async t => {

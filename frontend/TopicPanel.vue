@@ -12,7 +12,7 @@ const paused = computed(() => room.value?.session?.status === "paused");
 const base = computed(() => `${location.origin}/r/${room.value?.id}`);
 const execution = computed(() => room.value?.free?.executions?.[0]);
 const repair = computed(() => view.value.launch.repair?.room_id === room.value?.id ? view.value.launch.repair : null);
-const EXECUTION_LABELS = { dispatched: "唤醒中", started: "执行中", completed: "已完成", failed: "失败", cancelled: "已停止" };
+const EXECUTION_LABELS = { dispatched: "唤醒中", started: "执行中", completed: "已完成", failed: "失败" };
 </script>
 
 <template>
@@ -30,7 +30,7 @@ const EXECUTION_LABELS = { dispatched: "唤醒中", started: "执行中", comple
     </template>
     <template v-else>
       <div class="page-heading access-heading"><div><h2>本机连接</h2><p>成员的接入操作在上方；讨论暂停后可修正本机软件连接。</p></div></div>
-      <section v-if="execution" class="host-progress access-evidence" aria-label="实际执行进展" role="status"><span>最近执行</span><p>#{{ execution.id }} {{ bridge.display_name(execution.member) }} · {{ EXECUTION_LABELS[execution.status] || execution.status }}</p></section>
+      <section v-if="execution" class="host-progress access-evidence" aria-label="实际执行进展" role="status"><span>最近执行</span><p>#{{ execution.id }} {{ bridge.display_name(execution.member) }} · {{ execution.status === 'cancelled' ? bridge.stop_label(execution) : EXECUTION_LABELS[execution.status] || execution.status }}</p></section>
       <section v-if="paused && view.launch.available && !room.archived && !view.launch.remote" class="access-setup access-repair" aria-label="本机接入设置">
         <div class="access-repair-heading"><h3>修正本场软件连接</h3><UButton label="读取本场配置" variant="outline" color="neutral" class="channel-surface-button" :loading="pending === 'load_room_configuration'" @click="act('load_room_configuration')" /></div>
         <div class="access-repair-description"><p>修正软件路径，或切换 Codex 的 App / CLI 接入。保留原房间和会话，保存后到进度看板继续。</p><p class="fine-print">App 需保持运行，模型与文件权限沿用原聊天设置。切回 CLI 前，需让 App 释放原聊天。</p></div>

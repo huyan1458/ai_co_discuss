@@ -125,6 +125,18 @@ FREE_OPERATIONS = ("messages", "attachments", "move", "folder", "rename", "archi
 MEMBER_FIELDS = ("id", "name", "adapter", "role", "status", "access", "session_mode", "read_until")
 EXECUTION_FIELDS = ("id", "member_id", "status", "session_id", "lease_until", "created_at", "finished_at", "result",
                     "activity", "activity_at")
+# How the runner reached the member's software: a background process or API call it can stop, or a window, App or
+# Sidecar that keeps working on its own. Reported once delivered; '' before then.
+DELIVERIES = ("process", "api", "window", "app", "sidecar")
+# What the runner found when a voided execution's software was to stop; '' until it reports.
+STOP_RESULTS = ("stopped", "unstoppable")
+# Deliveries the runner cannot stop: voided there, the software may still be working on the turn.
+UNSTOPPABLE_DELIVERIES = ("window", "app", "sidecar")
+# How long a member voided in such a window or App gets no new delivery unless its late answer shows the turn ended.
+HOLD_SECONDS = 600
+# The delivery and stop result read alongside an execution aliased `e`.
+DELIVERY_COLUMNS = """(SELECT delivery FROM execution_deliveries d WHERE d.execution_id=e.id) AS delivery,
+    (SELECT stop_result FROM execution_deliveries d WHERE d.execution_id=e.id) AS stop_result"""
 # Columns added after the first free-room tables; Python databases created by that build gain them here.
 LATER_COLUMNS = {"room_members": {"access": "TEXT NOT NULL DEFAULT 'runner'", "session_mode": "TEXT NOT NULL DEFAULT 'new'"},
                  "member_executions": {"changes": "TEXT NOT NULL DEFAULT ''", "cwd": "TEXT NOT NULL DEFAULT ''",
@@ -522,6 +534,17 @@ def public_execution(row):
     return {key: row[key] for key in EXECUTION_FIELDS} if row else None
 
 
+def held_until(connection, member_id):
+    """Until when a member's next delivery waits, or 0: its latest execution was voided in a window or App the runner
+    cannot stop, which may still be on that turn and would take a new task mid-turn. Its late answer ends the wait."""
+    row = connection.execute(f"""SELECT e.finished_at FROM member_executions e JOIN execution_deliveries d ON d.execution_id=e.id
+        WHERE e.id=(SELECT MAX(id) FROM member_executions WHERE member_id=?) AND e.status='cancelled'
+          AND d.delivery IN ({",".join("?" for _ in UNSTOPPABLE_DELIVERIES)})
+          AND NOT EXISTS(SELECT 1 FROM late_answers l WHERE l.execution_id=e.id)""", (member_id, *UNSTOPPABLE_DELIVERIES)).fetchone()
+    until = row["finished_at"] + HOLD_SECONDS if row else 0
+    return until if until > int(time.time()) else 0
+
+
 def execution_retry(connection, execution_id):
     """What the runner reported about a waiting retry of one execution, or None."""
     row = connection.execute("SELECT attempt,retry_at,reason,stopped FROM execution_retries WHERE execution_id=?", (execution_id,)).fetchone()
@@ -631,12 +654,13 @@ def execution_timeline(connection, room_id, after=0):
 
 def recent_executions(connection, room_id):
     """Return bounded public reports, including requests no longer in the recent request list."""
-    rows = connection.execute("""SELECT e.*,m.name AS member,
+    rows = connection.execute(f"""SELECT e.*,m.name AS member,
         (SELECT json_group_array(id) FROM member_requests WHERE execution_id=e.id) AS request_ids,
         (SELECT MAX(answer_id) FROM member_requests WHERE execution_id=e.id) AS answer_id,
         (SELECT MIN(message_id) FROM member_requests WHERE execution_id=e.id) AS request_message_id,
         (SELECT COUNT(*) FROM execution_notes WHERE execution_id=e.id) AS note_count,
-        (SELECT denials FROM execution_denials WHERE execution_id=e.id) AS denials
+        (SELECT denials FROM execution_denials WHERE execution_id=e.id) AS denials,{DELIVERY_COLUMNS},
+        (SELECT json_object('text',text,'created_at',created_at) FROM late_answers WHERE execution_id=e.id) AS late_answer
         FROM member_executions e JOIN room_members m ON m.id=e.member_id WHERE e.room_id=? ORDER BY e.id DESC LIMIT ?""", (room_id, RECENT_EXECUTIONS))
     executions = []
     for row in rows:
@@ -647,6 +671,8 @@ def recent_executions(connection, room_id):
             "changes_recorded": bool(row["changes"]), "request_ids": json.loads(row["request_ids"]),
             "answer_id": row["answer_id"], "request_message_id": row["request_message_id"], "requests": requests,
             "notes": row["note_count"], "denials": json.loads(row["denials"] or "[]"),
+            "delivery": row["delivery"] or "", "stop_result": row["stop_result"] or "",
+            "late_answer": json.loads(row["late_answer"]) if row["late_answer"] else None,
             "retry": execution_retry(connection, row["id"])})
     return executions
 
@@ -727,15 +753,18 @@ def free_view(connection, room_id):
         member["registered_at"] = registered_at(connection, row)
         reported = connection.execute("SELECT session_id,client FROM member_sessions WHERE member_id=?", (row["id"],)).fetchone()
         member["reported_session"], member["reported_client"] = (reported["session_id"], reported["client"]) if reported else ("", "")
-        latest = connection.execute("SELECT * FROM member_executions WHERE member_id=? ORDER BY id DESC LIMIT 1",
+        latest = connection.execute(f"SELECT e.*,{DELIVERY_COLUMNS} FROM member_executions e WHERE member_id=? ORDER BY id DESC LIMIT 1",
                                     (row["id"],)).fetchone()
         member["execution"] = public_execution(latest)
+        if latest:
+            member["execution"].update(delivery=latest["delivery"] or "", stop_result=latest["stop_result"] or "")
         if latest and latest["status"] in ACTIVE:
             member["execution"]["stale"] = latest["lease_until"] <= now
             member["execution"]["notes"] = note_count(connection, latest["id"])
             member["execution"]["retry"] = execution_retry(connection, latest["id"])
         member["pending"] = connection.execute("SELECT COUNT(*) FROM member_requests WHERE member_id=? AND status='pending'",
                                                (row["id"],)).fetchone()[0]
+        member["held_until"] = held_until(connection, row["id"])
         members.append(member)
     names = {row["id"]: row["name"] for row in connection.execute("SELECT id,name FROM room_members WHERE room_id=?", (room_id,))}
     requests = [{**dict(row), "member": names.get(row["member_id"], ""),
@@ -911,6 +940,11 @@ def check_answer(connection, room_id, member, payload):
     if not row or row["member_id"] != member["id"]:
         raise PermissionError("执行编号不属于本成员")
     if row["status"] not in ACTIVE or row["lease_until"] <= int(time.time()):
+        if row["status"] == "cancelled":
+            # Kept apart from the transcript: the page shows it folded, and it marks the end of a turn the runner could not stop.
+            connection.execute("INSERT OR IGNORE INTO late_answers (execution_id,room_id,text,created_at) VALUES (?,?,?,?)",
+                               (execution_id, room_id, str(payload.get("text") or ""), int(time.time())))
+            connection.commit()
         raise FileExistsError("本次执行已结束、被打断或已过期；回答不能改作普通发言，请保留草稿")
     requests = [dict(item) for item in connection.execute(
         "SELECT id,purpose FROM member_requests WHERE execution_id=? AND status='delivering'", (execution_id,))]
@@ -1460,13 +1494,18 @@ def hand_over_routes(connection, room_id, routes, departed_id):
             VALUES (?,?,?,?,?,'user',?)""", (room_id, host["id"], message_id, message_id, purpose, int(time.time())))
 
 
-def stop_member_work(connection, member_id, reason, cancel_reason):
-    """Void a member's live execution and every open request, so nothing restarts by itself."""
+def stop_member_work(connection, member_id, reason, cancel_reason, keep_pending=False):
+    """Void a member's live execution and, unless `keep_pending`, every open request, so nothing restarts by itself.
+
+    The owner's stop keeps the requests that arrived while the member worked: like interrupting a turn, the member then
+    goes on to the messages sent after it, while a member that leaves drops them all.
+    """
     for row in connection.execute("SELECT id FROM member_executions WHERE member_id=? AND status IN ('dispatched','started')",
                                   (member_id,)).fetchall():
         finish_execution(connection, row["id"], "cancelled", reason, "cancelled", cancel_reason)
-    record_cancel_reasons(connection, "member_id=? AND status='pending'", (member_id,), cancel_reason)
-    connection.execute("UPDATE member_requests SET status='cancelled' WHERE member_id=? AND status='pending'", (member_id,))
+    if not keep_pending:
+        record_cancel_reasons(connection, "member_id=? AND status='pending'", (member_id,), cancel_reason)
+        connection.execute("UPDATE member_requests SET status='cancelled' WHERE member_id=? AND status='pending'", (member_id,))
     from .session_room import advance_session, create_host_request, current_session
 
     member = connection.execute("SELECT room_id,name FROM room_members WHERE id=?", (member_id,)).fetchone()
@@ -1474,7 +1513,8 @@ def stop_member_work(connection, member_id, reason, cancel_reason):
     if not session:
         return
     plans = connection.execute("""SELECT id,member_request_id FROM session_requests
-        WHERE session_id=? AND member_id=? AND purpose='discuss' AND status='open'""",
+        WHERE session_id=? AND member_id=? AND purpose='discuss' AND status='open'
+          AND member_request_id IN (SELECT id FROM member_requests WHERE status='cancelled')""",
         (session["id"], member_id)).fetchall()
     for plan in plans:
         connection.execute("UPDATE session_requests SET status='cancelled' WHERE id=?", (plan["id"],))
@@ -1487,6 +1527,21 @@ def stop_member_work(connection, member_id, reason, cancel_reason):
     create_host_request(connection, session["id"],
         f"专家 {member['name']} 的讨论发言已被打断，请检查余下安排并决定如何继续。",
         {"kind": "request_failed", "request_id": request_id, "key": f"interrupted-{request_id or plans[0]['id']}"})
+
+
+def stop_room(connection, room_id, token):
+    """Owner stops the whole free room: every live execution, open request and queued turn ends, so nothing restarts by itself.
+
+    Bound to the room alone, so it takes no revision; a running discussion is refused, since pausing it is how it stops.
+    """
+    require_owner(connection, room_id, token)
+    begin_write(connection)
+    from .session_room import current_session
+    if current_session(connection, room_id, active_only=True):
+        raise FileExistsError("讨论进行中，请用暂停或结束讨论")
+    connection.execute("DELETE FROM free_queue WHERE room_id=?", (room_id,))
+    stop_room_work(connection, room_id, "用户停止全部", "user_stop")
+    return free_view(connection, room_id)
 
 
 def stop_room_work(connection, room_id, reason, cancel_reason):
@@ -1521,6 +1576,7 @@ def inbox(connection, room_id, token):
         member_view = {key: row[key] for key in MEMBER_FIELDS}
         member_view["manual_source"] = manual_source[0] if manual_source else ""
         member_view["review_capability"] = review_capability(connection, room_id, row["id"], token)
+        member_view["held_until"] = held_until(connection, row["id"])
         pending = [{**request, **review_request_context(connection, request)} for request in pending]
         (members if row["access"] == "runner" else observers).append({**member_view, "pending": pending})
     executions = [{**public_execution(row), "member": row["name"], "retry": execution_retry(connection, row["id"])} for row in connection.execute(
@@ -1715,6 +1771,8 @@ def reserve_execution(connection, room_id, token, payload):
     if connection.execute("SELECT 1 FROM member_executions WHERE member_id=? AND status IN ('dispatched','started')",
                           (member["id"],)).fetchone():
         raise FileExistsError("该成员已有进行中的执行；同一会话不并发续接")
+    if held_until(connection, member["id"]):
+        raise FileExistsError("该成员上一轮已作废但本机无法停止，可能仍在处理；等它结束或等待时限到后再投递")
     # A group request waits for the runner to choose how everyone answers; it is never delivered itself.
     pending = connection.execute("""SELECT id,purpose,EXISTS(SELECT 1 FROM review_plans WHERE review_batch_id=member_requests.message_id AND reviewer_id=member_requests.member_id) AS review FROM member_requests
         WHERE member_id=? AND status='pending' AND purpose<>'group' ORDER BY id""", (member["id"],)).fetchall()
@@ -1806,7 +1864,7 @@ def renewed_notes(payload):
 
 
 def execution_action(connection, room_id, execution_id, token, payload):
-    """Runner-side lifecycle: renew, fail, release undelivered work, or report observed file changes."""
+    """Runner-side lifecycle: renew, fail, release undelivered work, report how the software was reached, whether a voided one stopped, or observed file changes."""
     begin_write(connection)
     action = payload.get("action")
     member = None
@@ -1843,8 +1901,25 @@ def execution_action(connection, room_id, execution_id, token, payload):
         save_segments(connection, "free", room_id, execution_id, row["created_at"], finished, payload, optional=bool(notes))
         connection.executemany("INSERT OR IGNORE INTO execution_notes (execution_id,seq,room_id,text,created_at) VALUES (?,?,?,?,?)",
                                [(execution_id, note["seq"], room_id, note["text"], min(now, finished) if finished else now) for note in notes])
+    elif action == "stopped":
+        # After a voided execution: whether the runner ended its software, or could not because it works in a window or App.
+        if row["status"] != "cancelled":
+            raise FileExistsError("只有已作废的执行才报告停止结果")
+        if payload.get("result") not in STOP_RESULTS:
+            raise ValueError(f"result 须为 {'、'.join(STOP_RESULTS)}")
+        saved = connection.execute("""INSERT INTO execution_deliveries (execution_id,room_id,stop_result) VALUES (?,?,?)
+            ON CONFLICT(execution_id) DO UPDATE SET stop_result=excluded.stop_result WHERE stop_result=''""",
+                                   (execution_id, room_id, payload["result"]))
+        if not saved.rowcount:
+            raise FileExistsError("本次执行的停止结果已记录")
     elif row["status"] not in ACTIVE:
         raise FileExistsError("执行已结束")
+    elif action == "delivery":
+        # How the software was reached; a retried delivery may reach it another way, so the latest report counts.
+        if payload.get("delivery") not in DELIVERIES:
+            raise ValueError(f"delivery 须为 {'、'.join(DELIVERIES)}")
+        connection.execute("""INSERT INTO execution_deliveries (execution_id,room_id,delivery) VALUES (?,?,?)
+            ON CONFLICT(execution_id) DO UPDATE SET delivery=excluded.delivery""", (execution_id, room_id, payload["delivery"]))
     elif action == "renew":
         # No time limit on one execution: it runs while the runner keeps renewing.
         if row["lease_until"] <= now:
@@ -1904,9 +1979,9 @@ def owned_member(connection, room_id, member_id, token):
 
 
 def interrupt_member(connection, room_id, member_id, token):
-    """Owner stop: void the live execution and every open request."""
+    """Owner stop: void the live execution; requests that arrived meanwhile stay queued for the member's next turn."""
     owned_member(connection, room_id, member_id, token)
-    stop_member_work(connection, member_id, "用户打断", "user_stop")
+    stop_member_work(connection, member_id, "用户打断", "user_stop", keep_pending=True)
     settle_batches(connection, room_id)
     return free_view(connection, room_id)
 

@@ -22,6 +22,10 @@ const MAX_DELIVERY_RETRIES = 3;
 const RETRY_DELAY_SECONDS = 60;
 const MAX_RETRY_REASON = 500;
 const LIVE = ['reserving', 'delivering', 'sidecar_pending', 'running', 'retry_wait'];
+// How each adapter reaches the software when its delivery does not say otherwise; a Claude task written into the
+// member's open window reports 'window'. A window, App or Sidecar works on its own: the runner cannot stop it.
+const DELIVERY_BY_ADAPTER = { api: 'api', codex: 'app', antigravity: 'sidecar' };
+const UNSTOPPABLE_DELIVERIES = ['window', 'app', 'sidecar'];
 const MAX_HASHED_BYTES = 5 * 1024 * 1024;
 const GIT_TIMEOUT_MS = 15_000;
 
@@ -77,7 +81,7 @@ export function changed_between(before, after) {
 }
 
 /** Write a non-secret task and a member-only credential file for one execution. */
-export function free_task_files(config, member, execution, binding, { session = null, suggestions = [], reviews = [], process_access = true } = {}) {
+export function free_task_files(config, member, execution, binding, { session = null, suggestions = [], reviews = [], stopped = [], process_access = true } = {}) {
   const id = `free-${execution.id}`;
   const draft_directory = config.draft_directory || `${config.directory}-drafts`;
   mkdirSync(draft_directory, { recursive: true });
@@ -111,6 +115,7 @@ export function free_task_files(config, member, execution, binding, { session = 
       goal: session.goal, named_followup: session.named_followup } } : {}),
     ...(suggestions.length ? { scheduler_suggestions: suggestions } : {}),
     ...(reviews.length ? { review_handoffs: reviews } : {}),
+    ...(stopped.length ? { stopped_executions: stopped } : {}),
     role: member.role || 'member',
     read_after: execution.read_until, cwd: profile.cwd || null, project_access: profile.project_access, draft_directory,
     skills: skills.map(file => join(config.project, '.agents/skills', file)),
@@ -255,8 +260,9 @@ export class FreeRoomRunner {
     for (const member of [...inbox.members].sort((left, right) => place(left.name) - place(right.name))) {
       const row = this.row(member.name);
       if (row && LIVE.includes(row.status)) await this.reconcile(member, row, active);
+      // A member voided in a window or App the runner could not stop waits until that turn ends (`held_until`).
       else if (!inbox.archived && member.pending.some(request => request.purpose !== 'group') && !this.members.get(member.name)?.size
-        && !member.pending.some(request => this.routing.has(request.id))) await this.start(member, row);
+        && !member.pending.some(request => this.routing.has(request.id)) && !(member.held_until * 1000 > Date.now())) await this.start(member, row);
     }
   }
   /** Publish only changed local facts, using member revisions supplied by the owner's inbox. */
@@ -572,8 +578,11 @@ export class FreeRoomRunner {
         : session_request?.purpose === 'discuss_host' ? this.session_driver.take_suggestions(session_request.id)
           : execution.requests.map(request => this.saved_suggestion(request.id)).filter(Boolean);
       const review_handoffs = await this.review_handoffs(execution);
+      // Executions the user stopped that this session may still hold; a rewind already cut its own out, and a new session holds none.
+      const rewound = new Set(execution.rewound_executions || []);
+      const stopped = binding.session_id ? this.stopped_executions(member.name).filter(id => !rewound.has(id)) : [];
       const task = free_task_files(this.config, member, execution, binding, {
-        session, suggestions: scheduler_suggestions, reviews: review_handoffs,
+        session, suggestions: scheduler_suggestions, reviews: review_handoffs, stopped,
       });
       invoked = true;
       this.segments.start(execution.id);
@@ -596,7 +605,9 @@ export class FreeRoomRunner {
         on_denials: denials => api(this.config, `/executions/${execution.id}`, { action: 'denials', denials }).catch(() => {}),
       });
       if (result.session_id) this.store.bind(member.name, result.session_id);
+      this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(`stopped:${member.name}`);
       this.save(member.name, { status: result.status === 'sidecar_pending' ? 'sidecar_pending' : 'running', attempts: 0 });
+      await this.report_delivery(execution.id, result.delivery || DELIVERY_BY_ADAPTER[adapter.adapter] || 'process');
     } catch (error) {
       if (review_request && error.delivery_status === 'not_sent') return this.reject_review(member, execution, error.message);
       if (adapter.project_access === 'own') return this.retry_or_fail(member.name, execution, `投递失败：${error.message}`);
@@ -671,6 +682,7 @@ export class FreeRoomRunner {
       this.activity.delete(row.execution_id);
       await this.report_segments(row.execution_id, true);
       this.stop_member(member.name);
+      await this.report_stop(member.name, row.execution_id);
       return this.save(member.name, { status: 'idle', error: '' });
     }
     if (row.status === 'retry_wait') {
@@ -704,6 +716,34 @@ export class FreeRoomRunner {
       if (activity) Object.assign(activity, { sent_phase: activity.phase, sent_at: activity.at });
       this.save(member.name, { last_renew: Date.now() });
     }
+  }
+  /**
+   * Tell the site how the software was reached, kept locally until the execution ends so a restarted runner still knows
+   * whether it could stop it. A site without this report only lacks the label; delivery goes on.
+   */
+  async report_delivery(execution_id, delivery) {
+    this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(`delivery:${execution_id}`, delivery);
+    await api(this.config, `/executions/${execution_id}`, { action: 'delivery', delivery })
+      .catch(error => this.log(`执行 #${execution_id} 的投递方式未能上报：${error.message}`));
+  }
+  /**
+   * Once an execution has left the site's live list, report whether its software stopped: a process or API call the runner
+   * ended, or a window, App or Sidecar it cannot stop. Only a voided execution takes the report; one that finished answers 409.
+   */
+  async report_stop(name, execution_id) {
+    const key = `delivery:${execution_id}`;
+    const delivery = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(key)?.value;
+    if (!delivery) return;
+    this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(key);
+    const result = UNSTOPPABLE_DELIVERIES.includes(delivery) ? 'unstoppable' : 'stopped';
+    const voided = await api(this.config, `/executions/${execution_id}`, { action: 'stopped', result }).then(() => true, () => false);
+    // The member's next task names it, so the session does not carry on with work the user stopped.
+    if (voided) this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)')
+      .run(`stopped:${name}`, JSON.stringify([...this.stopped_executions(name), execution_id]));
+  }
+  /** Executions the user stopped since this member's last delivered task. */
+  stopped_executions(name) {
+    return JSON.parse(this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(`stopped:${name}`)?.value || '[]');
   }
   /** Send the execution's recorded segments and progress notes; `final` sends the rest once it has ended. */
   report_segments(execution_id, final = false) {
@@ -757,6 +797,7 @@ export class FreeRoomRunner {
     catch (error) { if (!/HTTP 409/.test(error.message)) throw error; }
     this.save(name, { status: 'idle', error: reason });
     this.stop_member(name);
+    this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(`delivery:${execution_id}`);
   }
   /** Count live processes per member so one session never has two writers. */
   track(name, child) {

@@ -15,6 +15,7 @@ const text = field("message-input");
 const text_length = computed(() => [...text.value].length);
 const EDITOR_MAX_ROWS = 6;
 const LENGTH_WARNING_RATIO = 0.9;
+const RETRACT_ESCAPE_WINDOW_MS = 500;
 const near_length_limit = computed(() => text_length.value >= bridge.max_message_length * LENGTH_WARNING_RATIO);
 const answer_summary = field("message-summary");
 const summary_source = field("message-summary-source");
@@ -111,7 +112,7 @@ const free_busy = computed(() => {
       const retry = execution.retry?.retry_at && !execution.retry.stopped ? execution.retry : null;
       return [{ id: `free-${execution.id}`, author: member.name, member_id: member.id, retry,
         text: execution.stale ? "执行失联：网站已不再接受本次回答，软件停止未确认" : retry ? "会话异常，等待自动重试" : ACTIVITY_LABELS[execution.activity] || "正在处理",
-        working: !execution.stale && !retry, created_at: execution.created_at, adapter: member.adapter,
+        working: !execution.stale && !retry, created_at: execution.created_at, adapter: member.adapter, delivery: execution.delivery,
         activity: execution.activity, activity_at: execution.activity_at, notes: execution.notes || 0,
         execution_id: execution.id, request_message_id: reports.get(execution.id)?.request_message_id,
         discussion_request: reports.get(execution.id)?.requests?.find((request) => request.discussion_session_id) }];
@@ -151,7 +152,7 @@ function answer_execution(message) {
  */
 function working_status(message) {
   const silent = Math.max(0, free_now.value - (message.activity_at || message.created_at));
-  if (!message.working || BLIND_ADAPTERS.includes(message.adapter) || silent < STALL_SECONDS) return { text: message.text, live: message.working };
+  if (!message.working || !capabilities(message).progress || silent < STALL_SECONDS) return { text: message.text, live: message.working };
   if (message.activity === "command") return { text: `命令已运行 ${format_elapsed(silent)}`, live: true };
   return { text: `已 ${format_elapsed(silent)}无输出，可能卡住`, live: false, warning: true };
 }
@@ -178,22 +179,40 @@ const mention_pool = computed(() => [...(mention_all.value ? [...ALL_ALIASES, ..
 const MENTION_PATTERN = (name) => new RegExp(`(^|[\\s(（，,。；;：:])@${name}(?![\\w-])`, "u");
 const draft_prose = computed(() => text.value.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "").replace(/^>.*$/gm, ""));
 const SCHEDULER_LABELS = { jev: "TypeSafe Jev", decisions: "OpenAI Decisions" };
-/** App deliveries run in the user's own window, so the runner never sees their output. */
-const BLIND_ADAPTERS = ["codex", "antigravity"];
+/** What the runner can do with how an execution reached its member's software: stop it, see its progress. */
+const capabilities = (item) => bridge.delivery_capabilities(item.delivery,
+  item.adapter ?? (room.value.free?.members || []).find((member) => member.name === item.member)?.adapter);
+/**
+ * A voided execution as it really went: stopped once the runner ended its process; still stopping until it reports;
+ * voided only, when it works in a window or App the runner cannot stop (`.dev/docs/Design_适配能力.md`).
+ */
+function stop_state(execution) {
+  const label = bridge.stop_label(execution);
+  // A runner that predates delivery reports says nothing about the software; only the room's side is certain.
+  if (!execution.delivery) return { label, note: "" };
+  const name = bridge.display_name(execution.member);
+  // A late answer shows the member did finish the turn; it stays out of the transcript and AI reads.
+  if (execution.late_answer) return { label, note: `${name} 之后仍交来了回答，未采纳：不进入记录，其他 AI 读不到。` };
+  if (!capabilities(execution).stoppable) return { label, note: `${name} 在自己的窗口或 App 里，本机无法停止，可能仍在生成；网站不再接受本次回答。` };
+  return { label, note: label === "正在停止" ? "等待本机服务结束进程。" : "" };
+}
 // The runner retries a manual member's refused delivery this many times (runner/free_runner.mjs MAX_DELIVERY_RETRIES).
 const MAX_DELIVERY_RETRIES = 3;
 /** Long reasoning or a long reply can be silent for minutes; beyond this the card only warns, never stops. */
 const STALL_SECONDS = 180;
 const FREE_REQUEST_LABELS = { pending: ["待投递", "neutral"], delivering: ["处理中", "info"], completed: ["已回复", "success"],
-  cancelled: ["已停止", "neutral"], failed: ["失败", "error"] };
+  cancelled: ["已取消", "neutral"], failed: ["失败", "error"] };
 /** Each user message in a free room shows what happened to its request for every named member. */
 const request_badges = computed(() => {
   const badges = new Map();
   const source = room.value.free;
   if (!source) return badges;
+  const executions = new Map((source.executions || []).map((execution) => [execution.id, execution]));
   const failures = new Map((source.executions || []).map((execution) => [execution.id, execution.result]));
   for (const request of source.requests || []) {
-    const [label, color] = FREE_REQUEST_LABELS[request.status];
+    // A request voided after reaching the software reads as its stop really went; one never delivered was only cancelled.
+    const voided = request.status === "cancelled" && executions.get(request.execution_id)?.delivery ? executions.get(request.execution_id) : null;
+    const [label, color] = voided ? [stop_state(voided).label, "neutral"] : FREE_REQUEST_LABELS[request.status];
     const title = request.status === "failed" ? failures.get(request.execution_id) || "执行失败" : "";
     badges.set(request.message_id, [...(badges.get(request.message_id) || []),
       { key: request.id, label: `${bridge.display_name(request.member)} · ${label}`, color, title }]);
@@ -209,10 +228,10 @@ const execution_reports = computed(() => {
     if (!["completed", "failed", "cancelled"].includes(execution.status)) continue;
     // A clean completion adds nothing to the message header; only failures, observed file changes and refused operations earn a card.
     if (execution.status === "completed" && !execution.changes?.length && !execution.denials?.length) continue;
-    // A failed free-room execution keeps its own card in the slot it worked in.
-    if (execution.status === "failed") continue;
+    // A failed free-room execution keeps its own card in the slot it worked in, and so does a delivered one that was voided.
+    if (execution.status === "failed" || (execution.status === "cancelled" && execution.delivery)) continue;
     const message_id = execution.answer_id || execution.request_message_id;
-    const report = { ...execution, label: { completed: "已完成", failed: "失败", cancelled: "已停止" }[execution.status] };
+    const report = { ...execution, label: execution.status === "cancelled" ? bridge.stop_label(execution) : { completed: "已完成", failed: "失败" }[execution.status] };
     reports.set(message_id, [...(reports.get(message_id) || []), report]);
   }
   return reports;
@@ -578,10 +597,11 @@ const free_layout = computed(() => {
     const missed = new Set((room.value.cancelled_turns || []).map((turn) => turn.execution_id));
     for (const execution of executions.values()) {
       if (execution.status !== "cancelled" || execution.answer_id || missed.has(execution.id)) continue;
+      // Work that reached the member's software keeps a card where it worked once voided; work never delivered leaves none.
       const request = execution.requests?.find((item) => item.discussion_session_id);
-      if (request) place({ id: `stopped-${execution.id}`, author: execution.member,
+      if (request || execution.delivery) place({ id: `stopped-${execution.id}`, author: execution.member,
         slot_card: true, cancelled_execution: execution, execution_id: execution.id, created_at: execution.created_at,
-        discussion_request: request });
+        request_message_id: execution.request_message_id, discussion_request: request });
     }
   }
   const tail = free_working.value.map((item) => ({ ...item, slot_card: true })).filter((item) => !place(item));
@@ -998,9 +1018,12 @@ const can_branch = (message) => free.value && view.value.access?.can_manage && !
   && !(room.value.discussions || []).some((item) => ["active", "paused"].includes(item.status) || item.started_message_id >= message.id);
 /** The owner may take back their own message unless the room is archived. */
 const can_take_back = (message) => can_branch(message) && message.author === "用户" && !room.value.archived;
-/** Retracting needs every request on the message still waiting; once a member started one, only editing takes it back. */
-const can_retract = (message) => can_take_back(message)
-  && !(room.value.free?.requests || []).some((request) => request.message_id === message.id && ["delivering", "completed", "failed"].includes(request.status));
+/**
+ * Retracting needs every request on the message still waiting, or the message to be the latest: retracting it then stops
+ * the work on it and rewinds to just before it. Otherwise only editing takes it back.
+ */
+const can_retract = (message) => can_take_back(message) && (view.value.messages.at(-1)?.id === message.id
+  || !(room.value.free?.requests || []).some((request) => request.message_id === message.id && ["delivering", "completed", "failed"].includes(request.status)));
 
 const NO_EDIT = { id: 0, text: "", plan: null, error: "" };
 const editing = ref(NO_EDIT);
@@ -1040,6 +1063,25 @@ async function send() {
   await act("send");
   await follow_messages();
 }
+
+let last_escape = 0;
+/**
+ * Two Esc presses within a moment take back the latest own message, like its card's 撤回, and fill the text back in.
+ * Only from an empty composer (or the page while the composer is locked for sending), so a draft is never at stake;
+ * the site refuses once a member started on the message, and says so.
+ */
+function retract_shortcut(event) {
+  if (event.key !== "Escape" || event.isComposing || event.defaultPrevented) return;
+  const from_composer = event.target === prompt.value?.textareaRef || event.target === document.body;
+  if (!from_composer || (has_draft.value && !view.value.sending_message) || view.value.sending_preview?.failed) { last_escape = 0; return; }
+  if (event.timeStamp - last_escape > RETRACT_ESCAPE_WINDOW_MS) { last_escape = event.timeStamp; return; }
+  last_escape = 0;
+  event.preventDefault();
+  // Called directly: the send in flight holds the shared action lock, and the controller waits for it to be saved.
+  bridge.execute("retract_latest");
+}
+onMounted(() => window.addEventListener("keydown", retract_shortcut));
+onBeforeUnmount(() => window.removeEventListener("keydown", retract_shortcut));
 
 /** The chat prompt ignores empty text, so attachment-only drafts send on Enter here. */
 function attachment_shortcut(event) {
@@ -1099,9 +1141,16 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
               <div class="channel-message-meta"><div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong></div></div>
               <span v-if="message.cancelled_turn" class="channel-message-provenance channel-message-elapsed">已错过 · 安排 #{{ message.cancelled_turn.display_id || message.cancelled_turn.id }}</span>
-              <span v-else class="channel-message-provenance channel-message-elapsed">已停止 · 执行 #{{ message.execution_id }}</span>
+              <span v-else class="channel-message-provenance channel-message-elapsed">{{ stop_state(message.cancelled_execution).label }} · 执行 #{{ message.execution_id }}</span>
             </div>
-            <div class="channel-message-text" role="status">{{ message.cancelled_turn ? '本次发言已被跳过或取消，未回答。' : message.cancelled_execution.result || '本次执行已停止，未回答。' }}</div>
+            <div class="channel-message-text" role="status">{{ message.cancelled_turn ? '本次发言已被跳过或取消，未回答。' : message.cancelled_execution.result || '本次执行已作废，未回答。' }}</div>
+            <template v-for="execution in [message.cancelled_execution || (room.free?.executions || []).find((item) => item.id === message.execution_id)].filter((item) => item?.delivery && stop_state(item).note)" :key="execution.id">
+              <p class="channel-message-text channel-stop-note">{{ stop_state(execution).note }}</p>
+              <details v-if="execution.late_answer" class="channel-receipt">
+                <summary :aria-label="`查看 ${bridge.display_name(execution.member)} 未采纳的回答`">未采纳的回答</summary>
+                <div class="channel-message-text channel-late-answer">{{ execution.late_answer.text }}</div>
+              </details>
+            </template>
           </template>
         </UChatMessage>
         <UChatMessage v-else-if="message.slot_card && !message.failure" :id="`execution-${message.id}`" :data-author="bridge.identities[message.author]?.style" role="assistant" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
@@ -1114,9 +1163,9 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
               </div>
               <span class="channel-message-provenance channel-message-elapsed">{{ message.waiting ? `手动启动${message.created_at ? ` · 已等 ${format_elapsed(Math.max(0, free_now - message.created_at))}` : ''}` : `已用 ${format_elapsed(Math.max(0, free_now - message.created_at))}` }}</span>
             </div>
-            <div v-for="status in [working_status(message)]" :key="message.id" class="channel-message-text" :class="{ 'channel-working-warning': status.warning }" role="status" :aria-label="`${bridge.display_name(message.author)} ${status.text}`" :title="BLIND_ADAPTERS.includes(message.adapter) ? '此接入方式看不到进度，可在原窗口查看' : undefined">
+            <div v-for="status in [working_status(message)]" :key="message.id" class="channel-message-text" :class="{ 'channel-working-warning': status.warning }" role="status" :aria-label="`${bridge.display_name(message.author)} ${status.text}`" :title="capabilities(message).progress ? undefined : '此接入方式看不到进度，可在原窗口查看'">
               <span v-if="message.waiting">{{ message.text }}</span>
-              <WorkingText v-else-if="status.live" :text="status.text" :seed="message.author" :beat="message.activity_at" :silent="free_now - (message.activity_at || message.created_at)" dots :muted="BLIND_ADAPTERS.includes(message.adapter)" />
+              <WorkingText v-else-if="status.live" :text="status.text" :seed="message.author" :beat="message.activity_at" :silent="free_now - (message.activity_at || message.created_at)" dots :muted="!capabilities(message).progress" />
               <span v-else>{{ status.text }}</span>
             </div>
             <template v-if="message.retry">
@@ -1259,6 +1308,27 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
         </template>
         </template>
         </template>
+      </div>
+      <!-- The message being sent shows at once; the saved copy replaces it when the site answers, and a failed send stays here as a failed card. -->
+      <div v-if="view.sending_preview" class="channel-message-group">
+        <UChatMessage id="channel-sending-message" :data-author="bridge.identities[view.sending_preview.author]?.style" role="user" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message channel-sending-message" :class="{ 'is-failed': view.sending_preview.failed }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
+          <template #body>
+            <div class="channel-message-byline">
+              <UAvatar :src="bridge.identities[view.sending_preview.author]?.icon" :text="bridge.identities[view.sending_preview.author]?.initials || '?'" :alt="bridge.display_name(view.sending_preview.author)" size="md" class="channel-avatar" :class="bridge.identities[view.sending_preview.author]?.style" />
+              <div class="channel-message-meta"><div class="channel-message-author"><strong>{{ bridge.display_name(view.sending_preview.author) }}</strong><UBadge v-if="view.sending_preview.failed" label="发送失败" color="error" variant="soft" size="xs" /></div></div>
+              <span v-if="!view.sending_preview.failed" class="channel-message-provenance channel-message-elapsed" role="status">{{ view.upload_status || '发送中…' }}</span>
+            </div>
+            <div class="channel-message-text">{{ view.sending_preview.text }}</div>
+            <div v-if="view.sending_preview.files.length" class="channel-message-provenance">附件：{{ view.sending_preview.files.join('、') }}</div>
+            <template v-if="view.sending_preview.failed">
+              <p class="channel-message-text channel-failure-reason" role="alert">{{ view.sending_preview.failed }}；草稿已保留在输入框</p>
+              <div class="channel-failure-actions">
+                <UButton label="重试" icon="i-lucide-rotate-ccw" size="sm" variant="soft" color="primary" aria-label="重新发送这条消息" :disabled="!has_draft || view.sending_message" @click="send" />
+                <UButton label="放弃" icon="i-lucide-x" size="sm" variant="soft" color="neutral" aria-label="放弃发送，移除这张卡片" :disabled="view.sending_message" @click="act('discard_sending')" />
+              </div>
+            </template>
+          </template>
+        </UChatMessage>
       </div>
       <div v-if="(topic_anchor === 'end' || end_anchor === 'end') && !view.query && !view.mention_only" class="channel-message-group">
         <TopicCard v-if="topic_anchor === 'end'" :ref="(card) => topic_card = card" @edit="emit('edit')" />
