@@ -647,9 +647,7 @@ def execution_notes(connection, room_id, execution_id, token=""):
     execution = connection.execute("SELECT member_id FROM member_executions WHERE room_id=? AND id=?", (room_id, execution_id)).fetchone()
     if not execution:
         raise LookupError("执行不存在")
-    from .session_room import session_message_access
-
-    boundary = session_message_access(connection, room_id, {}, token)
+    boundary = discussion.session_message_access(connection, room_id, {}, token)
     if boundary is not None:
         try:
             member = require_member(connection, room_id, token)
@@ -714,18 +712,9 @@ def recent_executions(connection, room_id):
 
 def session_request_source(connection, member_request_id, message_id):
     """Expose session provenance and a visible transcript anchor for a member request."""
-    row = connection.execute("""SELECT q.id AS session_request_id,q.session_id AS discussion_session_id,q.round,
-        q.question AS source_question,t.cause_kind,t.cause_message_id AS source_message_id,t.cause_request_id,
-        CASE WHEN q.id IS NULL THEN r.message_id ELSE COALESCE((SELECT MAX(m.id) FROM messages m
-            WHERE m.room_id=r.room_id AND m.id<r.message_id
-            AND NOT EXISTS(SELECT 1 FROM internal_task_messages hidden WHERE hidden.message_id=m.id)),0) END AS session_anchor
-        FROM member_requests r LEFT JOIN session_requests q ON q.member_request_id=r.id
-        LEFT JOIN task_message_sources t ON t.session_request_id=q.id WHERE r.id=?""", (member_request_id,)).fetchone()
-    if row and row["session_request_id"] is not None:
-        return {"session_request_id": row["session_request_id"], "discussion_session_id": row["discussion_session_id"],
-                "round": row["round"], "source_question": row["source_question"],
-                "source_message_id": row["source_message_id"], "cause_kind": row["cause_kind"],
-                "cause_request_id": row["cause_request_id"], "after_message_id": row["session_anchor"]}
+    origin = discussion.session_request_origin(connection, member_request_id)
+    if origin:
+        return origin
     request = connection.execute("SELECT message_id,purpose FROM member_requests WHERE id=?", (member_request_id,)).fetchone()
     return {"session_request_id": None, "discussion_session_id": None, "round": None, "source_question": "",
             "source_message_id": None, "cause_kind": None, "cause_request_id": None, "after_message_id": message_id,
@@ -965,7 +954,7 @@ def check_answer(connection, room_id, member, payload):
                 raise FileExistsError(f"请求 {request_id} 不属于本成员或已处理")
             purposes.append(row["purpose"])
             requests.append(row)
-        validate_session_request_answer(connection, room_id, requests)
+        discussion.validate_session_request_answer(connection, room_id, requests)
         check_dispatch(member, payload, purposes)
         return None
     execution_id = payload.get("execution_id")
@@ -983,7 +972,7 @@ def check_answer(connection, room_id, member, payload):
         raise FileExistsError("本次执行已结束、被打断或已过期；回答不能改作普通发言，请保留草稿")
     requests = [dict(item) for item in connection.execute(
         "SELECT id,purpose FROM member_requests WHERE execution_id=? AND status='delivering'", (execution_id,))]
-    validate_session_request_answer(connection, room_id, requests)
+    discussion.validate_session_request_answer(connection, room_id, requests)
     check_dispatch(member, payload, [item["purpose"] for item in requests])
     return row
 
@@ -992,21 +981,6 @@ def check_dispatch(member, payload, purposes):
     """A host answering only its share of an everyone request answers as a member, so it may not dispatch others."""
     if member["role"] == "host" and payload.get("to") and purposes and all(purpose == "all" for purpose in purposes):
         raise ValueError("这次是请全体成员各自回应，其他成员已收到请求；主持人只回答自己的部分，不能用 --to 派活")
-
-
-def validate_session_request_answer(connection, room_id, requests):
-    """Keep a discussion speaker request separate and live when answering it."""
-    discussions = [request for request in requests if request["purpose"] == "discuss"]
-    if not discussions:
-        return
-    if len(requests) != 1 or len(discussions) != 1:
-        raise ValueError("讨论安排须单独回答，不能与普通请求合并")
-    request_id = discussions[0]["id"]
-    plan = connection.execute("""SELECT sr.status,s.status AS session_status FROM session_requests sr
-        JOIN discussion_sessions s ON s.id=sr.session_id JOIN member_requests r ON r.id=sr.member_request_id
-        WHERE s.room_id=? AND r.id=? AND sr.purpose='discuss'""", (room_id, request_id)).fetchone()
-    if not plan or plan["session_status"] != "active" or plan["status"] != "open":
-        raise FileExistsError("讨论安排已暂停、结束或取消，不能继续回答")
 
 
 def check_proxy(connection, room_id, member, payload):
@@ -1020,7 +994,7 @@ def check_proxy(connection, room_id, member, payload):
         if not row or row["member_id"] != member["id"] or row["status"] != "pending":
             raise FileExistsError(f"请求 {request_id} 不属于该在线成员或已处理")
         requests.append(row)
-    validate_session_request_answer(connection, room_id, requests)
+    discussion.validate_session_request_answer(connection, room_id, requests)
 
 
 def insert_request(connection, room_id, member_id, message_id, chain_id, purpose, created_by, batch_id=0):
@@ -1254,35 +1228,11 @@ def speaking_order(connection, room):
     items, kind, target, later = [], "default", 0, []
     session_plan_state = []
     if room["mode"] == "free":
-        from .session_room import current_session
-        session = current_session(connection, room["id"], active_only=True)
+        session = discussion.current_session(connection, room["id"], active_only=True)
         if session:
             kind = "turns"
             target = session["id"]
-            session_plan_state = [list(row) for row in connection.execute("""SELECT id,round,position,member_id,question,status,submission_id
-                FROM session_requests WHERE session_id=? AND purpose='discuss' ORDER BY round,position,id""", (session["id"],))]
-            active_round = connection.execute("SELECT MIN(round) FROM session_requests WHERE session_id=? AND purpose='discuss' AND status IN ('open','queued')",
-                                              (session["id"],)).fetchone()[0]
-            if active_round is None:
-                active_round = connection.execute("SELECT COALESCE(MAX(round),1) FROM session_requests WHERE session_id=? AND purpose='discuss'",
-                                                  (session["id"],)).fetchone()[0]
-            answered = [row["name"] for row in connection.execute("""SELECT m.name FROM session_requests sr JOIN room_members m ON m.id=sr.member_id
-                WHERE sr.session_id=? AND sr.purpose='discuss' AND sr.round=? AND sr.status='answered' ORDER BY sr.position,sr.id""",
-                (session["id"], active_round))]
-            items.extend({"name": name, "state": "done"} for name in answered)
-            open_turn = connection.execute("""SELECT m.name FROM session_requests sr JOIN room_members m ON m.id=sr.member_id
-                WHERE sr.session_id=? AND sr.purpose='discuss' AND sr.round=? AND sr.status='open'
-                ORDER BY sr.position,sr.id LIMIT 1""", (session["id"], active_round)).fetchone()
-            if open_turn:
-                items.append({"name": open_turn["name"], "state": "speaking"})
-            queued = connection.execute("""SELECT sr.round,m.name FROM session_requests sr JOIN room_members m ON m.id=sr.member_id
-                WHERE sr.session_id=? AND sr.purpose='discuss' AND sr.status='queued' ORDER BY sr.round,sr.position,sr.id""",
-                (session["id"],)).fetchall()
-            for row in queued:
-                if row["round"] == active_round:
-                    items.append({"name": row["name"], "state": "queued"})
-            later = [[row["name"] for row in queued if row["round"] == round_number]
-                     for round_number in sorted({row["round"] for row in queued if row["round"] > active_round})]
+            items, later, session_plan_state = discussion.session_speaking_order(connection, session)
         else:
             target = connection.execute("""SELECT MAX(q.message_id) FROM free_queue q LEFT JOIN member_requests r ON r.message_id=q.message_id
                 AND r.member_id=q.member_id WHERE q.room_id=? AND (r.id IS NULL OR r.status IN ('pending','delivering'))""", (room["id"],)).fetchone()[0] or 0
@@ -1352,22 +1302,9 @@ def reorder_speakers(connection, room, token, payload):
         for name in order:
             connection.execute("INSERT INTO free_queue (room_id,message_id,member_id) VALUES (?,?,?)", (room["id"], current["message_id"], names[name]))
     elif current["kind"] == "turns":
-        from .session_room import current_session
-        session = current_session(connection, room["id"], active_only=True)
+        session = discussion.current_session(connection, room["id"], active_only=True)
         if session:
-            active_round = connection.execute("SELECT MIN(round) FROM session_requests WHERE session_id=? AND purpose='discuss' AND status IN ('open','queued')",
-                                              (session["id"],)).fetchone()[0]
-            active_round = active_round or 1
-            open_position = connection.execute("SELECT COALESCE(MAX(position),0) FROM session_requests WHERE session_id=? AND purpose='discuss' AND round=? AND status IN ('answered','open')",
-                                                (session["id"], active_round)).fetchone()[0]
-            rows = connection.execute("SELECT id FROM session_requests WHERE session_id=? AND purpose='discuss' AND round=? AND status='queued'",
-                                      (session["id"], active_round)).fetchall()
-            connection.execute("UPDATE session_requests SET position=-id WHERE id IN (%s)" % ",".join("?" for _ in rows),
-                               [row["id"] for row in rows]) if rows else None
-            for offset, name in enumerate(order, 1):
-                connection.execute("UPDATE session_requests SET position=? WHERE session_id=? AND purpose='discuss' AND round=? AND status='queued' AND member_id=?",
-                                   (open_position + offset, session["id"], active_round, names[name]))
-            connection.execute("UPDATE session_state SET revision=revision+1 WHERE session_id=?", (session["id"],))
+            discussion.reorder_session_turns(connection, session, order, names)
         else:
             reorder_turns(connection, room["id"], order)
     else:
@@ -1408,14 +1345,7 @@ def after_free_message(connection, room_id, message_id, actor, payload):
     """Create requests for the owner's message, or close what the member's answer covers."""
     now = int(time.time())
     if actor == "用户":
-        from .session_room import create_host_request, current_session
-        session = current_session(connection, room_id, active_only=True)
-        if session and session["status"] == "active" and payload.get("to") is None:
-            create_host_request(connection, session["id"],
-                                f"用户留言 #{message_id}：请处理并决定是否安排专家。",
-                                {"kind": "user_message", "message_id": message_id, "key": f"message-{message_id}"})
-            connection.execute("UPDATE session_state SET held_since=?,revision=revision+1 WHERE session_id=?",
-                               (message_id, session["id"]))
+        if discussion.hold_user_message(connection, room_id, message_id, payload):
             return
         pairs = recipients(connection, room_id, payload)
         if payload.get("sequential") is True and payload.get("to") is not None:
@@ -1499,17 +1429,14 @@ def finish_execution(connection, execution_id, status, result, request_status, c
     """End one execution and move its delivered requests in the same transaction."""
     if request_status == "cancelled" and cancel_reason:
         record_cancel_reasons(connection, "execution_id=? AND status='delivering'", (execution_id,), cancel_reason)
-    session_requests = connection.execute("""SELECT r.id FROM member_requests r JOIN session_requests sr
-        ON sr.member_request_id=r.id WHERE r.execution_id=? AND sr.purpose='discuss' AND sr.status='open'""",
-        (execution_id,)).fetchall()
+    discussion_requests = discussion.open_discussion_requests(connection, execution_id)
     connection.execute("UPDATE member_executions SET status=?,finished_at=?,result=? WHERE id=? AND status IN ('dispatched','started')",
                        (status, int(time.time()), result[:500], execution_id))
     connection.execute("UPDATE member_requests SET status=?,execution_id=CASE WHEN ?='pending' THEN NULL ELSE execution_id END WHERE execution_id=? AND status='delivering'",
                        (request_status, request_status, execution_id))
     if status == "failed" and request_status == "failed":
-        from .session_room import fail_session_request
-        for row in session_requests:
-            fail_session_request(connection, row["id"], result)
+        for row in discussion_requests:
+            discussion.fail_session_request(connection, row["id"], result)
 
 
 def open_route_messages(connection, member_id, pending_only=False):
@@ -1541,27 +1468,7 @@ def stop_member_work(connection, member_id, reason, cancel_reason, keep_pending=
     if not keep_pending:
         record_cancel_reasons(connection, "member_id=? AND status='pending'", (member_id,), cancel_reason)
         connection.execute("UPDATE member_requests SET status='cancelled' WHERE member_id=? AND status='pending'", (member_id,))
-    from .session_room import advance_session, create_host_request, current_session
-
-    member = connection.execute("SELECT room_id,name FROM room_members WHERE id=?", (member_id,)).fetchone()
-    session = current_session(connection, member["room_id"], active_only=True) if member else None
-    if not session:
-        return
-    plans = connection.execute("""SELECT id,member_request_id FROM session_requests
-        WHERE session_id=? AND member_id=? AND purpose='discuss' AND status='open'
-          AND member_request_id IN (SELECT id FROM member_requests WHERE status='cancelled')""",
-        (session["id"], member_id)).fetchall()
-    for plan in plans:
-        connection.execute("UPDATE session_requests SET status='cancelled' WHERE id=?", (plan["id"],))
-    if not plans:
-        return
-    connection.execute("UPDATE session_state SET revision=revision+1 WHERE session_id=?", (session["id"],))
-    if advance_session(connection, session["id"]):
-        return
-    request_id = plans[0]["member_request_id"]
-    create_host_request(connection, session["id"],
-        f"专家 {member['name']} 的讨论发言已被打断，请检查余下安排并决定如何继续。",
-        {"kind": "request_failed", "request_id": request_id, "key": f"interrupted-{request_id or plans[0]['id']}"})
+    discussion.after_member_stopped(connection, member_id)
 
 
 def stop_room(connection, room_id, token):
@@ -1571,8 +1478,7 @@ def stop_room(connection, room_id, token):
     """
     require_owner(connection, room_id, token)
     begin_write(connection)
-    from .session_room import current_session
-    if current_session(connection, room_id, active_only=True):
+    if discussion.current_session(connection, room_id, active_only=True):
         raise FileExistsError("讨论进行中，请用暂停或结束讨论")
     connection.execute("DELETE FROM free_queue WHERE room_id=?", (room_id,))
     stop_room_work(connection, room_id, "用户停止全部", "user_stop")
@@ -2099,9 +2005,7 @@ def owner_message(connection, room_id, message_id):
         raise ValueError("只有协作房间的消息可以撤回或编辑")
     if connection.execute("SELECT 1 FROM room_directory WHERE room_id=? AND archived=1", (room_id,)).fetchone():
         raise ValueError("房间已存档；恢复后才能撤回或编辑")
-    # A discussion's host reads the user's messages itself, with no request that shows whether it began.
-    if connection.execute("SELECT 1 FROM discussion_sessions WHERE room_id=? AND (status IN ('active','paused') OR started_message_id>=?)",
-                          (room_id, message_id)).fetchone():
+    if discussion.blocks_message_change(connection, room_id, message_id):
         raise FileExistsError("讨论进行中，或这条消息之后开启过讨论，不能撤回或编辑")
     return row
 
@@ -2250,31 +2154,9 @@ def queue_invited_expert(connection, room_id, name, now):
     member = connection.execute("SELECT * FROM room_members WHERE room_id=? AND name=? AND status='active'", (room_id, name)).fetchone()
     if not member or (member["adapter"] == "manual" and not registered_at(connection, member)):
         return
-    from .session_room import current_session
-    session = current_session(connection, room_id)
+    session = discussion.current_session(connection, room_id)
     if session and session["status"] != "concluded":
-        planned = connection.execute("SELECT 1 FROM session_requests WHERE session_id=? AND purpose='discuss' AND status IN ('open','queued') LIMIT 1",
-                                     (session["id"],)).fetchone()
-        if not planned:
-            return
-        round_number = connection.execute("SELECT MIN(round) FROM session_requests WHERE session_id=? AND purpose='discuss' AND status IN ('open','queued')",
-                                          (session["id"],)).fetchone()[0]
-        if round_number is None:
-            round_number = 1
-        position = connection.execute("SELECT COALESCE(MAX(position),0)+1 FROM session_requests WHERE session_id=? AND purpose='discuss' AND round=?",
-                                     (session["id"], round_number)).fetchone()[0]
-        invitation = connection.execute("SELECT COUNT(*) FROM session_requests WHERE session_id=? AND member_id=? AND submission_id LIKE 'invite:%'",
-                                        (session["id"], member["id"])).fetchone()[0] + 1
-        state = connection.execute("SELECT phase,read_until FROM session_state WHERE session_id=?", (session["id"],)).fetchone()
-        question = ("欢迎加入：请先读取议题，独立给出你的开场观点。" if state and state["phase"] == "initial"
-                    else "欢迎加入：请先读取议题和已有回答，给出你的观点。")
-        read_until = state["read_until"] if state and state["phase"] == "initial" and round_number == 1 else None
-        connection.execute("""INSERT OR IGNORE INTO session_requests
-            (session_id,round,position,member_id,purpose,question,status,submission_id,read_until,created_at)
-            VALUES(?,?,?,?,'discuss',?,'queued',?,?,?)""",
-            (session["id"], round_number, position, member["id"], question,
-             f"invite:{member['id']}:{invitation}", read_until,
-             time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())))
+        discussion.queue_session_invite(connection, session, member)
         return
     connection.execute("""INSERT OR IGNORE INTO discussion_turns (room_id,expert,question,status,submission_id,created_at)
         SELECT settings.room_id,member.name,
@@ -2324,8 +2206,7 @@ def discussion_member_action(connection, room_id, member_id, token, payload):
     if action in ("away", "remove"):
         if member["name"] == host:
             raise ValueError("主持人不能离开或移除；请先更换主持人")
-        from .session_room import session_member_change
-        session_member_change(connection, room_id, member, action)
+        discussion.session_member_change(connection, room_id, member, action)
         connection.execute("UPDATE discussion_turns SET status='cancelled' WHERE room_id=? AND expert=? AND status IN ('pending','notified')",
                            (room_id, member["name"]))
         connection.execute("UPDATE discussion_turns SET status='skipped' WHERE room_id=? AND expert=? AND status='queued'", (room_id, member["name"]))
@@ -2340,9 +2221,8 @@ def discussion_member_action(connection, room_id, member_id, token, payload):
         require_fresh_member_token(connection, room_id, payload.get("token"))
         connection.execute("UPDATE room_members SET status='active',token_hash=? WHERE id=?", (hashed, member_id))
         experts[member["name"]] = "online" if member["access"] == "online" else "cli"
-        from .session_room import current_session, session_member_change
-        if current_session(connection, room_id, active_only=True):
-            session_member_change(connection, room_id, member, action)
+        if discussion.current_session(connection, room_id, active_only=True):
+            discussion.session_member_change(connection, room_id, member, action)
         else:
             queue_invited_expert(connection, room_id, member["name"], int(time.time()))
     elif action == "adopt":
@@ -2394,11 +2274,10 @@ def member_action(connection, room_id, member_id, token, payload):
     action = payload.get("action")
     routed = []
     if action in ("away", "remove"):
-        from .session_room import pause_session_for_host_change, session_member_change
         if member["role"] == "host":
-            pause_session_for_host_change(connection, room_id)
+            discussion.pause_session_for_host_change(connection, room_id)
         else:
-            session_member_change(connection, room_id, member, action)
+            discussion.session_member_change(connection, room_id, member, action)
         # Unnamed messages still waiting on a departing host move to its successor instead of being dropped.
         routed = open_route_messages(connection, member_id)
         stop_member_work(connection, member_id, "成员已离开" if action == "away" else "成员已移除",
@@ -2412,9 +2291,8 @@ def member_action(connection, room_id, member_id, token, payload):
             raise ValueError("只有离开的成员可以请回，且须提供新的成员凭证")
         require_fresh_member_token(connection, room_id, payload.get("token"))
         connection.execute("UPDATE room_members SET status='active',token_hash=? WHERE id=?", (hashed, member_id))
-        from .session_room import current_session, session_member_change
-        if current_session(connection, room_id, active_only=True):
-            session_member_change(connection, room_id, member, action)
+        if discussion.current_session(connection, room_id, active_only=True):
+            discussion.session_member_change(connection, room_id, member, action)
         else:
             queue_invited_expert(connection, room_id, member["name"], int(time.time()))
     elif action == "adopt":
@@ -2426,8 +2304,7 @@ def member_action(connection, room_id, member_id, token, payload):
         if role == "member" and member["role"] == "host":
             raise ValueError("自由房间须由一位 AI 主持；请指定另一位成员担任主持人")
         if role == "host":
-            from .session_room import pause_session_for_host_change
-            pause_session_for_host_change(connection, room_id)
+            discussion.pause_session_for_host_change(connection, room_id)
             # Unnamed messages the old host has not started move to the new host, which carries the host rules.
             old_host = connection.execute("SELECT id FROM room_members WHERE room_id=? AND role='host' AND id<>?", (room_id, member_id)).fetchone()
             if old_host:
@@ -2442,3 +2319,7 @@ def member_action(connection, room_id, member_id, token, payload):
     sync_participants(connection, room_id)
     hand_over_routes(connection, room_id, routed, member_id if action in ("away", "remove") else None)
     return free_view(connection, room_id)
+
+
+# Imported last: session_room imports helpers from this module, so both load in either order.
+from . import session_room as discussion  # noqa: E402

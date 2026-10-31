@@ -977,11 +977,11 @@ async function select_room(room_id) {
     element("message-count").textContent = "0";
     element("latest-id").textContent = "#0";
   }
-  const history = cached && cached_message_history(room_id);
-  state.messages_loading = Boolean(state.room) && !history;
+  const cached_history = cached && cached_message_history(room_id);
+  state.messages_loading = Boolean(state.room) && !cached_history;
   render_rooms();
   if (cached) render_room();
-  if (history) render_messages(history);
+  if (cached_history) render_messages(cached_history);
   try { await refresh_room(); }
   finally { if (state.messages_loading && state.room?.id === room_id) { state.messages_loading = false; publish_view(); } }
 }

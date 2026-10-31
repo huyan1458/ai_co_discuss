@@ -310,7 +310,7 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 .progress-drawer { max-width: min(420px, 100vw); }
 .progress-drawer-body { display: flex; flex-direction: column; padding: 0; scrollbar-gutter: stable; }
 @media (max-width: 700px) {
-  .progress-drawer { max-width: 100vw; }
+  .progress-drawer { max-width: 310px; }
 }
 @media (hover: none) { .pb-member-more { opacity: 1; } }
 .progress-ending { display: grid; gap: 10px; }
@@ -569,7 +569,7 @@ html[data-theme^="channel"] .channel-topic-menu [data-slot="separator"] { height
 html[data-theme^="channel"] .channel-topic-tooltip { padding: 7px 10px; border: 1px solid #ffffff0d; border-radius: 8px; background: #17181b; color: #f0f1f4; font-size: 12px; box-shadow: 0 3px 10px #0004; }
 .channel-navigation-drawer { max-width: 310px; }
 .channel-navigation-drawer > .channel-sidebar { flex: 1; border-right: 0; }
-html[data-theme^="channel"] :is(.channel-navigation-drawer, .glass-panel) { background: #25272df5 !important; backdrop-filter: blur(28px); border: 1px solid #ffffff19; box-shadow: 0 20px 64px #0006, inset 0 1px #ffffff08; }
+html[data-theme^="channel"] :is(.channel-navigation-drawer, .progress-drawer, .glass-panel) { background: #25272df5 !important; backdrop-filter: blur(28px); border: 1px solid #ffffff19; box-shadow: 0 20px 64px #0006, inset 0 1px #ffffff08; }
 html[data-theme^="channel"] .studio-modal { max-width: 540px; border-radius: 15px; }
 html[data-theme^="channel"] .studio-modal [data-slot="header"] { padding: 23px 25px 20px; border-bottom-color: #ffffff0a; }
 html[data-theme^="channel"] .studio-modal [data-slot="title"] { font-size: 16px; font-weight: 600; }
@@ -931,7 +931,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   .channel-topic-menu [data-slot="item"] { color: var(--ui-text); }
   .channel-topic-menu [data-slot="separator"] { background: var(--ui-border-muted); }
   .channel-identity-menu [data-slot="input"] { border-color: var(--ui-border-muted); }
-  :is(.channel-navigation-drawer, .glass-panel) { background: #ffffff !important; border-color: var(--ui-border); box-shadow: 0 20px 64px #00000026; }
+  :is(.channel-navigation-drawer, .progress-drawer, .glass-panel) { background: #ffffff !important; border-color: var(--ui-border); box-shadow: 0 20px 64px #00000026; }
   .studio-modal [data-slot="header"] { border-bottom-color: var(--ui-border-muted); }
   .dialog-form :is(input, textarea, button[role="combobox"]), :is(.summary-editor, .summary-brief-editor) textarea { background: #ffffff; box-shadow: 0 0 0 1px #c9c9c9; }
   .dialog-form :is(.project-box, .project-select) { background: #ffffff; box-shadow: 0 0 0 1px #c9c9c9; }
@@ -1072,8 +1072,8 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 :root[data-theme^="channel"] :is(.channel-message, .turn-panel, .summary-form) { box-shadow: var(--channel-shadow-panel); }
 :root[data-theme^="channel"] .channel-message.channel-topic-card { box-shadow: inset 3px 0 0 var(--channel-accent), var(--channel-shadow-panel); }
 :root[data-theme^="channel"] .channel-composer { box-shadow: var(--channel-shadow-panel) !important; }
-:root[data-theme^="channel"] :is(.channel-menu, .channel-select-menu, .channel-topic-menu, .channel-nav-preview, .channel-message-toolbar, .channel-latest-button, .channel-navigation-drawer, .glass-panel) { border-color: var(--channel-edge-float); box-shadow: var(--channel-shadow-float); }
-:root[data-theme="channel"] :is(.channel-menu, .channel-select-menu, .channel-topic-menu, .channel-nav-preview, .channel-message-toolbar, .channel-latest-button, .channel-navigation-drawer, .glass-panel) { background: var(--channel-glass-bg) !important; -webkit-backdrop-filter: var(--channel-glass-filter); backdrop-filter: var(--channel-glass-filter); }
+:root[data-theme^="channel"] :is(.channel-menu, .channel-select-menu, .channel-topic-menu, .channel-nav-preview, .channel-message-toolbar, .channel-latest-button, .channel-navigation-drawer, .progress-drawer, .glass-panel) { border-color: var(--channel-edge-float); box-shadow: var(--channel-shadow-float); }
+:root[data-theme="channel"] :is(.channel-menu, .channel-select-menu, .channel-topic-menu, .channel-nav-preview, .channel-message-toolbar, .channel-latest-button, .channel-navigation-drawer, .progress-drawer, .glass-panel) { background: var(--channel-glass-bg) !important; -webkit-backdrop-filter: var(--channel-glass-filter); backdrop-filter: var(--channel-glass-filter); }
 /* 消息操作按钮使用频率低：去掉浮层底色、边框与阴影，仅保留淡色图标。 */
 :root[data-theme^="channel"] .channel-message-toolbar { background: transparent !important; border-color: transparent; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
 :root[data-theme^="channel"] .channel-message-actions button { color: var(--ui-text-dimmed); }

@@ -1417,6 +1417,232 @@ async function finish_session_if_limited(database, session, room_id) {
   return true;
 }
 
+// Discussion hooks the free room calls at its own decision points; each leaves the free room alone when no discussion is open.
+// Mirrors the hooks at the end of backend/session_room.py.
+
+/** The running discussion that takes an unnamed user message to its host; null when there is none or the message names members. */
+async function session_holding_message(database, room_id, payload) {
+  if (payload.to !== undefined) return null;
+  const session = await latest_session(database, room_id);
+  return session?.status === "active" ? session : null;
+}
+
+/** The message batch's guard, extended so the held message lands only while the discussion is unchanged. */
+function session_hold_guard(guard, session) {
+  return { condition: `${guard.condition} AND EXISTS(SELECT 1 FROM discussion_sessions s JOIN session_state st ON st.session_id=s.id
+    WHERE s.id=? AND s.status='active' AND st.revision=?)`, values: [...guard.values, session.id, session.state_revision] };
+}
+
+/** Statement marking where the discussion started holding the user's messages. */
+function session_hold_statement(database, session, message_id, key) {
+  return database.prepare(`UPDATE session_state SET held_since=CASE WHEN held_since=0 THEN ${message_id} ELSE held_since END,
+    revision=revision+1 WHERE session_id=? AND EXISTS(SELECT 1 FROM discussion_sessions WHERE id=? AND status='active')`)
+    .bind(...key, session.id, session.id);
+}
+
+/** Ask the discussion's host to handle a user message it holds. */
+async function wake_host_for_message(database, room_id, session, message_id) {
+  const host = await database.prepare("SELECT id FROM room_members WHERE room_id=? AND role='host' AND status='active'").bind(room_id).first();
+  if (host) await create_session_task(database, session.id, host.id, "discuss_host", `用户留言 #${message_id}，请读取并处理后继续讨论。`,
+    "user_message", message_id);
+}
+
+/** Statements marking the discussion turns an answer covers as answered; `requests_sql` selects the member requests by one bound value. */
+function session_answer_statements(database, requests_sql, value) {
+  return [database.prepare(`UPDATE session_requests SET status='answered' WHERE status='open' AND member_request_id IN
+      (SELECT id FROM member_requests WHERE ${requests_sql} AND purpose='discuss')`).bind(value),
+    database.prepare(`UPDATE session_state SET revision=revision+1 WHERE session_id IN
+      (SELECT session_id FROM session_requests WHERE status='answered' AND member_request_id IN
+        (SELECT id FROM member_requests WHERE ${requests_sql} AND purpose='discuss'))`).bind(value)];
+}
+
+/** SQL condition that none of the discussion turns among the selected member requests has paused, ended, run out of time or closed. */
+function session_turns_live_sql(requests_sql) {
+  return `NOT EXISTS(SELECT 1 FROM session_requests q JOIN discussion_sessions s ON s.id=q.session_id
+    JOIN session_limits l ON l.session_id=s.id JOIN session_pauses p ON p.session_id=s.id
+    WHERE q.member_request_id IN (SELECT id FROM member_requests WHERE ${requests_sql} AND purpose='discuss')
+      AND (q.status<>'open' OR s.status<>'active' OR (l.max_minutes>0 AND unixepoch()>=l.started_at+l.max_minutes*60+p.paused_seconds)))`;
+}
+
+/** A manual member answers a discussion turn alone, and only while its discussion runs. */
+async function check_session_manual_answer(database, purposes, ids) {
+  if (purposes.includes("discuss") && (purposes.length !== 1 || (await database.prepare(`SELECT q.status,s.status AS session_status
+    FROM session_requests q JOIN discussion_sessions s ON s.id=q.session_id WHERE q.member_request_id IN (SELECT value FROM json_each(?))`)
+    .bind(JSON.stringify(ids)).first())?.session_status !== "active")) throw new HttpError(409, "讨论请求已失效，或不能与其他请求合并");
+}
+
+/** A discussion turn runs in an execution of its own. */
+function check_session_execution_answer(purposes) {
+  if (purposes.includes("discuss") && purposes.length !== 1) throw new HttpError(409, "讨论请求必须单独执行，不能与直接提问合并");
+}
+
+/** Statements cancelling the open discussion turns a stopped member's cancelled requests carried. */
+function session_stop_statements(database, member_id) {
+  return [database.prepare(`UPDATE session_requests SET status='cancelled' WHERE status='open' AND member_request_id IN
+      (SELECT id FROM member_requests WHERE member_id=? AND status='cancelled' AND purpose='discuss')`).bind(member_id),
+    database.prepare(`UPDATE session_state SET revision=revision+1 WHERE session_id IN
+      (SELECT session_id FROM session_requests WHERE status='cancelled' AND member_request_id IN
+        (SELECT id FROM member_requests WHERE member_id=? AND purpose='discuss' AND status='cancelled'))`).bind(member_id)];
+}
+
+/** The open round's speakers so far, current turn and queued turns, later rounds apart, and everyone who may take part. */
+async function session_speaking_order(database, room, session, active) {
+  const requests = (await database.prepare(`SELECT q.*,m.name FROM session_requests q JOIN room_members m ON m.id=q.member_id
+    WHERE q.session_id=? AND q.purpose='discuss' ORDER BY q.round,q.position,q.id`).bind(session.id).all()).results;
+  const open_rounds = requests.filter(row => ['open', 'queued'].includes(row.status)).map(row => row.round);
+  const round = open_rounds.length ? Math.min(...open_rounds) : Math.max(1, ...requests.map(row => row.round));
+  const current = requests.filter(row => row.round === round);
+  const speaking = current.find(row => row.status === 'open');
+  const items = current.filter(row => row.status === 'answered' && row.name !== speaking?.name).map(row => ({ name: row.name, state: 'done' }));
+  if (speaking) items.push({ name: speaking.name, state: 'speaking' });
+  items.push(...current.filter(row => row.status === 'queued').map(row => ({ name: row.name, state: 'queued' })));
+  const later = [...new Set(requests.filter(row => row.status === 'queued' && row.round > round).map(row => row.round))]
+    .map(later_round => requests.filter(row => row.round === later_round && row.status === 'queued').map(row => row.name));
+  const ordered = [...active.map(member => member.name), ...Object.keys(room.experts)].filter(name => name !== '用户');
+  return { items, later, ordered };
+}
+
+/** Renumber the open round's queued turns in the owner's order, after those already answered or speaking. */
+async function reorder_session_turns(database, room_id, session, order, names) {
+  const round = (await session_roster(database, room_id)).round;
+  const open_position = (await database.prepare(`SELECT COALESCE(MAX(position),0) AS position FROM session_requests
+    WHERE session_id=? AND purpose='discuss' AND round=? AND status IN ('answered','open')`).bind(session.id, round).first()).position;
+  await database.batch([...order.map((name, index) => database.prepare(`UPDATE session_requests SET position=?
+    WHERE session_id=? AND purpose='discuss' AND round=? AND status='queued' AND member_id=?`)
+    .bind(open_position + index + 1, session.id, round, names.get(name))),
+    database.prepare('UPDATE session_state SET revision=revision+1 WHERE session_id=?').bind(session.id)]);
+}
+
+/** True while a discussion is open, or once one started after the message: its host reads user messages without a request. */
+async function session_blocks_message_change(database, room_id, message_id) {
+  return Boolean(await database.prepare("SELECT 1 FROM discussion_sessions WHERE room_id=? AND (status IN ('active','paused') OR started_message_id>=?)").bind(room_id, message_id).first());
+}
+
+/** A forwarded discussion answer covers that one turn alone, and only while it is open in a running discussion. */
+async function check_session_proxy_answer(database, rows) {
+  const turns = rows.filter(row => row.purpose === "discuss");
+  if (!turns.length) return;
+  if (rows.length !== 1) throw new HttpError(400, "讨论安排须单独代发，不能与普通请求合并");
+  const live = await database.prepare(`SELECT 1 FROM session_requests q JOIN discussion_sessions s ON s.id=q.session_id
+    WHERE q.member_request_id=? AND q.purpose='discuss' AND q.status='open' AND s.status='active'`).bind(turns[0].id).first();
+  if (!live) throw new HttpError(409, "讨论安排已暂停、结束或取消，不能继续回答");
+}
+
+/** SQL condition, bound to the room and a JSON list of request ids, that every forwarded discussion turn is still open in a running discussion. */
+function session_proxy_live_sql() {
+  return `NOT EXISTS(
+    SELECT 1 FROM member_requests r LEFT JOIN session_requests q ON q.member_request_id=r.id AND q.purpose='discuss'
+    LEFT JOIN discussion_sessions s ON s.id=q.session_id WHERE r.room_id=? AND r.id IN (SELECT value FROM json_each(?))
+      AND r.purpose='discuss' AND (q.id IS NULL OR q.status<>'open' OR s.status<>'active'))`;
+}
+
+/** Return the host to any active session whose speaker was interrupted or removed. */
+async function reconcile_cancelled_session_requests(database, room_id, member_id) {
+  const cancelled = (await database.prepare(`SELECT q.session_id,q.member_request_id,m.name
+    FROM session_requests q JOIN member_requests r ON r.id=q.member_request_id JOIN room_members m ON m.id=q.member_id
+    JOIN discussion_sessions s ON s.id=q.session_id
+    WHERE s.room_id=? AND s.status='active' AND q.status='cancelled' AND q.purpose='discuss'
+      AND q.member_id=? AND EXISTS(SELECT 1 FROM request_cancel_reasons c WHERE c.request_id=r.id
+        AND c.reason IN ('user_stop','member_away','member_removed')) ORDER BY q.id`).bind(room_id, member_id).all()).results;
+  for (const request of cancelled) {
+    const session = await latest_session(database, room_id);
+    if (!session || session.id !== request.session_id) continue;
+    let next = await database.prepare("SELECT * FROM session_requests WHERE session_id=? AND status='queued' ORDER BY round,position,id LIMIT 1")
+      .bind(session.id).first();
+    while (next) {
+      if (await issue_session_plan(database, session, next, request.member_request_id)) break;
+      next = await database.prepare("SELECT * FROM session_requests WHERE session_id=? AND status='queued' ORDER BY round,position,id LIMIT 1")
+        .bind(session.id).first();
+    }
+    if (next) continue;
+    const host = await database.prepare("SELECT id FROM room_members WHERE room_id=? AND role='host' AND status='active'").bind(room_id).first();
+    if (host) await create_session_task(database, request.session_id, host.id, "discuss_host",
+      `${request.name} 的讨论发言已被中断（请求 ${request.member_request_id}）。请读取最新状态，继续安排或收束。`,
+      "member_change", null, request.member_request_id);
+  }
+}
+
+/** Queue an invited expert after its registration, preserving the current open plan. */
+async function queue_invited_expert(database, room_id, name) {
+  const session = await latest_session(database, room_id);
+  if (!session) return;
+  const member = await database.prepare(`SELECT m.*,COALESCE(src.source,'') AS manual_source FROM room_members m
+    LEFT JOIN member_manual_sources src ON src.member_id=m.id WHERE m.room_id=? AND m.name=? AND m.status='active'`)
+    .bind(room_id, name).first();
+  if (!member || (member.access === 'manual' && member.manual_source !== 'web' && !await registered_at(database, member))) return;
+  const planned = await database.prepare("SELECT 1 FROM session_requests WHERE session_id=? AND purpose='discuss' AND status IN ('open','queued') LIMIT 1")
+    .bind(session.id).first();
+  if (!planned) return;
+  const round = (await database.prepare("SELECT MIN(round) AS round FROM session_requests WHERE session_id=? AND purpose='discuss' AND status IN ('open','queued','failed')")
+    .bind(session.id).first()).round ?? 1;
+  const position = (await database.prepare("SELECT COALESCE(MAX(position),0)+1 AS position FROM session_requests WHERE session_id=? AND purpose='discuss' AND round=?")
+    .bind(session.id, round).first()).position;
+  const invitation = (await database.prepare("SELECT COUNT(*) AS count FROM session_requests WHERE session_id=? AND member_id=? AND submission_id LIKE 'invite:%'")
+    .bind(session.id, member.id).first()).count + 1;
+  const question = session.phase === 'initial' ? '欢迎加入：请先读取议题，独立给出你的开场观点。' : '欢迎加入：请先读取议题和已有回答，给出你的观点。';
+  await database.batch([
+    database.prepare(`INSERT OR IGNORE INTO session_requests(session_id,round,position,member_id,purpose,question,status,submission_id,read_until,created_at)
+      VALUES(?,?,?,?,'discuss',?,'queued',?,?,?)`).bind(session.id, round, position, member.id, question,
+      `invite:${member.id}:${invitation}`, session.phase === 'initial' && round === 1 ? session.read_until : null, new Date().toISOString()),
+    database.prepare('UPDATE session_state SET revision=revision+1 WHERE session_id=?').bind(session.id),
+  ]);
+}
+
+/** Invalidate queued work after roster changes and ask the active host to plan again. */
+async function session_member_change(database, room_id, member, action) {
+  const session = await latest_session(database, room_id);
+  if (!session || session.status !== 'active') return;
+  const queued = (await database.prepare("SELECT id,member_request_id FROM session_requests WHERE session_id=? AND purpose='discuss' AND status='queued'")
+    .bind(session.id).all()).results;
+  const targets = ['away', 'remove'].includes(action)
+    ? (await database.prepare("SELECT id,member_request_id FROM session_requests WHERE session_id=? AND purpose='discuss' AND member_id=? AND status IN ('open','queued','failed')")
+      .bind(session.id, member.id).all()).results : [];
+  const statements = [
+    ...queued.flatMap(row => [
+      ...(row.member_request_id ? [database.prepare("UPDATE member_requests SET status='cancelled' WHERE id=? AND status IN ('pending','delivering')").bind(row.member_request_id),
+        database.prepare(`UPDATE member_executions SET status='cancelled',finished_at=unixepoch(),result='discussion_roster_changed'
+          WHERE id IN (SELECT execution_id FROM member_requests WHERE id=?) AND status IN ('dispatched','started')`).bind(row.member_request_id)] : []),
+      database.prepare("UPDATE session_requests SET status='skipped' WHERE id=? AND status='queued'").bind(row.id),
+    ]),
+    ...targets.flatMap(row => [
+      ...(row.member_request_id ? [database.prepare("INSERT OR REPLACE INTO request_cancel_reasons(request_id,reason) SELECT ?,? WHERE EXISTS(SELECT 1 FROM member_requests WHERE id=? AND status IN ('pending','delivering'))")
+        .bind(row.member_request_id, action === 'away' ? 'member_away' : 'member_removed', row.member_request_id),
+        database.prepare("UPDATE member_requests SET status='cancelled' WHERE id=? AND status IN ('pending','delivering')").bind(row.member_request_id),
+        database.prepare(`UPDATE member_executions SET status='cancelled',finished_at=unixepoch(),result='member_left'
+          WHERE id IN (SELECT execution_id FROM member_requests WHERE id=?) AND status IN ('dispatched','started')`).bind(row.member_request_id)] : []),
+      database.prepare("UPDATE session_requests SET status=CASE WHEN status='open' THEN 'cancelled' WHEN status='queued' THEN 'skipped' ELSE status END WHERE id=?").bind(row.id),
+    ]),
+    database.prepare('UPDATE session_state SET revision=revision+1 WHERE session_id=?').bind(session.id),
+  ];
+  await database.batch(statements);
+  const host = await database.prepare("SELECT id FROM room_members WHERE room_id=? AND role='host' AND status='active'").bind(room_id).first();
+  if (host) {
+    const detail = action === 'away' ? '暂离' : action === 'remove' ? '移除' : '请回';
+    await create_session_task(database, session.id, host.id, 'discuss_host',
+      `专家 ${member.name} 已${detail}；剩余排队安排已作废，请检查当前发言并重新安排。`, 'member_change');
+  }
+}
+
+/** Pause and cancel a live session before changing its host. */
+async function pause_session_for_host_change(database, room_id) {
+  const session = await latest_session(database, room_id);
+  if (!session || session.status !== 'active') return;
+  const requests = (await database.prepare("SELECT member_request_id FROM session_requests WHERE session_id=? AND status IN ('open','queued')")
+    .bind(session.id).all()).results;
+  await database.batch([
+    ...requests.flatMap(row => row.member_request_id ? [
+      database.prepare("INSERT OR REPLACE INTO request_cancel_reasons(request_id,reason) SELECT ?,'user_stop' WHERE EXISTS(SELECT 1 FROM member_requests WHERE id=? AND status IN ('pending','delivering'))").bind(row.member_request_id, row.member_request_id),
+      database.prepare("UPDATE member_requests SET status='cancelled' WHERE id=? AND status IN ('pending','delivering')").bind(row.member_request_id),
+      database.prepare(`UPDATE member_executions SET status='cancelled',finished_at=unixepoch(),result='host_changed'
+        WHERE id IN (SELECT execution_id FROM member_requests WHERE id=?) AND status IN ('dispatched','started')`).bind(row.member_request_id),
+    ] : []),
+    database.prepare("UPDATE session_requests SET status='cancelled' WHERE session_id=? AND status IN ('open','queued')").bind(session.id),
+    database.prepare("UPDATE discussion_sessions SET status='paused' WHERE id=? AND status='active'").bind(session.id),
+    database.prepare('UPDATE session_pauses SET paused_at=unixepoch() WHERE session_id=?').bind(session.id),
+    database.prepare('UPDATE session_state SET revision=revision+1 WHERE session_id=?').bind(session.id),
+  ]);
+}
+
 async function advance_session_answer(database, room_id, message_id) {
   const completed = (await database.prepare(`SELECT r.id AS member_request_id,r.purpose,q.id AS plan_id,q.session_id,q.status AS plan_status,
     q.round,q.member_id,q.question,q.submission_id FROM member_requests r JOIN session_requests q ON q.member_request_id=r.id
@@ -3861,18 +4087,7 @@ async function speaking_order(database, room) {
   let items = [], kind = "default", target = 0, later = [];
   if (session) {
     kind = 'turns';
-    const requests = (await database.prepare(`SELECT q.*,m.name FROM session_requests q JOIN room_members m ON m.id=q.member_id
-      WHERE q.session_id=? AND q.purpose='discuss' ORDER BY q.round,q.position,q.id`).bind(session.id).all()).results;
-    const open_rounds = requests.filter(row => ['open', 'queued'].includes(row.status)).map(row => row.round);
-    const round = open_rounds.length ? Math.min(...open_rounds) : Math.max(1, ...requests.map(row => row.round));
-    const current = requests.filter(row => row.round === round);
-    const speaking = current.find(row => row.status === 'open');
-    items = current.filter(row => row.status === 'answered' && row.name !== speaking?.name).map(row => ({ name: row.name, state: 'done' }));
-    if (speaking) items.push({ name: speaking.name, state: 'speaking' });
-    items.push(...current.filter(row => row.status === 'queued').map(row => ({ name: row.name, state: 'queued' })));
-    later = [...new Set(requests.filter(row => row.status === 'queued' && row.round > round).map(row => row.round))]
-      .map(later_round => requests.filter(row => row.round === later_round && row.status === 'queued').map(row => row.name));
-    ordered = [...active.map(member => member.name), ...Object.keys(room.experts)].filter(name => name !== '用户');
+    ({ items, later, ordered } = await session_speaking_order(database, room, session, active));
   } else if (room.mode === "free") {
     target = queued?.target || 0;
     if (target) {
@@ -3939,16 +4154,7 @@ async function reorder_speakers(database, room, token, payload) {
       ...order.map((name) => database.prepare("INSERT INTO free_queue (room_id,message_id,member_id) VALUES (?,?,?)").bind(room.id, current.message_id, names.get(name)))]);
   } else if (current.kind === "turns") {
     const session = await latest_session(database, room.id);
-    if (session) {
-      const round = (await session_roster(database, room.id)).round;
-      const open_position = (await database.prepare(`SELECT COALESCE(MAX(position),0) AS position FROM session_requests
-        WHERE session_id=? AND purpose='discuss' AND round=? AND status IN ('answered','open')`).bind(session.id, round).first()).position;
-      await database.batch([...order.map((name, index) => database.prepare(`UPDATE session_requests SET position=?
-        WHERE session_id=? AND purpose='discuss' AND round=? AND status='queued' AND member_id=?`)
-        .bind(open_position + index + 1, session.id, round, names.get(name))),
-        database.prepare('UPDATE session_state SET revision=revision+1 WHERE session_id=?').bind(session.id)]);
-      return;
-    }
+    if (session) return reorder_session_turns(database, room.id, session, order, names);
     // Ids keep the relay order, so each turn's content moves to the id at its new place; submission ids are freed first as they are unique.
     // This round's turns lead the queue, so they are its first rows; later rounds keep theirs.
     const rows = (await database.prepare("SELECT * FROM discussion_turns WHERE room_id=? AND status='queued' ORDER BY id LIMIT ?").bind(room.id, order.length).all()).results;
@@ -4065,16 +4271,11 @@ async function free_answer_guard(database, room_id, member, payload) {
       if (!row || row.member_id !== member.id || row.status !== "pending") throw new HttpError(409, `请求 ${id} 不属于本成员或已处理`);
       purposes.push(row.purpose);
     }
-    if (purposes.includes("discuss") && (purposes.length !== 1 || (await database.prepare(`SELECT q.status,s.status AS session_status
-      FROM session_requests q JOIN discussion_sessions s ON s.id=q.session_id WHERE q.member_request_id IN (SELECT value FROM json_each(?))`)
-      .bind(JSON.stringify(ids)).first())?.session_status !== "active")) throw new HttpError(409, "讨论请求已失效，或不能与其他请求合并");
+    await check_session_manual_answer(database, purposes, ids);
     free_check_dispatch(member, payload, purposes);
     const unique = [...new Set(ids)];
     return { ids: unique, condition: `${token_check} AND (SELECT COUNT(*) FROM member_requests WHERE member_id=? AND status='pending' AND id IN (SELECT value FROM json_each(?)))=?
-      AND NOT EXISTS(SELECT 1 FROM session_requests q JOIN discussion_sessions s ON s.id=q.session_id
-        JOIN session_limits l ON l.session_id=s.id JOIN session_pauses p ON p.session_id=s.id
-        WHERE q.member_request_id IN (SELECT id FROM member_requests WHERE id IN (SELECT value FROM json_each(?)) AND purpose='discuss')
-          AND (q.status<>'open' OR s.status<>'active' OR (l.max_minutes>0 AND unixepoch()>=l.started_at+l.max_minutes*60+p.paused_seconds)))`,
+      AND ${session_turns_live_sql("id IN (SELECT value FROM json_each(?))")}`,
       values: [member.id, member.token_hash, member.id, JSON.stringify(unique), unique.length, JSON.stringify(unique)] };
   }
   const execution_id = payload.execution_id;
@@ -4090,12 +4291,9 @@ async function free_answer_guard(database, room_id, member, payload) {
   free_check_dispatch(member, payload, (await database.prepare("SELECT purpose FROM member_requests WHERE execution_id=? AND status='delivering'")
     .bind(execution_id).all()).results.map(item => item.purpose));
   const purposes = (await database.prepare("SELECT purpose FROM member_requests WHERE execution_id=? AND status='delivering'").bind(execution_id).all()).results.map(item => item.purpose);
-  if (purposes.includes("discuss") && purposes.length !== 1) throw new HttpError(409, "讨论请求必须单独执行，不能与直接提问合并");
+  check_session_execution_answer(purposes);
   return { execution_id, condition: `${token_check} AND EXISTS(SELECT 1 FROM member_executions WHERE id=? AND member_id=? AND ${FREE_LIVE} AND lease_until>unixepoch())
-    AND NOT EXISTS(SELECT 1 FROM session_requests q JOIN discussion_sessions s ON s.id=q.session_id
-      JOIN session_limits l ON l.session_id=s.id JOIN session_pauses p ON p.session_id=s.id
-      WHERE q.member_request_id IN (SELECT id FROM member_requests WHERE execution_id=? AND purpose='discuss')
-        AND (q.status<>'open' OR s.status<>'active' OR (l.max_minutes>0 AND unixepoch()>=l.started_at+l.max_minutes*60+p.paused_seconds)))`,
+    AND ${session_turns_live_sql("execution_id=?")}`,
     values: [member.id, member.token_hash, execution_id, member.id, execution_id] };
 }
 
@@ -4125,37 +4323,7 @@ function free_stop_statements(database, member_id, reason, cancel_reason, keep_p
     ...(keep_pending ? [] : [
       database.prepare("INSERT OR REPLACE INTO request_cancel_reasons (request_id,reason) SELECT id,? FROM member_requests WHERE member_id=? AND status='pending'").bind(cancel_reason, member_id),
       database.prepare("UPDATE member_requests SET status='cancelled' WHERE member_id=? AND status='pending'").bind(member_id)]),
-    database.prepare(`UPDATE session_requests SET status='cancelled' WHERE status='open' AND member_request_id IN
-      (SELECT id FROM member_requests WHERE member_id=? AND status='cancelled' AND purpose='discuss')`).bind(member_id),
-    database.prepare(`UPDATE session_state SET revision=revision+1 WHERE session_id IN
-      (SELECT session_id FROM session_requests WHERE status='cancelled' AND member_request_id IN
-        (SELECT id FROM member_requests WHERE member_id=? AND purpose='discuss' AND status='cancelled'))`).bind(member_id)];
-}
-
-/** Return the host to any active session whose speaker was interrupted or removed. */
-async function reconcile_cancelled_session_requests(database, room_id, member_id) {
-  const cancelled = (await database.prepare(`SELECT q.session_id,q.member_request_id,m.name
-    FROM session_requests q JOIN member_requests r ON r.id=q.member_request_id JOIN room_members m ON m.id=q.member_id
-    JOIN discussion_sessions s ON s.id=q.session_id
-    WHERE s.room_id=? AND s.status='active' AND q.status='cancelled' AND q.purpose='discuss'
-      AND q.member_id=? AND EXISTS(SELECT 1 FROM request_cancel_reasons c WHERE c.request_id=r.id
-        AND c.reason IN ('user_stop','member_away','member_removed')) ORDER BY q.id`).bind(room_id, member_id).all()).results;
-  for (const request of cancelled) {
-    const session = await latest_session(database, room_id);
-    if (!session || session.id !== request.session_id) continue;
-    let next = await database.prepare("SELECT * FROM session_requests WHERE session_id=? AND status='queued' ORDER BY round,position,id LIMIT 1")
-      .bind(session.id).first();
-    while (next) {
-      if (await issue_session_plan(database, session, next, request.member_request_id)) break;
-      next = await database.prepare("SELECT * FROM session_requests WHERE session_id=? AND status='queued' ORDER BY round,position,id LIMIT 1")
-        .bind(session.id).first();
-    }
-    if (next) continue;
-    const host = await database.prepare("SELECT id FROM room_members WHERE room_id=? AND role='host' AND status='active'").bind(room_id).first();
-    if (host) await create_session_task(database, request.session_id, host.id, "discuss_host",
-      `${request.name} 的讨论发言已被中断（请求 ${request.member_request_id}）。请读取最新状态，继续安排或收束。`,
-      "member_change", null, request.member_request_id);
-  }
+    ...session_stop_statements(database, member_id)];
 }
 
 /** Void every live execution and open request of a room, e.g. when it is archived. */
@@ -4208,8 +4376,7 @@ async function owner_message(database, room_id, message_id) {
   if (row.author !== "用户") throw new HttpError(400, "只能撤回或编辑用户自己的消息");
   if (await room_mode(database, room_id) !== "free") throw new HttpError(400, "只有协作房间的消息可以撤回或编辑");
   if (await database.prepare("SELECT 1 FROM room_directory WHERE room_id=? AND archived=1").bind(room_id).first()) throw new HttpError(400, "房间已存档；恢复后才能撤回或编辑");
-  // A discussion's host reads the user's messages itself, with no request that shows whether it began.
-  if (await database.prepare("SELECT 1 FROM discussion_sessions WHERE room_id=? AND (status IN ('active','paused') OR started_message_id>=?)").bind(room_id, message_id).first()) {
+  if (await session_blocks_message_change(database, room_id, message_id)) {
     throw new HttpError(409, "讨论进行中，或这条消息之后开启过讨论，不能撤回或编辑");
   }
   return row;
@@ -5076,87 +5243,6 @@ async function register_member(database, room_id, token) {
   return { member: member.name, registered_at: stamp, session_client: reported?.client ?? "" };
 }
 
-/** Queue an invited expert after its registration, preserving the current open plan. */
-async function queue_invited_expert(database, room_id, name) {
-  const session = await latest_session(database, room_id);
-  if (!session) return;
-  const member = await database.prepare(`SELECT m.*,COALESCE(src.source,'') AS manual_source FROM room_members m
-    LEFT JOIN member_manual_sources src ON src.member_id=m.id WHERE m.room_id=? AND m.name=? AND m.status='active'`)
-    .bind(room_id, name).first();
-  if (!member || (member.access === 'manual' && member.manual_source !== 'web' && !await registered_at(database, member))) return;
-  const planned = await database.prepare("SELECT 1 FROM session_requests WHERE session_id=? AND purpose='discuss' AND status IN ('open','queued') LIMIT 1")
-    .bind(session.id).first();
-  if (!planned) return;
-  const round = (await database.prepare("SELECT MIN(round) AS round FROM session_requests WHERE session_id=? AND purpose='discuss' AND status IN ('open','queued','failed')")
-    .bind(session.id).first()).round ?? 1;
-  const position = (await database.prepare("SELECT COALESCE(MAX(position),0)+1 AS position FROM session_requests WHERE session_id=? AND purpose='discuss' AND round=?")
-    .bind(session.id, round).first()).position;
-  const invitation = (await database.prepare("SELECT COUNT(*) AS count FROM session_requests WHERE session_id=? AND member_id=? AND submission_id LIKE 'invite:%'")
-    .bind(session.id, member.id).first()).count + 1;
-  const question = session.phase === 'initial' ? '欢迎加入：请先读取议题，独立给出你的开场观点。' : '欢迎加入：请先读取议题和已有回答，给出你的观点。';
-  await database.batch([
-    database.prepare(`INSERT OR IGNORE INTO session_requests(session_id,round,position,member_id,purpose,question,status,submission_id,read_until,created_at)
-      VALUES(?,?,?,?,'discuss',?,'queued',?,?,?)`).bind(session.id, round, position, member.id, question,
-      `invite:${member.id}:${invitation}`, session.phase === 'initial' && round === 1 ? session.read_until : null, new Date().toISOString()),
-    database.prepare('UPDATE session_state SET revision=revision+1 WHERE session_id=?').bind(session.id),
-  ]);
-}
-
-/** Invalidate queued work after roster changes and ask the active host to plan again. */
-async function session_member_change(database, room_id, member, action) {
-  const session = await latest_session(database, room_id);
-  if (!session || session.status !== 'active') return;
-  const queued = (await database.prepare("SELECT id,member_request_id FROM session_requests WHERE session_id=? AND purpose='discuss' AND status='queued'")
-    .bind(session.id).all()).results;
-  const targets = ['away', 'remove'].includes(action)
-    ? (await database.prepare("SELECT id,member_request_id FROM session_requests WHERE session_id=? AND purpose='discuss' AND member_id=? AND status IN ('open','queued','failed')")
-      .bind(session.id, member.id).all()).results : [];
-  const statements = [
-    ...queued.flatMap(row => [
-      ...(row.member_request_id ? [database.prepare("UPDATE member_requests SET status='cancelled' WHERE id=? AND status IN ('pending','delivering')").bind(row.member_request_id),
-        database.prepare(`UPDATE member_executions SET status='cancelled',finished_at=unixepoch(),result='discussion_roster_changed'
-          WHERE id IN (SELECT execution_id FROM member_requests WHERE id=?) AND status IN ('dispatched','started')`).bind(row.member_request_id)] : []),
-      database.prepare("UPDATE session_requests SET status='skipped' WHERE id=? AND status='queued'").bind(row.id),
-    ]),
-    ...targets.flatMap(row => [
-      ...(row.member_request_id ? [database.prepare("INSERT OR REPLACE INTO request_cancel_reasons(request_id,reason) SELECT ?,? WHERE EXISTS(SELECT 1 FROM member_requests WHERE id=? AND status IN ('pending','delivering'))")
-        .bind(row.member_request_id, action === 'away' ? 'member_away' : 'member_removed', row.member_request_id),
-        database.prepare("UPDATE member_requests SET status='cancelled' WHERE id=? AND status IN ('pending','delivering')").bind(row.member_request_id),
-        database.prepare(`UPDATE member_executions SET status='cancelled',finished_at=unixepoch(),result='member_left'
-          WHERE id IN (SELECT execution_id FROM member_requests WHERE id=?) AND status IN ('dispatched','started')`).bind(row.member_request_id)] : []),
-      database.prepare("UPDATE session_requests SET status=CASE WHEN status='open' THEN 'cancelled' WHEN status='queued' THEN 'skipped' ELSE status END WHERE id=?").bind(row.id),
-    ]),
-    database.prepare('UPDATE session_state SET revision=revision+1 WHERE session_id=?').bind(session.id),
-  ];
-  await database.batch(statements);
-  const host = await database.prepare("SELECT id FROM room_members WHERE room_id=? AND role='host' AND status='active'").bind(room_id).first();
-  if (host) {
-    const detail = action === 'away' ? '暂离' : action === 'remove' ? '移除' : '请回';
-    await create_session_task(database, session.id, host.id, 'discuss_host',
-      `专家 ${member.name} 已${detail}；剩余排队安排已作废，请检查当前发言并重新安排。`, 'member_change');
-  }
-}
-
-/** Pause and cancel a live session before changing its host. */
-async function pause_session_for_host_change(database, room_id) {
-  const session = await latest_session(database, room_id);
-  if (!session || session.status !== 'active') return;
-  const requests = (await database.prepare("SELECT member_request_id FROM session_requests WHERE session_id=? AND status IN ('open','queued')")
-    .bind(session.id).all()).results;
-  await database.batch([
-    ...requests.flatMap(row => row.member_request_id ? [
-      database.prepare("INSERT OR REPLACE INTO request_cancel_reasons(request_id,reason) SELECT ?,'user_stop' WHERE EXISTS(SELECT 1 FROM member_requests WHERE id=? AND status IN ('pending','delivering'))").bind(row.member_request_id, row.member_request_id),
-      database.prepare("UPDATE member_requests SET status='cancelled' WHERE id=? AND status IN ('pending','delivering')").bind(row.member_request_id),
-      database.prepare(`UPDATE member_executions SET status='cancelled',finished_at=unixepoch(),result='host_changed'
-        WHERE id IN (SELECT execution_id FROM member_requests WHERE id=?) AND status IN ('dispatched','started')`).bind(row.member_request_id),
-    ] : []),
-    database.prepare("UPDATE session_requests SET status='cancelled' WHERE session_id=? AND status IN ('open','queued')").bind(session.id),
-    database.prepare("UPDATE discussion_sessions SET status='paused' WHERE id=? AND status='active'").bind(session.id),
-    database.prepare('UPDATE session_pauses SET paused_at=unixepoch() WHERE session_id=?').bind(session.id),
-    database.prepare('UPDATE session_state SET revision=revision+1 WHERE session_id=?').bind(session.id),
-  ]);
-}
-
 /** Prevent reuse of an existing member or owner credential. */
 async function require_fresh_member_hash(database, room_id, hashed) {
   if (!hashed || await database.prepare("SELECT 1 FROM room_members WHERE room_id=? AND token_hash=? UNION ALL SELECT 1 FROM room_modes WHERE room_id=? AND control_hash=?")
@@ -5259,8 +5345,7 @@ async function append_free_message(database, room, payload, actor) {
     return { message: previous, duplicate: true };
   }
   if (room.archived) throw new HttpError(400, "房间已存档；恢复后才能继续协作");
-  const current_session = actor === "用户" && payload.to === undefined ? await latest_session(database, room_id) : null;
-  const session = current_session?.status === "active" ? current_session : null;
+  const session = actor === "用户" ? await session_holding_message(database, room_id, payload) : null;
   await check_message_references(database, room_id, expected);
   await check_message_attachments(database, room_id, expected);
   const review_plan = await checked_review_plan(database, room_id, actor, payload);
@@ -5280,11 +5365,7 @@ async function append_free_message(database, room, payload, actor) {
     guard = add_web_proxy_batch_guard(guard, room_id, proxy.id, checked.ids);
     effects.push(database.prepare(`UPDATE member_requests SET status='completed',answer_id=${message_id}
       WHERE member_id=? AND status='pending' AND id IN (SELECT value FROM json_each(?))`).bind(...key, proxy.id, JSON.stringify(checked.ids)));
-    effects.push(database.prepare(`UPDATE session_requests SET status='answered' WHERE status='open' AND member_request_id IN
-      (SELECT id FROM member_requests WHERE id IN (SELECT value FROM json_each(?)) AND purpose='discuss')`).bind(JSON.stringify(checked.ids)),
-      database.prepare(`UPDATE session_state SET revision=revision+1 WHERE session_id IN
-        (SELECT session_id FROM session_requests WHERE status='answered' AND member_request_id IN
-          (SELECT id FROM member_requests WHERE id IN (SELECT value FROM json_each(?)) AND purpose='discuss'))`).bind(JSON.stringify(checked.ids)));
+    effects.push(...session_answer_statements(database, "id IN (SELECT value FROM json_each(?))", JSON.stringify(checked.ids)));
   } else if (host_proxy) {
     const ids = payload.request_ids ?? [];
     const checked = await validate_web_proxy_requests(database, room_id, ids);
@@ -5293,11 +5374,7 @@ async function append_free_message(database, room, payload, actor) {
       WHERE m.id=? AND m.status='active' AND (m.access='online' OR src.source='web'))`, values: [...guard.values, checked.member_id] };
     effects.push(database.prepare(`UPDATE member_requests SET status='completed',answer_id=${message_id}
       WHERE id IN (SELECT value FROM json_each(?)) AND status='pending'`).bind(...key, JSON.stringify(checked.ids)));
-    effects.push(database.prepare(`UPDATE session_requests SET status='answered' WHERE status='open' AND member_request_id IN
-      (SELECT id FROM member_requests WHERE id IN (SELECT value FROM json_each(?)) AND purpose='discuss')`).bind(JSON.stringify(checked.ids)),
-      database.prepare(`UPDATE session_state SET revision=revision+1 WHERE session_id IN
-        (SELECT session_id FROM session_requests WHERE status='answered' AND member_request_id IN
-          (SELECT id FROM member_requests WHERE id IN (SELECT value FROM json_each(?)) AND purpose='discuss'))`).bind(JSON.stringify(checked.ids)));
+    effects.push(...session_answer_statements(database, "id IN (SELECT value FROM json_each(?))", JSON.stringify(checked.ids)));
   } else if (actor === "用户" && payload.sequential === true && payload.to !== undefined) {
     // Named members answer one after another in the room's speaking order; settling below asks the first.
     const ids = (await free_recipients(database, room_id, payload)).map(recipient => recipient.id);
@@ -5311,11 +5388,8 @@ async function append_free_message(database, room, payload, actor) {
         .bind(room_id, recipient.id, ...key, ...key, recipient.purpose, recipient.id));
     }
     if (session) {
-      guard = { condition: `${guard.condition} AND EXISTS(SELECT 1 FROM discussion_sessions s JOIN session_state st ON st.session_id=s.id
-        WHERE s.id=? AND s.status='active' AND st.revision=?)`, values: [...guard.values, session.id, session.state_revision] };
-      effects.push(database.prepare(`UPDATE session_state SET held_since=CASE WHEN held_since=0 THEN ${message_id} ELSE held_since END,
-        revision=revision+1 WHERE session_id=? AND EXISTS(SELECT 1 FROM discussion_sessions WHERE id=? AND status='active')`)
-        .bind(...key, session.id, session.id));
+      guard = session_hold_guard(guard, session);
+      effects.push(session_hold_statement(database, session, message_id, key));
     }
   } else {
     guard = await free_answer_guard(database, room_id, actor, payload);
@@ -5323,21 +5397,13 @@ async function append_free_message(database, room, payload, actor) {
     if (guard.ids) {
       effects.push(database.prepare(`UPDATE member_requests SET status='completed',answer_id=${message_id}
         WHERE member_id=? AND status='pending' AND id IN (SELECT value FROM json_each(?))`).bind(...key, actor.id, JSON.stringify(guard.ids)));
-      effects.push(database.prepare(`UPDATE session_requests SET status='answered' WHERE status='open' AND member_request_id IN
-        (SELECT id FROM member_requests WHERE id IN (SELECT value FROM json_each(?)) AND purpose='discuss')`).bind(JSON.stringify(guard.ids)),
-        database.prepare(`UPDATE session_state SET revision=revision+1 WHERE session_id IN
-          (SELECT session_id FROM session_requests WHERE status='answered' AND member_request_id IN
-            (SELECT id FROM member_requests WHERE id IN (SELECT value FROM json_each(?)) AND purpose='discuss'))`).bind(JSON.stringify(guard.ids)));
+      effects.push(...session_answer_statements(database, "id IN (SELECT value FROM json_each(?))", JSON.stringify(guard.ids)));
     } else {
       effects.push(database.prepare(`UPDATE member_requests SET status='completed',answer_id=${message_id} WHERE execution_id=? AND status='delivering'`)
         .bind(...key, guard.execution_id),
         database.prepare(`UPDATE member_executions SET status='completed',finished_at=unixepoch(),result='message:'||${message_id} WHERE id=?`)
           .bind(...key, guard.execution_id));
-      effects.push(database.prepare(`UPDATE session_requests SET status='answered' WHERE status='open' AND member_request_id IN
-        (SELECT id FROM member_requests WHERE execution_id=? AND purpose='discuss')`).bind(guard.execution_id),
-        database.prepare(`UPDATE session_state SET revision=revision+1 WHERE session_id IN
-          (SELECT session_id FROM session_requests WHERE status='answered' AND member_request_id IN
-            (SELECT id FROM member_requests WHERE execution_id=? AND purpose='discuss'))`).bind(guard.execution_id));
+      effects.push(...session_answer_statements(database, "execution_id=?", guard.execution_id));
     }
     effects.push(database.prepare(`UPDATE room_members SET read_until=MAX(read_until,${message_id}) WHERE id=?`).bind(...key, actor.id));
     if (actor.role === "host" && payload.to?.length) effects.push(...await free_dispatch_statements(database, room_id, actor, payload.to, chain_id, message_id, key, payload.handoff === true || Boolean(review_plan)));
@@ -5370,11 +5436,7 @@ async function append_free_message(database, room, payload, actor) {
   }
   const message = await lookup();
   if (actor !== "用户" || proxy) await advance_session_answer(database, room_id, message.id);
-  if (session) {
-    const host = await database.prepare("SELECT id FROM room_members WHERE room_id=? AND role='host' AND status='active'").bind(room_id).first();
-    if (host) await create_session_task(database, session.id, host.id, "discuss_host", `用户留言 #${message.id}，请读取并处理后继续讨论。`,
-      "user_message", message.id);
-  }
+  if (session) await wake_host_for_message(database, room_id, session, message.id);
   await attach_message_files(database, [message]);
   return { message, duplicate: false };
 }
@@ -5385,21 +5447,14 @@ async function validate_web_proxy_requests(database, room_id, request_ids, membe
     throw new HttpError(400, "代发须关联有效的 request_ids");
   }
   const ids = [...new Set(request_ids)];
-  const rows = (await database.prepare(`SELECT r.id,r.member_id,r.status,r.purpose,q.status AS session_request_status,s.status AS session_status
-    FROM member_requests r LEFT JOIN session_requests q ON q.member_request_id=r.id AND q.purpose='discuss'
-    LEFT JOIN discussion_sessions s ON s.id=q.session_id WHERE r.room_id=? AND r.id IN (SELECT value FROM json_each(?))`)
+  const rows = (await database.prepare("SELECT id,member_id,status,purpose FROM member_requests WHERE room_id=? AND id IN (SELECT value FROM json_each(?))")
     .bind(room_id, JSON.stringify(ids)).all()).results;
   if (rows.length !== ids.length || rows.some(row => row.status !== "pending" || member_id !== null && row.member_id !== member_id)) {
     throw new HttpError(409, "代发请求不属于该在线成员或已处理");
   }
   const members = new Set(rows.map(row => row.member_id));
   if (members.size > 1) throw new HttpError(409, "代发请求必须属于同一在线成员");
-  if (rows.some(row => row.purpose === "discuss") && rows.length !== 1) {
-    throw new HttpError(400, "讨论安排须单独代发，不能与普通请求合并");
-  }
-  if (rows.some(row => row.purpose === "discuss" && (row.session_request_status !== "open" || row.session_status !== "active"))) {
-    throw new HttpError(409, "讨论安排已暂停、结束或取消，不能继续回答");
-  }
+  await check_session_proxy_answer(database, rows);
   return { ids, member_id: member_id ?? [...members][0] };
 }
 
@@ -5408,10 +5463,7 @@ function add_web_proxy_batch_guard(guard, room_id, member_id, ids) {
   const encoded_ids = JSON.stringify(ids);
   return { condition: `${guard.condition} AND
     (SELECT COUNT(*) FROM member_requests WHERE room_id=? AND member_id=? AND status='pending'
-      AND id IN (SELECT value FROM json_each(?)))=? AND NOT EXISTS(
-    SELECT 1 FROM member_requests r LEFT JOIN session_requests q ON q.member_request_id=r.id AND q.purpose='discuss'
-    LEFT JOIN discussion_sessions s ON s.id=q.session_id WHERE r.room_id=? AND r.id IN (SELECT value FROM json_each(?))
-      AND r.purpose='discuss' AND (q.id IS NULL OR q.status<>'open' OR s.status<>'active'))`,
+      AND id IN (SELECT value FROM json_each(?)))=? AND ${session_proxy_live_sql()}`,
     values: [...guard.values, room_id, member_id, encoded_ids, ids.length, room_id, encoded_ids] };
 }
 

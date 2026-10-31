@@ -996,3 +996,159 @@ def update_session_state(connection, session_id, phase=None, held_since=None):
         fields.append("held_since=?"); values.append(held_since)
     fields.append("revision=revision+1"); values.append(session_id)
     connection.execute(f"UPDATE session_state SET {','.join(fields)} WHERE session_id=?",values)
+
+
+# Hooks the free room calls at its own decision points; each leaves the free room alone when no discussion is open.
+
+def hold_user_message(connection, room_id, message_id, payload):
+    """Hand an unnamed user message to the running discussion's host; True when the discussion took it."""
+    session = current_session(connection, room_id, active_only=True)
+    if not session or session["status"] != "active" or payload.get("to") is not None:
+        return False
+    create_host_request(connection, session["id"],
+                        f"用户留言 #{message_id}：请处理并决定是否安排专家。",
+                        {"kind": "user_message", "message_id": message_id, "key": f"message-{message_id}"})
+    connection.execute("UPDATE session_state SET held_since=?,revision=revision+1 WHERE session_id=?",
+                       (message_id, session["id"]))
+    return True
+
+
+def validate_session_request_answer(connection, room_id, requests):
+    """Keep a discussion speaker request separate and live when answering it."""
+    discussions = [request for request in requests if request["purpose"] == "discuss"]
+    if not discussions:
+        return
+    if len(requests) != 1 or len(discussions) != 1:
+        raise ValueError("讨论安排须单独回答，不能与普通请求合并")
+    request_id = discussions[0]["id"]
+    plan = connection.execute("""SELECT sr.status,s.status AS session_status FROM session_requests sr
+        JOIN discussion_sessions s ON s.id=sr.session_id JOIN member_requests r ON r.id=sr.member_request_id
+        WHERE s.room_id=? AND r.id=? AND sr.purpose='discuss'""", (room_id, request_id)).fetchone()
+    if not plan or plan["session_status"] != "active" or plan["status"] != "open":
+        raise FileExistsError("讨论安排已暂停、结束或取消，不能继续回答")
+
+
+def open_discussion_requests(connection, execution_id):
+    """Member requests of an execution that carry an open discussion turn; read before the execution ends."""
+    return connection.execute("""SELECT r.id FROM member_requests r JOIN session_requests sr
+        ON sr.member_request_id=r.id WHERE r.execution_id=? AND sr.purpose='discuss' AND sr.status='open'""",
+        (execution_id,)).fetchall()
+
+
+def after_member_stopped(connection, member_id):
+    """Cancel the discussion turns a stopped member's cancelled requests carried, then relay or ask the host to re-plan."""
+    member = connection.execute("SELECT room_id,name FROM room_members WHERE id=?", (member_id,)).fetchone()
+    session = current_session(connection, member["room_id"], active_only=True) if member else None
+    if not session:
+        return
+    plans = connection.execute("""SELECT id,member_request_id FROM session_requests
+        WHERE session_id=? AND member_id=? AND purpose='discuss' AND status='open'
+          AND member_request_id IN (SELECT id FROM member_requests WHERE status='cancelled')""",
+        (session["id"], member_id)).fetchall()
+    for plan in plans:
+        connection.execute("UPDATE session_requests SET status='cancelled' WHERE id=?", (plan["id"],))
+    if not plans:
+        return
+    connection.execute("UPDATE session_state SET revision=revision+1 WHERE session_id=?", (session["id"],))
+    if advance_session(connection, session["id"]):
+        return
+    request_id = plans[0]["member_request_id"]
+    create_host_request(connection, session["id"],
+        f"专家 {member['name']} 的讨论发言已被打断，请检查余下安排并决定如何继续。",
+        {"kind": "request_failed", "request_id": request_id, "key": f"interrupted-{request_id or plans[0]['id']}"})
+
+
+def session_speaking_order(connection, session):
+    """The open round's speakers so far, current turn and queued turns, later rounds apart, and the plan state for the revision."""
+    items = []
+    plan_state = [list(row) for row in connection.execute("""SELECT id,round,position,member_id,question,status,submission_id
+        FROM session_requests WHERE session_id=? AND purpose='discuss' ORDER BY round,position,id""", (session["id"],))]
+    active_round = connection.execute("SELECT MIN(round) FROM session_requests WHERE session_id=? AND purpose='discuss' AND status IN ('open','queued')",
+                                      (session["id"],)).fetchone()[0]
+    if active_round is None:
+        active_round = connection.execute("SELECT COALESCE(MAX(round),1) FROM session_requests WHERE session_id=? AND purpose='discuss'",
+                                          (session["id"],)).fetchone()[0]
+    answered = [row["name"] for row in connection.execute("""SELECT m.name FROM session_requests sr JOIN room_members m ON m.id=sr.member_id
+        WHERE sr.session_id=? AND sr.purpose='discuss' AND sr.round=? AND sr.status='answered' ORDER BY sr.position,sr.id""",
+        (session["id"], active_round))]
+    items.extend({"name": name, "state": "done"} for name in answered)
+    open_turn = connection.execute("""SELECT m.name FROM session_requests sr JOIN room_members m ON m.id=sr.member_id
+        WHERE sr.session_id=? AND sr.purpose='discuss' AND sr.round=? AND sr.status='open'
+        ORDER BY sr.position,sr.id LIMIT 1""", (session["id"], active_round)).fetchone()
+    if open_turn:
+        items.append({"name": open_turn["name"], "state": "speaking"})
+    queued = connection.execute("""SELECT sr.round,m.name FROM session_requests sr JOIN room_members m ON m.id=sr.member_id
+        WHERE sr.session_id=? AND sr.purpose='discuss' AND sr.status='queued' ORDER BY sr.round,sr.position,sr.id""",
+        (session["id"],)).fetchall()
+    for row in queued:
+        if row["round"] == active_round:
+            items.append({"name": row["name"], "state": "queued"})
+    later = [[row["name"] for row in queued if row["round"] == round_number]
+             for round_number in sorted({row["round"] for row in queued if row["round"] > active_round})]
+    return items, later, plan_state
+
+
+def reorder_session_turns(connection, session, order, names):
+    """Renumber the open round's queued turns in the owner's order, after those already answered or speaking."""
+    active_round = connection.execute("SELECT MIN(round) FROM session_requests WHERE session_id=? AND purpose='discuss' AND status IN ('open','queued')",
+                                      (session["id"],)).fetchone()[0]
+    active_round = active_round or 1
+    open_position = connection.execute("SELECT COALESCE(MAX(position),0) FROM session_requests WHERE session_id=? AND purpose='discuss' AND round=? AND status IN ('answered','open')",
+                                        (session["id"], active_round)).fetchone()[0]
+    rows = connection.execute("SELECT id FROM session_requests WHERE session_id=? AND purpose='discuss' AND round=? AND status='queued'",
+                              (session["id"], active_round)).fetchall()
+    connection.execute("UPDATE session_requests SET position=-id WHERE id IN (%s)" % ",".join("?" for _ in rows),
+                       [row["id"] for row in rows]) if rows else None
+    for offset, name in enumerate(order, 1):
+        connection.execute("UPDATE session_requests SET position=? WHERE session_id=? AND purpose='discuss' AND round=? AND status='queued' AND member_id=?",
+                           (open_position + offset, session["id"], active_round, names[name]))
+    connection.execute("UPDATE session_state SET revision=revision+1 WHERE session_id=?", (session["id"],))
+
+
+def queue_session_invite(connection, session, member):
+    """Queue a newly invited member at the tail of the session's open round, once per invitation; with no live plan it waits."""
+    planned = connection.execute("SELECT 1 FROM session_requests WHERE session_id=? AND purpose='discuss' AND status IN ('open','queued') LIMIT 1",
+                                 (session["id"],)).fetchone()
+    if not planned:
+        return
+    round_number = connection.execute("SELECT MIN(round) FROM session_requests WHERE session_id=? AND purpose='discuss' AND status IN ('open','queued')",
+                                      (session["id"],)).fetchone()[0]
+    if round_number is None:
+        round_number = 1
+    position = connection.execute("SELECT COALESCE(MAX(position),0)+1 FROM session_requests WHERE session_id=? AND purpose='discuss' AND round=?",
+                                 (session["id"], round_number)).fetchone()[0]
+    invitation = connection.execute("SELECT COUNT(*) FROM session_requests WHERE session_id=? AND member_id=? AND submission_id LIKE 'invite:%'",
+                                    (session["id"], member["id"])).fetchone()[0] + 1
+    state = connection.execute("SELECT phase,read_until FROM session_state WHERE session_id=?", (session["id"],)).fetchone()
+    question = ("欢迎加入：请先读取议题，独立给出你的开场观点。" if state and state["phase"] == "initial"
+                else "欢迎加入：请先读取议题和已有回答，给出你的观点。")
+    read_until = state["read_until"] if state and state["phase"] == "initial" and round_number == 1 else None
+    connection.execute("""INSERT OR IGNORE INTO session_requests
+        (session_id,round,position,member_id,purpose,question,status,submission_id,read_until,created_at)
+        VALUES(?,?,?,?,'discuss',?,'queued',?,?,?)""",
+        (session["id"], round_number, position, member["id"], question,
+         f"invite:{member['id']}:{invitation}", read_until,
+         time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())))
+
+
+def blocks_message_change(connection, room_id, message_id):
+    """True while a discussion is open, or once one started after the message: its host reads user messages without a request."""
+    return bool(connection.execute("SELECT 1 FROM discussion_sessions WHERE room_id=? AND (status IN ('active','paused') OR started_message_id>=?)",
+                                   (room_id, message_id)).fetchone())
+
+
+def session_request_origin(connection, member_request_id):
+    """The discussion turn a member request carries, with a visible transcript anchor; None outside a discussion."""
+    row = connection.execute("""SELECT q.id AS session_request_id,q.session_id AS discussion_session_id,q.round,
+        q.question AS source_question,t.cause_kind,t.cause_message_id AS source_message_id,t.cause_request_id,
+        CASE WHEN q.id IS NULL THEN r.message_id ELSE COALESCE((SELECT MAX(m.id) FROM messages m
+            WHERE m.room_id=r.room_id AND m.id<r.message_id
+            AND NOT EXISTS(SELECT 1 FROM internal_task_messages hidden WHERE hidden.message_id=m.id)),0) END AS session_anchor
+        FROM member_requests r LEFT JOIN session_requests q ON q.member_request_id=r.id
+        LEFT JOIN task_message_sources t ON t.session_request_id=q.id WHERE r.id=?""", (member_request_id,)).fetchone()
+    if not row or row["session_request_id"] is None:
+        return None
+    return {"session_request_id": row["session_request_id"], "discussion_session_id": row["discussion_session_id"],
+            "round": row["round"], "source_question": row["source_question"],
+            "source_message_id": row["source_message_id"], "cause_kind": row["cause_kind"],
+            "cause_request_id": row["cause_request_id"], "after_message_id": row["session_anchor"]}
