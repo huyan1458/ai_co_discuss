@@ -7,7 +7,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { setup_sidecar } from './discussion_adapters.mjs';
+import { adapter_of, capabilities_of, validate_participant } from './adapters/index.mjs';
+import { adapter_profile, same_session_family } from './adapters/profiles.mjs';
 import { read_api_key } from './discussion_api.mjs';
 import { access_levels, PROJECT_ACCESS, READ_RULE } from './expert_prompts.mjs';
 import { validate_scheduler } from './scheduler.mjs';
@@ -22,11 +23,9 @@ let rg_available;
 export function read_rule(adapter) {
   if (process.platform !== 'win32') return '';
   rg_available ??= spawnSync('rg', ['--version'], { stdio: 'ignore', windowsHide: true }).status === 0;
-  return rg_available || adapter === 'codex_cli' ? READ_RULE : '';
+  return rg_available || capabilities_of(adapter).ripgrep ? READ_RULE : '';
 }
 
-const ADAPTER_NAMES = ['codex', 'claude', 'antigravity', 'codex_cli', 'antigravity_cli', 'api'];
-export const CODEX_ADAPTERS = ['codex', 'codex_cli'];
 const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 /** The shared prompt for rounds bridged without named follow-ups: experts answer and question each other. */
 export function peer_round_question(round) {
@@ -55,7 +54,7 @@ export function validate_config(input, base_directory) {
   // A free room of manual members runs here only for smart scheduling or a preset project directory, which need no local software.
   if (!config.participants || (!Object.keys(config.participants).length && !(config.mode === 'free' && (config.scheduler || config.cwd)))) throw new Error('请配置本机参与软件');
   for (const participant of Object.values(config.participants)) {
-    if (participant.adapter === 'api') {
+    if (adapter_profile(participant.adapter)?.kind === 'api') {
       read_api_key(config.api_home, participant);
       for (const field of ['cwd', 'project_name', 'project_id', 'executable', 'effort']) delete participant[field];
       participant.project_access = 'read';
@@ -66,12 +65,11 @@ export function validate_config(input, base_directory) {
     participant.project_access = participant.project_access || config.project_access || 'read';
     // `own` is set only when the service takes over a manual member: it keeps its own session's permissions.
     if (![...PROJECT_ACCESS, 'own'].includes(participant.project_access)) throw new Error('project_access 只能为 read、write、auto 或 full');
-    if (participant.project_access !== 'own' && !access_levels(participant.adapter).includes(participant.project_access)) throw new Error('agy 无人值守不支持自动档，请选只读、可写或全放开');
+    if (participant.project_access !== 'own' && !access_levels(participant.adapter).includes(participant.project_access)) {
+      throw new Error(adapter_profile(participant.adapter)?.unsupported_hints?.[participant.project_access] || '该软件不支持此项目权限档位');
+    }
     if (participant.cwd && !statSync(participant.cwd).isDirectory()) throw new Error('cwd 必须是已有本机目录');
-    if (!ADAPTER_NAMES.includes(participant.adapter)) throw new Error(`适配器只能为 ${ADAPTER_NAMES.join('/')}`);
-    if (participant.adapter === 'antigravity' && !participant.ipc_directory) throw new Error('缺少 Antigravity Sidecar IPC 目录');
-    if (participant.adapter !== 'antigravity' && !existsSync(participant.executable ?? '')) throw new Error('请指定实际原生可执行文件');
-    if (participant.adapter === 'codex' && !participant.source_thread_id && !participant.session_id) throw new Error('Codex 新建入口需要实际来源聊天 ID');
+    validate_participant(participant);
   }
   if (![undefined, 'free', 'brainstorm'].includes(config.mode)) throw new Error('房间模式只能为 free 或 brainstorm');
   if (config.mode === 'free' && Object.keys(config.participants).some(name => typeof config.members?.[name]?.token !== 'string' || config.members[name].token.length < 32)) {
@@ -124,8 +122,8 @@ export class DiscussionStore {
         const next = entries[index];
         if (JSON.stringify(item) === JSON.stringify(next)) return true;
         const session = this.binding(item[0]).session_id || item[6];
-        return item[0] === next[0] && item[1] !== next[1] && CODEX_ADAPTERS.includes(item[1])
-          && CODEX_ADAPTERS.includes(next[1]) && session && next[6] === session && (!item[6] || item[6] === session)
+        return item[0] === next[0] && same_session_family(item[1], next[1])
+          && session && next[6] === session && (!item[6] || item[6] === session)
           && JSON.stringify(item.slice(2, 6)) === JSON.stringify(next.slice(2, 6));
       });
       // Experts invited during a run only add entries; every existing binding must stay as it was.
@@ -191,7 +189,10 @@ export async function main(args = process.argv.slice(2)) {
   }
   const config = load_config(values.config);
   if (positionals[0] === 'setup-sidecar') {
-    for (const participant of Object.values(config.participants).filter(item => item.adapter === 'antigravity')) process.stdout.write(JSON.stringify(setup_sidecar(participant)) + '\n');
+    for (const participant of Object.values(config.participants)) {
+      const setup = adapter_of(participant.adapter)?.setup;
+      if (setup) process.stdout.write(JSON.stringify(setup(participant)) + '\n');
+    }
     return;
   }
   const run = await api(config, '/discussion');

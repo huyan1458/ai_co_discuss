@@ -7,7 +7,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
-import { atomic_json } from './discussion_adapters.mjs';
+import { atomic_json } from './files.mjs';
 import { acquire_lock } from './discussion_runner.mjs';
 import { assert_shared_home, main as service_main, service_home, service_pid, service_ready, start_service } from './discussion_service.mjs';
 import { detect_python, local_settings } from './discussion_setup.mjs';

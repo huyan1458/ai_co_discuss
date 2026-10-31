@@ -640,23 +640,23 @@ test("attachment retries retain files and reuse both upload and message receipts
   assert.deepEqual(fixture.revoked, ["blob:test"]);
 });
 
-/** The delivery capability table and the helpers reading it, as the page defines them. */
-function delivery_source() {
-  const table = source.indexOf("const DELIVERY_CAPABILITIES");
-  const fallback = source.indexOf(";", source.indexOf("const ADAPTER_DELIVERIES")) + 1;
-  return source.slice(table, fallback) + source.slice(source.indexOf("function delivery_capabilities("), source.indexOf("/** Stop the whole free room"));
+/** The page's stop wording, read from what each execution's adapter reported. */
+function stop_source() {
+  return source.slice(source.indexOf("function stop_label("), source.indexOf("/** Stop the whole free room"));
 }
 
-test("stops are described by how each execution was delivered, with older runners judged by their adapter", () => {
+test("stops are described by what each execution's adapter reported, and claim nothing for an older runner", () => {
   const context = vm.createContext({ display_name: name => name });
-  vm.runInContext(delivery_source(), context);
-  assert.equal(context.delivery_capabilities("process", "claude").stoppable, true);
-  assert.equal(context.delivery_capabilities("window", "claude").stoppable, false, "the same adapter may reach a window it cannot stop");
-  assert.equal(context.delivery_capabilities("window", "claude").progress, false);
-  assert.equal(context.delivery_capabilities("", "codex").stoppable, false, "an App adapter is known without a report");
-  assert.equal(context.delivery_capabilities("", "codex_cli").stoppable, true);
-  const members = [{ name: "Codex", adapter: "codex" }];
-  assert.equal(context.stop_summary([{ member: "Codex", delivery: "" }], members), "Codex 在自己的窗口或 App 里本机无法停止，可能仍在生成，之后的回答会被拒收");
+  vm.runInContext(stop_source(), context);
+  const process = { stoppable: true, progress: true }, window = { stoppable: false, progress: false };
+  assert.equal(context.stop_label({ capabilities: process, stop_result: "" }), "正在停止");
+  assert.equal(context.stop_label({ capabilities: process, stop_result: "stopped" }), "已停止");
+  assert.equal(context.stop_label({ capabilities: process, stop_result: "unconfirmed" }), "停止未确认");
+  assert.equal(context.stop_label({ capabilities: null, stop_result: "unconfirmed" }), "停止未确认");
+  assert.equal(context.stop_label({ capabilities: window, stop_result: "unstoppable" }), "已作废", "a window the runner cannot stop is not called stopped");
+  assert.equal(context.stop_label({ capabilities: null, stop_result: "" }), "已作废", "an older runner reported nothing");
+  assert.equal(context.stop_summary([{ member: "Codex", capabilities: process }, { member: "Claude", capabilities: window }, { member: "Gemini", capabilities: null }]),
+    "正在停止 Codex；Claude 在自己的窗口或 App 里本机无法停止，可能仍在生成，之后的回答会被拒收；Gemini 的本次工作已作废");
 });
 
 test("retracting the latest message members started on stops that work and rewinds, but nothing wider", async () => {
@@ -673,12 +673,13 @@ test("retracting the latest message members started on stops that work and rewin
       posts.push([url, payload]);
       return {};
     } });
-  vm.runInContext(delivery_source(), context);
+  vm.runInContext(stop_source(), context);
   vm.runInContext(source.slice(source.indexOf("async function retract_message("), source.indexOf("/** What editing a message would take back")), context);
   plan = { messages: 1, revision: "r1", members: [{ name: "Codex", session: "cut", executions: [9] }, { name: "Claude", session: "kept", executions: [10] }] };
   room = { free: { members: [{ name: "Codex", adapter: "codex_cli" }, { name: "Claude", adapter: "claude" }],
     requests: [{ message_id: 5, execution_id: 9 }, { message_id: 5, execution_id: 10 }],
-    executions: [{ id: 9, member: "Codex", status: "started", delivery: "process" }, { id: 10, member: "Claude", status: "started", delivery: "window" }] } };
+    executions: [{ id: 9, member: "Codex", status: "started", capabilities: { stoppable: true, progress: true } },
+      { id: 10, member: "Claude", status: "started", capabilities: { stoppable: false, progress: false } }] } };
   await context.retract_message(5);
   assert.equal(JSON.stringify(posts), JSON.stringify([["/api/rooms/one/rewind", { message_id: 5, revision: "r1" }]]), "the rewind carries the plan's revision");
   assert.equal(input.value, "原问题");
@@ -2653,8 +2654,8 @@ test("stopped host executions replace their work at the same anchor and avoid mi
   assert.deepEqual(ids(), [10, 11], "mention filtering hides stopped and missed cards");
   f.view.mention_only = false;
   // Free collaboration: delivered work keeps its card once voided; a delivery never made leaves none.
-  f.room.free.executions.push({ id: 4, member_id: 2, member: "Codex", status: "cancelled", delivery: "process", request_message_id: 11, created_at: 1005, requests: [] },
-    { id: 5, member_id: 2, member: "Codex", status: "cancelled", delivery: "", request_message_id: 11, created_at: 1006, requests: [] });
+  f.room.free.executions.push({ id: 4, member_id: 2, member: "Codex", status: "cancelled", capabilities: { stoppable: true, progress: true }, request_message_id: 11, created_at: 1005, requests: [] },
+    { id: 5, member_id: 2, member: "Codex", status: "cancelled", capabilities: null, request_message_id: 11, created_at: 1006, requests: [] });
   await nextTick();
   assert.deepEqual(ids(), ["stopped-1", 10, "stopped-2", "cancelled-session-9-request-3", 11, "stopped-4"]);
   assert.match(discussion_source, /v-else-if="message\.cancelled_turn \|\| message\.cancelled_execution"/);
@@ -4099,6 +4100,52 @@ test("the timeline zooms around the pointer, pans within its ends and ticks fine
   assert.ok(close[1].at - close[0].at < whole[1].at - whole[0].at, "zoomed in, ticks fall at finer steps");
 });
 
+test('late reply text is fetched only for the owner and discarded when access or room changes', async () => {
+  let finish;
+  const calls = [], room = ref({ id: 'one' }), view = ref({ access: { can_manage: false } });
+  const context = vm.createContext({ room, view, ref, watch, bridge: {
+    request: path => { calls.push(path); return new Promise(resolve => { finish = resolve; }); },
+    notify() { throw new Error('unexpected read failure'); },
+  } });
+  const start = discussion_source.indexOf('const late_answers =');
+  const end = discussion_source.indexOf('async function load_notes(', start);
+  vm.runInContext(discussion_source.slice(start, end) + '\nglobalThis.cache = late_answers;', context);
+  const event = { target: { open: true } };
+  await context.load_late_answer(9, event);
+  assert.equal(calls.length, 0);
+  view.value.access.can_manage = true;
+  await nextTick();
+  const loading = context.load_late_answer(9, event);
+  assert.deepEqual(calls, ['/api/rooms/one/executions/9/late-answer']);
+  view.value.access.can_manage = false;
+  await nextTick();
+  finish({ text: 'private' });
+  await loading;
+  assert.equal(context.cache.value.size, 0);
+  view.value.access.can_manage = true;
+  await nextTick();
+  const second = context.load_late_answer(9, event);
+  finish({ text: 'private' });
+  await second;
+  assert.equal(context.cache.value.get(9).text, 'private');
+  room.value.id = 'two';
+  await nextTick();
+  assert.equal(context.cache.value.size, 0);
+});
+
+test('backup import applies the adapter restore policy without interpreting the adapter name', () => {
+  const f = theme_fixture();
+  f.context.window.discuss_backup = { adapter_profile: id => ({ restore_manual: id === 'future_adapter' }) };
+  const result = f.context.import_body({ local_members: { mode: 'free', participants: {
+    Future: { adapter: 'future_adapter' }, Claude: { adapter: 'claude' },
+  } }, tables: { room_members: [
+    { name: 'Future', status: 'active', access: 'runner' }, { name: 'Claude', status: 'active', access: 'runner' },
+  ] } });
+  assert.equal(result.tables.room_members[0].access, 'manual');
+  assert.equal(result.tables.room_members[1].access, 'runner');
+  assert.equal(result.local_members, undefined);
+});
+
 test('importing rooms reports each room as it goes and one short line per restored member', async () => {
   const f = theme_fixture(), state = f.context.test_state, seen = [];
   state.launch.available = true;
@@ -4108,7 +4155,8 @@ test('importing rooms reports each room as it goes and one short line per restor
     refresh_room: async () => {}, save_room_credentials() {},
     request_json: async (path, body) => path === '/api/rooms/import'
       ? body.tables.rooms[0].title === '旧房间' ? { skipped: true, title: '旧房间' } : { id: 'new', title: body.tables.rooms[0].title, attachments: {} } : {},
-    local_launch_request: async () => ({ members: [{ name: 'Codex', status: 'resumed' }, { name: 'Claude', status: 'manual', session_id: 'abc', cwd: 'D:/p' },
+    local_launch_request: async () => ({ members: [{ name: 'Codex', status: 'resumed' }, { name: 'Claude', status: 'manual', session_id: 'abc', cwd: 'D:/p',
+      resume: { command: 'claude --resume abc', cwd: 'D:/p' } },
       { name: 'Gemini', status: 'failed', error: '找不到会话' }] }),
   });
   f.context.window.discuss_backup = { read_room_archives: async file => file.name === 'bad.zip' ? Promise.reject(new Error('格式无效')) : [snapshot('剧本', true), snapshot('旧房间')] };

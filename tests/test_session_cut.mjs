@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { branch_session, execution_marker, session_exists } from '../runner/session_cut.mjs';
+import { branch_session, execution_marker, session_exists } from '../runner/adapters/index.mjs';
 
 const SESSION = '11111111-2222-3333-4444-555555555555';
 const prompt = id => `请先读取任务文件：D:/runs/${execution_marker(id)}，完成后提交。`;

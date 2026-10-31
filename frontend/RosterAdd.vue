@@ -40,5 +40,4 @@ defineExpose({ focus_first });
 .roster-add-break { flex-basis: 100%; height: 0; }
 .roster-add .channel-avatar { flex-shrink: 0; width: 20px; height: 20px; font-size: 9px; }
 .roster-add > button > span:last-child { width: 12px; height: 12px; color: var(--ui-text-muted); }
-@media (pointer: coarse) { .roster-add > button { min-height: 44px; } }
 </style>

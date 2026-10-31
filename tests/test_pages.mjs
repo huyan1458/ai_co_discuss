@@ -1845,6 +1845,13 @@ test('Worker retract takes back a message only until a member starts it, and rew
   const taken = await r.reserve();
   await r.answer(taken.body.id);
   await r.say('三');
+  // The plan shows what the runner reported its adapter does to the session; without a report the session is kept.
+  const unreported = (await f.request(`${r.path}/rewind?message_id=${second}`, undefined, r.owner)).body;
+  assert.equal(unreported.members[0].session, 'kept');
+  const capability = `${r.path}/members/${await r.member_id('Claude')}/capabilities`;
+  assert.equal((await f.request(capability, { rewind: 'shred' }, r.owner)).status, 400);
+  assert.equal((await f.request(capability, { rewind: 'cut' })).status, 403);
+  assert.equal((await f.request(capability, { rewind: 'cut' }, r.owner)).status, 200);
   const plan = (await f.request(`${r.path}/rewind?message_id=${second}`, undefined, r.owner)).body;
   assert.deepEqual([plan.messages, plan.members.map(item => [item.name, item.executions, item.session])], [3, [['Claude', [taken.body.id], 'cut']]]);
   assert.equal((await f.request(`${r.path}/rewind`, { message_id: second }, r.owner)).status, 400);
@@ -2539,6 +2546,9 @@ test('Worker free rooms take over a registered manual member with a credential t
   assert.equal((await f.request(`${r.path}/register`, {}, gemini)).status, 200);
   assert.equal((await f.request(`${r.path}/members/${id}`, adopt, r.owner)).status, 400, 'no session reported yet');
   await f.raw(r.path, { headers: { 'X-Discussion-Token': gemini, 'X-Discussion-Session': 'session-1', 'X-Discussion-Session-Client': 'antigravity' } });
+  for (const adapter of [['antigravity_cli'], { value: 'antigravity_cli' }, 1]) {
+    assert.equal((await f.request(`${r.path}/members/${id}`, { ...adopt, adapter }, r.owner)).status, 400);
+  }
   assert.equal((await f.request(`${r.path}/members/${id}`, { ...adopt, token: 'short' }, r.owner)).status, 400, 'an invalid credential is refused');
   const adopted = await f.request(`${r.path}/members/${id}`, adopt, r.owner);
   assert.equal(adopted.status, 200, JSON.stringify(adopted.body));
@@ -2585,23 +2595,24 @@ test('Worker free rooms bundle requests into one execution and reject late or un
   assert.equal((await f.request(`${r.path}/inbox`, undefined, r.claude)).status, 403);
 });
 
-test('Worker records how each execution was delivered and how a voided one stopped', async t => {
+test('Worker records what each delivery can do and how a voided one stopped', async t => {
   const f = await worker_fixture(t);
   const r = await free_worker_room(f, [{ name: 'Codex', adapter: 'codex_cli', token: 'delivery-codex'.repeat(3) }]);
   await r.say('先做这个', { to: ['Codex'] });
   const working = (await r.reserve('Codex')).body;
   const url = `${r.path}/executions/${working.id}`;
-  assert.equal((await f.request(url, { action: 'delivery', delivery: 'desktop' }, r.owner)).status, 400);
+  assert.equal((await f.request(url, { action: 'delivery', stoppable: 'no', progress: false }, r.owner)).status, 400);
   assert.equal((await f.request(url, { action: 'stopped', result: 'stopped' }, r.owner)).status, 409, 'a live execution has no stop result');
-  assert.equal((await f.request(url, { action: 'delivery', delivery: 'window' }, r.owner)).status, 200);
+  assert.equal((await f.request(url, { action: 'delivery', stoppable: false, progress: false }, r.owner)).status, 200);
   const member = (await f.request(r.path)).body.free.members.find(item => item.name === 'Codex');
-  assert.deepEqual([member.execution.delivery, member.execution.stop_result], ['window', '']);
+  assert.deepEqual([member.execution.capabilities, member.execution.stop_result], [{ stoppable: false, progress: false }, '']);
   assert.equal((await f.request(`${r.path}/members/${await r.member_id('Codex')}/interrupt`, {}, r.owner)).status, 200);
-  assert.equal((await f.request(url, { action: 'delivery', delivery: 'process' }, r.owner)).status, 409);
+  assert.equal((await f.request(url, { action: 'delivery', stoppable: false, progress: false }, r.owner)).status, 200);
   assert.equal((await f.request(url, { action: 'stopped', result: 'unstoppable' }, r.owner)).status, 200);
+  assert.equal((await f.request(url, { action: 'stopped', result: 'unstoppable' }, r.owner)).body.duplicate, true);
   assert.equal((await f.request(url, { action: 'stopped', result: 'stopped' }, r.owner)).status, 409, 'recorded once');
   const report = (await f.request(r.path)).body.free.executions.find(item => item.id === working.id);
-  assert.deepEqual([report.status, report.delivery, report.stop_result], ['cancelled', 'window', 'unstoppable']);
+  assert.deepEqual([report.status, report.capabilities, report.stop_result], ['cancelled', { stoppable: false, progress: false }, 'unstoppable']);
   // The window may still be on the voided turn: the member's next message waits instead of arriving mid-turn.
   await r.say('补充一句', { to: ['Codex'] });
   assert.equal((await r.reserve('Codex')).status, 409);
@@ -2610,9 +2621,60 @@ test('Worker records how each execution was delivered and how a voided one stopp
   const late = { author: 'Codex', text: '迟到的回答', source: 'cli', kind: 'chat', execution_id: working.id, submission_id: crypto.randomUUID().replaceAll('-', '') };
   assert.equal((await f.request(`${r.path}/messages`, late, 'delivery-codex'.repeat(3))).status, 409);
   const after = (await f.request(r.path)).body.free.executions.find(item => item.id === working.id);
-  assert.equal(after.late_answer.text, '迟到的回答');
+  assert.deepEqual(Object.keys(after.late_answer), ['created_at']);
+  for (const token of ['delivery-codex'.repeat(3), 'anonymous']) {
+    assert.ok(!JSON.stringify((await f.request(r.path, undefined, token)).body).includes('迟到的回答'));
+    assert.equal((await f.request(url + '/late-answer', undefined, token)).status, 403);
+  }
+  assert.equal((await f.request(url + '/late-answer', undefined, r.owner)).body.text, '迟到的回答');
   assert.ok(!(await f.request(`${r.path}/messages`)).body.messages.some(item => item.text === '迟到的回答'));
   assert.equal((await r.reserve('Codex')).status, 200);
+});
+
+test('Worker late delivery and unconfirmed stop reports keep the original hold deadline', async t => {
+  const f = await worker_fixture(t), r = await free_worker_room(f, []);
+  const id = await r.member_id('Claude');
+  for (const result of ['unstoppable', 'unconfirmed']) {
+    await r.say('开始', { to: ['Claude'] });
+    const execution = (await r.reserve()).body, url = `${r.path}/executions/${execution.id}`;
+    await f.request(`${r.path}/members/${id}/interrupt`, {}, r.owner);
+    const payload = { action: 'stopped', result };
+    assert.equal((await f.request(url, payload, r.owner)).status, 200);
+    assert.equal((await f.request(url, payload, r.owner)).body.duplicate, true);
+    const held = async () => (await f.request(`${r.path}/inbox`, undefined, r.owner)).body.members[0].held_until;
+    const deadline = await held();
+    assert.ok(deadline > 0);
+    assert.equal((await f.request(url, { action: 'delivery', stoppable: true, progress: true }, r.owner)).status, 200);
+    await r.say('主动重发', { to: ['Claude'] });
+    assert.equal(await held(), deadline);
+    assert.equal((await r.reserve()).status, 409);
+    if (result === 'unconfirmed') assert.equal((await f.request(url, { action: 'stopped', result: 'stopped' }, r.owner)).status, 200);
+    else f.sql.prepare('UPDATE member_executions SET finished_at=unixepoch()-601 WHERE id=?').run(execution.id);
+    assert.equal(await held(), 0);
+    assert.equal((await r.answer((await r.reserve()).body.id, r.claude, 'Claude')).status, 201);
+  }
+});
+
+test('Worker rewind rejects a capability change at transaction commit', async t => {
+  const f = await worker_fixture(t), r = await free_worker_room(f, []);
+  const id = await r.member_id('Claude');
+  await f.request(`${r.path}/members/${id}/capabilities`, { rewind: 'cut' }, r.owner);
+  const message = (await r.say('处理', { to: ['Claude'] })).body.message;
+  await r.answer((await r.reserve()).body.id, r.claude, 'Claude');
+  const plan = (await f.request(`${r.path}/rewind?message_id=${message.id}`, undefined, r.owner)).body;
+  assert.equal(plan.members[0].session, 'cut');
+  f.before_batch = () => f.sql.prepare("UPDATE member_capabilities SET rewind='kept' WHERE member_id=?").run(id);
+  const result = await f.request(`${r.path}/rewind`, { message_id: message.id, revision: plan.revision }, r.owner);
+  assert.equal(result.status, 409, JSON.stringify(result.body));
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM room_rewinds').get().count, 0);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM message_withdrawals').get().count, 0);
+});
+
+test('schema reinitialization retains pre-capability delivery records', async t => {
+  const f = await worker_fixture(t);
+  f.sql.exec("CREATE TABLE execution_deliveries(execution_id INTEGER PRIMARY KEY,delivery TEXT); INSERT INTO execution_deliveries VALUES(1,'window')");
+  f.sql.exec(await readFile(join(PROJECT_ROOT, 'backend', 'schema.sql'), 'utf8'));
+  assert.equal(f.sql.prepare('SELECT delivery FROM execution_deliveries WHERE execution_id=1').get().delivery, 'window');
 });
 
 test('Worker owner stop ends every live and queued request of a free room', async t => {

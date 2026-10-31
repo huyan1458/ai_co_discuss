@@ -107,6 +107,16 @@ After publishing, check the page, `/api/health`, and:
 codiscuss health --site https://YOUR_PROJECT_NAME.pages.dev
 ```
 
+### Upgrading the Execution Capability Protocol
+
+Upgrade the site and every connected runner together; the old delivery-name protocol is incompatible.
+
+1. Pause new requests, end all active local executions, then stop runners and site writes. A website stop alone does not prove the original software has exited.
+2. Back up D1 and attachments and verify the upgrade on a database copy. Reapply `backend/schema.sql` to create `execution_capabilities`, `member_capabilities` and `late_answers`; add any missing columns in existing tables separately for the version being upgraded.
+3. Update the site and runners, verify room reads, capability reports, stops and held deliveries, then resume requests.
+
+The unused `execution_deliveries` table is retained without migration. It was never deployed online and contains only temporary test data. Retaining it does not provide mixed-version compatibility. Local Python sites also require executions to end before updating the site and runner together.
+
 ### Live Updates (Optional)
 
 Without this, the page polls every 12 seconds. For live updates across instances, deploy the notification Worker and bind it in your private configuration:

@@ -166,5 +166,4 @@ onBeforeUnmount(() => cancelAnimationFrame(frame));
 .effort-slider:hover .effort-slider-thumb { box-shadow: 0 1px 3px #0000004d, 0 0 0 4px color-mix(in srgb, var(--channel-accent) 20%, transparent); }
 .effort-slider.is-dragging { cursor: grabbing; }
 .effort-slider.is-dragging .effort-slider-thumb { transform: translate(-50%, -50%) scale(1.15); box-shadow: 0 2px 6px #0000004d, 0 0 0 6px color-mix(in srgb, var(--channel-accent) 22%, transparent); }
-@media (pointer: coarse) { .effort-slider { height: 44px; } }
 </style>

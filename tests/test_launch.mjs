@@ -17,7 +17,7 @@ import { DiscussionService, read_registry, register_room } from '../runner/discu
 import { save_api_key } from '../runner/discussion_api.mjs';
 import { SCHEDULER_PROVIDERS } from '../runner/scheduler.mjs';
 import { save_site_connection } from '../runner/discussion_local.mjs';
-import { session_settings, software_defaults, software_effort, software_models } from '../runner/discussion_models.mjs';
+import { session_settings, software_defaults, software_effort, software_models } from '../runner/adapters/index.mjs';
 import { DatabaseSync } from 'node:sqlite';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -250,7 +250,9 @@ test('paused room path correction is authenticated, versioned and adopted before
   const input = { site: f.site, room_id: config.room, token: config.token };
   const calls = [];
   service = new DiscussionService(f.home, (current, store) => new FreeRoomRunner(current, store,
-    async (profile, binding) => { calls.push({ executable: profile.executable, session_id: binding.session_id });
+    async (profile, binding, task) => { calls.push({ executable: profile.executable, session_id: binding.session_id });
+      const child = Object.assign(new EventEmitter(), { kill() { this.emit('close'); return true; } });
+      task.on_process(child);
       return { status: 'accepted', session_id: 'original-host' }; }));
   await service.tick();
   await assert.rejects(room_configuration(f.home, input), /先暂停/);
@@ -296,8 +298,11 @@ test('paused Codex switches App and CLI with the same room and session, without 
   const config = load_config(launched.config_path), calls = [];
   const input = { site: f.site, room_id: config.room, token: config.token };
   service = new DiscussionService(f.home, (current, store) => new FreeRoomRunner(current, store,
-    async (profile, binding) => { calls.push([profile.adapter, binding.session_id]);
-      return { status: 'accepted', session_id: 'original-host' }; }));
+    // A stoppable stand-in: this test is about switching entrypoints, not the wait after voiding software the runner cannot stop.
+    async (profile, binding, task) => { calls.push([profile.adapter, binding.session_id]);
+      const child = Object.assign(new EventEmitter(), { kill() { this.emit('close'); return true; } });
+      task.on_process(child);
+      return { status: 'accepted', session_id: 'original-host', capabilities: { stoppable: true, progress: true } }; }));
   await service.tick();
   let discussion = await api(config, '/discussion');
   await api(config, '/discussion', { action: 'pause', revision: discussion.revision });
@@ -332,6 +337,31 @@ test('paused Codex switches App and CLI with the same room and session, without 
     await api(config, '/discussion', { action: 'pause', revision: discussion.revision });
     await service.tick();
   }
+});
+
+test('an unstoppable App waits after discussion pause and resume until its late answer', async t => {
+  let service;
+  t.after(() => service?.close());
+  const f = await fixture(t), launched = await launch_discussion(f.home, f.input, f.options);
+  const config = load_config(launched.config_path), calls = [];
+  service = new DiscussionService(f.home, (current, store) => new FreeRoomRunner(current, store,
+    async () => { calls.push(true); return { status: 'accepted', capabilities: { stoppable: false, progress: false } }; }));
+  await service.tick();
+  const execution = (await api(config, '/inbox')).executions[0];
+  let discussion = await api(config, '/discussion');
+  await api(config, '/discussion', { action: 'pause', revision: discussion.revision });
+  await service.tick();
+  const held = (await api(config, '/inbox')).members[0].held_until;
+  assert.ok(held > Date.now() / 1000);
+  discussion = await api(config, '/discussion');
+  await api(config, '/discussion', { action: 'resume', revision: discussion.revision });
+  await service.tick();
+  assert.equal(calls.length, 1);
+  assert.equal((await api(config, '/inbox')).members[0].held_until, held);
+  await assert.rejects(api({ ...config, token: config.members.Codex.token }, '/messages', { author: 'Codex',
+    text: '迟到回答', execution_id: execution.id, submission_id: randomUUID() }), /409/);
+  await service.tick();
+  assert.equal(calls.length, 2);
 });
 
 test('Codex entrypoint changes reject unbound sessions and unrelated participant changes', async t => {
@@ -698,9 +728,9 @@ test('missing software, current identity or invalid limits fail before creating 
   const agy = { adapter: 'antigravity_cli', executable: process.execPath };
   const agy_room = { ...f.input.room, host: 'Gemini', experts: { Gemini: 'cli', Claude: 'cli' } };
   await assert.rejects(launch_discussion(f.home, { ...f.input, room: agy_room, entry: 'conversation', current_session_id: 'agy-chat',
-    participants: { ...f.input.participants, Gemini: agy } }, f.options), /agy 不能绑定已有会话/);
+    participants: { ...f.input.participants, Gemini: agy } }, f.options), /Antigravity CLI 不能绑定已有会话/);
   await assert.rejects(launch_discussion(f.home, { ...f.input, room: agy_room,
-    participants: { ...f.input.participants, Gemini: { ...agy, session_id: 'known-session' } } }, f.options), /agy 不能绑定已有会话/);
+    participants: { ...f.input.participants, Gemini: { ...agy, session_id: 'known-session' } } }, f.options), /Antigravity CLI 不能绑定已有会话/);
   assert.equal((await request(f.site, '/api/rooms')).body.rooms.length, 0);
   assert.equal(f.starts.length, 0);
 });
@@ -1122,14 +1152,14 @@ test('a woken member switches project files between read-only and writable after
   const current = load_config(launched.config_path);
   writeFileSync(launched.config_path, JSON.stringify({ ...current, participants: { ...current.participants,
     Gemini: { adapter: 'antigravity_cli', executable: process.execPath, session_id: 'own-agy-conversation' } } }));
-  await assert.rejects(room_member_access(f.home, { ...input, name: 'Gemini' }), /自己的 agy 对话/);
+  await assert.rejects(room_member_access(f.home, { ...input, name: 'Gemini' }), /自己的 Antigravity CLI 对话/);
   const latest = JSON.parse(readFileSync(launched.config_path, 'utf8'));
   writeFileSync(launched.config_path, JSON.stringify({ ...latest, participants: { ...latest.participants,
     Claude: { ...latest.participants.Claude, project_access: 'own' } } }));
   await assert.rejects(room_member_access(f.home, input), /手动接入的成员/);
   // A refused operation is allowed by adding its rule to the member, kept once and without touching its session.
   const allow = { site: f.site, room_id: launched.room.id, token: owner, name: 'Claude', rules: ['PowerShell(lark-cli *)'] };
-  await assert.rejects(room_member_allow(f.home, { ...allow, name: 'Gemini' }), /自己的 agy 对话/);
+  await assert.rejects(room_member_allow(f.home, { ...allow, name: 'Gemini' }), /自己的 Antigravity CLI 对话/);
   const { Gemini, ...participants } = JSON.parse(readFileSync(launched.config_path, 'utf8')).participants;
   writeFileSync(launched.config_path, JSON.stringify({ ...JSON.parse(readFileSync(launched.config_path, 'utf8')), participants }));
   await room_member_allow(f.home, allow);
@@ -1145,7 +1175,7 @@ test('an idle Codex member switches between App and CLI in a free room and keeps
     room: { title: '切换接入', goal: 'x', mode: 'free', members: ['Codex'], submission_id: randomUUID() } }, f.options);
   const input = { site: f.site, room_id: launched.room.id, token: owner, name: 'Codex', adapter: 'codex' };
   await assert.rejects(room_member_adapter(f.home, { ...input, token: 'wrong'.repeat(8) }), /403/);
-  await assert.rejects(room_member_adapter(f.home, { ...input, adapter: 'claude' }), /codex_cli/);
+  await assert.rejects(room_member_adapter(f.home, { ...input, adapter: 'claude' }), /共用会话/);
   await assert.rejects(room_member_adapter(f.home, input), /尚无实际 Codex 会话/);
   const config = load_config(launched.config_path);
   const store = new DiscussionStore(config.directory);
@@ -1261,17 +1291,17 @@ test('an invited existing session must exist locally, and Claude resumes only fr
   writeFileSync(join(env.CLAUDE_CONFIG_DIR, 'projects', 'encoded-original', `${claude_id}.jsonl`),
     `{"type":"queue-operation"}\n${JSON.stringify({ type: 'user', cwd: original })}\n`);
   assert.equal(borrowed_session('Codex', { adapter: 'codex', session_id: codex_id }, '', env).session_id, codex_id);
-  assert.throws(() => borrowed_session('Codex', { adapter: 'codex_cli', session_id: randomUUID() }, '', env), /找不到 Codex 会话/);
+  assert.throws(() => borrowed_session('Codex', { adapter: 'codex_cli', session_id: randomUUID() }, '', env), /找不到 Codex CLI 会话/);
   assert.throws(() => borrowed_session('Codex', { adapter: 'codex_cli', session_id: '../../x' }, '', env), /格式不正确/);
   assert.equal(borrowed_session('Claude', { adapter: 'claude', session_id: claude_id }, '', env).cwd, original, 'without a project the session keeps its directory');
   assert.equal(borrowed_session('Claude', { adapter: 'claude', session_id: claude_id }, original, env).cwd, original);
   assert.throws(() => borrowed_session('Claude', { adapter: 'claude', session_id: claude_id }, other, env), /只能在原目录续接/);
-  assert.throws(() => borrowed_session('Gemini', { adapter: 'antigravity_cli', session_id: claude_id }, '', env), /找不到 agy 会话/);
-  assert.throws(() => borrowed_session('Grok', { adapter: 'api', session_id: claude_id }, '', env), /只有 Codex、Claude 与 agy/);
+  assert.throws(() => borrowed_session('Gemini', { adapter: 'antigravity_cli', session_id: claude_id }, '', env), /找不到 Antigravity CLI 会话/);
+  assert.throws(() => borrowed_session('Grok', { adapter: 'api', session_id: claude_id }, '', env), /只有 Codex CLI、Codex App、Claude Code、Antigravity CLI、Antigravity App 可以接入已有会话/);
   const owner = randomUUID() + randomUUID();
   const launched = await launch_discussion(f.home, { ...f.input, token: owner }, f.options);
   await assert.rejects(room_member(f.home, { site: f.site, room_id: launched.room.id, token: owner, action: 'add', name: 'Claude-2',
-    participants: { 'Claude-2': { ...f.input.participants.Claude, session_id: randomUUID() } } }), /找不到 Claude 会话/, 'a mistyped ID never reaches the room');
+    participants: { 'Claude-2': { ...f.input.participants.Claude, session_id: randomUUID() } } }), /找不到 Claude Code 会话/, 'a mistyped ID never reaches the room');
   assert.equal((await request(f.site, `/api/rooms/${launched.room.id}`)).body.experts['Claude-2'], undefined);
 });
 
@@ -1287,7 +1317,7 @@ test('a manual Claude expert\'s reported session is registered as a hosted parti
   const previous = process.env.CLAUDE_CONFIG_DIR;
   process.env.CLAUDE_CONFIG_DIR = claude_home;
   try {
-    assert.throws(() => adopt_member_profile(f.home, launched.config_path, 'Claude-2', randomUUID()), /找不到 Claude 会话/);
+    assert.throws(() => adopt_member_profile(f.home, launched.config_path, 'Claude-2', randomUUID()), /找不到 Claude Code 会话/);
     assert.equal(Object.hasOwn(load_config(launched.config_path).participants, 'Claude-2'), false);
     adopt_member_profile(f.home, launched.config_path, 'Claude-2', claude_id);
     const profile = load_config(launched.config_path).participants['Claude-2'];
@@ -1355,7 +1385,7 @@ test('a manual agy expert\'s reported conversation is hosted under its own proje
   const previous = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
   process.env.HOME = process.env.USERPROFILE = home;
   try {
-    assert.throws(() => adopt_member_profile(f.home, launched.config_path, 'Gemini-2', randomUUID(), 'antigravity'), /找不到 agy 会话/);
+    assert.throws(() => adopt_member_profile(f.home, launched.config_path, 'Gemini-2', randomUUID(), 'antigravity'), /找不到 Antigravity CLI 会话/);
     assert.equal(adopt_member_profile(f.home, launched.config_path, 'Gemini-2', conversation_id, 'antigravity'), 'antigravity_cli');
     const profile = load_config(launched.config_path).participants['Gemini-2'];
     assert.deepEqual([profile.adapter, profile.session_id], ['antigravity_cli', conversation_id]);

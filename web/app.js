@@ -4,14 +4,6 @@ const REFRESH_INTERVAL_MS = 60000;
 const FALLBACK_REFRESH_INTERVAL_MS = 12000;
 // The site caps one message batch at 200.
 const MESSAGE_HISTORY_BATCH = 200;
-// What the runner can do with each way it reaches a member's software (an execution's `delivery`): stop it, and see its
-// progress. A window or App works on its own; untested abilities count as unsupported (`.dev/docs/Design_适配能力.md`).
-const DELIVERY_CAPABILITIES = {
-  process: { stoppable: true, progress: true }, api: { stoppable: true, progress: true },
-  window: { stoppable: false, progress: false }, app: { stoppable: false, progress: false }, sidecar: { stoppable: false, progress: false },
-};
-// Runners that predate delivery reports: an App adapter is known to be one; anything else ran as a process.
-const ADAPTER_DELIVERIES = { codex: "app", antigravity: "sidecar", api: "api" };
 // A poll reads the room in full only when it changed or an AI is working in it; this full read still comes at least this often.
 const SAFETY_REFRESH_MS = 5 * 60 * 1000;
 const WORKING_STATUSES = ["dispatched", "started"];
@@ -2998,40 +2990,37 @@ async function interrupt_member(member_id) {
   if (state.room?.id === room_id) await refresh_room();
 }
 
-/** The abilities behind one execution's delivery; `adapter` stands in while a runner has not reported it. */
-function delivery_capabilities(delivery, adapter) {
-  return DELIVERY_CAPABILITIES[delivery || ADAPTER_DELIVERIES[adapter] || "process"];
-}
-
 /**
- * How a voided execution's stop really went: stopped once the runner ended its software, stopping until it reports,
- * and only voided where the runner cannot reach (a window or App) or never said how it delivered.
+ * How a voided execution's stop really went, from what the runner's adapter reported for it (`capabilities`): stopped
+ * once the runner ended its software, stopping until it says so, and only voided where it cannot stop the software (a
+ * window or App) or never reported (an older runner). See `.dev/docs/Design_适配能力.md`.
  */
 function stop_label(execution) {
-  const adapter = (state.room?.free?.members || []).find(member => member.name === execution.member)?.adapter;
-  if (!execution.delivery || !delivery_capabilities(execution.delivery, adapter).stoppable) return "已作废";
-  return execution.stop_result === "stopped" ? "已停止" : "正在停止";
+  if (execution.stop_result === "stopped") return "已停止";
+  if (execution.stop_result === "unconfirmed") return "停止未确认";
+  if (execution.stop_result === "unstoppable") return "已作废";
+  if (!execution.capabilities?.stoppable) return "已作废";
+  return "正在停止";
 }
 
-/** What stopping some executions really did: who stopped, and who may keep generating where the runner cannot reach. */
-function stop_summary(executions, members) {
-  const unstoppable = executions.filter(item => !delivery_capabilities(item.delivery, members.find(member => member.name === item.member)?.adapter).stoppable);
+/** What stopping some executions really did: who is stopping, who may keep generating, and whose software never said. */
+function stop_summary(executions) {
   const names = items => [...new Set(items.map(item => display_name(item.member)))].join("、");
-  const stopped = executions.filter(item => !unstoppable.includes(item));
-  return [stopped.length ? `正在停止 ${names(stopped)}` : "",
-    unstoppable.length ? `${names(unstoppable)} 在自己的窗口或 App 里本机无法停止，可能仍在生成，之后的回答会被拒收` : ""].filter(Boolean).join("；");
+  const stopping = executions.filter(item => item.capabilities?.stoppable === true);
+  const unstoppable = executions.filter(item => item.capabilities?.stoppable === false);
+  const unknown = executions.filter(item => !item.capabilities);
+  return [stopping.length ? `正在停止 ${names(stopping)}` : "",
+    unstoppable.length ? `${names(unstoppable)} 在自己的窗口或 App 里本机无法停止，可能仍在生成，之后的回答会被拒收` : "",
+    unknown.length ? `${names(unknown)} 的本次工作已作废` : ""].filter(Boolean).join("；");
 }
 
 /** Stop the whole free room: running work and everything still owed end; a new message starts again. */
 async function stop_room() {
   const room_id = state.room.id;
   const live = (state.room.free?.executions || []).filter(item => ["dispatched", "started"].includes(item.status));
-  const members = state.room.free?.members || [];
   await request_json(`/api/rooms/${room_id}/stop`, {});
-  // Quiet when everything stopped; a window or App that keeps generating is said at once.
-  if (live.some(item => !delivery_capabilities(item.delivery, members.find(member => member.name === item.member)?.adapter).stoppable)) {
-    notify("warning", stop_summary(live, members));
-  }
+  // Quiet when everything is stopping; a window or App that keeps generating is said at once.
+  if (live.some(item => !item.capabilities?.stoppable)) notify("warning", stop_summary(live));
   if (state.room?.id === room_id) await refresh_room();
 }
 
@@ -3071,7 +3060,7 @@ async function stop_and_rewind(room_id, message_id, refusal) {
   const text = state.messages.find(message => message.id === message_id)?.text ?? "";
   await request_json(`/api/rooms/${room_id}/rewind`, { message_id, revision: plan.revision });
   const kept = touched.filter(member => member.session === "kept").map(member => display_name(member.name));
-  if (live.length) notify("info", `已撤回；${stop_summary(live, room.free.members)}`
+  if (live.length) notify("info", `已撤回；${stop_summary(live)}`
     + `${kept.length ? `；${kept.join("、")} 的会话未回退，仍记得这条消息` : ""}；文件改动不会恢复`);
   return { text };
 }
@@ -4026,12 +4015,12 @@ async function attach_local_members(snapshot, room_id) {
   } catch (error) { throw new Error(`读取本机成员会话失败，未生成备份：${error.message}`); }
 }
 
-/** The website copy of a backup: local paths and sessions stay in the browser, and Claude Code members return as manual. */
+/** The website copy of a backup: keep local data private and apply each adapter's restore policy. */
 function import_body(snapshot) {
   const { local_members, ...body } = snapshot;
   if (local_members?.mode !== "free") return body;
-  const claude = new Set(Object.entries(local_members.participants || {}).filter(([, profile]) => profile.adapter === "claude").map(([name]) => name));
-  const room_members = (body.tables?.room_members || []).map(row => claude.has(row.name) && row.status !== "removed"
+  const manual = new Set(Object.entries(local_members.participants || {}).filter(([, profile]) => window.discuss_backup.adapter_profile(profile.adapter)?.restore_manual).map(([name]) => name));
+  const room_members = (body.tables?.room_members || []).map(row => manual.has(row.name) && row.status !== "removed"
     ? { ...row, access: "manual", adapter: "", session_mode: "new" } : row);
   return { ...body, tables: { ...body.tables, room_members } };
 }
@@ -4043,7 +4032,7 @@ async function restore_local_members(room, token, local_members) {
     const result = await local_launch_request("room-restore", { room_id: room.id, token, local_members });
     return { members: result.members.map(member => ({ name: member.name, failed: member.status === "failed",
       text: member.status === "failed" ? `未恢复：${member.error}` : member.status === "resumed" ? "请回后接续原会话" : "已改为手动接入，请回后在原窗口重新注册",
-      resume: member.status === "manual" && member.session_id ? { command: `claude --resume ${member.session_id}`, cwd: member.cwd } : null })) };
+      resume: member.resume || null })) };
   } catch (error) { return { members: [], problem: `成员会话未恢复：${error.message}` }; }
 }
 
@@ -4139,7 +4128,7 @@ function change_view_theme(theme) {
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, notify,
   write_launch: write_launch_field, default_launch_entry, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
   launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, pick_launch_directory, browse_local_directory, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
-  start_drag: start_directory_drag, reconnect: reconnect_live_updates, delivery_capabilities, stop_label,
+  start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,

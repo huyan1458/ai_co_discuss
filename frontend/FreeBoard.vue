@@ -57,7 +57,7 @@ function member_status(member, state) {
   const execution = member.execution;
   if (execution && LIVE.includes(execution.status)) return execution.stale ? "执行失联，停止未确认" : "正在处理";
   // Voided in a window or App the runner cannot stop: that turn may still run, so new messages wait for it.
-  if (member.held_until) return `上一轮已作废，可能仍在生成；${member.pending ? `${member.pending} 条新消息` : "新消息"}最晚 ${bridge.format_time(member.held_until * 1000)} 送达`;
+  if (member.held_until) return `${execution?.stop_result === "unconfirmed" ? "上一轮停止未确认" : "上一轮已作废，可能仍在生成"}，等待结束确认或迟到回答；${member.pending ? `${member.pending} 条新消息` : "新消息"}最晚 ${bridge.format_time(member.held_until * 1000)} 送达`;
   if (member.pending) return `待投递 ${member.pending} 条`;
   if (state === "queued") return discussion.value ? "本轮排队" : "等待依次发言";
   if (execution?.status === "failed") return "执行失败";

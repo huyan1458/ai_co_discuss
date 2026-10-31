@@ -9,7 +9,8 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { atomic_json } from './discussion_adapters.mjs';
+import { adapter_profile } from './adapters/profiles.mjs';
+import { atomic_json } from './files.mjs';
 import { saved_api_keys } from './discussion_api.mjs';
 import { launch_discussion, launch_projects, launch_settings, platform_of } from './discussion_launch.mjs';
 
@@ -82,9 +83,13 @@ function api_key_ref(profile, keys) {
 /** Platforms this computer can wake without further setup, and the client each uses. */
 export function ready_clients(home) {
   const keys = saved_api_keys(home);
-  return Object.fromEntries(Object.entries(launch_settings(home).participants).filter(([, profile]) => profile.adapter === 'api'
-    ? Boolean(profile.base_url && profile.api_protocol && profile.model && api_key_ref(profile, keys))
-    : Boolean(profile.adapter && (profile.adapter === 'antigravity' ? profile.ipc_directory : profile.executable))).map(([name, profile]) => [name, profile.adapter]));
+  return Object.fromEntries(Object.entries(launch_settings(home).participants).filter(([, profile]) => {
+    const facts = adapter_profile(profile.adapter);
+    if (!facts) return false;
+    // A model API needs its endpoint and key; other software needs its installed location.
+    return facts.kind === 'api' ? Boolean(profile.base_url && profile.api_protocol && profile.model && api_key_ref(profile, keys))
+      : Boolean(profile[facts.location]);
+  }).map(([name, profile]) => [name, profile.adapter]));
 }
 
 /** Turn a relayed request into the request the connected browser would send, using this computer's directory and keys. */
@@ -97,7 +102,7 @@ export function local_request(home, site, request) {
   const participants = { ...(input.participants || {}) };
   for (const member of input.room?.members || []) {
     const profile = defaults[platform_of(member.name)];
-    const ref = profile?.adapter === 'api' && !participants[member.name]?.api_key_ref ? api_key_ref(profile, keys) : undefined;
+    const ref = adapter_profile(profile?.adapter)?.kind === 'api' && !participants[member.name]?.api_key_ref ? api_key_ref(profile, keys) : undefined;
     if (ref) participants[member.name] = { ...participants[member.name], api_key_ref: ref };
   }
   return { ...input, participants, site, entry: 'web', ...(project ? { cwd: project.path } : {}) };

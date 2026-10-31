@@ -235,8 +235,6 @@ async function save_projects() {
 .project-error { display: flex; align-items: flex-start; gap: 6px; margin: 0; color: #f0716b; font-size: 12px; line-height: 1.5; }
 .project-error > [class*="icon"] { flex-shrink: 0; width: 14px; height: 14px; margin-top: 2px; }
 .project-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
-@media (hover: none), (max-width: 600px) {
-  .project-actions { opacity: 1; }
-  .project-prefix { max-width: 120px; }
-}
+@media (hover: none), (max-width: 600px) { .project-actions { opacity: 1; } }
+@media (max-width: 600px) { .project-prefix { max-width: 120px; } }
 </style>

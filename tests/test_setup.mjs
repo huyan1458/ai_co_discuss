@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import { install_skills, remove_legacy_skills } from '../runner/discussion_skills.mjs';
-import { agy_rule } from '../runner/discussion_adapters.mjs';
+import { agy_rule } from '../runner/adapters/antigravity_cli.mjs';
 import { check_command, checkbox_prompt, detect_clients, detect_python, remove_legacy_agy_rules } from '../runner/discussion_setup.mjs';
 
 const CLI = fileURLToPath(new URL('../runner/codiscuss.mjs', import.meta.url));

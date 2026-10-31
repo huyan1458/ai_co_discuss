@@ -176,6 +176,5 @@ async function save_key() {
 .scheduler-description { margin: 2px 0 0; color: var(--ui-text-muted); font-size: 13px; }
 .scheduler-title small { color: var(--ui-text-dimmed); font-size: 11px; font-weight: 400; }
 .scheduler-badge { color: var(--channel-accent); }
-@media (pointer: coarse) { .scheduler-tools > button { min-width: 44px; min-height: 44px; } }
 @media (max-width: 600px) { .scheduler-cards { grid-template-columns: 1fr; } }
 </style>

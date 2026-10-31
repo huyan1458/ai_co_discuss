@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { listen_local } from './local_port.mjs';
 
 import { detect_python } from '../runner/discussion_setup.mjs';
 import { connection_site } from '../runner/discussion_local.mjs';
@@ -23,7 +24,7 @@ function startup_diagnostics(home, result) {
 
 async function reserve_port() {
   const server = createServer();
-  await new Promise(done => server.listen(0, '127.0.0.1', done));
+  await listen_local(server);
   return server;
 }
 

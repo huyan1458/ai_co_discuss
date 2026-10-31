@@ -112,7 +112,7 @@ const free_busy = computed(() => {
       const retry = execution.retry?.retry_at && !execution.retry.stopped ? execution.retry : null;
       return [{ id: `free-${execution.id}`, author: member.name, member_id: member.id, retry,
         text: execution.stale ? "执行失联：网站已不再接受本次回答，软件停止未确认" : retry ? "会话异常，等待自动重试" : ACTIVITY_LABELS[execution.activity] || "正在处理",
-        working: !execution.stale && !retry, created_at: execution.created_at, adapter: member.adapter, delivery: execution.delivery,
+        working: !execution.stale && !retry, created_at: execution.created_at, adapter: member.adapter, capabilities: execution.capabilities,
         activity: execution.activity, activity_at: execution.activity_at, notes: execution.notes || 0,
         execution_id: execution.id, request_message_id: reports.get(execution.id)?.request_message_id,
         discussion_request: reports.get(execution.id)?.requests?.find((request) => request.discussion_session_id) }];
@@ -131,6 +131,23 @@ watch(() => free_busy.value.length > 0, (busy, _previous, cleanup) => {
 const free_working = computed(() => view.value.query || view.value.mention_only ? [] : free_busy.value);
 /** Progress notes per execution id; only counts come with the room, so texts are read when a card shows more or a fold opens. */
 const execution_notes = ref(new Map());
+/** Late text is owner-only and fetched only when its fold opens; never cache it across rooms or loss of access. */
+const late_answers = ref(new Map());
+watch(() => [room.value.id, view.value.access?.can_manage], () => { late_answers.value = new Map(); });
+async function load_late_answer(execution_id, event) {
+  if (!event.target.open || !view.value.access?.can_manage || late_answers.value.has(execution_id)) return;
+  const room_id = room.value.id;
+  late_answers.value = new Map(late_answers.value).set(execution_id, null);
+  try {
+    const answer = await bridge.request(`/api/rooms/${room_id}/executions/${execution_id}/late-answer`);
+    if (room.value.id === room_id && view.value.access?.can_manage) late_answers.value = new Map(late_answers.value).set(execution_id, answer);
+  } catch (error) {
+    if (room.value.id !== room_id) return;
+    late_answers.value.delete(execution_id);
+    event.target.open = false;
+    bridge.notify("error", `未采纳的回答读取失败：${error.message}`);
+  }
+}
 async function load_notes(execution_id) {
   try {
     const { notes } = await bridge.request(`/api/rooms/${room.value.id}/executions/${execution_id}/notes`);
@@ -152,7 +169,7 @@ function answer_execution(message) {
  */
 function working_status(message) {
   const silent = Math.max(0, free_now.value - (message.activity_at || message.created_at));
-  if (!message.working || !capabilities(message).progress || silent < STALL_SECONDS) return { text: message.text, live: message.working };
+  if (!message.working || !shows_progress(message) || silent < STALL_SECONDS) return { text: message.text, live: message.working };
   if (message.activity === "command") return { text: `命令已运行 ${format_elapsed(silent)}`, live: true };
   return { text: `已 ${format_elapsed(silent)}无输出，可能卡住`, live: false, warning: true };
 }
@@ -180,20 +197,20 @@ const MENTION_PATTERN = (name) => new RegExp(`(^|[\\s(（，,。；;：:])@${nam
 const draft_prose = computed(() => text.value.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "").replace(/^>.*$/gm, ""));
 const SCHEDULER_LABELS = { jev: "TypeSafe Jev", decisions: "OpenAI Decisions" };
 /** What the runner can do with how an execution reached its member's software: stop it, see its progress. */
-const capabilities = (item) => bridge.delivery_capabilities(item.delivery,
-  item.adapter ?? (room.value.free?.members || []).find((member) => member.name === item.member)?.adapter);
+const capabilities = (item) => item.capabilities || null;
+/** Whether the runner can show this work's progress; until it reports, the page assumes it can. */
+const shows_progress = (item) => capabilities(item)?.progress !== false;
 /**
  * A voided execution as it really went: stopped once the runner ended its process; still stopping until it reports;
  * voided only, when it works in a window or App the runner cannot stop (`.dev/docs/Design_适配能力.md`).
  */
 function stop_state(execution) {
   const label = bridge.stop_label(execution);
-  // A runner that predates delivery reports says nothing about the software; only the room's side is certain.
-  if (!execution.delivery) return { label, note: "" };
   const name = bridge.display_name(execution.member);
   // A late answer shows the member did finish the turn; it stays out of the transcript and AI reads.
   if (execution.late_answer) return { label, note: `${name} 之后仍交来了回答，未采纳：不进入记录，其他 AI 读不到。` };
-  if (!capabilities(execution).stoppable) return { label, note: `${name} 在自己的窗口或 App 里，本机无法停止，可能仍在生成；网站不再接受本次回答。` };
+  if (execution.stop_result === "unconfirmed") return { label, note: "本机尚未确认进程结束，可能仍在生成；网站不再接受本次回答。" };
+  if (execution.stop_result === "unstoppable" || capabilities(execution)?.stoppable === false) return { label, note: `${name} 在自己的窗口或 App 里，本机无法停止，可能仍在生成；网站不再接受本次回答。` };
   return { label, note: label === "正在停止" ? "等待本机服务结束进程。" : "" };
 }
 // The runner retries a manual member's refused delivery this many times (runner/free_runner.mjs MAX_DELIVERY_RETRIES).
@@ -211,7 +228,7 @@ const request_badges = computed(() => {
   const failures = new Map((source.executions || []).map((execution) => [execution.id, execution.result]));
   for (const request of source.requests || []) {
     // A request voided after reaching the software reads as its stop really went; one never delivered was only cancelled.
-    const voided = request.status === "cancelled" && executions.get(request.execution_id)?.delivery ? executions.get(request.execution_id) : null;
+    const voided = request.status === "cancelled" && executions.get(request.execution_id)?.capabilities ? executions.get(request.execution_id) : null;
     const [label, color] = voided ? [stop_state(voided).label, "neutral"] : FREE_REQUEST_LABELS[request.status];
     const title = request.status === "failed" ? failures.get(request.execution_id) || "执行失败" : "";
     badges.set(request.message_id, [...(badges.get(request.message_id) || []),
@@ -229,7 +246,7 @@ const execution_reports = computed(() => {
     // A clean completion adds nothing to the message header; only failures, observed file changes and refused operations earn a card.
     if (execution.status === "completed" && !execution.changes?.length && !execution.denials?.length) continue;
     // A failed free-room execution keeps its own card in the slot it worked in, and so does a delivered one that was voided.
-    if (execution.status === "failed" || (execution.status === "cancelled" && execution.delivery)) continue;
+    if (execution.status === "failed" || (execution.status === "cancelled" && execution.capabilities)) continue;
     const message_id = execution.answer_id || execution.request_message_id;
     const report = { ...execution, label: execution.status === "cancelled" ? bridge.stop_label(execution) : { completed: "已完成", failed: "失败" }[execution.status] };
     reports.set(message_id, [...(reports.get(message_id) || []), report]);
@@ -599,7 +616,7 @@ const free_layout = computed(() => {
       if (execution.status !== "cancelled" || execution.answer_id || missed.has(execution.id)) continue;
       // Work that reached the member's software keeps a card where it worked once voided; work never delivered leaves none.
       const request = execution.requests?.find((item) => item.discussion_session_id);
-      if (request || execution.delivery) place({ id: `stopped-${execution.id}`, author: execution.member,
+      if (request || execution.capabilities) place({ id: `stopped-${execution.id}`, author: execution.member,
         slot_card: true, cancelled_execution: execution, execution_id: execution.id, created_at: execution.created_at,
         request_message_id: execution.request_message_id, discussion_request: request });
     }
@@ -1144,11 +1161,11 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
               <span v-else class="channel-message-provenance channel-message-elapsed">{{ stop_state(message.cancelled_execution).label }} · 执行 #{{ message.execution_id }}</span>
             </div>
             <div class="channel-message-text" role="status">{{ message.cancelled_turn ? '本次发言已被跳过或取消，未回答。' : message.cancelled_execution.result || '本次执行已作废，未回答。' }}</div>
-            <template v-for="execution in [message.cancelled_execution || (room.free?.executions || []).find((item) => item.id === message.execution_id)].filter((item) => item?.delivery && stop_state(item).note)" :key="execution.id">
+            <template v-for="execution in [message.cancelled_execution || (room.free?.executions || []).find((item) => item.id === message.execution_id)].filter((item) => item && stop_state(item).note)" :key="execution.id">
               <p class="channel-message-text channel-stop-note">{{ stop_state(execution).note }}</p>
-              <details v-if="execution.late_answer" class="channel-receipt">
+              <details v-if="execution.late_answer && view.access?.can_manage" class="channel-receipt" @toggle="load_late_answer(execution.id, $event)">
                 <summary :aria-label="`查看 ${bridge.display_name(execution.member)} 未采纳的回答`">未采纳的回答</summary>
-                <div class="channel-message-text channel-late-answer">{{ execution.late_answer.text }}</div>
+                <div class="channel-message-text channel-late-answer">{{ late_answers.get(execution.id)?.text ?? '正在读取…' }}</div>
               </details>
             </template>
           </template>
@@ -1163,9 +1180,9 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
               </div>
               <span class="channel-message-provenance channel-message-elapsed">{{ message.waiting ? `手动启动${message.created_at ? ` · 已等 ${format_elapsed(Math.max(0, free_now - message.created_at))}` : ''}` : `已用 ${format_elapsed(Math.max(0, free_now - message.created_at))}` }}</span>
             </div>
-            <div v-for="status in [working_status(message)]" :key="message.id" class="channel-message-text" :class="{ 'channel-working-warning': status.warning }" role="status" :aria-label="`${bridge.display_name(message.author)} ${status.text}`" :title="capabilities(message).progress ? undefined : '此接入方式看不到进度，可在原窗口查看'">
+            <div v-for="status in [working_status(message)]" :key="message.id" class="channel-message-text" :class="{ 'channel-working-warning': status.warning }" role="status" :aria-label="`${bridge.display_name(message.author)} ${status.text}`" :title="shows_progress(message) ? undefined : '此接入方式看不到进度，可在原窗口查看'">
               <span v-if="message.waiting">{{ message.text }}</span>
-              <WorkingText v-else-if="status.live" :text="status.text" :seed="message.author" :beat="message.activity_at" :silent="free_now - (message.activity_at || message.created_at)" dots :muted="!capabilities(message).progress" />
+              <WorkingText v-else-if="status.live" :text="status.text" :seed="message.author" :beat="message.activity_at" :silent="free_now - (message.activity_at || message.created_at)" dots :muted="!shows_progress(message)" />
               <span v-else>{{ status.text }}</span>
             </div>
             <template v-if="message.retry">

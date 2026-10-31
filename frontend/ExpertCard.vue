@@ -478,11 +478,4 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card-manual { display: grid; gap: 4px; width: 100%; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
 .expert-card-manual > p { margin: 0; }
 .expert-card-note > span { flex-shrink: 0; width: 13px; height: 13px; margin-top: 3px; }
-@media (pointer: coarse) {
-  .expert-card-flip, .expert-card-defaults, .expert-card-tools > button, .expert-card-back-tool { min-width: 44px; min-height: 44px; }
-  .expert-card-turn { height: 262px; }
-  .expert-card-tools { top: 4px; right: 4px; }
-  .expert-card-identity { padding-right: 136px; }
-  .expert-card-modes button { min-height: 44px; }
-}
 </style>

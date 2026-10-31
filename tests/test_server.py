@@ -159,17 +159,18 @@ class DiscussionTests(unittest.TestCase):
         codex = next(item for item in self.request(path + "/inbox")[1]["members"] if item["name"] == "Codex")
         execution = self.request(path + "/executions", {"member_id": codex["id"], "client_id": uuid.uuid4().hex})[1]
         url = f"{path}/executions/{execution['id']}"
-        self.assertEqual(self.request(url, {"action": "delivery", "delivery": "desktop"})[0], 400)
+        self.assertEqual(self.request(url, {"action": "delivery", "stoppable": "no", "progress": False})[0], 400)
         self.assertEqual(self.request(url, {"action": "stopped", "result": "stopped"})[0], 409, "a live execution has no stop result")
-        self.assertEqual(self.request(url, {"action": "delivery", "delivery": "window"})[0], 200)
+        self.assertEqual(self.request(url, {"action": "delivery", "stoppable": False, "progress": False})[0], 200)
         member = next(item for item in self.request(path)[1]["free"]["members"] if item["name"] == "Codex")
-        self.assertEqual([member["execution"]["delivery"], member["execution"]["stop_result"]], ["window", ""])
+        self.assertEqual([member["execution"]["capabilities"], member["execution"]["stop_result"]], [{"stoppable": False, "progress": False}, ""])
         self.assertEqual(self.request(f"{path}/members/{codex['id']}/interrupt", {})[0], 200)
-        self.assertEqual(self.request(url, {"action": "delivery", "delivery": "process"})[0], 409)
+        self.assertEqual(self.request(url, {"action": "delivery", "stoppable": False, "progress": False})[0], 200)
         self.assertEqual(self.request(url, {"action": "stopped", "result": "unstoppable"})[0], 200)
+        self.assertTrue(self.request(url, {"action": "stopped", "result": "unstoppable"})[1]["duplicate"])
         self.assertEqual(self.request(url, {"action": "stopped", "result": "stopped"})[0], 409, "recorded once")
         report = next(item for item in self.request(path)[1]["free"]["executions"] if item["id"] == execution["id"])
-        self.assertEqual([report["status"], report["delivery"], report["stop_result"]], ["cancelled", "window", "unstoppable"])
+        self.assertEqual([report["status"], report["capabilities"], report["stop_result"]], ["cancelled", {"stoppable": False, "progress": False}, "unstoppable"])
         # The window may still be on the voided turn: the member's next message waits instead of arriving mid-turn.
         self.request(path + "/messages", {"author": "用户", "text": "补充一句", "to": ["Codex"], "submission_id": uuid.uuid4().hex})
         self.assertEqual(self.request(path + "/executions", {"member_id": codex["id"], "client_id": uuid.uuid4().hex})[0], 409)
@@ -179,7 +180,11 @@ class DiscussionTests(unittest.TestCase):
             "execution_id": execution["id"], "submission_id": uuid.uuid4().hex}, token=self.member_tokens["Codex"])
         self.assertEqual(status, 409, refused)
         report = next(item for item in self.request(path)[1]["free"]["executions"] if item["id"] == execution["id"])
-        self.assertEqual(report["late_answer"]["text"], "迟到的回答")
+        self.assertEqual(set(report["late_answer"]), {"created_at"})
+        for token in (self.member_tokens["Codex"], "anonymous"):
+            self.assertNotIn("迟到的回答", json.dumps(self.request(path, token=token)[1], ensure_ascii=False))
+            self.assertEqual(self.request(url + "/late-answer", token=token)[0], 403)
+        self.assertEqual(self.request(url + "/late-answer")[1]["text"], "迟到的回答")
         self.assertNotIn("迟到的回答", [item["text"] for item in self.request(path + "/messages")[1]["messages"]])
         self.assertEqual(self.request(path + "/executions", {"member_id": codex["id"], "client_id": uuid.uuid4().hex})[0], 200)
 

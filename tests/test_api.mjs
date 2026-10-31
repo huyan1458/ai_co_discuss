@@ -8,8 +8,9 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { listen_local } from './local_port.mjs';
 import { API_PROVIDERS, api_base_url, api_check, api_generate, api_status_message, api_history, api_models, api_request, api_response, api_tool_results, read_api_key, save_api_key } from '../runner/discussion_api.mjs';
-import { api_delivery, participant_tools, system_prompt } from '../runner/api_participant.mjs';
+import { api_delivery, participant_tools, system_prompt } from '../runner/adapters/api.mjs';
 import { launch_discussion } from '../runner/discussion_launch.mjs';
 import { api, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
@@ -49,7 +50,7 @@ async function model_fixture(t, respond) {
       response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(result));
     } catch (error) { response.statusCode = 500; response.end(JSON.stringify({ error: error.message })); }
   });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  await listen_local(server);
   t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
   return { base_url: `http://127.0.0.1:${server.address().port}/custom/v1`, calls, server };
 }
@@ -133,7 +134,7 @@ test('API HTTP errors say whether to fix the setup or wait, without implying a r
   for (const [status, expected] of [[401, /密钥无效或无权访问/], [403, /密钥无效或无权访问/], [404, /地址或模型 ID 不存在/],
     [429, /请求过多或额度已用尽.*先核对房间/], [503, /服务暂时不可用.*先核对房间/], [418, /请核对地址、密钥、模型和请求协议/]]) {
     const server = createServer((request, response) => { response.statusCode = status; response.end('{}'); });
-    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    await listen_local(server);
     t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
     const base_url = `http://127.0.0.1:${server.address().port}/custom/v1`;
     await assert.rejects(api_models(f.home, profiles(f.home, base_url).Codex), error => {

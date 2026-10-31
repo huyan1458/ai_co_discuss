@@ -171,5 +171,4 @@ async function invite() {
 .pb-invite-reserved { visibility: hidden; }
 .pb-invite-empty { margin: 0; padding: 18px 12px; border: 1px dashed var(--ui-border); border-radius: 8px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }
 .pb-invite-footer { display: flex; justify-content: flex-end; gap: 8px; }
-@media (pointer: coarse) { .pb-invite-options label { min-height: 44px; } }
 </style>

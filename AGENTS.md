@@ -23,7 +23,8 @@
 | `backend/` | Python 后端 `server.py`（根目录 `server.py` 为启动入口）、Cloudflare Worker `worker.mjs`、共用 `schema.sql` | 业务协议两套后端同改，并补相关测试 |
 | `frontend/` | Vue、Markdown、备份页源码 | 运行 `npm run build`，生成 `web/` 资源与 `dist/pages/` |
 | `web/` | 直接运行的静态网页与构建产物 | 不手改产物（如 `web/modern.js`） |
-| `runner/` | `codiscuss` CLI 与本机接入程序（唤醒软件、API 参与者、智能调度 `scheduler.mjs`） | `Ref_技术细节.md`“接入程序”、`tests/test_runner.mjs`；影响使用时同步 `docs/runner.md` |
+| `runner/` | `codiscuss` CLI 与本机接入程序（房间编排 `free_runner.mjs`、常驻服务、启动配置、智能调度 `scheduler.mjs`） | `Ref_技术细节.md`“接入程序”、`tests/test_runner.mjs`；影响使用时同步 `docs/runner.md` |
+| `runner/adapters/` | **适配层**：`profiles.mjs` 各软件的静态事实（显示名、配置字段、档位、能力；不依赖 Node，网页也引用），每家软件一个行为模块（投递、停止能力、会话截断与分叉、模型读取），`index.mjs` 是对外唯一入口 | 新接一家软件只在这里新增 profile 与行为模块；`Ref_技术细节.md`“适配能力”；`tests/test_runner.mjs`、`tests/test_session_cut.mjs` |
 | `.agents/skills/` | 分发技能 discuss-host / discuss-participant / discuss-report；`codiscuss-setup` 仅在源码仓库使用，不进 npm 包、不由安装器复制 | 只有 `.gitignore` 白名单内的技能入库，新增分发技能同步白名单 |
 | `tests/`、`scripts/`、`deploy/` | 测试、构建脚本、部署配置 | — |
 | `docs/` | 对外精简文档 | 见 §6 |
@@ -39,6 +40,7 @@
 | UI | `.dev/docs/Design_UI设计说明.md` |
 | 智能调度的题干、选项、上下文、阈值 | `.dev/docs/Insight_决策模型使用经验.md`、`.dev/docs/Ref_智能调度场景清单.md`；改后递增提示版本并跑回归评测 |
 | runner 唤醒、投递、会话接管、权限档位 | `Ref_技术细节.md`“接入程序”“独立 CLI 接入”；取舍依据见 `Res_会话接入.md`、`Res_权限档位.md` |
+| 接入一家新软件，或改动某家软件的投递、停止、会话、模型读取 | §4 红线 9；`.dev/docs/Design_适配能力.md`；`Ref_技术细节.md`“适配能力”；只改 `runner/adapters/` |
 | 技能、runner 任务文字、软件预设、专属提示词 | §5“提示词分层”；对应 `SKILL.md` |
 | 附件 | `.dev/plans/跨平台附件适配/`，先与用户确认其中的待决事项 |
 | 构建、测试、贡献 | `.github/CONTRIBUTING.md` |

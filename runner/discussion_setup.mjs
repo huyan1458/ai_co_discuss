@@ -6,7 +6,7 @@ import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:pa
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
-import { atomic_json } from './discussion_adapters.mjs';
+import { atomic_json } from './files.mjs';
 import { launch_settings, save_launch_settings } from './discussion_launch.mjs';
 import { assert_shared_home, service_home } from './discussion_service.mjs';
 import { SKILLS, install_skills, remove_legacy_skills } from './discussion_skills.mjs';

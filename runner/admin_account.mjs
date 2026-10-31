@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
-import { atomic_json } from './discussion_adapters.mjs';
+import { atomic_json } from './files.mjs';
 import { service_home } from './discussion_service.mjs';
 
 const DEFAULT_CONFIG = join('.wrangler', 'deploy', 'wrangler.jsonc');

@@ -20,7 +20,8 @@ from .identity import MAX_ROOM_AGENTS, is_ai
 from .runtime import (LEASE_SECONDS, MAX_EXECUTION_SEGMENTS, begin_write, enforce_session_limits,
                       require_owner, save_segments, token_hash)
 
-REVIEW_ADAPTERS = ("codex_cli",)
+# Adapter and client values are named by the runner's adapter layer; the site only checks their shape (AGENTS.md red line 9).
+ADAPTER_VALUE = re.compile(r"[a-z][a-z0-9_]{1,31}")
 MAX_REVIEW_SCOPE = 2000
 MAX_REVIEW_INPUT = 60000
 REVIEW_STATE_SQL = """SELECT json_object(
@@ -125,18 +126,21 @@ FREE_OPERATIONS = ("messages", "attachments", "move", "folder", "rename", "archi
 MEMBER_FIELDS = ("id", "name", "adapter", "role", "status", "access", "session_mode", "read_until")
 EXECUTION_FIELDS = ("id", "member_id", "status", "session_id", "lease_until", "created_at", "finished_at", "result",
                     "activity", "activity_at")
-# How the runner reached the member's software: a background process or API call it can stop, or a window, App or
-# Sidecar that keeps working on its own. Reported once delivered; '' before then.
-DELIVERIES = ("process", "api", "window", "app", "sidecar")
 # What the runner found when a voided execution's software was to stop; '' until it reports.
-STOP_RESULTS = ("stopped", "unstoppable")
-# Deliveries the runner cannot stop: voided there, the software may still be working on the turn.
-UNSTOPPABLE_DELIVERIES = ("window", "app", "sidecar")
-# How long a member voided in such a window or App gets no new delivery unless its late answer shows the turn ended.
+STOP_RESULTS = ("stopped", "unstoppable", "unconfirmed")
+# How long a member voided where the runner could not stop it gets no new delivery unless its late answer shows the turn ended.
 HOLD_SECONDS = 600
-# The delivery and stop result read alongside an execution aliased `e`.
-DELIVERY_COLUMNS = """(SELECT delivery FROM execution_deliveries d WHERE d.execution_id=e.id) AS delivery,
-    (SELECT stop_result FROM execution_deliveries d WHERE d.execution_id=e.id) AS stop_result"""
+# What a rewind does to a runner member's session, as its adapter reports.
+REWIND_EFFECTS = ("cut", "fresh", "kept")
+# The reported capabilities and stop result read alongside an execution aliased `e`.
+CAPABILITY_COLUMNS = """(SELECT stoppable FROM execution_capabilities c WHERE c.execution_id=e.id) AS stoppable,
+    (SELECT progress FROM execution_capabilities c WHERE c.execution_id=e.id) AS progress,
+    (SELECT stop_result FROM execution_capabilities c WHERE c.execution_id=e.id) AS stop_result"""
+
+
+def reported_capabilities(row):
+    """`{stoppable, progress}` as the runner reported them for one execution, or None before it did (or an older runner)."""
+    return None if row["stoppable"] is None else {"stoppable": bool(row["stoppable"]), "progress": bool(row["progress"])}
 # Columns added after the first free-room tables; Python databases created by that build gain them here.
 LATER_COLUMNS = {"room_members": {"access": "TEXT NOT NULL DEFAULT 'runner'", "session_mode": "TEXT NOT NULL DEFAULT 'new'"},
                  "member_executions": {"changes": "TEXT NOT NULL DEFAULT ''", "cwd": "TEXT NOT NULL DEFAULT ''",
@@ -159,6 +163,19 @@ def migrate_free_tables(connection):
         SELECT id,'web' FROM room_members WHERE access='online'""")
     connection.execute("UPDATE room_members SET access='manual' WHERE access='online'")
     connection.execute("UPDATE room_modes SET mode='free' WHERE mode='brainstorm'")
+    migrate_stop_results(connection)
+
+
+def migrate_stop_results(connection):
+    """Keep development capability records while allowing the new unconfirmed stop result."""
+    row = connection.execute("SELECT sql FROM sqlite_master WHERE name='execution_capabilities'").fetchone()
+    if not row or "'unconfirmed'" in row[0]:
+        return
+    definition = row[0].replace("execution_capabilities", "execution_capabilities_next", 1)
+    connection.execute(definition.replace("'unstoppable'", "'unstoppable','unconfirmed'"))
+    connection.execute("INSERT INTO execution_capabilities_next SELECT * FROM execution_capabilities")
+    connection.execute("DROP TABLE execution_capabilities")
+    connection.execute("ALTER TABLE execution_capabilities_next RENAME TO execution_capabilities")
 
 
 def room_mode(connection, room_id):
@@ -194,7 +211,8 @@ def review_capability(connection, room_id, member_id, token, payload=None):
             version = payload.get("config_version", "")
             if not isinstance(version, str) or not re.fullmatch(r"[a-f0-9]{64}", version):
                 raise ValueError("config_version 须为本机配置的 SHA-256 摘要")
-            if member["status"] != "active" or member["access"] != "runner" or member["session_mode"] != "new" or member["adapter"] not in REVIEW_ADAPTERS:
+            # Whether the software can enforce a read-only project is the runner's adapter to judge; it attests only then.
+            if member["status"] != "active" or member["access"] != "runner" or member["session_mode"] != "new":
                 raise FileExistsError("仅支持程序启动、可核验只读权限的本地 CLI 成员")
             connection.execute("""INSERT INTO member_review_capabilities(member_id,member_revision,config_version,adapter,recorded_at) VALUES (?,?,?,?,?)
                 ON CONFLICT(member_id) DO UPDATE SET member_revision=excluded.member_revision,
@@ -220,7 +238,7 @@ def review_roster(connection, room_id, token):
         JOIN member_review_capabilities c ON c.member_id=m.id WHERE m.room_id=? AND m.status='active'
         AND m.access='runner' AND m.session_mode='new' ORDER BY m.id""", (room_id,)).fetchall()
     members = [{"id": row["id"], "name": row["name"], "adapter": row["adapter"], "config_version": row["config_version"]}
-               for row in rows if row["adapter"] in REVIEW_ADAPTERS and row["member_revision"] == review_member_revision(row, row["generation"])]
+               for row in rows if row["member_revision"] == review_member_revision(row, row["generation"])]
     state = connection.execute(REVIEW_STATE_SQL, (room_id,)).fetchone()["state"]
     return {"members": members, "revision": hashlib.sha256(state.encode("utf-8")).hexdigest(),
             "reason": "" if members else "没有可核验只读的评审成员"}
@@ -535,14 +553,31 @@ def public_execution(row):
 
 
 def held_until(connection, member_id):
-    """Until when a member's next delivery waits, or 0: its latest execution was voided in a window or App the runner
-    cannot stop, which may still be on that turn and would take a new task mid-turn. Its late answer ends the wait."""
-    row = connection.execute(f"""SELECT e.finished_at FROM member_executions e JOIN execution_deliveries d ON d.execution_id=e.id
+    """Until when a member's next delivery waits, or 0: its latest execution was voided where the runner reported it cannot
+    stop the software (a window or App), which may still be on that turn and would take a new task mid-turn. Its late
+    answer ends the wait."""
+    row = connection.execute("""SELECT e.finished_at FROM member_executions e JOIN execution_capabilities c ON c.execution_id=e.id
         WHERE e.id=(SELECT MAX(id) FROM member_executions WHERE member_id=?) AND e.status='cancelled'
-          AND d.delivery IN ({",".join("?" for _ in UNSTOPPABLE_DELIVERIES)})
-          AND NOT EXISTS(SELECT 1 FROM late_answers l WHERE l.execution_id=e.id)""", (member_id, *UNSTOPPABLE_DELIVERIES)).fetchone()
+          AND c.stop_result<>'stopped' AND (c.stoppable=0 OR c.stop_result IN ('unstoppable','unconfirmed'))
+          AND NOT EXISTS(SELECT 1 FROM late_answers l WHERE l.execution_id=e.id)""", (member_id,)).fetchone()
     until = row["finished_at"] + HOLD_SECONDS if row else 0
     return until if until > int(time.time()) else 0
+
+
+def member_capability(connection, room_id, member_id, token, payload):
+    """Record what a rewind does to one runner member's session, as the runner's adapter for it reports.
+
+    Bound to one known member and replaced whole, so it takes no revision. Returns `{member_id, rewind}`.
+    """
+    require_owner(connection, room_id, token)
+    begin_write(connection)
+    if not connection.execute("SELECT 1 FROM room_members WHERE room_id=? AND id=?", (room_id, member_id)).fetchone():
+        raise LookupError("成员不存在")
+    if payload.get("rewind") not in REWIND_EFFECTS:
+        raise ValueError(f"rewind 须为 {'、'.join(REWIND_EFFECTS)}")
+    connection.execute("""INSERT INTO member_capabilities (member_id,room_id,rewind) VALUES (?,?,?)
+        ON CONFLICT(member_id) DO UPDATE SET rewind=excluded.rewind""", (member_id, room_id, payload["rewind"]))
+    return {"member_id": member_id, "rewind": payload["rewind"]}
 
 
 def execution_retry(connection, execution_id):
@@ -659,8 +694,8 @@ def recent_executions(connection, room_id):
         (SELECT MAX(answer_id) FROM member_requests WHERE execution_id=e.id) AS answer_id,
         (SELECT MIN(message_id) FROM member_requests WHERE execution_id=e.id) AS request_message_id,
         (SELECT COUNT(*) FROM execution_notes WHERE execution_id=e.id) AS note_count,
-        (SELECT denials FROM execution_denials WHERE execution_id=e.id) AS denials,{DELIVERY_COLUMNS},
-        (SELECT json_object('text',text,'created_at',created_at) FROM late_answers WHERE execution_id=e.id) AS late_answer
+        (SELECT denials FROM execution_denials WHERE execution_id=e.id) AS denials,{CAPABILITY_COLUMNS},
+        (SELECT json_object('created_at',created_at) FROM late_answers WHERE execution_id=e.id) AS late_answer
         FROM member_executions e JOIN room_members m ON m.id=e.member_id WHERE e.room_id=? ORDER BY e.id DESC LIMIT ?""", (room_id, RECENT_EXECUTIONS))
     executions = []
     for row in rows:
@@ -671,7 +706,7 @@ def recent_executions(connection, room_id):
             "changes_recorded": bool(row["changes"]), "request_ids": json.loads(row["request_ids"]),
             "answer_id": row["answer_id"], "request_message_id": row["request_message_id"], "requests": requests,
             "notes": row["note_count"], "denials": json.loads(row["denials"] or "[]"),
-            "delivery": row["delivery"] or "", "stop_result": row["stop_result"] or "",
+            "capabilities": reported_capabilities(row), "stop_result": row["stop_result"] or "",
             "late_answer": json.loads(row["late_answer"]) if row["late_answer"] else None,
             "retry": execution_retry(connection, row["id"])})
     return executions
@@ -753,11 +788,11 @@ def free_view(connection, room_id):
         member["registered_at"] = registered_at(connection, row)
         reported = connection.execute("SELECT session_id,client FROM member_sessions WHERE member_id=?", (row["id"],)).fetchone()
         member["reported_session"], member["reported_client"] = (reported["session_id"], reported["client"]) if reported else ("", "")
-        latest = connection.execute(f"SELECT e.*,{DELIVERY_COLUMNS} FROM member_executions e WHERE member_id=? ORDER BY id DESC LIMIT 1",
+        latest = connection.execute(f"SELECT e.*,{CAPABILITY_COLUMNS} FROM member_executions e WHERE member_id=? ORDER BY id DESC LIMIT 1",
                                     (row["id"],)).fetchone()
         member["execution"] = public_execution(latest)
         if latest:
-            member["execution"].update(delivery=latest["delivery"] or "", stop_result=latest["stop_result"] or "")
+            member["execution"].update(capabilities=reported_capabilities(latest), stop_result=latest["stop_result"] or "")
         if latest and latest["status"] in ACTIVE:
             member["execution"]["stale"] = latest["lease_until"] <= now
             member["execution"]["notes"] = note_count(connection, latest["id"])
@@ -1577,6 +1612,9 @@ def inbox(connection, room_id, token):
         member_view["manual_source"] = manual_source[0] if manual_source else ""
         member_view["review_capability"] = review_capability(connection, room_id, row["id"], token)
         member_view["held_until"] = held_until(connection, row["id"])
+        # The runner compares this with its adapter's effect and reports a change.
+        reported = connection.execute("SELECT rewind FROM member_capabilities WHERE member_id=?", (row["id"],)).fetchone()
+        member_view["rewind"] = reported[0] if reported else ""
         pending = [{**request, **review_request_context(connection, request)} for request in pending]
         (members if row["access"] == "runner" else observers).append({**member_view, "pending": pending})
     executions = [{**public_execution(row), "member": row["name"], "retry": execution_retry(connection, row["id"])} for row in connection.execute(
@@ -1863,10 +1901,36 @@ def renewed_notes(payload):
     return notes
 
 
+def late_answer(connection, room_id, execution_id, token):
+    """Read one voided execution's late text after checking the room owner's credential."""
+    require_owner(connection, room_id, token)
+    row = connection.execute("SELECT text,created_at FROM late_answers WHERE room_id=? AND execution_id=?",
+                             (room_id, execution_id)).fetchone()
+    if not row:
+        raise LookupError("本次执行没有迟到回答")
+    return dict(row)
+
+
+def record_stop_result(connection, room_id, execution_id, result):
+    """Record a stop idempotently; an unconfirmed stop may later gain a confirmed outcome."""
+    if result not in STOP_RESULTS:
+        raise ValueError(f"result 须为 {'、'.join(STOP_RESULTS)}")
+    saved = connection.execute("""INSERT INTO execution_capabilities (execution_id,room_id,stop_result) VALUES (?,?,?)
+        ON CONFLICT(execution_id) DO UPDATE SET stop_result=excluded.stop_result
+        WHERE stop_result IN ('','unconfirmed') AND stop_result<>excluded.stop_result""", (execution_id, room_id, result))
+    if saved.rowcount:
+        return False
+    previous = connection.execute("SELECT stop_result FROM execution_capabilities WHERE execution_id=?", (execution_id,)).fetchone()[0]
+    if previous != result:
+        raise FileExistsError("本次执行已记录不同的停止结果")
+    return True
+
+
 def execution_action(connection, room_id, execution_id, token, payload):
     """Runner-side lifecycle: renew, fail, release undelivered work, report how the software was reached, whether a voided one stopped, or observed file changes."""
     begin_write(connection)
     action = payload.get("action")
+    duplicate = False
     member = None
     if action == "fail":
         try:
@@ -1905,21 +1969,18 @@ def execution_action(connection, room_id, execution_id, token, payload):
         # After a voided execution: whether the runner ended its software, or could not because it works in a window or App.
         if row["status"] != "cancelled":
             raise FileExistsError("只有已作废的执行才报告停止结果")
-        if payload.get("result") not in STOP_RESULTS:
-            raise ValueError(f"result 须为 {'、'.join(STOP_RESULTS)}")
-        saved = connection.execute("""INSERT INTO execution_deliveries (execution_id,room_id,stop_result) VALUES (?,?,?)
-            ON CONFLICT(execution_id) DO UPDATE SET stop_result=excluded.stop_result WHERE stop_result=''""",
-                                   (execution_id, room_id, payload["result"]))
-        if not saved.rowcount:
-            raise FileExistsError("本次执行的停止结果已记录")
+        duplicate = record_stop_result(connection, room_id, execution_id, payload.get("result"))
+    elif action == "delivery":
+        if row["status"] not in (*ACTIVE, "cancelled"):
+            raise FileExistsError("执行已结束")
+        # What this delivery can do, as the runner's adapter reported; a retried delivery may differ, so the latest counts.
+        if type(payload.get("stoppable")) is not bool or type(payload.get("progress")) is not bool:
+            raise ValueError("delivery 须带布尔值 stoppable 与 progress")
+        connection.execute("""INSERT INTO execution_capabilities (execution_id,room_id,stoppable,progress) VALUES (?,?,?,?)
+            ON CONFLICT(execution_id) DO UPDATE SET stoppable=excluded.stoppable,progress=excluded.progress""",
+                           (execution_id, room_id, int(payload["stoppable"]), int(payload["progress"])))
     elif row["status"] not in ACTIVE:
         raise FileExistsError("执行已结束")
-    elif action == "delivery":
-        # How the software was reached; a retried delivery may reach it another way, so the latest report counts.
-        if payload.get("delivery") not in DELIVERIES:
-            raise ValueError(f"delivery 须为 {'、'.join(DELIVERIES)}")
-        connection.execute("""INSERT INTO execution_deliveries (execution_id,room_id,delivery) VALUES (?,?,?)
-            ON CONFLICT(execution_id) DO UPDATE SET delivery=excluded.delivery""", (execution_id, room_id, payload["delivery"]))
     elif action == "renew":
         # No time limit on one execution: it runs while the runner keeps renewing.
         if row["lease_until"] <= now:
@@ -1965,7 +2026,8 @@ def execution_action(connection, room_id, execution_id, token, payload):
         finish_execution(connection, execution_id, "cancelled", str(payload.get("reason") or "未送达"), "pending")
     else:
         raise ValueError("action 须为 renew、fail、release、report、segments、retry_wait、retry_start、retry_now 或 retry_stop")
-    return execution_detail(connection, connection.execute("SELECT * FROM member_executions WHERE id=?", (execution_id,)).fetchone())
+    detail = execution_detail(connection, connection.execute("SELECT * FROM member_executions WHERE id=?", (execution_id,)).fetchone())
+    return {**detail, "duplicate": duplicate} if action == "stopped" else detail
 
 
 def owned_member(connection, room_id, member_id, token):
@@ -2033,8 +2095,6 @@ def retract_message(connection, room_id, message_id, token):
     return {"message_id": message_id, "text": message["text"], "duplicate": False}
 
 
-# Software whose session the runner can cut before a taken-back execution; an API member rebuilds its context each time.
-CUTTABLE_ADAPTERS = ("claude", "codex", "codex_cli", "antigravity_cli")
 # Executions a rewind takes back: any touching a message from the rewind point on, and any still running.
 REWOUND_EXECUTIONS = """SELECT e.id,e.member_id FROM member_executions e WHERE e.room_id=? AND (e.status IN ('dispatched','started')
     OR EXISTS(SELECT 1 FROM member_requests r WHERE r.execution_id=e.id AND (r.message_id>=? OR r.answer_id>=?))) ORDER BY e.id"""
@@ -2044,8 +2104,9 @@ def rewind_plan(connection, room_id, message_id):
     """What rewinding to just before a message takes back, and a revision of the state it was read from.
 
     Each member reports what happens to its session: `cut` (the runner cuts it before the first taken-back execution),
-    `fresh` (an API member, which rebuilds its context), `unchanged` (no taken-back execution) or `kept` (manual, online or
-    App software whose own window keeps what it saw).
+    `fresh` (its context is rebuilt each time), `unchanged` (no taken-back execution) or `kept` (manual and online members,
+    and software the runner reported it cannot cut, keep what they saw). The runner reports each member's effect from its
+    adapter (`member_capabilities`); a member without a report is kept.
     """
     owner_message(connection, room_id, message_id)
     if connection.execute("SELECT 1 FROM message_withdrawals WHERE message_id=?", (message_id,)).fetchone():
@@ -2054,10 +2115,11 @@ def rewind_plan(connection, room_id, message_id):
     for row in connection.execute(REWOUND_EXECUTIONS, (room_id, message_id, message_id)):
         executions.setdefault(row["member_id"], []).append(row["id"])
     members = []
-    for row in connection.execute("SELECT id,name,access,adapter FROM room_members WHERE room_id=? AND status<>'removed' ORDER BY id", (room_id,)):
+    for row in connection.execute("""SELECT m.id,m.name,m.access,(SELECT rewind FROM member_capabilities c WHERE c.member_id=m.id) AS rewind
+        FROM room_members m WHERE m.room_id=? AND m.status<>'removed' ORDER BY m.id""", (room_id,)):
         taken = executions.get(row["id"], [])
-        session = ("kept" if row["access"] != "runner" or row["adapter"] not in (*CUTTABLE_ADAPTERS, "api")
-                   else "unchanged" if not taken else "fresh" if row["adapter"] == "api" else "cut")
+        effect = row["rewind"] if row["access"] == "runner" else "kept"
+        session = "kept" if effect in (None, "kept") else "unchanged" if not taken else effect
         members.append({"id": row["id"], "name": row["name"], "executions": taken, "session": session})
     count = connection.execute("""SELECT COUNT(*) FROM messages m WHERE m.room_id=? AND m.id>=?
         AND NOT EXISTS(SELECT 1 FROM message_withdrawals w WHERE w.message_id=m.id)""", (room_id, message_id)).fetchone()[0]
@@ -2257,16 +2319,15 @@ def discussion_member_action(connection, room_id, member_id, token, payload):
     save_discussion_experts(connection, room_id, experts)
 
 
-ADOPTABLE_ADAPTERS = ("claude", "codex", "codex_cli", "antigravity", "antigravity_cli")
-
-
 def adopt_manual_member(connection, room_id, member, payload):
     """Hand a manual expert to the local service once its CLI reported the session it runs in; the owner's service resumes that session."""
     reported = connection.execute("SELECT session_id FROM member_sessions WHERE member_id=?", (member["id"],)).fetchone()
     run = connection.execute("SELECT mode FROM discussion_runtime WHERE room_id=?", (room_id,)).fetchone()
     if not registered_at(connection, member):
         raise ValueError("成员尚未注册，不能转为托管")
-    if not reported or reported["session_id"] != payload.get("session_id") or payload.get("adapter") not in ADOPTABLE_ADAPTERS:
+    adapter = payload.get("adapter")
+    if (not reported or reported["session_id"] != payload.get("session_id") or not isinstance(adapter, str)
+            or not ADAPTER_VALUE.fullmatch(adapter) or adapter == "manual"):
         raise ValueError("成员尚未上报与之相符的会话，不能转为托管")
     if member["access"] != "manual" or member["status"] != "active" or not (room_mode(connection, room_id) == "free" or (run and run["mode"] == "automatic")):
         raise ValueError("只有自由协作或全自动讨论中在场的手动专家可以转为托管")

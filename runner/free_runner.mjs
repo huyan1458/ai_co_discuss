@@ -3,11 +3,12 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import { atomic_json, claude_inbox_ready, deliver_task, remove_agy_projects, SegmentLog, sidecar_receipt, TASK_SUBCOMMANDS } from './discussion_adapters.mjs';
-import { api, CODEX_ADAPTERS, read_rule } from './discussion_runner.mjs';
-import { free_task_text, with_expert_prompt } from './expert_prompts.mjs';
+import { adapter_of, BRANCHABLE_ADAPTERS, branch_session, capabilities_of, cleanup_room, deliver_task, delivery_receipt, session_exists, stored_delivery } from './adapters/index.mjs';
+import { api, read_rule } from './discussion_runner.mjs';
+import { SegmentLog } from './execution_progress.mjs';
+import { free_task_text, TASK_SUBCOMMANDS, with_expert_prompt } from './expert_prompts.mjs';
+import { atomic_json } from './files.mjs';
 import { SessionDriver } from './session_driver.mjs';
-import { BRANCHABLE_ADAPTERS, branch_session, session_exists } from './session_cut.mjs';
 import { REVIEW_CONFIDENCE, REVIEW_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, decide_group_order, decide_review_completion, route_free_message } from './scheduler.mjs';
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -22,17 +23,13 @@ const MAX_DELIVERY_RETRIES = 3;
 const RETRY_DELAY_SECONDS = 60;
 const MAX_RETRY_REASON = 500;
 const LIVE = ['reserving', 'delivering', 'sidecar_pending', 'running', 'retry_wait'];
-// How each adapter reaches the software when its delivery does not say otherwise; a Claude task written into the
-// member's open window reports 'window'. A window, App or Sidecar works on its own: the runner cannot stop it.
-const DELIVERY_BY_ADAPTER = { api: 'api', codex: 'app', antigravity: 'sidecar' };
-const UNSTOPPABLE_DELIVERIES = ['window', 'app', 'sidecar'];
 const MAX_HASHED_BYTES = 5 * 1024 * 1024;
 const GIT_TIMEOUT_MS = 15_000;
 
 /** Fingerprint configurations whose adapter can enforce project read-only access; no local paths leave this function. */
 export function review_capability_version(profile, member, config) {
   if (!profile || profile.project_access !== 'read' || member.access !== 'runner' || member.session_mode !== 'new'
-    || profile.adapter !== 'codex_cli' || profile.adapter !== member.adapter
+    || !capabilities_of(profile.adapter).enforces_read_only || profile.adapter !== member.adapter
     || !profile.cwd || profile.allowed_tools?.length) return '';
   const project = cwd_key(profile.cwd), drafts = cwd_key(config.draft_directory || `${config.directory}-drafts`);
   if (drafts === project || drafts.startsWith(`${project}/`)) return '';
@@ -90,9 +87,10 @@ export function free_task_files(config, member, execution, binding, { session = 
   const profile = config.participants[member.name];
   atomic_json(access_path, { site: config.site, room: config.room, token: config.members[member.name].token,
     session_id: binding.session_id || '', execution_id: execution.id });
-  const cli = process.platform === 'win32' && profile.adapter !== 'claude' ? 'codiscuss.cmd' : 'codiscuss';
-  const inbox = claude_inbox_ready(profile, binding);
-  const bound_access = process_access && !inbox && ['claude', 'codex_cli', 'antigravity_cli'].includes(profile.adapter);
+  const adapter = adapter_of(profile.adapter);
+  const cli = process.platform === 'win32' ? adapter?.windows_command || 'codiscuss.cmd' : 'codiscuss';
+  const inbox = Boolean(adapter?.into_window?.(profile, binding));
+  const bound_access = process_access && !inbox && Boolean(adapter?.capabilities.access_env);
   const messages = execution.requests.map(item => `#${item.message_id}`).join('、');
   const requests = execution.requests || [];
   const discussion_request = requests.find(item => item.session_request_id && ['discuss', 'discuss_host'].includes(item.purpose)) || null;
@@ -125,15 +123,13 @@ export function free_task_files(config, member, execution, binding, { session = 
     skills_directory: join(config.project, '.agents', 'skills'), access_path, prompt: with_expert_prompt(prompt, profile), inbox };
 }
 
-const ADAPTER_LABELS = { codex: 'Codex App', codex_cli: 'Codex CLI', claude: 'Claude Code', antigravity: 'Antigravity App',
-  antigravity_cli: 'Antigravity CLI', api: '模型 API，只能读写房间消息' };
 
 /** What a scheduler can know about a member without a role field: its software, project access and the messages it is on. */
 function member_description(name, profile, work) {
   const project = profile.project_name || (profile.cwd ? basename(profile.cwd) : '');
-  const access = profile.adapter === 'api' ? '' : profile.project_access === 'own' ? '，权限沿用其会话设置' : !profile.cwd ? '，未指定项目目录'
+  const access = !capabilities_of(profile.adapter).project ? '，只能读写房间消息' : profile.project_access === 'own' ? '，权限沿用其会话设置' : !profile.cwd ? '，未指定项目目录'
     : profile.project_access === 'read' ? `，项目 ${project} 只读` : `，可修改项目 ${project} 的文件并运行命令`;
-  return `${name}（${ADAPTER_LABELS[profile.adapter] || profile.adapter}${access}${work}）`;
+  return `${name}（${adapter_of(profile.adapter)?.label || profile.adapter}${access}${work}）`;
 }
 
 /** The other messages a member is answering or has queued, so a correction can follow the message it corrects. */
@@ -170,6 +166,8 @@ export class FreeRoomRunner {
     this.routing = new Set();
     this.children = new Set();
     this.members = new Map();
+    // An empty set proves every tracked handle for this execution closed; a missing set proves nothing after restart.
+    this.execution_processes = new Map();
     // Execution id -> why its session ended on its own, such as a command refused in unattended mode ('' when unknown).
     this.exited = new Map();
     this.snapshots = new Map();
@@ -215,7 +213,7 @@ export class FreeRoomRunner {
    */
   same_context(name, previous, current) {
     const [before, after] = [JSON.parse(previous), JSON.parse(current)];
-    for (const context of [before, after]) if (CODEX_ADAPTERS.includes(context[0])) context[0] = 'codex';
+    for (const context of [before, after]) context[0] = adapter_of(context[0])?.session_family || context[0];
     const bound = this.store.binding(name).session_id;
     if (before[5] !== after[5] && [before[5], after[5]].includes('') && [before[5], after[5]].includes(bound)) after[5] = before[5];
     return JSON.stringify(before) === JSON.stringify(after);
@@ -230,10 +228,11 @@ export class FreeRoomRunner {
       room = await api(this.config, '');
     }
     catch (error) {
-      if (error.message === 'HTTP 404: 房间不存在') remove_agy_projects(this.config.directory);
+      if (error.message === 'HTTP 404: 房间不存在') cleanup_room(this.config.directory);
       throw error;
     }
     if (!inbox.archived) await this.sync_review_capabilities(inbox);
+    if (!inbox.archived) await this.sync_member_capabilities(inbox);
     if (!inbox.archived && room.mode === 'free' && room.session?.status === 'active'
       && await this.session_driver.tick(room, inbox)) {
       // A scheduled plan completes the pending host request and creates a speaker request.
@@ -254,6 +253,7 @@ export class FreeRoomRunner {
       if (LIVE.includes(row.status) && !present.has(row.member)) { this.stop_member(row.member); this.save(row.member, { status: 'idle' }); }
     }
     await this.report_finished(active);
+    const pending_stops = await this.report_stops(active);
     // Start in the room's speaking order: execution ids follow it, and the website lays out working cards by them.
     const rank = (room.speaking_order?.items || []).map(item => item.name);
     const place = name => rank.includes(name) ? rank.indexOf(name) : rank.length;
@@ -262,6 +262,7 @@ export class FreeRoomRunner {
       if (row && LIVE.includes(row.status)) await this.reconcile(member, row, active);
       // A member voided in a window or App the runner could not stop waits until that turn ends (`held_until`).
       else if (!inbox.archived && member.pending.some(request => request.purpose !== 'group') && !this.members.get(member.name)?.size
+        && !pending_stops.has(member.name)
         && !member.pending.some(request => this.routing.has(request.id)) && !(member.held_until * 1000 > Date.now())) await this.start(member, row);
     }
   }
@@ -278,6 +279,18 @@ export class FreeRoomRunner {
           revision: current.revision, read_only: Boolean(version), ...(version ? { config_version: version } : {}),
         });
       } catch (error) { this.log(`只读评审能力未同步：${member.name}：${error.message}`); }
+    }
+  }
+  /** Tell the site what a rewind does to each member's session, as its adapter says; only a change is sent. */
+  async sync_member_capabilities(inbox) {
+    for (const member of inbox.members) {
+      const profile = this.config.participants[member.name];
+      // An older site lists no effect and takes no report.
+      if (member.rewind === undefined || !profile) continue;
+      const rewind = capabilities_of(profile.adapter).rewind;
+      if (member.rewind === rewind) continue;
+      try { await api(this.config, `/members/${member.id}/capabilities`, { rewind }); member.rewind = rewind; }
+      catch (error) { this.log(`成员会话能力未同步：${member.name}：${error.message}`); }
     }
   }
   /** Hold only pending review handoffs while their preauthorized next step is judged. */
@@ -542,7 +555,7 @@ export class FreeRoomRunner {
   async reserve(member, record) {
     let execution;
     const profile = this.config.participants[member.name];
-    const cwd = profile?.adapter === 'api' ? '' : cwd_key(profile?.cwd || this.config.cwd);
+    const cwd = profile && !capabilities_of(profile.adapter).project ? '' : cwd_key(profile?.cwd || this.config.cwd);
     try { execution = await api(this.config, '/executions', { member_id: member.id, client_id: record.client_id, cwd }); }
     catch (error) {
       if (/HTTP (404|409)/.test(error.message)) return this.save(member.name, { status: 'idle', error: '' });
@@ -562,7 +575,7 @@ export class FreeRoomRunner {
     }
     if (!adapter) return this.fail(member.name, execution.id, `未配置 ${member.name} 的本机接入`);
     if (this.context_errors.has(member.name)) return this.fail(member.name, execution.id, this.context_errors.get(member.name));
-    const directory = adapter.adapter === 'api' ? undefined : adapter.cwd || this.config.cwd;
+    const directory = capabilities_of(adapter.adapter).project ? adapter.cwd || this.config.cwd : undefined;
     // A read-only member's software cannot write the project, so files changing meanwhile were written by someone else.
     const before = adapter.project_access === 'read' ? null : workspace_snapshot(directory);
     if (before) this.snapshots.set(execution.id, { member: member.name, directory, before });
@@ -594,7 +607,7 @@ export class FreeRoomRunner {
           requests: execution.requests, read_after: execution.read_until, session, discussion_request: session_request,
           scheduler_suggestions, review_handoffs },
         on_binding: session => this.store.bind(member.name, session),
-        on_process: child => this.track(member.name, child),
+        on_process: child => this.track(member.name, child, execution.id),
         on_output: (path, chunk) => { appendFileSync(path, chunk, { mode: 0o600 }); this.touch(execution.id); this.segments.mark(execution.id); },
         on_activity: (phase, tool) => { this.touch(execution.id, phase); this.segments.mark(execution.id, phase, tool); },
         on_note: text => this.note(execution.id, text),
@@ -605,9 +618,9 @@ export class FreeRoomRunner {
         on_denials: denials => api(this.config, `/executions/${execution.id}`, { action: 'denials', denials }).catch(() => {}),
       });
       if (result.session_id) this.store.bind(member.name, result.session_id);
-      this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(`stopped:${member.name}`);
+      this.clear_stopped(member.name);
       this.save(member.name, { status: result.status === 'sidecar_pending' ? 'sidecar_pending' : 'running', attempts: 0 });
-      await this.report_delivery(execution.id, result.delivery || DELIVERY_BY_ADAPTER[adapter.adapter] || 'process');
+      await this.report_delivery(execution.id, result.capabilities || capabilities_of(adapter.adapter).delivery, member.name);
     } catch (error) {
       if (review_request && error.delivery_status === 'not_sent') return this.reject_review(member, execution, error.message);
       if (adapter.project_access === 'own') return this.retry_or_fail(member.name, execution, `投递失败：${error.message}`);
@@ -671,7 +684,7 @@ export class FreeRoomRunner {
   async reconcile(member, row, active) {
     if (row.status === 'reserving') return this.reserve(member, row);
     if (row.status === 'sidecar_pending') {
-      const receipt = sidecar_receipt(this.config.participants[member.name], `free-${row.execution_id}`);
+      const receipt = delivery_receipt(this.config.participants[member.name], `free-${row.execution_id}`);
       if (receipt?.status === 'accepted' && receipt.session_id) {
         this.store.bind(member.name, receipt.session_id);
         this.save(member.name, { status: 'running' });
@@ -682,7 +695,6 @@ export class FreeRoomRunner {
       this.activity.delete(row.execution_id);
       await this.report_segments(row.execution_id, true);
       this.stop_member(member.name);
-      await this.report_stop(member.name, row.execution_id);
       return this.save(member.name, { status: 'idle', error: '' });
     }
     if (row.status === 'retry_wait') {
@@ -718,28 +730,73 @@ export class FreeRoomRunner {
     }
   }
   /**
-   * Tell the site how the software was reached, kept locally until the execution ends so a restarted runner still knows
-   * whether it could stop it. A site without this report only lacks the label; delivery goes on.
+   * Tell the site what this delivery can do, as the adapter reported it: whether the runner can stop it and see its
+   * progress. Kept locally until the execution ends so a restarted runner still knows whether it could stop it.
+   * A lost report is retained for the final stop result; sites and runners must use the same capability protocol.
    */
-  async report_delivery(execution_id, delivery) {
-    this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(`delivery:${execution_id}`, delivery);
-    await api(this.config, `/executions/${execution_id}`, { action: 'delivery', delivery })
-      .catch(error => this.log(`执行 #${execution_id} 的投递方式未能上报：${error.message}`));
+  async report_delivery(execution_id, { stoppable, progress }, member) {
+    this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(`delivery:${execution_id}`, JSON.stringify({ stoppable, progress, member }));
+    await api(this.config, `/executions/${execution_id}`, { action: 'delivery', stoppable, progress })
+      .catch(error => this.log(`执行 #${execution_id} 的投递能力未能上报：${error.message}`));
   }
-  /**
-   * Once an execution has left the site's live list, report whether its software stopped: a process or API call the runner
-   * ended, or a window, App or Sidecar it cannot stop. Only a voided execution takes the report; one that finished answers 409.
-   */
+  /** Retry durable stop reports even after the member went idle, left, or started a later execution. */
+  async report_stops(active) {
+    const pending = new Set();
+    for (const { key, value } of this.store.db.prepare("SELECT key,value FROM metadata WHERE key LIKE 'delivery:%'").all()) {
+      const execution_id = Number(key.slice('delivery:'.length));
+      if (active.has(execution_id)) continue;
+      const delivery = stored_delivery(value);
+      const name = delivery.member || this.store.db.prepare('SELECT member FROM free_deliveries WHERE execution_id=?').get(execution_id)?.member;
+      if (!name) continue;
+      for (const child of this.execution_processes.get(execution_id) || []) this.request_stop(child);
+      try { await this.report_stop(name, execution_id); }
+      catch (error) { pending.add(name); this.log(`执行 #${execution_id} 的停止结果未能上报：${error.message}`); }
+    }
+    return pending;
+  }
+  /** Report observed termination, never infer it from a capability or a successfully sent kill signal. */
   async report_stop(name, execution_id) {
     const key = `delivery:${execution_id}`;
-    const delivery = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(key)?.value;
-    if (!delivery) return;
-    this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(key);
-    const result = UNSTOPPABLE_DELIVERIES.includes(delivery) ? 'unstoppable' : 'stopped';
-    const voided = await api(this.config, `/executions/${execution_id}`, { action: 'stopped', result }).then(() => true, () => false);
-    // The member's next task names it, so the session does not carry on with work the user stopped.
-    if (voided) this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)')
-      .run(`stopped:${name}`, JSON.stringify([...this.stopped_executions(name), execution_id]));
+    const value = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(key)?.value;
+    if (!value) return;
+    const delivery = stored_delivery(value), processes = this.execution_processes.get(execution_id);
+    const ended = processes ? processes.size === 0 : this.exited.has(execution_id);
+    const result = delivery.pending_result && delivery.pending_result !== 'unconfirmed' ? delivery.pending_result
+      : !delivery.stoppable ? 'unstoppable' : ended ? 'stopped' : 'unconfirmed';
+    if (delivery.stop_result === result) return;
+    // Keep the observed outcome before sending: a restart after a lost response must retry the same fact.
+    this.store.db.prepare('UPDATE metadata SET value=? WHERE key=?')
+      .run(JSON.stringify({ ...delivery, member: name, pending_result: result }), key);
+    try { await api(this.config, `/executions/${execution_id}`, { action: 'stopped', result }); }
+    catch (error) {
+      if (!/HTTP 409:/.test(error.message)) throw error;
+      const latest = await api(this.config, `/executions/${execution_id}`);
+      // A conflict is not necessarily normal completion: keep cancelled reports until an idempotent receipt arrives.
+      if (!['completed', 'failed'].includes(latest.status)) throw error;
+      this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(key);
+      this.execution_processes.delete(execution_id);
+      return;
+    }
+    this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)')
+      .run(`stopped:${name}`, JSON.stringify([...new Set([...this.stopped_executions(name), execution_id])]));
+    if (result === 'unconfirmed') {
+      this.store.db.prepare('UPDATE metadata SET value=? WHERE key=?')
+        .run(JSON.stringify({ ...delivery, member: name, pending_result: result, stop_result: result }), key);
+      // The site's bounded hold now controls the next delivery; retain handles to observe and retry termination.
+      for (const child of processes || []) this.members.get(name)?.delete(child);
+    }
+    else { this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(key); this.execution_processes.delete(execution_id); }
+  }
+  /** Once a new task received the stop reminders, retire acknowledged unconfirmed reports for its old turns. */
+  clear_stopped(name) {
+    for (const id of this.stopped_executions(name)) {
+      const key = `delivery:${id}`, value = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(key)?.value;
+      if (value && stored_delivery(value).stop_result === 'unconfirmed') {
+        this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(key);
+        this.execution_processes.delete(id);
+      }
+    }
+    this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(`stopped:${name}`);
   }
   /** Executions the user stopped since this member's last delivered task. */
   stopped_executions(name) {
@@ -766,7 +823,7 @@ export class FreeRoomRunner {
   /** Report observed file changes once an execution has ended and its member's processes have exited. */
   async report_finished(active) {
     for (const [execution_id, snapshot] of this.snapshots) {
-      if (active.has(execution_id) || this.members.get(snapshot.member)?.size) continue;
+      if (active.has(execution_id) || this.execution_processes.get(execution_id)?.size) continue;
       this.snapshots.delete(execution_id);
       const after = workspace_snapshot(snapshot.directory);
       if (!after) continue;
@@ -797,17 +854,21 @@ export class FreeRoomRunner {
     catch (error) { if (!/HTTP 409/.test(error.message)) throw error; }
     this.save(name, { status: 'idle', error: reason });
     this.stop_member(name);
-    this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(`delivery:${execution_id}`);
   }
   /** Count live processes per member so one session never has two writers. */
-  track(name, child) {
+  track(name, child, execution_id = this.row(name)?.execution_id) {
     this.children.add(child);
     if (!this.members.has(name)) this.members.set(name, new Set());
     this.members.get(name).add(child);
-    child.once('close', () => { this.children.delete(child); this.members.get(name).delete(child); });
+    if (!this.execution_processes.has(execution_id)) this.execution_processes.set(execution_id, new Set());
+    const processes = this.execution_processes.get(execution_id);
+    processes.add(child);
+    child.once('close', () => { processes.delete(child); this.children.delete(child); this.members.get(name).delete(child); });
   }
+  /** Request termination; only a later close event proves it happened. */
+  request_stop(child) { try { child.kill(); } catch { /* The stop report remains unconfirmed. */ } }
   /** Stop one member's processes without touching other members or desktop apps. */
-  stop_member(name) { for (const child of this.members.get(name) || []) child.kill(); }
+  stop_member(name) { for (const child of this.members.get(name) || []) this.request_stop(child); }
   /** Stop every process this runner created. */
-  stop_children() { for (const child of this.children) child.kill(); }
+  stop_children() { for (const child of this.children) this.request_stop(child); }
 }

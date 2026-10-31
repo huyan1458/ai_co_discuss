@@ -386,10 +386,4 @@ defineExpose({ settle });
   .limit-picker { gap: 12px; }
   .limit-trigger { padding-inline: 10px; }
 }
-@media (pointer: coarse) {
-  .limit-field-heading, .limit-unlimited { min-height: 44px; }
-  .limit-field-heading { margin-bottom: 0; }
-  .limit-trigger, .limit-close { min-height: 44px; }
-  .limit-close { width: 44px; }
-}
 </style>

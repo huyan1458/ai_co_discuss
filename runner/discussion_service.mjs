@@ -8,7 +8,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { atomic_json } from './discussion_adapters.mjs';
+import { same_session_family } from './adapters/profiles.mjs';
+import { atomic_json } from './files.mjs';
 import { DiscussionStore, acquire_lock, api, load_config, pause_if_running, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner } from './free_runner.mjs';
 
@@ -222,8 +223,7 @@ class RoomWorker {
     }
     const codex_switches = Object.entries(this.config.participants).filter(([name, previous]) => {
       const next = updated.participants[name];
-      return next && previous.adapter !== next.adapter
-        && ['codex', 'codex_cli'].includes(previous.adapter) && ['codex', 'codex_cli'].includes(next.adapter);
+      return next && same_session_family(previous.adapter, next.adapter);
     });
     const codex_switch = codex_switches.length > 0;
     const discussion = codex_switch ? await api(this.config, '/discussion') : null;

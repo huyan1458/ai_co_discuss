@@ -1,4 +1,5 @@
 import { strFromU8, strToU8, unzip, zip } from "fflate";
+export { adapter_profile } from "../runner/adapters/profiles.mjs";
 
 const DOWNLOAD_RELEASE_MS = 60000;
 const FILENAME_TITLE_LIMIT = 80;

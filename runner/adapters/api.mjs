@@ -1,16 +1,19 @@
-/** Execute API participants with room-scoped tools and the runner's existing lifecycle. */
+/**
+ * Model API adapter: the runner itself calls the user's configured model API, with room-scoped tools and the shared skills
+ * as its system prompt. It holds no software session: each execution rebuilds its context from the room.
+ */
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { api_generate, api_history, api_tool_results, read_api_key } from './discussion_api.mjs';
-import { expert_prompt } from './expert_prompts.mjs';
+import { api_generate, api_history, api_tool_results, read_api_key } from '../discussion_api.mjs';
+import { expert_prompt } from '../expert_prompts.mjs';
 
 const MAX_MODEL_TURNS = 24;
 // API participants follow the same skills that local software loads, read fresh for every execution.
-const SKILLS = fileURLToPath(new URL('../.agents/skills/', import.meta.url));
+const SKILLS = fileURLToPath(new URL('../../.agents/skills/', import.meta.url));
 const SITE_TIMEOUT_MS = 10_000;
 const REPLY_EXCERPT_CHARS = 300;
 const MODEL_RETRIES = 2;
@@ -262,5 +265,16 @@ export async function api_delivery(profile, binding, task) {
       if (!controller.signal.aborted) task.on_failure?.(error.message.replaceAll(key, '[已隐藏]'));
     } finally { child.emit('close', 0); task.on_exit?.(); }
   });
-  return { status: 'accepted', session_id };
+  return { status: 'accepted', session_id, capabilities: API_CALL };
 }
+
+// The call is the runner's own, so it can be aborted and its tool steps are seen.
+const API_CALL = { stoppable: true, progress: true };
+
+/** The model API's behaviour; its static facts are in profiles.mjs. */
+export const api = {
+  id: 'api',
+  deliver: api_delivery,
+  session: null,
+  models: null,
+};

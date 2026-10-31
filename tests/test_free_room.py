@@ -45,6 +45,49 @@ class FreeRoomTests(unittest.TestCase):
         self.assertEqual(status, 201, room)
         self.assertEqual(room["experts"], {})
 
+    def test_stop_before_delivery_holds_until_confirmed_or_original_deadline(self):
+        """Late capability reports and uncertain stops retain the original bounded wait."""
+        member_id = self.request(self.path)[1]["free"]["members"][0]["id"]
+        for result in ("unstoppable", "unconfirmed"):
+            self.say("开始", to=["Claude"])
+            execution = self.reserve()[1]
+            url = f"{self.path}/executions/{execution['id']}"
+            self.request(f"{self.path}/members/{member_id}/interrupt", {}, self.owner)
+            payload = {"action": "stopped", "result": result}
+            self.assertEqual(self.request(url, payload, self.owner)[0], 200)
+            self.assertTrue(self.request(url, payload, self.owner)[1]["duplicate"])
+            held = lambda: self.request(self.path + "/inbox", token=self.owner)[1]["members"][0]["held_until"]
+            deadline = held()
+            self.assertGreater(deadline, 0, "a stop result holds even before delivery is reported")
+            self.assertEqual(self.request(url, {"action": "delivery", "stoppable": True, "progress": True}, self.owner)[0], 200)
+            self.say("主动重发", to=["Claude"])
+            self.assertEqual(held(), deadline)
+            self.assertEqual(self.reserve()[0], 409)
+            if result == "unconfirmed":
+                self.assertEqual(self.request(url, {"action": "stopped", "result": "stopped"}, self.owner)[0], 200)
+            else:
+                with closing(sqlite3.connect(self.database)) as connection, connection:
+                    connection.execute("UPDATE member_executions SET finished_at=? WHERE id=?", (int(time.time()) - 601, execution["id"]))
+            self.assertEqual(held(), 0)
+            next_execution = self.reserve()[1]
+            self.assertEqual(self.answer(next_execution["id"])[0], 201)
+
+    def test_capability_schema_upgrade_preserves_existing_records(self):
+        """An early capability CHECK gains unconfirmed without losing recorded capabilities."""
+        self.say("开始", to=["Claude"])
+        execution = self.reserve()[1]
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            definition = connection.execute("SELECT sql FROM sqlite_master WHERE name='execution_capabilities'").fetchone()[0]
+            connection.execute("DROP TABLE execution_capabilities")
+            connection.execute(definition.replace(",'unconfirmed'", ""))
+            connection.execute("INSERT INTO execution_capabilities VALUES (?,?,0,0,'unstoppable')", (execution["id"], self.room["id"]))
+        for _ in range(2):
+            init_database(self.database, seed=False)
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            saved = connection.execute("SELECT stoppable,progress,stop_result FROM execution_capabilities WHERE execution_id=?", (execution["id"],)).fetchone()
+            self.assertEqual(saved, (0, 0, "unstoppable"))
+            connection.execute("UPDATE execution_capabilities SET stop_result='unconfirmed' WHERE execution_id=?", (execution["id"],))
+
     def test_review_capability_owner_revision_and_invalidation(self):
         """Only owner attestations expose candidates; leaving and returning cannot resurrect old authority."""
         member_id = self.review_member_id()
@@ -472,6 +515,12 @@ class FreeRoomTests(unittest.TestCase):
         taken = self.reserve()[1]
         self.answer(taken["id"], "二好了")
         self.say("三")
+        claude_id = next(item["id"] for item in self.request(self.path)[1]["free"]["members"] if item["name"] == "Claude")
+        # The plan shows what the runner reported its adapter does to the session; without a report the session is kept.
+        unreported = self.request(f"{self.path}/rewind?message_id={second}", None, self.owner)[1]
+        self.assertEqual(next(item for item in unreported["members"] if item["name"] == "Claude")["session"], "kept")
+        self.assertEqual(self.request(f"{self.path}/members/{claude_id}/capabilities", {"rewind": "shred"}, self.owner)[0], 400)
+        self.assertEqual(self.request(f"{self.path}/members/{claude_id}/capabilities", {"rewind": "cut"}, self.owner)[0], 200)
         status, plan = self.request(f"{self.path}/rewind?message_id={second}", None, self.owner)
         self.assertEqual(status, 200, plan)
         self.assertEqual(plan["messages"], 3)
@@ -492,17 +541,17 @@ class FreeRoomTests(unittest.TestCase):
         self.assertEqual(self.reserve()[1]["rewound_executions"], [taken["id"]])
         self.assertEqual(self.request(f"{self.path}/rewind?message_id={first_answer}", None, self.owner)[0], 400)
 
-    def test_interrupt_also_cancels_queued_requests_so_nothing_restarts(self):
-        """Stopping a member voids work queued behind it; a new message starts fresh."""
+    def test_interrupt_voids_the_running_turn_and_keeps_what_arrived_meanwhile(self):
+        """Stopping a member voids its running turn; a message sent meanwhile waits for its next turn, with any new one."""
         self.say("一")
         self.reserve()
         self.say("二")
         member_id = self.request(self.path)[1]["free"]["members"][0]["id"]
         view = self.request(f"{self.path}/members/{member_id}/interrupt", {}, self.owner)[1]
-        self.assertEqual([item["status"] for item in view["requests"]], ["cancelled", "cancelled"])
+        self.assertEqual([item["status"] for item in view["requests"]], ["cancelled", "pending"])
         self.say("三")
         execution = self.reserve()[1]
-        self.assertEqual(len(execution["requests"]), 1)
+        self.assertEqual(len(execution["requests"]), 2)
 
     def test_failure_affects_only_its_requests_and_release_requeues(self):
         """A failed execution keeps the room usable; a proven non-delivery returns requests to the queue."""
@@ -1389,6 +1438,7 @@ class MultiMemberTests(FreeRoomTests):
         room = self.request(self.path)[1]
         mine = sorted((item["member"], item["status"], item["cancel_reason"]) for item in room["free"]["requests"] if item["message_id"] == message["id"])
         self.assertEqual(mine, [("Claude", "pending", None), ("Codex", "cancelled", "rerouted")])
+        self.reserve_for("Claude")
         self.assertEqual(self.request(f"{self.path}/members/{claude_id}/interrupt", {}, self.owner)[0], 200)
         room = self.request(self.path)[1]
         self.assertEqual([item["cancel_reason"] for item in room["free"]["requests"] if item["member"] == "Claude"], ["user_stop"])

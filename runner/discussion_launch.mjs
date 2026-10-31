@@ -9,17 +9,17 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
-import { atomic_json, setup_sidecar } from './discussion_adapters.mjs';
-import { session_settings, software_defaults, software_effort, software_models } from './discussion_models.mjs';
+import { atomic_json } from './files.mjs';
+import { setup_sidecar } from './adapters/antigravity_app.mjs';
+import { adapter_of, adoption_adapter, BRANCHABLE_ADAPTERS, branch_session, session_settings, software_defaults, software_effort, software_models } from './adapters/index.mjs';
+import { ADAPTER_IDS, ADAPTER_PROFILES, adapter_profile, platform_adapters, same_session_family } from './adapters/profiles.mjs';
 import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
 import { access_levels, BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT, PROJECT_ACCESS } from './expert_prompts.mjs';
-import { BRANCHABLE_ADAPTERS, branch_session } from './session_cut.mjs';
-import { acquire_lock, api, CODEX_ADAPTERS, DiscussionStore, service_drafts, validate_config } from './discussion_runner.mjs';
+import { acquire_lock, api, DiscussionStore, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner, free_task_files } from './free_runner.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 
-const CLIENTS = { Codex: ['codex_cli', 'codex', 'api'], Claude: ['claude', 'api'], Gemini: ['antigravity_cli', 'antigravity', 'api'], DeepSeek: ['api'], Qwen: ['api'], Grok: ['api'] };
 // A platform is a type; `Claude-评审` is another Claude instance with its own session, model and effort.
 const INSTANCE_PATTERN = /^(Codex|Claude|Gemini|DeepSeek|Qwen|Grok)(?:-[0-9A-Za-z_一-鿿]{1,16})?$/;
 
@@ -33,10 +33,7 @@ export function next_instance(platform, taken) {
 }
 
 /** Supported local clients of an instance's platform. */
-function clients_of(name) { return CLIENTS[platform_of(name)]; }
-// The UI discovers each model's supported subset; omitted values keep the CLI's own default.
-const EFFORT_LEVELS = { codex_cli: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], claude: ['low', 'medium', 'high', 'xhigh', 'max'],
-  antigravity_cli: ['low', 'medium', 'high', 'xhigh', 'max'] };
+function clients_of(name) { return platform_adapters(platform_of(name)); }
 const PROFILE_FIELDS = ['adapter', 'executable', 'model', 'effort', 'source_thread_id', 'ipc_directory', 'allowed_tools', 'cwd', 'project_name', 'project_id', 'base_url', 'api_protocol', 'api_key_ref', 'system_prompt'];
 const MAX_MINUTES = 1440;
 const SESSION_ID_PATTERN = /^[0-9A-Za-z_-]{8,128}$/;
@@ -232,7 +229,7 @@ export async function cached_software_models(home, profile, { refresh = false, q
   const cached = entry => !refresh && entry && Date.now() - entry.at < MODEL_CACHE_MS ? entry.result : null;
   // Defaults are read on every request, so a changed software setting shows without waiting out the cache.
   const [result, effort, defaults] = await Promise.all([cached(cache[key]) || query(profile),
-    profile.adapter === 'antigravity_cli' ? cached(cache[effort_key]) || query_effort(profile) : null, query_defaults(profile)]);
+    adapter_profile(profile.adapter)?.efforts_per_model ? cached(cache[effort_key]) || query_effort(profile) : null, query_defaults(profile)]);
   const updates = {};
   if (!cached(cache[key]) && !result.error && result.models.length) {
     updates[key] = { at: Date.now(), result };
@@ -273,17 +270,19 @@ export async function room_models(home, raw, { read_defaults = software_defaults
   let sessions = {};
   try { if (paths.length) sessions = bound_sessions(config, paths[0]); } catch { /* No readable runtime yet: fall back to borrowed sessions. */ }
   const participants = Object.fromEntries(await Promise.all(Object.entries(profiles).map(async ([name, profile]) => {
-    const cli = ['codex_cli', 'claude', 'antigravity_cli', 'api'].includes(profile.adapter);
-    // agy has no settings file and is run to name its default model, which takes seconds; a quick read leaves that to a later full read.
-    const pending = input.quick === true && profile.adapter === 'antigravity_cli';
+    const facts = adapter_profile(profile.adapter);
+    // An App chooses its model itself; a CLI or API member's card sets it.
+    const card_model = facts?.kind !== 'app';
+    // A software read by running it to name its default model takes seconds; a quick read leaves that to a later full read.
+    const pending = input.quick === true && Boolean(facts?.defaults_by_query);
     const defaults = pending ? { model: '', effort: '' } : await read_defaults(profile);
-    const actual = profile.adapter === 'api' ? { model: '', effort: '' } : read_session(profile.adapter, sessions[name] || profile.session_id);
-    return [name, { ...(pending ? { defaults_pending: true } : {}), adapter: profile.adapter, model: cli ? profile.model || '' : '',
-      effort: EFFORT_LEVELS[profile.adapter] ? profile.effort || '' : '', default_model: defaults.model, default_effort: defaults.effort,
+    const actual = read_session(profile.adapter, sessions[name] || profile.session_id);
+    return [name, { ...(pending ? { defaults_pending: true } : {}), adapter: profile.adapter, model: card_model ? profile.model || '' : '',
+      effort: facts?.efforts ? profile.effort || '' : '', default_model: defaults.model, default_effort: defaults.effort,
       ...(actual.model ? { actual_model: actual.model } : {}), ...(actual.effort ? { actual_effort: actual.effort } : {}),
-      project_access: profile.adapter === 'api' ? 'read' : profile.project_access || config.project_access || 'read',
-      // An agy member resuming its own conversation keeps that conversation's project, so this tool cannot set its access.
-      own_project: profile.adapter === 'antigravity_cli' && Boolean(profile.session_id) }];
+      project_access: !facts?.capabilities.project ? 'read' : profile.project_access || config.project_access || 'read',
+      // A member bound to its own conversation may keep that conversation's project, so this tool cannot set its access.
+      own_project: Boolean(facts?.own_project_when_bound && profile.session_id) }];
   })));
   // Smart scheduling is a local choice; only which model decides is shown, never its key.
   const scheduler = config.scheduler ? { provider: config.scheduler.provider, model: config.scheduler.model } : null;
@@ -390,10 +389,11 @@ function validate_profile(name, profile, binding = false) {
     if (key === 'model' && value && !/^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]*$/.test(value)) throw new Error(`${name}.model 只能是模型名称，例如 gpt-6-astra、opus 或 gemini-4-argon-high`);
     if (key === 'system_prompt' && value.length > MAX_EXPERT_PROMPT) throw new Error(`${name} 的专属提示词最多 ${MAX_EXPERT_PROMPT} 字`);
   }
-  if (profile.adapter === 'api') validate_api_profile(profile);
-  if (profile.effort && profile.adapter !== 'api' && !EFFORT_LEVELS[profile.adapter]?.includes(profile.effort)) {
-    throw new Error(EFFORT_LEVELS[profile.adapter] ? `${name}.effort 只能是 ${EFFORT_LEVELS[profile.adapter].join(' / ')}`
-      : `${name} 的思考档位在原软件中选择`);
+  const facts = adapter_profile(profile.adapter);
+  if (facts?.kind === 'api') validate_api_profile(profile);
+  // The UI discovers each model's supported subset; omitted values keep the CLI's own default.
+  if (profile.effort && facts?.kind !== 'api' && !facts?.efforts?.includes(profile.effort)) {
+    throw new Error(facts?.efforts ? `${name}.effort 只能是 ${facts.efforts.join(' / ')}` : `${name} 的思考档位在原软件中选择`);
   }
 }
 
@@ -494,17 +494,18 @@ function participant_profile(name, defaults, input, current_host) {
   for (const field of ['cwd', 'model', 'effort', 'project_name', 'project_id', 'project_access']) if (profile[field] === '') delete profile[field];
   validate_profile(name, profile, true);
   if (!clients_of(name)?.includes(profile.adapter)) throw new Error(`请配置 ${name} 的 CLI / App 客户端`);
-  if (profile.adapter === 'api') {
+  const facts = adapter_profile(profile.adapter);
+  if (facts?.kind === 'api') {
     if (input.entry === 'conversation' && current_host) throw new Error('API 主持人请从网页启动；当前软件会话主持须选择对应 CLI / App');
     return profile;
   }
-  if (profile.adapter !== 'antigravity' && (!existsSync(profile.executable || '') || !statSync(profile.executable).isFile()
+  if (facts?.location === 'executable' && (!existsSync(profile.executable || '') || !statSync(profile.executable).isFile()
     || (process.platform === 'win32' && !/\.exe$/i.test(profile.executable)))) throw new Error(`${name}：请指定实际原生可执行文件，Windows 使用 .exe`);
   const cwd = profile.cwd || input.cwd;
   if (cwd && (!existsSync(cwd) || !statSync(cwd).isDirectory())) throw new Error(`${name}：工作目录不存在或不是文件夹，请核对本次目录配置`);
   if (input.entry === 'conversation' && current_host) profile.session_id = input.current_session_id;
   // A new agy conversation always gets this tool's discussion project; only a manual agy expert the owner chose to host (input.adopt) keeps its own.
-  if (profile.adapter === 'antigravity_cli' && profile.session_id && !input.adopt) throw new Error(`${name}：agy 不能绑定已有会话或从当前 agy 对话主持全自动讨论；请从网页或其他软件发起，agy 会由讨论服务新建会话`);
+  if (!facts?.host_existing && profile.session_id && !input.adopt) throw new Error(`${name}：${facts?.label || profile.adapter} 不能绑定已有会话或从当前对话主持全自动讨论；请从网页或其他软件发起，它会由讨论服务新建会话`);
   return profile;
 }
 
@@ -528,21 +529,15 @@ function same_directory(left, right) {
 export function borrowed_session(name, profile, room_cwd, env = process.env) {
   const id = profile.session_id;
   if (!SESSION_ID_PATTERN.test(id)) throw new Error(`${name}：会话 ID 格式不正确`);
-  if (CODEX_ADAPTERS.includes(profile.adapter)) {
-    const sessions = join(env.CODEX_HOME || join(homedir(), '.codex'), 'sessions');
-    if (!session_files(sessions).some(path => path.endsWith(`-${id}.jsonl`))) throw new Error(`${name}：本机找不到 Codex 会话 ${id}，请核对会话 ID`);
-    return profile;
+  const adapter = adapter_of(profile.adapter);
+  if (!adapter?.adopt || !adapter.session) {
+    const adoptable = ADAPTER_IDS.filter(item => ADAPTER_PROFILES[item].adopt).map(item => ADAPTER_PROFILES[item].label);
+    throw new Error(`${name}：只有 ${adoptable.join('、')} 可以接入已有会话`);
   }
-  if (['antigravity', 'antigravity_cli'].includes(profile.adapter)) {
-    if (!existsSync(agy_conversation(profile.adapter, id))) throw new Error(`${name}：本机找不到 agy 会话 ${id}，请核对会话 ID`);
-    return profile;
-  }
-  if (profile.adapter !== 'claude') throw new Error(`${name}：只有 Codex、Claude 与 agy 可以接入已有会话`);
-  const projects = join(env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'projects');
-  const file = session_files(projects).find(path => path.endsWith(`${id}.jsonl`) && dirname(dirname(path)) === projects);
-  if (!file) throw new Error(`${name}：本机找不到 Claude 会话 ${id}，请核对会话 ID`);
-  const cwd = readFileSync(file, 'utf8').split('\n').map(line => { try { return JSON.parse(line).cwd; } catch { return undefined; } }).find(Boolean);
-  if (!cwd) throw new Error(`${name}：Claude 会话 ${id} 没有记录原工作目录，无法续接`);
+  if (!adapter.session.exists(id, { env })) throw new Error(`${name}：本机找不到 ${adapter.label} 会话 ${id}，请核对会话 ID`);
+  if (adapter.adopt !== 'own_cwd') return profile;
+  const cwd = adapter.session.cwd(id, { env });
+  if (!cwd) throw new Error(`${name}：${adapter.label} 会话 ${id} 没有记录原工作目录，无法续接`);
   const wanted = profile.cwd || room_cwd;
   if (wanted && !same_directory(wanted, cwd)) throw new Error(`${name}：这个 Claude 会话属于 ${cwd}，只能在原目录续接；请让项目目录与它一致，或留空会话 ID 新建会话`);
   return { ...profile, cwd: wanted || cwd };
@@ -628,8 +623,6 @@ export async function room_member(home, raw, locked = false) {
   } finally { release(); }
 }
 
-// CLIs whose project file access this tool sets per run; App members follow the App's own settings, API members only read.
-const ACCESS_ADAPTERS = ['codex_cli', 'claude', 'antigravity_cli'];
 
 /**
  * Switch one woken member's project files between read-only and writable after the room is created. Every run builds its
@@ -645,9 +638,11 @@ export async function room_member_access(home, raw) {
     const profile = config.participants?.[name];
     if (!profile) throw new Error(`${name} 不由本机唤醒，项目权限由它自己的会话决定`);
     if (profile.project_access === 'own') throw new Error(`${name} 是手动接入的成员，权限沿用它自己会话的软件设置`);
-    if (!access_levels(profile.adapter).includes(project_access)) throw new Error('agy 无人值守不支持自动档，请选只读、可写或全放开');
-    if (!ACCESS_ADAPTERS.includes(profile.adapter)) throw new Error(profile.adapter === 'api' ? 'API 成员没有本机文件工具，项目固定只读' : `${name} 的项目权限在 App 内设置`);
-    if (profile.adapter === 'antigravity_cli' && profile.session_id) throw new Error(`${name} 续接的是它自己的 agy 对话，项目权限沿用该对话所在项目，请在 agy 中设置`);
+    const facts = adapter_profile(profile.adapter);
+    // A CLI's project access is set per run; an App follows its own settings and an API member only reads.
+    if (!facts?.access_levels) throw new Error(!facts?.capabilities.project ? `${name} 没有本机文件工具，项目固定只读` : `${name} 的项目权限在 App 内设置`);
+    if (!facts.access_levels.includes(project_access)) throw new Error(facts.unsupported_hints?.[project_access] || `${facts.label} 不支持此档位`);
+    if (facts.own_project_when_bound && profile.session_id) throw new Error(`${name} 续接的是它自己的 ${facts.label} 对话，项目权限沿用该对话所在项目，请在原软件中设置`);
     if (project_access === 'write' && !(profile.cwd || config.cwd)) throw new Error('本房间没有指定项目目录，可写没有作用；请在新建房间时选择项目目录');
     const next = { ...config, participants: { ...config.participants, [name]: { ...profile, project_access } } };
     validate_config(next, dirname(path));
@@ -674,8 +669,9 @@ export async function room_member_allow(home, raw) {
     const config = configuration_snapshot(path).config;
     const profile = config.participants?.[name];
     if (!profile) throw new Error(`${name} 不由本机唤醒，权限由它自己的会话决定`);
-    if (!['claude', 'antigravity_cli'].includes(profile.adapter)) throw new Error(`${name} 的软件不支持逐条放行，请改用更高的权限档位`);
-    if (profile.adapter === 'antigravity_cli' && profile.session_id) throw new Error(`${name} 续接的是它自己的 agy 对话，权限沿用该对话所在项目，请在 agy 中设置`);
+    const facts = adapter_profile(profile.adapter);
+    if (!facts?.per_tool_allow) throw new Error(`${name} 的软件不支持逐条放行，请改用更高的权限档位`);
+    if (facts.own_project_when_bound && profile.session_id) throw new Error(`${name} 续接的是它自己的 ${facts.label} 对话，权限沿用该对话所在项目，请在原软件中设置`);
     const allowed_tools = [...new Set([...(profile.allowed_tools || []), ...rules.map(rule => rule.trim())])];
     if (allowed_tools.length > MAX_ALLOWED_TOOLS) throw new Error(`每位成员最多放行 ${MAX_ALLOWED_TOOLS} 条规则`);
     const next = { ...config, participants: { ...config.participants, [name]: { ...profile, allowed_tools } } };
@@ -694,7 +690,7 @@ export async function room_member_adapter(home, raw) {
   const { input, path, config: registered } = await member_room_context(home, raw);
   const { name, adapter } = input;
   if (registered.mode !== 'free') throw new Error('讨论进行中不能切换；结束讨论后再切换，或暂停后在“接入”页修正');
-  if (!CODEX_ADAPTERS.includes(adapter)) throw new Error('adapter 只能为 codex（App）或 codex_cli（CLI）');
+  if (!ADAPTER_IDS.some(other => same_session_family(other, adapter))) throw new Error('只能在共用会话的 App 与 CLI 接入之间切换');
   const room = await site_request(input.site, `/api/rooms/${input.room_id}`, input.token);
   const member = room.free.members.find(item => item.name === name);
   if (member?.pending > 0 || ['dispatched', 'started'].includes(member?.execution?.status)) throw new Error(`${name} 正在处理请求，请等它完成或先停止`);
@@ -702,30 +698,19 @@ export async function room_member_adapter(home, raw) {
   try {
     const config = configuration_snapshot(path).config;
     const profile = config.participants?.[name];
-    if (!CODEX_ADAPTERS.includes(profile?.adapter)) throw new Error(`${name} 不是本机唤醒的 Codex 成员`);
+    if (profile?.adapter !== adapter && !same_session_family(profile?.adapter, adapter)) throw new Error(`${name} 不是本机唤醒、能切换到该接入方式的成员`);
     if (profile.adapter === adapter) return { room_id: input.room_id, member: name, adapter };
     const context = { config, path };
     const next = { ...profile };
     switch_codex_adapter(context, name, next, adapter);
-    if (adapter === 'codex') { delete next.model; delete next.effort; }
+    // An App chooses its own model and effort.
+    if (!adapter_profile(adapter).models) delete next.model;
+    if (!adapter_profile(adapter).efforts) delete next.effort;
     const updated = { ...config, participants: { ...config.participants, [name]: next } };
     validate_config(updated, dirname(path));
     atomic_json(path, updated);
     return { room_id: input.room_id, member: name, adapter };
   } finally { release(); }
-}
-
-/** A Codex desktop chat is resumed through the app, any other Codex session through the CLI. */
-function codex_session_adapter(session_id, env = process.env) {
-  const sessions = join(env.CODEX_HOME || join(homedir(), '.codex'), 'sessions');
-  const file = session_files(sessions).find(path => path.endsWith(`-${session_id}.jsonl`));
-  const meta = file ? readFileSync(file, 'utf8').split('\n', 1)[0] : '';
-  return /"originator":"Codex Desktop"/.test(meta) ? 'codex' : 'codex_cli';
-}
-
-/** Where the Antigravity App or agy CLI keeps one conversation; the two keep separate stores. */
-function agy_conversation(adapter, session_id) {
-  return join(homedir(), '.gemini', adapter === 'antigravity' ? 'antigravity' : 'antigravity-cli', 'conversations', `${session_id}.db`);
 }
 
 /**
@@ -736,10 +721,11 @@ export function adopt_member_profile(home, path, name, session_id, client = 'cla
   const release = acquire_lock(join(dirname(path), 'configuration-edit'));
   try {
     const config = configuration_snapshot(path).config;
-    const adapter = client === 'codex' ? codex_session_adapter(session_id)
-      : client === 'antigravity' ? (existsSync(agy_conversation('antigravity', session_id)) ? 'antigravity' : 'antigravity_cli') : 'claude';
+    // The adapter whose store holds the session: a desktop chat is resumed through its App, others through the CLI.
+    const adapter = adoption_adapter(client, session_id);
+    if (!adapter) throw new Error(`${name}：本机不能接管 ${client} 的会话`);
     // An App conversation is reached through this room's own Sidecar, which the App starts as soon as it is configured.
-    const sidecar = adapter === 'antigravity' ? { ipc_directory: join(dirname(path), 'agy-app-sidecar') } : {};
+    const sidecar = adapter_profile(adapter).location === 'ipc_directory' ? { ipc_directory: join(dirname(path), 'agy-app-sidecar') } : {};
     // A manually started member keeps its own session's permissions; the room's 只读 / 可写 does not apply to it.
     const input = { cwd: config.cwd, adopt: true, participants: { [name]: { adapter, session_id, project_access: 'own', ...sidecar } } };
     // Its model, effort, prompt and tools stay as the user set them in that session; machine defaults never override them.
@@ -812,17 +798,21 @@ export async function restore_room(home, raw) {
   const room = await site_request(input.site, `/api/rooms/${input.room_id}`, input.token);
   if (registered_room_path(home, input.site, input.room_id)) throw new Error('本房间已在本机登记，不重复恢复');
   if (local.cwd && (!isAbsolute(local.cwd) || !existsSync(local.cwd) || !statSync(local.cwd).isDirectory())) throw new Error(`房间项目目录 ${local.cwd} 在本机不存在`);
-  const keep_manual = room.free.members.filter(member => member.access === 'manual' && member.status !== 'removed' && platform_of(member.name) === 'Claude').map(member => member.name);
+  const keep_manual = room.free.members.filter(member => member.access === 'manual' && member.status !== 'removed'
+    && platform_adapters(platform_of(member.name)).some(id => ADAPTER_PROFILES[id].restore_manual)).map(member => member.name);
   const participants = {}, members = [];
   for (const [name, exported] of Object.entries(local.participants)) {
     try {
       const profile = participant_profile(name, {}, { cwd: local.cwd, adopt: true, participants: { [name]: exported } }, false);
-      // An API member's binding lives in the old runtime directory, not in any software's session store, so it starts fresh.
-      if (profile.adapter === 'api') delete profile.session_id;
+      // A member without a software session store (an API member) kept its binding in the old runtime directory, so it starts fresh.
+      if (!adapter_of(profile.adapter)?.session) delete profile.session_id;
       const resumed = profile.session_id ? borrowed_session(name, profile, local.cwd) : profile;
-      if (profile.adapter === 'claude') {
+      if (adapter_profile(profile.adapter)?.restore_manual) {
         keep_manual.push(name);
-        members.push({ name, status: 'manual', session_id: resumed.session_id || '', cwd: resumed.cwd || local.cwd || '' });
+        const cwd = resumed.cwd || local.cwd || '';
+        const command = resumed.session_id && adapter_profile(profile.adapter).resume_command?.(resumed.session_id);
+        members.push({ name, status: 'manual', session_id: resumed.session_id || '', cwd,
+          resume: command ? { command, cwd } : null });
       } else {
         participants[name] = resumed;
         members.push({ name, status: 'resumed', session_id: resumed.session_id || '' });
@@ -888,7 +878,7 @@ export async function fork_room(home, raw) {
         continue;
       }
       // Claude resumes a session only in its original directory, so the forked member works there too.
-      const located = profile.adapter === 'claude' ? borrowed_session(name, profile, local.cwd) : profile;
+      const located = adapter_profile(profile.adapter)?.adopt === 'own_cwd' ? borrowed_session(name, profile, local.cwd) : profile;
       const branch = await branch_session(located, profile.session_id, (left_out[name] || []).filter(Number.isInteger), { always: true });
       const { session_id, ...forked } = located;
       participants[name] = forked;
@@ -1051,7 +1041,7 @@ function connection_view(context) {
 
 /** Switch only Codex's execution entrypoint, keeping its actual original conversation. */
 function switch_codex_adapter(context, name, profile, adapter) {
-  if (!CODEX_ADAPTERS.includes(profile.adapter) || !CODEX_ADAPTERS.includes(adapter)) throw new Error('本场仅支持 Codex App / CLI 切换');
+  if (!same_session_family(profile.adapter, adapter)) throw new Error('本场仅支持共用会话的 App / CLI 接入之间切换');
   const current = validate_config(context.config, dirname(context.path));
   let session = profile.session_id;
   if (existsSync(join(current.directory, 'runtime.sqlite3'))) {
@@ -1072,8 +1062,8 @@ function corrected_configuration(context) {
   const config = structuredClone(context.config);
   for (const [name, patch] of Object.entries(context.input.participants)) {
     const profile = config.participants[name];
-    const field = profile?.adapter === 'antigravity' ? 'ipc_directory' : 'executable';
-    const fields = CODEX_ADAPTERS.includes(profile?.adapter) ? [field, 'adapter'] : [field];
+    const field = adapter_profile(profile?.adapter)?.location || 'executable';
+    const fields = ADAPTER_IDS.some(other => same_session_family(other, profile?.adapter)) ? [field, 'adapter'] : [field];
     if (!profile || !patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some(key => !fields.includes(key))) throw new Error('本场修正仅支持软件路径、Sidecar 目录及 Codex App / CLI；参与者、项目及会话保持不变');
     validate_profile(name, patch);
     if (patch.adapter && patch.adapter !== profile.adapter) switch_codex_adapter(context, name, profile, patch.adapter);
@@ -1249,7 +1239,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'api-check' && input) result = await api_check(home, input);
   else if (positionals[0] === 'scheduler-check' && input) result = await scheduler_check(home, input);
   else if (positionals[0] === 'room-models' && input) result = await room_models(home, input);
-  else if (positionals[0] === 'models' && input?.adapter === 'api') result = await api_models(home, input);
+  else if (positionals[0] === 'models' && adapter_profile(input?.adapter)?.kind === 'api') result = await api_models(home, input);
   else if (positionals[0] === 'models' && input) {
     const saved = Object.values(launch_settings(home).participants).find(profile => profile.adapter === input.adapter);
     result = await cached_software_models(home, { adapter: input.adapter, executable: input.executable || saved?.executable,

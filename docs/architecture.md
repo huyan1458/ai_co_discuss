@@ -29,7 +29,8 @@ flowchart LR
 | 目录 | 职责 |
 | --- | --- |
 | `backend/` | 两套等价后端：`server.py`（Python + SQLite）与 `worker.mjs`（Cloudflare Pages + D1），共用 `schema.sql` |
-| `runner/` | 统一命令 `codiscuss`、常驻讨论服务、各软件与 API 适配器、智能调度；只使用 Node.js 内置模块 |
+| `runner/` | 统一命令 `codiscuss`、常驻讨论服务、房间编排、智能调度；只使用 Node.js 内置模块 |
+| `runner/adapters/` | 适配层：各软件（Claude Code、Codex CLI / App、Antigravity CLI / App、模型 API）的静态事实与投递、停止、会话、模型读取，对上提供统一接口；新接一家软件只改这里 |
 | `frontend/` | Vue 界面、Markdown 渲染与备份源码 |
 | `web/` | 可直接运行的静态网页与构建产物 |
 | `.agents/skills/` | 主持、参与与报告技能 |

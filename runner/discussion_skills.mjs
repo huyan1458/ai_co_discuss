@@ -4,7 +4,7 @@ import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rm
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { atomic_json } from './discussion_adapters.mjs';
+import { atomic_json } from './files.mjs';
 
 const SOURCE = fileURLToPath(new URL('../.agents/skills/', import.meta.url));
 export const SKILLS = ['discuss-host', 'discuss-participant', 'discuss-report'];

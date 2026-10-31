@@ -5,10 +5,11 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
+import { listen_local } from './local_port.mjs';
 import { fork_room } from '../runner/discussion_launch.mjs';
 import { DiscussionStore } from '../runner/discussion_runner.mjs';
 import { read_registry, register_room } from '../runner/discussion_service.mjs';
-import { execution_marker } from '../runner/session_cut.mjs';
+import { execution_marker } from '../runner/adapters/index.mjs';
 
 test('forking registers members on branches of their sessions without the executions left out', async t => {
   const home = mkdtempSync(join(tmpdir(), 'discussion-fork-'));
@@ -22,7 +23,7 @@ test('forking registers members on branches of their sessions without the execut
     response.end(JSON.stringify(!ok ? { error: '凭据无效' } : request.url.endsWith('/inbox') ? { members: [] }
       : { mode: 'free', free: { members: ['Claude', 'Codex'].map(name => ({ name, access: 'runner', status: 'away' })) } }));
   });
-  await new Promise(resolve_listen => server.listen(0, '127.0.0.1', resolve_listen));
+  await listen_local(server);
   t.after(async () => {
     saved === undefined ? delete process.env.CLAUDE_CONFIG_DIR : process.env.CLAUDE_CONFIG_DIR = saved;
     await new Promise(resolve_close => server.close(resolve_close));

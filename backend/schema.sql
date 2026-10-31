@@ -509,14 +509,23 @@ CREATE TABLE IF NOT EXISTS scheduler_routing (
     created_at INTEGER NOT NULL,
     PRIMARY KEY (room_id, message_id)
 );
--- How the runner delivered each execution, and whether its software stopped once the execution was voided: the page
--- describes a stop as it really went (a window or App the runner cannot stop keeps generating). A side table so older
--- databases need no column change; executions are not backed up, so neither is this.
-CREATE TABLE IF NOT EXISTS execution_deliveries (
+-- Older development databases may retain execution_deliveries; it is no longer read or written.
+-- What the runner's adapter reported each execution can do (stop it, see its progress), and whether its software stopped
+-- once the execution was voided: the page describes a stop as it really went (a window or App the runner cannot stop
+-- keeps generating). A side table so older databases need no column change; executions are not backed up, so neither is this.
+CREATE TABLE IF NOT EXISTS execution_capabilities (
     execution_id INTEGER PRIMARY KEY REFERENCES member_executions(id) ON DELETE CASCADE,
     room_id TEXT NOT NULL,
-    delivery TEXT NOT NULL DEFAULT '' CHECK(delivery IN ('','process','api','window','app','sidecar')),
-    stop_result TEXT NOT NULL DEFAULT '' CHECK(stop_result IN ('','stopped','unstoppable'))
+    stoppable INTEGER CHECK(stoppable IN (0,1)),
+    progress INTEGER CHECK(progress IN (0,1)),
+    stop_result TEXT NOT NULL DEFAULT '' CHECK(stop_result IN ('','stopped','unstoppable','unconfirmed'))
+);
+-- What a rewind does to each runner member's session, as its adapter reported: cut by the runner, rebuilt each time
+-- (fresh), or kept as it is. A member without a report is kept; manual and online members are always kept.
+CREATE TABLE IF NOT EXISTS member_capabilities (
+    member_id INTEGER PRIMARY KEY REFERENCES room_members(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL,
+    rewind TEXT NOT NULL CHECK(rewind IN ('cut','fresh','kept'))
 );
 -- What a member submitted for an execution the user had already voided. Refused as an answer, so it never joins the
 -- transcript or AI reads; kept so the page can show the late work folded, and so a member the runner could not stop

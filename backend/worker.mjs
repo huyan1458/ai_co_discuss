@@ -1927,7 +1927,7 @@ async function manage_room(database, room_id, action, payload) {
       "DELETE FROM task_message_sources WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
       "DELETE FROM session_requests WHERE session_id IN (SELECT id FROM discussion_sessions WHERE room_id=?)",
       "DELETE FROM discussion_sessions WHERE room_id=?",
-      "DELETE FROM member_recommendations WHERE room_id=?", "DELETE FROM free_queue WHERE room_id=?", "DELETE FROM speaking_orders WHERE room_id=?", "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_descriptions WHERE room_id=?", "DELETE FROM member_labels WHERE room_id=?", "DELETE FROM execution_notes WHERE room_id=?", "DELETE FROM execution_denials WHERE room_id=?", "DELETE FROM execution_segments WHERE room_id=?", "DELETE FROM execution_deliveries WHERE room_id=?", "DELETE FROM late_answers WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?", "DELETE FROM member_sessions WHERE room_id=?", "DELETE FROM member_registrations WHERE room_id=?",
+      "DELETE FROM member_recommendations WHERE room_id=?", "DELETE FROM free_queue WHERE room_id=?", "DELETE FROM speaking_orders WHERE room_id=?", "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_descriptions WHERE room_id=?", "DELETE FROM member_labels WHERE room_id=?", "DELETE FROM execution_notes WHERE room_id=?", "DELETE FROM execution_denials WHERE room_id=?", "DELETE FROM execution_segments WHERE room_id=?", "DELETE FROM execution_capabilities WHERE room_id=?", "DELETE FROM late_answers WHERE room_id=?", "DELETE FROM member_capabilities WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?", "DELETE FROM member_sessions WHERE room_id=?", "DELETE FROM member_registrations WHERE room_id=?",
       "DELETE FROM room_members WHERE room_id=?", "DELETE FROM room_modes WHERE room_id=?",
       "DELETE FROM free_batches WHERE room_id=?", "DELETE FROM free_chains WHERE room_id=?", "DELETE FROM free_handoffs WHERE room_id=?", "DELETE FROM free_settings WHERE room_id=?", "DELETE FROM free_round_limits WHERE room_id=?", "DELETE FROM free_chain_holds WHERE room_id=?", "DELETE FROM room_links WHERE room_id=?",
       "DELETE FROM discussion_options WHERE room_id=?",
@@ -2245,7 +2245,7 @@ const SESSION_ID_PATTERN = /^[0-9A-Za-z_-]{8,128}$/;
 /** Keep the software session a manual member posted from, so the local service can take the member over. */
 async function record_reported_session(database, room_id, token, payload) {
   const { session_id, session_client } = payload;
-  if (!["claude", "codex", "antigravity"].includes(session_client) || typeof session_id !== "string" || !SESSION_ID_PATTERN.test(session_id) || !token) return;
+  if (typeof session_client !== "string" || !FREE_ADAPTER_VALUE.test(session_client) || typeof session_id !== "string" || !SESSION_ID_PATTERN.test(session_id) || !token) return;
   const member = await database.prepare("SELECT id FROM room_members WHERE room_id=? AND token_hash=? AND status='active' AND access='manual' AND adapter IN ('manual','')")
     .bind(room_id, await runtime_hash(token)).first();
   if (member) {
@@ -3138,26 +3138,32 @@ const FREE_MEMBER_FIELDS = ["id", "name", "adapter", "role", "status", "access",
 const FREE_EXECUTION_FIELDS = ["id", "member_id", "status", "session_id", "lease_until", "created_at", "finished_at", "result",
   "activity", "activity_at"];
 const FREE_RECENT_EXECUTIONS = 100;
-// How the runner reached the member's software, and what it found when a voided execution was to stop; see backend/free_room.py.
-const FREE_DELIVERIES = ["process", "api", "window", "app", "sidecar"];
-const FREE_STOP_RESULTS = ["stopped", "unstoppable"];
-// Deliveries the runner cannot stop, and how long a member voided there gets no new delivery unless its late answer
-// shows the turn ended; mirrors HOLD_SECONDS in backend/free_room.py.
-const FREE_UNSTOPPABLE_DELIVERIES = ["window", "app", "sidecar"];
+// What the runner found when a voided execution's software was to stop, and what a rewind does to a runner member's
+// session, as its adapter reports; see backend/free_room.py.
+const FREE_STOP_RESULTS = ["stopped", "unstoppable", "unconfirmed"];
+const FREE_REWIND_EFFECTS = ["cut", "fresh", "kept"];
+// How long a member voided where the runner could not stop it gets no new delivery unless its late answer shows the turn
+// ended; mirrors HOLD_SECONDS in backend/free_room.py.
 const FREE_HOLD_SECONDS = 600;
 
-/** Until when a member's next delivery waits, or 0: its latest execution was voided in a window or App the runner cannot stop. */
+/** Until when a member's next delivery waits, or 0: its latest execution was voided where the runner reported it cannot stop it. */
 async function free_held_until(database, member_id) {
-  const row = await database.prepare(`SELECT e.finished_at FROM member_executions e JOIN execution_deliveries d ON d.execution_id=e.id
+  const row = await database.prepare(`SELECT e.finished_at FROM member_executions e JOIN execution_capabilities c ON c.execution_id=e.id
     WHERE e.id=(SELECT MAX(id) FROM member_executions WHERE member_id=?) AND e.status='cancelled'
-      AND d.delivery IN (${FREE_UNSTOPPABLE_DELIVERIES.map(() => "?").join(",")})
-      AND NOT EXISTS(SELECT 1 FROM late_answers l WHERE l.execution_id=e.id)`).bind(member_id, ...FREE_UNSTOPPABLE_DELIVERIES).first();
+      AND c.stop_result<>'stopped' AND (c.stoppable=0 OR c.stop_result IN ('unstoppable','unconfirmed'))
+      AND NOT EXISTS(SELECT 1 FROM late_answers l WHERE l.execution_id=e.id)`).bind(member_id).first();
   const until = row ? row.finished_at + FREE_HOLD_SECONDS : 0;
   return until > Math.floor(Date.now() / 1000) ? until : 0;
 }
-// The delivery and stop result read alongside an execution aliased `e`.
-const FREE_DELIVERY_SQL = `(SELECT delivery FROM execution_deliveries d WHERE d.execution_id=e.id) AS delivery,
-    (SELECT stop_result FROM execution_deliveries d WHERE d.execution_id=e.id) AS stop_result`;
+// The reported capabilities and stop result read alongside an execution aliased `e`.
+const FREE_CAPABILITY_SQL = `(SELECT stoppable FROM execution_capabilities c WHERE c.execution_id=e.id) AS stoppable,
+    (SELECT progress FROM execution_capabilities c WHERE c.execution_id=e.id) AS progress,
+    (SELECT stop_result FROM execution_capabilities c WHERE c.execution_id=e.id) AS stop_result`;
+
+/** `{stoppable, progress}` as the runner reported them for one execution, or null before it did (or an older runner). */
+function free_reported_capabilities(row) {
+  return row.stoppable === null || row.stoppable === undefined ? null : { stoppable: Boolean(row.stoppable), progress: Boolean(row.progress) };
+}
 // Only free rooms carry these tables; credential hashes are never exported.
 const FREE_BACKUP_QUERIES = {
   room_modes: "SELECT room_id,mode FROM room_modes WHERE room_id=?",
@@ -3306,8 +3312,8 @@ async function free_recent_executions(database, room_id) {
     (SELECT MAX(answer_id) FROM member_requests WHERE execution_id=e.id) AS answer_id,
     (SELECT MIN(message_id) FROM member_requests WHERE execution_id=e.id) AS request_message_id,
     (SELECT COUNT(*) FROM execution_notes WHERE execution_id=e.id) AS note_count,
-    (SELECT denials FROM execution_denials WHERE execution_id=e.id) AS denials,${FREE_RETRY_SQL("e")},${FREE_DELIVERY_SQL},
-    (SELECT json_object('text',text,'created_at',created_at) FROM late_answers WHERE execution_id=e.id) AS late_answer
+    (SELECT denials FROM execution_denials WHERE execution_id=e.id) AS denials,${FREE_RETRY_SQL("e")},${FREE_CAPABILITY_SQL},
+    (SELECT json_object('created_at',created_at) FROM late_answers WHERE execution_id=e.id) AS late_answer
     FROM member_executions e JOIN room_members m ON m.id=e.member_id WHERE e.room_id=? ORDER BY e.id DESC LIMIT ?`).bind(room_id, FREE_RECENT_EXECUTIONS).all()).results;
   return Promise.all(rows.map(async row => {
     const requests = (await database.prepare("SELECT id,message_id,status,purpose,answer_id FROM member_requests WHERE execution_id=? ORDER BY id")
@@ -3316,7 +3322,7 @@ async function free_recent_executions(database, room_id) {
     return { ...pick(row, FREE_EXECUTION_FIELDS), member: row.member, cwd: row.cwd, changes: JSON.parse(row.changes || '[]'),
       changes_recorded: Boolean(row.changes), request_ids: JSON.parse(row.request_ids),
       answer_id: row.answer_id, request_message_id: row.request_message_id, requests: sourced, notes: row.note_count,
-      denials: JSON.parse(row.denials || "[]"), delivery: row.delivery || "", stop_result: row.stop_result || "", late_answer: JSON.parse(row.late_answer || "null"), retry: JSON.parse(row.retry || "null") };
+      denials: JSON.parse(row.denials || "[]"), capabilities: free_reported_capabilities(row), stop_result: row.stop_result || "", late_answer: JSON.parse(row.late_answer || "null"), retry: JSON.parse(row.retry || "null") };
   }));
 }
 
@@ -3405,9 +3411,9 @@ async function free_view(database, room_id, token = "") {
   const rows = (await database.prepare("SELECT * FROM room_members WHERE room_id=? AND status<>'removed' ORDER BY id").bind(room_id).all()).results;
   const members = await Promise.all(rows.map(async row => {
     const latest = await database.prepare(`SELECT e.*,(SELECT MIN(message_id) FROM member_requests WHERE execution_id=e.id) AS request_message_id,
-      ${FREE_DELIVERY_SQL} FROM member_executions e WHERE member_id=? ORDER BY id DESC LIMIT 1`).bind(row.id).first();
+      ${FREE_CAPABILITY_SQL} FROM member_executions e WHERE member_id=? ORDER BY id DESC LIMIT 1`).bind(row.id).first();
     let execution = pick(latest, FREE_EXECUTION_FIELDS);
-    if (latest) Object.assign(execution, { delivery: latest.delivery || "", stop_result: latest.stop_result || "" });
+    if (latest) Object.assign(execution, { capabilities: free_reported_capabilities(latest), stop_result: latest.stop_result || "" });
     if (latest && ["dispatched", "started"].includes(latest.status)) {
       execution.stale = latest.lease_until <= now;
       execution.notes = (await database.prepare("SELECT COUNT(*) AS count FROM execution_notes WHERE execution_id=?").bind(latest.id).first()).count;
@@ -3459,7 +3465,8 @@ async function require_free_member(database, room_id, token, name) {
   return row;
 }
 
-const REVIEW_ADAPTERS = ['codex_cli'];
+// Adapter and client values are named by the runner's adapter layer; the site only checks their shape (AGENTS.md red line 9).
+const FREE_ADAPTER_VALUE = /^[a-z][a-z0-9_]{1,31}$/;
 
 /** Bind a local attestation to this member's current identity without exposing its credential. */
 async function review_member_revision(member, generation = 0) {
@@ -3483,7 +3490,8 @@ async function review_capability(database, room_id, member_id, token, payload = 
     if (payload.read_only && (typeof payload.config_version !== 'string' || !/^[a-f0-9]{64}$/.test(payload.config_version))) {
       throw new HttpError(400, 'config_version 须为本机配置的 SHA-256 摘要');
     }
-    if (payload.read_only && (member.status !== 'active' || member.access !== 'runner' || member.session_mode !== 'new' || !REVIEW_ADAPTERS.includes(member.adapter))) {
+    // Whether the software can enforce a read-only project is the runner's adapter to judge; it attests only then.
+    if (payload.read_only && (member.status !== 'active' || member.access !== 'runner' || member.session_mode !== 'new')) {
       throw new HttpError(409, '仅支持程序启动、可核验只读权限的本地 CLI 成员');
     }
     const statement = payload.read_only ? database.prepare(`INSERT INTO member_review_capabilities(member_id,member_revision,config_version,adapter,recorded_at) VALUES (?,?,?,?,unixepoch())
@@ -3530,7 +3538,7 @@ async function review_roster(database, room_id, token) {
     JOIN member_review_capabilities c ON c.member_id=m.id WHERE m.room_id=? AND m.status='active'
     AND m.access='runner' AND m.session_mode='new' ORDER BY m.id`).bind(room_id).all()).results;
   const members = [];
-  for (const row of rows) if (REVIEW_ADAPTERS.includes(row.adapter) && row.member_revision === await review_member_revision(row, row.generation)) {
+  for (const row of rows) if (row.member_revision === await review_member_revision(row, row.generation)) {
     members.push(pick(row, ['id', 'name', 'adapter', 'config_version']));
   }
   const state = (await database.prepare(REVIEW_STATE_SQL).bind(room_id).first()).state;
@@ -4166,15 +4174,18 @@ async function retract_message(database, room_id, message_id, token) {
   return { message_id, text: message.text, duplicate: false };
 }
 
-// Software whose session the runner can cut before a taken-back execution; an API member rebuilds its context each time.
-const CUTTABLE_ADAPTERS = ["claude", "codex", "codex_cli", "antigravity_cli"];
 // Executions a rewind takes back: any touching a message from the rewind point on, and any still running.
 const REWOUND_EXECUTIONS = `SELECT e.id,e.member_id FROM member_executions e WHERE e.room_id=? AND (e.status IN ('dispatched','started')
   OR EXISTS(SELECT 1 FROM member_requests r WHERE r.execution_id=e.id AND (r.message_id>=? OR r.answer_id>=?))) ORDER BY e.id`;
+// Capture before reading the plan, and compare inside the write batch so member changes cannot use a stale plan.
+const REWIND_MEMBER_STATE_SQL = `SELECT json_group_array(json_array(id,name,access,status,rewind)) AS state FROM
+  (SELECT m.id,m.name,m.access,m.status,c.rewind FROM room_members m LEFT JOIN member_capabilities c ON c.member_id=m.id
+   WHERE m.room_id=? ORDER BY m.id)`;
 
 /**
  * What rewinding to just before a message takes back, and a revision of the state it was read from; mirrors
- * backend/free_room.py. Each member's session is `cut`, `fresh` (API), `unchanged` or `kept` (its own window keeps it).
+ * backend/free_room.py. Each member's session is `cut`, `fresh`, `unchanged` or `kept`, from the effect the runner reported
+ * for it (`member_capabilities`); a member without a report, and every manual or online member, is kept.
  */
 async function rewind_plan(database, room_id, message_id) {
   await owner_message(database, room_id, message_id);
@@ -4183,11 +4194,12 @@ async function rewind_plan(database, room_id, message_id) {
   for (const row of (await database.prepare(REWOUND_EXECUTIONS).bind(room_id, message_id, message_id).all()).results) {
     executions.set(row.member_id, [...executions.get(row.member_id) || [], row.id]);
   }
-  const members = (await database.prepare("SELECT id,name,access,adapter FROM room_members WHERE room_id=? AND status<>'removed' ORDER BY id").bind(room_id).all()).results
+  const members = (await database.prepare(`SELECT m.id,m.name,m.access,(SELECT rewind FROM member_capabilities c WHERE c.member_id=m.id) AS rewind
+    FROM room_members m WHERE m.room_id=? AND m.status<>'removed' ORDER BY m.id`).bind(room_id).all()).results
     .map(row => {
       const taken = executions.get(row.id) || [];
-      const session = row.access !== "runner" || ![...CUTTABLE_ADAPTERS, "api"].includes(row.adapter) ? "kept"
-        : !taken.length ? "unchanged" : row.adapter === "api" ? "fresh" : "cut";
+      const effect = row.access === "runner" ? row.rewind : "kept";
+      const session = !effect || effect === "kept" ? "kept" : !taken.length ? "unchanged" : effect;
       return { id: row.id, name: row.name, executions: taken, session };
     });
   const counts = await database.prepare(`SELECT (SELECT COUNT(*) FROM messages m WHERE m.room_id=? AND m.id>=?
@@ -4207,6 +4219,7 @@ async function rewind_room(database, room_id, token, payload) {
   const message_id = payload.message_id;
   if (!Number.isInteger(message_id)) throw new HttpError(400, "须提供要回退到其之前的消息编号 message_id");
   if (payload.revision === undefined || payload.revision === null) throw new HttpError(400, "回退前须先读取回退计划（GET rewind?message_id=），并带上其 revision");
+  const member_state = await database.prepare(REWIND_MEMBER_STATE_SQL).bind(room_id).first();
   const plan = await rewind_plan(database, room_id, message_id);
   const changed = "房间已有新的消息或执行，请重新读取回退计划后再确认";
   if (payload.revision !== plan.revision) throw new HttpError(409, changed);
@@ -4216,8 +4229,9 @@ async function rewind_room(database, room_id, token, payload) {
     (SELECT COUNT(*) FROM member_executions WHERE room_id=? AND ${FREE_LIVE}) AS live`).bind(room_id, room_id, room_id).first();
   try {
     await checked_batch(database, `(SELECT COALESCE(MAX(id),0) FROM messages WHERE room_id=?)=? AND (SELECT COALESCE(MAX(id),0) FROM member_executions WHERE room_id=?)=?
-      AND (SELECT COUNT(*) FROM member_executions WHERE room_id=? AND ${FREE_LIVE})=? AND NOT EXISTS(SELECT 1 FROM message_withdrawals WHERE message_id=?)`,
-    [room_id, seen.latest, room_id, seen.execution, room_id, seen.live, message_id], [
+      AND (SELECT COUNT(*) FROM member_executions WHERE room_id=? AND ${FREE_LIVE})=? AND NOT EXISTS(SELECT 1 FROM message_withdrawals WHERE message_id=?)
+      AND (${REWIND_MEMBER_STATE_SQL})=?`,
+    [room_id, seen.latest, room_id, seen.execution, room_id, seen.live, message_id, room_id, member_state.state], [
       ...free_finish_statements(database, "room_id=?", [room_id], "cancelled", "用户回退了对话", "cancelled", "user_stop"),
       database.prepare("INSERT OR REPLACE INTO request_cancel_reasons (request_id,reason) SELECT id,'user_stop' FROM member_requests WHERE room_id=? AND message_id>=? AND status='pending'").bind(room_id, message_id),
       database.prepare("UPDATE member_requests SET status='cancelled' WHERE room_id=? AND message_id>=? AND status='pending'").bind(room_id, message_id),
@@ -4270,6 +4284,8 @@ async function free_inbox(database, room_id, token) {
   const listed = await Promise.all(rows.map(async row => ({ ...pick(row, FREE_MEMBER_FIELDS),
     review_capability: await review_capability(database, room_id, row.id, token),
     held_until: await free_held_until(database, row.id),
+    // The runner compares this with its adapter's effect and reports a change.
+    rewind: (await database.prepare("SELECT rewind FROM member_capabilities WHERE member_id=?").bind(row.id).first())?.rewind || "",
     pending: (await database.prepare(`SELECT r.id,r.message_id,r.purpose,q.id AS session_request_id,q.session_id,q.round,q.position,q.read_until,
       q.question AS source_question,t.cause_kind,t.cause_message_id AS source_message_id,t.cause_request_id,
       (SELECT action FROM group_routes WHERE message_id=r.message_id) AS group_action
@@ -4631,11 +4647,32 @@ function free_renewed_activity(payload, row, now) {
   return [activity, Math.min(Math.max(activity_at, row.created_at), now)];
 }
 
+/** Read late text only for the room owner; public reports carry its timestamp without its content. */
+async function free_late_answer(database, room_id, execution_id, token) {
+  await require_free_owner(database, room_id, token);
+  const answer = await database.prepare("SELECT text,created_at FROM late_answers WHERE room_id=? AND execution_id=?").bind(room_id, execution_id).first();
+  if (!answer) throw new HttpError(404, "本次执行没有迟到回答");
+  return answer;
+}
+
+/** Record a stop idempotently; an unconfirmed stop may later gain a confirmed outcome. */
+async function free_record_stop(database, room_id, execution_id, result) {
+  if (!FREE_STOP_RESULTS.includes(result)) throw new HttpError(400, `result 须为 ${FREE_STOP_RESULTS.join("、")}`);
+  const saved = await database.prepare(`INSERT INTO execution_capabilities (execution_id,room_id,stop_result) VALUES (?,?,?)
+    ON CONFLICT(execution_id) DO UPDATE SET stop_result=excluded.stop_result
+    WHERE stop_result IN ('','unconfirmed') AND stop_result<>excluded.stop_result`).bind(execution_id, room_id, result).run();
+  if (saved.meta.changes) return false;
+  const previous = await database.prepare("SELECT stop_result FROM execution_capabilities WHERE execution_id=?").bind(execution_id).first();
+  if (previous.stop_result !== result) throw new HttpError(409, "本次执行已记录不同的停止结果");
+  return true;
+}
+
 /** Runner-side lifecycle: renew, fail, release undelivered work, or report observed file changes. */
 async function free_execution_action(database, room_id, execution_id, token, payload) {
   const row = await database.prepare("SELECT * FROM member_executions WHERE room_id=? AND id=?").bind(room_id, execution_id).first();
   if (!row) throw new HttpError(404, "执行不存在");
   const action = payload.action;
+  let duplicate = false;
   if (action === "fail") {
     try { await require_free_owner(database, room_id, token); }
     catch {
@@ -4667,17 +4704,16 @@ async function free_execution_action(database, room_id, execution_id, token, pay
   } else if (action === "stopped") {
     // After a voided execution: whether the runner ended its software, or could not because it works in a window or App.
     if (row.status !== "cancelled") throw new HttpError(409, "只有已作废的执行才报告停止结果");
-    if (!FREE_STOP_RESULTS.includes(payload.result)) throw new HttpError(400, `result 须为 ${FREE_STOP_RESULTS.join("、")}`);
-    const result = await database.prepare(`INSERT INTO execution_deliveries (execution_id,room_id,stop_result) VALUES (?,?,?)
-      ON CONFLICT(execution_id) DO UPDATE SET stop_result=excluded.stop_result WHERE stop_result=''`).bind(execution_id, room_id, payload.result).run();
-    if (!result.meta.changes) throw new HttpError(409, "本次执行的停止结果已记录");
+    duplicate = await free_record_stop(database, room_id, execution_id, payload.result);
+  } else if (action === "delivery") {
+    if (!live && row.status !== "cancelled") throw new HttpError(409, "执行已结束");
+    // What this delivery can do, as the runner's adapter reported; a retried delivery may differ, so the latest counts.
+    if (typeof payload.stoppable !== "boolean" || typeof payload.progress !== "boolean") throw new HttpError(400, "delivery 须带布尔值 stoppable 与 progress");
+    await database.prepare(`INSERT INTO execution_capabilities (execution_id,room_id,stoppable,progress) VALUES (?,?,?,?)
+      ON CONFLICT(execution_id) DO UPDATE SET stoppable=excluded.stoppable,progress=excluded.progress`)
+      .bind(execution_id, room_id, Number(payload.stoppable), Number(payload.progress)).run();
   } else if (!live) throw new HttpError(409, "执行已结束");
-  else if (action === "delivery") {
-    // How the software was reached; a retried delivery may reach it another way, so the latest report counts.
-    if (!FREE_DELIVERIES.includes(payload.delivery)) throw new HttpError(400, `delivery 须为 ${FREE_DELIVERIES.join("、")}`);
-    await database.prepare(`INSERT INTO execution_deliveries (execution_id,room_id,delivery) VALUES (?,?,?)
-      ON CONFLICT(execution_id) DO UPDATE SET delivery=excluded.delivery`).bind(execution_id, room_id, payload.delivery).run();
-  } else if (action === "renew") {
+  else if (action === "renew") {
     // No time limit on one execution: it runs while the runner keeps renewing.
     const now = Math.floor(Date.now() / 1000);
     if (row.lease_until <= now) throw new HttpError(409, "执行租约已到期，不能续租");
@@ -4723,7 +4759,8 @@ async function free_execution_action(database, room_id, execution_id, token, pay
     // Only for proven non-delivery: the requests return to the queue unchanged.
     await database.batch(free_finish_statements(database, "id=?", [execution_id], "cancelled", String(payload.reason || "未送达"), "pending"));
   } else throw new HttpError(400, "action 须为 renew、fail、release、report、segments、retry_wait、retry_start、retry_now 或 retry_stop");
-  return free_execution_detail(database, await database.prepare("SELECT * FROM member_executions WHERE id=?").bind(execution_id).first());
+  const detail = await free_execution_detail(database, await database.prepare("SELECT * FROM member_executions WHERE id=?").bind(execution_id).first());
+  return action === "stopped" ? { ...detail, duplicate } : detail;
 }
 
 /** Read one non-removed member after proving the owner's credential. */
@@ -4747,6 +4784,7 @@ async function handle_free_api(database, request, parts) {
   if (parts.length === 5 && parts[3] === "recommendations" && method === "GET") return respond(await free_group_plan(database, room_id, token, integer(parts[4])));
   if (parts.length === 5 && parts[3] === "recommendations" && method === "POST") return respond(await free_adopt(database, room_id, token, integer(parts[4]), await read_payload(request)));
   if (parts.length === 6 && parts[3] === "executions" && parts[5] === "notes" && method === "GET") return respond(await free_execution_notes(database, room_id, integer(parts[4]), token));
+  if (parts.length === 6 && parts[3] === "executions" && parts[5] === "late-answer" && method === "GET") return respond(await free_late_answer(database, room_id, integer(parts[4]), token));
   if (parts.length === 5 && parts[3] === "executions") {
     const execution_id = integer(parts[4]);
     return respond(method === "GET" ? await free_view_execution(database, room_id, execution_id, token)
@@ -4773,6 +4811,16 @@ async function handle_free_api(database, request, parts) {
     await database.batch([database.prepare("DELETE FROM free_queue WHERE room_id=?").bind(room_id),
       ...free_stop_room_statements(database, room_id, "用户停止全部", "user_stop")]);
     return respond(await free_view(database, room_id));
+  }
+  // What a rewind does to one runner member's session, as the runner's adapter reports; mirrors member_capability in backend/free_room.py.
+  if (parts.length === 6 && parts[3] === "members" && parts[5] === "capabilities" && method === "POST") {
+    await require_free_owner(database, room_id, token);
+    const member_id = integer(parts[4]), payload = await read_payload(request);
+    if (!await database.prepare("SELECT 1 FROM room_members WHERE room_id=? AND id=?").bind(room_id, member_id).first()) throw new HttpError(404, "成员不存在");
+    if (!FREE_REWIND_EFFECTS.includes(payload.rewind)) throw new HttpError(400, `rewind 须为 ${FREE_REWIND_EFFECTS.join("、")}`);
+    await database.prepare(`INSERT INTO member_capabilities (member_id,room_id,rewind) VALUES (?,?,?)
+      ON CONFLICT(member_id) DO UPDATE SET rewind=excluded.rewind`).bind(member_id, room_id, payload.rewind).run();
+    return respond({ member_id, rewind: payload.rewind });
   }
   if (parts.length === 6 && parts[3] === "members" && parts[5] === "interrupt" && method === "POST") {
     const member = await free_owned_member(database, room_id, integer(parts[4]), token);
@@ -4803,7 +4851,7 @@ async function handle_free_api(database, request, parts) {
     } else if (payload.action === "adopt") {
       const reported = await database.prepare("SELECT session_id FROM member_sessions WHERE member_id=?").bind(member.id).first();
       if (!await registered_at(database, member)) throw new HttpError(400, "成员尚未注册，不能转为托管");
-      if (!reported || reported.session_id !== payload.session_id || !["claude", "codex", "codex_cli", "antigravity", "antigravity_cli"].includes(payload.adapter)) throw new HttpError(400, "成员尚未上报与之相符的会话，不能转为托管");
+      if (!reported || reported.session_id !== payload.session_id || typeof payload.adapter !== "string" || !FREE_ADAPTER_VALUE.test(payload.adapter) || payload.adapter === "manual") throw new HttpError(400, "成员尚未上报与之相符的会话，不能转为托管");
       if (member.access !== "manual" || member.status !== "active") throw new HttpError(400, "只有在场的手动成员可以转为托管");
       const hashed = payload.token === undefined ? null : await runtime_hash(payload.token);
       if (hashed !== null) await require_fresh_member_hash(database, room_id, hashed);
@@ -4893,7 +4941,7 @@ async function handle_discussion_members(database, request, parts) {
     } else if (payload.action === "adopt") {
       const reported = await database.prepare("SELECT session_id FROM member_sessions WHERE member_id=?").bind(member.id).first();
       if (!await registered_at(database, member)) throw new HttpError(400, "成员尚未注册，不能转为托管");
-      if (!reported || reported.session_id !== payload.session_id || !["claude", "codex", "codex_cli", "antigravity", "antigravity_cli"].includes(payload.adapter)) throw new HttpError(400, "成员尚未上报与之相符的会话，不能转为托管");
+      if (!reported || reported.session_id !== payload.session_id || typeof payload.adapter !== "string" || !FREE_ADAPTER_VALUE.test(payload.adapter) || payload.adapter === "manual") throw new HttpError(400, "成员尚未上报与之相符的会话，不能转为托管");
       if (member.access !== "manual" || member.status !== "active" || room.runtime?.mode !== "automatic") throw new HttpError(400, "只有全自动讨论中在场的手动专家可以转为托管");
       await database.batch([
         database.prepare("UPDATE room_members SET access='runner',adapter=?,session_mode='borrowed' WHERE id=?").bind(payload.adapter, member.id),

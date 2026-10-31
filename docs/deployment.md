@@ -107,6 +107,16 @@ codiscuss token
 codiscuss health --site https://YOUR_PROJECT_NAME.pages.dev
 ```
 
+### 升级执行能力协议
+
+网站与 runner 必须配套升级，不能混用旧的投递方式协议。升级步骤：
+
+1. 暂停新请求，结束所有正在进行的本机执行，再停止 runner 和网站写入；仅在网页点击停止不能保证原软件已退出。
+2. 备份 D1 与附件，在数据库副本验证升级。重新执行 `backend/schema.sql`，创建 `execution_capabilities`、`member_capabilities`、`late_answers`；已有表缺列时须按升级版本另外补列。
+3. 更新网站与所有连接它的 runner，核对房间读取、能力上报、停止和暂缓投递，再恢复请求。
+
+旧 `execution_deliveries` 表保留但不再读取，也不迁移；该表未部署到线上，仅有临时测试数据。保留旧表不代表支持混版运行。本机 Python 站点同样须先结束执行，再配套更新网站与 runner。
+
 ### 实时推送（可选）
 
 未配置时网页每 12 秒检查一次房间是否有变化，有变化才重新读取。需要跨实例实时推送时，先部署通知 Worker，再在私有配置中绑定：

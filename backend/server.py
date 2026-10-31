@@ -27,14 +27,14 @@ from .remote_launch import (COMMAND_WAIT_MAX, claim_machine_commands, finish_mac
                             machine_launch_action, machine_sync, pair_machine, remote_launch_status, submit_machine_command,
                             submit_remote_launch)
 from .free_room import (add_member, after_free_message, authorize_free_write, check_answer, check_proxy, execution_action, free_view,
-                        inbox, interrupt_member, member_action, member_values, migrate_free_tables, proxy_member, reserve_execution,
+                        inbox, interrupt_member, member_action, member_capability, member_values, migrate_free_tables, proxy_member, reserve_execution,
                         discussion_members, room_mode, save_room_access, sync_discussion_members, view_execution)
 from .free_room import add_discussion_member, convert_suggestion, discussion_member_action, message_suggestions, save_suggestions, sync_participants
 from .free_room import active_members, adopt_recommendation, ask_members, asks_view, checked_asks, recommend_member, register_member, route_held_messages, require_member
 from .free_room import describe_members, execution_notes, label_members, member_descriptions, member_labels, reorder_speakers, set_chain_rounds, speaking_order, stop_room, stop_room_work
-from .free_room import continue_chain, execution_timeline, group_route_plan, retract_message, rewind_plan, rewind_room, withdrawals
+from .free_room import ADAPTER_VALUE, continue_chain, execution_timeline, group_route_plan, retract_message, rewind_plan, rewind_room, withdrawals
 from .free_room import review_capability, review_roster, checked_review_plan, save_review_plan, check_review_retry
-from .free_room import review_ready, advance_review
+from .free_room import review_ready, advance_review, late_answer
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, is_ai, is_participant
 from .room_import import import_room, imported_attachment
 from .runtime import (authorize_write, begin_write, event_view,
@@ -987,7 +987,7 @@ def delete_room_records(connection, room_id):
     """Remove a room's dependent records in the caller's transaction."""
     connection.execute("DELETE FROM task_message_sources WHERE session_id IN (SELECT id FROM discussion_sessions WHERE room_id=?)", (room_id,))
     connection.execute("DELETE FROM discussion_sessions WHERE room_id=?", (room_id,))
-    for table in ("member_recommendations", "free_queue", "speaking_orders", "member_requests", "member_descriptions", "member_labels", "execution_notes", "execution_segments", "execution_deliveries", "late_answers", "member_executions", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "free_handoffs", "free_settings", "free_round_limits", "free_chain_holds", "room_links",
+    for table in ("member_recommendations", "free_queue", "speaking_orders", "member_requests", "member_descriptions", "member_labels", "execution_notes", "execution_segments", "execution_capabilities", "late_answers", "member_executions", "member_capabilities", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "free_handoffs", "free_settings", "free_round_limits", "free_chain_holds", "room_links",
                   "discussion_options", "round_budgets", "scheduler_decisions", "scheduler_routing", "discussion_conclusions", "discussion_sessions"):
         if table == "scheduler_decisions":
             for child in ("scheduler_feedback", "scheduler_decision_context", "scheduler_decision_inputs"):
@@ -1399,7 +1399,8 @@ def append_free_moderation(connection, room, payload, actor):
 def record_reported_session(connection, room_id, token, payload):
     """Keep the software session a manual member posted from, so the local service can take the member over."""
     session_id, client = payload.get("session_id"), payload.get("session_client")
-    if client not in ("claude", "codex", "antigravity") or not isinstance(session_id, str) or not SESSION_ID_PATTERN.fullmatch(session_id) or not token:
+    if (not isinstance(client, str) or not ADAPTER_VALUE.fullmatch(client) or not isinstance(session_id, str)
+            or not SESSION_ID_PATTERN.fullmatch(session_id) or not token):
         return
     member = connection.execute("SELECT id FROM room_members WHERE room_id=? AND token_hash=? AND status='active' AND access='manual' AND adapter IN ('manual','')",
                                 (room_id, token_hash(token))).fetchone()
@@ -2788,6 +2789,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = adopt_recommendation(connection, room_id, token, int(parts[4]), self.read_payload())
         elif len(parts) == 6 and parts[3] == "executions" and parts[5] == "notes" and method == "GET":
             result = execution_notes(connection, room_id, int(parts[4]), token)
+        elif len(parts) == 6 and parts[3] == "executions" and parts[5] == "late-answer" and method == "GET":
+            result = late_answer(connection, room_id, int(parts[4]), token)
         elif len(parts) == 5 and parts[3] == "executions":
             execution_id = int(parts[4])
             result = (view_execution(connection, room_id, execution_id, token) if method == "GET"
@@ -2798,6 +2801,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = member_action(connection, room_id, int(parts[4]), token, self.read_payload())
         elif len(parts) == 6 and parts[3] == "members" and parts[5] == "interrupt" and method == "POST":
             result = interrupt_member(connection, room_id, int(parts[4]), token)
+        elif len(parts) == 6 and parts[3] == "members" and parts[5] == "capabilities" and method == "POST":
+            result = member_capability(connection, room_id, int(parts[4]), token, self.read_payload())
         elif parts[3:] == ["stop"] and method == "POST":
             result = stop_room(connection, room_id, token)
         else:
