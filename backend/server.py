@@ -318,6 +318,11 @@ def init_database(database, seed=True):
             if "session_mode" not in columns:
                 connection.execute("ALTER TABLE room_members ADD COLUMN session_mode TEXT NOT NULL DEFAULT 'new'")
         migrate_legacy_discussion(connection, tables)
+        # The recent-changes partial index needs this early column before schema is applied.
+        if "member_executions" in tables:
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(member_executions)")}
+            if "changes" not in columns:
+                connection.execute("ALTER TABLE member_executions ADD COLUMN changes TEXT NOT NULL DEFAULT ''")
         connection.executescript(SCHEMA)
         migrate_free_tables(connection)
         if seed and is_new:
@@ -327,17 +332,15 @@ def init_database(database, seed=True):
 def require_room(connection, room_id):
     """Return a room and its current message count, or raise a lookup error."""
     row = connection.execute("""SELECT rooms.*,
-        COUNT(CASE WHEN NOT EXISTS (SELECT 1 FROM internal_task_messages t WHERE t.message_id=messages.id) THEN messages.id END) AS message_count,
-        COALESCE(MAX(CASE WHEN NOT EXISTS (SELECT 1 FROM internal_task_messages t WHERE t.message_id=messages.id) THEN messages.id END),0) AS latest_id
-        FROM rooms LEFT JOIN messages ON rooms.id=messages.room_id WHERE rooms.id=? GROUP BY rooms.id""", (room_id,)).fetchone()
+        COALESCE(stats.message_count,0) AS message_count,COALESCE(stats.latest_id,0) AS latest_id
+        FROM rooms LEFT JOIN room_message_stats stats ON stats.room_id=rooms.id WHERE rooms.id=? GROUP BY rooms.id""", (room_id,)).fetchone()
     if row is None:
         raise LookupError("房间不存在")
     if enforce_session_limits(connection, room_id):
         connection.commit()
         row = connection.execute("""SELECT rooms.*,
-            COUNT(CASE WHEN NOT EXISTS (SELECT 1 FROM internal_task_messages t WHERE t.message_id=messages.id) THEN messages.id END) AS message_count,
-            COALESCE(MAX(CASE WHEN NOT EXISTS (SELECT 1 FROM internal_task_messages t WHERE t.message_id=messages.id) THEN messages.id END),0) AS latest_id
-            FROM rooms LEFT JOIN messages ON rooms.id=messages.room_id WHERE rooms.id=? GROUP BY rooms.id""", (room_id,)).fetchone()
+            COALESCE(stats.message_count,0) AS message_count,COALESCE(stats.latest_id,0) AS latest_id
+            FROM rooms LEFT JOIN room_message_stats stats ON stats.room_id=rooms.id WHERE rooms.id=? GROUP BY rooms.id""", (room_id,)).fetchone()
     room = dict(row)
     room["archived"] = bool(connection.execute("SELECT archived FROM room_directory WHERE room_id=?", (room_id,)).fetchone()[0])
     room["folder_id"] = connection.execute("SELECT folder_id FROM room_folder_assignments WHERE room_id=?", (room_id,)).fetchone()[0]
@@ -368,7 +371,7 @@ def require_room(connection, room_id):
     room["scheduler_decisions"] = [dict(row) for row in connection.execute(
         f"{DECISION_SELECT} WHERE d.room_id=? ORDER BY d.id DESC LIMIT ?", (room_id, RECENT_DECISIONS))][::-1]
     details = {row[0]: json.loads(row[1]) for row in connection.execute(
-        "SELECT decision_id,detail FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)", (room_id,))}
+        "SELECT decision_id,detail FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=? ORDER BY id DESC LIMIT ?)", (room_id, RECENT_DECISIONS))}
     for decision in room["scheduler_decisions"]:
         decision["detail"] = details.get(decision["id"])
     room["scheduler_routing"] = [row[0] for row in connection.execute(
@@ -436,87 +439,81 @@ def visible_anchor_before(connection, room_id, message_id):
 
 def session_host_arrangements(connection, room_id):
     """Expose discussion plans as arrangement cards, grouped by submission batch."""
-    result = []
-    sessions = connection.execute("SELECT id FROM discussion_sessions WHERE room_id=? ORDER BY id", (room_id,))
-    for session_row in sessions:
-        session_id = session_row["id"]
-        rows = [dict(row) for row in connection.execute("""SELECT q.id,q.session_id,q.round,q.position,q.member_id,q.question,
-            q.created_at,q.submission_id,q.member_request_id,m.name AS expert,r.message_id AS task_message_id
-            FROM session_requests q JOIN room_members m ON m.id=q.member_id
-            LEFT JOIN member_requests r ON r.id=q.member_request_id
-            WHERE q.session_id=? AND q.purpose='discuss' AND q.submission_id NOT LIKE 'invite:%'
-            ORDER BY q.created_at,q.id""", (session_id,))]
-        submission_ids = {row["submission_id"] for row in rows}
-        batches = {}
-        for row in rows:
-            base_id = row["submission_id"]
-            match = re.match(r"^(.*)-q\d+$", base_id)
-            if match and match.group(1) in submission_ids:
-                base_id = match.group(1)
-            batches.setdefault((base_id, row["created_at"]), []).append(row)
-        for (base_id, created_at), batch in batches.items():
-            first = batch[0]
-            task_message_id = first["task_message_id"]
-            host_task = connection.execute("""SELECT t.message_id FROM task_message_sources t
-                JOIN session_requests h ON h.id=t.session_request_id
-                WHERE h.session_id=? AND h.purpose='discuss_host' AND t.message_id<?
-                ORDER BY t.message_id DESC LIMIT 1""", (session_id, task_message_id or 2 ** 63 - 1)).fetchone()
-            anchor_message_id = host_task["message_id"] if host_task else task_message_id
-            anchor = visible_anchor_before(connection, room_id, anchor_message_id)
-            result.append({"id": f"session-{session_id}-plan-{first['id']}", "key": f"session-{session_id}-plan-{first['id']}", "display_id": first["id"],
-                "after_message_id": anchor, "created_at": created_at,
-                "turns": [{"expert": row["expert"], "question": row["question"], "round": row["round"]} for row in batch]})
-    return result
+    rows = connection.execute("""SELECT q.id,q.session_id,q.round,q.question,q.created_at,q.submission_id,
+        m.name AS expert,r.message_id AS task_message_id FROM discussion_sessions s JOIN session_requests q ON q.session_id=s.id
+        JOIN room_members m ON m.id=q.member_id LEFT JOIN member_requests r ON r.id=q.member_request_id
+        WHERE s.room_id=? AND q.purpose='discuss' AND q.submission_id NOT LIKE 'invite:%'
+        ORDER BY s.id,q.created_at,q.id""", (room_id,)).fetchall()
+    submission_ids = {(row["session_id"], row["submission_id"]) for row in rows}
+    batches = {}
+    for row in rows:
+        base_id = row["submission_id"]
+        match = re.match(r"^(.*)-q\d+$", base_id)
+        if match and (row["session_id"], match.group(1)) in submission_ids:
+            base_id = match.group(1)
+        batches.setdefault((row["session_id"], base_id, row["created_at"]), []).append(row)
+    if not batches:
+        return []
+    anchors = arrangement_anchors(connection, room_id, [batch[0] for batch in batches.values()])
+    return [{"id": f"session-{session_id}-plan-{batch[0]['id']}", "key": f"session-{session_id}-plan-{batch[0]['id']}",
+        "display_id": batch[0]["id"], "after_message_id": anchors[batch[0]["id"]], "created_at": created_at,
+        "turns": [{"expert": row["expert"], "question": row["question"], "round": row["round"]} for row in batch]}
+        for (session_id, base_id, created_at), batch in batches.items()]
+
+
+def arrangement_anchors(connection, room_id, plans):
+    """Find historical plan slots in one query, restricting host-task lookup to its indexed session."""
+    values = [[row["id"], row["session_id"], row["task_message_id"] or 2 ** 63 - 1, row["task_message_id"] or 0] for row in plans]
+    rows = connection.execute("""WITH plans AS (
+        SELECT json_extract(value,'$[0]') AS id,json_extract(value,'$[1]') AS session_id,
+            json_extract(value,'$[2]') AS before_id,json_extract(value,'$[3]') AS task_message_id FROM json_each(?))
+        SELECT p.id,(SELECT COALESCE(MAX(m.id),0) FROM messages m WHERE m.room_id=? AND m.id<COALESCE(
+            (SELECT t.message_id FROM task_message_sources t JOIN session_requests h ON h.id=t.session_request_id
+                WHERE t.session_id=p.session_id AND h.purpose='discuss_host' AND t.message_id<p.before_id
+                ORDER BY t.message_id DESC LIMIT 1),p.task_message_id)
+            AND NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=m.id)) AS anchor
+        FROM plans p""", (json.dumps(values), room_id))
+    return {row["id"]: row["anchor"] for row in rows}
 
 
 def cancelled_turns(connection, room_id):
     """Discussion assignments that ended without an answer, anchored where their task appeared."""
-    rows = session_cancelled_turns(connection, room_id)
-    rows.sort(key=lambda item: (item.get("created_at", ""), item["after_message_id"], str(item["id"])))
-    return rows[-RECENT_DECISIONS:]
-
-
-def session_cancelled_turns(connection, room_id):
-    """Return only canceled/skipped session assignments that were opened and lack an execution failure card."""
     result = []
-    for row in connection.execute("""SELECT q.id,q.session_id,q.member_id,q.question,q.status,q.member_request_id,q.created_at,m.name AS expert,
-        r.message_id AS task_message_id,r.execution_id FROM session_requests q JOIN room_members m ON m.id=q.member_id
+    for row in connection.execute("""SELECT q.id,q.session_id,q.question,q.status,q.created_at,m.name AS expert,r.execution_id,
+        'session-'||q.session_id||'-request-'||q.id AS key,
+        (SELECT COALESCE(MAX(a.id),0) FROM messages a WHERE a.room_id=? AND a.id<r.message_id
+            AND NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=a.id)) AS after_message_id
+        FROM session_requests q JOIN room_members m ON m.id=q.member_id
         JOIN member_requests r ON r.id=q.member_request_id
         WHERE q.session_id IN (SELECT id FROM discussion_sessions WHERE room_id=?) AND q.purpose='discuss'
           AND q.status IN ('cancelled','skipped') AND q.member_request_id IS NOT NULL AND r.answer_id IS NULL
           AND NOT EXISTS(SELECT 1 FROM member_executions e WHERE e.id=r.execution_id AND e.status='failed')
-        ORDER BY q.id""", (room_id,)):
-        result.append({"id": f"session-{row['session_id']}-request-{row['id']}", "key": f"session-{row['session_id']}-request-{row['id']}", "display_id": row["id"],
+        ORDER BY q.created_at DESC,after_message_id DESC,key DESC LIMIT ?""", (room_id, room_id, RECENT_DECISIONS)):
+        result.append({"id": row["key"], "key": row["key"], "display_id": row["id"],
             "expert": row["expert"], "question": row["question"], "status": row["status"],
             "execution_id": row["execution_id"],
-            "after_message_id": visible_anchor_before(connection, room_id, row["task_message_id"]),
+            "after_message_id": row["after_message_id"],
             "created_at": row["created_at"]})
-    return result
+    return result[::-1]
 
 
 def merge_round_groups(connection, room_id):
     """The rounds of every discussion the room held, in transcript order."""
-    groups = []
-    sessions = connection.execute("SELECT id,started_message_id,ended_message_id FROM discussion_sessions WHERE room_id=? ORDER BY id", (room_id,))
-    for session in sessions:
-        groups.extend(session_round_groups(connection, room_id, session))
-    return sorted(groups, key=lambda group: (group["start_id"], group["key"]))
-
-
-def session_round_groups(connection, room_id, session):
-    """Group request-based chat answers by their stored discussion round."""
-    rows = connection.execute("""SELECT q.round,q.status,q.member_id,m.name AS expert,m.role,r.answer_id
-        FROM session_requests q JOIN room_members m ON m.id=q.member_id
-        LEFT JOIN member_requests r ON r.id=q.member_request_id
-        WHERE q.session_id=? AND q.purpose='discuss' AND r.answer_id IS NOT NULL ORDER BY q.round,q.position,q.id""", (session["id"],)).fetchall()
+    rows = connection.execute("""SELECT q.session_id,q.round,m.name AS expert,m.role,r.answer_id,s.started_message_id,s.ended_message_id
+        FROM discussion_sessions s JOIN session_requests q ON q.session_id=s.id
+        JOIN room_members m ON m.id=q.member_id JOIN member_requests r ON r.id=q.member_request_id
+        WHERE s.room_id=? AND q.purpose='discuss' AND r.answer_id IS NOT NULL
+        ORDER BY s.id,q.round,q.position,q.id""", (room_id,)).fetchall()
     by_round = {}
     for row in rows:
-        group = by_round.setdefault(row["round"], {"number": row["round"], "speakers": [], "opinions": 0,
-            "completed": False, "host_scheduled": False})
+        group = by_round.setdefault((row["session_id"], row["round"]), {"number": row["round"], "speakers": [], "opinions": 0,
+            "session_id": row["session_id"], "start_id": row["started_message_id"] or 0,
+            "end_id": row["ended_message_id"] or None, "last_answer": 0, "host_scheduled": False})
         if row["answer_id"]:
             group["opinions"] += 1
             if row["expert"] not in group["speakers"]:
                 group["speakers"].append(row["expert"])
+        group["last_answer"] = max(group["last_answer"], row["answer_id"])
         group["host_scheduled"] = group["host_scheduled"] or row["role"] == "host"
     if not by_round:
         return []
@@ -524,19 +521,15 @@ def session_round_groups(connection, room_id, session):
         WHERE m.room_id=? AND m.status='active' AND m.role<>'host'
         AND (m.access<>'manual' OR src.source='web' OR EXISTS(SELECT 1 FROM member_registrations reg
             WHERE reg.member_id=m.id AND reg.token_hash=m.token_hash))""", (room_id,)).fetchone()[0]
-    previous_answers = 0
+    previous_answers = {}
     result = []
-    for number, group in sorted(by_round.items()):
+    for (session_id, number), group in sorted(by_round.items()):
         denominator = active_experts + int(group.pop("host_scheduled"))
         group["completed"] = denominator > 0 and group["opinions"] >= denominator
-        group["start_id"] = max(int(session["started_message_id"] or 0), previous_answers) + 1
-        previous_answers = connection.execute("""SELECT COALESCE(MAX(r.answer_id),0) FROM session_requests q
-            JOIN member_requests r ON r.id=q.member_request_id WHERE q.session_id=? AND q.purpose='discuss' AND q.round=?""",
-            (session["id"], number)).fetchone()[0]
-        result.append({**{key: group[key] for key in ("number", "speakers", "opinions", "completed", "start_id")},
-                       "session_id": session["id"], "key": f"session-{session['id']}-round-{number}",
-                       "end_id": session["ended_message_id"] or None, "participants": denominator})
-    return result
+        group["start_id"] = max(group["start_id"], previous_answers.get(session_id, 0)) + 1
+        previous_answers[session_id] = group.pop("last_answer")
+        result.append({**group, "key": f"session-{session_id}-round-{number}", "participants": denominator})
+    return sorted(result, key=lambda group: (group["start_id"], group["key"]))
 
 
 def pending_label(room, expert):
@@ -652,15 +645,29 @@ def room_revisions(connection, params):
     return {"site": site, "rooms": {row["id"]: row["revision"] for row in rows}}
 
 
+def room_progress(connection, room_id):
+    """Read live execution progress and its room revision in one snapshot, without history or credentials."""
+    row = connection.execute("""SELECT COALESCE(v.revision,0) AS revision,
+        (SELECT json_group_array(json_object('id',e.id,'member_id',e.member_id,'status',e.status,
+            'lease_until',e.lease_until,'activity',e.activity,'activity_at',e.activity_at,
+            'notes',(SELECT COUNT(*) FROM execution_notes WHERE execution_id=e.id)))
+            FROM member_executions e WHERE e.room_id=rooms.id AND e.status IN ('dispatched','started')) AS executions
+        FROM rooms LEFT JOIN room_revisions v ON v.room_id=rooms.id WHERE rooms.id=?""", (room_id,)).fetchone()
+    if row is None:
+        raise LookupError("房间不存在")
+    now = int(time.time())
+    return {"revision": row["revision"], "executions": [
+        {**execution, "stale": execution["lease_until"] <= now} for execution in json.loads(row["executions"])]}
+
+
 def list_rooms(connection, params=None):
     """Return rooms, optionally locating a single persisted creation request."""
     params = params or {}
     identifier = submission_value(params["submission_id"]) if "submission_id" in params else None
     where = "WHERE EXISTS (SELECT 1 FROM room_creations WHERE room_id=rooms.id AND submission_id=?)" if identifier else ""
     rows = connection.execute(f"""SELECT rooms.*,
-        COUNT(CASE WHEN NOT EXISTS (SELECT 1 FROM internal_task_messages t WHERE t.message_id=messages.id) THEN messages.id END) AS message_count,
-        COALESCE(MAX(CASE WHEN NOT EXISTS (SELECT 1 FROM internal_task_messages t WHERE t.message_id=messages.id) THEN messages.id END),0) AS latest_id
-        FROM rooms LEFT JOIN messages ON rooms.id=messages.room_id {where}
+        COALESCE(stats.message_count,0) AS message_count,COALESCE(stats.latest_id,0) AS latest_id
+        FROM rooms LEFT JOIN room_message_stats stats ON stats.room_id=rooms.id {where}
         GROUP BY rooms.id ORDER BY rooms.created_at, rooms.id""", (identifier,) if identifier else ())
     directory = {row["room_id"]: dict(row) for row in connection.execute("SELECT * FROM room_directory")}
     assignments = {row["room_id"]: row["folder_id"] for row in connection.execute("SELECT room_id,folder_id FROM room_folder_assignments")}
@@ -1544,7 +1551,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         parts = urlsplit(self.path).path.strip("/").split("/")
         action = (getattr(self, "payload_cache", None) or {}).get("action")
         # Timeline segments are read by the timeline page on its own schedule, so they wake no other page.
-        quiet_renewal = parts[3:4] == ["executions"] and action == "segments"
+        quiet_renewal = parts[3:4] == ["executions"] and action in ("renew", "segments")
         if (self.command == "POST" and 200 <= status < 300 and parts[:2] in (["api", "rooms"], ["api", "folders"])
                 and not quiet_renewal):
             self.server.notify_update(parts[2] if parts[:2] == ["api", "rooms"] and len(parts) > 3 else None)
@@ -1930,6 +1937,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if len(parts) < 3 or parts[:2] != ["api", "rooms"]:
             raise LookupError("地址不存在")
         room_id = parts[2]
+        if parts[3:] == ["progress"] and method == "GET":
+            return self.respond(room_progress(connection, room_id))
         self.admin_as_owner(connection, room_id)
         token = self.headers.get("X-Discussion-Token", "")
         if self.headers.get("X-Discussion-Session"):

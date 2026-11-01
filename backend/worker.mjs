@@ -80,12 +80,11 @@ const MESSAGE_QUERY = `SELECT messages.*, COALESCE(details.kind,'opinion') AS ki
     ON answered.answer_id=messages.id`;
 // Messages the owner took back leave AI reads; the page asks for them with withdrawn=include to keep them in place.
 const INCLUDE_WITHDRAWN = "include";
-const ROOM_QUERY = `SELECT rooms.*, COALESCE(room_directory.archived,0) AS archived, COUNT(messages.id) AS message_count,
-  COALESCE(MAX(messages.id),0) AS latest_id, room_folder_assignments.folder_id AS folder_id FROM rooms
+const ROOM_QUERY = `SELECT rooms.*, COALESCE(room_directory.archived,0) AS archived, COALESCE(stats.message_count,0) AS message_count,
+  COALESCE(stats.latest_id,0) AS latest_id, room_folder_assignments.folder_id AS folder_id FROM rooms
   LEFT JOIN room_directory ON rooms.id=room_directory.room_id
   LEFT JOIN room_folder_assignments ON rooms.id=room_folder_assignments.room_id
-  LEFT JOIN messages ON rooms.id=messages.room_id
-    AND NOT EXISTS (SELECT 1 FROM internal_task_messages WHERE internal_task_messages.message_id=messages.id)`;
+  LEFT JOIN room_message_stats stats ON rooms.id=stats.room_id`;
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -425,7 +424,7 @@ async function require_room(database, room_id, token = "") {
       LEFT JOIN member_registrations AS r ON r.member_id=m.id AND r.token_hash=m.token_hash WHERE m.room_id=? AND m.status<>'removed' ORDER BY m.id`, room_id),
     first("SELECT named_followup FROM session_options WHERE session_id=(SELECT MAX(id) FROM discussion_sessions WHERE room_id=?)", room_id),
     decisions_read,
-    all("SELECT decision_id,detail FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)", room_id),
+    all("SELECT decision_id,detail FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=? ORDER BY id DESC LIMIT ?)", room_id, RECENT_DECISIONS),
     all("SELECT message_id FROM scheduler_routing WHERE room_id=? AND created_at>? ORDER BY message_id", room_id, Math.floor(Date.now() / 1000) - ROUTING_VISIBLE_SECONDS),
     decisions_read.then(rows => host_arrangements(database, room_id, [...rows].reverse())),
     cancelled_turns(database, room_id),
@@ -497,95 +496,93 @@ async function visible_anchor_before(database, room_id, message_id) {
 
 /** Request-based host plans, one card per submitted batch. */
 async function session_host_arrangements(database, room_id) {
-  const result = [];
-  const sessions = (await database.prepare("SELECT id FROM discussion_sessions WHERE room_id=? ORDER BY id").bind(room_id).all()).results;
-  for (const session of sessions) {
-    const rows = (await database.prepare(`SELECT q.id,q.round,q.position,q.member_id,q.question,q.created_at,q.submission_id,
-      q.member_request_id,m.name AS expert,r.message_id AS task_message_id FROM session_requests q JOIN room_members m ON m.id=q.member_id
-      LEFT JOIN member_requests r ON r.id=q.member_request_id
-      WHERE q.session_id=? AND q.purpose='discuss' AND q.submission_id NOT LIKE 'invite:%' ORDER BY q.created_at,q.id`)
-      .bind(session.id).all()).results;
-    const submissions = new Set(rows.map(row => row.submission_id));
-    const batches = new Map();
-    for (const row of rows) {
-      const match = row.submission_id.match(/^(.*)-q\d+$/);
-      const base = match && submissions.has(match[1]) ? match[1] : row.submission_id;
-      const key = `${base}\u0000${row.created_at}`;
-      if (!batches.has(key)) batches.set(key, []);
-      batches.get(key).push(row);
-    }
-    for (const batch of batches.values()) {
-      const first = batch[0];
-      const host_task = first.task_message_id ? await database.prepare(`SELECT t.message_id FROM task_message_sources t
-        JOIN session_requests h ON h.id=t.session_request_id WHERE h.session_id=? AND h.purpose='discuss_host' AND t.message_id<?
-        ORDER BY t.message_id DESC LIMIT 1`).bind(session.id, first.task_message_id).first() : null;
-      const anchor_message = host_task?.message_id ?? first.task_message_id ?? 0;
-      result.push({ id: `session-${session.id}-plan-${first.id}`, key: `session-${session.id}-plan-${first.id}`, display_id: first.id,
-        after_message_id: await visible_anchor_before(database, room_id, anchor_message), created_at: first.created_at,
-        turns: batch.map(row => ({ expert: row.expert, question: row.question, round: row.round })) });
-    }
+  const rows = (await database.prepare(`SELECT q.id,q.session_id,q.round,q.question,q.created_at,q.submission_id,
+    m.name AS expert,r.message_id AS task_message_id FROM discussion_sessions s JOIN session_requests q ON q.session_id=s.id
+    JOIN room_members m ON m.id=q.member_id LEFT JOIN member_requests r ON r.id=q.member_request_id
+    WHERE s.room_id=? AND q.purpose='discuss' AND q.submission_id NOT LIKE 'invite:%'
+    ORDER BY s.id,q.created_at,q.id`).bind(room_id).all()).results;
+  const submissions = new Set(rows.map(row => JSON.stringify([row.session_id, row.submission_id])));
+  const batches = new Map();
+  for (const row of rows) {
+    const match = row.submission_id.match(/^(.*)-q\d+$/);
+    const base = match && submissions.has(JSON.stringify([row.session_id, match[1]])) ? match[1] : row.submission_id;
+    const key = JSON.stringify([row.session_id, base, row.created_at]);
+    if (!batches.has(key)) batches.set(key, []);
+    batches.get(key).push(row);
   }
-  return result;
+  if (!batches.size) return [];
+  const anchors = await arrangement_anchors(database, room_id, [...batches.values()].map(batch => batch[0]));
+  return [...batches.values()].map(batch => {
+    const first = batch[0];
+    return { id: `session-${first.session_id}-plan-${first.id}`, key: `session-${first.session_id}-plan-${first.id}`, display_id: first.id,
+      after_message_id: anchors.get(first.id), created_at: first.created_at,
+      turns: batch.map(row => ({ expert: row.expert, question: row.question, round: row.round })) };
+  });
+}
+
+/** Find historical plan slots in one query, restricting host-task lookup to its indexed session. */
+async function arrangement_anchors(database, room_id, plans) {
+  const values = plans.map(row => [row.id, row.session_id, row.task_message_id || 0]);
+  const rows = (await database.prepare(`WITH plans AS (
+    SELECT json_extract(value,'$[0]') AS id,json_extract(value,'$[1]') AS session_id,
+      json_extract(value,'$[2]') AS task_message_id FROM json_each(?))
+    SELECT p.id,(SELECT COALESCE(MAX(m.id),0) FROM messages m WHERE m.room_id=? AND m.id<COALESCE(
+      (SELECT t.message_id FROM task_message_sources t JOIN session_requests h ON h.id=t.session_request_id
+        WHERE t.session_id=p.session_id AND h.purpose='discuss_host' AND t.message_id<p.task_message_id
+        ORDER BY t.message_id DESC LIMIT 1),p.task_message_id)
+      AND NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=m.id)) AS anchor
+    FROM plans p`).bind(JSON.stringify(values), room_id).all()).results;
+  return new Map(rows.map(row => [row.id, row.anchor]));
 }
 
 /** Assignments that ended without an answer, anchored where their wake card first appeared. */
 async function cancelled_turns(database, room_id) {
-  const cancelled = await session_cancelled_turns(database, room_id);
-  return cancelled.sort((left, right) => String(left.created_at ?? "").localeCompare(String(right.created_at ?? ""))
-    || left.after_message_id - right.after_message_id || String(left.id).localeCompare(String(right.id))).slice(-RECENT_DECISIONS);
-}
-
-/** Only assignments that were opened, have no answer and do not already have an execution failure card. */
-async function session_cancelled_turns(database, room_id) {
-  const rows = (await database.prepare(`SELECT q.id,q.session_id,q.question,q.status,q.created_at,m.name AS expert,r.message_id AS task_message_id,r.execution_id
+  const rows = (await database.prepare(`SELECT q.id,q.session_id,q.question,q.status,q.created_at,m.name AS expert,r.execution_id,
+    'session-'||q.session_id||'-request-'||q.id AS key,
+    (SELECT COALESCE(MAX(a.id),0) FROM messages a WHERE a.room_id=? AND a.id<r.message_id
+      AND NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=a.id)) AS after_message_id
     FROM session_requests q JOIN room_members m ON m.id=q.member_id JOIN member_requests r ON r.id=q.member_request_id
     WHERE q.session_id IN (SELECT id FROM discussion_sessions WHERE room_id=?) AND q.purpose='discuss'
       AND q.status IN ('cancelled','skipped') AND q.member_request_id IS NOT NULL AND r.answer_id IS NULL
-      AND NOT EXISTS(SELECT 1 FROM member_executions e WHERE e.id=r.execution_id AND e.status='failed') ORDER BY q.id`)
-    .bind(room_id).all()).results;
-  return Promise.all(rows.map(async row => ({ id: `session-${row.session_id}-request-${row.id}`, key: `session-${row.session_id}-request-${row.id}`, display_id: row.id,
+      AND NOT EXISTS(SELECT 1 FROM member_executions e WHERE e.id=r.execution_id AND e.status='failed')
+    ORDER BY q.created_at DESC,after_message_id DESC,key DESC LIMIT ?`).bind(room_id, room_id, RECENT_DECISIONS).all()).results;
+  return rows.reverse().map(row => ({ id: row.key, key: row.key, display_id: row.id,
     expert: row.expert, question: row.question, status: row.status, created_at: row.created_at, execution_id: row.execution_id,
-    after_message_id: await visible_anchor_before(database, room_id, row.task_message_id) })));
+    after_message_id: row.after_message_id }));
 }
 
 /** All request-based rounds in transcript order. */
 async function merge_round_groups(database, room_id) {
-  const sessions = (await database.prepare("SELECT id,started_message_id,ended_message_id FROM discussion_sessions WHERE room_id=? ORDER BY id").bind(room_id).all()).results;
-  const groups = [];
-  for (const session of sessions) groups.push(...await session_round_groups(database, room_id, session));
-  return groups.sort((left, right) => left.start_id - right.start_id || left.key.localeCompare(right.key));
-}
-
-/** Group request-based chat answers by their stored discussion round. */
-async function session_round_groups(database, room_id, session) {
-  const rows = (await database.prepare(`SELECT q.round,q.status,q.member_id,m.name AS expert,m.role,r.answer_id
-    FROM session_requests q JOIN room_members m ON m.id=q.member_id LEFT JOIN member_requests r ON r.id=q.member_request_id
-    WHERE q.session_id=? AND q.purpose='discuss' AND r.answer_id IS NOT NULL ORDER BY q.round,q.position,q.id`).bind(session.id).all()).results;
+  const rows = (await database.prepare(`SELECT q.session_id,q.round,m.name AS expert,m.role,r.answer_id,s.started_message_id,s.ended_message_id
+    FROM discussion_sessions s JOIN session_requests q ON q.session_id=s.id
+    JOIN room_members m ON m.id=q.member_id JOIN member_requests r ON r.id=q.member_request_id
+    WHERE s.room_id=? AND q.purpose='discuss' AND r.answer_id IS NOT NULL
+    ORDER BY s.id,q.round,q.position,q.id`).bind(room_id).all()).results;
   const groups = new Map();
   for (const row of rows) {
-    const group = groups.get(row.round) ?? { number: row.round, speakers: [], opinions: 0, completed: false, host_scheduled: false };
+    const key = `session-${row.session_id}-round-${row.round}`;
+    const group = groups.get(key) ?? { key, session_id: row.session_id, number: row.round, speakers: [], opinions: 0,
+      start_id: row.started_message_id || 0, end_id: row.ended_message_id || null, last_answer: 0, host_scheduled: false };
     if (row.answer_id) { group.opinions++; if (!group.speakers.includes(row.expert)) group.speakers.push(row.expert); }
+    group.last_answer = Math.max(group.last_answer, row.answer_id);
     group.host_scheduled ||= row.role === 'host';
-    groups.set(row.round, group);
+    groups.set(key, group);
   }
   if (!groups.size) return [];
   const active_experts = (await database.prepare(`SELECT COUNT(*) AS count FROM room_members m LEFT JOIN member_manual_sources src ON src.member_id=m.id
     WHERE m.room_id=? AND m.status='active' AND m.role<>'host' AND (m.access<>'manual' OR src.source='web'
       OR EXISTS(SELECT 1 FROM member_registrations reg WHERE reg.member_id=m.id AND reg.token_hash=m.token_hash))`).bind(room_id).first()).count;
-  let previous_answer = 0;
+  const previous_answers = new Map();
   const result = [];
-  for (const [number, group] of [...groups].sort(([left], [right]) => left - right)) {
+  for (const group of groups.values()) {
     const denominator = active_experts + Number(group.host_scheduled);
     group.completed = denominator > 0 && group.opinions >= denominator;
-    group.start_id = Math.max(session.started_message_id || 0, previous_answer) + 1;
-    previous_answer = (await database.prepare(`SELECT COALESCE(MAX(r.answer_id),0) AS id FROM session_requests q
-      JOIN member_requests r ON r.id=q.member_request_id WHERE q.session_id=? AND q.purpose='discuss' AND q.round=?`)
-      .bind(session.id, number).first()).id;
-    const { host_scheduled, ...visible } = group;
-    result.push({ ...visible, session_id: session.id, key: `session-${session.id}-round-${number}`,
-      end_id: session.ended_message_id || null, participants: denominator });
+    group.start_id = Math.max(group.start_id, previous_answers.get(group.session_id) || 0) + 1;
+    previous_answers.set(group.session_id, group.last_answer);
+    const { host_scheduled, last_answer, ...visible } = group;
+    result.push({ ...visible, participants: denominator });
   }
-  return result;
+  return result.sort((left, right) => left.start_id - right.start_id || left.key.localeCompare(right.key));
 }
 
 /** Separate explicitly marked legacy requests without guessing unmarked text. */
@@ -1819,6 +1816,20 @@ async function room_revisions(database, params) {
   return { site, rooms: Object.fromEntries(rows.map(row => [row.id, row.revision])) };
 }
 
+/** Read only live execution progress and its room revision in one snapshot, with no history or credentials. */
+async function room_progress(database, room_id) {
+  const row = await database.prepare(`SELECT COALESCE(v.revision,0) AS revision,
+    (SELECT json_group_array(json_object('id',e.id,'member_id',e.member_id,'status',e.status,
+      'lease_until',e.lease_until,'activity',e.activity,'activity_at',e.activity_at,
+      'notes',(SELECT COUNT(*) FROM execution_notes WHERE execution_id=e.id)))
+      FROM member_executions e WHERE e.room_id=rooms.id AND e.status IN ('dispatched','started')) AS executions
+    FROM rooms LEFT JOIN room_revisions v ON v.room_id=rooms.id WHERE rooms.id=?`).bind(room_id).first();
+  if (!row) throw new HttpError(404, "房间不存在");
+  const now = Math.floor(Date.now() / 1000);
+  return { revision: row.revision, executions: JSON.parse(row.executions).map(execution => ({
+    ...execution, stale: execution.lease_until <= now })) };
+}
+
 async function query_rooms(database, params) {
   const identifier = Object.hasOwn(params, "submission_id") ? submission_value(params.submission_id) : null;
   const where = identifier ? "WHERE EXISTS (SELECT 1 FROM room_creations WHERE room_id=rooms.id AND submission_id=?)" : "";
@@ -2735,9 +2746,6 @@ async function free_conflicts(database, room_id, names) {
 async function free_recent_executions(database, room_id) {
   const rows = (await database.prepare(`SELECT e.*,
     m.name AS member,
-    (SELECT json_group_array(id) FROM member_requests WHERE execution_id=e.id) AS request_ids,
-    (SELECT MAX(answer_id) FROM member_requests WHERE execution_id=e.id) AS answer_id,
-    (SELECT MIN(message_id) FROM member_requests WHERE execution_id=e.id) AS request_message_id,
     (SELECT COUNT(*) FROM execution_notes WHERE execution_id=e.id) AS note_count,
     (SELECT denials FROM execution_denials WHERE execution_id=e.id) AS denials,${FREE_RETRY_SQL("e")},${FREE_CAPABILITY_SQL},
     (SELECT json_object('created_at',created_at) FROM late_answers WHERE execution_id=e.id) AS late_answer
@@ -2747,9 +2755,11 @@ async function free_recent_executions(database, room_id) {
   const sourced_requests = await free_request_sources(database, room_id, carried);
   return rows.map(row => {
     const sourced = sourced_requests.filter(request => request.execution_id === row.id).map(({ execution_id, ...request }) => request);
+    const answer_id = sourced.reduce((latest, request) => request.answer_id === null ? latest : Math.max(latest ?? 0, request.answer_id), null);
+    const request_message_id = sourced.reduce((first, request) => Math.min(first ?? request.message_id, request.message_id), null);
     return { ...pick(row, FREE_EXECUTION_FIELDS), member: row.member, cwd: row.cwd, changes: JSON.parse(row.changes || '[]'),
-      changes_recorded: Boolean(row.changes), request_ids: JSON.parse(row.request_ids),
-      answer_id: row.answer_id, request_message_id: row.request_message_id, requests: sourced, notes: row.note_count,
+      changes_recorded: Boolean(row.changes), request_ids: sourced.map(request => request.id),
+      answer_id, request_message_id, requests: sourced, notes: row.note_count,
       denials: JSON.parse(row.denials || "[]"), capabilities: free_reported_capabilities(row), stop_result: row.stop_result || "", late_answer: JSON.parse(row.late_answer || "null"), retry: JSON.parse(row.retry || "null") };
   });
 }
@@ -2795,7 +2805,7 @@ async function free_request_sources(database, room_id, requests) {
       FROM member_requests r LEFT JOIN session_requests q ON q.member_request_id=r.id
       LEFT JOIN task_message_sources t ON t.session_request_id=q.id WHERE r.id IN (SELECT value FROM json_each(?))`)
       .bind(JSON.stringify([...new Set(requests.map(request => request.id))])).all(),
-    room_review_plans(database, room_id),
+    room_review_plans(database, room_id, requests),
   ]);
   const rows = new Map();
   for (const row of sourced.results) if (!rows.has(row.request_id)) rows.set(row.request_id, row);
@@ -2808,9 +2818,12 @@ async function free_request_sources(database, room_id, requests) {
   }));
 }
 
-/** Every review plan of a room, read once for the requests that may belong to one. */
-async function room_review_plans(database, room_id) {
-  return (await database.prepare("SELECT * FROM review_plans WHERE room_id=?").bind(room_id).all()).results;
+/** Read only the review plans referenced by this batch of requests, regardless of room history size. */
+async function room_review_plans(database, room_id, requests) {
+  if (!requests.length) return [];
+  return (await database.prepare(`SELECT * FROM review_plans WHERE room_id=?1 AND batch_id IN (SELECT value FROM json_each(?2))
+    UNION SELECT * FROM review_plans WHERE review_batch_id IN (SELECT value FROM json_each(?2)) AND room_id=?1`)
+    .bind(room_id, JSON.stringify([...new Set(requests.map(row => row.message_id))])).all()).results;
 }
 
 /** Attach one review's provenance without exposing local paths or credentials; `plans` are the room's review plans. */
@@ -3217,11 +3230,11 @@ const SPEAKING_ORDER_BY = `${SPEAKING_RANK} IS NULL, ${SPEAKING_RANK}, role<>'ho
  */
 function free_advance_statements(database, room_id) {
   return [
-    database.prepare(`DELETE FROM free_queue WHERE room_id=? AND NOT ${FREE_QUEUE_ASKED("free_queue")}
-      AND NOT EXISTS(SELECT 1 FROM room_members m WHERE m.id=free_queue.member_id AND m.status='active')`).bind(room_id),
+    database.prepare(`DELETE FROM free_queue WHERE id IN (SELECT q.id FROM free_queue_waiting q WHERE q.room_id=?
+      AND NOT EXISTS(SELECT 1 FROM room_members m WHERE m.id=q.member_id AND m.status='active'))`).bind(room_id),
     database.prepare(`INSERT OR IGNORE INTO member_requests (room_id,member_id,message_id,chain_id,batch_id,purpose,created_by,created_at)
-      SELECT q.room_id,q.member_id,q.message_id,q.message_id,0,'ask','user',unixepoch() FROM free_queue q
-      WHERE q.room_id=? AND q.id=(SELECT MIN(x.id) FROM free_queue x WHERE x.message_id=q.message_id AND NOT ${FREE_QUEUE_ASKED("x")})
+      SELECT q.room_id,q.member_id,q.message_id,q.message_id,0,'ask','user',unixepoch() FROM free_queue_waiting q
+      WHERE q.id IN (SELECT MIN(id) FROM free_queue_waiting WHERE room_id=? GROUP BY message_id)
       AND NOT EXISTS(SELECT 1 FROM member_requests r WHERE r.message_id=q.message_id AND r.status IN ('pending','delivering'))`).bind(room_id),
   ];
 }
@@ -3236,8 +3249,10 @@ async function speaking_order(database, room) {
   const [{ results: active }, session, queued] = await Promise.all([
     database.prepare(`SELECT id,name FROM room_members WHERE room_id=? AND status='active' ORDER BY ${SPEAKING_ORDER_BY}`).bind(room.id).all(),
     latest_session(database, room.id),
-    database.prepare(`SELECT MAX(q.message_id) AS target FROM free_queue q LEFT JOIN member_requests r ON r.message_id=q.message_id
-      AND r.member_id=q.member_id WHERE q.room_id=? AND (r.id IS NULL OR r.status IN ('pending','delivering'))`).bind(room.id).first(),
+    database.prepare(`SELECT MAX(message_id) AS target FROM (
+      SELECT MAX(message_id) AS message_id FROM free_queue_waiting WHERE room_id=?
+      UNION ALL SELECT MAX(r.message_id) FROM member_requests r WHERE r.room_id=? AND r.status IN ('pending','delivering')
+      AND EXISTS(SELECT 1 FROM free_queue q WHERE q.message_id=r.message_id AND q.member_id=r.member_id))`).bind(room.id, room.id).first(),
   ]);
   const by_id = new Map(active.map((member) => [member.id, member.name]));
   let ordered = active.map((member) => member.name);
@@ -3481,7 +3496,7 @@ async function free_execution_detail(database, row) {
     FROM member_requests r LEFT JOIN session_requests q ON q.member_request_id=r.id
     LEFT JOIN task_message_sources t ON t.session_request_id=q.id WHERE r.execution_id=? ORDER BY r.id`).bind(row.id).all()).results;
   const retry = await database.prepare("SELECT attempt,retry_at,reason,stopped FROM execution_retries WHERE execution_id=?").bind(row.id).first();
-  const plans = await room_review_plans(database, row.room_id);
+  const plans = await room_review_plans(database, row.room_id, requests);
   for (const request of requests) Object.assign(request, await review_request_context(database, request, plans));
   return { ...pick(row, FREE_EXECUTION_FIELDS), member: member.name, read_until: member.read_until, requests,
     rewound_executions: await member_rewinds(database, member), retry: retry || null };
@@ -3489,8 +3504,8 @@ async function free_execution_detail(database, row) {
 
 /** The room's taken-back messages by id, so the page keeps them in place while AI readers skip them. */
 async function message_withdrawals(database, room_id) {
-  return (await database.prepare(`SELECT w.message_id,w.kind FROM message_withdrawals w JOIN messages m ON m.id=w.message_id
-    WHERE m.room_id=? ORDER BY w.message_id`).bind(room_id).all()).results;
+  return (await database.prepare(`SELECT w.message_id,w.kind FROM message_withdrawal_rooms r
+    JOIN message_withdrawals w ON w.message_id=r.message_id WHERE r.room_id=? ORDER BY r.message_id`).bind(room_id).all()).results;
 }
 
 /** One visible message of the user in a free room without an open discussion, which a retract or rewind may take back. */
@@ -3650,7 +3665,7 @@ async function free_inbox(database, room_id, token) {
       FROM member_requests r LEFT JOIN session_requests q ON q.member_request_id=r.id
       LEFT JOIN task_message_sources t ON t.session_request_id=q.id
       WHERE r.member_id=? AND r.status='pending' ORDER BY r.id`).bind(row.id).all()).results })));
-  const plans = await room_review_plans(database, room_id);
+  const plans = await room_review_plans(database, room_id, listed.flatMap(member => member.pending));
   for (const member of listed) for (const request of member.pending) Object.assign(request, await review_request_context(database, request, plans));
   const members = listed.filter(member => member.access === "runner"), observers = listed.filter(member => member.access !== "runner");
   const executions = (await database.prepare(`SELECT member_executions.*,room_members.name,${FREE_RETRY_SQL("member_executions")} FROM member_executions JOIN room_members ON room_members.id=member_id
@@ -5027,6 +5042,7 @@ async function handle_api(database, request, parts, params, bucket, setup_key = 
     throw new HttpError(404, "地址不存在");
   }
   const room_id = parts[2];
+  if (parts.length === 4 && parts[3] === "progress" && method === "GET") return respond(await room_progress(database, room_id));
   request = await admin_as_owner(database, request, room_id);
   if (parts.slice(3).join('/') === 'reviews/roster' && method === 'GET') {
     return respond(await review_roster(database, room_id, request.headers.get('X-Discussion-Token') ?? ''));

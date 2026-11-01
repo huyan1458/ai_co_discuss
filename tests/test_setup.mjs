@@ -237,7 +237,7 @@ test('install validates Python and explicit client paths before writing the pack
 });
 
 test('skill conflicts report pending configuration and preserve the edited copy', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'codiscuss-conflict-'));
+  const directory = realpathSync.native(mkdtempSync(join(tmpdir(), 'codiscuss-conflict-')));
   const home = join(directory, 'service');
   fixture_cli(directory, 'codiscuss');
   const env = { ...process.env, DISCUSS_SERVICE_HOME: home, PATH: `${directory}${delimiter}${process.env.PATH || ''}` };
@@ -302,7 +302,7 @@ for (const [answer, status] of [['', 'retained'], ['更新', 'configured']]) {
 }
 
 test('setup installs once into a skill folder shared through a linked directory or agy skills.json', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'codiscuss-shared-skills-'));
+  const directory = realpathSync.native(mkdtempSync(join(tmpdir(), 'codiscuss-shared-skills-')));
   const home = join(directory, 'service');
   const env = { ...process.env, DISCUSS_SERVICE_HOME: home, PYTHONDONTWRITEBYTECODE: '1' };
   try {

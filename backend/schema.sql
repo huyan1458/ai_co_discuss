@@ -315,6 +315,11 @@ CREATE INDEX IF NOT EXISTS execution_segments_room ON execution_segments(room_id
 -- One live execution per member: different members may run in parallel, one session never twice.
 CREATE UNIQUE INDEX IF NOT EXISTS one_member_execution ON member_executions(member_id)
     WHERE status IN ('dispatched','started');
+CREATE INDEX IF NOT EXISTS member_executions_member ON member_executions(member_id);
+-- The client-id uniqueness index cannot satisfy ORDER BY id LIMIT on a room's history.
+CREATE INDEX IF NOT EXISTS member_executions_room_recent ON member_executions(room_id,id);
+CREATE INDEX IF NOT EXISTS member_executions_room_changes ON member_executions(room_id,id) WHERE changes<>'';
+CREATE INDEX IF NOT EXISTS member_executions_room_live ON member_executions(room_id,id) WHERE status IN ('dispatched','started');
 CREATE TABLE IF NOT EXISTS member_requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
@@ -332,6 +337,10 @@ CREATE TABLE IF NOT EXISTS member_requests (
     UNIQUE(message_id,member_id)
 );
 CREATE INDEX IF NOT EXISTS member_requests_open ON member_requests(member_id,status);
+CREATE INDEX IF NOT EXISTS member_requests_execution ON member_requests(execution_id);
+CREATE INDEX IF NOT EXISTS member_requests_room ON member_requests(room_id);
+CREATE INDEX IF NOT EXISTS member_requests_room_status ON member_requests(room_id,status);
+CREATE INDEX IF NOT EXISTS member_requests_batch ON member_requests(batch_id,status);
 -- One durable disposition per @everyone message; also prevents a host fallback from being routed again after restart.
 -- The original group request may be deleted for a sequential queue, so request_id is a receipt, not a foreign key.
 CREATE TABLE IF NOT EXISTS group_routes (
@@ -413,6 +422,23 @@ CREATE TABLE IF NOT EXISTS message_withdrawals (
     kind TEXT NOT NULL CHECK(kind IN ('retracted','rewound')),
     created_at INTEGER NOT NULL
 );
+-- An indexed room lookup without adding a room_id column that would make existing message joins ambiguous.
+CREATE TABLE IF NOT EXISTS message_withdrawal_rooms (
+    message_id INTEGER PRIMARY KEY REFERENCES message_withdrawals(message_id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS message_withdrawal_rooms_room ON message_withdrawal_rooms(room_id,message_id);
+INSERT INTO message_withdrawal_rooms(message_id,room_id)
+    SELECT w.message_id,m.room_id FROM message_withdrawals w JOIN messages m ON m.id=w.message_id
+    WHERE NOT EXISTS(SELECT 1 FROM message_withdrawal_rooms r WHERE r.message_id=w.message_id);
+CREATE TRIGGER IF NOT EXISTS withdrawal_room_insert AFTER INSERT ON message_withdrawals
+BEGIN
+    INSERT INTO message_withdrawal_rooms(message_id,room_id) SELECT NEW.message_id,room_id FROM messages WHERE id=NEW.message_id;
+END;
+CREATE TRIGGER IF NOT EXISTS withdrawal_room_move AFTER UPDATE OF room_id ON messages
+BEGIN
+    UPDATE message_withdrawal_rooms SET room_id=NEW.room_id WHERE message_id=NEW.id;
+END;
 -- Each rewind and, per member id, the executions it took back (JSON {member id: [execution ids]}): before the member's next
 -- execution the runner cuts its session before the earliest of them it finds. Not part of backups, since executions are not.
 CREATE TABLE IF NOT EXISTS room_rewinds (
@@ -455,6 +481,8 @@ CREATE TABLE IF NOT EXISTS member_recommendations (
     status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','waiting','adopted')),
     mode TEXT NOT NULL DEFAULT ''
 );
+CREATE INDEX IF NOT EXISTS member_recommendations_room ON member_recommendations(room_id,status);
+CREATE INDEX IF NOT EXISTS member_recommendations_recent ON member_recommendations(room_id,message_id);
 -- Ordinary members can suggest a response without creating work or spending a chain budget.
 CREATE TABLE IF NOT EXISTS member_suggestions (
     message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
@@ -478,6 +506,57 @@ CREATE TABLE IF NOT EXISTS free_queue (
     message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
     member_id INTEGER NOT NULL REFERENCES room_members(id) ON DELETE CASCADE
 );
+CREATE INDEX IF NOT EXISTS free_queue_room ON free_queue(room_id,id);
+CREATE INDEX IF NOT EXISTS free_queue_message ON free_queue(message_id,id);
+-- Only not-yet-requested queue rows participate in advancement. Historical rows remain in free_queue.
+CREATE TABLE IF NOT EXISTS free_queue_waiting (
+    id INTEGER PRIMARY KEY REFERENCES free_queue(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    message_id INTEGER NOT NULL,
+    member_id INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS free_queue_waiting_room ON free_queue_waiting(room_id,message_id,id);
+CREATE INDEX IF NOT EXISTS free_queue_waiting_message ON free_queue_waiting(message_id,member_id);
+INSERT INTO free_queue_waiting(id,room_id,message_id,member_id)
+    SELECT q.id,q.room_id,q.message_id,q.member_id FROM free_queue q
+    WHERE NOT EXISTS(SELECT 1 FROM member_requests r WHERE r.message_id=q.message_id AND r.member_id=q.member_id)
+      AND NOT EXISTS(SELECT 1 FROM free_queue_waiting w WHERE w.id=q.id);
+CREATE TRIGGER IF NOT EXISTS queue_waiting_insert AFTER INSERT ON free_queue
+BEGIN
+    INSERT INTO free_queue_waiting(id,room_id,message_id,member_id)
+        SELECT NEW.id,NEW.room_id,NEW.message_id,NEW.member_id
+        WHERE NOT EXISTS(SELECT 1 FROM member_requests WHERE message_id=NEW.message_id AND member_id=NEW.member_id);
+END;
+CREATE TRIGGER IF NOT EXISTS queue_waiting_move AFTER UPDATE OF room_id,message_id,member_id ON free_queue
+BEGIN
+    DELETE FROM free_queue_waiting WHERE id=OLD.id;
+    INSERT INTO free_queue_waiting(id,room_id,message_id,member_id)
+        SELECT NEW.id,NEW.room_id,NEW.message_id,NEW.member_id
+        WHERE NOT EXISTS(SELECT 1 FROM member_requests WHERE message_id=NEW.message_id AND member_id=NEW.member_id);
+END;
+CREATE TRIGGER IF NOT EXISTS queue_waiting_requested AFTER INSERT ON member_requests
+BEGIN
+    DELETE FROM free_queue_waiting WHERE message_id=NEW.message_id AND member_id=NEW.member_id;
+END;
+CREATE TRIGGER IF NOT EXISTS queue_waiting_request_deleted AFTER DELETE ON member_requests
+BEGIN
+    INSERT INTO free_queue_waiting(id,room_id,message_id,member_id)
+        SELECT q.id,q.room_id,q.message_id,q.member_id FROM free_queue q
+        WHERE q.message_id=OLD.message_id AND q.member_id=OLD.member_id
+          AND NOT EXISTS(SELECT 1 FROM member_requests WHERE message_id=q.message_id AND member_id=q.member_id)
+          AND NOT EXISTS(SELECT 1 FROM free_queue_waiting WHERE id=q.id);
+END;
+CREATE TRIGGER IF NOT EXISTS queue_waiting_request_moved AFTER UPDATE OF message_id,member_id ON member_requests
+BEGIN
+    DELETE FROM free_queue_waiting WHERE message_id=NEW.message_id AND member_id=NEW.member_id;
+    INSERT INTO free_queue_waiting(id,room_id,message_id,member_id)
+        SELECT q.id,q.room_id,q.message_id,q.member_id FROM free_queue q
+        WHERE q.message_id=OLD.message_id AND q.member_id=OLD.member_id
+          AND NOT EXISTS(SELECT 1 FROM member_requests WHERE message_id=q.message_id AND member_id=q.member_id)
+          AND NOT EXISTS(SELECT 1 FROM free_queue_waiting WHERE id=q.id);
+END;
+CREATE INDEX IF NOT EXISTS free_batches_chain ON free_batches(room_id,chain_id);
+CREATE INDEX IF NOT EXISTS free_batches_unsettled ON free_batches(room_id,batch_id) WHERE settled=0;
 -- The owner's default speaking order (JSON list of member ids); members it lacks follow, the host first, then by joining order.
 CREATE TABLE IF NOT EXISTS speaking_orders (
     room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
@@ -526,6 +605,7 @@ CREATE TABLE IF NOT EXISTS discussion_sessions (
     created_at TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS one_open_session ON discussion_sessions(room_id) WHERE status IN ('active','paused');
+CREATE INDEX IF NOT EXISTS discussion_sessions_room ON discussion_sessions(room_id);
 -- Historical conclusion snapshots are written by the application and remain readable across later discussions.
 CREATE TABLE IF NOT EXISTS discussion_conclusions (
     session_id INTEGER PRIMARY KEY REFERENCES discussion_sessions(id) ON DELETE CASCADE,
@@ -594,6 +674,7 @@ CREATE TABLE IF NOT EXISTS session_requests (
     UNIQUE(session_id,submission_id)
 );
 CREATE INDEX IF NOT EXISTS session_requests_queue ON session_requests(session_id,status,round,position,id);
+CREATE INDEX IF NOT EXISTS session_requests_rounds ON session_requests(session_id,round,position,id) WHERE purpose='discuss';
 CREATE UNIQUE INDEX IF NOT EXISTS one_open_session_request ON session_requests(session_id)
     WHERE status='open' AND purpose='discuss';
 CREATE TABLE IF NOT EXISTS task_message_sources (
@@ -625,9 +706,116 @@ CREATE TABLE IF NOT EXISTS review_plans (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS review_advance_submission ON review_plans(room_id,advance_submission)
     WHERE advance_submission<>'';
-CREATE VIEW IF NOT EXISTS internal_task_messages AS
+-- UNION ALL (the two sources never share a message) lets SQLite push a message_id lookup into each indexed arm;
+-- plain UNION materializes both tables on every lookup. Recreated on each schema run so existing databases pick it up.
+DROP VIEW IF EXISTS internal_task_messages;
+CREATE VIEW internal_task_messages AS
     SELECT message_id FROM task_message_sources
-    UNION SELECT review_batch_id AS message_id FROM review_plans WHERE review_batch_id IS NOT NULL;
+    UNION ALL SELECT review_batch_id AS message_id FROM review_plans WHERE review_batch_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS review_plans_batch_message ON review_plans(review_batch_id);
+
+-- Cached directory aggregates: backfill existing rooms once, then maintain them in the same write transaction.
+-- Withdrawal keeps a transcript card, so it does not change these counts. Internal task/review messages do.
+CREATE TABLE IF NOT EXISTS room_message_stats (
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+    message_count INTEGER NOT NULL DEFAULT 0,
+    latest_id INTEGER NOT NULL DEFAULT 0
+);
+INSERT INTO room_message_stats(room_id,message_count,latest_id)
+    SELECT r.id,COUNT(m.id),COALESCE(MAX(m.id),0) FROM rooms r
+    LEFT JOIN messages m ON m.room_id=r.id
+        AND NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=m.id)
+    WHERE NOT EXISTS(SELECT 1 FROM room_message_stats stats WHERE stats.room_id=r.id) GROUP BY r.id;
+CREATE TRIGGER IF NOT EXISTS message_stats_room AFTER INSERT ON rooms
+BEGIN
+    INSERT INTO room_message_stats(room_id) VALUES(NEW.id);
+END;
+CREATE TRIGGER IF NOT EXISTS message_stats_insert AFTER INSERT ON messages
+WHEN NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=NEW.id)
+BEGIN
+    UPDATE room_message_stats SET message_count=message_count+1,latest_id=MAX(latest_id,NEW.id)
+        WHERE room_id=NEW.room_id;
+END;
+CREATE TRIGGER IF NOT EXISTS message_stats_delete BEFORE DELETE ON messages
+WHEN NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=OLD.id)
+BEGIN
+    UPDATE room_message_stats SET message_count=message_count-1,
+        latest_id=CASE WHEN latest_id=OLD.id THEN (SELECT COALESCE(MAX(m.id),0) FROM messages m
+            WHERE m.room_id=room_message_stats.room_id AND m.id<>OLD.id AND NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=m.id)) ELSE latest_id END
+        WHERE room_id=OLD.room_id;
+END;
+CREATE TRIGGER IF NOT EXISTS message_stats_move_before BEFORE UPDATE OF room_id,id ON messages
+WHEN NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=OLD.id)
+BEGIN
+    UPDATE room_message_stats SET message_count=message_count-1,
+        latest_id=CASE WHEN latest_id=OLD.id THEN (SELECT COALESCE(MAX(m.id),0) FROM messages m
+            WHERE m.room_id=room_message_stats.room_id AND m.id<>OLD.id AND NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=m.id)) ELSE latest_id END
+        WHERE room_id=OLD.room_id;
+END;
+CREATE TRIGGER IF NOT EXISTS message_stats_move_after AFTER UPDATE OF room_id,id ON messages
+WHEN NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=NEW.id)
+BEGIN
+    UPDATE room_message_stats SET message_count=message_count+1,latest_id=MAX(latest_id,NEW.id)
+        WHERE room_id=NEW.room_id;
+END;
+CREATE TRIGGER IF NOT EXISTS message_stats_task_insert AFTER INSERT ON task_message_sources
+WHEN EXISTS(SELECT 1 FROM messages WHERE id=NEW.message_id) AND NOT EXISTS(SELECT 1 FROM review_plans WHERE review_batch_id=NEW.message_id)
+BEGIN
+    UPDATE room_message_stats SET message_count=message_count-1,
+        latest_id=CASE WHEN latest_id=NEW.message_id THEN (SELECT COALESCE(MAX(m.id),0) FROM messages m
+            WHERE m.room_id=room_message_stats.room_id AND m.id<>NEW.message_id AND NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=m.id)) ELSE latest_id END
+        WHERE room_id=(SELECT room_id FROM messages WHERE id=NEW.message_id);
+END;
+CREATE TRIGGER IF NOT EXISTS message_stats_task_delete AFTER DELETE ON task_message_sources
+WHEN EXISTS(SELECT 1 FROM messages WHERE id=OLD.message_id) AND NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=OLD.message_id)
+BEGIN
+    UPDATE room_message_stats SET message_count=message_count+1,latest_id=MAX(latest_id,OLD.message_id)
+        WHERE room_id=(SELECT room_id FROM messages WHERE id=OLD.message_id);
+END;
+CREATE TRIGGER IF NOT EXISTS message_stats_task_update_old AFTER UPDATE OF message_id ON task_message_sources
+WHEN OLD.message_id IS NOT NEW.message_id AND EXISTS(SELECT 1 FROM messages WHERE id=OLD.message_id) AND NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=OLD.message_id)
+BEGIN
+    UPDATE room_message_stats SET message_count=message_count+1,latest_id=MAX(latest_id,OLD.message_id)
+        WHERE room_id=(SELECT room_id FROM messages WHERE id=OLD.message_id);
+END;
+CREATE TRIGGER IF NOT EXISTS message_stats_task_update_new AFTER UPDATE OF message_id ON task_message_sources
+WHEN OLD.message_id IS NOT NEW.message_id AND EXISTS(SELECT 1 FROM messages WHERE id=NEW.message_id) AND NOT EXISTS(SELECT 1 FROM review_plans WHERE review_batch_id=NEW.message_id)
+BEGIN
+    UPDATE room_message_stats SET message_count=message_count-1,
+        latest_id=CASE WHEN latest_id=NEW.message_id THEN (SELECT COALESCE(MAX(m.id),0) FROM messages m
+            WHERE m.room_id=room_message_stats.room_id AND m.id<>NEW.message_id AND NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=m.id)) ELSE latest_id END
+        WHERE room_id=(SELECT room_id FROM messages WHERE id=NEW.message_id);
+END;
+CREATE TRIGGER IF NOT EXISTS message_stats_review_insert AFTER INSERT ON review_plans
+WHEN EXISTS(SELECT 1 FROM messages WHERE id=NEW.review_batch_id) AND NOT EXISTS(SELECT 1 FROM task_message_sources WHERE message_id=NEW.review_batch_id)
+    AND (SELECT COUNT(*) FROM review_plans WHERE review_batch_id=NEW.review_batch_id)=1
+BEGIN
+    UPDATE room_message_stats SET message_count=message_count-1,
+        latest_id=CASE WHEN latest_id=NEW.review_batch_id THEN (SELECT COALESCE(MAX(m.id),0) FROM messages m
+            WHERE m.room_id=room_message_stats.room_id AND m.id<>NEW.review_batch_id AND NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=m.id)) ELSE latest_id END
+        WHERE room_id=(SELECT room_id FROM messages WHERE id=NEW.review_batch_id);
+END;
+CREATE TRIGGER IF NOT EXISTS message_stats_review_delete AFTER DELETE ON review_plans
+WHEN EXISTS(SELECT 1 FROM messages WHERE id=OLD.review_batch_id) AND NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=OLD.review_batch_id)
+BEGIN
+    UPDATE room_message_stats SET message_count=message_count+1,latest_id=MAX(latest_id,OLD.review_batch_id)
+        WHERE room_id=(SELECT room_id FROM messages WHERE id=OLD.review_batch_id);
+END;
+CREATE TRIGGER IF NOT EXISTS message_stats_review_update_old AFTER UPDATE OF review_batch_id ON review_plans
+WHEN OLD.review_batch_id IS NOT NEW.review_batch_id AND EXISTS(SELECT 1 FROM messages WHERE id=OLD.review_batch_id) AND NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=OLD.review_batch_id)
+BEGIN
+    UPDATE room_message_stats SET message_count=message_count+1,latest_id=MAX(latest_id,OLD.review_batch_id)
+        WHERE room_id=(SELECT room_id FROM messages WHERE id=OLD.review_batch_id);
+END;
+CREATE TRIGGER IF NOT EXISTS message_stats_review_update_new AFTER UPDATE OF review_batch_id ON review_plans
+WHEN OLD.review_batch_id IS NOT NEW.review_batch_id AND EXISTS(SELECT 1 FROM messages WHERE id=NEW.review_batch_id) AND NOT EXISTS(SELECT 1 FROM task_message_sources WHERE message_id=NEW.review_batch_id)
+    AND (SELECT COUNT(*) FROM review_plans WHERE review_batch_id=NEW.review_batch_id)=1
+BEGIN
+    UPDATE room_message_stats SET message_count=message_count-1,
+        latest_id=CASE WHEN latest_id=NEW.review_batch_id THEN (SELECT COALESCE(MAX(m.id),0) FROM messages m
+            WHERE m.room_id=room_message_stats.room_id AND m.id<>NEW.review_batch_id AND NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=m.id)) ELSE latest_id END
+        WHERE room_id=(SELECT room_id FROM messages WHERE id=NEW.review_batch_id);
+END;
 
 -- Runtime idempotency receipts for converting one host interjection to an ordinary request.
 CREATE TABLE IF NOT EXISTS session_ask_submissions (
@@ -779,6 +967,39 @@ END;
 DROP TRIGGER IF EXISTS revision_execution_status;
 CREATE TRIGGER revision_execution_status AFTER UPDATE OF status ON member_executions
 WHEN OLD.status IS NOT NEW.status
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+-- Non-progress execution reports must invalidate full views even without SSE. Renewals/notes stay lightweight.
+CREATE TRIGGER IF NOT EXISTS revision_execution_report AFTER UPDATE OF changes,result,session_id ON member_executions
+WHEN OLD.changes IS NOT NEW.changes OR OLD.result IS NOT NEW.result OR OLD.session_id IS NOT NEW.session_id
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+CREATE TRIGGER IF NOT EXISTS revision_capability_insert AFTER INSERT ON execution_capabilities
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+CREATE TRIGGER IF NOT EXISTS revision_capability_update AFTER UPDATE ON execution_capabilities
+WHEN OLD.stoppable IS NOT NEW.stoppable OR OLD.progress IS NOT NEW.progress OR OLD.stop_result IS NOT NEW.stop_result
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+CREATE TRIGGER IF NOT EXISTS revision_denials_insert AFTER INSERT ON execution_denials
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+CREATE TRIGGER IF NOT EXISTS revision_late_answer AFTER INSERT ON late_answers
 BEGIN
     UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
     INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)

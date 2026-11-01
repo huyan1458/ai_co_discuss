@@ -355,7 +355,7 @@ function update_fixture() {
     static CLOSED = 2;
     constructor(url) { this.url = url; this.listeners = new Map(); sources.push(this); }
     addEventListener(name, callback) { this.listeners.set(name, callback); }
-    emit(name) { this.listeners.get(name)?.(); }
+    emit(name, data) { this.listeners.get(name)?.({ data: JSON.stringify(data || {}) }); }
     close() { this.closed = true; }
   };
   context.setTimeout = (callback, delay) => { timers.set(++timer_id, { callback, delay }); return timer_id; };
@@ -452,6 +452,60 @@ test("push defers during a directory drag and failed refreshes can recover", asy
   f.sources[0].emit("change");
   await f.run(100);
   assert.deepEqual(f.reads, ["recovered"]);
+});
+
+test("unchanged active rooms read only progress; SSE for other rooms only refreshes the directory", async () => {
+  const f = update_fixture(), state = f.context.test_state;
+  state.room = { id: 'current', free: { members: [{ execution: { id: 7, status: 'started' } }],
+    executions: [{ id: 7, status: 'started' }] } };
+  f.context.render_room = () => {};
+  f.context.refresh_room = async options => f.reads.push(options.room);
+  const paths = [];
+  let site = 10, revision = 2;
+  f.context.request_json = async path => {
+    paths.push(path);
+    return path.includes('/progress') ? { revision, executions: [{ id: 7, status: 'started', activity_at: 99, notes: 3 }] }
+      : { site, rooms: { current: revision } };
+  };
+  f.context.start_live_updates();
+  await f.run(100);
+  vm.runInContext('live_updates.refreshed_at = Date.now(); live_updates.revisions = "10:current=2";', f.context);
+  const previous_room = state.room;
+  await f.context.poll_live_updates();
+  assert.deepEqual(paths, ['/api/revisions?rooms=current', '/api/rooms/current/progress']);
+  assert.deepEqual(f.reads, [true]);
+  assert.notEqual(state.room, previous_room, 'the shallow Vue snapshot observes a new room reference');
+  assert.equal(state.room.free.members[0].execution.notes, 3);
+  assert.equal(state.room.free.executions[0].activity_at, 99);
+  f.sources[0].readyState = 2;
+  f.sources[0].emit('error');
+  await f.context.poll_live_updates();
+  assert.equal(f.sources.length, 2, 'a 204/closed SSE stream is retried');
+  assert.deepEqual(f.reads, [true], 'retrying unavailable SSE still uses revisions and lightweight progress');
+  f.sources[1].emit('change', { rooms: ['other'] });
+  await f.run(100);
+  assert.deepEqual(f.reads, [true, false], 'only the directory changed');
+  f.sources[1].emit('change', { rooms: ['current'] });
+  await f.run(100);
+  assert.deepEqual(f.reads, [true, false, true]);
+});
+
+test("progress responses cannot overwrite navigation or a newer room revision", async () => {
+  const f = update_fixture(), state = f.context.test_state;
+  state.room = { id: 'old', free: { members: [], executions: [] } };
+  f.context.start_live_updates();
+  await f.run(100);
+  let finish;
+  f.context.request_json = () => new Promise(resolve => { finish = resolve; });
+  const pending = f.context.refresh_live_progress('old', 2);
+  state.room = { id: 'next' };
+  finish({ revision: 2, executions: [] });
+  await pending;
+  assert.equal(state.room.id, 'next');
+  f.context.request_json = async () => ({ revision: 3, executions: [] });
+  await f.context.refresh_live_progress('next', 2);
+  await f.run(100);
+  assert.deepEqual(f.reads, ['old', 'next'], 'a changed revision reloads the snapshot');
 });
 
 test("a disconnected page reads in full on every poll and reopens a stream the browser closed", async () => {

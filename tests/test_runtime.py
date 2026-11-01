@@ -16,6 +16,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from backend import server as server_module
+from backend import free_room
 from backend.server import DiscussionServer, init_database
 
 
@@ -114,6 +115,23 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(self.request(self.path + "/runtime", token=self.owner)[0], 404)
             self.assertEqual(self.request(self.path + "/events", token=self.owner)[0], 404)
             self.assertEqual(self.request(self.path + "/events/1", {"action": "view"}, self.owner)[0], 400)
+
+    def test_live_progress_does_not_load_history_or_change_revision(self):
+        """Renewal progress has the same lightweight public shape as Worker, without credentials or answer text."""
+        self.start_session()
+        execution = self.reserve()[1]
+        status, before = self.request(self.path + "/progress")
+        self.assertEqual(status, 200)
+        self.assertEqual(before["executions"][0]["id"], execution["id"])
+        self.assertEqual(self.execution_action(execution, {"action": "renew", "activity": "command",
+            "activity_at": int(time.time()), "notes": [{"seq": 1, "text": "过程说明"} ]})[0], 200)
+        after = self.request(self.path + "/progress")[1]
+        self.assertEqual(after["revision"], before["revision"])
+        self.assertEqual(after["executions"][0]["notes"], 1)
+        self.assertEqual(after["executions"][0]["activity"], "command")
+        self.assertEqual(set(after["executions"][0]), {
+            "id", "member_id", "status", "lease_until", "activity", "activity_at", "notes", "stale"})
+        self.assertEqual(self.request("/api/rooms/missing/progress")[0], 404)
 
     def test_schema_reinitialization_preserves_session_and_member_execution(self):
         """Reinitializing the current schema preserves active session requests and execution leases."""
@@ -406,6 +424,36 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual([group["participants"] for group in groups], [1, 1])
         self.assertLess(groups[0]["end_id"], ordinary)
         self.assertLess(groups[1]["end_id"], ordinary)
+
+    def test_queue_backfill_keeps_history_and_request_deletion_restores_only_unasked_work(self):
+        """Old queues resume once; deleting a request or rolling back never loses the remaining speakers."""
+        self.invite("Claude")
+        self.invite("Gemini")
+        self.request(self.path + "/messages", {"author": "用户", "text": "依次回答", "to": ["Codex", "Claude", "Gemini"],
+            "sequential": True, "submission_id": uuid.uuid4().hex}, self.owner)
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute("UPDATE member_requests SET status='completed' WHERE room_id=?", (self.room,))
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'queue_waiting_%'").fetchall():
+                connection.execute(f"DROP TRIGGER {row['name']}")
+            connection.execute("DROP TABLE free_queue_waiting")
+            connection.executescript(server_module.SCHEMA)
+            connection.executescript(server_module.SCHEMA)
+            free_room.advance_queues(connection, self.room)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM free_queue").fetchone()[0], 3)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM free_queue_waiting").fetchone()[0], 1)
+            current = connection.execute("SELECT id,member_id FROM member_requests WHERE status='pending'").fetchone()
+            connection.execute("DELETE FROM member_requests WHERE id=?", (current["id"],))
+            free_room.advance_queues(connection, self.room)
+            self.assertEqual([row[0] for row in connection.execute("SELECT member_id FROM member_requests WHERE status='pending'")], [current["member_id"]])
+            connection.execute("SAVEPOINT queue_rollback")
+            connection.execute("DELETE FROM member_requests WHERE status='pending'")
+            connection.execute("ROLLBACK TO queue_rollback")
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM free_queue_waiting").fetchone()[0], 1)
+        order = self.request(self.path)[1]["speaking_order"]
+        self.assertEqual([(item["name"], item["state"]) for item in order["items"]],
+                         [("Codex", "done"), ("Claude", "speaking"), ("Gemini", "queued")])
 
     def test_cancelled_turn_cards_only_include_dispatched_nonfailed_requests(self):
         """Queued rows stay hidden; dispatched cancellations remain until their execution failed."""

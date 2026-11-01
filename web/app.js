@@ -3372,7 +3372,7 @@ async function flush_live_refresh() {
   }
   finally {
     live_updates.running = false;
-    if (live_updates.dirty) queue_live_refresh();
+    if (live_updates.dirty) queue_live_refresh(false);
   }
 }
 
@@ -3387,27 +3387,51 @@ function arm_update_poll() {
 }
 
 /**
- * A timed poll first reads the site and room revisions: the room is read in full only when it changed, an AI is working
- * in it (its progress is not a revision), or the safety interval passed; a change elsewhere refreshes just the room list.
+ * Polls check revisions before loading history; unchanged working rooms read only live progress.
+ * A change elsewhere refreshes just the room list. The safety interval still catches missed invalidations.
  * A site without revisions is read in full as before.
  */
 async function poll_live_updates() {
-  if (!live_updates.source && typeof EventSource !== "undefined") return reconnect_live_updates();
+  if (!live_updates.source && typeof EventSource !== "undefined") start_live_updates({ refresh: false });
   const room_id = state.room?.id || "";
   const working = (state.room?.free?.members || []).some((member) => WORKING_STATUSES.includes(member.execution?.status));
-  if (!state.connected || working || Date.now() - live_updates.refreshed_at >= SAFETY_REFRESH_MS) return queue_live_refresh();
+  if (!state.connected || Date.now() - live_updates.refreshed_at >= SAFETY_REFRESH_MS) return queue_live_refresh();
   let revisions;
   try { revisions = await request_json(`/api/revisions?rooms=${encodeURIComponent(room_id)}`); }
   catch { return queue_live_refresh(); }
   const [site, room] = live_updates.revisions.split(":");
   const next_room = `${room_id}=${revisions.rooms?.[room_id] ?? ""}`;
-  if (`${revisions.site}` === site && next_room === room) return;
+  if (`${revisions.site}` === site && next_room === room) {
+    if (working) await refresh_live_progress(room_id, revisions.rooms[room_id]);
+    return;
+  }
   live_updates.revisions = `${revisions.site}:${next_room}`;
   queue_live_refresh(next_room !== room);
 }
 
+/** Merge progress only into matching executions; a concurrent state change or navigation requires a fresh snapshot. */
+async function refresh_live_progress(room_id, revision) {
+  const version = state.refresh_version;
+  let progress;
+  try { progress = await request_json(`/api/rooms/${room_id}/progress`); }
+  catch { return queue_live_refresh(); }
+  if (state.room?.id !== room_id || state.refresh_version !== version) return;
+  if (progress.revision !== revision) return queue_live_refresh();
+  const members = state.room.free.members;
+  const live = members.map(member => member.execution).filter(execution => WORKING_STATUSES.includes(execution?.status));
+  if (live.length !== progress.executions.length || live.some(execution =>
+    !progress.executions.some(next => next.id === execution.id && next.status === execution.status))) return queue_live_refresh();
+  const updates = new Map(progress.executions.map(execution => [execution.id, execution]));
+  const merge = execution => updates.has(execution?.id) ? { ...execution, ...updates.get(execution.id) } : execution;
+  state.room = { ...state.room, free: { ...state.room.free,
+    members: members.map(member => ({ ...member, execution: merge(member.execution) })),
+    executions: (state.room.free.executions || []).map(merge) } };
+  cache_room_entry(room_views, room_id, state.room);
+  publish_view();
+}
+
 /** Subscribe once per visible page; every connection fetches changes missed while disconnected. */
-function start_live_updates() {
+function start_live_updates({ refresh = true } = {}) {
   if (document.hidden) return;
   live_updates.enabled = true;
   if (!live_updates.source && typeof EventSource !== "undefined") {
@@ -3418,8 +3442,14 @@ function start_live_updates() {
       live_updates.connected = true;
       arm_update_poll();
     });
-    for (const name of ["ready", "change"]) source.addEventListener(name, () => {
+    source.addEventListener("ready", () => {
       if (live_updates.source === source) queue_live_refresh();
+    });
+    source.addEventListener("change", event => {
+      if (live_updates.source !== source) return;
+      let rooms;
+      try { rooms = JSON.parse(event?.data || "{}").rooms; } catch { /* Old or global notifications invalidate everything. */ }
+      queue_live_refresh(!Array.isArray(rooms) || !rooms.length || rooms.includes(state.room?.id));
     });
     source.addEventListener("error", () => {
       if (live_updates.source !== source) return;
@@ -3431,7 +3461,7 @@ function start_live_updates() {
     });
   }
   arm_update_poll();
-  queue_live_refresh();
+  if (refresh) queue_live_refresh();
 }
 
 /** Reopen the update stream and read the site now; used by the footer retry and when the stream was closed. */

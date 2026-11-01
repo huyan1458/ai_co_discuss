@@ -41,7 +41,7 @@ async function worker_fixture(test_case) {
   const sql = new DatabaseSync(':memory:');
   sql.exec(await readFile(join(PROJECT_ROOT, 'backend', 'schema.sql'), 'utf8'));
   test_case.after(() => sql.close());
-  const fixture = { sql, before_batch: null, objects: new Map() };
+  const fixture = { sql, before_batch: null, objects: new Map(), queries: [] };
   fixture.bucket = {
     put: async (key, bytes) => { fixture.objects.set(key, new Uint8Array(bytes)); },
     get: async key => fixture.objects.has(key) ? { body: new Response(fixture.objects.get(key)).body } : null,
@@ -50,10 +50,10 @@ async function worker_fixture(test_case) {
   };
   function prepare(query, values = []) {
     const statement = sql.prepare(query);
-    const execute = () => ({ results: statement.all(...values), meta: sql.prepare('SELECT changes() AS changes').get() });
+    const execute = () => { fixture.queries.push(query); return { results: statement.all(...values), meta: sql.prepare('SELECT changes() AS changes').get() }; };
     return { bind: (...args) => prepare(query, args), execute,
       all: async () => execute(), run: async () => execute(),
-      first: async column => { const row = statement.get(...values); return column ? row?.[column] ?? null : row ?? null; } };
+      first: async column => { fixture.queries.push(query); const row = statement.get(...values); return column ? row?.[column] ?? null : row ?? null; } };
   }
   const database = { prepare, batch: async statements => {
     const mutation = fixture.before_batch;
@@ -388,7 +388,7 @@ test('Worker version 2 backups preserve session history under remapped, inert id
   const imported_requests = f.sql.prepare('SELECT * FROM session_requests WHERE session_id=? ORDER BY id').all(session_copy_id);
   assert.deepEqual(imported_requests.map(row => row.status), active_source_requests.map(row => ['open', 'queued'].includes(row.status) ? 'cancelled' : row.status));
   assert.ok(imported_requests.every(row => row.id > Math.max(0, ...backup.tables.session_requests.map(item => item.id))));
-  const imported_member_requests = f.sql.prepare('SELECT * FROM member_requests WHERE room_id=?').all('sessioncopy');
+  const imported_member_requests = f.sql.prepare('SELECT * FROM member_requests WHERE room_id=? ORDER BY id').all('sessioncopy');
   assert.ok(imported_member_requests.every(row => row.execution_id == null));
   assert.deepEqual(imported_member_requests.map(row => row.status), backup.tables.member_requests.map(row => ['pending', 'delivering'].includes(row.status) ? 'cancelled' : row.status));
   assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM member_executions WHERE room_id=?').get('sessioncopy').count, 0,
@@ -1660,6 +1660,83 @@ async function free_worker_room(f, extra = []) {
   return { owner, claude, path, room: created.body, say, member_id, reserve, answer };
 }
 
+test('Worker progress reads one snapshot without history and keeps renewals out of revisions', async t => {
+  const f = await worker_fixture(t), r = await free_worker_room(f);
+  await r.say('请处理');
+  const execution = (await r.reserve()).body;
+  f.queries.length = 0;
+  await f.request(r.path);
+  t.diagnostic(`one-member full room queries: ${f.queries.length}`);
+  f.queries.length = 0;
+  const before = await f.request(`${r.path}/progress`, undefined, '');
+  assert.equal(before.status, 200);
+  assert.equal(f.queries.length, 1);
+  assert.equal(before.body.executions[0].id, execution.id);
+  assert.doesNotMatch(JSON.stringify(before.body), /token|session_id|request|result|cwd/);
+  const renewal = await f.request(`${r.path}/executions/${execution.id}`, {
+    action: 'renew', activity: 'command', activity_at: Math.floor(Date.now() / 1000), notes: [{ seq: 1, text: '过程说明' }],
+  }, r.owner);
+  assert.equal(renewal.status, 200);
+  const after = (await f.request(`${r.path}/progress`)).body;
+  assert.equal(after.revision, before.body.revision);
+  assert.equal(after.executions[0].notes, 1);
+  assert.equal(after.executions[0].activity, 'command');
+  await r.answer(execution.id);
+  const ended = (await f.request(`${r.path}/progress`)).body;
+  assert.ok(ended.revision > after.revision);
+  assert.deepEqual(ended.executions, []);
+  assert.equal((await f.request('/missing/progress')).status, 404);
+});
+
+test('directory aggregates survive internal task/review changes, rollback and schema reapplication', async t => {
+  const f = await worker_fixture(t), r = await free_worker_room(f);
+  const ids = [];
+  for (const text of ['one', 'two', 'three']) ids.push((await r.say(text)).body.message.id);
+  const check = async () => {
+    const expected = f.sql.prepare(`SELECT COUNT(*) AS message_count,COALESCE(MAX(id),0) AS latest_id FROM messages
+      WHERE room_id=? AND NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=messages.id)`).get(r.room.id);
+    const cached = f.sql.prepare('SELECT message_count,latest_id FROM room_message_stats WHERE room_id=?').get(r.room.id);
+    assert.deepEqual({ ...cached }, { ...expected });
+    const directory = (await f.request('')).body.rooms.find(room => room.id === r.room.id);
+    assert.equal(directory.message_count, expected.message_count);
+    assert.equal(directory.latest_id, expected.latest_id);
+  };
+  await check();
+  const member = await r.member_id('Claude');
+  f.sql.prepare(`INSERT INTO review_plans(room_id,batch_id,chain_id,host_id,reviewer_id,reviewer_name,config_version,
+    member_revision,scope,implementers,review_batch_id) VALUES(?,?,0,?,?,'Claude','v','r','scope','[]',?)`)
+    .run(r.room.id, ids[0], member, member, ids[2]);
+  await check();
+  f.sql.prepare('UPDATE review_plans SET review_batch_id=? WHERE room_id=?').run(ids[1], r.room.id);
+  await check();
+  f.sql.exec('BEGIN');
+  f.sql.prepare('DELETE FROM review_plans WHERE room_id=?').run(r.room.id);
+  f.sql.exec('ROLLBACK');
+  await check();
+  const initial = (await f.request(`${r.path}/discussion`)).body;
+  assert.equal((await f.request(`${r.path}/discussion`, { action: 'start', revision: initial.revision, goal: 'task count' }, r.owner)).status, 200);
+  await check();
+  const task = f.sql.prepare('SELECT * FROM task_message_sources LIMIT 1').get();
+  assert.ok(task);
+  f.sql.prepare('DELETE FROM task_message_sources WHERE message_id=?').run(task.message_id);
+  await check();
+  f.sql.prepare(`INSERT INTO task_message_sources(${Object.keys(task).join(',')}) VALUES(${Object.keys(task).map(() => '?').join(',')})`).run(...Object.values(task));
+  await check();
+  f.sql.prepare('DELETE FROM review_plans WHERE room_id=?').run(r.room.id);
+  await check();
+  f.sql.prepare('DELETE FROM room_message_stats WHERE room_id=?').run(r.room.id);
+  const schema = await readFile(join(PROJECT_ROOT, 'backend', 'schema.sql'), 'utf8');
+  f.sql.exec(schema);
+  await check();
+  f.sql.exec(schema);
+  await check();
+  const standalone = f.sql.prepare(`INSERT INTO messages(room_id,author,text,source,submission_id,created_at)
+    VALUES(?,'用户','standalone','user','standalone','now')`).run(r.room.id).lastInsertRowid;
+  await check();
+  f.sql.prepare('DELETE FROM messages WHERE id=?').run(standalone);
+  await check();
+});
+
 test('Worker review capability binds owner facts to membership and rolls back a concurrent change', async t => {
   const f = await worker_fixture(t), r = await free_worker_room(f, [{ name: 'Codex-评审', adapter: 'codex_cli', token: 'review-token'.repeat(4) }]);
   const id = await r.member_id('Codex-评审'), path = `${r.path}/members/${id}/review-capability`;
@@ -1883,6 +1960,35 @@ test('Worker @全体依次 asks the host first and the next member only after th
   assert.equal((await r.answer(hosted.body.id, codex, 'Codex')).status, 201);
   assert.deepEqual(await requests(), [['Codex', 'completed'], ['Claude', 'pending']]);
   assert.deepEqual((await f.request(r.path)).body.speaking_order.items.map(item => [item.name, item.state]), [['Codex', 'done'], ['Claude', 'speaking']]);
+});
+
+test('Worker queue migration and request moves retain history and restore the unasked speakers', async t => {
+  const f = await worker_fixture(t);
+  const r = await free_worker_room(f, [{ name: 'Codex', adapter: 'codex_cli', token: 'queue-migration-codex'.repeat(3) }]);
+  await r.say('依次回答', { to: ['Claude', 'Codex'], sequential: true });
+  const request = f.sql.prepare('SELECT id,member_id FROM member_requests WHERE room_id=?').get(r.room.id);
+  const codex = await r.member_id('Codex');
+  for (const { name } of f.sql.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'queue_waiting_%'").all()) {
+    f.sql.exec(`DROP TRIGGER ${name}`);
+  }
+  f.sql.exec('DROP TABLE free_queue_waiting');
+  const schema = await readFile(join(PROJECT_ROOT, 'backend', 'schema.sql'), 'utf8');
+  f.sql.exec(schema);
+  f.sql.exec(schema);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM free_queue').get().n, 2, 'migration keeps the complete queue');
+  f.sql.prepare('UPDATE member_requests SET member_id=? WHERE id=?').run(codex, request.id);
+  let order = (await f.request(r.path)).body.speaking_order;
+  assert.deepEqual(order.items.map(item => [item.name, item.state]), [['Claude', 'queued'], ['Codex', 'speaking']]);
+  f.sql.exec('BEGIN');
+  f.sql.prepare('DELETE FROM member_requests WHERE id=?').run(request.id);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM free_queue_waiting').get().n, 2);
+  f.sql.exec('ROLLBACK');
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM free_queue_waiting').get().n, 1);
+  f.sql.prepare('UPDATE member_requests SET member_id=? WHERE id=?').run(request.member_id, request.id);
+  const execution = await r.reserve();
+  assert.equal((await r.answer(execution.body.id)).status, 201);
+  order = (await f.request(r.path)).body.speaking_order;
+  assert.deepEqual(order.items.map(item => [item.name, item.state]), [['Claude', 'done'], ['Codex', 'speaking']]);
 });
 
 test('Worker @全体成员 waits for the runner to have everyone answer at once or in turn', async t => {

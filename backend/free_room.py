@@ -1107,11 +1107,11 @@ def advance_queues(connection, room_id):
 
     Asked rows stay, so the speaking order can still show who already answered.
     """
-    connection.execute(f"""DELETE FROM free_queue WHERE room_id=? AND NOT {QUEUE_ASKED.format(row="free_queue")}
-        AND NOT EXISTS(SELECT 1 FROM room_members m WHERE m.id=free_queue.member_id AND m.status='active')""", (room_id,))
-    connection.execute(f"""INSERT OR IGNORE INTO member_requests (room_id,member_id,message_id,chain_id,batch_id,purpose,created_by,created_at)
-        SELECT q.room_id,q.member_id,q.message_id,q.message_id,0,'ask','user',? FROM free_queue q
-        WHERE q.room_id=? AND q.id=(SELECT MIN(x.id) FROM free_queue x WHERE x.message_id=q.message_id AND NOT {QUEUE_ASKED.format(row="x")})
+    connection.execute("""DELETE FROM free_queue WHERE id IN (SELECT q.id FROM free_queue_waiting q WHERE q.room_id=?
+        AND NOT EXISTS(SELECT 1 FROM room_members m WHERE m.id=q.member_id AND m.status='active'))""", (room_id,))
+    connection.execute("""INSERT OR IGNORE INTO member_requests (room_id,member_id,message_id,chain_id,batch_id,purpose,created_by,created_at)
+        SELECT q.room_id,q.member_id,q.message_id,q.message_id,0,'ask','user',? FROM free_queue_waiting q
+        WHERE q.id IN (SELECT MIN(id) FROM free_queue_waiting WHERE room_id=? GROUP BY message_id)
         AND NOT EXISTS(SELECT 1 FROM member_requests r WHERE r.message_id=q.message_id AND r.status IN ('pending','delivering'))""",
                        (int(time.time()), room_id))
 
@@ -1142,8 +1142,11 @@ def speaking_order(connection, room):
         target = session["id"]
         items, later, session_plan_state = discussion.session_speaking_order(connection, session)
     else:
-        target = connection.execute("""SELECT MAX(q.message_id) FROM free_queue q LEFT JOIN member_requests r ON r.message_id=q.message_id
-            AND r.member_id=q.member_id WHERE q.room_id=? AND (r.id IS NULL OR r.status IN ('pending','delivering'))""", (room["id"],)).fetchone()[0] or 0
+        target = connection.execute("""SELECT MAX(message_id) FROM (
+            SELECT MAX(message_id) AS message_id FROM free_queue_waiting WHERE room_id=?
+            UNION ALL SELECT MAX(r.message_id) FROM member_requests r WHERE r.room_id=? AND r.status IN ('pending','delivering')
+            AND EXISTS(SELECT 1 FROM free_queue q WHERE q.message_id=r.message_id AND q.member_id=r.member_id))""",
+            (room["id"], room["id"])).fetchone()[0] or 0
         if target:
             kind = "queue"
             for row in connection.execute("""SELECT q.member_id,r.status FROM free_queue q LEFT JOIN member_requests r
@@ -1817,8 +1820,8 @@ def interrupt_member(connection, room_id, member_id, token):
 
 def withdrawals(connection, room_id):
     """The room's taken-back messages by id, so the page keeps them in place while AI readers skip them."""
-    return [dict(row) for row in connection.execute("""SELECT w.message_id,w.kind FROM message_withdrawals w
-        JOIN messages m ON m.id=w.message_id WHERE m.room_id=? ORDER BY w.message_id""", (room_id,))]
+    return [dict(row) for row in connection.execute("""SELECT w.message_id,w.kind FROM message_withdrawal_rooms r
+        JOIN message_withdrawals w ON w.message_id=r.message_id WHERE r.room_id=? ORDER BY r.message_id""", (room_id,))]
 
 
 def owner_message(connection, room_id, message_id):
