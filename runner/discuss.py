@@ -54,12 +54,20 @@ class CliError(Exception):
         self.details = details
 
 
+# Shells split a literal text argument when it holds quotes they treat as delimiters; Windows PowerShell also treats
+# Chinese curly quotes as quotes, which surfaces here as leftover arguments.
+UNRECOGNIZED_HINT = "正文或摘要可能被 shell 按引号或空格截断（Windows PowerShell 也把中文弯引号当引号）：改用 --body-file / --summary-file 传文本。"
+
+
 class Parser(argparse.ArgumentParser):
     """Report parser failures through the same stderr contract as API errors."""
 
     def error(self, message):
         """Raise a usage error instead of printing a separate argparse format."""
-        raise CliError(message, hint=f"查看 {self.prog} --help")
+        hint = f"查看 {self.prog} --help"
+        if message.startswith("unrecognized arguments"):
+            hint = UNRECOGNIZED_HINT + hint
+        raise CliError(message, hint=hint)
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -131,6 +139,20 @@ def submission_id(value):
     return value
 
 
+def fill_submission_id(args, plan):
+    """Derive an omitted submission ID from the command and its content, so resending the same content is deduplicated
+    without the caller generating an ID in the shell; the hosting session ID is left out because it does not change what is written."""
+    target = next((part for part in (plan.body, plan.params) if isinstance(part, dict) and "submission_id" in part), None)
+    if plan.method != "POST" or target is None or target["submission_id"]:
+        return
+    body = {key: value for key, value in (plan.body or {}).items() if key not in ("session_id", "session_client")}
+    material = {"operation": args.operation, "room": getattr(args, "room", None), "body": body, "params": plan.params}
+    if plan.upload_file:
+        material["file"] = hashlib.sha256(Path(plan.upload_file).read_bytes()).hexdigest()
+    digest = hashlib.sha256(json.dumps(material, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+    target["submission_id"] = "auto-" + digest[:40]
+
+
 def attachment_id(value):
     """Accept only opaque file identifiers, never local or remote paths."""
     if not re.fullmatch(r"[a-f0-9]{32}", value):
@@ -143,7 +165,7 @@ def add_common(parser):
     options = {"default": argparse.SUPPRESS}
     parser.add_argument("--site", help="HTTP 服务地址；未指定时读 DISCUSS_URL，再读凭据中的 site", **options)
     parser.add_argument("--as", dest="actor", type=participant,
-                        help="业务写入的声明操作者；不是登录认证；api 使用原始请求体", **options)
+                        help="业务写入的声明操作者；省略时用凭据绑定的成员；不是登录认证；api 使用原始请求体", **options)
     parser.add_argument("-o", "--output", choices=("json", "text"),
                         help="默认 json；成功 stdout，错误 stderr", **options)
     parser.add_argument("--timeout", type=float, help="请求超时秒数，默认 20", **options)
@@ -180,7 +202,7 @@ def add_leaf(subcommands, registry, name, description, needs_room=False):
     add_common(parser)
     parser.set_defaults(operation=name)
     if needs_room:
-        parser.add_argument("room", type=room_id, help="房间 ID；始终显式指定")
+        parser.add_argument("room", type=room_id, nargs="?", help="房间 ID；省略时用凭据绑定的房间")
     registry[name] = parser
     return parser
 
@@ -203,8 +225,8 @@ def room_commands(subcommands, registry):
     create = add_leaf(subcommands, registry, "room create", "创建话题；不自动启动讨论或监控")
     create.add_argument("--folder-id", help="直接在指定文件夹中创建；省略则未归类")
     add_topic(create, create=True)
-    create.add_argument("--submission-id", type=submission_id, required=True,
-                        help="新话题唯一编号；未知结果先查询，重试沿用编号和原始资料")
+    create.add_argument("--submission-id", type=submission_id,
+                        help="新话题唯一编号；未知结果先查询，重试沿用编号和原始资料。省略时按命令与内容自动生成，同样内容重试得到同一编号")
     update = add_leaf(subcommands, registry, "room update", "维护话题；省略的字段保持不变", True)
     add_topic(update)
 
@@ -234,7 +256,7 @@ def message_commands(subcommands, registry):
     post.add_argument("--summary-by", type=participant, help="摘要撰写者：原作者或实际操作者；默认操作者")
     post.add_argument("--author", type=participant, help="原作者；默认等于 --as；不同即代发")
     post.add_argument("--kind", choices=("chat", "moderation"), default="chat")
-    post.add_argument("--execution", type=positive_int, help="自由房间：本次执行编号，仅 chat 可用；执行失效后不能改作普通发言")
+    post.add_argument("--execution", type=positive_int, help="自由房间：本次执行编号；省略时用凭据绑定的执行。执行失效后不能改作普通发言")
     post.add_argument("--to", type=ai_name, action="append", default=[],
                       help="自由房间：主持人点名派活，普通成员提出回应建议（须房主确认）；可重复")
     post.add_argument("--handoff", action="store_true",
@@ -245,8 +267,8 @@ def message_commands(subcommands, registry):
     post.add_argument("--request", type=positive_int, action="append", default=[],
                       help="自由房间手动接入成员：本次回答完成的请求编号，可重复；不能与 --execution 同用")
     post.add_argument("--reply-to", type=positive_int, help="被引用的原文编号")
-    post.add_argument("--submission-id", type=submission_id, required=True,
-                      help="每次新提交的唯一编号；重试必须沿用同编号和正文")
+    post.add_argument("--submission-id", type=submission_id,
+                      help="每次新提交的唯一编号；重试必须沿用同编号和正文。省略时按房间、身份、关联与内容自动生成，同一份草稿重试得到同一编号")
 
 
 def attachment_commands(subcommands, registry):
@@ -259,7 +281,7 @@ def attachment_commands(subcommands, registry):
     view.add_argument("id", type=attachment_id)
     upload = add_leaf(subcommands, registry, "attachment upload", "上传原文件；之后用 message post --attachment 关联消息", True)
     upload.add_argument("--file", required=True, help="本地原文件路径；最多 20 MiB")
-    upload.add_argument("--submission-id", type=submission_id, required=True)
+    upload.add_argument("--submission-id", type=submission_id, help="上传唯一编号；省略时按命令与内容自动生成，同样内容重试得到同一编号")
     download = add_leaf(subcommands, registry, "attachment download", "下载原文件到显式路径；不覆盖已有文件", True)
     download.add_argument("id", type=attachment_id)
     download.add_argument("--dest", required=True, help="保存文件的完整或相对路径；父目录须已存在")
@@ -288,8 +310,8 @@ def turn_commands(subcommands, registry):
             add_text(parser, "question")
             parser.add_argument("--plan-file", help='整轮安排 JSON 数组 [{"expert":"Claude","question":"…"}]，按顺序接力；- 从标准输入读取')
             parser.add_argument("--roster", required=True, help="turn roster 返回的 revision；任何新安排前必读，专家状态变化后需重新获取")
-            parser.add_argument("--submission-id", type=submission_id, required=True,
-                                help="新安排唯一编号；重试沿用同编号和内容")
+            parser.add_argument("--submission-id", type=submission_id,
+                                help="新安排唯一编号；重试沿用同编号和内容。省略时按命令与内容自动生成，同样内容重试得到同一编号")
         if action == "reorder":
             parser.add_argument("--revision", required=True, help="turn order 返回的 revision；顺序变化后需重新获取")
             parser.add_argument("--member", action="append", type=ai_name, required=True,
@@ -297,7 +319,7 @@ def turn_commands(subcommands, registry):
         if action == "ask":
             parser.add_argument("--request", type=positive_int, required=True, help="turn roster 中 host_requests 的请求编号")
             parser.add_argument("--expert", type=ai_name, required=True, help="在场且已注册的目标成员，含已发言者和主持人")
-            parser.add_argument("--submission-id", type=submission_id, required=True, help="转交唯一编号；重试沿用原编号与内容")
+            parser.add_argument("--submission-id", type=submission_id, help="转交唯一编号；重试沿用原编号与内容。省略时按命令与内容自动生成，同样内容重试得到同一编号")
         if action in ("continue", "ask"):
             parser.add_argument("--roster", required=True, help="turn roster 返回的 revision；状态变化后须重新读取")
 
@@ -334,7 +356,7 @@ def execution_commands(subcommands, registry):
     """Read an execution or report its failure through its durable identifier."""
     for action in ("view", "fail"):
         parser = add_leaf(subcommands, registry, f"execution {action}", "读取执行或报告本次执行失败", True)
-        parser.add_argument("id", type=positive_int)
+        parser.add_argument("id", type=positive_int, nargs="?", help="执行编号；省略时用凭据绑定的执行")
         if action == "fail":
             parser.add_argument("--reason", required=True)
 
@@ -354,13 +376,13 @@ def review_commands(subcommands, registry):
     advance = add_leaf(subcommands, registry, "review advance", "先读 review ready，再带 revision 只推进既定评审并处理对应交接", True)
     advance.add_argument("--batch", type=positive_int, required=True)
     advance.add_argument("--revision", required=True)
-    advance.add_argument("--submission-id", type=submission_id, required=True)
+    advance.add_argument("--submission-id", type=submission_id, help="推进唯一编号；省略时按命令与内容自动生成，同样内容重试得到同一编号")
 
 
 def build_parser(prog="discuss"):
     """Build help and schema from the same command definitions."""
     parser = Parser(prog=prog, description="AI CoDiscuss CLI：通过 HTTP 操作现有讨论网站。",
-                    allow_abbrev=False, epilog="站点用 --site、DISCUSS_URL 或凭据文件中的 site；不保存当前房间，不自动重试写入。")
+                    allow_abbrev=False, epilog="站点、房间、操作者与执行编号省略时取自凭据文件；提交编号省略时按内容生成；不保存当前房间，不自动重试写入。")
     add_common(parser)
     parser.add_argument("--version", action="version", version=f"{prog} {VERSION}")
     subcommands = parser.add_subparsers(dest="resource", required=True)
@@ -430,11 +452,30 @@ def text_field(args, field):
 
 
 def require_actor(args):
-    """Require an explicit declared operator for domain writes."""
-    actor = getattr(args, "actor", None)
+    """Use the declared operator, or the member a task credential is bound to."""
+    actor = getattr(args, "actor", None) or load_access(args).get("member")
     if not actor:
-        raise CliError("写入必须显式指定 --as；该字段声明操作者，不提供身份认证")
+        raise CliError("写入须用 --as 指定操作者，或使用绑定成员的凭据；该字段声明操作者，不提供身份认证")
     return actor
+
+
+def bound_execution(args):
+    """Return the execution a task credential is bound to, if any."""
+    value = load_access(args).get("execution_id")
+    if value is None:
+        return None
+    try:
+        return positive_int(str(value))
+    except argparse.ArgumentTypeError as error:
+        raise CliError("凭据文件中的 execution_id 无效") from error
+
+
+def bind_room(args):
+    """Fill an omitted room from the credential; a credential for another room is still rejected before sending."""
+    if hasattr(args, "room") and args.room is None:
+        args.room = load_access(args).get("room") or None
+        if not args.room:
+            raise CliError("请指定房间 ID，或使用绑定了房间的凭据（--access-file / DISCUSS_ACCESS_FILE）")
 
 
 def topic_payload(args):
@@ -519,6 +560,8 @@ def plan_message(args):
                   **read_context_params(args)}
         return RequestPlan(base, params={key: value for key, value in params.items() if value is not None})
     actor = require_actor(args)
+    if not args.execution and not args.request:
+        args.execution = bound_execution(args)
     if (args.to or args.handoff) and args.kind != "chat":
         raise CliError("--to / --handoff 仅用于 chat 消息")
     if args.kind == "moderation" and not (args.execution or args.request):
@@ -686,7 +729,10 @@ def plan_run(args):
 
 def plan_execution(args):
     """Read or fail one durable member execution."""
-    path = f"/api/rooms/{args.room}/executions/{args.id}"
+    execution_id = args.id or bound_execution(args)
+    if not execution_id:
+        raise CliError("请指定执行编号，或使用绑定了执行的凭据")
+    path = f"/api/rooms/{args.room}/executions/{execution_id}"
     if args.action == "view":
         return RequestPlan(path)
     return RequestPlan(path, "POST", {"action": "fail", "reason": args.reason})
@@ -721,7 +767,9 @@ def build_plan(args):
                 "attachment": plan_attachment,
                 "state": plan_state, "api": plan_api,
                 "run": plan_run, "execution": plan_execution, "member": plan_member, "review": plan_review}
+    bind_room(args)
     plan = RequestPlan("/api/health") if args.resource == "health" else handlers[args.resource](args)
+    fill_submission_id(args, plan)
     if getattr(args, "dry_run", False) and plan.method != "POST" and plan.download_file is None:
         raise CliError("--dry-run 仅用于写入命令；读取命令本身不会修改数据")
     if plan.body is not None and len(json.dumps(plan.body, ensure_ascii=False).encode("utf-8")) > MAX_BODY_BYTES:
@@ -933,6 +981,9 @@ def prepare_creation_access(args, site, plan):
         raise CliError("建房须用 --access-file 指定私有凭据文件路径；首次自动生成，重试沿用同一文件")
     path = Path(args.access_file)
     payload = plan.body
+    if path.exists() and not args.submission_id:
+        # A retry that omits the ID continues the creation this credential file already recorded.
+        payload["submission_id"] = read_object(path).get("submission_id") or payload["submission_id"]
     access = read_object(path) if path.exists() else {"site": site, "room": "", "token": secrets.token_urlsafe(48),
         "submission_id": payload.get("submission_id"), "members": {}}
     if access.get("site") != site or access.get("submission_id") != payload.get("submission_id"):
@@ -959,7 +1010,7 @@ def finish_creation_access(args, site, plan, value):
         if member["access"] == "online":
             continue
         member_path = path.with_name(f"{path.stem}.{member['name']}.json")
-        save_access(member_path, {"site": site, "room": value["id"], "token": member["token"]})
+        save_access(member_path, {"site": site, "room": value["id"], "member": member["name"], "token": member["token"]})
         paths[member["name"]] = str(member_path)
     return {"owner_access_file": str(path), "member_access_files": paths}
 

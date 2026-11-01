@@ -264,6 +264,25 @@ class CliTests(unittest.TestCase):
         codex = self.invoke(args, environment={"CLAUDE_CODE_SESSION_ID": "", "CODEX_THREAD_ID": "01a1694f-764d-7141-b2b8-47c433be027c"})
         self.assertEqual(json.loads(codex.stdout)["data"]["body"]["session_client"], "codex")
 
+    def test_message_post_derives_a_stable_submission_id_from_the_draft(self):
+        """Without --submission-id, resending the same draft reuses one ID and different content gets another."""
+        args = ["--site", self.base, "message", "post", self.room, "--as", "用户", "--dry-run"]
+        first = json.loads(self.invoke([*args, "--body", "同一份草稿"]).stdout)["data"]["body"]["submission_id"]
+        again = json.loads(self.invoke([*args, "--body", "同一份草稿"]).stdout)["data"]["body"]["submission_id"]
+        other = json.loads(self.invoke([*args, "--body", "另一份草稿"]).stdout)["data"]["body"]["submission_id"]
+        self.assertRegex(first, r"^auto-[0-9a-f]{40}$")
+        self.assertEqual(first, again)
+        self.assertNotEqual(first, other)
+        ask = ["--site", self.base, "turn", "ask", self.room, "--as", "Codex", "--request", 1, "--expert", "Claude", "--roster", "r1", "--dry-run"]
+        asked = json.loads(self.invoke(ask).stdout)["data"]["body"]["submission_id"]
+        self.assertRegex(asked, r"^auto-[0-9a-f]{40}$")
+        self.assertEqual(asked, json.loads(self.invoke(ask).stdout)["data"]["body"]["submission_id"])
+
+    def test_split_text_argument_points_to_file_input(self):
+        """Leftover arguments from a shell-split text value suggest the file inputs instead of only --help."""
+        result = self.invoke(["--site", self.base, "message", "post", self.room, "--as", "用户", "--body", "前半", "后半", "--dry-run"])
+        self.assertIn("--summary-file", json.loads(result.stderr)["error"]["hint"])
+
     def test_access_file_is_room_scoped_and_not_printed_in_preview(self):
         """A private capability is usable only for its configured site and room."""
         path = Path(self.directory.name) / "runtime-access.json"
@@ -278,6 +297,22 @@ class CliTests(unittest.TestCase):
         self.assertIn("凭据文件不属于", str(error))
         path.write_text(json.dumps({"site": "http://localhost:1", "room": self.room, "token": secret}), encoding="utf-8")
         self.assertIn("凭据文件不属于", str(self.rejected(["run", "view", self.room, "--access-file", path])))
+
+    def test_task_credential_supplies_room_operator_and_execution(self):
+        """A runner task posts with only its content: room, operator, execution and submission ID come from the credential."""
+        path = Path(self.directory.name) / "task-access.json"
+        secret = json.loads(Path(self.room_access[self.room]["用户"]).read_text(encoding="utf-8"))["token"]
+        path.write_text(json.dumps({"site": self.base, "room": self.room, "member": "Claude", "token": secret, "execution_id": 4}), encoding="utf-8")
+        environment = {"DISCUSS_ACCESS_FILE": str(path)}
+        preview = self.invoke(["message", "post", "--body-file", "-", "--dry-run"], stdin="回答", environment=environment)
+        self.assertEqual(preview.returncode, 0, preview.stderr)
+        data = json.loads(preview.stdout)["data"]
+        self.assertTrue(data["url"].endswith(f"/api/rooms/{self.room}/messages"))
+        self.assertEqual((data["body"]["author"], data["body"]["execution_id"]), ("Claude", 4))
+        failed = self.invoke(["execution", "fail", "--reason", "x", "--dry-run"], environment=environment)
+        self.assertIn("/executions/4", failed.stdout, failed.stderr)
+        explicit = self.invoke(["message", "view", 187, "--dry-run"], environment=environment)
+        self.assertIn("仅用于写入命令", explicit.stderr)
 
     def test_process_bound_access_file_preserves_explicit_override_and_room_scope(self):
         """A spawned CLI reads its current credential file without exposing or copying the token."""

@@ -2703,7 +2703,7 @@ function download_member_access(name) {
   const room = state.room, access = access_snapshot();
   const member = access.members.find(item => item.name === name);
   if (!access.can_manage || !member?.available || member.access === "online") throw new Error("当前浏览器没有此成员可下载的私有配置");
-  download_private_json({ site: location.origin, room: room.id, token: member_credentials(room.id)[name].token }, `member-${room.id}-${name}.json`);
+  download_private_json({ site: location.origin, room: room.id, member: name, token: member_credentials(room.id)[name].token }, `member-${room.id}-${name}.json`);
   notify("info", `已下载 ${name} 的私有配置`);
 }
 
@@ -2712,7 +2712,7 @@ async function copy_member_access_text(name) {
   const room = state.room, access = access_snapshot();
   const member = access.members.find(item => item.name === name);
   if (!access.can_manage || !member?.available || member.access === "online") throw new Error("当前浏览器没有此成员可复制的凭证");
-  await copy_text(JSON.stringify({ site: location.origin, room: room.id, token: member_credentials(room.id)[name].token }));
+  await copy_text(JSON.stringify({ site: location.origin, room: room.id, member: name, token: member_credentials(room.id)[name].token }));
   notify("info", `已复制 ${name} 的凭证文本（含 token）`);
 }
 
@@ -2731,7 +2731,7 @@ async function copy_member_join(name, with_credential = false) {
   else if (with_credential) instruction = `${skills}凭证文本在下方：每条 codiscuss 命令都在同一命令内把它原样设为环境变量 DISCUSS_ACCESS（不回显；首条 room view 也要带，否则无法识别你），命令省略 --access-file；先执行 codiscuss room view ${room.id} --site ${location.origin} --as ${name}，随后立即执行 codiscuss member register ${room.id} --site ${location.origin} --as ${name} 完成注册（只需一次，会话 ID 由程序自动附带，不要自己填写），之后命令保持本站点、房间和身份。模型与思考强度在原软件中设置。${MANUAL_TRIGGER_INSTRUCTION}`;
   else instruction = `${skills}使用属于你的私有文件 member-${room.id}-${name}.json，由用户提供它在本机的实际完整路径；先执行 codiscuss room view ${room.id} --site ${location.origin} --as ${name} --access-file "实际完整路径"；随后立即执行 codiscuss member register ${room.id} --site ${location.origin} --as ${name} --access-file "实际完整路径" 完成注册（只需一次，会话 ID 由程序自动附带，不要自己填写），之后命令保持本站点、房间和身份。不要读取或公开文件中的 token；若用户给的是凭证文本而非文件，把它设为环境变量 DISCUSS_ACCESS（不要回显）并省略 --access-file。模型与思考强度在原软件中设置。${MANUAL_TRIGGER_INSTRUCTION}`;
   const credential = with_credential ? `
-凭证文本（含 token，仅限你使用）：${JSON.stringify({ site: location.origin, room: room.id, token: member_credentials(room.id)[name].token })}` : "";
+凭证文本（含 token，仅限你使用）：${JSON.stringify({ site: location.origin, room: room.id, member: name, token: member_credentials(room.id)[name].token })}` : "";
   await copy_text(`请以 ${name} 身份参与房间。
 ${instruction}
 房间入口：${address}

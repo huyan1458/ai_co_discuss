@@ -85,7 +85,7 @@ export function free_task_files(config, member, execution, binding, { session = 
   const access_path = join(config.directory, `${id}.access.json`);
   const task_path = join(config.directory, `${id}.task.json`);
   const profile = config.participants[member.name];
-  atomic_json(access_path, { site: config.site, room: config.room, token: config.members[member.name].token,
+  atomic_json(access_path, { site: config.site, room: config.room, member: member.name, token: config.members[member.name].token,
     session_id: binding.session_id || '', execution_id: execution.id });
   const adapter = adapter_of(profile.adapter);
   const cli = process.platform === 'win32' ? adapter?.windows_command || 'codiscuss.cmd' : 'codiscuss';

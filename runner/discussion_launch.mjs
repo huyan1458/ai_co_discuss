@@ -562,7 +562,7 @@ async function member_room_context(home, raw) {
 /** Write a manual member's private credential next to the room configuration, never into a receipt. */
 function manual_access(path, input, name, token) {
   const access_path = join(dirname(path), `manual-${name}.access.json`);
-  atomic_json(access_path, { site: input.site, room: input.room_id, token });
+  atomic_json(access_path, { site: input.site, room: input.room_id, member: name, token });
   return access_path;
 }
 

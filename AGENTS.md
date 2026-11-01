@@ -134,4 +134,5 @@
 
 参与或主持房间时按技能操作：读 `.agents/skills/discuss-participant/SKILL.md`（主持人另读 `discuss-host`），Codex 调用 `$discuss-participant`，其他本地 AI 明确读取该文件，不假定自动发现。命令优先用 `codiscuss`，未安装时用 `python runner/discuss.py`，任务指定 CLI 路径时沿用指定入口；具体参与规则以技能和目标站点的 `room protocol` 为准。
 
-- 房间始终显式指定，业务写入显式 `--as`；不新增全局当前房间或身份配置，不因网页当前选中某话题就自动接管。
+- 房间与身份来自显式参数或本次任务凭据（凭据绑定的房间、成员与执行由 CLI 补齐并校验）；不新增全局当前房间或身份配置，不因网页当前选中某话题就自动接管。
+- CLI 参数能由凭据、内容或程序确定的（房间、身份、执行编号、提交编号）由工具自动补齐，Agent 只填内容与判断；只有红线 1 要求先读后带的版本凭据（`revision`、`roster`）必须显式填写。

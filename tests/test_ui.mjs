@@ -1822,10 +1822,10 @@ test("member downloads contain only their credential and copied instructions con
     download_private_json: value => { downloaded = value; }, copy_text: async value => { copied = value; }, workspace_instruction: () => '' });
   assert.equal(JSON.stringify(f.context.access_snapshot()).includes('secret'), false);
   f.context.download_member_access('Codex-2');
-  assert.deepEqual(JSON.parse(JSON.stringify(downloaded)), { site: 'https://discussion.example', room: 'one', token: 'Codex-2-secret' });
+  assert.deepEqual(JSON.parse(JSON.stringify(downloaded)), { site: 'https://discussion.example', room: 'one', member: 'Codex-2', token: 'Codex-2-secret' });
   assert.throws(() => f.context.download_member_access('DeepSeek'), /没有此成员/);
   await f.context.copy_member_access_text('Codex-2');
-  assert.deepEqual(JSON.parse(copied), { site: 'https://discussion.example', room: 'one', token: 'Codex-2-secret' });
+  assert.deepEqual(JSON.parse(copied), { site: 'https://discussion.example', room: 'one', member: 'Codex-2', token: 'Codex-2-secret' });
   await assert.rejects(() => f.context.copy_member_access_text('DeepSeek'), /没有此成员/);
   await f.context.copy_member_join('Codex-2', true);
   assert.match(copied, /DISCUSS_ACCESS/);

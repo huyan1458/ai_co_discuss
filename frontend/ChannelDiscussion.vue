@@ -80,6 +80,8 @@ const preview_group = computed(() => navigation_groups.value.find((group) => gro
 const preview_round = computed(() => preview_group.value?.label);
 const preview_index = computed(() => preview_open.value ? navigation_entries.value.findIndex((entry) => entry.key === preview_entry.value) : -1);
 const prompt = ref(null);
+// Phones and tablets have no Shift+Enter, so the keyboard's return key adds a line there and only the send button sends.
+const ENTER_SENDS = typeof window === "undefined" || !window.matchMedia("(pointer: coarse)").matches;
 const follow_tail = ref(true);
 const FOLLOW_TAIL_THRESHOLD = 70;
 const READING_OFFSET = 20;
@@ -1166,7 +1168,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", retract_shortcut));
 
 /** The chat prompt ignores empty text, so attachment-only drafts send on Enter here. */
 function attachment_shortcut(event) {
-  if (event.key !== "Enter" || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.isComposing || text.value.trim()) return;
+  if (!ENTER_SENDS || event.key !== "Enter" || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.isComposing || text.value.trim()) return;
   if (!view.value.attachment_drafts.length) return;
   event.preventDefault();
   event.stopPropagation();
@@ -1454,7 +1456,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           </div>
         </template>
       </UPopover>
-      <UChatPrompt ref="prompt" v-model="text" :disabled="view.sending_message" :submit-on-enter="true" :autofocus="false" :rows="1" :maxrows="EDITOR_MAX_ROWS" :placeholder="`发消息到 # ${room.title}`" aria-label="留言正文" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_members.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :class="{ 'has-mentions': mention_mirror }" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
+      <UChatPrompt ref="prompt" v-model="text" :disabled="view.sending_message" :submit-on-enter="ENTER_SENDS" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :autofocus="false" :rows="1" :maxrows="EDITOR_MAX_ROWS" :placeholder="`发消息到 # ${room.title}`" aria-label="留言正文" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_members.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :class="{ 'has-mentions': mention_mirror }" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
         <template #header>
           <div v-if="view.attachment_drafts.length" class="attachment-drafts">
             <div v-for="file in view.attachment_drafts" :key="file.id" :class="file.preview_url ? 'attachment-draft-image' : 'attachment-draft-file'">

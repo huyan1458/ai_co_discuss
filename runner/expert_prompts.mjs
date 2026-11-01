@@ -110,7 +110,7 @@ export const READ_RULE = '读含中文的文件用 rg --encoding utf-8 . 文件�
  * (messages, read point, execution, role, credentials), the skills it lists say how to use them, and `instructions`
  * holds only the limits no skill can know. `access_file` is set where the credential is not bound to the process.
  */
-export function free_task_text({ name, discussion, discussion_request, profile, cli, room, messages, read_after, execution_id, task_path, access_file = '', read_rule = '' }) {
+export function free_task_text({ name, discussion, discussion_request, profile, cli, messages, read_after, task_path, access_file = '', read_rule = '' }) {
   const scope = discussion ? `讨论进行中，用户直接向你提问（${messages}）：只回答这个提问，不改变讨论安排和进度。` : '';
   const commands = runs_commands(profile) ? '' : `命令只用 subcommands 列出的 ${cli} 子命令。`;
   const instructions = `${software_rules(profile, cli)}${scope}${project_rule(profile, '按请求')}${commands}草稿写在 draft_directory。`;
@@ -122,7 +122,8 @@ export function free_task_text({ name, discussion, discussion_request, profile, 
   // A greeting deserves a quick answer, and reading the skills first costs it one or two model rounds.
   const access = access_file ? ` --access-file ${access_file}` : '';
   // A one-line answer goes inline: a draft file guards long or quoted text and retries, which a greeting does not need.
-  const quick = `问候、致谢等简单消息可跳过技能：${cli} message list ${room} --after ${read_after}${access} 看原文，${cli} message post ${room} --as ${name} --kind chat --execution ${execution_id} --body "回答" --submission-id 新UUID${access} 回复。`;
+  // The credential already names the room, the member and this execution, so the commands carry only what changes.
+  const quick = `问候、致谢等简单消息可跳过技能：${cli} message list --after ${read_after}${access} 看原文，${cli} message post --body "回答"${access} 回复（正文含引号时先写草稿再用 --body-file）。`;
   const prompt = `用户在${discussion ? '讨论' : '自由协作'}房间点名了你（${name}），对应消息 ${messages}。${quick}其他请求先读任务文件 ${task_path}，按其中列出的技能处理并提交一次回答。${read_rule}`;
   return { instructions, prompt };
 }

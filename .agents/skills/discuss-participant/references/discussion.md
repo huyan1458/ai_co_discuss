@@ -29,13 +29,13 @@
 自动任务用本次执行编号保存一次完整回答，例如：
 
 ```sh
-codiscuss message post ROOM --as 本人 --kind chat --execution 执行编号 --body-file draft.md --submission-id 新UUID --access-file FILE
+codiscuss message post ROOM --as 本人 --kind chat --execution 执行编号 --body-file draft.md --access-file FILE
 ```
 
 手动成员用自己的成员凭据和服务端给出的请求编号：
 
 ```sh
-codiscuss message post ROOM --as 本人 --kind chat --request 请求编号 --body-file draft.md --submission-id 新UUID --access-file FILE
+codiscuss message post ROOM --as 本人 --kind chat --request 请求编号 --body-file draft.md --access-file FILE
 ```
 
 需要摘要时一并使用 `--summary` 或 `--summary-file`。成功提交后当前请求即完成；不要再补一条普通 chat 或状态回执。
