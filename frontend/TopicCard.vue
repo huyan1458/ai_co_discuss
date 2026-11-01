@@ -2,7 +2,7 @@
 import { computed, inject, nextTick, ref, watch } from "vue";
 
 const emit = defineEmits(["edit"]);
-const { view, bridge, act } = inject("discussion");
+const { view, bridge } = inject("discussion");
 const TOPIC_BODY_MAX_HEIGHT = 240;
 const topic_expanded = ref(false);
 const topic_body = ref(null);
@@ -14,9 +14,9 @@ const topic = computed(() => {
   const request = value.user_request?.trim() ? { label: "用户原文", text: value.user_request } : value.background?.trim() ? { label: "背景", text: value.background } : null;
   const experts = Object.entries(value.experts || {}).map(([name]) => ({ name, mode: bridge.participant_access(name, value) }));
   const limits = value.limits || {};
-  const bounds = !value.session ? "自由协作"
-    : [limits.max_rounds ? `${limits.max_rounds} 轮` : "轮次不限", limits.max_minutes ? `${limits.max_minutes} 分钟` : "时长不限",
-      value.session.status === "concluded" ? "讨论已结束" : "全自动"].join(" · ");
+  const discussing = ["active", "paused"].includes(value.session?.status);
+  const bounds = [discussing ? "本场讨论" : "下次讨论默认上限",
+    limits.max_rounds ? `${limits.max_rounds} 轮` : "轮次不限", limits.max_minutes ? `${limits.max_minutes} 分钟` : "时长不限"].join(" · ");
   return { request, goal: value.session?.goal || value.goal, boundaries: value.boundaries, host: value.host, experts, bounds };
 });
 
@@ -39,7 +39,6 @@ defineExpose({ measure });
     <div v-if="topic.boundaries" class="channel-topic-section"><h3>边界</h3><p class="channel-topic-text">{{ topic.boundaries }}</p></div>
     </div>
     <UButton v-if="topic_overflows || topic_expanded" :label="topic_expanded ? '收起' : '展开全文'" :trailing-icon="topic_expanded ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" variant="link" color="neutral" size="xs" class="channel-answer-toggle" @click="topic_expanded = !topic_expanded" />
-    <div v-if="room.parent_room" class="channel-topic-section"><h3>来源</h3><p class="channel-topic-text">从自由协作「<button type="button" class="channel-link-button" @click="act('room', room.parent_room.id)">{{ room.parent_room.title }}</button>」发起<template v-if="room.phase === 'concluded'"> · <button type="button" class="channel-link-button" @click="act('return_conclusion')">把结论发回</button></template></p></div>
     <div class="channel-topic-section channel-topic-config"><h3>参与配置</h3><div class="channel-topic-people">
       <span v-for="person in topic.experts" :key="person.name" class="channel-topic-person"><UAvatar :src="bridge.identities[person.name]?.icon" :text="bridge.identities[person.name]?.initials" :alt="person.name" size="2xs" class="channel-avatar" :class="bridge.identities[person.name]?.style" />{{ bridge.display_name(person.name) }}<small>{{ person.name === topic.host ? `主持 · ${person.mode}` : person.mode }}</small></span>    </div><small class="channel-topic-bounds">{{ topic.bounds }}</small></div>
   </section>

@@ -30,20 +30,17 @@ MAX_BRIEF_LENGTH = 1600
 PARTICIPANTS = ("用户", "Codex", "Claude", "Gemini", "DeepSeek", "Qwen", "Grok")
 # A platform is a type; `Claude-评审` is a second Claude instance with its own session. Mirrors backend/identity.py.
 INSTANCE_PATTERN = re.compile(r"(Codex|Claude|Gemini|DeepSeek|Qwen|Grok)(?:-[0-9A-Za-z_一-鿿]{1,16})?")
-PHASES = ("preparing", "initial", "discussing", "paused", "concluded")
 KINDS = ("opinion", "moderation", "chat")
-# Old rooms keep receipts they already hold, so reading can still filter them; new ones cannot be written.
-READ_KINDS = (*KINDS, "receipt")
 OVERVIEW_FIELDS = ("id", "title", "goal", "host", "phase", "focus", "message_count",
-                   "latest_id", "state_until", "current_turn", "queued_turns", "held_since", "runtime", "limits", "completed_rounds", "answered_turns", "duplicate", "submission_id",
-                   "mode", "members", "free", "parent_room", "linked_rooms")
-BRIEF_FIELDS = ("id", "title", "goal", "host", "user_request", "background", "boundaries", "experts")
-ROOM_LIST_FIELDS = ("id", "title", "goal", "message_count", "latest_id", "created_at")
+                   "latest_id", "state_until", "current_turn", "queued_turns", "held_since", "limits", "completed_rounds", "answered_turns", "duplicate", "submission_id",
+                   "mode", "members", "free")
 GUIDANCE = {
     "initial": "先基于目标、背景和边界独立形成观点；提交前不读他人观点或主持总结。",
     "paused": "停止处理安排并停止本讨论自己的后台任务，核对实际状态。",
     "concluded": "话题已收束；停止本讨论自己的后台任务并核对实际状态。",
 }
+BRIEF_FIELDS = ("id", "title", "goal", "host", "user_request", "background", "boundaries", "experts")
+ROOM_LIST_FIELDS = ("id", "title", "goal", "message_count", "latest_id", "created_at")
 EXIT_CODES = {"0": "成功", "1": "HTTP/API 错误", "2": "参数或输入错误",
               "3": "网络失败或响应无法确认", "130": "被中断，写入结果需核对"}
 
@@ -168,7 +165,6 @@ def add_topic(parser, create=False):
         add_text(parser, field.replace("_", "-"), required=create and field == "title")
     parser.add_argument("--host", type=participant, default=argparse.SUPPRESS,
                         help="主持人；创建时默认 --as 操作者")
-    parser.add_argument("--phase", choices=PHASES, default=argparse.SUPPRESS)
     parser.add_argument("--experts-file", default=argparse.SUPPRESS,
                         help='完整参与者映射 JSON，如 {"Codex":"cli","Gemini":"cli"}；替换整个映射')
     for name in ("max-rounds", "max-minutes"):
@@ -211,7 +207,6 @@ def room_commands(subcommands, registry):
                         help="新话题唯一编号；未知结果先查询，重试沿用编号和原始资料")
     update = add_leaf(subcommands, registry, "room update", "维护话题；省略的字段保持不变", True)
     add_topic(update)
-    update.add_argument("--conclusion", help="room conclusion 返回的 revision；主持人设为 concluded 时必填，状态变化后需重新获取")
 
 
 def message_commands(subcommands, registry):
@@ -223,7 +218,7 @@ def message_commands(subcommands, registry):
     listing.add_argument("--query", help="关键词或消息编号")
     listing.add_argument("--author", type=participant)
     listing.add_argument("--mention", type=participant)
-    listing.add_argument("--kind", choices=READ_KINDS, help="筛选观点、主持说明、协作消息或旧房间的历史回执")
+    listing.add_argument("--kind", choices=KINDS, help="筛选观点、主持说明或协作消息")
     listing.add_argument("--submission-id", type=submission_id, help="按提交编号精确查询结果")
     listing.add_argument("--request", type=positive_int, help="手动成员：按自己的有效请求限制可读原文")
     view = add_leaf(subcommands, registry, "message view", "读取一条精确原文与来源", True)
@@ -272,7 +267,7 @@ def attachment_commands(subcommands, registry):
 
 def turn_commands(subcommands, registry):
     """Read and control discussion plans through their dedicated operations."""
-    descriptions = {"list": "分页读取安排历史", "current": "读取阶段和最近安排；需核对状态及专家",
+    descriptions = {"list": "分页读取安排历史",
                     "view": "读取一个安排",
                     "roster": "申请最新专家状态（在场专家、本轮待发言者与 revision）；整轮安排前必做",
                     "order": "读取发言顺序（已发言、正在发言、待发言与 revision）；调整顺序前必做",
@@ -286,7 +281,7 @@ def turn_commands(subcommands, registry):
         if action == "list":
             parser.add_argument("--page", type=positive_int, default=1)
             parser.add_argument("--submission-id", type=submission_id, help="按安排提交编号精确查询结果")
-        elif action not in ("create", "current", "continue", "ask", "roster", "order", "reorder"):
+        elif action not in ("create", "continue", "ask", "roster", "order", "reorder"):
             parser.add_argument("id", type=positive_int, help="安排编号")
         if action == "create":
             parser.add_argument("--expert", type=ai_name, help="单个安排的专家；与 --plan-file 二选一")
@@ -452,9 +447,8 @@ def topic_payload(args):
         value = text_field(args, field)
         if value is not None:
             payload[field] = value
-    for field in ("host", "phase"):
-        if hasattr(args, field):
-            payload[field] = getattr(args, field)
+    if hasattr(args, "host"):
+        payload["host"] = args.host
     if hasattr(args, "experts_file"):
         experts = read_object(args.experts_file)
         if any(not INSTANCE_PATTERN.fullmatch(name) or mode not in ("cli", "online")
@@ -498,14 +492,12 @@ def plan_room(args):
         if args.done:
             return RequestPlan(base + "/limits", "POST", {"actor": require_actor(args), "action": "done",
                                                           **({"conclusion": args.conclusion} if args.conclusion else {})}, "overview")
-        return RequestPlan(base + "/limits", "POST", {"actor": require_actor(args)}, "overview") if args.check else RequestPlan(base + "/limits")
+        return RequestPlan(base + "/limits", "POST", {"actor": require_actor(args), "action": "check"}, "overview") if args.check else RequestPlan(base + "/limits")
     if args.action == "update":
         payload = topic_payload(args)
         if not payload:
             raise CliError("room update 至少需要一个话题字段")
         payload["actor"] = require_actor(args)
-        if args.conclusion:
-            payload["conclusion"] = args.conclusion
         return RequestPlan(base + "/topic", "POST", payload, "overview")
     if args.action == "conclusion":
         return RequestPlan(base + "/conclusion")
@@ -597,8 +589,6 @@ def plan_attachment(args):
 def plan_turn(args):
     """Separate creating an assignment from external notification delivery."""
     base = f"/api/rooms/{args.room}"
-    if args.action == "current":
-        return RequestPlan(base, view="current")
     if args.action == "list":
         params = {"page": args.page}
         if args.submission_id:
@@ -851,12 +841,11 @@ def project_result(value, plan, site):
     """Keep summaries, briefing material, host state, and original text separate."""
     if plan.view == "room_list":
         return {"rooms": [select_fields(room, ROOM_LIST_FIELDS) for room in value["rooms"]]}
-    if plan.view in ("overview", "brief", "state", "current"):
+    if plan.view in ("overview", "brief", "state"):
         fields = {"overview": OVERVIEW_FIELDS, "brief": BRIEF_FIELDS,
-                  "state": ("id", "state_text", "state_until", "host_brief", "answered_turns"),
-                  "current": ("id", "phase", "current_turn", "queued_turns", "held_since", "answered_turns")}[plan.view]
+                  "state": ("id", "state_text", "state_until", "host_brief", "answered_turns")}[plan.view]
         result = select_fields(value, fields)
-        if plan.view in ("overview", "current"):
+        if plan.view == "overview":
             result["guidance"] = GUIDANCE.get(value["phase"], "按本次主持或专家职责，结合最新阶段、安排和必要原文决定下一步。")
             result["url"] = f"{site}/r/{value['id']}"
         return result

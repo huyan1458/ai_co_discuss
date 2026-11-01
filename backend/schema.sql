@@ -81,72 +81,12 @@ CREATE TABLE IF NOT EXISTS message_summaries (
 CREATE TABLE IF NOT EXISTS topic_settings (
     room_id TEXT PRIMARY KEY REFERENCES rooms(id),
     host TEXT NOT NULL, background TEXT NOT NULL DEFAULT '', boundaries TEXT NOT NULL DEFAULT '',
-    experts TEXT NOT NULL, phase TEXT NOT NULL DEFAULT 'preparing', focus TEXT NOT NULL DEFAULT ''
+    experts TEXT NOT NULL, focus TEXT NOT NULL DEFAULT ''
 );
-CREATE TRIGGER IF NOT EXISTS reject_archived_resume BEFORE UPDATE OF phase ON topic_settings
-WHEN NEW.phase NOT IN ('paused','concluded')
-    AND EXISTS (SELECT 1 FROM room_directory WHERE room_id=NEW.room_id AND archived=1)
-BEGIN
-    SELECT RAISE(ABORT, 'topic_archived');
-END;
-CREATE TABLE IF NOT EXISTS discussion_turns (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, room_id TEXT NOT NULL REFERENCES rooms(id),
-    expert TEXT NOT NULL, question TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
-    submission_id TEXT NOT NULL, created_at TEXT NOT NULL, notified_at TEXT NOT NULL DEFAULT '',
-    answer_id INTEGER REFERENCES messages(id), UNIQUE(room_id, submission_id)
-);
-CREATE UNIQUE INDEX IF NOT EXISTS one_open_turn ON discussion_turns(room_id)
-    WHERE status IN ('pending', 'notified');
 CREATE TABLE IF NOT EXISTS message_details (
     message_id INTEGER PRIMARY KEY REFERENCES messages(id),
-    kind TEXT NOT NULL DEFAULT 'opinion', submitted_by TEXT NOT NULL,
-    turn_id INTEGER UNIQUE REFERENCES discussion_turns(id)
+    kind TEXT NOT NULL DEFAULT 'opinion', submitted_by TEXT NOT NULL
 );
-CREATE TRIGGER IF NOT EXISTS validate_turn_answer BEFORE INSERT ON message_details
-WHEN NEW.turn_id IS NOT NULL
-    AND NOT EXISTS (SELECT 1 FROM message_details WHERE message_id=NEW.message_id)
-    AND NOT EXISTS (
-        SELECT 1 FROM discussion_turns JOIN messages ON messages.id=NEW.message_id
-        WHERE discussion_turns.id=NEW.turn_id AND discussion_turns.room_id=messages.room_id
-        AND discussion_turns.expert=messages.author AND discussion_turns.status IN ('pending','notified')
-        AND NEW.kind='opinion'
-    )
-BEGIN
-    SELECT RAISE(ABORT, 'turn_unavailable');
-END;
-
-DROP TRIGGER IF EXISTS reject_inactive_opinion;
-CREATE TRIGGER reject_inactive_opinion BEFORE INSERT ON message_details
-WHEN NEW.kind='opinion'
-    AND (SELECT author FROM messages WHERE id=NEW.message_id)<>'用户'
-    AND NOT EXISTS (SELECT 1 FROM message_details WHERE message_id=NEW.message_id)
-    AND EXISTS (SELECT 1 FROM messages JOIN topic_settings ON topic_settings.room_id=messages.room_id
-                WHERE messages.id=NEW.message_id AND topic_settings.phase IN ('paused','concluded'))
-BEGIN
-    SELECT RAISE(ABORT, 'topic_inactive');
-END;
-CREATE TRIGGER IF NOT EXISTS reject_inactive_turn BEFORE INSERT ON discussion_turns
-WHEN NOT EXISTS (SELECT 1 FROM discussion_turns WHERE room_id=NEW.room_id AND submission_id=NEW.submission_id)
-    AND EXISTS (SELECT 1 FROM topic_settings WHERE room_id=NEW.room_id AND phase IN ('paused','concluded'))
-BEGIN
-    SELECT RAISE(ABORT, 'topic_inactive');
-END;
-CREATE TRIGGER IF NOT EXISTS reject_conclusion_with_open_turn BEFORE UPDATE OF phase ON topic_settings
-WHEN NEW.phase='concluded'
-    AND EXISTS (SELECT 1 FROM discussion_turns WHERE room_id=NEW.room_id AND status IN ('pending','notified'))
-BEGIN
-    SELECT RAISE(ABORT, 'open_turn');
-END;
-
-CREATE TABLE IF NOT EXISTS room_floor (
-    room_id TEXT PRIMARY KEY REFERENCES rooms(id),
-    holder TEXT,
-    next_speaker TEXT NOT NULL,
-    revision INTEGER NOT NULL DEFAULT 0
-);
--- The speaking floor is retired: the table stays only so old databases and backups load, and nothing reads or writes it.
-DROP TRIGGER IF EXISTS initialize_room_floor;
-DROP TRIGGER IF EXISTS transfer_host_floor;
 -- Site administrator account (single user) and its login sessions. Raw tokens and passwords are never stored.
 CREATE TABLE IF NOT EXISTS site_admin (
     id INTEGER PRIMARY KEY CHECK(id=1),
@@ -168,38 +108,20 @@ CREATE TABLE IF NOT EXISTS admin_setup (
     created_at INTEGER NOT NULL
 );
 
--- Free collaboration rooms. Rooms without a row are brainstorm rooms and keep every rule below.
+-- Every room is a free collaboration room; a discussion is a session inside it. Holds the owner's control hash.
 CREATE TABLE IF NOT EXISTS room_modes (
     room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
-    mode TEXT NOT NULL CHECK(mode IN ('free','brainstorm')),
+    mode TEXT NOT NULL CHECK(mode='free'),
     control_hash TEXT NOT NULL DEFAULT ''
 );
--- Replaced on every start so existing databases drop every speaking-floor rule.
-DROP TRIGGER IF EXISTS require_message_floor;
-DROP TRIGGER IF EXISTS return_message_floor;
-DROP TRIGGER IF EXISTS require_host_floor;
-DROP TRIGGER IF EXISTS nominate_expert_floor;
-DROP TRIGGER IF EXISTS cancel_turn_floor;
-CREATE TRIGGER IF NOT EXISTS require_opinion_turn BEFORE INSERT ON message_details
-WHEN NEW.kind='opinion' AND NEW.turn_id IS NULL
-    AND NOT EXISTS (SELECT 1 FROM message_details WHERE message_id=NEW.message_id)
-    AND EXISTS (SELECT 1 FROM messages WHERE id=NEW.message_id AND author<>'用户')
-BEGIN
-    SELECT RAISE(ABORT, 'floor_turn_required');
-END;
 
--- Legacy room-scoped limits remain for read-only history; new discussions use session-scoped limits below.
+-- A room's limits for its next discussion, set at creation or in the topic while no discussion is open; a started
+-- discussion copies them into session_limits.
 CREATE TABLE IF NOT EXISTS discussion_limits (
     room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
     max_rounds INTEGER NOT NULL DEFAULT 0,
     max_minutes INTEGER NOT NULL DEFAULT 0,
-    execution_minutes INTEGER NOT NULL DEFAULT 0,
-    on_limit TEXT NOT NULL DEFAULT 'pause',
-    summary_minutes INTEGER NOT NULL DEFAULT 5,
-    started_at INTEGER NOT NULL DEFAULT 0,
-    closing_at INTEGER NOT NULL DEFAULT 0,
-    stop_reason TEXT NOT NULL DEFAULT '',
-    revision INTEGER NOT NULL DEFAULT 0
+    execution_minutes INTEGER NOT NULL DEFAULT 0
 );
 INSERT OR IGNORE INTO discussion_limits(room_id,execution_minutes) SELECT id,0 FROM rooms;
 DROP TRIGGER IF EXISTS limits_room_created;
@@ -207,76 +129,37 @@ CREATE TRIGGER limits_room_created AFTER INSERT ON rooms
 BEGIN
     INSERT INTO discussion_limits(room_id,execution_minutes) VALUES (NEW.id,0);
 END;
-DROP TRIGGER IF EXISTS limits_topic_started;
-DROP TRIGGER IF EXISTS limits_phase_started;
-DROP TRIGGER IF EXISTS limits_turn_started;
--- Legacy event-based orchestration tables remain for historical reads; the request-based session is authoritative.
-CREATE TABLE IF NOT EXISTS discussion_runtime (
-    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
-    mode TEXT NOT NULL CHECK(mode IN ('manual','automatic')),
-    run_id TEXT NOT NULL,
-    generation INTEGER NOT NULL DEFAULT 1,
-    status TEXT NOT NULL CHECK(status IN ('ready','running','paused','stopped','concluded')),
-    control_hash TEXT NOT NULL,
-    deadline INTEGER NOT NULL DEFAULT 0, -- 0 means no run duration limit; execution leases remain bounded.
-    revision INTEGER NOT NULL DEFAULT 1,
-    resume_phase TEXT NOT NULL DEFAULT 'initial',
-    updated_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS discussion_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-    run_id TEXT NOT NULL,
-    generation INTEGER NOT NULL,
-    cause TEXT NOT NULL,
-    participant TEXT NOT NULL,
-    role TEXT NOT NULL CHECK(role IN ('host','expert')),
-    turn_id INTEGER,
-    status TEXT NOT NULL DEFAULT 'pending'
-        CHECK(status IN ('pending','dispatched','started','completed','cancelled','failed')),
-    token_hash TEXT NOT NULL DEFAULT '',
-    session_id TEXT NOT NULL DEFAULT '',
-    lease_until INTEGER NOT NULL DEFAULT 0,
-    started_at INTEGER NOT NULL DEFAULT 0,
-    result TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-    UNIQUE(room_id,run_id,generation,cause)
-);
-CREATE INDEX IF NOT EXISTS events_room_cursor ON discussion_events(room_id,id);
-CREATE UNIQUE INDEX IF NOT EXISTS one_active_execution ON discussion_events(room_id)
-    WHERE status IN ('dispatched','started');
--- Stage timestamps for the progress panel; old events simply have no timing row.
-CREATE TABLE IF NOT EXISTS event_timings (
-    event_id INTEGER PRIMARY KEY REFERENCES discussion_events(id) ON DELETE CASCADE,
-    dispatched_at INTEGER NOT NULL DEFAULT 0,
-    finished_at INTEGER NOT NULL DEFAULT 0
-);
 -- Freeze dispatch-to-publication time independently of the recent execution list.
 CREATE TABLE IF NOT EXISTS message_timings (
     message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
     elapsed_seconds INTEGER NOT NULL CHECK(elapsed_seconds>=0)
 );
--- Only completed expert events identify a historical message unambiguously.
-INSERT INTO message_timings(message_id,elapsed_seconds)
-    SELECT m.id,MAX(0,CAST(strftime('%s',m.created_at) AS INTEGER)-t.dispatched_at)
-    FROM messages AS m JOIN discussion_events AS e
-        ON e.room_id=m.room_id AND e.result='message:'||m.id AND e.participant=m.author
-    JOIN event_timings AS t ON t.event_id=e.id
-    WHERE m.source IN ('cli','api') AND e.role='expert' AND e.status='completed'
-        AND e.started_at>0 AND t.dispatched_at>0 AND t.finished_at>0
-    ON CONFLICT(message_id) DO NOTHING;
-DROP TRIGGER IF EXISTS record_event_timing;
 -- A failed assertion rolls back the whole D1 batch, including concurrent writes.
 CREATE TABLE IF NOT EXISTS runtime_assertions (
     id TEXT PRIMARY KEY, allowed INTEGER NOT NULL CHECK(allowed=1)
 );
+-- Triggers of the retired discussion-room model (speaking floor, turns, relay, room-scoped runtime and phase).
+-- Dropped on every start so an older database stops enforcing them; its leftover tables are removed by
+-- migrations/drop_legacy_discussion.sql.
+DROP TRIGGER IF EXISTS reject_archived_resume;
+DROP TRIGGER IF EXISTS validate_turn_answer;
+DROP TRIGGER IF EXISTS reject_inactive_opinion;
+DROP TRIGGER IF EXISTS reject_inactive_turn;
+DROP TRIGGER IF EXISTS reject_conclusion_with_open_turn;
+DROP TRIGGER IF EXISTS require_opinion_turn;
+DROP TRIGGER IF EXISTS initialize_room_floor;
+DROP TRIGGER IF EXISTS transfer_host_floor;
+DROP TRIGGER IF EXISTS require_message_floor;
+DROP TRIGGER IF EXISTS return_message_floor;
+DROP TRIGGER IF EXISTS require_host_floor;
+DROP TRIGGER IF EXISTS nominate_expert_floor;
+DROP TRIGGER IF EXISTS cancel_turn_floor;
+DROP TRIGGER IF EXISTS limits_topic_started;
+DROP TRIGGER IF EXISTS limits_phase_started;
+DROP TRIGGER IF EXISTS limits_turn_started;
+DROP TRIGGER IF EXISTS record_event_timing;
 DROP TRIGGER IF EXISTS runtime_generation;
 DROP TRIGGER IF EXISTS runtime_turn_created;
--- Retired relay state is preserved for old databases and historical reads only.
-CREATE TABLE IF NOT EXISTS turn_relay (
-    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
-    held_since INTEGER NOT NULL DEFAULT 0
-);
 DROP TRIGGER IF EXISTS relay_turn_promoted;
 DROP TRIGGER IF EXISTS relay_plan_replaced;
 DROP TRIGGER IF EXISTS relay_hold_user_message;
@@ -293,19 +176,15 @@ DROP TRIGGER IF EXISTS runtime_participants_changed;
 DROP TRIGGER IF EXISTS runtime_experts_changed;
 DROP TRIGGER IF EXISTS runtime_goal_changed;
 DROP TRIGGER IF EXISTS runtime_constraints_changed;
-CREATE TABLE IF NOT EXISTS discussion_pauses (
-    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
-    paused_at INTEGER NOT NULL DEFAULT 0,
-    paused_seconds INTEGER NOT NULL DEFAULT 0
-);
-INSERT INTO discussion_pauses(room_id,paused_at)
-    SELECT room_id,CASE WHEN phase IN ('paused','concluded') THEN COALESCE((SELECT CAST(strftime('%s',updated_at) AS INTEGER)
-        FROM discussion_runtime WHERE discussion_runtime.room_id=topic_settings.room_id AND status<>'running'),
-        CAST(strftime('%s','now') AS INTEGER)) ELSE 0 END
-    FROM topic_settings WHERE NOT EXISTS(SELECT 1 FROM discussion_pauses WHERE discussion_pauses.room_id=topic_settings.room_id);
 DROP TRIGGER IF EXISTS pause_clock_stopped;
 DROP TRIGGER IF EXISTS pause_clock_resumed;
--- Both room kinds register members; free rooms additionally persist requests and executions.
+DROP TRIGGER IF EXISTS session_for_new_discussion;
+DROP TRIGGER IF EXISTS session_follows_phase_insert;
+DROP TRIGGER IF EXISTS session_follows_phase;
+DROP TRIGGER IF EXISTS conclusion_snapshot;
+DROP TRIGGER IF EXISTS revision_free_settings_insert;
+DROP TRIGGER IF EXISTS revision_free_settings_update;
+-- Room members; their requests and executions follow.
 CREATE TABLE IF NOT EXISTS room_members (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
@@ -419,10 +298,10 @@ CREATE TABLE IF NOT EXISTS execution_retries (
     reason TEXT NOT NULL DEFAULT '',
     stopped INTEGER NOT NULL DEFAULT 0
 );
--- Phases the runner saw a member's software go through in one execution (a free execution or a discussion event), as
+-- Phases the runner saw a member's software go through in one execution, as
 -- millisecond offsets from its delivery; numbered per execution, and a resent segment keeps the later end. Not part of backups.
 CREATE TABLE IF NOT EXISTS execution_segments (
-    source TEXT NOT NULL CHECK(source IN ('free','discussion')),
+    source TEXT NOT NULL CHECK(source='free'),
     execution_id INTEGER NOT NULL,
     seq INTEGER NOT NULL,
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
@@ -460,20 +339,6 @@ CREATE TABLE IF NOT EXISTS group_routes (
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     request_id INTEGER NOT NULL,
     action TEXT NOT NULL CHECK(action IN ('all','sequential','host'))
-);
--- Discussion options chosen at creation. A room without a row predates the option and keeps named follow-ups.
-CREATE TABLE IF NOT EXISTS discussion_options (
-    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
-    named_followup INTEGER NOT NULL DEFAULT 0 CHECK(named_followup IN (0,1))
-);
--- Program-controlled round budget: rounds are expert opinions per active expert counted from `base`, so a roster that skips
--- someone cannot stall the limit. `cap` is the current segment's round limit (0 = discussion_limits.max_rounds); `extra` is the
--- total rounds the user appended. A room without a row predates the budget and keeps the per-roster round count.
-CREATE TABLE IF NOT EXISTS round_budgets (
-    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
-    base INTEGER NOT NULL DEFAULT 0,
-    cap INTEGER NOT NULL DEFAULT 0,
-    extra INTEGER NOT NULL DEFAULT 0
 );
 -- Visible record of each smart-scheduling decision in a discussion; it is not a message and moves no round or floor.
 CREATE TABLE IF NOT EXISTS scheduler_decisions (
@@ -631,11 +496,6 @@ CREATE TABLE IF NOT EXISTS free_handoffs (
     batch_id INTEGER NOT NULL,
     PRIMARY KEY (room_id,batch_id)
 );
--- Superseded by free_round_limits: it counted AI-created requests, which rose with the number of members. Kept, unread.
-CREATE TABLE IF NOT EXISTS free_settings (
-    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
-    max_auto_hops INTEGER NOT NULL
-);
 -- The owner's per-room limit on rounds a host may run from one owner message (a round is one host dispatch, its members'
 -- answers and the hand-back); rooms without a row use the default.
 CREATE TABLE IF NOT EXISTS free_round_limits (
@@ -654,15 +514,8 @@ CREATE TABLE IF NOT EXISTS free_chain_holds (
     handoff INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (room_id,chain_id)
 );
--- A brainstorm room started from a free room keeps its origin for the way back.
-CREATE TABLE IF NOT EXISTS room_links (
-    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
-    parent_id TEXT NOT NULL,
-    created_at TEXT NOT NULL
-);
-
 -- A discussion is a switch on a room, not a room type: one thin record per started discussion.
--- Session status is written by the application; legacy topic phase remains for old history only.
+-- Session status is written by the application.
 CREATE TABLE IF NOT EXISTS discussion_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
@@ -673,17 +526,6 @@ CREATE TABLE IF NOT EXISTS discussion_sessions (
     created_at TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS one_open_session ON discussion_sessions(room_id) WHERE status IN ('active','paused');
--- Rooms that predate sessions: every non-free room with topic settings gets one, mapped from its phase. Safe to repeat.
-INSERT INTO discussion_sessions (room_id,goal,status,started_message_id,ended_message_id,created_at)
-SELECT rooms.id,rooms.goal,
-       CASE WHEN topic_settings.phase='concluded' THEN 'concluded' WHEN topic_settings.phase IN ('preparing','paused') THEN 'paused' ELSE 'active' END,
-       0,CASE WHEN topic_settings.phase='concluded' THEN COALESCE((SELECT MAX(id) FROM messages WHERE room_id=rooms.id),0) ELSE 0 END,rooms.created_at
-FROM rooms JOIN topic_settings ON topic_settings.room_id=rooms.id
-WHERE NOT EXISTS (SELECT 1 FROM room_modes WHERE room_id=rooms.id AND mode='free')
-  AND NOT EXISTS (SELECT 1 FROM discussion_sessions WHERE room_id=rooms.id);
-DROP TRIGGER IF EXISTS session_for_new_discussion;
-DROP TRIGGER IF EXISTS session_follows_phase_insert;
-DROP TRIGGER IF EXISTS session_follows_phase;
 -- Historical conclusion snapshots are written by the application and remain readable across later discussions.
 CREATE TABLE IF NOT EXISTS discussion_conclusions (
     session_id INTEGER PRIMARY KEY REFERENCES discussion_sessions(id) ON DELETE CASCADE,
@@ -696,20 +538,7 @@ CREATE TABLE IF NOT EXISTS discussion_conclusions (
     state_until INTEGER NOT NULL DEFAULT 0,
     concluded_at TEXT NOT NULL
 );
-DROP TRIGGER IF EXISTS conclusion_snapshot;
--- Discussions that ended before snapshots: only the latest still matches the room's state, so only it gets one. Safe to repeat.
-INSERT OR IGNORE INTO discussion_conclusions (session_id,room_id,stop_reason,max_rounds,max_minutes,brief,state,state_until,concluded_at)
-SELECT s.id,s.room_id,COALESCE(l.stop_reason,''),COALESCE(l.max_rounds,0),COALESCE(l.max_minutes,0),CASE WHEN b.until>s.started_message_id THEN b.text ELSE '' END,
-           CASE WHEN r.state_until>s.started_message_id THEN r.state_text ELSE '' END,CASE WHEN r.state_until>s.started_message_id THEN r.state_until ELSE 0 END,''
-FROM discussion_sessions AS s JOIN rooms AS r ON r.id=s.room_id
-LEFT JOIN discussion_limits AS l ON l.room_id=s.room_id LEFT JOIN room_briefs AS b ON b.room_id=s.room_id
-WHERE s.status='concluded' AND s.id=(SELECT MAX(id) FROM discussion_sessions WHERE room_id=s.room_id);
-
--- The review phase behaved exactly like discussing and was retired; move rows left in it.
-UPDATE topic_settings SET phase='discussing' WHERE phase='reviewing';
-UPDATE discussion_runtime SET resume_phase='discussing' WHERE resume_phase='reviewing';
-
--- Request-based sessions use session-scoped settings. The room-scoped tables above remain read-only legacy history.
+-- Session-scoped settings and state.
 CREATE TABLE IF NOT EXISTS session_start_submissions (
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     submission_id TEXT NOT NULL,
@@ -809,31 +638,6 @@ CREATE TABLE IF NOT EXISTS session_ask_submissions (
     PRIMARY KEY (room_id,submission_id)
 );
 
--- Stop old engine sessions once during upgrade. Their original phase and rows remain readable, while new sessions can open.
-CREATE TABLE IF NOT EXISTS schema_migrations (
-    name TEXT PRIMARY KEY,
-    applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
-);
-INSERT OR IGNORE INTO discussion_conclusions (session_id,room_id,stop_reason,max_rounds,max_minutes,brief,state,state_until,concluded_at)
-SELECT s.id,s.room_id,'engine_upgrade',COALESCE(l.max_rounds,0),COALESCE(l.max_minutes,0),
-       CASE WHEN b.until>s.started_message_id THEN b.text ELSE '' END,
-       CASE WHEN r.state_until>s.started_message_id THEN r.state_text ELSE '' END,
-       CASE WHEN r.state_until>s.started_message_id THEN r.state_until ELSE 0 END,
-       strftime('%Y-%m-%dT%H:%M:%SZ','now')
-FROM discussion_sessions AS s JOIN rooms AS r ON r.id=s.room_id
-LEFT JOIN discussion_limits AS l ON l.room_id=s.room_id LEFT JOIN room_briefs AS b ON b.room_id=s.room_id
-WHERE s.status IN ('active','paused')
-  AND NOT EXISTS (SELECT 1 FROM schema_migrations WHERE name='discussion_session_requests_v1');
-UPDATE discussion_runtime SET status='stopped',generation=generation+1,updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
-WHERE status IN ('ready','running','paused')
-  AND room_id IN (SELECT room_id FROM discussion_sessions WHERE status IN ('active','paused'))
-  AND NOT EXISTS (SELECT 1 FROM schema_migrations WHERE name='discussion_session_requests_v1');
-UPDATE discussion_sessions SET status='concluded',
-    ended_message_id=COALESCE((SELECT MAX(id) FROM messages WHERE messages.room_id=discussion_sessions.room_id),0)
-WHERE status IN ('active','paused')
-  AND NOT EXISTS (SELECT 1 FROM schema_migrations WHERE name='discussion_session_requests_v1');
-INSERT OR IGNORE INTO schema_migrations(name) VALUES ('discussion_session_requests_v1');
-
 -- A computer running the local service, paired by the site administrator. Only project names and ids and the
 -- configured client of each platform are published; directories and credentials stay on that computer.
 CREATE TABLE IF NOT EXISTS local_machines (
@@ -876,12 +680,6 @@ CREATE TABLE IF NOT EXISTS machine_commands (
     updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS machine_commands_machine ON machine_commands(machine_id, status);
-
--- Normalize legacy online relay members and retired brainstorm rooms for the shared free-room model.
-INSERT OR IGNORE INTO member_manual_sources(member_id,source)
-SELECT id,'web' FROM room_members WHERE access='online';
-UPDATE room_members SET access='manual' WHERE access='online';
-UPDATE room_modes SET mode='free' WHERE mode='brainstorm';
 
 -- Change revisions, so idle rooms are not read on every poll. Every write a reader could show or act on gives its room the next
 -- value of one site-wide sequence: a room's revision tells a runner or page that this room changed, and the largest revision
@@ -1139,20 +937,6 @@ BEGIN
 END;
 DROP TRIGGER IF EXISTS revision_order_update;
 CREATE TRIGGER revision_order_update AFTER UPDATE ON speaking_orders
-BEGIN
-    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
-    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
-        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
-END;
-DROP TRIGGER IF EXISTS revision_free_settings_insert;
-CREATE TRIGGER revision_free_settings_insert AFTER INSERT ON free_settings
-BEGIN
-    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
-    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
-        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
-END;
-DROP TRIGGER IF EXISTS revision_free_settings_update;
-CREATE TRIGGER revision_free_settings_update AFTER UPDATE ON free_settings
 BEGIN
     UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
     INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)

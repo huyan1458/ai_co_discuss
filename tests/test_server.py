@@ -6,7 +6,6 @@ import os
 import sqlite3
 import tempfile
 import threading
-import time
 import unittest
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
@@ -17,9 +16,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request, urlopen
 from urllib.robotparser import RobotFileParser
 
-from backend.server import (DiscussionHandler, DiscussionServer, connect_db, create_room,
-                            get_message, init_database, require_room)
-from backend.runtime import runtime_view
+from backend.server import DiscussionHandler, DiscussionServer, connect_db, create_room, init_database, require_room
 
 
 class DiscussionTests(unittest.TestCase):
@@ -432,8 +429,8 @@ class DiscussionTests(unittest.TestCase):
         self.assertTrue(snapshot["exported_at"])
         tables = snapshot["tables"]
         self.assertEqual(set(tables), {"rooms", "room_directory", "room_folder_assignments", "topic_folders", "room_creations",
-                                      "room_briefs", "room_user_requests", "topic_settings", "discussion_limits", "messages", "message_withdrawals", "message_details", "message_summaries", "message_timings", "discussion_turns", "attachments", "room_modes", "room_members", "member_requests", "member_suggestions", "member_recommendations",
-                                      "discussion_options", "round_budgets", "scheduler_decisions", "review_plans",
+                                      "room_briefs", "room_user_requests", "topic_settings", "discussion_limits", "messages", "message_withdrawals", "message_details", "message_summaries", "message_timings", "attachments", "room_modes", "room_members", "member_requests", "member_suggestions", "member_recommendations",
+                                      "scheduler_decisions", "review_plans",
                                       "discussion_sessions", "discussion_conclusions", "session_requests",
                                       "task_message_sources", "session_state", "session_limits",
                                       "session_round_budgets", "session_options", "session_pauses"})
@@ -442,9 +439,8 @@ class DiscussionTests(unittest.TestCase):
             self.assertEqual(row, {key: original[key] for key in row})
         details = next(row for row in tables["message_details"] if row["message_id"] == answer["id"])
         summary = next(row for row in tables["message_summaries"] if row["message_id"] == answer["id"])
-        self.assertEqual((details["submitted_by"], details["turn_id"]), ("Codex", None))
+        self.assertEqual(details, {"message_id": answer["id"], "kind": "chat", "submitted_by": "Codex"})
         self.assertEqual((summary["text"], summary["author"]), ("摘要", "Gemini"))
-        self.assertEqual(tables["discussion_turns"], [])
         self.assertEqual(tables["rooms"][0]["state_text"], "保留分歧")
         self.assertEqual(tables["room_briefs"][0]["text"], "主持简报")
         self.assertEqual(tables["topic_settings"][0]["host"], "Codex")
@@ -508,7 +504,7 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual((second["text"], second["reply_to"]), (f"补充 #{new_first['id']}", new_first["id"]))
         self.assertEqual((new_answer["text"], new_answer["summary"], new_answer["submitted_by"]),
                          (f"回应 #{new_first['id']}", f"摘要 #{new_first['id']}", "Codex"))
-        self.assertIsNone(new_answer["turn_id"])
+        self.assertNotIn("turn_id", new_answer)
         self.assertIsNone(room["current_turn"])
         path = f"/api/rooms/importedroom/attachments/{result['attachments'][file['id']]}"
         self.assertEqual(self.attachment_request(path + "/content")[0], 404)
@@ -624,7 +620,7 @@ class DiscussionTests(unittest.TestCase):
         status, snapshot = self.request(f"/api/rooms/{self.room['id']}/backup")
         self.assertEqual(status, 200)
         self.assertEqual(snapshot["tables"]["messages"], [])
-        self.assertEqual(snapshot["tables"]["discussion_turns"], [])
+        self.assertEqual(snapshot["tables"]["discussion_sessions"], [])
         self.assertEqual(self.request("/api/rooms/missing/backup"), (404, {"error": "房间不存在"}))
 
     def test_channel_order_and_rename_survive_reload(self):
@@ -910,7 +906,7 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.request(f"/api/rooms/{other['id']}")[0], 200)
         if not self.external:
             with closing(sqlite3.connect(self.database)) as connection:
-                for table in ("messages", "discussion_turns", "topic_settings", "room_directory", "room_folder_assignments", "room_briefs", "room_floor"):
+                for table in ("messages", "topic_settings", "room_directory", "room_folder_assignments", "room_briefs", "discussion_limits"):
                     self.assertEqual(connection.execute(f"SELECT COUNT(*) FROM {table} WHERE room_id=?", (self.room["id"],)).fetchone()[0], 0)
                 self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
 
@@ -1269,7 +1265,7 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.request(base + f"/turns/{plan['id']}")[1]["status"], "open")
         status, saved = self.request(base + "/messages", answer)
         self.assertEqual(status, 201, saved)
-        self.assertIsNone(saved["message"]["turn_id"])
+        self.assertNotIn("turn_id", saved["message"])
         self.assertEqual(self.request(base + f"/turns/{plan['id']}")[1]["status"], "answered")
         self.assertTrue(self.request(base + "/messages", answer)[1]["duplicate"])
         self.assertEqual(self.request(base + "/messages", {**answer, "text": "改过的回答"})[0], 409)
@@ -1647,113 +1643,8 @@ class DiscussionTests(unittest.TestCase):
             self.assertEqual(self.request(base)[1]["message_count"],1)
 
 
-class LegacyStorageTests(unittest.TestCase):
-    """Verify additive migration from the actual pre-host schema."""
-
-    def legacy_fixture(self):
-        """Create isolated storage for direct, read-only history fixtures."""
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        database = Path(directory.name) / "history.sqlite3"
-        init_database(database, seed=False)
-        connection = connect_db(database)
-        self.addCleanup(connection.close)
-        room = create_room(connection, {"title": "历史讨论", "host": "Codex", "members": [
-            {"name": "Codex", "access": "runner", "token": uuid.uuid4().hex},
-            {"name": "Gemini", "access": "online", "token": uuid.uuid4().hex}]}, uuid.uuid4().hex)
-        connection.execute("INSERT INTO round_budgets(room_id,base,cap,extra) VALUES (?,0,0,0)", (room["id"],))
-        connection.commit()
-        return connection, room
-
-    def seed_legacy_messages(self, connection, room, records):
-        """Insert an old transcript directly, without calling retired write endpoints."""
-        messages = []
-        for index, (author, kind) in enumerate(records):
-            turn_id = None
-            if author != "用户" and kind == "opinion":
-                turn_id = connection.execute("""INSERT INTO discussion_turns
-                    (room_id,expert,question,status,submission_id,created_at) VALUES (?,?,?,'pending',?,'test')""",
-                    (room["id"], author, "历史问题", f"history-turn-{index}")).lastrowid
-            message_id = connection.execute("""INSERT INTO messages
-                (room_id,author,text,source,submission_id,created_at) VALUES (?,?,?,?,?,'test')""",
-                (room["id"], author, f"历史原文 {index}", "host_proxy" if author == "Gemini" else "cli", f"history-message-{index}")).lastrowid
-            connection.execute("INSERT INTO message_details(message_id,kind,submitted_by,turn_id) VALUES(?,?,?,?)",
-                               (message_id, kind, "Codex" if author == "Gemini" else author, turn_id))
-            if turn_id:
-                connection.execute("UPDATE discussion_turns SET status='answered',answer_id=? WHERE id=?", (message_id, turn_id))
-            messages.append(get_message(connection, room["id"], message_id))
-        connection.execute("""INSERT INTO discussion_sessions
-            (room_id,goal,status,started_message_id,ended_message_id,created_at) VALUES (?,'旧讨论','concluded',0,?,'test')""",
-            (room["id"], messages[-1]["id"]))
-        connection.commit()
-        return messages
-
-    def test_legacy_round_boundaries_and_backup_links_remain_readable(self):
-        """Historical roster rounds, budget groups, proxy authors and turn links survive filtering and import."""
-        from backend.room_import import import_room
-        from backend.server import query_messages, room_backup
-        connection, room = self.legacy_fixture()
-        records = [("Codex", "opinion")] * 18 + [("Gemini", "opinion"),
-            ("用户", "moderation"), ("Codex", "opinion"), ("Gemini", "opinion"), ("用户", "moderation")]
-        messages = self.seed_legacy_messages(connection, room, records)
-        expected = [{"number": 1, "start_id": messages[0]["id"], "speakers": ["Codex", "Gemini"], "completed": True},
-                    {"number": 2, "start_id": messages[19]["id"], "speakers": ["Codex", "Gemini"], "completed": True}]
-        for params in ({"page": 1}, {"page": 2}, {"author": "Gemini"}, {"q": "missing"}):
-            query_messages(connection, room["id"], params)
-            self.assertEqual(require_room(connection, room["id"])["rounds"], expected)
-        stored = require_room(connection, room["id"])
-        self.assertEqual(stored["completed_rounds"], 2)
-        self.assertEqual([item["completed"] for item in stored["round_groups"]], [True] * 10 + [False])
-        connection.execute("UPDATE room_modes SET mode='brainstorm' WHERE room_id=?", (room["id"],))
-        connection.commit()
-        snapshot = room_backup(connection, room["id"])
-        self.assertEqual(connection.execute("SELECT mode FROM room_modes WHERE room_id=?", (room["id"],)).fetchone()[0], "brainstorm")
-        old_answer = messages[21]
-        old_turn = next(row for row in snapshot["tables"]["discussion_turns"] if row["id"] == old_answer["turn_id"])
-        self.assertEqual(old_turn["answer_id"], old_answer["id"])
-        backup = json.loads(json.dumps(snapshot).replace(room["id"], "legacyimport"))
-        backup["version"] = 1
-        for table in ("discussion_sessions", "discussion_conclusions", "session_requests", "task_message_sources",
-                      "session_state", "session_limits", "session_round_budgets", "session_options", "session_pauses"):
-            backup["tables"].pop(table)
-        import_room(connection, backup, uuid.uuid4().hex, int(time.time()))
-        connection.commit()
-        self.assertEqual(connection.execute("SELECT mode FROM room_modes WHERE room_id='legacyimport'").fetchone()[0], "free")
-        imported = query_messages(connection, "legacyimport", {"page": 2})["messages"][1]
-        linked = connection.execute("SELECT answer_id FROM discussion_turns WHERE id=?", (imported["turn_id"],)).fetchone()
-        self.assertEqual((imported["submitted_by"], linked[0]), ("Codex", imported["id"]))
-        self.assertGreater(imported["id"], old_answer["id"])
-        self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
-
-    def test_a_database_with_the_retired_floor_keeps_its_data_and_loses_the_floor_rules(self):
-        """Old floor rows stay untouched, and an old trigger can no longer block an answer."""
-        with tempfile.TemporaryDirectory() as directory:
-            database = Path(directory) / "floor-migration.sqlite3"
-            schema = (Path(__file__).resolve().parent.parent / "backend" / "schema.sql").read_text(encoding="utf-8")
-            with closing(sqlite3.connect(database)) as connection, connection:
-                connection.executescript(schema)
-                connection.execute("INSERT INTO rooms(id,title,goal,created_at) VALUES ('old','旧房间','保留历史','test')")
-                connection.execute("INSERT INTO topic_settings(room_id,host,experts) VALUES ('old','Codex',?)", ('{"Codex":"cli","Gemini":"online"}',))
-                connection.execute("INSERT INTO room_floor(room_id,holder,next_speaker,revision) VALUES ('old','Codex','Gemini',3) ON CONFLICT(room_id) DO UPDATE SET revision=3")
-                connection.execute("INSERT INTO discussion_turns(room_id,expert,question,submission_id,created_at) VALUES ('old','Gemini','原问题','old-turn','test')")
-                connection.execute("CREATE TRIGGER runtime_generation AFTER UPDATE OF status ON discussion_runtime BEGIN SELECT 1; END")
-                connection.execute("CREATE TRIGGER relay_plan_concluded AFTER UPDATE OF phase ON topic_settings BEGIN SELECT 1; END")
-                connection.execute("CREATE TRIGGER session_follows_phase AFTER UPDATE OF phase ON topic_settings BEGIN SELECT 1; END")
-                connection.execute("CREATE TRIGGER conclusion_snapshot AFTER UPDATE OF phase ON topic_settings BEGIN SELECT 1; END")
-                connection.execute("CREATE TRIGGER limits_phase_started AFTER UPDATE OF phase ON topic_settings BEGIN SELECT 1; END")
-                connection.execute("""CREATE TRIGGER require_message_floor BEFORE INSERT ON messages WHEN NEW.author<>'用户'
-                    BEGIN SELECT RAISE(ABORT, 'floor_required'); END""")
-            init_database(database, seed=False)
-            with closing(sqlite3.connect(database)) as connection, connection:
-                connection.row_factory = sqlite3.Row
-                room = require_room(connection, "old")
-                self.assertNotIn("floor", room)
-                self.assertEqual(room["current_turn"]["question"], "原问题")
-                self.assertEqual(connection.execute("SELECT revision FROM room_floor WHERE room_id='old'").fetchone()[0], 3)
-                names = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
-                self.assertFalse({"require_message_floor", "return_message_floor", "require_host_floor", "nominate_expert_floor", "cancel_turn_floor"} & names)
-                self.assertFalse({"runtime_generation", "relay_plan_concluded", "session_follows_phase",
-                                  "conclusion_snapshot", "limits_phase_started"} & names)
+class SessionGuardTests(unittest.TestCase):
+    """Verify the discussion session state machine directly against isolated storage."""
 
     def test_session_guards_reject_stale_controls_and_two_open_discuss_requests(self):
         """The new state machine validates the read revision and database-level single-open invariant."""
@@ -1782,31 +1673,6 @@ class LegacyStorageTests(unittest.TestCase):
                 connection.commit()
                 with self.assertRaises(ValueError),connection:
                     create_plan(connection,room["id"],{**payload,"submission_id":"paused-plan-001","roster":roster_view(connection,room["id"])["revision"]},room)
-
-    def test_legacy_database_and_url_history_survive_reinitialization(self):
-        """Schema upgrades preserve old room and message content verbatim."""
-        with tempfile.TemporaryDirectory() as directory:
-            database = Path(directory) / "legacy.sqlite3"
-            with closing(sqlite3.connect(database)) as connection, connection:
-                connection.executescript("""
-                    CREATE TABLE rooms (id TEXT PRIMARY KEY,title TEXT NOT NULL,goal TEXT NOT NULL,
-                        state_text TEXT NOT NULL DEFAULT '',state_until INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL);
-                    CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT,room_id TEXT NOT NULL,
-                        author TEXT NOT NULL,text TEXT NOT NULL,reply_to INTEGER,source TEXT NOT NULL,
-                        submission_id TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(room_id,submission_id));
-                    INSERT INTO rooms VALUES ('legacy','历史话题','保留原文','旧状态',1,'2026-10-14');
-                    INSERT INTO messages VALUES (1,'legacy','Gemini','历史 URL 原文 & 中文',NULL,'url','legacy-001','2026-10-14');
-                """)
-            init_database(database)
-            init_database(database)
-            with closing(sqlite3.connect(database)) as connection:
-                connection.row_factory = sqlite3.Row
-                room = require_room(connection, "legacy")
-                message = get_message(connection, "legacy", 1)
-                self.assertEqual((room["host"], room["message_count"], room["state_text"]), ("用户", 1, "旧状态"))
-                self.assertEqual((message["source"], message["text"]), ("url", "历史 URL 原文 & 中文"))
-                self.assertEqual((message["summary"], message["summary_by"]), ("", ""))
-                self.assertIsNone(room["host_brief"])
 
 
 if __name__ == "__main__":

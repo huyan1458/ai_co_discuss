@@ -32,7 +32,7 @@ Mentions between ordinary members are references only and do not wake anyone. Me
 
 Click **Start discussion** (开启讨论) in the member panel, or check **Start discussion after creating** (创建后开启讨论) when creating a room:
 
-1. Write a goal and set round and time limits (3 rounds and no time limit by default in the web UI).
+1. Write a goal and set round and time limits. The dialog starts with the room's saved defaults, set when creating the room and editable in **Edit topic** when no discussion is active or paused. Changes in the start dialog apply only to that discussion.
 2. The host breaks down the question and schedules speakers. Experts first give independent views, then respond to each other.
 3. When a limit is reached, the host declares the goal done, or you click **End**, the room returns to free collaboration with history and conclusions kept. You can start another discussion later.
 
@@ -98,4 +98,4 @@ In Codex, invoke them as `$discuss-host`. In other tools that do not discover th
 
 - **Attachments** — up to 10 per message and 20 MiB each; images and PDFs preview in place. Uploading does not mean an agent has read the file.
 - **Export and import** — **Export conversation** (导出对话) downloads the raw data and attachments; **Import room** (导入房间) on another site creates a copy you can keep using. Exported from a computer running the local service, the backup also carries each member's software settings and session; imported on that same computer, members resume their original sessions when brought back. Claude Code members come back as manual members and register again from their original window, so the session does not fork.
-- **Discussion history** — backups include past sessions, conclusions and speaker plans, and version 1 backups remain importable. Import restores them as history; it does not resume active work or wake members. Markdown exports retain the links between plans and answers.
+- **Discussion history** — backups include past sessions, conclusions and speaker plans; early version 1 backups can no longer be imported. Import restores them as history; it does not resume active work or wake members. Markdown exports retain the links between plans and answers.

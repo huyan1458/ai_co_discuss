@@ -234,7 +234,7 @@ export class FreeRoomRunner {
     }
     if (!inbox.archived) await this.sync_review_capabilities(inbox);
     if (!inbox.archived) await this.sync_member_capabilities(inbox);
-    if (!inbox.archived && room.mode === 'free' && room.session?.status === 'active'
+    if (!inbox.archived && room.session?.status === 'active'
       && await this.session_driver.tick(room, inbox)) {
       // A scheduled plan completes the pending host request and creates a speaker request.
       inbox = await api(this.config, '/inbox');

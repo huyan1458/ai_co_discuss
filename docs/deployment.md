@@ -99,7 +99,26 @@ npm run deploy -- --cwd .wrangler/deploy
 codiscuss token
 ```
 
-`codiscuss token` 生成注册管理员用的一次性令牌（需已 `wrangler login`），在网站左下角注册时填入；在已用 `codiscuss local connect` 连上本机的网页注册时，账号密码会保存到 `~/.codiscuss/admin-accounts.json`。注册后其他设备直接用账号密码登录。`schema.sql` 可重复执行；升级已有站点前请先备份 D1（`npx wrangler d1 export`）。
+`codiscuss token` 生成注册管理员用的一次性令牌（需已 `wrangler login`），在网站左下角注册时填入；在已用 `codiscuss local connect` 连上本机的网页注册时，账号密码会保存到 `~/.codiscuss/admin-accounts.json`。注册后其他设备直接用账号密码登录。以上 schema 命令用于空库初始化；已有站点按下面的升级流程操作。
+
+### 升级已有数据库
+
+schema 有变化时，线上 D1 按“导出备份 → 删除旧讨论模型表 → 执行 schema”升级，再部署网站。删表不可逆，**执行删表脚本前须取得用户明确确认**；先停止写入、保留附件，并在数据库副本验证。不要只执行 schema，否则旧外键可能使删除房间失败。
+
+```sh
+npx wrangler d1 export DB --remote --config .wrangler/deploy/wrangler.jsonc --output backup-before-upgrade.sql
+```
+
+确认备份成功并获得删表授权后执行：
+
+```sh
+npx wrangler d1 execute DB --remote --config .wrangler/deploy/wrangler.jsonc --file backend/migrations/drop_legacy_discussion.sql
+npx wrangler d1 execute DB --remote --config .wrangler/deploy/wrangler.jsonc --file backend/schema.sql
+```
+
+脚本删除旧排程和运行记录，保留消息及当前协作会话；没有房主凭据的旧房间仍可阅读，但房主无法管理，已有成员凭据保留原权限。任一步失败立即停止，不继续部署；D1 上的整份迁移原子性尚未实测，必须保留事前备份。成功后的脚本和 schema 均可重复执行。
+
+本机 Python 站点启动时检测旧表，自动在单个事务内迁移，再应用 schema；迁移失败会整体回滚并终止启动。升级前仍应备份 SQLite 和附件，不必手工执行删表脚本。
 
 发布后检查网页、`/api/health`，以及：
 
@@ -112,7 +131,7 @@ codiscuss health --site https://YOUR_PROJECT_NAME.pages.dev
 网站与 runner 必须配套升级，不能混用旧的投递方式协议。升级步骤：
 
 1. 暂停新请求，结束所有正在进行的本机执行，再停止 runner 和网站写入；仅在网页点击停止不能保证原软件已退出。
-2. 备份 D1 与附件，在数据库副本验证升级。重新执行 `backend/schema.sql`，创建 `execution_capabilities`、`member_capabilities`、`late_answers`；已有表缺列时须按升级版本另外补列。
+2. 按“升级已有数据库”完成备份、确认删表与 schema 更新，创建 `execution_capabilities`、`member_capabilities`、`late_answers`；已有表缺列时须按升级版本另外补列。
 3. 更新网站与所有连接它的 runner，核对房间读取、能力上报、停止和暂缓投递，再恢复请求。
 
 旧 `execution_deliveries` 表保留但不再读取，也不迁移；该表未部署到线上，仅有临时测试数据。保留旧表不代表支持混版运行。本机 Python 站点同样须先结束执行，再配套更新网站与 runner。

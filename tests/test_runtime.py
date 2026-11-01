@@ -1,7 +1,6 @@
 """Regression coverage for discussion sessions and member executions."""
 
 import json
-import hashlib
 import os
 import sqlite3
 import tempfile
@@ -12,9 +11,11 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from backend import server as server_module
 from backend.server import DiscussionServer, init_database
 
 
@@ -105,77 +106,14 @@ class RuntimeTests(unittest.TestCase):
     def execution_action(self, execution, payload, token=None):
         return self.request(f"{self.path}/executions/{execution['id']}", payload, token or self.owner)
 
-    def test_active_session_rejects_legacy_runtime_and_event_writes(self):
-        """The retired run-generation interface is read-only while a new session is active."""
-        session = self.start_session()["session"]
-        self.assertEqual(self.request(self.path + "/runtime", {"action": "pause", "revision": 0}, self.owner)[0], 400)
-        self.assertEqual(self.request(self.path + "/events/1", {"action": "enter", "session_id": "legacy"}, self.owner)[0], 400)
-        self.assertEqual(self.request(self.path + "/events", token=self.owner)[0], 400)
-        self.assertEqual(self.request(self.path + "/runtime", token=self.owner)[0], 400)
-        self.assertEqual(self.request(self.path + "/discussion")[1]["session"]["id"], session["id"])
-
-    def test_concluded_session_keeps_legacy_history_reads_and_rejects_mutations(self):
-        """Ended request-model sessions retain old reads but reject runtime writes and segment reports."""
-        self.start_session()
-        discussion = self.request(self.path + "/discussion")[1]
-        status, result = self.request(self.path + "/discussion", {
-            "action": "end", "revision": discussion["revision"],
-        }, self.owner)
-        self.assertEqual(status, 200, result)
-        with closing(sqlite3.connect(self.database)) as connection, connection:
-            connection.execute("""INSERT INTO discussion_runtime
-                (room_id,mode,run_id,generation,status,control_hash,updated_at)
-                VALUES(?,?,?,?,?,?,?)""", (self.room, "automatic", "legacy-run", 1, "stopped",
-                                               hashlib.sha256(self.owner.encode()).hexdigest(), "2026-01-01T00:00:00Z"))
-            event_id = connection.execute("""INSERT INTO discussion_events
-                (room_id,run_id,generation,cause,participant,role,status,created_at)
-                VALUES(?,?,?,?,?,?,?,?)""", (self.room, "legacy-run", 1, "legacy-seed", "Codex", "host",
-                                                "completed", "2026-01-01T00:00:00Z")).lastrowid
-        self.assertEqual(self.request(self.path + "/runtime", token=self.owner)[0], 200)
-        self.assertEqual(self.request(self.path + "/events", token=self.owner)[0], 200)
-        self.assertEqual(self.request(f"{self.path}/events/{event_id}", {"action": "view"}, self.owner)[0], 200)
-        self.assertEqual(self.request(self.path + "/runtime", {"action": "stop"}, self.owner)[0], 409)
-        self.assertEqual(self.request(f"{self.path}/events/{event_id}", {"action": "fail"}, self.owner)[0], 409)
-        self.assertEqual(self.request(f"{self.path}/events/{event_id}", {"action": "segments", "segments": []}, self.owner)[0], 409)
-        self.assertEqual(self.request(self.path + "/timeline")[0], 200)
-
-    def test_unmodeled_free_room_rejects_legacy_segments(self):
-        """A free room without request-model session history cannot mutate the legacy execution timeline."""
-        with closing(sqlite3.connect(self.database)) as connection, connection:
-            connection.execute("""INSERT INTO discussion_runtime
-                (room_id,mode,run_id,generation,status,control_hash,updated_at)
-                VALUES(?,?,?,?,?,?,?)""", (self.room, "automatic", "legacy-run", 1, "stopped",
-                                               hashlib.sha256(self.owner.encode()).hexdigest(), "2026-01-01T00:00:00Z"))
-            event_id = connection.execute("""INSERT INTO discussion_events
-                (room_id,run_id,generation,cause,participant,role,status,created_at)
-                VALUES(?,?,?,?,?,?,?,?)""", (self.room, "legacy-run", 1, "legacy-seed", "Codex", "host",
-                                                "completed", "2026-01-01T00:00:00Z")).lastrowid
-        self.assertEqual(self.request(self.path + f"/events/{event_id}", {"action": "segments", "segments": []}, self.owner)[0], 400)
-
-    def test_legacy_event_history_remains_readable_after_schema_reinitialization(self):
-        """Old event rows remain readable and startup does not recreate legacy work."""
-        if not hasattr(self, "database"):
-            self.skipTest("历史 seed 与 schema 重新初始化需要隔离 SQLite")
-        with closing(sqlite3.connect(self.database)) as connection, connection:
-            connection.execute("INSERT INTO discussion_runtime(room_id,mode,run_id,generation,status,control_hash,updated_at) VALUES(?,?,?,?,?,?,?)",
-                (self.room, "automatic", "legacy-run", 7, "stopped", hashlib.sha256(self.owner.encode()).hexdigest(), "2026-01-01T00:00:00Z"))
-            connection.execute("INSERT INTO discussion_events(room_id,run_id,generation,cause,participant,role,status,created_at) VALUES(?,?,?,?,?,?,?,?)",
-                (self.room, "legacy-run", 7, "legacy-seed", "Codex", "host", "completed", "2026-01-01T00:00:00Z"))
-        status, before = self.request(self.path + "/events", token=self.owner)
-        self.assertEqual(status, 200, before)
-        self.assertEqual(len(before["events"]), 1)
-        init_database(self.database, seed=False)
-        status, after = self.request(self.path + "/events", token=self.owner)
-        self.assertEqual(status, 200, after)
-        self.assertEqual(after, before)
-        self.assertEqual(self.request(self.path + "/runtime", token=self.owner)[1]["generation"], 7)
-        self.assertEqual(self.request(self.path + "/runtime", {"action": "start", "revision": 1}, self.owner)[0], 400)
-        self.assertEqual(self.request(f"{self.path}/events/{before['events'][0]['id']}",
-                                      {"action": "enter", "session_id": "legacy"}, self.owner)[0], 400)
-        self.assertEqual(self.request(f"{self.path}/events/{before['events'][0]['id']}",
-                                      {"action": "view"}, self.owner)[0], 200)
-        self.assertEqual(self.request(f"{self.path}/events/{before['events'][0]['id']}",
-                                      {"action": "segments", "segments": []}, self.owner)[0], 400)
+    def test_retired_runtime_and_event_routes_are_gone(self):
+        """The room-scoped run interface of the old discussion rooms no longer exists, with or without a session."""
+        for started in (False, True):
+            if started:
+                self.start_session()
+            self.assertEqual(self.request(self.path + "/runtime", token=self.owner)[0], 404)
+            self.assertEqual(self.request(self.path + "/events", token=self.owner)[0], 404)
+            self.assertEqual(self.request(self.path + "/events/1", {"action": "view"}, self.owner)[0], 400)
 
     def test_schema_reinitialization_preserves_session_and_member_execution(self):
         """Reinitializing the current schema preserves active session requests and execution leases."""
@@ -190,6 +128,84 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.request(self.path + "/discussion")[1], before_view)
         self.assertEqual(self.request(f"{self.path}/executions/{execution['id']}", token=self.owner)[1], before_execution)
         self.assertEqual(before_view["session"]["id"], session["id"])
+
+    def add_legacy_records(self):
+        """Add retired foreign keys and a session with no request-model state to the private database."""
+        if not hasattr(self, "database"):
+            self.skipTest("旧库迁移需要隔离 SQLite")
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.executescript("""
+                CREATE TABLE room_floor(room_id TEXT PRIMARY KEY REFERENCES rooms(id));
+                CREATE TABLE discussion_turns(id INTEGER PRIMARY KEY,room_id TEXT REFERENCES rooms(id));
+                ALTER TABLE message_details ADD COLUMN turn_id INTEGER REFERENCES discussion_turns(id);
+            """)
+            connection.execute("INSERT INTO room_floor VALUES (?)", (self.room,))
+            connection.execute("INSERT INTO discussion_turns VALUES (1,?)", (self.room,))
+            message = connection.execute("""INSERT INTO messages(room_id,author,text,source,submission_id,created_at)
+                VALUES (?,'用户','迁移原文','cli','legacy-message','2026-01-01')""", (self.room,)).lastrowid
+            connection.execute("INSERT INTO message_details VALUES (?,'chat','用户',1)", (message,))
+            connection.execute("""INSERT INTO discussion_sessions(room_id,goal,status,created_at)
+                VALUES (?,'旧讨论','paused','2026-01-01')""", (self.room,))
+        return message
+
+    def test_legacy_startup_migration_preserves_messages_and_allows_deletion(self):
+        """Old room foreign keys disappear, orphan sessions conclude and a second startup stays safe."""
+        message = self.add_legacy_records()
+        init_database(self.database, seed=False)
+        init_database(self.database, seed=False)
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            self.assertEqual(connection.execute("SELECT name FROM sqlite_master WHERE name IN ('room_floor','discussion_turns')").fetchall(), [])
+            self.assertEqual(connection.execute("SELECT kind,submitted_by FROM message_details WHERE message_id=?", (message,)).fetchone(), ("chat", "用户"))
+            self.assertEqual(connection.execute("SELECT status,ended_message_id FROM discussion_sessions WHERE room_id=?", (self.room,)).fetchone(), ("concluded", message))
+            self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
+            connection.executescript("BEGIN;\n" + server_module.LEGACY_DISCUSSION_SQL + "\nCOMMIT;")
+        self.assertEqual(self.request(f"{self.path}/messages/{message}")[1]["text"], "迁移原文")
+        self.start_session()
+        status, deleted = self.request(self.path + "/delete", {"actor": "用户", "confirm_title": "会话运行验证"}, self.owner)
+        self.assertEqual(status, 200, deleted)
+        self.assertEqual(self.request(self.path)[0], 404)
+
+    def test_legacy_migration_failure_rolls_back_rebuilt_table(self):
+        """Failure after dropping message_details restores its data, foreign key and the orphan session."""
+        message = self.add_legacy_records()
+        failing = server_module.LEGACY_DISCUSSION_SQL.replace("DROP TABLE message_details;", "DROP TABLE message_details; SELECT * FROM missing_migration_table;")
+        with patch.object(server_module, "LEGACY_DISCUSSION_SQL", failing):
+            with self.assertRaises(sqlite3.OperationalError):
+                init_database(self.database, seed=False)
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            self.assertEqual(connection.execute("SELECT turn_id FROM message_details WHERE message_id=?", (message,)).fetchone(), (1,))
+            self.assertEqual(connection.execute("SELECT room_id FROM room_floor").fetchone(), (self.room,))
+            self.assertEqual(connection.execute("SELECT status FROM discussion_sessions WHERE room_id=?", (self.room,)).fetchone(), ("paused",))
+            self.assertEqual(connection.execute("SELECT name FROM sqlite_master WHERE name='message_details_rebuilt'").fetchall(), [])
+
+    def test_default_limits_survive_topic_edits_and_seed_each_new_session(self):
+        """Saved defaults drive starts and idle views; an explicit session override never replaces them."""
+        defaults = {"max_rounds": 5, "max_minutes": 45, "execution_minutes": 8}
+        before = self.request(self.path + "/discussion")[1]
+        status, saved = self.request(self.path + "/topic", {"actor": "用户", "limits": defaults}, self.owner)
+        self.assertEqual(status, 200, saved)
+        stale = self.request(self.path + "/discussion", {"action": "start", "revision": before["revision"]}, self.owner)
+        self.assertEqual(stale[0], 409, stale[1])
+        session = self.start_session()["session"]
+        self.assertEqual({key: session["limits"][key] for key in defaults}, defaults)
+        view = self.request(self.path + "/discussion")[1]
+        self.assertEqual(self.request(self.path + "/discussion", {"action": "pause", "revision": view["revision"]}, self.owner)[0], 200)
+        live = self.request(self.path + "/limits")[1]
+        self.assertEqual(live["revision"], self.request(self.path + "/discussion")[1]["revision"])
+        status, changed = self.request(self.path + "/limits", {"actor": "用户", "revision": live["revision"], "max_rounds": 7}, self.owner)
+        self.assertEqual(status, 200, changed)
+        status, edited = self.request(self.path + "/topic", {"actor": "用户", "focus": "仅改文字"}, self.owner)
+        self.assertEqual(status, 200, edited)
+        self.assertEqual(edited["limits"]["max_rounds"], 7)
+        view = self.request(self.path + "/discussion")[1]
+        ended = self.request(self.path + "/discussion", {"action": "end", "revision": view["revision"]}, self.owner)
+        self.assertEqual(ended[0], 200, ended[1])
+        self.assertEqual(self.request(self.path + "/limits")[1]["max_rounds"], 5)
+        history = self.request(self.path + "/backup")[1]["tables"]["session_limits"]
+        self.assertEqual(next(item for item in history if item["session_id"] == session["id"])["max_rounds"], 7)
+        saved = self.request(self.path + "/topic", {"actor": "用户", "limits": {"max_rounds": 6}}, self.owner)
+        self.assertEqual(saved[1]["limits"]["max_rounds"], 6)
+        self.assertEqual(self.start_session()["session"]["limits"]["max_rounds"], 6)
 
     def test_member_can_fail_only_its_own_active_execution(self):
         """An executing member may report its failure, while other lifecycle actions stay owner-only."""
@@ -352,23 +368,9 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual([(item["expert"], item["status"]) for item in discussion_turns],
                          [("Gemini", "answered"), ("Claude", "open")])
 
-    def test_room_view_keeps_legacy_and_each_session_round_and_stable_plan_slots(self):
-        """Round and assignment metadata stays distinct across legacy history and reopened sessions."""
-        if not hasattr(self, "database"):
-            self.skipTest("历史 round fixture 需要隔离 SQLite")
+    def test_room_view_keeps_each_session_round_and_stable_plan_slots(self):
+        """Round and assignment metadata stays distinct across reopened sessions."""
         self.invite("Claude")
-        with closing(sqlite3.connect(self.database)) as connection, connection:
-            connection.execute("UPDATE topic_settings SET host=?,experts=?,phase=? WHERE room_id=?",
-                               ("Codex", json.dumps({"Claude": "cli"}), "discussing", self.room))
-            turn = connection.execute("""INSERT INTO discussion_turns(room_id,expert,question,status,submission_id,created_at,notified_at)
-                VALUES(?,'Claude','旧安排','notified','legacy-round-turn','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')""",
-                                      (self.room,)).lastrowid
-            cursor = connection.execute("INSERT INTO messages(room_id,author,text,source,submission_id,created_at) VALUES(?,?,?,?,?,?)",
-                                        (self.room, "Claude", "旧观点", "cli", "legacy-opinion", "2026-01-01T00:01:00Z"))
-            connection.execute("INSERT INTO message_details(message_id,kind,submitted_by,turn_id) VALUES(?,?,?,?)",
-                               (cursor.lastrowid, "opinion", "Claude", turn))
-            connection.execute("UPDATE discussion_turns SET status='answered',answer_id=? WHERE id=?", (cursor.lastrowid, turn))
-
         session_ids = []
         for index in range(2):
             session = self.start_session()["session"]
@@ -398,20 +400,15 @@ class RuntimeTests(unittest.TestCase):
             "submission_id": uuid.uuid4().hex}, self.owner)[1]["message"]["id"]
         groups = self.request(self.path)[1]["round_groups"]
         self.assertEqual([group["key"] for group in groups], [
-            "legacy-round-1", f"session-{session_ids[0]}-round-1", f"session-{session_ids[1]}-round-1",
+            f"session-{session_ids[0]}-round-1", f"session-{session_ids[1]}-round-1",
         ])
-        self.assertEqual([group["session_id"] for group in groups[1:]], session_ids)
-        self.assertEqual([group["participants"] for group in groups[1:]], [1, 1])
+        self.assertEqual([group["session_id"] for group in groups], session_ids)
+        self.assertEqual([group["participants"] for group in groups], [1, 1])
+        self.assertLess(groups[0]["end_id"], ordinary)
         self.assertLess(groups[1]["end_id"], ordinary)
-        self.assertLess(groups[2]["end_id"], ordinary)
 
     def test_cancelled_turn_cards_only_include_dispatched_nonfailed_requests(self):
         """Queued rows stay hidden; dispatched cancellations remain until their execution failed."""
-        with closing(sqlite3.connect(self.database)) as connection, connection:
-            connection.execute("""INSERT INTO discussion_turns(room_id,expert,question,status,submission_id,created_at,notified_at)
-                VALUES(?,'Claude','旧已发送','cancelled','legacy-cancelled-sent','2026-01-01T00:00:00Z','2026-01-01T00:00:01Z')""", (self.room,))
-            connection.execute("""INSERT INTO discussion_turns(room_id,expert,question,status,submission_id,created_at)
-                VALUES(?,'Gemini','旧未发送','cancelled','legacy-cancelled-queued','2026-01-01T00:00:02Z')""", (self.room,))
         self.start_session()
         self.invite("Claude")
         self.invite("Gemini")
@@ -429,11 +426,11 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(paused[0], 200, paused[1])
         cards = self.request(self.path)[1]["cancelled_turns"]
         self.assertEqual([(item["key"], item.get("execution_id")) for item in cards],
-                         [("legacy-turn-1", None), (f"session-{self.request(self.path + '/discussion')[1]['session']['id']}-request-{plan['turn']['id']}", execution["id"])])
+                         [(f"session-{self.request(self.path + '/discussion')[1]['session']['id']}-request-{plan['turn']['id']}", execution["id"])])
         self.assertTrue(all(item["created_at"] for item in cards))
         with closing(sqlite3.connect(self.database)) as connection, connection:
             connection.execute("UPDATE member_executions SET status='failed' WHERE id=?", (execution["id"],))
-        self.assertEqual([item["key"] for item in self.request(self.path)[1]["cancelled_turns"]], ["legacy-turn-1"])
+        self.assertEqual(self.request(self.path)[1]["cancelled_turns"], [])
 
     def test_session_plan_retry_keeps_its_original_ids_after_roster_changes(self):
         """An exact plan retry is idempotent even after the first plan advances the roster revision."""

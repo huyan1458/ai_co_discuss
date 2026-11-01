@@ -477,7 +477,6 @@ function attachment_fixture() {
     if (!nodes.has(id)) nodes.set(id, { value: "", setAttribute() {} });
     return nodes.get(id);
   };
-  element("message-kind").value = "opinion";
   element("author-select").value = "用户";
   const state = { room: { id: "one", host: "Codex" }, attachment_drafts: [], messages: [], message_total: 0 };
   let identifier = 0, fail = true;
@@ -486,7 +485,7 @@ function attachment_fixture() {
     is_web_member: member => member?.manual_source === "web" || member?.access === "online",
     new_submission_id: () => String(++identifier), escape_html: text => text,
     URL: { createObjectURL: () => "blob:test", revokeObjectURL: url => revoked.push(url) },
-    localStorage: { getItem: () => null }, admin_headers: () => ({}), publish_view() {}, show_toast() {}, cancel_reply() {}, cancel_turn_reply() {},
+    localStorage: { getItem: () => null }, admin_headers: () => ({}), publish_view() {}, show_toast() {}, cancel_reply() {},
     notify: (level, message) => notified.push([level, message]),
     notify_failure: (error, message) => { notified.push(["error", message]); error.notified = true; },
     refresh_room: async () => {}, run_action: action => action(),
@@ -529,15 +528,6 @@ test("a free-room draft names everyone with @全体成员 for smart scheduling t
   assert.deepEqual([Array.from(context.message_payload().to), context.message_payload().sequential, context.message_payload().order], [["Claude", "Codex"], true, undefined]);
   element("message-input").value = "@all-seq go";
   assert.equal(context.message_payload().sequential, true);
-});
-
-test("a discussion draft names active members it @mentions outside code as direct questions", () => {
-  const { context, state, element } = attachment_fixture();
-  state.room.members = [{ name: "Claude", status: "active" }, { name: "Gemini", status: "away" }, { name: "Codex", status: "active" }];
-  element("message-input").value = "@Claude 你怎么看？ @Gemini 在吗";
-  assert.deepEqual(Array.from(context.message_payload().to), ["Claude"]);
-  element("message-input").value = "没有点名，`@Codex` 只是引用";
-  assert.equal(context.message_payload().to, undefined);
 });
 
 test("a live free-room discussion disables group @ routing but keeps personal questions", () => {
@@ -981,8 +971,8 @@ test("cards read model catalogs only for automatic CLI and pure web participants
 
 /** Use actual create-form handlers with isolated drafts; no AI or website is started. */
 function create_form_fixture() {
-  const view = ref({ fields: { "new-room-kind": "free", "new-room-host": "用户" },
-    experts: { "new-expert-modes": {} }, launch: { profiles: {}, workspace: {}, available: false, create: false } });
+  const view = ref({ fields: { "new-room-host": "用户" },
+    experts: { "new-expert-modes": {} }, launch: { profiles: {}, workspace: {}, available: false } });
   const events = [], cleanups = [], submissions = [];
   const pending = ref("");
   const bridge = { identities: { 用户: {}, Codex: {}, Claude: {}, DeepSeek: {} },
@@ -1547,15 +1537,13 @@ test('topic editing saves details without changing the discussion phase or a liv
   const { context, nodes } = theme_fixture(), calls = [];
   const experts = { Codex: 'cli', Claude: 'online' };
   nodes.set('topic-host-select', { value: 'Codex' });
-  nodes.set('topic-phase-select', { value: 'paused' });
   for (const key of ['title', 'goal', 'focus', 'user_request', 'background', 'boundaries']) {
     nodes.set(`topic-${key}-input`, { value: `${key} edited` });
   }
   for (const [key, value] of Object.entries({ max_rounds: '7', max_minutes: '30' })) {
     nodes.set(`topic-limit-${key}-input`, { value });
   }
-  Object.assign(context, { read_expert_inputs: () => experts, topic_member_requests: () => [],
-    save_room_credentials() {}, refresh_room: async () => {}, show_toast() {},
+  Object.assign(context, { refresh_room: async () => {}, show_toast() {},
     request_json: async (path, payload) => { calls.push({ path, payload }); return {}; } });
   for (const status of [null, 'active', 'paused', 'concluded']) {
     context.test_state.room = { id: 'topic-room', mode: 'free', host: 'Codex', experts,
@@ -1755,21 +1743,10 @@ test("finished discussions show their conclusion instead of a live timer or a la
   assert.doesNotMatch(label, /已用|剩余|已达上限/);
 });
 
-test("classic scheduling disables new work and explains a reached limit", () => {
-  const fixture = theme_fixture();
-  for (const id of ['turn-status', 'turn-note', 'turn-expert', 'turn-question', 'copy-turn', 'confirm-notified', 'forward-turn', 'cancel-turn', 'view-turn-answer', 'schedule-turn', 'schedule-note']) fixture.nodes.set(id, {});
-  fixture.context.test_state.room = { phase: 'discussing', host: 'Codex', experts: { Codex: 'cli' },
-    limits: { reached: true } };
-  fixture.context.render_current_turn();
-  assert.equal(fixture.nodes.get('schedule-turn').disabled, true);
-  assert.match(fixture.nodes.get('schedule-note').textContent, /已达到讨论上限/);
-});
-
 test("folder creation target is submitted atomically and changes the retry identifier", async () => {
   const fixture = theme_fixture();
   const requests = [];
   for (const id of ['title', 'goal', 'host', 'user_request', 'background', 'boundaries', 'mode']) fixture.nodes.set(`new-room-${id}`, { value: id === 'mode' ? 'manual' : '内容' });
-  fixture.nodes.set('new-room-kind', { value: 'brainstorm' });
   fixture.nodes.set('room-dialog', { close() {} });
   fixture.nodes.set('room-form', { reset() {} });
   fixture.root.dataset.theme = 'channel';
@@ -1785,7 +1762,7 @@ test("folder creation target is submitted atomically and changes the retry ident
   await assert.rejects(submit('one'), /retry/);
   await assert.rejects(submit('two'), /retry/);
   assert.equal(requests[0].folder_id, 'one');
-  assert.equal(requests[0].user_request, '内容');
+  assert.equal(requests[0].user_request, '', 'the task goes in the conversation, not an opening brief');
   assert.equal(requests[0].submission_id, requests[1].submission_id);
   assert.notEqual(requests[1].submission_id, requests[2].submission_id);
   fixture.context.request_json = async (path, payload) => { requests.push(payload); return { id: 'created', folder_id: payload.folder_id }; };
@@ -1865,12 +1842,12 @@ test("member downloads contain only their credential and copied instructions con
 });
 
 test("member instructions separate manual credentials, runner executions and online relay", async () => {
-  const f = theme_fixture(), room = { id: "one", mode: "free", host: "Codex", runtime: { protected: false }, members: [
+  const f = theme_fixture(), room = { id: "one", mode: "free", host: "Codex", members: [
     { id: 1, name: "Codex", access: "manual", status: "active" }, { id: 2, name: "DeepSeek", access: "online", status: "active" }] };
   f.context.test_state.room = room;
   f.context.save_room_credentials(room, "owner-secret", [{ name: "Codex", token: "member-secret", access: "manual" }]);
   let copied;
-  Object.assign(f.context, { location: new URL("https://discussion.example"), copy_text: async value => { copied = value; }, workspace_instruction: () => "" });
+  Object.assign(f.context, { location: new URL("https://discussion.example"), copy_text: async value => { copied = value; } });
   await f.context.copy_member_join("Codex");
   assert.match(copied, /discuss-participant 和 discuss-host/);
   assert.match(copied, /--as Codex --access-file/);
@@ -1881,10 +1858,7 @@ test("member instructions separate manual credentials, runner executions and onl
   assert.match(copied, /有效 execution_id/);
   assert.match(copied, /持久成员私有文件不能替代自动执行凭据/);
   assert.doesNotMatch(copied, /--access-file|人工或软件原生定时触发|模型与思考强度在原软件/);
-  room.mode = "brainstorm";
-  await f.context.copy_member_join("Codex");
   assert.match(copied, /只处理本次有效执行/);
-  assert.doesNotMatch(copied, /execution_id/);
   await f.context.copy_member_join("DeepSeek");
   assert.match(copied, /由用户或授权主持人代发/);
   assert.doesNotMatch(copied, /定时|自行提交|access_file|私有文件|owner-secret|member-secret/);
@@ -1903,13 +1877,8 @@ test("legacy copy actions delegate to member instructions without selecting loca
   assert.deepEqual(copied, ["Codex", "DeepSeek"]);
   room.members.push({ id: 3, name: "Claude", access: "manual", status: "active" });
   await f.context.copy_context("cli");
-  assert.deepEqual(tabs, ["access"]);
+  assert.deepEqual(tabs, ["overview"]);
   assert.equal(copied.length, 2);
-  const actions = {};
-  f.context.element = id => ({ addEventListener: (_event, action) => { actions[id] = action; } });
-  f.context.bind_host_controls();
-  await actions["copy-host"]();
-  assert.equal(copied.at(-1), "Codex");
 });
 
 test("manual invitations and rejoin reuse the original token after ambiguous responses", async () => {
@@ -1962,26 +1931,9 @@ test("automatic invitations keep explicit project permissions across an uncertai
   await f.context.invite_member({ name: 'Codex', access: 'runner' });
   assert.equal(inputs[2].payload.participants.Codex.project_access, 'read');
   assert.equal(inputs[2].payload.participants.Codex.session_id, undefined, 'a blank session field starts a new conversation');
-  f.context.test_state.room.mode = 'brainstorm';
   await f.context.invite_member({ name: 'Codex', access: 'runner', session_id: ' thread-from-history ' });
   assert.equal(inputs[3].payload.participants[inputs[3].payload.name].session_id, 'thread-from-history', 'the runner resumes the existing conversation');
   assert.match(f.notified.at(-1)[1], /原会话/);
-});
-
-test("topic retry retains a pending credential after live refresh has already revealed the new member", () => {
-  const f = theme_fixture();
-  const room = { id: 'topic', runtime: { mode: 'manual' }, members: [{ name: 'Codex', status: 'active', access: 'manual' }] };
-  const experts = { Codex: 'cli', 'Codex-2': 'cli' };
-  const original = f.context.topic_member_requests(room, experts);
-  assert.equal(original.length, 1);
-  room.members.push({ name: 'Codex-2', status: 'active', access: 'manual' });
-  const reloaded = theme_fixture(null, f.storage);
-  const retry = reloaded.context.topic_member_requests(room, experts);
-  assert.equal(retry.length, 1);
-  assert.equal(retry[0].member.token, original[0].member.token);
-  assert.equal(retry[0].member.name, 'Codex-2');
-  f.storage.delete(original[0].key);
-  assert.equal(f.context.topic_member_requests(room, experts).length, 0);
 });
 
 for (const recovery of [false, true]) test(`local defaults exclude session bindings and launch drafts are consumed after ${recovery ? 'saved-request recovery' : 'successful creation'}`, async () => {
@@ -1993,12 +1945,12 @@ for (const recovery of [false, true]) test(`local defaults exclude session bindi
   let dialog_closes = 0;
   fixture.nodes.set('room-dialog', { close() { dialog_closes++; } });
   fixture.nodes.set('room-form', { reset() {} });
-  Object.assign(state.launch, { available: true, create: true,
+  Object.assign(state.launch, { available: true,
     profiles: { Codex: { adapter: 'codex_cli', executable: 'C:\\codex.exe', session_id: 'one-room-session' } },
     workspace: { cwd: 'C:\\project', discussion_project: '本次项目' } });
   Object.assign(fixture.context, {
     crypto: { randomUUID: () => `token-${++sequence}` }, new_submission_id: () => `submission-${++sequence}`,
-    room_creation_payload: () => ({ title: '网页发起', runtime_mode: 'automatic' }),
+    room_creation_payload: () => ({ title: '网页发起', mode: 'free', host: 'Codex', experts: { Codex: 'cli' } }),
     render_launch_settings() {}, render_expert_inputs() {}, default_experts: () => ({}), select_room: async () => {},
     update_directory: async ({ save, commit }) => { const result = await save(); commit(result); return result; },
     local_launch_request: async (action, payload) => {
@@ -2023,7 +1975,6 @@ for (const recovery of [false, true]) test(`local defaults exclude session bindi
   assert.equal(state.launch.profiles.Codex.session_id, undefined);
   assert.equal(state.launch.profiles.Codex.executable, 'C:\\codex.exe');
   assert.deepEqual(Object.keys(state.launch.workspace), []);
-  assert.equal(state.launch.create, true, "the next form starts with immediate launch on again");
   assert.equal(dialog_closes, 1);
   assert.equal(state.launch.error, '');
 });
@@ -2034,7 +1985,7 @@ test("a new room that asks for a discussion is created as a collaboration room, 
   const calls = [];
   fixture.nodes.set('room-dialog', { close() {} });
   fixture.nodes.set('room-form', { reset() {} });
-  Object.assign(state.launch, { available: true, create: true, profiles: { Codex: { adapter: 'codex_cli', executable: 'C:\\codex.exe' } }, workspace: {} });
+  Object.assign(state.launch, { available: true, profiles: { Codex: { adapter: 'codex_cli', executable: 'C:\\codex.exe' } }, workspace: {} });
   state.create_discussion = true;
   state.named_followup = true;
   Object.assign(fixture.context, {
@@ -2050,34 +2001,6 @@ test("a new room that asks for a discussion is created as a collaboration room, 
   assert.deepEqual(calls.map(call => call[0]), ['/api/rooms/created/discussion', '/api/rooms/created/discussion']);
   assert.deepEqual(JSON.parse(JSON.stringify(calls[1][1])), { action: 'start', revision: 'created-revision', goal: '选方案', named_followup: true,
     limits: { max_rounds: 2, max_minutes: 30, execution_minutes: 0 } });
-});
-
-test("an existing-room launch keeps its target and preserves newer configuration edits", async () => {
-  const fixture = theme_fixture();
-  fixture.storage.set('discuss-access:room-a', 'owner-token');
-  const state = fixture.context.test_state;
-  state.room = { id: 'room-a', runtime: { protected: false } };
-  state.launch.profiles = { Codex: { session_id: 'old-session' } };
-  state.launch.workspace = { cwd: 'C:\\old' };
-  let request;
-  let refreshed = false;
-  Object.assign(fixture.context, {
-    crypto: { randomUUID: () => 'owner-token' }, render_launch_settings() {}, refresh_room: async () => { refreshed = true; },
-    local_launch_request: async (action, payload) => {
-      request = payload;
-      state.room = { id: 'room-b' };
-      state.launch.profiles.Codex.session_id = 'new-session';
-      state.launch.workspace.cwd = 'C:\\new';
-      return { status: 'running', room: { id: payload.room_id } };
-    },
-  });
-  await fixture.context.launch_current_room();
-  assert.equal(request.room_id, 'room-a');
-  assert.equal(request.participants.Codex.session_id, 'old-session');
-  assert.equal(fixture.storage.get('discuss-access:room-a'), 'owner-token');
-  assert.equal(state.launch.profiles.Codex.session_id, 'new-session');
-  assert.equal(state.launch.workspace.cwd, 'C:\\new');
-  assert.equal(refreshed, false);
 });
 
 test("launch drafts retain explicit clears so saved participant defaults cannot override this discussion", () => {
@@ -2097,50 +2020,17 @@ test("opening a new form restores every choice to defaults, including per-instan
   let resets = 0, experts = { Codex: 'cli', Claude: 'cli' };
   f.nodes.set('room-form', { reset() { resets++; } });
   Object.assign(f.context, { render_expert_inputs: (_id, value) => { experts = value; }, render_host_options() {}, render_launch_settings() {} });
-  Object.assign(state.launch, { create: false, workspace: { cwd: 'D:\上次项目' }, saved_profiles: { Codex: { adapter: 'codex_cli', executable: 'C:\codex.exe' } },
+  Object.assign(state.launch, { workspace: { cwd: 'D:\上次项目' }, saved_profiles: { Codex: { adapter: 'codex_cli', executable: 'C:\codex.exe' } },
     profiles: { Codex: { adapter: 'codex_cli', executable: 'C:\codex.exe', model: 'gpt-x', project_access: 'write' }, 'Codex-2': { adapter: 'codex_cli' } } });
-  state.creation_mode = 'brainstorm';
-  state.create_parent = 'free-room';
   state.create_discussion = true;
   f.context.reset_create_form();
   assert.equal(resets, 1);
   assert.deepEqual(Object.keys(experts), []);
-  assert.equal(state.creation_mode, 'free', 'every new room starts as a collaboration room');
   assert.equal(state.create_discussion, false);
-  assert.equal(state.create_parent, null);
-  assert.equal(state.launch.create, true);
   assert.deepEqual(Object.keys(state.launch.workspace), []);
   assert.deepEqual(JSON.parse(JSON.stringify(state.launch.profiles)), { Codex: { adapter: 'codex_cli', executable: 'C:\codex.exe' } });
   state.launch.profiles.Codex.model = 'changed';
   assert.equal(state.launch.saved_profiles.Codex.model, undefined, "drafts never write back into the saved defaults");
-});
-
-test("discussions keep only woken members while free rooms keep each member's delivery", () => {
-  const f = theme_fixture();
-  const state = f.context.test_state;
-  const kind = { value: 'brainstorm' };
-  const host = { value: '用户' };
-  state.creation_mode = 'free';
-  f.nodes.set('new-room-kind', kind); f.nodes.set('new-room-host', host);
-  let experts = {};
-  f.context.read_expert_inputs = () => experts;
-  f.context.render_expert_inputs = (_id, value) => { experts = value; };
-  state.launch.profiles = { Codex: { adapter: 'codex_cli', executable: 'C:\\codex.exe' },
-    Claude: { adapter: 'claude', executable: 'C:\\claude.exe' }, Gemini: { adapter: 'antigravity_cli' } };
-  f.context.update_creation_mode();
-  assert.equal(host.value, '');
-  assert.deepEqual(Object.entries(experts), [], "configured software never fills the roster by itself");
-  kind.value = 'free'; f.context.update_creation_mode();
-  assert.deepEqual(Object.entries(experts), []);
-  experts = { Codex: 'cli', Claude: 'manual', DeepSeek: 'online' }; host.value = 'Codex';
-  state.creation_drafts = {};
-  kind.value = 'brainstorm'; f.context.update_creation_mode();
-  assert.deepEqual(Object.entries(experts), [['Codex', 'cli']], "a first visit carries over only woken members");
-  assert.equal(host.value, 'Codex');
-  experts = {};
-  kind.value = 'free'; f.context.update_creation_mode();
-  assert.deepEqual(Object.entries(experts), [['Codex', 'cli'], ['Claude', 'manual'], ['DeepSeek', 'online']], "each use keeps its own draft");
-  assert.equal(host.value, 'Codex');
 });
 
 /** Invite dialog fixture for the shared member board. */
@@ -2381,7 +2271,7 @@ test("agy effort choices follow the selected native model without overriding sof
   assert.equal(state.launch.profiles.Gemini.effort, "");
   assert.deepEqual(Array.from(f.context.launch_model_state("Gemini").efforts), ["low", "high"]);
   f.context.write_launch_field("Gemini", "effort", "low");
-  const room = { id: "room", runtime: { mode: "automatic" }, members: [{ name: "Gemini", access: "runner" }] };
+  const room = { id: "room", members: [{ name: "Gemini", access: "runner" }] };
   assert.match(f.context.participant_model("Gemini", room, { room_id: "room", participants: { Gemini: state.launch.profiles.Gemini } }), /low/);
   f.context.write_launch_model("Gemini", "__default__");
   assert.equal(requests.length, 2, "returning to the default model reuses its native capability query");
@@ -2410,11 +2300,14 @@ test("choosing a discovered model applies its effort choices only to the selecte
   assert.match(f.context.launch_model_state("Codex").effort_note, /默认值由软件决定/);
 });
 
-test("room model readback stays separate from drafts, reloads on revision and discards a different room's late response", async () => {
+/** A room whose only member this computer wakes; a new execution changes the model readback key. */
+const woken_room = (id, name = 'Codex') => ({ id, members: [{ name, access: 'runner' }], free: { members: [{ name, execution: { id: 1 } }] } });
+
+test("room model readback stays separate from drafts, reloads on a new execution and discards a different room's late response", async () => {
   const f = theme_fixture(), state = f.context.test_state;
   state.launch.available = true;
   state.launch.profiles = { Codex: { model: 'new-discussion-draft', effort: 'low' } };
-  state.room = { id: 'one', runtime: { mode: 'automatic', revision: 1 } };
+  state.room = woken_room('one');
   const requests = [];
   f.context.local_launch_request = async (action, input) => {
     requests.push({ action, input });
@@ -2426,27 +2319,27 @@ test("room model readback stays separate from drafts, reloads on revision and di
   assert.equal(JSON.stringify(requests[0].input), JSON.stringify({ room_id: 'one', quick: true }));
   await f.context.load_room_models();
   assert.equal(requests.length, 1);
-  state.room.runtime.revision++;
+  state.room.free.members[0].execution.id++;
   await f.context.load_room_models();
   assert.equal(requests.length, 2);
   let release;
-  state.room.runtime.revision++;
+  state.room.free.members[0].execution.id++;
   f.context.local_launch_request = () => new Promise(resolve => { release = resolve; });
   const pending = f.context.load_room_models();
-  state.room = { id: 'two', runtime: { mode: 'automatic', revision: 1 } };
+  state.room = woken_room('two');
   f.context.local_launch_request = async () => ({ room_id: 'two', participants: {} });
   await f.context.load_room_models();
   release({ room_id: 'one', participants: { Codex: { model: 'late' } } });
   await pending;
   assert.equal(state.launch.room_models.room_id, 'two');
   assert.equal(state.launch.room_models.participants.Codex, undefined);
-  state.room.runtime.revision++;
+  state.room.free.members[0].execution.id++;
   f.context.local_launch_request = async () => { throw new Error('old bridge'); };
   await f.context.load_room_models();
   assert.equal(state.launch.room_models.loading, false);
   assert.equal(state.launch.room_models.participants, null);
   // agy's slow default model follows in a second, full read; the rest is shown first.
-  state.room = { id: 'three', runtime: { mode: 'automatic', revision: 1 } };
+  state.room = woken_room('three', 'Gemini');
   const quick_reads = [];
   f.context.local_launch_request = async (action, input) => {
     quick_reads.push(input.quick === true);
@@ -2460,7 +2353,7 @@ test("room model readback stays separate from drafts, reloads on revision and di
 
 test("participant model labels distinguish explicit choices, software defaults and unavailable room data", () => {
   const label = theme_fixture().context.participant_model;
-  const room = { id: 'one', runtime: { mode: 'automatic' } };
+  const room = { id: 'one', members: ['Codex', 'Claude', 'Gemini', 'Reviewer', 'Agy', 'AgyPicked'].map(name => ({ name, access: 'runner' })) };
   const saved = { room_id: 'one', participants: {
     Codex: { adapter: 'codex_cli', model: 'gpt-6-astra', effort: 'xhigh' },
     Claude: { adapter: 'claude', model: '', effort: '' },
@@ -2486,11 +2379,11 @@ test("participant model labels distinguish explicit choices, software defaults a
   assert.equal(label('Claude', room, saved), 'opus · high', 'the card choice wins; an empty one shows the session before the settings file');
   saved.participants.Agy = { adapter: 'antigravity_cli', model: '', effort: '', defaults_pending: true, actual_model: 'gemini-4-argon-low' };
   assert.equal(label('Agy', room, saved), 'gemini-4-argon-low · 默认', 'a known session model needs no slow default read');
-  assert.equal(label('Codex', { ...room, runtime: { mode: 'manual' } }, saved), '');
+  assert.equal(label('Codex', { ...room, members: [] }, saved), '', 'only members this computer wakes show a model');
   assert.equal(label('Codex', { ...room, members: [{ name: 'Codex', access: 'manual' }] }, saved), '', 'a manual member sets its model in its own session');
   saved.participants.Codex.adapter = 'codex_cli';
-  assert.equal(label('Codex', { ...room, runtime: { mode: 'manual' }, members: [{ name: 'Codex', access: 'runner' }] }, saved), 'gpt-6-astra · xhigh',
-    'a free room runs no discussion yet its woken members still show their model');
+  assert.equal(label('Codex', { ...room, members: [{ name: 'Codex', access: 'runner' }] }, saved), 'gpt-6-astra · xhigh',
+    'a room without a discussion still shows its woken members\' model');
 });
 
 test("participant files show 只读 / 可写 only where the site decides them", () => {
@@ -2515,11 +2408,9 @@ test("a borrowed session's hover says whether its original window shows the room
   assert.equal(hint('New', room, saved), undefined);
 });
 
-test("empty automatic discussions describe their actual state instead of requiring another message", () => {
+test("an empty room asks for a task, and an ended one says so", () => {
   const message = theme_fixture().context.empty_discussion_message;
-  for (const [status, pattern] of [['ready', /尚未启动/], ['running', /等待 AI 执行/], ['paused', /已暂停/], ['stopped', /已停止/]]) {
-    assert.match(message({ phase: 'preparing', runtime: { mode: 'automatic', status } }), pattern);
-  }
+  assert.match(message({ mode: 'free', phase: 'discussing' }), /写下任务并点名成员/);
   assert.match(message({ phase: 'concluded' }), /已结束/);
 });
 
@@ -2875,17 +2766,6 @@ test("a retry preflight rejection preserves an earlier in-flight request when it
   assert.equal(first.storage.get('discuss-access:original-room'), 'owner');
 });
 
-test("missing existing-room credentials remain visible in the default theme without sending a request", async () => {
-  const fixture = theme_fixture();
-  fixture.root.dataset.theme = 'channel';
-  fixture.context.test_state.room = { id: 'protected', runtime: { protected: true } };
-  let sends = 0;
-  Object.assign(fixture.context, { render_launch_settings() {}, local_launch_request: async () => { sends++; } });
-  await fixture.context.launch_current_room();
-  assert.match(fixture.notified.at(-1)[1], /缺少房间凭据/);
-  assert.equal(sends, 0);
-});
-
 test("launch readback distinguishes effective directories, project metadata and existing App bindings", () => {
   const fixture = theme_fixture();
   Object.assign(fixture.context.test_state.launch, { profiles: { Codex: { adapter: 'codex_cli', cwd: 'C:\\specific' },
@@ -3075,6 +2955,8 @@ function folder_fixture() {
   }, document: { getElementById: () => draft } });
   vm.runInContext(`${source}\nglobalThis.test_state = state;`, context);
   const state = context.test_state;
+  // Off the transcript tab a refresh reads only the room, so each test resolves the room reads it expects.
+  state.tab = "overview";
   state.rooms = [{ id: "a", title: "话题 A", folder_id: "one" }, { id: "b", folder_id: "one" }];
   state.room = { ...state.rooms[0], goal: "原议题" };
   state.messages = [{ id: 10, text: "原发言" }];
@@ -3527,7 +3409,7 @@ for (const interaction of ["navigation", "classic draft input"]) test(`room crea
     ...(id === "room-dialog" ? { close: () => { closes++; } } : { reset: () => { resets++; } }) });
   fixture.context.bind_controls();
   Object.assign(fixture.context, {
-    room_creation_payload: () => ({ title: "新讨论", runtime_mode: "manual", folder_id: null }),
+    room_creation_payload: () => ({ title: "新讨论", mode: "free", host: "用户", experts: {}, folder_id: null }),
     new_submission_id: () => "create-test-id", crypto: { randomUUID: () => "local-token" },
     request_json: () => new Promise(done => { resolve = done; }), render_expert_inputs() {}, default_experts: () => ({}),
     select_room: async () => { selections++; },

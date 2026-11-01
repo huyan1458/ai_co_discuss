@@ -18,7 +18,6 @@ async function process_request(name) {
   writeFileSync(claim, String(process.pid), { flag: 'wx', mode: 0o600 });
   try {
     const access = JSON.parse(readFileSync(request.access_path, 'utf8'));
-    if (request.mode !== 'free') throw new Error('Sidecar 只支持自由协作执行请求，旧讨论事件已停用');
     const response = await fetch(`${access.site}/api/rooms/${access.room}/executions/${request.event_id}`, {
       method: 'GET', redirect: 'error', signal: AbortSignal.timeout(10000),
       headers: { 'Content-Type': 'application/json', 'X-Discussion-Token': access.token },

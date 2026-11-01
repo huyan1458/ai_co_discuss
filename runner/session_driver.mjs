@@ -36,7 +36,7 @@ export class SessionDriver {
 
   /** Run at most one smart scheduling decision for a pending host request. */
   async tick(room, inbox) {
-    if (!this.config.scheduler || inbox.archived || room.mode !== 'free' || room.limits?.reached) return false;
+    if (!this.config.scheduler || inbox.archived || room.limits?.reached) return false;
     const state = await api(this.config, '/discussion');
     const session = state.session;
     if (!session || session.status !== 'active') return false;

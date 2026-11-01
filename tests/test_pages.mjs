@@ -27,18 +27,10 @@ async function load_fork_snapshot() {
 /** Load the real topic save handler with only its browser and network edges replaced. */
 async function load_topic_save_handler(browser) {
   const source = await readFile(join(PROJECT_ROOT, 'web', 'app.js'), 'utf8');
-  const web_start = source.indexOf('function is_web_member(member) {');
-  const web_end = source.indexOf('\n}\n\n/** Read and validate the current composer', web_start) + 2;
-  const members_start = source.indexOf('function topic_member_requests(room, experts) {');
-  const members_end = source.indexOf('\n}\n\n/** Save owner-edited topic data', members_start) + 2;
   const save_start = source.indexOf('async function save_topic(event) {');
-  const save_end = source.indexOf('\n}\n\n/** Schedule an expert', save_start) + 2;
-  assert.ok(web_start >= 0 && web_end > web_start && members_start >= 0 && members_end > members_start
-    && save_start >= 0 && save_end > save_start, 'topic save functions are present');
+  const save_end = source.indexOf('\n}\n\n/** Bind the topic workflow', save_start) + 2;
+  assert.ok(save_start >= 0 && save_end > save_start, 'topic save function is present');
   return vm.runInNewContext(`(() => {
-    const MEMBER_PENDING_PREFIX = "discuss-member-pending:";
-    ${source.slice(web_start, web_end)}
-    ${source.slice(members_start, members_end)}
     ${source.slice(save_start, save_end)}
     return save_topic;
   })()`, browser);
@@ -312,27 +304,26 @@ test('Worker imports a backup under fresh numbers, rewritten references and the 
     text: `回应 #${first.id}`, submission_id: 'import-answer' }, r.owner);
   assert.equal(answer.status, 201, JSON.stringify(answer.body));
   const backup = JSON.parse(JSON.stringify((await f.request(`${path}/backup`)).body).replaceAll(room.id, 'importedroom'));
-  backup.version = 1;
-  for (const table of ['discussion_sessions', 'discussion_conclusions', 'session_requests', 'session_state', 'session_limits',
-    'session_round_budgets', 'session_pauses', 'session_options', 'task_message_sources']) delete backup.tables[table];
-  backup.tables.room_modes[0].mode = 'brainstorm';
-  backup.tables.topic_settings[0].phase = 'discussing';
-  backup.tables.discussion_turns = [{ id: 90, room_id: room.id, expert: 'Claude', question: '旧版安排', status: 'answered',
-    submission_id: 'legacy-import-turn', created_at: '2026-10-28T00:00:00Z', notified_at: '', answer_id: first.id }];
-  backup.tables.message_details[0].turn_id = 90;
   backup.tables.scheduler_decisions = [{ id: 1, after_message_id: first.id, kind: 'interjection', label: '交给主持人 Codex', confidence: 0.66, applied: 0, provider: 'jev',
     created_at: '2026-10-25T00:00:00Z', feedback: 'bad', should_be: 'Qwen', note: '该问 Qwen', context: '{"prompt":2}' }];
   await r.say('占用新编号');
+  assert.equal((await f.request('/import', { ...backup, version: 1 })).status, 400, 'only version 2 backups import');
+  for (const table of ['discussion_sessions', 'discussion_conclusions', 'session_requests', 'task_message_sources',
+    'session_state', 'session_limits', 'session_round_budgets', 'session_options', 'session_pauses']) {
+    const incomplete = structuredClone(backup);
+    delete incomplete.tables[table];
+    const rejected = await f.request('/import', incomplete);
+    assert.equal(rejected.status, 400, table);
+    assert.match(rejected.body.error, /缺少讨论会话历史表/);
+  }
   const imported = await f.request('/import', backup);
   assert.equal(imported.status, 201, JSON.stringify(imported.body));
   assert.deepEqual(Object.keys(imported.body.attachments), [file.id]);
   assert.equal((await f.request('/import', backup)).body.skipped, true);
   const copy = (await f.request('/importedroom')).body;
-  assert.deepEqual([copy.host, copy.phase], ['Claude', 'paused']);
-  assert.equal(copy.mode, 'free', 'version 1 brainstorm backups import as free rooms');
-  assert.equal((await f.request('/importedroom/turns?legacy=1')).body.turns[0].question, '旧版安排', 'legacy turns remain readable');
+  assert.deepEqual([copy.host, copy.phase, copy.mode], ['Claude', 'discussing', 'free']);
   assert.equal((await f.request('/importedroom/turns', { actor: 'Claude', submission_id: 'new-legacy-turn', expert: 'Claude', question: '不可恢复' }, r.claude)).status, 400,
-    'imported legacy history cannot resume the old arrangement engine');
+    'an imported room has no open discussion to arrange');
   assert.equal((await f.request('/importedroom/runtime', { action: 'start', revision: 0 }, r.owner)).status, 400);
   assert.deepEqual(copy.scheduler_decisions.map(item => [item.feedback, item.should_be, item.note, item.context]), [['bad', 'Qwen', '该问 Qwen', '{"prompt":2}']]);
   const imported_messages = (await f.request('/importedroom/messages')).body.messages;
@@ -534,24 +525,6 @@ test('Worker leaves user timings unknown and refuses to proxy a local execution'
   assert.equal((await f.request(`${f.path}/messages/${user.body.message.id}`)).body.elapsed_seconds, null);
 });
 
-test('schema backfills only exact historical expert results and preserves frozen durations', async t => {
-  for (const role of ['host', 'expert']) {
-    const f = await timed_message_fixture(t, role);
-    const message = (await f.request(`${f.path}/messages`, f.payload, f.token)).body.message;
-    f.sql.prepare('DELETE FROM message_timings WHERE message_id=?').run(message.id);
-    const legacy = f.sql.prepare(`INSERT INTO discussion_events(room_id,run_id,generation,cause,participant,role,status,started_at,result)
-      VALUES (?,'legacy-backfill',1,'expert','Codex',?,'completed',1,?) RETURNING id`)
-      .get(f.room_id ?? f.path.split('/').at(-1), role, `message:${message.id}`);
-    f.sql.prepare('INSERT INTO event_timings(event_id,dispatched_at,finished_at) VALUES (?, ?, ?)')
-      .run(legacy.id, f.dispatched, f.dispatched + 125);
-    const schema = await readFile(join(PROJECT_ROOT, 'backend', 'schema.sql'), 'utf8');
-    f.sql.exec(schema);
-    f.sql.exec(schema);
-    assert.equal((await f.request(`${f.path}/messages/${message.id}`)).body.elapsed_seconds,
-      role === 'expert' ? message.elapsed_seconds : null);
-  }
-});
-
 test('Worker retains the creation request as room metadata for export and deletion', async t => {
   const f = await worker_fixture(t);
   const original = '  用户要求🙂\n保留换行  \n';
@@ -564,8 +537,8 @@ test('Worker retains the creation request as room metadata for export and deleti
   assert.equal((await f.request('', { ...payload, user_request: '另一要求' })).status, 409);
   const backup = await f.request(`/${id}/backup`);
   assert.deepEqual(backup.body.tables.room_user_requests, [{ room_id: id, text: original }]);
-  assert.equal((await f.request(`/${id}/topic`, { actor: '用户', background: '更新背景' })).status, 400,
-    'room topic writes remain on the discussion session API');
+  assert.equal((await f.request(`/${id}/topic`, { actor: '用户', background: '更新背景' })).status, 200,
+    'the owner edits topic material while no discussion is open');
   assert.equal((await f.request(`/${id}/delete`, { actor: '用户', confirm_title: payload.title })).status, 200);
   assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM room_user_requests WHERE room_id=?').get(id).count, 0);
 });
@@ -583,34 +556,13 @@ test('Worker reads explicitly marked legacy user requests without rewriting raw 
   assert.equal(room.background, '项目背景与入口：\n补充材料');
   assert.equal(f.sql.prepare('SELECT background FROM topic_settings WHERE room_id=?').get(id).background, background);
   assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM room_user_requests WHERE room_id=?').get(id).count, 0);
-  assert.equal((await f.request(`/${id}/topic`, { actor: '用户', goal: '更新目标' })).status, 400);
-  assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM room_user_requests WHERE room_id=?').get(id).count, 0);
+  assert.equal((await f.request(`/${id}/topic`, { actor: '用户', goal: '更新目标' })).status, 200);
   f.sql.prepare('DELETE FROM room_user_requests WHERE room_id=?').run(id);
   const plain = '用户原文：\n没有明确背景分隔的整段文字';
   f.sql.prepare('UPDATE topic_settings SET background=? WHERE room_id=?').run(plain, id);
   const unchanged = (await f.request(`/${id}`)).body;
   assert.equal(unchanged.user_request, '');
   assert.equal(unchanged.background, plain);
-});
-
-test('Worker preserves SQLite-formatted legacy discussion history without using it for new sessions', async t => {
-  const f = await worker_fixture(t);
-  const r = await free_worker_room(f, [{ name: 'Codex', token: 'legacy-json'.repeat(4) }]);
-  f.sql.prepare('UPDATE topic_settings SET experts=? WHERE room_id=?').run('{"Codex": "cli"}', r.room.id);
-  const message = f.sql.prepare(`INSERT INTO messages(room_id,author,text,source,submission_id,created_at)
-    VALUES (?,'Codex','历史观点','cli','legacy-json-answer','2026-10-29T00:00:00Z') RETURNING id`).get(r.room.id);
-  f.sql.prepare(`INSERT INTO discussion_turns(room_id,expert,question,status,submission_id,created_at)
-    VALUES (?,'Codex','旧安排','pending','legacy-json-turn','2026-10-29T00:00:00Z')`).run(r.room.id);
-  const legacy_turn = f.sql.prepare('SELECT id FROM discussion_turns WHERE room_id=?').get(r.room.id).id;
-  f.sql.prepare("INSERT INTO message_details(message_id,kind,submitted_by,turn_id) VALUES (?,'opinion','Codex',?)").run(message.id, legacy_turn);
-  const room = (await f.request(r.path)).body;
-  assert.equal(room.mode, 'free');
-  assert.equal(room.experts.Codex, 'cli');
-  const before = (await f.request(`${r.path}/discussion`)).body;
-  assert.equal((await f.request(`${r.path}/discussion`, { action: 'start', revision: before.revision, goal: '保留历史兼容' }, r.owner)).status, 200);
-  assert.equal((await f.request(`${r.path}/turns`)).body.total, 0, 'new history does not read retired turns');
-  assert.equal((await f.request(`${r.path}/turns?legacy=1`)).body.total, 1);
-  assert.equal((await f.request(`${r.path}/turns/${legacy_turn}?legacy=1`)).body.question, '旧安排');
 });
 
 test('Worker excludes paused time from a session elapsed-time limit', async t => {
@@ -711,7 +663,7 @@ test('Worker unlimited sessions end at the round limit and refuse the removed su
   const execution = (await r.reserve('Codex')).body;
   assert.equal((await r.answer(execution.id, codex, 'Codex')).status, 201);
   const room = (await f.request(r.path)).body;
-  assert.equal(room.limits.reason, 'round_limit');
+  assert.equal(room.discussions.find(item => item.id === room.session.id).stop_reason, 'round_limit');
   assert.deepEqual([room.mode, room.session.status], ['free', 'concluded']);
   assert.equal(room.limits.closing, undefined);
 });
@@ -729,7 +681,7 @@ test('Worker reaches the session elapsed-time limit and returns to free collabor
   const ended = (await f.request(r.path)).body;
   assert.equal(f.sql.prepare('SELECT stop_reason FROM session_limits WHERE session_id=?').get(started.body.session.id).stop_reason, 'time_limit');
   assert.deepEqual([f.sql.prepare('SELECT status FROM discussion_sessions WHERE id=?').get(started.body.session.id).status, ended.mode,
-    ended.phase, ended.session.status], ['concluded', 'free', 'discussing', 'concluded']);
+    ended.phase, ended.session.status], ['concluded', 'free', 'concluded', 'concluded']);
   const conclusion = f.sql.prepare('SELECT stop_reason,concluded_at FROM discussion_conclusions WHERE session_id=?').get(started.body.session.id);
   assert.equal(conclusion.stop_reason, 'time_limit');
   assert.ok(conclusion.concluded_at);
@@ -802,11 +754,8 @@ test('Worker accepts the real topic save payload during active and paused sessio
     { name: 'Gemini', access: 'manual', manual_source: 'web', token: 'topic-gemini-web-real-payload'.repeat(2) },
   ]);
   const topic_path = `${r.path}/topic`;
-  const save_topic_with_browser = async (room, reverse_experts, label) => {
-    const expert_entries = Object.entries(room.experts);
-    const experts = Object.fromEntries(reverse_experts ? expert_entries.reverse() : expert_entries);
+  const save_topic_with_browser = async (room, label) => {
     const fields = {
-      'topic-host-select': room.host,
       'topic-title-input': `保存${label}`,
       'topic-goal-input': room.goal,
       'topic-focus-input': room.focus,
@@ -818,29 +767,26 @@ test('Worker accepts the real topic save payload during active and paused sessio
       state: { room, topic_dirty: true },
       localStorage: { getItem: () => null, removeItem: () => {} },
       element: id => ({ value: fields[id] ?? '' }),
-      read_expert_inputs: () => experts,
       read_limits: () => { throw new Error('live-session topic saves must not read limits'); },
-      prepare_member_request: () => { throw new Error('an unchanged roster must not create member credentials'); },
       request_json: async (path, payload) => {
         assert.equal(path, `/api/rooms/${room.id}/topic`);
         const response = await f.request(topic_path, payload, r.owner);
         if (response.status < 200 || response.status >= 300) throw Object.assign(new Error(response.body.error), { status: response.status });
         return response.body;
       },
-      save_room_credentials: () => {},
       refresh_room: async () => {},
       show_toast: () => {},
     };
     const save_topic = await load_topic_save_handler(browser);
     await save_topic({ preventDefault() {} });
-    return { payload_experts: experts, room: browser.state.room };
+    return { room: browser.state.room };
   };
   const managed_state = session_id => ({
     session: f.sql.prepare(`SELECT s.id,s.status,st.phase FROM discussion_sessions s
       JOIN session_state st ON st.session_id=s.id WHERE s.id=?`).get(session_id),
     limits: f.sql.prepare(`SELECT max_rounds,max_minutes,execution_minutes,revision,stop_reason
       FROM session_limits WHERE session_id=?`).get(session_id),
-    topic: f.sql.prepare('SELECT host,experts,phase FROM topic_settings WHERE room_id=?').get(r.room.id),
+    topic: f.sql.prepare('SELECT host,experts FROM topic_settings WHERE room_id=?').get(r.room.id),
     members: f.sql.prepare(`SELECT m.name,m.access,m.role,m.status,m.token_hash,COALESCE(src.source,'') AS manual_source
       FROM room_members m LEFT JOIN member_manual_sources src ON src.member_id=m.id WHERE m.room_id=? ORDER BY m.name`).all(r.room.id),
   });
@@ -865,8 +811,7 @@ test('Worker accepts the real topic save payload during active and paused sessio
     }
 
     const before = managed_state(room.session.id);
-    const saved = await save_topic_with_browser(room, true, status);
-    assert.deepEqual(Object.keys(saved.payload_experts), Object.keys(room.experts).reverse(), 'the browser payload may reverse mapping key order');
+    await save_topic_with_browser(room, status);
     assert.deepEqual(managed_state(room.session.id), before, `${status} topic editing preserves roster credentials and discussion controls`);
     const updated = (await f.request(r.path, undefined, r.owner)).body;
     assert.equal(updated.title, `保存${status}`);
@@ -1272,6 +1217,48 @@ async function session_control_fixture(t, limits = {}, members = []) {
   return { f, r, control, session: started.body.session };
 }
 
+test('Worker saved default limits seed starts, survive text edits and stay separate from session history', async t => {
+  const f = await worker_fixture(t), r = await free_worker_room(f);
+  const defaults = { max_rounds: 5, max_minutes: 45, execution_minutes: 8 };
+  const before = (await f.request(`${r.path}/discussion`)).body;
+  const saved = await f.request(`${r.path}/topic`, { actor: '用户', limits: defaults }, r.owner);
+  assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  assert.equal((await f.request(`${r.path}/discussion`, { action: 'start', revision: before.revision }, r.owner)).status, 409);
+  const control = async (action, fields = {}) => f.request(`${r.path}/discussion`, {
+    action, revision: (await f.request(`${r.path}/discussion`)).body.revision, ...fields,
+  }, r.owner);
+  const started = await control('start');
+  assert.equal(started.status, 200, JSON.stringify(started.body));
+  assert.deepEqual(Object.fromEntries(Object.keys(defaults).map(key => [key, started.body.session.limits[key]])), defaults);
+  assert.equal((await control('pause')).status, 200);
+  const limits = (await f.request(`${r.path}/limits`)).body;
+  assert.equal(limits.revision, (await f.request(`${r.path}/discussion`)).body.revision);
+  const changed = await f.request(`${r.path}/limits`, { actor: '用户', revision: limits.revision, max_rounds: 7 }, r.owner);
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+  const edited = await f.request(`${r.path}/topic`, { actor: '用户', focus: '仅改文字' }, r.owner);
+  assert.equal(edited.status, 200, JSON.stringify(edited.body));
+  assert.equal(edited.body.limits.max_rounds, 7);
+  const checked = await f.request(`${r.path}/limits`, { actor: 'Claude', action: 'check' }, r.claude);
+  assert.equal(checked.status, 200, JSON.stringify(checked.body));
+  assert.equal(checked.body.id, r.room.id);
+  assert.equal((await control('end')).status, 200);
+  assert.equal((await f.request(`${r.path}/limits`)).body.max_rounds, 5);
+  const history = (await f.request(`${r.path}/backup`)).body.tables.session_limits;
+  assert.equal(history.find(item => item.session_id === started.body.session.id).max_rounds, 7);
+  const updated = await f.request(`${r.path}/topic`, { actor: '用户', limits: { max_rounds: 6 } }, r.owner);
+  assert.equal(updated.body.limits.max_rounds, 6);
+  assert.equal((await control('start')).body.session.limits.max_rounds, 6);
+});
+
+test('Worker rejects a default-limit change between reading and committing a discussion start', async t => {
+  const f = await worker_fixture(t), r = await free_worker_room(f);
+  const revision = (await f.request(`${r.path}/discussion`)).body.revision;
+  f.before_batch = () => f.sql.prepare('UPDATE discussion_limits SET max_rounds=9 WHERE room_id=?').run(r.room.id);
+  const started = await f.request(`${r.path}/discussion`, { action: 'start', revision }, r.owner);
+  assert.equal(started.status, 409, JSON.stringify(started.body));
+  assert.equal((await f.request(`${r.path}/discussion`)).body.session, null);
+});
+
 test('Worker session limits reject invalid values and the retired deadline cannot bypass them', async t => {
   const f = await worker_fixture(t), r = await free_worker_room(f);
   const revision = (await f.request(`${r.path}/discussion`)).body.revision;
@@ -1382,84 +1369,20 @@ for (const change of ['roster', 'archive', 'message']) {
     };
     const started = await f.request(`${r.path}/discussion`, { action: 'start', revision, goal: '并发启动' }, r.owner);
     assert.equal(started.status, 409, JSON.stringify(started.body));
-    for (const table of ['discussion_sessions', 'member_requests', 'discussion_events']) {
+    for (const table of ['discussion_sessions', 'member_requests']) {
       assert.equal(f.sql.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE room_id=?`).get(r.room.id).count, 0);
     }
     assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM task_message_sources').get().count, 0);
   });
 }
 
-test('Worker session clock survives schema reinitialization and does not reuse the old clock', async t => {
+test('Worker session clock survives schema reinitialization', async t => {
   const { f, r, session } = await session_control_fixture(t);
-  f.sql.prepare('UPDATE discussion_limits SET started_at=17 WHERE room_id=?').run(r.room.id);
   const started_at = f.sql.prepare('SELECT started_at FROM session_limits WHERE session_id=?').get(session.id).started_at;
-  assert.ok(started_at > 17);
+  assert.ok(started_at > 0);
   f.sql.exec(await readFile(join(PROJECT_ROOT, 'backend/schema.sql'), 'utf8'));
   assert.equal(f.sql.prepare('SELECT started_at FROM session_limits WHERE session_id=?').get(session.id).started_at, started_at);
-  assert.equal(f.sql.prepare('SELECT started_at FROM discussion_limits WHERE room_id=?').get(r.room.id).started_at, 17);
   assert.equal((await f.request(`${r.path}/runtime`, { action: 'start', revision: 0 }, r.owner)).status, 400);
-});
-
-test('Worker legacy runtime and event APIs retain ended history reads but cannot resume the old engine', async t => {
-  const { f, r, control } = await session_control_fixture(t);
-  await control('end');
-  const control_hash = createHash('sha256').update(r.owner).digest('hex');
-  f.sql.prepare(`INSERT INTO discussion_runtime(room_id,mode,run_id,status,control_hash,updated_at)
-    VALUES(?,'automatic','legacy-run','stopped',?,'2026-10-29T00:00:00Z')`).run(r.room.id, control_hash);
-  const event = f.sql.prepare(`INSERT INTO discussion_events(room_id,run_id,generation,cause,participant,role,status,result,created_at)
-    VALUES(?,'legacy-run',1,'host_turn','Claude','host','completed','历史结果','2026-10-29T00:00:01Z') RETURNING id`).get(r.room.id);
-  assert.equal((await f.request(`${r.path}/runtime`)).body.status, 'stopped');
-  assert.deepEqual((await f.request(`${r.path}/events?after=0`, undefined, r.owner)).body.events.map(row => row.id), [event.id]);
-  const historical = await f.request(`${r.path}/events/${event.id}`, { action: 'view' }, r.owner);
-  assert.equal(historical.status, 200, JSON.stringify(historical.body));
-  assert.deepEqual([historical.body.id, historical.body.status, historical.body.result], [event.id, 'completed', '历史结果']);
-  for (const action of ['reserve', 'enter', 'renew', 'fail', 'segments']) {
-    assert.equal((await f.request(`${r.path}/events/${event.id}`, { action }, r.owner)).status, 409, action);
-  }
-  assert.equal((await f.request(`${r.path}/runtime`, { action: 'stop', revision: 0 }, r.owner)).status, 409);
-  assert.equal(f.sql.prepare('SELECT status FROM discussion_events WHERE id=?').get(event.id).status, 'completed');
-  assert.equal(f.sql.prepare('SELECT status FROM discussion_runtime WHERE room_id=?').get(r.room.id).status, 'stopped');
-});
-
-test('Worker legacy brainstorm rooms without a session cannot enter the retired runtime', async t => {
-  const f = await worker_fixture(t), r = await free_worker_room(f);
-  const control_hash = createHash('sha256').update(r.owner).digest('hex');
-  f.sql.prepare("UPDATE room_modes SET mode='brainstorm' WHERE room_id=?").run(r.room.id);
-  f.sql.prepare(`INSERT INTO discussion_runtime(room_id,mode,run_id,status,control_hash,updated_at)
-    VALUES(?,'automatic','legacy-run','stopped',?,'2026-10-29T00:00:00Z')`).run(r.room.id, control_hash);
-  const event = f.sql.prepare(`INSERT INTO discussion_events(room_id,run_id,generation,cause,participant,role,status,result,created_at)
-    VALUES(?,'legacy-run',1,'host_turn','Claude','host','completed','历史结果','2026-10-29T00:00:01Z') RETURNING id`).get(r.room.id);
-  assert.equal((await f.request(`${r.path}/runtime`)).body.status, 'stopped');
-  assert.deepEqual((await f.request(`${r.path}/events?after=0`, undefined, r.owner)).body.events.map(row => row.id), [event.id]);
-  for (const [path, payload] of [[`${r.path}/runtime`, { action: 'start', revision: 0 }],
-    [`${r.path}/events/${event.id}`, { action: 'reserve' }]]) {
-    assert.equal((await f.request(path, payload, r.owner)).status, 400, path);
-  }
-  const historical = await f.request(`${r.path}/events/${event.id}`, { action: 'view' }, r.owner);
-  assert.equal(historical.status, 200, JSON.stringify(historical.body));
-  assert.equal(historical.body.result, '历史结果');
-  assert.equal(f.sql.prepare('SELECT status FROM discussion_runtime WHERE room_id=?').get(r.room.id).status, 'stopped');
-  assert.equal(f.sql.prepare('SELECT status FROM discussion_events WHERE id=?').get(event.id).status, 'completed');
-});
-
-test('Worker old database migration stops legacy runs and keeps only historical reads', async t => {
-  const f = await worker_fixture(t), r = await free_worker_room(f);
-  const control_hash = createHash('sha256').update(r.owner).digest('hex');
-  f.sql.prepare("UPDATE room_modes SET mode='brainstorm' WHERE room_id=?").run(r.room.id);
-  f.sql.prepare("UPDATE topic_settings SET phase='discussing' WHERE room_id=?").run(r.room.id);
-  f.sql.prepare(`INSERT INTO discussion_runtime(room_id,mode,run_id,status,control_hash,updated_at)
-    VALUES(?,'automatic','pre-upgrade-run','running',?,'2026-10-29T00:00:00Z')`).run(r.room.id, control_hash);
-  const event = f.sql.prepare(`INSERT INTO discussion_events(room_id,run_id,generation,cause,participant,role,status,created_at)
-    VALUES(?,'pre-upgrade-run',1,'host_turn','Claude','host','pending','2026-10-29T00:00:01Z') RETURNING id`).get(r.room.id);
-  f.sql.prepare("DELETE FROM schema_migrations WHERE name='discussion_session_requests_v1'").run();
-  f.sql.exec(await readFile(join(PROJECT_ROOT, 'backend', 'schema.sql'), 'utf8'));
-  assert.equal(f.sql.prepare('SELECT mode FROM room_modes WHERE room_id=?').get(r.room.id).mode, 'free');
-  assert.equal(f.sql.prepare('SELECT status FROM discussion_sessions WHERE room_id=?').get(r.room.id).status, 'concluded');
-  assert.equal(f.sql.prepare('SELECT status FROM discussion_runtime WHERE room_id=?').get(r.room.id).status, 'stopped');
-  assert.equal((await f.request(`${r.path}/runtime`, { action: 'start', revision: 0 }, r.owner)).status, 400);
-  assert.equal((await f.request(`${r.path}/events/${event.id}`, { action: 'reserve' }, r.owner)).status, 400);
-  assert.equal((await f.request(`${r.path}/events/${event.id}`, { action: 'view' }, r.owner)).status, 200);
-  assert.equal(f.sql.prepare('SELECT status FROM discussion_events WHERE id=?').get(event.id).status, 'pending');
 });
 
 test('Worker idle session revisions change after new visible messages', async t => {
@@ -1543,6 +1466,85 @@ test('Worker session rounds advance once and the owner may cancel the current pl
   assert.equal(f.sql.prepare("SELECT COUNT(*) AS count FROM member_requests WHERE member_id=? AND purpose='discuss_host' AND status='pending'")
     .get(await r.member_id('Claude')).count, pending_host_requests);
   assert.equal((await f.request(`${r.path}/turns/${second.id}`)).body.status, 'cancelled');
+});
+
+test('Worker speaking order shows the open discussion round and the owner reorders its queued turns', async t => {
+  const codex = 'order-codex'.repeat(4);
+  const { f, r } = await session_control_fixture(t, {}, [{ name: 'Codex', token: codex }, { name: 'Gemini', token: 'order-gemini'.repeat(4) },
+    { name: 'Qwen', token: 'order-qwen'.repeat(4) }]);
+  const planned = await f.request(`${r.path}/turns`, { actor: 'Claude', submission_id: 'order-round-plan', roster: (await f.request(`${r.path}/turns/roster`)).body.revision,
+    turns: ['Codex', 'Gemini', 'Qwen'].map(expert => ({ expert, question: '请发言' })) }, r.claude);
+  assert.equal(planned.status, 201, JSON.stringify(planned.body));
+  const url = `${r.path}/speaking-order`;
+  const order = (await f.request(url)).body;
+  const states = view => view.items.filter(item => item.state !== 'idle').map(item => [item.name, item.state]);
+  assert.equal(order.kind, 'turns');
+  assert.deepEqual(states(order), [['Codex', 'speaking'], ['Gemini', 'queued'], ['Qwen', 'queued']]);
+  assert.deepEqual(order.movable, ['Gemini', 'Qwen']);
+  const moved = await f.request(url, { revision: order.revision, order: ['Qwen', 'Gemini'] }, r.owner);
+  assert.equal(moved.status, 200, JSON.stringify(moved.body));
+  const execution = (await r.reserve('Codex')).body;
+  assert.equal((await r.answer(execution.id, codex, 'Codex')).status, 201);
+  assert.deepEqual(states((await f.request(url)).body), [['Codex', 'done'], ['Qwen', 'speaking'], ['Gemini', 'queued']]);
+});
+
+test('Worker refuses a discussion turn answered together with another request', async t => {
+  const codex = 'alone-codex'.repeat(4), qwen = 'alone-qwen'.repeat(4);
+  const { f, r } = await session_control_fixture(t, {}, [{ name: 'Codex', token: codex }, { name: 'Qwen', token: qwen, access: 'manual' }]);
+  assert.equal((await f.request(`${r.path}/register`, {}, qwen)).status, 200);
+  const plan = async (expert, submission_id) => f.request(`${r.path}/turns`, { actor: 'Claude', expert, question: '单独回答', submission_id,
+    roster: (await f.request(`${r.path}/turns/roster`)).body.revision }, r.claude);
+  const codex_turn = (await plan('Codex', 'alone-codex-plan')).body.turn;
+  const execution = (await r.reserve('Codex')).body;
+  await r.say('顺便问 Codex', { to: ['Codex'] });
+  f.sql.prepare("UPDATE member_requests SET status='delivering',execution_id=? WHERE purpose='ask' AND member_id=?")
+    .run(execution.id, await r.member_id('Codex'));
+  assert.equal((await r.answer(execution.id, codex, 'Codex')).status, 409);
+  f.sql.prepare("UPDATE member_requests SET status='cancelled' WHERE purpose='ask' AND member_id=?").run(await r.member_id('Codex'));
+  assert.equal((await r.answer(execution.id, codex, 'Codex')).status, 201);
+  assert.equal(f.sql.prepare('SELECT status FROM session_requests WHERE id=?').get(codex_turn.id).status, 'answered');
+  const qwen_turn = (await plan('Qwen', 'alone-qwen-plan')).body.turn;
+  await r.say('顺便问 Qwen', { to: ['Qwen'] });
+  const ask = f.sql.prepare("SELECT id FROM member_requests WHERE purpose='ask' AND member_id=?").get(await r.member_id('Qwen')).id;
+  const manual = request_ids => f.request(`${r.path}/messages`, { author: 'Qwen', source: 'cli', kind: 'chat', request_ids, text: '一起回答',
+    submission_id: crypto.randomUUID().replaceAll('-', '') }, qwen);
+  assert.equal((await manual([qwen_turn.member_request_id, ask])).status, 409);
+  assert.equal((await manual([qwen_turn.member_request_id])).status, 201);
+});
+
+test('Worker holds an unnamed user message only while the discussion is unchanged', async t => {
+  const { f, r, session } = await session_control_fixture(t);
+  f.before_batch = () => f.sql.prepare('UPDATE session_state SET revision=revision+1 WHERE session_id=?').run(session.id);
+  assert.equal((await r.say('讨论中留言')).status, 409);
+  assert.equal((await f.request(r.path)).body.message_count, 0);
+  f.before_batch = null;
+  assert.equal((await r.say('讨论中留言')).status, 201);
+});
+
+test('Worker refuses a forwarded discussion answer once the discussion pauses before it is saved', async t => {
+  const { f, r } = await session_control_fixture(t);
+  assert.equal((await f.request(`${r.path}/members`, { name: 'Qwen', token: 'web-turn-qwen'.repeat(4), access: 'online' }, r.owner)).status, 200);
+  const planned = await f.request(`${r.path}/turns`, { actor: 'Claude', expert: 'Qwen', question: '网页成员发言', submission_id: 'web-turn-plan',
+    roster: (await f.request(`${r.path}/turns/roster`)).body.revision }, r.claude);
+  assert.equal(planned.status, 201, JSON.stringify(planned.body));
+  const answer = { author: 'Qwen', submitted_by: '用户', text: '在线原文', request_ids: [planned.body.turn.member_request_id], submission_id: 'web-turn-answer' };
+  f.before_batch = () => f.sql.prepare("UPDATE discussion_sessions SET status='paused' WHERE room_id=?").run(r.room.id);
+  assert.equal((await f.request(`${r.path}/messages`, answer, r.owner)).status, 409);
+  f.before_batch = null;
+  f.sql.prepare("UPDATE discussion_sessions SET status='active' WHERE room_id=?").run(r.room.id);
+  assert.equal((await f.request(`${r.path}/messages`, answer, r.owner)).status, 201);
+});
+
+test('Worker keeps user messages from before a discussion out of retract', async t => {
+  const f = await worker_fixture(t), r = await free_worker_room(f);
+  const earlier = (await r.say('讨论前的消息')).body.message.id;
+  const discussion = `${r.path}/discussion`;
+  assert.equal((await f.request(discussion, { action: 'start', revision: (await f.request(discussion)).body.revision, goal: '撤回边界' }, r.owner)).status, 200);
+  assert.equal((await f.request(discussion, { action: 'end', revision: (await f.request(discussion)).body.revision }, r.owner)).status, 200);
+  const retracted = await f.request(`${r.path}/messages/${earlier}/retract`, {}, r.owner);
+  assert.equal(retracted.status, 409, JSON.stringify(retracted.body));
+  const later = (await r.say('讨论后的消息')).body.message.id;
+  assert.equal((await f.request(`${r.path}/messages/${later}/retract`, {}, r.owner)).status, 200);
 });
 
 test('Worker session roster retains and labels members that have not registered', async t => {
@@ -1814,9 +1816,11 @@ test('Worker free rooms need the owner credential and keep secrets out of views 
   assert.equal(r.room.host, 'Claude');
   for (const token of ['', 'x'.repeat(40), r.claude]) assert.equal((await r.say('冒充', {}, token)).status, 403);
   assert.equal((await r.say('主人冒充成员', { author: 'Claude' })).status, 403);
-  for (const tail of ['/turns', '/floor', '/topic', '/runtime']) {
+  for (const tail of ['/turns', '/floor', '/topic']) {
     assert.equal((await f.request(`${r.path}${tail}`, { actor: '用户', action: 'take', revision: 0, phase: 'paused' }, r.owner)).status, 400, tail);
   }
+  assert.equal((await f.request(`${r.path}/runtime`, { actor: '用户', action: 'take', revision: 0 }, r.owner)).status, 400);
+  assert.equal((await f.request(`${r.path}/runtime`)).status, 404);
   const view = await f.request(r.path);
   const backup = await f.request(`${r.path}/backup`);
   assert.ok(backup.body.tables.room_members.length);
@@ -2147,16 +2151,16 @@ test('Worker discussions use revision-bound session requests and hide internal t
   const ended = await f.request(discussion, { action: 'end', revision: paused.body.revision }, r.owner);
   assert.equal(ended.status, 200, JSON.stringify(ended.body));
   assert.equal(ended.body.session, null);
-  assert.equal((await f.request(`${r.path}/runtime`, { action: 'stop', revision: 0 }, r.owner)).status, 409,
-    'legacy runtime writes stay disabled after the new session ends');
-  assert.equal((await f.request(`${r.path}/turns`, { actor: '用户', submission_id: 'legacy-after-session', expert: 'Claude', question: '旧安排' }, r.owner)).status, 409,
-    'legacy turn writes stay disabled after the new session ends');
+  assert.equal((await f.request(`${r.path}/runtime`, { action: 'stop', revision: 0 }, r.owner)).status, 400,
+    'the retired runtime API takes no writes');
+  assert.equal((await f.request(`${r.path}/turns`, { actor: '用户', submission_id: 'legacy-after-session', expert: 'Claude', question: '旧安排' }, r.owner)).status, 400,
+    'arrangements need an open discussion');
   assert.equal((await f.request(`${r.path}/turns`)).body.total, 1, 'ended session turns remain readable through the new history API');
   assert.deepEqual([(await f.request(r.path)).body.mode, (await f.request(r.path)).body.session.status,
     (await f.request(`${r.path}/messages/${first}`)).body.text], ['free', 'concluded', '先聊几句']);
 });
 
-test('Worker session timeline preserves older free tasks and hides discussion and later task failures', async t => {
+test('Worker session timeline preserves older free tasks and hides later task failures', async t => {
   const f = await worker_fixture(t);
   const codex = 'timeline-codex'.repeat(4);
   const r = await free_worker_room(f, [{ name: 'Codex', adapter: 'codex_cli', token: codex }]);
@@ -2169,9 +2173,6 @@ test('Worker session timeline preserves older free tasks and hides discussion an
   const initial = (await f.request(discussion)).body;
   const started = await f.request(discussion, { action: 'start', revision: initial.revision, goal: '时间线边界' }, r.owner);
   assert.equal(started.status, 200, JSON.stringify(started.body));
-  const legacy_event = f.sql.prepare(`INSERT INTO discussion_events(room_id,run_id,generation,cause,participant,role,status,result,created_at)
-    VALUES(?,'old-run',1,'host_turn','Claude','host','failed','旧讨论失败原因','2026-10-29T00:00:01Z') RETURNING id`).get(r.room.id);
-  f.sql.prepare('INSERT INTO event_timings(event_id,dispatched_at,finished_at) VALUES(?,1,2)').run(legacy_event.id);
 
   await r.say('不可公开的后续普通任务', { to: ['Codex'] });
   const later_execution = (await r.reserve('Codex')).body;
@@ -2181,35 +2182,8 @@ test('Worker session timeline preserves older free tasks and hides discussion an
   const visible_old_task = timeline.find(item => item.source === 'free' && item.id === old_execution.id);
   assert.deepEqual([visible_old_task.task, visible_old_task.task_id, visible_old_task.reason],
     ['可见的早期普通任务', old_task, '可见的旧失败原因']);
-  const hidden_legacy = timeline.find(item => item.source === 'discussion' && item.id === legacy_event.id);
-  assert.deepEqual([hidden_legacy.task, hidden_legacy.task_id, hidden_legacy.reason], ['', null, '']);
   const hidden_later = timeline.find(item => item.source === 'free' && item.id === later_execution.id);
   assert.deepEqual([hidden_later.task, hidden_later.task_id, hidden_later.reason], ['', null, '']);
-});
-
-test('Worker disambiguates a legacy turn id from a colliding session request id', async t => {
-  const f = await worker_fixture(t);
-  const r = await free_worker_room(f);
-  const room_id = r.room.id;
-  const legacy_turn_id = 2;
-  const old_message = f.sql.prepare(`INSERT INTO messages(room_id,author,text,source,submission_id,created_at)
-    VALUES (?,'Claude','历史观点','cli','legacy-answer','2026-10-29T00:00:00Z') RETURNING id`).get(room_id);
-  f.sql.prepare(`INSERT INTO discussion_turns(id,room_id,expert,question,status,submission_id,created_at,answer_id)
-    VALUES (?,?,'Claude','历史问题','pending','legacy-plan','2026-10-29T00:00:00Z',NULL)`).run(legacy_turn_id, room_id);
-  f.sql.prepare("INSERT INTO message_details(message_id,kind,submitted_by,turn_id) VALUES (?,'opinion','Claude',?)").run(old_message.id, legacy_turn_id);
-  f.sql.prepare("UPDATE discussion_turns SET status='answered',answer_id=? WHERE id=?").run(old_message.id, legacy_turn_id);
-  const initial = (await f.request(`${r.path}/discussion`)).body;
-  const started = await f.request(`${r.path}/discussion`, { action: 'start', revision: initial.revision, goal: '编号冲突' }, r.owner);
-  assert.equal(started.status, 200, JSON.stringify(started.body));
-  const roster = (await f.request(`${r.path}/turns/roster`)).body;
-  const plan = await f.request(`${r.path}/turns`, { actor: 'Claude', submission_id: 'new-plan-collision', roster: roster.revision,
-    expert: 'Claude', question: '新安排' }, r.claude);
-  assert.equal(plan.status, 201, JSON.stringify(plan.body));
-  assert.equal(plan.body.turn.id, legacy_turn_id, 'the numeric id collides by design');
-  assert.equal((await f.request(`${r.path}/turns/${legacy_turn_id}`)).body.purpose, 'discuss');
-  assert.equal((await f.request(`${r.path}/turns/${legacy_turn_id}?legacy=1`)).body.question, '历史问题');
-  const text = await worker.fetch(new Request(`https://discussion.test/r/${room_id}/messages/${old_message.id}`), f.env);
-  assert.match(await text.text(), new RegExp(`/r/${room_id}/turns/${legacy_turn_id}\\?legacy=1`));
 });
 
 test('Worker session round limit uses free-room experts and ends without a host summary request', async t => {
@@ -2235,17 +2209,10 @@ test('Worker session round limit uses free-room experts and ends without a host 
   assert.equal((await f.request(r.path)).body.mode, 'free');
 });
 
-test('Worker room view keeps legacy rounds and partitions answered rounds across all sessions', async t => {
+test('Worker room view partitions answered rounds across all sessions', async t => {
   const f = await worker_fixture(t), codex = 'round-group-codex'.repeat(3);
   const r = await free_worker_room(f, [{ name: 'Codex', adapter: 'codex_cli', token: codex }]);
-  f.sql.prepare("UPDATE topic_settings SET host=?,experts=?,phase='discussing' WHERE room_id=?")
-    .run('Claude', JSON.stringify({ Codex: 'cli' }), r.room.id);
-  const legacy_turn = f.sql.prepare(`INSERT INTO discussion_turns(room_id,expert,question,status,submission_id,created_at,notified_at)
-    VALUES(?,'Codex','旧安排','notified','legacy-round-turn','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`).run(r.room.id).lastInsertRowid;
-  const legacy = f.sql.prepare(`INSERT INTO messages(room_id,author,text,source,submission_id,created_at)
-    VALUES(?,?,'旧观点','cli','legacy-round-opinion','2026-01-01T00:01:00Z')`).run(r.room.id, 'Codex').lastInsertRowid;
-  f.sql.prepare('INSERT INTO message_details(message_id,kind,submitted_by,turn_id) VALUES(?,?,?,?)').run(legacy, 'opinion', 'Codex', legacy_turn);
-  f.sql.prepare("UPDATE discussion_turns SET status='answered',answer_id=? WHERE id=?").run(legacy, legacy_turn);
+  assert.deepEqual((await f.request(r.path)).body.round_groups, [], 'a room without a discussion has no rounds');
   const session_ids = [];
   for (let index = 0; index < 2; index++) {
     const initial = (await f.request(`${r.path}/discussion`)).body;
@@ -2264,22 +2231,16 @@ test('Worker room view keeps legacy rounds and partitions answered rounds across
   }
   const ordinary = (await r.say('討論結束後')).body.message.id;
   const groups = (await f.request(r.path)).body.round_groups;
-  assert.deepEqual(groups.map(group => group.key), [
-    'legacy-round-1', `session-${session_ids[0]}-round-1`, `session-${session_ids[1]}-round-1`,
-  ]);
-  assert.deepEqual(groups.slice(1).map(group => group.session_id), session_ids);
-  assert.deepEqual(groups.slice(1).map(group => group.participants), [1, 1]);
-  assert.ok(groups.slice(1).every(group => group.speakers.length === 1));
-  assert.ok(groups.slice(1).every(group => group.end_id < ordinary), 'post-session messages are outside ended round ranges');
+  assert.deepEqual(groups.map(group => group.key), [`session-${session_ids[0]}-round-1`, `session-${session_ids[1]}-round-1`]);
+  assert.deepEqual(groups.map(group => group.session_id), session_ids);
+  assert.deepEqual(groups.map(group => group.participants), [1, 1]);
+  assert.ok(groups.every(group => group.speakers.length === 1));
+  assert.ok(groups.every(group => group.end_id < ordinary), 'post-session messages are outside ended round ranges');
 });
 
 test('Worker assignment cards use stable visible slots and omit queued or failed cancellations', async t => {
   const f = await worker_fixture(t), codex = 'cancel-card-codex'.repeat(3);
   const r = await free_worker_room(f, [{ name: 'Codex', adapter: 'codex_cli', token: codex }, { name: 'Gemini', token: 'queued-only-gemini'.repeat(3) }]);
-  f.sql.prepare(`INSERT INTO discussion_turns(room_id,expert,question,status,submission_id,created_at,notified_at)
-    VALUES(?,'Codex','旧已发送','cancelled','legacy-cancelled-sent','2026-01-01T00:00:00Z','2026-01-01T00:00:01Z')`).run(r.room.id);
-  f.sql.prepare(`INSERT INTO discussion_turns(room_id,expert,question,status,submission_id,created_at)
-    VALUES(?,'Gemini','旧未发送','cancelled','legacy-cancelled-queued','2026-01-01T00:00:02Z')`).run(r.room.id);
   const initial = (await f.request(`${r.path}/discussion`)).body;
   const started = await f.request(`${r.path}/discussion`, { action: 'start', revision: initial.revision, goal: '计划显示' }, r.owner);
   assert.equal(started.status, 200, JSON.stringify(started.body));
@@ -2299,11 +2260,11 @@ test('Worker assignment cards use stable visible slots and omit queued or failed
   assert.equal((await f.request(`${r.path}/discussion`, { action: 'pause', revision: current.revision }, r.owner)).status, 200);
   let cancelled = (await f.request(r.path)).body.cancelled_turns;
   assert.deepEqual(cancelled.map(item => [item.key, item.execution_id]), [
-    ['legacy-turn-1', undefined], [`session-${started.body.session.id}-request-${plan.body.turn.id}`, execution.body.id],
+    [`session-${started.body.session.id}-request-${plan.body.turn.id}`, execution.body.id],
   ]);
   f.sql.prepare("UPDATE member_executions SET status='failed' WHERE id=?").run(execution.body.id);
   cancelled = (await f.request(r.path)).body.cancelled_turns;
-  assert.deepEqual(cancelled.map(item => item.key), ['legacy-turn-1'], 'a failure card replaces only the new cancelled assignment card');
+  assert.deepEqual(cancelled.map(item => item.key), [], 'a failure card replaces the cancelled assignment card');
 });
 
 test('Worker discussion revisions distinguish closed sessions and current roster without visible-message changes', async t => {
@@ -3030,7 +2991,6 @@ test('Worker free rooms forward online answers and create discussions in place',
   const started = await f.request(`${r.path}/discussion`, { action: 'start', revision: initial.revision, goal: '方案讨论' }, r.owner);
   assert.equal(started.status, 200, JSON.stringify(started.body));
   assert.equal((await f.request(r.path)).body.id, r.room.id, 'discussion runs in the same collaboration room');
-  assert.equal((await f.request('', { title: '来源子房间', parent_room_id: r.room.id })).status, 400);
 });
 
 test('Worker owner relay keeps a discussion request separate from direct asks', async t => {

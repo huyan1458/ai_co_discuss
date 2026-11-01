@@ -207,7 +207,6 @@ class RoomWorker {
     const release = acquire_lock(config.directory);
     try { this.store = new DiscussionStore(config.directory); }
     catch (error) { release(); throw error; }
-    if (config.mode !== 'free') this.store.context(config);
     this.store.scope(config);
     this.config = config;
     this.release = release;
@@ -232,10 +231,6 @@ class RoomWorker {
     if (codex_switch && discussion?.session?.status === 'active') {
       throw new Error('讨论运行中不能切换 Codex 接入方式');
     }
-    if (codex_switch && this.config.mode !== 'free' && this.runner.children?.size) {
-      throw new Error('等待原 CLI 进程退出后再切换 Codex 接入方式');
-    }
-    if (this.config.mode !== 'free') this.store.context(updated, codex_switch);
     // The runner owns all free-room and discussion requests; only connection context is adopted here.
     this.runner.adopt?.({ ...updated, draft_directory: this.config.draft_directory });
     this.config = this.runner.config || { ...updated, draft_directory: this.config.draft_directory };
@@ -254,7 +249,7 @@ class RoomWorker {
         const { adopt_member_profile } = await import('./discussion_launch.mjs');
         const member_token = `${randomUUID()}${randomUUID()}`;
         const adapter = adopt_member_profile(this.home, this.path, member.name, member.reported_session, member.reported_client, member_token);
-        await api(this.config, `/members/${member.id}`, { action: 'adopt', adapter, session_id: member.reported_session, ...(member_token ? { token: member_token } : {}) });
+        await api(this.config, `/members/${member.id}`, { action: 'adopt', adapter, session_id: member.reported_session, token: member_token });
         this.log(`${this.config.room}: ${member.name} 已转为本机托管`);
       } catch (error) {
         this.adopt_failed.add(key);

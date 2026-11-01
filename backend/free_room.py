@@ -49,12 +49,8 @@ CHAIN_PROGRESS_SQL = """SELECT b.chain_id,COUNT(*) AS used,? + COALESCE((SELECT 
     GROUP BY b.chain_id ORDER BY b.chain_id DESC LIMIT 10"""
 TIMELINE_STATES = {"completed": "done", "failed": "failed", "cancelled": "cancelled"}
 TIMELINE_FREE_IDS = "SELECT id FROM member_executions WHERE room_id=?1 AND (?3=0 OR finished_at=0 OR finished_at>=?3) ORDER BY id DESC LIMIT ?2"
-TIMELINE_DISCUSSION_IDS = """SELECT e.id FROM discussion_events e LEFT JOIN event_timings t ON t.event_id=e.id
-    WHERE e.room_id=?1 AND (t.dispatched_at>0 OR e.status='pending') AND (?3=0 OR COALESCE(t.finished_at,0)=0 OR t.finished_at>=?3)
-    ORDER BY e.id DESC LIMIT ?2"""
-# Besides times: the task an execution took on (its request message, or the discussion turn's question), its result
-# (the answer's summary, else the answer's opening), its latest progress note, how many files it changed (NULL when
-# unobserved), its last output time (free executions only) and the discussion run it belongs to (discussion only).
+# Besides times: the task an execution took on (its request message), its result (the answer's summary, else the
+# answer's opening), its latest progress note, how many files it changed (NULL when unobserved) and its last output time.
 TIMELINE_SQL = f"""SELECT x.*,(SELECT COALESCE(NULLIF(s.text,''),substr(a.text,1,200)) FROM messages a
         LEFT JOIN message_summaries s ON s.message_id=a.id WHERE a.id=x.answer_id) AS result FROM (
     SELECT 'free' AS source,e.id,m.name AS member,m.role,e.status,
@@ -67,16 +63,10 @@ TIMELINE_SQL = f"""SELECT x.*,(SELECT COALESCE(NULLIF(s.text,''),substr(a.text,1
         (SELECT substr(q.text,1,160) FROM messages q WHERE q.id=(SELECT MIN(r.message_id) FROM member_requests r WHERE r.execution_id=e.id)) AS task,
         (SELECT MAX(r.answer_id) FROM member_requests r WHERE r.execution_id=e.id) AS answer_id,
         (SELECT n.text FROM execution_notes n WHERE n.execution_id=e.id ORDER BY n.seq DESC LIMIT 1) AS last_note,
-        CASE WHEN e.changes='' THEN NULL ELSE json_array_length(e.changes) END AS changes,NULL AS run_id
-    FROM member_executions e JOIN room_members m ON m.id=e.member_id WHERE e.id IN ({TIMELINE_FREE_IDS})
-    UNION ALL SELECT 'discussion',e.id,e.participant,e.role,e.status,CAST(strftime('%s',e.created_at) AS INTEGER),
-        COALESCE(t.dispatched_at,0),e.started_at,COALESCE(t.finished_at,0),CASE WHEN e.status='failed' THEN e.result ELSE '' END,NULL,
-        0,NULL,(SELECT substr(q.question,1,160) FROM discussion_turns q WHERE q.id=e.turn_id),
-        CASE WHEN e.result LIKE 'message:%' THEN CAST(substr(e.result,9) AS INTEGER) END,NULL,NULL,e.run_id
-    FROM discussion_events e LEFT JOIN event_timings t ON t.event_id=e.id WHERE e.id IN ({TIMELINE_DISCUSSION_IDS})) x"""
-TIMELINE_SEGMENTS_SQL = f"""SELECT source,execution_id,phase,tool,start_ms,end_ms FROM execution_segments WHERE room_id=?1 AND (
-    (source='free' AND execution_id IN ({TIMELINE_FREE_IDS})) OR (source='discussion' AND execution_id IN ({TIMELINE_DISCUSSION_IDS})))
-    ORDER BY source,execution_id,seq"""
+        CASE WHEN e.changes='' THEN NULL ELSE json_array_length(e.changes) END AS changes
+    FROM member_executions e JOIN room_members m ON m.id=e.member_id WHERE e.id IN ({TIMELINE_FREE_IDS})) x"""
+TIMELINE_SEGMENTS_SQL = f"""SELECT source,execution_id,phase,tool,start_ms,end_ms FROM execution_segments WHERE room_id=?1
+    AND source='free' AND execution_id IN ({TIMELINE_FREE_IDS}) ORDER BY source,execution_id,seq"""
 # Only the times of progress notes: the texts are read when the reader hovers one.
 TIMELINE_NOTES_SQL = f"""SELECT execution_id,created_at FROM execution_notes
     WHERE room_id=?1 AND execution_id IN ({TIMELINE_FREE_IDS}) ORDER BY execution_id,seq"""
@@ -102,6 +92,7 @@ MAX_RETRIES = 3
 MAX_RETRY_REASON = 500
 ACTIVE = ("dispatched", "started")
 ACCESS_MODES = ("runner", "manual")
+# A member given as `online` (older CLI room creation) becomes a manual member relayed from the web.
 LEGACY_ACCESS_MODES = ("runner", "manual", "online")
 SCHEDULER_PROVIDERS = ("jev", "decisions")
 RECOMMEND_SECONDS = 60
@@ -159,10 +150,6 @@ def migrate_free_tables(connection):
     connection.execute("""CREATE TABLE IF NOT EXISTS member_manual_sources (
         member_id INTEGER PRIMARY KEY REFERENCES room_members(id) ON DELETE CASCADE,
         source TEXT NOT NULL CHECK(source='web'))""")
-    connection.execute("""INSERT OR IGNORE INTO member_manual_sources(member_id,source)
-        SELECT id,'web' FROM room_members WHERE access='online'""")
-    connection.execute("UPDATE room_members SET access='manual' WHERE access='online'")
-    connection.execute("UPDATE room_modes SET mode='free' WHERE mode='brainstorm'")
     migrate_stop_results(connection)
 
 
@@ -176,12 +163,6 @@ def migrate_stop_results(connection):
     connection.execute("INSERT INTO execution_capabilities_next SELECT * FROM execution_capabilities")
     connection.execute("DROP TABLE execution_capabilities")
     connection.execute("ALTER TABLE execution_capabilities_next RENAME TO execution_capabilities")
-
-
-def room_mode(connection, room_id):
-    """Return 'free' for free rooms; every legacy room is a brainstorm room."""
-    row = connection.execute("SELECT mode FROM room_modes WHERE room_id=?", (room_id,)).fetchone()
-    return row[0] if row else "brainstorm"
 
 
 def review_member_revision(member, generation=0):
@@ -458,7 +439,7 @@ def insert_member(connection, room_id, member, now):
     connection.execute("""INSERT INTO room_members (room_id,name,adapter,token_hash,access,session_mode,created_at)
         VALUES (?,?,?,?,?,?,?)""", (room_id, member["name"], member["adapter"], token_hash(member["token"]),
                                      member["access"], member["session_mode"], now))
-    if member.get("manual_source") == "web" or member.get("access") == "online":
+    if member.get("manual_source") == "web":
         member_id = connection.execute("SELECT id FROM room_members WHERE room_id=? AND name=? AND token_hash=?",
                                        (room_id, member["name"], token_hash(member["token"]))).fetchone()[0]
         connection.execute("INSERT OR IGNORE INTO member_manual_sources(member_id,source) VALUES(?,'web')", (member_id,))
@@ -471,67 +452,10 @@ def save_room_access(connection, room_id, control_token, members, settings):
         raise ValueError("建房须提供 32–256 字符的房间控制凭据")
     if any(token_hash(member["token"]) == control for member in members):
         raise ValueError("成员凭证不能与房主控制凭据相同")
-    connection.execute("INSERT INTO room_modes (room_id,mode,control_hash) VALUES (?,?,?)", (room_id, settings["mode"], control))
+    connection.execute("INSERT INTO room_modes (room_id,mode,control_hash) VALUES (?,'free',?)", (room_id, control))
     for member in members:
         insert_member(connection, room_id, member, settings["created_at"])
     connection.execute("UPDATE room_members SET role='host' WHERE room_id=? AND name=?", (room_id, settings["host"]))
-
-
-def discussion_access_ok(access, capability, automatic, is_host, manual_source=""):
-    """Require web relays to stay read-only while local participants use runner or manual access."""
-    if capability == "online":
-        return access == "manual" and manual_source == "web" and not is_host
-    if manual_source == "web":
-        return False
-    if not automatic:
-        return access == "manual"
-    return access == "runner" or (access == "manual" and not is_host)
-
-
-def mark_manual(member, automatic):
-    """A manual expert of a woken discussion carries adapter 'manual', so mode switches never turn it into a woken member."""
-    return {**member, "adapter": "manual"} if automatic and member["access"] == "manual" else member
-
-
-def discussion_members(payload, settings):
-    """Validate credentials against the room's declared participants and delivery mode."""
-    members = member_values(payload.get("members")) if settings["experts"] else []
-    if {member["name"] for member in members} != set(settings["experts"]):
-        raise ValueError("成员凭证名单须与参与者名单一致")
-    for member in members:
-        if not discussion_access_ok(member["access"], settings["experts"][member["name"]],
-                                    payload.get("runtime_mode") == "automatic", member["name"] == settings["host"],
-                                    member["manual_source"]):
-            raise ValueError("成员接入方式与房间参与能力、任务交付方式不符")
-    return [mark_manual(member, payload.get("runtime_mode") == "automatic") for member in members]
-
-
-def sync_discussion_members(connection, room_id, payload, settings):
-    """Keep existing credentials; require fresh credentials for added or changed members."""
-    current = {row["name"]: row for row in connection.execute("""SELECT m.*,
-        COALESCE(s.source,'') AS manual_source FROM room_members m
-        LEFT JOIN member_manual_sources s ON s.member_id=m.id WHERE m.room_id=? AND m.status='active'""", (room_id,))}
-    supplied = {member["name"]: member_value(member) for member in payload.get("members", [])}
-    run = connection.execute("SELECT mode FROM discussion_runtime WHERE room_id=?", (room_id,)).fetchone()
-    for name, capability in settings["experts"].items():
-        automatic = bool(run and run[0] == "automatic")
-        old = current.get(name)
-        if old and (old["manual_source"] == "web") == (capability == "online"):
-            if name in supplied and token_hash(supplied[name]["token"]) != old["token_hash"]:
-                raise FileExistsError("成员凭证与已登记身份不符；请核对原接入文件")
-            continue
-        if name not in supplied or not discussion_access_ok(supplied[name]["access"], capability, automatic,
-                                                              name == settings["host"], supplied[name]["manual_source"]):
-            raise ValueError(f"新增或改变接入方式的成员 {name} 须提供独立的新凭证")
-        member = mark_manual(supplied[name], automatic)
-        hashed = token_hash(member["token"])
-        if connection.execute("SELECT 1 FROM room_members WHERE room_id=? AND token_hash=? UNION ALL SELECT 1 FROM room_modes WHERE room_id=? AND control_hash=?", (room_id, hashed, room_id, hashed)).fetchone():
-            raise ValueError("新成员凭证不能复用已有凭证")
-        connection.execute("UPDATE room_members SET status='removed' WHERE room_id=? AND name=?", (room_id, name))
-        insert_member(connection, room_id, member, int(time.time()))
-    for name in current.keys() - settings["experts"].keys():
-        connection.execute("UPDATE room_members SET status='removed' WHERE room_id=? AND name=?", (room_id, name))
-    connection.execute("UPDATE room_members SET role=CASE WHEN name=? THEN 'host' ELSE 'member' END WHERE room_id=?", (settings["host"], room_id))
 
 
 def sync_participants(connection, room_id):
@@ -660,10 +584,10 @@ def execution_notes(connection, room_id, execution_id, token=""):
 
 
 def execution_timeline(connection, room_id, after=0):
-    """Read the room's recent executions of both kinds with their phase segments and note times, for the timeline page.
+    """Read the room's recent executions with their phase segments and note times, for the timeline page.
 
-    Times are epoch seconds and segments are millisecond offsets from `dispatched_at`. A free execution's parent is the
-    execution that wrote the message it answers; discussion executions have none. `state` is running, done, failed
+    Times are epoch seconds and segments are millisecond offsets from `dispatched_at`. An execution's parent is the
+    execution that wrote the message it answers. `state` is running, done, failed
     or cancelled, so the page never interprets execution statuses itself. A positive `after` reads only executions
     still running or ended since then, so a page following live work rereads little.
     """
@@ -680,7 +604,7 @@ def execution_timeline(connection, room_id, after=0):
     for row in rows:
         row["state"] = TIMELINE_STATES.get(row["status"], "running")
         row["segments"] = segments.get((row["source"], row["id"]), [])
-        row["notes"] = notes.get(row["id"], []) if row["source"] == "free" else []
+        row["notes"] = notes.get(row["id"], [])
     return {"now": int(time.time()), "after": params[2], "executions": rows, "execution_limit": TIMELINE_EXECUTIONS,
             "segment_limit": MAX_EXECUTION_SEGMENTS}
 
@@ -906,20 +830,6 @@ def recipients(connection, room_id, payload):
     return [(host["id"], "route")] if host else []
 
 
-def route_held_messages(connection, room_id, host):
-    """When a discussion ends, hand the user's messages its host never answered to the free room's recipients, as if just sent."""
-    held = connection.execute("SELECT held_since FROM turn_relay WHERE room_id=?", (room_id,)).fetchone()
-    if held and held[0]:
-        rows = connection.execute("""SELECT id FROM messages m WHERE room_id=? AND author='用户' AND id>=?
-            AND id>COALESCE((SELECT MAX(id) FROM messages WHERE room_id=? AND author=?),0)
-            AND NOT EXISTS(SELECT 1 FROM member_requests r WHERE r.message_id=m.id) ORDER BY id""",
-                                  (room_id, held[0], room_id, host)).fetchall()
-        for row in rows:
-            for member_id, purpose in recipients(connection, room_id, {}):
-                insert_request(connection, room_id, member_id, row["id"], row["id"], purpose, "user")
-    connection.execute("UPDATE turn_relay SET held_since=0 WHERE room_id=?", (room_id,))
-
-
 def proxy_member(connection, room_id, author):
     """Return the active online member the owner may forward an answer for."""
     row = connection.execute("""SELECT m.*,s.source AS manual_source FROM room_members m
@@ -940,8 +850,6 @@ def check_answer(connection, room_id, member, payload):
         named_members(active_members(connection, room_id), payload["to"], exclude=member["name"])
     if payload.get("handoff") not in (None, False) and (payload["handoff"] is not True or member["role"] != "host" or not payload.get("to")):
         raise ValueError("handoff 只能由主持人与 to 一起使用，值为 true")
-    if member["access"] == "online":
-        raise PermissionError("在线成员只读，回答由用户代发")
     if member["access"] == "manual":
         request_ids = payload.get("request_ids", [])
         if payload.get("execution_id") is not None or not isinstance(request_ids, list) or any(type(item) is not int for item in request_ids):
@@ -1216,46 +1124,33 @@ def default_order(connection, room_id, members):
 
 
 def speaking_order(connection, room):
-    """Who spoke, who speaks now and who is next, shared by free rooms and discussions; only the not-yet-spoken part may be reordered.
+    """Who spoke, who speaks now and who is next; only the not-yet-spoken part may be reordered.
 
-    A free room shows its latest unfinished one-after-another queue, else every member in the room's default order;
-    a discussion shows the open round: speakers so far, the current turn, then this round's queued turns; a plan reaching into
-    later rounds lists them apart in `later` (one name list per round), read-only. The revision changes with any of it.
+    Without an open discussion the room shows its latest unfinished one-after-another queue, else every member in the room's
+    default order; an open discussion shows its open round: speakers so far, the current speaker, then this round's queued
+    speakers; a plan reaching into later rounds lists them apart in `later` (one name list per round), read-only. The
+    revision changes with any of it.
     """
     active = [member for member in room["members"] if member["status"] == "active"]
     by_id = {member["id"]: member for member in active}
     ordered = [member["name"] for member in default_order(connection, room["id"], active)]
     items, kind, target, later = [], "default", 0, []
     session_plan_state = []
-    if room["mode"] == "free":
-        session = discussion.current_session(connection, room["id"], active_only=True)
-        if session:
-            kind = "turns"
-            target = session["id"]
-            items, later, session_plan_state = discussion.session_speaking_order(connection, session)
-        else:
-            target = connection.execute("""SELECT MAX(q.message_id) FROM free_queue q LEFT JOIN member_requests r ON r.message_id=q.message_id
-                AND r.member_id=q.member_id WHERE q.room_id=? AND (r.id IS NULL OR r.status IN ('pending','delivering'))""", (room["id"],)).fetchone()[0] or 0
-            if target:
-                kind = "queue"
-                for row in connection.execute("""SELECT q.member_id,r.status FROM free_queue q LEFT JOIN member_requests r
-                    ON r.message_id=q.message_id AND r.member_id=q.member_id WHERE q.message_id=? ORDER BY q.id""", (target,)):
-                    if row["member_id"] in by_id:
-                        state = "queued" if row["status"] is None else "speaking" if row["status"] in ("pending", "delivering") else "done"
-                        items.append({"name": by_id[row["member_id"]]["name"], "state": state})
-    else:
+    session = discussion.current_session(connection, room["id"], active_only=True)
+    if session:
         kind = "turns"
-        last = room["rounds"][-1] if room["rounds"] else None
-        turn = room["current_turn"]
-        speaking = turn["expert"] if turn and turn["status"] in ("pending", "notified") else None
-        items = [{"name": name, "state": "done"} for name in (last["speakers"] if last and not last["completed"] else []) if name != speaking]
-        if speaking:
-            items.append({"name": speaking, "state": "speaking"})
-        rounds = split_rounds([item["expert"] for item in room["queued_turns"]], {item["name"] for item in items})
-        items += [{"name": name, "state": "queued"} for name in rounds[0]]
-        later = rounds[1:]
-        # The user may still hold the host seat of an old discussion; only AI participants have a place.
-        ordered = [name for name in [room["host"], *ordered, *room["experts"]] if (name in room["experts"] or name == room["host"]) and name != "用户"]
+        target = session["id"]
+        items, later, session_plan_state = discussion.session_speaking_order(connection, session)
+    else:
+        target = connection.execute("""SELECT MAX(q.message_id) FROM free_queue q LEFT JOIN member_requests r ON r.message_id=q.message_id
+            AND r.member_id=q.member_id WHERE q.room_id=? AND (r.id IS NULL OR r.status IN ('pending','delivering'))""", (room["id"],)).fetchone()[0] or 0
+        if target:
+            kind = "queue"
+            for row in connection.execute("""SELECT q.member_id,r.status FROM free_queue q LEFT JOIN member_requests r
+                ON r.message_id=q.message_id AND r.member_id=q.member_id WHERE q.message_id=? ORDER BY q.id""", (target,)):
+                if row["member_id"] in by_id:
+                    state = "queued" if row["status"] is None else "speaking" if row["status"] in ("pending", "delivering") else "done"
+                    items.append({"name": by_id[row["member_id"]]["name"], "state": state})
     listed = {item["name"] for item in items}
     items += [{"name": name, "state": "idle"} for name in dict.fromkeys(ordered) if name not in listed]
     movable = "queued" if kind != "default" else "idle"
@@ -1263,18 +1158,6 @@ def speaking_order(connection, room):
     return {"kind": kind, "message_id": target, "items": items, "later": later, "movable": [item["name"] for item in items if item["state"] == movable],
             "default": [member["name"] for member in default_order(connection, room["id"], active)],
             "revision": hashlib.sha256(state.encode("utf-8")).hexdigest()[:12]}
-
-
-def split_rounds(names, spoken):
-    """Cut a turn queue into rounds: an expert who already spoke in the round being filled starts the next one."""
-    rounds, seen = [[]], set(spoken)
-    for name in names:
-        if name in seen:
-            rounds.append([])
-            seen = set()
-        rounds[-1].append(name)
-        seen.add(name)
-    return rounds
 
 
 def reorder_speakers(connection, room, token, payload):
@@ -1302,32 +1185,10 @@ def reorder_speakers(connection, room, token, payload):
         for name in order:
             connection.execute("INSERT INTO free_queue (room_id,message_id,member_id) VALUES (?,?,?)", (room["id"], current["message_id"], names[name]))
     elif current["kind"] == "turns":
-        session = discussion.current_session(connection, room["id"], active_only=True)
-        if session:
-            discussion.reorder_session_turns(connection, session, order, names)
-        else:
-            reorder_turns(connection, room["id"], order)
+        discussion.reorder_session_turns(connection, discussion.current_session(connection, room["id"], active_only=True), order, names)
     else:
         connection.execute("INSERT OR REPLACE INTO speaking_orders (room_id,member_ids) VALUES (?,?)",
                            (room["id"], json.dumps([names[name] for name in order])))
-
-
-def reorder_turns(connection, room_id, order):
-    """Move this round's queued turns into the new order; ids keep the relay order, so each turn's content moves to the id at its new place.
-
-    This round's turns lead the queue, so they are its first rows; later rounds keep theirs.
-    """
-    rows = [dict(row) for row in connection.execute("SELECT * FROM discussion_turns WHERE room_id=? AND status='queued' ORDER BY id LIMIT ?",
-                                                    (room_id, len(order)))]
-    remaining, moved = list(rows), []
-    for name in order:
-        moved.append(remaining.pop(next(index for index, row in enumerate(remaining) if row["expert"] == name)))
-    # Submission ids are unique, so free them before writing them to their new rows.
-    for slot in rows:
-        connection.execute("UPDATE discussion_turns SET submission_id=submission_id||':moving:'||id WHERE id=?", (slot["id"],))
-    for slot, content in zip(rows, moved):
-        connection.execute("UPDATE discussion_turns SET expert=?,question=?,submission_id=?,created_at=? WHERE id=?",
-                           (content["expert"], content["question"], content["submission_id"], content["created_at"], slot["id"]))
 
 
 def answered_chain(connection, payload, actor):
@@ -1373,40 +1234,6 @@ def after_free_message(connection, room_id, message_id, actor, payload):
     if actor["role"] == "host" and payload.get("to"):
         dispatch(connection, room_id, actor, message_id, payload["to"], chain_id, payload.get("handoff") is True or bool(payload.get("next_review")))
     settle_batches(connection, room_id)
-
-
-def discussion_host_handles(connection, room):
-    """A running discussion already wakes its host for every user message, so a question to the host needs no request of its own."""
-    return room["phase"] not in ("paused", "concluded") and bool(connection.execute(
-        "SELECT 1 FROM discussion_runtime WHERE room_id=? AND status='running'", (room["id"],)).fetchone())
-
-
-def checked_asks(connection, room, payload):
-    """Validate the user's direct questions to members of a discussion before the message is stored."""
-    names = payload.get("to")
-    if names is None:
-        return []
-    return named_members(active_members(connection, room["id"]), names)
-
-
-def ask_members(connection, room, message_id, member_ids):
-    """Queue one 'ask' request per named member, outside the discussion's turns, rounds and limits."""
-    host_busy = discussion_host_handles(connection, room)
-    for member_id in member_ids:
-        row = connection.execute("SELECT name FROM room_members WHERE id=?", (member_id,)).fetchone()
-        if host_busy and row["name"] == room["host"]:
-            continue
-        insert_request(connection, room["id"], member_id, message_id, message_id, "ask", "user")
-
-
-def asks_view(connection, room_id):
-    """Direct questions of a discussion room: recent requests with their member, for status badges beside messages."""
-    names = {row["id"]: row["name"] for row in connection.execute("SELECT id,name FROM room_members WHERE room_id=?", (room_id,))}
-    requests = [{**dict(row), "member": names.get(row["member_id"], "")} for row in connection.execute(
-        """SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by,created_at,
-        (SELECT reason FROM request_cancel_reasons c WHERE c.request_id=member_requests.id) AS cancel_reason FROM member_requests
-        WHERE room_id=? ORDER BY id DESC LIMIT ?""", (room_id, RECENT_REQUESTS))]
-    return {"requests": requests[::-1], "executions": recent_executions(connection, room_id)}
 
 
 def expire_executions(connection, room_id):
@@ -2001,8 +1828,6 @@ def owner_message(connection, room_id, message_id):
         raise LookupError("消息不存在")
     if row["author"] != "用户":
         raise ValueError("只能撤回或编辑用户自己的消息")
-    if room_mode(connection, room_id) != "free":
-        raise ValueError("只有协作房间的消息可以撤回或编辑")
     if connection.execute("SELECT 1 FROM room_directory WHERE room_id=? AND archived=1", (room_id,)).fetchone():
         raise ValueError("房间已存档；恢复后才能撤回或编辑")
     if discussion.blocks_message_change(connection, room_id, message_id):
@@ -2135,17 +1960,6 @@ def add_member(connection, room_id, token, payload, now):
     return free_view(connection, room_id)
 
 
-def discussion_roster(connection, room_id):
-    """Return a discussion's host, active experts and phase; away experts keep only their member row."""
-    row = connection.execute("SELECT host,experts,phase FROM topic_settings WHERE room_id=?", (room_id,)).fetchone()
-    return row["host"], json.loads(row["experts"]), row["phase"]
-
-
-def save_discussion_experts(connection, room_id, experts):
-    """Write the active roster; additions preserve its plan, other changes ask the host to re-plan."""
-    connection.execute("UPDATE topic_settings SET experts=? WHERE room_id=?", (json.dumps(experts, ensure_ascii=False), room_id))
-
-
 def queue_invited_expert(connection, room_id, name, now):
     """Queue a new expert at the tail of an existing live plan, without changing the current speaker or hold.
 
@@ -2157,94 +1971,19 @@ def queue_invited_expert(connection, room_id, name, now):
     session = discussion.current_session(connection, room_id)
     if session and session["status"] != "concluded":
         discussion.queue_session_invite(connection, session, member)
-        return
-    connection.execute("""INSERT OR IGNORE INTO discussion_turns (room_id,expert,question,status,submission_id,created_at)
-        SELECT settings.room_id,member.name,
-            CASE WHEN settings.phase='initial' THEN '欢迎加入：请先读取议题，独立给出你的开场观点。'
-                 ELSE '欢迎加入：请先读取议题和已有回答，给出你的观点。' END,
-            'queued','invite:'||member.id,?
-        FROM topic_settings AS settings JOIN room_members AS member ON member.room_id=settings.room_id
-        WHERE settings.room_id=? AND member.name=? AND member.status='active'
-        AND settings.phase NOT IN ('paused','concluded')
-        AND EXISTS (SELECT 1 FROM discussion_turns WHERE room_id=settings.room_id AND status IN ('pending','notified','queued'))""",
-        (now, room_id, name))
-
-
-def add_discussion_member(connection, room_id, token, payload, now):
-    """Owner invites one expert into a discussion using the room's delivery method."""
-    require_owner(connection, room_id, token)
-    begin_write(connection)
-    member = member_value(payload)
-    _, experts, phase = discussion_roster(connection, room_id)
-    run = connection.execute("SELECT mode FROM discussion_runtime WHERE room_id=?", (room_id,)).fetchone()
-    if not discussion_access_ok(member["access"], "cli", bool(run and run["mode"] == "automatic"), False):
-        raise ValueError("新专家的接入方式须与讨论的推进方式一致")
-    existing = connection.execute("SELECT * FROM room_members WHERE room_id=? AND name=? AND status<>'removed'", (room_id, member["name"])).fetchone()
-    if existing and existing["status"] == "active" and existing["token_hash"] == token_hash(member["token"]):
-        return
-    if existing:
-        raise FileExistsError(f"{member['name']} 已是本房间成员；离开的成员请用请回")
-    if phase == "concluded":
-        raise ValueError("讨论已收束，不能再邀请专家")
-    if len(experts) >= MAX_ROOM_AGENTS:
-        raise ValueError("房间成员已达上限")
-    require_fresh_member_token(connection, room_id, member["token"])
-    insert_member(connection, room_id, mark_manual(member, bool(run and run["mode"] == "automatic")), now)
-    save_discussion_experts(connection, room_id, {**experts, member["name"]: "cli"})
-    queue_invited_expert(connection, room_id, member["name"], now)
-
-
-def discussion_member_action(connection, room_id, member_id, token, payload):
-    """Owner sends an expert away (keeping its seat), brings it back with a new credential, or removes it.
-
-    Leaving cancels the expert's open assignments; the host keeps its role and cannot leave, and an
-    leaving cancels its active plan and asks the host to re-plan without pausing the discussion.
-    """
-    member = owned_member(connection, room_id, member_id, token)
-    host, experts, phase = discussion_roster(connection, room_id)
-    action = payload.get("action")
-    if action in ("away", "remove"):
-        if member["name"] == host:
-            raise ValueError("主持人不能离开或移除；请先更换主持人")
-        discussion.session_member_change(connection, room_id, member, action)
-        connection.execute("UPDATE discussion_turns SET status='cancelled' WHERE room_id=? AND expert=? AND status IN ('pending','notified')",
-                           (room_id, member["name"]))
-        connection.execute("UPDATE discussion_turns SET status='skipped' WHERE room_id=? AND expert=? AND status='queued'", (room_id, member["name"]))
-        connection.execute("UPDATE room_members SET status=? WHERE id=?", ("away" if action == "away" else "removed", member_id))
-        experts.pop(member["name"], None)
-    elif action == "active":
-        hashed = token_hash(payload.get("token"))
-        if member["status"] == "active" and hashed and hmac.compare_digest(hashed, member["token_hash"]):
-            return
-        if member["status"] != "away" or not hashed or hmac.compare_digest(hashed, member["token_hash"]):
-            raise ValueError("只有离开的成员可以请回，且须提供新的成员凭证")
-        require_fresh_member_token(connection, room_id, payload.get("token"))
-        connection.execute("UPDATE room_members SET status='active',token_hash=? WHERE id=?", (hashed, member_id))
-        experts[member["name"]] = "online" if member["access"] == "online" else "cli"
-        if discussion.current_session(connection, room_id, active_only=True):
-            discussion.session_member_change(connection, room_id, member, action)
-        else:
-            queue_invited_expert(connection, room_id, member["name"], int(time.time()))
-    elif action == "adopt":
-        adopt_manual_member(connection, room_id, member, payload)
-        return
-    else:
-        raise ValueError("action 须为 away、active、remove 或 adopt")
-    save_discussion_experts(connection, room_id, experts)
 
 
 def adopt_manual_member(connection, room_id, member, payload):
     """Hand a manual expert to the local service once its CLI reported the session it runs in; the owner's service resumes that session."""
     reported = connection.execute("SELECT session_id FROM member_sessions WHERE member_id=?", (member["id"],)).fetchone()
-    run = connection.execute("SELECT mode FROM discussion_runtime WHERE room_id=?", (room_id,)).fetchone()
     if not registered_at(connection, member):
         raise ValueError("成员尚未注册，不能转为托管")
     adapter = payload.get("adapter")
     if (not reported or reported["session_id"] != payload.get("session_id") or not isinstance(adapter, str)
             or not ADAPTER_VALUE.fullmatch(adapter) or adapter == "manual"):
         raise ValueError("成员尚未上报与之相符的会话，不能转为托管")
-    if member["access"] != "manual" or member["status"] != "active" or not (room_mode(connection, room_id) == "free" or (run and run["mode"] == "automatic")):
-        raise ValueError("只有自由协作或全自动讨论中在场的手动专家可以转为托管")
+    if member["access"] != "manual" or member["status"] != "active":
+        raise ValueError("只有在场的手动成员可以转为托管")
     connection.execute("UPDATE room_members SET access='runner',adapter=?,session_mode='borrowed' WHERE id=?", (payload["adapter"], member["id"]))
     connection.execute("DELETE FROM member_sessions WHERE member_id=?", (member["id"],))
     # A free room's service answers as the member, so it takes over with a credential the owner's side generated.
@@ -2299,7 +2038,7 @@ def member_action(connection, room_id, member_id, token, payload):
         adopt_manual_member(connection, room_id, member, payload)
     elif action == "role":
         role = payload.get("role")
-        if role not in ("host", "member") or (role == "host" and (member["access"] == "online" or is_web_member)):
+        if role not in ("host", "member") or (role == "host" and is_web_member):
             raise ValueError("role 须为 host 或 member；在线成员不能担任主持人")
         if role == "member" and member["role"] == "host":
             raise ValueError("自由房间须由一位 AI 主持；请指定另一位成员担任主持人")

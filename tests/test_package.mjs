@@ -150,7 +150,7 @@ test('npm tarball installs outside the checkout and launches both entries with p
     assert.equal(packed.status, 0, packed.stderr);
     const tarball = JSON.parse(packed.stdout)[0];
     const files = tarball.files.map(item => item.path);
-    for (const required of ['server.py', 'backend/server.py', 'backend/runtime.py', 'backend/schema.sql', 'web/modern.js',
+    for (const required of ['server.py', 'backend/server.py', 'backend/runtime.py', 'backend/schema.sql', 'backend/migrations/drop_legacy_discussion.sql', 'web/modern.js',
       'runner/discuss.py', 'runner/discussion_setup.mjs', '.agents/skills/discuss-host/references/manual.md',
       '.agents/skills/discuss-host/references/launch.md',
       '.agents/skills/discuss-report/assets/Discussion_Report_Template.md']) assert(files.includes(required), required);

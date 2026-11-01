@@ -39,34 +39,31 @@ test("single and batch archives read back every room with its original files for
 /** Build a multi-page Unicode record that crosses the async compressor threshold. */
 function backup_fixture() {
   const timestamp = "2026-10-16T10:00:00Z";
-  return { format: "ai-codiscuss-room-backup", version: 1, exported_at: timestamp, source_url: "https://example.test/r/one",
+  return { format: "ai-codiscuss-room-backup", version: 2, exported_at: timestamp, source_url: "https://example.test/r/one",
     tables: {
       rooms: [{ id: "one", title: "备份 / 中文", goal: "目标", state_text: "分歧", state_until: 46, created_at: timestamp }],
-      room_directory: [{ room_id: "one", archived: 1 }], room_floor: [{ room_id: "one", holder: null, next_speaker: "用户", revision: 9 }],
+      room_directory: [{ room_id: "one", archived: 1 }],
       topic_settings: [], topic_folders: [], room_folder_assignments: [], room_creations: [], room_briefs: [],
       messages: Array.from({ length: 46 }, (_, index) => ({ id: index + 1, room_id: "one", author: "Gemini",
         text: `# 原文 ${index}\n${"完整中文🙂".repeat(500)}\n\`\`\`\n<script>不会执行</script>\n`,
         source: "host_proxy", reply_to: index ? 1 : null, submission_id: `message-${index}`, created_at: timestamp })),
-      message_details: [{ message_id: 46, kind: "opinion", submitted_by: "Codex", turn_id: 7 }],
+      message_details: [{ message_id: 46, kind: "chat", submitted_by: "Codex" }],
       message_summaries: [{ message_id: 46, text: "保留摘要", author: "Gemini" }],
-      discussion_turns: [{ id: 7, room_id: "one", expert: "Gemini", question: "条件？", status: "answered", answer_id: 46, created_at: timestamp, notified_at: "" }],
+      ...Object.fromEntries(["discussion_sessions", "discussion_conclusions", "session_requests", "task_message_sources", "session_state",
+        "session_limits", "session_round_budgets", "session_options", "session_pauses"].map(name => [name, []])),
     } };
 }
 
-test("readable backups separate stored and explicitly marked legacy user requests", () => {
+test("readable backups show the stored user request apart from the background", () => {
   const snapshot = backup_fixture();
-  const settings = { host: '用户', experts: '{}', phase: 'preparing', background: '补充背景' };
+  const settings = { host: '用户', experts: '{}', background: '补充背景' };
   snapshot.tables.topic_settings = [settings];
   snapshot.tables.room_user_requests = [{ room_id: 'one', text: '原始要求\n第二行' }];
   assert.match(room_markdown(snapshot), /## 用户原文\n\n```text\n原始要求\n第二行\n```\n\n## 背景\n\n```text\n补充背景/);
-  delete snapshot.tables.room_user_requests;
-  settings.background = '用户原文：\n原始要求\n第二行\n\n项目背景与入口：\n补充背景';
-  assert.match(room_markdown(snapshot), /## 用户原文\n\n```text\n原始要求\n第二行\n```\n\n## 背景\n\n```text\n项目背景与入口：\n补充背景/);
 });
 
 test("version 2 Markdown exports session arrangements but excludes system task messages", () => {
   const snapshot = backup_fixture();
-  snapshot.version = 2;
   snapshot.tables.messages = [
     { id: 1, author: "用户", text: "普通问题", source: "user", created_at: "2026-10-16T10:00:00Z" },
     { id: 2, author: "用户", text: "内部主持任务", source: "system", created_at: "2026-10-16T10:01:00Z" },
@@ -84,11 +81,10 @@ test("version 2 Markdown exports session arrangements but excludes system task m
     { message_id: 4, session_id: 5, session_request_id: 42 },
   ];
   const markdown = room_markdown(snapshot);
-  assert.match(markdown, /消息：2 条；发言安排：2 项/);
+  assert.match(markdown, /消息：2 条；发言安排：1 项/);
   assert.match(markdown, /session-5-request-42/);
   assert.match(markdown, /邀请成员补充/);
   assert.match(markdown, /回答：\[#3\]\(#message-3\)/);
-  assert.match(markdown, /安排 #7 · Gemini/);
   assert.doesNotMatch(markdown, /内部主持任务|内部专家任务|内部主持问题/);
   assert.doesNotMatch(markdown, /session-5-request-41/);
 });
@@ -104,7 +100,7 @@ test("standard ZIP reader recovers complete Unicode JSON, transcript and referen
   assert.deepEqual(JSON.parse(decoded["完整数据.json"]), snapshot);
   const markdown = decoded["讨论记录.md"];
   for (const message of snapshot.tables.messages) assert.ok(markdown.includes(message.text));
-  for (const reference of ["代发/提交者：Codex", "简述（作者：Gemini）", "#message-1", "#turn-7", "#message-46"])
+  for (const reference of ["代发/提交者：Codex", "简述（作者：Gemini）", "#message-1", "id=\"message-46\""])
     assert.ok(markdown.includes(reference), reference);
   assert.ok(markdown.includes("````text"));
   assert.ok(decoded["备份说明.txt"].includes("导入房间"));

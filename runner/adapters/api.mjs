@@ -45,8 +45,8 @@ export function participant_tools(context) {
   if (!discussion_host) return [...tools, submit];
   return [...tools, submit, tool('host_message', '保存主持说明，不能代替专家观点或伪造共识', { text: answer.text }, ['text']),
     tool('save_state', '根据实际原文更新详细状态和主持简报，标明分歧、依据与下一步', { text: { ...TEXT, maxLength: 4000 }, brief: { ...TEXT, maxLength: 1600 }, until: { type: 'integer', minimum: 0 } }, ['text', 'brief', 'until']),
-    tool('update_topic', '根据用户原文完善目标、背景和边界，或调整讨论阶段；保留用户原意，不能改变成员、上限或权限',
-      { goal: TEXT, background: TEXT, boundaries: TEXT, phase: { type: 'string', enum: ['initial', 'discussing'] }, focus: TEXT }),
+    tool('update_topic', '根据用户原文完善目标、背景和边界；保留用户原意，不能改变成员、上限或权限',
+      { goal: TEXT, background: TEXT, boundaries: TEXT, focus: TEXT }),
     tool('cancel_turn', '讨论方向变化时取消当前未完成安排；说明取消原因，不能虚构回答', { id: NUMBER }, ['id']),
     tool('arrange_turns', '一次排满本轮的专家发言序列；创建成功结束本次主持执行', { turns: { type: 'array', minItems: 1, maxItems: 10,
       items: { type: 'object', properties: { expert: TEXT, question: { ...TEXT, maxLength: 1000 } }, required: ['expert', 'question'], additionalProperties: false } } }, ['turns']),
@@ -107,7 +107,7 @@ function write_action(context, name, args) {
   }, terminal: true };
   const actions = {
     save_state: ['/state', { text: args.text, brief: args.brief, until: args.until }, false],
-    update_topic: ['/topic', Object.fromEntries(['goal', 'background', 'boundaries', 'phase', 'focus'].filter(key => args[key] !== undefined).map(key => [key, args[key]])), false],
+    update_topic: ['/topic', Object.fromEntries(['goal', 'background', 'boundaries', 'focus'].filter(key => args[key] !== undefined).map(key => [key, args[key]])), false],
     cancel_turn: [`/turns/${Number.isInteger(args.id) && args.id > 0 ? args.id : 0}`, { status: 'cancelled' }, false],
     arrange_turns: ['/turns', { turns: args.turns, roster: args.roster, submission_id: randomUUID() }, true],
     continue_plan: ['/turns/continue', { revision: args.roster }, true],

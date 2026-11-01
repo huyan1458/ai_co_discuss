@@ -47,10 +47,11 @@ let local_connection = null;
 let relay_machine = null;
 const DEFAULT_USER_LABEL = "User";
 const DEFAULT_USER_ICON = "/icons/user.svg";
+// How a manual member learns it is its turn: it is pulled by the member.
+const MANUAL_TRIGGER_INSTRUCTION = "首次复制后，可由人工或软件原生定时触发；自行提交，不必每轮复制回答。";
 const MANAGEMENT_LOGIN_HINT = "需要登录管理员账号或使用创建该房间的浏览器";
 const THEMES = ["channel", "channel-light"];
 const SOURCE_LABELS = { demo: "示例", user: "本人发言", proxy: "用户代发", cli: "CLI 发言", api: "API 发言", url: "历史 URL 发言", host_proxy: "主持人代发" };
-const PHASE_LABELS = { preparing: "准备中", initial: "独立观点", discussing: "深入讨论", paused: "已暂停", concluded: "已收束" };
 const TURN_LABELS = { pending: "待处理", notified: "已通知，待回答", answered: "已回答", cancelled: "已取消" };
 const PLATFORM_IDENTITIES = {
   "用户": { label: "User", initials: "U", style: "user", icon: "/icons/user.svg", description: "发起与协助" },
@@ -63,11 +64,10 @@ const PLATFORM_IDENTITIES = {
 };
 const IDENTITIES = by_platform(PLATFORM_IDENTITIES, (identity, name) => ({ ...identity, label: name, description: "AI 实例" }));
 const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false,
-  free_proxy: "", create_parent: null, named_followup: false, create_discussion: false,
+  free_proxy: "", named_followup: false, create_discussion: false,
   archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
-  reply_to: null, turn_reply_to: null, tab: "topic", refresh_version: 0, context_dirty: false, topic_dirty: false,
-  snapshot_id: 0, pending_submission: null, pending_turn: null, pending_room: null, toast_timer: null,
-  creation_mode: "brainstorm", creation_drafts: {} };
+  reply_to: null, tab: "discussion", refresh_version: 0, context_dirty: false, topic_dirty: false,
+  snapshot_id: 0, pending_submission: null, pending_room: null, toast_timer: null };
 const live_updates = { source: null, connected: false, enabled: false, timer: null, poll_timer: null,
   running: false, dirty: false, full: false, revisions: "", refreshed_at: 0 };
 state.messages = [];
@@ -101,7 +101,7 @@ state.directory_pending = new Map();
 state.directory_version = 0;
 state.navigation_version = 0;
 state.admin = { loaded: false, local: false, registered: false, setup_available: false, logged_in: false, profile: null, identity_version: 0 };
-state.launch = { available: false, remote: false, relay: null, connect_command: "", profiles: {}, projects: [], presets: [], builtin_presets: [], description_templates: {}, workspace: {}, scheduler: {}, create: true, error: "", recoveries: [] };
+state.launch = { available: false, remote: false, relay: null, connect_command: "", profiles: {}, projects: [], presets: [], builtin_presets: [], description_templates: {}, workspace: {}, scheduler: {}, error: "", recoveries: [] };
 const PLATFORM_CLIENTS = { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }],
   Claude: [{ value: "claude", label: "Claude Code CLI" }],
   Gemini: [{ value: "antigravity_cli", label: "Antigravity CLI" }, { value: "antigravity", label: "Antigravity App" }] };
@@ -219,7 +219,7 @@ function apply_admin_identity(profile) {
   Object.assign(PLATFORM_IDENTITIES["用户"], { label: profile?.username || DEFAULT_USER_LABEL, icon: profile?.avatar || DEFAULT_USER_ICON });
   state.admin.identity_version++;
   if (!element("participants")) return;
-  for (const id of ["author-select", "topic-host-select", "new-room-host"]) {
+  for (const id of ["author-select", "new-room-host"]) {
     const option = Array.from(element(id)?.options || []).find(item => item.value === "用户");
     if (option) option.textContent = display_name("用户");
   }
@@ -391,7 +391,6 @@ function identity_avatar(identity) {
 function render_identities() {
   const options = Object.keys(IDENTITIES).map((name) => `<option value="${name}">${escape_html(display_name(name))}</option>`).join("");
   element("author-select").innerHTML = options;
-  element("topic-host-select").innerHTML = options;
   element("new-room-host").innerHTML = options;
   render_expert_inputs("new-expert-modes", default_experts());
   render_participants();
@@ -757,27 +756,13 @@ function render_room() {
     state.snapshot_id = room.latest_id;
     element("state-update-note").textContent = `保存时标记整理至 #${state.snapshot_id}，原始发言保持不变。`;
   }
-  render_access();
   render_topic();
   render_host_brief();
-  update_composer_role();
-}
-
-/** A round completes only after all configured experts have contributed. */
-function progress_round(room) {
-  const groups = round_groups(room);
-  if (!groups) return "轮次待同步";
-  const latest = groups.at(-1);
-  const participants = Object.keys(room.experts).length;
-  const completed = groups.filter((item) => item.completed).length;
-  if (latest && !latest.completed) return `第 ${latest.number} 轮 · ${latest.opinions ?? latest.speakers.length}/${participants} 人已发言`;
-  return ["pending", "notified"].includes(room.current_turn?.status)
-    ? `第 ${completed + 1} 轮 · 0/${participants} 人已发言` : `已完成 ${completed} 轮`;
 }
 
 /** Rounds as labelled in the UI: counted by the round budget when the room has one, otherwise by the roster. */
 function round_groups(room) {
-  return Array.isArray(room.round_groups) ? room.round_groups : Array.isArray(room.rounds) ? room.rounds : null;
+  return Array.isArray(room.round_groups) ? room.round_groups : null;
 }
 
 /** Describe the designated respondent without claiming that their app is generating. */
@@ -786,7 +771,7 @@ function progress_speaker(room) {
   if (room.phase === "concluded") return "讨论已收束";
   if (room.phase === "paused") return `已暂停${turn && ["pending", "notified"].includes(turn.status) ? ` · 原安排 ${turn.expert}` : ""}`;
   if (turn && ["pending", "notified"].includes(turn.status)) return `等待 ${turn.expert} 回答 · ${turn_label(turn, room)}`;
-  return room.rounds?.length || room.answered_turns || turn?.status === "answered" ? "等待主持人安排下一步" : "尚未开始发言";
+  return room.round_groups?.length || room.answered_turns || turn?.status === "answered" ? "等待主持人安排下一步" : "尚未开始发言";
 }
 
 /** Explain an empty transcript using the room's actual progression state. */
@@ -794,14 +779,7 @@ function empty_discussion_message(room) {
   // A room opened for the first time has no transcript until the site answers; it is not an empty discussion.
   if (state.messages_loading) return '正在读取消息…';
   if (room.archived || room.phase === 'concluded') return '讨论已结束，尚未产生发言记录。';
-  if (room.mode === 'free') return '写下任务并点名成员。程序唤醒由本机服务交付；手动成员需在原会话触发，在线回答由人代发。';
-  if (room.phase === 'paused' || room.runtime?.status === 'paused') return '讨论已暂停。核对暂停原因后，可在进度看板重启或结束。';
-  if (room.runtime?.mode === 'automatic') {
-    if (room.runtime.status === 'ready') return '讨论尚未启动。请在接入页核对软件配置并启动。';
-    if (room.runtime.status === 'stopped') return '自动推进已停止，尚未产生发言记录。';
-    return room.runtime.latest_execution?.status === 'started' ? 'AI 已进入执行，等待第一条讨论记录。' : '自动推进已启用，等待 AI 执行；可在接入页核对实际进展。';
-  }
-  return '这是讨论的开始。发送问题，或从接入页邀请参与者。';
+  return '写下任务并点名成员。程序唤醒由本机服务交付；手动成员需在原会话触发，在线回答由人代发。';
 }
 
 /** Keep a saved brief's evidence cutoff visible next to the live assignment status. */
@@ -816,7 +794,6 @@ function render_host_brief() {
   element("host-brief-panel").hidden = !room;
   if (!room) return;
   room.rendered_brief = window.discuss_markdown.render_markdown(room.host_brief?.text || "主持人尚未更新结论、共识、歧义与下一步意图。");
-  element("progress-round").textContent = progress_round(room);
   element("progress-speaker").textContent = progress_speaker(room);
   element("host-brief-text").innerHTML = room.rendered_brief;
   element("host-brief-meta").textContent = brief_meta(room);
@@ -826,8 +803,7 @@ function render_host_brief() {
 function message_provenance(message) {
   const role = message.kind === "receipt" ? "运行回执" : message.kind === "moderation" ? "主持发言" : (message.author === "用户" ? "用户发言" : "专家观点");
   const forwarding = message.submitted_by && message.submitted_by !== message.author ? ` · ${display_name(message.submitted_by)} 代发` : "";
-  const turn = message.turn_id ? ` · 回答安排 #${message.turn_id}` : "";
-  return `${role}${forwarding}${turn}`;
+  return `${role}${forwarding}`;
 }
 
 /** Build compact chat lines with colored names, reply references, and provenance. */
@@ -950,7 +926,6 @@ async function select_room(room_id) {
   state.mention_only = false;
   state.context_dirty = false;
   state.topic_dirty = false;
-  state.pending_turn = null;
   state.pending_submission = null;
   clear_attachment_drafts();
   state.launch.repair = null;
@@ -963,9 +938,6 @@ async function select_room(room_id) {
   element("search-input").value = "";
   element("mention-filter").setAttribute("aria-pressed", "false");
   cancel_reply();
-  cancel_turn_reply();
-  element("turn-form").reset();
-  element("message-kind").value = "opinion";
   select_tab("discussion", { refresh: false });
   history.replaceState(null, "", state.room ? `/?room=${encodeURIComponent(room_id)}` : "/");
   if (state.room) state.archive_view = Boolean(state.room.archived);
@@ -1014,55 +986,39 @@ function is_web_member(member) {
 function message_payload() {
   const text = element("message-input").value.trim();
   if ([...text].length > MAX_MESSAGE_LENGTH) throw new Error(`留言最多 ${MAX_MESSAGE_LENGTH} 字，原文已保留，请调整后提交`);
-  // Free rooms: the owner always speaks as the user; naming members is the server's job.
-  if (state.room.mode === "free") {
-    const members = state.room.free?.members || [];
-    const web_member = members.find(member => member.name === state.free_proxy && is_web_member(member) && member.status === "active");
-    if (state.free_proxy) {
-      if (!web_member) throw new Error("只能代发仍在场的网页成员；本地成员须自行提交回答");
-      const pending = (state.room.free?.requests || []).filter(item => item.member === web_member.name && item.status === "pending");
-      const discussion = pending.find(item => item.purpose === "discuss");
-      const requests = discussion ? [discussion] : pending.filter(item => ["ask", "all"].includes(item.purpose));
-      if (!requests.length) throw new Error(`${web_member.name} 没有可代发的待处理请求`);
-      return with_answer_summary({ author: web_member.name, text, reply_to: state.reply_to, kind: "chat", submitted_by: "用户",
-        request_ids: requests.map(item => item.id) });
-    }
-    const payload = { author: "用户", text, reply_to: state.reply_to, kind: "chat", submitted_by: "用户" };
-    const active = members.filter(member => member.status === "active" && (member.access !== "manual" || member.registered_at || is_web_member(member))).map(member => member.name);
-    const session = state.room.session;
-    const session_live = session && ["active", "paused"].includes(session.status);
-    if (session_live) {
-      const direct = active.filter(name => mentioned(text, name));
-      if (direct.length) payload.to = direct;
-      return payload;
-    }
-    // @mentions outside code name members (@全体成员 or @all names them all, answering at once or in turn as smart scheduling decides;
-    // @全体依次 or @all-seq has them answer one after another, the host first); without any, the server gives the message to the only member or the host.
-    const sequential = mentioned(text, "全体依次") || mentioned(text, "all-seq");
-    const everyone = !sequential && (mentioned(text, "全体成员") || mentioned(text, "all"));
-    const named = sequential || everyone ? active : active.filter(name => mentioned(text, name));
-    if (named.length) payload.to = named;
-    if (sequential && named.length) payload.sequential = true;
-    if (everyone && named.length) payload.order = "auto";
+  // The owner always speaks as the user; naming members is the server's job.
+  const members = state.room.free?.members || [];
+  const web_member = members.find(member => member.name === state.free_proxy && is_web_member(member) && member.status === "active");
+  if (state.free_proxy) {
+    if (!web_member) throw new Error("只能代发仍在场的网页成员；本地成员须自行提交回答");
+    const pending = (state.room.free?.requests || []).filter(item => item.member === web_member.name && item.status === "pending");
+    const discussion = pending.find(item => item.purpose === "discuss");
+    const requests = discussion ? [discussion] : pending.filter(item => ["ask", "all"].includes(item.purpose));
+    if (!requests.length) throw new Error(`${web_member.name} 没有可代发的待处理请求`);
+    return with_answer_summary({ author: web_member.name, text, reply_to: state.reply_to, kind: "chat", submitted_by: "用户",
+      request_ids: requests.map(item => item.id) });
+  }
+  const payload = { author: "用户", text, reply_to: state.reply_to, kind: "chat", submitted_by: "用户" };
+  const active = members.filter(member => member.status === "active" && (member.access !== "manual" || member.registered_at || is_web_member(member))).map(member => member.name);
+  const session = state.room.session;
+  const session_live = session && ["active", "paused"].includes(session.status);
+  if (session_live) {
+    const direct = active.filter(name => mentioned(text, name));
+    if (direct.length) payload.to = direct;
     return payload;
   }
-  const mode = element("message-kind").value;
-  const author = mode === "moderation" ? "用户" : element("author-select").value;
-  const author_member = (state.room.free?.members || state.room.members || []).find(member => member.name === author);
-  if (author !== "用户" && !is_web_member(author_member) && state.room.experts?.[author] !== "online") throw new Error("本地 AI 须自行提交回答；网页仅代发在线成员的真实原文");
-  const payload = { author, text, reply_to: state.reply_to, turn_id: state.turn_reply_to,
-    kind: mode === "moderation" ? mode : "opinion", submitted_by: "用户" };
-  // @mentions of active members outside code are direct questions; the website queues them beside the discussion.
-  if (payload.kind === "opinion" && payload.author === "用户") {
-    const named = (state.room.members || []).filter(member => member.status === "active" && member.name !== "用户" && mentioned(text, member.name)).map(member => member.name);
-    if (named.length) payload.to = named;
-  }
-  if (payload.kind === "opinion" && payload.author !== "用户") with_answer_summary(payload);
-  if ([...payload.text].length > MAX_MESSAGE_LENGTH) throw new Error(`留言最多 ${MAX_MESSAGE_LENGTH} 字，原文已保留，请调整后提交`);
+  // @mentions outside code name members (@全体成员 or @all names them all, answering at once or in turn as smart scheduling decides;
+  // @全体依次 or @all-seq has them answer one after another, the host first); without any, the server gives the message to the only member or the host.
+  const sequential = mentioned(text, "全体依次") || mentioned(text, "all-seq");
+  const everyone = !sequential && (mentioned(text, "全体成员") || mentioned(text, "all"));
+  const named = sequential || everyone ? active : active.filter(name => mentioned(text, name));
+  if (named.length) payload.to = named;
+  if (sequential && named.length) payload.sequential = true;
+  if (everyone && named.length) payload.order = "auto";
   return payload;
 }
 
-/** Keep the summary and its author with the forwarded original in either room format. */
+/** Keep the summary and its author with the forwarded original. */
 function with_answer_summary(payload) {
   payload.summary = element("message-summary").value.trim();
   payload.summary_by = element("message-summary-source").value === "submitter" ? payload.submitted_by : payload.author;
@@ -1089,11 +1045,8 @@ async function copy_online_notice(name) {
 /** Start every new form from defaults: room use, delivery, text, roster, host, limits and software overrides. */
 function reset_create_form() {
   element("room-form").reset();
-  reset_creation_mode();
   render_expert_inputs("new-expert-modes", default_experts());
   render_host_options("new-room-host", [], "");
-  state.create_parent = null;
-  state.launch.create = true;
   state.launch.workspace = {};
   state.launch.scheduler = default_scheduler();
   state.named_followup = false;
@@ -1103,33 +1056,6 @@ function reset_create_form() {
   Object.values(state.launch.profiles).forEach(fill_api_key);
   render_launch_settings();
   publish_view();
-}
-
-/** Prepare the creation form for a brainstorm room that remembers this free room. */
-function prepare_brainstorm() {
-  reset_create_form();
-  const room = state.room;
-  // Discussions run automatically, so only members the local service wakes come along.
-  const members = (room.free?.members || []).filter(member => member.status === "active" && member.access === "runner");
-  const host = members.find(member => member.role === "host") || members[0];
-  element("new-room-kind").value = "brainstorm";
-  update_creation_mode();
-  element("new-room-title").value = `头脑风暴：${room.title}`.slice(0, 80);
-  element("new-room-user_request").value = room.user_request || room.goal || "";
-  render_expert_inputs("new-expert-modes", Object.fromEntries(members.map(member => [member.name, "cli"])));
-  render_host_options("new-room-host", members.map(member => member.name), host?.name || "");
-  state.create_parent = room.id;
-}
-
-/** Post a concluded brainstorm's result back to the free room it came from, as a plain note. */
-async function return_conclusion() {
-  const room = state.room, parent = room.parent_room;
-  if (!parent) return;
-  const summary = room.host_brief?.text || room.state_text || "（主持人尚未整理结论，请查看原文）";
-  await request_json(`/api/rooms/${parent.id}/messages`, { author: "用户", text: `头脑风暴「${room.title}」已收束。\n\n${summary}\n\n原文：${location.origin}/r/${room.id}`,
-    kind: "chat", submitted_by: "用户", submission_id: new_submission_id(), to: [] });
-  notify("info", `结论已发回「${parent.title}」`);
-  await select_room(parent.id);
 }
 
 /** Persist a member mutation before transmission and reuse its credential after an uncertain response. */
@@ -1432,8 +1358,7 @@ async function invite_member({ name, access, project_access = "read", session_id
       // A manual member's start step lives on the board row, the composer bar and the invite dialog; no extra notice.
       : access === "manual" ? ""
         : record.options?.session_id ? `${record.member.name} 已接入原会话；它工作时请不要在原窗口继续操作。`
-        : state.room.mode === "free" ? `${record.member.name} 已加入，之后点名它即会由本机服务唤醒。`
-          : `${record.member.name} 已加入讨论，主持人会重新安排发言。`;
+        : `${record.member.name} 已加入，之后点名它即会由本机服务唤醒。`;
     if (notice) notify("info", notice);
     await refresh_room();
   }
@@ -1449,7 +1374,6 @@ async function finish_message(result, room_id, drafts) {
   state.free_proxy = "";
   clear_attachment_drafts();
   cancel_reply();
-  cancel_turn_reply();
   state.query = "";
   state.mention_only = false;
   element("search-input").value = "";
@@ -1737,35 +1661,6 @@ async function show_message(message_id) {
   if (!element("message-dialog").open) element("message-dialog").showModal();
 }
 
-/** Render reading links without creating or fetching any publishing links. */
-function render_access() {
-  render_room_configuration();
-  const base = `${location.origin}/r/${state.room.id}`;
-  const runtime = state.room.runtime || { mode: "manual", status: "ready" };
-  element("runtime-status").textContent = runtime_label(runtime);
-  if (element("local-launch-start")) element("local-launch-start").disabled = !state.launch.available || runtime.mode !== "automatic" || runtime.status !== "ready";
-  element("runtime-execution").textContent = execution_label(runtime.latest_execution);
-  element("runtime-pause").hidden = runtime.status !== "running";
-  element("runtime-export").hidden = !runtime.protected;
-  if (state.runtime_draft_room !== state.room.id) {
-    const saved = JSON.parse(localStorage.getItem(`discuss-workspace:${state.room.id}`) || "{}");
-    element("runtime-project").value = saved.discussion_project || "";
-    element("runtime-cwd").value = saved.cwd || "";
-    state.runtime_draft_room = state.room.id;
-  }
-  element("reading-url").textContent = base;
-  element("open-reading").href = base;
-  element("cli-reading-url").textContent = `${base}?mode=cli`;
-  element("open-cli-reading").href = `${base}?mode=cli`;
-  element("cli-endpoint").textContent = `POST ${location.origin}/api/rooms/${state.room.id}/messages`;
-  const routes = [["背景与边界", `${base}/brief`], ["共识与分歧", `${base}/state`], ["完整历史 · 每页 20 条", `${base}/messages?page=1`],
-    ["精确查阅 · 消息编号", `${base}/messages/${state.room.latest_id || "消息编号"}`], ["检索原文", `${base}/search?q=关键词`],
-    ["查看被 @ 的消息", `${base}/search?mention=Codex`]];
-  element("endpoint-list").innerHTML = routes.map(([title, url]) => `<div class="endpoint"><div>${title}</div><code>${escape_html(url)}</code></div>`).join("");
-  const local = ["127.0.0.1", "localhost", "[::1]"].includes(location.hostname);
-  element("address-note").textContent = local ? "当前是本机地址。请给在线 AI 提供公网阅读地址，或直接复制讨论材料。" : "在线 AI 仅需读取；若读取失败，由用户复制材料提供。观点在原聊天窗口输出，再由用户代发。";
-}
-
 /** Read numeric limits from the shared classic/modern form controls. */
 function read_limits(prefix) {
   return Object.fromEntries(["max_rounds", "max_minutes"].map(key => {
@@ -1797,13 +1692,6 @@ function limits_label(limits = {}) {
 function stop_reason_label({ stop_reason, max_rounds, max_minutes } = {}) {
   return { round_limit: `达到轮次上限（${max_rounds} 轮）`, time_limit: `达到时长上限（${max_minutes} 分钟）`,
     goal_done: "主持人确认目标已完成" }[stop_reason] || "用户结束了讨论";
-}
-
-/** Apply a reached boundary without starting an AI or inventing a summary. */
-async function check_limits() {
-  await request_json(`/api/rooms/${state.room.id}/limits`, { actor: "用户" });
-  await refresh_room();
-  show_toast("已核对讨论上限");
 }
 
 /** Read private member files only inside the controller, never in a presentation snapshot. */
@@ -1853,12 +1741,9 @@ function creation_members(experts) {
 function room_creation_payload(folder_id) {
   const common = { title: element("new-room-title").value, goal: element("new-room-goal").value,
     host: element("new-room-host").value, user_request: element("new-room-user_request").value,
-    experts: read_expert_inputs("new-expert-modes"), folder_id };
-  // Free rooms carry their task in the conversation, so no opening brief is sent even if one was typed for a discussion.
-  if (element("new-room-kind").value === "free") return { ...common, user_request: "", mode: "free", host: common.host || "用户" };
-  return { ...common, mode: "brainstorm", background: element("new-room-background").value,
-    boundaries: element("new-room-boundaries").value, runtime_mode: "automatic", limits: read_limits("new-room"), named_followup: state.named_followup,
-    ...(state.create_parent ? { parent_room_id: state.create_parent } : {}) };
+    experts: read_expert_inputs("new-expert-modes"), limits: read_limits("new-room"), folder_id };
+  // Rooms carry their task in the conversation, so no opening brief is sent.
+  return { ...common, user_request: "", mode: "free", host: common.host || "用户" };
 }
 
 /** Retain an unresolved creation instead of silently replacing it with a new request. */
@@ -1878,15 +1763,13 @@ async function submit_room(event, folder_id = null) {
   event.preventDefault();
   if (state.directory_pending.has("create-room")) return;
   const payload = room_creation_payload(folder_id);
-  const free = payload.mode === "free";
-  // A discussion can still be created without the local service and started later from the room;
-  // a free room needs the service only for members it wakes or for smart scheduling.
+  // A room needs the local service only for members it wakes or for smart scheduling.
   const launchable = state.launch.available || Boolean(state.launch.relay);
-  const launching = free ? Object.values(payload.experts).includes("cli") || (launchable && Boolean(creation_launch_options().scheduler || state.launch.workspace.cwd || state.launch.workspace.local_project)) : state.launch.create && state.launch.available;
+  const launching = Object.values(payload.experts).includes("cli") || (launchable && Boolean(creation_launch_options().scheduler || state.launch.workspace.cwd || state.launch.workspace.local_project));
   if (launching && !launchable) throw new Error("本机唤醒的成员需要连接本机服务；也可改为手动接入或网页代发");
   const launch_draft = launching ? creation_launch_options() : null;
   // A discussion is only a way to push the room forward: the room is created as a free room, then opened with these limits.
-  const discussion = free && state.create_discussion ? { goal: payload.goal.trim(), named_followup: state.named_followup,
+  const discussion = state.create_discussion ? { goal: payload.goal.trim(), named_followup: state.named_followup,
     limits: read_limits("new-room") } : null;
   if (discussion && !(launching && payload.host && payload.experts[payload.host] === "cli")) throw new Error("开启讨论需要一位由本机唤醒的 AI 主持人；请先添加并设为主持人");
   // The key joins the signature only when a discussion is requested, so recovered requests keep matching their stored signature.
@@ -1909,13 +1792,10 @@ async function submit_room(event, folder_id = null) {
       if (!state.rooms.some(existing => existing.id === saved.id)) state.rooms.push(saved);
     } });
   state.pending_room = null;
-  state.create_parent = null;
   if (discussion) await open_discussion_after_creation(room.id, discussion);
   if (signed(room_creation_payload(folder_id), launching ? creation_launch_options() : null) === signature) {
     element("room-form").reset();
-    reset_creation_mode();
     render_expert_inputs("new-expert-modes", default_experts());
-    state.launch.create = true;
     if (launching) element("room-dialog").close();
   }
   if (launching) clear_launch_overrides(launch_draft);
@@ -2106,9 +1986,7 @@ async function resume_launch(id) {
     if (state.pending_room?.id === id && state.pending_room.signature === JSON.stringify({
       payload: room_creation_payload(record.input.room?.folder_id ?? null), launch_draft: record.direct ? null : creation_launch_options() })) {
       element("room-form").reset();
-      reset_creation_mode();
       render_expert_inputs("new-expert-modes", default_experts());
-      state.launch.create = true;
       element("room-dialog").close();
     }
     if (!record.direct) clear_launch_overrides(record.input);
@@ -2207,13 +2085,12 @@ async function retry_launch_connection() {
 /** Read saved choices for the active room without using drafts or delaying discussion refreshes. */
 async function load_room_models() {
   const room = state.room;
-  // A free room runs no discussion yet still has members this computer wakes, so either one makes the models worth reading.
+  // Only members this computer wakes make the models worth reading.
   const woken = (room?.members || []).filter(member => member.access === "runner").map(member => member.name);
-  if (!state.launch.available || (room?.runtime?.mode !== "automatic" && !woken.length)) return;
-  // Inviting or removing a member in a free room leaves the runtime revision alone, so the woken names are part of the key;
-  // each new execution may run another model, which only its session log tells, so the latest executions are too.
+  if (!state.launch.available || !woken.length) return;
+  // The woken names are part of the key; each new execution may run another model, which only its session log tells, so the latest executions are too.
   const executions = (room.free?.members || []).map(member => member.execution?.id || 0).join(",");
-  const revision = `${room.runtime?.revision ?? 0}:${woken.join(",")}:${executions}`;
+  const revision = `${woken.join(",")}:${executions}`;
   const previous = state.launch.room_models;
   if (previous?.room_id === room.id && previous.revision === revision
     && (previous.loading || previous.participants)) return;
@@ -2256,7 +2133,7 @@ function reload_room_models() {
 function participant_model(name, room, saved) {
   // Nothing to say beats a placeholder: a manual member's settings live in its own session and unread ones are not guessed.
   const member = (room?.members || []).find(item => item.name === name);
-  if (member ? member.access !== "runner" : room?.runtime?.mode !== "automatic") return "";
+  if (member?.access !== "runner") return "";
   const profile = saved?.room_id === room.id ? saved.participants?.[name] : null;
   if (!profile) return "";
   // Only an agy member without a chosen model depends on the default that is read later.
@@ -2415,7 +2292,6 @@ function default_launch_entry(name) {
 /** Keep software drafts separate from shared room records and from discussion advancement mode. */
 function write_launch_field(name, field, value) {
   if (name === "workspace") state.launch.workspace[field] = value;
-  else if (name === "create") state.launch.create = Boolean(value);
   else {
     state.launch.profiles[name] ||= {};
     if (field === "allowed_tools") value = value.split("\n").map(item => item.trim()).filter(Boolean);
@@ -2630,23 +2506,6 @@ async function save_launch_defaults() {
   publish_view();
 }
 
-/** Start an existing room with local client configuration, preserving browser ownership credentials. */
-async function launch_current_room() {
-  const room_id = state.room.id;
-  try {
-    const key = `discuss-access:${room_id}`;
-    let token = localStorage.getItem(key);
-    if (!token) throw new Error("此浏览器缺少房间凭据，请使用创建房间的浏览器");
-    const draft = launch_options();
-    const result = await submit_local_launch({ ...draft, room_id, token }, state.room.title || "已有讨论");
-    clear_launch_overrides(draft);
-    notify("info", result.status === "running" ? "启动已提交，实际执行请查看进度回执" : "本次启动已有记录，请查看房间状态");
-    if (state.room?.id === room_id) await refresh_room();
-  } catch (error) { notify("error", error.message); }
-  render_launch_settings();
-  publish_view();
-}
-
 /** Load the selected paused room's original connection paths after proving browser ownership. */
 async function load_room_configuration() {
   const room_id = state.room.id;
@@ -2656,7 +2515,6 @@ async function load_room_configuration() {
     const result = await local_launch_request('room-config', { room_id, token });
     if (state.room?.id === room_id) state.launch.repair = result;
   } catch (error) { if (state.room?.id === room_id) notify("error", error.message); }
-  render_room_configuration();
   publish_view();
 }
 
@@ -2699,28 +2557,7 @@ async function save_room_configuration() {
       await refresh_room();
     }
   } catch (error) { if (state.room?.id === repair.room_id) notify("error", error.message); }
-  render_room_configuration();
   publish_view();
-}
-
-/** Keep the classic theme's paused-room correction controls in sync with the shared draft. */
-function render_room_configuration() {
-  const panel = element('local-room-configuration');
-  if (!panel) return;
-  const runtime = state.room?.runtime;
-  panel.hidden = !state.launch.available || state.launch.remote || runtime?.mode !== 'automatic' || runtime.status !== 'paused' || state.room?.archived;
-  element('local-launch-settings').parentElement.hidden = runtime?.mode !== 'automatic' || (state.launch.available && runtime.status !== 'ready');
-  const repair = state.launch.repair?.room_id === state.room?.id ? state.launch.repair : null;
-  const fields = element('local-room-configuration-fields');
-  if (fields.dataset.roomId !== state.room?.id || !fields.contains(document.activeElement)) {
-    fields.innerHTML = repair ? Object.entries(repair.participants).map(([name, profile]) => {
-      const field = profile.adapter === 'antigravity' ? 'ipc_directory' : 'executable';
-      const adapter = ['codex', 'codex_cli'].includes(profile.adapter) ? `<label>${escape_html(name)} · 接入方式<select data-room-adapter="${escape_html(name)}"><option value="codex"${profile.adapter === 'codex' ? ' selected' : ''}>Codex App</option><option value="codex_cli"${profile.adapter === 'codex_cli' ? ' selected' : ''}>Codex CLI</option></select></label>` : '';
-      return `${adapter}<label>${escape_html(name)} · ${field === 'ipc_directory' ? 'Sidecar 目录' : '软件路径'}<input data-room-connection="${escape_html(name)}" value="${escape_html(profile[field] || '')}"></label>`;
-    }).join('') : '';
-    fields.dataset.roomId = state.room?.id || '';
-  }
-  element('local-room-configuration-save').hidden = !repair;
 }
 
 /** Render the same local setup controls in the classic theme. */
@@ -2740,8 +2577,6 @@ function render_launch_settings() {
     if (!container) continue;
     container.hidden = !state.launch.available;
     container.parentElement.hidden = false;
-    const create_toggle = container.parentElement.querySelector('[data-launch-name="create"]');
-    if (create_toggle) { create_toggle.checked = state.launch.create; create_toggle.disabled = !state.launch.available; }
     container.innerHTML = Object.entries(LAUNCH_CLIENTS).map(([name, clients]) => {
       const profile = state.launch.profiles[name] || {};
       const fields = profile.adapter === "antigravity" ? [["ipc_directory", "Sidecar IPC 目录"]]
@@ -2762,8 +2597,6 @@ function render_launch_settings() {
       !state.launch.available && state.launch.connect_command ? `在这台电脑运行 ${state.launch.connect_command}，使用命令打开的网页完成连接。` : ""].filter(Boolean).join(" ");
   }
   for (const id of ["local-launch-save", "new-local-launch-save"]) if (element(id)) element(id).disabled = !state.launch.available;
-  if (element("local-launch-start")) element("local-launch-start").disabled = !state.launch.available || state.room?.runtime?.mode !== "automatic" || state.room?.runtime?.status !== "ready";
-  render_room_configuration();
 }
 
 /** Persist a manually edited summary with the snapshot it was based on. */
@@ -2781,43 +2614,13 @@ async function copy_context(mode = "online") {
   const selected = mode === "online" ? members.find(member => member.name === element("author-select").value) : null;
   const member = selected || (members.length === 1 ? members[0] : null);
   if (member) return copy_member_join(member.name);
-  select_tab("access");
+  select_tab("overview");
   show_toast("请在接入页选择具体成员的「参与说明」");
 }
 
 /** Copy a bounded background startup contract without starting any external task. */
 async function copy_background() {
   return copy_context("cli");
-}
-
-/** Keep optional app placement local and include it in manual cold-start instructions. */
-function workspace_instruction() {
-  const workspace = runtime_workspace();
-  const lines = [workspace.discussion_project ? `讨论所属项目：${workspace.discussion_project}` : "",
-    workspace.cwd ? `工作目录 cwd：${workspace.cwd}` : ""].filter(Boolean);
-  return lines.length ? `\n${lines.join("\n")}\n请在对应项目和目录中打开会话；实际文件权限以软件配置为准。` : "";
-}
-
-/** Persist only optional local placement fields, never public room metadata. */
-function runtime_workspace() {
-  const workspace = { discussion_project: element("runtime-project").value.trim() || undefined,
-    cwd: element("runtime-cwd").value.trim() || undefined };
-  localStorage.setItem(`discuss-workspace:${state.room.id}`, JSON.stringify(workspace));
-  return workspace;
-}
-
-/** Describe a selected mode separately from actual execution. */
-function runtime_label(runtime = {}) {
-  const mode = runtime.mode === "automatic" ? "全自动讨论" : "手动复制冷启动";
-  const status = runtime.expired ? "已到截止时间" : ({ ready: "尚未启动", running: "运行已启用，实际进展以执行回执为准", paused: "已暂停", stopped: "已停止", concluded: "已收束" }[runtime.status] || "尚未启动");
-  return `${mode} · ${status}`;
-}
-
-/** Show only persisted business evidence, including actionable failure details. */
-function execution_label(event) {
-  if (!event) return "尚无自动执行回执";
-  const status = { pending: "待接入", dispatched: "已交付，等待开始", started: "实际执行中", completed: "本步已完成", cancelled: "已撤销", failed: "需要处理" }[event.status] || event.status;
-  return `${event.participant} · ${status}${event.result ? ` · ${event.result}` : ""}`;
 }
 
 /** Read the session revision and bind the write to that session and room. */
@@ -2864,31 +2667,6 @@ async function skip_turn() {
   show_toast("已跳过本次发言");
 }
 
-/** Reopen a concluded discussion with a fresh round and time budget; history stays. */
-async function reopen_discussion({ max_rounds, max_minutes }) {
-  const room = state.room, room_id = room.id;
-  const view = await request_json(`/api/rooms/${room_id}/discussion`);
-  if (state.room?.id !== room_id) return;
-  if (view.session) throw new Error("讨论会话已变化，请刷新后重试");
-  if (!has_room_control(room_id)) throw new Error(MANAGEMENT_LOGIN_HINT);
-  await request_json(`/api/rooms/${room_id}/discussion`, { action: "start", revision: view.revision,
-    goal: room.session?.goal || room.goal, named_followup: room.named_followup ?? true,
-    limits: { max_rounds, max_minutes } });
-  if (state.room?.id !== room_id) return;
-  await refresh_room();
-  show_toast("已开启新的讨论会话，按新的轮次与时长上限继续");
-}
-
-/** End early without a summary, keeping every original message. */
-async function conclude_discussion() {
-  const room_id = state.room.id, session_id = state.room.session?.id;
-  if (!session_id) throw new Error("当前没有进行中的讨论");
-  await discussion_control(room_id, "end", session_id);
-  if (state.room?.id !== room_id) return;
-  await refresh_room();
-  show_toast("讨论已直接收束，历史记录保留");
-}
-
 /** Turn this free room into a discussion within the given limits and start the run; the local service takes it over at its next check. */
 async function start_room_discussion({ goal, max_rounds, max_minutes, named_followup = false }) {
   const room_id = state.room.id, path = `/api/rooms/${room_id}`;
@@ -2910,11 +2688,6 @@ async function end_room_discussion() {
   if (state.room?.id !== room_id) return;
   await refresh_room();
   show_toast("讨论已结束，房间回到自由协作，历史记录保留");
-}
-
-/** Revoke active execution before the local adapters are stopped. */
-async function pause_runtime() {
-  return pause_discussion();
 }
 
 /** Download JSON through a temporary object URL without exposing its contents in the page. */
@@ -2954,9 +2727,9 @@ async function copy_member_join(name, with_credential = false) {
   const skills = `请调用 discuss-participant${room.host === name ? " 和 discuss-host" : ""}。`;
   let instruction;
   if (member.access === "online") instruction = "你是在线只读成员，请在原聊天回答，由用户或授权主持人代发；不要尝试直接写入房间。模型与思考强度在原网页设置。";
-  else if (member.access === "runner") instruction = `${skills}等待本机程序交付有效任务，按 task 中的 access_file 和 execution 凭据操作${room.mode === "free" ? "；自由协作的回答必须绑定本次有效 execution_id" : ""}。不要另建定时任务；只处理本次有效执行，失效或撤销后停止提交。下载的持久成员私有文件不能替代自动执行凭据。`;
-  else if (with_credential) instruction = `${skills}凭证文本在下方：每条 codiscuss 命令都在同一命令内把它原样设为环境变量 DISCUSS_ACCESS（不回显；首条 room view 也要带，否则无法识别你），命令省略 --access-file；先执行 codiscuss room view ${room.id} --site ${location.origin} --as ${name}，随后立即执行 codiscuss member register ${room.id} --site ${location.origin} --as ${name} 完成注册（只需一次，会话 ID 由程序自动附带，不要自己填写），之后命令保持本站点、房间和身份。模型与思考强度在原软件中设置。${manual_trigger_instruction(room)}${workspace_instruction()}`;
-  else instruction = `${skills}使用属于你的私有文件 member-${room.id}-${name}.json，由用户提供它在本机的实际完整路径；先执行 codiscuss room view ${room.id} --site ${location.origin} --as ${name} --access-file "实际完整路径"；随后立即执行 codiscuss member register ${room.id} --site ${location.origin} --as ${name} --access-file "实际完整路径" 完成注册（只需一次，会话 ID 由程序自动附带，不要自己填写），之后命令保持本站点、房间和身份。不要读取或公开文件中的 token；若用户给的是凭证文本而非文件，把它设为环境变量 DISCUSS_ACCESS（不要回显）并省略 --access-file。模型与思考强度在原软件中设置。${manual_trigger_instruction(room)}${workspace_instruction()}`;
+  else if (member.access === "runner") instruction = `${skills}等待本机程序交付有效任务，按 task 中的 access_file 和 execution 凭据操作；自由协作的回答必须绑定本次有效 execution_id。不要另建定时任务；只处理本次有效执行，失效或撤销后停止提交。下载的持久成员私有文件不能替代自动执行凭据。`;
+  else if (with_credential) instruction = `${skills}凭证文本在下方：每条 codiscuss 命令都在同一命令内把它原样设为环境变量 DISCUSS_ACCESS（不回显；首条 room view 也要带，否则无法识别你），命令省略 --access-file；先执行 codiscuss room view ${room.id} --site ${location.origin} --as ${name}，随后立即执行 codiscuss member register ${room.id} --site ${location.origin} --as ${name} 完成注册（只需一次，会话 ID 由程序自动附带，不要自己填写），之后命令保持本站点、房间和身份。模型与思考强度在原软件中设置。${MANUAL_TRIGGER_INSTRUCTION}`;
+  else instruction = `${skills}使用属于你的私有文件 member-${room.id}-${name}.json，由用户提供它在本机的实际完整路径；先执行 codiscuss room view ${room.id} --site ${location.origin} --as ${name} --access-file "实际完整路径"；随后立即执行 codiscuss member register ${room.id} --site ${location.origin} --as ${name} --access-file "实际完整路径" 完成注册（只需一次，会话 ID 由程序自动附带，不要自己填写），之后命令保持本站点、房间和身份。不要读取或公开文件中的 token；若用户给的是凭证文本而非文件，把它设为环境变量 DISCUSS_ACCESS（不要回显）并省略 --access-file。模型与思考强度在原软件中设置。${MANUAL_TRIGGER_INSTRUCTION}`;
   const credential = with_credential ? `
 凭证文本（含 token，仅限你使用）：${JSON.stringify({ site: location.origin, room: room.id, token: member_credentials(room.id)[name].token })}` : "";
   await copy_text(`请以 ${name} 身份参与房间。
@@ -2966,50 +2739,9 @@ ${instruction}
   if (state.room?.id === room.id) notify("info", with_credential ? `已复制 ${name} 的启动指令（含 token）` : `已复制 ${name} 的参与说明`);
 }
 
-/** How a manual member learns it is its turn: free rooms are pulled by the member, discussions only on the host's assignment. */
-function manual_trigger_instruction(room) {
-  return room.mode === "free" ? "首次复制后，可由人工或软件原生定时触发；自行提交，不必每轮复制回答。"
-    : "这是全自动讨论。现在只先了解房间（议题、参与者、已有发言），不要发言，不要自建定时任务；轮到你时会被唤醒。唤醒后先重读最新内容（turn current、新增发言），确认轮到你再认领发言权并提交；没有安排就结束本次检查。";
-}
-
-/** Download a private per-room setup file for the independent local runner. */
-function export_runtime() {
-  const token = localStorage.getItem(`discuss-access:${state.room.id}`);
-  if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
-  const saved = member_credentials(state.room.id);
-  // A manual expert answers with its own credential and has nothing for the local service to configure.
-  const manual = new Set((state.room.members || []).filter(member => member.access === "manual").map(member => member.name));
-  const participants = Object.fromEntries(Object.keys(state.room.experts).filter(name => state.room.experts[name] === "cli" && !manual.has(name))
-    .map(name => [name, { adapter: state.launch.profiles[name]?.adapter || "待配置" }]));
-  const members = Object.fromEntries(Object.entries(saved).filter(([name]) => !manual.has(name)).map(([name, value]) => [name, { token: value.token }]));
-  const workspace = runtime_workspace();
-  const config = { site: location.origin, room: state.room.id, token, ...workspace, participants, members };
-  download_private_json(config, `discussion-${state.room.id}.json`);
-  show_toast("已导出私有接入配置；按部署说明填写本机软件路径，不要公开此文件");
-}
 
 /** Supply participation defaults for a new topic. */
 function default_experts() { return {}; }
-
-/** Keep a roster per room use and delivery method; software drafts remain per instance. */
-function update_creation_mode() {
-  const kind = element("new-room-kind").value;
-  const key = kind;
-  if (key === state.creation_mode) return;
-  const previous = { host: element("new-room-host").value, experts: read_expert_inputs("new-expert-modes") };
-  state.creation_drafts[state.creation_mode] = previous;
-  // The roster starts empty and carries over only members the user added; configured software is never added for them.
-  const experts = previous.experts;
-  // Discussions run automatically; manual and web members stay available only in free rooms.
-  const eligible = kind === "free" ? experts : Object.fromEntries(Object.keys(experts)
-    .filter(name => experts[name] === "cli" && LAUNCH_CLIENTS[platform_of(name)]).map(name => [name, "cli"]));
-  const local_names = Object.keys(eligible).filter(name => eligible[name] !== "online");
-  const draft = state.creation_drafts[key] || { experts: eligible, host: local_names.includes(previous.host) ? previous.host : local_names[0] || "" };
-  render_expert_inputs("new-expert-modes", draft.experts);
-  render_host_options("new-room-host", Object.keys(draft.experts), draft.host);
-  state.creation_mode = key;
-  publish_view();
-}
 
 /** Preserve dynamic instance names in the hidden select that backs the visible host controls. */
 function render_host_options(id, names, selected) {
@@ -3219,7 +2951,6 @@ function fork_snapshot(snapshot, message_id, room_id, now = new Date().toISOStri
     member_suggestions: on_kept(tables.member_suggestions), member_recommendations: on_kept(tables.member_recommendations),
     // A request answered after the fork point is unanswered in the fork.
     member_requests,
-    discussion_turns: (tables.discussion_turns || []).filter(row => !row.answer_id || kept.has(row.answer_id)),
     discussion_sessions: truncated_sessions,
     discussion_conclusions: conclusions,
     session_requests,
@@ -3304,12 +3035,6 @@ async function load_decision_input(decision_id) {
   return request_json(`/api/rooms/${state.room.id}/scheduler-decisions/${decision_id}`);
 }
 
-/** A completed creation starts the next form with fresh mode defaults. */
-function reset_creation_mode() {
-  state.creation_mode = "free";
-  state.creation_drafts = {};
-}
-
 /** Render independently configurable expert modes without changing identity names. */
 function render_expert_inputs(container_id, experts) {
   element(container_id).innerHTML = [...new Set([...Object.keys(default_experts()), ...Object.keys(experts).filter(platform_of)])].map((name) =>
@@ -3323,55 +3048,16 @@ function read_expert_inputs(container_id) {
     .filter((control) => control.value).map((control) => [control.dataset.expert, control.value]));
 }
 
-/** Render the overview and preserve an unsaved host-management draft. */
+/** Fill the topic edit draft from the room, preserving an unsaved draft. */
 function render_topic() {
   const room = state.room;
-  element("topic-phase").textContent = PHASE_LABELS[room.phase];
-  const authors = ["用户", ...Object.keys(room.experts).filter(name => room.experts[name] === "online")];
-  render_host_options("author-select", authors.filter(name => name !== "用户"), authors.includes(element("author-select").value) ? element("author-select").value : "用户");
-  element("topic-host").textContent = `主持人：${display_name(room.host)} · 可以同时作为专家参与`;
-  element("discussion-limits-status").textContent = limits_label(room.limits);
-  for (const field of ["goal", "focus", "user_request", "background", "boundaries"]) element(`topic-${field}`).textContent = room[field] || "尚未填写";
-  element("topic-experts").textContent = Object.entries(room.experts).map(([name, mode]) =>
-    `${name} · ${mode === "cli" ? "本地 CLI，可读可写" : "在线 AI，只读"}${name === room.host ? " · 兼任主持人" : ""}`).join("\n");
-  element("turn-history").href = `${location.origin}/r/${room.id}/turns?page=1`;
-  element("host-operator").textContent = `当前以 ${display_name(room.host)} 的主持职责管理话题。AI 主持人通过 CLI 操作；用户可在这里协助。`;
-  if (!state.topic_dirty) {
-    for (const field of ["title", "goal", "focus", "user_request", "background", "boundaries"]) element(`topic-${field}-input`).value = room[field] || "";
-    render_host_options("topic-host-select", Object.keys(room.experts).filter(name => room.experts[name] === "cli"), room.host);
-    element("topic-phase-select").value = room.phase;
-    for (const key of ["max_rounds", "max_minutes"]) {
-      const input = element(`topic-limit-${key}-input`);
-      input.value = room.limits?.[key] || "";
-      input.disabled = ["active", "paused"].includes(room.session?.status);
-    }
-    render_expert_inputs("topic-expert-modes", room.experts);
+  if (state.topic_dirty) return;
+  for (const field of ["title", "goal", "focus", "user_request", "background", "boundaries"]) element(`topic-${field}-input`).value = room[field] || "";
+  for (const key of ["max_rounds", "max_minutes"]) {
+    const input = element(`topic-limit-${key}-input`);
+    input.value = room.limits?.[key] || "";
+    input.disabled = ["active", "paused"].includes(room.session?.status);
   }
-  const previous_expert = element("turn-expert-select").value;
-  element("turn-expert-select").innerHTML = Object.keys(room.experts).map((name) => `<option>${escape_html(name)}</option>`).join("");
-  if (room.experts[previous_expert]) element("turn-expert-select").value = previous_expert;
-  render_current_turn();
-}
-
-/** Display the actual assignment state without implying an external delivery. */
-function render_current_turn() {
-  const turn = state.room.current_turn;
-  const active = turn && ["pending", "notified"].includes(turn.status);
-  const inactive = ["paused", "concluded"].includes(state.room.phase);
-  element("turn-status").textContent = turn_label(turn, state.room);
-  element("turn-note").textContent = turn_guidance(turn, state.room);
-  element("turn-expert").textContent = turn ? `#${turn.id} · ${turn.expert}` : "由主持人安排下一位专家";
-  element("turn-question").textContent = turn?.question || "在下方展开主持管理，填写本轮待回应的问题。";
-  element("copy-turn").disabled = !active || inactive;
-  element("confirm-notified").disabled = !turn || turn.status !== "pending" || inactive;
-  element("forward-turn").disabled = !active || inactive || state.room.experts[turn?.expert] !== "online";
-  element("cancel-turn").disabled = !active;
-  element("view-turn-answer").hidden = !turn?.answer_id;
-  const limited = state.room.limits?.reached;
-  const unavailable = active || inactive || limited || !Object.keys(state.room.experts).length;
-  element("schedule-turn").disabled = Boolean(unavailable);
-  element("schedule-note").textContent = inactive ? "话题已暂停或收束；恢复阶段后才能继续安排。" :
-    (active ? "先完成或取消当前安排，再安排下一位。" : limited ? "已达到讨论上限，请检查到限处理；需要继续时先暂停并调整参数。" : "创建后本地专家可自行检查；在线专家需由主持人或用户联系。");
 }
 
 /** Distinguish local work discovery from contacting an online expert. */
@@ -3388,116 +3074,24 @@ function turn_guidance(turn, room) {
   return "在线专家需由主持人或用户联系。复制通知不表示送达，实际联系后再确认已通知。";
 }
 
-/** Prepare fresh member credentials only when an identity is added or changes writable capability. */
-function topic_member_requests(room, experts) {
-  const current = room.members || [];
-  return Object.entries(experts).map(([name, capability]) => {
-    const web_member = capability === "online";
-    const access = web_member ? "manual" : room.runtime?.mode === "automatic" ? "runner" : "manual";
-    const operation = `topic:${name}:${access}`;
-    const member = current.find(item => item.name === name && item.status === "active");
-    const pending = localStorage.getItem(MEMBER_PENDING_PREFIX + room.id + ":" + operation);
-    if (!pending && member && is_web_member(member) === web_member) return null;
-    return prepare_member_request(room.id, operation, { name, access, ...(web_member ? { manual_source: "web" } : {}), adapter: "", session_mode: "new" });
-  }).filter(Boolean);
-}
-
-/** Save owner-edited topic data while retaining untouched participants' existing credentials. */
+/** Save owner-edited topic data; the host and members change only through member management. */
 async function save_topic(event) {
   event.preventDefault();
   const room = state.room;
-  const payload = { actor: "用户", host: element("topic-host-select").value,
-    experts: read_expert_inputs("topic-expert-modes") };
+  const payload = { actor: "用户" };
   if (!["active", "paused"].includes(room.session?.status)) payload.limits = read_limits("topic");
   for (const field of ["title", "goal", "focus", "user_request", "background", "boundaries"]) payload[field] = element(`topic-${field}-input`).value;
-  const records = topic_member_requests(room, payload.experts);
-  payload.members = records.map(record => record.member);
-  const result = await request_json(`/api/rooms/${room.id}/topic`, payload);
-  save_room_credentials({ ...result, id: room.id }, localStorage.getItem(`discuss-access:${room.id}`), payload.members);
-  records.forEach(record => localStorage.removeItem(record.key));
+  await request_json(`/api/rooms/${room.id}/topic`, payload);
   if (state.room?.id === room.id) { state.topic_dirty = false; await refresh_room(); }
   show_toast("话题资料已保存");
 }
 
-/** Schedule an expert with an identifier retained across uncertain retries. */
-async function schedule_turn(event) {
-  event.preventDefault();
-  const payload = { actor: "用户", expert: element("turn-expert-select").value, question: element("turn-question-input").value.trim() };
-  const signature = JSON.stringify({ room: state.room.id, ...payload });
-  if (state.pending_turn?.signature !== signature) state.pending_turn = { signature, id: new_submission_id() };
-  element("schedule-turn").disabled = true;
-  try {
-    await request_json(`/api/rooms/${state.room.id}/turns`, { ...payload, submission_id: state.pending_turn.id });
-    state.pending_turn = null;
-    element("turn-question-input").value = "";
-    await refresh_room();
-    show_toast("发言安排已创建");
-  } finally { render_current_turn(); }
-}
-
-/** Copy only the addressee, question, and selective-reading entrypoint. */
-async function copy_turn() {
-  const turn = state.room.current_turn;
-  const params = new URLSearchParams({ participant: turn.expert, mode: state.room.experts[turn.expert] });
-  await copy_text(`@${turn.expert}，轮到你发言。\n待回应问题：${turn.question}\n话题入口：${location.origin}/r/${state.room.id}?${params}\n发言安排 #${turn.id}；请按需查看材料，回答时注明此安排编号和引用原文编号。`);
-}
-
-/** Confirm actual external delivery or cancel the current assignment. */
-async function change_turn_status(status) {
-  await request_json(`/api/rooms/${state.room.id}/turns/${state.room.current_turn.id}`, { actor: "用户", status });
-  await refresh_room();
-  show_toast(status === "notified" ? "已记录主持人的通知确认" : "发言安排已取消");
-}
-
-/** Prepare a host-forwarded answer while retaining the expert's own authorship. */
-function prepare_turn_answer() {
-  const turn = state.room.current_turn;
-  if (state.room.experts[turn.expert] !== "online") throw new Error("本地 AI 须使用自身凭据提交回答");
-  element("message-kind").value = "forward";
-  element("author-select").value = turn.expert;
-  state.turn_reply_to = turn.id;
-  element("turn-answer-label").textContent = `回答安排 #${turn.id} · ${turn.expert}，由用户代发`;
-  element("turn-answer-preview").hidden = false;
-  update_composer_role();
-  select_tab("discussion");
-  element("message-input").focus();
-}
-
-/** Remove an assignment link without changing a drafted opinion. */
-function cancel_turn_reply() {
-  state.turn_reply_to = null;
-  element("turn-answer-preview").hidden = true;
-}
-
-/** Keep moderator statements distinct from opinions in the same identity. */
-function update_composer_role() {
-  const mode = element("message-kind").value;
-  element("author-select").disabled = mode === "moderation";
-  if (mode === "moderation") element("author-select").value = "用户";
-  const needs_summary = ["opinion", "forward"].includes(mode) && element("author-select").value !== "用户";
-  element("message-summary-fields").hidden = !needs_summary;
-  element("author-note").textContent = mode === "moderation" ? "主持发言" :
-    (mode === "forward" ? "由用户代发" : (element("author-select").value === "用户" ? "发言" : "的观点代发"));
-}
-
 /** Bind the topic workflow separately from existing chat controls. */
 function bind_host_controls() {
-  const actions = { "topic-context": () => select_tab("context"), "edit-host-brief": () => select_tab("context"), "topic-history": () => select_tab("discussion"),
-    "runtime-export": export_runtime,
-    "local-launch-save": save_launch_defaults, "new-local-launch-save": save_launch_defaults,
-    "local-launch-start": launch_current_room,
-    "local-room-configuration-load": load_room_configuration, "local-room-configuration-save": save_room_configuration,
-    "local-room-configuration-restart": restart_discussion,
-    "runtime-pause": pause_runtime, "check-discussion-limits": check_limits,
-    "copy-turn": copy_turn, "cancel-turn": () => change_turn_status("cancelled"),
-    "forward-turn": prepare_turn_answer, "cancel-turn-answer": cancel_turn_reply,
-    "view-turn-answer": () => show_message(state.room.current_turn.answer_id),
-    "copy-host": () => copy_member_join(state.room.host) };
-  Object.entries(actions).forEach(([id, action]) => element(id).addEventListener("click", () => run_action(action)));
+  element("edit-host-brief").addEventListener("click", () => select_tab("discussion"));
+  element("new-local-launch-save").addEventListener("click", () => run_action(save_launch_defaults));
   element("topic-form").addEventListener("submit", (event) => run_action(() => save_topic(event)));
-  element("turn-form").addEventListener("submit", (event) => run_action(() => schedule_turn(event)));
   element("topic-form").addEventListener("input", () => { state.topic_dirty = true; });
-  element("message-kind").addEventListener("change", () => { cancel_turn_reply(); update_composer_role(); });
 }
 
 /** Run a UI operation and surface its failure to the user. */
@@ -3722,7 +3316,7 @@ function bind_controls() {
   const open_create = () => { reset_create_form(); element("room-dialog").showModal(); };
   const actions = { "new-room": open_create, "empty-create": open_create,
     "close-room-dialog": () => element("room-dialog").close(), "close-message-dialog": () => element("message-dialog").close(),
-    "refresh": refresh_room, "cancel-reply": cancel_reply, "go-context": () => select_tab("context"),
+    "refresh": refresh_room, "cancel-reply": cancel_reply, "go-context": () => select_tab("discussion"),
     "copy-reading": () => copy_text(`${location.origin}/r/${state.room.id}`),
     "backup-room": () => backup_room(),
     "copy-reading-secondary": () => copy_text(`${location.origin}/r/${state.room.id}`),
@@ -3741,7 +3335,6 @@ function bind_controls() {
     element("mention-filter").setAttribute("aria-pressed", String(state.mention_only)); run_action(refresh_room);
   });
   element("author-select").addEventListener("change", () => {
-    update_composer_role();
     element("mention-filter").textContent = `@ ${element("author-select").value === "用户" ? "提到我" : element("author-select").value}`;
     if (state.mention_only) { state.page = 1; run_action(refresh_room); }
   });
@@ -3872,14 +3465,10 @@ async function initialize() {
   bind_controls();
   bind_attachment_controls();
   bind_host_controls();
-  reset_creation_mode();
-  element("new-room-kind").addEventListener("change", update_creation_mode);
   document.addEventListener("focusin", event => {
     if (event.target.dataset?.launchField === "model") load_launch_models(event.target.dataset.launchName);
   });
   document.addEventListener("input", event => {
-    if (event.target.dataset?.roomConnection) write_room_connection(event.target.dataset.roomConnection, event.target.value);
-    if (event.target.dataset?.roomAdapter) write_room_adapter(event.target.dataset.roomAdapter, event.target.value);
     const { launchName: name, launchField: field } = event.target.dataset || {};
     if (name && field === "model") write_launch_model(name, event.target.value);
     else if (name) write_launch_field(name, field, event.target.type === "checkbox" ? event.target.checked : event.target.value);
@@ -3922,7 +3511,7 @@ function publish_view() {
 function view_snapshot() {
   const fields = Object.fromEntries(Array.from(document.querySelectorAll("#controller-fields input[id], #controller-fields textarea[id], #controller-fields select[id], body > dialog input[id], body > dialog textarea[id], body > dialog select[id]"))
     .map((control) => [control.id, control.value]));
-  const experts = Object.fromEntries(["new-expert-modes", "topic-expert-modes"].map((id) =>
+  const experts = Object.fromEntries(["new-expert-modes"].map((id) =>
     [id, element(id) ? read_expert_inputs(id) : {}]));
   return { rooms: ordered_rooms(), folders: state.folders, folder_groups: ordered_folders(), room: state.room, archive_view: state.archive_view, directory_sort: state.directory_sort, messages: state.messages, total: state.message_total,
     archive_pending: [...state.archive_changes.keys()], import_progress: structuredClone(state.import_progress),
@@ -3930,9 +3519,9 @@ function view_snapshot() {
     connected: state.connected, reconnecting: state.reconnecting, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
     attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url })),
     upload_status: state.upload_status, sending_message: state.sending_message, sending_preview: state.sending_preview,
-    mention_only: state.mention_only, reply_to: state.reply_to, turn_reply_to: state.turn_reply_to,
+    mention_only: state.mention_only, reply_to: state.reply_to,
     free_proxy: state.free_proxy,
-    create_parent: state.create_parent, access: access_snapshot(), admin: admin_snapshot(),
+    access: access_snapshot(), admin: admin_snapshot(),
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
     theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_chain_rounds: state.create_chain_rounds };
 }
@@ -3942,7 +3531,7 @@ function write_view_field(id, value) {
   const control = element(id);
   if (!control || !control.matches("input, textarea, select")) return;
   state.navigation_version++;
-  if (["new-room-host", "topic-host-select"].includes(id) && platform_of(value)
+  if (id === "new-room-host" && platform_of(value)
       && !Array.from(control.options).some(option => option.value === value)) {
     control.insertAdjacentHTML("beforeend", `<option value="${escape_html(value)}">${escape_html(value)}</option>`);
   }
@@ -4058,7 +3647,7 @@ async function attach_local_members(snapshot, room_id) {
 /** The website copy of a backup: keep local data private and apply each adapter's restore policy. */
 function import_body(snapshot) {
   const { local_members, ...body } = snapshot;
-  if (local_members?.mode !== "free") return body;
+  if (!local_members) return body;
   const manual = new Set(Object.entries(local_members.participants || {}).filter(([, profile]) => window.discuss_backup.adapter_profile(profile.adapter)?.restore_manual).map(([name]) => name));
   const room_members = (body.tables?.room_members || []).map(row => manual.has(row.name) && row.status !== "removed"
     ? { ...row, access: "manual", adapter: "", session_mode: "new" } : row);
@@ -4140,14 +3729,12 @@ async function execute_view_action(name, value) {
     send: () => send_message(event), discard_sending: () => { state.sending_preview = null; }, choose_attachments: () => element("attachment-input").click(), remove_attachment, preview_attachment,
     create: (folder_id) => submit_room(event, folder_id),
     save_context: () => save_context(event), save_topic: () => save_topic(event),
-    schedule: () => schedule_turn(event), filter: filter_view, reply: set_view_reply,
-    cancel_reply, cancel_answer: cancel_turn_reply, prepare_answer: prepare_turn_answer,
-    copy_turn, cancel_turn: () => change_turn_status("cancelled"), skip_turn,
+    filter: filter_view, reply: set_view_reply, cancel_reply, skip_turn,
     copy_online: () => copy_context(), copy_cli: () => copy_context("cli"), copy_background,
-    export_runtime, download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_runtime, check_limits, pause_discussion, restart_discussion, conclude_discussion, start_room_discussion, end_room_discussion, reopen_discussion,
-    save_launch_defaults, launch_current_room, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
+    download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_discussion, restart_discussion, start_room_discussion, end_room_discussion,
+    save_launch_defaults, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
     load_room_configuration, save_room_configuration, interrupt_member, retry_delivery, retract_message, retract_latest, stop_room, rewind_and_send, fork_room, change_member, reorder_speakers, invite_member, set_proxy, copy_online_notice,
-    prepare_brainstorm, return_conclusion, adopt_recommendation, rate_decision,
+    adopt_recommendation, rate_decision,
     busy: () => { throw new Error("上一个操作仍在处理中，请稍候；长时间无响应请刷新页面"); },
     copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };
   try {
@@ -4173,9 +3760,9 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form },
-  request: request_json, rewind_plan, identities: IDENTITIES, display_name, sources: SOURCE_LABELS, phases: PHASE_LABELS,
-  set_member_access, allow_denials, set_member_adapter, reload_room_models, runtime_label, execution_label, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
-  turns: TURN_LABELS, turn_label, turn_guidance, progress_round, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
+  request: request_json, rewind_plan, identities: IDENTITIES, display_name, sources: SOURCE_LABELS,
+  set_member_access, allow_denials, set_member_adapter, reload_room_models, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
+  turn_label, turn_guidance, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();
 restore_directory_sort();

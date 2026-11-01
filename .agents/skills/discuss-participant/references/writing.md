@@ -21,7 +21,7 @@
 | 自由协作回答或讨论专家回答 | `message post --kind chat`；自动执行使用 `--execution 执行编号`，手动成员使用 `--request 请求编号` |
 | 主持说明 | `message post --kind moderation`，仅主持人在允许的房间状态下使用；该消息本身不结束讨论 |
 | 网页来源成员代发（自由协作或讨论） | 使用 `message post --kind chat --author 网页成员`，讨论回答同时用 `--request 请求编号` 关联安排 |
-| 创建 / 维护话题 | `room create` / `room update`；`--experts-file` 会替换完整参与配置 |
+| 创建 / 维护话题 | `room create` / `room update`；成员请通过成员管理调整 |
 | 安排发言 / 取消 | `turn create` / `turn cancel`；同房间只能有一个未完成安排 |
 | 创建或继续安排 | `turn roster` 读取最新名单与 `revision`，随后 `turn create` 或 `turn continue` 携带该版本 |
 | 保存摘要 | `state set`，`--until` 只覆盖实际已读消息 |
@@ -49,4 +49,4 @@
 
 这些核对覆盖网站 HTTP 写入；浏览器向在线专家发送问题时，由主持人另行核对实际送达结果。
 
-自动任务的状态以本次执行及服务端请求状态为准；不要创建原生定时任务或补写运行回执。影响协作的异常直接向用户报告。
+自动任务的状态以本次执行及服务端请求状态为准；不要创建原生定时任务或补写状态回执。影响协作的异常直接向用户报告。

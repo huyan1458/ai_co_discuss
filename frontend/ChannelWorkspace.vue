@@ -95,7 +95,7 @@ const tabs = [
   { value: "overview", label: "房间", icon: "i-lucide-sliders-horizontal" },
 ];
 // Retired pages: consensus and discussion history open from the host brief, access moved into the room page.
-const MERGED_TABS = { context: "discussion", topic: "discussion", history: "discussion", access: "overview" };
+const MERGED_TABS = { context: "discussion", history: "discussion", access: "overview" };
 const free_room = computed(() => !["active", "paused"].includes(room.value?.session?.status));
 watch(() => MERGED_TABS[view.value.tab], (merged) => { if (merged) act("tab", merged); }, { immediate: true });
 // A free room shows the brief bar only once it has something to read; starting a discussion stays on the rail.

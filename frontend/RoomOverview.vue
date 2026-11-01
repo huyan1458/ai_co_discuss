@@ -48,9 +48,7 @@ async function save_rounds(value) {
   } catch { rounds_shown.value = room.value.free?.max_rounds || 0; }
   finally { saving_rounds.value = false; }
 }
-// Rooms from before members were recorded only list their experts.
-const members = computed(() => room.value.members?.length ? room.value.members
-  : Object.entries(room.value.experts || {}).map(([name, mode]) => ({ name, access: mode === "online" ? "online" : "runner", status: "active", role: name === room.value.host ? "host" : "member" })));
+const members = computed(() => room.value.members || []);
 
 /**
  * Being woken here is the usual case, so a woken member only names its kind (CLI / API / App), read from this

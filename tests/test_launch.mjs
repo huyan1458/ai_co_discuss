@@ -661,7 +661,6 @@ for (const entry of ['web', 'conversation']) test(`${entry} rejects incorrect co
   await assert.rejects(launch_discussion(f.home, input, f.options), /403/);
   assert.equal(existsSync(f.home), false, 'failed authorization must not persist a poisoned journal');
   assert.equal(f.starts.length, 0);
-  assert.equal((await request(f.site, `/api/rooms/${input.room_id}`)).body.runtime.status, 'ready');
   const result = await launch_discussion(f.home, { ...input, token }, f.options);
   assert.equal(result.status, 'free');
   assert.equal(load_config(result.config_path).token, token);
@@ -1062,7 +1061,6 @@ test('a free room launches without a run, and a user message reaches its member 
   const again = await launch_discussion(f.home, input, f.options);
   assert.equal(first.room.id, again.room.id);
   assert.equal(first.status, 'free');
-  assert.equal(first.room.runtime.mode, 'manual');
   assert.deepEqual(first.room.free.members.map(member => member.name), ['Claude']);
   const config = load_config(first.config_path);
   assert.equal(config.mode, 'free');
@@ -1317,9 +1315,9 @@ test('a manual Claude expert\'s reported session is registered as a hosted parti
   const previous = process.env.CLAUDE_CONFIG_DIR;
   process.env.CLAUDE_CONFIG_DIR = claude_home;
   try {
-    assert.throws(() => adopt_member_profile(f.home, launched.config_path, 'Claude-2', randomUUID()), /找不到 Claude Code 会话/);
+    assert.throws(() => adopt_member_profile(f.home, launched.config_path, 'Claude-2', randomUUID(), 'claude', randomUUID() + randomUUID()), /找不到 Claude Code 会话/);
     assert.equal(Object.hasOwn(load_config(launched.config_path).participants, 'Claude-2'), false);
-    adopt_member_profile(f.home, launched.config_path, 'Claude-2', claude_id);
+    adopt_member_profile(f.home, launched.config_path, 'Claude-2', claude_id, 'claude', randomUUID() + randomUUID());
     const profile = load_config(launched.config_path).participants['Claude-2'];
     assert.deepEqual([profile.adapter, profile.session_id], ['claude', claude_id]);
     assert.equal(profile.project_access, 'own', 'a manually started member keeps its own session permissions');
@@ -1366,8 +1364,8 @@ test('a manual Codex expert is hosted through the app for a desktop chat and the
   const previous = process.env.CODEX_HOME;
   process.env.CODEX_HOME = codex_home;
   try {
-    assert.equal(adopt_member_profile(f.home, launched.config_path, 'Codex-2', desktop_id, 'codex'), 'codex');
-    assert.equal(adopt_member_profile(f.home, launched.config_path, 'Codex-3', cli_id, 'codex'), 'codex_cli');
+    assert.equal(adopt_member_profile(f.home, launched.config_path, 'Codex-2', desktop_id, 'codex', randomUUID() + randomUUID()), 'codex');
+    assert.equal(adopt_member_profile(f.home, launched.config_path, 'Codex-3', cli_id, 'codex', randomUUID() + randomUUID()), 'codex_cli');
     const { participants } = load_config(launched.config_path);
     assert.deepEqual([participants['Codex-2'].session_id, participants['Codex-3'].session_id], [desktop_id, cli_id]);
   } finally {
@@ -1386,14 +1384,14 @@ test('a manual agy expert\'s reported conversation is hosted under its own proje
   process.env.HOME = process.env.USERPROFILE = home;
   try {
     assert.throws(() => adopt_member_profile(f.home, launched.config_path, 'Gemini-2', randomUUID(), 'antigravity'), /找不到 Antigravity CLI 会话/);
-    assert.equal(adopt_member_profile(f.home, launched.config_path, 'Gemini-2', conversation_id, 'antigravity'), 'antigravity_cli');
+    assert.equal(adopt_member_profile(f.home, launched.config_path, 'Gemini-2', conversation_id, 'antigravity', randomUUID() + randomUUID()), 'antigravity_cli');
     const profile = load_config(launched.config_path).participants['Gemini-2'];
     assert.deepEqual([profile.adapter, profile.session_id], ['antigravity_cli', conversation_id]);
     // An App conversation lives in the App's own store and is reached through a Sidecar the App starts for this room.
     const app_id = randomUUID();
     mkdirSync(join(home, '.gemini', 'antigravity', 'conversations'), { recursive: true });
     writeFileSync(join(home, '.gemini', 'antigravity', 'conversations', `${app_id}.db`), '');
-    assert.equal(adopt_member_profile(f.home, launched.config_path, 'Gemini-3', app_id, 'antigravity'), 'antigravity');
+    assert.equal(adopt_member_profile(f.home, launched.config_path, 'Gemini-3', app_id, 'antigravity', randomUUID() + randomUUID()), 'antigravity');
     const app = load_config(launched.config_path).participants['Gemini-3'];
     assert.deepEqual([app.adapter, app.session_id, app.project_access], ['antigravity', app_id, 'own']);
     const sidecars = JSON.parse(readFileSync(join(home, '.gemini', 'config', 'config.json'), 'utf8')).sidecars;

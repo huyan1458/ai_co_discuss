@@ -6,7 +6,7 @@ import re
 import time
 
 from .free_room import active_members, finish_execution, require_member, require_owner
-from .runtime import begin_write, enforce_session_limits, limit_values, token_hash
+from .runtime import begin_write, enforce_session_limits, limit_values, room_limits_view, token_hash
 
 MAX_PLAN_TURNS = 10
 MAX_QUESTION_LENGTH = 1000
@@ -32,8 +32,6 @@ def session_room(connection, room_id):
     limits = dict(connection.execute("SELECT * FROM session_limits WHERE session_id=?", (session['id'],)).fetchone())
     pause = dict(connection.execute("SELECT * FROM session_pauses WHERE session_id=?", (session['id'],)).fetchone())
     option = connection.execute("SELECT named_followup FROM session_options WHERE session_id=?", (session['id'],)).fetchone()
-    if not option:
-        option = connection.execute("SELECT named_followup FROM discussion_options WHERE room_id=?", (room_id,)).fetchone()
     counts = connection.execute("SELECT COUNT(*) FROM session_requests WHERE session_id=? AND purpose='discuss' AND status='answered'", (session['id'],)).fetchone()[0]
     session.update(state)
     submission = connection.execute("SELECT submission_id FROM session_start_submissions WHERE session_id=?", (session['id'],)).fetchone()
@@ -48,7 +46,7 @@ def session_room(connection, room_id):
 
 
 def _idle_session_revision(connection, room_id):
-    """Bind a new-session start token to the latest prior session, roster and visible history."""
+    """Bind a start token to the prior session, roster, defaults and visible history."""
     latest_session = connection.execute("SELECT id,status FROM discussion_sessions WHERE room_id=? ORDER BY id DESC LIMIT 1",
                                         (room_id,)).fetchone()
     members = [list(row) for row in connection.execute("""SELECT m.id,m.name,m.role,m.access,m.status,
@@ -61,8 +59,10 @@ def _idle_session_revision(connection, room_id):
     mode = connection.execute("SELECT mode FROM room_modes WHERE room_id=?", (room_id,)).fetchone()
     options = connection.execute("SELECT named_followup FROM session_options WHERE session_id=?",
                                  (latest_session["id"],)).fetchone() if latest_session else None
+    limits = room_limits_view(connection, room_id)
     return _hash_revision([room_id, list(latest_session) if latest_session else None, members,
-                           mode[0] if mode else "", list(options) if options else None, latest_message])
+                           mode[0] if mode else "", list(options) if options else None, latest_message,
+                           [limits[key] for key in ("max_rounds", "max_minutes", "execution_minutes")]])
 
 
 def _hash_revision(value):
@@ -211,7 +211,7 @@ def start_session(connection, room_id, token, payload, room):
     goal = str(payload.get("goal", room["goal"])).strip()
     if not goal or len(goal) > 1000:
         raise ValueError("讨论目标须为 1–1000 字")
-    limits = limit_values(payload.get("limits", {}))
+    limits = limit_values(payload.get("limits", {}), room_limits_view(connection, room_id))
     named_followup = payload.get("named_followup", False)
     if type(named_followup) is not bool:
         raise ValueError("named_followup 须为布尔值")
@@ -228,7 +228,6 @@ def start_session(connection, room_id, token, payload, room):
     connection.execute("INSERT INTO session_round_budgets(session_id) VALUES(?)", (session_id,))
     connection.execute("INSERT INTO session_pauses(session_id) VALUES(?)", (session_id,))
     connection.execute("INSERT INTO session_options(session_id,named_followup) VALUES(?,?)", (session_id, int(named_followup)))
-    connection.execute("UPDATE room_modes SET mode='free' WHERE room_id=?", (room_id,))
     connection.execute("UPDATE rooms SET goal=? WHERE id=?", (goal, room_id))
     create_host_request(connection, session_id, f"请主持讨论：{goal}。先确认目标与限制，再安排第一位专家发言。",
                         {"kind": "session_started", "key": "start"})

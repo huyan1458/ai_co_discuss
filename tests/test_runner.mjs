@@ -34,6 +34,9 @@ const progress_note = (adapter, event, responses) => adapter_of(adapter).events.
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
 import { certainty, decide, decide_group_order, decide_review_completion, DISCUSSION_GUIDED_PROMPT_VERSION, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_thresholds, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
 
+/** Every room configuration keeps one member credential per woken participant. */
+const with_members = config => ({ ...config, members: Object.fromEntries(Object.keys(config.participants).map(name => [name, { token: 'm'.repeat(32) }])) });
+
 /** The folded record of what the provider was asked is checked on its own. */
 const without_detail = ({ detail, input, ...plan }) => (assert.ok(Array.isArray(detail) && detail[0].choices.length && input.state && input.questions[0].instructions), plan);
 
@@ -260,8 +263,8 @@ test('API profiles need a bound key but no software or filesystem permission', t
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const base_url = 'https://openrouter.ai/api/v1';
   const key = save_api_key(home, { base_url, api_key: 'test-only-key' });
-  const input = { site: 'https://discussion.test', room: 'api-room', token: 'owner'.repeat(8), api_home: home, project_access: 'write',
-    participants: { Grok: { adapter: 'api', api_protocol: 'chat', base_url, model: 'vendor/model.1', ...key, project_access: 'write', cwd: home } } };
+  const input = with_members({ site: 'https://discussion.test', room: 'api-room', token: 'owner'.repeat(8), api_home: home, project_access: 'write',
+    participants: { Grok: { adapter: 'api', api_protocol: 'chat', base_url, model: 'vendor/model.1', ...key, project_access: 'write', cwd: home } } });
   const config = validate_config(input, home);
   assert.equal(config.participants.Grok.project_access, 'read');
   assert.equal(config.participants.Grok.cwd, undefined);
@@ -395,6 +398,7 @@ test('room model readback uses registered choices, adds the software settings fo
       Claude: { adapter: 'claude', executable: process.execPath },
       Gemini: { adapter: 'antigravity', ipc_directory: home, model: 'stale-cli-choice', effort: 'high' },
     } };
+  config.members = with_members(config).members;
   writeFileSync(path, JSON.stringify(config));
   register_room(home, path);
   writeFileSync(join(home, 'launch-settings.json'), JSON.stringify({ participants: { Claude: { model: 'wrong-default', effort: 'max' } } }));
@@ -1409,8 +1413,8 @@ test('tasks state whether the discussion project is read-only or writable', t =>
 
 /** Validate the fixture room with a project directory and optional access level. */
 function load_config_from(f, project, project_access) {
-  return validate_config({ ...f.config, project: undefined, token: 'x'.repeat(32), cwd: project, project_access,
-    participants: { Codex: { adapter: 'codex_cli', executable: process.execPath } }, data_directory: f.config.directory }, f.config.directory);
+  return validate_config(with_members({ ...f.config, project: undefined, token: 'x'.repeat(32), cwd: project, project_access,
+    participants: { Codex: { adapter: 'codex_cli', executable: process.execPath } }, data_directory: f.config.directory }), f.config.directory);
 }
 
 test('tasks direct website work to the approved codiscuss subcommands', t => {
@@ -1467,33 +1471,15 @@ test('headless CLI configuration does not require App threads or Sidecar directo
   const directory = mkdtempSync(join(tmpdir(), 'discussion-config-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const path = join(directory, 'config.json');
-  const config = { site: 'http://localhost:8765', room: 'room', token: 'x'.repeat(32),
+  const config = with_members({ site: 'http://localhost:8765', room: 'room', token: 'x'.repeat(32),
     participants: { Codex: { adapter: 'codex_cli', executable: process.execPath },
-      Gemini: { adapter: 'antigravity_cli', executable: process.execPath } } };
+      Gemini: { adapter: 'antigravity_cli', executable: process.execPath } } });
   writeFileSync(path, JSON.stringify(config));
   assert.equal(load_config(path).participants.Codex.adapter, 'codex_cli');
   config.participants.Codex.adapter = 'codex'; writeFileSync(path, JSON.stringify(config));
   assert.throws(() => load_config(path), /来源聊天 ID/);
   config.participants.Codex.adapter = 'codex_cli'; config.participants.Gemini.adapter = 'antigravity';
   writeFileSync(path, JSON.stringify(config)); assert.throws(() => load_config(path), /Sidecar IPC/);
-});
-
-test('legacy event inbox is left unread while the original session binding survives', t => {
-  const directory = mkdtempSync(join(tmpdir(), 'discussion-legacy-'));
-  const db = new DatabaseSync(join(directory, 'runtime.sqlite3'));
-  db.exec(`CREATE TABLE inbox(id INTEGER PRIMARY KEY,event TEXT NOT NULL,status TEXT NOT NULL,
-    token TEXT NOT NULL,sent_at INTEGER NOT NULL,last_renew INTEGER NOT NULL,error TEXT NOT NULL);
-    INSERT INTO inbox VALUES (7,'{}','accepted','original-token',123,0,'');
-    CREATE TABLE bindings(participant TEXT PRIMARY KEY,session_id TEXT NOT NULL);
-    INSERT INTO bindings VALUES('Codex','original-session');`);
-  db.close();
-  const store = new DiscussionStore(directory);
-  t.after(() => { store.close(); rmSync(directory, { recursive: true, force: true }); });
-  const row = store.db.prepare('SELECT * FROM inbox').get();
-  assert.equal(row.id, 7); assert.equal(row.status, 'accepted'); assert.equal(row.token, 'original-token');
-  assert.equal(row.sent_at, 123); assert.equal(row.attempts, undefined); assert.equal(row.retry_at, undefined);
-  assert.equal(store.binding('Codex').session_id, 'original-session');
-  assert.equal(typeof store.receive, 'undefined');
 });
 
 test('one data directory cannot silently share bindings across rooms or sites', async t => {
@@ -1515,8 +1501,8 @@ test('common cwd is inherited and participant-specific cwd can override it', t =
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   mkdirSync(join(directory, 'other')); mkdirSync(join(directory, 'runner')); writeFileSync(join(directory, 'runner', 'discuss.py'), '');
   const config_path = join(directory, 'config.json');
-  writeFileSync(config_path, JSON.stringify({ site: 'http://localhost:8765', room: 'room', token: 'x'.repeat(32), cli_project: directory,
-    cwd: directory, participants: { Claude: { adapter: 'claude', executable: process.execPath }, Gemini: { adapter: 'antigravity', ipc_directory: directory, cwd: join(directory, 'other') } } }));
+  writeFileSync(config_path, JSON.stringify(with_members({ site: 'http://localhost:8765', room: 'room', token: 'x'.repeat(32), cli_project: directory,
+    cwd: directory, participants: { Claude: { adapter: 'claude', executable: process.execPath }, Gemini: { adapter: 'antigravity', ipc_directory: directory, cwd: join(directory, 'other') } } })));
   const config = load_config(config_path);
   assert.equal(config.participants.Claude.cwd, directory);
   assert.equal(config.participants.Gemini.cwd, join(directory, 'other'));
@@ -1589,38 +1575,6 @@ test('a Sidecar delivery checks and claims one dispatched free-room execution', 
   assert.equal(calls, 1);
 });
 
-test('a legacy Sidecar event request is rejected without calling the old APIs or software', async t => {
-  const f = await fixture(t);
-  const access_path = join(f.config.directory, 'legacy.access.json');
-  writeFileSync(access_path, JSON.stringify({ site: f.config.site, room: f.config.room, token: 'owner' }));
-  writeFileSync(join(f.config.directory, 'event-1.request.json'), JSON.stringify({ id: 'event-1', mode: 'brainstorm',
-    event_id: 1, access_path, prompt: 'must not be delivered' }));
-  let fetches = 0, invocations = 0;
-  const source = readFileSync(new URL('../runner/adapters/antigravity_sidecar.mjs', import.meta.url), 'utf8')
-    .replace(/^import .+;\r?$/gm, '').split("\natomic_json(join(directory, 'ready.json')")[0];
-  const context = vm.createContext({ process: { env: { CODISCUSS_IPC_DIRECTORY: f.config.directory, ANTIGRAVITY_AGENTAPI_EXE: 'test' } },
-    resolve, join, existsSync, readFileSync, writeFileSync, AbortSignal,
-    fetch: async () => { fetches++; throw new Error('unexpected API call'); },
-    execFileSync: () => { invocations++; throw new Error('unexpected software call'); },
-    atomic_json: (path, value) => writeFileSync(path, JSON.stringify(value)),
-  });
-  await vm.runInContext(`${source}\nprocess_request('event-1.request.json')`, context);
-  const receipt = JSON.parse(readFileSync(join(f.config.directory, 'event-1.result.json'), 'utf8'));
-  assert.equal(receipt.status, 'uncertain');
-  assert.match(receipt.error, /旧讨论事件已停用/);
-  assert.equal(fetches, 0);
-  assert.equal(invocations, 0);
-});
-
-test('the Antigravity adapter refuses legacy event IDs instead of queueing them as discussion events', async t => {
-  const directory = mkdtempSync(join(tmpdir(), 'legacy-sidecar-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  writeFileSync(join(directory, 'ready.json'), JSON.stringify({ pid: process.pid }));
-  const task = { id: 'event-1', prompt: 'must not be queued', access_path: join(directory, 'access.json') };
-  await assert.rejects(deliver_task({ adapter: 'antigravity', ipc_directory: directory }, {}, task), /旧讨论事件已停用/);
-  assert.equal(existsSync(join(directory, 'event-1.request.json')), false);
-});
-
 test('a delayed Sidecar request after its execution lease expires never invokes the software', async t => {
   const f = await fixture(t);
   await new FreeRoomRunner(f.config, f.store, async (adapter, binding, task) => {
@@ -1646,8 +1600,8 @@ test('omitted cli_project defaults to this repository', t => {
   const directory = mkdtempSync(join(tmpdir(), 'discussion-config-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const path = join(directory, 'config.json');
-  writeFileSync(path, JSON.stringify({ site: 'http://127.0.0.1:8765', room: 'room1', token: 'x'.repeat(32),
-    participants: { Gemini: { adapter: 'antigravity', ipc_directory: directory } } }));
+  writeFileSync(path, JSON.stringify(with_members({ site: 'http://127.0.0.1:8765', room: 'room1', token: 'x'.repeat(32),
+    participants: { Gemini: { adapter: 'antigravity', ipc_directory: directory } } })));
   const config = load_config(path);
   assert.equal(config.project, resolve(fileURLToPath(new URL('..', import.meta.url))));
   assert.ok(existsSync(join(config.project, 'runner', 'discuss.py')));
@@ -1656,8 +1610,8 @@ test('omitted cli_project defaults to this repository', t => {
 /** Write a minimal valid private room configuration for the service registry. */
 function room_config(directory, site, room, name = room) {
   const path = join(directory, `${name}.json`);
-  writeFileSync(path, JSON.stringify({ site, room, token: 'x'.repeat(32), data_directory: join(directory, `data-${name}`),
-    participants: { Gemini: { adapter: 'antigravity', ipc_directory: directory } } }));
+  writeFileSync(path, JSON.stringify(with_members({ site, room, token: 'x'.repeat(32), data_directory: join(directory, `data-${name}`),
+    participants: { Gemini: { adapter: 'antigravity', ipc_directory: directory } } })));
   return path;
 }
 
@@ -1906,36 +1860,6 @@ test('a room deleted on the website is unregistered, while a missing route alone
   assert.deepEqual(rooms.map(room => [room.room, room.status]), [['kept', 'error']]);
 });
 
-test('a resident worker adopts connection corrections but rejects changes to its bound conversation context', async t => {
-  const f = await fixture(t);
-  const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
-  const path = room_config(home, f.config.site, 'room1');
-  register_room(home, path);
-  const service = new DiscussionService(home, (config, store) => {
-    store.context(config); store.bind('Gemini', 'existing-session');
-    return { tick: async () => 'waiting', stop_children() {} };
-  });
-  t.after(async () => { await service.close(); rmSync(home, { recursive: true, force: true }); });
-  await service.tick();
-  const worker = service.workers.get(path);
-  const previous_version = worker.state.config_version;
-  const config = JSON.parse(readFileSync(path, 'utf8'));
-  const connection = join(home, 'new-sidecar'); mkdirSync(connection);
-  config.participants.Gemini.ipc_directory = connection;
-  writeFileSync(path, JSON.stringify(config));
-  await service.tick();
-  assert.equal(worker.config.participants.Gemini.ipc_directory, connection);
-  assert.notEqual(worker.state.config_version, previous_version);
-  assert.equal(worker.store.binding('Gemini').session_id, 'existing-session');
-  config.participants.Gemini.session_id = 'another-session';
-  writeFileSync(path, JSON.stringify(config));
-  await service.tick();
-  assert.equal(worker.state.status, 'error');
-  assert.match(worker.state.error, /身份配置发生变化/);
-  assert.equal(worker.store.binding('Gemini').session_id, 'existing-session');
-  assert.equal(worker.config.participants.Gemini.session_id, undefined);
-});
-
 test('a resident free room isolates member context changes and only blocks Codex switching during an active discussion', async t => {
   const f = await fixture(t);
   f.member.pending = [];
@@ -1999,38 +1923,6 @@ test('Codex context switch is restricted to the original session and project', a
   f.store.context(switched, true);
   f.store.context(switched);
   assert.equal(f.store.binding('Codex').session_id, 'original-session');
-});
-
-test('Codex worker waits for its old process to exit before adopting a paused switch', async t => {
-  let service;
-  t.after(() => service?.close());
-  const f = await fixture(t);
-  const home = join(f.config.directory, 'service');
-  mkdirSync(home);
-  const path = join(home, 'config.json');
-  const config = { ...f.config, token: 'x'.repeat(32), project: undefined, data_directory: join(home, 'runtime'),
-    participants: { Codex: { adapter: 'codex_cli', executable: process.execPath, session_id: 'original-session' } } };
-  writeFileSync(path, JSON.stringify(config));
-  register_room(home, path);
-  const child = { kill() {} }, children = new Set([child]);
-  service = new DiscussionService(home, (current, store) => {
-    store.context(current);
-    return { children, stop_children() {}, tick: async () => f.room.session?.status === 'paused' ? 'waiting' : undefined };
-  });
-  await service.tick();
-  config.participants.Codex.adapter = 'codex';
-  writeFileSync(path, JSON.stringify(config));
-  await service.tick();
-  const worker = service.workers.get(path);
-  assert.equal(worker.config.participants.Codex.adapter, 'codex_cli', 'running rooms cannot adopt a switch');
-  f.room.session = { id: 1, status: 'paused' };
-  await service.tick();
-  assert.match(worker.state.error, /等待原 CLI 进程退出/);
-  assert.equal(worker.config.participants.Codex.adapter, 'codex_cli');
-  children.clear();
-  await service.tick();
-  assert.equal(worker.config.participants.Codex.adapter, 'codex');
-  assert.equal(worker.state.status, 'paused');
 });
 
 test('the same site and room cannot be registered twice', t => {
@@ -2832,7 +2724,7 @@ for (const outcome of ['accepted', 'cancelled', 'expired']) test(`free Sidecar d
   const runner = new FreeRoomRunner(config, store);
   await runner.tick();
   const request = JSON.parse(readFileSync(join(config.directory, 'free-1.request.json'), 'utf8'));
-  assert.equal(request.mode, 'free'); assert.equal(request.event_id, 1);
+  assert.equal(request.event_id, 1);
   if (outcome === 'cancelled') state.executions[0].status = 'cancelled';
   if (outcome === 'expired') state.executions[0].lease_until = 1;
   let invoked = 0;

@@ -36,7 +36,6 @@ function message_markdown(message, details, summary, attachments) {
   const lines = [`<a id="message-${message.id}"></a>`, `### #${message.id} · ${message.author}`,
     `时间：${message.created_at}；来源：${message.source}；职责：${details?.kind || "opinion"}；代发/提交者：${submitted_by}`];
   if (message.reply_to) lines.push(`回复：[#${message.reply_to}](#message-${message.reply_to})`);
-  if (details?.turn_id) lines.push(`对应安排：[#${details.turn_id}](#turn-${details.turn_id})`);
   if (summary?.text) lines.push(`简述（作者：${summary.author}）：`, original_block(summary.text));
   lines.push("原文：", original_block(message.text));
   for (const file of attachments) {
@@ -53,9 +52,8 @@ export function room_markdown(snapshot) {
   const room = tables.rooms[0];
   const settings = tables.topic_settings[0];
   const request = tables.room_user_requests?.[0];
-  const legacy = !request && settings?.background.match(/^用户原文[：:][ \t]*(?:\r?\n)?([\s\S]*?)(?:\r?\n){2,}((?:项目背景与入口|背景)[：:][\s\S]*)$/);
-  const user_request = request?.text ?? (legacy ? legacy[1] : "");
-  const background = legacy ? legacy[2] : settings?.background;
+  const user_request = request?.text ?? "";
+  const background = settings?.background;
   const brief = tables.room_briefs[0];
   const details = new Map(tables.message_details.map((row) => [row.message_id, row]));
   const summaries = new Map(tables.message_summaries.map((row) => [row.message_id, row]));
@@ -66,10 +64,10 @@ export function room_markdown(snapshot) {
   const member_requests = new Map((tables.member_requests || []).map((row) => [row.id, row]));
   const lines = ["# 讨论记录", original_block(room.title),
     `房间：${room.id}；创建：${room.created_at}；导出：${snapshot.exported_at}`,
-    `来源：${snapshot.source_url || "未记录"}`, `消息：${messages.length} 条；发言安排：${tables.discussion_turns.length + session_plans.length} 项`,
+    `来源：${snapshot.source_url || "未记录"}`, `消息：${messages.length} 条；发言安排：${session_plans.length} 项`,
     `目录状态：${tables.room_directory[0]?.archived ? "已存档" : "使用中"}；文件夹：${tables.topic_folders[0]?.name || "未分组"}`,
     "## 目标", original_block(room.goal)];
-  if (settings) lines.push(`主持人：${settings.host}；阶段：${settings.phase}`, "参与配置：", original_block(settings.experts),
+  if (settings) lines.push(`主持人：${settings.host}`, "参与配置：", original_block(settings.experts),
     "## 用户原文", original_block(user_request), "## 背景", original_block(background), "## 讨论边界", original_block(settings.boundaries),
     "## 当前焦点", original_block(settings.focus));
   if (brief) lines.push("## 主持简报", `覆盖至 #${brief.until}；更新：${brief.updated_at}`, original_block(brief.text));
@@ -80,12 +78,6 @@ export function room_markdown(snapshot) {
     (tables.attachments || []).filter(file => file.message_id === message.id)));
   if (!messages.length) lines.push("暂无消息。");
   lines.push("## 全部发言安排");
-  for (const turn of tables.discussion_turns) {
-    lines.push(`<a id="turn-${turn.id}"></a>`, `### 安排 #${turn.id} · ${turn.expert}`,
-      `状态：${turn.status}；创建：${turn.created_at}；通知：${turn.notified_at || "未记录"}`,
-      original_block(turn.question));
-    if (turn.answer_id) lines.push(`回答：[#${turn.answer_id}](#message-${turn.answer_id})`);
-  }
   for (const request of session_plans) {
     const member_request = member_requests.get(request.member_request_id);
     const answer_id = member_request?.answer_id;
@@ -96,7 +88,7 @@ export function room_markdown(snapshot) {
       original_block(request.question));
     if (answer_id) lines.push(`回答：[#${answer_id}](#message-${answer_id})`);
   }
-  if (!tables.discussion_turns.length && !session_plans.length) lines.push("暂无发言安排。");
+  if (!session_plans.length) lines.push("暂无发言安排。");
   return lines.join("\n\n") + "\n";
 }
 

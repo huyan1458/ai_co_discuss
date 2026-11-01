@@ -6,6 +6,8 @@ backend/**
 !backend/server.py
 !backend/runtime.py
 !backend/schema.sql
+!backend/migrations/
+!backend/migrations/*.sql
 !LICENSE
 !docs/
 docs/**

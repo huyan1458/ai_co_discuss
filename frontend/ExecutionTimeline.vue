@@ -171,7 +171,7 @@ watch(room_id, () => { chosen_run.value = LATEST; });
 const when = (ms) => new Date(ms).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 const RUN_TASK_CHARS = 22;
 function run_label(run) {
-  const task = run.task ? `${run.task.replace(/\s+/g, " ").slice(0, RUN_TASK_CHARS)}${run.task.length > RUN_TASK_CHARS ? "…" : ""}` : run.source === "discussion" ? "讨论" : "执行";
+  const task = run.task ? `${run.task.replace(/\s+/g, " ").slice(0, RUN_TASK_CHARS)}${run.task.length > RUN_TASK_CHARS ? "…" : ""}` : "执行";
   return `${when(run.start)} · ${task} · ${run.count} 次${run.running ? " · 进行中" : run.failed ? " · 有失败" : ""}`;
 }
 const run_items = computed(() => [{ label: "最近一轮（自动跟随）", value: LATEST },
@@ -335,11 +335,11 @@ function place(start, end, gap = false) {
 
 function role_label(row) {
   const host = row.item.role === "host";
-  return row.item.source === "discussion" ? (host ? "讨论 · 主持" : "讨论 · 专家") : (host ? "协作 · 主持" : "协作");
+  return host ? "协作 · 主持" : "协作";
 }
 /** The marks after a name: only what tells rows apart. Every free row would say "协作", so it says nothing. */
 function role_marks(row) {
-  return [...(row.item.source === "discussion" ? ["讨论"] : []), ...(row.item.role === "host" ? ["主持"] : [])];
+  return row.item.role === "host" ? ["主持"] : [];
 }
 const status = (row) => row_status(row, view_time.value);
 

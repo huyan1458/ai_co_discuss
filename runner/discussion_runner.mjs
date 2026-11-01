@@ -52,7 +52,7 @@ export function validate_config(input, base_directory) {
   if (!/^[A-Za-z0-9_-]+$/.test(config.room ?? '') || typeof config.token !== 'string' || config.token.length < 32) throw new Error('缺少房间及本房间凭据');
   if (!config.project || !existsSync(join(config.project, 'runner', 'discuss.py'))) throw new Error('cli_project 必须指向 AI CoDiscuss 项目；省略时默认使用本仓库');
   // A free room of manual members runs here only for smart scheduling or a preset project directory, which need no local software.
-  if (!config.participants || (!Object.keys(config.participants).length && !(config.mode === 'free' && (config.scheduler || config.cwd)))) throw new Error('请配置本机参与软件');
+  if (!config.participants || (!Object.keys(config.participants).length && !(config.scheduler || config.cwd))) throw new Error('请配置本机参与软件');
   for (const participant of Object.values(config.participants)) {
     if (adapter_profile(participant.adapter)?.kind === 'api') {
       read_api_key(config.api_home, participant);
@@ -71,13 +71,14 @@ export function validate_config(input, base_directory) {
     if (participant.cwd && !statSync(participant.cwd).isDirectory()) throw new Error('cwd 必须是已有本机目录');
     validate_participant(participant);
   }
-  if (![undefined, 'free', 'brainstorm'].includes(config.mode)) throw new Error('房间模式只能为 free 或 brainstorm');
-  if (config.mode === 'free' && Object.keys(config.participants).some(name => typeof config.members?.[name]?.token !== 'string' || config.members[name].token.length < 32)) {
-    throw new Error('自由房间须为每位成员保存成员凭证');
+  // Every room is a free-collaboration room; a configuration without member credentials predates it and is not run.
+  if (![undefined, 'free'].includes(config.mode)) throw new Error('房间模式只能为 free');
+  if (Object.keys(config.participants).some(name => typeof config.members?.[name]?.token !== 'string' || config.members[name].token.length < 32)) {
+    throw new Error('房间配置须为每位成员保存成员凭证；旧版配置请重新接入房间');
   }
   // Smart scheduling is optional; without it every decision stays with the host.
   if (config.scheduler) config.scheduler = validate_scheduler(config.api_home, config.scheduler);
-  return { ...config, site: url.origin, project: resolve(config.project), directory: resolve(config.data_directory || join(base_directory, `discussion-${config.room}`)) };
+  return { ...config, mode: 'free', site: url.origin, project: resolve(config.project), directory: resolve(config.data_directory || join(base_directory, `discussion-${config.room}`)) };
 }
 
 /** Send exactly one bounded website request; never follow redirects with a capability. */
@@ -92,7 +93,7 @@ export async function api(config, tail, body, token = config.token) {
   return result;
 }
 
-/** Persistent software bindings and room metadata; old event inbox rows are left unread. */
+/** Persistent software bindings and room metadata. */
 export class DiscussionStore {
   constructor(directory) {
     mkdirSync(directory, { recursive: true });
@@ -101,11 +102,11 @@ export class DiscussionStore {
       CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS bindings(participant TEXT PRIMARY KEY,session_id TEXT NOT NULL);`);
   }
-  /** Keep local bindings in their original room, accepting its old event-run scope. */
+  /** Keep local bindings in their original room. */
   scope(config) {
     const scope = `${config.site}/${config.room}`;
     const previous = this.db.prepare("SELECT value FROM metadata WHERE key='scope'").get()?.value;
-    if (previous && previous !== scope && !previous.startsWith(`${scope}/`)) throw new Error('数据目录已绑定另一站点或房间；请选择独立目录');
+    if (previous && previous !== scope) throw new Error('数据目录已绑定另一站点或房间；请选择独立目录');
     this.db.prepare("INSERT INTO metadata VALUES ('scope',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(scope);
   }
   /** Do not silently reuse a conversation after its software project or cwd changes. */

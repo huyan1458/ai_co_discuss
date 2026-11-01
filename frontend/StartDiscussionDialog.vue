@@ -3,20 +3,21 @@
 import { inject, ref, watch } from "vue";
 import DiscussionLimits from "./DiscussionLimits.vue";
 
-const DEFAULT_ROUNDS = 3;
+// A room saved without a round limit still opens with this many rounds; the user may clear it.
+const FALLBACK_ROUNDS = 3;
 const open = defineModel("open", { type: Boolean, default: false });
 const { view, act, pending } = inject("discussion");
 const goal = ref("");
-const rounds = ref(DEFAULT_ROUNDS);
+const rounds = ref(FALLBACK_ROUNDS);
 const minutes = ref(0);
 const named_followup = ref(false);
 const limits = ref(null);
-// Every opening starts from the defaults rather than the previous discussion.
+// The idle room exposes saved defaults; ended discussions keep their own historical limits.
 watch(open, (opened) => {
   if (!opened) return;
   goal.value = "";
-  rounds.value = DEFAULT_ROUNDS;
-  minutes.value = 0;
+  rounds.value = view.value.room?.limits?.max_rounds || FALLBACK_ROUNDS;
+  minutes.value = view.value.room?.limits?.max_minutes ?? 0;
   named_followup.value = false;
 });
 

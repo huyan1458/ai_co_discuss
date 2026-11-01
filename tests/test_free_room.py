@@ -646,7 +646,6 @@ class FreeRoomTests(unittest.TestCase):
         self.assertEqual(status, 200, body)
         item = body["executions"][0]
         self.assertEqual((item["source"], item["member"], item["state"]), ("free", "Claude", "done"))
-        self.assertIsNone(item["run_id"])
         span = (item["finished_at"] - item["dispatched_at"] + 1) * 1000
         self.assertEqual([(s["phase"], s["tool"], s["start_ms"]) for s in item["segments"]], [("thinking", "", 0), ("command", "Bash", 400), ("writing", "", 900)])
         self.assertTrue(900 < item["segments"][1]["end_ms"] <= span, "a later end is kept but never past the execution")
@@ -1192,24 +1191,17 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(result[0], 200, result[1])
         self.assertEqual(result[1]["total"], 0)
 
-    def test_text_turn_history_survives_end_and_legacy_view_is_explicit(self):
-        """The read-only turns page stays on the latest session after end unless legacy=1 is requested."""
+    def test_text_turn_history_survives_end(self):
+        """The read-only turns page keeps showing the latest session's arrangements after it ends."""
         self.start_session()
         status, plan = self.arrange_session([{"expert": "Claude", "question": "新会话安排"}])
         self.assertEqual(status, 201, plan)
         turn_id = plan["turn"]["id"]
-        with closing(sqlite3.connect(self.database)) as connection:
-            connection.execute("""INSERT INTO discussion_turns(id,room_id,expert,question,status,submission_id,created_at)
-                VALUES(?,?,?,'旧历史安排','pending',?,?)""",
-                (turn_id, self.room["id"], "Claude", f"legacy-{turn_id}", "2026-10-29T00:00:00Z"))
-            connection.commit()
         view = self.request(f"{self.path}/discussion")[1]
         self.assertEqual(self.request(f"{self.path}/discussion", {"action": "end", "revision": view["revision"]}, self.owner)[0], 200)
         current = self.read_text(f"/r/{self.room['id']}/turns/{turn_id}")
         self.assertIn("新会话安排", current)
-        self.assertNotIn("旧历史安排", current)
-        legacy = self.read_text(f"/r/{self.room['id']}/turns/{turn_id}?legacy=1")
-        self.assertIn("旧历史安排", legacy)
+        self.assertIn("新会话安排", self.read_text(f"/r/{self.room['id']}/turns"))
 
     def test_discussion_task_messages_are_hidden_from_ordinary_reads_and_counts(self):
         """Internal task anchors stay out of room messages, search, incremental reads and public message counts."""
@@ -1822,7 +1814,7 @@ class HostTests(FreeRoomTests):
 
 
 class OnlineAndLinkTests(FreeRoomTests):
-    """Online members are forwarded by the owner; brainstorm rooms remember the free room they came from."""
+    """Online members are forwarded by the owner."""
 
     def test_web_member_is_read_only_and_the_owner_forwards_its_answer(self):
         """Legacy online input becomes a web-sourced manual member; only the owner can forward its answer."""
@@ -1912,17 +1904,6 @@ class OnlineAndLinkTests(FreeRoomTests):
         self.assertEqual(completed, {discuss_request["id"]: "completed", ask_request["id"]: "pending"})
         self.assertEqual(self.request(f"{self.path}/turns/{plan['turn']['id']}")[1]["status"], "answered")
 
-    def test_room_creation_rejects_linked_brainstorm_children(self):
-        """A discussion stays in its room; creating a linked child room is no longer supported."""
-        with closing(sqlite3.connect(self.database)) as connection:
-            room_count = connection.execute("SELECT COUNT(*) FROM rooms").fetchone()[0]
-        status, result = self.request("/api/rooms", {"title": "方案头脑风暴", "goal": "x",
-            "experts": {}, "parent_room_id": self.room["id"]}, uuid.uuid4().hex)
-        self.assertEqual(status, 400, result)
-        with closing(sqlite3.connect(self.database)) as connection:
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM rooms").fetchone()[0], room_count)
-        self.assertEqual(self.request(self.path)[1]["linked_rooms"], [])
-
 
 class InstanceTests(FreeRoomTests):
     """Two instances of one platform are separate members with their own credentials and requests."""
@@ -1945,7 +1926,7 @@ class InstanceTests(FreeRoomTests):
         self.assertEqual((status, saved["message"]["author"]), (201, "Claude-评审"))
 
     def test_discussion_rooms_accept_instances_as_experts_and_host(self):
-        """A brainstorm room may hold two Claude instances, one of them hosting."""
+        """A room may hold two Claude instances, one of them hosting."""
         status, room = self.request("/api/rooms", {"title": "双 Claude", "goal": "x", "host": "Claude-主持",
             "experts": {"Claude-主持": "cli", "Claude": "cli", "Codex": "online"},
             "members": [{"name": name, "token": uuid.uuid4().hex, "access": "online" if name == "Codex" else "manual"}
@@ -1960,23 +1941,7 @@ class InstanceTests(FreeRoomTests):
 
 
 class MigrationTests(unittest.TestCase):
-    """The retired floor trigger is dropped on existing databases, and legacy rooms stay brainstorm rooms."""
-
-    def test_existing_floor_trigger_is_dropped_and_rerun_is_harmless(self):
-        """An old trigger definition disappears; repeating initialization changes nothing."""
-        with tempfile.TemporaryDirectory() as directory:
-            database = Path(directory) / "old.db"
-            init_database(database, seed=True)
-            with closing(sqlite3.connect(database)) as connection, connection:
-                connection.execute("""CREATE TRIGGER require_message_floor BEFORE INSERT ON messages
-                    WHEN NEW.author<>'用户' AND NOT EXISTS (SELECT 1 FROM room_floor WHERE room_id=NEW.room_id AND holder=NEW.author)
-                    BEGIN SELECT RAISE(ABORT, 'floor_required'); END""")
-            init_database(database)
-            init_database(database)
-            with closing(sqlite3.connect(database)) as connection, connection:
-                self.assertIsNone(connection.execute("SELECT sql FROM sqlite_master WHERE name='require_message_floor'").fetchone())
-                self.assertEqual(connection.execute("SELECT COUNT(*) FROM room_modes").fetchone()[0], 0)
-                connection.execute("INSERT INTO messages (room_id,author,text,source,submission_id,created_at) VALUES ('welcome','Codex','x','cli','late-0001','now')")
+    """Databases from earlier builds are upgraded in place."""
 
     def test_early_free_tables_gain_later_columns(self):
         """A database created before the member columns existed is upgraded in place."""

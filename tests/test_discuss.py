@@ -105,6 +105,13 @@ class CliTests(unittest.TestCase):
                         "--execution-minutes", "10")
         self.assertEqual(room["limits"]["max_rounds"], 3)
         self.assertEqual(self.cli("room", "limits", room["id"])["max_minutes"], 60)
+        self.create_discussion_room()
+        preview = self.cli("room", "limits", self.room, "--check", "--as", "Codex", "--dry-run")
+        self.assertEqual(preview["body"]["action"], "check")
+        checked = self.cli("room", "limits", self.room, "--check", "--as", "Codex")
+        self.assertEqual(checked["id"], self.room)
+        self.assertIn("phase", checked)
+        self.assertIn("limits", checked)
 
     def test_attachment_upload_recovery_files_only_message_and_verified_download(self):
         """Round-trip binary files with receipt recovery and no local overwrite."""
@@ -347,7 +354,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(sorted(roster["waiting"]), ["Claude", "DeepSeek", "Gemini", "Grok", "Qwen"])
         created = self.cli("turn", "create", self.room, "--plan-file", "-", "--as", "Codex", "--roster", roster["revision"],
                            "--submission-id", str(uuid.uuid4()), stdin=plan)
-        current = self.cli("turn", "current", self.room)
+        current = self.cli("room", "view", self.room)
         self.assertEqual((current["current_turn"]["expert"], [item["expert"] for item in current["queued_turns"]]), ("Codex", ["Gemini", "Claude", "DeepSeek", "Qwen", "Grok"]))
         # The owner reads the speaking order, then moves Grok to the front of the queue against that revision.
         order = self.cli("turn", "order", self.room)
@@ -355,12 +362,12 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self.rejected(["turn", "reorder", self.room, "--revision", "stale", *[part for name in order["movable"] for part in ("--member", name)]], 1)["http_status"], 409)
         moved = ["Grok", "Gemini", "Claude", "DeepSeek", "Qwen"]
         self.cli("turn", "reorder", self.room, "--revision", order["revision"], *[part for name in moved for part in ("--member", name)])
-        self.assertEqual([item["expert"] for item in self.cli("turn", "current", self.room)["queued_turns"]], moved)
+        self.assertEqual([item["expert"] for item in self.cli("room", "view", self.room)["queued_turns"]], moved)
         self.assertEqual(self.rejected(["turn", "continue", self.room, "--as", "Codex", "--roster", "stale"], 1)["http_status"], 409)
         execution = self.reserve_execution(created["turn"])
         self.cli("message", "post", self.room, "--body", "回答", "--as", "Codex", "--execution", execution,
                  "--summary", "摘要", "--submission-id", str(uuid.uuid4()))
-        current = self.cli("turn", "current", self.room)
+        current = self.cli("room", "view", self.room)
         self.assertEqual((current["current_turn"]["expert"], [item["expert"] for item in current["queued_turns"]]),
                          ("Grok", ["Gemini", "Claude", "DeepSeek", "Qwen"]))
         self.rejected(["turn", "create", self.room, "--plan-file", "-", "--expert", "Codex", "--as", "Codex",
@@ -421,7 +428,7 @@ class CliTests(unittest.TestCase):
                 "--submission-id", "recover-turn", "--as", "Codex", "--roster", roster["revision"]]
         turn = self.cli(*args)["turn"]
         self.assertEqual(self.cli("state", "view", self.room)["state_text"], pending)
-        self.assertEqual(self.cli("turn", "current", self.room)["current_turn"]["id"], turn["id"])
+        self.assertEqual(self.cli("room", "view", self.room)["current_turn"]["id"], turn["id"])
         self.assertTrue(self.cli(*args)["duplicate"])
         self.assertEqual(len(self.cli("turn", "list", self.room)["turns"]), 1)
         original = "只建议试用，不代表上线验收。\n条件：小范围验证；反例：已有合规问答工具。[6]\n\n主持人从原回答提取的引用：\n[6] https://example.org/source#conditions\n未核验的 43% 仅为候选条件。"
@@ -481,7 +488,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("1000", rejected["message"])
 
     def test_turn_replay_cancel_and_conclude_guard(self):
-        """Creating a plan is idempotent, cancellation is explicit, and the old phase write is rejected."""
+        """Creating a plan is idempotent and cancellation is explicit."""
         self.create_discussion_room()
         roster = self.cli("turn", "roster", self.room)
         args = ["turn", "create", self.room, "--expert", "Codex", "--question", "一次任务",
@@ -490,7 +497,6 @@ class CliTests(unittest.TestCase):
         self.assertTrue(self.cli(*args)["duplicate"])
         saved = self.cli("turn", "list", self.room, "--submission-id", "retry-turn-001")["turns"][0]
         self.assertEqual({key: saved[key] for key in turn}, turn)
-        self.rejected(["room", "update", self.room, "--phase", "concluded", "--as", "Codex"], 1)
         self.cli("turn", "cancel", self.room, turn["id"], "--as", "用户")
         self.assertEqual(self.cli("turn", "list", self.room)["turns"][0]["status"], "cancelled")
         state = self.cli("run", "view", self.room)

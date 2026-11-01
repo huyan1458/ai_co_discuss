@@ -99,7 +99,26 @@ npm run deploy -- --cwd .wrangler/deploy
 codiscuss token
 ```
 
-`codiscuss token` prints a one-time token for registering the administrator (requires `wrangler login`); enter it when registering from the bottom-left corner. Registering from a page connected with `codiscuss local connect` also saves the account to `~/.codiscuss/admin-accounts.json`. Other devices then simply log in with the username and password. `schema.sql` is safe to re-run; back up D1 (`npx wrangler d1 export`) before upgrading an existing site.
+`codiscuss token` prints a one-time token for registering the administrator (requires `wrangler login`); enter it when registering from the bottom-left corner. Registering from a page connected with `codiscuss local connect` also saves the account to `~/.codiscuss/admin-accounts.json`. Other devices then simply log in with the username and password. The schema command above initializes an empty database; use the upgrade process below for existing sites.
+
+### Upgrading an Existing Database
+
+When the schema changes, upgrade remote D1 in this order: **export a backup → remove retired discussion tables → apply schema**, then deploy. Stop writes, preserve attachments and verify on a database copy first. Dropping tables requires the user's explicit confirmation. Applying only schema can leave foreign keys that prevent room deletion.
+
+```sh
+npx wrangler d1 export DB --remote --config .wrangler/deploy/wrangler.jsonc --output backup-before-upgrade.sql
+```
+
+After verifying the backup and obtaining approval to drop the retired tables:
+
+```sh
+npx wrangler d1 execute DB --remote --config .wrangler/deploy/wrangler.jsonc --file backend/migrations/drop_legacy_discussion.sql
+npx wrangler d1 execute DB --remote --config .wrangler/deploy/wrangler.jsonc --file backend/schema.sql
+```
+
+The script removes retired scheduling and runtime records while retaining messages and current collaboration sessions. Old rooms without an owner credential remain readable but cannot be managed by the owner; existing member credentials retain their permissions. Stop on any failure. Atomicity of the complete migration on D1 has not been verified; keep the backup. Both scripts are safe to repeat after success.
+
+Local Python sites detect the retired tables on startup, migrate in one transaction, then apply schema. Migration failure rolls back and aborts startup. Back up SQLite and attachments before upgrading; no manual migration is needed.
 
 After publishing, check the page, `/api/health`, and:
 
@@ -112,7 +131,7 @@ codiscuss health --site https://YOUR_PROJECT_NAME.pages.dev
 Upgrade the site and every connected runner together; the old delivery-name protocol is incompatible.
 
 1. Pause new requests, end all active local executions, then stop runners and site writes. A website stop alone does not prove the original software has exited.
-2. Back up D1 and attachments and verify the upgrade on a database copy. Reapply `backend/schema.sql` to create `execution_capabilities`, `member_capabilities` and `late_answers`; add any missing columns in existing tables separately for the version being upgraded.
+2. Follow “Upgrading an Existing Database” for backup, approved table removal and schema updates, creating `execution_capabilities`, `member_capabilities` and `late_answers`; add any missing columns in existing tables separately for the version being upgraded.
 3. Update the site and runners, verify room reads, capability reports, stops and held deliveries, then resume requests.
 
 The unused `execution_deliveries` table is retained without migration. It was never deployed online and contains only temporary test data. Retaining it does not provide mixed-version compatibility. Local Python sites also require executions to end before updating the site and runner together.
