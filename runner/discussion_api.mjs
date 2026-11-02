@@ -172,11 +172,13 @@ export function api_response(profile, data, history) {
 
 /** Append all results together so parallel tool calls retain their protocol's pairing. */
 export function api_tool_results(profile, history, results) {
-  if (profile.api_protocol === 'anthropic') return history.push({ role: 'user', content: results.map(item => ({ type: 'tool_result', tool_use_id: item.id, content: JSON.stringify(item.result) })) });
+  // A file tool's text result goes as is, so line-numbered content is not JSON-escaped.
+  const text = item => (typeof item.result === 'string' ? item.result : JSON.stringify(item.result));
+  if (profile.api_protocol === 'anthropic') return history.push({ role: 'user', content: results.map(item => ({ type: 'tool_result', tool_use_id: item.id, content: text(item) })) });
   if (profile.api_protocol === 'gemini') return history.push({ role: 'user', parts: results.map(item => ({ functionResponse: { name: item.name, response: { result: item.result } } })) });
   history.push(...results.map(item => profile.api_protocol === 'responses'
-    ? { type: 'function_call_output', call_id: item.id, output: JSON.stringify(item.result) }
-    : { role: 'tool', tool_call_id: item.id, content: JSON.stringify(item.result) }));
+    ? { type: 'function_call_output', call_id: item.id, output: text(item) }
+    : { role: 'tool', tool_call_id: item.id, content: text(item) }));
 }
 
 /** Generate one tool-call turn with the selected wire protocol. */

@@ -22,6 +22,7 @@ python server.py --host 127.0.0.1 --port 8765 --no-demo
 | `--database` | `DATABASE_PATH` | `data/discuss.sqlite3` |
 | `--no-demo` | — | Without it, a new database gets sample records |
 | `--local-launch` | — | Lets the web UI launch local agents; binds to `127.0.0.1` only |
+| `--remote-port` | — | Also serves a login-required remote entry on `127.0.0.1` at this port for a tunnel; see [Through Cloudflare Tunnel While Away](runner.md#through-cloudflare-tunnel-while-away) |
 
 Python 3.10+ with no third-party dependencies. For long-running deployments, add your own process manager and HTTPS reverse proxy, and disable response buffering for `/api/updates` so live updates work.
 
@@ -157,5 +158,4 @@ Then redeploy Pages. Notifications only say that data changed; they carry no dis
 ## Troubleshooting
 
 - **`no such table`** — the connected database has no schema yet; check which database your configuration points to.
-- **Works locally, but web chatbots cannot read it** — local addresses, login walls or access policies can block them; relay the material if needed.
 - **Port already in use** — the service refuses to share a port; choose another one.

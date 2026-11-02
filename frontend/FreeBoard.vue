@@ -11,7 +11,7 @@ import { busy, member_actions } from "./member-actions.js";
 const { view, bridge, act, pending } = inject("discussion");
 const LIVE = ["dispatched", "started"];
 const EXECUTION_STATUS_TEXT = { dispatched: "唤醒中", started: "执行中", completed: "完成", failed: "失败" };
-const ACCESS_LABELS = { runner: "本机唤醒", manual: "手动接入", online: "网页代发" };
+const ACCESS_LABELS = { runner: "本机唤醒", manual: "手动接入" };
 const TASK_PREVIEW_LENGTH = 90;
 const room = computed(() => view.value.room);
 const free = computed(() => room.value.free || {});
@@ -40,7 +40,7 @@ function announce_conflicts(room_id, conflicts = []) {
 watch(() => [room.value.id, free.value.conflicts], ([room_id, conflicts]) => announce_conflicts(room_id, conflicts), { immediate: true });
 
 /** Status dot colour, matching the discussion progress board. */
-const unregistered = (member) => member.access === "manual" && member.manual_source !== "web" && member.status === "active" && !member.registered_at;
+const unregistered = (member) => member.access === "manual" && member.status === "active" && !member.registered_at;
 function member_tone(member) {
   if (member.status === "away") return "neutral";
   if (unregistered(member)) return "warning";
@@ -61,7 +61,7 @@ function member_status(member, state) {
   if (member.pending) return `待投递 ${member.pending} 条`;
   if (state === "queued") return discussion.value ? "本轮排队" : "等待依次发言";
   if (execution?.status === "failed") return "执行失败";
-  return !execution && member.access === "manual" && member.manual_source !== "web" ? "已注册" : "空闲";
+  return !execution && member.access === "manual" ? "已注册" : "空闲";
 }
 
 /**
@@ -69,7 +69,7 @@ function member_status(member, state) {
  * API, manual and web members also say how they take part. The crown already marks the host.
  */
 function member_tag(member) {
-  if (member.access !== "runner") return member.manual_source === "web" ? "网页代发" : ACCESS_LABELS[member.access];
+  if (member.access !== "runner") return ACCESS_LABELS[member.access];
   return [member.adapter === "api" ? "API" : "", member_model(member)].filter(Boolean).join(" · ");
 }
 
@@ -109,7 +109,7 @@ const status = computed(() => {
   if (halted) return { tone: "warning", title: "任务链已停", detail: "派出的成员都失败了；发新消息即重新开始" };
   if (!(free.value.members || []).length) return { tone: "neutral", title: "暂无成员", detail: "在下方邀请 AI 加入" };
   return { tone: "success", title: "空闲", detail: host.value
-    ? `消息默认交给 ${bridge.display_name(host.value.name)}；@ 其他成员让它们发言` : "只有网页 AI：消息只作留言，需要你代发回答" };
+    ? `消息默认交给 ${bridge.display_name(host.value.name)}；@ 其他成员让它们发言` : "没有主持人：消息只作留言" };
 });
 
 /** Requests on messages the user has not retracted or rewound; the rest no longer count as work. */

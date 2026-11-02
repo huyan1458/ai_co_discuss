@@ -205,8 +205,6 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .channel-answer .markdown-body pre { border: 0; border-radius: 6px; padding: 12px 14px; background: #27292e; }
 .channel-answer .markdown-body :is(th, td) { border-inline: 0; border-color: #ffffff0e; padding: .45em .8em; }
 .channel-answer .markdown-body th { background: #ffffff03; }
-.channel-answer-editor { padding: 10px 12px; display: grid; gap: 7px; }
-.channel-answer-editor > :last-child { justify-self: start; }
 .channel-header { display: flex; align-items: center; gap: 10px; padding: 0 20px; height: 56px; flex-shrink: 0; border-bottom: 1px solid var(--channel-topbar-divider); }
 .channel-title-icon { display: grid; place-items: center; color: #89909c; font-size: 24px; flex-shrink: 0; }
 .channel-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -503,18 +501,11 @@ html[data-theme^="channel"] .channel-composer:is(:focus, :focus-within, :has(:fo
 .channel-composer .channel-editor-mirror .channel-mention { padding: 0; background: none; }
 .channel-composer.has-mentions textarea.channel-editor { position: relative; z-index: 1; color: transparent !important; caret-color: var(--ui-text-highlighted); scrollbar-gutter: stable; }
 .channel-composer-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start !important; padding: 4px 10px 10px !important; gap: 4px !important; }
-.channel-composer-identity { display: flex; flex: 0 1 auto; align-items: center; gap: 2px; min-width: 0; }
-.channel-composer-footer > .channel-round-button, .channel-author-select { flex-shrink: 0; }
+.channel-composer-footer > .channel-round-button { flex-shrink: 0; }
 .channel-composer-footer > .channel-round-button { margin-left: auto; }
 /* Footer controls are quiet ghost chips; only hover and the open menu give them a surface. */
-.channel-composer-identity > button { width: auto; min-width: 0; height: 30px; border: 0; border-radius: 8px; color: var(--ui-text-toned); font-size: 12px; box-shadow: none; transition: background .12s, color .12s; }
-.channel-composer-identity > button:hover, .channel-composer-identity > button[data-state="open"] { background: var(--channel-ghost-hover); color: var(--ui-text-highlighted); }
 .channel-composer-footer > button[aria-label="添加附件"] { width: 30px; height: 30px; justify-content: center; border-radius: 8px; color: var(--ui-text-muted); }
 .channel-composer-footer > button[aria-label="添加附件"]:hover:not(:disabled) { background: var(--channel-ghost-hover); color: var(--ui-text-highlighted); }
-.channel-composer-identity > button:disabled { opacity: .55; }
-.channel-composer-identity > button [data-slot="leadingIcon"] { width: 14px; height: 14px; color: var(--ui-text-muted); }
-.channel-composer-identity .channel-avatar { width: 20px; height: 20px; font-size: 8px; }
-.channel-composer-identity [data-slot="trailingIcon"] { width: 12px; height: 12px; color: #9ba5b7; }
 html[data-theme^="channel"] .channel-round-button { width: 32px; height: 32px; min-width: 32px; min-height: 32px; padding: 0; justify-content: center; border-radius: 50%; transition: background .12s, transform .1s; }
 html[data-theme^="channel"] .channel-round-button:active:not(:disabled) { transform: scale(.95); }
 .channel-round-button > [class*="icon"] { width: 16px; height: 16px; }
@@ -545,7 +536,6 @@ html[data-theme^="channel"] .channel-round-button:active:not(:disabled) { transf
 .channel-mention-option small { margin-left: auto; color: var(--ui-text-muted); font-size: 11px; }
 .channel-mention-empty { margin: 0; padding: 12px 10px; color: var(--ui-text-muted); font-size: 12px; }
 html[data-theme^="channel"] :is(.channel-menu, .channel-select-menu) { min-width: 196px; border: 1px solid #ffffff19; border-radius: 10px; background: #2c2e35f5; backdrop-filter: blur(24px); box-shadow: inset 0 1px #ffffff08, 0 10px 32px #0006, 0 2px 7px #0005; padding: 4px; }
-html[data-theme^="channel"] .channel-identity-menu { min-width: 248px; max-height: min(370px, var(--reka-combobox-content-available-height, 370px)); }
 html[data-theme^="channel"] :is(.channel-menu, .channel-select-menu) [data-slot="item"] { min-height: 33px; margin: 1px 0; padding: 7px 8px; gap: 9px; border-radius: 6px; font-size: 12px; }
 html[data-theme^="channel"] :is(.channel-menu, .channel-select-menu) [data-slot="item"]::before { border-radius: 6px; }
 html[data-theme^="channel"] :is(.channel-menu, .channel-select-menu) [data-slot="item"][data-highlighted]::before { background: var(--channel-ghost-hover); }
@@ -556,10 +546,6 @@ html[data-theme^="channel"] .channel-menu.project-menu { width: min(400px, calc(
 html[data-theme^="channel"] .project-menu :is([data-slot="itemWrapper"], [data-slot="itemLabel"], [data-slot="itemDescription"]) { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 html[data-theme^="channel"] .project-menu [data-slot="itemDescription"] { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10.5px; }
 html[data-theme^="channel"] .project-menu [data-slot="itemTrailingIcon"] { color: var(--channel-accent); }
-html[data-theme^="channel"] .channel-identity-menu [data-slot="item"] { padding: 8px; }
-html[data-theme^="channel"] .channel-identity-menu [data-slot="itemDescription"] { font-size: 10px; color: #969fae; margin-top: 2px; }
-html[data-theme^="channel"] .channel-identity-menu [data-slot="input"] { border-bottom: 1px solid #ffffff0c; margin: 0 3px 3px; }
-html[data-theme^="channel"] .channel-identity-menu input { font-size: 12px; height: 37px; }
 html[data-theme^="channel"] .channel-topic-menu { width: 224px; max-width: calc(100vw - 24px); padding: 6px; border-radius: 12px; background: #292b30; backdrop-filter: none; border-color: #ffffff14; box-shadow: 0 12px 32px #0005, 0 2px 6px #0003; }
 html[data-theme^="channel"] .channel-topic-menu [data-slot="item"] { min-height: 35px; padding: 8px 10px; gap: 12px; font-size: 13px; color: #d8dbe2; }
 html[data-theme^="channel"] .channel-topic-menu [data-slot="itemLeadingIcon"] { width: 15px; height: 15px; color: #b1b7c2; }
@@ -764,8 +750,6 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-composer-column { padding: 0 8px; }
   .channel-editor { min-height: 36px; padding: 8px 10px 4px !important; }
   .channel-composer-footer { padding: 0 6px 5px !important; gap: 3px !important; }
-  .channel-composer-identity { gap: 1px; }
-  .channel-composer-identity > button { font-size: 11px; }
   .channel-composer-note { display: none; }
   html[data-theme^="channel"] .content-page { padding: 24px 18px; }
 }
@@ -836,7 +820,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   .channel-nav-preview-header > span:last-child, .channel-nav-preview-meta, .channel-message-round,
   .channel-message-provenance, .channel-message-id, .channel-answer-summary > small,
   .channel-answer-summary > small > span, .channel-message-actions button,
-  .channel-empty p, .channel-composer-identity > button, .channel-composer-identity [data-slot="trailingIcon"],
+  .channel-empty p,
   .channel-composer-note, .channel-note-divider, .channel-draft-length,
   .channel-management-target > span,
   .studio-modal [data-slot="description"], .dialog-form label[data-slot="label"],
@@ -846,8 +830,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   .channel-count, .channel-source { color: var(--ui-text-muted) !important; }
   .channel-editor::placeholder, .channel-search-input input::placeholder { color: var(--ui-text-dimmed); }
   .channel-room-row:hover, .channel-person:hover,
-  .channel-message-actions button:hover, .channel-composer-identity > button:hover,
-  .channel-composer-identity > button[data-state="open"] { background: var(--channel-ghost-hover); color: var(--ui-text-highlighted); }
+  .channel-message-actions button:hover { background: var(--channel-ghost-hover); color: var(--ui-text-highlighted); }
   .channel-room-row.active, .channel-folder-row.active { background: var(--channel-ghost-active); color: var(--ui-text-highlighted); box-shadow: none; }
   .channel-link:hover { color: var(--ui-text-highlighted); }
   .channel-link:hover::before { background: #ededed !important; }
@@ -918,17 +901,15 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   .channel-answer .markdown-body :is(th, td) { border-color: var(--ui-border); }
   .channel-answer .markdown-body th { background: #f6f6f6; }
   .channel-composer { background: #fff !important; border-color: #c9c9c9; box-shadow: none !important; }
-  :is(.channel-composer-identity > button, .channel-composer-footer > button[aria-label="添加附件"]):hover:not(:disabled) { background: var(--channel-ghost-hover); }
+  .channel-composer-footer > button[aria-label="添加附件"]:hover:not(:disabled) { background: var(--channel-ghost-hover); }
   .channel-key-hint kbd { border-color: #0000001f; }
   .channel-draft-length .is-near-limit { color: #9a6700; }
   .channel-reply-draft { color: #0969da; background: #f3f7fd; border-color: var(--ui-border-muted); }
   :is(.channel-menu, .channel-select-menu), .channel-topic-menu { background: #ffffff; border-color: var(--ui-border); box-shadow: 0 8px 28px #0000001c, 0 2px 6px #0000000d; }
   :is(.channel-menu, .channel-select-menu) [data-slot="item"][data-highlighted]::before { background: var(--channel-ghost-hover); }
-  :is(.channel-menu, .channel-select-menu) [data-slot="itemLeadingIcon"], .channel-menu [data-slot="label"],
-  .channel-identity-menu [data-slot="itemDescription"] { color: var(--ui-text-muted); }
+  :is(.channel-menu, .channel-select-menu) [data-slot="itemLeadingIcon"], .channel-menu [data-slot="label"] { color: var(--ui-text-muted); }
   .channel-topic-menu [data-slot="item"] { color: var(--ui-text); }
   .channel-topic-menu [data-slot="separator"] { background: var(--ui-border-muted); }
-  .channel-identity-menu [data-slot="input"] { border-color: var(--ui-border-muted); }
   :is(.channel-navigation-drawer, .progress-drawer, .glass-panel) { background: #ffffff !important; border-color: var(--ui-border); box-shadow: 0 20px 64px #00000026; }
   .studio-modal [data-slot="header"] { border-bottom-color: var(--ui-border-muted); }
   .dialog-form :is(input, textarea, button[role="combobox"]), :is(.summary-editor, .summary-brief-editor) textarea { background: #ffffff; box-shadow: 0 0 0 1px #c9c9c9; }

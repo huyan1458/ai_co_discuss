@@ -128,7 +128,8 @@ export function free_task_files(config, member, execution, binding, { session = 
 function member_description(name, profile, work) {
   const project = profile.project_name || (profile.cwd ? basename(profile.cwd) : '');
   const access = !capabilities_of(profile.adapter).project ? '，只能读写房间消息' : profile.project_access === 'own' ? '，权限沿用其会话设置' : !profile.cwd ? '，未指定项目目录'
-    : profile.project_access === 'read' ? `，项目 ${project} 只读` : `，可修改项目 ${project} 的文件并运行命令`;
+    : profile.project_access === 'read' ? `，项目 ${project} 只读`
+      : `，可修改项目 ${project} 的文件${capabilities_of(profile.adapter).file_tools ? '（不能运行命令）' : '并运行命令'}`;
   return `${name}（${adapter_of(profile.adapter)?.label || profile.adapter}${access}${work}）`;
 }
 
@@ -370,7 +371,7 @@ export class FreeRoomRunner {
    * member suits it better and apply a confident pick. The host waits for the answer (or its failure) before starting.
    */
   recommend_unnamed(inbox, room) {
-    // Manual and online members are listed apart; they are never delivered to but may host or be recommended.
+    // Manual members are listed apart; they are never delivered to but may host or be recommended.
     const everyone = [...inbox.members, ...(inbox.observers || [])];
     const host = everyone.find(member => member.role === 'host');
     const waiting = host?.pending.filter(request => request.purpose === 'route' && !request.group_action
@@ -487,7 +488,7 @@ export class FreeRoomRunner {
       const finished = (room.free?.requests || []).filter(item => item.member === member.name && item.status === 'completed' && item.message_id !== message_id).at(-1);
       return { id: member.id, name: member.name, role: member.role, model: profile?.model || '', finished: finished ? `#${finished.message_id}` : '',
         description: profile ? member_description(member.name, profile, `${work}${described}`)
-        : `${member.name}（${member.access === 'online' ? '网页 AI' : '手动接入'}，由用户代为触发${work}${described}）` };
+        : `${member.name}（手动接入，由用户代为触发${work}${described}）` };
     });
   }
   /** Retain a request-bound handoff across retries and service restarts; never inline model probabilities. */
@@ -610,6 +611,7 @@ export class FreeRoomRunner {
         ...(review_request ? { before_model_start: () => this.check_review_delivery(member, review_request) } : {}),
         api_context: { site: this.config.site, room: this.config.room, token: this.config.members[member.name].token,
           home: this.config.api_home, mode: 'free', role: member.role || 'member', execution_id: execution.id,
+          cwd: directory, project_access: adapter.project_access,
           requests: execution.requests, read_after: execution.read_until, session, discussion_request: session_request,
           scheduler_suggestions, review_handoffs },
         on_binding: session => this.store.bind(member.name, session),

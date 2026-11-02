@@ -9,6 +9,66 @@
 -- the room. Existing member credentials keep their permissions.
 PRAGMA defer_foreign_keys = ON;
 
+-- This script runs before schema.sql, so a database older than these tables gets them here; same definitions as schema.sql.
+CREATE TABLE IF NOT EXISTS room_modes (
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+    mode TEXT NOT NULL CHECK(mode='free'),
+    control_hash TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS room_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    adapter TEXT NOT NULL DEFAULT '',
+    role TEXT NOT NULL DEFAULT 'member' CHECK(role IN ('member','host')),
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','away','removed')),
+    token_hash TEXT NOT NULL,
+    read_until INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    access TEXT NOT NULL DEFAULT 'runner',
+    session_mode TEXT NOT NULL DEFAULT 'new'
+);
+CREATE TABLE IF NOT EXISTS member_manual_sources (
+    member_id INTEGER PRIMARY KEY REFERENCES room_members(id) ON DELETE CASCADE,
+    source TEXT NOT NULL CHECK(source='web')
+);
+CREATE TABLE IF NOT EXISTS discussion_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    goal TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'paused' CHECK(status IN ('active','paused','concluded')),
+    started_message_id INTEGER NOT NULL DEFAULT 0,
+    ended_message_id INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS session_state (
+    session_id INTEGER PRIMARY KEY REFERENCES discussion_sessions(id) ON DELETE CASCADE,
+    phase TEXT NOT NULL CHECK(phase IN ('initial','discussing')),
+    revision INTEGER NOT NULL DEFAULT 0,
+    read_until INTEGER NOT NULL DEFAULT 0,
+    held_since INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS attachments (
+    id TEXT PRIMARY KEY, room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    message_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL DEFAULT 0,
+    file_name TEXT NOT NULL, content_type TEXT NOT NULL,
+    size INTEGER NOT NULL, sha256 TEXT NOT NULL,
+    actor TEXT NOT NULL, submission_id TEXT NOT NULL, created_at TEXT NOT NULL,
+    UNIQUE(room_id, submission_id)
+);
+CREATE TABLE IF NOT EXISTS execution_segments (
+    source TEXT NOT NULL CHECK(source='free'),
+    execution_id INTEGER NOT NULL,
+    seq INTEGER NOT NULL,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    phase TEXT NOT NULL,
+    tool TEXT NOT NULL DEFAULT '',
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL,
+    PRIMARY KEY(source,execution_id,seq)
+);
+
 -- Every room is a collaboration room; members given as online are manual members relayed from the web.
 UPDATE room_modes SET mode='free' WHERE mode<>'free';
 INSERT OR IGNORE INTO room_modes (room_id,mode,control_hash) SELECT id,'free','' FROM rooms;

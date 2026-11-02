@@ -11,7 +11,7 @@ import { EXPERT_PROMPT_HEADING, EXPERT_PROMPT_PRESETS, MAX_EXPERT_PROMPT, READ_R
 const props = defineProps({
   name: { type: String, required: true },
   mode: { type: String, default: "" },
-  // Delivery options this card offers: cli (woken by the local service), manual or online; empty when fixed.
+  // Delivery options this card offers: cli (woken by the local service) or manual; empty when fixed.
   choices: { type: Array, default: () => [] },
   status: { type: Object, required: true },
   host: Boolean,
@@ -35,7 +35,7 @@ const entry_items = computed(() => bridge.launch_clients[props.name] || []);
 const offered = computed(() => props.choices.filter((option) => option !== "manual" || entry_items.value.some((item) => item.value !== "api")));
 const automatic = computed(() => props.mode === "cli");
 // Short labels for the front control; the 启动 row spells out what each one means.
-const ACCESS_LABELS = { cli: "程序启动", manual: "手动启动", online: "网页" };
+const ACCESS_LABELS = { cli: "程序启动", manual: "手动启动" };
 const api_mode = computed(() => automatic.value && profile.value.adapter === "api");
 const api_check = ref({ state: "" });
 // A previous check result no longer applies once any checked field changes.
@@ -62,7 +62,7 @@ const manual_note = computed(() => MANUAL_NOTES[bridge.platform_of(props.name)] 
 const resuming = computed(() => Boolean(profile.value.session_id));
 // Software paths and models typed here belong to this browser's computer, so a relayed member keeps the paired computer's settings.
 const can_flip = computed(() => automatic.value && entry_items.value.length > 0 && !(view.value.launch.relay && !view.value.launch.available));
-const card_label = computed(() => props.mode === "online" ? `设置 ${props.name} 的参与方式` : `配置 ${props.name} 的启动方式`);
+const card_label = computed(() => `配置 ${props.name} 的启动方式`);
 const models = computed(() => bridge.launch_model_state(props.name, view.value.launch));
 const configurable = computed(() => Boolean(automatic.value && models.value.supported));
 const configuration_note = computed(() => configurable.value && connection.value.length ? "补齐上方连接后，可在这里选择模型与思考强度。"
@@ -79,17 +79,15 @@ const effort_label = computed(() => profile.value.effort ? EFFORT_LABELS[profile
   : default_effort.value ? EFFORT_LABELS[default_effort.value] || default_effort.value
   : "默认");
 // The front lists the read-only configuration; strength appears only where this page sets it.
-// Room speech and project files are separate: only woken CLIs get a project choice from this page,
-// Apps and manual sessions keep their own settings, and API or web members never see project files.
+// Room speech and project files are separate: only woken CLIs and API members get a project choice from this page,
+// Apps and manual sessions keep their own settings.
 const sets_access = computed(() => automatic.value && bridge.launch_can_set_access(props.name, view.value.launch));
-const no_files = computed(() => props.mode === "online" || automatic.value && profile.value.adapter === "api");
 const local_connection = computed(() => automatic.value && profile.value.adapter !== "api");
 const access = computed(() => profile.value.project_access || view.value.launch.workspace?.project_access || "read");
 // Who starts the member and whether it can host: the two things the delivery choice changes and a user must see before inviting.
-const launch_fact = computed(() => props.mode === "online" ? "你转发回答 · 网页聊天"
-  : props.mode === "manual" ? "你来启动 · 自主发言"
+const launch_fact = computed(() => props.mode === "manual" ? "你来启动 · 自主发言"
   : `程序启动 · ${resuming.value ? "续接会话" : profile.value.adapter === "api" ? "调用 API" : "新会话"}`);
-const host_fact = computed(() => props.mode === "online" ? "不可（网页只读）" : "不可（须本机唤醒）");
+const host_fact = computed(() => "不可（须本机唤醒）");
 // The front states only what is decided or an exception; placeholders such as "set in the original software" stay off it.
 const facts = computed(() => [
   ...automatic.value ? [{ label: "状态", value: props.status.text, tone: props.status.tone }] : [],
@@ -97,7 +95,7 @@ const facts = computed(() => [
   ...automatic.value ? [{ label: "软件", value: entry_label.value }] : [],
   ...configurable.value ? [{ label: "模型", value: profile.value.model || models.value.defaults?.model || "软件默认模型" }] : [],
   ...configurable.value && profile.value.adapter !== "api" ? [{ label: "强度", value: effort_label.value }] : [],
-  ...sets_access.value ? [{ label: "项目", value: access_label(access.value) }] : no_files.value ? [{ label: "项目", value: "不访问" }] : [],
+  ...sets_access.value ? [{ label: "项目", value: access_label(access.value) }] : [],
   // The crown already offers hosting and the badge names the host, so only the refusal needs a row.
   ...props.hosting && !props.host && !props.hostable ? [{ label: "主持", value: host_fact.value }] : [],
 ]);
@@ -374,7 +372,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
           <p v-else class="expert-card-note">{{ models.effort_note }}</p>
           <button type="button" class="expert-card-defaults" title="留空使用 CLI 默认值" :aria-label="`恢复 ${name} 的默认模型与强度`" :disabled="!profile.model && !profile.effort" @click="reset_model">恢复默认</button>
         </template>
-        <p v-else class="expert-card-note"><UIcon :name="mode === 'online' ? 'i-lucide-globe' : 'i-lucide-monitor'" />{{ configuration_note }}</p>
+        <p v-else class="expert-card-note"><UIcon name="i-lucide-monitor" />{{ configuration_note }}</p>
         </div>
         <span class="expert-card-flip-actions">
           <template v-if="view.launch.available">

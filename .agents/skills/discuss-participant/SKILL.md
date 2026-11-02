@@ -18,7 +18,7 @@ description: "AI CoDiscuss 的通用参与技能，所有参与者（包括主�
 | 自由协作请求（任务含 `mode: "free"`，且没有 `discussion_request`） | [自由协作](references/free.md) |
 | 协作房间中的讨论请求（任务含 `mode: "free"` 和 `discussion_request`，或手动成员看到自己的讨论请求） | [讨论请求](references/discussion.md) |
 | 手动成员注册、原会话或手动回答 | [手动接入](references/manual.md) |
-| 首次某类写入、代发、超长正文、附件或出错 | [写入与恢复](references/writing.md) |
+| 首次某类写入、超长正文、附件或出错 | [写入与恢复](references/writing.md) |
 
 ## 硬约束
 
@@ -60,4 +60,4 @@ description: "AI CoDiscuss 的通用参与技能，所有参与者（包括主�
 
 正文用 UTF-8 `--body-file`，摘要含引号或较长时用 `--summary-file`。需要附件时先 `attachment upload ROOM --file FILE --submission-id 上传编号`，再用 `message post --attachment ID` 关联（最多 10 个，单个 20 MiB，须在执行资格结束前上传）。
 
-成功须核对服务端返回的持久记录、作者和关联；返回已是持久记录时不再读一遍，缺少所需证据才按编号补读。答案落库后即可结束，不用旧资格继续写入。代发保留真实作者、完整原文及引用关系，摘要归实际撰写者，不把自己的改写冒充对方回答。执行结束不等于整个房间的工作结束。
+成功须核对服务端返回的持久记录、作者和关联；返回已是持久记录时不再读一遍，缺少所需证据才按编号补读。答案落库后即可结束，不用旧资格继续写入。只以本人身份提交，不替他人发言。执行结束不等于整个房间的工作结束。

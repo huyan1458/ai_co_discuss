@@ -17,10 +17,6 @@ const EDITOR_MAX_ROWS = 6;
 const LENGTH_WARNING_RATIO = 0.9;
 const RETRACT_ESCAPE_WINDOW_MS = 500;
 const near_length_limit = computed(() => text_length.value >= bridge.max_message_length * LENGTH_WARNING_RATIO);
-const answer_summary = field("message-summary");
-const summary_source = field("message-summary-source");
-const needs_summary = computed(() => Boolean(view.value.free_proxy));
-const summary_sources = [{ value: "author", label: "原作者摘要" }, { value: "submitter", label: "代发者整理" }];
 const search = field("search-input");
 const transcript = ref(null);
 const expanded_answers = ref(new Set());
@@ -88,7 +84,7 @@ const READING_OFFSET = 20;
 const room = computed(() => view.value.room);
 const speaking_turn = computed(() => ["pending", "notified"].includes(room.value?.current_turn?.status)
   && !["paused", "concluded"].includes(room.value.phase) ? room.value.current_turn : null);
-const is_manual_member = (member) => member?.access === "manual" && member.manual_source !== "web" && member.status === "active";
+const is_manual_member = (member) => member?.access === "manual" && member.status === "active";
 const speaking_member = computed(() => (room.value.members || []).find((member) => member.name === speaking_turn.value?.expert));
 // The first invited manual expert that has not registered yet; the notice stays until it does.
 const unregistered_member = computed(() => room.value?.archived ? null
@@ -177,7 +173,6 @@ function working_status(message) {
 }
 /** Says in the note line who the draft will reach: the @mentioned members, else the host. */
 const recipient_hint = computed(() => {
-  if (view.value.free_proxy) return `本条作为 ${bridge.display_name(view.value.free_proxy)} 的回答原文保存，并关联待回应请求`;
   const named_group = (aliases) => aliases.some((alias) => MENTION_PATTERN(alias).test(draft_prose.value));
   if (free.value && named_group(SEQUENTIAL_ALIASES)) return `依次发给 ${in_turn(free_members.value).map((member) => bridge.display_name(member.name)).join(" → ")}，前一位结束后下一位开始`;
   if (free.value && named_group(ALL_ALIASES)) return `发给 ${free_members.value.map((member) => bridge.display_name(member.name)).join("、")}`;
@@ -189,9 +184,8 @@ const recipient_hint = computed(() => {
 });
 const has_draft = computed(() => Boolean(text.value.trim() || view.value.attachment_drafts.length));
 /** Active members a free-room message can name; chips appear only when there is a choice. */
-const free_members = computed(() => (room.value.free?.members || []).filter((member) => member.status === "active" && (member.access !== "manual" || member.manual_source === "web" || member.registered_at)));
+const free_members = computed(() => (room.value.free?.members || []).filter((member) => member.status === "active" && (member.access !== "manual" || member.registered_at)));
 const free_host = computed(() => free_members.value.find((member) => member.role === "host"));
-const proxy_members = computed(() => free_members.value.filter((member) => member.manual_source === "web" || member.access === "online"));
 /** In a discussion, an @mention of an active member is a direct question: it wakes that member outside turns, rounds and limits. */
 const mention_pool = computed(() => [...(mention_all.value ? [...ALL_ALIASES, ...SEQUENTIAL_ALIASES].map((name) => ({ name })) : []), ...free_members.value]);
 /** A draft @mentions a member only outside code and quotes. */
@@ -416,16 +410,6 @@ function message_elapsed(message) {
   const execution = (room.value.free?.executions || []).find((item) => item.answer_id === message.id);
   return execution?.created_at && execution.finished_at ? Math.max(0, execution.finished_at - execution.created_at) : null;
 }
-const identities = computed(() => ["用户", ...proxy_members.value.map((member) => member.name)].map(name => {
-  const identity = bridge.identities[name];
-  return { label: bridge.display_name(name), value: name,
-    avatar: { src: identity.icon, text: identity.initials, alt: bridge.display_name(name), class: `channel-avatar ${identity.style}` },
-    description: name === "用户" ? "本人发言" : "代发成员回答原文" };
-}));
-const proxy_author = computed({ get: () => view.value.free_proxy || "用户", set: (value) => {
-  if (value !== (view.value.free_proxy || "用户")) act("set_proxy", value === "用户" ? "" : value);
-} });
-const selected_identity = computed(() => identities.value.find((item) => item.value === proxy_author.value));
 const date_formatter = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" });
 
 const blank = (match) => " ".repeat(match.length);
@@ -1472,14 +1456,10 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           <div v-if="unregistered_member" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-user-round-x" /><span>{{ bridge.display_name(unregistered_member.name) }} 待注册：在其会话中粘贴启动指令</span><UButton v-if="view.access?.can_manage" :icon="launch_copied === unregistered_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === unregistered_member.name ? '已复制' : '复制启动指令'" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(unregistered_member.name)" /></div>
           <div v-if="queue_hint" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>{{ queue_hint }}</span><UButton v-if="is_manual_member(speaking_member) && view.access?.can_manage" :icon="launch_copied === speaking_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === speaking_member.name ? '已复制' : '复制启动指令'" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(speaking_member.name)" /></div>
           <div v-if="view.reply_to" class="channel-reply-draft"><UIcon name="i-lucide-corner-up-left" /><span>{{ `回复 #${view.reply_to}` }}</span><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" aria-label="取消回复" @click="act('cancel_reply')" /></div>
-          <div v-if="needs_summary" class="channel-answer-editor"><UTextarea v-model="answer_summary" :rows="2" aria-label="回答摘要" class="w-full" placeholder="可选：回答较长时先说结论，保留关键理由、条件和不确定性。完整内容写在正文中。" /><USelect v-model="summary_source" :items="summary_sources" aria-label="摘要提供者" size="xs" /></div>
         </template>
         <div v-if="mention_mirror" ref="mirror" class="channel-editor channel-editor-mirror" aria-hidden="true" v-html="mention_mirror"></div>
         <template #footer>
           <UButton type="button" icon="i-lucide-paperclip" aria-label="添加附件" title="图片、PDF 或其他文件 · 每个最多 20 MiB" color="neutral" variant="ghost" size="sm" :disabled="view.sending_message" @click="act('choose_attachments')" />
-          <div v-if="proxy_members.length" class="channel-composer-identity">
-            <USelectMenu v-model="proxy_author" :items="identities" value-key="value" :avatar="selected_identity?.avatar" :search-input="{ placeholder: '搜索身份…', icon: 'i-lucide-search' }" :content="{ side: 'top', align: 'start', sideOffset: 10 }" variant="none" size="sm" aria-label="发言身份" class="channel-author-select" :ui="{ content: 'channel-select-menu channel-identity-menu', itemLeadingAvatarSize: 'xs' }" />
-          </div>
           <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" aria-label="发送" title="发送 · Enter" :disabled="!has_draft" :loading="pending === 'send' || view.sending_message" @click="send" />
         </template>
       </UChatPrompt>

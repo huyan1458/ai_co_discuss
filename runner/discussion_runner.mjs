@@ -54,11 +54,10 @@ export function validate_config(input, base_directory) {
   // A free room of manual members runs here only for smart scheduling or a preset project directory, which need no local software.
   if (!config.participants || (!Object.keys(config.participants).length && !(config.scheduler || config.cwd))) throw new Error('请配置本机参与软件');
   for (const participant of Object.values(config.participants)) {
-    if (adapter_profile(participant.adapter)?.kind === 'api') {
+    const api = adapter_profile(participant.adapter)?.kind === 'api';
+    if (api) {
       read_api_key(config.api_home, participant);
-      for (const field of ['cwd', 'project_name', 'project_id', 'executable', 'effort']) delete participant[field];
-      participant.project_access = 'read';
-      continue;
+      for (const field of ['project_id', 'executable', 'effort']) delete participant[field];
     }
     participant.cwd = participant.cwd ?? config.cwd;
     participant.project_name = participant.project_name ?? config.discussion_project;
@@ -69,7 +68,7 @@ export function validate_config(input, base_directory) {
       throw new Error(adapter_profile(participant.adapter)?.unsupported_hints?.[participant.project_access] || '该软件不支持此项目权限档位');
     }
     if (participant.cwd && !statSync(participant.cwd).isDirectory()) throw new Error('cwd 必须是已有本机目录');
-    validate_participant(participant);
+    if (!api) validate_participant(participant);
   }
   // Every room is a free-collaboration room; a configuration without member credentials predates it and is not run.
   if (![undefined, 'free'].includes(config.mode)) throw new Error('房间模式只能为 free');

@@ -97,8 +97,9 @@ async function wait_website(child, progress, url) {
 function website_process(home, settings, url) {
   const python = detect_python(settings.python);
   const database = join(home, 'local', 'discuss.sqlite3');
+  const remote = settings.remote_port ? ['--remote-port', String(settings.remote_port)] : [];
   const child = spawn(python, ['-u', SERVER, '--host', '127.0.0.1', '--port', String(settings.port || 8765),
-    '--database', database, '--no-demo', '--local-launch'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+    '--database', database, '--no-demo', '--local-launch', ...remote], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1', PATH: `${dirname(process.execPath)}${delimiter}${dirname(python)}${delimiter}${process.env.PATH || ''}` } });
   const progress = { ready: false, error: null };
   let recent = '';
@@ -151,7 +152,7 @@ async function supervise(home) {
   const stop_path = join(directory, 'stop.request');
   const settings = local_settings(home);
   const url = `http://127.0.0.1:${settings.port || 8765}`;
-  const status = { pid: process.pid, ready: false, url, version: VERSION };
+  const status = { pid: process.pid, ready: false, url, remote_port: settings.remote_port || null, version: VERSION };
   if (existsSync(stop_path)) unlinkSync(stop_path);
   atomic_json(status_path, status);
   let website, owned_service, stopped = false;
@@ -183,7 +184,9 @@ async function supervise(home) {
 /** Start once in the background and return only after the website is ready. */
 async function start_local(home) {
   const current = local_status(home);
-  if (current.website_running && current.url !== `http://127.0.0.1:${local_settings(home).port || 8765}`) {
+  const settings = local_settings(home);
+  if (current.website_running && (current.url !== `http://127.0.0.1:${settings.port || 8765}`
+      || (current.remote_port ?? null) !== (settings.remote_port || null))) {
     throw new Error('网站端口配置已改变；请先 codiscuss local stop，再 codiscuss local open。');
   }
   if (current.running) return current;
@@ -214,8 +217,11 @@ async function start_local(home) {
 export function restart_reason(home = service_home()) {
   const current = local_status(home);
   if (!current.website_running) return null;
-  const url = `http://127.0.0.1:${local_settings(home).port || 8765}`;
+  const settings = local_settings(home);
+  const url = `http://127.0.0.1:${settings.port || 8765}`;
   if (current.url !== url) return `本机网站正在 ${current.url} 运行，端口配置已改为 ${url}`;
+  const remote = settings.remote_port || null;
+  if ((current.remote_port ?? null) !== remote) return `远程入口端口配置已改为${remote ? ` ${remote}` : '关闭'}`;
   if (current.version !== VERSION) return `本机网站正在运行${current.version ? `版本 ${current.version}` : '未记录版本的旧程序'}，当前安装为 ${VERSION}`;
   return null;
 }

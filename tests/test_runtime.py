@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import sqlite3
 import tempfile
 import threading
@@ -16,8 +17,9 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from backend import server as server_module
-from backend import free_room
 from backend.server import DiscussionServer, init_database
+
+LEGACY_MIGRATION_TABLES = ("session_state", "discussion_sessions", "room_modes", "member_manual_sources", "attachments", "execution_segments", "room_members")
 
 
 class RuntimeTests(unittest.TestCase):
@@ -107,32 +109,6 @@ class RuntimeTests(unittest.TestCase):
     def execution_action(self, execution, payload, token=None):
         return self.request(f"{self.path}/executions/{execution['id']}", payload, token or self.owner)
 
-    def test_retired_runtime_and_event_routes_are_gone(self):
-        """The room-scoped run interface of the old discussion rooms no longer exists, with or without a session."""
-        for started in (False, True):
-            if started:
-                self.start_session()
-            self.assertEqual(self.request(self.path + "/runtime", token=self.owner)[0], 404)
-            self.assertEqual(self.request(self.path + "/events", token=self.owner)[0], 404)
-            self.assertEqual(self.request(self.path + "/events/1", {"action": "view"}, self.owner)[0], 400)
-
-    def test_live_progress_does_not_load_history_or_change_revision(self):
-        """Renewal progress has the same lightweight public shape as Worker, without credentials or answer text."""
-        self.start_session()
-        execution = self.reserve()[1]
-        status, before = self.request(self.path + "/progress")
-        self.assertEqual(status, 200)
-        self.assertEqual(before["executions"][0]["id"], execution["id"])
-        self.assertEqual(self.execution_action(execution, {"action": "renew", "activity": "command",
-            "activity_at": int(time.time()), "notes": [{"seq": 1, "text": "过程说明"} ]})[0], 200)
-        after = self.request(self.path + "/progress")[1]
-        self.assertEqual(after["revision"], before["revision"])
-        self.assertEqual(after["executions"][0]["notes"], 1)
-        self.assertEqual(after["executions"][0]["activity"], "command")
-        self.assertEqual(set(after["executions"][0]), {
-            "id", "member_id", "status", "lease_until", "activity", "activity_at", "notes", "stale"})
-        self.assertEqual(self.request("/api/rooms/missing/progress")[0], 404)
-
     def test_schema_reinitialization_preserves_session_and_member_execution(self):
         """Reinitializing the current schema preserves active session requests and execution leases."""
         if not hasattr(self, "database"):
@@ -183,6 +159,37 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(status, 200, deleted)
         self.assertEqual(self.request(self.path)[0], 404)
 
+    def test_legacy_startup_migration_runs_before_newer_tables_exist(self):
+        """A database older than the tables the script writes to still migrates and keeps its records."""
+        message = self.add_legacy_records()
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            member = connection.execute("SELECT id FROM room_members WHERE room_id=?", (self.room,)).fetchone()[0]
+            connection.execute("UPDATE room_members SET access='online' WHERE id=?", (member,))
+            # Triggers and views may read the dropped tables; schema.sql re-creates them.
+            for kind, name in connection.execute("SELECT type,name FROM sqlite_master WHERE type IN ('trigger','view')").fetchall():
+                connection.execute(f"DROP {kind} {name}")
+            for table in LEGACY_MIGRATION_TABLES:
+                if table != "room_members":
+                    connection.execute(f"DROP TABLE {table}")
+        init_database(self.database, seed=False)
+        init_database(self.database, seed=False)
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            self.assertEqual(connection.execute("SELECT name FROM sqlite_master WHERE name IN ('room_floor','discussion_turns')").fetchall(), [])
+            self.assertEqual(connection.execute("SELECT kind,submitted_by FROM message_details WHERE message_id=?", (message,)).fetchone(), ("chat", "用户"))
+            self.assertEqual(connection.execute("SELECT access FROM room_members WHERE id=?", (member,)).fetchone(), ("manual",))
+            self.assertEqual(connection.execute("SELECT source FROM member_manual_sources WHERE member_id=?", (member,)).fetchone(), ("web",))
+            self.assertEqual(connection.execute("SELECT status FROM room_members WHERE id=?", (member,)).fetchone(), ("removed",))
+            self.assertEqual(connection.execute("SELECT mode FROM room_modes WHERE room_id=?", (self.room,)).fetchone(), ("free",))
+            self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
+
+    def test_legacy_migration_tables_match_schema(self):
+        """Tables the one-off script creates for old databases keep the current schema's definition."""
+        for table in LEGACY_MIGRATION_TABLES:
+            pattern = rf"^CREATE TABLE IF NOT EXISTS {table} \(.*?^\);$"
+            created = re.search(pattern, server_module.LEGACY_DISCUSSION_SQL, flags=re.S | re.M)
+            self.assertIsNotNone(created, table)
+            self.assertEqual(created[0], re.search(pattern, server_module.SCHEMA, flags=re.S | re.M)[0])
+
     def test_legacy_migration_failure_rolls_back_rebuilt_table(self):
         """Failure after dropping message_details restores its data, foreign key and the orphan session."""
         message = self.add_legacy_records()
@@ -195,35 +202,6 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT room_id FROM room_floor").fetchone(), (self.room,))
             self.assertEqual(connection.execute("SELECT status FROM discussion_sessions WHERE room_id=?", (self.room,)).fetchone(), ("paused",))
             self.assertEqual(connection.execute("SELECT name FROM sqlite_master WHERE name='message_details_rebuilt'").fetchall(), [])
-
-    def test_default_limits_survive_topic_edits_and_seed_each_new_session(self):
-        """Saved defaults drive starts and idle views; an explicit session override never replaces them."""
-        defaults = {"max_rounds": 5, "max_minutes": 45, "execution_minutes": 8}
-        before = self.request(self.path + "/discussion")[1]
-        status, saved = self.request(self.path + "/topic", {"actor": "用户", "limits": defaults}, self.owner)
-        self.assertEqual(status, 200, saved)
-        stale = self.request(self.path + "/discussion", {"action": "start", "revision": before["revision"]}, self.owner)
-        self.assertEqual(stale[0], 409, stale[1])
-        session = self.start_session()["session"]
-        self.assertEqual({key: session["limits"][key] for key in defaults}, defaults)
-        view = self.request(self.path + "/discussion")[1]
-        self.assertEqual(self.request(self.path + "/discussion", {"action": "pause", "revision": view["revision"]}, self.owner)[0], 200)
-        live = self.request(self.path + "/limits")[1]
-        self.assertEqual(live["revision"], self.request(self.path + "/discussion")[1]["revision"])
-        status, changed = self.request(self.path + "/limits", {"actor": "用户", "revision": live["revision"], "max_rounds": 7}, self.owner)
-        self.assertEqual(status, 200, changed)
-        status, edited = self.request(self.path + "/topic", {"actor": "用户", "focus": "仅改文字"}, self.owner)
-        self.assertEqual(status, 200, edited)
-        self.assertEqual(edited["limits"]["max_rounds"], 7)
-        view = self.request(self.path + "/discussion")[1]
-        ended = self.request(self.path + "/discussion", {"action": "end", "revision": view["revision"]}, self.owner)
-        self.assertEqual(ended[0], 200, ended[1])
-        self.assertEqual(self.request(self.path + "/limits")[1]["max_rounds"], 5)
-        history = self.request(self.path + "/backup")[1]["tables"]["session_limits"]
-        self.assertEqual(next(item for item in history if item["session_id"] == session["id"])["max_rounds"], 7)
-        saved = self.request(self.path + "/topic", {"actor": "用户", "limits": {"max_rounds": 6}}, self.owner)
-        self.assertEqual(saved[1]["limits"]["max_rounds"], 6)
-        self.assertEqual(self.start_session()["session"]["limits"]["max_rounds"], 6)
 
     def test_member_can_fail_only_its_own_active_execution(self):
         """An executing member may report its failure, while other lifecycle actions stay owner-only."""
@@ -254,24 +232,6 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn(self.request(self.path + "/messages", answer, self.tokens["Codex"])[0], (400, 409))
         report = self.request(f"{self.path}/executions/{execution['id']}", token=self.owner)[1]
         self.assertEqual(report["status"], "cancelled")
-
-    def test_direct_question_remains_available_while_a_session_is_paused(self):
-        """A direct question has its own member request and does not resume or consume a discussion turn."""
-        self.invite("Claude")
-        started = self.start_session()["session"]
-        view = self.request(self.path + "/discussion")[1]
-        paused = self.request(self.path + "/discussion", {"action": "pause", "revision": view["revision"]}, self.owner)
-        self.assertEqual(paused[0], 200, paused[1])
-        message = self.request(self.path + "/messages", {
-            "author": "用户", "text": "@Claude 一个直接问题", "to": ["Claude"],
-            "submission_id": uuid.uuid4().hex,
-        }, self.owner)
-        self.assertEqual(message[0], 201, message[1])
-        request = next(item for item in self.request(self.path, token=self.owner)[1]["free"]["requests"]
-                       if item["message_id"] == message[1]["message"]["id"])
-        self.assertEqual((request["purpose"], request["status"]), ("ask", "pending"))
-        self.assertEqual(self.request(self.path + "/discussion")[1]["session"]["id"], started["id"])
-        self.assertEqual(self.request(self.path + "/discussion")[1]["session"]["status"], "paused")
 
     def test_concurrent_reservation_creates_only_one_member_execution(self):
         """Concurrent dispatch attempts cannot create two executions for one member session."""
@@ -367,135 +327,6 @@ class RuntimeTests(unittest.TestCase):
         stale = self.arrange([{"expert": "Claude", "question": "仍旧的名单"}], roster)
         self.assertEqual(stale[0], 409, stale[1])
 
-    def test_session_plan_preserves_host_order_and_completed_history(self):
-        """The host's order controls dispatch, and answered requests remain in their original order."""
-        self.start_session()
-        self.invite("Claude")
-        self.invite("Gemini")
-        status, plan = self.arrange([
-            {"expert": "Gemini", "question": "先由 Gemini"},
-            {"expert": "Claude", "question": "再由 Claude"},
-        ])
-        self.assertEqual(status, 201, plan)
-        gemini = self.reserve("Gemini")[1]
-        answer = {"author": "Gemini", "source": "cli", "kind": "chat", "text": "Gemini 的观点",
-                  "execution_id": gemini["id"], "submission_id": uuid.uuid4().hex}
-        self.assertEqual(self.request(self.path + "/messages", answer, self.tokens["Gemini"])[0], 201)
-        turns = self.request(self.path + "/turns")[1]["turns"]
-        discussion_turns = [item for item in turns if item["purpose"] == "discuss"]
-        self.assertEqual([(item["expert"], item["status"]) for item in discussion_turns],
-                         [("Gemini", "answered"), ("Claude", "open")])
-
-    def test_room_view_keeps_each_session_round_and_stable_plan_slots(self):
-        """Round and assignment metadata stays distinct across reopened sessions."""
-        self.invite("Claude")
-        session_ids = []
-        for index in range(2):
-            session = self.start_session()["session"]
-            session_ids.append(session["id"])
-            roster = self.roster()
-            status, plan = self.request(self.path + "/turns", {
-                "actor": "Codex", "expert": "Claude", "question": f"第 {index + 1} 次安排",
-                "roster": roster["revision"], "submission_id": uuid.uuid4().hex,
-            }, self.tokens["Codex"])
-            self.assertEqual(status, 201, plan)
-            view = self.request(self.path)[1]
-            arrangement = next(item for item in view["host_arrangements"] if item["id"].startswith(f"session-{session['id']}-"))
-            anchor = arrangement["after_message_id"]
-            self.request(self.path + "/messages", {"author": "用户", "text": f"后来消息 {index}",
-                "submission_id": uuid.uuid4().hex}, self.owner)
-            refreshed = self.request(self.path)[1]
-            self.assertEqual(next(item for item in refreshed["host_arrangements"] if item["id"] == arrangement["id"])["after_message_id"], anchor)
-            execution = self.reserve("Claude")[1]
-            answer = self.request(self.path + "/messages", {"author": "Claude", "source": "cli", "kind": "chat",
-                "text": f"第 {index + 1} 轮", "execution_id": execution["id"], "submission_id": uuid.uuid4().hex}, self.tokens["Claude"])
-            self.assertEqual(answer[0], 201, answer[1])
-            current = self.request(self.path + "/discussion")[1]
-            ended = self.request(self.path + "/discussion", {"action": "end", "revision": current["revision"]}, self.owner)
-            self.assertEqual(ended[0], 200, ended[1])
-
-        ordinary = self.request(self.path + "/messages", {"author": "用户", "text": "讨论外留言",
-            "submission_id": uuid.uuid4().hex}, self.owner)[1]["message"]["id"]
-        groups = self.request(self.path)[1]["round_groups"]
-        self.assertEqual([group["key"] for group in groups], [
-            f"session-{session_ids[0]}-round-1", f"session-{session_ids[1]}-round-1",
-        ])
-        self.assertEqual([group["session_id"] for group in groups], session_ids)
-        self.assertEqual([group["participants"] for group in groups], [1, 1])
-        self.assertLess(groups[0]["end_id"], ordinary)
-        self.assertLess(groups[1]["end_id"], ordinary)
-
-    def test_queue_backfill_keeps_history_and_request_deletion_restores_only_unasked_work(self):
-        """Old queues resume once; deleting a request or rolling back never loses the remaining speakers."""
-        self.invite("Claude")
-        self.invite("Gemini")
-        self.request(self.path + "/messages", {"author": "用户", "text": "依次回答", "to": ["Codex", "Claude", "Gemini"],
-            "sequential": True, "submission_id": uuid.uuid4().hex}, self.owner)
-        with closing(sqlite3.connect(self.database)) as connection, connection:
-            connection.row_factory = sqlite3.Row
-            connection.execute("PRAGMA foreign_keys=ON")
-            connection.execute("UPDATE member_requests SET status='completed' WHERE room_id=?", (self.room,))
-            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'queue_waiting_%'").fetchall():
-                connection.execute(f"DROP TRIGGER {row['name']}")
-            connection.execute("DROP TABLE free_queue_waiting")
-            connection.executescript(server_module.SCHEMA)
-            connection.executescript(server_module.SCHEMA)
-            free_room.advance_queues(connection, self.room)
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM free_queue").fetchone()[0], 3)
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM free_queue_waiting").fetchone()[0], 1)
-            current = connection.execute("SELECT id,member_id FROM member_requests WHERE status='pending'").fetchone()
-            connection.execute("DELETE FROM member_requests WHERE id=?", (current["id"],))
-            free_room.advance_queues(connection, self.room)
-            self.assertEqual([row[0] for row in connection.execute("SELECT member_id FROM member_requests WHERE status='pending'")], [current["member_id"]])
-            connection.execute("SAVEPOINT queue_rollback")
-            connection.execute("DELETE FROM member_requests WHERE status='pending'")
-            connection.execute("ROLLBACK TO queue_rollback")
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM free_queue_waiting").fetchone()[0], 1)
-        order = self.request(self.path)[1]["speaking_order"]
-        self.assertEqual([(item["name"], item["state"]) for item in order["items"]],
-                         [("Codex", "done"), ("Claude", "speaking"), ("Gemini", "queued")])
-
-    def test_cancelled_turn_cards_only_include_dispatched_nonfailed_requests(self):
-        """Queued rows stay hidden; dispatched cancellations remain until their execution failed."""
-        self.start_session()
-        self.invite("Claude")
-        self.invite("Gemini")
-        roster = self.roster()
-        status, plan = self.request(self.path + "/turns", {
-            "actor": "Codex", "turns": [
-                {"expert": "Claude", "question": "已派发"},
-                {"expert": "Gemini", "question": "仍在队列"},
-            ], "roster": roster["revision"], "submission_id": uuid.uuid4().hex,
-        }, self.tokens["Codex"])
-        self.assertEqual(status, 201, plan)
-        execution = self.reserve("Claude")[1]
-        discussion = self.request(self.path + "/discussion")[1]
-        paused = self.request(self.path + "/discussion", {"action": "pause", "revision": discussion["revision"]}, self.owner)
-        self.assertEqual(paused[0], 200, paused[1])
-        cards = self.request(self.path)[1]["cancelled_turns"]
-        self.assertEqual([(item["key"], item.get("execution_id")) for item in cards],
-                         [(f"session-{self.request(self.path + '/discussion')[1]['session']['id']}-request-{plan['turn']['id']}", execution["id"])])
-        self.assertTrue(all(item["created_at"] for item in cards))
-        with closing(sqlite3.connect(self.database)) as connection, connection:
-            connection.execute("UPDATE member_executions SET status='failed' WHERE id=?", (execution["id"],))
-        self.assertEqual(self.request(self.path)[1]["cancelled_turns"], [])
-
-    def test_session_plan_retry_keeps_its_original_ids_after_roster_changes(self):
-        """An exact plan retry is idempotent even after the first plan advances the roster revision."""
-        self.start_session()
-        self.invite("Claude")
-        roster = self.roster()
-        payload = {"actor": "Codex", "turns": [{"expert": "Claude", "question": "唯一安排"}],
-                   "roster": roster["revision"], "submission_id": uuid.uuid4().hex}
-        first = self.request(self.path + "/turns", payload, self.tokens["Codex"])
-        self.assertEqual(first[0], 201, first[1])
-        retry = self.request(self.path + "/turns", payload, self.tokens["Codex"])
-        self.assertEqual(retry[0], 200, retry[1])
-        self.assertTrue(retry[1]["duplicate"])
-        self.assertEqual(retry[1]["turn"]["id"], first[1]["turn"]["id"])
-        self.assertEqual([item["id"] for item in self.request(self.path + "/turns")[1]["turns"]],
-                         [first[1]["turn"]["id"]])
-
     def test_session_round_limit_counts_distinct_speakers_and_only_scheduled_host(self):
         """The session limit counts actual speakers, includes a scheduled host, and cancels a repeated queued expert."""
         session = self.start_session({"max_rounds": 1})["session"]
@@ -557,40 +388,6 @@ class RuntimeTests(unittest.TestCase):
                 AND sr.status IN ('open','queued') AND t.cause_message_id=?""",
                 (self.request(self.path + "/discussion")[1]["session"]["id"], note[1]["message"]["id"])).fetchone()[0]
         self.assertEqual(pending, 1)
-
-    def test_reordering_queued_session_requests_preserves_speaker_questions_and_retry_identity(self):
-        """Reordering only the queued suffix changes dispatch order without changing plan contents or IDs."""
-        self.start_session()
-        for name in ("Claude", "Gemini", "Qwen"):
-            self.invite(name)
-        status, plan = self.arrange([
-            {"expert": "Claude", "question": "当前发言"},
-            {"expert": "Gemini", "question": "Gemini 的问题"},
-            {"expert": "Qwen", "question": "Qwen 的问题"},
-        ])
-        self.assertEqual(status, 201, plan)
-        order = self.request(self.path + "/speaking-order")[1]
-        status, _ = self.request(self.path + "/speaking-order", {
-            "revision": order["revision"], "order": ["Qwen", "Gemini"],
-        }, self.owner)
-        self.assertEqual(status, 200)
-        turns = [item for item in self.request(self.path + "/turns")[1]["turns"] if item["purpose"] == "discuss"]
-        self.assertEqual([(item["expert"], item["question"]) for item in turns], [
-            ("Claude", "当前发言"), ("Qwen", "Qwen 的问题"), ("Gemini", "Gemini 的问题"),
-        ])
-
-    def test_stored_execution_minutes_no_longer_end_a_running_execution(self):
-        """execution_minutes is still accepted from older clients, but one execution has no time limit."""
-        if not hasattr(self, "database"):
-            self.skipTest("execution 时钟边界需要隔离 SQLite")
-        session = self.start_session({"execution_minutes": 1})["session"]
-        execution = self.reserve()[1]
-        with closing(sqlite3.connect(self.database)) as connection, connection:
-            connection.execute("UPDATE member_executions SET created_at=?,lease_until=? WHERE id=?",
-                               (int(time.time()) - 61, int(time.time()) + 60, execution["id"]))
-        result = self.execution_action(execution, {"action": "renew"})
-        self.assertEqual(result[0], 200, result)
-        self.assertEqual(self.request(self.path + "/discussion")[1]["session"]["id"], session["id"])
 
     def test_session_deadline_concludes_and_records_its_reason(self):
         """The total session time limit concludes the session and records a stable stop reason."""
@@ -682,23 +479,6 @@ class RuntimeTests(unittest.TestCase):
             connection.execute("UPDATE member_executions SET lease_until=0 WHERE id=?", (execution["id"],))
         self.assertIn(self.execution_action(execution, {"action": "renew"})[0], (403, 409))
 
-    def test_concluded_session_can_start_a_fresh_session_after_schema_upgrade(self):
-        """A concluded session stays in history while a later session receives a new identity."""
-        if not hasattr(self, "database"):
-            self.skipTest("升级回归需要隔离 SQLite")
-        first = self.start_session()["session"]
-        view = self.request(self.path + "/discussion")[1]
-        ended = self.request(self.path + "/discussion", {"action": "end", "revision": view["revision"]}, self.owner)
-        self.assertEqual(ended[0], 200, ended[1])
-        init_database(self.database, seed=False)
-        latest = self.request(self.path + "/discussion")[1]
-        second = self.request(self.path + "/discussion", {
-            "action": "start", "goal": "升级后的新会话", "revision": latest["revision"],
-        }, self.owner)
-        self.assertEqual(second[0], 200, second[1])
-        self.assertNotEqual(second[1]["session"]["id"], first["id"])
-        self.assertEqual(second[1]["session"]["goal"], "升级后的新会话")
-
     def test_host_moderation_keeps_host_execution_live_and_does_not_count_as_a_turn(self):
         """A host may save notes repeatedly while keeping its host task available for state and scheduling."""
         session = self.start_session()["session"]
@@ -727,32 +507,6 @@ class RuntimeTests(unittest.TestCase):
             connection.execute("UPDATE member_executions SET lease_until=0 WHERE id=?", (execution["id"],))
         late = self.request(self.path + "/messages", {**payload, "text": "迟到", "submission_id": "host-moderation-runtime-03"}, self.tokens["Codex"])
         self.assertIn(late[0], (403, 409))
-
-    def test_room_view_exposes_visible_anchors_for_session_execution_cards(self):
-        """Session execution cards can attach to visible history while keeping their hidden task provenance."""
-        visible = self.request(self.path + "/messages", {"author": "用户", "text": "讨论前的问题", "submission_id": "session-card-anchor-01"}, self.owner)[1]["message"]
-        self.start_session()
-        self.invite("Claude")
-        plan = self.arrange([{"expert": "Claude", "question": "请核对原问题"}])
-        self.assertEqual(plan[0], 201, plan[1])
-        execution = self.reserve("Claude")[1]
-        view = self.request(self.path, token=self.tokens["Codex"])[1]
-        request = next(item for item in view["free"]["requests"] if item["id"] == execution["requests"][0]["id"])
-        self.assertEqual((request["session_request_id"], request["discussion_session_id"], request["purpose"], request["round"]),
-                         (plan[1]["turn"]["id"], self.request(self.path + "/discussion")[1]["session"]["id"], "discuss", 1))
-        self.assertEqual(request["source_question"], "请核对原问题")
-        self.assertEqual(request["after_message_id"], visible["id"])
-        self.assertGreater(request["message_id"], request["after_message_id"])
-        report = next(item for item in view["free"]["executions"] if item["id"] == execution["id"])
-        self.assertEqual(report["member"], "Claude")
-        self.assertEqual(report["requests"][0]["source_question"], "请核对原问题")
-        self.assertEqual(report["requests"][0]["after_message_id"], visible["id"])
-        with closing(sqlite3.connect(self.database)) as connection, connection:
-            connection.execute("UPDATE room_members SET status='removed' WHERE name='Claude' AND room_id=?", (self.room,))
-        removed_view = self.request(self.path)[1]
-        removed_report = next(item for item in removed_view["free"]["executions"] if item["id"] == execution["id"])
-        self.assertEqual(removed_report["member"], "Claude")
-
 
 if __name__ == "__main__":
     unittest.main()

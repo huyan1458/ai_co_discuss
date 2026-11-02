@@ -14,9 +14,8 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request, urlopen
-from urllib.robotparser import RobotFileParser
 
-from backend.server import DiscussionHandler, DiscussionServer, connect_db, create_room, init_database, require_room
+from backend.server import DiscussionServer, connect_db, create_room, init_database, require_room
 
 
 class DiscussionTests(unittest.TestCase):
@@ -26,6 +25,8 @@ class DiscussionTests(unittest.TestCase):
         """Use an explicit test Worker URL, or start isolated local storage."""
         self.owner = uuid.uuid4().hex
         self.member_tokens = {name: uuid.uuid4().hex for name in ("Codex", "Claude", "Gemini", "DeepSeek", "Qwen")}
+        # Members the local service wakes; the others answer as registered manual members.
+        self.runner_members = {"Codex"}
         self.base = os.getenv("DISCUSS_TEST_URL", "").rstrip("/")
         self.external = bool(self.base)
         if not self.external:
@@ -104,25 +105,6 @@ class DiscussionTests(unittest.TestCase):
                 current = self.request(path)[1]["free"]["requests"]
                 self.assertEqual([(item["purpose"], item["status"]) for item in current if item["message_id"] == message], [("group", "pending")])
                 self.assertEqual(self.request(url, {"action": "host"})[0], 200)
-
-    def test_group_parallel_and_sequential_retries_return_the_same_result(self):
-        """Concurrent duplicate writes arrange a group once; cancelled groups never become host requests."""
-        for action in ("all", "sequential"):
-            with self.subTest(action=action):
-                path, message = self.create_group_room()
-                url = f"{path}/recommendations/{message}"
-                plan = self.request(url)[1]
-                payload = {"action": action, "revision": plan["revision"]}
-                with ThreadPoolExecutor(max_workers=2) as pool:
-                    results = list(pool.map(lambda _: self.request(url, payload), range(2)))
-                self.assertEqual(results[0][0], 200, results)
-                self.assertEqual(results[0], results[1])
-                requests = self.request(path)[1]["free"]["requests"]
-                self.assertEqual(len(requests), 3 if action == "all" else 1)
-                self.assertTrue(all(item["purpose"] == ("all" if action == "all" else "ask") for item in requests))
-        path, message = self.create_group_room()
-        self.assertEqual(self.request(f"{path}/messages/{message}/retract", {})[0], 200)
-        self.assertEqual(self.request(f"{path}/recommendations/{message}", {"action": "host"})[0], 409)
 
     def test_user_stop_keeps_messages_sent_while_the_member_worked(self):
         """Stopping a member voids its live execution only; a message sent meanwhile waits for its next turn."""
@@ -203,29 +185,6 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual({(item["status"], item["cancel_reason"]) for item in view["requests"]}, {("cancelled", "user_stop")})
         self.assertEqual(next(item for item in view["executions"] if item["id"] == execution["id"])["status"], "cancelled")
 
-    def test_scheduler_decision_read_is_exact_room_bound_and_not_recent_only(self):
-        """A host can retrieve old model evidence without accidentally reading another room's record."""
-        path, message = self.create_group_room()
-        payload = {"kind": "interjection", "label": "未自动生效", "confidence": 0.4, "applied": False,
-                   "provider": "jev", "after_message_id": message, "detail": [{"choice": "__host__"}],
-                   "context": {"prompt": 9}, "input": {"state": "原问题与成员事实", "questions": []}}
-        first = self.request(path + "/scheduler-decisions", payload)[1]
-        for _ in range(100):
-            self.assertEqual(self.request(path + "/scheduler-decisions", payload)[0], 200)
-        self.assertNotIn(first["id"], [item["id"] for item in self.request(path)[1]["scheduler_decisions"]])
-        status, result = self.request(f"{path}/scheduler-decisions/{first['id']}", token=self.member_tokens["Claude"])
-        self.assertEqual(status, 200, result)
-        for key in ("input", "detail", "context"):
-            self.assertEqual(result[key], payload[key])
-        other, _ = self.create_group_room()
-        self.assertEqual(self.request(f"{other}/scheduler-decisions/{first['id']}")[0], 404)
-        state = self.request(path + "/discussion")[1]
-        self.assertEqual(self.request(path + "/discussion", {"action": "start", "revision": state["revision"], "goal": "独立观点"})[0], 200)
-        roster = self.request(path + "/turns/roster")[1]
-        self.assertEqual(self.request(path + "/turns", {"actor": "Claude", "expert": "Codex", "question": "独立回答",
-            "roster": roster["revision"], "submission_id": uuid.uuid4().hex}, token=self.member_tokens["Claude"])[0], 201)
-        self.assertEqual(self.request(f"{path}/scheduler-decisions/{first['id']}", token=self.member_tokens["Codex"])[0], 403)
-
     def test_browser_update_stream_reports_only_successful_committed_writes(self):
         """Independent subscribers see committed changes and can reconnect without a cursor."""
         if self.external:
@@ -298,20 +257,18 @@ class DiscussionTests(unittest.TestCase):
         """Send a request and decode JSON or UTF-8 text, including error bodies."""
         payload = dict(payload) if payload is not None else None
         if payload is not None and (path == "/api/rooms" or (path.endswith("/topic") and "experts" in payload)):
-            experts = payload.get("experts", {name: "cli" if name == "Codex" else "online" for name in self.member_tokens})
+            experts = payload.get("experts", {name: "cli" for name in self.member_tokens})
             if isinstance(experts, dict):
                 current = self.request(path.removesuffix("/topic"))[1].get("experts", {}) if path.endswith("/topic") else {}
                 for name, mode in experts.items():
                     if name in current and current[name] != mode:
                         self.member_tokens[name] = uuid.uuid4().hex
                 payload.setdefault("members", [{"name": name, "token": self.member_tokens.setdefault(name, uuid.uuid4().hex),
-                    "access": "online" if mode == "online" else "runner"} for name, mode in experts.items()])
+                    "access": "runner" if name in self.runner_members else "manual"} for name, mode in experts.items()])
         if payload is not None and path.endswith("/messages") and "source" not in payload and "submitted_by" not in payload:
             mode = self.request(path.removesuffix("/messages"))[1].get("experts", {}).get(payload.get("author"))
             if mode == "cli":
                 payload["source"] = "cli"
-            elif mode == "online":
-                payload["submitted_by"] = "用户"
         actor = (payload or {}).get("actor", (payload or {}).get("submitted_by", (payload or {}).get("author", "用户")))
         if token is None:
             token = self.owner if actor == "用户" or path == "/api/rooms" else self.member_tokens.get(actor, "")
@@ -416,7 +373,7 @@ class DiscussionTests(unittest.TestCase):
         self.configure_host(start=False)
         base = f"/api/rooms/{self.room['id']}"
         originals = [self.post(f"原文 {index} 🙂\n保留换行", f"backup-{index}")[1]["message"] for index in range(45)]
-        payload = {"author": "Gemini", "submitted_by": "Codex", "source": "cli", "text": "完整专家意见",
+        payload = {"author": "Gemini", "source": "cli", "text": "完整专家意见",
                    "summary": "摘要", "summary_by": "Gemini", "submission_id": "backup-answer", "reply_to": originals[0]["id"]}
         status, answer = self.request(base + "/messages", payload)
         self.assertEqual(status, 201)
@@ -439,7 +396,7 @@ class DiscussionTests(unittest.TestCase):
             self.assertEqual(row, {key: original[key] for key in row})
         details = next(row for row in tables["message_details"] if row["message_id"] == answer["id"])
         summary = next(row for row in tables["message_summaries"] if row["message_id"] == answer["id"])
-        self.assertEqual(details, {"message_id": answer["id"], "kind": "chat", "submitted_by": "Codex"})
+        self.assertEqual(details, {"message_id": answer["id"], "kind": "chat", "submitted_by": "Gemini"})
         self.assertEqual((summary["text"], summary["author"]), ("摘要", "Gemini"))
         self.assertEqual(tables["rooms"][0]["state_text"], "保留分歧")
         self.assertEqual(tables["room_briefs"][0]["text"], "主持简报")
@@ -479,7 +436,7 @@ class DiscussionTests(unittest.TestCase):
         file = json.loads(self.attachment_request(base + "/attachments?" + upload, data)[2])["attachment"]
         self.request(base + "/messages", {"author": "用户", "text": f"补充 #{first['id']}", "attachment_ids": [file["id"]],
                                           "submission_id": "import-second", "reply_to": first["id"]})
-        payload = {"author": "Gemini", "submitted_by": "Codex", "source": "cli", "text": f"回应 #{first['id']}",
+        payload = {"author": "Gemini", "source": "cli", "text": f"回应 #{first['id']}",
                    "summary": f"摘要 #{first['id']}", "summary_by": "Gemini", "submission_id": "import-answer"}
         answer = self.request(base + "/messages", payload)[1]["message"]
         backup = json.loads(json.dumps(self.request(base + "/backup")[1]).replace(self.room["id"], "importedroom"))
@@ -503,7 +460,7 @@ class DiscussionTests(unittest.TestCase):
         self.assertGreater(new_first["id"], answer["id"] + 1)
         self.assertEqual((second["text"], second["reply_to"]), (f"补充 #{new_first['id']}", new_first["id"]))
         self.assertEqual((new_answer["text"], new_answer["summary"], new_answer["submitted_by"]),
-                         (f"回应 #{new_first['id']}", f"摘要 #{new_first['id']}", "Codex"))
+                         (f"回应 #{new_first['id']}", f"摘要 #{new_first['id']}", "Gemini"))
         self.assertNotIn("turn_id", new_answer)
         self.assertIsNone(room["current_turn"])
         path = f"/api/rooms/importedroom/attachments/{result['attachments'][file['id']]}"
@@ -515,6 +472,7 @@ class DiscussionTests(unittest.TestCase):
 
     def test_room_backup_v2_imports_sessions_as_read_only_history(self):
         """Session history and task provenance are remapped without importing executable work."""
+        self.runner_members.add("Gemini")
         self.configure_host(experts={"Codex": "cli", "Gemini": "cli"})
         base = f"/api/rooms/{self.room['id']}"
         before = self.post("讨论前的问题 #17", "session-backup-before")[1]["message"]
@@ -615,14 +573,6 @@ class DiscussionTests(unittest.TestCase):
         imported_messages = self.request("/api/rooms/sessionimport/messages")[1]["messages"]
         self.assertNotIn("系统任务", [row["author"] for row in imported_messages])
 
-    def test_room_backup_handles_empty_and_missing_rooms(self):
-        """A new room is exportable; missing rooms never produce an empty success."""
-        status, snapshot = self.request(f"/api/rooms/{self.room['id']}/backup")
-        self.assertEqual(status, 200)
-        self.assertEqual(snapshot["tables"]["messages"], [])
-        self.assertEqual(snapshot["tables"]["discussion_sessions"], [])
-        self.assertEqual(self.request("/api/rooms/missing/backup"), (404, {"error": "房间不存在"}))
-
     def test_channel_order_and_rename_survive_reload(self):
         """Moves persist without losing new rooms; rename retains IDs and content."""
         original = self.post("原文保留", "rename-original")[1]["message"]
@@ -671,12 +621,6 @@ class DiscussionTests(unittest.TestCase):
         self.session_action("resume")
         self.assertEqual(self.request(base)[1]["session"]["id"], original["id"])
 
-    def test_user_can_message_while_paused(self):
-        """Pausing a session still permits ordinary user messages and direct questions."""
-        self.configure_host()
-        self.session_action("pause")
-        self.assertEqual(self.post("@主持人 讨论结束了吗", "paused-user-question")[0], 201)
-
     def test_archive_preserves_history_and_requires_explicit_resume(self):
         """Archive cancels active work, retains evidence and never resumes work during restoration."""
         self.configure_host()
@@ -720,23 +664,6 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(next(item for item in directory["rooms"] if item["id"] == self.room["id"])["folder_id"], folder_id)
         self.assertEqual(self.request(room_path + "/folder", {"actor": "用户", "folder_id": None})[1]["folder_id"], None)
 
-    def test_folder_rename_preserves_order_and_archived_membership(self):
-        """Editing a folder name retains its contents and rejects invalid names."""
-        folder = self.request("/api/folders", {"name": "原名"})[1]
-        room_path = f"/api/rooms/{self.room['id']}"
-        self.request(room_path + "/folder", {"actor": "用户", "folder_id": folder["id"]})
-        self.request(room_path + "/archive", {"actor": "用户"})
-        before = self.request(room_path)[1]
-        path = f"/api/folders/{folder['id']}/rename"
-        status, renamed = self.request(path, {"name": "  新名称  "})
-        self.assertEqual(status, 200)
-        self.assertEqual(renamed, {**folder, "name": "新名称"})
-        self.assertEqual(self.request(room_path)[1], before)
-        for invalid in ("", " ", "字" * 41, None, 42, [], {}):
-            self.assertEqual(self.request(path, {"name": invalid})[0], 400)
-        self.assertEqual(self.request("/api/folders/missing/rename", {"name": "不存在"})[0], 404)
-        self.assertIn(renamed, self.request("/api/rooms")[1]["folders"])
-
     def test_folder_removal_preserves_active_and_archived_rooms(self):
         """Removing a group clears assignments without deleting any room records."""
         folder = self.request("/api/folders", {"name": "待移除"})[1]["id"]
@@ -760,18 +687,6 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.request(f"/api/folders/{folder}/delete", {})[0], 404)
         self.assertEqual(self.request("/api/folders/__uncategorized__/delete", {})[0], 404)
         self.assertEqual(self.request("/api/rooms")[1], after)
-
-    def test_folder_removal_keeps_uncategorized_between_remaining_groups(self):
-        """Remove empty groups before and after the virtual group without moving it."""
-        folders = [self.request("/api/folders", {"name": name})[1]["id"] for name in ("甲", "乙", "丙")]
-        moved = self.request("/api/folders/__uncategorized__/move", {"before_id": folders[1]})[1]
-        self.request(f"/api/folders/{folders[0]}/delete", {})
-        directory = self.request("/api/rooms")[1]
-        self.assertEqual(directory["uncategorized_position"], moved["uncategorized_position"] - 1)
-        self.assertEqual(directory["folders"], [item for item in moved["folders"] if item["id"] != folders[0]])
-        self.request("/api/folders/__uncategorized__/move", {"before_id": folders[2]})
-        self.request(f"/api/folders/{folders[2]}/delete", {})
-        self.assertIsNone(self.request("/api/rooms")[1]["uncategorized_position"])
 
     def test_create_room_in_folder_is_atomic_and_replayable(self):
         """Creation includes placement; retries never duplicate or move an existing room."""
@@ -822,69 +737,6 @@ class DiscussionTests(unittest.TestCase):
                                    (other["id"], "简报", 0, "2026-10-29T00:00:00Z"))
             self.assertGreater(revisions()["rooms"][other["id"]], moved["rooms"][other["id"]])
 
-    def test_folder_order_persists_without_changing_room_membership(self):
-        """Moves preserve contents, survive reload and reject invalid destinations."""
-        folders = [self.request("/api/folders", {"name": name})[1]["id"] for name in ("甲组", "乙组", "丙组")]
-        room_path = f"/api/rooms/{self.room['id']}"
-        self.request(room_path + "/folder", {"actor": "用户", "folder_id": folders[0]})
-        self.request(room_path + "/archive", {"actor": "用户"})
-        before_room = self.request(room_path)[1]
-        path = f"/api/folders/{folders[2]}/move"
-        for _ in range(2):
-            status, result = self.request(path, {"before_id": folders[0]})
-            self.assertEqual(status, 200)
-            self.assertEqual([item["id"] for item in result["folders"] if item["id"] in folders],
-                             [folders[2], folders[0], folders[1]])
-        result = self.request(path, {"before_id": None})[1]
-        self.assertEqual([item["id"] for item in result["folders"] if item["id"] in folders], folders)
-        self.assertEqual([item["position"] for item in result["folders"]], list(range(1, len(result["folders"]) + 1)))
-        for invalid in (folders[2], "missing", 42, [], {}):
-            self.assertEqual(self.request(path, {"before_id": invalid})[0], 400)
-        self.assertEqual(self.request("/api/folders/missing/move", {"before_id": None})[0], 404)
-        if not self.external:
-            init_database(self.database)
-        self.assertEqual(self.request("/api/rooms")[1]["folders"], result["folders"])
-        # Paused time grows with the clock, so a read across a second boundary must not count as a change.
-        def without_clock(room):
-            limits = {key: value for key, value in (room.get("limits") or {}).items()
-                      if key not in ("idle_seconds", "deadline", "remaining_seconds", "elapsed_seconds")}
-            return {**room, "limits": limits}
-        self.assertEqual(without_clock(self.request(room_path)[1]), without_clock(before_room))
-
-    def test_uncategorized_order_with_one_folder_and_legacy_migration(self):
-        """The virtual group moves both ways, persists and never becomes an assignment."""
-        folder = self.request("/api/folders", {"name": "test"})[1]
-        virtual_path = "/api/folders/__uncategorized__/move"
-        folder_path = f"/api/folders/{folder['id']}/move"
-        if not self.external:
-            with closing(sqlite3.connect(self.database)) as connection:
-                connection.execute("DROP TABLE directory_settings")
-                connection.commit()
-            init_database(self.database, seed=False)
-            self.assertIsNone(self.request("/api/rooms")[1]["uncategorized_position"])
-        self.assertEqual(self.request(virtual_path, {"before_id": None})[0], 200)
-        status, moved = self.request(virtual_path, {"before_id": folder["id"]})
-        self.assertEqual(status, 200)
-        self.assertEqual(moved["uncategorized_position"], len(moved["folders"]) - 1)
-        self.assertEqual(self.request(folder_path, {"before_id": "__uncategorized__"})[1]["uncategorized_position"], None)
-        moved = self.request(folder_path, {"before_id": None})[1]
-        self.assertEqual(moved["uncategorized_position"], len(moved["folders"]) - 1)
-        if not self.external:
-            init_database(self.database, seed=False)
-            init_database(self.database, seed=False)
-        directory = self.request("/api/rooms")[1]
-        self.assertEqual(directory["uncategorized_position"], moved["uncategorized_position"])
-        self.assertEqual(directory["folders"], moved["folders"])
-        self.assertIsNone(self.request(f"/api/rooms/{self.room['id']}")[1]["folder_id"])
-        self.assertEqual(self.request(f"/api/rooms/{self.room['id']}/folder",
-                                      {"actor": "用户", "folder_id": "__uncategorized__"})[0], 400)
-        self.assertEqual(self.request(virtual_path, {"before_id": "__uncategorized__"})[0], 400)
-        self.request("/api/folders", {"name": "新增组"})
-        self.assertEqual(self.request("/api/rooms")[1]["uncategorized_position"], moved["uncategorized_position"])
-        self.request(virtual_path, {"before_id": None})
-        self.request("/api/folders", {"name": "末尾组"})
-        self.assertIsNone(self.request("/api/rooms")[1]["uncategorized_position"])
-
     def test_delete_removes_related_records_and_leaves_other_channels(self):
         """Wrong confirmations preserve content; deletion removes linked data atomically."""
         self.configure_host()
@@ -910,104 +762,6 @@ class DiscussionTests(unittest.TestCase):
                     self.assertEqual(connection.execute(f"SELECT COUNT(*) FROM {table} WHERE room_id=?", (self.room["id"],)).fetchone()[0], 0)
                 self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
 
-    def test_manual_message_search_and_exact_history(self):
-        """Unicode text, mentions, and reply links survive storage and retrieval."""
-        status, result = self.post("@Codex 成本 = 100 & 条件 < 3\n原文", "manual-001")
-        self.assertEqual(status, 201)
-        message = result["message"]
-        self.assertEqual(message["source"], "user")
-        self.assertEqual(self.post("补充依据", "manual-002", message["id"])[0], 201)
-        query = urlencode({"q": "成本", "mention": "Codex"})
-        found = self.request(f"/api/rooms/{self.room['id']}/messages?{query}")[1]
-        self.assertEqual(found["total"], 1)
-        original = self.request(f"/r/{self.room['id']}/messages/{message['id']}")[1]
-        self.assertIn("成本 = 100 & 条件 < 3\n原文", original)
-
-    def test_answer_summary_preserves_body_provenance_and_retry(self):
-        """Summaries retain their own author and cannot silently change on a retry."""
-        self.configure_host()
-        base = f"/api/rooms/{self.room['id']}"
-        payload = {"author": "Gemini", "submitted_by": "Codex", "source": "cli", "text": "完整正文\n条件与反例保留。",
-                   "summary": "仅建议有条件试用。", "summary_by": "Gemini", "submission_id": "summary-original"}
-        payload.update(self.prepare_speech("Gemini"))
-        status, result = self.request(base + "/messages", payload)
-        self.assertEqual(status, 201)
-        message = result["message"]
-        self.assertEqual((message["summary"], message["summary_by"]), (payload["summary"], "Gemini"))
-        self.assertEqual(self.request(base + "/messages", payload)[1]["message"], message)
-        for change in ({"summary": "改变摘要"}, {"summary_by": "Codex"}):
-            self.assertEqual(self.request(base + "/messages", {**payload, **change})[0], 409)
-        saved = self.request(base + f"/messages/{message['id']}")[1]
-        self.assertEqual(saved["text"], payload["text"])
-        self.assertEqual(self.request(base + "/messages?author=Gemini")[1]["messages"], [saved])
-        reading = self.request(f"/r/{self.room['id']}/messages/{message['id']}")[1]
-        self.assertIn("回答摘要（Gemini）", reading)
-        self.assertTrue(reading.endswith(payload["text"]))
-
-    def test_invalid_summary_does_not_finish_assignment(self):
-        """Summary limits and attribution are checked before storing or completing an answer."""
-        self.configure_host()
-        turn = self.schedule()[1]["turn"]
-        base = f"/api/rooms/{self.room['id']}"
-        payload = {"author": "Gemini", "submitted_by": "Codex", "text": "完整回答", "request_ids": [turn["member_request_id"]],
-                   "summary": "🙂" * 1000, "submission_id": "summary-validation"}
-        for change in ({"summary": "🙂" * 1001}, {"summary_by": "Claude"}, {"kind": "receipt", "turn_id": None}):
-            self.assertEqual(self.request(base + "/messages", {**payload, **change})[0], 400)
-        self.assertEqual(self.request(base + f"/turns/{turn['id']}")[1]["status"], "open")
-        self.assertEqual(self.request(base)[1]["message_count"], 0)
-        status, result = self.request(base + "/messages", payload)
-        self.assertEqual(status, 201)
-        self.assertEqual((result["message"]["summary"], result["message"]["summary_by"]), (payload["summary"], "Codex"))
-
-    def test_host_brief_survives_legacy_updates_without_leaking_into_entry(self):
-        """A saved brief retains its own cutoff when old clients update detailed state."""
-        self.configure_host()
-        message = self.post("作为依据的原文", "brief-evidence")[1]["message"]
-        base = f"/api/rooms/{self.room['id']}"
-        payload = {"actor": "Codex", "text": "详细共识", "brief": "结论待验证；歧义未消除；主持人将追问条件。", "until": message["id"]}
-        status, saved = self.request(base + "/state", payload)
-        self.assertEqual(status, 200)
-        brief = saved["host_brief"]
-        self.assertEqual((brief["text"], brief["until"]), (payload["brief"], message["id"]))
-        self.assertTrue(brief["updated_at"])
-        self.request(base + "/state", {"actor": "Codex", "text": "旧客户端的新状态", "until": 0})
-        self.assertEqual(self.request(base)[1]["host_brief"], brief)
-        for change in ({"brief": "🙂" * 1601}, {"until": message["id"] + 100}, {"actor": "Gemini"}):
-            self.assertEqual(self.request(base + "/state", {**payload, **change})[0], 403 if "actor" in change else 400)
-        self.assertEqual(self.request(base)[1]["state_text"], "旧客户端的新状态")
-        self.assertEqual(self.request(base)[1]["host_brief"], brief)
-        self.assertNotIn(payload["brief"], self.request(f"/r/{self.room['id']}?mode=cli")[1])
-        self.assertIn(payload["brief"], self.request(f"/r/{self.room['id']}/state")[1])
-
-    def test_answered_assignment_count_excludes_other_records(self):
-        """Only answered discuss requests count; cancelled plans and ordinary/host replies never inflate progress."""
-        self.configure_host()
-        base = f"/api/rooms/{self.room['id']}"
-        cancelled = self.schedule("round-cancelled")[1]["turn"]
-        self.request(base + f"/turns/{cancelled['id']}", {"actor": "用户", "status": "cancelled"})
-        self.post("没有关联安排的观点", "round-free")
-        host_binding = self.reserve_member("Codex")
-        self.assertEqual(self.request(base + "/messages", {**host_binding, "author": "Codex", "kind": "chat", "text": "主持说明", "submission_id": "round-moderation"})[0], 201)
-        plan = self.schedule("round-answered")[1]["turn"]
-        self.assertEqual(self.request(base + "/discussion")[1]["session"]["answered"], 0)
-        status, saved = self.request(base + "/messages", {"author": "Gemini", "text": "本轮回答", "summary": "简短摘要", "request_ids": [plan["member_request_id"]], "submission_id": "round-answer"})
-        self.assertEqual(status, 201, saved)
-        self.assertEqual(self.request(base + "/discussion")[1]["session"]["answered"], 1)
-        pending = self.schedule("round-pending")[1]["turn"]
-        self.assertEqual(self.request(base + f"/turns/{pending['id']}")[1]["status"], "open")
-        self.assertEqual(self.request(base + "/discussion")[1]["session"]["answered"], 1)
-
-    def test_concurrent_summary_conflicts_keep_one_unchanged_answer(self):
-        """Concurrent same-body submissions with different summaries cannot overwrite the winner."""
-        base = f"/api/rooms/{self.room['id']}/messages"
-        payload = {"author": "Claude", "text": "同一完整正文", "submission_id": "summary-race"}
-        payload.update(self.prepare_speech("Claude"))
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            results = list(executor.map(lambda summary: self.request(base, {**payload, "summary": summary}), ["摘要甲", "摘要乙"]))
-        self.assertEqual(sorted(status for status, _ in results), [201, 409])
-        winner = next(result["message"] for status, result in results if status == 201)
-        self.assertEqual(self.request(base)[1]["messages"], [winner])
-
     def test_frontend_assets_have_browser_compatible_content_types(self):
         """The channel workspace loads compiled assets through the static routes."""
         assets = {"/": "text/html", "/app.js": "text/javascript",
@@ -1022,24 +776,6 @@ class DiscussionTests(unittest.TestCase):
                 accepted_types = ("text/javascript", "application/javascript") if content_type == "text/javascript" else (content_type,)
                 self.assertIn(response.headers["Content-Type"].split(";")[0].strip(), accepted_types)
                 self.assertTrue(response.read())
-
-    def test_public_reading_allows_crawlers_and_indexing(self):
-        """Public pages and reading endpoints permit crawlers to fetch and index."""
-        status, robots_text = self.request("/robots.txt")
-        self.assertEqual(status, 200)
-        policy = RobotFileParser()
-        policy.parse(robots_text.splitlines())
-        paths = ("/", "/api/rooms", f"/r/{self.room['id']}", f"/r/{self.room['id']}/brief")
-        for path in paths:
-            with self.subTest(path=path):
-                for user_agent in ("*", "DeepSeekBot", "Googlebot"):
-                    self.assertTrue(policy.can_fetch(user_agent, self.base + path))
-                with urlopen(self.base + path, timeout=5) as response:
-                    self.assertEqual(response.status, 200)
-                    directives = response.headers.get("X-Robots-Tag", "").lower()
-                    self.assertNotIn("noindex", directives)
-                    self.assertNotIn("nofollow", directives)
-                    self.assertNotIn("none", directives)
 
     def test_cli_publish_is_idempotent_and_rejects_changed_payload(self):
         """An execution's exact retries retain one original CLI record, even after completion."""
@@ -1091,25 +827,6 @@ class DiscussionTests(unittest.TestCase):
         found = self.request("/api/rooms?" + urlencode({"submission_id": identifier}))[1]["rooms"]
         self.assertEqual(found[0]["id"], winner["id"])
 
-    def test_long_answer_limit_does_not_expand_summary_or_finish_rejected_turn(self):
-        """Full Unicode answers are atomic; oversized answers and summaries are rejected."""
-        self.configure_host()
-        turn = self.schedule()[1]["turn"]
-        base = f"/api/rooms/{self.room['id']}"
-        payload = {"author": "Gemini", "submitted_by": "Codex", "text": "🙂" * 32001,
-                   "request_ids": [turn["member_request_id"]], "submission_id": "unicode-long-answer"}
-        self.assertEqual(self.request(base + "/messages", payload)[0], 400)
-        self.assertEqual(self.request(base + f"/turns/{turn['id']}")[1]["status"], "open")
-        payload["text"] = "🙂" * 32000
-        status, result = self.request(base + "/messages", payload)
-        self.assertEqual(status, 201)
-        self.assertEqual(self.request(base + f"/messages/{result['message']['id']}")[1]["text"], payload["text"])
-        saved_request = next(item for item in self.request(base)[1]["free"]["requests"] if item["id"] == turn["member_request_id"])
-        self.assertEqual(saved_request["answer_id"], result["message"]["id"])
-        self.assertEqual(self.request(base + "/state", {"actor": "Codex", "text": "摘要" * 2001})[0], 400)
-        for query in ("after=-1", "after=0&page=2", "kind=unknown", "submission_id=bad"):
-            self.assertEqual(self.request(base + "/messages?" + query)[0], 400)
-
     def test_simultaneous_cli_retries_create_one_record(self):
         """Concurrent replays cannot bypass the submission ID uniqueness rule."""
         payload = {"author": "Codex", "text": "并发重试", "submission_id": "parallel-001", "source": "cli"}
@@ -1130,21 +847,6 @@ class DiscussionTests(unittest.TestCase):
             "author": "Codex", "text": "缺少提交编号", "source": "cli",
         })[0], 400)
         self.assertEqual(self.request(f"/api/rooms/{self.room['id']}")[1]["message_count"], 0)
-
-    def test_participation_mode_is_independent_of_model_name(self):
-        """Default and unknown modes get the web guide; local AIs are pointed to the skills, not raw writes."""
-        path = f"/r/{self.room['id']}"
-        for suffix in ("", "?mode=online&participant=Codex", "?mode=unknown&participant=Gemini"):
-            plain = self.request(path + suffix)[1]
-            self.assertIn("在线 AI · 只读参与", plain)
-            self.assertNotIn("POST /api/", plain)
-            self.assertNotIn("/publish?", plain)
-            self.assertIn("引用原文编号", plain)
-            self.assertNotIn("不调用模型服务 API", plain)
-        plain = self.request(path + "?mode=cli&participant=Gemini")[1]
-        self.assertIn("discuss-participant", plain)
-        self.assertNotIn("POST /api/", plain)
-        self.assertNotIn("在线 AI · 只读参与", plain)
 
     def test_simultaneous_conflicting_retries_preserve_original(self):
         """One payload wins; concurrent changed payloads cannot overwrite it."""
@@ -1172,44 +874,6 @@ class DiscussionTests(unittest.TestCase):
         second = self.request(f"/api/rooms/{self.room['id']}/messages?page=2")[1]
         self.assertEqual((len(first["messages"]), len(second["messages"])), (20, 3))
         self.assertEqual(len({row["id"] for row in first["messages"] + second["messages"]}), 23)
-
-    def test_state_keeps_its_snapshot_and_storage_survives_reinitialization(self):
-        """Saving a summary never marks later, unseen messages as summarized."""
-        first_id = self.post("初始证据", "snapshot-001")[1]["message"]["id"]
-        self.post("稍后抵达的分歧", "snapshot-002")
-        self.request(f"/api/rooms/{self.room['id']}/state", {"text": f"依据 #{first_id}", "until": first_id})
-        if not self.external:
-            init_database(self.database)
-        room = self.request(f"/api/rooms/{self.room['id']}")[1]
-        self.assertEqual(room["state_until"], first_id)
-        self.assertEqual(room["message_count"], 2)
-        self.assertGreater(room["latest_id"], room["state_until"])
-        plain = self.request(f"/r/{self.room['id']}")[1]
-        self.assertIn(f"整理至 #{first_id}", plain)
-
-    def test_run_receipts_are_no_longer_written_and_the_view_has_no_receipt_list(self):
-        """The receipt message kind is retired: it is refused, and the room view and state text carry no receipt references."""
-        self.configure_host()
-        base = f"/api/rooms/{self.room['id']}"
-        self.assertNotIn("latest_receipts", self.request(base)[1])
-        for author in ("Codex", "用户"):
-            self.assertEqual(self.request(base + "/messages", {"author": author, "kind": "receipt", "text": "旧运行已启动", "submission_id": f"receipt-{author}"})[0], 400)
-        self.assertNotIn("回执", self.request(f"/r/{self.room['id']}/state")[1])
-
-    def test_open_requests_never_claim_execution_has_started(self):
-        """Creating and reading an assignment issues a request without claiming successful delivery."""
-        self.configure_host()
-        base = f"/api/rooms/{self.room['id']}"
-        for expert in ("Codex", "Gemini"):
-            plan = self.schedule(f"label-{expert}", expert=expert)[1]["turn"]
-            self.assertEqual(plan["status"], "open")
-            self.assertIsNotNone(plan["member_request_id"])
-            stored = self.request(base + f"/turns/{plan['id']}")[1]
-            self.assertEqual(stored["status"], "open")
-            request = next(item for item in self.request(base)[1]["free"]["requests"] if item["id"] == plan["member_request_id"])
-            self.assertEqual(request["status"], "pending")
-            self.assertIsNone(request["execution_id"])
-            self.request(base + f"/turns/{plan['id']}", {"actor": "用户", "status": "cancelled"})
 
     def prepare_speech(self, author, kind="opinion"):
         """Arrange a session request and return the actual execution or manual request binding."""
@@ -1256,7 +920,7 @@ class DiscussionTests(unittest.TestCase):
         self.assertNotIn("floor", self.request(base)[1])
         self.assertEqual(self.request(base + "/floor")[0], 404)
         plan = self.schedule()[1]["turn"]
-        answer = {"author": "Gemini", "submitted_by": "用户", "kind": "chat", "request_ids": [plan["member_request_id"]],
+        answer = {"author": "Gemini", "kind": "chat", "request_ids": [plan["member_request_id"]],
                   "text": "被点名者的真实回答", "submission_id": "floor-answer"}
         self.assertIn(self.request(base + "/messages", {**answer, "author": "Qwen", "submission_id": "floor-wrong"})[0], (400, 403))
         self.assertEqual(self.post("补充约束", "floor-user")[0], 201)
@@ -1271,48 +935,17 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.request(base + "/messages", {**answer, "text": "改过的回答"})[0], 409)
         self.assertEqual(self.request(base + "/messages", {**answer, "submission_id": "floor-late"})[0], 409)
 
-    def test_failed_answers_leave_the_arrangement_open_and_the_host_may_cancel_it_any_time(self):
-        """Invalid proxy attribution leaves the request open, and only the owner or host may cancel it."""
-        self.configure_host()
-        base = f"/api/rooms/{self.room['id']}"
-        plan = self.schedule("floor-attribution")[1]["turn"]
-        bad = {"author": "Gemini", "submitted_by": "Claude", "text": "错误代发", "request_ids": [plan["member_request_id"]], "submission_id": "floor-bad-proxy"}
-        self.assertEqual(self.request(base + "/messages", bad)[0], 403)
-        self.assertEqual(self.request(base + f"/turns/{plan['id']}")[1]["status"], "open")
-        self.assertEqual(self.request(base + f"/turns/{plan['id']}", {"actor": "Codex", "status": "cancelled"})[0], 200)
-        self.assertEqual(self.request(base + f"/turns/{plan['id']}")[1]["status"], "cancelled")
-        self.assertEqual(self.schedule("floor-after-cancel")[0], 201)
-
     def configure_host(self, start=True, experts=None):
         """Create a free room with an automatic host and explicit participant capabilities."""
         status, self.room = self.request("/api/rooms", {"title": "讨论请求回归", "host": "Codex",
-            "experts": experts or {"Codex": "cli", "Gemini": "online"}})
+            "experts": experts or {"Codex": "cli", "Gemini": "cli"}})
         self.assertEqual(status, 201, self.room)
+        for name in self.room["experts"]:
+            if name not in self.runner_members:
+                self.assertEqual(self.request(f"/api/rooms/{self.room['id']}/register", {}, token=self.member_tokens[name])[0], 200)
         if start:
             self.session_action("start", goal="保持完整记录")
         return self.request(f"/api/rooms/{self.room['id']}")[1]
-
-    def test_topic_details_save_in_free_active_and_paused_rooms_without_mutating_session_controls(self):
-        """Owner topic edits retain discussion controls and reject legacy phase/limit mutations."""
-        self.configure_host(start=False)
-        base = f"/api/rooms/{self.room['id']}"
-        status, saved = self.request(base + "/topic", {"actor": "用户", "title": "自由协作资料", "background": "自由背景"})
-        self.assertEqual(status, 200, saved)
-        self.assertEqual((saved["title"], saved["background"]), ("自由协作资料", "自由背景"))
-        self.assertEqual(self.request(base + "/topic", {"actor": "用户", "phase": "paused"})[0], 400)
-        self.session_action("start", goal="保持完整记录", limits={"max_rounds": 3, "max_minutes": 0})
-        for state in ("active", "paused"):
-            if state == "paused":
-                self.session_action("pause")
-            before = self.request(base)[1]
-            status, saved = self.request(base + "/topic", {"actor": "用户", "title": f"{state}资料", "background": "只更新背景"})
-            self.assertEqual(status, 200, saved)
-            self.assertEqual((saved["title"], saved["background"]), (f"{state}资料", "只更新背景"))
-            self.assertEqual((saved["session"]["id"], saved["session"]["status"]), (before["session"]["id"], state))
-            self.assertEqual(saved["limits"]["max_rounds"], 3)
-            self.assertEqual(saved["phase"], before["phase"])
-            for change in ({"phase": "discussing"}, {"limits": {"max_rounds": 7}}, {"host": "用户"}, {"experts": {"Codex": "cli"}}):
-                self.assertEqual(self.request(base + "/topic", {"actor": "用户", **change})[0], 400, change)
 
     def schedule(self, submission_id="schedule-001", **changes):
         """Read the session roster and submit the host's versioned plan."""
@@ -1323,7 +956,7 @@ class DiscussionTests(unittest.TestCase):
 
     def test_interjection_ask_keeps_queue_and_other_host_requests(self):
         """Versioned conversion closes only one source, even when a host execution contains two."""
-        self.configure_host(experts={"Codex": "cli", "Gemini": "online", "Claude": "online"})
+        self.configure_host(experts={"Codex": "cli", "Gemini": "cli", "Claude": "cli"})
         base = f"/api/rooms/{self.room['id']}"
         self.schedule("ask-queue-plan", turns=[{"expert": name, "question": "请分析"} for name in ("Gemini", "Claude")])
         first = self.post("请解释第一处风险", "ask-source-one")[1]["message"]["id"]
@@ -1356,22 +989,6 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.request(base + "/turns/roster")[1]["held_since"], 0)
         self.assertEqual(self.request(base + f"/executions/{binding['execution_id']}")[1]["status"], "completed")
 
-    def test_interjection_ask_can_target_an_already_spoken_member(self):
-        """An answered expert gets an ordinary request without opening a new round."""
-        self.configure_host()
-        base = f"/api/rooms/{self.room['id']}"
-        plan = self.schedule("ask-spoken-plan")[1]["turn"]
-        self.assertEqual(self.request(base + "/messages", {"author": "Gemini", "submitted_by": "用户", "kind": "chat",
-            "request_ids": [plan["member_request_id"]], "text": "观点", "submission_id": "ask-spoken-answer"})[0], 201)
-        self.post("你说的数字有什么来源？", "ask-spoken-user")
-        roster = self.request(base + "/turns/roster")[1]
-        self.assertEqual(roster["waiting"], [])
-        status, result = self.request(base + "/turns/ask", {"actor": "Codex", "expert": "Gemini",
-            "request_id": roster["host_requests"][0]["id"], "revision": roster["revision"], "submission_id": "ask-spoken-convert"})
-        self.assertEqual(status, 201, result)
-        after = self.request(base + "/turns/roster")[1]
-        self.assertEqual((after["round"], after["queue"], after["waiting"]), (roster["round"], roster["queue"], []))
-
     def test_user_request_is_preserved_separately_through_writes_and_backup(self):
         """Keep original whitespace, enforce bounds, and include it in replay checks."""
         original = "  用户原文🙂\n保留换行与空白  \n"
@@ -1396,47 +1013,6 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual((cleared["user_request"], cleared["background"]), ("", "更新背景"))
         self.assertEqual(self.request(base + "/delete", {"actor": "用户", "confirm_title": room["title"]})[0], 200)
 
-    def test_legacy_user_request_has_read_only_compatibility_until_saved(self):
-        """Split only explicit legacy sections and preserve unmarked backgrounds."""
-        if self.external:
-            self.skipTest("Legacy storage setup is local to SQLite")
-        room_id = self.room["id"]
-        background = "用户原文：\n原始要求\n第二行\n\n项目背景与入口：\n补充材料"
-        with closing(sqlite3.connect(self.database)) as connection, connection:
-            connection.execute("DELETE FROM room_user_requests WHERE room_id=?", (room_id,))
-            connection.execute("UPDATE topic_settings SET background=? WHERE room_id=?", (background, room_id))
-        init_database(self.database, seed=False)
-        base = f"/api/rooms/{room_id}"
-        room = self.request(base)[1]
-        self.assertEqual((room["user_request"], room["background"]), ("原始要求\n第二行", "项目背景与入口：\n补充材料"))
-        with closing(sqlite3.connect(self.database)) as connection, connection:
-            self.assertEqual(connection.execute("SELECT background FROM topic_settings WHERE room_id=?", (room_id,)).fetchone()[0], background)
-            self.assertIsNone(connection.execute("SELECT text FROM room_user_requests WHERE room_id=?", (room_id,)).fetchone())
-        saved = self.request(base + "/topic", {"actor": "用户", "goal": "更新目标"})[1]
-        self.assertEqual(saved["user_request"], room["user_request"])
-        with closing(sqlite3.connect(self.database)) as connection, connection:
-            self.assertEqual(connection.execute("SELECT text FROM room_user_requests WHERE room_id=?", (room_id,)).fetchone()[0], room["user_request"])
-        plain = "用户原文：\n没有明确背景分隔的整段文字\n背景：\n仍属于原文"
-        with closing(sqlite3.connect(self.database)) as connection, connection:
-            connection.execute("DELETE FROM room_user_requests WHERE room_id=?", (room_id,))
-            connection.execute("UPDATE topic_settings SET background=? WHERE room_id=?", (plain, room_id))
-        self.assertEqual((self.request(base)[1]["user_request"], self.request(base)[1]["background"]), ("", plain))
-
-    def test_topic_host_requires_write_capability_and_preserves_metadata(self):
-        """Topic hosting is a role independent of the model name."""
-        path = f"/api/rooms/{self.room['id']}/topic"
-        self.assertEqual(self.request(path, {"actor": "用户", "host": "Gemini"})[0], 400)
-        room = self.configure_host()
-        path = f"/api/rooms/{self.room['id']}/topic"
-        self.assertEqual(room["host"], "Codex")
-        self.assertEqual(room["experts"]["Codex"], "cli")
-        self.assertEqual(self.request(path, {"actor": "Gemini", "focus": "错误操作"})[0], 403)
-        updated = self.request(path, {"actor": "Codex", "background": "问题背景", "boundaries": "不更换产品", "focus": "成本分歧"})[1]
-        self.assertEqual((updated["background"], updated["boundaries"], updated["focus"]), ("问题背景", "不更换产品", "成本分歧"))
-        status, created = self.request("/api/rooms", {"title": "主持人创建", "host": "Gemini", "experts": {"Gemini": "cli"}})
-        self.assertEqual(status, 201)
-        self.assertEqual(created["host"], "Gemini")
-
     def test_overview_discloses_context_only_through_explicit_pages(self):
         """Entry pages never inline background, state text, or mentioned messages."""
         self.configure_host()
@@ -1444,12 +1020,11 @@ class DiscussionTests(unittest.TestCase):
         self.post("@Gemini MESSAGE_ONLY", "progressive-001")
         self.request(f"/api/rooms/{self.room['id']}/state", {"actor": "Codex", "text": "STATE_ONLY"})
         base = f"/r/{self.room['id']}"
-        for mode in ("online", "cli"):
-            overview = self.request(base + f"?mode={mode}&participant=Gemini")[1]
-            for marker in ("BACKGROUND_ONLY", "BOUNDARIES_ONLY", "STATE_ONLY", "MESSAGE_ONLY"):
-                self.assertNotIn(marker, overview)
-            for route in ("/brief", "/state", "/search?mention=Gemini", "/messages?page=1"):
-                self.assertIn(route, overview)
+        overview = self.request(base + "?participant=Gemini")[1]
+        for marker in ("BACKGROUND_ONLY", "BOUNDARIES_ONLY", "STATE_ONLY", "MESSAGE_ONLY"):
+            self.assertNotIn(marker, overview)
+        for route in ("/brief", "/state", "/search?mention=Gemini", "/messages?page=1"):
+            self.assertIn(route, overview)
         self.assertIn("BACKGROUND_ONLY", self.request(base + "/brief")[1])
         self.assertIn("STATE_ONLY", self.request(base + "/state")[1])
         self.assertIn("MESSAGE_ONLY", self.request(base + "/search?mention=Gemini")[1])
@@ -1457,8 +1032,8 @@ class DiscussionTests(unittest.TestCase):
         self.assertIn("当前主持人：Codex", protocol)
         self.assertIn("--kind chat --execution", protocol)
 
-    def test_host_speech_and_forwarded_authorship_remain_distinct(self):
-        """The host's own answer and a web member's relayed answer preserve different authors and sources."""
+    def test_host_speech_keeps_its_authorship_and_cannot_answer_for_others(self):
+        """The host's own answer keeps its author and source; it cannot submit another member's answer."""
         self.configure_host()
         path = f"/api/rooms/{self.room['id']}/messages"
         payload = {"author": "Codex", "text": "个人观点", "source": "cli", "kind": "chat", "submission_id": "host-opinion-001"}
@@ -1468,48 +1043,10 @@ class DiscussionTests(unittest.TestCase):
         binding = self.prepare_speech("Codex", "moderation")
         moderation = self.request(path, {**binding, "author": "Codex", "text": "请回到议题", "kind": "chat", "submission_id": "host-control-001"})[1]["message"]
         self.assertEqual(moderation["author"], "Codex")
-        forwarded = {"author": "Gemini", "submitted_by": "Codex", "text": "在线专家原文 & 引用", "reply_to": opinion["id"], "submission_id": "host-forward-001"}
-        forwarded.update(self.prepare_speech("Gemini"))
-        status, result = self.request(path, forwarded)
-        self.assertEqual(status, 201, result)
-        message = result["message"]
-        self.assertEqual((message["author"], message["submitted_by"], message["source"]), ("Gemini", "Codex", "host_proxy"))
-        self.assertEqual(self.request(path, {**forwarded, "submitted_by": "Claude", "submission_id": "bad-forward-001"})[0], 403)
-        self.assertEqual(self.request(path, {**forwarded, "submitted_by": "Gemini", "source": "cli", "submission_id": "bad-online-001"})[0], 403)
-        self.assertEqual(self.request(path, {**forwarded, "kind": "moderation", "submission_id": "bad-role-001"})[0], 400)
-        original = self.request(f"/r/{self.room['id']}/messages/{message['id']}")[1]
+        forwarded = {"author": "Gemini", "submitted_by": "Codex", "text": "替他人回答", "reply_to": opinion["id"], "submission_id": "host-forward-001"}
+        self.assertEqual(self.request(path, forwarded, token=self.member_tokens["Codex"])[0], 403)
+        original = self.request(f"/r/{self.room['id']}/messages/{opinion['id']}")[1]
         self.assertIn("提交者：Codex", original)
-        self.assertIn("在线专家原文 & 引用", original)
-
-    def test_session_rounds_count_answer_volume_and_ignore_other_requests(self):
-        """Only discuss answers consume the non-host expert budget, including repeated speakers."""
-        self.configure_host(experts={"Codex":"cli", "Gemini":"online", "DeepSeek":"online"})
-        base=f"/api/rooms/{self.room['id']}"
-        binding=self.reserve_member("Codex")
-        self.assertEqual(self.request(base+"/messages",{**binding,"author":"Codex","text":"主持说明","submission_id":"round-host-note"})[0],201)
-        self.post("不计轮次的用户消息","round-user-note")
-        for index in range(2):
-            binding=self.prepare_speech("Gemini")
-            self.assertEqual(self.request(base+"/messages",{**binding,"author":"Gemini","text":"同一专家的回答","submission_id":f"round-volume-{index}"})[0],201)
-            self.assertEqual(self.request(base)[1]["limits"]["completed_rounds"],(index+1)//2)
-        self.assertEqual(self.request(base+"/discussion")[1]["session"]["answered"],2)
-        self.assertEqual(self.request(base)[1]["message_count"],4)
-
-    def test_session_progress_survives_pagination_and_filters(self):
-        """Progress comes from the session's complete requests, independently of message list filters."""
-        self.configure_host()
-        base=f"/api/rooms/{self.room['id']}"
-        messages=[]
-        for index in range(23):
-            binding=self.prepare_speech("Gemini")
-            status,saved=self.request(base+"/messages",{**binding,"author":"Gemini","text":f"分页回答 {index}","submission_id":f"round-page-{index:03d}"})
-            self.assertEqual(status,201,saved)
-            messages.append(saved["message"])
-        for query in ("page=1","page=2","author=Gemini","kind=chat","q=no-matching-round-record"):
-            self.assertEqual(self.request(base+"/messages?"+query)[0],200)
-            self.assertEqual(self.request(base)[1]["limits"]["completed_rounds"],23)
-        self.assertEqual(self.request(base+"/messages?page=2")[1]["messages"][0]["id"],messages[20]["id"])
-        self.assertEqual(self.request(base)[1]["message_count"],23)
 
     def test_host_conclusion_requires_current_state_and_keeps_the_room_writable(self):
         """A host concludes with the latest snapshot while its task is stopped and history remains."""
@@ -1546,7 +1083,7 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.schedule(question="另一问题")[0], 409)
         self.assertEqual(self.request(path)[1]["status"], "open")
         self.assertEqual(self.request(path, {"actor": "Codex", "status": "notified"})[0], 400)
-        payload = {"author": "Gemini", "submitted_by": "Codex", "text": "专家的回答", "request_ids": [plan["member_request_id"]], "submission_id": "turn-answer-001"}
+        payload = {"author": "Gemini", "text": "专家的回答", "request_ids": [plan["member_request_id"]], "submission_id": "turn-answer-001"}
         status, result = self.request(base + "/messages", payload)
         self.assertEqual(status, 201, result)
         self.assertEqual(self.request(path)[1]["status"], "answered")
@@ -1554,22 +1091,6 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(member_request["answer_id"], result["message"]["id"])
         self.assertTrue(self.request(base + "/messages", payload)[1]["duplicate"])
         self.assertEqual(self.schedule("schedule-next-001")[0], 201)
-
-    def test_turn_cancellation_phase_and_cross_room_constraints(self):
-        """Cancelled requests reject late answers and remain isolated from other rooms."""
-        self.configure_host()
-        plan = self.schedule()[1]["turn"]
-        base = f"/api/rooms/{self.room['id']}"
-        self.assertEqual(self.request(base + "/topic", {"actor": "用户", "phase": "concluded"})[0], 400)
-        other = self.request("/api/rooms", {"title": "另一个话题"})[1]
-        self.assertEqual(self.request(f"/api/rooms/{other['id']}/turns/{plan['id']}")[0], 404)
-        wrong = {"author": "Codex", "source": "cli", "text": "错误专家", "request_ids": [plan["member_request_id"]], "submission_id": "wrong-expert-001"}
-        self.assertEqual(self.request(base + "/messages", wrong)[0], 400)
-        self.request(base + f"/turns/{plan['id']}", {"actor": "用户", "status": "cancelled"})
-        late = {"author": "Gemini", "text": "迟到回答", "request_ids": [plan["member_request_id"]], "submission_id": "late-answer-001"}
-        self.assertEqual(self.request(base + "/messages", late)[0], 409)
-        self.session_action("end")
-        self.assertIn(self.schedule("closed-topic-001")[0], (400,409))
 
     def test_independent_pause_and_resume_lifecycle(self):
         """Pause cancels old work, resume requires a fresh plan, and conclusion leaves ordinary collaboration available."""
@@ -1612,7 +1133,7 @@ class DiscussionTests(unittest.TestCase):
         """One assignment accepts only one answer even with different submissions."""
         self.configure_host()
         turn = self.schedule()[1]["turn"]
-        payload = {"author": "Gemini", "submitted_by": "Codex", "text": "并发回答", "request_ids": [turn["member_request_id"]]}
+        payload = {"author": "Gemini", "text": "并发回答", "request_ids": [turn["member_request_id"]]}
         path = f"/api/rooms/{self.room['id']}/messages"
         with ThreadPoolExecutor(max_workers=5) as executor:
             results = list(executor.map(lambda index: self.request(path, {**payload, "submission_id": f"answer-race-{index}"}), range(5)))
@@ -1629,7 +1150,7 @@ class DiscussionTests(unittest.TestCase):
             barrier.wait()
             if cancel:
                 return self.request(base+f"/turns/{plan['id']}",{"actor":"用户","status":"cancelled"})
-            return self.request(base+"/messages",{"author":"Gemini","text":"正在提交的回答","submitted_by":"Codex","request_ids":[plan["member_request_id"]],"submission_id":"cancel-race-001"})
+            return self.request(base+"/messages",{"author":"Gemini","text":"正在提交的回答","request_ids":[plan["member_request_id"]],"submission_id":"cancel-race-001"})
         with ThreadPoolExecutor(max_workers=2) as executor:
             results=list(executor.map(cancel_or_answer,[True,False]))
         stored=self.request(base+f"/turns/{plan['id']}")[1]

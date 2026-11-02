@@ -233,7 +233,7 @@ CREATE TABLE IF NOT EXISTS member_registrations (
     token_hash TEXT NOT NULL,
     registered_at TEXT NOT NULL
 );
--- Web-relay members use the manual access path while retaining owner-only proxy semantics.
+-- Marks members of the retired web-relay access; no new rows are written.
 CREATE TABLE IF NOT EXISTS member_manual_sources (
     member_id INTEGER PRIMARY KEY REFERENCES room_members(id) ON DELETE CASCADE,
     source TEXT NOT NULL CHECK(source='web')
@@ -341,6 +341,13 @@ CREATE INDEX IF NOT EXISTS member_requests_execution ON member_requests(executio
 CREATE INDEX IF NOT EXISTS member_requests_room ON member_requests(room_id);
 CREATE INDEX IF NOT EXISTS member_requests_room_status ON member_requests(room_id,status);
 CREATE INDEX IF NOT EXISTS member_requests_batch ON member_requests(batch_id,status);
+-- Web chatbots are no longer members: earlier ones are removed and their open requests cancelled; their messages keep
+-- the author name. member_manual_sources stays only to recognise those earlier members.
+UPDATE member_requests SET status='cancelled' WHERE status IN ('pending','delivering') AND member_id IN (
+    SELECT member_id FROM member_manual_sources UNION SELECT id FROM room_members WHERE access='online');
+INSERT OR IGNORE INTO member_manual_sources (member_id,source) SELECT id,'web' FROM room_members WHERE access='online';
+UPDATE room_members SET access='manual' WHERE access='online';
+UPDATE room_members SET status='removed',role='member' WHERE status<>'removed' AND id IN (SELECT member_id FROM member_manual_sources);
 -- One durable disposition per @everyone message; also prevents a host fallback from being routed again after restart.
 -- The original group request may be deleted for a sequential queue, so request_id is a receipt, not a foreign key.
 CREATE TABLE IF NOT EXISTS group_routes (

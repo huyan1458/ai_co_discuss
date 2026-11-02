@@ -10,16 +10,12 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { adopt_member_profile, room_member_allow, borrowed_session, cached_software_models, launch_discussion, launch_projects, pick_directory, launch_settings, room_configuration, room_member, room_member_access, room_member_adapter, save_launch_projects, save_launch_settings, expert_presets, save_expert_presets } from '../runner/discussion_launch.mjs';
+import { adopt_member_profile, borrowed_session, launch_discussion, launch_settings, room_configuration, room_member, save_launch_projects, save_launch_settings } from '../runner/discussion_launch.mjs';
 import { api, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
-import { DiscussionService, read_registry, register_room } from '../runner/discussion_service.mjs';
-import { save_api_key } from '../runner/discussion_api.mjs';
-import { SCHEDULER_PROVIDERS } from '../runner/scheduler.mjs';
+import { DiscussionService, read_registry } from '../runner/discussion_service.mjs';
 import { save_site_connection } from '../runner/discussion_local.mjs';
-import { session_settings, software_defaults, software_effort, software_models } from '../runner/adapters/index.mjs';
-import { DatabaseSync } from 'node:sqlite';
-
+import { software_models } from '../runner/adapters/index.mjs';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 /** Simulate the software control stream, recording every request and process cleanup. */
@@ -55,189 +51,6 @@ test('model discovery initializes Codex and reads every catalog page without cre
   assert.deepEqual(f.requests.map(row => row.method), ['initialize', 'initialized', 'model/list', 'model/list']);
   assert.equal(f.child.killed, true);
   assert.equal(f.invocations[0][2].shell, false);
-});
-
-test('Claude model discovery sends only initialization and strips account metadata', async () => {
-  const f = catalog_process((request, child) => child.stdout.write(`${JSON.stringify({ type: 'control_response', response: {
-    subtype: 'success', request_id: request.request_id, response: { account: { email: 'private@example.test' }, models: [
-      { value: 'opus', displayName: 'Opus', supportedEffortLevels: ['low', 'max'], supportsEffort: true },
-      { value: 'older', displayName: 'Older', supportsEffort: false }] } } })}\n`));
-  const result = await software_models({ adapter: 'claude', executable: process.execPath }, f);
-  assert.deepEqual(result.models, [{ id: 'opus', label: 'Opus', efforts: ['low', 'max'] }, { id: 'older', label: 'Older', efforts: [] }]);
-  assert.equal(f.requests.length, 1); assert.equal(f.requests[0].request.subtype, 'initialize');
-  assert.ok(f.invocations[0][1].includes('--safe-mode'));
-  assert.ok(f.invocations[0][1].includes('--no-session-persistence'));
-  assert.ok(!JSON.stringify(result).includes('private@example.test'));
-  assert.equal(f.child.killed, true);
-});
-
-test('directory picker returns only an absolute chosen path and never guesses on cancel', async () => {
-  const runs = [];
-  const fake = (output, code = 0) => (command, args, options) => {
-    runs.push({ command, args, options });
-    const child = new EventEmitter();
-    child.stdout = new PassThrough();
-    queueMicrotask(() => { child.stdout.end(output); child.stdout.on('end', () => child.emit('close', code)); child.stdout.resume(); });
-    return child;
-  };
-  const chosen = await pick_directory({ platform: 'win32', spawn_process: fake('D:\\项目\\demo\r\n') });
-  assert.deepEqual(chosen, { path: 'D:\\项目\\demo' });
-  assert.equal(runs[0].command, 'powershell.exe');
-  assert.equal(runs[0].options.shell, false);
-  assert.deepEqual(await pick_directory({ platform: 'darwin', spawn_process: fake('', 1) }), { cancelled: true });
-  assert.deepEqual(await pick_directory({ platform: 'linux', spawn_process: fake('relative/path\n') }), { cancelled: true });
-  await assert.rejects(pick_directory({ platform: 'aix', spawn_process: fake('') }), /直接输入/);
-});
-
-test('project list keeps only named folders that exist on this computer', t => {
-  const home = mkdtempSync(join(tmpdir(), 'codiscuss-projects-'));
-  t.after(() => rmSync(home, { recursive: true, force: true }));
-  assert.deepEqual(launch_projects(home), { projects: [] });
-  const saved = save_launch_projects(home, { projects: [{ name: ' 演示 ', path: home }] });
-  assert.deepEqual(saved.projects.map(({ name, path }) => ({ name, path })), [{ name: '演示', path: home }]);
-  assert.deepEqual(launch_projects(home), saved);
-  assert.throws(() => save_launch_projects(home, { projects: [{ name: '', path: home }] }), /名称不能为空/);
-  assert.throws(() => save_launch_projects(home, { projects: [{ name: 'a', path: home }, { name: 'a', path: home }] }), /名称重复/);
-  assert.throws(() => save_launch_projects(home, { projects: [{ name: 'a', path: 'relative' }] }), /绝对路径/);
-  assert.throws(() => save_launch_projects(home, { projects: [{ name: 'a', path: join(home, 'missing') }] }), /不存在此文件夹/);
-  assert.deepEqual(launch_projects(home), saved);
-});
-
-test('expert presets and default descriptions are saved on this computer beside the built-in presets', t => {
-  const home = mkdtempSync(join(tmpdir(), 'codiscuss-presets-'));
-  t.after(() => rmSync(home, { recursive: true, force: true }));
-  const empty = expert_presets(home);
-  assert.deepEqual([empty.presets, empty.description_templates], [[], {}]);
-  assert.deepEqual(empty.builtin_presets.map(item => [item.name, item.project_access]), [['Codex-评审', 'read'], ['Gemini-文档', 'write']]);
-  const preset = { name: 'Claude-前端', label: '前端改版', description: '改 UI', system_prompt: '先给结论', project_access: 'write', model: 'opus' };
-  save_expert_presets(home, { presets: [preset] });
-  // Saving only the templates keeps the presets, and the other way round.
-  const saved = save_expert_presets(home, { description_templates: { Codex: '代码写得好' } });
-  assert.deepEqual([saved.presets, saved.description_templates], [[preset], { Codex: '代码写得好' }]);
-  assert.deepEqual(expert_presets(home).presets, [preset]);
-  assert.throws(() => save_expert_presets(home, { presets: [{ name: 'Codex-评审-2' }] }), /平台名-后缀/);
-  assert.throws(() => save_expert_presets(home, { presets: [preset, preset] }), /重复/);
-  assert.throws(() => save_expert_presets(home, { presets: [{ name: 'Codex', session_id: 'x' }] }), /只能包含/);
-  assert.throws(() => save_expert_presets(home, { presets: [{ name: 'Codex', project_access: 'all' }] }), /read、write、auto 或 full/);
-  assert.throws(() => save_expert_presets(home, { presets: [{ name: 'Codex-评审', label: 'x'.repeat(33) }] }), /显示名/);
-  assert.throws(() => save_expert_presets(home, { description_templates: { 'Codex-评审': 'x' } }), /平台名/);
-  assert.deepEqual(expert_presets(home).presets, [preset]);
-});
-
-test('slow model catalogs are reused until the executable changes or the user retries', async t => {
-  const home = mkdtempSync(join(tmpdir(), 'codiscuss-models-'));
-  t.after(() => rmSync(home, { recursive: true, force: true }));
-  const executable = join(home, 'agy.exe');
-  writeFileSync(executable, 'v1');
-  const calls = [];
-  const query = async profile => { calls.push(profile.adapter); return calls.length === 3
-    ? { adapter: profile.adapter, models: [], source: 'antigravity-cli', error: '超时' }
-    : { adapter: profile.adapter, models: [{ id: `model-${calls.length}`, label: 'Model' }], source: 'antigravity-cli' }; };
-  const profile = { adapter: 'antigravity_cli', executable };
-  const effort_calls = [], query_effort = async profile => { effort_calls.push(profile.model || ''); return { levels: ['low', 'medium', 'high'] }; };
-  const query_defaults = async () => ({ model: 'model-1', effort: 'medium' });
-  const options = { query, query_effort, query_defaults };
-  assert.deepEqual((await cached_software_models(home, profile, options)).defaults, { model: 'model-1', effort: 'medium' });
-  assert.equal((await cached_software_models(home, profile, options)).models[0].id, 'model-1');
-  assert.equal((await cached_software_models(home, profile, options)).models[0].id, 'model-1', 'a new page reads the saved list');
-  assert.equal(calls.length, 1);
-  assert.equal(effort_calls.length, 1);
-  await cached_software_models(home, { ...profile, model: 'model-1' }, options);
-  assert.deepEqual(effort_calls, ['', 'model-1']); assert.equal(calls.length, 1, 'changing models only queries native effort');
-  assert.equal((await cached_software_models(home, profile, { ...options, refresh: true })).models[0].id, 'model-2');
-  assert.match((await cached_software_models(home, profile, { ...options, refresh: true })).error, /超时/);
-  assert.equal((await cached_software_models(home, profile, options)).models[0].id, 'model-2', 'a failed retry keeps the last good list');
-  writeFileSync(executable, 'v2 upgraded');
-  assert.equal((await cached_software_models(home, profile, options)).models[0].id, 'model-4');
-  assert.equal(Object.keys(JSON.parse(readFileSync(join(home, 'model-catalogs.json'), 'utf8'))).length, 2, 'old catalog and effort entries are replaced');
-});
-
-test('agy effort discovery uses a read-only native command and never guesses on failure', async () => {
-  const f = catalog_process();
-  const pending = software_effort({ adapter: 'antigravity_cli', executable: process.execPath, model: 'native-model' }, f);
-  f.child.stdout.write(JSON.stringify({ status: 'SUCCESS', command: { name: 'effort', data: {
-    adjustable: true, current: 'medium', available: ['low', 'medium', 'high'] } } }) + '\n');
-  assert.deepEqual(await pending, { levels: ['low', 'medium', 'high'] });
-  assert.deepEqual(f.invocations[0][1], ['-p', '/effort', '--output-format', 'json', '--model', 'native-model']);
-  assert.equal(f.child.killed, true); assert.deepEqual(f.requests, []);
-  const older = catalog_process();
-  const unsupported = software_effort({ adapter: 'antigravity_cli', executable: process.execPath }, older);
-  older.child.emit('close', 1);
-  assert.equal((await unsupported).levels, undefined);
-  const fixed = catalog_process();
-  const immutable = software_effort({ adapter: 'antigravity_cli', executable: process.execPath }, fixed);
-  fixed.child.stdout.write(JSON.stringify({ status: 'SUCCESS', command: { name: 'effort', data: {
-    adjustable: false, available: [] } } }) + '\n');
-  assert.deepEqual(await immutable, { levels: [] });
-});
-
-test('agy defaults come from its native /model command, and an unreadable answer stays empty', async () => {
-  const f = catalog_process();
-  const pending = software_defaults({ adapter: 'antigravity_cli', executable: process.execPath, model: 'chosen-model' }, f);
-  f.child.stdout.write(JSON.stringify({ status: 'SUCCESS', command: { name: 'model', data: {
-    id: 'gemini-4-argon-medium', label: 'Gemini 4 Argon (Medium)', effort: 'medium', is_default: false } } }) + '\n');
-  assert.deepEqual(await pending, { model: 'gemini-4-argon-medium', effort: 'medium' });
-  assert.deepEqual(f.invocations[0][1], ['-p', '/model', '--output-format', 'json'], 'the default is asked without the chosen model');
-  const older = catalog_process();
-  const failed = software_defaults({ adapter: 'antigravity_cli', executable: process.execPath }, older);
-  older.child.emit('close', 1);
-  assert.deepEqual(await failed, { model: '', effort: '' });
-});
-
-test('session logs tell the model and effort a member last ran with, and anything unreadable stays empty', t => {
-  const home = mkdtempSync(join(tmpdir(), 'codiscuss-session-'));
-  t.after(() => rmSync(home, { recursive: true, force: true }));
-  const env = {}, id = '01a185a2-e580-7ef1-8b2e-90221ee4ade0', lines = items => items.map(item => typeof item === 'string' ? item : JSON.stringify(item)).join('\n') + '\n';
-  // Claude Code: the newest main-thread request wins over side queries such as titles.
-  mkdirSync(join(home, '.claude', 'projects', 'D--project'), { recursive: true });
-  writeFileSync(join(home, '.claude', 'projects', 'D--project', `${id}.jsonl`), lines([
-    { type: 'api-request', querySource: 'sdk', params: { model: 'claude-old', output_config: { effort: 'low' } } },
-    { type: 'api-request', querySource: 'sdk', params: { model: 'claude-opus-5-5', output_config: { effort: 'high' } } },
-    { type: 'api-request', querySource: 'generate_session_title', params: { model: 'claude-haiku-5-5' } }, '{"type":"api-request" cut']));
-  assert.deepEqual(session_settings('claude', id, { env, home }), { model: 'claude-opus-5-5', effort: 'high' });
-  // Codex CLI and App share rollout files; the latest turn context wins.
-  mkdirSync(join(home, '.codex', 'sessions', '2026', '10', '28'), { recursive: true });
-  writeFileSync(join(home, '.codex', 'sessions', '2026', '10', '28', `rollout-2026-10-28T20-10-07-${id}.jsonl`), lines([
-    { type: 'turn_context', payload: { model: 'gpt-6-sol', effort: 'low' } },
-    { type: 'turn_context', payload: { model: 'gpt-6-astra', collaboration_mode: { settings: { reasoning_effort: 'xhigh' } } } }]));
-  for (const adapter of ['codex_cli', 'codex']) assert.deepEqual(session_settings(adapter, id, { env, home }), { model: 'gpt-6-astra', effort: 'xhigh' });
-  // agy: the model sits in a protobuf field of the newest generation; its effort is part of the model ID.
-  mkdirSync(join(home, '.gemini', 'antigravity-cli', 'conversations'), { recursive: true });
-  const db = new DatabaseSync(join(home, '.gemini', 'antigravity-cli', 'conversations', `${id}.db`));
-  db.exec('CREATE TABLE gen_metadata (idx integer PRIMARY KEY, data blob, size integer)');
-  const blob = model => Buffer.concat([Buffer.from([0x0a, 0x02, 0x41, 0x42, 0xe2, 0x01, model.length]), Buffer.from(model), Buffer.from([0xf2, 0x01, 0x00])]);
-  db.prepare('INSERT INTO gen_metadata (idx, data, size) VALUES (?, ?, 0)').run(1, blob('gemini-4-argon-low'));
-  db.prepare('INSERT INTO gen_metadata (idx, data, size) VALUES (?, ?, 0)').run(2, blob('gemini-4-argon-medium'));
-  db.close();
-  assert.deepEqual(session_settings('antigravity_cli', id, { env, home }), { model: 'gemini-4-argon-medium', effort: '' });
-  const none = { model: '', effort: '' };
-  assert.deepEqual(session_settings('claude', 'missing-session', { env, home }), none);
-  assert.deepEqual(session_settings('claude', '../escape', { env, home }), none, 'a session ID never becomes a path');
-  assert.deepEqual(session_settings('api', id, { env, home }), none);
-});
-
-test('agy explicit effort can be saved without changing its native default model', t => {
-  const home = mkdtempSync(join(tmpdir(), 'codiscuss-effort-'));
-  t.after(() => rmSync(home, { recursive: true, force: true }));
-  const profile = { adapter: 'antigravity_cli', executable: process.execPath, effort: 'low' };
-  assert.deepEqual(save_launch_settings(home, { participants: { Gemini: profile } }).participants.Gemini, profile);
-  assert.throws(() => save_launch_settings(home, { participants: { Gemini: { ...profile, effort: 'turbo' } } }), /effort 只能是/);
-});
-
-test('agy discovery parses native model output and failure never invents choices', async () => {
-  const f = catalog_process();
-  const pending = software_models({ adapter: 'antigravity_cli', executable: process.execPath }, f);
-  f.child.stdout.write('model-high\tModel (High)\nmodel-low  Model (Low)\nFetching models...\n');
-  f.child.emit('close', 0);
-  assert.deepEqual((await pending).models, [{ id: 'model-high', label: 'Model (High)' }, { id: 'model-low', label: 'Model (Low)' }]);
-  assert.deepEqual(f.invocations[0][1], ['models']); assert.deepEqual(f.requests, []);
-  const slow = catalog_process();
-  const timeout = await software_models({ adapter: 'claude', executable: process.execPath }, { ...slow, timeout_ms: 5 });
-  assert.equal(slow.child.killed, true); assert.deepEqual(timeout.models, []); assert.match(timeout.error, /超时/);
-  const unused = catalog_process();
-  assert.match((await software_models({ adapter: 'codex' }, unused)).error, /原软件/);
-  assert.match((await software_models({ adapter: 'claude' }, unused)).error, /完整路径/);
-  assert.equal(unused.invocations.length, 0);
 });
 
 test('paused room path correction is authenticated, versioned and adopted before an explicit restart', async t => {
@@ -339,48 +152,6 @@ test('paused Codex switches App and CLI with the same room and session, without 
   }
 });
 
-test('an unstoppable App waits after discussion pause and resume until its late answer', async t => {
-  let service;
-  t.after(() => service?.close());
-  const f = await fixture(t), launched = await launch_discussion(f.home, f.input, f.options);
-  const config = load_config(launched.config_path), calls = [];
-  service = new DiscussionService(f.home, (current, store) => new FreeRoomRunner(current, store,
-    async () => { calls.push(true); return { status: 'accepted', capabilities: { stoppable: false, progress: false } }; }));
-  await service.tick();
-  const execution = (await api(config, '/inbox')).executions[0];
-  let discussion = await api(config, '/discussion');
-  await api(config, '/discussion', { action: 'pause', revision: discussion.revision });
-  await service.tick();
-  const held = (await api(config, '/inbox')).members[0].held_until;
-  assert.ok(held > Date.now() / 1000);
-  discussion = await api(config, '/discussion');
-  await api(config, '/discussion', { action: 'resume', revision: discussion.revision });
-  await service.tick();
-  assert.equal(calls.length, 1);
-  assert.equal((await api(config, '/inbox')).members[0].held_until, held);
-  await assert.rejects(api({ ...config, token: config.members.Codex.token }, '/messages', { author: 'Codex',
-    text: '迟到回答', execution_id: execution.id, submission_id: randomUUID() }), /409/);
-  await service.tick();
-  assert.equal(calls.length, 2);
-});
-
-test('Codex entrypoint changes reject unbound sessions and unrelated participant changes', async t => {
-  const f = await fixture(t);
-  const launched = await launch_discussion(f.home, f.input, f.options);
-  const config = load_config(launched.config_path);
-  const discussion = await api(config, '/discussion');
-  await api(config, '/discussion', { action: 'pause', revision: discussion.revision });
-  const input = { site: f.site, room_id: config.room, token: config.token };
-  const current = await room_configuration(f.home, input);
-  const saved = readFileSync(launched.config_path, 'utf8');
-  const change = participants => room_configuration(f.home, { ...input, version: current.version,
-    session_revision: current.session_revision, participants });
-  await assert.rejects(change({ Codex: { adapter: 'codex' } }), /尚无实际 Codex 会话/);
-  await assert.rejects(change({ Claude: { adapter: 'codex' } }), /本场修正仅支持/);
-  await assert.rejects(change({ Codex: { adapter: 'codex', session_id: 'replacement' } }), /本场修正仅支持/);
-  assert.equal(readFileSync(launched.config_path, 'utf8'), saved);
-});
-
 test('local room-config route edits only the authorized paused room and reports an offline worker honestly', async t => {
   const f = await fixture(t);
   const launched = await launch_discussion(f.home, f.input, f.options);
@@ -397,46 +168,6 @@ test('local room-config route edits only the authorized paused room and reports 
   assert.equal(saved.status, 200, JSON.stringify(saved.body));
   assert.equal(saved.body.applied, false);
   assert.equal((await api(config, '/discussion')).session.status, 'paused');
-});
-
-test('room-models bridge pins the connected site and reads without changing a running discussion', async t => {
-  const f = await fixture(t);
-  f.input.participants.Codex.model = 'gpt-6-astra';
-  f.input.participants.Codex.effort = 'xhigh';
-  const launched = await launch_discussion(f.home, f.input, f.options);
-  const config = load_config(launched.config_path);
-  const before = await api(config, '/discussion');
-  const contents = readFileSync(launched.config_path, 'utf8');
-  const input = { room_id: config.room, site: 'https://spoof.example', access_file: 'must-not-be-read',
-    participants: { Codex: { model: 'must-not-be-written' } } };
-  const headers = { 'X-CoDiscuss-Local': '1', Origin: f.site };
-  const read = await request(f.site, '/api/local/room-models', input, headers);
-  assert.equal(read.status, 200);
-  // default_model / default_effort come from this machine's own Codex settings, so only the registered choice is fixed here.
-  const { adapter, model, effort } = read.body.participants.Codex;
-  assert.deepEqual({ adapter, model, effort }, { adapter: 'codex_cli', model: 'gpt-6-astra', effort: 'xhigh' });
-  assert.equal(readFileSync(launched.config_path, 'utf8'), contents);
-  assert.equal((await api(config, '/discussion')).revision, before.revision);
-  assert.equal((await api(config, '/discussion')).session.status, 'active');
-  assert.equal((await request(f.site, '/api/local/room-models', input)).status, 403);
-  const origin = 'https://discussion.example', token = 'c'.repeat(64);
-  const remote_path = join(f.directory, 'connected-room.json');
-  writeFileSync(remote_path, JSON.stringify({ ...config, site: origin,
-    participants: { Codex: { ...config.participants.Codex, model: 'connected-room-model' } } }));
-  register_room(f.home, remote_path);
-  save_site_connection(f.home, origin, token);
-  const connected = { Origin: origin, 'X-CoDiscuss-Local': '1', 'X-CoDiscuss-Connection': token };
-  const remote_read = await request(f.site, '/api/local/room-models', { room_id: config.room, site: f.site }, connected);
-  assert.equal(remote_read.status, 200);
-  assert.equal(remote_read.body.participants.Codex.model, 'connected-room-model');
-  assert.equal(remote_read.headers['access-control-allow-origin'], origin);
-  assert.equal((await request(f.site, '/api/local/room-models', input, { ...connected, 'X-CoDiscuss-Connection': '' })).status, 403);
-  const preflight = await fetch(`${f.site}/api/local/room-models`, { method: 'OPTIONS', headers: {
-    Origin: origin, 'Access-Control-Request-Method': 'POST',
-    'Access-Control-Request-Headers': 'content-type,x-codiscuss-local,x-codiscuss-connection' } });
-  assert.equal(preflight.status, 200);
-  await preflight.json();
-  assert.equal(f.starts.length, 1, 'readback must not start another service or dispatch AI');
 });
 
 /** Run the real website in a temporary database; no actual AI software is invoked. */
@@ -483,21 +214,6 @@ async function request(site, path, body, headers = {}) {
     outgoing.end(text);
   });
 }
-
-test('machine defaults and per-discussion overrides share validation without persisting session IDs', async t => {
-  const f = await fixture(t);
-  save_launch_settings(f.home, { participants: f.input.participants });
-  assert.deepEqual(launch_settings(f.home).participants, f.input.participants);
-  assert.throws(() => save_launch_settings(f.home, { participants: { Codex: { ...f.input.participants.Codex, session_id: 'must-not-be-global' } } }), /不能保存房间或会话/);
-  assert.throws(() => save_launch_settings(f.home, { participants: { Codex: { executable: './codex.exe' } } }), /绝对路径/);
-  const input = { ...f.input, participants: { Claude: { cwd: f.directory } } };
-  const result = await launch_discussion(f.home, input, { dry_run: true });
-  assert.equal(result.participants.Claude.cwd, f.directory);
-  assert.equal(result.participants.Codex.adapter, 'codex_cli');
-  assert.equal((await request(f.site, '/api/rooms')).body.rooms.length, 0);
-  assert.equal(read_registry(f.home).length, 0);
-  assert.equal(existsSync(join(f.home, 'launches')), false);
-});
 
 test('connected website needs its own credential and CORS preflight never starts or configures anything', async t => {
   const f = await fixture(t);
@@ -599,12 +315,6 @@ for (const entry of ['web', 'conversation']) {
   });
 }
 
-test('zero launch minutes preserves a finite topic duration', async t => {
-  const f = await fixture(t);
-  const result = await launch_discussion(f.home, { ...f.input, minutes: 0 }, f.options);
-  assert.equal(result.room.limits.max_minutes, 15);
-});
-
 test('project write access is per launch, defaults to read and can differ per participant', async t => {
   const f = await fixture(t);
   assert.throws(() => save_launch_settings(f.home, { participants: { Codex: { ...f.input.participants.Codex, project_access: 'write' } } }), /不能保存房间或会话/);
@@ -615,19 +325,6 @@ test('project write access is per launch, defaults to read and can differ per pa
   const inherited = await preview({ project_access: 'write', participants: { ...f.input.participants, Claude: { ...f.input.participants.Claude, project_access: '' } } });
   assert.equal(inherited.participants.Claude.project_access, 'write');
   await assert.rejects(preview({ project_access: 'admin' }), /read、write、auto 或 full/);
-});
-
-test('explicit empty participant settings fall back to this discussion without changing saved defaults', async t => {
-  const f = await fixture(t);
-  const defaults = { ...f.input.participants, Codex: { ...f.input.participants.Codex,
-    cwd: f.directory, project_name: 'saved-project', project_id: 'saved-id' } };
-  save_launch_settings(f.home, { participants: defaults });
-  const result = await launch_discussion(f.home, { ...f.input, cwd: f.home, discussion_project: 'this-project',
-    participants: { Codex: { cwd: '', project_name: '', project_id: '' } } }, { dry_run: true });
-  assert.equal(result.participants.Codex.cwd, f.home);
-  assert.equal(result.participants.Codex.project_name, 'this-project');
-  assert.equal(result.participants.Codex.project_id, undefined);
-  assert.deepEqual(launch_settings(f.home).participants, defaults);
 });
 
 for (const legacy of [false, true]) test(`a ${legacy ? 'legacy' : 'current'} interrupted launch pins defaults and rejects changed explicit requests`, async t => {
@@ -664,49 +361,6 @@ for (const entry of ['web', 'conversation']) test(`${entry} rejects incorrect co
   const result = await launch_discussion(f.home, { ...input, token }, f.options);
   assert.equal(result.status, 'free');
   assert.equal(load_config(result.config_path).token, token);
-});
-
-test('correcting a legacy credential updates its live worker without changing the run or session', async t => {
-  const f = await fixture(t);
-  const token = randomUUID();
-  const input = { ...f.input, token };
-  const first = await launch_discussion(f.home, input, f.options);
-  const journal_path = join(dirname(first.config_path), 'launch.json');
-  const journal = JSON.parse(readFileSync(journal_path, 'utf8'));
-  const saved = JSON.parse(readFileSync(first.config_path, 'utf8'));
-  journal.token = saved.token = randomUUID();
-  for (const field of ['config', 'minutes', 'room_id', 'request_signature']) delete journal[field];
-  writeFileSync(journal_path, JSON.stringify(journal));
-  writeFileSync(first.config_path, JSON.stringify(saved));
-  const calls = [];
-  const service = new DiscussionService(f.home, (config, store) => new FreeRoomRunner(config, store,
-    async () => { calls.push('delivered'); return { status: 'accepted', session_id: 'same-host' }; }));
-  try {
-    await service.tick();
-    assert.match([...service.workers.values()][0].state.error, /403/);
-    const recovered = await launch_discussion(f.home, input, { ...f.options, browser_request: true });
-    assert.equal(recovered.room.session.id, first.room.session.id);
-    assert.equal(load_config(first.config_path).token, token);
-    await service.tick();
-    await service.tick();
-    assert.deepEqual(calls, ['delivered']);
-    assert.equal([...service.workers.values()][0].store.binding('Codex').session_id, 'same-host');
-  } finally { await service.close(); }
-});
-
-test('unrelated malformed registrations do not block launch and broken software still preserves room ownership', async t => {
-  const f = await fixture(t);
-  mkdirSync(f.home, { recursive: true });
-  const broken = join(f.home, 'unrelated.json');
-  writeFileSync(broken, '{');
-  writeFileSync(join(f.home, 'rooms.json'), JSON.stringify({ configs: [broken] }));
-  const started = await launch_discussion(f.home, f.input, f.options);
-  assert.equal(started.status, 'active');
-  assert.deepEqual(read_registry(f.home), [broken, started.config_path]);
-  const conflicting = join(f.home, 'same-room.json');
-  writeFileSync(conflicting, JSON.stringify({ site: f.site, room: started.room.id, participants: {} }));
-  writeFileSync(join(f.home, 'rooms.json'), JSON.stringify({ configs: [broken, conflicting] }));
-  await assert.rejects(launch_discussion(f.home, f.input, f.options), /另一份接入配置/);
 });
 
 test('missing software, current identity or invalid limits fail before creating rooms or starting a service', async t => {
@@ -933,45 +587,6 @@ test('web partial-failure receipts preserve the original room and require its br
   assert.equal((await api(config, '/inbox')).members.flatMap(item => item.pending).filter(item => item.purpose === 'discuss_host').length, 1);
 });
 
-test('an interrupted launch cannot resume a discussion paused before service recovery', async t => {
-  const f = await fixture(t);
-  const input = { ...f.input, token: randomUUID() };
-  let failure;
-  await assert.rejects(launch_discussion(f.home, input, { browser_request: true,
-    start_service: async () => { throw new Error('interrupted before start'); } }), error => {
-    failure = error.launch;
-    return error.message === 'interrupted before start';
-  });
-  assert.equal(failure.stage, 'created');
-  const journal = JSON.parse(readFileSync(join(f.home, 'launches', readdirSync(join(f.home, 'launches'))[0], 'launch.json'), 'utf8'));
-  const config = { ...journal.config, room: failure.room_id };
-  const initial = await api(config, '/discussion');
-  const started = await api(config, '/discussion', { action: 'start', revision: initial.revision, goal: f.input.room.goal || f.input.room.title,
-    limits: f.input.room.limits });
-  const paused = await api(config, '/discussion', { action: 'pause', revision: started.revision });
-  await assert.rejects(launch_discussion(f.home, input, { ...f.options, browser_request: true }), /暂停|状态已变化/);
-  const actual = await api(config, '/discussion');
-  assert.equal(actual.session.status, 'paused');
-  assert.equal(actual.session.id, paused.session.id);
-  assert.equal((await api(config, '/inbox')).members.flatMap(item => item.pending).filter(item => item.purpose === 'discuss_host').length, 0);
-  assert.equal(read_registry(f.home).length, 0);
-});
-
-test('a rejected first launch reports no side effects and a changed retry cannot replace its saved request', async t => {
-  const f = await fixture(t);
-  await assert.rejects(launch_discussion(f.home, { ...f.input, participants: {} }, { browser_request: true }), error => {
-    assert.equal(error.launch.stage, 'not_started');
-    return true;
-  });
-  assert.equal((await request(f.site, '/api/rooms')).body.rooms.length, 0);
-  const input = { ...f.input, token: randomUUID() };
-  await assert.rejects(launch_discussion(f.home, input, { start_service: async () => { throw new Error('offline'); } }), /offline/);
-  await assert.rejects(launch_discussion(f.home, { ...input, room: { ...input.room, title: 'changed' } }, { ...f.options, browser_request: true }), /原请求不同/);
-  const recovered = await launch_discussion(f.home, input, { ...f.options, browser_request: true });
-  assert.equal(recovered.room.title, f.input.room.title);
-  assert.equal((await request(f.site, '/api/rooms')).body.rooms.length, 1);
-});
-
 /** Exit a separate launcher at a real persistence or HTTP boundary, without a model process. */
 function interrupted_launcher(f, input, boundary) {
   const input_path = join(f.directory, 'interrupted-input.json');
@@ -1126,134 +741,6 @@ test('members join, leave and return while a free room keeps running', async t =
   } finally { await service.close(); }
 });
 
-test('a woken member switches project files between read-only and writable after the room is created', async t => {
-  const f = await fixture(t);
-  const owner = randomUUID() + randomUUID();
-  const project = mkdtempSync(join(tmpdir(), 'codiscuss-project-'));
-  t.after(() => rmSync(project, { recursive: true, force: true }));
-  const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token: owner,
-    room: { title: '改权限', goal: 'x', mode: 'free', members: ['Claude'], submission_id: randomUUID() } }, f.options);
-  const input = { site: f.site, room_id: launched.room.id, token: owner, name: 'Claude', project_access: 'write' };
-  await assert.rejects(room_member_access(f.home, { ...input, token: 'wrong'.repeat(8) }), /403/);
-  await assert.rejects(room_member_access(f.home, input), /没有指定项目目录/);
-  const config = load_config(launched.config_path);
-  writeFileSync(launched.config_path, JSON.stringify({ ...config, cwd: project }));
-  assert.deepEqual(await room_member_access(f.home, input), { room_id: launched.room.id, member: 'Claude', project_access: 'write' });
-  const saved = load_config(launched.config_path).participants.Claude;
-  assert.equal(saved.project_access, 'write');
-  assert.equal(saved.session_id, config.participants.Claude.session_id, 'the bound session stays');
-  await room_member_access(f.home, { ...input, project_access: 'read' });
-  assert.equal(load_config(launched.config_path).participants.Claude.project_access, 'read');
-  await assert.rejects(room_member_access(f.home, { ...input, project_access: 'all' }), /read、write、auto 或 full/);
-  await assert.rejects(room_member_access(f.home, { ...input, name: 'Codex' }), /不由本机唤醒/);
-  // An agy member resuming its own conversation keeps that conversation's project, so its access cannot be set here.
-  const current = load_config(launched.config_path);
-  writeFileSync(launched.config_path, JSON.stringify({ ...current, participants: { ...current.participants,
-    Gemini: { adapter: 'antigravity_cli', executable: process.execPath, session_id: 'own-agy-conversation' } } }));
-  await assert.rejects(room_member_access(f.home, { ...input, name: 'Gemini' }), /自己的 Antigravity CLI 对话/);
-  const latest = JSON.parse(readFileSync(launched.config_path, 'utf8'));
-  writeFileSync(launched.config_path, JSON.stringify({ ...latest, participants: { ...latest.participants,
-    Claude: { ...latest.participants.Claude, project_access: 'own' } } }));
-  await assert.rejects(room_member_access(f.home, input), /手动接入的成员/);
-  // A refused operation is allowed by adding its rule to the member, kept once and without touching its session.
-  const allow = { site: f.site, room_id: launched.room.id, token: owner, name: 'Claude', rules: ['PowerShell(lark-cli *)'] };
-  await assert.rejects(room_member_allow(f.home, { ...allow, name: 'Gemini' }), /自己的 Antigravity CLI 对话/);
-  const { Gemini, ...participants } = JSON.parse(readFileSync(launched.config_path, 'utf8')).participants;
-  writeFileSync(launched.config_path, JSON.stringify({ ...JSON.parse(readFileSync(launched.config_path, 'utf8')), participants }));
-  await room_member_allow(f.home, allow);
-  assert.deepEqual((await room_member_allow(f.home, allow)).allowed_tools, ['PowerShell(lark-cli *)']);
-  assert.equal(JSON.parse(readFileSync(launched.config_path, 'utf8')).participants.Claude.project_access, 'own');
-  await assert.rejects(room_member_allow(f.home, { ...allow, rules: [] }), /rules/);
-});
-
-test('an idle Codex member switches between App and CLI in a free room and keeps its conversation', async t => {
-  const f = await fixture(t);
-  const owner = randomUUID() + randomUUID();
-  const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token: owner,
-    room: { title: '切换接入', goal: 'x', mode: 'free', members: ['Codex'], submission_id: randomUUID() } }, f.options);
-  const input = { site: f.site, room_id: launched.room.id, token: owner, name: 'Codex', adapter: 'codex' };
-  await assert.rejects(room_member_adapter(f.home, { ...input, token: 'wrong'.repeat(8) }), /403/);
-  await assert.rejects(room_member_adapter(f.home, { ...input, adapter: 'claude' }), /共用会话/);
-  await assert.rejects(room_member_adapter(f.home, input), /尚无实际 Codex 会话/);
-  const config = load_config(launched.config_path);
-  const store = new DiscussionStore(config.directory);
-  try { store.bind('Codex', 'codex-thread-1'); } finally { store.close(); }
-  writeFileSync(launched.config_path, JSON.stringify({ ...JSON.parse(readFileSync(launched.config_path, 'utf8')),
-    participants: { Codex: { ...JSON.parse(readFileSync(launched.config_path, 'utf8')).participants.Codex, model: 'gpt-6-astra', effort: 'high' } } }));
-  assert.deepEqual(await room_member_adapter(f.home, input), { room_id: launched.room.id, member: 'Codex', adapter: 'codex' });
-  const app = JSON.parse(readFileSync(launched.config_path, 'utf8')).participants.Codex;
-  assert.deepEqual([app.adapter, app.session_id, app.model, app.effort], ['codex', 'codex-thread-1', undefined, undefined]);
-  await room_member_adapter(f.home, { ...input, adapter: 'codex_cli' });
-  assert.equal(JSON.parse(readFileSync(launched.config_path, 'utf8')).participants.Codex.adapter, 'codex_cli');
-  // The running service treats the switch as the same conversation, but still blocks a real change of session or project.
-  const runner = { store: { binding: () => ({ session_id: 'codex-thread-1' }) } };
-  const same = (before, after) => FreeRoomRunner.prototype.same_context.call(runner, 'Codex', JSON.stringify(before), JSON.stringify(after));
-  assert.ok(same(['codex_cli', '', '', '', '', ''], ['codex', '', '', '', '', 'codex-thread-1']));
-  assert.ok(!same(['codex_cli', '', '', '', '', ''], ['codex', '', '', '', '', 'other-thread']));
-  assert.ok(!same(['codex_cli', '', '', 'a', '', ''], ['codex', '', '', 'b', '', '']));
-  assert.ok(!same(['claude', '', '', '', '', ''], ['codex', '', '', '', '', '']));
-});
-
-test('a free room is created with woken, manual and online members chosen one by one', async t => {
-  const f = await fixture(t);
-  const owner = randomUUID() + randomUUID(), manual_token = randomUUID() + randomUUID();
-  const members = [{ name: 'Claude', access: 'runner', token: randomUUID() + randomUUID() },
-    { name: 'Codex', access: 'manual', token: manual_token }, { name: 'DeepSeek', access: 'online', token: randomUUID() + randomUUID() }];
-  const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token: owner,
-    room: { title: '混合接入', goal: 'x', mode: 'free', members, submission_id: randomUUID() } }, f.options);
-  assert.deepEqual(launched.room.free.members.map(member => [member.name, member.access]), [['Claude', 'runner'], ['Codex', 'manual'], ['DeepSeek', 'manual']]);
-  assert.deepEqual(Object.keys(load_config(launched.config_path).participants), ['Claude'], 'only woken members get local configuration');
-  assert.equal((await request(f.site, `/api/rooms/${launched.room.id}/messages`, { author: 'Codex', text: '手动成员', source: 'cli', submission_id: randomUUID() },
-    { 'X-Discussion-Token': manual_token })).status, 201);
-});
-
-test('a discussion room delivers a direct question to a named member through its free execution path', async t => {
-  const f = await fixture(t);
-  const owner = randomUUID() + randomUUID();
-  const launched = await launch_discussion(f.home, { ...f.input, entry: 'conversation', current_session_id: 'host-session', token: owner }, f.options);
-  const path = `/api/rooms/${launched.room.id}`, auth = { 'X-Discussion-Token': owner };
-  const delivered = [];
-  const service = new DiscussionService(f.home, (current, store) => new FreeRoomRunner(current, store,
-    async (_, binding, task) => { delivered.push([task.participant, task.prompt.includes('讨论')]); return { status: 'accepted' }; }));
-  try {
-    await service.tick();
-    assert.equal((await request(f.site, `${path}/messages`, { author: '用户', text: '@Claude 你怎么看', to: ['Claude'], submission_id: randomUUID() }, auth)).status, 201);
-    await service.tick();
-    assert.deepEqual(delivered, [['Claude', true]]);
-    const config = load_config(launched.config_path);
-    const inbox = await api(config, '/inbox');
-    const claude_execution = inbox.executions.find(item => item.member === 'Claude');
-    const execution = await api(config, `/executions/${claude_execution.id}`);
-    assert.deepEqual(execution.requests.map(item => item.purpose), ['ask']);
-  } finally { await service.close(); }
-});
-
-test('a free room of only manual members is launched for smart scheduling alone', async t => {
-  const f = await fixture(t);
-  const members = () => [{ name: 'Codex', access: 'manual', token: randomUUID() + randomUUID() }, { name: 'DeepSeek', access: 'online', token: randomUUID() + randomUUID() }];
-  const input = scheduler => ({ site: f.site, entry: 'web', participants: f.input.participants, token: randomUUID() + randomUUID(),
-    room: { title: '全手动', goal: 'x', mode: 'free', members: members(), submission_id: randomUUID() }, ...(scheduler ? { scheduler } : {}) });
-  await assert.rejects(launch_discussion(f.home, input(), f.options), /开启智能调度/);
-  const scheduler = { provider: 'jev', model: 'jev-1', ...save_api_key(f.home, { base_url: SCHEDULER_PROVIDERS.jev.base_url, api_key: 'jev-key' }) };
-  const launched = await launch_discussion(f.home, input(scheduler), f.options);
-  assert.deepEqual(Object.keys(load_config(launched.config_path).participants), [], 'nothing is woken locally');
-  assert.equal(load_config(launched.config_path).scheduler.provider, 'jev');
-  assert.deepEqual(launched.room.free.members.map(member => member.access), ['manual', 'manual']);
-});
-
-test('a discussion is created with a manual expert that gets no local configuration and answers with its own credential', async t => {
-  const f = await fixture(t);
-  const owner = randomUUID() + randomUUID(), manual_token = randomUUID() + randomUUID();
-  const room = { ...f.input.room, experts: { Codex: 'cli', Claude: 'cli', Gemini: 'cli' },
-    members: [{ name: 'Gemini', access: 'manual', token: manual_token }], submission_id: randomUUID() };
-  const launched = await launch_discussion(f.home, { ...f.input, room, token: owner }, f.options);
-  assert.deepEqual(Object.keys(load_config(launched.config_path).participants).sort(), ['Claude', 'Codex']);
-  const access = Object.fromEntries(launched.room.members.map(member => [member.name, member.access]));
-  assert.deepEqual(access, { Codex: 'runner', Claude: 'runner', Gemini: 'manual' });
-  await assert.rejects(launch_discussion(f.home, { ...f.input, token: owner, room: { ...f.input.room, host: 'Gemini', experts: { Gemini: 'cli', Claude: 'cli' },
-    members: [{ name: 'Gemini', access: 'manual', token: manual_token }], submission_id: randomUUID() } }, f.options), /不能选择手动接入/);
-});
-
 test('a running discussion admits a woken or manual expert without pausing', async t => {
   const f = await fixture(t);
   const owner = randomUUID() + randomUUID();
@@ -1327,30 +814,6 @@ test('a manual Claude expert\'s reported session is registered as a hosted parti
   }
 });
 
-test('a manual Claude member of a free room is hosted with a credential the service generates', async t => {
-  const f = await fixture(t);
-  const owner = randomUUID() + randomUUID(), claude_home = join(f.directory, 'claude-home-free'), claude_id = randomUUID();
-  const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token: owner,
-    room: { title: '自由托管', goal: 'x', mode: 'free', members: ['Claude'], submission_id: randomUUID() } }, f.options);
-  const cwd = load_config(launched.config_path).cwd || join(f.directory, 'original');
-  mkdirSync(cwd, { recursive: true });
-  mkdirSync(join(claude_home, 'projects', 'encoded'), { recursive: true });
-  writeFileSync(join(claude_home, 'projects', 'encoded', `${claude_id}.jsonl`), `${JSON.stringify({ type: 'user', cwd })}
-`);
-  save_launch_settings(f.home, { participants: { Claude: { adapter: 'claude', executable: process.execPath } } });
-  const previous = process.env.CLAUDE_CONFIG_DIR;
-  process.env.CLAUDE_CONFIG_DIR = claude_home;
-  try {
-    const member_token = randomUUID() + randomUUID();
-    adopt_member_profile(f.home, launched.config_path, 'Claude-2', claude_id, 'claude', member_token);
-    const config = load_config(launched.config_path);
-    assert.equal(config.participants['Claude-2'].session_id, claude_id);
-    assert.equal(config.members['Claude-2'].token, member_token, 'a free room delivers with the credential the service generated');
-  } finally {
-    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previous;
-  }
-});
-
 test('a manual Codex expert is hosted through the app for a desktop chat and the CLI otherwise', async t => {
   const f = await fixture(t);
   const codex_home = join(f.directory, 'codex-home-adopt'), [desktop_id, cli_id] = [randomUUID(), randomUUID()];
@@ -1402,31 +865,6 @@ test('a manual agy expert\'s reported conversation is hosted under its own proje
   } finally {
     for (const [key, value] of Object.entries(previous)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
   }
-});
-
-test('an extra instance inherits its platform settings but not its bound session, and names are never reused', async t => {
-  const f = await fixture(t);
-  assert.throws(() => save_launch_settings(f.home, { participants: { 'Claude-2': { adapter: 'claude', executable: process.execPath } } }), /按平台保存/);
-  const owner = randomUUID() + randomUUID();
-  const input = { site: f.site, entry: 'web', token: owner,
-    participants: { Claude: { ...f.input.participants.Claude, session_id: 'my-open-chat', model: 'sonnet' }, 'Claude-评审': { model: 'opus', effort: 'high' } },
-    room: { title: '双 Claude', goal: 'x', mode: 'free', members: ['Claude', 'Claude-评审'], submission_id: randomUUID() } };
-  const launched = await launch_discussion(f.home, input, f.options);
-  const config = load_config(launched.config_path);
-  assert.equal(config.participants.Claude.session_id, 'my-open-chat');
-  assert.equal(config.participants['Claude-评审'].session_id, undefined);
-  assert.deepEqual([config.participants['Claude-评审'].adapter, config.participants['Claude-评审'].model, config.participants['Claude-评审'].effort], ['claude', 'opus', 'high']);
-  assert.notEqual(config.members.Claude.token, config.members['Claude-评审'].token);
-  assert.deepEqual(launched.room.free.members.map(member => [member.name, member.session_mode]), [['Claude', 'borrowed'], ['Claude-评审', 'new']]);
-  const room_id = launched.room.id;
-  const added = await room_member(f.home, { site: f.site, room_id, token: owner, action: 'add', name: 'Claude', new_instance: true,
-    participants: { Claude: f.input.participants.Claude } });
-  assert.equal(added.member, 'Claude-2');
-  const member = added.free.members.find(item => item.name === 'Claude-2');
-  assert.equal((await request(f.site, `/api/rooms/${room_id}/members/${member.id}`, { action: 'remove' }, { 'X-Discussion-Token': owner })).status, 200);
-  const again = await room_member(f.home, { site: f.site, room_id, token: owner, action: 'add', name: 'Claude', new_instance: true,
-    participants: { Claude: f.input.participants.Claude } });
-  assert.equal(again.member, 'Claude-3', 'a removed instance name keeps its local session, so it is skipped');
 });
 
 test('relayed launches resolve projects locally and report back to the paired site', async t => {

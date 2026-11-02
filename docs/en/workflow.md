@@ -23,7 +23,7 @@ How collaboration works inside a room. For installation, see [Setup](runner.md).
 - **Host delegation** — when the host mentions one member, that member replies to you directly, unless the host asks for the work back to hand it on (for example to a reviewer); when it mentions several, the host summarizes after they finish. One message of yours lets the host run up to 3 rounds by default (a round: the host dispatches, the members answer, the work comes back for a summary); change it (1–20 rounds) when creating the room, or later under 协作设置 (Collaboration settings) on the room page. At the limit it stops and waits for you; 继续 (Continue) in the side panel lets it run on.
 - **Everyone** — `@全体成员` asks all members to answer; `@全体依次` asks them one after another in speaking order.
 - **Stop and retry** — stop a member's current run from its card or menu, or stop all running and queued work from the side panel. “Stopped” requires a confirmed process exit; otherwise the card says “Stop unconfirmed” or “Voided, may still be generating.” Late replies stay out of the transcript; only the owner can expand their text. New tasks wait for termination confirmation, a late reply or the original 10-minute deadline. Resuming a discussion or resending does not bypass or restart that wait. Retry puts the original message back in the composer for you to send.
-- **Retract and edit** — a message no member has started can be retracted from its “…” menu, and its text returns to the input. To change a message that was already handled, click “Edit” and resend: it and everything after it fold into a “rewound” line that AI members no longer read, and the sessions of Claude Code, Codex and agy members this machine wakes go back to before it. Manual, web and app members keep their own windows, so their sessions cannot go back. Files members changed are not restored. Neither works while a discussion is open.
+- **Retract and edit** — a message no member has started can be retracted from its “…” menu, and its text returns to the input. To change a message that was already handled, click “Edit” and resend: it and everything after it fold into a “rewound” line that AI members no longer read, and the sessions of Claude Code, Codex and agy members this machine wakes go back to before it. Manual and app members keep their own windows, so their sessions cannot go back. Files members changed are not restored. Neither works while a discussion is open.
 - **Branch** — “Branch from here” in an AI message's “…” menu creates a new room with the history up to that message; the Claude Code, Codex and agy members this machine wakes fork their own sessions and continue from there, while the original room and sessions stay as they were. Other members start new sessions. Both rooms share the same project directory, so files are not branched. Needs the local service.
 
 Mentions between ordinary members are references only and do not wake anyone. Members sharing a project directory are not locked; you decide who edits which files, and the member panel warns when two members changed the same file at the same time.
@@ -75,12 +75,11 @@ From the member panel you can:
 
 Project file access is set per member and is read-only by default.
 
-## Manual Members and Web Chatbots
+## Manual Members
 
-- **Manual** — a local member is not woken automatically; it reads and writes with its own credential after you or the host triggers it, and must run `codiscuss member register` before it can be scheduled. Web members do not register or write directly; the host or user relays their original replies, including replies to discussion requests.
-- **Web chatbots** can only read the room. Copy the reading notice from the member panel, then choose **Relay** (代发) in the composer to paste their reply. Web chatbots cannot reach a local address.
+- **Manual** — a local member is not woken automatically; it reads and writes with its own credential after you or the host triggers it, and must run `codiscuss member register` before it can be scheduled.
 
-The host of a discussion must be woken locally. Manual and web members can answer requests scheduled for them; web chatbots read the room and their replies are relayed by the host or user.
+The host of a discussion must be woken locally. Manual members can answer requests scheduled for them.
 
 ## Skills
 

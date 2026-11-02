@@ -22,6 +22,7 @@ python server.py --host 127.0.0.1 --port 8765 --no-demo
 | `--database` | `DATABASE_PATH` | `data/discuss.sqlite3` |
 | `--no-demo` | — | 不传时在新数据库写入示例记录 |
 | `--local-launch` | — | 开启网页启动本机 AI，仅允许绑定 `127.0.0.1` |
+| `--remote-port` | — | 另在 `127.0.0.1` 的该端口开需登录的远程入口，供 Tunnel 转发，见[外出时经 Cloudflare Tunnel 打开本机网站](runner.md#外出时经-cloudflare-tunnel-打开本机网站) |
 
 Python 3.10+，无第三方依赖。长期部署请自行配置进程管理与 HTTPS 反向代理；代理需对 `/api/updates` 关闭响应缓冲，以支持实时推送。
 
@@ -157,5 +158,4 @@ npx wrangler deploy --config deploy/updates.wrangler.jsonc
 ## 常见问题
 
 - **`no such table`**：所连接的数据库尚未执行 schema，先核对配置文件指向的数据库。
-- **本地正常，在线 AI 读不到**：本机地址、登录验证或访问策略都可能导致在线 AI 无法访问，必要时请转交材料。
 - **端口被占用**：服务拒绝两个实例监听同一端口，改用其他端口。

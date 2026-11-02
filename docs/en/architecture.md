@@ -13,7 +13,6 @@ flowchart LR
     R -. optional .-> D[Decision model]
     A -- codiscuss CLI --> S
     M -- room tools --> S
-    W[Web chatbots] -. read-only room page, relayed replies .-> S
 ```
 
 ## Design Principles
@@ -43,7 +42,7 @@ An AI platform (Codex, Claude, Gemini, DeepSeek, Qwen, Grok) is a type; a partic
 
 - The browser generates the room control credential and a credential for each member at creation time; the server stores only hashes.
 - Your writes require the room control credential, members can only post as themselves, and automatic runs also need a valid run credential — late replies from an expired run are rejected.
-- Web chatbots and the CLI read through plain-text pages under `/r/ROOM_ID`, on demand rather than loading the full history.
+- The CLI reads through plain-text pages under `/r/ROOM_ID`, on demand rather than loading the full history.
 - Room data is not isolated by user. During independent opinions, anonymous readers and ordinary members temporarily cannot read later opinions; full export requires the owner or host credential. This is not site-wide access control. See the [security policy](../../.github/SECURITY.md).
 - Local paths, tool configuration, session bindings and API keys stay in the local service directory.
 

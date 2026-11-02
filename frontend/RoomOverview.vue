@@ -11,11 +11,11 @@ import { member_actions } from "./member-actions.js";
 import { access_label, access_options } from "../runner/expert_prompts.mjs";
 
 const { view, bridge, act } = inject("discussion");
-const ACCESS_LABELS = { manual: "手动接入", online: "网页代发" };
+const ACCESS_LABELS = { manual: "手动接入" };
 const STATUS_LABELS = { active: "在场", away: "暂离" };
-const unregistered = (member) => member.access === "manual" && member.manual_source !== "web" && !member.registered_at;
-// CLIs this tool grants project access per run; App and API members are left to their own settings.
-const ACCESS_CLIENTS = ["codex_cli", "claude", "antigravity_cli"];
+const unregistered = (member) => member.access === "manual" && !member.registered_at;
+// CLIs and API members this tool grants project access per run; App members are left to their own settings.
+const ACCESS_CLIENTS = ["codex_cli", "claude", "antigravity_cli", "api"];
 const CODEX_OPTIONS = [{ value: "codex_cli", label: "CLI" }, { value: "codex", label: "App" }];
 const ADAPTER_LABELS = { api: "API", codex: "App", antigravity: "App" };
 const room = computed(() => view.value.room);
@@ -56,7 +56,7 @@ const members = computed(() => room.value.members || []);
  * collaboration can switch between its App and CLI here.
  */
 function access(member) {
-  if (ACCESS_LABELS[member.access]) return { text: member.manual_source === "web" ? "网页代发" : ACCESS_LABELS[member.access] };
+  if (ACCESS_LABELS[member.access]) return { text: ACCESS_LABELS[member.access] };
   const adapter = saved.value?.participants?.[member.name]?.adapter;
   if (!["codex", "codex_cli"].includes(adapter)) return { text: adapter ? ADAPTER_LABELS[adapter] || "CLI" : bridge.participant_access(member.name, room.value) };
   const idle = !(member.pending > 0 || ["dispatched", "started"].includes(member.execution?.status));
@@ -82,12 +82,10 @@ async function switch_adapter(member, adapter) {
 
 /** Project file access, and whether it can be switched here; anything that cannot says why on hover. */
 function files(member) {
-  if (member.access === "online" || member.manual_source === "web") return { value: "read", hint: "网页成员只能阅读" };
   if (member.access === "manual") return { text: "自行决定", hint: "手动成员的权限由它自己的会话决定" };
   const profile = saved.value?.participants?.[member.name];
   if (!profile) return { text: "—" };
-  if (profile.adapter === "api") return { value: "read", hint: "API 成员没有本机文件工具，固定只读" };
-  if (profile.project_access === "own") return { text: "自行决定", hint: "手动接入的成员，由本机服务代发时仍沿用它自己会话的软件权限" };
+  if (profile.project_access === "own") return { text: "自行决定", hint: "手动接入的成员，由本机服务投递时仍沿用它自己会话的软件权限" };
   if (!ACCESS_CLIENTS.includes(profile.adapter)) return { text: "App 内设置", hint: "App 成员的权限在 App 里设置" };
   if (profile.own_project) return { text: "agy 内设置", hint: "续接它自己的 agy 对话，权限沿用该对话所在项目" };
   if (waiting(member.name)) return { value: profile.project_access || "read", hint: "正在读取 agy 的配置" };

@@ -25,7 +25,8 @@
  * - `capabilities`: `delivery` `{stoppable, progress}` of a usual delivery (each delivery reports its own); `rewind`: `cut`
  *   (the runner cuts the session), `fresh` (context rebuilt each time) or `kept` (cannot be cut here); `project` (works in
  *   a project directory); `access_env` (its process takes the credential file by environment); `enforces_read_only`
- *   (its sandbox enforces a read-only project); `ripgrep` (bundles rg for reading on Windows).
+ *   (its sandbox enforces a read-only project); `ripgrep` (bundles rg for reading on Windows); `file_tools` (works on
+ *   the project only through the runner's file tools, running no commands).
  * - `session_family`: profiles sharing one session store; switching among them keeps the conversation.
  * - `windows_command`: how its shell names the codiscuss CLI on Windows.
  * - `task_rules(cli, {runs_commands})`: fixed task text this software needs, added by the runner so no member prompt drops it.
@@ -85,8 +86,10 @@ export const ADAPTER_PROFILES = {
   },
   api: {
     platform: '', label: '模型 API', kind: 'api', location: '', fields: ['base_url', 'api_protocol', 'api_key_ref'],
-    efforts: null, models: false, access_levels: null, per_tool_allow: false, adopt: '', host_existing: false,
-    capabilities: { delivery: PROCESS, rewind: 'fresh', project: false },
+    efforts: null, models: false, access_levels: ['read', 'write'], per_tool_allow: false, adopt: '', host_existing: false,
+    access_hints: { read: '用接入程序的文件工具读取、搜索项目文件', write: '还可新建、覆盖、局部编辑项目文件；没有命令行' },
+    unsupported_hints: { auto: 'API 成员没有命令行，没有需要软件审批的操作', full: 'API 成员没有命令行，没有需要软件审批的操作' },
+    capabilities: { delivery: PROCESS, rewind: 'fresh', project: true, file_tools: true },
   },
 };
 

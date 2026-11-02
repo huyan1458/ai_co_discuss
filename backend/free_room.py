@@ -3,8 +3,7 @@
 A free room has no floor, turns or rounds. The user (holding the room control credential)
 names members; each named member gets one durable request per message. The local runner
 delivers a runner member's open requests as one execution, and the member's answer completes
-them. A manual member finds its own requests and answers by request id; an online member's
-answer is forwarded by the owner. The user is the client, never the host: one member that
+them. A manual member finds its own requests and answers by request id. The user is the client, never the host: one member that
 answers by itself always hosts, routes unnamed messages, names members in its answers, and is
 woken once when everything it dispatched has finished. No software is launched here.
 """
@@ -92,8 +91,6 @@ MAX_RETRIES = 3
 MAX_RETRY_REASON = 500
 ACTIVE = ("dispatched", "started")
 ACCESS_MODES = ("runner", "manual")
-# A member given as `online` (older CLI room creation) becomes a manual member relayed from the web.
-LEGACY_ACCESS_MODES = ("runner", "manual", "online")
 SCHEDULER_PROVIDERS = ("jev", "decisions")
 RECOMMEND_SECONDS = 60
 # A click sent just before the hint disappears still counts.
@@ -106,7 +103,6 @@ MAX_CHAIN_ROUNDS = 20
 # A host that left gives up the role; the first active runner member (else manual) then takes it.
 RELEASE_HOST = "UPDATE room_members SET role='member' WHERE room_id=? AND role='host' AND status<>'active'"
 ASSIGN_HOST = """UPDATE room_members SET role='host' WHERE id=(SELECT id FROM room_members WHERE room_id=? AND status='active'
-    AND NOT EXISTS(SELECT 1 FROM member_manual_sources source WHERE source.member_id=room_members.id AND source.source='web')
     ORDER BY access='runner' DESC, id LIMIT 1)
     AND NOT EXISTS (SELECT 1 FROM room_members WHERE room_id=? AND role='host' AND status='active')"""
 TERMINAL = ("completed", "cancelled", "failed")
@@ -147,9 +143,6 @@ def migrate_free_tables(connection):
         for name, definition in columns.items():
             if name not in present:
                 connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
-    connection.execute("""CREATE TABLE IF NOT EXISTS member_manual_sources (
-        member_id INTEGER PRIMARY KEY REFERENCES room_members(id) ON DELETE CASCADE,
-        source TEXT NOT NULL CHECK(source='web'))""")
     migrate_stop_results(connection)
 
 
@@ -389,15 +382,10 @@ def member_value(member):
     if not isinstance(adapter, str) or len(adapter) > 40:
         raise ValueError("成员适配器名称无效")
     access, session_mode = member.get("access", "runner"), member.get("session_mode", "new")
-    if access not in LEGACY_ACCESS_MODES or session_mode not in SESSION_MODES:
-        raise ValueError("成员接入方式须为 runner/manual/online，会话方式须为 new/borrowed")
-    manual_source = member.get("manual_source", "")
-    if access == "online":
-        manual_source, access = "web", "manual"
-    if manual_source not in ("", "web") or (manual_source == "web" and access != "manual"):
-        raise ValueError("manual_source 只能为 manual 成员配置 web")
+    if access not in ACCESS_MODES or session_mode not in SESSION_MODES:
+        raise ValueError("成员接入方式须为 runner/manual，会话方式须为 new/borrowed")
     return {"name": member["name"], "adapter": adapter, "token": member["token"],
-            "access": access, "session_mode": session_mode, "manual_source": manual_source}
+            "access": access, "session_mode": session_mode}
 
 
 def review_request_context(connection, request):
@@ -439,10 +427,6 @@ def insert_member(connection, room_id, member, now):
     connection.execute("""INSERT INTO room_members (room_id,name,adapter,token_hash,access,session_mode,created_at)
         VALUES (?,?,?,?,?,?,?)""", (room_id, member["name"], member["adapter"], token_hash(member["token"]),
                                      member["access"], member["session_mode"], now))
-    if member.get("manual_source") == "web":
-        member_id = connection.execute("SELECT id FROM room_members WHERE room_id=? AND name=? AND token_hash=?",
-                                       (room_id, member["name"], token_hash(member["token"]))).fetchone()[0]
-        connection.execute("INSERT OR IGNORE INTO member_manual_sources(member_id,source) VALUES(?,'web')", (member_id,))
 
 
 def save_room_access(connection, room_id, control_token, members, settings):
@@ -462,10 +446,9 @@ def sync_participants(connection, room_id):
     """Keep one active AI host, then mirror member capabilities and the host into shared room metadata."""
     connection.execute(RELEASE_HOST, (room_id,))
     connection.execute(ASSIGN_HOST, (room_id, room_id))
-    members = connection.execute("""SELECT m.name,m.access,m.role,m.status,COALESCE(s.source,'') AS manual_source
-        FROM room_members m LEFT JOIN member_manual_sources s ON s.member_id=m.id
-        WHERE m.room_id=? AND m.status<>'removed' ORDER BY m.id""", (room_id,)).fetchall()
-    experts = {row["name"]: "online" if row["manual_source"] == "web" else "cli" for row in members}
+    members = connection.execute("""SELECT name,role,status FROM room_members
+        WHERE room_id=? AND status<>'removed' ORDER BY id""", (room_id,)).fetchall()
+    experts = {row["name"]: "cli" for row in members}
     host = next((row["name"] for row in members if row["role"] == "host" and row["status"] == "active"), "用户")
     connection.execute("UPDATE topic_settings SET experts=?,host=? WHERE room_id=?",
                        (json.dumps(experts, ensure_ascii=False), host, room_id))
@@ -673,8 +656,7 @@ def possible_conflicts(connection, room_id, names):
 
 
 # An invited manual member that has not registered counts as absent: it receives no request and is never a target.
-REGISTERED_MEMBER = """(room_members.access<>'manual' OR EXISTS(SELECT 1 FROM member_manual_sources source
-    WHERE source.member_id=room_members.id AND source.source='web') OR EXISTS(SELECT 1 FROM member_registrations r
+REGISTERED_MEMBER = """(room_members.access<>'manual' OR EXISTS(SELECT 1 FROM member_registrations r
     WHERE r.member_id=room_members.id AND r.token_hash=room_members.token_hash))"""
 
 # One snapshot for group routing; the Worker uses the same SQL inside its atomic write assertion.
@@ -696,8 +678,6 @@ def free_view(connection, room_id):
     members = []
     for row in connection.execute("SELECT * FROM room_members WHERE room_id=? AND status<>'removed' ORDER BY id", (room_id,)):
         member = {key: row[key] for key in MEMBER_FIELDS}
-        source = connection.execute("SELECT source FROM member_manual_sources WHERE member_id=?", (row["id"],)).fetchone()
-        member["manual_source"] = source[0] if source else ""
         member["registered_at"] = registered_at(connection, row)
         reported = connection.execute("SELECT session_id,client FROM member_sessions WHERE member_id=?", (row["id"],)).fetchone()
         member["reported_session"], member["reported_client"] = (reported["session_id"], reported["client"]) if reported else ("", "")
@@ -736,8 +716,6 @@ def require_member(connection, room_id, token, name=None):
                              (room_id, hashed)).fetchone() if hashed else None
     if not row or (name is not None and row["name"] != name):
         raise PermissionError("成员凭证无效、已停用或与发言身份不符")
-    if connection.execute("SELECT 1 FROM member_manual_sources WHERE member_id=? AND source='web'", (row["id"],)).fetchone():
-        raise PermissionError("网页成员只读；由房主凭据代发其回答")
     return dict(row)
 
 
@@ -787,11 +765,7 @@ def authorize_free_write(connection, room_id, token, operation, payload):
     member = require_member(connection, room_id, token)
     if author == member["name"] and payload.get("submitted_by", author) == author:
         return member
-    if member["role"] == "host" and author != member["name"] and payload.get("submitted_by") == member["name"]:
-        proxy = proxy_member(connection, room_id, author)
-        proxy["proxy_by"] = member["name"]
-        return proxy
-    raise PermissionError("成员只能以本人身份发言；只有主持人可以代发在线成员回答")
+    raise PermissionError("成员只能以本人身份发言")
 
 
 def active_members(connection, room_id, registered_only=True):
@@ -811,7 +785,7 @@ def recipients(connection, room_id, payload):
     """Resolve an owner message's recipients as (member id, purpose) pairs.
 
     A single active member is named by default. With several, an unnamed message goes to the
-    AI host for routing; only a room of online members has none, and then it stays a plain note.
+    AI host for routing; a room without one leaves it a plain note.
     Naming everyone with order auto leaves the host a group request: the runner has everyone answer
     at once or one after another; a host the runner does not wake has them all answer at once.
     """
@@ -828,17 +802,6 @@ def recipients(connection, room_id, payload):
         return [(next(iter(active.values()))["id"], "ask")]
     host = next((row for row in active.values() if row["role"] == "host"), None)
     return [(host["id"], "route")] if host else []
-
-
-def proxy_member(connection, room_id, author):
-    """Return the active online member the owner may forward an answer for."""
-    row = connection.execute("""SELECT m.*,s.source AS manual_source FROM room_members m
-        JOIN member_manual_sources s ON s.member_id=m.id AND s.source='web'
-        WHERE m.room_id=? AND m.name=? AND m.status='active' AND m.access='manual'""",
-        (room_id, author)).fetchone()
-    if not row:
-        raise PermissionError("房间控制凭据只能以用户身份发言，或代发在线成员的回答")
-    return dict(row)
 
 
 def check_answer(connection, room_id, member, payload):
@@ -889,20 +852,6 @@ def check_dispatch(member, payload, purposes):
     """A host answering only its share of an everyone request answers as a member, so it may not dispatch others."""
     if member["role"] == "host" and payload.get("to") and purposes and all(purpose == "all" for purpose in purposes):
         raise ValueError("这次是请全体成员各自回应，其他成员已收到请求；主持人只回答自己的部分，不能用 --to 派活")
-
-
-def check_proxy(connection, room_id, member, payload):
-    """The owner forwards an online member's answer and may close that member's open requests."""
-    request_ids = payload.get("request_ids", [])
-    if not isinstance(request_ids, list) or any(type(item) is not int for item in request_ids):
-        raise ValueError("request_ids 须为请求编号列表")
-    requests = []
-    for request_id in request_ids:
-        row = connection.execute("SELECT * FROM member_requests WHERE room_id=? AND id=?", (room_id, request_id)).fetchone()
-        if not row or row["member_id"] != member["id"] or row["status"] != "pending":
-            raise FileExistsError(f"请求 {request_id} 不属于该在线成员或已处理")
-        requests.append(row)
-    discussion.validate_session_request_answer(connection, room_id, requests)
 
 
 def insert_request(connection, room_id, member_id, message_id, chain_id, purpose, created_by, batch_id=0):
@@ -1218,11 +1167,6 @@ def after_free_message(connection, room_id, message_id, actor, payload):
         for member_id, purpose in pairs:
             insert_request(connection, room_id, member_id, message_id, message_id, purpose, "user")
         return
-    if actor.get("manual_source") == "web":
-        for request_id in payload.get("request_ids", []):
-            connection.execute("UPDATE member_requests SET status='completed',answer_id=? WHERE id=?", (message_id, request_id))
-        settle_batches(connection, room_id)
-        return
     chain_id = answered_chain(connection, payload, actor)
     if actor["access"] == "manual":
         for request_id in payload.get("request_ids", []):
@@ -1334,7 +1278,7 @@ def inbox(connection, room_id, token):
     release_recommendations(connection, room_id)
     archived = connection.execute("SELECT archived FROM room_directory WHERE room_id=?", (room_id,)).fetchone()[0]
     members, observers = [], []
-    # Manual and online members are never delivered to; the runner only reads them so smart scheduling can route to them too.
+    # Manual members are never delivered to; the runner only reads them so smart scheduling can route to them too.
     for row in connection.execute(f"SELECT * FROM room_members WHERE room_id=? AND status='active' AND {REGISTERED_MEMBER} ORDER BY id", (room_id,)):
         pending = [dict(item) for item in connection.execute("""SELECT r.id,r.message_id,r.purpose,
             sr.id AS session_request_id,sr.session_id,sr.round,sr.position,sr.read_until,sr.question AS source_question,
@@ -1343,9 +1287,7 @@ def inbox(connection, room_id, token):
             FROM member_requests r LEFT JOIN session_requests sr ON sr.member_request_id=r.id
             LEFT JOIN task_message_sources t ON t.session_request_id=sr.id
             WHERE r.member_id=? AND r.status='pending' ORDER BY r.id""", (row["id"],))]
-        manual_source = connection.execute("SELECT source FROM member_manual_sources WHERE member_id=?", (row["id"],)).fetchone()
         member_view = {key: row[key] for key in MEMBER_FIELDS}
-        member_view["manual_source"] = manual_source[0] if manual_source else ""
         member_view["review_capability"] = review_capability(connection, room_id, row["id"], token)
         member_view["held_until"] = held_until(connection, row["id"])
         # The runner compares this with its adapter's effect and reports a change.
@@ -1870,7 +1812,7 @@ def rewind_plan(connection, room_id, message_id):
     """What rewinding to just before a message takes back, and a revision of the state it was read from.
 
     Each member reports what happens to its session: `cut` (the runner cuts it before the first taken-back execution),
-    `fresh` (its context is rebuilt each time), `unchanged` (no taken-back execution) or `kept` (manual and online members,
+    `fresh` (its context is rebuilt each time), `unchanged` (no taken-back execution) or `kept` (manual members,
     and software the runner reported it cannot cut, keep what they saw). The runner reports each member's effect from its
     adapter (`member_capabilities`); a member without a report is kept.
     """
@@ -2011,8 +1953,6 @@ def member_action(connection, room_id, member_id, token, payload):
     `role` action makes one runner or manual member the AI host, replacing any previous host.
     """
     member = owned_member(connection, room_id, member_id, token)
-    manual_source = connection.execute("SELECT source FROM member_manual_sources WHERE member_id=?", (member_id,)).fetchone()
-    is_web_member = bool(manual_source and manual_source["source"] == "web")
     action = payload.get("action")
     routed = []
     if action in ("away", "remove"):
@@ -2041,8 +1981,8 @@ def member_action(connection, room_id, member_id, token, payload):
         adopt_manual_member(connection, room_id, member, payload)
     elif action == "role":
         role = payload.get("role")
-        if role not in ("host", "member") or (role == "host" and is_web_member):
-            raise ValueError("role 须为 host 或 member；在线成员不能担任主持人")
+        if role not in ("host", "member"):
+            raise ValueError("role 须为 host 或 member")
         if role == "member" and member["role"] == "host":
             raise ValueError("自由房间须由一位 AI 主持；请指定另一位成员担任主持人")
         if role == "host":

@@ -22,7 +22,7 @@ export function scheduler_thresholds(mode) {
   return mode === 'stable' ? { member: ROUTE_CONFIDENCE, wide: ROUTE_WIDE_CONFIDENCE } : { member: GUIDED_CONFIDENCE, wide: GUIDED_WIDE_CONFIDENCE };
 }
 /** Bump when the routing question or its option descriptions change, so ratings can be compared across wordings. */
-export const ROUTE_PROMPT_VERSION = 13;
+export const ROUTE_PROMPT_VERSION = 14;
 /**
  * How the free-room routing question is worded. guided (experimental, the default while it is being refined) states the
  * purpose and the evidence in prose; stable keeps the ordered checklist that passed the regression set.
@@ -30,7 +30,7 @@ export const ROUTE_PROMPT_VERSION = 13;
 export const SCHEDULER_MODES = { guided: '引导（试验）', stable: '稳定' };
 export const DEFAULT_SCHEDULER_MODE = 'guided';
 /** The guided wording has its own version, so its ratings are never mixed with the stable checklist's. */
-export const ROUTE_GUIDED_PROMPT_VERSION = 8;
+export const ROUTE_GUIDED_PROMPT_VERSION = 9;
 /** The routing prompt version that a decision in this mode was made with. */
 export function route_prompt_version(mode) {
   return mode === 'stable' ? ROUTE_PROMPT_VERSION : ROUTE_GUIDED_PROMPT_VERSION;

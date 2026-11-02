@@ -26,8 +26,8 @@ from .admin import AdminError, admin_status, login_admin, logout_admin, register
 from .remote_launch import (COMMAND_WAIT_MAX, claim_machine_commands, finish_machine_command, list_machines, machine_command_status,
                             machine_launch_action, machine_sync, pair_machine, remote_launch_status, submit_machine_command,
                             submit_remote_launch)
-from .free_room import (add_member, after_free_message, authorize_free_write, check_answer, check_proxy, execution_action, free_view,
-                        inbox, interrupt_member, member_action, member_capability, member_values, migrate_free_tables, proxy_member, reserve_execution,
+from .free_room import (add_member, after_free_message, authorize_free_write, check_answer, execution_action, free_view,
+                        inbox, interrupt_member, member_action, member_capability, member_values, migrate_free_tables, reserve_execution,
                         save_room_access, view_execution)
 from .free_room import convert_suggestion, message_suggestions, save_suggestions, sync_participants
 from .free_room import adopt_recommendation, recommend_member, register_member, require_member
@@ -278,16 +278,16 @@ def seed_demo(connection):
         ("用户", "我们先验证一个简单场景：不同 AI 能否通过同一个房间阅读、检索和留言？\n首轮只讨论信息如何流转，不接入真实模型。", None),
         ("Codex", "建议把完整历史保留下来，每轮先给目标、当前状态和需要回应的消息。\n@Claude 如果摘要遗漏了重要条件，参与者如何核对？", 1),
         ("Claude", "每条结论都应引用原始消息编号。AI 可以主动读取原文，也能按关键词检索。\n摘要由主持人维护，未解决的分歧不能写成共识。", 2),
-        ("Gemini", "在线 AI 只读取讨论记录，在自己的聊天窗口给出观点，由用户代发。\n@DeepSeek 请检查阅读入口和原文引用是否清楚。", 1),
-        ("DeepSeek", "如果只能阅读，回复可以由用户代发。需要保留原作者、引用关系和代发方式，便于其他参与者继续讨论。", 4),
-        ("Qwen", "无联网时，可以由用户传入本轮材料。我仍可提出检索请求，例如：请提供 #2 的完整原文。", 2),
+        ("Gemini", "每位成员在自己的会话里工作，按需读取房间，不一次加载全部历史。\n@DeepSeek 请检查阅读入口和原文引用是否清楚。", 1),
+        ("DeepSeek", "回答由成员自己提交，保留作者和引用关系，便于其他参与者继续讨论。", 4),
+        ("Qwen", "需要更多上下文时，我可以按编号或关键词检索，例如读取 #2 的完整原文。", 2),
     ]
     base_time = datetime.now(timezone.utc) - timedelta(minutes=len(samples) * 3)
     for index, (author, text, reply_to) in enumerate(samples):
         created_at = (base_time + timedelta(minutes=index * 3)).isoformat(timespec="seconds")
         connection.execute("INSERT INTO messages (room_id,author,text,reply_to,source,submission_id,created_at) VALUES (?,?,?,?,?,?,?)",
                            ("welcome", author, text, reply_to, "demo", f"demo-{index}", created_at))
-    summary = "已达成共识\n• 完整历史只追加，支持按编号查阅和关键词检索。〔#2、#3〕\n• 本地 CLI AI 读写记录；在线 AI 只读，观点由用户代发。〔#4、#5〕\n\n待验证\n• 在线 AI 是否能直接读取和检索原文。〔#4〕\n• 复制材料与代发流程是否清楚。〔#5、#6〕"
+    summary = "已达成共识\n• 完整历史只追加，支持按编号查阅和关键词检索。〔#2、#3〕\n• 成员按需读取房间，回答由成员自己提交。〔#4、#5〕\n\n待验证\n• 阅读入口和原文引用是否清楚。〔#4〕\n• 检索是否足以找回所需上下文。〔#6〕"
     connection.execute("UPDATE rooms SET state_text=?,state_until=6 WHERE id='welcome'", (summary,))
 
 
@@ -360,11 +360,11 @@ def require_room(connection, room_id):
     room.update(discussion_progress(connection, room))
     room["round_groups"] = merge_round_groups(connection, room_id)
     room["members"] = [dict(row) for row in connection.execute(
-        """SELECT m.id,m.name,m.adapter,m.role,m.status,m.access,m.session_mode,COALESCE(source.source,'') AS manual_source,COALESCE(s.session_id,'') AS reported_session,COALESCE(s.client,'') AS reported_client,
+        """SELECT m.id,m.name,m.adapter,m.role,m.status,m.access,m.session_mode,COALESCE(s.session_id,'') AS reported_session,COALESCE(s.client,'') AS reported_client,
         COALESCE(r.registered_at,'') AS registered_at
         FROM room_members AS m LEFT JOIN member_sessions AS s ON s.member_id=m.id
         LEFT JOIN member_registrations AS r ON r.member_id=m.id AND r.token_hash=m.token_hash
-        LEFT JOIN member_manual_sources AS source ON source.member_id=m.id WHERE m.room_id=? AND m.status<>'removed' ORDER BY m.id""", (room_id,))]
+        WHERE m.room_id=? AND m.status<>'removed' ORDER BY m.id""", (room_id,))]
     option = connection.execute("SELECT named_followup FROM session_options WHERE session_id=?", (session["id"],)).fetchone() if session else None
     # Before any discussion the host keeps its named follow-ups.
     room["named_followup"] = bool(option[0]) if option else True
@@ -517,9 +517,9 @@ def merge_round_groups(connection, room_id):
         group["host_scheduled"] = group["host_scheduled"] or row["role"] == "host"
     if not by_round:
         return []
-    active_experts = connection.execute("""SELECT COUNT(*) FROM room_members m LEFT JOIN member_manual_sources src ON src.member_id=m.id
+    active_experts = connection.execute("""SELECT COUNT(*) FROM room_members m
         WHERE m.room_id=? AND m.status='active' AND m.role<>'host'
-        AND (m.access<>'manual' OR src.source='web' OR EXISTS(SELECT 1 FROM member_registrations reg
+        AND (m.access<>'manual' OR EXISTS(SELECT 1 FROM member_registrations reg
             WHERE reg.member_id=m.id AND reg.token_hash=m.token_hash))""", (room_id,)).fetchone()[0]
     previous_answers = {}
     result = []
@@ -534,7 +534,7 @@ def merge_round_groups(connection, room_id):
 
 def pending_label(room, expert):
     """Describe a speaker's open request by how the member takes part, without claiming its app is generating."""
-    return {"cli": "待处理（本地 CLI）", "online": "待联系（在线专家）"}.get(room["experts"].get(expert), "待处理")
+    return "待处理（本地 CLI）" if room["experts"].get(expert) == "cli" else "待处理"
 
 
 def topic_context(background, user_request=None):
@@ -565,8 +565,8 @@ def topic_values(payload, current=None):
     result["experts"] = payload.get("experts", result["experts"])
     experts = result["experts"]
     if (not isinstance(experts, dict) or len(experts) > MAX_ROOM_AGENTS
-            or any(not is_ai(name) or mode not in ("cli", "online") for name, mode in experts.items())):
-        raise ValueError("专家需为有效 AI 身份，参与方式为 cli 或 online")
+            or any(not is_ai(name) or mode != "cli" for name, mode in experts.items())):
+        raise ValueError("专家需为有效 AI 身份，参与方式为 cli")
     if result["host"] != "用户" and experts.get(result["host"]) != "cli":
         raise ValueError("AI 主持人必须是可读可写的本地 CLI 参与者")
     return result
@@ -844,7 +844,7 @@ def create_room(connection, payload, control_token=""):
     if payload.get("mode", "free") != "free":
         raise ValueError("房间模式只能为 free")
     members = member_values(payload.get("members"))
-    payload = {**payload, "experts": {member["name"]: "online" if member.get("manual_source") == "web" else "cli" for member in members}}
+    payload = {**payload, "experts": {member["name"]: "cli" for member in members}}
     settings = topic_values(payload)
     limits = limit_values(payload["limits"]) if "limits" in payload else None
     if not token_hash(control_token):
@@ -855,7 +855,7 @@ def create_room(connection, payload, control_token=""):
         raise ValueError("文件夹编号必须是文本或 null")
     request_text = creation_request(settings, limits)
     request_text += ":access:" + token_hash(control_token) + ":" + json.dumps(
-        [[member["name"], member["adapter"], member["access"], member["manual_source"],
+        [[member["name"], member["adapter"], member["access"], "",
           member["session_mode"], token_hash(member["token"])] for member in members], ensure_ascii=False)
     if folder_id is not None:
         request_text += ":folder:" + json.dumps(folder_id, ensure_ascii=False)
@@ -1036,11 +1036,7 @@ def check_message_references(connection, room_id, message):
 
 
 def append_free_message(connection, room, payload, actor):
-    """Append a free-room message: the owner's creates requests, a member's completes its execution.
-
-    The owner may also forward an online member's answer; it keeps the member as author and the
-    owner as submitter.
-    """
+    """Append a free-room message: the owner's creates requests, a member's completes its execution."""
     if payload.get("kind") == "moderation":
         if any(payload.get(field) for field in ("next_review", "review_scope", "review_roster")):
             raise ValueError("主持说明不能声明评审授权；请在派实现任务时提交")
@@ -1051,15 +1047,11 @@ def append_free_message(connection, room, payload, actor):
         raise ValueError("新讨论使用 kind=chat，并以 execution_id 或 request_ids 关联请求")
     author, text, submission_id, reply_to = message_values(payload)
     room_id = room["id"]
-    proxy = actor if isinstance(actor, dict) and actor.get("proxy_by") else None
-    if actor == "用户" and author != "用户":
-        proxy = proxy_member(connection, room_id, author)
-        if payload.get("submitted_by", "用户") != "用户":
-            raise PermissionError("代发在线成员的回答须由用户提交")
-    proxy_by = proxy.get("proxy_by") if proxy else None
-    submitted_by = proxy_by or ("用户" if proxy else author)
+    if actor == "用户" and (author != "用户" or payload.get("submitted_by", "用户") != "用户"):
+        raise PermissionError("房间控制凭据只能以用户身份发言")
+    submitted_by = author
     expected = {"author": author, "text": text, "reply_to": reply_to, "kind": "chat", "submitted_by": submitted_by,
-                "source": ("host_proxy" if proxy_by else "proxy") if proxy else ("user" if author == "用户" else "api" if payload.get("source") == "api" else "cli")}
+                "source": "user" if author == "用户" else "api" if payload.get("source") == "api" else "cli"}
     expected.update(message_summary(payload, expected))
     identifiers = attachment_ids(payload)
     previous = connection.execute(f"{MESSAGE_QUERY} WHERE room_id=? AND submission_id=?", (room_id, submission_id)).fetchone()
@@ -1074,9 +1066,7 @@ def append_free_message(connection, room, payload, actor):
         raise ValueError("房间已存档；恢复后才能继续协作")
     check_message_references(connection, room_id, expected)
     check_message_attachments(connection, room_id, submitted_by, identifiers)
-    if proxy:
-        check_proxy(connection, room_id, proxy, payload)
-    elif actor != "用户":
+    if actor != "用户":
         check_answer(connection, room_id, actor, payload)
     review_plan = checked_review_plan(connection, room_id, actor, payload)
     cursor = connection.execute("INSERT INTO messages (room_id,author,text,reply_to,source,submission_id,created_at) VALUES (?,?,?,?,?,?,?)",
@@ -1087,10 +1077,10 @@ def append_free_message(connection, room, payload, actor):
                        (cursor.lastrowid, expected["summary"], expected["summary_by"]))
     for position, identifier in enumerate(identifiers):
         connection.execute("UPDATE attachments SET message_id=?,position=? WHERE id=?", (cursor.lastrowid, position, identifier))
-    save_suggestions(connection, room_id, cursor.lastrowid, proxy or actor, payload)
+    save_suggestions(connection, room_id, cursor.lastrowid, actor, payload)
     save_review_plan(connection, room_id, cursor.lastrowid, review_plan)
-    after_free_message(connection, room_id, cursor.lastrowid, proxy or actor, payload)
-    complete_session_requests(connection, room_id, payload, proxy or actor, cursor.lastrowid)
+    after_free_message(connection, room_id, cursor.lastrowid, actor, payload)
+    complete_session_requests(connection, room_id, payload, actor, cursor.lastrowid)
     saved_message = connection.execute(f"{MESSAGE_QUERY} WHERE messages.id=?", (cursor.lastrowid,)).fetchone()
     return {"message": message_with_attachments(connection, saved_message), "duplicate": False}
 
@@ -1418,29 +1408,20 @@ def room_text(connection, room_id, params):
                     f"按作者检索：{base}/search?author=Claude", f"发言安排历史：{base}/turns?page=1"])
     if participant:
         content.append(f"与 @{participant} 相关的观点：{base}/search?mention={participant}&page=1")
-    content.extend(participation_text(params, free=True))
+    content.extend(participation_text())
     return "\n\n".join(content)
 
 
-def participation_text(params, free=False):
-    """Local AIs follow the skills; web AIs read this short guide in place of them."""
-    footer = "参与方式按运行环境区分；主持人可以兼任专家；作者、职责与来源尚未认证。"
-    if params.get("mode") == "cli":
-        return ["", "## 本地 AI", "本地 AI 请调用 discuss-participant（主持人另调用 discuss-host），用 codiscuss 命令读写；"
-                "字段与写入规则以 codiscuss room protocol 为准，不直接调用网站接口。", footer]
-    return ["", "## 在线 AI · 只读参与",
-            "你是只读成员：读取议题、状态和与你相关的原文，在自己的聊天窗口回答；回答由用户代发留档。",
-            "先回答真正的问题，给出理由、证据、适用条件与不确定性；区分事实、推断和建议，引用原文编号，不编造他人的回答。"
-            "讨论初始阶段先独立判断，暂不读他人观点；深入讨论先理解对方主张及其最有力的依据，再说明同意、分歧或需要补的证据。"
-            "可以坚持有依据的少数意见，也可因新证据修改判断并说明变化。",
-            "输出：完整正文；回答较长时先给 1–3 句摘要。",
-            "不要操作网页表单、调用写入接口或生成发布链接。读取失败时如实报告，由用户提供复制的材料。",
-            *(["自由协作：只回应点名给你的消息（编号见阅读通知），按时间顺序处理，后面的消息可以修正前面的。"] if free else []), footer]
+def participation_text():
+    """Readers are local AIs; they follow the skills rather than a guide embedded here."""
+    return ["", "## 本地 AI", "本地 AI 请调用 discuss-participant（主持人另调用 discuss-host），用 codiscuss 命令读写；"
+            "字段与写入规则以 codiscuss room protocol 为准，不直接调用网站接口。",
+            "主持人可以兼任专家；作者、职责与来源尚未认证。"]
 
 
 def brief_text(room):
     """Render the detailed brief only when explicitly requested."""
-    experts = "\n".join(f"- {name}：{'本地 CLI 读写' if mode == 'cli' else '在线只读'}" for name, mode in room["experts"].items())
+    experts = "\n".join(f"- {name}" for name in room["experts"])
     return f"# {room['title']} · 话题资料\n\n目标：{room['goal']}\n\n用户原文：\n{room['user_request'] or '未填写'}\n\n背景：\n{room['background'] or '未填写'}\n\n边界：\n{room['boundaries'] or '未填写'}\n\n主持人：{room['host']}（可兼任专家）\n\n参与专家：\n{experts}"
 
 
@@ -1464,7 +1445,7 @@ def protocol_text(room):
         "先用 room view 读取成员、职责、free.requests、session 与阶段，再按需读取原文。任务中的 purpose=discuss 表示讨论发言，discuss_host 表示主持任务，ask 表示直接提问；内部任务来源不是普通发言。",
         "用户管理和讨论开关使用房主凭据；本地成员使用本人的 --access-file，不借用其他身份。凭据私下交付，不公开 token。API 参与者遵循相同请求与执行约束，source=api；本地 CLI 使用 source=cli。",
         "runner 成员等待本机接入程序交付任务，用 execution view 核对本次执行和请求，再以 message post --as 本人 --kind chat --execution 本次编号 --access-file FILE 回答。执行失效后保留草稿，不能去掉编号改作普通发言；认领、续租与后续投递由接入程序处理。",
-        "manual 本地成员首次用 member register 注册，会话 ID 由 CLI 自动取得；回答用 --request 请求编号，不编造执行编号。讨论不使用原生定时；原会话不能托管时由用户触发。网页成员只读，用户或当前主持人在核对真实回答后以本人身份、--author 原专家和 --request 关联请求代发。",
+        "manual 本地成员首次用 member register 注册，会话 ID 由 CLI 自动取得；回答用 --request 请求编号，不编造执行编号。讨论不使用原生定时；原会话不能托管时由用户触发。",
         "自由协作中的 host 可用 --to 点名成员，route 表示未点名的用户请求，handoff 表示派出任务已结束；链上 AI 派活受房间预算限制。普通成员的 --to 或正文 @ 只保存回应建议，不直接唤醒；不点名自己、不扩大授权。",
         "讨论中的用户 @ 直接提问独立排队，不计讨论轮次、不与讨论发言合并。initial 阶段先独立判断；服务端按讨论请求的 read_until 限制读取。直接提问和主持任务不继承该阅读限制。",
         "主持安排前先 turn roster 读取在场专家、waiting、unregistered 和 revision，再 turn create --roster revision；单项和多项都要带凭据，多项计划须覆盖本轮 waiting。继续排队同样先读 roster，再 turn continue --roster revision。状态或新消息变化后旧凭据被拒绝，重新读取再判断；每个回答保存后由程序推进下一项。",
@@ -1495,17 +1476,24 @@ class DiscussionServer(ThreadingHTTPServer):
     allow_reuse_address = os.name != "nt"
     allow_reuse_port = False
 
-    def __init__(self, address, database, local_launch=False):
+    def __init__(self, address, database, local_launch=False, hub=None):
+        """Listen on one address; with `hub`, act as that site's remote entry, sharing its updates but requiring login.
+
+        A remote entry is reached through a tunnel that connects from this computer, so its loopback address must not
+        make every visitor the administrator, and it never offers local launch.
+        """
         self.database = Path(database)
+        # The server whose update stream this one shares; a site's local and remote entries see the same changes.
+        self.hub = hub or self
         self.updates = threading.Condition()
         self.update_version = 0
         # Recent (version, room id or None) pairs, so a stream names the rooms that changed; None means the whole site.
         self.update_log = collections.deque(maxlen=UPDATE_LOG_SIZE)
         self.updates_closed = False
-        if local_launch and address[0] != "127.0.0.1":
+        if local_launch and (address[0] != "127.0.0.1" or hub):
             raise ValueError("本机启动入口须绑定 127.0.0.1")
         self.local_launch = local_launch
-        self.local_site = address[0] in ("127.0.0.1", "::1", "localhost")
+        self.local_site = not hub and address[0] in ("127.0.0.1", "::1", "localhost")
         self.admin_setup_key = os.getenv("DISCUSS_ADMIN_SETUP_KEY") or secrets.token_urlsafe(18)
         service_home = os.getenv("DISCUSS_SERVICE_HOME")
         self.connections_file = Path(service_home) / "site-connections.json" if service_home else None
@@ -1533,9 +1521,9 @@ class DiscussionServer(ThreadingHTTPServer):
 
     def server_close(self):
         """Release streaming clients when the HTTP server stops."""
-        with self.updates:
+        with self.hub.updates:
             self.updates_closed = True
-            self.updates.notify_all()
+            self.hub.updates.notify_all()
         super().server_close()
 
 
@@ -1554,7 +1542,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         quiet_renewal = parts[3:4] == ["executions"] and action in ("renew", "segments")
         if (self.command == "POST" and 200 <= status < 300 and parts[:2] in (["api", "rooms"], ["api", "folders"])
                 and not quiet_renewal):
-            self.server.notify_update(parts[2] if parts[:2] == ["api", "rooms"] and len(parts) > 3 else None)
+            self.server.hub.notify_update(parts[2] if parts[:2] == ["api", "rooms"] and len(parts) > 3 else None)
         if content_type == "application/json":
             body = json.dumps(body, ensure_ascii=False)
         data = body.encode("utf-8") if isinstance(body, str) else body
@@ -1638,8 +1626,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Stream invalidations without holding a database connection or exposing records."""
         self.close_connection = True
         self.connection.settimeout(5)
-        with self.server.updates:
-            version = self.server.update_version
+        hub = self.server.hub
+        with hub.updates:
+            version = hub.update_version
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
@@ -1649,15 +1638,15 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"retry: 3000\nevent: ready\ndata: {}\n\n")
             self.wfile.flush()
             while True:
-                with self.server.updates:
-                    self.server.updates.wait_for(
-                        lambda: self.server.update_version != version or self.server.updates_closed,
+                with hub.updates:
+                    hub.updates.wait_for(
+                        lambda: hub.update_version != version or hub.updates_closed or self.server.updates_closed,
                         timeout=UPDATE_HEARTBEAT_SECONDS)
-                    if self.server.updates_closed:
+                    if hub.updates_closed or self.server.updates_closed:
                         return
-                    changed = self.server.update_version != version
-                    rooms = self.server.changed_rooms(version) if changed else None
-                    version = self.server.update_version
+                    changed = hub.update_version != version
+                    rooms = hub.changed_rooms(version) if changed else None
+                    version = hub.update_version
                 self.wfile.write(update_frame(rooms) if changed else b": keepalive\n\n")
                 self.wfile.flush()
         except OSError:
@@ -2331,7 +2320,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         elif len(parts) == 4 and parts[2] == "messages":
             body = message_text(get_message(connection, room_id, int(parts[3]), params, token))
         elif parts[2:] == ["publish"]:
-            return self.respond("URL 发布入口已停用。在线 AI 只读；本地 CLI AI 请使用 POST 留言接口。", 410, "text/plain")
+            return self.respond("URL 发布入口已停用；本地 CLI AI 请使用 POST 留言接口。", 410, "text/plain")
         else:
             raise LookupError("地址不存在")
         return self.respond(body, content_type="text/plain")
@@ -2346,6 +2335,7 @@ def main():
     parser.add_argument("--no-demo", action="store_true", help="Do not seed sample data in a new database")
     parser.add_argument("--local-launch", action="store_true", help="Enable local AI launch and configuration (127.0.0.1 only)")
     parser.add_argument("--reset-admin", action="store_true", help="Delete the administrator account and sessions, then exit")
+    parser.add_argument("--remote-port", type=int, help="Also listen on 127.0.0.1:PORT as a login-required entry for a tunnel")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     init_database(args.database, seed=not args.no_demo)
@@ -2356,16 +2346,24 @@ def main():
         logging.info("管理员账号已清除；再次打开网站时可用安装令牌重新注册")
         return
     server = DiscussionServer((args.host, args.port), args.database, local_launch=args.local_launch)
+    remote = DiscussionServer(("127.0.0.1", args.remote_port), args.database, hub=server) if args.remote_port else None
+    if remote:
+        threading.Thread(target=remote.serve_forever, daemon=True).start()
+        logging.info("Remote entry (login required) at http://127.0.0.1:%s", args.remote_port)
     logging.info("AI CoDiscuss ready at http://%s:%s", args.host, args.port)
     with closing(connect_db(args.database)) as connection:
-        if not server.local_site and connection.execute("SELECT 1 FROM site_admin").fetchone() is None:
+        login_site = remote or (server if not server.local_site else None)
+        if login_site and connection.execute("SELECT 1 FROM site_admin").fetchone() is None:
             logging.info("尚未注册管理员账号；注册所需安装令牌：%s",
-                         "见环境变量 DISCUSS_ADMIN_SETUP_KEY" if os.getenv("DISCUSS_ADMIN_SETUP_KEY") else server.admin_setup_key)
+                         "见环境变量 DISCUSS_ADMIN_SETUP_KEY" if os.getenv("DISCUSS_ADMIN_SETUP_KEY") else login_site.admin_setup_key)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         logging.info("Server stopped")
     finally:
+        if remote:
+            remote.shutdown()
+            remote.server_close()
         server.server_close()
 
 

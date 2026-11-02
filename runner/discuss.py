@@ -248,13 +248,11 @@ def message_commands(subcommands, registry):
     view.add_argument("--request", type=positive_int, help="手动成员：按自己的有效请求限制可读原文")
     group = add_leaf(subcommands, registry, "message group-plan", "房主读取全体请求、成员、顺序与 revision；安排全体前先读，提交时携带该 revision", True)
     group.add_argument("id", type=positive_int, help="全体请求的原消息编号")
-    post = add_leaf(subcommands, registry, "message post", "提交观点、主持说明、协作回答或代发", True)
+    post = add_leaf(subcommands, registry, "message post", "提交观点、主持说明或协作回答", True)
     add_text(post, "body")
     post.add_argument("--attachment", action="append", type=attachment_id, default=[],
                       help="已上传附件 ID；可重复指定，最多 10 个")
     add_text(post, "summary")
-    post.add_argument("--summary-by", type=participant, help="摘要撰写者：原作者或实际操作者；默认操作者")
-    post.add_argument("--author", type=participant, help="原作者；默认等于 --as；不同即代发")
     post.add_argument("--kind", choices=("chat", "moderation"), default="chat")
     post.add_argument("--execution", type=positive_int, help="自由房间：本次执行编号；省略时用凭据绑定的执行。执行失效后不能改作普通发言")
     post.add_argument("--to", type=ai_name, action="append", default=[],
@@ -492,9 +490,8 @@ def topic_payload(args):
         payload["host"] = args.host
     if hasattr(args, "experts_file"):
         experts = read_object(args.experts_file)
-        if any(not INSTANCE_PATTERN.fullmatch(name) or mode not in ("cli", "online")
-               for name, mode in experts.items()):
-            raise CliError("专家映射的名称必须是有效 AI，模式必须是 cli 或 online")
+        if any(not INSTANCE_PATTERN.fullmatch(name) or mode != "cli" for name, mode in experts.items()):
+            raise CliError("专家映射的名称必须是有效 AI，模式必须是 cli")
         payload["experts"] = experts
     return payload
 
@@ -568,7 +565,7 @@ def plan_message(args):
         raise CliError("主持说明须关联本次 --execution 或有效 --request")
     if args.execution and args.request:
         raise CliError("--execution 用于接入程序交付的执行，--request 用于手动接入成员，二者不能同用")
-    payload = {"author": args.author or actor, "submitted_by": actor, "source": "cli",
+    payload = {"author": actor, "submitted_by": actor, "source": "cli",
                "kind": args.kind, "text": text_field(args, "body") or "", "submission_id": args.submission_id}
     if len(args.attachment) > MAX_MESSAGE_ATTACHMENTS or len(set(args.attachment)) != len(args.attachment):
         raise CliError("每条消息最多 10 个附件，不能重复")
@@ -581,8 +578,6 @@ def plan_message(args):
         if len(summary.strip()) > MAX_SUMMARY_LENGTH:
             raise CliError(f"回答摘要最多 {MAX_SUMMARY_LENGTH} 个 Unicode 字符；不会自动截断")
         payload["summary"] = summary
-    if args.summary_by:
-        payload["summary_by"] = args.summary_by
     if args.execution:
         payload["execution_id"] = args.execution
     if args.request:
@@ -988,11 +983,11 @@ def prepare_creation_access(args, site, plan):
         "submission_id": payload.get("submission_id"), "members": {}}
     if access.get("site") != site or access.get("submission_id") != payload.get("submission_id"):
         raise CliError("建房凭据文件与本次站点或 submission_id 不符")
-    experts = payload.setdefault("experts", {name: "cli" if name == "Codex" else "online" for name in PARTICIPANTS[1:]})
+    experts = payload.setdefault("experts", {name: "cli" for name in PARTICIPANTS[1:]})
     members = []
-    for name, capability in experts.items():
+    for name in experts:
         member = access["members"].setdefault(name, {"token": secrets.token_urlsafe(48)})
-        members.append({"name": name, "token": member["token"], "access": "online" if capability == "online" else "manual"})
+        members.append({"name": name, "token": member["token"], "access": "manual"})
     payload["members"] = members
     save_access(path, access)
 
@@ -1007,8 +1002,6 @@ def finish_creation_access(args, site, plan, value):
     save_access(path, access)
     paths = {}
     for member in plan.body["members"]:
-        if member["access"] == "online":
-            continue
         member_path = path.with_name(f"{path.stem}.{member['name']}.json")
         save_access(member_path, {"site": site, "room": value["id"], "member": member["name"], "token": member["token"]})
         paths[member["name"]] = str(member_path)

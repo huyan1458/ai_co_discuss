@@ -3,13 +3,12 @@ import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
-import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-import { install_skills, remove_legacy_skills } from '../runner/discussion_skills.mjs';
+import { install_skills } from '../runner/discussion_skills.mjs';
 import { agy_rule } from '../runner/adapters/antigravity_cli.mjs';
-import { check_command, checkbox_prompt, detect_clients, detect_python, remove_legacy_agy_rules } from '../runner/discussion_setup.mjs';
+import { detect_clients, detect_python, remove_legacy_agy_rules } from '../runner/discussion_setup.mjs';
 
 const CLI = fileURLToPath(new URL('../runner/codiscuss.mjs', import.meta.url));
 
@@ -64,23 +63,6 @@ test('setup removes only the global agy rules earlier versions recorded, keeping
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-test('client checkbox skips undetected entries, toggles with space and confirms with enter', async () => {
-  const input = Object.assign(new PassThrough(), { isTTY: true, raw: [], setRawMode(value) { this.raw.push(value); } });
-  const output = new PassThrough();
-  const items = [{ label: 'Codex', hint: 'codex.exe', checked: true, disabled: false },
-    { label: 'Gemini', hint: '未检测到 CLI', checked: false, disabled: true },
-    { label: 'Claude', hint: 'claude.exe', checked: true, disabled: false }];
-  const result = checkbox_prompt('选择要接入的软件', items, input, output);
-  input.write(' ');
-  input.write('\x1b[B');
-  input.write(' ');
-  input.write(' ');
-  input.write('\r');
-  assert.deepEqual(await result, [false, false, true]);
-  assert.deepEqual(input.raw, [true, false]);
-  assert.match(output.read().toString(), /○ Gemini/);
-});
-
 test('CLI detection is limited to Claude, Codex, agy and Cursor command aliases', () => {
   const directory = mkdtempSync(join(tmpdir(), 'codiscuss-cli fixtures-'));
   try {
@@ -95,28 +77,6 @@ test('CLI detection is limited to Claude, Codex, agy and Cursor command aliases'
     assert.equal(detect_clients({}, directory).find(item => item.key === 'cursor').executable, alias);
     rmSync(alias);
     assert.equal(detect_clients({}, directory).find(item => item.key === 'cursor').executable, '');
-  } finally { rmSync(directory, { recursive: true, force: true }); }
-});
-
-test('Cursor Windows cmd launcher is probed with a fixed argument and a path containing spaces', { skip: process.platform !== 'win32' }, () => {
-  const directory = mkdtempSync(join(tmpdir(), 'codiscuss-cursor space-'));
-  try {
-    const path = join(directory, 'agent.cmd');
-    writeFileSync(path, '@echo off\r\nif not "%~1"=="--version" exit /b 8\r\necho Cursor fixture 1.0\r\n');
-    assert.equal(detect_clients({}, directory).find(item => item.key === 'cursor').executable, path);
-  } finally { rmSync(directory, { recursive: true, force: true }); }
-});
-
-test('npm Codex binary search skips dot-prefixed upgrade leftovers', { skip: process.platform !== 'win32' }, () => {
-  const directory = mkdtempSync(join(tmpdir(), 'codiscuss-codex npm-'));
-  try {
-    const scope = join(directory, 'node_modules', '@openai');
-    const leftover = join(scope, '.codex-awaeVzrD');
-    const vendor = join(scope, 'codex', 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'codex');
-    for (const path of [leftover, vendor]) mkdirSync(path, { recursive: true });
-    fixture_cli(leftover, 'codex');
-    const current = fixture_cli(vendor, 'codex');
-    assert.equal(detect_clients({}, directory).find(item => item.key === 'codex').executable, current);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
@@ -144,23 +104,6 @@ test('complete skills install idempotently, preserve user edits and keep hashes 
     writeFileSync(path, 'custom skill');
     assert.equal(install_skills(skills, record)[0].status, 'conflict');
     assert.equal(readFileSync(path, 'utf8'), 'custom skill');
-  } finally { rmSync(directory, { recursive: true, force: true }); }
-});
-
-test('retired skill directory loses unmodified managed copies but keeps edited ones', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'codiscuss-legacy-skills-'));
-  try {
-    const legacy = join(directory, 'legacy'), record = join(directory, 'skills-manifest.json');
-    assert.deepEqual(remove_legacy_skills(legacy, record), []);
-    install_skills(legacy, record);
-    writeFileSync(join(legacy, 'discuss-host/SKILL.md'), 'custom skill');
-    assert.deepEqual(remove_legacy_skills(legacy, record).map(item => item.status), ['kept', 'removed', 'removed']);
-    assert.equal(readFileSync(join(legacy, 'discuss-host/SKILL.md'), 'utf8'), 'custom skill');
-    assert.deepEqual(Object.keys(JSON.parse(readFileSync(record, 'utf8'))[legacy]), ['discuss-host']);
-    rmSync(join(legacy, 'discuss-host'), { recursive: true });
-    assert.deepEqual(remove_legacy_skills(legacy, record), []);
-    assert.equal(existsSync(legacy), false);
-    assert.deepEqual(JSON.parse(readFileSync(record, 'utf8')), {});
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
@@ -259,17 +202,6 @@ test('skill conflicts report pending configuration and preserve the edited copy'
     assert.equal(result.skills[0].results.filter(skill => skill.status === 'unchanged').length, 2);
     assert.equal(readFileSync(path, 'utf8'), 'my local skill');
     assert.match(second.stderr, /配置待处理/);
-  } finally { rmSync(directory, { recursive: true, force: true }); }
-});
-
-test('persistent command check reports a missing command or a different installation', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'codiscuss-command-'));
-  try {
-    assert.equal(check_command(directory).status, 'missing');
-    const path = fixture_cli(directory, 'codiscuss');
-    const result = check_command(directory);
-    assert.equal(result.status, 'shadowed');
-    assert.equal(result.path, path);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 

@@ -448,8 +448,8 @@ function launch_config(home, input, room, directory, options) {
   if (room.mode === 'free') return free_launch_config(home, input, room, directory, options);
   if (!clients_of(room.host)) throw new Error('请选择支持全自动讨论的 AI 主持人');
   if (!room.experts || room.experts[room.host] !== 'cli') throw new Error('请将 AI 主持人的参与方式设为本地读写');
-  const online = Object.entries(room.experts).filter(([, mode]) => mode !== 'cli').map(([name]) => name);
-  if (online.length) throw new Error(`全自动无法接入在线专家：${online.join('、')}。请调整参与方式或改用手动推进`);
+  const other = Object.entries(room.experts).filter(([, mode]) => mode !== 'cli').map(([name]) => name);
+  if (other.length) throw new Error(`全自动讨论的参与方式须为本地读写：${other.join('、')}`);
   const defaults = options.defaults || launch_settings(home).participants;
   const manual = manual_experts(room);
   if (manual.has(room.host)) throw new Error('AI 主持人由本机服务续接，不能选择手动接入');
@@ -464,7 +464,7 @@ function launch_config(home, input, room, directory, options) {
     data_directory: join(directory, 'runtime'), draft_directory: service_drafts(home, join(directory, 'runtime')) }, directory);
 }
 
-/** A free-room member the local service wakes; manual and online members join without local configuration. */
+/** A free-room member the local service wakes; manual members join without local configuration. */
 function woken_member(member) { return typeof member === 'string' || !member.access || member.access === 'runner'; }
 
 /** Free rooms add one private credential per woken member, kept with the room configuration for retries. */
@@ -848,7 +848,7 @@ function register_copied_room(home, input, local, participants, keep_manual, see
 /**
  * Register a room forked from another on this machine: each local member continues from its own session as it stood
  * at the fork point, without the executions the fork leaves out. The source room's sessions are never changed.
- * Requires both rooms' owner credentials; members the new room keeps manual or online are not registered here.
+ * Requires both rooms' owner credentials; members the new room keeps manual are not registered here.
  * Returns `{room_id, registered, members: [{name, status: forked|fresh|failed, error?}]}`.
  */
 export async function fork_room(home, raw) {
@@ -1185,7 +1185,7 @@ async function perform_launch(home, context, options) {
       ...input.room,
       members: [...Object.keys(config.participants).map(name => ({ name, adapter: config.participants[name].adapter,
         token: config.members[name].token, access: 'runner', session_mode: config.participants[name].session_id ? 'borrowed' : 'new' })),
-      // Manual and online members keep the credentials the browser generated; nothing local is configured for them.
+      // Manual members keep the credentials the browser generated; nothing local is configured for them.
       ...(input.room.members || []).filter(member => record.discussion ? member?.access === 'manual' : !woken_member(member))
         .map(({ name, token, access }) => ({ name, token, access, adapter: '', session_mode: 'new' }))],
     });

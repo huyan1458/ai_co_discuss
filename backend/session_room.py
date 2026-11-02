@@ -50,9 +50,8 @@ def _idle_session_revision(connection, room_id):
     latest_session = connection.execute("SELECT id,status FROM discussion_sessions WHERE room_id=? ORDER BY id DESC LIMIT 1",
                                         (room_id,)).fetchone()
     members = [list(row) for row in connection.execute("""SELECT m.id,m.name,m.role,m.access,m.status,
-        CASE WHEN r.token_hash=m.token_hash THEN 1 ELSE 0 END AS registered,COALESCE(source.source,'')
+        CASE WHEN r.token_hash=m.token_hash THEN 1 ELSE 0 END AS registered
         FROM room_members m LEFT JOIN member_registrations r ON r.member_id=m.id
-        LEFT JOIN member_manual_sources source ON source.member_id=m.id
         WHERE m.room_id=? ORDER BY m.id""", (room_id,))]
     latest_message = connection.execute("""SELECT COALESCE(MAX(id),0) FROM messages WHERE room_id=?
         AND NOT EXISTS(SELECT 1 FROM internal_task_messages WHERE message_id=messages.id)""", (room_id,)).fetchone()[0]
@@ -458,16 +457,14 @@ def _session_roster(connection, session_id):
         max_round = connection.execute("SELECT COALESCE(MAX(round),1) FROM session_requests WHERE session_id=? AND purpose='discuss'", (session_id,)).fetchone()[0]
     answered = {row[0] for row in connection.execute("SELECT member_id FROM session_requests WHERE session_id=? AND purpose='discuss' AND round=? AND status='answered'", (session_id, max_round))}
     members = [dict(row) for row in connection.execute("""SELECT m.id,m.name,m.role,m.access,m.status,m.token_hash,
-        COALESCE(r.token_hash,'') AS registration_hash,COALESCE(source.source,'') AS manual_source
+        COALESCE(r.token_hash,'') AS registration_hash
         FROM room_members m LEFT JOIN member_registrations r ON r.member_id=m.id
-        LEFT JOIN member_manual_sources source ON source.member_id=m.id
         WHERE m.room_id=? AND m.status='active' ORDER BY m.id""", (session["room_id"],))]
     experts = []
     for member in members:
-        registered = (member["access"] != "manual" or member["manual_source"] == "web"
-                      or member["registration_hash"] == member["token_hash"])
+        registered = member["access"] != "manual" or member["registration_hash"] == member["token_hash"]
         experts.append({"id": member["id"],"name":member["name"],"host":member["role"] == "host", "mode":member["access"],
-                        "manual_source":member["manual_source"], "spoken":member["id"] in answered, "registered":registered})
+                        "spoken":member["id"] in answered, "registered":registered})
     experts.sort(key=lambda item: (item["host"], next(member["id"] for member in members if member["name"]==item["name"])))
     waiting = [item["name"] for item in experts if not item["host"] and not item["spoken"] and item["registered"]]
     unregistered = [item["name"] for item in experts if not item["registered"]]
@@ -589,13 +586,12 @@ def _validated_plan(payload):
 def _validate_plan_members(connection, room_id, plan):
     """Require each scheduled participant to be active and any manual member registered."""
     for name, _, _ in plan:
-        member = connection.execute("""SELECT m.*,COALESCE(source.source,'') AS manual_source FROM room_members m
-            LEFT JOIN member_manual_sources source ON source.member_id=m.id
+        member = connection.execute("""SELECT * FROM room_members m
             WHERE m.room_id=? AND m.name=? AND m.status='active'""",
                                     (room_id, name)).fetchone()
         if not member:
             raise ValueError(f"安排对象 {name} 不是在场专家")
-        if member["access"] == "manual" and member["manual_source"] != "web" and not connection.execute(
+        if member["access"] == "manual" and not connection.execute(
                 "SELECT 1 FROM member_registrations WHERE member_id=? AND token_hash=?",
                 (member["id"], member["token_hash"])).fetchone():
             raise ValueError(f"手动专家 {name} 尚未注册")
@@ -749,9 +745,8 @@ def _expert_denominator(connection, session_id, round_number=None):
     """Count registered active experts, plus the host only if that round explicitly schedules them."""
     room_id = connection.execute("SELECT room_id FROM discussion_sessions WHERE id=?", (session_id,)).fetchone()[0]
     count = connection.execute("""SELECT COUNT(*) FROM room_members m LEFT JOIN member_registrations r ON r.member_id=m.id
-        LEFT JOIN member_manual_sources source ON source.member_id=m.id
         WHERE m.room_id=? AND m.status='active' AND m.role<>'host'
-        AND (m.access<>'manual' OR source.source='web' OR r.token_hash=m.token_hash)""", (room_id,)).fetchone()[0]
+        AND (m.access<>'manual' OR r.token_hash=m.token_hash)""", (room_id,)).fetchone()[0]
     host_sql = "SELECT 1 FROM session_requests WHERE session_id=? AND purpose='discuss' AND member_id IN (SELECT id FROM room_members WHERE room_id=? AND role='host')"
     values = [session_id, room_id]
     if round_number is not None:

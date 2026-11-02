@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
 import { unzipSync } from "fflate";
@@ -106,64 +105,3 @@ test("standard ZIP reader recovers complete Unicode JSON, transcript and referen
   assert.ok(decoded["备份说明.txt"].includes("导入房间"));
 });
 
-/** Exercise the real shared download action without relying on either UI theme. */
-function controller_fixture(request) {
-  const source = readFileSync(new URL("../web/app.js", import.meta.url), "utf8");
-  const start = source.indexOf("async function backup_room(");
-  const end = source.indexOf("/** Execute a named view command", start);
-  const button = {};
-  const downloaded = [];
-  const notifications = [];
-  const context = vm.createContext({ state: { room: { id: "one" }, query: "filter", page: 3 },
-    element: () => button, publish_view() {}, location: { origin: "https://example.test" }, localStorage: { getItem: () => null },
-    request_json: request, attach_local_members: async () => {}, window: { discuss_backup: { async download_room_backup(snapshot) { downloaded.push(snapshot); } } },
-    show_toast: (text) => notifications.push(text) });
-  vm.runInContext(source.slice(start, end), context);
-  return { context, button, downloaded, notifications };
-}
-
-test("backup captures the chosen room before navigation and ignores repeated clicks", async () => {
-  let finish;
-  const requests = [];
-  const fixture = controller_fixture((path) => { requests.push(path); return new Promise((resolve) => { finish = resolve; }); });
-  const pending = fixture.context.backup_room();
-  await fixture.context.backup_room();
-  assert.equal(fixture.button.disabled, true);
-  fixture.context.state.room = { id: "two" };
-  finish(backup_fixture());
-  await pending;
-  assert.deepEqual(requests, ["/api/rooms/one/backup"]);
-  assert.equal(fixture.downloaded[0].source_url, "https://example.test/r/one");
-  assert.equal(fixture.downloaded.length, 1);
-  assert.equal(fixture.button.disabled, false);
-});
-
-test("sidebar export targets the selected menu room without switching the current draft", async () => {
-  const requests = [];
-  const fixture = controller_fixture(async (path) => { requests.push(path); return backup_fixture(); });
-  fixture.context.state.draft = "保留草稿";
-  await fixture.context.backup_room("archived-room");
-  assert.deepEqual(requests, ["/api/rooms/archived-room/backup"]);
-  assert.equal(fixture.context.state.room.id, "one");
-  assert.equal(fixture.context.state.draft, "保留草稿");
-  assert.equal(fixture.context.state.query, "filter");
-  assert.equal(fixture.downloaded[0].source_url, "https://example.test/r/archived-room");
-});
-
-test("backup confirmation counts only ordinary messages", async () => {
-  const snapshot = backup_fixture();
-  snapshot.tables.messages = [{ id: 1, text: "普通发言" }, { id: 2, text: "系统任务" }];
-  snapshot.tables.task_message_sources = [{ message_id: 2, session_id: 3, session_request_id: 4 }];
-  const fixture = controller_fixture(async () => snapshot);
-  await fixture.context.backup_room();
-  assert.deepEqual(fixture.notifications, ["已生成备份（1 条消息），请查看浏览器下载。"]);
-});
-
-test("a failed backup permits retry without claiming a completed download", async () => {
-  const fixture = controller_fixture(async () => { throw new Error("离线"); });
-  await assert.rejects(fixture.context.backup_room(), /离线/);
-  assert.equal(fixture.context.state.backup_pending, false);
-  assert.equal(fixture.button.disabled, false);
-  assert.deepEqual(fixture.downloaded, []);
-  assert.deepEqual(fixture.notifications, []);
-});

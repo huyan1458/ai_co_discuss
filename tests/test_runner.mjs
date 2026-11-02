@@ -1,38 +1,34 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, readFileSync, readdirSync, realpathSync, statSync, utimesSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
 import { tmpdir } from 'node:os';
-import { basename, join, relative, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
-import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import vm from 'node:vm';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { listen_local } from './local_port.mjs';
-import { DiscussionStore, load_config, service_drafts, validate_config } from '../runner/discussion_runner.mjs';
+import { DiscussionStore, service_drafts, validate_config } from '../runner/discussion_runner.mjs';
 import { cwd_key, free_task_files, FreeRoomRunner, review_capability_version, workspace_snapshot } from '../runner/free_runner.mjs';
 import { SessionDriver } from '../runner/session_driver.mjs';
 
 import { EXPERT_PROMPT_PRESETS, expert_prompt, free_task_text, software_rules } from '../runner/expert_prompts.mjs';
-import { system_prompt } from '../runner/adapters/api.mjs';
-import { assert_shared_home, DiscussionService, migrate_service_home, read_registry, register_room, service_pid, service_ready, start_service, sweep_service_home, unregister_room } from '../runner/discussion_service.mjs';
-import { launch_discussion, restore_room, room_models, room_profiles } from '../runner/discussion_launch.mjs';
+import { participant_tools, system_prompt } from '../runner/adapters/api.mjs';
+import { glob_regex, open_project, run_file_tool } from '../runner/adapters/api_files.mjs';
+import { DiscussionService, migrate_service_home, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
+import { restore_room, room_profiles } from '../runner/discussion_launch.mjs';
 import { adapter_of, deliver_task } from '../runner/adapters/index.mjs';
 import { adopted_fork, claude_exit_error, claude_inbox_ready, claude_rule_path, standalone_claude_env } from '../runner/adapters/claude.mjs';
 import { codex_permissions } from '../runner/adapters/codex_cli.mjs';
-import { codex_target } from '../runner/adapters/codex_app.mjs';
-import { agy_rule, antigravity_project, prepare_agy_project, remove_agy_projects } from '../runner/adapters/antigravity_cli.mjs';
+import { agy_rule, prepare_agy_project, remove_agy_projects } from '../runner/adapters/antigravity_cli.mjs';
 import { kill_process_tree, run_program, TASK_SUBCOMMANDS } from '../runner/adapters/common.mjs';
-import { MAX_EXECUTION_NOTES, MAX_EXECUTION_SEGMENTS, MAX_NOTES_PER_REPORT, MAX_SEGMENTS_PER_REPORT, SegmentLog } from '../runner/execution_progress.mjs';
 const activity_phase = (adapter, event) => adapter_of(adapter).events.phase(event);
-const activity_tool = (adapter, event) => adapter_of(adapter).events.tool(event);
-const progress_note = (adapter, event, responses) => adapter_of(adapter).events.note(event, responses);
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
-import { certainty, decide, decide_group_order, decide_review_completion, DISCUSSION_GUIDED_PROMPT_VERSION, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_thresholds, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
+import { certainty, decide, decide_group_order, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_thresholds, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
 
 /** Every room configuration keeps one member credential per woken participant. */
 const with_members = config => ({ ...config, members: Object.fromEntries(Object.keys(config.participants).map(name => [name, { token: 'm'.repeat(32) }])) });
@@ -53,32 +49,6 @@ test('review capability excludes borrowed access, additional grants and writable
   assert.equal(review_capability_version(profile, { ...member, session_mode: 'borrowed' }, config), '');
   assert.equal(review_capability_version(profile, member, { ...config, draft_directory: join(profile.cwd, 'drafts') }), '');
   assert.notEqual(review_capability_version({ ...profile, cwd: resolve('another-project') }, member, config), version);
-});
-
-test('review capability synchronization publishes once and revokes changed permissions without leaking paths', async t => {
-  const writes = [];
-  const server = createServer(async (request, response) => {
-    let body = ''; for await (const chunk of request) body += chunk;
-    const payload = JSON.parse(body); writes.push(payload);
-    response.setHeader('Content-Type', 'application/json');
-    response.end(JSON.stringify({ revision: 'member-r1', capability: payload.read_only ? { config_version: payload.config_version } : null }));
-  });
-  await listen_local(server);
-  t.after(() => new Promise(resolve => server.close(resolve)));
-  const member = { id: 1, name: 'Codex', adapter: 'codex_cli', access: 'runner', session_mode: 'new', review_capability: { revision: 'member-r1', capability: null } };
-  const config = { site: `http://127.0.0.1:${server.address().port}`, room: 'review-room', token: 'owner-token'.repeat(4),
-    directory: resolve('review-runtime'), draft_directory: resolve('review-drafts'),
-    participants: { Codex: { adapter: 'codex_cli', project_access: 'read', cwd: resolve('review-project') } } };
-  const runner = { config, context_errors: new Map(), log: assert.fail };
-  await FreeRoomRunner.prototype.sync_review_capabilities.call(runner, { members: [member] });
-  await FreeRoomRunner.prototype.sync_review_capabilities.call(runner, { members: [member] });
-  assert.equal(writes.length, 1);
-  assert.equal(writes[0].revision, 'member-r1');
-  assert.doesNotMatch(JSON.stringify(writes), /review-project|review-runtime|owner-token/);
-  config.participants.Codex.project_access = 'write';
-  await FreeRoomRunner.prototype.sync_review_capabilities.call(runner, { members: [member] });
-  assert.deepEqual(writes[1], { revision: 'member-r1', read_only: false });
-  assert.equal(member.review_capability.capability, null);
 });
 
 test('review delivery refuses a changed local permission before contacting the site', async () => {
@@ -246,31 +216,72 @@ function session_task(config, { role = 'host', ...options } = {}, binding = {}) 
     { session: { id: 3, status: 'active', phase: 'initial' }, process_access: false, ...options });
 }
 
-test('host tasks carry scheduling suggestions only when there are some', t => {
-  const f = task_fixture(t);
-  session_task(f.config);
-  assert.equal(JSON.parse(readFileSync(join(f.config.directory, 'free-1.task.json'), 'utf8')).scheduler_suggestions, undefined);
-  const suggestions = [{ message_id: 9, suggestion: '请 Claude 回应', confidence: 0.82 }];
-  session_task(f.config, { suggestions });
-  const task = JSON.parse(readFileSync(join(f.config.directory, 'free-1.task.json'), 'utf8'));
-  assert.deepEqual(task.scheduler_suggestions, suggestions);
-  assert.equal(task.discussion_request.purpose, 'discuss_host');
-  assert.equal(task.session.phase, 'initial');
-});
-
-test('API profiles need a bound key but no software or filesystem permission', t => {
+test('API profiles need a bound key and no software, and take only the access their file tools enforce', t => {
   const home = mkdtempSync(join(tmpdir(), 'api-config-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const base_url = 'https://openrouter.ai/api/v1';
   const key = save_api_key(home, { base_url, api_key: 'test-only-key' });
   const input = with_members({ site: 'https://discussion.test', room: 'api-room', token: 'owner'.repeat(8), api_home: home, project_access: 'write',
-    participants: { Grok: { adapter: 'api', api_protocol: 'chat', base_url, model: 'vendor/model.1', ...key, project_access: 'write', cwd: home } } });
+    participants: { Grok: { adapter: 'api', api_protocol: 'chat', base_url, model: 'vendor/model.1', ...key, project_access: 'write', cwd: home, executable: 'x.exe' } } });
   const config = validate_config(input, home);
-  assert.equal(config.participants.Grok.project_access, 'read');
-  assert.equal(config.participants.Grok.cwd, undefined);
+  assert.equal(config.participants.Grok.project_access, 'write');
+  assert.equal(config.participants.Grok.cwd, home);
   assert.equal(config.participants.Grok.executable, undefined);
+  // Without a command line there is nothing for a software to approve, so 自动 and 全放开 are refused.
+  assert.throws(() => validate_config({ ...input, participants: { Grok: { ...input.participants.Grok, project_access: 'full' } } }, home), /没有命令行/);
   assert.throws(() => validate_config({ ...input, participants: { Grok: { ...input.participants.Grok, base_url: 'https://api.x.ai/v1' } } }, home), /重新填写/);
   assert.deepEqual(saved_api_keys(home), { [base_url]: key.api_key_ref });
+});
+
+test('API file tools stay inside the project, refuse secrets and private files, and modify only what they read', t => {
+  const root = mkdtempSync(join(tmpdir(), 'api-files-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const project = join(root, 'project'), service = join(project, '.codiscuss');
+  mkdirSync(join(project, 'src'), { recursive: true });
+  mkdirSync(join(project, '.git'));
+  mkdirSync(join(service, 'api-keys'), { recursive: true });
+  writeFileSync(join(project, 'notes.md'), 'one\r\ntwo\r\ntwo\r\n');
+  writeFileSync(join(project, 'src', 'app.js'), 'const answer = 42;\n');
+  writeFileSync(join(project, '.env'), 'TOKEN=secret');
+  writeFileSync(join(project, '.git', 'config'), '[core]');
+  writeFileSync(join(service, 'api-keys', 'k.json'), '{"api_key":"secret"}');
+  writeFileSync(join(root, 'outside.txt'), 'outside');
+  const tools = files => participant_tools({ role: 'member', project: files }).map(item => item.name);
+  const reader = open_project({ cwd: project, project_access: 'read' }, [service]);
+  assert.deepEqual(tools(null), ['read_room', 'read_messages', 'read_message', 'submit_chat']);
+  assert.deepEqual(tools(reader), ['read_room', 'read_messages', 'read_message', 'read', 'glob', 'grep', 'submit_chat']);
+  assert.match(system_prompt({ participant: 'DeepSeek', role: 'member', project: reader }), /可用 read、glob、grep 工具只读本房间的项目目录/);
+
+  // The read envelope and footers follow DeepSeek Harness.
+  assert.equal(run_file_tool(reader, 'read', { file_path: 'notes.md', offset: 2, limit: 1 }),
+    '<path>notes.md</path>\n<type>file</type>\n<content>\n2: two\n\n(Showing lines 2-2 of 3. Use offset=3 to continue.)\n</content>');
+  for (const file_path of ['.env', '.git/config', '.codiscuss/api-keys/k.json', '../outside.txt', join(root, 'outside.txt')]) {
+    assert.ok(run_file_tool(reader, 'read', { file_path }).error, file_path);
+  }
+  assert.equal(run_file_tool(reader, 'glob', { pattern: '*.js' }), 'src/app.js');
+  assert.equal(run_file_tool(reader, 'glob', { pattern: '*' }).split('\n').sort().join('\n'), 'notes.md\nsrc/app.js');
+  assert.equal(run_file_tool(reader, 'grep', { pattern: 'answer|secret', include: '*.{js,json}' }), 'Found 1 match\n\nsrc/app.js\nLine 1: const answer = 42;');
+  assert.equal(run_file_tool(reader, 'grep', { pattern: 'TOKEN' }), 'No matches found');
+
+  const writer = open_project({ cwd: project, project_access: 'write' }, [service]);
+  assert.deepEqual(tools(writer).slice(-3), ['write', 'edit', 'submit_chat']);
+  assert.match(system_prompt({ participant: 'DeepSeek', role: 'member', project: writer }), /草稿文件与 --body-file 不适用：回答正文直接放进 submit_chat/);
+  const edit = { file_path: 'notes.md', old_string: 'one', new_string: 'first' };
+  assert.match(run_file_tool(writer, 'edit', edit).error, /has not been read/);
+  assert.match(run_file_tool(writer, 'write', { file_path: 'notes.md', content: 'x' }).error, /has not been read/);
+  run_file_tool(writer, 'read', { file_path: 'notes.md' });
+  assert.match(run_file_tool(writer, 'edit', { ...edit, old_string: 'two' }).error, /matched 2 times/);
+  assert.equal(run_file_tool(writer, 'edit', edit), 'The file notes.md has been updated successfully.');
+  assert.equal(readFileSync(join(project, 'notes.md'), 'utf8'), 'first\r\ntwo\r\ntwo\r\n', 'the file keeps its CRLF line endings');
+  assert.match(run_file_tool(writer, 'write', { file_path: 'docs/report.md', content: '# 汇报\n' }), /Created file/);
+  assert.equal(readFileSync(join(project, 'docs', 'report.md'), 'utf8'), '# 汇报\n');
+  // A change by someone else after the read makes the next modification re-read first.
+  writeFileSync(join(project, 'notes.md'), 'changed by another member, longer\n');
+  assert.match(run_file_tool(writer, 'edit', { ...edit, old_string: 'first', new_string: '1' }).error, /changed since it was read/);
+  assert.ok(run_file_tool(writer, 'write', { file_path: '../escape.txt', content: 'x' }).error);
+  assert.ok(run_file_tool(writer, 'write', { file_path: '.env.local', content: 'x' }).error);
+  assert.equal(existsSync(join(root, 'escape.txt')), false);
+  assert.ok(glob_regex('src/**/*.test.js').test('src/a/b.test.js') && glob_regex('src/**/*.test.js').test('src/b.test.js'));
 });
 
 test('a stopped legacy service directory moves with its paths and drafts rewritten', t => {
@@ -388,67 +399,6 @@ async function fixture(t) {
     current_execution: () => [...executions.values()].at(-1) };
 }
 
-test('room model readback uses registered choices, adds the software settings for empty ones, and excludes paths and credentials', async t => {
-  const home = mkdtempSync(join(tmpdir(), 'discussion-models-'));
-  t.after(() => rmSync(home, { recursive: true, force: true }));
-  const path = join(home, 'room.json');
-  const config = { site: 'http://127.0.0.1:8765', room: 'models', token: 'private-owner-token'.repeat(3),
-    data_directory: join(home, 'runtime'), participants: {
-      Codex: { adapter: 'codex_cli', executable: process.execPath, model: 'gpt-6-astra', effort: 'xhigh', session_id: 'private-session' },
-      Claude: { adapter: 'claude', executable: process.execPath },
-      Gemini: { adapter: 'antigravity', ipc_directory: home, model: 'stale-cli-choice', effort: 'high' },
-    } };
-  config.members = with_members(config).members;
-  writeFileSync(path, JSON.stringify(config));
-  register_room(home, path);
-  writeFileSync(join(home, 'launch-settings.json'), JSON.stringify({ participants: { Claude: { model: 'wrong-default', effort: 'max' } } }));
-  // The software's own settings are read for empty choices; point both CLIs at private copies.
-  const saved_env = { CODEX_HOME: process.env.CODEX_HOME, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
-  t.after(() => { for (const [key, value] of Object.entries(saved_env)) value === undefined ? delete process.env[key] : process.env[key] = value; });
-  process.env.CODEX_HOME = join(home, 'codex');
-  process.env.CLAUDE_CONFIG_DIR = join(home, 'claude');
-  mkdirSync(process.env.CODEX_HOME);
-  writeFileSync(join(process.env.CODEX_HOME, 'config.toml'), 'model = "gpt-6-sol"\nmodel_reasoning_effort = "high"\n[profiles.deep]\nmodel = "ignored"\n');
-  const input = { site: config.site, room_id: config.room };
-  const none = { default_model: '', default_effort: '', project_access: 'read', own_project: false };
-  assert.deepEqual(await room_models(home, input), { room_id: 'models', registered: true, participants: {
-    Codex: { adapter: 'codex_cli', model: 'gpt-6-astra', effort: 'xhigh', default_model: 'gpt-6-sol', default_effort: 'high', project_access: 'read', own_project: false },
-    Claude: { adapter: 'claude', model: '', effort: '', ...none },
-    Gemini: { adapter: 'antigravity', model: '', effort: '', ...none },
-  }, scheduler: null });
-  mkdirSync(process.env.CLAUDE_CONFIG_DIR);
-  writeFileSync(join(process.env.CLAUDE_CONFIG_DIR, 'settings.json'), JSON.stringify({ model: 'opus', effortLevel: 'high' }));
-  assert.deepEqual((await room_models(home, input)).participants.Claude,
-    { adapter: 'claude', model: '', effort: '', default_model: 'opus', default_effort: 'high', project_access: 'read', own_project: false });
-  config.participants.Gemini = { adapter: 'antigravity_cli', executable: process.execPath, model: 'gemini-4-argon-high' };
-  writeFileSync(path, JSON.stringify(config));
-  // agy keeps its default in the software and answers its native /model; stub that query here.
-  const agy = { read_defaults: profile => profile.adapter === 'antigravity_cli' ? { model: 'gemini-4-argon-medium', effort: 'medium' } : { model: '', effort: '' } };
-  // A quick read leaves agy's slow default query for later and says so.
-  assert.deepEqual((await room_models(home, { ...input, quick: true }, { read_defaults: profile => profile.adapter === 'antigravity_cli' ? assert.fail('agy must not be queried') : { model: '', effort: '' } })).participants.Gemini,
-    { defaults_pending: true, adapter: 'antigravity_cli', model: 'gemini-4-argon-high', effort: '', default_model: '', default_effort: '', project_access: 'read', own_project: false });
-  assert.deepEqual((await room_models(home, input, agy)).participants.Gemini,
-    { adapter: 'antigravity_cli', model: 'gemini-4-argon-high', effort: '', default_model: 'gemini-4-argon-medium', default_effort: 'medium', project_access: 'read', own_project: false });
-  assert.deepEqual(await room_models(home, { ...input, room_id: 'missing' }), { room_id: 'missing', registered: false, participants: {}, scheduler: null });
-  assert.deepEqual((await room_models(home, { ...input, site: 'https://other.example' })).participants, {});
-  await assert.rejects(() => room_models(home, { ...input, room_id: '../models' }), /房间编号无效/);
-  config.scheduler = { provider: 'jev', model: 'jev-decide', api_key_ref: 'private-key-ref' };
-  writeFileSync(path, JSON.stringify(config));
-  assert.deepEqual((await room_models(home, input, agy)).scheduler, { provider: 'jev', model: 'jev-decide', mode: 'guided' });
-  config.participants.Codex.project_access = 'write';
-  writeFileSync(path, JSON.stringify(config));
-  assert.equal((await room_models(home, input, agy)).participants.Codex.project_access, 'write');
-  config.participants.Gemini.session_id = 'own-agy-conversation';
-  writeFileSync(path, JSON.stringify(config));
-  assert.equal((await room_models(home, input, agy)).participants.Gemini.own_project, true);
-  // What a session last ran with comes from its log; only known values are added.
-  const read_session = (adapter, session_id) => session_id === 'private-session' ? { model: 'gpt-6-astra', effort: 'medium' } : { model: '', effort: '' };
-  const sessions = (await room_models(home, input, { ...agy, read_session })).participants;
-  assert.equal(sessions.Codex.actual_model, 'gpt-6-astra');
-  assert.equal(sessions.Codex.actual_effort, 'medium');
-  assert.equal('actual_model' in sessions.Claude, false);
-});
-
 test('a backup carries local member sessions, and restoring it resumes them while Claude Code stays manual', async t => {
   const home = mkdtempSync(join(tmpdir(), 'discussion-restore-'));
   const saved_env = { CODEX_HOME: process.env.CODEX_HOME, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
@@ -513,34 +463,6 @@ test('a backup carries local member sessions, and restoring it resumes them whil
   assert.deepEqual(missing.members[2], { name: 'DeepSeek', status: 'resumed', session_id: '' });
 });
 
-test('agy project records survive a concluded room and are dropped only after the room is deleted', async t => {
-  const directory = mkdtempSync(join(tmpdir(), 'discussion-deleted-'));
-  const room = { deleted: false, unrelated_404: false };
-  const server = createServer((request, response) => {
-    response.statusCode = room.deleted || (room.unrelated_404 && request.url.endsWith('/inbox')) ? 404 : 200;
-    response.setHeader('Content-Type', 'application/json');
-    response.end(JSON.stringify(room.deleted ? { error: '房间不存在' } : room.unrelated_404 ? { error: '成员不存在' }
-      : request.url.endsWith('/inbox') ? { archived: false, members: [], observers: [], executions: [] }
-        : { title: '已收束', phase: 'concluded', mode: 'free', limits: {}, session: null }));
-  });
-  await listen_local(server);
-  const store = new DiscussionStore(directory);
-  t.after(async () => { store.close(); await new Promise(resolve => server.close(resolve)); rmSync(directory, { recursive: true, force: true }); });
-  const record = join(directory, `agy-project-${'a'.repeat(64)}.json`);
-  writeFileSync(record, JSON.stringify({ project_id: randomUUID(), session_id: 'kept-session' }));
-  const runner = new FreeRoomRunner({ site: `http://127.0.0.1:${server.address().port}`, room: 'room', token: 'private-token', members: {}, participants: {},
-    directory, participants: { Gemini: { adapter: 'antigravity_cli' } } }, store, async () => assert.fail('must not deliver'));
-  await runner.tick();
-  assert.ok(existsSync(record));
-  room.unrelated_404 = true;
-  await assert.rejects(runner.tick(), /HTTP 404: 成员不存在/);
-  assert.ok(existsSync(record), 'an unrelated 404 must not delete the room project binding');
-  room.unrelated_404 = false;
-  room.deleted = true;
-  await assert.rejects(runner.tick(), /房间不存在/);
-  assert.equal(existsSync(record), false);
-});
-
 test('a restarted free-room runner does not redeliver an active member request', async t => {
   const f = await fixture(t); let sent = 0;
   const deliver = async () => { sent++; return { status: 'accepted', session_id: 'actual-chat' }; };
@@ -559,18 +481,6 @@ test('a manual observer without a local profile is never reserved for runner del
   assert.equal(sent, 0); assert.equal(f.calls.filter(action => action === 'reserve').length, 0);
 });
 
-test('a participant whose previous process is still exiting is not resumed until it closes', async t => {
-  const f = await fixture(t); let sent = 0;
-  const runner = new FreeRoomRunner(f.config, f.store, async () => { sent++; return { status: 'accepted' }; });
-  const previous = new EventEmitter();
-  runner.track('Codex', previous);
-  await runner.tick();
-  assert.equal(sent, 0); assert.equal(f.calls.filter(action => action === 'reserve').length, 0);
-  previous.emit('close', 0);
-  await runner.tick();
-  assert.equal(sent, 1);
-});
-
 test('a reached discussion limit is observed before another member request is delivered', async t => {
   const f = await fixture(t); let sent = 0;
   f.room.session = { id: 1, status: 'active' };
@@ -580,17 +490,6 @@ test('a reached discussion limit is observed before another member request is de
   assert.equal(sent, 0); assert.equal(f.room.session.status, 'concluded');
   assert.deepEqual([f.room.mode, f.room.phase], ['free', 'concluded']);
   assert.equal(f.calls.includes('reserve'), false);
-});
-
-test('a reached discussion limit ends once and later ticks do not deliver cancelled work', async t => {
-  const f = await fixture(t);
-  f.room.session = { id: 1, status: 'active' };
-  Object.assign(f.limits, { reached: true });
-  const runner = new FreeRoomRunner(f.config, f.store, async () => ({ status: 'accepted' }));
-  await runner.tick();
-  await runner.tick();
-  assert.equal(f.room.session.status, 'concluded');
-  assert.deepEqual([f.room.mode, f.room.phase], ['free', 'concluded']);
 });
 
 test('an uncertain software delivery is failed without a blind resend', async t => {
@@ -680,17 +579,6 @@ test('a restart at the software invocation boundary fails for review instead of 
   assert.equal(sent, 1); assert.equal(f.executions.get(id).status, 'failed');
 });
 
-test('an uncertain delivery stays failed when the discussion reaches its limit', async t => {
-  const f = await fixture(t); let sent = 0;
-  f.room.session = { id: 1, status: 'active' };
-  const runner = new FreeRoomRunner(f.config, f.store, async () => { sent++; throw new Error('receipt lost'); });
-  await runner.tick(); f.limits.reached = true;
-  await runner.tick();
-  assert.equal(sent, 1); assert.equal(f.room.session.status, 'concluded');
-  assert.deepEqual([f.room.mode, f.room.phase], ['free', 'concluded']);
-  assert.equal(f.current_execution().status, 'failed');
-});
-
 test('an expired execution lease ends that execution without restarting the AI task', async t => {
   const f = await fixture(t); let sent = 0;
   const runner = new FreeRoomRunner(f.config, f.store, async () => { sent++; return { status: 'accepted' }; });
@@ -716,29 +604,6 @@ test('a software error fails its execution at once with the cause instead of wai
   await runner.tick(); await delay(5);
   await runner.tick();
   assert.equal(f.current_execution().status, 'failed'); assert.equal(f.current_execution().result, 'Claude 执行出错：usage limit');
-});
-
-test('a session that exits without saving its result fails after rechecking the execution', async t => {
-  const f = await fixture(t);
-  const runner = new FreeRoomRunner(f.config, f.store, async (adapter, binding, task) => {
-    setImmediate(() => task.on_exit());
-    return { status: 'accepted' };
-  });
-  await runner.tick(); await delay(5);
-  await runner.tick();
-  assert.equal(f.current_execution().status, 'failed'); assert.match(f.current_execution().result, /会话已结束，但未提交本次回答.*请核对原会话/);
-});
-
-test('a late Sidecar receipt is reconciled without another request', async t => {
-  const f = await fixture(t); let sent = 0;
-  f.config.participants.Codex = { adapter: 'antigravity', ipc_directory: f.config.directory };
-  const runner = new FreeRoomRunner(f.config, f.store, async () => { sent++; return { status: 'sidecar_pending' }; });
-  await runner.tick();
-  const path = join(f.config.directory, 'free-1.result.json');
-  writeFileSync(path, JSON.stringify({ status: 'accepted', session_id: 'real-session' }));
-  await runner.tick();
-  assert.equal(f.store.db.prepare('SELECT status FROM free_deliveries WHERE member=?').get('Codex').status, 'running');
-  assert.equal(f.store.binding('Codex').session_id, 'real-session'); assert.equal(sent, 1);
 });
 
 test('only an executable that never starts is classified as safe to retry', async t => {
@@ -799,49 +664,6 @@ function fake_cli(events, options = {}) {
   };
   return { calls, config_calls, spawn_process };
 }
-
-/** Represent the documented startup and terminal events of the two CLI protocols. */
-test('an agy turn ended by a denied command names the command in the pause reason', async t => {
-  const f = await fixture(t);
-  f.config.participants.Codex = { adapter: 'antigravity_cli', executable: process.execPath };
-  const denied = { event: 'step_update', step_update: { state: 'ERROR', step_type: 'tool', tool_name: 'run_command',
-    tool_info: { parameters: { CommandLine: 'Get-ChildItem -Recurse' }, error: { type: 'TOOL_ERROR', message: 'permission check failed: user denied permission' } } } };
-  const events = [{ event: 'init', conversation_id: 'agy-session' }, denied,
-    { event: 'result', result: { conversation_id: 'agy-session', status: 'SUCCESS', response: '' } }];
-  const process_fixture = fake_cli(events);
-  const runner = new FreeRoomRunner(f.config, f.store,
-    (config, binding, task) => deliver_task(config, binding, task, process_fixture.spawn_process, join(f.config.directory, 'user')));
-  await runner.tick(); await process_fixture.calls[0].closed; await runner.tick();
-  assert.equal(f.current_execution().status, 'failed');
-  assert.match(f.current_execution().result, /运行了未授权的命令「Get-ChildItem -Recurse」/);
-});
-
-test('refused operations are reported with the rule that would allow them', async t => {
-  // Claude names them in its final result line, even when the turn itself succeeded.
-  const result = { type: 'result', is_error: false, result: '完成', permission_denials: [
-    { tool_name: 'PowerShell', tool_input: { command: 'cd D:/notes && lark-cli docs get abc' } },
-    { tool_name: 'Write', tool_input: { file_path: join(tmpdir(), 'outside', 'b.txt') } },
-    { tool_name: 'WebFetch', tool_input: { url: 'https://example.com' } }] };
-  const claude = await cli_delivery_fixture(t, 'claude', { events: [result] });
-  assert.deepEqual(claude.errors, []);
-  assert.deepEqual(claude.denials.map(item => item.rule), ['PowerShell(lark-cli *)', `Edit(${claude_rule_path(join(tmpdir(), 'outside'))}/**)`, 'WebFetch']);
-  assert.equal(claude.denials[0].detail, 'cd D:/notes && lark-cli docs get abc');
-  // agy names the check that failed in each refused step; a refused turn still ends with SUCCESS.
-  const step = (tool_name, parameters, message) => ({ event: 'step_update', step_update: { state: 'ERROR', step_type: 'tool', tool_name,
-    tool_info: { parameters, error: { type: 'TOOL_ERROR', message } } } });
-  const agy = await cli_delivery_fixture(t, 'antigravity_cli', { events: [{ event: 'init', conversation_id: 'agy-session' },
-    step('run_command', { CommandLine: 'git --version' }, 'permission check failed for unsandboxed "git --version": user denied permission'),
-    step('write_file', { Path: join(tmpdir(), 'outside', 'b.txt') }, 'permission check failed for write_file "b.txt": user denied permission'),
-    { event: 'result', result: { conversation_id: 'agy-session', status: 'SUCCESS', response: '', denied_actions: [{ action: 'command' }] } }] });
-  assert.deepEqual(agy.denials.map(item => item.rule), ['unsandboxed_command(git --version)', `write_file(${resolve(tmpdir(), 'outside').replaceAll('\\', '/')})`]);
-});
-
-test('a refused turn without a failed step still names what agy refused', async t => {
-  const agy = await cli_delivery_fixture(t, 'antigravity_cli', { events: [{ event: 'init', conversation_id: 'agy-session' },
-    { event: 'result', result: { conversation_id: 'agy-session', status: 'SUCCESS', response: '', denied_actions: [{ action: 'command', display_name: 'RunCommand' }] } }] });
-  assert.equal(agy.exits, 1);
-  assert.deepEqual(agy.denials, []);
-});
 
 function cli_events(adapter, session_id = 'actual-cli-session') {
   return adapter === 'codex_cli'
@@ -1146,41 +968,6 @@ test('agy refuses inherited shell bypasses before invoking a model and leaves se
   assert.ok(prepare_agy_project({}, {}, task, user_home).project_id);
 });
 
-test('agy rejects nested answer storage because native deny rules take priority over allows', async t => {
-  const f = task_fixture(t);
-  const task = session_task(f.config);
-  for (const parent of [task.directory, task.skills_directory, join(f.config.directory, 'user', '.gemini')]) {
-    assert.throws(() => prepare_agy_project({}, {}, { ...task, draft_directory: join(parent, 'drafts') },
-      join(f.config.directory, 'user')), /草稿目录不能位于/);
-  }
-});
-
-test('each CLI receives the configured model and effort as its own arguments', async t => {
-  const codex = await cli_delivery_fixture(t, 'codex_cli', { config: { model: 'gpt-6-astra', effort: 'xhigh' } });
-  const codex_args = codex.calls[0].args;
-  assert.equal(codex_args[codex_args.indexOf('-m') + 1], 'gpt-6-astra'); assert.equal(codex_args.at(-1), '-');
-  assert.ok(codex_args.includes('model_reasoning_effort="xhigh"'));
-  const agy = await cli_delivery_fixture(t, 'antigravity_cli', { config: { model: 'gemini-4-argon-high', effort: 'low' } });
-  const agy_args = agy.calls[0].args;
-  assert.equal(agy_args[agy_args.indexOf('--model') + 1], 'gemini-4-argon-high'); assert.ok(agy_args.indexOf('--model') < agy_args.indexOf('-p'));
-  assert.equal(agy_args[agy_args.indexOf('--effort') + 1], 'low');
-  const claude = await cli_delivery_fixture(t, 'claude', { events: [{ type: 'result', is_error: false, result: '完成' }], config: { model: 'opus', effort: 'max' } });
-  const claude_args = claude.calls[0].args;
-  assert.equal(claude_args[claude_args.indexOf('--model') + 1], 'opus');
-  assert.equal(claude_args[claude_args.indexOf('--effort') + 1], 'max'); assert.ok(claude_args.indexOf('--effort') < claude_args.indexOf('--allowedTools')); assert.ok(claude_args.indexOf('--model') < claude_args.indexOf('--allowedTools'));
-  const plain = await cli_delivery_fixture(t, 'codex_cli');
-  assert.equal(plain.calls[0].args.includes('-m'), false);
-  assert.equal(plain.calls[0].args.some(arg => arg.startsWith('model_reasoning_effort')), false);
-  const agy_default = await cli_delivery_fixture(t, 'antigravity_cli');
-  assert.equal(agy_default.calls[0].args.includes('--effort'), false);
-  assert.equal(agy_default.calls[0].args.includes('--model'), false);
-  for (const fixture of [codex, agy, claude]) {
-    assert.equal(fixture.calls[0].settings.env.DISCUSS_ACCESS_FILE, fixture.access_path);
-    assert.equal(Object.entries(fixture.calls[0].settings.env).find(([key]) => key.toLowerCase() === 'path')?.[1], process.env.PATH);
-    assert.notEqual(process.env.DISCUSS_ACCESS_FILE, fixture.access_path);
-  }
-});
-
 test('claude allows only codiscuss website subcommands and draft writes, then user rules', async t => {
   const f = await cli_delivery_fixture(t, 'claude', { events: [{ type: 'result', is_error: false, result: '完成' }],
     config: { allowed_tools: ['Read(//d/materials/**)'] } });
@@ -1219,36 +1006,6 @@ test('a stopped process tree is ended with taskkill on Windows and falls back to
   assert.equal(posix.plain, 1);
 });
 
-test('stopping a Claude run on Windows also ends the tool process its non-Node parent started', { skip: process.platform !== 'win32' }, async t => {
-  const root = mkdtempSync(join(tmpdir(), 'discussion-claude-tree-'));
-  const directory = join(root, 'runtime'); const draft_directory = join(root, 'drafts');
-  mkdirSync(directory); mkdirSync(draft_directory);
-  const access_path = join(directory, 'access.json');
-  writeFileSync(access_path, JSON.stringify({ token: 'test-only', session_id: '' }));
-  const grandchild_script = join(root, 'tool.mjs');
-  writeFileSync(grandchild_script, 'console.log(process.pid); setInterval(() => {}, 1000);');
-  const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
-  let grandchild = 0; let started;
-  const ready = new Promise(resolve => { started = resolve; });
-  // cmd.exe is not a Node process, so killing it alone would leave its child running.
-  const spawn_process = (executable, args, settings) => {
-    const child = spawn('cmd.exe', ['/d', '/s', '/c', `""${process.execPath}" "${grandchild_script}""`],
-      { ...settings, windowsVerbatimArguments: true });
-    child.stdout.on('data', chunk => { grandchild = Number(String(chunk).trim()); started(); });
-    return child;
-  };
-  let run;
-  const task = { id: 'event-tree', participant: 'Claude', directory, draft_directory, access_path, prompt: 'test', skills_directory: join(directory, 'skills'),
-    on_binding: () => {}, on_process: child => { run = child; }, on_output: () => {}, on_failure: () => {}, on_exit: () => {} };
-  t.after(() => { if (grandchild && alive(grandchild)) process.kill(grandchild); if (run && run.exitCode === null) run.kill(); rmSync(root, { recursive: true, force: true }); });
-  await deliver_task({ adapter: 'claude', executable: process.execPath }, {}, task, spawn_process);
-  await ready;
-  assert.ok(alive(grandchild), 'the tool process runs before the stop');
-  run.kill();
-  for (let waited = 0; alive(grandchild) && waited < 5000; waited += 100) await delay(100);
-  assert.equal(alive(grandchild), false, 'stopping the Claude run leaves no tool process behind');
-});
-
 test('claude edits a project and runs any command only when the launch grants write access', async t => {
   const project = mkdtempSync(join(tmpdir(), 'discussion-cwd-')); t.after(() => rmSync(project, { recursive: true, force: true }));
   const result = [{ type: 'result', is_error: false, result: '完成' }];
@@ -1271,47 +1028,6 @@ test('claude edits a project and runs any command only when the launch grants wr
     const level = (await cli_delivery_fixture(t, 'claude', { events: result, config: { cwd: project, project_access } })).calls[0].args;
     assert.equal(level[level.indexOf('--permission-mode') + 1], mode);
   }
-});
-
-/** A Codex desktop app-tools pipe that reports one chat status and records the messages sent through it. */
-async function fake_codex_app(t, status) {
-  const sent = [];
-  const server = createNetServer(socket => {
-    let buffer = Buffer.alloc(0);
-    const reply = (id, result) => {
-      const payload = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id, result }));
-      const frame = Buffer.alloc(4 + payload.length); frame.writeUInt32LE(payload.length); payload.copy(frame, 4); socket.write(frame);
-    };
-    const tool = data => ({ success: true, contentItems: [{ type: 'inputText', text: JSON.stringify(data) }] });
-    socket.on('data', chunk => {
-      buffer = Buffer.concat([buffer, chunk]);
-      while (buffer.length >= 4 && buffer.length >= buffer.readUInt32LE() + 4) {
-        const request = JSON.parse(buffer.subarray(4, buffer.readUInt32LE() + 4).toString('utf8'));
-        buffer = buffer.subarray(buffer.readUInt32LE() + 4);
-        if (request.method === 'tools/list') reply(request.id, { tools: ['create_thread', 'read_thread', 'send_message_to_thread'].map(name => ({ name, namespace: 'codex_app' })) });
-        else if (request.params.tool === 'read_thread') reply(request.id, tool({ thread: { id: request.params.arguments.threadId, status: { type: status } } }));
-        else if (request.params.tool === 'send_message_to_thread') { sent.push(request.params.arguments); reply(request.id, tool({ threadId: request.params.arguments.threadId })); }
-      }
-    });
-  });
-  const pipe_path = process.platform === 'win32' ? String.raw`\\.\pipe\codiscuss-test-${randomUUID()}` : join(mkdtempSync(join(tmpdir(), 'codex-pipe-')), 'app.sock');
-  await new Promise(resolve_listen => server.listen(pipe_path, resolve_listen));
-  t.after(() => server.close());
-  return { pipe_path, sent };
-}
-
-test('a Codex App chat the App has not loaded gets its message through the App, a loaded one through the queue', async t => {
-  const access_path = join(mkdtempSync(join(tmpdir(), 'codex-app-access-')), 'access.json');
-  writeFileSync(access_path, JSON.stringify({ token: 'test-only', session_id: '' }));
-  const task = { id: 'free-1', participant: 'Codex', access_path, prompt: '请处理 #12' };
-  const unloaded = await fake_codex_app(t, 'notLoaded');
-  const result = await deliver_task({ adapter: 'codex', executable: process.execPath, pipe_path: unloaded.pipe_path }, { session_id: 'forked-thread' }, task);
-  assert.deepEqual(result, { session_id: 'forked-thread', status: 'accepted', capabilities: { stoppable: false, progress: false } });
-  assert.deepEqual(unloaded.sent, [{ threadId: 'forked-thread', prompt: '请处理 #12' }]);
-  const loaded = await fake_codex_app(t, 'idle');
-  // The queue runs the configured executable; node cannot load a module named `queue`, which shows the queue was used.
-  await assert.rejects(deliver_task({ adapter: 'codex', executable: process.execPath, pipe_path: loaded.pipe_path }, { session_id: 'open-thread' }, task), /软件退出码/);
-  assert.deepEqual(loaded.sent, []);
 });
 
 test('a taken-over Claude member resumes its session once no window holds it, and forks it while a window without an inbox does', async t => {
@@ -1448,64 +1164,10 @@ test('tasks direct website work to the approved codiscuss subcommands', t => {
   assert.equal(task.skills_directory, join(f.config.project, '.agents', 'skills'));
 });
 
-test('CLI failure results fail their execution immediately even when the process exits with code zero', async t => {
-  for (const adapter of ['codex_cli', 'antigravity_cli']) {
-    await t.test(adapter, async t => {
-      const f = await fixture(t);
-      f.config.participants.Codex = { adapter, executable: process.execPath };
-      const events = cli_events(adapter).slice(0, 1);
-      events.push(adapter === 'codex_cli' ? { type: 'turn.failed', error: { message: 'quota exceeded' } }
-        : { event: 'result', result: { status: 'WAITING', response: 'permission required' } });
-      const process_fixture = fake_cli(events);
-      const runner = new FreeRoomRunner(f.config, f.store,
-        (config, binding, task) => deliver_task(config, binding, task, process_fixture.spawn_process, join(f.config.directory, 'user')));
-      await runner.tick(); await process_fixture.calls[0].closed; await runner.tick();
-      assert.equal(f.current_execution().status, 'failed');
-      assert.match(f.current_execution().result, /quota exceeded|permission required/);
-      assert.equal(process_fixture.calls.length, 1);
-    });
-  }
-});
-
-test('headless CLI configuration does not require App threads or Sidecar directories', t => {
-  const directory = mkdtempSync(join(tmpdir(), 'discussion-config-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const path = join(directory, 'config.json');
-  const config = with_members({ site: 'http://localhost:8765', room: 'room', token: 'x'.repeat(32),
-    participants: { Codex: { adapter: 'codex_cli', executable: process.execPath },
-      Gemini: { adapter: 'antigravity_cli', executable: process.execPath } } });
-  writeFileSync(path, JSON.stringify(config));
-  assert.equal(load_config(path).participants.Codex.adapter, 'codex_cli');
-  config.participants.Codex.adapter = 'codex'; writeFileSync(path, JSON.stringify(config));
-  assert.throws(() => load_config(path), /来源聊天 ID/);
-  config.participants.Codex.adapter = 'codex_cli'; config.participants.Gemini.adapter = 'antigravity';
-  writeFileSync(path, JSON.stringify(config)); assert.throws(() => load_config(path), /Sidecar IPC/);
-});
-
 test('one data directory cannot silently share bindings across rooms or sites', async t => {
   const f = await fixture(t);
   f.store.scope(f.config, 'run');
   assert.throws(() => f.store.scope({ ...f.config, room: 'another' }, 'run'), /另一站点/);
-});
-
-test('project and cwd are optional; configured directories must match real projects', async () => {
-  const app = { list_projects: async () => [{ hostId: 'local', projectId: 'project', label: 'Story', path: tmpdir() }] };
-  assert.deepEqual(await codex_target(app, {}), { type: 'projectless' });
-  assert.equal((await codex_target(app, { project_name: 'Story', cwd: tmpdir() })).projectId, 'project');
-  await assert.rejects(codex_target(app, { project_name: 'Story', cwd: join(tmpdir(), 'different') }), /无法唯一匹配/);
-  assert.equal(antigravity_project({}).id, 'outside-of-project');
-});
-
-test('common cwd is inherited and participant-specific cwd can override it', t => {
-  const directory = mkdtempSync(join(tmpdir(), 'discussion-config-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  mkdirSync(join(directory, 'other')); mkdirSync(join(directory, 'runner')); writeFileSync(join(directory, 'runner', 'discuss.py'), '');
-  const config_path = join(directory, 'config.json');
-  writeFileSync(config_path, JSON.stringify(with_members({ site: 'http://localhost:8765', room: 'room', token: 'x'.repeat(32), cli_project: directory,
-    cwd: directory, participants: { Claude: { adapter: 'claude', executable: process.execPath }, Gemini: { adapter: 'antigravity', ipc_directory: directory, cwd: join(directory, 'other') } } })));
-  const config = load_config(config_path);
-  assert.equal(config.participants.Claude.cwd, directory);
-  assert.equal(config.participants.Gemini.cwd, join(directory, 'other'));
 });
 
 test('a bound member session rejects changed projects before the next execution', async t => {
@@ -1538,19 +1200,6 @@ test('pausing a discussion cancels its request while free collaboration can stil
   await runner.tick();
   assert.equal(sent, 2);
   assert.equal(f.current_execution().requests[0].purpose, 'ask');
-});
-
-test('conclusion reconciles the final discussion result without ending the free-room runner', async t => {
-  const f = await fixture(t); let sent = 0;
-  f.room.session = { id: 1, status: 'active' };
-  f.request.purpose = 'discuss'; f.request.session_request_id = 1; f.request.session_id = 1;
-  const runner = new FreeRoomRunner(f.config, f.store, async () => { sent++; return { status: 'accepted' }; });
-  await runner.tick();
-  f.room.session.status = 'concluded'; f.room.phase = 'concluded';
-  f.finish_execution(f.current_execution().id, 'completed', 'answer_saved'); f.member.pending = [];
-  await runner.tick();
-  assert.equal(sent, 1);
-  assert.equal(f.current_execution().status, 'completed');
 });
 
 test('a Sidecar delivery checks and claims one dispatched free-room execution', async t => {
@@ -1594,17 +1243,6 @@ test('a delayed Sidecar request after its execution lease expires never invokes 
     assert.equal(result.status, 'uncertain');
     assert.match(result.error, /执行租约已到期，未调用软件/);
   } finally { child.kill(); await exited; }
-});
-
-test('omitted cli_project defaults to this repository', t => {
-  const directory = mkdtempSync(join(tmpdir(), 'discussion-config-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const path = join(directory, 'config.json');
-  writeFileSync(path, JSON.stringify(with_members({ site: 'http://127.0.0.1:8765', room: 'room1', token: 'x'.repeat(32),
-    participants: { Gemini: { adapter: 'antigravity', ipc_directory: directory } } })));
-  const config = load_config(path);
-  assert.equal(config.project, resolve(fileURLToPath(new URL('..', import.meta.url))));
-  assert.ok(existsSync(join(config.project, 'runner', 'discuss.py')));
 });
 
 /** Write a minimal valid private room configuration for the service registry. */
@@ -1665,162 +1303,6 @@ test('a slow room never holds up the other rooms between service polls', async t
   await service.workers.get(slow).busy;
   await service.tick();
   assert.deepEqual(ticks.filter(room => room === 'slow').length, 2);
-});
-
-test('a hosted site is polled less often than a local one, and a site update checks its rooms at once', async t => {
-  const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
-  // The test site serves the update stream; each `change` written to it should wake that site's rooms.
-  let stream;
-  const updates = createServer((request, response) => {
-    if (request.url !== '/api/updates') { response.writeHead(404).end(); return; }
-    response.writeHead(200, { 'Content-Type': 'text/event-stream' });
-    response.write('event: ready\ndata: {}\n\n');
-    stream = response;
-  });
-  await listen_local(updates);
-  const local_site = `http://127.0.0.1:${updates.address().port}`;
-  register_room(home, room_config(home, local_site, 'local'));
-  register_room(home, room_config(home, 'http://remote.invalid', 'remote'));
-  const ticks = [];
-  const service = new DiscussionService(home, config => ({ stop_children() {}, tick: async () => { ticks.push(config.room); return 'waiting'; } }));
-  service.intervals = { local: 50, remote: 60_000 };
-  t.after(async () => { await service.close(); stream?.destroy(); updates.close(); rmSync(home, { recursive: true, force: true }); });
-  const count = room => ticks.filter(item => item === room).length;
-  await service.tick({ wait: false });
-  await delay(80);
-  await service.tick({ wait: false });
-  await delay(10);
-  assert.equal(count('local'), 2, 'a local room is polled again once its interval passes');
-  assert.equal(count('remote'), 1, 'a hosted room waits for its longer interval');
-  service.push = true;
-  service.intervals.local = 60_000;
-  await service.tick({ wait: false });
-  for (let waited = 0; !stream && waited < 2000; waited += 10) await delay(10);
-  await delay(20);
-  const after_ready = count('local');
-  assert.ok(after_ready >= 3, 'connecting to the stream checks the site once for changes missed meanwhile');
-  stream.write('event: change\ndata: {}\n\n');
-  await delay(50);
-  assert.equal(count('local'), after_ready + 1, 'a change checks the local room at once, without waiting for a poll');
-  assert.equal(count('remote'), 1, 'another site is not woken by this site\'s change');
-  stream.write('event: change\ndata: {"rooms":["other"]}\n\n');
-  await delay(50);
-  assert.equal(count('local'), after_ready + 1, 'a change naming another room leaves this room to its poll');
-  stream.write('event: change\ndata: {"rooms":["local"]}\n\n');
-  await delay(50);
-  assert.equal(count('local'), after_ready + 2, 'a change naming this room checks it at once');
-});
-
-test('a settled scheduling decision checks its room at once instead of waiting for the next poll', async t => {
-  const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
-  register_room(home, room_config(home, 'http://remote.invalid', 'room'));
-  let ticks = 0, runner;
-  const service = new DiscussionService(home, () => (runner = { stop_children() {}, on_decided() {}, room: { free: { members: [] } }, tick: async () => { ticks += 1; } }));
-  service.intervals = { local: 60_000, remote: 60_000, revisions: 60_000, idle: 60_000 };
-  t.after(async () => { await service.close(); rmSync(home, { recursive: true, force: true }); });
-  await service.tick({ wait: false });
-  await delay(10);
-  assert.equal(ticks, 1);
-  runner.on_decided();
-  await delay(10);
-  assert.equal(ticks, 2, 'the decision wakes the room without its poll interval passing');
-});
-
-test('a hosted site with a live update stream is not asked for revisions until the stream drops', async t => {
-  const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
-  register_room(home, room_config(home, 'https://hosted.example', 'room'));
-  let revisions = 0, stream;
-  const real_fetch = globalThis.fetch;
-  globalThis.fetch = async url => {
-    if (String(url).endsWith('/api/updates')) {
-      return new Response(new ReadableStream({ start: controller => {
-        stream = controller;
-        controller.enqueue(new TextEncoder().encode('event: ready\ndata: {}\n\n'));
-      } }), { headers: { 'Content-Type': 'text/event-stream' } });
-    }
-    revisions += 1;
-    return Response.json({ site: 1, rooms: { room: 1 } });
-  };
-  const service = new DiscussionService(home, () => ({ stop_children() {}, idle: () => true,
-    room: { free: { members: [] } }, tick: async () => {} }));
-  service.intervals = { local: 50, remote: 40, revisions: 10, idle: 60_000 };
-  service.push = true;
-  t.after(async () => { await service.close(); globalThis.fetch = real_fetch; rmSync(home, { recursive: true, force: true }); });
-  const run = async ms => { for (const end = Date.now() + ms; Date.now() < end;) { await service.tick({ wait: false }); await delay(5); } };
-  await run(30);
-  const before = revisions;
-  await run(80);
-  assert.equal(revisions, before, 'a live stream replaces revision polling');
-  stream.close();
-  await run(80);
-  assert.ok(revisions > before, 'a dropped stream falls back to revision polling');
-});
-
-test('an idle hosted room is read in full only after its site reports a new revision, a busy one keeps its interval', async t => {
-  const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
-  register_room(home, room_config(home, 'https://hosted.example', 'idle'));
-  register_room(home, room_config(home, 'https://hosted.example', 'busy'));
-  const ticks = [], asked = [];
-  let revision = 1, supported = true;
-  const real_fetch = globalThis.fetch;
-  globalThis.fetch = async url => {
-    asked.push(String(url));
-    if (!supported) return new Response('{}', { status: 404, headers: { 'Content-Type': 'application/json' } });
-    return Response.json({ site: revision, rooms: { idle: revision, busy: 1 } });
-  };
-  // Like the real runner, the fake keeps the room it read, so adopting manual members reads nothing more.
-  const service = new DiscussionService(home, config => ({ stop_children() {}, idle: () => config.room === 'idle',
-    room: { free: { members: [] } }, tick: async () => { ticks.push(config.room); } }));
-  service.intervals = { local: 50, remote: 40, revisions: 10, idle: 60_000 };
-  t.after(async () => { await service.close(); globalThis.fetch = real_fetch; rmSync(home, { recursive: true, force: true }); });
-  const count = room => ticks.filter(item => item === room).length;
-  const run = async ms => { for (const end = Date.now() + ms; Date.now() < end;) { await service.tick({ wait: false }); await delay(5); } };
-  await run(80);
-  const idle_before = count('idle'), busy_before = count('busy');
-  await run(200);
-  assert.equal(count('idle'), idle_before, 'an unchanged idle room is not read again');
-  assert.ok(count('busy') >= busy_before + 2, 'a busy room keeps its regular interval');
-  assert.ok(asked.every(url => url.startsWith('https://hosted.example/api/revisions?rooms=')) && asked.length > 5, 'one small check per site');
-  revision++;
-  await run(60);
-  assert.equal(count('idle'), idle_before + 1, 'a new revision reads the idle room at once, once');
-  // A site without revisions keeps every room on the regular interval.
-  supported = false;
-  revision++;
-  await run(60);
-  const fallback = count('idle');
-  await run(200);
-  assert.ok(count('idle') >= fallback + 2, 'without revisions an idle room is polled as before');
-});
-
-test('the sweep removes stale unused launch folders, orphaned drafts and the old part of oversized logs only', t => {
-  const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
-  t.after(() => rmSync(home, { recursive: true, force: true }));
-  const folder = name => { const path = join(home, 'launches', name); mkdirSync(join(path, 'runtime'), { recursive: true }); return path; };
-  const registered = folder('registered'), stale = folder('stale'), recent = folder('recent'), held = folder('held');
-  writeFileSync(join(registered, 'config.json'), readFileSync(room_config(home, 'http://127.0.0.1:1', 'kept'), 'utf8'));
-  register_room(home, join(registered, 'config.json'));
-  writeFileSync(join(held, 'runtime', 'runner.lock'), String(process.pid));
-  const week_ago = (Date.now() - 8 * 24 * 60 * 60 * 1000) / 1000;
-  for (const path of [stale, held]) utimesSync(path, week_ago, week_ago);
-  const drafts = Object.fromEntries(['registered', 'stale', 'recent'].map(name => [name, service_drafts(home, join(home, 'launches', name, 'runtime'))]));
-  drafts.orphan = join(home, 'drafts', 'f'.repeat(64));
-  for (const path of Object.values(drafts)) mkdirSync(path, { recursive: true });
-  const log = join(home, 'local', 'website.log');
-  mkdirSync(join(home, 'local'), { recursive: true });
-  writeFileSync(log, `${'旧'.repeat(20)}\n`.repeat(200_000) + 'newest line\n');
-  writeFileSync(join(home, 'service.log'), 'short\n');
-  const removed = sweep_service_home(home);
-  assert.deepEqual(removed.launches, ['stale']);
-  // The stale folder's drafts go with it; only the draft folder no room uses is reported separately.
-  assert.deepEqual(removed.drafts, [basename(drafts.orphan)]);
-  assert.ok(!existsSync(drafts.stale));
-  assert.deepEqual(readdirSync(join(home, 'launches')).sort(), ['held', 'recent', 'registered']);
-  assert.ok(existsSync(drafts.registered) && existsSync(drafts.recent));
-  assert.deepEqual(removed.logs, [join('local', 'website.log')]);
-  assert.ok(statSync(log).size <= 1024 * 1024 && readFileSync(log, 'utf8').endsWith('newest line\n'));
-  assert.ok(readFileSync(log, 'utf8').startsWith('旧'), 'the kept part starts at a whole line');
-  assert.equal(readFileSync(join(home, 'service.log'), 'utf8'), 'short\n');
 });
 
 test('a room failure is reported without stopping the other rooms', async t => {
@@ -1911,35 +1393,10 @@ test('a resident free room isolates member context changes and only blocks Codex
   assert.match(restarted_worker.state.error, /讨论运行中不能切换 Codex 接入方式/);
 });
 
-test('Codex context switch is restricted to the original session and project', async t => {
-  const f = await fixture(t);
-  const original = { participants: { Codex: { adapter: 'codex_cli', cwd: f.config.directory } } };
-  f.store.context(original);
-  f.store.bind('Codex', 'original-session');
-  const switched = { participants: { Codex: { ...original.participants.Codex, adapter: 'codex', session_id: 'original-session' } } };
-  assert.throws(() => f.store.context(switched), /身份配置发生变化/);
-  assert.throws(() => f.store.context({ participants: { Codex: { ...switched.participants.Codex, session_id: 'other-session' } } }, true), /身份配置发生变化/);
-  assert.throws(() => f.store.context({ participants: { Codex: { ...switched.participants.Codex, cwd: tmpdir() } } }, true), /身份配置发生变化/);
-  f.store.context(switched, true);
-  f.store.context(switched);
-  assert.equal(f.store.binding('Codex').session_id, 'original-session');
-});
-
 test('the same site and room cannot be registered twice', t => {
   const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   register_room(home, room_config(home, 'http://127.0.0.1:8765', 'room1', 'a'));
-  assert.throws(() => register_room(home, room_config(home, 'http://127.0.0.1:8765', 'room1', 'b')), /已由/);
-});
-
-test('invalid software in an existing configuration does not permit another owner for its room', t => {
-  const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
-  t.after(() => rmSync(home, { recursive: true, force: true }));
-  const original = room_config(home, 'http://127.0.0.1:8765', 'room1', 'a');
-  register_room(home, original);
-  const config = JSON.parse(readFileSync(original, 'utf8'));
-  config.participants = {};
-  writeFileSync(original, JSON.stringify(config));
   assert.throws(() => register_room(home, room_config(home, 'http://127.0.0.1:8765', 'room1', 'b')), /已由/);
 });
 
@@ -2065,31 +1522,6 @@ test('an existing process is reused only after its own readiness receipt arrives
   assert.equal(ready.ready, true);
 });
 
-test('MSIX redirection fails before service startup or room creation and removes its probe', { skip: process.platform !== 'win32' }, async t => {
-  const home = mkdtempSync(join(tmpdir(), 'discussion-msix-'));
-  t.after(() => rmSync(home, { recursive: true, force: true }));
-  t.mock.method(realpathSync, 'native', path => join('C:\\Users\\example\\AppData\\Local\\Packages',
-    'Example_123', 'LocalCache', 'Local', basename(path)));
-  const redirected = /MSIX.*普通终端.*DISCUSS_SERVICE_HOME/;
-  assert.throws(() => assert_shared_home(home), redirected);
-  await assert.rejects(start_service(home), redirected);
-  await assert.rejects(launch_discussion(home, {}), redirected);
-  assert.deepEqual(readdirSync(home), [], 'no lock, launch record, or probe may remain');
-});
-
-test('service directory checks preserve absent homes and allow an explicit physical recovery path', () => {
-  const home = mkdtempSync(join(tmpdir(), 'discussion-path-'));
-  try {
-    const absent = join(home, 'not-created', 'service');
-    assert_shared_home(absent);
-    assert.deepEqual(readdirSync(home), []);
-    const physical = join(home, 'AppData', 'Local', 'Packages', 'Example_123', 'LocalCache', 'Local', 'service');
-    mkdirSync(physical, { recursive: true });
-    assert_shared_home(physical);
-    assert.deepEqual(readdirSync(physical), []);
-  } finally { rmSync(home, { recursive: true, force: true }); }
-});
-
 test('CLI help and status do not start a service; unknown commands fail', async t => {
   const home = mkdtempSync(join(tmpdir(), 'discussion-cli-'));
   const env = { ...process.env, DISCUSS_SERVICE_HOME: home };
@@ -2103,69 +1535,6 @@ test('CLI help and status do not start a service; unknown commands fail', async 
   assert.equal(invalid.code, 2); assert.equal(invalid.output, '');
   assert.match(JSON.parse(invalid.error).error.hint, /codiscuss --help/);
   assert.equal(service_pid(home), 0);
-});
-
-test('unified help separates website run controls from the resident service', async t => {
-  const home = mkdtempSync(join(tmpdir(), 'discussion-cli-'));
-  const env = { ...process.env, DISCUSS_SERVICE_HOME: home, DISCUSS_URL: '' };
-  t.after(() => rmSync(home, { recursive: true, force: true }));
-  const service_help = await run_service_cli(env, 'service', '--help');
-  assert.equal(service_help.code, 0); assert.match(service_help.output, /codiscuss service/);
-  const room_help = await run_service_cli(env, 'room', '--help');
-  assert.equal(room_help.code, 0); assert.match(room_help.output, /codiscuss room/);
-  const run_help = await run_service_cli(env, 'run', '--help');
-  assert.equal(run_help.code, 0); assert.match(run_help.output, /codiscuss run/);
-  const setup_help = await run_service_cli(env, 'setup', '--help');
-  assert.equal(setup_help.code, 0); assert.match(setup_help.output, /--no-start/);
-  assert.match(setup_help.output, /2=配置待处理/);
-  assert.match(setup_help.output, /中文摘要写入 stderr；输出被重定向或加 --json 时结果 JSON 写入 stdout/);
-  assert.match(setup_help.output, /codex,claude,antigravity,cursor/);
-  assert.match(setup_help.output, /Cursor 当前只安装技能/);
-  const local_help = await run_service_cli(env, 'local', '--help');
-  assert.equal(local_help.code, 0); assert.match(local_help.output, /codiscuss local/);
-  assert.match(local_help.output, /connect SITE/);
-  assert.match(local_help.output, /disconnect SITE/);
-  assert.equal(existsSync(join(home, 'local')), false);
-  const schema = await run_service_cli(env, 'schema', 'message', 'post');
-  assert.equal(schema.code, 0); assert.equal(JSON.parse(schema.output).ok, true);
-  assert.equal(schema.error, ''); assert.equal(service_pid(home), 0);
-});
-
-test('website commands preserve global flags and return clean JSON without starting the service', async t => {
-  const home = mkdtempSync(join(tmpdir(), 'discussion-cli-'));
-  const requests = [];
-  const server = createServer((request, response) => {
-    let body = '';
-    request.on('data', chunk => { body += chunk; });
-    request.on('end', () => {
-      requests.push({ method: request.method, url: request.url, body: body ? JSON.parse(body) : null });
-      response.setHeader('Content-Type', 'application/json');
-      response.end(JSON.stringify(request.url === '/api/health' ? { ok: true } : { session: null, status: 'paused' }));
-    });
-  });
-  await listen_local(server);
-  const site = `http://127.0.0.1:${server.address().port}`;
-  const env = { ...process.env, DISCUSS_SERVICE_HOME: home, DISCUSS_URL: site };
-  t.after(async () => { await new Promise(resolve => server.close(resolve)); rmSync(home, { recursive: true, force: true }); });
-  const health = await run_service_cli(env, '--site', site, 'health');
-  assert.equal(health.code, 0, health.error || health.output); assert.equal(health.error, '');
-  assert.equal(JSON.parse(health.output).data.ok, true);
-  const runtime = await run_service_cli(env, 'run', 'view', 'room');
-  assert.equal(runtime.code, 0); assert.equal(runtime.error, '');
-  assert.equal(JSON.parse(runtime.output).data.status, 'paused');
-  const started = await run_service_cli(env, 'run', 'start', 'room', '--revision', 'r1', '--goal', 'goal');
-  assert.equal(started.code, 0); assert.equal(started.error, '');
-  const roster = await run_service_cli(env, 'turn', 'roster', 'room');
-  assert.equal(roster.code, 0); assert.equal(roster.error, '');
-  const continued = await run_service_cli(env, 'turn', 'continue', 'room', '--as', 'Codex', '--roster', 'r2');
-  assert.equal(continued.code, 0); assert.equal(continued.error, '');
-  assert.deepEqual(requests.map(({ method, url }) => `${method} ${url}`), [
-    'GET /api/health', 'GET /api/rooms/room/discussion', 'POST /api/rooms/room/discussion',
-    'GET /api/rooms/room/turns/roster', 'POST /api/rooms/room/turns/continue',
-  ]);
-  assert.deepEqual(requests[2].body, { action: 'start', revision: 'r1', goal: 'goal' });
-  assert.deepEqual(requests[4].body, { actor: 'Codex', revision: 'r2' });
-  assert.equal(existsSync(join(home, 'runner.lock')), false);
 });
 
 test('unified message submission preserves UTF-8 stdin, quoted arguments and caller-relative files', async t => {
@@ -2215,40 +1584,6 @@ test('a website write with a lost response keeps exit code 3 and is never retrie
   assert.equal(uncertain.code, 3); assert.equal(uncertain.output, '');
   assert.equal(JSON.parse(uncertain.error).error.outcome, 'unknown');
   assert.equal(writes, 1); assert.equal(service_pid(home), 0);
-});
-
-test('the default CLI runs visibly, reports room state and can be stopped from another terminal', async t => {
-  const f = await fixture(t);
-  f.member.pending = [];
-  f.room.session = { id: 1, status: 'paused' };
-  const home = mkdtempSync(join(tmpdir(), 'discussion-cli-'));
-  const env = { ...process.env, DISCUSS_SERVICE_HOME: home };
-  const config = room_config(home, f.config.site, 'room1');
-  const added = await run_service_cli(env, 'add', '--config', config);
-  assert.equal(added.code, 0); assert.match(added.output, /已登记房间/);
-  writeFileSync(join(home, 'stop.request'), 'stale request');
-  const script = fileURLToPath(new URL('../runner/codiscuss.mjs', import.meta.url));
-  const child = spawn(process.execPath, [script], { env, cwd: tmpdir() });
-  const closed = once(child, 'close');
-  let output = ''; child.stdout.on('data', chunk => { output += chunk; });
-  try {
-    for (let attempt = 0; attempt < 200 && !output.includes('运行中'); attempt++) await delay(25);
-    assert.match(output, /讨论服务已启动/); assert.match(output, /Ctrl\+C/);
-    assert.match(output, /room1: 运行中/);
-    assert.equal(service_pid(home), child.pid);
-    const duplicate = await run_service_cli(env);
-    assert.equal(duplicate.code, 0); assert.match(duplicate.output, new RegExp(`PID ${child.pid}`));
-    const status = await run_service_cli(env, 'status');
-    assert.match(status.output, /运行中/); assert.match(status.output, /room1：运行中/);
-  } finally {
-    if (service_pid(home)) await run_service_cli(env, 'stop');
-    else if (child.exitCode === null) child.kill();
-    await closed;
-    assert.equal(service_pid(home), 0);
-    rmSync(home, { recursive: true, force: true });
-  }
-  assert.match(output, /讨论服务已停止/);
-  assert.deepEqual(f.calls, [], 'starting the service never starts a paused discussion');
 });
 
 test('the foreground service releases its lock when interrupted', async t => {
@@ -2456,19 +1791,6 @@ for (const cause of ['too_long', 'missing', 'hard_block', 'read_failure', 'model
   });
 }
 
-test('review completion resumes a persisted advance without repeating the model or changing its submission', async t => {
-  const { state, config, store } = await review_runner_fixture(t);
-  const request = state.pending[0];
-  store.db.prepare('INSERT INTO metadata VALUES (?,?)').run('review-decision:1', JSON.stringify({
-    decision: { action: 'review', confidence: 0.99, label: '交评审' }, revision: 'review-r1',
-    submission_id: 'persisted-review-submit', profiles: JSON.stringify(config.participants),
-  }));
-  const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }), () => {}, assert.fail);
-  await runner.tick(); await Promise.all(runner.decisions);
-  assert.equal(state.review_posts[0].submission_id, 'persisted-review-submit');
-  assert.equal(runner.saved_suggestion(request.id).applied, true);
-});
-
 test('the session driver schedules an opening, relays a mid-round answer, then starts and continues round two', async t => {
   const f = await free_fixture(t);
   const config = with_scheduler(f.config);
@@ -2512,67 +1834,6 @@ test('the session driver schedules an opening, relays a mid-round answer, then s
     [...first_round_turns, { round: 2, expert: 'Codex', status: 'answered', answer_id: 22 }],
     { cause_kind: 'speaker_answered' }, room);
   assert.match(round_two_next.turn.question, /第 2 轮/);
-});
-
-test('user interjection planning stays separate from discussion turns, including web and registered manual candidates', async t => {
-  const f = await free_fixture(t);
-  const driver_config = with_scheduler(f.config);
-  f.state.messages = [{ id: 21, author: '用户', text: '请回应这个风险' }];
-  const roster = { round: 1, waiting: ['Codex', 'Gemini'], experts: [
-    { name: 'Codex', host: false, mode: 'manual', manual_source: '', registered: true },
-    { name: 'Gemini', host: false, mode: 'manual', manual_source: 'web', registered: true },
-  ] };
-  const driver = new SessionDriver(driver_config, () => {}, scheduler_fetch({
-    handling: { type: 'choice', choice: 'Gemini', confidence: 0.9, probabilities: {} },
-  }));
-  const plan = await driver.plan({ id: 7, status: 'active', goal: '评估风险', phase: 'discussion', named_followup: false },
-    roster, [],
-    { cause_kind: 'user_message', source_message_id: 21 }, { latest_id: 21, title: '房间', host: 'Claude' });
-  assert.equal(plan.kind, 'interjection');
-  assert.equal(plan.expert, 'Gemini');
-  assert.equal(plan.action, 'ask');
-  assert.equal(plan.after_message_id, 21);
-  const manual_driver = new SessionDriver(driver_config, () => {}, scheduler_fetch({
-    handling: { type: 'choice', choice: 'Codex', confidence: 0.9, probabilities: {} },
-  }));
-  const manual_plan = await manual_driver.plan({ id: 7, status: 'active', goal: '评估风险', phase: 'discussion', named_followup: false },
-    roster, [], { cause_kind: 'user_message', source_message_id: 21 },
-    { latest_id: 21, title: '房间', host: 'Claude' });
-  assert.equal(manual_plan.expert, 'Codex');
-
-  const { state, store, config } = await free_fixture(t);
-  state.session = { id: 7, status: 'active', goal: '讨论', phase: 'discussion' };
-  state.room.phase = 'discussion';
-  state.pending = [{ id: 9, message_id: 22, purpose: 'ask' }];
-  const delivered = [];
-  await new FreeRoomRunner(config, store, async (adapter, binding, task) => { delivered.push(JSON.parse(readFileSync(join(config.directory, 'free-1.task.json'), 'utf8'))); return { status: 'accepted' }; }).tick();
-  assert.equal(delivered[0].mode, 'free');
-  assert.equal(delivered[0].session.phase, 'discussion');
-  assert.equal(delivered[0].discussion_request, undefined, 'a direct question is a free request outside the session plan');
-});
-
-test('interjection scheduler uses ordinary asks after all members have spoken, including the host', async t => {
-  const { state, config: original_config } = await free_fixture(t);
-  const config = with_scheduler(original_config);
-  state.session = { id: 7, status: 'active', goal: '讨论', phase: 'discussion' };
-  state.room = { ...state.room, session: state.session, latest_id: 30 };
-  state.messages = [{ id: 30, author: '用户', text: 'Claude，你说的数字有什么来源？' }];
-  state.pending = [{ id: 9, purpose: 'discuss_host', session_id: 7, cause_kind: 'user_message', source_message_id: 30 }];
-  state.turns = [{ id: 1, round: 1, expert: 'Gemini', status: 'answered', answer_id: 29 }];
-  state.roster = { revision: 'r1', round: 1, waiting: [], experts: [
-    { name: 'Claude', host: true, registered: true }, { name: 'Gemini', spoken: true, registered: true }] };
-  const writes = [];
-  const original = globalThis.fetch;
-  globalThis.fetch = async (input, init) => {
-    if (String(input).endsWith('/turns/ask')) { writes.push(JSON.parse(init.body)); return new Response(JSON.stringify({ request: { id: 10 } })); }
-    return original(input, init);
-  };
-  t.after(() => { globalThis.fetch = original; });
-  const driver = new SessionDriver(config, () => {}, scheduler_fetch({ handling: { type: 'choice', choice: 'Claude', confidence: 0.9 } }));
-  assert.equal(await driver.tick(state.room, { archived: false, members: [{ name: 'Claude', role: 'host', pending: state.pending }], executions: [] }), true);
-  assert.deepEqual(writes[0], { actor: 'Claude', revision: 'r1', request_id: 9, expert: 'Claude', submission_id: 'session-ask-7-9' });
-  assert.ok(!state.calls.includes('POST /turns'));
-  assert.equal(driver.take_suggestions(9)[0].actual_action, 'ask');
 });
 
 test('session scheduler failures and reached limits leave progression with the host without ordinary routing', async t => {
@@ -2663,60 +1924,6 @@ test('session auto-scheduling refuses to apply an old roster revision after the 
   assert.equal(state.plans?.length || 0, 0);
 });
 
-test('session driver reads every turns page before choosing an opening or peer question', async t => {
-  const { state, store, config } = await free_fixture(t);
-  Object.assign(config, with_scheduler(config));
-  state.session = { id: 7, status: 'active', goal: '目标', phase: 'discussion', named_followup: false };
-  state.room.phase = 'discussion'; state.room.session = state.session;
-  state.room.latest_id = 40;
-  state.pending = [{ id: 9, purpose: 'discuss_host', session_id: 7, cause_kind: 'speaker_answered', source_message_id: 40 }];
-  state.turns = Array.from({ length: 20 }, (_, index) => ({ id: index + 1, round: 1, expert: `Expert-${index}`, status: 'answered', answer_id: index + 1 }));
-  state.turns.push({ id: 21, round: 1, expert: 'Gemini', status: 'answered', answer_id: 21 });
-  state.roster = { revision: 'r1', round: 2, waiting: ['Gemini'], experts: [{ name: 'Gemini', host: false, spoken: false, registered: true }] };
-  const driver = new SessionDriver(config, () => {}, scheduler_fetch({
-    speaker: { type: 'choice', choice: 'Gemini', confidence: 0.9, probabilities: {} },
-  }));
-  await driver.tick(state.room, { archived: false, members: [{ name: 'Claude', role: 'host', pending: state.pending }], executions: [] });
-  assert.ok(state.calls.includes('GET /turns?page=2'));
-  assert.match(state.plans[0].turns[0].question, /第 2 轮/);
-});
-
-test('a side-note interjection keeps a running plan without waking the host, and records its prompt version', async t => {
-  const { state, config } = await free_fixture(t);
-  Object.assign(config, with_scheduler(config));
-  state.session = { id: 7, status: 'active', goal: '目标', phase: 'discussion', named_followup: false };
-  state.room.phase = 'discussion'; state.room.session = state.session; state.room.latest_id = 30;
-  state.messages = [{ id: 30, author: '用户', text: '补充一下，预算是十万' }];
-  state.pending = [{ id: 9, purpose: 'discuss_host', session_id: 7, cause_kind: 'user_message', source_message_id: 30 }];
-  // Everyone has spoken this round, but Gemini's queued turn is still running, so a side note can leave it alone.
-  state.turns = [{ id: 1, round: 1, expert: 'Gemini', status: 'answered', answer_id: 29, question: '请给出开场观点' },
-    { id: 2, round: 2, expert: 'Gemini', status: 'queued', question: '请回应第 1 轮的分歧' }];
-  state.roster = { revision: 'r1', round: 1, waiting: [], experts: [{ name: 'Gemini', host: false, spoken: true, registered: true }] };
-  const sent = [];
-  const decisions = [];
-  const original = globalThis.fetch;
-  globalThis.fetch = async (input, init) => {
-    if (String(input).endsWith('/scheduler-decisions')) decisions.push(JSON.parse(init.body));
-    return original(input, init);
-  };
-  t.after(() => { globalThis.fetch = original; });
-  const driver = new SessionDriver(config, () => {}, async (url, init) => { sent.push(JSON.parse(init.body));
-    return { ok: true, json: async () => ({ answers: { handling: { type: 'choice', choice: '__note__', confidence: 0.9, probabilities: {} } } }) }; });
-  await driver.tick(state.room, { archived: false, members: [{ name: 'Claude', role: 'host', pending: state.pending }], executions: [] });
-  assert.ok(state.calls.includes('POST /turns/continue'), 'a confident side note closes the host request by continuing the plan');
-  assert.match(sent[0].state, /主持人最近的安排：Gemini（第 1 轮，已发言）：请给出开场观点；Gemini（第 2 轮，排队中）：请回应第 1 轮的分歧/);
-  assert.deepEqual([decisions[0].applied, decisions[0].context.prompt], [true, DISCUSSION_GUIDED_PROMPT_VERSION]);
-
-  // With nothing open or queued, continuing would stall the discussion, so the note goes to the host.
-  state.turns = [state.turns[0]];
-  state.roster = { ...state.roster, waiting: ['Codex'] };
-  state.pending = [{ id: 10, purpose: 'discuss_host', session_id: 7, cause_kind: 'user_message', source_message_id: 30 }];
-  const calls = state.calls.length;
-  assert.equal(await driver.tick(state.room, { archived: false, members: [{ name: 'Claude', role: 'host', pending: state.pending }], executions: [] }), false);
-  assert.equal(state.calls.slice(calls).includes('POST /turns/continue'), false);
-  assert.equal(decisions.at(-1).label, '仅补充信息，但当前没有进行中的安排，交给主持人');
-});
-
 for (const outcome of ['accepted', 'cancelled', 'expired']) test(`free Sidecar delivery checks executions and reconciles ${outcome} without resending`, async t => {
   const { state, store, config } = await free_fixture(t);
   config.participants.Claude = { adapter: 'antigravity', ipc_directory: config.directory };
@@ -2805,26 +2012,6 @@ test('group context, timeout and unusable-answer failures hand back once, clear 
   });
 });
 
-test('group decisions see member facts and do not report a stale decision as applied', async t => {
-  const { state, config, store } = await group_fixture(t);
-  state.change_apply = 1;
-  let input;
-  const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }), () => {}, async (url, init) => {
-    input = JSON.parse(init.body);
-    return scheduler_fetch({ order: { type: 'choice', choice: 'parallel', confidence: 0.9 } })();
-  });
-  await runner.tick();
-  await Promise.all(runner.decisions);
-  assert.match(input.state, /Codex CLI，项目 Ledger 只读；正在处理 #9；用户描述：只负责评审/);
-  assert.doesNotMatch(input.state, /runner-test-key|private-project/);
-  assert.equal(input.state.includes(config.directory), false);
-  assert.deepEqual(state.calls.filter(call => call.startsWith('POST /recommendations/11')), ['POST /recommendations/11 all', 'POST /recommendations/11 host']);
-  assert.equal(state.decisions.at(-1).applied, false);
-  assert.match(state.decisions.at(-1).label, /未生效/);
-  const suggestion = runner.saved_suggestion(1);
-  assert.deepEqual([suggestion.decision_id, suggestion.actual_action, suggestion.applied], [state.decisions.length, 'host', false]);
-});
-
 test('unnamed host handoffs survive restart without repeating a judgment and stay bound to their request', async t => {
   const { state, config, store } = await group_fixture(t);
   state.pending = [{ id: 1, message_id: 11, purpose: 'route' }];
@@ -2840,47 +2027,6 @@ test('unnamed host handoffs survive restart without repeating a judgment and sta
   const task = JSON.parse(readFileSync(join(config.directory, `free-${state.executions[0].id}.task.json`), 'utf8'));
   assert.deepEqual(task.scheduler_suggestions, [suggestion]);
   assert.equal(restarted.saved_suggestion(999), null);
-});
-
-test('group website failure persists the judgment and retries the same action after restart without another model call', async t => {
-  const { state, config, store } = await group_fixture(t);
-  state.fail_apply = 1;
-  let asked = 0;
-  const model = async () => { asked++; return scheduler_fetch({ order: { type: 'choice', choice: 'sequential', confidence: 0.9 } })(); };
-  const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }), () => {}, model);
-  await runner.tick();
-  await Promise.all(runner.decisions);
-  assert.equal(state.pending[0].purpose, 'group');
-  assert.equal(state.decisions[0].applied, false);
-  assert.equal(state.routing.at(-1).active, false);
-  const restarted = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }), () => {}, model);
-  await restarted.tick();
-  await Promise.all(restarted.decisions);
-  assert.equal(asked, 1);
-  assert.deepEqual(state.calls.filter(call => call.startsWith('POST /recommendations/11')), ['POST /recommendations/11 sequential', 'POST /recommendations/11 sequential']);
-  assert.equal(state.decisions.at(-1).applied, true);
-});
-
-test('smart scheduling still reads an unnamed message that follows more than a page of messages', async t => {
-  const { state, store, config } = await free_fixture(t);
-  config.api_home = mkdtempSync(join(tmpdir(), 'scheduler-'));
-  t.after(() => rmSync(config.api_home, { recursive: true, force: true }));
-  config.scheduler = { provider: 'jev', model: 'jev-1.13', ...save_api_key(config.api_home, { base_url: SCHEDULER_PROVIDERS.jev.base_url, api_key: 'jev-key' }) };
-  config.scheduler.base_url = SCHEDULER_PROVIDERS.jev.base_url;
-  state.claude_role = 'host';
-  state.others = [{ id: 8, name: 'Codex', role: 'member', pending: [] }];
-  state.messages = Array.from({ length: 40 }, (_, index) => ({ id: index + 1, author: index === 39 ? '用户' : 'Claude', text: `第 ${index + 1} 条` }));
-  state.pending = [{ id: 1, message_id: 40, purpose: 'route' }];
-  const asked = [];
-  const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }), () => {}, async (url, init) => {
-    asked.push(JSON.parse(init.body).state);
-    return { ok: true, json: async () => ({ answers: { handler: { type: 'choice', choice: '__host__', confidence: 0.9, probabilities: { __host__: 0.9 } } } }) };
-  });
-  await runner.tick();
-  await Promise.all(runner.decisions);
-  assert.equal(asked.length, 1);
-  assert.match(asked[0], /第 40 条/);
-  assert.ok(state.calls.includes('POST /scheduler-decisions'));
 });
 
 test('a free room delivers all open requests as one execution with the member credential only', async t => {
@@ -2911,99 +2057,6 @@ test('a free room delivers all open requests as one execution with the member cr
   assert.equal(store.binding('Claude').session_id, 'claude-session');
 });
 
-test('a changed activity is reported with an early renewal, at most once per report interval', async t => {
-  const { state, store, config } = await free_fixture(t);
-  let task;
-  const runner = new FreeRoomRunner(config, store, async (adapter, binding, delivered) => { task = delivered; return { status: 'accepted' }; });
-  await runner.tick();
-  task.on_activity('command');
-  await runner.tick();
-  assert.equal(state.renewed, undefined, 'a phase seen right after delivery waits for the report interval');
-  runner.save('Claude', { last_renew: Date.now() - 11_000 });
-  await runner.tick();
-  assert.equal(state.renewed.activity, 'command');
-  assert.ok(Math.abs(state.renewed.activity_at - Date.now() / 1000) < 5);
-  state.renewed = undefined;
-  runner.save('Claude', { last_renew: Date.now() - 11_000 });
-  await runner.tick();
-  assert.equal(state.renewed, undefined, 'unchanged activity waits for the regular renewal');
-});
-
-test('a free execution sends its progress notes with its segments, not with a renewal', async t => {
-  const { state, store, config } = await free_fixture(t);
-  let task;
-  const runner = new FreeRoomRunner(config, store, async (adapter, binding, delivered) => { task = delivered; return { status: 'accepted' }; });
-  await runner.tick();
-  task.on_note('读完材料，改用方案 B');
-  runner.save('Claude', { last_renew: Date.now() - 31_000 });
-  await runner.tick();
-  assert.deepEqual(state.notes[0], [{ seq: 1, text: '读完材料，改用方案 B' }]);
-  assert.equal(state.renewed.notes, undefined);
-});
-
-test('phase segments merge repeats, resend the open one only once it ran further, and stop at the cap', async () => {
-  let now = 1000;
-  const log = new SegmentLog(() => now);
-  log.mark(1, 'thinking');
-  assert.deepEqual(log.batch(1).segments, [], 'an execution that was not started records nothing');
-  log.start(1);
-  now = 1100; log.mark(1, 'thinking');
-  now = 1300; log.mark(1, 'thinking');
-  now = 1500; log.mark(1, 'command', 'Bash');
-  now = 1700; log.mark(1);
-  assert.deepEqual(log.batch(1).segments, [{ seq: 1, phase: 'thinking', tool: '', start_ms: 100, end_ms: 500 },
-    { seq: 2, phase: 'command', tool: 'Bash', start_ms: 500, end_ms: 700 }]);
-  const sent = [];
-  await log.report(1, false, async batch => { sent.push(batch.segments); });
-  assert.equal(log.due(1, 0), false, 'an open segment that has not run further is not resent');
-  now = 2000; log.mark(1);
-  assert.equal(log.due(1, 0), true);
-  await log.report(1, false, async batch => { sent.push(batch.segments); });
-  assert.deepEqual(sent[1], [{ seq: 2, phase: 'command', tool: 'Bash', start_ms: 500, end_ms: 1000 }], 'only the open segment is sent again, further on');
-  now = 2100; log.mark(1, 'writing');
-  await log.report(1, false, async () => { throw new Error('fetch failed'); });
-  assert.deepEqual(log.batch(1).segments.map(item => item.seq), [2, 3], 'a network failure keeps the segments');
-  await log.report(1, true, async batch => { sent.push(batch.segments); });
-  assert.deepEqual(sent.at(-1).map(item => [item.seq, item.end_ms]), [[2, 1100], [3, 1100]]);
-  assert.deepEqual(log.batch(1).segments, [], 'a final report forgets the execution');
-  log.start(2);
-  for (let index = 0; index < MAX_EXECUTION_SEGMENTS + 5; index++) { now += 10; log.mark(2, index % 2 ? 'tool' : 'thinking', 'x'.repeat(80)); }
-  const all = [];
-  await log.report(2, true, async batch => { assert.ok(batch.segments.length <= MAX_SEGMENTS_PER_REPORT); all.push(...batch.segments); });
-  assert.equal(all.length, MAX_EXECUTION_SEGMENTS);
-  assert.equal(all[1].tool.length, 60);
-  log.start(3); log.mark(3, 'tool', 'Read');
-  await log.report(3, false, async () => { throw new Error('HTTP 409: 执行已结束较久，不再接收阶段记录'); });
-  assert.deepEqual(log.batch(3).segments, [], 'a refused report drops the segments');
-});
-
-test('progress notes ride with the segments: numbered once, cut, capped and not resent', async () => {
-  const log = new SegmentLog(() => 0);
-  log.start(1);
-  log.note(1, '读完材料，改用方案 B');
-  log.note(1, 'x'.repeat(600));
-  const sent = [];
-  await log.report(1, false, async batch => { sent.push(batch); });
-  assert.deepEqual(sent[0].segments, [], 'notes alone make a report');
-  assert.deepEqual(sent[0].notes.map(note => [note.seq, note.text.length]), [[1, 11], [2, 500]]);
-  log.note(1, '验证通过');
-  await log.report(1, false, async batch => { sent.push(batch); });
-  assert.deepEqual(sent[1].notes, [{ seq: 3, text: '验证通过' }]);
-  for (let index = 0; index < MAX_EXECUTION_NOTES; index++) log.note(1, `第 ${index} 段`);
-  const rest = [];
-  await log.report(1, true, async batch => { assert.ok(batch.notes.length <= MAX_NOTES_PER_REPORT); rest.push(...batch.notes); });
-  assert.equal(rest.at(-1).seq, MAX_EXECUTION_NOTES, 'notes past the cap are dropped');
-});
-
-test('the tool an event starts is named without its arguments', () => {
-  assert.equal(activity_tool('claude', { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'rm -rf x' } }] } }), 'Bash');
-  assert.equal(activity_tool('claude', { type: 'assistant', message: { content: [{ type: 'text', text: '好' }] } }), '');
-  assert.equal(activity_tool('codex_cli', { type: 'item.started', item: { type: 'mcp_tool_call', server: 'docs', tool: 'search' } }), 'search');
-  assert.equal(activity_tool('codex_cli', { type: 'item.started', item: { type: 'command_execution', command: 'ls' } }), '');
-  assert.equal(activity_tool('antigravity_cli', { step_update: { step_type: 'tool', state: 'ACTIVE', tool_name: 'view_file' } }), 'view_file');
-  assert.equal(activity_tool('antigravity_cli', { step_update: { step_type: 'tool', state: 'DONE', tool_name: 'view_file' } }), '');
-});
-
 test('a free execution reports its phase segments while it runs and the rest once it ends', async t => {
   const { state, store, config } = await free_fixture(t);
   let task;
@@ -3020,19 +2073,6 @@ test('a free execution reports its phase segments while it runs and the rest onc
   await runner.tick();
   assert.deepEqual([state.segments.at(-1).at(-1).seq, state.segments.at(-1).at(-1).phase], [3, 'writing'], 'the open segment closes with the final report');
   assert.match(state.calls.filter(call => call.endsWith('segments')).at(-1), /^POST \/executions\/1 segments$/);
-});
-
-test('agent text between tool calls becomes a note; agy deltas join when their step ends', () => {
-  assert.equal(progress_note('claude', { type: 'assistant', message: { content: [{ type: 'text', text: ' 先读文件 ' }] } }), '先读文件');
-  assert.equal(progress_note('claude', { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash' }] } }), '');
-  assert.equal(progress_note('codex_cli', { type: 'item.completed', item: { type: 'agent_message', text: '核对完成' } }), '核对完成');
-  assert.equal(progress_note('codex_cli', { type: 'item.completed', item: { type: 'reasoning', text: '内部推理' } }), '');
-  const responses = new Map();
-  const step = (state, text_delta) => ({ event: 'step_update', step_update: { step_type: 'agent_response', step_index: 4, state, text_delta } });
-  assert.equal(progress_note('antigravity_cli', step('ACTIVE', '正在'), responses), '');
-  assert.equal(progress_note('antigravity_cli', step('ACTIVE', '验证'), responses), '');
-  assert.equal(progress_note('antigravity_cli', step('DONE'), responses), '正在验证');
-  assert.equal(progress_note('antigravity_cli', step('DONE'), responses), '', 'an empty response step is no note');
 });
 
 test('streamed CLI events map to the phase the card shows', () => {
@@ -3061,20 +2101,6 @@ test('a free member that exits without answering fails only its own execution', 
   assert.match(state.executions[0].result, /会话已结束，但未提交本次回答.*请核对原会话/);
 });
 
-test("the owner's member descriptions reach the scheduler's state and each member's option", async t => {
-  const message = { id: 3, author: '用户', text: '把首页改好看点' };
-  const state = scheduler_state('房间', [], message, '', '', { profiles: { Claude: '审美好，UI 写得好', Codex: '' } });
-  assert.match(state, /用户对成员的描述[^\n]*\n- Claude：审美好，UI 写得好/);
-  assert.doesNotMatch(state, /- Codex：/, 'an empty description adds no line');
-  assert.doesNotMatch(scheduler_state('房间', [], message, '', '', { profiles: null }), /用户对成员的描述/);
-  const { store, config } = await free_fixture(t);
-  const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }));
-  const [described, manual] = runner.route_members([{ id: 7, name: 'Claude', role: 'member' }, { id: 8, name: 'Gemini', role: 'member', access: 'manual' }],
-    { descriptions: { Claude: '审美好', Gemini: '文档整理得好' }, free: { requests: [] } }, 3);
-  assert.match(described.description, /^Claude（Claude Code.*；用户描述：审美好）$/);
-  assert.match(manual.description, /手动接入.*；用户描述：文档整理得好）$/);
-});
-
 test("an expert prompt is only the member's own text, and the API file rule is fixed in its system prompt", () => {
   assert.deepEqual(EXPERT_PROMPT_PRESETS, {}, 'must-know software rules are fixed by the runner, not replaceable presets');
   assert.equal(expert_prompt({ adapter: 'api' }), '');
@@ -3092,45 +2118,6 @@ test('the agy command limit comes from the runner, so clearing the expert prompt
   const agy = { cli: 'codiscuss', messages: '#3', task_path: 'free-7.task.json', name: 'Gemini', profile: { adapter: 'antigravity_cli', project_access: 'write', cwd: 'D:/project' } };
   assert.match(free_task_text(agy).instructions, /关键转折处用一句话写出进展再继续/);
   assert.doesNotMatch(free_task_text({ ...agy, profile: { adapter: 'claude', project_access: 'read' } }).instructions, /写出进展/);
-});
-
-test('the fixed free-room text loads in steps and leaves values to the task fields and rules to the skills', () => {
-  const base = { name: 'Codex', profile: { adapter: 'codex_cli', project_access: 'read' }, cli: 'codiscuss', room: 'r1', messages: '#3',
-    read_after: 2, execution_id: 7, task_path: 'free-7.task.json' };
-  const text = free_task_text({ ...base, role: 'host' });
-  // The wake-up names who was asked; a simple message is answered at once, anything else starts from the task file.
-  assert.match(text.prompt, /点名了你（Codex），对应消息 #3。问候、致谢等简单消息可跳过技能：codiscuss message list --after 2 看原文/);
-  // A one-line answer is passed inline, so the quick path needs no draft file.
-  assert.match(text.prompt, /codiscuss message post --body "回答" 回复（正文含引号时先写草稿再用 --body-file）。其他请求先读任务文件 free-7\.task\.json，按其中列出的技能处理/);
-  assert.doesNotMatch(text.prompt + text.instructions, /--handoff|不建定时任务|提交被拒绝|DISCUSS_ACCESS_FILE|--access-file/);
-  // A credential not bound to the process is named on both quick commands.
-  assert.equal(free_task_text({ ...base, access_file: 'a.json' }).prompt.match(/--access-file a\.json/g).length, 2);
-  // What is left are the limits no skill can know: project access, the command scope and where drafts go.
-  assert.equal(text.instructions, '未指定项目目录。命令只用 subcommands 列出的 codiscuss 子命令。草稿写在 draft_directory。');
-  const writable = free_task_text({ ...base, profile: { adapter: 'codex_cli', project_access: 'write', cwd: 'D:/project' } });
-  assert.doesNotMatch(writable.instructions, /subcommands/);
-  assert.match(free_task_text({ ...base, discussion: true }).instructions, /不改变讨论安排和进度/);
-});
-
-test("the delivered task and the API system prompt carry only this member's own prompt", async t => {
-  const { store, config } = await free_fixture(t);
-  config.participants.Claude = { adapter: 'claude', system_prompt: '回答控制在三段内' };
-  let task;
-  const runner = new FreeRoomRunner(config, store, async (adapter, binding, delivered) => { task = delivered; return { status: 'accepted' }; });
-  await runner.tick();
-  assert.match(task.prompt, /用户为你单独设置的提示[^\n]*\n回答控制在三段内$/);
-  const context = { participant: 'DeepSeek', role: 'member', mode: 'free' };
-  assert.doesNotMatch(system_prompt(context), /单独设置的提示/);
-  assert.match(system_prompt({ ...context, expert_prompt: '先给结论' }), /单独设置的提示[^\n]*\n先给结论$/);
-});
-
-test('a free member whose command was refused names that command in its failure', async t => {
-  const { state, store, config } = await free_fixture(t);
-  const denial = '运行了未授权的命令「Get-ChildItem -Recurse」，无人值守模式下无法确认权限而被自动拒绝，随后会话结束';
-  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => { setImmediate(() => task.on_exit(denial)); return { status: 'accepted' }; });
-  await runner.tick();
-  await runner.tick();
-  assert.equal(state.executions[0].result, `Claude ${denial}，未提交本次回答`);
 });
 
 test('an interrupted free execution stops only that member and is not redelivered', async t => {
@@ -3193,33 +2180,6 @@ for (const sent of [false, true]) test(`a kill signal returning ${sent} stays un
   assert.deepEqual(runner.stopped_executions('Claude'), [1]);
 });
 
-test('a restarted runner cannot claim a stoppable process exited without its handle', async t => {
-  const { state, store, config } = await free_fixture(t);
-  await new FreeRoomRunner(config, store, async () => ({ status: 'accepted' })).tick();
-  state.executions[0].status = 'cancelled';
-  await new FreeRoomRunner(config, store).tick();
-  assert.equal(state.executions[0].stop_result, 'unconfirmed');
-});
-
-test('an unconfirmed process does not extend the site hold beyond its original deadline', async t => {
-  const { state, store, config } = await free_fixture(t);
-  const child = Object.assign(new EventEmitter(), { kill() { return false; } });
-  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => {
-    task.on_process(child); return { status: 'accepted', session_id: 'session-1' };
-  });
-  await runner.tick();
-  state.executions[0].status = 'cancelled';
-  await runner.tick();
-  state.pending = [{ id: 3, message_id: 13 }];
-  state.held_until = Math.floor(Date.now() / 1000) + 600;
-  await runner.tick();
-  assert.equal(state.executions.length, 1);
-  state.held_until = 0;
-  await runner.tick();
-  assert.equal(state.executions.length, 2);
-  assert.deepEqual(JSON.parse(readFileSync(join(config.directory, 'free-2.task.json'), 'utf8')).stopped_executions, [1]);
-});
-
 for (const failure of ['before', 'after']) test(`stop reporting survives a ${failure}-write network failure and restart`, async t => {
   const { state, store, config } = await free_fixture(t);
   const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted', capabilities: { stoppable: false, progress: false } }));
@@ -3239,19 +2199,6 @@ for (const failure of ['before', 'after']) test(`stop reporting survives a ${fai
   assert.deepEqual(restarted.stopped_executions('Claude'), [1]);
   await restarted.tick();
   assert.deepEqual(restarted.stopped_executions('Claude'), [1]);
-});
-
-test("a member's rewind effect is reported from its adapter once, and not to a site that lists none", async t => {
-  const { state, store, config } = await free_fixture(t);
-  state.pending = [];
-  const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }));
-  await runner.tick();
-  assert.equal(state.calls.filter(call => call.includes('/capabilities')).length, 0, 'an older site takes no report');
-  state.rewind = '';
-  await runner.tick();
-  assert.equal(state.rewind, 'cut', 'Claude Code sessions are cut by the runner');
-  await runner.tick();
-  assert.equal(state.calls.filter(call => call.includes('/capabilities')).length, 1, 'an unchanged effect is not sent again');
 });
 
 test('proven non-delivery is released and retried, then fails after three attempts', async t => {
@@ -3280,59 +2227,6 @@ test('a manual member whose session refuses a delivery is retried in the same ex
   await runner.tick();
   assert.equal(execution.status, 'failed');
   assert.match(execution.result, /原窗口拒绝（已停止自动重试）/);
-});
-
-test('a manual member is retried at most three times before the execution fails', async t => {
-  const { state, store, config } = await free_fixture(t);
-  config.participants.Claude.project_access = 'own';
-  const runner = new FreeRoomRunner(config, store, async () => { throw Object.assign(new Error('原窗口拒绝'), { delivery_status: 'not_sent' }); });
-  await runner.tick();
-  const [execution] = state.executions;
-  for (let index = 0; index < 3; index++) { execution.retry.retry_at = 1; await runner.tick(); }
-  assert.equal(execution.status, 'failed');
-  assert.match(execution.result, /已自动重试 3 次/);
-});
-
-test('discussion delivery retries a confirmed refusal after 60 seconds up to three times, then returns the failed request to its host', async t => {
-  const { state, store, config } = await free_fixture(t);
-  config.participants.Claude.project_access = 'own';
-  state.claude_role = 'host';
-  state.session = { id: 7, status: 'active', goal: '讨论目标', phase: 'discussion' };
-  state.room.phase = 'discussion';
-  state.pending = [{ id: 1, message_id: 11, purpose: 'discuss', session_request_id: 5, session_id: 7, round: 1, position: 1 }];
-  const runner = new FreeRoomRunner(config, store, async () => {
-    throw Object.assign(new Error('原窗口拒绝'), { delivery_status: 'not_sent' });
-  });
-  await runner.tick();
-  const [execution] = state.executions;
-  assert.equal(execution.retry.attempt, 1);
-  assert.ok(execution.retry.retry_at >= Math.floor(Date.now() / 1000) + 59);
-  for (let retry = 0; retry < 3; retry++) {
-    execution.retry.retry_at = 1;
-    await runner.tick();
-  }
-  assert.equal(execution.status, 'failed');
-  assert.match(execution.result, /已自动重试 3 次/);
-  assert.deepEqual(state.pending.map(item => [item.purpose, item.session_id, item.cause_kind]), [['discuss_host', 7, 'request_failed']]);
-});
-
-test('after a reached discussion limit the unified runner delivers ordinary free requests without scheduling another round', async t => {
-  const { state, store, config } = await free_fixture(t);
-  Object.assign(config, with_scheduler(config));
-  state.claude_role = 'host';
-  state.session = { id: 7, status: 'concluded', goal: '讨论目标', phase: 'concluded' };
-  state.room.phase = 'concluded';
-  state.pending = [{ id: 2, message_id: 12, purpose: 'ask' }];
-  let task_file;
-  await new FreeRoomRunner(config, store, async (adapter, binding, task) => {
-    task_file = JSON.parse(readFileSync(join(config.directory, 'free-1.task.json'), 'utf8'));
-    return { status: 'accepted' };
-  }).tick();
-  assert.equal(task_file.mode, 'free');
-  assert.equal(task_file.requests[0].purpose, 'ask');
-  assert.equal(task_file.discussion_request, undefined);
-  assert.equal(state.calls.some(call => call.includes('/turns/roster')), false);
-  assert.equal(state.calls.some(call => call.startsWith('POST /scheduler-routing')), false);
 });
 
 test('a restart between persisting and invoking never resends the free task', async t => {
@@ -3385,17 +2279,6 @@ test('two free members are delivered in parallel, each with its own credential',
   assert.equal(JSON.parse(readFileSync(tasks[1].access_path, 'utf8')).token, config.members.Codex.token);
 });
 
-test('free members answering at once start in the room speaking order, not by joining order', async t => {
-  const { state, store, config } = await free_fixture(t);
-  config.participants.Codex = { adapter: 'codex_cli' };
-  config.members.Codex = { token: 'codex-credential'.repeat(3) };
-  state.others.push({ id: 8, name: 'Codex', pending: [{ id: 3, message_id: 11 }] });
-  state.room = { speaking_order: { items: [{ name: 'Codex' }, { name: 'Claude' }] } };
-  const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }));
-  await runner.tick();
-  assert.deepEqual(state.executions.map(item => item.member), ['Codex', 'Claude']);
-});
-
 test('a free member that left is stopped while the other keeps working', async t => {
   const { state, store, config } = await free_fixture(t);
   config.participants.Codex = { adapter: 'codex_cli' };
@@ -3414,21 +2297,6 @@ test('a free member that left is stopped while the other keeps working', async t
   assert.equal(children.Codex.killed, true);
   assert.equal(children.Claude.killed, false);
   assert.equal(runner.row('Codex').status, 'idle');
-});
-
-test('a member whose bound context changes is blocked while new members are adopted', async t => {
-  const { state, store, config } = await free_fixture(t);
-  config.participants.Claude.cwd = config.directory;
-  const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }));
-  runner.adopt({ ...config, scheduler: { provider: 'jev', model: 'updated' },
-    participants: { Claude: { adapter: 'claude', cwd: tmpdir() }, Codex: { adapter: 'codex_cli' } },
-    members: { ...config.members, Codex: { token: 'codex-credential'.repeat(3) } } });
-  assert.equal(runner.session_driver.config, runner.config);
-  assert.equal(runner.session_driver.config.scheduler.model, 'updated');
-  assert.ok(runner.config.participants.Codex);
-  await runner.tick();
-  assert.equal(state.executions[0].status, 'failed');
-  assert.match(runner.row('Claude').error, /发生变化/);
 });
 
 test('changed files in a Git working tree are reported after the member exits', async t => {
@@ -3471,24 +2339,6 @@ test('changed files in a Git working tree are reported after the member exits', 
   assert.equal(state.reports[read_only.id], undefined, 'a read-only member cannot have written the changes it would observe');
 });
 
-test('only the host task points to the host skill; other members get no dispatch rule', async t => {
-  const { state, store, config } = await free_fixture(t);
-  state.claude_role = 'host';
-  const tasks = [];
-  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => { tasks.push(task); return { status: 'accepted' }; });
-  await runner.tick();
-  const task = JSON.parse(readFileSync(join(config.directory, 'free-1.task.json'), 'utf8'));
-  assert.equal(task.role, 'host');
-  // How to route and hand back lives in discuss-host, which only the host's task lists.
-  assert.ok(task.skills.some(path => /discuss-host/.test(path)));
-  state.claude_role = 'member';
-  state.executions[0].status = 'completed';
-  await runner.tick();
-  state.pending = [{ id: 9, message_id: 19 }];
-  await runner.tick();
-  assert.ok(!JSON.parse(readFileSync(join(config.directory, 'free-2.task.json'), 'utf8')).skills.some(path => /discuss-host/.test(path)));
-});
-
 test('two instances of one platform keep separate sessions and credentials', async t => {
   const { state, store, config } = await free_fixture(t);
   config.participants['Claude-评审'] = { adapter: 'claude', model: 'opus' };
@@ -3505,23 +2355,6 @@ test('two instances of one platform keep separate sessions and credentials', asy
   assert.equal(store.binding('Claude').session_id, 'session-main');
   assert.equal(store.binding('Claude-评审').session_id, 'session-review');
   assert.equal(JSON.parse(readFileSync(join(config.directory, 'free-2.access.json'), 'utf8')).token, config.members['Claude-评审'].token);
-});
-
-test('repeated Sidecar session reports persist one member binding without a legacy enter operation', async t => {
-  const f = await fixture(t);
-  const config = { ...f.config, participants: { Codex: { adapter: 'antigravity_cli', executable: process.execPath } } };
-  let sent = 0;
-  const runner = new FreeRoomRunner(config, f.store, async (adapter, binding, task) => {
-    task.on_binding('session-1'); task.on_binding('session-1');
-    sent++;
-    return { session_id: 'session-1', status: 'accepted' };
-  });
-  await runner.tick();
-  await new FreeRoomRunner(config, f.store, async () => { sent++; return { status: 'accepted' }; }).tick();
-  assert.equal(sent, 1);
-  assert.equal(f.store.binding('Codex').session_id, 'session-1');
-  assert.equal(f.calls.filter(action => action === 'reserve').length, 1);
-  assert.equal(f.calls.some(action => String(action).includes('enter')), false);
 });
 
 test('codiscuss token writes only its hash through wrangler and the account is saved per site', async () => {

@@ -55,6 +55,16 @@ The hosted site can then create rooms whose agents run on this machine. The conn
 
 Sign in as the site administrator in the connected computer's browser to pair it. Then sign in with the same account on a phone or tablet to create rooms using the projects saved on that computer. Project paths and keys never leave the computer.
 
+### Through Cloudflare Tunnel While Away
+
+Conversations stay on this computer; away from it, open the local site through [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/). Nothing is reachable while the computer is off or codiscuss is not running.
+
+1. Enable the remote entry. It listens on `127.0.0.1` only and shares the local site's data and live updates, but visitors must sign in as the administrator and it offers no local launch: `codiscuss setup --remote-port 8766`. Restart the local site when prompted; `--remote-port off` disables it.
+2. Install `cloudflared` and route a subdomain to `http://127.0.0.1:8766`. **Never route the local site port (8765 by default)**: its visitors are the administrator without signing in.
+3. Put Cloudflare Access (for example an email code) in front of the subdomain. Like any hosted deployment, the remote entry has no read isolation; without Access every conversation is public.
+4. Open the subdomain and register the administrator; the setup token is in `~/.codiscuss/local/website.log`, after the `Remote entry` line.
+5. To create rooms or invite members from the phone, pair the subdomain with `codiscuss local connect` as described above, and add an Access Bypass for `/api/machines/` so the computer can claim relayed commands; that path is checked against the administrator session or the computer's credential.
+
 ## API Access
 
 Flip a member card to **API**, enter a key and choose a model. Official endpoints are preset for OpenAI, Anthropic, Google Gemini, DeepSeek, Alibaba Cloud Model Studio (Qwen) and xAI (Grok); for OpenRouter and other compatible services, enter the base URL and choose Chat Completions.

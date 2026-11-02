@@ -92,8 +92,10 @@ function actions(room, index, folder_id, folder_room_count) {
     { label: "复制阅读入口", icon: "i-lucide-link", onSelect: () => act("copy", `${location.origin}/r/${encodeURIComponent(room.id)}`) },
     { label: "导出对话", icon: "i-lucide-upload", disabled: view.value.backup_pending || Boolean(pending.value), onSelect: () => act("backup", room.id) },
   ], ...(current ? [[{ label: "刷新消息", icon: "i-lucide-refresh-cw", onSelect: () => act("refresh") }]] : []), [
-    { label: "移出文件夹", icon: "i-lucide-folder-minus", disabled: !room.folder_id || Boolean(pending.value), onSelect: () => act("manage_channel", { id: room.id, action: "folder", folder_id: null }) },
-    ...(view.value.folders || []).map((folder) => ({ label: `移至「${folder.name}」`, icon: "i-lucide-folder-input", disabled: folder.pending || room.folder_id === folder.id || Boolean(pending.value), onSelect: () => act("manage_channel", { id: room.id, action: "folder", folder_id: folder.id }) })),
+    { label: "移至文件夹", icon: "i-lucide-folder-input", disabled: Boolean(pending.value) || (!room.folder_id && !view.value.folders?.length), children: [
+      { label: "移出文件夹", icon: "i-lucide-folder-minus", disabled: !room.folder_id, onSelect: () => act("manage_channel", { id: room.id, action: "folder", folder_id: null }) },
+      ...(view.value.folders || []).map((folder) => ({ label: folder.name, icon: "i-lucide-folder", disabled: folder.pending || room.folder_id === folder.id, onSelect: () => act("manage_channel", { id: room.id, action: "folder", folder_id: folder.id }) })),
+    ] },
   ], [
     { label: "上移", icon: "i-lucide-arrow-up", disabled: ordering || !manual_order.value || index === 0 || Boolean(pending.value), onSelect: () => act("move_channel", { id: room.id, direction: -1, folder_id }) },
     { label: "下移", icon: "i-lucide-arrow-down", disabled: ordering || !manual_order.value || index === folder_room_count - 1 || Boolean(pending.value), onSelect: () => act("move_channel", { id: room.id, direction: 1, folder_id }) },

@@ -427,7 +427,7 @@ const hover_notes = computed(() => {
       <ul class="wf-legend" aria-label="图例">
         <li v-for="[key, label] in legend" :key="key"><i class="wf-swatch" :class="`is-${key}`"></i>{{ label }}</li>
         <li v-if="member_tone.size > 1" class="wf-legend-note">颜色区分成员，深浅区分模型与工具</li>
-        <li v-if="no_phases" class="wf-legend-note">这些执行都没有阶段明细：发生在接入程序上报阶段之前，或来自手动接入、在线 AI、Codex App</li>
+        <li v-if="no_phases" class="wf-legend-note">这些执行都没有阶段明细：发生在接入程序上报阶段之前，或来自手动接入、Codex App</li>
       </ul>
       <div class="wf-grid" :class="{ 'is-zoomed': zoomed, 'is-panning': pan }" role="list" :style="{ '--wf-depth-px': `${DEPTH_PX}px` }"
         @wheel="on_wheel" @mousedown="stop_autoscroll" @pointerdown="on_pan_start" @pointermove="on_pan_move" @pointerup="on_pan_end" @pointercancel="on_pan_end" @dblclick="reset_on_dblclick">

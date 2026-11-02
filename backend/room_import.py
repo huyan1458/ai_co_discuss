@@ -75,14 +75,15 @@ def room_statements(tables, room, maps, control_hash):
 
 
 def member_statements(tables, room_id, maps):
-    """Members arrive away with unusable credential hashes; removed members stay removed."""
+    """Members arrive away with unusable credential hashes; removed members, and web members of older backups, arrive removed."""
     statements = []
     for member in tables.get("room_members", []):
         statements.append(("""INSERT INTO room_members (id,room_id,name,adapter,role,status,token_hash,read_until,created_at,access,session_mode)
             VALUES (?,?,?,?,?,?,?,?,?,?,?)""", (maps["room_members"][member["id"]], room_id, member["name"], member.get("adapter", ""),
-                                                member.get("role", "member"), "removed" if member.get("status") == "removed" else "away",
+                                                member.get("role", "member"),
+                                                "removed" if member.get("status") == "removed" or member.get("access") == "online" else "away",
                                                 uuid.uuid4().hex * 2, remap_until(member.get("read_until"), maps["messages"]),
-                                                member["created_at"], member.get("access") or "manual",
+                                                member["created_at"], "manual" if member.get("access") == "online" else member.get("access") or "manual",
                                                 member.get("session_mode") or "new")))
     return statements
 

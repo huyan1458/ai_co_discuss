@@ -35,11 +35,11 @@ const library = ref(null);
 const host = computed(() => value("host"));
 // Members that submit their own answers can host; web members only read. The user is the client, never the host.
 // A discussion's host is continued by the local service, so it cannot be a manual member.
-const host_options = computed(() => selected_names.value.filter((name) => selected.value[name] !== "online" && (!discussing.value || selected.value[name] !== "manual")));
+const host_options = computed(() => selected_names.value.filter((name) => !discussing.value || selected.value[name] !== "manual"));
 const limit_picker = ref(null);
 // A room needs the local service only for the members it wakes, smart scheduling or a discussion.
 const woken_names = computed(() => selected_names.value.filter((name) => selected.value[name] === "cli"));
-// Smart scheduling alone also registers a room with the local service, even when every member is manual or online.
+// Smart scheduling alone also registers a room with the local service, even when every member is manual.
 const automatic = computed(() => woken_names.value.length > 0 || scheduler_active.value || cwd_preset.value);
 // Without the local service in this browser, the paired computer wakes members through the website.
 const relay = computed(() => view.value.launch.available ? null : view.value.launch.relay);
