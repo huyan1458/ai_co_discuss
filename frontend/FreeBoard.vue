@@ -190,11 +190,11 @@ watch(() => room.value.id, () => { starting.value = false; });
       <div class="pb-status-line"><span class="pb-dot"></span><strong role="status">{{ status.title }}</strong></div>
       <p v-if="status.detail" class="pb-status-detail">{{ status.detail }}</p>
       <div v-if="status.title === '处理中' && view.access?.can_manage" class="pb-chain-actions">
-        <UButton label="全部停止" icon="i-lucide-square" size="xs" color="neutral" variant="outline" title="停止所有成员正在做的工作，并取消还没投递的请求；发新消息即重新开始"
+        <UButton label="全部停止" icon="i-lucide-circle-stop" size="sm" color="error" variant="outline" class="pb-action pb-action-danger" title="停止所有成员正在做的工作，并取消还没投递的请求；发新消息即重新开始"
           :loading="pending === 'stop_room'" :disabled="!!pending" @click="act('stop_room')" />
       </div>
       <div v-if="status.continue_chain && view.access?.can_manage" class="pb-chain-actions">
-        <UButton v-for="rounds in continue_choices" :key="rounds" :label="`继续 ${rounds} 轮`" icon="i-lucide-play" size="xs" color="neutral" variant="outline"
+        <UButton v-for="rounds in continue_choices" :key="rounds" :label="`继续 ${rounds} 轮`" icon="i-lucide-play" size="sm" color="neutral" variant="outline" class="pb-action"
           :loading="continuing === rounds" :disabled="Boolean(continuing)" @click="continue_chain(status.continue_chain, rounds)" />
       </div>
       <div class="pb-meters">

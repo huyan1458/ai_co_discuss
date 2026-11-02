@@ -528,6 +528,28 @@ INSERT INTO free_queue_waiting(id,room_id,message_id,member_id)
     SELECT q.id,q.room_id,q.message_id,q.member_id FROM free_queue q
     WHERE NOT EXISTS(SELECT 1 FROM member_requests r WHERE r.message_id=q.message_id AND r.member_id=q.member_id)
       AND NOT EXISTS(SELECT 1 FROM free_queue_waiting w WHERE w.id=q.id);
+-- Owner messages sent while members still work wait here, in position order, and are posted one by one once the room is idle.
+-- `payload` is the message as sent (submission_id included); `failure` holds why posting it failed, which holds the queue.
+CREATE TABLE IF NOT EXISTS queued_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    submission_id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    failure TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    UNIQUE(room_id,submission_id)
+);
+CREATE INDEX IF NOT EXISTS queued_messages_room ON queued_messages(room_id,position);
+-- A room's queue paused because the owner stopped members; the owner resumes it.
+CREATE TABLE IF NOT EXISTS queued_message_pauses (
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE
+);
+-- Site-wide composer behaviour: whether messages sent while members work are queued (1) or sent at once (0).
+CREATE TABLE IF NOT EXISTS composer_settings (
+    id INTEGER PRIMARY KEY CHECK (id=1),
+    queueing INTEGER NOT NULL DEFAULT 1 CHECK (queueing IN (0,1))
+);
 CREATE TRIGGER IF NOT EXISTS queue_waiting_insert AFTER INSERT ON free_queue
 BEGIN
     INSERT INTO free_queue_waiting(id,room_id,message_id,member_id)
@@ -1221,6 +1243,55 @@ BEGIN
 END;
 DROP TRIGGER IF EXISTS revision_folder_delete;
 CREATE TRIGGER revision_folder_delete AFTER DELETE ON topic_folders
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id='';
+    INSERT INTO room_revisions (room_id,revision) SELECT '',(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id='');
+END;
+DROP TRIGGER IF EXISTS revision_queued_message_insert;
+CREATE TRIGGER revision_queued_message_insert AFTER INSERT ON queued_messages
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_queued_message_update;
+CREATE TRIGGER revision_queued_message_update AFTER UPDATE ON queued_messages
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_queued_message_delete;
+CREATE TRIGGER revision_queued_message_delete AFTER DELETE ON queued_messages
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=OLD.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT OLD.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=OLD.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_queue_pause_insert;
+CREATE TRIGGER revision_queue_pause_insert AFTER INSERT ON queued_message_pauses
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_queue_pause_delete;
+CREATE TRIGGER revision_queue_pause_delete AFTER DELETE ON queued_message_pauses
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=OLD.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT OLD.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=OLD.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_composer_settings_insert;
+CREATE TRIGGER revision_composer_settings_insert AFTER INSERT ON composer_settings
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id='';
+    INSERT INTO room_revisions (room_id,revision) SELECT '',(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id='');
+END;
+DROP TRIGGER IF EXISTS revision_composer_settings_update;
+CREATE TRIGGER revision_composer_settings_update AFTER UPDATE ON composer_settings
 BEGIN
     UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id='';
     INSERT INTO room_revisions (room_id,revision) SELECT '',(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)

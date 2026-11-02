@@ -37,7 +37,7 @@
 
 ## 网页推送（可选）
 
-用户需要多标签实时推送时，按 deployment.md“网页推送”先部署 `deploy/updates.wrangler.jsonc` 的通知 Worker，再在私有配置中加入 `durable_objects` 绑定并重新发布。不配置时网页每 12 秒轮询，功能不受影响。
+用户需要外出用手机打开电脑上的房间，或需要多标签实时推送时，按 deployment.md“中转与实时推送”先部署 `deploy/updates.wrangler.jsonc` 的 Worker，再在私有配置中加入 `RELAY`（中转）和/或 `UPDATES`（推送）绑定并重新发布 Pages；顺序不能反。不配置时网页每 12 秒轮询，其他设备只能操作本网站的房间。
 
 ## 更新已部署的站点
 

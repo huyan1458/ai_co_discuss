@@ -28,7 +28,7 @@ export function member_actions(member, { view, act, describe }) {
     { label: "下载私有配置", icon: "i-lucide-download", disabled: locked || !available, onSelect: () => act("download_member_access", member.name) },
     ...(member.access === "manual" ? [{ label: "复制凭证文本", icon: "i-lucide-key-round", disabled: locked || !available, onSelect: () => act("copy_member_access_text", member.name) }] : []),
   ], [
-    ...(busy(member) ? [change("停止", "i-lucide-square", "interrupt")] : []),
+    ...(busy(member) ? [{ ...change("停止", "i-lucide-circle-stop", "interrupt"), color: "error" }] : []),
     ...(member.status === "active" && member.role !== "host" ? [change("设为主持人", "i-lucide-crown", "role", { role: "host" })] : []),
     ...(current_host ? [] : [member.status === "active" ? change("离开", "i-lucide-log-out", "away") : { ...change("请回", "i-lucide-log-in", "rejoin"), disabled: locked || (member.access === "runner" && !view.launch.available) }]),
   ], ...(current_host ? [] : [[{ ...change("移除", "i-lucide-trash-2", "remove"), color: "error" }]])];

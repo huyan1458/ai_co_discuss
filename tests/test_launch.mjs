@@ -949,3 +949,93 @@ test('relayed commands are decrypted, pinned to the site and answered encrypted'
   assert.deepEqual(await unseal(key, answer.body.envelope, 'command-0000000001:response'), { status: 200, body: { member: 'Gemini' } });
   assert.ok(!calls.some(call => call.url.endsWith('/commands/command-0000000002')));
 });
+
+test('the relay channel reaches only local room routes, as the bridge, and answers compressed and encrypted', async t => {
+  const { machine_link, machine_links, relay_cipher, seal } = await import('../runner/remote_launch.mjs');
+  const { answer_request, room_api } = await import('../runner/relay_channel.mjs');
+  const { gunzipSync } = await import('node:zlib');
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-relay-channel-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  machine_link(home, 'https://site.test');
+  writeFileSync(join(home, 'site-connections.json'), JSON.stringify({ sites: { 'https://site.test': { token_hash: 'a'.repeat(64) } } }));
+  writeFileSync(join(home, 'local-settings.json'), JSON.stringify({ port: 9876 }));
+  const calls = [];
+  const fetcher = async (url, options) => { calls.push({ url, options }); return Response.json({ messages: [] }); };
+
+  for (const path of ['/api/local/settings', '/api/admin', '/api/rooms/../local/settings', 'http://evil.test/api/rooms', '/api/rooms?x=<script>']) {
+    assert.equal((await room_api(home, 'https://site.test', { path }, { fetcher })).status, 400, path);
+  }
+  assert.equal(calls.length, 0, 'a refused route never reaches the local website');
+  const read = await room_api(home, 'https://site.test', { path: '/api/rooms/abc123/messages?after=0&limit=200' }, { fetcher });
+  assert.deepEqual(read, { status: 200, body: { messages: [] } });
+  assert.equal(calls[0].url, 'http://127.0.0.1:9876/api/rooms/abc123/messages?after=0&limit=200');
+  const bridge = calls[0].options.headers['X-CoDiscuss-Bridge'];
+  assert.match(bridge, /^[0-9a-f]{64}$/);
+  assert.equal(calls[0].options.headers['X-CoDiscuss-Bridge-Site'], 'https://site.test');
+  const connection = JSON.parse(readFileSync(join(home, 'site-connections.json'), 'utf8')).sites['https://site.test'];
+  assert.equal(connection.bridge_hash, (await import('node:crypto')).createHash('sha256').update(bridge).digest('hex'), 'the local website keeps only the hash');
+  assert.equal(connection.token_hash, 'a'.repeat(64), 'the browser connection is kept');
+
+  // A device seals the request under its id; the answer comes back gzipped and bound to the same id.
+  const link = machine_links(home).sites['https://site.test'];
+  const ephemeral = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+  const key = await relay_cipher(await crypto.subtle.exportKey('jwk', ephemeral.privateKey), link.public_key);
+  const { kty, crv, x, y } = await crypto.subtle.exportKey('jwk', ephemeral.publicKey);
+  const id = 'relay-request-0000000001';
+  const sealed = await seal(key, { action: 'room-api', payload: { method: 'POST', path: '/api/rooms/abc123/messages', body: { text: '外出' } } }, id);
+  const answer = await answer_request(home, 'https://site.test', link, { id, envelope: { ...sealed, key: { kty, crv, x, y } } }, { fetcher });
+  assert.equal(answer.type, 'response');
+  assert.equal(answer.envelope.encoding, 'gzip');
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: Buffer.from(answer.envelope.iv, 'base64'), additionalData: new TextEncoder().encode(`${id}:response`) },
+    key, Buffer.from(answer.envelope.data, 'base64'));
+  assert.deepEqual(JSON.parse(gunzipSync(Buffer.from(plain)).toString()), { status: 200, body: { messages: [] } });
+  assert.deepEqual(JSON.parse(calls[1].options.body), { text: '外出' });
+  await assert.rejects(answer_request(home, 'https://site.test', link, { id: 'relay-request-0000000002', envelope: { ...sealed, key: { kty, crv, x, y } } }, { fetcher }),
+    'a request sealed under another id is not run');
+  assert.equal(calls.length, 2);
+});
+
+test('the relay channel reads and sends files in parts, and runs computer-room operations with the credentials kept here', async t => {
+  const { machine_link } = await import('../runner/remote_launch.mjs');
+  const { computer_command, room_api, room_upload } = await import('../runner/relay_channel.mjs');
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-relay-files-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  machine_link(home, 'https://site.test');
+  writeFileSync(join(home, 'site-connections.json'), JSON.stringify({ sites: { 'https://site.test': {} } }));
+  writeFileSync(join(home, 'local-settings.json'), JSON.stringify({ port: 9876 }));
+
+  // A file larger than one frame is read in parts.
+  const file = Buffer.alloc(900 * 1024, 7);
+  const reader = async () => new Response(file, { headers: { 'Content-Type': 'image/png' } });
+  const path = '/api/rooms/abc123/attachments/f1/content';
+  const first = await room_api(home, 'https://site.test', { path }, { fetcher: reader });
+  const rest = await room_api(home, 'https://site.test', { path, offset: Buffer.from(first.body_base64, 'base64').length }, { fetcher: reader });
+  assert.equal(first.total, file.length);
+  assert.ok(Buffer.concat([Buffer.from(first.body_base64, 'base64'), Buffer.from(rest.body_base64, 'base64')]).equals(file));
+
+  // An upload reaches the local website once, whole, after every part has arrived; a resent part is not counted twice.
+  const sent = [];
+  const writer = async (url, options) => { sent.push({ url, options }); return Response.json({ attachment: { id: 'new' } }); };
+  const upload = { id: 'upload-000000000001', path: '/api/rooms/abc123/attachments?file_name=a.png&actor=%E7%94%A8%E6%88%B7', total: 2, size: 6 };
+  assert.deepEqual(await room_upload(home, 'https://site.test', { ...upload, index: 0, data: Buffer.from('abc').toString('base64') }, { fetcher: writer }),
+    { status: 200, body: { received: 1 } });
+  await room_upload(home, 'https://site.test', { ...upload, index: 0, data: Buffer.from('abc').toString('base64') }, { fetcher: writer });
+  assert.equal(sent.length, 0);
+  const done = await room_upload(home, 'https://site.test', { ...upload, index: 1, data: Buffer.from('def').toString('base64') }, { fetcher: writer });
+  assert.deepEqual(done, { status: 200, body: { attachment: { id: 'new' } } });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].url, `http://127.0.0.1:9876${upload.path}`);
+  assert.equal(Buffer.from(sent[0].options.body).toString(), 'abcdef');
+  assert.match(sent[0].options.headers['X-CoDiscuss-Bridge'], /^[0-9a-f]{64}$/);
+  assert.equal((await room_upload(home, 'https://site.test', { ...upload, path: '/api/local/settings', index: 0, data: '' }, { fetcher: writer })).status, 400);
+
+  // A room operation for the computer's rooms names the local website and takes the room credential kept here.
+  const config_path = join(home, 'room.json');
+  writeFileSync(config_path, JSON.stringify({ site: 'http://localhost:9876', room: 'abc123', token: 'owner-token' }));
+  writeFileSync(join(home, 'rooms.json'), JSON.stringify({ configs: [config_path] }));
+  const command = computer_command(home, 'https://site.test', 'room-member', { room_id: 'abc123', token: null, action: 'add', name: 'Gemini' });
+  assert.equal(command.input.site, 'http://localhost:9876');
+  assert.equal(command.input.token, 'owner-token');
+  assert.equal(computer_command(home, 'https://site.test', 'room-member', { room_id: 'other', action: 'add' }).input.token, '', 'no credential for a room served elsewhere');
+  assert.equal(computer_command(home, 'https://site.test', 'models', { client: 'claude' }).input.site, undefined, 'other operations are unchanged');
+});

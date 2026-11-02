@@ -137,9 +137,14 @@ codiscuss health --site https://YOUR_PROJECT_NAME.pages.dev
 
 旧 `execution_deliveries` 表保留但不再读取，也不迁移；该表未部署到线上，仅有临时测试数据。保留旧表不代表支持混版运行。本机 Python 站点同样须先结束执行，再配套更新网站与 runner。
 
-### 实时推送（可选）
+### 中转与实时推送（可选）
 
-未配置时网页每 12 秒检查一次房间是否有变化，有变化才重新读取。需要跨实例实时推送时，先部署通知 Worker，再在私有配置中绑定：
+`deploy/updates.wrangler.jsonc` 是一个独立的 Worker，提供两个 Durable Object，都在 Cloudflare 免费额度内：
+
+- `MachineRelay`（中转）：让手机等其他设备经已配对电脑读写电脑上的房间，并加快远程本机操作。没有它时，其他设备只能操作本网站的房间，本机操作经 D1 排队转交，较慢。
+- `DiscussionUpdates`（推送）：本网站房间的跨实例实时推送。没有它时，网页每 12 秒检查一次房间是否有变化，有变化才重新读取。
+
+先部署 Worker，再在私有配置中按需绑定，然后重新部署 Pages：
 
 ```sh
 npx wrangler deploy --config deploy/updates.wrangler.jsonc
@@ -148,12 +153,13 @@ npx wrangler deploy --config deploy/updates.wrangler.jsonc
 ```json
 "durable_objects": {
   "bindings": [
+    { "name": "RELAY", "class_name": "MachineRelay", "script_name": "ai-co-discuss-updates" },
     { "name": "UPDATES", "class_name": "DiscussionUpdates", "script_name": "ai-co-discuss-updates" }
   ]
 }
 ```
 
-然后重新部署 Pages。通知只包含“数据已变化”，不包含讨论内容。
+先部署 Worker 再部署 Pages：顺序反了，Pages 会因找不到绑定的脚本而部署失败。中转只经手密文；推送只包含“数据已变化”，不包含讨论内容。
 
 ## 常见问题
 

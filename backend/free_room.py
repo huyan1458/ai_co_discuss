@@ -16,6 +16,7 @@ import time
 import uuid
 
 from .identity import MAX_ROOM_AGENTS, is_ai
+from .message_queue import pause as pause_queue, queue_view
 from .runtime import (LEASE_SECONDS, MAX_EXECUTION_SEGMENTS, begin_write, enforce_session_limits,
                       require_owner, save_segments, token_hash)
 
@@ -706,7 +707,8 @@ def free_view(connection, room_id):
     progress = [dict(row) for row in connection.execute(CHAIN_PROGRESS_SQL, (max_rounds, room_id))]
     return {"members": members, "requests": requests[::-1], "executions": recent_executions(connection, room_id),
             "conflicts": possible_conflicts(connection, room_id, names), "halted_chains": chains, "max_rounds": max_rounds,
-            "chain_rounds": progress, "recommendations": recent_recommendations(connection, room_id, now)[::-1]}
+            "chain_rounds": progress, "recommendations": recent_recommendations(connection, room_id, now)[::-1],
+            "queued_messages": queue_view(connection, room_id)}
 
 
 def require_member(connection, room_id, token, name=None):
@@ -1255,6 +1257,7 @@ def stop_room(connection, room_id, token):
     if discussion.current_session(connection, room_id, active_only=True):
         raise FileExistsError("讨论进行中，请用暂停或结束讨论")
     connection.execute("DELETE FROM free_queue WHERE room_id=?", (room_id,))
+    pause_queue(connection, room_id)
     stop_room_work(connection, room_id, "用户停止全部", "user_stop")
     return free_view(connection, room_id)
 
@@ -1755,6 +1758,7 @@ def owned_member(connection, room_id, member_id, token):
 def interrupt_member(connection, room_id, member_id, token):
     """Owner stop: void the live execution; requests that arrived meanwhile stay queued for the member's next turn."""
     owned_member(connection, room_id, member_id, token)
+    pause_queue(connection, room_id)
     stop_member_work(connection, member_id, "用户打断", "user_stop", keep_pending=True)
     settle_batches(connection, room_id)
     return free_view(connection, room_id)

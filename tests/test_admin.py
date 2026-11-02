@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import sqlite3
 import tempfile
 import threading
@@ -289,6 +290,75 @@ class RemoteEntryTests(unittest.TestCase):
                 self.assertEqual(stream.readline(), line)
             self.assertEqual(self.request(self.local, "/api/folders", {"name": "外出"})[0], 201)
             self.assertEqual(stream.readline(), b"event: change\n")
+
+
+class RelayBridgeTests(unittest.TestCase):
+    """The runner relays a paired device as the administrator only with this site's bridge credential, on room routes."""
+
+    SITE = "https://site.test"
+    BRIDGE = "be" * 32
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        home = Path(self.directory.name)
+        (home / "site-connections.json").write_text(json.dumps({"sites": {self.SITE: {
+            "token_hash": "a" * 64, "bridge_hash": hashlib.sha256(self.BRIDGE.encode()).hexdigest()}}}), encoding="utf-8")
+        self.database = home / "bridge.db"
+        init_database(self.database, seed=False)
+        previous = os.environ.get("DISCUSS_SERVICE_HOME")
+        os.environ["DISCUSS_SERVICE_HOME"] = str(home)
+        try:
+            self.server = DiscussionServer(("127.0.0.1", 0), self.database)
+        finally:
+            os.environ.pop("DISCUSS_SERVICE_HOME") if previous is None else os.environ.__setitem__("DISCUSS_SERVICE_HOME", previous)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base = f"http://127.0.0.1:{self.server.server_port}"
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join()
+        self.directory.cleanup()
+
+    def request(self, path, payload=None, bridge=None, site=SITE, token=""):
+        headers = {"Content-Type": "application/json"}
+        if bridge is not None:
+            headers.update({"X-CoDiscuss-Bridge": bridge, "X-CoDiscuss-Bridge-Site": site})
+        if token:
+            headers["X-Discussion-Token"] = token
+        request = Request(self.base + path, headers=headers, data=json.dumps(payload).encode() if payload is not None else None)
+        try:
+            response = urlopen(request, timeout=10)
+        except HTTPError as error:
+            response = error
+        with response:
+            return response.status, json.load(response)
+
+    def test_bridge_writes_as_owner_only_with_a_valid_credential_on_room_routes(self):
+        owner = "owner-credential" * 3
+        status, room = self.request("/api/rooms", {"title": "外出", "goal": "x", "mode": "free", "submission_id": "bridge-room",
+                                                   "members": [{"name": "Codex", "token": uuid.uuid4().hex, "access": "manual"}]}, token=owner)
+        self.assertEqual(status, 201, room)
+        message = {"author": "用户", "text": "手机上发的", "submission_id": "bridge-message"}
+        path = f"/api/rooms/{room['id']}/messages"
+        self.assertEqual(self.request(path, message)[0], 403, "a local visitor still needs the room credential")
+        self.assertEqual(self.request(path, message, bridge="ef" * 32)[0], 403)
+        self.assertEqual(self.request(path, message, bridge=self.BRIDGE, site="https://other.test")[0], 403)
+        self.assertEqual(self.request(path, message, bridge="not-hex")[0], 403)
+        status, saved = self.request(path, message, bridge=self.BRIDGE)
+        self.assertEqual(status, 201, saved)
+        self.assertEqual(self.request(path, message, bridge=self.BRIDGE)[0], 200, "a retry with the same submission is deduplicated")
+        self.assertEqual(self.request("/api/local/settings", bridge=self.BRIDGE)[0], 403, "the bridge never reaches local launch")
+        self.assertEqual(self.request("/api/machines", bridge=self.BRIDGE)[0], 403)
+        self.assertEqual(self.request("/api/revisions", bridge=self.BRIDGE)[0], 200)
+        # A file relayed from a device arrives as raw bytes, as a browser upload would.
+        upload = Request(f"{self.base}/api/rooms/{room['id']}/attachments?file_name=a.txt&actor=%E7%94%A8%E6%88%B7&submission_id=bridge-file",
+                         data=b"from phone", headers={"Content-Type": "application/octet-stream", "X-CoDiscuss-Bridge": self.BRIDGE,
+                                                    "X-CoDiscuss-Bridge-Site": self.SITE})
+        with urlopen(upload, timeout=10) as response:
+            self.assertEqual(json.load(response)["attachment"]["size"], 10)
+
 
 if __name__ == "__main__":
     unittest.main()

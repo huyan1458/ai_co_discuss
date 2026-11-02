@@ -1918,7 +1918,7 @@ async function manage_room(database, room_id, action, payload) {
       "DELETE FROM task_message_sources WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)",
       "DELETE FROM session_requests WHERE session_id IN (SELECT id FROM discussion_sessions WHERE room_id=?)",
       "DELETE FROM discussion_sessions WHERE room_id=?",
-      "DELETE FROM member_recommendations WHERE room_id=?", "DELETE FROM free_queue WHERE room_id=?", "DELETE FROM speaking_orders WHERE room_id=?", "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_descriptions WHERE room_id=?", "DELETE FROM member_labels WHERE room_id=?", "DELETE FROM execution_notes WHERE room_id=?", "DELETE FROM execution_denials WHERE room_id=?", "DELETE FROM execution_segments WHERE room_id=?", "DELETE FROM execution_capabilities WHERE room_id=?", "DELETE FROM late_answers WHERE room_id=?", "DELETE FROM member_capabilities WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?", "DELETE FROM member_sessions WHERE room_id=?", "DELETE FROM member_registrations WHERE room_id=?",
+      "DELETE FROM member_recommendations WHERE room_id=?", "DELETE FROM free_queue WHERE room_id=?", "DELETE FROM queued_messages WHERE room_id=?", "DELETE FROM queued_message_pauses WHERE room_id=?", "DELETE FROM speaking_orders WHERE room_id=?", "DELETE FROM member_requests WHERE room_id=?", "DELETE FROM member_descriptions WHERE room_id=?", "DELETE FROM member_labels WHERE room_id=?", "DELETE FROM execution_notes WHERE room_id=?", "DELETE FROM execution_denials WHERE room_id=?", "DELETE FROM execution_segments WHERE room_id=?", "DELETE FROM execution_capabilities WHERE room_id=?", "DELETE FROM late_answers WHERE room_id=?", "DELETE FROM member_capabilities WHERE room_id=?", "DELETE FROM member_executions WHERE room_id=?", "DELETE FROM member_sessions WHERE room_id=?", "DELETE FROM member_registrations WHERE room_id=?",
       "DELETE FROM room_members WHERE room_id=?", "DELETE FROM room_modes WHERE room_id=?",
       "DELETE FROM free_batches WHERE room_id=?", "DELETE FROM free_chains WHERE room_id=?", "DELETE FROM free_handoffs WHERE room_id=?", "DELETE FROM free_round_limits WHERE room_id=?", "DELETE FROM free_chain_holds WHERE room_id=?",
       "DELETE FROM discussion_conclusions WHERE room_id=?", "DELETE FROM discussion_sessions WHERE room_id=?",
@@ -2846,7 +2846,7 @@ async function free_view(database, room_id, token = "") {
   const all = async (sql, ...binds) => (await database.prepare(sql).bind(...binds).all()).results;
   const read_limit_read = initial_session_read_limit(database, room_id, token);
   const names_read = all("SELECT id,name FROM room_members WHERE room_id=?", room_id).then(rows => Object.fromEntries(rows.map(row => [row.id, row.name])));
-  const [read_limit, members, requests, halted_chains, recommendations, executions, conflicts, max_rounds, chain_rounds] = await Promise.all([
+  const [read_limit, members, requests, halted_chains, recommendations, executions, conflicts, max_rounds, chain_rounds, queued_messages] = await Promise.all([
     read_limit_read,
     Promise.all([read_limit_read, all("SELECT * FROM room_members WHERE room_id=? AND status<>'removed' ORDER BY id", room_id)])
       .then(([read_limit, rows]) => Promise.all(rows.map(row => free_member_view(database, row, read_limit, now)))),
@@ -2862,10 +2862,12 @@ async function free_view(database, room_id, token = "") {
     names_read.then(names => free_conflicts(database, room_id, names)),
     free_chain_rounds(database, room_id),
     all(FREE_CHAIN_PROGRESS, room_id),
+    queue_view(database, room_id),
   ]);
   const limit = row => read_limit === null ? row : limit_free_execution(row, read_limit);
   return { members, requests: requests.reverse().map(limit), executions: executions.map(limit), conflicts,
-    halted_chains, max_rounds, chain_rounds, recommendations: recommendations.map(row => ({ ...row, expires_in: Math.max(0, row.expires_at - now) })).reverse() };
+    halted_chains, max_rounds, chain_rounds, recommendations: recommendations.map(row => ({ ...row, expires_in: Math.max(0, row.expires_at - now) })).reverse(),
+    queued_messages };
 }
 
 /** Accept only the room control credential; declared names never grant ownership. */
@@ -4169,7 +4171,7 @@ async function handle_free_api(database, request, parts) {
   if (parts.length === 4 && parts[3] === "stop" && method === "POST") {
     await require_free_owner(database, room_id, token);
     if (await latest_session(database, room_id)) throw new HttpError(409, "讨论进行中，请用暂停或结束讨论");
-    await database.batch([database.prepare("DELETE FROM free_queue WHERE room_id=?").bind(room_id),
+    await database.batch([database.prepare("DELETE FROM free_queue WHERE room_id=?").bind(room_id), queue_pause_statement(database, room_id),
       ...free_stop_room_statements(database, room_id, "用户停止全部", "user_stop")]);
     return respond(await free_view(database, room_id));
   }
@@ -4185,7 +4187,8 @@ async function handle_free_api(database, request, parts) {
   }
   if (parts.length === 6 && parts[3] === "members" && parts[5] === "interrupt" && method === "POST") {
     const member = await free_owned_member(database, room_id, integer(parts[4]), token);
-    await database.batch([...free_stop_statements(database, member.id, "用户打断", "user_stop", true), ...free_settle_statements(database, room_id)]);
+    await database.batch([queue_pause_statement(database, room_id), ...free_stop_statements(database, member.id, "用户打断", "user_stop", true),
+      ...free_settle_statements(database, room_id)]);
     await reconcile_cancelled_session_requests(database, room_id, member.id);
     return respond(await free_view(database, room_id));
   }
@@ -4362,6 +4365,9 @@ async function append_free_message(database, room, payload, actor) {
   const session = actor === "用户" ? await session_holding_message(database, room_id, payload) : null;
   await check_message_references(database, room_id, expected);
   await check_message_attachments(database, room_id, expected);
+  if (actor === "用户" && await should_queue(database, room_id, payload)) {
+    return { ...await enqueue_message(database, room_id, payload), queue: await queue_view(database, room_id) };
+  }
   const review_plan = await checked_review_plan(database, room_id, actor, payload);
   const message_id = "(SELECT id FROM messages WHERE room_id=? AND submission_id=?)";
   const key = [room_id, values.submission_id];
@@ -4433,6 +4439,156 @@ async function append_free_message(database, room, payload, actor) {
   if (session) await wake_host_for_message(database, room_id, session, message.id);
   await attach_message_files(database, [message]);
   return { message, duplicate: false };
+}
+
+// Owner messages queued while members work; mirrors backend/message_queue.py. Each idle moment posts the head through the
+// normal message path with its own submission_id, so a repeated drain finds the posted message and only removes the row.
+const QUEUED_FIELDS = ["author", "text", "reply_to", "kind", "submitted_by", "to", "sequential", "order", "attachment_ids", "submission_id"];
+const QUEUE_ACTIONS = ["send", "edit", "delete", "reorder", "resume", "queueing"];
+const QUEUE_DRAIN_LIMIT = 20;
+
+/** Whether the site queues owner messages sent while members work; on unless the owner turned it off. */
+async function queueing_enabled(database) {
+  const row = await database.prepare("SELECT queueing FROM composer_settings WHERE id=1").first();
+  return !row || Boolean(row.queueing);
+}
+
+/** A member still has an open request, a one-after-another turn waits, or a discussion runs. */
+async function room_busy(database, room_id) {
+  return Boolean(await database.prepare(`SELECT 1 FROM member_requests WHERE room_id=? AND status IN ('pending','delivering')
+    UNION ALL SELECT 1 FROM free_queue_waiting WHERE room_id=?
+    UNION ALL SELECT 1 FROM discussion_sessions WHERE room_id=? AND status='active' LIMIT 1`).bind(room_id, room_id, room_id).first());
+}
+
+async function queued_exists(database, room_id) {
+  return Boolean(await database.prepare("SELECT 1 FROM queued_messages WHERE room_id=? LIMIT 1").bind(room_id).first());
+}
+
+/** The room's queued owner messages in order, whether the queue is paused, and the site's queueing switch. */
+async function queue_view(database, room_id) {
+  const rows = (await database.prepare("SELECT * FROM queued_messages WHERE room_id=? ORDER BY position,id").bind(room_id).all()).results;
+  const items = await Promise.all(rows.map(async row => {
+    const payload = JSON.parse(row.payload);
+    const attachments = (await database.prepare(`SELECT id,file_name,content_type FROM attachments WHERE room_id=? AND id IN (SELECT value FROM json_each(?))`)
+      .bind(room_id, JSON.stringify(payload.attachment_ids ?? [])).all()).results;
+    return { id: row.id, text: payload.text ?? "", attachments, failure: row.failure, created_at: row.created_at };
+  }));
+  const [paused, busy, queueing] = await Promise.all([
+    database.prepare("SELECT 1 FROM queued_message_pauses WHERE room_id=?").bind(room_id).first(), room_busy(database, room_id), queueing_enabled(database)]);
+  return { items, paused: Boolean(paused) && items.length > 0, busy, queueing };
+}
+
+/** Queue an owner message that asked for it while the room is busy or earlier messages still wait. */
+async function should_queue(database, room_id, payload) {
+  return payload.queue === true && (await room_busy(database, room_id) || await queued_exists(database, room_id));
+}
+
+/** Keep a validated owner message at the end of the queue; a retry with the same submission_id returns the same row. */
+async function enqueue_message(database, room_id, payload) {
+  const stored = Object.fromEntries(QUEUED_FIELDS.filter(key => key in payload).map(key => [key, payload[key]]));
+  const lookup = () => database.prepare("SELECT * FROM queued_messages WHERE room_id=? AND submission_id=?").bind(room_id, stored.submission_id).first();
+  const same = row => JSON.stringify(JSON.parse(row.payload)) === JSON.stringify(stored);
+  let previous = await lookup();
+  if (!previous) {
+    try {
+      // A pause belongs to the messages queued when the owner stopped; a new queue starts unpaused.
+      await database.batch([
+        database.prepare("DELETE FROM queued_message_pauses WHERE room_id=? AND NOT EXISTS(SELECT 1 FROM queued_messages WHERE room_id=?)").bind(room_id, room_id),
+        database.prepare(`INSERT INTO queued_messages (room_id,position,submission_id,payload,created_at)
+          SELECT ?,COALESCE(MAX(position),0)+1,?,?,unixepoch() FROM queued_messages WHERE room_id=?`)
+          .bind(room_id, stored.submission_id, JSON.stringify(stored), room_id)]);
+      return { queued: (await lookup()).id, duplicate: false };
+    } catch (error) {
+      if (!String(error).includes("UNIQUE constraint")) throw error;
+      previous = await lookup();
+    }
+  }
+  if (!same(previous)) throw new HttpError(409, "这个提交编号已被另一条内容使用，请为新发言生成新编号");
+  return { queued: previous.id, duplicate: true };
+}
+
+/** Post one queued message through the normal path and drop its row; a refused post keeps the row with the reason. */
+async function post_queued(database, room_id, row) {
+  try {
+    const payload = JSON.parse(row.payload);
+    message_values(payload);
+    await append_free_message(database, { id: room_id, archived: false }, payload, "用户");
+  } catch (error) {
+    if (!(error instanceof HttpError)) throw error;
+    await database.prepare("UPDATE queued_messages SET failure=? WHERE id=?").bind(String(error.message).slice(0, 500) || "发送失败", row.id).run();
+    return false;
+  }
+  await database.prepare("DELETE FROM queued_messages WHERE id=?").bind(row.id).run();
+  return true;
+}
+
+/** Post the head while the room is idle, unpaused and the head has not failed; called after writes that can leave the room idle. */
+async function drain_queue(database, room_id) {
+  if (!room_id || !await queued_exists(database, room_id)) return;
+  const blocked = await database.prepare(`SELECT 1 FROM room_directory WHERE room_id=? AND archived=1
+    UNION ALL SELECT 1 FROM queued_message_pauses WHERE room_id=?`).bind(room_id, room_id).first();
+  if (blocked || !await database.prepare("SELECT 1 FROM room_directory WHERE room_id=?").bind(room_id).first()) return;
+  for (let index = 0; index < QUEUE_DRAIN_LIMIT && !await room_busy(database, room_id); index++) {
+    const head = await database.prepare("SELECT * FROM queued_messages WHERE room_id=? ORDER BY position,id LIMIT 1").bind(room_id).first();
+    if (!head || head.failure || !await post_queued(database, room_id, head)) return;
+  }
+}
+
+/** The owner stopped members: hold what is queued until resumed. */
+function queue_pause_statement(database, room_id) {
+  return database.prepare("INSERT OR IGNORE INTO queued_message_pauses (room_id) SELECT ? WHERE EXISTS(SELECT 1 FROM queued_messages WHERE room_id=?)").bind(room_id, room_id);
+}
+
+async function queued_row(database, room_id, item_id) {
+  const row = await database.prepare("SELECT * FROM queued_messages WHERE room_id=? AND id=?").bind(room_id, item_id ?? 0).first();
+  if (!row) throw new HttpError(404, "这条排队消息已发出或已删除");
+  return row;
+}
+
+/** The owner acts on the queue: send one now, edit, delete, reorder, resume, or switch queueing for the site. */
+async function queue_action(database, room_id, token, payload) {
+  await require_free_owner(database, room_id, token);
+  const action = payload.action;
+  if (!QUEUE_ACTIONS.includes(action)) throw new HttpError(400, `action 须为 ${QUEUE_ACTIONS.join("、")} 之一`);
+  if (action === "send") {
+    const row = await queued_row(database, room_id, payload.id);
+    if (!await post_queued(database, room_id, { ...row, failure: "" })) {
+      const failure = (await database.prepare("SELECT failure FROM queued_messages WHERE id=?").bind(row.id).first())?.failure;
+      await database.prepare("UPDATE queued_messages SET failure=? WHERE id=?").bind(row.failure, row.id).run();
+      throw new HttpError(400, failure || "发送失败");
+    }
+  } else if (action === "edit") {
+    const row = await queued_row(database, room_id, payload.id);
+    const stored = { ...JSON.parse(row.payload), text: String(payload.text ?? "").trim() };
+    message_values(stored);
+    await database.prepare("UPDATE queued_messages SET payload=?,failure='' WHERE id=?").bind(JSON.stringify(stored), row.id).run();
+  } else if (action === "delete") {
+    await database.prepare("DELETE FROM queued_messages WHERE id=?").bind((await queued_row(database, room_id, payload.id)).id).run();
+  } else if (action === "reorder") {
+    const current = (await database.prepare("SELECT id FROM queued_messages WHERE room_id=? ORDER BY position,id").bind(room_id).all()).results.map(row => row.id);
+    const ids = payload.ids;
+    if (!Array.isArray(ids) || JSON.stringify([...ids].sort((a, b) => a - b)) !== JSON.stringify([...current].sort((a, b) => a - b))) {
+      throw new HttpError(409, "排队消息已变化，请刷新后再调整顺序");
+    }
+    await checked_batch(database, "(SELECT json_group_array(id) FROM (SELECT id FROM queued_messages WHERE room_id=? ORDER BY position,id))=?",
+      [room_id, JSON.stringify(current)],
+      ids.map((id, index) => database.prepare("UPDATE queued_messages SET position=? WHERE id=? AND room_id=?").bind(index + 1, id, room_id)));
+  } else if (action === "resume") {
+    await database.prepare("DELETE FROM queued_message_pauses WHERE room_id=?").bind(room_id).run();
+  } else {
+    if (typeof payload.enabled !== "boolean") throw new HttpError(400, "enabled 须为 true 或 false");
+    await database.prepare("INSERT INTO composer_settings (id,queueing) VALUES (1,?) ON CONFLICT(id) DO UPDATE SET queueing=excluded.queueing")
+      .bind(payload.enabled ? 1 : 0).run();
+  }
+  await drain_queue(database, room_id);
+  return queue_view(database, room_id);
+}
+
+/** Finish a write, then post queued owner messages it may have let through; the write's own result is returned. */
+async function after_write(database, room_id, work) {
+  const result = await work;
+  await drain_queue(database, room_id);
+  return result;
 }
 
 /** Save a host note against its live host task without answering or routing it. */
@@ -4674,6 +4830,7 @@ const COMMAND_TTL_SECONDS = 180;
 const COMMAND_WAIT_MAX = 20;
 const COMMAND_POLL_MS = 250;
 const ENVELOPE_DATA_MAX = 512 * 1024;
+const RELAY_PROTOCOL = "codiscuss-relay";
 const MACHINE_SELECT = "SELECT m.*, k.public_key FROM local_machines m LEFT JOIN machine_keys k ON k.machine_id=m.id";
 
 /** Hash a machine token; malformed values hash to an empty string and never match. */
@@ -4874,6 +5031,46 @@ async function finish_machine_command(database, machine_id, command_id, token, p
   return { id: command_id, status: "done" };
 }
 
+/**
+ * Authenticate relay traffic, then hand it to the computer's relay object: the computer's socket by its token, a device's
+ * socket and requests by the administrator session. Credentials travel as WebSocket subprotocols, never in the URL.
+ * Without the RELAY binding the route is absent and both sides keep the D1 command queue.
+ */
+async function handle_relay(env, request, machine_id) {
+  if (!env.RELAY) throw new HttpError(404, "中转未配置");
+  const database = env.DB;
+  const relay = env.RELAY.get(env.RELAY.idFromName(machine_id));
+  if (request.headers.get("Upgrade") === "websocket") {
+    const offered = (request.headers.get("Sec-WebSocket-Protocol") ?? "").split(",").map(item => item.trim());
+    if (!offered.includes(RELAY_PROTOCOL)) throw new HttpError(400, "中转协议不受支持");
+    const credential = offered.find(item => /^[ma]\.[0-9a-f]{64}$/.test(item)) ?? "";
+    let role = "machine";
+    if (credential.startsWith("m.")) await require_machine(database, machine_id, credential.slice(2));
+    else {
+      await require_admin_session(database, new Request(request.url, { headers: { "X-Discussion-Admin": credential.slice(2) } }));
+      await require_paired_machine(database, machine_id);
+      role = "device";
+    }
+    const forwarded = new Request(request);
+    forwarded.headers.set("X-Relay-Role", role);
+    return relay.fetch(forwarded);
+  }
+  if (request.method !== "POST") throw new HttpError(404, "地址不存在");
+  await require_admin_session(database, request);
+  await require_paired_machine(database, machine_id);
+  const { id, envelope, wait } = await read_payload(request);
+  if (typeof id !== "string" || !/^[A-Za-z0-9_-]{16,80}$/.test(id)) throw new HttpError(400, "命令编号无效");
+  const answer = await relay.fetch("https://relay.internal/", { method: "POST", headers: { "Content-Type": "application/json", "X-Relay-Role": "request" },
+    body: JSON.stringify({ id, envelope: valid_envelope(envelope, true), ...(Number.isInteger(wait) ? { wait } : {}) }) });
+  return respond(await answer.json());
+}
+
+/** A paired computer that can already decrypt relayed commands. */
+async function require_paired_machine(database, machine_id) {
+  if (!await database.prepare("SELECT 1 AS found FROM local_machines WHERE id=?").bind(machine_id).first()) throw new HttpError(404, "这台电脑尚未连接网站");
+  if (!await database.prepare("SELECT 1 AS found FROM machine_keys WHERE machine_id=?").bind(machine_id).first()) throw new HttpError(409, "这台电脑的 codiscuss 版本过旧，请更新后重试");
+}
+
 /** Pair computers and relay room launches; a computer authenticates with its own token, everything else as the administrator. */
 async function handle_remote_launch_api(database, request, parts) {
   const now = now_seconds(), method = request.method;
@@ -4967,8 +5164,8 @@ async function handle_api(database, request, parts, params, bucket, setup_key = 
     { session_id: reported, session_client: request.headers.get("X-Discussion-Session-Client") });
   if (parts[3] === "discussion" && parts.length === 4) {
     if (method === "GET") return respond(await session_view(database, room_id));
-    if (method === "POST") return respond(await discussion_control(database, room_id,
-      request.headers.get("X-Discussion-Token") ?? "", await read_payload(request)));
+    if (method === "POST") return respond(await after_write(database, room_id, discussion_control(database, room_id,
+      request.headers.get("X-Discussion-Token") ?? "", await read_payload(request))));
   }
   if (parts[3] === "descriptions" && parts.length === 4 && method === "POST") return respond(await describe_members(database, room_id, request.headers.get("X-Discussion-Token") ?? "", await read_payload(request)));
   if (parts[3] === "labels" && parts.length === 4 && method === "POST") return respond(await label_members(database, room_id, request.headers.get("X-Discussion-Token") ?? "", await read_payload(request)));
@@ -4978,12 +5175,12 @@ async function handle_api(database, request, parts, params, bucket, setup_key = 
     request.headers.get("X-Discussion-Token") ?? ""));
   if (parts[3] === "register" && parts.length === 4 && method === "POST") return respond(await register_member(database, room_id, request.headers.get("X-Discussion-Token") ?? ""));
   if (parts[3] === "messages" && parts.length === 6 && parts[5] === "retract" && method === "POST") {
-    return respond(await retract_message(database, room_id, integer(parts[4]), request.headers.get("X-Discussion-Token") ?? ""));
+    return respond(await after_write(database, room_id, retract_message(database, room_id, integer(parts[4]), request.headers.get("X-Discussion-Token") ?? "")));
   }
   if (parts[3] === "rewind" && parts.length === 4) {
     const token = request.headers.get("X-Discussion-Token") ?? "";
     if (method === "GET") { await require_free_owner(database, room_id, token); return respond(await rewind_plan(database, room_id, integer(params.message_id ?? 0))); }
-    if (method === "POST") return respond(await rewind_room(database, room_id, token, await read_payload(request)));
+    if (method === "POST") return respond(await after_write(database, room_id, rewind_room(database, room_id, token, await read_payload(request))));
   }
   if (parts[3] === "speaking-order" && parts.length === 4) {
     if (method === "GET") return respond((await require_room(database, room_id)).speaking_order);
@@ -4995,7 +5192,10 @@ async function handle_api(database, request, parts, params, bucket, setup_key = 
   }
   const session_model = await has_session_request_model(database, room_id);
   // A discussion keeps the local service's inbox and per-member executions for the user's direct questions.
-  if (["inbox", "executions", "members", "suggestions", "recommendations", "stop"].includes(parts[3])) return handle_free_api(database, request, parts);
+  if (parts[3] === "queue" && parts.length === 4 && method === "POST") {
+    return respond(await queue_action(database, room_id, request.headers.get("X-Discussion-Token") ?? "", await read_payload(request)));
+  }
+  if (["inbox", "executions", "members", "suggestions", "recommendations", "stop"].includes(parts[3])) return after_write(database, room_id, handle_free_api(database, request, parts));
   if (parts[3] === "attachments") return handle_attachments(database, request, parts, params, bucket);
   if (["scheduler-decisions", "scheduler-routing"].includes(parts[3])) return handle_runtime_api(database, request, parts);
   const free_topic = method === "POST" && parts[3] === "topic";
@@ -5041,7 +5241,7 @@ async function handle_api(database, request, parts, params, bucket, setup_key = 
   if (tail === "messages") {
     if (method === "GET") return respond(await query_messages(database, room_id, params, request.headers.get("X-Discussion-Token") ?? ""));
     const payload = await read_payload(request);
-    const result = await append_message(database, room_id, payload, free_actor);
+    const result = await after_write(database, room_id, append_message(database, room_id, payload, free_actor));
     return respond(result, result.duplicate ? 200 : 201);
   }
   if (parts.length === 5 && parts[3] === "messages" && method === "GET") {
@@ -5204,6 +5404,7 @@ async function fetch_request(request, env, context) {
       const hub = updates_hub(env);
       return hub ? await hub.fetch("https://updates.internal/") : new Response(null, { status: 204 });
     }
+    if (parts.length === 4 && parts[1] === "machines" && parts[3] === "relay") return await handle_relay(env, request, parts[2]);
     const params = Object.fromEntries(url.searchParams);
     if (text_mode && request.method === "GET") {
       return respond(await handle_text(env.DB, parts, params, request.headers.get("X-Discussion-Token") ?? ""), 200, true);

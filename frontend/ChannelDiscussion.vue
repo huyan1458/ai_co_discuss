@@ -6,6 +6,7 @@ import DiscussionEndCard from "./DiscussionEndCard.vue";
 import ExecutionDenials from "./ExecutionDenials.vue";
 import ExecutionNotes from "./ExecutionNotes.vue";
 import WorkingText from "./WorkingText.vue";
+import QueuedMessages from "./QueuedMessages.vue";
 import { motion, useSpring, useTransform } from "motion-v";
 
 const emit = defineEmits(["detail", "edit"]);
@@ -1160,7 +1161,7 @@ function attachment_shortcut(event) {
 }
 
 /** Copy a durable reference to the original record. */
-function copy_message(message) { act("copy", `${location.origin}/r/${room.value.id}/messages/${message.id}`); }
+function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.value.id}/messages/${message.id}`); }
 
 </script>
 
@@ -1229,6 +1230,14 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
                 <div v-if="message.created_at" class="channel-message-provenance"><time :title="new Date(message.created_at * 1000).toLocaleString('zh-CN')">{{ bridge.format_time(message.created_at * 1000) }}</time></div>
               </div>
               <span class="channel-message-provenance channel-message-elapsed">{{ message.waiting ? `手动启动${message.created_at ? ` · 已等 ${format_elapsed(Math.max(0, free_now - message.created_at))}` : ''}` : `已用 ${format_elapsed(Math.max(0, free_now - message.created_at))}` }}</span>
+              <div v-if="!message.retry && view.access?.can_manage" class="channel-working-actions">
+                <template v-if="speaking_turn?.expert === message.author && message.discussion_request">
+                  <UButton label="暂停" icon="i-lucide-pause" size="xs" variant="soft" color="neutral" :aria-label="`暂停讨论，停止 ${bridge.display_name(message.author)} 本次发言`" :disabled="!!pending" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" />
+                  <UButton label="跳过" icon="i-lucide-skip-forward" size="xs" variant="soft" color="neutral" :aria-label="`跳过 ${bridge.display_name(message.author)} 本次发言`" :disabled="!!pending" :loading="pending === 'skip_turn'" @click="act('skip_turn')" />
+                </template>
+                <UButton v-else label="停止" icon="i-lucide-circle-stop" size="xs" variant="soft" color="error" :aria-label="`停止 ${bridge.display_name(message.author)} 本次执行`" :disabled="!!pending"
+                  @click="act('change_member', { member_id: message.member_id, name: message.author, action: 'interrupt' })" />
+              </div>
             </div>
             <div v-for="status in [working_status(message)]" :key="message.id" class="channel-message-text" :class="{ 'channel-working-warning': status.warning }" role="status" :aria-label="`${bridge.display_name(message.author)} ${status.text}`" :title="shows_progress(message) ? undefined : '此接入方式看不到进度，可在原窗口查看'">
               <span v-if="message.waiting">{{ message.text }}</span>
@@ -1242,19 +1251,11 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
                 <template v-if="view.access?.can_manage">
                   <UButton label="立即重试" icon="i-lucide-rotate-ccw" size="sm" variant="soft" color="primary" :aria-label="`立即重新投递给 ${bridge.display_name(message.author)}`" :disabled="!!pending"
                     @click="act('retry_delivery', { execution_id: message.execution_id, action: 'retry_now' })" />
-                  <UButton label="停止" icon="i-lucide-square" size="sm" variant="soft" color="neutral" :aria-label="`停止自动重试 ${bridge.display_name(message.author)} 的投递`" :disabled="!!pending"
+                  <UButton label="停止" icon="i-lucide-circle-stop" size="sm" variant="soft" color="error" :aria-label="`停止自动重试 ${bridge.display_name(message.author)} 的投递`" :disabled="!!pending"
                     @click="act('retry_delivery', { execution_id: message.execution_id, action: 'retry_stop' })" />
                 </template>
               </div>
             </template>
-            <div v-else-if="view.access?.can_manage" class="channel-failure-actions">
-              <template v-if="speaking_turn?.expert === message.author && message.discussion_request">
-                <UButton label="暂停" icon="i-lucide-pause" size="sm" variant="soft" color="neutral" :aria-label="`暂停讨论，停止 ${bridge.display_name(message.author)} 本次发言`" :disabled="!!pending" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" />
-                <UButton label="跳过" icon="i-lucide-skip-forward" size="sm" variant="soft" color="neutral" :aria-label="`跳过 ${bridge.display_name(message.author)} 本次发言`" :disabled="!!pending" :loading="pending === 'skip_turn'" @click="act('skip_turn')" />
-              </template>
-              <UButton v-else label="停止" icon="i-lucide-square" size="sm" variant="soft" color="neutral" :aria-label="`停止 ${bridge.display_name(message.author)} 本次执行`" :disabled="!!pending"
-                @click="act('change_member', { member_id: message.member_id, name: message.author, action: 'interrupt' })" />
-            </div>
             <!-- The same row the answer keeps folded after its result: open while working. -->
             <ExecutionNotes v-if="execution_notes.get(message.execution_id)?.length" live :notes="execution_notes.get(message.execution_id)" />
           </template>
@@ -1440,6 +1441,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           </div>
         </template>
       </UPopover>
+      <QueuedMessages v-if="room.free?.queued_messages" :queue="room.free.queued_messages" :room-id="room.id" />
       <UChatPrompt ref="prompt" v-model="text" :disabled="view.sending_message" :submit-on-enter="ENTER_SENDS" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :autofocus="false" :rows="1" :maxrows="EDITOR_MAX_ROWS" :placeholder="`发消息到 # ${room.title}`" aria-label="留言正文" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_members.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :class="{ 'has-mentions': mention_mirror }" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
         <template #header>
           <div v-if="view.attachment_drafts.length" class="attachment-drafts">
@@ -1455,6 +1457,7 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
           <p v-if="view.upload_status" class="attachment-status" role="status">{{ view.upload_status }}</p>
           <div v-if="unregistered_member" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-user-round-x" /><span>{{ bridge.display_name(unregistered_member.name) }} 待注册：在其会话中粘贴启动指令</span><UButton v-if="view.access?.can_manage" :icon="launch_copied === unregistered_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === unregistered_member.name ? '已复制' : '复制启动指令'" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(unregistered_member.name)" /></div>
           <div v-if="queue_hint" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>{{ queue_hint }}</span><UButton v-if="is_manual_member(speaking_member) && view.access?.can_manage" :icon="launch_copied === speaking_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === speaking_member.name ? '已复制' : '复制启动指令'" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(speaking_member.name)" /></div>
+          <div v-if="view.editing_queued" class="channel-reply-draft"><UIcon name="i-lucide-pencil" /><span>编辑排队消息：发送即保存修改，仍按原位置排队</span><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" aria-label="取消编辑排队消息" @click="act('queue_cancel_edit')" /></div>
           <div v-if="view.reply_to" class="channel-reply-draft"><UIcon name="i-lucide-corner-up-left" /><span>{{ `回复 #${view.reply_to}` }}</span><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" aria-label="取消回复" @click="act('cancel_reply')" /></div>
         </template>
         <div v-if="mention_mirror" ref="mirror" class="channel-editor channel-editor-mirror" aria-hidden="true" v-html="mention_mirror"></div>
@@ -1475,4 +1478,5 @@ function copy_message(message) { act("copy", `${location.origin}/r/${room.value.
 .channel-free-recipients button.is-on { border-color: color-mix(in srgb, var(--channel-accent) 40%, transparent); background: color-mix(in srgb, var(--channel-accent) 14%, transparent); color: var(--ui-text-highlighted); }
 .channel-message-elapsed { align-self: center; margin-left: auto; white-space: nowrap; }
 .channel-working-warning { color: var(--ui-warning); }
+.channel-working-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 </style>

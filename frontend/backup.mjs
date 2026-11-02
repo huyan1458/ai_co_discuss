@@ -98,11 +98,18 @@ export function attachment_archive_path(file) {
   return `附件/${file.id}_${name}`;
 }
 
-/** Fetch only this site's managed attachment bytes, not arbitrary URLs in message text. */
-async function fetch_attachment(file) {
-  const response = await fetch(`/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content?download=1`);
-  if (!response.ok) throw new Error(`附件下载失败：${file.file_name}，未生成备份`);
-  const bytes = new Uint8Array(await response.arrayBuffer());
+/** Read a managed attachment from this site. */
+async function read_site_file(path) {
+  const response = await fetch(path);
+  if (!response.ok) throw new Error("附件下载失败");
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+/** Fetch only the room's managed attachment bytes, not arbitrary URLs in message text, and check them against the record. */
+async function fetch_attachment(file, read_file = read_site_file) {
+  let bytes;
+  try { bytes = await read_file(`/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content?download=1`); }
+  catch { throw new Error(`附件下载失败：${file.file_name}，未生成备份`); }
   if (bytes.length !== file.size) throw new Error(`附件不完整：${file.file_name}，未生成备份`);
   if (globalThis.crypto?.subtle) {
     const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map(value => value.toString(16).padStart(2, "0")).join("");
@@ -173,13 +180,13 @@ function save_archive(archive, name) {
 }
 
 /** Start a browser download after the whole archive has been successfully built. */
-export async function download_room_backup(snapshot) {
-  const archive = await create_room_archive(snapshot);
+export async function download_room_backup(snapshot, read_file) {
+  const archive = await create_room_archive(snapshot, file => fetch_attachment(file, read_file));
   save_archive(archive, `${safe_title(snapshot.tables.rooms[0].title)}_${snapshot.exported_at.replace(/[:.]/g, "-")}.zip`);
 }
 
 /** Download several rooms as one batch archive named after the selection. */
-export async function download_rooms_backup(snapshots, name) {
-  const archive = await create_rooms_archive(snapshots);
+export async function download_rooms_backup(snapshots, name, read_file) {
+  const archive = await create_rooms_archive(snapshots, file => fetch_attachment(file, read_file));
   save_archive(archive, `${safe_title(name)}_${new Date().toISOString().replace(/[:.]/g, "-")}.zip`);
 }

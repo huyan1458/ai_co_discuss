@@ -43,8 +43,17 @@ const RELAY_SETTINGS_WAIT_MS = 20000;
 // The computer allows each operation 60 seconds, as the local website does.
 const RELAY_COMMAND_WAIT_MS = 75000;
 const RELAY_CIPHER_INFO = "codiscuss-relay-v1";
+// The rooms kept on the paired computer are read and written through its relay connection; only room routes go there.
+const RELAY_PROTOCOL = "codiscuss-relay";
+const RELAY_PING_MS = 25000;
+const ROOM_RELAY_PATH = /^\/api\/(rooms|folders|revisions)(\/|\?|$)/;
+const ROOM_SOURCE_KEY = "discuss-room-source";
+// One part of a file sent to the computer stays well inside the relay's 1 MiB frame once encoded and encrypted.
+const RELAY_UPLOAD_PART_BYTES = 384 * 1024;
 let local_connection = null;
 let relay_machine = null;
+// Object URLs of files read from the computer's rooms, by their room route.
+const relay_files = new Map();
 const DEFAULT_USER_LABEL = "User";
 const DEFAULT_USER_ICON = "/icons/user.svg";
 // How a manual member learns it is its turn: it is pulled by the member.
@@ -68,11 +77,15 @@ const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: ""
   named_followup: false, create_discussion: false,
   archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
   reply_to: null, tab: "discussion", refresh_version: 0, context_dirty: false, topic_dirty: false,
-  snapshot_id: 0, pending_submission: null, pending_room: null, toast_timer: null };
+  snapshot_id: 0, pending_submission: null, pending_room: null, toast_timer: null, editing_queued: null };
 const live_updates = { source: null, connected: false, enabled: false, timer: null, poll_timer: null,
   running: false, dirty: false, full: false, revisions: "", refreshed_at: 0 };
 state.messages = [];
 state.message_history = null;
+// Whether the directory shows the paired computer's rooms, and whether that computer is currently connected.
+state.remote_rooms = false;
+state.remote_online = null;
+state.remote_site = "";
 // The last full view and transcript of recently opened rooms: reopening one shows it at once while the site is read again,
 // and only messages after the cached ones are fetched. A later retract or rewind reaches them through the room's withdrawal list.
 const ROOM_CACHE_LIMIT = 12;
@@ -198,6 +211,7 @@ function admin_headers() {
 
 /** Request JSON from the local or remotely hosted discussion service. */
 async function request_json(path, payload, access_token) {
+  if (state.remote_rooms && ROOM_RELAY_PATH.test(path)) return (await relay_room_request(path, payload)).body;
   const options = { cache: "no-store" };
   const target_room = path.match(/^\/api\/rooms\/([^/?]+)/)?.[1];
   const token = access_token || (target_room ? localStorage.getItem(`discuss-access:${target_room}`) : null);
@@ -295,6 +309,7 @@ async function logout_admin() {
   store_admin_token("");
   state.admin.logged_in = false;
   state.launch.relay = null;
+  if (state.remote_rooms) await set_room_source(false).catch(() => {});
   // Operations through the paired computer need the session, so they stop with it.
   if (relay_machine) load_launch_settings();
   publish_view();
@@ -917,6 +932,7 @@ async function refresh_room({ room: read_room = true } = {}) {
 async function select_room(room_id) {
   state.navigation_version++;
   state.refresh_version++;
+  state.editing_queued = null;
   const listed = state.rooms.find((room) => room.id === room_id);
   // A room opened before is shown as last read, with the directory's newer title, folder and archive state, until the site answers.
   const cached = listed && room_views.get(room_id);
@@ -999,6 +1015,8 @@ function message_payload() {
   if (named.length) payload.to = named;
   if (sequential && named.length) payload.sequential = true;
   if (everyone && named.length) payload.order = "auto";
+  // The site queues the message while members still work (or earlier ones wait) and posts it once the room is idle.
+  if (state.room.free?.queued_messages?.queueing !== false) payload.queue = true;
   return payload;
 }
 
@@ -1350,10 +1368,57 @@ async function finish_message(result, room_id, drafts) {
   run_action(refresh_room);
 }
 
+/** A message the site queued: clear the composer; it waits above the composer until the room is idle. */
+async function finish_queued(result, room_id, drafts) {
+  if (state.room?.id !== room_id || state.attachment_drafts !== drafts) return;
+  element("message-input").value = "";
+  state.pending_submission = null;
+  clear_attachment_drafts();
+  cancel_reply();
+  state.sending_preview = null;
+  if (state.room.free) state.room = { ...state.room, free: { ...state.room.free, queued_messages: result.queue } };
+  run_action(refresh_room);
+}
+
+/** Act on the room's queued owner messages; the site posts what may go and returns the queue. */
+async function queue_request(payload) {
+  const room_id = state.room.id;
+  const queue = await request_json(`/api/rooms/${room_id}/queue`, payload);
+  if (state.room?.id === room_id && state.room.free) state.room = { ...state.room, free: { ...state.room.free, queued_messages: queue } };
+  publish_view();
+  if (state.room?.id === room_id) await refresh_room();
+}
+
+/** Put a queued message's text in the composer; sending then saves it in place. */
+function edit_queued(item) {
+  state.editing_queued = { id: item.id, draft: element("message-input").value };
+  element("message-input").value = item.text;
+  element("message-input").dispatchEvent(new Event("input", { bubbles: true }));
+  element("message-input").focus();
+}
+
+/** Leave queued-message editing and give back the draft that was in the composer. */
+function cancel_queued_edit() {
+  if (!state.editing_queued) return;
+  element("message-input").value = state.editing_queued.draft;
+  element("message-input").dispatchEvent(new Event("input", { bubbles: true }));
+  state.editing_queued = null;
+}
+
+/** Save the composer text into the queued message being edited. */
+async function save_queued_edit() {
+  const editing = state.editing_queued;
+  await queue_request({ action: "edit", id: editing.id, text: element("message-input").value });
+  element("message-input").value = editing.draft;
+  element("message-input").dispatchEvent(new Event("input", { bubbles: true }));
+  state.editing_queued = null;
+}
+
 /** Submit one message; reuse its identifier if a network failure requires a retry. */
 async function send_message(event) {
   event.preventDefault();
   if (!state.room || state.sending_message) return;
+  if (state.editing_queued) return save_queued_edit();
   const room_id = state.room.id, drafts = state.attachment_drafts;
   const payload = message_payload();
   let saved = false;
@@ -1372,7 +1437,8 @@ async function send_message(event) {
     payload.attachment_ids = await upload_message_attachments(room_id, payload.submitted_by, drafts);
     const result = await request_json(`/api/rooms/${room_id}/messages`, payload);
     saved = true;
-    await finish_message(result, room_id, drafts);
+    if (result.queued) await finish_queued(result, room_id, drafts);
+    else await finish_message(result, room_id, drafts);
   } catch (error) {
     if (state.room?.id !== room_id) throw error;
     // An unsaved message stays as a failed card in place, the one signal of this failure; the draft is kept for the retry.
@@ -1461,11 +1527,7 @@ async function upload_message_attachments(room_id, actor, drafts) {
       render_attachment_drafts();
       publish_view();
       const params = new URLSearchParams({ file_name: item.file.name, actor, submission_id: item.upload_submission });
-      const token = localStorage.getItem(`discuss-access:${room_id}`);
-      const response = await fetch(`/api/rooms/${room_id}/attachments?${params}`, { method: "POST",
-        headers: { "Content-Type": "application/octet-stream", ...(token ? { "X-Discussion-Token": token } : {}), ...admin_headers() }, body: item.file });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "附件上传失败");
+      const result = await post_room_file(`/api/rooms/${room_id}/attachments?${params}`, item.file, localStorage.getItem(`discuss-access:${room_id}`));
       item.uploaded = result.attachment.id;
     }
     identifiers.push(item.uploaded);
@@ -1495,13 +1557,16 @@ function attachment_markup(files = []) {
     const url = `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
     const name = escape_html(file.file_name);
     const preview_attributes = `data-preview-attachment="${escape_html(file.id)}" data-attachment-room="${escape_html(file.room_id)}" aria-label="预览 ${name}"`;
+    // Files of the computer's rooms are not on this website: they are read through the relay once shown or clicked.
+    const source = state.remote_rooms ? `data-relay-src="${url}"` : `src="${url}"`;
+    const download = state.remote_rooms ? `href="#" data-relay-href="${url}" data-file-name="${name}"` : `href="${url}?download=1"`;
     if (file.content_type.startsWith("image/")) return `<button type="button" class="attachment-image" ${preview_attributes}>
-      <img src="${url}" alt="${name}" loading="lazy"></button>`;
+      <img ${source} alt="${name}" loading="lazy"></button>`;
     const content = `${attachment_file_icon(file.file_name)}<span class="attachment-name"><span title="${name}">${name}</span><small>${attachment_size(file.size)}</small></span>`;
     return `<div class="attachment-file">${file.content_type === "application/pdf"
       ? `<button type="button" class="attachment-file-main" ${preview_attributes}>${content}</button>`
-      : `<a class="attachment-file-main" href="${url}?download=1" download aria-label="下载 ${name}">${content}</a>`}
-      <a class="attachment-download" href="${url}?download=1" download aria-label="下载 ${name}" title="下载 ${name}">
+      : `<a class="attachment-file-main" ${download} download aria-label="下载 ${name}">${content}</a>`}
+      <a class="attachment-download" ${download} download aria-label="下载 ${name}" title="下载 ${name}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>
       </a></div>`;
   }).join("")}</div>`;
@@ -1523,6 +1588,10 @@ async function preview_attachment({ room_id, id }) {
   state.attachment_preview = preview;
   const file = await request_json(`/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(id)}`);
   if (state.attachment_preview !== preview) return;
+  if (state.remote_rooms) {
+    file.url = file.download_url = await relay_file_url(new URL(file.url, location.origin).pathname);
+    if (state.attachment_preview !== preview) return;
+  }
   preview.file = file;
   const is_pdf = file.content_type === "application/pdf";
   element("attachment-title").textContent = file.file_name;
@@ -1834,31 +1903,225 @@ async function relay_cipher(private_key, public_jwk) {
     material, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
 }
 
+/** Seal one request so that only the paired computer can read it and seal the answer. */
+async function seal_relay_request(machine, id, request) {
+  const encoder = new TextEncoder();
+  const ephemeral = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
+  const key = await relay_cipher(ephemeral.privateKey, machine.public_key);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const data = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: encoder.encode(id) }, key, encoder.encode(JSON.stringify(request)));
+  const { kty, crv, x, y } = await crypto.subtle.exportKey("jwk", ephemeral.publicKey);
+  return { key, envelope: { key: { kty, crv, x, y }, iv: bytes_to_base64(iv), data: bytes_to_base64(data) } };
+}
+
+/** Open the computer's answer to one request as { status, body }; answers over the relay connection are compressed. */
+async function open_relay_response(key, id, sealed) {
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: base64_to_bytes(sealed.iv), additionalData: new TextEncoder().encode(`${id}:response`) },
+    key, base64_to_bytes(sealed.data));
+  const bytes = sealed.encoding === "gzip" ? await new Response(new Blob([plain]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer() : plain;
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+/**
+ * Hand one request to the paired computer over its open relay connection. A computer that is not connected fails at once;
+ * one that does not answer within `wait` leaves the outcome unconfirmed, and nothing is resent automatically.
+ */
+async function relay_exchange(action, payload, wait) {
+  const machine = relay_machine;
+  if (!machine) throw new Error("没有可用的已配对电脑，请在电脑上运行 codiscuss 并连接网站");
+  const id = crypto.randomUUID();
+  const target = state.remote_rooms ? { target: "computer" } : {};
+  const { key, envelope } = await seal_relay_request(machine, id, { action, payload, ...target });
+  const result = await request_json(`/api/machines/${encodeURIComponent(machine.id)}/relay`, { id, envelope, ...(wait ? { wait } : {}) });
+  if (result.status === "done") return open_relay_response(key, id, result.response);
+  if (result.status === "offline") throw Object.assign(new Error(`电脑「${machine.name}」不在线，请确认它开机并运行 codiscuss`), { offline: true });
+  throw Object.assign(new Error(`结果待确认：电脑「${machine.name}」未在限时内答复，请稍后查看房间，确认是否已生效后再重试`),
+    { unconfirmed: true, launch: { stage: "unconfirmed" } });
+}
+
+/** Queue one operation for the paired computer on the website and poll for its answer; used when the relay is unavailable. */
+async function queued_relay_command(action, payload, limit) {
+  const machine = relay_machine, id = crypto.randomUUID();
+  const { key, envelope } = await seal_relay_request(machine, id, { action, payload });
+  const path = `/api/machines/${encodeURIComponent(machine.id)}/commands`;
+  await request_json(path, { id, envelope });
+  for (const started = Date.now(); Date.now() - started < limit;) {
+    await new Promise(resolve => setTimeout(resolve, RELAY_COMMAND_POLL_MS));
+    const command = await request_json(`${path}/${id}`);
+    if (command.status === "done") return open_relay_response(key, id, command.response);
+  }
+  throw Object.assign(new Error(`电脑「${machine.name}」未在限时内答复，请确认它开机并运行 codiscuss 后重试`), { launch: { stage: "unconfirmed" } });
+}
+
 /** Run one local-service operation on the paired computer and answer as the local bridge would. */
 async function relay_command(action, payload) {
   // The folder dialog would open on the computer where nobody sees it.
   if (action === "pick-directory") throw new Error("请直接输入电脑上的完整路径");
-  const machine = relay_machine, id = crypto.randomUUID(), encoder = new TextEncoder();
-  const ephemeral = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
-  const key = await relay_cipher(ephemeral.privateKey, machine.public_key);
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const data = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: encoder.encode(id) }, key, encoder.encode(JSON.stringify({ action, payload })));
-  const { kty, crv, x, y } = await crypto.subtle.exportKey("jwk", ephemeral.publicKey);
-  const path = `/api/machines/${encodeURIComponent(machine.id)}/commands`;
-  await request_json(path, { id, envelope: { key: { kty, crv, x, y }, iv: bytes_to_base64(iv), data: bytes_to_base64(data) } });
   const limit = payload === undefined ? RELAY_SETTINGS_WAIT_MS : ["room-models", "models", "api-check", "scheduler-check"].includes(action)
     ? MODEL_CATALOG_TIMEOUT_MS + RELAY_SETTINGS_WAIT_MS : RELAY_COMMAND_WAIT_MS;
-  for (const started = Date.now(); Date.now() - started < limit;) {
-    await new Promise(resolve => setTimeout(resolve, RELAY_COMMAND_POLL_MS));
-    const command = await request_json(`${path}/${id}`);
-    if (command.status !== "done") continue;
-    const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: base64_to_bytes(command.response.iv), additionalData: encoder.encode(`${id}:response`) },
-      key, base64_to_bytes(command.response.data));
-    const { status, body } = JSON.parse(new TextDecoder().decode(plain));
-    if (status >= 400) throw Object.assign(new Error(body.error || "本机操作失败"), { launch: body.launch });
-    return body;
+  let answer;
+  // A website without the relay, or a computer not connected to it (an older codiscuss), still serves the queue.
+  try { answer = await relay_exchange(action, payload, limit); }
+  catch (error) { if (state.remote_rooms || (error.status !== 404 && !error.offline)) throw error; }
+  const { status, body } = answer ?? await queued_relay_command(action, payload, limit);
+  if (status >= 400) throw Object.assign(new Error(body.error || "本机操作失败"), { launch: body.launch });
+  return body;
+}
+
+/** Read or write one room route on the paired computer's local website, as its owner, and answer as request_json would. */
+async function relay_room_request(path, payload) {
+  const answer = await relay_exchange("room-api", { method: payload === undefined ? "GET" : "POST", path, body: payload });
+  if (answer.status >= 400) throw Object.assign(new Error(answer.body?.error || "请求失败，请重试"), { preflight: answer.status < 500, status: answer.status });
+  return answer;
+}
+
+/** Read a whole file of the computer's rooms through the relay; larger files come in several parts. */
+async function relay_room_bytes(path) {
+  const parts = [];
+  let offset = 0, total = 0, type = "";
+  do {
+    const answer = await relay_exchange("room-api", { method: "GET", path, offset });
+    if (answer.status >= 400) throw Object.assign(new Error(answer.body?.error || "文件读取失败"), { status: answer.status });
+    if (typeof answer.body_base64 !== "string") throw new Error("文件读取失败");
+    const bytes = base64_to_bytes(answer.body_base64);
+    if (!bytes.length && offset < answer.total) throw new Error("文件读取失败");
+    parts.push(bytes);
+    offset += bytes.length;
+    ({ total, content_type: type } = answer);
+  } while (offset < total);
+  return new Blob(parts, { type });
+}
+
+/** Send a file to a room route on the computer in parts; the computer hands it to its website whole. */
+async function relay_upload(path, data) {
+  const bytes = new Uint8Array(data instanceof Blob ? await data.arrayBuffer() : data);
+  const id = crypto.randomUUID(), total = Math.max(1, Math.ceil(bytes.length / RELAY_UPLOAD_PART_BYTES));
+  let answer;
+  for (let index = 0; index < total; index++) {
+    const part = bytes.subarray(index * RELAY_UPLOAD_PART_BYTES, (index + 1) * RELAY_UPLOAD_PART_BYTES);
+    answer = await relay_exchange("room-upload", { id, path, index, total, size: bytes.length, data: bytes_to_base64(part) });
+    if (answer.status >= 400) throw Object.assign(new Error(answer.body?.error || "附件上传失败"), { status: answer.status });
   }
-  throw Object.assign(new Error(`电脑「${machine.name}」未在限时内答复，请确认它开机并运行 codiscuss 后重试`), { launch: { stage: "unconfirmed" } });
+  return answer.body;
+}
+
+/** Send file bytes to a room route on this website, or on the paired computer while its rooms are shown. */
+async function post_room_file(path, body, token) {
+  if (state.remote_rooms) return relay_upload(path, body);
+  const response = await fetch(path, { method: "POST",
+    headers: { "Content-Type": "application/octet-stream", ...(token ? { "X-Discussion-Token": token } : {}), ...admin_headers() }, body });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || "附件上传失败");
+  return result;
+}
+
+/** Read the bytes of a room file from this website, or from the paired computer while its rooms are shown. */
+async function read_room_file(path) {
+  if (state.remote_rooms) return new Uint8Array(await (await relay_room_bytes(path)).arrayBuffer());
+  const response = await fetch(path, { cache: "no-store" });
+  if (!response.ok) throw new Error("附件读取失败");
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+/** Read one file of the computer's rooms through the relay once, and keep it as an object URL for this page. */
+function relay_file_url(path) {
+  if (!relay_files.has(path)) {
+    relay_files.set(path, relay_room_bytes(path).then(blob => URL.createObjectURL(blob))
+      .catch(error => { relay_files.delete(path); throw error; }));
+  }
+  return relay_files.get(path);
+}
+
+/** Show images of the computer's rooms as they appear; one that cannot be read keeps its name. */
+function show_relay_images() {
+  for (const image of document.querySelectorAll("img[data-relay-src]:not([src]):not([data-relay-failed])")) {
+    relay_file_url(image.dataset.relaySrc).then(url => { image.src = url; }).catch(() => { image.dataset.relayFailed = "1"; });
+  }
+}
+
+/** Download a file of the computer's rooms through the relay instead of from this website. */
+function download_relay_file(event) {
+  const link = event.target.closest?.("a[data-relay-href]");
+  if (!link) return;
+  event.preventDefault();
+  event.stopPropagation();
+  run_action(async () => {
+    const anchor = document.createElement("a");
+    anchor.href = await relay_file_url(link.dataset.relayHref);
+    anchor.download = link.dataset.fileName || "";
+    anchor.click();
+  });
+}
+
+/** The website of the rooms shown: the computer's own local website while its rooms are shown, otherwise this one. */
+function room_site() {
+  return state.remote_rooms && state.remote_site ? state.remote_site : location.origin;
+}
+
+/** Learn the computer's local website, so room links and member instructions name it rather than this website. */
+async function load_remote_site() {
+  const answer = await relay_exchange("computer-site");
+  state.remote_site = answer.body?.site || "";
+}
+
+/** Whether this page can show the paired computer's rooms: signed in here, without the local service, with an online computer. */
+function room_source_available() {
+  return Boolean(relay_machine) && !local_connection && !state.admin.local;
+}
+
+/** The room list this browser chose last time. */
+function stored_room_source() {
+  try { return localStorage.getItem(ROOM_SOURCE_KEY) || ""; } catch { return ""; }
+}
+
+/** Show the rooms kept on the paired computer, or this website's own rooms; the list opens at its first room. */
+async function set_room_source(remote) {
+  if (remote && !room_source_available()) throw new Error("需要登录管理员，并有一台在线的已配对电脑");
+  if (remote) await load_remote_site();
+  state.remote_rooms = Boolean(remote);
+  try { remote ? localStorage.setItem(ROOM_SOURCE_KEY, "computer") : localStorage.removeItem(ROOM_SOURCE_KEY); } catch { /* Only this page remembers it. */ }
+  // The two lists share no rooms, so nothing read from one may be shown for the other.
+  room_views.clear();
+  message_histories.clear();
+  state.remote_online = null;
+  state.rooms = [];
+  set_folder_directory({});
+  live_updates.source?.close();
+  live_updates.source = null;
+  live_updates.connected = false;
+  live_updates.revisions = "";
+  start_live_updates({ refresh: false });
+  // Opening no room reads the chosen directory and then opens its first room.
+  await select_room(undefined);
+}
+
+/** The relay's change notices for the computer's rooms, shaped like the website's update stream. */
+function relay_event_source() {
+  const target = new EventTarget();
+  const emit = (type, data) => target.dispatchEvent(Object.assign(new Event(type), { data }));
+  const url = `${location.origin.replace(/^http/, "ws")}/api/machines/${encodeURIComponent(relay_machine.id)}/relay`;
+  const socket = new WebSocket(url, [RELAY_PROTOCOL, `a.${admin_token()}`]);
+  let ping;
+  target.readyState = 0;
+  socket.addEventListener("open", () => {
+    target.readyState = 1;
+    ping = setInterval(() => socket.readyState === WebSocket.OPEN && socket.send("ping"), RELAY_PING_MS);
+    emit("open");
+    emit("ready");
+  });
+  socket.addEventListener("message", event => {
+    let frame;
+    try { frame = JSON.parse(event.data); } catch { return; }
+    if (frame.type === "change") emit("change", JSON.stringify({ rooms: frame.rooms }));
+    if (frame.type === "presence") { state.remote_online = Boolean(frame.online); publish_view(); }
+  });
+  socket.addEventListener("close", () => {
+    clearInterval(ping);
+    target.readyState = 2;
+    emit("error");
+  });
+  target.close = () => { clearInterval(ping); target.readyState = 2; socket.close(); };
+  return target;
 }
 
 /** Read this browser's submitted requests; credentials never enter the presentation snapshot. */
@@ -2659,7 +2922,7 @@ function download_member_access(name) {
   const room = state.room, access = access_snapshot();
   const member = access.members.find(item => item.name === name);
   if (!access.can_manage || !member?.available) throw new Error("当前浏览器没有此成员可下载的私有配置");
-  download_private_json({ site: location.origin, room: room.id, member: name, token: member_credentials(room.id)[name].token }, `member-${room.id}-${name}.json`);
+  download_private_json({ site: room_site(), room: room.id, member: name, token: member_credentials(room.id)[name].token }, `member-${room.id}-${name}.json`);
   notify("info", `已下载 ${name} 的私有配置`);
 }
 
@@ -2668,7 +2931,7 @@ async function copy_member_access_text(name) {
   const room = state.room, access = access_snapshot();
   const member = access.members.find(item => item.name === name);
   if (!access.can_manage || !member?.available) throw new Error("当前浏览器没有此成员可复制的凭证");
-  await copy_text(JSON.stringify({ site: location.origin, room: room.id, member: name, token: member_credentials(room.id)[name].token }));
+  await copy_text(JSON.stringify({ site: room_site(), room: room.id, member: name, token: member_credentials(room.id)[name].token }));
   notify("info", `已复制 ${name} 的凭证文本（含 token）`);
 }
 
@@ -2679,14 +2942,14 @@ async function copy_member_join(name, with_credential = false) {
   if (!access.can_manage || !member) throw new Error("请使用房主浏览器选择本房间成员");
   if (with_credential && (member.access !== "manual" || !member.available)) throw new Error("当前浏览器没有此成员可复制的凭证");
   const params = new URLSearchParams({ participant: name, mode: "cli" });
-  const address = `${location.origin}/r/${room.id}?${params}`;
+  const address = `${room_site()}/r/${room.id}?${params}`;
   const skills = `请调用 discuss-participant${room.host === name ? " 和 discuss-host" : ""}。`;
   let instruction;
   if (member.access === "runner") instruction = `${skills}等待本机程序交付有效任务，按 task 中的 access_file 和 execution 凭据操作；自由协作的回答必须绑定本次有效 execution_id。不要另建定时任务；只处理本次有效执行，失效或撤销后停止提交。下载的持久成员私有文件不能替代自动执行凭据。`;
-  else if (with_credential) instruction = `${skills}凭证文本在下方：每条 codiscuss 命令都在同一命令内把它原样设为环境变量 DISCUSS_ACCESS（不回显；首条 room view 也要带，否则无法识别你），命令省略 --access-file；先执行 codiscuss room view ${room.id} --site ${location.origin} --as ${name}，随后立即执行 codiscuss member register ${room.id} --site ${location.origin} --as ${name} 完成注册（只需一次，会话 ID 由程序自动附带，不要自己填写），之后命令保持本站点、房间和身份。模型与思考强度在原软件中设置。${MANUAL_TRIGGER_INSTRUCTION}`;
-  else instruction = `${skills}使用属于你的私有文件 member-${room.id}-${name}.json，由用户提供它在本机的实际完整路径；先执行 codiscuss room view ${room.id} --site ${location.origin} --as ${name} --access-file "实际完整路径"；随后立即执行 codiscuss member register ${room.id} --site ${location.origin} --as ${name} --access-file "实际完整路径" 完成注册（只需一次，会话 ID 由程序自动附带，不要自己填写），之后命令保持本站点、房间和身份。不要读取或公开文件中的 token；若用户给的是凭证文本而非文件，把它设为环境变量 DISCUSS_ACCESS（不要回显）并省略 --access-file。模型与思考强度在原软件中设置。${MANUAL_TRIGGER_INSTRUCTION}`;
+  else if (with_credential) instruction = `${skills}凭证文本在下方：每条 codiscuss 命令都在同一命令内把它原样设为环境变量 DISCUSS_ACCESS（不回显；首条 room view 也要带，否则无法识别你），命令省略 --access-file；先执行 codiscuss room view ${room.id} --site ${room_site()} --as ${name}，随后立即执行 codiscuss member register ${room.id} --site ${room_site()} --as ${name} 完成注册（只需一次，会话 ID 由程序自动附带，不要自己填写），之后命令保持本站点、房间和身份。模型与思考强度在原软件中设置。${MANUAL_TRIGGER_INSTRUCTION}`;
+  else instruction = `${skills}使用属于你的私有文件 member-${room.id}-${name}.json，由用户提供它在本机的实际完整路径；先执行 codiscuss room view ${room.id} --site ${room_site()} --as ${name} --access-file "实际完整路径"；随后立即执行 codiscuss member register ${room.id} --site ${room_site()} --as ${name} --access-file "实际完整路径" 完成注册（只需一次，会话 ID 由程序自动附带，不要自己填写），之后命令保持本站点、房间和身份。不要读取或公开文件中的 token；若用户给的是凭证文本而非文件，把它设为环境变量 DISCUSS_ACCESS（不要回显）并省略 --access-file。模型与思考强度在原软件中设置。${MANUAL_TRIGGER_INSTRUCTION}`;
   const credential = with_credential ? `
-凭证文本（含 token，仅限你使用）：${JSON.stringify({ site: location.origin, room: room.id, member: name, token: member_credentials(room.id)[name].token })}` : "";
+凭证文本（含 token，仅限你使用）：${JSON.stringify({ site: room_site(), room: room.id, member: name, token: member_credentials(room.id)[name].token })}` : "";
   await copy_text(`请以 ${name} 身份参与房间。
 ${instruction}
 房间入口：${address}
@@ -2920,10 +3183,10 @@ function fork_snapshot(snapshot, message_id, room_id, now = new Date().toISOStri
 async function copy_fork_files(source_id, room_id, token, mapping) {
   let missing = 0;
   for (const [old_id, new_id] of Object.entries(mapping)) {
-    const original = await fetch(`/api/rooms/${encodeURIComponent(source_id)}/attachments/${encodeURIComponent(old_id)}/content`, { cache: "no-store" });
-    const response = original.ok && await fetch(`/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(new_id)}/import`,
-      { method: "POST", headers: { "X-Discussion-Token": token, ...admin_headers() }, body: await original.arrayBuffer() });
-    if (!response?.ok) missing++;
+    try {
+      const original = await read_room_file(`/api/rooms/${encodeURIComponent(source_id)}/attachments/${encodeURIComponent(old_id)}/content`);
+      await post_room_file(`/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(new_id)}/import`, original, token);
+    } catch { missing++; }
   }
   return missing;
 }
@@ -3070,7 +3333,7 @@ function bind_delegated_actions() {
     const button = event.target.closest("button");
     if (!button) return;
     if (button.dataset.detail) run_action(() => show_message(button.dataset.detail));
-    if (button.dataset.copyMessage) run_action(() => copy_text(`${location.origin}/r/${state.room.id}/messages/${button.dataset.copyMessage}`));
+    if (button.dataset.copyMessage) run_action(() => copy_text(`${room_site()}/r/${state.room.id}/messages/${button.dataset.copyMessage}`));
     if (button.dataset.reply) {
       state.reply_to = Number(button.dataset.reply);
       element("reply-label").textContent = `正在回复 #${state.reply_to} · ${display_name(button.dataset.author)}`;
@@ -3272,9 +3535,9 @@ function bind_controls() {
   const actions = { "new-room": open_create, "empty-create": open_create,
     "close-room-dialog": () => element("room-dialog").close(), "close-message-dialog": () => element("message-dialog").close(),
     "refresh": refresh_room, "cancel-reply": cancel_reply, "go-context": () => select_tab("discussion"),
-    "copy-reading": () => copy_text(`${location.origin}/r/${state.room.id}`),
+    "copy-reading": () => copy_text(`${room_site()}/r/${state.room.id}`),
     "backup-room": () => backup_room(),
-    "copy-reading-secondary": () => copy_text(`${location.origin}/r/${state.room.id}`),
+    "copy-reading-secondary": () => copy_text(`${room_site()}/r/${state.room.id}`),
     "copy-cli": () => copy_context(), "copy-background": copy_background };
   Object.entries(actions).forEach(([id, action]) => element(id).addEventListener("click", () => run_action(action)));
   const forms = { "message-form": send_message, "room-form": submit_room, "state-form": save_context };
@@ -3390,7 +3653,7 @@ function start_live_updates({ refresh = true } = {}) {
   if (document.hidden) return;
   live_updates.enabled = true;
   if (!live_updates.source && typeof EventSource !== "undefined") {
-    const source = new EventSource("/api/updates");
+    const source = state.remote_rooms ? relay_event_source() : new EventSource("/api/updates");
     live_updates.source = source;
     source.addEventListener("open", () => {
       if (live_updates.source !== source) return;
@@ -3458,7 +3721,9 @@ async function initialize() {
     if (name && field === "model") write_launch_model(name, event.target.value);
     else if (name) write_launch_field(name, field, event.target.type === "checkbox" ? event.target.checked : event.target.value);
   });
-  load_launch_settings();
+  const launch_settings = load_launch_settings();
+  document.addEventListener("click", download_relay_file, true);
+  new MutationObserver(() => { if (state.remote_rooms) show_relay_images(); }).observe(document.body, { childList: true, subtree: true });
   window.addEventListener("hashchange", () => {
     if (new URLSearchParams(location.hash.slice(1)).has("codiscuss-connect")) load_launch_settings();
   });
@@ -3470,6 +3735,11 @@ async function initialize() {
     if (button?.dataset.launchRoom) run_action(() => select_room(button.dataset.launchRoom));
   });
   load_admin_state();
+  // The computer's rooms are shown again only once its connection is known.
+  if (stored_room_source() === "computer") {
+    await launch_settings;
+    state.remote_rooms = room_source_available() && await load_remote_site().then(() => true, () => false);
+  }
   try {
     const result = await request_json("/api/rooms");
     state.rooms = result.rooms;
@@ -3498,13 +3768,14 @@ function view_snapshot() {
     .map((control) => [control.id, control.value]));
   const experts = Object.fromEntries(["new-expert-modes"].map((id) =>
     [id, element(id) ? read_expert_inputs(id) : {}]));
-  return { rooms: ordered_rooms(), folders: state.folders, folder_groups: ordered_folders(), room: state.room, archive_view: state.archive_view, directory_sort: state.directory_sort, messages: state.messages, total: state.message_total,
+  return { room_source: { available: room_source_available(), remote: state.remote_rooms, online: state.remote_online, machine: relay_machine?.name || "" },
+    room_site: room_site(), rooms: ordered_rooms(), folders: state.folders, folder_groups: ordered_folders(), room: state.room, archive_view: state.archive_view, directory_sort: state.directory_sort, messages: state.messages, total: state.message_total,
     archive_pending: [...state.archive_changes.keys()], import_progress: structuredClone(state.import_progress),
     directory_pending: [...state.directory_pending.keys()], folder_pending: [...state.folder_moves.keys()], creating_room: state.creating_room,
     connected: state.connected, reconnecting: state.reconnecting, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
     attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url })),
     upload_status: state.upload_status, sending_message: state.sending_message, sending_preview: state.sending_preview,
-    mention_only: state.mention_only, reply_to: state.reply_to,
+    mention_only: state.mention_only, reply_to: state.reply_to, editing_queued: state.editing_queued?.id ?? null,
     access: access_snapshot(), admin: admin_snapshot(),
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
     theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_chain_rounds: state.create_chain_rounds };
@@ -3582,9 +3853,9 @@ async function backup_room(room_id = state.room?.id) {
   publish_view();
   try {
     const snapshot = await request_json(`/api/rooms/${encodeURIComponent(room_id)}/backup`);
-    snapshot.source_url = `${location.origin}/r/${encodeURIComponent(room_id)}`;
+    snapshot.source_url = `${room_site()}/r/${encodeURIComponent(room_id)}`;
     await attach_local_members(snapshot, room_id);
-    await window.discuss_backup.download_room_backup(snapshot);
+    await window.discuss_backup.download_room_backup(snapshot, read_room_file);
     const task_messages = new Set((snapshot.tables.task_message_sources || []).map(row => row.message_id));
     const message_count = snapshot.tables.messages.filter(message => !task_messages.has(message.id)).length;
     show_toast(`已生成备份（${message_count} 条消息），请查看浏览器下载。`);
@@ -3606,9 +3877,9 @@ async function backup_rooms({ ids, name }) {
     for (const id of ids) {
       const snapshot = await request_json(`/api/rooms/${encodeURIComponent(id)}/backup`);
       await attach_local_members(snapshot, id);
-      snapshots.push({ ...snapshot, source_url: `${location.origin}/r/${encodeURIComponent(id)}` });
+      snapshots.push({ ...snapshot, source_url: `${room_site()}/r/${encodeURIComponent(id)}` });
     }
-    await window.discuss_backup.download_rooms_backup(snapshots, name);
+    await window.discuss_backup.download_rooms_backup(snapshots, name, read_room_file);
     notify("info", `已生成 ${snapshots.length} 个频道的备份，请查看浏览器下载。`);
   } catch (error) {
     notify("error", `导出失败，未生成备份：${error.message}`);
@@ -3654,9 +3925,10 @@ async function upload_imported_files(room_id, token, mapping, files) {
   let missing = 0;
   for (const [old_id, new_id] of Object.entries(mapping)) {
     const data = files.get(old_id);
-    const response = data && await fetch(`/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(new_id)}/import`,
-      { method: "POST", headers: { "X-Discussion-Token": token, ...admin_headers() }, body: data });
-    if (!response?.ok) missing++;
+    try {
+      if (!data) throw new Error("备份中没有该文件");
+      await post_room_file(`/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(new_id)}/import`, data, token);
+    } catch { missing++; }
   }
   return missing;
 }
@@ -3709,7 +3981,7 @@ async function execute_view_action(name, value) {
   if (!["refresh", "create"].includes(name)) state.navigation_version++;
   const event = { preventDefault() {} };
   const actions = { refresh: refresh_room, room: select_room, tab: select_tab,
-    archives: toggle_archives, backup: backup_room, backup_rooms, import_rooms, manage_channel, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
+    archives: toggle_archives, room_source: set_room_source, backup: backup_room, backup_rooms, import_rooms, manage_channel, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
     send: () => send_message(event), discard_sending: () => { state.sending_preview = null; }, choose_attachments: () => element("attachment-input").click(), remove_attachment, preview_attachment,
     create: (folder_id) => submit_room(event, folder_id),
     save_context: () => save_context(event), save_topic: () => save_topic(event),
@@ -3719,8 +3991,11 @@ async function execute_view_action(name, value) {
     save_launch_defaults, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
     load_room_configuration, save_room_configuration, interrupt_member, retry_delivery, retract_message, retract_latest, stop_room, rewind_and_send, fork_room, change_member, reorder_speakers, invite_member,
     adopt_recommendation, rate_decision,
+    queue_send: id => queue_request({ action: "send", id }), queue_delete: id => queue_request({ action: "delete", id }),
+    queue_reorder: ids => queue_request({ action: "reorder", ids }), queue_resume: () => queue_request({ action: "resume" }),
+    queue_toggle: enabled => queue_request({ action: "queueing", enabled }), queue_edit: edit_queued, queue_cancel_edit: cancel_queued_edit,
     busy: () => { throw new Error("上一个操作仍在处理中，请稍候；长时间无响应请刷新页面"); },
-    copy_reading: () => copy_text(`${location.origin}/r/${state.room.id}`), copy: copy_text };
+    copy_reading: () => copy_text(`${room_site()}/r/${state.room.id}`), copy: copy_text };
   try {
     await actions[name](value);
     return true;

@@ -11,7 +11,7 @@ import vm from "node:vm";
 
 import { build_pages } from "../scripts/build_pages.mjs";
 import worker from "../backend/worker.mjs";
-import updates_worker, { DiscussionUpdates } from "../backend/updates.mjs";
+import updates_worker, { DiscussionUpdates, MachineRelay } from "../backend/updates.mjs";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -1630,6 +1630,30 @@ test('Worker records what each delivery can do and how a voided one stopped', as
   assert.equal((await r.reserve('Codex')).status, 200);
 });
 
+test('Worker queued owner messages wait for an idle room, pause on stop and send now, like Python', async t => {
+  const f = await worker_fixture(t);
+  const r = await free_worker_room(f);
+  const texts = async () => (await f.request(`${r.path}/messages?after=0`)).body.messages.map(item => item.text);
+  assert.equal((await r.say('一', { queue: true })).status, 201);
+  const execution = (await r.reserve()).body;
+  const second = await r.say('二', { queue: true });
+  assert.deepEqual([second.status, second.body.queue.items.length], [201, 1]);
+  const third_id = (await r.say('三', { queue: true })).body.queued;
+  assert.deepEqual(await texts(), ['一']);
+  assert.equal((await r.answer(execution.id)).status, 201);
+  assert.deepEqual((await texts()).slice(-1), ['二']);
+  await r.reserve();
+  const stopped = (await f.request(`${r.path}/members/${await r.member_id('Claude')}/interrupt`, {}, r.owner)).body.queued_messages;
+  assert.deepEqual([stopped.paused, stopped.items.map(item => item.text)], [true, ['三']]);
+  assert.equal((await f.request(`${r.path}/queue`, { action: 'reorder', ids: [third_id, 0] }, r.owner)).status, 409);
+  assert.equal((await f.request(`${r.path}/queue`, { action: 'resume' }, r.owner)).status, 200);
+  assert.deepEqual((await texts()).slice(-1), ['三']);
+  await r.reserve();
+  const fourth_id = (await r.say('四', { queue: true })).body.queued;
+  const sent = (await f.request(`${r.path}/queue`, { action: 'send', id: fourth_id }, r.owner)).body;
+  assert.deepEqual([sent.items, (await texts()).slice(-1)], [[], ['四']]);
+});
+
 test('Worker owner stop ends every live and queued request of a free room', async t => {
   const f = await worker_fixture(t);
   const r = await free_worker_room(f, [{ name: 'Codex', adapter: 'codex_cli', token: 'stop-all-codex'.repeat(3) }]);
@@ -2217,11 +2241,12 @@ test('a page without the local service runs operations on the paired computer en
   assert.ok(start >= 0 && end > start, 'relay functions are present');
   const request_json = async (path, payload) => {
     const { status, body } = await admin_call(f, path, payload, session);
-    if (status >= 400) throw new Error(body.error);
+    if (status >= 400) throw Object.assign(new Error(body.error), { status });
     return body;
   };
   const relay_command = vm.runInNewContext([`const MODEL_CATALOG_TIMEOUT_MS = 35000;`, constants, source.slice(start, end), 'relay_command'].join('\n'),
-    { crypto, TextEncoder, TextDecoder, btoa, atob, setTimeout, Uint8Array, JSON, Date, Object, Error, Promise, request_json, relay_machine: machine });
+    { crypto, TextEncoder, TextDecoder, btoa, atob, setTimeout, Uint8Array, JSON, Date, Object, Error, Promise, request_json, relay_machine: machine,
+      state: { remote_rooms: false } });
 
   const ran = [];
   const run = async request => {
@@ -2285,4 +2310,102 @@ test('Worker relays encrypted commands only between the administrator and the pa
   await admin_call(f, commands, { ...command, id: 'command-0000000002' }, session);
   f.sql.prepare('UPDATE machine_commands SET created_at=0').run();
   assert.deepEqual((await machine_call(claim, { wait: 0 })).body, { commands: [] }, 'an expired command is never run');
+});
+
+/** A Durable Object state with hibernatable sockets, enough to drive the relay without the Cloudflare runtime. */
+function relay_context() {
+  const sockets = [];
+  const ctx = {
+    acceptWebSocket: (socket, tags) => { socket.tags = tags; sockets.push(socket); },
+    getWebSockets: tag => sockets.filter(socket => socket.tags.includes(tag) && socket.readyState !== 3),
+  };
+  const socket = () => {
+    const sent = [];
+    let attachment = null;
+    return { sent, readyState: 1, send: text => sent.push(JSON.parse(text)), close() { this.readyState = 3; },
+      serializeAttachment: value => { attachment = value; }, deserializeAttachment: () => attachment };
+  };
+  return { ctx, socket };
+}
+
+test('the machine relay hands requests to the computer, answers once, and never retries on its own', async t => {
+  const { ctx, socket } = relay_context();
+  const relay = new MachineRelay(ctx);
+  const device = socket();
+  relay.accept(device, 'device');
+  assert.deepEqual(device.sent.pop(), { type: 'presence', online: false });
+  assert.deepEqual(await relay.relay({ id: 'request-1', envelope: { data: 'x' } }), { id: 'request-1', status: 'offline' });
+
+  const machine = socket();
+  relay.accept(machine, 'machine');
+  assert.deepEqual(device.sent.pop(), { type: 'presence', online: true });
+  const waiting = relay.relay({ id: 'request-2', envelope: { data: 'secret' } });
+  assert.deepEqual(machine.sent.pop(), { type: 'request', id: 'request-2', envelope: { data: 'secret' } });
+  assert.deepEqual(await relay.relay({ id: 'request-2', envelope: {} }), { id: 'request-2', status: 'duplicate' });
+  relay.webSocketMessage(device, JSON.stringify({ type: 'response', id: 'request-2', envelope: { data: 'forged' } }));
+  relay.webSocketMessage(machine, JSON.stringify({ type: 'response', id: 'request-2', envelope: { data: 'answer' } }));
+  assert.deepEqual(await waiting, { id: 'request-2', status: 'done', response: { data: 'answer' } }, 'only the computer can answer');
+
+  relay.webSocketMessage(machine, JSON.stringify({ type: 'event', rooms: ['room-a'] }));
+  assert.deepEqual(device.sent.pop(), { type: 'change', rooms: ['room-a'] });
+
+  const left = relay.relay({ id: 'request-3', envelope: {} });
+  machine.close();
+  relay.webSocketClose(machine);
+  assert.deepEqual(await left, { id: 'request-3', status: 'offline' }, 'a leaving computer fails its requests at once');
+  assert.deepEqual(device.sent.pop(), { type: 'presence', online: false });
+
+  const again = socket();
+  relay.accept(again, 'machine');
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const slow = relay.relay({ id: 'request-4', envelope: {} });
+  t.mock.timers.tick(9000);
+  assert.deepEqual(await slow, { id: 'request-4', status: 'unknown' }, 'a late answer leaves the outcome unconfirmed');
+  relay.webSocketMessage(again, JSON.stringify({ type: 'response', id: 'request-4', envelope: {} }));
+  assert.equal(relay.pending.size, 0);
+  // A long local operation asks to wait longer, within a bound.
+  const long = relay.relay({ id: 'request-5', envelope: {}, wait: 60000 });
+  t.mock.timers.tick(59000);
+  assert.equal(relay.pending.size, 1, 'a requested longer wait is kept');
+  t.mock.timers.tick(1000);
+  assert.deepEqual(await long, { id: 'request-5', status: 'unknown' });
+  const bounded = relay.relay({ id: 'request-6', envelope: {}, wait: 3600000 });
+  t.mock.timers.tick(80000);
+  assert.deepEqual(await bounded, { id: 'request-6', status: 'unknown' }, 'no device holds the relay longer than the bound');
+});
+
+test('Worker hands relay sockets and requests to the computer relay only after checking who sends them', async t => {
+  const f = await admin_fixture(t);
+  const machine_id = crypto.randomUUID().replaceAll('-', ''), machine_token = 'cd'.repeat(32);
+  const session = (await f.register()).body.token;
+  const path = `/api/machines/${machine_id}/relay`;
+  const upgrade = credential => worker.fetch(new Request(`https://discussion.test${path}`, {
+    headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': ['codiscuss-relay', credential].filter(Boolean).join(', ') } }), f.env);
+  assert.equal((await upgrade(`m.${machine_token}`)).status, 404, 'without the relay binding the D1 queue stays in use');
+
+  const seen = [];
+  f.env.RELAY = { idFromName: name => name, get: id => ({ fetch: async (input, init) => {
+    const request = new Request(input, init);
+    seen.push({ id, role: request.headers.get('X-Relay-Role'), body: request.method === 'POST' ? await request.json() : null });
+    return request.method === 'POST' ? Response.json({ id: 'relay-request-000001', status: 'unknown' }) : new Response(null, { status: 204 });
+  } }) };
+  await admin_call(f, '/api/machines', { id: machine_id, name: '工作站', token: machine_token }, session);
+  const key = { kty: 'EC', crv: 'P-256', x: 'A'.repeat(43), y: 'B'.repeat(43) };
+  const request = { id: 'relay-request-000001', envelope: { key, iv: 'C'.repeat(16), data: 'ZGF0YQ==' } };
+  assert.equal((await upgrade(`m.${'ef'.repeat(32)}`)).status, 401, 'a wrong computer token is refused');
+  assert.equal((await upgrade(`a.${'ef'.repeat(32)}`)).status, 401, 'a device needs a valid administrator session');
+  assert.equal((await upgrade('')).status, 401);
+  assert.equal((await admin_call(f, path, request)).status, 401);
+  assert.equal((await admin_call(f, path, request, session)).status, 409, 'a computer without a published key cannot take requests');
+  assert.equal(seen.length, 0, 'nothing reached the relay before authentication');
+
+  const sync = await worker.fetch(new Request(`https://discussion.test/api/machines/${machine_id}/sync`, { method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Machine-Token': machine_token }, body: JSON.stringify({ projects: [], clients: {}, public_key: key }) }), f.env);
+  assert.equal(sync.status, 200);
+  assert.equal((await upgrade(`m.${machine_token}`)).status, 204);
+  assert.equal((await upgrade(`a.${session}`)).status, 204);
+  assert.equal((await admin_call(f, path, { ...request, envelope: { ...request.envelope, data: 'not base64!' } }, session)).status, 400);
+  assert.deepEqual((await admin_call(f, path, request, session)).body, { id: 'relay-request-000001', status: 'unknown' });
+  assert.deepEqual(seen.map(item => [item.id, item.role]), [[machine_id, 'machine'], [machine_id, 'device'], [machine_id, 'request']]);
+  assert.deepEqual(seen[2].body, request);
 });

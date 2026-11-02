@@ -415,6 +415,31 @@ class SingleMemberTests(FreeRoomTests):
         execution = self.reserve()[1]
         self.assertEqual(len(execution["requests"]), 2)
 
+    def test_queued_messages_wait_for_idle_room_pause_on_stop_and_send_now(self):
+        """Owner messages sent while a member works wait in order; the stop pauses them; send-now and resume post them once."""
+        texts = lambda: [text for _, text, _ in self.messages()]
+        self.assertEqual(self.say("一", queue=True)[0], 201)
+        self.assertEqual(texts(), ["一"])
+        execution = self.reserve()[1]
+        status, second = self.say("二", queue=True)
+        self.assertEqual((status, len(second["queue"]["items"])), (201, 1))
+        third_id = self.say("三", queue=True)[1]["queued"]
+        self.assertEqual(texts(), ["一"])
+        self.assertEqual(self.answer(execution["id"], "答一")[0], 201)
+        self.assertEqual(texts(), ["一", "答一", "二"])
+        member_id = self.request(self.path)[1]["free"]["members"][0]["id"]
+        self.reserve()
+        queue = self.request(f"{self.path}/members/{member_id}/interrupt", {}, self.owner)[1]["queued_messages"]
+        self.assertEqual((queue["paused"], [item["text"] for item in queue["items"]]), (True, ["三"]))
+        self.assertEqual(texts(), ["一", "答一", "二"])
+        self.assertEqual(self.request(f"{self.path}/queue", {"action": "reorder", "ids": [third_id, 0]}, self.owner)[0], 409)
+        self.assertEqual(self.request(f"{self.path}/queue", {"action": "resume"}, self.owner)[0], 200)
+        self.assertEqual(texts(), ["一", "答一", "二", "三"])
+        self.reserve()
+        fourth_id = self.say("四", queue=True)[1]["queued"]
+        queue = self.request(f"{self.path}/queue", {"action": "send", "id": fourth_id}, self.owner)[1]
+        self.assertEqual((queue["items"], texts()), ([], ["一", "答一", "二", "三", "四"]))
+
     def test_failure_affects_only_its_requests_and_release_requeues(self):
         """A failed execution keeps the room usable; a proven non-delivery returns requests to the queue."""
         self.say("一")

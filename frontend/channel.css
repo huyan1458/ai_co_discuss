@@ -251,6 +251,8 @@ html[data-theme^="channel"] .pb-action.pb-action-add { margin-top: 8px; border-s
 .progress-board > .pb-actions:has(.pb-action-block) { flex-wrap: wrap; }
 html[data-theme^="channel"] .pb-action:hover { border-color: var(--ui-border-accented); background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); }
 html[data-theme^="channel"] .pb-action [class*="icon"] { width: 14px; height: 14px; }
+html[data-theme^="channel"] .pb-action.pb-action-danger { border-color: color-mix(in srgb, var(--ui-error) 45%, transparent); background: color-mix(in srgb, var(--ui-error) 10%, transparent); color: var(--ui-error); }
+html[data-theme^="channel"] .pb-action.pb-action-danger:hover { border-color: var(--ui-error); background: color-mix(in srgb, var(--ui-error) 18%, transparent); color: var(--ui-error); }
 html[data-theme^="channel"] .pb-restart { border-color: color-mix(in srgb, var(--channel-accent) 45%, transparent); background: color-mix(in srgb, var(--channel-accent) 14%, transparent); color: var(--channel-accent); }
 html[data-theme^="channel"] .pb-restart:hover { background: color-mix(in srgb, var(--channel-accent) 24%, transparent); color: var(--channel-accent); }
 html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f05252 45%, transparent); background: color-mix(in srgb, #f05252 12%, transparent); color: #f05252; }
@@ -1045,7 +1047,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   --channel-shadow-bar: 0 1px 2px #0014320f;
 }
 :root[data-effects="reduced"] * { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
-:root[data-theme^="channel"] :is(.channel-search-input input, .channel-surface-button:not(:hover), .pb-action:not(:hover)) { border-color: var(--channel-edge-control); }
+:root[data-theme^="channel"] :is(.channel-search-input input, .channel-surface-button:not(:hover), .pb-action:not(:hover, .pb-action-danger)) { border-color: var(--channel-edge-control); }
 :root[data-theme^="channel"] :is(.channel-search-input input, .channel-surface-button, .pb-action:not(:disabled)) { box-shadow: var(--channel-shadow-control); }
 :root[data-theme^="channel"] :is(.channel-message:not(:hover), .channel-composer, .turn-panel, .summary-form) { border-color: var(--channel-edge-panel); }
 :root[data-theme^="channel"] :is(.channel-message, .turn-panel, .summary-form) { box-shadow: var(--channel-shadow-panel); }

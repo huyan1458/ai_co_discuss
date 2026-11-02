@@ -35,10 +35,10 @@ npx wrangler d1 execute DB --remote --config .wrangler/deploy/wrangler.jsonc --f
 
 整份迁移在 D1 上的原子性尚未实测，失败时保留备份并停止，不继续部署。成功后两个脚本均可重复执行。
 
-**第 3 阶段**（部署后推送，已构建过不再重复构建）：
+**第 3 阶段**（部署后推送，已构建过不再重复构建）。私有配置绑定了 `RELAY` 时，先部署中转 Worker，再部署网站；没有绑定时只部署网站：
 
 ```bash
-npx wrangler pages deploy --branch main --commit-dirty=true --cwd .wrangler/deploy 2>&1 | tail -2 && git push 2>&1 | tail -1
+(grep -q '"RELAY"' .wrangler/deploy/wrangler.jsonc && npx wrangler deploy --config deploy/updates.wrangler.jsonc 2>&1 | tail -2 || true) && npx wrangler pages deploy --branch main --commit-dirty=true --cwd .wrangler/deploy 2>&1 | tail -2 && git push 2>&1 | tail -1
 ```
 
 若部署报 `.wrangler/deploy/config.json` 相关错误，删除该文件重试一次。

@@ -9,7 +9,17 @@ const archived_count = computed(() => view.value.rooms.filter((room) => room.arc
 const folders = computed(() => (view.value.folder_groups || []).map((folder) => ({ ...folder,
   rooms: rooms.value.filter((room) => (room.folder_id || "") === folder.id) })));
 const manual_order = computed(() => view.value.directory_sort !== "recent");
+const source = computed(() => view.value.room_source || {});
+// Rooms kept on the paired computer are listed instead of this website's own while that list is chosen.
+const source_actions = computed(() => source.value.available || source.value.remote ? [
+  { label: "房间来源", type: "label" },
+  { label: "本网站的房间", icon: source.value.remote ? undefined : "i-lucide-check", onSelect: () => source.value.remote && act("room_source", false) },
+  { label: `电脑「${source.value.machine || "已配对电脑"}」上的房间`, icon: source.value.remote ? "i-lucide-check" : undefined,
+    disabled: !source.value.available, onSelect: () => !source.value.remote && act("room_source", true) },
+  { type: "separator" },
+] : []);
 const directory_actions = computed(() => [
+  ...source_actions.value,
   { label: "对话排列方式", type: "label" },
   ...[{ value: "manual", label: "手动排序" }, { value: "recent", label: "最近发言" }].map((item) => ({
     label: item.label, icon: (view.value.directory_sort || "manual") === item.value ? "i-lucide-check" : undefined,
@@ -89,7 +99,7 @@ function actions(room, index, folder_id, folder_room_count) {
   return [[
     { label: "重命名", icon: "i-lucide-pencil", disabled: view.value.directory_pending.includes(`rename:${room.id}`), onSelect: () => emit("manage", { room, action: "rename" }) },
     ...(current ? [{ label: "编辑议题", icon: "i-lucide-pencil", onSelect: () => emit("manage", { room, action: "edit" }) }] : []),
-    { label: "复制阅读入口", icon: "i-lucide-link", onSelect: () => act("copy", `${location.origin}/r/${encodeURIComponent(room.id)}`) },
+    { label: "复制阅读入口", icon: "i-lucide-link", onSelect: () => act("copy", `${view.value.room_site}/r/${encodeURIComponent(room.id)}`) },
     { label: "导出对话", icon: "i-lucide-upload", disabled: view.value.backup_pending || Boolean(pending.value), onSelect: () => act("backup", room.id) },
   ], ...(current ? [[{ label: "刷新消息", icon: "i-lucide-refresh-cw", onSelect: () => act("refresh") }]] : []), [
     { label: "移至文件夹", icon: "i-lucide-folder-input", disabled: Boolean(pending.value) || (!room.folder_id && !view.value.folders?.length), children: [
@@ -111,7 +121,7 @@ function actions(room, index, folder_id, folder_room_count) {
   <div class="channel-directory-manager">
     <UButton label="新建对话" icon="i-lucide-plus" color="neutral" class="channel-primary-button channel-new-conversation" :disabled="view.directory_pending.includes('create-room')" @click="emit('create', null)" />
     <div class="channel-directory-heading">
-      <button type="button" class="channel-section-toggle" :aria-expanded="rooms_open" @click="rooms_open = !rooms_open"><UIcon :name="rooms_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />协作房间</button>
+      <button type="button" class="channel-section-toggle" :aria-expanded="rooms_open" @click="rooms_open = !rooms_open"><UIcon :name="rooms_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />{{ source.remote ? (source.online === false ? '电脑上的房间（电脑离线）' : '电脑上的房间') : '协作房间' }}</button>
       <div class="channel-directory-actions">
         <UTooltip text="新建文件夹"><UButton icon="i-lucide-plus" color="neutral" variant="ghost" size="xs" aria-label="新建文件夹" :disabled="view.directory_pending.includes('create-folder')" @click="emit('create-folder')" /></UTooltip>
         <UDropdownMenu :items="directory_actions" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu channel-directory-menu' }"><UButton icon="i-lucide-ellipsis" aria-label="房间目录选项" title="排列、导入与导出" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>

@@ -57,9 +57,16 @@ codiscuss local connect https://你的站点
 
 电脑离线，或 codiscuss 版本较旧时，其他设备只能选择电脑上保存的项目建房，建房请求会等电脑上线后再执行。
 
+### 外出时打开电脑上的房间
+
+网站部署了中转（见[部署指南](deployment.md)“中转与实时推送”）时，在手机上登录管理员后，打开目录右上角的“…”菜单，在“房间来源”中选择“电脑上的房间”，就能读写这台电脑本地网站里的房间：发消息、上传附件、管理成员、导出备份，更新实时推送。对话仍只保存在电脑上，网站只转交加密内容。
+
+- 电脑关机或 codiscuss 未运行时无法打开，目录标题会提示电脑离线；本网站的房间不受影响。
+- 电脑没有及时答复时，页面提示“结果待确认”，不会自动重发；请先查看房间确认是否已生效。
+
 ### 外出时经 Cloudflare Tunnel 打开本机网站
 
-对话只保存在这台电脑上，外出时用手机经 [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) 打开本机网站；电脑关机或 codiscuss 未运行时无法访问。
+可选做法，需要一个托管在 Cloudflare 的自有域名，并开通 Zero Trust 免费版。对话只保存在这台电脑上，外出时用手机经 [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) 打开本机网站；电脑关机或 codiscuss 未运行时无法访问。
 
 1. 开启远程入口。它只监听 `127.0.0.1`，与本机网站共用数据和实时推送，但访问者必须登录管理员，也不提供本机启动入口：
 

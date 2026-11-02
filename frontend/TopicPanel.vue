@@ -9,7 +9,7 @@ const room = computed(() => view.value.room);
 const turn = computed(() => room.value?.current_turn);
 const active_turn = computed(() => turn.value && ["open", "pending", "notified"].includes(turn.value.status));
 const paused = computed(() => room.value?.session?.status === "paused");
-const base = computed(() => `${location.origin}/r/${room.value?.id}`);
+const base = computed(() => `${view.value.room_site}/r/${room.value?.id}`);
 const execution = computed(() => room.value?.free?.executions?.[0]);
 const repair = computed(() => view.value.launch.repair?.room_id === room.value?.id ? view.value.launch.repair : null);
 const EXECUTION_LABELS = { dispatched: "唤醒中", started: "执行中", completed: "已完成", failed: "失败" };

@@ -36,6 +36,7 @@ from .free_room import ADAPTER_VALUE, continue_chain, execution_timeline, group_
 from .free_room import review_capability, review_roster, checked_review_plan, save_review_plan, check_review_retry
 from .free_room import review_ready, advance_review, late_answer
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, is_ai, is_participant
+from .message_queue import drain as drain_queue, enqueue, queue_action, queue_view, should_queue
 from .room_import import import_room, imported_attachment
 from .runtime import (begin_write, limit_values, owner_proxy_token, require_owner, token_hash,
                      enforce_session_limits, room_limits_view, session_limits_view)
@@ -809,7 +810,7 @@ def delete_room_records(connection, room_id):
     """Remove a room's dependent records in the caller's transaction."""
     connection.execute("DELETE FROM task_message_sources WHERE session_id IN (SELECT id FROM discussion_sessions WHERE room_id=?)", (room_id,))
     connection.execute("DELETE FROM discussion_sessions WHERE room_id=?", (room_id,))
-    for table in ("member_recommendations", "free_queue", "speaking_orders", "member_requests", "member_descriptions", "member_labels", "execution_notes", "execution_segments", "execution_capabilities", "late_answers", "member_executions", "member_capabilities", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "free_handoffs", "free_round_limits", "free_chain_holds",
+    for table in ("member_recommendations", "free_queue", "queued_messages", "queued_message_pauses", "speaking_orders", "member_requests", "member_descriptions", "member_labels", "execution_notes", "execution_segments", "execution_capabilities", "late_answers", "member_executions", "member_capabilities", "member_sessions", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "free_handoffs", "free_round_limits", "free_chain_holds",
                   "scheduler_decisions", "scheduler_routing", "discussion_conclusions", "discussion_sessions"):
         if table == "scheduler_decisions":
             for child in ("scheduler_feedback", "scheduler_decision_context", "scheduler_decision_inputs"):
@@ -1066,6 +1067,8 @@ def append_free_message(connection, room, payload, actor):
         raise ValueError("房间已存档；恢复后才能继续协作")
     check_message_references(connection, room_id, expected)
     check_message_attachments(connection, room_id, submitted_by, identifiers)
+    if actor == "用户" and should_queue(connection, room_id, payload):
+        return {**enqueue(connection, room_id, payload), "queue": queue_view(connection, room_id)}
     if actor != "用户":
         check_answer(connection, room_id, actor, payload)
     review_plan = checked_review_plan(connection, room_id, actor, payload)
@@ -1158,6 +1161,22 @@ def append_message(connection, room_id, payload, actor):
     message_values(payload)
     begin_write(connection)
     return append_free_message(connection, require_room(connection, room_id), payload, actor)
+
+
+def post_queued(connection, room_id, payload, actor):
+    """Post a queued owner message through the normal path; the queue already checked that the room is not archived."""
+    message_values(payload)
+    return append_free_message(connection, {"id": room_id, "archived": False}, payload, actor)
+
+
+def check_queued(payload):
+    """Validate an edited queued message as the composer's message would be."""
+    message_values(payload)
+
+
+def drain_room_queue(connection, room_id):
+    """Post queued owner messages that may go now; called after writes that can leave the room idle."""
+    drain_queue(connection, room_id, post_queued)
 
 
 def rate_scheduler_decision(connection, room_id, decision_id, token, payload):
@@ -1583,7 +1602,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         params = {key: values[-1] for key, values in parse_qs(parsed.query).items()}
         parts = parsed.path.strip("/").split("/")
         text_mode = parts[0] == "r"
+        self.bridged = False
         try:
+            self.bridged = self.relay_bridge(parts)
             if parts[:2] == ["api", "local"]:
                 return self.handle_local_launch(parts, method)
             if parts == ["api", "updates"] and method == "GET":
@@ -1798,9 +1819,29 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Whether the request is from the administrator: any visitor of a loopback-only site, else a valid session."""
         return self.server.local_site or session_valid(connection, self.admin_token())
 
+    def relay_bridge(self, parts):
+        """Whether this request comes from the runner relaying a paired device; a bad or misplaced bridge credential fails.
+
+        The runner holds one bridge token per paired website and this site keeps only its hash. A bridged request acts
+        as the administrator, so it is accepted only from this computer's loopback, on a loopback-only site, and only
+        for room, folder and revision routes.
+        """
+        credential = self.headers.get("X-CoDiscuss-Bridge")
+        if credential is None:
+            return False
+        path = self.server.connections_file
+        settings = json.loads(path.read_text(encoding="utf-8")) if path and path.exists() else {}
+        expected = settings.get("sites", {}).get(self.headers.get("X-CoDiscuss-Bridge-Site", ""), {}).get("bridge_hash")
+        if (not self.server.local_site or self.client_address[0] != "127.0.0.1" or not isinstance(expected, str)
+                or not re.fullmatch(r"[a-f0-9]{64}", credential) or not hmac.compare_digest(token_hash(credential), expected)):
+            raise PermissionError("本机中转凭据无效，请在电脑上重新连接网站")
+        if parts[:1] != ["api"] or parts[1:2] not in (["rooms"], ["folders"], ["revisions"]):
+            raise PermissionError("本机中转不允许访问该地址")
+        return True
+
     def admin_as_owner(self, connection, room_id):
-        """Let a logged-in administrator without this room's credential write as its owner; local visitors still need it."""
-        if self.headers.get("X-Discussion-Token") or not session_valid(connection, self.admin_token()):
+        """Let a logged-in administrator, or a relayed device, write as owner without the room credential; local visitors still need it."""
+        if self.headers.get("X-Discussion-Token") or not (self.bridged or session_valid(connection, self.admin_token())):
             return
         row = connection.execute("SELECT control_hash FROM room_modes WHERE room_id=?", (room_id,)).fetchone()
         if row and row[0]:
@@ -1939,6 +1980,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 return self.respond(session_room(connection, room_id))
             if method == "POST":
                 result = discussion_action(connection, room_id, token, self.read_payload(), require_room(connection, room_id))
+                drain_room_queue(connection, room_id)
                 connection.commit()
                 return self.respond(result)
             raise LookupError("地址不存在")
@@ -1992,6 +2034,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.handle_host_api(connection, parts, params, method)
         if len(parts) == 6 and parts[3] == "messages" and parts[5] == "retract" and method == "POST":
             result = retract_message(connection, room_id, int(parts[4]), token)
+            drain_room_queue(connection, room_id)
             connection.commit()
             return self.respond(result)
         if parts[3:] == ["rewind"]:
@@ -1999,6 +2042,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 require_owner(connection, room_id, token)
                 return self.respond(rewind_plan(connection, room_id, int(params.get("message_id", 0))))
             result = rewind_room(connection, room_id, token, self.read_payload())
+            drain_room_queue(connection, room_id)
             connection.commit()
             return self.respond(result)
         if parts[3:] == ["reviews", "roster"] and method == "GET":
@@ -2012,6 +2056,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.respond(review_ready(connection, room_id, int(parts[4]), token))
         if parts[3:] == ["reviews", "advance"] and method == "POST":
             result = advance_review(connection, room_id, token, self.read_payload())
+            connection.commit()
+            return self.respond(result)
+        if parts[3:] == ["queue"] and method == "POST":
+            result = queue_action(connection, room_id, token, self.read_payload(), post_queued, check_queued)
             connection.commit()
             return self.respond(result)
         if parts[3:4] in (["inbox"], ["executions"], ["members"], ["suggestions"], ["recommendations"], ["stop"]):
@@ -2088,6 +2136,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 return self.respond(query_messages(connection, room_id, params, token))
             payload = self.read_payload()
             result = append_message(connection, room_id, payload, free_actor)
+            drain_room_queue(connection, room_id)
             connection.commit()
             return self.respond(result, 200 if result["duplicate"] else 201)
         if len(parts) == 5 and parts[3] == "messages" and method == "GET":
@@ -2220,6 +2269,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = stop_room(connection, room_id, token)
         else:
             raise LookupError("地址不存在")
+        drain_room_queue(connection, room_id)
         connection.commit()
         return self.respond(result)
 

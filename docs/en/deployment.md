@@ -137,9 +137,14 @@ Upgrade the site and every connected runner together; the old delivery-name prot
 
 The unused `execution_deliveries` table is retained without migration. It was never deployed online and contains only temporary test data. Retaining it does not provide mixed-version compatibility. Local Python sites also require executions to end before updating the site and runner together.
 
-### Live Updates (Optional)
+### Relay and Live Updates (Optional)
 
-Without this, the page polls every 12 seconds. For live updates across instances, deploy the notification Worker and bind it in your private configuration:
+`deploy/updates.wrangler.jsonc` is a separate Worker with two Durable Objects, both within Cloudflare's free tier:
+
+- `MachineRelay` (relay): lets a phone or other device read and write the rooms on your paired computer, and speeds up remote local operations. Without it, other devices only work with this website's rooms, and local operations are queued through D1, which is slower.
+- `DiscussionUpdates` (live updates): live updates across instances for this website's rooms. Without it, the page checks every 12 seconds and reloads only when something changed.
+
+Deploy the Worker, bind what you need in your private configuration, then redeploy Pages:
 
 ```sh
 npx wrangler deploy --config deploy/updates.wrangler.jsonc
@@ -148,12 +153,13 @@ npx wrangler deploy --config deploy/updates.wrangler.jsonc
 ```json
 "durable_objects": {
   "bindings": [
+    { "name": "RELAY", "class_name": "MachineRelay", "script_name": "ai-co-discuss-updates" },
     { "name": "UPDATES", "class_name": "DiscussionUpdates", "script_name": "ai-co-discuss-updates" }
   ]
 }
 ```
 
-Then redeploy Pages. Notifications only say that data changed; they carry no discussion content.
+Deploy the Worker before Pages; in the other order the Pages deployment fails because the bound script does not exist. The relay only carries ciphertext; notifications only say that data changed.
 
 ## Troubleshooting
 

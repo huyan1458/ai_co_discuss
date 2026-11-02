@@ -564,7 +564,7 @@ export async function run_service(home, output = () => {}) {
   service.push = true;
   const stop_path = join(home, 'stop.request');
   if (existsSync(stop_path)) unlinkSync(stop_path);
-  let stopped = false, syncing = null, relaying = null;
+  let stopped = false, syncing = null, relaying = null, channels = null;
   const relay_stop = new AbortController();
   const stop = () => { stopped = true; relay_stop.abort(); };
   process.once('SIGINT', stop);
@@ -575,6 +575,8 @@ export async function run_service(home, output = () => {}) {
       updated_at: Math.floor(Date.now() / 1000), rooms: [] });
     // Loaded lazily: the relay runs launches, and the launch module itself depends on this one.
     const { relay_commands, sync_remote_launches } = await import('./remote_launch.mjs');
+    const { start_relay_channels } = await import('./relay_channel.mjs');
+    channels = start_relay_channels(home, { log: log_line, signal: relay_stop.signal });
     let synced_at = 0, swept_at = 0, relay_failed_at = 0;
     // A long-poll of its own: the site answers as soon as another device relays a command, and the next claim starts
     // the moment one returns, so a device sending several commands never waits on the loop; a failure retries after the sync interval.
@@ -582,7 +584,8 @@ export async function run_service(home, output = () => {}) {
     const start_relay = () => {
       let failed = false;
       const started = Date.now();
-      relaying = relay_commands(home, { log: log_line, signal: relay_stop.signal, on_failure: () => { failed = true; relay_failed_at = Date.now(); } })
+      relaying = relay_commands(home, { log: log_line, signal: relay_stop.signal, skip: channels.connected,
+        on_failure: () => { failed = true; relay_failed_at = Date.now(); } })
         .catch(error => { failed = true; relay_failed_at = Date.now(); log_line(`远程命令检查失败：${error.message}`); })
         .finally(() => {
           relaying = null;
@@ -603,6 +606,7 @@ export async function run_service(home, output = () => {}) {
       // Runs beside the room ticks: a slow remote site must not hold up local rooms.
       if (!syncing && Date.now() - synced_at >= REMOTE_SYNC_MS) {
         synced_at = Date.now();
+        channels.refresh();
         syncing = sync_remote_launches(home, { log: log_line }).catch(error => log_line(`远程启动检查失败：${error.message}`))
           .finally(() => { syncing = null; });
       }
@@ -611,7 +615,7 @@ export async function run_service(home, output = () => {}) {
     }
   } finally {
     relay_stop.abort();
-    await Promise.all([syncing, relaying]);
+    await Promise.all([syncing, relaying, channels?.done()]);
     await service.close();
     if (existsSync(stop_path)) unlinkSync(stop_path);
     log_line('讨论服务已停止');

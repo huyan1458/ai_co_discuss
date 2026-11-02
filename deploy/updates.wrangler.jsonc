@@ -6,9 +6,13 @@
   "workers_dev": false,
   "preview_urls": false,
   "durable_objects": {
-    "bindings": [{ "name": "UPDATES", "class_name": "DiscussionUpdates" }]
+    "bindings": [
+      { "name": "UPDATES", "class_name": "DiscussionUpdates" },
+      { "name": "RELAY", "class_name": "MachineRelay" }
+    ]
   },
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["DiscussionUpdates"] }
+    { "tag": "v1", "new_sqlite_classes": ["DiscussionUpdates"] },
+    { "tag": "v2", "new_sqlite_classes": ["MachineRelay"] }
   ]
 }

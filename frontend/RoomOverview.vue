@@ -137,7 +137,7 @@ async function save_description({ text, as_template }) {
   finally { describing_saving.value = false; }
 }
 
-const reading = computed(() => `${location.origin}/r/${room.value.id}`);
+const reading = computed(() => `${view.value.room_site}/r/${room.value.id}`);
 const created = computed(() => room.value.created_at ? new Date(room.value.created_at).toLocaleString("zh-CN", { hour12: false }) : "");
 </script>
 

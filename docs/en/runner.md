@@ -55,9 +55,16 @@ The hosted site can then create rooms whose agents run on this machine. The conn
 
 Sign in as the site administrator in the connected computer's browser to pair it. Then sign in with the same account on a phone or tablet to create rooms using the projects saved on that computer. Project paths and keys never leave the computer.
 
+### Opening the Computer's Rooms While Away
+
+When the website has the relay deployed (see "Relay and Live Updates" in the [deployment guide](deployment.md)), sign in as the administrator on your phone, open the "…" menu at the top of the directory, and choose "Rooms on the computer" under "Room source". You can then read and write the rooms of this computer's local website: send messages and attachments, manage members, export backups, with live updates. Conversations stay on the computer; the website only passes encrypted content.
+
+- Nothing opens while the computer is off or codiscuss is not running; the directory heading says the computer is offline. This website's own rooms are unaffected.
+- When the computer does not answer in time, the page reports the result as unconfirmed and never resends on its own; check the room before retrying.
+
 ### Through Cloudflare Tunnel While Away
 
-Conversations stay on this computer; away from it, open the local site through [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/). Nothing is reachable while the computer is off or codiscuss is not running.
+Optional: requires your own domain on Cloudflare and the free Zero Trust plan. Conversations stay on this computer; away from it, open the local site through [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/). Nothing is reachable while the computer is off or codiscuss is not running.
 
 1. Enable the remote entry. It listens on `127.0.0.1` only and shares the local site's data and live updates, but visitors must sign in as the administrator and it offers no local launch: `codiscuss setup --remote-port 8766`. Restart the local site when prompted; `--remote-port off` disables it.
 2. Install `cloudflared` and route a subdomain to `http://127.0.0.1:8766`. **Never route the local site port (8765 by default)**: its visitors are the administrator without signing in.
