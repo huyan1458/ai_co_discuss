@@ -20,6 +20,8 @@ from .admin import AdminError
 from .runtime import begin_write
 
 MACHINE_ONLINE_SECONDS = 30
+# Heartbeats refresh seen_at at most this often (well inside the online window) so frequent polls do not each write a row.
+MACHINE_SEEN_REFRESH_SECONDS = 10
 MACHINE_NAME_MAX = 60
 PROJECT_NAME_MAX = 80
 PROJECTS_MAX = 100
@@ -135,11 +137,15 @@ def machine_sync(connection, machine_id, token, payload, now):
     projects, clients = valid_projects(payload.get("projects")), valid_clients(payload.get("clients"))
     public_key = valid_public_key(payload["public_key"]) if "public_key" in payload else None
     begin_write(connection)
-    connection.execute("UPDATE local_machines SET projects=?, clients=?, seen_at=? WHERE id=?",
-                       (json.dumps(projects, ensure_ascii=False), json.dumps(clients, ensure_ascii=False), now, machine_id))
+    # Unchanged heartbeats write nothing until seen_at is due for a refresh.
+    connection.execute("UPDATE local_machines SET projects=?1, clients=?2, seen_at=?3 WHERE id=?4 "
+                       "AND (projects IS NOT ?1 OR clients IS NOT ?2 OR seen_at<?3-?5)",
+                       (json.dumps(projects, ensure_ascii=False), json.dumps(clients, ensure_ascii=False), now, machine_id,
+                        MACHINE_SEEN_REFRESH_SECONDS))
     if public_key:
         connection.execute("INSERT INTO machine_keys (machine_id,public_key) VALUES (?,?) "
-                           "ON CONFLICT(machine_id) DO UPDATE SET public_key=excluded.public_key", (machine_id, json.dumps(public_key)))
+                           "ON CONFLICT(machine_id) DO UPDATE SET public_key=excluded.public_key "
+                           "WHERE machine_keys.public_key IS NOT excluded.public_key", (machine_id, json.dumps(public_key)))
     rows = connection.execute("SELECT id,request FROM remote_launches WHERE machine_id=? AND status IN ('pending','claimed') ORDER BY created_at",
                               (machine_id,)).fetchall()
     return {"launches": [{"id": row["id"], "request": json.loads(row["request"])} for row in rows]}
@@ -245,7 +251,7 @@ def claim_machine_commands(connection, machine_id, token, now):
     require_machine(connection, machine_id, token)
     begin_write(connection)
     connection.execute("DELETE FROM machine_commands WHERE machine_id=? AND created_at<?", (machine_id, now - COMMAND_TTL_SECONDS))
-    connection.execute("UPDATE local_machines SET seen_at=? WHERE id=?", (now, machine_id))
+    connection.execute("UPDATE local_machines SET seen_at=? WHERE id=? AND seen_at<?", (now, machine_id, now - MACHINE_SEEN_REFRESH_SECONDS))
     rows = connection.execute("SELECT id,request FROM machine_commands WHERE machine_id=? AND status='pending' ORDER BY created_at",
                               (machine_id,)).fetchall()
     for row in rows:

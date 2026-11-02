@@ -237,5 +237,24 @@ class AdminTests(unittest.TestCase):
         self.sql("UPDATE machine_commands SET created_at=0")
         self.assertEqual(self.request(claim, {"wait": 0}, machine=machine_token)[1], {"commands": []}, "an expired command is never run")
 
+    def test_unchanged_machine_heartbeats_do_not_rewrite_rows(self):
+        machine_id, machine_token = uuid.uuid4().hex, uuid.uuid4().hex * 2
+        admin = self.register()
+        self.request("/api/machines", {"id": machine_id, "name": "工作站", "token": machine_token}, admin=admin)
+        sync, claim = f"/api/machines/{machine_id}/sync", f"/api/machines/{machine_id}/commands/claim"
+        state = {"projects": [], "clients": {}, "public_key": {"kty": "EC", "crv": "P-256", "x": "A" * 43, "y": "B" * 43}}
+        self.request(sync, state, machine=machine_token)
+        self.sql("UPDATE local_machines SET seen_at=CAST(strftime('%s','now') AS INTEGER)-5")
+        recent = self.sql("SELECT seen_at FROM local_machines")
+        self.request(sync, state, machine=machine_token)
+        self.request(claim, {"wait": 0}, machine=machine_token)
+        self.assertEqual(self.sql("SELECT seen_at FROM local_machines"), recent, "a recent heartbeat is not rewritten")
+        self.request(sync, {**state, "clients": {"claude": "cli"}}, machine=machine_token)
+        self.assertEqual(self.sql("SELECT clients FROM local_machines"), [(json.dumps({"claude": "cli"}),)], "changed state is always stored")
+        self.sql("UPDATE local_machines SET seen_at=0")
+        self.request(claim, {"wait": 0}, machine=machine_token)
+        self.assertGreater(self.sql("SELECT seen_at FROM local_machines")[0][0], 0, "a due heartbeat refreshes seen_at")
+        self.assertTrue(self.request("/api/machines", admin=admin)[1]["machines"][0]["online"])
+
 if __name__ == "__main__":
     unittest.main()

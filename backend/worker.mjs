@@ -4762,6 +4762,8 @@ async function handle_admin_api(database, request, parts, setup_key) {
 /** Route JSON operations alongside explicitly bounded binary attachment routes. */
 // Room launches relayed to a paired computer; same contract as backend/remote_launch.py.
 const MACHINE_ONLINE_SECONDS = 30;
+// Heartbeats refresh seen_at at most this often (well inside the online window) so frequent polls do not each spend a D1 row write.
+const MACHINE_SEEN_REFRESH_SECONDS = 10;
 const MACHINE_NAME_MAX = 60;
 const REMOTE_PROJECT_NAME_MAX = 80;
 const REMOTE_PROJECTS_MAX = 100;
@@ -4850,9 +4852,13 @@ async function machine_sync(database, machine_id, token, payload, now) {
   await require_machine(database, machine_id, token);
   const projects = valid_projects(payload.projects), clients = valid_clients(payload.clients);
   const public_key = "public_key" in payload ? valid_public_key(payload.public_key) : null;
-  await database.prepare("UPDATE local_machines SET projects=?, clients=?, seen_at=? WHERE id=?").bind(JSON.stringify(projects), JSON.stringify(clients), now, machine_id).run();
+  // Unchanged heartbeats write nothing until seen_at is due for a refresh.
+  await database.prepare(`UPDATE local_machines SET projects=?1, clients=?2, seen_at=?3 WHERE id=?4
+    AND (projects IS NOT ?1 OR clients IS NOT ?2 OR seen_at<?3-?5)`)
+    .bind(JSON.stringify(projects), JSON.stringify(clients), now, machine_id, MACHINE_SEEN_REFRESH_SECONDS).run();
   if (public_key) {
-    await database.prepare("INSERT INTO machine_keys (machine_id,public_key) VALUES (?,?) ON CONFLICT(machine_id) DO UPDATE SET public_key=excluded.public_key")
+    await database.prepare(`INSERT INTO machine_keys (machine_id,public_key) VALUES (?,?) ON CONFLICT(machine_id) DO UPDATE SET public_key=excluded.public_key
+      WHERE machine_keys.public_key IS NOT excluded.public_key`)
       .bind(machine_id, JSON.stringify(public_key)).run();
   }
   const { results } = await database.prepare("SELECT id,request FROM remote_launches WHERE machine_id=? AND status IN ('pending','claimed') ORDER BY created_at").bind(machine_id).all();
@@ -4930,7 +4936,7 @@ async function claim_machine_commands(database, machine_id, token, now) {
   await require_machine(database, machine_id, token);
   await database.batch([
     database.prepare("DELETE FROM machine_commands WHERE machine_id=? AND created_at<?").bind(machine_id, now - COMMAND_TTL_SECONDS),
-    database.prepare("UPDATE local_machines SET seen_at=? WHERE id=?").bind(now, machine_id),
+    database.prepare("UPDATE local_machines SET seen_at=? WHERE id=? AND seen_at<?").bind(now, machine_id, now - MACHINE_SEEN_REFRESH_SECONDS),
   ]);
   const { results } = await database.prepare("SELECT id,request FROM machine_commands WHERE machine_id=? AND status='pending' ORDER BY created_at").bind(machine_id).all();
   const commands = [];
