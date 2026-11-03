@@ -16,6 +16,7 @@ import { ADAPTER_IDS, ADAPTER_PROFILES, adapter_profile, platform_adapters, same
 import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { DEFAULT_SCHEDULER_MODE, SCHEDULER_MODES, SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
 import { save_tts_settings, tts_settings, tts_speak } from './tts.mjs';
+import { stt_part } from './stt.mjs';
 import { access_levels, BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT, PROJECT_ACCESS } from './expert_prompts.mjs';
 import { acquire_lock, api, DiscussionStore, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner, free_task_files } from './free_runner.mjs';
@@ -59,6 +60,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch scheduler-check --file FILE
       codiscuss launch tts-settings [--file FILE]
       codiscuss launch tts --file FILE
+      codiscuss launch stt --file FILE
       codiscuss launch room-member --file FILE
       codiscuss launch room-member-access --file FILE
       codiscuss launch room-member-allow --file FILE
@@ -83,6 +85,7 @@ api-check 用 API profile 向模型发送一次极短请求，核对地址、密
 scheduler-check 用智能调度配置（provider、model、api_key_ref）向决策模型发送一道是非题，核对供应商、模型与密钥是否可用。
 tts-settings 读取朗读设置；内容非空时保存（音色 speaker、语速 speech_rate、语气提示 context、api_key_ref）。
 tts 用朗读设置把 text（不超过 300 字）合成为 MP3，返回 base64。
+stt 按序接收录音片段（upload_id、index、base64 PCM 16 kHz 单声道、final）；最后一段时识别整段录音并返回 text。
 pick-directory 在本机弹出系统目录选择窗口，返回所选路径；取消时不返回路径。
 projects 读取本机已配置的项目（名称与绝对路径）；提供 JSON（projects 列表）时整体替换保存。
 presets 读取本机的专家预设（含内置预设）与各平台默认描述；提供 JSON（presets 列表和/或 description_templates）时替换对应部分。
@@ -1303,6 +1306,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'scheduler-check' && input) result = await scheduler_check(home, input);
   else if (positionals[0] === 'tts-settings') result = input && Object.keys(input).length ? save_tts_settings(home, input) : tts_settings(home);
   else if (positionals[0] === 'tts' && input) result = await tts_speak(home, input);
+  else if (positionals[0] === 'stt' && input) result = await stt_part(home, input);
   else if (positionals[0] === 'room-models' && input) result = await room_models(home, input);
   else if (positionals[0] === 'models' && adapter_profile(input?.adapter)?.kind === 'api') result = await api_models(home, input);
   else if (positionals[0] === 'models' && input) {

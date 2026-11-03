@@ -325,20 +325,47 @@ test('read-aloud sends the saved key only to Volcengine and joins chunked audio'
   const { save_tts_settings, tts_settings, tts_speak, TTS_BASE_URL } = await import('../runner/tts.mjs');
   const home = mkdtempSync(join(tmpdir(), 'codiscuss-tts-'));
   try {
-    await assert.rejects(tts_speak(home, { text: '你好' }), /尚未配置朗读/);
+    await assert.rejects(tts_speak(home, { text: '你好' }), /尚未配置语音/);
     const { api_key_ref } = save_api_key(home, { base_url: TTS_BASE_URL, api_key: SECRET });
     save_tts_settings(home, { speaker: 'zh_female_vv_uranus_bigtts', speech_rate: 20, context: '自然一点', api_key_ref });
     assert.equal(JSON.stringify(tts_settings(home)).includes(SECRET), false);
     let sent;
     const body = `{"code":0,"data":"${Buffer.from('ab').toString('base64')}"}\n{"code":0,"data":null,"sentence":{"text":"}"}}{"code":0,"data":"${Buffer.from('c').toString('base64')}"}{"code":20000000,"message":"ok","data":null}`;
-    const result = await tts_speak(home, { text: '你好' }, async (url, init) => { sent = { url, init }; return new Response(body); });
+    const section_id = randomUUID();
+    const result = await tts_speak(home, { text: '你好', section_id }, async (url, init) => { sent = { url, init }; return new Response(body); });
     assert.equal(Buffer.from(result.audio, 'base64').toString(), 'abc');
     assert.equal(sent.url, `${TTS_BASE_URL}/api/v3/tts/unidirectional`);
     assert.equal(sent.init.headers['X-Api-Key'], SECRET);
     const request = JSON.parse(sent.init.body);
     assert.equal(request.req_params.audio_params.speech_rate, 20);
-    assert.deepEqual(JSON.parse(request.req_params.additions).context_texts, ['自然一点']);
+    assert.deepEqual(JSON.parse(request.req_params.additions), { context_texts: ['自然一点'], section_id });
+    assert.equal(request.req_params.audio_params.enable_subtitle, true);
     await assert.rejects(tts_speak(home, { text: '你好' }, async () => new Response('{"code":45000000,"message":"denied"}')), /音色不可用/);
     await assert.rejects(tts_speak(home, { text: '字'.repeat(301) }), /不超过 300 字/);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test('voice input joins ordered parts into one WAV and returns the recognized text', async () => {
+  const { stt_part } = await import('../runner/stt.mjs');
+  const { save_tts_settings, TTS_BASE_URL } = await import('../runner/tts.mjs');
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-stt-'));
+  try {
+    const { api_key_ref } = save_api_key(home, { base_url: TTS_BASE_URL, api_key: SECRET });
+    save_tts_settings(home, { api_key_ref });
+    const upload_id = randomUUID();
+    let sent;
+    const recognize = async (url, init) => { sent = { url, init };
+      return new Response(JSON.stringify({ result: { text: '你好世界' } }), { headers: { 'X-Api-Status-Code': '20000000' } }); };
+    assert.deepEqual(await stt_part(home, { upload_id, index: 0, data: Buffer.from([1, 0, 2, 0]).toString('base64') }, recognize), { received: 0 });
+    assert.deepEqual(await stt_part(home, { upload_id, index: 1, data: Buffer.from([3, 0]).toString('base64'), final: true }, recognize), { text: '你好世界' });
+    assert.equal(sent.init.headers['X-Api-Key'], SECRET);
+    assert.equal(sent.init.headers['X-Api-Resource-Id'], 'volc.bigasr.auc_turbo');
+    const wav = Buffer.from(JSON.parse(sent.init.body).audio.data, 'base64');
+    assert.equal(wav.subarray(0, 4).toString(), 'RIFF');
+    assert.deepEqual([...wav.subarray(44)], [1, 0, 2, 0, 3, 0]);
+    const missing = randomUUID();
+    await assert.rejects(stt_part(home, { upload_id: missing, index: 1, data: '', final: true }, recognize), /片段缺失/);
+    const silent = async () => new Response('{}', { headers: { 'X-Api-Status-Code': '20000003' } });
+    assert.deepEqual(await stt_part(home, { upload_id: randomUUID(), index: 0, data: Buffer.from([0, 0]).toString('base64'), final: true }, silent), { text: '' });
   } finally { rmSync(home, { recursive: true, force: true }); }
 });

@@ -27,7 +27,7 @@ const RELAY_CIPHER_INFO = 'codiscuss-relay-v1';
 const LAUNCH_SCRIPT = fileURLToPath(new URL('./discussion_launch.mjs', import.meta.url));
 // What a connected browser may ask the local bridge for, minus the folder dialog nobody would see and pairing itself.
 const RELAYED_ACTIONS = new Set(['settings', 'launch', 'room-models', 'room-member', 'room-member-access', 'room-member-allow', 'room-member-adapter',
-  'room-member-model', 'room-profiles', 'room-restore', 'room-fork', 'models', 'api-key', 'api-check', 'scheduler-check', 'tts-settings', 'tts', 'projects', 'presets', 'admin-account']);
+  'room-member-model', 'room-profiles', 'room-restore', 'room-fork', 'models', 'api-key', 'api-check', 'scheduler-check', 'tts-settings', 'tts', 'stt', 'projects', 'presets', 'admin-account']);
 export const ROOM_ACTIONS = new Set(['launch', 'room-models', 'room-member', 'room-member-access', 'room-member-allow', 'room-member-adapter',
   'room-member-model', 'room-profiles', 'room-restore', 'room-fork']);
 

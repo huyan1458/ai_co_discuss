@@ -483,7 +483,12 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 .channel-empty > [class*="icon"] { font-size: 32px; color: #9aa4bc; margin-bottom: 14px; }
 .channel-empty h2 { color: #f1f3f7; font-size: 23px; font-weight: 650; }
 .channel-empty p { color: #a9b1c0; font-size: 14px; margin: 9px 0 22px; }
-.channel-latest-dock { grid-column: 2; grid-row: 2; align-self: end; justify-self: center; z-index: 3; padding-bottom: 12px; pointer-events: none; }
+.channel-latest-dock { grid-column: 2; grid-row: 2; align-self: end; justify-self: center; z-index: 3; display: flex; align-items: center; gap: 8px; padding-bottom: 12px; pointer-events: none; }
+/* "Listen from here": a pill matching the back-to-latest button; beside it on touch, under the selection with a pointer. */
+.channel-listen-pill { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px 0 11px; border: 1px solid #ffffff24; border-radius: 999px; background: #292b30; color: #e8eaee; font-size: 13px; font-weight: 500; white-space: nowrap; box-shadow: 0 2px 8px #0004; pointer-events: auto; }
+.channel-listen-pill:hover { color: #fff; }
+.channel-listen-pill > [class*="icon"] { width: 16px; height: 16px; color: var(--ui-primary); }
+.channel-listen-floating { position: fixed; z-index: 40; transform: translateX(-50%); }
 .channel-latest-button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; line-height: 1; border: 1px solid #ffffff24; border-radius: 50%; background: #292b30; box-shadow: 0 2px 8px #0004; pointer-events: auto; }
 .channel-latest-button > [data-slot="leadingIcon"] { display: block; width: 18px; height: 18px; }
 
@@ -505,6 +510,15 @@ html[data-theme^="channel"] .channel-composer:is(:focus, :focus-within, :has(:fo
 .channel-composer-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start !important; padding: 4px 10px 10px !important; gap: 4px !important; }
 .channel-composer-footer > .channel-round-button { flex-shrink: 0; }
 .channel-composer-footer > .channel-round-button { margin-left: auto; }
+/* Voice input sits just before send; while recording, live level bars and the elapsed time sit before it. */
+.channel-composer-footer > :is(.channel-voice-levels, .channel-voice-button) { margin-left: auto; }
+.channel-voice-levels + .channel-voice-button, .channel-voice-button + .channel-round-button { margin-left: 0; }
+.channel-composer-footer > .channel-voice-button { width: 30px; height: 30px; justify-content: center; border-radius: 8px; color: var(--ui-text-muted); }
+.channel-composer-footer > .channel-voice-button:hover:not(:disabled) { background: var(--channel-ghost-hover); color: var(--ui-text-highlighted); }
+.channel-composer-footer > .channel-voice-button.is-recording { color: var(--ui-error); }
+.channel-voice-levels { display: flex; align-items: center; gap: 2px; height: 22px; padding: 0 4px; }
+.channel-voice-levels i { width: 3px; height: 100%; border-radius: 2px; background: var(--ui-text-muted); transform-origin: center; transition: transform .08s linear; }
+.channel-voice-levels small { margin-left: 6px; color: var(--ui-text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 /* Footer controls are quiet ghost chips; only hover and the open menu give them a surface. */
 .channel-composer-footer > button[aria-label="添加附件"] { width: 30px; height: 30px; justify-content: center; border-radius: 8px; color: var(--ui-text-muted); }
 .channel-composer-footer > button[aria-label="添加附件"]:hover:not(:disabled) { background: var(--channel-ghost-hover); color: var(--ui-text-highlighted); }
@@ -962,6 +976,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   .channel-date-divider [data-slot="border"] { border-color: #dadada; }
   .channel-message-toolbar { border-radius: 8px; box-shadow: 0 3px 12px #0000000a; }
   .channel-latest-button { color: #555555; border-color: #dedede; box-shadow: 0 3px 12px #0000000a; }
+  .channel-listen-pill { color: #333; background: #fff; border-color: #dedede; box-shadow: 0 3px 12px #0000000f; }
   .channel-room-grip:active { color: var(--channel-accent); }
   .channel-room-row.drop-before::before, .channel-room-row.drop-after::after { background: var(--channel-accent); }
   .channel-topic-tooltip { background: #242424; color: #ffffff; border-color: #ffffff14; }
@@ -1053,8 +1068,8 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 :root[data-theme^="channel"] :is(.channel-message, .turn-panel, .summary-form) { box-shadow: var(--channel-shadow-panel); }
 :root[data-theme^="channel"] .channel-message.channel-topic-card { box-shadow: inset 3px 0 0 var(--channel-accent), var(--channel-shadow-panel); }
 :root[data-theme^="channel"] .channel-composer { box-shadow: var(--channel-shadow-panel) !important; }
-:root[data-theme^="channel"] :is(.channel-menu, .channel-select-menu, .channel-topic-menu, .channel-nav-preview, .channel-message-toolbar, .channel-latest-button, .channel-navigation-drawer, .progress-drawer, .glass-panel) { border-color: var(--channel-edge-float); box-shadow: var(--channel-shadow-float); }
-:root[data-theme="channel"] :is(.channel-menu, .channel-select-menu, .channel-topic-menu, .channel-nav-preview, .channel-message-toolbar, .channel-latest-button, .channel-navigation-drawer, .progress-drawer, .glass-panel) { background: var(--channel-glass-bg) !important; -webkit-backdrop-filter: var(--channel-glass-filter); backdrop-filter: var(--channel-glass-filter); }
+:root[data-theme^="channel"] :is(.channel-menu, .channel-select-menu, .channel-topic-menu, .channel-nav-preview, .channel-message-toolbar, .channel-latest-button, .channel-listen-pill, .channel-navigation-drawer, .progress-drawer, .glass-panel) { border-color: var(--channel-edge-float); box-shadow: var(--channel-shadow-float); }
+:root[data-theme="channel"] :is(.channel-menu, .channel-select-menu, .channel-topic-menu, .channel-nav-preview, .channel-message-toolbar, .channel-latest-button, .channel-listen-pill, .channel-navigation-drawer, .progress-drawer, .glass-panel) { background: var(--channel-glass-bg) !important; -webkit-backdrop-filter: var(--channel-glass-filter); backdrop-filter: var(--channel-glass-filter); }
 /* 消息操作按钮使用频率低：去掉浮层底色、边框与阴影，仅保留淡色图标。 */
 :root[data-theme^="channel"] .channel-message-toolbar { background: transparent !important; border-color: transparent; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
 :root[data-theme^="channel"] .channel-message-actions button { color: var(--ui-text-dimmed); }
@@ -1188,5 +1203,8 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 /* Hosts write the detail as one line per point; give each line room to be scanned. */
 .consensus-state p { margin-bottom: .9em; }
 
-/* The sentence being read aloud; a CSS highlight leaves the rendered message untouched. */
-::highlight(codiscuss-reading) { background-color: color-mix(in srgb, var(--ui-primary) 28%, transparent); }
+/* The sentence being read aloud: boxes drawn under the text of its answer; grey while paused. */
+.channel-answer { position: relative; isolation: isolate; }
+.channel-reading-layer { position: absolute; inset: 0; z-index: -1; pointer-events: none; }
+.channel-reading-layer i { position: absolute; border-radius: 3px; background: color-mix(in srgb, var(--ui-primary) 30%, transparent); }
+.channel-reading-layer.is-paused i { background: color-mix(in srgb, var(--ui-text-muted) 22%, transparent); }

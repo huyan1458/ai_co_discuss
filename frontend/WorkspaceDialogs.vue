@@ -3,7 +3,7 @@ import { computed, inject, ref, watch } from "vue";
 import CreateDiscussion from "./CreateDiscussion.vue";
 import DiscussionLimits from "./DiscussionLimits.vue";
 import AccountSettings from "./AccountSettings.vue";
-import ReadAloudSettings from "./ReadAloudSettings.vue";
+import SpeechSettings from "./SpeechSettings.vue";
 
 const props = defineProps({ detailId: { type: Number, default: null }, targetRoom: { type: Object, default: null }, targetFolder: { type: Object, default: null }, readingOptions: { type: Array, default: () => [] }, effectOptions: { type: Array, default: () => [] } });
 const mode = defineModel({ type: String, default: "" });
@@ -253,7 +253,7 @@ const keep_open = (event) => event.preventDefault();
           <div class="channel-reading-options channel-effect-options" role="group" aria-labelledby="channel-effects-label"><UButton v-for="option in effectOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: effects === option.value }" :aria-pressed="effects === option.value" @click="effects = option.value" /></div>
           <p class="fine-print">精简模式关闭毛玻璃模糊与多层阴影，适合配置较低或需要更流畅滚动的设备。</p>
         </section>
-        <ReadAloudSettings />
+        <SpeechSettings />
       </div>
       <CreateDiscussion v-else-if="rendered_mode === 'create'" :target-folder="targetFolder" @submit="save_form" @cancel="mode = ''" />
       <form v-else-if="rendered_mode === 'edit'" class="dialog-form" @submit.prevent="save_form">

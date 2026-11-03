@@ -8,6 +8,7 @@ import ExecutionNotes from "./ExecutionNotes.vue";
 import WorkingText from "./WorkingText.vue";
 import QueuedMessages from "./QueuedMessages.vue";
 import { use_read_aloud } from "./read-aloud.js";
+import { use_voice_input } from "./voice-input.js";
 import { motion, useSpring, useTransform } from "motion-v";
 
 const emit = defineEmits(["detail", "edit"]);
@@ -30,6 +31,14 @@ const reader = use_read_aloud({ bridge, container: () => transcript.value,
     expanded_answers.value.add(id);
     await nextTick();
   } });
+// Voice input inserts recognized text where the caret was in the composer.
+const voice = use_voice_input({ bridge, on_text: (spoken) => {
+  const area = prompt.value?.textareaRef, value = text.value || "";
+  const start = area ? area.selectionStart : value.length, end = area ? area.selectionEnd : value.length;
+  text.value = `${value.slice(0, start)}${spoken}${value.slice(end)}`;
+  nextTick(() => { area?.focus(); area?.setSelectionRange(start + spoken.length, start + spoken.length); });
+} });
+const format_voice_time = (seconds) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 // Where "listen from here" shows for text selected in a message, with the selection kept for the click.
 const listen_here = ref(null);
 // The phone toolbar has room for three buttons, so read-aloud joins the "more" menu there.
@@ -60,9 +69,9 @@ onMounted(() => {
   document.addEventListener("selectionchange", track_selection);
   narrow_query.addEventListener("change", track_narrow);
   transcript.value?.addEventListener("scroll", track_selection, { passive: true });
-  watch(() => room.value?.id, () => reader.stop());
+  watch(() => room.value?.id, () => { reader.stop(); voice.cancel(); });
 });
-onBeforeUnmount(() => { document.removeEventListener("selectionchange", track_selection); narrow_query.removeEventListener("change", track_narrow); reader.stop(); });
+onBeforeUnmount(() => { document.removeEventListener("selectionchange", track_selection); narrow_query.removeEventListener("change", track_narrow); reader.stop(); voice.cancel(); });
 const MESSAGE_PREVIEW_LENGTH = 160;
 const MESSAGE_PREVIEW_MIN_LENGTH = 100;
 const MESSAGE_PREVIEW_CODE_LINES = 4;
@@ -1236,7 +1245,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         </div>
       </motion.div>
     </Teleport>
-    <UButton v-if="listen_here" label="听当前" icon="i-lucide-headphones" size="sm" color="neutral" variant="outline" class="channel-surface-button channel-listen-here" :class="{ 'is-docked': listen_here.touch }" :style="listen_here.touch ? undefined : { left: `${listen_here.left}px`, top: `${listen_here.top}px` }" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection" />
+    <button v-if="listen_here && !listen_here.touch" type="button" class="channel-listen-pill channel-listen-floating" :style="{ left: `${listen_here.left}px`, top: `${listen_here.top}px` }" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />听当前</button>
     <div ref="transcript" v-memo="[message_groups, message_round_labels, free, room.session, view.access, active_message, expanded_answers.size, reader.state.message_id, room.title, view.query, view.mention_only, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, correcting, pending, execution_notes, editing, rewound_runs]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
       <div v-if="!view.query && !view.mention_only && !topic_anchor" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
@@ -1474,7 +1483,10 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       </div>
       <div v-if="!transcript_messages.length && !free_working.length" class="channel-empty"><UIcon :name="view.query || view.mention_only ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.mention_only ? '没有找到消息' : room.title }}</h2><p>{{ view.query || view.mention_only ? '试试其他关键词，或清除筛选。' : bridge.empty_discussion_message(room) }}</p></div>
     </div>
-    <div v-if="transcript_messages.length && !follow_tail" class="channel-latest-dock"><UButton icon="i-lucide-arrow-down" color="neutral" variant="outline" aria-label="回到最新消息" class="channel-latest-button" @click="return_to_latest" /></div>
+    <div v-if="(transcript_messages.length && !follow_tail) || listen_here?.touch" class="channel-latest-dock">
+      <button v-if="listen_here?.touch" type="button" class="channel-listen-pill" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />听当前</button>
+      <UButton v-if="transcript_messages.length && !follow_tail" icon="i-lucide-arrow-down" color="neutral" variant="outline" aria-label="回到最新消息" class="channel-latest-button" @click="return_to_latest" />
+    </div>
     <div class="channel-composer-dock"><div class="channel-composer-column" @dragover="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments" @keydown.capture="mention_keydown($event); attachment_shortcut($event)" @input="update_mention" @click="update_mention" @keyup="update_mention" @select="update_mention" @compositionstart="mention_composition" @compositionend="mention_composition" @scroll.capture="sync_mirror">
       <UPopover :open="!!mention_context" :reference="prompt?.$el" :content="{ side: 'top', align: 'start', sideOffset: 8, onOpenAutoFocus: keep_mention_focus, onCloseAutoFocus: keep_mention_focus }" :ui="{ content: 'channel-select-menu channel-mention-menu' }" @update:open="!$event && (mention_context = null)">
         <template #content>
@@ -1511,6 +1523,8 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         <div v-if="mention_mirror" ref="mirror" class="channel-editor channel-editor-mirror" aria-hidden="true" v-html="mention_mirror"></div>
         <template #footer>
           <UButton type="button" icon="i-lucide-paperclip" aria-label="添加附件" title="图片、PDF 或其他文件 · 每个最多 20 MiB" color="neutral" variant="ghost" size="sm" :disabled="view.sending_message" @click="act('choose_attachments')" />
+          <span v-if="voice.state.status === 'recording'" class="channel-voice-levels" role="status" :aria-label="`正在录音 ${format_voice_time(voice.state.seconds)}`"><i v-for="(level, index) in voice.state.levels" :key="index" :style="{ transform: `scaleY(${0.15 + level * 0.85})` }" /><small>{{ format_voice_time(voice.state.seconds) }}</small></span>
+          <UTooltip :text="voice.state.status === 'recording' ? '结束并转成文字' : voice.state.status === 'transcribing' ? '正在识别…' : '语音输入'"><UButton type="button" :icon="voice.state.status === 'recording' ? 'i-lucide-square' : 'i-lucide-mic'" :loading="voice.state.status === 'transcribing'" color="neutral" variant="ghost" size="sm" class="channel-voice-button" :class="{ 'is-recording': voice.state.status === 'recording' }" :aria-label="voice.state.status === 'recording' ? '结束录音并转成文字' : '语音输入'" :disabled="view.sending_message || voice.state.status === 'transcribing'" @click="voice.toggle()" /></UTooltip>
           <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" aria-label="发送" title="发送 · Enter" :disabled="!has_draft" :loading="pending === 'send' || view.sending_message" @click="send" />
         </template>
       </UChatPrompt>
@@ -1528,8 +1542,6 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
 .channel-working-warning { color: var(--ui-warning); }
 .channel-working-row { display: flex; align-items: center; gap: 12px; }
 .channel-working-row > .channel-message-text { flex: 1; min-width: 0; }
-.channel-listen-here { position: fixed; z-index: 40; transform: translateX(-50%); box-shadow: 0 6px 18px rgb(0 0 0 / 0.18); }
-.channel-listen-here.is-docked { left: 50%; bottom: calc(120px + env(safe-area-inset-bottom)); }
 .channel-working-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .channel-stop-button { width: 32px; height: 32px; padding: 0; justify-content: center; border-radius: 999px; background: #b4524c; color: #fff; }
 .channel-stop-button:hover:not(:disabled) { background: #9c4540; }
